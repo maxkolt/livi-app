@@ -31,7 +31,7 @@
     },
     "android": {
       "package": "com.kolt12max.livi",
-      "versionCode": 168,
+      "versionCode": 169,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
@@ -44,13 +44,13 @@
         "android.permission.RECORD_AUDIO",
         "android.permission.MODIFY_AUDIO_SETTINGS",
         "android.permission.BLUETOOTH_CONNECT",
-        "android.permission.WAKE_LOCK"
+        "android.permission.WAKE_LOCK",
+        "android.permission.READ_MEDIA_IMAGES"
       ],
       "blockedPermissions": [
         "android.permission.READ_EXTERNAL_STORAGE",
         "android.permission.WRITE_EXTERNAL_STORAGE",
         "android.permission.READ_MEDIA_AUDIO",
-        "android.permission.READ_MEDIA_IMAGES",
         "android.permission.READ_MEDIA_VIDEO",
         "android.permission.READ_MEDIA_VISUAL_USER_SELECTED",
         "android.permission.READ_PHONE_NUMBERS"
@@ -104,6 +104,14 @@
       "expo-video",
       "expo-audio",
       "expo-asset",
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "Разрешите доступ к фото, чтобы сохранять изображения из чата.",
+          "savePhotosPermission": "Разрешите сохранять изображения в галерею.",
+          "isAccessMediaLocationEnabled": false
+        }
+      ],
       [
         "expo-navigation-bar",
         {

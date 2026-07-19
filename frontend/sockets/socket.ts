@@ -49,6 +49,10 @@ export const globalMessageStorage = {
           to: message.to,
           timestamp: new Date(message.timestamp),
         };
+        if (Array.isArray(message.uris) && message.uris.length > 1) {
+          newMessage.uris = message.uris.map((u: any) => String(u || '').trim()).filter(Boolean).slice(0, 10);
+          if (!newMessage.uri) newMessage.uri = newMessage.uris[0];
+        }
         if (replyToPayload) newMessage.replyTo = replyToPayload;
         messages.push(newMessage);
         didWrite = true;
@@ -2784,6 +2788,8 @@ export function sendMessage(payload: {
   text?: string;
   type: 'text' | 'image' | 'audio' | 'video' | 'document' | 'sticker';
   uri?: string;
+  /** Album: up to 10 image URLs in one message. */
+  uris?: string[];
   name?: string;
   size?: number;
   duration?: number;
@@ -2799,12 +2805,20 @@ export function sendMessage(payload: {
   const messageType = payload.type === 'video' || payload.type === 'document' ? 'text' : payload.type;
 
   const optimisticUiId = String(payload.clientUiMessageId || '').trim() || undefined;
+  const albumUris =
+    messageType === 'image' && Array.isArray(payload.uris)
+      ? payload.uris.map((u) => String(u || '').trim()).filter(Boolean).slice(0, 10)
+      : [];
+  const primaryUri =
+    messageType === 'image'
+      ? (albumUris[0] || payload.uri)
+      : payload.uri;
 
   const socketPayload: any = {
     to: payload.to,
     text: payload.text,
     type: messageType,
-    uri: payload.uri,
+    uri: primaryUri,
     name: payload.name,
     size: payload.size,
     duration: payload.duration,
@@ -2813,6 +2827,9 @@ export function sendMessage(payload: {
     stickerEmoji: payload.stickerEmoji,
     stickerLabel: payload.stickerLabel,
   };
+  if (messageType === 'image' && albumUris.length > 1) {
+    socketPayload.uris = albumUris;
+  }
   if (optimisticUiId) {
     socketPayload.clientMessageId = optimisticUiId;
     socketPayload.clientId = optimisticUiId;
@@ -2835,7 +2852,7 @@ export function sendMessage(payload: {
       to: payload.to,
       text: payload.text,
       type: messageType,
-      uri: payload.uri,
+      uri: primaryUri,
       name: payload.name,
       size: payload.size,
       duration: payload.duration,
@@ -2844,6 +2861,9 @@ export function sendMessage(payload: {
       stickerEmoji: payload.stickerEmoji,
       stickerLabel: payload.stickerLabel,
     };
+    if (messageType === 'image' && albumUris.length > 1) {
+      body.uris = albumUris;
+    }
     if (optimisticUiId) {
       body.clientMessageId = optimisticUiId;
       body.clientId = optimisticUiId;
@@ -3816,6 +3836,38 @@ export function onMessageEdited(cb: (data: { messageId: string; text: string }) 
   const h = (data: any) => cb(data);
   socket.on('message:edited', h);
   return () => { socket.off('message:edited', h); };
+}
+
+/** Update album URIs (remove one photo). Empty uris deletes the whole message on server. */
+export async function updateMessageUris(messageId: string, uris: string[]): Promise<{
+  ok: boolean;
+  deleted?: boolean;
+  uri?: string;
+  uris?: string[];
+  error?: string;
+}> {
+  const mid = String(messageId || '').trim();
+  if (!mid) return { ok: false, error: 'bad_request' };
+  const normalized = (Array.isArray(uris) ? uris : [])
+    .map((u) => String(u || '').trim())
+    .filter(Boolean)
+    .slice(0, 10);
+  try {
+    const r = await emitAck<any>('message:update_uris', { messageId: mid, uris: normalized }, 12000);
+    return r && typeof r === 'object' ? r : { ok: false, error: 'bad_response' };
+  } catch (e: any) {
+    return { ok: false, error: e?.message || 'network_error' };
+  }
+}
+
+export function onMessageUrisUpdated(
+  cb: (data: { messageId: string; uri?: string; uris?: string[]; deleted?: boolean }) => void,
+): () => void {
+  const h = (data: any) => cb(data);
+  socket.on('message:uris_updated', h);
+  return () => {
+    socket.off('message:uris_updated', h);
+  };
 }
 
 // Загрузка всех сообщений для чата (с кэшированием)

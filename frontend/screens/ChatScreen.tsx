@@ -15,7 +15,6 @@ import {
   ScrollView,
   KeyboardAvoidingView,
   Keyboard,
-  Linking,
   Modal,
   Pressable,
   Animated,
@@ -54,8 +53,6 @@ import AvatarImage from "../components/AvatarImage";
 import ChatStyleBackButton from "../components/ChatStyleBackButton";
 import ChatEmojiKeyboard, { CHAT_EMOJI_PANEL_HEIGHT } from "../components/ChatEmojiKeyboard";
 import {
-  StickerView,
-  getBuiltInSticker,
   getStickerFallbackText,
   type BuiltInSticker,
 } from "../components/chatStickers";
@@ -65,9 +62,16 @@ import * as Clipboard from 'expo-clipboard';
 import { Audio } from 'expo-av';
 import { getFull, putFull, putThumb } from '../utils/avatarCache';
 import { BlurView } from 'expo-blur';
-import Svg, { Circle as SvgCircle, Defs, LinearGradient, Stop, G } from 'react-native-svg';
 import { getAvatarImageProps } from '../utils/imageOptimization';
 import { useResolvedImageUri } from '../hooks/useResolvedImageUri';
+import { ChatMessageItem } from './chat/ChatMessageItem';
+import {
+  isOfflineQueuedOrOptimisticOutgoingId,
+  type ChatReadStatus,
+} from './chat/chatMessageIds';
+import { CHAT_ALBUM_MAX, getMessageImageUris, isImageAlbumMessage, albumSelectionKey, parseAlbumSelectionKey, albumSelectionKeysForMessage, selectedAlbumIndices } from './chat/chatAlbum';
+import { ChatAlbumPickModal } from './chat/ChatAlbumPickModal';
+import { saveImageToGallery } from '../utils/saveToGallery';
 
 import { API_BASE, getMyProfile } from '../sockets/socket';
 import { logger } from '../utils/logger';
@@ -88,6 +92,8 @@ import { CometChat } from "@cometchat/chat-sdk-react-native";
 import { 
   getMyUserId,
   sendMessage as sendSocketMessage,
+  onMessageUrisUpdated,
+  updateMessageUris,
   sendChatTyping,
   onChatTyping,
   onMessageReceived,
@@ -139,23 +145,6 @@ type RouteParams = {
   incomingShareItems?: IncomingShareItem[];
 };
 type Props = { route: { params?: RouteParams }; navigation: any };
-
-/** Разбивает текст на сегменты «текст» и «ссылка» для отображения кликабельных URL в сообщениях. */
-function parseTextWithUrls(text: string): { type: 'text' | 'url'; value: string }[] {
-  if (!text || typeof text !== 'string') return [{ type: 'text', value: '' }];
-  const regex = /(https?:\/\/[^\s<>"\]]+|www\.[^\s<>"\]]+)/gi;
-  const parts = text.split(regex).filter(Boolean);
-  return parts.map((part) => ({
-    type: /^(https?:\/\/|www\.)/i.test(part) ? 'url' : 'text',
-    value: part,
-  }));
-}
-
-/** Нормализует URL для открытия (добавляет https:// для www.). */
-function openMessageUrl(raw: string): void {
-  const url = raw.startsWith('http://') || raw.startsWith('https://') ? raw : `https://${raw}`;
-  Linking.openURL(url).catch(() => {});
-}
 
 /** Стабильное имя файла в cacheDirectory для кэша голосового по удалённому URL. */
 function voiceCacheFileNameForRemoteUrl(remoteUri: string): string {
@@ -363,14 +352,6 @@ function ReactionsRowWithSwipe({
   );
 }
 
-/** Локальный id исходящего после офлайн-очереди или оптимистичной отправки (может ещё не попасть в свежую выборку с сервера). */
-function isOfflineQueuedOrOptimisticOutgoingId(messageId: string): boolean {
-  const id = String(messageId || '').trim();
-  if (!id) return false;
-  if (id.startsWith('outbox_')) return true;
-  return /^\d{10,}-[a-z0-9]+$/i.test(id);
-}
-
 function isServerMessageId(messageId: string): boolean {
   const id = String(messageId || '').trim();
   return !!id && !isOfflineQueuedOrOptimisticOutgoingId(id);
@@ -395,8 +376,6 @@ function approxSameOutgoingTextMessage(a: any, b: any): boolean {
   const dt = Math.abs(+new Date(a?.timestamp || 0) - +new Date(b?.timestamp || 0));
   return dt < 180_000;
 }
-
-type ChatReadStatus = 'sending' | 'delivered' | 'read' | 'failed' | 'sent';
 
 function mergeChatReadStatuses(
   localStatuses: Record<string, ChatReadStatus> = {},
@@ -552,6 +531,13 @@ function stickerFieldsFromMessage(msg: any) {
   };
 }
 
+function albumUrisFieldFromMessage(msg: any): { uris?: string[] } {
+  const uris = Array.isArray(msg?.uris)
+    ? msg.uris.map((u: any) => String(u || '').trim()).filter(Boolean).slice(0, CHAT_ALBUM_MAX)
+    : [];
+  return uris.length > 1 ? { uris } : {};
+}
+
 function getChatReplyPreviewText(message: any, langCode: string): string {
   if (String(message?.type || '') === 'sticker') {
     return getStickerFallbackText(
@@ -563,6 +549,11 @@ function getChatReplyPreviewText(message: any, langCode: string): string {
       },
       langCode,
     );
+  }
+  if (String(message?.type || '') === 'image') {
+    const n = getMessageImageUris(message).length;
+    if (n > 1) return t('chatAlbumPhotos', langCode as Lang).replace('{count}', String(n));
+    return t('mediaPhotoLabel', langCode as Lang);
   }
   return String(message?.text ?? message?.name ?? '');
 }
@@ -834,6 +825,14 @@ export default function ChatScreen({ route, navigation }: Props) {
   uploadStatusRef.current = uploadStatus;
   const [showClearMenu, setShowClearMenu] = useState(false);
   const [selectedMessage, setSelectedMessage] = useState<any>(null);
+  /** Index of album tile under long-press (null = whole message). */
+  const [albumFocusIndex, setAlbumFocusIndex] = useState<number | null>(null);
+  /** Album save/forward/delete: multi-select photos. */
+  const [albumScopeVisible, setAlbumScopeVisible] = useState(false);
+  const [albumScopeKind, setAlbumScopeKind] = useState<'save' | 'forward' | 'delete'>('delete');
+  const [albumPickUris, setAlbumPickUris] = useState<string[]>([]);
+  const [albumPickInitial, setAlbumPickInitial] = useState<number[]>([0]);
+  const albumScopeMessageRef = useRef<any>(null);
   const [selectedMessageLayout, setSelectedMessageLayout] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   const messageActionsLayoutRef = useRef<{ x: number; y: number; width: number; height: number } | null>(null);
   const reactionsScrollRef = useRef<ScrollView>(null);
@@ -1767,6 +1766,9 @@ export default function ChatScreen({ route, navigation }: Props) {
           text: message.text,
           type: message.type,
           uri: message.uri,
+          uris: Array.isArray((message as any).uris) && (message as any).uris.length > 1
+            ? (message as any).uris.map((u: any) => String(u || '').trim()).filter(Boolean).slice(0, CHAT_ALBUM_MAX)
+            : undefined,
           name: (message as any).name,
           size: (message as any).size,
           duration: (message as any).duration,
@@ -1786,6 +1788,7 @@ export default function ChatScreen({ route, navigation }: Props) {
             from: message.from,
             to: message.to,
             uri: message.uri,
+            urisCount: getMessageImageUris(newMessage).length,
             resolvedUri: resolveMediaUri(message.uri),
             hasUri: !!message.uri,
           });
@@ -1999,6 +2002,29 @@ export default function ChatScreen({ route, navigation }: Props) {
       });
     });
 
+    const unsubscribeMessageUrisUpdated = onMessageUrisUpdated((data) => {
+      const mid = String((data as any)?.messageId || '').trim();
+      if (!mid) return;
+      if ((data as any)?.deleted) {
+        setMessages((prev) => prev.filter((msg) => String(msg?.id || '') !== mid));
+        return;
+      }
+      const nextUris = Array.isArray((data as any)?.uris)
+        ? (data as any).uris.map((u: any) => String(u || '').trim()).filter(Boolean).slice(0, CHAT_ALBUM_MAX)
+        : [];
+      const primary = String((data as any)?.uri || nextUris[0] || '').trim();
+      setMessages((prev) =>
+        prev.map((msg) => {
+          if (String(msg?.id || '') !== mid) return msg;
+          return {
+            ...msg,
+            uri: primary || msg.uri,
+            uris: nextUris.length > 1 ? nextUris : undefined,
+          };
+        }),
+      );
+    });
+
     const unsubscribeOutboxDelivered = onOutboxMessageDelivered((ev) => {
       if (String(ev.to || '') !== peerId) return;
       const serverMessageId = String(ev.serverMessageId || '').trim();
@@ -2066,6 +2092,7 @@ export default function ChatScreen({ route, navigation }: Props) {
       unsubscribeMessageDeleted();
       unsubscribeMessagesDeleted();
       unsubscribeMessageEdited();
+      unsubscribeMessageUrisUpdated();
       unsubscribeOutboxDelivered();
       unsubscribeDelivered();
     };
@@ -2119,6 +2146,7 @@ export default function ChatScreen({ route, navigation }: Props) {
           text: msg.text,
           type: msg.type,
           uri: msg.uri,
+          ...albumUrisFieldFromMessage(msg),
           name: (msg as any).name,
           size: (msg as any).size,
           duration: (msg as any).duration,
@@ -2349,6 +2377,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 text: msg.text,
                 type: msg.type,
                 uri: msg.uri,
+                ...albumUrisFieldFromMessage(msg),
                 name: (msg as any).name,
                 size: (msg as any).size,
                 duration: (msg as any).duration,
@@ -2499,6 +2528,7 @@ export default function ChatScreen({ route, navigation }: Props) {
               text: msg.text,
               type: msg.type,
               uri: msg.uri,
+              ...albumUrisFieldFromMessage(msg),
               name: (msg as any).name,
               size: (msg as any).size,
               duration: (msg as any).duration,
@@ -3414,6 +3444,7 @@ export default function ChatScreen({ route, navigation }: Props) {
       setShowMessageActions(false);
       setSelectedMessageLayout(null);
       messageActionsLayoutRef.current = null;
+      setAlbumFocusIndex(null);
     });
   }, [messageActionsOpacity, messageActionsTranslateY]);
 
@@ -3544,7 +3575,7 @@ export default function ChatScreen({ route, navigation }: Props) {
       };
 
       /** Сразу показать в текущем чате, если переслали собеседнику этого экрана (иначе ждём socket echo с задержкой). */
-      const appendIfForwardedToThisPeer = (r: any, partial: { type: string; text?: string; uri?: string; name?: any; size?: any; duration?: any; stickerId?: string; stickerPackId?: string; stickerEmoji?: string; stickerLabel?: string }) => {
+      const appendIfForwardedToThisPeer = (r: any, partial: { type: string; text?: string; uri?: string; uris?: string[]; name?: any; size?: any; duration?: any; stickerId?: string; stickerPackId?: string; stickerEmoji?: string; stickerLabel?: string }) => {
         const uid = String(currentUserId || '').trim();
         const pid = String(peerId || '').trim();
         const t = String(to || '').trim();
@@ -3576,6 +3607,10 @@ export default function ChatScreen({ route, navigation }: Props) {
           }
           else {
             if (partial.uri) row.uri = resolveMediaUri(String(partial.uri));
+            if (Array.isArray(partial.uris) && partial.uris.length > 1) {
+              row.uris = partial.uris.map((u) => resolveMediaUri(String(u)) || String(u));
+              if (!row.uri) row.uri = row.uris[0];
+            }
             if (partial.name != null) row.name = partial.name;
             if (partial.size != null) row.size = partial.size;
             if (partial.duration != null) row.duration = partial.duration;
@@ -3599,10 +3634,33 @@ export default function ChatScreen({ route, navigation }: Props) {
       };
 
       if (selectionMode) {
-        const selected = messages.filter((m) => selectedMessageIds.has(String(m?.id || '')));
         const forwardables: any[] = [];
-        for (const m of selected) {
+        for (const m of messages) {
+          const mid = String(m?.id || '').trim();
+          if (!mid) continue;
           const type = String(m?.type || '').trim();
+          if (type === 'image' && isImageAlbumMessage(m)) {
+            const idxs = selectedAlbumIndices(m, selectedMessageIds);
+            if (!idxs.length) continue;
+            const album = getMessageImageUris(m);
+            const resolved = idxs
+              .map((i) => normalizeForwardMediaUri(album[i]))
+              .filter(Boolean);
+            if (!resolved.length) continue;
+            if (resolved.length === 1) {
+              forwardables.push({ type: 'image', uri: resolved[0], name: m?.name, size: m?.size });
+            } else {
+              forwardables.push({
+                type: 'image',
+                uri: resolved[0],
+                uris: resolved,
+                name: m?.name,
+                size: m?.size,
+              });
+            }
+            continue;
+          }
+          if (!selectedMessageIds.has(mid)) continue;
           if (type === 'text') {
             const txt = String(m?.text || '').trim();
             if (txt) forwardables.push({ type: 'text', text: txt });
@@ -3650,6 +3708,31 @@ export default function ChatScreen({ route, navigation }: Props) {
         return 0;
       }
       if (type === 'image') {
+        const forceOne = !!(selectedMessage as any)?.__albumForwardOne;
+        const album = forceOne ? [] : getMessageImageUris(selectedMessage);
+        if (album.length > 1) {
+          const resolved = album.map((u) => normalizeForwardMediaUri(u)).filter(Boolean);
+          if (!resolved.length) return 0;
+          const r: any = await sendSocketMessage({
+            to,
+            type: 'image',
+            uri: resolved[0],
+            uris: resolved,
+            name: selectedMessage?.name,
+            size: selectedMessage?.size,
+          });
+          if (r?.ok && !r?.localCancelled) {
+            appendIfForwardedToThisPeer(r, {
+              type: 'image',
+              uri: resolved[0],
+              uris: resolved,
+              name: selectedMessage?.name,
+              size: selectedMessage?.size,
+            });
+            return 1;
+          }
+          return 0;
+        }
         const rawUri = String(selectedMessage?.uri ?? '').trim();
         const uri = rawUri ? normalizeForwardMediaUri(rawUri) : '';
         if (!uri) return 0;
@@ -3737,10 +3820,23 @@ export default function ChatScreen({ route, navigation }: Props) {
 
     // Проверка «есть что пересылать» один раз (для режима выбора и одного сообщения)
     if (selectionMode) {
-      const selected = messages.filter((m) => selectedMessageIds.has(String(m?.id || '')));
       let hasAny = false;
-      for (const m of selected) {
+      for (const m of messages) {
+        const mid = String(m?.id || '').trim();
+        if (!mid) continue;
         const type = String(m?.type || '').trim();
+        if (type === 'image' && isImageAlbumMessage(m)) {
+          const idxs = selectedAlbumIndices(m, selectedMessageIds);
+          if (!idxs.length) continue;
+          const album = getMessageImageUris(m);
+          const ok = idxs.some((i) => normalizeForwardMediaUri(String(album[i] || '')));
+          if (ok) {
+            hasAny = true;
+            break;
+          }
+          continue;
+        }
+        if (!selectedMessageIds.has(mid)) continue;
         if (type === 'text' && String(m?.text || '').trim()) hasAny = true;
         else if (type === 'image' && normalizeForwardMediaUri(String(m?.uri || ''))) hasAny = true;
         else if (type === 'audio' && normalizeForwardMediaUri(String(m?.uri || ''))) hasAny = true;
@@ -3803,18 +3899,41 @@ export default function ChatScreen({ route, navigation }: Props) {
     let shareText = '';
     let shareUrl: string | undefined;
     if (selectionMode) {
-      const selected = messages.filter((m) => selectedMessageIds.has(String(m?.id || '')));
       const parts: string[] = [];
-      for (const m of selected) {
+      for (const m of messages) {
+        const mid = String(m?.id || '').trim();
+        if (!mid) continue;
         const type = String(m?.type || '').trim();
+        if (type === 'image' && isImageAlbumMessage(m)) {
+          const n = selectedAlbumIndices(m, selectedMessageIds).length;
+          if (n > 0) {
+            for (let i = 0; i < n; i++) parts.push(t('mediaPhotoLabel', lang));
+          }
+          continue;
+        }
+        if (!selectedMessageIds.has(mid)) continue;
         if (type === 'text') parts.push(String(m?.text ?? '').trim());
         else if (type === 'image') parts.push(t('mediaPhotoLabel', lang));
         else if (type === 'audio') parts.push(`🎤 ${t('chatVoiceMessage', lang)}`);
         else if (type === 'sticker') parts.push(getStickerFallbackText(m, lang));
       }
       shareText = parts.filter(Boolean).join('\n');
-      const firstMedia = selected.find((m) => String(m?.type || '').trim() !== 'text');
-      if (firstMedia?.uri) shareUrl = normalizeUri(String(firstMedia.uri));
+      const firstAlbum = messages.find(
+        (m) => isImageAlbumMessage(m) && selectedAlbumIndices(m, selectedMessageIds).length > 0,
+      );
+      if (firstAlbum) {
+        const idxs = selectedAlbumIndices(firstAlbum, selectedMessageIds);
+        const uris = getMessageImageUris(firstAlbum);
+        const raw = uris[idxs[0]];
+        if (raw) shareUrl = normalizeUri(String(raw));
+      } else {
+        const firstMedia = messages.find(
+          (m) =>
+            selectedMessageIds.has(String(m?.id || '')) &&
+            String(m?.type || '').trim() !== 'text',
+        );
+        if (firstMedia?.uri) shareUrl = normalizeUri(String(firstMedia.uri));
+      }
     } else if (selectedMessage) {
       const type = String(selectedMessage?.type || '').trim();
       if (type === 'text') shareText = String(selectedMessage?.text ?? '').trim();
@@ -3885,13 +4004,52 @@ export default function ChatScreen({ route, navigation }: Props) {
   const toggleSelectMessage = React.useCallback((id: string) => {
     const mid = String(id || '').trim();
     if (!mid) return;
+    const msg = messages.find((m) => String(m?.id || '').trim() === mid);
+    // Album: side checkbox toggles ALL photos on/off
+    if (msg && isImageAlbumMessage(msg)) {
+      const keys = albumSelectionKeysForMessage(msg);
+      setSelectedMessageIds((prev) => {
+        const next = new Set(prev);
+        next.delete(mid);
+        const allOn = keys.length > 0 && keys.every((k) => next.has(k));
+        if (allOn) {
+          for (const k of keys) next.delete(k);
+        } else {
+          for (const k of keys) next.add(k);
+        }
+        return next;
+      });
+      return;
+    }
     setSelectedMessageIds((prev) => {
       const next = new Set(prev);
       if (next.has(mid)) next.delete(mid);
       else next.add(mid);
       return next;
     });
-  }, []);
+  }, [messages]);
+
+  const toggleSelectAlbumTile = React.useCallback((messageId: string, index: number) => {
+    const mid = String(messageId || '').trim();
+    if (!mid || index < 0) return;
+    const key = albumSelectionKey(mid, index);
+    setSelectedMessageIds((prev) => {
+      const next = new Set(prev);
+      // Drop legacy whole-message key if present — expand to per-tile then toggle
+      if (next.has(mid)) {
+        next.delete(mid);
+        const msg = messages.find((m) => String(m?.id || '') === mid);
+        const n = getMessageImageUris(msg).length;
+        for (let i = 0; i < n; i++) {
+          if (i !== index) next.add(albumSelectionKey(mid, i));
+        }
+        return next;
+      }
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, [messages]);
 
   useEffect(() => {
     if (!selectionMode) return;
@@ -3900,9 +4058,20 @@ export default function ChatScreen({ route, navigation }: Props) {
       return;
     }
     let hasSelectedMessagesLeft = false;
-    for (const msg of messages) {
-      const mid = String(msg?.id || '').trim();
-      if (mid && selectedMessageIds.has(mid)) {
+    const byId = new Map(
+      messages.map((m) => [String(m?.id || '').trim(), m] as const).filter(([id]) => !!id),
+    );
+    for (const key of selectedMessageIds) {
+      const parsed = parseAlbumSelectionKey(key);
+      if (parsed) {
+        const msg = byId.get(parsed.messageId);
+        if (msg && parsed.index < getMessageImageUris(msg).length) {
+          hasSelectedMessagesLeft = true;
+          break;
+        }
+        continue;
+      }
+      if (byId.has(key)) {
         hasSelectedMessagesLeft = true;
         break;
       }
@@ -3921,12 +4090,22 @@ export default function ChatScreen({ route, navigation }: Props) {
     setSelectedMessage(null);
   }, [selectedMessage, messages, showMessageActions, hideMessageActions]);
 
-  const enterSelectionModeFromMessage = React.useCallback((m: any) => {
+  const enterSelectionModeFromMessage = React.useCallback((m: any, focusIndex: number | null = null) => {
     const mid = String(m?.id || '').trim();
     setSelectionMode(true);
     setSelectedMessageIds(() => {
       const next = new Set<string>();
-      if (mid) next.add(mid);
+      if (!mid) return next;
+      if (isImageAlbumMessage(m)) {
+        const uris = getMessageImageUris(m);
+        const idx =
+          focusIndex != null && focusIndex >= 0 && focusIndex < uris.length
+            ? focusIndex
+            : 0;
+        next.add(albumSelectionKey(mid, idx));
+      } else {
+        next.add(mid);
+      }
       return next;
     });
     // Закрываем sheet, если он был открыт
@@ -4072,36 +4251,125 @@ export default function ChatScreen({ route, navigation }: Props) {
   const selectedCount = selectedMessageIds.size;
   const selectedHasAnyForwardable = React.useMemo(() => {
     if (!selectionMode || selectedMessageIds.size === 0) return false;
-    // Пересылаем текст и медиа
     for (const m of messages) {
       const id = String(m?.id || '').trim();
       if (!id) continue;
-      if (!selectedMessageIds.has(id)) continue;
       const type = String(m?.type || '').trim();
+      if (type === 'image' && isImageAlbumMessage(m)) {
+        if (selectedAlbumIndices(m, selectedMessageIds).length > 0) return true;
+        continue;
+      }
+      if (!selectedMessageIds.has(id)) continue;
       if (type === 'text' && String(m?.text || '').trim()) return true;
       if (type === 'image' && String(m?.uri || '').trim()) return true;
       if (type === 'audio' && String(m?.uri || '').trim()) return true;
+      if (type === 'sticker' && String(m?.stickerId || '').trim()) return true;
     }
     return false;
   }, [selectionMode, selectedMessageIds, messages]);
 
   const selectAllLoaded = React.useCallback(() => {
-    const ids = messages.map((m) => String(m?.id || '')).filter(Boolean);
-    const allSelected = ids.length > 0 && ids.every((id) => selectedMessageIds.has(id));
+    const allKeys: string[] = [];
+    for (const m of messages) {
+      const mid = String(m?.id || '').trim();
+      if (!mid) continue;
+      if (isImageAlbumMessage(m)) {
+        allKeys.push(...albumSelectionKeysForMessage(m));
+      } else {
+        allKeys.push(mid);
+      }
+    }
+    const allSelected =
+      allKeys.length > 0 && allKeys.every((k) => selectedMessageIds.has(k));
     if (allSelected) {
       setSelectedMessageIds(new Set());
     } else {
-      setSelectedMessageIds(new Set(ids));
+      setSelectedMessageIds(new Set(allKeys));
     }
   }, [messages, selectedMessageIds]);
 
   const batchDeleteSelected = React.useCallback(async (forBoth: boolean = true, idsOverride?: string[]) => {
-    const ids = Array.from(new Set(
+    const rawKeys = Array.from(new Set(
       (idsOverride || Array.from(selectedMessageIds))
         .map((id) => String(id || '').trim())
         .filter(Boolean),
     ));
-    if (ids.length === 0) return;
+    if (rawKeys.length === 0) return;
+
+    const snapForPlan = Array.isArray(messagesRef.current) ? [...messagesRef.current] : [];
+    const byId = new Map(
+      snapForPlan.map((m) => [String(m?.id || '').trim(), m] as const).filter(([id]) => !!id),
+    );
+
+    // Expand selection: album tile keys → full delete or partial URI update
+    const fullDeleteIds = new Set<string>();
+    const albumPartials: Array<{ messageId: string; message: any; removeIndices: number[] }> = [];
+
+    const albumRemoveByMsg = new Map<string, Set<number>>();
+    for (const key of rawKeys) {
+      const parsed = parseAlbumSelectionKey(key);
+      if (parsed) {
+        let set = albumRemoveByMsg.get(parsed.messageId);
+        if (!set) {
+          set = new Set();
+          albumRemoveByMsg.set(parsed.messageId, set);
+        }
+        set.add(parsed.index);
+        continue;
+      }
+      fullDeleteIds.add(key);
+    }
+
+    for (const [messageId, removeSet] of albumRemoveByMsg) {
+      const message = byId.get(messageId);
+      if (!message) continue;
+      const uris = getMessageImageUris(message);
+      const removeIndices = Array.from(removeSet).filter((i) => i >= 0 && i < uris.length);
+      if (!removeIndices.length) continue;
+      const isOwn = message?.from === currentUserId || message?.sender === 'me';
+      if (!isOwn || removeIndices.length >= uris.length) {
+        fullDeleteIds.add(messageId);
+      } else {
+        albumPartials.push({ messageId, message, removeIndices });
+      }
+    }
+
+    // Partial album edits (own messages): remove only selected photos
+    for (const edit of albumPartials) {
+      const uris = getMessageImageUris(edit.message);
+      const removeSet = new Set(edit.removeIndices);
+      const next = uris.filter((_, i) => !removeSet.has(i));
+      if (next.length === 0) {
+        fullDeleteIds.add(edit.messageId);
+        continue;
+      }
+      const r = await updateMessageUris(String(edit.messageId), next);
+      if (r?.ok) {
+        if (r.deleted) {
+          fullDeleteIds.add(edit.messageId);
+        } else {
+          setMessages((prev) =>
+            prev.map((x) =>
+              String(x?.id) === String(edit.messageId)
+                ? {
+                    ...x,
+                    uri: r.uri || next[0],
+                    uris: next.length > 1 ? next : undefined,
+                  }
+                : x,
+            ),
+          );
+        }
+      }
+    }
+
+    const ids = Array.from(fullDeleteIds);
+    if (ids.length === 0) {
+      try { hideMessageActions(); } catch {}
+      setSelectedMessage(null);
+      exitSelectionMode();
+      return;
+    }
 
     const idSet = new Set(ids.map((x) => String(x)));
     const snapForResolve = Array.isArray(messagesRef.current) ? [...messagesRef.current] : [];
@@ -4233,6 +4501,7 @@ export default function ChatScreen({ route, navigation }: Props) {
   }, [
     selectedMessageIds,
     exitSelectionMode,
+    currentUserId,
     showForwardToastBadge,
     showNotice,
     lang,
@@ -4429,27 +4698,292 @@ export default function ChatScreen({ route, navigation }: Props) {
   ]);
 
   // Stable handler to avoid re-rendering all MessageItem rows on parent re-renders
+  const downloadUriToCache = React.useCallback(async (uri: string): Promise<string> => {
+    const resolved = resolveMediaUri(uri) || uri;
+    if (!resolved) return '';
+    if (/^file:\/\//i.test(resolved) || /^content:\/\//i.test(resolved)) return resolved;
+    try {
+      const ext = resolved.toLowerCase().includes('.png') ? 'png' : 'jpg';
+      const target = `${FileSystem.cacheDirectory}livi_save_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.${ext}`;
+      const res = await FileSystem.downloadAsync(resolved, target);
+      return res?.uri || '';
+    } catch {
+      return '';
+    }
+  }, [resolveMediaUri]);
+
+  const saveAlbumUris = React.useCallback(async (uris: string[]) => {
+    let ok = 0;
+    let permDenied = false;
+    for (const u of uris) {
+      const local = await downloadUriToCache(u);
+      if (!local) continue;
+      try {
+        await saveImageToGallery(local);
+        ok += 1;
+      } catch (e) {
+        if (/permission|Photos|gallery/i.test(String((e as any)?.message || e))) {
+          permDenied = true;
+        }
+      }
+    }
+    if (ok > 0) {
+      showForwardToastBadge(true, t('chatAlbumSaved', lang));
+      if (ok < uris.length) showNotice('error', t('errorTitle', lang), t('chatAlbumSavePartialFail', lang));
+    } else {
+      showNotice(
+        'error',
+        t('errorTitle', lang),
+        permDenied ? t('chatAlbumSaveNoPermission', lang) : t('saveFailed', lang),
+      );
+    }
+  }, [downloadUriToCache, showForwardToastBadge, showNotice, lang]);
+
+  const runSelectedImageAction = React.useCallback(
+    async (action: string, m: any, focusIndex: number | null) => {
+      if (!m) return;
+      const uris = getMessageImageUris(m);
+      const isAlbum = uris.length > 1;
+      const idx =
+        focusIndex != null && focusIndex >= 0 && focusIndex < uris.length ? focusIndex : null;
+      const oneUri = idx != null ? uris[idx] : uris[0];
+      const isOwn = m?.from === currentUserId || m?.sender === 'me';
+
+      if (action === 'save' || action === 'save_one') {
+        if (oneUri) await saveAlbumUris([oneUri]);
+        return;
+      }
+      if (action === 'save_all') {
+        await saveAlbumUris(uris);
+        return;
+      }
+      if (action === 'forward' || action === 'forward_all') {
+        setSelectedMessage(m);
+        await openForwardPicker();
+        return;
+      }
+      if (action === 'forward_one') {
+        if (!oneUri) return;
+        setSelectedMessage({ ...m, uri: oneUri, uris: undefined, __albumForwardOne: true });
+        await openForwardPicker();
+        return;
+      }
+      if (action === 'delete_one' && isOwn && isAlbum && idx != null) {
+        const next = uris.filter((_, i) => i !== idx);
+        if (next.length === 0) {
+          confirmDeleteSelectedMessage(m);
+          return;
+        }
+        const r = await updateMessageUris(String(m.id), next);
+        if (r?.ok) {
+          if (r.deleted) {
+            setMessages((prev) => prev.filter((x) => String(x?.id) !== String(m.id)));
+          } else {
+            setMessages((prev) =>
+              prev.map((x) =>
+                String(x?.id) === String(m.id)
+                  ? {
+                      ...x,
+                      uri: r.uri || next[0],
+                      uris: next.length > 1 ? next : undefined,
+                    }
+                  : x,
+              ),
+            );
+          }
+          showForwardToastBadge(true, t('chatDeleted', lang));
+        } else {
+          showNotice('error', t('errorTitle', lang), t('saveFailed', lang));
+        }
+        return;
+      }
+      if (action === 'delete' || action === 'delete_all') {
+        confirmDeleteSelectedMessage(m);
+      }
+    },
+    [
+      currentUserId,
+      saveAlbumUris,
+      openForwardPicker,
+      confirmDeleteSelectedMessage,
+      showForwardToastBadge,
+      showNotice,
+      lang,
+    ],
+  );
+
+  const closeAlbumScope = React.useCallback(() => {
+    setAlbumScopeVisible(false);
+    albumScopeMessageRef.current = null;
+    setAlbumPickUris([]);
+    setAlbumPickInitial([0]);
+    setAlbumFocusIndex(null);
+  }, []);
+
+  const openAlbumScope = React.useCallback(
+    (kind: 'save' | 'forward' | 'delete', m: any, focusIndex: number | null) => {
+      const uris = getMessageImageUris(m);
+      albumScopeMessageRef.current = m;
+      setAlbumScopeKind(kind);
+      setAlbumPickUris(uris);
+      const initial =
+        focusIndex != null && focusIndex >= 0 && focusIndex < uris.length
+          ? [focusIndex]
+          : [0];
+      setAlbumPickInitial(initial);
+      setAlbumScopeVisible(true);
+    },
+    [],
+  );
+
+  /** Single menu entry → run now, or open multi-select for albums. */
+  const requestImageAction = React.useCallback(
+    (kind: 'save' | 'forward' | 'delete', m: any, focusIndex: number | null) => {
+      if (!m) return;
+      const uris = getMessageImageUris(m);
+      const isAlbum = uris.length > 1;
+      const hasFocus =
+        isAlbum && focusIndex != null && focusIndex >= 0 && focusIndex < uris.length;
+      const focusForOne = hasFocus ? focusIndex : isAlbum ? 0 : null;
+      const isOwn = m?.from === currentUserId || m?.sender === 'me';
+
+      if (kind === 'delete') {
+        if (isAlbum && isOwn) {
+          openAlbumScope('delete', m, focusForOne);
+          return;
+        }
+        void runSelectedImageAction('delete', m, focusIndex);
+        return;
+      }
+      if (isAlbum) {
+        openAlbumScope(kind, m, focusForOne);
+        return;
+      }
+      if (kind === 'save') {
+        void runSelectedImageAction('save', m, focusIndex);
+        return;
+      }
+      void runSelectedImageAction('forward', m, focusIndex);
+    },
+    [currentUserId, openAlbumScope, runSelectedImageAction],
+  );
+
+  const applyAlbumPick = React.useCallback(
+    async (indices: number[]) => {
+      const m = albumScopeMessageRef.current;
+      const kind = albumScopeKind;
+      const uris = getMessageImageUris(m);
+      const pickedIdx = indices.filter((i) => i >= 0 && i < uris.length);
+      const picked = pickedIdx.map((i) => uris[i]).filter(Boolean);
+      setAlbumScopeVisible(false);
+      albumScopeMessageRef.current = null;
+      setAlbumPickUris([]);
+      setAlbumFocusIndex(null);
+      if (!m || !picked.length) return;
+
+      if (kind === 'save') {
+        await saveAlbumUris(picked);
+        return;
+      }
+      if (kind === 'forward') {
+        if (picked.length === 1) {
+          setSelectedMessage({ ...m, uri: picked[0], uris: undefined, __albumForwardOne: true });
+        } else {
+          setSelectedMessage({
+            ...m,
+            uri: picked[0],
+            uris: picked,
+            __albumForwardOne: false,
+          });
+        }
+        await openForwardPicker();
+        return;
+      }
+
+      // delete
+      const isOwn = m?.from === currentUserId || m?.sender === 'me';
+      if (!isOwn) {
+        confirmDeleteSelectedMessage(m);
+        return;
+      }
+      if (picked.length >= uris.length) {
+        confirmDeleteSelectedMessage(m);
+        return;
+      }
+      const removeSet = new Set(pickedIdx);
+      const next = uris.filter((_, i) => !removeSet.has(i));
+      if (next.length === 0) {
+        confirmDeleteSelectedMessage(m);
+        return;
+      }
+      const r = await updateMessageUris(String(m.id), next);
+      if (r?.ok) {
+        if (r.deleted) {
+          setMessages((prev) => prev.filter((x) => String(x?.id) !== String(m.id)));
+        } else {
+          setMessages((prev) =>
+            prev.map((x) =>
+              String(x?.id) === String(m.id)
+                ? {
+                    ...x,
+                    uri: r.uri || next[0],
+                    uris: next.length > 1 ? next : undefined,
+                  }
+                : x,
+            ),
+          );
+        }
+        showForwardToastBadge(true, t('chatDeleted', lang));
+      } else {
+        showNotice('error', t('errorTitle', lang), t('saveFailed', lang));
+      }
+    },
+    [
+      albumScopeKind,
+      saveAlbumUris,
+      openForwardPicker,
+      currentUserId,
+      confirmDeleteSelectedMessage,
+      showForwardToastBadge,
+      showNotice,
+      lang,
+    ],
+  );
+
   const handleLongPressMessage = React.useCallback(
-    (m: any, layout?: { x: number; y: number; width: number; height: number }) => {
+    (m: any, layout?: { x: number; y: number; width: number; height: number }, focusIndex: number | null = null) => {
       setSelectedMessage(m);
+      setAlbumFocusIndex(focusIndex);
       if (!layout && Platform.OS === 'android') {
         messageActionsLayoutRef.current = null;
       }
 
       const isOwn = m?.from === currentUserId || m?.sender === 'me';
       const isText = String(m?.type || '') === 'text';
+      const isImage = String(m?.type || '') === 'image';
       const showEdit = isOwn && isText;
 
-      const actionIds = ['copy', 'forward', 'select', 'reply', ...(showEdit ? (['edit'] as const) : []), 'delete', 'cancel'] as const;
-      const options = [
-        t('chatActionCopy', lang),
-        t('chatActionForward', lang),
-        t('chatActionSelect', lang),
-        t('chatActionReply', lang),
-        ...(showEdit ? [t('chatActionEdit', lang)] : []),
-        t('delete', lang),
-        t('cancelAction', lang),
-      ];
+      const actionIds: string[] = [];
+      const options: string[] = [];
+      const push = (id: string, label: string) => {
+        actionIds.push(id);
+        options.push(label);
+      };
+
+      if (isText || String(m?.stickerId || '').trim()) {
+        push('copy', t('chatActionCopy', lang));
+      }
+      if (isImage) {
+        push('save', t('save', lang));
+        push('forward', t('chatActionForward', lang));
+      } else {
+        push('forward', t('chatActionForward', lang));
+      }
+      push('select', t('chatActionSelect', lang));
+      push('reply', t('chatActionReply', lang));
+      if (showEdit) push('edit', t('chatActionEdit', lang));
+      push('delete', t('delete', lang));
+      push('cancel', t('cancelAction', lang));
 
       const cancelButtonIndex = actionIds.length - 1;
       const destructiveButtonIndex = actionIds.indexOf('delete');
@@ -4464,7 +4998,10 @@ export default function ChatScreen({ route, navigation }: Props) {
           },
           (buttonIndex) => {
             const action = actionIds[buttonIndex] || 'cancel';
-            if (action === 'cancel') return;
+            if (action === 'cancel') {
+              setAlbumFocusIndex(null);
+              return;
+            }
             if (action === 'reply') {
               setEditingMessageId(null);
               messageTextRef.current = '';
@@ -4475,6 +5012,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 from: m?.from,
                 isOwn: isOwn,
               });
+              setAlbumFocusIndex(null);
               return;
             }
             if (action === 'edit') {
@@ -4483,21 +5021,46 @@ export default function ChatScreen({ route, navigation }: Props) {
               setMessageText(text);
               setEditingMessageId(m?.id ?? null);
               setReplyingToMessage(null);
+              setAlbumFocusIndex(null);
               return;
             }
-            if (action === 'delete') return confirmDeleteSelectedMessage(m);
-            if (action === 'copy') return void copySelectedMessage(m);
-            if (action === 'forward') return void openForwardPicker();
-            if (action === 'select') return void enterSelectionModeFromMessage(m);
+            if (action === 'copy') {
+              void copySelectedMessage(m);
+              setAlbumFocusIndex(null);
+              return;
+            }
+            if (action === 'select') {
+              void enterSelectionModeFromMessage(m, focusIndex);
+              setAlbumFocusIndex(null);
+              return;
+            }
+            if (action === 'save' || action === 'forward' || action === 'delete') {
+              requestImageAction(action, m, focusIndex);
+              return;
+            }
           }
         );
         return;
       }
 
-      // Android: передаём layout при открытии и откладываем показ на следующий кадр
+      // Android: штатное меню действий (без Alert)
       showMessageActionsSheet(layout ?? null);
     },
-    [currentUserId, confirmDeleteSelectedMessage, copySelectedMessage, openForwardPicker, showMessageActionsSheet, lang]
+    [
+      currentUserId,
+      copySelectedMessage,
+      showMessageActionsSheet,
+      enterSelectionModeFromMessage,
+      requestImageAction,
+      lang,
+    ]
+  );
+
+  const handleLongPressAlbumTile = React.useCallback(
+    (m: any, index: number, layout?: { x: number; y: number; width: number; height: number }) => {
+      handleLongPressMessage(m, layout, index);
+    },
+    [handleLongPressMessage],
   );
 
   // Функция для получения анимации сообщения (стабильная ссылка, чтобы не ломать мемоизацию)
@@ -5382,6 +5945,128 @@ export default function ChatScreen({ route, navigation }: Props) {
     }
   }, [currentUserId, peerId, updateReadStatuses, resolveMediaUri, enqueueMediaOutboxId, dequeueMediaOutboxId]);
 
+  /** Send 2…10 photos as one album message. */
+  const sendPickedAlbum = React.useCallback(async (assets: any[]): Promise<boolean> => {
+    if (!currentUserId || !peerId) return false;
+    const list = (Array.isArray(assets) ? assets : []).slice(0, CHAT_ALBUM_MAX);
+    if (list.length < 2) {
+      if (list[0]) return sendPickedImage(list[0]);
+      return false;
+    }
+
+    const messageId = Date.now().toString();
+    const localUris = list.map((a) => String(a?.uri || '').trim()).filter(Boolean);
+    if (localUris.length < 2) return false;
+
+    const newMessage = {
+      id: messageId,
+      type: 'image' as const,
+      uri: localUris[0],
+      uris: localUris,
+      name: list[0]?.fileName || `album_${Date.now()}`,
+      size: list.reduce((s, a) => s + (Number(a?.fileSize) || 0), 0),
+      sender: 'me',
+      from: currentUserId,
+      to: peerId,
+      timestamp: new Date(),
+    };
+
+    setMessages((prev) => {
+      if (prev.find((msg) => msg.id === messageId)) return prev;
+      return [...prev, newMessage];
+    });
+    updateReadStatuses((prev) => ({ ...prev, [messageId]: 'sending' }));
+    setUploadStatus((prev) => ({ ...prev, [messageId]: 'sending' }));
+
+    try {
+      const remoteUris: string[] = [];
+      for (let i = 0; i < list.length; i++) {
+        const localUri = String(list[i]?.uri || '').trim();
+        if (!localUri) continue;
+        const uploadResult = await uploadMediaToServer(localUri, 'image', undefined, currentUserId, peerId);
+        if (!uploadResult.success || !uploadResult.url) {
+          updateReadStatuses((prev) => ({ ...prev, [messageId]: 'failed' }));
+          setUploadStatus((prev) => ({ ...prev, [messageId]: 'failed' }));
+          void enqueueMediaOutboxId(messageId);
+          return false;
+        }
+        remoteUris.push(uploadResult.url);
+      }
+      if (remoteUris.length < 2) {
+        updateReadStatuses((prev) => ({ ...prev, [messageId]: 'failed' }));
+        setUploadStatus((prev) => ({ ...prev, [messageId]: 'failed' }));
+        return false;
+      }
+
+      const resolvedUris = remoteUris.map((u) => resolveMediaUri(u) || u);
+      const socketResult: any = await sendSocketMessage({
+        to: peerId,
+        type: 'image',
+        uri: remoteUris[0],
+        uris: remoteUris,
+        name: list[0]?.fileName || undefined,
+        size: list.reduce((s, a) => s + (Number(a?.fileSize) || 0), 0) || undefined,
+        clientUiMessageId: messageId,
+      });
+
+      if (socketResult?.localCancelled) {
+        updateReadStatuses((prev) => {
+          const n = { ...prev };
+          delete (n as any)[messageId];
+          return n as any;
+        });
+        setUploadStatus((prev) => {
+          const n = { ...prev };
+          delete (n as any)[messageId];
+          return n;
+        });
+        void dequeueMediaOutboxId(messageId);
+        return false;
+      }
+
+      if (socketResult.ok && socketResult.messageId) {
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.id === messageId
+              ? {
+                  ...msg,
+                  id: socketResult.messageId!,
+                  uri: resolvedUris[0],
+                  uris: resolvedUris,
+                  from: currentUserId,
+                  to: peerId,
+                }
+              : msg,
+          ),
+        );
+        setUploadStatus((prev) => {
+          const newStatus = { ...prev };
+          newStatus[socketResult.messageId!] = 'sent';
+          delete newStatus[messageId];
+          return newStatus;
+        });
+        updateReadStatuses((prev) => {
+          const newStatuses = { ...prev };
+          newStatuses[socketResult.messageId!] = socketResult.delivered ? 'delivered' : 'sent';
+          delete newStatuses[messageId];
+          return newStatuses;
+        });
+        return true;
+      }
+
+      updateReadStatuses((prev) => ({ ...prev, [messageId]: 'failed' }));
+      setUploadStatus((prev) => ({ ...prev, [messageId]: 'failed' }));
+      void enqueueMediaOutboxId(messageId);
+      return false;
+    } catch (e) {
+      console.error('Failed to upload and send album:', e);
+      updateReadStatuses((prev) => ({ ...prev, [messageId]: 'failed' }));
+      setUploadStatus((prev) => ({ ...prev, [messageId]: 'failed' }));
+      void enqueueMediaOutboxId(messageId);
+      return false;
+    }
+  }, [currentUserId, peerId, sendPickedImage, updateReadStatuses, resolveMediaUri, enqueueMediaOutboxId, dequeueMediaOutboxId]);
+
   const uploadRawShareFile = React.useCallback(async (localUri: string) => {
     const installId = await getInstallId().catch(() => '');
     const normalizedUri = localUri.startsWith('file://') ? localUri : `file://${localUri}`;
@@ -5676,12 +6361,18 @@ export default function ChatScreen({ route, navigation }: Props) {
         mediaTypes: ['images'],
         // Не обрезаем принудительно: даём предпросмотр и возможность обрезать/не обрезать
         allowsEditing: false,
+        allowsMultipleSelection: true,
+        selectionLimit: CHAT_ALBUM_MAX,
         quality: 0.8,
       });
 
-      if (!result.canceled && result.assets[0]) {
-        const asset = result.assets[0];
-        openComposeViewer(asset);
+      if (!result.canceled && result.assets?.length) {
+        const assets = result.assets.slice(0, CHAT_ALBUM_MAX);
+        if (assets.length === 1) {
+          openComposeViewer(assets[0]);
+        } else {
+          void sendPickedAlbum(assets);
+        }
       }
     } catch (error) {
       console.error('Image picker error:', error);
@@ -5690,1059 +6381,8 @@ export default function ChatScreen({ route, navigation }: Props) {
   };
 
 
-  // КРИТИЧНО: если MessageItem создаётся внутри ChatScreen без мемоизации типа компонента,
-  // то при каждом setMessageText FlatList будет размонтировать/монтировать все элементы -> мерцание всех картинок.
-  const MessageItem = React.useMemo(() => React.memo(({ item, currentUserId, readStatus, uploadStatus, onPressImage, onPressAudio, playingAudioId, playingAudioState, onLongPressMessage, onMessagePress, onReactionPress, selectionMode, isSelected, onToggleSelect, retryUiForId, onToggleRetryUi, onRetryFailed, resolveMediaUri, peerDisplayName, highlightedMessageId, onPressReplyQuote }: any) => {
-    const bubbleRef = React.useRef<View>(null);
-    const [imageLoadError, setImageLoadError] = React.useState(false);
-    const [localImageUri, setLocalImageUri] = React.useState<string | null>(null);
-    const [isDownloading, setIsDownloading] = React.useState(false);
-    const imageUriForItem = item.type === 'image' ? (resolveMediaUri(item.uri) || '') : '';
-    const [messageImageResolvedUri] = useResolvedImageUri(
-      Platform.OS === 'android' && imageUriForItem && /^data:/i.test(imageUriForItem) ? imageUriForItem : ''
-    );
-    const fireLongPressWithLayout = React.useCallback(() => {
-      const measure = () => {
-        bubbleRef.current?.measureInWindow((x, y, w, h) => {
-          onLongPressMessage(item, { x, y, width: w, height: h });
-        });
-      };
-      if (Platform.OS === 'android') {
-        requestAnimationFrame(measure);
-      } else {
-        measure();
-      }
-    }, [item, onLongPressMessage]);
-    const openMessageActionsFromBubble = React.useCallback(() => {
-      animateMessagePress(item.id, fireLongPressWithLayout, { immediate: true });
-    }, [item.id, animateMessagePress, fireLongPressWithLayout]);
-    // Fallback логика для определения отправителя если поле sender отсутствует
-    let isMyMessage = item.sender === 'me';
-    if (item.sender === undefined || item.sender === null) {
-      isMyMessage = item.from === currentUserId;
-      // оставляем только предупреждение, без лишних деталей
-      console.warn('Message without sender field: using fallback');
-    }
+  // MessageItem вынесен в ./chat/ChatMessageItem (стабильный React.memo на уровне модуля).
 
-    const effectiveReadStatus: ChatReadStatus | undefined =
-      readStatus ||
-      (isMyMessage
-        ? (item.read
-            ? 'read'
-            : isOfflineQueuedOrOptimisticOutgoingId(String(item?.id || ''))
-              ? 'sending'
-              : 'sent')
-        : undefined);
-    const messageUploadStatus = isMyMessage ? (uploadStatus || 'sent') : 'sent';
-    
-    // Сбрасываем ошибку и локальный URI при изменении URI
-    React.useEffect(() => {
-      setImageLoadError(false);
-      setLocalImageUri(null);
-      setIsDownloading(false);
-    }, [item.uri]);
-    
-    // Функция для скачивания изображения через FileSystem (обходит ATS)
-    const downloadImageViaFileSystem = React.useCallback(async (uri: string) => {
-      if (isDownloading || localImageUri) return; // Уже скачивается или уже скачано
-      
-      setIsDownloading(true);
-      try {
-        const fileName = `image_${item.id}_${Date.now()}.jpg`;
-        const targetUri = `${FileSystem.cacheDirectory}${fileName}`;
-        
-        logger.debug('[ChatScreen] MessageItem: downloading image via FileSystem', { 
-          messageId: item.id, 
-          sourceUri: uri,
-          targetUri 
-        });
-        
-        const downloadResult = await FileSystem.downloadAsync(uri, targetUri);
-        
-        if (downloadResult.uri) {
-          logger.debug('[ChatScreen] MessageItem: image downloaded successfully', { 
-            messageId: item.id, 
-            localUri: downloadResult.uri 
-          });
-          setLocalImageUri(downloadResult.uri);
-          setImageLoadError(false);
-        } else {
-          throw new Error('Download failed: no URI returned');
-        }
-      } catch (error: any) {
-        logger.error('[ChatScreen] MessageItem: FileSystem download error', { 
-          messageId: item.id, 
-          uri, 
-          error: error?.message || String(error) 
-        });
-        setImageLoadError(true);
-      } finally {
-        setIsDownloading(false);
-      }
-    }, [item.id, isDownloading, localImageUri]);
-
-    const renderContent = () => {
-      switch (item.type) {
-        case 'image':
-          const imageUri = resolveMediaUri(item.uri);
-          if (!imageUri) {
-            logger.warn('[ChatScreen] MessageItem: image URI is empty', { messageId: item.id, originalUri: item.uri });
-            return (
-              <View style={{
-                width: 200,
-                height: 150,
-                backgroundColor: 'rgba(255,255,255,0.1)',
-                borderRadius: 12,
-                alignItems: 'center',
-                justifyContent: 'center',
-                borderWidth: 1,
-                borderColor: 'rgba(255,255,255,0.2)',
-              }}>
-                <Ionicons name="image-outline" size={32} color="rgba(255,255,255,0.5)" />
-                <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 10, marginTop: 4 }}>
-                  {t('chatImageUnavailable', lang)}
-                </Text>
-              </View>
-            );
-          }
-          const displayImageUri = (Platform.OS === 'android' && /^data:/i.test(imageUri)) ? messageImageResolvedUri : imageUri;
-          
-          logger.debug('[ChatScreen] MessageItem: rendering image', { 
-            messageId: item.id, 
-            originalUri: item.uri, 
-            resolvedUri: imageUri 
-          });
-          
-          // Если была ошибка загрузки, показываем fallback UI
-          if (imageLoadError) {
-            return (
-              <TouchableOpacity 
-                style={{ 
-                  position: 'relative',
-                  backgroundColor: 'rgba(255,255,255,0.1)',
-                  borderRadius: 12,
-                  overflow: 'hidden',
-                  marginBottom: 8,
-                  width: 200,
-                  height: 150,
-                  borderWidth: 1,
-                  borderColor: 'rgba(255,255,255,0.2)',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                }}
-                onPress={() => {
-                  animateMessagePress(item.id, () => {
-                    onPressImage('image', imageUri, item.name);
-                  });
-                }}
-                delayLongPress={280}
-                onLongPress={() => {
-                  animateMessagePress(item.id, fireLongPressWithLayout, { immediate: true });
-                }}
-                activeOpacity={0.9}
-              >
-                <Ionicons name="image-outline" size={40} color="rgba(255,255,255,0.5)" />
-                <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 11, marginTop: 8, textAlign: 'center', paddingHorizontal: 8 }}>
-                  Нажмите для просмотра
-                </Text>
-              </TouchableOpacity>
-            );
-          }
-          
-          return (
-            <TouchableOpacity 
-              style={{ 
-                position: 'relative',
-                backgroundColor: 'rgba(255,255,255,0.1)',
-                borderRadius: 12,
-                overflow: 'hidden',
-                marginBottom: 8,
-                width: 200,
-                height: 150,
-                borderWidth: 1,
-                borderColor: 'rgba(255,255,255,0.2)',
-                shadowColor: '#000',
-                shadowOffset: {
-                  width: 0,
-                  height: 2,
-                },
-                shadowOpacity: 0.1,
-                shadowRadius: 4,
-                elevation: 2,
-              }}
-              onPress={() => {
-                animateMessagePress(item.id, () => {
-                  onPressImage('image', imageUri, item.name);
-                });
-              }}
-              delayLongPress={280}
-              onLongPress={() => {
-                animateMessagePress(item.id, fireLongPressWithLayout, { immediate: true });
-              }}
-              activeOpacity={0.9}
-            >
-              {isDownloading && (
-                <View style={{
-                  position: 'absolute',
-                  top: 0,
-                  left: 0,
-                  right: 0,
-                  bottom: 0,
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  backgroundColor: 'rgba(0,0,0,0.3)',
-                }}>
-                  <ActivityIndicator size="small" color="#fff" />
-                </View>
-              )}
-              <ExpoImage
-                source={{ uri: localImageUri || displayImageUri }}
-                style={{
-                  width: '100%',
-                  height: '100%',
-                  backgroundColor: 'rgba(255,255,255,0.1)',
-                }}
-                contentFit="cover"
-                cachePolicy="memory-disk"
-                // КРИТИЧНО: на Android transition часто даёт мерцание в списках
-                transition={Platform.OS === 'android' ? 0 : 200}
-                recyclingKey={`message_image_${item.id}_${localImageUri ? 'local' : 'remote'}`}
-                allowDownscaling={false}
-                placeholder={null}
-                onError={(error: any) => {
-                  // КРИТИЧНО: Детальное логирование ошибки для диагностики
-                  const errorDetails: any = {
-                    messageId: item.id,
-                    uri: imageUri,
-                    originalUri: item.uri,
-                    errorType: typeof error,
-                    errorString: String(error),
-                  };
-                  
-                  // Пытаемся извлечь больше информации об ошибке
-                  try {
-                    if (error?.nativeEvent) {
-                      errorDetails.nativeEvent = error.nativeEvent;
-                    }
-                    if (error?.message) {
-                      errorDetails.errorMessage = error.message;
-                    }
-                    if (error?.code) {
-                      errorDetails.errorCode = error.code;
-                    }
-                    // Пытаемся сериализовать весь объект ошибки
-                    const errorKeys = Object.keys(error || {});
-                    if (errorKeys.length > 0) {
-                      errorDetails.errorKeys = errorKeys;
-                      errorDetails.errorValues = errorKeys.reduce((acc: any, key: string) => {
-                        try {
-                          acc[key] = String(error[key]);
-                        } catch {
-                          acc[key] = '[unserializable]';
-                        }
-                        return acc;
-                      }, {});
-                    }
-                  } catch (e) {
-                    errorDetails.serializationError = String(e);
-                  }
-                  
-                  logger.error('[ChatScreen] MessageItem: image load error', errorDetails);
-                  console.error('[ChatScreen] Image load error details:', errorDetails);
-                  
-                  // КРИТИЧНО: Если ошибка связана с ATS, пытаемся скачать через FileSystem
-                  const isATSError = errorDetails.errorValues?.error?.includes('App Transport Security') || 
-                                     errorDetails.nativeEvent?.error?.includes('App Transport Security');
-                  
-                  if (isATSError && !localImageUri && !isDownloading) {
-                    logger.info('[ChatScreen] MessageItem: ATS error detected, trying FileSystem download', { 
-                      messageId: item.id, 
-                      uri: imageUri 
-                    });
-                    downloadImageViaFileSystem(imageUri);
-                  } else {
-                    setImageLoadError(true);
-                  }
-                }}
-                onLoadStart={() => {
-                  setImageLoadError(false); // Сбрасываем ошибку при новой попытке загрузки
-                  logger.debug('[ChatScreen] MessageItem: image load started', { 
-                    messageId: item.id, 
-                    uri: imageUri 
-                  });
-                }}
-                onLoad={() => {
-                  setImageLoadError(false); // Успешная загрузка
-                  logger.debug('[ChatScreen] MessageItem: image loaded successfully', { 
-                    messageId: item.id, 
-                    uri: imageUri 
-                  });
-                }}
-                onLoadEnd={() => {
-                  logger.debug('[ChatScreen] MessageItem: image load ended', { 
-                    messageId: item.id, 
-                    uri: imageUri 
-                  });
-                }}
-              />
-             
-              
-              
-              {messageUploadStatus === 'sending' && (
-                <View style={{
-                  position: 'absolute',
-                  bottom: 8,
-                  left: 8,
-                  right: 8,
-                  backgroundColor: 'rgba(0,0,0,0.8)',
-                  borderRadius: 4,
-                  padding: 8,
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                }}>
-                  <ActivityIndicator size="small" color="#4CAF50" style={{ marginRight: 6 }} />
-                  <Text style={{
-                    color: 'white',
-                    fontSize: 10,
-                    fontWeight: '600',
-                  }}>
-                    Отправляется...
-                  </Text>
-                </View>
-              )}
-              
-              {messageUploadStatus === 'failed' && (
-                <View style={{
-                  position: 'absolute',
-                  bottom: 8,
-                  left: 8,
-                  right: 8,
-                  backgroundColor: 'rgba(255,0,0,0.8)',
-                  borderRadius: 4,
-                  padding: 8,
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                }}>
-                  <Ionicons name="alert-circle" size={12} color="white" style={{ marginRight: 4 }} />
-                  <Text style={{
-                    color: 'white',
-                    fontSize: 10,
-                    fontWeight: '600',
-                  }}>
-                    Ошибка отправки
-                  </Text>
-                </View>
-              )}
-            </TouchableOpacity>
-          );
-        case 'audio': {
-          const isPlaying = String(playingAudioId || '') === String(item.id || '');
-          const durSec = Number(item?.duration || 0);
-          const fullMs = durSec > 0 ? durSec * 1000 : 0;
-          const remainingMs =
-            isPlaying && playingAudioState?.id === String(item.id || '')
-              ? Math.max(0, Number(playingAudioState.durationMs || 0) - Number(playingAudioState.positionMs || 0))
-              : fullMs;
-          const durLabel = (isPlaying ? remainingMs : fullMs) > 0 ? formatDurationDot(isPlaying ? remainingMs : fullMs) : '';
-
-          const voiceRingSize = 42;
-          const voiceRingCx = voiceRingSize / 2;
-          const voiceRingR = 19;
-          /** Внутренний диск (тот же центр, что и у окружностей кольца) */
-          const voiceDiscR = 17;
-          const voiceRingCirc = 2 * Math.PI * voiceRingR;
-          const voiceDiscFill = isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.035)';
-          const voiceDurMs =
-            isPlaying && playingAudioState?.id === String(item.id || '')
-              ? Math.max(0, Number(playingAudioState.durationMs || 0))
-              : 0;
-          const voicePosMs =
-            isPlaying && playingAudioState?.id === String(item.id || '')
-              ? Math.max(0, Number(playingAudioState.positionMs || 0))
-              : 0;
-          const voiceProgressRaw =
-            isPlaying && voiceDurMs > 0 ? Math.min(1, voicePosMs / Math.max(voiceDurMs, 1)) : 0;
-          // expo-av часто не доводит position до duration до didJustFinish; хвост считаем «концом» без ломания коротких клипов
-          const tailMs = Math.min(220, Math.max(16, Math.floor(voiceDurMs * 0.08)));
-          const nearEnd = voiceDurMs > 0 && voicePosMs >= voiceDurMs - tailMs;
-          const voiceProgress = Math.min(1, nearEnd ? 1 : voiceProgressRaw);
-          const voiceGradId = `voicePearl-${String(item.id || '').replace(/[^a-zA-Z0-9_-]/g, '_')}`;
-
-          return (
-            <View
-              style={{
-                minWidth: 200,
-                flexDirection: 'row',
-                alignItems: 'center',
-                gap: 10,
-              }}
-            >
-              <View
-                style={{
-                  width: voiceRingSize,
-                  height: voiceRingSize,
-                  position: 'relative',
-                }}
-              >
-                {/*
-                  Кольцо + заливка только в SVG с одним центром (cx/cy) — иначе View/Svg/иконка
-                  на разных движках визуально «плывут». Сверху — только прозрачный hit-target и иконка.
-                */}
-                <Svg
-                  width={voiceRingSize}
-                  height={voiceRingSize}
-                  viewBox={`0 0 ${voiceRingSize} ${voiceRingSize}`}
-                  style={StyleSheet.absoluteFillObject}
-                  pointerEvents="none"
-                >
-                  <Defs>
-                    <LinearGradient id={voiceGradId} x1="0%" y1="0%" x2="100%" y2="100%">
-                      <Stop offset="0%" stopColor={isDark ? '#C8FFF4' : '#EDE4FF'} stopOpacity={1} />
-                      <Stop offset={isDark ? '45%' : '40%'} stopColor={isDark ? '#5ED4C8' : '#A894D8'} stopOpacity={1} />
-                      <Stop offset="100%" stopColor={isDark ? '#A8E8E0' : '#D4C4F0'} stopOpacity={1} />
-                    </LinearGradient>
-                  </Defs>
-                  <SvgCircle
-                    cx={voiceRingCx}
-                    cy={voiceRingCx}
-                    r={voiceDiscR}
-                    fill={voiceDiscFill}
-                  />
-                  <SvgCircle
-                    cx={voiceRingCx}
-                    cy={voiceRingCx}
-                    r={voiceRingR}
-                    fill="none"
-                    stroke={isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.10)'}
-                    strokeWidth={2.5}
-                  />
-                  {isPlaying ? (
-                    <G rotation="-90" origin={`${voiceRingCx}, ${voiceRingCx}`}>
-                      <SvgCircle
-                        cx={voiceRingCx}
-                        cy={voiceRingCx}
-                        r={voiceRingR}
-                        fill="none"
-                        stroke={`url(#${voiceGradId})`}
-                        strokeWidth={2.5}
-                        strokeLinecap="butt"
-                        strokeDasharray={`${voiceRingCirc} ${voiceRingCirc}`}
-                        strokeDashoffset={voiceRingCirc * (1 - voiceProgress)}
-                      />
-                    </G>
-                  ) : null}
-                </Svg>
-                <Pressable
-                  onPress={() => {
-                    try { onPressAudio?.(item); } catch {}
-                  }}
-                  onLongPress={openMessageActionsFromBubble}
-                  delayLongPress={280}
-                  style={[
-                    StyleSheet.absoluteFillObject,
-                    {
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                    },
-                  ]}
-                >
-                  <Ionicons name={isPlaying ? 'pause' : 'play'} size={18} color={LIVI.white} />
-                </Pressable>
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={{ color: LIVI.white, fontSize: 14, fontWeight: '600' }}>{t('chatVoiceMessage', lang)}</Text>
-                <Text style={{ marginTop: 2, color: LIVI.titan, fontSize: 12, fontWeight: '500' }}>
-                  {durLabel || '—'}
-                </Text>
-              </View>
-
-              {messageUploadStatus === 'sending' && (
-                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                  <ActivityIndicator size="small" color={LIVI.titan} />
-                </View>
-              )}
-            </View>
-          );
-        }
-        default:
-          return null; // Текст будет отображаться в основном блоке
-      }
-    };
-
-    const renderStatusIcons = () => {
-      if (!isMyMessage) return null;
-      
-      // Все возможные статусы: sending, delivered, read, failed, error
-      switch (effectiveReadStatus) {
-        case 'sending':
-          // Отправляется - часы
-          return (
-            <View style={{ flexDirection: 'row', alignItems: 'center', marginLeft: 2 }}>
-              <Ionicons 
-                name="time-outline" 
-                size={14} 
-                color={LIVI.titan}
-              />
-            </View>
-          );
-          
-        case 'failed': {
-          const showRetry = String(retryUiForId || '') === String(item?.id || '');
-          return (
-            <View style={{ flexDirection: 'row', alignItems: 'center', marginLeft: 6, gap: 8 }}>
-              {showRetry && (
-                <Pressable
-                  onPress={() => {
-                    try { onRetryFailed?.(item); } catch {}
-                  }}
-                  onLongPress={openMessageActionsFromBubble}
-                  delayLongPress={280}
-                  style={{
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    paddingHorizontal: 10,
-                    height: 28,
-                    borderRadius: 14,
-                    backgroundColor: isDark ? 'rgba(255,90,103,0.16)' : 'rgba(255,90,103,0.12)',
-                    borderWidth: 1,
-                    borderColor: 'rgba(255,90,103,0.45)',
-                  }}
-                >
-                  <Ionicons name="refresh-circle" size={18} color="#FF5A67" style={{ marginRight: 6 }} />
-                  <Text style={{ color: '#FF5A67', fontSize: 12, fontWeight: '700' }}>{t('retry', lang)}</Text>
-                </Pressable>
-              )}
-
-              <Pressable
-                onPress={() => {
-                  try { onToggleRetryUi?.(String(item?.id || '')); } catch {}
-                }}
-                onLongPress={openMessageActionsFromBubble}
-                delayLongPress={280}
-                hitSlop={8}
-                style={{ flexDirection: 'row', alignItems: 'center' }}
-              >
-                <View style={{
-                  width: 14,
-                  height: 14,
-                  borderRadius: 7,
-                  backgroundColor: LIVI.red,
-                  alignItems: 'center',
-                  justifyContent: 'center'
-                }}>
-                  <Text style={{ 
-                    color: 'white', 
-                    fontSize: 9, 
-                    fontWeight: 'bold',
-                    lineHeight: 9 
-                  }}>!</Text>
-                </View>
-              </Pressable>
-            </View>
-          );
-        }
-        case 'sent':
-          // Отправлено на сервер (еще не доставлено) — одна серая птичка
-          return (
-            <View style={{ flexDirection: 'row', alignItems: 'center', marginLeft: 2 }}>
-              <Ionicons 
-                name="checkmark" 
-                size={14} 
-                color={LIVI.titan}
-              />
-            </View>
-          );
-          
-        case 'delivered':
-          // Доставлено получателю, но не прочитано — одна серая птичка
-          return (
-            <View style={{ flexDirection: 'row', alignItems: 'center', marginLeft: 2 }}>
-              <Ionicons 
-                name="checkmark" 
-                size={14} 
-                color={LIVI.titan}
-              />
-            </View>
-          );
-          
-        case 'read':
-          // Прочитано - две бирюзовые птички
-          return (
-            <View style={{ flexDirection: 'row', alignItems: 'center', marginLeft: 2 }}>
-              <View style={{ position: 'relative' }}>
-                <Ionicons name="checkmark" size={14} color="hsl(108, 53.10%, 35.10%)" />
-                <Ionicons name="checkmark" size={14} color="hsl(108, 53.10%, 35.10%)" style={{ position: 'absolute', left: 5, top: 0 }} />
-              </View>
-            </View>
-          );
-          
-        default:
-          return null;
-      }
-    };
-
-    const messageAnimation = getMessageAnimation(item.id);
-    const canToggle = !!selectionMode;
-    const handleBubblePress = React.useCallback(() => {
-      if (canToggle) {
-        onToggleSelect?.(String(item.id));
-        return;
-      }
-      if (String(item?.type || '') === 'audio') {
-        onMessagePress?.(item);
-        return;
-      }
-      onMessagePress?.(item);
-    }, [canToggle, item, onToggleSelect, onMessagePress]);
-    const isQuotedTargetHighlighted =
-      highlightedMessageId != null && String(highlightedMessageId) === String(item.id);
-
-    const replyQuoteAccent = LIVI.replyQuoteAccent;
-    const replyQuotePressBg = LIVI.replyQuotePressBg;
-    const replyQuoteBarWidth = Platform.OS === 'ios' ? 1 : 2;
-    const highlightAccentColor = LIVI.replyHighlightAccent;
-    /** Android: borderWidth+radius даёт тонкие углы — делаем ровное «кольцо» через padding */
-    const androidHighlightRing = isQuotedTargetHighlighted && Platform.OS === 'android';
-    const ANDROID_RING_PX = 1;
-    const BUBBLE_RADIUS = 16;
-
-    if (String(item?.type || '') === 'sticker') {
-      const sticker = getBuiltInSticker(item.stickerId);
-      const reactions = Array.isArray(item.reactions) ? item.reactions : [];
-      const byEmoji: Record<string, number> = {};
-      reactions.forEach((r: { emoji: string }) => {
-        byEmoji[r.emoji] = (byEmoji[r.emoji] || 0) + 1;
-      });
-      const reactionList = Object.entries(byEmoji).map(([emoji, count]) => ({ emoji, count }));
-      const timeColor = isDark ? 'rgba(255,255,255,0.86)' : 'rgba(10,14,18,0.82)';
-      const metaBg = isDark ? 'rgba(10,14,18,0.42)' : 'rgba(255,255,255,0.72)';
-      const stickerSize = 132;
-
-      const checkbox = (
-        <Pressable
-          onPress={() => onToggleSelect?.(String(item.id))}
-          style={({ pressed }) => ({
-            width: 26,
-            height: 26,
-            borderRadius: 13,
-            borderWidth: 1.5,
-            borderColor: isSelected ? '#55d187' : (isDark ? 'rgba(255,255,255,0.24)' : 'rgba(0,0,0,0.18)'),
-            backgroundColor: pressed
-              ? (isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.06)')
-              : (isSelected ? 'rgba(85,209,135,0.18)' : (isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)')),
-            alignItems: 'center',
-            justifyContent: 'center',
-            marginRight: isMyMessage ? 0 : 10,
-            marginLeft: isMyMessage ? 10 : 0,
-            overflow: 'hidden',
-          })}
-        >
-          {isSelected ? <Ionicons name="checkmark" size={18} color="#55d187" /> : null}
-        </Pressable>
-      );
-
-      return (
-        <Animated.View
-          style={{
-            transform: [{ scale: messageAnimation }],
-            marginHorizontal: 16,
-            marginVertical: 4,
-            alignSelf: isMyMessage ? 'flex-end' : 'flex-start',
-            flexDirection: 'row',
-            alignItems: 'center',
-            maxWidth: '92%',
-          }}
-        >
-          {selectionMode && !isMyMessage ? checkbox : null}
-          <View style={{ alignSelf: isMyMessage ? 'flex-end' : 'flex-start', maxWidth: 190 }}>
-            {item.replyTo && (
-              <Pressable
-                disabled={!!selectionMode}
-                onPress={() => onPressReplyQuote?.(String(item.replyTo.id))}
-                onLongPress={openMessageActionsFromBubble}
-                delayLongPress={280}
-                style={({ pressed }) => ({
-                  flexDirection: 'row',
-                  alignItems: 'flex-start',
-                  marginBottom: 4,
-                  paddingLeft: 8,
-                  paddingVertical: 4,
-                  paddingRight: 8,
-                  borderRadius: 10,
-                  borderLeftWidth: replyQuoteBarWidth,
-                  borderLeftColor: replyQuoteAccent,
-                  opacity: selectionMode ? 0.5 : pressed ? 0.85 : 1,
-                  backgroundColor: pressed && !selectionMode ? replyQuotePressBg : metaBg,
-                })}
-              >
-                <View style={{ flex: 1 }}>
-                  <Text style={{ color: replyQuoteAccent, fontSize: 12, fontWeight: '600', marginBottom: 2 }}>
-                    {item.replyTo.isOwn ? t('you', lang) : (peerDisplayName || '—')}
-                  </Text>
-                  <Text style={{ color: timeColor, fontSize: 13, opacity: 0.9 }} numberOfLines={2}>
-                    {item.replyTo.text || '—'}
-                  </Text>
-                </View>
-              </Pressable>
-            )}
-            <Pressable
-              ref={bubbleRef}
-              onPress={handleBubblePress}
-              onLongPress={openMessageActionsFromBubble}
-              delayLongPress={280}
-              style={({ pressed }) => ({
-                width: stickerSize,
-                minHeight: stickerSize,
-                alignItems: 'center',
-                justifyContent: 'center',
-                opacity: pressed && !selectionMode ? 0.92 : 1,
-              })}
-            >
-              <StickerView stickerId={item.stickerId} sticker={sticker} size={stickerSize} animated isDark={isDark} />
-              <View
-                style={{
-                  position: 'absolute',
-                  right: 2,
-                  bottom: 0,
-                  borderRadius: 12,
-                  paddingHorizontal: 7,
-                  paddingVertical: 3,
-                  backgroundColor: metaBg,
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                }}
-              >
-                <Text style={{ color: timeColor, fontSize: 11, marginRight: isMyMessage ? 4 : 0, fontWeight: '600' }}>
-                  {new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                </Text>
-                {renderStatusIcons()}
-              </View>
-            </Pressable>
-            {reactionList.length > 0 ? (
-              <View style={{ flexDirection: 'row', alignItems: 'center', alignSelf: isMyMessage ? 'flex-end' : 'flex-start', marginTop: 2 }}>
-                {reactionList.map(({ emoji, count }) => (
-                  <Pressable
-                    key={emoji}
-                    onPress={() => onReactionPress?.(item.id, emoji)}
-                    onLongPress={openMessageActionsFromBubble}
-                    delayLongPress={280}
-                    style={({ pressed }) => ({
-                      flexDirection: 'row',
-                      alignItems: 'center',
-                      borderRadius: 12,
-                      paddingHorizontal: 8,
-                      paddingVertical: 4,
-                      backgroundColor: metaBg,
-                      opacity: pressed ? 0.85 : 1,
-                      marginLeft: 4,
-                    })}
-                  >
-                    <Text style={{ fontSize: 14 }}>{emoji}</Text>
-                    {count > 1 ? <Text style={{ fontSize: 11, color: timeColor, marginLeft: 2 }}>{count}</Text> : null}
-                  </Pressable>
-                ))}
-              </View>
-            ) : null}
-          </View>
-          {selectionMode && isMyMessage ? checkbox : null}
-        </Animated.View>
-      );
-    }
-
-    return (
-      <Animated.View
-        style={{
-          transform: [{ scale: messageAnimation }],
-          marginHorizontal: 16,
-          marginVertical: 4,
-          alignSelf: isMyMessage ? 'flex-end' : 'flex-start',
-          // row, чтобы чекбокс был рядом с облаком и по центру по высоте
-          flexDirection: 'row',
-          alignItems: 'center',
-          // чуть шире, т.к. добавляется чекбокс
-          maxWidth: '92%',
-        }}
-      >
-        {/* Чекбокс выбора (режим "Выбрать") — рядом с облаком и по центру */}
-        {selectionMode && !isMyMessage && (
-          <Pressable
-            onPress={() => onToggleSelect?.(String(item.id))}
-            style={({ pressed }) => ({
-              width: 26,
-              height: 26,
-              borderRadius: 13,
-              borderWidth: 1.5,
-              borderColor: isSelected ? '#55d187' : (isDark ? 'rgba(255,255,255,0.24)' : 'rgba(0,0,0,0.18)'),
-              backgroundColor: pressed
-                ? (isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.06)')
-                : (isSelected ? 'rgba(85,209,135,0.18)' : (isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)')),
-              alignItems: 'center',
-              justifyContent: 'center',
-              marginRight: 10,
-              overflow: 'hidden',
-            })}
-          >
-            {isSelected ? <Ionicons name="checkmark" size={18} color="#55d187" /> : null}
-          </Pressable>
-        )}
-
-        <View style={{ alignSelf: isMyMessage ? 'flex-end' : 'flex-start', maxWidth: '80%' }}>
-          {(() => {
-            const bubbleFill = isMyMessage ? BUBBLE_BG_OUT : BUBBLE_BG_IN;
-            const bubbleBody = (
-              <View style={{ maxWidth: '100%' }}>
-          {/* Основной контент */}
-          {renderContent()}
-          
-          {/* Текст сообщения (если есть), ссылки кликабельны */}
-          {item.type === 'text' && (() => {
-            const baseStyle = {
-              color: LIVI.white,
-              fontSize: 16,
-              marginBottom: 3,
-              lineHeight: 22,
-              fontWeight: '400' as const,
-            };
-            const linkStyle = {
-              ...baseStyle,
-              color: '#7eb8ff',
-              textDecorationLine: 'underline' as const,
-            };
-            const segments = parseTextWithUrls(String(item.text ?? ''));
-            return (
-              <Text style={baseStyle}>
-                {segments.map((seg, idx) =>
-                  seg.type === 'url' ? (
-                    <Text
-                      key={idx}
-                      onPress={() => openMessageUrl(seg.value)}
-                      onLongPress={openMessageActionsFromBubble}
-                      style={linkStyle}
-                    >
-                      {seg.value}
-                    </Text>
-                  ) : (
-                    <Text key={idx}>{seg.value}</Text>
-                  )
-                )}
-              </Text>
-            );
-          })()}
-          
-          {/* Нижняя строка: реакции слева, время + статус справа (всё внутри облака) */}
-          {(() => {
-            const reactions = Array.isArray(item.reactions) ? item.reactions : [];
-            const hasReactions = reactions.length > 0;
-            const byEmoji: Record<string, number> = {};
-            if (hasReactions) {
-              reactions.forEach((r: { emoji: string }) => {
-                byEmoji[r.emoji] = (byEmoji[r.emoji] || 0) + 1;
-              });
-            }
-            const list = hasReactions ? Object.entries(byEmoji).map(([emoji, count]) => ({ emoji, count })) : [];
-            return (
-              <View style={{
-                flexDirection: 'row',
-                alignItems: 'center',
-                justifyContent: hasReactions ? 'flex-end' : 'flex-end',
-                marginTop: item.type !== 'text' ? 4 : 1,
-              }}>
-                {hasReactions ? (
-                  <View style={{ flexDirection: 'row', alignItems: 'center', flexShrink: 0, marginRight: 10 }}>
-                    {list.map(({ emoji, count }, idx) => (
-                      <Pressable
-                        key={emoji}
-                        onPress={() => onReactionPress?.(item.id, emoji)}
-                        onLongPress={openMessageActionsFromBubble}
-                        delayLongPress={280}
-                        style={({ pressed }) => [
-                          {
-                            flexDirection: 'row',
-                            alignItems: 'center',
-                            backgroundColor: 'transparent',
-                            borderRadius: 12,
-                            paddingHorizontal: 8,
-                            paddingVertical: 4,
-                            opacity: pressed ? 0.85 : 1,
-                            transform: [{ scale: pressed ? 0.92 : 1 }],
-                          },
-                          idx > 0 ? { marginLeft: 4 } : {},
-                        ]}
-                      >
-                        <Text style={{ fontSize: 14 }}>{emoji}</Text>
-                        {count > 1 && (
-                          <Text style={{ fontSize: 11, color: LIVI.text, marginLeft: 2, opacity: 0.9 }}>{count}</Text>
-                        )}
-                      </Pressable>
-                    ))}
-                  </View>
-                ) : null}
-                <View style={{ flexDirection: 'row', alignItems: 'center', flexShrink: 0 }}>
-                  <Text style={{
-                    color: LIVI.text,
-                    fontSize: 12,
-                    marginRight: isMyMessage ? 4 : 0,
-                    opacity: 0.8,
-                    fontWeight: '500',
-                  }}>
-                    {new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                  </Text>
-                  {renderStatusIcons()}
-                </View>
-              </View>
-            );
-          })()}
-              </View>
-            );
-
-            const bubbleWithReply = (
-              <>
-                {item.replyTo && (
-                  <Pressable
-                    disabled={!!selectionMode}
-                    onPress={() => onPressReplyQuote?.(String(item.replyTo.id))}
-                    onLongPress={openMessageActionsFromBubble}
-                    delayLongPress={280}
-                    style={({ pressed }) => ({
-                      flexDirection: 'row',
-                      alignItems: 'flex-start',
-                      marginBottom: 8,
-                      paddingLeft: 8,
-                      paddingVertical: 4,
-                      marginHorizontal: -4,
-                      marginTop: -2,
-                      borderRadius: 8,
-                      borderLeftWidth: replyQuoteBarWidth,
-                      borderLeftColor: replyQuoteAccent,
-                      opacity: selectionMode ? 0.5 : pressed ? 0.85 : 1,
-                      backgroundColor: pressed && !selectionMode ? replyQuotePressBg : 'transparent',
-                    })}
-                  >
-                    <View style={{ flex: 1 }}>
-                      <Text style={{ color: replyQuoteAccent, fontSize: 12, fontWeight: '600', marginBottom: 2 }}>
-                        {item.replyTo.isOwn ? t('you', lang) : (peerDisplayName || '—')}
-                      </Text>
-                      <Text style={{ color: LIVI.white, fontSize: 13, opacity: 0.85 }} numberOfLines={2}>
-                        {item.replyTo.text || '—'}
-                      </Text>
-                    </View>
-                  </Pressable>
-                )}
-                {bubbleBody}
-              </>
-            );
-
-            if (androidHighlightRing) {
-              return (
-                <View
-                  style={{
-                    borderRadius: BUBBLE_RADIUS + ANDROID_RING_PX,
-                    padding: ANDROID_RING_PX,
-                    backgroundColor: highlightAccentColor,
-                    maxWidth: '100%',
-                    elevation: 0,
-                  }}
-                >
-                  {/*
-                    Облака полупрозрачные — без подложки сквозь них просвечивает цвет кольца.
-                    Непрозрачный фон списка сообщений, поверх — как обычно bubbleFill.
-                  */}
-                  <View
-                    style={{
-                      borderRadius: BUBBLE_RADIUS,
-                      backgroundColor: LIVI.feedBg,
-                      overflow: 'hidden',
-                      maxWidth: '100%',
-                    }}
-                  >
-                    <Pressable
-                      ref={bubbleRef}
-                      onPress={handleBubblePress}
-                      onLongPress={openMessageActionsFromBubble}
-                      delayLongPress={280}
-                      style={({ pressed }) => [
-                        {
-                          padding: 12,
-                          backgroundColor: bubbleFill,
-                          maxWidth: '100%',
-                        },
-                        pressed && !selectionMode ? { opacity: 0.94 } : null,
-                      ]}
-                    >
-                      {bubbleWithReply}
-                    </Pressable>
-                  </View>
-                </View>
-              );
-            }
-            return (
-              <Pressable
-                ref={bubbleRef}
-                onPress={handleBubblePress}
-                onLongPress={openMessageActionsFromBubble}
-                delayLongPress={280}
-                style={({ pressed }) => [
-                  {
-                    padding: 12,
-                    backgroundColor: bubbleFill,
-                    borderRadius: BUBBLE_RADIUS,
-                    borderWidth: 1,
-                    borderColor: isQuotedTargetHighlighted ? highlightAccentColor : BORDER_COLOR,
-                    maxWidth: '100%',
-                  },
-                  pressed && !selectionMode ? { opacity: 0.94 } : null,
-                ]}
-              >
-                {bubbleWithReply}
-              </Pressable>
-            );
-          })()}
-        </View>
-
-        {selectionMode && isMyMessage && (
-          <Pressable
-            onPress={() => onToggleSelect?.(String(item.id))}
-            style={({ pressed }) => ({
-              width: 26,
-              height: 26,
-              borderRadius: 13,
-              borderWidth: 1.5,
-              borderColor: isSelected ? '#55d187' : (isDark ? 'rgba(255,255,255,0.24)' : 'rgba(0,0,0,0.18)'),
-              backgroundColor: pressed
-                ? (isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.06)')
-                : (isSelected ? 'rgba(85,209,135,0.18)' : (isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)')),
-              alignItems: 'center',
-              justifyContent: 'center',
-              marginLeft: 10,
-              overflow: 'hidden',
-            })}
-          >
-            {isSelected ? <Ionicons name="checkmark" size={18} color="#55d187" /> : null}
-          </Pressable>
-        )}
-      </Animated.View>
-    );
-  }), [
-    resolveMediaUri,
-    formatDuration,
-    formatDurationDot,
-    animateMessagePress,
-    getMessageAnimation,
-    BUBBLE_BG_OUT,
-    BUBBLE_BG_IN,
-    BORDER_COLOR,
-    LIVI.white,
-    LIVI.titan,
-    LIVI.red,
-    LIVI.feedBg,
-    LIVI.replyQuoteAccent,
-    LIVI.replyQuotePressBg,
-    LIVI.replyHighlightAccent,
-    isDark,
-    lang,
-  ]);
 
   // КРИТИЧНО: на каждый ввод нельзя пересоздавать массив data для FlatList,
   // иначе он будет перерисовывать (а иногда и переразмещать) все элементы -> мерцание изображений.
@@ -6823,7 +6463,7 @@ export default function ChatScreen({ route, navigation }: Props) {
       const msg = item as any;
       const isOwnMessage = msg?.sender === 'me' || msg?.from === currentUserId;
       return (
-        <MessageItem
+        <ChatMessageItem
           item={msg}
           currentUserId={currentUserId}
           readStatus={isOwnMessage ? readStatuses[msg.id] : undefined}
@@ -6836,20 +6476,47 @@ export default function ChatScreen({ route, navigation }: Props) {
           onToggleRetryUi={handleToggleRetryUi}
           onRetryFailed={retryFailedOutgoingMessage}
           onLongPressMessage={handleLongPressMessage}
+          onLongPressAlbumTile={handleLongPressAlbumTile}
+          albumFocusIndex={
+            showMessageActions &&
+            selectedMessage &&
+            String(selectedMessage?.id || '') === String(msg?.id || '')
+              ? albumFocusIndex
+              : null
+          }
           onMessagePress={handleMessagePress}
           onReactionPress={handleReactionPress}
           selectionMode={selectionMode}
-          isSelected={selectedMessageIds.has(String(msg.id))}
+          isSelected={
+            isImageAlbumMessage(msg)
+              ? selectedAlbumIndices(msg, selectedMessageIds).length ===
+                getMessageImageUris(msg).length
+              : selectedMessageIds.has(String(msg.id))
+          }
           onToggleSelect={toggleSelectMessage}
+          selectedAlbumIndices={
+            isImageAlbumMessage(msg) ? selectedAlbumIndices(msg, selectedMessageIds) : []
+          }
+          onToggleAlbumTileSelect={(index) => {
+            toggleSelectAlbumTile(String(msg.id), index);
+          }}
           resolveMediaUri={resolveMediaUri}
           peerDisplayName={peerNameState}
           highlightedMessageId={highlightedMessageId}
           onPressReplyQuote={scrollToQuotedMessage}
+          animateMessagePress={animateMessagePress}
+          getMessageAnimation={getMessageAnimation}
+          formatDurationDot={formatDurationDot}
+          BUBBLE_BG_OUT={BUBBLE_BG_OUT}
+          BUBBLE_BG_IN={BUBBLE_BG_IN}
+          BORDER_COLOR={BORDER_COLOR}
+          LIVI={LIVI}
+          isDark={isDark}
+          lang={lang}
         />
       );
     },
     [
-      MessageItem,
       currentUserId,
       readStatuses,
       uploadStatus,
@@ -6861,16 +6528,29 @@ export default function ChatScreen({ route, navigation }: Props) {
       handleToggleRetryUi,
       retryFailedOutgoingMessage,
       handleLongPressMessage,
+      handleLongPressAlbumTile,
+      showMessageActions,
+      selectedMessage,
+      albumFocusIndex,
       handleMessagePress,
       handleReactionPress,
       selectionMode,
       selectedMessageIds,
       toggleSelectMessage,
+      toggleSelectAlbumTile,
       resolveMediaUri,
       peerNameState,
       highlightedMessageId,
       scrollToQuotedMessage,
+      animateMessagePress,
+      getMessageAnimation,
+      formatDurationDot,
+      BUBBLE_BG_OUT,
+      BUBBLE_BG_IN,
+      BORDER_COLOR,
       LIVI,
+      isDark,
+      lang,
     ],
   );
 
@@ -7988,56 +7668,70 @@ export default function ChatScreen({ route, navigation }: Props) {
                   {/* Отступ 12px — виден фон модалки (на нём лежат оба блока) */}
                   {/* Блок 2: список действий */}
                   <View style={{ marginTop: 12, width: 245, borderRadius: 12, overflow: 'hidden', backgroundColor: LIVI.bg, borderWidth: 1, borderColor }}>
-                    {(String(selectedMessage?.text || '').trim() || String(selectedMessage?.uri || '').trim() || String(selectedMessage?.stickerId || '').trim()) && (
+                    {(() => {
+                      const isImageMsg = String(selectedMessage?.type || '') === 'image';
+                      const row = (
+                        label: string,
+                        icon: React.ComponentProps<typeof Ionicons>['name'],
+                        onPress: () => void,
+                        danger?: boolean,
+                      ) => (
+                        <React.Fragment key={label + String(icon)}>
+                          <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: dividerColor }} />
+                          <Pressable
+                            onPress={onPress}
+                            style={({ pressed }) => ({
+                              flexDirection: 'row',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              paddingVertical: 12,
+                              paddingHorizontal: 14,
+                              backgroundColor: pressed
+                                ? danger
+                                  ? 'rgba(255,90,103,0.08)'
+                                  : (isDark ? LIVI.accent.vivid12 : LIVI.accent.vivid10)
+                                : 'transparent',
+                            })}
+                          >
+                            <Text style={{ color: danger ? '#FF5A67' : LIVI.white, fontSize: 15, fontWeight: '400' }}>
+                              {label}
+                            </Text>
+                            <Ionicons name={icon} size={20} color={danger ? '#FF5A67' : LIVI.titan} />
+                          </Pressable>
+                        </React.Fragment>
+                      );
+                      return (
+                        <>
+                    {(String(selectedMessage?.text || '').trim() || String(selectedMessage?.uri || '').trim() || String(selectedMessage?.stickerId || '').trim() || isImageMsg) && (
                       <>
-                        <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: dividerColor }} />
-                        <Pressable
-                          onPress={() => { hideMessageActions(); void copySelectedMessage(selectedMessage); }}
-                          style={({ pressed }) => ({
-                            flexDirection: 'row',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                            paddingVertical: 12,
-                            paddingHorizontal: 14,
-                            backgroundColor: pressed ? (isDark ? LIVI.accent.vivid12 : LIVI.accent.vivid10) : 'transparent',
-                          })}
-                        >
-                          <Text style={{ color: LIVI.white, fontSize: 15, fontWeight: '400' }}>{t('chatActionCopy', lang)}</Text>
-                          <Ionicons name="copy-outline" size={20} color={LIVI.titan} />
-                        </Pressable>
-                        <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: dividerColor }} />
-                        <Pressable
-                          onPress={() => { hideMessageActions(); void openForwardPicker(); }}
-                          style={({ pressed }) => ({
-                            flexDirection: 'row',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                            paddingVertical: 12,
-                            paddingHorizontal: 14,
-                            backgroundColor: pressed ? (isDark ? LIVI.accent.vivid12 : LIVI.accent.vivid10) : 'transparent',
-                          })}
-                        >
-                          <Text style={{ color: LIVI.white, fontSize: 15, fontWeight: '400' }}>{t('chatActionForward', lang)}</Text>
-                          <Ionicons name="paper-plane-outline" size={20} color={LIVI.titan} />
-                        </Pressable>
-                        <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: dividerColor }} />
-                        <Pressable
-                          onPress={() => { hideMessageActions(); enterSelectionModeFromMessage(selectedMessage); }}
-                          style={({ pressed }) => ({
-                            flexDirection: 'row',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                            paddingVertical: 12,
-                            paddingHorizontal: 14,
-                            backgroundColor: pressed ? (isDark ? LIVI.accent.vivid12 : LIVI.accent.vivid10) : 'transparent',
-                          })}
-                        >
-                          <Text style={{ color: LIVI.white, fontSize: 15, fontWeight: '400' }}>{t('chatActionSelect', lang)}</Text>
-                          <Ionicons name="checkbox-outline" size={20} color={LIVI.titan} />
-                        </Pressable>
-                        <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: dividerColor }} />
-                        <Pressable
-                          onPress={() => {
+                        {!isImageMsg && (String(selectedMessage?.text || '').trim() || String(selectedMessage?.stickerId || '').trim()) ? (
+                          row(t('chatActionCopy', lang), 'copy-outline', () => {
+                            hideMessageActions();
+                            void copySelectedMessage(selectedMessage);
+                          })
+                        ) : null}
+                        {isImageMsg ? (
+                          <>
+                            {row(t('save', lang), 'download-outline', () => {
+                              hideMessageActions();
+                              requestImageAction('save', selectedMessage, albumFocusIndex);
+                            })}
+                            {row(t('chatActionForward', lang), 'paper-plane-outline', () => {
+                              hideMessageActions();
+                              requestImageAction('forward', selectedMessage, albumFocusIndex);
+                            })}
+                          </>
+                        ) : (
+                          row(t('chatActionForward', lang), 'paper-plane-outline', () => {
+                            hideMessageActions();
+                            void openForwardPicker();
+                          })
+                        )}
+                        {row(t('chatActionSelect', lang), 'checkbox-outline', () => {
+                          hideMessageActions();
+                          enterSelectionModeFromMessage(selectedMessage, albumFocusIndex);
+                        })}
+                        {row(t('chatActionReply', lang), 'arrow-undo-outline', () => {
                             hideMessageActions();
                             setEditingMessageId(null);
                             messageTextRef.current = '';
@@ -8048,51 +7742,30 @@ export default function ChatScreen({ route, navigation }: Props) {
                               from: selectedMessage?.from,
                               isOwn: selectedMessage?.from === currentUserId || selectedMessage?.sender === 'me',
                             });
-                          }}
-                          style={({ pressed }) => ({
-                            flexDirection: 'row',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                            paddingVertical: 12,
-                            paddingHorizontal: 14,
-                            backgroundColor: pressed ? (isDark ? LIVI.accent.vivid12 : LIVI.accent.vivid10) : 'transparent',
                           })}
-                        >
-                          <Text style={{ color: LIVI.white, fontSize: 15, fontWeight: '400' }}>{t('chatActionReply', lang)}</Text>
-                          <Ionicons name="arrow-undo-outline" size={20} color={LIVI.titan} />
-                        </Pressable>
                         {(selectedMessage?.from === currentUserId || selectedMessage?.sender === 'me') && String(selectedMessage?.type || '') === 'text' && (
-                          <>
-                            <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: dividerColor }} />
-                            <Pressable
-                              onPress={() => {
+                          row(t('chatActionEdit', lang), 'pencil-outline', () => {
                                 hideMessageActions();
                                 const text = String(selectedMessage?.text ?? '');
                                 messageTextRef.current = text;
                                 setMessageText(text);
                                 setEditingMessageId(selectedMessage?.id ?? null);
                                 setReplyingToMessage(null);
-                              }}
-                              style={({ pressed }) => ({
-                                flexDirection: 'row',
-                                alignItems: 'center',
-                                justifyContent: 'space-between',
-                                paddingVertical: 12,
-                                paddingHorizontal: 14,
-                                backgroundColor: pressed ? (isDark ? LIVI.accent.vivid12 : LIVI.accent.vivid10) : 'transparent',
-                              })}
-                            >
-                              <Text style={{ color: LIVI.white, fontSize: 15, fontWeight: '400' }}>{t('chatActionEdit', lang)}</Text>
-                              <Ionicons name="pencil-outline" size={20} color={LIVI.titan} />
-                            </Pressable>
-                          </>
+                              })
                         )}
                         <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: dividerColor }} />
                       </>
                     )}
                     <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: dividerColor }} />
                     <Pressable
-                      onPress={() => { hideMessageActions(); confirmDeleteSelectedMessage(selectedMessage); }}
+                      onPress={() => {
+                        hideMessageActions();
+                        if (isImageMsg) {
+                          requestImageAction('delete', selectedMessage, albumFocusIndex);
+                        } else {
+                          confirmDeleteSelectedMessage(selectedMessage);
+                        }
+                      }}
                       style={({ pressed }) => ({
                         flexDirection: 'row',
                         alignItems: 'center',
@@ -8102,7 +7775,9 @@ export default function ChatScreen({ route, navigation }: Props) {
                         backgroundColor: pressed ? 'rgba(255,90,103,0.08)' : 'transparent',
                       })}
                     >
-                      <Text style={{ color: '#FF5A67', fontSize: 15, fontWeight: '400' }}>{t('delete', lang)}</Text>
+                      <Text style={{ color: '#FF5A67', fontSize: 15, fontWeight: '400' }}>
+                        {t('delete', lang)}
+                      </Text>
                       <Ionicons name="trash-outline" size={20} color="#FF5A67" />
                     </Pressable>
                     <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: dividerColor }} />
@@ -8118,6 +7793,9 @@ export default function ChatScreen({ route, navigation }: Props) {
                     >
                       <Text style={{ color: LIVI.titan, fontSize: 15, fontWeight: '400' }}>{t('cancelAction', lang)}</Text>
                     </Pressable>
+                        </>
+                      );
+                    })()}
                   </View>
                 </View>
                 );
@@ -8410,17 +8088,17 @@ export default function ChatScreen({ route, navigation }: Props) {
                             avatarVer={Number(item.avatarVer || 0)}
                             uri={item.avatarThumbB64 || undefined}
                             size={44}
-                            fallbackText={String((item.nick || '--').trim()?.[0] || '--').toUpperCase()}
+                            fallbackText={displayAvatarLetter(item.nick || item.name)}
                             containerStyle={{
                               borderWidth: 1,
                               borderColor: isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.12)',
                               overflow: 'hidden',
                               ...(isDark ? {} : { backgroundColor: 'rgba(0,0,0,0.08)' }),
                             }}
-                            fallbackTextStyle={isDark ? { color: LIVI.white, fontSize: 16 } : { color: 'rgba(0,0,0,0.45)', fontSize: 16 }}
+                            fallbackTextStyle={isDark ? { color: LIVI.white, fontSize: 18 } : { color: 'rgba(0,0,0,0.45)', fontSize: 18 }}
                           />
                           <View style={{ marginLeft: 12, flex: 1, justifyContent: 'center' }}>
-                            <Text style={{ color: isDark ? LIVI.white : LIVI.text, fontSize: 16, fontWeight: '600' }}>
+                            <Text style={{ color: isDark ? LIVI.white : LIVI.text, fontSize: 16, fontWeight: '600' }} numberOfLines={1}>
                               {(item.nick && String(item.nick).trim()) || '—'}
                             </Text>
                           </View>
@@ -8514,6 +8192,42 @@ export default function ChatScreen({ route, navigation }: Props) {
       )}
 
       {/* "Отправлено" теперь показывается в том же gap, что и "Печатает..." */}
+
+      {/* Альбом: мультивыбор фото для сохранить / переслать / удалить */}
+      <ChatAlbumPickModal
+        visible={albumScopeVisible}
+        kind={albumScopeKind}
+        uris={albumPickUris}
+        initialSelected={albumPickInitial}
+        resolveMediaUri={resolveMediaUri}
+        isDark={isDark}
+        bg={isDark ? LIVI.bg : 'rgba(255,255,255,0.98)'}
+        text={isDark ? LIVI.white : 'rgba(0,0,0,0.88)'}
+        muted={isDark ? 'rgba(255,255,255,0.48)' : 'rgba(0,0,0,0.48)'}
+        accent={LIVI.accent.solid}
+        title={
+          albumScopeKind === 'save'
+            ? t('chatAlbumScopeSaveTitle', lang)
+            : albumScopeKind === 'forward'
+              ? t('chatAlbumScopeForwardTitle', lang)
+              : t('chatAlbumScopeDeleteTitle', lang)
+        }
+        subtitle={t('chatAlbumScopeSubtitle', lang)}
+        selectAllLabel={t('chatAlbumScopeSelectAll', lang)}
+        clearLabel={t('chatAlbumScopeClear', lang)}
+        confirmLabel={
+          albumScopeKind === 'save'
+            ? t('chatAlbumScopeConfirmSave', lang)
+            : albumScopeKind === 'forward'
+              ? t('chatAlbumScopeConfirmForward', lang)
+              : t('chatAlbumScopeConfirmDelete', lang)
+        }
+        cancelLabel={t('cancelAction', lang)}
+        onClose={closeAlbumScope}
+        onConfirm={(indices) => {
+          void applyAlbumPick(indices);
+        }}
+      />
 
       {/* Универсальное подтверждение (используется для массового удаления/очистки и т.п.) */}
       <Modal
