@@ -10,6 +10,7 @@ import {
   Animated,
   StyleSheet,
   Linking,
+  Dimensions,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { Image as ExpoImage } from "expo-image";
@@ -28,6 +29,7 @@ import {
 } from "./chatMessageIds";
 import { getMessageImageUris, CHAT_ALBUM_INSET } from "./chatAlbum";
 import { ChatAlbumGrid } from "./ChatAlbumGrid";
+import { ChatReplyQuoteAccent } from "./ChatReplyQuoteAccent";
 
 /** Разбивает текст на сегменты «текст» и «ссылка» для отображения кликабельных URL в сообщениях. */
 function parseTextWithUrls(text: string): { type: "text" | "url"; value: string }[] {
@@ -789,12 +791,18 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
 
   const replyQuoteAccent = LIVI.replyQuoteAccent;
   const replyQuotePressBg = LIVI.replyQuotePressBg;
-  const replyQuoteBarWidth = Platform.OS === 'ios' ? 1 : 2;
   const highlightAccentColor = LIVI.replyHighlightAccent;
   /** Android: borderWidth+radius даёт тонкие углы — делаем ровное «кольцо» через padding */
   const androidHighlightRing = isQuotedTargetHighlighted && Platform.OS === 'android';
   const ANDROID_RING_PX = 1;
   const BUBBLE_RADIUS = 16;
+  // Короткий текст ответа («Ппи») иначе сжимает цитату — держим ширину пузыря.
+  const replyBubbleMinWidth = Math.round(Math.min(Dimensions.get('window').width * 0.58, 260));
+
+  const replyAuthorLabel = item.replyTo
+    ? (item.replyTo.isOwn ? t('you', lang) : (peerDisplayName || '—'))
+    : '';
+  const replyBodyText = item.replyTo ? (item.replyTo.text || '—') : '';
 
   if (String(item?.type || '') === 'sticker') {
     const sticker = getBuiltInSticker(item.stickerId);
@@ -844,7 +852,13 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
         }}
       >
         {selectionMode && !isMyMessage ? checkbox : null}
-        <View style={{ alignSelf: isMyMessage ? 'flex-end' : 'flex-start', maxWidth: 190 }}>
+        <View
+          style={{
+            alignSelf: isMyMessage ? 'flex-end' : 'flex-start',
+            maxWidth: item.replyTo ? replyBubbleMinWidth : 190,
+            ...(item.replyTo ? { minWidth: replyBubbleMinWidth } : null),
+          }}
+        >
           {item.replyTo && (
             <Pressable
               disabled={!!selectionMode}
@@ -852,27 +866,31 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
               onLongPress={openMessageActionsFromBubble}
               delayLongPress={280}
               style={({ pressed }) => ({
-                flexDirection: 'row',
-                alignItems: 'flex-start',
+                alignSelf: 'stretch',
                 marginBottom: 4,
-                paddingLeft: 8,
                 paddingVertical: 4,
                 paddingRight: 8,
                 borderRadius: 10,
-                borderLeftWidth: replyQuoteBarWidth,
-                borderLeftColor: replyQuoteAccent,
                 opacity: selectionMode ? 0.5 : pressed ? 0.85 : 1,
                 backgroundColor: pressed && !selectionMode ? replyQuotePressBg : metaBg,
               })}
             >
-              <View style={{ flex: 1 }}>
-                <Text style={{ color: replyQuoteAccent, fontSize: 12, fontWeight: '600', marginBottom: 2 }}>
-                  {item.replyTo.isOwn ? t('you', lang) : (peerDisplayName || '—')}
+              <ChatReplyQuoteAccent color={replyQuoteAccent}>
+                <Text
+                  style={{ color: replyQuoteAccent, fontSize: 12, fontWeight: '600', marginBottom: 2 }}
+                  numberOfLines={1}
+                  ellipsizeMode="tail"
+                >
+                  {replyAuthorLabel}
                 </Text>
-                <Text style={{ color: timeColor, fontSize: 13, opacity: 0.9 }} numberOfLines={2}>
-                  {item.replyTo.text || '—'}
+                <Text
+                  style={{ color: timeColor, fontSize: 13, opacity: 0.9 }}
+                  numberOfLines={1}
+                  ellipsizeMode="tail"
+                >
+                  {replyBodyText}
                 </Text>
-              </View>
+              </ChatReplyQuoteAccent>
             </Pressable>
           )}
           <Pressable
@@ -976,7 +994,13 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
         </Pressable>
       )}
 
-      <View style={{ alignSelf: isMyMessage ? 'flex-end' : 'flex-start', maxWidth: '80%' }}>
+      <View
+        style={{
+          alignSelf: isMyMessage ? 'flex-end' : 'flex-start',
+          maxWidth: '80%',
+          ...(item.replyTo ? { minWidth: replyBubbleMinWidth } : null),
+        }}
+      >
           {(() => {
             const bubbleFill = isMyMessage ? BUBBLE_BG_OUT : BUBBLE_BG_IN;
             const isImageMsg = String(item?.type || '') === 'image';
@@ -1105,28 +1129,32 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
                   onLongPress={openMessageActionsFromBubble}
                   delayLongPress={280}
                   style={({ pressed }) => ({
-                    flexDirection: 'row',
-                    alignItems: 'flex-start',
+                    alignSelf: 'stretch',
                     marginBottom: 8,
-                    paddingLeft: 8,
                     paddingVertical: 4,
                     marginHorizontal: -4,
                     marginTop: -2,
                     borderRadius: 8,
-                    borderLeftWidth: replyQuoteBarWidth,
-                    borderLeftColor: replyQuoteAccent,
                     opacity: selectionMode ? 0.5 : pressed ? 0.85 : 1,
                     backgroundColor: pressed && !selectionMode ? replyQuotePressBg : 'transparent',
                   })}
                 >
-                  <View style={{ flex: 1 }}>
-                    <Text style={{ color: replyQuoteAccent, fontSize: 12, fontWeight: '600', marginBottom: 2 }}>
-                      {item.replyTo.isOwn ? t('you', lang) : (peerDisplayName || '—')}
+                  <ChatReplyQuoteAccent color={replyQuoteAccent}>
+                    <Text
+                      style={{ color: replyQuoteAccent, fontSize: 12, fontWeight: '600', marginBottom: 2 }}
+                      numberOfLines={1}
+                      ellipsizeMode="tail"
+                    >
+                      {replyAuthorLabel}
                     </Text>
-                    <Text style={{ color: LIVI.white, fontSize: 13, opacity: 0.85 }} numberOfLines={2}>
-                      {item.replyTo.text || '—'}
+                    <Text
+                      style={{ color: LIVI.white, fontSize: 13, opacity: 0.85 }}
+                      numberOfLines={1}
+                      ellipsizeMode="tail"
+                    >
+                      {replyBodyText}
                     </Text>
-                  </View>
+                  </ChatReplyQuoteAccent>
                 </Pressable>
               )}
               {bubbleBody}
@@ -1166,6 +1194,8 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
                         ...bubblePadStyle,
                         backgroundColor: bubbleFill,
                         maxWidth: '100%',
+                        overflow: 'hidden',
+                        ...(item.replyTo ? { minWidth: replyBubbleMinWidth } : null),
                       },
                       // Для альбома эффект нажатия только у плитки, не у всего облака
                       pressed && !selectionMode && !isAlbumImage ? { opacity: 0.94 } : null,
@@ -1191,6 +1221,7 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
                   borderWidth: 1,
                   borderColor: isQuotedTargetHighlighted ? highlightAccentColor : BORDER_COLOR,
                   maxWidth: '100%',
+                  ...(item.replyTo ? { minWidth: replyBubbleMinWidth } : null),
                 },
                 pressed && !selectionMode && !isAlbumImage ? { opacity: 0.94 } : null,
               ]}

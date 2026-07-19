@@ -25,6 +25,12 @@
     "components",
     "utils",
     "livekit",
+    "screens",
+    "sockets",
+    "store",
+    "hooks",
+    "constants",
+    "theme",
     "App.tsx",
     "global.d.ts"
   ]
