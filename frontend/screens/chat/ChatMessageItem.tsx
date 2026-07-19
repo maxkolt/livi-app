@@ -877,14 +877,14 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
             >
               <ChatReplyQuoteAccent color={replyQuoteAccent}>
                 <Text
-                  style={{ color: replyQuoteAccent, fontSize: 12, fontWeight: '600', marginBottom: 2 }}
+                  style={{ color: replyQuoteAccent, fontSize: 12, fontWeight: '500', marginBottom: 2, opacity: 0.9 }}
                   numberOfLines={1}
                   ellipsizeMode="tail"
                 >
                   {replyAuthorLabel}
                 </Text>
                 <Text
-                  style={{ color: timeColor, fontSize: 13, opacity: 0.9 }}
+                  style={{ color: timeColor, fontSize: 13, opacity: 0.72 }}
                   numberOfLines={1}
                   ellipsizeMode="tail"
                 >
@@ -1144,14 +1144,14 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
                 >
                   <ChatReplyQuoteAccent color={replyQuoteAccent}>
                     <Text
-                      style={{ color: replyQuoteAccent, fontSize: 12, fontWeight: '600', marginBottom: 2 }}
+                      style={{ color: replyQuoteAccent, fontSize: 12, fontWeight: '500', marginBottom: 2, opacity: 0.9 }}
                       numberOfLines={1}
                       ellipsizeMode="tail"
                     >
                       {replyAuthorLabel}
                     </Text>
                     <Text
-                      style={{ color: LIVI.white, fontSize: 13, opacity: 0.85 }}
+                      style={{ color: LIVI.white, fontSize: 13, opacity: 0.72 }}
                       numberOfLines={1}
                       ellipsizeMode="tail"
                     >

@@ -228,9 +228,9 @@ export default function ChatScreen({ route, navigation }: Props) {
     red: '#FF5A67',
     presenceGreen: isDark ? '#2ECC71' : '#28A85E',
     presenceRed: isDark ? '#FF5A67' : '#E64E59',
-    replyQuoteAccent: isDark ? 'rgba(186, 236, 224, 0.98)' : 'rgba(154, 134, 190, 0.98)',
-    replyQuotePressBg: isDark ? 'rgba(186, 236, 224, 0.14)' : 'rgba(154, 134, 190, 0.22)',
-    replyHighlightAccent: isDark ? 'rgba(186, 236, 224, 0.95)' : 'rgba(154, 134, 190, 0.96)',
+    replyQuoteAccent: isDark ? 'rgba(168, 214, 204, 0.88)' : 'rgba(112, 98, 148, 0.88)',
+    replyQuotePressBg: isDark ? 'rgba(168, 214, 204, 0.10)' : 'rgba(112, 98, 148, 0.10)',
+    replyHighlightAccent: isDark ? 'rgba(168, 214, 204, 0.75)' : 'rgba(112, 98, 148, 0.78)',
     accent: uiAccent(isDark),
   } as const), [theme, isDark]);
 
