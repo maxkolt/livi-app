@@ -22,8 +22,8 @@
   <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" tools:node="remove"/>
   <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" tools:node="remove"/>
   <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" tools:node="remove"/>
-  <!-- Needed to save chat images to gallery via expo-media-library (no share sheet). -->
-  <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
+  <!-- Play policy: no READ_MEDIA_* — pick via Photo Picker; save via MediaStore (GalleryImageSaver). -->
+  <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" tools:node="remove"/>
   <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" tools:node="remove"/>
   <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" tools:node="remove"/>
   <uses-permission android:name="android.permission.READ_PHONE_STATE" android:maxSdkVersion="29" tools:node="remove"/>

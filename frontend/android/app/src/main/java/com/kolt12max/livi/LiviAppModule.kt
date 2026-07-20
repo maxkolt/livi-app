@@ -1715,6 +1715,21 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     trackAppErrorStatic(reactApplicationContext, eventName, message, paramsJson)
   }
 
+  /**
+   * Save image to gallery via MediaStore (no READ_MEDIA_*).
+   * Used by chat / MediaViewer "Save" on Android; picking stays on Photo Picker.
+   */
+  @ReactMethod
+  fun saveImageToGallery(localUri: String, promise: Promise) {
+    try {
+      GalleryImageSaver.save(reactApplicationContext, localUri)
+      promise.resolve(true)
+    } catch (e: Exception) {
+      Log.w(NAME, "saveImageToGallery failed: ${e.message}", e)
+      promise.reject("E_SAVE_GALLERY", e.message ?: "Failed to save image", e)
+    }
+  }
+
   companion object {
     const val NAME = "LiviAppModule"
     /** Intent action: FCM входящий при разблокированном экране — показать через CallKeep (ConnectionService). MainActivity сохраняет extras в pending; JS вызовет displayIncomingCall. */
