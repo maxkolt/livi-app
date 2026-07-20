@@ -280,6 +280,17 @@ export function bringMainActivityToFront(): void {
 }
 
 /**
+ * Accept входящего: сразу Main на передний план, без закрытия Outgoing через startActivity
+ * (иначе singleInstance Outgoing мелькает и после finish остаётся лаунчер).
+ */
+export function bringMainActivityToFrontForIncomingAnswer(): void {
+  if (Platform.OS !== 'android') return;
+  try {
+    NativeModules.LiviAppModule?.bringMainActivityToFrontForIncomingAnswer?.();
+  } catch {}
+}
+
+/**
  * Выход из системного PiP без finish() MainActivity: разворот в полноэкранный режим (REORDER_TO_FRONT).
  * Нужен при call:ended у собеседника / LiveKit — иначе moveTaskToBack+finish() убивает Activity и Metro перезапускается с нуля.
  * Завершение по X в PiP — по-прежнему {@link NativeModules.LiviAppModule.requestExitSystemPiP} (жёсткий выход).

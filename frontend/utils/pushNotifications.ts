@@ -1066,13 +1066,13 @@ export async function openAnswerCallScreen(
     prewarmDirectCallAudioCapture('push:answer-call-screen');
   }
   beginEarlyIncomingCallAccept(callId);
+  await navigateToVideoCallIncoming(peerUserId, callId, mediaHint);
+  // Incoming закрываем ПОСЛЕ navigate: иначе finish() singleInstance оставляет лаунчер до Main.
   if (Platform.OS === 'android') {
     sendCallAnsweredBroadcast(callId);
   }
-  await navigateToVideoCallIncoming(peerUserId, callId, mediaHint);
-  try {
-    await clearCallRelatedNotificationsAndSyncBadge();
-  } catch {}
+  // Не блокируем ответный UI очисткой нотификаций — иначе долго видна крышка accept.
+  void clearCallRelatedNotificationsAndSyncBadge().catch(() => {});
 }
 
 /** После отклонения из вне приложения — увести приложение в фон, чтобы пользователь остался на экране блокировки или в меню телефона. */

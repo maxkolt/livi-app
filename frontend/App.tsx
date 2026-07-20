@@ -52,6 +52,7 @@ import {
   getPendingCallInfo,
   closeOutgoingCallActivity,
   bringMainActivityToFront,
+  bringMainActivityToFrontForIncomingAnswer,
   requestExitSystemPiPSoft,
   dismissSystemPiPAfterCallEnded,
   OUTGOING_CALL_TIMEOUT_MS,
@@ -189,6 +190,11 @@ const endedCallIdsFromSocket = new Set<string>();
 const ENDED_CALL_IDS_TTL_MS = 120000;
 function addEndedCallIdFromSocket(callId: string) {
   endedCallIdsFromSocket.add(callId);
+  try {
+    const pendingRef = (global as any).__pendingForegroundVideoCallNavRef;
+    const pendingCallId = String(pendingRef?.current?.params?.callId || '').trim();
+    if (pendingCallId === callId) pendingRef.current = null;
+  } catch {}
   setTimeout(() => endedCallIdsFromSocket.delete(callId), ENDED_CALL_IDS_TTL_MS);
 }
 
@@ -474,6 +480,54 @@ function AppContent() {
   }, []);
   /** Пока true — не скрываем оверлей. После обработки initial URL (в т.ч. answer-call) ставим true, чтобы не мелькала Home у принимающего. */
   const [initialUrlProcessed, setInitialUrlProcessed] = React.useState(false);
+  /**
+   * Полноэкранная крышка на время accept → VideoCall.
+   * Иначе при bringMainActivityToFront / navigate мелькает предыдущий экран (Home/Chat).
+   */
+  const [incomingAnswerCover, setIncomingAnswerCover] = React.useState(false);
+  const incomingAnswerCoverClearTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clearIncomingAnswerCover = React.useCallback(() => {
+    if (incomingAnswerCoverClearTimerRef.current) {
+      clearTimeout(incomingAnswerCoverClearTimerRef.current);
+      incomingAnswerCoverClearTimerRef.current = null;
+    }
+    setIncomingAnswerCover(false);
+  }, []);
+  const showIncomingAnswerCover = React.useCallback(() => {
+    setIncomingAnswerCover(true);
+    if (incomingAnswerCoverClearTimerRef.current) {
+      clearTimeout(incomingAnswerCoverClearTimerRef.current);
+    }
+    // Safety: не держим крышку вечно, если навигация сорвалась.
+    incomingAnswerCoverClearTimerRef.current = setTimeout(() => {
+      incomingAnswerCoverClearTimerRef.current = null;
+      setIncomingAnswerCover(false);
+    }, 4000);
+  }, []);
+  React.useEffect(() => {
+    return () => {
+      if (incomingAnswerCoverClearTimerRef.current) {
+        clearTimeout(incomingAnswerCoverClearTimerRef.current);
+        incomingAnswerCoverClearTimerRef.current = null;
+      }
+    };
+  }, []);
+  const waitNextPaint = React.useCallback((): Promise<void> => {
+    // В background/inactive rAF часто не тикает, пока MainActivity не на экране —
+    // await здесь блокировал navigate и держал крышку по несколько секунд.
+    if (AppState.currentState !== 'active') {
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      if (typeof requestAnimationFrame === 'function') {
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => resolve());
+        });
+      } else {
+        setTimeout(resolve, 32);
+      }
+    });
+  }, []);
   /** Android: модалка «Разрешить отображение поверх других окон», пока разрешение не выдано. */
   const [overlayPermissionModalVisible, setOverlayPermissionModalVisible] = React.useState(false);
   const [incomingShareVisible, setIncomingShareVisible] = React.useState(false);
@@ -736,6 +790,8 @@ function AppContent() {
   const completeAndroidIncomingAnswer = React.useCallback(async (from: string, callId: string) => {
     logger.info('[App] Completing incoming answer', { callId, from });
     clearEndingCallInProgress();
+    // Крышка ДО foreground / navigate — иначе мелькает Home/Chat.
+    showIncomingAnswerCover();
     incomingCallIdRef.current = callId;
     const answerMediaHint = getCallMediaHint(callId);
     const gAns = global as any;
@@ -758,15 +814,67 @@ function AppContent() {
       try { stopIncomingCallRingtoneAndVibration(); } catch {}
       try { stopIncomingCallAlert(); } catch {}
       try { stopIncomingCallForegroundService(); } catch {}
-      try { sendCallAnsweredBroadcast(callId); } catch {}
       try {
         registerIncomingCallKeepSession(callId, from, {
           hasVideo: answerMediaHint !== 'audio',
         });
       } catch (_) {}
+      // Main ДО закрытия Incoming: иначе finish() singleInstance Incoming оставляет лаунчер.
+      try {
+        logger.info('[App] 📱 bringMain for incoming answer (before navigate/close Incoming)', { callId });
+        bringMainActivityToFrontForIncomingAnswer();
+      } catch {}
     }
-    await openAnswerCallScreen(from, callId, answerMediaHint);
-  }, [rememberExpectedCallAccepted, setIncomingAnswerTransitionGuard]);
+    // Крышку успеть нарисовать только если уже в foreground; в фоне rAF не ждём.
+    if (AppState.currentState === 'active') {
+      await waitNextPaint();
+    }
+    try {
+      await openAnswerCallScreen(from, callId, answerMediaHint);
+    } catch (e) {
+      logger.warn('[App] openAnswerCallScreen failed', { callId, error: e });
+    }
+    if (Platform.OS === 'android') {
+      // Закрыть Incoming только после navigate + Main на переднем плане.
+      try { sendCallAnsweredBroadcast(callId); } catch {}
+      const bringAnsweredMain = () => {
+        if (endedCallIdsFromSocket.has(callId)) return;
+        try {
+          logger.info('[App] 📱 bringMainActivityToFrontForIncomingAnswer (reinforce)', { callId });
+          bringMainActivityToFrontForIncomingAnswer();
+        } catch {}
+      };
+      bringAnsweredMain();
+      InteractionManager.runAfterInteractions(() => {
+        if (typeof requestAnimationFrame === 'function') {
+          requestAnimationFrame(bringAnsweredMain);
+        } else {
+          setTimeout(bringAnsweredMain, 0);
+        }
+      });
+    }
+    const clearCoverIfVideoCall = () => {
+      if (endedCallIdsFromSocket.has(callId)) {
+        clearIncomingAnswerCover();
+        return;
+      }
+      try {
+        if (navRef.isReady() && navRef.getCurrentRoute()?.name === 'VideoCall') {
+          clearIncomingAnswerCover();
+        }
+      } catch {
+        clearIncomingAnswerCover();
+      }
+    };
+    clearCoverIfVideoCall();
+    InteractionManager.runAfterInteractions(clearCoverIfVideoCall);
+  }, [
+    rememberExpectedCallAccepted,
+    setIncomingAnswerTransitionGuard,
+    showIncomingAnswerCover,
+    clearIncomingAnswerCover,
+    waitNextPaint,
+  ]);
 
   const completeAndroidIncomingAnswerRef = React.useRef(completeAndroidIncomingAnswer);
   completeAndroidIncomingAnswerRef.current = completeAndroidIncomingAnswer;
@@ -1188,7 +1296,7 @@ function AppContent() {
       subReturnActive.remove();
       subReturnAudio.remove();
     };
-  }, [completeAndroidIncomingAnswer, rememberExpectedCallAccepted, shouldRequestPendingCallAccepted, invokeReturnToVideoCallFromNotification]);
+  }, [completeAndroidIncomingAnswer, rememberExpectedCallAccepted, shouldRequestPendingCallAccepted, invokeReturnToVideoCallFromNotification, showIncomingAnswerCover, setIncomingAnswerTransitionGuard]);
 
   // События answer/end от нативного экрана звонка (Android) — регистрируем после возможного setup
   React.useEffect(() => {
@@ -1211,6 +1319,7 @@ function AppContent() {
           rememberExpectedCallAccepted(callId, 'callkeep-answer');
           beginEarlyIncomingCallAccept(callId);
           setIncomingAnswerTransitionGuard(callId, true);
+          showIncomingAnswerCover();
           reportAnswerIncomingCall(callId);
           try { emitCloseHomeModals(); } catch {}
           // Push VideoCall поверх текущего экрана (не reset), чтобы после завершения звонка goBack() вернул на тот же экран (Chat, Friends и т.д.).
@@ -1796,6 +1905,9 @@ function AppContent() {
             raw && typeof raw === 'object' ? String((raw as { from?: string }).from ?? '') : '';
           if (callId && from) {
             logger.info('[App] Native pending answer (initial poll): opening call', { callId, from });
+            // Сразу снимаем cold-start оверлей: дальше держит только incomingAnswerCover,
+            // иначе !initialUrlProcessed закрывает VideoCall на всё время await answer.
+            setInitialUrlProcessed(true);
             await completeAndroidIncomingAnswerRef.current(from, callId);
             return;
           }
@@ -2648,6 +2760,7 @@ function AppContent() {
       if (g.__pendingCallAcceptedRef) g.__pendingCallAcceptedRef.current = null;
       if (g.__incomingAnswerTransitionRef) g.__incomingAnswerTransitionRef.current = null;
       expectedCallAcceptedRef.current = null;
+      clearIncomingAnswerCover();
       // Жёстко запрещаем системный PiP на короткое время после завершения звонка (анти-гонка).
       try {
         (global as any).__disableSystemPiPUntilRef = (global as any).__disableSystemPiPUntilRef || { current: 0 };
@@ -2784,7 +2897,7 @@ function AppContent() {
     };
     socket.on('call:ended', onCallEnded);
     return () => { socket.off('call:ended', onCallEnded); };
-  }, [stopAnim]);
+  }, [stopAnim, clearIncomingAnswerCover]);
 
   // Fallback: когда сокет переподключается (устройство в PiP могло не получить call:ended). Если мы в системном PiP и комната уже отключена — закрываем PiP и синхронизируем состояние.
   React.useEffect(() => {
@@ -3331,8 +3444,47 @@ function AppContent() {
               hasIncomingContext,
               hasExpectedAcceptedContext,
               myUserId: myUserId || undefined,
+              alreadyOnVideoCall,
             });
             closeAcceptedCallUi();
+            // Принимающий всегда должен увидеть экран звонка, независимо от AppState.
+            // Не stash'им этот переход: Android Activity выводится на передний план сразу.
+            if (
+              !alreadyOnVideoCall &&
+              peerUserId &&
+              callId &&
+              !endedCallIdsFromSocket.has(callId)
+            ) {
+              const calleeParams = {
+                directCall: true,
+                directInitiator: false,
+                callId: (data as any)?.callId,
+                isIncoming: true,
+                peerUserId,
+                ...videoCallNavExtras((data as any)?.callId),
+              };
+              try {
+                showIncomingAnswerCover();
+                setActiveVideoCall(true);
+                try { emitCloseHomeModals(); } catch {}
+                navigateToVideoCallScreen(
+                  navRef,
+                  calleeParams as Record<string, unknown>,
+                  'call_accepted',
+                );
+                if (Platform.OS === 'android') {
+                  logger.info('[App] 📱 bringMainActivityToFrontForIncomingAnswer (call:accepted, callee)', {
+                    callId: data?.callId,
+                  });
+                  bringMainActivityToFrontForIncomingAnswer();
+                }
+              } catch (err) {
+                logger.error('[App] ❌ callee ownership fallback navigate failed', {
+                  error: err,
+                  callId: data?.callId,
+                });
+              }
+            }
           } else if (peerUserId) {
             const outgoingNick = isCaller ? resolveOutgoingPartnerNick() : undefined;
             const params = isCaller
@@ -3391,6 +3543,7 @@ function AppContent() {
                   });
                   return;
                 }
+                showIncomingAnswerCover();
                 setActiveVideoCall(true);
                 try { emitCloseHomeModals(); } catch {}
                 navigateToVideoCallScreen(navRef, params as Record<string, unknown>, 'call_accepted');
@@ -3586,6 +3739,14 @@ function AppContent() {
                   activeRouteNameRef.current = currentRoute;
                   setRouteName(currentRoute);
                 }
+                if (currentRoute === 'VideoCall') {
+                  // Один кадр после смены route — VideoCall уже в дереве, без мелькания Home.
+                  if (typeof requestAnimationFrame === 'function') {
+                    requestAnimationFrame(() => clearIncomingAnswerCover());
+                  } else {
+                    clearIncomingAnswerCover();
+                  }
+                }
               }
             } catch (e) {
               console.warn('[App] Error in onReady callback:', e);
@@ -3602,6 +3763,13 @@ function AppContent() {
                 if ((global as any).__skipAppStateActiveSetAppIsActiveRef?.current !== true) {
                   activeRouteNameRef.current = currentRoute;
                   setRouteName(currentRoute);
+                }
+                if (currentRoute === 'VideoCall') {
+                  if (typeof requestAnimationFrame === 'function') {
+                    requestAnimationFrame(() => clearIncomingAnswerCover());
+                  } else {
+                    clearIncomingAnswerCover();
+                  }
                 }
               }
             } catch (e) {
@@ -3658,11 +3826,11 @@ function AppContent() {
             </Stack.Navigator>
           </NavigationContainer>
 
-          {/* До обработки initial URL (answer-call и т.д.) не показываем контент — иначе у принимающего мелькает Home перед VideoCall */}
-          {!initialUrlProcessed && (
+          {/* До обработки initial URL / во время accept — не показываем предыдущий экран перед VideoCall */}
+          {(!initialUrlProcessed || incomingAnswerCover) && (
             <View
-              style={[StyleSheet.absoluteFill, { backgroundColor: (theme.colors?.background as string) || '#151F33' }]}
-              pointerEvents="none"
+              style={[StyleSheet.absoluteFill, { backgroundColor: (theme.colors?.background as string) || '#151F33', zIndex: 9999 }]}
+              pointerEvents="auto"
             />
           )}
 

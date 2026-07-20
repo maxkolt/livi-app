@@ -189,11 +189,13 @@ class IncomingCallActivity : AppCompatActivity() {
             stopRepeatingVibration()
             LiviAppModule.setPendingAnswerCall(callId, from, fromNick)
             val deliveredToJs = LiviAppModule.tryDeliverPendingAnswerToJs()
+            // Incoming = singleInstance. Без подъёма Main после finish() остаётся лаунчер.
             if (!deliveredToJs) {
-                android.util.Log.i(TAG, "accept: React not alive — fallback startMainForAnswerCall callId=$callId")
+                android.util.Log.i(TAG, "accept: React not alive — startMainForAnswerCall callId=$callId")
                 startMainForAnswerCall(callId, from, fromNick)
             } else {
-                android.util.Log.i(TAG, "accept: LiviPendingAnswerCall emitted under Incoming (Main stays behind) callId=$callId")
+                android.util.Log.i(TAG, "accept: JS handling — bring Main task to front (no re-stash) callId=$callId")
+                LiviAppModule.bringMainToFrontImmediate(applicationContext)
             }
             // Не закрываем экран сразу:
             // закрытие подтверждается ACTION_CALL_ANSWERED из JS после фактического старта флоу accept.
@@ -290,9 +292,14 @@ class IncomingCallActivity : AppCompatActivity() {
 
     /**
      * Домой / Недавние: экран уходит в фон без завершения (принять/отклонить — в приложении).
+     * При accept Main поднимается поверх — не трактуем это как Home и не уводим задачу «в никуда».
      */
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
+        if (acceptInProgress || closingForCompletion || closeHandled) {
+            android.util.Log.i(TAG, "onUserLeaveHint: skip moveTaskToBack (accept/close in progress)")
+            return
+        }
         minimizeIncomingToShade()
         moveTaskToBack(true)
     }
@@ -847,7 +854,8 @@ class IncomingCallActivity : AppCompatActivity() {
                 LiviAppModule.releaseBackgroundMediaSuppressionStatic(applicationContext)
             } catch (_: Exception) {}
         }
-        if (!acceptInProgress && !mainReturnScheduled && returnMainOnDismiss) {
+        // При accept тоже возвращаем Main: иначе finish() singleInstance Incoming оставляет лаунчер.
+        if (!mainReturnScheduled && (acceptInProgress || returnMainOnDismiss)) {
             mainReturnScheduled = true
             LiviAppModule.scheduleMainActivityAfterOutgoingUserCancel(applicationContext)
         }

@@ -374,6 +374,15 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     postMainActivityReorderToFront(ctx, 500L)
   }
 
+  /**
+   * Accept входящего: только Main на передний план, без запуска OutgoingCallActivity(close).
+   * Иначе singleInstance Outgoing на мгновение перехватывает фокус и после finish() остаётся лаунчер.
+   */
+  @ReactMethod
+  fun bringMainActivityToFrontForIncomingAnswer() {
+    LiviAppModule.bringMainToFrontImmediate(reactApplicationContext)
+  }
+
   /** Прочитать и сбросить флаг «пользователь нажал X на нативном экране исходящего». Вызывать из JS при переходе в active. */
   @ReactMethod
   fun getAndClearOutgoingCanceledByUserFlag(promise: Promise) {
@@ -2176,6 +2185,34 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       }
       Log.d(NAME, "scheduleMainActivityAfterOutgoingUserCancel: forcing Main reorder")
       postMainActivityReorderToFront(ctx.applicationContext, 80L)
+    }
+
+    /**
+     * Сразу вывести задачу MainActivity на передний план (accept входящего).
+     * Без OutgoingCall(close) и без debounce-skip по isInForeground — Incoming в отдельной задаче.
+     */
+    @JvmStatic
+    fun bringMainToFrontImmediate(ctx: Context) {
+      synchronized(LiviAppModule::class.java) {
+        lastBringMainToFrontAtMs = System.currentTimeMillis()
+      }
+      val appCtx = ctx.applicationContext
+      val mainIntent = Intent(appCtx, MainActivity::class.java).apply {
+        addFlags(
+          Intent.FLAG_ACTIVITY_NEW_TASK
+            or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+            or Intent.FLAG_ACTIVITY_SINGLE_TOP,
+        )
+      }
+      Handler(Looper.getMainLooper()).post {
+        try {
+          appCtx.startActivity(mainIntent)
+          Log.d(NAME, "bringMainToFrontImmediate: MainActivity startActivity OK")
+        } catch (e: Exception) {
+          Log.w(NAME, "bringMainToFrontImmediate: startActivity failed", e)
+        }
+      }
     }
 
     @JvmStatic
