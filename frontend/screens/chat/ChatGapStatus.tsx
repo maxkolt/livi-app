@@ -48,21 +48,7 @@ export function ChatGapCenterIndicator({
   const peerTyping = peerActivity === "typing";
   const peerRecording = peerActivity === "recording";
 
-  const baseStyle = {
-    fontSize: 13,
-    fontStyle: "italic" as const,
-    fontWeight: "500" as const,
-    letterSpacing: 0.2,
-  };
-
-  const color =
-    peerTyping || peerRecording
-      ? isDark
-        ? "rgba(255,255,255,0.40)"
-        : "rgba(0,0,0,0.40)"
-      : forwardToast.ok
-        ? "#55d187"
-        : "#FF5A67";
+  const toastColor = forwardToast.ok ? "rgba(255,255,255,0.96)" : "#FF8A93";
 
   return (
     <Animated.View
@@ -80,8 +66,28 @@ export function ChatGapCenterIndicator({
           isDark={isDark}
         />
       ) : (
-        <View style={{ flexDirection: "row", alignItems: "center" }}>
-          <Text style={{ ...baseStyle, color }}>
+        <View
+          style={{
+            alignSelf: "center",
+            paddingVertical: 7,
+            paddingHorizontal: 16,
+            borderRadius: 999,
+            backgroundColor: "rgba(12, 14, 18, 0.82)",
+            borderWidth: 1,
+            borderColor: "rgba(255,255,255,0.10)",
+            maxWidth: "72%",
+          }}
+        >
+          <Text
+            numberOfLines={1}
+            style={{
+              fontSize: 13,
+              fontWeight: "600",
+              letterSpacing: 0.25,
+              color: toastColor,
+              textAlign: "center",
+            }}
+          >
             {String(forwardToast.text || t("chatSent", lang))}
           </Text>
         </View>
@@ -108,17 +114,28 @@ export function ChatDeleteToastInline({
         opacity: forwardToastOpacity,
       }}
     >
-      <Text
+      <View
         style={{
-          fontSize: 13,
-          fontStyle: "italic",
-          fontWeight: "500",
-          letterSpacing: 0.2,
-          color: "#FF5A67",
+          paddingVertical: 7,
+          paddingHorizontal: 16,
+          borderRadius: 999,
+          backgroundColor: "rgba(12, 14, 18, 0.82)",
+          borderWidth: 1,
+          borderColor: "rgba(255,255,255,0.10)",
         }}
       >
-        {forwardToast.text}
-      </Text>
+        <Text
+          style={{
+            fontSize: 13,
+            fontWeight: "600",
+            letterSpacing: 0.25,
+            color: "#FF8A93",
+            textAlign: "center",
+          }}
+        >
+          {forwardToast.text}
+        </Text>
+      </View>
     </Animated.View>
   );
 }

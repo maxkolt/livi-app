@@ -451,18 +451,62 @@ export default function MediaViewer({
     }
   }, [busy, ensureLocalFile]);
 
+  const [saveToastVisible, setSaveToastVisible] = React.useState(false);
+  const [saveToastOk, setSaveToastOk] = React.useState(true);
+  const saveToastOpacity = React.useRef(new Animated.Value(0)).current;
+  const saveToastTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const showSaveToast = React.useCallback(
+    (ok: boolean) => {
+      try {
+        if (saveToastTimerRef.current) {
+          clearTimeout(saveToastTimerRef.current);
+          saveToastTimerRef.current = null;
+        }
+      } catch {}
+      setSaveToastOk(ok);
+      setSaveToastVisible(true);
+      saveToastOpacity.setValue(0);
+      Animated.timing(saveToastOpacity, {
+        toValue: 1,
+        duration: 180,
+        useNativeDriver: true,
+      }).start();
+      saveToastTimerRef.current = setTimeout(() => {
+        Animated.timing(saveToastOpacity, {
+          toValue: 0,
+          duration: 220,
+          useNativeDriver: true,
+        }).start(() => {
+          saveToastTimerRef.current = null;
+          setSaveToastVisible(false);
+        });
+      }, 1500);
+    },
+    [saveToastOpacity],
+  );
+
+  React.useEffect(() => {
+    return () => {
+      try {
+        if (saveToastTimerRef.current) clearTimeout(saveToastTimerRef.current);
+      } catch {}
+    };
+  }, []);
+
   const handleSave = React.useCallback(async () => {
     if (busy) return;
     setBusy(true);
     try {
       const local = await ensureLocalFile();
       await saveImageToGallery(local);
+      showSaveToast(true);
     } catch {
-      // ignore
+      showSaveToast(false);
     } finally {
       setBusy(false);
     }
-  }, [busy, ensureLocalFile]);
+  }, [busy, ensureLocalFile, showSaveToast]);
   return (
     <Modal
       isVisible={visible}
@@ -591,6 +635,25 @@ export default function MediaViewer({
               </View>
             ) : null}
           </View>
+
+          {saveToastVisible ? (
+            <Animated.View
+              pointerEvents="none"
+              style={[styles.saveToastWrap, { opacity: saveToastOpacity }]}
+            >
+              <View style={styles.saveToast}>
+                <Text
+                  numberOfLines={1}
+                  style={[
+                    styles.saveToastText,
+                    { color: saveToastOk ? 'rgba(255,255,255,0.96)' : '#FF8A93' },
+                  ]}
+                >
+                  {saveToastOk ? t('chatAlbumSaved', lang) : t('saveFailed', lang)}
+                </Text>
+              </View>
+            </Animated.View>
+          ) : null}
 
           {/* Footer */}
           <View style={styles.footer}>
@@ -758,5 +821,29 @@ const styles = StyleSheet.create({
     borderRadius: 26,
     width: 52,
     height: 52,
+  },
+  saveToastWrap: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 96,
+    alignItems: 'center',
+    zIndex: 20,
+  },
+  saveToast: {
+    alignSelf: 'center',
+    paddingVertical: 7,
+    paddingHorizontal: 16,
+    borderRadius: 999,
+    backgroundColor: 'rgba(12, 14, 18, 0.82)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.10)',
+    maxWidth: '72%',
+  },
+  saveToastText: {
+    fontSize: 13,
+    fontWeight: '600',
+    letterSpacing: 0.25,
+    textAlign: 'center',
   },
 });
