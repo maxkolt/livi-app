@@ -1152,6 +1152,12 @@ function isDirectCallAcceptedOrActive(callId: string, link?: { a: string; b: str
   return false;
 }
 
+/** Remove callOfUser only if it still points at this callId (late cancel must not wipe a newer dial). */
+function clearCallOfUserIfMatches(userId: string, callId: string): void {
+  const entry = callOfUser.get(userId);
+  if (!entry || entry.callId === callId) callOfUser.delete(userId);
+}
+
 /** After accept: drop ringing occupancy (memory + Redis) while keeping activeRoom / callIdToRoomId for call:end. */
 async function releaseRingingCallPersistence(callId: string, link: { a: string; b: string }): Promise<void> {
   const local = callsById.get(callId);
@@ -1166,8 +1172,8 @@ async function releaseRingingCallPersistence(callId: string, link: { a: string; 
     } catch {}
   }
   callsById.delete(callId);
-  callOfUser.delete(link.a);
-  callOfUser.delete(link.b);
+  clearCallOfUserIfMatches(link.a, callId);
+  clearCallOfUserIfMatches(link.b, callId);
   try {
     await clearDirectCallSharedState(callId, link);
   } catch (e: any) {
@@ -1188,8 +1194,8 @@ async function purgeStaleRingingDirectCallArtifacts(
       caller: link.a,
       callee: link.b,
     });
-    callOfUser.delete(link.a);
-    callOfUser.delete(link.b);
+    clearCallOfUserIfMatches(link.a, callId);
+    clearCallOfUserIfMatches(link.b, callId);
     try {
       await clearDirectCallSharedState(callId, link);
     } catch (e: any) {
@@ -1200,8 +1206,8 @@ async function purgeStaleRingingDirectCallArtifacts(
     }
     return;
   }
-  callOfUser.delete(link.a);
-  callOfUser.delete(link.b);
+  clearCallOfUserIfMatches(link.a, callId);
+  clearCallOfUserIfMatches(link.b, callId);
   callsById.delete(callId);
   try {
     await clearDirectCallSharedState(callId, link);
@@ -1580,8 +1586,8 @@ function cleanupCall(callId: string, reason?: 'accepted' | 'declined' | 'cancele
   if (link.timer) { try { clearTimeout(link.timer); } catch {} }
   if (link.retryPushTimer) { try { clearTimeout(link.retryPushTimer); } catch {} }
   callsById.delete(callId);
-  callOfUser.delete(link.a);
-  callOfUser.delete(link.b);
+  clearCallOfUserIfMatches(link.a, callId);
+  clearCallOfUserIfMatches(link.b, callId);
   void clearDirectCallSharedState(callId, { a: link.a, b: link.b }).catch((e) => {
     logger.warn('[call:cleanup] clear shared state failed', { callId, error: (e as Error)?.message });
   });
