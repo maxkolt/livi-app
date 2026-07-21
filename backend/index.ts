@@ -1669,6 +1669,19 @@ async function cleanupStaleRingingCallForImmediateRetry(callerId: string, callee
     const samePair = link.a === caller && link.b === callee;
     if (!samePair) continue;
 
+    const ageMs = Date.now() - Number(link.createdAtMs || Date.now());
+    // Параллельный call:initiate (двойной tap / socket+HTTP): не убивать только что созданный ringing —
+    // иначе callee принимает первый callId → not_found.
+    if (ageMs >= 0 && ageMs < 3_000) {
+      logger.info('[call:initiate] skip cleaning fresh ringing call', {
+        callId,
+        caller,
+        callee,
+        ageMs,
+      });
+      continue;
+    }
+
     const timeline = getCallTimeline(callId);
     const hasActivePendingRoom =
       activeRoomByUserId.has(link.a) || activeRoomByUserId.has(link.b);
@@ -1685,7 +1698,7 @@ async function cleanupStaleRingingCallForImmediateRetry(callerId: string, callee
       callId,
       caller,
       callee,
-      ageMs: Date.now() - Number(link.createdAtMs || Date.now()),
+      ageMs,
     });
 
     transitionCall(callId, 'canceled', {
@@ -1702,6 +1715,34 @@ async function cleanupStaleRingingCallForImmediateRetry(callerId: string, callee
     try { io.to(`u:${link.b}`).emit('call:cancel', { callId, from: link.a }); } catch {}
     cleanupCall(callId, 'canceled');
   }
+}
+
+/** Если по этой паре уже есть свежий ringing call — вернуть его callId (анти-гонка двойного initiate). */
+async function findReusableFreshRingingCallId(
+  callerId: string,
+  calleeId: string,
+): Promise<string | null> {
+  const caller = normalizeMongoObjectId(String(callerId || ''));
+  const callee = normalizeMongoObjectId(String(calleeId || ''));
+  if (!isOid(caller) || !isOid(callee)) return null;
+  const entry = await getUserCallEntryFromAnyStore(caller);
+  if (!entry?.callId || entry.with !== callee) return null;
+  const link = await getCallLinkFromAnyStore(entry.callId);
+  if (!link || link.a !== caller || link.b !== callee) return null;
+  if (isDirectCallAcceptedOrActive(entry.callId, link)) return null;
+  const timeline = getCallTimeline(entry.callId);
+  if (
+    timeline &&
+    (timeline.state === 'canceled' ||
+      timeline.state === 'declined' ||
+      timeline.state === 'timeout' ||
+      timeline.state === 'ended')
+  ) {
+    return null;
+  }
+  const ageMs = Date.now() - Number(link.createdAtMs || Date.now());
+  if (ageMs < 0 || ageMs > 5_000) return null;
+  return entry.callId;
 }
 
 /**
@@ -3169,6 +3210,18 @@ io.on('connection', async (sock: AuthedSocket) => {
 
       pruneOrphanCallOfUserEntry(me);
       pruneOrphanCallOfUserEntry(peerId);
+
+      // Двойной initiate (гонка): вернуть уже созданный свежий ringing callId, не cancel+recreate.
+      const reusableCallId = await findReusableFreshRingingCallId(me, peerId);
+      if (reusableCallId) {
+        logger.info('[call:initiate] reusing fresh ringing call', {
+          callId: reusableCallId,
+          me,
+          peerId,
+        });
+        return ack?.({ ok: true, callId: reusableCallId, reused: true });
+      }
+
       await cleanupStaleRingingCallForImmediateRetry(me, peerId);
 
       // Проверяем busy флаг инициатора
