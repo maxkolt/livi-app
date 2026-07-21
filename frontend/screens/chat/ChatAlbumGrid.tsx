@@ -231,5 +231,3 @@ export function ChatAlbumGrid({
     </View>
   );
 }
-
-export { CHAT_ALBUM_INSET };

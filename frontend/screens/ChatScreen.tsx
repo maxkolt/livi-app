@@ -35,7 +35,7 @@ import {
   NativeViewGestureHandler,
   FlatList as GHFlatList,
 } from "react-native-gesture-handler";
-import { onCloseIncoming, emitCloseIncoming, onCometChatStatus } from '../utils/globalEvents';
+import { onCloseIncoming, emitCloseIncoming } from '../utils/globalEvents';
 import { displayAvatarLetter } from './home/friendHelpers';
 import socket from '../sockets/socket';
 import { Ionicons } from "@expo/vector-icons";
@@ -148,7 +148,6 @@ import {
 import { uploadMediaToServer } from '../utils/mediaUpload';
 import MediaViewer from '../components/MediaViewer';
 import * as ImagePicker from 'expo-image-picker';
-import { CometChat } from "@cometchat/chat-sdk-react-native";
 import { 
   getMyUserId,
   sendMessage as sendSocketMessage,
@@ -316,8 +315,6 @@ export default function ChatScreen({ route, navigation }: Props) {
     return () => clearInterval(id);
   }, [peerId, isChatScreenFocused]);
 
-  const [conversation, setConversation] =
-    useState<CometChat.Conversation | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [messages, setMessages] = useState<any[]>([]);
@@ -1022,20 +1019,7 @@ export default function ChatScreen({ route, navigation }: Props) {
         } else {
           console.warn('🔍 ChatScreen: no userId received from getMyUserId');
         }
-        
-        // Создаем фиктивную conversation сразу (UI готов мгновенно)
-        const fakeUser = {
-          getUid: () => peerId,
-          getName: () => route?.params?.peerName || "—",
-          getAvatar: () => route?.params?.peerAvatar || "",
-        } as CometChat.User;
-        
-        const fakeConv = {
-          getConversationWith: () => fakeUser,
-          getUnreadMessageCount: () => 0,
-        } as CometChat.Conversation;
-        
-        setConversation(fakeConv);
+
         setLoading(false);
         
       } catch (e) {
@@ -1489,16 +1473,6 @@ export default function ChatScreen({ route, navigation }: Props) {
     const id = String(m?.id || '').trim();
     if (id) void deleteSingleMessage(id, forBoth);
   }, [deleteSingleMessage, consumeDeleteConfirm]);
-
-  React.useEffect(() => {
-    const off = onCometChatStatus?.((payload) => {
-      if (!payload?.message) return;
-      showNotice(payload.kind === 'error' ? 'error' : 'info', payload.title || 'LiVi', payload.message);
-    });
-    return () => {
-      try { off?.(); } catch {}
-    };
-  }, [showNotice]);
 
   const handleScrollToIndexFailed = React.useCallback((info: { index: number; averageItemLength?: number }) => {
     const fl = flatListRef.current as any;

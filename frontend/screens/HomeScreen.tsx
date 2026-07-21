@@ -13,7 +13,6 @@ import {
   Platform,
   ActionSheetIOS,
   Animated,
-  Easing,
   StyleProp,
   ViewStyle,
   AppState,
@@ -24,7 +23,6 @@ import {
   Vibration,
 } from 'react-native';
 import * as Haptics from 'expo-haptics';
-import { Audio } from 'expo-av';
 
 import { syncMyStreamProfile } from '../chat/cometchat';
 import { useSafeAreaInsets, SafeAreaView } from 'react-native-safe-area-context';
@@ -59,8 +57,8 @@ import { logger } from '../utils/logger';
 import { trimNick } from '../utils/userDisplayName';
 import { usePiP } from '../src/pip/PiPContext';
 import { onCallTimeout as onCallTimeoutEvent, onCallIncoming as onCallIncomingEvent, onCallDeclined as onCallDeclinedEvent } from '../sockets/socket';
-import { onRequestCloseIncoming, emitCloseIncoming, onCloseOutgoingCall, onCallCancelledOnHome, onCallEndedOnHome, onCloseHomeModals, onCometChatStatus } from '../utils/globalEvents';
-import { displayOutgoingCallImmediate, notifyOutgoingCallId, isCallKeepAvailable, reportEndCallToCallKeep, closeOutgoingCallActivity, bringMainActivityToFront, OUTGOING_CALL_TIMEOUT_MS, clearOutgoingDeclineHandled, isOutgoingDeclineHandled, setupCallKeep, setCallMediaHint } from '../utils/callKeep';
+import { onRequestCloseIncoming, emitCloseIncoming, onCloseOutgoingCall, onCallCancelledOnHome, onCallEndedOnHome, onCloseHomeModals } from '../utils/globalEvents';
+import { displayOutgoingCallImmediate, notifyOutgoingCallId, reportEndCallToCallKeep, closeOutgoingCallActivity, bringMainActivityToFront, OUTGOING_CALL_TIMEOUT_MS, clearOutgoingDeclineHandled, isOutgoingDeclineHandled, setupCallKeep, setCallMediaHint } from '../utils/callKeep';
 import { syncAppBadgeFromMissedCount, dismissMessageNotificationsOnly, getMissedCountByUserFromNative } from '../utils/pushNotifications';
 import SettingsTab from '../components/SettingsTab';
 import {
@@ -560,19 +558,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     }
     baseShowNotice(text, kind, ms);
   }, [baseShowNotice, setSavedToast, lang]);
-
-  useEffect(() => {
-    const off = onCometChatStatus?.((payload) => {
-      if (!payload?.message) return;
-      const prefix = payload.title ? `${payload.title}: ` : '';
-      const kind: NoticeKind =
-        payload.kind === 'error' ? 'error' : payload.kind === 'success' ? 'success' : 'info';
-      showNotice(`${prefix}${payload.message}`, kind, payload.kind === 'error' ? 4500 : 3000);
-    });
-    return () => {
-      try { off?.(); } catch {}
-    };
-  }, [showNotice]);
   
   // ===== Donate modal =====
   const [donateVisible, setDonateVisible] = useState(false);
@@ -855,47 +840,10 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   }, []);
   const lastIncomingFromRef = useRef<string | null>(null);
   const [roomFull, setRoomFull] = useState<{ visible: boolean; name?: string }>({ visible: false });
-  const wave1 = useRef(new Animated.Value(0)).current;
-  const wave2 = useRef(new Animated.Value(0)).current;
-  const wave3 = useRef(new Animated.Value(0)).current;
-
-  const waveStyle = (i: number) => {
-    const v = i === 0 ? wave1 : i === 1 ? wave2 : wave3;
-    const scale = v.interpolate({ inputRange: [0, 1], outputRange: [0.6, 1.4] });
-    const opacity = v.interpolate({ inputRange: [0, 1], outputRange: [0.45, 0] });
-    return {
-      position: 'absolute' as const,
-      width: 160,
-      height: 160,
-      borderRadius: 80,
-      borderWidth: 2,
-      borderColor: 'rgba(255,255,255,0.35)',
-      transform: [{ scale }],
-      opacity,
-    };
-  };
-
-  const startWaves = useCallback(() => {
-    const loop = (val: Animated.Value, delay: number) => {
-      Animated.loop(
-        Animated.sequence([
-          Animated.delay(delay),
-          Animated.timing(val, { toValue: 1, duration: 1600, easing: Easing.out(Easing.quad), useNativeDriver: true }),
-          Animated.timing(val, { toValue: 0, duration: 0, useNativeDriver: true }),
-        ])
-      ).start();
-    };
-    loop(wave1, 0); loop(wave2, 400); loop(wave3, 800);
-  }, [wave1, wave2, wave3]);
-
-  const stopWaves = useCallback(() => {
-    wave1.stopAnimation(); wave2.stopAnimation(); wave3.stopAnimation();
-  }, [wave1, wave2, wave3]);
 
   const pendingCancelRef = useRef(false);
   /** Пользователь явно сбросил исходящий (кнопка/натив): не показывать callStartFailed когда позже падает отложенный startCall. */
   const outgoingCallUserCanceledRef = useRef(false);
-  const outgoingCallSoundRef = useRef<Audio.Sound | null>(null);
   const callingVisibleRef = useRef(false);
   callingVisibleRef.current = calling.visible;
   /** Monotonic token for outgoing-call attempts: cancel/restart must make older async startCall results stale. */
@@ -1030,9 +978,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         : prev,
     );
     setSwipeActionsHiddenForCall(null);
-    stopWaves();
     return true;
-  }, [calling.callId, closeAndCancelOutgoingBeforeRetry, stopWaves]);
+  }, [calling.callId, closeAndCancelOutgoingBeforeRetry]);
 
   const prepareFriendRowActionTap = useCallback(() => {
     try {
@@ -1051,7 +998,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       activeOutgoingCallIdRef.current = null;
       outgoingAttemptSeqRef.current += 1;
     }
-  }, [clearNativeCanceledOutgoingAttempt, clearStaleOutgoingAttemptIfIdle, forceResetCallBusyRefs, stopWaves]);
+  }, [clearNativeCanceledOutgoingAttempt, clearStaleOutgoingAttemptIfIdle, forceResetCallBusyRefs]);
 
   // ВАЖНО: не закрываем исходящий UI на socket 'connect'.
   // Иначе при старте звонка из вкладки «Друзья» (HomeScreen смонтирован) нативный исходящий экран
@@ -1104,9 +1051,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         : prev,
     );
     setSwipeActionsHiddenForCall(null);
-    stopWaves();
     logger.info('[HomeScreen] reset outgoing after call accepted (light)', { source });
-  }, [stopWaves]);
+  }, []);
 
   // Закрытие модалки исходящего по событию извне (абонент отклонил на нативном экране/отменил/таймаут — событие приходит в App, эмитится emitCloseOutgoingCall)
   const resetOutgoingAfterExternalClose = useCallback((source = 'external', eventCallId?: string | null) => {
@@ -1237,8 +1183,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     forceResetCallBusyRefs();
     clearFriendsCallBusy([outgoingPeerId, lastOutgoingPeerIdRef.current]);
     lastOutgoingPeerIdRef.current = null;
-    stopWaves();
-  }, [calling.visible, calling.friend, calling.callId, markReadMenu, stopWaves, closeAndCancelOutgoingBeforeRetry, forceResetCallBusyRefs, clearFriendsCallBusy]);
+  }, [calling.visible, calling.friend, calling.callId, markReadMenu, closeAndCancelOutgoingBeforeRetry, forceResetCallBusyRefs, clearFriendsCallBusy]);
 
   useEffect(() => {
     const off = onCallCanceled?.((d) => {
@@ -1270,10 +1215,9 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           : prev,
       );
       setSwipeActionsHiddenForCall(null);
-      stopWaves();
     });
     return off;
-  }, [calling.callId, clearFriendsCallBusy, forceResetCallBusyRefs, stopWaves]);
+  }, [calling.callId, clearFriendsCallBusy, forceResetCallBusyRefs]);
 
   useEffect(() => {
     const unsub = onCloseOutgoingCall((payload) => {
@@ -1304,59 +1248,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   // Закрытие по call:declined делают App (closeOutgoingCallActivity) + offDeclined в handleStartVideoCall (setCalling, showNotice).
   // Прямую подписку socket.on('call:declined') убрали — она давала второй setCalling и двойное мерцание.
 
-  // Звук вызова: в модалке — из JS (WAV в цикле); на нативном экране — из OutgoingCallActivity (тот же WAV).
-  const OUTGOING_CALL_SOUND_DURATION_MS = 27000;
-  useEffect(() => {
-    if (!calling.visible || isCallKeepAvailable()) {
-      const sound = outgoingCallSoundRef.current;
-      if (sound) {
-        outgoingCallSoundRef.current = null;
-        sound.stopAsync().catch(() => {});
-        sound.unloadAsync().catch(() => {});
-      }
-      return;
-    }
-    let cancelled = false;
-    let stopTimer: ReturnType<typeof setTimeout> | null = null;
-    (async () => {
-      try {
-        await Audio.setAudioModeAsync({
-          playsInSilentModeIOS: true,
-          allowsRecordingIOS: true,
-          staysActiveInBackground: false,
-          shouldDuckAndroid: false,
-          playThroughEarpieceAndroid: false, // основной динамик — разговорный тихо даже при 1.0
-        });
-        const { sound } = await Audio.Sound.createAsync(
-          require('../assets/phone-calling-1b.wav'),
-          { shouldPlay: false, isLooping: true }
-        );
-        if (cancelled) {
-          sound.unloadAsync().catch(() => {});
-          return;
-        }
-        const volume = 0.8; // 0.0–1.0; на основном динамике разница 0.4/0.9 слышна
-        await sound.setVolumeAsync(volume);
-        outgoingCallSoundRef.current = sound;
-        await sound.playAsync();
-
-        stopTimer = setTimeout(() => {
-          if (outgoingCallSoundRef.current === sound) {
-            outgoingCallSoundRef.current = null;
-            sound.stopAsync().catch(() => {});
-            sound.unloadAsync().catch(() => {});
-          }
-        }, OUTGOING_CALL_SOUND_DURATION_MS);
-      } catch {
-        // игнорируем ошибки загрузки/воспроизведения
-      }
-    })();
-    return () => {
-      cancelled = true;
-      if (stopTimer != null) clearTimeout(stopTimer);
-    };
-  }, [calling.visible]);
-
   const handleStartDirectCall = useCallback(async (friend: Friend, media: 'audio' | 'video' = 'video') => {
     const canceledByNative =
       typeof global !== 'undefined' &&
@@ -1381,7 +1272,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       try { setOutgoingCallScreenVisible(false); } catch {}
       callingVisibleRef.current = false;
       setCalling({ visible: false, friend: null, callId: null });
-      stopWaves();
     }
     await waitForOutgoingNativeCloseBeforeRetry('handleStartDirectCall');
     const attemptId = ++outgoingAttemptSeqRef.current;
@@ -1406,7 +1296,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         (global as any).__outgoingCallMediaRef = { current: media };
       } catch {}
       setCalling({ visible: true, friend, callId: null });
-      startWaves();
       // Сразу помечаем «исходящий на экране», чтобы сокет не отключался при уходе в фон (диалог разрешений).
       // Иначе звонок не дойдёт до абонента (startCall по сокету).
       setOutgoingCallScreenVisible(true);
@@ -1504,7 +1393,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
             }
             callingVisibleRef.current = false;
             setCalling({ visible: false, friend: null, callId: null });
-            stopWaves();
           });
         }),
       );
@@ -1515,7 +1403,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           if (!shouldHandleOutgoingEvent('call:declined', eventCallId)) return;
           finishOutgoing(() => {
             disposeDirectCallAudioPrewarm('home:outgoing-declined');
-            logger.info('[decline/инициатор] HomeScreen offDeclined: setCalling(false), stopWaves, showNotice');
+            logger.info('[decline/инициатор] HomeScreen offDeclined: setCalling(false), showNotice');
             try { setOutgoingCallScreenVisible(false); } catch {}
             forceResetCallBusyRefs();
             clearFriendsCallBusy([String(friend.id), lastOutgoingPeerIdRef.current]);
@@ -1523,7 +1411,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
             callingVisibleRef.current = false;
             setCalling({ visible: false, friend: null, callId: null });
             setSwipeActionsHiddenForCall(null);
-            stopWaves();
             showNotice(t('callDeclined', lang), 'error', 3000);
           });
         }),
@@ -1542,7 +1429,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
             lastOutgoingPeerIdRef.current = null;
             callingVisibleRef.current = false;
             setCalling({ visible: false, friend: null, callId: null });
-            stopWaves();
           });
         }),
       );
@@ -1555,7 +1441,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
             lastOutgoingPeerIdRef.current = null;
             callingVisibleRef.current = false;
             setCalling({ visible: false, friend: null, callId: null });
-            stopWaves();
             setRoomFull({ visible: true, name: friend.name || '' });
             setTimeout(() => setRoomFull({ visible: false, name: '' }), 2000);
           });
@@ -1575,7 +1460,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
             lastOutgoingPeerIdRef.current = null;
             callingVisibleRef.current = false;
             setCalling({ visible: false, friend: null, callId: null });
-            stopWaves();
           });
         }),
       );
@@ -1652,7 +1536,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           lastOutgoingPeerIdRef.current = null;
           callingVisibleRef.current = false;
           setCalling({ visible: false, friend: null, callId: null });
-          stopWaves();
         });
         return;
       }
@@ -1669,7 +1552,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           lastOutgoingPeerIdRef.current = null;
           callingVisibleRef.current = false;
           setCalling({ visible: false, friend: null, callId: null });
-          stopWaves();
           showNotice(t('noAnswer', lang), 'error', 3000);
         });
       }, OUTGOING_CALL_TIMEOUT_MS);
@@ -1696,7 +1578,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       }
       callingVisibleRef.current = false;
       setCalling({ visible: false, friend: null, callId: null });
-      stopWaves();
       const canceledByNative =
         typeof global !== 'undefined' &&
         (global as any).__outgoingCanceledByNativeRef?.current === true;
@@ -1713,45 +1594,13 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         } catch {}
       }
     }
-  }, [navigation, showNotice, startWaves, stopWaves, resetOutgoingAfterExternalClose, clearNativeCanceledOutgoingAttempt, clearStaleOutgoingAttemptIfIdle, waitForOutgoingNativeCloseBeforeRetry, forceResetCallBusyRefs, clearFriendsCallBusy, lang]);
+  }, [navigation, showNotice, resetOutgoingAfterExternalClose, clearNativeCanceledOutgoingAttempt, clearStaleOutgoingAttemptIfIdle, waitForOutgoingNativeCloseBeforeRetry, forceResetCallBusyRefs, clearFriendsCallBusy, lang]);
 
   const handleStartFriendCall = useCallback(
     (friend: Friend) => handleStartDirectCall(friend, 'audio'),
     [handleStartDirectCall],
   );
 
-  const handleCancelCall = useCallback(() => {
-    const callIdToClose = activeOutgoingCallIdRef.current || calling.callId || null;
-    activeOutgoingAttemptRef.current = 0;
-    activeOutgoingCallIdRef.current = null;
-    outgoingAttemptSeqRef.current += 1;
-    outgoingCallUserCanceledRef.current = true;
-    const outgoingPeerId =
-      (calling.friend?.id != null ? String(calling.friend.id) : '') ||
-      String(lastOutgoingPeerIdRef.current || '');
-    // Важно: ставим ref сразу, чтобы внешние события (socket/push/native) не закрывали второй раз до рендера.
-    callingVisibleRef.current = false;
-    try { setOutgoingCallScreenVisible(false); } catch {}
-    try { closeOutgoingCallActivity(callIdToClose, { force: true }); } catch {}
-    try { bringMainActivityToFront(); } catch {}
-    if (calling.callId) {
-      try {
-        reportEndCallToCallKeep(calling.callId);
-        cancelCall(calling.callId);
-        // Повторно через 150мс на случай сетевой гонки
-        setTimeout(() => { try { cancelCall(calling.callId!); } catch {} }, 150);
-      } catch {}
-    } else {
-      // callId ещё не пришёл — отметим, чтобы отменить сразу после ack
-      pendingCancelRef.current = true;
-    }
-    forceResetCallBusyRefs();
-    clearFriendsCallBusy([outgoingPeerId]);
-    lastOutgoingPeerIdRef.current = null;
-    setCalling({ visible: false, friend: null, callId: null });
-    stopWaves();
-    showNotice(t('callCancelled', lang), 'error', 3000);
-  }, [calling.callId, calling.friend, stopWaves, showNotice, lang, forceResetCallBusyRefs, clearFriendsCallBusy]);
 
   /* ===== safe attachIdentity wrapper (queue if socket offline) ===== */
   const attachIdentitySafe = useCallback(
@@ -3150,11 +2999,10 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       // - звонящему, если получатель нажал «Отклонить» (не считаем пропущенным)
       // - получателю, если звонящий нажал «Отменить» (считаем пропущенным)
       setCalling({ visible: false, friend: null, callId: null });
-      stopWaves();
       lastIncomingFromRef.current = null;
     });
     return () => { off?.(); };
-  }, [stopWaves]);
+  }, []);
 
   /* ===== Конвертация изображения в base64 ===== */
   const imageToBase64 = async (uri: string): Promise<string> => {
@@ -3891,13 +3739,12 @@ const handleClearNick = useCallback(async () => {
       activeOutgoingAttemptRef.current = 0;
       activeOutgoingCallIdRef.current = null;
       callingVisibleRef.current = false;
-      stopWaves();
       showNotice(t('user_busy', lang), 'error', 3000);
     };
 
     socket.on('call:busy', onBusy);
     return () => { socket.off('call:busy', onBusy as any); };
-  }, [calling.callId, showNotice, lang, stopWaves]);
+  }, [calling.callId, showNotice, lang]);
 
   // Старый обработчик удален - используем новую систему статусов
 
@@ -4158,60 +4005,6 @@ const handleClearNick = useCallback(async () => {
               <Text style={[styles.confirmBtnText, { color: LIVI.white }]}>{t('ok', lang)}</Text>
             </TouchableOpacity>
           </View>
-        </View>
-      )}
-      {/* ───── Исходящий видеозвонок: нативный экран при CallKeep, иначе модалка в приложении ───── */}
-      {calling.visible && !isCallKeepAvailable() && (
-        <View style={styles.overlayModal} pointerEvents="box-none">
-          <BlurView intensity={Platform.OS === 'android' ? 100 : 85} tint="dark" style={StyleSheet.absoluteFill} />
-          <View
-            style={[
-              StyleSheet.absoluteFill,
-              // Android: сильнее затемняем задний фон
-              { backgroundColor: Platform.OS === 'android' ? 'rgba(0,0,0,1)' : 'rgba(0,0,0,0.35)' },
-            ]}
-          />
-          <Animated.View
-            style={{
-              alignItems: 'center',
-              justifyContent: 'center',
-              padding: 24,
-              ...(Platform.OS === 'android' ? StyleSheet.absoluteFillObject : {})
-            }}
-          >
-            <View style={{ width: 180, height: 180, alignItems: 'center', justifyContent: 'center' }}>
-              {/* Волны */}
-              <Animated.View style={[waveStyle(0)]} />
-              <Animated.View style={[waveStyle(1)]} />
-              <Animated.View style={[waveStyle(2)]} />
-              {/* Иконка звонка */}
-              <View style={{ width: 76, height: 76, borderRadius: 38, backgroundColor: 'rgba(0,0,0,0.45)', alignItems: 'center', justifyContent: 'center' }}>
-                <List.Icon icon="video" color={LIVI.white} />
-              </View>
-            </View>
-            <Text style={{ color: LIVI.white, fontSize: 16, fontWeight: '700', marginTop: 12 }}>
-              {t('callingYouCall', lang).replace('{name}', displayName(calling.friend?.name))}
-            </Text>
-            <Text style={{ color: LIVI.text2, marginTop: 6 }}>{t('callingWaiting', lang)}</Text>
-            <View style={{ alignItems: 'center', marginTop: 300 }}>
-              <TouchableOpacity
-                onPress={handleCancelCall}
-                activeOpacity={0.6}
-                style={{
-                  width: 76,
-                  height: 76,
-                  borderRadius: 38,
-                  backgroundColor: 'rgba(255,90,103,0.25)',
-                  borderWidth: 2,
-                  borderColor: 'rgba(255,90,103,0.5)',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                }}
-              >
-                <MaterialIcons name="call-end" size={28} color="#fff" />
-              </TouchableOpacity>
-            </View>
-          </Animated.View>
         </View>
       )}
 

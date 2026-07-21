@@ -1,6 +1,6 @@
 /**
  * VideoCall - Компонент для видеозвонка другу
- * Использует компоненты: RemoteVideo, LocalVideo, MediaControls, VoiceEqualizer
+ * Использует компоненты: RemoteVideo, LocalVideo, MediaControls
  * Имеет кнопку: Завершить
  */
 
@@ -32,7 +32,6 @@ import { LocalVideo } from './shared/LocalVideo';
 import { RemoteVideo } from './shared/RemoteVideo';
 import { HiddenRemoteAudioSink } from './shared/HiddenRemoteAudioSink';
 import { partnerRemoteRtcLikelyVisible, streamHasLiveRemoteAudio } from './shared/callTimerUtils';
-// import VoiceEqualizer from '../VoiceEqualizer'; // эквалайзер отключен
 import { t, loadLang, defaultLang } from '../../utils/i18n';
 import type { Lang } from '../../utils/i18n';
 import { useAppTheme } from '../../theme/ThemeProvider';
@@ -3069,9 +3068,6 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
             if (prev === false) setRemoteMuted(false);
           }
         },
-        // Эквалайзер отключен
-        onMicLevelChange: () => {},
-        onMicFrequencyLevelsChange: () => {},
         onPcConnectedChange: (connected) => {
           // Обработка изменения состояния подключения
         },
@@ -5786,7 +5782,6 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
   const hasActiveCall = !!partnerId || !!roomId || !!callId;
   const shouldShowLocalVideo = camOn && !isInactiveState;
   const shouldShowRemoteVideo = remoteCamOn && !isInactiveState;
-  // const micLevelForEqualizer = micOn && !isInactiveState ? micLevel : 0; // эквалайзер отключен
   const showControls = hasActiveCall && !isInactiveState;
   const endCallBlockedBySystemPiPReturn = getSystemPiPReturnGuard().returnRestoreInFlight;
   

@@ -23,9 +23,6 @@ import { logger } from './utils/logger';
 import InCallManager from 'react-native-incall-manager';
 import { startIncomingCallAlert, stopIncomingCallAlert } from './utils/incomingCallAlert';
 import HomeScreen, { markHomeScreenBootedForSession } from "./screens/HomeScreen";
-import VideoCallScreen from "./screens/VideoCallScreen";
-import RandomChatScreen from "./screens/RandomChatScreen";
-import ChatScreen from "./screens/ChatScreen";
 import IncomingSharePickerModal from "./components/IncomingSharePickerModal";
 import { PiPProvider, usePiP } from "./src/pip/PiPContext";
 import PiPOverlay from "./src/pip/PiPOverlay";
@@ -3788,7 +3785,7 @@ function AppContent() {
               <Stack.Screen name="Home" component={HomeScreen} />
               <Stack.Screen
                 name="RandomChat"
-                component={RandomChatScreen}
+                getComponent={() => require('./screens/RandomChatScreen').default}
                 options={{
                   presentation: 'card',
                   gestureEnabled: true,
@@ -3800,7 +3797,7 @@ function AppContent() {
               />
               <Stack.Screen
                 name="VideoCall"
-                component={VideoCallScreen}
+                getComponent={() => require('./screens/VideoCallScreen').default}
                 getId={({ params }) => {
                   const cid = params?.callId != null ? String(params.callId).trim() : '';
                   return cid ? `videocall-${cid}` : undefined;
@@ -3816,7 +3813,7 @@ function AppContent() {
               />
               <Stack.Screen
                 name="Chat"
-                component={ChatScreen}
+                getComponent={() => require('./screens/ChatScreen').default}
                 options={{
                   animation: 'fade',
                   animationDuration: 450,

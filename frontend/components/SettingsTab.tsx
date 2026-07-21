@@ -227,7 +227,7 @@ export default function SettingsTab({
   /** Удаление аватара */
   const deleteAvatarSafe = async () => {
     if (onDeleteAvatar) {
-      return onDeleteAvatar(); // обрабатывается в SettingsScreen (без тоста)
+      return onDeleteAvatar(); // без тоста — обработчик снаружи
     }
   };
 

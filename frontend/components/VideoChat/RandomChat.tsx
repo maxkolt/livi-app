@@ -9,8 +9,6 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   View,
   Text,
-  StyleSheet,
-  Dimensions,
   TouchableOpacity,
   Platform,
   Animated,
@@ -18,7 +16,6 @@ import {
   PermissionsAndroid,
   AppState,
   BackHandler,
-  Modal,
   Easing,
   ActivityIndicator,
   StatusBar,
@@ -29,42 +26,29 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { MediaStream, mediaDevices, RTCView } from '@livekit/react-native-webrtc';
 import { RandomChatSession } from '../../src/webrtc/sessions/RandomChatSession';
 import type { CamSide, WebRTCSessionConfig } from '../../src/webrtc/types';
-// import VoiceEqualizer from '../VoiceEqualizer'; // эквалайзер отключен
 import AwayPlaceholder from '../AwayPlaceholder';
 import { t, defaultLang } from '../../utils/i18n';
 import { useLang } from '../../store/lang';
-import type { Lang } from '../../utils/i18n';
 import { useAppTheme } from '../../theme/ThemeProvider';
 import { isValidStream } from '../../utils/streamUtils';
 import { logger } from '../../utils/logger';
-import { trimNick } from '../../utils/userDisplayName';
 import socket, {
-  fetchFriends,
-  requestFriend,
-  respondFriend,
-  checkInviteLink,
-  onFriendRequest,
-  onFriendAdded,
-  onFriendAccepted,
-  onFriendDeclined,
-  updateProfile,
-  onCallIncoming,
-  onCallCanceled,
-  acceptCall,
-  declineCall,
   getCurrentUserId,
   emitPresenceUpdateIfChanged,
   onConnected,
 } from '../../sockets/socket';
-import { syncMyStreamProfile } from '../../chat/cometchat';
-import { loadProfileFromStorage } from '../../utils/profileStorage';
 import { MaterialIcons } from '@expo/vector-icons';
-import { BlurView } from 'expo-blur';
 import { activateKeepAwakeAsync, deactivateKeepAwakeAsync } from '../../utils/keepAwake';
 import * as Device from 'expo-device';
 import { useAudioRouting } from './hooks/useAudioRouting';
 import { useModeration } from './hooks/useModeration';
 import { shouldDeferRandomChatStopOnAppBackground } from '../../utils/activeCallSession';
+import { ANDROID_SCREEN_PADDING, NETWORK_OVERLAY_DELAY_MS } from './randomChat/constants';
+import { styles } from './randomChat/styles';
+import { useRandomChatToast } from './randomChat/useRandomChatToast';
+import { RandomChatToast } from './randomChat/RandomChatToast';
+import { useRandomChatFriends } from './randomChat/useRandomChatFriends';
+import { FriendRequestModal } from './randomChat/FriendRequestModal';
 
 type Props = { 
   route?: { 
@@ -77,36 +61,19 @@ type Props = {
 
 /** Fallback moderation copy comes from i18n (`moderationWarningFallback`). */
 
-const CARD_BASE = {
-  backgroundColor: 'rgba(13,14,16,0.85)',
-  borderRadius: 10,
-  justifyContent: 'center' as const,
-  alignItems: 'center' as const,
-  overflow: 'hidden' as const,
-  marginVertical: 2,
-  position: 'relative' as const,
-};
-
-const boostMicLevel = (level: number) => {
-  if (!level || level <= 0) return 0;
-  const shaped = Math.pow(level, 0.55) * 2.4;
-  return Math.min(1, shaped);
-};
-
 const RandomChat: React.FC<Props> = ({ route }) => {
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   const { theme, isDark } = useAppTheme();
   const lang = useLang((s) => s.lang);
-  const androidScreenPadding = 4;
   const androidContentInsets = useMemo(() => {
     if (Platform.OS !== 'android') return null;
     // Android: делаем одинаковый базовый отступ со всех сторон + safe-area (челка/навигация)
     return {
-      paddingTop: insets.top + androidScreenPadding,
-      paddingBottom: insets.bottom + androidScreenPadding,
-      paddingLeft: insets.left + androidScreenPadding,
-      paddingRight: insets.right + androidScreenPadding,
+      paddingTop: insets.top + ANDROID_SCREEN_PADDING,
+      paddingBottom: insets.bottom + ANDROID_SCREEN_PADDING,
+      paddingLeft: insets.left + ANDROID_SCREEN_PADDING,
+      paddingRight: insets.right + ANDROID_SCREEN_PADDING,
     } as const;
   }, [insets.bottom, insets.left, insets.right, insets.top]);
   
@@ -126,12 +93,6 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     partnerUserIdRef.current = partnerUserId;
   }, [partnerUserId]);
   const [roomId, setRoomId] = useState<string | null>(null);
-  const [friends, setFriends] = useState<any[]>([]);
-  const [addPending, setAddPending] = useState(false);
-  const [addBlocked, setAddBlocked] = useState(false);
-  const [friendModalVisible, setFriendModalVisible] = useState(false);
-  const [incomingFriendFrom, setIncomingFriendFrom] = useState<string | null>(null);
-  const [incomingFriendNick, setIncomingFriendNick] = useState<string | undefined>(undefined);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
@@ -146,7 +107,6 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   // Full-screen network overlay (black screen with icon) for network-origin video failures.
   const [networkOverlayVisible, setNetworkOverlayVisible] = useState(false);
   const networkOverlayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const NETWORK_OVERLAY_DELAY_MS = 6000;
   // On Android we must not show "Отошел" because of transient track/stream churn.
   // Show it ONLY after we got an explicit remote cam state change event.
   const remoteCamStateKnownRef = useRef(false);
@@ -196,8 +156,6 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     );
   }, []);
   
-  // Входящий звонок (когда пользователь в неактивном состоянии)
-  const [incomingCall, setIncomingCall] = useState<{ callId: string; from: string; fromNick?: string } | null>(null);
   const moderationEnabled = String(process.env.EXPO_PUBLIC_RANDOM_CHAT_MODERATION || '0') === '1';
   const remoteModerationTargetRef = useRef<View | null>(null);
   const [banByModerationUntil, setBanByModerationUntil] = useState(0);
@@ -207,18 +165,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     const socketUserId = String(getCurrentUserId?.() ?? '').trim();
     return socketUserId || undefined;
   }, [route?.params?.myUserId]);
-  
-  // Анимации для входящего звонка (как в App.tsx)
-  const incomingCallBounce = useRef(new Animated.Value(0)).current;
-  const incomingWaveA = useRef(new Animated.Value(0)).current;
-  const incomingWaveB = useRef(new Animated.Value(0)).current;
-  // Toast уведомления
-  const [toastText, setToastText] = useState('');
-  const [toastVisible, setToastVisible] = useState(false);
-  /** true — тосты про нарушения правил / модерацию (шрифт 400); иначе обычный стиль */
-  const [toastModerationStyle, setToastModerationStyle] = useState(false);
-  const toastOpacity = useRef(new Animated.Value(0)).current;
-  
+
   // Session (sessionKey пересоздаёт сессию после forceStopRandomChat, чтобы кнопка «Начать» работала)
   const sessionRef = useRef<RandomChatSession | null>(null);
   const [sessionKey, setSessionKey] = useState(0);
@@ -240,42 +187,32 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       }
     }
   }, [partnerId]);
-  
-  
-  // Здесь грузим только друзей (язык берём выше из глобального стора)
-  useEffect(() => {
-    (async () => {
-      try {
-        const r = await fetchFriends();
-        const friendsList = r?.list || [];
-        setFriends(friendsList);
-      } catch (e) {
-        logger.warn('[RandomChat] Failed to load friends:', e);
-      }
-    })();
-  }, []);
-  
+
   // Заглушка «Отошёл» у партнёра в рандоме ведётся по socket `cam-toggle` из RandomChatSession.toggleCam (мгновенно, до LiveKit).
-  
+
   const L = useCallback((key: string) => t(key, lang), [lang]);
-  
-  // Функция показа toast уведомлений (moderationStyle — нарушения правил / бан / предупреждение партнёру)
-  const showToast = useCallback((text: string, ms = 1700, moderationStyle = false) => {
-    if (!text || text.toLowerCase() === 'self') return; // скрываем отладочный тост
-    setToastModerationStyle(!!moderationStyle);
-    setToastText(text);
-    setToastVisible(true);
-    Animated.timing(toastOpacity, { toValue: 1, duration: 160, useNativeDriver: true }).start(() => {
-      const t = setTimeout(() => {
-        Animated.timing(toastOpacity, { toValue: 0, duration: 160, useNativeDriver: true }).start(() => {
-          setToastVisible(false);
-          setToastText('');
-          setToastModerationStyle(false);
-        });
-        clearTimeout(t);
-      }, ms);
-    });
-  }, [toastOpacity]);
+  const { toastVisible, toastText, toastModerationStyle, toastOpacity, showToast } = useRandomChatToast();
+  const {
+    friends,
+    addPending,
+    addBlocked,
+    setAddPending,
+    setAddBlocked,
+    friendModalVisible,
+    setFriendModalVisible,
+    setIncomingFriendNick,
+    friendRequestDisplayName,
+    onAddFriend,
+    acceptFriend,
+    declineFriend,
+    isPartnerFriend,
+  } = useRandomChatFriends({
+    partnerUserId,
+    partnerUserIdRef,
+    lang,
+    showToast,
+    L,
+  });
 
   const isModerationBanned = banByModerationUntil > Date.now();
 
@@ -328,184 +265,6 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     }, delay);
     return () => clearTimeout(t);
   }, [banByModerationUntil]);
-  
-  // Входящая заявка: подписка один раз на монтирование (не пересоздавать при смене partnerUserId).
-  useEffect(() => {
-    const offReq = onFriendRequest?.(({ from, fromNick }) => {
-      const partner = partnerUserIdRef.current;
-      if (partner && String(from) !== String(partner)) return;
-      setIncomingFriendFrom(from);
-      setIncomingFriendNick(trimNick(fromNick) || undefined);
-      setFriendModalVisible(true);
-    });
-    return () => {
-      offReq?.();
-    };
-  }, []);
-
-  const friendRequestDisplayName = useMemo(() => {
-    const n = trimNick(incomingFriendNick);
-    return n || t('user', lang);
-  }, [incomingFriendNick, lang]);
-
-  useEffect(() => {
-    if (!friendModalVisible || !incomingFriendFrom) return;
-    if (trimNick(incomingFriendNick)) return;
-    let cancelled = false;
-    void (async () => {
-      try {
-        const r = await checkInviteLink(incomingFriendFrom);
-        const loaded = trimNick(r?.inviter?.nick);
-        if (!cancelled && loaded) setIncomingFriendNick(loaded);
-      } catch {
-        /* ignore */
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [friendModalVisible, incomingFriendFrom, incomingFriendNick]);
-
-  // Прочие события дружбы (зависят от текущего partnerUserId).
-  useEffect(() => {
-    const offAdded = onFriendAdded?.(({ userId }) => {
-      fetchFriends?.().then((r: any) => setFriends(r?.list || [])).catch(() => {});
-      if (String(userId) === String(partnerUserId)) {
-        setAddPending(false);
-        setAddBlocked(true);
-        showToast(L('friend_added'));
-      }
-    });
-    
-    const offAccepted = onFriendAccepted?.(async ({ userId }) => {
-      setAddPending(false);
-      fetchFriends?.().then((r: any) => setFriends(r?.list || [])).catch(() => {});
-      if (String(userId) === String(partnerUserId)) {
-        showToast(L('friend_added'));
-      }
-      // Обновляем профиль на сервере и синхронизируем с CometChat
-      try {
-        const cached = await loadProfileFromStorage();
-        const nick = cached?.nick || '';
-        const avatarUrl = cached?.avatar || '';
-        const patch: { nick?: string; avatar?: string } = {};
-        if (nick) patch.nick = nick;
-        // ⚠️ КРИТИЧНО: НЕ отправляем avatar='' — на сервере это считается удалением аватара.
-        if (avatarUrl) patch.avatar = avatarUrl;
-        if (Object.keys(patch).length) {
-          await updateProfile(patch);
-        }
-        await syncMyStreamProfile(nick, avatarUrl || undefined);
-      } catch (e) {
-        logger.warn('[RandomChat] Failed to update profile:', e);
-      }
-    });
-    
-    const offDecl = onFriendDeclined?.(({ userId }: { userId: string }) => {
-      setAddPending(false);
-      setAddBlocked(true);
-      if (String(userId) === String(partnerUserId)) {
-        showToast(L('friend_declined'));
-      }
-    });
-    
-    return () => {
-      offAdded?.();
-      offAccepted?.();
-      offDecl?.();
-    };
-  }, [partnerUserId, showToast]);
-  
-  // Обработка добавления в друзья
-  const onAddFriend = useCallback(async () => {
-    if (!partnerUserId || addPending || addBlocked) return;
-    
-    setAddPending(true);
-    try {
-      const res: any = await requestFriend(partnerUserId);
-      if (res?.status === 'pending' || res?.ok) {
-        showToast(L('friend_request_sent'));
-        // Обновляем профиль на сервере и синхронизируем с CometChat
-        try {
-          const cached = await loadProfileFromStorage();
-          const nick = cached?.nick || '';
-          const avatarUrl = cached?.avatar || '';
-          const patch: { nick?: string; avatar?: string } = {};
-          if (nick) patch.nick = nick;
-          // ⚠️ КРИТИЧНО: НЕ отправляем avatar='' — на сервере это считается удалением аватара.
-          if (avatarUrl) patch.avatar = avatarUrl;
-          if (Object.keys(patch).length) {
-            await updateProfile(patch);
-          }
-          await syncMyStreamProfile(nick, avatarUrl || undefined);
-        } catch (e) {
-          logger.warn('[RandomChat] Failed to update profile:', e);
-        }
-      } else if (res?.status === 'already') {
-        setAddPending(false);
-        setAddBlocked(true);
-        fetchFriends?.().then((r: any) => setFriends(r?.list || [])).catch(() => {});
-        showToast(L('already_friends'));
-      } else if (res?.ok === false) {
-        setAddPending(false);
-        showToast(res?.error || L('friend_request_failed'));
-      }
-    } catch (e) {
-      logger.error('[RandomChat] Error requesting friend:', e);
-      setAddPending(false);
-      showToast(L('friend_request_failed'));
-    }
-  }, [partnerUserId, addPending, addBlocked, showToast]);
-  
-  const acceptFriend = useCallback(async () => {
-    if (!incomingFriendFrom) return;
-    try {
-      await respondFriend(incomingFriendFrom, true);
-      setFriendModalVisible(false);
-      setIncomingFriendFrom(null);
-      setIncomingFriendNick(undefined);
-      fetchFriends?.().then((r: any) => setFriends(r?.list || [])).catch(() => {});
-      // Обновляем профиль на сервере и синхронизируем с CometChat
-      try {
-        const cached = await loadProfileFromStorage();
-        const nick = cached?.nick || '';
-        const avatarUrl = cached?.avatar || '';
-        const patch: { nick?: string; avatar?: string } = {};
-        if (nick) patch.nick = nick;
-        // ⚠️ КРИТИЧНО: НЕ отправляем avatar='' — на сервере это считается удалением аватара.
-        if (avatarUrl) patch.avatar = avatarUrl;
-        if (Object.keys(patch).length) {
-          await updateProfile(patch);
-        }
-        await syncMyStreamProfile(nick, avatarUrl || undefined);
-      } catch (e) {
-        logger.warn('[RandomChat] Failed to update profile:', e);
-      }
-    } catch (e) {
-      logger.error('[RandomChat] Error accepting friend:', e);
-    }
-  }, [incomingFriendFrom]);
-  
-  const declineFriend = useCallback(async () => {
-    if (!incomingFriendFrom) return;
-    try {
-      await respondFriend(incomingFriendFrom, false);
-      setFriendModalVisible(false);
-      setIncomingFriendFrom(null);
-      setIncomingFriendNick(undefined);
-    } catch (e) {
-      logger.error('[RandomChat] Error declining friend:', e);
-    }
-  }, [incomingFriendFrom]);
-  
-  // Проверка, является ли партнер другом
-  // КРИТИЧНО: Друзья могут попадаться в рандомном чате - это нормально
-  // Эта проверка используется только для UI (показ бейджа "Друг" и скрытие кнопки "Добавить в друзья")
-  // Она НЕ влияет на работу видеочата - соединение устанавливается независимо от статуса дружбы
-  const isPartnerFriend = useMemo(() => {
-    if (!partnerUserId) return false;
-    return friends.some(f => String(f._id) === String(partnerUserId));
-  }, [partnerUserId, friends]);
   
   // Инициализация session
   useEffect(() => {
@@ -597,12 +356,6 @@ const RandomChat: React.FC<Props> = ({ route }) => {
         },
         onLoadingChange: (loading) => {
           setLoading(loading);
-        },
-        onMicLevelChange: (level) => {
-          // Эквалайзер отключен
-        },
-        onMicFrequencyLevelsChange: (levels) => {
-          // Эквалайзер отключен
         },
       },
       getStarted: () => startedRef.current,
@@ -1189,7 +942,6 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   // Вычисляемые значения
   const hasActiveCall = !!partnerId || !!roomId;
   const shouldShowLocalVideo = camOn && !isInactiveState;
-  // const micLevelForEqualizer = micOn && !isInactiveState ? micLevel : 0; // эквалайзер отключен
   
   // КРИТИЧНО: Обновляем localRenderKey только при реальном изменении localStream (streamId) или camOn
   // Это предотвращает мерцание при next() - когда localStream остается тем же объектом
@@ -1597,173 +1349,6 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     
     return () => backHandler.remove();
   }, [started, isInactiveState, onStartStop]);
-  
-  // Обработка входящих звонков (когда пользователь в неактивном состоянии)
-  useEffect(() => {
-    // Стратегия A:
-    // На неактивном RandomChat НЕ показываем локальную модалку,
-    // а отдаём обработку глобальной модалке в App.tsx (full-screen + рингтон/вибрация).
-    const offIncoming = onCallIncoming?.((d) => {
-      if (!started || isInactiveState) return;
-    });
-    
-    return () => {
-      offIncoming?.();
-    };
-  }, [started, isInactiveState]);
-  
-  // Обработка отмены входящего звонка
-  useEffect(() => {
-    const offCancel = onCallCanceled?.((d) => {
-      if (incomingCall && d?.callId === incomingCall.callId) {
-        logger.info('[RandomChat] Incoming call canceled', { callId: d.callId });
-        setIncomingCall(null);
-      }
-    });
-    
-    const handleTimeout = () => {
-      if (incomingCall) {
-        logger.info('[RandomChat] Incoming call timeout');
-        setIncomingCall(null);
-      }
-    };
-    
-    const handleDeclined = (d?: any) => {
-      if (incomingCall && d?.callId === incomingCall.callId) {
-        setIncomingCall(null);
-      }
-    };
-    
-    socket.on('call:timeout', handleTimeout);
-    socket.on('call:declined', handleDeclined);
-    
-    return () => {
-      offCancel?.();
-      socket.off('call:timeout', handleTimeout);
-      socket.off('call:declined', handleDeclined);
-    };
-  }, [incomingCall]);
-  
-  // Принятие входящего звонка
-  const handleAcceptIncomingCall = useCallback(async () => {
-    if (!incomingCall) return;
-
-    try {
-      logger.info('[RandomChat] Accepting incoming call', { callId: incomingCall.callId });
-      
-      // КРИТИЧНО: Очищаем текущую сессию рандом-чата перед переходом на VideoCall
-      // Это предотвращает конфликты LiveKit комнат
-      const session = sessionRef.current;
-      if (session) {
-        logger.info('[RandomChat] Cleaning up RandomChatSession before accepting video call');
-        try {
-          session.cleanup?.();
-        } catch (e) {
-          logger.warn('[RandomChat] Error cleaning up session:', e);
-        }
-        sessionRef.current = null;
-      }
-      
-      // КРИТИЧНО: НЕ вызываем acceptCall здесь!
-      // Вместо этого передаем isIncoming: true в VideoCall, который сам вызовет acceptCall
-      // после создания VideoCallSession и установки обработчиков сокетов.
-      // Это гарантирует, что call:accepted событие будет получено.
-
-      // Переходим на страницу видеозвонка
-      (navigation as any).navigate('VideoCall', {
-        myUserId,
-        directCall: true,
-        callId: incomingCall.callId,
-        peerUserId: incomingCall.from, // user ID для показа бейджа друга
-        partnerNick: incomingCall.fromNick,
-        isIncoming: true,
-      });
-      
-      setIncomingCall(null);
-    } catch (e) {
-      logger.error('[RandomChat] Error accepting call:', e);
-      setIncomingCall(null);
-    }
-  }, [incomingCall, navigation, myUserId]);
-  
-  // Отклонение входящего звонка
-  const handleDeclineIncomingCall = useCallback(async () => {
-    if (!incomingCall) return;
-
-    try {
-      logger.info('[RandomChat] Declining incoming call', { callId: incomingCall.callId });
-      await declineCall?.(incomingCall.callId);
-      setIncomingCall(null);
-    } catch (e) {
-      logger.error('[RandomChat] Error declining call:', e);
-      setIncomingCall(null);
-    }
-  }, [incomingCall]);
-
-  // Анимации для входящего звонка
-  const stopIncomingAnim = useCallback(() => {
-    incomingCallBounce.stopAnimation();
-    incomingWaveA.stopAnimation();
-    incomingWaveB.stopAnimation();
-  }, [incomingCallBounce, incomingWaveA, incomingWaveB]);
-
-  const startIncomingAnim = useCallback(() => {
-    stopIncomingAnim();
-    Animated.loop(
-      Animated.sequence([
-        Animated.timing(incomingCallBounce, { toValue: 1, duration: 120, easing: Easing.out(Easing.quad), useNativeDriver: true }),
-        Animated.timing(incomingCallBounce, { toValue: -1, duration: 120, easing: Easing.out(Easing.quad), useNativeDriver: true }),
-        Animated.timing(incomingCallBounce, { toValue: 0, duration: 120, easing: Easing.out(Easing.quad), useNativeDriver: true }),
-        Animated.delay(300),
-      ])
-    ).start();
-
-    const loopWave = (val: Animated.Value, delay: number) => {
-      Animated.loop(
-        Animated.sequence([
-          Animated.delay(delay),
-          Animated.timing(val, { toValue: 1, duration: 1400, useNativeDriver: true }),
-          Animated.timing(val, { toValue: 0, duration: 0, useNativeDriver: true }),
-        ])
-      ).start();
-    };
-    loopWave(incomingWaveA, 0);
-    loopWave(incomingWaveB, 400);
-  }, [incomingCallBounce, incomingWaveA, incomingWaveB, stopIncomingAnim]);
-
-  // Запуск/остановка анимаций при изменении incomingCall
-  useEffect(() => {
-    if (incomingCall && (!started || isInactiveState)) {
-      startIncomingAnim();
-    } else {
-      stopIncomingAnim();
-    }
-    return () => stopIncomingAnim();
-  }, [incomingCall, started, isInactiveState, startIncomingAnim, stopIncomingAnim]);
-
-  const incomingCallIconStyle = useMemo(() => ({
-    transform: [
-      { translateY: incomingCallBounce.interpolate({ inputRange: [-1, 0, 1], outputRange: [-6, 0, -6] }) },
-      { rotate: incomingCallBounce.interpolate({ inputRange: [-1, 1], outputRange: ['-8deg', '8deg'] }) },
-    ],
-  }), [incomingCallBounce]);
-
-  const buildIncomingWaveStyle = useCallback(
-    (value: Animated.Value, direction: 'left' | 'right') => ({
-      position: 'absolute' as const,
-      width: 120,
-      height: 120,
-      borderRadius: 60,
-      borderWidth: 2,
-      borderColor: 'rgba(255,255,255,0.35)',
-      opacity: value.interpolate({ inputRange: [0, 1], outputRange: [0.45, 0] }),
-      transform: [
-        { scale: value.interpolate({ inputRange: [0, 1], outputRange: [0.6, 1.35] }) },
-        { translateX: direction === 'left' ? -24 : 24 },
-      ],
-    }),
-    []
-  );
 
   // Cleanup при уходе со страницы
   useFocusEffect(
@@ -2155,368 +1740,32 @@ const RandomChat: React.FC<Props> = ({ route }) => {
         </View>
       
       {/* Модалка заявки в друзья */}
-      <Modal
+      <FriendRequestModal
         visible={friendModalVisible}
-        transparent
-        animationType="fade"
+        isDark={isDark}
+        lang={lang}
+        friendRequestDisplayName={friendRequestDisplayName}
+        L={L}
         onRequestClose={() => {
           setFriendModalVisible(false);
           setIncomingFriendNick(undefined);
         }}
-      >
-        <View style={styles.modalOverlay}>
-          <BlurView intensity={60} tint={isDark ? 'dark' : 'light'} style={StyleSheet.absoluteFill} />
-          <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.5)' }]} />
-          <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>{L('friend_request')}</Text>
-            <Text style={styles.modalText}>
-              {t('friend_request_text', lang).replace('{user}', friendRequestDisplayName)}
-            </Text>
-            <View style={{ flexDirection: "row", gap: 12, marginTop: 16 }}>
-              <TouchableOpacity
-                style={[styles.btnGlassBase, styles.btnGlassDanger]}
-                onPress={declineFriend}
-              >
-                <Text style={styles.modalBtnText}>{L('decline')}</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.btnGlassBase, styles.btnGlassTitan]}
-                onPress={acceptFriend}
-              >
-                <Text style={styles.modalBtnText}>{L('accept')}</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
+        onDecline={declineFriend}
+        onAccept={acceptFriend}
+        styles={styles}
+      />
       
       {/* Toast уведомления */}
-      {toastVisible && (
-        <Animated.View style={[styles.toast, { opacity: toastOpacity }]}>
-          <Text style={[styles.toastText, toastModerationStyle && styles.toastTextModeration]}>{toastText}</Text>
-        </Animated.View>
-      )}
-      
-      {/* Модальное окно входящего звонка поверх всего экрана */}
-      {incomingCall && (!started || isInactiveState) && (
-        <View style={styles.incomingOverlayFullScreen}>
-          <BlurView intensity={60} tint={isDark ? 'dark' : 'light'} style={StyleSheet.absoluteFill} />
-          <View style={[StyleSheet.absoluteFill, { backgroundColor: Platform.OS === 'android' ? 'rgba(0,0,0,1)' : 'rgba(0,0,0,0.5)' }]} />
-          <View style={styles.incomingOverlayContent}>
-            <View style={{ width: 140, height: 140, alignItems: 'center', justifyContent: 'center' }}>
-              <Animated.View style={buildIncomingWaveStyle(incomingWaveA, 'left')} />
-              <Animated.View style={buildIncomingWaveStyle(incomingWaveB, 'right')} />
-              <Animated.View style={incomingCallIconStyle}>
-                <MaterialIcons name="call" size={48} color="#4FC3F7" />
-              </Animated.View>
-            </View>
-            <Text style={styles.incomingOverlayTitle}>{t('incomingCallTitle', lang)}</Text>
-            <Text style={styles.incomingOverlayName}>{incomingCall.fromNick || t('friend', lang)}</Text>
-            <View style={styles.incomingOverlayButtons}>
-              <TouchableOpacity
-                onPress={handleAcceptIncomingCall}
-                style={[styles.btnGlassBase, styles.btnGlassSuccess]}
-              >
-                <Text style={styles.modalBtnText}>{t('accept', lang)}</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={handleDeclineIncomingCall}
-                style={[styles.btnGlassBase, styles.btnGlassDanger]}
-              >
-                <Text style={styles.modalBtnText}>{t('decline', lang)}</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      )}
+      <RandomChatToast
+        toastVisible={toastVisible}
+        toastText={toastText}
+        toastModerationStyle={toastModerationStyle}
+        toastOpacity={toastOpacity}
+        styles={styles}
+      />
       </SafeAreaView>
     </>
   );
 };
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    // padding не задаём тут: на Android safe-area + базовый отступ считаем во внутреннем контейнере (styles.content)
-  },
-  content: {
-    flex: 1,
-    width: '100%',
-    alignItems: "center",
-    // Важно: нижний ряд кнопок должен быть всегда внизу внутри safe-area
-    justifyContent: 'space-between',
-  },
-  topSection: {
-    flex: 1,
-    width: '100%',
-    alignItems: 'center',
-  },
-  card: {
-    ...CARD_BASE,
-    width: Platform.OS === 'android' ? '100%' : '94%',
-    ...(Platform.OS === 'android'
-      ? {
-          flex: 1,
-          flexBasis: 0,
-          minHeight: 170,
-        }
-      : { height: Dimensions.get('window').height * 0.4 }),
-  },
-  eqWrapper: {
-    width: "100%", 
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  rtc: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'black',
-    // КРИТИЧНО: Отключаем оптимизации, которые могут блокировать обновление видео
-    ...(Platform.OS === 'android' ? {
-      // На Android не используем shouldRasterizeIOS, так как это iOS-специфичное свойство
-    } : {
-      // На iOS можно добавить дополнительные оптимизации если нужно
-    }),
-  },
-  remoteStage: {
-    flex: 1,
-    width: '100%',
-  },
-  remoteBlack: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: '#000',
-  },
-  overlayFill: {
-    ...StyleSheet.absoluteFillObject,
-    justifyContent: 'center',
-    alignItems: 'center',
-    // Important: the placeholder must include its own background, otherwise
-    // the underlying video/black layer can change a frame earlier and looks like a "two-step" disappear.
-    backgroundColor: '#000',
-  },
-  overlayCenter: {
-    ...StyleSheet.absoluteFillObject,
-    justifyContent: 'center',
-    alignItems: 'center',
-    // Loader must disappear as a single unit (background + spinner)
-    backgroundColor: '#000',
-  },
-  networkOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    zIndex: 9999,
-    elevation: 9999,
-    backgroundColor: '#000',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  placeholder: {
-    color: 'rgba(237,234,234,0.6)',
-    fontSize: 22,
-  },
-  bottomRow: {
-    // Ширина как у карточек (блок «Вы»): на iOS 94%, на Android 100%
-    width: Platform.OS === 'android' ? '100%' : '94%',
-    flexDirection: 'row',
-    gap: Platform.OS === "android" ? 11 : 16,
-    marginTop: Platform.OS === "android" ? 5 : 10,
-    marginBottom: Platform.OS === "android" ? 4 : 32,
-    // Смещаем кнопки к центру: «Начать» от левого края, «Далее» от правого
-    paddingHorizontal: Platform.OS === "android" ? 2 : 16,
-  },
-  bigBtn: {
-    flex: 1,
-    height: Platform.OS === "android" ? 50 : 60,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  bigBtnText: {
-    color: '#333333',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  btnTitan: {
-    backgroundColor: '#8a8f99',
-  },
-  btnDanger: {
-    backgroundColor: '#ff4d4d',
-  },
-  disabled: {
-    opacity: 1,
-  },
-  topRight: {
-    position: 'absolute',
-    top: 10,
-    right: 10,
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  modalCard: {
-    width: '86%',
-    backgroundColor: '#1f2937',
-    padding: 16,
-    borderRadius: 12,
-  },
-  modalTitle: {
-    color: '#fff',
-    fontSize: 18,
-    fontWeight: '700',
-    marginBottom: 8,
-  },
-  modalText: {
-    color: '#e5e7eb',
-    fontSize: 14,
-  },
-  btnGlassBase: {
-    borderRadius: 12,
-    borderWidth: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    height: 48,
-    flex: 1,
-  },
-  btnGlassDanger: {
-    backgroundColor: 'rgba(255,77,77,0.16)',
-    borderColor: 'rgba(255,77,77,0.65)',
-  },
-  btnGlassTitan: {
-    backgroundColor: 'rgba(138,143,153,0.16)',
-    borderColor: 'rgba(138,143,153,0.65)',
-  },
-  modalBtnText: {
-    color: '#ffffff',
-    fontSize: 16,
-    fontWeight: '700',
-  },
-  friendBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: 'rgba(0,255,0,0.15)',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(0,255,0,0.3)',
-  },
-  friendBadgeText: {
-    color: '#0f0',
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  toast: {
-    position: 'absolute',
-    bottom: 86,
-    left: '7%',
-    right: '7%',
-    backgroundColor: 'rgba(13,14,16,0.92)',
-    borderRadius: 12,
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(255,255,255,0.12)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  toastText: {
-    color: '#B7C0CF',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  /** Модерация: нарушения правил, бан, предупреждение партнёру */
-  toastTextModeration: {
-    fontWeight: '400',
-    fontSize: 15,
-  },
-  iconBtn: {
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    borderRadius: 22,
-    padding: 8,
-    justifyContent: 'center',
-    alignItems: 'center',
-    // Android: чтобы кнопки были выше видеовью (TextureView/обычные View)
-    ...(Platform.OS === 'android' ? { elevation: 40 } : {}),
-  },
-  iconBtnDisabled: {
-    opacity: 0.4,
-  },
-  topLeft: {
-    position: 'absolute',
-    top: 10,
-    left: 10,
-    zIndex: 40,
-    ...(Platform.OS === 'android' ? { elevation: 40 } : {}),
-  },
-  bottomOverlay: {
-    position: 'absolute',
-    bottom: 10,
-    left: 10,
-    right: 10,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    zIndex: 40,
-    ...(Platform.OS === 'android' ? { elevation: 40 } : {}),
-  },
-  // Стили для входящего звонка (как в VideoCall/App.tsx)
-  incomingOverlayContainer: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    borderRadius: 10,
-    overflow: 'hidden',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  incomingOverlayFullScreen: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    justifyContent: 'center',
-    alignItems: 'center',
-    zIndex: 9999,
-    elevation: 9999, // для Android
-  },
-  incomingOverlayContent: {
-    width: '100%',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 28,
-  },
-  incomingOverlayTitle: {
-    color: '#fff',
-    fontSize: 18,
-    fontWeight: '700',
-    marginTop: 10,
-  },
-  incomingOverlayName: {
-    color: '#e5e7eb',
-    fontSize: 16,
-    fontWeight: '600',
-    marginTop: 4,
-    marginBottom: 14,
-  },
-  incomingOverlayButtons: {
-    flexDirection: 'row',
-    gap: 14,
-    width: '100%',
-    paddingHorizontal: 28,
-    marginTop: 16,
-  },
-  btnGlassSuccess: {
-    backgroundColor: 'rgba(76, 175, 80, 0.16)',
-    borderColor: 'rgba(76, 175, 80, 0.65)',
-  },
-});
 
 export default RandomChat;
