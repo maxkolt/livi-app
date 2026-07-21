@@ -782,6 +782,50 @@ function findSocketForUser(io: Server, userId: string): AuthedSocket | undefined
   return getSocketsForUser(io, userId)[0];
 }
 
+/** Cold-start race: socket connected, reauth/bind ещё не успел — resolve callee по installId. */
+async function resolveCalleeSocketForAccept(
+  io: Server,
+  sock: AuthedSocket,
+  calleeUserId: string,
+): Promise<AuthedSocket | undefined> {
+  const linkB = normalizeMongoObjectId(String(calleeUserId || ''));
+  if (!linkB) return undefined;
+
+  const sockUid = normalizeMongoObjectId(String((sock as any)?.data?.userId || ''));
+  if (sockUid && sockUid === linkB) return sock;
+
+  const found = findSocketForUser(io, linkB);
+  if (found) return found;
+
+  // Accepting socket still unbound: map installId → user and bind sync path if matches callee.
+  try {
+    const hs: any = sock.handshake || {};
+    const rawInstallId =
+      (typeof hs.auth?.installId === 'string' && hs.auth.installId) ||
+      (typeof hs.query?.installId === 'string' && hs.query.installId) ||
+      '';
+    const installId = String(rawInstallId || '').trim();
+    if (!installId || !isMongoReady()) return undefined;
+
+    const inst = await Install.findOne({ installId }).select('user').lean();
+    const mapped = inst?.user ? normalizeMongoObjectId(String((inst as any).user)) : '';
+    if (!mapped || mapped !== linkB) return undefined;
+
+    // bindUserIdentity sets data.userId + joins u:room synchronously before first await.
+    await bindUserIdentity(io, sock, mapped);
+    logger.info('[call:accept] bound unbound callee socket via installId', {
+      callUserId: mapped,
+      socketId: sock.id,
+    });
+    return sock;
+  } catch (e: any) {
+    logger.warn('[call:accept] resolveCalleeSocketForAccept failed', {
+      error: e?.message || String(e),
+    });
+    return undefined;
+  }
+}
+
 function hasSocketForUser(io: Server, userId: string): boolean {
   return getSocketsForUser(io, userId).length > 0;
 }
@@ -3427,7 +3471,8 @@ io.on('connection', async (sock: AuthedSocket) => {
 
     // КРИТИЧНО: Принятие возможно даже если инициатор (A) офлайн — он получит call:accepted при reauth
     const aSock = findSocketForUser(io, link.a);
-    const bSock = (sock as any)?.data?.userId === link.b ? (sock as AuthedSocket) : findSocketForUser(io, link.b);
+    // Cold-start: не требуем уже bound sock.data.userId — resolveCalleeSocketForAccept добиндит по installId.
+    const bSock = await resolveCalleeSocketForAccept(io, sock as AuthedSocket, link.b);
 
     if (!bSock) {
       ack?.({ ok: false, error: 'callee_socket_not_found' });
