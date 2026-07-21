@@ -52,7 +52,7 @@ export const BRAND_LETTER_GLOW_SPREAD = 1.2;
 export const BRAND_LETTER_GLOW_INSET = BRAND_LETTER_GLOW_LAYERS * BRAND_LETTER_GLOW_SPREAD;
 export const BRAND_LETTER_GLOW_INTENSITY = 0.58;
 /** Доля inset для перекрытия ореолов между буквами. */
-export const BRAND_LETTER_GLOW_OVERLAP = 0.9;
+export const BRAND_LETTER_GLOW_OVERLAP = 1.2;
 export const CHROME_PERIMETER_GLOW_LAYERS = 5;
 export const CHROME_PERIMETER_GLOW_SPREAD = 2.8;
 /** Компенсация ширины ореола справа — кнопка меню на прежнем отступе. */

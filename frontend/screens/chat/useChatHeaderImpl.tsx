@@ -195,16 +195,17 @@ export function useChatHeader({
             size={FRIEND_ACTION_BUTTON.width}
             fallbackText={headerInitial}
             fallbackTextStyle={{ color: LIVI.titan }}
-            // If no avatar: match back button background + 1px outline
-            containerStyle={
-              fullAvatarUri
-                ? undefined
-                : {
-                    backgroundColor: isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.06)',
-                    borderWidth: 1,
-                    borderColor: outlineColor,
+            // Рамка как у кнопки «назад» — и с фото, и у плейсхолдера, в обеих темах.
+            containerStyle={{
+              overflow: 'hidden',
+              borderWidth: 1,
+              borderColor: isDark ? 'rgba(255,255,255,0.12)' : outlineColor,
+              ...(!fullAvatarUri
+                ? {
+                    backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)',
                   }
-            }
+                : null),
+            }}
           />
         </TouchableOpacity>
       )}

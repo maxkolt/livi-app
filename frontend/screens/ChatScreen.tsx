@@ -24,6 +24,7 @@ import {
   Image,
   StyleSheet,
   Share,
+  StatusBar,
 } from "react-native";
  
 import { useSafeAreaInsets, SafeAreaView } from "react-native-safe-area-context";
@@ -120,7 +121,6 @@ import {
   getChatStatusesKey,
 } from './chat/chatStorageKeys';
 import {
-  CHAT_TYPING_GAP_H as TYPING_GAP_H,
   ChatDeleteToastInline,
   ChatGapCenterIndicator,
   shouldShowChatDeleteToast,
@@ -220,7 +220,7 @@ export default function ChatScreen({ route, navigation }: Props) {
     bg: theme.colors.background,
     surface: theme.colors.surface,
     feedBg: isDark ? theme.colors.surface : 'rgb(200, 206, 216)',
-    titan: theme.colors.onSurfaceVariant as string,
+    titan: (theme.colors.titan || theme.colors.onSurfaceVariant) as string,
     text: theme.colors.onSurfaceVariant as string,
     white: theme.colors.onSurface as string,
     green: '#2ECC71',
@@ -232,6 +232,21 @@ export default function ChatScreen({ route, navigation }: Props) {
     replyHighlightAccent: isDark ? 'rgba(168, 214, 204, 0.75)' : 'rgba(112, 98, 148, 0.78)',
     accent: uiAccent(isDark),
   } as const), [theme, isDark]);
+
+  // Светлая шапка → тёмные иконки статус-бара (как стрелка назад / titan).
+  useFocusEffect(
+    React.useCallback(() => {
+      const style = isDark ? 'light-content' : 'dark-content';
+      StatusBar.setBarStyle(style, true);
+      if (Platform.OS === 'android') {
+        try {
+          StatusBar.setTranslucent(true);
+          StatusBar.setBackgroundColor('transparent', true);
+        } catch {}
+      }
+      return () => {};
+    }, [isDark]),
+  );
 
   // Защита от полупрозрачного фона темы: панель ввода всегда должна быть полностью непрозрачной,
   // чтобы под ней не просвечивал контент на разных устройствах/прошивках.
@@ -246,9 +261,9 @@ export default function ChatScreen({ route, navigation }: Props) {
   }, [LIVI.bg, isDark]);
 
   const BORDER_COLOR = theme.colors.outline as string;
-  // Тёмная тема — как есть. Светлая: исходящие серо-голубые; входящие светлее, почти непрозрачные — текст читается, обои почти не просвечивают.
+  // Тёмная тема — как есть. Светлая: исходящие серо-голубые; входящие — чуть затемнённый жемчужный белый.
   const BUBBLE_BG_OUT = isDark ? 'rgba(14, 20, 32, 0.99)' : 'hsla(220, 6%, 80%, 0.97)';
-  const BUBBLE_BG_IN  = isDark ? 'rgba(26, 32, 42, 0.98)' : 'hsla(208, 38%, 92%, 0.97)';
+  const BUBBLE_BG_IN  = isDark ? 'rgba(26, 32, 42, 0.98)' : 'hsla(40, 8%, 89%, 0.97)';
   const BORDER_WIDTH = 1;
 
   const peerId = String(route?.params?.peerId || "");
@@ -359,9 +374,9 @@ export default function ChatScreen({ route, navigation }: Props) {
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [keyboardInset, setKeyboardInset] = useState(0);
   const composerTextInputMaxHeight = 76;
-  // Android: до первого onLayout нужен реалистичный размер нижней панели,
-  // иначе входящее сообщение может стартово оказаться под инпутом.
-  const estimatedInputHeight = 124 + Math.max(0, insets.bottom);
+  // Android: до первого onLayout — оценка нижней панели (после более низкого инпута).
+  // Не завышать: иначе ListHeader spacer держит лишний зазор до последнего сообщения.
+  const estimatedInputHeight = 100 + Math.max(0, insets.bottom);
   const [inputHeight, setInputHeight] = useState(estimatedInputHeight);
   const [messageText, setMessageText] = useState("");
   const messageTextRef = useRef("");
@@ -1872,18 +1887,20 @@ export default function ChatScreen({ route, navigation }: Props) {
 
   // Только высота: индикатор «пишет…» вынесен в absolute-overlay ниже, чтобы ListHeaderComponent
   // не пересоздавался каждые ~420ms (анимация точек) — иначе FlatList перелayout и тапы по отправке теряются.
+  // Не вычитаем старый CHAT_TYPING_GAP_H: typing уже overlay — иначе облака проваливаются в paddingTop инпута.
+  const resolvedInputBarH = inputHeight > 0 ? inputHeight : estimatedInputHeight;
+  const androidSpacerH = Math.max(72, resolvedInputBarH + composerBottomLift + 10);
   const androidListHeader = React.useMemo(() => {
     if (isEmpty) return null;
     return (
       <View
-        pointerEvents="box-none"
-        style={{
-          // Spacer so the last message doesn't hide under the input bar (and the keyboard on devices without resize).
-          height: Math.max(inputHeight, estimatedInputHeight) + TYPING_GAP_H + composerBottomLift,
-        }}
+        key={`chat-spacer-${androidSpacerH}`}
+        collapsable={false}
+        pointerEvents="none"
+        style={{ height: androidSpacerH }}
       />
     );
-  }, [isEmpty, inputHeight, estimatedInputHeight, composerBottomLift]);
+  }, [isEmpty, androidSpacerH]);
 
   const renderMessageRow = React.useCallback(
     ({ item }: { item: ChatListRow }) => {
@@ -1893,9 +1910,11 @@ export default function ChatScreen({ route, navigation }: Props) {
             <Text
               style={{
                 fontSize: 12,
-                fontWeight: '300',
-                color: LIVI.text,
+                fontWeight: isDark ? '300' : '600',
+                // Светлые обои: onSurfaceVariant слишком бледный — как стрелка назад (titan).
+                color: isDark ? LIVI.text : LIVI.titan,
                 textAlign: 'center',
+                ...(Platform.OS === 'android' && !isDark ? { fontFamily: 'sans-serif-medium' } : null),
               }}
               allowFontScaling={false}
             >
@@ -2007,6 +2026,11 @@ export default function ChatScreen({ route, navigation }: Props) {
       // иначе получаем лишний зазор между инпутом и клавиатурой на разных прошивках.
       edges={Platform.OS === 'android' ? ['top', 'left', 'right'] : ['top', 'bottom', 'left', 'right']}
     >
+      <StatusBar
+        barStyle={isDark ? 'light-content' : 'dark-content'}
+        translucent={Platform.OS === 'android'}
+        backgroundColor={Platform.OS === 'android' ? 'transparent' : undefined}
+      />
       <View
         style={{ flex: 1, backgroundColor: isDark ? '#16243D' : '#B8D4EA' }}
         // Не блокируем весь экран pointerEvents='none': на Android это иногда "съедало" первый тап.
@@ -2054,7 +2078,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 flexGrow: 1,
                 justifyContent: showEmpty ? 'center' : 'flex-end',
                 paddingVertical: 16,
-                paddingBottom: 12,
+                paddingBottom: 20,
               }}
               ListFooterComponent={null}
               keyboardShouldPersistTaps="handled"
@@ -2141,7 +2165,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 borderTopColor: BORDER_COLOR,
                 backgroundColor: INPUT_BAR_BG,
                 paddingHorizontal: 16,
-                paddingTop: 18,
+                paddingTop: voiceIsRecording ? 8 : 18,
                 // Важно: симметричные отступы сверху/снизу вокруг инпута
                 // SafeAreaView уже обрабатывает safe area, поэтому не добавляем insets.bottom
                 paddingBottom: 18,
@@ -2149,7 +2173,7 @@ export default function ChatScreen({ route, navigation }: Props) {
               onLayout={handleInputBarLayout}
             >
               {voiceIsRecording && (
-                <View style={{ alignItems: 'center', marginBottom: 10 }}>
+                <View style={{ alignItems: 'center', marginBottom: 8 }}>
                   <View
                     style={{
                       flexDirection: 'row',
@@ -2218,9 +2242,9 @@ export default function ChatScreen({ route, navigation }: Props) {
                   flexDirection: "row",
                   alignItems: "center",
                   backgroundColor: "rgba(255,255,255,0.06)",
-                  borderRadius: 28,
+                  borderRadius: 24,
                   paddingHorizontal: 14,
-                  paddingVertical: Platform.OS === 'ios' ? 8 : 4,
+                  paddingVertical: Platform.OS === 'ios' ? 5 : 2,
                   borderWidth: 1,
                   borderColor: BORDER_COLOR,
                 }}
@@ -2285,6 +2309,9 @@ export default function ChatScreen({ route, navigation }: Props) {
                       flex: 1,
                       color: voiceIsRecording ? 'transparent' : LIVI.white,
                       fontSize: 16,
+                      lineHeight: 20,
+                      paddingTop: 2,
+                      paddingBottom: 2,
                       maxHeight: composerTextInputMaxHeight,
                     }}
                     placeholder={t('chatMessagePlaceholder', lang)}
@@ -2338,12 +2365,15 @@ export default function ChatScreen({ route, navigation }: Props) {
                   style={{
                     marginLeft: 4,
                     marginRight: 0,
+                    width: 36,
+                    height: 36,
+                    borderRadius: 18,
+                    alignItems: 'center',
+                    justifyContent: 'center',
                     transform: [{ scale: micScale }],
                     backgroundColor: voiceIsRecording ? LIVI.titan : 'rgba(255,255,255,0.2)',
-                    borderRadius: 14,
                     borderWidth: 1,
                     borderColor: BORDER_COLOR,
-                    padding: 6,
                   }}
                 >
                   <View pointerEvents="none" style={{ alignItems: 'center', justifyContent: 'center' }}>
@@ -2361,12 +2391,15 @@ export default function ChatScreen({ route, navigation }: Props) {
                   accessibilityState={{ disabled: !messageText.trim() && !voiceIsRecording }}
                   activeOpacity={messageText.trim() || voiceIsRecording ? 0.88 : 1}
                   style={{
+                    width: 36,
+                    height: 36,
+                    borderRadius: 18,
+                    alignItems: 'center',
+                    justifyContent: 'center',
                     backgroundColor:
                       messageText.trim() || voiceIsRecording
                         ? LIVI.titan
                         : 'rgba(255,255,255,0.2)',
-                    borderRadius: 14,
-                    padding: 6,
                     marginLeft: 12,
                     borderWidth: 1,
                     borderColor: BORDER_COLOR,
@@ -2418,6 +2451,7 @@ export default function ChatScreen({ route, navigation }: Props) {
               windowSize={CHAT_LIST_WINDOW_SIZE}
               updateCellsBatchingPeriod={CHAT_LIST_UPDATE_CELLS_BATCHING_PERIOD}
               ListHeaderComponent={androidListHeader}
+              ListHeaderComponentStyle={isEmpty ? undefined : { height: androidSpacerH }}
               ListEmptyComponent={() => {
                 if (!chatFeedReady) {
                   return (
@@ -2538,7 +2572,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 borderTopColor: BORDER_COLOR,
                 backgroundColor: INPUT_BAR_BG,
                 paddingHorizontal: 16,
-                paddingTop: 18,
+                paddingTop: voiceIsRecording ? 8 : 18,
                 // Когда клавиатура открыта — панель должна "стыковаться" с клавиатурой без зазора.
                 // Когда клавиатура скрыта — добавляем safe-area снизу, чтобы не упираться в навигацию.
                 paddingBottom: 18 + (keyboardVisible ? 0 : Math.max(0, insets.bottom)),
@@ -2546,7 +2580,7 @@ export default function ChatScreen({ route, navigation }: Props) {
               onLayout={handleInputBarLayout}
             >
               {voiceIsRecording && (
-                <View style={{ alignItems: 'center', marginBottom: 10 }}>
+                <View style={{ alignItems: 'center', marginBottom: 8 }}>
                   <View
                     style={{
                       flexDirection: 'row',
@@ -2615,8 +2649,9 @@ export default function ChatScreen({ route, navigation }: Props) {
                   flexDirection: 'row',
                   alignItems: 'center',
                   backgroundColor: 'rgba(255,255,255,0.06)',
-                  borderRadius: 28,
+                  borderRadius: 24,
                   paddingHorizontal: 12,
+                  paddingVertical: 2,
                   borderWidth: 1,
                   borderColor: BORDER_COLOR,
                 }}
@@ -2679,7 +2714,11 @@ export default function ChatScreen({ route, navigation }: Props) {
                       flex: 1,
                       color: voiceIsRecording ? 'transparent' : LIVI.white,
                       fontSize: 16,
+                      lineHeight: 20,
+                      paddingTop: 0,
+                      paddingBottom: 0,
                       maxHeight: composerTextInputMaxHeight,
+                      includeFontPadding: false,
                     }}
                     placeholder={t('chatMessagePlaceholder', lang)}
                     placeholderTextColor={voiceIsRecording ? 'transparent' : LIVI.titan}
@@ -2732,12 +2771,15 @@ export default function ChatScreen({ route, navigation }: Props) {
                   style={{
                     marginLeft: 4,
                     marginRight: 0,
+                    width: 36,
+                    height: 36,
+                    borderRadius: 18,
+                    alignItems: 'center',
+                    justifyContent: 'center',
                     transform: [{ scale: micScale }],
                     backgroundColor: voiceIsRecording ? LIVI.titan : 'rgba(255,255,255,0.2)',
-                    borderRadius: 14,
                     borderWidth: 1,
                     borderColor: BORDER_COLOR,
-                    padding: 6,
                   }}
                 >
                   <View pointerEvents="none" style={{ alignItems: 'center', justifyContent: 'center' }}>
@@ -2755,10 +2797,13 @@ export default function ChatScreen({ route, navigation }: Props) {
                   accessibilityState={{ disabled: !messageText.trim() && !voiceIsRecording }}
                   activeOpacity={messageText.trim() || voiceIsRecording ? 0.88 : 1}
                   style={{
+                    width: 36,
+                    height: 36,
+                    borderRadius: 18,
+                    alignItems: 'center',
+                    justifyContent: 'center',
                     backgroundColor:
                       messageText.trim() || voiceIsRecording ? LIVI.titan : 'rgba(255,255,255,0.2)',
-                    borderRadius: 14,
-                    padding: 6,
                     marginLeft: 12,
                     borderWidth: 1,
                     borderColor: BORDER_COLOR,

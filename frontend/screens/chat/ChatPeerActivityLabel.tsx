@@ -2,6 +2,7 @@
 import React, { useEffect, useState } from "react";
 import { View, Text } from "react-native";
 import { t, type Lang } from "../../utils/i18n";
+import { LightPalette } from "../../theme/ThemeProvider";
 
 /** Animated "..." for peer typing/recording — isolated so ChatScreen doesn't re-render every ~420ms. */
 export function ChatPeerActivityLabel({
@@ -32,7 +33,8 @@ export function ChatPeerActivityLabel({
     peerActivity === "recording"
       ? `${t("chatRecording", lang)}${".".repeat(dots)}`
       : `${t("chatTyping", lang)}${".".repeat(dots)}`;
-  const color = isDark ? "rgba(255,255,255,0.40)" : "rgba(0,0,0,0.40)";
+  // Светлая тема: как дата-разделитель в ленте (titan), не серый rgba(0,0,0,0.40).
+  const color = isDark ? "rgba(255,255,255,0.40)" : LightPalette.titan;
 
   return (
     <View style={{ flexDirection: "row", alignItems: "center" }}>
