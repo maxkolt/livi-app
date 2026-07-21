@@ -1345,6 +1345,20 @@ function clearAcceptedCallStateForUser(userId: string, reason: string): string |
   const pending = activeRoomByUserId.get(uid);
   const entry = callOfUser.get(uid);
   const callId = pending?.callId || entry?.callId || null;
+  // presence idle / stale cleanup must NEVER wipe an active ringing invite —
+  // otherwise callee accept → not_found while native UI still shows the call.
+  if (callId && !pending) {
+    const link = callsById.get(callId) || null;
+    if (!isDirectCallAcceptedOrActive(callId, link)) {
+      logger.info('[call:clearAccepted] skip non-accepted/ringing call', {
+        userId: uid,
+        callId,
+        reason,
+        hasLocalLink: !!link,
+      });
+      return null;
+    }
+  }
   const roomId = pending?.roomId || (callId ? callIdToRoomId.get(callId) : null) || null;
   const peerId = pending?.peerUserId || entry?.with || null;
   const ids = [uid, peerId ? normalizeMongoObjectId(String(peerId)) : ''].filter((id) => isOid(id));
@@ -2845,8 +2859,14 @@ io.on('connection', async (sock: AuthedSocket) => {
         });
 
         const sockData = (sock as any)?.data || {};
+        // callOfUser during ringing makes socketDataLooksRandomOrQueueBusy return false
+        // (not random) — still treat ringing / initiator busy as "busy" for idle wipe.
+        const ringingOrInitiatorBusy =
+          callOfUser.has(userId) ||
+          sockData.busy === true ||
+          sockData.inCall === true;
         const sockStillBusy =
-          sockData.inCall === true || socketDataLooksRandomOrQueueBusy(sockData, userId);
+          ringingOrInitiatorBusy || socketDataLooksRandomOrQueueBusy(sockData, userId);
 
         const pendingActive = activeRoomByUserId.get(userId);
         const pendingStillLive =
