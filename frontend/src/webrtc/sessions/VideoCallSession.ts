@@ -23,12 +23,12 @@ import { SimpleEventEmitter } from '../base/SimpleEventEmitter';
 import type { WebRTCSessionConfig, WebRTCSessionCallbacks, CamSide } from '../types';
 import socket, {
   API_BASE,
-  emitAck,
   ensureSocketConnected,
   warmCallSignaling,
   CALL_SIGNALING_CONNECT_MS,
   setActiveVideoCall,
   awaitEarlyIncomingCallAccept,
+  emitCallAcceptAck,
   hasEarlyIncomingCallAccept,
 } from '../../../sockets/socket';
 import { applyCallEndedGlobalRefsOnce } from '../../../utils/globalEvents';
@@ -490,11 +490,48 @@ export class VideoCallSession extends SimpleEventEmitter {
       return true;
     }
 
-    if (err === 'not_found' || err === 'call_not_found') {
+    const retryable =
+      err === 'not_found' ||
+      err === 'call_not_found' ||
+      err === 'callee_socket_not_found' ||
+      err === 'call_accept_failed';
+
+    if (retryable) {
       try {
-        const got = await emitAck<{ ok?: boolean }>('call:getAccepted', { callId: id }, 7000, 1);
-        if (got?.ok) {
-          logger.info('[VideoCallSession] acceptCall recovered via call:getAccepted', { callId: id });
+        const retry = await emitCallAcceptAck(id);
+        if (retry?.ok) {
+          logger.info('[VideoCallSession] acceptCall recovered via retry call:accept', {
+            callId: id,
+            error: err,
+            duplicate: retry.duplicate,
+          });
+          return true;
+        }
+        logger.warn('[VideoCallSession] acceptCall retry still not ok', {
+          callId: id,
+          error: err,
+          retryError: retry?.error,
+        });
+      } catch (e) {
+        logger.warn('[VideoCallSession] acceptCall retry failed', {
+          callId: id,
+          error: (e as Error)?.message || String(e),
+        });
+      }
+
+      try {
+        // getAccepted на сервере шлёт call:accepted событием (без ack) — emit может помочь
+        // если accept уже прошёл на другой попытке / с другого сокета.
+        socket.emit('call:getAccepted', { callId: id });
+        await new Promise((r) => setTimeout(r, 400));
+        if (this.consumedPendingCallAcceptedAtConstruct && this.callId === id) {
+          logger.info('[VideoCallSession] acceptCall recovered via pending call:accepted after getAccepted', {
+            callId: id,
+          });
+          return true;
+        }
+        const roomAfter = this.room?.state;
+        if (roomAfter === 'connected' || roomAfter === 'connecting') {
           return true;
         }
       } catch (e) {
@@ -561,6 +598,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       });
     }
     const earlyAcceptStarted = hasEarlyIncomingCallAccept(id);
+    // Early accept сам ждёт connect+reauth; если его нет — ждём здесь.
     const socketReadyPromise = earlyAcceptStarted ? Promise.resolve() : ensureSocketConnected(CALL_SIGNALING_CONNECT_MS);
 
     const run = (async () => {
@@ -569,7 +607,7 @@ export class VideoCallSession extends SimpleEventEmitter {
         this.acceptAckStartedAt = Date.now();
         let resp: { ok?: boolean; error?: string; duplicate?: boolean } | null = null;
         const early = await awaitEarlyIncomingCallAccept(id);
-        if (early) {
+        if (early?.ok) {
           resp = early;
           logger.info('[VideoCallSession] call:accept reused early incoming accept', {
             callId: id,
@@ -577,12 +615,14 @@ export class VideoCallSession extends SimpleEventEmitter {
             duplicate: early.duplicate,
           });
         } else {
-          resp = await emitAck<{ ok?: boolean; error?: string; duplicate?: boolean }>(
-            'call:accept',
-            { callId: id },
-            7000,
-            2,
-          );
+          if (early && !early.ok) {
+            logger.warn('[VideoCallSession] early call:accept not ok — retrying', {
+              callId: id,
+              error: early.error,
+            });
+          }
+          // Cold-start: не кэшируем failed early; emitCallAcceptAck ждёт identity+reauth.
+          resp = await emitCallAcceptAck(id);
         }
         this.acceptAckCompletedAt = Date.now();
         if (!resp?.ok) {

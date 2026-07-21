@@ -141,6 +141,7 @@ export {
   beginEarlyIncomingCallAccept,
   cancelCall,
   declineCall,
+  emitCallAcceptAck,
   forceEndDirectCallWithPeer,
   hasEarlyIncomingCallAccept,
   onCallAccepted,

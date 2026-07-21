@@ -494,7 +494,9 @@ class IncomingCallActivity : AppCompatActivity() {
             putExtra(MainActivity.EXTRA_PENDING_ANSWER_CALL_ID, callId)
             putExtra(MainActivity.EXTRA_PENDING_ANSWER_FROM, from)
             putExtra(MainActivity.EXTRA_PENDING_ANSWER_FROM_NICK, fromNick)
+            putExtra(MainActivity.EXTRA_INCOMING_ANSWER_COVER, true)
         }
+        MainActivity.armIncomingAnswerCover = true
         startActivity(intent)
     }
 

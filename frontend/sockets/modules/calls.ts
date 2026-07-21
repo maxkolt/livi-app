@@ -111,16 +111,85 @@ function markIncomingAcceptSent(callId: string): boolean {
   }
 }
 
-async function runCallAcceptAck(callId: string): Promise<{ ok: boolean; duplicate?: boolean }> {
+function clearIncomingAcceptSent(callId: string): void {
+  try {
+    const g = global as any;
+    if (g.__incomingAcceptSentRef?.current === callId) {
+      g.__incomingAcceptSentRef.current = null;
+    }
+  } catch {}
+}
+
+/** Cold-start: accept может стартовать до boot() → currentUserId ещё пуст. */
+async function waitForCurrentUserId(ms = 8000): Promise<string | null> {
+  const existing = String(shared.currentUserId || "").trim();
+  if (existing) return existing;
+  const { onCurrentUserId } = await import("./authState");
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (uid: string | null) => {
+      if (settled) return;
+      settled = true;
+      try {
+        off();
+      } catch {}
+      clearTimeout(t);
+      resolve(uid);
+    };
+    const t = setTimeout(() => {
+      finish(String(shared.currentUserId || "").trim() || null);
+    }, ms);
+    const off = onCurrentUserId((id) => {
+      const uid = String(id || "").trim();
+      if (uid) finish(uid);
+    });
+  });
+}
+
+/**
+ * call:accept с ожиданием connect + identity + reauth.
+ * Без этого cold-start шлёт accept до bind userId → callee_socket_not_found.
+ */
+export async function emitCallAcceptAck(
+  callId: string,
+): Promise<{ ok: boolean; duplicate?: boolean; error?: string }> {
+  const id = String(callId || "").trim();
+  if (!id) return { ok: false, error: "missing_callId" };
+
   warmCallSignaling();
   await ensureSocketConnected(CALL_SIGNALING_CONNECT_MS);
+  const uid = await waitForCurrentUserId(8000);
+  if (!uid) {
+    logger.warn("[socket] call:accept deferred — no currentUserId yet", { callId: id });
+  }
+  try {
+    const { ensureReauthBeforePrivilegedSocketOp } = await import("./reauth");
+    const reauthed = await ensureReauthBeforePrivilegedSocketOp();
+    if (!reauthed && shared.reauthInFlight) {
+      try {
+        await shared.reauthInFlight;
+      } catch {}
+    } else if (!reauthed) {
+      logger.warn("[socket] call:accept continuing without fresh reauth", { callId: id });
+    }
+  } catch (e: any) {
+    logger.warn("[socket] call:accept reauth wait failed", {
+      callId: id,
+      error: e?.message || String(e),
+    });
+  }
+
   const resp = await emitAck<{ ok?: boolean; error?: string; duplicate?: boolean }>(
     "call:accept",
-    { callId },
+    { callId: id },
     7000,
     2,
   );
-  return { ok: !!resp?.ok, duplicate: resp?.duplicate };
+  return {
+    ok: !!resp?.ok,
+    duplicate: resp?.duplicate,
+    error: resp?.error ? String(resp.error) : undefined,
+  };
 }
 
 /**
@@ -134,8 +203,19 @@ export function beginEarlyIncomingCallAccept(callId: string): void {
 
   const work = (async () => {
     try {
-      return await runCallAcceptAck(id);
+      const result = await emitCallAcceptAck(id);
+      if (!result.ok) {
+        // Позволяем dedupe, чтобы VideoCallSession / повторный begin могли ретраить.
+        clearIncomingAcceptSent(id);
+        logger.warn("[socket] early call:accept ack not ok", {
+          callId: id,
+          error: result.error,
+          duplicate: result.duplicate,
+        });
+      }
+      return result;
     } catch (e: any) {
+      clearIncomingAcceptSent(id);
       logger.warn("[socket] early call:accept failed, fallback emit", {
         callId: id,
         error: e?.message || String(e),
@@ -143,6 +223,7 @@ export function beginEarlyIncomingCallAccept(callId: string): void {
       try {
         socket.emit("call:accept", { callId: id });
       } catch {}
+      // Оптимистично: emit мог дойти; VideoCallSession всё равно дождётся call:accepted / recover.
       return { ok: true };
     }
   })();
@@ -162,14 +243,14 @@ export function hasEarlyIncomingCallAccept(callId: string): boolean {
 
 export async function awaitEarlyIncomingCallAccept(
   callId: string,
-): Promise<{ ok: boolean; duplicate?: boolean } | null> {
+): Promise<{ ok: boolean; duplicate?: boolean; error?: string } | null> {
   const id = String(callId || "").trim();
   const p = shared.earlyIncomingCallAcceptById.get(id);
   if (!p) return null;
   try {
     return await p;
   } catch {
-    return { ok: false };
+    return { ok: false, error: "early_accept_rejected" };
   }
 }
 

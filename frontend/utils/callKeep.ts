@@ -290,6 +290,22 @@ export function bringMainActivityToFrontForIncomingAnswer(): void {
   } catch {}
 }
 
+/** Снять нативную крышку accept (#1B1C22) после отрисовки VideoCall. */
+export function clearIncomingAnswerNativeCover(): void {
+  if (Platform.OS !== 'android') return;
+  try {
+    NativeModules.LiviAppModule?.clearIncomingAnswerNativeCover?.();
+  } catch {}
+}
+
+/** Показать нативную крышку accept без подъёма Main. */
+export function showIncomingAnswerNativeCover(): void {
+  if (Platform.OS !== 'android') return;
+  try {
+    NativeModules.LiviAppModule?.showIncomingAnswerNativeCover?.();
+  } catch {}
+}
+
 /**
  * Выход из системного PiP без finish() MainActivity: разворот в полноэкранный режим (REORDER_TO_FRONT).
  * Нужен при call:ended у собеседника / LiveKit — иначе moveTaskToBack+finish() убивает Activity и Metro перезапускается с нуля.

@@ -6690,7 +6690,15 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
 
   if (showAudioPresentation) {
     return (
-      <SafeAreaView style={[styles.container, styles.audioCallContainer]} edges={Platform.OS === 'android' ? [] : undefined}>
+      <SafeAreaView
+        style={[styles.container, styles.audioCallContainer]}
+        edges={Platform.OS === 'android' ? [] : undefined}
+        onLayout={() => {
+          try {
+            (global as any).__notifyIncomingAnswerUiReady?.();
+          } catch {}
+        }}
+      >
         {renderCallHiddenAudioSink()}
         <View style={[styles.audioCallContent, androidContentInsets]}>
           <View style={styles.audioCallHeader}>
@@ -6821,6 +6829,11 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       style={[styles.container, { backgroundColor: isDark ? '#151F33' : (theme.colors.background as string) }]}
       // Android: safe-area отступы считаем сами через insets, чтобы низ/верх точно не прилипали к системе
       edges={Platform.OS === 'android' ? [] : undefined}
+      onLayout={() => {
+        try {
+          (global as any).__notifyIncomingAnswerUiReady?.();
+        } catch {}
+      }}
     >
       {renderCallHiddenAudioSink()}
       <View style={[styles.content, androidContentInsets]}>

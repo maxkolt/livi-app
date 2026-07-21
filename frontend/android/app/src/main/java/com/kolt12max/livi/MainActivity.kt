@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.res.Configuration
+import android.graphics.Color
 import android.graphics.Rect
 import android.net.Uri
 import android.os.Build
@@ -78,6 +79,61 @@ class MainActivity : ReactActivity() {
   private var homePiPEnterAttemptSeq: Int = 0
   /** Нативная заглушка LiVi поверх RN — единый кадр system PiP на всех устройствах. */
   private var systemPiPBackdrop: View? = null
+  /**
+   * Непрозрачная крышка цвета audio-call (#1B1C22) поверх RN, пока VideoCall не отрисован.
+   * Нужна при accept с Incoming/lock/фона: Main поднимается раньше, чем JS успеет поставить cover.
+   */
+  private var incomingAnswerCoverView: View? = null
+
+  fun showIncomingAnswerCover() {
+    try {
+      armIncomingAnswerCover = true
+      val decor = window?.decorView as? ViewGroup ?: return
+      val cover = incomingAnswerCoverView ?: run {
+        val v = View(this).apply {
+          setBackgroundColor(Color.parseColor("#1B1C22"))
+          importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }
+        decor.addView(
+          v,
+          ViewGroup.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT,
+          ),
+        )
+        v.elevation = 20000f
+        v.translationZ = 20000f
+        incomingAnswerCoverView = v
+        v
+      }
+      cover.visibility = View.VISIBLE
+      cover.bringToFront()
+      decor.requestLayout()
+    } catch (e: Exception) {
+      android.util.Log.w("MainActivity", "showIncomingAnswerCover failed", e)
+    }
+  }
+
+  fun hideIncomingAnswerCover() {
+    try {
+      armIncomingAnswerCover = false
+      incomingAnswerCoverView?.visibility = View.GONE
+    } catch (e: Exception) {
+      android.util.Log.w("MainActivity", "hideIncomingAnswerCover failed", e)
+    }
+  }
+
+  private fun maybeShowIncomingAnswerCoverFromIntent(intent: Intent?) {
+    val fromExtra = intent?.getBooleanExtra(EXTRA_INCOMING_ANSWER_COVER, false) == true
+    // Не использовать hasPendingAnswerCall(): pending живёт до getAndClear и при каждом
+    // bringMain/onNewIntent снова накрывал бы VideoCall чёрной крышкой после accept.
+    if (fromExtra || armIncomingAnswerCover) {
+      if (fromExtra) {
+        try { intent?.removeExtra(EXTRA_INCOMING_ANSWER_COVER) } catch (_: Exception) {}
+      }
+      showIncomingAnswerCover()
+    }
+  }
 
   private fun showSystemPiPBackdropForCapture() {
     try {
@@ -294,6 +350,7 @@ class MainActivity : ReactActivity() {
     if (tryStashShareFromIntent(intent)) {
       pendingShareFromIntent = true
     }
+    maybeShowIncomingAnswerCoverFromIntent(intent)
     handleLauncherTapDuringActiveCall(intent)
   }
 
@@ -336,6 +393,7 @@ class MainActivity : ReactActivity() {
     handleReturnToActiveCallIntent(intent)
     handleAudioOnlyFromPiPIntent(intent)
     handleLauncherTapDuringActiveCall(intent)
+    maybeShowIncomingAnswerCoverFromIntent(intent)
     // FCM call_accepted запустил MainActivity — закрыть нативный экран исходящего (если ещё открыт) и уведомить JS
     val pendingCallId = intent?.getStringExtra(EXTRA_PENDING_CALL_ACCEPTED_CALL_ID)
     if (!pendingCallId.isNullOrBlank()) {
@@ -668,6 +726,7 @@ class MainActivity : ReactActivity() {
     if (tryStashShareFromIntent(intent)) {
       pendingShareFromIntent = true
     }
+    maybeShowIncomingAnswerCoverFromIntent(intent)
     handleLauncherTapDuringActiveCall(intent)
     // Пуш call_ended (endedFromActive): закрыть PiP сразу у собеседника, т.к. сокет в фоне часто отключён.
     closePipCallEndedReceiver = object : BroadcastReceiver() {
@@ -825,6 +884,8 @@ class MainActivity : ReactActivity() {
     const val EXTRA_PENDING_ANSWER_CALL_ID = "pending_answer_call_id"
     const val EXTRA_PENDING_ANSWER_FROM = "pending_answer_from"
     const val EXTRA_PENDING_ANSWER_FROM_NICK = "pending_answer_from_nick"
+    /** Accept входящего: показать #1B1C22 поверх RN до VideoCall.onLayout. */
+    const val EXTRA_INCOMING_ANSWER_COVER = "incoming_answer_cover"
     const val EXTRA_OPEN_TAB_FRIENDS = "open_tab_friends"
     /** Тап по ongoing-уведомлению активного видеозвонка — вернуться на экран звонка. */
     const val EXTRA_RETURN_TO_ACTIVE_CALL = "return_to_active_call"
@@ -838,5 +899,28 @@ class MainActivity : ReactActivity() {
     /** Последний MainActivity в onResume — для закрытия system PiP при call:ended, когда currentActivity == null. */
     @JvmField
     var lastResumedInstance: MainActivity? = null
+
+    /** Accept уже нажат — держим крышку даже если Activity ещё не получила intent extra. */
+    @JvmField
+    @Volatile
+    var armIncomingAnswerCover: Boolean = false
+
+    @JvmStatic
+    fun showIncomingAnswerCoverOnMainIfPossible() {
+      armIncomingAnswerCover = true
+      val act = lastResumedInstance
+      if (act != null && !act.isFinishing && !act.isDestroyed) {
+        act.runOnUiThread { act.showIncomingAnswerCover() }
+      }
+    }
+
+    @JvmStatic
+    fun hideIncomingAnswerCoverOnMainIfPossible() {
+      armIncomingAnswerCover = false
+      val act = lastResumedInstance
+      if (act != null && !act.isFinishing && !act.isDestroyed) {
+        act.runOnUiThread { act.hideIncomingAnswerCover() }
+      }
+    }
   }
 }

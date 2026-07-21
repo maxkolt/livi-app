@@ -191,10 +191,20 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     }, OUTGOING_LAUNCH_DELAY_MS)
   }
 
-  /** Закрыть старый экран входящего перед новым звонком, чтобы singleTop не показывал визуально "залипший" incoming. */
-  private fun closeAnyIncomingScreen(ctx: Context) {
+  /**
+   * Закрыть старый экран входящего перед новым звонком, чтобы singleTop не показывал визуально "залипший" incoming.
+   * [exceptCallId] — тот же звонок, который сейчас показываем (FCM уже открыл Incoming, socket догоняет):
+   * НЕ вызывать deliverIncomingCallCanceled — иначе EndedCallIds + JUST_CLOSE гасят экран сразу после появления (фон).
+   */
+  private fun closeAnyIncomingScreen(ctx: Context, exceptCallId: String? = null) {
     val activeIncomingId = IncomingCallActivity.activeCallId.takeIf { it.isNotBlank() }
     if (!IncomingCallActivity.isAlive && activeIncomingId == null) return
+
+    val except = exceptCallId?.trim().orEmpty()
+    if (except.isNotEmpty() && activeIncomingId == except) {
+      Log.d(NAME, "closeAnyIncomingScreen: skip same active callId=$except")
+      return
+    }
 
     activeIncomingId?.let { oldCallId ->
       try {
@@ -377,10 +387,27 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   /**
    * Accept входящего: только Main на передний план, без запуска OutgoingCallActivity(close).
    * Иначе singleInstance Outgoing на мгновение перехватывает фокус и после finish() остаётся лаунчер.
+   * Без крышки: VideoCall уже в стеке / крышку держит JS; повторный bringMain с крышкой залипает поверх аудио UI.
    */
   @ReactMethod
   fun bringMainActivityToFrontForIncomingAnswer() {
-    LiviAppModule.bringMainToFrontImmediate(reactApplicationContext)
+    LiviAppModule.bringMainToFrontImmediate(reactApplicationContext, withAnswerCover = false)
+  }
+
+  /** Снять нативную крышку accept после VideoCall.onLayout (JS). */
+  @ReactMethod
+  fun clearIncomingAnswerNativeCover() {
+    Handler(Looper.getMainLooper()).post {
+      MainActivity.hideIncomingAnswerCoverOnMainIfPossible()
+    }
+  }
+
+  /** Показать нативную крышку accept (#1B1C22) без подъёма Main (in-app / уже foreground). */
+  @ReactMethod
+  fun showIncomingAnswerNativeCover() {
+    Handler(Looper.getMainLooper()).post {
+      MainActivity.showIncomingAnswerCoverOnMainIfPossible()
+    }
   }
 
   /** Прочитать и сбросить флаг «пользователь нажал X на нативном экране исходящего». Вызывать из JS при переходе в active. */
@@ -429,7 +456,13 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     // иначе FGS делает detach до старта рингтона на экране — на keyguard/фоне плеер Activity часто
     // не успевает, а FGS уже заглушён через stopRingtonePlayerForCallKeepOnly → тишина.
 
-    closeAnyIncomingScreen(ctx)
+    val normalizedCallId = callId.trim()
+    if (IncomingCallActivity.isAlive && IncomingCallActivity.activeCallId == normalizedCallId) {
+      Log.d(NAME, "launchIncomingCallActivity: already showing same call, skip relaunch callId=$normalizedCallId")
+      return
+    }
+
+    closeAnyIncomingScreen(ctx, exceptCallId = normalizedCallId)
     Handler(Looper.getMainLooper()).postDelayed({
       LiviOngoingCallHelper.setIncomingCall(ctx, callId, from, fromNick ?: "")
       // Те же флаги, что и в FCM (buildIncomingCallActivityIntent): иначе при активном процессе + заблокированном экране
@@ -460,7 +493,14 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       LiviOngoingCallHelper.clearOngoingCallIfMatches(ctx, callId)
       return
     }
-    closeAnyIncomingScreen(ctx)
+    val normalizedCallId = callId.trim()
+    // FCM уже поднял Incoming для этого callId — socket/headless не должен «перезапускать»
+    // через closeAnyIncomingScreen(deliverIncomingCallCanceled), иначе экран мелькает и гаснет.
+    if (IncomingCallActivity.isAlive && IncomingCallActivity.activeCallId == normalizedCallId) {
+      Log.d(NAME, "showIncomingCallSystemUI: Incoming already showing same call, skip relaunch callId=$normalizedCallId")
+      return
+    }
+    closeAnyIncomingScreen(ctx, exceptCallId = normalizedCallId)
 
     val keyguardLocked = try {
       (ctx.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager)?.isKeyguardLocked == true
@@ -2190,11 +2230,16 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     /**
      * Сразу вывести задачу MainActivity на передний план (accept входящего).
      * Без OutgoingCall(close) и без debounce-skip по isInForeground — Incoming в отдельной задаче.
+     * [withAnswerCover]: true только до первого кадра VideoCall; false при reinforce после navigate.
      */
     @JvmStatic
-    fun bringMainToFrontImmediate(ctx: Context) {
+    @JvmOverloads
+    fun bringMainToFrontImmediate(ctx: Context, withAnswerCover: Boolean = true) {
       synchronized(LiviAppModule::class.java) {
         lastBringMainToFrontAtMs = System.currentTimeMillis()
+      }
+      if (withAnswerCover) {
+        MainActivity.showIncomingAnswerCoverOnMainIfPossible()
       }
       val appCtx = ctx.applicationContext
       val mainIntent = Intent(appCtx, MainActivity::class.java).apply {
@@ -2204,11 +2249,14 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
             or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
             or Intent.FLAG_ACTIVITY_SINGLE_TOP,
         )
+        if (withAnswerCover) {
+          putExtra(MainActivity.EXTRA_INCOMING_ANSWER_COVER, true)
+        }
       }
       Handler(Looper.getMainLooper()).post {
         try {
           appCtx.startActivity(mainIntent)
-          Log.d(NAME, "bringMainToFrontImmediate: MainActivity startActivity OK")
+          Log.d(NAME, "bringMainToFrontImmediate: MainActivity startActivity OK withAnswerCover=$withAnswerCover")
         } catch (e: Exception) {
           Log.w(NAME, "bringMainToFrontImmediate: startActivity failed", e)
         }
@@ -3245,6 +3293,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       pendingAnswerCallId = callId
       pendingAnswerFrom = from
       pendingAnswerFromNick = fromNick
+      MainActivity.showIncomingAnswerCoverOnMainIfPossible()
     }
 
     @JvmStatic

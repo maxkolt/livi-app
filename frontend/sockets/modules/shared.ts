@@ -77,7 +77,7 @@ export const shared = {
   // calls
   earlyIncomingCallAcceptById: new Map<
     string,
-    Promise<{ ok: boolean; duplicate?: boolean }>
+    Promise<{ ok: boolean; duplicate?: boolean; error?: string }>
   >(),
 
   // typing log

@@ -1238,8 +1238,16 @@ async function handleNotificationResponse(data: any, actionIdentifier: string, r
         try {
           stopIncomingCallAlert();
         } catch {}
-        warmCallSignaling();
-        await navigateToVideoCallIncoming(peerUserId, callId);
+        const complete =
+          typeof (global as any).__completeAndroidIncomingAnswer === 'function'
+            ? (global as any).__completeAndroidIncomingAnswer as (from: string, callId: string) => Promise<void>
+            : null;
+        if (complete && Platform.OS === 'android') {
+          await complete(peerUserId, callId);
+        } else {
+          warmCallSignaling();
+          await navigateToVideoCallIncoming(peerUserId, callId);
+        }
         try {
           await clearNotificationIndicators();
         } catch {}
