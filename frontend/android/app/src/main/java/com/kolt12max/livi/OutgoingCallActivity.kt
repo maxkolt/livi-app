@@ -62,7 +62,8 @@ class OutgoingCallActivity : AppCompatActivity() {
         // FCM call_declined может запустить активность с флагом «сразу закрыть» (приложение было в фоне/убито — broadcast не дошёл)
         if (closeImmediately) {
             Log.d(TAG, "onCreate: finishing immediately (EXTRA_CLOSE_IMMEDIATELY)")
-            LiviOutgoingCallService.stop(this)
+            val closeId = intent.getStringExtra(EXTRA_CALL_ID) ?: ""
+            LiviOutgoingCallService.stop(this, closeId)
             finish()
             return
         }
@@ -112,7 +113,6 @@ class OutgoingCallActivity : AppCompatActivity() {
                 callIdEmptyTimeoutRunnable = null
                 if (this@OutgoingCallActivity.callId.isEmpty()) {
                     Log.d(TAG, "No callId received within timeout, finishing (cold start without real call)")
-                    LiviOutgoingCallService.stop(this@OutgoingCallActivity)
                     finish()
                 }
             }
@@ -123,18 +123,14 @@ class OutgoingCallActivity : AppCompatActivity() {
         installPressFeedback(cancelButton)
 
         cancelButton.setOnClickListener {
-            var effectiveCallId = callId
-            if (effectiveCallId.isEmpty()) {
-                effectiveCallId = LiviOngoingCallHelper.peekOutgoingCall(this)?.first ?: ""
-                if (effectiveCallId.isNotEmpty()) {
-                    this@OutgoingCallActivity.callId = effectiveCallId
-                }
-            }
+            // Только локальный callId Activity. peekOutgoingCall опасен при redial:
+            // prefs уже новый звонок → HTTP cancel убьёт его на сервере.
+            val effectiveCallId = callId
             LiviAppModule.emitOutgoingCallCanceledByUser(effectiveCallId)
             if (effectiveCallId.isNotEmpty()) {
                 LiviOutgoingCallService.cancelCallOnServer(this, effectiveCallId)
             }
-            LiviOutgoingCallService.stop(this)
+            LiviOutgoingCallService.stop(this, effectiveCallId)
             mainReturnScheduledForUserCancel = true
             returnMainActivityImmediately()
             LiviAppModule.scheduleMainActivityAfterOutgoingUserCancel(applicationContext)
@@ -149,7 +145,7 @@ class OutgoingCallActivity : AppCompatActivity() {
                 val matchesCurrentCall = broadcastCallId.isNotEmpty() && broadcastCallId == this@OutgoingCallActivity.callId
                 val closesPendingNoCallId = broadcastCallId.isEmpty() && this@OutgoingCallActivity.callId.isEmpty()
                 if (forceUnscopedClose || matchesCurrentCall || closesPendingNoCallId) {
-                    LiviOutgoingCallService.stop(this@OutgoingCallActivity)
+                    LiviOutgoingCallService.stop(this@OutgoingCallActivity, this@OutgoingCallActivity.callId)
                     finish()
                 } else {
                     Log.d(TAG, "ACTION_CLOSE_OUTGOING_CALL ignored broadcastCallId=${broadcastCallId.take(24)} currentCallId=${this@OutgoingCallActivity.callId.take(24)} force=$forceClose")
@@ -179,18 +175,20 @@ class OutgoingCallActivity : AppCompatActivity() {
         Log.d(TAG, "onNewIntent: closeImmediately=$closeImmediately newCallId=${newCallId.take(24)}")
         if (closeImmediately) {
             Log.d(TAG, "onNewIntent: EXTRA_CLOSE_IMMEDIATELY -> finishing")
-            LiviOutgoingCallService.stop(this)
+            LiviOutgoingCallService.stop(this, callId.ifBlank { newCallId })
             finish()
             return
         }
         // Повторное нажатие «Видеозвонок» после отмены/таймаута: обновляем экран под новый вызов
         val newToUserId = intent.getStringExtra(EXTRA_TO_USER_ID) ?: ""
         val newToNick = intent.getStringExtra(EXTRA_TO_NICK) ?: ""
+        val previousCallId = callId
         callId = newCallId
         toUserId = newToUserId
         toNick = newToNick
         LiviOngoingCallHelper.setOutgoingCall(this, newCallId, newToUserId, newToNick)
-        LiviOutgoingCallService.stop(this)
+        // Гасим только предыдущий ringback, не unscoped (иначе убьём только что стартовавший).
+        LiviOutgoingCallService.stop(this, previousCallId)
         findViewById<TextView>(R.id.callee_name).text = if (newToNick.isNotEmpty()) newToNick else getString(R.string.outgoing_call_title)
         if (newCallId.isNotEmpty()) {
             callIdEmptyTimeoutRunnable?.let { timeoutHandler.removeCallbacks(it) }
@@ -224,7 +222,6 @@ class OutgoingCallActivity : AppCompatActivity() {
                 callIdEmptyTimeoutRunnable = null
                 if (this@OutgoingCallActivity.callId.isEmpty()) {
                     Log.d(TAG, "No callId received within timeout (onNewIntent), finishing")
-                    LiviOutgoingCallService.stop(this@OutgoingCallActivity)
                     finish()
                 }
             }
@@ -292,8 +289,12 @@ class OutgoingCallActivity : AppCompatActivity() {
     override fun onDestroy() {
         callIdEmptyTimeoutRunnable?.let { timeoutHandler.removeCallbacks(it) }
         callIdEmptyTimeoutRunnable = null
-        LiviOngoingCallHelper.clearOngoingCall(applicationContext)
-        LiviOutgoingCallService.stop(this)
+        // Не wipe всех prefs: при cancel→redial старый Activity.onDestroy иначе
+        // сносит prefs уже нового исходящего → callee accept → not_found.
+        if (callId.isNotBlank()) {
+            LiviOngoingCallHelper.clearOngoingCallIfMatches(applicationContext, callId)
+            LiviOutgoingCallService.stop(this, callId)
+        }
         dotsRunnable?.let { timeoutHandler.removeCallbacks(it) }
         dotsRunnable = null
         closeReceiver?.let { try { unregisterReceiver(it) } catch (_: Exception) {} }

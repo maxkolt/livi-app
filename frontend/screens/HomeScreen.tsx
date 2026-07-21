@@ -842,6 +842,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const [roomFull, setRoomFull] = useState<{ visible: boolean; name?: string }>({ visible: false });
 
   const pendingCancelRef = useRef(false);
+  /** Инкремент при реальной отмене исходящего — attempt видит только cancel, случившийся после своего старта. */
+  const outgoingCancelEpochRef = useRef(0);
   /** Пользователь явно сбросил исходящий (кнопка/натив): не показывать callStartFailed когда позже падает отложенный startCall. */
   const outgoingCallUserCanceledRef = useRef(false);
   const callingVisibleRef = useRef(false);
@@ -1086,6 +1088,22 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       });
       return;
     }
+    // Поздний remote_closed после native_cancel: UI уже сброшен — не травим следующий startCall
+    // (pendingCancel/seq bump → cancel только что созданного callId → not_found на accept).
+    if (
+      source.includes('remote_closed') &&
+      resolvedCloseCallId &&
+      !isActiveOutgoingAttempt &&
+      !currentCallId &&
+      !callingVisibleRef.current
+    ) {
+      logger.info('[HomeScreen] reset outgoing after external close skipped late remote_closed', {
+        source,
+        closeCallId: resolvedCloseCallId,
+        sinceLastMs: Date.now() - lastOutgoingExternalCloseResetAtRef.current,
+      });
+      return;
+    }
     if (!resolvedCloseCallId && isActiveOutgoingAttempt && !allowUnscopedActiveReset) {
       logger.info('[HomeScreen] reset outgoing after external close skipped unscoped active call', {
         source,
@@ -1145,8 +1163,20 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     disposeDirectCallAudioPrewarm(`home:outgoing-external-close:${source}`);
     activeOutgoingAttemptRef.current = 0;
     activeOutgoingCallIdRef.current = null;
-    pendingCancelRef.current = true;
-    outgoingCallUserCanceledRef.current = true;
+    // Invalidate in-flight handleStartDirectCall (isCurrentAttempt) even if a new start bumps active again.
+    outgoingAttemptSeqRef.current += 1;
+    // call-press-stale / video-start-native-flag: чистим UI чтобы сразу набрать снова.
+    // pendingCancel=true здесь отравляет следующий startCall (cancel только что созданного callId).
+    const isRetryClear =
+      source === 'call-press-stale-outgoing' || source === 'video-start-native-flag';
+    if (isRetryClear) {
+      pendingCancelRef.current = false;
+      outgoingCallUserCanceledRef.current = false;
+    } else {
+      outgoingCancelEpochRef.current += 1;
+      pendingCancelRef.current = true;
+      outgoingCallUserCanceledRef.current = true;
+    }
     const declinedAlready = callIdToCancel ? isOutgoingDeclineHandled(callIdToCancel) : false;
     const shouldSendCancelForNativeCancel = isNativeCancel && !closeCallId && !!resolvedCloseCallId;
     if (callIdToCancel && (!canceledByNative || shouldSendCancelForNativeCancel) && !declinedAlready) {
@@ -1249,6 +1279,17 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   // Прямую подписку socket.on('call:declined') убрали — она давала второй setCalling и двойное мерцание.
 
   const handleStartDirectCall = useCallback(async (friend: Friend, media: 'audio' | 'video' = 'video') => {
+    const gStart = global as any;
+    gStart.__outgoingStartInFlightRef = gStart.__outgoingStartInFlightRef || { current: false };
+    if (gStart.__outgoingStartInFlightRef.current) {
+      logger.info('[HomeScreen] skip duplicate outgoing start (already in flight)', {
+        friendId: friend.id,
+        media,
+      });
+      return;
+    }
+    gStart.__outgoingStartInFlightRef.current = true;
+    try {
     const canceledByNative =
       typeof global !== 'undefined' &&
       (global as any).__outgoingCanceledByNativeRef?.current === true;
@@ -1289,8 +1330,16 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       prefetchDirectCallIce('home:direct-call-start');
       // Audio prewarm нельзя стартовать на исходящем: mic capture глушит native ringback
       // (LiviOutgoingCallService). Prewarm mic — после call:accepted в App.tsx.
+      // На redial после прошлого звонка сбрасываем залипший prewarm/mic.
+      disposeDirectCallAudioPrewarm('home:outgoing-start');
       pendingCancelRef.current = false;
       outgoingCallUserCanceledRef.current = false;
+      try {
+        (global as any).__outgoingCanceledByNativeRef =
+          (global as any).__outgoingCanceledByNativeRef || { current: false };
+        (global as any).__outgoingCanceledByNativeRef.current = false;
+      } catch {}
+      const cancelEpochAtStart = outgoingCancelEpochRef.current;
       lastOutgoingPeerIdRef.current = String(friend.id);
       try {
         (global as any).__outgoingCallMediaRef = { current: media };
@@ -1480,8 +1529,17 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       }
 
       if (!isCurrentAttempt()) {
-        if (r?.callId) {
-          try { cancelCall(r.callId); } catch {}
+        const orphanCallId = String(r?.callId || '').trim();
+        const newerActiveCallId = String(activeOutgoingCallIdRef.current || '').trim();
+        // Гасим orphan этой попытки, но не callId новой исходящей.
+        if (orphanCallId && orphanCallId !== newerActiveCallId) {
+          logger.info('[HomeScreen] cancel orphan outgoing from stale attempt', {
+            orphanCallId,
+            newerActiveCallId: newerActiveCallId || null,
+            attemptId,
+            activeOutgoingAttempt: activeOutgoingAttemptRef.current,
+          });
+          try { cancelCall(orphanCallId); } catch {}
         }
         if (!outgoingFinished) {
           outgoingFinished = true;
@@ -1504,8 +1562,10 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
 
       // Отклонение/таймаут пришли по сокету до ack startCall — UI уже сброшен; синхронизируем сервер.
       if (outgoingFinished) {
-        if (r.callId) {
-          try { cancelCall(r.callId); } catch {}
+        const finishedCallId = String(r.callId || '').trim();
+        const newerActiveCallId = String(activeOutgoingCallIdRef.current || '').trim();
+        if (finishedCallId && finishedCallId !== newerActiveCallId) {
+          try { cancelCall(finishedCallId); } catch {}
         }
         if (isCurrentAttempt()) {
           activeOutgoingAttemptRef.current = 0;
@@ -1522,9 +1582,20 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         try { setCallMediaHint(r.callId, media); } catch {}
       }
 
-      const canceledByNative = (global as any).__outgoingCanceledByNativeRef?.current === true;
-      if ((pendingCancelRef.current || canceledByNative) && r.callId) {
-        if (canceledByNative) (global as any).__outgoingCanceledByNativeRef.current = false;
+      // Только cancel, случившийся после старта этой попытки (epoch).
+      // Stale OutgoingCallCanceledByUser может выставить native-флаг без reset — его игнорируем.
+      const canceledDuringThisAttempt = outgoingCancelEpochRef.current !== cancelEpochAtStart;
+      if (canceledDuringThisAttempt && r.callId) {
+        try {
+          (global as any).__outgoingCanceledByNativeRef &&
+            ((global as any).__outgoingCanceledByNativeRef.current = false);
+        } catch {}
+        logger.info('[HomeScreen] cancel outgoing after start (canceled during attempt)', {
+          callId: r.callId,
+          pendingCancel: pendingCancelRef.current,
+          epochAtStart: cancelEpochAtStart,
+          epochNow: outgoingCancelEpochRef.current,
+        });
         try { cancelCall(r.callId); } catch {}
         pendingCancelRef.current = false;
         finishOutgoing(() => {
@@ -1593,6 +1664,9 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           (global as any).__outgoingCanceledByNativeRef.current = false;
         } catch {}
       }
+    }
+    } finally {
+      gStart.__outgoingStartInFlightRef.current = false;
     }
   }, [navigation, showNotice, resetOutgoingAfterExternalClose, clearNativeCanceledOutgoingAttempt, clearStaleOutgoingAttemptIfIdle, waitForOutgoingNativeCloseBeforeRetry, forceResetCallBusyRefs, clearFriendsCallBusy, lang]);
 
@@ -2414,11 +2488,16 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         g.__randomChatHadPresenceBusyRef?.current === true ||
         g.__pipVisibleRef?.current === true ||
         g.__pipInSystemModeRef?.current === true ||
+        g.__outgoingCallScreenVisibleRef?.current === true ||
+        g.__incomingCallScreenVisibleRef?.current === true ||
+        !!String(g.__outgoingCallIdRef?.current || '').trim() ||
         incomingAnswerTransitionActive ||
         sessionNotEnded ||
         hasAnyCallIds ||
         calling.visible ||
-        incomingCallScreen.visible;
+        callingVisibleRef.current ||
+        incomingCallScreen.visible ||
+        activeOutgoingAttemptRef.current > 0;
       if (hasActiveLocalCall) return;
       emitPresenceUpdateIfChanged({ status: 'online', idle: true }, { force: true });
     } catch (e) {

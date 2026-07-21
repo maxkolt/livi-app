@@ -988,12 +988,33 @@ function AppContent() {
         .catch(() => {});
     };
     const sub1 = emitter.addListener('OutgoingCallCanceledByUser', (payload?: { callId?: string | null }) => {
-      const callId =
-        String(payload?.callId || '').trim() ||
-        String((global as any).__outgoingCallIdRef?.current || '').trim();
+      // Только callId из нативного события. Fallback на __outgoingCallIdRef опасен при быстром
+      // повторном наборе: ref уже новый callId → отменяем свежий звонок → not_found на accept.
+      const callId = String(payload?.callId || '').trim();
+      const currentOutgoing = String((global as any).__outgoingCallIdRef?.current || '').trim();
       (global as any).__outgoingCanceledByNativeRef = (global as any).__outgoingCanceledByNativeRef ?? { current: false };
+      if (callId && currentOutgoing && callId !== currentOutgoing) {
+        // Поздний cancel старого callId, пока уже идёт новый исходящий — не ставим native-флаг.
+        logger.info('[App] OutgoingCallCanceledByUser for stale callId — cancel old only', {
+          callId,
+          currentOutgoing,
+        });
+        repeatNativeCallSignal('cancel', callId);
+        return;
+      }
       (global as any).__outgoingCanceledByNativeRef.current = true;
-      repeatNativeCallSignal('cancel', callId);
+      if (callId) {
+        repeatNativeCallSignal('cancel', callId);
+      } else if (currentOutgoing) {
+        // Stale empty cancel после notifyOutgoingCallId: не закрываем активный дозвон
+        // (иначе closeOutgoingCallActivity гасит ringback на redial).
+        logger.info('[App] OutgoingCallCanceledByUser without callId ignored — active outgoing exists', {
+          currentOutgoing,
+        });
+        return;
+      } else {
+        logger.info('[App] OutgoingCallCanceledByUser without callId — UI close only (no cancelCall)');
+      }
       try { emitCloseOutgoingCall({ reason: 'native_cancel', callId: callId || null }); } catch {}
     });
     const sub2 = emitter.addListener('IncomingCallDeclinedByUser', (payload?: { callId?: string | null }) => {
@@ -3008,6 +3029,15 @@ function AppContent() {
           LiviAppModule?.getAndClearOutgoingCanceledByUserCallId?.()?.then?.((callId: string | null) => {
             const id = String(callId || '').trim();
             if (id) {
+              const currentOutgoing = String((global as any).__outgoingCallIdRef?.current || '').trim();
+              if (currentOutgoing && id !== currentOutgoing) {
+                logger.info('[App] stale outgoingCanceledByUserCallId on resume — cancel old only', {
+                  callId: id,
+                  currentOutgoing,
+                });
+                try { cancelCall(id); } catch {}
+                return;
+              }
               try { emitCloseOutgoingCall({ reason: 'native_cancel', callId: id }); } catch {}
               try { cancelCall(id); } catch {}
               setTimeout(() => { try { cancelCall(id); } catch {} }, 150);

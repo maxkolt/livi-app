@@ -353,6 +353,11 @@ function InviteButton({
                   String((global as any).__outgoingCallIdRef?.current || '').trim() ||
                   calling.callId ||
                   null;
+                // startCall ещё без callId — не сбрасываем attempt и не стартуем второй initiate
+                // (гонка: старый startCall потом cancelCall → у callee not_found на accept).
+                if (!currentOutgoingCallId) {
+                  return;
+                }
                 resetOutgoingAfterExternalClose('call-press-stale-outgoing', currentOutgoingCallId);
               } else if (callingVisibleRef.current) {
                 return;

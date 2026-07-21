@@ -20,6 +20,9 @@ export function startCall(toUserId: string, options?: { media?: DirectCallMedia 
       "call:initiate",
       payload,
       20000,
+      // Без ретраев: повторный initiate после «тихого» успеха чистит первый callId
+      // (cleanupStaleRinging) → callee отвечает на старый → not_found.
+      0,
     );
 
   const viaHttp = async () => {

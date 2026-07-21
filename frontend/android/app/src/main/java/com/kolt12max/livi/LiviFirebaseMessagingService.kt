@@ -278,7 +278,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 putExtra(OutgoingCallActivity.EXTRA_CALL_ID, callId)
             }
             sendBroadcast(closeOutgoing)
-            LiviOutgoingCallService.stop(this)
+            LiviOutgoingCallService.stop(this, callId)
             LiviAppModule.setPendingCallAcceptedCallId(callId)
             // 2) Только MainActivity на передний план (без startActivity(OutgoingCallActivity close) — иначе два startActivity сбрасывают стек и в dev показывается экран «Development servers» вместо VideoCall).
             if (!isAppProcessForeground()) {

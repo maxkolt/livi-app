@@ -350,20 +350,22 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       }
       lastBringMainToFrontAtMs = now
     }
+    val outgoingPeek = LiviOngoingCallHelper.peekOutgoingCall(ctx)
     // Если MainActivity уже в foreground, не запускаем лишние startActivity — это даёт stop/start churn и destroySurfaces.
     if (MainActivity.isInForeground) {
-      LiviOutgoingCallService.stop(ctx)
+      LiviOutgoingCallService.stop(ctx, outgoingPeek?.first)
       Log.d(NAME, "bringMainActivityToFront: MainActivity already foreground, skip relaunch")
       return
     }
-    val outgoingPeek = LiviOngoingCallHelper.peekOutgoingCall(ctx)
     LiviOngoingCallHelper.clearOngoingCall(ctx)
     // 1) Broadcast — закрыть OutgoingCallActivity, если на экране
     val closeOutgoing = Intent(OutgoingCallActivity.ACTION_CLOSE_OUTGOING_CALL).apply {
       setPackage(ctx.packageName)
+      outgoingPeek?.first?.takeIf { it.isNotBlank() }?.let { putExtra(OutgoingCallActivity.EXTRA_CALL_ID, it) }
+        ?: putExtra(OutgoingCallActivity.EXTRA_FORCE_CLOSE, true)
     }
     ctx.sendBroadcast(closeOutgoing)
-    LiviOutgoingCallService.stop(ctx)
+    LiviOutgoingCallService.stop(ctx, outgoingPeek?.first)
     // 2) Принудительно закрыть OutgoingCallActivity (как FCM): если broadcast не дошёл, активность получит intent и finish()
     val closeActivityIntent = Intent(ctx, OutgoingCallActivity::class.java).apply {
       addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_NO_HISTORY)
@@ -3246,8 +3248,9 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     /** Вызвать из OutgoingCallActivity при нажатии X — React очистит состояние исходящего. */
     @JvmStatic
     fun emitOutgoingCallCanceledByUser(callId: String?) {
+      // Не подставлять peekOutgoingCall: при cancel→redial prefs уже новый callId —
+      // fallback отменит свежий звонок → accept not_found.
       val resolvedCallId = callId?.takeIf { it.isNotBlank() }
-        ?: reactContextRef?.let { ctx -> LiviOngoingCallHelper.peekOutgoingCall(ctx)?.first?.takeIf { it.isNotBlank() } }
       outgoingCanceledByUserFlag = true
       outgoingCanceledByUserCallId = resolvedCallId
       runOnReactUiQueueIfAlive { ctx ->

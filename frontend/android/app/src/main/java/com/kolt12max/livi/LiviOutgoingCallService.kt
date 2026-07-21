@@ -11,6 +11,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.media.AudioAttributes
+import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.media.MediaPlayer
 import android.os.Build
@@ -33,6 +34,7 @@ class LiviOutgoingCallService : Service() {
     private var timeoutRunnable: Runnable? = null
     private var savedAudioMode: Int = AudioManager.MODE_NORMAL
     private var savedSpeakerphone: Boolean = false
+    private var ringbackAudioFocusRequest: AudioFocusRequest? = null
     private var callId: String = ""
     private var toUserId: String = ""
     private var toNick: String = ""
@@ -52,11 +54,24 @@ class LiviOutgoingCallService : Service() {
         closeReceiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
                 val broadcastCallId = intent?.getStringExtra(OutgoingCallActivity.EXTRA_CALL_ID) ?: ""
-                if (broadcastCallId.isEmpty() || broadcastCallId == this@LiviOutgoingCallService.callId) {
-                    android.util.Log.d(TAG, "close broadcast received, stopping service callId=$callId")
+                val forceClose = intent?.getBooleanExtra(OutgoingCallActivity.EXTRA_FORCE_CLOSE, false) == true
+                // Пустой broadcast без force больше НЕ гасит активный ringback:
+                // late onDestroy старого OutgoingCallActivity иначе убивает мелодию нового дозвона.
+                val shouldStop =
+                    (broadcastCallId.isNotEmpty() && broadcastCallId == this@LiviOutgoingCallService.callId) ||
+                        (forceClose && broadcastCallId.isEmpty()) ||
+                        (broadcastCallId.isEmpty() && this@LiviOutgoingCallService.callId.isEmpty())
+                if (shouldStop) {
+                    android.util.Log.d(
+                        TAG,
+                        "close broadcast stopping service callId=$callId broadcastCallId=$broadcastCallId force=$forceClose",
+                    )
                     requestStop()
                 } else {
-                    android.util.Log.d(TAG, "close broadcast ignored broadcastCallId=$broadcastCallId currentCallId=$callId")
+                    android.util.Log.d(
+                        TAG,
+                        "close broadcast ignored broadcastCallId=$broadcastCallId currentCallId=$callId force=$forceClose",
+                    )
                 }
             }
         }
@@ -166,6 +181,55 @@ class LiviOutgoingCallService : Service() {
             .build()
     }
 
+    private fun acquireRingbackAudioFocus(am: AudioManager) {
+        try {
+            releaseRingbackAudioFocus(am)
+            val attrs = AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                .build()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val req = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+                    .setAudioAttributes(attrs)
+                    .setOnAudioFocusChangeListener { }
+                    .build()
+                ringbackAudioFocusRequest = req
+                if (am.requestAudioFocus(req) != AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
+                    android.util.Log.w(TAG, "ringback audio focus not granted")
+                }
+            } else {
+                @Suppress("DEPRECATION")
+                if (am.requestAudioFocus(
+                        null,
+                        AudioManager.STREAM_VOICE_CALL,
+                        AudioManager.AUDIOFOCUS_GAIN_TRANSIENT,
+                    ) != AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+                ) {
+                    android.util.Log.w(TAG, "ringback audio focus not granted (legacy)")
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "acquireRingbackAudioFocus failed", e)
+        }
+    }
+
+    private fun releaseRingbackAudioFocus(am: AudioManager? = null) {
+        val audioManager = am ?: try {
+            getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        } catch (_: Exception) {
+            null
+        } ?: return
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                ringbackAudioFocusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
+                ringbackAudioFocusRequest = null
+            } else {
+                @Suppress("DEPRECATION")
+                audioManager.abandonAudioFocus(null)
+            }
+        } catch (_: Exception) {}
+    }
+
     private fun startSound() {
         try {
             mediaPlayer?.apply {
@@ -179,6 +243,9 @@ class LiviOutgoingCallService : Service() {
             val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
             savedAudioMode = am.mode
             savedSpeakerphone = am.isSpeakerphoneOn
+            // После предыдущего LiveKit/WebRTC часто остаётся чужой focus — без reclaim мелодия
+            // дозвона на redial не слышна в earpiece.
+            acquireRingbackAudioFocus(am)
             am.mode = AudioManager.MODE_IN_COMMUNICATION
             am.isSpeakerphoneOn = false
 
@@ -198,8 +265,14 @@ class LiviOutgoingCallService : Service() {
                 mp.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
             }
             mp.isLooping = true
-            mp.setVolume(0.2f, 0.2f)
-            mp.setOnPreparedListener { it.start() }
+            mp.setVolume(0.35f, 0.35f)
+            mp.setOnPreparedListener { player ->
+                try {
+                    am.mode = AudioManager.MODE_IN_COMMUNICATION
+                    am.isSpeakerphoneOn = false
+                } catch (_: Exception) {}
+                player.start()
+            }
             mp.prepareAsync()
             mediaPlayer = mp
         } catch (e: Exception) {
@@ -216,8 +289,8 @@ class LiviOutgoingCallService : Service() {
             val id = callId
             if (id.isNotEmpty()) {
                 EndedCallIds.add(applicationContext, id)
+                LiviOngoingCallHelper.clearOngoingCallIfMatches(applicationContext, id)
             }
-            LiviOngoingCallHelper.clearOngoingCall(applicationContext)
             cancelCallByHttp(id)
             val closeIntent = Intent(OutgoingCallActivity.ACTION_CLOSE_OUTGOING_CALL).apply {
                 setPackage(applicationContext.packageName)
@@ -272,6 +345,7 @@ class LiviOutgoingCallService : Service() {
         mediaPlayer = null
         try {
             val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            releaseRingbackAudioFocus(am)
             am.mode = savedAudioMode
             am.isSpeakerphoneOn = savedSpeakerphone
         } catch (_: Exception) {}
@@ -302,10 +376,19 @@ class LiviOutgoingCallService : Service() {
             }
         }
 
-        /** Закрытие через broadcast — сервис сам stopSelf после startForeground (без гонки stopService). */
-        fun stop(context: Context) {
+        /**
+         * Закрытие через broadcast — сервис сам stopSelf после startForeground.
+         * Без callId — no-op: иначе late onDestroy/unscoped stop гасит ringback нового redial.
+         */
+        fun stop(context: Context, callId: String? = null) {
+            val id = callId?.trim().orEmpty()
+            if (id.isEmpty()) {
+                android.util.Log.d(TAG, "stop skipped: empty callId (avoid killing redial ringback)")
+                return
+            }
             val closeIntent = Intent(OutgoingCallActivity.ACTION_CLOSE_OUTGOING_CALL).apply {
                 setPackage(context.packageName)
+                putExtra(OutgoingCallActivity.EXTRA_CALL_ID, id)
             }
             try {
                 context.sendBroadcast(closeIntent)
