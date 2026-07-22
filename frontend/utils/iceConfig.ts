@@ -8,6 +8,41 @@ let cacheUntil = 0;
 const RELAY_FALLBACK_WINDOW_MS = 10 * 60 * 1000; // 10 минут принудительного relay после сетевых сбоев
 let forcedRelayUntil = 0;
 
+function iceConfigHasTurn(cfg: RTCConfiguration | null | undefined): boolean {
+  const servers = (cfg as any)?.iceServers;
+  if (!Array.isArray(servers)) return false;
+  return servers.some((s: any) => {
+    const u = s?.urls;
+    const list = Array.isArray(u) ? u : typeof u === 'string' ? [u] : [];
+    return list.some((url: string) => typeof url === 'string' && url.startsWith('turn:'));
+  });
+}
+
+/** Clone cfg and force iceTransportPolicy=relay when TURN is present. */
+export function withRelayOnlyPolicy(cfg: RTCConfiguration): RTCConfiguration {
+  if (!iceConfigHasTurn(cfg)) return cfg;
+  return {
+    ...(cfg as any),
+    iceTransportPolicy: 'relay',
+  } as RTCConfiguration;
+}
+
+/**
+ * После сбоя PeerConnection (типично VPN / жёсткий NAT) — на окно времени
+ * все следующие getIceConfiguration() отдают relay-only.
+ */
+export function enableForcedRelayFallback(reason?: string): void {
+  forcedRelayUntil = Date.now() + RELAY_FALLBACK_WINDOW_MS;
+  console.warn(
+    `[ICE Config] Forced relay-only for ${Math.round(RELAY_FALLBACK_WINDOW_MS / 60000)}m` +
+      (reason ? ` (${reason})` : ''),
+  );
+}
+
+export function isForcedRelayActive(): boolean {
+  return forcedRelayUntil > Date.now();
+}
+
 export function getEnvFallbackConfiguration(options?: { forceRelayOnly?: boolean }): RTCConfiguration {
   const forceRelayOnly = !!options?.forceRelayOnly;
   const googleStun = { urls: 'stun:stun.l.google.com:19302' } as any;
@@ -128,7 +163,10 @@ export async function getIceConfiguration(forceRefresh = false, options?: { forc
   const forceRelayOnly = !!options?.forceRelayOnly;
   const relayActive = forceRelayOnly || (forcedRelayUntil > Date.now());
   const now = Date.now();
-  if (!forceRefresh && cachedConfig && now < cacheUntil) return cachedConfig;
+  // КРИТИЧНО: даже из кэша применяем relay-only (VPN retry), иначе policy остаётся "all".
+  if (!forceRefresh && cachedConfig && now < cacheUntil) {
+    return relayActive ? withRelayOnlyPolicy(cachedConfig) : cachedConfig;
+  }
 
   // Таймауты: первая попытка 5s (VPN может быть медленнее), вторая 10s для надёжности
   const maxRetries = 2;

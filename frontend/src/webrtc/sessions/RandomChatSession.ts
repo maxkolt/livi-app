@@ -19,11 +19,13 @@ import type { WebRTCSessionConfig, CamSide } from '../types';
 import socket, { API_BASE, getCurrentUserId } from '../../../sockets/socket';
 import { logger } from '../../../utils/logger';
 import { sendClientMetrics } from '../../utils/capacityClientMetrics';
-import { getIceConfiguration } from '../../../utils/iceConfig';
+import { getIceConfiguration, enableForcedRelayFallback } from '../../../utils/iceConfig';
 import { getPreferredVideoCaptureOptions } from '../videoCaptureProfile';
 import { getRoomIceTransportDiagnostics } from '../iceTransportDiagnostics';
 
 const LIVEKIT_URL = ((process.env.EXPO_PUBLIC_LIVEKIT_URL as string | undefined) ?? '').trim();
+/** LiveKit default PC timeout (~15s) is too short for VPN / slow ICE; match VideoCallSession. */
+const LIVEKIT_PEER_CONNECTION_TIMEOUT_MS = 30_000;
 
 function parsePublicFlag(value: string | undefined, fallback: boolean): boolean {
   const v = String(value ?? '').trim().toLowerCase();
@@ -99,7 +101,8 @@ export class RandomChatSession extends SimpleEventEmitter {
   private connectingInProgress = false;
   private connectingRoomName: string | null = null;
   private connectingStartedAt = 0;
-  private readonly connectLockTimeoutMs = 15_000;
+  /** Должен покрывать peerConnectionTimeout + один TURN relay retry. */
+  private readonly connectLockTimeoutMs = 75_000;
   private lastStuckRecoveryAt = 0;
   private readonly stuckRecoveryCooldownMs = 4_000;
   private roomConnectedAt = 0;
@@ -2496,7 +2499,8 @@ export class RandomChatSession extends SimpleEventEmitter {
     token: string,
     connectRequestId: number,
     targetRoomName?: string,
-    connectSource = 'unknown'
+    connectSource = 'unknown',
+    options?: { forceRelayOnly?: boolean; nestedRelayRetry?: boolean }
   ): Promise<boolean> {
     // КРИТИЧНО: Проверяем, что это актуальный запрос на подключение
     // Если connectRequestId изменился, значит был новый вызов next() и этот запрос устарел
@@ -2524,15 +2528,20 @@ export class RandomChatSession extends SimpleEventEmitter {
     }
 
     const normalizedRoomName = targetRoomName || null;
+    const nestedRelayRetry = !!options?.nestedRelayRetry;
     this.logReconnectTrace('connect_attempt_start', {
       connectSource,
       connectRequestId,
       targetRoomName: normalizedRoomName,
+      forceRelayOnly: !!options?.forceRelayOnly,
+      nestedRelayRetry,
     });
 
     // КРИТИЧНО: Если уже идет подключение к этой же комнате в этом же экземпляре, не запускаем второе.
     // Ждем завершения текущего подключения (с таймаутом), затем проверяем конечное состояние.
+    // nestedRelayRetry: внутренний TURN-retry — лок уже держит внешний вызов.
     if (
+      !nestedRelayRetry &&
       normalizedRoomName &&
       this.connectingInProgress &&
       this.connectingRoomName === normalizedRoomName
@@ -2592,7 +2601,7 @@ export class RandomChatSession extends SimpleEventEmitter {
       this.connectingStartedAt = 0;
     }
 
-    if (normalizedRoomName) {
+    if (!nestedRelayRetry && normalizedRoomName) {
       this.connectingInProgress = true;
       this.connectingRoomName = normalizedRoomName;
       this.connectingStartedAt = Date.now();
@@ -2799,10 +2808,11 @@ export class RandomChatSession extends SimpleEventEmitter {
     
     let rtcConfig: RTCConfiguration | undefined = undefined;
     try {
-      rtcConfig = await getIceConfiguration(false);
+      rtcConfig = await getIceConfiguration(false, { forceRelayOnly: !!options?.forceRelayOnly });
     } catch (e: any) {
       logger.warn('[RandomChatSession] Failed to load ICE config, using LiveKit defaults', {
         error: e?.message || String(e),
+        forceRelayOnly: !!options?.forceRelayOnly,
       });
     }
 
@@ -2825,6 +2835,8 @@ export class RandomChatSession extends SimpleEventEmitter {
       sessionId: this.sessionId,
       myUserId: this.resolveMyUserId(),
       deviceModel: this.deviceModel,
+      forceRelayOnly: !!options?.forceRelayOnly,
+      iceTransportPolicy: (rtcConfig as any)?.iceTransportPolicy || 'default',
     });
 
     const room = new Room({
@@ -2860,9 +2872,15 @@ export class RandomChatSession extends SimpleEventEmitter {
         deviceModel: this.deviceModel,
         connectSource,
         reconnectCycleId: this.reconnectCycleId,
+        forceRelayOnly: !!options?.forceRelayOnly,
+        peerConnectionTimeoutMs: LIVEKIT_PEER_CONNECTION_TIMEOUT_MS,
       });
       const connectStartTime = Date.now();
-      await room.connect(url, token, { autoSubscribe: true });
+      // VPN / медленный ICE: дефолтные ~15s LiveKit часто рвут до готовности TURN/TCP.
+      await room.connect(url, token, {
+        autoSubscribe: true,
+        peerConnectionTimeout: LIVEKIT_PEER_CONNECTION_TIMEOUT_MS,
+      });
       
       // КРИТИЧНО: Проверяем состояние после подключения
       if (room.state !== 'connected') {
@@ -2933,8 +2951,55 @@ export class RandomChatSession extends SimpleEventEmitter {
       const isInvalidApiKey = errorMessage.includes('invalid API key') || 
                                errorMessage.includes('401') ||
                                errorMessage.includes('Unauthorized');
+      const isClientDisconnect = /client initiated disconnect|user initiated disconnect/i.test(errorMessage);
+      const isTransientPcError =
+        /could not establish pc connection|pc connection|negotiation (disconnected|timed out)|transport error|ice (failed|disconnected)/i.test(
+          errorMessage,
+        );
+
+      // VPN / жёсткий NAT: прямой ICE (prflx) не успевает → одна попытка через TURN relay.
+      if (
+        isTransientPcError &&
+        !isClientDisconnect &&
+        !options?.forceRelayOnly &&
+        this.started &&
+        this.connectRequestId === connectRequestId
+      ) {
+        logger.warn('[RandomChatSession] PC connect failed — retrying with TURN relay-only', {
+          error: errorMessage,
+          targetRoomName,
+          connectSource,
+          reconnectCycleId: this.reconnectCycleId,
+          deviceModel: this.deviceModel,
+        });
+        this.logReconnectTrace('connect_error_retry_relay', {
+          connectSource,
+          connectRequestId,
+          targetRoomName: targetRoomName || null,
+          error: errorMessage,
+        });
+        enableForcedRelayFallback('random_chat_pc_connection');
+        try {
+          if (room.state !== 'disconnected') {
+            await room.disconnect();
+          }
+        } catch {}
+        if (this.room === room) {
+          this.room = null;
+          this.currentRoomName = null;
+        }
+        return this.connectToLiveKit(
+          url,
+          token,
+          connectRequestId,
+          targetRoomName,
+          `${connectSource}:relay_retry`,
+          { forceRelayOnly: true, nestedRelayRetry: true },
+        );
+      }
       
-      logger.error('[RandomChatSession] Error connecting to LiveKit', {
+      const logFn = isTransientPcError || isClientDisconnect ? logger.warn : logger.error;
+      logFn('[RandomChatSession] Error connecting to LiveKit', {
         error: errorMessage,
         errorCode: e?.code,
         errorName: e?.name,
@@ -2946,6 +3011,7 @@ export class RandomChatSession extends SimpleEventEmitter {
         tokenPrefix: token ? token.substring(0, 20) + '...' : 'no-token',
         roomState: room?.state,
         isInvalidApiKey,
+        forceRelayOnly: !!options?.forceRelayOnly,
         stack: e?.stack,
         connectSource,
         reconnectCycleId: this.reconnectCycleId,
@@ -3107,7 +3173,10 @@ export class RandomChatSession extends SimpleEventEmitter {
     
     return true;
     } finally {
-      if (!normalizedRoomName || this.connectingRoomName === normalizedRoomName) {
+      if (
+        !nestedRelayRetry &&
+        (!normalizedRoomName || this.connectingRoomName === normalizedRoomName)
+      ) {
         this.connectingInProgress = false;
         this.connectingRoomName = null;
         this.connectingStartedAt = 0;

@@ -14,7 +14,7 @@ const BADGE_COOLDOWN_MS = 24 * 60 * 60 * 1000; // 24 часа
 
 /** Публичная страница LiVi в Google Play (обновление и установка). */
 export const PLAY_STORE_UPDATE_URL =
-  'https://play.google.com/store/apps/details?id=com.kolt12max.livi';
+  'https://play.google.com/store/apps/details?id=com.kolt12max.livi&hl=ru';
 
 /** Разбор версии в числовые части (v1.2.3-rc → [1,2,3], нечисловые сегменты → 0). */
 function versionToParts(raw: string): number[] {

@@ -34,6 +34,13 @@ import { getInstallId } from './utils/installId';
 import { notifyIncomingShare, pullPendingShareFromNative, subscribeIncomingShare, type IncomingShareItem } from './utils/incomingShare';
 import { ensureInitialMediaPermissions } from './utils/mediaPermissions';
 import {
+  captureDeferredInviteCode,
+  clearPendingInviteCode,
+  getPendingInviteCode,
+  onInviteFlowSettled,
+  savePendingInviteCode,
+} from './utils/inviteLink';
+import {
   setupCallKeep,
   launchIncomingCallActivityScreen,
   showIncomingCallSystemUI,
@@ -567,6 +574,11 @@ function AppContent() {
 
   /** Пока false — не показываем overlay-модалку (ждём уведомления, камеру, микрофон, BT, CallKeep). */
   const androidInitialPermissionsDoneRef = React.useRef(false);
+  /** Runtime-разрешения старта завершены (Android + iOS) — после этого можно показать invite modal. */
+  const initialStartupPermissionsDoneRef = React.useRef(false);
+  const tryProcessPendingInviteRef = React.useRef<null | (() => Promise<void>)>(null);
+  const inviteProcessLockRef = React.useRef(false);
+  const presentedInviteCodeRef = React.useRef<string | null>(null);
   /**
    * Overlay-модалка: максимум один показ за запуск процесса (после полного закрытия приложения).
    * При каждом новом запуске ref снова false — если «поверх других окон» не включено, модалка показывается снова.
@@ -592,6 +604,14 @@ function AppContent() {
       setOverlayPermissionModalVisible(false);
       return;
     }
+    // Пока висит инвайт в друзья — не перекрываем его overlay-модалкой.
+    try {
+      const pendingInvite = await getPendingInviteCode();
+      if (pendingInvite) {
+        setOverlayPermissionModalVisible(false);
+        return;
+      }
+    } catch {}
     if (overlayColdStartPromptAttemptedRef.current) {
       if (!isHomeRouteNow()) setOverlayPermissionModalVisible(false);
       return;
@@ -1580,6 +1600,12 @@ function AppContent() {
         await setupCallKeep({ requestPermission: Platform.OS === 'android' });
       } catch {}
 
+      // Стартовые runtime-разрешения завершены — можно показать pending invite.
+      initialStartupPermissionsDoneRef.current = true;
+      try {
+        await tryProcessPendingInviteRef.current?.();
+      } catch {}
+
       // 📱 Android: overlay — только после всех стартовых runtime-разрешений (последний шаг).
       if (Platform.OS === 'android') {
         androidInitialPermissionsDoneRef.current = true;
@@ -1923,10 +1949,141 @@ function AppContent() {
   }, []);
 
   // ===== Deep Linking обработка для реферальных ссылок =====
-  const INVITE_LINK_KEY = 'pending_invite_code';
   React.useEffect(() => {
+    const navigateToInviteModal = (code: string) => {
+      if (!navRef.isReady()) {
+        logger.info('[App] Navigation not ready for invite modal');
+        return false;
+      }
+      const currentRoute = navRef.getCurrentRoute()?.name;
+      if (currentRoute === 'Home') {
+        navRef.dispatch(
+          CommonActions.setParams({
+            showInviteModal: true,
+            inviteCode: code,
+          })
+        );
+      } else {
+        navRef.dispatch(
+          CommonActions.reset({
+            index: 0,
+            routes: [
+              {
+                name: 'Home',
+                params: { showInviteModal: true, inviteCode: code },
+              },
+            ],
+          })
+        );
+      }
+      return true;
+    };
+
+    const processInviteCode = async (code: string) => {
+      try {
+        const userId = getCurrentUserId();
+        if (!userId) {
+          logger.warn('[App] Cannot process invite: user not authorized');
+          return;
+        }
+
+        const result = await checkInviteLink(code);
+
+        if (!result.ok) {
+          logger.warn('[App] Invalid invite link:', result.error);
+          await clearPendingInviteCode();
+          presentedInviteCodeRef.current = null;
+          return;
+        }
+
+        if (result.areFriends || result.hasPendingRequest) {
+          logger.info('[App] Invite already resolved', {
+            areFriends: result.areFriends,
+            hasPendingRequest: result.hasPendingRequest,
+          });
+          await clearPendingInviteCode();
+          presentedInviteCodeRef.current = null;
+          return;
+        }
+
+        if (result.canAdd && result.inviter) {
+          // Держим pending до accept/decline — не очищаем AsyncStorage здесь.
+          await savePendingInviteCode(code);
+          if (presentedInviteCodeRef.current === code) {
+            // Уже показали в этой сессии — только убедимся, что params на месте.
+            navigateToInviteModal(code);
+            return;
+          }
+          if (navigateToInviteModal(code)) {
+            presentedInviteCodeRef.current = code;
+          }
+        }
+      } catch (e) {
+        logger.error('[App] Error processing invite code:', e);
+      }
+    };
+
+    const tryProcessPendingInvite = async () => {
+      if (inviteProcessLockRef.current) return;
+      if (!initialStartupPermissionsDoneRef.current) return;
+
+      const userId = getCurrentUserId();
+      if (!userId) return;
+
+      inviteProcessLockRef.current = true;
+      try {
+        await captureDeferredInviteCode();
+        const code = await getPendingInviteCode();
+        if (!code) return;
+
+        if (!navRef.isReady()) {
+          setTimeout(() => {
+            void tryProcessPendingInviteRef.current?.();
+          }, 400);
+          return;
+        }
+
+        await processInviteCode(code);
+      } catch (e) {
+        logger.error('[App] Error checking pending invite:', e);
+      } finally {
+        inviteProcessLockRef.current = false;
+      }
+    };
+    tryProcessPendingInviteRef.current = tryProcessPendingInvite;
+
+    const handleInviteLink = async (url: string) => {
+      try {
+        if (url.includes('expo-development-client') || /^exp\+livi-video-chat:\/\//i.test(url)) {
+          return;
+        }
+        logger.debug('[App] Processing invite link:', url);
+
+        let inviteMatch = url.match(/livi:\/\/invite\/([a-f\d]{24})/i);
+        if (!inviteMatch) {
+          inviteMatch = url.match(/\/invite\/([a-f\d]{24})/i);
+        }
+        if (!inviteMatch) {
+          logger.debug('[App] URL does not match invite pattern');
+          return;
+        }
+
+        const code = inviteMatch[1];
+        logger.info('[App] Extracted invite code:', code);
+        presentedInviteCodeRef.current = null;
+        await savePendingInviteCode(code);
+        await tryProcessPendingInvite();
+      } catch (e) {
+        logger.error('[App] Error handling invite link:', e);
+      }
+    };
+
     const handleInitialUrl = async () => {
       try {
+        // Deferred invite from Play Install Referrer / clipboard.
+        try {
+          await captureDeferredInviteCode();
+        } catch {}
         if (Platform.OS === 'android') {
           await new Promise((r) => setTimeout(r, 400));
           const Livi = NativeModules.LiviAppModule;
@@ -1937,8 +2094,6 @@ function AppContent() {
             raw && typeof raw === 'object' ? String((raw as { from?: string }).from ?? '') : '';
           if (callId && from) {
             logger.info('[App] Native pending answer (initial poll): opening call', { callId, from });
-            // Не снимаем cold-start оверлей до complete: иначе кадр Home.
-            // clearIncomingAnswerCover / finally снимут !initialUrlProcessed после UI.
             await completeAndroidIncomingAnswerRef.current(from, callId);
             return;
           }
@@ -1949,7 +2104,7 @@ function AppContent() {
           if (!handled) {
             await handleIncomingCallDeepLink(initialUrl);
             if (!initialUrl.includes('expo-development-client') && !/^exp\+livi-video-chat:\/\//i.test(initialUrl)) {
-              handleInviteLink(initialUrl);
+              await handleInviteLink(initialUrl);
             }
           }
         }
@@ -1957,6 +2112,7 @@ function AppContent() {
         logger.warn('Failed to get initial URL:', e);
       } finally {
         setInitialUrlProcessed(true);
+        void tryProcessPendingInvite();
       }
     };
 
@@ -1965,167 +2121,34 @@ function AppContent() {
       if (!handled) {
         await handleIncomingCallDeepLink(event.url);
         if (!event.url.includes('expo-development-client') && !/^exp\+livi-video-chat:\/\//i.test(event.url)) {
-          handleInviteLink(event.url);
+          await handleInviteLink(event.url);
         }
       }
     };
 
     const subscription = Linking.addEventListener('url', handleUrl);
-    
-    // Проверяем начальную ссылку
     handleInitialUrl();
 
-    // Проверяем сохраненный код приглашения при старте (с небольшой задержкой для готовности навигации)
-    setTimeout(() => {
-      checkPendingInvite();
-    }, 1000);
+    const offUserId = onCurrentUserId?.(() => {
+      void tryProcessPendingInvite();
+    });
+
+    const offInviteSettled = onInviteFlowSettled(() => {
+      presentedInviteCodeRef.current = null;
+      void syncOverlayPermissionModal();
+    });
 
     return () => {
       subscription.remove();
-    };
-  }, []);
-
-  // Функция обработки реферальной ссылки
-  const handleInviteLink = async (url: string) => {
-    try {
-      if (url.includes('expo-development-client') || /^exp\+livi-video-chat:\/\//i.test(url)) {
-        return;
-      }
-      logger.debug('[App] Processing invite link:', url);
-
-      // Парсим URL: 
-      // - livi://invite/{code} (custom scheme для тестирования)
-      // - https://livi.app/invite/{code} (Universal Links для продакшена)
-      // - http://livi.app/invite/{code} (fallback)
-      let inviteMatch = url.match(/livi:\/\/invite\/([a-f\d]{24})/i);
-      if (!inviteMatch) {
-        inviteMatch = url.match(/\/invite\/([a-f\d]{24})/i);
-      }
-      
-      if (!inviteMatch) {
-        logger.debug('[App] URL does not match invite pattern');
-        return;
-      }
-
-      const code = inviteMatch[1];
-      logger.info('[App] Extracted invite code:', code);
-
-      const userId = getCurrentUserId();
-      
-      if (!userId) {
-        // Пользователь не авторизован - сохраняем код для обработки после авторизации
-        await AsyncStorage.setItem(INVITE_LINK_KEY, code);
-        logger.info('[App] User not authorized, saved invite code for later');
-        return;
-      }
-
-      // Пользователь авторизован - обрабатываем сразу
-      await processInviteCode(code);
-    } catch (e) {
-      logger.error('[App] Error handling invite link:', e);
-    }
-  };
-
-  // Функция обработки кода приглашения
-  const processInviteCode = async (code: string) => {
-    try {
-      const userId = getCurrentUserId();
-      if (!userId) {
-        logger.warn('[App] Cannot process invite: user not authorized');
-        return;
-      }
-
-      // Проверяем ссылку через API
-      const result = await checkInviteLink(code);
-      
-      if (!result.ok) {
-        logger.warn('[App] Invalid invite link:', result.error);
-        return;
-      }
-
-      if (result.areFriends) {
-        // Пользователи уже друзья - показываем сообщение
-        logger.info('[App] Users are already friends');
-        // Можно показать toast или модалку
-        return;
-      }
-
-      if (result.hasPendingRequest) {
-        // Заявка уже отправлена
-        logger.info('[App] Friend request already pending');
-        return;
-      }
-
-      if (result.canAdd && result.inviter) {
-        // Можно добавить в друзья - сохраняем информацию для показа модалки
-        await AsyncStorage.setItem(INVITE_LINK_KEY, JSON.stringify({
-          code,
-          inviter: result.inviter,
-          timestamp: Date.now(),
-        }));
-        
-        // КРИТИЧНО: Навигация на Home с параметром для показа модалки
-        // Используем reset для гарантированного открытия HomeScreen
-        if (navRef.isReady()) {
-          const currentRoute = navRef.getCurrentRoute()?.name;
-          
-          // Если уже на Home, просто обновляем параметры
-          if (currentRoute === 'Home') {
-            navRef.dispatch(
-              CommonActions.setParams({
-                showInviteModal: true,
-                inviteCode: code,
-              })
-            );
-          } else {
-            // Если на другом экране - сбрасываем навигацию на Home
-            navRef.dispatch(
-              CommonActions.reset({
-                index: 0,
-                routes: [
-                  {
-                    name: 'Home',
-                    params: { showInviteModal: true, inviteCode: code },
-                  },
-                ],
-              })
-            );
-          }
-        } else {
-          // Если навигация еще не готова - сохраняем для обработки позже
-          logger.info('[App] Navigation not ready, will process invite when ready');
-        }
-      }
-    } catch (e) {
-      logger.error('[App] Error processing invite code:', e);
-    }
-  };
-
-  // Проверка сохраненного кода приглашения
-  const checkPendingInvite = async () => {
-    try {
-      const userId = getCurrentUserId();
-      if (!userId) return;
-
-      const saved = await AsyncStorage.getItem(INVITE_LINK_KEY);
-      if (!saved) return;
-
-      // Пытаемся распарсить как JSON (новый формат) или как строку (старый формат)
-      let code: string;
       try {
-        const parsed = JSON.parse(saved);
-        code = parsed.code || saved;
-      } catch {
-        code = saved;
-      }
-
-      await processInviteCode(code);
-      // Удаляем после обработки
-      await AsyncStorage.removeItem(INVITE_LINK_KEY);
-    } catch (e) {
-      logger.error('[App] Error checking pending invite:', e);
-    }
-  };
+        offUserId?.();
+      } catch {}
+      try {
+        offInviteSettled();
+      } catch {}
+      tryProcessPendingInviteRef.current = null;
+    };
+  }, [syncOverlayPermissionModal]);
 
   // КРИТИЧНО: Поддержание экрана включенным ТОЛЬКО когда это нужно (звонок/рандомчат/входящий/PiP).
   // Глобальный агрессивный InCallManager.start на некоторых Android может приводить к сворачиванию/крашам.

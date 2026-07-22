@@ -36,6 +36,8 @@ import org.json.JSONObject
 import com.google.firebase.analytics.FirebaseAnalytics
 import com.google.firebase.crashlytics.FirebaseCrashlytics
 import expo.modules.notifications.badge.BadgeHelper
+import com.android.installreferrer.api.InstallReferrerClient
+import com.android.installreferrer.api.InstallReferrerStateListener
 import com.facebook.react.bridge.UiThreadUtil
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
@@ -1282,6 +1284,109 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   @ReactMethod
   fun getPiPEndCallParams(promise: Promise) {
     LiviAppModule.getPiPEndCallParamsStatic(promise)
+  }
+
+  /**
+   * Deferred invite after Play Store install.
+   * Reads Install Referrer once, caches invite OID, returns it until clearInstallInviteCode.
+   */
+  @ReactMethod
+  fun getPendingInstallInviteCode(promise: Promise) {
+    try {
+      val prefs = reactApplicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+      val cached = prefs.getString(KEY_INSTALL_INVITE_CODE, null)
+      if (!cached.isNullOrBlank()) {
+        promise.resolve(cached)
+        return
+      }
+      if (prefs.getBoolean(KEY_INSTALL_REFERRER_CHECKED, false)) {
+        promise.resolve(null)
+        return
+      }
+
+      val client = InstallReferrerClient.newBuilder(reactApplicationContext).build()
+      client.startConnection(object : InstallReferrerStateListener {
+        override fun onInstallReferrerSetupFinished(responseCode: Int) {
+          var resolved = false
+          try {
+            var code: String? = null
+            if (responseCode == InstallReferrerClient.InstallReferrerResponse.OK) {
+              try {
+                val referrer = client.installReferrer?.installReferrer.orEmpty()
+                code = parseInviteCodeFromInstallReferrer(referrer)
+                Log.d(NAME, "install referrer: raw=${referrer.take(120)} code=$code")
+              } catch (e: Exception) {
+                Log.w(NAME, "install referrer read failed", e)
+              }
+            }
+            prefs.edit()
+              .putBoolean(KEY_INSTALL_REFERRER_CHECKED, true)
+              .apply {
+                if (!code.isNullOrBlank()) putString(KEY_INSTALL_INVITE_CODE, code)
+              }
+              .apply()
+            resolved = true
+            promise.resolve(code)
+          } catch (e: Exception) {
+            Log.w(NAME, "install referrer finish failed", e)
+            try {
+              prefs.edit().putBoolean(KEY_INSTALL_REFERRER_CHECKED, true).apply()
+            } catch (_: Exception) {}
+            if (!resolved) promise.resolve(null)
+          } finally {
+            try {
+              client.endConnection()
+            } catch (_: Exception) {}
+          }
+        }
+
+        override fun onInstallReferrerServiceDisconnected() {
+          // no-op; connection may retry via startConnection on next JS call
+        }
+      })
+    } catch (e: Exception) {
+      Log.w(NAME, "getPendingInstallInviteCode failed", e)
+      promise.resolve(null)
+    }
+  }
+
+  @ReactMethod
+  fun clearInstallInviteCode(promise: Promise) {
+    try {
+      reactApplicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        .edit()
+        .remove(KEY_INSTALL_INVITE_CODE)
+        .apply()
+      promise.resolve(null)
+    } catch (e: Exception) {
+      promise.resolve(null)
+    }
+  }
+
+  private fun parseInviteCodeFromInstallReferrer(referrerRaw: String): String? {
+    if (referrerRaw.isBlank()) return null
+    val decoded = try {
+      Uri.decode(referrerRaw)
+    } catch (_: Exception) {
+      referrerRaw
+    }
+    val oid = Regex("^[a-fA-F\\d]{24}$")
+    for (part in decoded.split("&")) {
+      val kv = part.split("=", limit = 2)
+      if (kv.size != 2) continue
+      val key = kv[0].trim()
+      val value = kv[1].trim()
+      if (key.equals("invite", ignoreCase = true) ||
+        key.equals("invite_code", ignoreCase = true) ||
+        key.equals("utm_content", ignoreCase = true)
+      ) {
+        if (oid.matches(value)) return value
+      }
+    }
+    val embedded = Regex("(?:^|[?&])invite(?:=|%3D)([a-fA-F\\d]{24})", RegexOption.IGNORE_CASE)
+      .find(referrerRaw)
+      ?: Regex("(?:^|[?&])invite(?:=|%3D)([a-fA-F\\d]{24})", RegexOption.IGNORE_CASE).find(decoded)
+    return embedded?.groupValues?.getOrNull(1)
   }
 
   @ReactMethod
@@ -2747,6 +2852,8 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     const val KEY_SERVER_URL = "server_url"
     const val KEY_USER_ID_FOR_DECLINE = "user_id_for_decline"
     const val KEY_OUTGOING_CALL_TIMEOUT_MS = "outgoing_call_timeout_ms"
+    private const val KEY_INSTALL_REFERRER_CHECKED = "install_referrer_checked"
+    private const val KEY_INSTALL_INVITE_CODE = "install_invite_code"
     private const val PREFS_OPEN_TAB = "LiviOpenTab"
     private const val KEY_PENDING_OPEN_TAB_FRIENDS = "pending_open_tab_friends"
     private const val KEY_PENDING_RETURN_TO_ACTIVE_CALL = "pending_return_to_active_call"

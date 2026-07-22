@@ -46,6 +46,7 @@ import {
 } from '../utils/uploadAvatar';
 
 import LanguagePicker from '../components/LanguagePicker';
+import { clearPendingInviteCode } from '../utils/inviteLink';
 import { useAppTheme } from '../theme/ThemeProvider';
 import { uiAccent } from '../theme/uiAccent';
 import { t } from '../utils/i18n';
@@ -670,23 +671,29 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
 
   // ===== Обработка реферальной ссылки из route params =====
   const processedInviteRef = useRef<string | null>(null);
+
+  const clearInviteRouteParams = useCallback(() => {
+    try {
+      navigation?.setParams?.({
+        showInviteModal: false,
+        inviteCode: undefined,
+      } as any);
+    } catch {}
+  }, [navigation]);
   
   useEffect(() => {
     const checkInviteFromRoute = async () => {
       const inviteCode = route?.params?.inviteCode as string | undefined;
       const shouldShow = route?.params?.showInviteModal as boolean | undefined;
       
-      // Проверяем, не обрабатывали ли мы уже этот код
       if (!inviteCode || processedInviteRef.current === inviteCode) {
         return;
       }
 
-      // Если showInviteModal не установлен, но есть inviteCode - все равно обрабатываем
       if (!shouldShow && !inviteCode) {
         return;
       }
 
-      // Помечаем как обработанный
       processedInviteRef.current = inviteCode;
 
       try {
@@ -694,23 +701,29 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         
         if (!result.ok) {
           showNotice(t('inviteLinkInvalid', lang), 'error', 3000);
+          await clearPendingInviteCode();
+          clearInviteRouteParams();
+          processedInviteRef.current = null;
           return;
         }
 
         if (result.areFriends) {
-          // Пользователи уже друзья
           showNotice(t('inviteAlreadyFriendsWithUser', lang), 'info', 3000);
+          await clearPendingInviteCode();
+          clearInviteRouteParams();
+          processedInviteRef.current = null;
           return;
         }
 
         if (result.hasPendingRequest) {
-          // Заявка уже отправлена
           showNotice(t('inviteRequestAlreadySent', lang), 'info', 3000);
+          await clearPendingInviteCode();
+          clearInviteRouteParams();
+          processedInviteRef.current = null;
           return;
         }
 
         if (result.canAdd && result.inviter) {
-          // Показываем модалку приглашения
           setInviteRequestData({
             code: inviteCode,
             inviter: {
@@ -725,21 +738,18 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       } catch (e) {
         logger.error('Failed to check invite from route:', e);
         showNotice(t('inviteLinkProcessFailed', lang), 'error', 3000);
-        // Сбрасываем флаг обработки при ошибке, чтобы можно было повторить
         processedInviteRef.current = null;
       }
     };
 
-    // Обрабатываем при изменении параметров или при первом монтировании
     if (route?.params?.inviteCode || route?.params?.showInviteModal) {
-      // Небольшая задержка для гарантии готовности компонента
       const timer = setTimeout(() => {
-        checkInviteFromRoute();
+        void checkInviteFromRoute();
       }, 300);
       
       return () => clearTimeout(timer);
     }
-  }, [route?.params?.showInviteModal, route?.params?.inviteCode, showNotice]);
+  }, [route?.params?.showInviteModal, route?.params?.inviteCode, showNotice, clearInviteRouteParams]);
 
   useEffect(() => {
     if (!inviteRequestVisible || !inviteRequestData?.inviter?.id) return;
@@ -771,7 +781,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     if (!inviteRequestData) return;
 
     try {
-      // Используем acceptInvite для немедленного добавления в друзья (без заявки)
       const result = await acceptInvite(inviteRequestData.inviter.id);
       
       if (result?.ok) {
@@ -779,11 +788,9 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           showNotice(t('already_friends', lang), 'info', 3000);
         } else if (result.status === 'accepted') {
           showNotice(t('inviteUserAdded', lang), 'success', 3000);
-          // Обновляем список друзей
           loadFriendsFnRef.current();
         } else {
           showNotice(t('inviteUserAdded', lang), 'success', 3000);
-          // Обновляем список друзей
           loadFriendsFnRef.current();
         }
       } else {
@@ -792,30 +799,37 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       
       setInviteRequestVisible(false);
       setInviteRequestData(null);
-      // Сбрасываем флаг обработки
-      if (route?.params?.inviteCode) {
-        processedInviteRef.current = null;
-      }
+      processedInviteRef.current = null;
+      await clearPendingInviteCode();
+      clearInviteRouteParams();
     } catch (e) {
       logger.error('Failed to accept invite:', e);
       showNotice(t('friendAddFailed', lang), 'error', 3000);
       setInviteRequestVisible(false);
       setInviteRequestData(null);
-      // Сбрасываем флаг обработки при ошибке
-      if (route?.params?.inviteCode) {
-        processedInviteRef.current = null;
-      }
+      processedInviteRef.current = null;
+      await clearPendingInviteCode();
+      clearInviteRouteParams();
     }
-  }, [inviteRequestData, showNotice, route?.params?.inviteCode]);
+  }, [inviteRequestData, showNotice, clearInviteRouteParams]);
 
-  const handleDeclineInvite = useCallback(() => {
+  const handleDeclineInvite = useCallback(async () => {
     setInviteRequestVisible(false);
     setInviteRequestData(null);
-    // Сбрасываем флаг обработки, чтобы можно было открыть снова
-    if (route?.params?.inviteCode) {
-      processedInviteRef.current = null;
-    }
-  }, [route?.params?.inviteCode]);
+    processedInviteRef.current = null;
+    await clearPendingInviteCode();
+    clearInviteRouteParams();
+  }, [clearInviteRouteParams]);
+
+  // Android back: закрытие invite-модалки = decline (не теряем pending без явной отмены)
+  useEffect(() => {
+    if (Platform.OS !== 'android' || !inviteRequestVisible) return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      void handleDeclineInvite();
+      return true;
+    });
+    return () => sub.remove();
+  }, [inviteRequestVisible, handleDeclineInvite]);
 
   /* ===== Call (outgoing modal) ===== */
   const [calling, setCalling] = useState<{ visible: boolean; friend?: Friend | null; callId?: string | null }>({ visible: false });
@@ -4358,17 +4372,6 @@ const handleClearNick = useCallback(async () => {
                 <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.35)' }]} />
               </>
             )}
-            <ChatStyleBackButton
-              icon="close"
-              onPress={handleDeclineInvite}
-              iconColor={LIVI.titan}
-              style={{
-                position: 'absolute',
-                zIndex: 10,
-                top: insets.top + (Platform.OS === 'android' ? 35 : 16),
-                left: Platform.OS === 'ios' ? 15 : 17,
-              }}
-            />
             <Surface style={[styles.confirmCard, { minWidth: 300, maxWidth: 400, borderColor: '#4DD0E1' }]}>
               <Text style={[styles.confirmTitle, { textAlign: 'center', marginBottom: 20, color: '#4DD0E1' }]}>
                 {t('friendInviteTitle', lang)}
@@ -4467,7 +4470,7 @@ const handleClearNick = useCallback(async () => {
                       }}
                     >
                       <Text style={{ color: LIVI.white, fontWeight: '700', fontSize: 16 }}>
-                        Принять
+                        {t('accept', lang)}
                       </Text>
                     </TouchableOpacity>
                   </View>
