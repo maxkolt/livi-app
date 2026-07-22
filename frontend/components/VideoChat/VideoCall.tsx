@@ -31,6 +31,7 @@ import { MediaControls } from './shared/MediaControls';
 import { LocalVideo } from './shared/LocalVideo';
 import { RemoteVideo } from './shared/RemoteVideo';
 import { HiddenRemoteAudioSink } from './shared/HiddenRemoteAudioSink';
+import { AudioCallConnectingStatus } from './shared/AudioCallConnectingStatus';
 import { partnerRemoteRtcLikelyVisible, streamHasLiveRemoteAudio } from './shared/callTimerUtils';
 import { t, loadLang, defaultLang } from '../../utils/i18n';
 import type { Lang } from '../../utils/i18n';
@@ -786,6 +787,8 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
   const [friendCallAccepted, setFriendCallAccepted] = useState(() => initialLiveCallAccepted);
   const callConnectedAtRef = useRef<number | null>(null);
   const [callElapsedSec, setCallElapsedSec] = useState(0);
+  const [liveKitReconnectingUi, setLiveKitReconnectingUi] = useState(false);
+  const [remoteAudioGapUi, setRemoteAudioGapUi] = useState(false);
   const [buttonsOpacity] = useState(new Animated.Value(1));
   const incomingCallBounce = useRef(new Animated.Value(0)).current;
   const incomingWaveA = useRef(new Animated.Value(0)).current;
@@ -2924,8 +2927,9 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
             if (!acceptCallTimeRef.current) {
               acceptCallTimeRef.current = Date.now();
             }
+            // Timer starts when media is actually up — not from accept (otherwise jumps to 3–7s).
             if (callConnectedAtRef.current == null && stream.getAudioTracks?.()?.length) {
-              callConnectedAtRef.current = acceptCallTimeRef.current;
+              callConnectedAtRef.current = Date.now();
             }
             persistCallTimerToGlobal(
               acceptCallTimeRef,
@@ -4082,7 +4086,12 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
           acceptCallTimeRef.current = Date.now();
         }
         if (callConnectedAtRef.current == null && stream.getAudioTracks?.()?.length) {
-          callConnectedAtRef.current = acceptCallTimeRef.current;
+          callConnectedAtRef.current = Date.now();
+          persistCallTimerToGlobal(
+            acceptCallTimeRef,
+            callConnectedAtRef,
+            currentCallIdRef.current || callId || route?.params?.callId || null,
+          );
         }
         setFriendCallAccepted(true);
         setIsInactiveState(false);
@@ -4098,6 +4107,16 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     };
     
     // Устанавливаем обработчики событий
+    const handleLiveKitReconnecting = () => setLiveKitReconnectingUi(true);
+    const handleLiveKitReconnected = () => setLiveKitReconnectingUi(false);
+    try {
+      if (typeof (session as any).isLiveKitReconnecting === 'function') {
+        setLiveKitReconnectingUi(!!(session as any).isLiveKitReconnecting());
+      }
+    } catch {
+      setLiveKitReconnectingUi(false);
+    }
+
     session.on('remoteViewKeyChanged', handleRemoteViewKeyChange);
     session.on('callEnded', handleCallEnded);
     session.on('callAnswered', handleCallAnswered);
@@ -4107,6 +4126,8 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     session.on('partnerPiPStateChanged', handlePartnerPiPStateChanged);
     session.on('partnerExternalHoldChanged', handlePartnerExternalHoldChanged);
     session.on('localExternalHoldChanged', handleLocalExternalHoldChanged);
+    session.on('livekitReconnecting', handleLiveKitReconnecting);
+    session.on('livekitReconnected', handleLiveKitReconnected);
     if (needsStreamBridge) {
       session.on('localStream', handleLocalStreamEvent as any);
       session.on('remoteStream', handleRemoteStreamEvent as any);
@@ -4115,7 +4136,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     
     logger.debug('[VideoCall] Event handlers attached for session', {
       hasSession: !!session,
-      handlersCount: needsStreamBridge ? 8 : 6,
+      handlersCount: needsStreamBridge ? 10 : 8,
       needsStreamBridge,
     });
     
@@ -4134,6 +4155,8 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
         session.off('partnerPiPStateChanged', handlePartnerPiPStateChanged);
         session.off('partnerExternalHoldChanged', handlePartnerExternalHoldChanged);
         session.off('localExternalHoldChanged', handleLocalExternalHoldChanged);
+        session.off('livekitReconnecting', handleLiveKitReconnecting);
+        session.off('livekitReconnected', handleLiveKitReconnected);
         if (needsStreamBridge) {
           session.off('localStream', handleLocalStreamEvent as any);
           session.off('remoteStream', handleRemoteStreamEvent as any);
@@ -5103,10 +5126,10 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       rs &&
       streamHasLiveRemoteAudio(rs)
     ) {
-      const seed = acceptCallTimeRef.current > 0 ? acceptCallTimeRef.current : Date.now();
+      const seed = Date.now();
       callConnectedAtRef.current = seed;
       getGlobalCallTimerRefs(timerCallId).connected.current = seed;
-      setCallElapsedSec(Math.floor((Date.now() - seed) / 1000));
+      setCallElapsedSec(0);
     }
     setFriendCallAccepted(true);
     setStarted(true);
@@ -5914,9 +5937,10 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       const timerCallId = currentCallIdRef.current || callId || route?.params?.callId || null;
       syncCallTimerFromGlobal(acceptCallTimeRef, callConnectedAtRef, timerCallId);
       if (callConnectedAtRef.current == null) {
-        const seed = acceptCallTimeRef.current > 0 ? acceptCallTimeRef.current : Date.now();
+        const seed = Date.now();
         callConnectedAtRef.current = seed;
         getGlobalCallTimerRefs(timerCallId).connected.current = seed;
+        setCallElapsedSec(0);
       }
     }
     if (callConnectedAtRef.current == null) {
@@ -5964,6 +5988,50 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     !wasFriendCallEnded &&
     !isEndingCall &&
     (callConnectedForTimer || (friendCallAccepted && hasActiveCall && callElapsedSec > 0));
+
+  useEffect(() => {
+    if (!showAudioPresentation || wasFriendCallEnded || isEndingCall) {
+      setRemoteAudioGapUi(false);
+      return;
+    }
+    // After the call was already timed, brief audio drop → show connecting again.
+    if (!showCallDuration || remoteAudioLiveForTimer || liveKitReconnectingUi) {
+      setRemoteAudioGapUi(false);
+      return;
+    }
+    const timer = setTimeout(() => setRemoteAudioGapUi(true), 1200);
+    return () => clearTimeout(timer);
+  }, [
+    showAudioPresentation,
+    wasFriendCallEnded,
+    isEndingCall,
+    showCallDuration,
+    remoteAudioLiveForTimer,
+    liveKitReconnectingUi,
+  ]);
+
+  useEffect(() => {
+    if (!showAudioPresentation || wasFriendCallEnded || isEndingCall) return;
+    const sync = () => {
+      try {
+        const s = sessionRef.current as VideoCallSession | null;
+        if (s && typeof s.isLiveKitReconnecting === 'function') {
+          setLiveKitReconnectingUi(!!s.isLiveKitReconnecting());
+        }
+      } catch {}
+    };
+    sync();
+    const id = setInterval(sync, 700);
+    return () => clearInterval(id);
+  }, [showAudioPresentation, wasFriendCallEnded, isEndingCall, sessionTick]);
+
+  const showAudioConnectingStatus =
+    showAudioPresentation &&
+    !wasFriendCallEnded &&
+    !isEndingCall &&
+    !localExternalHoldUi &&
+    !partnerExternalHoldUi &&
+    (!showCallDuration || liveKitReconnectingUi || remoteAudioGapUi);
 
   const isPartnerFriend = useMemo(() => {
     if (!partnerUserId) return false;
@@ -6323,7 +6391,12 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
               acceptCallTimeRef.current = Date.now();
             }
             if (callConnectedAtRef.current == null) {
-              callConnectedAtRef.current = acceptCallTimeRef.current;
+              const timerCallId = currentCallIdRef.current || callId || route?.params?.callId || null;
+              syncCallTimerFromGlobal(acceptCallTimeRef, callConnectedAtRef, timerCallId);
+              if (callConnectedAtRef.current == null) {
+                callConnectedAtRef.current = Date.now();
+                getGlobalCallTimerRefs(timerCallId).connected.current = callConnectedAtRef.current;
+              }
             }
             setFriendCallAccepted(true);
             setStarted(true);
@@ -6704,22 +6777,30 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
             >
               {partnerDisplayName}
             </Text>
-            <Text
-              style={[
-                styles.audioCallSubtitle,
-                (localExternalHoldUi || partnerExternalHoldUi) && styles.audioCallSubtitleHold,
-              ]}
-              {...(Platform.OS === 'android' ? { includeFontPadding: false } : {})}
-            >
-              {localExternalHoldUi
-                ? t('externalCallHoldLocal', lang)
-                : partnerExternalHoldUi
-                  ? t('partnerBusyEllipsis', lang)
-                  : t('audioCallStatus', lang)}
-            </Text>
-            {showCallDuration ? (
-              <Text style={styles.audioCallTimer}>{formatCallDuration(callElapsedSec)}</Text>
-            ) : null}
+            {localExternalHoldUi || partnerExternalHoldUi ? (
+              <Text
+                style={[styles.audioCallSubtitle, styles.audioCallSubtitleHold]}
+                {...(Platform.OS === 'android' ? { includeFontPadding: false } : {})}
+              >
+                {localExternalHoldUi
+                  ? t('externalCallHoldLocal', lang)
+                  : t('partnerBusyEllipsis', lang)}
+              </Text>
+            ) : showAudioConnectingStatus ? (
+              <AudioCallConnectingStatus label={t('audioCallConnecting', lang)} />
+            ) : (
+              <>
+                <Text
+                  style={styles.audioCallSubtitle}
+                  {...(Platform.OS === 'android' ? { includeFontPadding: false } : {})}
+                >
+                  {t('audioCallStatus', lang)}
+                </Text>
+                {showCallDuration ? (
+                  <Text style={styles.audioCallTimer}>{formatCallDuration(callElapsedSec)}</Text>
+                ) : null}
+              </>
+            )}
           </View>
           <View style={styles.audioCallHeaderSpacer} />
           <Animated.View
@@ -6770,7 +6851,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
               onPress={toggleMic}
               disabled={controlsLockedForLocalHold}
               activeOpacity={0.85}
-              accessibilityLabel={micOn ? 'Выключить микрофон' : 'Включить микрофон'}
+              accessibilityLabel={micOn ? t('muteMic', lang) : t('unmuteMic', lang)}
               accessibilityState={{ selected: micOn }}
             >
               <MaterialIcons

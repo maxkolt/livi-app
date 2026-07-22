@@ -686,6 +686,8 @@ class MainActivity : ReactActivity() {
       setTheme(R.style.AppTheme)
     }
     super.onCreate(null)
+    // targetSdk 36: edge-to-edge is enforced; RN SafeAreaProvider pads content.
+    EdgeToEdgeHelper.apply(this)
     registerHomeKeyForSystemPiPReceiver()
     if (backPressLoggingCallback == null) {
       backPressLoggingCallback = object : OnBackPressedCallback(true) {

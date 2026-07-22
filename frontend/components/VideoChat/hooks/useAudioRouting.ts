@@ -29,7 +29,7 @@ import {
   isCallAudioNativeTransitionLocked,
   clearPersistedCallAudioRoute,
   resolveOngoingVideoCallAudioRoute,
-  applyCallAudioOutputRouteNow,
+  applyCallAudioOutputRouteLatest,
   clearScheduledCallAudioRouteReapplies,
   cancelScheduledCallAudioRouteReappliesMatching,
   armCallAudioPreservePriority,
@@ -2917,65 +2917,57 @@ export const useAudioRouting = (
   preferAudioModeRef.current = preferAudioMode;
 
   const cycleUserRoute = useCallback((): Promise<InCallAudioRoute | null> => {
-    return (async () => {
+    try {
+      if ((global as any).__pipVisibleRef?.current === true) {
+        routeLog('cycleUserRoute skipped (in-app PiP — use plaque toggle)');
+        return Promise.resolve(readInAppPiPAudioOutputRoute());
+      }
+      if (
+        !preferAudioModeRef.current &&
+        !isInAudioOnlyCallUi() &&
+        ongoingCallPrefersVideoMedia()
+      ) {
+        routeLog('cycleUserRoute skipped (full video UI)');
+        return Promise.resolve(
+          normalizeInCallRoute(getUserRoute()) || readUserSelectedCallAudioRoute(),
+        );
+      }
+      const g = global as any;
       const now = Date.now();
-      try {
-        if ((global as any).__pipVisibleRef?.current === true) {
-          routeLog('cycleUserRoute skipped (in-app PiP — use plaque toggle)');
-          return readInAppPiPAudioOutputRoute();
-        }
-        if (
-          !preferAudioModeRef.current &&
-          !isInAudioOnlyCallUi() &&
-          ongoingCallPrefersVideoMedia()
-        ) {
-          routeLog('cycleUserRoute skipped (full video UI)');
-          return normalizeInCallRoute(getUserRoute()) || readUserSelectedCallAudioRoute();
-        }
-        const g = global as any;
-        if (g.__audioUiRouteCycleInFlightRef?.current) {
-          routeLog('cycleUserRoute skipped (in flight)');
-          return readUserSelectedCallAudioRoute();
-        }
-        const lastAt = Number(g.__lastCycleUserRouteAtRef?.current || 0);
-        const lastRoute = normalizeInCallRoute(g.__lastCycleUserRouteResultRef?.current || '');
-        const lastCallId = String(g.__lastCycleUserRouteCallIdRef?.current || '').trim();
-        const activeCallId = String(g.__activeCallAudioRouteCallIdRef?.current || '').trim();
-        if (activeCallId && lastCallId === activeCallId && now - lastAt < 750) {
-          routeLog('cycleUserRoute skipped (dedup)', { lastRoute, msSince: now - lastAt });
-          return lastRoute || readUserSelectedCallAudioRoute();
-        }
-        g.__lastCycleUserRouteAtRef = { current: now };
-        g.__audioUiRouteCycleInFlightRef = g.__audioUiRouteCycleInFlightRef || { current: false };
-        g.__audioUiRouteCycleInFlightRef.current = true;
-      } catch {}
-      try {
+      const lastAt = Number(g.__lastCycleUserRouteAtRef?.current || 0);
+      const lastRoute = normalizeInCallRoute(g.__lastCycleUserRouteResultRef?.current || '');
+      const lastCallId = String(g.__lastCycleUserRouteCallIdRef?.current || '').trim();
+      const activeCallId = String(g.__activeCallAudioRouteCallIdRef?.current || '').trim();
+      // Только антидребезг тач-события; не ждём native probe / apply.
+      if (activeCallId && lastCallId === activeCallId && now - lastAt < 120) {
+        routeLog('cycleUserRoute skipped (dedup)', { lastRoute, msSince: now - lastAt });
+        return Promise.resolve(lastRoute || readUserSelectedCallAudioRoute());
+      }
+      g.__lastCycleUserRouteAtRef = { current: now };
+
       let av = [...lastAvailableRef.current];
       const icm = readInCallAvailableAudioRoutesForCycle();
-      if (Platform.OS === 'android') {
-        try {
-          const probe = await probeNativeCallAudioRoutes();
-          mergeNativeProbeIntoGlobal(probe);
-          av = Array.from(new Set([...av, ...probe.available]));
-          const btConnected = await isNativeBluetoothHeadsetConnectedForCall();
-          if (btConnected) {
-            av = Array.from(new Set([...av, 'BLUETOOTH']));
-          } else {
-            av = av.filter((r) => r !== 'BLUETOOTH');
-          }
-        } catch {}
-      }
       try {
-        const gAv = (global as any).__inCallAvailableAudioRoutesRef?.current;
+        const gAv = g.__inCallAvailableAudioRoutesRef?.current;
         if (Array.isArray(gAv)) {
           av = Array.from(new Set([...av, ...gAv.map((s: unknown) => String(s))]));
         }
       } catch {}
+      try {
+        const probe = g.__nativeCallAudioRoutesRef?.current as { available?: string[] } | undefined;
+        if (Array.isArray(probe?.available)) {
+          av = Array.from(new Set([...av, ...probe.available]));
+        }
+      } catch {}
+      if (Platform.OS === 'android' && !isBluetoothHeadsetActiveForCall()) {
+        av = av.filter((r) => r !== 'BLUETOOTH');
+      }
       av = sanitizeRoutesForAudioCycle(av, icm);
       lastAvailableRef.current = av;
+
       const uiLockForCycle = readCallAudioRouteUiLock();
       const explicitCycleHint = normalizeInCallRoute(
-        (global as any).__audioUiExplicitCycleRouteRef?.current || '',
+        g.__audioUiExplicitCycleRouteRef?.current || '',
       );
       const current =
         uiLockForCycle ||
@@ -2992,6 +2984,8 @@ export const useAudioRouting = (
         cycleCtx,
         cycleIcm,
       );
+
+      // Optimistic UI + intent — сразу, до любого await.
       explicitBuiltInChoiceRef.current = next === 'EARPIECE' || next === 'SPEAKER_PHONE';
       setExplicitBuiltInGlobal(explicitBuiltInChoiceRef.current);
       setUserRoute(next);
@@ -3005,57 +2999,83 @@ export const useAudioRouting = (
         markUserSelectedExternalCallAudioRoute(next);
       }
       try {
-        const params = (global as any).__currentCallPiPParamsRef?.current;
+        const params = g.__currentCallPiPParamsRef?.current;
         if (params && typeof params === 'object') {
           params.audioOutputRoute = next;
         }
-        (global as any).__onInAppPiPAudioRouteChanged?.(next);
+        g.__onInAppPiPAudioRouteChanged?.(next);
       } catch {}
       publishRouteState(av.length ? av : ['EARPIECE', 'SPEAKER_PHONE'], next);
+      g.__audioUiExplicitCycleRouteRef = g.__audioUiExplicitCycleRouteRef || { current: null };
+      g.__audioUiExplicitCycleRouteRef.current = next;
+      g.__inAppPiPExplicitToggleRouteRef = g.__inAppPiPExplicitToggleRouteRef || { current: null };
+      g.__inAppPiPExplicitToggleRouteRef.current = next;
+      g.__pipBuiltinRouteLockUntilRef = g.__pipBuiltinRouteLockUntilRef || { current: 0 };
+      g.__pipBuiltinRouteLockUntilRef.current = Date.now() + 6500;
+      armCallAudioPreservePriority(6500);
+      if (next === 'EARPIECE' || next === 'SPEAKER_PHONE') {
+        armCallAudioRouteUiLock(next, 8500);
+      } else if (isExternalHeadsetRoute(next)) {
+        clearCallAudioRouteUiLock();
+      }
+      g.__lastCycleUserRouteResultRef = { current: next };
+      g.__lastCycleUserRouteCallIdRef = {
+        current: String(g.__activeCallAudioRouteCallIdRef?.current || '').trim(),
+      };
       routeLog('cycleUserRoute', { from: current, next, available: av, cycleCtx });
-      try {
-        const g = global as any;
-        g.__audioUiExplicitCycleRouteRef = g.__audioUiExplicitCycleRouteRef || { current: null };
-        g.__audioUiExplicitCycleRouteRef.current = next;
-        g.__inAppPiPExplicitToggleRouteRef = g.__inAppPiPExplicitToggleRouteRef || { current: null };
-        g.__inAppPiPExplicitToggleRouteRef.current = next;
-        g.__pipBuiltinRouteLockUntilRef = g.__pipBuiltinRouteLockUntilRef || { current: 0 };
-        g.__pipBuiltinRouteLockUntilRef.current = Date.now() + 6500;
-        armCallAudioPreservePriority(6500);
-        if (next === 'EARPIECE' || next === 'SPEAKER_PHONE') {
-          armCallAudioRouteUiLock(next, 8500);
-        } else if (isExternalHeadsetRoute(next)) {
-          clearCallAudioRouteUiLock();
-        }
-        g.__lastCycleUserRouteResultRef = { current: next };
-        g.__lastCycleUserRouteCallIdRef = {
-          current: String(g.__activeCallAudioRouteCallIdRef?.current || '').trim(),
-        };
-      } catch {}
+
+      // Sync poke: только InCallManager. Native — строго через latest-очередь
+      // (параллельный void applyNativeVoiceCallSpeaker гонял SPEAKER поверх EAR).
+      if (next === 'SPEAKER_PHONE' || next === 'EARPIECE') {
+        const wantSpeaker = next === 'SPEAKER_PHONE';
+        try {
+          (InCallManager as any).setForceSpeakerphoneOn?.(wantSpeaker);
+          InCallManager.setSpeakerphoneOn(wantSpeaker);
+        } catch {}
+      }
+
+      cancelScheduledCallAudioRouteReappliesMatching([
+        'in_app_pip_from_',
+        'audio_ui_route_cycle',
+        'in_app_pip_headset_connect',
+      ]);
+      const media =
+        preferAudioModeRef.current || routingOptionsRef.current?.defaultToEarpiece
+          ? 'audio'
+          : 'video';
       if (Platform.OS === 'android') {
-        cancelScheduledCallAudioRouteReappliesMatching([
-          'in_app_pip_from_',
-          'audio_ui_route_cycle',
-          'in_app_pip_headset_connect',
-        ]);
-        const media =
-          preferAudioModeRef.current || routingOptionsRef.current?.defaultToEarpiece
-            ? 'audio'
-            : 'video';
-        await applyCallAudioOutputRouteNow(next, {
+        void applyCallAudioOutputRouteLatest(next, {
           media,
           forceBuiltIn: !isExternalHeadsetRoute(next),
         });
       } else {
         applySpecificRoute(next, 'cycleUserRoute', true);
       }
-      return next;
-      } finally {
-        try {
-          (global as any).__audioUiRouteCycleInFlightRef.current = false;
-        } catch {}
+
+      // Probe в фоне — для следующего цикла с BT, не блокирует этот тап.
+      if (Platform.OS === 'android') {
+        void probeNativeCallAudioRoutes()
+          .then((probe) => {
+            mergeNativeProbeIntoGlobal(probe);
+            let merged = Array.from(
+              new Set([...lastAvailableRef.current, ...probe.available]),
+            );
+            if (!isBluetoothHeadsetActiveForCall()) {
+              merged = merged.filter((r) => r !== 'BLUETOOTH');
+            }
+            lastAvailableRef.current = sanitizeRoutesForAudioCycle(
+              merged,
+              readInCallAvailableAudioRoutesForCycle(),
+            );
+          })
+          .catch(() => {});
       }
-    })();
+
+      return Promise.resolve(next);
+    } catch (e) {
+      routeLog('cycleUserRoute failed', { error: String(e) });
+      return Promise.resolve(readUserSelectedCallAudioRoute());
+    }
   }, []);
 
   return {

@@ -1207,7 +1207,22 @@ async function applyNativeOutputRouteImmediate(
   opts: { forceBuiltIn?: boolean },
 ): Promise<void> {
   const forceBuiltIn = !!opts.forceBuiltIn;
+
+  /** Пользователь уже выбрал другой built-in — не догонять устаревшим apply. */
+  const isStaleBuiltInApply = (target: 'EARPIECE' | 'SPEAKER_PHONE'): boolean => {
+    const lock = readCallAudioRouteUiLock();
+    const userSel = readUserSelectedCallAudioRoute();
+    const want =
+      lock === 'EARPIECE' || lock === 'SPEAKER_PHONE'
+        ? lock
+        : userSel === 'EARPIECE' || userSel === 'SPEAKER_PHONE'
+          ? userSel
+          : null;
+    return want != null && want !== target;
+  };
+
   if (route === 'EARPIECE') {
+    if (isStaleBuiltInApply('EARPIECE')) return;
     const lock = readCallAudioRouteUiLock();
     const userSel = readUserSelectedCallAudioRoute();
     if (lock === 'SPEAKER_PHONE' || userSel === 'SPEAKER_PHONE') {
@@ -1216,34 +1231,37 @@ async function applyNativeOutputRouteImmediate(
   }
   if (isExternalHeadsetRoute(route)) {
     try {
-      (InCallManager as any).setForceSpeakerphoneOn?.(false);
-      InCallManager.setSpeakerphoneOn(false);
-      await (InCallManager as any).chooseAudioRoute?.(route);
-      await applyNativeVoiceCallRoute(route);
+      const nativeP = applyNativeVoiceCallRoute(route);
+      try {
+        (InCallManager as any).setForceSpeakerphoneOn?.(false);
+        InCallManager.setSpeakerphoneOn(false);
+        void (InCallManager as any).chooseAudioRoute?.(route);
+      } catch {}
+      await nativeP;
     } catch {}
     return;
   }
   if (route === 'SPEAKER_PHONE') {
-    const lock = readCallAudioRouteUiLock();
-    const userSel = readUserSelectedCallAudioRoute();
-    if (lock === 'EARPIECE' && userSel !== 'SPEAKER_PHONE') {
-      return;
-    }
+    if (isStaleBuiltInApply('SPEAKER_PHONE')) return;
+    // Android 12+: setCommunicationDevice сразу — не ждать InCallManager.
+    const nativeP = applyNativeVoiceCallSpeaker(true, { forceBuiltIn });
     try {
       (InCallManager as any).setForceSpeakerphoneOn?.(true);
       InCallManager.setSpeakerphoneOn(true);
       void (InCallManager as any).chooseAudioRoute?.('SPEAKER_PHONE');
     } catch {}
-    await applyNativeVoiceCallSpeaker(true, { forceBuiltIn });
+    await nativeP;
     return;
   }
   if (route === 'EARPIECE') {
+    if (isStaleBuiltInApply('EARPIECE')) return;
+    const nativeP = applyNativeVoiceCallSpeaker(false, { forceBuiltIn });
     try {
       (InCallManager as any).setForceSpeakerphoneOn?.(false);
       InCallManager.setSpeakerphoneOn(false);
       void (InCallManager as any).chooseAudioRoute?.('EARPIECE');
     } catch {}
-    await applyNativeVoiceCallSpeaker(false, { forceBuiltIn });
+    await nativeP;
   }
 }
 
@@ -1459,6 +1477,64 @@ export async function applyCallAudioOutputRouteNow(
       params.audioOutputRoute = route;
     }
   } catch {}
+}
+
+type ManualRouteApplyJob = {
+  route: InCallAudioRoute;
+  opts?: { media?: 'audio' | 'video'; forceBuiltIn?: boolean };
+};
+
+let manualRouteApplyLatest: ManualRouteApplyJob | null = null;
+let manualRouteApplyChain: Promise<void> = Promise.resolve();
+
+/**
+ * Ручной цикл кнопки: latest-wins очередь.
+ * Повторный тап во время apply не откатывает звук «догоняющим» предыдущим маршрутом.
+ */
+export function applyCallAudioOutputRouteLatest(
+  route: InCallAudioRoute,
+  opts?: { media?: 'audio' | 'video'; forceBuiltIn?: boolean },
+): Promise<void> {
+  manualRouteApplyLatest = { route, opts };
+  // Не пропускать по signature — ручной тап всегда доходит до native.
+  lastNativeInCallSignature = '';
+  const drain = async () => {
+    while (manualRouteApplyLatest) {
+      const job = manualRouteApplyLatest;
+      manualRouteApplyLatest = null;
+      const lock = readCallAudioRouteUiLock();
+      const userSel = readUserSelectedCallAudioRoute();
+      const want =
+        lock === 'EARPIECE' || lock === 'SPEAKER_PHONE'
+          ? lock
+          : userSel === 'EARPIECE' || userSel === 'SPEAKER_PHONE'
+            ? userSel
+            : isExternalHeadsetRoute(userSel)
+              ? userSel
+              : null;
+      let routeToApply = job.route;
+      if (
+        want &&
+        (job.route === 'EARPIECE' || job.route === 'SPEAKER_PHONE') &&
+        want !== job.route
+      ) {
+        if (manualRouteApplyLatest) {
+          // Есть более новый job — он в while.
+          continue;
+        }
+        // Lock уже новый, а job устарел — применяем актуальный want.
+        routeToApply = want;
+      }
+      lastNativeInCallSignature = '';
+      await applyCallAudioOutputRouteNow(routeToApply, {
+        ...job.opts,
+        forceBuiltIn:
+          job.opts?.forceBuiltIn ?? !isExternalHeadsetRoute(routeToApply),
+      });
+    }
+  };
+  manualRouteApplyChain = manualRouteApplyChain.then(drain, drain);
+  return manualRouteApplyChain;
 }
 
 /** Отменить отложенные preserve/return — перед ручным переключением на аудио-экране. */

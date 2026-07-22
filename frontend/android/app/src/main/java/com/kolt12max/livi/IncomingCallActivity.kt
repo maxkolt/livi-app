@@ -83,6 +83,7 @@ class IncomingCallActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         ScreenOrientationHelper.applyPhonePortraitTabletAny(this)
         super.onCreate(savedInstanceState)
+        EdgeToEdgeHelper.apply(this)
         returnMainOnDismiss = intent.getBooleanExtra(EXTRA_RETURN_MAIN_ON_DISMISS, false)
         val callIdFromIntent = intent.getStringExtra(EXTRA_CALL_ID) ?: ""
         // FCM call_canceled может запустить активность с флагом «только закрыть» (приложение в фоне/убито — broadcast не дошёл)
@@ -133,6 +134,7 @@ class IncomingCallActivity : AppCompatActivity() {
         }
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD or WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED)
         setContentView(R.layout.activity_incoming_call)
+        findViewById<View>(R.id.incoming_call_content)?.let { EdgeToEdgeHelper.applySystemBarInsets(it) }
         // Пауза + transient media focus на время входящего/звонка (рингтон остаётся на STREAM_RING).
         window?.decorView?.post {
             try {

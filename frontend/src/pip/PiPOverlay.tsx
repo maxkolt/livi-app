@@ -38,6 +38,7 @@ import {
   iconNameForRoute,
   type InCallAudioRoute,
 } from '../../components/VideoChat/hooks/audioRouteTypes';
+import { t, loadLang, defaultLang, type Lang } from '../../utils/i18n';
 
 const PIP_BAR_H = 58;
 const PIP_BAR_RADIUS = PIP_BAR_H / 2;
@@ -118,6 +119,17 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
   const isMuted = ctx?.isMuted ?? false;
   const [localMicMuted, setLocalMicMuted] = useState(isMuted);
   const [pipAudioRoute, setPipAudioRoute] = useState<InCallAudioRoute>('EARPIECE');
+  const [lang, setLang] = useState<Lang>(defaultLang);
+
+  useEffect(() => {
+    let cancelled = false;
+    void loadLang().then((next) => {
+      if (!cancelled) setLang(next);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [visible]);
 
   useEffect(() => {
     if (!visible) return;
@@ -207,21 +219,13 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
   const pipAudioRouteIconColor = pipAudioRouteHighlight ? pipRouteAccent.softText : chrome.icon;
   const pipAudioRouteIcon = iconNameForRoute(pipAudioRoute);
 
-  const pipAudioRouteToggleBusyRef = useRef(false);
-
   const toggleAudioOutputRoute = useCallback(() => {
-    if (pipAudioRouteToggleBusyRef.current) return;
-    pipAudioRouteToggleBusyRef.current = true;
     void (async () => {
-      try {
-        const next = await toggleInAppPiPAudioOutputRoute();
-        if (next) {
-          setPipAudioRoute(next);
-        } else {
-          setPipAudioRoute(readInAppPiPAudioOutputRoute());
-        }
-      } finally {
-        pipAudioRouteToggleBusyRef.current = false;
+      const next = await toggleInAppPiPAudioOutputRoute();
+      if (next) {
+        setPipAudioRoute(next);
+      } else {
+        setPipAudioRoute(readInAppPiPAudioOutputRoute());
       }
     })();
   }, []);
@@ -430,7 +434,7 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
               {showAudioReturnFromVideoPiP ? (
                 <PiPActionButton
                   onPress={returnToAudioFromVideoPiP}
-                  accessibilityLabel="Вернуться в аудиозвонок"
+                  accessibilityLabel={t('returnToAudioCallA11y', lang)}
                   chrome={chrome}
                 >
                   <MaterialCommunityIcons name="phone-in-talk" size={PIP_ICON_SIZE} color={chrome.icon} />
@@ -438,7 +442,11 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
               ) : null}
               <PiPActionButton
                 onPress={returnToCallFromPiP}
-                accessibilityLabel={pipFromAudioOnly ? 'Вернуться в аудиозвонок' : 'Вернуться в видеозвонок'}
+                accessibilityLabel={
+                  pipFromAudioOnly
+                    ? t('returnToAudioCallA11y', lang)
+                    : t('returnToVideoCall', lang)
+                }
                 chrome={chrome}
                 active={pipVideoReturnHighlight}
                 activeAccent={accent}
@@ -456,7 +464,7 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
               {pipFromAudioOnly ? (
                 <PiPActionButton
                   onPress={openVideoCallFromAudioPiP}
-                  accessibilityLabel="Вернуться в видеозвонок"
+                  accessibilityLabel={t('returnToVideoCall', lang)}
                   chrome={chrome}
                 >
                   <MaterialIcons name="videocam" size={PIP_ICON_SIZE} color={chrome.icon} />
@@ -464,7 +472,7 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
               ) : null}
               <PiPActionButton
                 onPress={toggleAudioOutputRoute}
-                accessibilityLabel="Переключить динамик"
+                accessibilityLabel={t('toggleSpeaker', lang)}
                 chrome={chrome}
                 active={pipAudioRouteHighlight}
                 activeAccent={pipAudioRouteHighlight ? pipRouteAccent : undefined}
@@ -483,14 +491,14 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
                   />
                 )}
               </PiPActionButton>
-              <PiPActionButton onPress={toggleMic} accessibilityLabel="Микрофон" chrome={chrome}>
+              <PiPActionButton onPress={toggleMic} accessibilityLabel={t('microphone', lang)} chrome={chrome}>
                 <MaterialIcons
                   name={micIconMuted ? 'mic-off' : 'mic'}
                   size={PIP_ICON_SIZE}
                   color={micIconMuted ? chrome.iconOff : chrome.icon}
                 />
               </PiPActionButton>
-              <PiPActionButton onPress={endCall} accessibilityLabel="Завершить" chrome={chrome} endCall>
+              <PiPActionButton onPress={endCall} accessibilityLabel={t('endCall', lang)} chrome={chrome} endCall>
                 <MaterialIcons name="call-end" size={PIP_ICON_SIZE} color={chrome.endCallBorder} />
               </PiPActionButton>
             </View>

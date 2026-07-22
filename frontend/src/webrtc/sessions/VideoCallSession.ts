@@ -2434,6 +2434,15 @@ export class VideoCallSession extends SimpleEventEmitter {
     return this.isCamOn;
   }
 
+  /** LiveKit reconnect / transient media link drop (for audio-call connecting UI). */
+  isLiveKitReconnecting(): boolean {
+    try {
+      return !!(this.liveKitReconnecting || this.room?.state === 'reconnecting');
+    } catch {
+      return false;
+    }
+  }
+
   /** Локальный UI direct-call: экран «Аудиозвонок» (не video UI / не Home-as-video). */
   private isLocalDirectCallAudioOnlyUi(): boolean {
     try {
@@ -6326,6 +6335,9 @@ export class VideoCallSession extends SimpleEventEmitter {
           partnerUserId: this.partnerUserId,
         });
         this.clearPendingRemoteDisconnectTimer();
+        try {
+          this.emit('livekitReconnecting');
+        } catch {}
       })
       .on(RoomEvent.Reconnected, () => {
         this.liveKitReconnecting = false;
@@ -6350,6 +6362,9 @@ export class VideoCallSession extends SimpleEventEmitter {
         this.refreshCurrentRemoteParticipant(room);
         this.scheduleIceTransportLogging(room, 'reconnected');
         this.clearPendingRemoteDisconnectTimer();
+        try {
+          this.emit('livekitReconnected');
+        } catch {}
         if (
           !this.remoteStream &&
           !this.remoteVideoTrack &&

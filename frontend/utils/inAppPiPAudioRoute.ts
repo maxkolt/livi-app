@@ -1,4 +1,5 @@
 import { Platform } from 'react-native';
+import InCallManager from 'react-native-incall-manager';
 import {
   type InCallAudioRoute,
   isExternalHeadsetRoute,
@@ -20,7 +21,7 @@ import {
   isBluetoothHeadsetActiveForCall,
 } from './nativeCallAudioProbe';
 import {
-  applyCallAudioOutputRouteNow,
+  applyCallAudioOutputRouteLatest,
   armCallAudioPreservePriority,
   cancelScheduledCallAudioRouteReappliesMatching,
   scheduleReapplyPersistedCallAudioRoute,
@@ -36,9 +37,8 @@ export { notifyInAppPiPAudioRouteUi } from './callInAppPiPAudioRouteUi';
 
 const BUILTIN_FALLBACK = ['SPEAKER_PHONE', 'EARPIECE'];
 
-let pipAudioToggleInFlight = false;
 let lastPipAudioToggleAt = 0;
-const PIP_AUDIO_TOGGLE_DEBOUNCE_MS = 480;
+const PIP_AUDIO_TOGGLE_DEBOUNCE_MS = 120;
 
 function readAvailableInCallAudioRoutes(): string[] {
   const icm = readInCallAvailableAudioRoutesForCycle();
@@ -63,14 +63,6 @@ function readAvailableInCallAudioRoutes(): string[] {
     sanitized = sanitized.filter((r) => r !== 'BLUETOOTH');
   }
   return sanitized;
-}
-
-async function syncProbeBeforeCycle(): Promise<void> {
-  if (Platform.OS !== 'android') return;
-  try {
-    const probe = await probeNativeCallAudioRoutes();
-    mergeNativeProbeIntoGlobal(probe);
-  } catch {}
 }
 
 function notifyPiPAudioRouteChanged(route: InCallAudioRoute): void {
@@ -116,23 +108,22 @@ function persistInAppPiPAudioRoute(route: InCallAudioRoute): void {
   } catch {}
 }
 
+function pokeBuiltInSpeakerImmediate(route: InCallAudioRoute): void {
+  if (route !== 'SPEAKER_PHONE' && route !== 'EARPIECE') return;
+  const wantSpeaker = route === 'SPEAKER_PHONE';
+  try {
+    (InCallManager as any).setForceSpeakerphoneOn?.(wantSpeaker);
+    InCallManager.setSpeakerphoneOn(wantSpeaker);
+  } catch {}
+}
+
 /** In-app PiP: всегда 3 режима (как аудио-страница), не делегировать в video UI (2 режима). */
 export async function toggleInAppPiPAudioOutputRoute(): Promise<InCallAudioRoute | null> {
   const now = Date.now();
-  if (pipAudioToggleInFlight || now - lastPipAudioToggleAt < PIP_AUDIO_TOGGLE_DEBOUNCE_MS) {
+  if (now - lastPipAudioToggleAt < PIP_AUDIO_TOGGLE_DEBOUNCE_MS) {
     return readInAppPiPAudioOutputRoute();
   }
-  pipAudioToggleInFlight = true;
   lastPipAudioToggleAt = now;
-  try {
-    return await toggleInAppPiPAudioOutputRouteInner();
-  } finally {
-    pipAudioToggleInFlight = false;
-  }
-}
-
-async function toggleInAppPiPAudioOutputRouteInner(): Promise<InCallAudioRoute | null> {
-  await syncProbeBeforeCycle();
 
   const available = readAvailableInCallAudioRoutes();
   const icm = readInCallAvailableAudioRoutesForCycle();
@@ -186,16 +177,26 @@ async function toggleInAppPiPAudioOutputRouteInner(): Promise<InCallAudioRoute |
   } else if (isExternalHeadsetRoute(next)) {
     clearCallAudioRouteUiLock();
   }
-  await applyCallAudioOutputRouteNow(next, {
+
+  pokeBuiltInSpeakerImmediate(next);
+  void applyCallAudioOutputRouteLatest(next, {
     media,
     forceBuiltIn: !isExternalHeadsetRoute(next),
+  }).then(() => {
+    scheduleReapplyPersistedCallAudioRoute('in_app_pip_audio_route_toggle', {
+      media,
+      honorUserRoute: true,
+      skipInCallRestart: true,
+      delaysMs: [0],
+    });
   });
-  scheduleReapplyPersistedCallAudioRoute('in_app_pip_audio_route_toggle', {
-    media,
-    honorUserRoute: true,
-    skipInCallRestart: true,
-    delaysMs: [0],
-  });
+
+  if (Platform.OS === 'android') {
+    void probeNativeCallAudioRoutes()
+      .then((probe) => mergeNativeProbeIntoGlobal(probe))
+      .catch(() => {});
+  }
+
   logger.info('[inAppPiPAudioRoute] pip toggle', { from: current, next, media });
   return next;
 }

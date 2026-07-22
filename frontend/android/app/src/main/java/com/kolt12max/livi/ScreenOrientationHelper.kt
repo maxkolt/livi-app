@@ -5,8 +5,11 @@ import android.content.pm.ActivityInfo
 import android.content.res.Configuration
 
 /**
- * Phones stay portrait; tablets (sw >= 600dp or large/xlarge) can rotate freely.
- * Manifest uses unspecified so we can set this per device at runtime.
+ * Phones stay portrait; tablets / large screens (sw >= 600dp) can rotate freely.
+ *
+ * Android 16 (targetSdk 36): on large screens the platform ignores forced orientation /
+ * non-resizable restrictions. We already leave tablets unrestricted, which matches
+ * the new policy and avoids letterboxing on foldables / tablets.
  */
 object ScreenOrientationHelper {
   private const val TABLET_SMALLEST_WIDTH_DP = 600
@@ -20,11 +23,12 @@ object ScreenOrientationHelper {
   }
 
   fun applyPhonePortraitTabletAny(activity: Activity) {
-    activity.requestedOrientation =
-      if (isTablet(activity)) {
-        ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
-      } else {
-        ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-      }
+    // Large-screen devices: leave unrestricted (required behavior when targeting API 36).
+    if (isTablet(activity)) {
+      activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+      return
+    }
+    // Phones: portrait remains valid under API 36 (restrictions are ignored only on large screens).
+    activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
   }
 }

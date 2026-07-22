@@ -57,6 +57,7 @@ class OutgoingCallActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         ScreenOrientationHelper.applyPhonePortraitTabletAny(this)
         super.onCreate(savedInstanceState)
+        EdgeToEdgeHelper.apply(this)
         val closeImmediately = intent.getBooleanExtra(EXTRA_CLOSE_IMMEDIATELY, false)
         Log.d(TAG, "onCreate: closeImmediately=$closeImmediately callId=${intent.getStringExtra(EXTRA_CALL_ID) ?: ""} toUserId=${intent.getStringExtra(EXTRA_TO_USER_ID) ?: ""}")
         // FCM call_declined может запустить активность с флагом «сразу закрыть» (приложение было в фоне/убито — broadcast не дошёл)
@@ -73,6 +74,7 @@ class OutgoingCallActivity : AppCompatActivity() {
         }
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED)
         setContentView(R.layout.activity_outgoing_call)
+        findViewById<View>(R.id.outgoing_call_content)?.let { EdgeToEdgeHelper.applySystemBarInsets(it) }
 
         callId = intent.getStringExtra(EXTRA_CALL_ID) ?: ""
         toUserId = intent.getStringExtra(EXTRA_TO_USER_ID) ?: ""
