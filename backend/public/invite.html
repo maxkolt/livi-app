@@ -126,7 +126,7 @@
             
             <div class="info" style="margin-top: 20px;">
                 <p class="info-text">
-                    После установки приложения откройте эту ссылку снова, чтобы принять приглашение в друзья.
+                    После установки и разрешений в приложении появится запрос на добавление в друзья.
                 </p>
             </div>
         </div>
@@ -151,9 +151,21 @@
             document.getElementById('error').classList.remove('hidden');
         });
         
-        /** Публичная установка LiVi (Android) — то же, что кнопка «Обновить» в приложении. */
-        const PLAY_STORE_ANDROID =
-            'https://play.google.com/store/apps/details?id=com.kolt12max.livi&pcampaignid=web_share';
+        /** Play Store + Install Referrer (invite=code), чтобы после установки открылся диалог дружбы. */
+        function buildPlayStoreUrl(inviteCode) {
+            const referrer = encodeURIComponent('invite=' + inviteCode);
+            return 'https://play.google.com/store/apps/details?id=com.kolt12max.livi&hl=ru&referrer=' + referrer;
+        }
+
+        /** Clipboard fallback, если Install Referrer недоступен. */
+        function stashInviteForInstall(inviteCode) {
+            try {
+                const payload = 'livi-invite:' + inviteCode;
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    navigator.clipboard.writeText(payload).catch(function () {});
+                }
+            } catch (e) {}
+        }
 
         try {
             // Получаем код приглашения из URL
@@ -182,6 +194,7 @@
             // Пытаемся открыть приложение
             const appUrl = `livi://invite/${code}`;
             const fallbackUrl = `https://livi.app/invite/${code}`;
+            const PLAY_STORE_ANDROID = buildPlayStoreUrl(code);
             
             // Определяем платформу
             const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
@@ -189,6 +202,9 @@
             
             document.getElementById('ios-link').href = 'https://apps.apple.com/app/livi';
             document.getElementById('android-link').href = PLAY_STORE_ANDROID;
+            document.getElementById('android-link').addEventListener('click', function () {
+                stashInviteForInstall(code);
+            });
             
             // Пытаемся открыть приложение
             let opened = false;
@@ -267,6 +283,8 @@
             } else if (isAndroid) {
                 // Для Android используем intent:// URL для более надежного открытия
                 // Формат: intent://path#Intent;scheme=scheme;package=package;end
+                // Перед fallback в Play Store кладём код в clipboard + referrer в URL.
+                stashInviteForInstall(code);
                 const intentUrl = `intent://invite/${code}#Intent;scheme=livi;package=com.kolt12max.livi;S.browser_fallback_url=${encodeURIComponent(PLAY_STORE_ANDROID)};end`;
                 
                 console.log('[invite] Attempting to open app on Android:', { intentUrl, appUrl, code });
