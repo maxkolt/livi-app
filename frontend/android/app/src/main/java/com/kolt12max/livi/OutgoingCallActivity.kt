@@ -53,6 +53,8 @@ class OutgoingCallActivity : AppCompatActivity() {
     private var mainReturnScheduledForUserCancel = false
     /** Внутренний переход обратно в MainActivity не должен трактоваться как Home/Recents. */
     private var suppressMoveToBackOnUserLeaveHint = false
+    /** Broadcast/JS могут дернуть close много раз — один finish() на lifetime Activity. */
+    private var finishRequested = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         ScreenOrientationHelper.applyPhonePortraitTabletAny(this)
@@ -232,6 +234,11 @@ class OutgoingCallActivity : AppCompatActivity() {
     }
 
     override fun finish() {
+        if (finishRequested || isFinishing || isDestroyed) {
+            Log.d(TAG, "finish: skip duplicate (requested=$finishRequested isFinishing=$isFinishing)")
+            return
+        }
+        finishRequested = true
         super.finish()
         // Убираем системную анимацию закрытия, чтобы не было "мерцания/уезда" Home
         // при возврате с нативного экрана исходящего вызова.

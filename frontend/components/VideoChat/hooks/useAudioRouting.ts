@@ -586,10 +586,21 @@ export const useAudioRouting = (
       reason === 'in_app_pip_audio_route_toggle' ||
       reason === 'return_to_audio_ui' ||
       reason === 'return_to_audio_ui_sync' ||
-      reason === 'audio_ui_route_cycle';
+      reason === 'audio_ui_route_cycle' ||
+      reason === 'onAudioDeviceChanged_mismatch_repin';
+    // Не поднимать SPEAKER поверх явного EAR (lock / выбор пользователя), кроме ручного cycle/toggle.
+    if (wantSpeaker && !userIntent) {
+      const lock = readCallAudioRouteUiLock();
+      const userSel = readUserSelectedCallAudioRoute();
+      if (lock === 'EARPIECE' || userSel === 'EARPIECE') {
+        wantSpeaker = false;
+      } else if (!mayApplyProductSpeakerRoute('SPEAKER_PHONE')) {
+        wantSpeaker = false;
+      }
+    }
     if (!wantSpeaker && !userIntent) {
       const pinned = resolveAutoAudioBuiltInOrNull();
-      if (pinned === 'SPEAKER_PHONE') {
+      if (pinned === 'SPEAKER_PHONE' && mayApplyProductSpeakerRoute('SPEAKER_PHONE')) {
         wantSpeaker = true;
       }
     }
@@ -623,28 +634,31 @@ export const useAudioRouting = (
     ) {
       return;
     }
+    const route: InCallAudioRoute = coerceProductBuiltinRoute(
+      wantSpeaker ? 'SPEAKER_PHONE' : 'EARPIECE',
+    );
+    const finalWantSpeaker = route === 'SPEAKER_PHONE';
     const now = Date.now();
 
     if (!userIntentBuiltIn) {
       if (
         !force &&
-        lastHardRouteSpeakerRef.current === wantSpeaker &&
+        lastHardRouteSpeakerRef.current === finalWantSpeaker &&
         now - lastHardRouteAtRef.current < MIN_HARD_ROUTE_MS
       ) {
         return;
       }
       if (
         force &&
-        lastHardRouteSpeakerRef.current === wantSpeaker &&
+        lastHardRouteSpeakerRef.current === finalWantSpeaker &&
         now - lastHardRouteAtRef.current < 220
       ) {
         return;
       }
     }
 
-    lastHardRouteSpeakerRef.current = wantSpeaker;
+    lastHardRouteSpeakerRef.current = finalWantSpeaker;
     lastHardRouteAtRef.current = now;
-    const route: InCallAudioRoute = wantSpeaker ? 'SPEAKER_PHONE' : 'EARPIECE';
     lastAppliedRouteRef.current = route;
     setSelectedRoute(route);
     setUserRoute(route, { persist: shouldPersistAppliedRoute(route, reason) });
@@ -652,7 +666,18 @@ export const useAudioRouting = (
     if (Platform.OS === 'android') {
       enqueueInCallOp(async () => {
         try {
-          if (wantSpeaker) {
+          // Повторная проверка: за время очереди пользователь мог сменить режим.
+          const lockNow = readCallAudioRouteUiLock();
+          const userNow = readUserSelectedCallAudioRoute();
+          let applySpeaker = finalWantSpeaker;
+          if (
+            applySpeaker &&
+            (lockNow === 'EARPIECE' || userNow === 'EARPIECE') &&
+            !userIntent
+          ) {
+            applySpeaker = false;
+          }
+          if (applySpeaker) {
             (InCallManager as any).setForceSpeakerphoneOn?.(true);
             InCallManager.setSpeakerphoneOn(true);
             await (InCallManager as any).chooseAudioRoute?.('SPEAKER_PHONE');
@@ -663,13 +688,20 @@ export const useAudioRouting = (
           }
         } catch {}
       });
-      applyNativeSpeakerThrottled(wantSpeaker, userIntentBuiltIn || force, userIntentBuiltIn);
-      logRouteInfo(wantSpeaker ? 'speaker route' : 'earpiece route', { reason, force });
+      applyNativeSpeakerThrottled(
+        finalWantSpeaker,
+        userIntentBuiltIn || force,
+        userIntentBuiltIn,
+      );
+      logRouteInfo(finalWantSpeaker ? 'speaker route' : 'earpiece route', {
+        reason,
+        force,
+      });
       return;
     }
     configureIOSAudioSession();
     try {
-      InCallManager.setSpeakerphoneOn(wantSpeaker);
+      InCallManager.setSpeakerphoneOn(finalWantSpeaker);
     } catch {}
   };
 
@@ -1765,6 +1797,42 @@ export const useAudioRouting = (
                 lastAppliedRouteRef.current = selNorm;
                 setUserRoute(selNorm);
                 setSelectedRoute(selNorm);
+              } else if (
+                Platform.OS === 'android' &&
+                (selNorm === 'EARPIECE' || selNorm === 'SPEAKER_PHONE')
+              ) {
+                // InCallManager на Samsung часто держит SPEAKER после MODE_IN_COMMUNICATION,
+                // пока user/lock уже EAR — сразу дожимаем нужный built-in.
+                const desiredRaw =
+                  readCallAudioRouteUiLock() ||
+                  (getUserRoute() === 'EARPIECE' || getUserRoute() === 'SPEAKER_PHONE'
+                    ? getUserRoute()
+                    : null) ||
+                  readUserSelectedCallAudioRoute();
+                const desired =
+                  desiredRaw === 'EARPIECE' || desiredRaw === 'SPEAKER_PHONE'
+                    ? coerceProductBuiltinRoute(desiredRaw)
+                    : null;
+                if (desired && desired !== selNorm) {
+                  const nowMs = Date.now();
+                  const g = global as any;
+                  const lastRepinAt = Number(g.__audioBuiltinMismatchRepinAtRef?.current || 0);
+                  if (nowMs - lastRepinAt >= 700) {
+                    g.__audioBuiltinMismatchRepinAtRef = { current: nowMs };
+                    routeLog('onAudioDeviceChanged', {
+                      available,
+                      selected,
+                      desired,
+                      reason: 'builtin_mismatch_repin',
+                    });
+                    applyBuiltInOutputRoute(
+                      desired === 'SPEAKER_PHONE',
+                      'onAudioDeviceChanged_mismatch_repin',
+                      true,
+                    );
+                    return;
+                  }
+                }
               }
             }
           } catch {}
