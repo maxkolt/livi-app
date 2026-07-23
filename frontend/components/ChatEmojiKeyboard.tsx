@@ -99,6 +99,19 @@ export default function ChatEmojiKeyboard({
             translation={translation}
             theme={theme}
             disableSafeArea
+            // Пустой search-ряд библиотека рисует локальным StyleSheet (не через styles prop).
+            styles={{
+              container: {
+                borderRadius: 0,
+                borderTopLeftRadius: 0,
+                borderTopRightRadius: 0,
+                borderBottomLeftRadius: 0,
+                borderBottomRightRadius: 0,
+                elevation: 0,
+                shadowOpacity: 0,
+                shadowRadius: 0,
+              },
+            }}
           />
         ) : (
           <View style={styles.stickersPage}>

@@ -29,6 +29,13 @@ import {
  
 import { useSafeAreaInsets, SafeAreaView } from "react-native-safe-area-context";
 import {
+  useGenericKeyboardHandler,
+  useKeyboardContext,
+  KeyboardController,
+  AndroidSoftInputModes,
+} from "react-native-keyboard-controller";
+import { runOnJS } from "react-native-reanimated";
+import {
   PanGestureHandler,
   PinchGestureHandler,
   State,
@@ -374,6 +381,169 @@ export default function ChatScreen({ route, navigation }: Props) {
   } = useChatDialogs();
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [keyboardInset, setKeyboardInset] = useState(0);
+
+  /**
+   * Android edge-to-edge:
+   * - translateY = animatedIME.height × (correctLift / imeH) — одно движение без
+   *   post-settle «падения» (не height+overshoot: иначе в начале dock уезжает вниз);
+   * - spacer = correctLift;
+   * - correctLift из screenY сразу на DidShow; кэш на повторный open с onStart.
+   *
+   * chrome OEM (window≪screen): unlifted = windowH + navInset
+   * flush OEM (window≈screen): unlifted = screenH − statusH
+   */
+  const { animated: keyboardAnimated } = useKeyboardContext();
+  const androidDockRef = useRef<View>(null);
+  const androidImeHeightRef = useRef(0);
+  const androidKeyboardTopYRef = useRef(0);
+  const androidFlushNudgeRef = useRef(0);
+  const androidKeyboardVisibleRef = useRef(false);
+  const androidLastFlushRef = useRef({ imeH: 0, overshoot: 0, correctLift: 0 });
+  const androidLiftRatioAnim = useRef(new Animated.Value(1)).current;
+  const androidDockTranslateY = React.useMemo(
+    () => Animated.multiply(keyboardAnimated.height, androidLiftRatioAnim),
+    [keyboardAnimated.height, androidLiftRatioAnim],
+  );
+
+  const logAndroidImeSnapshot = React.useCallback((tag: string, extra: Record<string, number | string> = {}) => {
+    if (Platform.OS !== 'android') return;
+    const screen = Dimensions.get('screen');
+    const window = Dimensions.get('window');
+    console.log(
+      '[ChatIME]',
+      JSON.stringify({
+        tag,
+        imeH: androidImeHeightRef.current,
+        screenH: Math.round(screen.height),
+        windowH: Math.round(window.height),
+        statusBarH: Math.round(StatusBar.currentHeight || 0),
+        insetTop: Math.round(insets.top),
+        insetBottom: Math.round(insets.bottom),
+        nudge: androidFlushNudgeRef.current,
+        ...extra,
+      }),
+    );
+  }, [insets.bottom, insets.top]);
+
+  const resetAndroidFlushNudge = React.useCallback(() => {
+    // Только активный overshoot-лог; ratio/кэш не трогаем —
+    // при height→0 translateY и так 0, а ratio нужен на следующем open.
+    androidFlushNudgeRef.current = 0;
+  }, []);
+
+  const setAndroidLiftRatio = React.useCallback((imeH: number, correctLift: number, overshoot: number) => {
+    const ratio = imeH > 0 ? Math.min(1, Math.max(0, correctLift / imeH)) : 1;
+    androidFlushNudgeRef.current = overshoot;
+    androidLiftRatioAnim.setValue(ratio);
+    androidLastFlushRef.current = { imeH, overshoot, correctLift };
+    setKeyboardInset(correctLift);
+    return ratio;
+  }, [androidLiftRatioAnim]);
+
+  /** Сразу выставить ratio+spacer — без таймеров/measure. */
+  const applyAndroidDockFlush = React.useCallback((source: string) => {
+    if (Platform.OS !== 'android') return;
+    const sy = androidKeyboardTopYRef.current;
+    const imeH = androidImeHeightRef.current;
+    if (sy <= 0 || imeH <= 0) return;
+
+    const screenH = Math.round(Dimensions.get('screen').height);
+    const windowH = Math.round(Dimensions.get('window').height);
+    const statusH = Math.max(0, Math.round(StatusBar.currentHeight || insets.top || 0));
+    const insetBottom = Math.max(0, Math.round(insets.bottom));
+    const chrome = Math.max(0, screenH - windowH);
+    // Закрытый dock: chrome-устройства — на window+nav; flush — на screen−status.
+    const unliftedBottom = chrome > 8 ? windowH + insetBottom : Math.max(0, screenH - statusH);
+    const targetBottom = Math.max(0, sy - statusH);
+    const correctLift = Math.max(0, unliftedBottom - targetBottom);
+    const overshoot = Math.max(0, imeH - correctLift);
+    const ratio = setAndroidLiftRatio(imeH, correctLift, overshoot);
+
+    logAndroidImeSnapshot('flush:predict', {
+      source,
+      screenY: sy,
+      statusH,
+      chrome,
+      unliftedBottom,
+      targetBottom,
+      correctLift,
+      overshoot,
+      ratio: Math.round(ratio * 1000) / 1000,
+    });
+  }, [insets.bottom, insets.top, logAndroidImeSnapshot, setAndroidLiftRatio]);
+
+  /** Повторное открытие: тот же ratio с первого кадра анимации. */
+  const applyCachedAndroidFlush = React.useCallback((imeH: number) => {
+    const last = androidLastFlushRef.current;
+    if (last.imeH <= 0 || last.correctLift <= 0) return false;
+    if (Math.abs(last.imeH - imeH) > 32) return false;
+    const overshoot =
+      last.imeH === imeH
+        ? last.overshoot
+        : Math.max(0, Math.round(last.overshoot * (imeH / last.imeH)));
+    const correctLift = Math.max(0, imeH - overshoot);
+    const ratio = setAndroidLiftRatio(imeH, correctLift, overshoot);
+    logAndroidImeSnapshot('flush:cache', {
+      imeH,
+      overshoot,
+      correctLift,
+      ratio: Math.round(ratio * 1000) / 1000,
+    });
+    return true;
+  }, [logAndroidImeSnapshot, setAndroidLiftRatio]);
+
+  const syncAndroidImeMeta = React.useCallback((height: number, phase: 'start' | 'end' | 'hide') => {
+    if (Platform.OS !== 'android') return;
+    const h = Math.max(0, Math.round(Number(height) || 0));
+    androidImeHeightRef.current = h;
+
+    if (phase === 'hide' || h <= 0) {
+      androidKeyboardTopYRef.current = 0;
+      androidKeyboardVisibleRef.current = false;
+      resetAndroidFlushNudge();
+      setKeyboardVisible(false);
+      setKeyboardInset(0);
+      return;
+    }
+
+    androidKeyboardVisibleRef.current = true;
+    setKeyboardVisible(true);
+
+    if (androidKeyboardTopYRef.current > 0) {
+      applyAndroidDockFlush(phase);
+      return;
+    }
+    if (phase === 'start' && applyCachedAndroidFlush(h)) {
+      return;
+    }
+    // screenY ещё нет — временно полный imeH (DidShow сразу поправит ratio).
+    setKeyboardInset((prev) => (h > prev ? h : prev));
+  }, [applyAndroidDockFlush, applyCachedAndroidFlush, resetAndroidFlushNudge]);
+
+  useGenericKeyboardHandler(
+    {
+      onStart: (e) => {
+        'worklet';
+        // Не сбрасываем ratio на старте — иначе mid-flight скачок после predict.
+        runOnJS(syncAndroidImeMeta)(e.height, 'start');
+      },
+      onEnd: (e) => {
+        'worklet';
+        runOnJS(syncAndroidImeMeta)(e.height, 'end');
+      },
+    },
+    [syncAndroidImeMeta],
+  );
+
+  // Только ADJUST_NOTHING: иначе Sticky-высота + resize окна = щель над клавиатурой.
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    KeyboardController.setInputMode(AndroidSoftInputModes.SOFT_INPUT_ADJUST_NOTHING);
+    return () => {
+      KeyboardController.setDefaultMode();
+    };
+  }, []);
+
   const composerTextInputMaxHeight = 76;
   // Android: до первого onLayout — оценка нижней панели (после более низкого инпута).
   // Не завышать: иначе ListHeader spacer держит лишний зазор до последнего сообщения.
@@ -383,6 +553,11 @@ export default function ChatScreen({ route, navigation }: Props) {
   const messageTextRef = useRef("");
   messageTextRef.current = messageText;
   const [emojiPanelOpen, setEmojiPanelOpen] = useState(false);
+  useEffect(() => {
+    if (!emojiPanelOpen) return;
+    androidKeyboardTopYRef.current = 0;
+    resetAndroidFlushNudge();
+  }, [emojiPanelOpen, resetAndroidFlushNudge]);
   const [readStatuses, setReadStatuses] = useState<Record<string, 'sending' | 'delivered' | 'read' | 'failed' | 'sent'>>({});
   const readStatusesRef = useRef(readStatuses);
   readStatusesRef.current = readStatuses;
@@ -658,21 +833,34 @@ export default function ChatScreen({ route, navigation }: Props) {
     try { socket.on('call:declined', clearIncomingTimer); } catch {}
     try { socket.on('call:cancel', clearIncomingTimer); } catch {}
     try { socket.on('call:timeout', clearIncomingTimer); } catch {}
-    const onShow = (event: any) => { 
-      setKeyboardVisible(true); 
+    const onShow = (event: any) => {
       if (Platform.OS === 'android') {
+        const height = Number(event?.endCoordinates?.height || 0);
         const screenY = Number(event?.endCoordinates?.screenY || 0);
-        const screenH = Dimensions.get('screen').height;
-        const fallbackH = Number(event?.endCoordinates?.height || 0);
-        const inset = screenY > 0 ? Math.max(0, screenH - screenY) : Math.max(0, fallbackH);
-        setKeyboardInset(inset);
+        if (screenY > 0) androidKeyboardTopYRef.current = Math.round(screenY);
+        if (height > 0) {
+          androidImeHeightRef.current = Math.round(height);
+          setKeyboardVisible(true);
+        }
+        // Сразу predict — одно движение с IME, без отложенного measure.
+        applyAndroidDockFlush('didShow');
+        // Не scrollToBottom: лента едет translateY вместе с dock — скролл даёт рывок.
+      } else {
+        setKeyboardVisible(true);
+        const height = Number(event?.endCoordinates?.height || 0);
+        if (height > 0) setKeyboardInset(Math.round(height));
+        scheduleScrollToBottom(0);
       }
-      scheduleScrollToBottom(0); 
     };
-    const onHide = () => { 
-      setKeyboardVisible(false); 
-      setKeyboardInset(0);
-      scheduleScrollToBottom(0); 
+    const onHide = () => {
+      if (Platform.OS === 'android') {
+        syncAndroidImeMeta(0, 'hide');
+        // Без scrollToBottom — лента возвращается translateY вместе с dock.
+      } else {
+        setKeyboardVisible(false);
+        setKeyboardInset(0);
+        scheduleScrollToBottom(0);
+      }
     };
     const onWillShow = (event: any) => { 
       setKeyboardVisible(true); 
@@ -693,7 +881,7 @@ export default function ChatScreen({ route, navigation }: Props) {
       Keyboard.addListener('keyboardDidHide', onHide),       // Android
     ];
     return () => { subs.forEach(s => s.remove()); offClose?.(); try { socket.off('call:timeout', forceClose); } catch {}; try { socket.off('call:declined', forceClose); } catch {}; try { socket.off('call:cancel', forceClose); } catch {}; try { socket.off('call:incoming', onIncoming); } catch {}; try { socket.off('call:accepted', clearIncomingTimer); } catch {}; try { socket.off('call:declined', clearIncomingTimer); } catch {}; try { socket.off('call:cancel', clearIncomingTimer); } catch {}; try { socket.off('call:timeout', clearIncomingTimer); } catch {}; clearIncomingTimer(); };
-  }, []);
+  }, [applyAndroidDockFlush, syncAndroidImeMeta]);
 
   // На любое изменение количества сообщений — прижать вниз.
   // Android: делаем дополнительный проход после layout нового пузыря,
@@ -706,20 +894,22 @@ export default function ChatScreen({ route, navigation }: Props) {
     }
   }, [messages.length]);
 
-  // Фактический подъём панели над клавиатурой:
-  // lift = keyboardInset - (на сколько система уже ужала контейнер)
+  // Android: композер (+ emoji) в одном dock; IME — Animated translateY из KeyboardProvider.
   const systemResizeDelta =
     Platform.OS === 'ios' && keyboardVisible
       ? Math.max(0, baseRootLayoutHRef.current - rootLayoutH)
       : 0;
-  // Android: в манифесте уже включён adjustResize, поэтому ручной подъём списка/инпута
-  // только добавляет лишний layout-pass и визуальное мигание FlatList.
   const keyboardLift =
     Platform.OS === 'android'
       ? 0
       : (keyboardVisible ? Math.max(0, keyboardInset - systemResizeDelta) : 0);
 
   const composerBottomLift = emojiPanelOpen ? CHAT_EMOJI_PANEL_HEIGHT : keyboardLift;
+  // Android: IME-подъём ленты — тем же animated translateY, что и dock (не через
+  // мгновенный keyboardInset в spacer — иначе облака резко «прыгают» вверх).
+  const androidKeyboardPad = emojiPanelOpen
+    ? CHAT_EMOJI_PANEL_HEIGHT + Math.max(0, insets.bottom)
+    : 0;
 
   const GapCenterIndicator = shouldShowChatGapCenter(peerActivity, forwardToast, lang) ? (
     <ChatGapCenterIndicator
@@ -1866,12 +2056,8 @@ export default function ChatScreen({ route, navigation }: Props) {
   const handleRootLayout = React.useCallback((e: any) => {
     const h = Math.max(0, Math.round(Number(e?.nativeEvent?.layout?.height || 0)));
     if (!h) return;
-    if (Platform.OS === 'android') {
-      if (!keyboardVisible) {
-        baseRootLayoutHRef.current = h;
-      }
-      return;
-    }
+    // Android тоже: нужен rootLayoutH, чтобы systemResizeDelta корректно
+    // вычитал остаточный adjustResize при edge-to-edge.
     if (Math.abs(rootLayoutH - h) > 1) {
       setRootLayoutH(h);
     }
@@ -1890,18 +2076,56 @@ export default function ChatScreen({ route, navigation }: Props) {
   // не пересоздавался каждые ~420ms (анимация точек) — иначе FlatList перелayout и тапы по отправке теряются.
   // Не вычитаем старый CHAT_TYPING_GAP_H: typing уже overlay — иначе облака проваливаются в paddingTop инпута.
   const resolvedInputBarH = inputHeight > 0 ? inputHeight : estimatedInputHeight;
-  const androidSpacerH = Math.max(72, resolvedInputBarH + composerBottomLift + 10);
+  const androidSpacerH = Math.max(72, resolvedInputBarH + androidKeyboardPad + 10);
   const androidListHeader = React.useMemo(() => {
     if (isEmpty) return null;
+    // Без key={height}: иначе при каждом скачке keyboardInset FlatList remount header → мерцание.
     return (
       <View
-        key={`chat-spacer-${androidSpacerH}`}
         collapsable={false}
         pointerEvents="none"
         style={{ height: androidSpacerH }}
       />
     );
   }, [isEmpty, androidSpacerH]);
+
+  // Центр видимой области сообщений (над композером), не всего экрана.
+  const chatEmptyFeedPlaceholder = React.useMemo(() => {
+    if (!showEmpty) return null;
+    return (
+      <View
+        pointerEvents="none"
+        style={{
+          position: 'absolute',
+          left: 0,
+          right: 0,
+          top: 0,
+          bottom: Platform.OS === 'android' ? androidSpacerH : 0,
+          justifyContent: 'center',
+          alignItems: 'center',
+          paddingHorizontal: 28,
+          zIndex: 1,
+        }}
+      >
+        <Ionicons
+          name="chatbubble-outline"
+          size={64}
+          color={isDark ? 'rgba(255,255,255,0.65)' : 'rgba(0,0,0,0.55)'}
+        />
+        <Text
+          style={{
+            color: isDark ? 'rgba(255,255,255,0.65)' : 'rgba(0,0,0,0.55)',
+            fontSize: 18,
+            marginTop: 16,
+            textAlign: 'center',
+            fontWeight: '500',
+          }}
+        >
+          Начните общение с {peerNameParam}
+        </Text>
+      </View>
+    );
+  }, [showEmpty, androidSpacerH, isDark, peerNameParam]);
 
   const renderMessageRow = React.useCallback(
     ({ item }: { item: ChatListRow }) => {
@@ -2069,6 +2293,7 @@ export default function ChatScreen({ route, navigation }: Props) {
             behavior="padding"
             keyboardVerticalOffset={0}
           >
+            <View style={{ flex: 1 }}>
             <FlatList
               ref={flatListRef}
               data={iosChatListData}
@@ -2108,37 +2333,11 @@ export default function ChatScreen({ route, navigation }: Props) {
                     </View>
                   );
                 }
-                if (!showEmpty) return null;
-                return (
-                  <View
-                    style={{
-                      flex: 1,
-                      justifyContent: 'center',
-                      alignItems: 'center',
-                      backgroundColor: 'transparent',
-                      ...(Platform.OS === 'ios' ? {} : { transform: [{ scaleY: -1 }] }),
-                    }}
-                  >
-                    <Ionicons
-                      name="chatbubble-outline"
-                      size={64}
-                      color={isDark ? 'rgba(255,255,255,0.30)' : 'rgba(0,0,0,0.30)'}
-                    />
-                    <Text
-                      style={{
-                        color: isDark ? 'rgba(255,255,255,0.65)' : 'rgba(0,0,0,0.55)',
-                        fontSize: 18,
-                        marginTop: 16,
-                        textAlign: 'center',
-                        fontWeight: '500',
-                      }}
-                    >
-                      Начните общение с {peerNameParam}
-                    </Text>
-                  </View>
-                );
+                return null;
               }}
             />
+            {chatEmptyFeedPlaceholder}
+            </View>
             {DeleteToastInline ? (
               <View pointerEvents="none" style={{ alignItems: 'center', paddingTop: 8, paddingBottom: 8 }}>
                 {DeleteToastInline}
@@ -2426,9 +2625,15 @@ export default function ChatScreen({ route, navigation }: Props) {
             </View>
           </KeyboardAvoidingView>)
         ) : (
-          // Android: полагаемся на adjustResize (MainActivity windowSoftInputMode=adjustResize)
-          (<View style={{ flex: 1 }}>
-            {/** Если система уже "ужала" окно, поднимаем только остаток (без двойного подъёма). */}
+          // Android: edge-to-edge — composer через IME translateY (KeyboardProvider).
+          (<View style={{ flex: 1, overflow: 'hidden' }}>
+            {/** Лента + оверлеи едут тем же translateY, что dock — без скачка spacer. */}
+            <Animated.View
+              style={[
+                { flex: 1 },
+                emojiPanelOpen ? null : { transform: [{ translateY: androidDockTranslateY }] },
+              ]}
+            >
             <FlatList
               ref={flatListRef}
               data={androidChatListData}
@@ -2468,36 +2673,10 @@ export default function ChatScreen({ route, navigation }: Props) {
                     </View>
                   );
                 }
-                if (!showEmpty) return null;
-                return (
-                  <View
-                    style={{
-                      flex: 1,
-                      justifyContent: 'center',
-                      alignItems: 'center',
-                      backgroundColor: 'transparent',
-                    }}
-                  >
-                    <Ionicons
-                      name="chatbubble-outline"
-                      size={64}
-                      color={isDark ? 'rgba(255,255,255,0.30)' : 'rgba(0,0,0,0.30)'}
-                    />
-                    <Text
-                      style={{
-                        color: isDark ? 'rgba(255,255,255,0.30)' : 'rgba(0,0,0,0.30)',
-                        fontSize: 18,
-                        marginTop: 16,
-                        textAlign: 'center',
-                        fontWeight: '500',
-                      }}
-                    >
-                      Начните общение с {peerNameParam}
-                    </Text>
-                  </View>
-                );
+                return null;
               }}
             />
+            {chatEmptyFeedPlaceholder}
             {DeleteToastInline ? (
               <View
                 pointerEvents="none"
@@ -2505,7 +2684,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                   position: 'absolute',
                   left: 0,
                   right: 0,
-                  bottom: composerBottomLift + (inputHeight > 0 ? inputHeight : 96) + 8,
+                  bottom: androidKeyboardPad + (inputHeight > 0 ? inputHeight : 96) + 8,
                   alignItems: 'center',
                   zIndex: 8,
                   elevation: 8,
@@ -2523,7 +2702,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                   left: 0,
                   right: 0,
                   bottom:
-                    composerBottomLift +
+                    androidKeyboardPad +
                     Math.max(inputHeight > 0 ? inputHeight : estimatedInputHeight, 72) +
                     4,
                   alignItems: 'center',
@@ -2534,49 +2713,36 @@ export default function ChatScreen({ route, navigation }: Props) {
                 {GapCenterIndicator}
               </View>
             ) : null}
+            </Animated.View>
 
-            {emojiPanelOpen ? (
-              <View
-                style={{
+            {/* Android: инпут и смайлы в одной колонке. IME translateY + predict flush. */}
+            <Animated.View
+              ref={androidDockRef}
+              collapsable={false}
+              style={[
+                {
                   position: 'absolute',
                   left: 0,
                   right: 0,
                   bottom: 0,
-                  height: CHAT_EMOJI_PANEL_HEIGHT,
-                  zIndex: 15,
-                  elevation: 15,
-                  backgroundColor: INPUT_BAR_BG,
-                  borderTopWidth: BORDER_WIDTH,
-                  borderTopColor: BORDER_COLOR,
-                }}
-              >
-                <ChatEmojiKeyboard
-                  isDark={isDark}
-                  surfaceBg={INPUT_BAR_BG}
-                  textColor={LIVI.text}
-                  langCode={lang}
-                  onEmojiSelected={handleComposerEmojiSelected}
-                  onStickerSelected={handleComposerStickerSelected}
-                />
-              </View>
-            ) : null}
-            {/* Поле ввода для Android: поднимаем над клавиатурой, если система не ресайзит окно */}
+                  zIndex: 20,
+                  elevation: 20,
+                },
+                // При in-app emoji нельзя оставлять IME translateY: dismiss ещё крутит height → щель.
+                emojiPanelOpen ? null : { transform: [{ translateY: androidDockTranslateY }] },
+              ]}
+            >
             <View
               style={{
-                position: 'absolute',
-                left: 0,
-                right: 0,
-                bottom: composerBottomLift,
-                zIndex: 20,
-                elevation: 20,
                 borderTopWidth: BORDER_WIDTH,
                 borderTopColor: BORDER_COLOR,
                 backgroundColor: INPUT_BAR_BG,
                 paddingHorizontal: 16,
                 paddingTop: voiceIsRecording ? 8 : 18,
-                // Когда клавиатура открыта — панель должна "стыковаться" с клавиатурой без зазора.
-                // Когда клавиатура скрыта — добавляем safe-area снизу, чтобы не упираться в навигацию.
-                paddingBottom: 18 + (keyboardVisible ? 0 : Math.max(0, insets.bottom)),
+                // Смайлы снизу уже закрывают nav — insets.bottom только когда dock у края экрана.
+                paddingBottom:
+                  18 +
+                  (keyboardVisible || emojiPanelOpen ? 0 : Math.max(0, insets.bottom)),
               }}
               onLayout={handleInputBarLayout}
             >
@@ -2819,6 +2985,26 @@ export default function ChatScreen({ route, navigation }: Props) {
                 </TouchableOpacity>
               </View>
             </View>
+            {emojiPanelOpen ? (
+              <View
+                style={{
+                  backgroundColor: INPUT_BAR_BG,
+                  borderTopWidth: BORDER_WIDTH,
+                  borderTopColor: BORDER_COLOR,
+                  paddingBottom: Math.max(0, insets.bottom),
+                }}
+              >
+                <ChatEmojiKeyboard
+                  isDark={isDark}
+                  surfaceBg={INPUT_BAR_BG}
+                  textColor={LIVI.text}
+                  langCode={lang}
+                  onEmojiSelected={handleComposerEmojiSelected}
+                  onStickerSelected={handleComposerStickerSelected}
+                />
+              </View>
+            ) : null}
+            </Animated.View>
           </View>)
         )}
         </View>

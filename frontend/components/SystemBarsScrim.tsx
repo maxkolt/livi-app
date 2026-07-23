@@ -1,5 +1,5 @@
-import React from 'react';
-import { Platform, StyleSheet, View } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { Keyboard, Platform, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 /** Matches android colors.xml navigationBarColor / expo-navigation-bar (#B3000000). */
@@ -9,9 +9,23 @@ const SCRIM = 'rgba(0, 0, 0, 0.7)';
  * Edge-to-edge (targetSdk 36): system bar colors are ignored by the OS.
  * Draw translucent black strips over the status bar and nav / gesture inset
  * so icons stay readable against scrolling content.
+ *
+ * Hide the bottom scrim while the IME is open — otherwise on some OEMs it
+ * shows as a black seam between the chat composer and the keyboard.
  */
 export default function SystemBarsScrim() {
   const insets = useSafeAreaInsets();
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
+
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    const show = Keyboard.addListener('keyboardDidShow', () => setKeyboardVisible(true));
+    const hide = Keyboard.addListener('keyboardDidHide', () => setKeyboardVisible(false));
+    return () => {
+      show.remove();
+      hide.remove();
+    };
+  }, []);
 
   if (Platform.OS !== 'android') return null;
 
@@ -23,7 +37,7 @@ export default function SystemBarsScrim() {
           style={[styles.scrim, styles.top, { height: insets.top }]}
         />
       ) : null}
-      {insets.bottom > 0 ? (
+      {!keyboardVisible && insets.bottom > 0 ? (
         <View
           pointerEvents="none"
           style={[styles.scrim, styles.bottom, { height: insets.bottom }]}

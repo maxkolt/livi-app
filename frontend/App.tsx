@@ -5,6 +5,7 @@ import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { Provider as PaperProvider } from "react-native-paper";
 import { Platform } from "react-native";
 import { SafeAreaProvider, useSafeAreaInsets } from "react-native-safe-area-context";
+import { KeyboardProvider } from "react-native-keyboard-controller";
 import * as NavigationBar from "expo-navigation-bar";
 import { NavigationContainer, createNavigationContainerRef, CommonActions, DefaultTheme } from "@react-navigation/native";
 import { ThemeProvider, useAppTheme } from "./theme/ThemeProvider";
@@ -4209,12 +4210,15 @@ export default function App() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider initialSafeAreaInsets={defaultSafeAreaInsets}>
-        <ThemeProvider>
-          <PiPProvider onReturnToCall={navigateToCall} onEndCall={endCallImpl}>
-            <AppContent />
-          </PiPProvider>
-          <SystemBarsScrim />
-        </ThemeProvider>
+        {/* IME WindowInsets for chat; isEdgeToEdge() auto-enables translucent system bars. */}
+        <KeyboardProvider>
+          <ThemeProvider>
+            <PiPProvider onReturnToCall={navigateToCall} onEndCall={endCallImpl}>
+              <AppContent />
+            </PiPProvider>
+            <SystemBarsScrim />
+          </ThemeProvider>
+        </KeyboardProvider>
       </SafeAreaProvider>
     </GestureHandlerRootView>
   );
