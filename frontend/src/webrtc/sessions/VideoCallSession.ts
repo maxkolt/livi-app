@@ -1487,12 +1487,15 @@ export class VideoCallSession extends SimpleEventEmitter {
     const audioFirstCall =
       !!this.config.startWithCamOff ||
       (cidForMedia ? getCallMediaHint(cidForMedia) === 'audio' : false);
+    const stayOnVideoUi = (global as any).__stayOnVideoCallUiRef?.current === true;
+    // stayOnVideoUi достаточно: после in-app PiP userExpand могут сбросить как stale,
+    // но пользователь всё ещё на video UI и должен мочь снова включить камеру.
     const userLeftAudioOnlyForVideo =
       enabled &&
       this.config.getIsDirectCall?.() &&
       !isInAudioOnlyCallUi() &&
-      (global as any).__stayOnVideoCallUiRef?.current === true &&
-      (!audioFirstCall || isDirectCallUserRequestedVideoExpand());
+      stayOnVideoUi &&
+      (!audioFirstCall || isDirectCallUserRequestedVideoExpand() || stayOnVideoUi);
     if (
       enabled &&
       this.config.getIsDirectCall?.() &&
@@ -1501,13 +1504,19 @@ export class VideoCallSession extends SimpleEventEmitter {
         isInAudioOnlyCallUi() ||
         this.directCallAudioOnlyConsumerDefer)
     ) {
-      logger.debug('[VideoCallSession] Skip camera enable — direct-call audio-only UI');
+      logger.warn('[VideoCallSession] Skip camera enable — direct-call audio-only UI', {
+        stayOnVideoUi,
+        userExpand: isDirectCallUserRequestedVideoExpand(),
+        audioFirstCall,
+        defer: this.directCallAudioOnlyConsumerDefer,
+      });
       return;
     }
     if (enabled && this.config.getIsDirectCall?.() && !userLeftAudioOnlyForVideo) {
-      if (audioFirstCall && !isDirectCallUserRequestedVideoExpand()) {
-        logger.debug(
+      if (audioFirstCall && !isDirectCallUserRequestedVideoExpand() && !stayOnVideoUi) {
+        logger.warn(
           '[VideoCallSession] Skip camera enable — audio-first call without explicit video UI request',
+          { stayOnVideoUi, userExpand: isDirectCallUserRequestedVideoExpand() },
         );
         return;
       }
@@ -2417,6 +2426,9 @@ export class VideoCallSession extends SimpleEventEmitter {
 
   private isDirectCallAudioFirstWithoutUserVideo(): boolean {
     if (!this.config.getIsDirectCall?.()) return false;
+    try {
+      if ((global as any).__stayOnVideoCallUiRef?.current === true) return false;
+    } catch {}
     const cid = String(this.getCallId?.() || this.callId || '').trim();
     const audioFirst =
       !!this.config.startWithCamOff ||
@@ -2447,9 +2459,9 @@ export class VideoCallSession extends SimpleEventEmitter {
   private isLocalDirectCallAudioOnlyUi(): boolean {
     try {
       const g = global as any;
-      if (g.__preferAudioOnlyUiOnNextVideoCallRef?.current === true) return true;
-      // Пользователь на video UI (кнопка «видео»): не держать audio-only по startWithCamOff / callMedia hint.
+      // Как isInAudioOnlyCallUi: stayOnVideo побеждает stale preferAudioOnly после PiP return.
       if (g.__stayOnVideoCallUiRef?.current === true) return false;
+      if (g.__preferAudioOnlyUiOnNextVideoCallRef?.current === true) return true;
       if (g.__inAudioOnlyUiRef?.current === true) return true;
       if (g.__pipAudioOnlyPlaceholderRef?.current === true) {
         const live =

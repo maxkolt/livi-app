@@ -259,7 +259,13 @@ function stripStaleDirectCallPiPNavParamsIfNeeded(
     audioOnlyPiPReturn: false,
     preferVideoCallUi: false,
   });
+  // Не затираем userExpand, если пользователь уже на video UI (иначе после PiP
+  // повторное включение камеры тихо блокируется audio-first guard'ом).
+  const stayOnVideoUi = (global as any).__stayOnVideoCallUiRef?.current === true;
   clearStaleDirectCallVideoExpandGlobalHints();
+  if (stayOnVideoUi) {
+    markDirectCallUserRequestedVideoExpand();
+  }
 }
 
 function isFreshDirectCallAudioAcceptRoute(params?: {
@@ -4667,10 +4673,21 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
         stayOnVideoCallUiRef.current = true;
       }
       const leavingAudioOnlyUi = inAudioOnlyUiRef.current || isInAudioOnlyCallUi();
-      if (leavingAudioOnlyUi) {
+      // Включаем камеру на уже открытом video UI (в т.ч. после PiP): userExpand могли сбросить как stale.
+      const enablingCam = !camOn;
+      if (enablingCam || leavingAudioOnlyUi) {
         markDirectCallUserRequestedVideoExpand();
-        rememberAudioPageRouteBeforeVideoUi();
         stayOnVideoCallUiRef.current = true;
+        try {
+          const g = global as any;
+          g.__preferAudioOnlyUiOnNextVideoCallRef =
+            g.__preferAudioOnlyUiOnNextVideoCallRef || { current: false };
+          g.__preferAudioOnlyUiOnNextVideoCallRef.current = false;
+          if (g.__inAudioOnlyUiRef) g.__inAudioOnlyUiRef.current = false;
+        } catch {}
+      }
+      if (leavingAudioOnlyUi) {
+        rememberAudioPageRouteBeforeVideoUi();
         markDirectCallVideoMediaActive();
         directCallMountAudioUiAppliedRef.current = null;
         directCallPreferVideoExpandAppliedRef.current = null;
@@ -5508,10 +5525,20 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     const audioFirstMount = resolveDirectCallAudioFirst(route?.params ?? {}, mountKey || null);
 
     if (isStaleDirectCallVideoExpandGlobalHint(route?.params ?? {})) {
+      const stayOnVideoUi = g.__stayOnVideoCallUiRef?.current === true;
       clearStaleDirectCallVideoExpandGlobalHints();
+      if (stayOnVideoUi) {
+        markDirectCallUserRequestedVideoExpand();
+      }
     }
     const explicitVideoPiPReturn = isExplicitDirectCallVideoPiPReturnRoute(route?.params ?? {});
-    if (audioFirstMount && !explicitAudioPiPReturn && !explicitVideoPiPReturn) {
+    // Не поднимать audio-only globals, если пользователь уже на video UI (после PiP return).
+    if (
+      audioFirstMount &&
+      !explicitAudioPiPReturn &&
+      !explicitVideoPiPReturn &&
+      g.__stayOnVideoCallUiRef?.current !== true
+    ) {
       g.__preferAudioOnlyUiOnNextVideoCallRef.current = true;
       try {
         if (g.__inAudioOnlyUiRef) g.__inAudioOnlyUiRef.current = true;

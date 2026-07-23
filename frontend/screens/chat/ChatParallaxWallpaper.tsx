@@ -134,8 +134,8 @@ export function ChatParallaxWallpaper({ isDark }: { isDark: boolean }) {
   // cover = весь экран заполнен картинкой (без боковых «линий» от contain).
   const imgW = width + MAX_SHIFT * 2;
   const imgH = height + MAX_SHIFT * 2;
-  const themeWash = isDark ? "rgba(21, 31, 51, 0.72)" : "rgba(182, 203, 216, 0.62)";
-  const themeShade = isDark ? "rgba(8, 12, 20, 0.48)" : "rgba(140, 158, 180, 0.36)";
+  const themeWash = isDark ? "rgba(21, 31, 51, 0.58)" : "rgba(182, 203, 216, 0.58)";
+  const themeShade = isDark ? "rgba(8, 12, 20, 0.36)" : "rgba(140, 158, 180, 0.33)";
 
   return (
     <View
