@@ -31,9 +31,12 @@ object EdgeToEdgeHelper {
       }
     }
 
+    // Keep system bars transparent. On API 35+ bar colors are ignored anyway;
+    // translucent scrims are drawn by RN SystemBarsScrim for a consistent look.
     @Suppress("DEPRECATION")
     run {
       window.statusBarColor = Color.TRANSPARENT
+      window.navigationBarColor = Color.TRANSPARENT
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
         window.isStatusBarContrastEnforced = false
         window.isNavigationBarContrastEnforced = false

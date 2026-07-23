@@ -56,7 +56,8 @@ class MainActivity : ReactActivity() {
 
   /** Закрыть системный PiP при пуше call_ended (endedFromActive): собеседник в PiP не получает call:ended по сокету — пуш доходит, закрываем окно сразу. */
   private var closePipCallEndedReceiver: BroadcastReceiver? = null
-  private var backPressLoggingCallback: OnBackPressedCallback? = null
+  /** Forwards system Back into React Native (JS BackHandler). */
+  private var reactBackCallback: OnBackPressedCallback? = null
   /** Был intent с EXTRA_PENDING_ANSWER_* — в onResume шлём LiviPendingAnswerCall (один раз на доставку). */
   private var pendingAnswerFromIntent = false
   /** Был ACTION_SEND — в onResume шлём LiviPendingShare. */
@@ -689,22 +690,23 @@ class MainActivity : ReactActivity() {
     // targetSdk 36: edge-to-edge is enforced; RN SafeAreaProvider pads content.
     EdgeToEdgeHelper.apply(this)
     registerHomeKeyForSystemPiPReceiver()
-    if (backPressLoggingCallback == null) {
-      backPressLoggingCallback = object : OnBackPressedCallback(true) {
+    // targetSdk 36 / predictive back: dispatcher can finish the Activity without ever calling
+    // ReactActivity.onBackPressed() → JS BackHandler never runs → app minimizes/closes.
+    // Forward Back into RN explicitly; do not re-dispatch via onBackPressedDispatcher.
+    if (reactBackCallback == null) {
+      reactBackCallback = object : OnBackPressedCallback(true) {
         override fun handleOnBackPressed() {
           android.util.Log.i(
             "MainActivity",
-            "System back pressed: route delegated to React Native / activity handler; isInPiP=$isInPictureInPictureMode hasFocus=${window?.decorView?.hasWindowFocus() == true}"
+            "System back → React Native BackHandler; isInPiP=$isInPictureInPictureMode",
           )
-          isEnabled = false
-          try {
-            onBackPressedDispatcher.onBackPressed()
-          } finally {
-            isEnabled = true
-          }
+          // ReactActivity.onBackPressed → DeviceEventManagerModule.emitHardwareBackPressed.
+          // Returns without super when RN is alive; JS may later call invokeDefaultOnBackPressed.
+          @Suppress("DEPRECATION")
+          onBackPressed()
         }
       }
-      onBackPressedDispatcher.addCallback(this, backPressLoggingCallback!!)
+      onBackPressedDispatcher.addCallback(this, reactBackCallback!!)
     }
     // FCM входящий при разблокированном экране (холодный старт) — сохраняем для CallKeep
     if (intent?.action == LiviAppModule.ACTION_INCOMING_CALL_CALLKEEP) {
@@ -845,22 +847,19 @@ class MainActivity : ReactActivity() {
   }
 
   /**
-    * Align the back button behavior with Android S
-    * where moving root activities to background instead of finishing activities.
+    * Align root Back across API levels: always move task to background instead of finish().
+    * Expo template used moveTaskToBack only on ≤ Android 11; on Android 12+ default often
+    * finishes the Activity — one phone minimizes, another looks like the app "closed".
     * @see <a href="https://developer.android.com/reference/android/app/Activity#onBackPressed()">onBackPressed</a>
     */
   override fun invokeDefaultOnBackPressed() {
-      if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.R) {
-          if (!moveTaskToBack(false)) {
-              // For non-root activities, use the default implementation to finish them.
-              super.invokeDefaultOnBackPressed()
-          }
+      if (!isTaskRoot) {
+          super.invokeDefaultOnBackPressed()
           return
       }
-
-      // Use the default back button implementation on Android S
-      // because it's doing more than [Activity.moveTaskToBack] in fact.
-      super.invokeDefaultOnBackPressed()
+      if (!moveTaskToBack(true)) {
+          super.invokeDefaultOnBackPressed()
+      }
   }
 
   private fun handleReturnToActiveCallIntent(intent: Intent?) {

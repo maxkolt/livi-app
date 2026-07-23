@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect } from 'react';
-import { Pressable, View } from 'react-native';
+import { GestureResponderEvent, Pressable, View } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import {
   FRIEND_ACTION_BUTTON,
@@ -14,6 +14,9 @@ import {
   FRIEND_ACTION_ICON_PRESSED,
   LIVI,
 } from './constants';
+
+/** Выше — скролл; ниже — микродрожание пальца при реальном тапе. */
+const SCROLL_MOVE_SLOP = 8;
 
 type FriendRowIconActionButtonProps = {
   icon: 'chat-processing-outline' | 'video' | 'phone-in-talk-outline';
@@ -46,6 +49,8 @@ export function FriendRowIconActionButton({
   const pressStartedAtRef = React.useRef(0);
   const pressHandledRef = React.useRef(false);
   const longPressHandledRef = React.useRef(false);
+  const movedRef = React.useRef(false);
+  const startPageRef = React.useRef({ x: 0, y: 0 });
   const rescueTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const longPressTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const longPressDelay = delayLongPress ?? 500;
@@ -73,8 +78,38 @@ export function FriendRowIconActionButton({
     };
   }, [clearRescueTimer, clearLongPressTimer]);
 
+  const markMoved = useCallback(() => {
+    if (movedRef.current) return;
+    movedRef.current = true;
+    clearRescueTimer();
+    clearLongPressTimer();
+    // Блокируем onPress / rescue — жест стал скроллом.
+    pressHandledRef.current = true;
+  }, [clearRescueTimer, clearLongPressTimer]);
+
+  const onTouchMove = useCallback(
+    (e: GestureResponderEvent) => {
+      if (movedRef.current || pressHandledRef.current) return;
+      const { pageX, pageY } = e.nativeEvent;
+      const dx = Math.abs(pageX - startPageRef.current.x);
+      const dy = Math.abs(pageY - startPageRef.current.y);
+      if (dx > SCROLL_MOVE_SLOP || dy > SCROLL_MOVE_SLOP) {
+        markMoved();
+      }
+    },
+    [markMoved],
+  );
+
   const fireLongPress = useCallback(() => {
-    if (!onLongPress || disabled || longPressHandledRef.current || pressHandledRef.current) return;
+    if (
+      !onLongPress ||
+      disabled ||
+      movedRef.current ||
+      longPressHandledRef.current ||
+      pressHandledRef.current
+    ) {
+      return;
+    }
     clearRescueTimer();
     clearLongPressTimer();
     longPressHandledRef.current = true;
@@ -84,7 +119,7 @@ export function FriendRowIconActionButton({
 
   const runPress = useCallback(() => {
     clearRescueTimer();
-    if (pressHandledRef.current || longPressHandledRef.current) return;
+    if (movedRef.current || pressHandledRef.current || longPressHandledRef.current) return;
     pressHandledRef.current = true;
     onPress?.();
   }, [clearRescueTimer, onPress]);
@@ -96,15 +131,22 @@ export function FriendRowIconActionButton({
       hitSlop={hitSlop}
       pressRetentionOffset={FRIEND_ACTION_PRESS_RETENTION}
       delayLongPress={longPressEnabled ? longPressDelay : undefined}
-      unstable_pressDelay={0}
+      // Даём скроллу шанс перехватить жест до активации press.
+      unstable_pressDelay={48}
       android_disableSound
       android_ripple={null}
-      onPressIn={() => {
+      onTouchMove={onTouchMove}
+      onPressIn={(e) => {
         clearRescueTimer();
         clearLongPressTimer();
-        pressStartedAtRef.current = Date.now();
+        movedRef.current = false;
         pressHandledRef.current = false;
         longPressHandledRef.current = false;
+        pressStartedAtRef.current = Date.now();
+        startPageRef.current = {
+          x: e.nativeEvent.pageX,
+          y: e.nativeEvent.pageY,
+        };
         onPressIn?.();
         if (longPressEnabled) {
           longPressTimerRef.current = setTimeout(fireLongPress, longPressDelay);
@@ -112,9 +154,20 @@ export function FriendRowIconActionButton({
       }}
       onPressOut={() => {
         clearLongPressTimer();
-        if (!rescueMissedPress || !onPress || pressHandledRef.current || longPressHandledRef.current) return;
+        // После скролла Pressable часто глотает onPress, а rescue «дожимал» действие — не делаем так.
+        if (
+          movedRef.current ||
+          !rescueMissedPress ||
+          !onPress ||
+          pressHandledRef.current ||
+          longPressHandledRef.current
+        ) {
+          return;
+        }
         const pressDuration = Date.now() - pressStartedAtRef.current;
         if (longPressEnabled && pressDuration >= longPressDelay - 40) return;
+        // Только короткий неподвижный тап, который Android мог «потерять».
+        if (pressDuration > 220) return;
         rescueTimerRef.current = setTimeout(runPress, 80);
       }}
       onPress={longPressEnabled ? undefined : runPress}
@@ -132,7 +185,7 @@ export function FriendRowIconActionButton({
               borderWidth: 1,
               borderColor: 'rgba(255,255,255,0.08)',
             }
-          : pressed
+          : pressed && !movedRef.current
             ? FRIEND_ACTION_BTN_PRESSED_SURFACE
             : null,
       ]}
@@ -145,7 +198,7 @@ export function FriendRowIconActionButton({
             color={
               inactiveLook
                 ? ANDROID_VIDEO_CALL_DISABLED_ICON
-                : pressed
+                : pressed && !movedRef.current
                   ? FRIEND_ACTION_ICON_PRESSED
                   : LIVI.white
             }

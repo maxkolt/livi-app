@@ -4,7 +4,9 @@
   <color name="iconBackground">#ffffff</color>
   <color name="colorPrimary">#023c69</color>
   <color name="colorPrimaryDark">#0B0B0C</color>
-  <color name="navigationBarColor">#38000000</color>
+  <!-- Reference tint for RN SystemBarsScrim / expo-navigation-bar (edge-to-edge draws via JS). -->
+  <color name="statusBarColor">#B3000000</color>
+  <color name="navigationBarColor">#B3000000</color>
   <!-- Кнопки уведомления входящего звонка -->
   <color name="notification_call_decline">#FF5A67</color>
   <color name="notification_call_accept">#34C759</color>

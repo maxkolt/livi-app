@@ -24,6 +24,7 @@ import InCallManager from 'react-native-incall-manager';
 import { startIncomingCallAlert, stopIncomingCallAlert } from './utils/incomingCallAlert';
 import HomeScreen, { markHomeScreenBootedForSession } from "./screens/HomeScreen";
 import IncomingSharePickerModal from "./components/IncomingSharePickerModal";
+import SystemBarsScrim from "./components/SystemBarsScrim";
 import { PiPProvider, usePiP } from "./src/pip/PiPContext";
 import PiPOverlay from "./src/pip/PiPOverlay";
 import SystemPiPLogoLayer from "./src/pip/SystemPiPLogoLayer";
@@ -1465,12 +1466,12 @@ function AppContent() {
   const wave1 = React.useRef(new Animated.Value(0)).current;
   const wave2 = React.useRef(new Animated.Value(0)).current;
   
-  // Android: только стиль кнопок навбара (светлые/тёмные иконки). Цвет полосы — из app.json (expo-navigation-bar), без setBackgroundColorAsync в рантайме (WARN).
+  // Android: scrim под навбаром всегда тёмный → кнопки всегда светлые (читаемы на light/dark теме).
   React.useEffect(() => {
     if (Platform.OS === 'android') {
-      NavigationBar.setButtonStyleAsync(isDark ? 'light' : 'dark').catch(() => {});
+      NavigationBar.setButtonStyleAsync('light').catch(() => {});
     }
-  }, [isDark]);
+  }, []);
   
   // КРИТИЧНО: Управление яркостью экрана при показе модального окна входящего вызова на Android
   React.useEffect(() => {
@@ -3776,7 +3777,7 @@ function AppContent() {
   return (
     <>
       <StatusBar 
-        barStyle={isDark ? 'light-content' : 'dark-content'} 
+        barStyle={Platform.OS === 'android' || isDark ? 'light-content' : 'dark-content'} 
         translucent={Platform.OS === 'android'}
         backgroundColor={Platform.OS === 'android' ? 'transparent' : undefined}
       />
@@ -4129,20 +4130,38 @@ export default function App() {
     };
   }, []);
 
-  // Android: системный PiP только «Домой». VideoCall Back → in-app PiP в usePiP.
+  // Android: системный Back.
+  // 1) На корне без звонка — false → MainActivity.invokeDefaultOnBackPressed (сворачивание).
+  // 2) Если стек может goBack — всегда goBack (страховка, если экран вернул false).
+  // 3) Активный звонок вне VideoCall — in-app PiP (ниже).
   React.useEffect(() => {
     if (Platform.OS !== 'android') return () => {};
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (!navRef.isReady()) return false;
+
       const pipVisible = (global as any).__pipVisibleRef?.current === true;
       const session = (global as any).__webrtcSessionRef?.current;
       const hasActiveCall = session && typeof session.getRoomId === 'function' && session.getRoomId();
-      if (!pipVisible && !hasActiveCall) return false;
-      if (!navRef.isReady()) return false;
       if ((global as any).__endingCallInProgressRef?.current === true) return false;
+
       const currentRoute = navRef.getCurrentRoute?.()?.name;
       if (currentRoute === 'VideoCall' && hasActiveCall) {
         return false;
       }
+
+      // Страховка для экранов, которые забыли обработать Back (раньше RandomChat отдавал false → свернуть/закрыть).
+      if (!pipVisible && !hasActiveCall) {
+        if (navRef.canGoBack()) {
+          try {
+            navRef.goBack();
+            return true;
+          } catch {
+            return false;
+          }
+        }
+        return false;
+      }
+
       if (navRef.canGoBack()) return false;
 
       if (!hasActiveCall) return false;
@@ -4194,6 +4213,7 @@ export default function App() {
           <PiPProvider onReturnToCall={navigateToCall} onEndCall={endCallImpl}>
             <AppContent />
           </PiPProvider>
+          <SystemBarsScrim />
         </ThemeProvider>
       </SafeAreaProvider>
     </GestureHandlerRootView>

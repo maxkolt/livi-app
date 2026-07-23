@@ -233,10 +233,11 @@ export default function ChatScreen({ route, navigation }: Props) {
     accent: uiAccent(isDark),
   } as const), [theme, isDark]);
 
-  // Светлая шапка → тёмные иконки статус-бара (как стрелка назад / titan).
+  // Android: тёмный scrim status bar → всегда светлые иконки. iOS: по теме / шапке.
   useFocusEffect(
     React.useCallback(() => {
-      const style = isDark ? 'light-content' : 'dark-content';
+      const style =
+        Platform.OS === 'android' || isDark ? 'light-content' : 'dark-content';
       StatusBar.setBarStyle(style, true);
       if (Platform.OS === 'android') {
         try {
@@ -2027,7 +2028,7 @@ export default function ChatScreen({ route, navigation }: Props) {
       edges={Platform.OS === 'android' ? ['top', 'left', 'right'] : ['top', 'bottom', 'left', 'right']}
     >
       <StatusBar
-        barStyle={isDark ? 'light-content' : 'dark-content'}
+        barStyle={Platform.OS === 'android' || isDark ? 'light-content' : 'dark-content'}
         translucent={Platform.OS === 'android'}
         backgroundColor={Platform.OS === 'android' ? 'transparent' : undefined}
       />

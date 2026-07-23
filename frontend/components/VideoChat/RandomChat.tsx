@@ -1336,19 +1336,25 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     };
   }, [remoteStream, localStream, started]);
   
-  // Обработка BackHandler - для рандомного чата закрываем при нажатии назад
+  // Обработка BackHandler — стоп поиска или goBack на Home (не отдавать системе: иначе свернёт/закроет приложение).
   useEffect(() => {
+    if (Platform.OS !== 'android') return;
     const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
       if (started && !isInactiveState) {
-        // Если поиск активен, останавливаем его
         onStartStop();
-        return true; // Предотвращаем закрытие
+        return true;
       }
-      return false; // Разрешаем закрытие
+      try {
+        if (navigation?.canGoBack?.()) {
+          navigation.goBack();
+          return true;
+        }
+      } catch {}
+      return false;
     });
-    
+
     return () => backHandler.remove();
-  }, [started, isInactiveState, onStartStop]);
+  }, [started, isInactiveState, onStartStop, navigation]);
 
   // Cleanup при уходе со страницы
   useFocusEffect(
@@ -1377,7 +1383,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
         <StatusBar
           translucent
           backgroundColor="transparent"
-          barStyle={isDark ? 'light-content' : 'dark-content'}
+          barStyle="light-content"
         />
       )}
       <SafeAreaView 

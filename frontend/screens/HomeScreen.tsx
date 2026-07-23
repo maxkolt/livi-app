@@ -3880,7 +3880,7 @@ const handleClearNick = useCallback(async () => {
         edges={Platform.OS === "android" ? ['top', 'bottom','left','right'] : ['bottom','left','right','top']}
       >
       <StatusBar
-        barStyle={menuOpen || isDark ? 'light-content' : 'dark-content'}
+        barStyle={Platform.OS === 'android' || menuOpen || isDark ? 'light-content' : 'dark-content'}
         translucent={Platform.OS === 'android'}
         backgroundColor={Platform.OS === 'android' ? 'transparent' : undefined}
       />
