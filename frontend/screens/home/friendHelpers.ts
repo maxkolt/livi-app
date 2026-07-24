@@ -70,9 +70,12 @@ export const mapToFriend = (u: any): Friend => {
   };
 };
 
-/** Не залипаем «Занято»: если REST/presence уже сняли busy — доверяем серверу. */
-export function mergeFriendBusyFromFetch(serverBusy: boolean): boolean {
-  return !!serverBusy;
+/** Не залипаем «Занято»: REST после фикса совпадает с presence; не затираем локальный busy ложным false. */
+export function mergeFriendBusyFromFetch(serverBusy: boolean, prevBusy = false): boolean {
+  if (serverBusy) return true;
+  // Пока сервер на старом коде мог вернуть isBusy:false при живом presence busy —
+  // один refresh вкладки не должен сбрасывать бейдж. Снятие — только presence busy:false.
+  return !!prevBusy;
 }
 
 export function cleanPositiveBadgeMap(map: Record<string, number> | null | undefined): Record<string, number> {

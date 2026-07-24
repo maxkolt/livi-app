@@ -183,7 +183,7 @@ export function useHomeFriends({
                 avatarVer: newAvatarVer,
                 avatarThumbB64: finalAvatarThumbB64,
                 online: mergedOnlineCorr,
-                isBusy: mergeFriendBusyFromFetch(!!f.isBusy),
+                isBusy: mergeFriendBusyFromFetch(!!f.isBusy, !!prevOne?.isBusy),
                 isRandomBusy: !!prevOne?.isRandomBusy,
                 inCall: !!prevOne?.inCall,
               } as any;
@@ -218,7 +218,7 @@ export function useHomeFriends({
               avatarVer: newAvatarVer,
               avatarThumbB64: finalAvatarThumbB64,
               online: mergedOnlineMain,
-              isBusy: mergeFriendBusyFromFetch(!!f.isBusy),
+              isBusy: mergeFriendBusyFromFetch(!!f.isBusy, !!prevOne?.isBusy),
               isRandomBusy: !!prevOne?.isRandomBusy,
               inCall: !!prevOne?.inCall,
             } as any;

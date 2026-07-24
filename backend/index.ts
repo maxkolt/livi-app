@@ -1913,13 +1913,19 @@ async function runCallPushRetryCycle(callId: string): Promise<void> {
 }
 
 function socketDataLooksRandomOrQueueBusy(sdata: Record<string, unknown>, uid: string): boolean {
-  if (sdata.inCall === true) return true;
-  if (callOfUser.has(uid) || activeRoomByUserId.has(uid)) return false;
-  if (sdata.partnerSid) return true;
-  if (sdata.busy === true) return true;
   const rid = String(sdata.roomId || '').trim();
-  // room_{socket}_{socket} от рандома — не direct room_{oid}_{oid}
+  // room_{socket}_{socket} / rand_room_* — всегда рандом
   if (rid && !isDirectCallRoomId(rid)) return true;
+  if (sdata.partnerSid) return true;
+  if (sdata.busy === true && !isDirectCallRoomId(rid)) {
+    const entry = callOfUser.get(uid);
+    const link = entry?.callId ? callsById.get(entry.callId) : undefined;
+    // Живой direct (ringing/call) без random-room — не рандом.
+    // Залипший callOfUser без link в callsById не должен маскировать поиск.
+    if (entry?.callId && link && !recentlyEndedCalls.has(entry.callId)) return false;
+    return true;
+  }
+  if (sdata.inCall === true && !isDirectCallRoomId(rid)) return true;
   return false;
 }
 
@@ -1935,14 +1941,15 @@ async function userHasActiveRandomChat(io: Server, userId: string): Promise<bool
   return false;
 }
 
-/** Есть ли у userId хотя бы один сокет в принятом direct-call (inCall + room_*). */
+/** Есть ли у userId хотя бы один сокет в принятом direct-call (inCall + room_{oid}_{oid}). */
 function isUserInLiveDirectCall(io: Server, userId: string): boolean {
   const uid = normalizeMongoObjectId(String(userId || ''));
   if (!isOid(uid)) return false;
   for (const s of getSocketsForUser(io, uid)) {
     if ((s as any)?.data?.inCall !== true) continue;
     const rid = String((s as any)?.data?.roomId || activeCallBySocket.get(s.id) || '');
-    if (rid.startsWith('room_')) return true;
+    // Не путать с рандомным room_{socketId}_{socketId}.
+    if (isDirectCallRoomId(rid)) return true;
   }
   return false;
 }
@@ -2017,10 +2024,18 @@ async function clearStaleDirectCallPresenceForUser(io: Server, userId: string, r
   if (!isOid(uid)) return;
   const pending = activeRoomByUserId.get(uid);
   const peerId = pending?.peerUserId ? normalizeMongoObjectId(String(pending.peerUserId)) : '';
+  // Снимаем только direct-maps. Если юзер в рандоме/очереди — не шлём busy=false друзьям
+  // (иначе loadFriends → reconcile гасит бейдж «Занято» у ищущего собеседника).
+  const stillRandomBusy = await userHasActiveRandomChat(io, uid);
   clearAcceptedCallStateForUser(uid, reason);
+  if (stillRandomBusy) {
+    logger.info('📍 [presence] cleared stale direct maps; keep random busy', { userId: uid, reason });
+    return;
+  }
   lastBroadcastBusyByUserId.set(uid, false);
   await emitPresenceUpdateToFriends(io, uid, false);
   if (peerId && isOid(peerId) && peerId !== uid) {
+    if (await userHasActiveRandomChat(io, peerId)) return;
     lastBroadcastBusyByUserId.set(peerId, false);
     await emitPresenceUpdateToFriends(io, peerId, false);
   }
@@ -2054,17 +2069,25 @@ function isSocketBusyForFriendsExport(
   const busy = d.busy === true;
   const rid = String(d.roomId || '');
   const inDirectOccupancy = callOfUser.has(userId) || activeRoomByUserId.has(userId);
-  // Рандом: очередь (busy) / пара (partnerSid) / room_{socket}_{socket} или rand_room_* —
-  // не путать с direct room_{oid}_{oid}.
-  const looksLikeRandomBusy =
-    !inDirectOccupancy &&
-    (busy || !!d.partnerSid || (!!rid && !isDirectCallRoomId(rid)));
+  const isNonDirectRoom = !!rid && !isDirectCallRoomId(rid);
+
+  // Рандом (поиск / room_{socket}_* / partnerSid): busy без direct room id.
+  // Залипший callOfUser раньше блокировал looksLikeRandomBusy → REST isBusy:false
+  // и loadFriends затирал бейдж. Живой ringing (callsById) по-прежнему идёт в direct-ветки.
+  if ((busy || inCall || !!d.partnerSid || isNonDirectRoom) && !isDirectCallRoomId(rid)) {
+    const entry = callOfUser.get(userId);
+    const link = entry?.callId ? callsById.get(entry.callId) : undefined;
+    const liveDirectRingOrCall =
+      !!entry?.callId &&
+      !!link &&
+      !recentlyEndedCalls.has(entry.callId);
+    if (!(liveDirectRingOrCall && !d.partnerSid && !isNonDirectRoom)) {
+      return true;
+    }
+  }
 
   if (inCall) {
     if (inDirectOccupancy) return true;
-    // Раньше inCall без callOfUser считали stale direct → false, и REST /friends
-    // затирал бейдж «Занято» после presence:update из рандом-чата.
-    if (looksLikeRandomBusy) return true;
     return false;
   }
   // partnerSid при исходящем direct-call (до accept) не должен давать бейдж «Занято».
@@ -2101,8 +2124,7 @@ function isSocketBusyForFriendsExport(
       if (room && room.size > 1 && inCall && busy) return true;
       return false;
     }
-    // Очередь рандома / room_{socketId}_* / rand_room_* — совпадает с presence:update.
-    if (busy || looksLikeRandomBusy) return true;
+    if (busy || isNonDirectRoom || !!d.partnerSid) return true;
     return false;
   }
   return false;
@@ -2128,6 +2150,8 @@ function getEffectiveBusyForExport(io: Server, userId: string): boolean {
   for (const s of getSocketsForUser(io, userId)) {
     if (isSocketBusyForFriendsExport(io, (s as any).data, userId)) return true;
   }
+  // Согласуем REST с последним presence:update друзьям (гонки / локальный socket.data).
+  if (lastBroadcastBusyByUserId.get(String(userId)) === true) return true;
   return false;
 }
 setGetEffectiveBusy(getEffectiveBusyForExport);
@@ -2824,14 +2848,11 @@ io.on('connection', async (sock: AuthedSocket) => {
       if (busy && !inRandomChat) {
         const payloadRoomId = String(payload?.roomId || '').trim();
         const sockRoomId = String((sock as any)?.data?.roomId || '').trim();
-        // Гасить как «stale direct» только явные direct-call claims.
-        // Рандом шлёт room_{socketId}_{socketId} или busy без room (поиск) —
-        // раньше это ошибочно suppress'илось и ещё clear'ило partnerSid → бейдж пропадал сразу.
+        // Гасить как «stale direct» только при явном direct room id в payload/socket.
+        // НЕ использовать callOfUser/activeRoom: залипшие maps делали рандомный busy
+        // (roomId:null при поиске) «direct claim» → suppress → REST isBusy:false.
         const isDirectBusyClaim =
-          isDirectCallRoomId(payloadRoomId) ||
-          isDirectCallRoomId(sockRoomId) ||
-          callOfUser.has(userId) ||
-          activeRoomByUserId.has(userId);
+          isDirectCallRoomId(payloadRoomId) || isDirectCallRoomId(sockRoomId);
 
         if (isDirectBusyClaim) {
           const activeDirectRoom = getValidActiveDirectPresenceRoom(io, sock, userId, payload);
