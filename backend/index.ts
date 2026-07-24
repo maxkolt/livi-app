@@ -1917,6 +1917,9 @@ function socketDataLooksRandomOrQueueBusy(sdata: Record<string, unknown>, uid: s
   if (callOfUser.has(uid) || activeRoomByUserId.has(uid)) return false;
   if (sdata.partnerSid) return true;
   if (sdata.busy === true) return true;
+  const rid = String(sdata.roomId || '').trim();
+  // room_{socket}_{socket} от рандома — не direct room_{oid}_{oid}
+  if (rid && !isDirectCallRoomId(rid)) return true;
   return false;
 }
 
@@ -2051,10 +2054,11 @@ function isSocketBusyForFriendsExport(
   const busy = d.busy === true;
   const rid = String(d.roomId || '');
   const inDirectOccupancy = callOfUser.has(userId) || activeRoomByUserId.has(userId);
-  // Рандом: очередь (busy) / пара (partnerSid) / rand_room_* — не через callOfUser.
+  // Рандом: очередь (busy) / пара (partnerSid) / room_{socket}_{socket} или rand_room_* —
+  // не путать с direct room_{oid}_{oid}.
   const looksLikeRandomBusy =
     !inDirectOccupancy &&
-    (busy || !!d.partnerSid || (!!rid && !rid.startsWith('room_')));
+    (busy || !!d.partnerSid || (!!rid && !isDirectCallRoomId(rid)));
 
   if (inCall) {
     if (inDirectOccupancy) return true;
@@ -2092,12 +2096,12 @@ function isSocketBusyForFriendsExport(
   }
 
   if (busy || d.roomId) {
-    if (rid.startsWith('room_')) {
+    if (isDirectCallRoomId(rid)) {
       const room = io.sockets.adapter.rooms.get(rid);
       if (room && room.size > 1 && inCall && busy) return true;
       return false;
     }
-    // Очередь рандома (busy без room) или rand_room_* — совпадает с presence:update.
+    // Очередь рандома / room_{socketId}_* / rand_room_* — совпадает с presence:update.
     if (busy || looksLikeRandomBusy) return true;
     return false;
   }
@@ -2107,10 +2111,15 @@ function isSocketBusyForFriendsExport(
 function clearDirectCallSessionForUser(io: Server, userId: string) {
   forEachSocketForUser(io, userId, (s) => {
     (s as any).data = (s as any).data || {};
-    (s as any).data.busy = false;
-    (s as any).data.inCall = false;
-    delete (s as any).data.roomId;
-    delete (s as any).data.partnerSid;
+    const d = (s as any).data;
+    // Не сносим рандом: partnerSid или не-direct roomId.
+    if (d.partnerSid) return;
+    const rid = String(d.roomId || '');
+    if (rid && !isDirectCallRoomId(rid)) return;
+    d.busy = false;
+    d.inCall = false;
+    delete d.roomId;
+    delete d.partnerSid;
   });
 }
 
@@ -2813,38 +2822,51 @@ io.on('connection', async (sock: AuthedSocket) => {
       const inRandomChat = await userHasActiveRandomChat(io, userId);
 
       if (busy && !inRandomChat) {
-        const activeDirectRoom = getValidActiveDirectPresenceRoom(io, sock, userId, payload);
-        if (!activeDirectRoom) {
-          const entry = await getUserCallEntryFromAnyStore(userId);
-          const link = entry?.callId ? await getCallLinkFromAnyStore(entry.callId) : null;
-          const isRingingDirectCall = !!entry?.callId && !!link && !isDirectCallAcceptedOrActive(entry.callId, link);
-          if (isRingingDirectCall) {
-            logger.info('📍 [presence:update] Direct busy ignored until call accepted', {
+        const payloadRoomId = String(payload?.roomId || '').trim();
+        const sockRoomId = String((sock as any)?.data?.roomId || '').trim();
+        // Гасить как «stale direct» только явные direct-call claims.
+        // Рандом шлёт room_{socketId}_{socketId} или busy без room (поиск) —
+        // раньше это ошибочно suppress'илось и ещё clear'ило partnerSid → бейдж пропадал сразу.
+        const isDirectBusyClaim =
+          isDirectCallRoomId(payloadRoomId) ||
+          isDirectCallRoomId(sockRoomId) ||
+          callOfUser.has(userId) ||
+          activeRoomByUserId.has(userId);
+
+        if (isDirectBusyClaim) {
+          const activeDirectRoom = getValidActiveDirectPresenceRoom(io, sock, userId, payload);
+          if (!activeDirectRoom) {
+            const entry = await getUserCallEntryFromAnyStore(userId);
+            const link = entry?.callId ? await getCallLinkFromAnyStore(entry.callId) : null;
+            const isRingingDirectCall = !!entry?.callId && !!link && !isDirectCallAcceptedOrActive(entry.callId, link);
+            if (isRingingDirectCall) {
+              logger.info('📍 [presence:update] Direct busy ignored until call accepted', {
+                userId,
+                callId: entry?.callId,
+                roomId: payload?.roomId || null,
+              });
+              return;
+            }
+
+            clearDirectCallSessionForUser(io, userId);
+            try {
+              activeCallBySocket.delete(sock.id);
+            } catch {}
+            const stalePending = activeRoomByUserId.get(userId);
+            if (stalePending && !shouldRetainPendingAcceptedRoomForUser(io, userId, stalePending)) {
+              await clearStaleDirectCallPresenceForUser(io, userId, 'presence-busy-stale-direct');
+            } else if (lastBroadcastBusyByUserId.get(userId) === true) {
+              await emitPresenceUpdateToFriends(io, userId, false);
+            }
+            logger.info('📍 [presence:update] Stale direct busy suppressed', {
               userId,
-              callId: entry?.callId,
               roomId: payload?.roomId || null,
+              socketRoomId: (sock as any)?.data?.roomId || null,
+              hadPending: !!stalePending,
+              lastBroadcastBusy: lastBroadcastBusyByUserId.get(userId),
             });
             return;
           }
-
-          clearDirectCallSessionForUser(io, userId);
-          try {
-            activeCallBySocket.delete(sock.id);
-          } catch {}
-          const stalePending = activeRoomByUserId.get(userId);
-          if (stalePending && !shouldRetainPendingAcceptedRoomForUser(io, userId, stalePending)) {
-            await clearStaleDirectCallPresenceForUser(io, userId, 'presence-busy-stale-direct');
-          } else if (lastBroadcastBusyByUserId.get(userId) === true) {
-            await emitPresenceUpdateToFriends(io, userId, false);
-          }
-          logger.info('📍 [presence:update] Stale direct busy suppressed', {
-            userId,
-            roomId: payload?.roomId || null,
-            socketRoomId: (sock as any)?.data?.roomId || null,
-            hadPending: !!stalePending,
-            lastBroadcastBusy: lastBroadcastBusyByUserId.get(userId),
-          });
-          return;
         }
       }
 
