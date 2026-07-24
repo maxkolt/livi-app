@@ -2049,14 +2049,23 @@ function isSocketBusyForFriendsExport(
   const d = data || {};
   const inCall = d.inCall === true;
   const busy = d.busy === true;
+  const rid = String(d.roomId || '');
+  const inDirectOccupancy = callOfUser.has(userId) || activeRoomByUserId.has(userId);
+  // Рандом: очередь (busy) / пара (partnerSid) / rand_room_* — не через callOfUser.
+  const looksLikeRandomBusy =
+    !inDirectOccupancy &&
+    (busy || !!d.partnerSid || (!!rid && !rid.startsWith('room_')));
+
   if (inCall) {
-    if (!callOfUser.has(userId) && !activeRoomByUserId.has(userId)) {
-      return false;
-    }
-    return true;
+    if (inDirectOccupancy) return true;
+    // Раньше inCall без callOfUser считали stale direct → false, и REST /friends
+    // затирал бейдж «Занято» после presence:update из рандом-чата.
+    if (looksLikeRandomBusy) return true;
+    return false;
   }
   // partnerSid при исходящем direct-call (до accept) не должен давать бейдж «Занято».
-  if (d.partnerSid && !callOfUser.has(userId) && !activeRoomByUserId.has(userId) && (busy || inCall)) {
+  // Без callOfUser это рандомная пара / поиск — бейдж нужен.
+  if (d.partnerSid && !inDirectOccupancy && (busy || inCall)) {
     return true;
   }
   if (!busy && !d.roomId) return false;
@@ -2083,11 +2092,13 @@ function isSocketBusyForFriendsExport(
   }
 
   if (busy || d.roomId) {
-    const rid = String(d.roomId || '');
     if (rid.startsWith('room_')) {
       const room = io.sockets.adapter.rooms.get(rid);
       if (room && room.size > 1 && inCall && busy) return true;
+      return false;
     }
+    // Очередь рандома (busy без room) или rand_room_* — совпадает с presence:update.
+    if (busy || looksLikeRandomBusy) return true;
     return false;
   }
   return false;
