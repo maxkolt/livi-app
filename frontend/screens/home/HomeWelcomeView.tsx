@@ -19,6 +19,7 @@ import {
   LIVI,
   MENU_BTN_RADIUS,
   MENU_BTN_SIZE,
+  SEARCH_CTA_TABLET_MIN_WIDTH,
 } from './constants';
 import { AnimatedBorderButton, AnimatedGradientBorder, BrandTitleWithOutline } from './chrome';
 import { HomeCenterProfile } from './HomeCenterProfile';
@@ -80,6 +81,13 @@ function HomeWelcomeViewInner({
     menuTitanOpacity.setValue(menuIdleTitan);
   }, [menuIdleBlur, menuIdleTitan, menuTitanOpacity]);
 
+  // На планшетах отрицательный inset ореола упирается в край и срезает правую рамку —
+  // чуть отодвигаем кнопку влево, на телефонах оставляем как было.
+  const isTabletLayout = layoutWidth >= SEARCH_CTA_TABLET_MIN_WIDTH;
+  const menuBtnMarginRight = isTabletLayout
+    ? -CHROME_PERIMETER_GLOW_LAYOUT_INSET + 10
+    : -CHROME_PERIMETER_GLOW_LAYOUT_INSET;
+
   const unreadValues = Object.values(unreadByUser).filter((n) => typeof n === 'number' && n > 0);
   const missedValues = Object.values(missedByUser).filter((n) => typeof n === 'number' && n > 0);
   const shouldShowMenuDot = unreadValues.length > 0 || missedValues.length > 0;
@@ -103,7 +111,7 @@ function HomeWelcomeViewInner({
           style={{
             position: 'relative',
             flexShrink: 0,
-            marginRight: -CHROME_PERIMETER_GLOW_LAYOUT_INSET,
+            marginRight: menuBtnMarginRight,
           }}
         >
           <AnimatedGradientBorder

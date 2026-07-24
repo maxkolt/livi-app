@@ -2262,9 +2262,11 @@ export default function ChatScreen({ route, navigation }: Props) {
         pointerEvents="auto"
         onLayout={handleRootLayout}
       >
+        {/* Обои на весь корень (не только под шапкой) — иначе при повороте планшета
+            справа/снизу остаётся plate, пока внутренний flex ещё со старым layout. */}
+        <ChatParallaxWallpaper isDark={isDark} />
         {headerEl}
-        <View style={{ flex: 1, overflow: 'hidden' }}>
-          <ChatParallaxWallpaper isDark={isDark} />
+        <View style={{ flex: 1, overflow: 'hidden', backgroundColor: 'transparent' }}>
         {loading ? (
           <Loading />
         ) : err ? (

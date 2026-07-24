@@ -1,13 +1,15 @@
 /** Chat wallpaper with tilt parallax via accelerometer (no Motion/Fitness permission). */
 
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   Animated,
   AppState,
   type AppStateStatus,
+  Image,
   StyleSheet,
   View,
   useWindowDimensions,
+  type LayoutChangeEvent,
 } from "react-native";
 import { Accelerometer } from "expo-sensors";
 
@@ -30,7 +32,10 @@ function clamp(n: number, min: number, max: number) {
 }
 
 export function ChatParallaxWallpaper({ isDark }: { isDark: boolean }) {
-  const { width, height } = useWindowDimensions();
+  const { width: winW, height: winH } = useWindowDimensions();
+  // Реальный размер контейнера (после поворота планшета window ≠ layout).
+  const [box, setBox] = useState({ w: winW, h: winH });
+
   const tx = useRef(new Animated.Value(0)).current;
   const ty = useRef(new Animated.Value(0)).current;
   const originRef = useRef<{ x: number; z: number } | null>(null);
@@ -38,6 +43,30 @@ export function ChatParallaxWallpaper({ isDark }: { isDark: boolean }) {
   const targetRef = useRef({ x: 0, y: 0 });
   const listeningRef = useRef(false);
   const rafRef = useRef<number | null>(null);
+
+  const onRootLayout = (e: LayoutChangeEvent) => {
+    const { width, height } = e.nativeEvent.layout;
+    if (!(width > 0 && height > 0)) return;
+    setBox((prev) =>
+      Math.abs(prev.w - width) > 1 || Math.abs(prev.h - height) > 1
+        ? { w: width, h: height }
+        : prev
+    );
+  };
+
+  // Fallback после rotation: window dims обновляются даже если onLayout задержался.
+  useEffect(() => {
+    setBox({ w: winW, h: winH });
+  }, [winW, winH]);
+
+  // После смены размера сбрасываем сдвиг параллакса.
+  useEffect(() => {
+    originRef.current = null;
+    currentRef.current = { x: 0, y: 0 };
+    targetRef.current = { x: 0, y: 0 };
+    tx.setValue(0);
+    ty.setValue(0);
+  }, [box.w, box.h, tx, ty]);
 
   useEffect(() => {
     let sub: { remove: () => void } | null = null;
@@ -131,19 +160,25 @@ export function ChatParallaxWallpaper({ isDark }: { isDark: boolean }) {
     };
   }, [tx, ty]);
 
-  // cover = весь экран заполнен картинкой (без боковых «линий» от contain).
-  const imgW = width + MAX_SHIFT * 2;
-  const imgH = height + MAX_SHIFT * 2;
+  const imgW = Math.round(box.w) + MAX_SHIFT * 2;
+  const imgH = Math.round(box.h) + MAX_SHIFT * 2;
   const themeWash = isDark ? "rgba(21, 31, 51, 0.58)" : "rgba(182, 203, 216, 0.62)";
   const themeShade = isDark ? "rgba(8, 12, 20, 0.36)" : "rgba(140, 158, 180, 0.36)";
+  const source = isDark ? WALLPAPER_DARK : WALLPAPER_LIGHT;
+  const sizeKey = `${imgW}x${imgH}-${isDark ? "d" : "l"}`;
 
   return (
     <View
       style={[styles.root, { backgroundColor: isDark ? PLATE_DARK : PLATE_LIGHT }]}
       pointerEvents="none"
+      onLayout={onRootLayout}
     >
-      <Animated.Image
-        source={isDark ? WALLPAPER_DARK : WALLPAPER_LIGHT}
+      {/*
+        JPEG портретный (576×1024). На Android без явных width/height Image
+        остаётся в intrinsic aspect → справа/снизу plate после поворота.
+        Двигаем обёртку (parallax), саму картинку — обычный Image на весь box.
+      */}
+      <Animated.View
         style={{
           position: "absolute",
           width: imgW,
@@ -152,9 +187,15 @@ export function ChatParallaxWallpaper({ isDark }: { isDark: boolean }) {
           top: -MAX_SHIFT,
           transform: [{ translateX: tx }, { translateY: ty }],
         }}
-        resizeMode="cover"
-        fadeDuration={0}
-      />
+      >
+        <Image
+          key={sizeKey}
+          source={source}
+          style={{ width: imgW, height: imgH }}
+          resizeMode="cover"
+          fadeDuration={0}
+        />
+      </Animated.View>
       <View style={[StyleSheet.absoluteFill, { backgroundColor: themeWash }]} />
       <View style={[StyleSheet.absoluteFill, { backgroundColor: themeShade }]} />
     </View>
@@ -164,6 +205,8 @@ export function ChatParallaxWallpaper({ isDark }: { isDark: boolean }) {
 const styles = StyleSheet.create({
   root: {
     ...StyleSheet.absoluteFillObject,
+    width: "100%",
+    height: "100%",
     overflow: "hidden",
     zIndex: 0,
   },
