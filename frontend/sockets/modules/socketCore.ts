@@ -2,6 +2,7 @@
 import { io, Socket } from "socket.io-client";
 import {
   API_BASE,
+  SOCKET_ENGINE_TIMEOUT_MS,
   SOCKET_RECONNECT_DELAY_MS,
   SOCKET_RECONNECT_DELAY_MAX_MS,
 } from "./constants";
@@ -16,13 +17,10 @@ export const getSocket = (): Socket => {
   if (!socketInstance) {
     socketInstance = io(API_BASE, {
       path: "/socket.io",
-      // IMPORTANT:
-      // Many VPNs / captive portals / corporate networks block WebSocket.
-      // Start with polling (more likely to pass), then upgrade to WebSocket when possible.
-      transports: ["polling", "websocket"],
-      // If first transport fails (e.g. VPN blocks polling), engine.io should try the next one.
-      // This keeps behavior stable both with and without VPN.
-      // @ts-ignore - available in newer engine.io, safe no-op on older versions.
+      // Mobile VPN often breaks XHR long-polling while WebSocket still works (and is faster).
+      // Corporate/captive portals may block WS — tryAllTransports still falls back to polling.
+      transports: ["websocket", "polling"],
+      // @ts-ignore - engine.io-client: try every transport in the list on failure
       tryAllTransports: true,
       upgrade: true,
       // After a successful WebSocket session, reconnect with WebSocket first (less polling→upgrade churn).
@@ -35,11 +33,11 @@ export const getSocket = (): Socket => {
       // Connection is triggered via applyAuthAndConnect()/emitAck() when ready.
       autoConnect: false,
       reconnection: true,
-      reconnectionAttempts: 25,
+      reconnectionAttempts: Infinity,
       reconnectionDelay: SOCKET_RECONNECT_DELAY_MS,
       reconnectionDelayMax: SOCKET_RECONNECT_DELAY_MAX_MS,
-      // Connection attempt timeout. Heartbeat pingInterval/pingTimeout are negotiated in the Engine.IO handshake (server-side).
-      timeout: 25000,
+      // Keep short so tryAllTransports can fail over WS→polling inside one user-facing wait.
+      timeout: SOCKET_ENGINE_TIMEOUT_MS,
     });
   }
   return socketInstance;

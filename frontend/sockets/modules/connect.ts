@@ -1,4 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import NetInfo from "@react-native-community/netinfo";
 import { AppState, type AppStateStatus, NativeModules, Platform } from "react-native";
 import { getInstallId } from "../../utils/installId";
 import { logger } from "../../utils/logger";
@@ -10,6 +11,7 @@ import {
 import {
   API_BASE,
   SOCKET_CONNECT_WAIT_MS,
+  SOCKET_ENGINE_TIMEOUT_MS,
   SOCKET_RECONNECT_AFTER_SERVER_RESTART_DELAY_MAX_MS,
   SOCKET_RECONNECT_AFTER_SERVER_RESTART_DELAY_MS,
   SOCKET_RECONNECT_DELAY_MAX_MS,
@@ -26,6 +28,81 @@ import { __flushPendingRtcSignals } from "./rtc";
 import { shared } from "./shared";
 import { socket } from "./socketCore";
 import { __notifyCurrentUserId } from "./authState";
+
+/** Prefer the other transport after a failed attempt (VPN often kills only one path). */
+function preferAlternateSocketTransport(failedHint: string): void {
+  try {
+    const msg = String(failedHint || "").toLowerCase();
+    const ioOpts: any = (socket as any)?.io?.opts;
+    if (!Array.isArray(ioOpts?.transports) || ioOpts.transports.length < 2) return;
+
+    const current = String(ioOpts.transports[0] || "");
+    let next: string[] | null = null;
+
+    if (msg.includes("xhr poll") || (msg.includes("polling") && !msg.includes("websocket"))) {
+      next = ["websocket", "polling"];
+    } else if (msg.includes("websocket")) {
+      next = ["polling", "websocket"];
+    } else if (msg.includes("timeout") || msg.includes("transport error")) {
+      next = current === "websocket" ? ["polling", "websocket"] : ["websocket", "polling"];
+    }
+
+    if (!next || next[0] === current) return;
+    ioOpts.transports = next;
+    logger.warn(`[socket] transport preference → ${next[0]} (after: ${msg.slice(0, 80) || "unknown"})`);
+  } catch {}
+}
+
+let lastHardRecycleAt = 0;
+
+/**
+ * Tear down a wedged Engine.IO manager and reconnect.
+ * Useful when VPN toggles leave the client stuck in timeout loops.
+ */
+export async function hardRecycleSocketConnection(reason = "manual"): Promise<void> {
+  const now = Date.now();
+  if (now - lastHardRecycleAt < 8_000) return;
+  lastHardRecycleAt = now;
+
+  logger.warn("[socket] hard recycle", { reason, connected: !!socket.connected, api: API_BASE });
+  shared.connectAttemptPromise = null;
+  shared.handshakeHasInstallId = false;
+  shared.reconnecting = true;
+
+  try {
+    const mgr: any = (socket as any).io;
+    try {
+      socket.disconnect();
+    } catch {}
+    try {
+      mgr?.engine?.close?.();
+    } catch {}
+    // Under VPN, HTTPS long-polling often survives when WS upgrade is blocked.
+    if (mgr?.opts) {
+      mgr.opts.transports = ["polling", "websocket"];
+      mgr.opts.tryAllTransports = true;
+      mgr.opts.timeout = SOCKET_ENGINE_TIMEOUT_MS;
+      mgr.opts.reconnection = true;
+    }
+  } catch (e) {
+    logger.warn("[socket] hard recycle teardown error", e);
+  }
+
+  // Warm TLS/HTTP path before Engine.IO handshake (helps some VPNs).
+  try {
+    const controller = new AbortController();
+    const t = setTimeout(() => controller.abort(), 6_000);
+    await fetch(`${API_BASE}/socket.io/?EIO=4&transport=polling`, {
+      method: "GET",
+      signal: controller.signal,
+      headers: { Accept: "*/*" },
+      cache: "no-store",
+    } as any).catch(() => null);
+    clearTimeout(t);
+  } catch {}
+
+  await applyAuthAndConnect();
+}
 
 /**
  * Держать Socket.IO подключённым в фоне и не выключать reconnection при блокировке экрана.
@@ -208,6 +285,8 @@ export async function applyAuthAndConnect() {
         logger.debug("Connecting socket...");
         socket.connect();
 
+        // IMPORTANT (VPN): do NOT abort on the first connect_error.
+        // Engine.IO may fail polling then succeed on websocket (or vice versa) within the same wait window.
         await new Promise<void>((resolve, reject) => {
           const cleanup = () => {
             clearTimeout(timeout);
@@ -231,14 +310,15 @@ export async function applyAuthAndConnect() {
           };
 
           const onError = (err: any) => {
-            cleanup();
             if (!shouldAttemptRealtimeConnection()) {
+              cleanup();
               logger.debug("[applyAuthAndConnect] Ignoring connect error while realtime paused:", err?.message || String(err));
               resolve();
               return;
             }
-            logger.warn("Socket connect error:", err);
-            reject(err);
+            // Keep waiting — tryAllTransports / reconnection may still succeed.
+            // Do NOT flip transports here: mutating opts mid-handshake causes thrashing under VPN.
+            logger.warn("Socket connect error (waiting for alternate transport / retry):", err?.message || err);
           };
 
           if (socket.connected) {
@@ -246,7 +326,7 @@ export async function applyAuthAndConnect() {
             resolve();
           } else {
             socket.once("connect", onConnect);
-            socket.once("connect_error", onError);
+            socket.on("connect_error", onError);
           }
         });
         if (socket.connected && installId) shared.handshakeHasInstallId = true;
@@ -615,20 +695,34 @@ socket.on("disconnect", (r) => {
 
 socket.on("connect_error", (e) => {
   shared.reconnecting = true;
-  // VPNs sometimes break XHR polling while WebSocket is still available.
-  // Switch transport preference for next attempts to avoid stuck retries.
-  try {
-    const msg = String((e as any)?.message || "").toLowerCase();
-    if (msg.includes("xhr poll error")) {
-      const ioOpts: any = (socket as any)?.io?.opts;
-      if (Array.isArray(ioOpts?.transports) && ioOpts.transports[0] !== "websocket") {
-        ioOpts.transports = ["websocket", "polling"];
-        logger.warn("[socket] xhr polling failed, preferring websocket for reconnect");
-      }
-    }
-  } catch {}
+  // Flip transport preference only between reconnect cycles (debounced), not on every packet error.
+  const now = Date.now();
+  const lastFlip = (socket as any).__liviLastTransportFlipAt || 0;
+  if (now - lastFlip > 8_000) {
+    (socket as any).__liviLastTransportFlipAt = now;
+    preferAlternateSocketTransport((e as any)?.message || String(e || ""));
+  }
   console.warn(`[socket] error ${e?.message || e}`);
 });
+
+// VPN / airplane-mode / Wi‑Fi↔LTE: when the OS reports reachability again, nudge Socket.IO.
+try {
+  let lastNetReachable: boolean | null = null;
+  NetInfo.addEventListener((state) => {
+    const reachable =
+      state.isConnected === true &&
+      (state.isInternetReachable === true || state.isInternetReachable == null);
+    const wasReachable = lastNetReachable;
+    lastNetReachable = reachable;
+    // Skip initial NetInfo callback (null → true) — boot already connects.
+    // Only act on false → true (VPN toggle, airplane off, network restore).
+    if (!reachable || wasReachable !== false) return;
+    if (!shouldAttemptRealtimeConnection()) return;
+    if (socket.connected) return;
+    logger.info("[socket] network reachable again — reconnecting");
+    applyAuthAndConnect().catch(() => {});
+  });
+} catch {}
 // Busy handler (for logging/forwarding to UI screens)
 socket.on("call:busy", (data) => {});
 

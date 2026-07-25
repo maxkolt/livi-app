@@ -47,12 +47,12 @@ export async function waitForConnect(ms = 8000): Promise<void> {
 }
 
 /** Ждёт подключения сокета (с таймаутом). Нужно при отмене вызова из вне приложения, чтобы call:decline дошёл до сервера и caller получил call:declined. */
-export async function ensureSocketConnected(ms = 15000): Promise<void> {
+export async function ensureSocketConnected(ms = SOCKET_CONNECT_WAIT_MS): Promise<void> {
   if (socket.connected) return;
   try {
     await waitForConnect(ms);
   } catch {
-    // Таймаут — всё равно вызываем declineCall ниже, emit может уйти в очередь
+    // Таймаут — вызывающий код может всё равно emit'нуть (уйдёт в sendBuffer) или повторить позже.
   }
 }
 

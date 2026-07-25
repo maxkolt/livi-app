@@ -264,6 +264,8 @@ const dict: Partial<Record<Lang, Record<string, string>>> = {
     moderationReportAckFailed: 'Не удалось подтвердить действие на сервере. Нажмите «Далее», чтобы продолжить.',
     moderationPartnerBanned: 'Собеседник забанен на час. Он нарушил правила пользования.',
     moderationContentWarning: 'Пожалуйста, соблюдайте правила. Обнаружен нежелательный контент.',
+    randomChatServerUnreachable:
+      'Нет связи с сервером. VPN блокирует api.liviapp.com — отключите VPN или добавьте сервер в исключения.',
     start: 'Начать',
     stop: 'Стоп',
     next: 'Далее',
@@ -522,6 +524,8 @@ const dict: Partial<Record<Lang, Record<string, string>>> = {
     moderationReportAckFailed: 'Could not confirm the action on the server. Tap Next to continue.',
     moderationPartnerBanned: 'Your partner was banned for an hour for violating the rules.',
     moderationContentWarning: 'Please follow the rules. Unwanted content was detected.',
+    randomChatServerUnreachable:
+      'No connection to the server. Your VPN is blocking api.liviapp.com — disable VPN or exclude the server.',
   
     // — Profile settings
     nickname: 'Nickname',

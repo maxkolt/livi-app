@@ -44,8 +44,10 @@ if (SHOULD_FORCE_SAFE_API_BASE) {
   });
 }
 
-/** Первый коннект / смена сети (VPN, DNS): согласовано с io({ timeout }). Пуши и accept/decline ждут столько же. */
-export const SOCKET_CONNECT_WAIT_MS = 25000;
+/** Первый коннект / смена сети (VPN, DNS): несколько попыток × io timeout. */
+export const SOCKET_CONNECT_WAIT_MS = 45000;
+/** Один attempt Engine.IO (короче → быстрее failover WS↔polling при VPN). */
+export const SOCKET_ENGINE_TIMEOUT_MS = 12000;
 
 /** In-app call signaling (accept / initiate) after warmCallSignaling or while app is active. */
 export const CALL_SIGNALING_CONNECT_MS = 8000;

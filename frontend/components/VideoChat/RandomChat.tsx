@@ -521,6 +521,11 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       setAddPending(false);
       setAddBlocked(false);
     });
+
+    session.on('serverUnreachable', () => {
+      showToast(t('randomChatServerUnreachable', lang), 5000, true);
+      setNetworkOverlayVisible(true);
+    });
     
     session.on('disconnected', () => {
       if (leavingRef.current || !startedRef.current) {
@@ -551,6 +556,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       setLoading(false);
       loadingRef.current = false;
       setIsInactiveState(false);
+      setNetworkOverlayVisible(false);
       
       // УПРОЩЕНО: Для iOS обновляем key при matchFound (подключение к новой комнате)
       // Флаг needsIOSUpdateAfterNextRef уже установлен при next(), обновление произойдет при следующем localStream

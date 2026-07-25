@@ -160,3 +160,4 @@ export {
 
 export { getSocket, isReconnecting, socket } from "./modules/socketCore";
 export { socket as default } from "./modules/socketCore";
+export { applyAuthAndConnect, boot, hardRecycleSocketConnection, shouldAttemptRealtimeConnection } from "./modules/connect";

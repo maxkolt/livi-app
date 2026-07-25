@@ -168,9 +168,9 @@ export async function getIceConfiguration(forceRefresh = false, options?: { forc
     return relayActive ? withRelayOnlyPolicy(cachedConfig) : cachedConfig;
   }
 
-  // Таймауты: первая попытка 5s (VPN может быть медленнее), вторая 10s для надёжности
+  // Таймауты: первая попытка 8s (VPN / медленный DNS), вторая 15s для надёжности
   const maxRetries = 2;
-  const timeoutPerAttempt = [5000, 10000];
+  const timeoutPerAttempt = [8000, 15000];
   let lastError: any = null;
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {

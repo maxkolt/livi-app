@@ -16,7 +16,15 @@ import { Platform } from 'react-native';
 import * as Device from 'expo-device';
 import { SimpleEventEmitter } from '../base/SimpleEventEmitter';
 import type { WebRTCSessionConfig, CamSide } from '../types';
-import socket, { API_BASE, getCurrentUserId } from '../../../sockets/socket';
+import socket, {
+  API_BASE,
+  SOCKET_CONNECT_WAIT_MS,
+  applyAuthAndConnect,
+  ensureSocketConnected,
+  getCurrentUserId,
+  hardRecycleSocketConnection,
+  onConnected,
+} from '../../../sockets/socket';
 import { logger } from '../../../utils/logger';
 import { sendClientMetrics } from '../../utils/capacityClientMetrics';
 import { getIceConfiguration, enableForcedRelayFallback } from '../../../utils/iceConfig';
@@ -71,6 +79,14 @@ export class RandomChatSession extends SimpleEventEmitter {
   private remoteCamSide: CamSide = 'front';
   private lastAutoSearchAt = 0;
   private socketOffs: Array<() => void> = [];
+  /** Re-queue while searching if VPN drops the socket (server removes us from queue on disconnect). */
+  private searchWatchdogTimer: ReturnType<typeof setInterval> | null = null;
+  private readonly searchWatchdogIntervalMs = 8_000;
+  /** Prevent stacked ensureSocketConnected waits under VPN. */
+  private emitStartInFlight: Promise<void> | null = null;
+  private searchConnectLoopTimer: ReturnType<typeof setInterval> | null = null;
+  private searchConnectNudgeCount = 0;
+  private lastServerUnreachableEmitAt = 0;
   private connectRequestId = 0;
   private nextTransitionCounter = 0;
   private activeNextTransitionId: string | null = null;
@@ -566,7 +582,9 @@ export class RandomChatSession extends SimpleEventEmitter {
     this.notifyLoadingChange(true);
     this.emit('searching');
     await this.ensureLocalTracks();
+    this.startSearchConnectLoop();
     this.autoNext('initial_start');
+    this.startSearchWatchdog();
   }
 
   stopRandomChat(): void {
@@ -582,6 +600,9 @@ export class RandomChatSession extends SimpleEventEmitter {
     }
     this.stopRequested = true;
     this.started = false;
+    this.stopSearchWatchdog();
+    this.stopSearchConnectLoop();
+    this.emitStartInFlight = null;
     this.activeNextTransitionId = null;
     this.pendingMatchFound = null;
     this.clearPartnerGoneFallbackTimer();
@@ -875,28 +896,177 @@ export class RandomChatSession extends SimpleEventEmitter {
       });
       return;
     }
+
+    if (!this.started) {
+      this.logReconnectTrace('auto_next_skipped_not_started', { reason: reason || 'unspecified' });
+      return;
+    }
     
     const now = Date.now();
     if (now - this.lastAutoSearchAt < 200) return;
     this.lastAutoSearchAt = now;
     const nextTransitionId = this.activeNextTransitionId;
     this.startReconnectCycle(`autoNext:${reason || 'unspecified'}`);
+    this.startSearchConnectLoop();
+    this.startSearchWatchdog();
+    void this.emitStartReliable(reason || 'unspecified', nextTransitionId);
+  }
+
+  /** True while UI is searching and we are not in an active LiveKit room. */
+  private isSearchingForPartner(): boolean {
+    if (!this.started || this.isDisconnecting || this.stopRequested) return false;
+    if (this.room && (this.room.state === 'connected' || this.room.state === 'connecting' || this.room.state === 'reconnecting')) {
+      return false;
+    }
+    return true;
+  }
+
+  private startSearchWatchdog(): void {
+    if (this.searchWatchdogTimer) return;
+    this.searchWatchdogTimer = setInterval(() => {
+      if (!this.isSearchingForPartner()) {
+        this.stopSearchWatchdog();
+        this.stopSearchConnectLoop();
+        return;
+      }
+      // Server drops queue on socket disconnect; VPN churn needs periodic re-queue.
+      this.autoNext('search_watchdog');
+    }, this.searchWatchdogIntervalMs);
+  }
+
+  private stopSearchWatchdog(): void {
+    if (!this.searchWatchdogTimer) return;
+    clearInterval(this.searchWatchdogTimer);
+    this.searchWatchdogTimer = null;
+  }
+
+  /**
+   * While searching under VPN, Socket.IO may sit disconnected after a timeout.
+   * Keep nudging auth+connect every few seconds until we are online or search stops.
+   */
+  private startSearchConnectLoop(): void {
+    if (this.searchConnectLoopTimer) return;
+    this.searchConnectNudgeCount = 0;
+    const nudge = () => {
+      if (!this.isSearchingForPartner()) {
+        this.stopSearchConnectLoop();
+        return;
+      }
+      if (socket.connected) {
+        this.searchConnectNudgeCount = 0;
+        return;
+      }
+      this.searchConnectNudgeCount += 1;
+      logger.info('[RandomChatSession] Search connect loop: socket offline, reconnecting', {
+        sessionId: this.sessionId,
+        myUserId: this.resolveMyUserId(),
+        deviceModel: this.deviceModel,
+        nudge: this.searchConnectNudgeCount,
+      });
+
+      // After a few soft retries, tear down Engine.IO (VPN often leaves it wedged).
+      if (this.searchConnectNudgeCount > 0 && this.searchConnectNudgeCount % 4 === 0) {
+        void hardRecycleSocketConnection(`random_search_nudge_${this.searchConnectNudgeCount}`);
+      } else {
+        applyAuthAndConnect().catch(() => {});
+        try {
+          socket.connect();
+        } catch {}
+      }
+
+      // Tell UI the server path is blocked (typical VPN full-tunnel).
+      if (this.searchConnectNudgeCount >= 3) {
+        const now = Date.now();
+        if (now - this.lastServerUnreachableEmitAt > 12_000) {
+          this.lastServerUnreachableEmitAt = now;
+          this.emit('serverUnreachable', { apiBase: API_BASE, nudge: this.searchConnectNudgeCount });
+        }
+      }
+    };
+    nudge();
+    this.searchConnectLoopTimer = setInterval(nudge, 3_000);
+  }
+
+  private stopSearchConnectLoop(): void {
+    if (!this.searchConnectLoopTimer) return;
+    clearInterval(this.searchConnectLoopTimer);
+    this.searchConnectLoopTimer = null;
+  }
+
+  private async emitStartReliable(reason: string, nextTransitionId: string | null): Promise<void> {
+    if (this.emitStartInFlight) {
+      this.logReconnectTrace('auto_next_coalesced', { reason, nextTransitionId });
+      return this.emitStartInFlight;
+    }
+
+    this.emitStartInFlight = (async () => {
+      const maxAttempts = 8;
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        if (!this.isSearchingForPartner()) {
+          this.logReconnectTrace('auto_next_emit_aborted_state', { reason, nextTransitionId, attempt });
+          return;
+        }
+
+        try {
+          if (!socket.connected) {
+            await applyAuthAndConnect();
+          }
+          if (!socket.connected) {
+            await ensureSocketConnected(Math.min(SOCKET_CONNECT_WAIT_MS, 15_000));
+          }
+        } catch (e) {
+          logger.warn('[RandomChatSession] emitStartReliable: connect attempt failed', {
+            reason,
+            attempt,
+            error: (e as any)?.message || String(e),
+          });
+        }
+
+        if (!this.isSearchingForPartner()) return;
+
+        if (socket.connected) {
+          try {
+            socket.emit('start', nextTransitionId ? { transitionId: nextTransitionId } : undefined);
+            this.emit('searching');
+            this.notifyLoadingChange(true);
+            logger.info('[RandomChatSession] autoNext: emitted start', {
+              reason,
+              nextTransitionId,
+              socketId: socket.id,
+              attempt,
+            });
+            this.logReconnectTrace('auto_next_emitted_start', {
+              reason,
+              nextTransitionId,
+              attempt,
+            });
+            return;
+          } catch (e) {
+            logger.error('[RandomChatSession] autoNext error', e);
+            this.logReconnectTrace('auto_next_emit_error', {
+              reason,
+              nextTransitionId,
+              error: (e as any)?.message || String(e),
+            });
+          }
+        }
+
+        logger.warn('[RandomChatSession] autoNext: socket offline, retrying', { reason, attempt, maxAttempts });
+        this.logReconnectTrace('auto_next_retry_offline', { reason, nextTransitionId, attempt });
+        this.emit('searching');
+        this.notifyLoadingChange(true);
+        await new Promise((r) => setTimeout(r, 1_500));
+      }
+
+      logger.warn('[RandomChatSession] autoNext: gave up emit after retries (watchdog/reconnect will continue)', {
+        reason,
+      });
+    })();
+
     try {
-      socket.emit('start', nextTransitionId ? { transitionId: nextTransitionId } : undefined);
-      this.emit('searching');
-      this.notifyLoadingChange(true);
-      logger.debug('[RandomChatSession] autoNext: emitted start', { reason, nextTransitionId });
-      this.logReconnectTrace('auto_next_emitted_start', {
-        reason: reason || 'unspecified',
-        nextTransitionId,
-      });
-    } catch (e) {
-      logger.error('[RandomChatSession] autoNext error', e);
-      this.logReconnectTrace('auto_next_emit_error', {
-        reason: reason || 'unspecified',
-        nextTransitionId,
-        error: (e as any)?.message || String(e),
-      });
+      await this.emitStartInFlight;
+    } finally {
+      this.emitStartInFlight = null;
     }
   }
 
@@ -1138,6 +1308,8 @@ export class RandomChatSession extends SimpleEventEmitter {
   cleanup(): void {
     if (this.cleaned) return;
     this.cleaned = true;
+    this.stopSearchWatchdog();
+    this.stopSearchConnectLoop();
     this.stopRandomChat();
     this.socketOffs.forEach((off) => off());
     this.socketOffs = [];
@@ -1281,6 +1453,18 @@ export class RandomChatSession extends SimpleEventEmitter {
     socket.on('hangup', hangupHandler);
     socket.on('cam-toggle', camToggleHandler);
 
+    // After VPN / network drop the server removes us from the queue on disconnect.
+    // Re-join as soon as Socket.IO is back while the user is still searching.
+    const offSocketConnected = onConnected(() => {
+      if (!this.isSearchingForPartner()) return;
+      logger.info('[RandomChatSession] Socket reconnected while searching — re-queue', {
+        sessionId: this.sessionId,
+        myUserId: this.resolveMyUserId(),
+        deviceModel: this.deviceModel,
+      });
+      this.autoNext('socket_reconnect');
+    });
+
     this.socketOffs = [
       () => socket.off('match_found', matchHandler),
       () => socket.off('peer:stopped', peerStoppedHandler),
@@ -1288,6 +1472,7 @@ export class RandomChatSession extends SimpleEventEmitter {
       () => socket.off('disconnected', socketDisconnectedHandler),
       () => socket.off('hangup', hangupHandler),
       () => socket.off('cam-toggle', camToggleHandler),
+      offSocketConnected,
     ];
   }
 
@@ -1334,6 +1519,8 @@ export class RandomChatSession extends SimpleEventEmitter {
     this.clearPartnerGoneFallbackTimer();
     // Save socket-level match room id (used for cam-toggle relay).
     this.matchRoomId = roomId;
+    this.stopSearchWatchdog();
+    this.stopSearchConnectLoop();
 
     // КРИТИЧНО: Защита от множественных вызовов handleMatchFound для одной и той же комнаты
     const now = Date.now();
