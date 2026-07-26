@@ -15,6 +15,7 @@ import { logger } from '../../utils/logger';
 import { markUpdateBadgeShown, PLAY_STORE_UPDATE_URL } from '../../utils/updateCheck';
 import {
   ANDROID_MENU_HIT_SLOP,
+  ANIMATED_BORDER_WIDTH,
   CHROME_PERIMETER_GLOW_LAYOUT_INSET,
   LIVI,
   MENU_BTN_RADIUS,
@@ -77,19 +78,63 @@ function HomeWelcomeViewInner({
   const menuPressedTitan = isDark ? 0.4 : 0.5;
   const [menuBlurIntensity, setMenuBlurIntensity] = useState(menuIdleBlur);
   const menuTitanOpacity = useRef(new Animated.Value(menuIdleTitan)).current;
+  const welcomeBlockRef = useRef<View>(null);
+  const subtitleAnchorRef = useRef<View>(null);
+  const searchBtnAnchorRef = useRef<View>(null);
+  const [badgeGap, setBadgeGap] = useState<{ top: number; height: number } | null>(null);
+
+  // На планшетах отрицательный inset ореола упирается в край и срезает правую рамку —
+  // чуть отодвигаем кнопку влево, на телефонах оставляем как было.
+  const isTabletLayout = layoutWidth >= SEARCH_CTA_TABLET_MIN_WIDTH;
+  const compactLayout = layoutHeight < 520;
+  // Субпиксельная рамка (0.2–0.4) на планшетах/Android часто клипится overflow+radius —
+  // держим минимум как у AnimatedGradientBorder, на планшете чуть толще.
+  const updateBadgeBorderW = isTabletLayout ? Math.max(ANIMATED_BORDER_WIDTH, 1) : ANIMATED_BORDER_WIDTH;
+  const updateBadgeOuterRadius = 12;
+  const updateBadgeInnerRadius = Math.max(0, updateBadgeOuterRadius - updateBadgeBorderW);
+  const menuBtnMarginRight = isTabletLayout
+    ? -CHROME_PERIMETER_GLOW_LAYOUT_INSET + 10
+    : -CHROME_PERIMETER_GLOW_LAYOUT_INSET;
 
   useEffect(() => {
     setMenuBlurIntensity(menuIdleBlur);
     menuTitanOpacity.setValue(menuIdleTitan);
   }, [menuIdleBlur, menuIdleTitan, menuTitanOpacity]);
 
-  // На планшетах отрицательный inset ореола упирается в край и срезает правую рамку —
-  // чуть отодвигаем кнопку влево, на телефонах оставляем как было.
-  const isTabletLayout = layoutWidth >= SEARCH_CTA_TABLET_MIN_WIDTH;
-  const compactLayout = layoutHeight < 520;
-  const menuBtnMarginRight = isTabletLayout
-    ? -CHROME_PERIMETER_GLOW_LAYOUT_INSET + 10
-    : -CHROME_PERIMETER_GLOW_LAYOUT_INSET;
+  const syncBadgeGap = React.useCallback(() => {
+    const block = welcomeBlockRef.current;
+    const subtitle = subtitleAnchorRef.current;
+    const button = searchBtnAnchorRef.current;
+    if (!block || !subtitle || !button) return;
+    block.measureInWindow((_bx, blockY) => {
+      subtitle.measureInWindow((_sx, subY, _sw, subH) => {
+        button.measureInWindow((_cx, btnY) => {
+          const top = subY + subH - blockY;
+          // Верх рамки кнопки = верх ореола + inset.
+          const frameTop = btnY + CHROME_PERIMETER_GLOW_LAYOUT_INSET - blockY;
+          const height = frameTop - top;
+          if (!(height > 0)) return;
+          setBadgeGap((prev) =>
+            prev && prev.top === top && prev.height === height ? prev : { top, height },
+          );
+        });
+      });
+    });
+  }, []);
+
+  useEffect(() => {
+    const id = requestAnimationFrame(() => syncBadgeGap());
+    return () => cancelAnimationFrame(id);
+  }, [
+    syncBadgeGap,
+    layoutWidth,
+    layoutHeight,
+    compactLayout,
+    showUpdateBadge,
+    showCallSearchLockBadge,
+    hasActiveCallForSearch,
+    NoticeView,
+  ]);
 
   const unreadValues = Object.values(unreadByUser).filter((n) => typeof n === 'number' && n > 0);
   const missedValues = Object.values(missedByUser).filter((n) => typeof n === 'number' && n > 0);
@@ -218,6 +263,9 @@ function HomeWelcomeViewInner({
       />
 
       <View
+        ref={welcomeBlockRef}
+        collapsable={false}
+        onLayout={syncBadgeGap}
         style={[
           styles.welcomeBlock,
           Platform.OS === 'android' && { marginTop: compactLayout ? 8 : 50 },
@@ -239,6 +287,9 @@ function HomeWelcomeViewInner({
             {L('welcomeTitle')}
           </Text>
           <View
+            ref={subtitleAnchorRef}
+            collapsable={false}
+            onLayout={syncBadgeGap}
             style={{
               width: Math.min(Math.max(0, layoutWidth - 36), 400),
               alignSelf: 'center',
@@ -263,157 +314,178 @@ function HomeWelcomeViewInner({
             </Text>
           </View>
         </View>
-        <View style={styles.noticeSlot}>
-          {NoticeView}
-          {hasActiveCallForSearch && showCallSearchLockBadge && (
-            <View
-              style={[
-                styles.notice,
-                {
-                  backgroundColor: isDark ? 'rgba(138,143,153,0.16)' : 'rgba(59,68,83,0.16)',
-                  borderColor: isDark ? 'rgba(138,143,153,0.36)' : 'rgba(59,68,83,0.34)',
-                },
-              ]}
-            >
-              <Text
+        {/* Резерв места как раньше — чтобы аватар и тексты остались на прежних позициях. */}
+        <View style={styles.noticeSlot} pointerEvents="none" />
+        <View
+          ref={searchBtnAnchorRef}
+          collapsable={false}
+          onLayout={syncBadgeGap}
+          style={{ alignSelf: 'stretch', alignItems: 'center' }}
+        >
+          <AnimatedBorderButton
+            isDark={isDark}
+            onPress={onStartSearch}
+            label={L('startSearchBtn')}
+            style={{ marginBottom: compactLayout ? 8 : 40 }}
+            backgroundColor={themeBackground}
+            disabled={hasActiveCallForSearch}
+            onDisabledPress={onBlockedStartSearch}
+          />
+        </View>
+        {badgeGap ? (
+          <View
+            pointerEvents="box-none"
+            style={{
+              position: 'absolute',
+              left: 0,
+              right: 0,
+              top: badgeGap.top,
+              height: badgeGap.height,
+              justifyContent: 'center',
+              alignItems: 'center',
+              gap: 10,
+              zIndex: 2,
+            }}
+          >
+            {NoticeView}
+            {hasActiveCallForSearch && showCallSearchLockBadge && (
+              <View
                 style={[
-                  styles.noticeText,
-                  { color: isDark ? 'rgba(240,241,243,0.92)' : 'rgba(47,55,66,0.9)' },
-                ]}
-              >
-                Сначала завершите текущий звонок
-              </Text>
-            </View>
-          )}
-          {showUpdateBadge && (
-            <View
-              style={{
-                padding: isDark ? 0.2 : 0.4,
-                borderRadius: 12,
-                position: 'relative',
-                overflow: 'hidden',
-                alignSelf: 'center',
-                maxWidth: Math.min(320, layoutWidth - 40),
-              }}
-            >
-              <LinearGradient
-                colors={
-                  isDark
-                    ? ['#2dd4bf', '#60a5fa', '#38bdf8', '#FFF8F0', '#2dd4bf']
-                    : ['#8B82C8', '#9A8FC9', '#A8A0B8', '#ADA9B0']
-                }
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 1 }}
-                style={[StyleSheet.absoluteFillObject, { borderRadius: 12 }]}
-              />
-              <View
-                style={{
-                  position: 'absolute',
-                  top: 0,
-                  left: 0,
-                  right: 0,
-                  height: isDark ? 0.2 : 0.4,
-                  borderTopLeftRadius: 12,
-                  borderTopRightRadius: 12,
-                  overflow: 'hidden',
-                  zIndex: 2,
-                }}
-              >
-                <LinearGradient
-                  colors={
-                    isDark
-                      ? ['#2dd4bf', '#38bdf8', '#FFF8F0', '#60a5fa']
-                      : ['#8B82C8', '#7468B0', '#9A92A8', '#A09AAE']
-                  }
-                  start={{ x: 0, y: 0 }}
-                  end={{ x: 1, y: 0 }}
-                  style={[
-                    StyleSheet.absoluteFillObject,
-                    { borderTopLeftRadius: 12, borderTopRightRadius: 12 },
-                  ]}
-                />
-              </View>
-              <View
-                style={{
-                  position: 'absolute',
-                  bottom: 0,
-                  left: 0,
-                  right: 0,
-                  height: isDark ? 0.2 : 0.4,
-                  borderBottomLeftRadius: 12,
-                  borderBottomRightRadius: 12,
-                  overflow: 'hidden',
-                  zIndex: 2,
-                }}
-              >
-                <LinearGradient
-                  colors={
-                    isDark
-                      ? ['#60a5fa', '#38bdf8', '#2dd4bf', '#F0EEEC']
-                      : ['#B0A8C4', '#A39BB8', '#8B82C8', '#8B82C8']
-                  }
-                  start={{ x: 1, y: 0 }}
-                  end={{ x: 0, y: 0 }}
-                  style={[
-                    StyleSheet.absoluteFillObject,
-                    { borderBottomLeftRadius: 12, borderBottomRightRadius: 12 },
-                  ]}
-                />
-              </View>
-              <Pressable
-                style={({ pressed }) => [
+                  styles.notice,
                   {
-                    margin: isDark ? 0.2 : 0.4,
-                    borderRadius: isDark ? 11.8 : 11.6,
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    alignSelf: 'stretch',
-                    backgroundColor: themeBackground,
-                    paddingVertical: Platform.OS === 'ios' ? 10 : 8,
-                    paddingHorizontal: 20,
-                    zIndex: 1,
-                  },
-                  pressed && {
-                    backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)',
+                    backgroundColor: isDark ? 'rgba(138,143,153,0.16)' : 'rgba(59,68,83,0.16)',
+                    borderColor: isDark ? 'rgba(138,143,153,0.36)' : 'rgba(59,68,83,0.34)',
                   },
                 ]}
-                onPress={() => {
-                  onHideUpdateBadge();
-                  markUpdateBadgeShown();
-                  Linking.openURL(PLAY_STORE_UPDATE_URL);
-                }}
-                android_ripple={{
-                  color: isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)',
-                  borderless: false,
-                }}
               >
                 <Text
-                  style={{
-                    color: isDark ? LIVI.text : '#2F3742',
-                    fontSize: 12,
-                    fontWeight: '500',
-                    textAlign: 'center',
-                    ...(Platform.OS === 'android' && { includeFontPadding: false }),
-                  }}
-                  numberOfLines={1}
-                  ellipsizeMode="tail"
-                  allowFontScaling={false}
+                  style={[
+                    styles.noticeText,
+                    { color: isDark ? 'rgba(240,241,243,0.92)' : 'rgba(47,55,66,0.9)' },
+                  ]}
                 >
-                  {L('updateBtn')}
+                  Сначала завершите текущий звонок
                 </Text>
-              </Pressable>
-            </View>
-          )}
-        </View>
-        <AnimatedBorderButton
-          isDark={isDark}
-          onPress={onStartSearch}
-          label={L('startSearchBtn')}
-          style={{ marginBottom: compactLayout ? 8 : 40 }}
-          backgroundColor={themeBackground}
-          disabled={hasActiveCallForSearch}
-          onDisabledPress={onBlockedStartSearch}
-        />
+              </View>
+            )}
+            {showUpdateBadge && (
+              <View
+                style={{
+                  borderRadius: updateBadgeOuterRadius,
+                  overflow: 'hidden',
+                  alignSelf: 'center',
+                  maxWidth: Math.min(320, layoutWidth - 40),
+                  // Как у AnimatedGradientBorder: hairline помогает не терять край при clip.
+                  ...(Platform.OS === 'android'
+                    ? {
+                        borderWidth: StyleSheet.hairlineWidth,
+                        borderColor: isDark
+                          ? 'rgba(45, 212, 191, 0.4)'
+                          : 'rgba(139, 130, 200, 0.4)',
+                      }
+                    : null),
+                }}
+              >
+                <LinearGradient
+                  colors={
+                    isDark
+                      ? ['#2dd4bf', '#60a5fa', '#38bdf8', '#FFF8F0', '#2dd4bf']
+                      : ['#8B82C8', '#9A8FC9', '#A8A0B8', '#ADA9B0']
+                  }
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={StyleSheet.absoluteFillObject}
+                />
+                <View
+                  pointerEvents="none"
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    height: updateBadgeBorderW,
+                    zIndex: 2,
+                  }}
+                >
+                  <LinearGradient
+                    colors={
+                      isDark
+                        ? ['#2dd4bf', '#38bdf8', '#FFF8F0', '#60a5fa']
+                        : ['#8B82C8', '#7468B0', '#9A92A8', '#A09AAE']
+                    }
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 0 }}
+                    style={StyleSheet.absoluteFillObject}
+                  />
+                </View>
+                <View
+                  pointerEvents="none"
+                  style={{
+                    position: 'absolute',
+                    bottom: 0,
+                    left: 0,
+                    right: 0,
+                    height: updateBadgeBorderW,
+                    zIndex: 2,
+                  }}
+                >
+                  <LinearGradient
+                    colors={
+                      isDark
+                        ? ['#60a5fa', '#38bdf8', '#2dd4bf', '#F0EEEC']
+                        : ['#B0A8C4', '#A39BB8', '#8B82C8', '#8B82C8']
+                    }
+                    start={{ x: 1, y: 0 }}
+                    end={{ x: 0, y: 0 }}
+                    style={StyleSheet.absoluteFillObject}
+                  />
+                </View>
+                <Pressable
+                  style={({ pressed }) => [
+                    {
+                      margin: updateBadgeBorderW,
+                      borderRadius: updateBadgeInnerRadius,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      alignSelf: 'stretch',
+                      backgroundColor: themeBackground,
+                      paddingVertical: Platform.OS === 'ios' ? 10 : 8,
+                      paddingHorizontal: 20,
+                      zIndex: 1,
+                    },
+                    pressed && {
+                      backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)',
+                    },
+                  ]}
+                  onPress={() => {
+                    onHideUpdateBadge();
+                    markUpdateBadgeShown();
+                    Linking.openURL(PLAY_STORE_UPDATE_URL);
+                  }}
+                  android_ripple={{
+                    color: isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)',
+                    borderless: false,
+                  }}
+                >
+                  <Text
+                    style={{
+                      color: isDark ? LIVI.text : '#2F3742',
+                      fontSize: 12,
+                      fontWeight: '500',
+                      textAlign: 'center',
+                      ...(Platform.OS === 'android' && { includeFontPadding: false }),
+                    }}
+                    numberOfLines={1}
+                    ellipsizeMode="tail"
+                    allowFontScaling={false}
+                  >
+                    {L('updateBtn')}
+                  </Text>
+                </Pressable>
+              </View>
+            )}
+          </View>
+        ) : null}
       </View>
     </>
   );

@@ -355,13 +355,11 @@ export const styles = StyleSheet.create({
     width: '100%',
     paddingHorizontal: 4,
   },
+  // Резерв высоты как раньше — чтобы аватар/тексты не съезжали; сами бейджи рисуются absolute поверх.
   noticeSlot: {
     minHeight: 72,
-    justifyContent: 'flex-start',
-    alignItems: 'center',
-    width: '100%',
     marginBottom: 24,
-    gap: 10,
+    width: '100%',
   },
   // notice (бейдж «Вызов завершён» и др.): по центру между подзаголовком и кнопкой
   notice: {

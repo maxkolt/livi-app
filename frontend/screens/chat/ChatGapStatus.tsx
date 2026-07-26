@@ -114,28 +114,17 @@ export function ChatDeleteToastInline({
         opacity: forwardToastOpacity,
       }}
     >
-      <View
+      <Text
         style={{
-          paddingVertical: 7,
-          paddingHorizontal: 16,
-          borderRadius: 999,
-          backgroundColor: "rgba(12, 14, 18, 0.82)",
-          borderWidth: 1,
-          borderColor: "rgba(255,255,255,0.10)",
+          fontSize: 13,
+          fontWeight: "600",
+          letterSpacing: 0.25,
+          color: "#FF8A93",
+          textAlign: "center",
         }}
       >
-        <Text
-          style={{
-            fontSize: 13,
-            fontWeight: "600",
-            letterSpacing: 0.25,
-            color: "#FF8A93",
-            textAlign: "center",
-          }}
-        >
-          {forwardToast.text}
-        </Text>
-      </View>
+        {forwardToast.text}
+      </Text>
     </Animated.View>
   );
 }

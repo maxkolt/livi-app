@@ -382,6 +382,8 @@ export default function ChatScreen({ route, navigation }: Props) {
   const [keyboardInset, setKeyboardInset] = useState(0);
   const [androidImeInset, setAndroidImeInset] = useState(0);
   const [emojiPanelOpen, setEmojiPanelOpen] = useState(false);
+  const androidNativeImeAvailableRef = useRef(false);
+  const androidFallbackImeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   /**
    * Edge-to-edge: layout не должен одновременно сжиматься и сдвигаться.
@@ -405,11 +407,20 @@ export default function ChatScreen({ route, navigation }: Props) {
         const heightPx = Math.max(0, Number(rawHeight) || 0);
         // Android WindowInsets are pixels; React Native layout coordinates are dp.
         const height = Math.round(heightPx / PixelRatio.get());
-        console.log('[ChatIME] native WindowInsets', { height, heightPx });
+        androidNativeImeAvailableRef.current = true;
+        if (androidFallbackImeTimerRef.current) {
+          clearTimeout(androidFallbackImeTimerRef.current);
+          androidFallbackImeTimerRef.current = null;
+        }
         setAndroidImeInset(height);
       },
     );
-    return () => subscription.remove();
+    return () => {
+      subscription.remove();
+      if (androidFallbackImeTimerRef.current) {
+        clearTimeout(androidFallbackImeTimerRef.current);
+      }
+    };
   }, []);
 
   const composerTextInputMaxHeight = 76;
@@ -712,9 +723,21 @@ export default function ChatScreen({ route, navigation }: Props) {
         const height = Number(event?.endCoordinates?.height || 0);
         if (height > 0) {
           const resolvedHeight = Math.round(height);
-          console.log('[ChatIME] RN keyboard fallback', { height: resolvedHeight });
           setKeyboardInset(resolvedHeight);
-          setAndroidImeInset(resolvedHeight);
+          // Current builds receive the native inset in the same animation.
+          // Older dev-builds still get a delayed RN fallback instead of a
+          // visible 318dp → native-inset correction.
+          if (!androidNativeImeAvailableRef.current) {
+            if (androidFallbackImeTimerRef.current) {
+              clearTimeout(androidFallbackImeTimerRef.current);
+            }
+            androidFallbackImeTimerRef.current = setTimeout(() => {
+              if (!androidNativeImeAvailableRef.current) {
+                setAndroidImeInset(resolvedHeight);
+              }
+              androidFallbackImeTimerRef.current = null;
+            }, 100);
+          }
         }
       } else {
         setKeyboardVisible(true);
@@ -727,6 +750,10 @@ export default function ChatScreen({ route, navigation }: Props) {
       if (Platform.OS === 'android') {
         setKeyboardVisible(false);
         setKeyboardInset(0);
+        if (androidFallbackImeTimerRef.current) {
+          clearTimeout(androidFallbackImeTimerRef.current);
+          androidFallbackImeTimerRef.current = null;
+        }
         setAndroidImeInset(0);
         scheduleScrollToBottom(0);
         setTimeout(() => scheduleScrollToBottom(0), 90);
