@@ -2588,6 +2588,12 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       runOnReactUiQueueIfAlive { it.emitDeviceEvent("EndCallFromPiP", null) }
     }
 
+    /** Actual IME inset from Android's window, including OEM suggestion strips. */
+    @JvmStatic
+    fun emitAndroidImeInsets(height: Int) {
+      runOnReactUiQueueIfAlive { it.emitDeviceEvent("LiviAndroidImeInsets", height) }
+    }
+
     @JvmStatic
     fun emitActiveCallExternalAudioInterruptedStatic(focusChange: Int, appCtx: Context? = null) {
       runOnReactUiQueueIfAlive { ctx ->

@@ -18,6 +18,8 @@ import android.util.Rational
 import android.view.View
 import android.view.ViewGroup
 import androidx.activity.OnBackPressedCallback
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 
 import com.facebook.react.ReactActivity
 import com.facebook.react.ReactActivityDelegate
@@ -27,6 +29,41 @@ import com.facebook.react.defaults.DefaultReactActivityDelegate
 import expo.modules.ReactActivityDelegateWrapper
 
 class MainActivity : ReactActivity() {
+  private var lastReportedImeInset = -1
+
+  /**
+   * Exposes the platform's actual IME inset to JS. This avoids screen-coordinate
+   * calculations, which differ between edge-to-edge OEM implementations.
+   */
+  private fun observeImeInsets() {
+    val root = window?.decorView ?: return
+    fun reportImeInsets(insets: WindowInsetsCompat) {
+      val imeVisible = insets.isVisible(WindowInsetsCompat.Type.ime())
+      val imeInset = if (imeVisible) {
+        insets.getInsets(WindowInsetsCompat.Type.ime()).bottom
+      } else {
+        0
+      }
+      // `WindowInsets.Type.ime()` shares the same coordinate system as the
+      // React Native root. Do not mix it with physical display rectangles:
+      // their coordinates differ after rotation on some OEM devices.
+      val imeBottom = imeInset
+      if (imeBottom != lastReportedImeInset) {
+        lastReportedImeInset = imeBottom
+        LiviAppModule.emitAndroidImeInsets(imeBottom)
+      }
+    }
+    ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
+      reportImeInsets(insets)
+      insets
+    }
+    // React Native may replace the decor inset listener while it mounts. Global
+    // layout remains stable and re-reads the latest root insets on every IME move.
+    root.viewTreeObserver.addOnGlobalLayoutListener {
+      ViewCompat.getRootWindowInsets(root)?.let(::reportImeInsets)
+    }
+    ViewCompat.requestApplyInsets(root)
+  }
 
   override fun attachBaseContext(newBase: Context) {
     super.attachBaseContext(FontScaleContextHelper.wrap(newBase))
@@ -689,6 +726,7 @@ class MainActivity : ReactActivity() {
     super.onCreate(null)
     // targetSdk 36: edge-to-edge is enforced; RN SafeAreaProvider pads content.
     EdgeToEdgeHelper.apply(this)
+    observeImeInsets()
     registerHomeKeyForSystemPiPReceiver()
     // targetSdk 36 / predictive back: dispatcher can finish the Activity without ever calling
     // ReactActivity.onBackPressed() → JS BackHandler never runs → app minimizes/closes.

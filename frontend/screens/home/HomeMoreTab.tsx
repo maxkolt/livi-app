@@ -2,6 +2,7 @@ import React from 'react';
 import {
   Animated,
   Linking,
+  ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -47,14 +48,16 @@ function HomeMoreTabInner({
   updateSpinAnim,
 }: HomeMoreTabProps) {
   return (
-    <View
-      style={{
+    <ScrollView
+      style={{ flex: 1 }}
+      contentContainerStyle={{
         paddingTop: 8,
         paddingHorizontal: FRIENDS_LIST_PAD_H,
         paddingBottom: 16,
         gap: 16,
-        flex: 1,
+        flexGrow: 1,
       }}
+      showsVerticalScrollIndicator={false}
     >
       <View
         style={{
@@ -287,7 +290,7 @@ function HomeMoreTabInner({
           </TouchableOpacity>
         </View>
       )}
-    </View>
+    </ScrollView>
   );
 }
 

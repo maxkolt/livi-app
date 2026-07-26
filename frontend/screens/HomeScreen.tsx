@@ -287,7 +287,7 @@ export function markHomeScreenBootedForSession() {
 }
 
 export default function HomeScreen({ navigation, route }: Props & { route?: { params?: HomeRouteParams } }) {
-  const { width: layoutWidth } = useWindowDimensions();
+  const { width: layoutWidth, height: layoutHeight } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const pip = usePiP();
   const { preference, setPreference, theme, isDark } = useAppTheme();
@@ -1723,7 +1723,16 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
             return { ok: true, userId: currentUserId };
           }
 
-          const payload = { installId: params?.installId ?? '', profile: profilePayload };
+          // React state `installId` на первом запуске может ещё быть '' (гонка с createUser).
+          // Всегда резолвим через getInstallId(), иначе сервер отвечает no_installId.
+          const resolvedInstallId = String(params?.installId || '').trim()
+            || (await getInstallId().catch(() => ''));
+          if (!resolvedInstallId) {
+            console.warn('[attachIdentitySafe] no installId available yet');
+            return { ok: false, error: 'no_installId' };
+          }
+
+          const payload = { installId: resolvedInstallId, profile: profilePayload };
 
           if (!s || !s.connected) { // очередь до коннекта
             pendingAttachRef.current = profilePayload;
@@ -3891,6 +3900,7 @@ const handleClearNick = useCallback(async () => {
         isDark={isDark}
         themeBackground={theme.colors.background as string}
         layoutWidth={layoutWidth}
+        layoutHeight={layoutHeight}
         L={L}
         menuBtnInnerBg={MENU_BTN_INNER_BG}
         menuChromeBg={MENU_CHROME_BG}

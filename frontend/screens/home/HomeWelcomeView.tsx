@@ -30,6 +30,7 @@ export type HomeWelcomeViewProps = {
   isDark: boolean;
   themeBackground: string;
   layoutWidth: number;
+  layoutHeight: number;
   L: (key: string) => string;
   menuBtnInnerBg: string;
   menuChromeBg: string;
@@ -54,6 +55,7 @@ function HomeWelcomeViewInner({
   isDark,
   themeBackground,
   layoutWidth,
+  layoutHeight,
   L,
   menuBtnInnerBg,
   menuChromeBg,
@@ -84,6 +86,7 @@ function HomeWelcomeViewInner({
   // На планшетах отрицательный inset ореола упирается в край и срезает правую рамку —
   // чуть отодвигаем кнопку влево, на телефонах оставляем как было.
   const isTabletLayout = layoutWidth >= SEARCH_CTA_TABLET_MIN_WIDTH;
+  const compactLayout = layoutHeight < 520;
   const menuBtnMarginRight = isTabletLayout
     ? -CHROME_PERIMETER_GLOW_LAYOUT_INSET + 10
     : -CHROME_PERIMETER_GLOW_LAYOUT_INSET;
@@ -104,7 +107,13 @@ function HomeWelcomeViewInner({
 
   return (
     <>
-      <View style={[styles.topBar, { backgroundColor: 'transparent' }]}>
+      <View
+        style={[
+          styles.topBar,
+          { backgroundColor: 'transparent' },
+          compactLayout && { height: 64 },
+        ]}
+      >
         <BrandTitleWithOutline isDark={isDark} />
 
         <View
@@ -203,17 +212,29 @@ function HomeWelcomeViewInner({
         styles={styles}
         isDark={isDark}
         layoutWidth={layoutWidth}
+        compact={compactLayout}
         menuChromeBg={menuChromeBg}
         {...centerProfile}
       />
 
-      <View style={[styles.welcomeBlock, Platform.OS === 'android' && { marginTop: 50 }]}>
+      <View
+        style={[
+          styles.welcomeBlock,
+          Platform.OS === 'android' && { marginTop: compactLayout ? 8 : 50 },
+        ]}
+      >
         <View style={styles.welcomeTextBlock}>
           <Text
-            style={[styles.title, { color: isDark ? LIVI.text : LIVI.textThemeWhite }]}
+            style={[
+              styles.title,
+              {
+                color: isDark ? LIVI.text : LIVI.textThemeWhite,
+                ...(compactLayout && { fontSize: 21, lineHeight: 24 }),
+              },
+            ]}
             allowFontScaling={false}
             maxFontSizeMultiplier={1}
-            numberOfLines={2}
+            numberOfLines={compactLayout ? 1 : 2}
           >
             {L('welcomeTitle')}
           </Text>
@@ -231,9 +252,10 @@ function HomeWelcomeViewInner({
                   color: isDark ? LIVI.text2 : LIVI.textThemeWhite,
                   width: '100%',
                   ...(Platform.OS === 'android' && { includeFontPadding: false }),
+                  ...(compactLayout && { fontSize: 13, lineHeight: 16 }),
                 },
               ]}
-              numberOfLines={2}
+              numberOfLines={compactLayout ? 1 : 2}
               allowFontScaling={false}
               maxFontSizeMultiplier={1}
             >
@@ -387,7 +409,7 @@ function HomeWelcomeViewInner({
           isDark={isDark}
           onPress={onStartSearch}
           label={L('startSearchBtn')}
-          style={{ marginBottom: 40 }}
+          style={{ marginBottom: compactLayout ? 8 : 40 }}
           backgroundColor={themeBackground}
           disabled={hasActiveCallForSearch}
           onDisabledPress={onBlockedStartSearch}

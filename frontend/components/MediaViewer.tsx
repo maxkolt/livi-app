@@ -5,11 +5,11 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  Dimensions,
   StatusBar,
   Animated,
   Platform,
   Image,
+  useWindowDimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { GestureHandlerRootView, PinchGestureHandler, PanGestureHandler, State } from 'react-native-gesture-handler';
@@ -26,8 +26,6 @@ import { useLang } from '../store/lang';
 import { t } from '../utils/i18n';
 import PhotoEditor from '@baronha/react-native-photo-editor';
 import { useResolvedImageUri } from '../hooks/useResolvedImageUri';
-
-const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
 
 interface MediaViewerProps {
   visible: boolean;
@@ -46,6 +44,7 @@ export default function MediaViewer({
   name,
   onSend,
 }: MediaViewerProps) {
+  const { width: screenWidth, height: screenHeight } = useWindowDimensions();
   const lang = useLang((s) => s.lang);
   const [busy, setBusy] = React.useState(false);
   const [currentUri, setCurrentUri] = React.useState<string>('');
@@ -100,6 +99,16 @@ export default function MediaViewer({
   const translateX = React.useRef(new Animated.Value(0)).current;
   const translateY = React.useRef(new Animated.Value(0)).current;
   const lastTranslate = React.useRef({ x: 0, y: 0 });
+
+  React.useEffect(() => {
+    setContainerSize({ w: screenWidth, h: screenHeight });
+    setCropRect({
+      x: Math.round(screenWidth * 0.1),
+      y: Math.round(screenHeight * 0.2),
+      w: Math.round(screenWidth * 0.8),
+      h: Math.round(screenWidth * 0.8),
+    });
+  }, [screenWidth, screenHeight]);
 
   const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(v, max));
   const getPanBounds = (s: number) => {
@@ -524,7 +533,7 @@ export default function MediaViewer({
       */}
       <StatusBar barStyle="light-content" translucent backgroundColor="transparent" />
       {/* Important: GestureHandlerRootView is needed for pinch in Android modals */}
-      <GestureHandlerRootView style={{ flex: 1, width: screenWidth, height: screenHeight }}>
+      <GestureHandlerRootView style={{ flex: 1 }}>
         <SafeAreaView
           style={styles.container}
           edges={Platform.OS === 'android' ? ['top', 'bottom', 'left', 'right'] : undefined}
@@ -745,8 +754,6 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.95)',
-    width: screenWidth,
-    height: screenHeight,
   },
   header: {
     flexDirection: 'row',

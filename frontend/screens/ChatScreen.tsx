@@ -20,6 +20,8 @@ import {
   Animated,
   Vibration,
   NativeModules,
+  DeviceEventEmitter,
+  PixelRatio,
   Dimensions,
   Image,
   StyleSheet,
@@ -29,12 +31,9 @@ import {
  
 import { useSafeAreaInsets, SafeAreaView } from "react-native-safe-area-context";
 import {
-  useGenericKeyboardHandler,
-  useKeyboardContext,
   KeyboardController,
   AndroidSoftInputModes,
 } from "react-native-keyboard-controller";
-import { runOnJS } from "react-native-reanimated";
 import {
   PanGestureHandler,
   PinchGestureHandler,
@@ -381,167 +380,36 @@ export default function ChatScreen({ route, navigation }: Props) {
   } = useChatDialogs();
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [keyboardInset, setKeyboardInset] = useState(0);
+  const [androidImeInset, setAndroidImeInset] = useState(0);
+  const [emojiPanelOpen, setEmojiPanelOpen] = useState(false);
 
   /**
-   * Android edge-to-edge:
-   * - translateY = animatedIME.height × (correctLift / imeH) — одно движение без
-   *   post-settle «падения» (не height+overshoot: иначе в начале dock уезжает вниз);
-   * - spacer = correctLift;
-   * - correctLift из screenY сразу на DidShow; кэш на повторный open с onStart.
-   *
-   * chrome OEM (window≪screen): unlifted = windowH + navInset
-   * flush OEM (window≈screen): unlifted = screenH − statusH
+   * Edge-to-edge: layout не должен одновременно сжиматься и сдвигаться.
+   * Позицию dock определяет только нативная IME-высота из keyboard-controller.
    */
-  const { animated: keyboardAnimated } = useKeyboardContext();
-  const androidDockRef = useRef<View>(null);
-  const androidImeHeightRef = useRef(0);
-  const androidKeyboardTopYRef = useRef(0);
-  const androidFlushNudgeRef = useRef(0);
-  const androidKeyboardVisibleRef = useRef(false);
-  const androidLastFlushRef = useRef({ imeH: 0, overshoot: 0, correctLift: 0 });
-  const androidLiftRatioAnim = useRef(new Animated.Value(1)).current;
-  const androidDockTranslateY = React.useMemo(
-    () => Animated.multiply(keyboardAnimated.height, androidLiftRatioAnim),
-    [keyboardAnimated.height, androidLiftRatioAnim],
-  );
-
-  const logAndroidImeSnapshot = React.useCallback((tag: string, extra: Record<string, number | string> = {}) => {
-    if (Platform.OS !== 'android') return;
-    const screen = Dimensions.get('screen');
-    const window = Dimensions.get('window');
-    console.log(
-      '[ChatIME]',
-      JSON.stringify({
-        tag,
-        imeH: androidImeHeightRef.current,
-        screenH: Math.round(screen.height),
-        windowH: Math.round(window.height),
-        statusBarH: Math.round(StatusBar.currentHeight || 0),
-        insetTop: Math.round(insets.top),
-        insetBottom: Math.round(insets.bottom),
-        nudge: androidFlushNudgeRef.current,
-        ...extra,
-      }),
-    );
-  }, [insets.bottom, insets.top]);
-
-  const resetAndroidFlushNudge = React.useCallback(() => {
-    // Только активный overshoot-лог; ratio/кэш не трогаем —
-    // при height→0 translateY и так 0, а ratio нужен на следующем open.
-    androidFlushNudgeRef.current = 0;
-  }, []);
-
-  const setAndroidLiftRatio = React.useCallback((imeH: number, correctLift: number, overshoot: number) => {
-    const ratio = imeH > 0 ? Math.min(1, Math.max(0, correctLift / imeH)) : 1;
-    androidFlushNudgeRef.current = overshoot;
-    androidLiftRatioAnim.setValue(ratio);
-    androidLastFlushRef.current = { imeH, overshoot, correctLift };
-    setKeyboardInset(correctLift);
-    return ratio;
-  }, [androidLiftRatioAnim]);
-
-  /** Сразу выставить ratio+spacer — без таймеров/measure. */
-  const applyAndroidDockFlush = React.useCallback((source: string) => {
-    if (Platform.OS !== 'android') return;
-    const sy = androidKeyboardTopYRef.current;
-    const imeH = androidImeHeightRef.current;
-    if (sy <= 0 || imeH <= 0) return;
-
-    const screenH = Math.round(Dimensions.get('screen').height);
-    const windowH = Math.round(Dimensions.get('window').height);
-    const statusH = Math.max(0, Math.round(StatusBar.currentHeight || insets.top || 0));
-    const insetBottom = Math.max(0, Math.round(insets.bottom));
-    const chrome = Math.max(0, screenH - windowH);
-    // Закрытый dock: chrome-устройства — на window+nav; flush — на screen−status.
-    const unliftedBottom = chrome > 8 ? windowH + insetBottom : Math.max(0, screenH - statusH);
-    const targetBottom = Math.max(0, sy - statusH);
-    const correctLift = Math.max(0, unliftedBottom - targetBottom);
-    const overshoot = Math.max(0, imeH - correctLift);
-    const ratio = setAndroidLiftRatio(imeH, correctLift, overshoot);
-
-    logAndroidImeSnapshot('flush:predict', {
-      source,
-      screenY: sy,
-      statusH,
-      chrome,
-      unliftedBottom,
-      targetBottom,
-      correctLift,
-      overshoot,
-      ratio: Math.round(ratio * 1000) / 1000,
-    });
-  }, [insets.bottom, insets.top, logAndroidImeSnapshot, setAndroidLiftRatio]);
-
-  /** Повторное открытие: тот же ratio с первого кадра анимации. */
-  const applyCachedAndroidFlush = React.useCallback((imeH: number) => {
-    const last = androidLastFlushRef.current;
-    if (last.imeH <= 0 || last.correctLift <= 0) return false;
-    if (Math.abs(last.imeH - imeH) > 32) return false;
-    const overshoot =
-      last.imeH === imeH
-        ? last.overshoot
-        : Math.max(0, Math.round(last.overshoot * (imeH / last.imeH)));
-    const correctLift = Math.max(0, imeH - overshoot);
-    const ratio = setAndroidLiftRatio(imeH, correctLift, overshoot);
-    logAndroidImeSnapshot('flush:cache', {
-      imeH,
-      overshoot,
-      correctLift,
-      ratio: Math.round(ratio * 1000) / 1000,
-    });
-    return true;
-  }, [logAndroidImeSnapshot, setAndroidLiftRatio]);
-
-  const syncAndroidImeMeta = React.useCallback((height: number, phase: 'start' | 'end' | 'hide') => {
-    if (Platform.OS !== 'android') return;
-    const h = Math.max(0, Math.round(Number(height) || 0));
-    androidImeHeightRef.current = h;
-
-    if (phase === 'hide' || h <= 0) {
-      androidKeyboardTopYRef.current = 0;
-      androidKeyboardVisibleRef.current = false;
-      resetAndroidFlushNudge();
-      setKeyboardVisible(false);
-      setKeyboardInset(0);
-      return;
-    }
-
-    androidKeyboardVisibleRef.current = true;
-    setKeyboardVisible(true);
-
-    if (androidKeyboardTopYRef.current > 0) {
-      applyAndroidDockFlush(phase);
-      return;
-    }
-    if (phase === 'start' && applyCachedAndroidFlush(h)) {
-      return;
-    }
-    // screenY ещё нет — временно полный imeH (DidShow сразу поправит ratio).
-    setKeyboardInset((prev) => (h > prev ? h : prev));
-  }, [applyAndroidDockFlush, applyCachedAndroidFlush, resetAndroidFlushNudge]);
-
-  useGenericKeyboardHandler(
-    {
-      onStart: (e) => {
-        'worklet';
-        // Не сбрасываем ratio на старте — иначе mid-flight скачок после predict.
-        runOnJS(syncAndroidImeMeta)(e.height, 'start');
-      },
-      onEnd: (e) => {
-        'worklet';
-        runOnJS(syncAndroidImeMeta)(e.height, 'end');
-      },
-    },
-    [syncAndroidImeMeta],
-  );
-
-  // Только ADJUST_NOTHING: иначе Sticky-высота + resize окна = щель над клавиатурой.
   useEffect(() => {
     if (Platform.OS !== 'android') return;
     KeyboardController.setInputMode(AndroidSoftInputModes.SOFT_INPUT_ADJUST_NOTHING);
     return () => {
       KeyboardController.setDefaultMode();
     };
+  }, []);
+
+  // Android delivers this directly from WindowInsets.Type.ime() in MainActivity.
+  // The Keyboard event below remains a fallback for an older development build.
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    const subscription = DeviceEventEmitter.addListener(
+      'LiviAndroidImeInsets',
+      (rawHeight: unknown) => {
+        const heightPx = Math.max(0, Number(rawHeight) || 0);
+        // Android WindowInsets are pixels; React Native layout coordinates are dp.
+        const height = Math.round(heightPx / PixelRatio.get());
+        console.log('[ChatIME] native WindowInsets', { height, heightPx });
+        setAndroidImeInset(height);
+      },
+    );
+    return () => subscription.remove();
   }, []);
 
   const composerTextInputMaxHeight = 76;
@@ -552,12 +420,6 @@ export default function ChatScreen({ route, navigation }: Props) {
   const [messageText, setMessageText] = useState("");
   const messageTextRef = useRef("");
   messageTextRef.current = messageText;
-  const [emojiPanelOpen, setEmojiPanelOpen] = useState(false);
-  useEffect(() => {
-    if (!emojiPanelOpen) return;
-    androidKeyboardTopYRef.current = 0;
-    resetAndroidFlushNudge();
-  }, [emojiPanelOpen, resetAndroidFlushNudge]);
   const [readStatuses, setReadStatuses] = useState<Record<string, 'sending' | 'delivered' | 'read' | 'failed' | 'sent'>>({});
   const readStatusesRef = useRef(readStatuses);
   readStatusesRef.current = readStatuses;
@@ -804,6 +666,16 @@ export default function ChatScreen({ route, navigation }: Props) {
     }, delay);
   };
 
+  // При открытии IME увеличивается нижний spacer инвертированного списка.
+  // Сразу прижимаем его к новому низу, чтобы были видны последнее сообщение,
+  // статусы «отправлено/прочитано» и индикатор «печатает…».
+  useEffect(() => {
+    if (Platform.OS !== 'android' || !keyboardVisible || androidImeInset <= 0) return;
+    scheduleScrollToBottom(0);
+    const settleTimer = setTimeout(() => scheduleScrollToBottom(0), 90);
+    return () => clearTimeout(settleTimer);
+  }, [androidImeInset, keyboardVisible, inputHeight]);
+
   // Реальная высота контейнера (по onLayout), чтобы корректно понять, ресайзит ли система окно при клавиатуре
   const [rootLayoutH, setRootLayoutH] = useState<number>(0);
   const baseRootLayoutHRef = useRef<number>(0);
@@ -835,16 +707,15 @@ export default function ChatScreen({ route, navigation }: Props) {
     try { socket.on('call:timeout', clearIncomingTimer); } catch {}
     const onShow = (event: any) => {
       if (Platform.OS === 'android') {
+        // StickyView двигает dock; inset — для pad списка/empty.
+        setKeyboardVisible(true);
         const height = Number(event?.endCoordinates?.height || 0);
-        const screenY = Number(event?.endCoordinates?.screenY || 0);
-        if (screenY > 0) androidKeyboardTopYRef.current = Math.round(screenY);
         if (height > 0) {
-          androidImeHeightRef.current = Math.round(height);
-          setKeyboardVisible(true);
+          const resolvedHeight = Math.round(height);
+          console.log('[ChatIME] RN keyboard fallback', { height: resolvedHeight });
+          setKeyboardInset(resolvedHeight);
+          setAndroidImeInset(resolvedHeight);
         }
-        // Сразу predict — одно движение с IME, без отложенного measure.
-        applyAndroidDockFlush('didShow');
-        // Не scrollToBottom: лента едет translateY вместе с dock — скролл даёт рывок.
       } else {
         setKeyboardVisible(true);
         const height = Number(event?.endCoordinates?.height || 0);
@@ -854,8 +725,11 @@ export default function ChatScreen({ route, navigation }: Props) {
     };
     const onHide = () => {
       if (Platform.OS === 'android') {
-        syncAndroidImeMeta(0, 'hide');
-        // Без scrollToBottom — лента возвращается translateY вместе с dock.
+        setKeyboardVisible(false);
+        setKeyboardInset(0);
+        setAndroidImeInset(0);
+        scheduleScrollToBottom(0);
+        setTimeout(() => scheduleScrollToBottom(0), 90);
       } else {
         setKeyboardVisible(false);
         setKeyboardInset(0);
@@ -881,7 +755,7 @@ export default function ChatScreen({ route, navigation }: Props) {
       Keyboard.addListener('keyboardDidHide', onHide),       // Android
     ];
     return () => { subs.forEach(s => s.remove()); offClose?.(); try { socket.off('call:timeout', forceClose); } catch {}; try { socket.off('call:declined', forceClose); } catch {}; try { socket.off('call:cancel', forceClose); } catch {}; try { socket.off('call:incoming', onIncoming); } catch {}; try { socket.off('call:accepted', clearIncomingTimer); } catch {}; try { socket.off('call:declined', clearIncomingTimer); } catch {}; try { socket.off('call:cancel', clearIncomingTimer); } catch {}; try { socket.off('call:timeout', clearIncomingTimer); } catch {}; clearIncomingTimer(); };
-  }, [applyAndroidDockFlush, syncAndroidImeMeta]);
+  }, []);
 
   // На любое изменение количества сообщений — прижать вниз.
   // Android: делаем дополнительный проход после layout нового пузыря,
@@ -894,7 +768,7 @@ export default function ChatScreen({ route, navigation }: Props) {
     }
   }, [messages.length]);
 
-  // Android: композер (+ emoji) в одном dock; IME — Animated translateY из KeyboardProvider.
+  // Android: композер (+ emoji) в одном dock; IME поднимает KeyboardStickyView.
   const systemResizeDelta =
     Platform.OS === 'ios' && keyboardVisible
       ? Math.max(0, baseRootLayoutHRef.current - rootLayoutH)
@@ -905,11 +779,10 @@ export default function ChatScreen({ route, navigation }: Props) {
       : (keyboardVisible ? Math.max(0, keyboardInset - systemResizeDelta) : 0);
 
   const composerBottomLift = emojiPanelOpen ? CHAT_EMOJI_PANEL_HEIGHT : keyboardLift;
-  // Android: IME-подъём ленты — тем же animated translateY, что и dock (не через
-  // мгновенный keyboardInset в spacer — иначе облака резко «прыгают» вверх).
+  // Android: pad для списка/empty/overlays — IME (окно не resize) или emoji-панель.
   const androidKeyboardPad = emojiPanelOpen
     ? CHAT_EMOJI_PANEL_HEIGHT + Math.max(0, insets.bottom)
-    : 0;
+    : Math.max(0, androidImeInset);
 
   const GapCenterIndicator = shouldShowChatGapCenter(peerActivity, forwardToast, lang) ? (
     <ChatGapCenterIndicator
@@ -2056,8 +1929,6 @@ export default function ChatScreen({ route, navigation }: Props) {
   const handleRootLayout = React.useCallback((e: any) => {
     const h = Math.max(0, Math.round(Number(e?.nativeEvent?.layout?.height || 0)));
     if (!h) return;
-    // Android тоже: нужен rootLayoutH, чтобы systemResizeDelta корректно
-    // вычитал остаточный adjustResize при edge-to-edge.
     if (Math.abs(rootLayoutH - h) > 1) {
       setRootLayoutH(h);
     }
@@ -2072,23 +1943,24 @@ export default function ChatScreen({ route, navigation }: Props) {
     setInputHeight(h);
   }, [inputHeight]);
 
-  // Только высота: индикатор «пишет…» вынесен в absolute-overlay ниже, чтобы ListHeaderComponent
-  // не пересоздавался каждые ~420ms (анимация точек) — иначе FlatList перелayout и тапы по отправке теряются.
-  // Не вычитаем старый CHAT_TYPING_GAP_H: typing уже overlay — иначе облака проваливаются в paddingTop инпута.
+  // Android list viewport ends above the dock. Keeping the reserve on the
+  // viewport (rather than in an inverted ListHeader) prevents the newest
+  // bubble from being drawn underneath the composer.
   const resolvedInputBarH = inputHeight > 0 ? inputHeight : estimatedInputHeight;
-  const androidSpacerH = Math.max(72, resolvedInputBarH + androidKeyboardPad + 10);
-  const androidListHeader = React.useMemo(() => {
-    if (isEmpty) return null;
-    // Без key={height}: иначе при каждом скачке keyboardInset FlatList remount header → мерцание.
-    return (
-      <View
-        collapsable={false}
-        pointerEvents="none"
-        style={{ height: androidSpacerH }}
-      />
-    );
-  }, [isEmpty, androidSpacerH]);
-
+  // One persistent status slot on every Android device. Typing/recording and
+  // transient delivery/deletion labels use it without moving chat bubbles.
+  const androidInlineStatusGapH = 24;
+  const androidListBottomReserve =
+    resolvedInputBarH + androidKeyboardPad + androidInlineStatusGapH;
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    scheduleScrollToBottom(0);
+  }, [androidInlineStatusGapH]);
+  // Empty: центр в зоне над композером (+IME / emoji).
+  const androidEmptyBottomPad = Math.max(
+    72,
+    resolvedInputBarH + androidKeyboardPad + 10,
+  );
   // Центр видимой области сообщений (над композером), не всего экрана.
   const chatEmptyFeedPlaceholder = React.useMemo(() => {
     if (!showEmpty) return null;
@@ -2100,7 +1972,8 @@ export default function ChatScreen({ route, navigation }: Props) {
           left: 0,
           right: 0,
           top: 0,
-          bottom: Platform.OS === 'android' ? androidSpacerH : 0,
+          // Android: над инпутом (+IME). iOS: родитель уже ужат KeyboardAvoidingView.
+          bottom: Platform.OS === 'android' ? androidEmptyBottomPad : 0,
           justifyContent: 'center',
           alignItems: 'center',
           paddingHorizontal: 28,
@@ -2125,7 +1998,7 @@ export default function ChatScreen({ route, navigation }: Props) {
         </Text>
       </View>
     );
-  }, [showEmpty, androidSpacerH, isDark, peerNameParam]);
+  }, [showEmpty, androidEmptyBottomPad, isDark, peerNameParam]);
 
   const renderMessageRow = React.useCallback(
     ({ item }: { item: ChatListRow }) => {
@@ -2301,7 +2174,10 @@ export default function ChatScreen({ route, navigation }: Props) {
               data={iosChatListData}
               keyExtractor={(item) => item.id}
               renderItem={renderMessageRow}
-              style={{ flex: 1, backgroundColor: 'transparent' }}
+              style={{
+                flex: 1,
+                backgroundColor: 'transparent',
+              }}
               contentContainerStyle={{ 
                 flexGrow: 1,
                 justifyContent: showEmpty ? 'center' : 'flex-end',
@@ -2627,14 +2503,16 @@ export default function ChatScreen({ route, navigation }: Props) {
             </View>
           </KeyboardAvoidingView>)
         ) : (
-          // Android: edge-to-edge — composer через IME translateY (KeyboardProvider).
+          // Android: ADJUST_NOTHING + KeyboardStickyView — dock клеится к верху IME.
           (<View style={{ flex: 1, overflow: 'hidden' }}>
-            {/** Лента + оверлеи едут тем же translateY, что dock — без скачка spacer. */}
-            <Animated.View
-              style={[
-                { flex: 1 },
-                emojiPanelOpen ? null : { transform: [{ translateY: androidDockTranslateY }] },
-              ]}
+            <View
+              style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: androidListBottomReserve,
+              }}
             >
             <FlatList
               ref={flatListRef}
@@ -2645,7 +2523,7 @@ export default function ChatScreen({ route, navigation }: Props) {
               contentContainerStyle={{
                 flexGrow: 1,
                 justifyContent: isEmpty ? 'center' : 'flex-start',
-                paddingTop: 12,
+                paddingTop: 0,
               }}
               showsVerticalScrollIndicator={false}
               keyboardShouldPersistTaps="handled"
@@ -2658,8 +2536,6 @@ export default function ChatScreen({ route, navigation }: Props) {
               maxToRenderPerBatch={CHAT_LIST_MAX_TO_RENDER_PER_BATCH}
               windowSize={CHAT_LIST_WINDOW_SIZE}
               updateCellsBatchingPeriod={CHAT_LIST_UPDATE_CELLS_BATCHING_PERIOD}
-              ListHeaderComponent={androidListHeader}
-              ListHeaderComponentStyle={isEmpty ? undefined : { height: androidSpacerH }}
               ListEmptyComponent={() => {
                 if (!chatFeedReady) {
                   return (
@@ -2678,6 +2554,8 @@ export default function ChatScreen({ route, navigation }: Props) {
                 return null;
               }}
             />
+            </View>
+
             {chatEmptyFeedPlaceholder}
             {DeleteToastInline ? (
               <View
@@ -2686,7 +2564,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                   position: 'absolute',
                   left: 0,
                   right: 0,
-                  bottom: androidKeyboardPad + (inputHeight > 0 ? inputHeight : 96) + 8,
+                  bottom: resolvedInputBarH + androidKeyboardPad + 8,
                   alignItems: 'center',
                   zIndex: 8,
                   elevation: 8,
@@ -2703,10 +2581,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                   position: 'absolute',
                   left: 0,
                   right: 0,
-                  bottom:
-                    androidKeyboardPad +
-                    Math.max(inputHeight > 0 ? inputHeight : estimatedInputHeight, 72) +
-                    4,
+                  bottom: resolvedInputBarH + androidKeyboardPad + 4,
                   alignItems: 'center',
                   zIndex: 8,
                   elevation: 8,
@@ -2715,11 +2590,8 @@ export default function ChatScreen({ route, navigation }: Props) {
                 {GapCenterIndicator}
               </View>
             ) : null}
-            </Animated.View>
 
-            {/* Android: инпут и смайлы в одной колонке. IME translateY + predict flush. */}
-            <Animated.View
-              ref={androidDockRef}
+            <View
               collapsable={false}
               style={[
                 {
@@ -2729,9 +2601,10 @@ export default function ChatScreen({ route, navigation }: Props) {
                   bottom: 0,
                   zIndex: 20,
                   elevation: 20,
+                  transform: [
+                    { translateY: emojiPanelOpen ? 0 : -androidImeInset },
+                  ],
                 },
-                // При in-app emoji нельзя оставлять IME translateY: dismiss ещё крутит height → щель.
-                emojiPanelOpen ? null : { transform: [{ translateY: androidDockTranslateY }] },
               ]}
             >
             <View
@@ -2741,7 +2614,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 backgroundColor: INPUT_BAR_BG,
                 paddingHorizontal: 16,
                 paddingTop: voiceIsRecording ? 8 : 18,
-                // Смайлы снизу уже закрывают nav — insets.bottom только когда dock у края экрана.
+                // Nav inset только когда клавиатуры/emoji нет.
                 paddingBottom:
                   18 +
                   (keyboardVisible || emojiPanelOpen ? 0 : Math.max(0, insets.bottom)),
@@ -3006,7 +2879,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 />
               </View>
             ) : null}
-            </Animated.View>
+            </View>
           </View>)
         )}
         </View>

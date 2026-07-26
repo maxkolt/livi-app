@@ -12,6 +12,7 @@ export type HomeCenterProfileProps = {
   styles: HomeStyles;
   isDark: boolean;
   layoutWidth: number;
+  compact?: boolean;
   savedNick: string;
   avatarUri: string;
   myFullAvatarUri: string;
@@ -27,6 +28,7 @@ function HomeCenterProfileInner({
   styles,
   isDark,
   layoutWidth,
+  compact = false,
   savedNick,
   avatarUri,
   myFullAvatarUri,
@@ -40,8 +42,8 @@ function HomeCenterProfileInner({
   const letter = displayAvatarLetter(savedNick);
   const wrapperStyle: StyleProp<ViewStyle> = {
     alignItems: 'center',
-    marginTop: Platform.OS === 'android' ? 20 : 12 + 20,
-    marginBottom: layoutWidth < 400 ? -40 : -65,
+    marginTop: compact ? 4 : Platform.OS === 'android' ? 20 : 12 + 20,
+    marginBottom: compact ? -18 : layoutWidth < 400 ? -40 : -65,
   };
 
   const isLocalPreview = avatarUri && /^(file|content|ph|assets-library):\/\//i.test(avatarUri);
@@ -52,7 +54,7 @@ function HomeCenterProfileInner({
   const noAvatar = !isLocalPreview && !hasCachedAvatar && !hasDirectAvatarUri;
   const noNick = !(savedNick && String(savedNick).trim());
 
-  const centerAvatarSize = Platform.OS === 'ios' ? 136 : 120;
+  const centerAvatarSize = compact ? 76 : Platform.OS === 'ios' ? 136 : 120;
   const centerAvatarRadius = centerAvatarSize / 2;
 
   return (
@@ -68,7 +70,17 @@ function HomeCenterProfileInner({
           borderRadius={centerAvatarRadius}
           outerStyle={{ marginBottom: -CHROME_PERIMETER_GLOW_LAYOUT_INSET }}
         >
-          <View style={[styles.centerAvatarWrap, { backgroundColor: menuChromeBg }]}>
+          <View
+            style={[
+              styles.centerAvatarWrap,
+              {
+                width: centerAvatarSize,
+                height: centerAvatarSize,
+                borderRadius: centerAvatarRadius,
+                backgroundColor: menuChromeBg,
+              },
+            ]}
+          >
             {isLocalPreview ? (
               <ExpoImage
                 source={{ uri: resolvedAvatarUri || avatarUri }}
@@ -80,7 +92,7 @@ function HomeCenterProfileInner({
                 userId={myUserId}
                 avatarVer={myAvatarVer}
                 uri={myFullAvatarUri || undefined}
-                size={Platform.OS === 'ios' ? 136 : 120}
+                size={centerAvatarSize}
                 fallbackText={letter}
                 containerStyle={styles.centerAvatarImg}
                 fallbackTextStyle={{ fontSize: 48, fontWeight: '800' }}
@@ -113,8 +125,8 @@ function HomeCenterProfileInner({
         style={[
           styles.subtitleNik,
           {
-            marginTop: 12,
-            fontSize: Platform.OS === 'ios' ? 25 : 20,
+            marginTop: compact ? 6 : 12,
+            fontSize: compact ? 16 : Platform.OS === 'ios' ? 25 : 20,
             color: noNick || noAvatar ? LIVI.titan : isDark ? LIVI.text2 : LIVI.textThemeWhite,
           },
         ]}
