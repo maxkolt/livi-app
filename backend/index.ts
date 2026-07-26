@@ -2134,10 +2134,13 @@ function clearDirectCallSessionForUser(io: Server, userId: string) {
   forEachSocketForUser(io, userId, (s) => {
     (s as any).data = (s as any).data || {};
     const d = (s as any).data;
-    // Не сносим рандом: partnerSid или не-direct roomId.
-    if (d.partnerSid) return;
     const rid = String(d.roomId || '');
+    // Рандом (поиск / room_{socket}_*): не трогаем.
+    // Direct initiate ставит partnerSid на звонящем — его нужно сбрасывать при cancel/timeout,
+    // иначе после cleanupCall (нет callOfUser) isSocketBusyForFriendsExport видит
+    // partnerSid+busy → REST isBusy:true и «Занято» залипает у друзей.
     if (rid && !isDirectCallRoomId(rid)) return;
+    if (d.partnerSid && !isDirectCallRoomId(rid)) return;
     d.busy = false;
     d.inCall = false;
     delete d.roomId;
