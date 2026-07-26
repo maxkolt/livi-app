@@ -58,7 +58,7 @@ import { logger } from '../utils/logger';
 import { trimNick } from '../utils/userDisplayName';
 import { usePiP } from '../src/pip/PiPContext';
 import { onCallTimeout as onCallTimeoutEvent, onCallIncoming as onCallIncomingEvent, onCallDeclined as onCallDeclinedEvent } from '../sockets/socket';
-import { onRequestCloseIncoming, emitCloseIncoming, onCloseOutgoingCall, onCallCancelledOnHome, onCallEndedOnHome, onCloseHomeModals } from '../utils/globalEvents';
+import { onRequestCloseIncoming, emitCloseIncoming, onCloseOutgoingCall, onCallCancelledOnHome, onCallEndedOnHome, onCloseHomeModals, shouldSkipHomeUiSettle } from '../utils/globalEvents';
 import { displayOutgoingCallImmediate, notifyOutgoingCallId, reportEndCallToCallKeep, closeOutgoingCallActivity, bringMainActivityToFront, OUTGOING_CALL_TIMEOUT_MS, clearOutgoingDeclineHandled, isOutgoingDeclineHandled, setupCallKeep, setCallMediaHint } from '../utils/callKeep';
 import { syncAppBadgeFromMissedCount, dismissMessageNotificationsOnly, getMissedCountByUserFromNative } from '../utils/pushNotifications';
 import SettingsTab from '../components/SettingsTab';
@@ -1244,6 +1244,16 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           currentCallId: currentCallId || null,
           activeOutgoingAttempt: activeOutgoingAttemptRef.current,
         });
+        return;
+      }
+      const isOurOutgoing =
+        activeOutgoingAttemptRef.current > 0 ||
+        callingVisibleRef.current ||
+        !!currentCallId ||
+        !!String(lastOutgoingPeerIdRef.current || '').trim();
+      // Callee: не трогаем setState здесь — иначе ре-рендер Home в момент finish Incoming.
+      // Busy/тост сбрасывает App через deferred emitCallCancelledOnHome + presence:update.
+      if (!isOurOutgoing) {
         return;
       }
       const peerId = String(lastOutgoingPeerIdRef.current || '').trim();
@@ -2577,13 +2587,12 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     const sub = AppState.addEventListener('change', async (state) => {
       const wasBg = /inactive|background/.test(appStateRef.current);
       appStateRef.current = state;
-      // После отмены входящего на Home (callee) пропускаем setAppIsActive, чтобы не было ре-рендера/мерцания страницы приветствия
-      const skipSetAppIsActive = (global as any).__skipAppStateActiveSetAppIsActiveRef?.current === true;
-      if (!skipSetAppIsActive) {
-        try { setAppIsActive(state === 'active'); } catch {}
-      } else {
-        try { (global as any).__skipAppStateActiveSetAppIsActiveRef.current = false; } catch (_) {}
+      // После закрытия нативного Incoming (cancel) — окно settle: несколько active подряд не должны
+      // дергать setAppIsActive / loadFriends (иначе мерцание любого экрана 2–3 раза).
+      if (shouldSkipHomeUiSettle()) {
+        return;
       }
+      try { setAppIsActive(state === 'active'); } catch {}
       if (wasBg && state === 'active') {
         const now = Date.now();
         if (now - lastResumeSyncAtRef.current < RESUME_SYNC_DEBOUNCE_MS) return;
@@ -2612,8 +2621,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   useEffect(() => {
     const unsub = navigation?.addListener?.('focus', async () => {
       try {
-        // После отмены входящего на Home не дергаем setState при focus — убираем двойной показ страницы
-        if ((global as any).__skipAppStateActiveSetAppIsActiveRef?.current === true) {
+        // После отмены входящего не дергаем setState при focus — убираем двойной показ страницы
+        if (shouldSkipHomeUiSettle()) {
           return;
         }
         syncSelfPresenceOnlineIfIdle('home-focus');
@@ -3815,12 +3824,14 @@ const handleClearNick = useCallback(async () => {
 
   // Отмена входящего, когда пользователь уже на Home: бейдж «Вызов отменён» на 3 сек через событие, без setParams — без лишних ре-рендеров
   useEffect(() => {
-    const off = onCallCancelledOnHome(() => {
+    const off = onCallCancelledOnHome((payload) => {
+      const fromUserId = String(payload?.fromUserId || '').trim();
+      if (fromUserId) clearFriendsCallBusy([fromUserId]);
       suppressUpdateBadgeForCallNotice();
       showNotice(t('callCancelled', lang), 'error', 3000);
     });
     return off;
-  }, [showNotice, lang, suppressUpdateBadgeForCallNotice]);
+  }, [showNotice, lang, suppressUpdateBadgeForCallNotice, clearFriendsCallBusy]);
 
   // Завершение звонка (закрытие экрана через goBack): тост «Звонок завершён» при фокусе на Home, без setParams — без лишних ре-рендеров
   useEffect(() => {

@@ -89,7 +89,7 @@ class IncomingCallActivity : AppCompatActivity() {
         // FCM call_canceled может запустить активность с флагом «только закрыть» (приложение в фоне/убито — broadcast не дошёл)
         if (intent.getBooleanExtra(EXTRA_JUST_CLOSE, false) && callIdFromIntent.isNotEmpty()) {
             (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_INCOMING_CALL)
-            closeIncomingScreen(callIdFromIntent)
+            closeIncomingScreen(callIdFromIntent, bringMainOnDismiss = false)
             return
         }
         // Звонок уже отменён или ring window истёк (лаунчер/FGS с устаревшим callId).
@@ -266,7 +266,9 @@ class IncomingCallActivity : AppCompatActivity() {
             override fun onReceive(context: Context?, intent: Intent?) {
                 val canceledCallId = intent?.getStringExtra(LiviFirebaseMessagingService.EXTRA_CALL_ID) ?: return
                 if (canceledCallId == currentCallId) {
-                    closeIncomingScreen()
+                    // Не поднимаем Main через startActivity — finish Incoming без REORDER,
+                    // иначе поверх Home мелькает «вторая страница».
+                    closeIncomingScreen(bringMainOnDismiss = false)
                 }
             }
         }
@@ -521,7 +523,7 @@ class IncomingCallActivity : AppCompatActivity() {
             if (cid.isNotEmpty()) {
                 (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_INCOMING_CALL)
             }
-            closeIncomingScreen(cid.ifEmpty { null })
+            closeIncomingScreen(cid.ifEmpty { null }, bringMainOnDismiss = false)
         }
     }
 
@@ -842,8 +844,8 @@ class IncomingCallActivity : AppCompatActivity() {
         }
     }
 
-    private fun closeIncomingScreen(callIdToEnd: String? = null) {
-        android.util.Log.e(TAG, "IncomingCallActivity closeIncomingScreen: callIdToEnd=$callIdToEnd closeHandled=$closeHandled isFinishing=$isFinishing isDestroyed=$isDestroyed")
+    private fun closeIncomingScreen(callIdToEnd: String? = null, bringMainOnDismiss: Boolean? = null) {
+        android.util.Log.e(TAG, "IncomingCallActivity closeIncomingScreen: callIdToEnd=$callIdToEnd closeHandled=$closeHandled isFinishing=$isFinishing isDestroyed=$isDestroyed bringMain=$bringMainOnDismiss")
         callIdToEnd?.takeIf { it.isNotEmpty() }?.let { EndedCallIds.add(this, it) }
         clearIncomingTimeout()
         stopCallRingtone()
@@ -858,10 +860,21 @@ class IncomingCallActivity : AppCompatActivity() {
                 LiviAppModule.releaseBackgroundMediaSuppressionStatic(applicationContext)
             } catch (_: Exception) {}
         }
-        // При accept тоже возвращаем Main: иначе finish() singleInstance Incoming оставляет лаунчер.
-        if (!mainReturnScheduled && (acceptInProgress || returnMainOnDismiss)) {
+        // Accept: Main надо поднять сразу (Incoming — отдельная задача).
+        // Cancel (broadcast/JUST_CLOSE): bringMainOnDismiss=false — только finish без REORDER (иначе мерцание).
+        // Timeout при returnMainOnDismiss: мягкий fallback, если Main не стал foreground.
+        val wantMain = when {
+            acceptInProgress -> true
+            bringMainOnDismiss != null -> bringMainOnDismiss
+            else -> returnMainOnDismiss
+        }
+        if (!mainReturnScheduled && wantMain) {
             mainReturnScheduled = true
-            LiviAppModule.scheduleMainActivityAfterOutgoingUserCancel(applicationContext)
+            if (acceptInProgress) {
+                LiviAppModule.scheduleMainActivityAfterOutgoingUserCancel(applicationContext)
+            } else {
+                LiviAppModule.scheduleMainActivityAfterIncomingCancelDismiss(applicationContext)
+            }
         }
         android.util.Log.e(TAG, "IncomingCallActivity closeIncomingScreen: setting isInForeground=false, calling finish()")
         finish()

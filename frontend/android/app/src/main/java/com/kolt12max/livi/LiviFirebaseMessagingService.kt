@@ -999,8 +999,10 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
         }
 
         /**
-         * Инициатор отменил: EndedCallIds, broadcast (+ повторы), при живом IncomingCallActivity — onNewIntent JUST_CLOSE.
-         * Нужно, если cancel пришёл до registerReceiver в onCreate (иначе экран продолжает «дозваниваться»).
+         * Инициатор отменил: EndedCallIds, broadcast (+ повторы).
+         * JUST_CLOSE через startActivity — только fallback, если broadcast не закрыл экран:
+         * немедленный JUST_CLOSE при живом Incoming даёт REORDER_TO_FRONT и мерцание
+         * «ещё одной страницы» поверх уже закрывающегося UI.
          */
         @JvmStatic
         fun deliverIncomingCallCanceled(context: Context, callId: String, from: String = "", fromNick: String = "") {
@@ -1024,17 +1026,19 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                     } catch (_: Exception) {}
                 }, delayMs)
             }
-            if (IncomingCallActivity.isAlive && IncomingCallActivity.activeCallId == callId) {
+            // Fallback: receiver мог не успеть зарегистрироваться (ранний cancel).
+            handler.postDelayed({
+                if (!(IncomingCallActivity.isAlive && IncomingCallActivity.activeCallId == callId)) return@postDelayed
                 try {
                     val closeIntent = buildIncomingCallActivityIntent(context, callId, from, fromNick).apply {
                         putExtra(IncomingCallActivity.EXTRA_JUST_CLOSE, true)
                     }
                     context.startActivity(closeIntent)
-                    Log.d(TAG, "deliverIncomingCallCanceled: JUST_CLOSE for alive activity callId=$callId")
+                    Log.d(TAG, "deliverIncomingCallCanceled: delayed JUST_CLOSE fallback callId=$callId")
                 } catch (e: Exception) {
                     Log.w(TAG, "deliverIncomingCallCanceled JUST_CLOSE failed callId=$callId", e)
                 }
-            }
+            }, 400L)
         }
 
         /** Intent для IncomingCallActivity (поверх блокировки и домашнего экрана). */

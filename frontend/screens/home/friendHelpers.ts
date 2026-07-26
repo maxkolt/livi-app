@@ -70,12 +70,13 @@ export const mapToFriend = (u: any): Friend => {
   };
 };
 
-/** Не залипаем «Занято»: REST после фикса совпадает с presence; не затираем локальный busy ложным false. */
-export function mergeFriendBusyFromFetch(serverBusy: boolean, prevBusy = false): boolean {
-  if (serverBusy) return true;
-  // Пока сервер на старом коде мог вернуть isBusy:false при живом presence busy —
-  // один refresh вкладки не должен сбрасывать бейдж. Снятие — только presence busy:false.
-  return !!prevBusy;
+/**
+ * Сводим isBusy с REST. Серверный getEffectiveBusy уже учитывает рандом и direct;
+ * раньше client оставлял prevBusy при server false — из-за этого «Занято» залипало
+ * после call:cancel (особенно когда socket.data.partnerSid не сбрасывался).
+ */
+export function mergeFriendBusyFromFetch(serverBusy: boolean, _prevBusy = false): boolean {
+  return !!serverBusy;
 }
 
 export function cleanPositiveBadgeMap(map: Record<string, number> | null | undefined): Record<string, number> {

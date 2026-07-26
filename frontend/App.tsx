@@ -17,7 +17,7 @@ import { BlurView } from "expo-blur";
 import { MaterialIcons } from "@expo/vector-icons";
 import { PanGestureHandler } from "react-native-gesture-handler";
 import socket, { onCallIncoming, onCallTimeout, onCallDeclined, onCallCanceled, onCallAccepted, declineCall, cancelCall, requestCallAccepted, requestCallAcceptedWithRetry, ensureSocketConnected, warmCallSignaling, SOCKET_CONNECT_WAIT_MS, checkInviteLink, getCurrentUserId, onCurrentUserId, API_BASE, setOutgoingCallScreenVisible, setIncomingCallScreenVisible, setActiveVideoCall, reportIncomingCallShown, emitPresenceUpdateIfChanged, beginEarlyIncomingCallAccept, getIncomingCallScreenState } from "./sockets/socket";
-import { emitCloseIncoming, emitRequestCloseIncoming, emitCloseOutgoingCall, emitCallCancelledOnHome, emitCallEndedOnHome, emitCloseHomeModals, onRequestCloseIncoming, onCloseIncoming, applyCallEndedGlobalRefsOnce } from './utils/globalEvents';
+import { emitCloseIncoming, emitRequestCloseIncoming, emitCloseOutgoingCall, emitCallCancelledOnHome, emitCallEndedOnHome, emitCloseHomeModals, onRequestCloseIncoming, onCloseIncoming, applyCallEndedGlobalRefsOnce, armHomeUiSettleSkip, clearHomeUiSettleSkip, shouldSkipHomeUiSettle } from './utils/globalEvents';
 import { buildCallEndSocketPayload } from './utils/callEndPayload';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { logger } from './utils/logger';
@@ -3159,19 +3159,16 @@ function AppContent() {
       disposeDirectCallAudioPrewarm('app:call-canceled');
       incomingCallIdRef.current = null;
       const callIdStr = (d as any)?.callId ? String((d as any).callId) : '';
+      // До notifyCallCanceled: finish Incoming сразу шлёт AppState — settle уже должен быть armed.
+      if (isCallee) {
+        armHomeUiSettleSkip(2500);
+      }
       if (callIdStr) {
         try { reportEndCallToCallKeep(callIdStr); } catch {}
         try { notifyCallCanceled(callIdStr); } catch {}
       }
       stopIncomingCallRingtoneAndVibration();
-      try { setIncomingCallScreenVisible(false); } catch {}
       stopIncomingCallAlert();
-      // Сбрасываем refs активного звонка при отмене вызова
-      try {
-        (global as any).__videoCallPartnerUserIdRef = { current: null };
-        (global as any).__videoCallActiveRef = { current: false };
-        (global as any).__onVideoCallEndedRef?.current?.();
-      } catch (_) {}
       // КРИТИЧНО: Обновляем canceledCallsRef для защиты от гонки событий
       try {
         const id = String((d as any)?.callId || '');
@@ -3195,13 +3192,10 @@ function AppContent() {
         setIncoming(null); stopAnim(); try { emitCloseIncoming(); emitRequestCloseIncoming(); emitCloseOutgoingCall({ reason: 'remote_closed', callId: callIdStr || null }); } catch {}
       };
 
+      // Callee settle уже armed выше (до notifyCallCanceled).
       if (calleeAlreadyOnHome) {
-        // Ноль ре-рендеров в момент закрытия нативного экрана: ничего не делаем, что дергает HomeScreen (setIncoming, эмиты с setState, бейдж, пропущенный — всё откладываем)
-        // Пропуск setAppIsActive при AppState 'active': при возврате с нативного экрана HomeScreen не должен вызывать setAppIsActive → ре-рендер
-        try {
-          const skipRef = (g.__skipAppStateActiveSetAppIsActiveRef = g.__skipAppStateActiveSetAppIsActiveRef || { current: false });
-          skipRef.current = true;
-        } catch (_) {}
+        // Натив закрываем сразу (notifyCallCanceled выше). Несколько AppState/focus подряд
+        // при finish Incoming — подавляем окном settle, иначе Home мерцает 2–3 раза.
         try {
           const pipForceHidden = !!g?.__pipForceHiddenRef?.current;
           const pipVisible = !pipForceHidden && (!!(pip as any)?.visible || !!(g?.__pipVisibleRef?.current));
@@ -3210,30 +3204,48 @@ function AppContent() {
             InCallManager.stop();
           }
         } catch (_) {}
-        // Бейдж (showNotice) и пропущенный (emitMissedIncrement → setMissedByUser) вызывают ре-рендер HomeScreen — откладываем на 400ms, чтобы первый кадр после закрытия нативного экрана прошёл без дёргания
-        const CALLEE_ON_HOME_DEFER_MS = 400;
-        setTimeout(async () => {
+        const CALLEE_ON_HOME_DEFER_MS = 700;
+        setTimeout(() => {
           try {
-            const skipRef = (g as any).__skipAppStateActiveSetAppIsActiveRef;
-            if (skipRef) skipRef.current = false;
+            setIncomingCallScreenVisible(false);
           } catch (_) {}
-          try { emitCallCancelledOnHome(); } catch (_) {}
           try {
-            if (callerId) {
-              await recordMissedCallForUser(callerId, {
-                callId: callIdStr,
-                source: 'call:cancel:deferred',
-              });
-              try { await AsyncStorage.removeItem('last_incoming_from'); } catch {}
-            }
+            (global as any).__videoCallPartnerUserIdRef = { current: null };
+            (global as any).__videoCallActiveRef = { current: false };
+            (global as any).__onVideoCallEndedRef?.current?.();
           } catch (_) {}
+          // Тост и missed — отдельным кадром после стабилизации activity.
+          setTimeout(async () => {
+            try { emitCallCancelledOnHome(callerId); } catch (_) {}
+            try {
+              if (callerId) {
+                await recordMissedCallForUser(callerId, {
+                  callId: callIdStr,
+                  source: 'call:cancel:deferred',
+                });
+                try { await AsyncStorage.removeItem('last_incoming_from'); } catch {}
+              }
+            } catch (_) {}
+            clearHomeUiSettleSkip();
+          }, 180);
         }, CALLEE_ON_HOME_DEFER_MS);
       } else {
+        try { setIncomingCallScreenVisible(false); } catch {}
+        // Сбрасываем refs активного звонка при отмене вызова
+        try {
+          (global as any).__videoCallPartnerUserIdRef = { current: null };
+          (global as any).__videoCallActiveRef = { current: false };
+          (global as any).__onVideoCallEndedRef?.current?.();
+        } catch (_) {}
         runCloseUI();
         if (homeResetByVideoCall) {
           try { g.__homeResetByVideoCallRef.current = false; } catch (_) {}
         } else if (!alreadyDidNav && navRef.isReady()) {
           applyCallCancelledHomeNotice(navRef);
+        }
+        // Не на Home — settle снимем чуть позже, после activity transition.
+        if (isCallee) {
+          setTimeout(() => clearHomeUiSettleSkip(), 1200);
         }
       }
       // Инкремент пропущенного только у получателя (callee); для callee на Home делаем в setTimeout выше
@@ -3800,8 +3812,8 @@ function AppContent() {
                 if (currentRoute && currentRoute !== lastLoggedRouteRef.current) {
                   lastLoggedRouteRef.current = currentRoute;
                 }
-                // После отмены входящего на Home не дергаем setRouteName — иначе ре-рендер App и двойная отрисовка Home
-                if ((global as any).__skipAppStateActiveSetAppIsActiveRef?.current !== true) {
+                // После отмены входящего не дергаем setRouteName — иначе ре-рендер App / fade стека
+                if (!shouldSkipHomeUiSettle()) {
                   activeRouteNameRef.current = currentRoute;
                   setRouteName(currentRoute);
                 }
@@ -3817,8 +3829,8 @@ function AppContent() {
                 if (currentRoute && currentRoute !== lastLoggedRouteRef.current) {
                   lastLoggedRouteRef.current = currentRoute;
                 }
-                // После отмены входящего на Home не дергаем setRouteName — иначе ре-рендер App и двойная отрисовка Home
-                if ((global as any).__skipAppStateActiveSetAppIsActiveRef?.current !== true) {
+                // После отмены входящего не дергаем setRouteName — иначе ре-рендер App / fade стека
+                if (!shouldSkipHomeUiSettle()) {
                   activeRouteNameRef.current = currentRoute;
                   setRouteName(currentRoute);
                 }

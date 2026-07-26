@@ -8,7 +8,7 @@ const missedClearListeners = new Set<Listener<{ userId: string }>>();
 const closeIncomingListeners = new Set<Listener<{}>>();
 const closeIncomingRequestListeners = new Set<Listener<{}>>();
 const closeOutgoingCallListeners = new Set<Listener<{}>>();
-const callCancelledOnHomeListeners = new Set<Listener<{}>>();
+const callCancelledOnHomeListeners = new Set<Listener<{ fromUserId?: string }>>();
 const callEndedOnHomeListeners = new Set<Listener<{}>>();
 const closeHomeModalsListeners = new Set<Listener<{}>>();
 type CometChatStatusKind = 'info' | 'success' | 'error';
@@ -114,16 +114,46 @@ export function emitCloseOutgoingCall(opts?: CloseOutgoingCallPayload) {
 }
 
 /** Вызов отменён инициатором, при этом пользователь уже на Home (страница приветствия). Бейдж показываем через подписку в HomeScreen, без setParams — без лишних ре-рендеров. */
-export function onCallCancelledOnHome(cb: () => void): () => void {
-  const h = () => cb();
+export function onCallCancelledOnHome(cb: (payload?: { fromUserId?: string }) => void): () => void {
+  const h = (payload?: { fromUserId?: string }) => cb(payload);
   callCancelledOnHomeListeners.add(h as any);
   return () => { callCancelledOnHomeListeners.delete(h as any); };
 }
 
-export function emitCallCancelledOnHome() {
+export function emitCallCancelledOnHome(fromUserId?: string) {
+  const payload = { fromUserId: String(fromUserId || '').trim() || undefined };
   for (const l of callCancelledOnHomeListeners) {
-    try { (l as any)({}); } catch {}
+    try { (l as any)(payload); } catch {}
   }
+}
+
+/**
+ * После закрытия нативного Incoming (cancel) Android шлёт несколько AppState/focus подряд.
+ * Окно settle подавляет setAppIsActive / loadFriends / setRouteName — иначе Home «мерцает» несколько раз.
+ */
+export function armHomeUiSettleSkip(ms = 2500): void {
+  const g = global as any;
+  const until = Date.now() + Math.max(0, Number(ms) || 0);
+  g.__skipHomeUiSettleUntilRef = g.__skipHomeUiSettleUntilRef || { current: 0 };
+  g.__skipHomeUiSettleUntilRef.current = Math.max(
+    Number(g.__skipHomeUiSettleUntilRef.current || 0),
+    until,
+  );
+  g.__skipAppStateActiveSetAppIsActiveRef = g.__skipAppStateActiveSetAppIsActiveRef || { current: false };
+  g.__skipAppStateActiveSetAppIsActiveRef.current = true;
+}
+
+export function shouldSkipHomeUiSettle(): boolean {
+  const g = global as any;
+  const until = Number(g.__skipHomeUiSettleUntilRef?.current || 0);
+  if (until > Date.now()) return true;
+  return g.__skipAppStateActiveSetAppIsActiveRef?.current === true;
+}
+
+export function clearHomeUiSettleSkip(): void {
+  const g = global as any;
+  if (g.__skipHomeUiSettleUntilRef) g.__skipHomeUiSettleUntilRef.current = 0;
+  if (g.__skipAppStateActiveSetAppIsActiveRef) g.__skipAppStateActiveSetAppIsActiveRef.current = false;
 }
 
 /** Звонок завершён (не отмена). Показываем тост «Звонок завершён» на Home при фокусе, без setParams — без лишних ре-рендеров (при закрытии экрана звонка через goBack). */

@@ -2335,6 +2335,42 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     }
 
     /**
+     * Закрытие Incoming по cancel/timeout, когда пользователь был в приложении (returnMainOnDismiss).
+     * Не делаем мгновенный REORDER — Main обычно сам становится видимым после finish Incoming;
+     * startActivity(Main) в этот момент даёт мерцание «второй страницы».
+     */
+    @JvmStatic
+    fun scheduleMainActivityAfterIncomingCancelDismiss(ctx: Context) {
+      val appCtx = ctx.applicationContext
+      Handler(Looper.getMainLooper()).postDelayed({
+        if (MainActivity.isInForeground) {
+          Log.d(NAME, "scheduleMainActivityAfterIncomingCancelDismiss: Main already foreground, skip")
+          return@postDelayed
+        }
+        if (IncomingCallActivity.isAlive) {
+          // Ещё закрывается — подождём и проверим снова.
+          Handler(Looper.getMainLooper()).postDelayed({
+            if (MainActivity.isInForeground) {
+              Log.d(NAME, "scheduleMainActivityAfterIncomingCancelDismiss: Main foreground after wait, skip")
+              return@postDelayed
+            }
+            synchronized(LiviAppModule::class.java) {
+              lastBringMainToFrontAtMs = System.currentTimeMillis()
+            }
+            Log.d(NAME, "scheduleMainActivityAfterIncomingCancelDismiss: fallback Main reorder")
+            postMainActivityReorderToFront(appCtx, 0L)
+          }, 180L)
+          return@postDelayed
+        }
+        synchronized(LiviAppModule::class.java) {
+          lastBringMainToFrontAtMs = System.currentTimeMillis()
+        }
+        Log.d(NAME, "scheduleMainActivityAfterIncomingCancelDismiss: fallback Main reorder")
+        postMainActivityReorderToFront(appCtx, 0L)
+      }, 220L)
+    }
+
+    /**
      * Сразу вывести задачу MainActivity на передний план (accept входящего).
      * Без OutgoingCall(close) и без debounce-skip по isInForeground — Incoming в отдельной задаче.
      * [withAnswerCover]: true только до первого кадра VideoCall; false при reinforce после navigate.
