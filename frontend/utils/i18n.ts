@@ -108,6 +108,11 @@ const dict: Partial<Record<Lang, Record<string, string>>> = {
 
     // — UI «Ещё»
     uiSettings: 'Настройки интерфейса',
+    chatWallpaper: 'Фон чата',
+    chatWallpaperPickLight: 'Фон · светлая тема',
+    chatWallpaperPickDark: 'Фон · тёмная тема',
+    chatWallpaperApply: 'Применить',
+    chatWallpaperApplied: 'Успешно применено',
     chooseLanguage: 'Выбрать язык',
     baseLang: 'Базовый',
     updateDownloadNew: 'Скачайте обновление',
@@ -368,6 +373,11 @@ const dict: Partial<Record<Lang, Record<string, string>>> = {
   
     // — UI “More”
     uiSettings: 'Interface settings',
+    chatWallpaper: 'Chat background',
+    chatWallpaperPickLight: 'Background · light theme',
+    chatWallpaperPickDark: 'Background · dark theme',
+    chatWallpaperApply: 'Apply',
+    chatWallpaperApplied: 'Applied successfully',
     chooseLanguage: 'Choose language',
     baseLang: 'Base',
     updateDownloadNew: 'Download the update',

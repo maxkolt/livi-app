@@ -11,9 +11,10 @@ import {
   type LayoutChangeEvent,
 } from "react-native";
 import { Accelerometer } from "expo-sensors";
-
-const WALLPAPER_LIGHT = require("../../assets/chat-wallpaper-light.jpeg");
-const WALLPAPER_DARK = require("../../assets/chat-wallpaper-dark.jpeg");
+import {
+  getChatWallpaperSource,
+  useChatWallpaperPrefs,
+} from "../../utils/chatWallpaper";
 
 /** Max translate in px — subtle but noticeable. */
 const MAX_SHIFT = 4;
@@ -34,6 +35,8 @@ export function ChatParallaxWallpaper({ isDark }: { isDark: boolean }) {
   // Use the actual container size. Starting with window metrics and then
   // replacing them onLayout remounted the Image and looked like a wallpaper zoom.
   const [box, setBox] = useState<{ w: number; h: number } | null>(null);
+  const wallpaperPrefs = useChatWallpaperPrefs();
+  const source = getChatWallpaperSource(isDark, wallpaperPrefs);
 
   const tx = useRef(new Animated.Value(0)).current;
   const ty = useRef(new Animated.Value(0)).current;
@@ -158,7 +161,6 @@ export function ChatParallaxWallpaper({ isDark }: { isDark: boolean }) {
   const imgH = Math.round(box?.h || 0) + MAX_SHIFT * 2;
   const themeWash = isDark ? "rgba(21, 31, 51, 0.58)" : "rgba(182, 203, 216, 0.62)";
   const themeShade = isDark ? "rgba(8, 12, 20, 0.36)" : "rgba(140, 158, 180, 0.36)";
-  const source = isDark ? WALLPAPER_DARK : WALLPAPER_LIGHT;
 
   return (
     <View

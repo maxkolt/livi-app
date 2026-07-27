@@ -1,6 +1,7 @@
-import React from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   Animated,
+  BackHandler,
   Linking,
   Platform,
   ScrollView,
@@ -13,7 +14,12 @@ import { Ionicons } from '@expo/vector-icons';
 import { Image as ExpoImage } from 'expo-image';
 import type { ThemePreference } from '../../theme/ThemeProvider';
 import { t, defaultLang, type Lang } from '../../utils/i18n';
+import {
+  setChatWallpaperId,
+  type ChatWallpaperTheme,
+} from '../../utils/chatWallpaper';
 import { markUpdateBadgeShown, PLAY_STORE_UPDATE_URL } from '../../utils/updateCheck';
+import { ChatWallpaperPickerPanel } from './ChatWallpaperPickerPanel';
 import { FRIENDS_LIST_PAD_H, LIVI } from './constants';
 import type { HomeStyles } from './styles';
 
@@ -31,6 +37,9 @@ export type HomeMoreTabProps = {
   generateInviteLink: () => void | Promise<void>;
   updateAvailable: boolean;
   updateSpinAnim: Animated.Value;
+  /** Открытый пикер фона (null = список More). */
+  wallpaperPickerTheme: ChatWallpaperTheme | null;
+  setWallpaperPickerTheme: (theme: ChatWallpaperTheme | null) => void;
 };
 
 function HomeMoreTabInner({
@@ -47,7 +56,47 @@ function HomeMoreTabInner({
   generateInviteLink,
   updateAvailable,
   updateSpinAnim,
+  wallpaperPickerTheme,
+  setWallpaperPickerTheme,
 }: HomeMoreTabProps) {
+  const [wallpaperExpanded, setWallpaperExpanded] = useState(false);
+
+  // Сброс раскрытия при уходе с пикера / смене таба снаружи.
+  useEffect(() => {
+    if (wallpaperPickerTheme) setWallpaperExpanded(false);
+  }, [wallpaperPickerTheme]);
+
+  // Android back: сначала закрыть пикер, не всё меню.
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    if (!wallpaperPickerTheme) return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      setWallpaperPickerTheme(null);
+      return true;
+    });
+    return () => sub.remove();
+  }, [wallpaperPickerTheme, setWallpaperPickerTheme]);
+
+  const handleApplyWallpaper = useCallback(
+    async (wallpaperId: string) => {
+      if (!wallpaperPickerTheme) return;
+      await setChatWallpaperId(wallpaperPickerTheme, wallpaperId);
+    },
+    [wallpaperPickerTheme],
+  );
+
+  if (wallpaperPickerTheme) {
+    return (
+      <ChatWallpaperPickerPanel
+        key={wallpaperPickerTheme}
+        theme={wallpaperPickerTheme}
+        lang={lang}
+        onBack={() => setWallpaperPickerTheme(null)}
+        onApply={handleApplyWallpaper}
+      />
+    );
+  }
+
   return (
     <ScrollView
       style={{ flex: 1 }}
@@ -80,8 +129,8 @@ function HomeMoreTabInner({
           {(
             [
               { key: 'auto', label: t('themeAuto', lang) },
-              { key: 'light', label: t('themeLight', lang) },
               { key: 'dark', label: t('themeDark', lang) },
+              { key: 'light', label: t('themeLight', lang) },
             ] as { key: ThemePreference; label: string }[]
           ).map((opt) => {
             const active = preference === opt.key;
@@ -137,6 +186,71 @@ function HomeMoreTabInner({
         <Text style={{ color: LIVI.text2, marginTop: 6, fontSize: 12 }}>
           {L('baseLang')}: {defaultLang.toUpperCase()}
         </Text>
+
+        {/* Фон чата: пункт → раскрытие Light/Dark → пикер */}
+        <TouchableOpacity
+          activeOpacity={0.85}
+          onPress={() => setWallpaperExpanded((v) => !v)}
+          style={{
+            marginTop: 12,
+            borderWidth: StyleSheet.hairlineWidth,
+            borderColor: LIVI.border,
+            borderRadius: 10,
+            paddingVertical: 14,
+            paddingHorizontal: 14,
+            backgroundColor: 'rgba(255,255,255,0.02)',
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+          }}
+        >
+          <Text style={{ color: LIVI.white, fontSize: 14, fontWeight: '600' }}>
+            {t('chatWallpaper', lang)}
+          </Text>
+          <Ionicons
+            name={wallpaperExpanded ? 'chevron-up' : 'chevron-down'}
+            size={18}
+            color={LIVI.text2}
+          />
+        </TouchableOpacity>
+
+        {wallpaperExpanded && (
+          <View
+            style={{
+              marginTop: 8,
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: 8,
+            }}
+          >
+            {(
+              [
+                { key: 'dark' as const, label: t('themeDark', lang) },
+                { key: 'light' as const, label: t('themeLight', lang) },
+              ]
+            ).map((opt) => (
+              <TouchableOpacity
+                key={opt.key}
+                activeOpacity={0.85}
+                onPress={() => setWallpaperPickerTheme(opt.key)}
+                style={{
+                  flex: 1,
+                  paddingVertical: 12,
+                  paddingHorizontal: 14,
+                  borderRadius: 28,
+                  borderWidth: StyleSheet.hairlineWidth,
+                  borderColor: LIVI.border,
+                  backgroundColor: 'rgba(255,255,255,0.02)',
+                  alignItems: 'center',
+                }}
+              >
+                <Text style={{ color: LIVI.white, fontWeight: '700', fontSize: 14 }}>
+                  {opt.label}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        )}
       </View>
 
       <TouchableOpacity
@@ -251,7 +365,15 @@ function HomeMoreTabInner({
       </TouchableOpacity>
 
       {updateAvailable && (
-        <View style={{ marginTop: 'auto', marginBottom: 56, alignItems: 'center', alignSelf: 'stretch' }}>
+        <View
+          style={{
+            flexGrow: 1,
+            justifyContent: 'center',
+            alignItems: 'center',
+            alignSelf: 'stretch',
+            minHeight: 72,
+          }}
+        >
           <View
             style={{
               borderRadius: 12,

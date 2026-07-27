@@ -297,6 +297,15 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const [installId, setInstallId] = useState<string>('');
 
   const { menuOpen, setMenuOpen, tab, setTab, tabRef, menuOverlayOpacity, closeMenu } = useHomeMenu();
+  const [wallpaperPickerTheme, setWallpaperPickerTheme] = useState<'light' | 'dark' | null>(null);
+
+  // Пикер фона — внутренний экран More; сбрасываем при закрытии меню / смене вкладки.
+  useEffect(() => {
+    if (!menuOpen) setWallpaperPickerTheme(null);
+  }, [menuOpen]);
+  useEffect(() => {
+    if (tab !== 'more') setWallpaperPickerTheme(null);
+  }, [tab]);
   const {
     updateAvailable,
     showUpdateBadge,
@@ -4000,6 +4009,11 @@ const handleClearNick = useCallback(async () => {
         menuOpen={menuOpen}
         menuOverlayOpacity={menuOverlayOpacity}
         closeMenu={closeMenu}
+        onHeaderBackPress={
+          wallpaperPickerTheme
+            ? () => setWallpaperPickerTheme(null)
+            : closeMenu
+        }
         tab={tab}
         setTab={setTab}
         L={L}
@@ -4100,6 +4114,8 @@ const handleClearNick = useCallback(async () => {
                   generateInviteLink={generateInviteLink}
                   updateAvailable={updateAvailable}
                   updateSpinAnim={updateSpinAnim}
+                  wallpaperPickerTheme={wallpaperPickerTheme}
+                  setWallpaperPickerTheme={setWallpaperPickerTheme}
                 />
               )}
       </HomeMenuOverlay>

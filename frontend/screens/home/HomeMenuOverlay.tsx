@@ -26,6 +26,8 @@ export type HomeMenuOverlayProps = {
   menuOpen: boolean;
   menuOverlayOpacity: Animated.Value;
   closeMenu: () => void;
+  /** Если задан — кнопка «назад» в шапке вызывает его вместо closeMenu (подэкраны More). */
+  onHeaderBackPress?: () => void;
   tab: HomeMenuTab;
   setTab: (tab: HomeMenuTab) => void;
   L: (key: string) => string;
@@ -40,6 +42,7 @@ function HomeMenuOverlayInner({
   menuOpen,
   menuOverlayOpacity,
   closeMenu,
+  onHeaderBackPress,
   tab,
   setTab,
   L,
@@ -48,6 +51,7 @@ function HomeMenuOverlayInner({
   wiping,
   children,
 }: HomeMenuOverlayProps) {
+  const headerBack = onHeaderBackPress ?? closeMenu;
   const renderMoreSegBtn = () => {
     const active = tab === 'more';
     const label = L('tabMore');
@@ -161,7 +165,7 @@ function HomeMenuOverlayInner({
         >
           <View style={styles.sheetTopBar}>
             <ChatStyleBackButton
-              onPress={closeMenu}
+              onPress={headerBack}
               iconColor={LIVI.titan}
               style={{ marginLeft: 5 }}
             />
