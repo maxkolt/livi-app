@@ -504,33 +504,59 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
         await removeFromQueue(other.id);
         other.rooms.forEach(r => { if (r !== other.id) other.leave(r); });
         other.data.roomId = undefined;
-        // ЧАТРУЛЕТКА: Отправляем peer:left партнеру (он нажал "Далее", значит партнер должен начать новый поиск)
-        other.emit('peer:left', { nextTransitionId: transitionId ?? null });
-        // КРИТИЧНО: Автоматически возвращаем партнера в очередь для нового поиска
-        await markBusy(io, other, true);
-        // Одинаковая задержка для обоих (250ms), чтобы tryMatch не сматчил одного с третьим пока второй ещё не в очереди
-        const reEnqueueDelayMs = 250;
-        setTimeout(async () => {
-          const currentOther = safeGet(io, other.id);
-          if (!currentOther) {
-            await queueStore.clearSocketData(other.id);
-            logger.debug('Skip partner requeue after next: socket disconnected', {
-              socketId: other.id,
-              triggeredByTransitionId: transitionId,
-            });
-            return;
-          }
-          currentOther.data.partnerSid = undefined;
-          currentOther.data.inCall = false;
-          await unlockPair(currentOther.id);
-          await pushToQueue(currentOther.id);
-          logger.debug('Partner re-added to queue after next', {
-            socketId: currentOther.id,
+
+        const otherUserId = String(other.data.userId || '').trim();
+        const otherModBanned =
+          !!otherUserId && (await queueStore.isModerationBanned(otherUserId));
+        if (otherModBanned) {
+          // После модерации не возвращаем в поиск и не вешаем busy друзьям.
+          clearDelayedRetry(other.id);
+          await markBusy(io, other, false);
+          logger.debug('Skip partner requeue after next: moderation-banned', {
+            socketId: other.id,
+            otherUserId,
             triggeredByTransitionId: transitionId,
           });
-          runTryMatch(currentOther);
-          scheduleDelayedRetry(io, currentOther.id, REMATCH_BAN_MS + 250, 'next_rematch_window');
-        }, reEnqueueDelayMs);
+        } else {
+          // ЧАТРУЛЕТКА: Отправляем peer:left партнеру (он нажал "Далее", значит партнер должен начать новый поиск)
+          other.emit('peer:left', { nextTransitionId: transitionId ?? null });
+          // КРИТИЧНО: Автоматически возвращаем партнера в очередь для нового поиска
+          await markBusy(io, other, true);
+          // Одинаковая задержка для обоих (250ms), чтобы tryMatch не сматчил одного с третьим пока второй ещё не в очереди
+          const reEnqueueDelayMs = 250;
+          setTimeout(async () => {
+            const currentOther = safeGet(io, other.id);
+            if (!currentOther) {
+              await queueStore.clearSocketData(other.id);
+              logger.debug('Skip partner requeue after next: socket disconnected', {
+                socketId: other.id,
+                triggeredByTransitionId: transitionId,
+              });
+              return;
+            }
+            const uid = String(currentOther.data.userId || '').trim();
+            if (uid && (await queueStore.isModerationBanned(uid))) {
+              clearDelayedRetry(currentOther.id);
+              await markBusy(io, currentOther, false);
+              logger.debug('Skip partner requeue after next delay: moderation-banned', {
+                socketId: currentOther.id,
+                otherUserId: uid,
+                triggeredByTransitionId: transitionId,
+              });
+              return;
+            }
+            currentOther.data.partnerSid = undefined;
+            currentOther.data.inCall = false;
+            await unlockPair(currentOther.id);
+            await pushToQueue(currentOther.id);
+            logger.debug('Partner re-added to queue after next', {
+              socketId: currentOther.id,
+              triggeredByTransitionId: transitionId,
+            });
+            runTryMatch(currentOther);
+            scheduleDelayedRetry(io, currentOther.id, REMATCH_BAN_MS + 250, 'next_rematch_window');
+          }, reEnqueueDelayMs);
+        }
       }
     }
 
@@ -636,13 +662,28 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
       });
 
       await queueStore.banModerationUser(actualPartnerUserId, MODERATION_BAN_MS);
+      await banPair(socket.id, partnerSid);
+      // moderation:banned → клиент сам stopRandomChat; peer:left не шлём —
+      // иначе последующий next() репортёра снова пометит забаненного busy и вернёт в очередь.
       await emitModerationBannedToSocket(partner, actualPartnerUserId);
-      partner.emit('peer:left');
+
       partner.data.partnerSid = undefined;
       partner.data.inCall = false;
+      partner.data.roomId = undefined;
+      partner.rooms.forEach((r) => {
+        if (r !== partner.id) partner.leave(r);
+      });
+      clearDelayedRetry(partner.id);
       await unlockPair(partner.id);
       await removeFromQueue(partner.id);
       await markBusy(io, partner, false);
+
+      // Отвязываем репортёра от пары до его next(), иначе next найдёт prevPartner
+      // и сделает markBusy(banned, true) + requeue.
+      socket.data.partnerSid = undefined;
+      socket.data.inCall = false;
+      socket.data.roomId = undefined;
+      await unlockPair(socket.id);
 
       done({ ok: true });
     }
