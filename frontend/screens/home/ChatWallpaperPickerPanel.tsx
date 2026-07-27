@@ -53,9 +53,11 @@ function ChatWallpaperPickerPanelInner({
     };
   }, []);
 
-  const carouselWidth = windowWidth;
-  const itemWidth = Math.min(windowWidth * 0.78, 320);
-  const itemHeight = Math.min(Math.round(itemWidth * (1024 / 576)), 470);
+  // Как в демо parallax: ширина страницы = карточка, контейнер на весь экран → по бокам peek.
+  const pageWidth = Math.min(windowWidth * 0.82, 340);
+  const itemHeight = Math.min(Math.round(pageWidth * (1024 / 576)), 470);
+  const cardGap = 10;
+  const cardWidth = pageWidth - cardGap * 2;
 
   const title =
     theme === 'light'
@@ -70,7 +72,7 @@ function ChatWallpaperPickerPanelInner({
 
       <View style={styles.carouselWrap}>
         <Carousel
-          width={carouselWidth}
+          width={pageWidth}
           height={itemHeight}
           data={catalog}
           loop={catalog.length > 1}
@@ -80,19 +82,22 @@ function ChatWallpaperPickerPanelInner({
             parallaxScrollingScale: 0.9,
             parallaxScrollingOffset: 50,
           }}
-          style={{ width: carouselWidth }}
+          style={{
+            width: windowWidth,
+            justifyContent: 'center',
+          }}
           enabled={!applying && !applied}
           onSnapToItem={setIndex}
           renderItem={({ item }) => (
             <View
               style={{
                 flex: 1,
-                width: carouselWidth,
-                alignItems: 'center',
+                width: pageWidth,
+                paddingHorizontal: cardGap,
                 justifyContent: 'center',
               }}
             >
-              <View style={[styles.cardOuter, { width: itemWidth, height: itemHeight }]}>
+              <View style={[styles.cardOuter, { width: cardWidth, height: itemHeight }]}>
                 <View style={styles.cardInner}>
                   <Image
                     source={item.source}
@@ -176,6 +181,10 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-start',
     alignItems: 'center',
     position: 'relative',
+    // Выходим из горизонтального padding root, чтобы peek соседей был как в демо.
+    marginHorizontal: -FRIENDS_LIST_PAD_H,
+    width: undefined,
+    alignSelf: 'stretch',
   },
   cardOuter: {
     alignSelf: 'center',

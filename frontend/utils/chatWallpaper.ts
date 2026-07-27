@@ -19,20 +19,117 @@ export type ChatWallpaperItem = {
 export const DEFAULT_LIGHT_WALLPAPER_ID = 'light-default';
 export const DEFAULT_DARK_WALLPAPER_ID = 'dark-default';
 
-/**
- * Каталог. Пока в assets две картинки — обе доступны в каждом пикере,
- * чтобы слайдер было чем листать; дефолты совпадают с текущим поведением чата.
- * Новые фоны добавлять сюда же.
- */
-export const CHAT_WALLPAPER_CATALOG: ChatWallpaperItem[] = [
+/** Светлая тема: класть новые JPEG в `assets/chat-wallpapers/light/`. */
+export const CHAT_WALLPAPERS_LIGHT: ChatWallpaperItem[] = [
   {
     id: DEFAULT_LIGHT_WALLPAPER_ID,
-    source: require('../assets/chat-wallpaper-light.jpeg'),
+    source: require('../assets/chat-wallpapers/light/default.jpeg'),
   },
   {
-    id: DEFAULT_DARK_WALLPAPER_ID,
-    source: require('../assets/chat-wallpaper-dark.jpeg'),
+    id: 'light-doodles-soft',
+    source: require('../assets/chat-wallpapers/light/doodles-soft.jpeg'),
   },
+  {
+    id: 'light-math',
+    source: require('../assets/chat-wallpapers/light/math.jpeg'),
+  },
+  {
+    id: 'light-rpg',
+    source: require('../assets/chat-wallpapers/light/rpg.jpeg'),
+  },
+  {
+    id: 'light-doodles-bw',
+    source: require('../assets/chat-wallpapers/light/doodles-bw.jpeg'),
+  },
+  {
+    id: 'light-love',
+    source: require('../assets/chat-wallpapers/light/love.jpeg'),
+  },
+  {
+    id: 'light-school',
+    source: require('../assets/chat-wallpapers/light/school.jpeg'),
+  },
+  {
+    id: 'light-doodles-teal',
+    source: require('../assets/chat-wallpapers/light/doodles-teal.jpeg'),
+  },
+  {
+    id: 'light-doodles-bw-2',
+    source: require('../assets/chat-wallpapers/light/doodles-bw-2.jpeg'),
+  },
+  {
+    id: 'light-zoo',
+    source: require('../assets/chat-wallpapers/light/zoo.jpeg'),
+  },
+  {
+    id: 'light-doodles-cyan',
+    source: require('../assets/chat-wallpapers/light/doodles-cyan.jpeg'),
+  },
+  {
+    id: 'light-office',
+    source: require('../assets/chat-wallpapers/light/office.jpeg'),
+  },
+  {
+    id: 'light-doodles-mint',
+    source: require('../assets/chat-wallpapers/light/doodles-mint.jpeg'),
+  },
+];
+
+/** Тёмная тема: класть новые JPEG в `assets/chat-wallpapers/dark/`. */
+export const CHAT_WALLPAPERS_DARK: ChatWallpaperItem[] = [
+  {
+    id: DEFAULT_DARK_WALLPAPER_ID,
+    source: require('../assets/chat-wallpapers/dark/default.jpeg'),
+  },
+  {
+    id: 'dark-pushkin',
+    source: require('../assets/chat-wallpapers/dark/pushkin.jpeg'),
+  },
+  {
+    id: 'dark-texture-navy',
+    source: require('../assets/chat-wallpapers/dark/texture-navy.jpeg'),
+  },
+  {
+    id: 'dark-cosmos',
+    source: require('../assets/chat-wallpapers/dark/cosmos.jpeg'),
+  },
+  {
+    id: 'dark-doodles-cyan',
+    source: require('../assets/chat-wallpapers/dark/doodles-cyan.jpeg'),
+  },
+  {
+    id: 'dark-linen-blue',
+    source: require('../assets/chat-wallpapers/dark/linen-blue.jpeg'),
+  },
+  {
+    id: 'dark-nowhere',
+    source: require('../assets/chat-wallpapers/dark/nowhere.jpeg'),
+  },
+  {
+    id: 'dark-letters',
+    source: require('../assets/chat-wallpapers/dark/letters.jpeg'),
+  },
+  {
+    id: 'dark-doodles-soft',
+    source: require('../assets/chat-wallpapers/dark/doodles-soft.jpeg'),
+  },
+  {
+    id: 'dark-doodles-teal',
+    source: require('../assets/chat-wallpapers/dark/doodles-teal.jpeg'),
+  },
+  {
+    id: 'dark-fingerprint',
+    source: require('../assets/chat-wallpapers/dark/fingerprint.jpeg'),
+  },
+  {
+    id: 'dark-doodles-bw',
+    source: require('../assets/chat-wallpapers/dark/doodles-bw.jpeg'),
+  },
+];
+
+const ALL_WALLPAPERS: ChatWallpaperItem[] = [
+  ...CHAT_WALLPAPERS_LIGHT,
+  ...CHAT_WALLPAPERS_DARK,
 ];
 
 export type ChatWallpaperPrefs = {
@@ -49,15 +146,25 @@ const listeners = new Set<(prefs: ChatWallpaperPrefs) => void>();
 let cachedPrefs: ChatWallpaperPrefs = { ...DEFAULT_CHAT_WALLPAPER_PREFS };
 let loadPromise: Promise<ChatWallpaperPrefs> | null = null;
 
-function isKnownId(id: string): boolean {
-  return CHAT_WALLPAPER_CATALOG.some((item) => item.id === id);
+function isKnownId(id: string, theme?: ChatWallpaperTheme): boolean {
+  const list =
+    theme === 'light'
+      ? CHAT_WALLPAPERS_LIGHT
+      : theme === 'dark'
+        ? CHAT_WALLPAPERS_DARK
+        : ALL_WALLPAPERS;
+  return list.some((item) => item.id === id);
 }
 
 function normalizePrefs(raw: Partial<ChatWallpaperPrefs> | null | undefined): ChatWallpaperPrefs {
   const lightId =
-    raw?.lightId && isKnownId(raw.lightId) ? raw.lightId : DEFAULT_LIGHT_WALLPAPER_ID;
+    raw?.lightId && isKnownId(raw.lightId, 'light')
+      ? raw.lightId
+      : DEFAULT_LIGHT_WALLPAPER_ID;
   const darkId =
-    raw?.darkId && isKnownId(raw.darkId) ? raw.darkId : DEFAULT_DARK_WALLPAPER_ID;
+    raw?.darkId && isKnownId(raw.darkId, 'dark')
+      ? raw.darkId
+      : DEFAULT_DARK_WALLPAPER_ID;
   return { lightId, darkId };
 }
 
@@ -72,21 +179,27 @@ function notify(prefs: ChatWallpaperPrefs) {
   });
 }
 
-export function getChatWallpaperCatalog(_theme: ChatWallpaperTheme): ChatWallpaperItem[] {
-  return CHAT_WALLPAPER_CATALOG;
+export function getChatWallpaperCatalog(theme: ChatWallpaperTheme): ChatWallpaperItem[] {
+  return theme === 'dark' ? CHAT_WALLPAPERS_DARK : CHAT_WALLPAPERS_LIGHT;
 }
 
-export function getChatWallpaperById(id: string | null | undefined): ChatWallpaperItem {
-  const found = CHAT_WALLPAPER_CATALOG.find((item) => item.id === id);
-  return found ?? CHAT_WALLPAPER_CATALOG[0]!;
+export function getChatWallpaperById(
+  id: string | null | undefined,
+  theme?: ChatWallpaperTheme,
+): ChatWallpaperItem {
+  const list = theme ? getChatWallpaperCatalog(theme) : ALL_WALLPAPERS;
+  const found = list.find((item) => item.id === id) ?? ALL_WALLPAPERS.find((item) => item.id === id);
+  if (found) return found;
+  return theme === 'dark' ? CHAT_WALLPAPERS_DARK[0]! : CHAT_WALLPAPERS_LIGHT[0]!;
 }
 
 export function getChatWallpaperSource(
   isDark: boolean,
   prefs: ChatWallpaperPrefs = cachedPrefs,
 ): ImageSourcePropType {
+  const theme: ChatWallpaperTheme = isDark ? 'dark' : 'light';
   const id = isDark ? prefs.darkId : prefs.lightId;
-  return getChatWallpaperById(id).source;
+  return getChatWallpaperById(id, theme).source;
 }
 
 export function getCachedChatWallpaperPrefs(): ChatWallpaperPrefs {
