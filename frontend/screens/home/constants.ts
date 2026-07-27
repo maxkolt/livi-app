@@ -58,7 +58,7 @@ export const CHROME_PERIMETER_GLOW_SPREAD = 2.8;
 /** Компенсация ширины ореола справа — кнопка меню на прежнем отступе. */
 export const CHROME_PERIMETER_GLOW_LAYOUT_INSET =
   CHROME_PERIMETER_GLOW_LAYERS * CHROME_PERIMETER_GLOW_SPREAD;
-export const ANIMATED_BORDER_WIDTH = 0.8;
+export const ANIMATED_BORDER_WIDTH = 1;
 export const ANDROID_SEG_RIPPLE = { color: 'rgba(255,255,255,0.14)', borderless: false as const };
 export const FRIENDS_PAGE_SIZE = 50;
 export const FRIENDS_MAX_PAGES_PER_LOAD = 10;

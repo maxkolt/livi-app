@@ -143,6 +143,22 @@ function HomeWelcomeViewInner({
     : -CHROME_PERIMETER_GLOW_LAYOUT_INSET;
 
   const showCallLock = hasActiveCallForSearch && showCallSearchLockBadge;
+  // Ширина строк приветствия: почти на весь экран, чтобы subtitle не обрезался.
+  const welcomeTextWidth = Math.max(0, viewWidth - 28);
+  const welcomeTitleFontSize = phoneLandscape
+    ? 18
+    : compactLayout
+      ? 21
+      : Platform.OS === 'android'
+        ? 26
+        : 28;
+  const welcomeSubtitleFontSize = phoneLandscape
+    ? 12
+    : compactLayout
+      ? 13
+      : Platform.OS === 'android'
+        ? 14
+        : 16;
 
   useEffect(() => {
     setMenuBlurIntensity(menuIdleBlur);
@@ -416,6 +432,7 @@ function HomeWelcomeViewInner({
         onLayout={syncBadgeGap}
         style={[
           styles.welcomeBlock,
+          { overflow: 'visible' },
           Platform.OS === 'android' && {
             marginTop: phoneLandscape ? 4 : compactLayout ? 8 : 50,
           },
@@ -427,32 +444,39 @@ function HomeWelcomeViewInner({
             phoneLandscape && { marginTop: 4, flex: 0, gap: 2 },
           ]}
         >
-          <Text
-            style={[
-              styles.title,
-              {
-                color: isDark ? LIVI.text : LIVI.textThemeWhite,
-                ...(phoneLandscape
-                  ? { fontSize: 18, lineHeight: 20 }
-                  : compactLayout
-                    ? { fontSize: 21, lineHeight: 24 }
-                    : null),
-              },
-            ]}
-            allowFontScaling={false}
-            maxFontSizeMultiplier={1}
-            numberOfLines={phoneLandscape || compactLayout ? 1 : 2}
+          <View
+            style={{
+              width: welcomeTextWidth,
+              alignSelf: 'center',
+            }}
           >
-            {L('welcomeTitle')}
-          </Text>
+            <Text
+              style={[
+                styles.title,
+                {
+                  color: isDark ? LIVI.text : LIVI.textThemeWhite,
+                  width: welcomeTextWidth,
+                  fontSize: welcomeTitleFontSize,
+                  lineHeight: welcomeTitleFontSize + 4,
+                },
+              ]}
+              allowFontScaling={false}
+              maxFontSizeMultiplier={1}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.55}
+            >
+              {L('welcomeTitle')}
+            </Text>
+          </View>
           <View
             ref={subtitleAnchorRef}
             collapsable={false}
             onLayout={syncBadgeGap}
             style={{
-              width: Math.min(Math.max(0, viewWidth - 36), phoneLandscape ? 520 : 400),
+              width: welcomeTextWidth,
               alignSelf: 'center',
-              paddingHorizontal: 2,
+              marginTop: phoneLandscape ? 0 : 2,
             }}
           >
             <Text
@@ -460,16 +484,16 @@ function HomeWelcomeViewInner({
                 styles.subtitle,
                 {
                   color: isDark ? LIVI.text2 : LIVI.textThemeWhite,
-                  width: '100%',
+                  width: welcomeTextWidth,
+                  fontSize: welcomeSubtitleFontSize,
+                  lineHeight: welcomeSubtitleFontSize + 3,
+                  marginTop: 0,
                   ...(Platform.OS === 'android' && { includeFontPadding: false }),
-                  ...(phoneLandscape
-                    ? { fontSize: 12, lineHeight: 14, marginTop: 0 }
-                    : compactLayout
-                      ? { fontSize: 13, lineHeight: 16 }
-                      : null),
                 },
               ]}
-              numberOfLines={phoneLandscape || compactLayout ? 1 : 2}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.55}
               allowFontScaling={false}
               maxFontSizeMultiplier={1}
             >
@@ -482,6 +506,10 @@ function HomeWelcomeViewInner({
           style={[
             styles.noticeSlot,
             phoneLandscape && { minHeight: 40, marginBottom: 8 },
+            // Планшет landscape: меньше резерв, иначе CTA упирается вниз и теряется нижняя рамка.
+            isTabletLayout &&
+              isLandscape &&
+              !phoneLandscape && { minHeight: 48, marginBottom: 12 },
           ]}
           pointerEvents="none"
         />
@@ -489,13 +517,27 @@ function HomeWelcomeViewInner({
           ref={searchBtnAnchorRef}
           collapsable={false}
           onLayout={syncBadgeGap}
-          style={{ alignSelf: 'stretch', alignItems: 'center' }}
+          style={{
+            alignSelf: 'stretch',
+            alignItems: 'center',
+            ...(isTabletLayout ? { overflow: 'visible' as const } : null),
+          }}
         >
           <AnimatedBorderButton
             isDark={isDark}
             onPress={onStartSearch}
             label={L('startSearchBtn')}
-            style={{ marginBottom: phoneLandscape ? 4 : compactLayout ? 8 : 30 }}
+            style={{
+              // Планшет: запас снизу, чтобы glow/SafeArea не срезали нижнюю линию рамки.
+              marginBottom: phoneLandscape
+                ? 4
+                : compactLayout
+                  ? 8
+                  : isTabletLayout
+                    ? 30 + CHROME_PERIMETER_GLOW_LAYOUT_INSET
+                    : 30,
+              ...(isTabletLayout ? { overflow: 'visible' as const } : null),
+            }}
             backgroundColor={themeBackground}
             disabled={hasActiveCallForSearch}
             onDisabledPress={onBlockedStartSearch}
