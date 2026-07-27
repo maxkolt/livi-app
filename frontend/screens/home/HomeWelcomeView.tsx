@@ -15,7 +15,6 @@ import { logger } from '../../utils/logger';
 import { markUpdateBadgeShown, PLAY_STORE_UPDATE_URL } from '../../utils/updateCheck';
 import {
   ANDROID_MENU_HIT_SLOP,
-  ANIMATED_BORDER_WIDTH,
   CHROME_PERIMETER_GLOW_LAYOUT_INSET,
   LIVI,
   MENU_BTN_RADIUS,
@@ -87,9 +86,8 @@ function HomeWelcomeViewInner({
   // чуть отодвигаем кнопку влево, на телефонах оставляем как было.
   const isTabletLayout = layoutWidth >= SEARCH_CTA_TABLET_MIN_WIDTH;
   const compactLayout = layoutHeight < 520;
-  // Субпиксельная рамка (0.2–0.4) на планшетах/Android часто клипится overflow+radius —
-  // держим минимум как у AnimatedGradientBorder, на планшете чуть толще.
-  const updateBadgeBorderW = isTabletLayout ? Math.max(ANIMATED_BORDER_WIDTH, 1) : ANIMATED_BORDER_WIDTH;
+  // Один физический пиксель на любом density — одинаково по всему периметру.
+  const updateBadgeBorderW = StyleSheet.hairlineWidth;
   const updateBadgeOuterRadius = 12;
   const updateBadgeInnerRadius = Math.max(0, updateBadgeOuterRadius - updateBadgeBorderW);
   const menuBtnMarginRight = isTabletLayout
@@ -326,7 +324,7 @@ function HomeWelcomeViewInner({
             isDark={isDark}
             onPress={onStartSearch}
             label={L('startSearchBtn')}
-            style={{ marginBottom: compactLayout ? 8 : 40 }}
+          style={{ marginBottom: compactLayout ? 8 : 30 }}
             backgroundColor={themeBackground}
             disabled={hasActiveCallForSearch}
             onDisabledPress={onBlockedStartSearch}
@@ -396,50 +394,6 @@ function HomeWelcomeViewInner({
                   end={{ x: 1, y: 1 }}
                   style={StyleSheet.absoluteFillObject}
                 />
-                <View
-                  pointerEvents="none"
-                  style={{
-                    position: 'absolute',
-                    top: 0,
-                    left: 0,
-                    right: 0,
-                    height: updateBadgeBorderW,
-                    zIndex: 2,
-                  }}
-                >
-                  <LinearGradient
-                    colors={
-                      isDark
-                        ? ['#2dd4bf', '#38bdf8', '#FFF8F0', '#60a5fa']
-                        : ['#8B82C8', '#7468B0', '#9A92A8', '#A09AAE']
-                    }
-                    start={{ x: 0, y: 0 }}
-                    end={{ x: 1, y: 0 }}
-                    style={StyleSheet.absoluteFillObject}
-                  />
-                </View>
-                <View
-                  pointerEvents="none"
-                  style={{
-                    position: 'absolute',
-                    bottom: 0,
-                    left: 0,
-                    right: 0,
-                    height: updateBadgeBorderW,
-                    zIndex: 2,
-                  }}
-                >
-                  <LinearGradient
-                    colors={
-                      isDark
-                        ? ['#60a5fa', '#38bdf8', '#2dd4bf', '#F0EEEC']
-                        : ['#B0A8C4', '#A39BB8', '#8B82C8', '#8B82C8']
-                    }
-                    start={{ x: 1, y: 0 }}
-                    end={{ x: 0, y: 0 }}
-                    style={StyleSheet.absoluteFillObject}
-                  />
-                </View>
                 <Pressable
                   style={({ pressed }) => [
                     {

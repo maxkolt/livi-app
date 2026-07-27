@@ -6961,6 +6961,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
             remoteStreamReceivedAt={remoteStreamReceivedAtRef.current}
             partnerInPiP={partnerInPiP}
             partnerExternalHold={partnerExternalHoldUi}
+            objectFit="cover"
           />
           
           {showIncomingFriendOverlay && (

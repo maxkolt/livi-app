@@ -245,6 +245,18 @@ const RandomChat: React.FC<Props> = ({ route }) => {
         setIsNexting(false);
         setIsInactiveState(true);
       }
+      // Сразу снимаем busy у друзей: иначе гонка с next() собеседника / presence tick
+      // может оставить бейдж «Занято» после бана.
+      try {
+        const g = global as any;
+        g.__randomChatPresenceBusyRef = g.__randomChatPresenceBusyRef || { current: false };
+        g.__randomChatPresenceBusyRef.current = false;
+        g.__randomChatHadPresenceBusyRef = g.__randomChatHadPresenceBusyRef || { current: false };
+        g.__randomChatHadPresenceBusyRef.current = false;
+        emitPresenceUpdateIfChanged({ status: 'online' }, { force: true });
+      } catch (e) {
+        logger.warn('[RandomChat] Failed to clear presence busy after moderation ban', e);
+      }
     },
     [showToast]
   );
@@ -1246,8 +1258,8 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     moderationTarget: 'remote',
     partnerUserId,
     shouldCheck: started && !loading && !isInactiveState && !isNexting && !!remoteStream && !isModerationBanned,
-    cooldownMs: 900,
-    badFramesThreshold: 2,
+    cooldownMs: 1500,
+    badFramesThreshold: 4,
     stabilityDelayMs: 1800,
     onWarning: showWarning,
     onBan: banUser,

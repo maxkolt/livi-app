@@ -5,12 +5,16 @@ import { logger } from '../utils/logger';
 const router = Router();
 
 const moderationEnabled = String(process.env.MODERATION_ENABLED || '0') === '1';
-const minLabelConfidence = Number(process.env.MODERATION_MIN_LABEL_CONFIDENCE || 0.7);
+const minLabelConfidence = Number(process.env.MODERATION_MIN_LABEL_CONFIDENCE || 0.85);
 // Оружие — критично; Vision API часто даёт 0.5–0.8 для gun/handgun
-const minWeaponConfidence = Number(process.env.MODERATION_MIN_WEAPON_CONFIDENCE || 0.5);
+const minWeaponConfidence = Number(process.env.MODERATION_MIN_WEAPON_CONFIDENCE || 0.65);
 const debugLabels = String(process.env.MODERATION_DEBUG_LABELS || '0') === '1';
-// LIKELY в дополнение к VERY_LIKELY — быстрее ловим, но больше false positive
-const useLikelyThreshold = String(process.env.MODERATION_USE_LIKELY || '1') === '1';
+// По умолчанию только VERY_LIKELY (меньше ложных срабатываний на селфи/кожу/одежду).
+// MODERATION_USE_LIKELY=1 — снова учитывать LIKELY (агрессивнее).
+const useLikelyThreshold = String(process.env.MODERATION_USE_LIKELY || '0') === '1';
+// Racy отдельно: по умолчанию только VERY_LIKELY
+// (LIKELY часто срабатывает на крупные планы лица/плеч).
+const useRacyLikely = String(process.env.MODERATION_RACY_USE_LIKELY || '0') === '1';
 
 const violenceLabels = new Set(['violence', 'fight', 'physical violence', 'assault', 'blood', 'gore']);
 // Google Vision возвращает разные метки для оружия
@@ -18,10 +22,9 @@ const weaponLabels = new Set([
   'weapon', 'gun', 'knife', 'firearm', 'handgun', 'pistol', 'revolver', 'rifle',
   'blade', 'sword', 'machete', 'ammunition',
 ]);
-// NSFW-метки из Label Detection (дополняют SafeSearch adult/racy)
+// NSFW: только явный контент. bikini/underwear/lingerie убраны — дают много FP на обычной одежде.
 const nsfwLabels = new Set([
-  'nudity', 'nude', 'underwear', 'lingerie', 'bikini', 'erotic', 'sexual',
-  'pornography', 'explicit', 'indecent',
+  'nudity', 'nude', 'erotic', 'sexual', 'pornography', 'explicit', 'indecent',
 ]);
 
 type ModerationCategory = {
@@ -30,13 +33,23 @@ type ModerationCategory = {
 };
 
 if (moderationEnabled) {
-  logger.info('[Moderation] API enabled');
+  logger.info('[Moderation] API enabled', {
+    minLabelConfidence,
+    minWeaponConfidence,
+    useLikelyThreshold,
+    useRacyLikely,
+  });
 }
 
 const visionClient = moderationEnabled ? new vision.ImageAnnotatorClient() : null;
 
 function normalizeLabel(label?: string): string {
   return String(label || '').trim().toLowerCase();
+}
+
+function isSafeSearchHit(value: string, allowLikely: boolean): boolean {
+  if (value === 'VERY_LIKELY') return true;
+  return allowLikely && value === 'LIKELY';
 }
 
 router.post('/moderate', async (req, res) => {
@@ -78,17 +91,17 @@ router.post('/moderate', async (req, res) => {
     const violenceLikelihood = String(safe?.violence || 'UNKNOWN');
 
     // SafeSearch: adult (nudity, porn, sexual)
-    if (adultLikelihood === 'VERY_LIKELY' || (useLikelyThreshold && adultLikelihood === 'LIKELY')) {
+    if (isSafeSearchHit(adultLikelihood, useLikelyThreshold)) {
       nsfw.matched = true;
       nsfw.reasons.push(`adult_${adultLikelihood.toLowerCase()}`);
     }
-    // SafeSearch: racy (skimpy, provocative, close-ups)
-    if (racyLikelihood === 'VERY_LIKELY' || (useLikelyThreshold && racyLikelihood === 'LIKELY')) {
+    // SafeSearch: racy — по умолчанию только VERY_LIKELY
+    if (isSafeSearchHit(racyLikelihood, useRacyLikely)) {
       nsfw.matched = true;
       nsfw.reasons.push(`racy_${racyLikelihood.toLowerCase()}`);
     }
     // SafeSearch: violence (death, harm, injury)
-    if (violenceLikelihood === 'VERY_LIKELY' || (useLikelyThreshold && violenceLikelihood === 'LIKELY')) {
+    if (isSafeSearchHit(violenceLikelihood, useLikelyThreshold)) {
       violence.matched = true;
       violence.reasons.push(`safeSearch_violence_${violenceLikelihood.toLowerCase()}`);
     }
@@ -119,7 +132,7 @@ router.post('/moderate', async (req, res) => {
 
     if (violation) {
       logger.info('[Moderation] violation detected', {
-        nsfw: nsfw.matched,
+        nsfw: nsfw.reasons,
         violence: violence.reasons,
         weapon: weapon.reasons,
       });
@@ -128,7 +141,12 @@ router.post('/moderate', async (req, res) => {
         .slice(0, 10)
         .map((l) => `${l.description}:${Number(l.score || 0).toFixed(2)}`)
         .join(', ');
-      logger.info('[Moderation] top labels (no violation)', { labels: top });
+      logger.info('[Moderation] top labels (no violation)', {
+        labels: top,
+        adult: adultLikelihood,
+        racy: racyLikelihood,
+        violence: violenceLikelihood,
+      });
     }
 
     return res.json({
@@ -139,6 +157,7 @@ router.post('/moderate', async (req, res) => {
         minLabelConfidence,
         minWeaponConfidence,
         useLikelyThreshold,
+        useRacyLikely,
       },
     });
   } catch (e: any) {

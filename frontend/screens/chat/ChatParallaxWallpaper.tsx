@@ -8,7 +8,6 @@ import {
   Image,
   StyleSheet,
   View,
-  useWindowDimensions,
   type LayoutChangeEvent,
 } from "react-native";
 import { Accelerometer } from "expo-sensors";
@@ -16,8 +15,8 @@ import { Accelerometer } from "expo-sensors";
 const WALLPAPER_LIGHT = require("../../assets/chat-wallpaper-light.jpeg");
 const WALLPAPER_DARK = require("../../assets/chat-wallpaper-dark.jpeg");
 
-/** Max translate in px — barely noticeable. */
-const MAX_SHIFT = 3;
+/** Max translate in px — subtle but noticeable. */
+const MAX_SHIFT = 4;
 /** Larger range = weaker response to the same tilt. */
 const TILT_RANGE = 0.85;
 /** 0..1 — how quickly the wallpaper follows the tilt (lower = softer). */
@@ -32,9 +31,9 @@ function clamp(n: number, min: number, max: number) {
 }
 
 export function ChatParallaxWallpaper({ isDark }: { isDark: boolean }) {
-  const { width: winW, height: winH } = useWindowDimensions();
-  // Реальный размер контейнера (после поворота планшета window ≠ layout).
-  const [box, setBox] = useState({ w: winW, h: winH });
+  // Use the actual container size. Starting with window metrics and then
+  // replacing them onLayout remounted the Image and looked like a wallpaper zoom.
+  const [box, setBox] = useState<{ w: number; h: number } | null>(null);
 
   const tx = useRef(new Animated.Value(0)).current;
   const ty = useRef(new Animated.Value(0)).current;
@@ -48,16 +47,11 @@ export function ChatParallaxWallpaper({ isDark }: { isDark: boolean }) {
     const { width, height } = e.nativeEvent.layout;
     if (!(width > 0 && height > 0)) return;
     setBox((prev) =>
-      Math.abs(prev.w - width) > 1 || Math.abs(prev.h - height) > 1
+      !prev || Math.abs(prev.w - width) > 1 || Math.abs(prev.h - height) > 1
         ? { w: width, h: height }
         : prev
     );
   };
-
-  // Fallback после rotation: window dims обновляются даже если onLayout задержался.
-  useEffect(() => {
-    setBox({ w: winW, h: winH });
-  }, [winW, winH]);
 
   // После смены размера сбрасываем сдвиг параллакса.
   useEffect(() => {
@@ -66,7 +60,7 @@ export function ChatParallaxWallpaper({ isDark }: { isDark: boolean }) {
     targetRef.current = { x: 0, y: 0 };
     tx.setValue(0);
     ty.setValue(0);
-  }, [box.w, box.h, tx, ty]);
+  }, [box?.w, box?.h, tx, ty]);
 
   useEffect(() => {
     let sub: { remove: () => void } | null = null;
@@ -160,12 +154,11 @@ export function ChatParallaxWallpaper({ isDark }: { isDark: boolean }) {
     };
   }, [tx, ty]);
 
-  const imgW = Math.round(box.w) + MAX_SHIFT * 2;
-  const imgH = Math.round(box.h) + MAX_SHIFT * 2;
+  const imgW = Math.round(box?.w || 0) + MAX_SHIFT * 2;
+  const imgH = Math.round(box?.h || 0) + MAX_SHIFT * 2;
   const themeWash = isDark ? "rgba(21, 31, 51, 0.58)" : "rgba(182, 203, 216, 0.62)";
   const themeShade = isDark ? "rgba(8, 12, 20, 0.36)" : "rgba(140, 158, 180, 0.36)";
   const source = isDark ? WALLPAPER_DARK : WALLPAPER_LIGHT;
-  const sizeKey = `${imgW}x${imgH}-${isDark ? "d" : "l"}`;
 
   return (
     <View
@@ -178,24 +171,25 @@ export function ChatParallaxWallpaper({ isDark }: { isDark: boolean }) {
         остаётся в intrinsic aspect → справа/снизу plate после поворота.
         Двигаем обёртку (parallax), саму картинку — обычный Image на весь box.
       */}
-      <Animated.View
-        style={{
-          position: "absolute",
-          width: imgW,
-          height: imgH,
-          left: -MAX_SHIFT,
-          top: -MAX_SHIFT,
-          transform: [{ translateX: tx }, { translateY: ty }],
-        }}
-      >
-        <Image
-          key={sizeKey}
-          source={source}
-          style={{ width: imgW, height: imgH }}
-          resizeMode="cover"
-          fadeDuration={0}
-        />
-      </Animated.View>
+      {box ? (
+        <Animated.View
+          style={{
+            position: "absolute",
+            width: imgW,
+            height: imgH,
+            left: -MAX_SHIFT,
+            top: -MAX_SHIFT,
+            transform: [{ translateX: tx }, { translateY: ty }],
+          }}
+        >
+          <Image
+            source={source}
+            style={{ width: imgW, height: imgH }}
+            resizeMode="cover"
+            fadeDuration={0}
+          />
+        </Animated.View>
+      ) : null}
       <View style={[StyleSheet.absoluteFill, { backgroundColor: themeWash }]} />
       <View style={[StyleSheet.absoluteFill, { backgroundColor: themeShade }]} />
     </View>

@@ -2,6 +2,7 @@ import React from 'react';
 import {
   Animated,
   Linking,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -146,8 +147,8 @@ function HomeMoreTabInner({
         }}
         style={{
           borderRadius: 12,
-          borderWidth: 1,
-          borderColor: accent.solid,
+          borderWidth: StyleSheet.hairlineWidth,
+          borderColor: LIVI.border,
         }}
       >
         <View
@@ -164,7 +165,9 @@ function HomeMoreTabInner({
               width: 44,
               height: 44,
               borderRadius: 22,
-              backgroundColor: accent.solid,
+              backgroundColor: 'transparent',
+              borderWidth: 0.75,
+              borderColor: accent.solid,
               justifyContent: 'center',
               alignItems: 'center',
               marginRight: 14,
@@ -199,8 +202,8 @@ function HomeMoreTabInner({
         onPress={generateInviteLink}
         style={{
           borderRadius: 11,
-          borderWidth: 1,
-          borderColor: '#4DD0E1',
+          borderWidth: StyleSheet.hairlineWidth,
+          borderColor: LIVI.border,
         }}
       >
         <View
@@ -217,7 +220,9 @@ function HomeMoreTabInner({
               width: 44,
               height: 44,
               borderRadius: 22,
-              backgroundColor: '#4DD0E1',
+              backgroundColor: 'transparent',
+              borderWidth: 0.75,
+              borderColor: '#4DD0E1',
               justifyContent: 'center',
               alignItems: 'center',
               marginRight: 14,
@@ -247,47 +252,56 @@ function HomeMoreTabInner({
 
       {updateAvailable && (
         <View style={{ marginTop: 'auto', marginBottom: 56, alignItems: 'center', alignSelf: 'stretch' }}>
-          <TouchableOpacity
-            activeOpacity={0.85}
-            onPress={() => {
-              markUpdateBadgeShown();
-              Linking.openURL(PLAY_STORE_UPDATE_URL);
-            }}
+          <View
             style={{
-              backgroundColor: 'transparent',
-              borderWidth: StyleSheet.hairlineWidth,
-              borderColor: isDark ? '#5A5F69' : '#2E3643',
               borderRadius: 12,
-              paddingVertical: 6,
-              paddingHorizontal: 12,
-              flexDirection: 'row',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: 5,
-              minWidth: 100,
+              overflow: 'hidden',
+              alignSelf: 'center',
+              backgroundColor: '#5A5F69',
             }}
           >
-            <Animated.View
+            <TouchableOpacity
+              activeOpacity={0.85}
+              onPress={() => {
+                markUpdateBadgeShown();
+                Linking.openURL(PLAY_STORE_UPDATE_URL);
+              }}
               style={{
-                transform: [
-                  { scaleX: -1 },
-                  {
-                    rotate: updateSpinAnim.interpolate({
-                      inputRange: [0, 1],
-                      outputRange: ['0deg', '-360deg'],
-                    }),
-                  },
-                ],
+                backgroundColor:
+                  Platform.OS === 'android' ? '#0D0E10' : 'rgba(13,14,16,0.88)',
+                borderRadius: 12 - StyleSheet.hairlineWidth,
+                margin: StyleSheet.hairlineWidth,
+                paddingVertical: 6,
+                paddingHorizontal: 12,
+                flexDirection: 'row',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 5,
+                minWidth: 100,
               }}
             >
-              <ExpoImage
-                source={require('../../assets/icon-update.png')}
-                style={{ width: 16, height: 16 }}
-                contentFit="contain"
-              />
-            </Animated.View>
-            <Text style={{ color: LIVI.text2, fontSize: 13, fontWeight: '300' }}>{L('updateBtn')}</Text>
-          </TouchableOpacity>
+              <Animated.View
+                style={{
+                  transform: [
+                    { scaleX: -1 },
+                    {
+                      rotate: updateSpinAnim.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: ['0deg', '-360deg'],
+                      }),
+                    },
+                  ],
+                }}
+              >
+                <ExpoImage
+                  source={require('../../assets/icon-update.png')}
+                  style={{ width: 16, height: 16 }}
+                  contentFit="contain"
+                />
+              </Animated.View>
+              <Text style={{ color: LIVI.text2, fontSize: 13, fontWeight: '300' }}>{L('updateBtn')}</Text>
+            </TouchableOpacity>
+          </View>
         </View>
       )}
     </ScrollView>
