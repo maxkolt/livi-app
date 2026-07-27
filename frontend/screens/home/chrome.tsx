@@ -465,6 +465,8 @@ type AnimatedBorderButtonProps = {
   backgroundColor?: string; // Цвет фона страницы для перекрытия градиента
   disabled?: boolean;
   onDisabledPress?: () => void;
+  /** Телефон landscape: ниже кнопка и мельче текст. */
+  compact?: boolean;
 };
 
 export const AnimatedBorderButton: React.FC<AnimatedBorderButtonProps> = ({
@@ -475,6 +477,7 @@ export const AnimatedBorderButton: React.FC<AnimatedBorderButtonProps> = ({
   backgroundColor,
   disabled = false,
   onDisabledPress,
+  compact = false,
 }) => {
   const { width: windowWidth } = useWindowDimensions();
   const [blurIntensity, setBlurIntensity] = useState<number>(isDark ? 15 : 20);
@@ -488,8 +491,15 @@ export const AnimatedBorderButton: React.FC<AnimatedBorderButtonProps> = ({
   const maxCtaWidth =
     windowWidth >= SEARCH_CTA_TABLET_MIN_WIDTH ? SEARCH_CTA_TABLET_MAX_WIDTH : SEARCH_CTA_MAX_WIDTH;
   const buttonWidth = Math.min(Math.max(0, windowWidth - sideInset), maxCtaWidth);
-  const buttonHeight = Platform.OS === 'ios' ? 60 : 50;
+  const buttonHeight = compact
+    ? Platform.OS === 'ios'
+      ? 40
+      : 36
+    : Platform.OS === 'ios'
+      ? 60
+      : 50;
   const borderRadius = 12;
+  const labelFontSize = compact ? 14 : undefined;
 
   const triggerBlockedFeedback = useCallback(() => {
     // Короткий визуальный "нельзя": красный пульс + мягкий шейк.
@@ -602,6 +612,7 @@ export const AnimatedBorderButton: React.FC<AnimatedBorderButtonProps> = ({
                       color: isDark ? LIVI.text : LIVI.textThemeWhite,
                       textAlign: 'center',
                       opacity: disabled ? 0.88 : 1,
+                      ...(labelFontSize ? { fontSize: labelFontSize } : null),
                     },
                   ]}
                   allowFontScaling={false}
@@ -659,6 +670,7 @@ export const AnimatedBorderButton: React.FC<AnimatedBorderButtonProps> = ({
                       color: isDark ? LIVI.text : LIVI.textThemeWhite,
                       textAlign: 'center',
                       opacity: disabled ? 0.88 : 1,
+                      ...(labelFontSize ? { fontSize: labelFontSize } : null),
                     },
                   ]}
                   allowFontScaling={false}

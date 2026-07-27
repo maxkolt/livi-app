@@ -3660,11 +3660,17 @@ const handleClearNick = useCallback(async () => {
       const isFriendBusy = friend.isBusy || false;
       const friendBusyBlocksCall =
         friend.online && isFriendBusy && !isRecentlyEndedCallFriend(friendIdStr);
+      const inActiveCallWithFriend =
+        isDirectCallSessionLive(g) &&
+        !!videoCallPartner &&
+        String(videoCallPartner) === friendIdStr;
       const isIncomingFromThisFriend =
         incomingCallScreen.visible &&
         incomingCallScreen.fromUserId != null &&
         String(incomingCallScreen.fromUserId) === friendIdStr;
-      const showBusyBadge = friendBusyBlocksCall && !isIncomingFromThisFriend;
+      // Как в FriendCallActions: бейдж и при локальном активном звонке с другом.
+      const showBusyBadge =
+        (friendBusyBlocksCall || inActiveCallWithFriend) && !isIncomingFromThisFriend;
       if (showBusyBadge) return true;
       if (calling.visible && calling.friend && String(calling.friend.id) === friendIdStr) {
         return true;

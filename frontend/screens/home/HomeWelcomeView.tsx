@@ -1,12 +1,14 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   Animated,
+  Dimensions,
   Linking,
   Platform,
   Pressable,
   StyleSheet,
   Text,
   View,
+  type LayoutChangeEvent,
 } from 'react-native';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -39,7 +41,7 @@ export type HomeWelcomeViewProps = {
   missedByUser: Record<string, number>;
   centerProfile: Omit<
     React.ComponentProps<typeof HomeCenterProfile>,
-    'styles' | 'isDark' | 'layoutWidth' | 'menuChromeBg'
+    'styles' | 'isDark' | 'layoutWidth' | 'menuChromeBg' | 'compact' | 'dense'
   >;
   NoticeView: React.ReactNode;
   hasActiveCallForSearch: boolean;
@@ -49,6 +51,16 @@ export type HomeWelcomeViewProps = {
   onStartSearch: () => void;
   onBlockedStartSearch: () => void;
 };
+
+function resolveIsLandscape(width: number, height: number) {
+  return width > 0 && height > 0 && width / height > 1.05;
+}
+
+/** Телефон vs планшет: по короткой стороне (в landscape ширина телефона часто ≥ 600). */
+function resolveIsPhone(width: number, height: number) {
+  const shortest = Math.min(width, height);
+  return shortest > 0 && shortest < 600;
+}
 
 function HomeWelcomeViewInner({
   styles,
@@ -81,18 +93,56 @@ function HomeWelcomeViewInner({
   const subtitleAnchorRef = useRef<View>(null);
   const searchBtnAnchorRef = useRef<View>(null);
   const [badgeGap, setBadgeGap] = useState<{ top: number; height: number } | null>(null);
+  const [measured, setMeasured] = useState<{ w: number; h: number }>(() => ({
+    w: layoutWidth,
+    h: layoutHeight,
+  }));
 
-  // На планшетах отрицательный inset ореола упирается в край и срезает правую рамку —
-  // чуть отодвигаем кнопку влево, на телефонах оставляем как было.
-  const isTabletLayout = layoutWidth >= SEARCH_CTA_TABLET_MIN_WIDTH;
-  const compactLayout = layoutHeight < 520;
-  // Один физический пиксель на любом density — одинаково по всему периметру.
+  useEffect(() => {
+    setMeasured((prev) =>
+      prev.w === layoutWidth && prev.h === layoutHeight
+        ? prev
+        : { w: layoutWidth, h: layoutHeight },
+    );
+  }, [layoutWidth, layoutHeight]);
+
+  useEffect(() => {
+    const onChange = ({ window }: { window: { width: number; height: number } }) => {
+      setMeasured({ w: window.width, h: window.height });
+    };
+    const sub = Dimensions.addEventListener('change', onChange);
+    return () => sub.remove();
+  }, []);
+
+  const onRootLayout = (e: LayoutChangeEvent) => {
+    const { width, height } = e.nativeEvent.layout;
+    if (!(width > 0 && height > 0)) return;
+    setMeasured((prev) =>
+      Math.abs(prev.w - width) < 1 && Math.abs(prev.h - height) < 1
+        ? prev
+        : { w: width, h: height },
+    );
+  };
+
+  const viewWidth = measured.w || layoutWidth;
+  const viewHeight = measured.h || layoutHeight;
+
+  const isTabletLayout = viewWidth >= SEARCH_CTA_TABLET_MIN_WIDTH;
+  const isPhone = resolveIsPhone(viewWidth, viewHeight);
+  const isLandscape = resolveIsLandscape(viewWidth, viewHeight);
+  // Только телефоны в landscape: та же вертикальная структура, но плотнее.
+  const phoneLandscape = isPhone && isLandscape;
+  // Короткий portrait на телефоне (как раньше). Планшеты не трогаем.
+  const compactLayout = isPhone && !isLandscape && viewHeight < 520;
+
   const updateBadgeBorderW = StyleSheet.hairlineWidth;
   const updateBadgeOuterRadius = 12;
   const updateBadgeInnerRadius = Math.max(0, updateBadgeOuterRadius - updateBadgeBorderW);
   const menuBtnMarginRight = isTabletLayout
     ? -CHROME_PERIMETER_GLOW_LAYOUT_INSET + 10
     : -CHROME_PERIMETER_GLOW_LAYOUT_INSET;
+
+  const showCallLock = hasActiveCallForSearch && showCallSearchLockBadge;
 
   useEffect(() => {
     setMenuBlurIntensity(menuIdleBlur);
@@ -108,7 +158,6 @@ function HomeWelcomeViewInner({
       subtitle.measureInWindow((_sx, subY, _sw, subH) => {
         button.measureInWindow((_cx, btnY) => {
           const top = subY + subH - blockY;
-          // Верх рамки кнопки = верх ореола + inset.
           const frameTop = btnY + CHROME_PERIMETER_GLOW_LAYOUT_INSET - blockY;
           const height = frameTop - top;
           if (!(height > 0)) return;
@@ -125,9 +174,10 @@ function HomeWelcomeViewInner({
     return () => cancelAnimationFrame(id);
   }, [
     syncBadgeGap,
-    layoutWidth,
-    layoutHeight,
+    viewWidth,
+    viewHeight,
     compactLayout,
+    phoneLandscape,
     showUpdateBadge,
     showCallSearchLockBadge,
     hasActiveCallForSearch,
@@ -148,13 +198,112 @@ function HomeWelcomeViewInner({
     });
   }
 
+  const callLockBadge = showCallLock ? (
+    <View
+      style={[
+        styles.notice,
+        {
+          backgroundColor: isDark ? 'rgba(138,143,153,0.16)' : 'rgba(59,68,83,0.16)',
+          borderColor: isDark ? 'rgba(138,143,153,0.36)' : 'rgba(59,68,83,0.34)',
+          ...(phoneLandscape
+            ? { paddingVertical: 4, paddingHorizontal: 8, maxWidth: '90%' as const }
+            : null),
+        },
+      ]}
+    >
+      <Text
+        style={[
+          styles.noticeText,
+          {
+            color: isDark ? 'rgba(240,241,243,0.92)' : 'rgba(47,55,66,0.9)',
+            ...(phoneLandscape ? { fontSize: 11 } : null),
+          },
+        ]}
+      >
+        Сначала завершите текущий звонок
+      </Text>
+    </View>
+  ) : null;
+
+  const updateBadge = showUpdateBadge ? (
+    <View
+      style={{
+        borderRadius: updateBadgeOuterRadius,
+        overflow: 'hidden',
+        alignSelf: 'center',
+        maxWidth: Math.min(320, viewWidth - 40),
+        ...(Platform.OS === 'android'
+          ? {
+              borderWidth: StyleSheet.hairlineWidth,
+              borderColor: isDark
+                ? 'rgba(45, 212, 191, 0.4)'
+                : 'rgba(139, 130, 200, 0.4)',
+            }
+          : null),
+      }}
+    >
+      <LinearGradient
+        colors={
+          isDark
+            ? ['#2dd4bf', '#60a5fa', '#38bdf8', '#FFF8F0', '#2dd4bf']
+            : ['#8B82C8', '#9A8FC9', '#A8A0B8', '#ADA9B0']
+        }
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={StyleSheet.absoluteFillObject}
+      />
+      <Pressable
+        style={({ pressed }) => [
+          {
+            margin: updateBadgeBorderW,
+            borderRadius: updateBadgeInnerRadius,
+            alignItems: 'center',
+            justifyContent: 'center',
+            alignSelf: 'stretch',
+            backgroundColor: themeBackground,
+            paddingVertical: phoneLandscape ? 6 : Platform.OS === 'ios' ? 10 : 8,
+            paddingHorizontal: phoneLandscape ? 14 : 20,
+            zIndex: 1,
+          },
+          pressed && {
+            backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)',
+          },
+        ]}
+        onPress={() => {
+          onHideUpdateBadge();
+          markUpdateBadgeShown();
+          Linking.openURL(PLAY_STORE_UPDATE_URL);
+        }}
+        android_ripple={{
+          color: isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)',
+          borderless: false,
+        }}
+      >
+        <Text
+          style={{
+            color: isDark ? LIVI.text : '#2F3742',
+            fontSize: phoneLandscape ? 11 : 12,
+            fontWeight: '500',
+            textAlign: 'center',
+            ...(Platform.OS === 'android' && { includeFontPadding: false }),
+          }}
+          numberOfLines={1}
+          ellipsizeMode="tail"
+          allowFontScaling={false}
+        >
+          {L('updateBtn')}
+        </Text>
+      </Pressable>
+    </View>
+  ) : null;
+
   return (
-    <>
+    <View style={{ flex: 1, minHeight: 0 }} onLayout={onRootLayout} collapsable={false}>
       <View
         style={[
           styles.topBar,
           { backgroundColor: 'transparent' },
-          compactLayout && { height: 64 },
+          phoneLandscape ? { height: 48 } : compactLayout ? { height: 64 } : null,
         ]}
       >
         <BrandTitleWithOutline isDark={isDark} />
@@ -254,8 +403,9 @@ function HomeWelcomeViewInner({
       <HomeCenterProfile
         styles={styles}
         isDark={isDark}
-        layoutWidth={layoutWidth}
+        layoutWidth={viewWidth}
         compact={compactLayout}
+        dense={phoneLandscape}
         menuChromeBg={menuChromeBg}
         {...centerProfile}
       />
@@ -266,21 +416,32 @@ function HomeWelcomeViewInner({
         onLayout={syncBadgeGap}
         style={[
           styles.welcomeBlock,
-          Platform.OS === 'android' && { marginTop: compactLayout ? 8 : 50 },
+          Platform.OS === 'android' && {
+            marginTop: phoneLandscape ? 4 : compactLayout ? 8 : 50,
+          },
         ]}
       >
-        <View style={styles.welcomeTextBlock}>
+        <View
+          style={[
+            styles.welcomeTextBlock,
+            phoneLandscape && { marginTop: 4, flex: 0, gap: 2 },
+          ]}
+        >
           <Text
             style={[
               styles.title,
               {
                 color: isDark ? LIVI.text : LIVI.textThemeWhite,
-                ...(compactLayout && { fontSize: 21, lineHeight: 24 }),
+                ...(phoneLandscape
+                  ? { fontSize: 18, lineHeight: 20 }
+                  : compactLayout
+                    ? { fontSize: 21, lineHeight: 24 }
+                    : null),
               },
             ]}
             allowFontScaling={false}
             maxFontSizeMultiplier={1}
-            numberOfLines={compactLayout ? 1 : 2}
+            numberOfLines={phoneLandscape || compactLayout ? 1 : 2}
           >
             {L('welcomeTitle')}
           </Text>
@@ -289,7 +450,7 @@ function HomeWelcomeViewInner({
             collapsable={false}
             onLayout={syncBadgeGap}
             style={{
-              width: Math.min(Math.max(0, layoutWidth - 36), 400),
+              width: Math.min(Math.max(0, viewWidth - 36), phoneLandscape ? 520 : 400),
               alignSelf: 'center',
               paddingHorizontal: 2,
             }}
@@ -301,10 +462,14 @@ function HomeWelcomeViewInner({
                   color: isDark ? LIVI.text2 : LIVI.textThemeWhite,
                   width: '100%',
                   ...(Platform.OS === 'android' && { includeFontPadding: false }),
-                  ...(compactLayout && { fontSize: 13, lineHeight: 16 }),
+                  ...(phoneLandscape
+                    ? { fontSize: 12, lineHeight: 14, marginTop: 0 }
+                    : compactLayout
+                      ? { fontSize: 13, lineHeight: 16 }
+                      : null),
                 },
               ]}
-              numberOfLines={compactLayout ? 1 : 2}
+              numberOfLines={phoneLandscape || compactLayout ? 1 : 2}
               allowFontScaling={false}
               maxFontSizeMultiplier={1}
             >
@@ -312,8 +477,14 @@ function HomeWelcomeViewInner({
             </Text>
           </View>
         </View>
-        {/* Резерв места как раньше — чтобы аватар и тексты остались на прежних позициях. */}
-        <View style={styles.noticeSlot} pointerEvents="none" />
+        {/* Резерв под бейджи («вызов отменён» и т.п.) между подписью и кнопкой. */}
+        <View
+          style={[
+            styles.noticeSlot,
+            phoneLandscape && { minHeight: 40, marginBottom: 8 },
+          ]}
+          pointerEvents="none"
+        />
         <View
           ref={searchBtnAnchorRef}
           collapsable={false}
@@ -324,10 +495,11 @@ function HomeWelcomeViewInner({
             isDark={isDark}
             onPress={onStartSearch}
             label={L('startSearchBtn')}
-          style={{ marginBottom: compactLayout ? 8 : 30 }}
+            style={{ marginBottom: phoneLandscape ? 4 : compactLayout ? 8 : 30 }}
             backgroundColor={themeBackground}
             disabled={hasActiveCallForSearch}
             onDisabledPress={onBlockedStartSearch}
+            compact={phoneLandscape}
           />
         </View>
         {badgeGap ? (
@@ -341,107 +513,17 @@ function HomeWelcomeViewInner({
               height: badgeGap.height,
               justifyContent: 'center',
               alignItems: 'center',
-              gap: 10,
+              gap: phoneLandscape ? 6 : 10,
               zIndex: 2,
             }}
           >
             {NoticeView}
-            {hasActiveCallForSearch && showCallSearchLockBadge && (
-              <View
-                style={[
-                  styles.notice,
-                  {
-                    backgroundColor: isDark ? 'rgba(138,143,153,0.16)' : 'rgba(59,68,83,0.16)',
-                    borderColor: isDark ? 'rgba(138,143,153,0.36)' : 'rgba(59,68,83,0.34)',
-                  },
-                ]}
-              >
-                <Text
-                  style={[
-                    styles.noticeText,
-                    { color: isDark ? 'rgba(240,241,243,0.92)' : 'rgba(47,55,66,0.9)' },
-                  ]}
-                >
-                  Сначала завершите текущий звонок
-                </Text>
-              </View>
-            )}
-            {showUpdateBadge && (
-              <View
-                style={{
-                  borderRadius: updateBadgeOuterRadius,
-                  overflow: 'hidden',
-                  alignSelf: 'center',
-                  maxWidth: Math.min(320, layoutWidth - 40),
-                  // Как у AnimatedGradientBorder: hairline помогает не терять край при clip.
-                  ...(Platform.OS === 'android'
-                    ? {
-                        borderWidth: StyleSheet.hairlineWidth,
-                        borderColor: isDark
-                          ? 'rgba(45, 212, 191, 0.4)'
-                          : 'rgba(139, 130, 200, 0.4)',
-                      }
-                    : null),
-                }}
-              >
-                <LinearGradient
-                  colors={
-                    isDark
-                      ? ['#2dd4bf', '#60a5fa', '#38bdf8', '#FFF8F0', '#2dd4bf']
-                      : ['#8B82C8', '#9A8FC9', '#A8A0B8', '#ADA9B0']
-                  }
-                  start={{ x: 0, y: 0 }}
-                  end={{ x: 1, y: 1 }}
-                  style={StyleSheet.absoluteFillObject}
-                />
-                <Pressable
-                  style={({ pressed }) => [
-                    {
-                      margin: updateBadgeBorderW,
-                      borderRadius: updateBadgeInnerRadius,
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      alignSelf: 'stretch',
-                      backgroundColor: themeBackground,
-                      paddingVertical: Platform.OS === 'ios' ? 10 : 8,
-                      paddingHorizontal: 20,
-                      zIndex: 1,
-                    },
-                    pressed && {
-                      backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)',
-                    },
-                  ]}
-                  onPress={() => {
-                    onHideUpdateBadge();
-                    markUpdateBadgeShown();
-                    Linking.openURL(PLAY_STORE_UPDATE_URL);
-                  }}
-                  android_ripple={{
-                    color: isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)',
-                    borderless: false,
-                  }}
-                >
-                  <Text
-                    style={{
-                      color: isDark ? LIVI.text : '#2F3742',
-                      fontSize: 12,
-                      fontWeight: '500',
-                      textAlign: 'center',
-                      ...(Platform.OS === 'android' && { includeFontPadding: false }),
-                    }}
-                    numberOfLines={1}
-                    ellipsizeMode="tail"
-                    allowFontScaling={false}
-                  >
-                    {L('updateBtn')}
-                  </Text>
-                </Pressable>
-              </View>
-            )}
+            {callLockBadge}
+            {updateBadge}
           </View>
         ) : null}
       </View>
-    </>
+    </View>
   );
 }
 

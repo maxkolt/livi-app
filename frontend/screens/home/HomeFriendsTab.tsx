@@ -264,16 +264,18 @@ function InviteButton({
   const activeCallInProgress = isDirectCallSessionLive(g);
   const recentlyEndedCallFriend = isRecentlyEndedCallFriend(friendIdStr);
   const friendBusyBlocksCall = friend.online && isFriendBusy && !recentlyEndedCallFriend;
-  const busy =
-    friendBusyBlocksCall ||
-    (activeCallInProgress && !!videoCallPartner && String(videoCallPartner) === friendIdStr);
+  // Локальный активный звонок с этим другом: кнопки уже блокируются по videoCallPartner,
+  // бейдж «Занято» должен использовать ту же логику (presence isBusy может отставать / затираться loadFriends).
+  const inActiveCallWithFriend =
+    activeCallInProgress && !!videoCallPartner && String(videoCallPartner) === friendIdStr;
+  const busy = friendBusyBlocksCall || inActiveCallWithFriend;
   const outgoingInProgress = calling.visible;
   const incomingInProgress = incomingCallScreen.visible;
   const isIncomingFromThisFriend =
     incomingInProgress &&
     incomingCallScreen.fromUserId != null &&
     String(incomingCallScreen.fromUserId) === friendIdStr;
-  const showBusyBadge = friendBusyBlocksCall && !isIncomingFromThisFriend;
+  const showBusyBadge = busy && !isIncomingFromThisFriend;
   const hardVideoDisabled = busy || incomingInProgress || activeCallInProgress;
   const videoDisabled = hardVideoDisabled || outgoingInProgress;
   const pulse = React.useRef(new Animated.Value(0)).current;

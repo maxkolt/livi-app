@@ -13,6 +13,8 @@ export type HomeCenterProfileProps = {
   isDark: boolean;
   layoutWidth: number;
   compact?: boolean;
+  /** Телефон в landscape: та же вертикальная структура, меньший аватар/ник. */
+  dense?: boolean;
   savedNick: string;
   avatarUri: string;
   myFullAvatarUri: string;
@@ -29,6 +31,7 @@ function HomeCenterProfileInner({
   isDark,
   layoutWidth,
   compact = false,
+  dense = false,
   savedNick,
   avatarUri,
   myFullAvatarUri,
@@ -42,8 +45,8 @@ function HomeCenterProfileInner({
   const letter = displayAvatarLetter(savedNick);
   const wrapperStyle: StyleProp<ViewStyle> = {
     alignItems: 'center',
-    marginTop: compact ? 4 : Platform.OS === 'android' ? 20 : 12 + 20,
-    marginBottom: compact ? -18 : layoutWidth < 400 ? -40 : -65,
+    marginTop: dense ? 2 : compact ? 4 : Platform.OS === 'android' ? 20 : 12 + 20,
+    marginBottom: dense ? -8 : compact ? -18 : layoutWidth < 400 ? -40 : -65,
   };
 
   const isLocalPreview = avatarUri && /^(file|content|ph|assets-library):\/\//i.test(avatarUri);
@@ -54,8 +57,15 @@ function HomeCenterProfileInner({
   const noAvatar = !isLocalPreview && !hasCachedAvatar && !hasDirectAvatarUri;
   const noNick = !(savedNick && String(savedNick).trim());
 
-  const centerAvatarSize = compact ? 76 : Platform.OS === 'ios' ? 136 : 120;
+  const centerAvatarSize = dense
+    ? 56
+    : compact
+      ? 76
+      : Platform.OS === 'ios'
+        ? 136
+        : 120;
   const centerAvatarRadius = centerAvatarSize / 2;
+  const letterFontSize = dense ? 22 : 48;
 
   return (
     <View style={wrapperStyle}>
@@ -95,7 +105,7 @@ function HomeCenterProfileInner({
                 size={centerAvatarSize}
                 fallbackText={letter}
                 containerStyle={styles.centerAvatarImg}
-                fallbackTextStyle={{ fontSize: 48, fontWeight: '800' }}
+                fallbackTextStyle={{ fontSize: letterFontSize, fontWeight: '800' }}
               />
             ) : hasDirectAvatarUri && resolvedAvatarReady ? (
               <ExpoImage
@@ -106,14 +116,14 @@ function HomeCenterProfileInner({
             ) : hasDirectAvatarUri ? (
               avatarVerChecked ? (
                 <View style={[styles.centerAvatarImg, { alignItems: 'center', justifyContent: 'center' }]}>
-                  <Text style={{ color: LIVI.titan, fontSize: 48, fontWeight: '500' }}>{letter}</Text>
+                  <Text style={{ color: LIVI.titan, fontSize: letterFontSize, fontWeight: '500' }}>{letter}</Text>
                 </View>
               ) : (
                 <View style={[styles.centerAvatarImg, { alignItems: 'center', justifyContent: 'center' }]} />
               )
             ) : avatarVerChecked ? (
               <View style={[styles.centerAvatarImg, { alignItems: 'center', justifyContent: 'center' }]}>
-                <Text style={{ color: LIVI.titan, fontSize: 48, fontWeight: '500' }}>{letter}</Text>
+                <Text style={{ color: LIVI.titan, fontSize: letterFontSize, fontWeight: '500' }}>{letter}</Text>
               </View>
             ) : (
               <View style={[styles.centerAvatarImg, { alignItems: 'center', justifyContent: 'center' }]} />
@@ -125,11 +135,13 @@ function HomeCenterProfileInner({
         style={[
           styles.subtitleNik,
           {
-            marginTop: compact ? 6 : 12,
-            fontSize: compact ? 16 : Platform.OS === 'ios' ? 25 : 20,
+            marginTop: dense ? 4 : compact ? 6 : 12,
+            fontSize: dense ? 14 : compact ? 16 : Platform.OS === 'ios' ? 25 : 20,
             color: noNick || noAvatar ? LIVI.titan : isDark ? LIVI.text2 : LIVI.textThemeWhite,
           },
         ]}
+        numberOfLines={dense ? 1 : undefined}
+        ellipsizeMode={dense ? 'tail' : undefined}
       >
         {displayName(savedNick)}
       </Text>
