@@ -3842,7 +3842,11 @@ function AppContent() {
         >
           <Stack.Navigator screenOptions={{
             headerShown: false,
-            contentStyle: { backgroundColor: 'transparent' },
+            // Непрозрачный фон: Home остаётся под верхним экраном (detachInactiveScreens: false),
+            // а transparent contentStyle даёт мелькание Home/вкладок при сворачивании и app-switcher.
+            contentStyle: {
+              backgroundColor: (theme.colors.background as string) || '#151F33',
+            },
             animation: 'fade',
             animationDuration: 450,
             // Не размонтировать неактивные экраны — при закрытии VideoCall Home остаётся смонтированным, state (аватар и т.д.) сохраняется, нет мерцания буквы.
@@ -3859,7 +3863,9 @@ function AppContent() {
                   animation: 'fade',
                   // Быстрее переход с welcome-экрана, но с мягким fade без резкости.
                   animationDuration: 240,
-                  contentStyle: { backgroundColor: 'transparent' },
+                  contentStyle: {
+                    backgroundColor: (theme.colors.background as string) || '#151F33',
+                  },
                 }}
               />
               <Stack.Screen
@@ -3872,7 +3878,7 @@ function AppContent() {
                 options={{
                   presentation: 'card',
                   gestureEnabled: true,
-                  // Без fade: иначе с фона/lock видно Home/приветствие под прозрачным VideoCall.
+                  // Без fade: иначе с фона/lock видно Home/приветствие под VideoCall.
                   animation: 'none',
                   animationDuration: 0,
                   contentStyle: { backgroundColor: '#1B1C22' },
@@ -3885,6 +3891,9 @@ function AppContent() {
                   animation: 'fade',
                   animationDuration: 450,
                   gestureEnabled: true,
+                  contentStyle: {
+                    backgroundColor: (theme.colors.background as string) || '#151F33',
+                  },
                 }}
               />
             </Stack.Navigator>
