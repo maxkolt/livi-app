@@ -10,7 +10,8 @@
         "NODE_ENV": "development",
         "EXPO_PUBLIC_SERVER_URL": "https://api.liviapp.com",
         "EXPO_PUBLIC_LIVEKIT_URL": "wss://livekit.liviapp.com",
-        "EXPO_PUBLIC_LOG_LEVEL": "debug"
+        "EXPO_PUBLIC_LOG_LEVEL": "debug",
+        "EXPO_PUBLIC_APPMETRICA_API_KEY": "d342f43d-99e2-49b1-ab77-7de62be6d666"
       }
     },
     "preview": {
@@ -19,7 +20,8 @@
         "NODE_ENV": "production",
         "EXPO_PUBLIC_SERVER_URL": "https://api.liviapp.com",
         "EXPO_PUBLIC_LIVEKIT_URL": "wss://livekit.liviapp.com",
-        "EXPO_PUBLIC_LOG_LEVEL": "info"
+        "EXPO_PUBLIC_LOG_LEVEL": "info",
+        "EXPO_PUBLIC_APPMETRICA_API_KEY": "d342f43d-99e2-49b1-ab77-7de62be6d666"
       },
       "android": {
         "buildType": "apk"
@@ -30,7 +32,8 @@
         "NODE_ENV": "production",
         "EXPO_PUBLIC_SERVER_URL": "https://api.liviapp.com",
         "EXPO_PUBLIC_LIVEKIT_URL": "wss://livekit.liviapp.com",
-        "EXPO_PUBLIC_LOG_LEVEL": "warn"
+        "EXPO_PUBLIC_LOG_LEVEL": "warn",
+        "EXPO_PUBLIC_APPMETRICA_API_KEY": "d342f43d-99e2-49b1-ab77-7de62be6d666"
       },
       "android": {
         "buildType": "app-bundle"
