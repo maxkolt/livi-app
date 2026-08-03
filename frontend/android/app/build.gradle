@@ -26,6 +26,28 @@ def apiBaseUrlEnv = (System.getenv("EXPO_PUBLIC_SERVER_URL_ANDROID") ?: System.g
 if (!apiBaseUrlEnv) apiBaseUrlEnv = "https://api.liviapp.com"
 def apiBaseUrlEscaped = apiBaseUrlEnv.replace("\\", "\\\\").replace("\"", "\\\"")
 
+// AppMetrica API key: process env (Expo/EAS) or frontend/.env for local Gradle.
+def readDotEnvValue = { String key ->
+    def envFile = new File(projectRoot, ".env")
+    if (!envFile.exists()) return null
+    def prefix = key + "="
+    for (String line : envFile.readLines()) {
+        def trimmed = line.trim()
+        if (trimmed.isEmpty() || trimmed.startsWith("#")) continue
+        if (!trimmed.startsWith(prefix)) continue
+        def value = trimmed.substring(prefix.length()).trim()
+        if ((value.startsWith("\"") && value.endsWith("\"")) || (value.startsWith("'") && value.endsWith("'"))) {
+            value = value.substring(1, value.length() - 1)
+        }
+        return value ? value.trim() : null
+    }
+    return null
+}
+def appMetricaApiKeyRaw = (System.getenv("EXPO_PUBLIC_APPMETRICA_API_KEY") ?: readDotEnvValue("EXPO_PUBLIC_APPMETRICA_API_KEY") ?: "")
+        .toString()
+        .trim()
+def appMetricaApiKeyEscaped = appMetricaApiKeyRaw.replace("\\", "\\\\").replace("\"", "\\\"")
+
 /**
  * This is the configuration block to customize your React Native Android app.
  * By default you don't need to apply any configuration, just uncomment the lines you need.
@@ -120,6 +142,7 @@ android {
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 180
         versionName "1.1.20"
+        buildConfigField "String", "APPMETRICA_API_KEY", "\"${appMetricaApiKeyEscaped}\""
     }
     signingConfigs {
     debug {
@@ -236,6 +259,8 @@ dependencies {
     implementation("com.google.firebase:firebase-crashlytics:19.3.0")
     // Play Install Referrer: deferred invite link after first install from Play Store.
     implementation("com.android.installreferrer:installreferrer:2.2")
+    // AppMetrica analytics SDK.
+    implementation("io.appmetrica.analytics:analytics:8.5.0")
 
     def isGifEnabled = (findProperty('expo.gif.enabled') ?: "") == "true";
     def isWebpEnabled = (findProperty('expo.webp.enabled') ?: "") == "true";

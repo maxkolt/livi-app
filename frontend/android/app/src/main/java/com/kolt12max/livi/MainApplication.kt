@@ -24,6 +24,9 @@ import com.facebook.soloader.SoLoader
 import expo.modules.ApplicationLifecycleDispatcher
 import expo.modules.ReactNativeHostWrapper
 
+import io.appmetrica.analytics.AppMetrica
+import io.appmetrica.analytics.AppMetricaConfig
+
 class MainApplication : Application(), ReactApplication {
 
   /**
@@ -65,6 +68,11 @@ class MainApplication : Application(), ReactApplication {
 
   override fun onCreate() {
     super.onCreate()
+    val appMetricaApiKey = BuildConfig.APPMETRICA_API_KEY
+    if (appMetricaApiKey.isNotBlank()) {
+      val config = AppMetricaConfig.newConfigBuilder(appMetricaApiKey).build()
+      AppMetrica.activate(this, config)
+    }
     LiveKitReactNative.setup(this)
     // Screen capture / getDisplayMedia не используем; без этого @livekit/react-native-webrtc может поднять mediaProjection FGS.
     WebRTCModuleOptions.getInstance().enableMediaProjectionService = false
