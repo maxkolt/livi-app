@@ -4004,6 +4004,8 @@ const handleClearNick = useCallback(async () => {
         </View>
       )}
 
+      {/* Оверлей только при открытом меню: иначе при сворачивании с welcome в превью «торчат» вкладки (opacity:0 всё равно в дереве). */}
+      {menuOpen ? (
       <HomeMenuOverlay
         styles={styles}
         menuOpen={menuOpen}
@@ -4119,6 +4121,7 @@ const handleClearNick = useCallback(async () => {
                 />
               )}
       </HomeMenuOverlay>
+      ) : null}
 
       {/* ───── Комната занята (caller info) ───── */}
       {roomFull.visible && (
