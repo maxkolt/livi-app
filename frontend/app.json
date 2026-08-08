@@ -14,7 +14,7 @@
       "backgroundColor": "#0B0B0C"
     },
     "ios": {
-      "supportsTablet": false,
+      "supportsTablet": true,
       "bundleIdentifier": "com.kolt12max.livi",
       "buildNumber": "156",
       "infoPlist": {
@@ -25,7 +25,16 @@
         "NSPhotoLibraryUsageDescription": "Разрешите доступ к фото, чтобы выбрать аватар.",
         "NSPhotoLibraryAddUsageDescription": "Разрешите сохранять изображения в медиатеку.",
         "UISupportedInterfaceOrientations": [
-          "UIInterfaceOrientationPortrait"
+          "UIInterfaceOrientationPortrait",
+          "UIInterfaceOrientationPortraitUpsideDown",
+          "UIInterfaceOrientationLandscapeLeft",
+          "UIInterfaceOrientationLandscapeRight"
+        ],
+        "UISupportedInterfaceOrientations~ipad": [
+          "UIInterfaceOrientationPortrait",
+          "UIInterfaceOrientationPortraitUpsideDown",
+          "UIInterfaceOrientationLandscapeLeft",
+          "UIInterfaceOrientationLandscapeRight"
         ]
       }
     },
