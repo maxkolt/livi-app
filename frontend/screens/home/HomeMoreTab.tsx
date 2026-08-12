@@ -20,7 +20,7 @@ import {
 } from '../../utils/chatWallpaper';
 import { markUpdateBadgeShown, PLAY_STORE_UPDATE_URL } from '../../utils/updateCheck';
 import { ChatWallpaperPickerPanel } from './ChatWallpaperPickerPanel';
-import { FRIENDS_LIST_PAD_H, LIVI } from './constants';
+import { FRIENDS_LIST_PAD_H, LIVI, MORE_TAB_CONTROL_HEIGHT } from './constants';
 import type { HomeStyles } from './styles';
 
 export type HomeMoreTabProps = {
@@ -167,7 +167,7 @@ function HomeMoreTabInner({
             borderWidth: StyleSheet.hairlineWidth,
             borderColor: LIVI.border,
             borderRadius: 10,
-            paddingVertical: 14,
+            height: MORE_TAB_CONTROL_HEIGHT,
             paddingHorizontal: 14,
             backgroundColor: 'rgba(255,255,255,0.02)',
             flexDirection: 'row',

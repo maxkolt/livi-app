@@ -42,6 +42,8 @@ export const ANDROID_MENU_HIT_SLOP = { top: 12, bottom: 12, left: 12, right: 12 
 
 export const MENU_BTN_RADIUS = 12;
 export const MENU_BTN_SIZE = 42;
+/** Высота контролов вкладки «Ещё» (язык и т.п.): pad 14+14 + текст 14/line 20. */
+export const MORE_TAB_CONTROL_HEIGHT = 48;
 export const BRAND_OUTLINE_STROKE = 1.35;
 export const BRAND_FONT_FAMILY = Platform.OS === 'ios' ? 'System' : 'sans-serif-medium';
 export const BRAND_3D_LAYERS = 5;

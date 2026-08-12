@@ -1,21 +1,24 @@
 // components/SettingsTab.tsx
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ScrollView,
   View,
   TouchableWithoutFeedback,
   TouchableOpacity,
   Keyboard,
-  ActivityIndicator,
   StyleSheet,
   Platform,
+  Animated,
+  KeyboardAvoidingView,
   Text,
+  useWindowDimensions,
 } from 'react-native';
-import { Text as PaperText, TextInput, IconButton, Button } from 'react-native-paper';
+import { TextInput } from 'react-native-paper';
 import { Image as ExpoImage } from 'expo-image';
+import { LinearGradient } from 'expo-linear-gradient';
+import { Ionicons } from '@expo/vector-icons';
 import { getAvatarImageProps, getAvatarKey } from '../utils/imageOptimization';
 import { memo } from 'react';
-import * as ImagePicker from 'expo-image-picker';
 import { t, loadLang, Lang } from '../utils/i18n';
 import AvatarImage from './AvatarImage';
 
@@ -27,7 +30,7 @@ interface SettingsTabProps {
   setNick: (nick: string) => void;
   avatarUri: string;
   setAvatarUri: (uri: string) => void;
-  refreshKey?: number; // для Android, чтобы форсировать перерисовку
+  refreshKey?: number;
   handleSaveProfile: () => void;
   savedToast: boolean;
   setSavedToast: (show: boolean) => void;
@@ -36,7 +39,6 @@ interface SettingsTabProps {
   onDeleteAvatar?: () => void;
   saving?: boolean;
   isSaving?: boolean;
-  // Новые пропсы для кешированного аватара
   myFullAvatarUri?: string;
   myAvatarVer?: number;
   myUserId?: string;
@@ -67,81 +69,79 @@ interface SettingsTabProps {
 const toAvatarSrc = (u?: string) => {
   const s = String(u || '').trim();
   if (!s) return '';
-  // Если это HTTP URL, используем миниатюру
   if (/^https?:\/\//i.test(s)) {
     return toAvatarThumb(s, 96, 96);
   }
-  // Если это локальный файл, возвращаем как есть
   if (/^(file|content|ph|assets-library):\/\//i.test(s)) {
     return s;
   }
-  // Разрешаем прямую ссылку на /api/avatar — превращаем в абсолютный URL
   if (s.startsWith('/api/avatar/')) return `${API_BASE}${s}`;
   return s;
 };
 
-// Мемоизированный компонент аватара для предотвращения перерендеринга
-const SettingsAvatar = memo(({ 
-  avatarUri, 
-  styles, 
-  LIVI,
+/** Базовый ориентир; фактический размер — доля ширины экрана (Samsung Display size / разные dpi). */
+const SETTINGS_AVATAR_SIZE_MIN = 76;
+const SETTINGS_AVATAR_SIZE_MAX = 112;
+const NICK_FIELD_HEIGHT = 34;
+
+function resolveSettingsAvatarSize(windowWidth: number): number {
+  const fromWidth = Math.round(windowWidth * 0.24);
+  return Math.min(SETTINGS_AVATAR_SIZE_MAX, Math.max(SETTINGS_AVATAR_SIZE_MIN, fromWidth));
+}
+
+const SettingsAvatar = memo(({
+  avatarUri,
+  styles,
   refreshKey,
   myFullAvatarUri,
   myAvatarVer,
-  myUserId
-}: { 
-  avatarUri: string; 
-  styles: any; 
-  LIVI: any; 
+  myUserId,
+  size,
+}: {
+  avatarUri: string;
+  styles: any;
+  LIVI: any;
   refreshKey?: number;
   myFullAvatarUri?: string;
   myAvatarVer?: number;
   myUserId?: string;
+  size: number;
 }) => {
-  // Определяем какой аватар использовать: локальный файл или кешированный data URI
   const hasLocalAvatar = avatarUri && /^(file|content|ph|assets-library):\/\//i.test(avatarUri);
   const hasCachedAvatar = myFullAvatarUri && myUserId && myAvatarVer && myAvatarVer > 0;
-  
+
   const displayUri = hasLocalAvatar ? avatarUri : (hasCachedAvatar ? myFullAvatarUri : '');
   const avatarSrc = toAvatarSrc(displayUri);
-  
-  if (!displayUri) {} else {}
-  
-  // На Android не передаём data: в ExpoImage (Glide падает). Используем AvatarImage — он разрешает data: -> file:
+
   if (Platform.OS === 'android' && displayUri && /^data:/i.test(displayUri)) {
     return (
       <AvatarImage
         userId={myUserId}
         avatarVer={myAvatarVer || 0}
         uri={displayUri}
-        size={64}
+        size={size}
         containerStyle={styles.avatarImg}
       />
     );
   }
-  
-  // Стабильный ключ для Android: если локальный file://, используем сам путь
+
   const isLocal = hasLocalAvatar;
-  // ВАЖНО: НЕ добавляем query-параметры к file:// (ломает путь на Android).
-  // Для форс-рефреша используем key.
   const refreshSuffix = (Platform.OS === 'android' && typeof refreshKey !== 'undefined') ? `:k=${refreshKey}` : '';
   const keyBase = (isLocal ? avatarUri : 'settings') + refreshSuffix;
   const avatarKey = getAvatarKey(keyBase, avatarSrc || displayUri);
-  
-  // Если есть кешированный аватар и нет локального файла - используем AvatarImage
+
   if (hasCachedAvatar && !hasLocalAvatar) {
     return (
       <AvatarImage
         userId={myUserId!}
         avatarVer={myAvatarVer!}
         uri={myFullAvatarUri}
-        size={64}
+        size={size}
         containerStyle={styles.avatarImg}
       />
     );
   }
-  
-  // Иначе используем ExpoImage для локальных файлов
+
   return (
     <ExpoImage
       key={avatarKey}
@@ -150,23 +150,16 @@ const SettingsAvatar = memo(({
       onError={(e: any) => {
         try { console.warn('[SettingsTab] image error', e?.nativeEvent || e); } catch {}
       }}
-      onLoadStart={() => { try {} catch {} }}
-      onLoadEnd={() => { try {} catch {} }}
     />
   );
 });
 
 SettingsAvatar.displayName = 'SettingsAvatar';
 
-const NICK_FIELD_BORDER_RADIUS = 15;
-/** На 1px ниже стандартной высоты outlined TextInput — визуально чуть компактнее. */
-const NICK_FIELD_HEIGHT_TRIM = 1;
-
 export default function SettingsTab({
   nick,
   setNick,
   avatarUri,
-  setAvatarUri,
   refreshKey,
   handleSaveProfile,
   savedToast,
@@ -181,21 +174,103 @@ export default function SettingsTab({
   myUserId,
   LIVI,
   styles,
-  handleWipeAccount,
-  wiping,
   lang: langProp,
 }: SettingsTabProps) {
+  const { width: windowWidth } = useWindowDimensions();
+  const avatarSize = useMemo(() => resolveSettingsAvatarSize(windowWidth), [windowWidth]);
   const [langState, setLangState] = useState<Lang>('ru');
   const lang = langProp || langState;
   const busy = (saving ?? isSaving) || false;
-  const [nickInputMeasured, setNickInputMeasured] = useState(56);
-  const nickFieldHeight = nickInputMeasured - NICK_FIELD_HEIGHT_TRIM;
+  const nickFieldHeight = NICK_FIELD_HEIGHT;
+  const hasAvatar = !!(avatarUri || myFullAvatarUri);
+  const displayNick = String(nick || '').trim();
+
   const nickFieldFill = useMemo(() => {
     const bg = StyleSheet.flatten(styles.input)?.backgroundColor;
     return typeof bg === 'string' && bg.length > 0 ? bg : 'rgba(255,255,255,0.04)';
   }, [styles.input]);
 
-  // загружаем язык из AsyncStorage
+  const pulseA = useRef(new Animated.Value(0)).current;
+  const pulseB = useRef(new Animated.Value(0)).current;
+  const scrollRef = useRef<ScrollView>(null);
+  const nickOffsetYRef = useRef(0);
+  const [keyboardOpen, setKeyboardOpen] = useState(false);
+  const [keyboardPad, setKeyboardPad] = useState(0);
+
+  const scrollNickIntoView = () => {
+    const y = Math.max(0, nickOffsetYRef.current - 20);
+    const run = () => scrollRef.current?.scrollTo({ y, animated: true });
+    requestAnimationFrame(run);
+    setTimeout(run, Platform.OS === 'ios' ? 60 : 120);
+    setTimeout(run, Platform.OS === 'ios' ? 180 : 280);
+  };
+
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const onShow = (e: { endCoordinates?: { height?: number } }) => {
+      const h = Number(e?.endCoordinates?.height || 0);
+      setKeyboardOpen(true);
+      setKeyboardPad(Math.max(0, h - 24));
+      scrollNickIntoView();
+    };
+    const onHide = () => {
+      setKeyboardOpen(false);
+      setKeyboardPad(0);
+    };
+    const subShow = Keyboard.addListener(showEvent, onShow);
+    const subHide = Keyboard.addListener(hideEvent, onHide);
+    return () => {
+      subShow.remove();
+      subHide.remove();
+    };
+  }, []);
+
+  // Перезапуск после save / закрытия клавиатуры: native-driver loop
+  // отваливается, если Animated.View размонтировали или JS был занят.
+  const [pulseGen, setPulseGen] = useState(0);
+  const wasKeyboardOpenRef = useRef(false);
+
+  useEffect(() => {
+    if (keyboardOpen) {
+      wasKeyboardOpenRef.current = true;
+      return;
+    }
+    if (wasKeyboardOpenRef.current) {
+      wasKeyboardOpenRef.current = false;
+      setPulseGen((g) => g + 1);
+    }
+  }, [keyboardOpen]);
+
+  useEffect(() => {
+    if (!savedToast) return;
+    setPulseGen((g) => g + 1);
+  }, [savedToast]);
+
+  useEffect(() => {
+    pulseA.setValue(0);
+    pulseB.setValue(0);
+    const loopA = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseA, { toValue: 1, duration: 1800, useNativeDriver: true }),
+        Animated.timing(pulseA, { toValue: 0, duration: 1800, useNativeDriver: true }),
+      ]),
+    );
+    const loopB = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseB, { toValue: 1, duration: 2400, useNativeDriver: true }),
+        Animated.timing(pulseB, { toValue: 0, duration: 2400, useNativeDriver: true }),
+      ]),
+    );
+    loopA.start();
+    const delay = setTimeout(() => loopB.start(), 600);
+    return () => {
+      clearTimeout(delay);
+      loopA.stop();
+      loopB.stop();
+    };
+  }, [pulseA, pulseB, pulseGen]);
+
   useEffect(() => {
     if (!langProp) {
       (async () => {
@@ -205,56 +280,167 @@ export default function SettingsTab({
     }
   }, [langProp]);
 
-  // авто-скрытие тоста «Сохранено»
   useEffect(() => {
-    if (!savedToast || busy) {
-      if (savedToast && busy) {}
-      return;
-    }
-    const tmo = setTimeout(() => {
-      setSavedToast(false);
-    }, 1500);
+    if (!savedToast || busy) return;
+    const tmo = setTimeout(() => setSavedToast(false), 1500);
     return () => clearTimeout(tmo);
   }, [savedToast, setSavedToast, busy]);
 
-  /** Выбор аватара - используем переданную функцию */
   const pickAvatar = () => {
-    if (openAvatarSheet) {
-      openAvatarSheet();
-    }
+    if (openAvatarSheet) openAvatarSheet();
   };
 
-  /** Удаление аватара */
   const deleteAvatarSafe = async () => {
-    if (onDeleteAvatar) {
-      return onDeleteAvatar(); // без тоста — обработчик снаружи
-    }
+    if (onDeleteAvatar) return onDeleteAvatar();
   };
+
+  const pulseAOpacity = pulseA.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0.22, 0.55],
+  });
+  const pulseAScale = pulseA.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0.88, 1.08],
+  });
+  const pulseBOpacity = pulseB.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0.12, 0.38],
+  });
+  const pulseBScale = pulseB.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0.92, 1.18],
+  });
 
   return (
     <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
-      <View style={{ flex: 1 }}>
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 88 : 0}
+      >
         <ScrollView
+          ref={scrollRef}
           keyboardShouldPersistTaps="handled"
-          contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 28 }}
+          keyboardDismissMode="on-drag"
+          automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
+          contentContainerStyle={[
+            localStyles.scrollContent,
+            keyboardOpen && localStyles.scrollContentKeyboard,
+            { paddingBottom: keyboardOpen ? Math.max(keyboardPad, 120) : 24 },
+          ]}
+          showsVerticalScrollIndicator={false}
         >
-          {/* --- Никнейм --- */}
-          <PaperText style={styles.fieldLabel}>{t('nickname', lang)}</PaperText>
+          {/* --- Аватар --- */}
+          {/* Не размонтируем: иначе useNativeDriver-пульс «замирает» после save/клавиатуры */}
+          <View
+            style={[localStyles.avatarBlock, keyboardOpen && localStyles.avatarBlockHidden]}
+            pointerEvents={keyboardOpen ? 'none' : 'auto'}
+            accessibilityElementsHidden={keyboardOpen}
+            importantForAccessibility={keyboardOpen ? 'no-hide-descendants' : 'auto'}
+          >
+            <Animated.View
+              pointerEvents="none"
+              style={[
+                localStyles.pulseHaloOuter,
+                { opacity: pulseBOpacity, transform: [{ scale: pulseBScale }] },
+              ]}
+            >
+              <LinearGradient
+                colors={['rgba(120, 160, 220, 0.22)', 'rgba(120, 160, 220, 0.06)', 'transparent']}
+                start={{ x: 0.5, y: 0.25 }}
+                end={{ x: 0.5, y: 1 }}
+                style={localStyles.pulseHaloFill}
+              />
+            </Animated.View>
+            <Animated.View
+              pointerEvents="none"
+              style={[
+                localStyles.pulseHaloInner,
+                { opacity: pulseAOpacity, transform: [{ scale: pulseAScale }] },
+              ]}
+            >
+              <LinearGradient
+                colors={['rgba(140, 175, 230, 0.34)', 'rgba(140, 175, 230, 0.08)', 'transparent']}
+                start={{ x: 0.5, y: 0.3 }}
+                end={{ x: 0.5, y: 1 }}
+                style={localStyles.pulseHaloFill}
+              />
+            </Animated.View>
 
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+            <View style={localStyles.avatarContent}>
+              <View
+                style={[
+                  localStyles.avatarWrap,
+                  {
+                    width: avatarSize,
+                    height: avatarSize,
+                    borderRadius: avatarSize / 2,
+                    backgroundColor: nickFieldFill,
+                  },
+                ]}
+              >
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  onPress={pickAvatar}
+                  disabled={busy}
+                  style={localStyles.avatarPressArea}
+                >
+                  {hasAvatar ? (
+                    <SettingsAvatar
+                      avatarUri={avatarUri}
+                      styles={styles}
+                      LIVI={LIVI}
+                      refreshKey={refreshKey}
+                      myFullAvatarUri={myFullAvatarUri}
+                      myAvatarVer={myAvatarVer}
+                      myUserId={myUserId}
+                      size={avatarSize}
+                    />
+                  ) : (
+                    <Ionicons name="add" size={Math.round(avatarSize * 0.35)} color={LIVI.text2} />
+                  )}
+                </TouchableOpacity>
+
+                {hasAvatar && !!onDeleteAvatar ? (
+                  <TouchableOpacity
+                    activeOpacity={0.8}
+                    onPress={deleteAvatarSafe}
+                    disabled={busy}
+                    style={localStyles.deleteBadge}
+                    hitSlop={4}
+                  >
+                    <Ionicons name="trash-outline" size={14} color="#fff" />
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+            </View>
+          </View>
+
+          {/* --- Никнейм --- */}
+          <View
+            style={[localStyles.nickRow, keyboardOpen && localStyles.nickRowKeyboard]}
+            onLayout={(e) => {
+              nickOffsetYRef.current = e.nativeEvent.layout.y;
+            }}
+          >
             <View
-              style={{ flex: 1, justifyContent: 'center' }}
-              onLayout={(e) => {
-                const h = Math.round(e.nativeEvent.layout.height);
-                const base = h + NICK_FIELD_HEIGHT_TRIM;
-                if (base > 0 && base !== nickInputMeasured) setNickInputMeasured(base);
-              }}
+              style={[
+                localStyles.nickInputWrap,
+                {
+                  height: nickFieldHeight,
+                  borderBottomColor: LIVI.border,
+                },
+              ]}
             >
               <TextInput
                 value={nick ?? ''}
                 onChangeText={setNick}
                 mode="outlined"
-                outlineStyle={{ borderColor: LIVI.border, borderRadius: NICK_FIELD_BORDER_RADIUS }}
+                dense
+                outlineStyle={{
+                  borderColor: 'transparent',
+                  borderWidth: 0,
+                }}
                 style={[
                   styles.input,
                   {
@@ -263,183 +449,194 @@ export default function SettingsTab({
                     marginTop: 0,
                     marginVertical: 0,
                     height: nickFieldHeight,
-                    backgroundColor: nickFieldFill,
+                    backgroundColor: 'transparent',
+                    fontWeight: '400',
+                    fontSize: 13,
+                    color: LIVI.white,
                   },
                 ]}
-                contentStyle={{ paddingVertical: 0 }}
+                contentStyle={{
+                  paddingVertical: 0,
+                  paddingRight: 36,
+                  paddingLeft: 14,
+                  minHeight: nickFieldHeight,
+                  fontWeight: '400',
+                  fontSize: 13,
+                  color: LIVI.white,
+                }}
                 textColor={LIVI.white}
-                placeholder={t('enter_nick', lang)}
+                placeholder={t('nickname', lang)}
                 placeholderTextColor={LIVI.text2}
                 autoCorrect={false}
                 autoCapitalize="none"
                 returnKeyType="done"
                 blurOnSubmit
                 editable={!busy}
+                onFocus={scrollNickIntoView}
               />
-            </View>
-
-            <View
-              style={{
-                borderWidth: 1,
-                borderColor: LIVI.border,
-                borderRadius: NICK_FIELD_BORDER_RADIUS,
-                width: nickFieldHeight,
-                height: nickFieldHeight,
-                justifyContent: 'center',
-                alignItems: 'center',
-                backgroundColor: nickFieldFill,
-              }}
-            >
-              <IconButton
-                icon="delete"
-                size={22}
-                iconColor={LIVI.text}
-                style={{ margin: 0, width: nickFieldHeight, height: nickFieldHeight }}
-                onPress={onClearNick}
-              />
-            </View>
-          </View>
-
-          {/* --- Аватар --- */}
-          <PaperText style={styles.fieldLabel}>{t('avatar', lang)}</PaperText>
-
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14, marginBottom: 12 }}>
-            {(avatarUri || myFullAvatarUri) ? (
-              <View
-                style={[
-                  styles.avatarCircle,
-                  {
-                    width: 64,
-                    height: 64,
-                    borderRadius: 32,
-                    justifyContent: 'center',
-                    alignItems: 'center',
-                    backgroundColor: '#2A2C31',
-                    borderWidth: 1,
-                    borderColor: LIVI.border,
-                    overflow: 'hidden',
-                  },
-                ]}
-              >
-                <SettingsAvatar 
-                  avatarUri={avatarUri}
-                  styles={styles}
-                  LIVI={LIVI}
-                  refreshKey={refreshKey}
-                  myFullAvatarUri={myFullAvatarUri}
-                  myAvatarVer={myAvatarVer}
-                  myUserId={myUserId}
-                />
-                <IconButton
-                  icon="delete"
-                  size={16}
-                  iconColor="#fff"
-                  style={styles.deleteBadge}
-                  onPress={deleteAvatarSafe}
-                />
-              </View>
-            ) : (
               <TouchableOpacity
-                activeOpacity={0.85}
-                onPress={pickAvatar}
-                disabled={busy}
-                style={{
-                  width: 64,
-                  height: 64,
-                  borderRadius: 32,
-                  justifyContent: 'center',
-                  alignItems: 'center',
-                  backgroundColor: '#2A2C31',
-                  borderWidth: 1,
-                  borderColor: LIVI.border,
-                }}
+                activeOpacity={0.75}
+                onPress={onClearNick}
+                disabled={busy || !displayNick}
+                style={[
+                  localStyles.clearNickBtn,
+                  { opacity: displayNick ? 1 : 0.35 },
+                ]}
+                hitSlop={6}
               >
-                <IconButton
-                  icon="plus"
-                  size={20}
-                  iconColor={LIVI.white}
-                  style={{ margin: 0, padding: 0 }}
-                />
+                <Ionicons name="trash-outline" size={15} color={LIVI.text} />
               </TouchableOpacity>
-            )}
+            </View>
           </View>
-
-          {/* --- Сохранить --- */}
-          <Button
-            mode="contained"
-            style={{ 
-              marginTop: 8, 
-              backgroundColor: 'rgba(138, 143, 153, 0.15)', 
-              borderRadius: 12,
-              borderWidth: StyleSheet.hairlineWidth,
-              borderColor: 'rgba(138, 143, 153, 0.3)'
-            }}
-            labelStyle={{ color: LIVI.white }}
-            onPress={handleSaveProfile}
-            disabled={busy}
-          >
-            {t('save', lang)}
-          </Button>
-
-
         </ScrollView>
 
-        {/* --- Оверлей --- */}
-        {(busy || savedToast) && (
-          <View pointerEvents="none" style={savedToast ? overlayStyles.overlayBottom : overlayStyles.overlayLoading}>
-            {busy ? (
-              <ActivityIndicator size="large" />
-            ) : (
-              <View style={overlayStyles.toast}>
-                <PaperText style={overlayStyles.toastText}>{t('saved', lang)}</PaperText>
-              </View>
-            )}
-          </View>
-        )}
-      </View>
+        {!keyboardOpen ? (
+        <View style={localStyles.saveFooter}>
+          <TouchableOpacity
+            activeOpacity={0.85}
+            onPress={handleSaveProfile}
+            disabled={busy}
+            style={[
+              localStyles.saveBtn,
+              {
+                backgroundColor: savedToast ? 'rgba(51, 139, 73, 0.18)' : nickFieldFill,
+                borderColor: savedToast ? 'rgba(77, 228, 145, 0.35)' : LIVI.border,
+              },
+            ]}
+          >
+            <Text
+              style={[
+                localStyles.saveLabel,
+                { color: savedToast ? 'rgba(172, 220, 190, 0.95)' : LIVI.white },
+              ]}
+            >
+              {savedToast ? t('saved', lang) : t('save', lang)}
+            </Text>
+          </TouchableOpacity>
+        </View>
+        ) : null}
+      </KeyboardAvoidingView>
     </TouchableWithoutFeedback>
   );
 }
 
-const overlayStyles = StyleSheet.create({
-  overlay: {
-    ...StyleSheet.absoluteFillObject,
+const localStyles = StyleSheet.create({
+  scrollContent: {
+    paddingHorizontal: 16,
+    paddingTop: 36,
+    paddingBottom: 24,
+    flexGrow: 1,
+  },
+  scrollContentKeyboard: {
+    paddingTop: 24,
+    justifyContent: 'flex-start',
+  },
+  avatarBlock: {
+    alignItems: 'center',
     justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: 'transparent',
-    zIndex: 9999,
-    paddingTop: Platform.OS === 'android' ? 100 : 0,
+    marginTop: 8,
+    marginBottom: 8,
+    minHeight: 200,
+    overflow: 'visible',
   },
-  overlayLoading: {
+  avatarBlockHidden: {
+    opacity: 0,
+    height: 0,
+    minHeight: 0,
+    marginTop: 0,
+    marginBottom: 0,
+    overflow: 'hidden',
+  },
+  pulseHaloOuter: {
+    position: 'absolute',
+    width: 220,
+    height: 220,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  pulseHaloInner: {
+    position: 'absolute',
+    width: 170,
+    height: 170,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  pulseHaloFill: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 999,
+  },
+  avatarContent: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 1,
+  },
+  avatarWrap: {
+    overflow: 'hidden',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  avatarPressArea: {
     ...StyleSheet.absoluteFillObject,
-    justifyContent: 'flex-end',
     alignItems: 'center',
-    backgroundColor: 'transparent',
-    zIndex: 9999,
-    paddingBottom: Platform.OS === 'android' ? 180 : 200,
+    justifyContent: 'center',
   },
-  overlayBottom: {
-    ...StyleSheet.absoluteFillObject,
-    justifyContent: 'flex-end',
+  deleteBadge: {
+    position: 'absolute',
+    right: 2,
+    bottom: 2,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
     alignItems: 'center',
-    backgroundColor: 'transparent',
-    zIndex: 9999,
-    paddingBottom: Platform.OS === 'android' ? 180 : 200,
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.55)',
   },
-  toast: {
-    width: '46%',
+  nickRow: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 14,
+  },
+  nickRowKeyboard: {
+    marginTop: 8,
+  },
+  nickInputWrap: {
+    width: '58%',
+    maxWidth: 220,
+    minWidth: 160,
+    justifyContent: 'center',
+    overflow: 'hidden',
     alignSelf: 'center',
-    paddingVertical: 7,
-    paddingHorizontal: 9,
-    borderRadius: 12,
-    backgroundColor: 'rgba(51, 139, 73, 0.13)',
-    borderWidth: 1,
-    borderColor: 'rgba(77, 228, 145, 0.39)',
+    backgroundColor: 'transparent',
+    borderBottomWidth: 1,
   },
-  toastText: {
+  clearNickBtn: {
+    position: 'absolute',
+    right: 6,
+    top: 0,
+    bottom: 0,
+    width: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 2,
+  },
+  saveFooter: {
+    paddingHorizontal: 16,
+    marginBottom: 40,
+    alignItems: 'stretch',
+  },
+  saveBtn: {
+    height: 36,
+    borderRadius: 999,
+    borderWidth: StyleSheet.hairlineWidth,
+    overflow: 'hidden',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  saveLabel: {
+    fontSize: 14,
+    fontWeight: '400',
     textAlign: 'center',
-    color: 'rgba(172, 179, 185, 0.95)',
-    fontWeight: '600',
-    fontSize: 16,
+    ...(Platform.OS === 'android' ? { includeFontPadding: false } : null),
   },
 });
