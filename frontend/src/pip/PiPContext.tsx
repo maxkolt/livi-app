@@ -723,10 +723,37 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       }
       if (isExternalHeadsetRoute(videoRouteNorm)) {
         setUserSelectedCallAudioRoute(videoRouteNorm);
+      } else if (videoRouteNorm === 'SPEAKER_PHONE' || videoRouteNorm === 'EARPIECE') {
+        // Video→PiP: громкая (или явный earpiece) должна пережить возврат на audio.
+        setUserSelectedCallAudioRoute(videoRouteNorm);
+        rememberManualBuiltinCallAudioRoute(videoRouteNorm);
+        armCallAudioRouteUiLock(videoRouteNorm);
+        try {
+          const gPin = global as any;
+          gPin.__explicitBuiltInCallAudioRouteRef =
+            gPin.__explicitBuiltInCallAudioRouteRef || { current: false };
+          gPin.__explicitBuiltInCallAudioRouteRef.current = true;
+          // Как audio→PiP: lock + explicit, чтобы плашка/auto-poll не откатывали на EARPIECE.
+          gPin.__pipBuiltinRouteLockUntilRef = gPin.__pipBuiltinRouteLockUntilRef || { current: 0 };
+          gPin.__pipBuiltinRouteLockUntilRef.current = Date.now() + 6500;
+          gPin.__inAppPiPExplicitToggleRouteRef =
+            gPin.__inAppPiPExplicitToggleRouteRef || { current: null };
+          gPin.__inAppPiPExplicitToggleRouteRef.current = videoRouteNorm;
+        } catch {}
       } else {
         setUserSelectedCallAudioRoute(null);
       }
       persistVideoInAppPiPAudioRoute(videoRouteNorm, { mapForEnterVideoUi: false });
+      try {
+        const gVideoUi = global as any;
+        gVideoUi.__currentCallPiPParamsRef = gVideoUi.__currentCallPiPParamsRef || { current: null };
+        const existingVideo = gVideoUi.__currentCallPiPParamsRef.current;
+        if (existingVideo && typeof existingVideo === 'object') {
+          existingVideo.audioOutputRoute = videoRouteNorm;
+        }
+        gVideoUi.__lastAppliedCallAudioRouteRef = { current: videoRouteNorm };
+        notifyInAppPiPAudioRouteUi(videoRouteNorm);
+      } catch {}
       if (Platform.OS === 'android') {
         void probeNativeCallAudioRoutes().then((probe) => {
           mergeNativeProbeIntoGlobal(probe);
@@ -741,13 +768,14 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
           scheduleInAppPiPAudioTransitionReapply('from_video', {
             media: 'video',
             skipInCallRestart: true,
-            honorUserRoute: !!readUserLockedBuiltinCallAudioRoute(),
+            honorUserRoute: true,
           });
         }
       } catch {
         scheduleInAppPiPAudioTransitionReapply('from_video', {
           media: 'video',
           skipInCallRestart: true,
+          honorUserRoute: true,
         });
       }
     }

@@ -264,14 +264,15 @@ function resolveReturnToAudioUiReapplyRoute(): InCallAudioRoute {
   const userSel = readUserSelectedCallAudioRoute();
   const livePiP = readInAppPiPAudioOutputRoute();
 
+  // Маршрут video/audio плашки SPEAKER важнее stale EARPIECE (PiP → audio).
+  if (livePiP === 'SPEAKER_PHONE' || plaqueExplicit === 'SPEAKER_PHONE') {
+    return 'SPEAKER_PHONE';
+  }
+
   if (plaqueExplicit === 'EARPIECE' || userSel === 'EARPIECE') {
     return 'EARPIECE';
   }
-  if (
-    livePiP === 'EARPIECE' &&
-    plaqueExplicit !== 'SPEAKER_PHONE' &&
-    userSel !== 'SPEAKER_PHONE'
-  ) {
+  if (livePiP === 'EARPIECE' && userSel !== 'SPEAKER_PHONE') {
     return 'EARPIECE';
   }
 
@@ -289,13 +290,7 @@ function resolveReturnToAudioUiReapplyRoute(): InCallAudioRoute {
   if (authoritative === 'EARPIECE') {
     return 'EARPIECE';
   }
-  if (plaqueExplicit === 'SPEAKER_PHONE') {
-    return 'SPEAKER_PHONE';
-  }
   if (userSel === 'SPEAKER_PHONE') {
-    return 'SPEAKER_PHONE';
-  }
-  if (livePiP === 'SPEAKER_PHONE') {
     return 'SPEAKER_PHONE';
   }
   if (authoritative === 'SPEAKER_PHONE') {
@@ -1011,12 +1006,21 @@ function rememberReapplyDedup(route: InCallAudioRoute, media: 'audio' | 'video',
   lastReapplyAt = Date.now();
 }
 
-/** Локальный audio UI — не тянуть direct_call_video_ui / video speaker pin. */
+/** Инкремент при уходе на audio UI — отсекает уже запущенный async video reapply. */
+let directCallVideoUiReapplyGeneration = 0;
+
 function shouldSkipDirectCallVideoUiReapply(): boolean {
   try {
     if ((global as any).__inAudioOnlyUiRef?.current === true) return true;
   } catch {}
-  return isInAudioOnlyCallUi();
+  if (isInAudioOnlyCallUi()) return true;
+  try {
+    // Sticky после return-to-audio — даже если inAudioOnly ещё не синхронизировался.
+    if ((global as any).__preferAudioOnlyUiOnNextVideoCallRef?.current === true) {
+      return true;
+    }
+  } catch {}
+  return false;
 }
 
 function readPersistedOrUserExternalRoute(): InCallAudioRoute | null {
@@ -1070,20 +1074,22 @@ function coerceAudioOnlySystemPiPExitRoute(route: InCallAudioRoute): InCallAudio
   return route;
 }
 
-/** Снять video SPEAKER ui_lock при переходе на audio UI (если пользователь не выбирал громкую). */
+/** Снять product video SPEAKER ui_lock при переходе на audio UI. */
 export function clearStaleVideoSpeakerUiLockForAudioOnlyUi(): void {
   const lock = readCallAudioRouteUiLock();
-  if (
-    lock === 'SPEAKER_PHONE' &&
-    !readUserLockedBuiltinCallAudioRoute() &&
-    !userExplicitlyChoseLoudSpeakerForCall()
-  ) {
-    clearCallAudioRouteUiLock();
-  }
+  if (lock !== 'SPEAKER_PHONE') return;
+  // Пользователь явно выбрал громкую (cycle / beforeVideo SPEAKER) — lock оставляем.
+  if (userExplicitlyChoseLoudSpeakerForCall()) return;
+  const beforeVideo = readDirectCallAudioRouteBeforeVideo();
+  if (beforeVideo === 'SPEAKER_PHONE') return;
+  // Раньше: !userLocked блокировал сброс, если был EARPIECE lock с accept —
+  // тогда SPEAKER lock с video оставался и давал SPEAKER↔EARPIECE мерцание.
+  clearCallAudioRouteUiLock();
 }
 
 /** Отменить отложенные reapply с video-политикой, когда локально audio UI. */
 export function cancelDeferredVideoMediaAudioReappliesForLocalAudioUi(): void {
+  directCallVideoUiReapplyGeneration += 1;
   cancelScheduledCallAudioRouteReappliesMatching([
     'system_pip_return_media',
     'system_pip_exit_preserve_route',
@@ -1092,7 +1098,7 @@ export function cancelDeferredVideoMediaAudioReappliesForLocalAudioUi(): void {
   ]);
 }
 
-export function armLocalAudioOnlyUiAudioRoutingQuiet(ms = 600): void {
+export function armLocalAudioOnlyUiAudioRoutingQuiet(ms = 1000): void {
   armCallAudioPreferAudioModeQuiet(ms);
   armCallAudioPreservePriority(ms);
 }
@@ -2522,6 +2528,7 @@ export async function reapplyPersistedCallAudioRoute(
       }
 
       if (reason === 'direct_call_video_ui_route') {
+        const genAtStart = directCallVideoUiReapplyGeneration;
         if (shouldSkipDirectCallVideoUiReapply()) {
           logger.debug('[callAudioRoutePersist] reapply skipped (audio-only UI)', { reason });
           return;
@@ -2533,6 +2540,14 @@ export async function reapplyPersistedCallAudioRoute(
           return;
         }
         const videoRoute = resolveFullVideoCallScreenAudioRoute();
+        // После await/очереди пользователь мог уйти на audio UI — не применять SPEAKER.
+        if (
+          genAtStart !== directCallVideoUiReapplyGeneration ||
+          shouldSkipDirectCallVideoUiReapply()
+        ) {
+          logger.debug('[callAudioRoutePersist] reapply aborted (left video UI)', { reason });
+          return;
+        }
         setPersistedCallAudioRoute(videoRoute);
         try {
           const g = global as any;
@@ -2552,6 +2567,15 @@ export async function reapplyPersistedCallAudioRoute(
         await applyNativeOutputRoute(videoRoute, media, {
           forceBuiltIn: !isExternalHeadsetRoute(videoRoute),
         });
+        if (
+          genAtStart !== directCallVideoUiReapplyGeneration ||
+          shouldSkipDirectCallVideoUiReapply()
+        ) {
+          logger.debug('[callAudioRoutePersist] reapply native done but stale (left video UI)', {
+            reason,
+          });
+          return;
+        }
         lastNativeInCallSignature = signature;
         logger.info('[callAudioRoutePersist] reapply', {
           reason,
@@ -2572,6 +2596,13 @@ export async function reapplyPersistedCallAudioRoute(
         if (isExternalHeadsetRoute(videoRoute)) {
           setUserSelectedCallAudioRoute(videoRoute);
           markUserSelectedExternalCallAudioRoute(videoRoute);
+        } else if (videoRoute === 'SPEAKER_PHONE' || videoRoute === 'EARPIECE') {
+          // Не обнулять userSel: иначе плашка читает stale ICM EARPIECE поверх native SPEAKER.
+          setUserSelectedCallAudioRoute(videoRoute);
+          rememberManualBuiltinCallAudioRoute(videoRoute);
+          try {
+            (global as any).__userSelectedExternalCallAudioRouteRef = { current: null };
+          } catch {}
         } else {
           setUserSelectedCallAudioRoute(null);
           try {

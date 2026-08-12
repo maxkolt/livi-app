@@ -377,6 +377,10 @@ export const useAudioRouting = (
   /** На полном video UI встроенный earpiece запрещён — только громкая или BT/провод. */
   const mapBuiltInRouteForActiveCallUi = (route: InCallAudioRoute): InCallAudioRoute => {
     if (route !== 'EARPIECE') return route;
+    // Audio-first: на video UI всё равно нельзя держать ухо (только speaker / BT).
+    if (!isInAudioOnlyCallUi() && ongoingCallPrefersVideoMedia()) {
+      return mapRouteForEnterVideoUi('EARPIECE');
+    }
     if (routingOptionsRef.current?.defaultToEarpiece) return 'EARPIECE';
     if (isInAudioOnlyCallUi()) return 'EARPIECE';
     return mapRouteForEnterVideoUi('EARPIECE');
@@ -386,6 +390,8 @@ export const useAudioRouting = (
   const mayApplyProductSpeakerRoute = (route: InCallAudioRoute): boolean => {
     if (route !== 'SPEAKER_PHONE') return true;
     if (!routingOptionsRef.current?.defaultToEarpiece) return true;
+    // Video UI: продуктовая громкая обязательна, defaultToEarpiece сюда не относится.
+    if (!isInAudioOnlyCallUi() && ongoingCallPrefersVideoMedia()) return true;
     if (readUserLockedBuiltinCallAudioRoute() === 'SPEAKER_PHONE') return true;
     if (userExplicitlyPinnedBuiltinCallAudio()) return true;
     if (isDirectAudioEarpieceStabilizeWindow()) return false;
@@ -406,6 +412,7 @@ export const useAudioRouting = (
       if (
         lock === 'SPEAKER_PHONE' &&
         routingOptionsRef.current?.defaultToEarpiece &&
+        isInAudioOnlyCallUi() &&
         !userExplicitlyPinnedBuiltinCallAudio() &&
         !readUserLockedBuiltinCallAudioRoute()
       ) {
@@ -418,6 +425,7 @@ export const useAudioRouting = (
       if (
         userSel === 'SPEAKER_PHONE' &&
         routingOptionsRef.current?.defaultToEarpiece &&
+        isInAudioOnlyCallUi() &&
         !userExplicitlyPinnedBuiltinCallAudio() &&
         !readUserLockedBuiltinCallAudioRoute()
       ) {
@@ -432,6 +440,7 @@ export const useAudioRouting = (
       if (
         persisted === 'SPEAKER_PHONE' &&
         routingOptionsRef.current?.defaultToEarpiece &&
+        isInAudioOnlyCallUi() &&
         !userExplicitlyPinnedBuiltinCallAudio() &&
         !readUserLockedBuiltinCallAudioRoute()
       ) {
@@ -471,7 +480,10 @@ export const useAudioRouting = (
     const opts = routingOptionsRef.current;
     if (route === 'EARPIECE' || route === 'SPEAKER_PHONE') {
       rememberBuiltinCallRouteBeforeHeadset(route, !!opts?.defaultToEarpiece);
-      if (opts?.defaultToEarpiece) {
+      // beforeVideo = маршрут на audio UI до ухода на video.
+      // Не писать product SPEAKER с pinVideoUiSpeaker / video reapply —
+      // иначе return-to-audio восстанавливает громкую вместо earpiece.
+      if (opts?.defaultToEarpiece && isInAudioOnlyCallUi()) {
         rememberDirectCallAudioRouteBeforeVideo(route);
       }
     }
@@ -1803,16 +1815,27 @@ export const useAudioRouting = (
               ) {
                 // InCallManager на Samsung часто держит SPEAKER после MODE_IN_COMMUNICATION,
                 // пока user/lock уже EAR — сразу дожимаем нужный built-in.
-                const desiredRaw =
-                  readCallAudioRouteUiLock() ||
-                  (getUserRoute() === 'EARPIECE' || getUserRoute() === 'SPEAKER_PHONE'
-                    ? getUserRoute()
-                    : null) ||
-                  readUserSelectedCallAudioRoute();
+                // На video UI desired = speaker/BT, не audio-first earpiece.
+                const onVideoUi =
+                  !isInAudioOnlyCallUi() && ongoingCallPrefersVideoMedia();
+                const desiredRaw = onVideoUi
+                  ? resolveOngoingVideoCallAudioRoute() ||
+                    readCallAudioRouteUiLock() ||
+                    (getUserRoute() === 'EARPIECE' || getUserRoute() === 'SPEAKER_PHONE'
+                      ? getUserRoute()
+                      : null) ||
+                    readUserSelectedCallAudioRoute()
+                  : readCallAudioRouteUiLock() ||
+                    (getUserRoute() === 'EARPIECE' || getUserRoute() === 'SPEAKER_PHONE'
+                      ? getUserRoute()
+                      : null) ||
+                    readUserSelectedCallAudioRoute();
                 const desired =
                   desiredRaw === 'EARPIECE' || desiredRaw === 'SPEAKER_PHONE'
                     ? coerceProductBuiltinRoute(desiredRaw)
-                    : null;
+                    : isExternalHeadsetRoute(desiredRaw)
+                      ? desiredRaw
+                      : null;
                 if (desired && desired !== selNorm) {
                   const nowMs = Date.now();
                   const g = global as any;
@@ -1825,11 +1848,15 @@ export const useAudioRouting = (
                       desired,
                       reason: 'builtin_mismatch_repin',
                     });
-                    applyBuiltInOutputRoute(
-                      desired === 'SPEAKER_PHONE',
-                      'onAudioDeviceChanged_mismatch_repin',
-                      true,
-                    );
+                    if (isExternalHeadsetRoute(desired)) {
+                      applySpecificRoute(desired, 'onAudioDeviceChanged_mismatch_repin', true);
+                    } else {
+                      applyBuiltInOutputRoute(
+                        desired === 'SPEAKER_PHONE',
+                        'onAudioDeviceChanged_mismatch_repin',
+                        true,
+                      );
+                    }
                     return;
                   }
                 }
@@ -2400,6 +2427,15 @@ export const useAudioRouting = (
     const g = global as any;
     g.__applyCallAudioRouteFromParentRef = g.__applyCallAudioRouteFromParentRef || { current: null };
     g.__applyCallAudioRouteFromParentRef.current = (route: InCallAudioRoute, reason: string) => {
+      // Хвост video pin / reapply не должен перебивать return-to-audio.
+      if (
+        isInAudioOnlyCallUi() &&
+        (reason === 'direct_call_video_ui_route' ||
+          reason === 'pinVideoUiSpeaker' ||
+          reason === 'pinVideoUiSpeaker_expand')
+      ) {
+        return;
+      }
       if (isExternalHeadsetRoute(route)) {
         setUserSelectedCallAudioRoute(route);
       }
@@ -2422,11 +2458,18 @@ export const useAudioRouting = (
     if (!enabled || !routingOptionsRef.current?.defaultToEarpiece) return;
     const applyPreferBuiltin = (route: InCallAudioRoute) => {
       let target = route;
+      const keepSpeakerFromPiP =
+        target === 'SPEAKER_PHONE' &&
+        (normalizeInCallRoute(readInAppPiPAudioOutputRoute() || '') === 'SPEAKER_PHONE' ||
+          readLastAppliedCallAudioRoute() === 'SPEAKER_PHONE' ||
+          getPersistedCallAudioRoute() === 'SPEAKER_PHONE' ||
+          readUserLockedBuiltinCallAudioRoute() === 'SPEAKER_PHONE');
       if (
         target === 'SPEAKER_PHONE' &&
         routingOptionsRef.current?.defaultToEarpiece &&
         !readUserLockedBuiltinCallAudioRoute() &&
-        !userExplicitlyPinnedBuiltinCallAudio()
+        !userExplicitlyPinnedBuiltinCallAudio() &&
+        !keepSpeakerFromPiP
       ) {
         target = 'EARPIECE';
       }
@@ -2437,8 +2480,9 @@ export const useAudioRouting = (
       if (isCallAudioPreferAudioModeQuiet()) return;
       if (isDirectAudioEarpieceStabilizeWindow()) {
         const locked = readUserLockedBuiltinCallAudioRoute();
-        if (locked === 'SPEAKER_PHONE' && userExplicitlyPinnedBuiltinCallAudio()) {
-          applySpecificRoute('SPEAKER_PHONE', 'preferAudioMode', true);
+        // Video→PiP SPEAKER (rememberManual) тоже locked — не форсить EARPIECE.
+        if (locked === 'SPEAKER_PHONE' || locked === 'EARPIECE') {
+          applySpecificRoute(locked, 'preferAudioMode', true);
           return;
         }
         const extLockedStabilize = readUserSelectedExternalCallAudioRoute();
@@ -2515,10 +2559,16 @@ export const useAudioRouting = (
         return;
       }
       let uiLockPrefer = readCallAudioRouteUiLock();
+      // Не снимать SPEAKER lock, если плашка/lastApplied — громкая (video-PiP → audio).
+      const pipOrLastSpeaker =
+        normalizeInCallRoute(readInAppPiPAudioOutputRoute() || '') === 'SPEAKER_PHONE' ||
+        readLastAppliedCallAudioRoute() === 'SPEAKER_PHONE' ||
+        getPersistedCallAudioRoute() === 'SPEAKER_PHONE';
       if (
         uiLockPrefer === 'SPEAKER_PHONE' &&
         !readUserLockedBuiltinCallAudioRoute() &&
-        !userExplicitlyPinnedBuiltinCallAudio()
+        !userExplicitlyPinnedBuiltinCallAudio() &&
+        !pipOrLastSpeaker
       ) {
         clearCallAudioRouteUiLock();
         uiLockPrefer = null;
@@ -2539,9 +2589,10 @@ export const useAudioRouting = (
         if (
           authoritative === 'SPEAKER_PHONE' &&
           !userExplicitlyPinnedBuiltinCallAudio() &&
-          !readUserLockedBuiltinCallAudioRoute()
+          !readUserLockedBuiltinCallAudioRoute() &&
+          !pipOrLastSpeaker
         ) {
-          // ignore stale video speaker during PiP transition on audio UI
+          // ignore stale video speaker only when plaque is not SPEAKER
         } else if (
           authoritative === 'SPEAKER_PHONE' ||
           authoritative === 'EARPIECE' ||
@@ -2550,6 +2601,11 @@ export const useAudioRouting = (
           applyPreferBuiltin(authoritative);
           return;
         }
+      }
+      // Video-PiP / return from SPEAKER plaque — не форсить EARPIECE на audio-first.
+      if (pipOrLastSpeaker && isInAudioOnlyCallUi()) {
+        applyPreferBuiltin('SPEAKER_PHONE');
+        return;
       }
       const userSel = readExplicitUserSelectedBuiltInRoute();
       if (userSel === 'SPEAKER_PHONE' || userSel === 'EARPIECE') {
@@ -2827,6 +2883,10 @@ export const useAudioRouting = (
             return;
           }
         }
+        // Сразу после return-to-audio: не перебивать маршрут opportunistic sync'ом.
+        if (isInAudioOnlyCallUi() && isCallAudioPreferAudioModeQuiet()) {
+          return;
+        }
         if (Platform.OS === 'android') {
           try {
             const probe = await probeNativeCallAudioRoutes();
@@ -2834,11 +2894,11 @@ export const useAudioRouting = (
           } catch {}
         }
         const av = lastAvailableRef.current;
+        // Video UI: держим speaker/BT даже на audio-first (defaultToEarpiece не отменяет video-политику).
         const videoUiSync =
           !preferAudioModeRef.current &&
           !isInAudioOnlyCallUi() &&
-          ongoingCallPrefersVideoMedia() &&
-          !routingOptionsRef.current?.defaultToEarpiece;
+          ongoingCallPrefersVideoMedia();
         if (videoUiSync) {
           const route = resolveOngoingVideoCallAudioRoute();
           applySpecificRoute(route, 'manualSync_video_ctx', true);
@@ -2847,11 +2907,12 @@ export const useAudioRouting = (
         }
         const uiLockSyncRaw = readCallAudioRouteUiLock();
         let uiLockSync = uiLockSyncRaw;
+        // Product SPEAKER lock с video UI — сбрасывать на audio UI, если не явный выбор громкой.
         if (
           uiLockSync === 'SPEAKER_PHONE' &&
-          routingOptionsRef.current?.defaultToEarpiece &&
-          !readUserLockedBuiltinCallAudioRoute() &&
-          !userExplicitlyPinnedBuiltinCallAudio()
+          isInAudioOnlyCallUi() &&
+          !userExplicitlyPinnedBuiltinCallAudio() &&
+          readDirectCallAudioRouteBeforeVideo() !== 'SPEAKER_PHONE'
         ) {
           clearCallAudioRouteUiLock();
           uiLockSync = null;
@@ -2895,11 +2956,7 @@ export const useAudioRouting = (
         if (
           lockedBuiltinSync &&
           !isExternalHeadsetRoute(lockedBuiltinSync) &&
-          !(
-            !routingOptionsRef.current?.defaultToEarpiece &&
-            ongoingCallPrefersVideoMedia() &&
-            !isInAudioOnlyCallUi()
-          )
+          !(ongoingCallPrefersVideoMedia() && !isInAudioOnlyCallUi())
         ) {
           if (lockedBuiltinSync !== normalizeInCallRoute(lastAppliedRouteRef.current)) {
             applySpecificRoute(lockedBuiltinSync, 'manualSync', true);

@@ -2459,7 +2459,15 @@ export class VideoCallSession extends SimpleEventEmitter {
   private isLocalDirectCallAudioOnlyUi(): boolean {
     try {
       const g = global as any;
-      // Как isInAudioOnlyCallUi: stayOnVideo побеждает stale preferAudioOnly после PiP return.
+      // Явный return-to-audio: preferAudioOnly + inAudioOnly побеждают stale stayOnVideo
+      // (иначе партнёру снова уходит direct-call:video-ui=true).
+      if (
+        g.__preferAudioOnlyUiOnNextVideoCallRef?.current === true &&
+        g.__inAudioOnlyUiRef?.current === true
+      ) {
+        return true;
+      }
+      // stayOnVideo побеждает stale preferAudioOnly после PiP return на video.
       if (g.__stayOnVideoCallUiRef?.current === true) return false;
       if (g.__preferAudioOnlyUiOnNextVideoCallRef?.current === true) return true;
       if (g.__inAudioOnlyUiRef?.current === true) return true;
@@ -2576,7 +2584,7 @@ export class VideoCallSession extends SimpleEventEmitter {
         const g = global as any;
         if (g.__inAudioOnlyUiRef) g.__inAudioOnlyUiRef.current = true;
       } catch (_) {}
-      this.notifyPeerDirectCallVideoUi(false);
+      this.notifyPeerDirectCallVideoUi(false, { force: true });
       return;
     }
 

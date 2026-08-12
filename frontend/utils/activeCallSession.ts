@@ -35,8 +35,13 @@ function isActiveDirectCallAudioFirstWithoutUserVideo(): boolean {
 export function markDirectCallVideoMediaActive(): void {
   try {
     if (isActiveDirectCallAudioFirstWithoutUserVideo()) return;
-    clearDirectAudioEarpieceStabilizeWindow();
     const g = global as any;
+    // Явный return-to-audio без stayOnVideo: не переворачивать globals обратно на video.
+    // При expand на video stayOn уже true — пропускаем дальше даже если preferAudioOnly ещё sticky.
+    const stayOnVideo = g.__stayOnVideoCallUiRef?.current === true;
+    if (!stayOnVideo && g.__preferAudioOnlyUiOnNextVideoCallRef?.current === true) return;
+    if (!stayOnVideo && g.__inAudioOnlyUiRef?.current === true) return;
+    clearDirectAudioEarpieceStabilizeWindow();
     g.__stayOnVideoCallUiRef = g.__stayOnVideoCallUiRef || { current: false };
     g.__stayOnVideoCallUiRef.current = true;
     setPipAudioOnlyPlaceholderSticky(false);
@@ -828,6 +833,19 @@ export function readInAppPiPAudioOutputRoute(): InCallAudioRoute {
     }
 
     if (userSel === 'SPEAKER_PHONE' || userSel === 'EARPIECE') return userSel;
+
+    // Video→in-app PiP: ICM часто ещё EARPIECE после audio-only, пока persist/params уже SPEAKER.
+    if (
+      g.__pipVisibleRef?.current === true &&
+      g.__pipInAppRtcFromAudioOnlyRef?.current !== true
+    ) {
+      const videoBuiltin =
+        (fromParams === 'SPEAKER_PHONE' || fromParams === 'EARPIECE' ? fromParams : null) ||
+        (lastApplied === 'SPEAKER_PHONE' || lastApplied === 'EARPIECE' ? lastApplied : null) ||
+        (stored === 'SPEAKER_PHONE' || stored === 'EARPIECE' ? stored : null);
+      if (videoBuiltin === 'SPEAKER_PHONE') return 'SPEAKER_PHONE';
+      if (videoBuiltin === 'EARPIECE' && icmSelected !== 'SPEAKER_PHONE') return 'EARPIECE';
+    }
 
     if (icmSelected === 'SPEAKER_PHONE' || icmSelected === 'EARPIECE') return icmSelected;
 

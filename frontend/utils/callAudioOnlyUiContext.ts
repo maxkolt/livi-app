@@ -3,6 +3,14 @@
 export function isInAudioOnlyCallUi(): boolean {
   try {
     const g = global as any;
+    // Явный return-to-audio: не давать stale stayOnVideo / preferVideoCallUi
+    // перебить audio UI (иначе партнёру снова шлётся video-ui=true).
+    if (
+      g.__preferAudioOnlyUiOnNextVideoCallRef?.current === true &&
+      g.__inAudioOnlyUiRef?.current === true
+    ) {
+      return true;
+    }
     if (g.__stayOnVideoCallUiRef?.current === true) {
       return false;
     }
