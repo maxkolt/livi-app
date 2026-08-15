@@ -296,7 +296,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const [resolvedUserId, setResolvedUserId] = useState<string>('');
   const [installId, setInstallId] = useState<string>('');
 
-  const { menuOpen, setMenuOpen, tab, setTab, tabRef, menuOverlayOpacity, closeMenu } = useHomeMenu();
+  const { menuOpen, setMenuOpen, tab, setTab, tabRef, menuOverlayOpacity, menuOverlayTranslateY, closeMenu } = useHomeMenu();
   const [wallpaperPickerTheme, setWallpaperPickerTheme] = useState<'light' | 'dark' | null>(null);
 
   // Пикер фона — внутренний экран More; сбрасываем при закрытии меню / смене вкладки.
@@ -4004,12 +4004,13 @@ const handleClearNick = useCallback(async () => {
         </View>
       )}
 
-      {/* Оверлей только при открытом меню: иначе при сворачивании с welcome в превью «торчат» вкладки (opacity:0 всё равно в дереве). */}
-      {menuOpen ? (
+      {/* Оверлей всегда смонтирован (мгновенный open). Скрыт через opacity+offscreen, пока menuOpen=false —
+          иначе в app-switcher «торчат» вкладки. menuOpen/tab при фоне не сбрасываем. */}
       <HomeMenuOverlay
         styles={styles}
         menuOpen={menuOpen}
         menuOverlayOpacity={menuOverlayOpacity}
+        menuOverlayTranslateY={menuOverlayTranslateY}
         closeMenu={closeMenu}
         onHeaderBackPress={
           wallpaperPickerTheme
@@ -4121,7 +4122,6 @@ const handleClearNick = useCallback(async () => {
                 />
               )}
       </HomeMenuOverlay>
-      ) : null}
 
       {/* ───── Комната занята (caller info) ───── */}
       {roomFull.visible && (

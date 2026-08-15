@@ -25,6 +25,7 @@ export type HomeMenuOverlayProps = {
   styles: HomeStyles;
   menuOpen: boolean;
   menuOverlayOpacity: Animated.Value;
+  menuOverlayTranslateY: Animated.Value;
   closeMenu: () => void;
   /** Если задан — кнопка «назад» в шапке вызывает его вместо closeMenu (подэкраны More). */
   onHeaderBackPress?: () => void;
@@ -41,6 +42,7 @@ function HomeMenuOverlayInner({
   styles,
   menuOpen,
   menuOverlayOpacity,
+  menuOverlayTranslateY,
   closeMenu,
   onHeaderBackPress,
   tab,
@@ -132,10 +134,20 @@ function HomeMenuOverlayInner({
     );
   };
 
+  // Держим оверлей смонтированным для мгновенного open.
+  // Закрыто: opacity 0 + увод вниз — иначе при Home/app-switcher «торчат» вкладки поверх welcome.
+  // Открыто: на месте — в превью и после возврата из фона видна та же вкладка (state не трогаем).
   return (
     <Animated.View
-      style={[styles.overlayMenu, { opacity: menuOverlayOpacity }]}
+      style={[
+        styles.overlayMenu,
+        {
+          opacity: menuOverlayOpacity,
+          transform: [{ translateY: menuOverlayTranslateY }],
+        },
+      ]}
       pointerEvents={menuOpen ? 'box-none' : 'none'}
+      collapsable={false}
     >
       <View style={StyleSheet.absoluteFill} collapsable={false} pointerEvents="none">
         <BlurView
