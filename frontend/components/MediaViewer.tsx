@@ -36,7 +36,18 @@ function resolveViewerUri(raw: string): string {
   return value;
 }
 
-function ViewerImage({ uri }: { uri: string }) {
+/** [last, ...uris, first] — бесконечная карусель без рывка на краях. */
+function loopedAlbumData(uris: string[]): string[] {
+  if (uris.length <= 1) return uris;
+  return [uris[uris.length - 1], ...uris, uris[0]];
+}
+
+function loopedAlbumIndex(realIndex: number, count: number): number {
+  if (count <= 1) return Math.max(0, realIndex);
+  return realIndex + 1;
+}
+
+function ViewerImage({ uri, cacheKey }: { uri: string; cacheKey?: string }) {
   const isAndroidData = Platform.OS === 'android' && !!uri && /^data:/i.test(uri);
   const [androidFileUri, dataReady] = useResolvedImageUri(isAndroidData ? uri : '');
   const imageSourceUri = isAndroidData ? androidFileUri : uri;
@@ -50,7 +61,7 @@ function ViewerImage({ uri }: { uri: string }) {
       contentFit="contain"
       cachePolicy="memory-disk"
       transition={0}
-      recyclingKey={uri}
+      recyclingKey={cacheKey || uri}
       priority="high"
       allowDownscaling
     />
@@ -61,17 +72,24 @@ const AlbumStillSlide = React.memo(function AlbumStillSlide({
   uri,
   width,
   height,
+  slideKey,
 }: {
   uri: string;
   width: number;
   height: number;
+  slideKey: string;
 }) {
   return (
     <View style={{ width, height, justifyContent: 'center', alignItems: 'center' }}>
-      <ViewerImage uri={uri} />
+      <ViewerImage uri={uri} cacheKey={slideKey} />
     </View>
   );
-}, (prev, next) => prev.uri === next.uri && prev.width === next.width && prev.height === next.height);
+}, (prev, next) =>
+  prev.uri === next.uri &&
+  prev.width === next.width &&
+  prev.height === next.height &&
+  prev.slideKey === next.slideKey,
+);
 
 interface MediaViewerProps {
   visible: boolean;
@@ -107,6 +125,7 @@ export default function MediaViewer({
   const albumOpenIndexRef = React.useRef(0);
   const albumLayoutSyncedRef = React.useRef(false);
   const activeIndexRef = React.useRef(0);
+  const lastScaleRef = React.useRef(1);
   const [cropMode, setCropMode] = React.useState(false);
   const [cropRect, setCropRect] = React.useState<{ x: number; y: number; w: number; h: number }>(() => ({
     x: Math.round(screenWidth * 0.1),
@@ -134,6 +153,7 @@ export default function MediaViewer({
     () => sourceUris.map((item, index) => editsByIndex[index] || item),
     [sourceUris, editsByIndex],
   );
+  const loopedUris = React.useMemo(() => loopedAlbumData(displayUris), [displayUris]);
 
   // Pinch-to-zoom
   const pinchScale = React.useRef(new Animated.Value(1)).current;
@@ -165,16 +185,21 @@ export default function MediaViewer({
     return { maxX, maxY };
   };
 
-  const onPinchEvent = Animated.event([{ nativeEvent: { scale: pinchScale } }], {
-    useNativeDriver: true,
-  });
+  const onPinchEvent = React.useMemo(
+    () =>
+      Animated.event([{ nativeEvent: { scale: pinchScale } }], {
+        useNativeDriver: true,
+      }),
+    [pinchScale],
+  );
 
-  const onPinchStateChange = (e: any) => {
+  const onPinchStateChange = React.useCallback((e: any) => {
     if (e.nativeEvent.oldState === State.ACTIVE) {
       let next = lastScale.current * e.nativeEvent.scale;
       // Clamp scale between 1x and 6x
       next = Math.max(1, Math.min(next, 6));
       lastScale.current = next;
+      lastScaleRef.current = next;
       setScaleNumber(next);
       baseScale.setValue(next);
       pinchScale.setValue(1);
@@ -194,22 +219,24 @@ export default function MediaViewer({
         translateY.setValue(ny);
       }
     }
-  };
+  }, [baseScale, pinchScale, translateX, translateY]);
 
-  const onPanEvent = (e: any) => {
-    if (scaleNumber <= 1) return;
+  const onPanEvent = React.useCallback((e: any) => {
+    const s = lastScaleRef.current;
+    if (s <= 1) return;
     const dx = Number(e?.nativeEvent?.translationX || 0);
     const dy = Number(e?.nativeEvent?.translationY || 0);
-    const { maxX, maxY } = getPanBounds(scaleNumber);
+    const { maxX, maxY } = getPanBounds(s);
     const nx = clamp(lastTranslate.current.x + dx, -maxX, maxX);
     const ny = clamp(lastTranslate.current.y + dy, -maxY, maxY);
     translateX.setValue(nx);
     translateY.setValue(ny);
-  };
+  }, [translateX, translateY, containerSize.w, containerSize.h]);
 
-  const onPanStateChange = (e: any) => {
+  const onPanStateChange = React.useCallback((e: any) => {
     if (e?.nativeEvent?.oldState === State.ACTIVE) {
-      if (scaleNumber <= 1) {
+      const s = lastScaleRef.current;
+      if (s <= 1) {
         lastTranslate.current = { x: 0, y: 0 };
         translateX.setValue(0);
         translateY.setValue(0);
@@ -217,14 +244,14 @@ export default function MediaViewer({
       }
       const dx = Number(e?.nativeEvent?.translationX || 0);
       const dy = Number(e?.nativeEvent?.translationY || 0);
-      const { maxX, maxY } = getPanBounds(scaleNumber);
+      const { maxX, maxY } = getPanBounds(s);
       const nx = clamp(lastTranslate.current.x + dx, -maxX, maxX);
       const ny = clamp(lastTranslate.current.y + dy, -maxY, maxY);
       lastTranslate.current = { x: nx, y: ny };
       translateX.setValue(nx);
       translateY.setValue(ny);
     }
-  };
+  }, [translateX, translateY, containerSize.w, containerSize.h]);
 
   // === Crop rectangle gestures (freeform) ===
   const cropLast = React.useRef<{ x: number; y: number; w: number; h: number } | null>(null);
@@ -338,6 +365,7 @@ export default function MediaViewer({
 
   const resetZoomPan = React.useCallback(() => {
     lastScale.current = 1;
+    lastScaleRef.current = 1;
     setScaleNumber(1);
     baseScale.setValue(1);
     pinchScale.setValue(1);
@@ -383,15 +411,43 @@ export default function MediaViewer({
     setCropMode((prev) => (prev ? false : prev));
   }, [activeIndex, isAlbum]);
 
-  const syncActiveIndexFromOffset = React.useCallback(
-    (offsetX: number) => {
-      const w = pageWidth > 0 ? pageWidth : 1;
-      const next = Math.round(offsetX / w);
-      if (next < 0 || next >= displayUris.length) return;
-      if (next === activeIndexRef.current) return;
-      setActiveIndex(next);
+  const scrollAlbumToRealIndex = React.useCallback(
+    (realIndex: number, width = pageWidth, animated = false) => {
+      const w = width > 0 ? width : 1;
+      const n = displayUris.length;
+      try {
+        pagerRef.current?.scrollToOffset({
+          offset: loopedAlbumIndex(realIndex, n) * w,
+          animated,
+        });
+      } catch {}
     },
     [pageWidth, displayUris.length],
+  );
+
+  const settleAlbumPage = React.useCallback(
+    (offsetX: number) => {
+      const n = displayUris.length;
+      const w = pageWidth > 0 ? pageWidth : 1;
+      const loopedIndex = Math.round(offsetX / w);
+      if (n <= 1) {
+        setActiveIndex(0);
+        return;
+      }
+      if (loopedIndex <= 0) {
+        scrollAlbumToRealIndex(n - 1, w, false);
+        if (activeIndexRef.current !== n - 1) setActiveIndex(n - 1);
+        return;
+      }
+      if (loopedIndex >= n + 1) {
+        scrollAlbumToRealIndex(0, w, false);
+        if (activeIndexRef.current !== 0) setActiveIndex(0);
+        return;
+      }
+      const real = loopedIndex - 1;
+      if (real !== activeIndexRef.current) setActiveIndex(real);
+    },
+    [pageWidth, displayUris.length, scrollAlbumToRealIndex],
   );
 
   const syncAlbumLayout = React.useCallback((width: number, height: number) => {
@@ -400,14 +456,9 @@ export default function MediaViewer({
     if (!visible || !isAlbum || albumLayoutSyncedRef.current) return;
     albumLayoutSyncedRef.current = true;
     requestAnimationFrame(() => {
-      try {
-        pagerRef.current?.scrollToOffset({
-          offset: albumOpenIndexRef.current * width,
-          animated: false,
-        });
-      } catch {}
+      scrollAlbumToRealIndex(albumOpenIndexRef.current, width, false);
     });
-  }, [visible, isAlbum]);
+  }, [visible, isAlbum, scrollAlbumToRealIndex]);
 
   const getImageSize = React.useCallback(async (imgUri: string): Promise<{ width: number; height: number }> => {
     return await new Promise((resolve, reject) => {
@@ -628,36 +679,62 @@ export default function MediaViewer({
     }
   }, [busy, ensureLocalFile, showSaveToast]);
 
-  const renderAlbumItem = React.useCallback(
-    ({ item }: { item: string }) => (
-      <AlbumStillSlide uri={item} width={pageWidth} height={pageHeight} />
+  const renderZoomable = React.useCallback(
+    (imageUri: string) => {
+      const pinched = (
+        <PinchGestureHandler onGestureEvent={onPinchEvent} onHandlerStateChange={onPinchStateChange}>
+          <Animated.View
+            style={{
+              width: '100%',
+              height: '100%',
+              justifyContent: 'center',
+              alignItems: 'center',
+              transform: [{ scale }, { translateX }, { translateY }],
+            }}
+          >
+            <ViewerImage uri={imageUri} />
+          </Animated.View>
+        </PinchGestureHandler>
+      );
+      if (scaleNumber <= 1 && !cropMode) return pinched;
+      return (
+        <PanGestureHandler onGestureEvent={onPanEvent} onHandlerStateChange={onPanStateChange}>
+          <Animated.View style={{ width: '100%', height: '100%' }}>{pinched}</Animated.View>
+        </PanGestureHandler>
+      );
+    },
+    [
+      cropMode,
+      onPanEvent,
+      onPanStateChange,
+      onPinchEvent,
+      onPinchStateChange,
+      scale,
+      scaleNumber,
+      translateX,
+      translateY,
+    ],
+  );
+
+  const renderAlbumSlide = React.useCallback(
+    ({ item, index }: { item: string; index: number }) => (
+      <AlbumStillSlide
+        uri={item}
+        width={pageWidth}
+        height={pageHeight}
+        slideKey={`album-slide-${index}`}
+      />
     ),
     [pageWidth, pageHeight],
   );
 
-  const renderZoomable = (imageUri: string) => {
-    const pinched = (
-      <PinchGestureHandler onGestureEvent={onPinchEvent} onHandlerStateChange={onPinchStateChange}>
-        <Animated.View
-          style={{
-            width: '100%',
-            height: '100%',
-            justifyContent: 'center',
-            alignItems: 'center',
-            transform: [{ scale }, { translateX }, { translateY }],
-          }}
-        >
-          <ViewerImage uri={imageUri} />
-        </Animated.View>
-      </PinchGestureHandler>
-    );
-    if (scaleNumber <= 1 && !cropMode) return pinched;
-    return (
-      <PanGestureHandler onGestureEvent={onPanEvent} onHandlerStateChange={onPanStateChange}>
-        <Animated.View style={{ width: '100%', height: '100%' }}>{pinched}</Animated.View>
-      </PanGestureHandler>
-    );
-  };
+  const albumPagerInitialIndex =
+    displayUris.length <= 1
+      ? 0
+      : loopedAlbumIndex(
+          Math.max(0, Math.min(Number(initialIndex) || 0, displayUris.length - 1)),
+          displayUris.length,
+        );
 
   return (
     <Modal
@@ -676,6 +753,9 @@ export default function MediaViewer({
       animationOut="fadeOut"
       animationOutTiming={220}
       backdropOpacity={1}
+      coverScreen
+      deviceWidth={screenWidth}
+      deviceHeight={screenHeight}
     >
       {/*
         IMPORTANT:
@@ -684,30 +764,12 @@ export default function MediaViewer({
       */}
       <StatusBar barStyle="light-content" translucent backgroundColor="transparent" />
       {/* Important: GestureHandlerRootView is needed for pinch in Android modals */}
-      <GestureHandlerRootView style={{ flex: 1 }}>
-        <SafeAreaView
-          style={styles.container}
-          edges={Platform.OS === 'android' ? ['top', 'bottom', 'left', 'right'] : undefined}
-        >
-          {/* Header */}
-          <View style={styles.header}>
-            <TouchableOpacity onPress={onClose} style={styles.closeButton}>
-              <Ionicons name="close" size={28} color={LIVI.white} />
-            </TouchableOpacity>
-            {isAlbum ? (
-              <Text style={styles.fileName} numberOfLines={1}>
-                {`${activeIndex + 1} / ${displayUris.length}`}
-              </Text>
-            ) : name ? (
-              <Text style={styles.fileName} numberOfLines={1}>
-                {name}
-              </Text>
-            ) : null}
-          </View>
-
-          {/* Media Content */}
+      <GestureHandlerRootView style={styles.root}>
+        <View style={styles.container}>
+          {/* Media fills the screen; header/footer overlay so photos keep phone aspect. */}
           <View
-            style={styles.mediaContainer}
+            style={styles.mediaLayer}
+            pointerEvents="box-none"
             onLayout={(e) => {
               const { width, height } = e.nativeEvent.layout;
               syncAlbumLayout(width, height);
@@ -716,34 +778,52 @@ export default function MediaViewer({
             {isAlbum ? (
               albumPagerReady ? (
               <FlatList
+                key={`album-pager-${sourceUris.length}-${initialIndex}`}
                 ref={pagerRef}
-                data={displayUris}
+                data={loopedUris}
                 horizontal
                 pagingEnabled
+                disableIntervalMomentum
                 scrollEnabled={!cropMode && !busy}
                 showsHorizontalScrollIndicator={false}
-                bounces={displayUris.length > 1}
+                bounces={false}
                 decelerationRate="fast"
                 overScrollMode="never"
                 style={{ width: pageWidth, height: pageHeight }}
-                initialNumToRender={displayUris.length}
-                maxToRenderPerBatch={displayUris.length}
-                windowSize={displayUris.length}
+                initialScrollIndex={albumPagerInitialIndex}
+                initialNumToRender={loopedUris.length}
+                maxToRenderPerBatch={loopedUris.length}
+                windowSize={loopedUris.length}
                 removeClippedSubviews={false}
-                keyExtractor={(item) => item}
+                keyExtractor={(_, index) => `album-${index}`}
                 getItemLayout={(_, index) => ({
                   length: pageWidth,
                   offset: pageWidth * index,
                   index,
                 })}
-                onMomentumScrollEnd={(e) => syncActiveIndexFromOffset(e.nativeEvent.contentOffset.x)}
-                renderItem={renderAlbumItem}
+                onMomentumScrollEnd={(e) => settleAlbumPage(e.nativeEvent.contentOffset.x)}
+                onScrollEndDrag={(e) => {
+                  const vx = Number(e.nativeEvent.velocity?.x || 0);
+                  if (Math.abs(vx) < 0.08) settleAlbumPage(e.nativeEvent.contentOffset.x);
+                }}
+                renderItem={renderAlbumSlide}
               />
               ) : (
-                <View style={{ width: pageWidth, height: pageHeight }} />
+                <View style={{ width: pageWidth, height: pageHeight }}>
+                  <AlbumStillSlide
+                    uri={displayUris[albumOpenIndexRef.current] || displayUris[0] || ''}
+                    width={pageWidth}
+                    height={pageHeight}
+                    slideKey={`album-placeholder-${albumOpenIndexRef.current}`}
+                  />
+                </View>
               )
-            ) : (
+            ) : cropMode ? (
               renderZoomable(currentUri)
+            ) : (
+              <View style={{ width: '100%', height: '100%', justifyContent: 'center', alignItems: 'center' }}>
+                <ViewerImage uri={currentUri} />
+              </View>
             )}
 
             {cropMode ? (
@@ -802,18 +882,24 @@ export default function MediaViewer({
                 </PanGestureHandler>
               </View>
             ) : null}
-
-            {isAlbum && !cropMode ? (
-              <View pointerEvents="none" style={styles.pageDotsWrap}>
-                {displayUris.map((_, index) => (
-                  <View
-                    key={index}
-                    style={[styles.pageDot, index === activeIndex && styles.pageDotActive]}
-                  />
-                ))}
-              </View>
-            ) : null}
           </View>
+
+          <SafeAreaView pointerEvents="box-none" edges={['top']} style={styles.headerSafe}>
+            <View style={styles.header}>
+              <TouchableOpacity onPress={onClose} style={styles.closeButton}>
+                <Ionicons name="close" size={28} color={LIVI.white} />
+              </TouchableOpacity>
+              {isAlbum ? (
+                <Text style={styles.fileName} numberOfLines={1}>
+                  {`${activeIndex + 1} / ${displayUris.length}`}
+                </Text>
+              ) : name ? (
+                <Text style={styles.fileName} numberOfLines={1}>
+                  {name}
+                </Text>
+              ) : null}
+            </View>
+          </SafeAreaView>
 
           {saveToastVisible ? (
             <Animated.View
@@ -834,8 +920,18 @@ export default function MediaViewer({
             </Animated.View>
           ) : null}
 
-          {/* Footer */}
-          <View style={styles.footer}>
+          <SafeAreaView pointerEvents="box-none" edges={['bottom']} style={styles.footerSafe}>
+            {isAlbum && !cropMode ? (
+              <View pointerEvents="none" style={styles.pageDotsWrap}>
+                {displayUris.map((_, index) => (
+                  <View
+                    key={index}
+                    style={[styles.pageDot, index === activeIndex && styles.pageDotActive]}
+                  />
+                ))}
+              </View>
+            ) : null}
+            <View style={styles.footer}>
             <TouchableOpacity
               style={[styles.actionButton, busy && { opacity: 0.7 }]}
               onPress={handleEdit}
@@ -908,8 +1004,9 @@ export default function MediaViewer({
                 </TouchableOpacity>
               </>
             )}
-          </View>
-        </SafeAreaView>
+            </View>
+          </SafeAreaView>
+        </View>
       </GestureHandlerRootView>
     </Modal>
   );
@@ -918,20 +1015,31 @@ export default function MediaViewer({
 const styles = StyleSheet.create({
   modal: {
     margin: 0,
-    justifyContent: 'center',
-    alignItems: 'center',
+    justifyContent: 'flex-start',
+  },
+  root: {
+    flex: 1,
+    width: '100%',
+    height: '100%',
   },
   container: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.95)',
+    width: '100%',
+    backgroundColor: '#000',
+  },
+  headerSafe: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 10,
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(255, 255, 255, 0.1)',
+    paddingVertical: 8,
+    backgroundColor: 'rgba(0, 0, 0, 0.42)',
   },
   closeButton: {
     padding: 8,
@@ -943,25 +1051,30 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     flex: 1,
   },
-  mediaContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 0,
+  mediaLayer: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 0,
+    backgroundColor: '#000',
   },
   image: {
     width: '100%',
     height: '100%',
   },
-  pageDotsWrap: {
+  footerSafe: {
     position: 'absolute',
+    bottom: 0,
     left: 0,
     right: 0,
-    bottom: 12,
+    zIndex: 10,
+    backgroundColor: 'rgba(0, 0, 0, 0.42)',
+  },
+  pageDotsWrap: {
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
     gap: 6,
+    paddingTop: 10,
+    paddingBottom: 2,
   },
   pageDot: {
     width: 6,
@@ -1007,9 +1120,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-evenly',
     gap: 12,
     paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(255, 255, 255, 0.1)',
+    paddingVertical: 10,
   },
   actionButton: {
     alignItems: 'center',
