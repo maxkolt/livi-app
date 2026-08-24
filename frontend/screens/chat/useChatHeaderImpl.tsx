@@ -200,11 +200,7 @@ export function useChatHeader({
               overflow: 'hidden',
               borderWidth: 1,
               borderColor: isDark ? 'rgba(255,255,255,0.12)' : outlineColor,
-              ...(!fullAvatarUri
-                ? {
-                    backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)',
-                  }
-                : null),
+              backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)',
             }}
           />
         </TouchableOpacity>

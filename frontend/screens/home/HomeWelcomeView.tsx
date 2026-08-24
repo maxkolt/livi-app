@@ -357,8 +357,9 @@ function HomeWelcomeViewInner({
                 },
               ]}
               onPressIn={() => {
-                if (Platform.OS !== 'ios') return;
-                setMenuBlurIntensity(menuPressedBlur);
+                if (Platform.OS === 'ios') {
+                  setMenuBlurIntensity(menuPressedBlur);
+                }
                 Animated.timing(menuTitanOpacity, {
                   toValue: menuPressedTitan,
                   duration: 150,
@@ -366,8 +367,9 @@ function HomeWelcomeViewInner({
                 }).start();
               }}
               onPressOut={() => {
-                if (Platform.OS !== 'ios') return;
-                setMenuBlurIntensity(menuIdleBlur);
+                if (Platform.OS === 'ios') {
+                  setMenuBlurIntensity(menuIdleBlur);
+                }
                 Animated.timing(menuTitanOpacity, {
                   toValue: menuIdleTitan,
                   duration: 200,

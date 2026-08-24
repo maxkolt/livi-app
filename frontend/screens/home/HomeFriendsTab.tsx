@@ -333,7 +333,6 @@ function InviteButton({
               : undefined
           }
           onPress={() => {
-            prepareFriendRowActionTap();
             const gAfterTap = global as any;
             const activeCallAfterTap = isDirectCallSessionLive(gAfterTap);
             const videoCallPartnerAfterTap = gAfterTap.__videoCallPartnerUserIdRef?.current;
@@ -347,6 +346,16 @@ function InviteButton({
             const hardVideoDisabledAfterTap =
               busyAfterTap || incomingCallScreen.visible || activeCallAfterTap;
             if (hardVideoDisabledAfterTap) return;
+            const sameFriendOutgoing =
+              String(calling.friend?.id || '') === friendIdStr;
+            if (
+              outgoingInProgress &&
+              activeOutgoingAttemptRef.current > 0 &&
+              sameFriendOutgoing &&
+              callingVisibleRef.current
+            ) {
+              return;
+            }
             if (outgoingInProgress && activeOutgoingAttemptRef.current > 0) {
               const shouldResetStaleOutgoing = Platform.OS === 'android' && isCallKeepAvailable();
               if (shouldResetStaleOutgoing) {

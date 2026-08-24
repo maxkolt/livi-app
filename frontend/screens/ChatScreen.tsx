@@ -65,6 +65,7 @@ import { getFull, putFull, putThumb } from '../utils/avatarCache';
 import { BlurView } from 'expo-blur';
 import { getAvatarImageProps } from '../utils/imageOptimization';
 import { useResolvedImageUri } from '../hooks/useResolvedImageUri';
+import { resolveDataUriForAndroid } from '../utils/dataUriToFileUri';
 import { ChatMessageItem } from './chat/ChatMessageItem';
 import {
   isOfflineQueuedOrOptimisticOutgoingId,
@@ -282,6 +283,17 @@ export default function ChatScreen({ route, navigation }: Props) {
   const [peerAvatarVerState, setPeerAvatarVerState] = useState<number>(peerAvatarVer);
   const [peerOnline, setPeerOnline] = useState<boolean>(!!route?.params?.peerOnline);
   const [fullAvatarUri, setFullAvatarUri] = useState<string>(peerAvatarThumbB64Param); // Используем миниатюру как начальное значение
+  const setAvatarUriIfChanged = useCallback((next: string) => {
+    setFullAvatarUri((prev) => (prev === next ? prev : next));
+  }, []);
+
+  // Android: прогреваем file: кэш для data: до первого кадра шапки (меньше серого вспышки).
+  useEffect(() => {
+    const warm = fullAvatarUri || peerAvatarThumbB64Param;
+    if (Platform.OS === 'android' && warm && /^data:/i.test(warm)) {
+      void resolveDataUriForAndroid(warm);
+    }
+  }, [peerAvatarThumbB64Param, fullAvatarUri]);
 
   // Не показывать системное уведомление о сообщении от текущего собеседника, пока пользователь в этом чате.
   // Сообщить серверу «смотрю этот чат» (не слать пуш), снять уведомление этого чата из шторки.
@@ -848,25 +860,25 @@ export default function ChatScreen({ route, navigation }: Props) {
 
     (async () => {
       if (!peerId) {
-        setFullAvatarUri(peerAvatarThumbB64Param || '');
+        setAvatarUriIfChanged(peerAvatarThumbB64Param || '');
         return;
       }
 
       // Открыто по пушу (нет версии аватара) — запрашиваем аватар по peerId
       if (!peerAvatarVerState) {
-        if (peerAvatarThumbB64Param && !cancelled) setFullAvatarUri(peerAvatarThumbB64Param);
+        if (peerAvatarThumbB64Param && !cancelled) setAvatarUriIfChanged(peerAvatarThumbB64Param);
         try {
           const res = await getAvatar(peerId);
           if (cancelled) return;
           if (res?.ok && res.avatarB64 && res.avatarVer) {
             await putFull(peerId, res.avatarVer, res.avatarB64);
-            setFullAvatarUri(res.avatarB64);
+            setAvatarUriIfChanged(res.avatarB64);
             setPeerAvatarVerState(res.avatarVer);
           } else if (!peerAvatarThumbB64Param) {
-            setFullAvatarUri('');
+            setAvatarUriIfChanged('');
           }
         } catch {
-          if (!peerAvatarThumbB64Param && !cancelled) setFullAvatarUri('');
+          if (!peerAvatarThumbB64Param && !cancelled) setAvatarUriIfChanged('');
         }
         return;
       }
@@ -874,13 +886,8 @@ export default function ChatScreen({ route, navigation }: Props) {
       // Проверяем кэш полного аватара
       const cachedFull = await getFull(peerId, peerAvatarVerState);
       if (cachedFull && !cancelled) {
-        setFullAvatarUri(cachedFull);
+        setAvatarUriIfChanged(cachedFull);
         return;
-      }
-
-      // Если нет полного, но есть миниатюра - используем её временно
-      if (peerAvatarThumbB64Param && !cancelled) {
-        setFullAvatarUri(peerAvatarThumbB64Param);
       }
 
       try {
@@ -889,13 +896,13 @@ export default function ChatScreen({ route, navigation }: Props) {
 
         if (res?.ok && res.avatarB64) {
           await putFull(peerId, res.avatarVer!, res.avatarB64);
-          setFullAvatarUri(res.avatarB64);
+          setAvatarUriIfChanged(res.avatarB64);
 
           if (res.avatarVer !== peerAvatarVerState) {
             setPeerAvatarVerState(res.avatarVer!);
           }
         } else if (res?.ok && !res.avatarB64) {
-          if (!peerAvatarThumbB64Param) setFullAvatarUri('');
+          if (!peerAvatarThumbB64Param) setAvatarUriIfChanged('');
         }
       } catch {
         // мягко игнорируем — останется миниатюра/пусто
@@ -905,7 +912,7 @@ export default function ChatScreen({ route, navigation }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [peerId, peerAvatarVerState]);
+  }, [peerId, peerAvatarVerState, peerAvatarThumbB64Param, setAvatarUriIfChanged]);
 
   /* Модалка аватара собеседника в шапке чата: полный экран, блюр/затемнение, круг 3×, pinch-to-zoom */
   const [avatarModalVisible, setAvatarModalVisible] = useState(false);
@@ -2557,8 +2564,11 @@ export default function ChatScreen({ route, navigation }: Props) {
               renderItem={renderMessageRow}
               style={{ flex: 1, backgroundColor: 'transparent' }}
               contentContainerStyle={{
-                flexGrow: 1,
-                justifyContent: isEmpty ? 'center' : 'flex-start',
+                // flexGrow on a short inverted list lays cells in the middle
+                // first, then snaps them to the bottom — skip it once the feed is ready.
+                ...(!chatFeedReady || isEmpty
+                  ? { flexGrow: 1, justifyContent: 'center' as const }
+                  : null),
                 paddingTop: 0,
               }}
               showsVerticalScrollIndicator={false}

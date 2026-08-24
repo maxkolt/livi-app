@@ -4,28 +4,48 @@
  */
 import { useEffect, useState } from 'react';
 import { Platform } from 'react-native';
-import { resolveDataUriForAndroid } from '../utils/dataUriToFileUri';
+import { peekResolvedDataUriCache, resolveDataUriForAndroid } from '../utils/dataUriToFileUri';
 
 const isDataUri = (uri: string) =>
   typeof uri === 'string' && uri.trim().toLowerCase().startsWith('data:');
 
+function initialResolved(uri: string): { resolved: string; ready: boolean } {
+  if (!uri) return { resolved: '', ready: true };
+  if (Platform.OS !== 'android' || !isDataUri(uri)) {
+    return { resolved: uri, ready: true };
+  }
+  const cached = peekResolvedDataUriCache(uri);
+  if (cached) return { resolved: cached, ready: true };
+  return { resolved: '', ready: false };
+}
+
 /**
  * Возвращает URI, пригодный для ExpoImage: на Android для data: — file: URI после разрешения.
- * ready === false только когда идёт разрешение (data: на Android).
+ * При смене uri не гасит предыдущий кадр (stale-while-revalidate) — меньше мерцания в шапке чата.
  */
 export function useResolvedImageUri(uri: string): [resolvedUri: string, ready: boolean] {
   const needsResolve = Platform.OS === 'android' && isDataUri(uri);
-  const [resolved, setResolved] = useState(needsResolve ? '' : uri);
-  const [ready, setReady] = useState(!needsResolve);
+  const [resolved, setResolved] = useState(() => initialResolved(uri).resolved);
+  const [ready, setReady] = useState(() => initialResolved(uri).ready);
 
   useEffect(() => {
+    if (!uri) {
+      setResolved('');
+      setReady(true);
+      return;
+    }
     if (!needsResolve) {
       setResolved(uri);
       setReady(true);
       return;
     }
+    const cached = peekResolvedDataUriCache(uri);
+    if (cached) {
+      setResolved(cached);
+      setReady(true);
+      return;
+    }
     let alive = true;
-    setReady(false);
     resolveDataUriForAndroid(uri).then((fileUri) => {
       if (alive) {
         setResolved(fileUri);

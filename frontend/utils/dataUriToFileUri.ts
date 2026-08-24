@@ -20,6 +20,16 @@ function simpleHash(str: string): string {
 
 const resolvedCache: Record<string, string> = {};
 
+function cacheKeyForDataUri(uri: string): string {
+  return uri.length > 500 ? simpleHash(uri) + uri.length : uri;
+}
+
+/** Синхронно: уже разрешённый file: URI для этого data: (без записи на диск). */
+export function peekResolvedDataUriCache(uri: string): string | null {
+  if (!uri || Platform.OS !== 'android' || !isDataUri(uri)) return null;
+  return resolvedCache[cacheKeyForDataUri(uri)] || null;
+}
+
 /**
  * На Android для data: URI записывает base64 в кэш и возвращает file: URI.
  * На iOS и для не-data URI возвращает uri без изменений.
@@ -28,7 +38,7 @@ export async function resolveDataUriForAndroid(uri: string): Promise<string> {
   if (!uri || typeof uri !== 'string') return uri;
   if (Platform.OS !== 'android' || !isDataUri(uri)) return uri;
 
-  const cacheKey = uri.length > 500 ? simpleHash(uri) + uri.length : uri;
+  const cacheKey = cacheKeyForDataUri(uri);
   if (resolvedCache[cacheKey]) return resolvedCache[cacheKey];
 
   try {

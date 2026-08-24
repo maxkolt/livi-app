@@ -38,11 +38,22 @@ export function getMessageImageUris(message: any): string[] {
     seen.add(s);
     out.push(s);
   };
-  if (Array.isArray(message?.uris)) {
-    for (const u of message.uris) {
-      push(u);
-      if (out.length >= CHAT_ALBUM_MAX) break;
-    }
+  const rawUris = message?.uris;
+  const list = Array.isArray(rawUris)
+    ? rawUris
+    : typeof rawUris === 'string' && rawUris.trim().startsWith('[')
+      ? (() => {
+          try {
+            const parsed = JSON.parse(rawUris);
+            return Array.isArray(parsed) ? parsed : [];
+          } catch {
+            return [];
+          }
+        })()
+      : [];
+  for (const u of list) {
+    push(u);
+    if (out.length >= CHAT_ALBUM_MAX) break;
   }
   if (out.length === 0) push(message?.uri);
   return out;
@@ -85,4 +96,45 @@ export function albumGridColumns(count: number): number {
   if (n <= 1) return 1;
   if (n === 2 || n === 4) return 2;
   return 3;
+}
+
+/**
+ * Inner pixel width of the album grid (inside bubble padding).
+ * Matches ChatMessageItem: row maxWidth 92% + margin 16, bubble maxWidth 80%.
+ * Slightly conservative so tiles never wrap on the first Yoga pass.
+ */
+export function albumInnerWidth(windowWidth: number): number {
+  const listW = Math.max(1, Math.round(windowWidth));
+  const rowW = Math.min(Math.floor(listW * 0.92), listW - 32);
+  const bubbleW = Math.floor(rowW * 0.8);
+  return Math.max(120, bubbleW - CHAT_ALBUM_INSET * 2 - 2);
+}
+
+export type AlbumGridLayout = {
+  cols: number;
+  tile: number;
+  rowH: number;
+  gridW: number;
+  gridH: number;
+  bubbleW: number;
+};
+
+/** Locked pixel layout for an album — no onLayout resize. */
+export function albumGridLayout(windowWidth: number, count: number): AlbumGridLayout {
+  const n = Math.max(1, Math.min(CHAT_ALBUM_MAX, count | 0));
+  const cols = albumGridColumns(n);
+  const innerW = albumInnerWidth(windowWidth);
+  const tile = Math.max(1, Math.floor((innerW - CHAT_ALBUM_GAP * (cols - 1)) / cols));
+  const gridW = tile * cols + CHAT_ALBUM_GAP * (cols - 1);
+  const rowH = n === 1 ? Math.round(tile * 0.78) : tile;
+  const rows = Math.ceil(n / cols);
+  const gridH = rowH * rows + CHAT_ALBUM_GAP * Math.max(0, rows - 1);
+  return {
+    cols,
+    tile,
+    rowH,
+    gridW,
+    gridH,
+    bubbleW: gridW + CHAT_ALBUM_INSET * 2,
+  };
 }

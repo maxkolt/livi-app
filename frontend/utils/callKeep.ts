@@ -117,6 +117,11 @@ type SetupCallKeepOptions = {
 /** Ленивая инициализация CallKeep. Permission можно только проверить или запросить явно. */
 export async function setupCallKeep(options?: SetupCallKeepOptions): Promise<boolean> {
   const requestPermission = options?.requestPermission === true;
+
+  if (Platform.OS === 'android' && isSetup) {
+    return isAndroidCallKeepReady;
+  }
+
   const lang = await loadLang();
 
   if (Platform.OS === 'ios') {
@@ -160,10 +165,10 @@ export async function setupCallKeep(options?: SetupCallKeepOptions): Promise<boo
   }
 
   if (Platform.OS !== 'android') return false;
+
   if (requestPermission) {
     logger.info('[callKeep] setup requested with permission prompt flag; no dangerous runtime permission is requested on Android');
   }
-  if (isSetup) return isAndroidCallKeepReady;
 
   const telecomSupported = await resolveAndroidTelecomSupported();
   if (!telecomSupported) {

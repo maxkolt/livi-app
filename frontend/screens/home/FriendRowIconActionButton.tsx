@@ -51,18 +51,10 @@ export function FriendRowIconActionButton({
   const longPressHandledRef = React.useRef(false);
   const movedRef = React.useRef(false);
   const startPageRef = React.useRef({ x: 0, y: 0 });
-  const rescueTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const longPressTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const longPressDelay = delayLongPress ?? 500;
   const inactiveLook = !!(disabled || appearanceDisabled);
   const longPressEnabled = !!onLongPress && !disabled;
-
-  const clearRescueTimer = useCallback(() => {
-    if (rescueTimerRef.current) {
-      clearTimeout(rescueTimerRef.current);
-      rescueTimerRef.current = null;
-    }
-  }, []);
 
   const clearLongPressTimer = useCallback(() => {
     if (longPressTimerRef.current) {
@@ -73,19 +65,17 @@ export function FriendRowIconActionButton({
 
   useEffect(() => {
     return () => {
-      clearRescueTimer();
       clearLongPressTimer();
     };
-  }, [clearRescueTimer, clearLongPressTimer]);
+  }, [clearLongPressTimer]);
 
   const markMoved = useCallback(() => {
     if (movedRef.current) return;
     movedRef.current = true;
-    clearRescueTimer();
     clearLongPressTimer();
-    // Блокируем onPress / rescue — жест стал скроллом.
+    // Блокируем onPress — жест стал скроллом.
     pressHandledRef.current = true;
-  }, [clearRescueTimer, clearLongPressTimer]);
+  }, [clearLongPressTimer]);
 
   const onTouchMove = useCallback(
     (e: GestureResponderEvent) => {
@@ -110,19 +100,17 @@ export function FriendRowIconActionButton({
     ) {
       return;
     }
-    clearRescueTimer();
     clearLongPressTimer();
     longPressHandledRef.current = true;
     pressHandledRef.current = true;
     onLongPress();
-  }, [clearRescueTimer, clearLongPressTimer, disabled, onLongPress]);
+  }, [clearLongPressTimer, disabled, onLongPress]);
 
   const runPress = useCallback(() => {
-    clearRescueTimer();
     if (movedRef.current || pressHandledRef.current || longPressHandledRef.current) return;
     pressHandledRef.current = true;
     onPress?.();
-  }, [clearRescueTimer, onPress]);
+  }, [onPress]);
 
   return (
     <Pressable
@@ -131,13 +119,10 @@ export function FriendRowIconActionButton({
       hitSlop={hitSlop}
       pressRetentionOffset={FRIEND_ACTION_PRESS_RETENTION}
       delayLongPress={longPressEnabled ? longPressDelay : undefined}
-      // Даём скроллу шанс перехватить жест до активации press.
-      unstable_pressDelay={48}
       android_disableSound
       android_ripple={null}
       onTouchMove={onTouchMove}
       onPressIn={(e) => {
-        clearRescueTimer();
         clearLongPressTimer();
         movedRef.current = false;
         pressHandledRef.current = false;
@@ -154,7 +139,7 @@ export function FriendRowIconActionButton({
       }}
       onPressOut={() => {
         clearLongPressTimer();
-        // После скролла Pressable часто глотает onPress, а rescue «дожимал» действие — не делаем так.
+        // Android иногда глотает onPress; срабатываем сразу на отпускании, без паузы.
         if (
           movedRef.current ||
           !rescueMissedPress ||
@@ -166,11 +151,9 @@ export function FriendRowIconActionButton({
         }
         const pressDuration = Date.now() - pressStartedAtRef.current;
         if (longPressEnabled && pressDuration >= longPressDelay - 40) return;
-        // Только короткий неподвижный тап, который Android мог «потерять».
-        if (pressDuration > 220) return;
-        rescueTimerRef.current = setTimeout(runPress, 80);
+        runPress();
       }}
-      onPress={longPressEnabled ? undefined : runPress}
+      onPress={runPress}
       onLongPress={longPressEnabled ? fireLongPress : undefined}
       style={({ pressed }) => [
         {

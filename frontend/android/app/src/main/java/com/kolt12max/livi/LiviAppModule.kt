@@ -157,8 +157,8 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     promise.resolve(MainActivity.isInForeground)
   }
 
-  /** Задержка (мс) перед запуском OutgoingCallActivity после broadcast закрытия: даём предыдущему экземпляру (singleInstance) успеть finish(); после завершения звонка UI успевает стабилизироваться. */
-  private val OUTGOING_LAUNCH_DELAY_MS = 250L
+  /** Задержка перед запуском OutgoingCallActivity после broadcast закрытия: даём предыдущему экземпляру (singleInstance) успеть finish(). */
+  private val OUTGOING_LAUNCH_DELAY_MS = 120L
   /** Короткая пауза перед новым входящим: старый IncomingCallActivity должен успеть обработать JUST_CLOSE. */
   private val INCOMING_RELAUNCH_DELAY_MS = 120L
 
@@ -181,12 +181,12 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   /** Закрыть любой видимый экран исходящего (broadcast), затем через OUTGOING_LAUNCH_DELAY_MS запустить новый — чтобы при повторном звонке не поднимался старый singleInstance. */
   private fun closeAnyOutgoingScreenThenLaunch(ctx: Context, intent: Intent, retryIfNoActivity: Boolean, closeCallId: String? = null) {
     val scopedCallId = closeCallId?.takeIf { it.isNotBlank() }
-    val closeIntent = Intent(OutgoingCallActivity.ACTION_CLOSE_OUTGOING_CALL).apply {
-      setPackage(ctx.packageName)
-      scopedCallId?.let { putExtra(OutgoingCallActivity.EXTRA_CALL_ID, it) }
-      if (scopedCallId == null) putExtra(OutgoingCallActivity.EXTRA_FORCE_CLOSE, true)
-    }
-    ctx.sendBroadcast(closeIntent)
+    LiviAppModule.sendCloseOutgoingBroadcast(
+      ctx,
+      scopedCallId,
+      force = scopedCallId == null,
+      source = "launchOutgoing",
+    )
     Log.d(NAME, "launchOutgoing: sent close broadcast oldCallId=${scopedCallId ?: "<unscoped>"}, posting launch in ${OUTGOING_LAUNCH_DELAY_MS}ms")
     Handler(Looper.getMainLooper()).postDelayed({
       runOnUiThreadLaunchOutgoing(intent, ctx, retryIfNoActivity)
@@ -316,16 +316,17 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   fun closeOutgoingCallActivity(callId: String?, force: Boolean, skipMainReturn: Boolean) {
     val id = callId?.trim().orEmpty()
     if (id.isNotBlank()) {
+      EndedCallIds.add(reactApplicationContext, id)
       LiviOngoingCallHelper.clearOngoingCallIfMatches(reactApplicationContext, id)
     } else if (force) {
       LiviOngoingCallHelper.clearOngoingCall(reactApplicationContext)
     }
-    val intent = Intent(OutgoingCallActivity.ACTION_CLOSE_OUTGOING_CALL).apply {
-      setPackage(reactApplicationContext.packageName)
-      if (id.isNotBlank()) putExtra(OutgoingCallActivity.EXTRA_CALL_ID, id)
-      if (force) putExtra(OutgoingCallActivity.EXTRA_FORCE_CLOSE, true)
-    }
-    reactApplicationContext.sendBroadcast(intent)
+    LiviAppModule.sendCloseOutgoingBroadcast(
+      reactApplicationContext,
+      id.ifBlank { null },
+      force = force,
+      source = "closeOutgoingCallActivity",
+    )
     Log.d(
       NAME,
       "closeOutgoingCallActivity: sent close broadcast callId=${id.ifBlank { "<unscoped>" }} force=$force skipMainReturn=$skipMainReturn",
@@ -360,13 +361,12 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       return
     }
     LiviOngoingCallHelper.clearOngoingCall(ctx)
-    // 1) Broadcast — закрыть OutgoingCallActivity, если на экране
-    val closeOutgoing = Intent(OutgoingCallActivity.ACTION_CLOSE_OUTGOING_CALL).apply {
-      setPackage(ctx.packageName)
-      outgoingPeek?.first?.takeIf { it.isNotBlank() }?.let { putExtra(OutgoingCallActivity.EXTRA_CALL_ID, it) }
-        ?: putExtra(OutgoingCallActivity.EXTRA_FORCE_CLOSE, true)
-    }
-    ctx.sendBroadcast(closeOutgoing)
+    LiviAppModule.sendCloseOutgoingBroadcast(
+      ctx,
+      outgoingPeek?.first?.takeIf { it.isNotBlank() },
+      force = outgoingPeek?.first.isNullOrBlank(),
+      source = "bringMainActivityToFront",
+    )
     LiviOutgoingCallService.stop(ctx, outgoingPeek?.first)
     // 2) Принудительно закрыть OutgoingCallActivity (как FCM): если broadcast не дошёл, активность получит intent и finish()
     val closeActivityIntent = Intent(ctx, OutgoingCallActivity::class.java).apply {
@@ -2300,8 +2300,54 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     private var lastBringMainToFrontAtMs: Long = 0L
     @Volatile
     private var lastRequestExitSystemPiPAtMs: Long = 0L
+    @Volatile
+    private var lastCloseOutgoingBroadcastAtMs: Long = 0L
+    @Volatile
+    private var lastCloseOutgoingBroadcastSignature: String = ""
     private const val BRING_MAIN_TO_FRONT_DEBOUNCE_MS = 1200L
     private const val EXIT_SYSTEM_PIP_DEBOUNCE_MS = 1200L
+    private const val CLOSE_OUTGOING_BROADCAST_DEBOUNCE_MS = 350L
+
+    /**
+     * Единая точка CLOSE_OUTGOING broadcast: debounce одинаковых подряд (finish storm при redial).
+     */
+    @JvmStatic
+    fun sendCloseOutgoingBroadcast(
+      ctx: Context,
+      callId: String?,
+      force: Boolean,
+      source: String = "",
+    ): Boolean {
+      val id = callId?.trim().orEmpty()
+      val signature = when {
+        id.isNotEmpty() -> "id:$id"
+        force -> "force_unscoped"
+        else -> "empty"
+      }
+      val now = System.currentTimeMillis()
+      synchronized(LiviAppModule::class.java) {
+        if (
+          now - lastCloseOutgoingBroadcastAtMs < CLOSE_OUTGOING_BROADCAST_DEBOUNCE_MS &&
+          signature == lastCloseOutgoingBroadcastSignature
+        ) {
+          Log.d(
+            NAME,
+            "sendCloseOutgoingBroadcast: skip duplicate signature=$signature source=$source",
+          )
+          return false
+        }
+        lastCloseOutgoingBroadcastAtMs = now
+        lastCloseOutgoingBroadcastSignature = signature
+      }
+      val intent = Intent(OutgoingCallActivity.ACTION_CLOSE_OUTGOING_CALL).apply {
+        setPackage(ctx.packageName)
+        if (id.isNotBlank()) putExtra(OutgoingCallActivity.EXTRA_CALL_ID, id)
+        if (force) putExtra(OutgoingCallActivity.EXTRA_FORCE_CLOSE, true)
+      }
+      ctx.sendBroadcast(intent)
+      Log.d(NAME, "sendCloseOutgoingBroadcast: sent signature=$signature source=$source")
+      return true
+    }
 
     /**
      * OutgoingCallActivity в отдельной задаче (singleInstance). После finish() без этого пользователь

@@ -1,13 +1,12 @@
 // screens/chat/ChatAlbumGrid.tsx
 import React from "react";
-import { View, Pressable, Platform, Animated, Vibration } from "react-native";
+import { View, Pressable, Platform, Animated, Vibration, useWindowDimensions } from "react-native";
 import { Image as ExpoImage } from "expo-image";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import {
   CHAT_ALBUM_GAP,
-  CHAT_ALBUM_INSET,
-  albumGridColumns,
+  albumGridLayout,
   getMessageImageUris,
 } from "./chatAlbum";
 
@@ -166,9 +165,8 @@ function AlbumTile({
 }
 
 /**
- * Equal-tile album grid. Parent bubble supplies side/top padding;
- * this grid fills 100% of that content box so tiles never overflow.
- * Images render on first paint (no wait for onLayout) to avoid enter flicker.
+ * Equal-tile album grid. Pixel size is locked from window width so Yoga
+ * never does a second pass (estimate → onLayout shrink → jump right/down).
  */
 export function ChatAlbumGrid({
   item,
@@ -180,25 +178,18 @@ export function ChatAlbumGrid({
   onToggleTileSelect,
 }: Props) {
   const uris = React.useMemo(() => getMessageImageUris(item), [item]);
-  const cols = albumGridColumns(uris.length);
-  const [innerW, setInnerW] = React.useState(0);
+  const { width: windowWidth } = useWindowDimensions();
+  const layout = albumGridLayout(windowWidth, uris.length);
   const selectedSet = React.useMemo(() => new Set(selectedIndices), [selectedIndices]);
   const messageId = String(item?.id || "img");
 
-  const tile =
-    innerW > 0
-      ? Math.max(1, Math.floor((innerW - CHAT_ALBUM_GAP * (cols - 1)) / cols))
-      : 0;
-  const rowH = uris.length === 1 && tile > 0 ? Math.round(tile * 0.78) : tile || undefined;
-
   return (
     <View
-      onLayout={(e) => {
-        const w = Math.round(e.nativeEvent.layout.width);
-        if (w > 0 && w !== innerW) setInnerW(w);
-      }}
+      collapsable={false}
       style={{
-        width: "100%",
+        width: layout.gridW,
+        height: layout.gridH,
+        overflow: "hidden",
         flexDirection: "row",
         flexWrap: "wrap",
         gap: CHAT_ALBUM_GAP,
@@ -212,9 +203,9 @@ export function ChatAlbumGrid({
             messageId={messageId}
             uri={uri}
             index={index}
-            width={tile || undefined}
-            height={rowH}
-            cols={cols}
+            width={layout.tile}
+            height={layout.rowH}
+            cols={layout.cols}
             selectionMode={!!selectionMode}
             isTileSelected={selectedSet.has(index)}
             onPress={() => {

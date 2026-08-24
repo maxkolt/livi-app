@@ -27,7 +27,7 @@ import {
   isOfflineQueuedOrOptimisticOutgoingId,
   type ChatReadStatus,
 } from "./chatMessageIds";
-import { getMessageImageUris, CHAT_ALBUM_INSET } from "./chatAlbum";
+import { getMessageImageUris, CHAT_ALBUM_INSET, albumGridLayout } from "./chatAlbum";
 import { ChatAlbumGrid } from "./ChatAlbumGrid";
 import { ChatReplyQuoteAccent } from "./ChatReplyQuoteAccent";
 
@@ -772,8 +772,11 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
 
   const messageAnimation = getMessageAnimation(item.id);
   const canToggle = !!selectionMode;
-  const isAlbumImageMsg =
-    String(item?.type || '') === 'image' && getMessageImageUris(item).length > 1;
+  const albumUrisForLayout = item?.type === 'image' ? getMessageImageUris(item) : [];
+  const isAlbumImageMsg = albumUrisForLayout.length > 1;
+  const albumLayout = isAlbumImageMsg
+    ? albumGridLayout(Dimensions.get('window').width, albumUrisForLayout.length)
+    : null;
   const showSideCheckbox = !!selectionMode;
   const handleBubblePress = React.useCallback(() => {
     if (canToggle) {
@@ -997,7 +1000,9 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
       <View
         style={{
           alignSelf: isMyMessage ? 'flex-end' : 'flex-start',
-          maxWidth: '80%',
+          ...(albumLayout
+            ? { width: albumLayout.bubbleW, maxWidth: albumLayout.bubbleW }
+            : { maxWidth: '80%' }),
           ...(item.replyTo ? { minWidth: replyBubbleMinWidth } : null),
         }}
       >

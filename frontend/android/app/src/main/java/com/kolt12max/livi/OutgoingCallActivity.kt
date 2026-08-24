@@ -145,15 +145,18 @@ class OutgoingCallActivity : AppCompatActivity() {
             override fun onReceive(context: Context?, intent: Intent?) {
                 val broadcastCallId = intent?.getStringExtra(EXTRA_CALL_ID) ?: ""
                 val forceClose = intent?.getBooleanExtra(EXTRA_FORCE_CLOSE, false) == true
-                val forceUnscopedClose = forceClose && broadcastCallId.isEmpty()
-                val matchesCurrentCall = broadcastCallId.isNotEmpty() && broadcastCallId == this@OutgoingCallActivity.callId
-                val closesPendingNoCallId = broadcastCallId.isEmpty() && this@OutgoingCallActivity.callId.isEmpty()
-                if (forceUnscopedClose || matchesCurrentCall || closesPendingNoCallId) {
-                    LiviOutgoingCallService.stop(this@OutgoingCallActivity, this@OutgoingCallActivity.callId)
-                    finish()
-                } else {
-                    Log.d(TAG, "ACTION_CLOSE_OUTGOING_CALL ignored broadcastCallId=${broadcastCallId.take(24)} currentCallId=${this@OutgoingCallActivity.callId.take(24)} force=$forceClose")
+                if (!shouldAcceptCloseBroadcast(broadcastCallId, forceClose)) {
+                    Log.d(
+                        TAG,
+                        "ACTION_CLOSE_OUTGOING_CALL ignored broadcastCallId=${broadcastCallId.take(24)} currentCallId=${callId.take(24)} force=$forceClose",
+                    )
+                    return
                 }
+                if (finishRequested || isFinishing || isDestroyed) {
+                    return
+                }
+                LiviOutgoingCallService.stop(this@OutgoingCallActivity, this@OutgoingCallActivity.callId)
+                finish()
             }
         }
         val filter = IntentFilter(ACTION_CLOSE_OUTGOING_CALL)
@@ -178,6 +181,9 @@ class OutgoingCallActivity : AppCompatActivity() {
         val newCallId = intent.getStringExtra(EXTRA_CALL_ID) ?: ""
         Log.d(TAG, "onNewIntent: closeImmediately=$closeImmediately newCallId=${newCallId.take(24)}")
         if (closeImmediately) {
+            if (!shouldAcceptIncomingCloseId(newCallId)) {
+                return
+            }
             Log.d(TAG, "onNewIntent: EXTRA_CLOSE_IMMEDIATELY -> finishing")
             LiviOutgoingCallService.stop(this, callId.ifBlank { newCallId })
             finish()
@@ -303,6 +309,8 @@ class OutgoingCallActivity : AppCompatActivity() {
         if (callId.isNotBlank()) {
             LiviOngoingCallHelper.clearOngoingCallIfMatches(applicationContext, callId)
             LiviOutgoingCallService.stop(this, callId)
+        } else {
+            LiviOngoingCallHelper.clearPendingEmptyOutgoingPrefs(applicationContext)
         }
         dotsRunnable?.let { timeoutHandler.removeCallbacks(it) }
         dotsRunnable = null
@@ -311,6 +319,51 @@ class OutgoingCallActivity : AppCompatActivity() {
         callIdReadyReceiver?.let { try { unregisterReceiver(it) } catch (_: Exception) {} }
         callIdReadyReceiver = null
         super.onDestroy()
+    }
+
+    /**
+     * FCM / bringMain шлют CLOSE с опозданием — не закрывать новый исходящий
+     * (redial уже с другим callId или callId ещё пустой на этом экране).
+     */
+    private fun shouldAcceptIncomingCloseId(incomingCallId: String): Boolean {
+        val current = callId.trim()
+        val incoming = incomingCallId.trim()
+        if (current.isNotEmpty()) {
+            if (incoming.isEmpty()) {
+                Log.d(
+                    TAG,
+                    "shouldAcceptIncomingCloseId: reject unscoped close while active callId=${current.take(24)}",
+                )
+                return false
+            }
+            if (incoming != current) {
+                Log.d(
+                    TAG,
+                    "shouldAcceptIncomingCloseId: reject stale close incoming=${incoming.take(24)} current=${current.take(24)}",
+                )
+                return false
+            }
+            return true
+        }
+        if (incoming.isNotEmpty()) {
+            Log.d(
+                TAG,
+                "shouldAcceptIncomingCloseId: reject scoped close while pending callId incoming=${incoming.take(24)}",
+            )
+            return false
+        }
+        return true
+    }
+
+    private fun shouldAcceptCloseBroadcast(broadcastCallId: String, forceClose: Boolean): Boolean {
+        val incoming = broadcastCallId.trim()
+        if (forceClose && incoming.isEmpty()) {
+            return shouldAcceptIncomingCloseId("")
+        }
+        if (incoming.isEmpty()) {
+            return callId.trim().isEmpty()
+        }
+        return shouldAcceptIncomingCloseId(incoming) && incoming == callId.trim()
     }
 
     private fun installPressFeedback(button: ImageButton) {

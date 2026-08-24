@@ -493,13 +493,15 @@ export const AnimatedBorderButton: React.FC<AnimatedBorderButtonProps> = ({
   const buttonWidth = Math.min(Math.max(0, windowWidth - sideInset), maxCtaWidth);
   const buttonHeight = compact
     ? Platform.OS === 'ios'
-      ? 40
-      : 36
+      ? 36
+      : 32
     : Platform.OS === 'ios'
-      ? 60
-      : 50;
+      ? 52
+      : 44;
   const borderRadius = 12;
   const labelFontSize = compact ? 14 : undefined;
+
+  const pressArmedRef = useRef(false);
 
   const triggerBlockedFeedback = useCallback(() => {
     // Короткий визуальный "нельзя": красный пульс + мягкий шейк.
@@ -530,6 +532,20 @@ export const AnimatedBorderButton: React.FC<AnimatedBorderButtonProps> = ({
     ]).start();
     onDisabledPress?.();
   }, [blockedFlashOpacity, blockedShakeX, onDisabledPress]);
+
+  const firePress = useCallback(() => {
+    if (disabled) {
+      triggerBlockedFeedback();
+      return;
+    }
+    if (pressArmedRef.current) return;
+    pressArmedRef.current = true;
+    onPress();
+  }, [disabled, onPress, triggerBlockedFeedback]);
+
+  const unlockPress = useCallback(() => {
+    pressArmedRef.current = false;
+  }, []);
 
   return (
     <View style={[{ alignItems: 'center', justifyContent: 'center' }, style]}>
@@ -582,13 +598,9 @@ export const AnimatedBorderButton: React.FC<AnimatedBorderButtonProps> = ({
             />
             {Platform.OS === 'android' ? (
               <Pressable
-                onPress={() => {
-                  if (disabled) {
-                    triggerBlockedFeedback();
-                    return;
-                  }
-                  onPress();
-                }}
+                onPressIn={firePress}
+                onPress={firePress}
+                onPressOut={unlockPress}
                 disabled={disabled}
                 accessibilityState={{ disabled }}
                 android_ripple={{
@@ -635,8 +647,10 @@ export const AnimatedBorderButton: React.FC<AnimatedBorderButtonProps> = ({
                     duration: 150,
                     useNativeDriver: true,
                   }).start();
+                  firePress();
                 }}
                 onPressOut={() => {
+                  unlockPress();
                   if (disabled) return;
                   setBlurIntensity(isDark ? 15 : 20);
                   Animated.timing(titanOpacity, {
@@ -645,13 +659,7 @@ export const AnimatedBorderButton: React.FC<AnimatedBorderButtonProps> = ({
                     useNativeDriver: true,
                   }).start();
                 }}
-                onPress={() => {
-                  if (disabled) {
-                    triggerBlockedFeedback();
-                    return;
-                  }
-                  onPress();
-                }}
+                onPress={firePress}
                 accessibilityState={{ disabled }}
                 style={{
                   width: '100%',

@@ -1,5 +1,5 @@
 // components/AvatarImage.tsx
-import React, { memo, useEffect, useState } from 'react';
+import React, { memo, useEffect, useRef, useState } from 'react';
 import { View, Text, StyleProp, ViewStyle, TextStyle, ImageStyle } from 'react-native';
 import { Image as ExpoImage } from 'expo-image';
 import { useResolvedImageUri } from '../hooks/useResolvedImageUri';
@@ -76,13 +76,23 @@ const AvatarImage = memo<AvatarImageProps>(({
   }, [userId, avatarVer, propsUri]);
 
   const [resolvedUri, resolvedReady] = useResolvedImageUri(uri);
+  const lastGoodDisplayRef = useRef('');
+  useEffect(() => {
+    lastGoodDisplayRef.current = '';
+  }, [userId, avatarVer]);
+  if (resolvedReady && resolvedUri) {
+    lastGoodDisplayRef.current = resolvedUri;
+  }
+  const displayUri =
+    (resolvedReady && resolvedUri) ||
+    lastGoodDisplayRef.current ||
+    (uri && !/^data:/i.test(uri) ? uri : '');
+
   const borderRadius = size / 2;
   const key = `avatar_${userId || 'none'}_v${avatarVer || 0}_${size}`;
 
-  // Показываем плейсхолдер если нет URI, идёт загрузка или на Android ещё не разрешён data: URI
-  // Букву/— показываем только когда загрузка завершена и аватара нет (убирает мерцание при холодном старте)
   const showFallbackLetter = fallbackText && !loading && !uri;
-  if (!uri || loading || !resolvedReady) {
+  if (!displayUri) {
     return (
       <View
         style={[
@@ -119,7 +129,7 @@ const AvatarImage = memo<AvatarImageProps>(({
     <View style={[{ width: size, height: size, borderRadius }, containerStyle]}>
       <ExpoImage
         key={key}
-        {...getAvatarImageProps(resolvedUri, key)}
+        {...getAvatarImageProps(displayUri, key)}
         style={[
           {
             width: size,

@@ -136,7 +136,7 @@ export const styles = StyleSheet.create({
   title: {
     color: LIVI.text,
     fontSize: Platform.OS === "android" ? 26 : 28,
-    fontWeight: '700',
+    fontWeight: '500',
     letterSpacing: 0.3,
     textAlign: 'center',
     lineHeight: Platform.OS === 'android' ? 30 : 32,

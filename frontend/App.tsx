@@ -1028,16 +1028,29 @@ function AppContent() {
       if (callId) {
         repeatNativeCallSignal('cancel', callId);
       } else if (currentOutgoing) {
-        // Stale empty cancel после notifyOutgoingCallId: не закрываем активный дозвон
-        // (иначе closeOutgoingCallActivity гасит ringback на redial).
-        logger.info('[App] OutgoingCallCanceledByUser without callId ignored — active outgoing exists', {
+        // Activity ещё без callId (после нескольких redial broadcast часто не доходит),
+        // пользователь нажал X — это отмена текущего дозвона. Игнор залипает JS: calling.visible
+        // остаётся true, сбросить звонок уже нельзя.
+        logger.info('[App] OutgoingCallCanceledByUser without callId — cancel current outgoing', {
           currentOutgoing,
         });
-        return;
+        repeatNativeCallSignal('cancel', currentOutgoing);
       } else {
+        const attempt = Number((global as any).__activeOutgoingAttemptRef?.current || 0);
+        const uiActive = (global as any).__outgoingCallUiActiveRef?.current === true;
+        if (attempt <= 0 && !uiActive) {
+          logger.info('[App] OutgoingCallCanceledByUser without callId ignored — no active outgoing');
+          (global as any).__outgoingCanceledByNativeRef.current = false;
+          return;
+        }
         logger.info('[App] OutgoingCallCanceledByUser without callId — UI close only (no cancelCall)');
       }
-      try { emitCloseOutgoingCall({ reason: 'native_cancel', callId: callId || null }); } catch {}
+      try {
+        emitCloseOutgoingCall({
+          reason: 'native_cancel',
+          callId: callId || currentOutgoing || null,
+        });
+      } catch {}
     });
     const sub2 = emitter.addListener('IncomingCallDeclinedByUser', (payload?: { callId?: string | null }) => {
       repeatNativeCallSignal('decline', payload?.callId);
@@ -3821,6 +3834,11 @@ function AppContent() {
             } catch (e) {
               console.warn('[App] Error in onReady callback:', e);
             }
+            InteractionManager.runAfterInteractions(() => {
+              try { require('./screens/RandomChatScreen'); } catch {}
+              try { require('./screens/ChatScreen'); } catch {}
+              try { require('./screens/VideoCallScreen'); } catch {}
+            });
           }}
           onStateChange={() => {
             try {
@@ -3848,7 +3866,7 @@ function AppContent() {
               backgroundColor: (theme.colors.background as string) || '#151F33',
             },
             animation: 'fade',
-            animationDuration: 450,
+            animationDuration: 120,
             // Не размонтировать неактивные экраны — при закрытии VideoCall Home остаётся смонтированным, state (аватар и т.д.) сохраняется, нет мерцания буквы.
             // Типы native-stack не включают detachInactiveScreens, но опция поддерживается в рантайме.
             detachInactiveScreens: false,
@@ -3861,8 +3879,7 @@ function AppContent() {
                   presentation: 'card',
                   gestureEnabled: true,
                   animation: 'fade',
-                  // Быстрее переход с welcome-экрана, но с мягким fade без резкости.
-                  animationDuration: 240,
+                  animationDuration: 80,
                   contentStyle: {
                     backgroundColor: (theme.colors.background as string) || '#151F33',
                   },
@@ -3889,7 +3906,7 @@ function AppContent() {
                 getComponent={() => require('./screens/ChatScreen').default}
                 options={{
                   animation: 'fade',
-                  animationDuration: 450,
+                  animationDuration: 120,
                   gestureEnabled: true,
                   contentStyle: {
                     backgroundColor: (theme.colors.background as string) || '#151F33',
