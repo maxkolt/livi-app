@@ -6,6 +6,8 @@ export type ChatSelectedMedia = {
   type: "image";
   uri: string;
   name?: string;
+  uris?: string[];
+  index?: number;
 };
 
 export function useChatMediaViewers() {

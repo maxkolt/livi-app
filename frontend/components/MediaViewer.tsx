@@ -12,7 +12,7 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { GestureHandlerRootView, PinchGestureHandler, PanGestureHandler, State } from 'react-native-gesture-handler';
+import { GestureHandlerRootView, PinchGestureHandler, PanGestureHandler, State, FlatList } from 'react-native-gesture-handler';
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import { saveImageToGallery } from '../utils/saveToGallery';
@@ -26,28 +26,87 @@ import { useLang } from '../store/lang';
 import { t } from '../utils/i18n';
 import PhotoEditor from '@baronha/react-native-photo-editor';
 import { useResolvedImageUri } from '../hooks/useResolvedImageUri';
+import { prefetchImages } from '../utils/imageOptimization';
+
+function resolveViewerUri(raw: string): string {
+  const value = String(raw || '').trim();
+  if (!value) return '';
+  if (/^https?:\/\//i.test(value)) return value;
+  if (value.startsWith('/uploads/')) return `${API_BASE}${value}`;
+  return value;
+}
+
+function ViewerImage({ uri }: { uri: string }) {
+  const isAndroidData = Platform.OS === 'android' && !!uri && /^data:/i.test(uri);
+  const [androidFileUri, dataReady] = useResolvedImageUri(isAndroidData ? uri : '');
+  const imageSourceUri = isAndroidData ? androidFileUri : uri;
+  if (!imageSourceUri || (isAndroidData && !dataReady)) {
+    return <View style={styles.image} />;
+  }
+  return (
+    <ExpoImage
+      source={{ uri: imageSourceUri }}
+      style={styles.image}
+      contentFit="contain"
+      cachePolicy="memory-disk"
+      transition={0}
+      recyclingKey={uri}
+      priority="high"
+      allowDownscaling
+    />
+  );
+}
+
+const AlbumStillSlide = React.memo(function AlbumStillSlide({
+  uri,
+  width,
+  height,
+}: {
+  uri: string;
+  width: number;
+  height: number;
+}) {
+  return (
+    <View style={{ width, height, justifyContent: 'center', alignItems: 'center' }}>
+      <ViewerImage uri={uri} />
+    </View>
+  );
+}, (prev, next) => prev.uri === next.uri && prev.width === next.width && prev.height === next.height);
 
 interface MediaViewerProps {
   visible: boolean;
   onClose: () => void;
+  /** Called after close animation — safe to drop viewer payload in parent state. */
+  onClosed?: () => void;
   mediaType: 'image';
   uri: string;
   name?: string;
   onSend?: (finalUri: string) => void;
+  /** All photos in the same chat message. Swipe between them when length > 1. */
+  uris?: string[];
+  initialIndex?: number;
 }
 
 export default function MediaViewer({ 
   visible, 
-  onClose, 
+  onClose,
+  onClosed,
   mediaType, 
   uri, 
   name,
   onSend,
+  uris,
+  initialIndex = 0,
 }: MediaViewerProps) {
   const { width: screenWidth, height: screenHeight } = useWindowDimensions();
   const lang = useLang((s) => s.lang);
   const [busy, setBusy] = React.useState(false);
-  const [currentUri, setCurrentUri] = React.useState<string>('');
+  const pagerRef = React.useRef<FlatList<string>>(null);
+  const [activeIndex, setActiveIndex] = React.useState(0);
+  const [editsByIndex, setEditsByIndex] = React.useState<Record<number, string>>({});
+  const albumOpenIndexRef = React.useRef(0);
+  const albumLayoutSyncedRef = React.useRef(false);
+  const activeIndexRef = React.useRef(0);
   const [cropMode, setCropMode] = React.useState(false);
   const [cropRect, setCropRect] = React.useState<{ x: number; y: number; w: number; h: number }>(() => ({
     x: Math.round(screenWidth * 0.1),
@@ -60,32 +119,21 @@ export default function MediaViewer({
     cropRectRef.current = cropRect;
   }, [cropRect]);
 
-  const resolvedUri = React.useMemo(() => {
-    if (!uri) return '';
-    if (/^https?:\/\//i.test(uri)) return uri;
-    if (uri.startsWith('/uploads/')) return `${API_BASE}${uri}`;
-    return uri;
-  }, [uri]);
+  const sourceUris = React.useMemo(() => {
+    const list = (Array.isArray(uris) && uris.length > 0 ? uris : [uri])
+      .map((item) => resolveViewerUri(item))
+      .filter(Boolean);
+    if (list.length > 0) return list;
+    const fallback = resolveViewerUri(uri);
+    return fallback ? [fallback] : [];
+  }, [uris, uri]);
 
-  const uriToDisplay = currentUri || resolvedUri;
-  const [androidFileUri] = useResolvedImageUri(
-    Platform.OS === 'android' && uriToDisplay && /^data:/i.test(uriToDisplay) ? uriToDisplay : ''
+  const isAlbum = sourceUris.length > 1;
+  const currentUri = editsByIndex[activeIndex] || sourceUris[activeIndex] || '';
+  const displayUris = React.useMemo(
+    () => sourceUris.map((item, index) => editsByIndex[index] || item),
+    [sourceUris, editsByIndex],
   );
-  const imageSourceUri =
-    Platform.OS === 'android' && uriToDisplay && /^data:/i.test(uriToDisplay) ? androidFileUri : uriToDisplay;
-
-  React.useEffect(() => {
-    setCurrentUri(resolvedUri);
-    // Reset zoom/pan on open
-    lastScale.current = 1;
-    setScaleNumber(1);
-    baseScale.setValue(1);
-    pinchScale.setValue(1);
-    lastTranslate.current = { x: 0, y: 0 };
-    translateX.setValue(0);
-    translateY.setValue(0);
-    setCropMode(false);
-  }, [resolvedUri, visible]);
 
   // Pinch-to-zoom
   const pinchScale = React.useRef(new Animated.Value(1)).current;
@@ -298,6 +346,69 @@ export default function MediaViewer({
     translateY.setValue(0);
   }, [baseScale, pinchScale, translateX, translateY]);
 
+  const commitActiveUri = React.useCallback((nextUri: string) => {
+    setEditsByIndex((prev) => ({ ...prev, [activeIndex]: nextUri }));
+  }, [activeIndex]);
+
+  const pageWidth = containerSize.w;
+  const pageHeight = containerSize.h;
+  const albumPagerReady = pageWidth > 0 && pageHeight > 0;
+
+  React.useEffect(() => {
+    activeIndexRef.current = activeIndex;
+  }, [activeIndex]);
+
+  React.useEffect(() => {
+    if (!visible) {
+      albumLayoutSyncedRef.current = false;
+      return;
+    }
+    const max = Math.max(0, sourceUris.length - 1);
+    const idx = Math.max(0, Math.min(Number(initialIndex) || 0, max));
+    albumOpenIndexRef.current = idx;
+    setActiveIndex(idx);
+    setEditsByIndex({});
+    setCropMode(false);
+    resetZoomPan();
+  }, [visible, initialIndex, sourceUris.length, resetZoomPan]);
+
+  React.useEffect(() => {
+    if (!visible || !isAlbum || displayUris.length === 0) return;
+    const prefetchable = displayUris.filter((u) => /^https?:\/\//i.test(u));
+    if (prefetchable.length > 0) void prefetchImages(prefetchable);
+  }, [visible, isAlbum, displayUris]);
+
+  React.useEffect(() => {
+    if (!isAlbum) return;
+    setCropMode((prev) => (prev ? false : prev));
+  }, [activeIndex, isAlbum]);
+
+  const syncActiveIndexFromOffset = React.useCallback(
+    (offsetX: number) => {
+      const w = pageWidth > 0 ? pageWidth : 1;
+      const next = Math.round(offsetX / w);
+      if (next < 0 || next >= displayUris.length) return;
+      if (next === activeIndexRef.current) return;
+      setActiveIndex(next);
+    },
+    [pageWidth, displayUris.length],
+  );
+
+  const syncAlbumLayout = React.useCallback((width: number, height: number) => {
+    if (width <= 0 || height <= 0) return;
+    setContainerSize((prev) => (prev.w === width && prev.h === height ? prev : { w: width, h: height }));
+    if (!visible || !isAlbum || albumLayoutSyncedRef.current) return;
+    albumLayoutSyncedRef.current = true;
+    requestAnimationFrame(() => {
+      try {
+        pagerRef.current?.scrollToOffset({
+          offset: albumOpenIndexRef.current * width,
+          animated: false,
+        });
+      } catch {}
+    });
+  }, [visible, isAlbum]);
+
   const getImageSize = React.useCallback(async (imgUri: string): Promise<{ width: number; height: number }> => {
     return await new Promise((resolve, reject) => {
       try {
@@ -322,7 +433,7 @@ export default function MediaViewer({
         stickers: [],
       });
       if (edited && typeof edited === 'string') {
-        setCurrentUri(String(edited));
+        commitActiveUri(String(edited));
         resetZoomPan();
       }
     } catch (e) {
@@ -330,7 +441,7 @@ export default function MediaViewer({
     } finally {
       setBusy(false);
     }
-  }, [busy, ensureLocalFile, resetZoomPan]);
+  }, [busy, ensureLocalFile, resetZoomPan, commitActiveUri]);
 
   const enterCropMode = React.useCallback(async () => {
     if (busy) return;
@@ -427,7 +538,7 @@ export default function MediaViewer({
       );
 
       if (result?.uri) {
-        setCurrentUri(result.uri);
+        commitActiveUri(result.uri);
         setCropMode(false);
         resetZoomPan();
       }
@@ -436,7 +547,7 @@ export default function MediaViewer({
     } finally {
       setBusy(false);
     }
-  }, [busy, ensureLocalFile, getImageSize, containerSize, clamp, scaleNumber, resetZoomPan]);
+  }, [busy, ensureLocalFile, getImageSize, containerSize, clamp, scaleNumber, resetZoomPan, commitActiveUri]);
 
   const handleShare = React.useCallback(async () => {
     if (busy) return;
@@ -516,14 +627,54 @@ export default function MediaViewer({
       setBusy(false);
     }
   }, [busy, ensureLocalFile, showSaveToast]);
+
+  const renderAlbumItem = React.useCallback(
+    ({ item }: { item: string }) => (
+      <AlbumStillSlide uri={item} width={pageWidth} height={pageHeight} />
+    ),
+    [pageWidth, pageHeight],
+  );
+
+  const renderZoomable = (imageUri: string) => {
+    const pinched = (
+      <PinchGestureHandler onGestureEvent={onPinchEvent} onHandlerStateChange={onPinchStateChange}>
+        <Animated.View
+          style={{
+            width: '100%',
+            height: '100%',
+            justifyContent: 'center',
+            alignItems: 'center',
+            transform: [{ scale }, { translateX }, { translateY }],
+          }}
+        >
+          <ViewerImage uri={imageUri} />
+        </Animated.View>
+      </PinchGestureHandler>
+    );
+    if (scaleNumber <= 1 && !cropMode) return pinched;
+    return (
+      <PanGestureHandler onGestureEvent={onPanEvent} onHandlerStateChange={onPanStateChange}>
+        <Animated.View style={{ width: '100%', height: '100%' }}>{pinched}</Animated.View>
+      </PanGestureHandler>
+    );
+  };
+
   return (
     <Modal
       isVisible={visible}
       onBackdropPress={onClose}
       onBackButtonPress={onClose}
+      onModalHide={() => {
+        try {
+          onClosed?.();
+        } catch {}
+      }}
+      hideModalContentWhileAnimating
+      useNativeDriverForBackdrop
       style={styles.modal}
       animationIn="fadeIn"
       animationOut="fadeOut"
+      animationOutTiming={220}
       backdropOpacity={1}
     >
       {/*
@@ -543,11 +694,15 @@ export default function MediaViewer({
             <TouchableOpacity onPress={onClose} style={styles.closeButton}>
               <Ionicons name="close" size={28} color={LIVI.white} />
             </TouchableOpacity>
-            {name && (
+            {isAlbum ? (
+              <Text style={styles.fileName} numberOfLines={1}>
+                {`${activeIndex + 1} / ${displayUris.length}`}
+              </Text>
+            ) : name ? (
               <Text style={styles.fileName} numberOfLines={1}>
                 {name}
               </Text>
-            )}
+            ) : null}
           </View>
 
           {/* Media Content */}
@@ -555,37 +710,41 @@ export default function MediaViewer({
             style={styles.mediaContainer}
             onLayout={(e) => {
               const { width, height } = e.nativeEvent.layout;
-              if (width > 0 && height > 0) setContainerSize({ w: width, h: height });
+              syncAlbumLayout(width, height);
             }}
           >
-            <PanGestureHandler
-              enabled={scaleNumber > 1 || cropMode}
-              onGestureEvent={onPanEvent}
-              onHandlerStateChange={onPanStateChange}
-            >
-              <Animated.View style={{ width: '100%', height: '100%' }}>
-                <PinchGestureHandler onGestureEvent={onPinchEvent} onHandlerStateChange={onPinchStateChange}>
-                  <Animated.View
-                    style={{
-                      width: '100%',
-                      height: '100%',
-                      justifyContent: 'center',
-                      alignItems: 'center',
-                      // IMPORTANT: scale first, then translate (makes crop math predictable)
-                      transform: [{ scale }, { translateX }, { translateY }],
-                    }}
-                  >
-                    <ExpoImage
-                      source={{ uri: imageSourceUri }}
-                      style={styles.image}
-                      contentFit="contain"
-                      cachePolicy="memory-disk"
-                      transition={Platform.OS === 'android' ? 0 : 200}
-                    />
-                  </Animated.View>
-                </PinchGestureHandler>
-              </Animated.View>
-            </PanGestureHandler>
+            {isAlbum ? (
+              albumPagerReady ? (
+              <FlatList
+                ref={pagerRef}
+                data={displayUris}
+                horizontal
+                pagingEnabled
+                scrollEnabled={!cropMode && !busy}
+                showsHorizontalScrollIndicator={false}
+                bounces={displayUris.length > 1}
+                decelerationRate="fast"
+                overScrollMode="never"
+                style={{ width: pageWidth, height: pageHeight }}
+                initialNumToRender={displayUris.length}
+                maxToRenderPerBatch={displayUris.length}
+                windowSize={displayUris.length}
+                removeClippedSubviews={false}
+                keyExtractor={(item) => item}
+                getItemLayout={(_, index) => ({
+                  length: pageWidth,
+                  offset: pageWidth * index,
+                  index,
+                })}
+                onMomentumScrollEnd={(e) => syncActiveIndexFromOffset(e.nativeEvent.contentOffset.x)}
+                renderItem={renderAlbumItem}
+              />
+              ) : (
+                <View style={{ width: pageWidth, height: pageHeight }} />
+              )
+            ) : (
+              renderZoomable(currentUri)
+            )}
 
             {cropMode ? (
               <View style={StyleSheet.absoluteFill}>
@@ -641,6 +800,17 @@ export default function MediaViewer({
                     </PanGestureHandler>
                   </View>
                 </PanGestureHandler>
+              </View>
+            ) : null}
+
+            {isAlbum && !cropMode ? (
+              <View pointerEvents="none" style={styles.pageDotsWrap}>
+                {displayUris.map((_, index) => (
+                  <View
+                    key={index}
+                    style={[styles.pageDot, index === activeIndex && styles.pageDotActive]}
+                  />
+                ))}
               </View>
             ) : null}
           </View>
@@ -709,7 +879,7 @@ export default function MediaViewer({
                 style={[styles.actionButton, busy && { opacity: 0.7 }]}
                 onPress={() => {
                   try {
-                    const finalUri = currentUri || resolvedUri;
+                    const finalUri = currentUri;
                     if (finalUri) onSend(finalUri);
                   } catch {}
                 }}
@@ -782,6 +952,28 @@ const styles = StyleSheet.create({
   image: {
     width: '100%',
     height: '100%',
+  },
+  pageDotsWrap: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 12,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 6,
+  },
+  pageDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: 'rgba(255,255,255,0.35)',
+  },
+  pageDotActive: {
+    backgroundColor: 'rgba(255,255,255,0.95)',
+    width: 7,
+    height: 7,
+    borderRadius: 4,
   },
   cropDim: {
     ...StyleSheet.absoluteFillObject,

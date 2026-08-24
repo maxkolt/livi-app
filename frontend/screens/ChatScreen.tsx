@@ -986,19 +986,28 @@ export default function ChatScreen({ route, navigation }: Props) {
   }, [fullAvatarUri, headerAvatarResolvedReady, headerAvatarResolvedUri, peerId, peerAvatarVerState]);
 
   // Функция для открытия медиа в полноэкранном режиме
-  const openMediaViewer = React.useCallback((type: 'image', uri: string, name?: string) => {
-    setSelectedMedia({ type, uri, name });
+  const openMediaViewer = React.useCallback((
+    type: 'image',
+    uri: string,
+    name?: string,
+    album?: { uris: string[]; index: number; message?: any },
+  ) => {
+    const albumUris = Array.isArray(album?.uris)
+      ? album.uris.map((item) => String(item || '').trim()).filter(Boolean)
+      : [];
+    setSelectedMedia({
+      type,
+      uri,
+      name,
+      uris: albumUris.length > 1 ? albumUris : undefined,
+      index: albumUris.length > 1 ? Math.max(0, album?.index || 0) : 0,
+    });
     setMediaViewerVisible(true);
   }, []);
 
   // Функция для закрытия медиа просмотра
   const closeMediaViewer = React.useCallback(() => {
     setMediaViewerVisible(false);
-    // NB: keep selectedMedia to avoid extra prop churn while animating close;
-    // we'll clear it in a microtask after visibility changes.
-    setTimeout(() => {
-      try { setSelectedMedia(null); } catch {}
-    }, 0);
   }, []);
 
   // Функции для работы с сохраненными сообщениями и статусами
@@ -2977,9 +2986,16 @@ export default function ChatScreen({ route, navigation }: Props) {
       <MediaViewer
         visible={mediaViewerVisible}
         onClose={closeMediaViewer}
+        onClosed={() => {
+          try {
+            setSelectedMedia(null);
+          } catch {}
+        }}
         mediaType={selectedMedia?.type || 'image'}
         uri={selectedMedia?.uri || ''}
         name={selectedMedia?.name}
+        uris={selectedMedia?.uris}
+        initialIndex={selectedMedia?.index}
       />
 
       {/* Предпросмотр выбранного фото перед отправкой (можно обрезать или отправить как есть) */}
