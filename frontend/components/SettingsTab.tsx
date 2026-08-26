@@ -5,6 +5,7 @@ import {
   View,
   TouchableWithoutFeedback,
   TouchableOpacity,
+  Pressable,
   Keyboard,
   StyleSheet,
   Platform,
@@ -13,6 +14,7 @@ import {
   useWindowDimensions,
   Modal,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { TextInput } from 'react-native-paper';
 import { Image as ExpoImage } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
@@ -22,11 +24,12 @@ import { getAvatarImageProps, getAvatarKey } from '../utils/imageOptimization';
 import { memo } from 'react';
 import { t, loadLang, Lang } from '../utils/i18n';
 import AvatarImage from './AvatarImage';
+import ChatStyleBackButton from './ChatStyleBackButton';
 import { toAvatarThumb } from '../utils/uploadAvatar';
 import { API_BASE } from '../sockets/socket';
 import {
-  CHROME_BORDER_GRADIENT_DARK,
-  CHROME_BORDER_GRADIENT_LIGHT,
+  AVATAR_CHROME_GRADIENT_DARK,
+  AVATAR_CHROME_GRADIENT_LIGHT,
 } from '../screens/home/chrome';
 import { LIVI as LIVI_CONST, PROFILE_AVATAR_BORDER_WIDTH } from '../screens/home/constants';
 import Svg, {
@@ -203,7 +206,7 @@ function StaticAvatarChrome({
 }) {
   const borderWidth = PROFILE_AVATAR_BORDER_WIDTH;
   const outer = size + borderWidth * 2;
-  const colors = isDark ? CHROME_BORDER_GRADIENT_DARK : CHROME_BORDER_GRADIENT_LIGHT;
+  const colors = isDark ? AVATAR_CHROME_GRADIENT_DARK : AVATAR_CHROME_GRADIENT_LIGHT;
   const cx = outer / 2;
   const cy = outer / 2;
   // Центр линии обводки — по середине толщины рамки
@@ -251,11 +254,22 @@ function StaticAvatarChrome({
       >
         <Defs>
           <SvgLinearGradient id="avatarChromeRing" x1="0%" y1="0%" x2="100%" y2="100%">
-            <SvgStop offset="0%" stopColor={colors[0]} />
-            <SvgStop offset="35%" stopColor={colors[1]} />
-            <SvgStop offset="70%" stopColor={colors[2]} />
-            <SvgStop offset="100%" stopColor={colors[colors.length - 1]} />
+            {colors.map((color, i) => (
+              <SvgStop
+                key={`${color}-${i}`}
+                offset={`${colors.length <= 1 ? 0 : (i / (colors.length - 1)) * 100}%`}
+                stopColor={color}
+              />
+            ))}
           </SvgLinearGradient>
+          {isDark ? (
+            <SvgLinearGradient id="avatarChromePearlBl" x1="100%" y1="0%" x2="0%" y2="100%">
+              <SvgStop offset="0%" stopColor="#FFF8F0" stopOpacity="0" />
+              <SvgStop offset="52%" stopColor="#FFF8F0" stopOpacity="0" />
+              <SvgStop offset="78%" stopColor="#FFF8F0" stopOpacity="0.55" />
+              <SvgStop offset="100%" stopColor="#FFFCF8" stopOpacity="1" />
+            </SvgLinearGradient>
+          ) : null}
         </Defs>
         <SvgCircle
           cx={cx}
@@ -265,12 +279,22 @@ function StaticAvatarChrome({
           strokeWidth={borderWidth}
           fill="none"
         />
+        {isDark ? (
+          <SvgCircle
+            cx={cx}
+            cy={cy}
+            r={ringR}
+            stroke="url(#avatarChromePearlBl)"
+            strokeWidth={borderWidth}
+            fill="none"
+          />
+        ) : null}
       </Svg>
     </View>
   );
 }
 
-type MenuModalKind = 'help' | null;
+type MenuModalKind = 'help' | 'wipe' | null;
 
 export default function SettingsTab({
   nick,
@@ -296,6 +320,7 @@ export default function SettingsTab({
   lang: langProp,
 }: SettingsTabProps) {
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
   const avatarSize = useMemo(
     () => resolveSettingsAvatarSize(windowWidth, windowHeight),
     [windowWidth, windowHeight],
@@ -363,8 +388,10 @@ export default function SettingsTab({
 
   useEffect(() => {
     if (!savedToast || busy) return;
-    setAccountOpen(false);
-    const tmo = setTimeout(() => setSavedToast(false), 1500);
+    const tmo = setTimeout(() => {
+      setAccountOpen(false);
+      setSavedToast(false);
+    }, 1200);
     return () => clearTimeout(tmo);
   }, [savedToast, setSavedToast, busy]);
 
@@ -385,6 +412,11 @@ export default function SettingsTab({
   const closeModal = () => {
     setModalKind(null);
     setCopiedEmail(null);
+  };
+
+  const closeAccountPanel = () => {
+    Keyboard.dismiss();
+    setAccountOpen(false);
   };
 
   const copyEmail = async (email: string) => {
@@ -412,10 +444,26 @@ export default function SettingsTab({
       icon: 'help-circle-outline',
       onPress: () => setModalKind('help'),
     },
+    ...(handleWipeAccount
+      ? [
+          {
+            key: 'wipe',
+            label: t('wipeAccount', lang),
+            icon: 'trash-outline' as keyof typeof Ionicons.glyphMap,
+            onPress: () => setModalKind('wipe'),
+          },
+        ]
+      : []),
   ];
 
   return (
-    <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
+    <TouchableWithoutFeedback
+      onPress={() => {
+        Keyboard.dismiss();
+        if (accountOpen) setAccountOpen(false);
+      }}
+      accessible={false}
+    >
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
@@ -434,69 +482,74 @@ export default function SettingsTab({
           showsVerticalScrollIndicator={false}
         >
           {/* --- Аватар --- */}
-          <View style={localStyles.avatarBlock}>
-            <View style={localStyles.avatarChromeWrap}>
-              <StaticAvatarChrome
-                size={avatarSize}
-                isDark={isDark}
-                innerBg={nickFieldFill}
-                overlay={
-                  hasAvatar && !!onDeleteAvatar && accountOpen ? (
-                    <TouchableOpacity
-                      activeOpacity={0.8}
-                      onPress={deleteAvatarSafe}
-                      disabled={busy}
-                      style={[
-                        localStyles.deleteBadge,
-                        {
-                          // Как карандаш: по центру снизу, но выше обводки
-                          left:
-                            (avatarSize + PROFILE_AVATAR_BORDER_WIDTH * 2 - DELETE_BADGE_W) / 2,
-                          bottom: PROFILE_AVATAR_BORDER_WIDTH + DELETE_BADGE_ABOVE_RING,
-                          zIndex: 2,
-                        },
-                      ]}
-                      hitSlop={4}
-                    >
-                      <Ionicons name="trash-outline" size={16} color="#fff" />
-                    </TouchableOpacity>
-                  ) : null
-                }
-              >
-                <TouchableOpacity
-                  activeOpacity={0.85}
-                  onPress={pickAvatar}
-                  disabled={busy}
-                  style={localStyles.avatarPressArea}
+          <Pressable onPress={accountOpen ? closeAccountPanel : undefined}>
+            <View style={localStyles.avatarBlock}>
+              <View style={localStyles.avatarChromeWrap}>
+                <StaticAvatarChrome
+                  size={avatarSize}
+                  isDark={isDark}
+                  innerBg={nickFieldFill}
+                  overlay={
+                    hasAvatar && !!onDeleteAvatar && accountOpen ? (
+                      <TouchableOpacity
+                        activeOpacity={0.8}
+                        onPress={deleteAvatarSafe}
+                        disabled={busy}
+                        style={[
+                          localStyles.deleteBadge,
+                          {
+                            // Как карандаш: по центру снизу, но выше обводки
+                            left:
+                              (avatarSize + PROFILE_AVATAR_BORDER_WIDTH * 2 - DELETE_BADGE_W) / 2,
+                            bottom: PROFILE_AVATAR_BORDER_WIDTH + DELETE_BADGE_ABOVE_RING,
+                            zIndex: 2,
+                          },
+                        ]}
+                        hitSlop={4}
+                      >
+                        <Ionicons name="trash-outline" size={16} color="#fff" />
+                      </TouchableOpacity>
+                    ) : null
+                  }
                 >
-                  {hasAvatar ? (
-                    <SettingsAvatar
-                      avatarUri={avatarUri}
-                      styles={styles}
-                      LIVI={LIVI}
-                      refreshKey={refreshKey}
-                      myFullAvatarUri={myFullAvatarUri}
-                      myAvatarVer={myAvatarVer}
-                      myUserId={myUserId}
-                      size={avatarSize}
-                    />
-                  ) : (
-                    <Ionicons name="add" size={Math.round(avatarSize * 0.32)} color={LIVI.text2} />
-                  )}
-                </TouchableOpacity>
-              </StaticAvatarChrome>
-            </View>
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    onPress={pickAvatar}
+                    disabled={busy}
+                    style={localStyles.avatarPressArea}
+                  >
+                    {hasAvatar ? (
+                      <SettingsAvatar
+                        avatarUri={avatarUri}
+                        styles={styles}
+                        LIVI={LIVI}
+                        refreshKey={refreshKey}
+                        myFullAvatarUri={myFullAvatarUri}
+                        myAvatarVer={myAvatarVer}
+                        myUserId={myUserId}
+                        size={avatarSize}
+                      />
+                    ) : (
+                      <Ionicons name="add" size={Math.round(avatarSize * 0.32)} color={LIVI.text2} />
+                    )}
+                  </TouchableOpacity>
+                </StaticAvatarChrome>
+              </View>
 
-            <Text
-              style={[localStyles.nickDisplay, { color: LIVI.white }]}
-              numberOfLines={1}
-            >
-              {displayNick || t('enter_nick', lang)}
-            </Text>
-          </View>
+              <Text
+                style={[localStyles.nickDisplay, { color: LIVI.white }]}
+                numberOfLines={1}
+              >
+                {displayNick || t('enter_nick', lang)}
+              </Text>
+            </View>
+          </Pressable>
 
           {/* Растягиваем пространство — меню уезжает вниз экрана */}
-          <View style={localStyles.bottomSpacer} />
+          <Pressable
+            onPress={accountOpen ? closeAccountPanel : undefined}
+            style={localStyles.bottomSpacer}
+          />
 
           {/* --- Редактирование аккаунта (над пунктами меню) --- */}
           {accountOpen ? (
@@ -505,6 +558,7 @@ export default function SettingsTab({
                 localStyles.accountPanel,
                 { backgroundColor: frameBg, borderColor: frameBorder },
               ]}
+              onStartShouldSetResponder={() => true}
               onLayout={(e) => {
                 nickOffsetYRef.current = e.nativeEvent.layout.y;
               }}
@@ -574,48 +628,27 @@ export default function SettingsTab({
                 </TouchableOpacity>
               </View>
 
-              <View style={localStyles.accountActionsRow}>
-                <TouchableOpacity
-                  activeOpacity={0.85}
-                  onPress={handleSaveProfile}
-                  disabled={busy}
+              <TouchableOpacity
+                activeOpacity={0.85}
+                onPress={handleSaveProfile}
+                disabled={busy}
+                style={[
+                  localStyles.saveBtn,
+                  {
+                    backgroundColor: savedToast ? 'rgba(51, 139, 73, 0.18)' : 'rgba(255,255,255,0.04)',
+                    borderColor: savedToast ? 'rgba(77, 228, 145, 0.35)' : frameBorder,
+                  },
+                ]}
+              >
+                <Text
                   style={[
-                    localStyles.saveBtn,
-                    localStyles.accountActionFlex,
-                    {
-                      backgroundColor: savedToast ? 'rgba(51, 139, 73, 0.18)' : 'rgba(255,255,255,0.04)',
-                      borderColor: savedToast ? 'rgba(77, 228, 145, 0.35)' : frameBorder,
-                    },
+                    localStyles.saveLabel,
+                    { color: savedToast ? 'rgba(172, 220, 190, 0.95)' : LIVI.white },
                   ]}
                 >
-                  <Text
-                    style={[
-                      localStyles.saveLabel,
-                      { color: savedToast ? 'rgba(172, 220, 190, 0.95)' : LIVI.white },
-                    ]}
-                  >
-                    {savedToast ? t('saved', lang) : t('save', lang)}
-                  </Text>
-                </TouchableOpacity>
-
-                {handleWipeAccount ? (
-                  <TouchableOpacity
-                    activeOpacity={0.85}
-                    onPress={handleWipeAccount}
-                    disabled={busy || wiping}
-                    style={[
-                      localStyles.saveBtn,
-                      localStyles.accountActionFlex,
-                      localStyles.wipeBtn,
-                      { opacity: wiping ? 0.7 : 1 },
-                    ]}
-                  >
-                    <Text style={[localStyles.saveLabel, { color: 'rgba(255,90,103,0.9)' }]}>
-                      {t('delete', lang)}
-                    </Text>
-                  </TouchableOpacity>
-                ) : null}
-              </View>
+                  {savedToast ? t('saved', lang) : t('save', lang)}
+                </Text>
+              </TouchableOpacity>
             </View>
           ) : null}
 
@@ -623,6 +656,10 @@ export default function SettingsTab({
           <View style={localStyles.menuList}>
             {menuRows.map((row, idx) => {
               const active = row.key === 'account' && accountOpen;
+              const isWipe = row.key === 'wipe';
+              const wipeBusy = isWipe && (busy || wiping);
+              const rowColor = isWipe ? 'rgba(255,90,103,0.9)' : LIVI.white;
+              const iconColor = isWipe ? 'rgba(255,90,103,0.9)' : LIVI.text2;
               return (
                 <View key={row.key}>
                   {idx > 0 ? (
@@ -630,16 +667,20 @@ export default function SettingsTab({
                   ) : null}
                   <TouchableOpacity
                     activeOpacity={0.85}
-                    onPress={row.onPress}
-                    style={localStyles.menuRow}
+                    onPress={() => {
+                      if (row.key !== 'account' && accountOpen) setAccountOpen(false);
+                      row.onPress();
+                    }}
+                    disabled={wipeBusy}
+                    style={[localStyles.menuRow, wipeBusy ? { opacity: 0.7 } : null]}
                   >
-                    <Text style={[localStyles.menuRowLabel, { color: LIVI.white }]}>
+                    <Text style={[localStyles.menuRowLabel, { color: rowColor }]}>
                       {row.label}
                     </Text>
                     <Ionicons
                       name={active ? 'chevron-up' : row.icon}
                       size={20}
-                      color={LIVI.text2}
+                      color={iconColor}
                     />
                   </TouchableOpacity>
                 </View>
@@ -670,6 +711,19 @@ export default function SettingsTab({
                 },
               ]}
             />
+            {modalKind !== null ? (
+              <ChatStyleBackButton
+                onPress={closeModal}
+                iconColor={LIVI.titan}
+                style={{
+                  position: 'absolute',
+                  zIndex: 10,
+                  top: insets.top + (Platform.OS === 'android' ? 35 : 16),
+                  left: Platform.OS === 'ios' ? 15 : 17,
+                }}
+              />
+            ) : null}
+            <View style={localStyles.modalCardWrap}>
             <View
               style={[
                 localStyles.modalCard,
@@ -679,50 +733,87 @@ export default function SettingsTab({
                 },
               ]}
             >
-              <Text style={[localStyles.modalTitle, { color: LIVI.white }]}>
-                {t('profileHelpTitle', lang)}
-              </Text>
-              <Text style={[localStyles.modalMsg, { color: LIVI.text2 }]}>
-                {t('profileHelpMessage', lang)}
-              </Text>
+              {modalKind === 'wipe' ? (
+                <>
+                  <Text style={[localStyles.modalTitle, { color: LIVI.white }]}>
+                    {t('wipeTitle', lang)}
+                  </Text>
+                  <Text style={[localStyles.modalMsg, { color: LIVI.text2 }]}>
+                    {t('wipeMessage', lang)}
+                  </Text>
 
-              <View
-                style={[
-                  localStyles.emailRow,
-                  { backgroundColor: frameBg, borderColor: frameBorder },
-                ]}
-              >
-                <Text
-                  style={[localStyles.emailText, { color: LIVI.white }]}
-                  numberOfLines={1}
-                  selectable
-                >
-                  {SUPPORT_EMAIL}
-                </Text>
-                <View style={localStyles.emailActions}>
-                  <TouchableOpacity
-                    activeOpacity={0.85}
-                    onPress={() => copyEmail(SUPPORT_EMAIL)}
-                    style={[localStyles.emailActionBtn, { borderColor: frameBorder }]}
+                  <View style={localStyles.modalActions}>
+                    <TouchableOpacity
+                      activeOpacity={0.85}
+                      onPress={closeModal}
+                      disabled={wiping}
+                      style={[
+                        localStyles.modalActionBtn,
+                        { borderColor: frameBorder, backgroundColor: frameBg },
+                      ]}
+                    >
+                      <Text style={[localStyles.saveLabel, { color: LIVI.white }]}>
+                        {t('cancelAction', lang)}
+                      </Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      activeOpacity={0.85}
+                      onPress={() => {
+                        closeModal();
+                        handleWipeAccount?.();
+                      }}
+                      disabled={busy || wiping}
+                      style={[
+                        localStyles.modalActionBtn,
+                        localStyles.wipeConfirmBtn,
+                        { opacity: wiping ? 0.7 : 1 },
+                      ]}
+                    >
+                      <Text style={[localStyles.saveLabel, { color: '#fff' }]}>
+                        {t('wipeConfirm', lang)}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                </>
+              ) : (
+                <>
+                  <Text style={[localStyles.modalTitle, { color: LIVI.white }]}>
+                    {t('profileHelpTitle', lang)}
+                  </Text>
+                  <Text style={[localStyles.modalMsg, { color: LIVI.text2 }]}>
+                    {t('profileHelpMessage', lang)}
+                  </Text>
+
+                  <View
+                    style={[
+                      localStyles.emailRow,
+                      { backgroundColor: frameBg, borderColor: frameBorder },
+                    ]}
                   >
-                    <Text style={[localStyles.emailActionLabel, { color: LIVI.white }]}>
-                      {copiedEmail === SUPPORT_EMAIL
-                        ? t('profileEmailCopied', lang)
-                        : t('profileCopyEmail', lang)}
+                    <Text
+                      style={[localStyles.emailText, { color: LIVI.white }]}
+                      numberOfLines={1}
+                      selectable
+                    >
+                      {SUPPORT_EMAIL}
                     </Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-
-              <TouchableOpacity
-                activeOpacity={0.85}
-                onPress={closeModal}
-                style={[localStyles.modalCloseBtn, { borderColor: frameBorder, backgroundColor: frameBg }]}
-              >
-                <Text style={[localStyles.saveLabel, { color: LIVI.white }]}>
-                  {t('cancel', lang)}
-                </Text>
-              </TouchableOpacity>
+                    <View style={localStyles.emailActions}>
+                      <TouchableOpacity
+                        activeOpacity={0.85}
+                        onPress={() => copyEmail(SUPPORT_EMAIL)}
+                        style={[localStyles.emailActionBtn, { borderColor: frameBorder }]}
+                      >
+                        <Text style={[localStyles.emailActionLabel, { color: LIVI.white }]}>
+                          {copiedEmail === SUPPORT_EMAIL
+                            ? t('profileEmailCopied', lang)
+                            : t('profileCopyEmail', lang)}
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                </>
+              )}
+            </View>
             </View>
           </View>
         </Modal>
@@ -836,18 +927,6 @@ const localStyles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  accountActionsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  accountActionFlex: {
-    flex: 1,
-  },
-  wipeBtn: {
-    borderColor: 'rgba(255,90,103,0.45)',
-    backgroundColor: 'rgba(255,90,103,0.1)',
-  },
   saveLabel: {
     fontSize: 14,
     fontWeight: '500',
@@ -856,8 +935,12 @@ const localStyles = StyleSheet.create({
   },
   modalOverlay: {
     flex: 1,
-    paddingHorizontal: 22,
     justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalCardWrap: {
+    width: '100%',
+    paddingHorizontal: 22,
     alignItems: 'center',
   },
   modalCard: {
@@ -910,12 +993,21 @@ const localStyles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
   },
-  modalCloseBtn: {
+  modalActions: {
+    flexDirection: 'row',
+    gap: 8,
     marginTop: 4,
+  },
+  modalActionBtn: {
+    flex: 1,
     height: 42,
     borderRadius: 12,
     borderWidth: StyleSheet.hairlineWidth,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  wipeConfirmBtn: {
+    borderColor: 'rgba(255,90,103,0.45)',
+    backgroundColor: 'rgba(255,90,103,0.85)',
   },
 });

@@ -56,6 +56,23 @@ export const CHROME_BORDER_GRADIENT_LIGHT = [
   '#B0B5BF',
 ] as const;
 
+/** Тёмная рамка аватара — жемчуг понемногу с обеих диагоналей. */
+export const AVATAR_CHROME_GRADIENT_DARK = [
+  '#FFF8F0',
+  '#14b8a6',
+  '#3b82f6',
+  '#00b5ff',
+  '#FFF8F0',
+] as const;
+
+/** Светлая рамка аватара — чуть больше фиолетового, чем у CTA. */
+export const AVATAR_CHROME_GRADIENT_LIGHT = [
+  '#9a7ad8',
+  '#e8def2',
+  '#b8b0cc',
+  '#9b78d8',
+] as const;
+
 const EQUALIZER_GRADIENT_DARK = [
   ...CHROME_BORDER_GRADIENT_DARK,
   ...CHROME_BORDER_GRADIENT_DARK,

@@ -3627,8 +3627,6 @@ const handleClearNick = useCallback(async () => {
 
   const handleWipeAccount = useCallback(async () => {
     if (wiping) return;
-    const ok = await askConfirm({ title: L('wipeTitle'), message: L('wipeMessage'), confirmText: L('wipeConfirm'), cancelText: L('cancel') });
-    if (!ok) return;
 
     setWiping(true);
     setMenuOpen(false);
@@ -3700,7 +3698,7 @@ const handleClearNick = useCallback(async () => {
     } finally { 
       setWiping(false); 
     }
-  }, [wiping, installId, askConfirm, showNotice, attachIdentitySafe, wipeAccountOnServer, lang, resetAllState]);
+  }, [wiping, installId, showNotice, attachIdentitySafe, wipeAccountOnServer, lang, resetAllState]);
 
 
   /* ================= UI ================= */
@@ -4467,7 +4465,7 @@ const handleClearNick = useCallback(async () => {
                   }}
                   activeOpacity={0.85}
                   style={{
-                    backgroundColor: '#4DD0E1',
+                    backgroundColor: 'rgba(77, 208, 225, 0.12)',
                     borderColor: '#4DD0E1',
                     borderWidth: StyleSheet.hairlineWidth,
                     paddingVertical: 14,
