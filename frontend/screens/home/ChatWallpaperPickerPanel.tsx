@@ -201,22 +201,22 @@ const styles = StyleSheet.create({
   },
   applyRing: {
     marginTop: PREVIEW_GAP,
-    borderRadius: 28,
+    borderRadius: 24,
     padding: StyleSheet.hairlineWidth,
   },
   applyInner: {
-    borderRadius: 28 - StyleSheet.hairlineWidth,
+    borderRadius: 24 - StyleSheet.hairlineWidth,
     overflow: 'hidden',
     backgroundColor: '#0D0E10',
   },
   applyBtn: {
-    paddingVertical: 11,
+    paddingVertical: 8,
     alignItems: 'center',
     justifyContent: 'center',
   },
   applyText: {
     color: LIVI.white,
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '700',
   },
   successOverlay: {

@@ -136,18 +136,18 @@ function HomeWelcomeViewInner({
   // Ширина строк приветствия: почти на весь экран, чтобы subtitle не обрезался.
   const welcomeTextWidth = Math.max(0, viewWidth - 28);
   const welcomeTitleFontSize = phoneLandscape
-    ? 18
+    ? 16
     : compactLayout
-      ? 21
+      ? 19
       : Platform.OS === 'android'
-        ? 26
-        : 28;
+        ? 24
+        : 26;
   const welcomeSubtitleFontSize = phoneLandscape
     ? 12
     : compactLayout
       ? 13
       : Platform.OS === 'android'
-        ? 14
+        ? 12
         : 16;
 
   useEffect(() => {

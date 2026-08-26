@@ -12,7 +12,8 @@ import {
 } from 'react-native';
 import { BlurView } from 'expo-blur';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { t, type Lang, defaultLang } from '../utils/i18n';
+import { type Lang, defaultLang } from '../utils/i18n';
+import ChatStyleBackButton from './ChatStyleBackButton';
 
 type Props = {
   visible: boolean;
@@ -22,14 +23,10 @@ type Props = {
 };
 
 const LIVI = {
-  bg: '#151F33',
-  surface: 'rgba(13,14,16,0.92)',
-  glass: 'rgba(255,255,255,0.06)',
   border: 'rgba(255,255,255,0.12)',
-  text: '#AEB6C6',
   text2: '#9FA7B4',
   white: '#F4F5F7',
-  green: '#2ECC71',
+  titan: '#8A8F99',
 };
 
 const LANGUAGES: Array<{ code: Lang; name: string; native: string }> = [
@@ -52,6 +49,12 @@ const LANGUAGES: Array<{ code: Lang; name: string; native: string }> = [
   { code: 'id',    name: 'Indonesian',            native: 'Bahasa Indonesia' },
 ];
 
+const CARD_PADDING = 16;
+const LIST_CONTENT_PAD_V = 4;
+const VISIBLE_LANGUAGE_ROWS = 7;
+/** paddingVertical×2 + lineHeights (native + name) */
+const LANGUAGE_ROW_HEIGHT = 12 * 2 + 18 + 1 + 14;
+
 const LanguagePicker: React.FC<Props> = ({
   visible,
   onClose,
@@ -62,21 +65,14 @@ const LanguagePicker: React.FC<Props> = ({
 
   const insets = useSafeAreaInsets();
   const { height: winH } = useWindowDimensions();
-  const headerTitle = t('chooseLanguage', current);
-  const cancelLbl   = t('cancel', current);
 
-  const V_PAD = Platform.OS === 'android' ? 12 : 16;
-  // RTL labels: keep proper glyph shaping/direction but align consistently in LTR UI.
   const isRtlLang = (code: Lang) => code === 'ar';
 
-  // Делаем предсказуемую высоту карточки, чтобы:
-  // - она всегда была по центру
-  // - список скроллился, а кнопка "Закрыть" оставалась видимой
+  const V_PAD = Platform.OS === 'android' ? 12 : 16;
   const availableH = Math.max(0, winH - (V_PAD + insets.top) - (V_PAD + insets.bottom));
-  const cardH = Math.min(
-    availableH,
-    Math.max(320, Math.min(560, Math.round(availableH * 0.78)))
-  );
+  const listViewportH =
+    LIST_CONTENT_PAD_V * 2 + VISIBLE_LANGUAGE_ROWS * LANGUAGE_ROW_HEIGHT;
+  const cardH = Math.min(availableH, CARD_PADDING * 2 + listViewportH);
 
   return (
     <Modal
@@ -86,78 +82,66 @@ const LanguagePicker: React.FC<Props> = ({
       onRequestClose={onClose}
       statusBarTranslucent
     >
-      <View
-        style={[
-          styles.overlay,
-          {
-            paddingTop: V_PAD + insets.top,
-            paddingBottom: V_PAD + insets.bottom,
-          },
-        ]}
-      >
-        {Platform.OS === 'ios' ? (
-          <BlurView intensity={40} tint="dark" style={StyleSheet.absoluteFill} />
-        ) : null}
-        <View
-          style={[
-            styles.backdrop,
-            {
-              // Android needs stronger dimming (no BlurView) for readability
-              backgroundColor: Platform.OS === 'android' ? 'rgba(0,0,0,1)' : 'rgba(0,0,0,0.62)',
-            },
-          ]}
+      <View style={styles.overlay} pointerEvents="box-none">
+        {Platform.OS === 'android' ? (
+          <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.9)' }]} />
+        ) : (
+          <>
+            <BlurView intensity={85} tint="dark" style={StyleSheet.absoluteFill} />
+            <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.35)' }]} />
+          </>
+        )}
+
+        <ChatStyleBackButton
+          onPress={onClose}
+          iconColor={LIVI.titan}
+          style={{
+            position: 'absolute',
+            zIndex: 10,
+            top: insets.top + (Platform.OS === 'android' ? 35 : 16),
+            left: Platform.OS === 'ios' ? 15 : 17,
+          }}
         />
 
-        <View style={[styles.card, { height: cardH }]}>
-          <View style={styles.header}>
-            <Text style={styles.headerTitle}>{headerTitle}</Text>
-          </View>
-
+        <View style={[styles.card, { height: cardH, marginTop: 20 }]}>
           <ScrollView
             style={styles.list}
             contentContainerStyle={{ paddingVertical: 4 }}
             showsVerticalScrollIndicator={false}
           >
-            {LANGUAGES.map((lng) => {
+            {LANGUAGES.map((lng, idx) => {
               const selected = normalize(current) === normalize(lng.code);
               const rtl = isRtlLang(lng.code);
+              const isLast = idx === LANGUAGES.length - 1;
               return (
                 <TouchableOpacity
                   key={lng.code}
                   activeOpacity={0.85}
                   onPress={() => onSelect(lng.code)}
-                  style={[
-                    styles.row,
-                    selected && {
-                      borderColor: 'rgba(77, 228, 144, 0.70)',
-                      backgroundColor: 'rgba(46, 204, 113, 0.08)',
-                    },
-                  ]}
+                  style={[styles.row, isLast ? styles.rowLast : null]}
                 >
                   <View style={{ flex: 1 }}>
                     <Text
                       style={[
                         styles.rowNative,
+                        selected && styles.rowNativeSelected,
                         rtl && {
                           writingDirection: 'rtl',
-                          // keep the label in the same visual column as other languages
                           textAlign: 'left',
                         },
                       ]}
                     >
                       {lng.native}
                     </Text>
-                    <Text style={styles.rowName}>{lng.name}</Text>
+                    <Text style={[styles.rowName, selected && styles.rowNameSelected]}>
+                      {lng.name}
+                    </Text>
                   </View>
                   {selected ? <View style={styles.radioOn} /> : <View style={styles.radioOff} />}
                 </TouchableOpacity>
               );
             })}
           </ScrollView>
-
-          <TouchableOpacity activeOpacity={0.85} onPress={onClose} style={styles.footerBtn}>
-            <Text style={styles.footerBtnText}>{cancelLbl}</Text>
-          </TouchableOpacity>
         </View>
       </View>
     </Modal>
@@ -179,103 +163,64 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  backdrop: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.62)',
-  },
   card: {
     width: '92%',
-    backgroundColor: LIVI.surface,
-    borderRadius: 16,
+    backgroundColor: 'rgba(13,14,16,0.94)',
+    borderRadius: 12,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: LIVI.border,
-    padding: 12,
-    shadowColor: '#000',
-    shadowOpacity: 0.35,
-    shadowRadius: 18,
-    shadowOffset: { width: 0, height: 10 },
-    ...Platform.select({ android: { elevation: 8 } }),
+    padding: 16,
   },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 4,
-    paddingBottom: 8,
-  },
-  headerTitle: {
-    flex: 1,
-    color: LIVI.white,
-    fontSize: 18,
-    fontWeight: '800',
-  },
-  closeBtn: {
-    width: 34,
-    height: 34,
-    borderRadius: 10,
-    backgroundColor: LIVI.glass,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  closeTxt: { color: LIVI.white, fontSize: 16, fontWeight: '800' },
-
   list: {
     flex: 1,
   },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
+    gap: 10,
     paddingVertical: 12,
-    paddingHorizontal: 12,
-    marginVertical: 6,
-    borderRadius: 12,
-    // More pronounced rows for readability
-    backgroundColor: 'rgba(255,255,255,0.08)',
-    borderWidth: Platform.OS === 'android' ? 1 : StyleSheet.hairlineWidth,
-    borderColor: 'rgba(255,255,255,0.18)',
+    paddingHorizontal: 4,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: LIVI.border,
+    backgroundColor: 'transparent',
+  },
+  rowLast: {
+    borderBottomWidth: 0,
   },
   rowNative: {
     color: LIVI.white,
-    fontSize: 16,
-    fontWeight: '700',
+    fontSize: 15,
+    fontWeight: '600',
+    lineHeight: 18,
+  },
+  rowNativeSelected: {
+    color: 'rgba(172, 220, 190, 0.95)',
   },
   rowName: {
     color: LIVI.text2,
-    fontSize: 12,
-    marginTop: 2,
+    fontSize: 11,
+    fontWeight: '300',
+    marginTop: 1,
+    lineHeight: 14,
+  },
+  rowNameSelected: {
+    color: 'rgba(77, 228, 144, 0.75)',
   },
   radioOff: {
-    width: 18,
-    height: 18,
-    borderRadius: 9,
+    width: 16,
+    height: 16,
+    borderRadius: 8,
     borderWidth: 2,
     borderColor: LIVI.text2,
     backgroundColor: 'transparent',
   },
   radioOn: {
-    width: 18,
-    height: 18,
-    borderRadius: 9,
+    width: 16,
+    height: 16,
+    borderRadius: 8,
     borderWidth: 2,
     borderColor: 'rgba(77, 228, 144, 0.90)',
     backgroundColor: 'rgba(77, 228, 144, 0.35)',
-  },
-
-  footerBtn: {
-    marginTop: 8,
-    // Make the close button background more noticeable
-    backgroundColor: 'rgba(255,255,255,0.10)',
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 12,
-    borderWidth: Platform.OS === 'android' ? 1 : StyleSheet.hairlineWidth,
-    borderColor: 'rgba(255,255,255,0.22)',
-  },
-  footerBtnText: {
-    color: LIVI.white,
-    fontWeight: '800',
-    fontSize: 15,
   },
 });
 

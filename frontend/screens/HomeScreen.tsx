@@ -4256,8 +4256,38 @@ const handleClearNick = useCallback(async () => {
                 left: Platform.OS === 'ios' ? 15 : 17,
               }}
             />
-            <Surface style={[styles.confirmCard, { minWidth: 300, maxWidth: 400, borderColor: accent.solid }]}>
-              <Text style={[styles.confirmTitle, { textAlign: 'center', marginBottom: 20, color: accent.softText }]}>{t('supportProjectTitle', lang)}</Text>
+            <Surface
+              style={[
+                styles.confirmCard,
+                {
+                  minWidth: 300,
+                  maxWidth: 400,
+                  borderWidth: 1,
+                  borderColor: accent.solid28,
+                  borderRadius: 10,
+                },
+              ]}
+            >
+              <Text
+                style={[
+                  styles.confirmTitle,
+                  { textAlign: 'center', marginBottom: 8, color: accent.softText, fontWeight: '600' },
+                ]}
+              >
+                {t('supportProjectTitle', lang)}
+              </Text>
+              <Text
+                style={{
+                  color: LIVI.text2,
+                  fontSize: 13,
+                  fontWeight: '300',
+                  textAlign: 'center',
+                  marginBottom: 20,
+                  lineHeight: 18,
+                }}
+              >
+                {t('supportProjectSubtitle', lang)}
+              </Text>
               <View style={{ marginBottom: 20 }}>
                 <TouchableOpacity
                   onPress={async () => {
@@ -4277,28 +4307,28 @@ const handleClearNick = useCallback(async () => {
                   activeOpacity={1}
                   style={{
                     backgroundColor: pressedButton === 'boosty' ? accent.softText : accent.solid10,
-                    borderColor: accent.solid,
-                    borderWidth: StyleSheet.hairlineWidth,
-                    paddingVertical: 14,
-                    paddingHorizontal: 20,
+                    borderColor: accent.solid28,
+                    borderWidth: 1,
+                    paddingVertical: 10,
+                    paddingHorizontal: 16,
                     borderRadius: 10,
                     flexDirection: 'row',
                     alignItems: 'center',
                     justifyContent: 'center',
                     marginBottom: 12,
-                    gap: 10
+                    gap: 8,
                   }}
                 >
                   <ExpoImage
                     source={require('../assets/boosty-sign-logo.png')}
-                    style={{ width: 24, height: 24 }}
+                    style={{ width: 22, height: 22 }}
                     contentFit="contain"
                     cachePolicy="memory-disk"
                   />
                   <Text style={{ 
                     color: LIVI.white, 
                     fontWeight: '700', 
-                    fontSize: 16 
+                    fontSize: 15 
                   }}>
                     Boosty.to
                   </Text>
@@ -4321,27 +4351,27 @@ const handleClearNick = useCallback(async () => {
                   activeOpacity={1}
                   style={{
                     backgroundColor: pressedButton === 'patreon' ? accent.softText : accent.solid10,
-                    borderColor: accent.solid,
-                    borderWidth: StyleSheet.hairlineWidth,
-                    paddingVertical: 14,
-                    paddingHorizontal: 20,
+                    borderColor: accent.solid28,
+                    borderWidth: 1,
+                    paddingVertical: 10,
+                    paddingHorizontal: 16,
                     borderRadius: 10,
                     flexDirection: 'row',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    gap: 10
+                    gap: 8,
                   }}
                 >
                   <ExpoImage
                     source={require('../assets/patreon-sign-logo.png')}
-                    style={{ width: 24, height: 24 }}
+                    style={{ width: 22, height: 22 }}
                     contentFit="contain"
                     cachePolicy="memory-disk"
                   />
                   <Text style={{ 
                     color: LIVI.white, 
                     fontWeight: '700', 
-                    fontSize: 16 
+                    fontSize: 15 
                   }}>
                     Patreon
                   </Text>
@@ -4372,9 +4402,37 @@ const handleClearNick = useCallback(async () => {
                 left: Platform.OS === 'ios' ? 15 : 17,
               }}
             />
-            <Surface style={[styles.confirmCard, { minWidth: 300, maxWidth: 400, borderColor: '#4DD0E1' }]}>
-              <Text style={[styles.confirmTitle, { textAlign: 'center', marginBottom: 20, color: '#4DD0E1' }]}>
+            <Surface
+              style={[
+                styles.confirmCard,
+                {
+                  minWidth: 300,
+                  maxWidth: 400,
+                  borderWidth: 1,
+                  borderColor: 'rgba(77,208,225,0.3)',
+                  borderRadius: 10,
+                },
+              ]}
+            >
+              <Text
+                style={[
+                  styles.confirmTitle,
+                  { textAlign: 'center', marginBottom: 8, color: '#4DD0E1', fontWeight: '600' },
+                ]}
+              >
                 {t('inviteFriendTitle', lang)}
+              </Text>
+              <Text
+                style={{
+                  color: LIVI.text2,
+                  fontSize: 13,
+                  fontWeight: '300',
+                  textAlign: 'center',
+                  marginBottom: 20,
+                  lineHeight: 18,
+                }}
+              >
+                {t('inviteFriendsSubtitle', lang)}
               </Text>
               
               <View style={{ marginBottom: 20 }}>
@@ -4386,7 +4444,8 @@ const handleClearNick = useCallback(async () => {
                   borderWidth: 1,
                   borderColor: 'rgba(77,208,225,0.3)',
                   borderRadius: 10,
-                  padding: 12,
+                  paddingVertical: 8,
+                  paddingHorizontal: 10,
                   flexDirection: 'row',
                   alignItems: 'center',
                   gap: 8
@@ -4416,12 +4475,12 @@ const handleClearNick = useCallback(async () => {
                     }}
                     activeOpacity={0.7}
                     style={{
-                      padding: 8,
+                      padding: 6,
                       borderRadius: 8,
                       backgroundColor: 'rgba(77,208,225,0.15)'
                     }}
                   >
-                    <Ionicons name="copy-outline" size={20} color="#4DD0E1" />
+                    <Ionicons name="copy-outline" size={18} color="#4DD0E1" />
                   </TouchableOpacity>
                 </View>
                 <Text style={{ color: LIVI.text2, fontSize: 12, marginTop: 8, textAlign: 'center', lineHeight: 16 }}>
@@ -4466,22 +4525,22 @@ const handleClearNick = useCallback(async () => {
                   activeOpacity={0.85}
                   style={{
                     backgroundColor: 'rgba(77, 208, 225, 0.12)',
-                    borderColor: '#4DD0E1',
-                    borderWidth: StyleSheet.hairlineWidth,
-                    paddingVertical: 14,
-                    paddingHorizontal: 20,
+                    borderWidth: 1,
+                    borderColor: 'rgba(77,208,225,0.3)',
+                    paddingVertical: 10,
+                    paddingHorizontal: 16,
                     borderRadius: 10,
                     flexDirection: 'row',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    gap: 10
+                    gap: 8,
                   }}
                 >
-                  <Ionicons name="share-outline" size={20} color={LIVI.white} />
+                  <Ionicons name="share-outline" size={18} color={LIVI.white} />
                   <Text style={{ 
                     color: LIVI.white, 
                     fontWeight: '700', 
-                    fontSize: 16 
+                    fontSize: 15 
                   }}>
                     {t('share', lang)}
                   </Text>

@@ -68,7 +68,7 @@ export const FRIENDS_PAGE_SIZE = 50;
 export const FRIENDS_MAX_PAGES_PER_LOAD = 10;
 
 export const FRIEND_ACTION_BTN_SURFACE = {
-  backgroundColor: '#2B2B2B',
+  backgroundColor: 'rgba(255,255,255,0.06)',
   borderWidth: 1,
   borderColor: 'rgba(255,255,255,0.12)',
   justifyContent: 'center' as const,

@@ -801,9 +801,35 @@ export default function SettingsTab({
                       <TouchableOpacity
                         activeOpacity={0.85}
                         onPress={() => copyEmail(SUPPORT_EMAIL)}
-                        style={[localStyles.emailActionBtn, { borderColor: frameBorder }]}
+                        style={[
+                          localStyles.emailActionBtn,
+                          {
+                            borderColor: isDark
+                              ? 'rgba(46,196,182,0.45)'
+                              : 'rgba(113,91,168,0.45)',
+                            backgroundColor: isDark
+                              ? 'rgba(46,196,182,0.14)'
+                              : 'rgba(113,91,168,0.14)',
+                          },
+                          copiedEmail === SUPPORT_EMAIL && {
+                            borderColor: 'rgba(77, 228, 144, 0.55)',
+                            backgroundColor: 'rgba(46, 204, 113, 0.18)',
+                          },
+                        ]}
                       >
-                        <Text style={[localStyles.emailActionLabel, { color: LIVI.white }]}>
+                        <Text
+                          style={[
+                            localStyles.emailActionLabel,
+                            {
+                              color:
+                                copiedEmail === SUPPORT_EMAIL
+                                  ? 'rgba(172, 220, 190, 0.95)'
+                                  : isDark
+                                    ? '#9EE5DC'
+                                    : '#B8A9E8',
+                            },
+                          ]}
+                        >
                           {copiedEmail === SUPPORT_EMAIL
                             ? t('profileEmailCopied', lang)
                             : t('profileCopyEmail', lang)}
@@ -984,14 +1010,17 @@ const localStyles = StyleSheet.create({
     flexWrap: 'wrap',
   },
   emailActionBtn: {
-    paddingHorizontal: 12,
+    paddingHorizontal: 14,
     paddingVertical: 8,
     borderRadius: 10,
-    borderWidth: StyleSheet.hairlineWidth,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'center',
   },
   emailActionLabel: {
     fontSize: 13,
-    fontWeight: '600',
+    fontWeight: '700',
   },
   modalActions: {
     flexDirection: 'row',

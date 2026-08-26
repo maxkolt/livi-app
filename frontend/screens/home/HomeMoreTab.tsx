@@ -60,6 +60,18 @@ function HomeMoreTabInner({
   setWallpaperPickerTheme,
 }: HomeMoreTabProps) {
   const [wallpaperExpanded, setWallpaperExpanded] = useState(false);
+  const collapseWallpaperChoices = useCallback(() => {
+    setWallpaperExpanded(false);
+  }, []);
+  const frameBorder = isDark ? LIVI.border : 'rgba(255,255,255,0.18)';
+  const underlineRow = {
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: frameBorder,
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    justifyContent: 'space-between' as const,
+    backgroundColor: 'transparent' as const,
+  };
 
   // Сброс раскрытия при уходе с пикера / смене таба снаружи.
   useEffect(() => {
@@ -108,24 +120,13 @@ function HomeMoreTabInner({
         flexGrow: 1,
       }}
       showsVerticalScrollIndicator={false}
+      onScrollBeginDrag={collapseWallpaperChoices}
     >
-      <View
-        style={{
-          backgroundColor: 'rgba(255,255,255,0.03)',
-          borderColor: LIVI.border,
-          borderWidth: StyleSheet.hairlineWidth,
-          borderRadius: 12,
-          padding: 12,
-        }}
-      >
-        <Text style={{ color: LIVI.white, fontWeight: '300', marginBottom: 8 }}>
-          {t('uiSettings', lang)}
-        </Text>
-
-        <Text style={{ color: LIVI.text2, fontSize: 12, fontWeight: '300', marginBottom: 8 }}>
+      <View style={{ paddingHorizontal: 12, paddingBottom: 12, paddingTop: 2 }}>
+        <Text style={{ color: LIVI.white, fontSize: 14, fontWeight: '300', marginBottom: 8 }}>
           {t('appTheme', lang)}
         </Text>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 12 }}>
           {(
             [
               { key: 'auto', label: t('themeAuto', lang) },
@@ -137,7 +138,10 @@ function HomeMoreTabInner({
             return (
               <TouchableOpacity
                 key={opt.key}
-                onPress={() => setPreference(opt.key)}
+                onPress={() => {
+                  collapseWallpaperChoices();
+                  setPreference(opt.key);
+                }}
                 activeOpacity={0.85}
                 style={{
                   paddingVertical: 6,
@@ -162,17 +166,13 @@ function HomeMoreTabInner({
 
         <TouchableOpacity
           activeOpacity={0.85}
-          onPress={openLangPicker}
+          onPress={() => {
+            collapseWallpaperChoices();
+            openLangPicker();
+          }}
           style={{
-            borderWidth: StyleSheet.hairlineWidth,
-            borderColor: LIVI.border,
-            borderRadius: 10,
+            ...underlineRow,
             height: MORE_TAB_CONTROL_HEIGHT,
-            paddingHorizontal: 14,
-            backgroundColor: 'rgba(255,255,255,0.02)',
-            flexDirection: 'row',
-            alignItems: 'center',
-            justifyContent: 'space-between',
           }}
         >
           <Text style={{ color: LIVI.white, fontSize: 14, fontWeight: '300' }}>
@@ -192,16 +192,9 @@ function HomeMoreTabInner({
           activeOpacity={0.85}
           onPress={() => setWallpaperExpanded((v) => !v)}
           style={{
+            ...underlineRow,
             marginTop: 12,
-            borderWidth: StyleSheet.hairlineWidth,
-            borderColor: LIVI.border,
-            borderRadius: 10,
             paddingVertical: 14,
-            paddingHorizontal: 14,
-            backgroundColor: 'rgba(255,255,255,0.02)',
-            flexDirection: 'row',
-            alignItems: 'center',
-            justifyContent: 'space-between',
           }}
         >
           <Text style={{ color: LIVI.white, fontSize: 14, fontWeight: '300' }}>
@@ -217,7 +210,7 @@ function HomeMoreTabInner({
         {wallpaperExpanded && (
           <View
             style={{
-              marginTop: 8,
+              marginTop: 14,
               flexDirection: 'row',
               alignItems: 'center',
               gap: 8,
@@ -235,16 +228,16 @@ function HomeMoreTabInner({
                 onPress={() => setWallpaperPickerTheme(opt.key)}
                 style={{
                   flex: 1,
-                  paddingVertical: 12,
-                  paddingHorizontal: 14,
-                  borderRadius: 28,
+                  paddingVertical: 7,
+                  paddingHorizontal: 12,
+                  borderRadius: 24,
                   borderWidth: StyleSheet.hairlineWidth,
                   borderColor: LIVI.border,
                   backgroundColor: 'rgba(255,255,255,0.02)',
                   alignItems: 'center',
                 }}
               >
-                <Text style={{ color: LIVI.white, fontWeight: '300', fontSize: 14 }}>
+                <Text style={{ color: LIVI.white, fontWeight: '300', fontSize: 13 }}>
                   {opt.label}
                 </Text>
               </TouchableOpacity>
@@ -256,111 +249,85 @@ function HomeMoreTabInner({
       <TouchableOpacity
         activeOpacity={0.85}
         onPress={async () => {
+          collapseWallpaperChoices();
           await incrCounter('support_help_clicks');
           setDonateVisible(true);
         }}
         style={{
-          borderRadius: 12,
-          borderWidth: StyleSheet.hairlineWidth,
-          borderColor: LIVI.border,
+          ...underlineRow,
+          paddingVertical: 10,
+          paddingHorizontal: 4,
         }}
       >
-        <View
+        <Text
           style={{
-            backgroundColor: 'rgba(255,255,255,0.03)',
-            borderRadius: 11,
-            padding: 14,
-            flexDirection: 'row',
-            alignItems: 'center',
+            flex: 1,
+            marginRight: 10,
+            color: accent.softText,
+            fontSize: 15,
+            fontWeight: '300',
+            lineHeight: 18,
           }}
         >
-          <View
-            style={{
-              width: 44,
-              height: 44,
-              borderRadius: 22,
-              backgroundColor: 'transparent',
-              borderWidth: 0.75,
-              borderColor: accent.solid,
-              justifyContent: 'center',
-              alignItems: 'center',
-              marginRight: 14,
-              flexShrink: 0,
-            }}
-          >
-            <Text style={{ color: LIVI.white, fontSize: 15, fontWeight: '300', letterSpacing: 0.5 }}>
-              LiVi
-            </Text>
-          </View>
-          <View style={{ flex: 1, justifyContent: 'center' }}>
-            <Text
-              style={{
-                color: accent.softText,
-                fontSize: 16,
-                fontWeight: '300',
-                marginBottom: 3,
-                lineHeight: 20,
-              }}
-            >
-              {t('supportProjectTitle', lang)}
-            </Text>
-            <Text style={{ color: LIVI.text2, fontSize: 11, fontWeight: '300', lineHeight: 15 }}>
-              {t('supportProjectSubtitle', lang)}
-            </Text>
-          </View>
+          {t('supportProjectTitle', lang)}
+        </Text>
+        <View
+          style={{
+            width: 36,
+            height: 36,
+            borderRadius: 18,
+            backgroundColor: 'transparent',
+            borderWidth: 0.75,
+            borderColor: accent.solid,
+            justifyContent: 'center',
+            alignItems: 'center',
+            flexShrink: 0,
+          }}
+        >
+          <Text style={{ color: LIVI.white, fontSize: 13, fontWeight: '300', letterSpacing: 0.5 }}>
+            LiVi
+          </Text>
         </View>
       </TouchableOpacity>
 
       <TouchableOpacity
         activeOpacity={0.85}
-        onPress={generateInviteLink}
+        onPress={() => {
+          collapseWallpaperChoices();
+          void generateInviteLink();
+        }}
         style={{
-          borderRadius: 11,
-          borderWidth: StyleSheet.hairlineWidth,
-          borderColor: LIVI.border,
+          ...underlineRow,
+          paddingVertical: 10,
+          paddingHorizontal: 4,
         }}
       >
-        <View
+        <Text
           style={{
-            backgroundColor: 'rgba(255,255,255,0.03)',
-            borderRadius: 10,
-            padding: 14,
-            flexDirection: 'row',
-            alignItems: 'center',
+            flex: 1,
+            marginRight: 10,
+            color: '#4DD0E1',
+            fontSize: 15,
+            fontWeight: '300',
+            lineHeight: 18,
           }}
         >
-          <View
-            style={{
-              width: 44,
-              height: 44,
-              borderRadius: 22,
-              backgroundColor: 'transparent',
-              borderWidth: 0.75,
-              borderColor: '#4DD0E1',
-              justifyContent: 'center',
-              alignItems: 'center',
-              marginRight: 14,
-              flexShrink: 0,
-            }}
-          >
-            <Ionicons name="share-outline" size={22} color={LIVI.white} />
-          </View>
-          <View style={{ flex: 1, justifyContent: 'center' }}>
-            <Text
-              style={{
-                color: '#4DD0E1',
-                fontSize: 16,
-                fontWeight: '300',
-                marginBottom: 3,
-                lineHeight: 20,
-              }}
-            >
-              {t('inviteFriendsTitle', lang)}
-            </Text>
-            <Text style={{ color: LIVI.text2, fontSize: 11, fontWeight: '300', lineHeight: 15 }}>
-              {t('inviteFriendsSubtitle', lang)}
-            </Text>
-          </View>
+          {t('inviteFriendsTitle', lang)}
+        </Text>
+        <View
+          style={{
+            width: 36,
+            height: 36,
+            borderRadius: 18,
+            backgroundColor: 'transparent',
+            borderWidth: 0.75,
+            borderColor: '#4DD0E1',
+            justifyContent: 'center',
+            alignItems: 'center',
+            flexShrink: 0,
+          }}
+        >
+          <Ionicons name="share-outline" size={18} color={LIVI.white} />
         </View>
       </TouchableOpacity>
 
@@ -374,56 +341,44 @@ function HomeMoreTabInner({
             minHeight: 72,
           }}
         >
-          <View
+          <TouchableOpacity
+            activeOpacity={0.85}
+            onPress={() => {
+              collapseWallpaperChoices();
+              markUpdateBadgeShown();
+              Linking.openURL(PLAY_STORE_UPDATE_URL);
+            }}
             style={{
-              borderRadius: 12,
-              overflow: 'hidden',
-              alignSelf: 'center',
-              backgroundColor: '#5A5F69',
+              paddingVertical: 6,
+              paddingHorizontal: 12,
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 5,
+              minWidth: 100,
             }}
           >
-            <TouchableOpacity
-              activeOpacity={0.85}
-              onPress={() => {
-                markUpdateBadgeShown();
-                Linking.openURL(PLAY_STORE_UPDATE_URL);
-              }}
+            <Animated.View
               style={{
-                backgroundColor:
-                  Platform.OS === 'android' ? '#0D0E10' : 'rgba(13,14,16,0.88)',
-                borderRadius: 12 - StyleSheet.hairlineWidth,
-                margin: StyleSheet.hairlineWidth,
-                paddingVertical: 6,
-                paddingHorizontal: 12,
-                flexDirection: 'row',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: 5,
-                minWidth: 100,
+                transform: [
+                  { scaleX: -1 },
+                  {
+                    rotate: updateSpinAnim.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: ['0deg', '-360deg'],
+                    }),
+                  },
+                ],
               }}
             >
-              <Animated.View
-                style={{
-                  transform: [
-                    { scaleX: -1 },
-                    {
-                      rotate: updateSpinAnim.interpolate({
-                        inputRange: [0, 1],
-                        outputRange: ['0deg', '-360deg'],
-                      }),
-                    },
-                  ],
-                }}
-              >
-                <ExpoImage
-                  source={require('../../assets/icon-update.png')}
-                  style={{ width: 16, height: 16 }}
-                  contentFit="contain"
-                />
-              </Animated.View>
-              <Text style={{ color: LIVI.text2, fontSize: 13, fontWeight: '300' }}>{L('updateBtn')}</Text>
-            </TouchableOpacity>
-          </View>
+              <ExpoImage
+                source={require('../../assets/icon-update.png')}
+                style={{ width: 16, height: 16 }}
+                contentFit="contain"
+              />
+            </Animated.View>
+            <Text style={{ color: LIVI.text2, fontSize: 13, fontWeight: '300' }}>{L('updateBtn')}</Text>
+          </TouchableOpacity>
         </View>
       )}
     </ScrollView>
