@@ -43,13 +43,26 @@ import { styles } from './styles';
 
 /* ================= Animated gradient border (кнопка «Начать поиск», меню) ================= */
 
+/** Статичные цвета обводки (аватар профиля и т.п.) — те же, что у CTA/меню. */
+export const CHROME_BORDER_GRADIENT_DARK = [
+  '#14b8a6',
+  '#3b82f6',
+  '#00b5ff',
+  '#FFF8F0',
+] as const;
+export const CHROME_BORDER_GRADIENT_LIGHT = [
+  '#8f7ad8',
+  '#FFF8F0',
+  '#B0B5BF',
+] as const;
+
 const EQUALIZER_GRADIENT_DARK = [
-  '#14b8a6', '#3b82f6', '#00b5ff', '#FFF8F0',
-  '#14b8a6', '#3b82f6', '#00b5ff', '#FFF8F0',
+  ...CHROME_BORDER_GRADIENT_DARK,
+  ...CHROME_BORDER_GRADIENT_DARK,
 ];
 const EQUALIZER_GRADIENT_LIGHT = [
-  '#8f7ad8', '#FFF8F0', '#B0B5BF',
-  '#8f7ad8', '#FFF8F0', '#B0B5BF',
+  ...CHROME_BORDER_GRADIENT_LIGHT,
+  ...CHROME_BORDER_GRADIENT_LIGHT,
 ];
 
 function chromeExtrudeFill(layer: number, layerCount: number, isDark: boolean): string {

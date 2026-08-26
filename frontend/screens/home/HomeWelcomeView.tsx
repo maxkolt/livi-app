@@ -2,7 +2,6 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   Animated,
   Dimensions,
-  Linking,
   Platform,
   Pressable,
   StyleSheet,
@@ -11,10 +10,8 @@ import {
   type LayoutChangeEvent,
 } from 'react-native';
 import { BlurView } from 'expo-blur';
-import { LinearGradient } from 'expo-linear-gradient';
 import { Icon } from 'react-native-paper';
 import { logger } from '../../utils/logger';
-import { markUpdateBadgeShown, PLAY_STORE_UPDATE_URL } from '../../utils/updateCheck';
 import {
   ANDROID_MENU_HIT_SLOP,
   CHROME_PERIMETER_GLOW_LAYOUT_INSET,
@@ -46,8 +43,6 @@ export type HomeWelcomeViewProps = {
   NoticeView: React.ReactNode;
   hasActiveCallForSearch: boolean;
   showCallSearchLockBadge: boolean;
-  showUpdateBadge: boolean;
-  onHideUpdateBadge: () => void;
   onStartSearch: () => void;
   onBlockedStartSearch: () => void;
 };
@@ -78,8 +73,6 @@ function HomeWelcomeViewInner({
   NoticeView,
   hasActiveCallForSearch,
   showCallSearchLockBadge,
-  showUpdateBadge,
-  onHideUpdateBadge,
   onStartSearch,
   onBlockedStartSearch,
 }: HomeWelcomeViewProps) {
@@ -135,9 +128,6 @@ function HomeWelcomeViewInner({
   // Короткий portrait на телефоне (как раньше). Планшеты не трогаем.
   const compactLayout = isPhone && !isLandscape && viewHeight < 520;
 
-  const updateBadgeBorderW = StyleSheet.hairlineWidth;
-  const updateBadgeOuterRadius = 12;
-  const updateBadgeInnerRadius = Math.max(0, updateBadgeOuterRadius - updateBadgeBorderW);
   const menuBtnMarginRight = isTabletLayout
     ? -CHROME_PERIMETER_GLOW_LAYOUT_INSET + 10
     : -CHROME_PERIMETER_GLOW_LAYOUT_INSET;
@@ -194,7 +184,6 @@ function HomeWelcomeViewInner({
     viewHeight,
     compactLayout,
     phoneLandscape,
-    showUpdateBadge,
     showCallSearchLockBadge,
     hasActiveCallForSearch,
     NoticeView,
@@ -238,78 +227,6 @@ function HomeWelcomeViewInner({
       >
         Сначала завершите текущий звонок
       </Text>
-    </View>
-  ) : null;
-
-  const updateBadge = showUpdateBadge ? (
-    <View
-      style={{
-        borderRadius: updateBadgeOuterRadius,
-        overflow: 'hidden',
-        alignSelf: 'center',
-        maxWidth: Math.min(320, viewWidth - 40),
-        ...(Platform.OS === 'android'
-          ? {
-              borderWidth: StyleSheet.hairlineWidth,
-              borderColor: isDark
-                ? 'rgba(45, 212, 191, 0.4)'
-                : 'rgba(139, 130, 200, 0.4)',
-            }
-          : null),
-      }}
-    >
-      <LinearGradient
-        colors={
-          isDark
-            ? ['#2dd4bf', '#60a5fa', '#38bdf8', '#FFF8F0', '#2dd4bf']
-            : ['#8B82C8', '#9A8FC9', '#A8A0B8', '#ADA9B0']
-        }
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={StyleSheet.absoluteFillObject}
-      />
-      <Pressable
-        style={({ pressed }) => [
-          {
-            margin: updateBadgeBorderW,
-            borderRadius: updateBadgeInnerRadius,
-            alignItems: 'center',
-            justifyContent: 'center',
-            alignSelf: 'stretch',
-            backgroundColor: themeBackground,
-            paddingVertical: phoneLandscape ? 6 : Platform.OS === 'ios' ? 10 : 8,
-            paddingHorizontal: phoneLandscape ? 14 : 20,
-            zIndex: 1,
-          },
-          pressed && {
-            backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)',
-          },
-        ]}
-        onPress={() => {
-          onHideUpdateBadge();
-          markUpdateBadgeShown();
-          Linking.openURL(PLAY_STORE_UPDATE_URL);
-        }}
-        android_ripple={{
-          color: isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)',
-          borderless: false,
-        }}
-      >
-        <Text
-          style={{
-            color: isDark ? LIVI.text : '#2F3742',
-            fontSize: phoneLandscape ? 11 : 12,
-            fontWeight: '500',
-            textAlign: 'center',
-            ...(Platform.OS === 'android' && { includeFontPadding: false }),
-          }}
-          numberOfLines={1}
-          ellipsizeMode="tail"
-          allowFontScaling={false}
-        >
-          {L('updateBtn')}
-        </Text>
-      </Pressable>
     </View>
   ) : null;
 
@@ -563,7 +480,6 @@ function HomeWelcomeViewInner({
           >
             {NoticeView}
             {callLockBadge}
-            {updateBadge}
           </View>
         ) : null}
       </View>

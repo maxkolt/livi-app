@@ -284,6 +284,17 @@ const dict: Partial<Record<Lang, Record<string, string>>> = {
     avatar: 'Аватар',
     save: 'Сохранить',
     deleteNick: 'Удалить ник',
+    profileAccount: 'Редактировать профиль',
+    profileHelp: 'Помощь',
+    profileWrite: 'Написать',
+    profileMember: 'Участник LiVi',
+    profileHelpTitle: 'Помощь',
+    profileHelpMessage: 'Напишите нам на почту:',
+    profileWriteTitle: 'Написать',
+    profileWriteSubtitle: 'Почты, куда можно написать:',
+    profileCopyEmail: 'Скопировать',
+    profileEmailCopied: 'Скопировано',
+    profileOpenMail: 'Открыть почту',
 
     // — Прочее
     cancel: 'Закрыть',
@@ -542,6 +553,17 @@ const dict: Partial<Record<Lang, Record<string, string>>> = {
     avatar: 'Avatar',
     save: 'Save',
     deleteNick: 'Delete nickname',
+    profileAccount: 'Edit profile',
+    profileHelp: 'Help',
+    profileWrite: 'Write',
+    profileMember: 'LiVi member',
+    profileHelpTitle: 'Help',
+    profileHelpMessage: 'Write to us at:',
+    profileWriteTitle: 'Write',
+    profileWriteSubtitle: 'Emails you can write to:',
+    profileCopyEmail: 'Copy',
+    profileEmailCopied: 'Copied',
+    profileOpenMail: 'Open mail',
   
     // — Misc
    

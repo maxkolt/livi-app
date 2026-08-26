@@ -8,22 +8,39 @@ import {
   Keyboard,
   StyleSheet,
   Platform,
-  Animated,
   KeyboardAvoidingView,
   Text,
   useWindowDimensions,
+  Modal,
 } from 'react-native';
 import { TextInput } from 'react-native-paper';
 import { Image as ExpoImage } from 'expo-image';
-import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
+import * as Clipboard from 'expo-clipboard';
+import { BlurView } from 'expo-blur';
 import { getAvatarImageProps, getAvatarKey } from '../utils/imageOptimization';
 import { memo } from 'react';
 import { t, loadLang, Lang } from '../utils/i18n';
 import AvatarImage from './AvatarImage';
-
 import { toAvatarThumb } from '../utils/uploadAvatar';
 import { API_BASE } from '../sockets/socket';
+import {
+  CHROME_BORDER_GRADIENT_DARK,
+  CHROME_BORDER_GRADIENT_LIGHT,
+} from '../screens/home/chrome';
+import { LIVI as LIVI_CONST, PROFILE_AVATAR_BORDER_WIDTH } from '../screens/home/constants';
+import Svg, {
+  Circle as SvgCircle,
+  Defs,
+  LinearGradient as SvgLinearGradient,
+  Stop as SvgStop,
+} from 'react-native-svg';
+
+const SUPPORT_EMAIL = '12345kolt@gmal.com';
+const DELETE_BADGE_W = 40;
+const DELETE_BADGE_H = 24;
+/** Отступ от обводки внутрь аватара — низ сферы не перекрывает рамку. */
+const DELETE_BADGE_ABOVE_RING = 3;
 
 interface SettingsTabProps {
   nick: string;
@@ -42,6 +59,7 @@ interface SettingsTabProps {
   myFullAvatarUri?: string;
   myAvatarVer?: number;
   myUserId?: string;
+  isDark?: boolean;
 
   LIVI: {
     border: string;
@@ -79,15 +97,28 @@ const toAvatarSrc = (u?: string) => {
   return s;
 };
 
-/** Базовый ориентир; фактический размер — доля ширины экрана (Samsung Display size / разные dpi). */
-const SETTINGS_AVATAR_SIZE_MIN = 76;
-const SETTINGS_AVATAR_SIZE_MAX = 112;
-const NICK_FIELD_HEIGHT = 34;
-
-function resolveSettingsAvatarSize(windowWidth: number): number {
-  const fromWidth = Math.round(windowWidth * 0.24);
-  return Math.min(SETTINGS_AVATAR_SIZE_MAX, Math.max(SETTINGS_AVATAR_SIZE_MIN, fromWidth));
+/** Базовый ориентир — тот же размер, что у аватара на экране приветствия. */
+function resolveIsLandscape(width: number, height: number) {
+  return width > 0 && height > 0 && width / height > 1.05;
 }
+
+function resolveIsPhone(width: number, height: number) {
+  const shortest = Math.min(width, height);
+  return shortest > 0 && shortest < 600;
+}
+
+/** Совпадает с HomeCenterProfile (приветствие). */
+function resolveSettingsAvatarSize(windowWidth: number, windowHeight: number): number {
+  const isPhone = resolveIsPhone(windowWidth, windowHeight);
+  const isLandscape = resolveIsLandscape(windowWidth, windowHeight);
+  const dense = isPhone && isLandscape;
+  const compact = isPhone && !isLandscape && windowHeight < 520;
+  if (dense) return 56;
+  if (compact) return 76;
+  return Platform.OS === 'ios' ? 136 : 120;
+}
+
+const NICK_FIELD_HEIGHT = 34;
 
 const SettingsAvatar = memo(({
   avatarUri,
@@ -156,6 +187,91 @@ const SettingsAvatar = memo(({
 
 SettingsAvatar.displayName = 'SettingsAvatar';
 
+/** Неподвижная градиентная обводка — кольцо поверх аватара (и мусорки). */
+function StaticAvatarChrome({
+  size,
+  isDark,
+  innerBg,
+  overlay,
+  children,
+}: {
+  size: number;
+  isDark: boolean;
+  innerBg: string;
+  overlay?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  const borderWidth = PROFILE_AVATAR_BORDER_WIDTH;
+  const outer = size + borderWidth * 2;
+  const colors = isDark ? CHROME_BORDER_GRADIENT_DARK : CHROME_BORDER_GRADIENT_LIGHT;
+  const cx = outer / 2;
+  const cy = outer / 2;
+  // Центр линии обводки — по середине толщины рамки
+  const ringR = size / 2 + borderWidth / 2;
+
+  return (
+    <View
+      style={{
+        width: outer,
+        height: outer,
+        borderRadius: outer / 2,
+        overflow: 'visible',
+      }}
+    >
+      <View
+        style={{
+          position: 'absolute',
+          top: borderWidth,
+          left: borderWidth,
+          width: size,
+          height: size,
+          borderRadius: size / 2,
+          overflow: 'hidden',
+          backgroundColor: innerBg,
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1,
+        }}
+      >
+        {children}
+      </View>
+
+      {overlay ? (
+        <View pointerEvents="box-none" style={StyleSheet.absoluteFillObject}>
+          {overlay}
+        </View>
+      ) : null}
+
+      {/* Рамка сверху — мусорка визуально под ней на аватаре */}
+      <Svg
+        width={outer}
+        height={outer}
+        style={{ position: 'absolute', top: 0, left: 0, zIndex: 3 }}
+        pointerEvents="none"
+      >
+        <Defs>
+          <SvgLinearGradient id="avatarChromeRing" x1="0%" y1="0%" x2="100%" y2="100%">
+            <SvgStop offset="0%" stopColor={colors[0]} />
+            <SvgStop offset="35%" stopColor={colors[1]} />
+            <SvgStop offset="70%" stopColor={colors[2]} />
+            <SvgStop offset="100%" stopColor={colors[colors.length - 1]} />
+          </SvgLinearGradient>
+        </Defs>
+        <SvgCircle
+          cx={cx}
+          cy={cy}
+          r={ringR}
+          stroke="url(#avatarChromeRing)"
+          strokeWidth={borderWidth}
+          fill="none"
+        />
+      </Svg>
+    </View>
+  );
+}
+
+type MenuModalKind = 'help' | null;
+
 export default function SettingsTab({
   nick,
   setNick,
@@ -172,26 +288,36 @@ export default function SettingsTab({
   myFullAvatarUri,
   myAvatarVer,
   myUserId,
+  isDark = true,
   LIVI,
   styles,
+  handleWipeAccount,
+  wiping,
   lang: langProp,
 }: SettingsTabProps) {
-  const { width: windowWidth } = useWindowDimensions();
-  const avatarSize = useMemo(() => resolveSettingsAvatarSize(windowWidth), [windowWidth]);
+  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
+  const avatarSize = useMemo(
+    () => resolveSettingsAvatarSize(windowWidth, windowHeight),
+    [windowWidth, windowHeight],
+  );
   const [langState, setLangState] = useState<Lang>('ru');
   const lang = langProp || langState;
   const busy = (saving ?? isSaving) || false;
   const nickFieldHeight = NICK_FIELD_HEIGHT;
   const hasAvatar = !!(avatarUri || myFullAvatarUri);
   const displayNick = String(nick || '').trim();
+  const [accountOpen, setAccountOpen] = useState(false);
+  const [modalKind, setModalKind] = useState<MenuModalKind>(null);
+  const [copiedEmail, setCopiedEmail] = useState<string | null>(null);
 
   const nickFieldFill = useMemo(() => {
     const bg = StyleSheet.flatten(styles.input)?.backgroundColor;
     return typeof bg === 'string' && bg.length > 0 ? bg : 'rgba(255,255,255,0.04)';
   }, [styles.input]);
 
-  const pulseA = useRef(new Animated.Value(0)).current;
-  const pulseB = useRef(new Animated.Value(0)).current;
+  const frameBg = isDark ? 'rgba(255,255,255,0.04)' : 'rgba(255,255,255,0.08)';
+  const frameBorder = isDark ? LIVI.border : 'rgba(255,255,255,0.18)';
+
   const scrollRef = useRef<ScrollView>(null);
   const nickOffsetYRef = useRef(0);
   const [keyboardOpen, setKeyboardOpen] = useState(false);
@@ -212,7 +338,7 @@ export default function SettingsTab({
       const h = Number(e?.endCoordinates?.height || 0);
       setKeyboardOpen(true);
       setKeyboardPad(Math.max(0, h - 24));
-      scrollNickIntoView();
+      if (accountOpen) scrollNickIntoView();
     };
     const onHide = () => {
       setKeyboardOpen(false);
@@ -224,52 +350,7 @@ export default function SettingsTab({
       subShow.remove();
       subHide.remove();
     };
-  }, []);
-
-  // Перезапуск после save / закрытия клавиатуры: native-driver loop
-  // отваливается, если Animated.View размонтировали или JS был занят.
-  const [pulseGen, setPulseGen] = useState(0);
-  const wasKeyboardOpenRef = useRef(false);
-
-  useEffect(() => {
-    if (keyboardOpen) {
-      wasKeyboardOpenRef.current = true;
-      return;
-    }
-    if (wasKeyboardOpenRef.current) {
-      wasKeyboardOpenRef.current = false;
-      setPulseGen((g) => g + 1);
-    }
-  }, [keyboardOpen]);
-
-  useEffect(() => {
-    if (!savedToast) return;
-    setPulseGen((g) => g + 1);
-  }, [savedToast]);
-
-  useEffect(() => {
-    pulseA.setValue(0);
-    pulseB.setValue(0);
-    const loopA = Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulseA, { toValue: 1, duration: 1800, useNativeDriver: true }),
-        Animated.timing(pulseA, { toValue: 0, duration: 1800, useNativeDriver: true }),
-      ]),
-    );
-    const loopB = Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulseB, { toValue: 1, duration: 2400, useNativeDriver: true }),
-        Animated.timing(pulseB, { toValue: 0, duration: 2400, useNativeDriver: true }),
-      ]),
-    );
-    loopA.start();
-    const delay = setTimeout(() => loopB.start(), 600);
-    return () => {
-      clearTimeout(delay);
-      loopA.stop();
-      loopB.stop();
-    };
-  }, [pulseA, pulseB, pulseGen]);
+  }, [accountOpen]);
 
   useEffect(() => {
     if (!langProp) {
@@ -282,9 +363,16 @@ export default function SettingsTab({
 
   useEffect(() => {
     if (!savedToast || busy) return;
+    setAccountOpen(false);
     const tmo = setTimeout(() => setSavedToast(false), 1500);
     return () => clearTimeout(tmo);
   }, [savedToast, setSavedToast, busy]);
+
+  useEffect(() => {
+    if (!copiedEmail) return;
+    const tmo = setTimeout(() => setCopiedEmail(null), 1600);
+    return () => clearTimeout(tmo);
+  }, [copiedEmail]);
 
   const pickAvatar = () => {
     if (openAvatarSheet) openAvatarSheet();
@@ -294,22 +382,37 @@ export default function SettingsTab({
     if (onDeleteAvatar) return onDeleteAvatar();
   };
 
-  const pulseAOpacity = pulseA.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0.22, 0.55],
-  });
-  const pulseAScale = pulseA.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0.88, 1.08],
-  });
-  const pulseBOpacity = pulseB.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0.12, 0.38],
-  });
-  const pulseBScale = pulseB.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0.92, 1.18],
-  });
+  const closeModal = () => {
+    setModalKind(null);
+    setCopiedEmail(null);
+  };
+
+  const copyEmail = async (email: string) => {
+    try {
+      await Clipboard.setStringAsync(email);
+      setCopiedEmail(email);
+    } catch {}
+  };
+
+  const menuRows: Array<{
+    key: string;
+    label: string;
+    icon: keyof typeof Ionicons.glyphMap;
+    onPress: () => void;
+  }> = [
+    {
+      key: 'account',
+      label: t('profileAccount', lang),
+      icon: 'settings-outline',
+      onPress: () => setAccountOpen((v) => !v),
+    },
+    {
+      key: 'help',
+      label: t('profileHelp', lang),
+      icon: 'help-circle-outline',
+      onPress: () => setModalKind('help'),
+    },
+  ];
 
   return (
     <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
@@ -326,58 +429,39 @@ export default function SettingsTab({
           contentContainerStyle={[
             localStyles.scrollContent,
             keyboardOpen && localStyles.scrollContentKeyboard,
-            { paddingBottom: keyboardOpen ? Math.max(keyboardPad, 120) : 24 },
+            { paddingBottom: keyboardOpen ? Math.max(keyboardPad, 120) : 28 },
           ]}
           showsVerticalScrollIndicator={false}
         >
           {/* --- Аватар --- */}
-          {/* Не размонтируем: иначе useNativeDriver-пульс «замирает» после save/клавиатуры */}
-          <View
-            style={[localStyles.avatarBlock, keyboardOpen && localStyles.avatarBlockHidden]}
-            pointerEvents={keyboardOpen ? 'none' : 'auto'}
-            accessibilityElementsHidden={keyboardOpen}
-            importantForAccessibility={keyboardOpen ? 'no-hide-descendants' : 'auto'}
-          >
-            <Animated.View
-              pointerEvents="none"
-              style={[
-                localStyles.pulseHaloOuter,
-                { opacity: pulseBOpacity, transform: [{ scale: pulseBScale }] },
-              ]}
-            >
-              <LinearGradient
-                colors={['rgba(120, 160, 220, 0.22)', 'rgba(120, 160, 220, 0.06)', 'transparent']}
-                start={{ x: 0.5, y: 0.25 }}
-                end={{ x: 0.5, y: 1 }}
-                style={localStyles.pulseHaloFill}
-              />
-            </Animated.View>
-            <Animated.View
-              pointerEvents="none"
-              style={[
-                localStyles.pulseHaloInner,
-                { opacity: pulseAOpacity, transform: [{ scale: pulseAScale }] },
-              ]}
-            >
-              <LinearGradient
-                colors={['rgba(140, 175, 230, 0.34)', 'rgba(140, 175, 230, 0.08)', 'transparent']}
-                start={{ x: 0.5, y: 0.3 }}
-                end={{ x: 0.5, y: 1 }}
-                style={localStyles.pulseHaloFill}
-              />
-            </Animated.View>
-
-            <View style={localStyles.avatarContent}>
-              <View
-                style={[
-                  localStyles.avatarWrap,
-                  {
-                    width: avatarSize,
-                    height: avatarSize,
-                    borderRadius: avatarSize / 2,
-                    backgroundColor: nickFieldFill,
-                  },
-                ]}
+          <View style={localStyles.avatarBlock}>
+            <View style={localStyles.avatarChromeWrap}>
+              <StaticAvatarChrome
+                size={avatarSize}
+                isDark={isDark}
+                innerBg={nickFieldFill}
+                overlay={
+                  hasAvatar && !!onDeleteAvatar && accountOpen ? (
+                    <TouchableOpacity
+                      activeOpacity={0.8}
+                      onPress={deleteAvatarSafe}
+                      disabled={busy}
+                      style={[
+                        localStyles.deleteBadge,
+                        {
+                          // Как карандаш: по центру снизу, но выше обводки
+                          left:
+                            (avatarSize + PROFILE_AVATAR_BORDER_WIDTH * 2 - DELETE_BADGE_W) / 2,
+                          bottom: PROFILE_AVATAR_BORDER_WIDTH + DELETE_BADGE_ABOVE_RING,
+                          zIndex: 2,
+                        },
+                      ]}
+                      hitSlop={4}
+                    >
+                      <Ionicons name="trash-outline" size={16} color="#fff" />
+                    </TouchableOpacity>
+                  ) : null
+                }
               >
                 <TouchableOpacity
                   activeOpacity={0.85}
@@ -397,124 +481,251 @@ export default function SettingsTab({
                       size={avatarSize}
                     />
                   ) : (
-                    <Ionicons name="add" size={Math.round(avatarSize * 0.35)} color={LIVI.text2} />
+                    <Ionicons name="add" size={Math.round(avatarSize * 0.32)} color={LIVI.text2} />
                   )}
                 </TouchableOpacity>
+              </StaticAvatarChrome>
+            </View>
 
-                {hasAvatar && !!onDeleteAvatar ? (
-                  <TouchableOpacity
-                    activeOpacity={0.8}
-                    onPress={deleteAvatarSafe}
-                    disabled={busy}
-                    style={localStyles.deleteBadge}
-                    hitSlop={4}
+            <Text
+              style={[localStyles.nickDisplay, { color: LIVI.white }]}
+              numberOfLines={1}
+            >
+              {displayNick || t('enter_nick', lang)}
+            </Text>
+          </View>
+
+          {/* Растягиваем пространство — меню уезжает вниз экрана */}
+          <View style={localStyles.bottomSpacer} />
+
+          {/* --- Редактирование аккаунта (над пунктами меню) --- */}
+          {accountOpen ? (
+            <View
+              style={[
+                localStyles.accountPanel,
+                { backgroundColor: frameBg, borderColor: frameBorder },
+              ]}
+              onLayout={(e) => {
+                nickOffsetYRef.current = e.nativeEvent.layout.y;
+              }}
+            >
+              <View
+                style={[
+                  localStyles.nickInputWrap,
+                  {
+                    height: nickFieldHeight,
+                    borderBottomColor: frameBorder,
+                  },
+                ]}
+              >
+                <TextInput
+                  value={nick ?? ''}
+                  onChangeText={setNick}
+                  mode="outlined"
+                  dense
+                  outlineStyle={{
+                    borderColor: 'transparent',
+                    borderWidth: 0,
+                  }}
+                  style={[
+                    styles.input,
+                    {
+                      flex: 1,
+                      marginBottom: 0,
+                      marginTop: 0,
+                      marginVertical: 0,
+                      height: nickFieldHeight,
+                      backgroundColor: 'transparent',
+                      fontWeight: '400',
+                      fontSize: 13,
+                      color: LIVI.white,
+                    },
+                  ]}
+                  contentStyle={{
+                    paddingVertical: 0,
+                    paddingRight: 36,
+                    paddingLeft: 14,
+                    minHeight: nickFieldHeight,
+                    fontWeight: '400',
+                    fontSize: 13,
+                    color: LIVI.white,
+                  }}
+                  textColor={LIVI.white}
+                  placeholder={t('nickname', lang)}
+                  placeholderTextColor={LIVI.text2}
+                  autoCorrect={false}
+                  autoCapitalize="none"
+                  returnKeyType="done"
+                  blurOnSubmit
+                  editable={!busy}
+                  onFocus={scrollNickIntoView}
+                />
+                <TouchableOpacity
+                  activeOpacity={0.75}
+                  onPress={onClearNick}
+                  disabled={busy || !displayNick}
+                  style={[
+                    localStyles.clearNickBtn,
+                    { opacity: displayNick ? 1 : 0.35 },
+                  ]}
+                  hitSlop={6}
+                >
+                  <Ionicons name="trash-outline" size={15} color={LIVI.text} />
+                </TouchableOpacity>
+              </View>
+
+              <View style={localStyles.accountActionsRow}>
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  onPress={handleSaveProfile}
+                  disabled={busy}
+                  style={[
+                    localStyles.saveBtn,
+                    localStyles.accountActionFlex,
+                    {
+                      backgroundColor: savedToast ? 'rgba(51, 139, 73, 0.18)' : 'rgba(255,255,255,0.04)',
+                      borderColor: savedToast ? 'rgba(77, 228, 145, 0.35)' : frameBorder,
+                    },
+                  ]}
+                >
+                  <Text
+                    style={[
+                      localStyles.saveLabel,
+                      { color: savedToast ? 'rgba(172, 220, 190, 0.95)' : LIVI.white },
+                    ]}
                   >
-                    <Ionicons name="trash-outline" size={14} color="#fff" />
+                    {savedToast ? t('saved', lang) : t('save', lang)}
+                  </Text>
+                </TouchableOpacity>
+
+                {handleWipeAccount ? (
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    onPress={handleWipeAccount}
+                    disabled={busy || wiping}
+                    style={[
+                      localStyles.saveBtn,
+                      localStyles.accountActionFlex,
+                      localStyles.wipeBtn,
+                      { opacity: wiping ? 0.7 : 1 },
+                    ]}
+                  >
+                    <Text style={[localStyles.saveLabel, { color: 'rgba(255,90,103,0.9)' }]}>
+                      {t('delete', lang)}
+                    </Text>
                   </TouchableOpacity>
                 ) : null}
               </View>
             </View>
-          </View>
+          ) : null}
 
-          {/* --- Никнейм --- */}
-          <View
-            style={[localStyles.nickRow, keyboardOpen && localStyles.nickRowKeyboard]}
-            onLayout={(e) => {
-              nickOffsetYRef.current = e.nativeEvent.layout.y;
-            }}
-          >
-            <View
-              style={[
-                localStyles.nickInputWrap,
-                {
-                  height: nickFieldHeight,
-                  borderBottomColor: LIVI.border,
-                },
-              ]}
-            >
-              <TextInput
-                value={nick ?? ''}
-                onChangeText={setNick}
-                mode="outlined"
-                dense
-                outlineStyle={{
-                  borderColor: 'transparent',
-                  borderWidth: 0,
-                }}
-                style={[
-                  styles.input,
-                  {
-                    flex: 1,
-                    marginBottom: 0,
-                    marginTop: 0,
-                    marginVertical: 0,
-                    height: nickFieldHeight,
-                    backgroundColor: 'transparent',
-                    fontWeight: '400',
-                    fontSize: 13,
-                    color: LIVI.white,
-                  },
-                ]}
-                contentStyle={{
-                  paddingVertical: 0,
-                  paddingRight: 36,
-                  paddingLeft: 14,
-                  minHeight: nickFieldHeight,
-                  fontWeight: '400',
-                  fontSize: 13,
-                  color: LIVI.white,
-                }}
-                textColor={LIVI.white}
-                placeholder={t('nickname', lang)}
-                placeholderTextColor={LIVI.text2}
-                autoCorrect={false}
-                autoCapitalize="none"
-                returnKeyType="done"
-                blurOnSubmit
-                editable={!busy}
-                onFocus={scrollNickIntoView}
-              />
-              <TouchableOpacity
-                activeOpacity={0.75}
-                onPress={onClearNick}
-                disabled={busy || !displayNick}
-                style={[
-                  localStyles.clearNickBtn,
-                  { opacity: displayNick ? 1 : 0.35 },
-                ]}
-                hitSlop={6}
-              >
-                <Ionicons name="trash-outline" size={15} color={LIVI.text} />
-              </TouchableOpacity>
-            </View>
+          {/* --- Меню-строки (внизу экрана) --- */}
+          <View style={localStyles.menuList}>
+            {menuRows.map((row, idx) => {
+              const active = row.key === 'account' && accountOpen;
+              return (
+                <View key={row.key}>
+                  {idx > 0 ? (
+                    <View style={[localStyles.menuDivider, { backgroundColor: frameBorder }]} />
+                  ) : null}
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    onPress={row.onPress}
+                    style={localStyles.menuRow}
+                  >
+                    <Text style={[localStyles.menuRowLabel, { color: LIVI.white }]}>
+                      {row.label}
+                    </Text>
+                    <Ionicons
+                      name={active ? 'chevron-up' : row.icon}
+                      size={20}
+                      color={LIVI.text2}
+                    />
+                  </TouchableOpacity>
+                </View>
+              );
+            })}
           </View>
         </ScrollView>
 
-        {!keyboardOpen ? (
-        <View style={localStyles.saveFooter}>
-          <TouchableOpacity
-            activeOpacity={0.85}
-            onPress={handleSaveProfile}
-            disabled={busy}
-            style={[
-              localStyles.saveBtn,
-              {
-                backgroundColor: savedToast ? 'rgba(51, 139, 73, 0.18)' : nickFieldFill,
-                borderColor: savedToast ? 'rgba(77, 228, 145, 0.35)' : LIVI.border,
-              },
-            ]}
-          >
-            <Text
+        <Modal
+          visible={modalKind !== null}
+          transparent
+          animationType="fade"
+          onRequestClose={closeModal}
+          statusBarTranslucent
+        >
+          <View style={localStyles.modalOverlay}>
+            <BlurView
+              intensity={Platform.OS === 'android' ? 100 : 85}
+              tint="dark"
+              style={StyleSheet.absoluteFill}
+            />
+            <View
               style={[
-                localStyles.saveLabel,
-                { color: savedToast ? 'rgba(172, 220, 190, 0.95)' : LIVI.white },
+                StyleSheet.absoluteFill,
+                {
+                  backgroundColor:
+                    Platform.OS === 'android' ? 'rgba(0,0,0,0.78)' : 'rgba(0,0,0,0.35)',
+                },
+              ]}
+            />
+            <View
+              style={[
+                localStyles.modalCard,
+                {
+                  backgroundColor: LIVI_CONST.surface,
+                  borderColor: frameBorder,
+                },
               ]}
             >
-              {savedToast ? t('saved', lang) : t('save', lang)}
-            </Text>
-          </TouchableOpacity>
-        </View>
-        ) : null}
+              <Text style={[localStyles.modalTitle, { color: LIVI.white }]}>
+                {t('profileHelpTitle', lang)}
+              </Text>
+              <Text style={[localStyles.modalMsg, { color: LIVI.text2 }]}>
+                {t('profileHelpMessage', lang)}
+              </Text>
+
+              <View
+                style={[
+                  localStyles.emailRow,
+                  { backgroundColor: frameBg, borderColor: frameBorder },
+                ]}
+              >
+                <Text
+                  style={[localStyles.emailText, { color: LIVI.white }]}
+                  numberOfLines={1}
+                  selectable
+                >
+                  {SUPPORT_EMAIL}
+                </Text>
+                <View style={localStyles.emailActions}>
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    onPress={() => copyEmail(SUPPORT_EMAIL)}
+                    style={[localStyles.emailActionBtn, { borderColor: frameBorder }]}
+                  >
+                    <Text style={[localStyles.emailActionLabel, { color: LIVI.white }]}>
+                      {copiedEmail === SUPPORT_EMAIL
+                        ? t('profileEmailCopied', lang)
+                        : t('profileCopyEmail', lang)}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              <TouchableOpacity
+                activeOpacity={0.85}
+                onPress={closeModal}
+                style={[localStyles.modalCloseBtn, { borderColor: frameBorder, backgroundColor: frameBg }]}
+              >
+                <Text style={[localStyles.saveLabel, { color: LIVI.white }]}>
+                  {t('cancel', lang)}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </Modal>
       </KeyboardAvoidingView>
     </TouchableWithoutFeedback>
   );
@@ -523,58 +734,29 @@ export default function SettingsTab({
 const localStyles = StyleSheet.create({
   scrollContent: {
     paddingHorizontal: 16,
-    paddingTop: 36,
+    paddingTop: 20,
     paddingBottom: 24,
     flexGrow: 1,
   },
   scrollContentKeyboard: {
-    paddingTop: 24,
+    paddingTop: 12,
     justifyContent: 'flex-start',
+  },
+  bottomSpacer: {
+    flexGrow: 1,
+    minHeight: 24,
   },
   avatarBlock: {
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: 8,
-    marginBottom: 8,
-    minHeight: 200,
+    marginTop: 12,
+    marginBottom: 12,
+  },
+  avatarChromeWrap: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 16,
     overflow: 'visible',
-  },
-  avatarBlockHidden: {
-    opacity: 0,
-    height: 0,
-    minHeight: 0,
-    marginTop: 0,
-    marginBottom: 0,
-    overflow: 'hidden',
-  },
-  pulseHaloOuter: {
-    position: 'absolute',
-    width: 220,
-    height: 220,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  pulseHaloInner: {
-    position: 'absolute',
-    width: 170,
-    height: 170,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  pulseHaloFill: {
-    width: '100%',
-    height: '100%',
-    borderRadius: 999,
-  },
-  avatarContent: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    zIndex: 1,
-  },
-  avatarWrap: {
-    overflow: 'hidden',
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   avatarPressArea: {
     ...StyleSheet.absoluteFillObject,
@@ -583,30 +765,56 @@ const localStyles = StyleSheet.create({
   },
   deleteBadge: {
     position: 'absolute',
-    right: 2,
-    bottom: 2,
-    width: 28,
-    height: 28,
-    borderRadius: 14,
+    width: DELETE_BADGE_W,
+    height: DELETE_BADGE_H,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
     alignItems: 'center',
     justifyContent: 'center',
+    paddingTop: 3,
     backgroundColor: 'rgba(0,0,0,0.55)',
   },
-  nickRow: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 14,
+  nickDisplay: {
+    fontSize: 18,
+    fontWeight: '700',
+    letterSpacing: 0.6,
+    textAlign: 'center',
+    maxWidth: '90%',
+    ...(Platform.OS === 'android' ? { includeFontPadding: false } : null),
   },
-  nickRowKeyboard: {
-    marginTop: 8,
+  menuList: {
+    overflow: 'hidden',
+    marginBottom: 8,
+  },
+  menuRow: {
+    minHeight: 52,
+    paddingHorizontal: 4,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  menuRowLabel: {
+    fontSize: 14,
+    fontWeight: '300',
+    ...(Platform.OS === 'android' ? { includeFontPadding: false } : null),
+  },
+  menuDivider: {
+    height: StyleSheet.hairlineWidth,
+    marginLeft: 4,
+  },
+  accountPanel: {
+    marginBottom: 10,
+    borderRadius: 14,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: 12,
+    paddingTop: 10,
+    paddingBottom: 12,
+    gap: 12,
   },
   nickInputWrap: {
-    width: '58%',
-    maxWidth: 220,
-    minWidth: 160,
+    width: '100%',
     justifyContent: 'center',
     overflow: 'hidden',
-    alignSelf: 'center',
     backgroundColor: 'transparent',
     borderBottomWidth: 1,
   },
@@ -620,23 +828,94 @@ const localStyles = StyleSheet.create({
     justifyContent: 'center',
     zIndex: 2,
   },
-  saveFooter: {
-    paddingHorizontal: 16,
-    marginBottom: 40,
-    alignItems: 'stretch',
-  },
   saveBtn: {
-    height: 36,
+    height: 32,
     borderRadius: 999,
     borderWidth: StyleSheet.hairlineWidth,
     overflow: 'hidden',
     alignItems: 'center',
     justifyContent: 'center',
   },
+  accountActionsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  accountActionFlex: {
+    flex: 1,
+  },
+  wipeBtn: {
+    borderColor: 'rgba(255,90,103,0.45)',
+    backgroundColor: 'rgba(255,90,103,0.1)',
+  },
   saveLabel: {
     fontSize: 14,
-    fontWeight: '400',
+    fontWeight: '500',
     textAlign: 'center',
     ...(Platform.OS === 'android' ? { includeFontPadding: false } : null),
+  },
+  modalOverlay: {
+    flex: 1,
+    paddingHorizontal: 22,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalCard: {
+    width: '100%',
+    maxWidth: 360,
+    borderRadius: 16,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: 18,
+    paddingTop: 18,
+    paddingBottom: 14,
+  },
+  modalTitle: {
+    fontSize: 17,
+    fontWeight: '700',
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  modalMsg: {
+    fontSize: 14,
+    textAlign: 'center',
+    marginBottom: 14,
+    lineHeight: 20,
+  },
+  emailRow: {
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    marginBottom: 10,
+  },
+  emailText: {
+    fontSize: 15,
+    fontWeight: '600',
+    marginBottom: 10,
+    textAlign: 'center',
+  },
+  emailActions: {
+    flexDirection: 'row',
+    gap: 8,
+    justifyContent: 'center',
+    flexWrap: 'wrap',
+  },
+  emailActionBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  emailActionLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  modalCloseBtn: {
+    marginTop: 4,
+    height: 42,
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 });

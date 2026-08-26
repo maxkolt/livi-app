@@ -1,4 +1,4 @@
-import { Platform } from 'react-native';
+import { Platform, StyleSheet } from 'react-native';
 import { FRIEND_ACTION_BUTTON, FRIEND_ROW_ACTION_GAP } from '../../constants/uiTokens';
 
 export const LIVI = {
@@ -20,7 +20,7 @@ export const LIVI = {
 export const FRIENDS_LIST_HORIZONTAL_PAD = 17;
 
 /** Толщина разделителя между строками друзей. */
-export const FRIEND_ROW_DIVIDER_HEIGHT = 1;
+export const FRIEND_ROW_DIVIDER_HEIGHT = StyleSheet.hairlineWidth;
 
 export const FRIEND_ROW_LAYOUT_HEIGHT = 72;
 
@@ -60,7 +60,9 @@ export const CHROME_PERIMETER_GLOW_SPREAD = 2.8;
 /** Компенсация ширины ореола справа — кнопка меню на прежнем отступе. */
 export const CHROME_PERIMETER_GLOW_LAYOUT_INSET =
   CHROME_PERIMETER_GLOW_LAYERS * CHROME_PERIMETER_GLOW_SPREAD;
-export const ANIMATED_BORDER_WIDTH = 1;
+export const ANIMATED_BORDER_WIDTH = StyleSheet.hairlineWidth;
+/** Рамка аватара на вкладке «Профиль» — толще, чем у CTA/меню. */
+export const PROFILE_AVATAR_BORDER_WIDTH = 1;
 export const ANDROID_SEG_RIPPLE = { color: 'rgba(255,255,255,0.14)', borderless: false as const };
 export const FRIENDS_PAGE_SIZE = 50;
 export const FRIENDS_MAX_PAGES_PER_LOAD = 10;

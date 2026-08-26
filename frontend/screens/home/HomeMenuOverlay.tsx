@@ -13,10 +13,9 @@ import { BlurView } from 'expo-blur';
 import { Divider, List } from 'react-native-paper';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Image as ExpoImage } from 'expo-image';
-import { Ionicons } from '@expo/vector-icons';
 import ChatStyleBackButton from '../../components/ChatStyleBackButton';
-import { FRIEND_ACTION_BUTTON, FRIEND_ACTION_ICON_SIZE } from '../../constants/uiTokens';
-import { ANDROID_MENU_HIT_SLOP, ANDROID_SEG_RIPPLE, LIVI } from './constants';
+import { FRIEND_ACTION_BUTTON } from '../../constants/uiTokens';
+import { ANDROID_SEG_RIPPLE, LIVI } from './constants';
 import type { HomeStyles } from './styles';
 
 export type HomeMenuTab = 'friends' | 'settings' | 'more';
@@ -33,8 +32,6 @@ export type HomeMenuOverlayProps = {
   setTab: (tab: HomeMenuTab) => void;
   L: (key: string) => string;
   updateAvailable: boolean;
-  handleWipeAccount?: () => void;
-  wiping?: boolean;
   children: React.ReactNode;
 };
 
@@ -49,8 +46,6 @@ function HomeMenuOverlayInner({
   setTab,
   L,
   updateAvailable,
-  handleWipeAccount,
-  wiping,
   children,
 }: HomeMenuOverlayProps) {
   const headerBack = onHeaderBackPress ?? closeMenu;
@@ -182,46 +177,7 @@ function HomeMenuOverlayInner({
               style={{ marginLeft: 5 }}
             />
             <Text style={styles.sheetTitle}>{L('menuTitle')}</Text>
-            {tab === 'settings' && handleWipeAccount ? (
-              Platform.OS === 'android' ? (
-                <Pressable
-                  onPress={handleWipeAccount}
-                  disabled={wiping}
-                  hitSlop={ANDROID_MENU_HIT_SLOP}
-                  android_ripple={{ color: 'rgba(255,90,103,0.22)', borderless: true }}
-                  style={[
-                    styles.sheetCornerIconBtn,
-                    styles.sheetCornerIconBtnDanger,
-                    { marginRight: 5, opacity: wiping ? 0.7 : 1 },
-                  ]}
-                >
-                  <Ionicons
-                    name="trash"
-                    size={FRIEND_ACTION_ICON_SIZE}
-                    color="rgba(255,90,103,0.6)"
-                  />
-                </Pressable>
-              ) : (
-                <TouchableOpacity
-                  onPress={handleWipeAccount}
-                  activeOpacity={0.85}
-                  disabled={wiping}
-                  style={[
-                    styles.sheetCornerIconBtn,
-                    styles.sheetCornerIconBtnDanger,
-                    { marginRight: 5, opacity: wiping ? 0.7 : 1 },
-                  ]}
-                >
-                  <Ionicons
-                    name="trash"
-                    size={FRIEND_ACTION_ICON_SIZE}
-                    color="rgba(255,90,103,0.6)"
-                  />
-                </TouchableOpacity>
-              )
-            ) : (
-              <View style={{ width: FRIEND_ACTION_BUTTON.width }} />
-            )}
+            <View style={{ width: FRIEND_ACTION_BUTTON.width }} />
           </View>
 
           <View style={styles.segmentCapsule}>

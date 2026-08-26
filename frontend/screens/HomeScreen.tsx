@@ -155,10 +155,6 @@ import socket, {
 } from '../sockets/socket';
 import { primeAndroidCallContextForLeaveHint } from '../utils/activeCallNotification';
 import { clearHomeTransientRouteParams } from '../utils/appNavigationGuard';
-import {
-  markUpdateBadgeShown,
-  PLAY_STORE_UPDATE_URL,
-} from '../utils/updateCheck';
 
 
 
@@ -314,8 +310,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   }, [tab]);
   const {
     updateAvailable,
-    showUpdateBadge,
-    setShowUpdateBadgeState,
     updateSpinAnim,
     suppressUpdateBadgeForCallNotice,
   } = useHomeUpdatePromo(tab);
@@ -375,16 +369,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const [dataLoaded, setDataLoaded] = useState(homeScreenAlreadyBooted);
   // Сплеш поверх уже отрисованного Home: при уходе сплеша видна страница приветствия с актуальными данными
   const [splashDismissed, setSplashDismissed] = useState(homeScreenAlreadyBooted);
-  // Автоскрытие бейджа «Обновить» через 3 сек — только когда оверлей сплеша уже скрыт (пользователь видит страницу приветствия).
-  // Раньше таймер был привязан к splashVisible (data/profile) и стартовал под оверлеем — бейдж исчезал через 1–2 сек после появления.
-  useEffect(() => {
-    if (!showUpdateBadge || !splashDismissed) return;
-    const t = setTimeout(() => {
-      setShowUpdateBadgeState(false);
-      markUpdateBadgeShown();
-    }, 3000);
-    return () => clearTimeout(t);
-  }, [showUpdateBadge, splashDismissed]);
   const [nick, setNick] = useState('');
   // На медленных девайсах (Android 8.1/старые модели) setState может "догонять" ввод,
   // и при нажатии "Сохранить" в тот же момент на сервер может уйти только первая буква.
@@ -3977,9 +3961,6 @@ const handleClearNick = useCallback(async () => {
   const handleStartSearch = useCallback(() => {
     navigation.navigate('RandomChat', { returnTo: { name: 'Home' } });
   }, [navigation]);
-  const handleHideUpdateBadge = useCallback(() => {
-    setShowUpdateBadgeState(false);
-  }, [setShowUpdateBadgeState]);
   const handleOpenAvatarModal = useCallback((uri: string) => {
     setModalAvatarUri(uri);
     setAvatarModalVisible(true);
@@ -4047,8 +4028,6 @@ const handleClearNick = useCallback(async () => {
         NoticeView={NoticeView}
         hasActiveCallForSearch={hasActiveCallForSearch}
         showCallSearchLockBadge={showCallSearchLockBadge}
-        showUpdateBadge={showUpdateBadge}
-        onHideUpdateBadge={handleHideUpdateBadge}
         onStartSearch={handleStartSearch}
         onBlockedStartSearch={handleBlockedStartSearchPress}
       />
@@ -4119,8 +4098,6 @@ const handleClearNick = useCallback(async () => {
         setTab={setTab}
         L={L}
         updateAvailable={updateAvailable}
-        handleWipeAccount={handleWipeAccount}
-        wiping={wiping}
       >
               {menuTabsMounted ? (
                 <View
@@ -4208,6 +4185,7 @@ const handleClearNick = useCallback(async () => {
                   handleWipeAccount={handleWipeAccount}
                   wiping={wiping}
                   lang={lang}
+                  isDark={isDark}
                 />
               )}
               {menuTabsMounted && tab === 'more' && (

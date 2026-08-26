@@ -101,7 +101,7 @@ function HomeMoreTabInner({
     <ScrollView
       style={{ flex: 1 }}
       contentContainerStyle={{
-        paddingTop: 8,
+        paddingTop: 20,
         paddingHorizontal: FRIENDS_LIST_PAD_H,
         paddingBottom: 16,
         gap: 16,
@@ -118,11 +118,11 @@ function HomeMoreTabInner({
           padding: 12,
         }}
       >
-        <Text style={{ color: LIVI.white, fontWeight: '700', marginBottom: 8 }}>
+        <Text style={{ color: LIVI.white, fontWeight: '300', marginBottom: 8 }}>
           {t('uiSettings', lang)}
         </Text>
 
-        <Text style={{ color: LIVI.text2, fontSize: 14, fontWeight: '500', marginBottom: 8 }}>
+        <Text style={{ color: LIVI.text2, fontSize: 12, fontWeight: '300', marginBottom: 8 }}>
           {t('appTheme', lang)}
         </Text>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 }}>
@@ -140,7 +140,7 @@ function HomeMoreTabInner({
                 onPress={() => setPreference(opt.key)}
                 activeOpacity={0.85}
                 style={{
-                  paddingVertical: 10,
+                  paddingVertical: 6,
                   paddingHorizontal: 14,
                   borderRadius: 24,
                   borderWidth: StyleSheet.hairlineWidth,
@@ -152,7 +152,7 @@ function HomeMoreTabInner({
                     : { backgroundColor: 'rgba(255,255,255,0.02)' }),
                 }}
               >
-                <Text style={{ color: LIVI.white, fontWeight: '700', opacity: active ? 1 : 0.8 }}>
+                <Text style={{ color: LIVI.white, fontWeight: '300', opacity: active ? 1 : 0.8 }}>
                   {opt.label}
                 </Text>
               </TouchableOpacity>
@@ -175,15 +175,15 @@ function HomeMoreTabInner({
             justifyContent: 'space-between',
           }}
         >
-          <Text style={{ color: LIVI.white, fontSize: 14, fontWeight: '600' }}>
+          <Text style={{ color: LIVI.white, fontSize: 14, fontWeight: '300' }}>
             {L('chooseLanguage')}
           </Text>
-          <Text style={{ color: LIVI.text2, fontSize: 14, fontWeight: '700' }}>
+          <Text style={{ color: LIVI.text2, fontSize: 14, fontWeight: '300' }}>
             {(lang ?? 'ru').toUpperCase()}
           </Text>
         </TouchableOpacity>
 
-        <Text style={{ color: LIVI.text2, marginTop: 6, fontSize: 12 }}>
+        <Text style={{ color: LIVI.text2, marginTop: 6, fontSize: 11, fontWeight: '300' }}>
           {L('baseLang')}: {defaultLang.toUpperCase()}
         </Text>
 
@@ -204,7 +204,7 @@ function HomeMoreTabInner({
             justifyContent: 'space-between',
           }}
         >
-          <Text style={{ color: LIVI.white, fontSize: 14, fontWeight: '600' }}>
+          <Text style={{ color: LIVI.white, fontSize: 14, fontWeight: '300' }}>
             {t('chatWallpaper', lang)}
           </Text>
           <Ionicons
@@ -244,7 +244,7 @@ function HomeMoreTabInner({
                   alignItems: 'center',
                 }}
               >
-                <Text style={{ color: LIVI.white, fontWeight: '700', fontSize: 14 }}>
+                <Text style={{ color: LIVI.white, fontWeight: '300', fontSize: 14 }}>
                   {opt.label}
                 </Text>
               </TouchableOpacity>
@@ -288,7 +288,7 @@ function HomeMoreTabInner({
               flexShrink: 0,
             }}
           >
-            <Text style={{ color: LIVI.white, fontSize: 15, fontWeight: '800', letterSpacing: 0.5 }}>
+            <Text style={{ color: LIVI.white, fontSize: 15, fontWeight: '300', letterSpacing: 0.5 }}>
               LiVi
             </Text>
           </View>
@@ -297,14 +297,14 @@ function HomeMoreTabInner({
               style={{
                 color: accent.softText,
                 fontSize: 16,
-                fontWeight: '700',
+                fontWeight: '300',
                 marginBottom: 3,
                 lineHeight: 20,
               }}
             >
               {t('supportProjectTitle', lang)}
             </Text>
-            <Text style={{ color: LIVI.text2, fontSize: 13, lineHeight: 17 }}>
+            <Text style={{ color: LIVI.text2, fontSize: 11, fontWeight: '300', lineHeight: 15 }}>
               {t('supportProjectSubtitle', lang)}
             </Text>
           </View>
@@ -350,14 +350,14 @@ function HomeMoreTabInner({
               style={{
                 color: '#4DD0E1',
                 fontSize: 16,
-                fontWeight: '700',
+                fontWeight: '300',
                 marginBottom: 3,
                 lineHeight: 20,
               }}
             >
               {t('inviteFriendsTitle', lang)}
             </Text>
-            <Text style={{ color: LIVI.text2, fontSize: 13, lineHeight: 17 }}>
+            <Text style={{ color: LIVI.text2, fontSize: 11, fontWeight: '300', lineHeight: 15 }}>
               {t('inviteFriendsSubtitle', lang)}
             </Text>
           </View>

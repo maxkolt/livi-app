@@ -12,6 +12,8 @@ export {
   AnimatedGradientBorder,
   BrandTitleWithOutline,
   AnimatedBorderButton,
+  CHROME_BORDER_GRADIENT_DARK,
+  CHROME_BORDER_GRADIENT_LIGHT,
 } from './chrome';
 export {
   displayName,
