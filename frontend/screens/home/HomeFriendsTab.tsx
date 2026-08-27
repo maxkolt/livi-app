@@ -247,7 +247,7 @@ function InviteButton({
   handleStartFriendCall: (friend: Friend) => void;
   clearMissedCallsForFriend: (friendIdStr: string) => Promise<void>;
   isRecentlyEndedCallFriend: (userId: string | null | undefined) => boolean;
-  calling: { visible: boolean; callId?: string | null };
+  calling: { visible: boolean; friend?: Friend | null; callId?: string | null };
   callingVisibleRef: React.MutableRefObject<boolean>;
   activeOutgoingAttemptRef: React.MutableRefObject<number>;
   activeOutgoingCallIdRef: React.MutableRefObject<string | null>;

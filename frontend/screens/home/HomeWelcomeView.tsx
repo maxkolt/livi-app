@@ -107,11 +107,16 @@ function HomeWelcomeViewInner({
 
   useEffect(() => {
     if (!splashGone || brandEntryShinePlayedThisSession) return;
-    brandEntryShinePlayedThisSession = true;
+    let cancelled = false;
     const timer = setTimeout(() => {
+      if (cancelled || brandEntryShinePlayedThisSession) return;
+      brandEntryShinePlayedThisSession = true;
       setShineNonce((nonce) => nonce + 1);
     }, 320);
-    return () => clearTimeout(timer);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
   }, [splashGone]);
 
   useEffect(() => {
