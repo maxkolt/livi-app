@@ -1,0 +1,9 @@
+<resources>
+  <!-- API 28–29: SHORT_EDGES only. ALWAYS (3) throws UnsupportedOperationException on Android 9/10. -->
+  <style name="AppTheme" parent="AppTheme.Base">
+    <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
+  </style>
+  <style name="Theme.App.Translucent" parent="Theme.App.Translucent.Base">
+    <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
+  </style>
+</resources>

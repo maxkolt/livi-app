@@ -1,0 +1,9 @@
+<resources>
+  <!-- API 30+: LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS for full edge-to-edge under cutouts. -->
+  <style name="AppTheme" parent="AppTheme.Base">
+    <item name="android:windowLayoutInDisplayCutoutMode">always</item>
+  </style>
+  <style name="Theme.App.Translucent" parent="Theme.App.Translucent.Base">
+    <item name="android:windowLayoutInDisplayCutoutMode">always</item>
+  </style>
+</resources>

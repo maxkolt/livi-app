@@ -2,28 +2,33 @@
   <!--
     Android 16 (targetSdk 36): edge-to-edge is enforced; windowOptOutEdgeToEdgeEnforcement is ignored.
     Draw under system bars; RN screens pad via react-native-safe-area-context.
+
+    windowLayoutInDisplayCutoutMode:
+    - omitted below API 28 (attribute does not exist)
+    - shortEdges on API 28–29 (values-v28) — ALWAYS(3) crashes PhoneWindow on Android 9/10
+    - always on API 30+ (values-v30)
   -->
-  <style name="AppTheme" parent="Theme.AppCompat.DayNight.NoActionBar">
+  <style name="AppTheme.Base" parent="Theme.AppCompat.DayNight.NoActionBar">
     <item name="android:editTextBackground">@drawable/rn_edit_text_material</item>
-    <item name="android:windowLayoutInDisplayCutoutMode" tools:targetApi="30">always</item>
     <item name="android:statusBarColor">@android:color/transparent</item>
     <item name="android:navigationBarColor">@android:color/transparent</item>
     <item name="android:enforceStatusBarContrast" tools:targetApi="q">false</item>
     <item name="android:enforceNavigationBarContrast" tools:targetApi="q">false</item>
     <item name="colorPrimary">@color/colorPrimary</item>
   </style>
+  <style name="AppTheme" parent="AppTheme.Base" />
   <style name="Theme.App.SplashScreen" parent="AppTheme">
     <item name="android:windowBackground">@drawable/ic_launcher_background</item>
   </style>
   <!-- Прозрачная тема при запуске только для decline-call: пользователь видит экран блокировки/лаунчер, не страницу приветствия -->
-  <style name="Theme.App.Translucent" parent="Theme.AppCompat.DayNight.NoActionBar">
+  <style name="Theme.App.Translucent.Base" parent="Theme.AppCompat.DayNight.NoActionBar">
     <item name="android:windowIsTranslucent">true</item>
     <item name="android:windowBackground">@android:color/transparent</item>
     <item name="android:windowContentOverlay">@null</item>
-    <item name="android:windowLayoutInDisplayCutoutMode" tools:targetApi="30">always</item>
     <item name="android:statusBarColor">@android:color/transparent</item>
     <item name="android:navigationBarColor">@android:color/transparent</item>
     <item name="android:enforceStatusBarContrast" tools:targetApi="q">false</item>
     <item name="android:enforceNavigationBarContrast" tools:targetApi="q">false</item>
   </style>
+  <style name="Theme.App.Translucent" parent="Theme.App.Translucent.Base" />
 </resources>
