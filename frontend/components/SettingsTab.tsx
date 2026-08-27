@@ -27,17 +27,12 @@ import AvatarImage from './AvatarImage';
 import ChatStyleBackButton from './ChatStyleBackButton';
 import { toAvatarThumb } from '../utils/uploadAvatar';
 import { API_BASE } from '../sockets/socket';
+import { LinearGradient } from 'expo-linear-gradient';
 import {
   AVATAR_CHROME_GRADIENT_DARK,
   AVATAR_CHROME_GRADIENT_LIGHT,
 } from '../screens/home/chrome';
 import { LIVI as LIVI_CONST, PROFILE_AVATAR_BORDER_WIDTH } from '../screens/home/constants';
-import Svg, {
-  Circle as SvgCircle,
-  Defs,
-  LinearGradient as SvgLinearGradient,
-  Stop as SvgStop,
-} from 'react-native-svg';
 
 const SUPPORT_EMAIL = '12345kolt@gmal.com';
 const DELETE_BADGE_W = 40;
@@ -154,7 +149,7 @@ const SettingsAvatar = memo(({
         avatarVer={myAvatarVer || 0}
         uri={displayUri}
         size={size}
-        containerStyle={styles.avatarImg}
+        containerStyle={{ width: '100%', height: '100%', borderRadius: size / 2, overflow: 'hidden' }}
       />
     );
   }
@@ -171,7 +166,7 @@ const SettingsAvatar = memo(({
         avatarVer={myAvatarVer!}
         uri={myFullAvatarUri}
         size={size}
-        containerStyle={styles.avatarImg}
+        containerStyle={{ width: '100%', height: '100%', borderRadius: size / 2, overflow: 'hidden' }}
       />
     );
   }
@@ -180,7 +175,11 @@ const SettingsAvatar = memo(({
     <ExpoImage
       key={avatarKey}
       {...getAvatarImageProps(avatarSrc, avatarKey)}
-      style={styles.avatarImg}
+      style={{
+        width: '100%',
+        height: '100%',
+        borderRadius: size / 2,
+      }}
       onError={(e: any) => {
         try { console.warn('[SettingsTab] image error', e?.nativeEvent || e); } catch {}
       }}
@@ -190,7 +189,11 @@ const SettingsAvatar = memo(({
 
 SettingsAvatar.displayName = 'SettingsAvatar';
 
-/** Неподвижная градиентная обводка — кольцо поверх аватара (и мусорки). */
+/**
+ * Неподвижная градиентная обводка аватара.
+ * Не SVG-stroke: на части Android stroke съезжает относительно View и залазит на фото.
+ * Как у CTA: градиентный диск + внутренний круг с аватаром (ровная «литая» рамка).
+ */
 function StaticAvatarChrome({
   size,
   isDark,
@@ -206,90 +209,65 @@ function StaticAvatarChrome({
 }) {
   const borderWidth = PROFILE_AVATAR_BORDER_WIDTH;
   const outer = size + borderWidth * 2;
+  const outerRadius = outer / 2;
+  const innerRadius = size / 2;
   const colors = isDark ? AVATAR_CHROME_GRADIENT_DARK : AVATAR_CHROME_GRADIENT_LIGHT;
-  const cx = outer / 2;
-  const cy = outer / 2;
-  // Центр линии обводки — по середине толщины рамки
-  const ringR = size / 2 + borderWidth / 2;
 
   return (
     <View
+      collapsable={false}
       style={{
         width: outer,
         height: outer,
-        borderRadius: outer / 2,
-        overflow: 'visible',
+        borderRadius: outerRadius,
+        overflow: 'hidden',
       }}
     >
+      <LinearGradient
+        colors={[...colors]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={StyleSheet.absoluteFillObject}
+      />
+      {isDark ? (
+        <LinearGradient
+          colors={[
+            'rgba(255,248,240,0)',
+            'rgba(255,248,240,0)',
+            'rgba(255,248,240,0.55)',
+            '#FFFCF8',
+          ]}
+          locations={[0, 0.52, 0.78, 1]}
+          start={{ x: 1, y: 0 }}
+          end={{ x: 0, y: 1 }}
+          style={StyleSheet.absoluteFillObject}
+          pointerEvents="none"
+        />
+      ) : null}
+
       <View
+        collapsable={false}
         style={{
           position: 'absolute',
           top: borderWidth,
           left: borderWidth,
           width: size,
           height: size,
-          borderRadius: size / 2,
+          borderRadius: innerRadius,
           overflow: 'hidden',
           backgroundColor: innerBg,
           alignItems: 'center',
           justifyContent: 'center',
-          zIndex: 1,
         }}
       >
         {children}
       </View>
 
       {overlay ? (
-        <View pointerEvents="box-none" style={StyleSheet.absoluteFillObject}>
+        <View pointerEvents="box-none" style={[StyleSheet.absoluteFillObject, { zIndex: 2 }]}>
           {overlay}
         </View>
       ) : null}
-
-      {/* Рамка сверху — мусорка визуально под ней на аватаре */}
-      <Svg
-        width={outer}
-        height={outer}
-        style={{ position: 'absolute', top: 0, left: 0, zIndex: 3 }}
-        pointerEvents="none"
-      >
-        <Defs>
-          <SvgLinearGradient id="avatarChromeRing" x1="0%" y1="0%" x2="100%" y2="100%">
-            {colors.map((color, i) => (
-              <SvgStop
-                key={`${color}-${i}`}
-                offset={`${colors.length <= 1 ? 0 : (i / (colors.length - 1)) * 100}%`}
-                stopColor={color}
-              />
-            ))}
-          </SvgLinearGradient>
-          {isDark ? (
-            <SvgLinearGradient id="avatarChromePearlBl" x1="100%" y1="0%" x2="0%" y2="100%">
-              <SvgStop offset="0%" stopColor="#FFF8F0" stopOpacity="0" />
-              <SvgStop offset="52%" stopColor="#FFF8F0" stopOpacity="0" />
-              <SvgStop offset="78%" stopColor="#FFF8F0" stopOpacity="0.55" />
-              <SvgStop offset="100%" stopColor="#FFFCF8" stopOpacity="1" />
-            </SvgLinearGradient>
-          ) : null}
-        </Defs>
-        <SvgCircle
-          cx={cx}
-          cy={cy}
-          r={ringR}
-          stroke="url(#avatarChromeRing)"
-          strokeWidth={borderWidth}
-          fill="none"
-        />
-        {isDark ? (
-          <SvgCircle
-            cx={cx}
-            cy={cy}
-            r={ringR}
-            stroke="url(#avatarChromePearlBl)"
-            strokeWidth={borderWidth}
-            fill="none"
-          />
-        ) : null}
-      </Svg>
     </View>
   );
 }
@@ -402,6 +380,9 @@ export default function SettingsTab({
   }, [copiedEmail]);
 
   const pickAvatar = () => {
+    // Тап по аватару = вход в редактирование профиля + выбор фото,
+    // чтобы «Сохранить» было на виду и смена не «терялась».
+    if (!accountOpen) setAccountOpen(true);
     if (openAvatarSheet) openAvatarSheet();
   };
 
@@ -537,7 +518,7 @@ export default function SettingsTab({
               </View>
 
               <Text
-                style={[localStyles.nickDisplay, { color: LIVI.white }]}
+                style={[localStyles.nickDisplay, { color: LIVI.titan }]}
                 numberOfLines={1}
               >
                 {displayNick || t('enter_nick', lang)}
@@ -893,7 +874,7 @@ const localStyles = StyleSheet.create({
   },
   nickDisplay: {
     fontSize: 18,
-    fontWeight: '700',
+    fontWeight: '600',
     letterSpacing: 0.6,
     textAlign: 'center',
     maxWidth: '90%',

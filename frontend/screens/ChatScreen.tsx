@@ -2037,11 +2037,11 @@ export default function ChatScreen({ route, navigation }: Props) {
             fontWeight: '500',
           }}
         >
-          Начните общение с {peerNameParam}
+          {t('chatStartWith', lang).replace('{name}', peerNameParam)}
         </Text>
       </View>
     );
-  }, [showEmpty, androidEmptyBottomPad, isDark, peerNameParam]);
+  }, [showEmpty, androidEmptyBottomPad, isDark, peerNameParam, lang]);
 
   const renderMessageRow = React.useCallback(
     ({ item }: { item: ChatListRow }) => {
@@ -2318,7 +2318,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                       }}
                     />
                     <Text style={{ color: LIVI.white, fontSize: 12, fontWeight: '700' }}>
-                      Запись {formatDuration(Math.min(voiceRecordMs, VOICE_MAX_MS))}
+                      {t('chatRecordingTimed', lang).replace('{duration}', formatDuration(Math.min(voiceRecordMs, VOICE_MAX_MS)))}
                     </Text>
                     <Text style={{ color: LIVI.titan, fontSize: 12, fontWeight: '600', marginLeft: 6 }}>
                       / 1:00
@@ -2692,7 +2692,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                       }}
                     />
                     <Text style={{ color: LIVI.white, fontSize: 12, fontWeight: '700' }}>
-                      Запись {formatDuration(Math.min(voiceRecordMs, VOICE_MAX_MS))}
+                      {t('chatRecordingTimed', lang).replace('{duration}', formatDuration(Math.min(voiceRecordMs, VOICE_MAX_MS)))}
                     </Text>
                     <Text style={{ color: LIVI.titan, fontSize: 12, fontWeight: '600', marginLeft: 6 }}>
                       / 1:00
@@ -3058,7 +3058,7 @@ export default function ChatScreen({ route, navigation }: Props) {
               textAlign: 'center',
               marginBottom: 20,
             }}>
-              Очистить переписку
+              {t('chatClearMenuTitle', lang)}
             </Text>
             
             <TouchableOpacity
@@ -3079,7 +3079,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 fontSize: 16,
                 fontWeight: '600',
               }}>
-                Удалить только у меня
+                {t('chatClearForMeOption', lang)}
               </Text>
               <Text style={{
                 color: LIVI.titan,
@@ -3087,7 +3087,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 marginTop: 4,
                 textAlign: 'center',
               }}>
-                Удалить переписку только у вас
+                {t('chatClearForMeHint', lang)}
               </Text>
             </TouchableOpacity>
             
@@ -3109,7 +3109,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 fontSize: 16,
                 fontWeight: '600',
               }}>
-                Удалить у всех
+                {t('chatClearForAllOption', lang)}
               </Text>
               <Text style={{
                 color: LIVI.titan,
@@ -3117,7 +3117,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 marginTop: 4,
                 textAlign: 'center',
               }}>
-                Удалить переписку у вас и у друга
+                {t('chatClearForAllHint', lang)}
               </Text>
             </TouchableOpacity>
 
@@ -3139,7 +3139,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 fontSize: 16,
                 fontWeight: '600',
               }}>
-                Удалить только у себя
+                {t('chatClearForSelfOption', lang)}
               </Text>
               <Text style={{
                 color: LIVI.titan,
@@ -3147,7 +3147,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 marginTop: 4,
                 textAlign: 'center',
               }}>
-                У друга переписка останется
+                {t('chatClearForSelfHint', lang)}
               </Text>
             </TouchableOpacity>
 
@@ -3165,7 +3165,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 fontSize: 16,
                 fontWeight: '600',
               }}>
-                Отмена
+                {t('cancelAction', lang)}
               </Text>
             </TouchableOpacity>
           </View>
@@ -4130,7 +4130,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 })}
               >
                 <Text style={{ color: noticeKind === 'error' ? '#FF5A67' : LIVI.titan, fontSize: 15, fontWeight: '700' }}>
-                  Ок
+                  {t('ok', lang)}
                 </Text>
               </Pressable>
             </View>

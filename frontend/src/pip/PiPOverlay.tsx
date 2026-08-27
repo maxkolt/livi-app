@@ -39,6 +39,7 @@ import {
   type InCallAudioRoute,
 } from '../../components/VideoChat/hooks/audioRouteTypes';
 import { t, loadLang, defaultLang, type Lang } from '../../utils/i18n';
+import { useLang } from '../../store/lang';
 
 const PIP_BAR_H = 58;
 const PIP_BAR_RADIUS = PIP_BAR_H / 2;
@@ -89,7 +90,7 @@ class PiPErrorBoundary extends React.Component<
     if (this.state.hasError) {
       return (
         <View style={styles.errorFallback}>
-          <Text style={styles.errorFallbackText}>Не удалось показать панель звонка</Text>
+          <Text style={styles.errorFallbackText}>{t('pipPanelFailed', useLang.getState().lang)}</Text>
         </View>
       );
     }

@@ -1,6 +1,19 @@
 import './polyfills/ensureCoreJsPolyfills';
 import { safeRegisterLiveKitGlobals } from './livekit/safeRegisterGlobals';
 
+// Dev: глушим deprecation-шум до импорта App/expo-av (иначе warn успевает проскочить).
+if (__DEV__) {
+  try {
+    const origWarn = console.warn.bind(console);
+    console.warn = (...args: unknown[]) => {
+      const msg = String(args[0] ?? '');
+      if (msg.includes('[expo-av]: Expo AV has been deprecated')) return;
+      if (msg.includes('[expo-image-picker]') && msg.includes('MediaTypeOptions')) return;
+      origWarn(...args);
+    };
+  } catch {}
+}
+
 try {
   safeRegisterLiveKitGlobals();
 } catch (e) {

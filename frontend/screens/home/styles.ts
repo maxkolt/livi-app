@@ -179,7 +179,7 @@ export const styles = StyleSheet.create({
     borderColor: LIVI.border,
   },
   sheetTopBar: { height: 56, flexDirection: 'row', marginTop: Platform.OS === "android" ? 26 : 12, alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 12 },
-  sheetTitle: { color: LIVI.white, fontSize: 16, fontWeight: '700' },
+  sheetTitle: { color: LIVI.titan, fontSize: 16, fontWeight: '700' },
   sheetCornerIconBtn: {
     width: FRIEND_ACTION_BUTTON.width,
     height: FRIEND_ACTION_BUTTON.height,
@@ -211,16 +211,17 @@ export const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.06)', borderRadius: 114,
     borderWidth: StyleSheet.hairlineWidth, borderColor: LIVI.border, overflow: 'hidden', minHeight: 44,
   },
-  segItem: { flex: 1, justifyContent: 'center' },
+  segItem: { flex: 1, justifyContent: 'center', overflow: 'hidden' as const },
   segLeft: { borderTopLeftRadius: 114, borderBottomLeftRadius: 114 },
   segRight: { borderTopRightRadius: 114, borderBottomRightRadius: 114 },
-  segContent: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', height: 44 },
+  segContent: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', height: 44, zIndex: 2 },
   segLabel: {
-    color: LIVI.white,
+    color: '#E2E5EC',
     fontWeight: '400',
     fontSize: Platform.OS === 'android' ? 14 : 16,
   },
   segDivider: { width: StyleSheet.hairlineWidth, backgroundColor: LIVI.border, marginVertical: 8 },
+  /** Активный чип (вкладки меню / тема обоев) — лёгкая заливка. */
   segActiveBg: { backgroundColor: 'rgba(157, 161, 169, 0.11)' },
   segTopShadow: { position: 'absolute', top: 0, left: 0, right: 0, height: 0 },
 

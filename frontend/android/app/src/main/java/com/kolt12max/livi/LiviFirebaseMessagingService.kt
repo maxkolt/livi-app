@@ -461,14 +461,39 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             val today = cal.get(Calendar.DAY_OF_YEAR) == now.get(Calendar.DAY_OF_YEAR) && cal.get(Calendar.YEAR) == now.get(Calendar.YEAR)
             val yesterday = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, -1) }
             val wasYesterday = cal.get(Calendar.DAY_OF_YEAR) == yesterday.get(Calendar.DAY_OF_YEAR) && cal.get(Calendar.YEAR) == yesterday.get(Calendar.YEAR)
-            val timeStr = SimpleDateFormat("HH:mm", Locale.getDefault()).format(d)
+            val locale = Locale.getDefault()
+            val timeStr = SimpleDateFormat("HH:mm", locale).format(d)
             when {
                 today -> timeStr
-                wasYesterday -> "вчера $timeStr"
-                else -> SimpleDateFormat("dd.MM HH:mm", Locale.getDefault()).format(d)
+                wasYesterday -> "${yesterdayLabel(locale)} $timeStr"
+                else -> SimpleDateFormat("dd.MM HH:mm", locale).format(d)
             }
         } catch (_: Exception) {
             ""
+        }
+    }
+
+    private fun yesterdayLabel(locale: Locale): String {
+        val tag = locale.toLanguageTag().lowercase(Locale.US)
+        val lang = locale.language.lowercase(Locale.US)
+        return when {
+            tag.startsWith("zh-hant") || tag.startsWith("zh-tw") || tag.contains("hant") -> "昨天"
+            lang == "zh" -> "昨天"
+            lang == "ru" -> "вчера"
+            lang == "es" -> "ayer"
+            lang == "de" -> "gestern"
+            lang == "fr" -> "hier"
+            lang == "it" -> "ieri"
+            lang == "pt" -> "ontem"
+            lang == "tr" -> "dün"
+            lang == "ar" -> "أمس"
+            lang == "ja" -> "昨日"
+            lang == "ko" -> "어제"
+            lang == "hi" -> "कल"
+            lang == "vi" -> "hôm qua"
+            lang == "th" -> "เมื่อวาน"
+            lang == "id" -> "kemarin"
+            else -> "yesterday"
         }
     }
 

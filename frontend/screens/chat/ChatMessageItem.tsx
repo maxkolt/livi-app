@@ -262,7 +262,7 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
                   }}>
                     <ActivityIndicator size="small" color="#4CAF50" style={{ marginRight: 6 }} />
                     <Text style={{ color: 'white', fontSize: 10, fontWeight: '600' }}>
-                      Отправляется...
+                      {t('messageSending', lang)}
                     </Text>
                   </View>
                 )}
@@ -279,7 +279,7 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
                   }}>
                     <Ionicons name="alert-circle" size={12} color="white" style={{ marginRight: 4 }} />
                     <Text style={{ color: 'white', fontSize: 10, fontWeight: '600' }}>
-                      Ошибка отправки
+                      {t('messageSendError', lang)}
                     </Text>
                   </View>
                 )}
@@ -340,7 +340,7 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
             >
               <Ionicons name="image-outline" size={40} color="rgba(255,255,255,0.5)" />
               <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 11, marginTop: 8, textAlign: 'center', paddingHorizontal: 8 }}>
-                Нажмите для просмотра
+                {t('tapToView', lang)}
               </Text>
             </TouchableOpacity>
           );
@@ -493,7 +493,7 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
                   fontSize: 10,
                   fontWeight: '600',
                 }}>
-                  Отправляется...
+                  {t('messageSending', lang)}
                 </Text>
               </View>
             )}
@@ -517,7 +517,7 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
                   fontSize: 10,
                   fontWeight: '600',
                 }}>
-                  Ошибка отправки
+                  {t('messageSendError', lang)}
                 </Text>
               </View>
             )}

@@ -24,6 +24,7 @@ export type HomeCenterProfileProps = {
   avatarVerChecked: boolean;
   menuChromeBg: string;
   onOpenAvatarModal: (uri: string) => void;
+  avatarAnchorRef?: React.Ref<View>;
 };
 
 function HomeCenterProfileInner({
@@ -41,6 +42,7 @@ function HomeCenterProfileInner({
   avatarVerChecked,
   menuChromeBg,
   onOpenAvatarModal,
+  avatarAnchorRef,
 }: HomeCenterProfileProps) {
   const letter = displayAvatarLetter(savedNick);
   const wrapperStyle: StyleProp<ViewStyle> = {
@@ -78,9 +80,12 @@ function HomeCenterProfileInner({
           width={centerAvatarSize}
           height={centerAvatarSize}
           borderRadius={centerAvatarRadius}
+          glowIntensity={isDark ? 1 : 2}
           outerStyle={{ marginBottom: -CHROME_PERIMETER_GLOW_LAYOUT_INSET }}
         >
           <View
+            ref={avatarAnchorRef}
+            collapsable={false}
             style={[
               styles.centerAvatarWrap,
               {

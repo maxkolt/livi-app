@@ -3523,7 +3523,7 @@ const handleClearNick = useCallback(async () => {
         let localUri: string | undefined;
 
         if (pendingPicker === 'gallery') {
-          const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, allowsEditing: true, aspect: [1, 1], quality: 0.9 });
+          const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], allowsEditing: true, aspect: [1, 1], quality: 0.9 });
           if (!res.canceled) {
             const a = res.assets?.[0];
             localUri = await normalizeLocalImageUri(a?.uri ?? undefined, (a as any)?.assetId ?? null);
@@ -3533,7 +3533,7 @@ const handleClearNick = useCallback(async () => {
           if (!cam.granted) cam = await ImagePicker.requestCameraPermissionsAsync();
           if (!cam.granted) { showNotice(t('noCamera', lang), 'error'); return; }
 
-          const res = await ImagePicker.launchCameraAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, allowsEditing: true, aspect: [1, 1], quality: 0.9 });
+          const res = await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], allowsEditing: true, aspect: [1, 1], quality: 0.9 });
           if (!res.canceled) {
             const a = res.assets?.[0];
             localUri = await normalizeLocalImageUri(a?.uri ?? undefined, (a as any)?.assetId ?? null);
@@ -4028,6 +4028,7 @@ const handleClearNick = useCallback(async () => {
         showCallSearchLockBadge={showCallSearchLockBadge}
         onStartSearch={handleStartSearch}
         onBlockedStartSearch={handleBlockedStartSearchPress}
+        splashGone={!showSplashOverlay}
       />
 
       {/* Модалка аватара: полный экран, блюр/затемнение, круг 3×, pinch-to-zoom, тап вне — закрыть. Без вложенности touch/gesture (Nesting touch handlers with native animated driver). */}

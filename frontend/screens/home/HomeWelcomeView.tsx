@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Animated,
   Dimensions,
@@ -10,6 +10,7 @@ import {
   type LayoutChangeEvent,
 } from 'react-native';
 import { BlurView } from 'expo-blur';
+import * as Haptics from 'expo-haptics';
 import { Icon } from 'react-native-paper';
 import { logger } from '../../utils/logger';
 import {
@@ -21,6 +22,7 @@ import {
   SEARCH_CTA_TABLET_MIN_WIDTH,
 } from './constants';
 import { AnimatedBorderButton, AnimatedGradientBorder, BrandTitleWithOutline } from './chrome';
+import { HomeBrandConfetti, type BrandConfettiOrigin } from './HomeBrandConfetti';
 import { HomeCenterProfile } from './HomeCenterProfile';
 import type { HomeStyles } from './styles';
 
@@ -38,13 +40,15 @@ export type HomeWelcomeViewProps = {
   missedByUser: Record<string, number>;
   centerProfile: Omit<
     React.ComponentProps<typeof HomeCenterProfile>,
-    'styles' | 'isDark' | 'layoutWidth' | 'menuChromeBg' | 'compact' | 'dense'
+    'styles' | 'isDark' | 'layoutWidth' | 'menuChromeBg' | 'compact' | 'dense' | 'avatarAnchorRef'
   >;
   NoticeView: React.ReactNode;
   hasActiveCallForSearch: boolean;
   showCallSearchLockBadge: boolean;
   onStartSearch: () => void;
   onBlockedStartSearch: () => void;
+  /** Сплеш уже скрыт — один раз за холодный старт запускаем перелив LiVi. */
+  splashGone?: boolean;
 };
 
 function resolveIsLandscape(width: number, height: number) {
@@ -56,6 +60,9 @@ function resolveIsPhone(width: number, height: number) {
   const shortest = Math.min(width, height);
   return shortest > 0 && shortest < 600;
 }
+
+/** Сбрасывается при убийстве процесса — при возврате из фона/PiP повторно не играет. */
+let brandEntryShinePlayedThisSession = false;
 
 function HomeWelcomeViewInner({
   styles,
@@ -75,13 +82,20 @@ function HomeWelcomeViewInner({
   showCallSearchLockBadge,
   onStartSearch,
   onBlockedStartSearch,
+  splashGone = true,
 }: HomeWelcomeViewProps) {
   const menuIdleBlur = isDark ? 15 : 20;
   const menuPressedBlur = isDark ? 25 : 40;
-  const menuIdleTitan = isDark ? 0.25 : 0.14;
+  // Как у «Начать поиск»: idle titan 0.25 в обеих темах.
+  const menuIdleTitan = 0.25;
   const menuPressedTitan = isDark ? 0.4 : 0.5;
   const [menuBlurIntensity, setMenuBlurIntensity] = useState(menuIdleBlur);
   const menuTitanOpacity = useRef(new Animated.Value(menuIdleTitan)).current;
+  const welcomeRootRef = useRef<View>(null);
+  const avatarAnchorRef = useRef<View>(null);
+  const burstActiveRef = useRef(false);
+  const [burst, setBurst] = useState<{ id: number; origin: BrandConfettiOrigin } | null>(null);
+  const [shineNonce, setShineNonce] = useState(0);
   const welcomeBlockRef = useRef<View>(null);
   const subtitleAnchorRef = useRef<View>(null);
   const searchBtnAnchorRef = useRef<View>(null);
@@ -90,6 +104,15 @@ function HomeWelcomeViewInner({
     w: layoutWidth,
     h: layoutHeight,
   }));
+
+  useEffect(() => {
+    if (!splashGone || brandEntryShinePlayedThisSession) return;
+    brandEntryShinePlayedThisSession = true;
+    const timer = setTimeout(() => {
+      setShineNonce((nonce) => nonce + 1);
+    }, 320);
+    return () => clearTimeout(timer);
+  }, [splashGone]);
 
   useEffect(() => {
     setMeasured((prev) =>
@@ -127,6 +150,89 @@ function HomeWelcomeViewInner({
   const phoneLandscape = isPhone && isLandscape;
   // Короткий portrait на телефоне (как раньше). Планшеты не трогаем.
   const compactLayout = isPhone && !isLandscape && viewHeight < 520;
+
+  const cancelBurst = useCallback(() => {
+    if (!burstActiveRef.current) return;
+    burstActiveRef.current = false;
+    setBurst(null);
+  }, []);
+
+  const finishBurst = useCallback((burstId: number) => {
+    if (!burstActiveRef.current) return;
+    setBurst((current) => {
+      if (!current || current.id !== burstId) return current;
+      return null;
+    });
+    burstActiveRef.current = false;
+    setShineNonce((nonce) => nonce + 1);
+  }, []);
+
+  const fireBurst = useCallback((origin: BrandConfettiOrigin) => {
+    burstActiveRef.current = true;
+    setBurst({ id: Date.now(), origin });
+    try {
+      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    } catch {
+      /* haptic optional */
+    }
+  }, []);
+
+  const onBrandPress = useCallback(() => {
+    if (burstActiveRef.current) return;
+    burstActiveRef.current = true;
+    const fallbackSize = phoneLandscape ? 56 : compactLayout ? 76 : Platform.OS === 'ios' ? 136 : 120;
+    const fallback = () => {
+      if (!burstActiveRef.current) return;
+      fireBurst({
+        x: viewWidth / 2,
+        y: Math.max(110, viewHeight * 0.26),
+        size: fallbackSize,
+      });
+    };
+    const root = welcomeRootRef.current;
+    const avatar = avatarAnchorRef.current;
+    if (!root || !avatar) {
+      fallback();
+      return;
+    }
+    root.measureInWindow((rx, ry) => {
+      avatar.measureInWindow((ax, ay, aw, ah) => {
+        if (!burstActiveRef.current) return;
+        if (!(aw > 8 && ah > 8) || !Number.isFinite(ax) || !Number.isFinite(ay)) {
+          fallback();
+          return;
+        }
+        fireBurst({
+          x: ax - rx + aw / 2,
+          y: ay - ry + ah / 2,
+          size: Math.max(aw, ah),
+        });
+      });
+    });
+  }, [compactLayout, fireBurst, phoneLandscape, viewHeight, viewWidth]);
+
+  const handleOpenMenu = useCallback(() => {
+    cancelBurst();
+    onOpenMenu();
+  }, [cancelBurst, onOpenMenu]);
+
+  const handleStartSearchPress = useCallback(() => {
+    cancelBurst();
+    onStartSearch();
+  }, [cancelBurst, onStartSearch]);
+
+  const handleBlockedSearchPress = useCallback(() => {
+    cancelBurst();
+    onBlockedStartSearch();
+  }, [cancelBurst, onBlockedStartSearch]);
+
+  const handleOpenAvatarModal = useCallback(
+    (uri: string) => {
+      cancelBurst();
+      centerProfile.onOpenAvatarModal(uri);
+    },
+    [cancelBurst, centerProfile],
+  );
 
   const menuBtnMarginRight = isTabletLayout
     ? -CHROME_PERIMETER_GLOW_LAYOUT_INSET + 10
@@ -225,13 +331,18 @@ function HomeWelcomeViewInner({
           },
         ]}
       >
-        Сначала завершите текущий звонок
+        {L('finishCurrentCallFirst')}
       </Text>
     </View>
   ) : null;
 
   return (
-    <View style={{ flex: 1, minHeight: 0 }} onLayout={onRootLayout} collapsable={false}>
+    <View
+      ref={welcomeRootRef}
+      style={{ flex: 1, minHeight: 0 }}
+      onLayout={onRootLayout}
+      collapsable={false}
+    >
       <View
         style={[
           styles.topBar,
@@ -239,7 +350,12 @@ function HomeWelcomeViewInner({
           phoneLandscape ? { height: 48 } : compactLayout ? { height: 64 } : null,
         ]}
       >
-        <BrandTitleWithOutline isDark={isDark} />
+        <BrandTitleWithOutline
+          isDark={isDark}
+          onPress={onBrandPress}
+          pressLocked={!!burst}
+          shineNonce={shineNonce}
+        />
 
         <View
           style={{
@@ -274,6 +390,7 @@ function HomeWelcomeViewInner({
                 },
               ]}
               onPressIn={() => {
+                cancelBurst();
                 if (Platform.OS === 'ios') {
                   setMenuBlurIntensity(menuPressedBlur);
                 }
@@ -293,7 +410,7 @@ function HomeWelcomeViewInner({
                   useNativeDriver: true,
                 }).start();
               }}
-              onPress={onOpenMenu}
+              onPress={handleOpenMenu}
             >
               <BlurView
                 pointerEvents="none"
@@ -343,6 +460,8 @@ function HomeWelcomeViewInner({
         dense={phoneLandscape}
         menuChromeBg={menuChromeBg}
         {...centerProfile}
+        avatarAnchorRef={avatarAnchorRef}
+        onOpenAvatarModal={handleOpenAvatarModal}
       />
 
       <View
@@ -444,7 +563,7 @@ function HomeWelcomeViewInner({
         >
           <AnimatedBorderButton
             isDark={isDark}
-            onPress={onStartSearch}
+            onPress={handleStartSearchPress}
             label={L('startSearchBtn')}
             style={{
               // Планшет: запас снизу, чтобы glow/SafeArea не срезали нижнюю линию рамки.
@@ -459,7 +578,7 @@ function HomeWelcomeViewInner({
             }}
             backgroundColor={themeBackground}
             disabled={hasActiveCallForSearch}
-            onDisabledPress={onBlockedStartSearch}
+            onDisabledPress={handleBlockedSearchPress}
             compact={phoneLandscape}
           />
         </View>
@@ -483,6 +602,15 @@ function HomeWelcomeViewInner({
           </View>
         ) : null}
       </View>
+      {burst ? (
+        <HomeBrandConfetti
+          key={burst.id}
+          burstId={burst.id}
+          origin={burst.origin}
+          isDark={isDark}
+          onComplete={finishBurst}
+        />
+      ) : null}
     </View>
   );
 }

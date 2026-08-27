@@ -181,6 +181,7 @@ if (__DEV__) {
   try {
     LogBox.ignoreLogs([
       'Excessive number of pending callbacks',
+      '[expo-av]: Expo AV has been deprecated',
     ]);
   } catch {}
 }
@@ -3947,15 +3948,15 @@ function AppContent() {
                       <MaterialIcons name="lock-open" size={20} color={isDark ? accent.bright : theme.colors.primary} />
                     </View>
                     <View style={overlayPermissionModalStyles.overlayPermissionTitleWrap}>
-                      <Text style={overlayPermissionModalStyles.overlayPermissionTitle}>Вызовы на заблокированном экране</Text>
+                      <Text style={overlayPermissionModalStyles.overlayPermissionTitle}>{t('overlayPermissionTitle', lang)}</Text>
                     </View>
                   </View>
                   <Text style={overlayPermissionModalStyles.overlayPermissionText}>
-                    Включите «Поверх других приложений» (или «Всегда сверху»), чтобы входящие видеозвонки приходили на заблокированном экране и когда вы в других приложениях.
+                    {t('overlayPermissionMessage', lang)}
                   </Text>
                   <View style={overlayPermissionModalStyles.overlayPermissionButtons}>
                     <TouchableOpacity style={overlayPermissionModalStyles.overlayPermissionButtonSecondary} onPress={() => setOverlayPermissionModalVisible(false)}>
-                      <Text style={overlayPermissionModalStyles.overlayPermissionButtonSecondaryText}>Не сейчас</Text>
+                      <Text style={overlayPermissionModalStyles.overlayPermissionButtonSecondaryText}>{t('notNow', lang)}</Text>
                     </TouchableOpacity>
                     <TouchableOpacity
                       style={[
@@ -3970,7 +3971,7 @@ function AppContent() {
                       }}
                     >
                       <View style={isDark ? overlayPermissionModalStyles.overlayPermissionButtonPrimaryDark : overlayPermissionModalStyles.overlayPermissionButtonPrimaryLightInner}>
-                        <Text style={overlayPermissionModalStyles.overlayPermissionButtonPrimaryText}>Открыть настройки</Text>
+                        <Text style={overlayPermissionModalStyles.overlayPermissionButtonPrimaryText}>{t('openSettings', lang)}</Text>
                       </View>
                     </TouchableOpacity>
                   </View>

@@ -360,6 +360,8 @@ type BrandLetterWithOutlineAndGlowProps = {
   isDark: boolean;
   strokeGradId: string;
   fillGradId: string;
+  shineNonce?: number;
+  pressLocked?: boolean;
 };
 
 const BrandLetterWithOutlineAndGlow: React.FC<BrandLetterWithOutlineAndGlowProps> = ({
@@ -368,11 +370,17 @@ const BrandLetterWithOutlineAndGlow: React.FC<BrandLetterWithOutlineAndGlowProps
   isDark,
   strokeGradId,
   fillGradId,
+  shineNonce = 0,
+  pressLocked = false,
 }) => {
   const [textSize, setTextSize] = useState({
     w: letter === 'i' ? 14 : 26,
     h: 40,
   });
+  const [shineShift, setShineShift] = useState(0);
+  const [shineOp, setShineOp] = useState(0);
+  const shineX = useRef(new Animated.Value(0)).current;
+  const shineOpacity = useRef(new Animated.Value(0)).current;
   const stroke = BRAND_OUTLINE_STROKE;
   const pad = stroke;
   const extrudeX = BRAND_3D_LAYERS * BRAND_3D_STEP_X;
@@ -383,6 +391,8 @@ const BrandLetterWithOutlineAndGlow: React.FC<BrandLetterWithOutlineAndGlowProps
   const fontWeight = '600';
   const baselineY =
     pad + textSize.h - (Platform.OS === 'ios' ? 3 : 4);
+  const shineGradId = `liviBrandShine${BRAND_LETTER_GRAD_SUFFIX[letterIndex]}`;
+  const shineSweepW = Math.max(18, textSize.w * 0.85);
 
   const brandSvgTextLayout = {
     fontSize,
@@ -399,6 +409,64 @@ const BrandLetterWithOutlineAndGlow: React.FC<BrandLetterWithOutlineAndGlowProps
   );
   const glowRadius = Math.min(14, svgH * 0.26, svgW * 0.42);
   const letterGlowOverlap = BRAND_LETTER_GLOW_INSET * BRAND_LETTER_GLOW_OVERLAP;
+
+  useEffect(() => {
+    const xId = shineX.addListener(({ value }) => setShineShift(value));
+    const oId = shineOpacity.addListener(({ value }) => setShineOp(value));
+    return () => {
+      shineX.removeListener(xId);
+      shineOpacity.removeListener(oId);
+    };
+  }, [shineOpacity, shineX]);
+
+  useEffect(() => {
+    if (pressLocked) {
+      shineOpacity.setValue(0);
+      setShineOp(0);
+    }
+  }, [pressLocked, shineOpacity]);
+
+  useEffect(() => {
+    if (!shineNonce) return;
+    const startX = pad - shineSweepW;
+    const endX = pad + textSize.w + 4;
+    shineX.setValue(startX);
+    shineOpacity.setValue(0);
+    setShineShift(startX);
+    setShineOp(0);
+    Animated.sequence([
+      Animated.delay(letterIndex * 190),
+      Animated.timing(shineOpacity, {
+        toValue: 1,
+        duration: 110,
+        useNativeDriver: false,
+      }),
+      Animated.parallel([
+        Animated.timing(shineX, {
+          toValue: endX,
+          duration: 980,
+          easing: Easing.inOut(Easing.cubic),
+          useNativeDriver: false,
+        }),
+        Animated.sequence([
+          Animated.delay(680),
+          Animated.timing(shineOpacity, {
+            toValue: 0,
+            duration: 320,
+            useNativeDriver: false,
+          }),
+        ]),
+      ]),
+    ]).start();
+  }, [
+    letterIndex,
+    pad,
+    shineNonce,
+    shineOpacity,
+    shineSweepW,
+    shineX,
+    textSize.w,
+  ]);
 
   return (
     <ChromePerimeterGlow
@@ -428,6 +496,37 @@ const BrandLetterWithOutlineAndGlow: React.FC<BrandLetterWithOutlineAndGlowProps
       <Svg width={svgW} height={svgH} viewBox={`0 0 ${svgW} ${svgH}`}>
         <BrandStrokeGradientDefs gradId={strokeGradId} isDark={isDark} />
         <Brand3dFaceGradientDefs gradId={fillGradId} isDark={isDark} />
+        {shineOp > 0.01 ? (
+          <Defs>
+            {/* Градиент двигается по user-space; заливка только у глифа буквы. */}
+            <SvgLinearGradient
+              id={shineGradId}
+              gradientUnits="userSpaceOnUse"
+              x1={shineShift}
+              y1={0}
+              x2={shineShift + shineSweepW}
+              y2={0}
+            >
+              <SvgStop offset="0%" stopColor="#FFFFFF" stopOpacity={0} />
+              <SvgStop
+                offset="40%"
+                stopColor={isDark ? '#FFF8F0' : '#FFFFFF'}
+                stopOpacity={0.12}
+              />
+              <SvgStop
+                offset="50%"
+                stopColor={isDark ? '#FFF8F0' : '#FFFFFF'}
+                stopOpacity={0.9}
+              />
+              <SvgStop
+                offset="60%"
+                stopColor={isDark ? '#00b5ff' : '#8f7ad8'}
+                stopOpacity={0.28}
+              />
+              <SvgStop offset="100%" stopColor="#FFFFFF" stopOpacity={0} />
+            </SvgLinearGradient>
+          </Defs>
+        ) : null}
         {extrusionLayers.map((layer) => (
           <SvgText
             key={`extrude-${letter}-${layer}`}
@@ -457,6 +556,16 @@ const BrandLetterWithOutlineAndGlow: React.FC<BrandLetterWithOutlineAndGlowProps
         >
           {letter}
         </SvgText>
+        {shineOp > 0.01 ? (
+          <SvgText
+            {...brandSvgTextLayout}
+            fill={`url(#${shineGradId})`}
+            stroke="none"
+            opacity={shineOp}
+          >
+            {letter}
+          </SvgText>
+        ) : null}
       </Svg>
     </ChromePerimeterGlow>
   );
@@ -464,27 +573,56 @@ const BrandLetterWithOutlineAndGlow: React.FC<BrandLetterWithOutlineAndGlowProps
 
 type BrandTitleWithOutlineProps = {
   isDark: boolean;
+  onPress?: () => void;
+  pressLocked?: boolean;
+  shineNonce?: number;
 };
 
-export const BrandTitleWithOutline: React.FC<BrandTitleWithOutlineProps> = ({ isDark }) => (
-  <View
-    style={styles.brandOutlineWrap}
-    accessible
-    accessibilityRole="header"
-    accessibilityLabel="LiVi"
-  >
-    {BRAND_LETTERS.map((letter, index) => (
-      <BrandLetterWithOutlineAndGlow
-        key={`${letter}-${index}`}
-        letter={letter}
-        letterIndex={index}
-        isDark={isDark}
-        strokeGradId={`liviBrandGrad${BRAND_LETTER_GRAD_SUFFIX[index]}`}
-        fillGradId={`liviBrandFill3d${BRAND_LETTER_GRAD_SUFFIX[index]}`}
-      />
-    ))}
-  </View>
-);
+export const BrandTitleWithOutline: React.FC<BrandTitleWithOutlineProps> = ({
+  isDark,
+  onPress,
+  pressLocked = false,
+  shineNonce = 0,
+}) => {
+  const letters = (
+    <View
+      style={styles.brandOutlineWrap}
+      accessible={!onPress}
+      accessibilityRole={onPress ? undefined : 'header'}
+      accessibilityLabel={onPress ? undefined : 'LiVi'}
+    >
+      {BRAND_LETTERS.map((letter, index) => (
+        <BrandLetterWithOutlineAndGlow
+          key={`${letter}-${index}`}
+          letter={letter}
+          letterIndex={index}
+          isDark={isDark}
+          strokeGradId={`liviBrandGrad${BRAND_LETTER_GRAD_SUFFIX[index]}`}
+          fillGradId={`liviBrandFill3d${BRAND_LETTER_GRAD_SUFFIX[index]}`}
+          shineNonce={shineNonce}
+          pressLocked={pressLocked}
+        />
+      ))}
+    </View>
+  );
+
+  if (!onPress) return letters;
+
+  return (
+    <Pressable
+      onPress={() => {
+        if (pressLocked) return;
+        onPress();
+      }}
+      hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+      accessibilityRole="header"
+      accessibilityLabel="LiVi"
+      style={{ flexShrink: 1 }}
+    >
+      {letters}
+    </Pressable>
+  );
+};
 
 /* ================= Animated Border Button Component ================= */
 type AnimatedBorderButtonProps = {

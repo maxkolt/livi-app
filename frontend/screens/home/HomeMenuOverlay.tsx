@@ -10,13 +10,18 @@ import {
   View,
 } from 'react-native';
 import { BlurView } from 'expo-blur';
-import { Divider, List } from 'react-native-paper';
+import { Divider } from 'react-native-paper';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Image as ExpoImage } from 'expo-image';
 import ChatStyleBackButton from '../../components/ChatStyleBackButton';
 import { FRIEND_ACTION_BUTTON } from '../../constants/uiTokens';
 import { ANDROID_SEG_RIPPLE, LIVI } from './constants';
 import type { HomeStyles } from './styles';
+
+/** Подписи вкладок — чуть светлее titan; иконки — как стрелка назад / «Меню». */
+const SEG_TAB_LABEL_COLOR = '#E2E5EC';
+const SEG_TAB_ICON_COLOR = LIVI.titan;
 
 export type HomeMenuTab = 'friends' | 'settings' | 'more';
 
@@ -49,8 +54,13 @@ function HomeMenuOverlayInner({
   children,
 }: HomeMenuOverlayProps) {
   const headerBack = onHeaderBackPress ?? closeMenu;
+
+  const renderSegChrome = (value: HomeMenuTab) =>
+    tab === value ? (
+      <View pointerEvents="none" style={[StyleSheet.absoluteFill, styles.segActiveBg]} />
+    ) : null;
+
   const renderMoreSegBtn = () => {
-    const active = tab === 'more';
     const label = L('tabMore');
     const SegWrapper = Platform.OS === 'android' ? Pressable : TouchableOpacity;
     const segTouchProps =
@@ -64,8 +74,7 @@ function HomeMenuOverlayInner({
         style={[styles.segItem, styles.segRight, { position: 'relative' }]}
         {...segTouchProps}
       >
-        {active && <View style={[StyleSheet.absoluteFill, styles.segActiveBg]} />}
-        {active && <View style={styles.segTopShadow} />}
+        {renderSegChrome('more')}
         {updateAvailable && (
           <View
             style={{
@@ -76,7 +85,7 @@ function HomeMenuOverlayInner({
               justifyContent: 'center',
               width: 22,
               alignItems: 'center',
-              zIndex: 1,
+              zIndex: 4,
               transform: [{ scaleX: -1 }],
             }}
             pointerEvents="none"
@@ -85,24 +94,29 @@ function HomeMenuOverlayInner({
               source={require('../../assets/icon-update.png')}
               style={{ width: 14, height: 14 }}
               contentFit="contain"
+              tintColor="rgba(255,90,103,0.9)"
             />
           </View>
         )}
         <View style={[styles.segContent, { marginLeft: -18 }]}>
-          <List.Icon icon="dots-horizontal" color={LIVI.white} style={{ margin: 0, marginRight: 8 }} />
-          <Text style={styles.segLabel}>{label}</Text>
+          <MaterialCommunityIcons
+            name="dots-horizontal"
+            size={22}
+            color={SEG_TAB_ICON_COLOR}
+            style={{ marginRight: 8 }}
+          />
+          <Text style={[styles.segLabel, { color: SEG_TAB_LABEL_COLOR }]}>{label}</Text>
         </View>
       </SegWrapper>
     );
   };
 
   const renderSegBtn = (
-    value: HomeMenuTab,
+    value: Exclude<HomeMenuTab, 'more'>,
     label: string,
-    icon: string,
-    rounded: 'left' | 'mid' | 'right',
+    icon: React.ComponentProps<typeof MaterialCommunityIcons>['name'],
+    rounded: 'left' | 'mid',
   ) => {
-    const active = tab === value;
     const SegWrapper = Platform.OS === 'android' ? Pressable : TouchableOpacity;
     const segTouchProps =
       Platform.OS === 'android'
@@ -115,15 +129,19 @@ function HomeMenuOverlayInner({
         style={[
           styles.segItem,
           rounded === 'left' && styles.segLeft,
-          rounded === 'right' && styles.segRight,
+          { position: 'relative' },
         ]}
         {...segTouchProps}
       >
-        {active && <View style={[StyleSheet.absoluteFill, styles.segActiveBg]} />}
-        {active && <View style={styles.segTopShadow} />}
+        {renderSegChrome(value)}
         <View style={styles.segContent}>
-          <List.Icon icon={icon} color={LIVI.white} style={{ margin: 0, marginRight: 8 }} />
-          <Text style={styles.segLabel}>{label}</Text>
+          <MaterialCommunityIcons
+            name={icon}
+            size={22}
+            color={SEG_TAB_ICON_COLOR}
+            style={{ marginRight: 8 }}
+          />
+          <Text style={[styles.segLabel, { color: SEG_TAB_LABEL_COLOR }]}>{label}</Text>
         </View>
       </SegWrapper>
     );

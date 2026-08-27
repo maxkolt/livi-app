@@ -183,7 +183,7 @@ export function FriendRowIconActionButton({
                 ? ANDROID_VIDEO_CALL_DISABLED_ICON
                 : pressed && !movedRef.current
                   ? FRIEND_ACTION_ICON_PRESSED
-                  : LIVI.white
+                  : LIVI.titan
             }
           />
         </View>

@@ -375,6 +375,7 @@ function HomeMoreTabInner({
                 source={require('../../assets/icon-update.png')}
                 style={{ width: 16, height: 16 }}
                 contentFit="contain"
+                tintColor="rgba(255,90,103,0.9)"
               />
             </Animated.View>
             <Text style={{ color: LIVI.text2, fontSize: 13, fontWeight: '300' }}>{L('updateBtn')}</Text>
