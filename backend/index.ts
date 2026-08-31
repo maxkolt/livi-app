@@ -711,6 +711,8 @@ mongoose
     // Проверяем количество пользователей при старте
     try {
       const User = (await import('./models/User')).default;
+      const { ensureFriendshipMessageItemIndexes } = await import('./models/FriendshipMessageItem');
+      await ensureFriendshipMessageItemIndexes();
       const userCount = await User.countDocuments();
       logger.info(`[MongoDB] Current users count in database "${dbName}": ${userCount}`);
 

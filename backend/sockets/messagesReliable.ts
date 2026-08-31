@@ -211,7 +211,10 @@ function legacyMessageToItem(friendshipId: mongoose.Types.ObjectId, message: any
     stickerLabel: message.stickerLabel,
     timestamp: asValidDate(message.timestamp),
     read: !!message.read,
-    reactions: Array.isArray(message.reactions) ? message.reactions : undefined,
+    reactions:
+      Array.isArray(message.reactions) && message.reactions.length > 0
+        ? message.reactions
+        : undefined,
     replyTo: message.replyTo && message.replyTo.id ? message.replyTo : undefined,
   };
 }
@@ -354,13 +357,22 @@ export async function fetchFriendshipMessagesPage(
   limit: number,
   before?: string
 ): Promise<{ messages: any[]; hasMore: boolean }> {
+  let backfillFailed = false;
   try {
     await backfillFriendshipMessageItems(friendshipId);
   } catch (error) {
+    backfillFailed = true;
     console.warn('[messages] legacy backfill failed; serving read fallback:', error);
   }
 
-  const legacyItems = await readLegacyFriendshipMessageItems(friendshipId);
+  // After a successful backfill, history lives in friendshipmessageitems.
+  // Skip loading huge legacy arrays on every page unless we still need them.
+  const hasItems = await FriendshipMessageItem.exists({ friendshipId });
+  const needLegacyMerge = backfillFailed || !hasItems;
+  const legacyItems = needLegacyMerge
+    ? await readLegacyFriendshipMessageItems(friendshipId)
+    : [];
+
   let beforeTimestamp: Date | null = null;
   const beforeId = String(before || '').trim();
   if (beforeId) {
@@ -370,7 +382,7 @@ export async function fetchFriendshipMessagesPage(
     ).lean();
     if (beforeDoc && (beforeDoc as any).timestamp) {
       beforeTimestamp = asValidDate((beforeDoc as any).timestamp);
-    } else {
+    } else if (needLegacyMerge) {
       const legacyBefore = legacyItems.find((item) => String(item.id) === beforeId);
       if (legacyBefore) beforeTimestamp = asValidDate(legacyBefore.timestamp);
     }
@@ -382,6 +394,15 @@ export async function fetchFriendshipMessagesPage(
     .sort({ timestamp: -1 })
     .limit(limit + 1)
     .lean();
+
+  if (!needLegacyMerge) {
+    const hasMore = itemDocs.length > limit;
+    const slice = hasMore ? itemDocs.slice(0, limit) : itemDocs;
+    return {
+      messages: (slice as any[]).reverse().map(formatMessageForClient),
+      hasMore,
+    };
+  }
 
   const byId = new Map<string, any>();
   const isBeforeCursor = (msg: any) => !beforeTimestamp || asValidDate(msg.timestamp).getTime() < beforeTimestamp.getTime();
@@ -749,7 +770,7 @@ export async function markMessagesReadForUser(
 
   while (true) {
     const unreadItems = await FriendshipMessageItem.find(
-      { friendshipId: fid, from: fromOid, to: meOid, read: { $ne: true } },
+      { friendshipId: fid, from: fromOid, to: meOid, read: false },
       { _id: 1, id: 1 }
     )
       .sort({ timestamp: 1, _id: 1 })
@@ -796,7 +817,7 @@ export async function markSingleMessageReadForUser(me: string, from: string, mes
         id: messageId,
         from: fromOid,
         to: meOid,
-        read: { $ne: true },
+        read: false,
       },
       { $set: { read: true } }
     ).exec(),

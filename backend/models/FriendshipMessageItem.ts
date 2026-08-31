@@ -59,7 +59,8 @@ const FriendshipMessageItemSchema = new Schema<IFriendshipMessageItem>(
     stickerLabel: String,
     timestamp: { type: Date, default: Date.now },
     read: { type: Boolean, default: false },
-    reactions: [ReactionSchema],
+    // Omit empty array on insert — only store when someone reacts.
+    reactions: { type: [ReactionSchema], default: undefined },
     replyTo: {
       type: {
         id: { type: String, required: true },
@@ -69,15 +70,46 @@ const FriendshipMessageItemSchema = new Schema<IFriendshipMessageItem>(
       default: undefined
     },
   },
-  { timestamps: false }
+  { timestamps: false, versionKey: false }
 );
 
 FriendshipMessageItemSchema.index({ friendshipId: 1, timestamp: -1 });
 FriendshipMessageItemSchema.index({ friendshipId: 1, id: 1 }, { unique: true });
-FriendshipMessageItemSchema.index({ friendshipId: 1, from: 1, to: 1, read: 1, timestamp: 1, _id: 1 });
+// Unread scan only — keep small via partial filter (read:false docs only).
+FriendshipMessageItemSchema.index(
+  { friendshipId: 1, from: 1, to: 1, timestamp: 1, _id: 1 },
+  {
+    name: 'friendship_unread_partial',
+    partialFilterExpression: { read: false },
+  }
+);
 FriendshipMessageItemSchema.index({ id: 1 });
 
-export default mongoose.model<IFriendshipMessageItem>(
+const FriendshipMessageItem = mongoose.model<IFriendshipMessageItem>(
   'FriendshipMessageItem',
   FriendshipMessageItemSchema
 );
+
+/** Drop legacy unread compound index if present; ensure current indexes exist. */
+export async function ensureFriendshipMessageItemIndexes(): Promise<void> {
+  const coll = FriendshipMessageItem.collection;
+  const obsoleteNames = [
+    'friendshipId_1_from_1_to_1_read_1_timestamp_1__id_1',
+  ];
+  for (const name of obsoleteNames) {
+    try {
+      await coll.dropIndex(name);
+    } catch (err: any) {
+      if (err?.code !== 27 && err?.codeName !== 'IndexNotFound') {
+        console.warn(`[FriendshipMessageItem] dropIndex(${name}):`, err?.message || err);
+      }
+    }
+  }
+  try {
+    await FriendshipMessageItem.createIndexes();
+  } catch (err: any) {
+    console.warn('[FriendshipMessageItem] createIndexes:', err?.message || err);
+  }
+}
+
+export default FriendshipMessageItem;
