@@ -8,6 +8,7 @@ import {
   TextInput,
   TouchableWithoutFeedback,
   View,
+  BackHandler,
 } from 'react-native';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { t, type Lang } from '../../utils/i18n';
@@ -80,6 +81,15 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
     });
     return () => sub.remove();
   }, [searchOpen]);
+
+  useEffect(() => {
+    if (Platform.OS !== 'android' || !searchOpen) return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      closeSearch();
+      return true;
+    });
+    return () => sub.remove();
+  }, [searchOpen, closeSearch]);
 
   const filteredFriends = useMemo(() => {
     let list = allFriends;
@@ -169,12 +179,11 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
           >
             <Ionicons
               name={searchOpen ? 'search' : 'search-outline'}
-              size={18}
+              size={22}
               color={searchOpen ? WELCOME_SEGMENT_ACTIVE : LIVI.white}
             />
           </Pressable>
           <WelcomeCrownButton
-            compact
             onPress={onOpenProfile}
             onLongPress={onOpenMenu}
             showBadge={shouldShowMenuDot}
@@ -302,9 +311,9 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   iconBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: WELCOME_CHROME_BTN_BG,

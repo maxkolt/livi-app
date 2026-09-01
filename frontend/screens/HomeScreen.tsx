@@ -69,6 +69,7 @@ import {
   HomeMoreTab,
   HomeWelcomeView,
   HomeWelcomeFriendsView,
+  HomeWelcomeProfileView,
   HomeMenuOverlay,
   displayName,
   displayAvatarLetter,
@@ -84,8 +85,8 @@ import {
   useHomeFriends,
 } from './home';
 import type { NoticeKind } from './home';
-import { WelcomeQuietAtmosphere } from './home/WelcomeQuietAtmosphere';
 import { HomeWelcomeTabBar, type WelcomeTabId } from './home/HomeWelcomeTabBar';
+import { WelcomeStageBackground } from './home/WelcomeStageBackground';
 import { WELCOME_STAGE_BG } from './home/constants';
 import { useWelcomeOnlineCount } from './home/hooks/useWelcomeOnlineCount';
 import type { Friend, HomeRouteParams } from './home/types';
@@ -312,13 +313,11 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   }, [menuOpen]);
   const menuTabsMounted = menuOpen || menuEverOpened;
 
-  // Пикер фона — внутренний экран More; сбрасываем при закрытии меню / смене вкладки.
+  // Пикер фона — More или welcome-профиль.
   useEffect(() => {
-    if (!menuOpen) setWallpaperPickerTheme(null);
-  }, [menuOpen]);
-  useEffect(() => {
-    if (tab !== 'more') setWallpaperPickerTheme(null);
-  }, [tab]);
+    const wallpaperHost = (menuOpen && tab === 'more') || welcomeActiveTab === 'profile';
+    if (!wallpaperHost) setWallpaperPickerTheme(null);
+  }, [menuOpen, tab, welcomeActiveTab]);
   const {
     updateAvailable,
     updateSpinAnim,
@@ -4067,18 +4066,47 @@ const handleClearNick = useCallback(async () => {
     setTab('friends');
   }, [setMenuOpen, setTab]);
   const handleOpenProfile = useCallback(() => {
-    setMenuOpen(true);
-    setTab('settings');
-  }, [setMenuOpen, setTab]);
+    setWelcomeActiveTab('profile');
+  }, []);
   const handleWelcomeTabPress = useCallback(
     (tabId: WelcomeTabId) => {
       setWelcomeActiveTab(tabId);
-      if (tabId === 'search' || tabId === 'friends') return;
+      if (tabId === 'search' || tabId === 'friends' || tabId === 'profile') return;
       setMenuOpen(true);
       setTab('friends');
     },
     [setMenuOpen, setTab],
   );
+  const handleProfileSupportClick = useCallback(() => {
+    void incrCounter('support_help_clicks');
+  }, [incrCounter]);
+  const handleProfileLogOut = useCallback(() => {
+    void askConfirm({
+      title: t('wipeTitle', lang),
+      message: t('wipeMessage', lang),
+      confirmText: t('wipeConfirm', lang),
+      cancelText: t('cancelAction', lang),
+    }).then((ok) => {
+      if (ok) void handleWipeAccount();
+    });
+  }, [askConfirm, handleWipeAccount, lang]);
+  const handleClearLocalMessages = useCallback(() => {
+    void askConfirm({
+      title: t('welcomeClearMessages', lang),
+      message: t('welcomeClearMessagesConfirm', lang),
+      confirmText: t('delete', lang),
+      cancelText: t('cancelAction', lang),
+    }).then((ok) => {
+      if (!ok) return;
+      try {
+        const { clearAllMessageCache } = require('../sockets/socket') as typeof import('../sockets/socket');
+        clearAllMessageCache();
+        showNotice(t('welcomeClearMessagesDone', lang), 'info', 3000);
+      } catch {
+        showNotice(t('wipeFailed', lang), 'error');
+      }
+    });
+  }, [askConfirm, lang, showNotice]);
   const handleStartSearch = useCallback(() => {
     navigation.navigate('RandomChat', { returnTo: { name: 'Home' } });
   }, [navigation]);
@@ -4116,18 +4144,14 @@ const handleClearNick = useCallback(async () => {
 
   return (
     <View style={{ flex: 1, backgroundColor: isDark ? WELCOME_STAGE_BG : theme.colors.background }}>
-      {/* Full-bleed stage behind SafeArea — avoids flat “status strip” frame above welcome glow */}
-      <WelcomeQuietAtmosphere
+      <WelcomeStageBackground
         isDark={isDark}
-        baseColor={(isDark ? WELCOME_STAGE_BG : theme.colors.background) as string}
-        width={layoutWidth}
-        height={layoutHeight}
+        lightColor={theme.colors.background as string}
       />
     <SafeAreaView
         style={[
           styles.container,
           {
-            // Content inset only; transparent so atmosphere shows through top/bottom safe areas.
             backgroundColor: 'transparent',
           },
         ]}
@@ -4148,6 +4172,40 @@ const handleClearNick = useCallback(async () => {
             onOpenProfile={handleOpenProfile}
             onOpenMenu={handleOpenMenu}
             onInviteFriends={generateInviteLink}
+          />
+        ) : welcomeActiveTab === 'profile' && !menuOpen ? (
+          <HomeWelcomeProfileView
+            lang={lang}
+            isDark={isDark}
+            styles={styles}
+            menuChromeBg={MENU_CHROME_BG}
+            savedNick={savedNick}
+            nick={nick}
+            setNick={(v) => {
+              nickLiveRef.current = v;
+              nickInputDirtyRef.current = true;
+              setNick(v);
+              saveDraftProfile({ nick: v });
+            }}
+            onClearNick={handleClearNick}
+            avatarUri={avatarUri}
+            myFullAvatarUri={myFullAvatarUri}
+            myAvatarVer={myAvatarVer}
+            openAvatarSheet={openAvatarSheet}
+            handleSaveProfile={handleSaveProfile}
+            saving={saving}
+            savedToast={savedToast}
+            setSavedToast={setSavedToast}
+            onSelectLang={(code) => {
+              void handleSelectLang(code);
+            }}
+            incrCounter={incrCounter}
+            onSupportClick={handleProfileSupportClick}
+            onLogOutAccount={handleProfileLogOut}
+            wiping={wiping}
+            updateAvailable={updateAvailable}
+            wallpaperPickerTheme={wallpaperPickerTheme}
+            setWallpaperPickerTheme={setWallpaperPickerTheme}
           />
         ) : (
           <HomeWelcomeView
@@ -4184,6 +4242,7 @@ const handleClearNick = useCallback(async () => {
             friends: L('tabFriends'),
             calls: L('tabCalls'),
             chat: L('tabChat'),
+            profile: L('tabSettings'),
           }}
           onPressTab={handleWelcomeTabPress}
         />

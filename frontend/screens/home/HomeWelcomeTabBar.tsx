@@ -6,13 +6,14 @@ import {
   WELCOME_BRAND_VI_FILL_GRADIENT,
   WELCOME_GLASS_BORDER,
   WELCOME_GLASS_SURFACE,
+  WELCOME_STAGE_BG,
 } from './constants';
 
 /** Активная вкладка — заливка как у «Vi» (верх/низ градиента логотипа). */
 const ACTIVE_ICON = WELCOME_BRAND_VI_FILL_GRADIENT[2];
 const ACTIVE_LABEL = WELCOME_BRAND_VI_FILL_GRADIENT[1];
 
-export type WelcomeTabId = 'search' | 'friends' | 'calls' | 'chat';
+export type WelcomeTabId = 'search' | 'friends' | 'calls' | 'chat' | 'profile';
 
 type TabDef = {
   id: WelcomeTabId;
@@ -27,9 +28,12 @@ type HomeWelcomeTabBarProps = {
     friends: string;
     calls: string;
     chat: string;
+    profile: string;
   };
   onPressTab: (tab: WelcomeTabId) => void;
 };
+
+const PROFILE_ACTIVE_DOT = 26;
 
 const INACTIVE = '#7A8494';
 
@@ -69,6 +73,23 @@ function HomeWelcomeTabBarInner({ activeTab, labels, onPressTab }: HomeWelcomeTa
           color={color}
         />
       ),
+    },
+    {
+      id: 'profile',
+      label: labels.profile,
+      renderIcon: (active, color) =>
+        active ? (
+          <View
+            style={[
+              styles.profileActiveDisc,
+              { backgroundColor: ACTIVE_ICON, width: PROFILE_ACTIVE_DOT, height: PROFILE_ACTIVE_DOT, borderRadius: PROFILE_ACTIVE_DOT / 2 },
+            ]}
+          >
+            <Ionicons name="person" size={15} color={WELCOME_STAGE_BG} />
+          </View>
+        ) : (
+          <Ionicons name="person-outline" size={23} color={color} />
+        ),
     },
   ];
 
@@ -124,7 +145,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-around',
     paddingTop: 8,
-    paddingHorizontal: 6,
+    paddingHorizontal: 2,
     minHeight: 46,
   },
   item: {
@@ -132,16 +153,21 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: 0,
+    minWidth: 0,
   },
   tabInner: {
     alignItems: 'center',
     justifyContent: 'center',
     gap: 4,
     paddingVertical: 5,
-    paddingHorizontal: 10,
+    paddingHorizontal: 2,
+  },
+  profileActiveDisc: {
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   label: {
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: '500',
     letterSpacing: 0.05,
   },
