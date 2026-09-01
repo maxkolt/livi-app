@@ -5,6 +5,7 @@ export type { HomeStyles } from './styles';
 export { HomeFriendsTab } from './HomeFriendsTab';
 export { HomeMoreTab } from './HomeMoreTab';
 export { HomeWelcomeView } from './HomeWelcomeView';
+export { HomeWelcomeFriendsView } from './HomeWelcomeFriendsView';
 export { HomeMenuOverlay } from './HomeMenuOverlay';
 export { HomeCenterProfile } from './HomeCenterProfile';
 export {

@@ -20,12 +20,14 @@ import {
 } from '../friendHelpers';
 import type { Friend } from '../types';
 import type { HomeMenuTab } from './useHomeMenu';
+import type { WelcomeTabId } from '../HomeWelcomeTabBar';
 
 type UseHomeFriendsArgs = {
   resolvedUserId: string;
   installId: string;
   menuOpen: boolean;
   tab: HomeMenuTab;
+  welcomeActiveTab: WelcomeTabId;
   appIsActive: boolean;
 };
 
@@ -34,8 +36,11 @@ export function useHomeFriends({
   installId,
   menuOpen,
   tab,
+  welcomeActiveTab,
   appIsActive,
 }: UseHomeFriendsArgs) {
+  const friendsSurfaceActive =
+    appIsActive && ((menuOpen && tab === 'friends') || welcomeActiveTab === 'friends');
   const [friends, setFriends] = useState<Friend[]>([]);
   const [initialized, setInitialized] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -321,26 +326,26 @@ export function useHomeFriends({
     };
   }, [loadFriends]);
 
-  /* ===== refresh friends when menu friends tab open ===== */
+  /* ===== refresh friends when welcome-friends or menu friends tab open ===== */
   useEffect(() => {
-    if (menuOpen && tab === 'friends' && appIsActive) {
+    if (friendsSurfaceActive) {
       setInitialized(true);
       void loadFriends();
       const tmr = setInterval(() => void loadFriends({ includeAvatarThumbs: false }), 2 * 60_000);
       return () => clearInterval(tmr);
     }
-  }, [menuOpen, tab, appIsActive, loadFriends]);
+  }, [friendsSurfaceActive, loadFriends, setInitialized]);
 
   /* ===== warm avatar cache когда открыта вкладка друзей === */
   useEffect(() => {
-    if (menuOpen && tab === 'friends' && friends.length > 0) {
+    if (friendsSurfaceActive && friends.length > 0) {
       friends.forEach((f) => {
         if (f.avatarVer) {
           warmAvatar(f.id, f.avatarVer).catch(() => {});
         }
       });
     }
-  }, [menuOpen, tab, friends]);
+  }, [friendsSurfaceActive, friends]);
 
   return {
     friends,

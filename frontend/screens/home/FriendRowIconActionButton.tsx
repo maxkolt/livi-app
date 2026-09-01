@@ -13,6 +13,11 @@ import {
   FRIEND_ACTION_BTN_SURFACE,
   FRIEND_ACTION_ICON_PRESSED,
   LIVI,
+  WELCOME_FRIEND_ACTION_BTN_RADIUS,
+  WELCOME_FRIEND_ACTION_BTN_PRESSED_SURFACE,
+  WELCOME_FRIEND_ACTION_BTN_SURFACE,
+  WELCOME_FRIEND_ACTION_ICON,
+  WELCOME_FRIEND_ACTION_ICON_PRESSED,
 } from './constants';
 
 /** Выше — скролл; ниже — микродрожание пальца при реальном тапе. */
@@ -31,6 +36,8 @@ type FriendRowIconActionButtonProps = {
   onPressIn?: () => void;
   onPress?: () => void;
   onLongPress?: () => void;
+  /** Welcome-список друзей: круглее кнопка и иконка в тон tab bar. */
+  variant?: 'menu' | 'welcome';
 };
 
 export function FriendRowIconActionButton({
@@ -45,6 +52,7 @@ export function FriendRowIconActionButton({
   onPressIn,
   onPress,
   onLongPress,
+  variant = 'menu',
 }: FriendRowIconActionButtonProps) {
   const pressStartedAtRef = React.useRef(0);
   const pressHandledRef = React.useRef(false);
@@ -112,6 +120,15 @@ export function FriendRowIconActionButton({
     onPress?.();
   }, [onPress]);
 
+  const isWelcomeVariant = variant === 'welcome';
+  const btnRadius = isWelcomeVariant ? WELCOME_FRIEND_ACTION_BTN_RADIUS : FRIEND_ACTION_BUTTON.borderRadius;
+  const iconColorDefault = isWelcomeVariant ? WELCOME_FRIEND_ACTION_ICON : LIVI.titan;
+  const iconColorPressed = isWelcomeVariant ? WELCOME_FRIEND_ACTION_ICON_PRESSED : FRIEND_ACTION_ICON_PRESSED;
+  const btnSurface = isWelcomeVariant ? WELCOME_FRIEND_ACTION_BTN_SURFACE : FRIEND_ACTION_BTN_SURFACE;
+  const btnPressedSurface = isWelcomeVariant
+    ? WELCOME_FRIEND_ACTION_BTN_PRESSED_SURFACE
+    : FRIEND_ACTION_BTN_PRESSED_SURFACE;
+
   return (
     <Pressable
       disabled={disabled}
@@ -159,17 +176,17 @@ export function FriendRowIconActionButton({
         {
           width: FRIEND_ACTION_BUTTON.width,
           height: FRIEND_ACTION_BUTTON.height,
-          borderRadius: FRIEND_ACTION_BUTTON.borderRadius,
+          borderRadius: btnRadius,
         },
-        FRIEND_ACTION_BTN_SURFACE,
+        btnSurface,
         inactiveLook
           ? {
               backgroundColor: ANDROID_VIDEO_CALL_DISABLED_BG,
-              borderWidth: 1,
+              borderWidth: isWelcomeVariant ? 0 : 1,
               borderColor: 'rgba(255,255,255,0.08)',
             }
           : pressed && !movedRef.current
-            ? FRIEND_ACTION_BTN_PRESSED_SURFACE
+            ? btnPressedSurface
             : null,
       ]}
     >
@@ -182,8 +199,8 @@ export function FriendRowIconActionButton({
               inactiveLook
                 ? ANDROID_VIDEO_CALL_DISABLED_ICON
                 : pressed && !movedRef.current
-                  ? FRIEND_ACTION_ICON_PRESSED
-                  : LIVI.titan
+                  ? iconColorPressed
+                  : iconColorDefault
             }
           />
         </View>

@@ -68,6 +68,7 @@ import {
   HomeFriendsTab,
   HomeMoreTab,
   HomeWelcomeView,
+  HomeWelcomeFriendsView,
   HomeMenuOverlay,
   displayName,
   displayAvatarLetter,
@@ -83,6 +84,10 @@ import {
   useHomeFriends,
 } from './home';
 import type { NoticeKind } from './home';
+import { WelcomeQuietAtmosphere } from './home/WelcomeQuietAtmosphere';
+import { HomeWelcomeTabBar, type WelcomeTabId } from './home/HomeWelcomeTabBar';
+import { WELCOME_STAGE_BG } from './home/constants';
+import { useWelcomeOnlineCount } from './home/hooks/useWelcomeOnlineCount';
 import type { Friend, HomeRouteParams } from './home/types';
 import {
   DRAFT_KEY,
@@ -296,8 +301,14 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const [wallpaperPickerTheme, setWallpaperPickerTheme] = useState<'light' | 'dark' | null>(null);
   // После первого открытия вкладки остаются в дереве (скрыты оверлеем) — без скачка «пусто → друзья».
   const [menuEverOpened, setMenuEverOpened] = useState(false);
+  const [welcomeActiveTab, setWelcomeActiveTab] = useState<WelcomeTabId>('search');
   useEffect(() => {
     if (menuOpen) setMenuEverOpened(true);
+  }, [menuOpen]);
+  useEffect(() => {
+    if (!menuOpen) {
+      setWelcomeActiveTab((prev) => (prev === 'calls' || prev === 'chat' ? 'search' : prev));
+    }
   }, [menuOpen]);
   const menuTabsMounted = menuOpen || menuEverOpened;
 
@@ -325,7 +336,14 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     loadFriends,
     loadFriendsFnRef,
     friendLastOnlineTrueAtRef,
-  } = useHomeFriends({ resolvedUserId, installId, menuOpen, tab, appIsActive });
+  } = useHomeFriends({
+    resolvedUserId,
+    installId,
+    menuOpen,
+    tab,
+    welcomeActiveTab,
+    appIsActive,
+  });
 
   const {
     unreadByUser,
@@ -335,6 +353,19 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     setMissedLoaded,
     refreshUnreadCountsForFriends,
   } = useHomeBadges({ friends, friendsRef });
+
+  const { onlineCount: welcomeOnlineCount } = useWelcomeOnlineCount(appIsActive);
+
+  const welcomeBannerPeers = React.useMemo(
+    () =>
+      friends.slice(0, 4).map((f) => ({
+        id: String(f.id),
+        name: f.name,
+        avatarVer: f.avatarVer,
+        avatarThumbB64: f.avatarThumbB64,
+      })),
+    [friends],
+  );
 
   const pendingPresenceOfflineTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
@@ -3842,6 +3873,80 @@ const handleClearNick = useCallback(async () => {
     ],
   );
 
+  const friendsListShellProps = React.useMemo(
+    () => ({
+      friends,
+      refreshing,
+      onRefresh: onRefreshFriends,
+      initialized,
+      friendsListExtraData,
+      markReadMenu,
+      setMarkReadMenu,
+      setUnreadByUser,
+      L,
+      lang,
+      styles,
+      navigation,
+      prepareFriendRowActionTap,
+      handleStartFriendCall,
+      clearMissedCallsForFriend,
+      friendRowBlocksSwipeDelete,
+      handleRemoveFriend,
+      calling,
+      callingVisibleRef,
+      activeOutgoingAttemptRef,
+      activeOutgoingCallIdRef,
+      lastChatOpenRef,
+      menuOpen,
+      donateVisible,
+      shareVisible,
+      inviteRequestVisible,
+      roomFullVisible: roomFull.visible,
+      incomingCallScreen,
+      missedByUser,
+      unreadByUser,
+      isRecentlyEndedCallFriend,
+      resetOutgoingAfterExternalClose,
+      openSwipeableRef,
+      swipeableRefsMap,
+    }),
+    [
+      friends,
+      refreshing,
+      onRefreshFriends,
+      initialized,
+      friendsListExtraData,
+      markReadMenu,
+      setMarkReadMenu,
+      setUnreadByUser,
+      L,
+      lang,
+      navigation,
+      prepareFriendRowActionTap,
+      handleStartFriendCall,
+      clearMissedCallsForFriend,
+      friendRowBlocksSwipeDelete,
+      handleRemoveFriend,
+      calling,
+      callingVisibleRef,
+      activeOutgoingAttemptRef,
+      activeOutgoingCallIdRef,
+      lastChatOpenRef,
+      menuOpen,
+      donateVisible,
+      shareVisible,
+      inviteRequestVisible,
+      roomFull.visible,
+      incomingCallScreen,
+      missedByUser,
+      unreadByUser,
+      isRecentlyEndedCallFriend,
+      resetOutgoingAfterExternalClose,
+      openSwipeableRef,
+      swipeableRefsMap,
+    ],
+  );
+
   // Показ уведомления «Звонок завершён» / «Вызов отменен», авто-открытие меню друзей, переход на вкладку «Друзья».
   // При переходе по тапу summary-уведомлений (пропущенные / непрочитанные) — снимаем уведомления из шторки и бейдж.
   useEffect(() => {
@@ -3860,9 +3965,13 @@ const handleClearNick = useCallback(async () => {
     }
     if (openFriendsMenu) {
       setMenuOpen(true);
+      setTab('friends');
     }
     if (openFriendsTab) {
-      setTab('friends');
+      setWelcomeActiveTab('friends');
+      if (!openFriendsMenu) {
+        setTab('friends');
+      }
       if (pushMessageFrom && /^[a-f\d]{24}$/i.test(pushMessageFrom)) {
         dismissMessageNotificationsOnly().catch(() => {});
         setUnreadByUser((prev) => ({
@@ -3955,7 +4064,21 @@ const handleClearNick = useCallback(async () => {
   }, []);
   const handleOpenMenu = useCallback(() => {
     setMenuOpen(true);
-  }, [setMenuOpen]);
+    setTab('friends');
+  }, [setMenuOpen, setTab]);
+  const handleOpenProfile = useCallback(() => {
+    setMenuOpen(true);
+    setTab('settings');
+  }, [setMenuOpen, setTab]);
+  const handleWelcomeTabPress = useCallback(
+    (tabId: WelcomeTabId) => {
+      setWelcomeActiveTab(tabId);
+      if (tabId === 'search' || tabId === 'friends') return;
+      setMenuOpen(true);
+      setTab('friends');
+    },
+    [setMenuOpen, setTab],
+  );
   const handleStartSearch = useCallback(() => {
     navigation.navigate('RandomChat', { returnTo: { name: 'Home' } });
   }, [navigation]);
@@ -3992,16 +4115,23 @@ const handleClearNick = useCallback(async () => {
   }, [hasActiveCallForSearch]);
 
   return (
-    <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
+    <View style={{ flex: 1, backgroundColor: isDark ? WELCOME_STAGE_BG : theme.colors.background }}>
+      {/* Full-bleed stage behind SafeArea — avoids flat “status strip” frame above welcome glow */}
+      <WelcomeQuietAtmosphere
+        isDark={isDark}
+        baseColor={(isDark ? WELCOME_STAGE_BG : theme.colors.background) as string}
+        width={layoutWidth}
+        height={layoutHeight}
+      />
     <SafeAreaView
         style={[
           styles.container,
           {
-            paddingTop: Platform.OS === "android" ? 20 : 0,
-            backgroundColor: theme.colors.background,
+            // Content inset only; transparent so atmosphere shows through top/bottom safe areas.
+            backgroundColor: 'transparent',
           },
         ]}
-        edges={Platform.OS === "android" ? ['top', 'bottom','left','right'] : ['bottom','left','right','top']}
+        edges={['top', 'left', 'right']}
       >
       <StatusBar
         barStyle={Platform.OS === 'android' || menuOpen || isDark ? 'light-content' : 'dark-content'}
@@ -4010,26 +4140,54 @@ const handleClearNick = useCallback(async () => {
       />
 
 
-      <HomeWelcomeView
-        styles={styles}
-        isDark={isDark}
-        themeBackground={theme.colors.background as string}
-        layoutWidth={layoutWidth}
-        layoutHeight={layoutHeight}
-        L={L}
-        menuBtnInnerBg={MENU_BTN_INNER_BG}
-        menuChromeBg={MENU_CHROME_BG}
-        onOpenMenu={handleOpenMenu}
-        unreadByUser={unreadByUser}
-        missedByUser={missedByUser}
-        centerProfile={centerProfile}
-        NoticeView={NoticeView}
-        hasActiveCallForSearch={hasActiveCallForSearch}
-        showCallSearchLockBadge={showCallSearchLockBadge}
-        onStartSearch={handleStartSearch}
-        onBlockedStartSearch={handleBlockedStartSearchPress}
-        splashGone={!showSplashOverlay}
-      />
+      <View style={{ flex: 1, minHeight: 0 }}>
+        {welcomeActiveTab === 'friends' && !menuOpen ? (
+          <HomeWelcomeFriendsView
+            {...friendsListShellProps}
+            allFriends={friends}
+            onOpenProfile={handleOpenProfile}
+            onOpenMenu={handleOpenMenu}
+            onInviteFriends={generateInviteLink}
+          />
+        ) : (
+          <HomeWelcomeView
+            styles={styles}
+            isDark={isDark}
+            themeBackground={(isDark ? WELCOME_STAGE_BG : theme.colors.background) as string}
+            layoutWidth={layoutWidth}
+            layoutHeight={layoutHeight}
+            L={L}
+            lang={lang}
+            menuChromeBg={MENU_CHROME_BG}
+            onOpenProfile={handleOpenProfile}
+            onOpenMenu={handleOpenMenu}
+            onlineCount={welcomeOnlineCount}
+            bannerPeers={welcomeBannerPeers}
+            unreadByUser={unreadByUser}
+            missedByUser={missedByUser}
+            centerProfile={centerProfile}
+            NoticeView={NoticeView}
+            hasActiveCallForSearch={hasActiveCallForSearch}
+            showCallSearchLockBadge={showCallSearchLockBadge}
+            onStartSearch={handleStartSearch}
+            onBlockedStartSearch={handleBlockedStartSearchPress}
+            splashGone={!showSplashOverlay}
+          />
+        )}
+      </View>
+
+      {!menuOpen ? (
+        <HomeWelcomeTabBar
+          activeTab={welcomeActiveTab}
+          labels={{
+            search: L('tabSearch'),
+            friends: L('tabFriends'),
+            calls: L('tabCalls'),
+            chat: L('tabChat'),
+          }}
+          onPressTab={handleWelcomeTabPress}
+        />
+      ) : null}
 
       {/* Модалка аватара: полный экран, блюр/затемнение, круг 3×, pinch-to-zoom, тап вне — закрыть. Без вложенности touch/gesture (Nesting touch handlers with native animated driver). */}
       {avatarModalVisible && (
@@ -4108,42 +4266,7 @@ const handleClearNick = useCallback(async () => {
                   pointerEvents={tab === 'friends' ? 'auto' : 'none'}
                   collapsable={false}
                 >
-                <HomeFriendsTab
-                  friends={friends}
-                  refreshing={refreshing}
-                  onRefresh={onRefreshFriends}
-                  initialized={initialized}
-                  friendsListExtraData={friendsListExtraData}
-                  markReadMenu={markReadMenu}
-                  setMarkReadMenu={setMarkReadMenu}
-                  setUnreadByUser={setUnreadByUser}
-                  L={L}
-                  lang={lang}
-                  styles={styles}
-                  navigation={navigation}
-                  prepareFriendRowActionTap={prepareFriendRowActionTap}
-                  handleStartFriendCall={handleStartFriendCall}
-                  clearMissedCallsForFriend={clearMissedCallsForFriend}
-                  friendRowBlocksSwipeDelete={friendRowBlocksSwipeDelete}
-                  handleRemoveFriend={handleRemoveFriend}
-                  calling={calling}
-                  callingVisibleRef={callingVisibleRef}
-                  activeOutgoingAttemptRef={activeOutgoingAttemptRef}
-                  activeOutgoingCallIdRef={activeOutgoingCallIdRef}
-                  lastChatOpenRef={lastChatOpenRef}
-                  menuOpen={menuOpen}
-                  donateVisible={donateVisible}
-                  shareVisible={shareVisible}
-                  inviteRequestVisible={inviteRequestVisible}
-                  roomFullVisible={roomFull.visible}
-                  incomingCallScreen={incomingCallScreen}
-                  missedByUser={missedByUser}
-                  unreadByUser={unreadByUser}
-                  isRecentlyEndedCallFriend={isRecentlyEndedCallFriend}
-                  resetOutgoingAfterExternalClose={resetOutgoingAfterExternalClose}
-                  openSwipeableRef={openSwipeableRef}
-                  swipeableRefsMap={swipeableRefsMap}
-                />
+                <HomeFriendsTab {...friendsListShellProps} />
                 </View>
               ) : null}
               {menuTabsMounted && tab === 'settings' && (

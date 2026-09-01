@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
   Easing,
@@ -37,6 +37,9 @@ import {
   BRAND_OUTLINE_STROKE,
   CHROME_PERIMETER_GLOW_LAYERS,
   CHROME_PERIMETER_GLOW_SPREAD,
+  AURA_GRADIENT,
+  WELCOME_BRAND_VI_FILL_GRADIENT,
+  WELCOME_BRAND_VI_STROKE_GRADIENT,
   LIVI,
 } from './constants';
 import { styles } from './styles';
@@ -197,6 +200,8 @@ type AnimatedGradientBorderProps = {
   outerStyle?: StyleProp<ViewStyle>;
   innerStyle?: StyleProp<ViewStyle>;
   perimeterGlow?: boolean;
+  /** Chrome rotation loop duration (ms). */
+  spinDurationMs?: number;
   children: React.ReactNode;
 };
 
@@ -209,6 +214,7 @@ export const AnimatedGradientBorder: React.FC<AnimatedGradientBorderProps> = ({
   outerStyle,
   innerStyle,
   perimeterGlow = false,
+  spinDurationMs = 3000,
   children,
 }) => {
   const rotateAnim = useRef(new Animated.Value(0)).current;
@@ -219,7 +225,7 @@ export const AnimatedGradientBorder: React.FC<AnimatedGradientBorderProps> = ({
     const rotateAnimation = Animated.loop(
       Animated.timing(rotateAnim, {
         toValue: 1,
-        duration: 3000,
+        duration: Math.max(1200, spinDurationMs),
         easing: Easing.linear,
         useNativeDriver: true,
       }),
@@ -230,7 +236,7 @@ export const AnimatedGradientBorder: React.FC<AnimatedGradientBorderProps> = ({
       rotateAnimation.stop();
       rotateAnim.stopAnimation();
     };
-  }, [rotateAnim]);
+  }, [rotateAnim, spinDurationMs]);
 
   const rotate = rotateAnim.interpolate({
     inputRange: [0, 1],
@@ -351,8 +357,95 @@ const Brand3dFaceGradientDefs: React.FC<{ gradId: string; isDark: boolean }> = (
   </Defs>
 );
 
+const BrandAuraGradientDefs: React.FC<{
+  fillGradId: string;
+  strokeGradId: string;
+  /** Welcome-логотип: приглушённый «Vi». */
+  muted?: boolean;
+}> = ({ fillGradId, strokeGradId, muted = false }) => {
+  const fillColors = muted ? WELCOME_BRAND_VI_FILL_GRADIENT : AURA_GRADIENT;
+  const strokeColors = muted ? WELCOME_BRAND_VI_STROKE_GRADIENT : AURA_GRADIENT;
+  return (
+    <Defs>
+      <SvgLinearGradient id={fillGradId} x1="0%" y1="0%" x2="0%" y2="100%">
+        <SvgStop offset="0%" stopColor={fillColors[2]} />
+        <SvgStop offset="42%" stopColor={fillColors[1]} />
+        <SvgStop offset="100%" stopColor={fillColors[0]} />
+      </SvgLinearGradient>
+      <SvgLinearGradient id={strokeGradId} x1="0%" y1="0%" x2="100%" y2="100%">
+        <SvgStop offset="0%" stopColor={strokeColors[0]} />
+        <SvgStop offset="40%" stopColor={strokeColors[1]} />
+        <SvgStop offset="100%" stopColor={strokeColors[2]} />
+      </SvgLinearGradient>
+    </Defs>
+  );
+};
+
 const BRAND_LETTERS = ['L', 'i', 'V', 'i'] as const;
 const BRAND_LETTER_GRAD_SUFFIX = ['L', 'I1', 'V', 'I2'] as const;
+/** Перекрытие соседних букв в row-логотипе (меньше — больше воздуха). */
+const BRAND_TITLE_LETTER_OVERLAP = 4;
+/** Доп. зазор после «L» перед «i». */
+const BRAND_TITLE_GAP_AFTER_L = 2;
+
+function brandTitleMetrics(fontSize: number) {
+  const lineHeight = fontSize - 1;
+  const pad = BRAND_OUTLINE_STROKE;
+  const extrudeX = BRAND_3D_LAYERS * BRAND_3D_STEP_X;
+  const extrudeY = BRAND_3D_LAYERS * BRAND_3D_STEP_Y;
+  const svgH = lineHeight + pad * 2 + extrudeY;
+  const baselineFudge = Math.round((Platform.OS === 'ios' ? 3 : 4) * (fontSize / 41));
+  const baselineY = pad + lineHeight - baselineFudge;
+  return { lineHeight, pad, extrudeX, extrudeY, svgH, baselineY };
+}
+
+function brandLetterAdvance(glyphW: number, pad: number, extrudeX: number) {
+  return glyphW + pad * 2 + extrudeX;
+}
+
+function brandTitleExtraGapAfter(letterIndex: number): number {
+  return letterIndex === 0 ? BRAND_TITLE_GAP_AFTER_L : 0;
+}
+
+function brandTitleGlyphXs(
+  glyphWidths: readonly number[],
+  pad: number,
+  extrudeX: number,
+  overlap: number
+): number[] {
+  const xs: number[] = [];
+  let cursor = 0;
+  for (let i = 0; i < glyphWidths.length; i += 1) {
+    xs.push(cursor + pad);
+    if (i < glyphWidths.length - 1) {
+      cursor += brandLetterAdvance(glyphWidths[i], pad, extrudeX) - overlap;
+      cursor += brandTitleExtraGapAfter(i);
+    }
+  }
+  return xs;
+}
+
+function brandTitleSvgWidth(
+  glyphWidths: readonly number[],
+  pad: number,
+  extrudeX: number,
+  overlap: number
+): number {
+  if (glyphWidths.length === 0) return 0;
+  let total = 0;
+  for (let i = 0; i < glyphWidths.length; i += 1) {
+    total += brandLetterAdvance(glyphWidths[i], pad, extrudeX);
+    if (i < glyphWidths.length - 1) {
+      total -= overlap;
+      total += brandTitleExtraGapAfter(i);
+    }
+  }
+  return total;
+}
+
+function defaultBrandGlyphWidth(letter: string, fontSize: number) {
+  return letter === 'i' ? Math.round(fontSize * 0.34) : Math.round(fontSize * 0.63);
+}
 
 type BrandLetterWithOutlineAndGlowProps = {
   letter: string;
@@ -362,6 +455,9 @@ type BrandLetterWithOutlineAndGlowProps = {
   fillGradId: string;
   shineNonce?: number;
   pressLocked?: boolean;
+  fontSize?: number;
+  useAuraGradient?: boolean;
+  letterGlow?: boolean;
 };
 
 const BrandLetterWithOutlineAndGlow: React.FC<BrandLetterWithOutlineAndGlowProps> = ({
@@ -372,25 +468,25 @@ const BrandLetterWithOutlineAndGlow: React.FC<BrandLetterWithOutlineAndGlowProps
   fillGradId,
   shineNonce = 0,
   pressLocked = false,
+  fontSize = 41,
+  useAuraGradient = false,
+  letterGlow = true,
 }) => {
+  const { lineHeight, pad, extrudeX, extrudeY, svgH, baselineY } =
+    brandTitleMetrics(fontSize);
+  const glyphH = lineHeight;
   const [textSize, setTextSize] = useState({
-    w: letter === 'i' ? 14 : 26,
-    h: 40,
+    w: defaultBrandGlyphWidth(letter, fontSize),
+    h: glyphH,
   });
   const [shineShift, setShineShift] = useState(0);
   const [shineOp, setShineOp] = useState(0);
   const shineX = useRef(new Animated.Value(0)).current;
   const shineOpacity = useRef(new Animated.Value(0)).current;
   const stroke = BRAND_OUTLINE_STROKE;
-  const pad = stroke;
-  const extrudeX = BRAND_3D_LAYERS * BRAND_3D_STEP_X;
-  const extrudeY = BRAND_3D_LAYERS * BRAND_3D_STEP_Y;
-  const svgW = textSize.w + pad * 2 + extrudeX;
-  const svgH = textSize.h + pad * 2 + extrudeY;
-  const fontSize = 41;
+  const extrudeXLocal = extrudeX;
+  const svgW = textSize.w + pad * 2 + extrudeXLocal;
   const fontWeight = '600';
-  const baselineY =
-    pad + textSize.h - (Platform.OS === 'ios' ? 3 : 4);
   const shineGradId = `liviBrandShine${BRAND_LETTER_GRAD_SUFFIX[letterIndex]}`;
   const shineSweepW = Math.max(18, textSize.w * 0.85);
 
@@ -468,34 +564,32 @@ const BrandLetterWithOutlineAndGlow: React.FC<BrandLetterWithOutlineAndGlowProps
     textSize.w,
   ]);
 
-  return (
-    <ChromePerimeterGlow
-      isDark={isDark}
-      width={svgW}
-      height={svgH}
-      borderRadius={glowRadius}
-      glowLayers={BRAND_LETTER_GLOW_LAYERS}
-      glowSpread={BRAND_LETTER_GLOW_SPREAD}
-      glowIntensity={BRAND_LETTER_GLOW_INTENSITY}
-      outerStyle={{
-        marginLeft: letterIndex === 0 ? -BRAND_LETTER_GLOW_INSET : -letterGlowOverlap,
-        marginRight: -letterGlowOverlap,
-      }}
-    >
+  const letterChrome = (
+    <>
       <Text
-        style={[styles.brand, styles.brandMeasureProbe]}
+        style={[
+          styles.brand,
+          styles.brandMeasureProbe,
+          { fontSize, lineHeight, letterSpacing: 0 },
+        ]}
         onLayout={(e) => {
-          const { width, height } = e.nativeEvent.layout;
-          if (width > 0 && height > 0) {
-            setTextSize({ w: width, h: height });
+          const { width } = e.nativeEvent.layout;
+          if (width > 0) {
+            setTextSize((prev) => (prev.w === width ? prev : { w: width, h: glyphH }));
           }
         }}
       >
         {letter}
       </Text>
       <Svg width={svgW} height={svgH} viewBox={`0 0 ${svgW} ${svgH}`}>
-        <BrandStrokeGradientDefs gradId={strokeGradId} isDark={isDark} />
-        <Brand3dFaceGradientDefs gradId={fillGradId} isDark={isDark} />
+        {useAuraGradient ? (
+          <BrandAuraGradientDefs fillGradId={fillGradId} strokeGradId={strokeGradId} />
+        ) : (
+          <>
+            <BrandStrokeGradientDefs gradId={strokeGradId} isDark={isDark} />
+            <Brand3dFaceGradientDefs gradId={fillGradId} isDark={isDark} />
+          </>
+        )}
         {shineOp > 0.01 ? (
           <Defs>
             {/* Градиент двигается по user-space; заливка только у глифа буквы. */}
@@ -567,7 +661,324 @@ const BrandLetterWithOutlineAndGlow: React.FC<BrandLetterWithOutlineAndGlowProps
           </SvgText>
         ) : null}
       </Svg>
+    </>
+  );
+
+  if (!letterGlow) {
+    return (
+      <View
+        style={{
+          height: svgH,
+          justifyContent: 'flex-end',
+          marginLeft: letterIndex === 0 ? 0 : -4,
+          marginRight: -4,
+        }}
+      >
+        {letterChrome}
+      </View>
+    );
+  }
+
+  return (
+    <ChromePerimeterGlow
+      isDark={isDark}
+      width={svgW}
+      height={svgH}
+      borderRadius={glowRadius}
+      glowLayers={BRAND_LETTER_GLOW_LAYERS}
+      glowSpread={BRAND_LETTER_GLOW_SPREAD}
+      glowIntensity={BRAND_LETTER_GLOW_INTENSITY}
+      outerStyle={{
+        marginLeft: letterIndex === 0 ? -BRAND_LETTER_GLOW_INSET : -letterGlowOverlap,
+        marginRight: -letterGlowOverlap,
+      }}
+    >
+      {letterChrome}
     </ChromePerimeterGlow>
+  );
+};
+
+type BrandTitleOutlineFlatProps = {
+  isDark: boolean;
+  pressLocked?: boolean;
+  shineNonce?: number;
+  fontSize: number;
+  tailAuraFromIndex?: number;
+};
+
+const BrandTitleOutlineFlat: React.FC<BrandTitleOutlineFlatProps> = ({
+  isDark,
+  pressLocked = false,
+  shineNonce = 0,
+  fontSize,
+  tailAuraFromIndex,
+}) => {
+  const { lineHeight, pad, extrudeX, extrudeY, svgH, baselineY } =
+    brandTitleMetrics(fontSize);
+  const stroke = BRAND_OUTLINE_STROKE;
+  const fontWeight = '600';
+  const extrusionLayers = Array.from(
+    { length: BRAND_3D_LAYERS },
+    (_, idx) => BRAND_3D_LAYERS - idx
+  );
+
+  const [glyphWidths, setGlyphWidths] = useState(() =>
+    BRAND_LETTERS.map((letter) => defaultBrandGlyphWidth(letter, fontSize))
+  );
+
+  const glyphXs = useMemo(
+    () =>
+      brandTitleGlyphXs(glyphWidths, pad, extrudeX, BRAND_TITLE_LETTER_OVERLAP),
+    [extrudeX, glyphWidths, pad]
+  );
+  const svgW = useMemo(
+    () =>
+      brandTitleSvgWidth(glyphWidths, pad, extrudeX, BRAND_TITLE_LETTER_OVERLAP),
+    [extrudeX, glyphWidths, pad]
+  );
+
+  const shineXRefs = useRef(BRAND_LETTERS.map(() => new Animated.Value(0))).current;
+  const shineOpacityRefs = useRef(
+    BRAND_LETTERS.map(() => new Animated.Value(0))
+  ).current;
+  const [shineShifts, setShineShifts] = useState(() => BRAND_LETTERS.map(() => 0));
+  const [shineOps, setShineOps] = useState(() => BRAND_LETTERS.map(() => 0));
+
+  useEffect(() => {
+    const xListeners = shineXRefs.map((shineX, index) =>
+      shineX.addListener(({ value }) => {
+        setShineShifts((prev) => {
+          if (prev[index] === value) return prev;
+          const next = [...prev];
+          next[index] = value;
+          return next;
+        });
+      })
+    );
+    const oListeners = shineOpacityRefs.map((shineOpacity, index) =>
+      shineOpacity.addListener(({ value }) => {
+        setShineOps((prev) => {
+          if (prev[index] === value) return prev;
+          const next = [...prev];
+          next[index] = value;
+          return next;
+        });
+      })
+    );
+    return () => {
+      shineXRefs.forEach((shineX, index) => shineX.removeListener(xListeners[index]));
+      shineOpacityRefs.forEach((shineOpacity, index) =>
+        shineOpacity.removeListener(oListeners[index])
+      );
+    };
+  }, [shineOpacityRefs, shineXRefs]);
+
+  useEffect(() => {
+    if (pressLocked) {
+      shineOpacityRefs.forEach((shineOpacity) => shineOpacity.setValue(0));
+      setShineOps(BRAND_LETTERS.map(() => 0));
+    }
+  }, [pressLocked, shineOpacityRefs]);
+
+  useEffect(() => {
+    if (!shineNonce) return;
+    BRAND_LETTERS.forEach((_, letterIndex) => {
+      const glyphW = glyphWidths[letterIndex];
+      const glyphX = glyphXs[letterIndex];
+      const shineSweepW = Math.max(18, glyphW * 0.85);
+      const startX = glyphX - shineSweepW;
+      const endX = glyphX + glyphW + 4;
+      const shineX = shineXRefs[letterIndex];
+      const shineOpacity = shineOpacityRefs[letterIndex];
+
+      shineX.setValue(startX);
+      shineOpacity.setValue(0);
+      setShineShifts((prev) => {
+        const next = [...prev];
+        next[letterIndex] = startX;
+        return next;
+      });
+      setShineOps((prev) => {
+        const next = [...prev];
+        next[letterIndex] = 0;
+        return next;
+      });
+
+      Animated.sequence([
+        Animated.delay(letterIndex * 190),
+        Animated.timing(shineOpacity, {
+          toValue: 1,
+          duration: 110,
+          useNativeDriver: false,
+        }),
+        Animated.parallel([
+          Animated.timing(shineX, {
+            toValue: endX,
+            duration: 980,
+            easing: Easing.inOut(Easing.cubic),
+            useNativeDriver: false,
+          }),
+          Animated.sequence([
+            Animated.delay(680),
+            Animated.timing(shineOpacity, {
+              toValue: 0,
+              duration: 320,
+              useNativeDriver: false,
+            }),
+          ]),
+        ]),
+      ]).start();
+    });
+  }, [glyphWidths, glyphXs, shineNonce, shineOpacityRefs, shineXRefs]);
+
+  const svgTextBase = {
+    fontSize,
+    fontWeight,
+    fontFamily: BRAND_FONT_FAMILY,
+    letterSpacing: 0,
+  };
+
+  return (
+    <View style={[styles.brandOutlineWrap, { minHeight: 0 }]}>
+      {BRAND_LETTERS.map((letter, index) => (
+        <Text
+          key={`measure-${letter}-${index}`}
+          style={[
+            styles.brand,
+            styles.brandMeasureProbe,
+            { fontSize, lineHeight, letterSpacing: 0 },
+          ]}
+          onLayout={(e) => {
+            const { width } = e.nativeEvent.layout;
+            if (width > 0) {
+              setGlyphWidths((prev) =>
+                prev[index] === width ? prev : prev.map((w, i) => (i === index ? width : w))
+              );
+            }
+          }}
+        >
+          {letter}
+        </Text>
+      ))}
+      <Svg width={svgW} height={svgH} viewBox={`0 0 ${svgW} ${svgH}`}>
+        {BRAND_LETTERS.map((letter, index) => {
+          const strokeGradId = `liviBrandGrad${BRAND_LETTER_GRAD_SUFFIX[index]}`;
+          const fillGradId = `liviBrandFill3d${BRAND_LETTER_GRAD_SUFFIX[index]}`;
+          const useAuraGradient =
+            tailAuraFromIndex != null && index >= tailAuraFromIndex;
+          const shineGradId = `liviBrandShine${BRAND_LETTER_GRAD_SUFFIX[index]}`;
+          const glyphX = glyphXs[index];
+          const glyphW = glyphWidths[index];
+          const shineSweepW = Math.max(18, glyphW * 0.85);
+          const shineOp = shineOps[index];
+          const shineShift = shineShifts[index];
+
+          return (
+            <React.Fragment key={`${letter}-${index}`}>
+              {useAuraGradient ? (
+                <BrandAuraGradientDefs
+                  fillGradId={fillGradId}
+                  strokeGradId={strokeGradId}
+                  muted
+                />
+              ) : (
+                <>
+                  <BrandStrokeGradientDefs gradId={strokeGradId} isDark={isDark} />
+                  <Brand3dFaceGradientDefs gradId={fillGradId} isDark={isDark} />
+                </>
+              )}
+              {shineOp > 0.01 ? (
+                <Defs>
+                  <SvgLinearGradient
+                    id={shineGradId}
+                    gradientUnits="userSpaceOnUse"
+                    x1={shineShift}
+                    y1={0}
+                    x2={shineShift + shineSweepW}
+                    y2={0}
+                  >
+                    <SvgStop offset="0%" stopColor="#FFFFFF" stopOpacity={0} />
+                    <SvgStop
+                      offset="40%"
+                      stopColor={isDark ? '#FFF8F0' : '#FFFFFF'}
+                      stopOpacity={0.12}
+                    />
+                    <SvgStop
+                      offset="50%"
+                      stopColor={isDark ? '#FFF8F0' : '#FFFFFF'}
+                      stopOpacity={0.9}
+                    />
+                    <SvgStop
+                      offset="60%"
+                      stopColor={isDark ? '#00b5ff' : '#8f7ad8'}
+                      stopOpacity={0.28}
+                    />
+                    <SvgStop offset="100%" stopColor="#FFFFFF" stopOpacity={0} />
+                  </SvgLinearGradient>
+                </Defs>
+              ) : null}
+            </React.Fragment>
+          );
+        })}
+        {BRAND_LETTERS.map((letter, index) => {
+          const strokeGradId = `liviBrandGrad${BRAND_LETTER_GRAD_SUFFIX[index]}`;
+          const fillGradId = `liviBrandFill3d${BRAND_LETTER_GRAD_SUFFIX[index]}`;
+          const glyphX = glyphXs[index];
+          const shineGradId = `liviBrandShine${BRAND_LETTER_GRAD_SUFFIX[index]}`;
+          const shineOp = shineOps[index];
+
+          return (
+            <React.Fragment key={`glyph-${letter}-${index}`}>
+              {extrusionLayers.map((layer) => (
+                <SvgText
+                  key={`extrude-${letter}-${layer}`}
+                  {...svgTextBase}
+                  x={glyphX + layer * BRAND_3D_STEP_X}
+                  y={baselineY + layer * BRAND_3D_STEP_Y}
+                  fill={chromeExtrudeFill(layer, BRAND_3D_LAYERS, isDark)}
+                  stroke="none"
+                >
+                  {letter}
+                </SvgText>
+              ))}
+              <SvgText
+                {...svgTextBase}
+                x={glyphX}
+                y={baselineY}
+                fill="none"
+                stroke={`url(#${strokeGradId})`}
+                strokeWidth={stroke}
+                strokeLinejoin="round"
+                strokeLinecap="round"
+              >
+                {letter}
+              </SvgText>
+              <SvgText
+                {...svgTextBase}
+                x={glyphX}
+                y={baselineY}
+                fill={`url(#${fillGradId})`}
+                stroke="none"
+              >
+                {letter}
+              </SvgText>
+              {shineOp > 0.01 ? (
+                <SvgText
+                  {...svgTextBase}
+                  x={glyphX}
+                  y={baselineY}
+                  fill={`url(#${shineGradId})`}
+                  stroke="none"
+                  opacity={shineOp}
+                >
+                  {letter}
+                </SvgText>
+              ) : null}
+            </React.Fragment>
+          );
+        })}
+      </Svg>
+    </View>
   );
 };
 
@@ -576,6 +987,12 @@ type BrandTitleWithOutlineProps = {
   onPress?: () => void;
   pressLocked?: boolean;
   shineNonce?: number;
+  /** Масштаб логотипа (база 41). */
+  fontSize?: number;
+  /** С индекса — aura-градиент (2 = «Vi»). */
+  tailAuraFromIndex?: number;
+  /** Perimeter glow вокруг каждой буквы (welcome — off). */
+  letterGlow?: boolean;
 };
 
 export const BrandTitleWithOutline: React.FC<BrandTitleWithOutlineProps> = ({
@@ -583,8 +1000,11 @@ export const BrandTitleWithOutline: React.FC<BrandTitleWithOutlineProps> = ({
   onPress,
   pressLocked = false,
   shineNonce = 0,
+  fontSize = 41,
+  tailAuraFromIndex,
+  letterGlow = true,
 }) => {
-  const letters = (
+  const letters = letterGlow ? (
     <View
       style={styles.brandOutlineWrap}
       accessible={!onPress}
@@ -601,8 +1021,27 @@ export const BrandTitleWithOutline: React.FC<BrandTitleWithOutlineProps> = ({
           fillGradId={`liviBrandFill3d${BRAND_LETTER_GRAD_SUFFIX[index]}`}
           shineNonce={shineNonce}
           pressLocked={pressLocked}
+          fontSize={fontSize}
+          useAuraGradient={
+            tailAuraFromIndex != null && index >= tailAuraFromIndex
+          }
+          letterGlow
         />
       ))}
+    </View>
+  ) : (
+    <View
+      accessible={!onPress}
+      accessibilityRole={onPress ? undefined : 'header'}
+      accessibilityLabel={onPress ? undefined : 'LiVi'}
+    >
+      <BrandTitleOutlineFlat
+        isDark={isDark}
+        pressLocked={pressLocked}
+        shineNonce={shineNonce}
+        fontSize={fontSize}
+        tailAuraFromIndex={tailAuraFromIndex}
+      />
     </View>
   );
 
@@ -652,8 +1091,11 @@ export const AnimatedBorderButton: React.FC<AnimatedBorderButtonProps> = ({
   const titanOpacity = useRef(new Animated.Value(0.25)).current;
   const blockedFlashOpacity = useRef(new Animated.Value(0)).current;
   const blockedShakeX = useRef(new Animated.Value(0)).current;
+  const idlePulseRef = useRef<Animated.CompositeAnimation | null>(null);
 
   const titanColor = isDark ? '#8A8F99' : '#3B4453';
+  const idleHi = isDark ? 0.34 : 0.48;
+  const idleLo = isDark ? 0.22 : 0.28;
 
   const sideInset = Platform.OS === 'ios' ? 60 : 40;
   const maxCtaWidth =
@@ -670,6 +1112,39 @@ export const AnimatedBorderButton: React.FC<AnimatedBorderButtonProps> = ({
   const labelFontSize = compact ? 14 : undefined;
 
   const pressArmedRef = useRef(false);
+
+  const stopIdlePulse = useCallback(() => {
+    idlePulseRef.current?.stop();
+    idlePulseRef.current = null;
+  }, []);
+
+  const startIdlePulse = useCallback(() => {
+    if (disabled) return;
+    stopIdlePulse();
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(titanOpacity, {
+          toValue: idleHi,
+          duration: 2200,
+          easing: Easing.inOut(Easing.sin),
+          useNativeDriver: true,
+        }),
+        Animated.timing(titanOpacity, {
+          toValue: idleLo,
+          duration: 2200,
+          easing: Easing.inOut(Easing.sin),
+          useNativeDriver: true,
+        }),
+      ])
+    );
+    idlePulseRef.current = loop;
+    loop.start();
+  }, [disabled, idleHi, idleLo, stopIdlePulse, titanOpacity]);
+
+  useEffect(() => {
+    startIdlePulse();
+    return () => stopIdlePulse();
+  }, [startIdlePulse, stopIdlePulse]);
 
   const triggerBlockedFeedback = useCallback(() => {
     // Короткий визуальный "нельзя": красный пульс + мягкий шейк.
@@ -723,6 +1198,7 @@ export const AnimatedBorderButton: React.FC<AnimatedBorderButtonProps> = ({
         height={buttonHeight}
         borderRadius={borderRadius}
         perimeterGlow
+        spinDurationMs={5600}
         outerStyle={{
           transform: [{ translateX: blockedShakeX }],
           shadowOpacity: 0,
@@ -809,6 +1285,7 @@ export const AnimatedBorderButton: React.FC<AnimatedBorderButtonProps> = ({
                     triggerBlockedFeedback();
                     return;
                   }
+                  stopIdlePulse();
                   setBlurIntensity(isDark ? 25 : 40);
                   Animated.timing(titanOpacity, {
                     toValue: isDark ? 0.4 : 0.5,
@@ -825,7 +1302,7 @@ export const AnimatedBorderButton: React.FC<AnimatedBorderButtonProps> = ({
                     toValue: 0.25,
                     duration: 200,
                     useNativeDriver: true,
-                  }).start();
+                  }).start(() => startIdlePulse());
                 }}
                 onPress={firePress}
                 accessibilityState={{ disabled }}

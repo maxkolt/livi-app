@@ -15,6 +15,8 @@ export type HomeCenterProfileProps = {
   compact?: boolean;
   /** Телефон в landscape: та же вертикальная структура, меньший аватар/ник. */
   dense?: boolean;
+  /** Экран приветствия: аватар в радаре без ника под фото. */
+  radarStage?: boolean;
   savedNick: string;
   avatarUri: string;
   myFullAvatarUri: string;
@@ -33,6 +35,7 @@ function HomeCenterProfileInner({
   layoutWidth,
   compact = false,
   dense = false,
+  radarStage = false,
   savedNick,
   avatarUri,
   myFullAvatarUri,
@@ -47,8 +50,16 @@ function HomeCenterProfileInner({
   const letter = displayAvatarLetter(savedNick);
   const wrapperStyle: StyleProp<ViewStyle> = {
     alignItems: 'center',
-    marginTop: dense ? 2 : compact ? 4 : Platform.OS === 'android' ? 20 : 12 + 20,
-    marginBottom: dense ? -8 : compact ? -18 : layoutWidth < 400 ? -40 : -65,
+    marginTop: radarStage
+      ? 0
+      : dense
+        ? 2
+        : compact
+          ? 4
+          : Platform.OS === 'android'
+            ? 20
+            : 12 + 20,
+    marginBottom: radarStage ? 0 : dense ? -8 : compact ? -18 : layoutWidth < 400 ? -40 : -65,
   };
 
   const isLocalPreview = avatarUri && /^(file|content|ph|assets-library):\/\//i.test(avatarUri);
@@ -59,15 +70,77 @@ function HomeCenterProfileInner({
   const noAvatar = !isLocalPreview && !hasCachedAvatar && !hasDirectAvatarUri;
   const noNick = !(savedNick && String(savedNick).trim());
 
-  const centerAvatarSize = dense
-    ? 56
-    : compact
-      ? 76
-      : Platform.OS === 'ios'
-        ? 136
-        : 120;
+  const centerAvatarSize = radarStage
+    ? Math.round(layoutWidth < 400 ? 112 : 124)
+    : dense
+      ? 56
+      : compact
+        ? 76
+        : Platform.OS === 'ios'
+          ? 136
+          : 120;
   const centerAvatarRadius = centerAvatarSize / 2;
-  const letterFontSize = dense ? 22 : 48;
+  const letterFontSize = dense ? 22 : radarStage ? 36 : 48;
+
+  const avatarInner = (
+    <View
+      ref={avatarAnchorRef}
+      collapsable={false}
+      style={[
+        styles.centerAvatarWrap,
+        {
+          width: centerAvatarSize,
+          height: centerAvatarSize,
+          borderRadius: centerAvatarRadius,
+          backgroundColor: menuChromeBg,
+          ...(radarStage
+            ? {
+                borderWidth: 2.5,
+                borderColor: 'rgba(59, 130, 246, 0.78)',
+              }
+            : null),
+        },
+      ]}
+    >
+      {isLocalPreview ? (
+        <ExpoImage
+          source={{ uri: resolvedAvatarUri || avatarUri }}
+          style={styles.centerAvatarImg}
+          cachePolicy="none"
+        />
+      ) : myUserId && myAvatarVer > 0 ? (
+        <AvatarImage
+          userId={myUserId}
+          avatarVer={myAvatarVer}
+          uri={myFullAvatarUri || undefined}
+          size={centerAvatarSize}
+          fallbackText={letter}
+          containerStyle={styles.centerAvatarImg}
+          fallbackTextStyle={{ fontSize: letterFontSize, fontWeight: '800' }}
+        />
+      ) : hasDirectAvatarUri && resolvedAvatarReady ? (
+        <ExpoImage
+          source={{ uri: resolvedAvatarUri }}
+          style={styles.centerAvatarImg}
+          cachePolicy={/^https?:\/\//i.test(avatarUri) ? 'memory-disk' : 'none'}
+        />
+      ) : hasDirectAvatarUri ? (
+        avatarVerChecked ? (
+          <View style={[styles.centerAvatarImg, { alignItems: 'center', justifyContent: 'center' }]}>
+            <Text style={{ color: LIVI.titan, fontSize: letterFontSize, fontWeight: '500' }}>{letter}</Text>
+          </View>
+        ) : (
+          <View style={[styles.centerAvatarImg, { alignItems: 'center', justifyContent: 'center' }]} />
+        )
+      ) : avatarVerChecked ? (
+        <View style={[styles.centerAvatarImg, { alignItems: 'center', justifyContent: 'center' }]}>
+          <Text style={{ color: LIVI.titan, fontSize: letterFontSize, fontWeight: '500' }}>{letter}</Text>
+        </View>
+      ) : (
+        <View style={[styles.centerAvatarImg, { alignItems: 'center', justifyContent: 'center' }]} />
+      )}
+    </View>
+  );
 
   return (
     <View style={wrapperStyle}>
@@ -75,67 +148,22 @@ function HomeCenterProfileInner({
         onPress={() => onOpenAvatarModal(myFullAvatarUri || avatarUri || '')}
         style={{ alignSelf: 'center' }}
       >
-        <ChromePerimeterGlow
-          isDark={isDark}
-          width={centerAvatarSize}
-          height={centerAvatarSize}
-          borderRadius={centerAvatarRadius}
-          glowIntensity={isDark ? 1 : 2}
-          outerStyle={{ marginBottom: -CHROME_PERIMETER_GLOW_LAYOUT_INSET }}
-        >
-          <View
-            ref={avatarAnchorRef}
-            collapsable={false}
-            style={[
-              styles.centerAvatarWrap,
-              {
-                width: centerAvatarSize,
-                height: centerAvatarSize,
-                borderRadius: centerAvatarRadius,
-                backgroundColor: menuChromeBg,
-              },
-            ]}
+        {radarStage ? (
+          avatarInner
+        ) : (
+          <ChromePerimeterGlow
+            isDark={isDark}
+            width={centerAvatarSize}
+            height={centerAvatarSize}
+            borderRadius={centerAvatarRadius}
+            glowIntensity={isDark ? 1.15 : 2.25}
+            outerStyle={{ marginBottom: -CHROME_PERIMETER_GLOW_LAYOUT_INSET }}
           >
-            {isLocalPreview ? (
-              <ExpoImage
-                source={{ uri: resolvedAvatarUri || avatarUri }}
-                style={styles.centerAvatarImg}
-                cachePolicy="none"
-              />
-            ) : myUserId && myAvatarVer > 0 ? (
-              <AvatarImage
-                userId={myUserId}
-                avatarVer={myAvatarVer}
-                uri={myFullAvatarUri || undefined}
-                size={centerAvatarSize}
-                fallbackText={letter}
-                containerStyle={styles.centerAvatarImg}
-                fallbackTextStyle={{ fontSize: letterFontSize, fontWeight: '800' }}
-              />
-            ) : hasDirectAvatarUri && resolvedAvatarReady ? (
-              <ExpoImage
-                source={{ uri: resolvedAvatarUri }}
-                style={styles.centerAvatarImg}
-                cachePolicy={/^https?:\/\//i.test(avatarUri) ? 'memory-disk' : 'none'}
-              />
-            ) : hasDirectAvatarUri ? (
-              avatarVerChecked ? (
-                <View style={[styles.centerAvatarImg, { alignItems: 'center', justifyContent: 'center' }]}>
-                  <Text style={{ color: LIVI.titan, fontSize: letterFontSize, fontWeight: '500' }}>{letter}</Text>
-                </View>
-              ) : (
-                <View style={[styles.centerAvatarImg, { alignItems: 'center', justifyContent: 'center' }]} />
-              )
-            ) : avatarVerChecked ? (
-              <View style={[styles.centerAvatarImg, { alignItems: 'center', justifyContent: 'center' }]}>
-                <Text style={{ color: LIVI.titan, fontSize: letterFontSize, fontWeight: '500' }}>{letter}</Text>
-              </View>
-            ) : (
-              <View style={[styles.centerAvatarImg, { alignItems: 'center', justifyContent: 'center' }]} />
-            )}
-          </View>
-        </ChromePerimeterGlow>
+            {avatarInner}
+          </ChromePerimeterGlow>
+        )}
       </Pressable>
+      {!radarStage ? (
       <Text
         style={[
           styles.subtitleNik,
@@ -150,6 +178,7 @@ function HomeCenterProfileInner({
       >
         {displayName(savedNick)}
       </Text>
+      ) : null}
     </View>
   );
 }

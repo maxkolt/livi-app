@@ -201,3 +201,20 @@ export function getFriendDisplay(f: Friend) {
   const avatarLetter = !hasAvatar && hasNick ? displayAvatarLetter(rawNick) : '';
   return { displayName: displayNameValue, avatarLetter, hasAvatar };
 }
+
+/** Нормализация для поиска по нику (любой язык, без учёта регистра). */
+export function normalizeFriendSearchText(value: string): string {
+  return String(value ?? '')
+    .normalize('NFKC')
+    .trim()
+    .toLocaleLowerCase(undefined);
+}
+
+export function friendMatchesNameSearch(friend: Friend, rawQuery: string): boolean {
+  const query = normalizeFriendSearchText(rawQuery);
+  if (!query) return true;
+  const { displayName } = getFriendDisplay(friend);
+  const nameNorm = normalizeFriendSearchText(displayName);
+  if (!nameNorm || nameNorm === normalizeFriendSearchText('—')) return false;
+  return nameNorm.includes(query);
+}

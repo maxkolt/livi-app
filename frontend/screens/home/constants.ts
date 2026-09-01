@@ -1,6 +1,24 @@
 import { Platform, StyleSheet } from 'react-native';
 import { FRIEND_ACTION_BUTTON, FRIEND_ROW_ACTION_GAP } from '../../constants/uiTokens';
 
+/** Фон welcome-экрана (макет). */
+export const WELCOME_STAGE_BG = '#0A0C14';
+/** Accent gradient (aura) — вместо фиолетового на макете. */
+export const AURA_GRADIENT = ['#14b8a6', '#3b82f6', '#00b5ff'] as const;
+export const AURA_GLOW = '#3b82f6';
+/** Надписи welcome / активный tab — в тон aura-рамки CTA. */
+export const WELCOME_AURA_TEXT = AURA_GRADIENT[2];
+export const CROWN_GOLD = '#E4C065';
+export const WELCOME_CARD_BG = '#161B22';
+export const WELCOME_NAV_BG = '#151921';
+export const WELCOME_MUTED_TEXT = '#8B949E';
+/** Заголовки welcome (например «Друзья») — мягче чистого white. */
+export const WELCOME_HEADER_TITLE = 'rgba(244, 245, 247, 0.86)';
+export const WELCOME_CHROME_BTN_BG = '#1C2129';
+/** Полупрозрачная «стеклянная» подложка (онлайн-баннер, tab bar). */
+export const WELCOME_GLASS_SURFACE = 'rgba(22, 27, 34, 0.52)';
+export const WELCOME_GLASS_BORDER = 'rgba(255,255,255,0.06)';
+
 export const LIVI = {
   bg: '#151F33',
   surface: '#0D0E10',
@@ -15,6 +33,54 @@ export const LIVI = {
   darkText: '#151515',
   textThemeWhite: '#444444',
 };
+
+/** Заливка «Vi» — тёмный chrome с бирюзово-синими оттенками (aura). */
+export const WELCOME_BRAND_VI_FILL_GRADIENT = [
+  '#1a3640',
+  '#2a5868',
+  '#4a7a8c',
+] as const;
+
+/** Обводка «Vi» — teal → blue. */
+export const WELCOME_BRAND_VI_STROKE_GRADIENT = [
+  '#134e4a',
+  '#2a6f7a',
+  '#3b82f6',
+] as const;
+
+/** Горизонтальный inset списка друзей на welcome (карточки уже экрана). */
+export const WELCOME_FRIENDS_LIST_INSET = 22;
+/** Отступ справа у кнопок звонка/чата в welcome-карточке. */
+export const WELCOME_FRIEND_ROW_TRAILING_PAD = 12;
+/** Высота welcome-карточки (контент). */
+export const WELCOME_FRIEND_CARD_ROW_HEIGHT = 66;
+/** Зазор между welcome-карточками. */
+export const WELCOME_FRIEND_CARD_GAP = 6;
+/** Шаг для getItemLayout (высота + зазор). */
+export const WELCOME_FRIEND_ROW_STRIDE = WELCOME_FRIEND_CARD_ROW_HEIGHT + WELCOME_FRIEND_CARD_GAP;
+/** Диаметр аватара в welcome-карточке. */
+export const WELCOME_FRIEND_AVATAR_SIZE = 44;
+/** Скругление внешней оболочки сегментов «Все / Онлайн» (не pill). */
+export const WELCOME_FRIENDS_SEGMENT_SHELL_RADIUS = 14;
+/** Кнопки звонка/чата в welcome-строке — скругление (круг при 42×42). */
+export const WELCOME_FRIEND_ACTION_BTN_RADIUS = 21;
+/** Иконки звонка/чата welcome — чуть светлее активных иконок tab bar (Vi). */
+export const WELCOME_FRIEND_ACTION_ICON = '#6aa3b5';
+export const WELCOME_FRIEND_ACTION_ICON_PRESSED = '#7eb8cc';
+
+/** Welcome: та же заливка, что у menu, без рамки. */
+export const WELCOME_FRIEND_ACTION_BTN_SURFACE = {
+  backgroundColor: 'rgba(255,255,255,0.06)',
+  borderWidth: 0,
+  justifyContent: 'center' as const,
+  alignItems: 'center' as const,
+};
+
+export const WELCOME_FRIEND_ACTION_BTN_PRESSED_SURFACE = {
+  backgroundColor: 'rgba(255,255,255,0.28)',
+  borderWidth: 0,
+  transform: [{ scale: 0.92 }],
+} as const;
 
 /** Горизонтальный padding списка друзей (sheet 12 + отступ «назад» 5). */
 export const FRIENDS_LIST_HORIZONTAL_PAD = 17;

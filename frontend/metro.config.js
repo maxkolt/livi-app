@@ -40,14 +40,6 @@ config.resolver.resolveRequest = (context, moduleName, platform) => {
       platform,
     );
   }
-  // React Navigation treats MaskedView as optional. Resolve its probe to a
-  // pass-through component when the package/native view is not installed.
-  if (moduleName === "@react-native-masked-view/masked-view") {
-    return {
-      type: "sourceFile",
-      filePath: require("path").resolve(__dirname, "polyfills/optionalMaskedViewStub.js"),
-    };
-  }
   // CometChat probes its optional calling SDK at runtime. LiVi calls use
   // LiveKit, so resolve both probes to an explicitly unavailable module.
   if (

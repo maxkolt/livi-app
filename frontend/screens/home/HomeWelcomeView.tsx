@@ -2,28 +2,24 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Animated,
   Dimensions,
-  Platform,
+  Easing,
   Pressable,
   StyleSheet,
   Text,
   View,
   type LayoutChangeEvent,
 } from 'react-native';
-import { BlurView } from 'expo-blur';
 import * as Haptics from 'expo-haptics';
-import { Icon } from 'react-native-paper';
 import { logger } from '../../utils/logger';
-import {
-  ANDROID_MENU_HIT_SLOP,
-  CHROME_PERIMETER_GLOW_LAYOUT_INSET,
-  LIVI,
-  MENU_BTN_RADIUS,
-  MENU_BTN_SIZE,
-  SEARCH_CTA_TABLET_MIN_WIDTH,
-} from './constants';
-import { AnimatedBorderButton, AnimatedGradientBorder, BrandTitleWithOutline } from './chrome';
+import { CHROME_PERIMETER_GLOW_LAYOUT_INSET, LIVI, SEARCH_CTA_TABLET_MIN_WIDTH, WELCOME_MUTED_TEXT } from './constants';
+import { BrandTitleWithOutline } from './chrome';
 import { HomeBrandConfetti, type BrandConfettiOrigin } from './HomeBrandConfetti';
 import { HomeCenterProfile } from './HomeCenterProfile';
+import { WelcomeCrownButton } from './WelcomeCrownButton';
+import { WelcomeOnlineBanner, type WelcomeBannerPeer } from './WelcomeOnlineBanner';
+import { WelcomeRadar } from './WelcomeRadar';
+import { WelcomeSearchCta } from './WelcomeSearchCta';
+import type { Lang } from '../../utils/i18n';
 import type { HomeStyles } from './styles';
 
 export type HomeWelcomeViewProps = {
@@ -33,21 +29,24 @@ export type HomeWelcomeViewProps = {
   layoutWidth: number;
   layoutHeight: number;
   L: (key: string) => string;
-  menuBtnInnerBg: string;
+  lang: Lang;
   menuChromeBg: string;
+  onOpenProfile: () => void;
+  /** Долгое нажатие на корону — меню (друзья и т.д.), пока нет tab bar. */
   onOpenMenu: () => void;
+  onlineCount: number | null;
+  bannerPeers: WelcomeBannerPeer[];
   unreadByUser: Record<string, number>;
   missedByUser: Record<string, number>;
   centerProfile: Omit<
     React.ComponentProps<typeof HomeCenterProfile>,
-    'styles' | 'isDark' | 'layoutWidth' | 'menuChromeBg' | 'compact' | 'dense' | 'avatarAnchorRef'
+    'styles' | 'isDark' | 'layoutWidth' | 'menuChromeBg' | 'compact' | 'dense' | 'radarStage' | 'avatarAnchorRef'
   >;
   NoticeView: React.ReactNode;
   hasActiveCallForSearch: boolean;
   showCallSearchLockBadge: boolean;
   onStartSearch: () => void;
   onBlockedStartSearch: () => void;
-  /** Сплеш уже скрыт — один раз за холодный старт запускаем перелив LiVi. */
   splashGone?: boolean;
 };
 
@@ -55,25 +54,25 @@ function resolveIsLandscape(width: number, height: number) {
   return width > 0 && height > 0 && width / height > 1.05;
 }
 
-/** Телефон vs планшет: по короткой стороне (в landscape ширина телефона часто ≥ 600). */
 function resolveIsPhone(width: number, height: number) {
   const shortest = Math.min(width, height);
   return shortest > 0 && shortest < 600;
 }
 
-/** Сбрасывается при убийстве процесса — при возврате из фона/PiP повторно не играет. */
 let brandEntryShinePlayedThisSession = false;
 
 function HomeWelcomeViewInner({
   styles,
   isDark,
-  themeBackground,
   layoutWidth,
   layoutHeight,
   L,
-  menuBtnInnerBg,
+  lang,
   menuChromeBg,
+  onOpenProfile,
   onOpenMenu,
+  onlineCount,
+  bannerPeers,
   unreadByUser,
   missedByUser,
   centerProfile,
@@ -84,26 +83,30 @@ function HomeWelcomeViewInner({
   onBlockedStartSearch,
   splashGone = true,
 }: HomeWelcomeViewProps) {
-  const menuIdleBlur = isDark ? 15 : 20;
-  const menuPressedBlur = isDark ? 25 : 40;
-  // Как у «Начать поиск»: idle titan 0.25 в обеих темах.
-  const menuIdleTitan = 0.25;
-  const menuPressedTitan = isDark ? 0.4 : 0.5;
-  const [menuBlurIntensity, setMenuBlurIntensity] = useState(menuIdleBlur);
-  const menuTitanOpacity = useRef(new Animated.Value(menuIdleTitan)).current;
   const welcomeRootRef = useRef<View>(null);
   const avatarAnchorRef = useRef<View>(null);
+  const welcomeBlockRef = useRef<View>(null);
+  const copyAnchorRef = useRef<View>(null);
+  const searchBtnAnchorRef = useRef<View>(null);
   const burstActiveRef = useRef(false);
   const [burst, setBurst] = useState<{ id: number; origin: BrandConfettiOrigin } | null>(null);
   const [shineNonce, setShineNonce] = useState(0);
-  const welcomeBlockRef = useRef<View>(null);
-  const subtitleAnchorRef = useRef<View>(null);
-  const searchBtnAnchorRef = useRef<View>(null);
+  const reveal = useRef(new Animated.Value(0)).current;
   const [badgeGap, setBadgeGap] = useState<{ top: number; height: number } | null>(null);
   const [measured, setMeasured] = useState<{ w: number; h: number }>(() => ({
     w: layoutWidth,
     h: layoutHeight,
   }));
+
+  useEffect(() => {
+    if (!splashGone) return;
+    Animated.timing(reveal, {
+      toValue: 1,
+      duration: 560,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+  }, [reveal, splashGone]);
 
   useEffect(() => {
     if (!splashGone || brandEntryShinePlayedThisSession) return;
@@ -121,9 +124,7 @@ function HomeWelcomeViewInner({
 
   useEffect(() => {
     setMeasured((prev) =>
-      prev.w === layoutWidth && prev.h === layoutHeight
-        ? prev
-        : { w: layoutWidth, h: layoutHeight },
+      prev.w === layoutWidth && prev.h === layoutHeight ? prev : { w: layoutWidth, h: layoutHeight },
     );
   }, [layoutWidth, layoutHeight]);
 
@@ -139,22 +140,25 @@ function HomeWelcomeViewInner({
     const { width, height } = e.nativeEvent.layout;
     if (!(width > 0 && height > 0)) return;
     setMeasured((prev) =>
-      Math.abs(prev.w - width) < 1 && Math.abs(prev.h - height) < 1
-        ? prev
-        : { w: width, h: height },
+      Math.abs(prev.w - width) < 1 && Math.abs(prev.h - height) < 1 ? prev : { w: width, h: height },
     );
   };
 
   const viewWidth = measured.w || layoutWidth;
   const viewHeight = measured.h || layoutHeight;
-
   const isTabletLayout = viewWidth >= SEARCH_CTA_TABLET_MIN_WIDTH;
   const isPhone = resolveIsPhone(viewWidth, viewHeight);
   const isLandscape = resolveIsLandscape(viewWidth, viewHeight);
-  // Только телефоны в landscape: та же вертикальная структура, но плотнее.
   const phoneLandscape = isPhone && isLandscape;
-  // Короткий portrait на телефоне (как раньше). Планшеты не трогаем.
   const compactLayout = isPhone && !isLandscape && viewHeight < 520;
+
+  const radarSize = phoneLandscape
+    ? Math.min(viewWidth * 0.68, 248)
+    : compactLayout
+      ? Math.min(viewWidth * 0.84, 288)
+      : Math.min(viewWidth * 0.88, 328);
+
+  const welcomeAvatarRadius = Math.round((viewWidth < 400 ? 112 : 124) / 2);
 
   const cancelBurst = useCallback(() => {
     if (!burstActiveRef.current) return;
@@ -164,10 +168,7 @@ function HomeWelcomeViewInner({
 
   const finishBurst = useCallback((burstId: number) => {
     if (!burstActiveRef.current) return;
-    setBurst((current) => {
-      if (!current || current.id !== burstId) return current;
-      return null;
-    });
+    setBurst((current) => (current?.id === burstId ? null : current));
     burstActiveRef.current = false;
     setShineNonce((nonce) => nonce + 1);
   }, []);
@@ -178,14 +179,14 @@ function HomeWelcomeViewInner({
     try {
       void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     } catch {
-      /* haptic optional */
+      /* optional */
     }
   }, []);
 
   const onBrandPress = useCallback(() => {
     if (burstActiveRef.current) return;
     burstActiveRef.current = true;
-    const fallbackSize = phoneLandscape ? 56 : compactLayout ? 76 : Platform.OS === 'ios' ? 136 : 120;
+    const fallbackSize = phoneLandscape ? 56 : compactLayout ? 76 : 118;
     const fallback = () => {
       if (!burstActiveRef.current) return;
       fireBurst({
@@ -203,7 +204,7 @@ function HomeWelcomeViewInner({
     root.measureInWindow((rx, ry) => {
       avatar.measureInWindow((ax, ay, aw, ah) => {
         if (!burstActiveRef.current) return;
-        if (!(aw > 8 && ah > 8) || !Number.isFinite(ax) || !Number.isFinite(ay)) {
+        if (!(aw > 8 && ah > 8)) {
           fallback();
           return;
         }
@@ -216,8 +217,18 @@ function HomeWelcomeViewInner({
     });
   }, [compactLayout, fireBurst, phoneLandscape, viewHeight, viewWidth]);
 
-  const handleOpenMenu = useCallback(() => {
+  const handleOpenProfile = useCallback(() => {
     cancelBurst();
+    onOpenProfile();
+  }, [cancelBurst, onOpenProfile]);
+
+  const handleOpenMenuLongPress = useCallback(() => {
+    cancelBurst();
+    try {
+      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    } catch {
+      /* optional */
+    }
     onOpenMenu();
   }, [cancelBurst, onOpenMenu]);
 
@@ -239,48 +250,22 @@ function HomeWelcomeViewInner({
     [cancelBurst, centerProfile],
   );
 
-  const menuBtnMarginRight = isTabletLayout
-    ? -CHROME_PERIMETER_GLOW_LAYOUT_INSET + 10
-    : -CHROME_PERIMETER_GLOW_LAYOUT_INSET;
-
-  const showCallLock = hasActiveCallForSearch && showCallSearchLockBadge;
-  // Ширина строк приветствия: почти на весь экран, чтобы subtitle не обрезался.
-  const welcomeTextWidth = Math.max(0, viewWidth - 28);
-  const welcomeTitleFontSize = phoneLandscape
-    ? 16
-    : compactLayout
-      ? 19
-      : Platform.OS === 'android'
-        ? 24
-        : 26;
-  const welcomeSubtitleFontSize = phoneLandscape
-    ? 12
-    : compactLayout
-      ? 13
-      : Platform.OS === 'android'
-        ? 12
-        : 16;
-
-  useEffect(() => {
-    setMenuBlurIntensity(menuIdleBlur);
-    menuTitanOpacity.setValue(menuIdleTitan);
-  }, [menuIdleBlur, menuIdleTitan, menuTitanOpacity]);
-
   const syncBadgeGap = React.useCallback(() => {
     const block = welcomeBlockRef.current;
-    const subtitle = subtitleAnchorRef.current;
+    const copyTop = copyAnchorRef.current;
     const button = searchBtnAnchorRef.current;
-    if (!block || !subtitle || !button) return;
+    if (!block || !copyTop || !button) return;
     block.measureInWindow((_bx, blockY) => {
-      subtitle.measureInWindow((_sx, subY, _sw, subH) => {
-        button.measureInWindow((_cx, btnY) => {
-          const top = subY + subH - blockY;
-          const frameTop = btnY + CHROME_PERIMETER_GLOW_LAYOUT_INSET - blockY;
+      copyTop.measureInWindow((_cx, copyY, _cw, copyH) => {
+        button.measureInWindow((_sx, btnY) => {
+          const top = copyY + copyH - blockY;
+          const frameTop = btnY - blockY;
           const height = frameTop - top;
-          if (!(height > 0)) return;
-          setBadgeGap((prev) =>
-            prev && prev.top === top && prev.height === height ? prev : { top, height },
-          );
+          if (height > 0) {
+            setBadgeGap((prev) =>
+              prev && prev.top === top && prev.height === height ? prev : { top, height },
+            );
+          }
         });
       });
     });
@@ -304,16 +289,13 @@ function HomeWelcomeViewInner({
   const missedValues = Object.values(missedByUser).filter((n) => typeof n === 'number' && n > 0);
   const shouldShowMenuDot = unreadValues.length > 0 || missedValues.length > 0;
   if (shouldShowMenuDot) {
-    logger.debug('[HomeScreen] Showing menu dot notification', {
-      hasUnread: unreadValues.length > 0,
-      hasMissed: missedValues.length > 0,
-      unreadCount: unreadValues.length,
-      missedCount: missedValues.length,
-      totalMissedKeys: Object.keys(missedByUser).length,
-      missedByUser,
+    logger.debug('[HomeScreen] welcome menu dot', {
+      unread: unreadValues.length,
+      missed: missedValues.length,
     });
   }
 
+  const showCallLock = hasActiveCallForSearch && showCallSearchLockBadge;
   const callLockBadge = showCallLock ? (
     <View
       style={[
@@ -321,38 +303,34 @@ function HomeWelcomeViewInner({
         {
           backgroundColor: isDark ? 'rgba(138,143,153,0.16)' : 'rgba(59,68,83,0.16)',
           borderColor: isDark ? 'rgba(138,143,153,0.36)' : 'rgba(59,68,83,0.34)',
-          ...(phoneLandscape
-            ? { paddingVertical: 4, paddingHorizontal: 8, maxWidth: '90%' as const }
-            : null),
         },
       ]}
     >
-      <Text
-        style={[
-          styles.noticeText,
-          {
-            color: isDark ? 'rgba(240,241,243,0.92)' : 'rgba(47,55,66,0.9)',
-            ...(phoneLandscape ? { fontSize: 11 } : null),
-          },
-        ]}
-      >
+      <Text style={[styles.noticeText, { color: isDark ? 'rgba(240,241,243,0.92)' : 'rgba(47,55,66,0.9)' }]}>
         {L('finishCurrentCallFirst')}
       </Text>
     </View>
   ) : null;
 
+  const revealStyle = {
+    opacity: reveal,
+    transform: [
+      {
+        translateY: reveal.interpolate({
+          inputRange: [0, 1],
+          outputRange: [12, 0],
+        }),
+      },
+    ],
+  };
+
   return (
-    <View
-      ref={welcomeRootRef}
-      style={{ flex: 1, minHeight: 0 }}
-      onLayout={onRootLayout}
-      collapsable={false}
-    >
+    <View ref={welcomeRootRef} style={welcomeStyles.root} onLayout={onRootLayout} collapsable={false}>
       <View
         style={[
-          styles.topBar,
-          { backgroundColor: 'transparent' },
-          phoneLandscape ? { height: 48 } : compactLayout ? { height: 64 } : null,
+          welcomeStyles.topBar,
+          phoneLandscape && welcomeStyles.topBarLandscape,
+          compactLayout && welcomeStyles.topBarCompact,
         ]}
       >
         <BrandTitleWithOutline
@@ -360,253 +338,111 @@ function HomeWelcomeViewInner({
           onPress={onBrandPress}
           pressLocked={!!burst}
           shineNonce={shineNonce}
+          fontSize={36}
+          tailAuraFromIndex={2}
+          letterGlow={false}
         />
-
-        <View
-          style={{
-            position: 'relative',
-            flexShrink: 0,
-            marginRight: menuBtnMarginRight,
-          }}
-        >
-          <AnimatedGradientBorder
-            isDark={isDark}
-            width={MENU_BTN_SIZE}
-            height={MENU_BTN_SIZE}
-            borderRadius={MENU_BTN_RADIUS}
-            perimeterGlow
-          >
-            <Pressable
-              hitSlop={
-                Platform.OS === 'android'
-                  ? ANDROID_MENU_HIT_SLOP
-                  : { top: 8, bottom: 8, left: 8, right: 8 }
-              }
-              android_ripple={{
-                color: isDark ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.10)',
-                borderless: false,
-              }}
-              style={[
-                styles.menuBtnInner,
-                {
-                  backgroundColor: menuBtnInnerBg,
-                  position: 'relative',
-                  ...(Platform.OS === 'android' ? { elevation: 0 } : {}),
-                },
-              ]}
-              onPressIn={() => {
-                cancelBurst();
-                if (Platform.OS === 'ios') {
-                  setMenuBlurIntensity(menuPressedBlur);
-                }
-                Animated.timing(menuTitanOpacity, {
-                  toValue: menuPressedTitan,
-                  duration: 150,
-                  useNativeDriver: true,
-                }).start();
-              }}
-              onPressOut={() => {
-                if (Platform.OS === 'ios') {
-                  setMenuBlurIntensity(menuIdleBlur);
-                }
-                Animated.timing(menuTitanOpacity, {
-                  toValue: menuIdleTitan,
-                  duration: 200,
-                  useNativeDriver: true,
-                }).start();
-              }}
-              onPress={handleOpenMenu}
-            >
-              <BlurView
-                pointerEvents="none"
-                intensity={menuBlurIntensity}
-                tint={isDark ? 'dark' : 'light'}
-                style={[StyleSheet.absoluteFillObject, { borderRadius: MENU_BTN_RADIUS }]}
-              />
-              <Animated.View
-                pointerEvents="none"
-                style={[
-                  StyleSheet.absoluteFillObject,
-                  {
-                    borderRadius: MENU_BTN_RADIUS,
-                    backgroundColor: isDark ? '#8A8F99' : '#3B4453',
-                    opacity: menuTitanOpacity,
-                  },
-                ]}
-              />
-              <View style={styles.menuBtnIconWrap} pointerEvents="none">
-                <Icon
-                  source="menu"
-                  size={Platform.OS === 'ios' ? 28 : 24}
-                  color={isDark ? LIVI.text : LIVI.textThemeWhite}
-                />
-              </View>
-            </Pressable>
-          </AnimatedGradientBorder>
-          {shouldShowMenuDot ? (
-            <View
-              style={[
-                styles.menuDot,
-                {
-                  top: CHROME_PERIMETER_GLOW_LAYOUT_INSET - 2,
-                  right: 2 + CHROME_PERIMETER_GLOW_LAYOUT_INSET,
-                },
-              ]}
-            />
-          ) : null}
-        </View>
+        <WelcomeCrownButton
+          onPress={handleOpenProfile}
+          onLongPress={handleOpenMenuLongPress}
+          showBadge={shouldShowMenuDot}
+        />
       </View>
 
-      <HomeCenterProfile
-        styles={styles}
-        isDark={isDark}
-        layoutWidth={viewWidth}
-        compact={compactLayout}
-        dense={phoneLandscape}
-        menuChromeBg={menuChromeBg}
-        {...centerProfile}
-        avatarAnchorRef={avatarAnchorRef}
-        onOpenAvatarModal={handleOpenAvatarModal}
-      />
+      <Animated.View style={revealStyle}>
+        <WelcomeOnlineBanner
+          lang={lang}
+          onlineLabel={L('online')}
+          onlineCount={onlineCount}
+          peers={bannerPeers}
+          compact={phoneLandscape || compactLayout}
+        />
+      </Animated.View>
 
-      <View
+      <Animated.View
         ref={welcomeBlockRef}
         collapsable={false}
         onLayout={syncBadgeGap}
         style={[
-          styles.welcomeBlock,
-          { overflow: 'visible' },
-          Platform.OS === 'android' && {
-            marginTop: phoneLandscape ? 4 : compactLayout ? 8 : 50,
-          },
+          welcomeStyles.radarFlex,
+          revealStyle,
         ]}
       >
-        <View
-          style={[
-            styles.welcomeTextBlock,
-            phoneLandscape && { marginTop: 4, flex: 0, gap: 2 },
-          ]}
-        >
-          <View
-            style={{
-              width: welcomeTextWidth,
-              alignSelf: 'center',
-            }}
-          >
-            <Text
-              style={[
-                styles.title,
-                {
-                  color: isDark ? LIVI.text : LIVI.textThemeWhite,
-                  width: welcomeTextWidth,
-                  fontSize: welcomeTitleFontSize,
-                  lineHeight: welcomeTitleFontSize + 4,
-                },
-              ]}
-              allowFontScaling={false}
-              maxFontSizeMultiplier={1}
-              numberOfLines={1}
-              adjustsFontSizeToFit
-              minimumFontScale={0.55}
-            >
-              {L('welcomeTitle')}
-            </Text>
-          </View>
-          <View
-            ref={subtitleAnchorRef}
-            collapsable={false}
-            onLayout={syncBadgeGap}
-            style={{
-              width: welcomeTextWidth,
-              alignSelf: 'center',
-              marginTop: phoneLandscape ? 0 : 2,
-            }}
-          >
-            <Text
-              style={[
-                styles.subtitle,
-                {
-                  color: isDark ? LIVI.text2 : LIVI.textThemeWhite,
-                  width: welcomeTextWidth,
-                  fontSize: welcomeSubtitleFontSize,
-                  lineHeight: welcomeSubtitleFontSize + 3,
-                  marginTop: 0,
-                  ...(Platform.OS === 'android' && { includeFontPadding: false }),
-                },
-              ]}
-              numberOfLines={1}
-              adjustsFontSizeToFit
-              minimumFontScale={0.55}
-              allowFontScaling={false}
-              maxFontSizeMultiplier={1}
-            >
-              {L('welcomeSubtitle')}
-            </Text>
-          </View>
-        </View>
-        {/* Резерв под бейджи («вызов отменён» и т.п.) между подписью и кнопкой. */}
-        <View
-          style={[
-            styles.noticeSlot,
-            phoneLandscape && { minHeight: 40, marginBottom: 8 },
-            // Планшет landscape: меньше резерв, иначе CTA упирается вниз и теряется нижняя рамка.
-            isTabletLayout &&
-              isLandscape &&
-              !phoneLandscape && { minHeight: 48, marginBottom: 12 },
-          ]}
-          pointerEvents="none"
-        />
-        <View
-          ref={searchBtnAnchorRef}
-          collapsable={false}
-          onLayout={syncBadgeGap}
-          style={{
-            alignSelf: 'stretch',
-            alignItems: 'center',
-            ...(isTabletLayout ? { overflow: 'visible' as const } : null),
-          }}
-        >
-          <AnimatedBorderButton
+        <WelcomeRadar size={radarSize} isDark={isDark} avatarRadius={welcomeAvatarRadius}>
+          <HomeCenterProfile
+            styles={styles}
             isDark={isDark}
-            onPress={handleStartSearchPress}
-            label={L('startSearchBtn')}
-            style={{
-              // Планшет: запас снизу, чтобы glow/SafeArea не срезали нижнюю линию рамки.
-              marginBottom: phoneLandscape
-                ? 4
-                : compactLayout
-                  ? 8
-                  : isTabletLayout
-                    ? 30 + CHROME_PERIMETER_GLOW_LAYOUT_INSET
-                    : 30,
-              ...(isTabletLayout ? { overflow: 'visible' as const } : null),
-            }}
-            backgroundColor={themeBackground}
-            disabled={hasActiveCallForSearch}
-            onDisabledPress={handleBlockedSearchPress}
-            compact={phoneLandscape}
+            layoutWidth={viewWidth}
+            compact={compactLayout}
+            dense={phoneLandscape}
+            radarStage
+            menuChromeBg={menuChromeBg}
+            {...centerProfile}
+            avatarAnchorRef={avatarAnchorRef}
+            onOpenAvatarModal={handleOpenAvatarModal}
           />
-        </View>
-        {badgeGap ? (
-          <View
-            pointerEvents="box-none"
-            style={{
-              position: 'absolute',
-              left: 0,
-              right: 0,
-              top: badgeGap.top,
-              height: badgeGap.height,
-              justifyContent: 'center',
-              alignItems: 'center',
-              gap: phoneLandscape ? 6 : 10,
-              zIndex: 2,
-            }}
-          >
-            {NoticeView}
-            {callLockBadge}
+        </WelcomeRadar>
+
+        <Animated.View style={[welcomeStyles.stageCopy, revealStyle]}>
+          <View ref={copyAnchorRef} collapsable={false} onLayout={syncBadgeGap} style={welcomeStyles.copyBlock}>
+            <Text
+              style={[
+                welcomeStyles.heading,
+                phoneLandscape && welcomeStyles.headingCompact,
+                !isDark && { color: LIVI.textThemeWhite },
+              ]}
+              allowFontScaling={false}
+            >
+              {L('welcomeSearchHeading')}
+            </Text>
+            <Text
+              style={[
+                welcomeStyles.matching,
+                phoneLandscape && welcomeStyles.matchingCompact,
+                !isDark && { color: LIVI.text2 },
+              ]}
+              allowFontScaling={false}
+            >
+              {L('welcomeSearchMatching')}
+            </Text>
           </View>
-        ) : null}
-      </View>
+
+          <View
+            style={[
+              styles.noticeSlot,
+              { minHeight: phoneLandscape ? 10 : 12, marginBottom: phoneLandscape ? 2 : 3 },
+            ]}
+            pointerEvents="none"
+          />
+
+          <View ref={searchBtnAnchorRef} collapsable={false} onLayout={syncBadgeGap} style={welcomeStyles.ctaWrap}>
+            <WelcomeSearchCta
+              label={L('welcomeFindPartnerBtn')}
+              onPress={handleStartSearchPress}
+              disabled={hasActiveCallForSearch}
+              onDisabledPress={handleBlockedSearchPress}
+              compact={phoneLandscape}
+              style={{
+                marginBottom: phoneLandscape ? 4 : 8,
+              }}
+            />
+          </View>
+
+          {badgeGap ? (
+            <View
+              pointerEvents="box-none"
+              style={[
+                welcomeStyles.badgeOverlay,
+                { top: badgeGap.top - (phoneLandscape ? 28 : 48), height: badgeGap.height },
+              ]}
+            >
+              {NoticeView}
+              {callLockBadge}
+            </View>
+          ) : null}
+        </Animated.View>
+      </Animated.View>
+
       {burst ? (
         <HomeBrandConfetti
           key={burst.id}
@@ -619,5 +455,89 @@ function HomeWelcomeViewInner({
     </View>
   );
 }
+
+const welcomeStyles = StyleSheet.create({
+  root: {
+    flex: 1,
+    minHeight: 0,
+  },
+  topBar: {
+    height: 54,
+    paddingTop: 12,
+    paddingHorizontal: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  topBarLandscape: {
+    height: 48,
+    paddingTop: 6,
+  },
+  topBarCompact: {
+    height: 48,
+    paddingTop: 8,
+  },
+  radarFlex: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+    minHeight: 0,
+    paddingTop: 4,
+    marginTop: -8,
+  },
+  stageCopy: {
+    width: '100%',
+    alignItems: 'center',
+    marginTop: 4,
+    paddingBottom: 8,
+    position: 'relative',
+  },
+  copyBlock: {
+    paddingHorizontal: 28,
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  heading: {
+    color: LIVI.white,
+    fontSize: 18,
+    fontWeight: '600',
+    textAlign: 'center',
+    letterSpacing: 0.08,
+    marginBottom: 4,
+  },
+  headingCompact: {
+    fontSize: 17,
+    marginBottom: 4,
+  },
+  matching: {
+    color: WELCOME_MUTED_TEXT,
+    fontSize: 13,
+    fontWeight: '400',
+    textAlign: 'center',
+    lineHeight: 19,
+    maxWidth: 292,
+    paddingHorizontal: 12,
+  },
+  matchingCompact: {
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  ctaWrap: {
+    alignSelf: 'stretch',
+    alignItems: 'center',
+    marginTop: 30,
+    paddingBottom: 4,
+  },
+  badgeOverlay: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 8,
+    zIndex: 2,
+    paddingHorizontal: CHROME_PERIMETER_GLOW_LAYOUT_INSET,
+  },
+});
 
 export const HomeWelcomeView = React.memo(HomeWelcomeViewInner);

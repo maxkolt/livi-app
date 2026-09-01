@@ -17,8 +17,17 @@ import {
 } from './constants';
 
 export const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: LIVI.bg, paddingHorizontal: 14, paddingBottom: 10, justifyContent: 'center' },
-  topBar: { height: 100, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',   paddingHorizontal: Platform.OS === "android" ? 0 : 10, },
+  // Full-bleed home stage: padding lives on sheets/lists/CTA, not the root —
+  // otherwise the welcome bg reads as an inset “frame” on all edges.
+  container: { flex: 1, backgroundColor: LIVI.bg, justifyContent: 'center' },
+  topBar: {
+    height: 108,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    paddingHorizontal: 14,
+    paddingTop: 30,
+  },
   brandOutlineWrap: {
     position: 'relative',
     flexShrink: 1,
@@ -353,9 +362,9 @@ export const styles = StyleSheet.create({
   welcomeTextBlock: {
     flex: 1,
     alignItems: 'center',
-    justifyContent: 'center',
+    justifyContent: 'flex-start',
     gap: 4,
-    marginTop: 35,
+    marginTop: 12,
     minHeight: 0,
     width: '100%',
     paddingHorizontal: 4,
