@@ -28,6 +28,11 @@ import {
   type ChatReadStatus,
 } from "./chatMessageIds";
 import { getMessageImageUris, CHAT_ALBUM_INSET, albumGridLayout } from "./chatAlbum";
+import { WELCOME_BRAND_VI_FILL_GRADIENT } from "../home/constants";
+
+/** Активный чекбокс выбора — как иконки активной вкладки в navbar. */
+const SELECT_CHECK = WELCOME_BRAND_VI_FILL_GRADIENT[2];
+const SELECT_CHECK_BG = "rgba(74, 122, 140, 0.22)";
 import { ChatAlbumGrid } from "./ChatAlbumGrid";
 import { ChatReplyQuoteAccent } from "./ChatReplyQuoteAccent";
 
@@ -81,6 +86,13 @@ export type ChatMessageItemProps = {
     item: any,
     layout: { x: number; y: number; width: number; height: number },
   ) => void;
+  /** true = облако под chrome — не открывать меню и не анимировать. */
+  isLayoutBlockedByChrome?: (layout: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  }) => boolean;
   /** Long-press on one album tile — actions for one/all photos. */
   onLongPressAlbumTile?: (
     item: any,
@@ -120,7 +132,7 @@ export type ChatMessageItemProps = {
 };
 
 
-export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, uploadStatus, onPressImage, onPressAudio, playingAudioId, playingAudioState, onLongPressMessage, onLongPressAlbumTile, albumFocusIndex = null, onMessagePress, onReactionPress, selectionMode, isSelected, onToggleSelect, selectedAlbumIndices = [], onToggleAlbumTileSelect, retryUiForId, onToggleRetryUi, onRetryFailed, resolveMediaUri, peerDisplayName, highlightedMessageId, onPressReplyQuote, animateMessagePress, getMessageAnimation, formatDurationDot, BUBBLE_BG_OUT, BUBBLE_BG_IN, BORDER_COLOR, LIVI, isDark, lang }: ChatMessageItemProps) => {
+export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, uploadStatus, onPressImage, onPressAudio, playingAudioId, playingAudioState, onLongPressMessage, isLayoutBlockedByChrome, onLongPressAlbumTile, albumFocusIndex = null, onMessagePress, onReactionPress, selectionMode, isSelected, onToggleSelect, selectedAlbumIndices = [], onToggleAlbumTileSelect, retryUiForId, onToggleRetryUi, onRetryFailed, resolveMediaUri, peerDisplayName, highlightedMessageId, onPressReplyQuote, animateMessagePress, getMessageAnimation, formatDurationDot, BUBBLE_BG_OUT, BUBBLE_BG_IN, BORDER_COLOR, LIVI, isDark, lang }: ChatMessageItemProps) => {
   const bubbleRef = React.useRef<View>(null);
   const [imageLoadError, setImageLoadError] = React.useState(false);
   const [localImageUri, setLocalImageUri] = React.useState<string | null>(null);
@@ -132,7 +144,9 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
   const fireLongPressWithLayout = React.useCallback(() => {
     const measure = () => {
       bubbleRef.current?.measureInWindow((x, y, w, h) => {
-        onLongPressMessage(item, { x, y, width: w, height: h });
+        const layout = { x, y, width: w, height: h };
+        if (isLayoutBlockedByChrome?.(layout)) return;
+        onLongPressMessage(item, layout);
       });
     };
     if (Platform.OS === 'android') {
@@ -140,10 +154,18 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
     } else {
       measure();
     }
-  }, [item, onLongPressMessage]);
+  }, [item, onLongPressMessage, isLayoutBlockedByChrome]);
   const openMessageActionsFromBubble = React.useCallback(() => {
-    animateMessagePress(item.id, fireLongPressWithLayout, { immediate: true });
-  }, [item.id, animateMessagePress, fireLongPressWithLayout]);
+    const measureThenMaybeOpen = () => {
+      bubbleRef.current?.measureInWindow((x, y, w, h) => {
+        const layout = { x, y, width: w, height: h };
+        if (isLayoutBlockedByChrome?.(layout)) return;
+        animateMessagePress(item.id, () => onLongPressMessage(item, layout), { immediate: true });
+      });
+    };
+    if (Platform.OS === 'android') requestAnimationFrame(measureThenMaybeOpen);
+    else measureThenMaybeOpen();
+  }, [item, animateMessagePress, onLongPressMessage, isLayoutBlockedByChrome]);
   // Fallback логика для определения отправителя если поле sender отсутствует
   let isMyMessage = item.sender === 'me';
   if (item.sender === undefined || item.sender === null) {
@@ -175,6 +197,7 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
       const measure = () => {
         bubbleRef.current?.measureInWindow((x, y, w, h) => {
           const layout = { x, y, width: w, height: h };
+          if (isLayoutBlockedByChrome?.(layout)) return;
           if (onLongPressAlbumTile) onLongPressAlbumTile(item, index, layout);
           else onLongPressMessage(item, layout);
         });
@@ -182,7 +205,7 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
       if (Platform.OS === "android") requestAnimationFrame(measure);
       else measure();
     },
-    [item, onLongPressAlbumTile, onLongPressMessage],
+    [item, onLongPressAlbumTile, onLongPressMessage, isLayoutBlockedByChrome],
   );
   
   // Функция для скачивания изображения через FileSystem (обходит ATS)
@@ -827,10 +850,10 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
           height: 26,
           borderRadius: 13,
           borderWidth: 1.5,
-          borderColor: isSelected ? '#55d187' : (isDark ? 'rgba(255,255,255,0.24)' : 'rgba(0,0,0,0.18)'),
+          borderColor: isSelected ? SELECT_CHECK : (isDark ? 'rgba(255,255,255,0.24)' : 'rgba(0,0,0,0.18)'),
           backgroundColor: pressed
             ? (isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.06)')
-            : (isSelected ? 'rgba(85,209,135,0.18)' : (isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)')),
+            : (isSelected ? SELECT_CHECK_BG : (isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)')),
           alignItems: 'center',
           justifyContent: 'center',
           marginRight: isMyMessage ? 0 : 10,
@@ -838,7 +861,7 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
           overflow: 'hidden',
         })}
       >
-        {isSelected ? <Ionicons name="checkmark" size={18} color="#55d187" /> : null}
+        {isSelected ? <Ionicons name="checkmark" size={18} color={SELECT_CHECK} /> : null}
       </Pressable>
     );
 
@@ -983,17 +1006,17 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
             height: 26,
             borderRadius: 13,
             borderWidth: 1.5,
-            borderColor: isSelected ? '#55d187' : (isDark ? 'rgba(255,255,255,0.24)' : 'rgba(0,0,0,0.18)'),
+            borderColor: isSelected ? SELECT_CHECK : (isDark ? 'rgba(255,255,255,0.24)' : 'rgba(0,0,0,0.18)'),
             backgroundColor: pressed
               ? (isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.06)')
-              : (isSelected ? 'rgba(85,209,135,0.18)' : (isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)')),
+              : (isSelected ? SELECT_CHECK_BG : (isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)')),
             alignItems: 'center',
             justifyContent: 'center',
             marginRight: 10,
             overflow: 'hidden',
           })}
         >
-          {isSelected ? <Ionicons name="checkmark" size={18} color="#55d187" /> : null}
+          {isSelected ? <Ionicons name="checkmark" size={18} color={SELECT_CHECK} /> : null}
         </Pressable>
       )}
 
@@ -1029,10 +1052,10 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
           {/* Текст сообщения (если есть), ссылки кликабельны */}
           {item.type === 'text' && (() => {
           const baseStyle = {
-            color: LIVI.white,
-            fontSize: 16,
+            color: isDark ? 'rgba(196, 202, 212, 0.92)' : LIVI.white,
+            fontSize: 15,
             marginBottom: 3,
-            lineHeight: 22,
+            lineHeight: 21,
             fontWeight: '400' as const,
           };
           const linkStyle = {
@@ -1248,17 +1271,17 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
             height: 26,
             borderRadius: 13,
             borderWidth: 1.5,
-            borderColor: isSelected ? '#55d187' : (isDark ? 'rgba(255,255,255,0.24)' : 'rgba(0,0,0,0.18)'),
+            borderColor: isSelected ? SELECT_CHECK : (isDark ? 'rgba(255,255,255,0.24)' : 'rgba(0,0,0,0.18)'),
             backgroundColor: pressed
               ? (isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.06)')
-              : (isSelected ? 'rgba(85,209,135,0.18)' : (isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)')),
+              : (isSelected ? SELECT_CHECK_BG : (isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)')),
             alignItems: 'center',
             justifyContent: 'center',
             marginLeft: 10,
             overflow: 'hidden',
           })}
         >
-          {isSelected ? <Ionicons name="checkmark" size={18} color="#55d187" /> : null}
+          {isSelected ? <Ionicons name="checkmark" size={18} color={SELECT_CHECK} /> : null}
         </Pressable>
       )}
     </Animated.View>

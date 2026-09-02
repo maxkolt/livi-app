@@ -1,4 +1,5 @@
 import { Platform, Dimensions, StyleSheet } from 'react-native';
+import { WELCOME_HEADER_TITLE } from '../../../screens/home/constants';
 import { CARD_BASE } from './constants';
 
 export const styles = StyleSheet.create({
@@ -95,16 +96,24 @@ export const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  bigBtnPressed: {
+    backgroundColor: 'rgba(26, 54, 64, 0.98)',
+    transform: [{ scale: 0.96 }],
+  },
+  bigBtnPressedDanger: {
+    backgroundColor: '#5C1A28',
+    transform: [{ scale: 0.96 }],
+  },
   bigBtnText: {
-    color: '#333333',
+    color: WELCOME_HEADER_TITLE,
     fontSize: 16,
     fontWeight: '600',
   },
   btnTitan: {
-    backgroundColor: '#8a8f99',
+    backgroundColor: 'rgba(42, 88, 104, 0.62)',
   },
   btnDanger: {
-    backgroundColor: '#ff4d4d',
+    backgroundColor: '#7A2436',
   },
   disabled: {
     opacity: 1,

@@ -24,6 +24,7 @@ import { logger } from './utils/logger';
 import InCallManager from 'react-native-incall-manager';
 import { startIncomingCallAlert, stopIncomingCallAlert } from './utils/incomingCallAlert';
 import HomeScreen, { markHomeScreenBootedForSession } from "./screens/HomeScreen";
+import { WELCOME_STAGE_BG } from "./screens/home/constants";
 import IncomingSharePickerModal from "./components/IncomingSharePickerModal";
 import SystemBarsScrim from "./components/SystemBarsScrim";
 import { PiPProvider, usePiP } from "./src/pip/PiPContext";
@@ -3050,6 +3051,27 @@ function AppContent() {
     return () => timers.forEach((t) => clearTimeout(t));
   }, [rememberExpectedCallAccepted, shouldRequestPendingCallAccepted]);
 
+  // Холодный старт: не оставлять залипший OutgoingCallActivity из prefs, если JS не ведёт исходящий.
+  React.useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    const t = setTimeout(() => {
+      try {
+        const g = global as any;
+        const hasOutgoing =
+          !!String(g.__outgoingCallIdRef?.current || '').trim() ||
+          g.__outgoingCallScreenVisibleRef?.current === true;
+        const hasVideo =
+          g.__videoCallActiveRef?.current === true ||
+          String(navRef.getCurrentRoute?.()?.name ?? '') === 'VideoCall';
+        if (hasOutgoing || hasVideo) return;
+        logger.info('[App] dismiss stale native outgoing on launch (no JS call context)');
+        closeOutgoingCallActivity(null, { force: true, skipMainReturn: true });
+      } catch (e) {
+        logger.warn('[App] dismiss stale outgoing on launch failed', e);
+      }
+    }, 350);
+    return () => clearTimeout(t);
+  }, []);
 
   // КРИТИЧНО: Перерегистрация обработчика при возврате из спящего режима (AppState change)
   React.useEffect(() => {
@@ -3882,7 +3904,7 @@ function AppContent() {
                   animation: 'fade',
                   animationDuration: 80,
                   contentStyle: {
-                    backgroundColor: (theme.colors.background as string) || '#151F33',
+                    backgroundColor: isDark ? WELCOME_STAGE_BG : ((theme.colors.background as string) || WELCOME_STAGE_BG),
                   },
                 }}
               />
@@ -3910,15 +3932,15 @@ function AppContent() {
                   animationDuration: 120,
                   gestureEnabled: true,
                   contentStyle: {
-                    backgroundColor: (theme.colors.background as string) || '#151F33',
+                    backgroundColor: isDark ? WELCOME_STAGE_BG : ((theme.colors.background as string) || WELCOME_STAGE_BG),
                   },
                 }}
               />
             </Stack.Navigator>
           </NavigationContainer>
 
-          {/* Accept / cold start: непрозрачная крышка цвета audio-call, пока VideoCall не onLayout */}
-          {(!initialUrlProcessed || incomingAnswerCover) && (
+          {/* Только accept → VideoCall: не показывать на обычном cold start (иначе весь запуск = экран цвета аудиозвонка). */}
+          {incomingAnswerCover && (
             <View
               style={[StyleSheet.absoluteFill, { backgroundColor: '#1B1C22', zIndex: 9999 }]}
               pointerEvents="auto"

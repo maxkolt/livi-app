@@ -40,7 +40,11 @@ export function useHomeFriends({
   appIsActive,
 }: UseHomeFriendsArgs) {
   const friendsSurfaceActive =
-    appIsActive && ((menuOpen && tab === 'friends') || welcomeActiveTab === 'friends');
+    appIsActive &&
+    ((menuOpen && tab === 'friends') ||
+      welcomeActiveTab === 'friends' ||
+      welcomeActiveTab === 'chat' ||
+      welcomeActiveTab === 'calls');
   const [friends, setFriends] = useState<Friend[]>([]);
   const [initialized, setInitialized] = useState(false);
   const [refreshing, setRefreshing] = useState(false);

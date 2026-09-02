@@ -51,6 +51,8 @@ type WelcomeProfileRowProps = {
   compact?: boolean;
   /** Уже строка по высоте, шрифты как обычно. */
   dense?: boolean;
+  /** Ещё плотнее по высоте, шрифты как у dense (короткие телефоны). */
+  tight?: boolean;
   /** Аккордеон: chevron вниз / вверх вместо вправо. */
   expandable?: boolean;
   expanded?: boolean;
@@ -67,6 +69,7 @@ export function WelcomeProfileRow({
   disabled,
   compact,
   dense,
+  tight,
   expandable,
   expanded,
 }: WelcomeProfileRowProps) {
@@ -84,6 +87,7 @@ export function WelcomeProfileRow({
       style={({ pressed }) => [
         styles.row,
         dense && styles.rowDense,
+        tight && styles.rowTight,
         compact && styles.rowCompact,
         pressed && onPress ? styles.rowPressed : null,
       ]}
@@ -211,6 +215,11 @@ const styles = StyleSheet.create({
     paddingVertical: 11,
     paddingHorizontal: 14,
     minHeight: 47,
+  },
+  rowTight: {
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    minHeight: 40,
   },
   rowPressed: {
     backgroundColor: 'rgba(255,255,255,0.04)',

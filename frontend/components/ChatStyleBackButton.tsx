@@ -67,7 +67,17 @@ export default function ChatStyleBackButton({
             },
         ]}
       >
-        <Ionicons name={icon} size={iconSize} color={tint} />
+        <Ionicons
+          name={icon}
+          size={iconSize}
+          color={tint}
+          style={
+            // Chevron/arrow визуально правее центра glyph: лёгкий сдвиг влево.
+            icon === 'chevron-back' || icon === 'arrow-back'
+              ? { transform: [{ translateX: -Math.max(1, Math.round(iconSize * 0.08)) }] }
+              : undefined
+          }
+        />
       </Pressable>
     </View>
   );

@@ -10,6 +10,7 @@ import {
   Dimensions,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { StageGradient } from "../home/WelcomeStageBackground";
 
 export const REACTION_EMOJIS_PAGE_1 = ["👍", "😊", "❤️", "😮", "😢", "👎"];
 export const REACTION_EMOJIS_PAGE_2 = ["😉", "😂", "😍", "😭", "🙏", "🔥"];
@@ -53,17 +54,19 @@ export function ReactionBarModal({
   }, [visible, hintBounce]);
 
   const barWidth = Math.min(320, Dimensions.get("window").width * 0.88);
+  const Shell = isDark ? StageGradient : View;
 
   const barStyle = {
     width: barWidth,
     flexDirection: "row" as const,
     alignItems: "center" as const,
-    backgroundColor: isDark ? "#1e2329" : "#2d3238",
+    backgroundColor: isDark ? undefined : "#2d3238",
     borderRadius: 24,
     paddingHorizontal: 10,
     paddingVertical: 10,
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.1)" as const,
+    overflow: "hidden" as const,
   };
 
   const renderEmojiRow = (emojis: string[]) => (
@@ -99,7 +102,7 @@ export function ReactionBarModal({
         }}
         onPress={onClose}
       >
-        <Pressable onPress={() => {}} style={{ width: barWidth, overflow: "hidden" }}>
+        <Pressable onPress={() => {}} style={{ width: barWidth, overflow: "hidden", borderRadius: 24 }}>
           <ScrollView
             ref={scrollRef}
             horizontal
@@ -111,7 +114,7 @@ export function ReactionBarModal({
             contentContainerStyle={{ flexGrow: 1 }}
             style={{ borderRadius: 24, overflow: "hidden" }}
           >
-            <View style={barStyle}>
+            <Shell style={barStyle}>
               <Animated.View
                 style={{
                   marginRight: 6,
@@ -125,8 +128,8 @@ export function ReactionBarModal({
                 <Ionicons name="chevron-back" size={18} color="rgba(255,255,255,0.8)" />
               </Animated.View>
               {renderEmojiRow(REACTION_EMOJIS_PAGE_1)}
-            </View>
-            <View style={barStyle}>{renderEmojiRow(REACTION_EMOJIS_PAGE_2)}</View>
+            </Shell>
+            <Shell style={barStyle}>{renderEmojiRow(REACTION_EMOJIS_PAGE_2)}</Shell>
           </ScrollView>
         </Pressable>
       </Pressable>

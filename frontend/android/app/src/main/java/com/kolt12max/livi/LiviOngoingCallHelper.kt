@@ -219,13 +219,25 @@ object LiviOngoingCallHelper {
             clearOngoingCallIfMatches(context, callId)
             return false
         }
-        if (type == "outgoing" && shouldSuppressStaleOutgoingRestore(context, callId)) {
-            dismissStaleOutgoingRestore(context, callId)
-            return false
-        }
-        if (type == "outgoing" && EndedCallIds.isEnded(context, callId)) {
-            clearOngoingCall(context)
-            return false
+        if (type == "outgoing") {
+            // Пустой callId / мёртвые prefs после kill не должны снова поднимать нативный исходящий.
+            if (callId.isBlank() || shouldSuppressStaleOutgoingRestore(context, callId)) {
+                dismissStaleOutgoingRestore(context, callId)
+                return false
+            }
+            if (EndedCallIds.isEnded(context, callId)) {
+                clearOngoingCall(context)
+                return false
+            }
+            // Холодный старт / уже завершённый дозвон: сервис не играет — не восстанавливаем экран.
+            if (!LiviOutgoingCallService.isRingingActive(callId)) {
+                android.util.Log.i(
+                    "LiviOngoingCallHelper",
+                    "launchOngoingCallActivityIfNeeded: skip stale outgoing (service not ringing) callId=${callId.take(24)}",
+                )
+                dismissStaleOutgoingRestore(context, callId)
+                return false
+            }
         }
         val intent = when (type) {
             "outgoing" -> {
@@ -267,6 +279,10 @@ object LiviOngoingCallHelper {
             return null
         }
         if (type == "outgoing" && shouldSuppressStaleOutgoingRestore(context, callId)) {
+            dismissStaleOutgoingRestore(context, callId)
+            return null
+        }
+        if (type == "outgoing" && !LiviOutgoingCallService.isRingingActive(callId)) {
             dismissStaleOutgoingRestore(context, callId)
             return null
         }

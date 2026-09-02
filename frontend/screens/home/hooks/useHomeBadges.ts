@@ -15,6 +15,7 @@ import { clearMissedBadgeCleared, syncAppBadgeFromMissedCount } from '../../../u
 import { logger } from '../../../utils/logger';
 import { MISSED_CALLS_KEY, UNREAD_BY_USER_KEY } from '../constants';
 import { badgeMapsEqual, patchUnreadCountsIfChanged } from '../friendHelpers';
+import { recordCallLog } from '../callLog';
 import type { Friend } from '../types';
 
 type UseHomeBadgesArgs = {
@@ -198,14 +199,17 @@ export function useHomeBadges({ friends, friendsRef }: UseHomeBadgesArgs) {
     const off = onMissedIncrement(({ userId, count }) => {
       if (!userId) return;
       const userIdStr = String(userId);
+      let didIncrement = false;
       setMissedByUser((prev) => {
         const prevCount = prev[userIdStr] || 0;
         const nextCount =
           typeof count === 'number' ? Math.max(prevCount, count) : prevCount + 1;
         if (nextCount <= 0 || nextCount === prevCount) return prev;
+        didIncrement = true;
         logger.debug('[HomeScreen] Missed call updated (UI)', { userId: userIdStr, count: nextCount });
         return { ...prev, [userIdStr]: nextCount };
       });
+      if (didIncrement) recordCallLog({ peerId: userIdStr, direction: 'missed' });
     });
     return () => off?.();
   }, []);

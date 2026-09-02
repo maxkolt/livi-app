@@ -144,9 +144,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-around',
-    paddingTop: 8,
+    paddingTop: 6,
     paddingHorizontal: 2,
-    minHeight: 46,
+    minHeight: 48,
   },
   item: {
     flex: 1,
@@ -158,8 +158,8 @@ const styles = StyleSheet.create({
   tabInner: {
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 4,
-    paddingVertical: 5,
+    gap: 3,
+    paddingVertical: 6,
     paddingHorizontal: 2,
   },
   profileActiveDisc: {

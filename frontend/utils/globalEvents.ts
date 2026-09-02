@@ -231,6 +231,42 @@ export function emitCloseHomeModals() {
   }
 }
 
+export type RequestDirectCallPayload = {
+  peerId: string;
+  peerName?: string;
+  peerAvatarVer?: number;
+  peerAvatarThumbB64?: string;
+  peerOnline?: boolean;
+  media?: 'audio' | 'video';
+};
+
+const requestDirectCallListeners = new Set<Listener<RequestDirectCallPayload>>();
+
+export function onRequestDirectCall(cb: Listener<RequestDirectCallPayload>): () => void {
+  requestDirectCallListeners.add(cb);
+  return () => {
+    requestDirectCallListeners.delete(cb);
+  };
+}
+
+export function emitRequestDirectCall(payload: RequestDirectCallPayload) {
+  const peerId = String(payload?.peerId || '').trim();
+  if (!peerId) return;
+  const next: RequestDirectCallPayload = {
+    peerId,
+    peerName: payload.peerName,
+    peerAvatarVer: payload.peerAvatarVer,
+    peerAvatarThumbB64: payload.peerAvatarThumbB64,
+    peerOnline: payload.peerOnline,
+    media: payload.media === 'audio' ? 'audio' : 'video',
+  };
+  for (const l of requestDirectCallListeners) {
+    try {
+      l(next);
+    } catch {}
+  }
+}
+
 export function onCometChatStatus(cb: Listener<CometChatStatusPayload>): () => void {
   cometchatStatusListeners.add(cb);
   return () => {

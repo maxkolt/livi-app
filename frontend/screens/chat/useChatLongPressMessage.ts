@@ -23,6 +23,8 @@ type Options = {
   clearAndroidLayoutIfNeeded: (layout?: Layout) => void;
   enterSelectionModeFromMessage: (m: any, focusIndex: number | null) => void;
   requestImageAction: (kind: "save" | "forward" | "delete", m: any, focusIndex: number | null) => void;
+  /** true = облако ≥½ под шапкой/композером — long-press запрещён. */
+  isLayoutBlockedByChrome?: (layout: Layout) => boolean;
 };
 
 export function useChatLongPressMessage({
@@ -39,9 +41,12 @@ export function useChatLongPressMessage({
   clearAndroidLayoutIfNeeded,
   enterSelectionModeFromMessage,
   requestImageAction,
+  isLayoutBlockedByChrome,
 }: Options) {
   const handleLongPressMessage = React.useCallback(
     (m: any, layout?: { x: number; y: number; width: number; height: number }, focusIndex: number | null = null) => {
+      if (layout && isLayoutBlockedByChrome?.(layout)) return;
+
       setSelectedMessage(m);
       setAlbumFocusIndex(focusIndex);
       clearAndroidLayoutIfNeeded(layout);
@@ -141,7 +146,14 @@ export function useChatLongPressMessage({
       clearAndroidLayoutIfNeeded,
       enterSelectionModeFromMessage,
       requestImageAction,
+      isLayoutBlockedByChrome,
       lang,
+      messageTextRef,
+      setMessageText,
+      setEditingMessageId,
+      setReplyingToMessage,
+      setSelectedMessage,
+      setAlbumFocusIndex,
     ]
   );
 

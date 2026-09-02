@@ -20,6 +20,8 @@ export const WELCOME_STAGE_BOTTOM_WASH = [
 /** Accent gradient (aura) — вместо фиолетового на макете. */
 export const AURA_GRADIENT = ['#14b8a6', '#3b82f6', '#00b5ff'] as const;
 export const AURA_GLOW = '#3b82f6';
+/** Unread / missed count badge on welcome chats and friend action buttons. */
+export const WELCOME_UNREAD_BADGE = '#2158c0';
 /** Надписи welcome / активный tab — в тон aura-рамки CTA. */
 export const WELCOME_AURA_TEXT = AURA_GRADIENT[2];
 export const CROWN_GOLD = '#E4C065';
@@ -172,6 +174,8 @@ export const FRIEND_SWIPE_DELETE_WIDTH = FRIEND_ROW_ACTION_GAP + FRIEND_ACTION_B
 export const DRAFT_KEY = 'profile_draft_v1';
 export const MISSED_CALLS_KEY = 'missed_calls_by_user_v1';
 export const UNREAD_BY_USER_KEY = 'unread_by_user_v1';
+export const CHAT_FAVORITES_KEY = 'welcome_chat_favorites_v1';
+export const CALL_LOG_KEY = 'welcome_call_log_v1';
 export const PROFILE_KEY = 'livi.profile.v1';
 export const INSTALL_ID_KEY = 'livi.installId';
 export const USER_ID_KEY = 'userId';

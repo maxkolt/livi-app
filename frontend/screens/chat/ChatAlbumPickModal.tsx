@@ -12,6 +12,7 @@ import {
 import { Image as ExpoImage } from "expo-image";
 import { Ionicons } from "@expo/vector-icons";
 import { CHAT_ALBUM_GAP, albumGridColumns } from "./chatAlbum";
+import { WelcomeStageBackground } from "../home/WelcomeStageBackground";
 
 export type AlbumPickKind = "save" | "forward" | "delete";
 
@@ -140,6 +141,9 @@ export function ChatAlbumPickModal({
             }),
           }}
         >
+          {isDark ? (
+            <WelcomeStageBackground isDark lightColor={bg} />
+          ) : null}
           <View style={{ paddingHorizontal: 20, paddingTop: 20, paddingBottom: 10 }}>
             <Text
               style={{

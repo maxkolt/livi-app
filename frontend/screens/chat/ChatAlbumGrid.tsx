@@ -9,6 +9,10 @@ import {
   albumGridLayout,
   getMessageImageUris,
 } from "./chatAlbum";
+import { WELCOME_BRAND_VI_FILL_GRADIENT } from "../home/constants";
+
+/** Активный чекбокс альбома — как иконки активной вкладки в navbar. */
+const SELECT_CHECK = WELCOME_BRAND_VI_FILL_GRADIENT[2];
 
 type Props = {
   item: any;
@@ -146,11 +150,11 @@ function AlbumTile({
               alignItems: "center",
               justifyContent: "center",
               backgroundColor: isTileSelected
-                ? "rgba(85,209,135,0.95)"
+                ? SELECT_CHECK
                 : "rgba(0,0,0,0.40)",
               borderWidth: 1.5,
               borderColor: isTileSelected
-                ? "#55d187"
+                ? SELECT_CHECK
                 : "rgba(255,255,255,0.70)",
             }}
           >

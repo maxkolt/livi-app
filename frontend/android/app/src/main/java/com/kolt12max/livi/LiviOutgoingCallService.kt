@@ -104,6 +104,7 @@ class LiviOutgoingCallService : Service() {
     }
 
     private fun stopForegroundAndSelf() {
+        markNotRinging()
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                 stopForeground(STOP_FOREGROUND_REMOVE)
@@ -113,6 +114,16 @@ class LiviOutgoingCallService : Service() {
             }
         } catch (_: Exception) {}
         stopSelf()
+    }
+
+    private fun markRinging(id: String) {
+        ringingCallId = id.trim()
+        ringingActive = true
+    }
+
+    private fun markNotRinging() {
+        ringingActive = false
+        ringingCallId = ""
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -129,10 +140,12 @@ class LiviOutgoingCallService : Service() {
                 "onStartCommand: stop after foreground pendingStop=$pendingStopAfterForeground emptyCallId=${callId.isEmpty()}",
             )
             pendingStopAfterForeground = false
+            markNotRinging()
             stopForegroundAndSelf()
             return START_NOT_STICKY
         }
 
+        markRinging(callId)
         startSound()
         scheduleTimeout()
 
@@ -332,6 +345,7 @@ class LiviOutgoingCallService : Service() {
     }
 
     override fun onDestroy() {
+        markNotRinging()
         closeReceiver?.let { try { unregisterReceiver(it) } catch (_: Exception) {} }
         closeReceiver = null
         timeoutRunnable?.let { mainHandler.removeCallbacks(it) }
@@ -358,6 +372,20 @@ class LiviOutgoingCallService : Service() {
         private const val TAG = "LiviOutgoingCallService"
         private const val NOTIFICATION_ID = 1003
         private const val DEFAULT_TIMEOUT_MS = 27_000L
+
+        @Volatile
+        private var ringingActive: Boolean = false
+        @Volatile
+        private var ringingCallId: String = ""
+
+        /** Живой дозвон (сервис играет ringback). Без этого prefs не должны поднимать Outgoing с лаунчера. */
+        @JvmStatic
+        fun isRingingActive(callId: String? = null): Boolean {
+            if (!ringingActive) return false
+            val want = callId?.trim().orEmpty()
+            if (want.isEmpty()) return true
+            return ringingCallId == want
+        }
 
         fun start(context: Context, callId: String, toUserId: String, toNick: String) {
             if (callId.isBlank()) {

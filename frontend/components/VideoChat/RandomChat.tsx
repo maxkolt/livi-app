@@ -10,6 +10,7 @@ import {
   View,
   Text,
   TouchableOpacity,
+  Pressable,
   Platform,
   Animated,
   Alert,
@@ -43,6 +44,8 @@ import * as Device from 'expo-device';
 import { useAudioRouting } from './hooks/useAudioRouting';
 import { useModeration } from './hooks/useModeration';
 import { shouldDeferRandomChatStopOnAppBackground } from '../../utils/activeCallSession';
+import { WELCOME_STAGE_BG } from '../../screens/home/constants';
+import { WelcomeStageBackground } from '../../screens/home/WelcomeStageBackground';
 import { ANDROID_SCREEN_PADDING, NETWORK_OVERLAY_DELAY_MS } from './randomChat/constants';
 import { styles } from './randomChat/styles';
 import { useRandomChatToast } from './randomChat/useRandomChatToast';
@@ -86,6 +89,10 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   const leavingRef = useRef(false);
   const [isNexting, setIsNexting] = useState(false);
   const isNextingRef = useRef(false); // КРИТИЧНО: Ref для синхронной проверки состояния
+  const [nextTapHighlight, setNextTapHighlight] = useState(false);
+  const nextTapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [startStopTapHighlight, setStartStopTapHighlight] = useState(false);
+  const startStopTapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [partnerId, setPartnerId] = useState<string | null>(null);
   const [partnerUserId, setPartnerUserId] = useState<string | null>(null);
   const partnerUserIdRef = useRef<string | null>(null);
@@ -1393,8 +1400,35 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       };
     }, [navigation, forceStopRandomChat])
   );
-  
-  
+
+  const nextDisabled = !started || isNexting || isInactiveState || loading || isModerationBanned;
+  const startStopLocked = isInactiveState || isModerationBanned;
+
+  const flashNextTap = useCallback(() => {
+    setNextTapHighlight(true);
+    if (nextTapTimerRef.current) clearTimeout(nextTapTimerRef.current);
+    nextTapTimerRef.current = setTimeout(() => {
+      nextTapTimerRef.current = null;
+      setNextTapHighlight(false);
+    }, 280);
+  }, []);
+
+  const flashStartStopTap = useCallback(() => {
+    setStartStopTapHighlight(true);
+    if (startStopTapTimerRef.current) clearTimeout(startStopTapTimerRef.current);
+    startStopTapTimerRef.current = setTimeout(() => {
+      startStopTapTimerRef.current = null;
+      setStartStopTapHighlight(false);
+    }, 280);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (nextTapTimerRef.current) clearTimeout(nextTapTimerRef.current);
+      if (startStopTapTimerRef.current) clearTimeout(startStopTapTimerRef.current);
+    };
+  }, []);
+
   return (
     <>
       {Platform.OS === 'android' && (
@@ -1404,8 +1438,13 @@ const RandomChat: React.FC<Props> = ({ route }) => {
           barStyle="light-content"
         />
       )}
+      <View style={[styles.container, { backgroundColor: isDark ? WELCOME_STAGE_BG : (theme.colors.background as string) }]}>
+      <WelcomeStageBackground
+        isDark={isDark}
+        lightColor={theme.colors.background as string}
+      />
       <SafeAreaView 
-        style={[styles.container, { backgroundColor: isDark ? '#151F33' : (theme.colors.background as string) }]}
+        style={[styles.container, { backgroundColor: 'transparent' }]}
         // Android: safe-area отступы считаем сами через insets, чтобы ничего не перезатиралось стилями
         edges={Platform.OS === 'android' ? [] : undefined}
       >
@@ -1733,33 +1772,51 @@ const RandomChat: React.FC<Props> = ({ route }) => {
         </View>
         {/* Кнопки снизу: Начать/Стоп и Далее */}
         <View style={styles.bottomRow}>
-          <TouchableOpacity
-            style={[
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={started ? L('stop') : L('start')}
+            disabled={startStopLocked}
+            onPressIn={() => {
+              if (startStopLocked) return;
+              flashStartStopTap();
+            }}
+            onPress={() => {
+              if (startStopLocked) return;
+              onStartStop();
+            }}
+            style={({ pressed }) => [
               styles.bigBtn,
               started ? styles.btnDanger : styles.btnTitan,
-              (isInactiveState || isModerationBanned) && styles.disabled
+              (pressed || startStopTapHighlight) &&
+                (started ? styles.bigBtnPressedDanger : styles.bigBtnPressed),
             ]}
-            disabled={isInactiveState || isModerationBanned}
-            onPress={isInactiveState || isModerationBanned ? undefined : onStartStop}
           >
             <Text style={styles.bigBtnText}>
               {started ? L('stop') : L('start')}
             </Text>
-          </TouchableOpacity>
+          </Pressable>
           
-          <TouchableOpacity
-            style={[
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={L('next')}
+            accessibilityState={{ disabled: nextDisabled }}
+            disabled={!started || isInactiveState || isModerationBanned}
+            onPressIn={() => {
+              if (!started || isInactiveState || isModerationBanned) return;
+              flashNextTap();
+            }}
+            onPress={() => {
+              if (nextDisabled) return;
+              onNext();
+            }}
+            style={({ pressed }) => [
               styles.bigBtn,
               styles.btnTitan,
-              (!started || isNexting || isInactiveState || loading || isModerationBanned) && styles.disabled
+              (pressed || nextTapHighlight) && styles.bigBtnPressed,
             ]}
-            disabled={!started || isNexting || isInactiveState || loading || isModerationBanned}
-            onPress={onNext}
           >
-            <Text style={styles.bigBtnText}>
-              {L('next')}
-            </Text>
-          </TouchableOpacity>
+            <Text style={styles.bigBtnText}>{L('next')}</Text>
+          </Pressable>
         </View>
         </View>
       
@@ -1788,6 +1845,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
         styles={styles}
       />
       </SafeAreaView>
+      </View>
     </>
   );
 };

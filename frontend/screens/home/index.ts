@@ -6,6 +6,8 @@ export { HomeFriendsTab } from './HomeFriendsTab';
 export { HomeMoreTab } from './HomeMoreTab';
 export { HomeWelcomeView } from './HomeWelcomeView';
 export { HomeWelcomeFriendsView } from './HomeWelcomeFriendsView';
+export { HomeWelcomeChatsView } from './HomeWelcomeChatsView';
+export { HomeWelcomeCallsView } from './HomeWelcomeCallsView';
 export { HomeWelcomeProfileView } from './HomeWelcomeProfileView';
 export { HomeMenuOverlay } from './HomeMenuOverlay';
 export { HomeCenterProfile } from './HomeCenterProfile';

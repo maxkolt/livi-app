@@ -31,7 +31,7 @@ import * as ImagePicker from 'expo-image-picker';
 import * as Clipboard from 'expo-clipboard';
 import SplashLoader from '../components/SplashLoader';
 import { Swipeable, PinchGestureHandler, State } from 'react-native-gesture-handler';
-import { List, Surface, Portal } from 'react-native-paper';
+import { Portal } from 'react-native-paper';
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { Image as ExpoImage } from 'expo-image';
 import { getAvatarImageProps, forceImageRefresh } from '../utils/imageOptimization';
@@ -58,7 +58,7 @@ import { logger } from '../utils/logger';
 import { trimNick } from '../utils/userDisplayName';
 import { usePiP } from '../src/pip/PiPContext';
 import { onCallTimeout as onCallTimeoutEvent, onCallIncoming as onCallIncomingEvent, onCallDeclined as onCallDeclinedEvent } from '../sockets/socket';
-import { onRequestCloseIncoming, emitCloseIncoming, onCloseOutgoingCall, onCallCancelledOnHome, onCallEndedOnHome, onCloseHomeModals, shouldSkipHomeUiSettle } from '../utils/globalEvents';
+import { onRequestCloseIncoming, emitCloseIncoming, onCloseOutgoingCall, onCallCancelledOnHome, onCallEndedOnHome, onCloseHomeModals, onRequestDirectCall, shouldSkipHomeUiSettle } from '../utils/globalEvents';
 import { displayOutgoingCallImmediate, notifyOutgoingCallId, reportEndCallToCallKeep, closeOutgoingCallActivity, bringMainActivityToFront, OUTGOING_CALL_TIMEOUT_MS, clearOutgoingDeclineHandled, isOutgoingDeclineHandled, setupCallKeep, isCallKeepAvailable, setCallMediaHint } from '../utils/callKeep';
 import { syncAppBadgeFromMissedCount, dismissMessageNotificationsOnly, getMissedCountByUserFromNative } from '../utils/pushNotifications';
 import SettingsTab from '../components/SettingsTab';
@@ -69,6 +69,8 @@ import {
   HomeMoreTab,
   HomeWelcomeView,
   HomeWelcomeFriendsView,
+  HomeWelcomeChatsView,
+  HomeWelcomeCallsView,
   HomeWelcomeProfileView,
   HomeMenuOverlay,
   displayName,
@@ -87,7 +89,16 @@ import {
 import type { NoticeKind } from './home';
 import { HomeWelcomeTabBar, type WelcomeTabId } from './home/HomeWelcomeTabBar';
 import { WelcomeStageBackground } from './home/WelcomeStageBackground';
-import { WELCOME_STAGE_BG } from './home/constants';
+import { WELCOME_HEADER_TITLE, WELCOME_STAGE_BG } from './home/constants';
+import { recordCallLog } from './home/callLog';
+import {
+  WelcomeOverlayBack,
+  WelcomeOverlayCard,
+  WelcomeOverlayDim,
+  WelcomeOverlayPill,
+  WELCOME_OVERLAY_ACCENT,
+  welcomeOverlayText,
+} from './home/WelcomeOverlayChrome';
 import { useWelcomeOnlineCount } from './home/hooks/useWelcomeOnlineCount';
 import type { Friend, HomeRouteParams } from './home/types';
 import {
@@ -100,7 +111,6 @@ import {
   UNREAD_BY_USER_KEY,
   USER_ID_KEY,
 } from './home/constants';
-import ChatStyleBackButton from '../components/ChatStyleBackButton';
 import { loadProfileFromStorage, saveProfileToStorage, clearAllAvatarCaches } from '../utils/profileStorage';
 // УБРАНО: forceClearUserDataOnly не используется - вместо этого используется hardLocalReset() и clearAllUserData() из socket.ts
 import { warmAvatar, putThumb, putFull, getFull, clearAvatarCacheFor } from '../utils/avatarCache';
@@ -305,11 +315,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const [welcomeActiveTab, setWelcomeActiveTab] = useState<WelcomeTabId>('search');
   useEffect(() => {
     if (menuOpen) setMenuEverOpened(true);
-  }, [menuOpen]);
-  useEffect(() => {
-    if (!menuOpen) {
-      setWelcomeActiveTab((prev) => (prev === 'calls' || prev === 'chat' ? 'search' : prev));
-    }
   }, [menuOpen]);
   const menuTabsMounted = menuOpen || menuEverOpened;
 
@@ -1448,6 +1453,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       } catch {}
       setCalling({ visible: true, friend, callId: null });
       callingVisibleRef.current = true;
+      recordCallLog({ peerId: String(friend.id), direction: 'outgoing' });
       // Сразу помечаем «исходящий на экране», чтобы сокет не отключался при уходе в фон (диалог разрешений).
       // Иначе звонок не дойдёт до абонента (startCall по сокету).
       setOutgoingCallScreenVisible(true);
@@ -1796,6 +1802,34 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     (friend: Friend) => handleStartDirectCall(friend, 'audio'),
     [handleStartDirectCall],
   );
+
+  useEffect(() => {
+    const off = onRequestDirectCall((payload) => {
+      const peerId = String(payload.peerId || '').trim();
+      if (!peerId) return;
+      const existing = friendsRef.current.find((f) => String(f.id) === peerId);
+      const friend: Friend = existing || {
+        id: peerId,
+        name: payload.peerName,
+        avatarVer: payload.peerAvatarVer || 0,
+        avatarThumbB64: payload.peerAvatarThumbB64 || '',
+        online: !!payload.peerOnline,
+      };
+      void handleStartDirectCall(friend, payload.media === 'audio' ? 'audio' : 'video');
+    });
+    return () => off();
+  }, [handleStartDirectCall]);
+
+  useEffect(() => {
+    const off = onCallAccepted?.(({ callId, from }) => {
+      const outgoingId = String((global as any).__outgoingCallIdRef?.current || '').trim();
+      if (outgoingId && outgoingId === String(callId || '').trim()) return;
+      const peerId = String(from || '').trim();
+      if (!peerId) return;
+      recordCallLog({ peerId, direction: 'incoming' });
+    });
+    return () => off?.();
+  }, []);
 
 
   /* ===== safe attachIdentity wrapper (queue if socket offline) ===== */
@@ -3784,27 +3818,31 @@ const handleClearNick = useCallback(async () => {
   );
 
   const handleRemoveFriend = useCallback(
-    async (peerId: string) => {
+    async (peerId: string, opts?: { quiet?: boolean }) => {
       const friend = friendsRef.current.find((f) => String(f.id) === String(peerId));
-      if (friend && friendRowBlocksSwipeDelete(friend)) return;
+      if (friend && friendRowBlocksSwipeDelete(friend)) return false;
       try {
         openSwipeableRef.current?.close?.();
       } catch {}
       openSwipeableRef.current = null;
-      try {
-        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-      } catch {
-        Vibration.vibrate(12);
+      if (!opts?.quiet) {
+        try {
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+        } catch {
+          Vibration.vibrate(12);
+        }
       }
       const prevFriends = friendsRef.current;
       setFriends((prev) => prev.filter((f) => f.id !== peerId));
       try {
         const res = await removeFriend(peerId);
         if (!res?.ok) throw new Error(res?.error || 'remove failed');
-        showNotice(L('friendRemoved'), 'success', 3000);
+        if (!opts?.quiet) showNotice(L('friendRemoved'), 'success', 3000);
+        return true;
       } catch (e: any) {
         setFriends(prevFriends);
-        showNotice(`${L('friendRemoveFailed')}: ${e?.message || 'error'}`, 'error', 3000);
+        if (!opts?.quiet) showNotice(`${L('friendRemoveFailed')}: ${e?.message || 'error'}`, 'error', 3000);
+        return false;
       }
     },
     [showNotice, L, friendRowBlocksSwipeDelete],
@@ -4071,7 +4109,15 @@ const handleClearNick = useCallback(async () => {
   const handleWelcomeTabPress = useCallback(
     (tabId: WelcomeTabId) => {
       setWelcomeActiveTab(tabId);
-      if (tabId === 'search' || tabId === 'friends' || tabId === 'profile') return;
+      if (
+        tabId === 'search' ||
+        tabId === 'friends' ||
+        tabId === 'profile' ||
+        tabId === 'chat' ||
+        tabId === 'calls'
+      ) {
+        return;
+      }
       setMenuOpen(true);
       setTab('friends');
     },
@@ -4172,6 +4218,43 @@ const handleClearNick = useCallback(async () => {
             onOpenProfile={handleOpenProfile}
             onOpenMenu={handleOpenMenu}
             onInviteFriends={generateInviteLink}
+            askConfirm={askConfirm}
+            showNotice={showNotice}
+          />
+        ) : welcomeActiveTab === 'chat' && !menuOpen ? (
+          <HomeWelcomeChatsView
+            lang={lang}
+            L={L}
+            allFriends={friends}
+            unreadByUser={unreadByUser}
+            missedByUser={missedByUser}
+            navigation={navigation}
+            lastChatOpenRef={lastChatOpenRef}
+            prepareFriendRowActionTap={prepareFriendRowActionTap}
+            onOpenProfile={handleOpenProfile}
+            onOpenMenu={handleOpenMenu}
+            refreshing={refreshing}
+            onRefresh={onRefreshFriends}
+            askConfirm={askConfirm}
+            showNotice={showNotice}
+            setUnreadByUser={setUnreadByUser}
+          />
+        ) : welcomeActiveTab === 'calls' && !menuOpen ? (
+          <HomeWelcomeCallsView
+            lang={lang}
+            L={L}
+            allFriends={friends}
+            unreadByUser={unreadByUser}
+            missedByUser={missedByUser}
+            prepareFriendRowActionTap={prepareFriendRowActionTap}
+            handleStartFriendCall={handleStartFriendCall}
+            clearMissedCallsForFriend={clearMissedCallsForFriend}
+            onOpenProfile={handleOpenProfile}
+            onOpenMenu={handleOpenMenu}
+            refreshing={refreshing}
+            onRefresh={onRefreshFriends}
+            askConfirm={askConfirm}
+            showNotice={showNotice}
           />
         ) : welcomeActiveTab === 'profile' && !menuOpen ? (
           <HomeWelcomeProfileView
@@ -4393,24 +4476,19 @@ const handleClearNick = useCallback(async () => {
       {/* ───── Комната занята (caller info) ───── */}
       {roomFull.visible && (
         <View style={styles.overlayModal} pointerEvents="box-none">
-          <BlurView intensity={50} tint="dark" style={StyleSheet.absoluteFill} />
-          <View
-            style={{
-              alignItems: 'center',
-              justifyContent: 'center',
-              padding: 20,
-              borderRadius: 16,
-              backgroundColor: 'rgba(13,14,16,0.9)',
-              borderWidth: StyleSheet.hairlineWidth,
-              borderColor: 'rgba(255,255,255,0.12)'
-            }}
-          >
-            <Text style={{ color: LIVI.white, fontWeight: '700', fontSize: 16, textAlign: 'center' }}>{t('roomBusyTitle', lang)}</Text>
-            {!!roomFull.name && <Text style={{ color: LIVI.text2, marginTop: 6 }}>{roomFull.name}</Text>}
-            <TouchableOpacity onPress={() => setRoomFull({ visible: false })} activeOpacity={0.85} style={[styles.confirmBtn, { marginTop: 14, width: 120, backgroundColor: 'rgba(255,255,255,0.08)' }]}>
-              <Text style={[styles.confirmBtnText, { color: LIVI.white }]}>{t('ok', lang)}</Text>
-            </TouchableOpacity>
-          </View>
+          <WelcomeOverlayDim />
+          <WelcomeOverlayCard style={{ maxWidth: 320, minWidth: 240 }}>
+            <Text style={welcomeOverlayText.title}>{t('roomBusyTitle', lang)}</Text>
+            {!!roomFull.name && (
+              <Text style={[welcomeOverlayText.body, { marginBottom: 4 }]}>{roomFull.name}</Text>
+            )}
+            <WelcomeOverlayPill
+              label={t('ok', lang)}
+              onPress={() => setRoomFull({ visible: false })}
+              variant="secondary"
+              style={{ marginTop: 14, alignSelf: 'stretch' }}
+            />
+          </WelcomeOverlayCard>
         </View>
       )}
 
@@ -4421,57 +4499,16 @@ const handleClearNick = useCallback(async () => {
       <Portal>
         {donateVisible && (
           <View style={styles.overlayModal} pointerEvents="box-none">
-            {Platform.OS === 'android' ? (
-              <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.9)' }]} />
-            ) : (
-              <>
-                <BlurView intensity={85} tint="dark" style={StyleSheet.absoluteFill} />
-                <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.35)' }]} />
-              </>
-            )}
-            <ChatStyleBackButton
-              onPress={() => setDonateVisible(false)}
-              iconColor={LIVI.titan}
-              style={{
-                position: 'absolute',
-                zIndex: 10,
-                top: insets.top + (Platform.OS === 'android' ? 35 : 16),
-                left: Platform.OS === 'ios' ? 15 : 17,
-              }}
-            />
-            <Surface
-              style={[
-                styles.confirmCard,
-                {
-                  minWidth: 300,
-                  maxWidth: 400,
-                  borderWidth: 1,
-                  borderColor: accent.solid28,
-                  borderRadius: 10,
-                },
-              ]}
-            >
-              <Text
-                style={[
-                  styles.confirmTitle,
-                  { textAlign: 'center', marginBottom: 8, color: accent.softText, fontWeight: '600' },
-                ]}
-              >
+            <WelcomeOverlayDim />
+            <WelcomeOverlayBack onPress={() => setDonateVisible(false)} />
+            <WelcomeOverlayCard>
+              <Text style={welcomeOverlayText.title}>
                 {t('supportProjectTitle', lang)}
               </Text>
-              <Text
-                style={{
-                  color: LIVI.text2,
-                  fontSize: 13,
-                  fontWeight: '300',
-                  textAlign: 'center',
-                  marginBottom: 20,
-                  lineHeight: 18,
-                }}
-              >
+              <Text style={welcomeOverlayText.subtitle}>
                 {t('supportProjectSubtitle', lang)}
               </Text>
-              <View style={{ marginBottom: 20 }}>
+              <View style={{ marginBottom: 4, gap: 10 }}>
                 <TouchableOpacity
                   onPress={async () => {
                     const clicks = await incrCounter('support_boosty_clicks');
@@ -4489,16 +4526,18 @@ const handleClearNick = useCallback(async () => {
                   onPressOut={() => setPressedButton(null)}
                   activeOpacity={1}
                   style={{
-                    backgroundColor: pressedButton === 'boosty' ? accent.softText : accent.solid10,
-                    borderColor: accent.solid28,
-                    borderWidth: 1,
-                    paddingVertical: 10,
+                    backgroundColor:
+                      pressedButton === 'boosty'
+                        ? 'rgba(42, 88, 104, 0.72)'
+                        : 'rgba(255,255,255,0.04)',
+                    borderColor: WELCOME_OVERLAY_ACCENT,
+                    borderWidth: StyleSheet.hairlineWidth,
+                    paddingVertical: 11,
                     paddingHorizontal: 16,
-                    borderRadius: 10,
+                    borderRadius: 999,
                     flexDirection: 'row',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    marginBottom: 12,
                     gap: 8,
                   }}
                 >
@@ -4508,11 +4547,7 @@ const handleClearNick = useCallback(async () => {
                     contentFit="contain"
                     cachePolicy="memory-disk"
                   />
-                  <Text style={{ 
-                    color: LIVI.white, 
-                    fontWeight: '700', 
-                    fontSize: 15 
-                  }}>
+                  <Text style={{ color: WELCOME_HEADER_TITLE, fontWeight: '600', fontSize: 15 }}>
                     Boosty.to
                   </Text>
                 </TouchableOpacity>
@@ -4533,12 +4568,15 @@ const handleClearNick = useCallback(async () => {
                   onPressOut={() => setPressedButton(null)}
                   activeOpacity={1}
                   style={{
-                    backgroundColor: pressedButton === 'patreon' ? accent.softText : accent.solid10,
-                    borderColor: accent.solid28,
-                    borderWidth: 1,
-                    paddingVertical: 10,
+                    backgroundColor:
+                      pressedButton === 'patreon'
+                        ? 'rgba(42, 88, 104, 0.72)'
+                        : 'rgba(255,255,255,0.04)',
+                    borderColor: WELCOME_OVERLAY_ACCENT,
+                    borderWidth: StyleSheet.hairlineWidth,
+                    paddingVertical: 11,
                     paddingHorizontal: 16,
-                    borderRadius: 10,
+                    borderRadius: 999,
                     flexDirection: 'row',
                     alignItems: 'center',
                     justifyContent: 'center',
@@ -4551,95 +4589,35 @@ const handleClearNick = useCallback(async () => {
                     contentFit="contain"
                     cachePolicy="memory-disk"
                   />
-                  <Text style={{ 
-                    color: LIVI.white, 
-                    fontWeight: '700', 
-                    fontSize: 15 
-                  }}>
+                  <Text style={{ color: WELCOME_HEADER_TITLE, fontWeight: '600', fontSize: 15 }}>
                     Patreon
                   </Text>
                 </TouchableOpacity>
               </View>
-            </Surface>
+            </WelcomeOverlayCard>
           </View>
         )}
 
         {/* Share/Invite Modal */}
         {shareVisible && (
           <View style={styles.overlayModal} pointerEvents="box-none">
-            {Platform.OS === 'android' ? (
-              <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.9)' }]} />
-            ) : (
-              <>
-                <BlurView intensity={85} tint="dark" style={StyleSheet.absoluteFill} />
-                <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.35)' }]} />
-              </>
-            )}
-            <ChatStyleBackButton
-              onPress={() => setShareVisible(false)}
-              iconColor={LIVI.titan}
-              style={{
-                position: 'absolute',
-                zIndex: 10,
-                top: insets.top + (Platform.OS === 'android' ? 35 : 16),
-                left: Platform.OS === 'ios' ? 15 : 17,
-              }}
-            />
-            <Surface
-              style={[
-                styles.confirmCard,
-                {
-                  minWidth: 300,
-                  maxWidth: 400,
-                  borderWidth: 1,
-                  borderColor: 'rgba(77,208,225,0.3)',
-                  borderRadius: 10,
-                },
-              ]}
-            >
-              <Text
-                style={[
-                  styles.confirmTitle,
-                  { textAlign: 'center', marginBottom: 8, color: '#4DD0E1', fontWeight: '600' },
-                ]}
-              >
+            <WelcomeOverlayDim />
+            <WelcomeOverlayBack onPress={() => setShareVisible(false)} />
+            <WelcomeOverlayCard>
+              <Text style={welcomeOverlayText.title}>
                 {t('inviteFriendTitle', lang)}
               </Text>
-              <Text
-                style={{
-                  color: LIVI.text2,
-                  fontSize: 13,
-                  fontWeight: '300',
-                  textAlign: 'center',
-                  marginBottom: 20,
-                  lineHeight: 18,
-                }}
-              >
+              <Text style={welcomeOverlayText.subtitle}>
                 {t('inviteFriendsSubtitle', lang)}
               </Text>
-              
+
               <View style={{ marginBottom: 20 }}>
-                <Text style={{ color: LIVI.text2, fontSize: 14, marginBottom: 8, fontWeight: '600' }}>
+                <Text style={welcomeOverlayText.label}>
                   {t('inviteLinkLabel', lang)}
                 </Text>
-                <View style={{
-                  backgroundColor: 'rgba(255,255,255,0.05)',
-                  borderWidth: 1,
-                  borderColor: 'rgba(77,208,225,0.3)',
-                  borderRadius: 10,
-                  paddingVertical: 8,
-                  paddingHorizontal: 10,
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  gap: 8
-                }}>
-                  <Text 
-                    style={{ 
-                      flex: 1, 
-                      color: LIVI.white, 
-                      fontSize: 13,
-                      fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace'
-                    }}
+                <View style={welcomeOverlayText.linkField}>
+                  <Text
+                    style={welcomeOverlayText.linkText}
                     numberOfLines={1}
                     ellipsizeMode="middle"
                   >
@@ -4657,121 +4635,73 @@ const handleClearNick = useCallback(async () => {
                       }
                     }}
                     activeOpacity={0.7}
-                    style={{
-                      padding: 6,
-                      borderRadius: 8,
-                      backgroundColor: 'rgba(77,208,225,0.15)'
-                    }}
+                    style={welcomeOverlayText.copyBtn}
                   >
-                    <Ionicons name="copy-outline" size={18} color="#4DD0E1" />
+                    <Ionicons name="copy-outline" size={18} color={WELCOME_OVERLAY_ACCENT} />
                   </TouchableOpacity>
                 </View>
-                <Text style={{ color: LIVI.text2, fontSize: 12, marginTop: 8, textAlign: 'center', lineHeight: 16 }}>
+                <Text style={welcomeOverlayText.hint}>
                   {t('inviteShareHint', lang)}
                 </Text>
               </View>
 
-              <View style={{ gap: 12 }}>
-                <TouchableOpacity
-                  onPress={async () => {
-                    try {
-                      const shareMessage = t('inviteShareMessage', lang).replace('{link}', inviteLink);
-                      
-                      // Используем Share из React Native для текстовых ссылок
-                      const result = await Share.share({
-                        message: shareMessage,
-                        url: inviteLink, // Для iOS это будет использовано как URL
-                        title: t('inviteShareTitle', lang),
-                      });
-                      
-                      if (result.action === Share.sharedAction) {
-                        await incrCounter('invite_link_shared');
-                        if (result.activityType) {
-                          // Поделились через конкретное приложение
-                          logger.debug('Shared via:', result.activityType);
-                        }
-                      } else if (result.action === Share.dismissedAction) {
-                        // Пользователь отменил
-                        logger.debug('Share dismissed');
+              <WelcomeOverlayPill
+                label={t('share', lang)}
+                onPress={async () => {
+                  try {
+                    const shareMessage = t('inviteShareMessage', lang).replace('{link}', inviteLink);
+
+                    const result = await Share.share({
+                      message: shareMessage,
+                      url: inviteLink,
+                      title: t('inviteShareTitle', lang),
+                    });
+
+                    if (result.action === Share.sharedAction) {
+                      await incrCounter('invite_link_shared');
+                      if (result.activityType) {
+                        logger.debug('Shared via:', result.activityType);
                       }
-                    } catch (e) {
-                      logger.error('Failed to share link:', e);
-                      // Fallback на копирование при ошибке
-                      try {
-                        await Clipboard.setStringAsync(inviteLink);
-                        showNotice(t('linkCopied', lang), 'success', 3000);
-                      } catch (copyError) {
-                        showNotice(t('shareFailed', lang), 'error', 3000);
-                      }
+                    } else if (result.action === Share.dismissedAction) {
+                      logger.debug('Share dismissed');
                     }
-                  }}
-                  activeOpacity={0.85}
-                  style={{
-                    backgroundColor: 'rgba(77, 208, 225, 0.12)',
-                    borderWidth: 1,
-                    borderColor: 'rgba(77,208,225,0.3)',
-                    paddingVertical: 10,
-                    paddingHorizontal: 16,
-                    borderRadius: 10,
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: 8,
-                  }}
-                >
-                  <Ionicons name="share-outline" size={18} color={LIVI.white} />
-                  <Text style={{ 
-                    color: LIVI.white, 
-                    fontWeight: '700', 
-                    fontSize: 15 
-                  }}>
-                    {t('share', lang)}
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            </Surface>
+                  } catch (e) {
+                    logger.error('Failed to share link:', e);
+                    try {
+                      await Clipboard.setStringAsync(inviteLink);
+                      showNotice(t('linkCopied', lang), 'success', 3000);
+                    } catch (copyError) {
+                      showNotice(t('shareFailed', lang), 'error', 3000);
+                    }
+                  }
+                }}
+                leading={<Ionicons name="share-outline" size={18} color={WELCOME_HEADER_TITLE} />}
+              />
+            </WelcomeOverlayCard>
           </View>
         )}
 
         {/* Invite Request Modal */}
         {inviteRequestVisible && inviteRequestData && (
           <View style={styles.overlayModal} pointerEvents="box-none">
-            {Platform.OS === 'android' ? (
-              <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.9)' }]} />
-            ) : (
-              <>
-                <BlurView intensity={85} tint="dark" style={StyleSheet.absoluteFill} />
-                <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.35)' }]} />
-              </>
-            )}
-            <Surface style={[styles.confirmCard, { minWidth: 300, maxWidth: 400, borderColor: '#4DD0E1' }]}>
-              <Text style={[styles.confirmTitle, { textAlign: 'center', marginBottom: 20, color: '#4DD0E1' }]}>
+            <WelcomeOverlayDim />
+            <WelcomeOverlayCard>
+              <Text style={[welcomeOverlayText.title, { marginBottom: 20 }]}>
                 {t('friendInviteTitle', lang)}
               </Text>
-              
+
               {inviteRequestData.areFriends ? (
-                <View style={{ marginBottom: 20 }}>
-                  <Text style={{ color: LIVI.text2, fontSize: 14, textAlign: 'center', marginBottom: 12 }}>
+                <View style={{ marginBottom: 4 }}>
+                  <Text style={[welcomeOverlayText.body, { marginBottom: 16 }]}>
                     {t('alreadyFriendsWithUser', lang).replace(
                       '{user}',
                       trimNick(inviteRequestData.inviter.nick) || t('thisUser', lang),
                     )}
                   </Text>
-                  <TouchableOpacity
+                  <WelcomeOverlayPill
+                    label={t('ok', lang)}
                     onPress={handleDeclineInvite}
-                    activeOpacity={0.85}
-                    style={{
-                      backgroundColor: '#4DD0E1',
-                      paddingVertical: 14,
-                      paddingHorizontal: 20,
-                      borderRadius: 10,
-                      alignItems: 'center'
-                    }}
-                  >
-                    <Text style={{ color: LIVI.white, fontWeight: '700', fontSize: 16 }}>
-                      {t('ok', lang)}
-                    </Text>
-                  </TouchableOpacity>
+                  />
                 </View>
               ) : (
                 <>
@@ -4786,69 +4716,36 @@ const handleClearNick = useCallback(async () => {
                         containerStyle={{ marginBottom: 12 }}
                       />
                     ) : (
-                      <View style={{
-                        width: 64,
-                        height: 64,
-                        borderRadius: 32,
-                        backgroundColor: '#4DD0E1',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        marginBottom: 12
-                      }}>
-                        <Text style={{ color: LIVI.white, fontSize: 24, fontWeight: '800' }}>
+                      <View style={welcomeOverlayText.avatarFallback}>
+                        <Text style={{ color: WELCOME_HEADER_TITLE, fontSize: 24, fontWeight: '700' }}>
                           {trimNick(inviteRequestData.inviter.nick)?.[0]?.toUpperCase() || '?'}
                         </Text>
                       </View>
                     )}
-                    <Text style={{ color: LIVI.white, fontSize: 16, fontWeight: '700', marginBottom: 8, textAlign: 'center' }}>
+                    <Text style={[welcomeOverlayText.strong, { marginBottom: 8 }]}>
                       {trimNick(inviteRequestData.inviter.nick) || t('user', lang)}
                     </Text>
-                    <Text style={{ color: LIVI.text2, fontSize: 14, textAlign: 'center' }}>
+                    <Text style={welcomeOverlayText.body}>
                       {t('wantsToAddYouAsFriend', lang)}
                     </Text>
                   </View>
 
-                  <View style={{ flexDirection: 'row', gap: 12 }}>
-                    <TouchableOpacity
+                  <View style={welcomeOverlayText.actionRow}>
+                    <WelcomeOverlayPill
+                      label={t('decline', lang)}
                       onPress={handleDeclineInvite}
-                      activeOpacity={0.85}
-                      style={{
-                        flex: 1,
-                        backgroundColor: 'rgba(255,255,255,0.08)',
-                        borderColor: LIVI.border,
-                        borderWidth: StyleSheet.hairlineWidth,
-                        paddingVertical: 14,
-                        paddingHorizontal: 20,
-                        borderRadius: 10,
-                        alignItems: 'center'
-                      }}
-                    >
-                      <Text style={{ color: LIVI.white, fontWeight: '700', fontSize: 16 }}>
-                        {t('decline', lang)}
-                      </Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
+                      variant="secondary"
+                      style={{ flex: 1 }}
+                    />
+                    <WelcomeOverlayPill
+                      label={t('accept', lang)}
                       onPress={handleAcceptInvite}
-                      activeOpacity={0.85}
-                      style={{
-                        flex: 1,
-                        backgroundColor: '#4DD0E1',
-                        borderColor: '#4DD0E1',
-                        borderWidth: StyleSheet.hairlineWidth,
-                        paddingVertical: 14,
-                        paddingHorizontal: 20,
-                        borderRadius: 10,
-                        alignItems: 'center'
-                      }}
-                    >
-                      <Text style={{ color: LIVI.white, fontWeight: '700', fontSize: 16 }}>
-                        {t('accept', lang)}
-                      </Text>
-                    </TouchableOpacity>
+                      style={{ flex: 1 }}
+                    />
                   </View>
                 </>
               )}
-            </Surface>
+            </WelcomeOverlayCard>
           </View>
         )}
       </Portal>

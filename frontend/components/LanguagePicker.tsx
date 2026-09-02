@@ -8,25 +8,29 @@ import {
   StyleSheet,
   ScrollView,
   Platform,
+  Pressable,
   useWindowDimensions,
 } from 'react-native';
-import { BlurView } from 'expo-blur';
+import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { type Lang, defaultLang } from '../utils/i18n';
-import ChatStyleBackButton from './ChatStyleBackButton';
+import {
+  LIVI,
+  WELCOME_BRAND_VI_FILL_GRADIENT,
+  WELCOME_FRIENDS_SEGMENT_SHELL_RADIUS,
+  WELCOME_GLASS_BORDER,
+  WELCOME_GLASS_SURFACE,
+  WELCOME_HEADER_TITLE,
+  WELCOME_MUTED_TEXT,
+} from '../screens/home/constants';
+
+const OVERLAY_DIM = 'rgba(0, 0, 0, 0.62)';
 
 type Props = {
   visible: boolean;
   onClose: () => void;
   onSelect: (code: Lang) => void;
   current?: Lang;
-};
-
-const LIVI = {
-  border: 'rgba(255,255,255,0.12)',
-  text2: '#9FA7B4',
-  white: '#F4F5F7',
-  titan: '#8A8F99',
 };
 
 const LANGUAGES: Array<{ code: Lang; name: string; native: string }> = [
@@ -54,6 +58,7 @@ const LIST_CONTENT_PAD_V = 4;
 const VISIBLE_LANGUAGE_ROWS = 7;
 /** paddingVertical×2 + lineHeights (native + name) */
 const LANGUAGE_ROW_HEIGHT = 12 * 2 + 18 + 1 + 14;
+const ACCENT = WELCOME_BRAND_VI_FILL_GRADIENT[1];
 
 const LanguagePicker: React.FC<Props> = ({
   visible,
@@ -83,25 +88,23 @@ const LanguagePicker: React.FC<Props> = ({
       statusBarTranslucent
     >
       <View style={styles.overlay} pointerEvents="box-none">
-        {Platform.OS === 'android' ? (
-          <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.9)' }]} />
-        ) : (
-          <>
-            <BlurView intensity={85} tint="dark" style={StyleSheet.absoluteFill} />
-            <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.35)' }]} />
-          </>
-        )}
+        <View style={[StyleSheet.absoluteFill, { backgroundColor: OVERLAY_DIM }]} />
 
-        <ChatStyleBackButton
+        <Pressable
           onPress={onClose}
-          iconColor={LIVI.titan}
-          style={{
-            position: 'absolute',
-            zIndex: 10,
-            top: insets.top + (Platform.OS === 'android' ? 35 : 16),
-            left: Platform.OS === 'ios' ? 15 : 17,
-          }}
-        />
+          accessibilityRole="button"
+          hitSlop={10}
+          style={({ pressed }) => [
+            styles.backBtn,
+            {
+              top: insets.top + (Platform.OS === 'android' ? 12 : 8),
+              left: 12,
+            },
+            pressed && styles.backBtnPressed,
+          ]}
+        >
+          <Ionicons name="chevron-back" size={22} color={LIVI.white} />
+        </Pressable>
 
         <View style={[styles.card, { height: cardH, marginTop: 20 }]}>
           <ScrollView
@@ -137,7 +140,11 @@ const LanguagePicker: React.FC<Props> = ({
                       {lng.name}
                     </Text>
                   </View>
-                  {selected ? <View style={styles.radioOn} /> : <View style={styles.radioOff} />}
+                  {selected ? (
+                    <Ionicons name="checkmark" size={20} color={ACCENT} />
+                  ) : (
+                    <View style={styles.radioOff} />
+                  )}
                 </TouchableOpacity>
               );
             })}
@@ -163,13 +170,24 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+  backBtn: {
+    position: 'absolute',
+    zIndex: 10,
+    width: 40,
+    height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  backBtnPressed: {
+    opacity: 0.72,
+  },
   card: {
     width: '92%',
-    backgroundColor: 'rgba(13,14,16,0.94)',
-    borderRadius: 12,
+    backgroundColor: WELCOME_GLASS_SURFACE,
+    borderRadius: WELCOME_FRIENDS_SEGMENT_SHELL_RADIUS,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: LIVI.border,
-    padding: 16,
+    borderColor: WELCOME_GLASS_BORDER,
+    padding: CARD_PADDING,
   },
   list: {
     flex: 1,
@@ -181,46 +199,38 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     paddingHorizontal: 4,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: LIVI.border,
+    borderBottomColor: WELCOME_GLASS_BORDER,
     backgroundColor: 'transparent',
   },
   rowLast: {
     borderBottomWidth: 0,
   },
   rowNative: {
-    color: LIVI.white,
+    color: WELCOME_HEADER_TITLE,
     fontSize: 15,
     fontWeight: '600',
     lineHeight: 18,
   },
   rowNativeSelected: {
-    color: 'rgba(172, 220, 190, 0.95)',
+    color: ACCENT,
   },
   rowName: {
-    color: LIVI.text2,
+    color: WELCOME_MUTED_TEXT,
     fontSize: 11,
     fontWeight: '300',
     marginTop: 1,
     lineHeight: 14,
   },
   rowNameSelected: {
-    color: 'rgba(77, 228, 144, 0.75)',
+    color: WELCOME_BRAND_VI_FILL_GRADIENT[2],
   },
   radioOff: {
     width: 16,
     height: 16,
     borderRadius: 8,
     borderWidth: 2,
-    borderColor: LIVI.text2,
+    borderColor: WELCOME_MUTED_TEXT,
     backgroundColor: 'transparent',
-  },
-  radioOn: {
-    width: 16,
-    height: 16,
-    borderRadius: 8,
-    borderWidth: 2,
-    borderColor: 'rgba(77, 228, 144, 0.90)',
-    backgroundColor: 'rgba(77, 228, 144, 0.35)',
   },
 });
 

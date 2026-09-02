@@ -49,8 +49,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: WELCOME_CHROME_BTN_BG,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(255,255,255,0.08)',
   },
   btnPressed: {
     opacity: 0.82,

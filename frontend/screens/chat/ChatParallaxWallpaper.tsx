@@ -11,10 +11,14 @@ import {
   type LayoutChangeEvent,
 } from "react-native";
 import { Accelerometer } from "expo-sensors";
+import { LinearGradient } from "expo-linear-gradient";
 import {
   getChatWallpaperSource,
   useChatWallpaperPrefs,
 } from "../../utils/chatWallpaper";
+import {
+  WELCOME_STAGE_BG,
+} from "../home/constants";
 
 /** Max translate in px — subtle but noticeable. */
 const MAX_SHIFT = 4;
@@ -25,7 +29,28 @@ const SMOOTH = 0.12;
 
 /** Match jpeg plate so letterbox/parallax edges never show a seam. */
 const PLATE_LIGHT = "#AACABB";
-const PLATE_DARK = "#16243D";
+const PLATE_DARK = WELCOME_STAGE_BG;
+
+/** Тёмный stage-tint поверх обоев — картинка читается, тон как у welcome. */
+const WALLPAPER_STAGE_TINT = [
+  "rgba(16, 24, 34, 0.52)",
+  "rgba(10, 12, 20, 0.45)",
+  "rgba(11, 17, 24, 0.48)",
+  "rgba(17, 24, 34, 0.56)",
+] as const;
+
+/** Aura wash для середины чата — чуть тише, чем на welcome. */
+const WALLPAPER_AURA_WASH = [
+  "rgba(20, 184, 166, 0.06)",
+  "rgba(59, 130, 246, 0.045)",
+  "rgba(10, 12, 20, 0)",
+] as const;
+
+const WALLPAPER_BOTTOM_WASH = [
+  "rgba(10, 12, 20, 0)",
+  "rgba(59, 130, 246, 0.025)",
+  "rgba(0, 181, 255, 0.04)",
+] as const;
 
 function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
@@ -159,8 +184,8 @@ export function ChatParallaxWallpaper({ isDark }: { isDark: boolean }) {
 
   const imgW = Math.round(box?.w || 0) + MAX_SHIFT * 2;
   const imgH = Math.round(box?.h || 0) + MAX_SHIFT * 2;
-  const themeWash = isDark ? "rgba(21, 31, 51, 0.58)" : "rgba(182, 203, 216, 0.62)";
-  const themeShade = isDark ? "rgba(8, 12, 20, 0.36)" : "rgba(140, 158, 180, 0.36)";
+  const lightWash = "rgba(182, 203, 216, 0.55)";
+  const lightShade = "rgba(140, 158, 180, 0.28)";
 
   return (
     <View
@@ -192,8 +217,36 @@ export function ChatParallaxWallpaper({ isDark }: { isDark: boolean }) {
           />
         </Animated.View>
       ) : null}
-      <View style={[StyleSheet.absoluteFill, { backgroundColor: themeWash }]} />
-      <View style={[StyleSheet.absoluteFill, { backgroundColor: themeShade }]} />
+      {isDark ? (
+        <>
+          <LinearGradient
+            colors={[...WALLPAPER_STAGE_TINT]}
+            locations={[0, 0.32, 0.68, 1]}
+            start={{ x: 0.5, y: 0 }}
+            end={{ x: 0.5, y: 1 }}
+            style={StyleSheet.absoluteFill}
+          />
+          <LinearGradient
+            colors={[...WALLPAPER_AURA_WASH]}
+            locations={[0, 0.42, 1]}
+            start={{ x: 0.15, y: 0 }}
+            end={{ x: 0.85, y: 0.62 }}
+            style={StyleSheet.absoluteFill}
+          />
+          <LinearGradient
+            colors={[...WALLPAPER_BOTTOM_WASH]}
+            locations={[0.5, 0.82, 1]}
+            start={{ x: 0.5, y: 0 }}
+            end={{ x: 0.5, y: 1 }}
+            style={StyleSheet.absoluteFill}
+          />
+        </>
+      ) : (
+        <>
+          <View style={[StyleSheet.absoluteFill, { backgroundColor: lightWash }]} />
+          <View style={[StyleSheet.absoluteFill, { backgroundColor: lightShade }]} />
+        </>
+      )}
     </View>
   );
 }

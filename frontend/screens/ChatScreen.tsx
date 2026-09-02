@@ -134,6 +134,9 @@ import {
   shouldShowChatGapCenter,
 } from './chat/ChatGapStatus';
 import { ChatParallaxWallpaper } from './chat/ChatParallaxWallpaper';
+import { WelcomeStageBackground, StageGradient } from './home/WelcomeStageBackground';
+import { WELCOME_STAGE_BG } from './home/constants';
+import { emitRequestDirectCall } from '../utils/globalEvents';
 import {
   ReactionBarModal,
   ReactionsRowWithSwipe,
@@ -256,10 +259,10 @@ export default function ChatScreen({ route, navigation }: Props) {
     }, [isDark]),
   );
 
-  // Защита от полупрозрачного фона темы: панель ввода всегда должна быть полностью непрозрачной,
-  // чтобы под ней не просвечивал контент на разных устройствах/прошивках.
+  // Шапка и композер в тёмной теме прозрачные — тот же градиент сцены, что у поиска/друзей/чатов.
+  const CHAT_HEADER_BG = isDark ? 'transparent' : String(theme.colors.background || LIVI.bg);
   const INPUT_BAR_BG = React.useMemo(() => {
-    if (isDark) return LIVI.bg;
+    if (isDark) return 'transparent';
     const bg = String(LIVI.bg || '');
     const m = bg.match(/^rgba\(([^)]+)\)$/i);
     if (!m) return bg;
@@ -267,6 +270,7 @@ export default function ChatScreen({ route, navigation }: Props) {
     if (parts.length !== 4) return bg;
     return `rgba(${parts[0]}, ${parts[1]}, ${parts[2]}, 1)`;
   }, [LIVI.bg, isDark]);
+  const EMOJI_SURFACE_BG = isDark ? WELCOME_STAGE_BG : INPUT_BAR_BG;
 
   const BORDER_COLOR = theme.colors.outline as string;
   // Тёмная тема — как есть. Светлая: исходящие серо-голубые; входящие — чуть затемнённый жемчужный белый.
@@ -823,6 +827,33 @@ export default function ChatScreen({ route, navigation }: Props) {
     ? CHAT_EMOJI_PANEL_HEIGHT + Math.max(0, insets.bottom)
     : Math.max(0, androidImeInset);
 
+  const resolvedInputBarHForChrome = inputHeight > 0 ? inputHeight : estimatedInputHeight;
+  /** Середина облака под шапкой/композером → long-press нельзя. */
+  const isLayoutBlockedByChrome = React.useCallback(
+    (layout: { x: number; y: number; width: number; height: number }) => {
+      if (!(layout.height > 0)) return false;
+      const winH = Dimensions.get('window').height;
+      const headerBottom = Math.max(0, insets.top) + 56 + 14;
+      const bottomReserve =
+        Platform.OS === 'android'
+          ? androidKeyboardPad
+          : keyboardVisible
+            ? Math.max(0, keyboardInset)
+            : Math.max(0, insets.bottom);
+      const composerTop = winH - resolvedInputBarHForChrome - bottomReserve;
+      const midY = layout.y + layout.height * 0.5;
+      return midY < headerBottom || midY > composerTop;
+    },
+    [
+      androidKeyboardPad,
+      insets.top,
+      insets.bottom,
+      keyboardVisible,
+      keyboardInset,
+      resolvedInputBarHForChrome,
+    ],
+  );
+
   const GapCenterIndicator = shouldShowChatGapCenter(peerActivity, forwardToast, lang) ? (
     <ChatGapCenterIndicator
       peerActivity={peerActivity}
@@ -1173,6 +1204,7 @@ export default function ChatScreen({ route, navigation }: Props) {
 
   const headerH = 56;
   const headerTopPadding = 14;
+  const headerTotalH = headerH + headerTopPadding;
 
   const resolveAvatar = React.useCallback((s?: string) => {
     if (!s) return '';
@@ -1660,13 +1692,25 @@ export default function ChatScreen({ route, navigation }: Props) {
   }, [selectedCount, selectedMessageIds, openDeleteConfirmMulti]);
 
 
+  const handleHeaderCall = React.useCallback(() => {
+    const id = String(peerId || '').trim();
+    if (!id) return;
+    emitRequestDirectCall({
+      peerId: id,
+      peerName: peerNameState,
+      peerAvatarVer: peerAvatarVerState,
+      peerAvatarThumbB64: fullAvatarUri || peerAvatarThumbB64Param || '',
+      peerOnline,
+      media: 'video',
+    });
+  }, [peerId, peerNameState, peerAvatarVerState, fullAvatarUri, peerAvatarThumbB64Param, peerOnline]);
+
   const headerApi = useChatHeader({
     lang,
     headerH,
     headerTopPadding,
     LIVI,
-    BORDER_WIDTH,
-    BORDER_COLOR,
+    headerBg: CHAT_HEADER_BG,
     navigation,
     isDark,
     outlineColor: (theme.colors?.outline as string) || 'rgba(0,0,0,0.12)',
@@ -1677,6 +1721,8 @@ export default function ChatScreen({ route, navigation }: Props) {
     fullAvatarUri,
     headerInitial,
     openAvatarModal,
+    onPressCall: handleHeaderCall,
+    onPressMore: openClearMenu,
     selectionMode,
     selectedCount,
     exitSelectionMode,
@@ -1718,6 +1764,7 @@ export default function ChatScreen({ route, navigation }: Props) {
     clearAndroidLayoutIfNeeded,
     enterSelectionModeFromMessage,
     requestImageAction,
+    isLayoutBlockedByChrome,
   });
 
   // Функция для получения анимации сообщения (стабильная ссылка, чтобы не ломать мемоизацию)
@@ -1986,15 +2033,13 @@ export default function ChatScreen({ route, navigation }: Props) {
     setInputHeight(h);
   }, [inputHeight]);
 
-  // Android list viewport ends above the dock. Keeping the reserve on the
-  // viewport (rather than in an inverted ListHeader) prevents the newest
-  // bubble from being drawn underneath the composer.
+  // Список на весь экран под chrome: облака уезжают под шапку/композер (просвечивают).
+  // Инсеты — через padding контента; под IME оставляем только keyboard pad.
   const resolvedInputBarH = inputHeight > 0 ? inputHeight : estimatedInputHeight;
   // One persistent status slot on every Android device. Typing/recording and
   // transient delivery/deletion labels use it without moving chat bubbles.
   const androidInlineStatusGapH = 24;
-  const androidListBottomReserve =
-    resolvedInputBarH + androidKeyboardPad + androidInlineStatusGapH;
+  const androidListBottomReserve = androidKeyboardPad;
   useEffect(() => {
     if (Platform.OS !== 'android') return;
     scheduleScrollToBottom(0);
@@ -2004,7 +2049,7 @@ export default function ChatScreen({ route, navigation }: Props) {
     72,
     resolvedInputBarH + androidKeyboardPad + 10,
   );
-  // Центр видимой области сообщений (над композером), не всего экрана.
+  // Центр видимой области сообщений (между шапкой и композером).
   const chatEmptyFeedPlaceholder = React.useMemo(() => {
     if (!showEmpty) return null;
     return (
@@ -2014,9 +2059,9 @@ export default function ChatScreen({ route, navigation }: Props) {
           position: 'absolute',
           left: 0,
           right: 0,
-          top: 0,
+          top: headerTotalH,
           // Android: над инпутом (+IME). iOS: родитель уже ужат KeyboardAvoidingView.
-          bottom: Platform.OS === 'android' ? androidEmptyBottomPad : 0,
+          bottom: Platform.OS === 'android' ? androidEmptyBottomPad : resolvedInputBarH,
           justifyContent: 'center',
           alignItems: 'center',
           paddingHorizontal: 28,
@@ -2041,7 +2086,7 @@ export default function ChatScreen({ route, navigation }: Props) {
         </Text>
       </View>
     );
-  }, [showEmpty, androidEmptyBottomPad, isDark, peerNameParam, lang]);
+  }, [showEmpty, androidEmptyBottomPad, isDark, peerNameParam, lang, headerTotalH, resolvedInputBarH]);
 
   const renderMessageRow = React.useCallback(
     ({ item }: { item: ChatListRow }) => {
@@ -2050,7 +2095,7 @@ export default function ChatScreen({ route, navigation }: Props) {
           <View style={{ paddingTop: 10, paddingBottom: 6, alignItems: 'center' }}>
             <Text
               style={{
-                fontSize: 12,
+                fontSize: 11,
                 fontWeight: isDark ? '300' : '600',
                 // Светлые обои: onSurfaceVariant слишком бледный — как стрелка назад (titan).
                 color: isDark ? LIVI.text : LIVI.titan,
@@ -2080,6 +2125,7 @@ export default function ChatScreen({ route, navigation }: Props) {
           onToggleRetryUi={handleToggleRetryUi}
           onRetryFailed={retryFailedOutgoingMessage}
           onLongPressMessage={handleLongPressMessage}
+          isLayoutBlockedByChrome={isLayoutBlockedByChrome}
           onLongPressAlbumTile={handleLongPressAlbumTile}
           albumFocusIndex={
             showMessageActions &&
@@ -2132,6 +2178,7 @@ export default function ChatScreen({ route, navigation }: Props) {
       handleToggleRetryUi,
       retryFailedOutgoingMessage,
       handleLongPressMessage,
+      isLayoutBlockedByChrome,
       handleLongPressAlbumTile,
       showMessageActions,
       selectedMessage,
@@ -2158,11 +2205,21 @@ export default function ChatScreen({ route, navigation }: Props) {
     ],
   );
 
+  const ChatChrome = isDark ? StageGradient : View;
+  const chatChromeBottomExtra = isDark ? ({ translucent: true, mirror: true } as const) : {};
+
   return (
+    <View style={{ flex: 1, backgroundColor: isDark ? WELCOME_STAGE_BG : LIVI.bg }}>
+    <WelcomeStageBackground
+      isDark={isDark}
+      lightColor={String(theme.colors.background || LIVI.bg)}
+    />
+    {/* Обоина на весь экран: от верхнего края до нижнего, под glass-шапкой и композером. */}
+    {!loading && !err ? <ChatParallaxWallpaper isDark={isDark} /> : null}
     <SafeAreaView 
       // IMPORTANT: color the top safe-area (status bar area) to match the header.
       // Otherwise on Android (with translucent StatusBar) you'll see a white strip above the header.
-      style={{ flex: 1, backgroundColor: LIVI.bg }}
+      style={{ flex: 1, backgroundColor: 'transparent' }}
       // Android: bottom inset добавляем вручную только когда клавиатура скрыта,
       // иначе получаем лишний зазор между инпутом и клавиатурой на разных прошивках.
       edges={Platform.OS === 'android' ? ['top', 'left', 'right'] : ['top', 'bottom', 'left', 'right']}
@@ -2173,15 +2230,11 @@ export default function ChatScreen({ route, navigation }: Props) {
         backgroundColor={Platform.OS === 'android' ? 'transparent' : undefined}
       />
       <View
-        style={{ flex: 1, backgroundColor: isDark ? '#16243D' : '#B8D4EA' }}
+        style={{ flex: 1, backgroundColor: 'transparent' }}
         // Не блокируем весь экран pointerEvents='none': на Android это иногда "съедало" первый тап.
         pointerEvents="auto"
         onLayout={handleRootLayout}
       >
-        {/* Обои на весь корень (не только под шапкой) — иначе при повороте планшета
-            справа/снизу остаётся plate, пока внутренний flex ещё со старым layout. */}
-        <ChatParallaxWallpaper isDark={isDark} />
-        {headerEl}
         <View style={{ flex: 1, overflow: 'hidden', backgroundColor: 'transparent' }}>
         {loading ? (
           <Loading />
@@ -2211,7 +2264,7 @@ export default function ChatScreen({ route, navigation }: Props) {
             behavior="padding"
             keyboardVerticalOffset={0}
           >
-            <View style={{ flex: 1 }}>
+            <View style={{ flex: 1, overflow: 'hidden' }}>
             <FlatList
               ref={flatListRef}
               data={iosChatListData}
@@ -2224,8 +2277,8 @@ export default function ChatScreen({ route, navigation }: Props) {
               contentContainerStyle={{ 
                 flexGrow: 1,
                 justifyContent: showEmpty ? 'center' : 'flex-end',
-                paddingVertical: 16,
-                paddingBottom: 20,
+                paddingTop: headerTotalH + 10,
+                paddingBottom: resolvedInputBarH + 14,
               }}
               ListFooterComponent={null}
               keyboardShouldPersistTaps="handled"
@@ -2258,9 +2311,18 @@ export default function ChatScreen({ route, navigation }: Props) {
               }}
             />
             {chatEmptyFeedPlaceholder}
-            </View>
             {DeleteToastInline ? (
-              <View pointerEvents="none" style={{ alignItems: 'center', paddingTop: 8, paddingBottom: 8 }}>
+              <View
+                pointerEvents="none"
+                style={{
+                  position: 'absolute',
+                  left: 0,
+                  right: 0,
+                  bottom: resolvedInputBarH + 8,
+                  alignItems: 'center',
+                  zIndex: 8,
+                }}
+              >
                 {DeleteToastInline}
               </View>
             ) : null}
@@ -2271,7 +2333,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                   position: 'absolute',
                   left: 0,
                   right: 0,
-                  bottom: Math.max(inputHeight > 0 ? inputHeight : estimatedInputHeight, 72) + 4,
+                  bottom: Math.max(resolvedInputBarH, 72) + 4,
                   alignItems: 'center',
                   zIndex: 8,
                 }}
@@ -2279,12 +2341,16 @@ export default function ChatScreen({ route, navigation }: Props) {
                 {GapCenterIndicator}
               </View>
             ) : null}
-            {/* Поле ввода для iOS */}
-            <View
+            {/* Поле ввода для iOS — поверх ленты, облака уезжают под него */}
+            <ChatChrome
+              {...chatChromeBottomExtra}
               style={{
-                borderTopWidth: BORDER_WIDTH,
-                borderTopColor: BORDER_COLOR,
-                backgroundColor: INPUT_BAR_BG,
+                position: 'absolute',
+                left: 0,
+                right: 0,
+                bottom: 0,
+                zIndex: 20,
+                backgroundColor: isDark ? undefined : INPUT_BAR_BG,
                 paddingHorizontal: 16,
                 paddingTop: voiceIsRecording ? 8 : 18,
                 // Важно: симметричные отступы сверху/снизу вокруг инпута
@@ -2536,13 +2602,14 @@ export default function ChatScreen({ route, navigation }: Props) {
               {emojiPanelOpen ? (
                 <ChatEmojiKeyboard
                   isDark={isDark}
-                  surfaceBg={INPUT_BAR_BG}
+                  surfaceBg={EMOJI_SURFACE_BG}
                   textColor={LIVI.text}
                   langCode={lang}
                   onEmojiSelected={handleComposerEmojiSelected}
                   onStickerSelected={handleComposerStickerSelected}
                 />
               ) : null}
+            </ChatChrome>
             </View>
           </KeyboardAvoidingView>)
         ) : (
@@ -2555,6 +2622,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 left: 0,
                 right: 0,
                 bottom: androidListBottomReserve,
+                overflow: 'hidden',
               }}
             >
             <FlatList
@@ -2569,7 +2637,9 @@ export default function ChatScreen({ route, navigation }: Props) {
                 ...(!chatFeedReady || isEmpty
                   ? { flexGrow: 1, justifyContent: 'center' as const }
                   : null),
-                paddingTop: 0,
+                // inverted: paddingTop = низ (под композер), paddingBottom = верх (под шапку)
+                paddingTop: showEmpty ? 0 : resolvedInputBarH + androidInlineStatusGapH,
+                paddingBottom: showEmpty ? 0 : headerTotalH + 8,
               }}
               showsVerticalScrollIndicator={false}
               keyboardShouldPersistTaps="handled"
@@ -2653,11 +2723,10 @@ export default function ChatScreen({ route, navigation }: Props) {
                 },
               ]}
             >
-            <View
+            <ChatChrome
+              {...chatChromeBottomExtra}
               style={{
-                borderTopWidth: BORDER_WIDTH,
-                borderTopColor: BORDER_COLOR,
-                backgroundColor: INPUT_BAR_BG,
+                backgroundColor: isDark ? undefined : INPUT_BAR_BG,
                 paddingHorizontal: 16,
                 paddingTop: voiceIsRecording ? 8 : 18,
                 // Nav inset только когда клавиатуры/emoji нет.
@@ -2905,29 +2974,42 @@ export default function ChatScreen({ route, navigation }: Props) {
                   />
                 </TouchableOpacity>
               </View>
-            </View>
+            </ChatChrome>
             {emojiPanelOpen ? (
-              <View
+              <ChatChrome
+                {...chatChromeBottomExtra}
                 style={{
-                  backgroundColor: INPUT_BAR_BG,
-                  borderTopWidth: BORDER_WIDTH,
-                  borderTopColor: BORDER_COLOR,
+                  backgroundColor: isDark ? undefined : INPUT_BAR_BG,
                   paddingBottom: Math.max(0, insets.bottom),
                 }}
               >
                 <ChatEmojiKeyboard
                   isDark={isDark}
-                  surfaceBg={INPUT_BAR_BG}
+                  surfaceBg={EMOJI_SURFACE_BG}
                   textColor={LIVI.text}
                   langCode={lang}
                   onEmojiSelected={handleComposerEmojiSelected}
                   onStickerSelected={handleComposerStickerSelected}
                 />
-              </View>
+              </ChatChrome>
             ) : null}
             </View>
           </View>)
         )}
+        </View>
+        {/* Шапка поверх ленты — облака уезжают под glass и слегка просвечивают. */}
+        <View
+          pointerEvents="box-none"
+          style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            zIndex: 40,
+            elevation: 40,
+          }}
+        >
+          {headerEl}
         </View>
       </View>
       {/* Модалка аватара собеседника: полный экран, блюр/затемнение, круг 3×, pinch-to-zoom */}
@@ -3216,12 +3298,18 @@ export default function ChatScreen({ route, navigation }: Props) {
               }}
             >
               {(() => {
-                const cardBg = isDark ? 'rgba(30, 35, 41, 0.98)' : 'rgba(45, 50, 56, 0.98)';
                 const borderColor = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)';
                 const dividerColor = isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.10)';
                 const reactionsAll = [...SHEET_REACTIONS_ROW_1, ...SHEET_REACTIONS_ROW_2];
                 const row1 = reactionsAll.slice(0, 5);
                 const row2 = reactionsAll.slice(5, 10);
+                const CardShell = isDark ? StageGradient : View;
+                const cardShellStyle = {
+                  overflow: 'hidden' as const,
+                  backgroundColor: isDark ? undefined : LIVI.bg,
+                  borderWidth: 1,
+                  borderColor,
+                };
                 const emojiPress = (emoji: string) => {
                   hideMessageActions();
                   const msgId = selectedMessage?.id != null ? String(selectedMessage.id) : null;
@@ -3230,7 +3318,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 return (
                 <View style={{ width: 280, alignItems: 'center' }}>
                   {/* Блок 1: реакции (лежит на фоне модалки) */}
-                  <View style={{ width: 256, borderRadius: 28, overflow: 'hidden', backgroundColor: LIVI.bg, borderWidth: 1, borderColor }}>
+                  <CardShell style={{ width: 256, borderRadius: 28, ...cardShellStyle }}>
                       <ScrollView
                         ref={reactionsScrollRef}
                         horizontal
@@ -3271,10 +3359,10 @@ export default function ChatScreen({ route, navigation }: Props) {
                           ))}
                         </View>
                       </ScrollView>
-                  </View>
+                  </CardShell>
                   {/* Отступ 12px — виден фон модалки (на нём лежат оба блока) */}
                   {/* Блок 2: список действий */}
-                  <View style={{ marginTop: 12, width: 245, borderRadius: 12, overflow: 'hidden', backgroundColor: LIVI.bg, borderWidth: 1, borderColor }}>
+                  <CardShell style={{ marginTop: 12, width: 245, borderRadius: 12, ...cardShellStyle }}>
                     {(() => {
                       const isImageMsg = String(selectedMessage?.type || '') === 'image';
                       const row = (
@@ -3403,7 +3491,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                         </>
                       );
                     })()}
-                  </View>
+                  </CardShell>
                 </View>
                 );
               })()}
@@ -3432,7 +3520,8 @@ export default function ChatScreen({ route, navigation }: Props) {
               <Pressable
                 onPress={() => {}}
                 style={{
-                  backgroundColor: LIVI.bg,
+                  backgroundColor: isDark ? WELCOME_STAGE_BG : LIVI.bg,
+                  overflow: 'hidden',
                   borderTopLeftRadius: 20,
                   borderTopRightRadius: 20,
                   paddingTop: 8,
@@ -3445,6 +3534,9 @@ export default function ChatScreen({ route, navigation }: Props) {
                   elevation: 12,
                 }}
               >
+                {isDark ? (
+                  <WelcomeStageBackground isDark lightColor={String(theme.colors.background)} />
+                ) : null}
                 <View style={{ alignItems: 'center', paddingTop: 4, paddingBottom: 8 }}>
                   <View
                     style={{
@@ -3555,7 +3647,8 @@ export default function ChatScreen({ route, navigation }: Props) {
             <Pressable
               onPress={() => {}}
               style={{
-                backgroundColor: isDark ? LIVI.bg : 'rgba(182, 203, 216, 1)',
+                backgroundColor: isDark ? WELCOME_STAGE_BG : 'rgba(182, 203, 216, 1)',
+                overflow: 'hidden',
                 borderTopLeftRadius: 20,
                 borderTopRightRadius: 20,
                 paddingTop: 8,
@@ -3567,6 +3660,9 @@ export default function ChatScreen({ route, navigation }: Props) {
                 flexDirection: 'column',
               }}
             >
+              {isDark ? (
+                <WelcomeStageBackground isDark lightColor={String(theme.colors.background)} />
+              ) : null}
               <View style={{ paddingBottom: 2 }}>
                 <PanGestureHandler
                   activeOffsetY={10}
@@ -3808,7 +3904,7 @@ export default function ChatScreen({ route, navigation }: Props) {
         initialSelected={albumPickInitial}
         resolveMediaUri={resolveMediaUri}
         isDark={isDark}
-        bg={isDark ? LIVI.bg : 'rgba(255,255,255,0.98)'}
+        bg={isDark ? WELCOME_STAGE_BG : 'rgba(255,255,255,0.98)'}
         text={isDark ? LIVI.white : 'rgba(0,0,0,0.88)'}
         muted={isDark ? 'rgba(255,255,255,0.48)' : 'rgba(0,0,0,0.48)'}
         accent={LIVI.accent.solid}
@@ -3860,7 +3956,7 @@ export default function ChatScreen({ route, navigation }: Props) {
               maxWidth: 380,
               borderRadius: 18,
               // Светлая тема: оставляем как есть. Тёмная: фирменный LiVi background (без серого оттенка).
-              backgroundColor: isDark ? LIVI.bg : 'rgba(255,255,255,0.98)',
+              backgroundColor: isDark ? WELCOME_STAGE_BG : 'rgba(255,255,255,0.98)',
               borderWidth: StyleSheet.hairlineWidth,
               borderColor: isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.10)',
               overflow: 'hidden',
@@ -3953,7 +4049,7 @@ export default function ChatScreen({ route, navigation }: Props) {
               maxWidth: 380,
               borderRadius: 18,
               // Светлая тема: оставляем как есть. Тёмная: фирменный LiVi background (без серого оттенка).
-              backgroundColor: isDark ? LIVI.bg : 'rgba(255,255,255,0.98)',
+              backgroundColor: isDark ? WELCOME_STAGE_BG : 'rgba(255,255,255,0.98)',
               borderWidth: StyleSheet.hairlineWidth,
               borderColor: isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.10)',
               overflow: 'hidden',
@@ -4085,7 +4181,7 @@ export default function ChatScreen({ route, navigation }: Props) {
               width: '100%',
               maxWidth: 380,
               borderRadius: 18,
-              backgroundColor: isDark ? LIVI.bg : 'rgba(255,255,255,0.98)',
+              backgroundColor: isDark ? WELCOME_STAGE_BG : 'rgba(255,255,255,0.98)',
               borderWidth: StyleSheet.hairlineWidth,
               borderColor: isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.10)',
               overflow: 'hidden',
@@ -4138,5 +4234,6 @@ export default function ChatScreen({ route, navigation }: Props) {
         </Pressable>
       </Modal>
     </SafeAreaView>
+    </View>
   );
 }

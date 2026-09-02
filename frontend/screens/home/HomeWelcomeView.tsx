@@ -3,6 +3,7 @@ import {
   Animated,
   Dimensions,
   Easing,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -158,7 +159,17 @@ function HomeWelcomeViewInner({
       ? Math.min(viewWidth * 0.84, 288)
       : Math.min(viewWidth * 0.88, 328);
 
-  const welcomeAvatarRadius = Math.round((viewWidth < 400 ? 112 : 124) / 2);
+  // Базовый аватар для раскладки колец; визуально больше на ⅓ ширины 1-го кольца (перекрывает его).
+  const welcomeAvatarBase = viewWidth < 400 ? 112 : 124;
+  const welcomeAvatarRadius = Math.round(welcomeAvatarBase / 2);
+  const welcomeAvatarSize = (() => {
+    const half = radarSize / 2;
+    const avatarOuter = welcomeAvatarRadius + 2;
+    const stepTotal = 0.72 + 1.08 + 1.32 + 1.14;
+    const g = Math.max(half * 0.078, (half * 0.9 - avatarOuter) / stepTotal);
+    const firstRingWidth = g * 0.72;
+    return Math.round(welcomeAvatarBase + (firstRingWidth * 2) / 3);
+  })();
 
   const cancelBurst = useCallback(() => {
     if (!burstActiveRef.current) return;
@@ -376,6 +387,7 @@ function HomeWelcomeViewInner({
             compact={compactLayout}
             dense={phoneLandscape}
             radarStage
+            radarAvatarSize={welcomeAvatarSize}
             menuChromeBg={menuChromeBg}
             {...centerProfile}
             avatarAnchorRef={avatarAnchorRef}
@@ -463,8 +475,9 @@ const welcomeStyles = StyleSheet.create({
   },
   topBar: {
     height: 54,
-    paddingTop: 12,
+    paddingTop: Platform.OS === 'ios' ? 8 : 12,
     paddingHorizontal: 20,
+    paddingBottom: 6,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',

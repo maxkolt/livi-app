@@ -1,7 +1,8 @@
 import React, { useCallback, useMemo } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { FlatList, Swipeable } from 'react-native-gesture-handler';
 import { IconButton } from 'react-native-paper';
+import { Ionicons } from '@expo/vector-icons';
 import AvatarImage from '../../components/AvatarImage';
 import { FRIEND_ROW_ACTION_GAP } from '../../constants/uiTokens';
 import { dismissMessageNotificationForUser, syncAppBadgeFromMissedCount } from '../../utils/pushNotifications';
@@ -48,7 +49,7 @@ export type FriendsListCoreProps = {
   handleStartFriendCall: (friend: Friend) => void;
   clearMissedCallsForFriend: (friendIdStr: string) => Promise<void>;
   friendRowBlocksSwipeDelete: (friend: Friend) => boolean;
-  handleRemoveFriend: (peerId: string) => Promise<void>;
+  handleRemoveFriend: (peerId: string, opts?: { quiet?: boolean }) => Promise<void | boolean>;
   calling: { visible: boolean; friend?: Friend | null; callId?: string | null };
   callingVisibleRef: React.MutableRefObject<boolean>;
   activeOutgoingAttemptRef: React.MutableRefObject<number>;
@@ -69,6 +70,10 @@ export type FriendsListCoreProps = {
   ListFooterComponent?: React.ComponentType<any> | React.ReactElement | null;
   keyboardShouldPersistTaps?: 'always' | 'handled' | 'never';
   onScrollBeginDragExtra?: () => void;
+  selectMode?: boolean;
+  selectedIds?: Set<string>;
+  onEnterSelect?: (friendId: string) => void;
+  onToggleSelect?: (friendId: string) => void;
 };
 
 function FriendsListCoreInner(props: FriendsListCoreProps) {
@@ -111,6 +116,10 @@ function FriendsListCoreInner(props: FriendsListCoreProps) {
     ListFooterComponent,
     keyboardShouldPersistTaps = 'always',
     onScrollBeginDragExtra,
+    selectMode = false,
+    selectedIds,
+    onEnterSelect,
+    onToggleSelect,
   } = props;
 
   const isWelcome = presentation === 'welcome';
@@ -296,7 +305,7 @@ function FriendsListCoreInner(props: FriendsListCoreProps) {
       })}
       data={friends}
       keyExtractor={(item) => item.id}
-      extraData={friendsListExtraData}
+      extraData={{ ...friendsListExtraData, selectMode, selectedIds }}
       refreshing={refreshing}
       onRefresh={onRefresh}
       onScrollBeginDrag={() => {
@@ -309,12 +318,13 @@ function FriendsListCoreInner(props: FriendsListCoreProps) {
         const rowHidden = markReadMenu?.friendId === item.id;
         const showTopDivider = !isWelcome && index > 0;
         const swipeDeleteBlocked = friendRowBlocksSwipeDelete(item);
+        const isSelected = !!selectedIds?.has(item.id);
 
         const innerRow = (
           <View
             style={
               isWelcome
-                ? welcomeListStyles.welcomeRow
+                ? [welcomeListStyles.welcomeRow, selectMode && welcomeListStyles.welcomeRowSelecting]
                 : [
                     styles.listRow,
                     styles.listRowAligned,
@@ -334,73 +344,45 @@ function FriendsListCoreInner(props: FriendsListCoreProps) {
           >
             {showTopDivider ? <View style={styles.friendRowDivider} pointerEvents="none" /> : null}
             {isWelcome ? (
-              <View style={welcomeListStyles.glassCard}>
+              <View style={[welcomeListStyles.glassCard, isSelected && welcomeListStyles.glassCardSelected]}>
                 <View style={welcomeListStyles.glassRow}>
-                  <View style={[styles.friendRowSwipeColumn, welcomeListStyles.swipeColumnWelcome]}>
-                    {!rowHidden ? (
-                      <Swipeable
-                        containerStyle={[styles.friendRowSwipeContainer, welcomeListStyles.swipeContainer]}
-                        enabled={!swipeDeleteBlocked}
-                        ref={(r) => {
-                          if (r) {
-                            swipeableRefsMap.current[item.id] = r;
-                            return;
-                          }
-                          const existing = swipeableRefsMap.current[item.id];
-                          if (openSwipeableRef.current === existing) openSwipeableRef.current = null;
-                          delete swipeableRefsMap.current[item.id];
-                        }}
-                        onSwipeableWillOpen={() => {
-                          if (swipeDeleteBlocked) {
-                            try {
-                              swipeableRefsMap.current[item.id]?.close?.();
-                            } catch {}
-                            return;
-                          }
-                          setMarkReadMenu(null);
-                          const opening = swipeableRefsMap.current[item.id];
-                          const prev = openSwipeableRef.current;
-                          if (prev && prev !== opening) {
-                            try {
-                              prev.close?.();
-                            } catch {}
-                          }
-                        }}
-                        onSwipeableOpen={() => {
-                          openSwipeableRef.current = swipeableRefsMap.current[item.id] ?? null;
-                        }}
-                        onSwipeableClose={() => {
-                          if (openSwipeableRef.current === swipeableRefsMap.current[item.id]) {
-                            openSwipeableRef.current = null;
-                          }
-                        }}
-                        renderRightActions={() => renderRightActions(item)}
-                        dragOffsetFromRightEdge={0}
-                        dragOffsetFromLeftEdge={0}
-                        activeOffsetX={[-6, 6]}
-                        failOffsetY={[-14, 14]}
-                        rightThreshold={16}
-                        leftThreshold={24}
-                        overshootRight={false}
-                        friction={1}
-                        overshootFriction={6}
-                        enableTrackpadTwoFingerGesture={false}
-                      >
-                        {innerRow}
-                      </Swipeable>
-                    ) : (
-                      <View
-                        style={[
-                          styles.friendRowSwipeContainer,
-                          isWelcome && welcomeListStyles.swipeContainer,
-                        ]}
-                        pointerEvents="none"
-                      >
-                        {innerRow}
-                      </View>
-                    )}
-                  </View>
-                  {!rowHidden ? renderActions(item) : null}
+                  <Pressable
+                    style={[styles.friendRowSwipeColumn, welcomeListStyles.swipeColumnWelcome]}
+                    onPress={() => {
+                      if (selectMode) onToggleSelect?.(item.id);
+                    }}
+                    onLongPress={() => {
+                      if (swipeDeleteBlocked) return;
+                      if (selectMode) onToggleSelect?.(item.id);
+                      else onEnterSelect?.(item.id);
+                    }}
+                    delayLongPress={380}
+                    disabled={rowHidden}
+                  >
+                    <View
+                      style={[
+                        styles.friendRowSwipeContainer,
+                        welcomeListStyles.swipeContainer,
+                        welcomeListStyles.welcomeSelectRow,
+                      ]}
+                    >
+                      {selectMode ? (
+                        <View style={welcomeListStyles.selectMark}>
+                          {isSelected ? (
+                            <Ionicons
+                              name="checkmark-circle"
+                              size={22}
+                              color={WELCOME_BRAND_VI_FILL_GRADIENT[2]}
+                            />
+                          ) : (
+                            <View style={welcomeListStyles.selectEmpty} />
+                          )}
+                        </View>
+                      ) : null}
+                      {innerRow}
+                    </View>
+                  </Pressable>
+                  {!rowHidden && !selectMode ? renderActions(item) : null}
                 </View>
               </View>
             ) : (
@@ -548,6 +530,30 @@ const welcomeListStyles = StyleSheet.create({
     borderRadius: 16,
     overflow: 'hidden',
   },
+  glassCardSelected: {
+    borderColor: 'rgba(74, 122, 140, 0.45)',
+    backgroundColor: 'rgba(42, 88, 104, 0.28)',
+  },
+  welcomeSelectRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+  },
+  selectMark: {
+    width: 22,
+    height: 22,
+    marginLeft: 12,
+    marginRight: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  selectEmpty: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderColor: WELCOME_MUTED_TEXT,
+  },
   glassRow: {
     height: WELCOME_FRIEND_CARD_ROW_HEIGHT,
     flexDirection: 'row',
@@ -560,12 +566,17 @@ const welcomeListStyles = StyleSheet.create({
     backgroundColor: 'transparent',
   },
   welcomeRow: {
+    flex: 1,
+    minWidth: 0,
     flexDirection: 'row',
     alignItems: 'center',
     height: WELCOME_FRIEND_CARD_ROW_HEIGHT,
     backgroundColor: 'transparent',
     paddingLeft: 12,
     paddingRight: 4,
+  },
+  welcomeRowSelecting: {
+    paddingLeft: 8,
   },
   avatarBox: {
     width: WELCOME_FRIEND_AVATAR_SIZE,

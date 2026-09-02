@@ -17,6 +17,8 @@ export type HomeCenterProfileProps = {
   dense?: boolean;
   /** Экран приветствия: аватар в радаре без ника под фото. */
   radarStage?: boolean;
+  /** Явный диаметр аватара на radar (иначе layoutWidth → 112/124). */
+  radarAvatarSize?: number;
   savedNick: string;
   avatarUri: string;
   myFullAvatarUri: string;
@@ -36,6 +38,7 @@ function HomeCenterProfileInner({
   compact = false,
   dense = false,
   radarStage = false,
+  radarAvatarSize,
   savedNick,
   avatarUri,
   myFullAvatarUri,
@@ -71,7 +74,7 @@ function HomeCenterProfileInner({
   const noNick = !(savedNick && String(savedNick).trim());
 
   const centerAvatarSize = radarStage
-    ? Math.round(layoutWidth < 400 ? 112 : 124)
+    ? Math.round(radarAvatarSize ?? (layoutWidth < 400 ? 112 : 124))
     : dense
       ? 56
       : compact
