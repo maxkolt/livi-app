@@ -61,20 +61,29 @@ function parseEntries(raw: string | null): CallLogEntry[] {
 async function ensureLoaded(uid = currentUid()): Promise<CallLogEntry[]> {
   if (memory && memoryUid === uid) return memory;
   if (loadPromise && memoryUid === uid) return loadPromise;
+  // Смена uid (логин после пустого id) — сбрасываем кэш, иначе список «пропадает».
+  if (memoryUid !== uid) {
+    memory = null;
+    loadPromise = null;
+  }
   memoryUid = uid;
   loadPromise = AsyncStorage.getItem(storageKey(uid))
     .then((raw) => {
+      if (memoryUid !== uid) return memory || [];
       memory = parseEntries(raw);
       memoryUid = uid;
+      notify();
       return memory;
     })
     .catch(() => {
+      if (memoryUid !== uid) return memory || [];
       memory = [];
       memoryUid = uid;
+      notify();
       return memory;
     })
     .finally(() => {
-      loadPromise = null;
+      if (memoryUid === uid) loadPromise = null;
     });
   return loadPromise;
 }

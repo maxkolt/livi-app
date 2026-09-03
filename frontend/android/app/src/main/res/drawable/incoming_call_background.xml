@@ -1,19 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Фон: #1B1C22 → картинка по центру → сверху немного тёмного стекла -->
-<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
-    <item>
-        <shape android:shape="rectangle">
-            <solid android:color="#1B1C22" />
-        </shape>
-    </item>
-    <item
-        android:drawable="@mipmap/ic_launcher_round"
-        android:gravity="center"
-        android:width="152dp"
-        android:height="152dp" />
-    <item>
-        <shape android:shape="rectangle">
-            <solid android:color="#A6000000" />
-        </shape>
-    </item>
-</layer-list>
+<!-- Dithered bitmap: XML-градиенты на OLED дают banding. -->
+<bitmap xmlns:android="http://schemas.android.com/apk/res/android"
+    android:src="@drawable/welcome_stage_bg"
+    android:gravity="fill"
+    android:dither="true"
+    android:filter="true" />

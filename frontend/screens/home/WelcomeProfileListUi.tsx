@@ -9,6 +9,7 @@ import {
   WELCOME_GLASS_SURFACE,
   WELCOME_HEADER_TITLE,
   WELCOME_BRAND_VI_FILL_GRADIENT,
+  WELCOME_UNREAD_BADGE,
 } from './constants';
 
 /** Иконки и chevron в строках профиля — приглушённый серый. */
@@ -46,6 +47,8 @@ type WelcomeProfileRowProps = {
   largeValue?: boolean;
   destructive?: boolean;
   showChevron?: boolean;
+  /** Синий бейдж с числом справа у стрелки (например обновление). */
+  badgeCount?: number;
   onPress?: () => void;
   disabled?: boolean;
   compact?: boolean;
@@ -72,6 +75,7 @@ export function WelcomeProfileRow({
   tight,
   expandable,
   expanded,
+  badgeCount,
 }: WelcomeProfileRowProps) {
   const labelColor = destructive ? LIVI.red : WELCOME_HEADER_TITLE;
   const iconColor = destructive ? LIVI.red : WELCOME_PROFILE_ROW_ICON;
@@ -107,6 +111,11 @@ export function WelcomeProfileRow({
           <Text style={[styles.rowValue, largeValue && styles.rowValueLarge]} numberOfLines={1}>
             {value}
           </Text>
+        ) : null}
+        {typeof badgeCount === 'number' && badgeCount > 0 ? (
+          <View style={styles.countBadge}>
+            <Text style={styles.countBadgeText}>{badgeCount > 99 ? '99+' : String(badgeCount)}</Text>
+          </View>
         ) : null}
         {showChevron && onPress ? (
           <Ionicons name={chevronName} size={ROW_CHEVRON_SIZE} color={WELCOME_PROFILE_ROW_ICON} />
@@ -263,6 +272,22 @@ const styles = StyleSheet.create({
     color: WELCOME_PROFILE_ROW_ICON,
     fontSize: 14,
     fontWeight: '400',
+  },
+  countBadge: {
+    minWidth: 17,
+    height: 17,
+    paddingHorizontal: 5,
+    borderRadius: 9,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: WELCOME_UNREAD_BADGE,
+    flexShrink: 0,
+  },
+  countBadgeText: {
+    color: LIVI.white,
+    fontSize: 10,
+    fontWeight: '700',
+    lineHeight: 12,
   },
   divider: {
     height: StyleSheet.hairlineWidth,

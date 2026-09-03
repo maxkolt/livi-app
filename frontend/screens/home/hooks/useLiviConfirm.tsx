@@ -36,8 +36,8 @@ export function useLiviConfirm() {
 
   const view = state.visible ? (
     <View style={styles.overlayModal}>
-      <WelcomeOverlayDim />
-      <WelcomeOverlayCard>
+      <WelcomeOverlayDim strong />
+      <WelcomeOverlayCard opaque>
         <Text style={styles.confirmTitle}>{state.title}</Text>
         {!!state.message && <Text style={styles.confirmMsg}>{state.message}</Text>}
         <View style={styles.confirmBtns}>

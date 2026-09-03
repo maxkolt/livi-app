@@ -135,7 +135,7 @@ import {
 } from './chat/ChatGapStatus';
 import { ChatParallaxWallpaper } from './chat/ChatParallaxWallpaper';
 import { WelcomeStageBackground, StageGradient } from './home/WelcomeStageBackground';
-import { WELCOME_STAGE_BG } from './home/constants';
+import { WELCOME_CARD_BG, WELCOME_HEADER_TITLE, WELCOME_STAGE_BG } from './home/constants';
 import { emitRequestDirectCall } from '../utils/globalEvents';
 import {
   ReactionBarModal,
@@ -3119,7 +3119,7 @@ export default function ChatScreen({ route, navigation }: Props) {
           left: 0,
           right: 0,
           bottom: 0,
-          backgroundColor: 'rgba(0,0,0,0.5)',
+          backgroundColor: 'rgba(0,0,0,0.90)',
           justifyContent: 'center',
           alignItems: 'center',
           zIndex: 1000,
@@ -3943,7 +3943,7 @@ export default function ChatScreen({ route, navigation }: Props) {
           onPress={closeConfirm}
           style={{
             flex: 1,
-            backgroundColor: isDark ? 'rgba(0,0,0,0.62)' : 'rgba(0,0,0,0.38)',
+            backgroundColor: isDark ? 'rgba(0,0,0,0.90)' : 'rgba(0,0,0,0.58)',
             alignItems: 'center',
             justifyContent: 'center',
             padding: 24,
@@ -3955,8 +3955,7 @@ export default function ChatScreen({ route, navigation }: Props) {
               width: '100%',
               maxWidth: 380,
               borderRadius: 18,
-              // Светлая тема: оставляем как есть. Тёмная: фирменный LiVi background (без серого оттенка).
-              backgroundColor: isDark ? WELCOME_STAGE_BG : 'rgba(255,255,255,0.98)',
+              backgroundColor: isDark ? WELCOME_CARD_BG : 'rgba(255,255,255,0.98)',
               borderWidth: StyleSheet.hairlineWidth,
               borderColor: isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.10)',
               overflow: 'hidden',
@@ -3983,9 +3982,11 @@ export default function ChatScreen({ route, navigation }: Props) {
                 onPress={closeConfirm}
                 style={({ pressed }) => ({
                   flex: 1,
-                  paddingVertical: 12,
-                  borderRadius: 14,
+                  paddingVertical: 9,
+                  minHeight: 40,
+                  borderRadius: 999,
                   alignItems: 'center',
+                  justifyContent: 'center',
                   backgroundColor: pressed
                     ? (isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.06)')
                     : (isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)'),
@@ -4000,21 +4001,25 @@ export default function ChatScreen({ route, navigation }: Props) {
                 onPress={runConfirm}
                 style={({ pressed }) => ({
                   flex: 1,
-                  paddingVertical: 12,
-                  borderRadius: 14,
+                  paddingVertical: 9,
+                  minHeight: 40,
+                  borderRadius: 999,
                   alignItems: 'center',
+                  justifyContent: 'center',
+                  opacity: pressed ? 0.88 : 1,
+                  transform: [{ scale: pressed ? 0.99 : 1 }],
                   backgroundColor: confirmDestructive
-                    ? (pressed ? 'rgba(255,90,103,0.26)' : 'rgba(255,90,103,0.18)')
+                    ? 'rgba(255, 90, 103, 0.16)'
                     : (pressed ? LIVI.accent.vivid22 : LIVI.accent.vivid16),
-                  borderWidth: StyleSheet.hairlineWidth,
-                  borderColor: confirmDestructive ? 'rgba(255,90,103,0.45)' : LIVI.accent.vivid45,
+                  borderWidth: confirmDestructive ? 1 : StyleSheet.hairlineWidth,
+                  borderColor: confirmDestructive ? 'rgba(255, 90, 103, 0.72)' : LIVI.accent.vivid45,
                 })}
               >
                 <Text
                   style={{
-                    color: confirmDestructive ? '#FF5A67' : LIVI.titan,
+                    color: confirmDestructive ? WELCOME_HEADER_TITLE : LIVI.titan,
                     fontSize: 15,
-                    fontWeight: '700',
+                    fontWeight: '600',
                   }}
                 >
                   {confirmOkText || t('ok', lang)}
@@ -4036,7 +4041,7 @@ export default function ChatScreen({ route, navigation }: Props) {
           onPress={closeDeleteConfirm}
           style={{
             flex: 1,
-            backgroundColor: isDark ? 'rgba(0,0,0,0.62)' : 'rgba(0,0,0,0.38)',
+            backgroundColor: isDark ? 'rgba(0,0,0,0.90)' : 'rgba(0,0,0,0.58)',
             alignItems: 'center',
             justifyContent: 'center',
             padding: 24,
@@ -4048,8 +4053,7 @@ export default function ChatScreen({ route, navigation }: Props) {
               width: '100%',
               maxWidth: 380,
               borderRadius: 18,
-              // Светлая тема: оставляем как есть. Тёмная: фирменный LiVi background (без серого оттенка).
-              backgroundColor: isDark ? WELCOME_STAGE_BG : 'rgba(255,255,255,0.98)',
+              backgroundColor: isDark ? WELCOME_CARD_BG : 'rgba(255,255,255,0.98)',
               borderWidth: StyleSheet.hairlineWidth,
               borderColor: isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.10)',
               overflow: 'hidden',
@@ -4128,9 +4132,11 @@ export default function ChatScreen({ route, navigation }: Props) {
                 onPress={closeDeleteConfirm}
                 style={({ pressed }) => ({
                   flex: 1,
-                  paddingVertical: 12,
-                  borderRadius: 14,
+                  paddingVertical: 9,
+                  minHeight: 40,
+                  borderRadius: 999,
                   alignItems: 'center',
+                  justifyContent: 'center',
                   backgroundColor: pressed
                     ? (isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.06)')
                     : (isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)'),
@@ -4143,15 +4149,19 @@ export default function ChatScreen({ route, navigation }: Props) {
                 onPress={confirmDeleteNow}
                 style={({ pressed }) => ({
                   flex: 1,
-                  paddingVertical: 12,
-                  borderRadius: 14,
+                  paddingVertical: 9,
+                  minHeight: 40,
+                  borderRadius: 999,
                   alignItems: 'center',
-                  backgroundColor: pressed ? 'rgba(255,90,103,0.26)' : 'rgba(255,90,103,0.18)',
-                  borderWidth: StyleSheet.hairlineWidth,
-                  borderColor: 'rgba(255,90,103,0.45)',
+                  justifyContent: 'center',
+                  opacity: pressed ? 0.88 : 1,
+                  transform: [{ scale: pressed ? 0.99 : 1 }],
+                  backgroundColor: 'rgba(255, 90, 103, 0.16)',
+                  borderWidth: 1,
+                  borderColor: 'rgba(255, 90, 103, 0.72)',
                 })}
               >
-                <Text style={{ color: '#FF5A67', fontSize: 15, fontWeight: '700' }}>{t('delete', lang)}</Text>
+                <Text style={{ color: WELCOME_HEADER_TITLE, fontSize: 15, fontWeight: '600' }}>{t('delete', lang)}</Text>
               </Pressable>
             </View>
           </Pressable>

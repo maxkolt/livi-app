@@ -12,6 +12,7 @@ import android.os.Looper
 import android.util.Log
 import android.view.MotionEvent
 import android.view.View
+import android.graphics.PixelFormat
 import android.view.WindowManager
 import androidx.activity.OnBackPressedCallback
 import android.widget.ImageButton
@@ -75,6 +76,7 @@ class OutgoingCallActivity : AppCompatActivity() {
             setTurnScreenOn(true)
         }
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED)
+        window.setFormat(PixelFormat.RGBA_8888)
         setContentView(R.layout.activity_outgoing_call)
         findViewById<View>(R.id.outgoing_call_content)?.let { EdgeToEdgeHelper.applySystemBarInsets(it) }
 

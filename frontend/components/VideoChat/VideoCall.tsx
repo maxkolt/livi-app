@@ -8,6 +8,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import {
   View,
   Text,
+  Image,
   StyleSheet,
   Dimensions,
   TouchableOpacity,
@@ -36,6 +37,8 @@ import { partnerRemoteRtcLikelyVisible, streamHasLiveRemoteAudio } from './share
 import { t, loadLang, defaultLang } from '../../utils/i18n';
 import type { Lang } from '../../utils/i18n';
 import { useAppTheme } from '../../theme/ThemeProvider';
+import { WelcomeStageBackground } from '../../screens/home/WelcomeStageBackground';
+import { WELCOME_STAGE_BG } from '../../screens/home/constants';
 import { uiAccent } from '../../theme/uiAccent';
 import { isValidStream } from '../../utils/streamUtils';
 import { logger } from '../../utils/logger';
@@ -6992,8 +6995,13 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
   }
 
   return (
-    <SafeAreaView 
-      style={[styles.container, { backgroundColor: isDark ? '#151F33' : (theme.colors.background as string) }]}
+    <View style={[styles.container, { backgroundColor: isDark ? WELCOME_STAGE_BG : (theme.colors.background as string) }]}>
+      <WelcomeStageBackground
+        isDark={!!isDark}
+        lightColor={(theme.colors.background as string) || WELCOME_STAGE_BG}
+      />
+      <SafeAreaView 
+      style={[styles.container, { backgroundColor: 'transparent' }]}
       // Android: safe-area отступы считаем сами через insets, чтобы низ/верх точно не прилипали к системе
       edges={Platform.OS === 'android' ? [] : undefined}
       onLayout={() => {
@@ -7187,12 +7195,18 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
             }
             disabled={isInactiveState}
           >
-            <Text style={styles.bigBtnText}>{t('endCall', lang)}</Text>
-            <MaterialIcons name="call-end" size={18} color="#fff" />
+            <Text style={[styles.bigBtnText, styles.btnDangerText]}>{t('endCall', lang)}</Text>
+            <Image
+              source={require('../../assets/icons/phone-classic.png')}
+              style={styles.endCallPhoneIcon}
+              resizeMode="contain"
+              tintColor="#C5C9CE"
+            />
           </TouchableOpacity>
         </View>
       </View>
     </SafeAreaView>
+    </View>
   );
 };
 
@@ -7359,7 +7373,14 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   btnDanger: {
-    backgroundColor: '#ff4d4d',
+    backgroundColor: 'rgba(214, 46, 49, 0.34)',
+  },
+  btnDangerText: {
+    color: '#C5C9CE',
+  },
+  endCallPhoneIcon: {
+    width: 22,
+    height: 16,
   },
   disabled: {
     opacity: 1,

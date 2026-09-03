@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
+import { getCurrentUserId } from '../../../sockets/socket';
 import { loadCallLog, subscribeCallLog, type CallLogEntry } from '../callLog';
 
 export function useCallLog(enabled: boolean) {
   const [entries, setEntries] = useState<CallLogEntry[]>([]);
+  const uid = String(getCurrentUserId() || '').trim();
 
   useEffect(() => {
     if (!enabled) return;
@@ -17,7 +19,7 @@ export function useCallLog(enabled: boolean) {
       cancelled = true;
       off();
     };
-  }, [enabled]);
+  }, [enabled, uid]);
 
   return entries;
 }

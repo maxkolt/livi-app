@@ -680,7 +680,8 @@ const styles = StyleSheet.create({
     marginBottom: WELCOME_FRIEND_CARD_GAP,
   },
   cardPressed: {
-    opacity: 0.92,
+    opacity: 0.82,
+    transform: [{ scale: 0.992 }],
   },
   glassCard: {
     height: WELCOME_FRIEND_CARD_ROW_HEIGHT,

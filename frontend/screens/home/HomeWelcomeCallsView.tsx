@@ -33,7 +33,7 @@ import { WELCOME_SEGMENT_ACTIVE } from './FriendsListCore';
 import { friendMatchesNameSearch, getFriendDisplay } from './friendHelpers';
 import { formatWelcomeChatTime } from './chatPreview';
 import { useCallLog } from './hooks/useCallLog';
-import { deleteCallLogIds } from './callLog';
+import { deleteCallLogIds, recordCallLog } from './callLog';
 import { WelcomeCrownButton } from './WelcomeCrownButton';
 import type { CallLogDirection, CallLogEntry } from './callLog';
 import type { Friend } from './types';
@@ -51,6 +51,8 @@ type CallRow = {
 export type HomeWelcomeCallsViewProps = {
   lang: Lang;
   L: (key: string) => string;
+  /** Вкладка «Звонки» сейчас видима (pane keep-alive не remount'ит экран). */
+  active: boolean;
   allFriends: Friend[];
   unreadByUser: Record<string, number>;
   missedByUser: Record<string, number>;
@@ -98,6 +100,7 @@ function MissedCountBadge({ count }: { count: number }) {
 function HomeWelcomeCallsViewInner({
   lang,
   L,
+  active,
   allFriends,
   unreadByUser,
   missedByUser,
@@ -120,8 +123,10 @@ function HomeWelcomeCallsViewInner({
   const [deleting, setDeleting] = useState(false);
   const searchInputRef = useRef<TextInput>(null);
   const skipSearchDismissRef = useRef(false);
+  const clearedOnOpenRef = useRef(false);
 
   const trimmedQuery = searchQuery.trim();
+  // Журнал греем заранее (pane keep-alive) — список готов до тапа на вкладку.
   const logEntries = useCallLog(true);
 
   const friendsById = useMemo(() => {
@@ -130,16 +135,26 @@ function HomeWelcomeCallsViewInner({
     return map;
   }, [allFriends]);
 
-  // Открыли вкладку «Звонки» — смотрим журнал, бейджи пропущенных снимаем без звонка.
+  // Pane keep-alive: сброс бейджа при показе вкладки (без ожидания AsyncStorage).
   useEffect(() => {
+    if (!active) {
+      clearedOnOpenRef.current = false;
+      return;
+    }
+    if (clearedOnOpenRef.current) return;
     const peerIds = Object.keys(missedByUser).filter((id) => (missedByUser[id] || 0) > 0);
     if (peerIds.length === 0) return;
+    clearedOnOpenRef.current = true;
+    const haveMissed = new Set(
+      logEntries.filter((item) => item.direction === 'missed').map((item) => item.peerId),
+    );
     peerIds.forEach((peerId) => {
+      if (!haveMissed.has(peerId)) {
+        recordCallLog({ peerId, direction: 'missed' });
+      }
       void clearMissedCallsForFriend(peerId);
     });
-    // Только при входе на экран, не при каждом обновлении карты.
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount / remount when tab opens
-  }, [clearMissedCallsForFriend]);
+  }, [active, clearMissedCallsForFriend, logEntries, missedByUser]);
 
   const closeSearch = useCallback(() => {
     skipSearchDismissRef.current = true;
@@ -219,12 +234,6 @@ function HomeWelcomeCallsViewInner({
     setSearchOpen(true);
     requestAnimationFrame(() => searchInputRef.current?.focus());
   }, [searchOpen, closeSearch, exitSelect]);
-
-  const togglePick = useCallback(() => {
-    closeSearch();
-    exitSelect();
-    setPickMode((open) => !open);
-  }, [closeSearch, exitSelect]);
 
   const clearSearch = useCallback(() => {
     setSearchQuery('');
@@ -341,8 +350,6 @@ function HomeWelcomeCallsViewInner({
         : { displayName: t('user', lang), avatarLetter: '—' };
       const timeLabel = item.at ? formatWelcomeChatTime(item.at) : '';
       const missed = item.direction === 'missed';
-      const missedCount = missedByUser[item.peerId] || 0;
-      const badgeCount = missed || item.direction === 'contact' ? missedCount : 0;
       const statusLabel =
         item.direction === 'outgoing'
           ? L('callsOutgoing')
@@ -370,13 +377,16 @@ function HomeWelcomeCallsViewInner({
               toggleSelect(item.id);
               return;
             }
-            if (!friend) return;
-            // Пропущенный: только снять бейдж, без автозвонка (позвонить — через +).
-            if (item.direction === 'missed') {
-              void clearMissedCallsForFriend(String(friend.id));
-              return;
-            }
-            startCall(friend);
+            const peerId = String(item.peerId || '').trim();
+            if (!peerId) return;
+            const target =
+              friend ||
+              ({
+                id: peerId,
+                name: displayName,
+                online: false,
+              } as Friend);
+            startCall(target);
           }}
           onLongPress={() => {
             if (pickMode) return;
@@ -442,14 +452,12 @@ function HomeWelcomeCallsViewInner({
                     <Text style={[styles.status, missed && styles.statusMissed]} numberOfLines={1}>
                       {statusLabel}
                     </Text>
-                    <MissedCountBadge count={badgeCount} />
                   </View>
                 ) : (
                   <View style={styles.statusRow}>
                     <Text style={styles.status} numberOfLines={1}>
                       {friend?.online ? L('online') : L('offline')}
                     </Text>
-                    <MissedCountBadge count={badgeCount} />
                   </View>
                 )}
               </View>
@@ -458,7 +466,7 @@ function HomeWelcomeCallsViewInner({
         </Pressable>
       );
     },
-    [L, clearMissedCallsForFriend, enterSelect, friendsById, lang, missedByUser, pickMode, selectMode, selectedIds, startCall, toggleSelect],
+    [L, enterSelect, friendsById, lang, pickMode, selectMode, selectedIds, startCall, toggleSelect],
   );
 
   return (
@@ -519,23 +527,6 @@ function HomeWelcomeCallsViewInner({
                     name={searchOpen ? 'search' : 'search-outline'}
                     size={22}
                     color={searchOpen ? WELCOME_SEGMENT_ACTIVE : LIVI.white}
-                  />
-                </Pressable>
-                <Pressable
-                  style={({ pressed }) => [
-                    styles.iconBtn,
-                    pickMode && styles.iconBtnActive,
-                    pressed && styles.iconBtnPressed,
-                  ]}
-                  accessibilityRole="button"
-                  accessibilityLabel={L('callsNewA11y')}
-                  accessibilityState={{ selected: pickMode }}
-                  onPress={togglePick}
-                >
-                  <MaterialCommunityIcons
-                    name="phone-plus-outline"
-                    size={22}
-                    color={pickMode ? WELCOME_SEGMENT_ACTIVE : LIVI.white}
                   />
                 </Pressable>
                 <WelcomeCrownButton
@@ -774,7 +765,8 @@ const styles = StyleSheet.create({
     marginBottom: WELCOME_FRIEND_CARD_GAP,
   },
   cardPressed: {
-    opacity: 0.92,
+    opacity: 0.82,
+    transform: [{ scale: 0.992 }],
   },
   glassCard: {
     height: WELCOME_FRIEND_CARD_ROW_HEIGHT,

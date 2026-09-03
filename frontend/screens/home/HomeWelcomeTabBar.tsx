@@ -35,9 +35,11 @@ type HomeWelcomeTabBarProps = {
   showChatDot?: boolean;
   /** Красная точка на вкладке звонков при пропущенных. */
   showCallsDot?: boolean;
+  /** Красная точка на вкладке профиля при доступном обновлении. */
+  showProfileDot?: boolean;
 };
 
-const PROFILE_ACTIVE_DOT = 26;
+const PROFILE_ACTIVE_DOT = 28;
 
 const INACTIVE = '#7A8494';
 
@@ -47,6 +49,7 @@ function HomeWelcomeTabBarInner({
   onPressTab,
   showChatDot,
   showCallsDot,
+  showProfileDot,
 }: HomeWelcomeTabBarProps) {
   const insets = useSafeAreaInsets();
   const bottomPad = Math.max(insets.bottom, Platform.OS === 'android' ? 6 : 2);
@@ -56,21 +59,21 @@ function HomeWelcomeTabBarInner({
       id: 'search',
       label: labels.search,
       renderIcon: (active, color) => (
-        <Ionicons name={active ? 'search' : 'search-outline'} size={23} color={color} />
+        <Ionicons name={active ? 'search' : 'search-outline'} size={26} color={color} />
       ),
     },
     {
       id: 'friends',
       label: labels.friends,
       renderIcon: (active, color) => (
-        <Ionicons name={active ? 'people' : 'people-outline'} size={23} color={color} />
+        <Ionicons name={active ? 'people' : 'people-outline'} size={26} color={color} />
       ),
     },
     {
       id: 'calls',
       label: labels.calls,
       renderIcon: (active, color) => (
-        <Ionicons name={active ? 'call' : 'call-outline'} size={22} color={color} />
+        <Ionicons name={active ? 'call' : 'call-outline'} size={25} color={color} />
       ),
     },
     {
@@ -79,7 +82,7 @@ function HomeWelcomeTabBarInner({
       renderIcon: (active, color) => (
         <MaterialCommunityIcons
           name={active ? 'chat-processing' : 'chat-processing-outline'}
-          size={23}
+          size={26}
           color={color}
         />
       ),
@@ -95,10 +98,10 @@ function HomeWelcomeTabBarInner({
               { backgroundColor: ACTIVE_ICON, width: PROFILE_ACTIVE_DOT, height: PROFILE_ACTIVE_DOT, borderRadius: PROFILE_ACTIVE_DOT / 2 },
             ]}
           >
-            <Ionicons name="person" size={15} color={WELCOME_STAGE_BG} />
+            <Ionicons name="person" size={17} color={WELCOME_STAGE_BG} />
           </View>
         ) : (
-          <Ionicons name="person-outline" size={23} color={color} />
+          <Ionicons name="person-outline" size={26} color={color} />
         ),
     },
   ];
@@ -111,7 +114,9 @@ function HomeWelcomeTabBarInner({
           const iconColor = active ? ACTIVE_ICON : INACTIVE;
           const labelColor = active ? ACTIVE_LABEL : INACTIVE;
           const showDot =
-            (tab.id === 'chat' && !!showChatDot) || (tab.id === 'calls' && !!showCallsDot);
+            (tab.id === 'chat' && !!showChatDot) ||
+            (tab.id === 'calls' && !!showCallsDot) ||
+            (tab.id === 'profile' && !!showProfileDot);
           return (
             <Pressable
               key={tab.id}
@@ -161,7 +166,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-around',
     paddingTop: 6,
     paddingHorizontal: 2,
-    minHeight: 48,
+    minHeight: 52,
   },
   item: {
     flex: 1,
@@ -181,8 +186,8 @@ const styles = StyleSheet.create({
     position: 'relative',
     alignItems: 'center',
     justifyContent: 'center',
-    width: 28,
-    height: 26,
+    width: 32,
+    height: 30,
   },
   badge: {
     position: 'absolute',

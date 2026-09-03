@@ -4194,6 +4194,22 @@ const handleClearNick = useCallback(async () => {
   /** Keep React tree mounted (no avatar remount); hide inactive panes without covering the active one. */
   const paneStyle = (visible: boolean) =>
     visible ? ({ flex: 1, minHeight: 0 } as const) : ({ display: 'none' as const });
+  /**
+   * Списки (друзья / чаты / звонки): не display:none — FlatList теряет layout
+   * и «догоняет» после тапа. Opacity+absolute сохраняет прогрев и мгновенный показ.
+   */
+  const listPaneStyle = (visible: boolean) =>
+    visible
+      ? ({ flex: 1, minHeight: 0 } as const)
+      : ({
+          position: 'absolute' as const,
+          left: 0,
+          right: 0,
+          top: 0,
+          bottom: 0,
+          opacity: 0,
+          pointerEvents: 'none' as const,
+        });
 
   return (
     <View style={{ flex: 1, backgroundColor: isDark ? WELCOME_STAGE_BG : theme.colors.background }}>
@@ -4244,7 +4260,7 @@ const handleClearNick = useCallback(async () => {
             splashGone={!showSplashOverlay}
           />
         </View>
-        <View style={paneStyle(showFriendsTab)} collapsable={false}>
+        <View style={listPaneStyle(showFriendsTab)} collapsable={false}>
           <HomeWelcomeFriendsView
             {...friendsListShellProps}
             allFriends={friends}
@@ -4255,7 +4271,7 @@ const handleClearNick = useCallback(async () => {
             showNotice={showNotice}
           />
         </View>
-        <View style={paneStyle(showChatTab)} collapsable={false}>
+        <View style={listPaneStyle(showChatTab)} collapsable={false}>
           <HomeWelcomeChatsView
             lang={lang}
             L={L}
@@ -4274,10 +4290,11 @@ const handleClearNick = useCallback(async () => {
             setUnreadByUser={setUnreadByUser}
           />
         </View>
-        <View style={paneStyle(showCallsTab)} collapsable={false}>
+        <View style={listPaneStyle(showCallsTab)} collapsable={false}>
           <HomeWelcomeCallsView
             lang={lang}
             L={L}
+            active={showCallsTab}
             allFriends={friends}
             unreadByUser={unreadByUser}
             missedByUser={missedByUser}
@@ -4342,6 +4359,7 @@ const handleClearNick = useCallback(async () => {
           onPressTab={handleWelcomeTabPress}
           showChatDot={Object.values(unreadByUser).some((n) => typeof n === 'number' && n > 0)}
           showCallsDot={Object.values(missedByUser).some((n) => typeof n === 'number' && n > 0)}
+          showProfileDot={!!updateAvailable}
         />
       ) : null}
 
@@ -4508,7 +4526,9 @@ const handleClearNick = useCallback(async () => {
 
       <LanguagePicker visible={langPickerVisible} onClose={closeLangPicker} onSelect={(code) => { void handleSelectLang(code); }} current={lang} />
 
-      {ConfirmView}
+      <Portal>
+        {ConfirmView}
+      </Portal>
 
       <Portal>
         {donateVisible && (
@@ -4615,9 +4635,9 @@ const handleClearNick = useCallback(async () => {
         {/* Share/Invite Modal */}
         {shareVisible && (
           <View style={styles.overlayModal} pointerEvents="box-none">
-            <WelcomeOverlayDim />
+            <WelcomeOverlayDim strong />
             <WelcomeOverlayBack onPress={() => setShareVisible(false)} />
-            <WelcomeOverlayCard>
+            <WelcomeOverlayCard opaque>
               <Text style={welcomeOverlayText.title}>
                 {t('inviteFriendTitle', lang)}
               </Text>

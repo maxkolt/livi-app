@@ -3,7 +3,15 @@
     android:id="@+id/incoming_call_root"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@drawable/incoming_call_background">
+    android:background="#0A0C14">
+
+    <ImageView
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:contentDescription="@null"
+        android:importantForAccessibility="no"
+        android:scaleType="centerCrop"
+        android:src="@drawable/welcome_stage_bg" />
 
     <LinearLayout
         android:id="@+id/incoming_call_content"

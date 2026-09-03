@@ -618,6 +618,7 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
           icon="information-circle-outline"
           label={t('welcomeAboutApp', lang)}
           onPress={openAbout}
+          badgeCount={updateAvailable ? 1 : 0}
         />
         <WelcomeProfileRowDivider />
         <WelcomeProfileRow
@@ -691,6 +692,7 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
             icon="cloud-download-outline"
             label={t('updateDownloadNew', lang)}
             onPress={openUpdate}
+            badgeCount={1}
           />
         </>
       ) : null}

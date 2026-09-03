@@ -20,6 +20,7 @@ import android.os.Vibrator
 import android.os.VibratorManager
 import android.os.VibrationAttributes
 import android.content.res.Configuration
+import android.graphics.PixelFormat
 import android.view.WindowManager
 import android.view.MotionEvent
 import android.view.View
@@ -133,6 +134,7 @@ class IncomingCallActivity : AppCompatActivity() {
             setTurnScreenOn(true)
         }
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD or WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED)
+        window.setFormat(PixelFormat.RGBA_8888)
         setContentView(R.layout.activity_incoming_call)
         findViewById<View>(R.id.incoming_call_content)?.let { EdgeToEdgeHelper.applySystemBarInsets(it) }
         // Пауза + transient media focus на время входящего/звонка (рингтон остаётся на STREAM_RING).

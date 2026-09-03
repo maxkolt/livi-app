@@ -41,6 +41,7 @@ export function useHomeBadges({ friends, friendsRef }: UseHomeBadgesArgs) {
   const [missedLoaded, setMissedLoaded] = useState(false);
   const pendingUnreadBatchRefreshRef = useRef(false);
   const badgeSyncDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const missedByUserRef = useRef<Record<string, number>>({});
   /** Не даём серверному 0 сразу после нового сообщения стереть красную точку (гонка ack). */
   const unreadFloorRef = useRef<Map<string, { min: number; until: number }>>(new Map());
 
@@ -167,6 +168,10 @@ export function useHomeBadges({ friends, friendsRef }: UseHomeBadgesArgs) {
     })();
   }, []);
 
+  useEffect(() => {
+    missedByUserRef.current = missedByUser;
+  }, [missedByUser]);
+
   // Сохраняем пропущенные вызовы при изменении
   useEffect(() => {
     if (!missedLoaded) return;
@@ -199,17 +204,18 @@ export function useHomeBadges({ friends, friendsRef }: UseHomeBadgesArgs) {
     const off = onMissedIncrement(({ userId, count }) => {
       if (!userId) return;
       const userIdStr = String(userId);
-      let didIncrement = false;
+      const prevCount = missedByUserRef.current[userIdStr] || 0;
+      const nextCount =
+        typeof count === 'number' ? Math.max(prevCount, count) : prevCount + 1;
+      if (nextCount <= 0 || nextCount === prevCount) return;
+      missedByUserRef.current = { ...missedByUserRef.current, [userIdStr]: nextCount };
       setMissedByUser((prev) => {
-        const prevCount = prev[userIdStr] || 0;
-        const nextCount =
-          typeof count === 'number' ? Math.max(prevCount, count) : prevCount + 1;
-        if (nextCount <= 0 || nextCount === prevCount) return prev;
-        didIncrement = true;
+        const cur = prev[userIdStr] || 0;
+        if (nextCount <= cur) return prev;
         logger.debug('[HomeScreen] Missed call updated (UI)', { userId: userIdStr, count: nextCount });
         return { ...prev, [userIdStr]: nextCount };
       });
-      if (didIncrement) recordCallLog({ peerId: userIdStr, direction: 'missed' });
+      recordCallLog({ peerId: userIdStr, direction: 'missed' });
     });
     return () => off?.();
   }, []);

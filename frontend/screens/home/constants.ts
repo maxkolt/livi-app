@@ -3,20 +3,11 @@ import { FRIEND_ACTION_BUTTON, FRIEND_ROW_ACTION_GAP } from '../../constants/uiT
 
 /** Фон welcome-экрана (макет). */
 export const WELCOME_STAGE_BG = '#0A0C14';
-/** Вертикальный градиент сцены (тёмная тема) — близко к базе, лёгкий aura-оттенок. */
-export const WELCOME_STAGE_GRADIENT = ['#101822', '#0A0C14', '#0b1118', '#111822'] as const;
-/** Диagonal wash aura поверх базового градиента (низкая opacity). */
-export const WELCOME_STAGE_AURA_WASH = [
-  'rgba(20, 184, 166, 0.11)',
-  'rgba(59, 130, 246, 0.08)',
-  'rgba(10, 12, 20, 0)',
-] as const;
-/** Лёгкое свечение снизу (blue/cyan). */
-export const WELCOME_STAGE_BOTTOM_WASH = [
-  'rgba(10, 12, 20, 0)',
-  'rgba(59, 130, 246, 0.045)',
-  'rgba(0, 181, 255, 0.07)',
-] as const;
+/**
+ * Вертикальный градиент сцены — aura «запечена» в непрозрачные stops.
+ * Без полупрозрачных wash-слоёв: на Android они дают banding (полосы).
+ */
+export const WELCOME_STAGE_GRADIENT = ['#0B141A', '#0A0C14', '#0A1016', '#0A141A'] as const;
 /** Accent gradient (aura) — вместо фиолетового на макете. */
 export const AURA_GRADIENT = ['#14b8a6', '#3b82f6', '#00b5ff'] as const;
 export const AURA_GLOW = '#3b82f6';

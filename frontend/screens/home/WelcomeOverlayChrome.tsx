@@ -13,6 +13,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   LIVI,
   WELCOME_BRAND_VI_FILL_GRADIENT,
+  WELCOME_CARD_BG,
   WELCOME_FRIENDS_SEGMENT_SHELL_RADIUS,
   WELCOME_GLASS_BORDER,
   WELCOME_GLASS_SURFACE,
@@ -22,11 +23,13 @@ import {
 
 /** Спокойное затемнение без тяжёлого Blur (стабильнее на Android). */
 export const WELCOME_OVERLAY_DIM = 'rgba(0, 0, 0, 0.62)';
+/** Плотнее — для confirm delete и похожих модалок. */
+export const WELCOME_OVERLAY_DIM_STRONG = 'rgba(0, 0, 0, 0.90)';
 
 export const WELCOME_OVERLAY_ACCENT = WELCOME_BRAND_VI_FILL_GRADIENT[1];
 
-export function WelcomeOverlayDim() {
-  return <View style={styles.dim} pointerEvents="none" />;
+export function WelcomeOverlayDim({ strong }: { strong?: boolean } = {}) {
+  return <View style={[styles.dim, strong && styles.dimStrong]} pointerEvents="none" />;
 }
 
 type WelcomeOverlayBackProps = {
@@ -58,10 +61,12 @@ export function WelcomeOverlayBack({ onPress }: WelcomeOverlayBackProps) {
 type WelcomeOverlayCardProps = {
   children: React.ReactNode;
   style?: StyleProp<ViewStyle>;
+  /** Непрозрачный блок (не glass). */
+  opaque?: boolean;
 };
 
-export function WelcomeOverlayCard({ children, style }: WelcomeOverlayCardProps) {
-  return <View style={[styles.card, style]}>{children}</View>;
+export function WelcomeOverlayCard({ children, style, opaque }: WelcomeOverlayCardProps) {
+  return <View style={[styles.card, opaque && styles.cardOpaque, style]}>{children}</View>;
 }
 
 type WelcomeOverlayPillProps = {
@@ -118,6 +123,9 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     backgroundColor: WELCOME_OVERLAY_DIM,
   },
+  dimStrong: {
+    backgroundColor: WELCOME_OVERLAY_DIM_STRONG,
+  },
   backBtn: {
     position: 'absolute',
     zIndex: 10,
@@ -139,15 +147,19 @@ const styles = StyleSheet.create({
     borderColor: WELCOME_GLASS_BORDER,
     padding: 18,
   },
+  cardOpaque: {
+    backgroundColor: WELCOME_CARD_BG,
+    borderColor: 'rgba(255,255,255,0.10)',
+  },
   pill: {
-    minHeight: 46,
+    minHeight: 40,
     borderRadius: 999,
     alignItems: 'center',
     justifyContent: 'center',
     flexDirection: 'row',
     gap: 8,
     paddingHorizontal: 16,
-    paddingVertical: 11,
+    paddingVertical: 9,
   },
   pillPrimary: {
     backgroundColor: WELCOME_OVERLAY_ACCENT,
@@ -157,8 +169,11 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: WELCOME_GLASS_BORDER,
   },
+  /** Как «Удалить профиль» в welcome profile. */
   pillDanger: {
-    backgroundColor: 'rgba(255, 90, 103, 0.88)',
+    backgroundColor: 'rgba(255, 90, 103, 0.16)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 90, 103, 0.72)',
   },
   pillDisabled: {
     opacity: 0.55,
