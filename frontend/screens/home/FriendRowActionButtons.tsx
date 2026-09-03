@@ -160,7 +160,7 @@ export function FriendRowChatButton({
               : undefined
           }
         />
-        {count > 0 && (
+        {count > 0 && actionButtonVariant !== 'welcome' && (
           <View style={styles.badgeBubble} pointerEvents="none">
             <Text style={styles.badgeBubbleText}>{count > 99 ? '99+' : count}</Text>
           </View>
@@ -325,7 +325,7 @@ export function FriendRowInviteButton({
             handleStartFriendCall(friend);
           }}
         />
-        {missedCount > 0 && (
+        {missedCount > 0 && actionButtonVariant !== 'welcome' && (
           <View style={styles.badgeBubble} pointerEvents="none">
             <Text style={styles.badgeBubbleText}>{missedCount > 99 ? '99+' : missedCount}</Text>
           </View>

@@ -173,7 +173,8 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
   }, []);
 
   const inviteFooter = useMemo(() => {
-    if (trimmedQuery || selectMode) return null;
+    // Только на «Все»; на «Онлайн» блок не показываем.
+    if (filter === 'online' || trimmedQuery || selectMode) return null;
     return (
       <Pressable
         style={({ pressed }) => [styles.inviteCard, pressed && styles.inviteCardPressed]}
@@ -192,7 +193,7 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
         <Ionicons name="chevron-forward" size={20} color={WELCOME_MUTED_TEXT} />
       </Pressable>
     );
-  }, [lang, onInviteFriends, trimmedQuery, selectMode]);
+  }, [filter, lang, onInviteFriends, selectMode, trimmedQuery]);
 
   const deleteSelected = useCallback(async () => {
     if (deleting) return;
@@ -446,8 +447,6 @@ const styles = StyleSheet.create({
     paddingVertical: Platform.OS === 'ios' ? 10 : 6,
     borderRadius: 14,
     backgroundColor: WELCOME_GLASS_SURFACE,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: WELCOME_GLASS_BORDER,
     gap: 8,
   },
   searchIcon: {

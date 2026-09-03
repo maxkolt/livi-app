@@ -130,6 +130,17 @@ function HomeWelcomeCallsViewInner({
     return map;
   }, [allFriends]);
 
+  // Открыли вкладку «Звонки» — смотрим журнал, бейджи пропущенных снимаем без звонка.
+  useEffect(() => {
+    const peerIds = Object.keys(missedByUser).filter((id) => (missedByUser[id] || 0) > 0);
+    if (peerIds.length === 0) return;
+    peerIds.forEach((peerId) => {
+      void clearMissedCallsForFriend(peerId);
+    });
+    // Только при входе на экран, не при каждом обновлении карты.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount / remount when tab opens
+  }, [clearMissedCallsForFriend]);
+
   const closeSearch = useCallback(() => {
     skipSearchDismissRef.current = true;
     Keyboard.dismiss();
@@ -360,6 +371,11 @@ function HomeWelcomeCallsViewInner({
               return;
             }
             if (!friend) return;
+            // Пропущенный: только снять бейдж, без автозвонка (позвонить — через +).
+            if (item.direction === 'missed') {
+              void clearMissedCallsForFriend(String(friend.id));
+              return;
+            }
             startCall(friend);
           }}
           onLongPress={() => {
@@ -442,7 +458,7 @@ function HomeWelcomeCallsViewInner({
         </Pressable>
       );
     },
-    [L, enterSelect, friendsById, lang, missedByUser, pickMode, selectMode, selectedIds, startCall, toggleSelect],
+    [L, clearMissedCallsForFriend, enterSelect, friendsById, lang, missedByUser, pickMode, selectMode, selectedIds, startCall, toggleSelect],
   );
 
   return (
@@ -694,8 +710,6 @@ const styles = StyleSheet.create({
     paddingVertical: Platform.OS === 'ios' ? 10 : 6,
     borderRadius: 14,
     backgroundColor: WELCOME_GLASS_SURFACE,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: WELCOME_GLASS_BORDER,
     gap: 8,
   },
   searchIcon: {
@@ -765,13 +779,10 @@ const styles = StyleSheet.create({
   glassCard: {
     height: WELCOME_FRIEND_CARD_ROW_HEIGHT,
     backgroundColor: WELCOME_GLASS_SURFACE,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: WELCOME_GLASS_BORDER,
     borderRadius: 16,
     overflow: 'hidden',
   },
   glassCardSelected: {
-    borderColor: 'rgba(47, 111, 212, 0.45)',
     backgroundColor: 'rgba(33, 88, 192, 0.18)',
   },
   selectMark: {

@@ -12,7 +12,7 @@ import {
 } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import { logger } from '../../utils/logger';
-import { CHROME_PERIMETER_GLOW_LAYOUT_INSET, LIVI, SEARCH_CTA_TABLET_MIN_WIDTH, WELCOME_MUTED_TEXT } from './constants';
+import { CHROME_PERIMETER_GLOW_LAYOUT_INSET, LIVI, SEARCH_CTA_TABLET_MIN_WIDTH, WELCOME_HEADER_TITLE, WELCOME_MUTED_TEXT } from './constants';
 import { BrandTitleWithOutline } from './chrome';
 import { HomeBrandConfetti, type BrandConfettiOrigin } from './HomeBrandConfetti';
 import { HomeCenterProfile } from './HomeCenterProfile';
@@ -61,6 +61,7 @@ function resolveIsPhone(width: number, height: number) {
 }
 
 let brandEntryShinePlayedThisSession = false;
+let welcomeRevealPlayedThisSession = false;
 
 function HomeWelcomeViewInner({
   styles,
@@ -92,7 +93,7 @@ function HomeWelcomeViewInner({
   const burstActiveRef = useRef(false);
   const [burst, setBurst] = useState<{ id: number; origin: BrandConfettiOrigin } | null>(null);
   const [shineNonce, setShineNonce] = useState(0);
-  const reveal = useRef(new Animated.Value(0)).current;
+  const reveal = useRef(new Animated.Value(welcomeRevealPlayedThisSession ? 1 : 0)).current;
   const [badgeGap, setBadgeGap] = useState<{ top: number; height: number } | null>(null);
   const [measured, setMeasured] = useState<{ w: number; h: number }>(() => ({
     w: layoutWidth,
@@ -101,12 +102,18 @@ function HomeWelcomeViewInner({
 
   useEffect(() => {
     if (!splashGone) return;
+    if (welcomeRevealPlayedThisSession) {
+      reveal.setValue(1);
+      return;
+    }
     Animated.timing(reveal, {
       toValue: 1,
       duration: 560,
       easing: Easing.out(Easing.cubic),
       useNativeDriver: true,
-    }).start();
+    }).start(() => {
+      welcomeRevealPlayedThisSession = true;
+    });
   }, [reveal, splashGone]);
 
   useEffect(() => {
@@ -401,7 +408,6 @@ function HomeWelcomeViewInner({
               style={[
                 welcomeStyles.heading,
                 phoneLandscape && welcomeStyles.headingCompact,
-                !isDark && { color: LIVI.textThemeWhite },
               ]}
               allowFontScaling={false}
             >
@@ -495,8 +501,8 @@ const welcomeStyles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'flex-start',
     minHeight: 0,
-    paddingTop: 4,
-    marginTop: -8,
+    paddingTop: 12,
+    marginTop: 0,
   },
   stageCopy: {
     width: '100%',
@@ -511,7 +517,7 @@ const welcomeStyles = StyleSheet.create({
     marginBottom: 6,
   },
   heading: {
-    color: LIVI.white,
+    color: WELCOME_HEADER_TITLE,
     fontSize: 18,
     fontWeight: '600',
     textAlign: 'center',

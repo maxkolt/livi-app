@@ -31,13 +31,23 @@ type HomeWelcomeTabBarProps = {
     profile: string;
   };
   onPressTab: (tab: WelcomeTabId) => void;
+  /** Красная точка на вкладке чатов при непрочитанных. */
+  showChatDot?: boolean;
+  /** Красная точка на вкладке звонков при пропущенных. */
+  showCallsDot?: boolean;
 };
 
 const PROFILE_ACTIVE_DOT = 26;
 
 const INACTIVE = '#7A8494';
 
-function HomeWelcomeTabBarInner({ activeTab, labels, onPressTab }: HomeWelcomeTabBarProps) {
+function HomeWelcomeTabBarInner({
+  activeTab,
+  labels,
+  onPressTab,
+  showChatDot,
+  showCallsDot,
+}: HomeWelcomeTabBarProps) {
   const insets = useSafeAreaInsets();
   const bottomPad = Math.max(insets.bottom, Platform.OS === 'android' ? 6 : 2);
 
@@ -100,6 +110,8 @@ function HomeWelcomeTabBarInner({ activeTab, labels, onPressTab }: HomeWelcomeTa
           const active = tab.id === activeTab;
           const iconColor = active ? ACTIVE_ICON : INACTIVE;
           const labelColor = active ? ACTIVE_LABEL : INACTIVE;
+          const showDot =
+            (tab.id === 'chat' && !!showChatDot) || (tab.id === 'calls' && !!showCallsDot);
           return (
             <Pressable
               key={tab.id}
@@ -109,7 +121,10 @@ function HomeWelcomeTabBarInner({ activeTab, labels, onPressTab }: HomeWelcomeTa
               accessibilityState={{ selected: active }}
             >
               <View style={styles.tabInner}>
-                {tab.renderIcon(active, iconColor)}
+                <View style={styles.iconWrap}>
+                  {tab.renderIcon(active, iconColor)}
+                  {showDot ? <View style={styles.badge} pointerEvents="none" /> : null}
+                </View>
                 <Text
                   style={[
                     styles.label,
@@ -161,6 +176,24 @@ const styles = StyleSheet.create({
     gap: 3,
     paddingVertical: 6,
     paddingHorizontal: 2,
+  },
+  iconWrap: {
+    position: 'relative',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 28,
+    height: 26,
+  },
+  badge: {
+    position: 'absolute',
+    top: -1,
+    right: -2,
+    width: 9,
+    height: 9,
+    borderRadius: 5,
+    backgroundColor: '#FF5A67',
+    borderWidth: 1.5,
+    borderColor: 'rgba(10,12,20,0.95)',
   },
   profileActiveDisc: {
     alignItems: 'center',

@@ -29,13 +29,13 @@ import { useSafeAreaInsets, SafeAreaView } from 'react-native-safe-area-context'
 import { BlurView } from 'expo-blur';
 import * as ImagePicker from 'expo-image-picker';
 import * as Clipboard from 'expo-clipboard';
-import SplashLoader from '../components/SplashLoader';
 import { Swipeable, PinchGestureHandler, State } from 'react-native-gesture-handler';
 import { Portal } from 'react-native-paper';
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { Image as ExpoImage } from 'expo-image';
 import { getAvatarImageProps, forceImageRefresh } from '../utils/imageOptimization';
 import { useResolvedImageUri } from '../hooks/useResolvedImageUri';
+import SplashLoader from '../components/SplashLoader';
 import AvatarImage from '../components/AvatarImage';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -4079,15 +4079,11 @@ const handleClearNick = useCallback(async () => {
 
   // Старый обработчик удален - используем новую систему статусов
 
-  // Показываем SplashLoader только пока данные загружаются
   // Если данные загружены (dataLoaded = true) и профиль загружен (profileLoaded = true),
   // но нет ника и аватара (hasRealData = false), то показываем экран создания профиля
   const currentNick = savedNick || nick || '';
   const currentAvatar = avatarUri || savedAvatarUrl || '';
   const hasRealData = (currentNick && currentNick.trim()) || (currentAvatar && currentAvatar.trim());
-  // Home всегда монтируется под сплешем.
-  // Сам сплеш ждёт server/dataLoaded только в пределах окна 2.5с, после чего исчезает принудительно.
-  const showSplashOverlay = !splashDismissed;
   const [showCallSearchLockBadge, setShowCallSearchLockBadge] = useState(false);
   const hasActiveCallForSearch =
     pip.visible ||
@@ -4182,11 +4178,22 @@ const handleClearNick = useCallback(async () => {
       handleOpenAvatarModal,
     ],
   );
+
   useEffect(() => {
     if (!hasActiveCallForSearch) {
       setShowCallSearchLockBadge(false);
     }
   }, [hasActiveCallForSearch]);
+
+  const showFriendsTab = welcomeActiveTab === 'friends' && !menuOpen;
+  const showChatTab = welcomeActiveTab === 'chat' && !menuOpen;
+  const showCallsTab = welcomeActiveTab === 'calls' && !menuOpen;
+  const showProfileTab = welcomeActiveTab === 'profile' && !menuOpen;
+  const showSearchWelcome = !showFriendsTab && !showChatTab && !showCallsTab && !showProfileTab;
+  const showSplashOverlay = !splashDismissed;
+  /** Keep React tree mounted (no avatar remount); hide inactive panes without covering the active one. */
+  const paneStyle = (visible: boolean) =>
+    visible ? ({ flex: 1, minHeight: 0 } as const) : ({ display: 'none' as const });
 
   return (
     <View style={{ flex: 1, backgroundColor: isDark ? WELCOME_STAGE_BG : theme.colors.background }}>
@@ -4211,7 +4218,33 @@ const handleClearNick = useCallback(async () => {
 
 
       <View style={{ flex: 1, minHeight: 0 }}>
-        {welcomeActiveTab === 'friends' && !menuOpen ? (
+        {/* Keep welcome panes mounted — no avatar remount flicker on tab switch. */}
+        <View style={paneStyle(showSearchWelcome)} collapsable={false}>
+          <HomeWelcomeView
+            styles={styles}
+            isDark={isDark}
+            themeBackground={(isDark ? WELCOME_STAGE_BG : theme.colors.background) as string}
+            layoutWidth={layoutWidth}
+            layoutHeight={layoutHeight}
+            L={L}
+            lang={lang}
+            menuChromeBg={MENU_CHROME_BG}
+            onOpenProfile={handleOpenProfile}
+            onOpenMenu={handleOpenMenu}
+            onlineCount={welcomeOnlineCount}
+            bannerPeers={welcomeBannerPeers}
+            unreadByUser={unreadByUser}
+            missedByUser={missedByUser}
+            centerProfile={centerProfile}
+            NoticeView={NoticeView}
+            hasActiveCallForSearch={hasActiveCallForSearch}
+            showCallSearchLockBadge={showCallSearchLockBadge}
+            onStartSearch={handleStartSearch}
+            onBlockedStartSearch={handleBlockedStartSearchPress}
+            splashGone={!showSplashOverlay}
+          />
+        </View>
+        <View style={paneStyle(showFriendsTab)} collapsable={false}>
           <HomeWelcomeFriendsView
             {...friendsListShellProps}
             allFriends={friends}
@@ -4221,7 +4254,8 @@ const handleClearNick = useCallback(async () => {
             askConfirm={askConfirm}
             showNotice={showNotice}
           />
-        ) : welcomeActiveTab === 'chat' && !menuOpen ? (
+        </View>
+        <View style={paneStyle(showChatTab)} collapsable={false}>
           <HomeWelcomeChatsView
             lang={lang}
             L={L}
@@ -4239,7 +4273,8 @@ const handleClearNick = useCallback(async () => {
             showNotice={showNotice}
             setUnreadByUser={setUnreadByUser}
           />
-        ) : welcomeActiveTab === 'calls' && !menuOpen ? (
+        </View>
+        <View style={paneStyle(showCallsTab)} collapsable={false}>
           <HomeWelcomeCallsView
             lang={lang}
             L={L}
@@ -4256,7 +4291,8 @@ const handleClearNick = useCallback(async () => {
             askConfirm={askConfirm}
             showNotice={showNotice}
           />
-        ) : welcomeActiveTab === 'profile' && !menuOpen ? (
+        </View>
+        <View style={paneStyle(showProfileTab)} collapsable={false}>
           <HomeWelcomeProfileView
             lang={lang}
             isDark={isDark}
@@ -4290,31 +4326,7 @@ const handleClearNick = useCallback(async () => {
             wallpaperPickerTheme={wallpaperPickerTheme}
             setWallpaperPickerTheme={setWallpaperPickerTheme}
           />
-        ) : (
-          <HomeWelcomeView
-            styles={styles}
-            isDark={isDark}
-            themeBackground={(isDark ? WELCOME_STAGE_BG : theme.colors.background) as string}
-            layoutWidth={layoutWidth}
-            layoutHeight={layoutHeight}
-            L={L}
-            lang={lang}
-            menuChromeBg={MENU_CHROME_BG}
-            onOpenProfile={handleOpenProfile}
-            onOpenMenu={handleOpenMenu}
-            onlineCount={welcomeOnlineCount}
-            bannerPeers={welcomeBannerPeers}
-            unreadByUser={unreadByUser}
-            missedByUser={missedByUser}
-            centerProfile={centerProfile}
-            NoticeView={NoticeView}
-            hasActiveCallForSearch={hasActiveCallForSearch}
-            showCallSearchLockBadge={showCallSearchLockBadge}
-            onStartSearch={handleStartSearch}
-            onBlockedStartSearch={handleBlockedStartSearchPress}
-            splashGone={!showSplashOverlay}
-          />
-        )}
+        </View>
       </View>
 
       {!menuOpen ? (
@@ -4328,6 +4340,8 @@ const handleClearNick = useCallback(async () => {
             profile: L('tabSettings'),
           }}
           onPressTab={handleWelcomeTabPress}
+          showChatDot={Object.values(unreadByUser).some((n) => typeof n === 'number' && n > 0)}
+          showCallsDot={Object.values(missedByUser).some((n) => typeof n === 'number' && n > 0)}
         />
       ) : null}
 

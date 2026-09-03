@@ -11,7 +11,6 @@ import {
   View,
   BackHandler,
   useWindowDimensions,
-  type LayoutChangeEvent,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -54,11 +53,93 @@ import type { HomeStyles } from './styles';
 const SUPPORT_EMAIL = '12345kolt@gmal.com';
 const BOOSTY_URL = process.env.EXPO_PUBLIC_BOOSTY_URL || 'https://boosty.to/liviapp/donate';
 const PATREON_URL = process.env.EXPO_PUBLIC_PATREON_URL || 'https://www.patreon.com/c/LiViApp';
-const AVATAR_SIZE = 124;
 const AVATAR_RING_WIDTH = 2.5;
 const CAMERA_BTN_SIZE = 38;
-/** Одинаковый зазор: низ списка → кнопка «Удалить профиль» → таб-бар. */
-const HUB_DELETE_EDGE_GAP = 14;
+/** Зазор между низом списка и кнопкой «Удалить профиль». */
+const HUB_LIST_ABOVE_DELETE_GAP = 10;
+/** Симметричные отступы вокруг кнопки «Удалить профиль». */
+const HUB_DELETE_EDGE_GAP = 12;
+/** Строк hub-профиля (dense) — см. WelcomeProfileListUi. */
+const PROFILE_HUB_ROW_DENSE = 47;
+const PROFILE_HUB_ROW_COUNT = 8;
+const PROFILE_HUB_SECTION_COUNT = 3;
+const EST_DELETE_FOOTER_H = 58;
+
+type HubLayoutTokens = {
+  avatarSize: number;
+  avatarMarginBottom: number;
+  avatarPaddingTop: number;
+  listGap: number;
+  listMarginTop: number;
+  cameraBtnSize: number;
+};
+
+const HUB_LAYOUT_PHONE: HubLayoutTokens = {
+  avatarSize: 122,
+  avatarMarginBottom: 6,
+  avatarPaddingTop: 4,
+  listGap: 11,
+  listMarginTop: 0,
+  cameraBtnSize: CAMERA_BTN_SIZE,
+};
+
+const HUB_LAYOUT_PHONE_COMPACT: HubLayoutTokens = {
+  avatarSize: 116,
+  avatarMarginBottom: 4,
+  avatarPaddingTop: 2,
+  listGap: 10,
+  listMarginTop: 0,
+  cameraBtnSize: CAMERA_BTN_SIZE,
+};
+
+const HUB_LAYOUT_TABLET: HubLayoutTokens = {
+  avatarSize: 128,
+  avatarMarginBottom: 8,
+  avatarPaddingTop: 6,
+  listGap: 12,
+  listMarginTop: 0,
+  cameraBtnSize: CAMERA_BTN_SIZE,
+};
+
+function estimateProfileHubBodyHeight(tokens: HubLayoutTokens): number {
+  const avatarBlock =
+    tokens.avatarPaddingTop + tokens.avatarSize + tokens.avatarMarginBottom + AVATAR_RING_WIDTH * 2;
+  const listBlock =
+    tokens.listMarginTop +
+    PROFILE_HUB_ROW_COUNT * PROFILE_HUB_ROW_DENSE +
+    (PROFILE_HUB_SECTION_COUNT - 1) * tokens.listGap;
+  return avatarBlock + listBlock + HUB_LIST_ABOVE_DELETE_GAP;
+}
+
+function estimateProfileHubContentBudget(
+  windowHeight: number,
+  topInset: number,
+  bottomInset: number,
+): number {
+  return Math.max(
+    0,
+    windowHeight -
+      topInset -
+      estimateProfileHeaderHeight() -
+      estimateTabBarHeight(bottomInset) -
+      EST_DELETE_FOOTER_H,
+  );
+}
+
+/** Два пресета по высоте экрана — без подстройки под ширину/модель. */
+function resolveHubLayoutFromWindow(
+  windowHeight: number,
+  topInset: number,
+  bottomInset: number,
+  isTablet: boolean,
+): HubLayoutTokens {
+  if (isTablet) return HUB_LAYOUT_TABLET;
+  const budget = estimateProfileHubContentBudget(windowHeight, topInset, bottomInset);
+  if (estimateProfileHubBodyHeight(HUB_LAYOUT_PHONE) <= budget) {
+    return HUB_LAYOUT_PHONE;
+  }
+  return HUB_LAYOUT_PHONE_COMPACT;
+}
 
 function estimateTabBarHeight(bottomInset: number) {
   return 54 + Math.max(bottomInset, Platform.OS === 'android' ? 6 : 2);
@@ -153,45 +234,14 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
   const [screen, setScreen] = useState<ProfileScreen>('hub');
   const [accountOpen, setAccountOpen] = useState(false);
   const [copiedEmail, setCopiedEmail] = useState<string | null>(null);
-  const [hubH, setHubH] = useState(0);
-  const [footerH, setFooterH] = useState(0);
-  const [contentH, setContentH] = useState(0);
 
-  const estimatedHubH = Math.max(
-    0,
-    windowHeight - insets.top - estimateProfileHeaderHeight() - estimateTabBarHeight(insets.bottom),
+  const hubLayout = useMemo(
+    () => resolveHubLayoutFromWindow(windowHeight, insets.top, insets.bottom, isTablet),
+    [windowHeight, insets.top, insets.bottom, isTablet],
   );
-  const effectiveHubH = hubH > 0 ? hubH : estimatedHubH;
 
-  const hubLayout = useMemo(() => {
-    const compact = !isTablet && effectiveHubH > 0 && effectiveHubH < 640;
-    const tight = !isTablet && effectiveHubH > 0 && effectiveHubH < 560;
-    return {
-      avatarSize: tight ? 96 : compact ? 110 : AVATAR_SIZE,
-      avatarMarginBottom: tight ? 4 : compact ? 6 : 8,
-      listGap: isTablet ? 14 : tight ? 8 : compact ? 10 : 12,
-      listMarginTop: tight ? 6 : 10,
-      rowTight: tight,
-      cameraBtnSize: tight ? 32 : CAMERA_BTN_SIZE,
-    };
-  }, [effectiveHubH, isTablet]);
-
-  const listViewportH = Math.max(0, effectiveHubH - footerH);
-  const needsHubScroll = accountOpen || (contentH > 0 && listViewportH > 0 && contentH > listViewportH + 4);
-
-  const onHubPaneLayout = useCallback((e: LayoutChangeEvent) => {
-    const h = e.nativeEvent.layout.height;
-    setHubH((prev) => (prev === h ? prev : h));
-  }, []);
-
-  const onHubFooterLayout = useCallback((e: LayoutChangeEvent) => {
-    const h = e.nativeEvent.layout.height;
-    setFooterH((prev) => (prev === h ? prev : h));
-  }, []);
-
-  const onHubContentSizeChange = useCallback((_w: number, h: number) => {
-    setContentH((prev) => (prev === h ? prev : h));
-  }, []);
+  /** Скролл только при открытом редактировании ника (клавиатура). */
+  const needsHubScroll = accountOpen;
 
   const myUserId = getCurrentUserId();
   const displayNick = displayName(savedNick || nick);
@@ -348,7 +398,6 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
 
   const avatarSize = hubLayout.avatarSize;
   const cameraBtnSize = hubLayout.cameraBtnSize;
-  const rowTight = hubLayout.rowTight;
 
   const avatarInner = (
     <View
@@ -372,11 +421,11 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
           size={avatarSize}
           fallbackText={letter}
           containerStyle={homeStyles.centerAvatarImg}
-          fallbackTextStyle={{ fontSize: avatarSize > 110 ? 36 : 30, fontWeight: '800' }}
+          fallbackTextStyle={{ fontSize: avatarSize > 110 ? 34 : 28, fontWeight: '800' }}
         />
       ) : (
         <View style={[homeStyles.centerAvatarImg, { alignItems: 'center', justifyContent: 'center' }]}>
-          <Text style={{ color: LIVI.titan, fontSize: avatarSize > 110 ? 36 : 30, fontWeight: '500' }}>{letter}</Text>
+          <Text style={{ color: LIVI.titan, fontSize: avatarSize > 110 ? 34 : 28, fontWeight: '500' }}>{letter}</Text>
         </View>
       )}
     </View>
@@ -445,7 +494,7 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
   );
 
   const hubLogoutButton = (
-    <View style={styles.hubActions} onLayout={onHubFooterLayout}>
+    <View style={styles.hubActions}>
       <Pressable
         style={({ pressed }) => [styles.logOutBtn, pressed && styles.hubBtnPressed]}
         onPress={() => onLogOutAccount?.()}
@@ -457,90 +506,63 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
     </View>
   );
 
-  const hubScrollBody = (
-    <View>
-      <View style={[styles.avatarBlock, { marginBottom: hubLayout.avatarMarginBottom }]}>
-        <View style={styles.avatarWrap}>
-          <Pressable
-            onPress={() => openAvatarSheet?.()}
-            disabled={busy}
-            style={[
-              styles.avatarRing,
-              {
-                width: avatarSize + AVATAR_RING_WIDTH * 2,
-                height: avatarSize + AVATAR_RING_WIDTH * 2,
-                borderRadius: (avatarSize + AVATAR_RING_WIDTH * 2) / 2,
-              },
-            ]}
-          >
-            {avatarInner}
-          </Pressable>
-          <Pressable
-            style={[
-              styles.cameraBtn,
-              {
-                width: cameraBtnSize,
-                height: cameraBtnSize,
-                borderRadius: cameraBtnSize / 2,
-              },
-            ]}
-            onPress={() => openAvatarSheet?.()}
-            disabled={busy}
-            accessibilityRole="button"
-            accessibilityLabel={t('takePhoto', lang)}
-          >
-            <Ionicons name="camera-outline" size={cameraBtnSize > 34 ? 20 : 18} color={LIVI.white} />
-          </Pressable>
-        </View>
+  const hubAvatarSection = (
+    <View
+      style={[
+        styles.avatarBlock,
+        {
+          marginBottom: accountOpen ? hubLayout.avatarMarginBottom : 0,
+          paddingTop: hubLayout.avatarPaddingTop,
+        },
+      ]}
+    >
+      <View style={styles.avatarWrap}>
+        <Pressable
+          onPress={() => openAvatarSheet?.()}
+          disabled={busy}
+          style={[
+            styles.avatarRing,
+            {
+              width: avatarSize + AVATAR_RING_WIDTH * 2,
+              height: avatarSize + AVATAR_RING_WIDTH * 2,
+              borderRadius: (avatarSize + AVATAR_RING_WIDTH * 2) / 2,
+            },
+          ]}
+        >
+          {avatarInner}
+        </Pressable>
+        <Pressable
+          style={[
+            styles.cameraBtn,
+            {
+              width: cameraBtnSize,
+              height: cameraBtnSize,
+              borderRadius: cameraBtnSize / 2,
+            },
+          ]}
+          onPress={() => openAvatarSheet?.()}
+          disabled={busy}
+          accessibilityRole="button"
+          accessibilityLabel={t('takePhoto', lang)}
+        >
+          <Ionicons name="camera-outline" size={cameraBtnSize > 34 ? 20 : 18} color={LIVI.white} />
+        </Pressable>
       </View>
+    </View>
+  );
 
-      {accountOpen ? (
-        <View style={styles.accountPanel}>
-          <PaperInput
-            value={nick ?? ''}
-            onChangeText={setNick}
-            mode="outlined"
-            dense
-            theme={{ roundness: 12 }}
-            outlineStyle={{ borderWidth: 0, borderRadius: 12 }}
-            style={styles.nickInput}
-            contentStyle={styles.nickInputContent}
-            textColor={LIVI.white}
-            placeholder={t('nickname', lang)}
-            placeholderTextColor={WELCOME_MUTED_TEXT}
-            autoCorrect={false}
-            autoCapitalize="none"
-            editable={!busy}
-          />
-          <View style={styles.accountActions}>
-            <Pressable onPress={onClearNick} disabled={busy || !displayNick} style={styles.accountSecondary}>
-              <Text style={styles.accountSecondaryText}>{t('deleteNick', lang)}</Text>
-            </Pressable>
-            <Pressable
-              onPress={() => {
-                handleSaveProfile();
-                closeAccountEdit();
-              }}
-              disabled={busy}
-              style={[styles.accountSave, savedToast && styles.accountSaveDone]}
-            >
-              <Text style={styles.accountSaveText}>{savedToast ? t('saved', lang) : t('save', lang)}</Text>
-            </Pressable>
-          </View>
-        </View>
-      ) : null}
-
-      <View
-        style={[
-          styles.hubListStack,
-          { marginTop: hubLayout.listMarginTop, gap: hubLayout.listGap },
-          accountOpen && styles.hubListStackNickOpen,
-        ]}
-      >
+  const hubListStack = (
+    <View
+      style={[
+        styles.hubListStack,
+        { gap: hubLayout.listGap },
+        !accountOpen && styles.hubListStackLower,
+        accountOpen && styles.hubListStackNickOpen,
+      ]}
+    >
       <WelcomeProfileSection dense>
         <WelcomeProfileRow
           dense
-          tight={rowTight}
           expandable
           expanded={accountOpen}
           icon="person-outline"
@@ -552,7 +574,6 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
         <WelcomeProfileRowDivider />
         <WelcomeProfileRow
           dense
-          tight={rowTight}
           icon="globe-outline"
           label={t('chooseLanguage', lang)}
           value={langLabel}
@@ -561,7 +582,6 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
         <WelcomeProfileRowDivider />
         <WelcomeProfileRow
           dense
-          tight={rowTight}
           icon="notifications-outline"
           label={t('welcomeNotifications', lang)}
           value={t('welcomeNotificationsHint', lang)}
@@ -572,7 +592,6 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
       <WelcomeProfileSection dense>
         <WelcomeProfileRow
           dense
-          tight={rowTight}
           icon="lock-closed-outline"
           label={t('welcomePrivacy', lang)}
           onPress={openPrivacy}
@@ -580,7 +599,6 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
         <WelcomeProfileRowDivider />
         <WelcomeProfileRow
           dense
-          tight={rowTight}
           icon="image-outline"
           label={t('chatWallpaper', lang)}
           onPress={openChatWallpaper}
@@ -590,7 +608,6 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
       <WelcomeProfileSection dense>
         <WelcomeProfileRow
           dense
-          tight={rowTight}
           icon="help-circle-outline"
           label={t('profileHelp', lang)}
           onPress={openHelp}
@@ -598,7 +615,6 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
         <WelcomeProfileRowDivider />
         <WelcomeProfileRow
           dense
-          tight={rowTight}
           icon="information-circle-outline"
           label={t('welcomeAboutApp', lang)}
           onPress={openAbout}
@@ -606,13 +622,56 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
         <WelcomeProfileRowDivider />
         <WelcomeProfileRow
           dense
-          tight={rowTight}
           icon="heart-outline"
           label={t('supportProjectTitle', lang)}
           onPress={openSupport}
         />
       </WelcomeProfileSection>
+    </View>
+  );
+
+  const hubScrollBody = accountOpen ? (
+    <View>
+      {hubAvatarSection}
+      <View style={styles.accountPanel}>
+        <PaperInput
+          value={nick ?? ''}
+          onChangeText={setNick}
+          mode="outlined"
+          dense
+          theme={{ roundness: 12 }}
+          outlineStyle={{ borderWidth: 0, borderRadius: 12 }}
+          style={styles.nickInput}
+          contentStyle={styles.nickInputContent}
+          textColor={LIVI.white}
+          placeholder={t('nickname', lang)}
+          placeholderTextColor={WELCOME_MUTED_TEXT}
+          autoCorrect={false}
+          autoCapitalize="none"
+          editable={!busy}
+        />
+        <View style={styles.accountActions}>
+          <Pressable onPress={onClearNick} disabled={busy || !displayNick} style={styles.accountSecondary}>
+            <Text style={styles.accountSecondaryText}>{t('deleteNick', lang)}</Text>
+          </Pressable>
+          <Pressable
+            onPress={() => {
+              handleSaveProfile();
+              closeAccountEdit();
+            }}
+            disabled={busy}
+            style={[styles.accountSave, savedToast && styles.accountSaveDone]}
+          >
+            <Text style={styles.accountSaveText}>{savedToast ? t('saved', lang) : t('save', lang)}</Text>
+          </Pressable>
+        </View>
       </View>
+      {hubListStack}
+    </View>
+  ) : (
+    <View style={styles.hubMainBalance}>
+      <View style={styles.hubMainTop}>{hubAvatarSection}</View>
+      {hubListStack}
     </View>
   );
 
@@ -755,18 +814,22 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
         {screen === 'hub' ? headerHub : headerSettings}
 
         {screen === 'hub' ? (
-          <View style={styles.hubPane} onLayout={onHubPaneLayout}>
-            <ScrollView
-              style={styles.hubMainDock}
-              contentContainerStyle={styles.hubMainDockScroll}
-              scrollEnabled={needsHubScroll}
-              keyboardShouldPersistTaps="handled"
-              showsVerticalScrollIndicator={false}
-              overScrollMode="never"
-              onContentSizeChange={onHubContentSizeChange}
-            >
-              {hubScrollBody}
-            </ScrollView>
+          <View style={styles.hubPane}>
+            {needsHubScroll ? (
+              <ScrollView
+                style={styles.hubMainDock}
+                contentContainerStyle={styles.hubMainDockScroll}
+                scrollEnabled
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator={false}
+                bounces={false}
+                overScrollMode="never"
+              >
+                {hubScrollBody}
+              </ScrollView>
+            ) : (
+              <View style={[styles.hubMainDock, styles.hubMainDockClip]}>{hubScrollBody}</View>
+            )}
             {hubLogoutButton}
           </View>
         ) : (
@@ -857,6 +920,19 @@ const styles = StyleSheet.create({
     flex: 1,
     minHeight: 0,
   },
+  hubMainDockClip: {
+    overflow: 'hidden',
+  },
+  hubMainBalance: {
+    flex: 1,
+    minHeight: 0,
+    justifyContent: 'space-between',
+    paddingBottom: HUB_LIST_ABOVE_DELETE_GAP,
+  },
+  hubMainTop: {
+    flexShrink: 0,
+    width: '100%',
+  },
   hubMainDockScroll: {
     flexGrow: 0,
     paddingBottom: 0,
@@ -864,6 +940,7 @@ const styles = StyleSheet.create({
   scrollContent: { paddingTop: 4 },
   avatarBlock: { alignItems: 'center', marginBottom: 8, marginTop: 0 },
   hubListStack: { gap: 12 },
+  hubListStackLower: { marginTop: 12 },
   hubListStackNickOpen: { marginTop: 0 },
   avatarWrap: { position: 'relative' },
   avatarRing: {
@@ -1035,8 +1112,12 @@ const styles = StyleSheet.create({
     paddingTop: HUB_DELETE_EDGE_GAP,
     paddingBottom: HUB_DELETE_EDGE_GAP,
     flexShrink: 0,
+    alignItems: 'center',
   },
   logOutBtn: {
+    alignSelf: 'center',
+    width: '88%',
+    maxWidth: 340,
     paddingVertical: 11,
     borderRadius: 999,
     backgroundColor: 'rgba(255, 90, 103, 0.16)',
@@ -1047,7 +1128,7 @@ const styles = StyleSheet.create({
   },
   logOutBtnText: {
     color: WELCOME_HEADER_TITLE,
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '600',
   },
   hubBtnPressed: {

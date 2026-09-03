@@ -16,6 +16,7 @@ import {
   SEARCH_CTA_MAX_WIDTH,
   SEARCH_CTA_TABLET_MAX_WIDTH,
   SEARCH_CTA_TABLET_MIN_WIDTH,
+  WELCOME_HEADER_TITLE,
 } from './constants';
 
 const BORDER_W = 1.35;
@@ -125,7 +126,7 @@ export function WelcomeSearchCta({
             <MaterialCommunityIcons
               name="lightning-bolt"
               size={compact ? 20 : 22}
-              color="rgba(255,255,255,0.92)"
+              color={WELCOME_HEADER_TITLE}
             />
             <Text style={[styles.label, compact && styles.labelCompact]} allowFontScaling={false}>
               {label}
@@ -169,7 +170,7 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   label: {
-    color: 'rgba(255,255,255,0.94)',
+    color: WELCOME_HEADER_TITLE,
     fontSize: 17,
     fontWeight: '500',
     letterSpacing: 0.2,

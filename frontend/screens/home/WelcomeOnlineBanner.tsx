@@ -3,7 +3,7 @@ import { StyleSheet, Text, View } from 'react-native';
 import type { Lang } from '../../utils/i18n';
 import AvatarImage from '../../components/AvatarImage';
 import { displayAvatarLetter } from './friendHelpers';
-import { LIVI, WELCOME_GLASS_BORDER, WELCOME_GLASS_SURFACE, WELCOME_MUTED_TEXT, WELCOME_STAGE_BG } from './constants';
+import { LIVI, WELCOME_GLASS_BORDER, WELCOME_GLASS_SURFACE, WELCOME_HEADER_TITLE, WELCOME_MUTED_TEXT, WELCOME_STAGE_BG } from './constants';
 import { formatWelcomeUsersOnlineLine } from './utils/welcomeOnlineLabel';
 
 export type WelcomeBannerPeer = {
@@ -91,7 +91,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     alignSelf: 'stretch',
     marginHorizontal: 20,
-    marginTop: 16,
+    marginTop: 8,
     paddingVertical: 14,
     paddingHorizontal: 20,
     borderRadius: 26,
@@ -123,7 +123,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#3DDC84',
   },
   onlineWord: {
-    color: LIVI.white,
+    color: WELCOME_HEADER_TITLE,
     fontSize: 16,
     fontWeight: '600',
     letterSpacing: 0.1,

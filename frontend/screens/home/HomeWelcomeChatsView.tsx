@@ -622,8 +622,6 @@ const styles = StyleSheet.create({
     paddingVertical: Platform.OS === 'ios' ? 10 : 6,
     borderRadius: 14,
     backgroundColor: WELCOME_GLASS_SURFACE,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: WELCOME_GLASS_BORDER,
     gap: 8,
   },
   searchIcon: {
@@ -687,13 +685,10 @@ const styles = StyleSheet.create({
   glassCard: {
     height: WELCOME_FRIEND_CARD_ROW_HEIGHT,
     backgroundColor: WELCOME_GLASS_SURFACE,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: WELCOME_GLASS_BORDER,
     borderRadius: 16,
     overflow: 'hidden',
   },
   glassCardSelected: {
-    borderColor: 'rgba(47, 111, 212, 0.45)',
     backgroundColor: 'rgba(33, 88, 192, 0.18)',
   },
   selectMark: {

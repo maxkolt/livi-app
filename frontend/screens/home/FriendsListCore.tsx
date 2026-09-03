@@ -13,7 +13,6 @@ import {
   FRIEND_SWIPE_DELETE_WIDTH,
   LIVI,
   WELCOME_BRAND_VI_FILL_GRADIENT,
-  WELCOME_GLASS_BORDER,
   WELCOME_GLASS_SURFACE,
   WELCOME_MUTED_TEXT,
   WELCOME_FRIENDS_LIST_INSET,
@@ -190,7 +189,7 @@ function FriendsListCoreInner(props: FriendsListCoreProps) {
     if (item.online) {
       return (
         <View style={welcomeListStyles.statusRow}>
-          <View style={welcomeListStyles.onlineDot} />
+          {!isWelcome ? <View style={welcomeListStyles.onlineDot} /> : null}
           <Text style={[styles.friendStatus, { color: LIVI.green }]}>{L('online')}</Text>
         </View>
       );
@@ -495,9 +494,15 @@ function FriendsListCoreInner(props: FriendsListCoreProps) {
       contentContainerStyle={contentContainerStyle}
       ListEmptyComponent={
         initialized ? (
-          <View style={{ padding: 16 }}>
-            <Text style={{ color: isWelcome ? WELCOME_MUTED_TEXT : LIVI.text2 }}>
-              👤 {L('friendsEmpty')}
+          <View style={isWelcome ? welcomeListStyles.emptyWrap : { padding: 16 }}>
+            <Text
+              style={
+                isWelcome
+                  ? welcomeListStyles.emptyText
+                  : { color: LIVI.text2 }
+              }
+            >
+              {isWelcome ? L('friendsEmpty') : `👤 ${L('friendsEmpty')}`}
             </Text>
           </View>
         ) : null
@@ -525,13 +530,10 @@ const welcomeListStyles = StyleSheet.create({
   glassCard: {
     height: WELCOME_FRIEND_CARD_ROW_HEIGHT,
     backgroundColor: WELCOME_GLASS_SURFACE,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: WELCOME_GLASS_BORDER,
     borderRadius: 16,
     overflow: 'hidden',
   },
   glassCardSelected: {
-    borderColor: 'rgba(74, 122, 140, 0.45)',
     backgroundColor: 'rgba(42, 88, 104, 0.28)',
   },
   welcomeSelectRow: {
@@ -614,6 +616,17 @@ const welcomeListStyles = StyleSheet.create({
     height: 6,
     borderRadius: 4,
     backgroundColor: LIVI.green,
+  },
+  emptyWrap: {
+    paddingTop: 36,
+    paddingHorizontal: 16,
+    alignItems: 'center',
+  },
+  emptyText: {
+    color: WELCOME_MUTED_TEXT,
+    fontSize: 15,
+    fontWeight: '400',
+    textAlign: 'center',
   },
 });
 
