@@ -955,22 +955,36 @@ async function emitPresenceUpdateToFriends(io: Server, userId: string, busy: boo
 /**
  * Рассылает busy для обоих участников звонка всем друзьям обоих.
  * Чтобы у общего друга (напр. зритель списка) оба участника отображались «Занято».
+ * omitRecipientUserIds — не слать в комнату пользователя (после локального cancel инициатора
+ * его JS уже сбросил busy; лишний presence:update грузит hot path вкладок).
  */
 async function emitPresenceUpdateCallToFriends(
   io: Server,
   userIdA: string,
   userIdB: string,
-  busy: boolean
+  busy: boolean,
+  opts?: { omitRecipientUserIds?: string[] },
 ) {
+  const omit = new Set(
+    (opts?.omitRecipientUserIds || []).map((id) => String(id || '').trim()).filter(Boolean),
+  );
+  try {
+    if (userIdA) lastBroadcastBusyByUserId.set(String(userIdA), !!busy);
+    if (userIdB) lastBroadcastBusyByUserId.set(String(userIdB), !!busy);
+  } catch {}
   if (!userIdA || !userIdB) {
-    if (userIdA) await emitPresenceUpdateToFriends(io, userIdA, busy);
-    if (userIdB) await emitPresenceUpdateToFriends(io, userIdB, busy);
+    if (userIdA && !omit.has(String(userIdA))) await emitPresenceUpdateToFriends(io, userIdA, busy);
+    if (userIdB && !omit.has(String(userIdB))) await emitPresenceUpdateToFriends(io, userIdB, busy);
     return;
   }
   try {
     if (!isMongoReady()) {
-      io.to(`u:${userIdA}`).emit('presence:update', { userId: userIdA, busy });
-      io.to(`u:${userIdB}`).emit('presence:update', { userId: userIdB, busy });
+      if (!omit.has(String(userIdA))) {
+        io.to(`u:${userIdA}`).emit('presence:update', { userId: userIdA, busy });
+      }
+      if (!omit.has(String(userIdB))) {
+        io.to(`u:${userIdB}`).emit('presence:update', { userId: userIdB, busy });
+      }
       return;
     }
     const friendMap = await getFriendIdsForUsers([userIdA, userIdB]);
@@ -978,21 +992,33 @@ async function emitPresenceUpdateCallToFriends(
     const friendsB = friendMap.get(userIdB) || [];
     const allFriendIds = [...new Set([...friendsA, ...friendsB])];
     for (const friendId of allFriendIds) {
+      if (omit.has(String(friendId))) continue;
       try {
         io.to(`u:${friendId}`).emit('presence:update', { userId: userIdA, busy });
         io.to(`u:${friendId}`).emit('presence:update', { userId: userIdB, busy });
       } catch {}
     }
-    io.to(`u:${userIdA}`).emit('presence:update', { userId: userIdA, busy });
-    io.to(`u:${userIdA}`).emit('presence:update', { userId: userIdB, busy });
-    io.to(`u:${userIdB}`).emit('presence:update', { userId: userIdA, busy });
-    io.to(`u:${userIdB}`).emit('presence:update', { userId: userIdB, busy });
+    if (!omit.has(String(userIdA))) {
+      io.to(`u:${userIdA}`).emit('presence:update', { userId: userIdA, busy });
+      io.to(`u:${userIdA}`).emit('presence:update', { userId: userIdB, busy });
+    }
+    if (!omit.has(String(userIdB))) {
+      io.to(`u:${userIdB}`).emit('presence:update', { userId: userIdA, busy });
+      io.to(`u:${userIdB}`).emit('presence:update', { userId: userIdB, busy });
+    }
   } catch (e) {
     try {
-      await emitPresenceUpdateToFriends(io, userIdA, busy);
-      await emitPresenceUpdateToFriends(io, userIdB, busy);
+      if (!omit.has(String(userIdA))) await emitPresenceUpdateToFriends(io, userIdA, busy);
+      if (!omit.has(String(userIdB))) await emitPresenceUpdateToFriends(io, userIdB, busy);
     } catch {}
   }
+}
+
+/** call:cancel только callee — инициатор уже закрыл Outgoing локально; echo грузит его JS. */
+function emitCallCancelToCallee(callId: string, callerId: string, calleeId: string): void {
+  try {
+    io.to(`u:${calleeId}`).emit('call:cancel', { callId, from: callerId });
+  } catch {}
 }
 
 /* ========= Matching (ГЛОБАЛЬНО) ========= */
@@ -1107,6 +1133,17 @@ type CallDeliveryTelemetry = {
 const callDeliveryById = new Map<string, CallDeliveryTelemetry>();
 // Активный callId для конкретного socket.id (после accept)
 const activeCallBySocket = new Map<string, string>();
+
+/**
+ * FCM call_canceled нужен, если у callee нет сокета или входящий ещё не ACK'нут.
+ * Иначе socket cancel достаточно (иначе поздний push бьёт в телефон / redial).
+ */
+function shouldSendCallCanceledPush(callId: string, calleeId: string): boolean {
+  if (!hasSocketForUser(io, calleeId)) return true;
+  const telemetry = callDeliveryById.get(callId);
+  if (!telemetry?.incomingShownAtMs) return true;
+  return false;
+}
 
 async function persistDirectCallSharedState(callId: string, link: CallLink): Promise<void> {
   await queueStore.setDirectCall(callId, {
@@ -1569,9 +1606,15 @@ function handleCancelDeduped(callId: string, link: { a: string; b: string }, sou
     });
     return;
   }
-  void resendBusyFalseForStaleRingingCall(callId, link, `cancel_${source}`).catch((e: any) => {
-    logger.warn('[call:cancel] dedupe busy=false replay failed', { callId, source, error: e?.message });
-  });
+  // Первый cancel уже снял busy; повторный busy=false грузит JS инициатора после X.
+  // Safety: реплеим только если lastBroadcast всё ещё busy=true.
+  const callerStillBusy = lastBroadcastBusyByUserId.get(String(link.a)) === true;
+  const calleeStillBusy = lastBroadcastBusyByUserId.get(String(link.b)) === true;
+  if (callerStillBusy || calleeStillBusy) {
+    void resendBusyFalseForStaleRingingCall(callId, link, `cancel_${source}`).catch((e: any) => {
+      logger.warn('[call:cancel] dedupe busy=false replay failed', { callId, source, error: e?.message });
+    });
+  }
   if (callsById.has(callId)) cleanupCall(callId, 'canceled');
 }
 
@@ -1727,8 +1770,7 @@ async function cleanupStaleRingingCallForImmediateRetry(callerId: string, callee
       const sortedU = [link.a, link.b].sort();
       dissolveSocketIoRoom(io, `room_${sortedU[0]}_${sortedU[1]}`);
     } catch {}
-    try { io.to(`u:${link.a}`).emit('call:cancel', { callId, from: link.a }); } catch {}
-    try { io.to(`u:${link.b}`).emit('call:cancel', { callId, from: link.a }); } catch {}
+    emitCallCancelToCallee(callId, link.a, link.b);
     cleanupCall(callId, 'canceled');
   }
 }
@@ -2323,20 +2365,23 @@ app.post('/api/calls/cancel', async (req, res) => {
     logger.info('[api/calls/cancel] caller canceled via HTTP', { callId, caller: link.a, callee: link.b });
     clearDirectCallSessionForUser(io, link.a);
     clearDirectCallSessionForUser(io, link.b);
-    // Socket cancel сразу — не ждём Mongo/FCM (иначе redial у callee убивается поздним push).
-    try { io.to(`u:${link.a}`).emit('call:cancel', { callId, from: link.a }); } catch {}
-    try { io.to(`u:${link.b}`).emit('call:cancel', { callId, from: link.a }); } catch {}
+    // Socket cancel сразу callee — не ждём Mongo/FCM; инициатору echo не шлём (UI уже закрыт).
+    emitCallCancelToCallee(callId, link.a, link.b);
     logger.info('[call:cancel] processed (http), clearing ring timer if any', {
       callId,
       hadTimer: !!callsById.get(callId)?.timer,
     });
-    cleanupCall(callId, 'canceled');
-    // Presence + FCM + missed — фон: не блокируем HTTP и не держим hot path cancel.
     const calleeId = link.b;
     const callerId = link.a;
+    const sendCanceledPush = shouldSendCallCanceledPush(callId, calleeId);
+    cleanupCall(callId, 'canceled');
+    // Presence + FCM + missed — фон: не блокируем HTTP и не держим hot path cancel.
     void (async () => {
       try {
-        await emitPresenceUpdateCallToFriends(io, callerId, calleeId, false);
+        // Инициатор уже сбросил busy локально — не шлём presence в его комнату.
+        await emitPresenceUpdateCallToFriends(io, callerId, calleeId, false, {
+          omitRecipientUserIds: [callerId],
+        });
       } catch {}
       let fromNick: string | undefined;
       try {
@@ -2345,15 +2390,27 @@ app.post('/api/calls/cancel', async (req, res) => {
           if (u && typeof (u as any).nick === 'string') fromNick = String((u as any).nick).trim() || undefined;
         }
       } catch {}
-      try {
-        await sendCallCanceledToRecipient(calleeId, callId, callerId, fromNick);
-      } catch (e: any) {
-        logger.warn('[api/calls/cancel] sendCallCanceledToRecipient failed', { error: e?.message });
+      if (sendCanceledPush) {
+        try {
+          await sendCallCanceledToRecipient(calleeId, callId, callerId, fromNick);
+        } catch (e: any) {
+          logger.warn('[api/calls/cancel] sendCallCanceledToRecipient failed', { error: e?.message });
+        }
+      } else {
+        logger.info('[api/calls/cancel] skip FCM call_canceled (callee socket + incoming_shown)', {
+          callId,
+          callee: calleeId,
+        });
       }
       try {
         if (!hasSocketForUser(io, calleeId)) await saveMissedCall(calleeId, callerId, fromNick || '');
       } catch {}
-      logger.info('[api/calls/cancel] background notify done', { callId, caller: callerId, callee: calleeId });
+      logger.info('[api/calls/cancel] background notify done', {
+        callId,
+        caller: callerId,
+        callee: calleeId,
+        fcmCanceled: sendCanceledPush,
+      });
     })();
     return res.json({ ok: true });
   } catch (e: any) {
@@ -4033,16 +4090,18 @@ io.on('connection', async (sock: AuthedSocket) => {
       hadTimer: !!callsById.get(id)?.timer,
     });
 
-    // уведомим получателя и инициатора сразу — FCM/presence в фоне
-    try { io.to(`u:${link.a}`).emit('call:cancel', { callId: id, from: link.a }); } catch {}
-    try { io.to(`u:${link.b}`).emit('call:cancel', { callId: id, from: link.a }); } catch {}
-    cleanupCall(id, 'canceled');
-
+    // Только callee — инициатор уже закрыл UI; FCM/presence в фоне
+    emitCallCancelToCallee(id, link.a, link.b);
     const calleeId = link.b;
     const callerId = link.a;
+    const sendCanceledPush = shouldSendCallCanceledPush(id, calleeId);
+    cleanupCall(id, 'canceled');
+
     void (async () => {
       try {
-        await emitPresenceUpdateCallToFriends(io, callerId, calleeId, false);
+        await emitPresenceUpdateCallToFriends(io, callerId, calleeId, false, {
+          omitRecipientUserIds: [callerId],
+        });
       } catch {}
       let fromNick: string | undefined;
       try {
@@ -4051,15 +4110,27 @@ io.on('connection', async (sock: AuthedSocket) => {
           if (u && typeof (u as any).nick === 'string') fromNick = String((u as any).nick).trim() || undefined;
         }
       } catch {}
-      try {
-        await sendCallCanceledToRecipient(calleeId, id, callerId, fromNick);
-      } catch (e: any) {
-        logger.warn('[call:cancel] sendCallCanceledToRecipient failed', { error: e?.message });
+      if (sendCanceledPush) {
+        try {
+          await sendCallCanceledToRecipient(calleeId, id, callerId, fromNick);
+        } catch (e: any) {
+          logger.warn('[call:cancel] sendCallCanceledToRecipient failed', { error: e?.message });
+        }
+      } else {
+        logger.info('[call:cancel] skip FCM call_canceled (callee socket + incoming_shown)', {
+          callId: id,
+          callee: calleeId,
+        });
       }
       try {
         if (!hasSocketForUser(io, calleeId)) await saveMissedCall(calleeId, callerId, fromNick || '');
       } catch {}
-      logger.info('[call:cancel] background notify done', { callId: id, caller: callerId, callee: calleeId });
+      logger.info('[call:cancel] background notify done', {
+        callId: id,
+        caller: callerId,
+        callee: calleeId,
+        fcmCanceled: sendCanceledPush,
+      });
     })();
   });
 
