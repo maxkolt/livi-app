@@ -2323,25 +2323,38 @@ app.post('/api/calls/cancel', async (req, res) => {
     logger.info('[api/calls/cancel] caller canceled via HTTP', { callId, caller: link.a, callee: link.b });
     clearDirectCallSessionForUser(io, link.a);
     clearDirectCallSessionForUser(io, link.b);
-    await emitPresenceUpdateCallToFriends(io, link.a, link.b, false);
+    // Socket cancel сразу — не ждём Mongo/FCM (иначе redial у callee убивается поздним push).
     try { io.to(`u:${link.a}`).emit('call:cancel', { callId, from: link.a }); } catch {}
     try { io.to(`u:${link.b}`).emit('call:cancel', { callId, from: link.a }); } catch {}
-    logger.info('[api/calls/cancel] sending call_canceled push to callee', { callId, caller: link.a, callee: link.b });
-    let fromNick: string | undefined;
-    try {
-      if (isMongoReady()) {
-        const u = await User.findById(link.a).select('nick').lean();
-        if (u && typeof (u as any).nick === 'string') fromNick = String((u as any).nick).trim() || undefined;
-      }
-    } catch {}
-    try { await sendCallCanceledToRecipient(link.b, callId, link.a, fromNick); } catch (e: any) { logger.warn('[api/calls/cancel] sendCallCanceledToRecipient failed', { error: e?.message }); }
-    if (!hasSocketForUser(io, link.b)) await saveMissedCall(link.b, link.a, fromNick || '');
     logger.info('[call:cancel] processed (http), clearing ring timer if any', {
       callId,
       hadTimer: !!callsById.get(callId)?.timer,
     });
-    logger.info('[api/calls/cancel] call ended for both: callee got missed from native', { callId, caller: link.a, callee: link.b });
     cleanupCall(callId, 'canceled');
+    // Presence + FCM + missed — фон: не блокируем HTTP и не держим hot path cancel.
+    const calleeId = link.b;
+    const callerId = link.a;
+    void (async () => {
+      try {
+        await emitPresenceUpdateCallToFriends(io, callerId, calleeId, false);
+      } catch {}
+      let fromNick: string | undefined;
+      try {
+        if (isMongoReady()) {
+          const u = await User.findById(callerId).select('nick').lean();
+          if (u && typeof (u as any).nick === 'string') fromNick = String((u as any).nick).trim() || undefined;
+        }
+      } catch {}
+      try {
+        await sendCallCanceledToRecipient(calleeId, callId, callerId, fromNick);
+      } catch (e: any) {
+        logger.warn('[api/calls/cancel] sendCallCanceledToRecipient failed', { error: e?.message });
+      }
+      try {
+        if (!hasSocketForUser(io, calleeId)) await saveMissedCall(calleeId, callerId, fromNick || '');
+      } catch {}
+      logger.info('[api/calls/cancel] background notify done', { callId, caller: callerId, callee: calleeId });
+    })();
     return res.json({ ok: true });
   } catch (e: any) {
     return res.status(500).json({ ok: false, error: e?.message || 'server_error' });
@@ -3355,7 +3368,10 @@ io.on('connection', async (sock: AuthedSocket) => {
       });
       callOfUser.set(me, { with: peerId, callId });
       callOfUser.set(peerId, { with: me, callId });
-      await persistDirectCallSharedState(callId, { a: me, b: peerId, createdAtMs, expiresAtMs });
+      // Redis persist не на hot path — иначе ack/incoming ждут queueStore (сотни мс+).
+      void persistDirectCallSharedState(callId, { a: me, b: peerId, createdAtMs, expiresAtMs }).catch(
+        (e: any) => logger.warn('[call:initiate] persistDirectCallSharedState failed', { callId, error: e?.message }),
+      );
 
       // КРИТИЧНО: Создаем комнату при инициации звонка (инициатором)
       // Используем user IDs для имени комнаты, чтобы совпадало с LiveKit roomName
@@ -3391,6 +3407,7 @@ io.on('connection', async (sock: AuthedSocket) => {
         sock.emit('call:room:created', { callId, roomId, partnerId: peerId, from: peerSocket ? peerSocket.id : null });
         logger.debug('Room created event sent to initiator', { socketId: sock.id, roomId, callId, from: peerSocket ? peerSocket.id : null });
       } catch {}
+
 
       // таймаут 20с
       const timer = setTimeout(async () => {
@@ -3451,22 +3468,10 @@ io.on('connection', async (sock: AuthedSocket) => {
       const link = callsById.get(callId);
       if (link) link.timer = timer;
 
-      // отправим входящий вызов получателю (с ником инициатора, если есть)
-      let fromNick: string | undefined;
+      // отправим входящий вызов получателю СРАЗУ (ник/FCM — после ack, не на hot path).
+      // Раньше await User.findById + await sendCallPush блокировали ack на сотни мс–секунды.
+      let fromNick: string | undefined = String((sock as any)?.data?.nick || '').trim() || undefined;
       try {
-        try {
-          // КРИТИЧНО: Проверяем готовность MongoDB перед операциями
-          if (isMongoReady()) {
-            const u = await User.findById(me).select('nick').lean();
-            if (u && typeof (u as any).nick === 'string') fromNick = String((u as any).nick).trim() || undefined;
-          }
-        } catch {}
-
-        const tNick = callDeliveryById.get(callId);
-        if (tNick) tNick.callerNick = fromNick ?? '';
-
-        // Шлём либо напрямую в уже связанные сокеты пользователя, либо в user-room fallback.
-        // Одновременная отправка обоими путями давала дубль одного и того же call:incoming.
         const room = io.sockets.adapter.rooms.get(`u:${peerId}`);
         const recipientSockets = getSocketsForUser(io, peerId);
         for (const recipientSocket of recipientSockets) {
@@ -3484,7 +3489,12 @@ io.on('connection', async (sock: AuthedSocket) => {
           } catch {}
         }
         const roomSize = room ? room.size : 0;
-        logger.info('[call:initiate] emitting call:incoming to recipient', { peerId, callId, recipientSocketsCount: recipientSockets.length, roomUSize: roomSize });
+        logger.info('[call:initiate] emitting call:incoming to recipient', {
+          peerId,
+          callId,
+          recipientSocketsCount: recipientSockets.length,
+          roomUSize: roomSize,
+        });
         if (recipientSockets.length === 0 && roomSize > 0) {
           io.to(`u:${peerId}`).emit('call:incoming', {
             callId,
@@ -3499,37 +3509,50 @@ io.on('connection', async (sock: AuthedSocket) => {
         }
       } catch {}
 
-      // КРИТИЧНО: пуш всегда отправляем в отдельном шаге, чтобы исключение в блоке с Mongo/сокетами не пропустило доставку в глубоком сне
-      try {
-        const t = callDeliveryById.get(callId);
-        if (t) {
-          t.callerNick = fromNick ?? '';
-          callDeliveryById.set(callId, t);
+      // Ack инициатору сразу — UI/notifyOutgoingCallId не ждут FCM.
+      ack?.({ ok: true, callId });
+
+      void (async () => {
+        try {
+          if (!fromNick && isMongoReady()) {
+            const u = await User.findById(me).select('nick').lean();
+            if (u && typeof (u as any).nick === 'string') {
+              fromNick = String((u as any).nick).trim() || undefined;
+            }
+          }
+        } catch {}
+        try {
+          const t = callDeliveryById.get(callId);
+          if (t) {
+            t.callerNick = fromNick ?? '';
+            callDeliveryById.set(callId, t);
+          }
+        } catch {}
+        try {
+          logger.info('[call:initiate] sending call push to recipient', { peerId, callId, from: me });
+          await sendCallPushToRecipient(peerId, {
+            callId,
+            from: me,
+            fromNick: fromNick ?? '',
+            createdAtMs,
+            expiresAtMs,
+            media: callMedia,
+          });
+          addCallEvent(callId, 'push_sent', 'backend_initial', {
+            providerMode: callProviderMode,
+            providerPrimary: callFeatureFlags.providerSignalingEnabled,
+            pushFallbackEnabled: callFeatureFlags.pushFallbackEnabled,
+          });
+          const t = callDeliveryById.get(callId);
+          if (t && !t.pushSentAtMs) t.pushSentAtMs = Date.now();
+          logger.info('[call:initiate] call push sent', { peerId });
+        } catch (pushErr: any) {
+          logger.warn('[call:initiate] push to recipient failed', { peerId, error: pushErr?.message });
         }
-        logger.info('[call:initiate] sending call push to recipient', { peerId, callId, from: me });
-        await sendCallPushToRecipient(peerId, {
-          callId,
-          from: me,
-          fromNick: fromNick ?? '',
-          createdAtMs,
-          expiresAtMs,
-          media: callMedia,
-        });
-        addCallEvent(callId, 'push_sent', 'backend_initial', {
-          providerMode: callProviderMode,
-          providerPrimary: callFeatureFlags.providerSignalingEnabled,
-          pushFallbackEnabled: callFeatureFlags.pushFallbackEnabled,
-        });
-        if (t && !t.pushSentAtMs) t.pushSentAtMs = Date.now();
-        logger.info('[call:initiate] call push sent', { peerId });
-      } catch (pushErr: any) {
-        logger.warn('[call:initiate] push to recipient failed', { peerId, error: pushErr?.message });
-      }
+        scheduleCallPushRetry(callId, CALL_DELIVERY_ACK_WAIT_MS);
+      })();
 
-      // Надёжная доставка: если incoming_shown ACK не пришёл, запускаем цикл retry + escalation.
-      scheduleCallPushRetry(callId, CALL_DELIVERY_ACK_WAIT_MS);
-
-      return ack?.({ ok: true, callId });
+      return;
     } catch (e: any) {
       return ack?.({ ok: false, error: e?.message || 'server_error' });
     }
@@ -3999,7 +4022,6 @@ io.on('connection', async (sock: AuthedSocket) => {
     // Снимаем busy статус с обоих участников при отмене
     clearDirectCallSessionForUser(io, link.a);
     clearDirectCallSessionForUser(io, link.b);
-    await emitPresenceUpdateCallToFriends(io, link.a, link.b, false);
 
     try {
       const sortedU = [link.a, link.b].sort();
@@ -4011,23 +4033,34 @@ io.on('connection', async (sock: AuthedSocket) => {
       hadTimer: !!callsById.get(id)?.timer,
     });
 
-    // уведомим получателя и инициатора одинаковым событием call:cancel,
-    // чтобы оба клиента синхронно закрыли UI входящего/исходящего звонка
+    // уведомим получателя и инициатора сразу — FCM/presence в фоне
     try { io.to(`u:${link.a}`).emit('call:cancel', { callId: id, from: link.a }); } catch {}
     try { io.to(`u:${link.b}`).emit('call:cancel', { callId: id, from: link.a }); } catch {}
-    logger.info('[call:cancel] sending call_canceled push to callee', { callId: id, caller: link.a, callee: link.b });
-    let fromNick: string | undefined;
-    try {
-      if (isMongoReady()) {
-        const u = await User.findById(link.a).select('nick').lean();
-        if (u && typeof (u as any).nick === 'string') fromNick = String((u as any).nick).trim() || undefined;
-      }
-    } catch {}
-    // FCM data-only получателю: снимаем «входящий вызов», показываем «пропущенный вызов», счётчик на иконке
-    try { await sendCallCanceledToRecipient(link.b, id, link.a, fromNick); } catch (e: any) { logger.warn('[call:cancel] sendCallCanceledToRecipient failed', { error: e?.message }); }
-    if (!hasSocketForUser(io, link.b)) await saveMissedCall(link.b, link.a, fromNick || '');
-    logger.info('[call:cancel] call ended for both: both notified (socket+FCM, callee got missed from native)', { callId: id, caller: link.a, callee: link.b });
     cleanupCall(id, 'canceled');
+
+    const calleeId = link.b;
+    const callerId = link.a;
+    void (async () => {
+      try {
+        await emitPresenceUpdateCallToFriends(io, callerId, calleeId, false);
+      } catch {}
+      let fromNick: string | undefined;
+      try {
+        if (isMongoReady()) {
+          const u = await User.findById(callerId).select('nick').lean();
+          if (u && typeof (u as any).nick === 'string') fromNick = String((u as any).nick).trim() || undefined;
+        }
+      } catch {}
+      try {
+        await sendCallCanceledToRecipient(calleeId, id, callerId, fromNick);
+      } catch (e: any) {
+        logger.warn('[call:cancel] sendCallCanceledToRecipient failed', { error: e?.message });
+      }
+      try {
+        if (!hasSocketForUser(io, calleeId)) await saveMissedCall(calleeId, callerId, fromNick || '');
+      } catch {}
+      logger.info('[call:cancel] background notify done', { callId: id, caller: callerId, callee: calleeId });
+    })();
   });
 
   // Обработчик: партнер ушел (активировал PiP)
