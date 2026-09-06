@@ -1,5 +1,5 @@
-import React, { useCallback, useMemo } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useRef } from 'react';
+import { Animated, Pressable, StyleSheet, Text, View } from 'react-native';
 import { FlatList, Swipeable } from 'react-native-gesture-handler';
 import { IconButton } from 'react-native-paper';
 import { Ionicons } from '@expo/vector-icons';
@@ -24,11 +24,64 @@ import {
 } from './constants';
 import { FriendMarkReadMenuStrip } from './FriendMarkReadMenuStrip';
 import { FriendRowChatButton, FriendRowInviteButton } from './FriendRowActionButtons';
-import { getFriendDisplay } from './friendHelpers';
+import { getFriendDisplay, isDirectCallSessionLive } from './friendHelpers';
 import type { Friend, MarkReadMenu } from './types';
 import type { HomeStyles } from './styles';
 
 export type FriendsListPresentation = 'menu' | 'welcome';
+
+/** Бирюза для статуса «Занято». */
+const BUSY_STATUS_COLOR = '#2EC4B6';
+
+/** Друг занят: серверный busy (рандом/звонок) или локальный активный звонок с ним. */
+export function friendRowIsBusy(
+  friend: Friend,
+  isRecentlyEndedCallFriend: (userId: string | null | undefined) => boolean,
+): boolean {
+  const friendIdStr = String(friend.id);
+  const g = global as any;
+  const videoCallPartner = g.__videoCallPartnerUserIdRef?.current;
+  const activeCallInProgress = isDirectCallSessionLive(g);
+  const recentlyEnded = isRecentlyEndedCallFriend(friendIdStr);
+  const friendBusyBlocksCall = !!friend.online && !!friend.isBusy && !recentlyEnded;
+  const inActiveCallWithFriend =
+    activeCallInProgress && !!videoCallPartner && String(videoCallPartner) === friendIdStr;
+  return friendBusyBlocksCall || inActiveCallWithFriend;
+}
+
+function FriendBusyStatusLabel({ label, styles }: { label: string; styles: HomeStyles }) {
+  const pulse = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    const anim = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, { toValue: 1, duration: 900, useNativeDriver: true }),
+        Animated.timing(pulse, { toValue: 0, duration: 900, useNativeDriver: true }),
+      ]),
+    );
+    anim.start();
+    return () => {
+      try {
+        anim.stop();
+      } catch {}
+      pulse.setValue(0);
+    };
+  }, [pulse]);
+  return (
+    <Animated.Text
+      style={[
+        styles.friendStatus,
+        {
+          color: BUSY_STATUS_COLOR,
+          fontWeight: '500',
+          opacity: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.45, 1] }),
+        },
+      ]}
+      pointerEvents="none"
+    >
+      {label}
+    </Animated.Text>
+  );
+}
 
 export type FriendsListCoreProps = {
   presentation?: FriendsListPresentation;
@@ -186,6 +239,10 @@ function FriendsListCoreInner(props: FriendsListCoreProps) {
   );
 
   const renderStatusLine = (item: Friend) => {
+    const busy = friendRowIsBusy(item, isRecentlyEndedCallFriend);
+    if (busy) {
+      return <FriendBusyStatusLabel label={L('busy')} styles={styles} />;
+    }
     if (item.online) {
       return (
         <View style={welcomeListStyles.statusRow}>
@@ -194,13 +251,12 @@ function FriendsListCoreInner(props: FriendsListCoreProps) {
         </View>
       );
     }
-    return (
-      <Text style={[styles.friendStatus, { color: LIVI.red }]}>{L('offline')}</Text>
-    );
+    return <Text style={[styles.friendStatus, { color: LIVI.red }]}>{L('offline')}</Text>;
   };
 
   const renderNameRow = (item: Friend, displayName: string, avatarLetter: string) => {
     const avatarSize = isWelcome ? WELCOME_FRIEND_AVATAR_SIZE : 48;
+    const busy = friendRowIsBusy(item, isRecentlyEndedCallFriend);
     return (
       <>
         <View style={isWelcome ? welcomeListStyles.avatarBox : styles.avatarBox}>
@@ -228,6 +284,8 @@ function FriendsListCoreInner(props: FriendsListCoreProps) {
           <Text style={[styles.friendName, isWelcome && welcomeListStyles.friendName]}>{displayName}</Text>
           {isWelcome ? (
             renderStatusLine(item)
+          ) : busy ? (
+            <FriendBusyStatusLabel label={L('busy')} styles={styles} />
           ) : (
             <Text style={[styles.friendStatus, { color: item.online ? LIVI.green : LIVI.red }]}>
               {item.online ? L('online') : L('offline')}

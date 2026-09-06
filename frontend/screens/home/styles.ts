@@ -134,8 +134,9 @@ export const styles = StyleSheet.create({
   },
   friendStatus: {
     marginTop: 2,
-    fontSize: Platform.OS === "android" ? 11 : 13,
+    fontSize: Platform.OS === "android" ? 10 : 11,
     fontWeight: '300',
+    lineHeight: Platform.OS === "android" ? 13 : 14,
     ...(Platform.OS === 'android' && { fontFamily: 'sans-serif-light' }),
   },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 4 },

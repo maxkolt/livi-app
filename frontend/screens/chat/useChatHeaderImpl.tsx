@@ -6,6 +6,7 @@ import { Ionicons } from "@expo/vector-icons";
 import AvatarImage from "../../components/AvatarImage";
 import ChatStyleBackButton from "../../components/ChatStyleBackButton";
 import { t, type Lang } from "../../utils/i18n";
+import { WELCOME_CHROME_EDGE_RADIUS } from "../home/constants";
 import { StageGradient } from "../home/WelcomeStageBackground";
 
 type LiviColors = {
@@ -106,6 +107,8 @@ export function useChatHeader({
           elevation: 0,
           borderWidth: 0,
           overflow: "hidden",
+          borderBottomLeftRadius: WELCOME_CHROME_EDGE_RADIUS,
+          borderBottomRightRadius: WELCOME_CHROME_EDGE_RADIUS,
         }}
       >
         <ChatStyleBackButton

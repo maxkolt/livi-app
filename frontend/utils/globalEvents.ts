@@ -1,3 +1,5 @@
+import { NativeModules, Platform } from 'react-native';
+
 // Простой глобальный эмиттер событий без зависимостей
 // Используем для мгновенного обновления счетчиков пропущенных звонков на HomeScreen
 
@@ -131,7 +133,7 @@ export function emitCallCancelledOnHome(fromUserId?: string) {
  * После закрытия нативного Incoming (cancel) Android шлёт несколько AppState/focus подряд.
  * Окно settle подавляет setAppIsActive / loadFriends / setRouteName — иначе Home «мерцает» несколько раз.
  */
-export function armHomeUiSettleSkip(ms = 2500): void {
+export function armHomeUiSettleSkip(ms = 4500): void {
   const g = global as any;
   const until = Date.now() + Math.max(0, Number(ms) || 0);
   g.__skipHomeUiSettleUntilRef = g.__skipHomeUiSettleUntilRef || { current: 0 };
@@ -139,21 +141,36 @@ export function armHomeUiSettleSkip(ms = 2500): void {
     Number(g.__skipHomeUiSettleUntilRef.current || 0),
     until,
   );
-  g.__skipAppStateActiveSetAppIsActiveRef = g.__skipAppStateActiveSetAppIsActiveRef || { current: false };
-  g.__skipAppStateActiveSetAppIsActiveRef.current = true;
+  // Зеркало на native: AppState(active) может прийти до этого вызова.
+  if (Platform.OS === 'android') {
+    try {
+      NativeModules.LiviAppModule?.armHomeUiSettleSkip?.(ms);
+    } catch {}
+  }
 }
 
 export function shouldSkipHomeUiSettle(): boolean {
   const g = global as any;
   const until = Number(g.__skipHomeUiSettleUntilRef?.current || 0);
   if (until > Date.now()) return true;
-  return g.__skipAppStateActiveSetAppIsActiveRef?.current === true;
+  // Native armed на X Outgoing до returnMain — читаем sync, иначе loadFriends глотает тачи.
+  if (Platform.OS === 'android') {
+    try {
+      if (NativeModules.LiviAppModule?.shouldSkipHomeUiSettleSync?.() === true) return true;
+    } catch {}
+  }
+  return false;
 }
 
 export function clearHomeUiSettleSkip(): void {
   const g = global as any;
   if (g.__skipHomeUiSettleUntilRef) g.__skipHomeUiSettleUntilRef.current = 0;
   if (g.__skipAppStateActiveSetAppIsActiveRef) g.__skipAppStateActiveSetAppIsActiveRef.current = false;
+  if (Platform.OS === 'android') {
+    try {
+      NativeModules.LiviAppModule?.clearHomeUiSettleSkipNative?.();
+    } catch {}
+  }
 }
 
 /** Звонок завершён (не отмена). Показываем тост «Звонок завершён» на Home при фокусе, без setParams — без лишних ре-рендеров (при закрытии экрана звонка через goBack). */

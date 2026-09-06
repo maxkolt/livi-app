@@ -354,23 +354,29 @@ export function reportIncomingCallShown(callId: string): void {
   }
 }
 
-export function onCallAccepted(cb: (d: { callId: string; from: string }) => void): () => void {
+export function onCallAccepted(
+  cb: (d: { callId: string; from: string; fromUserId?: string }) => void,
+): () => void {
   const h = (d: any) => {
-    logger.debug("Socket received call:accepted", { callId: d.callId, from: d.from });
+    logger.debug("Socket received call:accepted", { callId: d.callId, from: d.from, fromUserId: d.fromUserId });
     cb(d);
   };
   socket.on("call:accepted", h);
   return () => socket.off("call:accepted", h);
 }
 
-export function onCallDeclined(cb: (d: { callId: string; from: string }) => void): () => void {
+export function onCallDeclined(
+  cb: (d: { callId: string; from: string; fromUserId?: string }) => void,
+): () => void {
   const h = (d: any) => cb(d);
   socket.on("call:declined", h);
   return () => socket.off("call:declined", h);
 }
 
 // Отдельное событие для явной отмены звонком инициатора (дублирует call:declined на сервере, но даём отдельный listener для явности)
-export function onCallCanceled(cb: (d: { callId: string; from: string }) => void): () => void {
+export function onCallCanceled(
+  cb: (d: { callId: string; from: string; fromUserId?: string }) => void,
+): () => void {
   const h = (d: any) => cb(d);
   socket.on("call:cancel", h);
   return () => socket.off("call:cancel", h);

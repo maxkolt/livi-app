@@ -9,7 +9,6 @@ import { KeyboardProvider } from "react-native-keyboard-controller";
 import * as NavigationBar from "expo-navigation-bar";
 import { NavigationContainer, createNavigationContainerRef, CommonActions, DefaultTheme } from "@react-navigation/native";
 import { ThemeProvider, useAppTheme } from "./theme/ThemeProvider";
-import { uiAccent } from "./theme/uiAccent";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { Audio } from "expo-av";
 import { View, Text, TextInput, Animated, TouchableOpacity, StyleSheet, Easing, AppState, StatusBar, Linking, LogBox, Keyboard, InteractionManager, NativeModules, NativeEventEmitter, BackHandler, Modal } from "react-native";
@@ -24,7 +23,7 @@ import { logger } from './utils/logger';
 import InCallManager from 'react-native-incall-manager';
 import { startIncomingCallAlert, stopIncomingCallAlert } from './utils/incomingCallAlert';
 import HomeScreen, { markHomeScreenBootedForSession } from "./screens/HomeScreen";
-import { WELCOME_STAGE_BG } from "./screens/home/constants";
+import { WELCOME_NAV_ACTIVE_ACCENT, WELCOME_NAV_ACTIVE_ICON, WELCOME_STAGE_BG } from "./screens/home/constants";
 import IncomingSharePickerModal from "./components/IncomingSharePickerModal";
 import SystemBarsScrim from "./components/SystemBarsScrim";
 import { PiPProvider, usePiP } from "./src/pip/PiPContext";
@@ -119,13 +118,14 @@ import {
 import {
   restoreCallMediaAfterSystemPiPReturn,
   prepareDirectCallVideoExpandFromInAppPiP,
-  applyCallAudioOutputRouteNow,
   setPersistedCallAudioRoute,
   clearStaleVideoSpeakerUiLockForAudioOnlyUi,
   resolveDirectCallAcceptAudioReapplyRoute,
   clearStaleHomeAudioRouteBeforeDirectCallAccept,
+  cancelScheduledCallAudioRouteReappliesMatching,
 } from './utils/callAudioRoutePersist';
 import { isExternalHeadsetRoute } from './components/VideoChat/hooks/audioRouteTypes';
+import { markFreshDirectCallAudioAcceptCall } from './utils/directCallVideoExpandGuard';
 import {
   installAppNavigationGuard,
   applyCallCancelledHomeNotice,
@@ -328,11 +328,11 @@ const isVideoSessionRoute = (routeName?: string | null) =>
 (global as any).__cycleAudioRouteRef = { current: null as (() => void) | null };
 
 const getOverlayPermissionModalStyles = (theme: any, isDark: boolean) => {
-  const a = uiAccent(isDark);
+  const nav = WELCOME_NAV_ACTIVE_ACCENT;
   return StyleSheet.create({
   overlayPermissionBackdrop: {
     flex: 1,
-    backgroundColor: isDark ? 'rgba(5, 8, 14, 0.66)' : 'rgba(26, 35, 52, 0.28)',
+    backgroundColor: isDark ? 'rgba(5, 8, 14, 0.82)' : 'rgba(26, 35, 52, 0.40)',
     justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: 16,
@@ -366,7 +366,7 @@ const getOverlayPermissionModalStyles = (theme: any, isDark: boolean) => {
     marginRight: 12,
     backgroundColor: isDark ? 'rgba(4, 4, 4, 0.8)' : 'rgba(113,91,168,0.12)',
     borderWidth: 1,
-    borderColor: isDark ? a.solid : theme.colors.primary,
+    borderColor: isDark ? nav.solid : theme.colors.primary,
   },
   overlayPermissionTitleWrap: {
     flex: 1,
@@ -375,7 +375,7 @@ const getOverlayPermissionModalStyles = (theme: any, isDark: boolean) => {
   overlayPermissionTitle: {
     fontSize: 18,
     fontWeight: '700',
-    color: isDark ? a.bright : '#8B7BC8',
+    color: isDark ? WELCOME_NAV_ACTIVE_ICON : '#8B7BC8',
   },
   overlayPermissionText: {
     fontSize: 13,
@@ -388,9 +388,9 @@ const getOverlayPermissionModalStyles = (theme: any, isDark: boolean) => {
     paddingVertical: 12,
     paddingHorizontal: 14,
     marginBottom: 18,
-    backgroundColor: isDark ? a.noteTintBg : '#F2EEF9',
+    backgroundColor: isDark ? 'rgba(74, 122, 140, 0.12)' : '#F2EEF9',
     borderWidth: 1,
-    borderColor: isDark ? a.solid34 : 'rgba(113,91,168,0.22)',
+    borderColor: isDark ? nav.solid15 : 'rgba(113,91,168,0.22)',
   },
   overlayPermissionNoteText: {
     fontSize: 14,
@@ -435,7 +435,7 @@ const getOverlayPermissionModalStyles = (theme: any, isDark: boolean) => {
     paddingBottom: 1.5,
   },
   overlayPermissionButtonPrimaryDarkOuter: {
-    backgroundColor: a.solid,
+    backgroundColor: nav.solid,
     padding: 1,
   },
   overlayPermissionButtonPrimaryLightInner: {
@@ -473,7 +473,6 @@ const getOverlayPermissionModalStyles = (theme: any, isDark: boolean) => {
 
 function AppContent() {
   const { theme, isDark } = useAppTheme();
-  const accent = React.useMemo(() => uiAccent(isDark), [isDark]);
   const overlayPermissionModalStyles = React.useMemo(
     () => getOverlayPermissionModalStyles(theme, isDark),
     [theme, isDark]
@@ -859,9 +858,7 @@ function AppContent() {
       } catch (_) {}
     }
     // Сначала VideoCall в стеке (+ крышка), потом Main на передний план — иначе первый кадр = Home/приветствие.
-    if (AppState.currentState === 'active') {
-      await waitNextPaint();
-    }
+    // Не ждём double-rAF на active: крышка уже показана, navigate ASAP.
     try {
       await openAnswerCallScreen(from, callId, answerMediaHint);
     } catch (e) {
@@ -869,37 +866,20 @@ function AppContent() {
     }
     if (Platform.OS === 'android') {
       // Incoming уже закрыт broadcast'ом из openAnswerCallScreen — поднимаем Main с VideoCall в стеке.
-      // Без native cover: иначе reinforce bringMain снова кладёт #1B1C22 поверх аудио UI.
+      // Один bringMain; повторный reinforce только грузил JS и держал крышку.
       try { sendCallAnsweredBroadcast(callId); } catch {}
-      const bringAnsweredMain = () => {
-        if (endedCallIdsFromSocket.has(callId)) return;
+      if (!endedCallIdsFromSocket.has(callId)) {
         try {
           logger.info('[App] 📱 bringMainActivityToFrontForIncomingAnswer (after VideoCall nav)', { callId });
           bringMainActivityToFrontForIncomingAnswer();
         } catch {}
-      };
-      bringAnsweredMain();
+      }
       InteractionManager.runAfterInteractions(() => {
-        if (typeof requestAnimationFrame === 'function') {
-          requestAnimationFrame(() => {
-            bringAnsweredMain();
-            // Если VideoCall уже смонтирован — не оставляем крышку после reinforce bringMain.
-            try {
-              if (navRef.getCurrentRoute()?.name === 'VideoCall') {
-                clearIncomingAnswerCover();
-              }
-            } catch {}
-          });
-        } else {
-          setTimeout(() => {
-            bringAnsweredMain();
-            try {
-              if (navRef.getCurrentRoute()?.name === 'VideoCall') {
-                clearIncomingAnswerCover();
-              }
-            } catch {}
-          }, 0);
-        }
+        try {
+          if (navRef.getCurrentRoute()?.name === 'VideoCall') {
+            clearIncomingAnswerCover();
+          }
+        } catch {}
       });
     }
     // Крышку снимает VideoCall.onLayout → __notifyIncomingAnswerUiReady (и clear выше).
@@ -908,7 +888,6 @@ function AppContent() {
     setIncomingAnswerTransitionGuard,
     showIncomingAnswerCover,
     clearIncomingAnswerCover,
-    waitNextPaint,
   ]);
 
   const completeAndroidIncomingAnswerRef = React.useRef(completeAndroidIncomingAnswer);
@@ -1005,16 +984,35 @@ function AppContent() {
           else declineCall(callId);
         } catch {}
       };
+      // Один emit сразу. Native cancel уже шлёт HTTP — не долбить ensureSocketConnected(2500)
+      // и тройной cancel: это как раз жрало JS после X (~1–2с «мёртвых» таймеров).
       send();
-      setTimeout(send, 150);
-      void ensureSocketConnected(2500)
-        .then(() => { send(); })
-        .catch(() => {});
+      if (type === 'decline') {
+        setTimeout(send, 150);
+        void ensureSocketConnected(2500)
+          .then(() => { send(); })
+          .catch(() => {});
+      } else if (!socket.connected) {
+        void ensureSocketConnected(800)
+          .then(() => { send(); })
+          .catch(() => {});
+      }
     };
     const sub1 = emitter.addListener('OutgoingCallCanceledByUser', (payload?: { callId?: string | null }) => {
+      // Первым делом: до любого await/cancel — иначе AppState(active) уже грузит friends.
+      try {
+        armHomeUiSettleSkip(8000);
+      } catch {}
+      try {
+        const g = global as any;
+        g.__lastOutgoingCancelAtRef = g.__lastOutgoingCancelAtRef || { current: 0 };
+        g.__lastOutgoingCancelAtRef.current = Date.now();
+      } catch {}
       // Только callId из нативного события. Fallback на __outgoingCallIdRef опасен при быстром
       // повторном наборе: ref уже новый callId → отменяем свежий звонок → not_found на accept.
-      const callId = String(payload?.callId || '').trim();
+      const rawCallId = String(payload?.callId || '').trim();
+      // provisional ringback id (`pending_*`) — ещё нет серверного callId.
+      const callId = rawCallId.startsWith('pending_') ? '' : rawCallId;
       const currentOutgoing = String((global as any).__outgoingCallIdRef?.current || '').trim();
       (global as any).__outgoingCanceledByNativeRef = (global as any).__outgoingCanceledByNativeRef ?? { current: false };
       if (callId && currentOutgoing && callId !== currentOutgoing) {
@@ -1035,6 +1033,7 @@ function AppContent() {
         // остаётся true, сбросить звонок уже нельзя.
         logger.info('[App] OutgoingCallCanceledByUser without callId — cancel current outgoing', {
           currentOutgoing,
+          provisionalNativeId: rawCallId.startsWith('pending_') ? rawCallId : null,
         });
         repeatNativeCallSignal('cancel', currentOutgoing);
       } else {
@@ -1045,7 +1044,16 @@ function AppContent() {
           (global as any).__outgoingCanceledByNativeRef.current = false;
           return;
         }
-        logger.info('[App] OutgoingCallCanceledByUser without callId — UI close only (no cancelCall)');
+        // callId ещё не пришёл (pending_*): HomeScreen cancel'нёт orphan при ack startCall.
+        // Без флага callee остаётся на Incoming до позднего cancel/busy.
+        (global as any).__outgoingCancelAwaitingCallIdRef =
+          (global as any).__outgoingCancelAwaitingCallIdRef || { current: false };
+        (global as any).__outgoingCancelAwaitingCallIdRef.current = true;
+        logger.info('[App] OutgoingCallCanceledByUser without callId — await orphan callId to cancel', {
+          attempt,
+          uiActive,
+          provisionalNativeId: rawCallId.startsWith('pending_') ? rawCallId : null,
+        });
       }
       try {
         emitCloseOutgoingCall({
@@ -1843,6 +1851,8 @@ function AppContent() {
   React.useEffect(() => {
     const sub = AppState.addEventListener('change', (state) => {
       if (state !== 'active') return;
+      // Сразу после cancel Outgoing не жжём сеть — иначе табы/redial ждут секунды.
+      if (shouldSkipHomeUiSettle()) return;
       const uid = getCurrentUserId?.();
       if (uid) registerAndSendPushToken(uid, { reason: 'app_active' }).catch(() => {});
     });
@@ -3087,32 +3097,42 @@ function AppContent() {
         }
         if (Platform.OS === 'android') {
           const LiviAppModule = NativeModules.LiviAppModule;
-          LiviAppModule?.getAndClearOutgoingCanceledByUserCallId?.()?.then?.((callId: string | null) => {
-            const id = String(callId || '').trim();
-            if (id) {
-              const currentOutgoing = String((global as any).__outgoingCallIdRef?.current || '').trim();
-              if (currentOutgoing && id !== currentOutgoing) {
-                logger.info('[App] stale outgoingCanceledByUserCallId on resume — cancel old only', {
-                  callId: id,
-                  currentOutgoing,
-                });
+          // Native уже armed settle на X: не дублировать cancel/emit (Home иначе loadFriends → UI freeze).
+          if (shouldSkipHomeUiSettle()) {
+            LiviAppModule?.getAndClearOutgoingCanceledByUserCallId?.()?.then?.(() => {
+              LiviAppModule?.getAndClearOutgoingCanceledByUserFlag?.()?.catch?.(() => {});
+            });
+          } else {
+            LiviAppModule?.getAndClearOutgoingCanceledByUserCallId?.()?.then?.((callId: string | null) => {
+              const id = String(callId || '').trim();
+              if (id) {
+                const currentOutgoing = String((global as any).__outgoingCallIdRef?.current || '').trim();
+                if (currentOutgoing && id !== currentOutgoing) {
+                  logger.info('[App] stale outgoingCanceledByUserCallId on resume — cancel old only', {
+                    callId: id,
+                    currentOutgoing,
+                  });
+                  try { cancelCall(id); } catch {}
+                  return;
+                }
+                try {
+                  armHomeUiSettleSkip(3500);
+                } catch {}
+                try { emitCloseOutgoingCall({ reason: 'native_cancel', callId: id }); } catch {}
                 try { cancelCall(id); } catch {}
+                setTimeout(() => { try { cancelCall(id); } catch {} }, 150);
+                void ensureSocketConnected(2500)
+                  .then(() => { try { cancelCall(id); } catch {} })
+                  .catch(() => {});
                 return;
               }
-              try { emitCloseOutgoingCall({ reason: 'native_cancel', callId: id }); } catch {}
-              try { cancelCall(id); } catch {}
-              setTimeout(() => { try { cancelCall(id); } catch {} }, 150);
-              void ensureSocketConnected(2500)
-                .then(() => { try { cancelCall(id); } catch {} })
-                .catch(() => {});
-              return;
-            }
-            // Флаг без callId — только сброс; иначе stale flag от прошлого X отменит новый исходящий.
-            LiviAppModule?.getAndClearOutgoingCanceledByUserFlag?.()?.then?.((flag: boolean) => {
-              if (!flag) return;
-              logger.info('[App] cleared stale outgoingCanceledByUserFlag without callId — skip cancel');
+              // Флаг без callId — только сброс; иначе stale flag от прошлого X отменит новый исходящий.
+              LiviAppModule?.getAndClearOutgoingCanceledByUserFlag?.()?.then?.((flag: boolean) => {
+                if (!flag) return;
+                logger.info('[App] cleared stale outgoingCanceledByUserFlag without callId — skip cancel');
+              });
             });
-          });
+          }
           // FCM call_accepted вывел приложение — запросить call:accepted у сервера → переход на VideoCall
           LiviAppModule?.getAndClearPendingCallAcceptedCallId?.()?.then?.((callId: string | null) => {
             if (callId && shouldRequestPendingCallAccepted(callId, 'app-active-pending')) {
@@ -3177,27 +3197,68 @@ function AppContent() {
       stopIncomingCallAlert();
       setIncoming(null); stopAnim(); try { emitCloseIncoming(); emitRequestCloseIncoming(); } catch {}
       logger.info('[decline/инициатор] App: закрываем нативное окно и сбрасываем visible');
-      try { closeOutgoingCallActivity(id || null, { force: true }); } catch {}
+      try {
+        armHomeUiSettleSkip(2500);
+      } catch {}
+      // skipMainReturn: Outgoing уже уходит; второй startActivity(Main) тупит табы/redial.
+      try {
+        closeOutgoingCallActivity(id || null, { force: true, skipMainReturn: true });
+      } catch {}
       try { setOutgoingCallScreenVisible(false); } catch {}
-      // Сбрасываем refs активного звонка, чтобы кнопки видеозвонка у инициатора снова стали активными
+      // Сбрасываем refs активного звонка без loadFriends (ended-callback).
       try {
         (global as any).__videoCallPartnerUserIdRef = { current: null };
         (global as any).__videoCallActiveRef = { current: false };
-        (global as any).__onVideoCallEndedRef?.current?.();
       } catch (_) {}
       // Не эмитим emitCloseOutgoingCall — иначе onCloseOutgoingCall вызовет второй setCalling и второе мерцание
       // call:declined = тот, кому звонили, отклонил — пропущенным не считаем, счётчик не увеличиваем
     });
     const offCancel = onCallCanceled?.(async (d) => {
-      const callerId = String((d as any)?.from || '');
+      const callerId =
+        String((d as any)?.fromUserId || '').trim() ||
+        (/^[a-f0-9]{24}$/i.test(String((d as any)?.from || '').trim())
+          ? String((d as any).from).trim()
+          : '') ||
+        String((d as any)?.from || '').trim();
       const myUserId = getCurrentUserId?.() ?? '';
       const isCallee = callerId && myUserId && callerId !== myUserId;
+      const callIdStr = (d as any)?.callId ? String((d as any).callId) : '';
+      // Инициатор уже закрыл Outgoing локально — server echo не должен гонять Home/nav/callLog.
+      if (!isCallee) {
+        try {
+          const at = Number((global as any).__lastOutgoingCancelAtRef?.current || 0);
+          if (at > 0 && Date.now() - at < 8000) {
+            logger.info('[App] onCallCanceled skipped (local initiator cancel settle)', {
+              callId: callIdStr || null,
+            });
+            if (callIdStr) {
+              try {
+                canceledCallsRef.current.set(callIdStr, Date.now());
+              } catch {}
+            }
+            return;
+          }
+        } catch {}
+      }
+      const liveIncomingId = String(incomingCallIdRef.current || '').trim();
+      // Поздний cancel старого callId во время нового redial — не гасить новый Incoming/UI.
+      if (callIdStr && liveIncomingId && callIdStr !== liveIncomingId) {
+        logger.info('[App] onCallCanceled stale vs live incoming — scoped native only', {
+          callIdStr,
+          liveIncomingId,
+        });
+        try { reportEndCallToCallKeep(callIdStr); } catch {}
+        try { notifyCallCanceled(callIdStr); } catch {}
+        try {
+          canceledCallsRef.current.set(callIdStr, Date.now());
+        } catch {}
+        return;
+      }
       disposeDirectCallAudioPrewarm('app:call-canceled');
       incomingCallIdRef.current = null;
-      const callIdStr = (d as any)?.callId ? String((d as any).callId) : '';
       // До notifyCallCanceled: finish Incoming сразу шлёт AppState — settle уже должен быть armed.
       if (isCallee) {
-        armHomeUiSettleSkip(2500);
+        armHomeUiSettleSkip(8000);
       }
       if (callIdStr) {
         try { reportEndCallToCallKeep(callIdStr); } catch {}
@@ -3232,39 +3293,31 @@ function AppContent() {
       if (calleeAlreadyOnHome) {
         // Натив закрываем сразу (notifyCallCanceled выше). Несколько AppState/focus подряд
         // при finish Incoming — подавляем окном settle, иначе Home мерцает 2–3 раза.
+        // Не зовём InCallManager.stop: Incoming сам гасит ringtone; stop() на Main даёт вспышку.
+        // Один проход UI: без __onVideoCallEndedRef (он даёт setFriends + loadFriends → мерцание).
         try {
-          const pipForceHidden = !!g?.__pipForceHiddenRef?.current;
-          const pipVisible = !pipForceHidden && (!!(pip as any)?.visible || !!(g?.__pipVisibleRef?.current));
-          if (!isVideoSessionRoute(routeName) && !pipVisible && Platform.OS === 'android') {
-            try { (InCallManager as any).setKeepScreenOn?.(false); } catch (_) {}
-            InCallManager.stop();
-          }
+          setIncomingCallScreenVisible(false);
         } catch (_) {}
-        const CALLEE_ON_HOME_DEFER_MS = 700;
-        setTimeout(() => {
+        try {
+          g.__videoCallPartnerUserIdRef = g.__videoCallPartnerUserIdRef || { current: null };
+          g.__videoCallPartnerUserIdRef.current = null;
+          g.__videoCallActiveRef = g.__videoCallActiveRef || { current: false };
+          g.__videoCallActiveRef.current = false;
+        } catch (_) {}
+        // Тост + missed сильно после Incoming→Main, иначе welcome мерцает вместе с badge/toast.
+        setTimeout(async () => {
+          try { emitCallCancelledOnHome(callerId); } catch (_) {}
           try {
-            setIncomingCallScreenVisible(false);
+            if (callerId) {
+              await recordMissedCallForUser(callerId, {
+                callId: callIdStr,
+                source: 'call:cancel:deferred',
+              });
+              try { await AsyncStorage.removeItem('last_incoming_from'); } catch {}
+            }
           } catch (_) {}
-          try {
-            (global as any).__videoCallPartnerUserIdRef = { current: null };
-            (global as any).__videoCallActiveRef = { current: false };
-            (global as any).__onVideoCallEndedRef?.current?.();
-          } catch (_) {}
-          // Тост и missed — отдельным кадром после стабилизации activity.
-          setTimeout(async () => {
-            try { emitCallCancelledOnHome(callerId); } catch (_) {}
-            try {
-              if (callerId) {
-                await recordMissedCallForUser(callerId, {
-                  callId: callIdStr,
-                  source: 'call:cancel:deferred',
-                });
-                try { await AsyncStorage.removeItem('last_incoming_from'); } catch {}
-              }
-            } catch (_) {}
-            clearHomeUiSettleSkip();
-          }, 180);
-        }, CALLEE_ON_HOME_DEFER_MS);
+          setTimeout(() => clearHomeUiSettleSkip(), 800);
+        }, 8000);
       } else {
         try { setIncomingCallScreenVisible(false); } catch {}
         // Сбрасываем refs активного звонка при отмене вызова
@@ -3284,7 +3337,7 @@ function AppContent() {
           setTimeout(() => clearHomeUiSettleSkip(), 1200);
         }
       }
-      // Инкремент пропущенного только у получателя (callee); для callee на Home делаем в setTimeout выше
+      // Пропущенный у получателя (callee), если дозвон успел пройти; для callee на Home — в setTimeout выше
       try {
         if (callerId && isCallee && !calleeAlreadyOnHome) {
           await recordMissedCallForUser(callerId, {
@@ -3531,18 +3584,9 @@ function AppContent() {
           const closeAcceptedCallUi = () => {
             closeOutgoingNativeShell();
             if (isCaller) {
-              const bringCallerMain = () => {
-                logger.info('[App] 📱 bringMainActivityToFront (call:accepted, caller)');
-                try { bringMainActivityToFront(); } catch {}
-              };
-              bringCallerMain();
-              InteractionManager.runAfterInteractions(() => {
-                if (typeof requestAnimationFrame === 'function') {
-                  requestAnimationFrame(bringCallerMain);
-                } else {
-                  setTimeout(bringCallerMain, 0);
-                }
-              });
+              // Один bringMain — повтор через InteractionManager только тормозил accept UI.
+              logger.info('[App] 📱 bringMainActivityToFront (call:accepted, caller)');
+              try { bringMainActivityToFront(); } catch {}
             }
           };
 
@@ -3670,26 +3714,30 @@ function AppContent() {
                 logger.error('[App] ❌ Error navigating to VideoCall', { error: err, callId: data?.callId });
               }
             };
-            const applyCallerAudioRouteAsync = async () => {
+            // Caller audio: только persist + cancel stale home reapply.
+            // Полный applyCallAudioOutputRouteNow здесь гонялся параллельно с VideoCall acceptBootstrap
+            // (return_to_audio_ui / preserve / dual earpiece) и задерживал LiveKit start.
+            const prepareCallerAudioRouteForAccept = () => {
               if (isCaller && callId && getCallMediaHint(callId) !== 'video') {
                 try {
                   markActiveCallAudioRouteCallId(String(callId));
+                  markFreshDirectCallAudioAcceptCall(String(callId));
                   armDirectAudioEarpieceStabilizeWindow();
                   clearStaleVideoSpeakerUiLockForAudioOnlyUi();
                   clearStaleHomeAudioRouteBeforeDirectCallAccept();
                   const route = resolveDirectCallAcceptAudioReapplyRoute();
                   const acceptRoute = isExternalHeadsetRoute(route) ? route : 'EARPIECE';
                   setPersistedCallAudioRoute(acceptRoute);
-                  const forceBuiltIn = acceptRoute === 'EARPIECE';
-                  await applyCallAudioOutputRouteNow(acceptRoute, {
-                    media: 'audio',
-                    forceBuiltIn,
-                  });
+                  cancelScheduledCallAudioRouteReappliesMatching([
+                    'return_to_audio_ui',
+                    'audio_home_preserve_route',
+                    'audio_home_preserve_route_deferred',
+                  ]);
                 } catch {}
               }
             };
             doNavigate();
-            void applyCallerAudioRouteAsync();
+            prepareCallerAudioRouteForAccept();
             if (isCaller) {
               closeOutgoingNativeShell({ skipMainReturn: true });
               bringCallerMainAfterVideoCallNav();
@@ -3699,11 +3747,12 @@ function AppContent() {
             if (isCaller) {
               InteractionManager.runAfterInteractions(() => {
                 try {
+                  // Только если первый navigate не успел — без второго bringMain поверх уже открытого VideoCall.
                   if (navRef.isReady() && navRef.getCurrentRoute()?.name !== 'VideoCall') {
                     flushPendingVideoCallNavigation(navRef);
                     doNavigate();
+                    bringCallerMainAfterVideoCallNav();
                   }
-                  bringCallerMainAfterVideoCallNav();
                 } catch (_) {}
               });
             }
@@ -3967,7 +4016,7 @@ function AppContent() {
                 <TouchableOpacity activeOpacity={1} onPress={(e) => e.stopPropagation()} style={overlayPermissionModalStyles.overlayPermissionCard}>
                   <View style={overlayPermissionModalStyles.overlayPermissionHeader}>
                     <View style={overlayPermissionModalStyles.overlayPermissionIconWrap}>
-                      <MaterialIcons name="lock-open" size={20} color={isDark ? accent.bright : theme.colors.primary} />
+                      <MaterialIcons name="lock-open" size={20} color={isDark ? WELCOME_NAV_ACTIVE_ICON : theme.colors.primary} />
                     </View>
                     <View style={overlayPermissionModalStyles.overlayPermissionTitleWrap}>
                       <Text style={overlayPermissionModalStyles.overlayPermissionTitle}>{t('overlayPermissionTitle', lang)}</Text>

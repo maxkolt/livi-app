@@ -1,5 +1,5 @@
-import React, { useCallback, useEffect } from 'react';
-import { Animated, AppState, Platform, Text, View } from 'react-native';
+import React, { useCallback, useRef } from 'react';
+import { AppState, Platform, Text, View } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import { Vibration } from 'react-native';
 import {
@@ -8,7 +8,7 @@ import {
 } from '../../constants/uiTokens';
 import { isCallKeepAvailable } from '../../utils/callKeep';
 import { logger } from '../../utils/logger';
-import { t, type Lang } from '../../utils/i18n';
+import { type Lang } from '../../utils/i18n';
 import { CHAT_OPEN_DEBOUNCE_MS } from './constants';
 import { FriendRowIconActionButton } from './FriendRowIconActionButton';
 import { isDirectCallSessionLive } from './friendHelpers';
@@ -173,7 +173,6 @@ export function FriendRowChatButton({
 export function FriendRowInviteButton({
   friend,
   styles,
-  lang,
   missedByUser,
   prepareFriendRowActionTap,
   handleStartFriendCall,
@@ -207,6 +206,8 @@ export function FriendRowInviteButton({
 }) {
   const friendIdStr = String(friend.id);
   const missedCount = missedByUser[friendIdStr] || 0;
+  /** Cancel→redial: стартуем на pressIn, не ждём onPress (JS может быть занят 1с+). */
+  const startedCallOnPressInRef = useRef(false);
 
   const isFriendBusy = friend.isBusy || false;
   const g = global as any;
@@ -217,49 +218,108 @@ export function FriendRowInviteButton({
   const inActiveCallWithFriend =
     activeCallInProgress && !!videoCallPartner && String(videoCallPartner) === friendIdStr;
   const busy = friendBusyBlocksCall || inActiveCallWithFriend;
-  const outgoingInProgress = calling.visible;
+  // Refs: после cancel calling.visible может ещё кадр быть true и глотать redial.
+  const outgoingInProgress = callingVisibleRef.current === true;
   const incomingInProgress = incomingCallScreen.visible;
-  const isIncomingFromThisFriend =
-    incomingInProgress &&
-    incomingCallScreen.fromUserId != null &&
-    String(incomingCallScreen.fromUserId) === friendIdStr;
-  const showBusyBadge = busy && !isIncomingFromThisFriend;
   const hardVideoDisabled = busy || incomingInProgress || activeCallInProgress;
   const videoDisabled = hardVideoDisabled || outgoingInProgress;
-  const pulse = React.useRef(new Animated.Value(0)).current;
-  useEffect(() => {
-    if (showBusyBadge) {
-      const anim = Animated.loop(
-        Animated.sequence([
-          Animated.timing(pulse, { toValue: 1, duration: 900, useNativeDriver: true }),
-          Animated.timing(pulse, { toValue: 0, duration: 900, useNativeDriver: true }),
-        ]),
-      );
-      anim.start();
-      return () => {
-        try {
-          (anim as any).stop?.();
-        } catch {}
-      };
-    } else {
-      pulse.stopAnimation();
-      pulse.setValue(0);
+
+  const runStartCall = useCallback(() => {
+    const gAfterTap = global as any;
+    const activeCallAfterTap = isDirectCallSessionLive(gAfterTap);
+    const videoCallPartnerAfterTap = gAfterTap.__videoCallPartnerUserIdRef?.current;
+    const recentlyEndedAfterTap = isRecentlyEndedCallFriend(friendIdStr);
+    const friendBusyBlocksAfterTap = friend.online && !!friend.isBusy && !recentlyEndedAfterTap;
+    const busyAfterTap =
+      friendBusyBlocksAfterTap ||
+      (activeCallAfterTap &&
+        !!videoCallPartnerAfterTap &&
+        String(videoCallPartnerAfterTap) === friendIdStr);
+    const hardVideoDisabledAfterTap =
+      busyAfterTap || incomingCallScreen.visible || activeCallAfterTap;
+    if (hardVideoDisabledAfterTap) {
+      const ending = gAfterTap.__endingCallInProgressRef?.current === true;
+      const session = gAfterTap.__webrtcSessionRef?.current;
+      const sessionEnded =
+        !session || (typeof session.isEnded === 'function' && session.isEnded());
+      const allowStaleUnlock =
+        activeCallAfterTap &&
+        !incomingCallScreen.visible &&
+        !busyAfterTap &&
+        (ending || sessionEnded);
+      if (!allowStaleUnlock) return;
+      try {
+        gAfterTap.__videoCallActiveRef = gAfterTap.__videoCallActiveRef || { current: false };
+        gAfterTap.__videoCallActiveRef.current = false;
+        gAfterTap.__videoCallPartnerUserIdRef =
+          gAfterTap.__videoCallPartnerUserIdRef || { current: null };
+        gAfterTap.__videoCallPartnerUserIdRef.current = null;
+        gAfterTap.__outgoingStartInFlightRef =
+          gAfterTap.__outgoingStartInFlightRef || { current: false };
+        gAfterTap.__outgoingStartInFlightRef.current = false;
+      } catch {}
     }
-  }, [showBusyBadge, pulse]);
+    const sameFriendOutgoing = String(calling.friend?.id || '') === friendIdStr;
+    const outgoingUiActive = callingVisibleRef.current === true;
+    const inRedialGrace =
+      Date.now() < Number((global as any).__outgoingRedialGraceUntilRef?.current || 0);
+    if (
+      outgoingUiActive &&
+      activeOutgoingAttemptRef.current > 0 &&
+      sameFriendOutgoing &&
+      !inRedialGrace
+    ) {
+      return;
+    }
+    if (outgoingUiActive && activeOutgoingAttemptRef.current > 0) {
+      const shouldResetStaleOutgoing =
+        (Platform.OS === 'android' && isCallKeepAvailable()) || inRedialGrace;
+      if (shouldResetStaleOutgoing) {
+        const currentOutgoingCallId =
+          activeOutgoingCallIdRef.current ||
+          String((global as any).__outgoingCallIdRef?.current || '').trim() ||
+          calling.callId ||
+          null;
+        if (!currentOutgoingCallId) {
+          activeOutgoingAttemptRef.current = 0;
+          activeOutgoingCallIdRef.current = null;
+          callingVisibleRef.current = false;
+        } else {
+          resetOutgoingAfterExternalClose('call-press-stale-outgoing', currentOutgoingCallId);
+        }
+      } else if (callingVisibleRef.current) {
+        return;
+      }
+    }
+    try {
+      const gTap = global as any;
+      if (
+        gTap.__outgoingStartInFlightRef?.current === true &&
+        (!callingVisibleRef.current || inRedialGrace)
+      ) {
+        gTap.__outgoingStartInFlightRef.current = false;
+      }
+    } catch {}
+    const fid = String(friend.id);
+    handleStartFriendCall(friend);
+    void clearMissedCallsForFriend(fid);
+  }, [
+    friend,
+    friendIdStr,
+    calling.friend?.id,
+    calling.callId,
+    callingVisibleRef,
+    activeOutgoingAttemptRef,
+    activeOutgoingCallIdRef,
+    incomingCallScreen.visible,
+    isRecentlyEndedCallFriend,
+    handleStartFriendCall,
+    clearMissedCallsForFriend,
+    resetOutgoingAfterExternalClose,
+  ]);
 
   return (
     <View style={styles.rightWrap}>
-      {showBusyBadge && (
-        <Animated.View
-          pointerEvents="none"
-          style={[
-            styles.busyBadge,
-            { opacity: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.65, 1] }) },
-          ]}
-        >
-          <Text style={styles.busyText}>{t('busy', lang)}</Text>
-        </Animated.View>
-      )}
       <View style={styles.friendCallActionsAnchor}>
         <FriendRowIconActionButton
           icon="phone-in-talk-outline"
@@ -272,6 +332,15 @@ export function FriendRowInviteButton({
           rescueMissedPress
           onPressIn={() => {
             prepareFriendRowActionTap();
+            const inRedialGrace =
+              Date.now() < Number((global as any).__outgoingRedialGraceUntilRef?.current || 0);
+            // После cancel — старт на касании, пока JS ещё свободен.
+            if (inRedialGrace && !hardVideoDisabled) {
+              startedCallOnPressInRef.current = true;
+              runStartCall();
+            } else {
+              startedCallOnPressInRef.current = false;
+            }
           }}
           onLongPress={
             missedCount > 0
@@ -282,47 +351,11 @@ export function FriendRowInviteButton({
               : undefined
           }
           onPress={() => {
-            const gAfterTap = global as any;
-            const activeCallAfterTap = isDirectCallSessionLive(gAfterTap);
-            const videoCallPartnerAfterTap = gAfterTap.__videoCallPartnerUserIdRef?.current;
-            const recentlyEndedAfterTap = isRecentlyEndedCallFriend(friendIdStr);
-            const friendBusyBlocksAfterTap = friend.online && !!friend.isBusy && !recentlyEndedAfterTap;
-            const busyAfterTap =
-              friendBusyBlocksAfterTap ||
-              (activeCallAfterTap &&
-                !!videoCallPartnerAfterTap &&
-                String(videoCallPartnerAfterTap) === friendIdStr);
-            const hardVideoDisabledAfterTap =
-              busyAfterTap || incomingCallScreen.visible || activeCallAfterTap;
-            if (hardVideoDisabledAfterTap) return;
-            const sameFriendOutgoing = String(calling.friend?.id || '') === friendIdStr;
-            if (
-              outgoingInProgress &&
-              activeOutgoingAttemptRef.current > 0 &&
-              sameFriendOutgoing &&
-              callingVisibleRef.current
-            ) {
+            if (startedCallOnPressInRef.current) {
+              startedCallOnPressInRef.current = false;
               return;
             }
-            if (outgoingInProgress && activeOutgoingAttemptRef.current > 0) {
-              const shouldResetStaleOutgoing = Platform.OS === 'android' && isCallKeepAvailable();
-              if (shouldResetStaleOutgoing) {
-                const currentOutgoingCallId =
-                  activeOutgoingCallIdRef.current ||
-                  String((global as any).__outgoingCallIdRef?.current || '').trim() ||
-                  calling.callId ||
-                  null;
-                if (!currentOutgoingCallId) {
-                  return;
-                }
-                resetOutgoingAfterExternalClose('call-press-stale-outgoing', currentOutgoingCallId);
-              } else if (callingVisibleRef.current) {
-                return;
-              }
-            }
-            const fid = String(friend.id);
-            clearMissedCallsForFriend(fid);
-            handleStartFriendCall(friend);
+            runStartCall();
           }}
         />
         {missedCount > 0 && actionButtonVariant !== 'welcome' && (

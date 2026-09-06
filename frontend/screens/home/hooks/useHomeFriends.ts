@@ -18,6 +18,7 @@ import {
   mapToFriend,
   mergeFriendBusyFromFetch,
 } from '../friendHelpers';
+import { shouldSkipHomeUiSettle } from '../../../utils/globalEvents';
 import type { Friend } from '../types';
 import type { HomeMenuTab } from './useHomeMenu';
 import type { WelcomeTabId } from '../HomeWelcomeTabBar';
@@ -43,8 +44,9 @@ export function useHomeFriends({
     appIsActive &&
     ((menuOpen && tab === 'friends') ||
       welcomeActiveTab === 'friends' ||
-      welcomeActiveTab === 'chat' ||
-      welcomeActiveTab === 'calls');
+      welcomeActiveTab === 'chat');
+  // Calls специально НЕ входит: call log не нуждается в fetch friends, а soft
+  // refresh@8s после открытия Calls совпадал с cancel и убивал тачи (лог loadFriends@calls).
   const [friends, setFriends] = useState<Friend[]>([]);
   const [initialized, setInitialized] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -332,23 +334,81 @@ export function useHomeFriends({
 
   /* ===== refresh friends when welcome-friends or menu friends tab open ===== */
   useEffect(() => {
-    if (friendsSurfaceActive) {
-      setInitialized(true);
-      void loadFriends();
-      const tmr = setInterval(() => void loadFriends({ includeAvatarThumbs: false }), 2 * 60_000);
+    if (!friendsSurfaceActive) return;
+    setInitialized(true);
+    let cancelled = false;
+    const recentOutgoingCancel = () => {
+      try {
+        const at = Number((global as any).__lastOutgoingCancelAtRef?.current || 0);
+        return at > 0 && Date.now() - at < 12000;
+      } catch {
+        return false;
+      }
+    };
+    // После cancel Outgoing: не fetch'ить friends — список уже есть, иначе calls/friends
+    // заметно перерисовываются, пока пользователь ждёт «Отменённый» / табы.
+    // Тап навбара clear'ит settle — поэтому ещё и recentCancelAt.
+    if (shouldSkipHomeUiSettle() || recentOutgoingCancel()) {
+      logger.info('[welcome-tab] skip loadFriends (settle after cancel)', {
+        welcomeActiveTab,
+        friendsCached: friendsRef.current.length,
+        settle: shouldSkipHomeUiSettle(),
+        recentCancel: recentOutgoingCancel(),
+      });
+      const tmr = setInterval(() => {
+        if (shouldSkipHomeUiSettle() || recentOutgoingCancel()) return;
+        void loadFriends({ includeAvatarThumbs: false });
+      }, 2 * 60_000);
       return () => clearInterval(tmr);
     }
+    const runLoad = () => {
+      if (cancelled) return;
+      // Soft timer мог быть поставлен до cancel — не грузить во время settle.
+      if (shouldSkipHomeUiSettle() || recentOutgoingCancel()) {
+        logger.info('[welcome-tab] skip loadFriends (settle soft-timer)', {
+          welcomeActiveTab,
+          friendsCached: friendsRef.current.length,
+        });
+        return;
+      }
+      logger.info('[welcome-tab] loadFriends start', {
+        welcomeActiveTab,
+        cached: friendsRef.current.length,
+        soft: friendsRef.current.length > 0,
+      });
+      void loadFriends({ includeAvatarThumbs: false });
+    };
+    // Уже есть кэш в памяти — мягкий refresh позже, без блокировки UI.
+    let softTimer: ReturnType<typeof setTimeout> | null = null;
+    if (friendsRef.current.length > 0) {
+      softTimer = setTimeout(runLoad, 8000);
+    } else {
+      runLoad();
+    }
+    const tmr = setInterval(() => {
+      if (shouldSkipHomeUiSettle() || recentOutgoingCancel()) return;
+      void loadFriends({ includeAvatarThumbs: false });
+    }, 2 * 60_000);
+    return () => {
+      cancelled = true;
+      if (softTimer) clearTimeout(softTimer);
+      clearInterval(tmr);
+    };
   }, [friendsSurfaceActive, loadFriends, setInitialized]);
 
   /* ===== warm avatar cache когда открыта вкладка друзей === */
   useEffect(() => {
-    if (friendsSurfaceActive && friends.length > 0) {
+    if (!friendsSurfaceActive || friends.length === 0) return;
+    if (shouldSkipHomeUiSettle()) return;
+    // Не на том же кадре что resume/cancel.
+    const t = setTimeout(() => {
       friends.forEach((f) => {
         if (f.avatarVer) {
           warmAvatar(f.id, f.avatarVer).catch(() => {});
         }
       });
-    }
+    }, 1200);
+    return () => clearTimeout(t);
   }, [friendsSurfaceActive, friends]);
 
   return {

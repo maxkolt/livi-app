@@ -18,6 +18,8 @@ export const WELCOME_AURA_TEXT = AURA_GRADIENT[2];
 export const CROWN_GOLD = '#E4C065';
 export const WELCOME_CARD_BG = '#161B22';
 export const WELCOME_NAV_BG = '#151921';
+/** Скругление «полки» tab bar / шапки и композера чата по краям к контенту. */
+export const WELCOME_CHROME_EDGE_RADIUS = 24;
 export const WELCOME_MUTED_TEXT = '#8B949E';
 /** Заголовки welcome (например «Друзья») — мягче чистого white. */
 export const WELCOME_HEADER_TITLE = 'rgba(244, 245, 247, 0.86)';
@@ -47,6 +49,14 @@ export const WELCOME_BRAND_VI_FILL_GRADIENT = [
   '#2a5868',
   '#4a7a8c',
 ] as const;
+
+/** Активная иконка навбара / подсветка speaker & peer-video на audio UI и in-app PiP. */
+export const WELCOME_NAV_ACTIVE_ICON = WELCOME_BRAND_VI_FILL_GRADIENT[2];
+export const WELCOME_NAV_ACTIVE_ACCENT = {
+  solid: WELCOME_NAV_ACTIVE_ICON,
+  softText: WELCOME_NAV_ACTIVE_ICON,
+  solid15: 'rgba(74, 122, 140, 0.15)',
+} as const;
 
 /** Обводка «Vi» — teal → blue. */
 export const WELCOME_BRAND_VI_STROKE_GRADIENT = [

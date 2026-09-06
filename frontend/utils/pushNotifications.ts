@@ -426,7 +426,21 @@ export async function recordMissedCallForUser(
   emitMissedIncrement(uid, next);
   logger.info('[push] recordMissedCallForUser', { uid, next, callId, source, storageN, nativeN, nativeAlreadyForCallId });
   if (!(Platform.OS === 'android' && nativeAlreadyForCallId)) {
-    await syncAppBadgeFromMissedCount();
+    const recentCancel = (() => {
+      try {
+        const at = Number((global as any).__lastOutgoingCancelAtRef?.current || 0);
+        return at > 0 && Date.now() - at < 8000;
+      } catch {
+        return false;
+      }
+    })();
+    if (recentCancel) {
+      setTimeout(() => {
+        void syncAppBadgeFromMissedCount();
+      }, 8500);
+    } else {
+      await syncAppBadgeFromMissedCount();
+    }
   }
   return true;
 }

@@ -18,6 +18,7 @@ import { logger } from '../../utils/logger';
 import { useResolvedImageUri } from '../../hooks/useResolvedImageUri';
 import { useAppTheme } from '../../theme/ThemeProvider';
 import { uiAccent } from '../../theme/uiAccent';
+import { WELCOME_NAV_ACTIVE_ACCENT } from '../../screens/home/constants';
 import {
   prepareDirectCallAudioReturnFromPiP,
   pipInAppBarEnteredFromAudioOnly,
@@ -102,7 +103,6 @@ type PiPOverlayProps = { currentRouteName?: string | null };
 
 export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
   const { isDark } = useAppTheme();
-  const accent = useMemo(() => uiAccent(isDark), [isDark]);
   const ctx = usePiPContextSafe();
   const visible = ctx?.visible ?? false;
   const returnToCall = ctx?.returnToCall ?? (() => {});
@@ -216,7 +216,7 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
     pipAudioRoute === 'SPEAKER_PHONE' ||
     pipAudioRoute === 'BLUETOOTH' ||
     pipAudioRoute === 'WIRED_HEADSET';
-  const pipRouteAccent = pipAudioRoute === 'BLUETOOTH' ? btAccent : accent;
+  const pipRouteAccent = pipAudioRoute === 'BLUETOOTH' ? btAccent : WELCOME_NAV_ACTIVE_ACCENT;
   const pipAudioRouteIconColor = pipAudioRouteHighlight ? pipRouteAccent.softText : chrome.icon;
   const pipAudioRouteIcon = iconNameForRoute(pipAudioRoute);
 
@@ -450,7 +450,7 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
                 }
                 chrome={chrome}
                 active={pipVideoReturnHighlight}
-                activeAccent={accent}
+                activeAccent={WELCOME_NAV_ACTIVE_ACCENT}
               >
                 {pipFromAudioOnly ? (
                   <MaterialCommunityIcons name="phone-in-talk" size={PIP_ICON_SIZE} color={chrome.icon} />
@@ -458,7 +458,7 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
                   <MaterialIcons
                     name="videocam"
                     size={PIP_ICON_SIZE}
-                    color={pipVideoReturnHighlight ? accent.softText : chrome.icon}
+                    color={pipVideoReturnHighlight ? WELCOME_NAV_ACTIVE_ACCENT.softText : chrome.icon}
                   />
                 )}
               </PiPActionButton>

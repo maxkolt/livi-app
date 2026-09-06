@@ -26,6 +26,8 @@ import {
 import { FriendsListCore, WELCOME_SEGMENT_ACTIVE, type FriendsListCoreProps } from './FriendsListCore';
 import { friendMatchesNameSearch } from './friendHelpers';
 import { WelcomeCrownButton } from './WelcomeCrownButton';
+import { WelcomeSelectModeHeader } from './WelcomeSelectModeHeader';
+import { welcomeSelectHaptic } from './welcomeSelectHaptic';
 import type { Friend } from './types';
 
 type FriendsFilter = 'all' | 'online';
@@ -92,6 +94,7 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
 
   const enterSelect = useCallback(
     (friendId: string) => {
+      welcomeSelectHaptic();
       closeSearch();
       setSelectMode(true);
       setSelectedIds(new Set([String(friendId)]));
@@ -139,6 +142,24 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
     if (trimmedQuery) list = list.filter((f) => friendMatchesNameSearch(f, trimmedQuery));
     return list;
   }, [allFriends, filter, trimmedQuery]);
+
+  const visibleSelectIds = useMemo(
+    () => filteredFriends.map((f) => String(f.id)),
+    [filteredFriends],
+  );
+
+  const allVisibleSelected = useMemo(
+    () => visibleSelectIds.length > 0 && visibleSelectIds.every((id) => selectedIds.has(id)),
+    [selectedIds, visibleSelectIds],
+  );
+
+  const toggleSelectAll = useCallback(() => {
+    setSelectedIds((prev) => {
+      const allOn =
+        visibleSelectIds.length > 0 && visibleSelectIds.every((id) => prev.has(id));
+      return allOn ? new Set() : new Set(visibleSelectIds);
+    });
+  }, [visibleSelectIds]);
 
   const shouldShowMenuDot = useMemo(() => {
     const unread = Object.values(unreadByUser).some((n) => n > 0);
@@ -230,34 +251,21 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
       <View style={styles.root}>
       <View style={styles.header}>
         {selectMode ? (
-          <>
-            <Pressable
-              style={({ pressed }) => [styles.iconBtn, pressed && styles.iconBtnPressed]}
-              accessibilityRole="button"
-              accessibilityLabel={t('cancelAction', lang)}
-              onPress={exitSelect}
-            >
-              <Ionicons name="close" size={22} color={LIVI.white} />
-            </Pressable>
-            <Text style={styles.selectTitle} numberOfLines={1}>
-              {String(selectedIds.size)}
-            </Text>
-            <Pressable
-              style={({ pressed }) => [
-                styles.iconBtn,
-                (deleting || selectedIds.size === 0) && styles.iconBtnDisabled,
-                pressed && selectedIds.size > 0 && !deleting && styles.iconBtnPressed,
-              ]}
-              accessibilityRole="button"
-              accessibilityLabel={L('friendsDeleteSelectedA11y')}
-              disabled={deleting || selectedIds.size === 0}
-              onPress={() => {
-                void deleteSelected();
-              }}
-            >
-              <Ionicons name="trash-outline" size={20} color={LIVI.red} />
-            </Pressable>
-          </>
+          <WelcomeSelectModeHeader
+            selectedCount={selectedIds.size}
+            visibleCount={visibleSelectIds.length}
+            allSelected={allVisibleSelected}
+            deleting={deleting}
+            cancelA11y={t('cancelAction', lang)}
+            selectAllLabel={t('chatSelectAll', lang)}
+            selectAllA11y={t('chatSelectAll', lang)}
+            deleteA11y={L('friendsDeleteSelectedA11y')}
+            onCancel={exitSelect}
+            onToggleSelectAll={toggleSelectAll}
+            onDelete={() => {
+              void deleteSelected();
+            }}
+          />
         ) : (
           <>
         <Pressable

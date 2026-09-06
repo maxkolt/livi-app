@@ -38,7 +38,7 @@ import { t, loadLang, defaultLang } from '../../utils/i18n';
 import type { Lang } from '../../utils/i18n';
 import { useAppTheme } from '../../theme/ThemeProvider';
 import { WelcomeStageBackground } from '../../screens/home/WelcomeStageBackground';
-import { WELCOME_STAGE_BG } from '../../screens/home/constants';
+import { WELCOME_NAV_ACTIVE_ACCENT, WELCOME_NAV_ACTIVE_ICON, WELCOME_STAGE_BG } from '../../screens/home/constants';
 import { uiAccent } from '../../theme/uiAccent';
 import { isValidStream } from '../../utils/streamUtils';
 import { logger } from '../../utils/logger';
@@ -474,7 +474,6 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
   const isFocused = useIsFocused();
   const insets = useSafeAreaInsets();
   const { theme, isDark } = useAppTheme();
-  const accent = useMemo(() => uiAccent(isDark), [isDark]);
   
   const [lang, setLang] = useState<Lang>(defaultLang);
   const androidScreenPadding = 4;
@@ -1268,11 +1267,12 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
           g.__directCallIncomingAcceptAudioBootstrapRef || { current: null as string | null };
         if (g.__directCallIncomingAcceptAudioBootstrapRef.current !== key) {
           g.__directCallIncomingAcceptAudioBootstrapRef.current = key;
+          // Accept happy path: one immediate apply + one short retry (was 0/250/700/1500).
           scheduleReapplyPersistedCallAudioRoute('direct_call_accept_audio_route', {
             media: 'audio',
             honorUserRoute: true,
             skipInCallRestart: true,
-            delaysMs: [0, 250, 700, 1500],
+            delaysMs: [0, 400],
           });
         }
       } catch {}
@@ -1454,7 +1454,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
         media: 'audio',
         honorUserRoute: true,
         skipInCallRestart: true,
-        delaysMs: [0, 300, 900],
+        delaysMs: [0, 400],
       });
     })();
   };
@@ -1565,7 +1565,8 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
         : selectedRoute);
   const audioRouteIcon = iconNameForRoute(audioRouteForUi);
   const btAccent = useMemo(() => uiAccent(!isDark), [isDark]);
-  const audioOutputRouteAccent = audioRouteForUi === 'BLUETOOTH' ? btAccent : accent;
+  const audioOutputRouteAccent =
+    audioRouteForUi === 'BLUETOOTH' ? btAccent : WELCOME_NAV_ACTIVE_ACCENT;
   const audioOutputRouteHighlighted =
     audioRouteForUi === 'SPEAKER_PHONE' ||
     audioRouteForUi === 'BLUETOOTH' ||
@@ -2420,12 +2421,11 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       currentCallIdRef.current = null;
       clearCallRelatedNotificationsAndSyncBadge().catch(() => {});
 
-      setTimeout(() => {
-        isEndingCallRef.current = false;
-        setIsEndingCall(false);
-        clearEndingCallInProgress();
-        logger.debug('[VideoCall] isEndingCallRef reset after deferred teardown', { source });
-      }, 1000);
+      // UI unlock immediately — don't hold isEndingCall ~1s (blocks redial feel).
+      isEndingCallRef.current = false;
+      setIsEndingCall(false);
+      clearEndingCallInProgress();
+      logger.debug('[VideoCall] isEndingCallRef reset after deferred teardown', { source });
     }, 0);
     return true;
   }, [clearSessionRefs, getGlobalCleanupKey, isPipOverlayVisibleSync, markGlobalCleanupDone, markGlobalTeardownScheduled, wasGlobalCleanupDone, wasGlobalTeardownScheduled]);
@@ -3234,6 +3234,9 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
         session.rebindVideoCallMount(config);
         sessionRef.current = session;
         (global as any).__webrtcSessionRef.current = session;
+        if (effectiveCallId) {
+          sessionBridgeCompletedForKeyRef.current = `${effectiveCallId}|${String(route?.params?.roomId || '') || String(session.getRoomId?.() || '')}`;
+        }
         setLocalCamSide(session.getCamSide?.() ?? 'front');
         setRemoteCamSide(session.getRemoteCamSide?.() ?? 'front');
         setSessionTick((t) => t + 1);
@@ -3351,10 +3354,9 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
               media: 'audio',
               honorUserRoute: true,
               skipInCallRestart: true,
-              delaysMs: [0, 250, 700, 1500],
+              delaysMs: [0, 400],
             });
             pinInitialAudioCallEarpieceRef.current({ force: true });
-            setTimeout(() => pinInitialAudioCallEarpieceRef.current({ force: true }), 450);
           };
           if (freshIncomingAccept && effectiveCallId && !callAlreadyLive) {
             runDirectCallAcceptAudioBootstrap();
@@ -3384,6 +3386,9 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
         try {
           createdSessionsRef.current.add(session as any);
         } catch {}
+        if (effectiveCallId) {
+          sessionBridgeCompletedForKeyRef.current = `${effectiveCallId}|${String(route?.params?.roomId || '') || String(session.getRoomId?.() || '')}`;
+        }
         logger.info('[VideoCall] ♻️ Rebound existing VideoCallSession to current screen (callbacks refresh)', {
           callId: effectiveCallId || session.getCallId?.(),
         });
@@ -3402,6 +3407,11 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
         createdSessionsRef.current.add(session as any);
       } catch {}
       (global as any).__webrtcSessionRef.current = session;
+      // Сразу помечаем bridge — иначе isFocused/deps re-run до конца эффекта
+      // снова идёт в полный init вместо light rebind.
+      if (effectiveCallId) {
+        sessionBridgeCompletedForKeyRef.current = `${effectiveCallId}|${String(route?.params?.roomId || '')}`;
+      }
       logger.info('[VideoCall] ✅ Глобальная ссылка на сессию установлена при создании', {
         hasSession: !!session,
         sessionType: session.constructor.name,
@@ -3869,13 +3879,12 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
         setInAudioOnlyUi(true);
         try {
           pinInitialAudioCallEarpieceRef.current({ force: true });
-          setTimeout(() => pinInitialAudioCallEarpieceRef.current({ force: true }), 450);
           scheduleDirectCallAudioRepinRef.current?.();
           scheduleReapplyPersistedCallAudioRoute('direct_call_accept_audio_route', {
             media: 'audio',
             honorUserRoute: true,
             skipInCallRestart: true,
-            delaysMs: [0, 250, 700, 1500],
+            delaysMs: [0, 400],
           });
           try {
             (global as any).__applyCallAudioRouteFromParentRef?.current?.(
@@ -4001,7 +4010,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
           media: 'audio',
           honorUserRoute: true,
           skipInCallRestart: true,
-          delaysMs: [0, 450, 1200],
+          delaysMs: [0, 400],
         });
       }
       syncPeerVideoInviteHint();
@@ -5223,12 +5232,16 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     try {
       syncRouteNowRef.current?.();
       if (opts?.pinInitialEarpiece || opts?.acceptBootstrap) {
+        cancelScheduledCallAudioRouteReappliesMatching([
+          'return_to_audio_ui',
+          'audio_home_preserve_route',
+          'audio_home_preserve_route_deferred',
+        ]);
         if (
           finalAudioRoute === 'EARPIECE' &&
           !isExternalHeadsetRoute(finalAudioRoute)
         ) {
           pinInitialAudioCallEarpieceRef.current({ force: true });
-          setTimeout(() => pinInitialAudioCallEarpieceRef.current({ force: true }), 450);
         }
         if (isExternalHeadsetRoute(finalAudioRoute)) {
           try {
@@ -5242,7 +5255,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
           media: 'audio',
           honorUserRoute: true,
           skipInCallRestart: true,
-          delaysMs: [0, 450, 1200],
+          delaysMs: [0, 400],
         });
       } else {
         if (opts?.fromPiP && shouldSkipScheduledReturnToAudioUiReapply()) {
@@ -5252,7 +5265,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
           media: 'audio',
           honorUserRoute: true,
           skipInCallRestart: true,
-          delaysMs: opts?.fromPiP ? [0, 450] : [0, 450, 1200],
+          delaysMs: [0, 400],
         });
       }
     } catch {}
@@ -5906,6 +5919,10 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
   const pulsePeerVideoButton =
     showAudioPresentation && peerInvitedVideo && !localExternalHoldUi && !partnerExternalHoldUi;
 
+  /** Как активная иконка навбара (Vi fill). */
+  const peerVideoInviteAccent = WELCOME_NAV_ACTIVE_ICON;
+  const peerVideoInviteAccentBg = WELCOME_NAV_ACTIVE_ACCENT.solid15;
+
   const controlsLockedForLocalHold = localExternalHoldUi;
   /** На video UI при GSM hold блокируем только кнопки в блоке «Вы»; «Собеседник» остаётся интерактивным. */
   const lockControlsOnAudioUiOnly = showAudioPresentation && controlsLockedForLocalHold;
@@ -5986,13 +6003,13 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       height: 64,
       borderRadius: 32,
       borderWidth: 2,
-      borderColor: accent.solid,
+      borderColor: peerVideoInviteAccent,
       opacity: peerVideoPulse.interpolate({ inputRange: [0, 1], outputRange: [0.2, 0.75] }),
       transform: [
         { scale: peerVideoPulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.14] }) },
       ],
     }),
-    [accent.solid, peerVideoPulse],
+    [peerVideoInviteAccent, peerVideoPulse],
   );
 
   const partnerDisplayName = useMemo(() => {
@@ -6964,8 +6981,8 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
                   styles.audioRoundBtn,
                   pulsePeerVideoButton && {
                     borderWidth: 1,
-                    borderColor: accent.solid,
-                    backgroundColor: accent.solid15,
+                    borderColor: peerVideoInviteAccent,
+                    backgroundColor: peerVideoInviteAccentBg,
                   },
                   controlsLockedForLocalHold && styles.audioRoundBtnLocked,
                 ]}
@@ -6976,14 +6993,14 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
                 <MaterialIcons
                   name="videocam"
                   size={28}
-                  color={pulsePeerVideoButton ? accent.softText : '#FFFFFF'}
+                  color={pulsePeerVideoButton ? peerVideoInviteAccent : '#FFFFFF'}
                 />
               </TouchableOpacity>
             </View>
           </Animated.View>
           {pulsePeerVideoButton ? (
             <Text
-              style={[styles.audioCallPeerVideoHint, { color: accent.softText }]}
+              style={[styles.audioCallPeerVideoHint, { color: peerVideoInviteAccent }]}
               {...(Platform.OS === 'android' ? { includeFontPadding: false } : {})}
             >
               {t('peerEnabledVideo', lang)}

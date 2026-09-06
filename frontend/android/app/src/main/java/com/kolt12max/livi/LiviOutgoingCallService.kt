@@ -18,9 +18,11 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import java.net.URL
+import java.lang.ref.WeakReference
 
 /**
  * Foreground-сервис исходящего вызова: воспроизводит WAV в верхнем динамике в фоне,
@@ -46,6 +48,7 @@ class LiviOutgoingCallService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        instanceRef = WeakReference(this)
         // Receiver регистрируем после первого startForeground в onStartCommand.
     }
 
@@ -133,6 +136,16 @@ class LiviOutgoingCallService : Service() {
         callId = intent?.getStringExtra(OutgoingCallActivity.EXTRA_CALL_ID) ?: ""
         toUserId = intent?.getStringExtra(OutgoingCallActivity.EXTRA_TO_USER_ID) ?: ""
         toNick = intent?.getStringExtra(OutgoingCallActivity.EXTRA_TO_NICK) ?: ""
+        val adoptOnly = intent?.getBooleanExtra(EXTRA_ADOPT_ONLY, false) == true
+
+        if (adoptOnly && callId.isNotEmpty()) {
+            this.callId = callId
+            markRinging(callId)
+            // Таймаут с реальным callId; звук уже играет с provisional.
+            scheduleTimeout()
+            android.util.Log.d(TAG, "onStartCommand: adoptOnly callId=${callId.take(24)}")
+            return START_NOT_STICKY
+        }
 
         if (pendingStopAfterForeground || callId.isEmpty()) {
             android.util.Log.d(
@@ -344,25 +357,58 @@ class LiviOutgoingCallService : Service() {
         }.start()
     }
 
+    /** Мгновенно заглушить ringback на main; stop/release — вне критического пути cancel. */
+    private fun silencePlayerNow() {
+        try {
+            mediaPlayer?.setVolume(0f, 0f)
+        } catch (_: Exception) {}
+        try {
+            mediaPlayer?.pause()
+        } catch (_: Exception) {}
+    }
+
+    private fun releasePlayerAsync() {
+        val mp = mediaPlayer
+        mediaPlayer = null
+        if (mp == null) return
+        Thread({
+            try {
+                if (mp.isPlaying) mp.stop()
+            } catch (_: Exception) {}
+            try {
+                mp.release()
+            } catch (_: Exception) {}
+        }, "livi-ringback-release").start()
+    }
+
     override fun onDestroy() {
+        val t0 = SystemClock.elapsedRealtime()
         markNotRinging()
         closeReceiver?.let { try { unregisterReceiver(it) } catch (_: Exception) {} }
         closeReceiver = null
         timeoutRunnable?.let { mainHandler.removeCallbacks(it) }
         timeoutRunnable = null
-        try {
-            mediaPlayer?.apply {
-                if (isPlaying) stop()
-                release()
-            }
-        } catch (_: Exception) {}
-        mediaPlayer = null
-        try {
-            val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
-            releaseRingbackAudioFocus(am)
-            am.mode = savedAudioMode
-            am.isSpeakerphoneOn = savedSpeakerphone
-        } catch (_: Exception) {}
+        silencePlayerNow()
+        releasePlayerAsync()
+        // AudioManager restore НЕ на main: на части OEM mode/focus блокирует тачи на секунды.
+        val savedMode = savedAudioMode
+        val savedSpeaker = savedSpeakerphone
+        Thread({
+            try {
+                val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                releaseRingbackAudioFocus(am)
+                am.mode = savedMode
+                am.isSpeakerphoneOn = savedSpeaker
+            } catch (_: Exception) {}
+            android.util.Log.d(
+                TAG,
+                "onDestroy audio restore done elapsedMs=${SystemClock.elapsedRealtime() - t0}",
+            )
+        }, "livi-audio-restore").start()
+        android.util.Log.d(TAG, "onDestroy quick exit elapsedMs=${SystemClock.elapsedRealtime() - t0}")
+        if (instanceRef?.get() === this) {
+            instanceRef = null
+        }
         super.onDestroy()
     }
 
@@ -377,6 +423,50 @@ class LiviOutgoingCallService : Service() {
         private var ringingActive: Boolean = false
         @Volatile
         private var ringingCallId: String = ""
+
+        private var instanceRef: WeakReference<LiviOutgoingCallService>? = null
+
+        /**
+         * Cancel path: mute instantly, then stop via broadcast (onDestroy release async).
+         * Не блокирует UI-поток MediaPlayer.stop/release.
+         * Stale stop после redial: не mute/CLOSE нового дозвона.
+         */
+        @JvmStatic
+        fun silenceAndStop(context: Context, callId: String?) {
+            val id = callId?.trim().orEmpty()
+            if (
+                id.isNotEmpty() &&
+                ringingActive &&
+                ringingCallId.isNotEmpty() &&
+                ringingCallId != id
+            ) {
+                android.util.Log.d(
+                    TAG,
+                    "silenceAndStop: skip stale id=${id.take(24)} ringing=${ringingCallId.take(24)}",
+                )
+                return
+            }
+            silencePlayerOnly()
+            if (id.isEmpty()) {
+                android.util.Log.d(TAG, "silenceAndStop: empty callId — muted only")
+                return
+            }
+            stop(context, id)
+        }
+
+        /** Только mute + сброс ringing flag — без stopForeground/broadcast (для мгновенного X). */
+        @JvmStatic
+        fun silencePlayerOnly() {
+            try {
+                instanceRef?.get()?.silencePlayerNow()
+            } catch (_: Exception) {}
+            markNotRingingStatic()
+        }
+
+        private fun markNotRingingStatic() {
+            ringingActive = false
+            ringingCallId = ""
+        }
 
         /** Живой дозвон (сервис играет ringback). Без этого prefs не должны поднимать Outgoing с лаунчера. */
         @JvmStatic
@@ -403,6 +493,45 @@ class LiviOutgoingCallService : Service() {
                 context.startService(intent)
             }
         }
+
+        /**
+         * callId с сервера пришёл после provisional ringback (`pending_*`).
+         * Не перезапускаем сервис/звук — только перепривязываем id, иначе redial «думает» до notifyOutgoingCallId.
+         */
+        @JvmStatic
+        fun adoptRealCallId(context: Context, newCallId: String, toUserId: String, toNick: String): Boolean {
+            val id = newCallId.trim()
+            if (id.isEmpty()) return false
+            if (ringingActive && (ringingCallId.startsWith("pending_") || ringingCallId == id)) {
+                ringingCallId = id
+                android.util.Log.d(TAG, "adoptRealCallId: rebound ringing to ${id.take(24)}")
+                // Обновить prefs/notification context без stop/start MediaPlayer.
+                try {
+                    LiviOngoingCallHelper.setOutgoingCall(context, id, toUserId, toNick)
+                } catch (_: Exception) {}
+                // Дёрнуть onStartCommand с новым callId, но startSound уже играет —
+                // передаём EXTRA_ADOPT_ONLY чтобы не рестартить плеер.
+                val intent = Intent(context, LiviOutgoingCallService::class.java).apply {
+                    putExtra(OutgoingCallActivity.EXTRA_CALL_ID, id)
+                    putExtra(OutgoingCallActivity.EXTRA_TO_USER_ID, toUserId)
+                    putExtra(OutgoingCallActivity.EXTRA_TO_NICK, toNick)
+                    putExtra(EXTRA_ADOPT_ONLY, true)
+                }
+                try {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        context.startForegroundService(intent)
+                    } else {
+                        context.startService(intent)
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.w(TAG, "adoptRealCallId startService failed", e)
+                }
+                return true
+            }
+            return false
+        }
+
+        private const val EXTRA_ADOPT_ONLY = "adopt_only"
 
         /**
          * Закрытие через broadcast — сервис сам stopSelf после startForeground.

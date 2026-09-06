@@ -495,6 +495,28 @@ function resolvePreserveCallAudioRoute(): InCallAudioRoute {
 }
 
 function schedulePreserveCallAudioRoute(reason: string, media?: 'audio' | 'video'): void {
+  // Fresh accept / incoming answer: не ставить audio_home_preserve поверх bootstrap.
+  try {
+    const incoming = (global as any).__incomingAnswerTransitionRef?.current;
+    if (incoming && Number(incoming.expiresAt || 0) > Date.now()) {
+      return;
+    }
+  } catch {}
+  try {
+    const freshAcceptId = String(
+      (global as any).__freshDirectCallAudioAcceptCallIdRef?.current || '',
+    ).trim();
+    const bootstrappedId = String(
+      (global as any).__directCallAudioAcceptBootstrappedCallIdRef?.current || '',
+    ).trim();
+    // Пока audio accept ещё не bootstrapped — preserve только мешает.
+    if (freshAcceptId && freshAcceptId !== bootstrappedId) {
+      return;
+    }
+  } catch {}
+  if (isCallAudioBootstrapPending()) {
+    return;
+  }
   if (shouldDeferPreserveDuringCallBootstrap()) {
     armCallAudioPreservePriority();
     scheduleReapplyPersistedCallAudioRoute('audio_home_preserve_route_deferred', {

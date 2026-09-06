@@ -37,6 +37,8 @@ import { useChatPreviews } from './hooks/useChatPreviews';
 import { formatWelcomeChatTime } from './chatPreview';
 import { clearWelcomeChatsForMe } from './clearWelcomeChats';
 import { WelcomeCrownButton } from './WelcomeCrownButton';
+import { WelcomeSelectModeHeader } from './WelcomeSelectModeHeader';
+import { welcomeSelectHaptic } from './welcomeSelectHaptic';
 import type { Friend } from './types';
 import type { NoticeKind } from './hooks';
 
@@ -45,6 +47,8 @@ type ChatsFilter = 'all' | 'unread';
 export type HomeWelcomeChatsViewProps = {
   lang: Lang;
   L: (key: string) => string;
+  /** Видима ли вкладка — иначе не грузим AsyncStorage превью (keep-alive без лагов). */
+  active?: boolean;
   allFriends: Friend[];
   unreadByUser: Record<string, number>;
   missedByUser: Record<string, number>;
@@ -68,6 +72,7 @@ export type HomeWelcomeChatsViewProps = {
 function HomeWelcomeChatsViewInner({
   lang,
   L,
+  active = true,
   allFriends,
   unreadByUser,
   missedByUser,
@@ -93,7 +98,7 @@ function HomeWelcomeChatsViewInner({
 
   const trimmedQuery = searchQuery.trim();
   const friendIds = useMemo(() => allFriends.map((f) => String(f.id)), [allFriends]);
-  const { previews, reloadPreviews, dropPreviews } = useChatPreviews(friendIds, lang, true);
+  const { previews, reloadPreviews, dropPreviews } = useChatPreviews(friendIds, lang, active);
 
   const closeSearch = useCallback(() => {
     skipSearchDismissRef.current = true;
@@ -113,6 +118,7 @@ function HomeWelcomeChatsViewInner({
 
   const enterSelect = useCallback(
     (friendId: string) => {
+      welcomeSelectHaptic();
       closeSearch();
       setSelectMode(true);
       setSelectedIds(new Set([String(friendId)]));
@@ -156,8 +162,9 @@ function HomeWelcomeChatsViewInner({
 
   useFocusEffect(
     useCallback(() => {
+      if (!active) return;
       void reloadPreviews();
-    }, [reloadPreviews]),
+    }, [active, reloadPreviews]),
   );
 
   const toggleSearch = useCallback(() => {
@@ -214,6 +221,24 @@ function HomeWelcomeChatsViewInner({
       return aName.localeCompare(bName);
     });
   }, [allFriends, filter, trimmedQuery, unreadByUser, previews]);
+
+  const visibleSelectIds = useMemo(
+    () => filteredChats.map((f) => String(f.id)),
+    [filteredChats],
+  );
+
+  const allVisibleSelected = useMemo(
+    () => visibleSelectIds.length > 0 && visibleSelectIds.every((id) => selectedIds.has(id)),
+    [selectedIds, visibleSelectIds],
+  );
+
+  const toggleSelectAll = useCallback(() => {
+    setSelectedIds((prev) => {
+      const allOn =
+        visibleSelectIds.length > 0 && visibleSelectIds.every((id) => prev.has(id));
+      return allOn ? new Set() : new Set(visibleSelectIds);
+    });
+  }, [visibleSelectIds]);
 
   const emptyLabel = useMemo(() => {
     if (trimmedQuery) return L('chatsSearchEmpty');
@@ -400,34 +425,21 @@ function HomeWelcomeChatsViewInner({
       <View style={styles.root}>
         <View style={styles.header}>
           {selectMode ? (
-            <>
-              <Pressable
-                style={({ pressed }) => [styles.iconBtn, pressed && styles.iconBtnPressed]}
-                accessibilityRole="button"
-                accessibilityLabel={t('cancelAction', lang)}
-                onPress={exitSelect}
-              >
-                <Ionicons name="close" size={22} color={LIVI.white} />
-              </Pressable>
-              <Text style={styles.selectTitle} numberOfLines={1}>
-                {String(selectedIds.size)}
-              </Text>
-              <Pressable
-                style={({ pressed }) => [
-                  styles.iconBtn,
-                  (deleting || selectedIds.size === 0) && styles.iconBtnDisabled,
-                  pressed && selectedIds.size > 0 && !deleting && styles.iconBtnPressed,
-                ]}
-                accessibilityRole="button"
-                accessibilityLabel={L('chatsDeleteSelectedA11y')}
-                disabled={deleting || selectedIds.size === 0}
-                onPress={() => {
-                  void deleteSelected();
-                }}
-              >
-                <Ionicons name="trash-outline" size={20} color={LIVI.red} />
-              </Pressable>
-            </>
+            <WelcomeSelectModeHeader
+              selectedCount={selectedIds.size}
+              visibleCount={visibleSelectIds.length}
+              allSelected={allVisibleSelected}
+              deleting={deleting}
+              cancelA11y={t('cancelAction', lang)}
+              selectAllLabel={t('chatSelectAll', lang)}
+              selectAllA11y={t('chatSelectAll', lang)}
+              deleteA11y={L('chatsDeleteSelectedA11y')}
+              onCancel={exitSelect}
+              onToggleSelectAll={toggleSelectAll}
+              onDelete={() => {
+                void deleteSelected();
+              }}
+            />
           ) : (
             <>
               <Pressable

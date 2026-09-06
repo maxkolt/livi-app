@@ -153,10 +153,21 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 (getSystemService(Context.POWER_SERVICE) as? PowerManager)?.isInteractive == true
             } catch (_: Exception) { true }
             vLog("[INCOMING_CALL] FCM call push: callId=$callId keyguardLocked=$keyguardLocked isInteractive=$isInteractive")
-            // Пропуск только если пользователь прямо сейчас смотрит на экран входящего (дубликат пуша или тот же звонок). Иначе показываем — в т.ч. повторный звонок после отмены/сообщения.
+            // Пропуск только тот же callId, уже на экране. Другой callId — закрыть старый и показать новый
+            // (иначе после cancel→redial Incoming «висит» на старом, а новый не открывается / мелькает).
             if (IncomingCallActivity.isInForeground) {
-                Log.i(TAG, "[INCOMING_CALL] SKIP IncomingCallActivity already in foreground callId=$callId")
-                return
+                val activeId = IncomingCallActivity.activeCallId
+                if (activeId.isNotBlank() && activeId == callId) {
+                    Log.i(TAG, "[INCOMING_CALL] SKIP IncomingCallActivity already in foreground callId=$callId")
+                    return
+                }
+                Log.i(
+                    TAG,
+                    "[INCOMING_CALL] replace foreground incoming active=$activeId → new=$callId",
+                )
+                try {
+                    deliverIncomingCallCanceled(applicationContext, activeId)
+                } catch (_: Exception) {}
             }
             Log.i(TAG, "[INCOMING_CALL] proceed callId=$callId keyguardLocked=$keyguardLocked isInteractive=$isInteractive")
             vLog("[INCOMING_CALL] proceeding: main thread → dismiss → startActivity → FGS")
@@ -184,6 +195,13 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 ensureCallChannel(this@LiviFirebaseMessagingService)
                 try {
                     LiviAppModule.beginBackgroundMediaSuppressionStatic(this@LiviFirebaseMessagingService)
+                } catch (_: Exception) {}
+                // Перед новым Incoming закрыть чужой active (socket+FCM race после cancel).
+                try {
+                    val activeId = IncomingCallActivity.activeCallId
+                    if (IncomingCallActivity.isAlive && activeId.isNotBlank() && activeId != callId) {
+                        deliverIncomingCallCanceled(this@LiviFirebaseMessagingService, activeId)
+                    }
                 } catch (_: Exception) {}
                 try {
                     val launchIntent = buildIncomingCallActivityIntent(
@@ -1051,19 +1069,48 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                     } catch (_: Exception) {}
                 }, delayMs)
             }
-            // Fallback: receiver мог не успеть зарегистрироваться (ранний cancel).
+            // Fallback JUST_CLOSE только если Incoming ещё жив И Main не наверху.
+            // startActivity(JUST_CLOSE) при Main foreground = REORDER Incoming → мерцание.
+            // При Main fg — ещё broadcast; JUST_CLOSE — last resort, если экран всё ещё alive.
             handler.postDelayed({
                 if (!(IncomingCallActivity.isAlive && IncomingCallActivity.activeCallId == callId)) return@postDelayed
+                if (MainActivity.isInForeground) {
+                    try {
+                        context.sendBroadcast(cancelIntent)
+                    } catch (_: Exception) {}
+                    handler.postDelayed({
+                        if (!(IncomingCallActivity.isAlive && IncomingCallActivity.activeCallId == callId)) return@postDelayed
+                        // Main всё ещё fg, Incoming залип — закрыть без анимации (редко).
+                        try {
+                            val closeIntent = buildIncomingCallActivityIntent(context, callId, from, fromNick).apply {
+                                putExtra(IncomingCallActivity.EXTRA_JUST_CLOSE, true)
+                                addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION)
+                            }
+                            context.startActivity(closeIntent)
+                            Log.d(
+                                TAG,
+                                "deliverIncomingCallCanceled: last-resort JUST_CLOSE callId=$callId mainFg=true",
+                            )
+                        } catch (e: Exception) {
+                            Log.w(TAG, "deliverIncomingCallCanceled JUST_CLOSE failed callId=$callId", e)
+                        }
+                    }, 800L)
+                    return@postDelayed
+                }
                 try {
                     val closeIntent = buildIncomingCallActivityIntent(context, callId, from, fromNick).apply {
                         putExtra(IncomingCallActivity.EXTRA_JUST_CLOSE, true)
+                        addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION)
                     }
                     context.startActivity(closeIntent)
-                    Log.d(TAG, "deliverIncomingCallCanceled: delayed JUST_CLOSE fallback callId=$callId")
+                    Log.d(
+                        TAG,
+                        "deliverIncomingCallCanceled: delayed JUST_CLOSE fallback callId=$callId mainFg=false",
+                    )
                 } catch (e: Exception) {
                     Log.w(TAG, "deliverIncomingCallCanceled JUST_CLOSE failed callId=$callId", e)
                 }
-            }, 400L)
+            }, 900L)
         }
 
         /** Intent для IncomingCallActivity (поверх блокировки и домашнего экрана). */

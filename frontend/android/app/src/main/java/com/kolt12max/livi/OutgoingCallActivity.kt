@@ -60,6 +60,7 @@ class OutgoingCallActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         ScreenOrientationHelper.applyPhonePortraitTabletAny(this)
         super.onCreate(savedInstanceState)
+        isAlive = true
         EdgeToEdgeHelper.apply(this)
         val closeImmediately = intent.getBooleanExtra(EXTRA_CLOSE_IMMEDIATELY, false)
         Log.d(TAG, "onCreate: closeImmediately=$closeImmediately callId=${intent.getStringExtra(EXTRA_CALL_ID) ?: ""} toUserId=${intent.getStringExtra(EXTRA_TO_USER_ID) ?: ""}")
@@ -93,6 +94,11 @@ class OutgoingCallActivity : AppCompatActivity() {
         if (callId.isNotEmpty()) {
             LiviOutgoingCallService.start(this, callId, toUserId, toNick)
         } else {
+            // Сразу ringback, не ждать call:initiate — иначе cancel→redial «думает» до notifyOutgoingCallId.
+            val provisionalId = "pending_${System.currentTimeMillis()}"
+            callId = provisionalId
+            LiviOngoingCallHelper.setOutgoingCall(this, provisionalId, toUserId, toNick)
+            LiviOutgoingCallService.start(this, provisionalId, toUserId, toNick)
             callIdReadyReceiver = object : BroadcastReceiver() {
                 override fun onReceive(context: Context?, intent: Intent?) {
                     val id = intent?.getStringExtra(EXTRA_CALL_ID) ?: return
@@ -100,9 +106,16 @@ class OutgoingCallActivity : AppCompatActivity() {
                     if (id.isNotEmpty()) {
                         callIdEmptyTimeoutRunnable?.let { timeoutHandler.removeCallbacks(it) }
                         callIdEmptyTimeoutRunnable = null
+                        val prev = this@OutgoingCallActivity.callId
                         this@OutgoingCallActivity.callId = id
                         LiviOngoingCallHelper.setOutgoingCall(this@OutgoingCallActivity, id, toUserId, toNick)
-                        LiviOutgoingCallService.start(this@OutgoingCallActivity, id, toUserId, toNick)
+                        if (!LiviOutgoingCallService.adoptRealCallId(this@OutgoingCallActivity, id, toUserId, toNick)) {
+                            // Provisional не играл — обычный старт.
+                            if (prev.startsWith("pending_")) {
+                                LiviOutgoingCallService.stop(this@OutgoingCallActivity, prev)
+                            }
+                            LiviOutgoingCallService.start(this@OutgoingCallActivity, id, toUserId, toNick)
+                        }
                         callIdReadyReceiver?.let { try { unregisterReceiver(it) } catch (_: Exception) {} }
                         callIdReadyReceiver = null
                     }
@@ -117,8 +130,9 @@ class OutgoingCallActivity : AppCompatActivity() {
             // Холодный старт: если callId так и не пришёл (нет реального исходящего вызова) — закрыть экран. 27 сек — как серверный таймаут входящего.
             callIdEmptyTimeoutRunnable = Runnable {
                 callIdEmptyTimeoutRunnable = null
-                if (this@OutgoingCallActivity.callId.isEmpty()) {
-                    Log.d(TAG, "No callId received within timeout, finishing (cold start without real call)")
+                if (this@OutgoingCallActivity.callId.startsWith("pending_")) {
+                    Log.d(TAG, "No real callId received within timeout, finishing (cold start without real call)")
+                    LiviOutgoingCallService.stop(this@OutgoingCallActivity, this@OutgoingCallActivity.callId)
                     finish()
                 }
             }
@@ -132,15 +146,27 @@ class OutgoingCallActivity : AppCompatActivity() {
             // Только локальный callId Activity. peekOutgoingCall опасен при redial:
             // prefs уже новый звонок → HTTP cancel убьёт его на сервере.
             val effectiveCallId = callId
-            LiviAppModule.emitOutgoingCallCanceledByUser(effectiveCallId)
-            if (effectiveCallId.isNotEmpty()) {
+            LiviAppModule.emitOutgoingCallCanceledByUser(
+                if (effectiveCallId.startsWith("pending_")) "" else effectiveCallId,
+            )
+            if (effectiveCallId.isNotEmpty() && !effectiveCallId.startsWith("pending_")) {
                 LiviOutgoingCallService.cancelCallOnServer(this, effectiveCallId)
             }
-            LiviOutgoingCallService.stop(this, effectiveCallId)
+            // Сначала finish (вернуть Main), потом ringback stop — иначе MediaPlayer на main
+            // держит UI до resume и RN таймеры/тачи «спят» секунды.
             mainReturnScheduledForUserCancel = true
-            returnMainActivityImmediately()
-            LiviAppModule.scheduleMainActivityAfterOutgoingUserCancel(applicationContext)
+            // Same-task Outgoing (!isTaskRoot): достаточно finish() — Main уже под ним.
+            // returnMain+CLEAR_TOP раньше пересоздавал Main → RN freeze 5–7с.
+            if (isTaskRoot && !MainActivity.isInForeground) {
+                returnMainActivityImmediately()
+            }
             finish()
+            // Mute/stop строго вне UI-кадра finish/resume Main.
+            Thread({
+                try {
+                    LiviOutgoingCallService.silenceAndStop(applicationContext, effectiveCallId)
+                } catch (_: Exception) {}
+            }, "livi-outgoing-silence").start()
         }
 
         closeReceiver = object : BroadcastReceiver() {
@@ -194,6 +220,7 @@ class OutgoingCallActivity : AppCompatActivity() {
         // Повторное нажатие «Видеозвонок» после отмены/таймаута: обновляем экран под новый вызов
         val newToUserId = intent.getStringExtra(EXTRA_TO_USER_ID) ?: ""
         val newToNick = intent.getStringExtra(EXTRA_TO_NICK) ?: ""
+        val newHasVideo = intent.getBooleanExtra(EXTRA_HAS_VIDEO, true)
         val previousCallId = callId
         callId = newCallId
         toUserId = newToUserId
@@ -202,6 +229,7 @@ class OutgoingCallActivity : AppCompatActivity() {
         // Гасим только предыдущий ringback, не unscoped (иначе убьём только что стартовавший).
         LiviOutgoingCallService.stop(this, previousCallId)
         findViewById<TextView>(R.id.callee_name).text = if (newToNick.isNotEmpty()) newToNick else getString(R.string.outgoing_call_title)
+        findViewById<TextView>(R.id.call_subtitle)?.let { startDotsAnimation(it, newHasVideo) }
         if (newCallId.isNotEmpty()) {
             callIdEmptyTimeoutRunnable?.let { timeoutHandler.removeCallbacks(it) }
             callIdEmptyTimeoutRunnable = null
@@ -209,16 +237,30 @@ class OutgoingCallActivity : AppCompatActivity() {
             callIdReadyReceiver = null
             LiviOutgoingCallService.start(this, newCallId, newToUserId, newToNick)
         } else {
+            // Replace/redial: сразу provisional ringback, как в onCreate.
+            callIdEmptyTimeoutRunnable?.let { timeoutHandler.removeCallbacks(it) }
+            callIdEmptyTimeoutRunnable = null
             callIdReadyReceiver?.let { try { unregisterReceiver(it) } catch (_: Exception) {} }
+            callIdReadyReceiver = null
+            val provisionalId = "pending_${System.currentTimeMillis()}"
+            callId = provisionalId
+            LiviOngoingCallHelper.setOutgoingCall(this, provisionalId, newToUserId, newToNick)
+            LiviOutgoingCallService.start(this, provisionalId, newToUserId, newToNick)
             callIdReadyReceiver = object : BroadcastReceiver() {
                 override fun onReceive(context: Context?, rcvIntent: Intent?) {
                     val id = rcvIntent?.getStringExtra(EXTRA_CALL_ID) ?: return
                     if (id.isNotEmpty()) {
                         callIdEmptyTimeoutRunnable?.let { timeoutHandler.removeCallbacks(it) }
                         callIdEmptyTimeoutRunnable = null
+                        val prev = this@OutgoingCallActivity.callId
                         this@OutgoingCallActivity.callId = id
                         LiviOngoingCallHelper.setOutgoingCall(this@OutgoingCallActivity, id, toUserId, toNick)
-                        LiviOutgoingCallService.start(this@OutgoingCallActivity, id, toUserId, toNick)
+                        if (!LiviOutgoingCallService.adoptRealCallId(this@OutgoingCallActivity, id, toUserId, toNick)) {
+                            if (prev.startsWith("pending_")) {
+                                LiviOutgoingCallService.stop(this@OutgoingCallActivity, prev)
+                            }
+                            LiviOutgoingCallService.start(this@OutgoingCallActivity, id, toUserId, toNick)
+                        }
                         callIdReadyReceiver?.let { try { unregisterReceiver(it) } catch (_: Exception) {} }
                         callIdReadyReceiver = null
                     }
@@ -232,8 +274,9 @@ class OutgoingCallActivity : AppCompatActivity() {
             }
             callIdEmptyTimeoutRunnable = Runnable {
                 callIdEmptyTimeoutRunnable = null
-                if (this@OutgoingCallActivity.callId.isEmpty()) {
-                    Log.d(TAG, "No callId received within timeout (onNewIntent), finishing")
+                if (this@OutgoingCallActivity.callId.startsWith("pending_")) {
+                    Log.d(TAG, "No real callId received within timeout (onNewIntent), finishing")
+                    LiviOutgoingCallService.stop(this@OutgoingCallActivity, this@OutgoingCallActivity.callId)
                     finish()
                 }
             }
@@ -247,11 +290,17 @@ class OutgoingCallActivity : AppCompatActivity() {
             return
         }
         finishRequested = true
+        // Раньше onDestroy: cancel→redial не ждёт 120ms close+delay пока isAlive ещё true.
+        isAlive = false
+        // До super.finish(): после finish isTaskRoot уже бессмысленен.
+        val needsMainReorder = !mainReturnScheduledForUserCancel && isTaskRoot
         super.finish()
         // Убираем системную анимацию закрытия, чтобы не было "мерцания/уезда" Home
         // при возврате с нативного экрана исходящего вызова.
         overridePendingTransition(0, 0)
-        if (!mainReturnScheduledForUserCancel) {
+        // Same-task: Main под Outgoing — scheduleMain не нужен (и даёт AppState churn).
+        // Отдельный task (was task root) без user-cancel return — поднять Main, иначе лаунчер.
+        if (needsMainReorder) {
             LiviAppModule.scheduleMainActivityAfterOutgoingClose(applicationContext)
         }
     }
@@ -262,8 +311,8 @@ class OutgoingCallActivity : AppCompatActivity() {
      */
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
-        if (suppressMoveToBackOnUserLeaveHint) {
-            Log.d(TAG, "onUserLeaveHint: skip moveTaskToBack for internal MainActivity return")
+        if (suppressMoveToBackOnUserLeaveHint || finishRequested || isFinishing || mainReturnScheduledForUserCancel) {
+            Log.d(TAG, "onUserLeaveHint: skip moveTaskToBack (finishing/cancel/internal)")
             return
         }
         moveTaskToBack(true)
@@ -272,10 +321,11 @@ class OutgoingCallActivity : AppCompatActivity() {
     private fun returnMainActivityImmediately() {
         suppressMoveToBackOnUserLeaveHint = true
         try {
+            // Без CLEAR_TOP: иначе Main пересоздаётся → RN remount 5–7с (табы/redial «мёртвые»).
+            // REORDER_TO_FRONT + SINGLE_TOP достаточно вернуть уже живой Main.
             val mainIntent = Intent(this, MainActivity::class.java).apply {
                 addFlags(
-                    Intent.FLAG_ACTIVITY_CLEAR_TOP
-                        or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                    Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
                         or Intent.FLAG_ACTIVITY_SINGLE_TOP
                         or Intent.FLAG_ACTIVITY_NO_ANIMATION
                 )
@@ -320,6 +370,7 @@ class OutgoingCallActivity : AppCompatActivity() {
         closeReceiver = null
         callIdReadyReceiver?.let { try { unregisterReceiver(it) } catch (_: Exception) {} }
         callIdReadyReceiver = null
+        isAlive = false
         super.onDestroy()
     }
 
@@ -402,5 +453,8 @@ class OutgoingCallActivity : AppCompatActivity() {
         const val ACTION_CLOSE_OUTGOING_CALL = "com.kolt12max.livi.CLOSE_OUTGOING_CALL"
         /** Broadcast: JS получил callId с сервера — запустить сервис (звук, таймаут). */
         const val ACTION_OUTGOING_CALL_ID_READY = "com.kolt12max.livi.OUTGOING_CALL_ID_READY"
+        /** true пока экземпляр OutgoingCallActivity существует (cancel→redial: без лишней паузы close+delay). */
+        @JvmField
+        var isAlive: Boolean = false
     }
 }

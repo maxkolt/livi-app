@@ -30,11 +30,13 @@ import {
   WELCOME_BRAND_VI_FILL_GRADIENT,
 } from './constants';
 import { WELCOME_SEGMENT_ACTIVE } from './FriendsListCore';
-import { friendMatchesNameSearch, getFriendDisplay } from './friendHelpers';
+import { friendMatchesNameSearch, getFriendDisplay, displayAvatarLetter } from './friendHelpers';
 import { formatWelcomeChatTime } from './chatPreview';
 import { useCallLog } from './hooks/useCallLog';
 import { deleteCallLogIds, recordCallLog } from './callLog';
 import { WelcomeCrownButton } from './WelcomeCrownButton';
+import { WelcomeSelectModeHeader } from './WelcomeSelectModeHeader';
+import { welcomeSelectHaptic } from './welcomeSelectHaptic';
 import type { CallLogDirection, CallLogEntry } from './callLog';
 import type { Friend } from './types';
 import type { NoticeKind } from './hooks';
@@ -126,8 +128,8 @@ function HomeWelcomeCallsViewInner({
   const clearedOnOpenRef = useRef(false);
 
   const trimmedQuery = searchQuery.trim();
-  // Журнал греем заранее (pane keep-alive) — список готов до тапа на вкладку.
-  const logEntries = useCallLog(true);
+  // Журнал только когда вкладка видна — иначе notify после cancel перерисовывает скрытый FlatList.
+  const logEntries = useCallLog(active);
 
   const friendsById = useMemo(() => {
     const map = new Map<string, Friend>();
@@ -178,6 +180,7 @@ function HomeWelcomeCallsViewInner({
 
   const enterSelect = useCallback(
     (rowId: string) => {
+      welcomeSelectHaptic();
       closeSearch();
       closePick();
       setSelectMode(true);
@@ -289,6 +292,24 @@ function HomeWelcomeCallsViewInner({
     return list;
   }, [allFriends, filter, friendsById, logEntries, missedByUser, pickMode, trimmedQuery]);
 
+  const visibleSelectIds = useMemo(
+    () => (pickMode ? [] : rows.map((row) => row.id)),
+    [pickMode, rows],
+  );
+
+  const allVisibleSelected = useMemo(
+    () => visibleSelectIds.length > 0 && visibleSelectIds.every((id) => selectedIds.has(id)),
+    [selectedIds, visibleSelectIds],
+  );
+
+  const toggleSelectAll = useCallback(() => {
+    setSelectedIds((prev) => {
+      const allOn =
+        visibleSelectIds.length > 0 && visibleSelectIds.every((id) => prev.has(id));
+      return allOn ? new Set() : new Set(visibleSelectIds);
+    });
+  }, [visibleSelectIds]);
+
   const emptyLabel = useMemo(() => {
     if (pickMode) {
       if (trimmedQuery) return L('callsSearchEmpty');
@@ -302,8 +323,9 @@ function HomeWelcomeCallsViewInner({
   const startCall = useCallback(
     (friend: Friend) => {
       prepareFriendRowActionTap();
-      void clearMissedCallsForFriend(String(friend.id));
+      // Сначала native UI, badge — после (не блокировать redial).
       handleStartFriendCall(friend);
+      void clearMissedCallsForFriend(String(friend.id));
       if (pickMode) closePick();
     },
     [clearMissedCallsForFriend, closePick, handleStartFriendCall, pickMode, prepareFriendRowActionTap],
@@ -348,8 +370,13 @@ function HomeWelcomeCallsViewInner({
       const { displayName, avatarLetter } = friend
         ? getFriendDisplay(friend)
         : { displayName: t('user', lang), avatarLetter: '—' };
+      const avatarFallback =
+        avatarLetter ||
+        (friend?.name ? displayAvatarLetter(friend.name) : '') ||
+        '—';
       const timeLabel = item.at ? formatWelcomeChatTime(item.at) : '';
       const missed = item.direction === 'missed';
+      const cancelled = item.direction === 'cancelled';
       const statusLabel =
         item.direction === 'outgoing'
           ? L('callsOutgoing')
@@ -357,7 +384,9 @@ function HomeWelcomeCallsViewInner({
             ? L('callsIncoming')
             : item.direction === 'missed'
               ? L('callsMissed')
-              : '';
+              : item.direction === 'cancelled'
+                ? L('callsCancelled')
+                : '';
       const statusIcon =
         item.direction === 'outgoing'
           ? 'arrow-top-right'
@@ -365,7 +394,11 @@ function HomeWelcomeCallsViewInner({
             ? 'arrow-bottom-left'
             : item.direction === 'missed'
               ? 'phone-missed'
-              : 'phone-outline';
+              : item.direction === 'cancelled'
+                ? 'phone-hangup'
+                : 'phone-outline';
+      const statusTone = missed;
+      const statusColor = missed || cancelled ? LIVI.red : LIVI.green;
 
       const isSelected = selectedIds.has(item.id);
 
@@ -420,16 +453,16 @@ function HomeWelcomeCallsViewInner({
                       avatarVer={friend.avatarVer || 0}
                       uri={friend.avatarThumbB64 || undefined}
                       size={WELCOME_FRIEND_AVATAR_SIZE}
-                      fallbackText={avatarLetter || '—'}
+                      fallbackText={avatarFallback}
                       containerStyle={{ overflow: 'hidden' }}
                       fallbackTextStyle={
-                        avatarLetter
+                        avatarFallback && avatarFallback !== '—'
                           ? { fontWeight: '800', color: LIVI.white }
                           : { fontWeight: '400', color: LIVI.text2 }
                       }
                     />
                   ) : (
-                    <Text style={styles.avatarFallback}>{avatarLetter}</Text>
+                    <Text style={styles.avatarFallback}>{avatarFallback}</Text>
                   )}
                 </View>
                 {!selectMode && friend?.online ? <View style={styles.onlineDot} /> : null}
@@ -437,7 +470,7 @@ function HomeWelcomeCallsViewInner({
 
               <View style={styles.bodyCol}>
                 <View style={styles.nameRow}>
-                  <Text style={[styles.name, missed && styles.nameMissed]} numberOfLines={1}>
+                  <Text style={[styles.name, statusTone && styles.nameMissed]} numberOfLines={1}>
                     {displayName}
                   </Text>
                   {timeLabel ? <Text style={styles.time}>{timeLabel}</Text> : null}
@@ -445,11 +478,11 @@ function HomeWelcomeCallsViewInner({
                 {statusLabel ? (
                   <View style={styles.statusRow}>
                     <MaterialCommunityIcons
-                      name={statusIcon}
+                      name={statusIcon as keyof typeof MaterialCommunityIcons.glyphMap}
                       size={14}
-                      color={missed ? LIVI.red : LIVI.green}
+                      color={statusColor}
                     />
-                    <Text style={[styles.status, missed && styles.statusMissed]} numberOfLines={1}>
+                    <Text style={[styles.status, statusTone && styles.statusMissed]} numberOfLines={1}>
                       {statusLabel}
                     </Text>
                   </View>
@@ -474,34 +507,21 @@ function HomeWelcomeCallsViewInner({
       <View style={styles.root}>
         <View style={styles.header}>
           {selectMode ? (
-            <>
-              <Pressable
-                style={({ pressed }) => [styles.iconBtn, pressed && styles.iconBtnPressed]}
-                accessibilityRole="button"
-                accessibilityLabel={t('cancelAction', lang)}
-                onPress={exitSelect}
-              >
-                <Ionicons name="close" size={22} color={LIVI.white} />
-              </Pressable>
-              <Text style={styles.selectTitle} numberOfLines={1}>
-                {String(selectedIds.size)}
-              </Text>
-              <Pressable
-                style={({ pressed }) => [
-                  styles.iconBtn,
-                  (deleting || selectedIds.size === 0) && styles.iconBtnDisabled,
-                  pressed && selectedIds.size > 0 && !deleting && styles.iconBtnPressed,
-                ]}
-                accessibilityRole="button"
-                accessibilityLabel={L('callsDeleteSelectedA11y')}
-                disabled={deleting || selectedIds.size === 0}
-                onPress={() => {
-                  void deleteSelected();
-                }}
-              >
-                <Ionicons name="trash-outline" size={20} color={LIVI.red} />
-              </Pressable>
-            </>
+            <WelcomeSelectModeHeader
+              selectedCount={selectedIds.size}
+              visibleCount={visibleSelectIds.length}
+              allSelected={allVisibleSelected}
+              deleting={deleting}
+              cancelA11y={t('cancelAction', lang)}
+              selectAllLabel={t('chatSelectAll', lang)}
+              selectAllA11y={t('chatSelectAll', lang)}
+              deleteA11y={L('callsDeleteSelectedA11y')}
+              onCancel={exitSelect}
+              onToggleSelectAll={toggleSelectAll}
+              onDelete={() => {
+                void deleteSelected();
+              }}
+            />
           ) : (
             <>
               <Pressable

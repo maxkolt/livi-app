@@ -271,6 +271,11 @@ class IncomingCallActivity : AppCompatActivity() {
                     // Не поднимаем Main через startActivity — finish Incoming без REORDER,
                     // иначе поверх Home мелькает «вторая страница».
                     closeIncomingScreen(bringMainOnDismiss = false)
+                } else {
+                    android.util.Log.e(
+                        TAG,
+                        "IncomingCallActivity CALL_CANCELED ignored stale callId=$canceledCallId current=$currentCallId",
+                    )
                 }
             }
         }
@@ -522,6 +527,14 @@ class IncomingCallActivity : AppCompatActivity() {
         }
         if (intent.getBooleanExtra(EXTRA_JUST_CLOSE, false)) {
             val cid = intent.getStringExtra(EXTRA_CALL_ID) ?: ""
+            // JUST_CLOSE от старого callId не должен гасить новый Incoming (cancel→redial race).
+            if (cid.isNotEmpty() && currentCallId.isNotEmpty() && cid != currentCallId) {
+                android.util.Log.e(
+                    TAG,
+                    "IncomingCallActivity onNewIntent JUST_CLOSE ignored stale callId=$cid current=$currentCallId",
+                )
+                return
+            }
             if (cid.isNotEmpty()) {
                 (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_INCOMING_CALL)
             }
@@ -530,11 +543,14 @@ class IncomingCallActivity : AppCompatActivity() {
     }
 
     override fun finish() {
+        // До и после finish — иначе OEM рисует «доезд» Incoming поверх Home (мерцание).
+        try {
+            overridePendingTransition(0, 0)
+        } catch (_: Exception) {}
         super.finish()
-        // Как и у OutgoingCallActivity, убираем системную анимацию закрытия.
-        // Иначе при возврате к уже открытому Home Android рисует "доезд" окна
-        // отдельной singleInstance-activity, что выглядит как двойной показ экрана.
-        overridePendingTransition(0, 0)
+        try {
+            overridePendingTransition(0, 0)
+        } catch (_: Exception) {}
     }
 
     /** Системная мелодия звонка (Настройки → Мелодия звонка), зациклена до ответа/отмены/таймаута 20с. */

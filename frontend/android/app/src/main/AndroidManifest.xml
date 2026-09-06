@@ -152,8 +152,9 @@
     </activity>
     <!-- Full-screen incoming call (WhatsApp/Telegram style): показывается поверх блокировки при FCM-пуше о звонке -->
     <activity android:name=".IncomingCallActivity" android:exported="false" android:theme="@style/Theme.App.SplashScreen" android:showWhenLocked="true" android:turnScreenOn="true" android:launchMode="singleInstance" android:finishOnTaskLaunch="false" android:screenOrientation="unspecified"/>
-    <!-- Нативный экран исходящего видеозвонка (вместо in-app модалки при CallKeep) -->
-    <activity android:name=".OutgoingCallActivity" android:exported="false" android:theme="@style/Theme.App.SplashScreen" android:showWhenLocked="true" android:turnScreenOn="true" android:launchMode="singleInstance" android:finishOnTaskLaunch="false" android:screenOrientation="unspecified"/>
+    <!-- Нативный экран исходящего: singleTop в том же task что Main (как TG/WA).
+         singleInstance+CLEAR_TASK раньше уводил Main в фон → после X RN «просыпался» секундами. -->
+    <activity android:name=".OutgoingCallActivity" android:exported="false" android:theme="@style/Theme.App.SplashScreen" android:showWhenLocked="true" android:turnScreenOn="true" android:launchMode="singleTop" android:screenOrientation="unspecified"/>
     <!-- ML Kit activity: портрет OK (сканер QR); на планшетах Play может игнорировать lock. -->
     <activity
       android:name="com.google.mlkit.vision.codescanner.internal.GmsBarcodeScanningDelegateActivity"

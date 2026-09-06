@@ -1,9 +1,12 @@
-import React, { memo } from 'react';
-import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import React, { memo, useRef } from 'react';
+import { AppState, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { logger } from '../../utils/logger';
+import { shouldSkipHomeUiSettle } from '../../utils/globalEvents';
 import {
   WELCOME_BRAND_VI_FILL_GRADIENT,
+  WELCOME_CHROME_EDGE_RADIUS,
   WELCOME_GLASS_BORDER,
   WELCOME_GLASS_SURFACE,
   WELCOME_STAGE_BG,
@@ -53,6 +56,8 @@ function HomeWelcomeTabBarInner({
 }: HomeWelcomeTabBarProps) {
   const insets = useSafeAreaInsets();
   const bottomPad = Math.max(insets.bottom, Platform.OS === 'android' ? 6 : 2);
+  /** После cancel onPress часто опаздывает на 1.5–3с — переключаем на pressIn и держим длинное окно. */
+  const pressInHandledRef = useRef<{ id: WelcomeTabId; at: number } | null>(null);
 
   const tabs: TabDef[] = [
     {
@@ -121,7 +126,41 @@ function HomeWelcomeTabBarInner({
             <Pressable
               key={tab.id}
               style={styles.item}
-              onPress={() => onPressTab(tab.id)}
+              onPressIn={() => {
+                const g = global as any;
+                const cancelAt = Number(g.__lastOutgoingCancelAtRef?.current || 0);
+                logger.info('[welcome-tab] pressIn', {
+                  tab: tab.id,
+                  appState: AppState.currentState,
+                  settleSkip: shouldSkipHomeUiSettle(),
+                  sinceCancelMs: cancelAt > 0 ? Date.now() - cancelAt : null,
+                });
+                pressInHandledRef.current = { id: tab.id, at: Date.now() };
+                onPressTab(tab.id);
+              }}
+              onPress={() => {
+                const g = global as any;
+                const cancelAt = Number(g.__lastOutgoingCancelAtRef?.current || 0);
+                const sinceCancel = cancelAt > 0 ? Date.now() - cancelAt : null;
+                const recentCancel = sinceCancel != null && sinceCancel < 8000;
+                // После cancel touch→onPress часто >900ms (лог ~1.6s) — не дергать handler повторно.
+                const dedupeMs = recentCancel || shouldSkipHomeUiSettle() ? 3200 : 900;
+                const handled = pressInHandledRef.current;
+                const already =
+                  handled &&
+                  handled.id === tab.id &&
+                  Date.now() - handled.at < dedupeMs;
+                logger.info('[welcome-tab] press', {
+                  tab: tab.id,
+                  appState: AppState.currentState,
+                  settleSkip: shouldSkipHomeUiSettle(),
+                  sinceCancelMs: sinceCancel,
+                  alreadyHandledOnPressIn: !!already,
+                  dedupeMs,
+                });
+                if (already) return;
+                onPressTab(tab.id);
+              }}
               accessibilityRole="tab"
               accessibilityState={{ selected: active }}
             >
@@ -149,12 +188,10 @@ function HomeWelcomeTabBarInner({
   );
 }
 
-const TAB_TOP_RADIUS = 24;
-
 const styles = StyleSheet.create({
   shell: {
-    borderTopLeftRadius: TAB_TOP_RADIUS,
-    borderTopRightRadius: TAB_TOP_RADIUS,
+    borderTopLeftRadius: WELCOME_CHROME_EDGE_RADIUS,
+    borderTopRightRadius: WELCOME_CHROME_EDGE_RADIUS,
     backgroundColor: WELCOME_GLASS_SURFACE,
     overflow: 'hidden',
     borderTopWidth: StyleSheet.hairlineWidth,

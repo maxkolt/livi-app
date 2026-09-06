@@ -66,4 +66,44 @@ object EdgeToEdgeHelper {
     }
     ViewCompat.requestApplyInsets(view)
   }
+
+  /**
+   * Для overlay поверх Main: RN часто уже «съел» dispatched insets (top=0),
+   * поэтому читаем systemBars с [insetsAnchor] (обычно decorView) и ставим padding вручную.
+   * Итог как у IncomingCallActivity: statusBar + XML marginTop(80dp) до ника.
+   */
+  @JvmStatic
+  fun applySystemBarInsetsFromWindow(view: View, insetsAnchor: View) {
+    val initialLeft = view.paddingLeft
+    val initialTop = view.paddingTop
+    val initialRight = view.paddingRight
+    val initialBottom = view.paddingBottom
+
+    fun applyFromRoot() {
+      val rootInsets = ViewCompat.getRootWindowInsets(insetsAnchor) ?: return
+      val bars = rootInsets.getInsets(WindowInsetsCompat.Type.systemBars())
+      view.setPadding(
+        initialLeft + bars.left,
+        initialTop + bars.top,
+        initialRight + bars.right,
+        initialBottom + bars.bottom,
+      )
+    }
+
+    ViewCompat.setOnApplyWindowInsetsListener(view) { _, insets ->
+      // Даже если child получил пустой top — берём с корня окна.
+      val rootInsets = ViewCompat.getRootWindowInsets(insetsAnchor) ?: insets
+      val bars = rootInsets.getInsets(WindowInsetsCompat.Type.systemBars())
+      view.setPadding(
+        initialLeft + bars.left,
+        initialTop + bars.top,
+        initialRight + bars.right,
+        initialBottom + bars.bottom,
+      )
+      insets
+    }
+    applyFromRoot()
+    view.post { applyFromRoot() }
+    ViewCompat.requestApplyInsets(view)
+  }
 }

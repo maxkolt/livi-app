@@ -23,6 +23,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.os.Bundle
 import android.os.PowerManager
 import android.os.VibrationEffect
@@ -158,39 +159,56 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   }
 
   /** Задержка перед запуском OutgoingCallActivity после broadcast закрытия: даём предыдущему экземпляру (singleInstance) успеть finish(). */
-  private val OUTGOING_LAUNCH_DELAY_MS = 120L
   /** Короткая пауза перед новым входящим: старый IncomingCallActivity должен успеть обработать JUST_CLOSE. */
   private val INCOMING_RELAUNCH_DELAY_MS = 120L
 
-  /** Показать нативный экран исходящего сразу (без callId). callId придёт позже через notifyOutgoingCallId. Сохраняем toUserId/toNick, чтобы запустить звук из notifyOutgoingCallId даже если broadcast не успел дойти до Activity. Перед запуском шлём broadcast закрытия предыдущего экрана, чтобы при повторном звонке (пока друг на неактивном экране) не поднимался старый singleInstance. */
+  /** Показать нативный экран исходящего сразу (без callId). callId придёт позже через notifyOutgoingCallId. Сохраняем toUserId/toNick, чтобы запустить звук из notifyOutgoingCallId даже если broadcast не успел дойти до Activity. */
   @ReactMethod
   fun launchOutgoingCallActivityWithoutCallId(toUserId: String, toNick: String?, hasVideo: Boolean) {
     Log.d(NAME, "launchOutgoingCallActivityWithoutCallId: toUserId=$toUserId toNick=${toNick?.take(20)} hasVideo=$hasVideo hasCurrentActivity=${currentActivity != null}")
     val ctx = reactApplicationContext
-    val previousCallId = LiviOngoingCallHelper.peekOutgoingCall(ctx)?.first.orEmpty()
+    LiviAppModule.clearOutgoingCanceledByUser()
+    LiviAppModule.clearHomeUiSettleSkip()
     LiviOngoingCallHelper.setOutgoingCall(ctx, "", toUserId, toNick ?: "")
+    // Foreground Main: оверлей без второй Activity — иначе onPause Main → после X 3–6с без pressIn.
+    if (OutgoingCallOverlay.tryShowOnForegroundMain(toUserId, toNick ?: "", hasVideo)) {
+      Log.d(NAME, "launchOutgoingCallActivityWithoutCallId: Main overlay (no Activity)")
+      return
+    }
     val intent = Intent(ctx, OutgoingCallActivity::class.java).apply {
       putExtra(OutgoingCallActivity.EXTRA_CALL_ID, "")
       putExtra(OutgoingCallActivity.EXTRA_TO_USER_ID, toUserId)
       putExtra(OutgoingCallActivity.EXTRA_TO_NICK, toNick ?: "")
       putExtra(OutgoingCallActivity.EXTRA_HAS_VIDEO, hasVideo)
     }
-    closeAnyOutgoingScreenThenLaunch(ctx, intent, retryIfNoActivity = true, closeCallId = previousCallId)
+    closeAnyOutgoingScreenThenLaunch(ctx, intent, retryIfNoActivity = true)
   }
 
-  /** Закрыть любой видимый экран исходящего (broadcast), затем через OUTGOING_LAUNCH_DELAY_MS запустить новый — чтобы при повторном звонке не поднимался старый singleInstance. */
-  private fun closeAnyOutgoingScreenThenLaunch(ctx: Context, intent: Intent, retryIfNoActivity: Boolean, closeCallId: String? = null) {
-    val scopedCallId = closeCallId?.takeIf { it.isNotBlank() }
-    LiviAppModule.sendCloseOutgoingBroadcast(
-      ctx,
-      scopedCallId,
-      force = scopedCallId == null,
-      source = "launchOutgoing",
-    )
-    Log.d(NAME, "launchOutgoing: sent close broadcast oldCallId=${scopedCallId ?: "<unscoped>"}, posting launch in ${OUTGOING_LAUNCH_DELAY_MS}ms")
-    Handler(Looper.getMainLooper()).postDelayed({
-      runOnUiThreadLaunchOutgoing(intent, ctx, retryIfNoActivity)
-    }, OUTGOING_LAUNCH_DELAY_MS)
+  /** Запуск Outgoing: мёртвый — сразу; живой — reuse onNewIntent (без close→Main→120ms). */
+  private fun closeAnyOutgoingScreenThenLaunch(ctx: Context, intent: Intent, retryIfNoActivity: Boolean) {
+    if (OutgoingCallOverlay.isVisible) {
+      val toUserId = intent.getStringExtra(OutgoingCallActivity.EXTRA_TO_USER_ID) ?: ""
+      val toNick = intent.getStringExtra(OutgoingCallActivity.EXTRA_TO_NICK) ?: ""
+      val hasVideo = intent.getBooleanExtra(OutgoingCallActivity.EXTRA_HAS_VIDEO, true)
+      Log.d(NAME, "launchOutgoing: overlay visible — reuse/update overlay")
+      if (OutgoingCallOverlay.tryShowOnForegroundMain(toUserId, toNick, hasVideo)) {
+        val callId = intent.getStringExtra(OutgoingCallActivity.EXTRA_CALL_ID)?.trim().orEmpty()
+        if (callId.isNotEmpty()) {
+          OutgoingCallOverlay.bindCallId(callId)
+        }
+        return
+      }
+      OutgoingCallOverlay.hide(stopRingback = false)
+    }
+    if (!OutgoingCallActivity.isAlive) {
+      Log.d(NAME, "launchOutgoing: no live OutgoingCallActivity — launch immediately")
+      runOnUiThreadLaunchOutgoing(intent, ctx, retryIfNoActivity, reuseAlive = false)
+      return
+    }
+    // Replace/redial пока Outgoing ещё на экране: onNewIntent обновляет UI.
+    // Не close→finish→scheduleMain→120ms — иначе табы/redial «тупят» на секунды.
+    Log.d(NAME, "launchOutgoing: live OutgoingCallActivity — reuse via onNewIntent (no close delay)")
+    runOnUiThreadLaunchOutgoing(intent, ctx, retryIfNoActivity, reuseAlive = true)
   }
 
   /**
@@ -234,44 +252,61 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     }
   }
 
-  /** Флаги для запуска OutgoingCallActivity из currentActivity: NEW_TASK + CLEAR_TASK чтобы при повторном вызове не подхватить старый close intent (FCM/bringMainActivityToFront) — задача очищается и создаётся с нашим intent. */
-  private val OUTGOING_FLAGS_FROM_ACTIVITY = (Intent.FLAG_ACTIVITY_NEW_TASK
-      or Intent.FLAG_ACTIVITY_CLEAR_TASK
+  /**
+   * Из Main: Outgoing поверх Main в том же task — без NEW_TASK/CLEAR_TASK.
+   * CLEAR_TASK раньше уничтожал/отрывал Main → cancel = полный resume RN (секунды).
+   */
+  private val OUTGOING_FLAGS_FROM_ACTIVITY = (Intent.FLAG_ACTIVITY_SINGLE_TOP
+      or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+
+  /** Reuse живого Outgoing (onNewIntent) — те же флаги same-task. */
+  private val OUTGOING_FLAGS_REUSE_ALIVE = (Intent.FLAG_ACTIVITY_SINGLE_TOP
+      or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+
+  /** Из сервиса/FCM без Activity: нужен NEW_TASK, но без CLEAR_TASK. */
+  private val OUTGOING_FLAGS_FROM_CONTEXT = (Intent.FLAG_ACTIVITY_NEW_TASK
       or Intent.FLAG_ACTIVITY_SINGLE_TOP
       or Intent.FLAG_ACTIVITY_CLEAR_TOP
       or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
 
   /** Запуск OutgoingCallActivity на UI-потоке (currentActivity надёжнее на main thread). При retryIfNoActivity=true при null делаем одну повторную попытку через 150ms. */
-  private fun runOnUiThreadLaunchOutgoing(intent: Intent, ctx: Context, retryIfNoActivity: Boolean) {
+  private fun runOnUiThreadLaunchOutgoing(
+    intent: Intent,
+    ctx: Context,
+    retryIfNoActivity: Boolean,
+    reuseAlive: Boolean = false,
+  ) {
     Handler(Looper.getMainLooper()).post {
       try {
         val act = currentActivity
         if (act != null) {
-          intent.addFlags(OUTGOING_FLAGS_FROM_ACTIVITY)
+          val flags = if (reuseAlive) OUTGOING_FLAGS_REUSE_ALIVE else OUTGOING_FLAGS_FROM_ACTIVITY
+          intent.addFlags(flags)
           act.startActivity(intent)
-          Log.d(NAME, "launchOutgoingCall: startActivity from currentActivity (UI thread, NEW_TASK)")
+          Log.d(NAME, "launchOutgoingCall: startActivity from currentActivity (same-task, reuseAlive=$reuseAlive)")
         } else {
           if (retryIfNoActivity) {
             Handler(Looper.getMainLooper()).postDelayed({
               try {
                 val act2 = currentActivity
                 if (act2 != null) {
-                  intent.addFlags(OUTGOING_FLAGS_FROM_ACTIVITY)
+                  val flags = if (reuseAlive) OUTGOING_FLAGS_REUSE_ALIVE else OUTGOING_FLAGS_FROM_ACTIVITY
+                  intent.addFlags(flags)
                   act2.startActivity(intent)
-                  Log.d(NAME, "launchOutgoingCall: startActivity from currentActivity (retry 150ms, NEW_TASK)")
+                  Log.d(NAME, "launchOutgoingCall: startActivity from currentActivity (retry 150ms, same-task)")
                 } else {
-                  intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                  intent.addFlags(OUTGOING_FLAGS_FROM_CONTEXT)
                   ctx.startActivity(intent)
-                  Log.d(NAME, "launchOutgoingCall: startActivity from app context after retry (no currentActivity)")
+                  Log.d(NAME, "launchOutgoingCall: startActivity from app context after retry (NEW_TASK, no CLEAR_TASK)")
                 }
               } catch (e: Exception) {
                 Log.e(NAME, "launchOutgoingCall: retry startActivity failed", e)
               }
             }, 150)
           } else {
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+            intent.addFlags(OUTGOING_FLAGS_FROM_CONTEXT)
             ctx.startActivity(intent)
-            Log.d(NAME, "launchOutgoingCall: startActivity from app context (no currentActivity)")
+            Log.d(NAME, "launchOutgoingCall: startActivity from app context (NEW_TASK, no CLEAR_TASK)")
           }
         }
       } catch (e: Exception) {
@@ -284,31 +319,64 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   fun launchOutgoingCallActivity(callId: String, toUserId: String, toNick: String?) {
     Log.d(NAME, "launchOutgoingCallActivity: callId=${callId.take(24)} toUserId=$toUserId hasCurrentActivity=${currentActivity != null}")
     val ctx = reactApplicationContext
-    val previousCallId = LiviOngoingCallHelper.peekOutgoingCall(ctx)?.first.orEmpty()
     LiviOngoingCallHelper.setOutgoingCall(ctx, callId, toUserId, toNick ?: "")
+    if (OutgoingCallOverlay.tryShowOnForegroundMain(toUserId, toNick ?: "", hasVideo = true)) {
+      OutgoingCallOverlay.bindCallId(callId)
+      Log.d(NAME, "launchOutgoingCallActivity: Main overlay (no Activity)")
+      return
+    }
     val intent = Intent(ctx, OutgoingCallActivity::class.java).apply {
       putExtra(OutgoingCallActivity.EXTRA_CALL_ID, callId)
       putExtra(OutgoingCallActivity.EXTRA_TO_USER_ID, toUserId)
       putExtra(OutgoingCallActivity.EXTRA_TO_NICK, toNick ?: "")
     }
-    closeAnyOutgoingScreenThenLaunch(ctx, intent, retryIfNoActivity = true, closeCallId = previousCallId)
+    closeAnyOutgoingScreenThenLaunch(ctx, intent, retryIfNoActivity = true)
   }
 
   /** Передать callId уже открытому экрану исходящего (после ответа сервера). Запускаем сервис (звук, таймаут) сразу отсюда, чтобы рингтон не зависел от того, успела ли Activity принять broadcast. */
   @ReactMethod
   fun notifyOutgoingCallId(callId: String) {
     Log.d(NAME, "notifyOutgoingCallId: callId=${callId.take(24)} sending broadcast and starting service")
+    val id = callId.trim()
+    if (id.isEmpty()) return
+    // Пользователь уже нажал X (в т.ч. на pending_*) — не поднимать ringback заново.
+    if (LiviAppModule.outgoingCanceledByUserFlag) {
+      val canceledId = LiviAppModule.outgoingCanceledByUserCallId?.trim().orEmpty()
+      if (canceledId.isEmpty() || canceledId == id || canceledId.startsWith("pending_")) {
+        Log.d(NAME, "notifyOutgoingCallId: skip — already canceled by user callId=${id.take(24)}")
+        EndedCallIds.add(reactApplicationContext, id)
+        return
+      }
+    }
+    if (EndedCallIds.isEnded(reactApplicationContext, id)) {
+      Log.d(NAME, "notifyOutgoingCallId: skip — ended callId=${id.take(24)}")
+      return
+    }
     val ctx = reactApplicationContext
+    if (OutgoingCallOverlay.isVisible) {
+      OutgoingCallOverlay.bindCallId(id)
+    }
     val intent = Intent(OutgoingCallActivity.ACTION_OUTGOING_CALL_ID_READY).apply {
       setPackage(ctx.packageName)
-      putExtra(OutgoingCallActivity.EXTRA_CALL_ID, callId)
+      putExtra(OutgoingCallActivity.EXTRA_CALL_ID, id)
     }
     ctx.sendBroadcast(intent)
     val (toUserId, toNick) = LiviOngoingCallHelper.getOutgoingToUserAndNick(ctx) ?: run {
       Log.w(NAME, "notifyOutgoingCallId: no outgoing toUserId/toNick in helper — service not started")
       return
     }
-    LiviOutgoingCallService.start(ctx, callId, toUserId, toNick)
+    // Если provisional ringback уже играет — только rebind callId, без перезапуска звука.
+    if (LiviOutgoingCallService.adoptRealCallId(ctx, id, toUserId, toNick)) {
+      Log.d(NAME, "notifyOutgoingCallId: adopted provisional ringback callId=${id.take(24)}")
+      return
+    }
+    // Ringback уже остановлен cancel'ом — не стартовать сервис заново по late ack.
+    if (!LiviOutgoingCallService.isRingingActive() && LiviAppModule.shouldSkipHomeUiSettle()) {
+      Log.d(NAME, "notifyOutgoingCallId: skip start — not ringing + settle after cancel callId=${id.take(24)}")
+      EndedCallIds.add(ctx, id)
+      return
+    }
+    LiviOutgoingCallService.start(ctx, id, toUserId, toNick)
     Log.d(NAME, "notifyOutgoingCallId: LiviOutgoingCallService.start done")
   }
 
@@ -321,6 +389,11 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     } else if (force) {
       LiviOngoingCallHelper.clearOngoingCall(reactApplicationContext)
     }
+    // Overlay на Main: сразу hide, без scheduleMain (даже если JS забыл skipMainReturn).
+    val overlayWasVisible = OutgoingCallOverlay.isVisible
+    if (overlayWasVisible) {
+      OutgoingCallOverlay.hide(stopRingback = true)
+    }
     LiviAppModule.sendCloseOutgoingBroadcast(
       reactApplicationContext,
       id.ifBlank { null },
@@ -329,9 +402,9 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     )
     Log.d(
       NAME,
-      "closeOutgoingCallActivity: sent close broadcast callId=${id.ifBlank { "<unscoped>" }} force=$force skipMainReturn=$skipMainReturn",
+      "closeOutgoingCallActivity: sent close broadcast callId=${id.ifBlank { "<unscoped>" }} force=$force skipMainReturn=$skipMainReturn overlayWasVisible=$overlayWasVisible",
     )
-    if (!skipMainReturn) {
+    if (!skipMainReturn && !overlayWasVisible) {
       LiviAppModule.scheduleMainActivityAfterOutgoingClose(reactApplicationContext)
     }
   }
@@ -418,6 +491,25 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   @ReactMethod
   fun getAndClearOutgoingCanceledByUserFlag(promise: Promise) {
     promise.resolve(LiviAppModule.getAndClearOutgoingCanceledByUserFlag())
+  }
+
+  /**
+   * Sync: AppState(active) после cancel Outgoing часто раньше JS-события —
+   * без этого Home успевает loadFriends и UI «мёртвый» 2–3с.
+   */
+  @ReactMethod(isBlockingSynchronousMethod = true)
+  fun shouldSkipHomeUiSettleSync(): Boolean {
+    return LiviAppModule.shouldSkipHomeUiSettle()
+  }
+
+  @ReactMethod
+  fun armHomeUiSettleSkip(ms: Double) {
+    LiviAppModule.armHomeUiSettleSkip(ms.toLong())
+  }
+
+  @ReactMethod
+  fun clearHomeUiSettleSkipNative() {
+    LiviAppModule.clearHomeUiSettleSkip()
   }
 
   /** FCM call_accepted: прочитать и сбросить callId; JS отправит call:getAccepted и получит call:accepted → переход на VideoCall. */
@@ -2350,8 +2442,8 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     }
 
     /**
-     * OutgoingCallActivity в отдельной задаче (singleInstance). После finish() без этого пользователь
-     * попадает на лаунчер, хотя MainActivity жива в другой задаче — выглядит как «приложение закрылось».
+     * Outgoing обычно в том же task что Main (singleTop). scheduleMain нужен только
+     * если Outgoing был task root (отдельный task / cold from FCM).
      */
     @JvmStatic
     fun scheduleMainActivityAfterOutgoingClose(ctx: Context, delayMs: Long = 320L) {
@@ -2388,6 +2480,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     @JvmStatic
     fun scheduleMainActivityAfterIncomingCancelDismiss(ctx: Context) {
       val appCtx = ctx.applicationContext
+      // Дольше ждём natural resume Main после finish Incoming — ранний REORDER = мерцание.
       Handler(Looper.getMainLooper()).postDelayed({
         if (MainActivity.isInForeground) {
           Log.d(NAME, "scheduleMainActivityAfterIncomingCancelDismiss: Main already foreground, skip")
@@ -2400,12 +2493,16 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
               Log.d(NAME, "scheduleMainActivityAfterIncomingCancelDismiss: Main foreground after wait, skip")
               return@postDelayed
             }
+            if (IncomingCallActivity.isAlive) {
+              Log.d(NAME, "scheduleMainActivityAfterIncomingCancelDismiss: Incoming still alive, skip reorder")
+              return@postDelayed
+            }
             synchronized(LiviAppModule::class.java) {
               lastBringMainToFrontAtMs = System.currentTimeMillis()
             }
             Log.d(NAME, "scheduleMainActivityAfterIncomingCancelDismiss: fallback Main reorder")
             postMainActivityReorderToFront(appCtx, 0L)
-          }, 180L)
+          }, 320L)
           return@postDelayed
         }
         synchronized(LiviAppModule::class.java) {
@@ -2413,7 +2510,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
         }
         Log.d(NAME, "scheduleMainActivityAfterIncomingCancelDismiss: fallback Main reorder")
         postMainActivityReorderToFront(appCtx, 0L)
-      }, 220L)
+      }, 450L)
     }
 
     /**
@@ -2459,11 +2556,12 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
         return
       }
       val mainIntent = Intent(ctx, MainActivity::class.java).apply {
+        // Без CLEAR_TOP: иначе после cancel Outgoing Main пересоздаётся и RN «спит» секунды.
         addFlags(
           Intent.FLAG_ACTIVITY_NEW_TASK
-            or Intent.FLAG_ACTIVITY_CLEAR_TOP
             or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
-            or Intent.FLAG_ACTIVITY_SINGLE_TOP,
+            or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            or Intent.FLAG_ACTIVITY_NO_ANIMATION,
         )
       }
       Handler(Looper.getMainLooper()).postDelayed({
@@ -3438,11 +3536,38 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       private set
 
     @Volatile
-    private var outgoingCanceledByUserCallId: String? = null
+    var outgoingCanceledByUserCallId: String? = null
+      private set
+
+    /** До returnMain: AppState(active) не должен гонять loadFriends раньше JS cancel. */
+    @Volatile
+    private var homeUiSettleSkipUntilElapsedRealtime: Long = 0L
+
+    @JvmStatic
+    fun armHomeUiSettleSkip(ms: Long = 1200L) {
+      val until = SystemClock.elapsedRealtime() + ms.coerceAtLeast(0L)
+      if (until > homeUiSettleSkipUntilElapsedRealtime) {
+        homeUiSettleSkipUntilElapsedRealtime = until
+      }
+    }
+
+    @JvmStatic
+    fun clearHomeUiSettleSkip() {
+      homeUiSettleSkipUntilElapsedRealtime = 0L
+    }
+
+    @JvmStatic
+    fun shouldSkipHomeUiSettle(): Boolean {
+      // Только окно по времени. Не привязывать к outgoingCanceledByUserFlag —
+      // флаг мог залипнуть и вечно глушить resume/loadFriends.
+      return SystemClock.elapsedRealtime() < homeUiSettleSkipUntilElapsedRealtime
+    }
 
     /** Вызвать из OutgoingCallActivity при нажатии X — React очистит состояние исходящего. */
     @JvmStatic
     fun emitOutgoingCallCanceledByUser(callId: String?) {
+      // Сразу, до startActivity(Main): иначе resume → loadFriends раньше DeviceEvent.
+      armHomeUiSettleSkip(1200L)
       // Не подставлять peekOutgoingCall: при cancel→redial prefs уже новый callId —
       // fallback отменит свежий звонок → accept not_found.
       val resolvedCallId = callId?.takeIf { it.isNotBlank() }
@@ -3455,6 +3580,13 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
         }
         ctx.emitDeviceEvent("OutgoingCallCanceledByUser", params)
       }
+    }
+
+    /** Новый исходящий — сбросить cancel-флаг, иначе late notifyOutgoingCallId от старого звонка ок, а redial тоже должен жить. */
+    @JvmStatic
+    fun clearOutgoingCanceledByUser() {
+      outgoingCanceledByUserFlag = false
+      outgoingCanceledByUserCallId = null
     }
 
     @JvmStatic

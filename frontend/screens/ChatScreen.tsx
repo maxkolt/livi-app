@@ -135,7 +135,7 @@ import {
 } from './chat/ChatGapStatus';
 import { ChatParallaxWallpaper } from './chat/ChatParallaxWallpaper';
 import { WelcomeStageBackground, StageGradient } from './home/WelcomeStageBackground';
-import { WELCOME_CARD_BG, WELCOME_HEADER_TITLE, WELCOME_STAGE_BG } from './home/constants';
+import { WELCOME_CARD_BG, WELCOME_CHROME_EDGE_RADIUS, WELCOME_HEADER_TITLE, WELCOME_STAGE_BG } from './home/constants';
 import { emitRequestDirectCall } from '../utils/globalEvents';
 import {
   ReactionBarModal,
@@ -2356,6 +2356,9 @@ export default function ChatScreen({ route, navigation }: Props) {
                 // Важно: симметричные отступы сверху/снизу вокруг инпута
                 // SafeAreaView уже обрабатывает safe area, поэтому не добавляем insets.bottom
                 paddingBottom: 18,
+                overflow: 'hidden',
+                borderTopLeftRadius: WELCOME_CHROME_EDGE_RADIUS,
+                borderTopRightRadius: WELCOME_CHROME_EDGE_RADIUS,
               }}
               onLayout={handleInputBarLayout}
             >
@@ -2733,6 +2736,9 @@ export default function ChatScreen({ route, navigation }: Props) {
                 paddingBottom:
                   18 +
                   (keyboardVisible || emojiPanelOpen ? 0 : Math.max(0, insets.bottom)),
+                overflow: 'hidden',
+                borderTopLeftRadius: WELCOME_CHROME_EDGE_RADIUS,
+                borderTopRightRadius: WELCOME_CHROME_EDGE_RADIUS,
               }}
               onLayout={handleInputBarLayout}
             >

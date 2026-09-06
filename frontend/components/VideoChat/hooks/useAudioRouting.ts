@@ -2312,7 +2312,9 @@ export const useAudioRouting = (
         }
         return;
       }
-      const delays = [150, 400, 900, 2000];
+      const delays = routingOptionsRef.current?.defaultToEarpiece
+        ? [200, 500]
+        : [150, 400, 900, 2000];
       for (const ms of delays) {
         if (cancelled) break;
         await new Promise((r) => setTimeout(r, ms));
@@ -2329,6 +2331,16 @@ export const useAudioRouting = (
         const av = lastAvailableRef.current;
         const desired = pickDesiredRoute(av, `poll_${ms}`);
         if (desired === lastSelectedRef.current && (av.includes('WIRED_HEADSET') || av.includes('BLUETOOTH'))) {
+          break;
+        }
+        // Direct audio: already on earpiece and no headset — stop early.
+        if (
+          routingOptionsRef.current?.defaultToEarpiece &&
+          desired === 'EARPIECE' &&
+          lastSelectedRef.current === 'EARPIECE' &&
+          !av.includes('WIRED_HEADSET') &&
+          !av.includes('BLUETOOTH')
+        ) {
           break;
         }
       }
