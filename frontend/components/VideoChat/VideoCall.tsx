@@ -38,7 +38,7 @@ import { t, loadLang, defaultLang } from '../../utils/i18n';
 import type { Lang } from '../../utils/i18n';
 import { useAppTheme } from '../../theme/ThemeProvider';
 import { WelcomeStageBackground } from '../../screens/home/WelcomeStageBackground';
-import { WELCOME_NAV_ACTIVE_ACCENT, WELCOME_NAV_ACTIVE_ICON, WELCOME_STAGE_BG } from '../../screens/home/constants';
+import { WELCOME_HEADER_TITLE, WELCOME_NAV_ACTIVE_ACCENT, WELCOME_NAV_ACTIVE_ICON, WELCOME_STAGE_BG } from '../../screens/home/constants';
 import { uiAccent } from '../../theme/uiAccent';
 import { isValidStream } from '../../utils/streamUtils';
 import { logger } from '../../utils/logger';
@@ -6946,7 +6946,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
                     : audioRouteIcon
                 }
                 size={28}
-                color={audioOutputRouteHighlighted ? audioOutputRouteAccent.softText : '#FFFFFF'}
+                color={audioOutputRouteHighlighted ? audioOutputRouteAccent.softText : WELCOME_HEADER_TITLE}
               />
             </TouchableOpacity>
             <TouchableOpacity
@@ -6968,7 +6968,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
               <MaterialIcons
                 name={micOn ? 'mic' : 'mic-off'}
                 size={28}
-                color={micOn ? '#FFFFFF' : '#E57373'}
+                color={micOn ? WELCOME_HEADER_TITLE : '#E57373'}
               />
             </TouchableOpacity>
             <AudioCallEndButton onPress={() => onAbortCall('end_button')} />
@@ -6993,7 +6993,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
                 <MaterialIcons
                   name="videocam"
                   size={28}
-                  color={pulsePeerVideoButton ? peerVideoInviteAccent : '#FFFFFF'}
+                  color={pulsePeerVideoButton ? peerVideoInviteAccent : WELCOME_HEADER_TITLE}
                 />
               </TouchableOpacity>
             </View>
@@ -7107,7 +7107,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
                   <MaterialIcons
                     name={remoteMuted ? "volume-off" : "volume-up"}
                     size={26}
-                    color={remoteMuted ? "#999" : (currentRemoteStream ? "#fff" : "#777")}
+                    color={remoteMuted ? "#999" : (currentRemoteStream ? WELCOME_HEADER_TITLE : "#777")}
                   />
                   {remoteMuted && (
                     <View
@@ -7264,7 +7264,7 @@ const styles = StyleSheet.create({
     fontSize: 34,
     fontWeight: '700',
     lineHeight: 38,
-    color: '#FFFFFF',
+    color: WELCOME_HEADER_TITLE,
     textAlign: 'center',
   },
   audioCallSubtitle: {
@@ -7278,14 +7278,14 @@ const styles = StyleSheet.create({
     marginTop: 4,
     fontSize: 16,
     fontWeight: '600',
-    color: '#FFFFFF',
+    color: WELCOME_HEADER_TITLE,
   },
   audioCallTimer: {
     marginTop: 6,
     fontSize: 16,
     fontWeight: '600',
     fontVariant: ['tabular-nums'],
-    color: '#FFFFFF',
+    color: WELCOME_HEADER_TITLE,
     textAlign: 'center',
   },
   audioCallControls: {
@@ -7315,9 +7315,9 @@ const styles = StyleSheet.create({
   },
   /** Как `btn_decline_round` / OutgoingCallActivity `btn_cancel` (colors.xml). */
   audioRoundBtnDanger: {
-    backgroundColor: '#CC5C2F2F',
+    backgroundColor: '#CC4A1E2A',
     borderWidth: 1,
-    borderColor: '#E57373',
+    borderColor: '#A33B4F',
   },
   audioCallPeerVideoHint: {
     fontSize: 13,
@@ -7325,8 +7325,8 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   audioRoundBtnDangerPressed: {
-    backgroundColor: '#F06E3636',
-    borderColor: '#FF9F9F',
+    backgroundColor: '#F06A2E3C',
+    borderColor: '#C45A6E',
   },
   content: {
     flex: 1,
@@ -7510,23 +7510,23 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    backgroundColor: 'rgba(0,255,0,0.15)',
+    backgroundColor: WELCOME_NAV_ACTIVE_ACCENT.solid15,
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: 'rgba(0,255,0,0.3)',
+    borderColor: WELCOME_NAV_ACTIVE_ACCENT.solid30,
   },
   friendBadgeText: {
-    color: '#0f0',
+    color: WELCOME_NAV_ACTIVE_ICON,
     fontSize: 12,
     fontWeight: '600',
   },
 });
 
 /** Как `installPressFeedback` + `btn_decline_round` на Incoming/OutgoingCallActivity. */
-const AUDIO_CALL_DECLINE_ICON = '#E57373';
-const AUDIO_CALL_DECLINE_ICON_PRESSED = '#FF9F9F';
+const AUDIO_CALL_DECLINE_ICON = '#C45A6E';
+const AUDIO_CALL_DECLINE_ICON_PRESSED = '#E08A9A';
 
 function AudioCallEndButton({ onPress }: { onPress: () => void }) {
   const scale = useRef(new Animated.Value(1)).current;

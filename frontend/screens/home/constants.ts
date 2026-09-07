@@ -56,6 +56,7 @@ export const WELCOME_NAV_ACTIVE_ACCENT = {
   solid: WELCOME_NAV_ACTIVE_ICON,
   softText: WELCOME_NAV_ACTIVE_ICON,
   solid15: 'rgba(74, 122, 140, 0.15)',
+  solid30: 'rgba(74, 122, 140, 0.30)',
 } as const;
 
 /** Обводка «Vi» — teal → blue. */

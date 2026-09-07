@@ -2,6 +2,7 @@ import React from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { EmojiKeyboard, en, ru, type EmojiType } from 'rn-emoji-keyboard';
 import { BUILT_IN_STICKER_PACKS, StickerView, type BuiltInSticker } from './chatStickers';
+import { StageGradient } from '../screens/home/WelcomeStageBackground';
 import { t, type Lang } from '../utils/i18n';
 
 export const CHAT_EMOJI_PANEL_HEIGHT = 280;
@@ -30,19 +31,22 @@ export default function ChatEmojiKeyboard({
   const [packId, setPackId] = React.useState(BUILT_IN_STICKER_PACKS[0]?.id || '');
   const translation = lang === 'ru' ? ru : en;
   const activePack = BUILT_IN_STICKER_PACKS.find((pack) => pack.id === packId) || BUILT_IN_STICKER_PACKS[0];
+  // Тёмная тема: тот же StageGradient, что у модалки long-press (прозрачный fill поверх bitmap).
+  const panelFill = isDark ? 'transparent' : surfaceBg;
+  const Shell = isDark ? StageGradient : View;
 
   const theme = React.useMemo(
     () =>
       isDark
         ? {
-            container: surfaceBg,
+            container: panelFill,
             header: textColor,
             knob: 'rgba(255,255,255,0.25)',
-            skinTonesContainer: surfaceBg,
+            skinTonesContainer: panelFill,
             category: {
               icon: 'rgba(255,255,255,0.45)',
               iconActive: textColor,
-              container: surfaceBg,
+              container: panelFill,
               containerActive: 'rgba(255,255,255,0.08)',
             },
             search: {
@@ -84,17 +88,18 @@ export default function ChatEmojiKeyboard({
             },
             emoji: { selected: 'rgba(0,0,0,0.08)' },
           },
-    [isDark, surfaceBg, textColor],
+    [isDark, panelFill, surfaceBg, textColor],
   );
 
   return (
-    <View style={[styles.wrap, { backgroundColor: surfaceBg }]}>
+    <Shell style={[styles.wrap, { backgroundColor: isDark ? undefined : surfaceBg }]}>
       <View style={styles.content}>
         {tab === 'emoji' ? (
           <EmojiKeyboard
             onEmojiSelected={onEmojiSelected}
             enableSearchBar={false}
             enableRecentlyUsed
+            hideHeader
             categoryPosition="top"
             translation={translation}
             theme={theme}
@@ -110,6 +115,12 @@ export default function ChatEmojiKeyboard({
                 elevation: 0,
                 shadowOpacity: 0,
                 shadowRadius: 0,
+              },
+              header: {
+                height: 0,
+                marginTop: 0,
+                marginBottom: 0,
+                opacity: 0,
               },
             }}
           />
@@ -195,7 +206,7 @@ export default function ChatEmojiKeyboard({
           );
         })}
       </View>
-    </View>
+    </Shell>
   );
 }
 

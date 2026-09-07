@@ -35,6 +35,7 @@ import {
 import { LIVI as LIVI_CONST, PROFILE_AVATAR_BORDER_WIDTH } from '../screens/home/constants';
 
 const SUPPORT_EMAIL = '12345kolt@gmal.com';
+const SUPPORT_EMAIL_2 = 'kolt12max@mail.ru';
 const DELETE_BADGE_W = 40;
 const DELETE_BADGE_H = 24;
 /** Отступ от обводки внутрь аватара — низ сферы не перекрывает рамку. */
@@ -812,6 +813,59 @@ export default function SettingsTab({
                           ]}
                         >
                           {copiedEmail === SUPPORT_EMAIL
+                            ? t('profileEmailCopied', lang)
+                            : t('profileCopyEmail', lang)}
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                  <View
+                    style={[
+                      localStyles.emailRow,
+                      { backgroundColor: frameBg, borderColor: frameBorder },
+                    ]}
+                  >
+                    <Text
+                      style={[localStyles.emailText, { color: LIVI.white }]}
+                      numberOfLines={1}
+                      selectable
+                    >
+                      {SUPPORT_EMAIL_2}
+                    </Text>
+                    <View style={localStyles.emailActions}>
+                      <TouchableOpacity
+                        activeOpacity={0.85}
+                        onPress={() => copyEmail(SUPPORT_EMAIL_2)}
+                        style={[
+                          localStyles.emailActionBtn,
+                          {
+                            borderColor: isDark
+                              ? 'rgba(46,196,182,0.45)'
+                              : 'rgba(113,91,168,0.45)',
+                            backgroundColor: isDark
+                              ? 'rgba(46,196,182,0.14)'
+                              : 'rgba(113,91,168,0.14)',
+                          },
+                          copiedEmail === SUPPORT_EMAIL_2 && {
+                            borderColor: 'rgba(77, 228, 144, 0.55)',
+                            backgroundColor: 'rgba(46, 204, 113, 0.18)',
+                          },
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            localStyles.emailActionLabel,
+                            {
+                              color:
+                                copiedEmail === SUPPORT_EMAIL_2
+                                  ? 'rgba(172, 220, 190, 0.95)'
+                                  : isDark
+                                    ? '#9EE5DC'
+                                    : '#B8A9E8',
+                            },
+                          ]}
+                        >
+                          {copiedEmail === SUPPORT_EMAIL_2
                             ? t('profileEmailCopied', lang)
                             : t('profileCopyEmail', lang)}
                         </Text>

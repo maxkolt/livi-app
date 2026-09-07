@@ -5365,8 +5365,8 @@ const handleClearNick = useCallback(async () => {
         {/* Invite Request Modal */}
         {inviteRequestVisible && inviteRequestData && (
           <View style={styles.overlayModal} pointerEvents="box-none">
-            <WelcomeOverlayDim />
-            <WelcomeOverlayCard>
+            <WelcomeOverlayDim strong />
+            <WelcomeOverlayCard opaque>
               <Text style={[welcomeOverlayText.title, { marginBottom: 20 }]}>
                 {t('friendInviteTitle', lang)}
               </Text>

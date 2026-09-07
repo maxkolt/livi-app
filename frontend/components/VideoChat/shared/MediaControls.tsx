@@ -1,6 +1,7 @@
 import React from 'react';
 import { View, TouchableOpacity, StyleSheet, Animated, Platform } from 'react-native';
 import { MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
+import { WELCOME_HEADER_TITLE } from '../../../screens/home/constants';
 
 interface MediaControlsProps {
   micOn: boolean;
@@ -53,7 +54,7 @@ export const MediaControls: React.FC<MediaControlsProps> = ({
           style={[styles.iconBtn, lockedBtnStyle]}
           disabled={locked}
         >
-          <MaterialIcons name="flip-camera-ios" size={26} color="#fff" />
+          <MaterialIcons name="flip-camera-ios" size={26} color={WELCOME_HEADER_TITLE} />
         </TouchableOpacity>
       </Animated.View>
 
@@ -67,7 +68,7 @@ export const MediaControls: React.FC<MediaControlsProps> = ({
             accessibilityLabel="return-to-audio"
             disabled={locked}
           >
-            <MaterialCommunityIcons name="phone-in-talk" size={28} color="#fff" />
+            <MaterialCommunityIcons name="phone-in-talk" size={28} color={WELCOME_HEADER_TITLE} />
           </TouchableOpacity>
         </Animated.View>
       ) : null}
@@ -84,7 +85,7 @@ export const MediaControls: React.FC<MediaControlsProps> = ({
           <MaterialIcons
             name={micOn ? "mic" : "mic-off"}
             size={26}
-            color={micOn ? "#fff" : "#888"}
+            color={micOn ? WELCOME_HEADER_TITLE : "#888"}
           />
         </TouchableOpacity>
 
@@ -98,7 +99,7 @@ export const MediaControls: React.FC<MediaControlsProps> = ({
           <MaterialIcons
             name={camOn ? "videocam" : "videocam-off"}
             size={26}
-            color={camOn ? "#fff" : "#888"}
+            color={camOn ? WELCOME_HEADER_TITLE : "#888"}
           />
         </TouchableOpacity>
       </Animated.View>

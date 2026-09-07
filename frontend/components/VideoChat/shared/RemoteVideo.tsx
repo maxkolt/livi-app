@@ -6,6 +6,10 @@ import AwayPlaceholder from '../../../components/AwayPlaceholder';
 import PartnerCallStatusOverlay from '../../../components/PartnerCallStatusOverlay';
 import { t, type Lang } from '../../../utils/i18n';
 import { logger } from '../../../utils/logger';
+import {
+  WELCOME_NAV_ACTIVE_ACCENT,
+  WELCOME_NAV_ACTIVE_ICON,
+} from '../../../screens/home/constants';
 
 interface RemoteVideoProps {
   remoteStream: MediaStream | null;
@@ -158,7 +162,7 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
           {held}
           {showFriendBadge && (
             <View style={styles.friendBadge}>
-              <MaterialIcons name="check-circle" size={16} color="#0f0" />
+              <MaterialIcons name="check-circle" size={16} color={WELCOME_NAV_ACTIVE_ICON} />
               <Text style={styles.friendBadgeText}>{L('friend')}</Text>
             </View>
           )}
@@ -383,7 +387,7 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
         <PartnerCallStatusOverlay lang={lang} mode="busy" />
         {showFriendBadge && (
           <View style={styles.friendBadge}>
-            <MaterialIcons name="check-circle" size={16} color="#0f0" />
+            <MaterialIcons name="check-circle" size={16} color={WELCOME_NAV_ACTIVE_ICON} />
             <Text style={styles.friendBadgeText}>{L('friend')}</Text>
           </View>
         )}
@@ -415,7 +419,7 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
         <AwayPlaceholder />
         {showFriendBadge && (
           <View style={styles.friendBadge}>
-            <MaterialIcons name="check-circle" size={16} color="#0f0" />
+            <MaterialIcons name="check-circle" size={16} color={WELCOME_NAV_ACTIVE_ICON} />
             <Text style={styles.friendBadgeText}>{L('friend')}</Text>
           </View>
         )}
@@ -438,7 +442,7 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
         <AwayPlaceholder />
         {showFriendBadge && (
           <View style={styles.friendBadge}>
-            <MaterialIcons name="check-circle" size={16} color="#0f0" />
+            <MaterialIcons name="check-circle" size={16} color={WELCOME_NAV_ACTIVE_ICON} />
             <Text style={styles.friendBadgeText}>{L('friend')}</Text>
           </View>
         )}
@@ -457,7 +461,7 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
           <AwayPlaceholder />
           {showFriendBadge && (
             <View style={styles.friendBadge}>
-              <MaterialIcons name="check-circle" size={16} color="#0f0" />
+              <MaterialIcons name="check-circle" size={16} color={WELCOME_NAV_ACTIVE_ICON} />
               <Text style={styles.friendBadgeText}>{L('friend')}</Text>
             </View>
           )}
@@ -484,7 +488,7 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
             {held}
             {showFriendBadge && (
               <View style={styles.friendBadge}>
-                <MaterialIcons name="check-circle" size={16} color="#0f0" />
+                <MaterialIcons name="check-circle" size={16} color={WELCOME_NAV_ACTIVE_ICON} />
                 <Text style={styles.friendBadgeText}>{L('friend')}</Text>
               </View>
             )}
@@ -502,7 +506,7 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
             </View>
             {showFriendBadge && (
               <View style={styles.friendBadge}>
-                <MaterialIcons name="check-circle" size={16} color="#0f0" />
+                <MaterialIcons name="check-circle" size={16} color={WELCOME_NAV_ACTIVE_ICON} />
                 <Text style={styles.friendBadgeText}>{L('friend')}</Text>
               </View>
             )}
@@ -518,7 +522,7 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
           </View>
           {showFriendBadge && (
             <View style={styles.friendBadge}>
-              <MaterialIcons name="check-circle" size={16} color="#0f0" />
+              <MaterialIcons name="check-circle" size={16} color={WELCOME_NAV_ACTIVE_ICON} />
               <Text style={styles.friendBadgeText}>{L('friend')}</Text>
             </View>
           )}
@@ -531,7 +535,7 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
         <View style={[styles.rtc, { backgroundColor: 'black' }]} />
         {showFriendBadge && (
           <View style={styles.friendBadge}>
-            <MaterialIcons name="check-circle" size={16} color="#0f0" />
+            <MaterialIcons name="check-circle" size={16} color={WELCOME_NAV_ACTIVE_ICON} />
             <Text style={styles.friendBadgeText}>{L('friend')}</Text>
           </View>
         )}
@@ -587,7 +591,7 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
           <AwayPlaceholder />
           {showFriendBadge && (
             <View style={styles.friendBadge}>
-              <MaterialIcons name="check-circle" size={16} color="#0f0" />
+              <MaterialIcons name="check-circle" size={16} color={WELCOME_NAV_ACTIVE_ICON} />
               <Text style={styles.friendBadgeText}>{L('friend')}</Text>
             </View>
           )}
@@ -664,7 +668,7 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
         />
         {showFriendBadge && (
           <View style={styles.friendBadge}>
-            <MaterialIcons name="check-circle" size={16} color="#0f0" />
+            <MaterialIcons name="check-circle" size={16} color={WELCOME_NAV_ACTIVE_ICON} />
             <Text style={styles.friendBadgeText}>{L('friend')}</Text>
           </View>
         )}
@@ -700,7 +704,7 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
         <AwayPlaceholder />
         {showFriendBadge && (
           <View style={styles.friendBadge}>
-            <MaterialIcons name="check-circle" size={16} color="#0f0" />
+            <MaterialIcons name="check-circle" size={16} color={WELCOME_NAV_ACTIVE_ICON} />
             <Text style={styles.friendBadgeText}>{L('friend')}</Text>
           </View>
         )}
@@ -728,7 +732,7 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
           <AwayPlaceholder />
           {showFriendBadge && (
             <View style={styles.friendBadge}>
-              <MaterialIcons name="check-circle" size={16} color="#0f0" />
+              <MaterialIcons name="check-circle" size={16} color={WELCOME_NAV_ACTIVE_ICON} />
               <Text style={styles.friendBadgeText}>{L('friend')}</Text>
             </View>
           )}
@@ -752,7 +756,7 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
           {held}
           {showFriendBadge && (
             <View style={styles.friendBadge}>
-              <MaterialIcons name="check-circle" size={16} color="#0f0" />
+              <MaterialIcons name="check-circle" size={16} color={WELCOME_NAV_ACTIVE_ICON} />
               <Text style={styles.friendBadgeText}>{L('friend')}</Text>
             </View>
           )}
@@ -786,7 +790,7 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
         </View>
         {showFriendBadge && (
           <View style={styles.friendBadge}>
-            <MaterialIcons name="check-circle" size={16} color="#0f0" />
+            <MaterialIcons name="check-circle" size={16} color={WELCOME_NAV_ACTIVE_ICON} />
             <Text style={styles.friendBadgeText}>{L('friend')}</Text>
           </View>
         )}
@@ -808,7 +812,7 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
         <AwayPlaceholder />
         {showFriendBadge && (
           <View style={styles.friendBadge}>
-            <MaterialIcons name="check-circle" size={16} color="#0f0" />
+            <MaterialIcons name="check-circle" size={16} color={WELCOME_NAV_ACTIVE_ICON} />
             <Text style={styles.friendBadgeText}>{L('friend')}</Text>
           </View>
         )}
@@ -836,7 +840,7 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
           <AwayPlaceholder />
           {showFriendBadge && (
             <View style={styles.friendBadge}>
-              <MaterialIcons name="check-circle" size={16} color="#0f0" />
+              <MaterialIcons name="check-circle" size={16} color={WELCOME_NAV_ACTIVE_ICON} />
               <Text style={styles.friendBadgeText}>{L('friend')}</Text>
             </View>
           )}
@@ -860,7 +864,7 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
           {held}
           {showFriendBadge && (
             <View style={styles.friendBadge}>
-              <MaterialIcons name="check-circle" size={16} color="#0f0" />
+              <MaterialIcons name="check-circle" size={16} color={WELCOME_NAV_ACTIVE_ICON} />
               <Text style={styles.friendBadgeText}>{L('friend')}</Text>
             </View>
           )}
@@ -878,7 +882,7 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
           </View>
           {showFriendBadge && (
             <View style={styles.friendBadge}>
-              <MaterialIcons name="check-circle" size={16} color="#0f0" />
+              <MaterialIcons name="check-circle" size={16} color={WELCOME_NAV_ACTIVE_ICON} />
               <Text style={styles.friendBadgeText}>{L('friend')}</Text>
             </View>
           )}
@@ -894,7 +898,7 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
       </View>
       {showFriendBadge && (
         <View style={styles.friendBadge}>
-          <MaterialIcons name="check-circle" size={16} color="#0f0" />
+          <MaterialIcons name="check-circle" size={16} color={WELCOME_NAV_ACTIVE_ICON} />
           <Text style={styles.friendBadgeText}>{L('friend')}</Text>
         </View>
       )}
@@ -932,15 +936,15 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    backgroundColor: 'rgba(0,255,0,0.15)',
+    backgroundColor: WELCOME_NAV_ACTIVE_ACCENT.solid15,
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: 'rgba(0,255,0,0.3)',
+    borderColor: WELCOME_NAV_ACTIVE_ACCENT.solid30,
   },
   friendBadgeText: {
-    color: '#0f0',
+    color: WELCOME_NAV_ACTIVE_ICON,
     fontSize: 12,
     fontWeight: '600',
   },

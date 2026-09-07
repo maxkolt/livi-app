@@ -51,6 +51,7 @@ import {
 import type { HomeStyles } from './styles';
 
 const SUPPORT_EMAIL = '12345kolt@gmal.com';
+const SUPPORT_EMAIL_2 = 'kolt12max@mail.ru';
 const BOOSTY_URL = process.env.EXPO_PUBLIC_BOOSTY_URL || 'https://boosty.to/liviapp/donate';
 const PATREON_URL = process.env.EXPO_PUBLIC_PATREON_URL || 'https://www.patreon.com/c/LiViApp';
 const AVATAR_RING_WIDTH = 2.5;
@@ -733,6 +734,16 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
           <Text style={styles.helpEmailText}>{SUPPORT_EMAIL}</Text>
           <Text style={styles.helpEmailHint}>
             {copiedEmail === SUPPORT_EMAIL ? t('profileEmailCopied', lang) : t('profileCopyEmail', lang)}
+          </Text>
+        </Pressable>
+        <Pressable
+          onPress={() => copyEmail(SUPPORT_EMAIL_2)}
+          style={({ pressed }) => [styles.helpEmailRow, pressed && styles.helpEmailRowPressed]}
+          accessibilityRole="button"
+        >
+          <Text style={styles.helpEmailText}>{SUPPORT_EMAIL_2}</Text>
+          <Text style={styles.helpEmailHint}>
+            {copiedEmail === SUPPORT_EMAIL_2 ? t('profileEmailCopied', lang) : t('profileCopyEmail', lang)}
           </Text>
         </Pressable>
       </View>

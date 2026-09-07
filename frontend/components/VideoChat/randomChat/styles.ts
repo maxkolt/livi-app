@@ -1,5 +1,9 @@
 import { Platform, Dimensions, StyleSheet } from 'react-native';
-import { WELCOME_HEADER_TITLE } from '../../../screens/home/constants';
+import {
+  WELCOME_HEADER_TITLE,
+  WELCOME_NAV_ACTIVE_ACCENT,
+  WELCOME_NAV_ACTIVE_ICON,
+} from '../../../screens/home/constants';
 import { CARD_BASE } from './constants';
 
 export const styles = StyleSheet.create({
@@ -170,15 +174,15 @@ export const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    backgroundColor: 'rgba(0,255,0,0.15)',
+    backgroundColor: WELCOME_NAV_ACTIVE_ACCENT.solid15,
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: 'rgba(0,255,0,0.3)',
+    borderColor: WELCOME_NAV_ACTIVE_ACCENT.solid30,
   },
   friendBadgeText: {
-    color: '#0f0',
+    color: WELCOME_NAV_ACTIVE_ICON,
     fontSize: 12,
     fontWeight: '600',
   },

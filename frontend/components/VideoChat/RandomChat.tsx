@@ -44,7 +44,7 @@ import * as Device from 'expo-device';
 import { useAudioRouting } from './hooks/useAudioRouting';
 import { useModeration } from './hooks/useModeration';
 import { shouldDeferRandomChatStopOnAppBackground } from '../../utils/activeCallSession';
-import { WELCOME_STAGE_BG } from '../../screens/home/constants';
+import { WELCOME_HEADER_TITLE, WELCOME_NAV_ACTIVE_ICON, WELCOME_STAGE_BG } from '../../screens/home/constants';
 import { WelcomeStageBackground } from '../../screens/home/WelcomeStageBackground';
 import { ANDROID_SCREEN_PADDING, NETWORK_OVERLAY_DELAY_MS } from './randomChat/constants';
 import { styles } from './randomChat/styles';
@@ -1529,7 +1529,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
 
                 {showLoader && (
                   <View style={styles.overlayCenter}>
-                    <ActivityIndicator size="large" color="#fff" />
+                    <ActivityIndicator size="large" color={WELCOME_HEADER_TITLE} />
                   </View>
                 )}
 
@@ -1541,7 +1541,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
 
                 {networkOverlayVisible && (
                   <View style={styles.networkOverlay} pointerEvents="auto">
-                    <MaterialIcons name="wifi-off" size={64} color="#fff" />
+                    <MaterialIcons name="wifi-off" size={64} color={WELCOME_HEADER_TITLE} />
                   </View>
                 )}
               </View>
@@ -1572,7 +1572,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
                     <MaterialIcons
                       name={remoteMuted ? "volume-off" : "volume-up"}
                       size={26}
-                      color={remoteMuted ? "#999" : (remoteStream ? "#fff" : "#777")}
+                      color={remoteMuted ? "#999" : (remoteStream ? WELCOME_HEADER_TITLE : "#777")}
                     />
                     {remoteMuted && (
                       <View
@@ -1603,7 +1603,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
                   <MaterialIcons
                     name={addBlocked ? "person-add-disabled" : "person-add"}
                     size={26}
-                    color="#fff"
+                    color={WELCOME_HEADER_TITLE}
                   />
                 </TouchableOpacity>
               </View>
@@ -1613,7 +1613,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
           {/* Бейдж "Друг" */}
           {!isInactiveState && showFriendBadge && !!remoteStream && (
             <View style={[styles.friendBadge, { position: "absolute", top: 8, right: 8 }]}>
-              <MaterialIcons name="check-circle" size={16} color="#0f0" />
+              <MaterialIcons name="check-circle" size={16} color={WELCOME_NAV_ACTIVE_ICON} />
               <Text style={styles.friendBadgeText}>{L('friend')}</Text>
             </View>
           )}
@@ -1732,7 +1732,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
                   activeOpacity={0.7}
                   style={[styles.iconBtn, !camOn && { opacity: 0.5 }]}
                 >
-                  <MaterialIcons name="flip-camera-ios" size={26} color="#fff" />
+                  <MaterialIcons name="flip-camera-ios" size={26} color={WELCOME_HEADER_TITLE} />
                 </TouchableOpacity>
               </Animated.View>
               
@@ -1748,7 +1748,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
                   <MaterialIcons
                     name={micOn ? "mic" : "mic-off"}
                     size={26}
-                    color={micOn ? "#fff" : "#888"}
+                    color={micOn ? WELCOME_HEADER_TITLE : "#888"}
                   />
                 </TouchableOpacity>
 
@@ -1761,7 +1761,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
                   <MaterialIcons
                     name={camOn ? "videocam" : "videocam-off"}
                     size={26}
-                    color={camOn ? "#fff" : "#888"}
+                    color={camOn ? WELCOME_HEADER_TITLE : "#888"}
                   />
                 </TouchableOpacity>
               </Animated.View>

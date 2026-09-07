@@ -21,11 +21,11 @@ import {
 } from "../home/constants";
 
 /** Max translate in px — subtle but noticeable. */
-const MAX_SHIFT = 4;
+const MAX_SHIFT = 5;
 /** Larger range = weaker response to the same tilt. */
-const TILT_RANGE = 0.85;
+const TILT_RANGE = 0.78;
 /** 0..1 — how quickly the wallpaper follows the tilt (lower = softer). */
-const SMOOTH = 0.12;
+const SMOOTH = 0.16;
 
 /** Match jpeg plate so letterbox/parallax edges never show a seam. */
 const PLATE_LIGHT = "#AACABB";
@@ -120,7 +120,7 @@ export function ChatParallaxWallpaper({ isDark }: { isDark: boolean }) {
         const available = await Accelerometer.isAvailableAsync();
         if (!available || cancelled) return;
 
-        Accelerometer.setUpdateInterval(80);
+        Accelerometer.setUpdateInterval(60);
         listeningRef.current = true;
         sub = Accelerometer.addListener(({ x, z }) => {
           if (!listeningRef.current) return;

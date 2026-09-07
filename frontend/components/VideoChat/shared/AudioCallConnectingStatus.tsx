@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { Animated, Easing, Platform, StyleSheet, Text, View } from 'react-native';
+import { WELCOME_HEADER_TITLE } from '../../../screens/home/constants';
 
 type Props = {
   label: string;
@@ -117,7 +118,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '400',
     lineHeight: 18,
-    color: 'rgba(255,255,255,0.78)',
+    color: WELCOME_HEADER_TITLE,
     letterSpacing: 0.15,
     textAlign: 'center',
   },
@@ -131,6 +132,6 @@ const styles = StyleSheet.create({
   bar: {
     width: 2,
     borderRadius: 1,
-    backgroundColor: 'rgba(255,255,255,0.9)',
+    backgroundColor: WELCOME_HEADER_TITLE,
   },
 });

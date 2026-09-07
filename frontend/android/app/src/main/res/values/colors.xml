@@ -13,13 +13,15 @@
   <!-- Карточка как в Telegram: тёмный фон, бейдж трубки -->
   <color name="notification_card_background">#2D2D2D</color>
   <color name="notification_phone_badge">#1E88E5</color>
-  <!-- Круглые кнопки IncomingCallActivity: тёмный фон с прозрачностью + светлая рамка -->
-  <color name="incoming_btn_accept_bg">#CC2F5C2F</color>
-  <color name="incoming_btn_accept_border">#4CAF50</color>
-  <color name="incoming_btn_accept_bg_pressed">#F0427E42</color>
-  <color name="incoming_btn_accept_border_pressed">#7CFF8A</color>
-  <color name="incoming_btn_decline_bg">#CC5C2F2F</color>
-  <color name="incoming_btn_decline_border">#E57373</color>
-  <color name="incoming_btn_decline_bg_pressed">#F06E3636</color>
-  <color name="incoming_btn_decline_border_pressed">#FF9F9F</color>
+  <!-- Круглые кнопки Incoming/Outgoing: прозрачная заливка + обводка -->
+  <!-- Принять — рамка как у активных иконок welcome-навбара (#4a7a8c) -->
+  <color name="incoming_btn_accept_bg">#CC1A3640</color>
+  <color name="incoming_btn_accept_border">#4A7A8C</color>
+  <color name="incoming_btn_accept_bg_pressed">#F02A5868</color>
+  <color name="incoming_btn_accept_border_pressed">#6AA3B5</color>
+  <!-- Отклонить / отменить — краповый с прозрачностью внутри -->
+  <color name="incoming_btn_decline_bg">#CC4A1E2A</color>
+  <color name="incoming_btn_decline_border">#A33B4F</color>
+  <color name="incoming_btn_decline_bg_pressed">#F06A2E3C</color>
+  <color name="incoming_btn_decline_border_pressed">#C45A6E</color>
 </resources>
