@@ -1,7 +1,9 @@
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  AppState,
   BackHandler,
   Keyboard,
+  NativeModules,
   Platform,
   Pressable,
   StyleSheet,
@@ -34,6 +36,8 @@ import { friendMatchesNameSearch, getFriendDisplay, displayAvatarLetter } from '
 import { formatWelcomeChatTime } from './chatPreview';
 import { useCallLog } from './hooks/useCallLog';
 import { deleteCallLogIds, recordCallLog } from './callLog';
+import { consumePendingWelcomeCallsFilter, onPendingWelcomeCallsFilter, setWelcomeCallsMissedFilterActive, setWelcomeCallsTabSelected, setWelcomeViewingMissedCalls, shouldSkipHomeUiSettle } from '../../utils/globalEvents';
+import { markMissedNotificationsSeen } from '../../utils/pushNotifications';
 import { WelcomeCrownButton } from './WelcomeCrownButton';
 import { WelcomeSelectModeHeader } from './WelcomeSelectModeHeader';
 import { welcomeSelectHaptic } from './welcomeSelectHaptic';
@@ -125,11 +129,76 @@ function HomeWelcomeCallsViewInner({
   const [deleting, setDeleting] = useState(false);
   const searchInputRef = useRef<TextInput>(null);
   const skipSearchDismissRef = useRef(false);
-  const clearedOnOpenRef = useRef(false);
 
   const trimmedQuery = searchQuery.trim();
   // Журнал только когда вкладка видна — иначе notify после cancel перерисовывает скрытый FlatList.
   const logEntries = useCallLog(active);
+
+  // Тап по уведомлению «пропущенный» → сразу фильтр Missed (в т.ч. если уже на Calls).
+  useEffect(() => {
+    const applyPending = () => {
+      if (!active) return;
+      const pending = consumePendingWelcomeCallsFilter();
+      if (pending === 'missed') {
+        setFilter('missed');
+        setPickMode(false);
+      } else if (pending === 'all') {
+        setFilter('all');
+      }
+    };
+    applyPending();
+    return onPendingWelcomeCallsFilter(applyPending);
+  }, [active]);
+
+  // Calls + foreground → без системных missed (гасим шторку).
+  // Свернуто → пуши приходят. Разворот на Calls → снова гасим.
+  useEffect(() => {
+    const onCalls = active && !pickMode;
+    setWelcomeCallsTabSelected(onCalls);
+    const applyViewing = () => {
+      if (!onCalls) {
+        setWelcomeCallsMissedFilterActive(false);
+        setWelcomeViewingMissedCalls(false);
+        // Уход с Calls на другую вкладку — добить бейдж иконки (missed уже 0, остаётся unread).
+        if (Platform.OS === 'android') {
+          try { NativeModules.LiviAppModule?.refreshAppIconBadgeOnly?.(); } catch (_) {}
+        }
+        return;
+      }
+      const appActive = AppState.currentState === 'active';
+      const incomingUi = !!(global as any).__incomingCallScreenVisibleRef?.current;
+      // В фоне suppress только пока висит Incoming; иначе пуши должны идти.
+      const viewing = appActive || incomingUi;
+      setWelcomeCallsMissedFilterActive(viewing);
+      setWelcomeViewingMissedCalls(viewing);
+    };
+    const markSeenIfSafe = (reason: string) => {
+      if (!onCalls || AppState.currentState !== 'active') return;
+      markMissedNotificationsSeen(reason).catch(() => {});
+    };
+    applyViewing();
+    markSeenIfSafe('welcome-calls-tab');
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state !== 'active') {
+        // Сразу снять suppress в фоне; через 500ms перепроверить Incoming.
+        applyViewing();
+        // С Calls сразу в фон: без ухода на Search бейдж иначе залипает на 2.
+        if (onCalls && Platform.OS === 'android') {
+          try { NativeModules.LiviAppModule?.refreshAppIconBadgeOnly?.(); } catch (_) {}
+        }
+        setTimeout(applyViewing, 500);
+        return;
+      }
+      applyViewing();
+      markSeenIfSafe('welcome-calls-resume');
+    });
+    return () => {
+      sub.remove();
+      setWelcomeCallsTabSelected(false);
+      setWelcomeViewingMissedCalls(false);
+      setWelcomeCallsMissedFilterActive(false);
+    };
+  }, [active, pickMode]);
 
   const friendsById = useMemo(() => {
     const map = new Map<string, Friend>();
@@ -137,16 +206,14 @@ function HomeWelcomeCallsViewInner({
     return map;
   }, [allFriends]);
 
-  // Pane keep-alive: сброс бейджа при показе вкладки (без ожидания AsyncStorage).
+  // Пока смотрим Calls в foreground — сбрасываем missed-бейджи (строка в журнале и так видна).
+  // Не трогаем сразу после cancel (settle): иначе гасим системный пуш/бейдж, пока пользователь не в приложении.
   useEffect(() => {
-    if (!active) {
-      clearedOnOpenRef.current = false;
-      return;
-    }
-    if (clearedOnOpenRef.current) return;
+    if (!active || pickMode) return;
+    if (AppState.currentState !== 'active') return;
+    if (shouldSkipHomeUiSettle()) return;
     const peerIds = Object.keys(missedByUser).filter((id) => (missedByUser[id] || 0) > 0);
     if (peerIds.length === 0) return;
-    clearedOnOpenRef.current = true;
     const haveMissed = new Set(
       logEntries.filter((item) => item.direction === 'missed').map((item) => item.peerId),
     );
@@ -156,7 +223,7 @@ function HomeWelcomeCallsViewInner({
       }
       void clearMissedCallsForFriend(peerId);
     });
-  }, [active, clearMissedCallsForFriend, logEntries, missedByUser]);
+  }, [active, clearMissedCallsForFriend, logEntries, missedByUser, pickMode]);
 
   const closeSearch = useCallback(() => {
     skipSearchDismissRef.current = true;
@@ -612,7 +679,8 @@ function HomeWelcomeCallsViewInner({
                   <Text style={styles.segmentLabel} numberOfLines={1}>
                     {L('callsSegmentMissed')}
                   </Text>
-                  <MissedCountBadge count={missedTotal} />
+                  {/* На Calls бейдж не нужен — журнал уже на экране. */}
+                  {active ? null : <MissedCountBadge count={missedTotal} />}
                 </View>
               </Pressable>
             </View>

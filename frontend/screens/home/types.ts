@@ -16,8 +16,14 @@ export type HomeRouteParams = {
   callCancelled?: boolean;
   inviteCode?: string;
   showInviteModal?: boolean;
+  /** @deprecated legacy overlay — remapped to welcome; do not set */
   openFriendsMenu?: boolean;
+  /** @deprecated prefer openWelcomeChat / openWelcomeCalls */
   openFriendsTab?: boolean;
+  openWelcomeCalls?: boolean;
+  openWelcomeCallsMissed?: boolean;
+  openWelcomeChat?: boolean;
+  openWelcomeChatUnread?: boolean;
   pushMessageFrom?: string;
 };
 

@@ -40,6 +40,8 @@ class LiviOutgoingCallService : Service() {
     private var callId: String = ""
     private var toUserId: String = ""
     private var toNick: String = ""
+    /** pending_* до adopt — чтобы CLOSE/cancel с provisional id всё ещё стопал сервис. */
+    private var provisionalCallId: String = ""
     private var closeReceiver: BroadcastReceiver? = null
     @Volatile
     private var foregroundStarted: Boolean = false
@@ -58,22 +60,20 @@ class LiviOutgoingCallService : Service() {
             override fun onReceive(context: Context?, intent: Intent?) {
                 val broadcastCallId = intent?.getStringExtra(OutgoingCallActivity.EXTRA_CALL_ID) ?: ""
                 val forceClose = intent?.getBooleanExtra(OutgoingCallActivity.EXTRA_FORCE_CLOSE, false) == true
-                // Пустой broadcast без force больше НЕ гасит активный ringback:
-                // late onDestroy старого OutgoingCallActivity иначе убивает мелодию нового дозвона.
                 val shouldStop =
-                    (broadcastCallId.isNotEmpty() && broadcastCallId == this@LiviOutgoingCallService.callId) ||
-                        (forceClose && broadcastCallId.isEmpty()) ||
+                    forceClose ||
+                        callIdsMatchForStop(broadcastCallId, this@LiviOutgoingCallService.callId, provisionalCallId) ||
                         (broadcastCallId.isEmpty() && this@LiviOutgoingCallService.callId.isEmpty())
                 if (shouldStop) {
                     android.util.Log.d(
                         TAG,
-                        "close broadcast stopping service callId=$callId broadcastCallId=$broadcastCallId force=$forceClose",
+                        "close broadcast stopping service callId=$callId provisional=$provisionalCallId broadcast=$broadcastCallId force=$forceClose",
                     )
                     requestStop()
                 } else {
                     android.util.Log.d(
                         TAG,
-                        "close broadcast ignored broadcastCallId=$broadcastCallId currentCallId=$callId force=$forceClose",
+                        "close broadcast ignored broadcastCallId=$broadcastCallId currentCallId=$callId provisional=$provisionalCallId force=$forceClose",
                     )
                 }
             }
@@ -158,6 +158,11 @@ class LiviOutgoingCallService : Service() {
             return START_NOT_STICKY
         }
 
+        if (callId.startsWith("pending_")) {
+            provisionalCallId = callId
+        } else if (provisionalCallId.isEmpty()) {
+            provisionalCallId = ""
+        }
         markRinging(callId)
         startSound()
         scheduleTimeout()
@@ -195,8 +200,14 @@ class LiviOutgoingCallService : Service() {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
 
+        val title = if (toNick.isNotBlank()) {
+            toNick
+        } else {
+            getString(R.string.outgoing_call_notification_title)
+        }
         return NotificationCompat.Builder(this, channelId)
-            .setContentTitle(getString(R.string.outgoing_call_notification_title))
+            .setContentTitle(title)
+            .setContentText(getString(R.string.outgoing_call_notification_title))
             .setSmallIcon(applicationInfo.icon.takeIf { it != 0 } ?: android.R.drawable.ic_menu_call)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
@@ -427,31 +438,86 @@ class LiviOutgoingCallService : Service() {
         private var instanceRef: WeakReference<LiviOutgoingCallService>? = null
 
         /**
-         * Cancel path: mute instantly, then stop via broadcast (onDestroy release async).
-         * Не блокирует UI-поток MediaPlayer.stop/release.
-         * Stale stop после redial: не mute/CLOSE нового дозвона.
+         * Cancel path: mute instantly, then stop FGS (notification).
+         * pending_* этого же dial (provisional на сервисе) ↔ real — стопаем.
+         * Другой real id (redial) — skip.
          */
         @JvmStatic
         fun silenceAndStop(context: Context, callId: String?) {
             val id = callId?.trim().orEmpty()
+            val svc = instanceRef?.get()
+            val ringing = ringingCallId.ifBlank { svc?.callId.orEmpty() }
+            val provisional = svc?.provisionalCallId.orEmpty()
             if (
                 id.isNotEmpty() &&
                 ringingActive &&
-                ringingCallId.isNotEmpty() &&
-                ringingCallId != id
+                ringing.isNotEmpty() &&
+                !callIdsMatchForStop(id, ringing, provisional)
             ) {
                 android.util.Log.d(
                     TAG,
-                    "silenceAndStop: skip stale id=${id.take(24)} ringing=${ringingCallId.take(24)}",
+                    "silenceAndStop: skip stale id=${id.take(24)} ringing=${ringing.take(24)} provisional=${provisional.take(24)}",
                 )
                 return
             }
-            silencePlayerOnly()
-            if (id.isEmpty()) {
-                android.util.Log.d(TAG, "silenceAndStop: empty callId — muted only")
-                return
+            val stopId = when {
+                ringing.isNotEmpty() && (id.isEmpty() || callIdsMatchForStop(id, ringing, provisional)) -> ringing
+                id.isNotEmpty() -> id
+                else -> ""
             }
-            stop(context, id)
+            silencePlayerOnly()
+            forceStopNow(context, stopId)
+        }
+
+        /**
+         * Снять FGS-уведомление исходящего сразу (cancel / stale tap).
+         * Не зависит только от broadcast — instance.requestStop + nm.cancel.
+         */
+        @JvmStatic
+        fun forceStopNow(context: Context, callId: String? = null) {
+            val id = callId?.trim().orEmpty()
+            try {
+                instanceRef?.get()?.requestStop()
+            } catch (_: Exception) {}
+            try {
+                val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                nm.cancel(NOTIFICATION_ID)
+            } catch (_: Exception) {}
+            markNotRingingStatic()
+            if (id.isNotEmpty()) {
+                stop(context, id)
+                try {
+                    LiviOngoingCallHelper.clearOngoingCallIfMatches(context, id)
+                } catch (_: Exception) {}
+            }
+            // Снести prefs исходящего, если сервис уже мёртв (stale shade).
+            if (!isRingingActive()) {
+                try {
+                    val type = context.getSharedPreferences("livi_ongoing_call", Context.MODE_PRIVATE)
+                        .getString("type", null)
+                    if (type == "outgoing") {
+                        LiviOngoingCallHelper.clearOngoingCall(context)
+                    }
+                } catch (_: Exception) {}
+            }
+            android.util.Log.d(TAG, "forceStopNow callId=${id.take(24)}")
+        }
+
+        /**
+         * broadcast/cancel id относится к текущему сервису:
+         * exact match, или cancel provisional этого dial, или real пока сервис ещё на pending.
+         */
+        @JvmStatic
+        fun callIdsMatchForStop(cancelId: String, serviceCallId: String, serviceProvisional: String): Boolean {
+            val x = cancelId.trim()
+            val y = serviceCallId.trim()
+            val p = serviceProvisional.trim()
+            if (x.isEmpty()) return false
+            if (y.isNotEmpty() && x == y) return true
+            if (p.isNotEmpty() && x == p) return true
+            // Cancel уже с real, сервис ещё на pending_ этого же dial
+            if (!x.startsWith("pending_") && y.startsWith("pending_") && (p.isEmpty() || p == y)) return true
+            return false
         }
 
         /** Только mute + сброс ringing flag — без stopForeground/broadcast (для мгновенного X). */

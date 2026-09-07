@@ -7,13 +7,15 @@ import { socket } from "./socketCore";
 
 export type DirectCallMedia = "audio" | "video";
 
-export function startCall(toUserId: string, options?: { media?: DirectCallMedia }) {
+export function startCall(toUserId: string, options?: { media?: DirectCallMedia; callerNick?: string }) {
   const raw = String(toUserId || "").trim();
   if (!isOid(raw)) return Promise.reject(new Error("invalid ObjectId"));
   const to = /^[a-f\d]{24}$/i.test(raw) ? raw.toLowerCase() : raw;
   const media = options?.media === "audio" ? "audio" : undefined;
-  const payload: { to: string; media?: DirectCallMedia } = { to };
+  const callerNick = String(options?.callerNick || "").trim().slice(0, 64);
+  const payload: { to: string; media?: DirectCallMedia; callerNick?: string } = { to };
   if (media) payload.media = media;
+  if (callerNick) payload.callerNick = callerNick;
 
   const viaSocket = () =>
     emitAck<{ ok: boolean; callId?: string; error?: string }>(

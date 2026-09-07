@@ -1,4 +1,4 @@
-import { NativeModules, Platform } from 'react-native';
+import { NativeModules, Platform, AppState } from 'react-native';
 
 // Простой глобальный эмиттер событий без зависимостей
 // Используем для мгновенного обновления счетчиков пропущенных звонков на HomeScreen
@@ -36,6 +36,181 @@ export function emitMissedIncrement(userId: string, count?: number) {
   const payload = typeof count === 'number' ? { userId: uid, count } : { userId: uid };
   for (const l of missedListeners) {
     try { l(payload); } catch {}
+  }
+}
+
+/**
+ * Пользователь на вкладке welcome Calls в foreground — без системных missed-пушей
+ * (строка видна в журнале). В фоне пуши всегда приходят.
+ */
+export function setWelcomeViewingMissedCalls(viewing: boolean): void {
+  const g = global as any;
+  g.__welcomeViewingMissedCallsRef = g.__welcomeViewingMissedCallsRef || { current: false };
+  g.__welcomeViewingMissedCallsRef.current = viewing === true;
+  if (Platform.OS === 'android') {
+    try {
+      NativeModules.LiviAppModule?.setSuppressMissedCallAlerts?.(viewing === true);
+    } catch {}
+  }
+}
+
+/** Выбрана вкладка Calls (даже в фоне) — для Incoming поверх не слать лишний missed. */
+export function setWelcomeCallsTabSelected(selected: boolean): void {
+  const g = global as any;
+  g.__welcomeCallsTabSelectedRef = g.__welcomeCallsTabSelectedRef || { current: false };
+  g.__welcomeCallsTabSelectedRef.current = selected === true;
+}
+
+/**
+ * Вкладка Calls + foreground.
+ * В фоне — false (пуши должны приходить), кроме Incoming поверх вкладки Calls.
+ */
+export function setWelcomeCallsMissedFilterActive(active: boolean): void {
+  const g = global as any;
+  g.__welcomeCallsMissedFilterRef = g.__welcomeCallsMissedFilterRef || { current: false };
+  g.__welcomeCallsMissedFilterRef.current = active === true;
+}
+
+function isIncomingCallUiVisible(): boolean {
+  try {
+    return (global as any).__incomingCallScreenVisibleRef?.current === true;
+  } catch {
+    return false;
+  }
+}
+
+export function isWelcomeCallsMissedFilterActive(): boolean {
+  try {
+    // В фоне пуши нужны; не держим filter из‑за settle.
+    if (AppState.currentState !== 'active') {
+      const tabSelected = (global as any).__welcomeCallsTabSelectedRef?.current === true;
+      return tabSelected && isIncomingCallUiVisible();
+    }
+    return (global as any).__welcomeCallsMissedFilterRef?.current === true;
+  } catch {
+    return false;
+  }
+}
+
+export function isWelcomeViewingMissedCalls(): boolean {
+  try {
+    if (AppState.currentState !== 'active') {
+      // Свернуто: пуши да; Incoming поверх Calls — без дубля в шторке.
+      const tabSelected = (global as any).__welcomeCallsTabSelectedRef?.current === true;
+      return tabSelected && isIncomingCallUiVisible();
+    }
+    return (global as any).__welcomeViewingMissedCallsRef?.current === true;
+  } catch {
+    return false;
+  }
+}
+
+export function setWelcomeViewingChats(viewing: boolean): void {
+  const g = global as any;
+  g.__welcomeViewingChatsRef = g.__welcomeViewingChatsRef || { current: false };
+  g.__welcomeViewingChatsRef.current = viewing === true;
+  if (Platform.OS === 'android') {
+    try {
+      NativeModules.LiviAppModule?.setSuppressUnreadMessageAlerts?.(viewing === true);
+    } catch {}
+  }
+}
+
+export function isWelcomeViewingChats(): boolean {
+  try {
+    if (AppState.currentState !== 'active') return false;
+    return (global as any).__welcomeViewingChatsRef?.current === true;
+  } catch {
+    return false;
+  }
+}
+
+/** Ушли в фон — сразу снять suppress, чтобы FCM/JS показали missed. */
+let suppressClearOnBackgroundInstalled = false;
+function ensureSuppressClearedWhenBackgrounded(): void {
+  if (suppressClearOnBackgroundInstalled) return;
+  suppressClearOnBackgroundInstalled = true;
+  try {
+    AppState.addEventListener('change', (state) => {
+      if (state === 'active') return;
+      const clearIfNeeded = () => {
+        try {
+          if (AppState.currentState === 'active') return;
+          // Incoming ещё на экране — не снимаем suppress (иначе дубль при cancel).
+          if (isIncomingCallUiVisible()) return;
+          const g = global as any;
+          if (g.__welcomeViewingMissedCallsRef?.current) {
+            setWelcomeViewingMissedCalls(false);
+          }
+          if (g.__welcomeCallsMissedFilterRef) g.__welcomeCallsMissedFilterRef.current = false;
+          if (g.__welcomeViewingChatsRef?.current) {
+            setWelcomeViewingChats(false);
+          }
+        } catch {}
+      };
+      // Сразу + короткий retry (Incoming flag может выставиться чуть позже).
+      clearIfNeeded();
+      setTimeout(clearIfNeeded, 500);
+    });
+  } catch {}
+}
+ensureSuppressClearedWhenBackgrounded();
+
+/** Тап по уведомлению / deep link: сразу открыть фильтр «Пропущенные» на welcome Calls. */
+const welcomeCallsFilterPendingListeners = new Set<() => void>();
+export function onPendingWelcomeCallsFilter(cb: () => void): () => void {
+  welcomeCallsFilterPendingListeners.add(cb);
+  return () => {
+    welcomeCallsFilterPendingListeners.delete(cb);
+  };
+}
+
+export function setPendingWelcomeCallsFilter(filter: 'all' | 'missed' | null): void {
+  const g = global as any;
+  g.__welcomeCallsPendingFilterRef = g.__welcomeCallsPendingFilterRef || { current: null as 'all' | 'missed' | null };
+  g.__welcomeCallsPendingFilterRef.current = filter;
+  for (const l of welcomeCallsFilterPendingListeners) {
+    try { l(); } catch {}
+  }
+}
+
+export function consumePendingWelcomeCallsFilter(): 'all' | 'missed' | null {
+  try {
+    const g = global as any;
+    const next = g.__welcomeCallsPendingFilterRef?.current ?? null;
+    if (g.__welcomeCallsPendingFilterRef) g.__welcomeCallsPendingFilterRef.current = null;
+    return next === 'all' || next === 'missed' ? next : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Тап по уведомлению о непрочитанных → фильтр Unread на welcome Chat. */
+const welcomeChatsFilterPendingListeners = new Set<() => void>();
+export function onPendingWelcomeChatsFilter(cb: () => void): () => void {
+  welcomeChatsFilterPendingListeners.add(cb);
+  return () => {
+    welcomeChatsFilterPendingListeners.delete(cb);
+  };
+}
+
+export function setPendingWelcomeChatsFilter(filter: 'all' | 'unread' | null): void {
+  const g = global as any;
+  g.__welcomeChatsPendingFilterRef = g.__welcomeChatsPendingFilterRef || { current: null as 'all' | 'unread' | null };
+  g.__welcomeChatsPendingFilterRef.current = filter;
+  for (const l of welcomeChatsFilterPendingListeners) {
+    try { l(); } catch {}
+  }
+}
+
+export function consumePendingWelcomeChatsFilter(): 'all' | 'unread' | null {
+  try {
+    const g = global as any;
+    const next = g.__welcomeChatsPendingFilterRef?.current ?? null;
+    if (g.__welcomeChatsPendingFilterRef) g.__welcomeChatsPendingFilterRef.current = null;
+    return next === 'all' || next === 'unread' ? next : null;
+  } catch {
+    return null;
   }
 }
 

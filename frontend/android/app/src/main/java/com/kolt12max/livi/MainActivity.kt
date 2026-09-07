@@ -374,12 +374,8 @@ class MainActivity : ReactActivity() {
         LiviAppModule.setPendingIncomingCallForCallKeep(callId, from, fromNick)
       }
     }
-    // Тап по уведомлению «Пропущенный вызов» (приложение уже было в фоне) — сразу снимаем уведомления
-    if (intent.getBooleanExtra(EXTRA_OPEN_TAB_FRIENDS, false)) {
-      intent.removeExtra(EXTRA_OPEN_TAB_FRIENDS)
-      LiviAppModule.dismissAllMissedCallNotificationsFromContext(this)
-      LiviAppModule.setPendingOpenTabFriends(this)
-    }
+    // Тап по уведомлению в шторке → welcome Chat / Calls (не legacy friends menu).
+    consumeShadeOpenIntent(intent, dismissMissed = true)
     handleReturnToActiveCallIntent(intent)
     handleAudioOnlyFromPiPIntent(intent)
     if (tryStashPendingAnswerFromIntent(intent)) {
@@ -418,16 +414,8 @@ class MainActivity : ReactActivity() {
       emitSystemPiPExpandedOnce("onResume")
     }
     restoreNavigationBarVisibility()
-    // Тап по уведомлению «Пропущенный вызов» — снять уведомления из шторки и открыть вкладку Друзья (здесь срабатывает и при холодном старте — activity уже готова)
-    if (intent?.getBooleanExtra(EXTRA_OPEN_TAB_FRIENDS, false) == true) {
-      intent?.removeExtra(EXTRA_OPEN_TAB_FRIENDS)
-      LiviAppModule.setPendingOpenTabFriends(this)
-      // Сразу и с небольшой задержкой: на части устройств при холодном старте cancel в первый момент не срабатывает
-      LiviAppModule.dismissAllMissedCallNotificationsFromContext(this)
-      Handler(Looper.getMainLooper()).postDelayed({
-        LiviAppModule.dismissAllMissedCallNotificationsFromContext(this@MainActivity)
-      }, 150)
-    }
+    // Тап по уведомлению в шторке → welcome Chat / Calls
+    consumeShadeOpenIntent(intent, dismissMissed = true)
     handleReturnToActiveCallIntent(intent)
     handleAudioOnlyFromPiPIntent(intent)
     handleLauncherTapDuringActiveCall(intent)
@@ -755,11 +743,8 @@ class MainActivity : ReactActivity() {
         LiviAppModule.setPendingIncomingCallForCallKeep(callId, from, fromNick)
       }
     }
-    // Тап по уведомлению «Пропущенный вызов»: ставим флаг для JS; снятие уведомлений из шторки — в onResume (при холодном старте в onCreate система уведомлений может быть ещё не готова).
-    if (intent?.getBooleanExtra(EXTRA_OPEN_TAB_FRIENDS, false) == true) {
-      intent.removeExtra(EXTRA_OPEN_TAB_FRIENDS)
-      LiviAppModule.setPendingOpenTabFriends(this)
-    }
+    // Тап по уведомлению в шторке: флаг для JS (снятие missed — в onResume).
+    consumeShadeOpenIntent(intent, dismissMissed = false)
     handleReturnToActiveCallIntent(intent)
     handleAudioOnlyFromPiPIntent(intent)
     if (tryStashPendingAnswerFromIntent(intent)) {
@@ -900,6 +885,42 @@ class MainActivity : ReactActivity() {
       }
   }
 
+  /**
+   * Тап по shade: непрочитанные → welcome Chat; пропущенные → welcome Calls.
+   * Action и extra разделены — иначе общий PendingIntent requestCode=0 склеивал оба типа.
+   */
+  private fun consumeShadeOpenIntent(intent: Intent?, dismissMissed: Boolean) {
+    if (intent == null) return
+    val action = intent.action
+    val openChat =
+      action == LiviFirebaseMessagingService.ACTION_OPEN_UNREAD_CHAT ||
+        intent.getBooleanExtra(EXTRA_OPEN_WELCOME_CHAT, false)
+    val openCalls =
+      action == LiviFirebaseMessagingService.ACTION_OPEN_MISSED_CALLS ||
+        intent.getBooleanExtra(EXTRA_OPEN_TAB_FRIENDS, false)
+    if (openChat) {
+      intent.removeExtra(EXTRA_OPEN_WELCOME_CHAT)
+      if (action == LiviFirebaseMessagingService.ACTION_OPEN_UNREAD_CHAT) {
+        intent.action = null
+      }
+      LiviAppModule.setPendingOpenWelcomeChat(this)
+      return
+    }
+    if (openCalls) {
+      intent.removeExtra(EXTRA_OPEN_TAB_FRIENDS)
+      if (action == LiviFirebaseMessagingService.ACTION_OPEN_MISSED_CALLS) {
+        intent.action = null
+      }
+      LiviAppModule.setPendingOpenTabFriends(this)
+      if (dismissMissed) {
+        LiviAppModule.dismissAllMissedCallNotificationsFromContext(this)
+        Handler(Looper.getMainLooper()).postDelayed({
+          LiviAppModule.dismissAllMissedCallNotificationsFromContext(this@MainActivity)
+        }, 150)
+      }
+    }
+  }
+
   private fun handleReturnToActiveCallIntent(intent: Intent?) {
     if (intent?.getBooleanExtra(EXTRA_RETURN_TO_ACTIVE_CALL, false) != true) return
     val audioOnly = intent.getBooleanExtra(EXTRA_RETURN_TO_ACTIVE_CALL_AUDIO_ONLY, false)
@@ -926,6 +947,8 @@ class MainActivity : ReactActivity() {
     /** Accept входящего: показать #1B1C22 поверх RN до VideoCall.onLayout. */
     const val EXTRA_INCOMING_ANSWER_COVER = "incoming_answer_cover"
     const val EXTRA_OPEN_TAB_FRIENDS = "open_tab_friends"
+    /** Тап по уведомлению о непрочитанном сообщении → welcome Chat. */
+    const val EXTRA_OPEN_WELCOME_CHAT = "open_welcome_chat"
     /** Тап по ongoing-уведомлению активного видеозвонка — вернуться на экран звонка. */
     const val EXTRA_RETURN_TO_ACTIVE_CALL = "return_to_active_call"
     /** С какого UI ушли в фон (аудио / видео) — для возврата по тапу на ongoing-уведомление. */

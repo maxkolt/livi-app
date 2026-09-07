@@ -261,6 +261,8 @@ dependencies {
     implementation("com.android.installreferrer:installreferrer:2.2")
     // AppMetrica analytics SDK.
     implementation("io.appmetrica.analytics:analytics:8.5.0")
+    // Same as expo-notifications — прямой вызов для бейджа иконки без cancelAll().
+    implementation("me.leolin:ShortcutBadger:1.1.22@aar")
 
     def isGifEnabled = (findProperty('expo.gif.enabled') ?: "") == "true";
     def isWebpEnabled = (findProperty('expo.webp.enabled') ?: "") == "true";

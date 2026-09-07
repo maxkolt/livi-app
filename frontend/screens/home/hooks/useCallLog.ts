@@ -1,4 +1,4 @@
-import { useEffect, useState, startTransition } from 'react';
+import { useEffect, useLayoutEffect, useState, startTransition } from 'react';
 import { getCurrentUserId } from '../../../sockets/socket';
 import {
   getCallLogSnapshot,
@@ -11,12 +11,10 @@ import {
 function isOutgoingDialHot(): boolean {
   try {
     const g = global as any;
+    // Только активный дозвон — не grace после cancel: иначе строка «отменён/пропущен» ждёт ~3с.
     if (g.__outgoingStartInFlightRef?.current) return true;
     if (g.__outgoingCallUiActiveRef?.current) return true;
     if (g.__outgoingCallScreenVisibleRef?.current) return true;
-    // Cancel→redial grace: не bump FlatList, пока пользователь может сразу набрать снова.
-    const cancelAt = Number(g.__lastOutgoingCancelAtRef?.current || 0);
-    if (cancelAt > 0 && Date.now() - cancelAt < 3200) return true;
     return false;
   } catch {
     return false;
@@ -28,6 +26,13 @@ export function useCallLog(enabled: boolean) {
     enabled ? getCallLogSnapshot() : [],
   );
   const uid = String(getCurrentUserId() || '').trim();
+
+  // До paint: если prefetch уже в memory — сразу полный список, не «1 строка → rest».
+  useLayoutEffect(() => {
+    if (!enabled) return;
+    const snap = getCallLogSnapshot();
+    if (snap.length) setEntries(snap);
+  }, [enabled, uid]);
 
   useEffect(() => {
     if (!enabled) return;
@@ -53,7 +58,6 @@ export function useCallLog(enabled: boolean) {
       applySnap();
     };
 
-    // Вход на Calls: memory уже cancelled/outgoing — без ожидания notify.
     const snap = getCallLogSnapshot();
     if (snap.length) setEntries(snap);
     void loadCallLog().then((list) => {

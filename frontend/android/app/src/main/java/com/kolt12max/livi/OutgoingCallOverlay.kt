@@ -347,9 +347,14 @@ object OutgoingCallOverlay {
       val ctx = act?.applicationContext
       if (ctx != null) {
         try {
-          LiviOutgoingCallService.silencePlayerOnly()
+          if (!id.startsWith("pending_")) {
+            EndedCallIds.add(ctx, id)
+          }
         } catch (_: Exception) {}
-        scheduleDeferredRingbackStop(ctx, id)
+        // Сразу снять FGS — без deferred 1.8s (иначе stale «LiVi — вызов» в шторке).
+        try {
+          LiviOutgoingCallService.silenceAndStop(ctx, id)
+        } catch (_: Exception) {}
       }
     }
     callId = ""

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   getChatMessagesLocal,
   getCurrentUserId,
@@ -15,8 +15,38 @@ import {
 
 export type { ChatPreview };
 
+let previewMemory: Record<string, ChatPreview> = {};
+
+export function getChatPreviewSnapshot(): Record<string, ChatPreview> {
+  return previewMemory;
+}
+
+/** Prefetch до открытия вкладки Chat — первый paint с полными превью. */
+export async function prefetchChatPreviews(friendIds: string[], lang: Lang): Promise<void> {
+  const ids = friendIds.map((id) => String(id || '').trim()).filter(Boolean);
+  if (ids.length === 0) return;
+  const next: Record<string, ChatPreview> = {};
+  await Promise.all(
+    ids.map(async (id) => {
+      try {
+        const messages = await getChatMessagesLocal(id);
+        const last = pickLatestMessage(messages);
+        if (!last) return;
+        const at = messageTimestampMs(last);
+        const text = previewTextFromMessage(last, lang);
+        next[id] = { text, at };
+      } catch {
+        // skip
+      }
+    }),
+  );
+  previewMemory = next;
+}
+
 export function useChatPreviews(friendIds: string[], lang: Lang, enabled: boolean) {
-  const [previews, setPreviews] = useState<Record<string, ChatPreview>>({});
+  const [previews, setPreviews] = useState<Record<string, ChatPreview>>(() =>
+    enabled ? { ...getChatPreviewSnapshot() } : {},
+  );
   const idsKey = friendIds.join('|');
   const idsRef = useRef(friendIds);
   const langRef = useRef(lang);
@@ -50,7 +80,14 @@ export function useChatPreviews(friendIds: string[], lang: Lang, enabled: boolea
         }
       }),
     );
+    previewMemory = next;
     setPreviews(next);
+  }, [enabled, idsKey]);
+
+  useLayoutEffect(() => {
+    if (!enabled) return;
+    const snap = getChatPreviewSnapshot();
+    if (Object.keys(snap).length) setPreviews({ ...snap });
   }, [enabled, idsKey]);
 
   useEffect(() => {
@@ -68,7 +105,11 @@ export function useChatPreviews(friendIds: string[], lang: Lang, enabled: boolea
       if (!peerId || !idsRef.current.includes(peerId)) return;
       const at = messageTimestampMs(message) || Date.now();
       const text = previewTextFromMessage(message, langRef.current);
-      setPreviews((prev) => ({ ...prev, [peerId]: { text, at } }));
+      setPreviews((prev) => {
+        const next = { ...prev, [peerId]: { text, at } };
+        previewMemory = { ...previewMemory, [peerId]: { text, at } };
+        return next;
+      });
     });
     const offCleared = onChatCleared((data) => {
       const me = String(getCurrentUserId() || '');
@@ -80,6 +121,11 @@ export function useChatPreviews(friendIds: string[], lang: Lang, enabled: boolea
         if (!prev[peerId]) return prev;
         const next = { ...prev };
         delete next[peerId];
+        if (previewMemory[peerId]) {
+          const mem = { ...previewMemory };
+          delete mem[peerId];
+          previewMemory = mem;
+        }
         return next;
       });
     });
@@ -100,6 +146,13 @@ export function useChatPreviews(friendIds: string[], lang: Lang, enabled: boolea
         delete next[id];
         changed = true;
       });
+      if (changed) {
+        const mem = { ...previewMemory };
+        ids.forEach((id) => {
+          delete mem[id];
+        });
+        previewMemory = mem;
+      }
       return changed ? next : prev;
     });
   }, []);

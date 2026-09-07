@@ -16,7 +16,7 @@ import { BlurView } from "expo-blur";
 import { MaterialIcons } from "@expo/vector-icons";
 import { PanGestureHandler } from "react-native-gesture-handler";
 import socket, { onCallIncoming, onCallTimeout, onCallDeclined, onCallCanceled, onCallAccepted, declineCall, cancelCall, requestCallAccepted, requestCallAcceptedWithRetry, ensureSocketConnected, warmCallSignaling, SOCKET_CONNECT_WAIT_MS, checkInviteLink, getCurrentUserId, onCurrentUserId, API_BASE, setOutgoingCallScreenVisible, setIncomingCallScreenVisible, setActiveVideoCall, reportIncomingCallShown, emitPresenceUpdateIfChanged, beginEarlyIncomingCallAccept, getIncomingCallScreenState } from "./sockets/socket";
-import { emitCloseIncoming, emitRequestCloseIncoming, emitCloseOutgoingCall, emitCallCancelledOnHome, emitCallEndedOnHome, emitCloseHomeModals, onRequestCloseIncoming, onCloseIncoming, applyCallEndedGlobalRefsOnce, armHomeUiSettleSkip, clearHomeUiSettleSkip, shouldSkipHomeUiSettle } from './utils/globalEvents';
+import { emitCloseIncoming, emitRequestCloseIncoming, emitCloseOutgoingCall, emitCallCancelledOnHome, emitCallEndedOnHome, emitCloseHomeModals, onRequestCloseIncoming, onCloseIncoming, applyCallEndedGlobalRefsOnce, armHomeUiSettleSkip, clearHomeUiSettleSkip, shouldSkipHomeUiSettle, setPendingWelcomeCallsFilter, setPendingWelcomeChatsFilter } from './utils/globalEvents';
 import { buildCallEndSocketPayload } from './utils/callEndPayload';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { logger } from './utils/logger';
@@ -1744,24 +1744,41 @@ function AppContent() {
     const LiviAppModule = NativeModules.LiviAppModule;
     const key = 'missed_calls_by_user_v1';
     let cancelled = false;
-    const GO_TO_FRIENDS_RETRIES = 25;
-    const GO_TO_FRIENDS_DELAY_MS = 100;
-    const goToFriends = (retryCount = 0) => {
+    const GO_TO_WELCOME_RETRIES = 25;
+    const GO_TO_WELCOME_DELAY_MS = 100;
+    const goToWelcomeCallsMissed = (retryCount = 0) => {
       if (cancelled) return;
       if (navRef.isReady()) {
         ensureInAppPiPBeforeOpenFriends();
-        navRef.dispatch(CommonActions.navigate({ name: 'Home', params: { openFriendsMenu: true, openFriendsTab: true } }));
+        try { setPendingWelcomeCallsFilter('missed'); } catch {}
+        navRef.dispatch(CommonActions.navigate({ name: 'Home', params: { openWelcomeCalls: true, openWelcomeCallsMissed: true } }));
         return;
       }
-      if (retryCount < GO_TO_FRIENDS_RETRIES) {
-        setTimeout(() => goToFriends(retryCount + 1), GO_TO_FRIENDS_DELAY_MS);
+      if (retryCount < GO_TO_WELCOME_RETRIES) {
+        setTimeout(() => goToWelcomeCallsMissed(retryCount + 1), GO_TO_WELCOME_DELAY_MS);
+      }
+    };
+    const goToWelcomeChatUnread = (retryCount = 0) => {
+      if (cancelled) return;
+      if (navRef.isReady()) {
+        ensureInAppPiPBeforeOpenFriends();
+        try { setPendingWelcomeChatsFilter('unread'); } catch {}
+        navRef.dispatch(CommonActions.navigate({ name: 'Home', params: { openWelcomeChat: true, openWelcomeChatUnread: true } }));
+        return;
+      }
+      if (retryCount < GO_TO_WELCOME_RETRIES) {
+        setTimeout(() => goToWelcomeChatUnread(retryCount + 1), GO_TO_WELCOME_DELAY_MS);
       }
     };
     (async () => {
-      // Fast-path: если открыли по уведомлению, сразу показываем Friends (+PiP), а тяжелые синки уводим в фон.
-      const open = await (LiviAppModule?.getAndClearPendingOpenTabFriends?.() ?? Promise.resolve(false));
-      if (open) {
-        goToFriends();
+      // Раздельные native-флаги: Chat → непрочитанные, Calls → пропущенные (без эвристики по badge).
+      const openChat = await (LiviAppModule?.getAndClearPendingOpenWelcomeChat?.() ?? Promise.resolve(false));
+      if (openChat) {
+        goToWelcomeChatUnread();
+      }
+      const openCalls = await (LiviAppModule?.getAndClearPendingOpenTabFriends?.() ?? Promise.resolve(false));
+      if (openCalls && !openChat) {
+        goToWelcomeCallsMissed();
       }
       setTimeout(() => {
         if (cancelled) return;
@@ -1826,22 +1843,40 @@ function AppContent() {
     return () => sub.remove();
   }, [invokeReturnToVideoCallFromNotification]);
 
-  // Android: при возврате в приложение (тап по уведомлению «Пропущенный вызов») — открыть меню и вкладку Друзья; сразу помечаем «увидел», чтобы синхронизация с нативом не пересоздала уведомление
+  // Android: тап по уведомлению «Пропущенный вызов» / «Непрочитанные» → welcome Calls/Chat.
   React.useEffect(() => {
     if (Platform.OS !== 'android') return;
+    const goChat = () => {
+      const go = (retry = 0) => {
+        if (navRef.isReady()) {
+          ensureInAppPiPBeforeOpenFriends();
+          try { setPendingWelcomeChatsFilter('unread'); } catch {}
+          navRef.dispatch(CommonActions.navigate({ name: 'Home', params: { openWelcomeChat: true, openWelcomeChatUnread: true } }));
+          return;
+        }
+        if (retry < 15) setTimeout(() => go(retry + 1), 100);
+      };
+      go();
+    };
+    const goCalls = () => {
+      const go = (retry = 0) => {
+        if (navRef.isReady()) {
+          ensureInAppPiPBeforeOpenFriends();
+          try { setPendingWelcomeCallsFilter('missed'); } catch {}
+          navRef.dispatch(CommonActions.navigate({ name: 'Home', params: { openWelcomeCalls: true, openWelcomeCallsMissed: true } }));
+          return;
+        }
+        if (retry < 15) setTimeout(() => go(retry + 1), 100);
+      };
+      go();
+    };
     const sub = AppState.addEventListener('change', (state) => {
       if (state !== 'active') return;
+      NativeModules.LiviAppModule?.getAndClearPendingOpenWelcomeChat?.()?.then?.((open: boolean) => {
+        if (open) goChat();
+      });
       NativeModules.LiviAppModule?.getAndClearPendingOpenTabFriends?.()?.then?.((open: boolean) => {
-        if (!open) return;
-        const go = (retry = 0) => {
-          if (navRef.isReady()) {
-            ensureInAppPiPBeforeOpenFriends();
-            navRef.dispatch(CommonActions.navigate({ name: 'Home', params: { openFriendsMenu: true, openFriendsTab: true } }));
-            return;
-          }
-          if (retry < 15) setTimeout(() => go(retry + 1), 100);
-        };
-        go();
+        if (open) goCalls();
       });
     });
     return () => sub.remove();
@@ -3304,20 +3339,20 @@ function AppContent() {
           g.__videoCallActiveRef = g.__videoCallActiveRef || { current: false };
           g.__videoCallActiveRef.current = false;
         } catch (_) {}
-        // Тост + missed сильно после Incoming→Main, иначе welcome мерцает вместе с badge/toast.
+        // Call log / missed сразу после cancel (All и Missed). Раньше 8s — мерцание badge; строка важнее.
         setTimeout(async () => {
           try { emitCallCancelledOnHome(callerId); } catch (_) {}
           try {
             if (callerId) {
               await recordMissedCallForUser(callerId, {
                 callId: callIdStr,
-                source: 'call:cancel:deferred',
+                source: 'call:cancel:immediate',
               });
               try { await AsyncStorage.removeItem('last_incoming_from'); } catch {}
             }
           } catch (_) {}
-          setTimeout(() => clearHomeUiSettleSkip(), 800);
-        }, 8000);
+          setTimeout(() => clearHomeUiSettleSkip(), 4000);
+        }, 0);
       } else {
         try { setIncomingCallScreenVisible(false); } catch {}
         // Сбрасываем refs активного звонка при отмене вызова
@@ -3332,9 +3367,9 @@ function AppContent() {
         } else if (!alreadyDidNav && navRef.isReady()) {
           applyCallCancelledHomeNotice(navRef);
         }
-        // Не на Home — settle снимем чуть позже, после activity transition.
+        // Не на Home — settle держим дольше, чтобы не стереть missed-пуш при возврате Main.
         if (isCallee) {
-          setTimeout(() => clearHomeUiSettleSkip(), 1200);
+          setTimeout(() => clearHomeUiSettleSkip(), 4000);
         }
       }
       // Пропущенный у получателя (callee), если дозвон успел пройти; для callee на Home — в setTimeout выше

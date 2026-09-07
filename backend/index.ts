@@ -3140,6 +3140,11 @@ io.on('connection', async (sock: AuthedSocket) => {
     const avatarVer = u?.avatarVer || 0;
     const avatarB64 = u?.avatarB64 || '';
     const avatarThumbB64 = u?.avatarThumbB64 || '';
+    const nick = String(u?.nick || '').trim();
+    try {
+      (sock as any).data = (sock as any).data || {};
+      (sock as any).data.nick = nick;
+    } catch {}
     const profile = u ? { nick: u.nick || '', avatar: rawAvatar, avatarVer, avatarB64, avatarThumbB64 } : {};
     ack?.({ ok: true, profile });
   });
@@ -3280,6 +3285,15 @@ io.on('connection', async (sock: AuthedSocket) => {
         logger.debug('Profile update called without ack function', { socketId: sock.id, userId: me });
       }
 
+      // Держим nick на всех сокетах пользователя для call:incoming hot path.
+      try {
+        const nickOnSocket = String(fresh?.nick || '').trim();
+        for (const s of getSocketsForUser(io, me)) {
+          (s as any).data = (s as any).data || {};
+          (s as any).data.nick = nickOnSocket;
+        }
+      } catch {}
+
       // КРИТИЧНО: Отправляем обновление друзьям ВСЕГДА при изменении профиля
       // Это включает случаи: изменение никнейма, удаление никнейма, изменение аватара, удаление аватара
       // Отправляем даже если значение стало пустым - это важно для синхронизации
@@ -3347,7 +3361,7 @@ io.on('connection', async (sock: AuthedSocket) => {
   });
 
   /* ---- Direct Calls ---- */
-  sock.on('call:initiate', async ({ to, media: mediaRaw }: { to?: string; media?: string }, ack?: Function) => {
+  sock.on('call:initiate', async ({ to, media: mediaRaw, callerNick: callerNickRaw }: { to?: string; media?: string; callerNick?: string }, ack?: Function) => {
     try {
       const meRaw = String((sock as any).data?.userId || '');
       if (!meRaw) return ack?.({ ok: false, error: 'unauthorized' });
@@ -3356,6 +3370,7 @@ io.on('connection', async (sock: AuthedSocket) => {
       if (!peerRaw || !peerRaw.match(/^[a-f\d]{24}$/i)) return ack?.({ ok: false, error: 'bad_peer' });
       const peerId = normalizeMongoObjectId(peerRaw);
       const callMedia = String(mediaRaw || '').trim().toLowerCase() === 'audio' ? 'audio' : 'video';
+      const callerNickHint = String(callerNickRaw || '').trim().slice(0, 64);
 
       pruneOrphanCallOfUserEntry(me);
       pruneOrphanCallOfUserEntry(peerId);
@@ -3525,9 +3540,34 @@ io.on('connection', async (sock: AuthedSocket) => {
       const link = callsById.get(callId);
       if (link) link.timer = timer;
 
-      // отправим входящий вызов получателю СРАЗУ (ник/FCM — после ack, не на hot path).
-      // Раньше await User.findById + await sendCallPush блокировали ack на сотни мс–секунды.
-      let fromNick: string | undefined = String((sock as any)?.data?.nick || '').trim() || undefined;
+      // Ник обязан быть в первом call:incoming — иначе IncomingCallActivity показывает «Кто-то звонит».
+      // sock.data.nick заполняется в bindUser; Mongo — только если кеш пуст (не блокируем FCM на hot path).
+      let fromNick: string | undefined =
+        String((sock as any)?.data?.nick || '').trim() ||
+        callerNickHint ||
+        undefined;
+      if (!fromNick && isMongoReady()) {
+        try {
+          const u = await User.findById(me).select('nick').lean();
+          if (u && typeof (u as any).nick === 'string') {
+            fromNick = String((u as any).nick).trim() || undefined;
+          }
+        } catch {}
+      }
+      if (fromNick) {
+        try {
+          (sock as any).data = (sock as any).data || {};
+          (sock as any).data.nick = fromNick;
+        } catch {}
+      }
+      try {
+        const t = callDeliveryById.get(callId);
+        if (t) {
+          t.callerNick = fromNick ?? '';
+          callDeliveryById.set(callId, t);
+        }
+      } catch {}
+
       try {
         const room = io.sockets.adapter.rooms.get(`u:${peerId}`);
         const recipientSockets = getSocketsForUser(io, peerId);
@@ -3549,6 +3589,7 @@ io.on('connection', async (sock: AuthedSocket) => {
         logger.info('[call:initiate] emitting call:incoming to recipient', {
           peerId,
           callId,
+          fromNick: fromNick || '',
           recipientSocketsCount: recipientSockets.length,
           roomUSize: roomSize,
         });
@@ -3571,22 +3612,7 @@ io.on('connection', async (sock: AuthedSocket) => {
 
       void (async () => {
         try {
-          if (!fromNick && isMongoReady()) {
-            const u = await User.findById(me).select('nick').lean();
-            if (u && typeof (u as any).nick === 'string') {
-              fromNick = String((u as any).nick).trim() || undefined;
-            }
-          }
-        } catch {}
-        try {
-          const t = callDeliveryById.get(callId);
-          if (t) {
-            t.callerNick = fromNick ?? '';
-            callDeliveryById.set(callId, t);
-          }
-        } catch {}
-        try {
-          logger.info('[call:initiate] sending call push to recipient', { peerId, callId, from: me });
+          logger.info('[call:initiate] sending call push to recipient', { peerId, callId, from: me, fromNick: fromNick || '' });
           await sendCallPushToRecipient(peerId, {
             callId,
             from: me,

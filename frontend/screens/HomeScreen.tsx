@@ -16,6 +16,7 @@ import {
   StyleProp,
   ViewStyle,
   AppState,
+  InteractionManager,
   NativeModules,
   ActivityIndicator,
   Linking,
@@ -58,7 +59,7 @@ import { logger } from '../utils/logger';
 import { trimNick } from '../utils/userDisplayName';
 import { usePiP } from '../src/pip/PiPContext';
 import { onCallTimeout as onCallTimeoutEvent, onCallIncoming as onCallIncomingEvent, onCallDeclined as onCallDeclinedEvent } from '../sockets/socket';
-import { onRequestCloseIncoming, emitCloseIncoming, onCloseOutgoingCall, onCallCancelledOnHome, onCloseHomeModals, onRequestDirectCall, shouldSkipHomeUiSettle, armHomeUiSettleSkip, clearHomeUiSettleSkip } from '../utils/globalEvents';
+import { onRequestCloseIncoming, emitCloseIncoming, onCloseOutgoingCall, onCallCancelledOnHome, onCloseHomeModals, onRequestDirectCall, shouldSkipHomeUiSettle, armHomeUiSettleSkip, clearHomeUiSettleSkip, setPendingWelcomeCallsFilter, setPendingWelcomeChatsFilter } from '../utils/globalEvents';
 import { displayOutgoingCallImmediate, notifyOutgoingCallId, reportEndCallToCallKeep, closeOutgoingCallActivity, bringMainActivityToFront, OUTGOING_CALL_TIMEOUT_MS, clearOutgoingDeclineHandled, isOutgoingDeclineHandled, setupCallKeep, isCallKeepAvailable, setCallMediaHint } from '../utils/callKeep';
 import { syncAppBadgeFromMissedCount, dismissMessageNotificationsOnly, getMissedCountByUserFromNative } from '../utils/pushNotifications';
 import SettingsTab from '../components/SettingsTab';
@@ -91,7 +92,8 @@ import { HomeWelcomeTabBar, type WelcomeTabId } from './home/HomeWelcomeTabBar';
 import { WelcomeKeepAlivePane } from './home/WelcomeKeepAlivePane';
 import { WelcomeStageBackground } from './home/WelcomeStageBackground';
 import { WELCOME_HEADER_TITLE, WELCOME_STAGE_BG } from './home/constants';
-import { recordCallLog, recordCancelledCall, requestCallLogSoftUi, cancelPendingCallLogNotify } from './home/callLog';
+import { recordCallLog, recordCancelledCall, requestCallLogSoftUi, cancelPendingCallLogNotify, loadCallLog } from './home/callLog';
+import { prefetchChatPreviews } from './home/hooks/useChatPreviews';
 import { clearEndingCallInProgress } from '../utils/activeCallSession';
 import { clearDirectCallAudioRouteCarryoverAfterCallEnd } from '../utils/callAudioRoutePersist';
 import {
@@ -332,7 +334,20 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       return next;
     });
   }, []);
-  // Без фонового warmup: mount только по тапу. Скрытые pane не грузят chat/call log (active=false).
+  /** One-shot: idle + dial. Скрытые pane (active=false) без call log / chat previews UI. */
+  const welcomeShellsWarmedRef = useRef(false);
+  const warmWelcomeListShells = useCallback(
+    (reason: string) => {
+      const toWarm: WelcomeTabId[] = ['friends', 'chat', 'calls', 'profile'];
+      // Sync mount: startTransition опаздывал → alreadyMounted:false при быстром тапе.
+      for (const id of toWarm) ensureWelcomeTabMounted(id);
+      welcomeShellsWarmedRef.current = true;
+      // Данные в memory до первого открытия вкладки — иначе «1 строка → догрузка».
+      void loadCallLog().catch(() => {});
+      logger.info('[welcome-tab] shell prewarm', { reason, tabs: toWarm });
+    },
+    [ensureWelcomeTabMounted],
+  );
   useEffect(() => {
     if (menuOpen) setMenuEverOpened(true);
   }, [menuOpen]);
@@ -375,6 +390,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     setMissedByUser,
     setMissedLoaded,
     refreshUnreadCountsForFriends,
+    refreshBadgesOnAppResume,
   } = useHomeBadges({ friends, friendsRef });
 
   const { onlineCount: welcomeOnlineCount } = useWelcomeOnlineCount(appIsActive);
@@ -920,6 +936,93 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
    * а строка `ref = calling.visible` возвращала true и глотала первый redial (skip duplicate / FriendRow return).
    */
   const callingVisibleRef = useRef(false);
+  /**
+   * Idle: после splash один раз греем shells — первый тап Calls/Friends до звонка без first-mount.
+   * Не на settle/cancel; dial-path ниже дублирует, если idle ещё не успел.
+   */
+  useEffect(() => {
+    if (!splashDismissed) return;
+    if (welcomeShellsWarmedRef.current) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    const tryWarm = (reason: string) => {
+      if (cancelled || welcomeShellsWarmedRef.current) return false;
+      if (callingVisibleRef.current) return false;
+      try {
+        if (shouldSkipHomeUiSettle()) return false;
+        const cancelAt = Number((global as any).__lastOutgoingCancelAtRef?.current || 0);
+        if (cancelAt > 0 && Date.now() - cancelAt < 4000) return false;
+      } catch {}
+      warmWelcomeListShells(reason);
+      return true;
+    };
+    const handle = InteractionManager.runAfterInteractions(() => {
+      // Сразу после splash: sync mount + prefetch call log (не ждать 700ms).
+      timer = setTimeout(() => {
+        if (tryWarm('idle-after-splash')) return;
+        retryTimer = setTimeout(() => {
+          tryWarm('idle-retry');
+        }, 1200);
+      }, 120);
+    });
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+      if (retryTimer) clearTimeout(retryTimer);
+      try {
+        handle.cancel?.();
+      } catch {}
+    };
+  }, [splashDismissed, warmWelcomeListShells]);
+  // Как можно раньше после splash — call log в memory до тапа Calls.
+  useEffect(() => {
+    if (!splashDismissed) return;
+    void loadCallLog().catch(() => {});
+  }, [splashDismissed]);
+  // Prefetch превью чатов, когда друзья уже в memory (cold start → Chat сразу полный).
+  const chatPrefetchKeyRef = useRef('');
+  useEffect(() => {
+    if (!splashDismissed) return;
+    if (!friends.length) return;
+    const key = `${lang}|${friends.map((f) => String(f.id)).join('|')}`;
+    if (chatPrefetchKeyRef.current === key) return;
+    let cancelled = false;
+    const handle = InteractionManager.runAfterInteractions(() => {
+      if (cancelled) return;
+      chatPrefetchKeyRef.current = key;
+      void prefetchChatPreviews(
+        friends.map((f) => String(f.id)),
+        lang,
+      ).catch(() => {});
+    });
+    return () => {
+      cancelled = true;
+      try {
+        handle.cancel?.();
+      } catch {}
+    };
+  }, [splashDismissed, friends, lang]);
+  /**
+   * Dial: overlay закрывает табы — догреть shells, если idle не успел (или redial).
+   */
+  useEffect(() => {
+    if (!calling.visible) return;
+    let cancelled = false;
+    const handle = InteractionManager.runAfterInteractions(() => {
+      if (cancelled) return;
+      if (!callingVisibleRef.current) return;
+      if (welcomeShellsWarmedRef.current) return;
+      warmWelcomeListShells('dial');
+    });
+    return () => {
+      cancelled = true;
+      try {
+        handle.cancel?.();
+      } catch {}
+    };
+    // callId/friend: redial при visible, оставшемся true после refs-only cancel.
+  }, [calling.visible, calling.callId, calling.friend?.id, warmWelcomeListShells]);
   /** Monotonic token for outgoing-call attempts: cancel/restart must make older async startCall results stale. */
   const outgoingAttemptSeqRef = useRef(0);
   const activeOutgoingAttemptRef = useRef(0);
@@ -1494,8 +1597,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     forceResetCallBusyRefs({
       skipEndedCallback: isCancelPath,
     });
-    // callLog: memory сразу (cancelled). Soft UI — только после redial-grace (~3.4с),
-    // не @700ms: иначе FlatList рядом с повторным «Вызов».
+    // callLog: cancelled сразу в UI (All). Silent+grace 3.4с убирали строку после отмены.
     if (
       !isRetryClear &&
       outgoingPeerId &&
@@ -1506,8 +1608,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         cancelPendingCallLogNotify();
       } catch {}
       try {
-        recordCancelledCall(peerForLog, { silent: true });
-        logger.info('[welcome-tab] callLog cancelled silent', {
+        recordCancelledCall(peerForLog);
+        logger.info('[welcome-tab] callLog cancelled', {
           peerId: peerForLog,
           sinceCancelMs: Date.now() - Number((global as any).__lastOutgoingCancelAtRef?.current || Date.now()),
         });
@@ -1515,23 +1617,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       if (cancelCallLogTimerRef.current) {
         clearTimeout(cancelCallLogTimerRef.current);
         cancelCallLogTimerRef.current = null;
-      }
-      // После grace: softPull сам ждёт, если dial снова hot; snapshot при входе на Calls.
-      if (isCancelPath && welcomeActiveTabRef.current === 'calls') {
-        cancelCallLogTimerRef.current = setTimeout(() => {
-          cancelCallLogTimerRef.current = null;
-          try {
-            const g = global as any;
-            if (callingVisibleRef.current) return;
-            if (g.__outgoingStartInFlightRef?.current) return;
-            if (g.__outgoingCallUiActiveRef?.current) return;
-            requestCallLogSoftUi();
-            logger.info('[welcome-tab] callLog soft ui (post-grace)', {
-              peerId: peerForLog,
-              sinceCancelMs: Date.now() - Number(g.__lastOutgoingCancelAtRef?.current || Date.now()),
-            });
-          } catch {}
-        }, 3400);
       }
     }
     lastOutgoingPeerIdRef.current = null;
@@ -1786,10 +1871,10 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
 
       setCalling({ visible: true, friend, callId: null });
       // call:initiate сразу — warm/ICE/log не на том же синхронном кадре что native UI.
-      const startCallPromise = startCall(
-        friend.id,
-        media === 'audio' ? { media: 'audio' } : undefined,
-      );
+      const startCallPromise = startCall(friend.id, {
+        ...(media === 'audio' ? { media: 'audio' as const } : {}),
+        callerNick: String(savedNickRef.current || nickLiveRef.current || nick || '').trim() || undefined,
+      });
       setTimeout(() => {
         if (!isCurrentAttempt()) return;
         try { warmCallSignaling(); } catch {}
@@ -3135,7 +3220,9 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   /* ===== app resume ===== */
   const appStateRef = useRef(AppState.currentState);
   const lastResumeSyncAtRef = useRef(0);
+  const lastBadgeResumeAtRef = useRef(0);
   const RESUME_SYNC_DEBOUNCE_MS = 30 * 1000; // не чаще раза в 30 сек — убирает мерцание при частых active (два устройства, блокировка)
+  const BADGE_RESUME_DEBOUNCE_MS = 400; // точки Chat/Calls — почти сразу, без 30s throttle
   useEffect(() => {
     const sub = AppState.addEventListener('change', async (state) => {
       const wasBg = /inactive|background/.test(appStateRef.current);
@@ -3149,6 +3236,17 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       })();
       const recentlyCanceled =
         recentCancelAt > 0 && Date.now() - recentCancelAt < 12000;
+
+      // Точки навигации Chat/Calls: сразу при возврате из фона (FCM мог обновить только иконку).
+      // Не завязано на 30s loadFriends debounce.
+      if (wasBg && state === 'active' && !shouldSkipHomeUiSettle() && !recentlyCanceled) {
+        const nowBadge = Date.now();
+        if (nowBadge - lastBadgeResumeAtRef.current >= BADGE_RESUME_DEBOUNCE_MS) {
+          lastBadgeResumeAtRef.current = nowBadge;
+          void refreshBadgesOnAppResume();
+        }
+      }
+
       // Settle / сразу после cancel: ноль setState (даже setAppIsActive) —
       // AppState churn с Incoming/Outgoing иначе конкурент paint вкладок.
       if (shouldSkipHomeUiSettle() || recentlyCanceled) {
@@ -3189,6 +3287,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           }
           syncSelfPresenceOnlineIfIdle('app-resume');
           await loadFriends();
+          // После friends — ещё раз unread (на случай пустого friendsRef на первом проходе).
+          void refreshBadgesOnAppResume();
           logger.info('[welcome-tab] AppState resume sync done', {
             elapsedMs: Date.now() - now,
           });
@@ -3196,7 +3296,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       }
     });
     return () => sub.remove();
-  }, [syncUserData, ensureIdentity, loadFriends, syncSelfPresenceOnlineIfIdle]);
+  }, [syncUserData, ensureIdentity, loadFriends, syncSelfPresenceOnlineIfIdle, refreshBadgesOnAppResume]);
 
 
 
@@ -4445,33 +4545,63 @@ const handleClearNick = useCallback(async () => {
     ],
   );
 
-  // Авто-открытие меню/вкладки друзей по route params. Тосты «Вызов завершён/отменён» убраны — мешали welcome.
-  // При переходе по тапу summary-уведомлений (пропущенные / непрочитанные) — снимаем уведомления из шторки и бейдж.
+  // Авто-открытие welcome-вкладок по route params (тап по уведомлению). Legacy menu не открываем.
   useEffect(() => {
     const ended = (route as any)?.params?.callEnded;
     const cancelled = (route as any)?.params?.callCancelled;
     const openFriendsMenu = (route as any)?.params?.openFriendsMenu;
     const openFriendsTab = (route as any)?.params?.openFriendsTab;
+    const openWelcomeCalls = (route as any)?.params?.openWelcomeCalls;
+    const openWelcomeCallsMissed = (route as any)?.params?.openWelcomeCallsMissed;
+    const openWelcomeChat = (route as any)?.params?.openWelcomeChat;
+    const openWelcomeChatUnread = (route as any)?.params?.openWelcomeChatUnread;
     const pushMessageFrom = String((route as any)?.params?.pushMessageFrom || '').trim();
-    if (openFriendsMenu) {
-      setMenuOpen(true);
-      setTab('friends');
-    }
-    if (openFriendsTab) {
-      setWelcomeActiveTab('friends');
-      ensureWelcomeTabMounted('friends');
-      if (!openFriendsMenu) {
-        setTab('friends');
+
+    // Legacy openFriendsMenu → welcome Calls (старое меню больше не показываем).
+    const wantCalls = !!(openWelcomeCalls || openFriendsMenu);
+    const wantCallsMissed = !!(openWelcomeCallsMissed || openFriendsMenu);
+    const wantChat = !!(openWelcomeChat || (openFriendsTab && pushMessageFrom && !openFriendsMenu));
+    const wantFriends = !!(openFriendsTab && !openFriendsMenu && !pushMessageFrom && !openWelcomeChat);
+
+    if (wantCalls) {
+      setMenuOpen(false);
+      if (wantCallsMissed) {
+        try { setPendingWelcomeCallsFilter('missed'); } catch {}
       }
+      setWelcomeActiveTab('calls');
+      ensureWelcomeTabMounted('calls');
+    } else if (wantChat) {
+      setMenuOpen(false);
+      if (openWelcomeChatUnread || pushMessageFrom) {
+        try { setPendingWelcomeChatsFilter('unread'); } catch {}
+      }
+      setWelcomeActiveTab('chat');
+      ensureWelcomeTabMounted('chat');
       if (pushMessageFrom && /^[a-f\d]{24}$/i.test(pushMessageFrom)) {
         dismissMessageNotificationsOnly().catch(() => {});
         setUnreadByUser((prev) => ({
           ...prev,
           [pushMessageFrom]: Math.max(1, prev[pushMessageFrom] || 0),
         }));
+        const peer = friends.find((f) => String(f.id) === pushMessageFrom);
+        const peerName = (peer?.name && peer.name.trim()) || peer?.nick || '—';
+        try {
+          (navigation as any).navigate('Chat', {
+            peerId: pushMessageFrom,
+            peerName,
+            peerAvatarVer: peer?.avatarVer || 0,
+            peerAvatarThumbB64: peer?.avatarThumbB64 || '',
+            peerOnline: !!peer?.online,
+          });
+        } catch {}
       }
+    } else if (wantFriends) {
+      setMenuOpen(false);
+      setWelcomeActiveTab('friends');
+      ensureWelcomeTabMounted('friends');
     }
-    if (openFriendsMenu || openFriendsTab) {
+
+    if (wantCalls || wantChat || wantFriends || openFriendsMenu || openFriendsTab) {
       AsyncStorage.getItem(MISSED_CALLS_KEY).then((raw) => {
         try {
           const parsed = raw ? JSON.parse(raw) : {};
@@ -4489,10 +4619,10 @@ const handleClearNick = useCallback(async () => {
         } catch {}
       }).catch(() => {});
     }
-    if (ended || cancelled || openFriendsMenu || openFriendsTab) {
+    if (ended || cancelled || wantCalls || wantChat || wantFriends || openFriendsMenu || openFriendsTab) {
       clearHomeTransientRouteParams();
     }
-  }, [route, ensureWelcomeTabMounted]);
+  }, [route, ensureWelcomeTabMounted, friends, navigation]);
 
   // Отмена входящего на Home: снять busy у пира. Тост «Вызов отменён» не показываем.
   useEffect(() => {
@@ -4868,8 +4998,14 @@ const handleClearNick = useCallback(async () => {
             profile: L('tabSettings'),
           }}
           onPressTab={handleWelcomeTabPress}
-          showChatDot={Object.values(unreadByUser).some((n) => typeof n === 'number' && n > 0)}
-          showCallsDot={Object.values(missedByUser).some((n) => typeof n === 'number' && n > 0)}
+          showChatDot={
+            welcomeActiveTab !== 'chat' &&
+            Object.values(unreadByUser).some((n) => typeof n === 'number' && n > 0)
+          }
+          showCallsDot={
+            welcomeActiveTab !== 'calls' &&
+            Object.values(missedByUser).some((n) => typeof n === 'number' && n > 0)
+          }
           showProfileDot={!!updateAvailable}
         />
       ) : null}

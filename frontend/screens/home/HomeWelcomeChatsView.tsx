@@ -1,5 +1,6 @@
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  AppState,
   BackHandler,
   Keyboard,
   Platform,
@@ -35,6 +36,8 @@ import { WELCOME_SEGMENT_ACTIVE } from './FriendsListCore';
 import { friendMatchesNameSearch, getFriendDisplay } from './friendHelpers';
 import { useChatPreviews } from './hooks/useChatPreviews';
 import { formatWelcomeChatTime } from './chatPreview';
+import { consumePendingWelcomeChatsFilter, onPendingWelcomeChatsFilter, setWelcomeViewingChats, shouldSkipHomeUiSettle } from '../../utils/globalEvents';
+import { markUnreadNotificationsSeen } from '../../utils/pushNotifications';
 import { clearWelcomeChatsForMe } from './clearWelcomeChats';
 import { WelcomeCrownButton } from './WelcomeCrownButton';
 import { WelcomeSelectModeHeader } from './WelcomeSelectModeHeader';
@@ -99,6 +102,46 @@ function HomeWelcomeChatsViewInner({
   const trimmedQuery = searchQuery.trim();
   const friendIds = useMemo(() => allFriends.map((f) => String(f.id)), [allFriends]);
   const { previews, reloadPreviews, dropPreviews } = useChatPreviews(friendIds, lang, active);
+
+  // Тап по уведомлению о непрочитанных → фильтр Unread.
+  useEffect(() => {
+    const applyPending = () => {
+      if (!active) return;
+      const pending = consumePendingWelcomeChatsFilter();
+      if (pending === 'unread') {
+        setFilter('unread');
+      } else if (pending === 'all') {
+        setFilter('all');
+      }
+    };
+    applyPending();
+    return onPendingWelcomeChatsFilter(applyPending);
+  }, [active]);
+
+  // На вкладке Chat в foreground — без системных message-пушей; иконка/шторка = «увидел».
+  // После cancel не гасим пуши на кратком AppState(active).
+  useEffect(() => {
+    const applyViewing = () => {
+      const viewing =
+        active && AppState.currentState === 'active' && !shouldSkipHomeUiSettle();
+      setWelcomeViewingChats(viewing);
+    };
+    const markSeenIfSafe = (reason: string) => {
+      if (!active || AppState.currentState !== 'active') return;
+      if (shouldSkipHomeUiSettle()) return;
+      markUnreadNotificationsSeen(reason).catch(() => {});
+    };
+    applyViewing();
+    markSeenIfSafe('welcome-chats-tab');
+    const sub = AppState.addEventListener('change', (state) => {
+      applyViewing();
+      if (state === 'active') markSeenIfSafe('welcome-chats-resume');
+    });
+    return () => {
+      sub.remove();
+      setWelcomeViewingChats(false);
+    };
+  }, [active]);
 
   const closeSearch = useCallback(() => {
     skipSearchDismissRef.current = true;

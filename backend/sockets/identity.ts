@@ -35,6 +35,16 @@ export async function bindUser(io: Server, sock: any, userId: string) {
 
   sock.data.userId = canonical;
 
+  // Ник на сокете нужен для call:incoming (иначе callee видит «Кто-то звонит»).
+  try {
+    if (mongoose.connection.readyState === 1) {
+      const u = await User.findById(canonical).select('nick').lean();
+      sock.data.nick = String((u as any)?.nick || '').trim();
+    }
+  } catch {
+    sock.data.nick = String(sock.data.nick || '').trim();
+  }
+
   // Присоединяем к комнате пользователя
   try { 
     sock.join(`u:${canonical}`); 

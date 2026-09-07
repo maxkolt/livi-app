@@ -11,11 +11,15 @@ import {
 } from '../../../sockets/socket';
 import socket from '../../../sockets/socket';
 import { onMissedIncrement, onMissedClear, onMissedFetchedFromServer } from '../../../utils/globalEvents';
-import { clearMissedBadgeCleared, syncAppBadgeFromMissedCount } from '../../../utils/pushNotifications';
+import {
+  applyPendingMissedCallsFromNative,
+  clearMissedBadgeCleared,
+  getMissedCountByUserFromNative,
+  syncAppBadgeFromMissedCount,
+} from '../../../utils/pushNotifications';
 import { logger } from '../../../utils/logger';
 import { MISSED_CALLS_KEY, UNREAD_BY_USER_KEY } from '../constants';
-import { badgeMapsEqual, patchUnreadCountsIfChanged } from '../friendHelpers';
-import { recordCallLog } from '../callLog';
+import { badgeMapsEqual, mergeMissedFromSources, patchUnreadCountsIfChanged } from '../friendHelpers';
 import type { Friend } from '../types';
 
 type UseHomeBadgesArgs = {
@@ -247,7 +251,7 @@ export function useHomeBadges({ friends, friendsRef }: UseHomeBadgesArgs) {
         logger.debug('[HomeScreen] Missed call updated (UI)', { userId: userIdStr, count: nextCount });
         return { ...prev, [userIdStr]: nextCount };
       });
-      recordCallLog({ peerId: userIdStr, direction: 'missed' });
+      // Call log уже пишет recordMissedCallForUser — не дублируем.
     });
     return () => off?.();
   }, []);
@@ -335,6 +339,89 @@ export function useHomeBadges({ friends, friendsRef }: UseHomeBadgesArgs) {
       if (t) clearTimeout(t);
     };
   }, [friendsRef, refreshUnreadCountsForFriends]);
+
+  /**
+   * Возврат из фона: сразу точки на Chat/Calls (не ждать loadFriends / 30s debounce).
+   * FCM мог обновить только иконку/шторку — JS unreadByUser/missedByUser ещё пустые.
+   */
+  const refreshBadgesOnAppResume = useCallback(async () => {
+    const started = Date.now();
+    logger.info('[welcome-tab] badge resume refresh start');
+    try {
+      const rawMissed = await AsyncStorage.getItem(MISSED_CALLS_KEY);
+      const parsedMissed = rawMissed ? JSON.parse(rawMissed) : {};
+      let nativeMissed: Record<string, number> = {};
+      if (Platform.OS === 'android') {
+        try {
+          nativeMissed = await getMissedCountByUserFromNative();
+        } catch (_) {}
+      }
+      setMissedByUser((prev) => {
+        const merged = mergeMissedFromSources(prev, parsedMissed, nativeMissed);
+        if (badgeMapsEqual(prev, merged)) return prev;
+        AsyncStorage.setItem(MISSED_CALLS_KEY, JSON.stringify(merged)).catch(() => {});
+        return merged;
+      });
+      setMissedLoaded(true);
+    } catch (e) {
+      logger.warn('[welcome-tab] badge resume missed merge failed', e as any);
+    }
+
+    if (Platform.OS === 'android') {
+      try {
+        const pendingMissed = (await (NativeModules.LiviAppModule?.getAndClearPendingMissedCalls?.() ??
+          Promise.resolve([]))) as string[];
+        if (pendingMissed?.length) {
+          await applyPendingMissedCallsFromNative(pendingMissed);
+        }
+      } catch (e) {
+        logger.warn('[welcome-tab] badge resume pending missed failed', e as any);
+      }
+
+      try {
+        const pendingUnread = (await (NativeModules.LiviAppModule?.getAndClearPendingUnreadMessages?.() ??
+          Promise.resolve([]))) as string[];
+        if (pendingUnread?.length) {
+          const ids = [...new Set(pendingUnread.map((u) => String(u || '').trim()).filter(Boolean))];
+          for (const id of ids) {
+            bumpUnreadFloor(id, 1, 5000);
+          }
+          setUnreadByUserState((prev) => {
+            let changed = false;
+            const next = { ...prev };
+            for (const id of ids) {
+              const cur = typeof next[id] === 'number' ? next[id]! : 0;
+              if (cur < 1) {
+                next[id] = 1;
+                changed = true;
+              }
+            }
+            if (!changed) return prev;
+            persistUnreadMap(next);
+            return next;
+          });
+          logger.info('[welcome-tab] badge resume pending unread applied', { n: ids.length });
+        }
+      } catch (e) {
+        logger.warn('[welcome-tab] badge resume pending unread failed', e as any);
+      }
+    }
+
+    try {
+      const list = friendsRef.current;
+      if (list.length) {
+        await refreshUnreadCountsForFriends(list);
+      }
+    } catch (e) {
+      logger.warn('[welcome-tab] badge resume unread server refresh failed', e as any);
+    }
+
+    try {
+      await syncAppBadgeFromMissedCount();
+    } catch (_) {}
+
+    logger.info('[welcome-tab] badge resume refresh done', { elapsedMs: Date.now() - started });
+  }, [bumpUnreadFloor, friendsRef, refreshUnreadCountsForFriends]);
 
   /* ===== unread counters (через сокеты) =====
    * Слушатель не пересоздаём на каждый presence/loadFriends (только при смене набора friend ids),
@@ -462,6 +549,7 @@ export function useHomeBadges({ friends, friendsRef }: UseHomeBadgesArgs) {
     missedLoaded,
     setMissedLoaded,
     refreshUnreadCountsForFriends,
+    refreshBadgesOnAppResume,
     pendingUnreadBatchRefreshRef,
   };
 }

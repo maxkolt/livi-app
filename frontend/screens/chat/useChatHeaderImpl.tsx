@@ -225,10 +225,11 @@ export function useChatHeader({
               <Text
                 style={{
                   marginTop: 2,
-                  fontSize: 12,
+                  fontSize: Platform.OS === "android" ? 10 : 11,
+                  lineHeight: Platform.OS === "android" ? 13 : 14,
                   color: peerOnline ? LIVI.presenceGreen : LIVI.presenceRed,
-                  fontWeight: "400",
-                  ...(Platform.OS === "android" && { fontFamily: "sans-serif" }),
+                  fontWeight: "300",
+                  ...(Platform.OS === "android" && { fontFamily: "sans-serif-light" }),
                 }}
               >
                 {peerOnline ? t("online", lang) : t("offline", lang)}

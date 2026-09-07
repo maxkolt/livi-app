@@ -16,6 +16,9 @@ export function registerProfileSockets(io: Server, socket: Socket) {
         return ack?.({ ok: true, profile: {} }); // гость
       }
       const u = await User.findById(userId).select('nick avatar avatarVer avatarB64 avatarThumbB64').lean();
+      try {
+        socket.data.nick = String((u as any)?.nick || '').trim();
+      } catch {}
       const profile = u ? { 
         nick: u.nick, 
         avatar: u.avatar, // Используем avatar вместо avatarUrl для совместимости
@@ -71,6 +74,16 @@ export function registerProfileSockets(io: Server, socket: Socket) {
         console.error('[profile:update] ❌ User not found:', userId);
         return ack?.({ ok: false, error: 'User not found' });
       }
+
+      try {
+        const nickOnSocket = String((user as any).nick || '').trim();
+        for (const s of io.sockets.sockets.values()) {
+          if (String((s as any)?.data?.userId || '') === String(userId)) {
+            (s as any).data = (s as any).data || {};
+            (s as any).data.nick = nickOnSocket;
+          }
+        }
+      } catch {}
 
       // 1) сообщаем всем устройствам этого пользователя
       try {

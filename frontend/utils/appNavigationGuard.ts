@@ -473,6 +473,10 @@ export function clearHomeTransientRouteParams(): boolean {
           callCancelled: undefined,
           openFriendsMenu: undefined,
           openFriendsTab: undefined,
+          openWelcomeCalls: undefined,
+          openWelcomeCallsMissed: undefined,
+          openWelcomeChat: undefined,
+          openWelcomeChatUnread: undefined,
           pushMessageFrom: undefined,
         }),
       );

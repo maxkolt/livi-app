@@ -68,7 +68,7 @@ class OutgoingCallActivity : AppCompatActivity() {
         if (closeImmediately) {
             Log.d(TAG, "onCreate: finishing immediately (EXTRA_CLOSE_IMMEDIATELY)")
             val closeId = intent.getStringExtra(EXTRA_CALL_ID) ?: ""
-            LiviOutgoingCallService.stop(this, closeId)
+            LiviOutgoingCallService.forceStopNow(this, closeId)
             finish()
             return
         }
@@ -78,12 +78,25 @@ class OutgoingCallActivity : AppCompatActivity() {
         }
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED)
         window.setFormat(PixelFormat.RGBA_8888)
-        setContentView(R.layout.activity_outgoing_call)
-        findViewById<View>(R.id.outgoing_call_content)?.let { EdgeToEdgeHelper.applySystemBarInsets(it) }
 
         callId = intent.getStringExtra(EXTRA_CALL_ID) ?: ""
         toUserId = intent.getStringExtra(EXTRA_TO_USER_ID) ?: ""
         toNick = intent.getStringExtra(EXTRA_TO_NICK) ?: ""
+
+        // Тап по stale FGS после cancel — не поднимать пустой исходящий.
+        if (callId.isNotEmpty() &&
+            (EndedCallIds.isEnded(this, callId) ||
+                LiviOngoingCallHelper.shouldSuppressStaleOutgoingRestore(this, callId))
+        ) {
+            Log.i(TAG, "onCreate: stale outgoing restore, finishing callId=${callId.take(24)}")
+            LiviOutgoingCallService.forceStopNow(this, callId)
+            finish()
+            return
+        }
+
+        setContentView(R.layout.activity_outgoing_call)
+        findViewById<View>(R.id.outgoing_call_content)?.let { EdgeToEdgeHelper.applySystemBarInsets(it) }
+
         Log.d(TAG, "onCreate: activity created callId=$callId toUserId=$toUserId toNick=${toNick.take(20)}")
 
         findViewById<TextView>(R.id.callee_name).text = if (toNick.isNotEmpty()) toNick else getString(R.string.outgoing_call_title)
@@ -150,6 +163,7 @@ class OutgoingCallActivity : AppCompatActivity() {
                 if (effectiveCallId.startsWith("pending_")) "" else effectiveCallId,
             )
             if (effectiveCallId.isNotEmpty() && !effectiveCallId.startsWith("pending_")) {
+                try { EndedCallIds.add(this, effectiveCallId) } catch (_: Exception) {}
                 LiviOutgoingCallService.cancelCallOnServer(this, effectiveCallId)
             }
             // Сначала finish (вернуть Main), потом ringback stop — иначе MediaPlayer на main
@@ -161,7 +175,7 @@ class OutgoingCallActivity : AppCompatActivity() {
                 returnMainActivityImmediately()
             }
             finish()
-            // Mute/stop строго вне UI-кадра finish/resume Main.
+            // Mute/stop строго вне UI-кадра finish/resume Main — сразу снять FGS.
             Thread({
                 try {
                     LiviOutgoingCallService.silenceAndStop(applicationContext, effectiveCallId)
@@ -360,6 +374,7 @@ class OutgoingCallActivity : AppCompatActivity() {
         // сносит prefs уже нового исходящего → callee accept → not_found.
         if (callId.isNotBlank()) {
             LiviOngoingCallHelper.clearOngoingCallIfMatches(applicationContext, callId)
+            // Только stop с этим callId — не forceStopNow (redial уже мог поднять новый FGS).
             LiviOutgoingCallService.stop(this, callId)
         } else {
             LiviOngoingCallHelper.clearPendingEmptyOutgoingPrefs(applicationContext)
