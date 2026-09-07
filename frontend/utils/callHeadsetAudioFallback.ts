@@ -24,10 +24,19 @@ export function rememberDirectCallAudioRouteBeforeVideo(
   fromRoute?: InCallAudioRoute | string | null,
 ): void {
   const norm = normalizeInCallRoute(fromRoute || '') as BuiltinCallAudioRoute | null;
-  if (norm === 'EARPIECE' || norm === 'SPEAKER_PHONE') {
-    beforeVideoRef().current = norm;
-    builtinRef().current = norm;
+  if (norm !== 'EARPIECE' && norm !== 'SPEAKER_PHONE') return;
+  const existing = beforeVideoRef().current;
+  // Только вне audio UI: product SPEAKER с video pin не затирает earpiece.
+  // На audio (cycle / expand snapshot) SPEAKER должен свободно перезаписывать EARPIECE.
+  if (
+    existing === 'EARPIECE' &&
+    norm === 'SPEAKER_PHONE' &&
+    !isInAudioOnlyCallUi()
+  ) {
+    return;
   }
+  beforeVideoRef().current = norm;
+  builtinRef().current = norm;
 }
 
 export function readDirectCallAudioRouteBeforeVideo(): BuiltinCallAudioRoute | null {
@@ -59,6 +68,14 @@ export function rememberBuiltinCallRouteBeforeHeadset(
 ): void {
   const norm = normalizeInCallRoute(fromRoute || '');
   if (norm === 'EARPIECE' || norm === 'SPEAKER_PHONE') {
+    // Video pin SPEAKER через setUserRoute не должен портить fallback для return-to-audio.
+    if (
+      norm === 'SPEAKER_PHONE' &&
+      readDirectCallAudioRouteBeforeVideo() === 'EARPIECE' &&
+      !isInAudioOnlyCallUi()
+    ) {
+      return;
+    }
     builtinRef().current = norm;
     return;
   }

@@ -6,6 +6,7 @@ import { beginBackgroundMediaSuppression } from './backgroundMediaSuppression';
 import { isExternalCallHoldActive } from './externalCallHold';
 import { applyNativeVoiceCallSpeaker, applyNativeVoiceCallRoute } from './voiceCallAudioRoute';
 import { logger } from './logger';
+import { markCallPerfAudioRoute } from './callPerfTrace';
 import {
   applySystemPiPReturnMediaSnapshot,
   captureCallAudioRouteFromUi,
@@ -240,6 +241,19 @@ function readExplicitInAppPiPBuiltinRoute(): InCallAudioRoute | null {
 }
 
 function resolveReturnToAudioUiReapplyRoute(): InCallAudioRoute {
+  const extEarly =
+    readUserSelectedExternalCallAudioRoute() ||
+    readActiveExternalCallAudioRoute(null);
+  if (isExternalHeadsetRoute(extEarly)) {
+    return coercePersistedRouteForAvailableDevices(extEarly);
+  }
+
+  // video→audio: beforeVideo важнее residue SPEAKER (ui_lock / lastApplied / PiP video pin).
+  const beforeVideo = readDirectCallAudioRouteBeforeVideo();
+  if (beforeVideo === 'EARPIECE' || beforeVideo === 'SPEAKER_PHONE') {
+    return beforeVideo;
+  }
+
   const uiLock = readCallAudioRouteUiLock();
   if (
     uiLock === 'EARPIECE' ||
@@ -280,12 +294,6 @@ function resolveReturnToAudioUiReapplyRoute(): InCallAudioRoute {
   if (locked === 'SPEAKER_PHONE' || locked === 'EARPIECE') {
     return locked;
   }
-  const ext =
-    readUserSelectedExternalCallAudioRoute() ||
-    readActiveExternalCallAudioRoute(null);
-  if (isExternalHeadsetRoute(ext)) {
-    return ext;
-  }
   const authoritative = readAuthoritativeCallAudioRouteAfterPiP();
   if (authoritative === 'EARPIECE') {
     return 'EARPIECE';
@@ -295,13 +303,6 @@ function resolveReturnToAudioUiReapplyRoute(): InCallAudioRoute {
   }
   if (authoritative === 'SPEAKER_PHONE') {
     return 'SPEAKER_PHONE';
-  }
-  const beforeVideo = readDirectCallAudioRouteBeforeVideo();
-  if (beforeVideo === 'SPEAKER_PHONE') {
-    return 'SPEAKER_PHONE';
-  }
-  if (beforeVideo === 'EARPIECE') {
-    return 'EARPIECE';
   }
   const persisted = getPersistedCallAudioRoute();
   if (persisted === 'SPEAKER_PHONE') {
@@ -332,6 +333,11 @@ function touchDirectCallVideoExpandAudioPrepared(): void {
       g.__directCallVideoExpandAudioPreparedAtRef || { current: 0 };
     g.__directCallVideoExpandAudioPreparedAtRef.current = Date.now();
   } catch {}
+}
+
+/** Пометить, что speaker/route для video expand уже применён — не дублировать native pin. */
+export function markDirectCallVideoExpandAudioPrepared(): void {
+  touchDirectCallVideoExpandAudioPrepared();
 }
 
 /** Недавно вызван prepareDirectCallVideoExpandFromInAppPiP — не дублировать native reapply. */
@@ -1100,12 +1106,16 @@ function coerceAudioOnlySystemPiPExitRoute(route: InCallAudioRoute): InCallAudio
 export function clearStaleVideoSpeakerUiLockForAudioOnlyUi(): void {
   const lock = readCallAudioRouteUiLock();
   if (lock !== 'SPEAKER_PHONE') return;
-  // Пользователь явно выбрал громкую (cycle / beforeVideo SPEAKER) — lock оставляем.
-  if (userExplicitlyChoseLoudSpeakerForCall()) return;
   const beforeVideo = readDirectCallAudioRouteBeforeVideo();
+  // До video был earpiece — product SPEAKER lock с video/PiP не должен блокировать restore.
+  if (beforeVideo === 'EARPIECE') {
+    clearCallAudioRouteUiLock();
+    return;
+  }
+  // До video уже была громкая — lock оставляем.
   if (beforeVideo === 'SPEAKER_PHONE') return;
-  // Раньше: !userLocked блокировал сброс, если был EARPIECE lock с accept —
-  // тогда SPEAKER lock с video оставался и давал SPEAKER↔EARPIECE мерцание.
+  // beforeVideo неизвестен: явный cycle на audio UI — оставляем; иначе сбрасываем residue.
+  if (userExplicitlyChoseLoudSpeakerForCall()) return;
   clearCallAudioRouteUiLock();
 }
 
@@ -2407,7 +2417,7 @@ export async function reapplyPersistedCallAudioRoute(
 
       if (reason === 'return_to_audio_ui') {
         let route = resolveExplicitPiPOrAudioUiBuiltinRoute(
-          readCallAudioRouteUiLock() || resolveReturnToAudioUiReapplyRoute() || 'EARPIECE',
+          resolveReturnToAudioUiReapplyRoute() || 'EARPIECE',
         );
         route = coerceDirectAudioAcceptBuiltinRoute(route);
         if (
@@ -2423,11 +2433,14 @@ export async function reapplyPersistedCallAudioRoute(
         ) {
           route = coercePersistedRouteForAvailableDevices(route);
         }
+        // ui_lock SPEAKER с video не должен перебивать beforeVideo EARPIECE.
+        const beforeVideo = readDirectCallAudioRouteBeforeVideo();
         const uiLock = readCallAudioRouteUiLock();
         if (
           !isExternalHeadsetRoute(route) &&
           uiLock &&
-          (uiLock === 'EARPIECE' || uiLock === 'SPEAKER_PHONE')
+          (uiLock === 'EARPIECE' || uiLock === 'SPEAKER_PHONE') &&
+          !(beforeVideo === 'EARPIECE' && uiLock === 'SPEAKER_PHONE')
         ) {
           route = uiLock;
         }
@@ -2621,7 +2634,11 @@ export async function reapplyPersistedCallAudioRoute(
         } else if (videoRoute === 'SPEAKER_PHONE' || videoRoute === 'EARPIECE') {
           // Не обнулять userSel: иначе плашка читает stale ICM EARPIECE поверх native SPEAKER.
           setUserSelectedCallAudioRoute(videoRoute);
-          rememberManualBuiltinCallAudioRoute(videoRoute);
+          // Product SPEAKER на video PiP — не rememberManual: иначе return-to-audio
+          // считает громкую «выбором пользователя» и не возвращает beforeVideo earpiece.
+          if (videoRoute === 'EARPIECE') {
+            rememberManualBuiltinCallAudioRoute(videoRoute);
+          }
           try {
             (global as any).__userSelectedExternalCallAudioRouteRef = { current: null };
           } catch {}
@@ -3005,6 +3022,13 @@ export function scheduleReapplyPersistedCallAudioRoute(
       opts?.skipInCallRestart ??
       (reason === 'return_to_audio_ui' && isInCallAudioSessionStarted() && isOngoingCallSession()),
   };
+  try {
+    markCallPerfAudioRoute(`schedule:${reason}`, String(opts?.media || ''), {
+      delays,
+      honorUser: opts?.honorUserRoute ?? null,
+      skipInCallRestart: reapplyOpts.skipInCallRestart ?? null,
+    });
+  } catch {}
   for (const ms of delays) {
     const timer = setTimeout(() => {
       scheduledReapplyTimers = scheduledReapplyTimers.filter((e) => e.timer !== timer);

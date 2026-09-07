@@ -56,6 +56,7 @@ import { useLang } from '../store/lang';
 
 import { getInstallId, resetInstallId } from '../utils/installId';
 import { logger } from '../utils/logger';
+import { markCallPerf, callPerfSpan } from '../utils/callPerfTrace';
 import { trimNick } from '../utils/userDisplayName';
 import { usePiP } from '../src/pip/PiPContext';
 import { onCallTimeout as onCallTimeoutEvent, onCallIncoming as onCallIncomingEvent, onCallDeclined as onCallDeclinedEvent } from '../sockets/socket';
@@ -3236,10 +3237,25 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       })();
       const recentlyCanceled =
         recentCancelAt > 0 && Date.now() - recentCancelAt < 12000;
+      const activeVideoCall = (() => {
+        try {
+          const g = global as any;
+          if (g.__socketActiveVideoCallRef?.current === true) return true;
+          const session = g.__webrtcSessionRef?.current;
+          if (session && typeof session.isEnded === 'function' && !session.isEnded()) return true;
+          if (session && typeof session.isEnded !== 'function') return true;
+          return false;
+        } catch {
+          return false;
+        }
+      })();
+      // Accept / active call: не грузить badge+friends — конкурирует с VideoCall paint (1–2с).
+      const skipHomeHeavyResume =
+        shouldSkipHomeUiSettle() || recentlyCanceled || activeVideoCall;
 
       // Точки навигации Chat/Calls: сразу при возврате из фона (FCM мог обновить только иконку).
-      // Не завязано на 30s loadFriends debounce.
-      if (wasBg && state === 'active' && !shouldSkipHomeUiSettle() && !recentlyCanceled) {
+      // Не завязано на 30s loadFriends debounce. На accept/звонке — skip.
+      if (wasBg && state === 'active' && !skipHomeHeavyResume) {
         const nowBadge = Date.now();
         if (nowBadge - lastBadgeResumeAtRef.current >= BADGE_RESUME_DEBOUNCE_MS) {
           lastBadgeResumeAtRef.current = nowBadge;
@@ -3247,16 +3263,26 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         }
       }
 
-      // Settle / сразу после cancel: ноль setState (даже setAppIsActive) —
-      // AppState churn с Incoming/Outgoing иначе конкурент paint вкладок.
-      if (shouldSkipHomeUiSettle() || recentlyCanceled) {
+      // Settle / сразу после cancel / active call: ноль setState (даже setAppIsActive) —
+      // AppState churn с Incoming/Outgoing иначе конкурент paint вкладок / VideoCall.
+      if (skipHomeHeavyResume) {
         logger.info('[welcome-tab] AppState settle-skip (no loadFriends)', {
           state,
           wasBg,
           settle: shouldSkipHomeUiSettle(),
           recentlyCanceled,
+          activeVideoCall,
           sinceCancelMs: recentCancelAt > 0 ? Date.now() - recentCancelAt : null,
         });
+        try {
+          markCallPerf('home_appstate_settle_skip', {
+            state,
+            wasBg,
+            settle: shouldSkipHomeUiSettle(),
+            recentlyCanceled,
+            activeVideoCall,
+          });
+        } catch {}
         return;
       }
       // Outgoing поверх Main даёт AppState=background, хотя пользователь «в приложении».
@@ -3278,13 +3304,33 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         if (now - lastResumeSyncAtRef.current < RESUME_SYNC_DEBOUNCE_MS) return;
         lastResumeSyncAtRef.current = now;
         logger.info('[welcome-tab] AppState resume sync start', { state });
+        const activeCallId = String(
+          (global as any).__activeCallAudioRouteCallIdRef?.current ||
+            (global as any).__webrtcSessionRef?.current?.getCallId?.() ||
+            '',
+        ).trim();
+        const resumeSpan = callPerfSpan('home_resume_sync', {
+          state,
+          activeCallId: activeCallId || null,
+          activeVideoCall: !!(global as any).__socketActiveVideoCallRef?.current,
+          settleSkip: shouldSkipHomeUiSettle(),
+        });
         try {
           await waitSocketConnected();
+          markCallPerf('home_resume_after_socket', {
+            activeCallId: activeCallId || null,
+            elapsedMs: Date.now() - now,
+          });
           const userExists = await syncUserData();
           if (userExists) {
             await ensureIdentity();
             getCurrentUserId();
           }
+          markCallPerf('home_resume_after_identity', {
+            activeCallId: activeCallId || null,
+            elapsedMs: Date.now() - now,
+            userExists: !!userExists,
+          });
           syncSelfPresenceOnlineIfIdle('app-resume');
           await loadFriends();
           // После friends — ещё раз unread (на случай пустого friendsRef на первом проходе).
@@ -3292,7 +3338,11 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           logger.info('[welcome-tab] AppState resume sync done', {
             elapsedMs: Date.now() - now,
           });
-        } catch (e) { console.warn('resume error', e); }
+          resumeSpan.end({ ok: true });
+        } catch (e) {
+          resumeSpan.end({ ok: false, error: String(e) });
+          console.warn('resume error', e);
+        }
       }
     });
     return () => sub.remove();

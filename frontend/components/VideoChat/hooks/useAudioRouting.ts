@@ -8,6 +8,7 @@ import {
 import InCallManager from 'react-native-incall-manager';
 import { beginBackgroundMediaSuppression, pauseBackgroundMediaAfterCall } from '../../../utils/callKeep';
 import { logger } from '../../../utils/logger';
+import { markCallPerfAudioRoute } from '../../../utils/callPerfTrace';
 import { applyNativeVoiceCallSpeaker, applyNativeVoiceCallRoute } from '../../../utils/voiceCallAudioRoute';
 import {
   isCallAudioBootstrapPending,
@@ -364,6 +365,29 @@ export const useAudioRouting = (
         ...data,
       });
     } catch {}
+    try {
+      const routeReason = String(data?.reason ?? event ?? '');
+      if (
+        routeReason &&
+        (event === 'earpiece route' ||
+          event === 'speaker route' ||
+          event === 'cycleUserRoute' ||
+          event === 'applyRouting' ||
+          /preferAudioMode|return_to_audio_ui|pinVideoUiSpeaker|locked_bootstrap|native_repin|cycleUserRoute|bootstrap_done|manualSync/.test(
+            routeReason,
+          ))
+      ) {
+        markCallPerfAudioRoute(
+          routeReason || event,
+          String(data?.selectedRoute ?? data?.next ?? lastAppliedRouteRef.current ?? ''),
+          {
+            event,
+            next: data?.next ?? null,
+            from: data?.from ?? null,
+          },
+        );
+      }
+    } catch {}
   };
 
   const getUserRoute = (): InCallAudioRoute => {
@@ -480,12 +504,9 @@ export const useAudioRouting = (
     const opts = routingOptionsRef.current;
     if (route === 'EARPIECE' || route === 'SPEAKER_PHONE') {
       rememberBuiltinCallRouteBeforeHeadset(route, !!opts?.defaultToEarpiece);
-      // beforeVideo = маршрут на audio UI до ухода на video.
-      // Не писать product SPEAKER с pinVideoUiSpeaker / video reapply —
-      // иначе return-to-audio восстанавливает громкую вместо earpiece.
-      if (opts?.defaultToEarpiece && isInAudioOnlyCallUi()) {
-        rememberDirectCallAudioRouteBeforeVideo(route);
-      }
+      // beforeVideo пишется только при уходе audio→video (rememberAudioPageRouteBeforeVideoUi)
+      // и при cycle на audio PiP. Не писать сюда: product SPEAKER / late reapply на return
+      // затирали earpiece и давали плавание маршрута.
     }
     if (opts?.userRouteRef) {
       opts.userRouteRef.current = route;
@@ -2470,8 +2491,11 @@ export const useAudioRouting = (
     if (!enabled || !routingOptionsRef.current?.defaultToEarpiece) return;
     const applyPreferBuiltin = (route: InCallAudioRoute) => {
       let target = route;
+      // Residue SPEAKER с video pin / persist не держать, если до video был earpiece.
+      const beforeVideoEarpiece = readDirectCallAudioRouteBeforeVideo() === 'EARPIECE';
       const keepSpeakerFromPiP =
         target === 'SPEAKER_PHONE' &&
+        !beforeVideoEarpiece &&
         (normalizeInCallRoute(readInAppPiPAudioOutputRoute() || '') === 'SPEAKER_PHONE' ||
           readLastAppliedCallAudioRoute() === 'SPEAKER_PHONE' ||
           getPersistedCallAudioRoute() === 'SPEAKER_PHONE' ||
@@ -2479,9 +2503,9 @@ export const useAudioRouting = (
       if (
         target === 'SPEAKER_PHONE' &&
         routingOptionsRef.current?.defaultToEarpiece &&
-        !readUserLockedBuiltinCallAudioRoute() &&
         !userExplicitlyPinnedBuiltinCallAudio() &&
-        !keepSpeakerFromPiP
+        (beforeVideoEarpiece ||
+          (!readUserLockedBuiltinCallAudioRoute() && !keepSpeakerFromPiP))
       ) {
         target = 'EARPIECE';
       }
@@ -3132,6 +3156,13 @@ export const useAudioRouting = (
       setUserSelectedCallAudioRoute(next);
       setPersistedCallAudioRoute(next);
       rememberManualBuiltinCallAudioRoute(next);
+      // Audio cycle: обновить beforeVideo, иначе expand→return вернёт старый earpiece.
+      if (
+        (preferAudioModeRef.current || isInAudioOnlyCallUi()) &&
+        (next === 'EARPIECE' || next === 'SPEAKER_PHONE')
+      ) {
+        rememberDirectCallAudioRouteBeforeVideo(next);
+      }
       if (isExternalHeadsetRoute(next)) {
         markUserSelectedExternalCallAudioRoute(next);
       }

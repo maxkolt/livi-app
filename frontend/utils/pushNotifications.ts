@@ -24,6 +24,7 @@ import { emitCloseOutgoingCall, emitCloseHomeModals, emitMissedClear, emitMissed
 import { recordCallLog } from '../screens/home/callLog';
 import { UNREAD_BY_USER_KEY } from '../screens/home/constants';
 import { navigateToVideoCallScreen, type VideoCallNavLike } from './appNavigationGuard';
+import { beginCallPerfTrace, markCallPerf, callPerfSpan } from './callPerfTrace';
 import { recordAppliedFromPending } from '../sockets/socket';
 import { loadLang, t } from './i18n';
 import { isIncomingCallExpired } from './callExpiry';
@@ -1347,6 +1348,7 @@ async function runWhenNavReady(
 async function navigateToVideoCallIncoming(peerUserId: string, callId: string, media?: DirectCallMediaHint) {
   const incomingMedia = media ?? getCallMediaHint(callId);
   try { setCallMediaHint(callId, incomingMedia); } catch {}
+  const span = callPerfSpan('push_nav_videocall_incoming', { callId, peerUserId });
   await runWhenNavReady(`call:${callId || peerUserId}`, (nav) => {
     setActiveVideoCall(true);
     try { emitCloseHomeModals(); } catch {}
@@ -1362,7 +1364,11 @@ async function navigateToVideoCallIncoming(peerUserId: string, callId: string, m
       },
       'incoming_navigate',
     );
+    try {
+      markCallPerf('push_nav_videocall_incoming_dispatched', { callId });
+    } catch {}
   });
+  span.end();
 }
 
 /** Открыть экран входящего звонка (для deep link livi://incoming-call и full-screen intent). */
@@ -1380,6 +1386,15 @@ export async function openAnswerCallScreen(
   callId: string,
   media?: DirectCallMediaHint,
 ): Promise<void> {
+  try {
+    beginCallPerfTrace({
+      callId,
+      role: 'callee',
+      reason: 'open_answer_call_screen',
+      extra: { peerUserId },
+    });
+    markCallPerf('open_answer_call_screen_enter', { peerUserId, media: media ?? null });
+  } catch {}
   try { setIncomingCallScreenVisible(false); } catch {}
   try {
     stopIncomingCallAlert();
@@ -1396,6 +1411,7 @@ export async function openAnswerCallScreen(
   if (Platform.OS === 'android') {
     sendCallAnsweredBroadcast(callId);
   }
+  try { markCallPerf('open_answer_call_screen_exit', { callId }); } catch {}
   // Не блокируем ответный UI очисткой нотификаций — иначе долго видна крышка accept.
   void clearCallRelatedNotificationsAndSyncBadge().catch(() => {});
 }

@@ -31,6 +31,7 @@ import socket, {
 } from '../../../sockets/socket';
 import { applyCallEndedGlobalRefsOnce } from '../../../utils/globalEvents';
 import { logger } from '../../../utils/logger';
+import { markCallPerf, callPerfSpan, endCallPerfTrace } from '../../../utils/callPerfTrace';
 import { sendClientMetrics } from '../../utils/capacityClientMetrics';
 import { trackReleaseEvent } from '../../../utils/telemetry';
 import { getIceConfiguration } from '../../../utils/iceConfig';
@@ -812,6 +813,12 @@ export class VideoCallSession extends SimpleEventEmitter {
       partnerSocketId: this.partnerId,
       partnerUserId: this.partnerUserId,
     });
+    try {
+      endCallPerfTrace('call_end', {
+        callId: callIdToSend || this.callId || null,
+        roomId: roomIdToSend || this.roomId || null,
+      });
+    } catch {}
     
     // Останавливаем локальные треки и сбрасываем состояние
     disposeDirectCallAudioPrewarm('session:endCall');
@@ -1469,12 +1476,21 @@ export class VideoCallSession extends SimpleEventEmitter {
   }
 
   private async applyLocalCameraEnabled(enabled: boolean): Promise<void> {
+    const camSpan = callPerfSpan('session_toggle_cam', {
+      enabled,
+      hasLocalVideoTrack: !!this.localVideoTrack,
+      roomState: this.room?.state ?? null,
+    });
     const work = (this.cameraMutationPromise ?? Promise.resolve())
       .catch(() => {})
       .then(() => this.applyLocalCameraEnabledNow(enabled));
     this.cameraMutationPromise = work;
     try {
       await work;
+      camSpan.end({ ok: true, camOn: this.isCamOn });
+    } catch (e) {
+      camSpan.end({ ok: false, error: String(e) });
+      throw e;
     } finally {
       if (this.cameraMutationPromise === work) {
         this.cameraMutationPromise = null;
@@ -2607,14 +2623,16 @@ export class VideoCallSession extends SimpleEventEmitter {
       !!localVideoTrack &&
       localVideoTrack.readyState === 'live' &&
       localVideoTrack.enabled !== false;
-    const needsCamOff = camOn && hasLiveLocalVideo;
+    // Во время fast-start upgrade track может кратко не быть live — всё равно гасим.
+    const needsCamOff = camOn || hasLiveLocalVideo || !!this.localVideoTrack;
     const needsVideoTeardown =
       !this.deferRemoteVideoSubscription ||
       !!this.remoteVideoTrack ||
       this.remoteStreamHasLiveVideoTrack();
     try {
       if (needsCamOff) {
-        await this.toggleCam();
+        // Не toggleCam(): при isCamOn=false он включил бы камеру.
+        await this.applyLocalCameraEnabled(false);
       }
     } catch (e) {
       logger.warn('[VideoCallSession] enterDirectCallAudioOnlyMode toggleCam failed', e);
@@ -3444,6 +3462,12 @@ export class VideoCallSession extends SimpleEventEmitter {
               myUserId: this.config.myUserId,
               attempt,
             });
+            try {
+              markCallPerf('livekit_connected_after_accepted', {
+                roomName: data.livekitRoomName,
+                attempt,
+              });
+            } catch {}
             if (Platform.OS === 'android') {
               try { setAndroidSystemPiPLeaveHintEnabled(true); } catch (_) {}
             }
@@ -4071,7 +4095,6 @@ export class VideoCallSession extends SimpleEventEmitter {
   }
 
   private maybeScheduleFastStartVideoUpgrade(reason: string): void {
-    if (this.config.getIsDirectCall?.()) return;
     if (!this.fastStartVideoProfileActive) return;
     if (this.fastStartVideoUpgradeTimer) return;
     if (this.ended || !this.isCamOn || this.cameraSwitchInProgress) return;
@@ -4494,20 +4517,25 @@ export class VideoCallSession extends SimpleEventEmitter {
     const camStateBeforeAwait = this.isCamOn;
 
     const facingMode = this.camSide === 'front' ? 'user' : 'environment';
+    // Первое включение камеры из audio-only (нет трека): fast-start → upgrade.
+    // Steady (high) оставляем для pip-return / recovery существующего трека.
+    const firstToggleCamEnable =
+      /toggleCam:recovery/i.test(context) && !this.localVideoTrack;
     const preferSteadyCaptureForDirectCall =
       this.config.getIsDirectCall?.() &&
+      !firstToggleCamEnable &&
       (isDirectCallVideoExpandGuardActive() ||
         /toggleCam:recovery|pip-return|reconnectCameraOnResume|camera-enable-recovery/i.test(context));
     const useFastRecovery =
-      !preferSteadyCaptureForDirectCall &&
-      /recovery|pipReturn|pip-return|reconnectCameraOnResume/i.test(context);
+      firstToggleCamEnable ||
+      (!preferSteadyCaptureForDirectCall &&
+        /recovery|pipReturn|pip-return|reconnectCameraOnResume/i.test(context));
     const steadyPreferred = getPreferredVideoCaptureOptions(facingMode);
     const preferred = useFastRecovery
       ? getFastStartVideoCaptureOptions(facingMode)
       : steadyPreferred;
     if (useFastRecovery) {
       this.fastStartVideoProfileActive =
-        !this.config.getIsDirectCall?.() &&
         steadyPreferred.meta.preset !== preferred.meta.preset &&
         preferred.meta.preset === 'low';
       this.clearFastStartVideoUpgradeTimer();
@@ -4516,6 +4544,13 @@ export class VideoCallSession extends SimpleEventEmitter {
       this.clearFastStartVideoUpgradeTimer();
     }
     logger.info('[VideoCallSession] Recreating local video track', { context, preferred: preferred.meta, camSide: this.camSide });
+    try {
+      markCallPerf('session_recreate_video_track', {
+        context,
+        preset: preferred.meta?.preset ?? null,
+        camSide: this.camSide,
+      });
+    } catch {}
 
     const oldVideoTrack = this.localVideoTrack;
 
@@ -5189,6 +5224,12 @@ export class VideoCallSession extends SimpleEventEmitter {
           connectReason: options?.reason || null,
         });
         const connectStartTime = Date.now();
+        try {
+          markCallPerf('livekit_connect_start', {
+            roomName: targetRoomName,
+            connectReason: options?.reason || null,
+          });
+        } catch {}
         this.livekitConnectStartedAt = connectStartTime;
         // Увеличиваем peerConnectionTimeout: при одновременном подключении обоих участников
         // переговоры (negotiation) могут не уложиться в 15s → "negotiation timed out" и повторная попытка.

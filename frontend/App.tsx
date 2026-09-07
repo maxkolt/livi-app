@@ -20,6 +20,12 @@ import { emitCloseIncoming, emitRequestCloseIncoming, emitCloseOutgoingCall, emi
 import { buildCallEndSocketPayload } from './utils/callEndPayload';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { logger } from './utils/logger';
+import {
+  beginCallPerfTrace,
+  markCallPerf,
+  callPerfSpan,
+  setCallPerfDeviceTag,
+} from './utils/callPerfTrace';
 import InCallManager from 'react-native-incall-manager';
 import { startIncomingCallAlert, stopIncomingCallAlert } from './utils/incomingCallAlert';
 import HomeScreen, { markHomeScreenBootedForSession } from "./screens/HomeScreen";
@@ -502,10 +508,12 @@ function AppContent() {
     }
     setIncomingAnswerCover(false);
     try { clearIncomingAnswerNativeCover(); } catch {}
+    try { markCallPerf('answer_cover_clear'); } catch {}
   }, []);
   const showIncomingAnswerCover = React.useCallback(() => {
     setIncomingAnswerCover(true);
     try { showIncomingAnswerNativeCover(); } catch {}
+    try { markCallPerf('answer_cover_show'); } catch {}
     if (incomingAnswerCoverClearTimerRef.current) {
       clearTimeout(incomingAnswerCoverClearTimerRef.current);
     }
@@ -514,6 +522,7 @@ function AppContent() {
       incomingAnswerCoverClearTimerRef.current = null;
       setIncomingAnswerCover(false);
       try { clearIncomingAnswerNativeCover(); } catch {}
+      try { markCallPerf('answer_cover_timeout_clear', { timeoutMs: 8000 }); } catch {}
     }, 8000);
   }, []);
   React.useEffect(() => {
@@ -824,6 +833,21 @@ function AppContent() {
 
   const completeAndroidIncomingAnswer = React.useCallback(async (from: string, callId: string) => {
     logger.info('[App] Completing incoming answer', { callId, from });
+    // До bringMain/AppState(active): иначе Home badge/friends resume (~1–2с) конкурирует с VideoCall paint.
+    try {
+      armHomeUiSettleSkip(8000);
+    } catch {}
+    try {
+      const uid = String(getCurrentUserId() || '').trim();
+      if (uid) setCallPerfDeviceTag(uid);
+      beginCallPerfTrace({
+        callId,
+        role: 'callee',
+        reason: 'android_incoming_answer',
+        extra: { from, appState: AppState.currentState },
+      });
+      markCallPerf('callee_answer_start', { from, appState: AppState.currentState });
+    } catch {}
     clearEndingCallInProgress();
     // Крышка ДО foreground / navigate — иначе мелькает Home/Chat.
     showIncomingAnswerCover();
@@ -859,9 +883,12 @@ function AppContent() {
     }
     // Сначала VideoCall в стеке (+ крышка), потом Main на передний план — иначе первый кадр = Home/приветствие.
     // Не ждём double-rAF на active: крышка уже показана, navigate ASAP.
+    const navSpan = callPerfSpan('open_answer_call_screen', { callId });
     try {
       await openAnswerCallScreen(from, callId, answerMediaHint);
+      navSpan.end({ ok: true });
     } catch (e) {
+      navSpan.end({ ok: false, error: String(e) });
       logger.warn('[App] openAnswerCallScreen failed', { callId, error: e });
     }
     if (Platform.OS === 'android') {
@@ -871,11 +898,19 @@ function AppContent() {
       if (!endedCallIdsFromSocket.has(callId)) {
         try {
           logger.info('[App] 📱 bringMainActivityToFrontForIncomingAnswer (after VideoCall nav)', { callId });
+          markCallPerf('bring_main_for_incoming_answer', {
+            callId,
+            appState: AppState.currentState,
+            settleSkip: shouldSkipHomeUiSettle(),
+          });
           bringMainActivityToFrontForIncomingAnswer();
         } catch {}
       }
       InteractionManager.runAfterInteractions(() => {
         try {
+          markCallPerf('after_interactions_cover_check', {
+            route: navRef.getCurrentRoute()?.name ?? null,
+          });
           if (navRef.getCurrentRoute()?.name === 'VideoCall') {
             clearIncomingAnswerCover();
           }
@@ -2000,6 +2035,7 @@ function AppContent() {
       void syncDeclinePrefs();
       const userId = getCurrentUserId();
       if (userId) {
+        try { setCallPerfDeviceTag(userId); } catch {}
         void connectStreamIfNeeded(userId).catch(() => {});
       }
     });
@@ -3489,6 +3525,31 @@ function AppContent() {
           peerUserId: peerUserId || null,
         });
       }
+      try {
+        if (myUserId) setCallPerfDeviceTag(myUserId);
+        if (callId) {
+          beginCallPerfTrace({
+            callId,
+            role: isCaller ? 'caller' : 'callee',
+            reason: 'socket_call_accepted',
+            extra: {
+              alreadyOnVideoCall,
+              calleeOwnsNavigation,
+              incomingAnswerInFlight,
+              route: navRef.getCurrentRoute()?.name ?? null,
+              appState: AppState.currentState,
+            },
+          });
+          markCallPerf('call_accepted_received', {
+            isCaller,
+            calleeOwnsNavigation,
+            alreadyOnVideoCall,
+            route: navRef.getCurrentRoute()?.name ?? null,
+            appState: AppState.currentState,
+            hasLivekitToken: !!(data as any)?.livekitToken,
+          });
+        }
+      } catch {}
       if (!hasAcceptedContext) {
         logger.info('[App] ⏭️ call:accepted deferred (no active call context)', {
           callId,
@@ -3639,6 +3700,15 @@ function AppContent() {
               myUserId: myUserId || undefined,
               alreadyOnVideoCall,
             });
+            try {
+              markCallPerf('callee_nav_owned_by_answer_flow', {
+                alreadyOnVideoCall,
+                incomingAnswerInFlight,
+              });
+            } catch {}
+            try {
+              armHomeUiSettleSkip(8000);
+            } catch {}
             closeAcceptedCallUi();
             // Принимающий всегда должен увидеть экран звонка, независимо от AppState.
             // Не stash'им этот переход: Android Activity выводится на передний план сразу.
@@ -3720,6 +3790,17 @@ function AppContent() {
               myUserId: myUserId || undefined,
               partnerNick: outgoingNick,
             });
+            try {
+              markCallPerf('nav_videocall_start', {
+                isCaller,
+                peerUserId,
+                route: navRef.getCurrentRoute()?.name ?? null,
+              });
+            } catch {}
+            // Outgoing→Main / accept UI: не гонять Home resume/badge поверх VideoCall.
+            try {
+              armHomeUiSettleSkip(8000);
+            } catch {}
             if (isCaller && outgoingNick) {
               try {
                 (global as any).__outgoingCallPeerNickRef.current = null;
@@ -3740,6 +3821,12 @@ function AppContent() {
                 setActiveVideoCall(true);
                 try { emitCloseHomeModals(); } catch {}
                 navigateToVideoCallScreen(navRef, params as Record<string, unknown>, 'call_accepted');
+                try {
+                  markCallPerf('nav_videocall_dispatched', {
+                    isCaller,
+                    routeAfter: navRef.getCurrentRoute()?.name ?? null,
+                  });
+                } catch {}
                 try {
                   (global as any).__pendingForegroundVideoCallNavRef = (global as any)
                     .__pendingForegroundVideoCallNavRef || { current: null };
@@ -3806,6 +3893,12 @@ function AppContent() {
             calleeOwnsNavigation,
             myUserId: myUserId || undefined,
           });
+          try {
+            markCallPerf('already_on_videocall_skip_nav', {
+              isCaller,
+              calleeOwnsNavigation,
+            });
+          } catch {}
         }
       } catch (e) {
         logger.error('[App] ❌ Error navigating to VideoCall', { error: e, callId: data?.callId });

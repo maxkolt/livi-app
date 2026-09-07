@@ -73,7 +73,11 @@ function persistInAppPiPAudioRoute(route: InCallAudioRoute): void {
   const fromAudioPiP = (global as any).__pipInAppRtcFromAudioOnlyRef?.current === true;
   if (route === 'EARPIECE' || route === 'SPEAKER_PHONE') {
     rememberBuiltinCallRouteBeforeHeadset(route, fromAudioPiP);
-    rememberDirectCallAudioRouteBeforeVideo(route);
+    // Только audio PiP cycle обновляет beforeVideo. Video PiP + product SPEAKER не должен
+    // затирать earpiece, с которым уходили на видео.
+    if (fromAudioPiP) {
+      rememberDirectCallAudioRouteBeforeVideo(route);
+    }
   }
   setUserSelectedCallAudioRoute(route);
   setPersistedCallAudioRoute(route);
