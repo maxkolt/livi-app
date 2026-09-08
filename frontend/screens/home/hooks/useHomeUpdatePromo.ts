@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Animated, AppState, Easing } from 'react-native';
+import { AppState } from 'react-native';
 import {
   isUpdateAvailable,
   isUpdateReminderCooldownActive,
@@ -7,18 +7,16 @@ import {
   clearUpdateCheckCache,
   clearUpdatePromotionWhenUpToDate,
 } from '../../../utils/updateCheck';
-import type { HomeMenuTab } from './useHomeMenu';
 
 const UPDATE_CHECK_RESUME_DEBOUNCE_MS = 60 * 1000;
 
-export function useHomeUpdatePromo(tab: HomeMenuTab) {
+export function useHomeUpdatePromo() {
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [showUpdateBadge, setShowUpdateBadgeState] = useState(false);
   const updateBadgeShownRef = useRef(false);
   const suppressUpdateBadgeUntilRef = useRef(0);
   /** Результат последней isUpdateAvailable() в check() — для shouldShowUpdateBadge без повторного запроса */
   const serverSaysUpdateRef = useRef(false);
-  const updateSpinAnim = useRef(new Animated.Value(0)).current;
   const lastUpdateCheckAtRef = useRef(0);
 
   const suppressUpdateBadgeForCallNotice = useCallback((durationMs = 4000) => {
@@ -79,28 +77,12 @@ export function useHomeUpdatePromo(tab: HomeMenuTab) {
     return () => { cancelled = true; };
   }, [updateAvailable]);
 
-  useEffect(() => {
-    if (!updateAvailable || tab !== 'more') return;
-    const loop = Animated.loop(
-      Animated.timing(updateSpinAnim, {
-        toValue: 1,
-        duration: 1500,
-        useNativeDriver: true,
-        easing: Easing.linear,
-      })
-    );
-    updateSpinAnim.setValue(0);
-    loop.start();
-    return () => loop.stop();
-  }, [updateAvailable, updateSpinAnim, tab]);
-
   return {
     updateAvailable,
     setUpdateAvailable,
     showUpdateBadge,
     setShowUpdateBadgeState,
     updateBadgeShownRef,
-    updateSpinAnim,
     suppressUpdateBadgeForCallNotice,
   };
 }

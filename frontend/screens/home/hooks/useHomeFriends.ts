@@ -20,14 +20,11 @@ import {
 } from '../friendHelpers';
 import { shouldSkipHomeUiSettle } from '../../../utils/globalEvents';
 import type { Friend } from '../types';
-import type { HomeMenuTab } from './useHomeMenu';
 import type { WelcomeTabId } from '../HomeWelcomeTabBar';
 
 type UseHomeFriendsArgs = {
   resolvedUserId: string;
   installId: string;
-  menuOpen: boolean;
-  tab: HomeMenuTab;
   welcomeActiveTab: WelcomeTabId;
   appIsActive: boolean;
 };
@@ -35,16 +32,11 @@ type UseHomeFriendsArgs = {
 export function useHomeFriends({
   resolvedUserId,
   installId,
-  menuOpen,
-  tab,
   welcomeActiveTab,
   appIsActive,
 }: UseHomeFriendsArgs) {
   const friendsSurfaceActive =
-    appIsActive &&
-    ((menuOpen && tab === 'friends') ||
-      welcomeActiveTab === 'friends' ||
-      welcomeActiveTab === 'chat');
+    appIsActive && (welcomeActiveTab === 'friends' || welcomeActiveTab === 'chat');
   // Calls специально НЕ входит: call log не нуждается в fetch friends, а soft
   // refresh@8s после открытия Calls совпадал с cancel и убивал тачи (лог loadFriends@calls).
   const [friends, setFriends] = useState<Friend[]>([]);

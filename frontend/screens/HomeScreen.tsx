@@ -49,7 +49,6 @@ import {
 import LanguagePicker from '../components/LanguagePicker';
 import { clearPendingInviteCode } from '../utils/inviteLink';
 import { useAppTheme } from '../theme/ThemeProvider';
-import { uiAccent } from '../theme/uiAccent';
 import { t } from '../utils/i18n';
 import type { Lang } from '../utils/i18n';
 import { useLang } from '../store/lang';
@@ -63,18 +62,14 @@ import { onCallTimeout as onCallTimeoutEvent, onCallIncoming as onCallIncomingEv
 import { onRequestCloseIncoming, emitCloseIncoming, onCloseOutgoingCall, onCallCancelledOnHome, onCloseHomeModals, onRequestDirectCall, shouldSkipHomeUiSettle, armHomeUiSettleSkip, clearHomeUiSettleSkip, setPendingWelcomeCallsFilter, setPendingWelcomeChatsFilter } from '../utils/globalEvents';
 import { displayOutgoingCallImmediate, notifyOutgoingCallId, reportEndCallToCallKeep, closeOutgoingCallActivity, bringMainActivityToFront, OUTGOING_CALL_TIMEOUT_MS, clearOutgoingDeclineHandled, isOutgoingDeclineHandled, setupCallKeep, isCallKeepAvailable, setCallMediaHint } from '../utils/callKeep';
 import { syncAppBadgeFromMissedCount, dismissMessageNotificationsOnly, getMissedCountByUserFromNative } from '../utils/pushNotifications';
-import SettingsTab from '../components/SettingsTab';
 import {
   LIVI,
   styles,
-  HomeFriendsTab,
-  HomeMoreTab,
   HomeWelcomeView,
   HomeWelcomeFriendsView,
   HomeWelcomeChatsView,
   HomeWelcomeCallsView,
   HomeWelcomeProfileView,
-  HomeMenuOverlay,
   displayName,
   displayAvatarLetter,
   badgeMapsEqual,
@@ -83,7 +78,6 @@ import {
   isDirectCallSessionLive,
   useLiviNotice,
   useLiviConfirm,
-  useHomeMenu,
   useHomeUpdatePromo,
   useHomeBadges,
   useHomeFriends,
@@ -310,16 +304,14 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const { width: layoutWidth, height: layoutHeight } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const pip = usePiP();
-  const { preference, setPreference, theme, isDark } = useAppTheme();
-  const accent = React.useMemo(() => uiAccent(isDark), [isDark]);
+  const { theme, isDark } = useAppTheme();
   const [appIsActive, setAppIsActive] = useState(AppState.currentState === 'active');
   const [resolvedUserId, setResolvedUserId] = useState<string>('');
   const [installId, setInstallId] = useState<string>('');
 
-  const { menuOpen, setMenuOpen, tab, setTab, tabRef, menuOverlayOpacity, menuOverlayTranslateY, closeMenu } = useHomeMenu();
+  /** Legacy menu removed; friendsListShellProps still accepts the flag. */
+  const menuOpen = false;
   const [wallpaperPickerTheme, setWallpaperPickerTheme] = useState<'light' | 'dark' | null>(null);
-  // После первого открытия вкладки остаются в дереве (скрыты оверлеем) — без скачка «пусто → друзья».
-  const [menuEverOpened, setMenuEverOpened] = useState(false);
   const [welcomeActiveTab, setWelcomeActiveTab] = useState<WelcomeTabId>('search');
   const welcomeActiveTabRef = useRef<WelcomeTabId>('search');
   welcomeActiveTabRef.current = welcomeActiveTab;
@@ -349,20 +341,12 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     },
     [ensureWelcomeTabMounted],
   );
-  useEffect(() => {
-    if (menuOpen) setMenuEverOpened(true);
-  }, [menuOpen]);
-  const menuTabsMounted = menuOpen || menuEverOpened;
 
-  // Пикер фона — More или welcome-профиль.
+  // Пикер фона — welcome-профиль.
   useEffect(() => {
-    const wallpaperHost = (menuOpen && tab === 'more') || welcomeActiveTab === 'profile';
-    if (!wallpaperHost) setWallpaperPickerTheme(null);
-  }, [menuOpen, tab, welcomeActiveTab]);
-  const {
-    updateAvailable,
-    updateSpinAnim,
-  } = useHomeUpdatePromo(tab);
+    if (welcomeActiveTab !== 'profile') setWallpaperPickerTheme(null);
+  }, [welcomeActiveTab]);
+  const { updateAvailable } = useHomeUpdatePromo();
 
   const {
     friends,
@@ -378,8 +362,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   } = useHomeFriends({
     resolvedUserId,
     installId,
-    menuOpen,
-    tab,
     welcomeActiveTab,
     appIsActive,
   });
@@ -509,7 +491,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     return () => { cancelled = true; };
   }, [resolvedUserId]);
 
-  // Всегда синхронизируем ref со state (на случай, если nick меняется НЕ через SettingsTab onChangeText,
+  // Всегда синхронизируем ref со state (на случай, если nick меняется НЕ через onChangeText профиля),
   // например после загрузки профиля с сервера).
   useEffect(() => {
     nickLiveRef.current = nick;
@@ -737,7 +719,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     }
   }, [showNotice, incrCounter]);
   
-  const openLangPicker  = () => setLangPickerVisible(true);
   const closeLangPicker = () => setLangPickerVisible(false);
   const handleSelectLang = async (code: Lang) => { await setLang(code); setLangPickerVisible(false); };
 
@@ -3124,37 +3105,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     prevAvatarRef.current = avatarUri;
   }, [avatarUri, attachIdentitySafe, installId, loadFriends, lang, nick, savedNick, showNotice]);
 
-  /* ===== pull draft when Settings is open ===== */
-  useEffect(() => {
-    if (!menuOpen || tab !== 'settings') return;
-    (async () => {
-      try {
-        // ВАЖНО: НЕ загружаем черновик для новых пользователей
-        const currentUserId = getCurrentUserId();
-
-        if (!currentUserId) {
-          return;
-        }
-
-        const draft = await loadDraftProfile();
-
-        // Только обновляем если есть значение И пользователь существует
-        if (typeof draft.nick === 'string' && draft.nick.trim()) {
-          setNick(draft.nick);
-        }
-
-        // Аватар из черновика - только file:// превью (не восстанавливаем старые URL)
-        if (typeof draft.avatar === 'string' && draft.avatar) {
-          const isLocalPreview = /^(file|content|ph|assets-library):\/\//i.test(draft.avatar);
-          if (isLocalPreview) {
-            setAvatarUri((u) => u || draft.avatar || '');
-          } else {}
-        }
-      } catch (e) {
-        console.warn('[Settings] Failed to load draft:', e);
-      }
-    })();
-  }, [menuOpen, tab]);
+  /* draft pull for Settings removed with legacy menu */
 
   // Бейдж «Занято» у участников видеозвонка: сервер при инициации (call:initiate) и при принятии (call:accept)
   // рассылает presence:update({ userId, busy: true }) друзьям обоих участников; при завершении/отмене/отклонении
@@ -3203,7 +3154,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   }, [calling.visible, incomingCallScreen.visible]);
 
   useEffect(() => {
-    if (tab !== 'friends') return;
+    if (welcomeActiveTab !== 'friends') return;
     syncSelfPresenceOnlineIfIdle('friends-tab');
     try {
       const g = global as any;
@@ -3212,7 +3163,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       }
     } catch {}
     void loadFriends();
-  }, [tab, syncSelfPresenceOnlineIfIdle, forceResetCallBusyRefs, loadFriends]);
+  }, [welcomeActiveTab, syncSelfPresenceOnlineIfIdle, forceResetCallBusyRefs, loadFriends]);
 
   useEffect(() => {
     const timers = new Set<ReturnType<typeof setTimeout>>();
@@ -3387,7 +3338,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           return;
         }
         syncSelfPresenceOnlineIfIdle('home-focus');
-        const onFriendsTab = tabRef.current === 'friends';
+        const onFriendsTab = welcomeActiveTabRef.current === 'friends';
         const raw = await AsyncStorage.getItem(MISSED_CALLS_KEY);
         const parsed = raw ? JSON.parse(raw) : {};
         const nativeMissed = await getMissedCountByUserFromNative();
@@ -4329,7 +4280,6 @@ const handleClearNick = useCallback(async () => {
     if (wiping) return;
 
     setWiping(true);
-    setMenuOpen(false);
     setInitialized(false); // Сбрасываем флаг инициализации
 
     try {
@@ -4645,14 +4595,12 @@ const handleClearNick = useCallback(async () => {
     const wantFriends = !!(openFriendsTab && !openFriendsMenu && !pushMessageFrom && !openWelcomeChat);
 
     if (wantCalls) {
-      setMenuOpen(false);
       if (wantCallsMissed) {
         try { setPendingWelcomeCallsFilter('missed'); } catch {}
       }
       setWelcomeActiveTab('calls');
       ensureWelcomeTabMounted('calls');
     } else if (wantChat) {
-      setMenuOpen(false);
       if (openWelcomeChatUnread || pushMessageFrom) {
         try { setPendingWelcomeChatsFilter('unread'); } catch {}
       }
@@ -4677,7 +4625,6 @@ const handleClearNick = useCallback(async () => {
         } catch {}
       }
     } else if (wantFriends) {
-      setMenuOpen(false);
       setWelcomeActiveTab('friends');
       ensureWelcomeTabMounted('friends');
     }
@@ -4769,14 +4716,6 @@ const handleClearNick = useCallback(async () => {
   const handleBlockedStartSearchPress = useCallback(() => {
     setShowCallSearchLockBadge(true);
   }, []);
-  const handleOpenMenu = useCallback(() => {
-    setMenuOpen(true);
-    setTab('friends');
-  }, [setMenuOpen, setTab]);
-  const handleOpenProfile = useCallback(() => {
-    setWelcomeActiveTab('profile');
-    ensureWelcomeTabMounted('profile');
-  }, [ensureWelcomeTabMounted]);
   const handleWelcomeTabPress = useCallback(
     (tabId: WelcomeTabId) => {
       const g = global as any;
@@ -4833,19 +4772,8 @@ const handleClearNick = useCallback(async () => {
         elapsedMs: Date.now() - t0,
         sinceCancelMs: cancelAt > 0 ? Date.now() - cancelAt : null,
       });
-      if (
-        tabId === 'search' ||
-        tabId === 'friends' ||
-        tabId === 'profile' ||
-        tabId === 'chat' ||
-        tabId === 'calls'
-      ) {
-        return;
-      }
-      setMenuOpen(true);
-      setTab('friends');
     },
-    [ensureWelcomeTabMounted, flushStaleCallingUiAfterCancel, mountedWelcomeTabs, setMenuOpen, setTab, welcomeActiveTab],
+    [ensureWelcomeTabMounted, flushStaleCallingUiAfterCancel, mountedWelcomeTabs, welcomeActiveTab],
   );
   const handleProfileSupportClick = useCallback(() => {
     void incrCounter('support_help_clicks');
@@ -4913,10 +4841,10 @@ const handleClearNick = useCallback(async () => {
     }
   }, [hasActiveCallForSearch]);
 
-  const showFriendsTab = welcomeActiveTab === 'friends' && !menuOpen;
-  const showChatTab = welcomeActiveTab === 'chat' && !menuOpen;
-  const showCallsTab = welcomeActiveTab === 'calls' && !menuOpen;
-  const showProfileTab = welcomeActiveTab === 'profile' && !menuOpen;
+  const showFriendsTab = welcomeActiveTab === 'friends';
+  const showChatTab = welcomeActiveTab === 'chat';
+  const showCallsTab = welcomeActiveTab === 'calls';
+  const showProfileTab = welcomeActiveTab === 'profile';
   const showSearchWelcome = !showFriendsTab && !showChatTab && !showCallsTab && !showProfileTab;
   const showSplashOverlay = !splashDismissed;
 
@@ -4936,7 +4864,7 @@ const handleClearNick = useCallback(async () => {
         edges={['top', 'left', 'right']}
       >
       <StatusBar
-        barStyle={Platform.OS === 'android' || menuOpen || isDark ? 'light-content' : 'dark-content'}
+        barStyle={Platform.OS === 'android' || isDark ? 'light-content' : 'dark-content'}
         translucent={Platform.OS === 'android'}
         backgroundColor={Platform.OS === 'android' ? 'transparent' : undefined}
       />
@@ -4954,12 +4882,8 @@ const handleClearNick = useCallback(async () => {
             L={L}
             lang={lang}
             menuChromeBg={MENU_CHROME_BG}
-            onOpenProfile={handleOpenProfile}
-            onOpenMenu={handleOpenMenu}
             onlineCount={welcomeOnlineCount}
             bannerPeers={welcomeBannerPeers}
-            unreadByUser={unreadByUser}
-            missedByUser={missedByUser}
             centerProfile={centerProfile}
             NoticeView={NoticeView}
             hasActiveCallForSearch={hasActiveCallForSearch}
@@ -4977,8 +4901,6 @@ const handleClearNick = useCallback(async () => {
           <HomeWelcomeFriendsView
             {...friendsListShellProps}
             allFriends={friends}
-            onOpenProfile={handleOpenProfile}
-            onOpenMenu={handleOpenMenu}
             onInviteFriends={generateInviteLink}
             askConfirm={askConfirm}
             showNotice={showNotice}
@@ -4996,12 +4918,9 @@ const handleClearNick = useCallback(async () => {
             active={showChatTab}
             allFriends={friends}
             unreadByUser={showChatTab ? unreadByUser : EMPTY_BADGE_MAP}
-            missedByUser={showChatTab ? missedByUser : EMPTY_BADGE_MAP}
             navigation={navigation}
             lastChatOpenRef={lastChatOpenRef}
             prepareFriendRowActionTap={prepareFriendRowActionTap}
-            onOpenProfile={handleOpenProfile}
-            onOpenMenu={handleOpenMenu}
             refreshing={refreshing}
             onRefresh={onRefreshFriends}
             askConfirm={askConfirm}
@@ -5020,13 +4939,10 @@ const handleClearNick = useCallback(async () => {
             L={L}
             active={showCallsTab}
             allFriends={friends}
-            unreadByUser={showCallsTab ? unreadByUser : EMPTY_BADGE_MAP}
             missedByUser={showCallsTab ? missedByUser : EMPTY_BADGE_MAP}
             prepareFriendRowActionTap={prepareFriendRowActionTap}
             handleStartFriendCall={handleStartFriendCall}
             clearMissedCallsForFriend={clearMissedCallsForFriend}
-            onOpenProfile={handleOpenProfile}
-            onOpenMenu={handleOpenMenu}
             refreshing={refreshing}
             onRefresh={onRefreshFriends}
             askConfirm={askConfirm}
@@ -5077,8 +4993,7 @@ const handleClearNick = useCallback(async () => {
         ) : null}
       </View>
 
-      {!menuOpen ? (
-        <HomeWelcomeTabBar
+      <HomeWelcomeTabBar
           activeTab={welcomeActiveTab}
           labels={{
             search: L('tabSearch'),
@@ -5098,7 +5013,6 @@ const handleClearNick = useCallback(async () => {
           }
           showProfileDot={!!updateAvailable}
         />
-      ) : null}
 
       {/* Модалка аватара: полный экран, блюр/затемнение, круг 3×, pinch-to-zoom, тап вне — закрыть. Без вложенности touch/gesture (Nesting touch handlers with native animated driver). */}
       {avatarModalVisible && (
@@ -5148,99 +5062,6 @@ const handleClearNick = useCallback(async () => {
           </View>
         </View>
       )}
-
-      {/* Оверлей всегда смонтирован (мгновенный open). Скрыт через opacity+offscreen, пока menuOpen=false —
-          иначе в app-switcher «торчат» вкладки. menuOpen/tab при фоне не сбрасываем. */}
-      <HomeMenuOverlay
-        styles={styles}
-        menuOpen={menuOpen}
-        menuOverlayOpacity={menuOverlayOpacity}
-        menuOverlayTranslateY={menuOverlayTranslateY}
-        closeMenu={closeMenu}
-        onHeaderBackPress={
-          wallpaperPickerTheme
-            ? () => setWallpaperPickerTheme(null)
-            : closeMenu
-        }
-        tab={tab}
-        setTab={setTab}
-        L={L}
-        updateAvailable={updateAvailable}
-      >
-              {menuTabsMounted ? (
-                <View
-                  style={
-                    tab === 'friends'
-                      ? { flex: 1 }
-                      : { display: 'none' as const }
-                  }
-                  pointerEvents={tab === 'friends' ? 'auto' : 'none'}
-                  collapsable={false}
-                >
-                <HomeFriendsTab {...friendsListShellProps} />
-                </View>
-              ) : null}
-              {menuTabsMounted && tab === 'settings' && (
-                <SettingsTab
-                  nick={nick}
-                  setNick={(v) => {
-                    nickLiveRef.current = v;
-                    nickInputDirtyRef.current = true;
-                    setNick(v);
-                    saveDraftProfile({ nick: v });
-                    // ВАЖНО: НЕ сохраняем ник в постоянное хранилище на каждый ввод.
-                    // Иначе при резком "убийстве" приложения может записаться промежуточное значение (например, только первая буква),
-                    // а затем при старте оно перезапишет ник на сервере через ensureIdentity/attachIdentity.
-                  }}
-                  avatarUri={avatarUri}
-                  setAvatarUri={(u) => {
-                    setAvatarUri(u);
-                    saveDraftProfile({ avatar: u });
-                    setAvatarRefreshKey((k) => k + 1);
-                    // Также сохраняем в основное хранилище
-                    // ВАЖНО: берём ник из live-ref (state может "догонять" при быстром вводе + выборе аватара)
-                    saveProfileToStorage({ nick: String(nickLiveRef.current || nick || ''), avatar: u }).catch(() => {});
-                  }}
-                  refreshKey={avatarRefreshKey}
-                  openAvatarSheet={openAvatarSheet}
-                  handleSaveProfile={handleSaveProfile}
-                  savedToast={savedToast}
-                  setSavedToast={setSavedToast}
-                  LIVI={LIVI}
-                  styles={styles}
-                  onClearNick={handleClearNick}
-                  saving={saving}
-                  onDeleteAvatar={handleDeleteAvatar}
-                  // Передаём информацию о кешированном аватаре
-                  myFullAvatarUri={myFullAvatarUri}
-                  myAvatarVer={myAvatarVer}
-                  myUserId={getCurrentUserId()}
-                  handleWipeAccount={handleWipeAccount}
-                  wiping={wiping}
-                  lang={lang}
-                  isDark={isDark}
-                />
-              )}
-              {menuTabsMounted && tab === 'more' && (
-                <HomeMoreTab
-                  styles={styles}
-                  L={L}
-                  lang={lang}
-                  preference={preference}
-                  setPreference={setPreference}
-                  accent={accent}
-                  isDark={isDark}
-                  openLangPicker={openLangPicker}
-                  incrCounter={incrCounter}
-                  setDonateVisible={setDonateVisible}
-                  generateInviteLink={generateInviteLink}
-                  updateAvailable={updateAvailable}
-                  updateSpinAnim={updateSpinAnim}
-                  wallpaperPickerTheme={wallpaperPickerTheme}
-                  setWallpaperPickerTheme={setWallpaperPickerTheme}
-                />
-              )}
-      </HomeMenuOverlay>
 
       {/* ───── Комната занята (caller info) ───── */}
       {roomFull.visible && (

@@ -298,7 +298,7 @@ const styles = StyleSheet.create({
     gap: 0,
   },
   rowLabel: {
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: '500',
     flexShrink: 1,
   },
@@ -307,7 +307,7 @@ const styles = StyleSheet.create({
     textAlign: 'left',
   },
   rowLabelCompact: {
-    fontSize: 14,
+    fontSize: 13,
   },
   rowRight: {
     flexDirection: 'row',

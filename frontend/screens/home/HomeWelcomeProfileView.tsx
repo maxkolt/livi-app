@@ -55,48 +55,42 @@ const BOOSTY_URL = process.env.EXPO_PUBLIC_BOOSTY_URL || 'https://boosty.to/livi
 const PATREON_URL = process.env.EXPO_PUBLIC_PATREON_URL || 'https://www.patreon.com/c/LiViApp';
 const AVATAR_RING_WIDTH = 2.5;
 const CAMERA_BTN_SIZE = 38;
-/** Зазор между низом списка и кнопкой «Удалить профиль». */
-const HUB_LIST_ABOVE_DELETE_GAP = 10;
-/** Симметричные отступы вокруг кнопки «Удалить профиль». */
-const HUB_DELETE_EDGE_GAP = 6;
+/** Нижний отступ у «Удалить профиль» (над tab bar). */
+const HUB_DELETE_BOTTOM_PAD = 4;
 /** Строк hub-профиля (dense) — см. WelcomeProfileListUi. */
 const PROFILE_HUB_ROW_DENSE = 48;
 const PROFILE_HUB_ROW_COUNT = 8;
-const EST_DELETE_FOOTER_H = 44;
+const EST_DELETE_FOOTER_H = 40;
 
 type HubLayoutTokens = {
   avatarSize: number;
   avatarMarginBottom: number;
   avatarPaddingTop: number;
   listGap: number;
-  listMarginTop: number;
   cameraBtnSize: number;
 };
 
 const HUB_LAYOUT_PHONE: HubLayoutTokens = {
-  avatarSize: 128,
+  avatarSize: 120,
   avatarMarginBottom: 6,
   avatarPaddingTop: 4,
   listGap: 10,
-  listMarginTop: 22,
   cameraBtnSize: CAMERA_BTN_SIZE,
 };
 
 const HUB_LAYOUT_PHONE_COMPACT: HubLayoutTokens = {
-  avatarSize: 120,
+  avatarSize: 114,
   avatarMarginBottom: 4,
   avatarPaddingTop: 2,
   listGap: 8,
-  listMarginTop: 18,
   cameraBtnSize: CAMERA_BTN_SIZE,
 };
 
 const HUB_LAYOUT_TABLET: HubLayoutTokens = {
-  avatarSize: 134,
+  avatarSize: 126,
   avatarMarginBottom: 8,
   avatarPaddingTop: 6,
   listGap: 12,
-  listMarginTop: 24,
   cameraBtnSize: CAMERA_BTN_SIZE,
 };
 
@@ -106,10 +100,9 @@ function estimateProfileHubBodyHeight(tokens: HubLayoutTokens): number {
   const avatarBlock =
     tokens.avatarPaddingTop + tokens.avatarSize + tokens.avatarMarginBottom + AVATAR_RING_WIDTH * 2;
   const listBlock =
-    tokens.listMarginTop +
     PROFILE_HUB_ROW_COUNT * PROFILE_HUB_ROW_DENSE +
     (PROFILE_HUB_SECTION_COUNT - 1) * tokens.listGap;
-  return avatarBlock + listBlock + HUB_LIST_ABOVE_DELETE_GAP;
+  return avatarBlock + listBlock + EST_DELETE_FOOTER_H;
 }
 
 function estimateProfileHubContentBudget(
@@ -122,8 +115,7 @@ function estimateProfileHubContentBudget(
     windowHeight -
       topInset -
       estimateProfileHeaderHeight() -
-      estimateTabBarHeight(bottomInset) -
-      EST_DELETE_FOOTER_H,
+      estimateTabBarHeight(bottomInset),
   );
 }
 
@@ -256,8 +248,6 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
   }, [savedToast, busy, setSavedToast]);
 
   const langLabel = (lang ?? 'ru').toUpperCase();
-
-  const noop = useCallback(() => {}, []);
 
   const openAccountEdit = useCallback(() => {
     setAccountOpen((open) => {
@@ -475,7 +465,7 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
   const headerHub = (
     <View style={styles.header}>
       <Text style={styles.title}>{t('tabSettings', lang)}</Text>
-      <WelcomeCrownButton onPress={noop} />
+      <WelcomeCrownButton />
     </View>
   );
 
@@ -558,7 +548,6 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
       style={[
         styles.hubListStack,
         { gap: hubLayout.listGap },
-        !accountOpen && { marginTop: hubLayout.listMarginTop },
         accountOpen && styles.hubListStackNickOpen,
       ]}
     >
@@ -672,11 +661,13 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
         </View>
       </View>
       {hubListStack}
+      {hubLogoutButton}
     </View>
   ) : (
     <View style={styles.hubMainBalance}>
       <View style={styles.hubMainTop}>{hubAvatarSection}</View>
       {hubListStack}
+      {hubLogoutButton}
     </View>
   );
 
@@ -843,7 +834,6 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
             ) : (
               <View style={[styles.hubMainDock, styles.hubMainDockClip]}>{hubScrollBody}</View>
             )}
-            {hubLogoutButton}
           </View>
         ) : (
           <View style={styles.subScreenPane}>
@@ -940,19 +930,21 @@ const styles = StyleSheet.create({
     flex: 1,
     minHeight: 0,
     justifyContent: 'space-between',
-    paddingBottom: HUB_LIST_ABOVE_DELETE_GAP,
   },
   hubMainTop: {
     flexShrink: 0,
     width: '100%',
   },
   hubMainDockScroll: {
-    flexGrow: 0,
+    flexGrow: 1,
     paddingBottom: 0,
   },
   scrollContent: { paddingTop: 4 },
-  avatarBlock: { alignItems: 'center', marginBottom: 8, marginTop: 0 },
-  hubListStack: {},
+  avatarBlock: { alignItems: 'center', marginBottom: 0, marginTop: 0 },
+  hubListStack: {
+    flexShrink: 0,
+    width: '100%',
+  },
   hubListStackNickOpen: { marginTop: 8 },
   avatarWrap: { position: 'relative' },
   avatarRing: {
@@ -1118,10 +1110,12 @@ const styles = StyleSheet.create({
   },
   hubActions: {
     marginHorizontal: WELCOME_FRIENDS_LIST_INSET,
-    paddingTop: HUB_DELETE_EDGE_GAP,
-    paddingBottom: HUB_DELETE_EDGE_GAP,
+    minHeight: EST_DELETE_FOOTER_H,
+    paddingTop: 0,
+    paddingBottom: HUB_DELETE_BOTTOM_PAD,
     flexShrink: 0,
     alignItems: 'center',
+    justifyContent: 'center',
   },
   logOutBtn: {
     alignSelf: 'center',
@@ -1129,8 +1123,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 7,
-    paddingVertical: 4,
-    paddingHorizontal: 16,
+    paddingVertical: 0,
+    paddingTop: 0,
+    paddingBottom: HUB_DELETE_BOTTOM_PAD,    paddingHorizontal: 16,
+    transform: [{ translateY: -4 }],
   },
   logOutBtnText: {
     color: '#A63A48',

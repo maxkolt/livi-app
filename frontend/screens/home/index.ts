@@ -2,14 +2,11 @@ export { LIVI } from './constants';
 export type { Friend, HomeRouteParams, MarkReadMenu } from './types';
 export { styles } from './styles';
 export type { HomeStyles } from './styles';
-export { HomeFriendsTab } from './HomeFriendsTab';
-export { HomeMoreTab } from './HomeMoreTab';
 export { HomeWelcomeView } from './HomeWelcomeView';
 export { HomeWelcomeFriendsView } from './HomeWelcomeFriendsView';
 export { HomeWelcomeChatsView } from './HomeWelcomeChatsView';
 export { HomeWelcomeCallsView } from './HomeWelcomeCallsView';
 export { HomeWelcomeProfileView } from './HomeWelcomeProfileView';
-export { HomeMenuOverlay } from './HomeMenuOverlay';
 export { HomeCenterProfile } from './HomeCenterProfile';
 export {
   ChromePerimeterGlow,
@@ -36,9 +33,8 @@ export {
 export {
   useLiviNotice,
   useLiviConfirm,
-  useHomeMenu,
   useHomeUpdatePromo,
   useHomeBadges,
   useHomeFriends,
 } from './hooks';
-export type { NoticeKind, HomeMenuTab } from './hooks';
+export type { NoticeKind } from './hooks';

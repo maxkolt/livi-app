@@ -54,12 +54,9 @@ export type HomeWelcomeChatsViewProps = {
   active?: boolean;
   allFriends: Friend[];
   unreadByUser: Record<string, number>;
-  missedByUser: Record<string, number>;
   navigation: any;
   lastChatOpenRef: React.MutableRefObject<{ peerId: string; at: number } | null>;
   prepareFriendRowActionTap: () => void;
-  onOpenProfile: () => void;
-  onOpenMenu: () => void;
   refreshing: boolean;
   onRefresh: () => void | Promise<void>;
   askConfirm: (opts: {
@@ -78,12 +75,9 @@ function HomeWelcomeChatsViewInner({
   active = true,
   allFriends,
   unreadByUser,
-  missedByUser,
   navigation,
   lastChatOpenRef,
   prepareFriendRowActionTap,
-  onOpenProfile,
-  onOpenMenu,
   refreshing,
   onRefresh,
   askConfirm,
@@ -235,12 +229,6 @@ function HomeWelcomeChatsViewInner({
       skipSearchDismissRef.current = false;
     }, 450);
   }, []);
-
-  const shouldShowMenuDot = useMemo(() => {
-    const unread = Object.values(unreadByUser).some((n) => n > 0);
-    const missed = Object.values(missedByUser).some((n) => n > 0);
-    return unread || missed;
-  }, [unreadByUser, missedByUser]);
 
   const filteredChats = useMemo(() => {
     let list = allFriends;
@@ -510,11 +498,7 @@ function HomeWelcomeChatsViewInner({
                     color={searchOpen ? WELCOME_SEGMENT_ACTIVE : LIVI.white}
                   />
                 </Pressable>
-                <WelcomeCrownButton
-                  onPress={onOpenProfile}
-                  onLongPress={onOpenMenu}
-                  showBadge={shouldShowMenuDot}
-                />
+                <WelcomeCrownButton />
               </View>
             </>
           )}

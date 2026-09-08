@@ -60,13 +60,10 @@ export type HomeWelcomeCallsViewProps = {
   /** Вкладка «Звонки» сейчас видима (pane keep-alive не remount'ит экран). */
   active: boolean;
   allFriends: Friend[];
-  unreadByUser: Record<string, number>;
   missedByUser: Record<string, number>;
   prepareFriendRowActionTap: () => void;
   handleStartFriendCall: (friend: Friend) => void;
   clearMissedCallsForFriend: (friendIdStr: string) => Promise<void>;
-  onOpenProfile: () => void;
-  onOpenMenu: () => void;
   refreshing: boolean;
   onRefresh: () => void | Promise<void>;
   askConfirm: (opts: {
@@ -110,13 +107,10 @@ function HomeWelcomeCallsViewInner({
   L,
   active,
   allFriends,
-  unreadByUser,
   missedByUser,
   prepareFriendRowActionTap,
   handleStartFriendCall,
   clearMissedCallsForFriend,
-  onOpenProfile,
-  onOpenMenu,
   refreshing,
   onRefresh,
   askConfirm,
@@ -324,12 +318,6 @@ function HomeWelcomeCallsViewInner({
       skipSearchDismissRef.current = false;
     }, 450);
   }, []);
-
-  const shouldShowMenuDot = useMemo(() => {
-    const unread = Object.values(unreadByUser).some((n) => n > 0);
-    const missed = Object.values(missedByUser).some((n) => n > 0);
-    return unread || missed;
-  }, [unreadByUser, missedByUser]);
 
   const missedTotal = useMemo(
     () => Object.values(missedByUser).reduce((sum, n) => sum + (typeof n === 'number' && n > 0 ? n : 0), 0),
@@ -647,11 +635,7 @@ function HomeWelcomeCallsViewInner({
                     color={searchOpen ? WELCOME_SEGMENT_ACTIVE : LIVI.white}
                   />
                 </Pressable>
-                <WelcomeCrownButton
-                  onPress={onOpenProfile}
-                  onLongPress={onOpenMenu}
-                  showBadge={shouldShowMenuDot}
-                />
+                <WelcomeCrownButton />
               </View>
             </>
           )}

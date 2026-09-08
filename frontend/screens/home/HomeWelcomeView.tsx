@@ -11,7 +11,6 @@ import {
   type LayoutChangeEvent,
 } from 'react-native';
 import * as Haptics from 'expo-haptics';
-import { logger } from '../../utils/logger';
 import { CHROME_PERIMETER_GLOW_LAYOUT_INSET, LIVI, SEARCH_CTA_TABLET_MIN_WIDTH, WELCOME_HEADER_TITLE, WELCOME_MUTED_TEXT } from './constants';
 import { BrandTitleWithOutline } from './chrome';
 import { HomeBrandConfetti, type BrandConfettiOrigin } from './HomeBrandConfetti';
@@ -32,13 +31,8 @@ export type HomeWelcomeViewProps = {
   L: (key: string) => string;
   lang: Lang;
   menuChromeBg: string;
-  onOpenProfile: () => void;
-  /** Долгое нажатие на корону — меню (друзья и т.д.), пока нет tab bar. */
-  onOpenMenu: () => void;
   onlineCount: number | null;
   bannerPeers: WelcomeBannerPeer[];
-  unreadByUser: Record<string, number>;
-  missedByUser: Record<string, number>;
   centerProfile: Omit<
     React.ComponentProps<typeof HomeCenterProfile>,
     'styles' | 'isDark' | 'layoutWidth' | 'menuChromeBg' | 'compact' | 'dense' | 'radarStage' | 'avatarAnchorRef'
@@ -71,12 +65,8 @@ function HomeWelcomeViewInner({
   L,
   lang,
   menuChromeBg,
-  onOpenProfile,
-  onOpenMenu,
   onlineCount,
   bannerPeers,
-  unreadByUser,
-  missedByUser,
   centerProfile,
   NoticeView,
   hasActiveCallForSearch,
@@ -235,21 +225,6 @@ function HomeWelcomeViewInner({
     });
   }, [compactLayout, fireBurst, phoneLandscape, viewHeight, viewWidth]);
 
-  const handleOpenProfile = useCallback(() => {
-    cancelBurst();
-    onOpenProfile();
-  }, [cancelBurst, onOpenProfile]);
-
-  const handleOpenMenuLongPress = useCallback(() => {
-    cancelBurst();
-    try {
-      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    } catch {
-      /* optional */
-    }
-    onOpenMenu();
-  }, [cancelBurst, onOpenMenu]);
-
   const handleStartSearchPress = useCallback(() => {
     cancelBurst();
     onStartSearch();
@@ -303,16 +278,6 @@ function HomeWelcomeViewInner({
     NoticeView,
   ]);
 
-  const unreadValues = Object.values(unreadByUser).filter((n) => typeof n === 'number' && n > 0);
-  const missedValues = Object.values(missedByUser).filter((n) => typeof n === 'number' && n > 0);
-  const shouldShowMenuDot = unreadValues.length > 0 || missedValues.length > 0;
-  if (shouldShowMenuDot) {
-    logger.debug('[HomeScreen] welcome menu dot', {
-      unread: unreadValues.length,
-      missed: missedValues.length,
-    });
-  }
-
   const showCallLock = hasActiveCallForSearch && showCallSearchLockBadge;
   const callLockBadge = showCallLock ? (
     <View
@@ -360,11 +325,7 @@ function HomeWelcomeViewInner({
           tailAuraFromIndex={2}
           letterGlow={false}
         />
-        <WelcomeCrownButton
-          onPress={handleOpenProfile}
-          onLongPress={handleOpenMenuLongPress}
-          showBadge={shouldShowMenuDot}
-        />
+        <WelcomeCrownButton />
       </View>
 
       <Animated.View style={revealStyle}>

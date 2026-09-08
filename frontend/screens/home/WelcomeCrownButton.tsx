@@ -4,12 +4,6 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { CROWN_GOLD, WELCOME_CHROME_BTN_BG } from './constants';
 
 type WelcomeCrownButtonProps = {
-  /** @deprecated Decorative for now — ignored. */
-  onPress?: () => void;
-  /** @deprecated Decorative for now — ignored. */
-  onLongPress?: () => void;
-  /** @deprecated Badge hidden while decorative. */
-  showBadge?: boolean;
   /** Чуть меньше круг (экран «Друзья»). */
   compact?: boolean;
 };

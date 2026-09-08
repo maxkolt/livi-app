@@ -35,8 +35,6 @@ type FriendsFilter = 'all' | 'online';
 export type HomeWelcomeFriendsViewProps = Omit<FriendsListCoreProps, 'presentation' | 'friends' | 'ListFooterComponent'> & {
   lang: Lang;
   allFriends: Friend[];
-  onOpenProfile: () => void;
-  onOpenMenu: () => void;
   unreadByUser: Record<string, number>;
   missedByUser: Record<string, number>;
   onInviteFriends: () => void | Promise<void>;
@@ -53,8 +51,6 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
   const {
     lang,
     allFriends,
-    onOpenProfile,
-    onOpenMenu,
     unreadByUser,
     missedByUser,
     onInviteFriends,
@@ -160,12 +156,6 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
       return allOn ? new Set() : new Set(visibleSelectIds);
     });
   }, [visibleSelectIds]);
-
-  const shouldShowMenuDot = useMemo(() => {
-    const unread = Object.values(unreadByUser).some((n) => n > 0);
-    const missed = Object.values(missedByUser).some((n) => n > 0);
-    return unread || missed;
-  }, [unreadByUser, missedByUser]);
 
   const toggleSearch = useCallback(() => {
     if (searchOpen) {
@@ -293,11 +283,7 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
               color={searchOpen ? WELCOME_SEGMENT_ACTIVE : LIVI.white}
             />
           </Pressable>
-          <WelcomeCrownButton
-            onPress={onOpenProfile}
-            onLongPress={onOpenMenu}
-            showBadge={shouldShowMenuDot}
-          />
+          <WelcomeCrownButton />
         </View>
           </>
         )}
