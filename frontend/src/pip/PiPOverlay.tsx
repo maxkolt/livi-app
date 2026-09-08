@@ -13,15 +13,18 @@ import {
   Platform,
 } from 'react-native';
 import { MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
+import { RTCView } from '@livekit/react-native-webrtc';
 import { PiPContext } from './PiPContext';
 import { logger } from '../../utils/logger';
 import { useResolvedImageUri } from '../../hooks/useResolvedImageUri';
 import { useAppTheme } from '../../theme/ThemeProvider';
 import { uiAccent } from '../../theme/uiAccent';
 import { WELCOME_NAV_ACTIVE_ACCENT } from '../../screens/home/constants';
+import AwayPlaceholder from '../../components/AwayPlaceholder';
 import {
   prepareDirectCallAudioReturnFromPiP,
   pipInAppBarEnteredFromAudioOnly,
+  mediaStreamHasLiveVideo,
 } from './pipPlaceholderOnly';
 import { resolvePiPLocalMutedState, setUserSelectedCallAudioRoute } from '../../utils/activeCallSession';
 import { displayAvatarLetter } from '../../screens/home/friendHelpers';
@@ -45,6 +48,8 @@ import { useLang } from '../../store/lang';
 const PIP_BAR_H = 58;
 const PIP_BAR_RADIUS = PIP_BAR_H / 2;
 const PIP_PREVIEW_SIZE = 46;
+/** Превью peer над плашкой кнопок: ширина = бар, выше по высоте. */
+const PIP_VIDEO_PREVIEW_H = 140;
 const PIP_ACTION_BTN = 36;
 const PIP_ACTION_OUTER = PIP_ACTION_BTN + 2;
 const PIP_ACTION_GAP = 6;
@@ -118,6 +123,11 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
   const partnerAvatarUrl = ctx?.partnerAvatarUrl;
   const partnerName = ctx?.partnerName ?? '';
   const isMuted = ctx?.isMuted ?? false;
+  const remoteStream = ctx?.remoteStream ?? null;
+  const remoteCamOn = ctx?.remoteCamOn !== false;
+  const allowVideoRender = ctx?.allowVideoRender === true;
+  const remoteStreamVersion = ctx?.remoteStreamVersion ?? 0;
+  const pipRemoteViewKey = ctx?.pipRemoteViewKey ?? 0;
   const [localMicMuted, setLocalMicMuted] = useState(isMuted);
   const [pipAudioRoute, setPipAudioRoute] = useState<InCallAudioRoute>('EARPIECE');
   const [lang, setLang] = useState<Lang>(defaultLang);
@@ -172,6 +182,8 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
   const chrome = useMemo(
     () => ({
       barBg: isDark ? 'rgba(22, 22, 24, 0.98)' : 'rgba(36, 36, 38, 0.98)',
+      /** Видео-блок чуть плотнее плашки — без просвечивания welcome. */
+      videoBg: isDark ? 'rgb(22, 22, 24)' : 'rgb(36, 36, 38)',
       border: 'rgba(255, 255, 255, 0.08)',
       btnBg: 'rgba(255, 255, 255, 0.08)',
       btnBorder: 'rgba(255, 255, 255, 0.1)',
@@ -211,6 +223,18 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
   }, [visible]);
 
   const pipFromAudioOnly = pipInAppBarEnteredFromAudioOnly();
+  /** Выход с video UI — слот превью peer (видео или логотип LiVi). С audio — как раньше. */
+  const showPeerVideoPreviewSlot = !pipFromAudioOnly;
+  const remoteStreamUrl =
+    remoteStream && typeof (remoteStream as any).toURL === 'function'
+      ? String((remoteStream as any).toURL())
+      : '';
+  const showPeerLiveVideo =
+    showPeerVideoPreviewSlot &&
+    allowVideoRender &&
+    remoteCamOn &&
+    !!remoteStreamUrl &&
+    mediaStreamHasLiveVideo(remoteStream);
   /** Ушли с видео-экрана в in-app PiP — подсветить «вернуться в видео», как активный динамик. */
   const pipVideoReturnHighlight = !pipFromAudioOnly;
   const btAccent = useMemo(() => uiAccent(!isDark), [isDark]);
@@ -338,6 +362,11 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
     return Math.min(W - 16, minW);
   }, [W, showAudioReturnFromVideoPiP, pipFromAudioOnly]);
 
+  const pipClusterW = pipBarW;
+  const pipClusterH = showPeerVideoPreviewSlot
+    ? PIP_VIDEO_PREVIEW_H + PIP_BAR_H
+    : PIP_BAR_H;
+
   const isSystemPiPLayout = pendingSystemPiP || inSystemPiPMode;
   const showingInAppPiPDuringBackTransition =
     !isSystemPiPLayout &&
@@ -357,10 +386,10 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
 
   const clampPosition = useCallback(
     (x: number, y: number) => ({
-      x: Math.max(0, Math.min(W - pipBarW, x)),
-      y: Math.max(0, Math.min(H - PIP_BAR_H, y)),
+      x: Math.max(0, Math.min(W - pipClusterW, x)),
+      y: Math.max(0, Math.min(H - pipClusterH, y)),
     }),
-    [W, H, pipBarW],
+    [W, H, pipClusterW, pipClusterH],
   );
 
   const panResponder = useRef(
@@ -403,37 +432,86 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
       <View pointerEvents="box-none" style={styles.pipRoot}>
         <Animated.View
           style={[
-            styles.pipBar,
+            styles.pipCluster,
             {
               left: pipPos.x,
               top: pipPos.y,
-              width: pipBarW,
-              height: PIP_BAR_H,
-              borderRadius: PIP_BAR_RADIUS,
+              width: pipClusterW,
+              height: pipClusterH,
               transform: [{ translateX: translate.x }, { translateY: translate.y }],
             },
           ]}
           {...panResponder.panHandlers}
         >
+          {showPeerVideoPreviewSlot ? (
+            <View
+              style={[
+                styles.pipVideoPreview,
+                {
+                  width: pipClusterW,
+                  height: PIP_VIDEO_PREVIEW_H,
+                  backgroundColor: chrome.videoBg,
+                  borderColor: chrome.border,
+                  borderTopLeftRadius: PIP_BAR_RADIUS,
+                  borderTopRightRadius: PIP_BAR_RADIUS,
+                  borderBottomLeftRadius: 0,
+                  borderBottomRightRadius: 0,
+                  borderBottomWidth: 0,
+                },
+              ]}
+              pointerEvents="none"
+            >
+              {showPeerLiveVideo ? (
+                <RTCView
+                  key={`pip-remote-${pipRemoteViewKey}-${remoteStreamVersion}`}
+                  streamURL={remoteStreamUrl}
+                  style={styles.pipVideoRtc}
+                  objectFit="cover"
+                  mirror={false}
+                  zOrder={0}
+                />
+              ) : (
+                <AwayPlaceholder logoSize={44} />
+              )}
+            </View>
+          ) : null}
           <View
             style={[
-              styles.pipBarInner,
+              styles.pipBar,
               {
-                backgroundColor: chrome.barBg,
-                borderColor: chrome.border,
+                width: pipClusterW,
+                height: PIP_BAR_H,
+                borderBottomLeftRadius: PIP_BAR_RADIUS,
+                borderBottomRightRadius: PIP_BAR_RADIUS,
+                borderTopLeftRadius: showPeerVideoPreviewSlot ? 0 : PIP_BAR_RADIUS,
+                borderTopRightRadius: showPeerVideoPreviewSlot ? 0 : PIP_BAR_RADIUS,
               },
             ]}
           >
-            <View style={styles.pipAvatarSlot} pointerEvents="none">
-              <PipPlaceholder
-                avatarUri={partnerAvatarUrl}
-                name={partnerName}
-                compact
-                avatarSize={PIP_PREVIEW_SIZE}
-              />
-            </View>
+            <View
+              style={[
+                styles.pipBarInner,
+                {
+                  backgroundColor: chrome.barBg,
+                  borderColor: chrome.border,
+                  borderBottomLeftRadius: PIP_BAR_RADIUS,
+                  borderBottomRightRadius: PIP_BAR_RADIUS,
+                  borderTopLeftRadius: showPeerVideoPreviewSlot ? 0 : PIP_BAR_RADIUS,
+                  borderTopRightRadius: showPeerVideoPreviewSlot ? 0 : PIP_BAR_RADIUS,
+                  borderTopWidth: showPeerVideoPreviewSlot ? 0 : StyleSheet.hairlineWidth,
+                },
+              ]}
+            >
+              <View style={styles.pipAvatarSlot} pointerEvents="none">
+                <PipPlaceholder
+                  avatarUri={partnerAvatarUrl}
+                  name={partnerName}
+                  compact
+                  avatarSize={PIP_PREVIEW_SIZE}
+                />
+              </View>
 
-            <View style={[styles.pipActionsRow, { gap: PIP_ACTION_GAP }]} pointerEvents="box-none">
+              <View style={[styles.pipActionsRow, { gap: PIP_ACTION_GAP }]} pointerEvents="box-none">
               {showAudioReturnFromVideoPiP ? (
                 <PiPActionButton
                   onPress={returnToAudioFromVideoPiP}
@@ -509,6 +587,7 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
               <PiPActionButton onPress={endCall} accessibilityLabel={t('endCall', lang)} chrome={chrome} danger>
                 <MaterialIcons name="call-end" size={PIP_ICON_SIZE} color={chrome.dangerIcon} />
               </PiPActionButton>
+              </View>
             </View>
           </View>
         </Animated.View>
@@ -650,17 +729,30 @@ const styles = StyleSheet.create({
     zIndex: 10050,
     elevation: 10050,
   },
-  pipBar: {
+  pipCluster: {
     position: 'absolute',
     zIndex: 10050,
     elevation: 10050,
+    flexDirection: 'column',
+    alignItems: 'stretch',
+  },
+  pipVideoPreview: {
+    borderWidth: StyleSheet.hairlineWidth,
+    overflow: 'hidden',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  pipVideoRtc: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#000',
+  },
+  pipBar: {
     overflow: 'hidden',
   },
   pipBarInner: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    borderRadius: PIP_BAR_RADIUS,
     borderWidth: StyleSheet.hairlineWidth,
     paddingHorizontal: PIP_BAR_H_PAD,
     paddingVertical: PIP_BAR_H_PAD,

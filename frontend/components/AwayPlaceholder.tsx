@@ -2,7 +2,12 @@
 import React, { useEffect, useRef } from 'react';
 import { View, Animated, Easing, StyleSheet, Image } from 'react-native';
 
-const AwayPlaceholder = () => {
+type AwayPlaceholderProps = {
+  /** Размер логотипа (по умолчанию 90 — блок собеседника на VideoCall). */
+  logoSize?: number;
+};
+
+const AwayPlaceholder = ({ logoSize = 90 }: AwayPlaceholderProps) => {
   const rotateAnim = useRef(new Animated.Value(0)).current;
   const floatAnim = useRef(new Animated.Value(0)).current;
 
@@ -34,15 +39,7 @@ const AwayPlaceholder = () => {
     floatLoop();
   }, [floatAnim]);
 
-  const floatY = floatAnim.interpolate({
-    inputRange: [0, 0.5, 1],
-    outputRange: [-6, 6, -6],
-  });
-
-  const spin = rotateAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: ['0deg', '360deg'],
-  });
+  const floatAmp = logoSize < 50 ? 2 : 6;
 
   return (
     <View style={styles.container}>
@@ -51,12 +48,32 @@ const AwayPlaceholder = () => {
           backfaceVisibility: 'visible',
           transform: [
             { perspective: 600 },
-            { rotateY: spin },
-            { translateY: floatY },
+            {
+              rotateY: rotateAnim.interpolate({
+                inputRange: [0, 1],
+                outputRange: ['0deg', '360deg'],
+              }),
+            },
+            {
+              translateY: floatAnim.interpolate({
+                inputRange: [0, 0.5, 1],
+                outputRange: [-floatAmp, floatAmp, -floatAmp],
+              }),
+            },
           ],
         }}
       >
-        <Image source={require('../assets/favicon.png')} style={styles.logo} />
+        <Image
+          source={require('../assets/favicon.png')}
+          style={[
+            styles.logo,
+            {
+              width: logoSize,
+              height: logoSize,
+              borderRadius: Math.max(6, Math.round(logoSize * 0.18)),
+            },
+          ]}
+        />
       </Animated.View>
     </View>
   );
@@ -70,10 +87,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   logo: {
-    width: 90,
-    height: 90,
     resizeMode: 'contain',
-    borderRadius: 16,
   },
 });
 

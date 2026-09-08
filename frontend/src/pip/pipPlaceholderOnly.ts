@@ -218,9 +218,13 @@ export function pipInAppBarEnteredFromAudioOnly(): boolean {
   }
 }
 
-/** In-app PiP-плашка: без RTCView, только аватар (и для видео-, и для аудио-звонка). */
-export function shouldAllowRtcVideoInInAppPiPBar(_opts?: { fromAudioOnlyUi?: boolean }): boolean {
-  return false;
+/** In-app PiP: RTC в превью-слоте только при выходе с video UI (с audio — аватар как раньше). */
+export function shouldAllowRtcVideoInInAppPiPBar(opts?: { fromAudioOnlyUi?: boolean }): boolean {
+  if (opts?.fromAudioOnlyUi === true) return false;
+  try {
+    if (pipInAppBarEnteredFromAudioOnly()) return false;
+  } catch {}
+  return true;
 }
 
 export function setPipInAppRtcFromAudioOnlySticky(fromAudioOnlyUi: boolean): void {
