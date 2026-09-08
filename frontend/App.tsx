@@ -35,6 +35,7 @@ import SystemBarsScrim from "./components/SystemBarsScrim";
 import { PiPProvider, usePiP } from "./src/pip/PiPContext";
 import PiPOverlay from "./src/pip/PiPOverlay";
 import SystemPiPLogoLayer from "./src/pip/SystemPiPLogoLayer";
+import SystemPiPCaptureHost from "./src/pip/SystemPiPCaptureHost";
 import { ensureCometChatReady } from "./chat/cometchat";
 import type { RootStackParamList } from "./navigation/types";
 import { addNotificationListeners, ensureInitialNotificationPermissions, openIncomingCallScreen, openAnswerCallScreen, handleDeclineCallFromDeepLink, registerAndSendPushToken, clearCallRelatedNotificationsAndSyncBadge, syncAppBadgeFromMissedCount, clearMissedBadgeCleared, recordMissedCallForUser, applyPendingMissedCallsFromNative, getMissedCountByUserFromNative } from './utils/pushNotifications';
@@ -4126,6 +4127,7 @@ function AppContent() {
 
           {/* In-app PiP не показывается на экране видеозвонка (VideoCall/RandomChat) — только на Home и др. */}
           <PiPOverlay currentRouteName={routeName} />
+          <SystemPiPCaptureHost />
           <SystemPiPLogoLayer />
 
           {/* Android: запрос разрешения «Отображение поверх других окон» при первом заходе (без Alert) */}

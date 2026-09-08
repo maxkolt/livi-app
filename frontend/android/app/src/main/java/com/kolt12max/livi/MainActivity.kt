@@ -198,6 +198,21 @@ class MainActivity : ReactActivity() {
     }
   }
 
+  /** Called from LiviAppModule when JS flips placeholderOnly while already in PiP. */
+  internal fun applySystemPiPPlaceholderOnlyUi(placeholderOnly: Boolean) {
+    try {
+      if (!isInPictureInPictureMode && !isPiPEnterAttemptRunning) {
+        if (!placeholderOnly) hideSystemPiPBackdropForCapture()
+        return
+      }
+      if (placeholderOnly) {
+        showSystemPiPBackdropForCapture()
+      } else {
+        hideSystemPiPBackdropForCapture()
+      }
+    } catch (_: Exception) {}
+  }
+
   private fun restoreMainWindowBackgroundAfterPiP() {
     try {
       window.setBackgroundDrawable(null)
@@ -531,13 +546,14 @@ class MainActivity : ReactActivity() {
         lastPiPEnterRequestAtMs = nowEnter
         cancelPendingPiPEnterAttempts()
         isPiPEnterAttemptRunning = true
-        // Всегда logo-only system PiP (LiVi на тёмном фоне), без RTC/capture.
-        LiviAppModule.setSystemPiPCapturePlaceholderOnlyStatic(true)
-        LiviAppModule.setSystemPiPCaptureFrameReadyStatic(true)
-        val placeholderOnlyEnter = true
+        // Respect JS arming: audio/logo → placeholder; video-origin + peer live → capture RTC.
+        val placeholderOnlyEnter = LiviAppModule.getSystemPiPCapturePlaceholderOnly()
+        if (placeholderOnlyEnter) {
+          LiviAppModule.setSystemPiPCaptureFrameReadyStatic(true)
+        }
         android.util.Log.i(
           "MainActivity",
-          "onUserLeaveHint: placeholderOnly=$placeholderOnlyEnter — prepare PiP enter (black backdrop)"
+          "onUserLeaveHint: placeholderOnly=$placeholderOnlyEnter — prepare PiP enter"
         )
         val root = window?.decorView
         val decorW = root?.width ?: 0
@@ -556,16 +572,21 @@ class MainActivity : ReactActivity() {
               }
             }
             val waitedMs = System.currentTimeMillis() - lastPiPEnterRequestAtMs
-            val placeholderOnly = true
+            val placeholderOnly = LiviAppModule.getSystemPiPCapturePlaceholderOnly()
             val frameReady = LiviAppModule.getSystemPiPCaptureFrameReady()
-            if (!placeholderOnly && !inAppPiPVisible && !frameReady && waitedMs in 50L..450L) {
+            // Video capture: wait for JS RTC/compact layout before enter (avoid capturing full call chrome).
+            if (!placeholderOnly && !inAppPiPVisible && !frameReady && waitedMs < 900L) {
               android.util.Log.d(
                 "MainActivity",
                 "onUserLeaveHint: defer PiP enter — capture frame not ready yet (waitedMs=$waitedMs)"
               )
               return@Runnable
             }
-            showSystemPiPBackdropForCapture()
+            if (placeholderOnly) {
+              showSystemPiPBackdropForCapture()
+            } else {
+              hideSystemPiPBackdropForCapture()
+            }
             val ratio =
               if (placeholderOnly) Rational(16, 9) else Rational(9, 16)
             val builder = PictureInPictureParams.Builder()
@@ -592,22 +613,22 @@ class MainActivity : ReactActivity() {
           }
         }
         leaveHintPiPEnterRunnable = tryEnterPiP
+        // Emit to JS first so video path can mount compact/capture before first enter attempt.
+        LiviAppModule.emitAboutToEnterSystemPiP(decorW, decorH, currentHomePiPTraceId)
         if (!isInPictureInPictureMode) {
           val hasFocusNow = window?.decorView?.hasWindowFocus() == true
-          if (hasFocusNow) {
+          val canEnterNow =
+            placeholderOnlyEnter || LiviAppModule.getSystemPiPCaptureFrameReady()
+          if (hasFocusNow && canEnterNow) {
             tryEnterPiP.run()
+          } else if (!hasFocusNow && placeholderOnlyEnter) {
+            root?.post { tryEnterPiP.run() } ?: tryEnterPiP.run()
           }
-          LiviAppModule.emitAboutToEnterSystemPiP(decorW, decorH, currentHomePiPTraceId)
-          if (!isInPictureInPictureMode) {
-            if (!hasFocusNow) {
-              root?.post { tryEnterPiP.run() } ?: tryEnterPiP.run()
-            }
-            pendingPiPEnterRunnables.add(tryEnterPiP)
-            pipEnterHandler.post(tryEnterPiP)
-          }
+          pendingPiPEnterRunnables.add(tryEnterPiP)
+          pipEnterHandler.post(tryEnterPiP)
           android.util.Log.i(
             "MainActivity",
-            "onUserLeaveHint: scheduled PiP enter (logo backdrop + retries; inAppPiPVisible=$inAppPiPVisible hasFocus=$hasFocusNow)"
+            "onUserLeaveHint: scheduled PiP enter (placeholderOnly=$placeholderOnlyEnter; inAppPiPVisible=$inAppPiPVisible hasFocus=$hasFocusNow)"
           )
           if (!isInPictureInPictureMode) {
             val delays = longArrayOf(16L, 48L, 120L, 280L, 480L, 800L, 1200L)
@@ -638,11 +659,19 @@ class MainActivity : ReactActivity() {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
       if (isInPictureInPictureMode) {
         cancelPendingPiPEnterAttempts()
-        showSystemPiPBackdropForCapture()
-        try {
-          window.setBackgroundDrawableResource(R.color.system_pip_backdrop)
-        } catch (_: Exception) {
-          window.setBackgroundDrawableResource(android.R.color.black)
+        val placeholderOnly = LiviAppModule.getSystemPiPCapturePlaceholderOnly()
+        if (placeholderOnly) {
+          showSystemPiPBackdropForCapture()
+          try {
+            window.setBackgroundDrawableResource(R.color.system_pip_backdrop)
+          } catch (_: Exception) {
+            window.setBackgroundDrawableResource(android.R.color.black)
+          }
+        } else {
+          hideSystemPiPBackdropForCapture()
+          try {
+            window.setBackgroundDrawableResource(android.R.color.black)
+          } catch (_: Exception) {}
         }
         // Вход в PiP: отменяем таймер «выход из PiP», иначе на части устройств через таймаут срабатывает EndCallFromPiP.
         exitPipTimeoutRunnable?.let { pipHandler.removeCallbacks(it) }

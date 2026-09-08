@@ -7017,7 +7017,15 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     (homeSystemPiPPending || pip.inSystemPiPMode);
   if (systemPiPCompact) {
     return (
-      <SafeAreaView style={styles.systemPiPContainer} edges={[]}>
+      <SafeAreaView
+        style={styles.systemPiPContainer}
+        edges={[]}
+        onLayout={() => {
+          try {
+            NativeModules.LiviAppModule?.setSystemPiPCaptureFrameReady?.(true);
+          } catch {}
+        }}
+      >
         {renderCallHiddenAudioSink({ forceSystemPiP: true })}
         <View style={styles.systemPiPVideoFill}>
           <RemoteVideo

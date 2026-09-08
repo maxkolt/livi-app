@@ -2868,6 +2868,12 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       if (value) {
         systemPiPCaptureFrameReady = true
       }
+      try {
+        val activity = reactContextRef?.currentActivity as? MainActivity
+        activity?.runOnUiThread {
+          activity.applySystemPiPPlaceholderOnlyUi(value)
+        }
+      } catch (_: Exception) {}
     }
 
     /** true только для маленького in-app PiP; помогает MainActivity выбрать задержанный вход в system PiP без zoomed capture. */

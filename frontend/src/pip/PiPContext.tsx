@@ -15,12 +15,17 @@ import { requestExitSystemPiPSoft, dismissSystemPiPAfterCallEnded } from '../../
 import { startActiveCallNotification, reenableAndroidSystemPiPLeaveHintAfterReturn, refreshAndroidActiveCallNotification, syncAndroidSystemPiPNativeFlags, isAndroidActiveCallEligibleForLeaveHint, shouldUseSystemPiPControlsCaptureOnly } from '../../utils/activeCallNotification';
 import {
   shouldUsePipPlaceholderOnly,
+  shouldUseSystemPiPPlaceholderOnly,
   prepareDirectCallAudioReturnFromPiP,
   isInAudioOnlyCallUi,
   setPipInAppRtcFromAudioOnlySticky,
   shouldAllowRtcVideoRenderInInAppPiP,
   peekSystemPiPLeaveContextForReturn,
   refreshSystemPiPLeaveContextSnapshot,
+  isSystemPiPLeaveAudioOrigin,
+  markSystemPiPSessionAudioOrigin,
+  clearSystemPiPSessionAudioOrigin,
+  mediaStreamHasLiveVideo,
 } from './pipPlaceholderOnly';
 import {
   pinLoudSpeakerForAudioCallLeavingToBackground,
@@ -496,6 +501,9 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
             g.__systemPiPLiViBackdropActiveRef = g.__systemPiPLiViBackdropActiveRef || { current: false };
             g.__systemPiPLiViBackdropActiveRef.current = false;
           } catch (_) {}
+          try {
+            clearSystemPiPSessionAudioOrigin();
+          } catch (_) {}
           setPendingSystemPiP(false);
           setDecorSizeForPiP(null);
           setSystemPiPCaptureActive(false);
@@ -515,8 +523,16 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         if (inPiP) {
           armCallAudioPreservePriority(6000);
           setPendingSystemPiP(false);
-          setSystemPiPCaptureActive(false);
-          setSystemPiPCaptureRequestId(0);
+          // Video-origin peer capture (Home CaptureHost) must stay mounted while in system PiP.
+          const keepVideoCapture =
+            !isSystemPiPLeaveAudioOrigin() && !shouldUseSystemPiPPlaceholderOnly();
+          if (!keepVideoCapture) {
+            setSystemPiPCaptureActive(false);
+            setSystemPiPCaptureRequestId(0);
+          } else if (readRootCurrentRouteName() !== 'VideoCall') {
+            setSystemPiPCaptureActive(true);
+            setAllowVideoRender(true);
+          }
           try {
             g.__pipVisibleRef = g.__pipVisibleRef || { current: false };
             if (g.__pipVisibleRef.current === true) {
@@ -1064,6 +1080,9 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     setPendingSystemPiP(false);
     setSystemPiPCaptureActive(false);
     setSystemPiPCaptureRequestId(0);
+    try {
+      clearSystemPiPSessionAudioOrigin();
+    } catch {}
   }, []);
 
   useEffect(() => {
@@ -1078,6 +1097,35 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       } catch (_) {}
     };
   }, []);
+
+  /** Video-origin system PiP: peer включил камеру уже в PiP → показать RTC (audio-origin остаётся лого). */
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    if (!inSystemPiPMode && !pendingSystemPiP && !systemPiPCaptureActive) return;
+    if (isSystemPiPLeaveAudioOrigin()) return;
+    const placeholder = shouldUseSystemPiPPlaceholderOnly({
+      remoteCamOn,
+      remoteStream: remoteStreamRef.current,
+    });
+    try {
+      NativeModules.LiviAppModule?.setSystemPiPCapturePlaceholderOnly?.(placeholder);
+      if (!placeholder) {
+        NativeModules.LiviAppModule?.setSystemPiPCaptureFrameReady?.(true);
+      }
+    } catch (_) {}
+    if (!placeholder) {
+      setAllowVideoRender(true);
+      if (readRootCurrentRouteName() !== 'VideoCall') {
+        setSystemPiPCaptureActive(true);
+      }
+    }
+  }, [
+    inSystemPiPMode,
+    pendingSystemPiP,
+    systemPiPCaptureActive,
+    remoteCamOn,
+    remoteStreamVersion,
+  ]);
 
   /** In-app / system PiP без VideoCall: снятие BT/провода → разговорный или громкий (video-path). */
   useEffect(() => {
@@ -1568,35 +1616,65 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         session && typeof (session as any).getLocalStream === 'function'
           ? (session as any).getLocalStream()
           : null;
-      const localCamForPlaceholder =
-        params?.localCamOn ??
-        (session && typeof (session as any).getIsCamOn === 'function'
+      const localCamFromSession =
+        session && typeof (session as any).getIsCamOn === 'function'
           ? (session as any).getIsCamOn()
-          : false);
-      const remoteCamForPlaceholder =
-        params?.remoteCamOn ??
-        (session && typeof (session as any).getRemoteCamEnabled === 'function'
+          : undefined;
+      const remoteCamFromSession =
+        session && typeof (session as any).getRemoteCamEnabled === 'function'
           ? (session as any).getRemoteCamEnabled()
-          : false);
-      const placeholderOnlyHome = shouldUseSystemPiPControlsCaptureOnly()
+          : undefined;
+      const sessionHasLiveRemoteVideo = mediaStreamHasLiveVideo(remoteFromSessionForPlaceholder);
+      // Prefer session / live track over stale params after in-app PiP.
+      const remoteStreamForPlaceholder = sessionHasLiveRemoteVideo
+        ? remoteFromSessionForPlaceholder
+        : params?.remoteStream ?? remoteFromSessionForPlaceholder ?? null;
+      const localCamForPlaceholder =
+        typeof localCamFromSession === 'boolean' ? localCamFromSession : !!params?.localCamOn;
+      const remoteCamForPlaceholder = sessionHasLiveRemoteVideo
         ? true
-        : shouldUsePipPlaceholderOnly({
+        : typeof remoteCamFromSession === 'boolean'
+          ? remoteCamFromSession
+          : !!params?.remoteCamOn;
+      try {
+        markSystemPiPSessionAudioOrigin(isSystemPiPLeaveAudioOrigin());
+      } catch (_) {}
+      const placeholderOnlyHome = shouldUseSystemPiPPlaceholderOnly({
         localCamOn: localCamForPlaceholder,
         remoteCamOn: remoteCamForPlaceholder,
-        remoteStream: params?.remoteStream ?? remoteFromSessionForPlaceholder ?? null,
+        remoteStream: remoteStreamForPlaceholder,
         localStream: params?.localStream ?? localFromSessionForPlaceholder ?? null,
       });
       logger.info('[PiPContext] AboutToEnterSystemPiP placeholder decision', {
         placeholderOnlyHome,
-        localCamOn: params?.localCamOn,
-        remoteCamOn: params?.remoteCamOn,
-        hasRemoteStream: !!(params?.remoteStream ?? remoteFromSessionForPlaceholder),
+        audioOrigin: isSystemPiPLeaveAudioOrigin(),
+        localCamOn: localCamForPlaceholder,
+        remoteCamOn: remoteCamForPlaceholder,
+        paramsRemoteCamOn: params?.remoteCamOn,
+        sessionRemoteCamOn: remoteCamFromSession,
+        sessionHasLiveRemoteVideo,
+        hasRemoteStream: !!remoteStreamForPlaceholder,
         decorPayload: { w: payload?.width ?? 0, h: payload?.height ?? 0 },
       });
+      try {
+        // Keep params in sync so leave-hint / CaptureHost don't re-read stale remoteCamOn:false.
+        if (params && g.__currentCallPiPParamsRef) {
+          g.__currentCallPiPParamsRef.current = {
+            ...params,
+            localCamOn: localCamForPlaceholder,
+            remoteCamOn: remoteCamForPlaceholder,
+            remoteStream: remoteStreamForPlaceholder ?? params.remoteStream ?? null,
+            localStream: params.localStream ?? localFromSessionForPlaceholder ?? null,
+          };
+          params = g.__currentCallPiPParamsRef.current;
+        }
+      } catch (_) {}
       try {
         NativeModules.LiviAppModule?.setSystemPiPCapturePlaceholderOnly?.(placeholderOnlyHome);
         if (!placeholderOnlyHome) {
           NativeModules.LiviAppModule?.setSystemPiPCaptureFrameReady?.(false);
+        } else {
+          NativeModules.LiviAppModule?.setSystemPiPCaptureFrameReady?.(true);
         }
       } catch (_) {}
       if (params?.callId && params?.roomId) {
@@ -1612,25 +1690,15 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
             ? (session as any).getLocalStream()
             : null;
         const updateFnEarly = g.__pipUpdateStateRef?.current;
-        const localCamFromSession =
-          session && typeof (session as any).getIsCamOn === 'function'
-            ? (session as any).getIsCamOn()
-            : undefined;
-        const remoteCamFromSession =
-          session && typeof (session as any).getRemoteCamEnabled === 'function'
-            ? (session as any).getRemoteCamEnabled()
-            : undefined;
         if (typeof updateFnEarly === 'function') {
           updateFnEarly({
             callId: params.callId,
             roomId: params.roomId,
             lastNavParams: params.navParams,
-            remoteStream: params.remoteStream ?? remoteFromSession ?? null,
+            remoteStream: remoteStreamForPlaceholder ?? params.remoteStream ?? remoteFromSession ?? null,
             localStream: params.localStream ?? localFromSession ?? null,
-            localCamOn:
-              typeof params?.localCamOn === 'boolean' ? params.localCamOn : localCamFromSession,
-            remoteCamOn:
-              typeof params?.remoteCamOn === 'boolean' ? params.remoteCamOn : remoteCamFromSession,
+            localCamOn: localCamForPlaceholder,
+            remoteCamOn: remoteCamForPlaceholder,
             preferVideoCallUi: params?.preferVideoCallUi,
             inAudioOnlyUi: params?.inAudioOnlyUi,
             allowVideoRender: !placeholderOnlyHome,
@@ -1638,14 +1706,32 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         }
       }
 
-      // Black-only system PiP: нативный backdrop в MainActivity, без JS-оверлея (иначе мелькает сплэш/логотип).
-      setPendingSystemPiP(false);
-      setSystemPiPCaptureActive(false);
-      setSystemPiPCaptureRequestId(0);
-      try {
-        NativeModules.LiviAppModule?.setSystemPiPCaptureFrameReady?.(true);
-      } catch (_) {}
-      setAllowVideoRender(false);
+      const onVideoCallRoute = readRootCurrentRouteName() === 'VideoCall';
+      if (placeholderOnlyHome) {
+        // Logo-only: нативный backdrop в MainActivity, без JS RTC overlay.
+        setPendingSystemPiP(false);
+        setSystemPiPCaptureActive(false);
+        setSystemPiPCaptureRequestId(0);
+        setAllowVideoRender(false);
+        try {
+          NativeModules.LiviAppModule?.setSystemPiPCaptureFrameReady?.(true);
+        } catch (_) {}
+      } else {
+        // Peer video: VideoCall compact на маршруте VideoCall, иначе App-level CaptureHost.
+        setPendingSystemPiP(true);
+        setAllowVideoRender(true);
+        if (onVideoCallRoute) {
+          setSystemPiPCaptureActive(false);
+          setSystemPiPCaptureRequestId(0);
+        } else {
+          setSystemPiPCaptureActive(true);
+          setSystemPiPCaptureRequestId((id) => id + 1);
+        }
+        try {
+          g.__pendingSystemPiPSyncRef = g.__pendingSystemPiPSyncRef || { current: false };
+          g.__pendingSystemPiPSyncRef.current = true;
+        } catch (_) {}
+      }
       const apply = (decorSize: { width: number; height: number } | null) => {
         // Не применять размер окна PiP (типично ~334x594) — иначе при повторном входе layout/зум ломается.
         if (decorSize && decorSize.width > 400 && decorSize.height > 400) setDecorSizeForPiP(decorSize);
@@ -1866,6 +1952,9 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     setPendingSystemPiP(false);
     setSystemPiPCaptureActive(false);
     setSystemPiPCaptureRequestId(0);
+    try {
+      clearSystemPiPSessionAudioOrigin();
+    } catch (_) {}
     if (Platform.OS === 'android' && wasSystemPiP) {
       try { requestExitSystemPiPSoft(); } catch (_) {}
     }

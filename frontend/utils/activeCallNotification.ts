@@ -1,5 +1,5 @@
 import { AppState, NativeModules, Platform } from 'react-native';
-import { isInAudioOnlyCallUi, shouldUsePipPlaceholderOnly, refreshSystemPiPLeaveContextSnapshot } from '../src/pip/pipPlaceholderOnly';
+import { isInAudioOnlyCallUi, shouldUsePipPlaceholderOnly, shouldUseSystemPiPPlaceholderOnly, refreshSystemPiPLeaveContextSnapshot } from '../src/pip/pipPlaceholderOnly';
 import { logHomePiPTrace } from './systemPiPHomeTrace';
 import { isOngoingCallSession, resolveActiveCallInCallMedia } from './activeCallSession';
 import { readRootCurrentRouteName } from './safeRootNavigation';
@@ -159,14 +159,25 @@ export function startActiveCallNotification(
 let lastNativeLeaveHintAllow: boolean | null = null;
 let lastNativePlaceholderOnly: boolean | null = null;
 
-/** System PiP: всегда заглушка LiVi (без RTC/capture), независимо от экрана звонка. */
+/** System PiP: всегда разрешаем вход (лого или peer video). Не отменяем audio system PiP. */
 export function shouldUseSystemPiPControlsCaptureOnly(): boolean {
   return true;
 }
 
+function resolveLeaveHintPlaceholderOnly(): boolean {
+  try {
+    refreshSystemPiPLeaveContextSnapshot();
+  } catch (_) {}
+  try {
+    return shouldUseSystemPiPPlaceholderOnly();
+  } catch (_) {
+    return true;
+  }
+}
+
 function applyAndroidLeaveHintNativeFlags(allowPiP: boolean): void {
   const effectiveAllow = allowPiP && shouldAllowAndroidSystemPiPOnLeaveHint();
-  const placeholderOnly = effectiveAllow ? true : false;
+  const placeholderOnly = effectiveAllow ? resolveLeaveHintPlaceholderOnly() : false;
   if (lastNativeLeaveHintAllow === effectiveAllow && lastNativePlaceholderOnly === placeholderOnly) {
     return;
   }
@@ -175,6 +186,8 @@ function applyAndroidLeaveHintNativeFlags(allowPiP: boolean): void {
   NativeModules.LiviAppModule?.setSystemPiPCapturePlaceholderOnly?.(placeholderOnly);
   if (placeholderOnly) {
     NativeModules.LiviAppModule?.setSystemPiPCaptureFrameReady?.(true);
+  } else if (effectiveAllow) {
+    NativeModules.LiviAppModule?.setSystemPiPCaptureFrameReady?.(false);
   }
   NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(effectiveAllow);
   logHomePiPTrace('js_leave_hint_arm', { allowPiP: effectiveAllow, placeholderOnly });
