@@ -18,6 +18,21 @@ export const WELCOME_PROFILE_ROW_ICON = '#828A96';
 const ROW_ICON_SIZE = 22;
 const ROW_ICON_SIZE_COMPACT = 20;
 const ROW_CHEVRON_SIZE = 20;
+/**
+ * Внутри glass-карточки — как padding у cardRow чатов/звонков.
+ */
+const ROW_PAD_H = 12;
+const ROW_PAD_H_COMPACT = 12;
+const ROW_ICON_GAP = 12;
+
+/** Линия: от начала текста (после иконки) до начала стрелки. */
+const DIVIDER_MARGIN_LEFT = ROW_PAD_H + ROW_ICON_SIZE + ROW_ICON_GAP;
+const DIVIDER_MARGIN_RIGHT = ROW_PAD_H + ROW_CHEVRON_SIZE;
+const DIVIDER_MARGIN_LEFT_COMPACT = ROW_PAD_H_COMPACT + ROW_ICON_SIZE_COMPACT + ROW_ICON_GAP;
+const DIVIDER_MARGIN_RIGHT_COMPACT = ROW_PAD_H_COMPACT + ROW_CHEVRON_SIZE;
+/** Строки без иконки (язык): от начала надписи. */
+const DIVIDER_MARGIN_LEFT_TEXT_ONLY = ROW_PAD_H;
+const DIVIDER_MARGIN_LEFT_TEXT_ONLY_COMPACT = ROW_PAD_H_COMPACT;
 
 export function WelcomeProfileSection({
   title,
@@ -34,7 +49,7 @@ export function WelcomeProfileSection({
   return (
     <View style={[styles.sectionWrap, compact && styles.sectionWrapCompact, dense && styles.sectionWrapDense]}>
       {title ? <Text style={styles.sectionTitle}>{title}</Text> : null}
-      <View style={styles.card}>{children}</View>
+      <View style={styles.sectionBody}>{children}</View>
     </View>
   );
 }
@@ -59,6 +74,8 @@ type WelcomeProfileRowProps = {
   /** Аккордеон: chevron вниз / вверх вместо вправо. */
   expandable?: boolean;
   expanded?: boolean;
+  /** Разделитель под строкой (от текста до стрелки). */
+  showDivider?: boolean;
 };
 
 export function WelcomeProfileRow({
@@ -76,6 +93,7 @@ export function WelcomeProfileRow({
   expandable,
   expanded,
   badgeCount,
+  showDivider = false,
 }: WelcomeProfileRowProps) {
   const labelColor = destructive ? LIVI.red : WELCOME_HEADER_TITLE;
   const iconColor = destructive ? LIVI.red : WELCOME_PROFILE_ROW_ICON;
@@ -85,48 +103,71 @@ export function WelcomeProfileRow({
       : 'chevron-forward'
     : 'chevron-forward';
   return (
-    <Pressable
-      onPress={onPress}
-      disabled={disabled || !onPress}
-      style={({ pressed }) => [
-        styles.row,
-        dense && styles.rowDense,
-        tight && styles.rowTight,
-        compact && styles.rowCompact,
-        pressed && onPress ? styles.rowPressed : null,
-      ]}
-      accessibilityRole="button"
-    >
-      <View style={styles.rowLeft}>
-        <Ionicons name={icon} size={compact ? ROW_ICON_SIZE_COMPACT : ROW_ICON_SIZE} color={iconColor} />
-        <Text
-          style={[styles.rowLabel, compact && styles.rowLabelCompact, { color: labelColor }]}
-          numberOfLines={1}
-        >
-          {label}
-        </Text>
-      </View>
-      <View style={styles.rowRight}>
-        {value ? (
-          <Text style={[styles.rowValue, largeValue && styles.rowValueLarge]} numberOfLines={1}>
-            {value}
+    <View>
+      <Pressable
+        onPress={onPress}
+        disabled={disabled || !onPress}
+        style={({ pressed }) => [
+          styles.row,
+          dense && styles.rowDense,
+          tight && styles.rowTight,
+          compact && styles.rowCompact,
+          pressed && onPress ? styles.rowPressed : null,
+        ]}
+        accessibilityRole="button"
+      >
+        <View style={styles.rowLeft}>
+          <Ionicons name={icon} size={compact ? ROW_ICON_SIZE_COMPACT : ROW_ICON_SIZE} color={iconColor} />
+          <Text
+            style={[styles.rowLabel, compact && styles.rowLabelCompact, { color: labelColor }]}
+            numberOfLines={1}
+          >
+            {label}
           </Text>
-        ) : null}
-        {typeof badgeCount === 'number' && badgeCount > 0 ? (
-          <View style={styles.countBadge}>
-            <Text style={styles.countBadgeText}>{badgeCount > 99 ? '99+' : String(badgeCount)}</Text>
-          </View>
-        ) : null}
-        {showChevron && onPress ? (
-          <Ionicons name={chevronName} size={ROW_CHEVRON_SIZE} color={WELCOME_PROFILE_ROW_ICON} />
-        ) : null}
-      </View>
-    </Pressable>
+        </View>
+        <View style={styles.rowRight}>
+          {value ? (
+            <Text style={[styles.rowValue, largeValue && styles.rowValueLarge]} numberOfLines={1}>
+              {value}
+            </Text>
+          ) : null}
+          {typeof badgeCount === 'number' && badgeCount > 0 ? (
+            <View style={styles.countBadge}>
+              <Text style={styles.countBadgeText}>{badgeCount > 99 ? '99+' : String(badgeCount)}</Text>
+            </View>
+          ) : null}
+          {showChevron && onPress ? (
+            <Ionicons name={chevronName} size={ROW_CHEVRON_SIZE} color={WELCOME_PROFILE_ROW_ICON} />
+          ) : null}
+        </View>
+      </Pressable>
+      {showDivider ? <WelcomeProfileRowDivider compact={compact} /> : null}
+    </View>
   );
 }
 
-export function WelcomeProfileRowDivider({ compact }: { compact?: boolean }) {
-  return <View style={[styles.divider, compact && styles.dividerCompact]} />;
+export function WelcomeProfileRowDivider({
+  compact,
+  textOnly,
+}: {
+  compact?: boolean;
+  /** Без иконки слева — линия от начала текста. */
+  textOnly?: boolean;
+}) {
+  return (
+    <View
+      style={[
+        styles.divider,
+        textOnly
+          ? compact
+            ? styles.dividerTextOnlyCompact
+            : styles.dividerTextOnly
+          : compact
+            ? styles.dividerCompact
+            : null,
+      ]}
+    />
+  );
 }
 
 type WelcomeProfileLanguageRowProps = {
@@ -135,6 +176,8 @@ type WelcomeProfileLanguageRowProps = {
   selected?: boolean;
   rtl?: boolean;
   onPress: () => void;
+  showDivider?: boolean;
+  compact?: boolean;
 };
 
 /** Строка выбора языка (экран профиля, как «О приложении»). */
@@ -144,39 +187,48 @@ export function WelcomeProfileLanguageRow({
   selected,
   rtl,
   onPress,
+  showDivider = false,
+  compact,
 }: WelcomeProfileLanguageRowProps) {
   return (
-    <Pressable
-      onPress={onPress}
-      style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
-      accessibilityRole="button"
-      accessibilityState={{ selected: !!selected }}
-    >
-      <View style={[styles.rowLeft, styles.rowLeftLanguage]}>
-        <Text
-          style={[
-            styles.rowLabel,
-            { color: WELCOME_HEADER_TITLE },
-            rtl && styles.rowLabelRtl,
-          ]}
-          numberOfLines={1}
-        >
-          {nativeName}
-        </Text>
-      </View>
-      <View style={styles.rowRight}>
-        <Text style={styles.rowValue} numberOfLines={1}>
-          {englishName}
-        </Text>
-        {selected ? (
-          <Ionicons
-            name="checkmark"
-            size={ROW_CHEVRON_SIZE}
-            color={WELCOME_BRAND_VI_FILL_GRADIENT[1]}
-          />
-        ) : null}
-      </View>
-    </Pressable>
+    <View>
+      <Pressable
+        onPress={onPress}
+        style={({ pressed }) => [
+          styles.row,
+          compact && styles.rowCompact,
+          pressed && styles.rowPressed,
+        ]}
+        accessibilityRole="button"
+        accessibilityState={{ selected: !!selected }}
+      >
+        <View style={[styles.rowLeft, styles.rowLeftLanguage]}>
+          <Text
+            style={[
+              styles.rowLabel,
+              { color: WELCOME_HEADER_TITLE },
+              rtl && styles.rowLabelRtl,
+            ]}
+            numberOfLines={1}
+          >
+            {nativeName}
+          </Text>
+        </View>
+        <View style={styles.rowRight}>
+          <Text style={styles.rowValue} numberOfLines={1}>
+            {englishName}
+          </Text>
+          {selected ? (
+            <Ionicons
+              name="checkmark"
+              size={ROW_CHEVRON_SIZE}
+              color={WELCOME_BRAND_VI_FILL_GRADIENT[1]}
+            />
+          ) : null}
+        </View>
+      </Pressable>
+      {showDivider ? <WelcomeProfileRowDivider compact={compact} textOnly /> : null}
+    </View>
   );
 }
 
@@ -200,7 +252,8 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.4,
   },
-  card: {
+  /** Glass-карточка секции (как раньше на hub профиля). */
+  sectionBody: {
     borderRadius: WELCOME_FRIENDS_SEGMENT_SHELL_RADIUS,
     backgroundColor: WELCOME_GLASS_SURFACE,
     borderWidth: StyleSheet.hairlineWidth,
@@ -212,22 +265,22 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingVertical: 14,
-    paddingHorizontal: 14,
+    paddingHorizontal: ROW_PAD_H,
     minHeight: 50,
   },
   rowCompact: {
     paddingVertical: 10,
-    paddingHorizontal: 12,
+    paddingHorizontal: ROW_PAD_H_COMPACT,
     minHeight: 42,
   },
   rowDense: {
-    paddingVertical: 11,
-    paddingHorizontal: 14,
-    minHeight: 47,
+    paddingVertical: 12,
+    paddingHorizontal: ROW_PAD_H,
+    minHeight: 48,
   },
   rowTight: {
     paddingVertical: 8,
-    paddingHorizontal: 14,
+    paddingHorizontal: ROW_PAD_H,
     minHeight: 40,
   },
   rowPressed: {
@@ -236,7 +289,7 @@ const styles = StyleSheet.create({
   rowLeft: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
+    gap: ROW_ICON_GAP,
     flex: 1,
     minWidth: 0,
     paddingRight: 8,
@@ -292,9 +345,19 @@ const styles = StyleSheet.create({
   divider: {
     height: StyleSheet.hairlineWidth,
     backgroundColor: WELCOME_GLASS_BORDER,
-    marginLeft: 14,
+    marginLeft: DIVIDER_MARGIN_LEFT,
+    marginRight: DIVIDER_MARGIN_RIGHT,
   },
   dividerCompact: {
-    marginLeft: 12,
+    marginLeft: DIVIDER_MARGIN_LEFT_COMPACT,
+    marginRight: DIVIDER_MARGIN_RIGHT_COMPACT,
+  },
+  dividerTextOnly: {
+    marginLeft: DIVIDER_MARGIN_LEFT_TEXT_ONLY,
+    marginRight: DIVIDER_MARGIN_RIGHT,
+  },
+  dividerTextOnlyCompact: {
+    marginLeft: DIVIDER_MARGIN_LEFT_TEXT_ONLY_COMPACT,
+    marginRight: DIVIDER_MARGIN_RIGHT_COMPACT,
   },
 });

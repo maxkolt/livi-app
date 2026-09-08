@@ -43,7 +43,6 @@ import { WELCOME_SEGMENT_ACTIVE } from './FriendsListCore';
 import { displayAvatarLetter, displayName } from './friendHelpers';
 import {
   WelcomeProfileRow,
-  WelcomeProfileRowDivider,
   WelcomeProfileSection,
   WelcomeProfileLanguageRow,
   WELCOME_PROFILE_ROW_ICON,
@@ -59,12 +58,11 @@ const CAMERA_BTN_SIZE = 38;
 /** Зазор между низом списка и кнопкой «Удалить профиль». */
 const HUB_LIST_ABOVE_DELETE_GAP = 10;
 /** Симметричные отступы вокруг кнопки «Удалить профиль». */
-const HUB_DELETE_EDGE_GAP = 12;
+const HUB_DELETE_EDGE_GAP = 6;
 /** Строк hub-профиля (dense) — см. WelcomeProfileListUi. */
-const PROFILE_HUB_ROW_DENSE = 47;
+const PROFILE_HUB_ROW_DENSE = 48;
 const PROFILE_HUB_ROW_COUNT = 8;
-const PROFILE_HUB_SECTION_COUNT = 3;
-const EST_DELETE_FOOTER_H = 58;
+const EST_DELETE_FOOTER_H = 44;
 
 type HubLayoutTokens = {
   avatarSize: number;
@@ -76,31 +74,33 @@ type HubLayoutTokens = {
 };
 
 const HUB_LAYOUT_PHONE: HubLayoutTokens = {
-  avatarSize: 122,
+  avatarSize: 128,
   avatarMarginBottom: 6,
   avatarPaddingTop: 4,
-  listGap: 11,
-  listMarginTop: 0,
+  listGap: 10,
+  listMarginTop: 22,
   cameraBtnSize: CAMERA_BTN_SIZE,
 };
 
 const HUB_LAYOUT_PHONE_COMPACT: HubLayoutTokens = {
-  avatarSize: 116,
+  avatarSize: 120,
   avatarMarginBottom: 4,
   avatarPaddingTop: 2,
-  listGap: 10,
-  listMarginTop: 0,
+  listGap: 8,
+  listMarginTop: 18,
   cameraBtnSize: CAMERA_BTN_SIZE,
 };
 
 const HUB_LAYOUT_TABLET: HubLayoutTokens = {
-  avatarSize: 128,
+  avatarSize: 134,
   avatarMarginBottom: 8,
   avatarPaddingTop: 6,
   listGap: 12,
-  listMarginTop: 0,
+  listMarginTop: 24,
   cameraBtnSize: CAMERA_BTN_SIZE,
 };
+
+const PROFILE_HUB_SECTION_COUNT = 4;
 
 function estimateProfileHubBodyHeight(tokens: HubLayoutTokens): number {
   const avatarBlock =
@@ -502,6 +502,7 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
         disabled={busy || !onLogOutAccount}
         accessibilityRole="button"
       >
+        <Ionicons name="trash-outline" size={22} color="#A63A48" />
         <Text style={styles.logOutBtnText}>{t('welcomeDeleteProfile', lang)}</Text>
       </Pressable>
     </View>
@@ -557,13 +558,14 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
       style={[
         styles.hubListStack,
         { gap: hubLayout.listGap },
-        !accountOpen && styles.hubListStackLower,
+        !accountOpen && { marginTop: hubLayout.listMarginTop },
         accountOpen && styles.hubListStackNickOpen,
       ]}
     >
       <WelcomeProfileSection dense>
         <WelcomeProfileRow
           dense
+          showDivider
           expandable
           expanded={accountOpen}
           icon="person-outline"
@@ -572,7 +574,6 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
           largeValue
           onPress={openAccountEdit}
         />
-        <WelcomeProfileRowDivider />
         <WelcomeProfileRow
           dense
           icon="globe-outline"
@@ -580,48 +581,50 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
           value={langLabel}
           onPress={openLanguage}
         />
-        <WelcomeProfileRowDivider />
+      </WelcomeProfileSection>
+
+      <WelcomeProfileSection dense>
         <WelcomeProfileRow
           dense
+          showDivider
           icon="notifications-outline"
           label={t('welcomeNotifications', lang)}
           value={t('welcomeNotificationsHint', lang)}
           onPress={openNotificationsSettings}
         />
-      </WelcomeProfileSection>
-
-      <WelcomeProfileSection dense>
         <WelcomeProfileRow
           dense
           icon="lock-closed-outline"
           label={t('welcomePrivacy', lang)}
           onPress={openPrivacy}
         />
-        <WelcomeProfileRowDivider />
+      </WelcomeProfileSection>
+
+      <WelcomeProfileSection dense>
         <WelcomeProfileRow
           dense
+          showDivider
           icon="image-outline"
           label={t('chatWallpaper', lang)}
           onPress={openChatWallpaper}
         />
-      </WelcomeProfileSection>
-
-      <WelcomeProfileSection dense>
         <WelcomeProfileRow
           dense
           icon="help-circle-outline"
           label={t('profileHelp', lang)}
           onPress={openHelp}
         />
-        <WelcomeProfileRowDivider />
+      </WelcomeProfileSection>
+
+      <WelcomeProfileSection dense>
         <WelcomeProfileRow
           dense
+          showDivider
           icon="information-circle-outline"
           label={t('welcomeAboutApp', lang)}
           onPress={openAbout}
           badgeCount={updateAvailable ? 1 : 0}
         />
-        <WelcomeProfileRowDivider />
         <WelcomeProfileRow
           dense
           icon="heart-outline"
@@ -680,42 +683,39 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
   const aboutBody = (
     <View style={styles.subScreenBlockOffset}>
       <WelcomeProfileSection>
-      <WelcomeProfileRow
-        icon="phone-portrait-outline"
-        label={t('welcomeAppVersion', lang)}
-        value={getCurrentAppVersion()}
-        showChevron={false}
-      />
-      {updateAvailable ? (
-        <>
-          <WelcomeProfileRowDivider />
+        <WelcomeProfileRow
+          icon="phone-portrait-outline"
+          label={t('welcomeAppVersion', lang)}
+          value={getCurrentAppVersion()}
+          showChevron={false}
+          showDivider={!!updateAvailable}
+        />
+        {updateAvailable ? (
           <WelcomeProfileRow
             icon="cloud-download-outline"
             label={t('updateDownloadNew', lang)}
             onPress={openUpdate}
             badgeCount={1}
           />
-        </>
-      ) : null}
-    </WelcomeProfileSection>
+        ) : null}
+      </WelcomeProfileSection>
     </View>
   );
 
   const languageBody = (
     <WelcomeProfileSection compact>
-      {languages.map((lng, idx) => {
+      {languages.map((lng) => {
         const selected = normalizeLangCode(lang) === normalizeLangCode(lng.code);
         return (
-          <React.Fragment key={lng.code}>
-            {idx > 0 ? <WelcomeProfileRowDivider /> : null}
-            <WelcomeProfileLanguageRow
-              nativeName={lng.native}
-              englishName={lng.name}
-              selected={selected}
-              rtl={lng.code === 'ar'}
-              onPress={() => pickLang(lng.code)}
-            />
-          </React.Fragment>
+          <WelcomeProfileLanguageRow
+            key={lng.code}
+            nativeName={lng.native}
+            englishName={lng.name}
+            selected={selected}
+            rtl={lng.code === 'ar'}
+            onPress={() => pickLang(lng.code)}
+            compact
+          />
         );
       })}
     </WelcomeProfileSection>
@@ -756,7 +756,7 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
       <WelcomeProfileSection>
       <View style={styles.supportHero}>
         <View style={styles.supportHeroIcon}>
-          <Ionicons name="heart-outline" size={22} color={WELCOME_BRAND_VI_FILL_GRADIENT[1]} />
+          <Ionicons name="heart-outline" size={34} color={WELCOME_BRAND_VI_FILL_GRADIENT[1]} />
         </View>
         <Text style={styles.supportHeroText}>{t('supportProjectSubtitle', lang)}</Text>
       </View>
@@ -952,9 +952,8 @@ const styles = StyleSheet.create({
   },
   scrollContent: { paddingTop: 4 },
   avatarBlock: { alignItems: 'center', marginBottom: 8, marginTop: 0 },
-  hubListStack: { gap: 12 },
-  hubListStackLower: { marginTop: 12 },
-  hubListStackNickOpen: { marginTop: 0 },
+  hubListStack: {},
+  hubListStackNickOpen: { marginTop: 8 },
   avatarWrap: { position: 'relative' },
   avatarRing: {
     alignItems: 'center',
@@ -980,11 +979,8 @@ const styles = StyleSheet.create({
     marginHorizontal: WELCOME_FRIENDS_LIST_INSET,
     marginTop: 10,
     marginBottom: 4,
-    padding: 10,
-    borderRadius: 14,
-    backgroundColor: 'rgba(22, 27, 34, 0.58)',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(255,255,255,0.06)',
+    paddingHorizontal: 0,
+    paddingVertical: 4,
   },
   nickInput: {
     backgroundColor: 'rgba(255,255,255,0.04)',
@@ -1039,12 +1035,12 @@ const styles = StyleSheet.create({
   },
   helpEmailText: {
     color: WELCOME_HEADER_TITLE,
-    fontSize: 15,
-    marginBottom: 6,
+    fontSize: 12,
+    marginBottom: 4,
   },
   helpEmailHint: {
     color: WELCOME_SEGMENT_ACTIVE,
-    fontSize: 13,
+    fontSize: 11,
   },
   subScreenBlockOffset: {
     marginTop: 12,
@@ -1056,15 +1052,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
   },
   supportHeroIcon: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+    width: 68,
+    height: 68,
+    borderRadius: 34,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: 'rgba(59, 130, 246, 0.1)',
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: 'rgba(59, 130, 246, 0.2)',
-    marginBottom: 12,
+    marginBottom: 14,
   },
   supportHeroText: {
     textAlign: 'center',
@@ -1129,24 +1125,20 @@ const styles = StyleSheet.create({
   },
   logOutBtn: {
     alignSelf: 'center',
-    width: '88%',
-    maxWidth: 340,
-    paddingVertical: 11,
-    borderRadius: 999,
-    backgroundColor: 'rgba(255, 90, 103, 0.16)',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 90, 103, 0.72)',
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    gap: 7,
+    paddingVertical: 4,
+    paddingHorizontal: 16,
   },
   logOutBtnText: {
-    color: WELCOME_HEADER_TITLE,
-    fontSize: 15,
+    color: '#A63A48',
+    fontSize: 14,
     fontWeight: '600',
   },
   hubBtnPressed: {
-    opacity: 0.88,
-    transform: [{ scale: 0.99 }],
+    opacity: 0.72,
   },
 });
 

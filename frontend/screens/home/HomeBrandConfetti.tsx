@@ -239,10 +239,10 @@ const ConfettiPiece = React.memo(function ConfettiPiece({ originX, originY, spec
     const flip = isTinsel
       ? Math.max(0.18, Math.abs(Math.cos(phase + sec * flipHz)))
       : 1;
-    const fadeIn = Math.min(1, t / 0.05);
+    // Instant pop — no soft fade-in (that made the white flash feel laggy).
     const fadeOut = t > 0.76 ? Math.max(0, (1 - t) / 0.24) : 1;
     return {
-      opacity: fadeIn * fadeOut * baseOpacity,
+      opacity: fadeOut * baseOpacity,
       transform: [
         { translateX: x - w / 2 },
         { translateY: y - h / 2 },
@@ -282,63 +282,38 @@ type FlashProps = {
 };
 
 function BurstFlash({ originX, originY, avatarSize, isDark }: FlashProps) {
-  const core = useSharedValue(0);
   const ringA = useSharedValue(0);
   const ringB = useSharedValue(0);
 
   useEffect(() => {
-    core.value = 0;
     ringA.value = 0;
     ringB.value = 0;
-    core.value = withTiming(1, { duration: 340, easing: Easing.out(Easing.cubic) });
-    ringA.value = withTiming(1, { duration: 520, easing: Easing.out(Easing.cubic) });
-    ringB.value = withDelay(80, withTiming(1, { duration: 680, easing: Easing.out(Easing.quad) }));
+    // No white core ball — only quick aura rings so the burst starts clean.
+    ringA.value = withTiming(1, { duration: 280, easing: Easing.out(Easing.cubic) });
+    ringB.value = withDelay(30, withTiming(1, { duration: 360, easing: Easing.out(Easing.quad) }));
     return () => {
-      cancelAnimation(core);
       cancelAnimation(ringA);
       cancelAnimation(ringB);
     };
-  }, [core, ringA, ringB]);
+  }, [ringA, ringB]);
 
-  const coreSize = avatarSize * 0.72;
   const ringSize = avatarSize * 1.05;
 
-  const coreStyle = useAnimatedStyle(() => ({
-    opacity: interpolate(core.value, [0, 0.18, 1], [0.9, 0.55, 0]),
-    transform: [{ scale: interpolate(core.value, [0, 1], [0.28, 1.18]) }],
-  }));
-
   const ringAStyle = useAnimatedStyle(() => ({
-    opacity: interpolate(ringA.value, [0, 0.12, 1], [0.7, 0.45, 0]),
-    transform: [{ scale: interpolate(ringA.value, [0, 1], [0.55, 1.85]) }],
+    opacity: interpolate(ringA.value, [0, 0.08, 1], [0.55, 0.32, 0]),
+    transform: [{ scale: interpolate(ringA.value, [0, 1], [0.7, 1.9]) }],
   }));
 
   const ringBStyle = useAnimatedStyle(() => ({
-    opacity: interpolate(ringB.value, [0, 0.2, 1], [0, 0.4, 0]),
-    transform: [{ scale: interpolate(ringB.value, [0, 1], [0.7, 2.25]) }],
+    opacity: interpolate(ringB.value, [0, 0.12, 1], [0.35, 0.22, 0]),
+    transform: [{ scale: interpolate(ringB.value, [0, 1], [0.85, 2.2]) }],
   }));
 
-  const coreColor = isDark ? 'rgba(255,248,240,0.92)' : 'rgba(255,255,255,0.88)';
   const ringColorA = isDark ? 'rgba(0,181,255,0.85)' : 'rgba(143,122,216,0.8)';
   const ringColorB = isDark ? 'rgba(20,184,166,0.7)' : 'rgba(255,248,240,0.75)';
 
   return (
     <>
-      <Reanimated.View
-        pointerEvents="none"
-        style={[
-          styles.flashCircle,
-          {
-            width: coreSize,
-            height: coreSize,
-            borderRadius: coreSize / 2,
-            backgroundColor: coreColor,
-            left: originX - coreSize / 2,
-            top: originY - coreSize / 2,
-          },
-          coreStyle,
-        ]}
-      />
       <Reanimated.View
         pointerEvents="none"
         style={[
@@ -422,9 +397,6 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     zIndex: 40,
     elevation: 40,
-  },
-  flashCircle: {
-    position: 'absolute',
   },
   flashRing: {
     position: 'absolute',
