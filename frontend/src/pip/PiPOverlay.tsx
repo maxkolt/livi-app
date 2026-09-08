@@ -176,9 +176,11 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
       btnBg: 'rgba(255, 255, 255, 0.08)',
       btnBorder: 'rgba(255, 255, 255, 0.1)',
       icon: 'rgba(255, 255, 255, 0.92)',
-      iconOff: '#E57373',
       ripple: 'rgba(255, 255, 255, 0.14)',
-      endCallBorder: 'rgba(229, 57, 53, 0.72)',
+      /** Как audioRoundBtnDanger / AudioCallEndButton на странице аудиозвонка. */
+      dangerBg: '#CC4A1E2A',
+      dangerBorder: '#A33B4F',
+      dangerIcon: '#C45A6E',
     }),
     [isDark],
   );
@@ -492,15 +494,20 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
                   />
                 )}
               </PiPActionButton>
-              <PiPActionButton onPress={toggleMic} accessibilityLabel={t('microphone', lang)} chrome={chrome}>
+              <PiPActionButton
+                onPress={toggleMic}
+                accessibilityLabel={t('microphone', lang)}
+                chrome={chrome}
+                danger={micIconMuted}
+              >
                 <MaterialIcons
                   name={micIconMuted ? 'mic-off' : 'mic'}
                   size={PIP_ICON_SIZE}
-                  color={micIconMuted ? chrome.iconOff : chrome.icon}
+                  color={chrome.icon}
                 />
               </PiPActionButton>
-              <PiPActionButton onPress={endCall} accessibilityLabel={t('endCall', lang)} chrome={chrome} endCall>
-                <MaterialIcons name="call-end" size={PIP_ICON_SIZE} color={chrome.endCallBorder} />
+              <PiPActionButton onPress={endCall} accessibilityLabel={t('endCall', lang)} chrome={chrome} danger>
+                <MaterialIcons name="call-end" size={PIP_ICON_SIZE} color={chrome.dangerIcon} />
               </PiPActionButton>
             </View>
           </View>
@@ -514,7 +521,9 @@ type PipChrome = {
   btnBg: string;
   btnBorder: string;
   ripple: string;
-  endCallBorder: string;
+  dangerBg: string;
+  dangerBorder: string;
+  dangerIcon: string;
 };
 
 type PipActiveAccent = {
@@ -528,7 +537,7 @@ function PiPActionButton({
   disabled = false,
   accessibilityLabel,
   chrome,
-  endCall = false,
+  danger = false,
   active = false,
   activeAccent,
 }: {
@@ -537,7 +546,8 @@ function PiPActionButton({
   disabled?: boolean;
   accessibilityLabel?: string;
   chrome: PipChrome;
-  endCall?: boolean;
+  /** Краповая заливка+рамка — как muted mic / hangup на аудиозвонке. */
+  danger?: boolean;
   active?: boolean;
   activeAccent?: PipActiveAccent;
 }) {
@@ -565,7 +575,6 @@ function PiPActionButton({
       <View
         style={[
           styles.pipActionCircle,
-          endCall && styles.pipActionCircleEndCall,
           active && activeAccent
             ? {
                 borderWidth: 1,
@@ -574,10 +583,13 @@ function PiPActionButton({
               }
             : null,
           {
-            backgroundColor:
-              active && activeAccent ? activeAccent.solid15 : chrome.btnBg,
-            borderColor: endCall
-              ? chrome.endCallBorder
+            backgroundColor: danger
+              ? chrome.dangerBg
+              : active && activeAccent
+                ? activeAccent.solid15
+                : chrome.btnBg,
+            borderColor: danger
+              ? chrome.dangerBorder
               : active && activeAccent
                 ? activeAccent.solid
                 : chrome.btnBorder,
@@ -695,9 +707,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     justifyContent: 'center',
     alignItems: 'center',
-  },
-  pipActionCircleEndCall: {
-    borderWidth: 1,
   },
   pipAvatarFallback: {
     justifyContent: 'center',

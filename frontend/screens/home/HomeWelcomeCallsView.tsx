@@ -76,6 +76,8 @@ export type HomeWelcomeCallsViewProps = {
     cancelText?: string;
   }) => Promise<boolean>;
   showNotice: (text: string, kind?: NoticeKind, ms?: number) => void;
+  /** Активный звонок / PiP — не стартовать новый вызов с строки. */
+  callActionsLocked?: boolean;
 };
 
 function mergeMissedSeeds(entries: CallLogEntry[], missedByUser: Record<string, number>): CallLogEntry[] {
@@ -119,6 +121,7 @@ function HomeWelcomeCallsViewInner({
   onRefresh,
   askConfirm,
   showNotice,
+  callActionsLocked = false,
 }: HomeWelcomeCallsViewProps) {
   const [filter, setFilter] = useState<CallsFilter>('all');
   const [searchOpen, setSearchOpen] = useState(false);
@@ -389,13 +392,26 @@ function HomeWelcomeCallsViewInner({
 
   const startCall = useCallback(
     (friend: Friend) => {
+      if (callActionsLocked) {
+        showNotice(t('finishCurrentCallFirst', lang), 'info', 2500);
+        return;
+      }
       prepareFriendRowActionTap();
       // Сначала native UI, badge — после (не блокировать redial).
       handleStartFriendCall(friend);
       void clearMissedCallsForFriend(String(friend.id));
       if (pickMode) closePick();
     },
-    [clearMissedCallsForFriend, closePick, handleStartFriendCall, pickMode, prepareFriendRowActionTap],
+    [
+      callActionsLocked,
+      clearMissedCallsForFriend,
+      closePick,
+      handleStartFriendCall,
+      lang,
+      pickMode,
+      prepareFriendRowActionTap,
+      showNotice,
+    ],
   );
 
   const deleteSelected = useCallback(async () => {
@@ -427,8 +443,8 @@ function HomeWelcomeCallsViewInner({
   }, [askConfirm, clearMissedCallsForFriend, deleting, exitSelect, lang, rows, selectedIds, showNotice]);
 
   const listExtraData = useMemo(
-    () => ({ filter, pickMode, missedByUser, friendsById, selectMode, selectedIds }),
-    [filter, friendsById, missedByUser, pickMode, selectMode, selectedIds],
+    () => ({ filter, pickMode, missedByUser, friendsById, selectMode, selectedIds, callActionsLocked }),
+    [callActionsLocked, filter, friendsById, missedByUser, pickMode, selectMode, selectedIds],
   );
 
   const renderItem = useCallback(
@@ -471,7 +487,11 @@ function HomeWelcomeCallsViewInner({
 
       return (
         <Pressable
-          style={({ pressed }) => [styles.cardWrap, pressed && styles.cardPressed]}
+          style={({ pressed }) => [
+            styles.cardWrap,
+            pressed && !callActionsLocked && styles.cardPressed,
+            callActionsLocked && styles.cardLocked,
+          ]}
           onPress={() => {
             if (selectMode) {
               toggleSelect(item.id);
@@ -499,7 +519,7 @@ function HomeWelcomeCallsViewInner({
           delayLongPress={380}
           accessibilityRole="button"
           accessibilityLabel={displayName}
-          accessibilityState={{ selected: isSelected }}
+          accessibilityState={{ selected: isSelected, disabled: callActionsLocked && !selectMode }}
         >
           <View style={[styles.glassCard, isSelected && styles.glassCardSelected]}>
             <View style={styles.cardRow}>
@@ -566,7 +586,18 @@ function HomeWelcomeCallsViewInner({
         </Pressable>
       );
     },
-    [L, enterSelect, friendsById, lang, pickMode, selectMode, selectedIds, startCall, toggleSelect],
+    [
+      L,
+      callActionsLocked,
+      enterSelect,
+      friendsById,
+      lang,
+      pickMode,
+      selectMode,
+      selectedIds,
+      startCall,
+      toggleSelect,
+    ],
   );
 
   return (
@@ -855,6 +886,9 @@ const styles = StyleSheet.create({
   cardPressed: {
     opacity: 0.82,
     transform: [{ scale: 0.992 }],
+  },
+  cardLocked: {
+    opacity: 0.55,
   },
   glassCard: {
     height: WELCOME_FRIEND_CARD_ROW_HEIGHT,

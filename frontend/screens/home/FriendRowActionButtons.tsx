@@ -213,6 +213,7 @@ export function FriendRowInviteButton({
   const g = global as any;
   const videoCallPartner = g.__videoCallPartnerUserIdRef?.current;
   const activeCallInProgress = isDirectCallSessionLive(g);
+  const pipBlocksCall = g.__pipVisibleRef?.current === true;
   const recentlyEndedCallFriend = isRecentlyEndedCallFriend(friendIdStr);
   const friendBusyBlocksCall = friend.online && isFriendBusy && !recentlyEndedCallFriend;
   const inActiveCallWithFriend =
@@ -221,12 +222,13 @@ export function FriendRowInviteButton({
   // Refs: после cancel calling.visible может ещё кадр быть true и глотать redial.
   const outgoingInProgress = callingVisibleRef.current === true;
   const incomingInProgress = incomingCallScreen.visible;
-  const hardVideoDisabled = busy || incomingInProgress || activeCallInProgress;
+  const hardVideoDisabled = busy || incomingInProgress || activeCallInProgress || pipBlocksCall;
   const videoDisabled = hardVideoDisabled || outgoingInProgress;
 
   const runStartCall = useCallback(() => {
     const gAfterTap = global as any;
     const activeCallAfterTap = isDirectCallSessionLive(gAfterTap);
+    const pipBlocksAfterTap = gAfterTap.__pipVisibleRef?.current === true;
     const videoCallPartnerAfterTap = gAfterTap.__videoCallPartnerUserIdRef?.current;
     const recentlyEndedAfterTap = isRecentlyEndedCallFriend(friendIdStr);
     const friendBusyBlocksAfterTap = friend.online && !!friend.isBusy && !recentlyEndedAfterTap;
@@ -236,7 +238,7 @@ export function FriendRowInviteButton({
         !!videoCallPartnerAfterTap &&
         String(videoCallPartnerAfterTap) === friendIdStr);
     const hardVideoDisabledAfterTap =
-      busyAfterTap || incomingCallScreen.visible || activeCallAfterTap;
+      busyAfterTap || incomingCallScreen.visible || activeCallAfterTap || pipBlocksAfterTap;
     if (hardVideoDisabledAfterTap) {
       const ending = gAfterTap.__endingCallInProgressRef?.current === true;
       const session = gAfterTap.__webrtcSessionRef?.current;
@@ -244,6 +246,7 @@ export function FriendRowInviteButton({
         !session || (typeof session.isEnded === 'function' && session.isEnded());
       const allowStaleUnlock =
         activeCallAfterTap &&
+        !pipBlocksAfterTap &&
         !incomingCallScreen.visible &&
         !busyAfterTap &&
         (ending || sessionEnded);

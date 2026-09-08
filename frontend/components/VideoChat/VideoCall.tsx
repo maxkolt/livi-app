@@ -7130,11 +7130,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
             <TouchableOpacity
               style={[
                 styles.audioRoundBtn,
-                !micOn && {
-                  borderWidth: 1,
-                  borderColor: '#E57373',
-                  backgroundColor: 'rgba(204, 92, 47, 0.19)',
-                },
+                !micOn && styles.audioRoundBtnDanger,
                 controlsLockedForLocalHold && styles.audioRoundBtnLocked,
               ]}
               onPress={toggleMic}
@@ -7146,7 +7142,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
               <MaterialIcons
                 name={micOn ? 'mic' : 'mic-off'}
                 size={28}
-                color={micOn ? WELCOME_HEADER_TITLE : '#E57373'}
+                color={WELCOME_HEADER_TITLE}
               />
             </TouchableOpacity>
             <AudioCallEndButton onPress={() => onAbortCall('end_button')} />

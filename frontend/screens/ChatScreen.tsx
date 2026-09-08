@@ -136,6 +136,12 @@ import {
 import { ChatParallaxWallpaper } from './chat/ChatParallaxWallpaper';
 import { WelcomeStageBackground, StageGradient } from './home/WelcomeStageBackground';
 import { WELCOME_CARD_BG, WELCOME_CHROME_EDGE_RADIUS, WELCOME_HEADER_TITLE, WELCOME_STAGE_BG } from './home/constants';
+import {
+  WelcomeOverlayCard,
+  WelcomeOverlayDim,
+  WelcomeOverlayPill,
+} from './home/WelcomeOverlayChrome';
+import { styles as homeStyles } from './home/styles';
 import { emitRequestDirectCall } from '../utils/globalEvents';
 import {
   ReactionBarModal,
@@ -3117,146 +3123,36 @@ export default function ChatScreen({ route, navigation }: Props) {
         }}
       />
 
-      {/* Модальное окно для меню очистки чата */}
+      {/* Меню очистки чата — тот же chrome, что confirm удаления друзей */}
       {showClearMenu && (
-        <View style={{
-          position: 'absolute',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          backgroundColor: 'rgba(0,0,0,0.90)',
-          justifyContent: 'center',
-          alignItems: 'center',
-          zIndex: 1000,
-        }}>
-          <View style={{
-            backgroundColor: LIVI.surface,
-            borderRadius: 16,
-            padding: 20,
-            margin: 20,
-            minWidth: 280,
-            borderWidth: 1,
-            borderColor: 'rgba(255,255,255,0.1)',
-          }}>
-            <Text style={{
-              color: LIVI.white,
-              fontSize: 18,
-              fontWeight: '700',
-              textAlign: 'center',
-              marginBottom: 20,
-            }}>
-              {t('chatClearMenuTitle', lang)}
-            </Text>
-            
-            <TouchableOpacity
-              onPress={() => {
-                setShowClearMenu(false);
-                clearChatForMe();
-              }}
-              style={{
-                backgroundColor: 'rgba(255,255,255,0.1)',
-                borderRadius: 12,
-                padding: 16,
-                marginBottom: 12,
-                alignItems: 'center',
-              }}
-            >
-              <Text style={{
-                color: LIVI.white,
-                fontSize: 16,
-                fontWeight: '600',
-              }}>
-                {t('chatClearForMeOption', lang)}
-              </Text>
-              <Text style={{
-                color: LIVI.titan,
-                fontSize: 12,
-                marginTop: 4,
-                textAlign: 'center',
-              }}>
-                {t('chatClearForMeHint', lang)}
-              </Text>
-            </TouchableOpacity>
-            
-            <TouchableOpacity
-              onPress={() => {
-                setShowClearMenu(false);
-                clearChatForAll();
-              }}
-              style={{
-                backgroundColor: 'rgba(255,255,255,0.1)',
-                borderRadius: 12,
-                padding: 16,
-                marginBottom: 12,
-                alignItems: 'center',
-              }}
-            >
-              <Text style={{
-                color: LIVI.white,
-                fontSize: 16,
-                fontWeight: '600',
-              }}>
-                {t('chatClearForAllOption', lang)}
-              </Text>
-              <Text style={{
-                color: LIVI.titan,
-                fontSize: 12,
-                marginTop: 4,
-                textAlign: 'center',
-              }}>
-                {t('chatClearForAllHint', lang)}
-              </Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              onPress={() => {
-                setShowClearMenu(false);
-                clearChatForMe();
-              }}
-              style={{
-                backgroundColor: 'rgba(255,255,255,0.1)',
-                borderRadius: 12,
-                padding: 16,
-                marginBottom: 20,
-                alignItems: 'center',
-              }}
-            >
-              <Text style={{
-                color: LIVI.white,
-                fontSize: 16,
-                fontWeight: '600',
-              }}>
-                {t('chatClearForSelfOption', lang)}
-              </Text>
-              <Text style={{
-                color: LIVI.titan,
-                fontSize: 12,
-                marginTop: 4,
-                textAlign: 'center',
-              }}>
-                {t('chatClearForSelfHint', lang)}
-              </Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              onPress={() => setShowClearMenu(false)}
-              style={{
-                backgroundColor: 'rgba(255,255,255,0.05)',
-                borderRadius: 12,
-                padding: 16,
-                alignItems: 'center',
-              }}
-            >
-              <Text style={{
-                color: LIVI.titan,
-                fontSize: 16,
-                fontWeight: '600',
-              }}>
-                {t('cancelAction', lang)}
-              </Text>
-            </TouchableOpacity>
-          </View>
+        <View style={homeStyles.overlayModal}>
+          <WelcomeOverlayDim strong />
+          <WelcomeOverlayCard opaque>
+            <Text style={homeStyles.confirmTitle}>{t('chatClearMenuTitle', lang)}</Text>
+            <View style={{ gap: 10, marginTop: 16 }}>
+              <WelcomeOverlayPill
+                label={t('chatClearForAllOption', lang)}
+                onPress={() => {
+                  setShowClearMenu(false);
+                  clearChatForAll();
+                }}
+                variant="danger"
+              />
+              <WelcomeOverlayPill
+                label={t('chatClearForSelfOption', lang)}
+                onPress={() => {
+                  setShowClearMenu(false);
+                  clearChatForMe();
+                }}
+                variant="danger"
+              />
+              <WelcomeOverlayPill
+                label={t('cancelAction', lang)}
+                onPress={() => setShowClearMenu(false)}
+                variant="secondary"
+              />
+            </View>
+          </WelcomeOverlayCard>
         </View>
       )}
 

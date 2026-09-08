@@ -1712,6 +1712,27 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const handleStartDirectCall = useCallback(async (friend: Friend, media: 'audio' | 'video' = 'video') => {
     // Не flush до native UI: setState на входе откладывал displayOutgoing на кадр+.
     const gStart = global as any;
+    // Активный звонок / in-app|system PiP — не поднимать Outgoing (иначе flash + initiator_busy).
+    // Не трогаем обычный cancel→redial: там сессия ещё не live / PiP нет.
+    const blockForActiveCall =
+      pip.visible ||
+      pip.inSystemPiPMode ||
+      pip.pendingSystemPiP ||
+      incomingCallScreen.visible ||
+      isDirectCallSessionLive(gStart);
+    if (blockForActiveCall) {
+      logger.info('[outgoing] blocked start — active call or PiP', {
+        friendId: friend.id,
+        media,
+        pipVisible: pip.visible,
+        systemPiP: pip.inSystemPiPMode,
+        pendingSystemPiP: pip.pendingSystemPiP,
+        incomingVisible: incomingCallScreen.visible,
+        sessionLive: isDirectCallSessionLive(gStart),
+      });
+      showNotice(t('finishCurrentCallFirst', lang), 'info', 2500);
+      return;
+    }
     gStart.__outgoingStartInFlightRef = gStart.__outgoingStartInFlightRef || { current: false };
     const inRedialGrace = Date.now() < readOutgoingRedialGraceUntil();
     const uiIdleForRedial =
@@ -2280,7 +2301,11 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         pendingCancelRef.current ||
         canceledByNative;
       if (!skipNetworkBanner) {
-        showNotice(t('callStartFailed', lang), 'error', 3000);
+        if (errCode === 'initiator_busy' || errCode === 'busy') {
+          showNotice(t('finishCurrentCallFirst', lang), 'info', 2500);
+        } else {
+          showNotice(t('callStartFailed', lang), 'error', 3000);
+        }
       }
       if (canceledByNative) {
         try {
@@ -2295,7 +2320,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         gStart.__outgoingStartInFlightRef.current = false;
       }
     }
-  }, [navigation, showNotice, resetOutgoingAfterExternalClose, clearNativeCanceledOutgoingAttempt, clearStaleOutgoingAttemptIfIdle, teardownOutgoingAttemptSubs, forceResetCallBusyRefs, clearFriendsCallBusy, closeAndCancelOutgoingBeforeRetry, lang]);
+  }, [navigation, showNotice, resetOutgoingAfterExternalClose, clearNativeCanceledOutgoingAttempt, clearStaleOutgoingAttemptIfIdle, teardownOutgoingAttemptSubs, forceResetCallBusyRefs, clearFriendsCallBusy, closeAndCancelOutgoingBeforeRetry, lang, pip.visible, pip.inSystemPiPMode, pip.pendingSystemPiP, incomingCallScreen.visible]);
 
   const handleStartFriendCall = useCallback(
     (friend: Friend) => handleStartDirectCall(friend, 'audio'),
@@ -4507,6 +4532,9 @@ const handleClearNick = useCallback(async () => {
       friendBadgesSignature,
       friendsCallSwipeBlockSignature,
       swipeActionsHiddenForCall,
+      // Чтобы кнопки звонка перерисовались при in-app/system PiP.
+      pipVisible: pip.visible,
+      pipSystem: pip.inSystemPiPMode || pip.pendingSystemPiP,
     }),
     [
       friendActionsGestureResetSeq,
@@ -4518,6 +4546,9 @@ const handleClearNick = useCallback(async () => {
       friendBadgesSignature,
       friendsCallSwipeBlockSignature,
       swipeActionsHiddenForCall,
+      pip.visible,
+      pip.inSystemPiPMode,
+      pip.pendingSystemPiP,
     ],
   );
 
@@ -4726,7 +4757,15 @@ const handleClearNick = useCallback(async () => {
     // Ref: после cancel visible в state ещё true ~1.8с, но табы/поиск не должны быть «в звонке».
     callingVisibleRef.current ||
     incomingCallScreen.visible ||
-    (global as any).__videoCallActiveRef?.current === true;
+    (global as any).__videoCallActiveRef?.current === true ||
+    isDirectCallSessionLive(global as any);
+  /** Блок нового вызова из Друзей/Звонков (без outgoing dialing — redial не ломаем). */
+  const callActionsLocked =
+    pip.visible ||
+    pip.inSystemPiPMode ||
+    pip.pendingSystemPiP ||
+    incomingCallScreen.visible ||
+    isDirectCallSessionLive(global as any);
   const handleBlockedStartSearchPress = useCallback(() => {
     setShowCallSearchLockBadge(true);
   }, []);
@@ -4992,6 +5031,7 @@ const handleClearNick = useCallback(async () => {
             onRefresh={onRefreshFriends}
             askConfirm={askConfirm}
             showNotice={showNotice}
+            callActionsLocked={callActionsLocked}
           />
         </WelcomeKeepAlivePane>
         ) : null}

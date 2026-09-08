@@ -159,8 +159,7 @@ export function patchUnreadCountsIfChanged(
 
 /** Есть ли реально активный direct-call (не залипшие global refs после завершения). */
 export function isDirectCallSessionLive(g: any): boolean {
-  if (g.__videoCallActiveRef?.current !== true) return false;
-  const session = g.__webrtcSessionRef?.current;
+  const session = g?.__webrtcSessionRef?.current;
   if (session && typeof session.isEnded === 'function' && session.isEnded()) {
     return false;
   }
@@ -169,12 +168,23 @@ export function isDirectCallSessionLive(g: any): boolean {
     (typeof session.isEnded === 'function'
       ? !session.isEnded()
       : session?.room?.state !== 'disconnected');
-  const params = g.__currentCallPiPParamsRef?.current;
+  const params = g?.__currentCallPiPParamsRef?.current;
+  let sessionCallId = '';
+  let sessionRoomId = '';
+  try {
+    sessionCallId = String(session?.getCallId?.() || '').trim();
+    sessionRoomId = String(session?.getRoomId?.() || '').trim();
+  } catch {}
   const hasAnyCallIds =
     !!params?.callId ||
     !!params?.roomId ||
-    (!!session && typeof session.getCallId === 'function' && !!session.getCallId()) ||
-    (!!session && typeof session.getRoomId === 'function' && !!session.getRoomId());
+    !!sessionCallId ||
+    !!sessionRoomId;
+
+  // Живая сессия с call/room — источник правды (Home/in-app PiP: videoCallActiveRef может кратко отвалиться).
+  if (sessionNotEnded && hasAnyCallIds) return true;
+
+  if (g?.__videoCallActiveRef?.current !== true) return false;
   return !!(sessionNotEnded || hasAnyCallIds);
 }
 
