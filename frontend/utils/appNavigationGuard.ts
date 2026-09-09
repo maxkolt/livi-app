@@ -477,6 +477,7 @@ export function clearHomeTransientRouteParams(): boolean {
           openWelcomeCallsMissed: undefined,
           openWelcomeChat: undefined,
           openWelcomeChatUnread: undefined,
+          openWelcomeProfile: undefined,
           pushMessageFrom: undefined,
         }),
       );

@@ -119,13 +119,14 @@ class ActiveCallForegroundService : Service() {
             getString(R.string.active_call_notification_text)
         }
 
+        // Dumb return: только «вернуть к звонку». Audio vs video UI решает JS по живому состоянию.
         val pendingIntent = PendingIntent.getActivity(
             this,
             NOTIFICATION_ID,
             Intent(this, MainActivity::class.java).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP)
                 putExtra(MainActivity.EXTRA_RETURN_TO_ACTIVE_CALL, true)
-                putExtra(MainActivity.EXTRA_RETURN_TO_ACTIVE_CALL_AUDIO_ONLY, audioOnly)
+                putExtra(MainActivity.EXTRA_RETURN_TO_ACTIVE_CALL_AUDIO_ONLY, false)
             },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )

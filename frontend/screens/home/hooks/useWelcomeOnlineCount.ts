@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState } from 'react-native';
-import { API_BASE } from '../../../sockets/socket';
+import { API_BASE, onConnected, onWelcomePresence } from '../../../sockets/socket';
 import { shouldSkipHomeUiSettle } from '../../../utils/globalEvents';
 import type { WelcomeBannerPeer } from '../WelcomeOnlineBanner';
 
-const REFRESH_MS = 45_000;
+/** Fallback heal, если socket snapshot давно не приходил. */
+const FALLBACK_REFRESH_MS = 120_000;
 
 export function formatWelcomeOnlineCount(count: number): string {
   if (!Number.isFinite(count) || count < 0) return '—';
@@ -55,6 +56,19 @@ function normalizePresencePeers(list: PresenceListItem[], excludeUserId?: string
   return out;
 }
 
+function applyPresenceList(
+  list: PresenceListItem[],
+  excludeUserId: string | null | undefined,
+  setCount: (n: number) => void,
+  setPeers: (p: WelcomeBannerPeer[]) => void,
+  lastGoodRef: { current: number | null },
+) {
+  const n = list.length;
+  lastGoodRef.current = n;
+  setCount(n);
+  setPeers(normalizePresencePeers(list, excludeUserId));
+}
+
 export function useWelcomeOnlineCount(enabled = true, excludeUserId?: string | null) {
   const [count, setCount] = useState<number | null>(null);
   const [peers, setPeers] = useState<WelcomeBannerPeer[]>([]);
@@ -69,14 +83,22 @@ export function useWelcomeOnlineCount(enabled = true, excludeUserId?: string | n
       if (!res.ok) return;
       const json = (await res.json()) as { ok?: boolean; list?: PresenceListItem[] };
       if (json?.ok && Array.isArray(json.list)) {
-        const n = json.list.length;
-        lastGoodRef.current = n;
-        setCount(n);
-        setPeers(normalizePresencePeers(json.list, excludeRef.current));
+        applyPresenceList(json.list, excludeRef.current, setCount, setPeers, lastGoodRef);
       }
     } catch {
       if (lastGoodRef.current != null) setCount(lastGoodRef.current);
     }
+  }, [enabled]);
+
+  // Socket realtime: presence:welcome при входе/выходе/фоне любого пользователя.
+  useEffect(() => {
+    if (!enabled) return;
+    const unsub = onWelcomePresence((data) => {
+      if (shouldSkipHomeUiSettle()) return;
+      if (!data || data.ok === false || !Array.isArray(data.list)) return;
+      applyPresenceList(data.list, excludeRef.current, setCount, setPeers, lastGoodRef);
+    });
+    return unsub;
   }, [enabled]);
 
   useEffect(() => {
@@ -89,15 +111,18 @@ export function useWelcomeOnlineCount(enabled = true, excludeUserId?: string | n
         return false;
       }
     };
-    // После cancel Outgoing enabled снова true на том же кадре что resume —
-    // не дергать /api/presence+setCount, иначе лишний ре-рендер Home.
+    // Первый снимок: HTTP + после connect (сервер шлёт welcome вместе с friend presence).
     if (!shouldSkipHomeUiSettle() && !recentOutgoingCancel()) {
       void refresh();
     }
+    const unsubConnected = onConnected(() => {
+      if (shouldSkipHomeUiSettle() || recentOutgoingCancel()) return;
+      void refresh();
+    });
     const interval = setInterval(() => {
       if (shouldSkipHomeUiSettle() || recentOutgoingCancel()) return;
       void refresh();
-    }, REFRESH_MS);
+    }, FALLBACK_REFRESH_MS);
     const sub = AppState.addEventListener('change', (state) => {
       if (state !== 'active') return;
       if (shouldSkipHomeUiSettle() || recentOutgoingCancel()) return;
@@ -106,6 +131,7 @@ export function useWelcomeOnlineCount(enabled = true, excludeUserId?: string | n
     return () => {
       clearInterval(interval);
       sub.remove();
+      unsubConnected();
     };
   }, [enabled, refresh]);
 

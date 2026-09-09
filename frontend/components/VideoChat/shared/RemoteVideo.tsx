@@ -576,13 +576,21 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
   // КРИТИЧНО: Показываем видео если есть готовый трек, даже если remoteCamOn еще не обновлен
   // remoteCamOn может обновиться позже через onRemoteCamStateChange
   // Показываем видео когда: партнер не в PiP ИЛИ партнер в PiP с включенной камерой (поток продолжает идти)
-  // В системном PiP (forceTextureView): показываем RTCView даже если трек ещё не "live", чтобы не крутить лоадер.
+  // В системном PiP (forceTextureView): RTCView даже без remoteCamOn/live — не лого «через время».
   const canRenderVideo =
     (hasRenderableVideo || (forceTextureView && !!streamToUse && hasVideoTrack)) &&
-    (!partnerInPiP || effectiveRemoteCamOn);
+    (forceTextureView || !partnerInPiP || effectiveRemoteCamOn);
   if (canRenderVideo) {
-    // Партнер выключил камеру (трек disabled) — RTCView покажет застывший кадр; показываем заглушку
-    if (hasVideoTrack && !videoTrackEnabled && started && !wasFriendCallEnded && !isInactiveState) {
+    // Партнер выключил камеру (трек disabled) — RTCView покажет застывший кадр; показываем заглушку.
+    // System PiP: не мигать лого, пока remoteCamOn ещё true (renegotiation).
+    if (
+      hasVideoTrack &&
+      !videoTrackEnabled &&
+      started &&
+      !wasFriendCallEnded &&
+      !isInactiveState &&
+      !(forceTextureView && effectiveRemoteCamOn)
+    ) {
       stallSinceRef.current = null;
       lastGoodStreamRef.current = null;
       lastGoodAtRef.current = 0;
@@ -677,10 +685,8 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
   }
 
   // Камера явно выключена И нет готового трека — показываем заглушку "Отошёл"
-  // КРИТИЧНО: Если камера явно выключена (remoteCamOn === false), всегда показываем заглушку "Отошел",
-  // а не лоадер, даже если стрим только что получен. Это означает, что пользователь явно выключил камеру.
-  // НО: НЕ показываем заглушку если партнер в PiP (это уже обработано выше)
-  if (!effectiveRemoteCamOn && !hasRenderableVideo && !partnerInPiP) {
+  // В system PiP (forceTextureView) не подменяем peer video логотипом LiVi.
+  if (!effectiveRemoteCamOn && !hasRenderableVideo && !partnerInPiP && !forceTextureView) {
     if (shouldSuppressTransientRemoteUi) {
       const held = renderHeldRemoteFrame('suppress-no-renderable-video-during-local-flip', {
         streamId: streamToUse.id,
@@ -800,6 +806,10 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
 
   // Нет видеотрека (например, только аудио) — показываем заглушку, если камера "выключена" по состоянию
   if (!effectiveRemoteCamOn) {
+    if (forceTextureView) {
+      // System PiP: без spinning LiVi на переходах — native placeholderOnly рисует logo.
+      return <View style={[styles.videoContainer, { backgroundColor: '#1B1C22' }]} />;
+    }
     if (shouldSuppressTransientRemoteUi) {
       const held = renderHeldRemoteFrame('suppress-fallback-remote-cam-off-during-local-flip', {
         streamId: streamToUse?.id,

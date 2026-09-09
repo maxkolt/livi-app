@@ -27,6 +27,7 @@ import * as Haptics from 'expo-haptics';
 
 import { syncMyStreamProfile } from '../chat/cometchat';
 import { useSafeAreaInsets, SafeAreaView } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
 import { BlurView } from 'expo-blur';
 import * as ImagePicker from 'expo-image-picker';
 import * as Clipboard from 'expo-clipboard';
@@ -168,7 +169,7 @@ import socket, {
   emitPresenceUpdateIfChanged,
   setActiveVideoCall,
 } from '../sockets/socket';
-import { primeAndroidCallContextForLeaveHint } from '../utils/activeCallNotification';
+import { primeAndroidCallContextForLeaveHint, minimizeAndroidAppToBackground } from '../utils/activeCallNotification';
 import { clearHomeTransientRouteParams } from '../utils/appNavigationGuard';
 
 
@@ -345,6 +346,12 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   // Пикер фона — welcome-профиль.
   useEffect(() => {
     if (welcomeActiveTab !== 'profile') setWallpaperPickerTheme(null);
+  }, [welcomeActiveTab]);
+  useEffect(() => {
+    if (welcomeActiveTab !== 'profile') return;
+    import('../utils/productShadeNotifications')
+      .then((m) => m.dismissAppUpdateShadeNotifications())
+      .catch(() => {});
   }, [welcomeActiveTab]);
   const { updateAvailable } = useHomeUpdatePromo();
 
@@ -4606,6 +4613,7 @@ const handleClearNick = useCallback(async () => {
     const openWelcomeCallsMissed = (route as any)?.params?.openWelcomeCallsMissed;
     const openWelcomeChat = (route as any)?.params?.openWelcomeChat;
     const openWelcomeChatUnread = (route as any)?.params?.openWelcomeChatUnread;
+    const openWelcomeProfile = (route as any)?.params?.openWelcomeProfile;
     const pushMessageFrom = String((route as any)?.params?.pushMessageFrom || '').trim();
 
     // Legacy openFriendsMenu → welcome Calls (старое меню больше не показываем).
@@ -4613,6 +4621,7 @@ const handleClearNick = useCallback(async () => {
     const wantCallsMissed = !!(openWelcomeCallsMissed || openFriendsMenu);
     const wantChat = !!(openWelcomeChat || (openFriendsTab && pushMessageFrom && !openFriendsMenu));
     const wantFriends = !!(openFriendsTab && !openFriendsMenu && !pushMessageFrom && !openWelcomeChat);
+    const wantProfile = !!openWelcomeProfile;
 
     if (wantCalls) {
       if (wantCallsMissed) {
@@ -4647,9 +4656,12 @@ const handleClearNick = useCallback(async () => {
     } else if (wantFriends) {
       setWelcomeActiveTab('friends');
       ensureWelcomeTabMounted('friends');
+    } else if (wantProfile) {
+      setWelcomeActiveTab('profile');
+      ensureWelcomeTabMounted('profile');
     }
 
-    if (wantCalls || wantChat || wantFriends || openFriendsMenu || openFriendsTab) {
+    if (wantCalls || wantChat || wantFriends || wantProfile || openFriendsMenu || openFriendsTab) {
       AsyncStorage.getItem(MISSED_CALLS_KEY).then((raw) => {
         try {
           const parsed = raw ? JSON.parse(raw) : {};
@@ -4667,7 +4679,7 @@ const handleClearNick = useCallback(async () => {
         } catch {}
       }).catch(() => {});
     }
-    if (ended || cancelled || wantCalls || wantChat || wantFriends || openFriendsMenu || openFriendsTab) {
+    if (ended || cancelled || wantCalls || wantChat || wantFriends || wantProfile || openFriendsMenu || openFriendsTab) {
       clearHomeTransientRouteParams();
     }
   }, [route, ensureWelcomeTabMounted, friends, navigation]);
@@ -4795,6 +4807,35 @@ const handleClearNick = useCallback(async () => {
     },
     [ensureWelcomeTabMounted, flushStaleCallingUiAfterCancel, mountedWelcomeTabs, welcomeActiveTab],
   );
+
+  // Android Back на Home: вкладка → Search → в фон (частые нажатия не finish Activity).
+  // Profile nested UI обрабатывает свой Back; hub зовёт onBackFromHub → Search.
+  const goWelcomeSearchFromBack = useCallback(() => {
+    setWelcomeActiveTab('search');
+    return true;
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (Platform.OS !== 'android') return undefined;
+      const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+        try {
+          if (callingVisibleRef.current) return false;
+          if (incomingCallScreen.visible) return false;
+        } catch {}
+        const tab = welcomeActiveTabRef.current;
+        // Profile: пусть сначала отработает вложенный BackHandler.
+        if (tab === 'profile') return false;
+        if (tab !== 'search') {
+          setWelcomeActiveTab('search');
+          return true;
+        }
+        return minimizeAndroidAppToBackground();
+      });
+      return () => sub.remove();
+    }, [incomingCallScreen.visible]),
+  );
+
   const handleProfileSupportClick = useCallback(() => {
     void incrCounter('support_help_clicks');
   }, [incrCounter]);
@@ -5044,6 +5085,8 @@ const handleClearNick = useCallback(async () => {
             updateAvailable={updateAvailable}
             wallpaperPickerTheme={wallpaperPickerTheme}
             setWallpaperPickerTheme={setWallpaperPickerTheme}
+            onBackFromHub={goWelcomeSearchFromBack}
+            active={showProfileTab}
           />
         </WelcomeKeepAlivePane>
         ) : null}

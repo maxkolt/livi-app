@@ -744,8 +744,17 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       LiviAppModule.beginActiveCallVoiceAudioHoldStatic(reactApplicationContext)
       LiviAppModule.setActiveCallForegroundRunningStatic(true)
       setPiPOnLeaveHintEnabled(true)
-      setSystemPiPCapturePlaceholderOnlyStatic(true)
-      setSystemPiPCaptureFrameReadyStatic(true)
+      // Важно: не форсировать logo (placeholderOnly=true) на video FGS.
+      // Иначе Home/leave-hint входит в system PiP с LiVi backdrop до AboutToEnter,
+      // даже когда у peer уже live video. Audio-only → logo; video → JS leave-hint arm.
+      if (audioOnly) {
+        setSystemPiPCapturePlaceholderOnlyStatic(true)
+        setSystemPiPCaptureFrameReadyStatic(true)
+      }
+      try {
+        val act = MainActivity.lastResumedInstance
+        act?.runOnUiThread { act.syncSystemPiPAutoEnterParams(true) }
+      } catch (_: Exception) {}
     } catch (e: Exception) {
       android.util.Log.w(NAME, "startActiveCallForegroundService failed", e)
     }
@@ -761,6 +770,10 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       setPiPOnLeaveHintEnabled(false)
       setSystemPiPCapturePlaceholderOnlyStatic(false)
       setSystemPiPCaptureFrameReadyStatic(false)
+      try {
+        val act = MainActivity.lastResumedInstance
+        act?.runOnUiThread { act.syncSystemPiPAutoEnterParams(false) }
+      } catch (_: Exception) {}
     } catch (e: Exception) {
       android.util.Log.w(NAME, "stopActiveCallForegroundService failed", e)
     }
@@ -1193,11 +1206,48 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     }
   }
 
-  /** @deprecated Системный PiP только по Home (onUserLeaveHint), не из JS Back/moveTaskToBack. */
+  /** Back / programmatic minimize: при активном звонке — system PiP (как Home), иначе просто в фон. */
   @ReactMethod
   fun moveTaskToBackAndEnterPiP(nonRoot: Boolean) {
-    Log.i(NAME, "moveTaskToBackAndEnterPiP ignored — use Home for system PiP")
-    moveTaskToBack(nonRoot)
+    val activity = currentActivity ?: return
+    activity.runOnUiThread {
+      try {
+        val main = activity as? MainActivity
+        if (main != null &&
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+            !main.isInPictureInPictureMode &&
+            !LiviAppModule.getEndingCallInProgress() &&
+            (LiviAppModule.getShouldEnterPiPOnLeaveHint() || LiviAppModule.isActiveCallForegroundRunning())
+        ) {
+          Log.i(NAME, "moveTaskToBackAndEnterPiP: enter system PiP then background")
+          main.onUserLeaveHint()
+          // Не уходим в фон, пока enter не успел: иначе leave-hint window уже закрыт.
+          if (!main.isInPictureInPictureMode) {
+            main.retryEnterSystemPiPIfLeaveHintPending()
+          }
+          if (!main.isInPictureInPictureMode) {
+            activity.window?.decorView?.post {
+              try {
+                if (!main.isInPictureInPictureMode) {
+                  main.retryEnterSystemPiPIfLeaveHintPending()
+                }
+                if (!main.isInPictureInPictureMode) {
+                  activity.moveTaskToBack(nonRoot)
+                }
+              } catch (_: Exception) {
+                try {
+                  activity.moveTaskToBack(nonRoot)
+                } catch (_: Exception) {}
+              }
+            }
+          }
+          return@runOnUiThread
+        }
+      } catch (e: Exception) {
+        Log.w(NAME, "moveTaskToBackAndEnterPiP PiP path failed", e)
+      }
+      activity.moveTaskToBack(nonRoot)
+    }
   }
 
   /** Включить/выключить системный PiP при нажатии Home: true = при уходе в фон перейти в Picture-in-Picture (окно поверх лаунчера). Вызывать из JS при активном видеозвонке или при показе in-app PiP. На Android 12+ дополнительно включается авто-вход в PiP для совместимости со всеми устройствами. */
@@ -1244,6 +1294,10 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   @ReactMethod
   fun setSystemPiPCapturePlaceholderOnly(placeholderOnly: Boolean) {
     LiviAppModule.setSystemPiPCapturePlaceholderOnlyStatic(placeholderOnly)
+    // Video flip после AboutToEnter — сразу retry enter (не ждать только frameReady).
+    if (!placeholderOnly) {
+      (currentActivity as? MainActivity)?.retryEnterSystemPiPIfLeaveHintPending()
+    }
   }
 
   /** Координаты маленького in-app PiP в пикселях окна; используются как sourceRect при Home -> system PiP. */
@@ -2833,6 +2887,14 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     @JvmStatic
     internal fun setPiPOnLeaveHintEnabled(value: Boolean) {
       shouldEnterPiPOnLeaveHint = value
+      try {
+        val act = MainActivity.lastResumedInstance
+        act?.runOnUiThread {
+          try {
+            act.syncSystemPiPAutoEnterParams(value && !getEndingCallInProgress())
+          } catch (_: Exception) {}
+        }
+      } catch (_: Exception) {}
     }
 
     @Volatile
@@ -2869,9 +2931,17 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
         systemPiPCaptureFrameReady = true
       }
       try {
-        val activity = reactContextRef?.currentActivity as? MainActivity
+        val activity =
+          (reactContextRef?.currentActivity as? MainActivity) ?: MainActivity.lastResumedInstance
         activity?.runOnUiThread {
-          activity.applySystemPiPPlaceholderOnlyUi(value)
+          try {
+            activity.applySystemPiPPlaceholderOnlyUi(value)
+          } catch (_: Exception) {}
+          try {
+            activity.syncSystemPiPAutoEnterParams(
+              getShouldEnterPiPOnLeaveHint() || isActiveCallForegroundRunning(),
+            )
+          } catch (_: Exception) {}
         }
       } catch (_: Exception) {}
     }

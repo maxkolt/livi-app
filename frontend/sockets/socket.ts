@@ -36,7 +36,9 @@ export {
   isPeerInVisibleOnlinePresence,
   onPresenceUpdate,
   onUserPresence,
+  onWelcomePresence,
 } from "./modules/presence";
+export type { WelcomePresencePayload } from "./modules/presence";
 
 export {
   onRtcAnswer,

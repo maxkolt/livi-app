@@ -39,6 +39,13 @@ export function useHomeFriends({
     appIsActive && (welcomeActiveTab === 'friends' || welcomeActiveTab === 'chat');
   // Calls специально НЕ входит: call log не нуждается в fetch friends, а soft
   // refresh@8s после открытия Calls совпадал с cancel и убивал тачи (лог loadFriends@calls).
+
+  useEffect(() => {
+    if (!appIsActive || welcomeActiveTab !== 'friends') return;
+    import('../../../utils/productShadeNotifications')
+      .then((m) => m.dismissFriendRequestShadeNotifications())
+      .catch(() => {});
+  }, [appIsActive, welcomeActiveTab]);
   const [friends, setFriends] = useState<Friend[]>([]);
   const [initialized, setInitialized] = useState(false);
   const [refreshing, setRefreshing] = useState(false);

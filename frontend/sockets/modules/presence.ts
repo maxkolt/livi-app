@@ -152,6 +152,26 @@ export function onUserPresence(
   });
 }
 
+export type WelcomePresencePayload = {
+  ok?: boolean;
+  list?: Array<string | { id?: string; nick?: string; name?: string; avatarVer?: number }>;
+};
+
+/** Global app-online snapshot for welcome banner (not friend-only). */
+export function onWelcomePresence(cb: (data: WelcomePresencePayload) => void): () => void {
+  const handler = (data: WelcomePresencePayload) => {
+    try {
+      cb(data);
+    } catch (e) {
+      logger.warn("[socket] onWelcomePresence subscriber error", e as any);
+    }
+  };
+  shared.welcomePresenceSubscribers.add(handler);
+  return () => {
+    shared.welcomePresenceSubscribers.delete(handler);
+  };
+}
+
 socket.on("connect", () => {
   shared.hasConnectedEver = true;
   shared.lastPresenceUpdateKey = null;
@@ -163,6 +183,15 @@ socket.on("connect", () => {
 
 socket.on("presence:update", __dispatchPresenceUpdate);
 socket.on("presence_update", __dispatchPresenceUpdate);
+socket.on("presence:welcome", (data: WelcomePresencePayload) => {
+  for (const cb of shared.welcomePresenceSubscribers) {
+    try {
+      cb(data);
+    } catch (e) {
+      logger.warn("[socket] presence:welcome subscriber error", e as any);
+    }
+  }
+});
 
 // При подключении сервер шлёт пропущенные звонки (телефон был выключен / нет сети) — мержим в хранилище и обновляем UI
 socket.on("missed_calls:sync", (payload: { missed?: { from: string; fromNick?: string }[] }) => {

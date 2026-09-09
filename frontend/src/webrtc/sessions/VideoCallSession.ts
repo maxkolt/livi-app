@@ -44,9 +44,13 @@ import { getFastStartVideoCaptureOptions, getPreferredVideoCaptureOptions } from
 import { buildCallEndSocketPayload } from '../../../utils/callEndPayload';
 import { getInstallId } from '../../../utils/installId';
 import { requestExitSystemPiPSoft, dismissSystemPiPAfterCallEnded } from '../../../utils/callKeep';
-import { setAndroidSystemPiPLeaveHintEnabled } from '../../../utils/activeCallNotification';
+import {
+  forceAndroidSystemPiPPeerVideoVisible,
+  setAndroidSystemPiPLeaveHintEnabled,
+} from '../../../utils/activeCallNotification';
 import { getRoomIceTransportDiagnostics } from '../iceTransportDiagnostics';
 import { isDirectCallVideoExpandGuardActive, isInAudioOnlyCallUi, isDirectCallUserRequestedVideoExpand, shouldSuppressDirectCallAudioOnlyUiTransition } from '../../pip/pipPlaceholderOnly';
+import { readRootCurrentRouteName } from '../../../utils/safeRootNavigation';
 import { markDirectCallVideoMediaActive, resetDirectCallVideoUiGlobalsAfterCallEnd } from '../../../utils/activeCallSession';
 import { clearDirectCallAudioRouteCarryoverAfterCallEnd } from '../../../utils/callAudioRoutePersist';
 import { getCallMediaHint } from '../../../utils/directCallMediaHint';
@@ -2275,6 +2279,47 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.flushPiPRemoteVideoState();
   }
 
+  /** Throttle arming logs / resubscribe while waiting for TrackSubscribed. */
+  private lastSystemPiPRemoteVideoArmAt = 0;
+
+  /**
+   * System PiP с audio UI, но peer cam уже on: подтянуть remote video для capture,
+   * не переключая пользователя на video UI.
+   * Важно: не restore'ить deferRemoteVideoSubscription сразу — TrackSubscribed приходит async
+   * и иначе снова unsub'ится. Не flush'ить на каждый вызов (иначе remoteStreamVersion loop).
+   */
+  ensureRemoteVideoForSystemPiPCapture(): void {
+    if (this.ended || this.endCallInProgress || this.cleaned) return;
+    if (this.remoteStreamHasLiveVideoTrack()) return;
+    if (!this.getRemoteCamEnabled()) return;
+    const now = Date.now();
+    if (now - this.lastSystemPiPRemoteVideoArmAt < 400) return;
+    this.lastSystemPiPRemoteVideoArmAt = now;
+
+    const wasDeferred = this.deferRemoteVideoSubscription;
+    const wasConsumerDefer = this.directCallAudioOnlyConsumerDefer;
+    try {
+      // Держим subscription открытой до exit system PiP / restore after PiP.
+      this.deferRemoteVideoSubscription = false;
+      if (wasDeferred || wasConsumerDefer || isInAudioOnlyCallUi()) {
+        this.restoreDeferRemoteVideoAfterPiP = true;
+      }
+      this.resubscribeRemoteVideoIfNeeded('system_pip_capture');
+      const hadLiveAfter = this.remoteStreamHasLiveVideoTrack();
+      logger.info('[VideoCallSession] Remote video armed for system PiP capture', {
+        hadLiveAfter,
+        wasDeferred,
+        wasConsumerDefer,
+      });
+      // Flush только когда track уже в стриме — иначе PiPContext крутит update depth.
+      if (hadLiveAfter) {
+        this.flushPiPRemoteVideoState({ bumpKey: true });
+      }
+    } catch (e) {
+      logger.warn('[VideoCallSession] ensureRemoteVideoForSystemPiPCapture failed', e as any);
+    }
+  }
+
   private remoteStreamHasLiveVideoTrack(): boolean {
     try {
       const t = (this.remoteStream as any)?.getVideoTracks?.()?.[0];
@@ -2302,17 +2347,100 @@ export class VideoCallSession extends SimpleEventEmitter {
     });
   }
 
-  private flushPiPRemoteVideoState(): void {
+  private flushPiPRemoteVideoState(opts?: { bumpKey?: boolean }): void {
     try {
       const pipUpdate = (global as any).__pipUpdateStateRef?.current;
       if (typeof pipUpdate !== 'function') return;
-      this.remoteViewKey = Date.now();
-      pipUpdate({
+      const bumpKey = opts?.bumpKey !== false;
+      if (bumpKey) {
+        this.remoteViewKey = Date.now();
+      }
+      const patch: Record<string, unknown> = {
         remoteStream: this.remoteStream ?? null,
         remoteCamOn: this.getRemoteCamEnabled(),
-        pipRemoteViewKey: this.remoteViewKey,
-      });
+      };
+      if (bumpKey) {
+        patch.pipRemoteViewKey = this.remoteViewKey;
+      }
+      pipUpdate(patch);
     } catch (_) {}
+  }
+
+  /** System PiP (в т.ч. audio/logo enter): показать peer RTC без смены audio UI. */
+  private activateSystemPiPPeerVideoCapture(reason: string): void {
+    try {
+      const g = global as any;
+      const now = Date.now();
+      const inSystemPiP = g.__pipInSystemModeRef?.current === true;
+      // Samsung часто держит AppState=active в system PiP — не требовать background для pending.
+      const pendingEnter = g.__pendingSystemPiPSyncRef?.current === true;
+      const entryUntil = Number(g.__systemPiPEntryInProgressUntilRef?.current || 0);
+      const enteringPiP = !inSystemPiP && entryUntil > now;
+      const inPiPLifecycle = inSystemPiP || pendingEnter || enteringPiP;
+
+      // После expand CaptureHost = peer video fullscreen — только вне PiP lifecycle.
+      if (!inPiPLifecycle) {
+        if (now < Number(g.__returningFromSystemPiPUntilRef?.current || 0)) return;
+        if (now < Number(g.__blockSystemPiPCaptureHostUntilRef?.current || 0)) return;
+        if (g.__pipReturnToCallInFlightRef?.current === true) return;
+        if (g.__preferAudioOnlyUiOnNextVideoCallRef?.current === true) return;
+        if (isInAudioOnlyCallUi()) return;
+        return;
+      }
+
+      forceAndroidSystemPiPPeerVideoVisible();
+      try {
+        const params = g.__currentCallPiPParamsRef?.current;
+        if (params && typeof params === 'object') {
+          g.__currentCallPiPParamsRef.current = {
+            ...params,
+            remoteCamOn: true,
+            remoteStream: this.remoteStream ?? params.remoteStream ?? null,
+          };
+        }
+      } catch (_) {}
+
+      const pipUpdate = g.__pipUpdateStateRef?.current;
+      if (typeof pipUpdate !== 'function') return;
+      const onVideoCallRoute = readRootCurrentRouteName() === 'VideoCall';
+      const audioUi = isInAudioOnlyCallUi();
+      let stayOnVideo = false;
+      try {
+        stayOnVideo = g.__stayOnVideoCallUiRef?.current === true;
+      } catch (_) {}
+      // Audio/logo origin: CaptureHost; полный video UI на VideoCall — compact RemoteVideo.
+      const videoUiOwnsCapture = onVideoCallRoute && stayOnVideo && !audioUi;
+      pipUpdate({
+        remoteCamOn: true,
+        allowVideoRender: true,
+        pendingSystemPiP: true,
+        remoteStream: this.remoteStream ?? null,
+        pipRemoteViewKey: this.remoteViewKey || Date.now(),
+        systemPiPCaptureActive: !videoUiOwnsCapture,
+        systemPiPCaptureRequestId: Date.now(),
+      });
+      logger.info('[VideoCallSession] System PiP peer video capture activated', {
+        reason,
+        videoUiOwnsCapture,
+        inSystemPiP,
+        hasLive: this.remoteStreamHasLiveVideoTrack(),
+      });
+      // OEM иногда игнорирует первый hide backdrop в PiP — повтор (только пока ещё в PiP).
+      const repin = () => {
+        try {
+          if (Date.now() < Number(g.__returningFromSystemPiPUntilRef?.current || 0)) return;
+          if (Date.now() < Number(g.__blockSystemPiPCaptureHostUntilRef?.current || 0)) return;
+          if (g.__pipInSystemModeRef?.current !== true && g.__pendingSystemPiPSyncRef?.current !== true) {
+            return;
+          }
+          forceAndroidSystemPiPPeerVideoVisible();
+        } catch (_) {}
+      };
+      setTimeout(repin, 120);
+      setTimeout(repin, 400);
+    } catch (e) {
+      logger.warn('[VideoCallSession] activateSystemPiPPeerVideoCapture failed', e as any);
+    }
   }
 
   private restoreAudioOnlyDeferAfterPiPIfNeeded(): void {
@@ -2420,6 +2548,11 @@ export class VideoCallSession extends SimpleEventEmitter {
   private deferRemoteVideoPublication(publication: RemoteTrackPublication, context: string): boolean {
     if (publication.kind !== Track.Kind.Video) return false;
     if (!this.deferRemoteVideoSubscription) return false;
+    if (this.shouldKeepRemoteVideoDespiteAudioDefer()) {
+      this.deferRemoteVideoSubscription = false;
+      this.restoreDeferRemoteVideoAfterPiP = true;
+      return false;
+    }
     try {
       if (publication.isSubscribed) publication.setSubscribed(false);
     } catch {}
@@ -2428,6 +2561,20 @@ export class VideoCallSession extends SimpleEventEmitter {
       trackSid: publication.trackSid,
     });
     return true;
+  }
+
+  /**
+   * Audio UI обычно не подписывается на remote video.
+   * Исключение: peer cam on / system PiP — track нужен сразу (иначе leave→PiP с лого и late TrackSubscribed).
+   */
+  private shouldKeepRemoteVideoDespiteAudioDefer(): boolean {
+    if (this.getRemoteCamEnabled()) return true;
+    try {
+      const g = global as any;
+      if (g.__pipInSystemModeRef?.current === true) return true;
+      if (g.__pendingSystemPiPSyncRef?.current === true) return true;
+    } catch (_) {}
+    return false;
   }
 
   /** True only when the peer explicitly reported camera OFF via cam-toggle. */
@@ -3019,15 +3166,21 @@ export class VideoCallSession extends SimpleEventEmitter {
         if (typeof pipUpdate === 'function') pipUpdate({ remoteCamOn: data.enabled });
       } catch (_) {}
       try {
-        const pipVisible = (global as any).__pipVisibleRef?.current === true;
-        if (pipVisible && data.enabled) {
-          if (this.deferRemoteVideoSubscription) {
-            this.ensureRemoteVideoForPiP();
-          } else if (!this.remoteStreamHasLiveVideoTrack()) {
-            this.resubscribeRemoteVideoIfNeeded('cam_toggle_pip');
-            this.flushPiPRemoteVideoState();
-          } else {
-            this.flushPiPRemoteVideoState();
+        const g = global as any;
+        const pipVisible = g.__pipVisibleRef?.current === true;
+        if (data.enabled) {
+          // Preload remote video even on audio UI — иначе к leave в system PiP track ещё unsub'нут.
+          this.ensureRemoteVideoForSystemPiPCapture();
+          this.activateSystemPiPPeerVideoCapture('cam_toggle');
+          if (pipVisible && g.__pipInSystemModeRef?.current !== true) {
+            if (this.deferRemoteVideoSubscription) {
+              this.ensureRemoteVideoForPiP();
+            } else if (!this.remoteStreamHasLiveVideoTrack()) {
+              this.resubscribeRemoteVideoIfNeeded('cam_toggle_pip');
+              this.flushPiPRemoteVideoState();
+            } else {
+              this.flushPiPRemoteVideoState();
+            }
           }
         }
       } catch (_) {}
@@ -6632,10 +6785,15 @@ export class VideoCallSession extends SimpleEventEmitter {
         }
         participant = liveParticipant;
         if (publication.kind === Track.Kind.Video && this.deferRemoteVideoSubscription) {
-          try {
-            if (publication.isSubscribed) publication.setSubscribed(false);
-          } catch {}
-          return;
+          // Peer cam on / system PiP: не unsub — иначе leave→PiP без live track (см. removetrack в логах).
+          if (!this.shouldKeepRemoteVideoDespiteAudioDefer()) {
+            try {
+              if (publication.isSubscribed) publication.setSubscribed(false);
+            } catch {}
+            return;
+          }
+          this.deferRemoteVideoSubscription = false;
+          this.restoreDeferRemoteVideoAfterPiP = true;
         }
         this.handleTrackSubscribed(track, publication, participant);
       })
@@ -6894,10 +7052,14 @@ export class VideoCallSession extends SimpleEventEmitter {
     const isVideoTrack = publication.kind === Track.Kind.Video;
     const isAudioTrack = publication.kind === Track.Kind.Audio;
     if (isVideoTrack && this.deferRemoteVideoSubscription) {
-      try {
-        if (publication.isSubscribed) publication.setSubscribed(false);
-      } catch {}
-      return;
+      if (!this.shouldKeepRemoteVideoDespiteAudioDefer()) {
+        try {
+          if (publication.isSubscribed) publication.setSubscribed(false);
+        } catch {}
+        return;
+      }
+      this.deferRemoteVideoSubscription = false;
+      this.restoreDeferRemoteVideoAfterPiP = true;
     }
     const oldVideoTrackSid = this.remoteVideoTrack?.sid;
     const mediaTrack = track.mediaStreamTrack;
@@ -7087,6 +7249,10 @@ export class VideoCallSession extends SimpleEventEmitter {
         });
       }
     } catch (_) {}
+    // System PiP после audio-enter: peer video track → снять logo, показать RTC через CaptureHost.
+    if (isVideoTrack && this.getRemoteCamEnabled()) {
+      this.activateSystemPiPPeerVideoCapture('track_subscribed');
+    }
 
     // КРИТИЧНО: Устанавливаем loading=false только когда приходит remoteStream с треками
     // Это предотвращает черный экран при принятии звонка

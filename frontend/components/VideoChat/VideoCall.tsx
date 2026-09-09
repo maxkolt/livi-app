@@ -53,6 +53,7 @@ import {
   isDirectCallVideoExpandGuardActive,
   setPipAudioOnlyPlaceholderSticky,
   shouldUsePipPlaceholderOnly,
+  shouldUseSystemPiPPlaceholderOnly,
   isInAudioOnlyCallUi,
   pipInAppBarEnteredFromAudioOnly,
   refreshSystemPiPLeaveContextSnapshot,
@@ -90,6 +91,7 @@ import {
   setAndroidSystemPiPLeaveHintEnabled,
   shouldBlockAndroidLeaveHintDisarm,
   refreshAndroidActiveCallNotification,
+  stopActiveCallNotification,
   syncAndroidLeaveHintForOngoingCall,
   syncAndroidSystemPiPLeaveHintForActiveVideoCall,
   syncAndroidSystemPiPNativeFlags,
@@ -247,6 +249,24 @@ function stripStaleDirectCallPiPNavParamsIfNeeded(
   if (!routePiPFlags) return;
   if (params.audioOnlyPiPReturn === true) return;
   if (isExplicitDirectCallVideoPiPReturnRoute({ ...params, callId: mountKey })) {
+    return;
+  }
+  // Remount race: globals already say video return, но preferVideoCallUi ещё не в route.
+  if (hasAuthenticDirectCallVideoPiPReturnIntent()) {
+    if (params.preferVideoCallUi !== true) {
+      logDirectCallUiGate('layout_restore_video_pip_nav', {
+        callId: mountKey,
+        fromPiP: params.fromPiP,
+        resume: params.resume,
+        preferVideoCallUi: params.preferVideoCallUi,
+      });
+      mergeActiveVideoCallParams({
+        fromPiP: true,
+        resume: true,
+        audioOnlyPiPReturn: false,
+        preferVideoCallUi: true,
+      });
+    }
     return;
   }
   logDirectCallUiGate('layout_strip_stale_pip_nav', {
@@ -1941,12 +1961,17 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
 
     stripStaleDirectCallPiPNavParamsIfNeeded(p, mountKey);
 
-    if (isExplicitDirectCallVideoPiPReturnRoute({ ...p, callId: mountKey })) {
+    // После strip/restore preferVideoCallUi может быть только в globals/merge — не смотрим устаревший `p`.
+    if (
+      isExplicitDirectCallVideoPiPReturnRoute({ ...p, callId: mountKey }) ||
+      hasAuthenticDirectCallVideoPiPReturnIntent()
+    ) {
       logDirectCallUiGate('layout_video_pip_return_skip_fresh', {
         callId: mountKey,
         fromPiP: p.fromPiP,
         resume: p.resume,
         preferVideoCallUi: p.preferVideoCallUi,
+        authenticIntent: hasAuthenticDirectCallVideoPiPReturnIntent(),
       });
       return;
     }
@@ -1966,6 +1991,34 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
         routePiPFlags,
         staleExpandHint: isStaleDirectCallVideoExpandGlobalHint(p),
       });
+      // Сброс sticky system-PiP флагов прошлого звонка — иначе compact/logo даёт чёрный экран на аудио.
+      try {
+        const g = global as any;
+        g.__systemPiPEntryInProgressUntilRef = g.__systemPiPEntryInProgressUntilRef || { current: 0 };
+        g.__systemPiPEntryInProgressUntilRef.current = 0;
+        g.__pendingSystemPiPSyncRef = g.__pendingSystemPiPSyncRef || { current: false };
+        g.__pendingSystemPiPSyncRef.current = false;
+        g.__leavingVideoCallByHomeRef = g.__leavingVideoCallByHomeRef || { current: false };
+        g.__leavingVideoCallByHomeRef.current = false;
+        g.__leavingVideoCallByBackRef = g.__leavingVideoCallByBackRef || { current: false };
+        g.__leavingVideoCallByBackRef.current = false;
+        g.__pipSuspendedForSystemPiPRef = g.__pipSuspendedForSystemPiPRef || { current: false };
+        g.__pipSuspendedForSystemPiPRef.current = false;
+        const upd = g.__pipUpdateStateRef?.current;
+        if (typeof upd === 'function') {
+          upd({
+            pendingSystemPiP: false,
+            systemPiPCaptureActive: false,
+            systemPiPCaptureRequestId: 0,
+            inSystemPiPMode: false,
+            decorSizeForPiP: null,
+            allowVideoRender: true,
+          });
+        }
+        try {
+          NativeModules.LiviAppModule?.setSystemPiPCapturePlaceholderOnly?.(false);
+        } catch {}
+      } catch {}
       try {
         beginCallPerfTrace({
           callId: mountKey,
@@ -3130,6 +3183,15 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
           remoteCamStateKnownRef.current = true;
           if (inAudioOnlyUiRef.current) {
             syncPeerVideoInviteHint();
+            // В system PiP с audio UI всё равно обновляем remoteCam для апгрейда logo→video.
+            try {
+              if ((global as any).__pipInSystemModeRef?.current === true) {
+                setRemoteCamOn(enabled);
+                if (enabled) {
+                  sessionRef.current?.ensureRemoteVideoForSystemPiPCapture?.();
+                }
+              }
+            } catch {}
             return;
           }
           setRemoteCamOn(enabled);
@@ -3734,6 +3796,14 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
         remoteCamStateKnownRef.current = true;
         if (inAudioOnlyUiRef.current) {
           syncPeerVideoInviteHint();
+          try {
+            if ((global as any).__pipInSystemModeRef?.current === true) {
+              setRemoteCamOn(enabled);
+              if (enabled) {
+                sessionRef.current?.ensureRemoteVideoForSystemPiPCapture?.();
+              }
+            }
+          } catch {}
           return;
         }
         setRemoteCamOn(enabled);
@@ -3825,6 +3895,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       if (Platform.OS === 'android') {
         try { NativeModules.LiviAppModule?.setEndingCallInProgress?.(true); } catch (_) {}
         try { NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false); } catch (_) {}
+        try { stopActiveCallNotification(); } catch (_) {}
       }
       logger.info('[VideoCall] [end] refs установлены, закрываем экран');
       logMicTraceRef.current('handleCallEnded — завершение звонка (далее deferred cleanup → session.cleanup / stopLocalTracks)', {
@@ -4383,6 +4454,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       if (Platform.OS === 'android') {
         try { NativeModules.LiviAppModule?.setEndingCallInProgress?.(true); } catch (_) {}
         try { NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false); } catch (_) {}
+        try { stopActiveCallNotification(); } catch (_) {}
       }
       markGlobalCleanupDone('onAbortCall-no-session', callId ?? currentCallIdRef.current ?? null, roomId ?? null);
       try {
@@ -4468,6 +4540,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     if (Platform.OS === 'android') {
       try { NativeModules.LiviAppModule?.setEndingCallInProgress?.(true); } catch (_) {}
       try { NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false); } catch (_) {}
+      try { stopActiveCallNotification(); } catch (_) {}
     }
 
     const idToReport = callId ?? currentCallIdRef.current ?? (session as any)?.callId ?? null;
@@ -5209,6 +5282,14 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       return;
     }
     stayOnVideoCallUiRef.current = false;
+    // Снять leave/PiP sticky — иначе на audio UI мелькает compact/black.
+    try {
+      const g = global as any;
+      if (g.__leavingVideoCallByHomeRef) g.__leavingVideoCallByHomeRef.current = false;
+      if (g.__leavingVideoCallByBackRef) g.__leavingVideoCallByBackRef.current = false;
+      if (g.__pendingSystemPiPSyncRef) g.__pendingSystemPiPSyncRef.current = false;
+      if (g.__systemPiPEntryInProgressUntilRef) g.__systemPiPEntryInProgressUntilRef.current = 0;
+    } catch {}
     const fromPiP = !!opts?.fromPiP;
     const pipReturnRoute = fromPiP
       ? (() => {
@@ -7046,50 +7127,87 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
   );
   
   
-  // Как в WhatsApp/Telegram: в системном PiP рисуем только видео собеседника; фон прозрачный, чтобы в окне PiP не было чёрных областей.
-  // При возврате из PiP (fromPiP) показываем полноэкранный вид; при повторном входе в PiP (pendingSystemPiP) — компакт, иначе захватится layout с бейджем/кнопкой.
+  // System PiP (video UI): только RemoteVideo peer. Без JS AwayPlaceholder на переходах —
+  // logo в PiP рисует native backdrop (placeholderOnly). Audio UI не перехватываем.
+  const leavingForSystemPiP = (() => {
+    try {
+      const g = global as any;
+      if (g.__leavingVideoCallByHomeRef?.current === true) return true;
+      if (g.__leavingVideoCallByBackRef?.current === true) return true;
+      if (g.__pendingSystemPiPSyncRef?.current === true) return true;
+      // Не использовать entryUntil alone — sticky окно давало чёрный+LiVi на native→audio.
+      return false;
+    } catch {
+      return false;
+    }
+  })();
   const homeSystemPiPPending =
     pip.pendingSystemPiP ||
     pip.systemPiPCaptureActive ||
-    (global as any).__pendingSystemPiPSyncRef?.current === true;
+    leavingForSystemPiP;
+  const pipSuspendedForSystem =
+    (global as any).__pipSuspendedForSystemPiPRef?.current === true;
   const systemPiPCompact =
     Platform.OS === 'android' &&
-    !pip.visible &&
-    !pip.systemPiPCaptureActive &&
-    !route?.params?.fromPiP &&
-    (homeSystemPiPPending || pip.inSystemPiPMode);
+    !showAudioPresentation &&
+    (!pip.visible || pipSuspendedForSystem || pip.inSystemPiPMode || leavingForSystemPiP) &&
+    (pip.pendingSystemPiP || pip.inSystemPiPMode || homeSystemPiPPending || leavingForSystemPiP);
   if (systemPiPCompact) {
+    let sessionRemoteCamOn = remoteCamOn;
+    let sessionRemoteStream = currentRemoteStream;
+    try {
+      const s = sessionRef.current as any;
+      if (typeof s?.getRemoteCamEnabled === 'function' && s.getRemoteCamEnabled()) {
+        sessionRemoteCamOn = true;
+      }
+      if (typeof s?.getRemoteStream === 'function') {
+        const fromSession = s.getRemoteStream();
+        if (fromSession) sessionRemoteStream = fromSession;
+      }
+    } catch {}
+    const systemPiPLogoOnly = shouldUseSystemPiPPlaceholderOnly({
+      remoteCamOn: sessionRemoteCamOn,
+      remoteStream: sessionRemoteStream,
+      localCamOn: camOn,
+      localStream: localStream ?? null,
+    });
     return (
       <SafeAreaView
-        style={styles.systemPiPContainer}
+        style={[
+          styles.systemPiPContainer,
+          systemPiPLogoOnly ? styles.systemPiPAudioMatch : null,
+        ]}
         edges={[]}
         onLayout={() => {
           try {
+            NativeModules.LiviAppModule?.setSystemPiPCapturePlaceholderOnly?.(systemPiPLogoOnly);
             NativeModules.LiviAppModule?.setSystemPiPCaptureFrameReady?.(true);
           } catch {}
         }}
       >
         {renderCallHiddenAudioSink({ forceSystemPiP: true })}
-        <View style={styles.systemPiPVideoFill}>
-          <RemoteVideo
-            remoteStream={currentRemoteStream}
-            remoteCamOn={remoteCamOn}
-            remoteCamSide={remoteCamSide}
-            remoteMuted={remoteMuted}
-            isInactiveState={isInactiveState}
-            wasFriendCallEnded={wasFriendCallEnded}
-            started={started}
-            loading={loading}
-            remoteViewKey={remoteViewKey}
-            showFriendBadge={false}
-            lang={lang}
-            session={sessionRef.current}
-            remoteStreamReceivedAt={remoteStreamReceivedAtRef.current}
-            partnerInPiP={false}
-            partnerExternalHold={partnerExternalHoldUi}
-            forceTextureView={true}
-            objectFit="contain"
-          />
+        <View style={styles.systemPiPVideoFill} pointerEvents="none" collapsable={false}>
+          {systemPiPLogoOnly ? null : (
+            <RemoteVideo
+              remoteStream={sessionRemoteStream}
+              remoteCamOn={sessionRemoteCamOn}
+              remoteCamSide={remoteCamSide}
+              remoteMuted={remoteMuted}
+              isInactiveState={isInactiveState}
+              wasFriendCallEnded={wasFriendCallEnded}
+              started={started}
+              loading={loading}
+              remoteViewKey={remoteViewKey}
+              showFriendBadge={false}
+              lang={lang}
+              session={sessionRef.current}
+              remoteStreamReceivedAt={remoteStreamReceivedAtRef.current}
+              partnerInPiP={false}
+              partnerExternalHold={partnerExternalHoldUi}
+              forceTextureView={true}
+              objectFit="cover"
+            />
+          )}
         </View>
       </SafeAreaView>
     );
@@ -7462,11 +7580,14 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#000',
   },
+  systemPiPAudioMatch: {
+    backgroundColor: '#1B1C22',
+  },
   systemPiPVideoFill: {
     flex: 1,
     width: '100%',
     height: '100%',
-    backgroundColor: '#000',
+    backgroundColor: 'transparent',
   },
   audioCallContainer: {
     backgroundColor: '#1B1C22',

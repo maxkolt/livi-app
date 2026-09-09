@@ -12,7 +12,7 @@ import { logger } from '../../utils/logger';
 import { readRootCurrentRouteName } from '../../utils/safeRootNavigation';
 import { trackReleaseEvent } from '../../utils/telemetry';
 import { requestExitSystemPiPSoft, dismissSystemPiPAfterCallEnded } from '../../utils/callKeep';
-import { startActiveCallNotification, reenableAndroidSystemPiPLeaveHintAfterReturn, refreshAndroidActiveCallNotification, syncAndroidSystemPiPNativeFlags, isAndroidActiveCallEligibleForLeaveHint, shouldUseSystemPiPControlsCaptureOnly } from '../../utils/activeCallNotification';
+import { startActiveCallNotification, reenableAndroidSystemPiPLeaveHintAfterReturn, refreshAndroidActiveCallNotification, syncAndroidSystemPiPNativeFlags, isAndroidActiveCallEligibleForLeaveHint, shouldUseSystemPiPControlsCaptureOnly, forceAndroidSystemPiPPeerVideoVisible } from '../../utils/activeCallNotification';
 import {
   shouldUsePipPlaceholderOnly,
   shouldUseSystemPiPPlaceholderOnly,
@@ -22,7 +22,9 @@ import {
   shouldAllowRtcVideoRenderInInAppPiP,
   peekSystemPiPLeaveContextForReturn,
   refreshSystemPiPLeaveContextSnapshot,
+  commitSystemPiPLeaveContextSnapshot,
   isSystemPiPLeaveAudioOrigin,
+  isSystemPiPSessionAudioOrigin,
   markSystemPiPSessionAudioOrigin,
   clearSystemPiPSessionAudioOrigin,
   mediaStreamHasLiveVideo,
@@ -70,6 +72,7 @@ import {
   noteHomePiPModeChanged,
   setActiveHomePiPTraceId,
 } from '../../utils/systemPiPHomeTrace';
+import { mergeActiveVideoCallParams } from '../../utils/appNavigationGuard';
 
 type MediaStreamLike = any; // из @livekit/react-native-webrtc
 
@@ -301,6 +304,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
   /** Инкремент при установке стрима в showPiP — чтобы value контекста обновился и PiPOverlay получил remoteStream. */
   const [remoteStreamVersion, setRemoteStreamVersion] = useState(0);
   const [pipRemoteViewKey, setPipRemoteViewKey] = useState(0);
+  const pipRemoteViewKeyRef = useRef(0);
   /** Размеры decorView для системного PiP layout (синхрон с buildSystemPiPSourceRect на нативе). */
   const [decorSizeForPiP, setDecorSizeForPiP] = useState<{ width: number; height: number } | null>(null);
 
@@ -462,6 +466,58 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         callId: stableIds.callId,
         roomId: stableIds.roomId,
       });
+      // SYNC до rAF: TrackSubscribed в том же кадре иначе remount CaptureHost (peer video fullscreen поверх audio).
+      if (!inPiP) {
+        try {
+          const g = global as any;
+          const now = Date.now();
+          g.__blockSystemPiPCaptureHostUntilRef =
+            g.__blockSystemPiPCaptureHostUntilRef || { current: 0 };
+          g.__blockSystemPiPCaptureHostUntilRef.current = Math.max(
+            Number(g.__blockSystemPiPCaptureHostUntilRef.current || 0),
+            now + 10000,
+          );
+          g.__returningFromSystemPiPUntilRef = g.__returningFromSystemPiPUntilRef || { current: 0 };
+          g.__returningFromSystemPiPUntilRef.current = Math.max(
+            Number(g.__returningFromSystemPiPUntilRef.current || 0),
+            now + 12000,
+          );
+          g.__pendingSystemPiPSyncRef = g.__pendingSystemPiPSyncRef || { current: false };
+          g.__pendingSystemPiPSyncRef.current = false;
+          g.__pipInSystemModeRef = g.__pipInSystemModeRef || { current: false };
+          g.__pipInSystemModeRef.current = false;
+          g.__pipUpdateStateRef?.current?.({
+            systemPiPCaptureActive: false,
+            systemPiPCaptureRequestId: 0,
+            pendingSystemPiP: false,
+            inSystemPiPMode: false,
+          });
+          const leaveCtx = peekSystemPiPLeaveContextForReturn();
+          if (
+            leaveCtx.leaveUi === 'audio' ||
+            leaveCtx.preferAudioOnly ||
+            leaveCtx.audioOrigin ||
+            isSystemPiPSessionAudioOrigin()
+          ) {
+            prepareDirectCallAudioReturnFromPiP();
+          }
+        } catch (_) {}
+      } else {
+        // SYNC enter: cam-toggle / TrackSubscribed до rAF должны видеть in-PiP (mid-PiP peer video).
+        // Снимаем returning/block с прошлого expand — иначе shouldIgnoreLateEnter глушит реальный enter.
+        try {
+          const g = global as any;
+          g.__pipInSystemModeRef = g.__pipInSystemModeRef || { current: false };
+          g.__pipInSystemModeRef.current = true;
+          g.__blockSystemPiPCaptureHostUntilRef =
+            g.__blockSystemPiPCaptureHostUntilRef || { current: 0 };
+          g.__blockSystemPiPCaptureHostUntilRef.current = 0;
+          g.__returningFromSystemPiPUntilRef = g.__returningFromSystemPiPUntilRef || { current: 0 };
+          g.__returningFromSystemPiPUntilRef.current = 0;
+          g.__pendingSystemPiPSyncRef = g.__pendingSystemPiPSyncRef || { current: false };
+          g.__pendingSystemPiPSyncRef.current = true;
+        } catch (_) {}
+      }
       const run = () => {
         const g = global as any;
         const now = Date.now();
@@ -471,16 +527,13 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
           returnState && Number(returnState.token || 0) === Number(g.__systemPiPReturnTokenRef?.current || 0)
             ? Number(returnState.settledUntil || 0)
             : 0;
-        // Не используем __disableSystemPiPUntilRef здесь: после Back с VideoCall usePiP ставит +2s,
-        // пользователь уходит на Home и сразу жмёт Home → реальный system PiP, а мы обнуляли ref и
-        // call:ended / PiPContext не закрывали окно (PiP «висит» без связи с JS).
+        // Только in-flight return / justPressed — НЕ длинный returningUntil (глушил mid-PiP peer video).
         const shouldIgnoreLateEnter =
           inPiP &&
           (
             returnToCallInFlightRef.current ||
-            now < returningUntil ||
-            now < settledUntil ||
-            g.__pipReturnToCallJustPressedRef?.current === true
+            g.__pipReturnToCallJustPressedRef?.current === true ||
+            (now < settledUntil && now < returningUntil)
           );
         if (shouldIgnoreLateEnter) {
           setInSystemPiPMode(false);
@@ -490,8 +543,8 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
           setDecorSizeForPiP(null);
           try {
             g.__pipInSystemModeRef = g.__pipInSystemModeRef || { current: false };
-            // Ref должен совпадать с нативом (App/call:ended/requestExitSystemPiPSoft), иначе PiP остаётся в системе.
-            g.__pipInSystemModeRef.current = inPiP;
+            // Не поднимаем ref=true при ignored late enter — иначе activate CaptureHost после expand.
+            g.__pipInSystemModeRef.current = false;
           } catch (_) {}
           return;
         }
@@ -501,8 +554,23 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
             g.__systemPiPLiViBackdropActiveRef = g.__systemPiPLiViBackdropActiveRef || { current: false };
             g.__systemPiPLiViBackdropActiveRef.current = false;
           } catch (_) {}
+          // Повторно (после sync) — на случай если rAF пришёл позже TrackSubscribed.
           try {
-            clearSystemPiPSessionAudioOrigin();
+            g.__blockSystemPiPCaptureHostUntilRef =
+              g.__blockSystemPiPCaptureHostUntilRef || { current: 0 };
+            g.__blockSystemPiPCaptureHostUntilRef.current = Math.max(
+              Number(g.__blockSystemPiPCaptureHostUntilRef.current || 0),
+              Date.now() + 10000,
+            );
+            g.__returningFromSystemPiPUntilRef = g.__returningFromSystemPiPUntilRef || { current: 0 };
+            g.__returningFromSystemPiPUntilRef.current = Math.max(
+              Number(g.__returningFromSystemPiPUntilRef.current || 0),
+              Date.now() + 12000,
+            );
+            g.__pendingSystemPiPSyncRef = g.__pendingSystemPiPSyncRef || { current: false };
+            g.__pendingSystemPiPSyncRef.current = false;
+            g.__pipInSystemModeRef = g.__pipInSystemModeRef || { current: false };
+            g.__pipInSystemModeRef.current = false;
           } catch (_) {}
           setPendingSystemPiP(false);
           setDecorSizeForPiP(null);
@@ -515,23 +583,55 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
           } else {
             setSuppressOverlayForReturn(true);
           }
+          try {
+            const leaveCtx = peekSystemPiPLeaveContextForReturn();
+            if (
+              leaveCtx.leaveUi === 'audio' ||
+              leaveCtx.preferAudioOnly ||
+              leaveCtx.audioOrigin ||
+              isSystemPiPSessionAudioOrigin()
+            ) {
+              prepareDirectCallAudioReturnFromPiP();
+            }
+          } catch (_) {}
         }
         try {
           g.__pipInSystemModeRef = g.__pipInSystemModeRef || { current: false };
           g.__pipInSystemModeRef.current = inPiP;
         } catch (_) {}
         if (inPiP) {
+          // Новый вход в PiP — снять block с прошлого expand, иначе mid-PiP peer video не поднимется.
+          try {
+            g.__blockSystemPiPCaptureHostUntilRef =
+              g.__blockSystemPiPCaptureHostUntilRef || { current: 0 };
+            g.__blockSystemPiPCaptureHostUntilRef.current = 0;
+          } catch (_) {}
           armCallAudioPreservePriority(6000);
           setPendingSystemPiP(false);
-          // Video-origin peer capture (Home CaptureHost) must stay mounted while in system PiP.
-          const keepVideoCapture =
-            !isSystemPiPLeaveAudioOrigin() && !shouldUseSystemPiPPlaceholderOnly();
-          if (!keepVideoCapture) {
+          // Audio/logo origin: CaptureHost всегда mounted (тихий fill под native logo) —
+          // иначе mid-PiP peer cam не успевает remount RTC до expand.
+          // Полный video UI на VideoCall → compact RemoteVideo, без dual RTC.
+          const onVideoCallRoute = readRootCurrentRouteName() === 'VideoCall';
+          const audioUi = isInAudioOnlyCallUi();
+          const audioOrigin = isSystemPiPLeaveAudioOrigin() || isSystemPiPSessionAudioOrigin();
+          const peerLiveNow = !shouldUseSystemPiPPlaceholderOnly();
+          const videoUiOwnsCapture =
+            onVideoCallRoute && !audioUi && !audioOrigin && peerLiveNow;
+          if (videoUiOwnsCapture) {
             setSystemPiPCaptureActive(false);
             setSystemPiPCaptureRequestId(0);
-          } else if (readRootCurrentRouteName() !== 'VideoCall') {
-            setSystemPiPCaptureActive(true);
             setAllowVideoRender(true);
+            try {
+              forceAndroidSystemPiPPeerVideoVisible();
+            } catch (_) {}
+          } else {
+            setSystemPiPCaptureActive(true);
+            setAllowVideoRender(peerLiveNow);
+            if (peerLiveNow) {
+              try {
+                forceAndroidSystemPiPPeerVideoVisible();
+              } catch (_) {}
+            }
           }
           try {
             g.__pipVisibleRef = g.__pipVisibleRef || { current: false };
@@ -1098,26 +1198,82 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     };
   }, []);
 
-  /** Video-origin system PiP: peer включил камеру уже в PiP → показать RTC (audio-origin остаётся лого). */
+  /** System PiP: peer включил камеру уже в PiP → RTC (в т.ч. после enter с audio UI). */
   useEffect(() => {
     if (Platform.OS !== 'android') return;
     if (!inSystemPiPMode && !pendingSystemPiP && !systemPiPCaptureActive) return;
-    if (isSystemPiPLeaveAudioOrigin()) return;
-    const placeholder = shouldUseSystemPiPPlaceholderOnly({
-      remoteCamOn,
-      remoteStream: remoteStreamRef.current,
-    });
     try {
-      NativeModules.LiviAppModule?.setSystemPiPCapturePlaceholderOnly?.(placeholder);
-      if (!placeholder) {
-        NativeModules.LiviAppModule?.setSystemPiPCaptureFrameReady?.(true);
+      const g = global as any;
+      const now = Date.now();
+      const inSys =
+        inSystemPiPMode === true ||
+        g.__pipInSystemModeRef?.current === true ||
+        pendingSystemPiP === true;
+      // Block/returning только вне PiP — иначе mid-PiP peer video не поднимется.
+      if (!inSys) {
+        if (now < Number(g.__returningFromSystemPiPUntilRef?.current || 0)) return;
+        if (now < Number(g.__blockSystemPiPCaptureHostUntilRef?.current || 0)) return;
+        return;
       }
     } catch (_) {}
-    if (!placeholder) {
-      setAllowVideoRender(true);
-      if (readRootCurrentRouteName() !== 'VideoCall') {
-        setSystemPiPCaptureActive(true);
+    let sessionRemoteStream: unknown = null;
+    let sessionRemoteCam = false;
+    let sessionEnded = false;
+    try {
+      const session = (global as any).__webrtcSessionRef?.current;
+      if (!session) {
+        sessionEnded = true;
+      } else {
+        sessionRemoteStream =
+          typeof session?.getRemoteStream === 'function' ? session.getRemoteStream() : null;
+        if (typeof session?.getRemoteCamEnabled === 'function') {
+          sessionRemoteCam = !!session.getRemoteCamEnabled();
+        }
       }
+    } catch (_) {}
+    const hasLive =
+      mediaStreamHasLiveVideo(sessionRemoteStream) ||
+      mediaStreamHasLiveVideo(remoteStreamRef.current);
+    const peerLive = hasLive || remoteCamOn === true || sessionRemoteCam;
+    try {
+      // Снимаем native logo когда peer cam on / live — CaptureHost покажет RTC или тихий fill.
+      if (peerLive) {
+        forceAndroidSystemPiPPeerVideoVisible();
+      } else {
+        NativeModules.LiviAppModule?.setSystemPiPCapturePlaceholderOnly?.(true);
+      }
+    } catch (_) {}
+    if (!peerLive) {
+      setAllowVideoRender((prev) => (prev === false ? prev : false));
+      return;
+    }
+    setAllowVideoRender((prev) => (prev === true ? prev : true));
+    setPendingSystemPiP((prev) => (prev ? prev : true));
+    if (!sessionEnded && !hasLive && (remoteCamOn === true || sessionRemoteCam)) {
+      try {
+        const session = (global as any).__webrtcSessionRef?.current;
+        if (session && typeof session.ensureRemoteVideoForSystemPiPCapture === 'function') {
+          session.ensureRemoteVideoForSystemPiPCapture();
+        }
+      } catch (_) {}
+    }
+    // Audio/logo enter → peer video: CaptureHost обязателен (audio UI не рисует RemoteVideo).
+    // Полный video UI на VideoCall → compact RemoteVideo, без dual RTC.
+    const onVideoCallRoute = readRootCurrentRouteName() === 'VideoCall';
+    const audioUi = isInAudioOnlyCallUi();
+    let stayOnVideo = false;
+    try {
+      stayOnVideo = (global as any).__stayOnVideoCallUiRef?.current === true;
+    } catch (_) {}
+    const audioOrigin = isSystemPiPLeaveAudioOrigin() || isSystemPiPSessionAudioOrigin();
+    const videoUiOwnsCapture = onVideoCallRoute && stayOnVideo && !audioUi && !audioOrigin;
+    if (!videoUiOwnsCapture) {
+      setSystemPiPCaptureActive((prev) => (prev ? prev : true));
+      if (hasLive) {
+        setSystemPiPCaptureRequestId((id) => id + 1);
+      }
+    } else {
+      setSystemPiPCaptureActive((prev) => (prev ? false : prev));
     }
   }, [
     inSystemPiPMode,
@@ -1636,18 +1792,33 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         : typeof remoteCamFromSession === 'boolean'
           ? remoteCamFromSession
           : !!params?.remoteCamOn;
-      try {
-        markSystemPiPSessionAudioOrigin(isSystemPiPLeaveAudioOrigin());
-      } catch (_) {}
+      // Sticky audio-origin только если реально уходим в logo-PiP.
+      // Иначе peer cam on с audio UI помечался audioOrigin → вечный placeholder.
       const placeholderOnlyHome = shouldUseSystemPiPPlaceholderOnly({
         localCamOn: localCamForPlaceholder,
         remoteCamOn: remoteCamForPlaceholder,
         remoteStream: remoteStreamForPlaceholder,
         localStream: params?.localStream ?? localFromSessionForPlaceholder ?? null,
       });
+      try {
+        // Sticky по реальному leave UI, не по logo/placeholder (peer video в PiP не меняет return target).
+        markSystemPiPSessionAudioOrigin(isSystemPiPLeaveAudioOrigin() || isInAudioOnlyCallUi());
+      } catch (_) {}
+      try {
+        commitSystemPiPLeaveContextSnapshot({ placeholderOnly: placeholderOnlyHome });
+      } catch (_) {}
+      // Audio UI часто defer'ит remote video — для video system PiP подтянем track без смены UI.
+      if (!placeholderOnlyHome && !sessionHasLiveRemoteVideo && remoteCamForPlaceholder) {
+        try {
+          if (session && typeof (session as any).ensureRemoteVideoForSystemPiPCapture === 'function') {
+            (session as any).ensureRemoteVideoForSystemPiPCapture();
+          }
+        } catch (_) {}
+      }
       logger.info('[PiPContext] AboutToEnterSystemPiP placeholder decision', {
         placeholderOnlyHome,
-        audioOrigin: isSystemPiPLeaveAudioOrigin(),
+        audioOrigin: isSystemPiPSessionAudioOrigin(),
+        leavePreferAudio: peekSystemPiPLeaveContextForReturn().preferAudioOnly,
         localCamOn: localCamForPlaceholder,
         remoteCamOn: remoteCamForPlaceholder,
         paramsRemoteCamOn: params?.remoteCamOn,
@@ -1672,7 +1843,13 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       try {
         NativeModules.LiviAppModule?.setSystemPiPCapturePlaceholderOnly?.(placeholderOnlyHome);
         if (!placeholderOnlyHome) {
-          NativeModules.LiviAppModule?.setSystemPiPCaptureFrameReady?.(false);
+          // Не сбрасывать pre-armed frameReady при live video — иначе leave-hint
+          // снова ждёт и промахивает OEM-окно enter.
+          if (sessionHasLiveRemoteVideo || remoteCamForPlaceholder) {
+            NativeModules.LiviAppModule?.setSystemPiPCaptureFrameReady?.(true);
+          } else {
+            NativeModules.LiviAppModule?.setSystemPiPCaptureFrameReady?.(false);
+          }
         } else {
           NativeModules.LiviAppModule?.setSystemPiPCaptureFrameReady?.(true);
         }
@@ -1706,21 +1883,39 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         }
       }
 
-      const onVideoCallRoute = readRootCurrentRouteName() === 'VideoCall';
       if (placeholderOnlyHome) {
-        // Logo-only: нативный backdrop в MainActivity, без JS RTC overlay.
-        setPendingSystemPiP(false);
-        setSystemPiPCaptureActive(false);
-        setSystemPiPCaptureRequestId(0);
+        // Logo-only: native backdrop сверху; CaptureHost уже mounted (тихий fill) —
+        // mid-PiP peer cam только снимает backdrop + bind RTC, без remount.
+        try {
+          if (g.__pipVisibleRef?.current === true) {
+            suspendInAppOverlayForSystemPiPEnter();
+          }
+        } catch (_) {}
+        try {
+          g.__pipInSystemModeRef = g.__pipInSystemModeRef || { current: false };
+          // Optimistic: cam-toggle / TrackSubscribed до ModeChanged всё равно mid-PiP path.
+          g.__pipInSystemModeRef.current = true;
+          g.__blockSystemPiPCaptureHostUntilRef =
+            g.__blockSystemPiPCaptureHostUntilRef || { current: 0 };
+          g.__blockSystemPiPCaptureHostUntilRef.current = 0;
+          g.__pendingSystemPiPSyncRef = g.__pendingSystemPiPSyncRef || { current: false };
+          g.__pendingSystemPiPSyncRef.current = true;
+        } catch (_) {}
+        setPendingSystemPiP(true);
+        setSystemPiPCaptureActive(true);
+        setSystemPiPCaptureRequestId((id) => id + 1);
         setAllowVideoRender(false);
         try {
           NativeModules.LiviAppModule?.setSystemPiPCaptureFrameReady?.(true);
         } catch (_) {}
       } else {
-        // Peer video: VideoCall compact на маршруте VideoCall, иначе App-level CaptureHost.
+        // Peer cam on → video. На VideoCall — compact RemoteVideo (TextureView).
+        // CaptureHost только вне VideoCall / на audio shell, иначе dual RTCView → чёрный кадр.
+        const onVideoCallRoute = readRootCurrentRouteName() === 'VideoCall';
+        const audioUi = isInAudioOnlyCallUi();
         setPendingSystemPiP(true);
         setAllowVideoRender(true);
-        if (onVideoCallRoute) {
+        if (onVideoCallRoute && !audioUi) {
           setSystemPiPCaptureActive(false);
           setSystemPiPCaptureRequestId(0);
         } else {
@@ -2126,6 +2321,24 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       return;
     }
 
+    // Уже на VideoCall → video UI: merge params без reset (меньше remount).
+    if (!preferAudioOnlyUi && !restoreInAppPiP && currentRouteName === 'VideoCall') {
+      hidePiP();
+      try {
+        mergeActiveVideoCallParams({
+          resume: true,
+          fromPiP: true,
+          audioOnlyPiPReturn: false,
+          preferVideoCallUi: true,
+          systemPiPReturnToken: Number(g.__systemPiPReturnTokenRef?.current || Date.now()),
+        });
+      } catch (e) {
+        logger.warn('[PiPContext] returnToCall video fast-path merge failed', e);
+      }
+      finishReturnToCallAfterNav();
+      return;
+    }
+
     if (restoreInAppPiP) {
       const leaveSnap = peekSystemPiPLeaveContextForReturn();
       const targetRoute = leaveSnap.routeName || 'Home';
@@ -2370,29 +2583,55 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     if (patch.isRemoteMuted !== undefined) setIsRemoteMuted(patch.isRemoteMuted);
     if (patch.localCamOn !== undefined) setLocalCamOn(patch.localCamOn);
     if (patch.remoteCamOn !== undefined) {
-      setRemoteCamOn(patch.remoteCamOn);
-      if (patch.remoteCamOn === true) {
-        setRemoteStreamVersion((v) => v + 1);
-      }
+      setRemoteCamOn((prev) => (prev === patch.remoteCamOn ? prev : !!patch.remoteCamOn));
+      // Не бампим remoteStreamVersion только из-за cam flag — это крутило ensure→flush loop.
     }
     if (patch.pipPos) setPipPos(patch.pipPos);
-    if (patch.allowVideoRender !== undefined) setAllowVideoRender(!!patch.allowVideoRender);
-    if (patch.inSystemPiPMode !== undefined) setInSystemPiPMode(!!patch.inSystemPiPMode);
-    if (patch.pendingSystemPiP !== undefined) setPendingSystemPiP(!!patch.pendingSystemPiP);
-    if (patch.systemPiPCaptureActive !== undefined) setSystemPiPCaptureActive(!!patch.systemPiPCaptureActive);
+    if (patch.allowVideoRender !== undefined) {
+      setAllowVideoRender((prev) => (prev === !!patch.allowVideoRender ? prev : !!patch.allowVideoRender));
+    }
+    if (patch.inSystemPiPMode !== undefined) {
+      setInSystemPiPMode((prev) => (prev === !!patch.inSystemPiPMode ? prev : !!patch.inSystemPiPMode));
+    }
+    if (patch.pendingSystemPiP !== undefined) {
+      setPendingSystemPiP((prev) => (prev === !!patch.pendingSystemPiP ? prev : !!patch.pendingSystemPiP));
+    }
+    if (patch.systemPiPCaptureActive !== undefined) {
+      setSystemPiPCaptureActive((prev) =>
+        prev === !!patch.systemPiPCaptureActive ? prev : !!patch.systemPiPCaptureActive,
+      );
+    }
     if (patch.systemPiPCaptureRequestId !== undefined) setSystemPiPCaptureRequestId(Number(patch.systemPiPCaptureRequestId || 0));
     if (patch.decorSizeForPiP !== undefined) setDecorSizeForPiP(patch.decorSizeForPiP ?? null);
     if (patch.lastNavParams !== undefined) setLastNavParams(patch.lastNavParams);
     // потоки через ref:
     if (patch.localStream !== undefined) localStreamRef.current = patch.localStream;
     if (patch.remoteStream !== undefined) {
+      const prev = remoteStreamRef.current as any;
+      const next = patch.remoteStream as any;
+      const prevId = prev?.id;
+      const nextId = next?.id;
+      const liveChanged =
+        mediaStreamHasLiveVideo(prev) !== mediaStreamHasLiveVideo(next);
+      let videoCountChanged = false;
+      try {
+        const prevN = prev?.getVideoTracks?.()?.length ?? 0;
+        const nextN = next?.getVideoTracks?.()?.length ?? 0;
+        videoCountChanged = prevN !== nextN;
+      } catch (_) {}
+      const identityChanged = prevId !== nextId || (!!next && !prev) || (!!prev && !next);
       remoteStreamRef.current = patch.remoteStream;
-      setRemoteStreamVersion((v) => v + 1);
+      if (identityChanged || liveChanged || videoCountChanged) {
+        setRemoteStreamVersion((v) => v + 1);
+      }
     }
     if (patch.pipRemoteViewKey !== undefined) {
       const k = Number(patch.pipRemoteViewKey) || 0;
-      setPipRemoteViewKey(k);
-      setRemoteStreamVersion((v) => v + 1);
+      if (pipRemoteViewKeyRef.current !== k) {
+        pipRemoteViewKeyRef.current = k;
+        setPipRemoteViewKey(k);
+        setRemoteStreamVersion((v) => v + 1);
+      }
     }
     if (patch.suppressOverlayForReturn !== undefined) {
       setSuppressOverlayForReturn(!!patch.suppressOverlayForReturn);

@@ -102,11 +102,13 @@ import {
   syncAndroidLeaveHintForOngoingCall,
   primeAndroidCallContextForLeaveHint,
   buildVideoCallReturnNavParams,
+  minimizeAndroidAppToBackground,
 } from './utils/activeCallNotification';
 import {
   resolvePreferAudioOnlyUiOnActiveCallReturn,
   prepareDirectCallAudioReturnFromPiP,
   peekSystemPiPLeaveContextForReturn,
+  isSystemPiPSessionAudioOrigin,
 } from './src/pip/pipPlaceholderOnly';
 import { installActiveCallBackgroundAudioHandlers } from './utils/activeCallBackgroundAudio';
 import { installExternalCallHoldHandlers } from './utils/externalCallHold';
@@ -1240,6 +1242,17 @@ function AppContent() {
           Number(g.__returningFromSystemPiPUntilRef.current || 0),
           now + 12000,
         );
+        g.__blockSystemPiPCaptureHostUntilRef = g.__blockSystemPiPCaptureHostUntilRef || { current: 0 };
+        g.__blockSystemPiPCaptureHostUntilRef.current = Math.max(
+          Number(g.__blockSystemPiPCaptureHostUntilRef.current || 0),
+          now + 10000,
+        );
+        try {
+          g.__pendingSystemPiPSyncRef = g.__pendingSystemPiPSyncRef || { current: false };
+          g.__pendingSystemPiPSyncRef.current = false;
+          g.__pipInSystemModeRef = g.__pipInSystemModeRef || { current: false };
+          g.__pipInSystemModeRef.current = false;
+        } catch (_) {}
         markHomeScreenBootedForSession();
         g.__systemPiPReturnTokenRef = g.__systemPiPReturnTokenRef || { current: 0 };
         g.__systemPiPReturnTokenRef.current = now;
@@ -1251,13 +1264,30 @@ function AppContent() {
           settledUntil: 0,
         };
         const leaveCtx = peekSystemPiPLeaveContextForReturn();
+        const preferAudioReturn =
+          leaveCtx.leaveUi === 'audio' ||
+          leaveCtx.preferAudioOnly ||
+          leaveCtx.audioOrigin ||
+          isSystemPiPSessionAudioOrigin();
+        // Сразу убрать CaptureHost: иначе после expand peer video на весь экран поверх audio UI.
+        try {
+          g.__pipUpdateStateRef?.current?.({
+            systemPiPCaptureActive: false,
+            systemPiPCaptureRequestId: 0,
+            pendingSystemPiP: false,
+            inSystemPiPMode: false,
+          });
+        } catch (_) {}
         g.__preferAudioOnlyUiOnNextVideoCallRef = g.__preferAudioOnlyUiOnNextVideoCallRef || { current: false };
         g.__expandToVideoCallUiFromPiPRef = g.__expandToVideoCallUiFromPiPRef || { current: false };
-        if (leaveCtx.restoreInAppPiP) {
-          g.__preferAudioOnlyUiOnNextVideoCallRef.current = false;
-          g.__expandToVideoCallUiFromPiPRef.current = false;
-        } else if (leaveCtx.preferAudioOnly) {
+        if (preferAudioReturn) {
           g.__preferAudioOnlyUiOnNextVideoCallRef.current = true;
+          g.__expandToVideoCallUiFromPiPRef.current = false;
+          try {
+            prepareDirectCallAudioReturnFromPiP();
+          } catch (_) {}
+        } else if (leaveCtx.restoreInAppPiP) {
+          g.__preferAudioOnlyUiOnNextVideoCallRef.current = false;
           g.__expandToVideoCallUiFromPiPRef.current = false;
         } else {
           g.__preferAudioOnlyUiOnNextVideoCallRef.current = false;
@@ -1281,8 +1311,12 @@ function AppContent() {
         requestExitSystemPiPSoft();
       } catch (_) {}
       const leaveCtx = peekSystemPiPLeaveContextForReturn();
-      const preferAudioOnly = leaveCtx.preferAudioOnly;
-      const restoreInAppPiP = leaveCtx.restoreInAppPiP;
+      const preferAudioOnly =
+        leaveCtx.leaveUi === 'audio' ||
+        leaveCtx.preferAudioOnly ||
+        leaveCtx.audioOrigin ||
+        isSystemPiPSessionAudioOrigin();
+      const restoreInAppPiP = !preferAudioOnly && leaveCtx.restoreInAppPiP;
       try {
         restoreCallMediaAfterSystemPiPReturn();
       } catch (_) {}
@@ -4441,45 +4475,16 @@ export default function App() {
             return false;
           }
         }
-        return false;
+        // Корень стека: в фон; при звонке — с system PiP.
+        return minimizeAndroidAppToBackground();
       }
 
       if (navRef.canGoBack()) return false;
 
-      if (!hasActiveCall) return false;
+      if (!hasActiveCall) return minimizeAndroidAppToBackground();
 
-      if (!pipVisible) {
-        try {
-          const params = (global as any).__currentCallPiPParamsRef?.current;
-          const callId = params?.callId ?? (typeof session.getCallId === 'function' ? session.getCallId() : null);
-          const roomId = params?.roomId ?? (typeof session.getRoomId === 'function' ? session.getRoomId() : null);
-          const showPiP = (global as any).__pipShowPiPRef?.current;
-          const remoteStream =
-            params?.remoteStream ??
-            (typeof session.getRemoteStream === 'function' ? session.getRemoteStream() : null);
-          if (typeof showPiP === 'function' && callId && roomId) {
-            showPiP({
-              callId,
-              roomId,
-              partnerName: params?.partnerName,
-              partnerAvatarUrl: params?.partnerAvatarUrl,
-              localStream: params?.localStream ?? null,
-              remoteStream: remoteStream ?? null,
-              muteLocal: params?.muteLocal,
-              muteRemote: params?.muteRemote,
-              localCamOn: params?.localCamOn,
-              remoteCamOn: params?.remoteCamOn,
-              navParams: params?.navParams,
-              deferVisible: false,
-            });
-            if (NativeModules.LiviAppModule?.setPiPEndCallParams) {
-              NativeModules.LiviAppModule.setPiPEndCallParams(callId, roomId);
-            }
-            if (session && typeof session.enterPiP === 'function') session.enterPiP();
-          }
-        } catch (_) {}
-      }
-      return true;
+      // Корень + активный звонок (в т.ч. in-app PiP): Back → фон + system PiP, как Home.
+      return minimizeAndroidAppToBackground();
     });
     return () => sub.remove();
   }, []);

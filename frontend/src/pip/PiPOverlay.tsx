@@ -368,12 +368,18 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
     : PIP_BAR_H;
 
   const isSystemPiPLayout = pendingSystemPiP || inSystemPiPMode;
+  // Ref выставляется синхронно в AboutToEnter — не держать RTCView рядом с CaptureHost.
+  let suspendedForSystemPiP = false;
+  try {
+    suspendedForSystemPiP = (global as any).__pipSuspendedForSystemPiPRef?.current === true;
+  } catch (_) {}
   const showingInAppPiPDuringBackTransition =
     !isSystemPiPLayout &&
     suppressInAppPiPOnCurrentRoute &&
     (global as any).__leavingVideoCallByBackRef?.current === true;
   const shouldShowOverlay =
     visible &&
+    !suspendedForSystemPiP &&
     !(systemPiPCaptureActive && systemPiPCaptureRequestId > 0) &&
     !suppressOverlayForReturn &&
     !isSystemPiPLayout &&

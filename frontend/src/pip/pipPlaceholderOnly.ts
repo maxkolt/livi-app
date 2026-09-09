@@ -160,19 +160,7 @@ export function getPipPlaceholderOnlyDebug(opts?: {
   if (paramsPref?.preferVideoCallUi === true) {
     return { placeholderOnly: false, reason: 'params_prefer_video_ui', flags };
   }
-  if (flags.inAudioOnlyUiRef) {
-    return { placeholderOnly: true, reason: 'inAudioOnlyUiRef', flags };
-  }
-  if (flags.pipAudioOnlySticky) {
-    const sessionSticky = g.__webrtcSessionRef?.current;
-    const callLiveSticky =
-      sessionSticky && typeof sessionSticky.isEnded === 'function'
-        ? !sessionSticky.isEnded()
-        : !!sessionSticky;
-    if (callLiveSticky) {
-      return { placeholderOnly: true, reason: 'pipAudioOnlySticky', flags };
-    }
-  }
+  // Peer/local video already on — don't force logo just because local UI is still audio-only.
   if (opts?.localCamOn === true || opts?.remoteCamOn === true) {
     return { placeholderOnly: false, reason: 'cam_on', flags };
   }
@@ -191,6 +179,19 @@ export function getPipPlaceholderOnlyDebug(opts?: {
       return { placeholderOnly: false, reason: 'session_remote_cam', flags };
     }
   } catch (_) {}
+  if (flags.inAudioOnlyUiRef) {
+    return { placeholderOnly: true, reason: 'inAudioOnlyUiRef', flags };
+  }
+  if (flags.pipAudioOnlySticky) {
+    const sessionSticky = g.__webrtcSessionRef?.current;
+    const callLiveSticky =
+      sessionSticky && typeof sessionSticky.isEnded === 'function'
+        ? !sessionSticky.isEnded()
+        : !!sessionSticky;
+    if (callLiveSticky) {
+      return { placeholderOnly: true, reason: 'pipAudioOnlySticky', flags };
+    }
+  }
   try {
     const session = g.__webrtcSessionRef?.current;
     if (session && typeof session.shouldUsePlaceholderPiP === 'function') {
@@ -263,10 +264,11 @@ export function shouldUsePipPlaceholderOnly(opts?: {
 }
 
 /**
- * Куда развернуть звонок по тапу ongoing-уведомления / return from Home.
- * Video UI (params + stayOnVideo) важнее устаревшего audio-sticky; нативный audioOnly — подсказка при равных.
+ * Куда развернуть звонок по тапу ongoing-уведомления.
+ * Только живой call UI — без native audioOnly и без PiP-placeholder
+ * (FGS обязан быть, но return должен быть «тупым» и надёжным).
  */
-export function resolvePreferAudioOnlyUiOnActiveCallReturn(opts?: {
+export function resolvePreferAudioOnlyUiOnActiveCallReturn(_opts?: {
   preferAudioOnlyFromNative?: boolean;
 }): boolean {
   try {
@@ -276,13 +278,10 @@ export function resolvePreferAudioOnlyUiOnActiveCallReturn(opts?: {
     if (params?.preferVideoCallUi === true) return false;
     if (isDirectCallVideoUiActive()) return false;
     if (params?.inAudioOnlyUi === true) return true;
-    const native = opts?.preferAudioOnlyFromNative;
-    if (native === false) return false;
-    if (native === true) return true;
     if (isInAudioOnlyCallUi()) return true;
-    return resolvePreferAudioOnlyUiOnPiPReturn();
+    return false;
   } catch {
-    return opts?.preferAudioOnlyFromNative === true;
+    return false;
   }
 }
 
@@ -338,6 +337,8 @@ export type SystemPiPLeaveContext = {
   preferAudioOnly: boolean;
   /** Уход с аудио UI / audio-origin in-app — system PiP только лого, даже если peer потом включит камеру. */
   audioOrigin: boolean;
+  /** Sticky UI at leave — never flipped by mid-PiP peer video. */
+  leaveUi: 'audio' | 'video';
   restoreInAppPiP: boolean;
   routeName: string | null;
   capturedAt: number;
@@ -349,6 +350,9 @@ export function markSystemPiPSessionAudioOrigin(fromAudio: boolean): void {
     const g = global as any;
     g.__systemPiPSessionAudioOriginRef = g.__systemPiPSessionAudioOriginRef || { current: false };
     g.__systemPiPSessionAudioOriginRef.current = !!fromAudio;
+    g.__systemPiPSessionAudioOriginDecidedRef =
+      g.__systemPiPSessionAudioOriginDecidedRef || { current: false };
+    g.__systemPiPSessionAudioOriginDecidedRef.current = true;
   } catch {}
 }
 
@@ -356,6 +360,9 @@ export function clearSystemPiPSessionAudioOrigin(): void {
   try {
     const g = global as any;
     if (g.__systemPiPSessionAudioOriginRef) g.__systemPiPSessionAudioOriginRef.current = false;
+    if (g.__systemPiPSessionAudioOriginDecidedRef) {
+      g.__systemPiPSessionAudioOriginDecidedRef.current = false;
+    }
   } catch {}
 }
 
@@ -369,10 +376,15 @@ export function isSystemPiPSessionAudioOrigin(): boolean {
 
 /**
  * Откуда уходим в system PiP: аудио-экран / audio in-app — не video UI.
- * Не путать с «нет live peer video» (там лого, но mid-PiP cam-on всё ещё может показать видео).
+ * После AboutToEnter sticky decided — источник правды на всю PiP-сессию
+ * (video capture с audio UI не должен вечно считаться audio-origin).
  */
 export function isSystemPiPLeaveAudioOrigin(): boolean {
-  if (isSystemPiPSessionAudioOrigin()) return true;
+  try {
+    if ((global as any).__systemPiPSessionAudioOriginDecidedRef?.current === true) {
+      return isSystemPiPSessionAudioOrigin();
+    }
+  } catch {}
   try {
     const g = global as any;
     if (g.__stayOnVideoCallUiRef?.current === true) return false;
@@ -390,9 +402,11 @@ export function isSystemPiPLeaveAudioOrigin(): boolean {
 }
 
 /**
- * System PiP: лого (native backdrop / AwayPlaceholder) vs peer RTC.
- * Audio-origin → всегда лого. Video-origin → видео при live peer cam / session cam.
- * Не доверяем stale params.remoteCamOn===false, если session или track уже live.
+ * System PiP: лого (native backdrop) vs peer RTC.
+ * Product:
+ * - enter с audio UI → лого (пока peer без video)
+ * - уже в system PiP + peer cam/live → peer RTC (апгрейд, даже с audio UI)
+ * - peer cam OFF / нет live → лого
  */
 export function shouldUseSystemPiPPlaceholderOnly(opts?: {
   localCamOn?: boolean;
@@ -400,7 +414,6 @@ export function shouldUseSystemPiPPlaceholderOnly(opts?: {
   remoteStream?: unknown;
   localStream?: unknown;
 }): boolean {
-  if (isSystemPiPLeaveAudioOrigin()) return true;
   try {
     const g = global as any;
     const params = g.__currentCallPiPParamsRef?.current;
@@ -408,19 +421,16 @@ export function shouldUseSystemPiPPlaceholderOnly(opts?: {
     const sessionRemoteStream =
       typeof session?.getRemoteStream === 'function' ? session.getRemoteStream() : null;
     const optsOrParamsStream = opts?.remoteStream ?? params?.remoteStream ?? null;
-    // Prefer any stream that actually has live video (session first — params often stale after in-app PiP).
     const remoteStream =
       (mediaStreamHasLiveVideo(sessionRemoteStream) ? sessionRemoteStream : null) ??
       (mediaStreamHasLiveVideo(optsOrParamsStream) ? optsOrParamsStream : null) ??
       sessionRemoteStream ??
       optsOrParamsStream;
-    // Live peer video wins over stale remoteCamOn flags in params / React state.
-    if (mediaStreamHasLiveVideo(remoteStream)) return false;
+    const hasLiveRemote = mediaStreamHasLiveVideo(remoteStream);
     const sessionCam =
       typeof session?.getRemoteCamEnabled === 'function'
         ? session.getRemoteCamEnabled()
         : undefined;
-    // Prefer session truth; opts/params only when session has no boolean.
     const remoteCamOn =
       typeof sessionCam === 'boolean'
         ? sessionCam
@@ -429,49 +439,124 @@ export function shouldUseSystemPiPPlaceholderOnly(opts?: {
           : typeof params?.remoteCamOn === 'boolean'
             ? params.remoteCamOn
             : undefined;
+    const peerVideo =
+      hasLiveRemote || remoteCamOn === true || opts?.remoteCamOn === true;
+    const inSystemPiP =
+      g.__pipInSystemModeRef?.current === true ||
+      g.__pendingSystemPiPSyncRef?.current === true;
+
+    // Уже в system PiP: peer включил видео → RTC, даже если локальный UI ещё audio.
+    if (inSystemPiP && peerVideo) return false;
+
+    // Enter с audio-страницы → logo (пока peer без video).
+    if (isInAudioOnlyCallUi()) return true;
+
+    if (hasLiveRemote) return false;
     if (remoteCamOn === true) return false;
+    if (opts?.remoteCamOn === true) return false;
+    if (isSystemPiPLeaveAudioOrigin()) return true;
     return true;
   } catch {
     return true;
   }
 }
 
-/** Держим актуальный снимок UI до Home → system PiP (onUserLeaveHint раньше AppState background). */
-export function refreshSystemPiPLeaveContextSnapshot(): void {
+/**
+ * Снимок leave-context для return из system PiP.
+ * Product: leave с audio → return на audio, даже если в PiP уже показали peer video.
+ */
+export function commitSystemPiPLeaveContextSnapshot(opts?: {
+  placeholderOnly?: boolean;
+  restoreInAppPiP?: boolean;
+  routeName?: string | null;
+}): void {
   try {
     const g = global as any;
     const params = g.__currentCallPiPParamsRef?.current;
-    const preferAudioOnly = resolvePreferAudioOnlyUiOnPiPReturn({
+    const existing = g.__systemPiPLeaveContextSnapshotRef as SystemPiPLeaveContext | undefined;
+    const placeholderOnly =
+      typeof opts?.placeholderOnly === 'boolean'
+        ? opts.placeholderOnly
+        : shouldUseSystemPiPPlaceholderOnly({
+            localCamOn: params?.localCamOn,
+            remoteCamOn: params?.remoteCamOn,
+            remoteStream: params?.remoteStream,
+            localStream: params?.localStream,
+          });
+    const uiPreferAudio = resolvePreferAudioOnlyUiOnPiPReturn({
       localCamOn: params?.localCamOn,
       remoteCamOn: params?.remoteCamOn,
       remoteStream: params?.remoteStream,
       localStream: params?.localStream,
     });
-    const inAppPiP = g.__pipVisibleRef?.current === true;
+    // Sticky leaveUi: первый снимок фиксирует audio|video на всю PiP-сессию.
+    const leaveUi: 'audio' | 'video' =
+      existing?.leaveUi === 'audio' || existing?.leaveUi === 'video'
+        ? existing.leaveUi
+        : isInAudioOnlyCallUi() || isSystemPiPLeaveAudioOrigin() || uiPreferAudio
+          ? 'audio'
+          : 'video';
+    // Sticky: audio leave не сбрасывается апгрейдом PiP logo→peer video.
+    const audioLeave =
+      leaveUi === 'audio' ||
+      existing?.preferAudioOnly === true ||
+      existing?.audioOrigin === true ||
+      isSystemPiPSessionAudioOrigin() ||
+      (placeholderOnly && (uiPreferAudio || isInAudioOnlyCallUi()));
+    const preferAudioOnly = audioLeave || leaveUi === 'audio';
+    const inAppPiP =
+      typeof opts?.restoreInAppPiP === 'boolean'
+        ? opts.restoreInAppPiP
+        : // Audio leave → всегда полный return на VideoCall audio, не in-app plaque.
+          preferAudioOnly
+            ? false
+            : g.__pipVisibleRef?.current === true || existing?.restoreInAppPiP === true;
     g.__systemPiPLeaveContextSnapshotRef = {
       preferAudioOnly,
-      audioOrigin: isSystemPiPLeaveAudioOrigin(),
-      // Любой in-app PiP (в т.ч. с аудио-экрана) — при развороте system PiP возвращаем на Home + overlay, не на полный VideoCall.
+      audioOrigin: preferAudioOnly,
+      leaveUi,
       restoreInAppPiP: inAppPiP,
-      routeName: readRootCurrentRouteName() || null,
+      routeName:
+        opts?.routeName !== undefined
+          ? opts.routeName
+          : (existing?.routeName ?? readRootCurrentRouteName()) || null,
       capturedAt: Date.now(),
     };
   } catch {}
+}
+
+/** Держим актуальный снимок UI до Home → system PiP (onUserLeaveHint раньше AppState background). */
+export function refreshSystemPiPLeaveContextSnapshot(): void {
+  commitSystemPiPLeaveContextSnapshot();
 }
 
 export function peekSystemPiPLeaveContextForReturn(): SystemPiPLeaveContext {
   try {
     const snap = (global as any).__systemPiPLeaveContextSnapshotRef as SystemPiPLeaveContext | undefined;
     if (snap && Date.now() - snap.capturedAt < 120_000) {
+      const leaveUi =
+        snap.leaveUi === 'audio' || snap.leaveUi === 'video'
+          ? snap.leaveUi
+          : snap.preferAudioOnly || snap.audioOrigin
+            ? 'audio'
+            : 'video';
+      const preferAudioOnly =
+        leaveUi === 'audio' || snap.preferAudioOnly === true || snap.audioOrigin === true;
       return {
         ...snap,
-        audioOrigin: typeof snap.audioOrigin === 'boolean' ? snap.audioOrigin : isSystemPiPLeaveAudioOrigin(),
+        leaveUi,
+        preferAudioOnly,
+        audioOrigin: preferAudioOnly,
+        // Audio leave никогда не уходит в restoreInAppPiP (иначе сбрасывается preferAudio).
+        restoreInAppPiP: preferAudioOnly ? false : !!snap.restoreInAppPiP,
       };
     }
   } catch {}
+  const audioNow = isSystemPiPLeaveAudioOrigin() || resolvePreferAudioOnlyUiOnPiPReturn();
   return {
-    preferAudioOnly: resolvePreferAudioOnlyUiOnPiPReturn(),
-    audioOrigin: isSystemPiPLeaveAudioOrigin(),
+    preferAudioOnly: audioNow,
+    audioOrigin: audioNow,
+    leaveUi: audioNow ? 'audio' : 'video',
     restoreInAppPiP: false,
     routeName: null,
     capturedAt: Date.now(),

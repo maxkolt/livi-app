@@ -45,6 +45,7 @@ export const shared = {
   visibleOnlinePresenceListKnown: false,
   lastSocketConnectAt: 0,
   presenceUpdateSubscribers: new Set<(data: any) => void>(),
+  welcomePresenceSubscribers: new Set<(data: any) => void>(),
 
   // app visibility / call screen flags
   lastAppState: AppState.currentState as AppStateStatus,

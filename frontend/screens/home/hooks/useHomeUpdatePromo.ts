@@ -7,6 +7,7 @@ import {
   clearUpdateCheckCache,
   clearUpdatePromotionWhenUpToDate,
 } from '../../../utils/updateCheck';
+import { presentAppUpdateShadeNotificationIfNeeded } from '../../../utils/productShadeNotifications';
 
 const UPDATE_CHECK_RESUME_DEBOUNCE_MS = 60 * 1000;
 
@@ -18,6 +19,7 @@ export function useHomeUpdatePromo() {
   /** Результат последней isUpdateAvailable() в check() — для shouldShowUpdateBadge без повторного запроса */
   const serverSaysUpdateRef = useRef(false);
   const lastUpdateCheckAtRef = useRef(0);
+  const updateShadePresentedRef = useRef(false);
 
   const suppressUpdateBadgeForCallNotice = useCallback((durationMs = 4000) => {
     suppressUpdateBadgeUntilRef.current = Math.max(
@@ -43,6 +45,10 @@ export function useHomeUpdatePromo() {
           if (!__DEV__ && !serverSaysUpdate) {
             setShowUpdateBadgeState(false);
             await clearUpdatePromotionWhenUpToDate();
+          }
+          if (!cancelled && showPromotion && !updateShadePresentedRef.current) {
+            updateShadePresentedRef.current = true;
+            presentAppUpdateShadeNotificationIfNeeded().catch(() => {});
           }
         }
       } catch {}

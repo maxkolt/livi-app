@@ -85,8 +85,24 @@ function onAppStateChange(next: AppStateStatus): void {
     return;
   }
 
+  // Android Home: inactive часто раньше leave-hint — сразу peer-only compact.
+  if (
+    Platform.OS === 'android' &&
+    (next === 'inactive' || next === 'background') &&
+    prev === 'active'
+  ) {
+    armAndroidLeaveHintForVideoCallHome({ allowFromInAppPiP: true });
+    try {
+      syncAndroidLeaveHintForOngoingCall();
+    } catch (_) {}
+  }
+
   if (next === 'background') {
-    armAndroidLeaveHintForVideoCallHome();
+    // Home/Back: arm ASAP — onUserLeaveHint часто раньше JS, auto-enter + FGS подстраховывают.
+    armAndroidLeaveHintForVideoCallHome({ allowFromInAppPiP: true });
+    try {
+      syncAndroidLeaveHintForOngoingCall();
+    } catch (_) {}
     if (prev !== 'background') {
       maintainCallAudioForActiveCall('app_state_background');
     }

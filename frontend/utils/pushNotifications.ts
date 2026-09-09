@@ -34,6 +34,7 @@ import {
   prefetchDirectCallIce,
   prewarmDirectCallAudioCapture,
 } from './directCallConnectPrewarm';
+import { presentFriendRequestShadeNotification } from './productShadeNotifications';
 
 const MISSED_CALLS_KEY = 'missed_calls_by_user_v1';
 /** Флаг: пользователь заходил во вкладку «Друзья» и «увидел» пропущенные — бейдж и уведомления в шторке скрываем, счётчики в приложении не трогаем. */
@@ -1175,6 +1176,22 @@ Notifications.setNotificationHandler({
         };
       }
     }
+    if (type === 'friend_request') {
+      return {
+        shouldShowBanner: true,
+        shouldShowList: true,
+        shouldPlaySound: true,
+        shouldSetBadge: false,
+      };
+    }
+    if (type === 'app_update') {
+      return {
+        shouldShowBanner: true,
+        shouldShowList: true,
+        shouldPlaySound: false,
+        shouldSetBadge: false,
+      };
+    }
     // Не показывать баннер для необработанных типов — иначе возможно пустое уведомление.
     return {
       shouldShowBanner: false,
@@ -1540,6 +1557,38 @@ async function handleNotificationResponse(data: any, actionIdentifier: string, r
       return;
     }
 
+    if (type === 'friend_request') {
+      await runWhenNavReady(`friend_request:${String(data?.from || 'unknown')}`, async (nav) => {
+        try {
+          const { dismissFriendRequestShadeNotifications } = await import('./productShadeNotifications');
+          await dismissFriendRequestShadeNotifications();
+        } catch {}
+        nav.dispatch(
+          CommonActions.reset({
+            index: 0,
+            routes: [{ name: 'Home' as never, params: { openFriendsTab: true } }],
+          })
+        );
+      });
+      return;
+    }
+
+    if (type === 'app_update') {
+      await runWhenNavReady('app_update', async (nav) => {
+        try {
+          const { dismissAppUpdateShadeNotifications } = await import('./productShadeNotifications');
+          await dismissAppUpdateShadeNotifications();
+        } catch {}
+        nav.dispatch(
+          CommonActions.reset({
+            index: 0,
+            routes: [{ name: 'Home' as never, params: { openWelcomeProfile: true } }],
+          })
+        );
+      });
+      return;
+    }
+
     if (type === 'call') {
       const peerUserId = String(data?.from || '');
       const callId = String(data?.callId || '');
@@ -1648,6 +1697,11 @@ export async function ensureAndroidNotificationChannels() {
     sound: undefined,
     lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
   });
+
+  try {
+    const { ensureProductShadeChannels } = await import('./productShadeNotifications');
+    await ensureProductShadeChannels();
+  } catch {}
 }
 
 /**
@@ -1909,6 +1963,17 @@ export function addNotificationListeners() {
     } catch {}
   });
 
+  // Заявка в друзья (socket) → системное уведомление, если приложение свёрнуто.
+  let offFriendRequest: (() => void) | null = null;
+  try {
+    const { onFriendRequest } = require('../sockets/modules/friends') as typeof import('../sockets/modules/friends');
+    offFriendRequest = onFriendRequest(({ from, fromNick }) => {
+      const fromId = String(from || '').trim();
+      if (!fromId) return;
+      presentFriendRequestShadeNotification({ fromUserId: fromId, fromNick }).catch(() => {});
+    });
+  } catch (_) {}
+
   // 1) Если приложение было "убито" и открылось по тапу по пушу или по кнопке — используем заранее захваченный ответ
   (async () => {
     try {
@@ -2047,6 +2112,9 @@ export function addNotificationListeners() {
     sub2.remove();
     try {
       appStateSub.remove();
+    } catch {}
+    try {
+      offFriendRequest?.();
     } catch {}
   };
 }

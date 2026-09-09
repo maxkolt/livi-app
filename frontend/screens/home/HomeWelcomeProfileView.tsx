@@ -191,6 +191,10 @@ export type HomeWelcomeProfileViewProps = {
   updateAvailable: boolean;
   wallpaperPickerTheme: ChatWallpaperTheme | null;
   setWallpaperPickerTheme: (theme: ChatWallpaperTheme | null) => void;
+  /** Hub + Back → родитель (обычно Search), иначе false → системный фон. */
+  onBackFromHub?: () => boolean;
+  /** Keep-alive: Back только когда вкладка видна. */
+  active?: boolean;
 };
 
 function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
@@ -219,6 +223,8 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
     updateAvailable,
     wallpaperPickerTheme,
     setWallpaperPickerTheme,
+    onBackFromHub,
+    active = true,
   } = props;
 
   const insets = useSafeAreaInsets();
@@ -360,6 +366,7 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
 
   useEffect(() => {
     if (Platform.OS !== 'android') return;
+    if (!active) return;
 
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
       if (wallpaperPickerTheme) {
@@ -374,17 +381,22 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
         closeAccountEdit();
         return true;
       }
+      if (typeof onBackFromHub === 'function') {
+        return onBackFromHub();
+      }
       return false;
     });
 
     return () => sub.remove();
   }, [
+    active,
     wallpaperPickerTheme,
-    screen,
-    accountOpen,
     setWallpaperPickerTheme,
+    screen,
     goHub,
+    accountOpen,
     closeAccountEdit,
+    onBackFromHub,
   ]);
 
   const avatarSize = hubLayout.avatarSize;

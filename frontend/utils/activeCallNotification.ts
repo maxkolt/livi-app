@@ -1,7 +1,17 @@
 import { AppState, NativeModules, Platform } from 'react-native';
-import { isInAudioOnlyCallUi, shouldUsePipPlaceholderOnly, shouldUseSystemPiPPlaceholderOnly, refreshSystemPiPLeaveContextSnapshot } from '../src/pip/pipPlaceholderOnly';
+import {
+  isInAudioOnlyCallUi,
+  shouldUseSystemPiPPlaceholderOnly,
+  refreshSystemPiPLeaveContextSnapshot,
+  markSystemPiPSessionAudioOrigin,
+  mediaStreamHasLiveVideo,
+} from '../src/pip/pipPlaceholderOnly';
 import { logHomePiPTrace } from './systemPiPHomeTrace';
-import { isOngoingCallSession, resolveActiveCallInCallMedia } from './activeCallSession';
+import {
+  isOngoingCallSession,
+  ongoingCallPrefersVideoMedia,
+  resolveActiveCallInCallMedia,
+} from './activeCallSession';
 import { readRootCurrentRouteName } from './safeRootNavigation';
 import {
   pinLoudSpeakerForAudioCallLeavingToBackground,
@@ -10,45 +20,50 @@ import {
 } from './callAudioRoutePersist';
 import { readActiveExternalCallAudioRoute } from './activeCallSession';
 
-/** Ongoing FGS: audio channel + return intent when пользователь на экране аудиозвонка. */
-function resolveActiveCallNotificationAudioOnly(): boolean {
-  try {
-    const g = global as any;
-    if (g.__stayOnVideoCallUiRef?.current === true) return false;
-    const params = g.__currentCallPiPParamsRef?.current;
-    if (params?.preferVideoCallUi === true) return false;
-    if (params?.inAudioOnlyUi === true) return true;
-  } catch (_) {}
-  if (isInAudioOnlyCallUi()) return true;
-  return resolveActiveCallPlaceholderOnly();
-}
-
-function resolveActiveCallPlaceholderOnly(): boolean {
+/**
+ * Video system PiP: кадр уже есть до leave-hint — enterPictureInPictureMode
+ * должен вызваться сразу в onUserLeaveHint (задержки → OEM не даёт войти).
+ */
+function hasSystemPiPVideoCaptureReady(): boolean {
   try {
     const g = global as any;
     const params = g.__currentCallPiPParamsRef?.current;
     const session = g.__webrtcSessionRef?.current;
-    const remoteStream =
+    if (params?.localCamOn === true || params?.remoteCamOn === true) return true;
+    if (ongoingCallPrefersVideoMedia()) return true;
+    if (g.__stayOnVideoCallUiRef?.current === true) return true;
+    const remote =
+      (typeof session?.getRemoteStream === 'function' ? session.getRemoteStream() : null) ??
       params?.remoteStream ??
-      (typeof session?.getRemoteStream === 'function' ? session.getRemoteStream() : null);
-    const localStream =
+      null;
+    const local =
+      (typeof session?.getLocalStream === 'function' ? session.getLocalStream() : null) ??
       params?.localStream ??
-      (typeof session?.getLocalStream === 'function' ? session.getLocalStream() : null);
-    const localCamOn =
-      params?.localCamOn ??
-      (typeof session?.getIsCamOn === 'function' ? session.getIsCamOn() : undefined);
-    const remoteCamOn =
-      params?.remoteCamOn ??
-      (typeof session?.getRemoteCamEnabled === 'function' ? session.getRemoteCamEnabled() : undefined);
-    return shouldUsePipPlaceholderOnly({
-      localCamOn,
-      remoteCamOn,
-      remoteStream,
-      localStream,
-    });
-  } catch {
-    return false;
-  }
+      null;
+    if (mediaStreamHasLiveVideo(remote) || mediaStreamHasLiveVideo(local)) return true;
+    if (typeof session?.getRemoteCamEnabled === 'function' && session.getRemoteCamEnabled()) {
+      return true;
+    }
+    if (typeof session?.getIsCamOn === 'function' && session.getIsCamOn()) return true;
+  } catch (_) {}
+  return false;
+}
+/**
+ * Ongoing FGS label: только явный audio-only UI.
+ * Не выводить из PiP placeholder / cam-off — иначе video-звонок попадает в «аудио» канал
+ * и return-intent ломает разворот.
+ */
+function resolveActiveCallNotificationAudioOnly(): boolean {
+  try {
+    const g = global as any;
+    if (g.__stayOnVideoCallUiRef?.current === true) return false;
+    if (ongoingCallPrefersVideoMedia()) return false;
+    const params = g.__currentCallPiPParamsRef?.current;
+    if (params?.preferVideoCallUi === true) return false;
+    if (params?.inAudioOnlyUi === true) return true;
+    if (g.__inAudioOnlyUiRef?.current === true) return true;
+  } catch (_) {}
+  return isInAudioOnlyCallUi();
 }
 
 function isCallTeardownInProgress(): boolean {
@@ -153,11 +168,16 @@ export function startActiveCallNotification(
     lastFgsStartSignature = signature;
     lastFgsStartAtMs = now;
     NativeModules.LiviAppModule?.startActiveCallForegroundService?.(nick || null, audioOnly);
+    // FGS больше не форсит logo на video — сразу синхронизируем peer-cam placeholder/frameReady.
+    try {
+      syncAndroidSystemPiPNativeFlags();
+    } catch (_) {}
   } catch (_) {}
 }
 
 let lastNativeLeaveHintAllow: boolean | null = null;
 let lastNativePlaceholderOnly: boolean | null = null;
+let lastNativeFrameReady: boolean | null = null;
 
 /** System PiP: всегда разрешаем вход (лого или peer video). Не отменяем audio system PiP. */
 export function shouldUseSystemPiPControlsCaptureOnly(): boolean {
@@ -166,9 +186,8 @@ export function shouldUseSystemPiPControlsCaptureOnly(): boolean {
 
 function resolveLeaveHintPlaceholderOnly(): boolean {
   try {
-    refreshSystemPiPLeaveContextSnapshot();
-  } catch (_) {}
-  try {
+    // Не переписываем leave-snapshot на каждом leave-hint sync —
+    // иначе logo→peer video в PiP сбрасывал preferAudioOnly и return уходил в video UI.
     return shouldUseSystemPiPPlaceholderOnly();
   } catch (_) {
     return true;
@@ -178,19 +197,50 @@ function resolveLeaveHintPlaceholderOnly(): boolean {
 function applyAndroidLeaveHintNativeFlags(allowPiP: boolean): void {
   const effectiveAllow = allowPiP && shouldAllowAndroidSystemPiPOnLeaveHint();
   const placeholderOnly = effectiveAllow ? resolveLeaveHintPlaceholderOnly() : false;
-  if (lastNativeLeaveHintAllow === effectiveAllow && lastNativePlaceholderOnly === placeholderOnly) {
+  // Video path: pre-arm frameReady пока камеры/live track уже есть —
+  // иначе leave-hint ждёт кадр и промахивает окно enter на OEM.
+  const frameReady = !effectiveAllow
+    ? false
+    : placeholderOnly
+      ? true
+      : hasSystemPiPVideoCaptureReady();
+  if (
+    lastNativeLeaveHintAllow === effectiveAllow &&
+    lastNativePlaceholderOnly === placeholderOnly &&
+    lastNativeFrameReady === frameReady
+  ) {
     return;
   }
   lastNativeLeaveHintAllow = effectiveAllow;
   lastNativePlaceholderOnly = placeholderOnly;
+  lastNativeFrameReady = frameReady;
   NativeModules.LiviAppModule?.setSystemPiPCapturePlaceholderOnly?.(placeholderOnly);
   if (placeholderOnly) {
     NativeModules.LiviAppModule?.setSystemPiPCaptureFrameReady?.(true);
   } else if (effectiveAllow) {
-    NativeModules.LiviAppModule?.setSystemPiPCaptureFrameReady?.(false);
+    NativeModules.LiviAppModule?.setSystemPiPCaptureFrameReady?.(frameReady);
   }
   NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(effectiveAllow);
-  logHomePiPTrace('js_leave_hint_arm', { allowPiP: effectiveAllow, placeholderOnly });
+  logHomePiPTrace('js_leave_hint_arm', {
+    allowPiP: effectiveAllow,
+    placeholderOnly,
+    frameReady,
+  });
+}
+
+/**
+ * Mid-PiP logo→peer video: сразу снять native backdrop и синхронизировать leave-hint cache,
+ * чтобы следующий syncAndroidLeaveHint не вернул лого поверх RTC.
+ */
+export function forceAndroidSystemPiPPeerVideoVisible(): void {
+  if (Platform.OS !== 'android') return;
+  try {
+    lastNativePlaceholderOnly = false;
+    lastNativeFrameReady = true;
+    NativeModules.LiviAppModule?.setSystemPiPCapturePlaceholderOnly?.(false);
+    NativeModules.LiviAppModule?.setSystemPiPCaptureFrameReady?.(true);
+    logHomePiPTrace('js_force_pip_peer_video', {});
+  } catch (_) {}
 }
 
 /**
@@ -283,7 +333,7 @@ export function syncAndroidLeaveHintForOngoingCall(): void {
   } catch (_) {}
 }
 
-/** Синхронизировать shouldEnterPiPOnLeaveHint + placeholderOnly с текущим audio/video UI. */
+/** Синхронизировать shouldEnterPiPOnLeaveHint + placeholderOnly + frameReady с текущим audio/video UI. */
 export function syncAndroidSystemPiPNativeFlags(): void {
   if (Platform.OS !== 'android') return;
   try {
@@ -429,13 +479,22 @@ export function setAndroidSystemPiPLeaveHintEnabled(enabled: boolean): void {
 
 /**
  * Сразу при Home (AppState background): закрепить refs и нативные флаги до onUserLeaveHint.
+ * allowFromInAppPiP: Back→фон из in-app PiP тоже должен открыть system PiP.
  */
-export function armAndroidLeaveHintForVideoCallHome(): void {
+export function armAndroidLeaveHintForVideoCallHome(opts?: { allowFromInAppPiP?: boolean }): void {
   if (Platform.OS !== 'android') return;
+  if (!opts?.allowFromInAppPiP) {
+    try {
+      if (isInAppPiPContextIncludingSuspended()) return;
+    } catch {}
+  }
   try {
-    if (isInAppPiPContextIncludingSuspended()) return;
-  } catch {}
-  try {
+    try {
+      // Leave с audio UI → sticky return-to-audio (даже если в PiP потом появится peer video).
+      if (isInAudioOnlyCallUi()) {
+        markSystemPiPSessionAudioOrigin(true);
+      }
+    } catch (_) {}
     refreshSystemPiPLeaveContextSnapshot();
     const media = resolveActiveCallInCallMedia();
     if (media === 'audio') {
@@ -463,7 +522,79 @@ export function armAndroidLeaveHintForVideoCallHome(): void {
       return;
     }
     applyAndroidLeaveHintNativeFlags(true);
+    // До onUserLeaveHint: VideoCall уже в compact (только peer), иначе PiP захватит dual layout.
+    try {
+      const placeholderOnly = shouldUseSystemPiPPlaceholderOnly();
+      g.__pendingSystemPiPSyncRef = g.__pendingSystemPiPSyncRef || { current: false };
+      g.__pendingSystemPiPSyncRef.current = !placeholderOnly;
+      const upd = g.__pipUpdateStateRef?.current;
+      if (typeof upd === 'function') {
+        if (placeholderOnly) {
+          upd({
+            pendingSystemPiP: false,
+            systemPiPCaptureActive: false,
+            systemPiPCaptureRequestId: 0,
+            allowVideoRender: false,
+          });
+        } else {
+          upd({
+            pendingSystemPiP: true,
+            systemPiPCaptureActive: false,
+            systemPiPCaptureRequestId: 0,
+            allowVideoRender: true,
+          });
+        }
+      }
+      NativeModules.LiviAppModule?.setSystemPiPCapturePlaceholderOnly?.(placeholderOnly);
+      if (!placeholderOnly) {
+        NativeModules.LiviAppModule?.setSystemPiPCaptureFrameReady?.(true);
+      }
+    } catch (_) {}
   } catch (_) {}
+}
+
+/**
+ * Системный Back → фон. При активном звонке сначала arm leaveHint,
+ * чтобы moveTaskToBack → onUserLeaveHint открыл system PiP (как Home).
+ */
+export function minimizeAndroidAppToBackground(): boolean {
+  if (Platform.OS !== 'android') return false;
+  try {
+    const g = global as any;
+    const ending =
+      g.__endingCallInProgressRef?.current === true ||
+      g.__callEndedFromPiPNoOpenRef?.current === true ||
+      g.__endingFromPiPButtonRef?.current === true;
+    const callActive =
+      !ending &&
+      (isAndroidActiveCallEligibleForLeaveHint() ||
+        isOngoingCallSession() ||
+        g.__videoCallActiveRef?.current === true ||
+        g.__pipVisibleRef?.current === true ||
+        g.__pipInSystemModeRef?.current === true);
+    if (callActive) {
+      armAndroidLeaveHintForVideoCallHome({ allowFromInAppPiP: true });
+      try {
+        setAndroidSystemPiPLeaveHintEnabled(true);
+      } catch (_) {}
+      try {
+        syncAndroidLeaveHintForOngoingCall();
+      } catch (_) {}
+      try {
+        // Native: enter system PiP then background (same as Home leave-hint).
+        if (typeof NativeModules.LiviAppModule?.moveTaskToBackAndEnterPiP === 'function') {
+          NativeModules.LiviAppModule.moveTaskToBackAndEnterPiP(true);
+          return true;
+        }
+      } catch (_) {}
+    }
+  } catch (_) {}
+  try {
+    NativeModules.LiviAppModule?.moveTaskToBack?.(true);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 const SYSTEM_PIP_RETURN_SETTLE_MS = 3600;
