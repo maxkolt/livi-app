@@ -370,6 +370,15 @@ export function scheduleGlobalFriendPresenceEmit(io: Server, changedUserIds?: st
     } else {
       void emitGlobalFriendPresence(io);
     }
+    // Отложенный require: welcomeOnlinePresence → getFriendVisibleOnlineUserIds (цикл импортов).
+    try {
+      const { scheduleWelcomeOnlinePresenceEmit } = require('./welcomeOnlinePresence') as {
+        scheduleWelcomeOnlinePresenceEmit: (io: Server) => void;
+      };
+      scheduleWelcomeOnlinePresenceEmit(io);
+    } catch {
+      // best-effort
+    }
   }, PRESENCE_BROADCAST_DEBOUNCE_MS);
 }
 
