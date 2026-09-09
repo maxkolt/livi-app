@@ -440,9 +440,24 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
               height: pipClusterH,
               transform: [{ translateX: translate.x }, { translateY: translate.y }],
             },
+            showPeerVideoPreviewSlot ? styles.pipClusterShadow : null,
           ]}
           {...panResponder.panHandlers}
         >
+          <View
+            style={[
+              styles.pipClusterBody,
+              showPeerVideoPreviewSlot
+                ? {
+                    borderRadius: PIP_BAR_RADIUS,
+                    borderWidth: StyleSheet.hairlineWidth,
+                    borderColor: chrome.border,
+                    backgroundColor: chrome.videoBg,
+                    overflow: 'hidden',
+                  }
+                : null,
+            ]}
+          >
           {showPeerVideoPreviewSlot ? (
             <View
               style={[
@@ -451,12 +466,6 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
                   width: pipClusterW,
                   height: PIP_VIDEO_PREVIEW_H,
                   backgroundColor: chrome.videoBg,
-                  borderColor: chrome.border,
-                  borderTopLeftRadius: PIP_BAR_RADIUS,
-                  borderTopRightRadius: PIP_BAR_RADIUS,
-                  borderBottomLeftRadius: 0,
-                  borderBottomRightRadius: 0,
-                  borderBottomWidth: 0,
                 },
               ]}
               pointerEvents="none"
@@ -481,8 +490,8 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
               {
                 width: pipClusterW,
                 height: PIP_BAR_H,
-                borderBottomLeftRadius: PIP_BAR_RADIUS,
-                borderBottomRightRadius: PIP_BAR_RADIUS,
+                borderBottomLeftRadius: showPeerVideoPreviewSlot ? 0 : PIP_BAR_RADIUS,
+                borderBottomRightRadius: showPeerVideoPreviewSlot ? 0 : PIP_BAR_RADIUS,
                 borderTopLeftRadius: showPeerVideoPreviewSlot ? 0 : PIP_BAR_RADIUS,
                 borderTopRightRadius: showPeerVideoPreviewSlot ? 0 : PIP_BAR_RADIUS,
               },
@@ -494,11 +503,18 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
                 {
                   backgroundColor: chrome.barBg,
                   borderColor: chrome.border,
-                  borderBottomLeftRadius: PIP_BAR_RADIUS,
-                  borderBottomRightRadius: PIP_BAR_RADIUS,
+                  borderBottomLeftRadius: showPeerVideoPreviewSlot ? 0 : PIP_BAR_RADIUS,
+                  borderBottomRightRadius: showPeerVideoPreviewSlot ? 0 : PIP_BAR_RADIUS,
                   borderTopLeftRadius: showPeerVideoPreviewSlot ? 0 : PIP_BAR_RADIUS,
                   borderTopRightRadius: showPeerVideoPreviewSlot ? 0 : PIP_BAR_RADIUS,
-                  borderTopWidth: showPeerVideoPreviewSlot ? 0 : StyleSheet.hairlineWidth,
+                  // С видео: рамка/тень на кластере — иначе elevation даёт щель на стыке.
+                  ...(showPeerVideoPreviewSlot
+                    ? {
+                        borderWidth: 0,
+                        shadowOpacity: 0,
+                        elevation: 0,
+                      }
+                    : null),
                 },
               ]}
             >
@@ -589,6 +605,7 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
               </PiPActionButton>
               </View>
             </View>
+          </View>
           </View>
         </Animated.View>
       </View>
@@ -736,8 +753,19 @@ const styles = StyleSheet.create({
     flexDirection: 'column',
     alignItems: 'stretch',
   },
+  /** iOS-тень на кластере; elevation не трогаем — у pipCluster уже 10050 для z-order. */
+  pipClusterShadow: {
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 6,
+  },
+  pipClusterBody: {
+    flex: 1,
+    flexDirection: 'column',
+    alignItems: 'stretch',
+  },
   pipVideoPreview: {
-    borderWidth: StyleSheet.hairlineWidth,
     overflow: 'hidden',
     justifyContent: 'center',
     alignItems: 'center',
@@ -759,8 +787,8 @@ const styles = StyleSheet.create({
     gap: PIP_AVATAR_ACTION_GAP,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
     shadowRadius: 6,
+    shadowOpacity: 0.2,
     elevation: 12,
     overflow: 'hidden',
   },

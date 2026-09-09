@@ -13,22 +13,25 @@ export async function clearWelcomeChatForMe(peerId: string): Promise<boolean> {
   const currentUser = String(getCurrentUserId() || '').trim();
   if (!id || !currentUser) return false;
 
+  let localOk = false;
   try {
     clearMessageCache(id, currentUser);
     const chatKey = globalMessageStorage.getChatKey(currentUser, id);
     await AsyncStorage.removeItem(chatKey);
+    localOk = true;
   } catch {
     // local wipe should not block server clear
   }
 
-  const ok = await clearChatMessages(id, false);
+  const serverOk = await clearChatMessages(id, false);
   try {
     markMessagesAsRead(id);
   } catch {}
   try {
     dismissMessageNotificationForUser(id);
   } catch {}
-  return ok;
+  // Для UI вкладки Chat достаточно локальной очистки — строка должна исчезнуть сразу.
+  return localOk || serverOk;
 }
 
 export async function clearWelcomeChatsForMe(

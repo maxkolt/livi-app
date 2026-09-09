@@ -231,7 +231,11 @@ function HomeWelcomeChatsViewInner({
   }, []);
 
   const filteredChats = useMemo(() => {
-    let list = allFriends;
+    // Только реальные переписки: без превью строка = «пустой» чат (после удаления должна пропасть).
+    let list = allFriends.filter((f) => {
+      const id = String(f.id);
+      return !!previews[id] || (unreadByUser[id] || 0) > 0;
+    });
     if (filter === 'unread') {
       list = list.filter((f) => (unreadByUser[String(f.id)] || 0) > 0);
     }
@@ -321,16 +325,15 @@ function HomeWelcomeChatsViewInner({
     setDeleting(true);
     try {
       const result = await clearWelcomeChatsForMe(ids);
-      if (result.ok.length > 0) {
-        dropPreviews(result.ok);
-        setUnreadByUser((prev) => {
-          const next = { ...prev };
-          result.ok.forEach((id) => {
-            delete next[id];
-          });
-          return next;
+      // Сразу убираем строки: список строится по previews/unread.
+      dropPreviews(ids);
+      setUnreadByUser((prev) => {
+        const next = { ...prev };
+        ids.forEach((id) => {
+          delete next[id];
         });
-      }
+        return next;
+      });
       if (result.failed.length > 0) {
         showNotice(t('chatClearFailedServer', lang), 'error');
       } else {
