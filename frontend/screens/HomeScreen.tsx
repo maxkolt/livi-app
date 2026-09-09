@@ -4805,8 +4805,44 @@ const handleClearNick = useCallback(async () => {
       }
     });
   }, [askConfirm, lang, showNotice]);
+  const searchNavLockUntilRef = useRef(0);
   const handleStartSearch = useCallback(() => {
+    const now = Date.now();
+    if (now < searchNavLockUntilRef.current) {
+      try {
+        const g = global as any;
+        const t0 = Number(g.__searchNavT0 || now);
+        logger.info('[search-nav] home.handleStartSearch.skipped', {
+          elapsedMs: now - t0,
+          lockLeftMs: searchNavLockUntilRef.current - now,
+        });
+      } catch {}
+      return;
+    }
+    // Блок повторного navigate на время fade (иначе 2-й вызов перезапускает анимацию).
+    searchNavLockUntilRef.current = now + 700;
+    try {
+      const g = global as any;
+      const t0 = Number(g.__searchNavT0 || now);
+      g.__searchNavT0 = t0;
+      const steps = Array.isArray(g.__searchNavSteps) ? g.__searchNavSteps : [];
+      steps.push({ step: 'home.handleStartSearch.navigate', at: now, elapsedMs: now - t0 });
+      g.__searchNavSteps = steps;
+      logger.info('[search-nav] home.handleStartSearch.navigate', {
+        elapsedMs: now - t0,
+        route: 'RandomChat',
+      });
+    } catch {}
     navigation.navigate('RandomChat', { returnTo: { name: 'Home' } });
+    try {
+      const after = Date.now();
+      const g = global as any;
+      const t0 = Number(g.__searchNavT0 || after);
+      logger.info('[search-nav] home.handleStartSearch.navigateReturned', {
+        elapsedMs: after - t0,
+        navigateCallMs: after - now,
+      });
+    } catch {}
   }, [navigation]);
   const handleOpenAvatarModal = useCallback((uri: string) => {
     setModalAvatarUri(uri);

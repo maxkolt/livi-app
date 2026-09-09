@@ -66,6 +66,19 @@ type Props = {
 
 const RandomChat: React.FC<Props> = ({ route }) => {
   const navigation = useNavigation();
+  const firstRenderLoggedRef = useRef(false);
+  if (!firstRenderLoggedRef.current) {
+    firstRenderLoggedRef.current = true;
+    try {
+      const now = Date.now();
+      const g = global as any;
+      const t0 = Number(g.__searchNavT0 || now);
+      const steps = Array.isArray(g.__searchNavSteps) ? g.__searchNavSteps : [];
+      steps.push({ step: 'RandomChat.firstRender', at: now, elapsedMs: now - t0 });
+      g.__searchNavSteps = steps;
+      logger.info('[search-nav] RandomChat.firstRender', { elapsedMs: now - t0 });
+    } catch {}
+  }
   const insets = useSafeAreaInsets();
   const { theme, isDark } = useAppTheme();
   const lang = useLang((s) => s.lang);
@@ -287,6 +300,19 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   
   // Инициализация session
   useEffect(() => {
+    const effectStart = Date.now();
+    try {
+      const g = global as any;
+      const t0 = Number(g.__searchNavT0 || effectStart);
+      const steps = Array.isArray(g.__searchNavSteps) ? g.__searchNavSteps : [];
+      steps.push({ step: 'RandomChat.sessionEffect.start', at: effectStart, elapsedMs: effectStart - t0 });
+      g.__searchNavSteps = steps;
+      logger.info('[search-nav] RandomChat.sessionEffect.start', {
+        elapsedMs: effectStart - t0,
+        myUserId: !!myUserId,
+        sessionKey,
+      });
+    } catch {}
     const config: WebRTCSessionConfig = {
       myUserId,
       isSimulator: Platform.OS === 'ios' && !(Device as any)?.isDevice,
@@ -390,6 +416,24 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     sessionRef.current = session;
     setLocalCamSide(session.getCamSide?.() ?? 'front');
     setRemoteCamSide(session.getRemoteCamSide?.() ?? 'front');
+    try {
+      const now = Date.now();
+      const g = global as any;
+      const t0 = Number(g.__searchNavT0 || now);
+      const steps = Array.isArray(g.__searchNavSteps) ? g.__searchNavSteps : [];
+      steps.push({
+        step: 'RandomChat.sessionCreated',
+        at: now,
+        elapsedMs: now - t0,
+        effectMs: now - effectStart,
+      });
+      g.__searchNavSteps = steps;
+      logger.info('[search-nav] RandomChat.sessionCreated', {
+        elapsedMs: now - t0,
+        effectMs: now - effectStart,
+        steps,
+      });
+    } catch {}
     
     // Подписки на события
     session.on('localStream', (stream) => {
@@ -1385,6 +1429,18 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   useFocusEffect(
     useCallback(() => {
       leavingRef.current = false;
+      try {
+        const now = Date.now();
+        const g = global as any;
+        const t0 = Number(g.__searchNavT0 || now);
+        const steps = Array.isArray(g.__searchNavSteps) ? g.__searchNavSteps : [];
+        steps.push({ step: 'RandomChat.focus', at: now, elapsedMs: now - t0 });
+        g.__searchNavSteps = steps;
+        logger.info('[search-nav] RandomChat.focus', {
+          elapsedMs: now - t0,
+          steps,
+        });
+      } catch {}
       
       return () => {
         const stillFocused = navigation?.isFocused?.();

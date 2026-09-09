@@ -202,6 +202,37 @@ const navRef = createNavigationContainerRef<RootStackParamList>();
 // (безопасно: используется только для navigate на Home при разрыве вызова)
 (global as any).__navRef = navRef;
 
+/** Стабильная ссылка: inline getComponent в render App пересоздаётся и даёт лишний resolve/focus. */
+function getRandomChatScreen() {
+  const requireStart = Date.now();
+  try {
+    const g = global as any;
+    const t0 = Number(g.__searchNavT0 || requireStart);
+    logger.info('[search-nav] App.getComponent.start', {
+      elapsedMs: requireStart - t0,
+    });
+  } catch {}
+  const Comp = require('./screens/RandomChatScreen').default;
+  try {
+    const now = Date.now();
+    const g = global as any;
+    const t0 = Number(g.__searchNavT0 || now);
+    const steps = Array.isArray(g.__searchNavSteps) ? g.__searchNavSteps : [];
+    steps.push({
+      step: 'App.getComponent.done',
+      at: now,
+      elapsedMs: now - t0,
+      requireMs: now - requireStart,
+    });
+    g.__searchNavSteps = steps;
+    logger.info('[search-nav] App.getComponent.done', {
+      elapsedMs: now - t0,
+      requireMs: now - requireStart,
+    });
+  } catch {}
+  return Comp;
+}
+
 // Звонки, для которых уже пришло call:ended по сокету. Не переходить на VideoCall по call:accepted для такого callId (избегаем мелькания и «произвольных» переходов).
 const endedCallIdsFromSocket = new Set<string>();
 const ENDED_CALL_IDS_TTL_MS = 120000;
@@ -4048,10 +4079,36 @@ function AppContent() {
                 if (currentRoute && currentRoute !== lastLoggedRouteRef.current) {
                   lastLoggedRouteRef.current = currentRoute;
                 }
+                if (currentRoute === 'RandomChat') {
+                  try {
+                    const now = Date.now();
+                    const g = global as any;
+                    const t0 = Number(g.__searchNavT0 || 0);
+                    if (t0 > 0) {
+                      const steps = Array.isArray(g.__searchNavSteps) ? g.__searchNavSteps : [];
+                      steps.push({ step: 'App.onStateChange.RandomChat', at: now, elapsedMs: now - t0 });
+                      g.__searchNavSteps = steps;
+                      logger.info('[search-nav] App.onStateChange.RandomChat', {
+                        elapsedMs: now - t0,
+                        steps,
+                      });
+                    }
+                  } catch {}
+                }
                 // После отмены входящего не дергаем setRouteName — иначе ре-рендер App / fade стека
                 if (!shouldSkipHomeUiSettle()) {
                   activeRouteNameRef.current = currentRoute;
-                  setRouteName(currentRoute);
+                  // RandomChat: не ре-рендерить App в том же тике, что и первый paint
+                  // (иначе стек снова резолвит экран → второй focus). PiP на welcome обычно скрыт.
+                  if (currentRoute === 'RandomChat') {
+                    InteractionManager.runAfterInteractions(() => {
+                      if (activeRouteNameRef.current === 'RandomChat') {
+                        setRouteName('RandomChat');
+                      }
+                    });
+                  } else {
+                    setRouteName(currentRoute);
+                  }
                 }
               }
             } catch (e) {
@@ -4075,12 +4132,13 @@ function AppContent() {
               <Stack.Screen name="Home" component={HomeScreen} />
               <Stack.Screen
                 name="RandomChat"
-                getComponent={() => require('./screens/RandomChatScreen').default}
+                getComponent={getRandomChatScreen}
                 options={{
                   presentation: 'card',
                   gestureEnabled: true,
-                  animation: 'fade',
-                  animationDuration: 80,
+                  // Как VideoCall: без fade — мгновенный вход, без «залипания» поверх Home.
+                  animation: 'none',
+                  animationDuration: 0,
                   contentStyle: {
                     backgroundColor: isDark ? WELCOME_STAGE_BG : ((theme.colors.background as string) || WELCOME_STAGE_BG),
                   },

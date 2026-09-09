@@ -12,14 +12,16 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import {
-  AURA_GRADIENT,
   SEARCH_CTA_MAX_WIDTH,
   SEARCH_CTA_TABLET_MAX_WIDTH,
   SEARCH_CTA_TABLET_MIN_WIDTH,
   WELCOME_HEADER_TITLE,
 } from './constants';
+import { logger } from '../../utils/logger';
 
 const BORDER_W = 1.35;
+/** Темнее/приглушённее aura — только рамка CTA, без смены глобального градиента. */
+const CTA_BORDER_GRADIENT = ['#0b7f74', '#255db8', '#007fbc'] as const;
 
 type WelcomeSearchCtaProps = {
   label: string;
@@ -48,6 +50,8 @@ export function WelcomeSearchCta({
   const innerRadius = Math.max(0, borderRadius - BORDER_W);
   const blockedFlash = useRef(new Animated.Value(0)).current;
   const blockedShake = useRef(new Animated.Value(0)).current;
+  const pressScale = useRef(new Animated.Value(1)).current;
+  const pressDepth = useRef(new Animated.Value(0)).current;
   const pressArmed = useRef(false);
 
   const triggerBlocked = useCallback(() => {
@@ -67,6 +71,38 @@ export function WelcomeSearchCta({
     onDisabledPress?.();
   }, [blockedFlash, blockedShake, onDisabledPress]);
 
+  const animatePressIn = useCallback(() => {
+    Animated.parallel([
+      Animated.spring(pressScale, {
+        toValue: 0.965,
+        friction: 6,
+        tension: 220,
+        useNativeDriver: true,
+      }),
+      Animated.timing(pressDepth, {
+        toValue: 1,
+        duration: 90,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [pressDepth, pressScale]);
+
+  const animatePressOut = useCallback(() => {
+    Animated.parallel([
+      Animated.spring(pressScale, {
+        toValue: 1,
+        friction: 5,
+        tension: 160,
+        useNativeDriver: true,
+      }),
+      Animated.timing(pressDepth, {
+        toValue: 0,
+        duration: 200,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [pressDepth, pressScale]);
+
   const firePress = useCallback(() => {
     if (disabled) {
       triggerBlocked();
@@ -74,33 +110,60 @@ export function WelcomeSearchCta({
     }
     if (pressArmed.current) return;
     pressArmed.current = true;
+    const t0 = Date.now();
+    try {
+      const g = global as any;
+      g.__searchNavT0 = t0;
+      g.__searchNavSteps = [{ step: 'cta.firePress', at: t0, elapsedMs: 0 }];
+    } catch {}
+    logger.info('[search-nav] cta.firePress', { t0 });
     onPress();
   }, [disabled, onPress, triggerBlocked]);
+
+  const handlePressIn = useCallback(() => {
+    if (!disabled) animatePressIn();
+    firePress();
+  }, [animatePressIn, disabled, firePress]);
+
+  const handlePressOut = useCallback(() => {
+    animatePressOut();
+    // Не сбрасывать armed синхронно в pressOut: иначе onPress после onPressIn
+    // снова вызовет navigate и перезапустит переход.
+    setTimeout(() => {
+      pressArmed.current = false;
+    }, 0);
+  }, [animatePressOut]);
+
+  const depthOpacity = pressDepth.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, 0.18],
+  });
+  const sheenOpacity = pressDepth.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, 0.14],
+  });
 
   return (
     <Animated.View
       style={[
-        { width: buttonWidth, transform: [{ translateX: blockedShake }] },
+        {
+          width: buttonWidth,
+          transform: [{ translateX: blockedShake }, { scale: pressScale }],
+        },
         style,
       ]}
     >
       <Pressable
         onPress={firePress}
-        onPressIn={firePress}
-        onPressOut={() => {
-          pressArmed.current = false;
-        }}
+        onPressIn={handlePressIn}
+        onPressOut={handlePressOut}
         disabled={false}
         accessibilityRole="button"
         accessibilityState={{ disabled }}
-        style={({ pressed }) => [
-          styles.shadow,
-          pressed && !disabled ? { opacity: 0.92, transform: [{ scale: 0.985 }] } : null,
-          disabled ? { opacity: 0.45 } : null,
-        ]}
+        style={[styles.shadow, disabled ? { opacity: 0.45 } : null]}
       >
         <LinearGradient
-          colors={[AURA_GRADIENT[0], AURA_GRADIENT[1], AURA_GRADIENT[2]]}
+          colors={[CTA_BORDER_GRADIENT[0], CTA_BORDER_GRADIENT[1], CTA_BORDER_GRADIENT[2]]}
           start={{ x: 0, y: 0.35 }}
           end={{ x: 1, y: 0.65 }}
           style={[
@@ -137,6 +200,27 @@ export function WelcomeSearchCta({
                 StyleSheet.absoluteFillObject,
                 {
                   borderRadius: innerRadius,
+                  backgroundColor: '#000',
+                  opacity: depthOpacity,
+                },
+              ]}
+            />
+            <Animated.View
+              pointerEvents="none"
+              style={[
+                styles.sheen,
+                {
+                  borderRadius: innerRadius,
+                  opacity: sheenOpacity,
+                },
+              ]}
+            />
+            <Animated.View
+              pointerEvents="none"
+              style={[
+                StyleSheet.absoluteFillObject,
+                {
+                  borderRadius: innerRadius,
                   backgroundColor: 'rgba(255,90,103,0.4)',
                   opacity: blockedFlash,
                 },
@@ -151,9 +235,9 @@ export function WelcomeSearchCta({
 
 const styles = StyleSheet.create({
   shadow: {
-    shadowColor: AURA_GRADIENT[1],
+    shadowColor: CTA_BORDER_GRADIENT[1],
     shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.22,
+    shadowOpacity: 0.2,
     shadowRadius: 14,
     elevation: 6,
     overflow: 'visible',
@@ -168,6 +252,12 @@ const styles = StyleSheet.create({
     gap: 8,
     paddingHorizontal: 24,
     overflow: 'hidden',
+  },
+  sheen: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(255,255,255,0.55)',
+    // верхняя «бликовая» полоса при нажатии
+    height: '45%',
   },
   label: {
     color: WELCOME_HEADER_TITLE,

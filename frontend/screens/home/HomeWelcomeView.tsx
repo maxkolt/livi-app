@@ -20,6 +20,7 @@ import { WelcomeOnlineBanner, type WelcomeBannerPeer } from './WelcomeOnlineBann
 import { WelcomeRadar } from './WelcomeRadar';
 import { WelcomeSearchCta } from './WelcomeSearchCta';
 import type { Lang } from '../../utils/i18n';
+import { logger } from '../../utils/logger';
 import type { HomeStyles } from './styles';
 
 export type HomeWelcomeViewProps = {
@@ -226,6 +227,18 @@ function HomeWelcomeViewInner({
   }, [compactLayout, fireBurst, phoneLandscape, viewHeight, viewWidth]);
 
   const handleStartSearchPress = useCallback(() => {
+    const now = Date.now();
+    try {
+      const g = global as any;
+      const t0 = Number(g.__searchNavT0 || now);
+      const steps = Array.isArray(g.__searchNavSteps) ? g.__searchNavSteps : [];
+      steps.push({ step: 'welcome.handleStartSearchPress', at: now, elapsedMs: now - t0 });
+      g.__searchNavSteps = steps;
+      logger.info('[search-nav] welcome.handleStartSearchPress', {
+        elapsedMs: now - t0,
+        hadBurst: !!burstActiveRef.current,
+      });
+    } catch {}
     cancelBurst();
     onStartSearch();
   }, [cancelBurst, onStartSearch]);
