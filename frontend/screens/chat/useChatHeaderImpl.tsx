@@ -2,7 +2,7 @@
 
 import React from "react";
 import { Platform, Pressable, Text, TouchableOpacity, View } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
+import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import AvatarImage from "../../components/AvatarImage";
 import ChatStyleBackButton from "../../components/ChatStyleBackButton";
 import { t, type Lang } from "../../utils/i18n";
@@ -244,7 +244,7 @@ export function useChatHeader({
                 accessibilityRole="button"
                 accessibilityLabel={t("tabCalls", lang)}
               >
-                <Ionicons name="videocam" size={20} color={LIVI.titan} />
+                <MaterialCommunityIcons name="phone-in-talk-outline" size={23} color={LIVI.titan} />
               </TouchableOpacity>
               <TouchableOpacity
                 onPress={onPressMore}

@@ -2002,6 +2002,18 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     }
 
     const doNavigate = (cid: string, rid: string, navParams?: any) => {
+      const partnerNickFromCtx = String(
+        navParams?.partnerNick ||
+          partnerNameRef.current ||
+          (global as any).__currentCallPiPParamsRef?.current?.partnerName ||
+          '',
+      ).trim();
+      const peerFromCtx = String(
+        navParams?.peerUserId ||
+          navParams?.partnerId ||
+          (global as any).__videoCallPartnerUserIdRef?.current ||
+          '',
+      ).trim();
       const params = {
         ...(navParams ?? {}),
         resume: true,
@@ -2014,6 +2026,8 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         directInitiator: undefined,
         callId: cid,
         roomId: rid,
+        ...(peerFromCtx ? { peerUserId: peerFromCtx } : {}),
+        ...(partnerNickFromCtx ? { partnerNick: partnerNickFromCtx } : {}),
       };
 
       const completeAfterNavAttempt = (source: string) => {

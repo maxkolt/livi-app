@@ -4311,7 +4311,47 @@ app.get('/whoami', async (req, res) => {
 });
 
 /* ========= REST presence ========= */
-app.get('/api/presence', (_req, res) => res.json({ ok: true, list: getOnlineListFromIo(io) }));
+/** Онлайн в приложении (не только друзья): id + nick + avatarVer для welcome-баннера. */
+app.get('/api/presence', async (_req, res) => {
+  try {
+    const ids = getOnlineListFromIo(io);
+    if (!ids.length) {
+      return res.json({ ok: true, list: [] as Array<{ id: string; nick: string; avatarVer: number }> });
+    }
+    if (!isMongoReady()) {
+      return res.json({
+        ok: true,
+        list: ids.map((id) => ({ id, nick: '', avatarVer: 0 })),
+      });
+    }
+    const users = await User.find({ _id: { $in: ids } })
+      .select('nick avatarVer')
+      .lean();
+    const byId = new Map<string, { nick?: string; avatarVer?: number }>();
+    for (const u of users as Array<{ _id: unknown; nick?: string; avatarVer?: number }>) {
+      byId.set(String(u._id), u);
+    }
+    const list = ids.map((id) => {
+      const u = byId.get(id);
+      return {
+        id,
+        nick: typeof u?.nick === 'string' ? u.nick : '',
+        avatarVer: Number(u?.avatarVer) || 0,
+      };
+    });
+    return res.json({ ok: true, list });
+  } catch (e: any) {
+    try {
+      const ids = getOnlineListFromIo(io);
+      return res.json({
+        ok: true,
+        list: ids.map((id) => ({ id, nick: '', avatarVer: 0 })),
+      });
+    } catch {
+      return res.status(500).json({ ok: false, error: e?.message || 'server_error' });
+    }
+  }
+});
 
 /* ========= REST chat history REMOVED - using in-memory only ========= */
 

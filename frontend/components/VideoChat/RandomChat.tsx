@@ -1432,14 +1432,18 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       try {
         const now = Date.now();
         const g = global as any;
-        const t0 = Number(g.__searchNavT0 || now);
-        const steps = Array.isArray(g.__searchNavSteps) ? g.__searchNavSteps : [];
-        steps.push({ step: 'RandomChat.focus', at: now, elapsedMs: now - t0 });
-        g.__searchNavSteps = steps;
-        logger.info('[search-nav] RandomChat.focus', {
-          elapsedMs: now - t0,
-          steps,
-        });
+        const t0 = Number(g.__searchNavT0 || 0);
+        // Один лог на CTA: повторные focus после setRouteName/remount не время открытия.
+        if (t0 > 0 && !g.__searchNavFocusLogged) {
+          g.__searchNavFocusLogged = true;
+          const steps = Array.isArray(g.__searchNavSteps) ? g.__searchNavSteps : [];
+          steps.push({ step: 'RandomChat.focus', at: now, elapsedMs: now - t0 });
+          g.__searchNavSteps = steps;
+          logger.info('[search-nav] RandomChat.focus', {
+            elapsedMs: now - t0,
+            steps,
+          });
+        }
       } catch {}
       
       return () => {

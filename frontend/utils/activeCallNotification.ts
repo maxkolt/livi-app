@@ -193,6 +193,53 @@ function applyAndroidLeaveHintNativeFlags(allowPiP: boolean): void {
   logHomePiPTrace('js_leave_hint_arm', { allowPiP: effectiveAllow, placeholderOnly });
 }
 
+/**
+ * Параметры VideoCall при возврате по ongoing-уведомлению / system PiP fallback.
+ * Без peerUserId/partnerNick после remount в шапке «—» или пустой ник.
+ */
+export function buildVideoCallReturnNavParams(
+  params: Record<string, any> | null | undefined,
+  opts: {
+    preferAudioOnlyUi: boolean;
+    returnToken: number;
+  },
+): Record<string, unknown> {
+  const g = global as any;
+  const navParams =
+    params?.navParams && typeof params.navParams === 'object' && !Array.isArray(params.navParams)
+      ? (params.navParams as Record<string, unknown>)
+      : {};
+  const partnerNick = String(
+    navParams.partnerNick ||
+      params?.partnerNick ||
+      params?.partnerName ||
+      g.__outgoingCallPeerNickRef?.current ||
+      '',
+  ).trim();
+  const peerUserId = String(
+    navParams.peerUserId ||
+      navParams.partnerId ||
+      params?.peerUserId ||
+      g.__videoCallPartnerUserIdRef?.current ||
+      g.__outgoingCallPeerUserIdRef?.current ||
+      '',
+  ).trim();
+  return {
+    ...navParams,
+    resume: true,
+    fromPiP: true,
+    systemPiPReturnToken: opts.returnToken,
+    callId: params?.callId,
+    roomId: params?.roomId,
+    directCall: true,
+    ...(peerUserId ? { peerUserId } : {}),
+    ...(partnerNick ? { partnerNick } : {}),
+    ...(opts.preferAudioOnlyUi
+      ? { audioOnlyPiPReturn: true, preferVideoCallUi: false }
+      : { audioOnlyPiPReturn: false, preferVideoCallUi: true }),
+  };
+}
+
 /** До монтирования VideoCall: callId/roomId + active ref, чтобы Home не попал в should_enter_false. */
 export function primeAndroidCallContextForLeaveHint(opts: {
   callId?: string | null;

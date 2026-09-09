@@ -1,4 +1,4 @@
-import React, { memo } from 'react';
+import React, { memo, useEffect, useMemo, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import type { Lang } from '../../utils/i18n';
 import AvatarImage from '../../components/AvatarImage';
@@ -11,6 +11,8 @@ export type WelcomeBannerPeer = {
   name?: string;
   avatarVer?: number;
   avatarThumbB64?: string;
+  /** HTTP URL (`/api/avatar/:id?thumb=1`) для не-друзей без локального thumb. */
+  avatarUri?: string;
 };
 
 type WelcomeOnlineBannerProps = {
@@ -23,6 +25,8 @@ type WelcomeOnlineBannerProps = {
 
 const STACK_SIZE = 32;
 const STACK_OVERLAP = 12;
+const STACK_VISIBLE = 4;
+const ROTATE_MS = 3800;
 
 function WelcomeOnlineBannerInner({
   lang,
@@ -32,11 +36,43 @@ function WelcomeOnlineBannerInner({
   compact = false,
 }: WelcomeOnlineBannerProps) {
   const countLine = formatWelcomeUsersOnlineLine(onlineCount, lang);
+  const [offset, setOffset] = useState(0);
 
-  const stackPeers = peers.slice(0, 4);
-  while (stackPeers.length < 4) {
-    stackPeers.push({ id: `placeholder-${stackPeers.length}`, name: '' });
-  }
+  useEffect(() => {
+    if (peers.length <= STACK_VISIBLE) {
+      setOffset(0);
+      return;
+    }
+    const t = setInterval(() => {
+      setOffset((o) => (o + 1) % peers.length);
+    }, ROTATE_MS);
+    return () => clearInterval(t);
+  }, [peers.length]);
+
+  // Сброс offset, если список резко укоротился.
+  useEffect(() => {
+    if (peers.length === 0) {
+      setOffset(0);
+      return;
+    }
+    setOffset((o) => o % peers.length);
+  }, [peers.length]);
+
+  const stackPeers = useMemo(() => {
+    const out: WelcomeBannerPeer[] = [];
+    for (let i = 0; i < STACK_VISIBLE; i++) {
+      if (peers.length === 0) {
+        out.push({ id: `placeholder-${i}`, name: '' });
+        continue;
+      }
+      if (peers.length <= STACK_VISIBLE) {
+        out.push(peers[i] || { id: `placeholder-${i}`, name: '' });
+        continue;
+      }
+      out.push(peers[(offset + i) % peers.length]);
+    }
+    return out;
+  }, [peers, offset]);
 
   return (
     <View style={[styles.pill, compact && styles.pillCompact]}>
@@ -53,14 +89,15 @@ function WelcomeOnlineBannerInner({
         {stackPeers.map((peer, index) => {
           const isPlaceholder = String(peer.id).startsWith('placeholder-');
           const letter = displayAvatarLetter(peer.name || '');
+          const uri = peer.avatarThumbB64 || peer.avatarUri || undefined;
           return (
             <View
-              key={peer.id}
+              key={isPlaceholder ? `placeholder-${index}` : peer.id}
               style={[
                 styles.stackItem,
                 {
                   marginLeft: index === 0 ? 0 : -STACK_OVERLAP,
-                  zIndex: 4 - index,
+                  zIndex: STACK_VISIBLE - index,
                 },
               ]}
             >
@@ -70,7 +107,7 @@ function WelcomeOnlineBannerInner({
                 <AvatarImage
                   userId={peer.id}
                   avatarVer={peer.avatarVer || 0}
-                  uri={peer.avatarThumbB64 || undefined}
+                  uri={uri}
                   size={STACK_SIZE}
                   fallbackText={letter || '·'}
                   containerStyle={styles.stackAvatar}

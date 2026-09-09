@@ -1789,7 +1789,13 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       g.__currentCallPiPParamsRef.current = {
         callId: effectiveSystemPiPCallId || '',
         roomId: effectiveSystemPiPRoomId || '',
-        partnerName: (partner as any)?.nick || '',
+        partnerName:
+          String(
+            (partner as any)?.nick ||
+              (partner as any)?.name ||
+              route?.params?.partnerNick ||
+              '',
+          ).trim() || '',
         partnerAvatarUrl: avatarUrl,
         localStream: localStream || null,
         remoteStream: remoteStream || null,
@@ -1803,7 +1809,26 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
         preferVideoCallUi: !inAudioOnlyUiRef.current,
         inAudioOnlyUi: inAudioOnlyUiRef.current,
         audioOutputRoute: routeForPiPParams,
-        navParams: { ...route?.params, peerUserId: partnerUserId, partnerId } as any,
+        navParams: {
+          ...route?.params,
+          peerUserId: partnerUserId,
+          partnerId,
+          ...(String(
+            route?.params?.partnerNick ||
+              (partner as any)?.nick ||
+              (partner as any)?.name ||
+              '',
+          ).trim()
+            ? {
+                partnerNick: String(
+                  route?.params?.partnerNick ||
+                    (partner as any)?.nick ||
+                    (partner as any)?.name ||
+                    '',
+                ).trim(),
+              }
+            : {}),
+        } as any,
       };
       refreshSystemPiPLeaveContextSnapshot();
     };
@@ -3159,9 +3184,17 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       getPipRemoteStream: () => pip.remoteStream,
       getPartnerDisplayName: () => {
         const uid = partnerUserId;
+        const fromParams = String(route?.params?.partnerNick || '').trim();
+        if (fromParams) return fromParams;
+        try {
+          const fromPiP = String((global as any).__currentCallPiPParamsRef?.current?.partnerName || '').trim();
+          if (fromPiP) return fromPiP;
+        } catch {}
         if (!uid) return t('someone', lang);
-        const partner = friendsRef.current?.find((f: any) => String(f._id) === String(uid));
-        const nick = (partner as any)?.nick?.trim();
+        const partner = friendsRef.current?.find(
+          (f: any) => String(f._id ?? f.id) === String(uid),
+        );
+        const nick = String((partner as any)?.nick || (partner as any)?.name || '').trim();
         return nick || t('someone', lang);
       },
       onSwitchToConnectingSession: (connectingSession: unknown) => {
@@ -6191,6 +6224,10 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
 
   const partnerDisplayName = useMemo(() => {
     if (route?.params?.partnerNick) return String(route.params.partnerNick);
+    try {
+      const fromPiP = String((global as any).__currentCallPiPParamsRef?.current?.partnerName || '').trim();
+      if (fromPiP) return fromPiP;
+    } catch {}
     if (partnerUserId) {
       const f = friends.find((fr) => String(fr._id ?? fr.id) === String(partnerUserId));
       const name = (f?.name || f?.nick || '').trim();
@@ -6926,7 +6963,13 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
           currentPip.showPiP({
             callId: callId || '',
             roomId: roomId || '',
-            partnerName: partner?.nick || '',
+            partnerName:
+              String(
+                partner?.nick ||
+                  partner?.name ||
+                  route?.params?.partnerNick ||
+                  '',
+              ).trim() || '',
             partnerAvatarUrl: avatarUrl,
             muteLocal: !micOn,
             muteRemote: remoteMuted,

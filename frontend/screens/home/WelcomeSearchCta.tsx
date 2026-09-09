@@ -115,6 +115,9 @@ export function WelcomeSearchCta({
       const g = global as any;
       g.__searchNavT0 = t0;
       g.__searchNavSteps = [{ step: 'cta.firePress', at: t0, elapsedMs: 0 }];
+      // Только первый focus/onStateChange после CTA — иначе поздние remount/focus шумят (200–1100ms).
+      g.__searchNavFocusLogged = false;
+      g.__searchNavStateChangeLogged = false;
     } catch {}
     logger.info('[search-nav] cta.firePress', { t0 });
     onPress();

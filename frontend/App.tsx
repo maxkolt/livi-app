@@ -101,6 +101,7 @@ import {
   armAndroidLeaveHintForVideoCallHome,
   syncAndroidLeaveHintForOngoingCall,
   primeAndroidCallContextForLeaveHint,
+  buildVideoCallReturnNavParams,
 } from './utils/activeCallNotification';
 import {
   resolvePreferAudioOnlyUiOnActiveCallReturn,
@@ -1004,17 +1005,10 @@ function AppContent() {
             { name: 'Home' as const },
             {
               name: 'VideoCall' as const,
-              params: {
-                resume: true,
-                fromPiP: true,
-                systemPiPReturnToken: returnToken,
-                callId: params.callId,
-                roomId: params.roomId,
-                directCall: true,
-                ...(preferAudioOnlyUi
-                  ? { audioOnlyPiPReturn: true, preferVideoCallUi: false }
-                  : { audioOnlyPiPReturn: false, preferVideoCallUi: true }),
-              },
+              params: buildVideoCallReturnNavParams(params, {
+                preferAudioOnlyUi,
+                returnToken,
+              }),
             },
           ],
         })
@@ -1370,17 +1364,10 @@ function AppContent() {
                 { name: 'Home' as const },
                 {
                   name: 'VideoCall' as const,
-                  params: {
-                    resume: true,
-                    fromPiP: true,
-                    systemPiPReturnToken: returnToken,
-                    callId: params.callId,
-                    roomId: params.roomId,
-                    directCall: true,
-                    ...(preferAudioOnly
-                      ? { audioOnlyPiPReturn: true, preferVideoCallUi: false }
-                      : { audioOnlyPiPReturn: false, preferVideoCallUi: true }),
-                  },
+                  params: buildVideoCallReturnNavParams(params, {
+                    preferAudioOnlyUi: preferAudioOnly,
+                    returnToken,
+                  }),
                 },
               ],
             })
@@ -1416,15 +1403,10 @@ function AppContent() {
                 { name: 'Home' as const },
                 {
                   name: 'VideoCall' as const,
-                  params: {
-                    resume: true,
-                    fromPiP: true,
-                    audioOnlyPiPReturn: true,
-                    systemPiPReturnToken: returnToken,
-                    callId: params.callId,
-                    roomId: params.roomId,
-                    directCall: true,
-                  },
+                  params: buildVideoCallReturnNavParams(params, {
+                    preferAudioOnlyUi: true,
+                    returnToken,
+                  }),
                 },
               ],
             })
@@ -4084,7 +4066,8 @@ function AppContent() {
                     const now = Date.now();
                     const g = global as any;
                     const t0 = Number(g.__searchNavT0 || 0);
-                    if (t0 > 0) {
+                    if (t0 > 0 && !g.__searchNavStateChangeLogged) {
+                      g.__searchNavStateChangeLogged = true;
                       const steps = Array.isArray(g.__searchNavSteps) ? g.__searchNavSteps : [];
                       steps.push({ step: 'App.onStateChange.RandomChat', at: now, elapsedMs: now - t0 });
                       g.__searchNavSteps = steps;

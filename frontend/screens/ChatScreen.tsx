@@ -134,6 +134,7 @@ import {
   shouldShowChatGapCenter,
 } from './chat/ChatGapStatus';
 import { ChatParallaxWallpaper } from './chat/ChatParallaxWallpaper';
+import { ChatMessageEdgeFade } from './chat/ChatMessageEdgeFade';
 import { WelcomeStageBackground, StageGradient } from './home/WelcomeStageBackground';
 import { WELCOME_CARD_BG, WELCOME_CHROME_EDGE_RADIUS, WELCOME_HEADER_TITLE, WELCOME_STAGE_BG } from './home/constants';
 import {
@@ -2039,7 +2040,7 @@ export default function ChatScreen({ route, navigation }: Props) {
     setInputHeight(h);
   }, [inputHeight]);
 
-  // Список на весь экран под chrome: облака уезжают под шапку/композер (просвечивают).
+  // Список на весь экран под chrome: облака уезжают под шапку/композер и растворяются у края.
   // Инсеты — через padding контента; под IME оставляем только keyboard pad.
   const resolvedInputBarH = inputHeight > 0 ? inputHeight : estimatedInputHeight;
   // One persistent status slot on every Android device. Typing/recording and
@@ -2271,6 +2272,11 @@ export default function ChatScreen({ route, navigation }: Props) {
             keyboardVerticalOffset={0}
           >
             <View style={{ flex: 1, overflow: 'hidden' }}>
+            <ChatMessageEdgeFade
+              style={{ flex: 1 }}
+              top={headerTotalH}
+              bottom={resolvedInputBarH + 14}
+            >
             <FlatList
               ref={flatListRef}
               data={iosChatListData}
@@ -2316,6 +2322,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 return null;
               }}
             />
+            </ChatMessageEdgeFade>
             {chatEmptyFeedPlaceholder}
             {DeleteToastInline ? (
               <View
@@ -2634,6 +2641,11 @@ export default function ChatScreen({ route, navigation }: Props) {
                 overflow: 'hidden',
               }}
             >
+            <ChatMessageEdgeFade
+              style={{ flex: 1 }}
+              top={headerTotalH}
+              bottom={resolvedInputBarH + androidInlineStatusGapH}
+            >
             <FlatList
               ref={flatListRef}
               data={androidChatListData}
@@ -2679,6 +2691,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 return null;
               }}
             />
+            </ChatMessageEdgeFade>
             </View>
 
             {chatEmptyFeedPlaceholder}
@@ -3009,7 +3022,7 @@ export default function ChatScreen({ route, navigation }: Props) {
           </View>)
         )}
         </View>
-        {/* Шапка поверх ленты — облака уезжают под glass и слегка просвечивают. */}
+        {/* Шапка поверх ленты — облака растворяются маской ленты; фон chrome без доп. затемнения. */}
         <View
           pointerEvents="box-none"
           style={{

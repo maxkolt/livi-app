@@ -219,7 +219,13 @@ export const usePiP = ({
       pip.showPiP({
         callId: finalCallId,
         roomId: finalRoomId,
-        partnerName: (partner?.nick && partner.nick.trim()) ? partner.nick.trim() : (partnerNameFromParams && String(partnerNameFromParams).trim()) ? String(partnerNameFromParams).trim() : '',
+        partnerName: (partner?.nick && partner.nick.trim())
+          ? partner.nick.trim()
+          : (partner?.name && String(partner.name).trim())
+            ? String(partner.name).trim()
+            : (partnerNameFromParams && String(partnerNameFromParams).trim())
+              ? String(partnerNameFromParams).trim()
+              : '',
         partnerAvatarUrl: avatarUrl,
         muteLocal,
         muteRemote: remoteMuted,

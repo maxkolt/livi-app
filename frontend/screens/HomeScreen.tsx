@@ -376,18 +376,26 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     refreshBadgesOnAppResume,
   } = useHomeBadges({ friends, friendsRef });
 
-  const { onlineCount: welcomeOnlineCount } = useWelcomeOnlineCount(appIsActive);
-
-  const welcomeBannerPeers = React.useMemo(
-    () =>
-      friends.slice(0, 4).map((f) => ({
-        id: String(f.id),
-        name: f.name,
-        avatarVer: f.avatarVer,
-        avatarThumbB64: f.avatarThumbB64,
-      })),
-    [friends],
+  const { onlineCount: welcomeOnlineCount, peers: welcomePresencePeers } = useWelcomeOnlineCount(
+    appIsActive,
+    resolvedUserId,
   );
+
+  // Prefer локальный thumb друга, если есть — иначе HTTP /api/avatar из presence.
+  const welcomeBannerPeers = React.useMemo(() => {
+    if (!welcomePresencePeers.length) return welcomePresencePeers;
+    const byId = new Map(friends.map((f) => [String(f.id), f]));
+    return welcomePresencePeers.map((p) => {
+      const f = byId.get(String(p.id));
+      if (!f) return p;
+      return {
+        ...p,
+        name: p.name || f.name,
+        avatarVer: p.avatarVer || f.avatarVer,
+        avatarThumbB64: f.avatarThumbB64 || p.avatarThumbB64,
+      };
+    });
+  }, [welcomePresencePeers, friends]);
 
   const pendingPresenceOfflineTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
@@ -1283,6 +1291,13 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       outgoingLive && calling.callId ? calling.callId : null;
     (global as any).__outgoingCallPeerUserIdRef.current =
       outgoingLive && calling.friend?.id ? String(calling.friend.id) : null;
+    try {
+      (global as any).__outgoingCallPeerNickRef =
+        (global as any).__outgoingCallPeerNickRef || { current: null };
+      const nick = trimNick(calling.friend?.nick || calling.friend?.name || '');
+      (global as any).__outgoingCallPeerNickRef.current =
+        outgoingLive && nick ? nick : null;
+    } catch {}
     if (Platform.OS === 'android' && outgoingLive && calling.callId) {
       const media = (global as any).__outgoingCallMediaRef?.current;
       if (media === 'video') {
@@ -1809,7 +1824,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       g.__outgoingCallUiActiveRef.current = true;
     } catch {}
     const isCurrentAttempt = () => activeOutgoingAttemptRef.current === attemptId;
-    const friendName = friend.name ?? '';
+    const friendName = trimNick(friend.nick || friend.name || '');
     requestAnimationFrame(() => {
       setSwipeActionsHiddenForCall(friend.id);
       openSwipeableRef.current?.close?.();
@@ -1854,6 +1869,11 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       lastOutgoingPeerIdRef.current = String(friend.id);
       try {
         (global as any).__outgoingCallMediaRef = { current: media };
+      } catch {}
+      try {
+        (global as any).__outgoingCallPeerNickRef =
+          (global as any).__outgoingCallPeerNickRef || { current: null };
+        (global as any).__outgoingCallPeerNickRef.current = friendName || null;
       } catch {}
       callingVisibleRef.current = true;
       clearOutgoingRedialGrace();

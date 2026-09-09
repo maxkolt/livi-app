@@ -187,18 +187,35 @@ class LiviOutgoingCallService : Service() {
             (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).createNotificationChannel(channel)
         }
 
-        val pendingIntent = LiviOngoingCallHelper.getPendingIntent(this)
-            ?: PendingIntent.getActivity(
-                this,
-                NOTIFICATION_ID,
-                Intent(this, OutgoingCallActivity::class.java).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
-                    putExtra(OutgoingCallActivity.EXTRA_CALL_ID, callId)
-                    putExtra(OutgoingCallActivity.EXTRA_TO_USER_ID, this@LiviOutgoingCallService.toUserId)
-                    putExtra(OutgoingCallActivity.EXTRA_TO_NICK, this@LiviOutgoingCallService.toNick)
-                },
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        // Всегда свежий Intent с актуальным toNick: IMMUTABLE PI от getPendingIntent
+        // мог заморозить пустой ник с первого start → тап по уведомлению без ника.
+        val contentIntent = Intent(this, OutgoingCallActivity::class.java).apply {
+            addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                    Intent.FLAG_ACTIVITY_REORDER_TO_FRONT,
             )
+            putExtra(OutgoingCallActivity.EXTRA_CALL_ID, callId)
+            putExtra(OutgoingCallActivity.EXTRA_TO_USER_ID, this@LiviOutgoingCallService.toUserId)
+            putExtra(OutgoingCallActivity.EXTRA_TO_NICK, this@LiviOutgoingCallService.toNick)
+            putExtra(OutgoingCallActivity.EXTRA_HAS_VIDEO, true)
+        }
+        val piFlags =
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                // MUTABLE: UPDATE_CURRENT реально обновляет extras при adoptRealCallId / смене ника.
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            } else {
+                PendingIntent.FLAG_UPDATE_CURRENT
+            }
+        val pendingIntent = PendingIntent.getActivity(
+            this,
+            NOTIFICATION_ID,
+            contentIntent,
+            piFlags,
+        )
 
         val title = if (toNick.isNotBlank()) {
             toNick
