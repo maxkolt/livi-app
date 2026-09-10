@@ -3943,6 +3943,11 @@ function AppContent() {
                   return;
                 }
                 showIncomingAnswerCover();
+                // Caller Android: закрыть Outgoing сразу после cover — Main с крышкой на экране,
+                // иначе onLayout VideoCall ждёт, пока Outgoing сверху (~1–2с).
+                if (isCaller && Platform.OS === 'android') {
+                  closeOutgoingNativeShell({ skipMainReturn: true });
+                }
                 setActiveVideoCall(true);
                 try { emitCloseHomeModals(); } catch {}
                 navigateToVideoCallScreen(navRef, params as Record<string, unknown>, 'call_accepted');
@@ -3986,6 +3991,7 @@ function AppContent() {
             doNavigate();
             prepareCallerAudioRouteForAccept();
             if (isCaller) {
+              // Повторный close идемпотентен (finishRequested). Нужен, если doNavigate вышел рано.
               closeOutgoingNativeShell({ skipMainReturn: true });
               bringCallerMainAfterVideoCallNav();
             } else {

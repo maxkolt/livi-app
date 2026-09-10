@@ -84,7 +84,7 @@ function WelcomeSelectModeHeaderInner({
           disabled={!canDelete}
           onPress={onDelete}
         >
-          <Ionicons name="trash-outline" size={20} color={LIVI.red} />
+          <Ionicons name="trash-outline" size={20} color="#A63A48" />
         </Pressable>
       </View>
     </>

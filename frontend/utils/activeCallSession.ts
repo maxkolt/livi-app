@@ -355,7 +355,22 @@ export function readUserSelectedExternalCallAudioRoute(): InCallAudioRoute | nul
         return [];
       }
     })();
-    if (available.length && !available.includes(route)) return null;
+    if (available.length && !available.includes(route)) {
+      // ICM lag: native probe / BT cache ещё держат гарнитуру.
+      try {
+        const probe = (global as any).__nativeCallAudioRoutesRef?.current as
+          | { available?: string[] }
+          | undefined;
+        if (Array.isArray(probe?.available) && probe.available.includes(route)) {
+          if (route === 'BLUETOOTH') {
+            const cached = (global as any).__callBtHeadsetConnectedRef?.current;
+            if (cached === false) return null;
+          }
+          return route;
+        }
+      } catch {}
+      return null;
+    }
     return route;
   } catch {
     return null;
@@ -417,7 +432,21 @@ export function readActiveExternalCallAudioRoute(
     ];
     const found = candidates.find((r) => r && isExternalHeadsetRoute(r)) || null;
     if (!found) return null;
-    if (available.length && !available.includes(found)) return null;
+    if (available.length && !available.includes(found)) {
+      try {
+        const probe = (global as any).__nativeCallAudioRoutesRef?.current as
+          | { available?: string[] }
+          | undefined;
+        if (Array.isArray(probe?.available) && probe.available.includes(found)) {
+          if (found === 'BLUETOOTH') {
+            const cached = (global as any).__callBtHeadsetConnectedRef?.current;
+            if (cached === false) return null;
+          }
+          return found;
+        }
+      } catch {}
+      return null;
+    }
     return found;
   } catch {
     return null;

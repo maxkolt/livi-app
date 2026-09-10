@@ -20,11 +20,14 @@ import android.os.Vibrator
 import android.os.VibratorManager
 import android.os.VibrationAttributes
 import android.content.res.Configuration
+import android.graphics.Color
 import android.graphics.PixelFormat
 import android.view.WindowManager
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewGroup
 import android.widget.ImageButton
+import android.widget.ImageView
 import android.widget.TextView
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
@@ -191,6 +194,8 @@ class IncomingCallActivity : AppCompatActivity() {
             declineButton.isEnabled = false
             stopCallRingtone()
             stopRepeatingVibration()
+            // Последний кадр Incoming = цвет audio/cover (#1B1C22), иначе task-switch даёт скачок welcome→audio.
+            paintAnswerHandoffCover()
             LiviAppModule.setPendingAnswerCall(callId, from, fromNick)
             val deliveredToJs = LiviAppModule.tryDeliverPendingAnswerToJs()
             // Incoming = singleInstance. Без подъёма Main после finish() остаётся лаунчер.
@@ -200,6 +205,9 @@ class IncomingCallActivity : AppCompatActivity() {
             } else {
                 android.util.Log.i(TAG, "accept: JS handling — bring Main task to front (no re-stash) callId=$callId")
                 LiviAppModule.bringMainToFrontImmediate(applicationContext)
+                try {
+                    overridePendingTransition(0, 0)
+                } catch (_: Exception) {}
             }
             // Не закрываем экран сразу:
             // закрытие подтверждается ACTION_CALL_ANSWERED из JS после фактического старта флоу accept.
@@ -499,9 +507,35 @@ class IncomingCallActivity : AppCompatActivity() {
         }.start()
     }
 
+    /**
+     * Сразу довести Incoming до цвета audio-call / answer-cover (#1B1C22),
+     * чтобы при подъёме Main не мелькал welcome-фон (#0A0C14 + image).
+     */
+    private fun paintAnswerHandoffCover() {
+        try {
+            val handoff = Color.parseColor("#1B1C22")
+            val root = findViewById<ViewGroup>(R.id.incoming_call_root)
+            root?.setBackgroundColor(handoff)
+            findViewById<View>(R.id.incoming_call_content)?.visibility = View.INVISIBLE
+            if (root != null) {
+                for (i in 0 until root.childCount) {
+                    val child = root.getChildAt(i)
+                    if (child is ImageView) child.visibility = View.INVISIBLE
+                }
+            }
+            window?.decorView?.setBackgroundColor(handoff)
+        } catch (_: Exception) {}
+    }
+
     private fun startMainForAnswerCall(callId: String, from: String, fromNick: String) {
         val intent = Intent(this, MainActivity::class.java).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+            addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK
+                    or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                    or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                    or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                    or Intent.FLAG_ACTIVITY_NO_ANIMATION,
+            )
             putExtra(MainActivity.EXTRA_PENDING_ANSWER_CALL_ID, callId)
             putExtra(MainActivity.EXTRA_PENDING_ANSWER_FROM, from)
             putExtra(MainActivity.EXTRA_PENDING_ANSWER_FROM_NICK, fromNick)
@@ -509,6 +543,9 @@ class IncomingCallActivity : AppCompatActivity() {
         }
         MainActivity.armIncomingAnswerCover = true
         startActivity(intent)
+        try {
+            overridePendingTransition(0, 0)
+        } catch (_: Exception) {}
     }
 
     private fun startMainWithDeepLink(deepLink: String) {

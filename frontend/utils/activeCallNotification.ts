@@ -11,6 +11,8 @@ import {
   isOngoingCallSession,
   ongoingCallPrefersVideoMedia,
   resolveActiveCallInCallMedia,
+  isDirectAudioEarpieceStabilizeWindow,
+  readActiveExternalCallAudioRoute,
 } from './activeCallSession';
 import { readRootCurrentRouteName } from './safeRootNavigation';
 import {
@@ -18,7 +20,7 @@ import {
   scheduleReapplyPersistedCallAudioRoute,
   isInAppPiPContextIncludingSuspended,
 } from './callAudioRoutePersist';
-import { readActiveExternalCallAudioRoute } from './activeCallSession';
+import { isFreshDirectCallAudioAcceptCallActive } from './directCallVideoExpandGuard';
 
 /**
  * Video system PiP: кадр уже есть до leave-hint — enterPictureInPictureMode
@@ -501,16 +503,34 @@ export function armAndroidLeaveHintForVideoCallHome(opts?: { allowFromInAppPiP?:
     const media = resolveActiveCallInCallMedia();
     if (media === 'audio') {
       const external = readActiveExternalCallAudioRoute();
+      // Accept / AppState flicker: не гонять multi-delay preserve поверх BT settle.
+      const acceptQuiet =
+        isDirectAudioEarpieceStabilizeWindow() ||
+        (() => {
+          try {
+            const cid = String(
+              (global as any).__activeCallAudioRouteCallIdRef?.current ||
+                (global as any).__currentCallPiPParamsRef?.current?.callId ||
+                '',
+            ).trim();
+            return !!cid && isFreshDirectCallAudioAcceptCallActive(cid);
+          } catch {
+            return false;
+          }
+        })();
       if (external) {
-        scheduleReapplyPersistedCallAudioRoute('audio_home_preserve_headset', {
-          media: 'audio',
-          delaysMs: [0, 400, 1200],
-        });
-      } else {
+        if (!acceptQuiet) {
+          scheduleReapplyPersistedCallAudioRoute('audio_home_preserve_headset', {
+            media: 'audio',
+            delaysMs: [0],
+            skipInCallRestart: true,
+          });
+        }
+      } else if (!acceptQuiet) {
         pinLoudSpeakerForAudioCallLeavingToBackground();
         scheduleReapplyPersistedCallAudioRoute('audio_home_loud_speaker', {
           media: 'audio',
-          delaysMs: [0, 300, 900, 1500],
+          delaysMs: [0, 500],
         });
       }
     }

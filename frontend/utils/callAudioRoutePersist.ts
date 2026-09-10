@@ -62,6 +62,8 @@ import {
   probeNativeCallAudioRoutes,
   isCallAudioBootstrapPending,
   isBluetoothHeadsetActiveForCall,
+  isBluetoothPreferredForAutoRoute,
+  isBluetoothAvailableForAutoRoute,
 } from './nativeCallAudioProbe';
 import {
   isCallAudioPiPTransitionWindow,
@@ -589,7 +591,18 @@ function shouldKeepExternalRouteDespiteMissingFromList(route: InCallAudioRoute):
   if (route === 'BLUETOOTH' && !isBluetoothHeadsetActiveForCall()) return false;
   try {
     const list = readAvailableAudioDeviceList();
-    if (list.length && !list.includes(route)) return false;
+    // ICM без BT при живом native probe — не считать «отключено» (accept churn).
+    if (list.length && !list.includes(route)) {
+      try {
+        const probe = (global as any).__nativeCallAudioRoutesRef?.current as
+          | { available?: string[] }
+          | undefined;
+        if (Array.isArray(probe?.available) && probe.available.includes(route)) {
+          return true;
+        }
+      } catch {}
+      return false;
+    }
 
     const nativeExt = readNativeProbedExternalRoute();
     if (nativeExt === route && (!list.length || list.includes(route))) return true;
@@ -713,7 +726,7 @@ export function pinLoudSpeakerForAudioCallLeavingToBackground(): void {
   if (isExternalHeadsetRoute(route)) return;
 
   const available = readAvailableAudioDeviceList();
-  if (available.includes('BLUETOOTH')) {
+  if (isBluetoothAvailableForAutoRoute()) {
     setPersistedCallAudioRoute('BLUETOOTH');
     try {
       const params = (global as any).__currentCallPiPParamsRef?.current;
@@ -1804,6 +1817,18 @@ export function resolveDirectCallAcceptAudioReapplyRoute(): InCallAudioRoute {
   if (isExternalHeadsetRoute(userExt)) {
     return coercePersistedRouteForAvailableDevices(userExt);
   }
+  const userSel = normalizeInCallRoute(readUserSelectedCallAudioRoute() || '');
+  if (isExternalHeadsetRoute(userSel)) {
+    return coercePersistedRouteForAvailableDevices(userSel);
+  }
+  const lastApplied = readLastAppliedCallAudioRoute();
+  if (isExternalHeadsetRoute(lastApplied)) {
+    return coercePersistedRouteForAvailableDevices(lastApplied);
+  }
+  const activeExt = readActiveExternalCallAudioRoute();
+  if (isExternalHeadsetRoute(activeExt)) {
+    return coercePersistedRouteForAvailableDevices(activeExt);
+  }
   const nativeExt = readNativeProbedExternalRoute();
   if (nativeExt && isExternalHeadsetRoute(nativeExt)) {
     return coercePersistedRouteForAvailableDevices(nativeExt);
@@ -2535,11 +2560,37 @@ export async function reapplyPersistedCallAudioRoute(
             return;
           }
         }
+        if (Platform.OS === 'android') {
+          try {
+            const probe = await probeNativeCallAudioRoutes();
+            mergeNativeProbeIntoGlobal(probe);
+          } catch {}
+        }
         let route: InCallAudioRoute;
         if (isInAudioOnlyCallUi()) {
           route = resolveDirectCallAcceptAudioReapplyRoute();
         } else {
           route = await resolveHeadsetFirstReapplyRoute('EARPIECE');
+        }
+        // Не откатывать уже выбранный BT/провод на product EARPIECE (лог: accept churn).
+        if (route === 'EARPIECE' || route === 'SPEAKER_PHONE') {
+          const liveExt =
+            readUserSelectedExternalCallAudioRoute() ||
+            (isExternalHeadsetRoute(readUserSelectedCallAudioRoute())
+              ? readUserSelectedCallAudioRoute()
+              : null) ||
+            (isExternalHeadsetRoute(readLastAppliedCallAudioRoute())
+              ? readLastAppliedCallAudioRoute()
+              : null) ||
+            readNativeProbedExternalRoute() ||
+            readConnectedExternalCallAudioRoute() ||
+            readActiveExternalCallAudioRoute();
+          if (
+            isExternalHeadsetRoute(liveExt) &&
+            (liveExt !== 'BLUETOOTH' || isBluetoothHeadsetActiveForCall())
+          ) {
+            route = liveExt;
+          }
         }
         route = coerceDirectAudioAcceptBuiltinRoute(route);
         const media = opts?.media ?? 'audio';
@@ -2548,9 +2599,22 @@ export async function reapplyPersistedCallAudioRoute(
           logger.debug('[callAudioRoutePersist] reapply skipped (duplicate)', { reason, route, media });
           return;
         }
+        // Уже на нужной гарнитуре — не делать лишний native apply.
+        if (
+          isExternalHeadsetRoute(route) &&
+          readLastAppliedCallAudioRoute() === route &&
+          nativeOutputSignature(route, media, false) === lastNativeInCallSignature
+        ) {
+          logger.debug('[callAudioRoutePersist] reapply skipped (accept headset stable)', {
+            reason,
+            route,
+          });
+          return;
+        }
         setPersistedCallAudioRoute(route);
         if (isExternalHeadsetRoute(route)) {
           setUserSelectedCallAudioRoute(route);
+          markUserSelectedExternalCallAudioRoute(route);
         } else if (route === 'SPEAKER_PHONE' || route === 'EARPIECE') {
           const userPinned =
             readUserLockedBuiltinCallAudioRoute() === route ||

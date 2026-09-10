@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.res.Configuration
+import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -12,10 +13,12 @@ import android.os.Looper
 import android.util.Log
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewGroup
 import android.graphics.PixelFormat
 import android.view.WindowManager
 import androidx.activity.OnBackPressedCallback
 import android.widget.ImageButton
+import android.widget.ImageView
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 
@@ -205,6 +208,8 @@ class OutgoingCallActivity : AppCompatActivity() {
                 if (finishRequested || isFinishing || isDestroyed) {
                     return
                 }
+                // Accept/remote-end → VideoCall: последний кадр = audio/cover (#1B1C22), не welcome.
+                paintAcceptedHandoffCover()
                 LiviOutgoingCallService.stop(this@OutgoingCallActivity, this@OutgoingCallActivity.callId)
                 finish()
             }
@@ -235,6 +240,7 @@ class OutgoingCallActivity : AppCompatActivity() {
                 return
             }
             Log.d(TAG, "onNewIntent: EXTRA_CLOSE_IMMEDIATELY -> finishing")
+            paintAcceptedHandoffCover()
             LiviOutgoingCallService.stop(this, callId.ifBlank { newCallId })
             finish()
             return
@@ -311,6 +317,25 @@ class OutgoingCallActivity : AppCompatActivity() {
             }
             timeoutHandler.postDelayed(callIdEmptyTimeoutRunnable!!, 27000L)
         }
+    }
+
+    /**
+     * Accept → audio/VideoCall: довести Outgoing до цвета answer-cover (#1B1C22),
+     * иначе finish() даёт скачок welcome (#0A0C14 + image) → Main.
+     * Cancel (X) не вызывает — там возврат на Home, не на audio UI.
+     */
+    private fun paintAcceptedHandoffCover() {
+        try {
+            val handoff = Color.parseColor("#1B1C22")
+            val root = findViewById<ViewGroup>(R.id.outgoing_call_root) ?: return
+            root.setBackgroundColor(handoff)
+            findViewById<View>(R.id.outgoing_call_content)?.visibility = View.INVISIBLE
+            for (i in 0 until root.childCount) {
+                val child = root.getChildAt(i)
+                if (child is ImageView) child.visibility = View.INVISIBLE
+            }
+            window?.decorView?.setBackgroundColor(handoff)
+        } catch (_: Exception) {}
     }
 
     override fun finish() {

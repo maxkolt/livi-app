@@ -45,15 +45,7 @@ export async function applyNativeVoiceCallSpeaker(
       await applyNativeVoiceCallRoute(external);
       return;
     }
-    if (!speakerOn) {
-      try {
-        const av = (global as any).__inCallAvailableAudioRoutesRef?.current;
-        if (Array.isArray(av) && av.includes('BLUETOOTH')) {
-          await applyNativeVoiceCallRoute('BLUETOOTH');
-          return;
-        }
-      } catch {}
-    }
+    // Не уводить в BT только из-за paired-in-case в available — нужен call-audio / user BT.
   } else {
     await applyNativeVoiceCallRoute(speakerOn ? 'SPEAKER_PHONE' : 'EARPIECE');
     return;

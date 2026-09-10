@@ -147,6 +147,9 @@ class MainActivity : ReactActivity() {
       cover.visibility = View.VISIBLE
       cover.bringToFront()
       decor.requestLayout()
+      try {
+        overridePendingTransition(0, 0)
+      } catch (_: Exception) {}
     } catch (e: Exception) {
       android.util.Log.w("MainActivity", "showIncomingAnswerCover failed", e)
     }

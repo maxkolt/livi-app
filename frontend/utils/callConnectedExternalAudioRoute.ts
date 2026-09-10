@@ -21,7 +21,22 @@ function readUserSelectedExternalFromGlobals(): InCallAudioRoute | null {
     if (!route || !isExternalHeadsetRoute(route)) return null;
     if (Number(entry?.until || 0) <= Date.now()) return null;
     const available = readInCallAvailableAudioRoutesList();
-    if (!available.length || !available.includes(route)) return null;
+    if (!available.length || !available.includes(route)) {
+      try {
+        const probe = (global as any).__nativeCallAudioRoutesRef?.current as
+          | { available?: string[] }
+          | undefined;
+        if (Array.isArray(probe?.available) && probe.available.includes(route)) {
+          if (route === 'BLUETOOTH') {
+            const cached = (global as any).__callBtHeadsetConnectedRef?.current;
+            if (cached === false) return null;
+          }
+          return route;
+        }
+      } catch {}
+      if (!available.length) return route;
+      return null;
+    }
     return route;
   } catch {
     return null;
@@ -57,12 +72,19 @@ export function readConnectedExternalCallAudioRoute(
 ): InCallAudioRoute | null {
   const available = readInCallAvailableAudioRoutesList();
   const nativeExt = readNativeProbedExternalRoute();
-  if (nativeExt && available.length > 0 && available.includes(nativeExt)) {
-    return nativeExt;
-  }
+  // Probe важнее отстающего ICM (accept/bootstrap).
+  if (nativeExt) return nativeExt;
   const fromPersist = readActiveExternalCallAudioRouteFromGlobals(hint);
-  if (fromPersist && available.length > 0 && available.includes(fromPersist)) {
-    return fromPersist;
+  if (fromPersist) {
+    if (!available.length || available.includes(fromPersist)) return fromPersist;
+    try {
+      const probe = (global as any).__nativeCallAudioRoutesRef?.current as
+        | { available?: string[] }
+        | undefined;
+      if (Array.isArray(probe?.available) && probe.available.includes(fromPersist)) {
+        return fromPersist;
+      }
+    } catch {}
   }
   try {
     const selected = normalizeInCallRoute((global as any).__inCallSelectedAudioRouteRef?.current || '');

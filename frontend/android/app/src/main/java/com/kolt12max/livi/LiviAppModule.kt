@@ -12,9 +12,15 @@ import android.content.Intent
 import android.app.KeyguardManager
 import android.graphics.Rect
 import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothClass
+import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothHeadset
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
+import android.content.BroadcastReceiver
+import android.content.IntentFilter
 import android.media.AudioAttributes
+import android.media.AudioDeviceCallback
 import android.media.AudioDeviceInfo
 import android.media.AudioFocusRequest
 import android.media.AudioManager
@@ -917,18 +923,58 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       type == AudioDeviceInfo.TYPE_BLE_HEADSET ||
       type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP
 
-  /** SCO/BLE в списке comm-устройств и профиль гарнитуры CONNECTED (не idle A2DP без наушников). */
-  private fun isBluetoothHeadsetConnectedForUi(am: AudioManager): Boolean {
-    if (isBluetoothActiveForVoiceCall(am)) return true
-    if (!isBluetoothHeadsetProfileConnected()) return false
+  /**
+   * Paired / HFP / A2DP виден (в т.ч. idle) — для cycle UI.
+   * Любые BT-наушники / колонки / гарнитуры, не OEM-specific.
+   * Не использовать для auto на accept (там только call-audio active).
+   */
+  private fun isBluetoothHeadsetPairedAvailable(am: AudioManager): Boolean {
+    ensureBluetoothHeadsetWearMonitor()
+    if (isBluetoothHeadsetConnectedForUi(am)) return true
+    // HFP/LE_AUDIO profile — даже без SCO в communication list.
+    if (isBluetoothHeadsetProfileConnected()) return true
+    // Часто paired виден только как A2DP output, пока нет call-SCO.
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+      try {
+        if (
+          am.getDevices(AudioManager.GET_DEVICES_OUTPUTS).any { dev ->
+            isBluetoothCommunicationDeviceType(dev.type)
+          }
+        ) {
+          return true
+        }
+      } catch (_: Exception) {}
+    }
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
       return am.availableCommunicationDevices.any { dev ->
-        dev.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
-          dev.type == AudioDeviceInfo.TYPE_BLE_HEADSET
+        isBluetoothCommunicationDeviceType(dev.type)
       }
     }
-    @Suppress("DEPRECATION")
-    return am.isBluetoothScoOn
+    return false
+  }
+
+  /**
+   * BT «в ушах» / call-audio ready — НЕ idle paired в кейсе.
+   * Только SCO/communicationDevice = BT, или Headset isAudioConnected при preferred BT.
+   * Если OS уже на EAR/SPEAKER — не считаем active (buds в кейсе / sticky HFP).
+   */
+  private fun isBluetoothHeadsetConnectedForUi(am: AudioManager): Boolean {
+    ensureBluetoothHeadsetWearMonitor()
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+      val comm = am.communicationDevice
+      if (comm != null) {
+        val preferred = audioRouteFromCommunicationDeviceType(comm.type)
+        if (preferred == "EARPIECE" || preferred == "SPEAKER_PHONE" || preferred == "WIRED_HEADSET") {
+          // OS на built-in — сбросить sticky isAudioConnected (часто true у buds в кейсе).
+          if (!am.isBluetoothScoOn) {
+            bluetoothHeadsetAudioConnected = false
+          }
+          return false
+        }
+      }
+    }
+    if (isBluetoothActiveForVoiceCall(am)) return true
+    return isBluetoothHeadsetAudioConnectedCached()
   }
 
   @Suppress("MissingPermission")
@@ -951,14 +997,274 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     return false
   }
 
+  private fun isBluetoothHeadsetAudioConnectedCached(): Boolean =
+    bluetoothHeadsetAudioConnected || readBluetoothHeadsetAudioConnectedNow()
+
+  @Suppress("MissingPermission")
+  private fun readBluetoothHeadsetAudioConnectedNow(): Boolean {
+    try {
+      val proxy = bluetoothHeadsetProxy ?: return false
+      val devices = proxy.connectedDevices ?: return false
+      for (device in devices) {
+        // getAudioState — @SystemApi; публичный API: isAudioConnected.
+        if (proxy.isAudioConnected(device)) {
+          bluetoothHeadsetAudioConnected = true
+          return true
+        }
+      }
+    } catch (_: Exception) {}
+    bluetoothHeadsetAudioConnected = false
+    return false
+  }
+
+  /** SCO / BLE headset communication — не A2DP (музыка ≠ call-audio). */
+  private fun isBluetoothVoiceCallDeviceType(type: Int): Boolean =
+    type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+      type == AudioDeviceInfo.TYPE_BLE_HEADSET
+
   /** Активный маршрут BT (SCO / communicationDevice) — для redirect speakerOff, не для idle A2DP. */
   private fun isBluetoothActiveForVoiceCall(am: AudioManager): Boolean {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
       val comm = am.communicationDevice
-      if (comm != null && isBluetoothCommunicationDeviceType(comm.type)) return true
+      if (comm != null && isBluetoothVoiceCallDeviceType(comm.type)) return true
     }
     @Suppress("DEPRECATION")
     return am.isBluetoothScoOn
+  }
+
+  /**
+   * API 31+: голос идёт через communicationDevice, не через isBluetoothScoOn.
+   * scoOn=true при preferred EAR = ложный success (кнопка BT, звук в ухе).
+   */
+  private fun isBluetoothCommunicationRouteLive(am: AudioManager): Boolean {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+      val comm = am.communicationDevice ?: return false
+      return isBluetoothVoiceCallDeviceType(comm.type)
+    }
+    @Suppress("DEPRECATION")
+    return am.isBluetoothScoOn
+  }
+
+  @Volatile private var bluetoothHeadsetProxy: BluetoothHeadset? = null
+  @Volatile private var bluetoothHeadsetAudioConnected: Boolean = false
+  @Volatile private var bluetoothWearMonitorStarted: Boolean = false
+  private var bluetoothWearReceiver: BroadcastReceiver? = null
+  private var bluetoothAudioDeviceCallback: AudioDeviceCallback? = null
+  private val bluetoothWearHandler = Handler(Looper.getMainLooper())
+  @Volatile private var bluetoothRouteSettleRunnable: Runnable? = null
+
+  /** JS: подписка на ACL/HFP/SCO wear до первого probe (иначе edge теряется). */
+  @ReactMethod
+  fun startBluetoothHeadsetWearMonitor(promise: Promise) {
+    UiThreadUtil.runOnUiThread {
+      try {
+        ensureBluetoothHeadsetWearMonitor()
+        promise.resolve(true)
+      } catch (e: Exception) {
+        promise.resolve(false)
+      }
+    }
+  }
+
+  /** Raw SCO/HFP audio — без preferred-EAR kill (для rising-edge poll после accept). */
+  @ReactMethod
+  fun isBluetoothHeadsetScoAudioConnected(promise: Promise) {
+    UiThreadUtil.runOnUiThread {
+      try {
+        val am = reactApplicationContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+        @Suppress("DEPRECATION")
+        val scoOn = am?.isBluetoothScoOn == true
+        val audioOn = readBluetoothHeadsetAudioConnectedNow()
+        promise.resolve(scoOn || audioOn)
+      } catch (_: Exception) {
+        promise.resolve(false)
+      }
+    }
+  }
+
+  /** HFP/LE profile connected — даже если communicationDevice ещё EAR (после TWS flap). */
+  @ReactMethod
+  fun isBluetoothHeadsetProfileConnectedForCall(promise: Promise) {
+    UiThreadUtil.runOnUiThread {
+      try {
+        ensureBluetoothHeadsetWearMonitor()
+        promise.resolve(isBluetoothHeadsetProfileConnected())
+      } catch (_: Exception) {
+        promise.resolve(false)
+      }
+    }
+  }
+
+  private fun ensureBluetoothHeadsetWearMonitor() {
+    if (bluetoothWearMonitorStarted) return
+    bluetoothWearMonitorStarted = true
+    try {
+      val bm =
+        reactApplicationContext.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
+      val adapter = bm?.adapter
+      if (adapter != null) {
+        adapter.getProfileProxy(
+          reactApplicationContext,
+          object : BluetoothProfile.ServiceListener {
+            override fun onServiceConnected(profile: Int, proxy: BluetoothProfile) {
+              if (profile != BluetoothProfile.HEADSET) return
+              bluetoothHeadsetProxy = proxy as? BluetoothHeadset
+              val audioOn = readBluetoothHeadsetAudioConnectedNow()
+              Log.i(NAME, "BluetoothHeadset proxy ready audioConnected=$audioOn")
+            }
+
+            override fun onServiceDisconnected(profile: Int) {
+              if (profile == BluetoothProfile.HEADSET) {
+                bluetoothHeadsetProxy = null
+                bluetoothHeadsetAudioConnected = false
+              }
+            }
+          },
+          BluetoothProfile.HEADSET,
+        )
+      }
+    } catch (e: Exception) {
+      Log.w(NAME, "BluetoothHeadset getProfileProxy failed", e)
+    }
+
+    val receiver =
+      object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+          val action = intent?.action ?: return
+          when (action) {
+            BluetoothHeadset.ACTION_AUDIO_STATE_CHANGED -> {
+              val state =
+                intent.getIntExtra(BluetoothHeadset.EXTRA_STATE, BluetoothHeadset.STATE_AUDIO_DISCONNECTED)
+              val connected = state == BluetoothHeadset.STATE_AUDIO_CONNECTED
+              bluetoothHeadsetAudioConnected = connected
+              Log.i(NAME, "BT headset audio state=$state connected=$connected")
+              emitBluetoothHeadsetWearEvent(if (connected) "audio_connected" else "audio_disconnected", connected)
+            }
+            BluetoothHeadset.ACTION_CONNECTION_STATE_CHANGED -> {
+              val state =
+                intent.getIntExtra(BluetoothHeadset.EXTRA_STATE, BluetoothHeadset.STATE_DISCONNECTED)
+              Log.i(NAME, "BT headset profile connection state=$state")
+              if (state == BluetoothHeadset.STATE_CONNECTED) {
+                emitBluetoothHeadsetWearEvent("profile_connected", true)
+              } else if (state == BluetoothHeadset.STATE_DISCONNECTED) {
+                bluetoothHeadsetAudioConnected = false
+                emitBluetoothHeadsetWearEvent("profile_disconnected", false)
+              }
+            }
+            "android.bluetooth.a2dp.profile.action.CONNECTION_STATE_CHANGED" -> {
+              val state =
+                intent.getIntExtra(BluetoothProfile.EXTRA_STATE, BluetoothProfile.STATE_DISCONNECTED)
+              Log.i(NAME, "BT A2DP connection state=$state")
+              if (state == BluetoothProfile.STATE_CONNECTED) {
+                emitBluetoothHeadsetWearEvent("a2dp_connected", true)
+              } else if (state == BluetoothProfile.STATE_DISCONNECTED) {
+                emitBluetoothHeadsetWearEvent("a2dp_disconnected", false)
+              }
+            }
+            BluetoothDevice.ACTION_ACL_CONNECTED -> {
+              val device =
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                  intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
+                } else {
+                  @Suppress("DEPRECATION")
+                  intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
+                }
+              if (device != null && isLikelyBluetoothHeadsetDevice(device)) {
+                Log.i(NAME, "BT ACL_CONNECTED headset ${device.address}")
+                emitBluetoothHeadsetWearEvent("acl_connected", true)
+              }
+            }
+            BluetoothDevice.ACTION_ACL_DISCONNECTED -> {
+              val device =
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                  intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
+                } else {
+                  @Suppress("DEPRECATION")
+                  intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
+                }
+              if (device != null && isLikelyBluetoothHeadsetDevice(device)) {
+                Log.i(NAME, "BT ACL_DISCONNECTED headset ${device.address}")
+                bluetoothHeadsetAudioConnected = false
+                emitBluetoothHeadsetWearEvent("acl_disconnected", false)
+              }
+            }
+          }
+        }
+      }
+    bluetoothWearReceiver = receiver
+    try {
+      val filter =
+        IntentFilter().apply {
+          addAction(BluetoothHeadset.ACTION_AUDIO_STATE_CHANGED)
+          addAction(BluetoothHeadset.ACTION_CONNECTION_STATE_CHANGED)
+          addAction(BluetoothDevice.ACTION_ACL_CONNECTED)
+          addAction(BluetoothDevice.ACTION_ACL_DISCONNECTED)
+          addAction("android.bluetooth.a2dp.profile.action.CONNECTION_STATE_CHANGED")
+        }
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        // System Bluetooth intents требуют EXPORTED — NOT_EXPORTED их глотает (Android 13+).
+        reactApplicationContext.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
+      } else {
+        reactApplicationContext.registerReceiver(receiver, filter)
+      }
+    } catch (e: Exception) {
+      Log.w(NAME, "BT wear receiver register failed", e)
+    }
+
+    try {
+      val am = reactApplicationContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+      if (am != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+        val cb =
+          object : AudioDeviceCallback() {
+            override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>) {
+              if (addedDevices.any { isBluetoothCommunicationDeviceType(it.type) }) {
+                Log.i(NAME, "BT audio device added")
+                emitBluetoothHeadsetWearEvent("device_added", true)
+              }
+            }
+
+            override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>) {
+              if (removedDevices.any { isBluetoothCommunicationDeviceType(it.type) }) {
+                Log.i(NAME, "BT audio device removed")
+                bluetoothHeadsetAudioConnected = false
+                emitBluetoothHeadsetWearEvent("device_removed", false)
+              }
+            }
+          }
+        bluetoothAudioDeviceCallback = cb
+        am.registerAudioDeviceCallback(cb, bluetoothWearHandler)
+      }
+    } catch (e: Exception) {
+      Log.w(NAME, "BT AudioDeviceCallback register failed", e)
+    }
+  }
+
+  /** Любое BT audio sink (наушники, колонка, гарнитура) — не фильтровать по бренду. */
+  @Suppress("MissingPermission")
+  private fun isLikelyBluetoothHeadsetDevice(device: BluetoothDevice): Boolean {
+    try {
+      val bc = device.bluetoothClass ?: return true
+      return when (bc.majorDeviceClass) {
+        BluetoothClass.Device.Major.PHONE,
+        BluetoothClass.Device.Major.COMPUTER,
+        BluetoothClass.Device.Major.PERIPHERAL,
+        BluetoothClass.Device.Major.IMAGING,
+        BluetoothClass.Device.Major.NETWORKING,
+        BluetoothClass.Device.Major.HEALTH -> false
+        else -> true
+      }
+    } catch (_: Exception) {
+      return true
+    }
+  }
+
+  private fun emitBluetoothHeadsetWearEvent(reason: String, wornOrAudioOn: Boolean) {
+    runOnReactUiQueueIfAlive { ctx ->
+      val params = Arguments.createMap()
+      params.putBoolean("active", wornOrAudioOn)
+      params.putString("reason", reason)
+      ctx.emitDeviceEvent("LiviBluetoothHeadsetWear", params)
+    }
   }
 
   private fun isWiredActiveForVoiceCall(am: AudioManager): Boolean {
@@ -1013,18 +1319,20 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
           for (dev in am.availableCommunicationDevices) {
             val route = audioRouteFromCommunicationDeviceType(dev.type) ?: continue
             when (route) {
-              "BLUETOOTH" -> if (isBluetoothHeadsetConnectedForUi(am)) pushRoute(route)
+              // Paired (в т.ч. кейс) — в available для cycle/gain; active отдельно.
+              "BLUETOOTH" -> if (isBluetoothHeadsetPairedAvailable(am)) pushRoute(route)
               "WIRED_HEADSET" -> if (isWiredActiveForVoiceCall(am)) pushRoute(route)
               else -> pushRoute(route)
             }
           }
+          if (isBluetoothHeadsetPairedAvailable(am)) pushRoute("BLUETOOTH")
           if (seen.isEmpty()) {
             pushRoute("EARPIECE")
             pushRoute("SPEAKER_PHONE")
           }
         } else {
           @Suppress("DEPRECATION")
-          if (am.isBluetoothScoOn) pushRoute("BLUETOOTH")
+          if (am.isBluetoothScoOn || isBluetoothHeadsetPairedAvailable(am)) pushRoute("BLUETOOTH")
           @Suppress("DEPRECATION")
           if (am.isWiredHeadsetOn) pushRoute("WIRED_HEADSET")
           pushRoute("EARPIECE")
@@ -1032,6 +1340,10 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
         }
         val result = Arguments.createMap()
         result.putArray("available", available)
+        val btActive = isBluetoothHeadsetConnectedForUi(am)
+        val btPaired = isBluetoothHeadsetPairedAvailable(am)
+        result.putBoolean("btCallAudioActive", btActive)
+        result.putBoolean("btPairedAvailable", btPaired)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
           val current = am.communicationDevice
           val preferred = current?.let { audioRouteFromCommunicationDeviceType(it.type) }
@@ -1059,19 +1371,18 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
           return@runOnUiThread
         }
         am.mode = AudioManager.MODE_IN_COMMUNICATION
-        if (!speakerOn && hasExternalVoiceCallCommunicationDevice(am)) {
+        // Явный ear/speaker: всегда снимаем SCO, иначе UI ear а голос «залипает» / flap.
+        if (speakerOn || !isBluetoothActiveForVoiceCall(am)) {
+          stopBluetoothScoForBuiltIn(am)
+        } else if (!speakerOn && isBluetoothActiveForVoiceCall(am)) {
+          // Уже на BT call-audio — не уводить в earpiece через setSpeakerphoneOn(false).
           val btDev = findCommunicationDeviceForRoute(am, "BLUETOOTH")
           if (btDev != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             try {
               am.setCommunicationDevice(btDev)
             } catch (_: Exception) {}
-          } else {
-            @Suppress("DEPRECATION")
-            if (!am.isBluetoothScoOn) am.startBluetoothSco()
-            @Suppress("DEPRECATION")
-            am.isBluetoothScoOn = true
           }
-          Log.i(NAME, "setVoiceCallSpeakerOn redirected to BLUETOOTH (external device)")
+          Log.i(NAME, "setVoiceCallSpeakerOn kept BLUETOOTH (call-audio active)")
           promise.resolve(true)
           return@runOnUiThread
         }
@@ -1110,10 +1421,10 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return null
     val devices = am.availableCommunicationDevices
     return when (route) {
+      // Только SCO/BLE для звонка — A2DP даёт ok без голоса (звук остаётся в earpiece).
       "BLUETOOTH" ->
         devices.firstOrNull { it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO }
           ?: devices.firstOrNull { it.type == AudioDeviceInfo.TYPE_BLE_HEADSET }
-          ?: devices.firstOrNull { it.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP }
       "WIRED_HEADSET" ->
         devices.firstOrNull { it.type == AudioDeviceInfo.TYPE_WIRED_HEADSET }
           ?: devices.firstOrNull { it.type == AudioDeviceInfo.TYPE_USB_HEADSET }
@@ -1121,6 +1432,25 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       "SPEAKER_PHONE" -> devices.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
       "EARPIECE" -> devices.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_EARPIECE }
       else -> null
+    }
+  }
+
+  private fun stopBluetoothScoForBuiltIn(am: AudioManager) {
+    try {
+      @Suppress("DEPRECATION")
+      if (am.isBluetoothScoOn) {
+        am.isBluetoothScoOn = false
+      }
+      @Suppress("DEPRECATION")
+      am.stopBluetoothSco()
+    } catch (_: Exception) {}
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+      try {
+        val comm = am.communicationDevice
+        if (comm != null && isBluetoothCommunicationDeviceType(comm.type)) {
+          am.clearCommunicationDevice()
+        }
+      } catch (_: Exception) {}
     }
   }
 
@@ -1135,52 +1465,148 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
           return@runOnUiThread
         }
         am.mode = AudioManager.MODE_IN_COMMUNICATION
-        var applied = false
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-          val device = findCommunicationDeviceForRoute(am, route)
-          if (device != null) {
-            try {
-              applied = am.setCommunicationDevice(device)
-            } catch (e: Exception) {
-              Log.w(NAME, "setVoiceCallAudioRoute setCommunicationDevice failed: ${e.message}")
+        when (route) {
+          "BLUETOOTH" -> {
+            bluetoothRouteSettleRunnable?.let { bluetoothWearHandler.removeCallbacks(it) }
+            bluetoothRouteSettleRunnable = null
+            @Suppress("DEPRECATION")
+            am.isSpeakerphoneOn = false
+            @Suppress("DEPRECATION")
+            if (!am.isBluetoothScoOn) {
+              am.startBluetoothSco()
             }
-          }
-        }
-        if (!applied) {
-          when (route) {
-            "BLUETOOTH" -> {
-              @Suppress("DEPRECATION")
-              if (!am.isBluetoothScoOn) {
-                am.startBluetoothSco()
+            @Suppress("DEPRECATION")
+            am.isBluetoothScoOn = true
+
+            fun tryApplyBtDevice(): Boolean {
+              if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val scoOrBle = findCommunicationDeviceForRoute(am, "BLUETOOTH")
+                if (scoOrBle != null) {
+                  try {
+                    if (am.setCommunicationDevice(scoOrBle)) {
+                      // Только live communicationDevice — не scoOn alone.
+                      return isBluetoothCommunicationRouteLive(am)
+                    }
+                  } catch (e: Exception) {
+                    Log.w(NAME, "setVoiceCallAudioRoute BT setCommunicationDevice failed: ${e.message}")
+                  }
+                }
+                return false
               }
               @Suppress("DEPRECATION")
-              am.isBluetoothScoOn = true
-              @Suppress("DEPRECATION")
-              am.isSpeakerphoneOn = false
-              applied = true
+              return am.isBluetoothScoOn
             }
-            "WIRED_HEADSET" -> {
+
+            if (tryApplyBtDevice()) {
               @Suppress("DEPRECATION")
-              am.isSpeakerphoneOn = false
-              applied = true
+              Log.i(
+                NAME,
+                "setVoiceCallAudioRoute route=BLUETOOTH applied=true scoOn=${am.isBluetoothScoOn} commDev=${if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) am.communicationDevice?.type else null}",
+              )
+              promise.resolve(true)
+              return@runOnUiThread
             }
-            "SPEAKER_PHONE" -> {
-              @Suppress("DEPRECATION")
-              am.isSpeakerphoneOn = true
-              applied = true
-            }
-            "EARPIECE" -> {
-              @Suppress("DEPRECATION")
-              am.isSpeakerphoneOn = false
-              applied = true
-            }
+
+            // SCO появляется в availableCommunicationDevices с задержкой после ACL — дожимаем.
+            val delays = longArrayOf(250L, 500L, 900L, 1400L, 2200L, 3200L)
+            var attempt = 0
+            val settle =
+              object : Runnable {
+                override fun run() {
+                  try {
+                    @Suppress("DEPRECATION")
+                    if (!am.isBluetoothScoOn) {
+                      am.startBluetoothSco()
+                      am.isBluetoothScoOn = true
+                    }
+                    val ok = tryApplyBtDevice()
+                    if (ok || attempt >= delays.size) {
+                      @Suppress("DEPRECATION")
+                      val scoOn = am.isBluetoothScoOn
+                      val commType =
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                          am.communicationDevice?.type
+                        } else {
+                          null
+                        }
+                      Log.i(
+                        NAME,
+                        "setVoiceCallAudioRoute route=BLUETOOTH settle ok=$ok attempt=$attempt scoOn=$scoOn commDev=$commType",
+                      )
+                      if (bluetoothRouteSettleRunnable === this) {
+                        bluetoothRouteSettleRunnable = null
+                      }
+                      promise.resolve(ok)
+                      return
+                    }
+                    val delay = delays[attempt++]
+                    bluetoothWearHandler.postDelayed(this, delay)
+                  } catch (e: Exception) {
+                    Log.e(NAME, "setVoiceCallAudioRoute BT settle failed", e)
+                    if (bluetoothRouteSettleRunnable === this) {
+                      bluetoothRouteSettleRunnable = null
+                    }
+                    promise.resolve(false)
+                  }
+                }
+              }
+            bluetoothRouteSettleRunnable = settle
+            bluetoothWearHandler.postDelayed(settle, delays[attempt++])
+            return@runOnUiThread
           }
+          "EARPIECE", "SPEAKER_PHONE" -> {
+            bluetoothRouteSettleRunnable?.let { bluetoothWearHandler.removeCallbacks(it) }
+            bluetoothRouteSettleRunnable = null
+            var applied = false
+            stopBluetoothScoForBuiltIn(am)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+              val device = findCommunicationDeviceForRoute(am, route)
+              if (device != null) {
+                try {
+                  applied = am.setCommunicationDevice(device)
+                } catch (e: Exception) {
+                  Log.w(NAME, "setVoiceCallAudioRoute setCommunicationDevice failed: ${e.message}")
+                }
+              }
+            }
+            if (!applied) {
+              @Suppress("DEPRECATION")
+              am.isSpeakerphoneOn = route == "SPEAKER_PHONE"
+              applied = true
+            } else {
+              @Suppress("DEPRECATION")
+              am.isSpeakerphoneOn = route == "SPEAKER_PHONE"
+            }
+            val commType =
+              if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) am.communicationDevice?.type else null
+            Log.i(
+              NAME,
+              "setVoiceCallAudioRoute route=$route applied=$applied scoOn=false commDev=$commType",
+            )
+            promise.resolve(applied)
+          }
+          "WIRED_HEADSET" -> {
+            var applied = false
+            stopBluetoothScoForBuiltIn(am)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+              val device = findCommunicationDeviceForRoute(am, route)
+              if (device != null) {
+                try {
+                  applied = am.setCommunicationDevice(device)
+                } catch (e: Exception) {
+                  Log.w(NAME, "setVoiceCallAudioRoute wired setCommunicationDevice failed: ${e.message}")
+                }
+              }
+            }
+            if (!applied) {
+              @Suppress("DEPRECATION")
+              am.isSpeakerphoneOn = false
+              applied = true
+            }
+            promise.resolve(applied)
+          }
+          else -> promise.resolve(false)
         }
-        Log.i(
-          NAME,
-          "setVoiceCallAudioRoute route=$route applied=$applied commDev=${if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) am.communicationDevice?.type else null}",
-        )
-        promise.resolve(applied)
       } catch (e: Exception) {
         Log.e(NAME, "setVoiceCallAudioRoute failed", e)
         promise.reject("ERR_AUDIO_ROUTE", e.message, e)
@@ -2763,7 +3189,9 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
           Intent.FLAG_ACTIVITY_NEW_TASK
             or Intent.FLAG_ACTIVITY_CLEAR_TOP
             or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
-            or Intent.FLAG_ACTIVITY_SINGLE_TOP,
+            or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            // Incoming = singleInstance: без NO_ANIMATION OEM рисует task-switch / splash → мерцание.
+            or Intent.FLAG_ACTIVITY_NO_ANIMATION,
         )
         if (withAnswerCover) {
           putExtra(MainActivity.EXTRA_INCOMING_ANSWER_COVER, true)
@@ -2772,6 +3200,9 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       Handler(Looper.getMainLooper()).post {
         try {
           appCtx.startActivity(mainIntent)
+          try {
+            MainActivity.lastResumedInstance?.overridePendingTransition(0, 0)
+          } catch (_: Exception) {}
           Log.d(NAME, "bringMainToFrontImmediate: MainActivity startActivity OK withAnswerCover=$withAnswerCover")
         } catch (e: Exception) {
           Log.w(NAME, "bringMainToFrontImmediate: startActivity failed", e)

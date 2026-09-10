@@ -98,7 +98,13 @@ import {
   syncAndroidSystemPiPNativeFlags,
 } from '../../utils/activeCallNotification';
 import { clearEndingCallInProgress, isOngoingCallSession, resolvePiPLocalMutedState, readOngoingCallMicOn, restoreOngoingCallMicrophoneIfEnabled, resolvePersistedCallAudioRouteForActiveUi, resolveActiveCallInCallMedia, ongoingCallPrefersVideoMedia, markDirectCallVideoMediaActive, readInAppPiPAudioOutputRoute, readAuthoritativeCallAudioRouteAfterPiP, readLastAppliedCallAudioRoute, readActiveExternalCallAudioRoute, readConnectedExternalCallAudioRoute, markInCallAudioSessionStarted, setUserSelectedCallAudioRoute, readUserSelectedCallAudioRoute, readUserSelectedExternalCallAudioRoute, readUserLockedBuiltinCallAudioRoute, userExplicitlyPinnedBuiltinCallAudio, armDirectAudioEarpieceStabilizeWindow, isDirectAudioEarpieceStabilizeWindow, markActiveCallAudioRouteCallId, rememberManualBuiltinCallAudioRoute, isPiPBuiltinCallAudioRouteLockActive, releaseInAppPiPBuiltinAudioLockForFullVideoUi, markUserSelectedExternalCallAudioRoute } from '../../utils/activeCallSession';
-import { readNativeProbedExternalRoute } from '../../utils/nativeCallAudioProbe';
+import {
+  isBluetoothAvailableForAutoRoute,
+  isCallAudioBootstrapPending,
+  readNativeProbedExternalRoute,
+  setCallAudioBootstrapPending,
+  setCallBluetoothHeadsetConnectedCache,
+} from '../../utils/nativeCallAudioProbe';
 import { isInAppPiPExplicitBuiltinRouteChoiceActive } from '../../utils/inAppPiPHeadsetConnect';
 import {
   dispatchLeaveVideoCallScreen,
@@ -123,7 +129,6 @@ import {
 } from '../../utils/callKeep';
 import { clearCallRelatedNotificationsAndSyncBadge, syncAppBadgeFromMissedCount } from '../../utils/pushNotifications';
 import { emitMissedClear, emitCallEndedOnHome } from '../../utils/globalEvents';
-import { isCallAudioBootstrapPending, setCallAudioBootstrapPending } from '../../utils/nativeCallAudioProbe';
 
 type Props = { 
   route?: { 
@@ -1284,23 +1289,55 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
         'return_to_audio_ui',
         'direct_call_video_ui_route',
         'video_call_return_from_pip',
+        'audio_home_preserve_headset',
+        'audio_home_loud_speaker',
       ]);
       clearStaleVideoSpeakerUiLockForAudioOnlyUi();
       clearCallAudioRouteUiLock();
-      userRouteRef.current = 'EARPIECE';
+      // BT/провод уже в probe или выбран — не форсить EARPIECE (лог: accept EAR поверх BT).
+      const acceptExt =
+        readNativeProbedExternalRoute() ||
+        readConnectedExternalCallAudioRoute() ||
+        readActiveExternalCallAudioRoute(userRouteRef.current) ||
+        (isExternalHeadsetRoute(readUserSelectedCallAudioRoute())
+          ? readUserSelectedCallAudioRoute()
+          : null);
+      const keepHeadset =
+        isExternalHeadsetRoute(acceptExt) &&
+        (acceptExt !== 'BLUETOOTH' || isBluetoothAvailableForAutoRoute());
+      const acceptRoute: InCallAudioRoute = keepHeadset
+        ? (acceptExt as 'BLUETOOTH' | 'WIRED_HEADSET')
+        : 'EARPIECE';
+      if (!keepHeadset) {
+        try {
+          (global as any).__userSelectedExternalCallAudioRouteRef = { current: null };
+          setCallBluetoothHeadsetConnectedCache(false);
+        } catch {}
+      }
+      userRouteRef.current = acceptRoute;
+      // Accept audio-first: только EAR / headset — SPEAKER здесь не выбираем.
       speakerOnRef.current = false;
       inAudioOnlyUiRef.current = true;
       try {
         (global as any).__inAudioOnlyUiRef.current = true;
       } catch {}
-      setPersistedCallAudioRoute('EARPIECE');
-      rememberBuiltinCallRouteBeforeHeadset('EARPIECE', true);
+      setPersistedCallAudioRoute(acceptRoute);
+      if (keepHeadset) {
+        setUserSelectedCallAudioRoute(acceptRoute);
+        markUserSelectedExternalCallAudioRoute(acceptRoute);
+        rememberBuiltinCallRouteBeforeHeadset('EARPIECE', true);
+      } else {
+        rememberBuiltinCallRouteBeforeHeadset('EARPIECE', true);
+      }
       normalizedInitialAudioRouteCallRef.current = null;
       setInAudioOnlyUi(true);
       try {
-        void applyCallAudioOutputRouteNow('EARPIECE', { media: 'audio', forceBuiltIn: true });
+        void applyCallAudioOutputRouteNow(acceptRoute, {
+          media: 'audio',
+          forceBuiltIn: !keepHeadset,
+        });
         (global as any).__applyCallAudioRouteFromParentRef?.current?.(
-          'EARPIECE',
+          acceptRoute,
           'direct_call_accept_layout',
         );
       } catch {}
@@ -1612,15 +1649,21 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     resolveDirectCallAudioFirst(route?.params ?? {}, callId ?? route?.params?.callId ?? null) &&
     (inAudioOnlyUi || inAudioOnlyUiRef.current) &&
     !stayOnVideoCallUiRef.current;
+  const externalRouteForUi =
+    (isExternalHeadsetRoute(selectedRoute) && selectedRoute) ||
+    readUserSelectedExternalCallAudioRoute();
   const audioRouteForUi =
-    uiLockRoute ||
-    (directAudioFirstForUi &&
-    (callAudioRouteUiPending || isDirectAudioEarpieceStabilizeWindow()) &&
-    !isExternalHeadsetRoute(selectedRoute)
-      ? 'EARPIECE'
-      : callAudioRouteUiPending
-        ? resolveCallAudioRouteUiWhileBootstrapPending(selectedRoute)
-        : selectedRoute);
+    // Живой BT/провод важнее uiLock accept — иначе кнопка мигает EAR при одевании.
+    isExternalHeadsetRoute(externalRouteForUi)
+      ? externalRouteForUi
+      : uiLockRoute ||
+        (directAudioFirstForUi &&
+        (callAudioRouteUiPending || isDirectAudioEarpieceStabilizeWindow()) &&
+        !isExternalHeadsetRoute(selectedRoute)
+          ? 'EARPIECE'
+          : callAudioRouteUiPending
+            ? resolveCallAudioRouteUiWhileBootstrapPending(selectedRoute)
+            : selectedRoute);
   const audioRouteIcon = iconNameForRoute(audioRouteForUi);
   const btAccent = useMemo(() => uiAccent(!isDark), [isDark]);
   const audioOutputRouteAccent =
@@ -6251,10 +6294,27 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
   const lockControlsOnAudioUiOnly = showAudioPresentation && controlsLockedForLocalHold;
   const hideLocalMediaControlsOnVideoHold = localExternalHoldUi && !showAudioPresentation;
 
-  const audioControlsOpacity = useRef(new Animated.Value(0)).current;
+  const audioControlsOpacity = useRef(
+    new Animated.Value(
+      Platform.OS === 'android' &&
+        (route?.params?.isIncoming === true || route?.params?.directInitiator === true)
+        ? 1
+        : 0,
+    ),
+  ).current;
 
   useEffect(() => {
     if (!showAudioPresentation) {
+      audioControlsOpacity.setValue(1);
+      return;
+    }
+    // Native Incoming/Outgoing → audio: после снятия cover fade 0→1 = мерцание пустого экрана.
+    const skipNativeHandoffFade =
+      Platform.OS === 'android' &&
+      (route?.params?.isIncoming === true ||
+        route?.params?.directInitiator === true ||
+        !!(global as any).__incomingAnswerTransitionRef?.current);
+    if (skipNativeHandoffFade) {
       audioControlsOpacity.setValue(1);
       return;
     }
@@ -6268,7 +6328,12 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       }).start();
     }, Platform.OS === 'android' ? 60 : 30);
     return () => clearTimeout(timer);
-  }, [showAudioPresentation, audioControlsOpacity]);
+  }, [
+    showAudioPresentation,
+    audioControlsOpacity,
+    route?.params?.isIncoming,
+    route?.params?.directInitiator,
+  ]);
 
   useEffect(() => {
     if (!isDirectCall || inAudioOnlyUiRef.current) return;
