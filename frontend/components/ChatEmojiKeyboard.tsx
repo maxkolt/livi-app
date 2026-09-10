@@ -92,7 +92,7 @@ export default function ChatEmojiKeyboard({
   );
 
   return (
-    <Shell style={[styles.wrap, { backgroundColor: isDark ? undefined : surfaceBg }]}>
+    <Shell style={StyleSheet.flatten([styles.wrap, !isDark ? { backgroundColor: surfaceBg } : null])}>
       <View style={styles.content}>
         {tab === 'emoji' ? (
           <EmojiKeyboard

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Image, StyleSheet, View, type LayoutChangeEvent, type ViewStyle } from 'react-native';
+import { Image, StyleSheet, View, type LayoutChangeEvent, type StyleProp, type ViewStyle } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { WELCOME_STAGE_BG, WELCOME_STAGE_GRADIENT } from './constants';
 
@@ -30,7 +30,7 @@ export function WelcomeStageBackground({ isDark, lightColor }: WelcomeStageBackg
 }
 
 type StageGradientProps = {
-  style?: ViewStyle;
+  style?: StyleProp<ViewStyle>;
   children?: React.ReactNode;
   onLayout?: (e: LayoutChangeEvent) => void;
   /** Полупрозрачный слой поверх обоев чата — картинка слегка просвечивает. */
