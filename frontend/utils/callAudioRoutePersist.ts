@@ -523,6 +523,16 @@ function schedulePreserveCallAudioRoute(reason: string, media?: 'audio' | 'video
   if (isCallAudioBootstrapPending()) {
     return;
   }
+  // Dedupe burst: Back/Home leave вызывают preserve из нескольких путей за один кадр.
+  try {
+    const g = global as any;
+    g.__lastAudioHomePreserveAtRef = g.__lastAudioHomePreserveAtRef || { current: 0 };
+    const now = Date.now();
+    if (now - Number(g.__lastAudioHomePreserveAtRef.current || 0) < 700) {
+      return;
+    }
+    g.__lastAudioHomePreserveAtRef.current = now;
+  } catch {}
   if (shouldDeferPreserveDuringCallBootstrap()) {
     armCallAudioPreservePriority();
     scheduleReapplyPersistedCallAudioRoute('audio_home_preserve_route_deferred', {
@@ -1384,12 +1394,19 @@ function isPipBurstReapplyReason(reason: string): boolean {
 function isProbeMismatchFollowUpReason(reason: string): boolean {
   if (reason.endsWith('_probe_retry')) return false;
   if (reason === 'in_app_pip_audio_route_toggle' || reason === 'audio_ui_route_cycle') return false;
+  // Exit/return / accept / video-ui pin уже honor-user — probe_retry только крутит native каждые 450ms.
+  if (
+    reason === 'system_pip_exit_preserve_route' ||
+    reason === 'system_pip_return_media' ||
+    reason === 'direct_call_accept_audio_route' ||
+    reason === 'direct_call_video_ui_route'
+  ) {
+    return false;
+  }
   return (
     isPipBurstReapplyReason(reason) ||
     reason.startsWith('system_pip_') ||
-    reason === 'direct_call_accept_audio_route' ||
-    reason === 'preserve_in_app_pip_headset' ||
-    reason === 'direct_call_video_ui_route'
+    reason === 'preserve_in_app_pip_headset'
   );
 }
 
@@ -2022,8 +2039,16 @@ export function prepareSystemPiPEnterCallAudioRoute(): void {
   if (Platform.OS !== 'android' || !isOngoingCallSession()) return;
   try {
     const g = global as any;
-    g.__lastSystemPiPAudioPrepareAtRef = g.__lastSystemPiPAudioPrepareAtRef || { current: 0 };
     const now = Date.now();
+    // Expand/return: не ставить enter_preserve поверх return_to_audio (ложный schedule после exit).
+    if (now < Number(g.__returningFromSystemPiPUntilRef?.current || 0)) return;
+    if (now < Number(g.__blockSystemPiPCaptureHostUntilRef?.current || 0)) return;
+    if (now < Number(g.__disableSystemPiPUntilRef?.current || 0)) return;
+    const inSystemPiP = g.__pipInSystemModeRef?.current === true;
+    const pendingEnter = g.__pendingSystemPiPSyncRef?.current === true;
+    const enteringPiP = Number(g.__systemPiPEntryInProgressUntilRef?.current || 0) > now;
+    if (!inSystemPiP && !pendingEnter && !enteringPiP) return;
+    g.__lastSystemPiPAudioPrepareAtRef = g.__lastSystemPiPAudioPrepareAtRef || { current: 0 };
     if (now - Number(g.__lastSystemPiPAudioPrepareAtRef.current || 0) < 800) {
       return;
     }
@@ -3033,14 +3058,12 @@ export function scheduleReapplyPersistedCallAudioRoute(
     const timer = setTimeout(() => {
       scheduledReapplyTimers = scheduledReapplyTimers.filter((e) => e.timer !== timer);
       void reapplyPersistedCallAudioRoute(reason, reapplyOpts).then(() => {
+        // Не перезапускать probe с base reason после _probe_retry — иначе петля каждые 450ms.
+        if (reason.endsWith('_probe_retry')) return;
         if (reason.includes('headset') && reason !== 'preserve_in_app_pip_headset') return;
         const applied = readLastAppliedCallAudioRoute();
         if (applied) {
-          scheduleProbeMismatchRetryIfNeeded(
-            reason.replace(/_probe_retry$/, ''),
-            applied,
-            reapplyOpts,
-          );
+          scheduleProbeMismatchRetryIfNeeded(reason, applied, reapplyOpts);
         }
       });
     }, ms);
@@ -3061,7 +3084,9 @@ export function shouldPreserveCallAudioRouteInInAppPiP(): boolean {
 }
 
 /** После разворота system PiP: mic + динамик как до ухода на Home. */
-export function restoreCallMediaAfterSystemPiPReturn(): boolean {
+export function restoreCallMediaAfterSystemPiPReturn(opts?: {
+  preferAudioOnly?: boolean;
+}): boolean {
   const g = global as any;
   const token = Number(g.__systemPiPReturnTokenRef?.current || 0);
   g.__systemPiPReturnMediaRestoreTokenRef =
@@ -3076,9 +3101,21 @@ export function restoreCallMediaAfterSystemPiPReturn(): boolean {
   if (token) {
     g.__systemPiPReturnMediaRestoreTokenRef.current = token;
   }
+  // Audio leave: return_to_audio_ui_sync уже pinned — один лёгкий pass, без [0,250,800,1500].
+  const audioOnly = opts?.preferAudioOnly === true;
+  cancelScheduledCallAudioRouteReappliesMatching([
+    'system_pip_enter_',
+    'audio_home_preserve',
+    'system_pip_exit_preserve',
+  ]);
+  if (audioOnly && shouldSkipScheduledReturnToAudioUiReapply()) {
+    return true;
+  }
   scheduleReapplyPersistedCallAudioRoute('system_pip_return_media', {
-    media: resolveReapplyMediaInCallContext(),
-    delaysMs: [0, 250, 800, 1500],
+    media: audioOnly ? 'audio' : resolveReapplyMediaInCallContext(),
+    delaysMs: audioOnly ? [0] : [0, 400],
+    honorUserRoute: true,
+    skipInCallRestart: audioOnly,
   });
   return true;
 }

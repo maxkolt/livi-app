@@ -12,7 +12,7 @@ import { logger } from '../../utils/logger';
 import { readRootCurrentRouteName } from '../../utils/safeRootNavigation';
 import { trackReleaseEvent } from '../../utils/telemetry';
 import { requestExitSystemPiPSoft, dismissSystemPiPAfterCallEnded } from '../../utils/callKeep';
-import { startActiveCallNotification, reenableAndroidSystemPiPLeaveHintAfterReturn, refreshAndroidActiveCallNotification, syncAndroidSystemPiPNativeFlags, isAndroidActiveCallEligibleForLeaveHint, shouldUseSystemPiPControlsCaptureOnly, forceAndroidSystemPiPPeerVideoVisible } from '../../utils/activeCallNotification';
+import { startActiveCallNotification, reenableAndroidSystemPiPLeaveHintAfterReturn, refreshAndroidActiveCallNotification, syncAndroidSystemPiPNativeFlags, syncAndroidLeaveHintForOngoingCall, isAndroidActiveCallEligibleForLeaveHint, shouldUseSystemPiPControlsCaptureOnly, forceAndroidSystemPiPPeerVideoVisible } from '../../utils/activeCallNotification';
 import {
   shouldUsePipPlaceholderOnly,
   shouldUseSystemPiPPlaceholderOnly,
@@ -48,8 +48,9 @@ import {
   clearCallAudioRouteUiLock,
   applyCallAudioOutputRouteNow,
   resolveReapplyMediaInCallContext,
+  cancelScheduledCallAudioRouteReappliesMatching,
 } from '../../utils/callAudioRoutePersist';
-import { armCallAudioRouteUiLock } from '../../utils/callAudioRouteTransitionGuards';
+import { armCallAudioRouteUiLock, shouldSkipScheduledReturnToAudioUiReapply } from '../../utils/callAudioRouteTransitionGuards';
 import {
   preferSpeakerAfterHeadsetDisconnect,
   rememberVideoUiSpeakerAfterHeadsetDisconnect,
@@ -118,6 +119,7 @@ function shouldSkipSuppressOverlayWhenLeavingSystemPiP(): boolean {
     const g = global as any;
     if (g.__restoringInAppPiPFromSystemRef?.current === true) return true;
     if (g.__pipSuspendedForSystemPiPRef?.current === true) return true;
+    if (g.__systemPiPNeedsInAppRestoreRef?.current === true) return true;
     if (g.__pipReturnToCallInFlightRef?.current === true) return true;
     return peekSystemPiPLeaveContextForReturn().restoreInAppPiP;
   } catch {
@@ -132,6 +134,9 @@ function suspendInAppOverlayForSystemPiPEnter(): void {
     if (g.__pipVisibleRef?.current !== true) return;
     g.__pipSuspendedForSystemPiPRef = g.__pipSuspendedForSystemPiPRef || { current: false };
     g.__pipSuspendedForSystemPiPRef.current = true;
+    // Sticky: OEM bounce enter→exit может снять suspend до restore — плашку всё равно вернуть.
+    g.__systemPiPNeedsInAppRestoreRef = g.__systemPiPNeedsInAppRestoreRef || { current: false };
+    g.__systemPiPNeedsInAppRestoreRef.current = true;
     NativeModules.LiviAppModule?.setInAppPiPVisibleForSystemPiP?.(false);
   } catch (_) {}
 }
@@ -141,7 +146,33 @@ function clearInAppPiPSystemSuspendFlags(): void {
     const g = global as any;
     if (g.__pipSuspendedForSystemPiPRef) g.__pipSuspendedForSystemPiPRef.current = false;
     if (g.__restoringInAppPiPFromSystemRef) g.__restoringInAppPiPFromSystemRef.current = false;
+    try {
+      NativeModules.LiviAppModule?.setInAppPiPVisibleForSystemPiP?.(true);
+    } catch (_) {}
   } catch (_) {}
+}
+
+function markSystemPiPNeedsInAppRestore(): void {
+  try {
+    const g = global as any;
+    g.__systemPiPNeedsInAppRestoreRef = g.__systemPiPNeedsInAppRestoreRef || { current: false };
+    g.__systemPiPNeedsInAppRestoreRef.current = true;
+  } catch (_) {}
+}
+
+function clearSystemPiPNeedsInAppRestore(): void {
+  try {
+    const g = global as any;
+    if (g.__systemPiPNeedsInAppRestoreRef) g.__systemPiPNeedsInAppRestoreRef.current = false;
+  } catch (_) {}
+}
+
+function isSystemPiPNeedsInAppRestore(): boolean {
+  try {
+    return (global as any).__systemPiPNeedsInAppRestoreRef?.current === true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -461,6 +492,40 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       logHomePiPTrace('js_mode_changed', { traceId: traceId ?? undefined, inPiP });
       noteHomePiPModeChanged(traceId, inPiP);
       const stableIds = resolveStablePiPIds();
+      // OEM bounce: ModeChanged(true)→false за сотни ms пока app ещё в background —
+      // не трактовать как реальный exit (иначе pip:state=false + audio return).
+      try {
+        const g = global as any;
+        g.__lastSystemPiPModeChangedAtRef = g.__lastSystemPiPModeChangedAtRef || { current: 0 };
+        g.__lastSystemPiPEnteredAtRef = g.__lastSystemPiPEnteredAtRef || { current: 0 };
+        const now = Date.now();
+        if (inPiP) {
+          g.__lastSystemPiPEnteredAtRef.current = now;
+        } else {
+          const enteredAt = Number(g.__lastSystemPiPEnteredAtRef.current || 0);
+          const returnInFlight =
+            returnToCallInFlightRef.current ||
+            g.__pipReturnToCallJustPressedRef?.current === true ||
+            g.__pipReturnToCallInFlightRef?.current === true;
+          if (
+            !returnInFlight &&
+            enteredAt > 0 &&
+            now - enteredAt < 900 &&
+            AppState.currentState === 'background'
+          ) {
+            logger.info('[PiPContext] Ignore OEM SystemPiPModeChanged(false) bounce', {
+              sinceEnterMs: now - enteredAt,
+            });
+            logHomePiPTrace('js_mode_changed_bounce_ignored', {
+              traceId: traceId ?? undefined,
+              sinceEnterMs: now - enteredAt,
+            });
+            g.__lastSystemPiPModeChangedAtRef.current = now;
+            return;
+          }
+        }
+        g.__lastSystemPiPModeChangedAtRef.current = now;
+      } catch (_) {}
       trackReleaseEvent('pip_enter_exit', {
         phase: inPiP ? 'enter' : 'exit',
         callId: stableIds.callId,
@@ -486,18 +551,36 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
           g.__pendingSystemPiPSyncRef.current = false;
           g.__pipInSystemModeRef = g.__pipInSystemModeRef || { current: false };
           g.__pipInSystemModeRef.current = false;
+          g.__systemPiPEntryInProgressUntilRef =
+            g.__systemPiPEntryInProgressUntilRef || { current: 0 };
+          g.__systemPiPEntryInProgressUntilRef.current = 0;
+          // Не дать late AboutToEnter / enter_preserve перебить return_to_audio.
+          cancelScheduledCallAudioRouteReappliesMatching([
+            'system_pip_enter_',
+            'audio_home_preserve',
+            'audio_home_loud_speaker',
+          ]);
           g.__pipUpdateStateRef?.current?.({
             systemPiPCaptureActive: false,
             systemPiPCaptureRequestId: 0,
             pendingSystemPiP: false,
             inSystemPiPMode: false,
           });
-          const leaveCtx = peekSystemPiPLeaveContextForReturn();
+          // Stale optimistic enter из AboutToEnter — не оставить pending для late activate.
+          g.__pendingSystemPiPSyncRef.current = false;
+          g.__pipInSystemModeRef.current = false;
+          // SYNC: leaveUi может быть 'audio' даже при in-app leave — prepare убивает плашку (exitPiP).
+          const leaveCtxSync = peekSystemPiPLeaveContextForReturn();
+          const restoreInAppSync =
+            leaveCtxSync.restoreInAppPiP === true ||
+            g.__systemPiPNeedsInAppRestoreRef?.current === true ||
+            g.__pipSuspendedForSystemPiPRef?.current === true;
           if (
-            leaveCtx.leaveUi === 'audio' ||
-            leaveCtx.preferAudioOnly ||
-            leaveCtx.audioOrigin ||
-            isSystemPiPSessionAudioOrigin()
+            !restoreInAppSync &&
+            (leaveCtxSync.preferAudioOnly ||
+              leaveCtxSync.audioOrigin ||
+              (leaveCtxSync.leaveUi === 'audio' && !leaveCtxSync.restoreInAppPiP) ||
+              isSystemPiPSessionAudioOrigin())
           ) {
             prepareDirectCallAudioReturnFromPiP();
           }
@@ -576,24 +659,70 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
           setDecorSizeForPiP(null);
           setSystemPiPCaptureActive(false);
           setSystemPiPCaptureRequestId(0);
-          // Выход из системного PiP: подавляем оверлей только при возврате на полный VideoCall.
-          // При restoreInAppPiP плашка должна остаться видимой без мигания.
-          if (shouldSkipSuppressOverlayWhenLeavingSystemPiP()) {
+          // Выход из системного PiP.
+          // In-app leave: никогда audio-return/exitPiP — только снять suspend + гарантировать showPiP.
+          const leaveCtxExit = peekSystemPiPLeaveContextForReturn();
+          const restoreInAppExit =
+            leaveCtxExit.restoreInAppPiP === true || shouldSkipSuppressOverlayWhenLeavingSystemPiP();
+          if (restoreInAppExit) {
             setSuppressOverlayForReturn(false);
+            clearInAppPiPSystemSuspendFlags();
+            try {
+              const gRestore = global as any;
+              gRestore.__pendingInAppPiPRestoreAfterSystemRef =
+                gRestore.__pendingInAppPiPRestoreAfterSystemRef || { current: false };
+              gRestore.__pendingInAppPiPRestoreAfterSystemRef.current = true;
+              const runRestore = () => {
+                try {
+                  if (gRestore.__pendingInAppPiPRestoreAfterSystemRef?.current !== true) return;
+                  if (
+                    gRestore.__endingCallInProgressRef?.current === true ||
+                    gRestore.__callEndedFromPiPNoOpenRef?.current === true
+                  ) {
+                    gRestore.__pendingInAppPiPRestoreAfterSystemRef.current = false;
+                    return;
+                  }
+                  // Даже если __pipVisibleRef=true (soft-hide), нужен showPiP/re-render —
+                  // иначе overlay остаётся скрыт по __pipSuspended (ref без setState).
+                  const fn = gRestore.__pipReturnToCallRef?.current;
+                  if (typeof fn === 'function') {
+                    gRestore.__restoringInAppPiPFromSystemRef =
+                      gRestore.__restoringInAppPiPFromSystemRef || { current: false };
+                    gRestore.__restoringInAppPiPFromSystemRef.current = true;
+                    fn({ restoreInAppPiP: true });
+                    return;
+                  }
+                  if (gRestore.__pipVisibleRef?.current === true) {
+                    gRestore.__pendingInAppPiPRestoreAfterSystemRef.current = false;
+                    clearSystemPiPNeedsInAppRestore();
+                    try {
+                      gRestore.__pipUpdateStateRef?.current?.({
+                        suppressOverlayForReturn: false,
+                      });
+                    } catch (_) {}
+                    restoreCallAudioForInAppPiPPlaque('system_pip_exit_in_app_already_visible');
+                  }
+                } catch (_) {}
+              };
+              if (typeof requestAnimationFrame === 'function') {
+                requestAnimationFrame(() => setTimeout(runRestore, 32));
+              } else {
+                setTimeout(runRestore, 48);
+              }
+            } catch (_) {}
           } else {
             setSuppressOverlayForReturn(true);
+            try {
+              if (
+                leaveCtxExit.leaveUi === 'audio' ||
+                leaveCtxExit.preferAudioOnly ||
+                leaveCtxExit.audioOrigin ||
+                isSystemPiPSessionAudioOrigin()
+              ) {
+                prepareDirectCallAudioReturnFromPiP();
+              }
+            } catch (_) {}
           }
-          try {
-            const leaveCtx = peekSystemPiPLeaveContextForReturn();
-            if (
-              leaveCtx.leaveUi === 'audio' ||
-              leaveCtx.preferAudioOnly ||
-              leaveCtx.audioOrigin ||
-              isSystemPiPSessionAudioOrigin()
-            ) {
-              prepareDirectCallAudioReturnFromPiP();
-            }
-          } catch (_) {}
         }
         try {
           g.__pipInSystemModeRef = g.__pipInSystemModeRef || { current: false };
@@ -664,18 +793,35 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
             armCallAudioPreservePriority(4500);
           } catch (_) {}
           try {
-            if (shouldSkipSuppressOverlayWhenLeavingSystemPiP()) {
+            cancelScheduledCallAudioRouteReappliesMatching([
+              'system_pip_enter_',
+              'audio_home_preserve',
+              'audio_home_loud_speaker',
+              'app_state_foreground',
+            ]);
+            if (shouldSkipSuppressOverlayWhenLeavingSystemPiP() || peekSystemPiPLeaveContextForReturn().restoreInAppPiP) {
               restoreCallAudioForInAppPiPPlaque('system_pip_exit_to_in_app_plaque');
             } else {
-              const userBuiltin = readUserSelectedCallAudioRoute();
-              const honorBuiltin =
-                userBuiltin === 'SPEAKER_PHONE' || userBuiltin === 'EARPIECE';
-              scheduleReapplyPersistedCallAudioRoute('system_pip_exit_preserve_route', {
-                media: resolveReapplyMediaInCallContext(),
-                delaysMs: [0, 300, 900],
-                honorUserRoute: honorBuiltin,
-                skipInCallRestart: honorBuiltin,
-              });
+              const leaveCtx = peekSystemPiPLeaveContextForReturn();
+              const audioLeave =
+                leaveCtx.leaveUi === 'audio' ||
+                leaveCtx.preferAudioOnly ||
+                leaveCtx.audioOrigin ||
+                isSystemPiPSessionAudioOrigin() ||
+                isInAudioOnlyCallUi() ||
+                shouldSkipScheduledReturnToAudioUiReapply();
+              // Audio leave: sync prepare + App restoreCallMedia — без exit_preserve churn.
+              if (!audioLeave) {
+                const userBuiltin = readUserSelectedCallAudioRoute();
+                const honorBuiltin =
+                  userBuiltin === 'SPEAKER_PHONE' || userBuiltin === 'EARPIECE';
+                scheduleReapplyPersistedCallAudioRoute('system_pip_exit_preserve_route', {
+                  media: resolveReapplyMediaInCallContext(),
+                  delaysMs: [0, 400],
+                  honorUserRoute: honorBuiltin,
+                  skipInCallRestart: honorBuiltin,
+                });
+              }
             }
           } catch (_) {}
         }
@@ -1150,6 +1296,10 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     }
     if (Platform.OS === 'android' && p.callId && p.roomId) {
       startActiveCallNotification(p.partnerName);
+      // Back → in-app: leave-hint остаётся armed, чтобы Home штатно дал system PiP.
+      try {
+        syncAndroidLeaveHintForOngoingCall();
+      } catch (_) {}
     }
   }, []);
 
@@ -1266,7 +1416,8 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       stayOnVideo = (global as any).__stayOnVideoCallUiRef?.current === true;
     } catch (_) {}
     const audioOrigin = isSystemPiPLeaveAudioOrigin() || isSystemPiPSessionAudioOrigin();
-    const videoUiOwnsCapture = onVideoCallRoute && stayOnVideo && !audioUi && !audioOrigin;
+    const videoUiOwnsCapture =
+      onVideoCallRoute && stayOnVideo && !audioUi && !audioOrigin && hasLive;
     if (!videoUiOwnsCapture) {
       setSystemPiPCaptureActive((prev) => (prev ? prev : true));
       if (hasLive) {
@@ -1599,6 +1750,56 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       if (g.__videoCallActiveRef?.current === false) {
         return;
       }
+      // После expand/exit: late AboutToEnter не должен ставить enter_preserve / CaptureHost.
+      // Back пока app active → in-app PiP. Home/фон (inactive|background) → system PiP.
+      try {
+        const now = Date.now();
+        const leavingByBack = g.__leavingVideoCallByBackRef?.current === true;
+        const leavingByHome = g.__leavingVideoCallByHomeRef?.current === true;
+        const appLeavingToBackground =
+          AppState.currentState === 'background' || AppState.currentState === 'inactive';
+        if (leavingByBack && !leavingByHome && !appLeavingToBackground) {
+          logger.info('[PiPContext] AboutToEnterSystemPiP skipped — Back uses in-app PiP');
+          logHomePiPTrace('js_about_to_enter_skip', { traceId, reason: 'leaving_by_back_in_app' });
+          try {
+            NativeModules.LiviAppModule?.cancelPendingSystemPiPEnter?.();
+            cancelScheduledCallAudioRouteReappliesMatching([
+              'audio_home_preserve',
+              'audio_home_loud_speaker',
+              'system_pip_enter_',
+            ]);
+          } catch (_) {}
+          return;
+        }
+        if (leavingByHome || appLeavingToBackground) {
+          g.__leavingVideoCallByBackRef = g.__leavingVideoCallByBackRef || { current: false };
+          g.__leavingVideoCallByBackRef.current = false;
+          g.__returningFromSystemPiPUntilRef = g.__returningFromSystemPiPUntilRef || { current: 0 };
+          g.__returningFromSystemPiPUntilRef.current = 0;
+          g.__blockSystemPiPCaptureHostUntilRef =
+            g.__blockSystemPiPCaptureHostUntilRef || { current: 0 };
+          g.__blockSystemPiPCaptureHostUntilRef.current = 0;
+          g.__disableSystemPiPUntilRef = g.__disableSystemPiPUntilRef || { current: 0 };
+          g.__disableSystemPiPUntilRef.current = 0;
+        } else if (
+          now < Number(g.__returningFromSystemPiPUntilRef?.current || 0) ||
+          now < Number(g.__blockSystemPiPCaptureHostUntilRef?.current || 0) ||
+          now < Number(g.__disableSystemPiPUntilRef?.current || 0) ||
+          g.__pipReturnToCallInFlightRef?.current === true
+        ) {
+          logger.info('[PiPContext] AboutToEnterSystemPiP skipped — returning from system PiP');
+          logHomePiPTrace('js_about_to_enter_skip', { traceId, reason: 'returning_from_system_pip' });
+          try {
+            NativeModules.LiviAppModule?.cancelPendingSystemPiPEnter?.();
+            cancelScheduledCallAudioRouteReappliesMatching([
+              'audio_home_preserve',
+              'audio_home_loud_speaker',
+              'system_pip_enter_',
+            ]);
+          } catch (_) {}
+          return;
+        }
+      } catch (_) {}
       if (!isAndroidActiveCallEligibleForLeaveHint()) {
         logger.info('[PiPContext] AboutToEnterSystemPiP skipped — not on active VideoCall');
         logHomePiPTrace('js_about_to_enter_skip', { traceId, reason: 'not_on_video_call' });
@@ -1801,8 +2002,9 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         localStream: params?.localStream ?? localFromSessionForPlaceholder ?? null,
       });
       try {
-        // Sticky по реальному leave UI, не по logo/placeholder (peer video в PiP не меняет return target).
-        markSystemPiPSessionAudioOrigin(isSystemPiPLeaveAudioOrigin() || isInAudioOnlyCallUi());
+        // Новый system-PiP session: origin только от текущего UI.
+        // Sticky прошлого audio-leave ломал video Home (return-to-audio / pip:state=false).
+        markSystemPiPSessionAudioOrigin(isInAudioOnlyCallUi());
       } catch (_) {}
       try {
         commitSystemPiPLeaveContextSnapshot({ placeholderOnly: placeholderOnlyHome });
@@ -2081,7 +2283,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
 
     if (wasSystemPiP) {
       try {
-        restoreCallMediaAfterSystemPiPReturn();
+        restoreCallMediaAfterSystemPiPReturn({ preferAudioOnly: preferAudioOnlyUi });
       } catch (_) {}
     }
 
@@ -2341,7 +2543,15 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
 
     if (restoreInAppPiP) {
       const leaveSnap = peekSystemPiPLeaveContextForReturn();
-      const targetRoute = leaveSnap.routeName || 'Home';
+      const liveRoute = readRootCurrentRouteName();
+      // Никогда не открывать VideoCall при restore плашки — только Home / текущий non-call экран.
+      const rawTarget = leaveSnap.routeName || liveRoute || 'Home';
+      const targetRoute =
+        rawTarget === 'VideoCall'
+          ? liveRoute && liveRoute !== 'VideoCall'
+            ? liveRoute
+            : 'Home'
+          : rawTarget;
       const showInAppFromParams = (): boolean => {
         const params = g.__currentCallPiPParamsRef?.current;
         const showFn = g.__pipShowPiPRef?.current;
@@ -2385,6 +2595,13 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
           restoreCallAudioForInAppPiPPlaque('restore_in_app_pip_from_system');
         } catch (_) {}
         clearInAppPiPSystemSuspendFlags();
+        clearSystemPiPNeedsInAppRestore();
+        try {
+          const g2 = global as any;
+          if (g2.__pendingInAppPiPRestoreAfterSystemRef) {
+            g2.__pendingInAppPiPRestoreAfterSystemRef.current = false;
+          }
+        } catch (_) {}
         setSuppressOverlayForReturn(false);
         finishReturnToCallAfterNav();
       };

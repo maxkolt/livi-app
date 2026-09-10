@@ -5,7 +5,7 @@ import {
   armCallAudioNativeTransitionLock,
   armCallAudioPreservePriority,
 } from '../../utils/callAudioRoutePersist';
-import { finishDirectCallVideoExpandInFlight, isDirectCallVideoUiActive } from '../../utils/directCallVideoExpandGuard';
+import { finishDirectCallVideoExpandInFlight, isDirectCallVideoUiActive, clearDirectCallUserRequestedVideoExpand } from '../../utils/directCallVideoExpandGuard';
 
 export {
   touchDirectCallVideoExpandGuard,
@@ -57,6 +57,9 @@ export {
 export function prepareDirectCallAudioReturnFromPiP(): void {
   try {
     const g = global as any;
+    // Явный audio-return: сбросить sticky video-expand, иначе layout/focus
+    // видят authenticIntent при preferVideoCallUi:false и шумят remount/cam.
+    clearDirectCallUserRequestedVideoExpand();
     finishDirectCallVideoExpandInFlight();
     g.__directCallVideoExpandUntilRef = g.__directCallVideoExpandUntilRef || { current: 0 };
     g.__directCallVideoExpandUntilRef.current = 0;
@@ -441,19 +444,14 @@ export function shouldUseSystemPiPPlaceholderOnly(opts?: {
             : undefined;
     const peerVideo =
       hasLiveRemote || remoteCamOn === true || opts?.remoteCamOn === true;
-    const inSystemPiP =
-      g.__pipInSystemModeRef?.current === true ||
-      g.__pendingSystemPiPSyncRef?.current === true;
 
-    // Уже в system PiP: peer включил видео → RTC, даже если локальный UI ещё audio.
-    if (inSystemPiP && peerVideo) return false;
+    // Peer video уже есть → RTC в system PiP (и на enter с audio UI, и mid-PiP upgrade).
+    // Раньше audio UI форсил logo раньше проверки live remote — собеседник не видел видео.
+    if (peerVideo) return false;
 
-    // Enter с audio-страницы → logo (пока peer без video).
+    // Enter с audio-страницы без peer video → logo.
     if (isInAudioOnlyCallUi()) return true;
 
-    if (hasLiveRemote) return false;
-    if (remoteCamOn === true) return false;
-    if (opts?.remoteCamOn === true) return false;
     if (isSystemPiPLeaveAudioOrigin()) return true;
     return true;
   } catch {
@@ -497,29 +495,40 @@ export function commitSystemPiPLeaveContextSnapshot(opts?: {
           ? 'audio'
           : 'video';
     // Sticky: audio leave не сбрасывается апгрейдом PiP logo→peer video.
-    const audioLeave =
+    const preferAudioOnly =
       leaveUi === 'audio' ||
       existing?.preferAudioOnly === true ||
       existing?.audioOrigin === true ||
       isSystemPiPSessionAudioOrigin() ||
       (placeholderOnly && (uiPreferAudio || isInAudioOnlyCallUi()));
-    const preferAudioOnly = audioLeave || leaveUi === 'audio';
     const inAppPiP =
       typeof opts?.restoreInAppPiP === 'boolean'
         ? opts.restoreInAppPiP
-        : // Audio leave → всегда полный return на VideoCall audio, не in-app plaque.
-          preferAudioOnly
-            ? false
-            : g.__pipVisibleRef?.current === true || existing?.restoreInAppPiP === true;
+        : g.__pipVisibleRef?.current === true ||
+          g.__pipSuspendedForSystemPiPRef?.current === true ||
+          g.__systemPiPNeedsInAppRestoreRef?.current === true ||
+          existing?.restoreInAppPiP === true;
+    if (inAppPiP) {
+      g.__systemPiPNeedsInAppRestoreRef = g.__systemPiPNeedsInAppRestoreRef || { current: false };
+      g.__systemPiPNeedsInAppRestoreRef.current = true;
+    }
+    // In-app leave: всегда актуальный route (не sticky VideoCall — иначе restore откроет полный экран).
+    const liveRoute = readRootCurrentRouteName();
+    const routeNameForSnap =
+      opts?.routeName !== undefined
+        ? opts.routeName
+        : inAppPiP
+          ? liveRoute && liveRoute !== 'VideoCall'
+            ? liveRoute
+            : 'Home'
+          : (existing?.routeName ?? liveRoute) || null;
     g.__systemPiPLeaveContextSnapshotRef = {
-      preferAudioOnly,
-      audioOrigin: preferAudioOnly,
+      // In-app leave: не форсить full-screen audio return (иначе плашка не восстановится).
+      preferAudioOnly: inAppPiP ? false : preferAudioOnly,
+      audioOrigin: inAppPiP ? false : preferAudioOnly,
       leaveUi,
       restoreInAppPiP: inAppPiP,
-      routeName:
-        opts?.routeName !== undefined
-          ? opts.routeName
-          : (existing?.routeName ?? readRootCurrentRouteName()) || null,
+      routeName: routeNameForSnap,
       capturedAt: Date.now(),
     };
   } catch {}
@@ -532,23 +541,51 @@ export function refreshSystemPiPLeaveContextSnapshot(): void {
 
 export function peekSystemPiPLeaveContextForReturn(): SystemPiPLeaveContext {
   try {
-    const snap = (global as any).__systemPiPLeaveContextSnapshotRef as SystemPiPLeaveContext | undefined;
+    const g = global as any;
+    const snap = g.__systemPiPLeaveContextSnapshotRef as SystemPiPLeaveContext | undefined;
+    const suspendedInApp = g.__pipSuspendedForSystemPiPRef?.current === true;
     if (snap && Date.now() - snap.capturedAt < 120_000) {
+      const restoreInAppPiP =
+        snap.restoreInAppPiP === true ||
+        suspendedInApp ||
+        g.__restoringInAppPiPFromSystemRef?.current === true ||
+        g.__systemPiPNeedsInAppRestoreRef?.current === true;
       const leaveUi =
         snap.leaveUi === 'audio' || snap.leaveUi === 'video'
           ? snap.leaveUi
           : snap.preferAudioOnly || snap.audioOrigin
             ? 'audio'
             : 'video';
+      // Полный audio return только если уходили НЕ с in-app плашки.
       const preferAudioOnly =
-        leaveUi === 'audio' || snap.preferAudioOnly === true || snap.audioOrigin === true;
+        !restoreInAppPiP &&
+        (leaveUi === 'audio' || snap.preferAudioOnly === true || snap.audioOrigin === true);
       return {
         ...snap,
         leaveUi,
         preferAudioOnly,
         audioOrigin: preferAudioOnly,
-        // Audio leave никогда не уходит в restoreInAppPiP (иначе сбрасывается preferAudio).
-        restoreInAppPiP: preferAudioOnly ? false : !!snap.restoreInAppPiP,
+        restoreInAppPiP,
+      };
+    }
+    if (suspendedInApp) {
+      return {
+        preferAudioOnly: false,
+        audioOrigin: false,
+        leaveUi: 'video',
+        restoreInAppPiP: true,
+        routeName: readRootCurrentRouteName() || 'Home',
+        capturedAt: Date.now(),
+      };
+    }
+    if (g.__systemPiPNeedsInAppRestoreRef?.current === true) {
+      return {
+        preferAudioOnly: false,
+        audioOrigin: false,
+        leaveUi: snap?.leaveUi === 'audio' || snap?.leaveUi === 'video' ? snap.leaveUi : 'video',
+        restoreInAppPiP: true,
+        routeName: snap?.routeName || readRootCurrentRouteName() || 'Home',
+        capturedAt: Date.now(),
       };
     }
   } catch {}

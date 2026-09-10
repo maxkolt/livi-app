@@ -962,6 +962,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '500',
     flexShrink: 0,
+    marginRight: 6,
   },
   statusRow: {
     flexDirection: 'row',

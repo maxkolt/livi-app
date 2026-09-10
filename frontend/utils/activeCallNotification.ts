@@ -397,6 +397,7 @@ export function isAndroidActiveCallEligibleForLeaveHint(): boolean {
     const inBackgroundWithLiveCall =
       AppState.currentState === 'background' && g.__videoCallActiveRef?.current !== false;
     const ongoingSession = isOngoingCallSession();
+    const inAppPiPVisible = g.__pipVisibleRef?.current === true;
     const incomingTransition = g.__incomingAnswerTransitionRef?.current;
     const incomingAnswerTransitionActive =
       !!incomingTransition && Number(incomingTransition.expiresAt || 0) > Date.now();
@@ -408,6 +409,7 @@ export function isAndroidActiveCallEligibleForLeaveHint(): boolean {
         homeHold ||
         inBackgroundWithLiveCall ||
         ongoingSession ||
+        inAppPiPVisible ||
         onCallConnectTransition) &&
       (!!roomId || !!callId)
     );
@@ -513,6 +515,18 @@ export function armAndroidLeaveHintForVideoCallHome(opts?: { allowFromInAppPiP?:
       }
     }
     const g = global as any;
+    // Home/фон штатно → system PiP: снять Back-guards и returning с прошлого expand.
+    try {
+      g.__leavingVideoCallByBackRef = g.__leavingVideoCallByBackRef || { current: false };
+      g.__leavingVideoCallByBackRef.current = false;
+      g.__returningFromSystemPiPUntilRef = g.__returningFromSystemPiPUntilRef || { current: 0 };
+      g.__returningFromSystemPiPUntilRef.current = 0;
+      g.__blockSystemPiPCaptureHostUntilRef =
+        g.__blockSystemPiPCaptureHostUntilRef || { current: 0 };
+      g.__blockSystemPiPCaptureHostUntilRef.current = 0;
+      g.__disableSystemPiPUntilRef = g.__disableSystemPiPUntilRef || { current: 0 };
+      g.__disableSystemPiPUntilRef.current = 0;
+    } catch (_) {}
     g.__leavingVideoCallByHomeRef = g.__leavingVideoCallByHomeRef || { current: false };
     g.__leavingVideoCallByHomeRef.current = true;
     g.__systemPiPEntryInProgressUntilRef = g.__systemPiPEntryInProgressUntilRef || { current: 0 };
@@ -573,6 +587,16 @@ export function minimizeAndroidAppToBackground(): boolean {
         g.__pipVisibleRef?.current === true ||
         g.__pipInSystemModeRef?.current === true);
     if (callActive) {
+      // Явный Back/Home leave: не держать returning/block с прошлого expand.
+      try {
+        g.__returningFromSystemPiPUntilRef = g.__returningFromSystemPiPUntilRef || { current: 0 };
+        g.__returningFromSystemPiPUntilRef.current = 0;
+        g.__blockSystemPiPCaptureHostUntilRef =
+          g.__blockSystemPiPCaptureHostUntilRef || { current: 0 };
+        g.__blockSystemPiPCaptureHostUntilRef.current = 0;
+        g.__disableSystemPiPUntilRef = g.__disableSystemPiPUntilRef || { current: 0 };
+        g.__disableSystemPiPUntilRef.current = 0;
+      } catch (_) {}
       armAndroidLeaveHintForVideoCallHome({ allowFromInAppPiP: true });
       try {
         setAndroidSystemPiPLeaveHintEnabled(true);

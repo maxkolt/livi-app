@@ -3307,11 +3307,17 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         if (now - lastResumeSyncAtRef.current < RESUME_SYNC_DEBOUNCE_MS) return;
         lastResumeSyncAtRef.current = now;
         logger.info('[welcome-tab] AppState resume sync start', { state });
-        const activeCallId = String(
-          (global as any).__activeCallAudioRouteCallIdRef?.current ||
-            (global as any).__webrtcSessionRef?.current?.getCallId?.() ||
-            '',
-        ).trim();
+        const activeSession = (global as any).__webrtcSessionRef?.current;
+        const sessionLive =
+          !!activeSession &&
+          (typeof activeSession.isEnded !== 'function' || !activeSession.isEnded());
+        const activeCallId = sessionLive
+          ? String(
+              (global as any).__activeCallAudioRouteCallIdRef?.current ||
+                activeSession?.getCallId?.() ||
+                '',
+            ).trim()
+          : '';
         const resumeSpan = callPerfSpan('home_resume_sync', {
           state,
           activeCallId: activeCallId || null,

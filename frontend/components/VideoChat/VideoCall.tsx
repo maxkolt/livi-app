@@ -67,6 +67,7 @@ import {
   markDirectCallUserRequestedVideoExpand,
   clearDirectCallUserRequestedVideoExpand,
   isDirectCallUserRequestedVideoExpand,
+  clearSystemPiPSessionAudioOrigin,
   shouldSuppressDirectCallAudioOnlyUiTransition,
   markFreshDirectCallAudioAcceptCall,
   isFreshDirectCallAudioAcceptCallActive,
@@ -201,14 +202,14 @@ function isAcceptedVideoCallNavCallId(callId?: string | null): boolean {
 function hasAuthenticDirectCallVideoPiPReturnIntent(): boolean {
   try {
     const g = global as any;
+    // Не считать stayOnVideo / in-app PiP «возвратом из PiP» — иначе remount/layout шум
+    // и ложный restore fromPiP пока партнёр в system PiP.
     return (
       isDirectCallUserRequestedVideoExpand() ||
       isDirectCallVideoExpandGuardActive() ||
       g.__expandToVideoCallUiFromPiPRef?.current === true ||
-      g.__stayOnVideoCallUiRef?.current === true ||
-      shouldPreserveCallAudioRouteInInAppPiP() ||
-      g.__pipVisibleRef?.current === true ||
-      isPipOverlayVisibleSync()
+      (g.__pipReturnToCallInFlightRef?.current === true &&
+        Number(g.__systemPiPReturnTokenRef?.current || 0) > 0)
     );
   } catch {
     return false;
@@ -247,12 +248,23 @@ function stripStaleDirectCallPiPNavParamsIfNeeded(
 ): void {
   const routePiPFlags = params.fromPiP === true || params.resume === true;
   if (!routePiPFlags) return;
-  if (params.audioOnlyPiPReturn === true) return;
+  if (params.audioOnlyPiPReturn === true) {
+    // Sticky video-expand после Back→video-PiP→«на аудио» не должен restore'ить video nav.
+    if (hasAuthenticDirectCallVideoPiPReturnIntent()) {
+      clearStaleDirectCallVideoExpandFlags();
+    }
+    return;
+  }
   if (isExplicitDirectCallVideoPiPReturnRoute({ ...params, callId: mountKey })) {
     return;
   }
   // Remount race: globals already say video return, но preferVideoCallUi ещё не в route.
   if (hasAuthenticDirectCallVideoPiPReturnIntent()) {
+    // Явный audio return (preferVideoCallUi: false) — не форсить video nav.
+    if (params.preferVideoCallUi === false) {
+      clearStaleDirectCallVideoExpandFlags();
+      return;
+    }
     if (params.preferVideoCallUi !== true) {
       logDirectCallUiGate('layout_restore_video_pip_nav', {
         callId: mountKey,
@@ -1190,7 +1202,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     routeParams: route?.params,
     session: sessionRef.current,
     acceptCallTimeRef,
-    // Android Back: goBack + in-app PiP; системный PiP — только кнопка «Домой».
+    // Android Back: in-app PiP + серфинг по app. System PiP — Home / фон.
     enableAndroidBackHandler: true,
     getAudioOutputRoute: () => userRouteRef.current,
   });
@@ -1299,12 +1311,12 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
           g.__directCallIncomingAcceptAudioBootstrapRef || { current: null as string | null };
         if (g.__directCallIncomingAcceptAudioBootstrapRef.current !== key) {
           g.__directCallIncomingAcceptAudioBootstrapRef.current = key;
-          // Accept happy path: one immediate apply + one short retry (was 0/250/700/1500).
+          // Accept happy path: one immediate reapply (preferAudioMode уже sync; [0,400]+probe давали churn).
           scheduleReapplyPersistedCallAudioRoute('direct_call_accept_audio_route', {
             media: 'audio',
             honorUserRoute: true,
             skipInCallRestart: true,
-            delaysMs: [0, 400],
+            delaysMs: [0],
           });
         }
       } catch {}
@@ -1486,7 +1498,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
         media: 'audio',
         honorUserRoute: true,
         skipInCallRestart: true,
-        delaysMs: [0, 400],
+        delaysMs: [0],
       });
     })();
   };
@@ -1625,6 +1637,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
   const isInactiveStateRef = useRef(false);
   const isEndingCallRef = useRef(false); // КРИТИЧНО: Флаг для предотвращения повторных вызовов handleCallEnded
   const wasFriendCallEndedRef = useRef(false);
+  const audioUiOnLayoutLoggedRef = useRef(false);
   const [isEndingCall, setIsEndingCall] = useState(false); // Синхронно с ref: скрываем бейдж/активный звонок при завершении, чтобы не мигало
   const callEndedTransitionDoneRef = useRef(false); // Один переход в UI «завершён» — защита от многократных setState при disconnect + call:ended
   const remoteEndedShellAppliedRef = useRef(false);
@@ -1961,8 +1974,12 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
 
     stripStaleDirectCallPiPNavParamsIfNeeded(p, mountKey);
 
-    // После strip/restore preferVideoCallUi может быть только в globals/merge — не смотрим устаревший `p`.
-    if (
+    // Явный audio-return: не считать sticky userExpand «video PiP return».
+    if (p.audioOnlyPiPReturn === true) {
+      if (hasAuthenticDirectCallVideoPiPReturnIntent()) {
+        clearStaleDirectCallVideoExpandFlags();
+      }
+    } else if (
       isExplicitDirectCallVideoPiPReturnRoute({ ...p, callId: mountKey }) ||
       hasAuthenticDirectCallVideoPiPReturnIntent()
     ) {
@@ -3483,7 +3500,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
               media: 'audio',
               honorUserRoute: true,
               skipInCallRestart: true,
-              delaysMs: [0, 400],
+              delaysMs: [0],
             });
             pinInitialAudioCallEarpieceRef.current({ force: true });
           };
@@ -3614,11 +3631,17 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
             existingCallId,
             friendId,
           });
-          // Если microtask сорвался / сессия застряла — через ~1.8с fallback + getAccepted retry.
+          // Если microtask сорвался / сессия застряла — через ~3.2с fallback + getAccepted retry.
           setTimeout(() => {
             try {
               if (typeof session.isEnded === 'function' && session.isEnded()) return;
-              const state = (session as any)?.room?.state as string | undefined;
+              if (typeof session.isPendingAcceptConnectBusy === 'function' && session.isPendingAcceptConnectBusy()) {
+                return;
+              }
+              const state =
+                (typeof session.getLiveKitRoomState === 'function'
+                  ? session.getLiveKitRoomState()
+                  : (session as any)?.room?.state) as string | undefined;
               if (state === 'connected' || state === 'connecting' || state === 'reconnecting') return;
               logger.warn('[VideoCall] Pending accept connect stalled — fallback initiator connect', {
                 existingCallId,
@@ -3631,7 +3654,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
                 logger.error('[VideoCall] Fallback connectAsInitiatorAfterAccepted failed:', e);
               });
             } catch (_) {}
-          }, 1800);
+          }, 3200);
           return;
         }
 
@@ -3689,7 +3712,13 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
         setTimeout(() => {
           try {
             if (typeof session.isEnded === 'function' && session.isEnded()) return;
-            const state = (session as any)?.room?.state as string | undefined;
+            if (typeof session.isPendingAcceptConnectBusy === 'function' && session.isPendingAcceptConnectBusy()) {
+              return;
+            }
+            const state =
+              (typeof session.getLiveKitRoomState === 'function'
+                ? session.getLiveKitRoomState()
+                : (session as any)?.room?.state) as string | undefined;
             if (state === 'connected' || state === 'connecting' || state === 'reconnecting') return;
             logger.warn('[VideoCall] Callee pending accept stalled — retry acceptCall', {
               callId: incomingCallId,
@@ -3699,7 +3728,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
               logger.error('[VideoCall] Callee stalled acceptCall retry failed:', e);
             });
           } catch (_) {}
-        }, 1800);
+        }, 3200);
         return;
       }
 
@@ -4031,7 +4060,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
             media: 'audio',
             honorUserRoute: true,
             skipInCallRestart: true,
-            delaysMs: [0, 400],
+            delaysMs: [0],
           });
           try {
             (global as any).__applyCallAudioRouteFromParentRef?.current?.(
@@ -4157,7 +4186,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
           media: 'audio',
           honorUserRoute: true,
           skipInCallRestart: true,
-          delaysMs: [0, 400],
+          delaysMs: [0],
         });
       }
       syncPeerVideoInviteHint();
@@ -4874,6 +4903,9 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       // Optimistic UI: сразу уходим с audio shell → video layout, камера догоняет после paint.
       if (leavingAudioOnlyUi) {
         markDirectCallVideoMediaActive();
+        try {
+          clearSystemPiPSessionAudioOrigin();
+        } catch {}
         directCallMountAudioUiAppliedRef.current = null;
         directCallPreferVideoExpandAppliedRef.current = null;
         setPipAudioOnlyPlaceholderSticky(false);
@@ -5495,7 +5527,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
           media: 'audio',
           honorUserRoute: true,
           skipInCallRestart: true,
-          delaysMs: [0, 400],
+          delaysMs: [0],
         });
       } else {
         if (shouldSkipScheduledReturnToAudioUiReapply(finalAudioRoute)) {
@@ -7132,8 +7164,8 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
   const leavingForSystemPiP = (() => {
     try {
       const g = global as any;
+      // Back → in-app PiP, не compact system capture.
       if (g.__leavingVideoCallByHomeRef?.current === true) return true;
-      if (g.__leavingVideoCallByBackRef?.current === true) return true;
       if (g.__pendingSystemPiPSyncRef?.current === true) return true;
       // Не использовать entryUntil alone — sticky окно давало чёрный+LiVi на native→audio.
       return false;
@@ -7220,7 +7252,10 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
         edges={Platform.OS === 'android' ? [] : undefined}
         onLayout={() => {
           try {
-            markCallPerf('videocall_audio_ui_onLayout');
+            if (!audioUiOnLayoutLoggedRef.current) {
+              audioUiOnLayoutLoggedRef.current = true;
+              markCallPerf('videocall_audio_ui_onLayout');
+            }
             (global as any).__notifyIncomingAnswerUiReady?.();
           } catch {}
         }}
@@ -7608,16 +7643,17 @@ const styles = StyleSheet.create({
     width: '100%',
   },
   audioCallName: {
-    fontSize: 34,
-    fontWeight: '700',
-    lineHeight: 38,
+    fontSize: 28,
+    fontWeight: '500',
+    letterSpacing: -0.3,
+    lineHeight: 34,
     color: WELCOME_HEADER_TITLE,
     textAlign: 'center',
   },
   audioCallSubtitle: {
     marginTop: -4,
-    fontSize: 14,
-    lineHeight: 18,
+    fontSize: 12,
+    lineHeight: 16,
     color: '#B0B0B0',
     textAlign: 'center',
   },

@@ -201,6 +201,8 @@ export class VideoCallSession extends SimpleEventEmitter {
   private cleaned = false;
   /** ctor запланировал handleCallAccepted из __pendingCallAcceptedRef — UI не должен дублировать connectAsInitiatorAfterAccepted */
   private consumedPendingCallAcceptedAtConstruct = false;
+  /** handleCallAccepted / Room.connect ещё идут — stall-fallback в VideoCall не должен дублировать connect */
+  private pendingAcceptConnectBusyDepth = 0;
 
   // LiveKit reconnect handling: during reconnect we must NOT treat transient disconnects as "call ended".
   private liveKitReconnecting = false;
@@ -336,18 +338,23 @@ export class VideoCallSession extends SimpleEventEmitter {
           });
           return;
         }
+        this.beginPendingAcceptConnectBusy();
         void this.ensureLocalTracks().catch((e) => {
           logger.warn('[VideoCallSession] ensureLocalTracks (pending call:accepted) failed', {
             error: (e as Error)?.message || String(e),
             callId: pendingSnapshot.callId,
           });
         });
-        void this.handleCallAccepted(pendingSnapshot).catch((e) => {
-          logger.error('[VideoCallSession] ❌ Failed to handle pending call:accepted', {
-            error: e,
-            callId: pendingSnapshot.callId,
+        void this.handleCallAccepted(pendingSnapshot)
+          .catch((e) => {
+            logger.error('[VideoCallSession] ❌ Failed to handle pending call:accepted', {
+              error: e,
+              callId: pendingSnapshot.callId,
+            });
+          })
+          .finally(() => {
+            this.endPendingAcceptConnectBusy();
           });
-        });
       });
     }
   }
@@ -434,6 +441,22 @@ export class VideoCallSession extends SimpleEventEmitter {
   /** ctor запланировал обработку __pendingCallAcceptedRef — не дублировать connectAsInitiatorAfterAccepted из VideoCall */
   didSchedulePendingCallAcceptedConnect(): boolean {
     return this.consumedPendingCallAcceptedAtConstruct;
+  }
+
+  /** Pending accept / LiveKit connect ещё в работе — UI stall-fallback должен ждать. */
+  isPendingAcceptConnectBusy(): boolean {
+    if (this.pendingAcceptConnectBusyDepth > 0) return true;
+    if (this.connectingPromise) return true;
+    const st = this.room?.state as string | undefined;
+    return st === 'connecting' || st === 'reconnecting' || st === 'connected';
+  }
+
+  private beginPendingAcceptConnectBusy(): void {
+    this.pendingAcceptConnectBusyDepth += 1;
+  }
+
+  private endPendingAcceptConnectBusy(): void {
+    this.pendingAcceptConnectBusyDepth = Math.max(0, this.pendingAcceptConnectBusyDepth - 1);
   }
 
   async prewarmLocalTracks(): Promise<void> {
@@ -2293,6 +2316,21 @@ export class VideoCallSession extends SimpleEventEmitter {
     if (this.remoteStreamHasLiveVideoTrack()) return;
     if (!this.getRemoteCamEnabled()) return;
     const now = Date.now();
+    try {
+      const g = global as any;
+      // Returning/block всегда первым — stale inSystemPiP не должен снимать defer на audio UI.
+      if (now < Number(g.__returningFromSystemPiPUntilRef?.current || 0)) return;
+      if (now < Number(g.__blockSystemPiPCaptureHostUntilRef?.current || 0)) return;
+      if (g.__pipReturnToCallInFlightRef?.current === true) return;
+      const inSystemPiP = g.__pipInSystemModeRef?.current === true;
+      const pendingEnter = g.__pendingSystemPiPSyncRef?.current === true;
+      const enteringPiP = Number(g.__systemPiPEntryInProgressUntilRef?.current || 0) > now;
+      const inPiPLifecycle = inSystemPiP || pendingEnter || enteringPiP;
+      // Вне PiP preload peer cam — ок (до leave в system PiP).
+      if (!inPiPLifecycle && isInAudioOnlyCallUi() && g.__preferAudioOnlyUiOnNextVideoCallRef?.current === true) {
+        return;
+      }
+    } catch (_) {}
     if (now - this.lastSystemPiPRemoteVideoArmAt < 400) return;
     this.lastSystemPiPRemoteVideoArmAt = now;
 
@@ -2306,11 +2344,19 @@ export class VideoCallSession extends SimpleEventEmitter {
       }
       this.resubscribeRemoteVideoIfNeeded('system_pip_capture');
       const hadLiveAfter = this.remoteStreamHasLiveVideoTrack();
-      logger.info('[VideoCallSession] Remote video armed for system PiP capture', {
-        hadLiveAfter,
-        wasDeferred,
-        wasConsumerDefer,
-      });
+      if (hadLiveAfter) {
+        logger.info('[VideoCallSession] Remote video armed for system PiP capture', {
+          hadLiveAfter,
+          wasDeferred,
+          wasConsumerDefer,
+        });
+      } else {
+        logger.debug('[VideoCallSession] Remote video arm pending for system PiP', {
+          hadLiveAfter,
+          wasDeferred,
+          wasConsumerDefer,
+        });
+      }
       // Flush только когда track уже в стриме — иначе PiPContext крутит update depth.
       if (hadLiveAfter) {
         this.flushPiPRemoteVideoState({ bumpKey: true });
@@ -2371,6 +2417,14 @@ export class VideoCallSession extends SimpleEventEmitter {
     try {
       const g = global as any;
       const now = Date.now();
+      // Expanding/returning побеждает stale inSystemPiP — иначе late TrackSubscribed remount CaptureHost.
+      if (now < Number(g.__returningFromSystemPiPUntilRef?.current || 0)) return;
+      if (now < Number(g.__blockSystemPiPCaptureHostUntilRef?.current || 0)) return;
+      if (g.__pipReturnToCallInFlightRef?.current === true) return;
+      if (g.__preferAudioOnlyUiOnNextVideoCallRef?.current === true && g.__pipInSystemModeRef?.current !== true) {
+        return;
+      }
+
       const inSystemPiP = g.__pipInSystemModeRef?.current === true;
       // Samsung часто держит AppState=active в system PiP — не требовать background для pending.
       const pendingEnter = g.__pendingSystemPiPSyncRef?.current === true;
@@ -2378,12 +2432,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       const enteringPiP = !inSystemPiP && entryUntil > now;
       const inPiPLifecycle = inSystemPiP || pendingEnter || enteringPiP;
 
-      // После expand CaptureHost = peer video fullscreen — только вне PiP lifecycle.
       if (!inPiPLifecycle) {
-        if (now < Number(g.__returningFromSystemPiPUntilRef?.current || 0)) return;
-        if (now < Number(g.__blockSystemPiPCaptureHostUntilRef?.current || 0)) return;
-        if (g.__pipReturnToCallInFlightRef?.current === true) return;
-        if (g.__preferAudioOnlyUiOnNextVideoCallRef?.current === true) return;
         if (isInAudioOnlyCallUi()) return;
         return;
       }
@@ -2408,8 +2457,11 @@ export class VideoCallSession extends SimpleEventEmitter {
       try {
         stayOnVideo = g.__stayOnVideoCallUiRef?.current === true;
       } catch (_) {}
-      // Audio/logo origin: CaptureHost; полный video UI на VideoCall — compact RemoteVideo.
-      const videoUiOwnsCapture = onVideoCallRoute && stayOnVideo && !audioUi;
+      const hasLive = this.remoteStreamHasLiveVideoTrack();
+      // Compact RemoteVideo только когда peer уже live на video UI.
+      // Иначе mid-PiP upgrade → CaptureHost (не logo / не пустой compact).
+      const videoUiOwnsCapture =
+        onVideoCallRoute && stayOnVideo && !audioUi && hasLive;
       pipUpdate({
         remoteCamOn: true,
         allowVideoRender: true,
@@ -2419,12 +2471,21 @@ export class VideoCallSession extends SimpleEventEmitter {
         systemPiPCaptureActive: !videoUiOwnsCapture,
         systemPiPCaptureRequestId: Date.now(),
       });
-      logger.info('[VideoCallSession] System PiP peer video capture activated', {
-        reason,
-        videoUiOwnsCapture,
-        inSystemPiP,
-        hasLive: this.remoteStreamHasLiveVideoTrack(),
-      });
+      if (hasLive) {
+        logger.info('[VideoCallSession] System PiP peer video capture activated', {
+          reason,
+          videoUiOwnsCapture,
+          inSystemPiP,
+          hasLive,
+        });
+      } else {
+        logger.debug('[VideoCallSession] System PiP peer video capture arming', {
+          reason,
+          videoUiOwnsCapture,
+          inSystemPiP,
+          hasLive,
+        });
+      }
       // OEM иногда игнорирует первый hide backdrop в PiP — повтор (только пока ещё в PiP).
       const repin = () => {
         try {
@@ -2860,6 +2921,19 @@ export class VideoCallSession extends SimpleEventEmitter {
 
   exitPiP?(): void {
     const currentRoomId = this.getRoomId();
+    // OEM bounce / audio-return mid-enter: не сбрасывать local inPiP и не слать false.
+    try {
+      const g = global as any;
+      const now = Date.now();
+      if (
+        g.__pipInSystemModeRef?.current === true ||
+        g.__pendingSystemPiPSyncRef?.current === true ||
+        now < Number(g.__systemPiPEntryInProgressUntilRef?.current || 0)
+      ) {
+        logger.debug('[VideoCallSession] Skip exitPiP — still in system PiP lifecycle');
+        return;
+      }
+    } catch (_) {}
     const wasInLocalPiP = this.inPiP;
     this.setInPiP(false);
     if (!this.isLocalDirectCallAudioOnlyUi()) {

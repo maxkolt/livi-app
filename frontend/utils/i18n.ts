@@ -96,7 +96,7 @@ const dict: Partial<Record<Lang, Record<string, string>>> = {
     welcomeTitle: 'Добро пожаловать',
     welcomeSubtitle: 'Найти собеседника просто, начните видеочат',
     welcomeSearchHeading: 'Поиск собеседника...',
-    welcomeSearchMatching: 'Мы подбираем для вас интересного собеседника',
+    welcomeSearchMatching: 'Мы подберём для вас интересного собеседника',
     welcomeFindPartnerBtn: 'Найти собеседника',
     welcomeUsersOnline: '{count} пользователей онлайн',
     startSearch: 'Начать поиск',

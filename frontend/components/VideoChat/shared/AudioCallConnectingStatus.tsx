@@ -115,9 +115,9 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   label: {
-    fontSize: 14,
+    fontSize: 12,
     fontWeight: '400',
-    lineHeight: 18,
+    lineHeight: 16,
     color: WELCOME_HEADER_TITLE,
     letterSpacing: 0.15,
     textAlign: 'center',
@@ -125,7 +125,7 @@ const styles = StyleSheet.create({
   signal: {
     flexDirection: 'row',
     alignItems: 'flex-end',
-    height: 14,
+    height: 12,
     gap: 2,
     marginBottom: 2,
   },

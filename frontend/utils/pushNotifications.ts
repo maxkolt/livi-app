@@ -1362,9 +1362,15 @@ async function runWhenNavReady(
   return false;
 }
 
-async function navigateToVideoCallIncoming(peerUserId: string, callId: string, media?: DirectCallMediaHint) {
+async function navigateToVideoCallIncoming(
+  peerUserId: string,
+  callId: string,
+  media?: DirectCallMediaHint,
+  partnerNick?: string,
+) {
   const incomingMedia = media ?? getCallMediaHint(callId);
   try { setCallMediaHint(callId, incomingMedia); } catch {}
+  const nick = String(partnerNick || '').trim();
   const span = callPerfSpan('push_nav_videocall_incoming', { callId, peerUserId });
   await runWhenNavReady(`call:${callId || peerUserId}`, (nav) => {
     setActiveVideoCall(true);
@@ -1377,6 +1383,7 @@ async function navigateToVideoCallIncoming(peerUserId: string, callId: string, m
         directInitiator: false,
         callId,
         isIncoming: true,
+        ...(nick ? { partnerNick: nick } : {}),
         ...videoCallNavExtras(callId, incomingMedia),
       },
       'incoming_navigate',
@@ -1402,6 +1409,7 @@ export async function openAnswerCallScreen(
   peerUserId: string,
   callId: string,
   media?: DirectCallMediaHint,
+  partnerNick?: string,
 ): Promise<void> {
   try {
     beginCallPerfTrace({
@@ -1423,7 +1431,7 @@ export async function openAnswerCallScreen(
     prewarmDirectCallAudioCapture('push:answer-call-screen');
   }
   beginEarlyIncomingCallAccept(callId);
-  await navigateToVideoCallIncoming(peerUserId, callId, mediaHint);
+  await navigateToVideoCallIncoming(peerUserId, callId, mediaHint, partnerNick);
   // Incoming закрываем ПОСЛЕ navigate: иначе finish() singleInstance оставляет лаунчер до Main.
   if (Platform.OS === 'android') {
     sendCallAnsweredBroadcast(callId);

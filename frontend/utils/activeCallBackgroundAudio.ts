@@ -12,6 +12,7 @@ import {
   isCallAudioPiPTransitionWindow,
   setPersistedCallAudioRoute,
 } from './callAudioRoutePersist';
+import { peekSystemPiPLeaveContextForReturn, isSystemPiPSessionAudioOrigin } from '../src/pip/pipPlaceholderOnly';
 import { armAndroidLeaveHintForVideoCallHome, syncAndroidLeaveHintForOngoingCall } from './activeCallNotification';
 import { readNativeProbedExternalRoute } from './nativeCallAudioProbe';
 import { readRootCurrentRouteName } from './safeRootNavigation';
@@ -131,7 +132,16 @@ function onAppStateChange(next: AppStateStatus): void {
       const hasPendingSnap = !!peekSystemPiPReturnMediaSnapshot();
       const plaqueVisible = g.__pipVisibleRef?.current === true;
       if (returningFromPiP || hasPendingSnap) {
-        restoreCallMediaAfterSystemPiPReturn();
+        const leaveCtx = peekSystemPiPLeaveContextForReturn();
+        const restoreInApp = leaveCtx.restoreInAppPiP === true;
+        const preferAudioOnly =
+          !restoreInApp &&
+          (leaveCtx.preferAudioOnly ||
+            leaveCtx.audioOrigin ||
+            leaveCtx.leaveUi === 'audio' ||
+            isSystemPiPSessionAudioOrigin() ||
+            g.__preferAudioOnlyUiOnNextVideoCallRef?.current === true);
+        restoreCallMediaAfterSystemPiPReturn({ preferAudioOnly });
       } else if (!plaqueVisible && !isCallAudioPiPTransitionWindow()) {
         restoreAudioCallEarpieceAfterHomeReturn();
       }
@@ -166,6 +176,44 @@ function onAppStateChange(next: AppStateStatus): void {
           Date.now() < Number(g.__returningFromSystemPiPUntilRef?.current || 0);
         const external =
           readActiveExternalCallAudioRoute() || readNativeProbedExternalRoute();
+        // Страховка: ModeChanged/Expanded могли промахнуться — вернуть in-app плашку.
+        const needsInAppRestore =
+          !plaqueVisible &&
+          (g.__systemPiPNeedsInAppRestoreRef?.current === true ||
+            g.__pendingInAppPiPRestoreAfterSystemRef?.current === true ||
+            peekSystemPiPLeaveContextForReturn().restoreInAppPiP === true);
+        const endingCall =
+          g.__endingCallInProgressRef?.current === true ||
+          g.__callEndedFromPiPNoOpenRef?.current === true ||
+          g.__endingFromPiPButtonRef?.current === true;
+        if (needsInAppRestore && !endingCall) {
+          try {
+            g.__pendingInAppPiPRestoreAfterSystemRef =
+              g.__pendingInAppPiPRestoreAfterSystemRef || { current: false };
+            g.__pendingInAppPiPRestoreAfterSystemRef.current = true;
+            const fn = g.__pipReturnToCallRef?.current;
+            if (typeof fn === 'function') {
+              g.__restoringInAppPiPFromSystemRef =
+                g.__restoringInAppPiPFromSystemRef || { current: false };
+              g.__restoringInAppPiPFromSystemRef.current = true;
+              setTimeout(() => {
+                try {
+                  if (g.__pipVisibleRef?.current === true) {
+                    g.__pendingInAppPiPRestoreAfterSystemRef.current = false;
+                    return;
+                  }
+                  if (
+                    g.__endingCallInProgressRef?.current === true ||
+                    g.__callEndedFromPiPNoOpenRef?.current === true
+                  ) {
+                    return;
+                  }
+                  fn({ restoreInAppPiP: true });
+                } catch {}
+              }, 60);
+            }
+          } catch {}
+        }
         if (onHomeWithPlaque) {
           restoreCallAudioForInAppPiPPlaque('app_state_foreground_in_app_pip');
         } else if (returningFromPiP || isCallAudioPiPTransitionWindow() || plaqueVisible) {

@@ -1,12 +1,11 @@
 import { useCallback, useRef, useEffect } from 'react';
-import { BackHandler, PanResponder, Platform, Dimensions } from 'react-native';
+import { BackHandler, PanResponder, Platform, Dimensions, NativeModules } from 'react-native';
 import { usePiP as usePiPContext, isPipOverlayVisibleSync } from '../../../src/pip/PiPContext';
 import { isInAudioOnlyCallUi, setPipInAppRtcFromAudioOnlySticky } from '../../../src/pip/pipPlaceholderOnly';
 import { resolvePiPLocalMutedState, markDirectCallVideoMediaActive } from '../../../utils/activeCallSession';
 import { goBackFromCallScreenOrHome } from '../../../utils/appNavigationGuard';
 import { setPersistedCallAudioRoute } from '../../../utils/callAudioRoutePersist';
 import { readInAppPiPAudioOutputRoute } from '../../../utils/inAppPiPAudioRoute';
-import { minimizeAndroidAppToBackground } from '../../../utils/activeCallNotification';
 import { logger } from '../../../utils/logger';
 import socket from '../../../sockets/socket';
 
@@ -284,8 +283,7 @@ export const usePiP = ({
     }
   }, [roomId, callId, partnerId, isInactiveState, wasFriendCallEnded, pip.visible, friends, partnerUserId, camOn, micOn, remoteMuted, remoteCamOn, localStream, remoteStream, routeParams, session, getAudioOutputRoute]);
 
-  // Android Back на активном звонке: в фон + system PiP (как Home).
-  // In-app плашка — только явный жест/кнопка свернуть, не hardware Back.
+  // Android Back: goBack + in-app PiP. Системный PiP — только Home / реальный уход в фон.
   useEffect(() => {
     if (Platform.OS !== 'android') {
       return;
@@ -303,6 +301,22 @@ export const usePiP = ({
       }
     };
 
+    const revealInAppPiPAfterBack = () => {
+      enterPiPMode({ deferVisible: true, fromVideoCallBack: true });
+      try {
+        const g = global as any;
+        const clearLeaving = () => {
+          g.__leavingVideoCallByBackRef = g.__leavingVideoCallByBackRef || { current: false };
+          g.__leavingVideoCallByBackRef.current = false;
+        };
+        if (typeof requestAnimationFrame === 'function') {
+          requestAnimationFrame(clearLeaving);
+        } else {
+          setTimeout(clearLeaving, 16);
+        }
+      } catch {}
+    };
+
     const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
       if (isInactiveStateRef.current || wasFriendCallEndedRef.current) {
         navigateBackFromCallScreen();
@@ -311,27 +325,57 @@ export const usePiP = ({
 
       if (!hasActiveCallRef.current) return false;
 
+      const now = Date.now();
       try {
         const g = global as any;
         g.__leavingVideoCallByBackRef = g.__leavingVideoCallByBackRef || { current: false };
         g.__leavingVideoCallByBackRef.current = true;
-        // Не блокировать system PiP на 2s — Back должен войти в leave-hint как Home.
+        // Не пускать leave-hint → system PiP во время Back→навигация.
         g.__disableSystemPiPUntilRef = g.__disableSystemPiPUntilRef || { current: 0 };
-        g.__disableSystemPiPUntilRef.current = 0;
+        g.__disableSystemPiPUntilRef.current = now + 2000;
+        g.__pipVisibleRef = g.__pipVisibleRef || { current: false };
+        g.__pipVisibleRef.current = true;
+        g.__suppressInAppPiPUntilRef = g.__suppressInAppPiPUntilRef || { current: 0 };
+        g.__suppressInAppPiPUntilRef.current = 0;
+        g.__systemPiPEntryInProgressUntilRef = g.__systemPiPEntryInProgressUntilRef || { current: 0 };
+        g.__systemPiPEntryInProgressUntilRef.current = 0;
+        const upd = g.__pipUpdateStateRef?.current;
+        if (typeof upd === 'function') {
+          upd({
+            pendingSystemPiP: false,
+            systemPiPCaptureActive: false,
+            systemPiPCaptureRequestId: 0,
+            decorSizeForPiP: null,
+          });
+        }
+        NativeModules.LiviAppModule?.setSystemPiPCaptureFrameReady?.(false);
       } catch {}
 
-      return minimizeAndroidAppToBackground();
+      navigateBackFromCallScreen();
+      if (typeof requestAnimationFrame === 'function') {
+        requestAnimationFrame(revealInAppPiPAfterBack);
+      } else {
+        revealInAppPiPAfterBack();
+      }
+      return true;
     });
 
     return () => backHandler.remove();
   }, [
     enableAndroidBackHandler,
+    enterPiPMode,
     roomId,
     callId,
     partnerId,
     isInactiveState,
     wasFriendCallEnded,
+    pip.visible,
+    session,
     routeParams,
+    localStream,
+    remoteStream,
+    camOn,
+    remoteCamOn,
   ]);
 
   // Обработка Swipe Left to Right для входа в PiP и возврата на предыдущую страницу
@@ -413,24 +457,38 @@ export const usePiP = ({
           // В onPanResponderRelease всегда показываем PiP, если он еще не показан
           // После завершения жеста (навигации) флаг сбрасывается, и PiP может показаться снова при следующем свайпе
           if (hasActiveCall) {
+            // Back/swipe: in-app PiP поверх предыдущего экрана. System PiP — только Home/фон.
             if (Platform.OS === 'android') {
-              // Android: in-app PiP отключён. Свайп — просто шаг назад (системный PiP только по Back/Home).
-              requestAnimationFrame(() => {
-                goBackFromCallScreenOrHome(
-                  (routeParams as any)?.returnTo as { name: string; params?: object } | undefined,
-                );
-              });
-            } else {
-              // iOS: системный PiP для текущего сценария недоступен, сохраняем in-app PiP.
-              if (!pipShownDuringSwipeRef.current) {
-                enterPiPMode({ deferVisible: true });
-                pipShownDuringSwipeRef.current = true;
-              }
-              goBackFromCallScreenOrHome(
-                (routeParams as any)?.returnTo as { name: string; params?: object } | undefined,
-              );
-              pipShownDuringSwipeRef.current = false;
+              try {
+                const g = global as any;
+                g.__leavingVideoCallByBackRef = g.__leavingVideoCallByBackRef || { current: false };
+                g.__leavingVideoCallByBackRef.current = true;
+                g.__disableSystemPiPUntilRef = g.__disableSystemPiPUntilRef || { current: 0 };
+                g.__disableSystemPiPUntilRef.current = Date.now() + 2000;
+              } catch {}
             }
+            if (!pipShownDuringSwipeRef.current) {
+              enterPiPMode({ deferVisible: true, fromVideoCallBack: Platform.OS === 'android' });
+              pipShownDuringSwipeRef.current = true;
+            }
+            goBackFromCallScreenOrHome(
+              (routeParams as any)?.returnTo as { name: string; params?: object } | undefined,
+            );
+            if (Platform.OS === 'android') {
+              try {
+                const g = global as any;
+                const clearLeaving = () => {
+                  g.__leavingVideoCallByBackRef = g.__leavingVideoCallByBackRef || { current: false };
+                  g.__leavingVideoCallByBackRef.current = false;
+                };
+                if (typeof requestAnimationFrame === 'function') {
+                  requestAnimationFrame(clearLeaving);
+                } else {
+                  setTimeout(clearLeaving, 16);
+                }
+              } catch {}
+            }
+            pipShownDuringSwipeRef.current = false;
           } else {
             // Нет активного звонка - просто возвращаемся назад
             requestAnimationFrame(() => {
@@ -450,25 +508,31 @@ export const usePiP = ({
           const hasActiveCall = !!(actualRoomId || actualCallId || actualPartnerId);
           if (hasActiveCall) {
             if (Platform.OS === 'android') {
-              // На Android при terminate не показываем in-app PiP: логика едина с onPanResponderRelease.
-              requestAnimationFrame(() => {
-                goBackFromCallScreenOrHome(
-                  (routeParams as any)?.returnTo as { name: string; params?: object } | undefined,
-                );
-                pipShownDuringSwipeRef.current = false;
-              });
-            } else {
-              if (!pipShownDuringSwipeRef.current) {
-                enterPiPMode({ deferVisible: true });
-                pipShownDuringSwipeRef.current = true;
-              }
-              requestAnimationFrame(() => {
-                goBackFromCallScreenOrHome(
-                  (routeParams as any)?.returnTo as { name: string; params?: object } | undefined,
-                );
-                pipShownDuringSwipeRef.current = false;
-              });
+              try {
+                const g = global as any;
+                g.__leavingVideoCallByBackRef = g.__leavingVideoCallByBackRef || { current: false };
+                g.__leavingVideoCallByBackRef.current = true;
+                g.__disableSystemPiPUntilRef = g.__disableSystemPiPUntilRef || { current: 0 };
+                g.__disableSystemPiPUntilRef.current = Date.now() + 2000;
+              } catch {}
             }
+            if (!pipShownDuringSwipeRef.current) {
+              enterPiPMode({ deferVisible: true, fromVideoCallBack: Platform.OS === 'android' });
+              pipShownDuringSwipeRef.current = true;
+            }
+            requestAnimationFrame(() => {
+              goBackFromCallScreenOrHome(
+                (routeParams as any)?.returnTo as { name: string; params?: object } | undefined,
+              );
+              if (Platform.OS === 'android') {
+                try {
+                  const g = global as any;
+                  g.__leavingVideoCallByBackRef = g.__leavingVideoCallByBackRef || { current: false };
+                  g.__leavingVideoCallByBackRef.current = false;
+                } catch {}
+              }
+              pipShownDuringSwipeRef.current = false;
+            });
           }
         }
       },
