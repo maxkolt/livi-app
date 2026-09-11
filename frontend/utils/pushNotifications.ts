@@ -6,7 +6,6 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   API_BASE,
   SOCKET_CONNECT_WAIT_MS,
-  setOutgoingCallScreenVisible,
   setIncomingCallScreenVisible,
   setActiveVideoCall,
   declineCall,
@@ -20,8 +19,9 @@ import { getInstallId } from './installId';
 import { logger } from './logger';
 import { trackReleaseError, trackReleaseEvent } from './telemetry';
 import { stopIncomingCallAlert } from './incomingCallAlert';
-import { displayIncomingCall, isCallKeepAvailable, sendCallAnsweredBroadcast, addEndedCallId, closeOutgoingCallActivity, notifyCallCanceled, isEndedCallId, isOutgoingDeclineHandled, markOutgoingDeclineHandled, stopIncomingCallRingtoneAndVibration, setCallMediaHint, getCallMediaHint, videoCallNavExtras, type DirectCallMediaHint } from './callKeep';
-import { emitCloseOutgoingCall, emitCloseHomeModals, emitMissedClear, emitMissedIncrement, isWelcomeCallsMissedFilterActive, isWelcomeViewingChats, isWelcomeViewingMissedCalls, setPendingWelcomeCallsFilter, setPendingWelcomeChatsFilter, shouldSkipHomeUiSettle } from './globalEvents';
+import { sendCallAnsweredBroadcast, addEndedCallId, isEndedCallId, isOutgoingDeclineHandled, markOutgoingDeclineHandled, setCallMediaHint, getCallMediaHint, videoCallNavExtras, type DirectCallMediaHint } from './callKeep';
+import { emitCloseHomeModals, emitMissedClear, emitMissedIncrement, isWelcomeCallsMissedFilterActive, isWelcomeViewingChats, isWelcomeViewingMissedCalls, setPendingWelcomeCallsFilter, setPendingWelcomeChatsFilter, shouldSkipHomeUiSettle } from './globalEvents';
+import { terminateCall } from './terminateCall';
 import { recordCallLog, recordCancelledCall, flushCallLogUi, forceCallLogUiNow } from '../screens/home/callLog';
 import { UNREAD_BY_USER_KEY } from '../screens/home/constants';
 import { navigateToVideoCallScreen, type VideoCallNavLike } from './appNavigationGuard';
@@ -1096,10 +1096,8 @@ Notifications.setNotificationHandler({
         return { shouldShowBanner: false, shouldShowList: false, shouldPlaySound: false, shouldSetBadge: false };
       }
       if (id) markOutgoingDeclineHandled(id);
-      try { closeOutgoingCallActivity(id || null, { force: true }); } catch {}
-      try { setOutgoingCallScreenVisible(false); } catch {}
-      try { emitCloseOutgoingCall({ reason: 'remote_closed', callId: id || null }); } catch {}
-      logger.info('[decline/инициатор] push setNotificationHandler: закрыли и emitCloseOutgoingCall');
+      terminateCall({ reason: 'outgoing_declined', callId: id || null });
+      logger.info('[decline/инициатор] push setNotificationHandler: terminateCall(outgoing_declined)');
       return {
         shouldShowBanner: false,
         shouldShowList: false,
@@ -1111,11 +1109,8 @@ Notifications.setNotificationHandler({
       const data = (n as any)?.request?.content?.data || {};
       logger.info('[push] call_canceled received (handler)', { callId: data?.callId });
       if (data?.callId) {
-        try { stopIncomingCallRingtoneAndVibration(); } catch {}
-        try { setIncomingCallScreenVisible(false); } catch {}
-        try { notifyCallCanceled(String(data.callId)); } catch {}
-        try { addEndedCallId(String(data.callId)); } catch {}
-        logger.info('[push] notifyCallCanceled + addEndedCallId called after call_canceled');
+        terminateCall({ reason: 'incoming_canceled', callId: String(data.callId) });
+        logger.info('[push] terminateCall(incoming_canceled) after call_canceled');
       }
       // Android: пропущенный при отмене — FCM call_canceled в Kotlin; notifyCallCanceled закрывает входящий.
       return {
@@ -1457,10 +1452,6 @@ function moveAppToBackAfterDecline() {
  * Отклонение получателем → «Отменённый звонок» в журнале (не пропущенный). */
 export async function handleDeclineCallFromDeepLink(callId: string): Promise<void> {
   disposeDirectCallAudioPrewarm('push:decline-call');
-  try { setIncomingCallScreenVisible(false); } catch {}
-  try {
-    stopIncomingCallAlert();
-  } catch {}
   let callerPeer = '';
   try {
     callerPeer = String(getIncomingCallScreenState().fromUserId || '').trim();
@@ -1489,13 +1480,13 @@ export async function handleDeclineCallFromDeepLink(callId: string): Promise<voi
     (global as any).__lastIncomingFromUserIdRef = (global as any).__lastIncomingFromUserIdRef || { current: null };
     (global as any).__lastIncomingFromUserIdRef.current = null;
   } catch {}
+  terminateCall({ reason: 'incoming_declined_local', callId });
   try {
     await ensureSocketConnected(SOCKET_CONNECT_WAIT_MS);
     declineCall(callId);
   } catch (e) {
     logger.warn('[push] declineCall from decline-call deep link failed', { callId, error: (e as Error)?.message });
   }
-  await clearCallRelatedNotificationsAndSyncBadge();
   moveAppToBackAfterDecline();
 }
 
@@ -1526,20 +1517,15 @@ async function handleNotificationResponse(data: any, actionIdentifier: string, r
         return;
       }
       if (id) markOutgoingDeclineHandled(id);
-      try { closeOutgoingCallActivity(id || null, { force: true }); } catch {}
-      try { setOutgoingCallScreenVisible(false); } catch {}
-      try { emitCloseOutgoingCall({ reason: 'remote_closed', callId: id || null }); } catch {}
-      logger.info('[decline/инициатор] push handleNotificationResponse: закрыли и emitCloseOutgoingCall');
+      terminateCall({ reason: 'outgoing_declined', callId: id || null });
+      logger.info('[decline/инициатор] push handleNotificationResponse: terminateCall(outgoing_declined)');
       return;
     }
     if (type === 'call_canceled') {
       logger.info('[push] call_canceled received (handleNotificationResponse)', { callId: data?.callId });
       if (data?.callId) {
-        try { stopIncomingCallRingtoneAndVibration(); } catch {}
-        try { setIncomingCallScreenVisible(false); } catch {}
-        try { notifyCallCanceled(String(data.callId)); } catch {}
-        try { addEndedCallId(String(data.callId)); } catch {}
-        logger.info('[push] notifyCallCanceled + addEndedCallId called after call_canceled (response)');
+        terminateCall({ reason: 'incoming_canceled', callId: String(data.callId) });
+        logger.info('[push] terminateCall(incoming_canceled) after call_canceled (response)');
       }
       return;
     }
@@ -2063,18 +2049,13 @@ export function addNotificationListeners() {
           return;
         }
         if (id) markOutgoingDeclineHandled(id);
-        try { closeOutgoingCallActivity(id || null, { force: true }); } catch {}
-        try { setOutgoingCallScreenVisible(false); } catch {}
-        try { emitCloseOutgoingCall({ reason: 'remote_closed', callId: id || null }); } catch {}
-        logger.info('[decline/инициатор] push notificationReceived: закрыли и emitCloseOutgoingCall');
+        terminateCall({ reason: 'outgoing_declined', callId: id || null });
+        logger.info('[decline/инициатор] push notificationReceived: terminateCall(outgoing_declined)');
         return;
       }
       if (data?.type === 'call_canceled' && data?.callId) {
         logger.info('[push] call_canceled received (notificationReceived)', { callId: data.callId });
-        try { stopIncomingCallRingtoneAndVibration(); } catch {}
-        try { setIncomingCallScreenVisible(false); } catch {}
-        try { notifyCallCanceled(String(data.callId)); } catch {}
-        try { addEndedCallId(String(data.callId)); } catch {}
+        terminateCall({ reason: 'incoming_canceled', callId: String(data.callId) });
         const from = String(data.fromUserId || data.from || '').trim();
         if (from) {
           void recordMissedCallForUser(from, {
@@ -2083,7 +2064,7 @@ export function addNotificationListeners() {
             fromNick: String(data.fromNick || ''),
           });
         }
-        logger.info('[push] notifyCallCanceled + addEndedCallId called after call_canceled (received)');
+        logger.info('[push] terminateCall(incoming_canceled) after call_canceled (received)');
         return;
       }
       if (data?.type === 'call_ended' && data?.callId) {
@@ -2135,10 +2116,7 @@ export function addNotificationListeners() {
           from: data.from,
           appState: AppState.currentState,
         });
-        if (isCallKeepAvailable() && AppState.currentState !== 'active') {
-          const hasVideo = String(data?.media || '').toLowerCase() === 'video';
-          displayIncomingCall(data.callId, data.from, data.fromNick ?? '', hasVideo, data.callKitId);
-        }
+        // Один путь: только handler App → presentIncomingCall. Не CallKeep.displayIncomingCall (двойной UI).
         const setFromPush = (global as any).__setIncomingCallFromPush;
         if (typeof setFromPush === 'function') {
           setFromPush(data);

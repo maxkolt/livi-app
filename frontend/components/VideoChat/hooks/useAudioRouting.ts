@@ -98,6 +98,25 @@ import {
 } from './audioRouteTypes';
 
 /**
+ * WA-like: proximity только на audio + earpiece (экран гаснет у уха).
+ * Speaker / video / BT / system PiP — sensor off.
+ */
+function syncCallProximitySensor(route: InCallAudioRoute | null | undefined): void {
+  try {
+    const inSystemPiP = (global as any).__pipInSystemModeRef?.current === true;
+    const audioOnly =
+      !inSystemPiP &&
+      isInAudioOnlyCallUi() &&
+      !ongoingCallPrefersVideoMedia();
+    const want = audioOnly && route === 'EARPIECE';
+    if (want) {
+      InCallManager.startProximitySensor();
+    } else {
+      InCallManager.stopProximitySensor();
+    }
+  } catch {}
+}
+/**
  * Хук для управления аудио-рутированием
  * ВАЖНО: без агрессивных таймеров/пинков — они часто ухудшают стабильность (особенно на Android/ColorOS).
  * Делаем один предсказуемый старт/стоп аудио-сессии, остальное оставляем LiveKit/WebRTC.
@@ -1539,6 +1558,7 @@ export const useAudioRouting = (
     });
     setSelectedRoute(effectiveRoute);
     lastSelectedRef.current = effectiveRoute;
+    syncCallProximitySensor(effectiveRoute);
     if (
       isExternalHeadsetRoute(effectiveRoute) &&
       !userLockedBuiltinAudioOutput() &&
@@ -1635,6 +1655,9 @@ export const useAudioRouting = (
               (InCallManager as any).setForceSpeakerphoneOn?.(false);
               InCallManager.setSpeakerphoneOn(false);
             } catch {}
+            syncCallProximitySensor('EARPIECE');
+          } else {
+            syncCallProximitySensor('SPEAKER_PHONE');
           }
           markInCallAudioSessionStarted(true);
         } catch {}
@@ -1902,6 +1925,7 @@ export const useAudioRouting = (
     lastAvailableRef.current = [];
     try { (InCallManager as any).setForceSpeakerphoneOn?.('auto'); } catch {}
     try { InCallManager.setSpeakerphoneOn(false); } catch {}
+    try { InCallManager.stopProximitySensor(); } catch {}
     try { InCallManager.stop(); } catch {}
     pauseBackgroundMediaAfterCall();
     try { (InCallManager as any).abandonAudioFocus?.(); } catch {}
@@ -4141,6 +4165,7 @@ export const useAudioRouting = (
       );
 
       // Optimistic UI + intent — сразу, до любого await.
+      // Пункт 3: next уже earpiece↔speaker (BT не в цикле кнопки).
       explicitBuiltInChoiceRef.current = next === 'EARPIECE' || next === 'SPEAKER_PHONE';
       setExplicitBuiltInGlobal(explicitBuiltInChoiceRef.current);
       setUserRoute(next);
@@ -4150,6 +4175,7 @@ export const useAudioRouting = (
       setUserSelectedCallAudioRoute(next);
       setPersistedCallAudioRoute(next);
       rememberManualBuiltinCallAudioRoute(next);
+      syncCallProximitySensor(next);
       // Audio cycle: обновить beforeVideo, иначе expand→return вернёт старый earpiece.
       if (
         (preferAudioModeRef.current || isInAudioOnlyCallUi()) &&

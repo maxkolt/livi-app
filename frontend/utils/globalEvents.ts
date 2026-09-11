@@ -1,4 +1,5 @@
 import { NativeModules, Platform, AppState } from 'react-native';
+import { setPipVisible, setVideoCallActive } from './callRuntime';
 
 // Простой глобальный эмиттер событий без зависимостей
 // Используем для мгновенного обновления счетчиков пропущенных звонков на HomeScreen
@@ -386,11 +387,9 @@ export function applyCallEndedGlobalRefsOnce(
   try {
     g.__videoCallPartnerUserIdRef = g.__videoCallPartnerUserIdRef || { current: null };
     g.__videoCallPartnerUserIdRef.current = null;
-    g.__videoCallActiveRef = g.__videoCallActiveRef || { current: false };
-    g.__videoCallActiveRef.current = false;
+    setVideoCallActive(false);
     // Сразу снимаем флаги PiP/params, иначе один тик App оставляет hasAnyIds/sessionNotEnded в рассинхроне с реальностью.
-    g.__pipVisibleRef = g.__pipVisibleRef || { current: false };
-    g.__pipVisibleRef.current = false;
+    setPipVisible(false);
     g.__currentCallPiPParamsRef = g.__currentCallPiPParamsRef || { current: null };
     g.__currentCallPiPParamsRef.current = null;
     g.__pendingCallAcceptedRef = g.__pendingCallAcceptedRef || { current: null };

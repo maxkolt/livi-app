@@ -1,5 +1,9 @@
 import './polyfills/ensureCoreJsPolyfills';
 import { safeRegisterLiveKitGlobals } from './livekit/safeRegisterGlobals';
+import { installCallRuntimeBridges } from './utils/callRuntime';
+
+// Пункт 6: lifecycle/policy флаги звонка — callRuntime; global.__*Ref только bridge.
+installCallRuntimeBridges();
 
 // Dev: глушим deprecation-шум до импорта App/expo-av (иначе warn успевает проскочить).
 if (__DEV__) {
@@ -37,11 +41,11 @@ const noFontScaling = { allowFontScaling: false as const, maxFontSizeMultiplier:
 (TextInput as any).defaultProps = { ...(TextInput as any).defaultProps, ...noFontScaling };
 import { registerRootComponent } from 'expo';
 import App from './App';
-import { isEndedCallId, setupCallKeep, displayIncomingCall, stopIncomingCallForegroundService, showIncomingCallSystemUI } from './utils/callKeep';
+import { isEndedCallId, setupCallKeep, presentIncomingCall, stopIncomingCallForegroundService } from './utils/callKeep';
 import * as Notifications from 'expo-notifications';
 import { isIncomingCallExpired } from './utils/callExpiry';
 
-// Headless: при входящем пуше показываем баннер через ConnectionService/CallKeep (как в Telegram) — он не исчезает через 5–7 сек.
+// Headless: один путь presentIncomingCall (Activity/system UI), без CallKeep.displayIncomingCall.
 AppRegistry.registerHeadlessTask('RNCallKeepBackgroundMessage', () => async (data: { type?: string; callId?: string; from?: string; fromNick?: string; ts?: number | string; expiresAt?: number | string } | null) => {
   if (Platform.OS !== 'android') return;
   console.log('[headless] RNCallKeepBackgroundMessage received', data ? { type: data.type, callId: data?.callId, from: data?.from } : null);
@@ -55,20 +59,21 @@ AppRegistry.registerHeadlessTask('RNCallKeepBackgroundMessage', () => async (dat
       console.log('[headless] skip (call already ended)', data.callId);
       return;
     }
-    // В фоне не запрашиваем runtime-permissions: используем CallKeep только если он уже готов,
-    // иначе переключаемся на нативный системный fallback.
-    const ready = await setupCallKeep({ requestPermission: false });
-    if (ready) {
-      displayIncomingCall(data.callId, data.from, data.fromNick ?? '', true);
-      // Без второго MediaPlayer: CallKeep/ConnectionService уже играет рингтон.
-    } else {
-      showIncomingCallSystemUI(data.callId, data.from, data.fromNick ?? '');
-    }
-    // Даём системе время показать баннер CallKeep, затем снимаем уведомление FGS (иначе на части устройств баннер не успевает появиться)
+    // Session bookkeeping; UI всегда через presentIncomingCall (forceBackgroundUi).
+    await setupCallKeep({ requestPermission: false });
+    await presentIncomingCall({
+      callId: data.callId,
+      from: data.from,
+      fromNick: data.fromNick ?? '',
+      hasVideo: true,
+      checkEnded: true,
+      forceBackgroundUi: true,
+      source: 'headless:RNCallKeepBackgroundMessage',
+    });
     setTimeout(() => {
       try { stopIncomingCallForegroundService(); } catch {}
     }, 1500);
-    console.log('[headless] incoming UI shown', { callId: data.callId, viaCallKeep: ready });
+    console.log('[headless] incoming UI shown via presentIncomingCall', { callId: data.callId });
   } catch (e) {
     console.warn('[headless] RNCallKeepBackgroundMessage failed', e);
   }
@@ -139,10 +144,11 @@ try {
 }
 
 // Обработчик необработанных промисов
-if (typeof global !== 'undefined' && global.HermesInternal) {
+const bootstrapGlobal = global as any;
+if (typeof global !== 'undefined' && bootstrapGlobal.HermesInternal) {
   // React Native с Hermes
-  const originalUnhandledRejection = global.onunhandledrejection;
-  global.onunhandledrejection = (event: any) => {
+  const originalUnhandledRejection = bootstrapGlobal.onunhandledrejection;
+  bootstrapGlobal.onunhandledrejection = (event: any) => {
     const reason = event?.reason || event;
     const msg = String(reason?.message || reason?.reasonName || reason || '');
     const isLeaveWhileReconnect =
@@ -181,14 +187,14 @@ if (typeof global !== 'undefined' && global.HermesInternal) {
     if (event?.preventDefault) {
       event.preventDefault();
     }
-    if (originalUnhandledRejection) {
-      originalUnhandledRejection(event);
+    if (typeof originalUnhandledRejection === 'function') {
+      (originalUnhandledRejection as (ev: any) => void)(event);
     }
   };
 } else {
   // Fallback для других движков
   if (typeof global !== 'undefined') {
-    (global as any).onunhandledrejection = (event: any) => {
+    bootstrapGlobal.onunhandledrejection = (event: any) => {
       const reason = event?.reason || event;
       const msg = String(reason?.message || reason?.reasonName || reason || '');
       const isLeaveWhileReconnect =

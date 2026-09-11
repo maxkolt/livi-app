@@ -18,7 +18,6 @@ import { PiPContext } from './PiPContext';
 import { logger } from '../../utils/logger';
 import { useResolvedImageUri } from '../../hooks/useResolvedImageUri';
 import { useAppTheme } from '../../theme/ThemeProvider';
-import { uiAccent } from '../../theme/uiAccent';
 import { WELCOME_HEADER_TITLE, WELCOME_NAV_ACTIVE_ACCENT } from '../../screens/home/constants';
 import AwayPlaceholder from '../../components/AwayPlaceholder';
 import {
@@ -26,22 +25,16 @@ import {
   pipInAppBarEnteredFromAudioOnly,
   mediaStreamHasLiveVideo,
 } from './pipPlaceholderOnly';
-import { resolvePiPLocalMutedState, setUserSelectedCallAudioRoute } from '../../utils/activeCallSession';
+import { resolvePiPLocalMutedState } from '../../utils/activeCallSession';
 import { displayAvatarLetter } from '../../screens/home/friendHelpers';
-import {
-  setPersistedCallAudioRoute,
-  prepareDirectCallVideoExpandFromInAppPiP,
-  armCallAudioRouteUiLock,
-} from '../../utils/callAudioRoutePersist';
-import { toggleInAppPiPAudioOutputRoute } from '../../utils/inAppPiPAudioRoute';
-import { reconcileInAppPiPAudioRoutePlaqueUi } from '../../utils/callInAppPiPAudioRouteUi';
+import { prepareDirectCallVideoExpandFromInAppPiP } from '../../utils/callAudioRoutePersist';
 import { refreshCallBluetoothHeadsetConnectedCache } from '../../utils/nativeCallAudioProbe';
-import { tryAutoSwitchInAppPiPToConnectedHeadset, tryAutoSwitchInAppPiPFromDisconnectedHeadset, isInAppPiPManualRouteLockActive } from '../../utils/inAppPiPHeadsetConnect';
-import { readInAppPiPAudioOutputRoute } from '../../utils/activeCallSession';
 import {
-  iconNameForRoute,
-  type InCallAudioRoute,
-} from '../../components/VideoChat/hooks/audioRouteTypes';
+  tryAutoSwitchInAppPiPToConnectedHeadset,
+  tryAutoSwitchInAppPiPFromDisconnectedHeadset,
+  isInAppPiPManualRouteLockActive,
+} from '../../utils/inAppPiPHeadsetConnect';
+import { isSystemPiPActiveOrEnteringSync } from '../../utils/pipMutex';
 import { t, loadLang, defaultLang, type Lang } from '../../utils/i18n';
 import { useLang } from '../../store/lang';
 
@@ -129,7 +122,6 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
   const remoteStreamVersion = ctx?.remoteStreamVersion ?? 0;
   const pipRemoteViewKey = ctx?.pipRemoteViewKey ?? 0;
   const [localMicMuted, setLocalMicMuted] = useState(isMuted);
-  const [pipAudioRoute, setPipAudioRoute] = useState<InCallAudioRoute>('EARPIECE');
   const [lang, setLang] = useState<Lang>(defaultLang);
 
   useEffect(() => {
@@ -142,37 +134,24 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
     };
   }, [visible]);
 
+  // Headset auto-switch без кнопки маршрута на плашке (пункт 5: return · mute · end).
   useEffect(() => {
     if (!visible) return;
-    const syncRoute = () => {
+    const syncHeadset = () => {
       void (async () => {
-        if (Platform.OS === 'android' && !isInAppPiPManualRouteLockActive()) {
-          const unplugged = await tryAutoSwitchInAppPiPFromDisconnectedHeadset();
-          if (unplugged) {
-            setPipAudioRoute(unplugged);
-            return;
-          }
-          const switched = await tryAutoSwitchInAppPiPToConnectedHeadset();
-          if (switched) {
-            setPipAudioRoute(switched);
-            return;
-          }
-          await refreshCallBluetoothHeadsetConnectedCache();
-        }
-        setPipAudioRoute(reconcileInAppPiPAudioRoutePlaqueUi());
+        if (Platform.OS !== 'android' || isInAppPiPManualRouteLockActive()) return;
+        const unplugged = await tryAutoSwitchInAppPiPFromDisconnectedHeadset();
+        if (unplugged) return;
+        const switched = await tryAutoSwitchInAppPiPToConnectedHeadset();
+        if (switched) return;
+        await refreshCallBluetoothHeadsetConnectedCache();
       })();
     };
     setLocalMicMuted(resolvePiPLocalMutedState());
-    syncRoute();
-    const g = global as any;
-    const onRoute = (route: InCallAudioRoute) => setPipAudioRoute(route);
-    g.__onInAppPiPAudioRouteChanged = onRoute;
-    const interval = setInterval(syncRoute, 1400);
+    syncHeadset();
+    const interval = setInterval(syncHeadset, 1400);
     return () => {
       clearInterval(interval);
-      if (g.__onInAppPiPAudioRouteChanged === onRoute) {
-        g.__onInAppPiPAudioRouteChanged = null;
-      }
     };
   }, [visible, isMuted]);
 
@@ -236,66 +215,8 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
     allowVideoRender &&
     peerHasLiveVideo &&
     !!remoteStreamUrl;
-  /** Ушли с видео-экрана в in-app PiP — подсветить «вернуться в видео», как активный динамик. */
+  /** Ушли с видео-экрана в in-app PiP — подсветить «вернуться». */
   const pipVideoReturnHighlight = !pipFromAudioOnly;
-  const btAccent = useMemo(() => uiAccent(!isDark), [isDark]);
-  const pipAudioRouteHighlight =
-    pipAudioRoute === 'SPEAKER_PHONE' ||
-    pipAudioRoute === 'BLUETOOTH' ||
-    pipAudioRoute === 'WIRED_HEADSET';
-  const pipRouteAccent = pipAudioRoute === 'BLUETOOTH' ? btAccent : WELCOME_NAV_ACTIVE_ACCENT;
-  const pipAudioRouteIconColor = pipAudioRouteHighlight ? pipRouteAccent.softText : chrome.icon;
-  const pipAudioRouteIcon = iconNameForRoute(pipAudioRoute);
-
-  const toggleAudioOutputRoute = useCallback(() => {
-    void (async () => {
-      const next = await toggleInAppPiPAudioOutputRoute();
-      if (next) {
-        setPipAudioRoute(next);
-      } else {
-        setPipAudioRoute(readInAppPiPAudioOutputRoute());
-      }
-    })();
-  }, []);
-
-  const showAudioReturnFromVideoPiP = useMemo(() => {
-    if (pipFromAudioOnly) return false;
-    try {
-      const g = global as any;
-      const session = g.__webrtcSessionRef?.current;
-      const live = session && typeof session.isEnded === 'function' && !session.isEnded();
-      const params = g.__currentCallPiPParamsRef?.current;
-      const direct =
-        params?.navParams?.directCall === true ||
-        params?.navParams?.directCall === undefined;
-      return !!(live && direct && (params?.callId || session?.getCallId?.()));
-    } catch {
-      return false;
-    }
-  }, [pipFromAudioOnly, visible]);
-
-  const returnToAudioFromVideoPiP = useCallback(() => {
-    try {
-      const g = global as any;
-      const pipRoute = readInAppPiPAudioOutputRoute();
-      setUserSelectedCallAudioRoute(pipRoute);
-      setPersistedCallAudioRoute(pipRoute);
-      if (pipRoute === 'EARPIECE' || pipRoute === 'SPEAKER_PHONE') {
-        armCallAudioRouteUiLock(pipRoute);
-      }
-      const onVideoCallScreen = shouldSuppressInAppPiPOnRoute(currentRouteName);
-      hidePiP();
-      if (onVideoCallScreen) {
-        const fn = g.__returnToAudioCallRef?.current;
-        if (typeof fn === 'function') {
-          void fn({ skipNavigation: true, fromPiP: true });
-        }
-        return;
-      }
-      prepareDirectCallAudioReturnFromPiP();
-      returnToCall({ preferAudioOnlyUi: true });
-    } catch (_) {}
-  }, [returnToCall, currentRouteName, hidePiP]);
 
   const returnToCallFromPiP = useCallback(() => {
     try {
@@ -331,37 +252,18 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
     } catch (_) {}
   }, [returnToCall, currentRouteName, hidePiP, pipFromAudioOnly]);
 
-  const openVideoCallFromAudioPiP = useCallback(() => {
-    try {
-      const g = global as any;
-      const onVideoCallScreen = shouldSuppressInAppPiPOnRoute(currentRouteName);
-      prepareDirectCallVideoExpandFromInAppPiP();
-      hidePiP();
-      if (onVideoCallScreen) {
-        const expandFn = g.__expandDirectCallToVideoUiRef?.current;
-        if (typeof expandFn === 'function') {
-          void expandFn();
-        }
-        return;
-      }
-      returnToCall({ preferAudioOnlyUi: false });
-    } catch (_) {}
-  }, [returnToCall, currentRouteName, hidePiP]);
-
   const dims = Dimensions.get('window');
   const W = typeof dims?.width === 'number' && dims.width > 0 ? dims.width : 400;
   const H = typeof dims?.height === 'number' && dims.height > 0 ? dims.height : 700;
 
+  // Пункт 5: ровно 3 кнопки — вернуться · mute · end.
   const pipBarW = useMemo(() => {
-    let actionCount = 3;
-    if (showAudioReturnFromVideoPiP) actionCount += 1;
-    if (pipFromAudioOnly) actionCount += 1;
-    actionCount += 1;
+    const actionCount = 3;
     const actionSlots =
       actionCount * PIP_ACTION_OUTER + Math.max(0, actionCount - 1) * PIP_ACTION_GAP;
     const minW = PIP_PREVIEW_SIZE + PIP_BAR_H_PAD * 2 + PIP_AVATAR_ACTION_GAP + actionSlots;
     return Math.min(W - 16, minW);
-  }, [W, showAudioReturnFromVideoPiP, pipFromAudioOnly]);
+  }, [W]);
 
   const pipClusterW = pipBarW;
   const pipClusterH = showPeerVideoPreviewSlot
@@ -372,10 +274,13 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
   // Ref выставляется синхронно в AboutToEnter — не держать RTCView рядом с CaptureHost.
   let suspendedForSystemPiP = false;
   try {
-    suspendedForSystemPiP = (global as any).__pipSuspendedForSystemPiPRef?.current === true;
+    suspendedForSystemPiP =
+      (global as any).__pipSuspendedForSystemPiPRef?.current === true ||
+      isSystemPiPActiveOrEnteringSync();
   } catch (_) {}
   const showingInAppPiPDuringBackTransition =
     !isSystemPiPLayout &&
+    !suspendedForSystemPiP &&
     suppressInAppPiPOnCurrentRoute &&
     (global as any).__leavingVideoCallByBackRef?.current === true;
   const shouldShowOverlay =
@@ -535,15 +440,6 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
               </View>
 
               <View style={[styles.pipActionsRow, { gap: PIP_ACTION_GAP }]} pointerEvents="box-none">
-              {showAudioReturnFromVideoPiP ? (
-                <PiPActionButton
-                  onPress={returnToAudioFromVideoPiP}
-                  accessibilityLabel={t('returnToAudioCallA11y', lang)}
-                  chrome={chrome}
-                >
-                  <MaterialCommunityIcons name="phone-in-talk" size={PIP_ICON_SIZE} color={chrome.icon} />
-                </PiPActionButton>
-              ) : null}
               <PiPActionButton
                 onPress={returnToCallFromPiP}
                 accessibilityLabel={
@@ -556,42 +452,20 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
                 activeAccent={WELCOME_NAV_ACTIVE_ACCENT}
               >
                 {pipFromAudioOnly ? (
-                  <MaterialCommunityIcons name="phone-in-talk" size={PIP_ICON_SIZE} color={chrome.icon} />
+                  <MaterialCommunityIcons
+                    name="phone-in-talk"
+                    size={PIP_ICON_SIZE}
+                    color={
+                      pipVideoReturnHighlight
+                        ? WELCOME_NAV_ACTIVE_ACCENT.softText
+                        : chrome.icon
+                    }
+                  />
                 ) : (
                   <MaterialIcons
                     name="videocam"
                     size={PIP_ICON_SIZE}
                     color={pipVideoReturnHighlight ? WELCOME_NAV_ACTIVE_ACCENT.softText : chrome.icon}
-                  />
-                )}
-              </PiPActionButton>
-              {pipFromAudioOnly ? (
-                <PiPActionButton
-                  onPress={openVideoCallFromAudioPiP}
-                  accessibilityLabel={t('returnToVideoCall', lang)}
-                  chrome={chrome}
-                >
-                  <MaterialIcons name="videocam" size={PIP_ICON_SIZE} color={chrome.icon} />
-                </PiPActionButton>
-              ) : null}
-              <PiPActionButton
-                onPress={toggleAudioOutputRoute}
-                accessibilityLabel={t('toggleSpeaker', lang)}
-                chrome={chrome}
-                active={pipAudioRouteHighlight}
-                activeAccent={pipAudioRouteHighlight ? pipRouteAccent : undefined}
-              >
-                {pipAudioRouteIcon === 'ear-hearing' ? (
-                  <MaterialCommunityIcons
-                    name="ear-hearing"
-                    size={PIP_ICON_SIZE}
-                    color={pipAudioRouteIconColor}
-                  />
-                ) : (
-                  <MaterialIcons
-                    name={pipAudioRouteIcon}
-                    size={PIP_ICON_SIZE}
-                    color={pipAudioRouteIconColor}
                   />
                 )}
               </PiPActionButton>

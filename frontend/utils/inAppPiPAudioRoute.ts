@@ -183,6 +183,13 @@ export async function toggleInAppPiPAudioOutputRoute(): Promise<InCallAudioRoute
   }
 
   pokeBuiltInSpeakerImmediate(next);
+  try {
+    if (fromAudioPiP && next === 'EARPIECE') {
+      InCallManager.startProximitySensor();
+    } else {
+      InCallManager.stopProximitySensor();
+    }
+  } catch {}
   void applyCallAudioOutputRouteLatest(next, {
     media,
     forceBuiltIn: !isExternalHeadsetRoute(next),

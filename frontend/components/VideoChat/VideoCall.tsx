@@ -98,6 +98,7 @@ import {
   syncAndroidSystemPiPNativeFlags,
 } from '../../utils/activeCallNotification';
 import { clearEndingCallInProgress, isOngoingCallSession, resolvePiPLocalMutedState, readOngoingCallMicOn, restoreOngoingCallMicrophoneIfEnabled, resolvePersistedCallAudioRouteForActiveUi, resolveActiveCallInCallMedia, ongoingCallPrefersVideoMedia, markDirectCallVideoMediaActive, readInAppPiPAudioOutputRoute, readAuthoritativeCallAudioRouteAfterPiP, readLastAppliedCallAudioRoute, readActiveExternalCallAudioRoute, readConnectedExternalCallAudioRoute, markInCallAudioSessionStarted, setUserSelectedCallAudioRoute, readUserSelectedCallAudioRoute, readUserSelectedExternalCallAudioRoute, readUserLockedBuiltinCallAudioRoute, userExplicitlyPinnedBuiltinCallAudio, armDirectAudioEarpieceStabilizeWindow, isDirectAudioEarpieceStabilizeWindow, markActiveCallAudioRouteCallId, rememberManualBuiltinCallAudioRoute, isPiPBuiltinCallAudioRouteLockActive, releaseInAppPiPBuiltinAudioLockForFullVideoUi, markUserSelectedExternalCallAudioRoute } from '../../utils/activeCallSession';
+import { setVideoCallActive } from '../../utils/callRuntime';
 import {
   isBluetoothAvailableForAutoRoute,
   isCallAudioBootstrapPending,
@@ -439,14 +440,13 @@ const stopStreamTracks = (stream: MediaStream | null | undefined, context: strin
   }
 };
 
-/** Снимает блокировку кнопок видеозвонка на Home (__videoCallActiveRef / partner) и дергает сброс busy у друзей. */
+/** Снимает блокировку кнопок видеозвонка на Home (callRuntime videoCallActive / partner) и дергает сброс busy у друзей. */
 function clearVideoCallHomeScreenLocks(reason: string) {
   try {
     const g = global as any;
     if (!g.__videoCallPartnerUserIdRef) g.__videoCallPartnerUserIdRef = { current: null };
     else g.__videoCallPartnerUserIdRef.current = null;
-    if (!g.__videoCallActiveRef) g.__videoCallActiveRef = { current: false };
-    else g.__videoCallActiveRef.current = false;
+    setVideoCallActive(false);
     g.__onVideoCallEndedRef?.current?.();
   } catch (e) {
     logger.warn('[VideoCall] clearVideoCallHomeScreenLocks failed', { reason, e });

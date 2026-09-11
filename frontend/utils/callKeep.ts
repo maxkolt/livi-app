@@ -2,7 +2,7 @@
  * CallKeep (ConnectionService) — нативный экран входящего звонка на Android.
  * Инициализация, displayIncomingCall, обработка answer/end.
  */
-import { Platform, NativeModules } from 'react-native';
+import { Platform, NativeModules, AppState } from 'react-native';
 import { logger } from './logger';
 import { setIncomingCallScreenVisible } from '../sockets/socket';
 import { loadLang, t } from './i18n';
@@ -630,6 +630,8 @@ export function displayOutgoingCall(callId: string, toUserId: string, toNick?: s
 /**
  * Показать входящий звонок в нативном UI (полный экран / уведомление).
  * Вызывать при получении входящего (сокет или пуш). Повторные вызовы для того же callId игнорируются.
+ *
+ * @deprecated На Android предпочитайте {@link presentIncomingCall} — без второго UI CallKeep.
  */
 export function displayIncomingCall(callId: string, fromUserId: string, fromNick?: string, hasVideo = false, callKitId?: string): void {
   if (Platform.OS !== 'android' && Platform.OS !== 'ios') return;
@@ -664,6 +666,92 @@ export function displayIncomingCall(callId: string, fromUserId: string, fromNick
   } catch (e) {
     logger.warn('[callKeep] displayIncomingCall failed', e as Error);
   }
+}
+
+export type PresentIncomingCallOptions = {
+  callId: string;
+  from: string;
+  fromNick?: string;
+  hasVideo?: boolean;
+  callKitId?: string;
+  /** Проверить ended на нативе перед показом. */
+  checkEnded?: boolean;
+  /**
+   * Android: форсировать system UI (background / headless), даже если AppState ещё 'active'.
+   */
+  forceBackgroundUi?: boolean;
+  source?: string;
+};
+
+export type PresentIncomingCallResult = 'shown' | 'skipped' | 'ended';
+
+/**
+ * Пункт 2: один путь показа входящего.
+ *
+ * Android: только IncomingCallActivity (foreground) или showIncomingCallSystemUI (background).
+ * Не вызывает CallKeep.displayIncomingCall — иначе двойной UI/рингтон с FGS/Activity.
+ * CallKeep session регистрируется без второго экрана ({@link registerIncomingCallKeepSession}).
+ *
+ * iOS: CallKeep displayIncomingCall.
+ */
+export async function presentIncomingCall(
+  opts: PresentIncomingCallOptions,
+): Promise<PresentIncomingCallResult> {
+  const callId = String(opts.callId || '').trim();
+  const from = String(opts.from || '').trim();
+  if (!callId || !from) return 'skipped';
+
+  if (opts.checkEnded && (await isEndedCallId(callId))) {
+    logger.info('[presentIncomingCall] skipped (ended)', { callId, source: opts.source || null });
+    return 'ended';
+  }
+
+  const now = Date.now();
+  if (lastDisplayedCallId.id === callId && now - lastDisplayedCallId.at < DISPLAY_DEBOUNCE_MS) {
+    logger.debug('[presentIncomingCall] skipped (duplicate)', {
+      callId,
+      source: opts.source || null,
+    });
+    return 'skipped';
+  }
+
+  const hasVideo = opts.hasVideo === true;
+
+  if (Platform.OS === 'ios') {
+    displayIncomingCall(callId, from, opts.fromNick, hasVideo, opts.callKitId);
+    return 'shown';
+  }
+
+  if (Platform.OS !== 'android') return 'skipped';
+
+  const appState = AppState.currentState;
+  const useSystemUi =
+    opts.forceBackgroundUi === true || !!(appState && appState !== 'active');
+
+  if (useSystemUi) {
+    lastDisplayedCallId.id = callId;
+    lastDisplayedCallId.at = now;
+    showIncomingCallSystemUI(callId, from, opts.fromNick, hasVideo);
+  } else {
+    // launchIncomingCallActivityScreen сам ставит lastDisplayed + дедуп.
+    await launchIncomingCallActivityScreen(callId, from, opts.fromNick, false, hasVideo);
+  }
+
+  try {
+    registerIncomingCallKeepSession(callId, from, {
+      fromNick: opts.fromNick,
+      hasVideo,
+    });
+  } catch {}
+
+  logger.info('[presentIncomingCall]', {
+    callId,
+    from,
+    via: useSystemUi ? 'system_ui' : 'activity',
+    source: opts.source || null,
+    appState,
+  });
+  return 'shown';
 }
 
 /** Данные входящего по callId (для навигации при answer из нативного UI). */

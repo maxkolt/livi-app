@@ -12,6 +12,10 @@ import { logger } from '../../utils/logger';
 import { readRootCurrentRouteName } from '../../utils/safeRootNavigation';
 import { trackReleaseEvent } from '../../utils/telemetry';
 import { requestExitSystemPiPSoft, dismissSystemPiPAfterCallEnded } from '../../utils/callKeep';
+import {
+  isSystemPiPActiveOrEnteringSync,
+  shouldReportInAppPiPVisibleToNative,
+} from '../../utils/pipMutex';
 import { startActiveCallNotification, reenableAndroidSystemPiPLeaveHintAfterReturn, refreshAndroidActiveCallNotification, syncAndroidSystemPiPNativeFlags, syncAndroidLeaveHintForOngoingCall, isAndroidActiveCallEligibleForLeaveHint, shouldUseSystemPiPControlsCaptureOnly, forceAndroidSystemPiPPeerVideoVisible } from '../../utils/activeCallNotification';
 import {
   shouldUsePipPlaceholderOnly,
@@ -1104,7 +1108,14 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       (global as any).__pipVisibleRef = (global as any).__pipVisibleRef || { current: false };
       (global as any).__pipVisibleRef.current = true;
       if (Platform.OS === 'android') {
-        NativeModules.LiviAppModule?.setInAppPiPVisibleForSystemPiP?.(true);
+        // Mutex: поверх system PiP плашку не поднимаем (leave-hint/OEM не видят dual).
+        if (isSystemPiPActiveOrEnteringSync()) {
+          suspendInAppOverlayForSystemPiPEnter();
+          NativeModules.LiviAppModule?.setInAppPiPVisibleForSystemPiP?.(false);
+          logger.info('[PiPContext] showPiP while system PiP — overlay suspended (mutex)');
+        } else {
+          NativeModules.LiviAppModule?.setInAppPiPVisibleForSystemPiP?.(true);
+        }
       }
       refreshSystemPiPLeaveContextSnapshot();
     } catch {}
@@ -1931,8 +1942,17 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       } catch (_) {}
 
       try {
+        // Mutex: сразу помечаем system-entry, чтобы showPiP/effect не подняли плашку.
+        g.__systemPiPEntryInProgressUntilRef =
+          g.__systemPiPEntryInProgressUntilRef || { current: 0 };
+        g.__systemPiPEntryInProgressUntilRef.current = Date.now() + 4000;
+        g.__pendingSystemPiPSyncRef = g.__pendingSystemPiPSyncRef || { current: false };
+        g.__pendingSystemPiPSyncRef.current = true;
         if (g.__pipVisibleRef?.current === true) {
           suspendInAppOverlayForSystemPiPEnter();
+          try {
+            NativeModules.LiviAppModule?.setInAppPiPVisibleForSystemPiP?.(false);
+          } catch (_) {}
           logHomePiPTrace('js_soft_hide_in_app_for_system', { traceId, reason: 'before_system_capture' });
         }
       } catch (_) {}
@@ -2928,14 +2948,11 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
 
   useEffect(() => {
     if (Platform.OS !== 'android') return () => {};
-    const g = global as any;
-    const inAppFromContext = visible && !inSystemPiPMode && !pendingSystemPiP;
-    const inAppFromSyncRef =
-      g.__pipForceHiddenRef?.current !== true &&
-      g.__pipVisibleRef?.current === true &&
-      !inSystemPiPMode &&
-      !pendingSystemPiP;
-    const inAppPiPVisible = inAppFromContext || inAppFromSyncRef;
+    const inAppPiPVisible = shouldReportInAppPiPVisibleToNative({
+      visible,
+      inSystemPiPMode,
+      pendingSystemPiP,
+    });
     try {
       NativeModules.LiviAppModule?.setInAppPiPVisibleForSystemPiP?.(inAppPiPVisible);
     } catch (_) {}

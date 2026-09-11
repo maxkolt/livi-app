@@ -16,13 +16,33 @@ import {
   clearFreshDirectCallAudioAcceptCall,
   clearDirectCallAudioAcceptBootstrapped,
 } from './directCallVideoExpandGuard';
+import {
+  getOutgoingCallId,
+  getWebrtcSession,
+  isCallEndedFromPiPNoOpen,
+  isEndingCallInProgress,
+  isEndingFromPiPButton,
+  isInAudioOnlyUi,
+  isInCallAudioSessionStarted as isInCallAudioSessionStartedRuntime,
+  isPipAudioOnlyPlaceholder,
+  isPipInSystemMode,
+  isPipVisible,
+  isPreferAudioOnlyUiOnNextVideoCall,
+  isStayOnVideoCallUi,
+  isVideoCallActive,
+  isVideoCallActiveExplicitlyFalse,
+  setEndingCallInProgress,
+  setInAudioOnlyUi,
+  setInCallAudioSessionStarted,
+  setPreferAudioOnlyUiOnNextVideoCall,
+  setStayOnVideoCallUi,
+} from './callRuntime';
 
 function isActiveDirectCallAudioFirstWithoutUserVideo(): boolean {
   try {
-    const g = global as any;
-    const session = g.__webrtcSessionRef?.current;
+    const session = getWebrtcSession();
     const cid = String(
-      session?.getCallId?.() ?? g.__activeCallAudioRouteCallIdRef?.current ?? '',
+      session?.getCallId?.() ?? (global as any).__activeCallAudioRouteCallIdRef?.current ?? '',
     ).trim();
     if (!cid || getCallMediaHint(cid) !== 'audio') return false;
     return !isDirectCallUserRequestedVideoExpand();
@@ -35,21 +55,17 @@ function isActiveDirectCallAudioFirstWithoutUserVideo(): boolean {
 export function markDirectCallVideoMediaActive(): void {
   try {
     if (isActiveDirectCallAudioFirstWithoutUserVideo()) return;
-    const g = global as any;
     // Явный return-to-audio без stayOnVideo: не переворачивать globals обратно на video.
     // При expand на video stayOn уже true — пропускаем дальше даже если preferAudioOnly ещё sticky.
-    const stayOnVideo = g.__stayOnVideoCallUiRef?.current === true;
-    if (!stayOnVideo && g.__preferAudioOnlyUiOnNextVideoCallRef?.current === true) return;
-    if (!stayOnVideo && g.__inAudioOnlyUiRef?.current === true) return;
+    const stayOnVideo = isStayOnVideoCallUi();
+    if (!stayOnVideo && isPreferAudioOnlyUiOnNextVideoCall()) return;
+    if (!stayOnVideo && isInAudioOnlyUi()) return;
     clearDirectAudioEarpieceStabilizeWindow();
-    g.__stayOnVideoCallUiRef = g.__stayOnVideoCallUiRef || { current: false };
-    g.__stayOnVideoCallUiRef.current = true;
+    setStayOnVideoCallUi(true);
     setPipAudioOnlyPlaceholderSticky(false);
-    if (g.__inAudioOnlyUiRef) g.__inAudioOnlyUiRef.current = false;
-    g.__preferAudioOnlyUiOnNextVideoCallRef =
-      g.__preferAudioOnlyUiOnNextVideoCallRef || { current: false };
-    g.__preferAudioOnlyUiOnNextVideoCallRef.current = false;
-    const params = g.__currentCallPiPParamsRef?.current;
+    setInAudioOnlyUi(false);
+    setPreferAudioOnlyUiOnNextVideoCall(false);
+    const params = (global as any).__currentCallPiPParamsRef?.current;
     if (params && typeof params === 'object') {
       params.inAudioOnlyUi = false;
       params.preferVideoCallUi = true;
@@ -106,11 +122,11 @@ export function ongoingCallPrefersVideoMedia(): boolean {
       if (params?.localCamOn === true) return true;
       return false;
     }
-    if (g.__stayOnVideoCallUiRef?.current === true) return true;
+    if (isStayOnVideoCallUi()) return true;
     const params = g.__currentCallPiPParamsRef?.current;
     if (params?.preferVideoCallUi === true) return true;
     if (params?.localCamOn === true) return true;
-    const session = g.__webrtcSessionRef?.current;
+    const session = getWebrtcSession();
     if (!session) return false;
     if (typeof session.isEnded === 'function' && session.isEnded()) return false;
     if (typeof session.getIsCamOn === 'function' && session.getIsCamOn()) return true;
@@ -125,11 +141,7 @@ export function ongoingCallPrefersVideoMedia(): boolean {
 
 /** Сброс JS + native «завершение звонка» (блокирует system PiP в onUserLeaveHint). */
 export function clearEndingCallInProgress(): void {
-  try {
-    const g = global as any;
-    g.__endingCallInProgressRef = g.__endingCallInProgressRef || { current: false };
-    g.__endingCallInProgressRef.current = false;
-  } catch {}
+  setEndingCallInProgress(false);
   if (Platform.OS === 'android') {
     try {
       NativeModules.LiviAppModule?.setEndingCallInProgress?.(false);
@@ -143,10 +155,9 @@ export function clearEndingCallInProgress(): void {
  */
 export function shouldDeferCallAudioStopOnHookUnmount(): boolean {
   try {
-    const g = global as any;
-    if (g.__endingCallInProgressRef?.current === true) return true;
-    if (g.__inCallAudioSessionStartedRef?.current === true) return true;
-    const session = g.__webrtcSessionRef?.current;
+    if (isEndingCallInProgress()) return true;
+    if (isInCallAudioSessionStartedRuntime()) return true;
+    const session = getWebrtcSession();
     if (session && typeof session.isEnded === 'function' && !session.isEnded()) return true;
   } catch {}
   return isOngoingCallSession();
@@ -155,14 +166,13 @@ export function shouldDeferCallAudioStopOnHookUnmount(): boolean {
 /** Активный direct / VideoCall (не teardown, сессия не ended). */
 export function isOngoingCallSession(): boolean {
   try {
-    const g = global as any;
-    if (g.__endingCallInProgressRef?.current === true) return false;
-    if (g.__callEndedFromPiPNoOpenRef?.current === true) return false;
-    if (g.__videoCallActiveRef?.current === false) return false;
-    const session = g.__webrtcSessionRef?.current;
+    if (isEndingCallInProgress()) return false;
+    if (isCallEndedFromPiPNoOpen()) return false;
+    if (isVideoCallActiveExplicitlyFalse()) return false;
+    const session = getWebrtcSession();
     if (session && typeof session.isEnded === 'function' && session.isEnded()) return false;
     if (session) return true;
-    return g.__videoCallActiveRef?.current === true;
+    return isVideoCallActive();
   } catch {
     return false;
   }
@@ -170,17 +180,11 @@ export function isOngoingCallSession(): boolean {
 
 /** InCallManager.start уже поднят (не делать stop/start при remount VideoCall). */
 export function markInCallAudioSessionStarted(started: boolean): void {
-  try {
-    (global as any).__inCallAudioSessionStartedRef = { current: started };
-  } catch {}
+  setInCallAudioSessionStarted(!!started);
 }
 
 export function isInCallAudioSessionStarted(): boolean {
-  try {
-    return (global as any).__inCallAudioSessionStartedRef?.current === true;
-  } catch {
-    return false;
-  }
+  return isInCallAudioSessionStartedRuntime();
 }
 
 /** Accept с нативного Incoming → VideoCall: не уводить в in-app/system PiP от task-switch. */
@@ -200,11 +204,11 @@ export function isIncomingAnswerTransitionActive(): boolean {
 export function shouldKeepInCallAudioOnAppBackground(): boolean {
   try {
     const g = global as any;
-    if (g.__endingCallInProgressRef?.current === true) return false;
-    if (g.__callEndedFromPiPNoOpenRef?.current === true) return false;
-    if (g.__endingFromPiPButtonRef?.current === true) return false;
+    if (isEndingCallInProgress()) return false;
+    if (isCallEndedFromPiPNoOpen()) return false;
+    if (isEndingFromPiPButton()) return false;
 
-    const session = g.__webrtcSessionRef?.current;
+    const session = getWebrtcSession();
     const sessionLive =
       !!session &&
       (typeof session.isEnded !== 'function' || !session.isEnded());
@@ -213,20 +217,19 @@ export function shouldKeepInCallAudioOnAppBackground(): boolean {
     if (isOngoingCallSession()) return true;
     if (isIncomingAnswerTransitionActive()) return true;
 
-    const outgoingCallId = String(g.__outgoingCallIdRef?.current || '').trim();
-    if (outgoingCallId) return true;
+    if (getOutgoingCallId()) return true;
 
     if (g.__incomingCallScreenVisibleRef?.current === true) return true;
     if (g.__outgoingCallScreenVisibleRef?.current === true) return true;
     if (g.__socketActiveVideoCallRef?.current === true) return true;
 
-    if (g.__videoCallActiveRef?.current === true) {
+    if (isVideoCallActive()) {
       const params = g.__currentCallPiPParamsRef?.current;
       if (params?.callId || params?.roomId) return true;
     }
 
     const route = readRootCurrentRouteName();
-    if (route === 'VideoCall' && g.__videoCallActiveRef?.current !== false) {
+    if (route === 'VideoCall' && !isVideoCallActiveExplicitlyFalse()) {
       return true;
     }
   } catch {}
@@ -244,15 +247,15 @@ export function resolveActiveCallInCallMedia(): 'audio' | 'video' {
     if (ongoingCallPrefersVideoMedia()) return 'video';
     if (isInAudioOnlyCallUi()) return 'audio';
     const g = global as any;
-    if (g.__inAudioOnlyUiRef?.current === true) return 'audio';
+    if (isInAudioOnlyUi()) return 'audio';
     const params = g.__currentCallPiPParamsRef?.current;
     if (params?.inAudioOnlyUi === true) return 'audio';
     if (params?.preferVideoCallUi === false) return 'audio';
-    const session = g.__webrtcSessionRef?.current;
+    const session = getWebrtcSession();
     if (session && typeof session.isCameraSuspendedForAppBackground === 'function') {
       if (session.isCameraSuspendedForAppBackground()) return 'audio';
     }
-    if (g.__pipInSystemModeRef?.current === true) {
+    if (isPipInSystemMode()) {
       const localCamOn = params?.localCamOn;
       if (localCamOn === false) return 'audio';
     }
@@ -281,7 +284,7 @@ export function isAudioOnlyOngoingCallContext(): boolean {
     const g = global as any;
     const params = g.__currentCallPiPParamsRef?.current;
     if (params?.inAudioOnlyUi === true) return true;
-    if (g.__pipAudioOnlyPlaceholderRef?.current === true) return true;
+    if (isPipAudioOnlyPlaceholder()) return true;
   } catch {}
   return false;
 }
@@ -305,7 +308,7 @@ export function resolvePersistedCallAudioRouteForReapply(
       const now = Date.now();
       const pipTransition =
         now < Number(g.__returningFromSystemPiPUntilRef?.current || 0) ||
-        g.__pipInSystemModeRef?.current === true ||
+        isPipInSystemMode() ||
         now < Number(g.__systemPiPEntryInProgressUntilRef?.current || 0) ||
         now < Number(g.__callAudioPreservePriorityUntilRef?.current || 0);
       if (pipTransition) {
@@ -730,14 +733,14 @@ export function readAuthoritativeCallAudioRouteAfterPiP(): InCallAudioRoute | nu
       isInAudioOnlyCallUi() ||
       (() => {
         try {
-          return g.__pipVisibleRef?.current === true && g.__pipInSystemModeRef?.current !== true;
+          return isPipVisible() && !isPipInSystemMode();
         } catch {
           return false;
         }
       })();
     if (isInAudioOnlyCallUi()) {
       try {
-        if (g.__pipVisibleRef?.current !== true) {
+        if (!isPipVisible()) {
           const fullUiSel = readUserSelectedCallAudioRoute();
           if (fullUiSel === 'SPEAKER_PHONE' && !userExplicitlyPinnedBuiltinCallAudio()) {
             // stale native/UI — не авторитет для audio-first

@@ -3112,7 +3112,8 @@ export function scheduleReapplyPersistedCallAudioRoute(
               reason,
             )
           ? [0]
-          : [0, 300, 900, 1500, 2500];
+          // Пункт 3: не веер из 5 reapply — один immediate + короткий settle.
+          : [0, 450];
   const delays = opts?.delaysMs ?? defaultDelays;
   const reapplyOpts = {
     media: opts?.media,

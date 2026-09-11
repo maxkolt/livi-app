@@ -52,10 +52,9 @@ import {
 } from './utils/inviteLink';
 import {
   setupCallKeep,
-  launchIncomingCallActivityScreen,
-  showIncomingCallSystemUI,
   sendCallAnsweredBroadcast,
   displayIncomingCall,
+  presentIncomingCall,
   isCallKeepAvailable,
   registerCallKeepEvents,
   reportAnswerIncomingCall,
@@ -89,6 +88,14 @@ import {
   videoCallNavExtras,
 } from './utils/callKeep';
 import { isIncomingCallExpired } from './utils/callExpiry';
+import { terminateCall } from './utils/terminateCall';
+import {
+  setCallEndedFromPiPNoOpen,
+  setEndingCallInProgress,
+  setEndingFromPiPButton,
+  setPipInSystemMode,
+  setPipVisible,
+} from './utils/callRuntime';
 import { addVoipTokenListener } from './utils/voipPush';
 import { useLang } from './store/lang';
 import { t } from './utils/i18n';
@@ -344,9 +351,8 @@ const isVideoSessionRoute = (routeName?: string | null) =>
 // Колбэк для принудительного ре-рендера списка друзей при завершении видеозвонка (чтобы снялись бейдж «Занят» и disabled кнопки).
 (global as any).__onVideoCallEndedRef = { current: null as (() => void) | null };
 
-// КРИТИЧНО: Глобальная ссылка на WebRTC session
-// Это нужно чтобы можно было остановить стримы даже когда экран звонка размонтирован (в PiP)
-(global as any).__webrtcSessionRef = { current: null as any };
+// КРИТИЧНО: WebRTC session — box в callRuntime; global.__webrtcSessionRef = bridge.
+(global as any).__webrtcSessionRef = (global as any).__webrtcSessionRef || { current: null as any };
 
 // AppContent региструет сюда bump, outer App (endCallImpl) вызывает — пересчёт Android leaveHint без доступа к state AppContent.
 (global as any).__bumpAndroidPipGuardRef = { current: null as (() => void) | null };
@@ -833,7 +839,7 @@ function AppContent() {
   /** Схлопываем серию socket connect/reconnect в одну попытку register push после затишья. */
   const pushReconnectDebounceRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // FCM входящий при разблокированном экране: pending передан через MainActivity → показать через ConnectionService/CallKeep (баннер не исчезает)
+  // FCM/MainActivity: pending incoming → один UI-путь (Activity / system UI), без CallKeep.displayIncomingCall.
   React.useEffect(() => {
     if (Platform.OS !== 'android') return;
     (async () => {
@@ -844,18 +850,20 @@ function AppContent() {
         return;
       }
       try {
-        const ready = await setupCallKeep({ requestPermission: false });
-        if (ready) {
-          displayIncomingCall(pending.callId, pending.from, pending.fromNick ?? '', true);
-          // Не дублируем LiviAppModule-рингтон: ConnectionService/CallKeep уже ведёт системный звук входящего.
-          logger.info('[App] Pending CallKeep incoming shown', { callId: pending.callId });
-        } else {
-          await launchIncomingCallActivityScreen(pending.callId, pending.from, pending.fromNick ?? '', true);
-          logger.info('[App] Pending incoming shown via native activity fallback', { callId: pending.callId });
-        }
+        // CallKeep setup только для session bookkeeping внутри presentIncomingCall.
+        await setupCallKeep({ requestPermission: false });
+        await presentIncomingCall({
+          callId: pending.callId,
+          from: pending.from,
+          fromNick: pending.fromNick ?? '',
+          hasVideo: true,
+          checkEnded: true,
+          source: 'app:pending_callkeep_prefs',
+        });
         stopIncomingCallForegroundService();
+        logger.info('[App] Pending incoming shown via presentIncomingCall', { callId: pending.callId });
       } catch (e) {
-        logger.warn('[App] Pending CallKeep incoming failed', e);
+        logger.warn('[App] Pending incoming present failed', e);
       }
     })();
   }, []);
@@ -1263,18 +1271,14 @@ function AppContent() {
       } catch (_) {}
       try {
         const g = (global as any);
-        g.__endingFromPiPButtonRef = g.__endingFromPiPButtonRef || { current: false };
-        g.__endingFromPiPButtonRef.current = true;
-        g.__endingCallInProgressRef = g.__endingCallInProgressRef || { current: false };
-        g.__endingCallInProgressRef.current = true;
-        g.__callEndedFromPiPNoOpenRef = g.__callEndedFromPiPNoOpenRef || { current: false };
-        g.__callEndedFromPiPNoOpenRef.current = true;
+        setEndingFromPiPButton(true);
+        setEndingCallInProgress(true);
+        setCallEndedFromPiPNoOpen(true);
         g.__ignoreSystemPiPExpandedUntilRef = g.__ignoreSystemPiPExpandedUntilRef || { current: 0 };
         g.__ignoreSystemPiPExpandedUntilRef.current = Date.now() + 5000;
         g.__pipForceHiddenRef = g.__pipForceHiddenRef || { current: false };
         g.__pipForceHiddenRef.current = true;
-        g.__pipVisibleRef = g.__pipVisibleRef || { current: false };
-        g.__pipVisibleRef.current = false;
+        setPipVisible(false);
       } catch (_) {}
       NativeModules.LiviAppModule?.getPiPEndCallParams?.()?.then?.((params: { callId?: string | null; roomId?: string | null }) => {
         const fn = (global as any).__endCallFromNativeRef?.current;
@@ -1631,10 +1635,8 @@ function AppContent() {
               // Принимающий нажал X на нативном экране — отклоняем входящий; сервер пошлёт call:declined звонящему
               incomingCallIdRef.current = null;
               try { declineCall(callId); } catch {}
-              try { setIncomingCallScreenVisible(false); } catch {}
-              stopIncomingCallAlert();
+              terminateCall({ reason: 'incoming_declined_local', callId });
               setIncoming(null);
-              try { emitCloseIncoming(); emitRequestCloseIncoming(); } catch {}
               // У отклонившего — «Отменённый звонок» (не пропущенный).
               try {
                 const callerPeer =
@@ -1650,7 +1652,7 @@ function AppContent() {
             } else if (isCaller) {
               // Звонящий отменил с нативного экрана — отменяем исходящий и сразу закрываем модалку
               try { cancelCall(callId); } catch {}
-              try { emitCloseOutgoingCall({ reason: 'native_cancel', callId }); } catch {}
+              terminateCall({ reason: 'outgoing_canceled_local', callId });
             } else {
               // Без контекста (stale CallKeep end / гонка FCM+socket) — не шлём cancel/decline
               logger.info('[App] CallKeep onEnd ignored (no active callee/caller context)', {
@@ -1662,13 +1664,8 @@ function AppContent() {
             }
           }
           incomingCallIdRef.current = null;
-          reportEndCallToCallKeep(callId);
-          stopIncomingCallRingtoneAndVibration();
-          try { setIncomingCallScreenVisible(false); } catch {}
-          stopIncomingCallAlert();
-          setIncoming(null);
           reportRejectCall(callId);
-          clearCallRelatedNotificationsAndSyncBadge().catch(() => {});
+          // Surfaces уже в terminateCall для callee/caller; endFn→endCallImpl сам зовёт hangup_surfaces.
         },
       });
     }, 4000);
@@ -2136,9 +2133,14 @@ function AppContent() {
       const from = params.get('from') || params.get('userId') || '';
       const fromNick = params.get('fromNick') ?? '';
       if (callId && from) {
-        logger.info('[App] Incoming call deep link: showing native IncomingCallActivity', { callId, from });
+        logger.info('[App] Incoming call deep link: presentIncomingCall', { callId, from });
         if (Platform.OS === 'android') {
-          launchIncomingCallActivityScreen(callId, from, fromNick);
+          void presentIncomingCall({
+            callId,
+            from,
+            fromNick,
+            source: 'app:deeplink_incoming',
+          });
         } else {
           await openIncomingCallScreen(from, callId);
         }
@@ -2177,10 +2179,7 @@ function AppContent() {
           logger.info('[App] cancel-outgoing deep link', { callId });
           try { cancelCall(callId); } catch {}
           setTimeout(() => { try { cancelCall(callId); } catch {} }, 150);
-          try { reportEndCallToCallKeep(callId); } catch {}
-          try { setOutgoingCallScreenVisible(false); } catch {}
-          try { emitCloseOutgoingCall({ reason: 'native_cancel', callId }); } catch {}
-          try { closeOutgoingCallActivity(callId, { force: true }); } catch {}
+          terminateCall({ reason: 'outgoing_canceled_local', callId });
           return true;
         }
       }
@@ -2894,18 +2893,18 @@ function AppContent() {
     incomingCallIdRef.current = d.callId;
     try { Keyboard.dismiss(); } catch {}
 
-    // Единый UI Android:
-    // - app active: открыть IncomingCallActivity
-    // - app background: показать системный UI (unlocked→notification, locked/sleep→full-screen→IncomingCallActivity)
+    // Единый UI (presentIncomingCall):
+    // Android active → IncomingCallActivity; background → system UI; iOS → CallKeep.
+    // Без CallKeep.displayIncomingCall на Android (двойной рингтон/UI).
     if (Platform.OS === 'android') {
-      const appState = AppState.currentState;
-      if (appState && appState !== 'active') {
-        showIncomingCallSystemUI(d.callId, d.from, d.fromNick ?? '', hasVideo);
-      } else {
-        launchIncomingCallActivityScreen(d.callId, d.from, d.fromNick ?? '', undefined, hasVideo);
-      }
+      void presentIncomingCall({
+        callId: d.callId,
+        from: d.from,
+        fromNick: d.fromNick ?? '',
+        hasVideo,
+        source: 'app:socket_incoming',
+      });
     } else if (isCallKeepAvailable()) {
-      // iOS: системный UI через CallKeep (нативный, без RN-модалки)
       displayIncomingCall(d.callId, d.from, d.fromNick ?? '', hasVideo, d.callKitId);
     }
     try { AsyncStorage.setItem('last_incoming_from', String(d.from || '')); } catch {}
@@ -3125,15 +3124,14 @@ function AppContent() {
       }
       if (data?.callId) {
         addEndedCallIdFromSocket(data.callId);
-        try { reportEndCallToCallKeep(data.callId); } catch {}
       }
-      stopIncomingCallRingtoneAndVibration();
-      stopIncomingCallAlert();
+      terminateCall({
+        reason: 'call_ended_surfaces',
+        callId: data?.callId || null,
+        roomId: eventRoomId || null,
+      });
       setIncoming(null);
       stopAnim();
-      try { emitCloseOutgoingCall({ reason: 'remote_closed', callId: data?.callId || null }); } catch {}
-      try { emitCloseIncoming(); emitRequestCloseIncoming(); } catch {}
-      clearCallRelatedNotificationsAndSyncBadge().catch(() => {});
 
       const wasInSystemSnapshot = g.__pipCallEndedWasInSystemRef?.current === true;
       const inSystem =
@@ -3465,25 +3463,19 @@ function AppContent() {
       if (id) markOutgoingDeclineHandled(id);
       disposeDirectCallAudioPrewarm('app:call-declined');
       incomingCallIdRef.current = null;
-      if (d?.callId) try { reportEndCallToCallKeep(d.callId); } catch {}
-      stopIncomingCallRingtoneAndVibration();
-      stopIncomingCallAlert();
-      setIncoming(null); stopAnim(); try { emitCloseIncoming(); emitRequestCloseIncoming(); } catch {}
-      logger.info('[decline/инициатор] App: закрываем нативное окно и сбрасываем visible');
       try {
         armHomeUiSettleSkip(2500);
       } catch {}
-      // skipMainReturn: Outgoing уже уходит; второй startActivity(Main) тупит табы/redial.
-      try {
-        closeOutgoingCallActivity(id || null, { force: true, skipMainReturn: true });
-      } catch {}
-      try { setOutgoingCallScreenVisible(false); } catch {}
+      terminateCall({ reason: 'outgoing_declined_socket', callId: id || null });
+      stopAnim();
+      setIncoming(null);
+      logger.info('[decline/инициатор] App: terminateCall(outgoing_declined_socket)');
       // Сбрасываем refs активного звонка без loadFriends (ended-callback).
       try {
         (global as any).__videoCallPartnerUserIdRef = { current: null };
         (global as any).__videoCallActiveRef = { current: false };
       } catch (_) {}
-      // Не эмитим emitCloseOutgoingCall — иначе onCloseOutgoingCall вызовет второй setCalling и второе мерцание
+      // emitCloseOutgoing намеренно не шлём (preset outgoing_declined_socket) — анти-мерцание Home.
       // call:declined = тот, кому звонили, отклонил — пропущенным не считаем; «Отменённый» пишет HomeScreen offDeclined.
     });
     const offCancel = onCallCanceled?.(async (d) => {
@@ -3650,16 +3642,10 @@ function AppContent() {
       if (callId && endedCallIdsFromSocket.has(callId)) {
         logger.info('[App] ⏭️ call:accepted ignored (call already ended)', { callId });
         disposeDirectCallAudioPrewarm('app:accepted-already-ended');
-        try { setOutgoingCallScreenVisible(false); } catch {}
-        try { setIncomingCallScreenVisible(false); } catch {}
-        try { emitCloseOutgoingCall({ reason: 'remote_closed', callId }); } catch {}
-        try { closeOutgoingCallActivity(callId || null, { force: true }); } catch {}
+        terminateCall({ reason: 'accepted_stale_ended', callId });
         if ((global as any).__pendingCallAcceptedRef) (global as any).__pendingCallAcceptedRef.current = null;
-        stopIncomingCallAlert();
         setIncoming(null);
         stopAnim();
-        try { emitCloseIncoming(); emitRequestCloseIncoming(); } catch {}
-        clearCallRelatedNotificationsAndSyncBadge().catch(() => {});
         return;
       }
 
@@ -4480,7 +4466,7 @@ export default function App() {
     }
     const fromPiPButton = g.__endingFromPiPButtonRef?.current === true;
     if (fromPiPButton) {
-      try { g.__endingFromPiPButtonRef.current = false; } catch (_) {}
+      try { setEndingFromPiPButton(false); } catch (_) {}
     }
     const inSystem = g.__pipInSystemModeRef?.current === true;
     const pipVisible = g.__pipVisibleRef?.current === true;
@@ -4491,21 +4477,17 @@ export default function App() {
       try {
         g.__lastEndCallSourceRef = g.__lastEndCallSourceRef || { current: null };
         g.__lastEndCallSourceRef.current = 'pip_close';
-        g.__endingCallInProgressRef = g.__endingCallInProgressRef || { current: false };
-        g.__endingCallInProgressRef.current = true;
-        g.__callEndedFromPiPNoOpenRef = g.__callEndedFromPiPNoOpenRef || { current: false };
-        g.__callEndedFromPiPNoOpenRef.current = true;
+        setEndingCallInProgress(true);
+        setCallEndedFromPiPNoOpen(true);
         g.__pipForceHiddenRef = g.__pipForceHiddenRef || { current: false };
         g.__pipForceHiddenRef.current = true;
-        g.__pipVisibleRef = g.__pipVisibleRef || { current: false };
-        g.__pipVisibleRef.current = false;
-        g.__pipInSystemModeRef = g.__pipInSystemModeRef || { current: false };
-        g.__pipInSystemModeRef.current = false;
+        setPipVisible(false);
+        setPipInSystemMode(false);
         g.__currentCallPiPParamsRef = g.__currentCallPiPParamsRef || { current: null };
         g.__currentCallPiPParamsRef.current = null;
         setTimeout(() => {
-          try { (global as any).__callEndedFromPiPNoOpenRef.current = false; } catch (_) {}
-          try { (global as any).__endingCallInProgressRef.current = false; } catch (_) {}
+          try { setCallEndedFromPiPNoOpen(false); } catch (_) {}
+          try { setEndingCallInProgress(false); } catch (_) {}
         }, 6000);
       } catch (_) {}
       // При завершении из системного PiP cleanupFunction не выполнит InCallManager.stop() (guard по isInactiveStateRef).
@@ -4526,11 +4508,11 @@ export default function App() {
     if (Platform.OS === 'android') {
       try { NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false); } catch (_) {}
     }
-    reportEndCallToCallKeep(callId);
-    setCallKeepAvailable(true);
-    clearCallRelatedNotificationsAndSyncBadge().catch(() => {});
-    try { emitCloseOutgoingCall({ reason: 'remote_closed', callId }); } catch {}
-    try { emitCloseIncoming(); emitRequestCloseIncoming(); } catch {}
+    terminateCall({
+      reason: 'hangup_surfaces',
+      callId: resolvedCallId || callId,
+      roomId: resolvedRoomId || roomId,
+    });
 
     // КРИТИЧНО: Завершение видеозвонка из PiP (кнопка X) завершает звонок у обоих: отправка call:end на сервер,
     // иначе у собеседника звонок продолжается. Сначала завершаем звонок на сервере, потом локальный cleanup.
