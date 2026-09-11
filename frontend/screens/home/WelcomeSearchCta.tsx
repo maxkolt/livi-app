@@ -16,6 +16,7 @@ import {
   SEARCH_CTA_TABLET_MAX_WIDTH,
   SEARCH_CTA_TABLET_MIN_WIDTH,
   WELCOME_HEADER_TITLE,
+  WELCOME_MUTED_TEXT,
 } from './constants';
 import { logger } from '../../utils/logger';
 
@@ -192,7 +193,7 @@ export function WelcomeSearchCta({
             <MaterialCommunityIcons
               name="lightning-bolt"
               size={compact ? 20 : 22}
-              color={WELCOME_HEADER_TITLE}
+              color={WELCOME_MUTED_TEXT}
             />
             <Text style={[styles.label, compact && styles.labelCompact]} allowFontScaling={false}>
               {label}
