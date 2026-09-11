@@ -383,26 +383,28 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     refreshBadgesOnAppResume,
   } = useHomeBadges({ friends, friendsRef });
 
-  const { onlineCount: welcomeOnlineCount, peers: welcomePresencePeers } = useWelcomeOnlineCount(
+  const { onlineCount: welcomeOnlineCount } = useWelcomeOnlineCount(
     appIsActive,
     resolvedUserId,
   );
 
-  // Prefer локальный thumb друга, если есть — иначе HTTP /api/avatar из presence.
+  // Online-блок: только друзья онлайн (realtime). Счётчик — все в приложении (welcomeOnlineCount).
   const welcomeBannerPeers = React.useMemo(() => {
-    if (!welcomePresencePeers.length) return welcomePresencePeers;
-    const byId = new Map(friends.map((f) => [String(f.id), f]));
-    return welcomePresencePeers.map((p) => {
-      const f = byId.get(String(p.id));
-      if (!f) return p;
-      return {
-        ...p,
-        name: p.name || f.name,
-        avatarVer: p.avatarVer || f.avatarVer,
-        avatarThumbB64: f.avatarThumbB64 || p.avatarThumbB64,
-      };
-    });
-  }, [welcomePresencePeers, friends]);
+    const me = String(resolvedUserId || '').trim().toLowerCase();
+    return friends
+      .filter((f) => {
+        if (!f?.online || !f.id) return false;
+        if (me && String(f.id).toLowerCase() === me) return false;
+        return true;
+      })
+      .slice(0, 4)
+      .map((f) => ({
+        id: String(f.id),
+        name: f.name || '',
+        avatarVer: f.avatarVer || 0,
+        avatarThumbB64: f.avatarThumbB64 || '',
+      }));
+  }, [friends, resolvedUserId]);
 
   const pendingPresenceOfflineTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 

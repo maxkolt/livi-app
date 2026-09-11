@@ -78,6 +78,15 @@ const HUB_LAYOUT_PHONE: HubLayoutTokens = {
   cameraBtnSize: CAMERA_BTN_SIZE,
 };
 
+/** Tall phones: тот же размер аватара, больше воздуха сверху/между секциями. */
+const HUB_LAYOUT_PHONE_TALL: HubLayoutTokens = {
+  avatarSize: 120,
+  avatarMarginBottom: 6,
+  avatarPaddingTop: 12,
+  listGap: 12,
+  cameraBtnSize: CAMERA_BTN_SIZE,
+};
+
 const HUB_LAYOUT_PHONE_COMPACT: HubLayoutTokens = {
   avatarSize: 114,
   avatarMarginBottom: 4,
@@ -89,7 +98,7 @@ const HUB_LAYOUT_PHONE_COMPACT: HubLayoutTokens = {
 const HUB_LAYOUT_TABLET: HubLayoutTokens = {
   avatarSize: 126,
   avatarMarginBottom: 8,
-  avatarPaddingTop: 6,
+  avatarPaddingTop: 10,
   listGap: 12,
   cameraBtnSize: CAMERA_BTN_SIZE,
 };
@@ -119,7 +128,7 @@ function estimateProfileHubContentBudget(
   );
 }
 
-/** Два пресета по высоте экрана — без подстройки под ширину/модель. */
+/** Пресеты по высоте — размеры контролов почти фиксированы, меняются отступы. */
 function resolveHubLayoutFromWindow(
   windowHeight: number,
   topInset: number,
@@ -128,6 +137,9 @@ function resolveHubLayoutFromWindow(
 ): HubLayoutTokens {
   if (isTablet) return HUB_LAYOUT_TABLET;
   const budget = estimateProfileHubContentBudget(windowHeight, topInset, bottomInset);
+  if (windowHeight >= 780 && estimateProfileHubBodyHeight(HUB_LAYOUT_PHONE_TALL) <= budget) {
+    return HUB_LAYOUT_PHONE_TALL;
+  }
   if (estimateProfileHubBodyHeight(HUB_LAYOUT_PHONE) <= budget) {
     return HUB_LAYOUT_PHONE;
   }
@@ -942,6 +954,7 @@ const styles = StyleSheet.create({
     flex: 1,
     minHeight: 0,
     justifyContent: 'space-between',
+    overflow: 'hidden',
   },
   hubMainTop: {
     flexShrink: 0,

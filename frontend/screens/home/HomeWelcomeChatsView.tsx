@@ -542,7 +542,13 @@ function HomeWelcomeChatsViewInner({
               accessibilityRole="button"
               accessibilityState={{ selected: filter === 'all' }}
             >
-              <Text style={styles.segmentLabel}>
+              <Text
+                style={styles.segmentLabel}
+                numberOfLines={1}
+                allowFontScaling={false}
+                adjustsFontSizeToFit
+                minimumFontScale={0.85}
+              >
                 {L('friendsSegmentAll')}
               </Text>
             </Pressable>
@@ -555,7 +561,13 @@ function HomeWelcomeChatsViewInner({
               accessibilityRole="button"
               accessibilityState={{ selected: filter === 'unread' }}
             >
-              <Text style={styles.segmentLabel}>
+              <Text
+                style={styles.segmentLabel}
+                numberOfLines={1}
+                allowFontScaling={false}
+                adjustsFontSizeToFit
+                minimumFontScale={0.85}
+              >
                 {L('chatsSegmentUnread')}
               </Text>
             </Pressable>
@@ -692,8 +704,9 @@ const styles = StyleSheet.create({
   },
   segmentBtn: {
     flex: 1,
+    minWidth: 0,
     paddingVertical: 9,
-    paddingHorizontal: 12,
+    paddingHorizontal: 10,
     borderRadius: 999,
     alignItems: 'center',
     justifyContent: 'center',
@@ -705,6 +718,8 @@ const styles = StyleSheet.create({
     color: WELCOME_MUTED_TEXT,
     fontSize: 14,
     fontWeight: '500',
+    textAlign: 'center',
+    width: '100%',
   },
   list: {
     flex: 1,

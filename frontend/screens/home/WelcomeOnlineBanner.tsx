@@ -1,8 +1,7 @@
-import React, { memo, useEffect, useMemo, useState } from 'react';
+import React, { memo, useMemo } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import type { Lang } from '../../utils/i18n';
 import AvatarImage from '../../components/AvatarImage';
-import { displayAvatarLetter } from './friendHelpers';
 import { LIVI, WELCOME_GLASS_BORDER, WELCOME_GLASS_SURFACE, WELCOME_HEADER_TITLE, WELCOME_MUTED_TEXT, WELCOME_STAGE_BG } from './constants';
 import { formatWelcomeUsersOnlineLine } from './utils/welcomeOnlineLabel';
 
@@ -11,7 +10,7 @@ export type WelcomeBannerPeer = {
   name?: string;
   avatarVer?: number;
   avatarThumbB64?: string;
-  /** HTTP URL (`/api/avatar/:id?thumb=1`) для не-друзей без локального thumb. */
+  /** HTTP URL (`/api/avatar/:id?thumb=1`) — опционально, если нет локального thumb. */
   avatarUri?: string;
 };
 
@@ -19,14 +18,16 @@ type WelcomeOnlineBannerProps = {
   lang: Lang;
   onlineLabel: string;
   onlineCount: number | null;
+  /** До 4 онлайн-друзей; realtime с родителя. */
   peers: WelcomeBannerPeer[];
   compact?: boolean;
+  /** Переопределить верхний отступ pill (адаптив Search). */
+  marginTop?: number;
 };
 
 const STACK_SIZE = 32;
 const STACK_OVERLAP = 12;
 const STACK_VISIBLE = 4;
-const ROTATE_MS = 3800;
 
 function WelcomeOnlineBannerInner({
   lang,
@@ -34,52 +35,33 @@ function WelcomeOnlineBannerInner({
   onlineCount,
   peers,
   compact = false,
+  marginTop,
 }: WelcomeOnlineBannerProps) {
   const countLine = formatWelcomeUsersOnlineLine(onlineCount, lang);
-  const [offset, setOffset] = useState(0);
-
-  useEffect(() => {
-    if (peers.length <= STACK_VISIBLE) {
-      setOffset(0);
-      return;
-    }
-    const t = setInterval(() => {
-      setOffset((o) => (o + 1) % peers.length);
-    }, ROTATE_MS);
-    return () => clearInterval(t);
-  }, [peers.length]);
-
-  // Сброс offset, если список резко укоротился.
-  useEffect(() => {
-    if (peers.length === 0) {
-      setOffset(0);
-      return;
-    }
-    setOffset((o) => o % peers.length);
-  }, [peers.length]);
 
   const stackPeers = useMemo(() => {
+    const live = peers.slice(0, STACK_VISIBLE);
     const out: WelcomeBannerPeer[] = [];
     for (let i = 0; i < STACK_VISIBLE; i++) {
-      if (peers.length === 0) {
-        out.push({ id: `placeholder-${i}`, name: '' });
-        continue;
-      }
-      if (peers.length <= STACK_VISIBLE) {
-        out.push(peers[i] || { id: `placeholder-${i}`, name: '' });
-        continue;
-      }
-      out.push(peers[(offset + i) % peers.length]);
+      out.push(live[i] || { id: `placeholder-${i}`, name: '' });
     }
     return out;
-  }, [peers, offset]);
+  }, [peers]);
 
   return (
-    <View style={[styles.pill, compact && styles.pillCompact]}>
+    <View
+      style={[
+        styles.pill,
+        compact && styles.pillCompact,
+        marginTop != null ? { marginTop } : null,
+      ]}
+    >
       <View style={styles.textCol}>
         <View style={styles.onlineRow}>
           <View style={styles.onlineDot} />
-          <Text style={[styles.onlineWord, compact && styles.onlineWordCompact]}>{onlineLabel}</Text>
+          <Text style={[styles.onlineWord, compact && styles.onlineWordCompact]} numberOfLines={1}>
+            {onlineLabel}
+          </Text>
         </View>
         <Text style={[styles.countText, compact && styles.countTextCompact]} numberOfLines={2}>
           {countLine}
@@ -88,7 +70,10 @@ function WelcomeOnlineBannerInner({
       <View style={styles.stack}>
         {stackPeers.map((peer, index) => {
           const isPlaceholder = String(peer.id).startsWith('placeholder-');
-          const letter = displayAvatarLetter(peer.name || '');
+          const hasAvatar =
+            !!(peer.avatarThumbB64 && peer.avatarThumbB64.length > 0) ||
+            !!(peer.avatarUri && peer.avatarUri.length > 0) ||
+            (Number(peer.avatarVer) || 0) > 0;
           const uri = peer.avatarThumbB64 || peer.avatarUri || undefined;
           return (
             <View
@@ -106,10 +91,10 @@ function WelcomeOnlineBannerInner({
               ) : (
                 <AvatarImage
                   userId={peer.id}
-                  avatarVer={peer.avatarVer || 0}
-                  uri={uri}
+                  avatarVer={hasAvatar ? peer.avatarVer || 0 : 0}
+                  uri={hasAvatar ? uri : undefined}
                   size={STACK_SIZE}
-                  fallbackText={letter || '·'}
+                  fallbackText="—"
                   containerStyle={styles.stackAvatar}
                   fallbackTextStyle={styles.stackFallback}
                 />
@@ -138,7 +123,7 @@ const styles = StyleSheet.create({
     gap: 14,
   },
   pillCompact: {
-    paddingVertical: 10,
+    paddingVertical: 14,
     paddingHorizontal: 16,
     borderRadius: 22,
     marginHorizontal: 16,

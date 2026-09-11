@@ -687,7 +687,13 @@ function HomeWelcomeCallsViewInner({
                 accessibilityRole="button"
                 accessibilityState={{ selected: filter === 'all' }}
               >
-                <Text style={styles.segmentLabel}>
+                <Text
+                  style={styles.segmentLabel}
+                  numberOfLines={1}
+                  allowFontScaling={false}
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.85}
+                >
                   {L('friendsSegmentAll')}
                 </Text>
               </Pressable>
@@ -701,7 +707,13 @@ function HomeWelcomeCallsViewInner({
                 accessibilityState={{ selected: filter === 'missed' }}
               >
                 <View style={styles.segmentLabelRow}>
-                  <Text style={styles.segmentLabel} numberOfLines={1}>
+                  <Text
+                    style={styles.segmentLabel}
+                    numberOfLines={1}
+                    allowFontScaling={false}
+                    adjustsFontSizeToFit
+                    minimumFontScale={0.85}
+                  >
                     {L('callsSegmentMissed')}
                   </Text>
                   {/* На Calls бейдж не нужен — журнал уже на экране. */}
@@ -842,6 +854,7 @@ const styles = StyleSheet.create({
   },
   segmentBtn: {
     flex: 1,
+    minWidth: 0,
     paddingVertical: 9,
     paddingHorizontal: 8,
     borderRadius: 999,
@@ -861,6 +874,8 @@ const styles = StyleSheet.create({
     color: WELCOME_MUTED_TEXT,
     fontSize: 14,
     fontWeight: '500',
+    textAlign: 'center',
+    flexShrink: 1,
   },
   list: {
     flex: 1,

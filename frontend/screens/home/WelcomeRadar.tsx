@@ -37,13 +37,14 @@ const ORBIT_BAND_COLOR = mixOrbitBandColor();
 /** 1-я орбита ярче, дальше слабее. */
 const BAND_OPACITIES = [0.22, 0.15, 0.1, 0.04] as const;
 
-/** 4 орбиты: зазор 1→2 < 2→3 < 3→4 (растущие «диаметры» между кольцами). */
+/** 4 орбиты: ближе к аватару; 2-е уже, 3/4 чуть сжаты без раздува g. */
 function computeRingRadii(half: number, avatarR: number): number[] {
   const avatarOuter = avatarR + 2;
-  const maxOuter = half * 0.9;
-  const step0 = 0.72;
-  const step12 = 1.08;
-  const step23 = 1.32;
+  const maxOuter = half * 0.85;
+  const step0 = 0.56;
+  const step12 = 0.86;
+  const step23 = 1.18;
+  /** Компенсация сужения 3-го — иначе растёт g и раздувается 2-е. */
   const step34 = 1.14;
   const total = step0 + step12 + step23 + step34;
   const g = Math.max(half * 0.078, (maxOuter - avatarOuter) / total);

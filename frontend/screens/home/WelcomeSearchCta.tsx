@@ -46,7 +46,7 @@ export function WelcomeSearchCta({
   const maxCtaWidth =
     windowWidth >= SEARCH_CTA_TABLET_MIN_WIDTH ? SEARCH_CTA_TABLET_MAX_WIDTH : SEARCH_CTA_MAX_WIDTH;
   const buttonWidth = Math.min(Math.max(0, windowWidth - sideInset * 2), maxCtaWidth);
-  const buttonHeight = compact ? (Platform.OS === 'ios' ? 52 : 48) : Platform.OS === 'ios' ? 58 : 54;
+  const buttonHeight = compact ? (Platform.OS === 'ios' ? 48 : 44) : Platform.OS === 'ios' ? 52 : 48;
   const borderRadius = buttonHeight / 2;
   const innerRadius = Math.max(0, borderRadius - BORDER_W);
   const blockedFlash = useRef(new Animated.Value(0)).current;

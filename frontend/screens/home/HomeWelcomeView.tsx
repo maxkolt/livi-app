@@ -148,14 +148,28 @@ function HomeWelcomeViewInner({
   const isTabletLayout = viewWidth >= SEARCH_CTA_TABLET_MIN_WIDTH;
   const isPhone = resolveIsPhone(viewWidth, viewHeight);
   const isLandscape = resolveIsLandscape(viewWidth, viewHeight);
+  const shortPhone = isPhone && !isLandscape && viewHeight > 0 && viewHeight < 700;
   const phoneLandscape = isPhone && isLandscape;
+  /** Только экстремально низкая высота (ландшафт телефона / SE crouch) — размеры контролов не трогаем. */
   const compactLayout = isPhone && !isLandscape && viewHeight < 520;
+
+  /** Радар ближе к online; CTA выше tab bar за счёт большего paddingBottom (auto). */
+  const space = {
+    bannerMarginTop: phoneLandscape || compactLayout ? 6 : 8,
+    radarPaddingTop: phoneLandscape ? 2 : compactLayout ? 2 : 4,
+    stageCopyMarginTop: phoneLandscape ? -2 : -6,
+    stageCopyPaddingBottom: 0,
+    ctaMinGap: phoneLandscape ? 10 : compactLayout ? 12 : 16,
+    /** Больше = кнопка выше над навигацией. */
+    ctaBottomPad: phoneLandscape ? 14 : compactLayout ? 22 : 32,
+    copyMarginBottom: 4,
+  };
 
   const radarSize = phoneLandscape
     ? Math.min(viewWidth * 0.68, 248)
     : compactLayout
       ? Math.min(viewWidth * 0.84, 288)
-      : Math.min(viewWidth * 0.88, 328);
+      : Math.min(viewWidth * 0.88, isTabletLayout ? 340 : 328);
 
   // Базовый аватар для раскладки колец; визуально больше на ⅓ ширины 1-го кольца (перекрывает его).
   const welcomeAvatarBase = viewWidth < 400 ? 112 : 124;
@@ -163,9 +177,9 @@ function HomeWelcomeViewInner({
   const welcomeAvatarSize = (() => {
     const half = radarSize / 2;
     const avatarOuter = welcomeAvatarRadius + 2;
-    const stepTotal = 0.72 + 1.08 + 1.32 + 1.14;
-    const g = Math.max(half * 0.078, (half * 0.9 - avatarOuter) / stepTotal);
-    const firstRingWidth = g * 0.72;
+    const stepTotal = 0.56 + 0.86 + 1.18 + 1.14;
+    const g = Math.max(half * 0.078, (half * 0.85 - avatarOuter) / stepTotal);
+    const firstRingWidth = g * 0.56;
     return Math.round(welcomeAvatarBase + (firstRingWidth * 2) / 3);
   })();
 
@@ -347,7 +361,8 @@ function HomeWelcomeViewInner({
           onlineLabel={L('online')}
           onlineCount={onlineCount}
           peers={bannerPeers}
-          compact={phoneLandscape || compactLayout}
+          compact={phoneLandscape || compactLayout || shortPhone}
+          marginTop={space.bannerMarginTop}
         />
       </Animated.View>
 
@@ -357,6 +372,7 @@ function HomeWelcomeViewInner({
         onLayout={syncBadgeGap}
         style={[
           welcomeStyles.radarFlex,
+          { paddingTop: space.radarPaddingTop },
           revealStyle,
         ]}
       >
@@ -376,14 +392,29 @@ function HomeWelcomeViewInner({
           />
         </WelcomeRadar>
 
-        <Animated.View style={[welcomeStyles.stageCopy, revealStyle]}>
-          <View ref={copyAnchorRef} collapsable={false} onLayout={syncBadgeGap} style={welcomeStyles.copyBlock}>
+        <Animated.View
+          style={[
+            welcomeStyles.stageCopy,
+            {
+              marginTop: space.stageCopyMarginTop,
+              paddingBottom: space.stageCopyPaddingBottom,
+            },
+            revealStyle,
+          ]}
+        >
+          <View
+            ref={copyAnchorRef}
+            collapsable={false}
+            onLayout={syncBadgeGap}
+            style={[welcomeStyles.copyBlock, { marginBottom: space.copyMarginBottom }]}
+          >
             <Text
               style={[
                 welcomeStyles.heading,
                 phoneLandscape && welcomeStyles.headingCompact,
               ]}
               allowFontScaling={false}
+              numberOfLines={2}
             >
               {L('welcomeSearchHeading')}
             </Text>
@@ -394,6 +425,7 @@ function HomeWelcomeViewInner({
                 !isDark && { color: LIVI.text2 },
               ]}
               allowFontScaling={false}
+              numberOfLines={3}
             >
               {L('welcomeSearchMatching')}
             </Text>
@@ -407,7 +439,19 @@ function HomeWelcomeViewInner({
             pointerEvents="none"
           />
 
-          <View ref={searchBtnAnchorRef} collapsable={false} onLayout={syncBadgeGap} style={welcomeStyles.ctaWrap}>
+          <View
+            ref={searchBtnAnchorRef}
+            collapsable={false}
+            onLayout={syncBadgeGap}
+            style={[
+              welcomeStyles.ctaWrap,
+              {
+                marginTop: 'auto' as const,
+                paddingTop: space.ctaMinGap,
+                paddingBottom: space.ctaBottomPad,
+              },
+            ]}
+          >
             <WelcomeSearchCta
               label={L('welcomeFindPartnerBtn')}
               onPress={handleStartSearchPress}
@@ -415,7 +459,7 @@ function HomeWelcomeViewInner({
               onDisabledPress={handleBlockedSearchPress}
               compact={phoneLandscape}
               style={{
-                marginBottom: phoneLandscape ? 4 : 8,
+                marginBottom: 0,
               }}
             />
           </View>
@@ -452,6 +496,7 @@ const welcomeStyles = StyleSheet.create({
   root: {
     flex: 1,
     minHeight: 0,
+    overflow: 'hidden',
   },
   topBar: {
     height: 54,
@@ -475,20 +520,20 @@ const welcomeStyles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'flex-start',
     minHeight: 0,
-    paddingTop: 12,
-    marginTop: 0,
+    overflow: 'hidden',
   },
   stageCopy: {
     width: '100%',
+    flexGrow: 1,
+    flexShrink: 1,
+    minHeight: 0,
     alignItems: 'center',
-    marginTop: 4,
-    paddingBottom: 8,
     position: 'relative',
   },
   copyBlock: {
     paddingHorizontal: 28,
     alignItems: 'center',
-    marginBottom: 6,
+    flexShrink: 0,
   },
   heading: {
     color: WELCOME_HEADER_TITLE,
@@ -518,8 +563,8 @@ const welcomeStyles = StyleSheet.create({
   ctaWrap: {
     alignSelf: 'stretch',
     alignItems: 'center',
-    marginTop: 30,
-    paddingBottom: 4,
+    flexShrink: 0,
+    zIndex: 1,
   },
   badgeOverlay: {
     position: 'absolute',
