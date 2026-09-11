@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useState, startTransition } from 'react';
+import { useEffect, useLayoutEffect, useState } from 'react';
 import { getCurrentUserId } from '../../../sockets/socket';
 import {
   getCallLogSnapshot,
@@ -21,6 +21,16 @@ function isOutgoingDialHot(): boolean {
   }
 }
 
+/** После cancel/timeout refs могут кратко выглядеть hot — строку в списке всё равно показать сразу. */
+function shouldDeferCallLogUi(): boolean {
+  if (!isOutgoingDialHot()) return false;
+  try {
+    const cancelAt = Number((global as any).__lastOutgoingCancelAtRef?.current || 0);
+    if (cancelAt > 0 && Date.now() - cancelAt < 6000) return false;
+  } catch {}
+  return true;
+}
+
 export function useCallLog(enabled: boolean) {
   const [entries, setEntries] = useState<CallLogEntry[]>(() =>
     enabled ? getCallLogSnapshot() : [],
@@ -39,20 +49,17 @@ export function useCallLog(enabled: boolean) {
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
 
-    const applySnap = () => {
+    const applySnap = (list?: CallLogEntry[]) => {
       if (cancelled) return;
-      const snap = getCallLogSnapshot();
-      startTransition(() => {
-        if (!cancelled) setEntries(snap);
-      });
+      setEntries(list ?? getCallLogSnapshot());
     };
 
     const softPull = () => {
       if (cancelled) return;
-      if (isOutgoingDialHot()) {
+      if (shouldDeferCallLogUi()) {
         // Dial/redial: не трогаем FlatList — догоним после.
         if (retryTimer) clearTimeout(retryTimer);
-        retryTimer = setTimeout(softPull, 700);
+        retryTimer = setTimeout(softPull, 400);
         return;
       }
       applySnap();
@@ -67,14 +74,12 @@ export function useCallLog(enabled: boolean) {
     const offSoft = subscribeCallLogSoftUi(softPull);
     const off = subscribeCallLog((list) => {
       if (cancelled) return;
-      if (isOutgoingDialHot()) {
+      if (shouldDeferCallLogUi()) {
         if (retryTimer) clearTimeout(retryTimer);
-        retryTimer = setTimeout(softPull, 700);
+        retryTimer = setTimeout(softPull, 400);
         return;
       }
-      startTransition(() => {
-        if (!cancelled) setEntries(list);
-      });
+      applySnap(list);
     });
 
     return () => {

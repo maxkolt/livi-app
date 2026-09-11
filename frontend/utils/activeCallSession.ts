@@ -183,7 +183,8 @@ export function isInCallAudioSessionStarted(): boolean {
   }
 }
 
-function isIncomingAnswerTransitionActive(): boolean {
+/** Accept с нативного Incoming → VideoCall: не уводить в in-app/system PiP от task-switch. */
+export function isIncomingAnswerTransitionActive(): boolean {
   try {
     const incomingTransition = (global as any).__incomingAnswerTransitionRef?.current;
     return !!incomingTransition && Number(incomingTransition.expiresAt || 0) > Date.now();

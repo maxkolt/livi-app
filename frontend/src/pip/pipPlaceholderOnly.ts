@@ -347,6 +347,50 @@ export type SystemPiPLeaveContext = {
   capturedAt: number;
 };
 
+/**
+ * Accept с нативного Incoming: сбросить sticky «вернуть in-app PiP» и подавить
+ * ложный Back/leaveHint от task-switch Incoming→Main (иначе Home+плашка вместо VideoCall).
+ */
+export function clearStaleInAppPiPRestoreForIncomingAnswer(ttlMs = 10_000): void {
+  try {
+    const g = global as any;
+    const now = Date.now();
+    g.__suppressInAppPiPUntilRef = g.__suppressInAppPiPUntilRef || { current: 0 };
+    g.__suppressInAppPiPUntilRef.current = Math.max(
+      Number(g.__suppressInAppPiPUntilRef.current || 0),
+      now + ttlMs,
+    );
+    g.__disableSystemPiPUntilRef = g.__disableSystemPiPUntilRef || { current: 0 };
+    g.__disableSystemPiPUntilRef.current = Math.max(
+      Number(g.__disableSystemPiPUntilRef.current || 0),
+      now + ttlMs,
+    );
+    g.__systemPiPNeedsInAppRestoreRef = g.__systemPiPNeedsInAppRestoreRef || { current: false };
+    g.__systemPiPNeedsInAppRestoreRef.current = false;
+    g.__pendingInAppPiPRestoreAfterSystemRef =
+      g.__pendingInAppPiPRestoreAfterSystemRef || { current: false };
+    g.__pendingInAppPiPRestoreAfterSystemRef.current = false;
+    g.__restoringInAppPiPFromSystemRef = g.__restoringInAppPiPFromSystemRef || { current: false };
+    g.__restoringInAppPiPFromSystemRef.current = false;
+    g.__pipSuspendedForSystemPiPRef = g.__pipSuspendedForSystemPiPRef || { current: false };
+    g.__pipSuspendedForSystemPiPRef.current = false;
+    g.__leavingVideoCallByBackRef = g.__leavingVideoCallByBackRef || { current: false };
+    g.__leavingVideoCallByBackRef.current = false;
+    g.__leavingVideoCallByHomeRef = g.__leavingVideoCallByHomeRef || { current: false };
+    g.__leavingVideoCallByHomeRef.current = false;
+    g.__systemPiPEntryInProgressUntilRef = g.__systemPiPEntryInProgressUntilRef || { current: 0 };
+    g.__systemPiPEntryInProgressUntilRef.current = 0;
+    const snap = g.__systemPiPLeaveContextSnapshotRef as SystemPiPLeaveContext | undefined;
+    if (snap && snap.restoreInAppPiP === true) {
+      g.__systemPiPLeaveContextSnapshotRef = {
+        ...snap,
+        restoreInAppPiP: false,
+        capturedAt: now,
+      };
+    }
+  } catch {}
+}
+
 /** Sticky на всю сессию system PiP (ставится в AboutToEnter). */
 export function markSystemPiPSessionAudioOrigin(fromAudio: boolean): void {
   try {
@@ -462,6 +506,10 @@ export function shouldUseSystemPiPPlaceholderOnly(opts?: {
 /**
  * Снимок leave-context для return из system PiP.
  * Product: leave с audio → return на audio, даже если в PiP уже показали peer video.
+ *
+ * Не наследуем sticky restoreInAppPiP / needsRestore с прошлого ухода:
+ * иначе audio VideoCall → Home → system PiP → expand сначала показывает audio,
+ * потом ошибочно уводит в in-app плашку.
  */
 export function commitSystemPiPLeaveContextSnapshot(opts?: {
   placeholderOnly?: boolean;
@@ -487,30 +535,44 @@ export function commitSystemPiPLeaveContextSnapshot(opts?: {
       remoteStream: params?.remoteStream,
       localStream: params?.localStream,
     });
-    // Sticky leaveUi: первый снимок фиксирует audio|video на всю PiP-сессию.
-    const leaveUi: 'audio' | 'video' =
-      existing?.leaveUi === 'audio' || existing?.leaveUi === 'video'
-        ? existing.leaveUi
-        : isInAudioOnlyCallUi() || isSystemPiPLeaveAudioOrigin() || uiPreferAudio
-          ? 'audio'
-          : 'video';
-    // Sticky: audio leave не сбрасывается апгрейдом PiP logo→peer video.
-    const preferAudioOnly =
-      leaveUi === 'audio' ||
-      existing?.preferAudioOnly === true ||
-      existing?.audioOrigin === true ||
-      isSystemPiPSessionAudioOrigin() ||
-      (placeholderOnly && (uiPreferAudio || isInAudioOnlyCallUi()));
+    // Только живая плашка / soft-hide — не stale needsRestore и не existing.restoreInAppPiP.
+    const liveInAppPiP =
+      g.__pipVisibleRef?.current === true ||
+      g.__pipSuspendedForSystemPiPRef?.current === true;
     const inAppPiP =
-      typeof opts?.restoreInAppPiP === 'boolean'
-        ? opts.restoreInAppPiP
-        : g.__pipVisibleRef?.current === true ||
-          g.__pipSuspendedForSystemPiPRef?.current === true ||
-          g.__systemPiPNeedsInAppRestoreRef?.current === true ||
-          existing?.restoreInAppPiP === true;
+      typeof opts?.restoreInAppPiP === 'boolean' ? opts.restoreInAppPiP : liveInAppPiP;
+    const leaveUiFromLive: 'audio' | 'video' =
+      isInAudioOnlyCallUi() || isSystemPiPLeaveAudioOrigin() || uiPreferAudio
+        ? 'audio'
+        : 'video';
+    // Sticky leaveUi только mid-session (уже в system PiP / peer cam upgrade).
+    // Новый AboutToEnter всегда берёт текущий UI — иначе audio leave травится старым video snap.
+    const alreadyInSystemPiP =
+      g.__pipInSystemModeRef?.current === true || g.__pendingSystemPiPSyncRef?.current === true;
+    const leaveUi: 'audio' | 'video' =
+      alreadyInSystemPiP && (existing?.leaveUi === 'audio' || existing?.leaveUi === 'video')
+        ? existing.leaveUi
+        : leaveUiFromLive;
+    // Sticky audio leave не сбрасывается апгрейдом PiP logo→peer video (только mid-session).
+    const preferAudioOnly = inAppPiP
+      ? false
+      : leaveUi === 'audio' ||
+        isSystemPiPSessionAudioOrigin() ||
+        (alreadyInSystemPiP &&
+          (existing?.preferAudioOnly === true || existing?.audioOrigin === true)) ||
+        (placeholderOnly && (uiPreferAudio || isInAudioOnlyCallUi()));
     if (inAppPiP) {
       g.__systemPiPNeedsInAppRestoreRef = g.__systemPiPNeedsInAppRestoreRef || { current: false };
       g.__systemPiPNeedsInAppRestoreRef.current = true;
+    } else {
+      // Fullscreen leave: не дать stale needsRestore вернуть in-app на expand.
+      if (g.__systemPiPNeedsInAppRestoreRef) g.__systemPiPNeedsInAppRestoreRef.current = false;
+      if (g.__pendingInAppPiPRestoreAfterSystemRef) {
+        g.__pendingInAppPiPRestoreAfterSystemRef.current = false;
+      }
+      if (g.__restoringInAppPiPFromSystemRef) {
+        g.__restoringInAppPiPFromSystemRef.current = false;
+      }
     }
     // In-app leave: всегда актуальный route (не sticky VideoCall — иначе restore откроет полный экран).
     const liveRoute = readRootCurrentRouteName();
@@ -521,7 +583,7 @@ export function commitSystemPiPLeaveContextSnapshot(opts?: {
           ? liveRoute && liveRoute !== 'VideoCall'
             ? liveRoute
             : 'Home'
-          : (existing?.routeName ?? liveRoute) || null;
+          : liveRoute || existing?.routeName || null;
     g.__systemPiPLeaveContextSnapshotRef = {
       // In-app leave: не форсить full-screen audio return (иначе плашка не восстановится).
       preferAudioOnly: inAppPiP ? false : preferAudioOnly,
@@ -531,6 +593,14 @@ export function commitSystemPiPLeaveContextSnapshot(opts?: {
       routeName: routeNameForSnap,
       capturedAt: Date.now(),
     };
+  } catch {}
+}
+
+/** После успешного return из system PiP — сбросить снимок, чтобы не отравить следующий leave. */
+export function clearSystemPiPLeaveContextSnapshot(): void {
+  try {
+    const g = global as any;
+    g.__systemPiPLeaveContextSnapshotRef = null;
   } catch {}
 }
 
@@ -545,6 +615,7 @@ export function peekSystemPiPLeaveContextForReturn(): SystemPiPLeaveContext {
     const snap = g.__systemPiPLeaveContextSnapshotRef as SystemPiPLeaveContext | undefined;
     const suspendedInApp = g.__pipSuspendedForSystemPiPRef?.current === true;
     if (snap && Date.now() - snap.capturedAt < 120_000) {
+      // snap.restoreInAppPiP ставится только при live in-app leave (commit больше не sticky).
       const restoreInAppPiP =
         snap.restoreInAppPiP === true ||
         suspendedInApp ||

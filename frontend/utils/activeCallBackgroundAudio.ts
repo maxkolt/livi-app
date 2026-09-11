@@ -1,5 +1,5 @@
 import { AppState, Platform, type AppStateStatus, NativeModules } from 'react-native';
-import { captureCallAudioRouteFromUi, isOngoingCallSession, peekSystemPiPReturnMediaSnapshot, resolveActiveCallInCallMedia, readActiveExternalCallAudioRoute, isDirectAudioEarpieceStabilizeWindow } from './activeCallSession';
+import { captureCallAudioRouteFromUi, isOngoingCallSession, peekSystemPiPReturnMediaSnapshot, resolveActiveCallInCallMedia, readActiveExternalCallAudioRoute, isDirectAudioEarpieceStabilizeWindow, isIncomingAnswerTransitionActive } from './activeCallSession';
 import {
   pinLoudSpeakerForAudioCallLeavingToBackground,
   reapplyPersistedCallAudioRoute,
@@ -179,6 +179,7 @@ function onAppStateChange(next: AppStateStatus): void {
         // Страховка: ModeChanged/Expanded могли промахнуться — вернуть in-app плашку.
         const needsInAppRestore =
           !plaqueVisible &&
+          !isIncomingAnswerTransitionActive() &&
           (g.__systemPiPNeedsInAppRestoreRef?.current === true ||
             g.__pendingInAppPiPRestoreAfterSystemRef?.current === true ||
             peekSystemPiPLeaveContextForReturn().restoreInAppPiP === true);

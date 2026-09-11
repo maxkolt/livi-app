@@ -58,6 +58,39 @@ export function cancelPendingCallLogNotify(): void {
   }
 }
 
+/**
+ * Сразу показать актуальный memory в Calls (cancel / timeout / decline / hangup).
+ * Soft + полный notify: вкладка Calls обновляется даже если dial-hot глушил один из каналов.
+ */
+export function flushCallLogUi(): void {
+  cancelPendingCallLogNotify();
+  notify();
+  softUiListeners.forEach((cb) => {
+    try {
+      cb();
+    } catch {}
+  });
+}
+
+/** Memory поверх диска: cancel/record во время AsyncStorage.getItem не должны пропасть. */
+function mergeCallLogPreferMemory(mem: CallLogEntry[], disk: CallLogEntry[]): CallLogEntry[] {
+  const byId = new Map<string, CallLogEntry>();
+  for (const e of disk) byId.set(e.id, e);
+  for (const e of mem) byId.set(e.id, e);
+  const list = Array.from(byId.values());
+  const filtered = list.filter((e) => {
+    if (e.direction !== 'outgoing') return true;
+    const superseded = list.some(
+      (c) =>
+        c.direction === 'cancelled' &&
+        c.peerId === e.peerId &&
+        Math.abs(c.at - e.at) <= OUTGOING_TO_CANCELLED_MS,
+    );
+    return !superseded;
+  });
+  return filtered.sort((a, b) => b.at - a.at).slice(0, MAX_ENTRIES);
+}
+
 const softUiListeners = new Set<() => void>();
 
 /**
@@ -101,7 +134,9 @@ function parseEntries(raw: string | null): CallLogEntry[] {
 }
 
 async function ensureLoaded(uid = currentUid()): Promise<CallLogEntry[]> {
-  if (memory && memoryUid === uid) return memory;
+  // Memory готов и load не идёт — отдаём сразу.
+  if (memory && memoryUid === uid && !loadPromise) return memory;
+  // Дождаться in-flight load (с merge), иначе cancel mid-load теряется.
   if (loadPromise && memoryUid === uid) return loadPromise;
   // Смена uid (логин после пустого id) — сбрасываем кэш, иначе список «пропадает».
   if (memoryUid !== uid) {
@@ -112,36 +147,25 @@ async function ensureLoaded(uid = currentUid()): Promise<CallLogEntry[]> {
   loadPromise = AsyncStorage.getItem(storageKey(uid))
     .then((raw) => {
       if (memoryUid !== uid) return memory || [];
-      memory = parseEntries(raw);
-      memoryUid = uid;
-      // После cancel не notify сразу — иначе CallsView remount на горячем пути.
-      try {
-        const at = Number((global as any).__lastOutgoingCancelAtRef?.current || 0);
-        if (at > 0 && Date.now() - at < 5000) {
-          notifyDeferred(3000);
-        } else {
-          notify();
-        }
-      } catch {
-        notify();
+      const disk = parseEntries(raw);
+      // Cancel/record могли обновить memory пока ждали диск — не затирать.
+      if (memory && memoryUid === uid) {
+        memory = mergeCallLogPreferMemory(memory, disk);
+      } else {
+        memory = disk;
       }
+      memoryUid = uid;
+      notify();
       return memory;
     })
     .catch(() => {
       if (memoryUid !== uid) return memory || [];
-      memory = [];
-      memoryUid = uid;
-      try {
-        const at = Number((global as any).__lastOutgoingCancelAtRef?.current || 0);
-        if (at > 0 && Date.now() - at < 5000) {
-          notifyDeferred(3000);
-        } else {
-          notify();
-        }
-      } catch {
-        notify();
+      if (!(memory && memoryUid === uid)) {
+        memory = [];
+        memoryUid = uid;
       }
-      return memory;
+      notify();
+      return memory || [];
     })
     .finally(() => {
       if (memoryUid === uid) loadPromise = null;
@@ -192,7 +216,10 @@ export function recordCallLog(
     memory = next;
     memoryUid = uid;
     persist(uid, next);
-    if (!silent) notify();
+    if (!silent) {
+      cancelPendingCallLogNotify();
+      notify();
+    }
   };
 
   if (memory && memoryUid === uid) apply(memory);
@@ -253,6 +280,7 @@ export function recordCancelledCall(
     if (typeof deferNotifyMs === 'number' && deferNotifyMs > 0) {
       notifyDeferred(deferNotifyMs);
     } else {
+      cancelPendingCallLogNotify();
       notify();
     }
   };
@@ -282,6 +310,7 @@ export function recordCancelledCall(
       if (typeof deferNotifyMs === 'number' && deferNotifyMs > 0) {
         notifyDeferred(deferNotifyMs);
       } else {
+        cancelPendingCallLogNotify();
         notify();
       }
     });

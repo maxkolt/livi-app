@@ -60,7 +60,7 @@ import { markCallPerf, callPerfSpan } from '../utils/callPerfTrace';
 import { trimNick } from '../utils/userDisplayName';
 import { usePiP } from '../src/pip/PiPContext';
 import { onCallTimeout as onCallTimeoutEvent, onCallIncoming as onCallIncomingEvent, onCallDeclined as onCallDeclinedEvent } from '../sockets/socket';
-import { onRequestCloseIncoming, emitCloseIncoming, onCloseOutgoingCall, onCallCancelledOnHome, onCloseHomeModals, onRequestDirectCall, shouldSkipHomeUiSettle, armHomeUiSettleSkip, clearHomeUiSettleSkip, setPendingWelcomeCallsFilter, setPendingWelcomeChatsFilter } from '../utils/globalEvents';
+import { onRequestCloseIncoming, emitCloseIncoming, onCloseOutgoingCall, onCallCancelledOnHome, onCallEndedOnHome, onCloseHomeModals, onRequestDirectCall, shouldSkipHomeUiSettle, armHomeUiSettleSkip, clearHomeUiSettleSkip, setPendingWelcomeCallsFilter, setPendingWelcomeChatsFilter } from '../utils/globalEvents';
 import { displayOutgoingCallImmediate, notifyOutgoingCallId, reportEndCallToCallKeep, closeOutgoingCallActivity, bringMainActivityToFront, OUTGOING_CALL_TIMEOUT_MS, clearOutgoingDeclineHandled, isOutgoingDeclineHandled, setupCallKeep, isCallKeepAvailable, setCallMediaHint } from '../utils/callKeep';
 import { syncAppBadgeFromMissedCount, dismissMessageNotificationsOnly, getMissedCountByUserFromNative } from '../utils/pushNotifications';
 import {
@@ -88,7 +88,7 @@ import { HomeWelcomeTabBar, type WelcomeTabId } from './home/HomeWelcomeTabBar';
 import { WelcomeKeepAlivePane } from './home/WelcomeKeepAlivePane';
 import { WelcomeStageBackground } from './home/WelcomeStageBackground';
 import { WELCOME_HEADER_TITLE, WELCOME_STAGE_BG } from './home/constants';
-import { recordCallLog, recordCancelledCall, requestCallLogSoftUi, cancelPendingCallLogNotify, loadCallLog } from './home/callLog';
+import { recordCallLog, recordCancelledCall, requestCallLogSoftUi, cancelPendingCallLogNotify, flushCallLogUi, loadCallLog } from './home/callLog';
 import { prefetchChatPreviews } from './home/hooks/useChatPreviews';
 import { clearEndingCallInProgress } from '../utils/activeCallSession';
 import { clearDirectCallAudioRouteCarryoverAfterCallEnd } from '../utils/callAudioRoutePersist';
@@ -1613,6 +1613,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       } catch {}
       try {
         recordCancelledCall(peerForLog);
+        flushCallLogUi();
         logger.info('[welcome-tab] callLog cancelled', {
           peerId: peerForLog,
           sinceCancelMs: Date.now() - Number((global as any).__lastOutgoingCancelAtRef?.current || Date.now()),
@@ -1668,7 +1669,10 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         String(calling.friend?.id || '').trim();
       forceResetCallBusyRefs();
       clearFriendsCallBusy([callerId, peerId]);
-      if (peerId) recordCancelledCall(peerId);
+      if (peerId) {
+        recordCancelledCall(peerId);
+        try { flushCallLogUi(); } catch {}
+      }
       lastOutgoingPeerIdRef.current = null;
       activeOutgoingAttemptRef.current = 0;
       activeOutgoingCallIdRef.current = null;
@@ -2054,6 +2058,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
             callingVisibleRef.current = false;
             setCalling({ visible: false, friend: null, callId: null });
             setSwipeActionsHiddenForCall(null);
+            try { flushCallLogUi(); } catch {}
             showNotice(t('callDeclined', lang), 'error', 3000);
           });
         }),
@@ -2072,6 +2077,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
             lastOutgoingPeerIdRef.current = null;
             callingVisibleRef.current = false;
             setCalling({ visible: false, friend: null, callId: null });
+            try { flushCallLogUi(); } catch {}
           });
         }),
       );
@@ -2112,6 +2118,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
             clearFriendsCallBusy([String(friend.id), lastOutgoingPeerIdRef.current]);
             // Только своя отмена инициатора → «Отменённый» у себя.
             recordCancelledCall(String(friend.id));
+            try { flushCallLogUi(); } catch {}
             lastOutgoingPeerIdRef.current = null;
             callingVisibleRef.current = false;
             setCalling({ visible: false, friend: null, callId: null });
@@ -2260,6 +2267,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           lastOutgoingPeerIdRef.current = null;
           callingVisibleRef.current = false;
           setCalling({ visible: false, friend: null, callId: null });
+          try { flushCallLogUi(); } catch {}
           showNotice(t('noAnswer', lang), 'error', 3000);
         });
       }, OUTGOING_CALL_TIMEOUT_MS);
@@ -4710,6 +4718,16 @@ const handleClearNick = useCallback(async () => {
   }, [clearFriendsCallBusy, markRecentlyEndedCallFriend]);
 
   // onCallEndedOnHome раньше показывал тост «Вызов завершён» — убрано.
+  // Сразу показать строку в Calls (outgoing писался silent на старте).
+  useEffect(() => {
+    const off = onCallEndedOnHome(() => {
+      try {
+        flushCallLogUi();
+      } catch {}
+    });
+    return off;
+  }, []);
+
   // «Занято» при неудачном дозвоне — toast; бейдж isBusy только с presence:update (реальный звонок).
   useEffect(() => {
     const onBusy = (_payload: { from: string }) => {
@@ -4720,6 +4738,7 @@ const handleClearNick = useCallback(async () => {
       activeOutgoingAttemptRef.current = 0;
       activeOutgoingCallIdRef.current = null;
       callingVisibleRef.current = false;
+      try { flushCallLogUi(); } catch {}
       showNotice(t('user_busy', lang), 'error', 3000);
     };
 

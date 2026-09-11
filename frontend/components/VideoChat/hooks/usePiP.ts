@@ -2,7 +2,7 @@ import { useCallback, useRef, useEffect } from 'react';
 import { BackHandler, PanResponder, Platform, Dimensions, NativeModules } from 'react-native';
 import { usePiP as usePiPContext, isPipOverlayVisibleSync } from '../../../src/pip/PiPContext';
 import { isInAudioOnlyCallUi, setPipInAppRtcFromAudioOnlySticky } from '../../../src/pip/pipPlaceholderOnly';
-import { resolvePiPLocalMutedState, markDirectCallVideoMediaActive } from '../../../utils/activeCallSession';
+import { resolvePiPLocalMutedState, markDirectCallVideoMediaActive, isIncomingAnswerTransitionActive } from '../../../utils/activeCallSession';
 import { goBackFromCallScreenOrHome } from '../../../utils/appNavigationGuard';
 import { setPersistedCallAudioRoute } from '../../../utils/callAudioRoutePersist';
 import { readInAppPiPAudioOutputRoute } from '../../../utils/inAppPiPAudioRoute';
@@ -97,6 +97,10 @@ export const usePiP = ({
   const enterPiPMode = useCallback((opts?: { deferVisible?: boolean; fromVideoCallBack?: boolean }) => {
     const now = Date.now();
     const g = global as any;
+    // Accept с Incoming: task-switch/ложный Back не должен показывать in-app PiP.
+    if (isIncomingAnswerTransitionActive()) {
+      return;
+    }
     const fromVideoCallBack = opts?.fromVideoCallBack === true;
     if (!fromVideoCallBack) {
       const suppressInAppPiPUntil = Number(g.__suppressInAppPiPUntilRef?.current || 0);
@@ -318,6 +322,10 @@ export const usePiP = ({
     };
 
     const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (isIncomingAnswerTransitionActive()) {
+        // Handoff Incoming→Main иногда шлёт KEYCODE_BACK — остаёмся на VideoCall.
+        return true;
+      }
       if (isInactiveStateRef.current || wasFriendCallEndedRef.current) {
         navigateBackFromCallScreen();
         return true;

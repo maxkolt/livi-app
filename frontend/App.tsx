@@ -109,6 +109,7 @@ import {
   prepareDirectCallAudioReturnFromPiP,
   peekSystemPiPLeaveContextForReturn,
   isSystemPiPSessionAudioOrigin,
+  clearStaleInAppPiPRestoreForIncomingAnswer,
 } from './src/pip/pipPlaceholderOnly';
 import { installActiveCallBackgroundAudioHandlers } from './utils/activeCallBackgroundAudio';
 import { installExternalCallHoldHandlers } from './utils/externalCallHold';
@@ -537,6 +538,7 @@ function AppContent() {
   const [incomingAnswerCover, setIncomingAnswerCover] = React.useState(false);
   const incomingAnswerCoverClearTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const incomingAnswerCoverShownRef = React.useRef(false);
+  const incomingAnswerTransitionTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const clearIncomingAnswerCover = React.useCallback(() => {
     if (incomingAnswerCoverClearTimerRef.current) {
       clearTimeout(incomingAnswerCoverClearTimerRef.current);
@@ -551,6 +553,17 @@ function AppContent() {
     setIncomingAnswerCover(false);
     try { clearIncomingAnswerNativeCover(); } catch {}
     try { markCallPerf('answer_cover_clear'); } catch {}
+    // Audio UI готов: снять accept-guard и снова разрешить Home→system PiP.
+    try {
+      const g = global as any;
+      if (incomingAnswerTransitionTimerRef.current) {
+        clearTimeout(incomingAnswerTransitionTimerRef.current);
+        incomingAnswerTransitionTimerRef.current = null;
+      }
+      if (g.__incomingAnswerTransitionRef) g.__incomingAnswerTransitionRef.current = null;
+      if (g.__incomingAnswerPeerUserIdRef) g.__incomingAnswerPeerUserIdRef.current = null;
+      syncAndroidLeaveHintForOngoingCall();
+    } catch {}
   }, []);
   const showIncomingAnswerCover = React.useCallback(() => {
     incomingAnswerCoverShownRef.current = true;
@@ -710,7 +723,6 @@ function AppContent() {
   // Ref для различения в onEnd: мы принимающий (отклонили входящий) или звонящий (отменили исходящий)
   const incomingCallIdRef = React.useRef<string | null>(null);
   const expectedCallAcceptedRef = React.useRef<{ callId: string; reason: string; expiresAt: number } | null>(null);
-  const incomingAnswerTransitionTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const setIncomingAnswerTransitionGuard = React.useCallback((callId?: string | null, active = true, ttlMs = 10000) => {
     const g = global as any;
     g.__incomingAnswerTransitionRef = g.__incomingAnswerTransitionRef || { current: null as null | { callId: string; expiresAt: number } };
@@ -721,6 +733,9 @@ function AppContent() {
     if (!active) {
       g.__incomingAnswerTransitionRef.current = null;
       if (g.__incomingAnswerPeerUserIdRef) g.__incomingAnswerPeerUserIdRef.current = null;
+      try {
+        syncAndroidLeaveHintForOngoingCall();
+      } catch {}
       return;
     }
     const normalizedCallId = String(callId || '').trim();
@@ -734,6 +749,9 @@ function AppContent() {
         g.__incomingAnswerTransitionRef.current = null;
       }
       incomingAnswerTransitionTimerRef.current = null;
+      try {
+        syncAndroidLeaveHintForOngoingCall();
+      } catch {}
     }, ttlMs);
   }, []);
   const rememberExpectedCallAccepted = React.useCallback((callId: string, reason: string, ttlMs = 15000) => {
@@ -920,6 +938,11 @@ function AppContent() {
       } catch {}
     }
     rememberExpectedCallAccepted(callId, 'incoming-answer');
+    // До leaveHint/bringMain: иначе Incoming→Main task-switch уводит в in-app PiP вместо VideoCall.
+    setIncomingAnswerTransitionGuard(callId, true);
+    try {
+      clearStaleInAppPiPRestoreForIncomingAnswer(10_000);
+    } catch {}
     beginEarlyIncomingCallAccept(callId);
     prefetchDirectCallIce('app:android-incoming-answer');
     if (answerMediaHint === 'audio') {
@@ -931,7 +954,6 @@ function AppContent() {
         setActiveVideoCall(true);
       } catch (_) {}
     }
-    setIncomingAnswerTransitionGuard(callId, true);
     if (Platform.OS === 'android') {
       try { stopIncomingCallRingtoneAndVibration(); } catch {}
       try { stopIncomingCallAlert(); } catch {}
@@ -1262,18 +1284,24 @@ function AppContent() {
           g.__restoringInAppPiPFromSystemRef?.current === true ||
           leaveCtxEarly.restoreInAppPiP === true;
         const plaqueVisible = g.__pipVisibleRef?.current === true;
-        // ModeChanged уже вернул плашку — не открывать VideoCall.
+        // Soft-hide: ref=true, но overlay мог остаться скрыт (suspend cleared без re-render).
+        // Раньше early-return сбрасывал pending → ModeChanged runRestore abort, плашка исчезала.
         if (forceInAppRestore && plaqueVisible && !endingCall) {
           try {
-            g.__pendingInAppPiPRestoreAfterSystemRef =
-              g.__pendingInAppPiPRestoreAfterSystemRef || { current: false };
-            g.__pendingInAppPiPRestoreAfterSystemRef.current = false;
-            g.__systemPiPNeedsInAppRestoreRef =
-              g.__systemPiPNeedsInAppRestoreRef || { current: false };
-            g.__systemPiPNeedsInAppRestoreRef.current = false;
             g.__restoringInAppPiPFromSystemRef =
               g.__restoringInAppPiPFromSystemRef || { current: false };
-            g.__restoringInAppPiPFromSystemRef.current = false;
+            g.__restoringInAppPiPFromSystemRef.current = true;
+            g.__pendingInAppPiPRestoreAfterSystemRef =
+              g.__pendingInAppPiPRestoreAfterSystemRef || { current: false };
+            // Не гасить pending до showPiP — иначе параллельный ModeChanged restore abort'ится.
+            g.__pendingInAppPiPRestoreAfterSystemRef.current = true;
+            const fn = g.__pipReturnToCallRef?.current;
+            if (typeof fn === 'function') {
+              fn({ restoreInAppPiP: true });
+            } else {
+              g.__pipUpdateStateRef?.current?.({ suppressOverlayForReturn: false });
+              NativeModules.LiviAppModule?.setInAppPiPVisibleForSystemPiP?.(true);
+            }
           } catch (_) {}
           return;
         }

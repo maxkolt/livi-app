@@ -19,7 +19,7 @@ import { logger } from '../../utils/logger';
 import { useResolvedImageUri } from '../../hooks/useResolvedImageUri';
 import { useAppTheme } from '../../theme/ThemeProvider';
 import { uiAccent } from '../../theme/uiAccent';
-import { WELCOME_NAV_ACTIVE_ACCENT } from '../../screens/home/constants';
+import { WELCOME_HEADER_TITLE, WELCOME_NAV_ACTIVE_ACCENT } from '../../screens/home/constants';
 import AwayPlaceholder from '../../components/AwayPlaceholder';
 import {
   prepareDirectCallAudioReturnFromPiP,
@@ -187,7 +187,8 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
       border: 'rgba(255, 255, 255, 0.08)',
       btnBg: 'rgba(255, 255, 255, 0.08)',
       btnBorder: 'rgba(255, 255, 255, 0.1)',
-      icon: 'rgba(255, 255, 255, 0.92)',
+      /** Как заголовок «Звонки» на странице Calls. */
+      icon: WELCOME_HEADER_TITLE,
       ripple: 'rgba(255, 255, 255, 0.14)',
       /** Как audioRoundBtnDanger / AudioCallEndButton на странице аудиозвонка. */
       dangerBg: '#CC4A1E2A',

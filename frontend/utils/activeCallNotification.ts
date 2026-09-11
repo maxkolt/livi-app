@@ -13,6 +13,7 @@ import {
   resolveActiveCallInCallMedia,
   isDirectAudioEarpieceStabilizeWindow,
   readActiveExternalCallAudioRoute,
+  isIncomingAnswerTransitionActive,
 } from './activeCallSession';
 import { readRootCurrentRouteName } from './safeRootNavigation';
 import {
@@ -315,6 +316,11 @@ export function primeAndroidCallContextForLeaveHint(opts: {
       roomId: roomId || prev?.roomId || '',
       ...(nick ? { partnerName: nick } : {}),
     };
+    // Incoming→Main task-switch: leaveHint+onUserLeaveHint даёт ложный PiP вместо VideoCall.
+    if (isIncomingAnswerTransitionActive()) {
+      applyAndroidLeaveHintNativeFlags(false);
+      return;
+    }
     applyAndroidLeaveHintNativeFlags(true);
   } catch (_) {}
 }
@@ -324,6 +330,10 @@ export function syncAndroidLeaveHintForOngoingCall(): void {
   if (Platform.OS !== 'android') return;
   try {
     if (isCallTeardownInProgress()) return;
+    if (isIncomingAnswerTransitionActive()) {
+      applyAndroidLeaveHintNativeFlags(false);
+      return;
+    }
     const { roomId, callId } = getActiveCallIds();
     if (roomId || callId) {
       applyAndroidLeaveHintNativeFlags(true);
@@ -487,6 +497,8 @@ export function setAndroidSystemPiPLeaveHintEnabled(enabled: boolean): void {
  */
 export function armAndroidLeaveHintForVideoCallHome(opts?: { allowFromInAppPiP?: boolean }): void {
   if (Platform.OS !== 'android') return;
+  // Accept handoff: AppState inactive от Incoming/Main не должен готовить system/in-app PiP.
+  if (isIncomingAnswerTransitionActive()) return;
   if (!opts?.allowFromInAppPiP) {
     try {
       if (isInAppPiPContextIncludingSuspended()) return;

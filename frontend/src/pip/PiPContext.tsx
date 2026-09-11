@@ -6,7 +6,7 @@ import InCallManager from 'react-native-incall-manager';
 import { CommonActions } from '@react-navigation/native';
 import socket, { onConnected, emitPresenceUpdateIfChanged } from '../../sockets/socket';
 import { applyCallEndedGlobalRefsOnce } from '../../utils/globalEvents';
-import { clearEndingCallInProgress, captureSystemPiPReturnMediaSnapshot, resolvePiPLocalMutedState, markDirectCallVideoMediaActive, ongoingCallPrefersVideoMedia, resolveActiveCallInCallMedia, readInAppPiPAudioOutputRoute, readAuthoritativeCallAudioRouteAfterPiP, readLastAppliedCallAudioRoute, readActiveExternalCallAudioRoute, readConnectedExternalCallAudioRoute, setUserSelectedCallAudioRoute, readUserSelectedCallAudioRoute, readUserSelectedExternalCallAudioRoute, rememberManualBuiltinCallAudioRoute, readUserLockedBuiltinCallAudioRoute, clearBuiltinPinForExternalHeadsetConnect, markUserSelectedExternalCallAudioRoute } from '../../utils/activeCallSession';
+import { clearEndingCallInProgress, captureSystemPiPReturnMediaSnapshot, resolvePiPLocalMutedState, markDirectCallVideoMediaActive, ongoingCallPrefersVideoMedia, resolveActiveCallInCallMedia, readInAppPiPAudioOutputRoute, readAuthoritativeCallAudioRouteAfterPiP, readLastAppliedCallAudioRoute, readActiveExternalCallAudioRoute, readConnectedExternalCallAudioRoute, setUserSelectedCallAudioRoute, readUserSelectedCallAudioRoute, readUserSelectedExternalCallAudioRoute, rememberManualBuiltinCallAudioRoute, readUserLockedBuiltinCallAudioRoute, clearBuiltinPinForExternalHeadsetConnect, markUserSelectedExternalCallAudioRoute, isIncomingAnswerTransitionActive } from '../../utils/activeCallSession';
 import { buildCallEndSocketPayload } from '../../utils/callEndPayload';
 import { logger } from '../../utils/logger';
 import { readRootCurrentRouteName } from '../../utils/safeRootNavigation';
@@ -23,6 +23,7 @@ import {
   peekSystemPiPLeaveContextForReturn,
   refreshSystemPiPLeaveContextSnapshot,
   commitSystemPiPLeaveContextSnapshot,
+  clearSystemPiPLeaveContextSnapshot,
   isSystemPiPLeaveAudioOrigin,
   isSystemPiPSessionAudioOrigin,
   markSystemPiPSessionAudioOrigin,
@@ -667,6 +668,9 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
           if (restoreInAppExit) {
             setSuppressOverlayForReturn(false);
             clearInAppPiPSystemSuspendFlags();
+            // suppress мог уже быть false → setState no-op; форсим re-render overlay
+            // (иначе soft-hide остаётся на экране до showPiP, который Expanded мог отменить).
+            setPipRemoteViewKey((k) => k + 1);
             try {
               const gRestore = global as any;
               gRestore.__pendingInAppPiPRestoreAfterSystemRef =
@@ -1750,6 +1754,18 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       if (g.__videoCallActiveRef?.current === false) {
         return;
       }
+      // Accept handoff Incoming→Main: ложный leaveHint не должен готовить system/in-app PiP.
+      if (isIncomingAnswerTransitionActive()) {
+        logger.info('[PiPContext] AboutToEnterSystemPiP skipped — incoming answer transition');
+        logHomePiPTrace('js_about_to_enter_skip', { traceId, reason: 'incoming_answer_transition' });
+        try {
+          NativeModules.LiviAppModule?.cancelPendingSystemPiPEnter?.();
+          NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false);
+          g.__leavingVideoCallByHomeRef = g.__leavingVideoCallByHomeRef || { current: false };
+          g.__leavingVideoCallByHomeRef.current = false;
+        } catch (_) {}
+        return;
+      }
       // После expand/exit: late AboutToEnter не должен ставить enter_preserve / CaptureHost.
       // Back пока app active → in-app PiP. Home/фон (inactive|background) → system PiP.
       try {
@@ -2268,7 +2284,14 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     };
 
     const preferAudioOnlyUi = opts?.preferAudioOnlyUi === true;
-    const restoreInAppPiP = opts?.restoreInAppPiP === true;
+    const restoreInAppPiP =
+      opts?.restoreInAppPiP === true && !isIncomingAnswerTransitionActive();
+
+    if (opts?.restoreInAppPiP === true && !restoreInAppPiP) {
+      logger.info('[PiPContext] returnToCall restoreInAppPiP ignored — incoming answer transition');
+      releaseReturnToCallInFlight();
+      return;
+    }
 
     if (restoreInAppPiP) {
       try {
@@ -2292,6 +2315,9 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       setTimeout(() => {
         setSuppressOverlayForReturn(false);
         clearInAppPiPSystemSuspendFlags();
+        try {
+          clearSystemPiPLeaveContextSnapshot();
+        } catch (_) {}
         releaseReturnToCallInFlight();
         reenableAndroidSystemPiPLeaveHintAfterReturn();
       }, tailMs);
@@ -2596,6 +2622,9 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         } catch (_) {}
         clearInAppPiPSystemSuspendFlags();
         clearSystemPiPNeedsInAppRestore();
+        try {
+          clearSystemPiPLeaveContextSnapshot();
+        } catch (_) {}
         try {
           const g2 = global as any;
           if (g2.__pendingInAppPiPRestoreAfterSystemRef) {
