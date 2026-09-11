@@ -21,12 +21,16 @@ function isOutgoingDialHot(): boolean {
   }
 }
 
-/** После cancel/timeout refs могут кратко выглядеть hot — строку в списке всё равно показать сразу. */
+/** После cancel/decline/end refs могут кратко выглядеть hot — строку показать сразу. */
 function shouldDeferCallLogUi(): boolean {
   if (!isOutgoingDialHot()) return false;
   try {
-    const cancelAt = Number((global as any).__lastOutgoingCancelAtRef?.current || 0);
-    if (cancelAt > 0 && Date.now() - cancelAt < 6000) return false;
+    const g = global as any;
+    const forceAt = Number(g.__lastCallLogForceUiAtRef?.current || 0);
+    if (forceAt > 0 && Date.now() - forceAt < 8000) return false;
+    const cancelAt = Number(g.__lastOutgoingCancelAtRef?.current || 0);
+    // Сразу после отмены не глушить UI — иначе «Отменённый/Пропущенный» ждёт остывания dial refs.
+    if (cancelAt > 0 && Date.now() - cancelAt < 8000) return false;
   } catch {}
   return true;
 }
@@ -59,8 +63,12 @@ export function useCallLog(enabled: boolean) {
       if (shouldDeferCallLogUi()) {
         // Dial/redial: не трогаем FlatList — догоним после.
         if (retryTimer) clearTimeout(retryTimer);
-        retryTimer = setTimeout(softPull, 400);
+        retryTimer = setTimeout(softPull, 250);
         return;
+      }
+      if (retryTimer) {
+        clearTimeout(retryTimer);
+        retryTimer = null;
       }
       applySnap();
     };
@@ -68,7 +76,13 @@ export function useCallLog(enabled: boolean) {
     const snap = getCallLogSnapshot();
     if (snap.length) setEntries(snap);
     void loadCallLog().then((list) => {
-      if (!cancelled) setEntries(list);
+      if (cancelled) return;
+      if (shouldDeferCallLogUi()) {
+        if (retryTimer) clearTimeout(retryTimer);
+        retryTimer = setTimeout(softPull, 250);
+        return;
+      }
+      setEntries(list);
     });
 
     const offSoft = subscribeCallLogSoftUi(softPull);
@@ -76,8 +90,12 @@ export function useCallLog(enabled: boolean) {
       if (cancelled) return;
       if (shouldDeferCallLogUi()) {
         if (retryTimer) clearTimeout(retryTimer);
-        retryTimer = setTimeout(softPull, 400);
+        retryTimer = setTimeout(softPull, 250);
         return;
+      }
+      if (retryTimer) {
+        clearTimeout(retryTimer);
+        retryTimer = null;
       }
       applySnap(list);
     });

@@ -47,6 +47,7 @@ export async function applyNativeVoiceCallSpeaker(
     }
     // Не уводить в BT только из-за paired-in-case в available — нужен call-audio / user BT.
   } else {
+    // forceBuiltIn: setVoiceCallAudioRoute всегда снимает SCO (в отличие от setVoiceCallSpeakerOn).
     await applyNativeVoiceCallRoute(speakerOn ? 'SPEAKER_PHONE' : 'EARPIECE');
     return;
   }

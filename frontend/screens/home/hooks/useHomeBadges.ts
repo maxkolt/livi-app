@@ -216,29 +216,8 @@ export function useHomeBadges({ friends, friendsRef }: UseHomeBadgesArgs) {
   useEffect(() => {
     const off = onMissedIncrement(({ userId, count }) => {
       if (!userId) return;
-      // Сразу после cancel исходящего не трогаем Home setState — иначе все welcome-pane лагают.
-      try {
-        const at = Number((global as any).__lastOutgoingCancelAtRef?.current || 0);
-        if (at > 0 && Date.now() - at < 8000) {
-          const userIdStr = String(userId);
-          const prevCount = missedByUserRef.current[userIdStr] || 0;
-          const nextCount =
-            typeof count === 'number' ? Math.max(prevCount, count) : prevCount + 1;
-          if (nextCount > prevCount) {
-            missedByUserRef.current = { ...missedByUserRef.current, [userIdStr]: nextCount };
-          }
-          setTimeout(() => {
-            const n = missedByUserRef.current[userIdStr] || 0;
-            if (n <= 0) return;
-            setMissedByUser((prev) => {
-              const cur = prev[userIdStr] || 0;
-              if (n <= cur) return prev;
-              return { ...prev, [userIdStr]: n };
-            });
-          }, 8500);
-          return;
-        }
-      } catch {}
+      // Точку на Calls обновляем сразу (дёшево). Тяжёлый syncAppBadge уже
+      // откладывается/пропускается через debounce + __lastOutgoingCancelAtRef ниже.
       const userIdStr = String(userId);
       const prevCount = missedByUserRef.current[userIdStr] || 0;
       const nextCount =

@@ -474,7 +474,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         allowVideoRenderTimeoutRef.current = null;
       }
     };
-  }, [visible, remoteStreamVersion, delayMs, allowVideoRender, pendingSystemPiP]);
+  }, [visible, remoteStreamVersion, remoteCamOn, delayMs, allowVideoRender, pendingSystemPiP]);
 
   // Системный PiP (Android): только видео + системная кнопка X. In-app PiP: верхняя панель + видео.
   useEffect(() => {
@@ -2829,8 +2829,23 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     if (patch.isRemoteMuted !== undefined) setIsRemoteMuted(patch.isRemoteMuted);
     if (patch.localCamOn !== undefined) setLocalCamOn(patch.localCamOn);
     if (patch.remoteCamOn !== undefined) {
-      setRemoteCamOn((prev) => (prev === patch.remoteCamOn ? prev : !!patch.remoteCamOn));
+      const nextCam = !!patch.remoteCamOn;
+      remoteCamOnRef.current = nextCam;
+      setRemoteCamOn((prev) => (prev === nextCam ? prev : nextCam));
       // Не бампим remoteStreamVersion только из-за cam flag — это крутило ensure→flush loop.
+      // Mid-PiP peer cam ON: если стрим уже live — разрешить RTC без ожидания TrackSubscribed bump.
+      if (
+        nextCam &&
+        mediaStreamHasLiveVideo(remoteStreamRef.current) &&
+        shouldAllowRtcVideoRenderInInAppPiP({
+          localCamOn: localCamOnRef.current,
+          remoteCamOn: true,
+          remoteStream: remoteStreamRef.current,
+          localStream: localStreamRef.current,
+        })
+      ) {
+        setAllowVideoRender(true);
+      }
     }
     if (patch.pipPos) setPipPos(patch.pipPos);
     if (patch.allowVideoRender !== undefined) {

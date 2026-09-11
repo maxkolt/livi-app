@@ -222,11 +222,30 @@ export function pipInAppBarEnteredFromAudioOnly(): boolean {
   }
 }
 
-/** In-app PiP: RTC в превью-слоте только при выходе с video UI (с audio — аватар как раньше). */
-export function shouldAllowRtcVideoInInAppPiPBar(opts?: { fromAudioOnlyUi?: boolean }): boolean {
+/** In-app PiP: RTC в превью-слоте при выходе с video UI; с audio — аватар, пока peer не включил live video. */
+export function shouldAllowRtcVideoInInAppPiPBar(opts?: {
+  fromAudioOnlyUi?: boolean;
+  remoteCamOn?: boolean;
+  remoteStream?: unknown;
+}): boolean {
+  // Mid-PiP: peer включил камеру — показать RTC даже если ушли с audio UI.
+  if (opts?.remoteCamOn === true && mediaStreamHasLiveVideo(opts?.remoteStream)) {
+    return true;
+  }
   if (opts?.fromAudioOnlyUi === true) return false;
   try {
-    if (pipInAppBarEnteredFromAudioOnly()) return false;
+    if (pipInAppBarEnteredFromAudioOnly()) {
+      try {
+        const session = (global as any).__webrtcSessionRef?.current;
+        if (
+          session?.getRemoteCamEnabled?.() === true &&
+          mediaStreamHasLiveVideo(opts?.remoteStream ?? session?.getRemoteStream?.())
+        ) {
+          return true;
+        }
+      } catch {}
+      return false;
+    }
   } catch {}
   return true;
 }

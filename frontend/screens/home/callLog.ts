@@ -59,9 +59,31 @@ export function cancelPendingCallLogNotify(): void {
 }
 
 /**
- * Сразу показать актуальный memory в Calls (cancel / timeout / decline / hangup).
- * Soft + полный notify: вкладка Calls обновляется даже если dial-hot глушил один из каналов.
+ * Сразу показать журнал Calls после cancel / decline / hangup.
+ * Снимает dial-hot defer в useCallLog (иначе строка ждёт остывания refs).
  */
+export function forceCallLogUiNow(reason?: string): void {
+  try {
+    const g = global as any;
+    g.__lastCallLogForceUiAtRef = g.__lastCallLogForceUiAtRef || { current: 0 };
+    g.__lastCallLogForceUiAtRef.current = Date.now();
+    const r = String(reason || '');
+    // cancelAt только для локальной отмены исходящего / decline.
+    // Не ставить для callee missed: иначе useHomeBadges откладывает точку на Calls ~8.5с.
+    const isCalleeMissed = /missed/i.test(r);
+    if (!isCalleeMissed && (/cancel|declin|timeout|busy/i.test(r) || !r)) {
+      g.__lastOutgoingCancelAtRef = g.__lastOutgoingCancelAtRef || { current: 0 };
+      g.__lastOutgoingCancelAtRef.current = Date.now();
+    }
+    g.__outgoingCallUiActiveRef = g.__outgoingCallUiActiveRef || { current: false };
+    g.__outgoingCallUiActiveRef.current = false;
+    g.__outgoingStartInFlightRef = g.__outgoingStartInFlightRef || { current: false };
+    g.__outgoingStartInFlightRef.current = false;
+  } catch {}
+  flushCallLogUi();
+}
+
+/** Soft + полный notify: вкладка Calls обновляется даже если dial-hot глушил один из каналов. */
 export function flushCallLogUi(): void {
   cancelPendingCallLogNotify();
   notify();
@@ -212,13 +234,39 @@ export function recordCallLog(
   };
 
   const apply = (prev: CallLogEntry[]) => {
-    const next = [entry, ...prev].slice(0, MAX_ENTRIES);
+    // После cancel late silent-outgoing не должен снова положить «Исходящий» поверх «Отменённый».
+    if (input.direction === 'outgoing') {
+      const recentCancelled = prev.some(
+        (item) =>
+          item.peerId === peerId &&
+          item.direction === 'cancelled' &&
+          at - item.at <= OUTGOING_TO_CANCELLED_MS,
+      );
+      if (recentCancelled) return;
+    }
+    let base = prev;
+    if (input.direction === 'cancelled') {
+      base = prev.filter(
+        (item) =>
+          !(
+            item.peerId === peerId &&
+            item.direction === 'outgoing' &&
+            at - item.at <= OUTGOING_TO_CANCELLED_MS
+          ),
+      );
+    }
+    const next = [entry, ...base].slice(0, MAX_ENTRIES);
     memory = next;
     memoryUid = uid;
     persist(uid, next);
     if (!silent) {
       cancelPendingCallLogNotify();
       notify();
+      softUiListeners.forEach((cb) => {
+        try {
+          cb();
+        } catch {}
+      });
     }
   };
 
@@ -228,8 +276,9 @@ export function recordCallLog(
 
 /**
  * Только своя отмена инициатора до ответа: исходящий → cancelled.
- * У абонента при отмене звонящего — пропущенный (не эта функция).
- * Memory/disk сразу; notify можно silent / отложить (не блокировать тапы после cancel).
+ * Также: создаёт cancelled, если outgoing ещё не успели записать (быстрый cancel/decline).
+ * У абонента при отмене звонящего — пропущенный (recordMissed / recordCallLog missed).
+ * У абонента при своём decline — тоже cancelled через эту же функцию (peer = caller).
  */
 export function recordCancelledCall(
   peerIdRaw: string,
@@ -282,6 +331,11 @@ export function recordCancelledCall(
     } else {
       cancelPendingCallLogNotify();
       notify();
+      softUiListeners.forEach((cb) => {
+        try {
+          cb();
+        } catch {}
+      });
     }
   };
 
@@ -312,6 +366,11 @@ export function recordCancelledCall(
       } else {
         cancelPendingCallLogNotify();
         notify();
+        softUiListeners.forEach((cb) => {
+          try {
+            cb();
+          } catch {}
+        });
       }
     });
   }

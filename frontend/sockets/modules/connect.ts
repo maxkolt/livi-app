@@ -526,6 +526,11 @@ export function setActiveVideoCall(active: boolean, partnerDisplayName?: string 
       } catch (_) {}
     } else {
       stopActiveCallNotification();
+      // Cancel исходящего (чат/друзья) раньше оставлял leaveHint=true → ложный system PiP.
+      try {
+        NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false);
+        NativeModules.LiviAppModule?.setSystemPiPCapturePlaceholderOnly?.(false);
+      } catch (_) {}
     }
   }
   if (

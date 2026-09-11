@@ -39,6 +39,7 @@ import SystemPiPCaptureHost from "./src/pip/SystemPiPCaptureHost";
 import { ensureCometChatReady } from "./chat/cometchat";
 import type { RootStackParamList } from "./navigation/types";
 import { addNotificationListeners, ensureInitialNotificationPermissions, openIncomingCallScreen, openAnswerCallScreen, handleDeclineCallFromDeepLink, registerAndSendPushToken, clearCallRelatedNotificationsAndSyncBadge, syncAppBadgeFromMissedCount, clearMissedBadgeCleared, recordMissedCallForUser, applyPendingMissedCallsFromNative, getMissedCountByUserFromNative } from './utils/pushNotifications';
+import { flushCallLogUi, forceCallLogUiNow, recordCallLog, recordCancelledCall } from './screens/home/callLog';
 import { getInstallId } from './utils/installId';
 import { notifyIncomingShare, pullPendingShareFromNative, subscribeIncomingShare, type IncomingShareItem } from './utils/incomingShare';
 import { ensureInitialMediaPermissions } from './utils/mediaPermissions';
@@ -1126,19 +1127,7 @@ function AppContent() {
         repeatNativeCallSignal('cancel', callId);
         return;
       }
-      (global as any).__outgoingCanceledByNativeRef.current = true;
-      if (callId) {
-        repeatNativeCallSignal('cancel', callId);
-      } else if (currentOutgoing) {
-        // Activity ещё без callId (после нескольких redial broadcast часто не доходит),
-        // пользователь нажал X — это отмена текущего дозвона. Игнор залипает JS: calling.visible
-        // остаётся true, сбросить звонок уже нельзя.
-        logger.info('[App] OutgoingCallCanceledByUser without callId — cancel current outgoing', {
-          currentOutgoing,
-          provisionalNativeId: rawCallId.startsWith('pending_') ? rawCallId : null,
-        });
-        repeatNativeCallSignal('cancel', currentOutgoing);
-      } else {
+      if (!callId && !currentOutgoing) {
         const attempt = Number((global as any).__activeOutgoingAttemptRef?.current || 0);
         const uiActive = (global as any).__outgoingCallUiActiveRef?.current === true;
         if (attempt <= 0 && !uiActive) {
@@ -1157,6 +1146,41 @@ function AppContent() {
           provisionalNativeId: rawCallId.startsWith('pending_') ? rawCallId : null,
         });
       }
+      (global as any).__outgoingCanceledByNativeRef.current = true;
+      // Текущий исходящий реально отменяем: снять video+leaveHint до AppState,
+      // иначе cancel из чата оставляет activeVideoCall и ложный system PiP.
+      try {
+        const g = global as any;
+        g.__disableSystemPiPUntilRef = g.__disableSystemPiPUntilRef || { current: 0 };
+        g.__disableSystemPiPUntilRef.current = Date.now() + 4000;
+        g.__videoCallActiveRef = g.__videoCallActiveRef || { current: false };
+        g.__videoCallActiveRef.current = false;
+        g.__currentCallPiPParamsRef = g.__currentCallPiPParamsRef || { current: null };
+        g.__currentCallPiPParamsRef.current = null;
+      } catch {}
+      try {
+        setActiveVideoCall(false);
+      } catch {}
+      if (Platform.OS === 'android') {
+        try {
+          NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false);
+        } catch {}
+        try {
+          NativeModules.LiviAppModule?.requestExitSystemPiP?.();
+        } catch {}
+      }
+      if (callId) {
+        repeatNativeCallSignal('cancel', callId);
+      } else if (currentOutgoing) {
+        // Activity ещё без callId (после нескольких redial broadcast часто не доходит),
+        // пользователь нажал X — это отмена текущего дозвона. Игнор залипает JS: calling.visible
+        // остаётся true, сбросить звонок уже нельзя.
+        logger.info('[App] OutgoingCallCanceledByUser without callId — cancel current outgoing', {
+          currentOutgoing,
+          provisionalNativeId: rawCallId.startsWith('pending_') ? rawCallId : null,
+        });
+        repeatNativeCallSignal('cancel', currentOutgoing);
+      }
       try {
         emitCloseOutgoingCall({
           reason: 'native_cancel',
@@ -1165,12 +1189,22 @@ function AppContent() {
       } catch {}
     });
     const sub2 = emitter.addListener('IncomingCallDeclinedByUser', (payload?: { callId?: string | null }) => {
+      const callerPeer =
+        String(getIncomingCallScreenState().fromUserId || '').trim() ||
+        String((global as any).__lastIncomingFromUserIdRef?.current || '').trim();
       repeatNativeCallSignal('decline', payload?.callId);
       incomingCallIdRef.current = null;
       setIncoming(null);
       try { setIncomingCallScreenVisible(false); } catch {}
       try { stopIncomingCallAlert(); } catch {}
       try { emitCloseIncoming(); emitRequestCloseIncoming(); } catch {}
+      // У отклонившего — «Отменённый звонок».
+      if (callerPeer) {
+        try {
+          recordCancelledCall(callerPeer);
+          forceCallLogUiNow('incoming_declined_native');
+        } catch {}
+      }
       // Бейдж «Вызов отменен» на главном экране (тот, кому звонили, отклонил в приложении)
       applyCallCancelledHomeNotice(navRef);
     });
@@ -1601,6 +1635,16 @@ function AppContent() {
               stopIncomingCallAlert();
               setIncoming(null);
               try { emitCloseIncoming(); emitRequestCloseIncoming(); } catch {}
+              // У отклонившего — «Отменённый звонок» (не пропущенный).
+              try {
+                const callerPeer =
+                  String(getIncomingCallScreenState().fromUserId || '').trim() ||
+                  String((global as any).__lastIncomingFromUserIdRef?.current || '').trim();
+                if (callerPeer) {
+                  recordCancelledCall(callerPeer);
+                  forceCallLogUiNow('incoming_declined_callkeep');
+                }
+              } catch {}
               // Бейдж «Вызов отменен» на главном экране (тот, кому звонили, отклонил)
               applyCallCancelledHomeNotice(navRef);
             } else if (isCaller) {
@@ -2865,6 +2909,11 @@ function AppContent() {
       displayIncomingCall(d.callId, d.from, d.fromNick ?? '', hasVideo, d.callKitId);
     }
     try { AsyncStorage.setItem('last_incoming_from', String(d.from || '')); } catch {}
+    try {
+      const g = global as any;
+      g.__lastIncomingFromUserIdRef = g.__lastIncomingFromUserIdRef || { current: null };
+      g.__lastIncomingFromUserIdRef.current = String(d.from || '').trim() || null;
+    } catch {}
   }, [routeName]);
 
   // Сохраняем обработчик в ref для использования в fallback и для пуша
@@ -3435,7 +3484,7 @@ function AppContent() {
         (global as any).__videoCallActiveRef = { current: false };
       } catch (_) {}
       // Не эмитим emitCloseOutgoingCall — иначе onCloseOutgoingCall вызовет второй setCalling и второе мерцание
-      // call:declined = тот, кому звонили, отклонил — пропущенным не считаем, счётчик не увеличиваем
+      // call:declined = тот, кому звонили, отклонил — пропущенным не считаем; «Отменённый» пишет HomeScreen offDeclined.
     });
     const offCancel = onCallCanceled?.(async (d) => {
       const callerId =
@@ -3528,7 +3577,14 @@ function AppContent() {
           g.__videoCallActiveRef = g.__videoCallActiveRef || { current: false };
           g.__videoCallActiveRef.current = false;
         } catch (_) {}
-        // Call log / missed сразу после cancel (All и Missed). Раньше 8s — мерцание badge; строка важнее.
+        // Журнал Calls сразу (не ждать setTimeout/badge) — иначе «Пропущенный» опаздывает.
+        if (callerId) {
+          try {
+            recordCallLog({ peerId: callerId, direction: 'missed' });
+            forceCallLogUiNow('call_cancel_missed_home');
+          } catch (_) {}
+        }
+        // Call log / missed badge после cancel. Раньше 8s — мерцание badge; строка важнее.
         setTimeout(async () => {
           try { emitCallCancelledOnHome(callerId); } catch (_) {}
           try {
@@ -3564,6 +3620,10 @@ function AppContent() {
       // Пропущенный у получателя (callee), если дозвон успел пройти; для callee на Home — в setTimeout выше
       try {
         if (callerId && isCallee && !calleeAlreadyOnHome) {
+          try {
+            recordCallLog({ peerId: callerId, direction: 'missed' });
+            forceCallLogUiNow('call_cancel_missed');
+          } catch {}
           await recordMissedCallForUser(callerId, {
             callId: callIdStr,
             source: 'call:cancel',

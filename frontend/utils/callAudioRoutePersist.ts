@@ -1305,24 +1305,23 @@ async function applyNativeOutputRouteImmediate(
   if (route === 'SPEAKER_PHONE') {
     if (isStaleBuiltInApply('SPEAKER_PHONE')) return;
     // Android 12+: setCommunicationDevice сразу — не ждать InCallManager.
-    const nativeP = applyNativeVoiceCallSpeaker(true, { forceBuiltIn });
+    // Не await bridge: ручной cycle ear↔speaker не должен стоять в очереди.
+    void applyNativeVoiceCallSpeaker(true, { forceBuiltIn });
     try {
       (InCallManager as any).setForceSpeakerphoneOn?.(true);
       InCallManager.setSpeakerphoneOn(true);
       void (InCallManager as any).chooseAudioRoute?.('SPEAKER_PHONE');
     } catch {}
-    await nativeP;
     return;
   }
   if (route === 'EARPIECE') {
     if (isStaleBuiltInApply('EARPIECE')) return;
-    const nativeP = applyNativeVoiceCallSpeaker(false, { forceBuiltIn });
+    void applyNativeVoiceCallSpeaker(false, { forceBuiltIn });
     try {
       (InCallManager as any).setForceSpeakerphoneOn?.(false);
       InCallManager.setSpeakerphoneOn(false);
       void (InCallManager as any).chooseAudioRoute?.('EARPIECE');
     } catch {}
-    await nativeP;
   }
 }
 
@@ -1558,6 +1557,7 @@ let manualRouteApplyChain: Promise<void> = Promise.resolve();
 /**
  * Ручной цикл кнопки: latest-wins очередь.
  * Повторный тап во время apply не откатывает звук «догоняющим» предыдущим маршрутом.
+ * EAR↔SPEAKER не await'им native — иначе тап ждёт bridge и звук «тупит».
  */
 export function applyCallAudioOutputRouteLatest(
   route: InCallAudioRoute,
@@ -1594,11 +1594,21 @@ export function applyCallAudioOutputRouteLatest(
         routeToApply = want;
       }
       lastNativeInCallSignature = '';
-      await applyCallAudioOutputRouteNow(routeToApply, {
+      const applyOpts = {
         ...job.opts,
         forceBuiltIn:
           job.opts?.forceBuiltIn ?? !isExternalHeadsetRoute(routeToApply),
-      });
+      };
+      const isBuiltIn =
+        routeToApply === 'EARPIECE' || routeToApply === 'SPEAKER_PHONE';
+      if (isBuiltIn) {
+        // Fire-and-forget: очередь не блокируется на RN bridge / AudioManager.
+        void applyCallAudioOutputRouteNow(routeToApply, applyOpts).catch(() => {});
+        // Дать шанс схлопнуть быстрые повторные тапы в том же тике.
+        await Promise.resolve();
+        continue;
+      }
+      await applyCallAudioOutputRouteNow(routeToApply, applyOpts);
     }
   };
   manualRouteApplyChain = manualRouteApplyChain.then(drain, drain);

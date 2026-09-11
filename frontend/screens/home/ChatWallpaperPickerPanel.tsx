@@ -24,9 +24,6 @@ import {
   WELCOME_HEADER_TITLE,
 } from './constants';
 
-/** Как у кнопки «Удалить профиль» на welcome hub. */
-const WELCOME_FOOTER_EDGE_GAP = 14;
-
 export type ChatWallpaperPickerPanelProps = {
   theme: ChatWallpaperTheme;
   lang: Lang;
@@ -137,11 +134,14 @@ function ChatWallpaperPickerPanelInner({
           </View>
         )}
       />
+    </View>
+  );
+
+  const successSlot = (
+    <View style={styles.successSlot} pointerEvents="none">
       {applied ? (
-        <View style={styles.successOverlay} pointerEvents="none">
-          <View style={styles.successBadge}>
-            <Text style={styles.successText}>{t('chatWallpaperApplied', lang)}</Text>
-          </View>
+        <View style={styles.successBadge}>
+          <Text style={styles.successText}>{t('chatWallpaperApplied', lang)}</Text>
         </View>
       ) : null}
     </View>
@@ -155,22 +155,25 @@ function ChatWallpaperPickerPanelInner({
             {title}
           </Text>
         )}
-        <View style={styles.carouselSlotWelcome}>{carouselBlock}</View>
-        <View style={styles.footerWelcome}>
-          <Pressable
-            style={({ pressed }) => [
-              styles.applyBtnWelcome,
-              (applying || applied) && styles.applyBtnWelcomeDisabled,
-              pressed && !applying && !applied && styles.applyBtnWelcomePressed,
-            ]}
-            disabled={applying || applied}
-            onPress={() => {
-              void runApply();
-            }}
-            accessibilityRole="button"
-          >
-            <Text style={styles.applyTextWelcome}>{t('chatWallpaperApply', lang)}</Text>
-          </Pressable>
+        <View style={styles.blockWelcome}>
+          {carouselBlock}
+          <View style={styles.footerWelcome}>
+            {successSlot}
+            <Pressable
+              style={({ pressed }) => [
+                styles.applyBtnWelcome,
+                (applying || applied) && styles.applyBtnWelcomeDisabled,
+                pressed && !applying && !applied && styles.applyBtnWelcomePressed,
+              ]}
+              disabled={applying || applied}
+              onPress={() => {
+                void runApply();
+              }}
+              accessibilityRole="button"
+            >
+              <Text style={styles.applyTextWelcome}>{t('chatWallpaperApply', lang)}</Text>
+            </Pressable>
+          </View>
         </View>
       </View>
     );
@@ -183,6 +186,8 @@ function ChatWallpaperPickerPanelInner({
       </Text>
 
       {carouselBlock}
+
+      {successSlot}
 
       <View
         style={[
@@ -255,17 +260,26 @@ const styles = StyleSheet.create({
     marginHorizontal: -WELCOME_FRIENDS_LIST_INSET,
     justifyContent: 'center',
     pointerEvents: 'auto',
+    transform: [{ translateY: -18 }],
   },
-  carouselSlotWelcome: {
+  blockWelcome: {
     flex: 1,
     minHeight: 0,
     justifyContent: 'center',
+    paddingTop: 36,
   },
   footerWelcome: {
     marginHorizontal: WELCOME_FRIENDS_LIST_INSET,
-    paddingTop: WELCOME_FOOTER_EDGE_GAP,
-    paddingBottom: WELCOME_FOOTER_EDGE_GAP,
+    paddingTop: 8,
+    paddingBottom: 8,
     flexShrink: 0,
+    transform: [{ translateY: -28 }],
+  },
+  successSlot: {
+    minHeight: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 16,
   },
   applyBtnWelcome: {
     paddingVertical: 11,
@@ -319,26 +333,21 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '700',
   },
-  successOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
   successBadge: {
     borderRadius: 12,
     paddingVertical: 7,
-    paddingHorizontal: 10,
+    paddingHorizontal: 12,
     borderWidth: 1,
-    backgroundColor: 'rgba(34, 197, 94, 0.22)',
-    borderColor: 'rgba(22, 163, 74, 0.9)',
+    backgroundColor: 'rgba(52, 120, 82, 0.14)',
+    borderColor: 'rgba(92, 148, 110, 0.38)',
     alignItems: 'center',
     justifyContent: 'center',
-    maxWidth: '55%',
+    maxWidth: '90%',
   },
   successText: {
     color: LIVI.white,
     fontSize: 12,
-    fontWeight: '500',
+    fontWeight: '400',
     textAlign: 'center',
   },
 });

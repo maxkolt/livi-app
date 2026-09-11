@@ -224,8 +224,9 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
   }, [visible]);
 
   const pipFromAudioOnly = pipInAppBarEnteredFromAudioOnly();
-  /** Выход с video UI — слот превью peer (видео или логотип LiVi). С audio — как раньше. */
-  const showPeerVideoPreviewSlot = !pipFromAudioOnly;
+  const peerHasLiveVideo = remoteCamOn && mediaStreamHasLiveVideo(remoteStream);
+  /** Video UI → слот превью; audio UI → слот только когда peer уже шлёт live video (mid-PiP cam on). */
+  const showPeerVideoPreviewSlot = !pipFromAudioOnly || peerHasLiveVideo;
   const remoteStreamUrl =
     remoteStream && typeof (remoteStream as any).toURL === 'function'
       ? String((remoteStream as any).toURL())
@@ -233,9 +234,8 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
   const showPeerLiveVideo =
     showPeerVideoPreviewSlot &&
     allowVideoRender &&
-    remoteCamOn &&
-    !!remoteStreamUrl &&
-    mediaStreamHasLiveVideo(remoteStream);
+    peerHasLiveVideo &&
+    !!remoteStreamUrl;
   /** Ушли с видео-экрана в in-app PiP — подсветить «вернуться в видео», как активный динамик. */
   const pipVideoReturnHighlight = !pipFromAudioOnly;
   const btAccent = useMemo(() => uiAccent(!isDark), [isDark]);

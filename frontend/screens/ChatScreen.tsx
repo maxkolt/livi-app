@@ -1698,10 +1698,22 @@ export default function ChatScreen({ route, navigation }: Props) {
     openDeleteConfirmMulti(Array.from(selectedMessageIds));
   }, [selectedCount, selectedMessageIds, openDeleteConfirmMulti]);
 
+  const lastChatCallTapAtRef = useRef(0);
 
   const handleHeaderCall = React.useCallback(() => {
     const id = String(peerId || '').trim();
     if (!id) return;
+    const now = Date.now();
+    // Двойной тап по трубке в шапке чата — один исходящий.
+    if (now - lastChatCallTapAtRef.current < 1200) return;
+    try {
+      const g = global as any;
+      if (g.__outgoingStartInFlightRef?.current === true) return;
+      if (g.__outgoingCallUiActiveRef?.current === true) return;
+      if (g.__outgoingCallScreenVisibleRef?.current === true) return;
+      if (g.__videoCallActiveRef?.current === true) return;
+    } catch {}
+    lastChatCallTapAtRef.current = now;
     emitRequestDirectCall({
       peerId: id,
       peerName: peerNameState,

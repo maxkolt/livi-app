@@ -88,7 +88,7 @@ import { HomeWelcomeTabBar, type WelcomeTabId } from './home/HomeWelcomeTabBar';
 import { WelcomeKeepAlivePane } from './home/WelcomeKeepAlivePane';
 import { WelcomeStageBackground } from './home/WelcomeStageBackground';
 import { WELCOME_HEADER_TITLE, WELCOME_STAGE_BG } from './home/constants';
-import { recordCallLog, recordCancelledCall, requestCallLogSoftUi, cancelPendingCallLogNotify, flushCallLogUi, loadCallLog } from './home/callLog';
+import { recordCallLog, recordCancelledCall, requestCallLogSoftUi, cancelPendingCallLogNotify, flushCallLogUi, forceCallLogUiNow, loadCallLog } from './home/callLog';
 import { prefetchChatPreviews } from './home/hooks/useChatPreviews';
 import { clearEndingCallInProgress } from '../utils/activeCallSession';
 import { clearDirectCallAudioRouteCarryoverAfterCallEnd } from '../utils/callAudioRoutePersist';
@@ -1027,6 +1027,12 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const lastOutgoingExternalCloseResetAtRef = useRef(0);
   /** Generation for __outgoingStartInFlightRef — old finally must not block/clear a newer redial. */
   const outgoingStartGenRef = useRef(0);
+  /**
+   * Повторный тап на того же peer пока dial жив → ignore (не replace).
+   * Иначе callee: cancel+новый Incoming = мерцание / экран сам пропадает.
+   * Cancel→redial: после cancel callingVisible/inFlight сброшены, userCanceled=true.
+   */
+  const lastOutgoingDialTapRef = useRef<{ peerId: string; at: number } | null>(null);
 
   const readOutgoingRedialGraceUntil = () => {
     try {
@@ -1121,6 +1127,11 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const forceResetCallBusyRefs = useCallback((opts?: { skipEndedCallback?: boolean }) => {
     try {
       const g = global as any;
+      // Сначала socket/FGS/leaveHint: исходящий video (чат) ставил setActiveVideoCall(true)
+      // до accept — без сброса cancel оставлял activeVideoCall+PiP «живыми».
+      try {
+        setActiveVideoCall(false);
+      } catch {}
       g.__videoCallPartnerUserIdRef = g.__videoCallPartnerUserIdRef || { current: null };
       g.__videoCallPartnerUserIdRef.current = null;
       g.__videoCallActiveRef = g.__videoCallActiveRef || { current: false };
@@ -1144,6 +1155,22 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       } catch {}
       g.__callEndedFromPiPNoOpenRef = g.__callEndedFromPiPNoOpenRef || { current: false };
       g.__callEndedFromPiPNoOpenRef.current = false;
+      if (Platform.OS === 'android') {
+        try {
+          g.__disableSystemPiPUntilRef = g.__disableSystemPiPUntilRef || { current: 0 };
+          g.__disableSystemPiPUntilRef.current = Date.now() + 4000;
+        } catch {}
+        try {
+          NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false);
+        } catch {}
+        try {
+          NativeModules.LiviAppModule?.requestExitSystemPiP?.();
+        } catch {}
+      }
+      try {
+        const hidePiP = g.__pipHidePiPRef?.current;
+        if (typeof hidePiP === 'function') hidePiP();
+      } catch {}
       // После native cancel Outgoing: __onVideoCallEndedRef → loadFriends блокирует табы/redial на секунды.
       if (!opts?.skipEndedCallback) {
         g.__onVideoCallEndedRef?.current?.();
@@ -1613,7 +1640,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       } catch {}
       try {
         recordCancelledCall(peerForLog);
-        flushCallLogUi();
+        forceCallLogUiNow('native_cancel');
         logger.info('[welcome-tab] callLog cancelled', {
           peerId: peerForLog,
           sinceCancelMs: Date.now() - Number((global as any).__lastOutgoingCancelAtRef?.current || Date.now()),
@@ -1671,7 +1698,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       clearFriendsCallBusy([callerId, peerId]);
       if (peerId) {
         recordCancelledCall(peerId);
-        try { flushCallLogUi(); } catch {}
+        forceCallLogUiNow('onCallCanceled');
       }
       lastOutgoingPeerIdRef.current = null;
       activeOutgoingAttemptRef.current = 0;
@@ -1740,15 +1767,60 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       showNotice(t('finishCurrentCallFirst', lang), 'info', 2500);
       return;
     }
+    const peerId = String(friend.id || '').trim();
+    const dialingPeerId = String(
+      calling.friend?.id || lastOutgoingPeerIdRef.current || lastOutgoingDialTapRef.current?.peerId || '',
+    ).trim();
+    const inRedialGraceEarly = Date.now() < readOutgoingRedialGraceUntil();
+    // Гонка двойного тапа (чат): второй start до inFlight — глушим recent same-peer.
+    // Cancel→redial не трогаем: userCanceled / redial grace.
+    const recentSamePeerTap =
+      !!peerId &&
+      peerId === String(lastOutgoingDialTapRef.current?.peerId || '').trim() &&
+      Date.now() - Number(lastOutgoingDialTapRef.current?.at || 0) < 1200 &&
+      !outgoingCallUserCanceledRef.current &&
+      !inRedialGraceEarly;
+    const dialActive =
+      callingVisibleRef.current === true ||
+      gStart.__outgoingStartInFlightRef?.current === true ||
+      activeOutgoingAttemptRef.current > 0;
+    // Весь dial того же peer — ignore. Окно в мс недостаточно: replace после 1с → мерцание Incoming.
+    const samePeerAlreadyDialing =
+      !!peerId &&
+      peerId === dialingPeerId &&
+      dialActive &&
+      !outgoingCallUserCanceledRef.current;
+    if (samePeerAlreadyDialing || recentSamePeerTap) {
+      logger.info('[HomeScreen] ignore duplicate dial tap (same peer)', {
+        peerId,
+        media,
+        recentSamePeerTap,
+        sinceMs: Date.now() - Number(lastOutgoingDialTapRef.current?.at || 0),
+        callingVisible: callingVisibleRef.current,
+        inFlight: gStart.__outgoingStartInFlightRef?.current === true,
+        activeAttempt: activeOutgoingAttemptRef.current,
+      });
+      return;
+    }
+    if (peerId) {
+      lastOutgoingDialTapRef.current = { peerId, at: Date.now() };
+    }
     gStart.__outgoingStartInFlightRef = gStart.__outgoingStartInFlightRef || { current: false };
-    const inRedialGrace = Date.now() < readOutgoingRedialGraceUntil();
+    const inRedialGrace = inRedialGraceEarly;
     const uiIdleForRedial =
       !callingVisibleRef.current && activeOutgoingAttemptRef.current <= 0;
     if (gStart.__outgoingStartInFlightRef.current) {
-      // Всегда supersede: skip duplicate глотал cancel→redial и double-tap.
+      // Supersede только для cancel→redial / другого peer. Same-peer dial уже отсечён выше.
       const sameFriendInFlight =
         String(calling.friend?.id || lastOutgoingPeerIdRef.current || '') ===
         String(friend.id);
+      if (sameFriendInFlight && !inRedialGrace && !outgoingCallUserCanceledRef.current) {
+        logger.info('[HomeScreen] ignore duplicate dial while same peer in flight', {
+          friendId: friend.id,
+          media,
+        });
+        return;
+      }
       logger.info('[HomeScreen] supersede stale outgoing start in flight (redial)', {
         friendId: friend.id,
         media,
@@ -1781,7 +1853,24 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     if (activeOutgoingAttemptRef.current > 0) {
       clearStaleOutgoingAttemptIfIdle();
       if (activeOutgoingAttemptRef.current > 0 && callingVisibleRef.current) {
-        // Уже идёт исходящий UI — не silent-return с залипшим inFlight: сбросить и набрать снова.
+        const samePeerActive =
+          !!peerId &&
+          peerId ===
+            String(calling.friend?.id || lastOutgoingPeerIdRef.current || '').trim() &&
+          !outgoingCallUserCanceledRef.current;
+        if (samePeerActive) {
+          // Защита: не cancel текущего dial того же peer (callee Incoming мерцает/пропадает).
+          logger.info('[HomeScreen] ignore replace — same peer already dialing', {
+            friendId: friend.id,
+            media,
+            activeOutgoingAttempt: activeOutgoingAttemptRef.current,
+          });
+          if (outgoingStartGenRef.current === startGen) {
+            gStart.__outgoingStartInFlightRef.current = false;
+          }
+          return;
+        }
+        // Другой peer / явный redial после cancel — заменить активный исходящий.
         logger.info('[HomeScreen] replacing active outgoing attempt on new call tap', {
           friendId: friend.id,
           media,
@@ -1886,6 +1975,10 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           (global as any).__outgoingCallPeerNickRef || { current: null };
         (global as any).__outgoingCallPeerNickRef.current = friendName || null;
       } catch {}
+      // Outgoing в журнал сразу (silent) — cancel сможет перевести в cancelled без гонки setTimeout(0).
+      try {
+        recordCallLog({ peerId: String(friend.id), direction: 'outgoing', silent: true });
+      } catch {}
       callingVisibleRef.current = true;
       clearOutgoingRedialGrace();
       setOutgoingCallScreenVisible(true);
@@ -1911,12 +2004,18 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       });
       setTimeout(() => {
         if (!isCurrentAttempt()) return;
+        if (outgoingCallUserCanceledRef.current) return;
+        try {
+          const cancelAt = Number((global as any).__lastOutgoingCancelAtRef?.current || 0);
+          if (cancelAt > 0 && Date.now() - cancelAt < 8000) return;
+        } catch {}
         try { warmCallSignaling(); } catch {}
         try { prefetchDirectCallIce('home:direct-call-start'); } catch {}
         // Audio prewarm нельзя стартовать на исходящем: mic capture глушит native ringback
         // (LiviOutgoingCallService). Prewarm mic — после call:accepted в App.tsx.
         // На redial после прошлого звонка сбрасываем залипший prewarm/mic.
         try { disposeDirectCallAudioPrewarm('home:outgoing-start'); } catch {}
+        // Outgoing уже пишется sync выше; здесь только если early record не успел (dedupe).
         try { recordCallLog({ peerId: String(friend.id), direction: 'outgoing', silent: true }); } catch {}
       }, 0);
 
@@ -2058,7 +2157,14 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
             callingVisibleRef.current = false;
             setCalling({ visible: false, friend: null, callId: null });
             setSwipeActionsHiddenForCall(null);
-            try { flushCallLogUi(); } catch {}
+            // Callee отклонил → у инициатора тоже «Отменённый звонок» (не оставлять «Исходящий»).
+            try {
+              recordCancelledCall(String(friend.id));
+              forceCallLogUiNow('declined');
+              logger.info('[welcome-tab] callLog cancelled (declined)', {
+                peerId: String(friend.id),
+              });
+            } catch {}
             showNotice(t('callDeclined', lang), 'error', 3000);
           });
         }),
@@ -2077,7 +2183,10 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
             lastOutgoingPeerIdRef.current = null;
             callingVisibleRef.current = false;
             setCalling({ visible: false, friend: null, callId: null });
-            try { flushCallLogUi(); } catch {}
+            try {
+              recordCancelledCall(String(friend.id));
+              forceCallLogUiNow('timeout');
+            } catch {}
           });
         }),
       );
@@ -2118,7 +2227,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
             clearFriendsCallBusy([String(friend.id), lastOutgoingPeerIdRef.current]);
             // Только своя отмена инициатора → «Отменённый» у себя.
             recordCancelledCall(String(friend.id));
-            try { flushCallLogUi(); } catch {}
+            forceCallLogUiNow('attempt_canceled');
             lastOutgoingPeerIdRef.current = null;
             callingVisibleRef.current = false;
             setCalling({ visible: false, friend: null, callId: null });
@@ -2374,6 +2483,9 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         String(getIncomingCallScreenState().fromUserId || '').trim();
       if (!peerId) return;
       recordCallLog({ peerId, direction: 'incoming' });
+      try {
+        forceCallLogUiNow('incoming_accepted');
+      } catch {}
     });
     return () => off?.();
   }, []);
@@ -4717,12 +4829,11 @@ const handleClearNick = useCallback(async () => {
     return off;
   }, [clearFriendsCallBusy, markRecentlyEndedCallFriend]);
 
-  // onCallEndedOnHome раньше показывал тост «Вызов завершён» — убрано.
-  // Сразу показать строку в Calls (outgoing писался silent на старте).
+  // Сразу показать строку в Calls после hangup (outgoing/incoming уже в memory).
   useEffect(() => {
     const off = onCallEndedOnHome(() => {
       try {
-        flushCallLogUi();
+        forceCallLogUiNow('call_ended');
       } catch {}
     });
     return off;

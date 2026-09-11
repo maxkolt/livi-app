@@ -2285,21 +2285,34 @@ export class VideoCallSession extends SimpleEventEmitter {
 
   /** In-app PiP: подписаться на remote video и синхронизировать стрим с оверлеем PiP. */
   ensureRemoteVideoForPiP(): void {
-    if (this.isLocalDirectCallAudioOnlyUi()) {
+    let inAppPiPVisible = false;
+    try {
+      const g = global as any;
+      inAppPiPVisible =
+        g.__pipVisibleRef?.current === true && g.__pipInSystemModeRef?.current !== true;
+    } catch (_) {}
+    // Mid-PiP peer video: не блокировать подписку из‑за local audio-only UI.
+    if (!inAppPiPVisible && this.isLocalDirectCallAudioOnlyUi()) {
       logger.debug('[VideoCallSession] Skip ensureRemoteVideoForPiP — local audio-only UI');
       return;
     }
-    if (this.directCallAudioOnlyConsumerDefer || isInAudioOnlyCallUi()) {
+    if (!inAppPiPVisible && (this.directCallAudioOnlyConsumerDefer || isInAudioOnlyCallUi())) {
       logger.debug('[VideoCallSession] Skip ensureRemoteVideoForPiP — direct-call audio-only consumer');
       return;
     }
     if (this.deferRemoteVideoSubscription) {
       this.restoreDeferRemoteVideoAfterPiP = true;
-      this.enableRemoteVideoConsumption({ keepRestoreDeferAfterPiP: true });
+      if (inAppPiPVisible && (this.isLocalDirectCallAudioOnlyUi() || isInAudioOnlyCallUi())) {
+        // Не переключать пользователя на video UI — только подтянуть remote track для плашки.
+        this.deferRemoteVideoSubscription = false;
+        this.resubscribeRemoteVideoIfNeeded('pip_enter_mid_peer');
+      } else {
+        this.enableRemoteVideoConsumption({ keepRestoreDeferAfterPiP: true });
+      }
     } else {
       this.resubscribeRemoteVideoIfNeeded('pip_enter');
     }
-    this.flushPiPRemoteVideoState();
+    this.flushPiPRemoteVideoState({ bumpKey: true });
   }
 
   /** Throttle arming logs / resubscribe while waiting for TrackSubscribed. */
@@ -2401,13 +2414,24 @@ export class VideoCallSession extends SimpleEventEmitter {
       if (bumpKey) {
         this.remoteViewKey = Date.now();
       }
+      const hasLive = this.remoteStreamHasLiveVideoTrack();
+      const remoteCamOn = this.getRemoteCamEnabled();
       const patch: Record<string, unknown> = {
         remoteStream: this.remoteStream ?? null,
-        remoteCamOn: this.getRemoteCamEnabled(),
+        remoteCamOn,
+        pipRemoteViewKey: this.remoteViewKey || Date.now(),
       };
-      if (bumpKey) {
-        patch.pipRemoteViewKey = this.remoteViewKey;
-      }
+      try {
+        const g = global as any;
+        if (
+          hasLive &&
+          remoteCamOn &&
+          g.__pipVisibleRef?.current === true &&
+          g.__pipInSystemModeRef?.current !== true
+        ) {
+          patch.allowVideoRender = true;
+        }
+      } catch (_) {}
       pipUpdate(patch);
     } catch (_) {}
   }
@@ -2634,6 +2658,8 @@ export class VideoCallSession extends SimpleEventEmitter {
       const g = global as any;
       if (g.__pipInSystemModeRef?.current === true) return true;
       if (g.__pendingSystemPiPSyncRef?.current === true) return true;
+      // In-app PiP: peer может включить cam после входа — track нужен для плашки.
+      if (g.__pipVisibleRef?.current === true) return true;
     } catch (_) {}
     return false;
   }
@@ -3247,13 +3273,10 @@ export class VideoCallSession extends SimpleEventEmitter {
           this.ensureRemoteVideoForSystemPiPCapture();
           this.activateSystemPiPPeerVideoCapture('cam_toggle');
           if (pipVisible && g.__pipInSystemModeRef?.current !== true) {
-            if (this.deferRemoteVideoSubscription) {
+            if (this.deferRemoteVideoSubscription || !this.remoteStreamHasLiveVideoTrack()) {
               this.ensureRemoteVideoForPiP();
-            } else if (!this.remoteStreamHasLiveVideoTrack()) {
-              this.resubscribeRemoteVideoIfNeeded('cam_toggle_pip');
-              this.flushPiPRemoteVideoState();
             } else {
-              this.flushPiPRemoteVideoState();
+              this.flushPiPRemoteVideoState({ bumpKey: true });
             }
           }
         }
@@ -6908,8 +6931,14 @@ export class VideoCallSession extends SimpleEventEmitter {
           this.clearRemoteCamOffTimeout();
           this.notifyRemoteCamStateChange(true);
           try {
-            const pipUpdate = (global as any).__pipUpdateStateRef?.current;
-            if (typeof pipUpdate === 'function') pipUpdate({ remoteCamOn: true });
+            const g = global as any;
+            const pipVisible = g.__pipVisibleRef?.current === true;
+            if (pipVisible && g.__pipInSystemModeRef?.current !== true) {
+              this.flushPiPRemoteVideoState({ bumpKey: true });
+            } else {
+              const pipUpdate = g.__pipUpdateStateRef?.current;
+              if (typeof pipUpdate === 'function') pipUpdate({ remoteCamOn: true });
+            }
           } catch (_) {}
         }
       })
@@ -7314,13 +7343,17 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.notifyRemoteStreamChange(this.remoteStream);
     // КРИТИЧНО: Обновляем PiP (в т.ч. системный) при смене удалённого стрима — иначе при включении камеры партнёром из app PiP видео не восстановится у пользователя в системном PiP
     try {
-      const pipUpdate = (global as any).__pipUpdateStateRef?.current;
-      if (typeof pipUpdate === 'function') {
-        pipUpdate({
-          remoteStream: this.remoteStream,
-          remoteCamOn: this.getRemoteCamEnabled(),
-          pipRemoteViewKey: this.remoteViewKey,
-        });
+      if (isVideoTrack && this.getRemoteCamEnabled()) {
+        this.flushPiPRemoteVideoState({ bumpKey: false });
+      } else {
+        const pipUpdate = (global as any).__pipUpdateStateRef?.current;
+        if (typeof pipUpdate === 'function') {
+          pipUpdate({
+            remoteStream: this.remoteStream,
+            remoteCamOn: this.getRemoteCamEnabled(),
+            pipRemoteViewKey: this.remoteViewKey,
+          });
+        }
       }
     } catch (_) {}
     // System PiP после audio-enter: peer video track → снять logo, показать RTC через CaptureHost.

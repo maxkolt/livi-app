@@ -433,6 +433,7 @@ export type RequestDirectCallPayload = {
 };
 
 const requestDirectCallListeners = new Set<Listener<RequestDirectCallPayload>>();
+let lastRequestDirectCallEmit: { peerId: string; at: number } | null = null;
 
 export function onRequestDirectCall(cb: Listener<RequestDirectCallPayload>): () => void {
   requestDirectCallListeners.add(cb);
@@ -444,6 +445,16 @@ export function onRequestDirectCall(cb: Listener<RequestDirectCallPayload>): () 
 export function emitRequestDirectCall(payload: RequestDirectCallPayload) {
   const peerId = String(payload?.peerId || '').trim();
   if (!peerId) return;
+  // Двойной тап из чата: два emit до inFlight → два Outgoing. Глушим same-peer <1.2с.
+  const now = Date.now();
+  if (
+    lastRequestDirectCallEmit &&
+    lastRequestDirectCallEmit.peerId === peerId &&
+    now - lastRequestDirectCallEmit.at < 1200
+  ) {
+    return;
+  }
+  lastRequestDirectCallEmit = { peerId, at: now };
   const next: RequestDirectCallPayload = {
     peerId,
     peerName: payload.peerName,

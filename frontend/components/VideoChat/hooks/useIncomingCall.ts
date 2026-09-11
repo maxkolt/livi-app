@@ -8,6 +8,7 @@ import { startIncomingCallAlert, stopIncomingCallAlert } from '../../../utils/in
 import { syncAppBadgeFromMissedCount } from '../../../utils/pushNotifications';
 import { emitMissedClear } from '../../../utils/globalEvents';
 import { readRootNavigationState } from '../../../utils/safeRootNavigation';
+import { flushCallLogUi, forceCallLogUiNow, recordCancelledCall } from '../../../screens/home/callLog';
 
 interface UseIncomingCallProps {
   myUserId?: string;
@@ -315,8 +316,15 @@ export const useIncomingCall = ({
   // Функция отклонения звонка
   const handleDecline = useCallback(() => {
     const callIdToDecline = incomingCall?.callId || currentCallIdRef.current;
+    const callerPeer = String(incomingCall?.from || incomingFriendCall?.from || '').trim();
     if (callIdToDecline) {
       declineCall(callIdToDecline);
+    }
+    if (callerPeer) {
+      try {
+        recordCancelledCall(callerPeer);
+        forceCallLogUiNow('incoming_overlay_decline');
+      } catch {}
     }
     setDeclinedBlock(incomingCall?.from || incomingFriendCall?.from || '', 12000);
     setIncomingFriendCall(null);

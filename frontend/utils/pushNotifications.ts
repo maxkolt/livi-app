@@ -14,6 +14,7 @@ import {
   warmCallSignaling,
   getUnreadCount,
   beginEarlyIncomingCallAccept,
+  getIncomingCallScreenState,
 } from '../sockets/socket';
 import { getInstallId } from './installId';
 import { logger } from './logger';
@@ -21,7 +22,7 @@ import { trackReleaseError, trackReleaseEvent } from './telemetry';
 import { stopIncomingCallAlert } from './incomingCallAlert';
 import { displayIncomingCall, isCallKeepAvailable, sendCallAnsweredBroadcast, addEndedCallId, closeOutgoingCallActivity, notifyCallCanceled, isEndedCallId, isOutgoingDeclineHandled, markOutgoingDeclineHandled, stopIncomingCallRingtoneAndVibration, setCallMediaHint, getCallMediaHint, videoCallNavExtras, type DirectCallMediaHint } from './callKeep';
 import { emitCloseOutgoingCall, emitCloseHomeModals, emitMissedClear, emitMissedIncrement, isWelcomeCallsMissedFilterActive, isWelcomeViewingChats, isWelcomeViewingMissedCalls, setPendingWelcomeCallsFilter, setPendingWelcomeChatsFilter, shouldSkipHomeUiSettle } from './globalEvents';
-import { recordCallLog } from '../screens/home/callLog';
+import { recordCallLog, recordCancelledCall, flushCallLogUi, forceCallLogUiNow } from '../screens/home/callLog';
 import { UNREAD_BY_USER_KEY } from '../screens/home/constants';
 import { navigateToVideoCallScreen, type VideoCallNavLike } from './appNavigationGuard';
 import { beginCallPerfTrace, markCallPerf, callPerfSpan } from './callPerfTrace';
@@ -1453,16 +1454,40 @@ function moveAppToBackAfterDecline() {
 }
 
 /** Отклонить звонок (для livi://decline-call из нативного IncomingCallActivity). Ждём сокет, чтобы call:decline дошёл до сервера и у звонящего завершился вызов. После этого уводим приложение в фон.
- * Отклонение получателем не считается пропущенным вызовом — очищаем last_incoming_from. */
+ * Отклонение получателем → «Отменённый звонок» в журнале (не пропущенный). */
 export async function handleDeclineCallFromDeepLink(callId: string): Promise<void> {
   disposeDirectCallAudioPrewarm('push:decline-call');
   try { setIncomingCallScreenVisible(false); } catch {}
   try {
     stopIncomingCallAlert();
   } catch {}
-  // Отклонение с нашей стороны — не пропущенный вызов; сбрасываем маркер, чтобы нигде не считать как пропущенный
+  let callerPeer = '';
+  try {
+    callerPeer = String(getIncomingCallScreenState().fromUserId || '').trim();
+  } catch {}
+  if (!callerPeer) {
+    try {
+      callerPeer = String((global as any).__lastIncomingFromUserIdRef?.current || '').trim();
+    } catch {}
+  }
+  if (!callerPeer) {
+    try {
+      callerPeer = String((await AsyncStorage.getItem('last_incoming_from')) || '').trim();
+    } catch {}
+  }
+  if (callerPeer) {
+    try {
+      recordCancelledCall(callerPeer);
+      forceCallLogUiNow('decline_deeplink');
+    } catch {}
+  }
+  // Отклонение с нашей стороны — не пропущенный вызов; сбрасываем маркер
   try {
     await AsyncStorage.removeItem('last_incoming_from');
+  } catch {}
+  try {
+    (global as any).__lastIncomingFromUserIdRef = (global as any).__lastIncomingFromUserIdRef || { current: null };
+    (global as any).__lastIncomingFromUserIdRef.current = null;
   } catch {}
   try {
     await ensureSocketConnected(SOCKET_CONNECT_WAIT_MS);
@@ -1623,6 +1648,12 @@ async function handleNotificationResponse(data: any, actionIdentifier: string, r
         try {
           stopIncomingCallAlert();
         } catch {}
+        if (peerUserId) {
+          try {
+            recordCancelledCall(peerUserId);
+            forceCallLogUiNow('decline_notification');
+          } catch {}
+        }
         try {
           await ensureSocketConnected(SOCKET_CONNECT_WAIT_MS);
           declineCall(callId);

@@ -430,9 +430,19 @@ function HomeWelcomeCallsViewInner({
     }
   }, [askConfirm, clearMissedCallsForFriend, deleting, exitSelect, lang, rows, selectedIds, showNotice]);
 
+  // Нужен signature направлений: outgoing→cancelled / новый missed при тех же id — иначе FlatList не перерисует статус.
   const listExtraData = useMemo(
-    () => ({ filter, pickMode, missedByUser, friendsById, selectMode, selectedIds, callActionsLocked }),
-    [callActionsLocked, filter, friendsById, missedByUser, pickMode, selectMode, selectedIds],
+    () => ({
+      filter,
+      pickMode,
+      missedByUser,
+      friendsById,
+      selectMode,
+      selectedIds,
+      callActionsLocked,
+      logSig: logEntries.map((e) => `${e.id}:${e.direction}:${e.at}`).join('|'),
+    }),
+    [callActionsLocked, filter, friendsById, logEntries, missedByUser, pickMode, selectMode, selectedIds],
   );
 
   const renderItem = useCallback(
