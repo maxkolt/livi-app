@@ -31,6 +31,7 @@ import { setIoInstance } from './utils/ioInstance';
 import { setGetEffectiveBusy } from './utils/effectiveBusy';
 import User from './models/User';
 import Install from './models/Install';
+import { verifyInstallSecret } from './utils/installSecret';
 import MissedCall from './models/MissedCall';
 import createChatRouter from './routes/chat';
 import { buildAvatarDataUris } from './utils/avatars';
@@ -2218,6 +2219,29 @@ async function saveMissedCall(calleeId: string, callerId: string, callerNick: st
   }
 }
 
+/** SECURITY: если для этого installId уже сохранён installSecretHash (клиент прошёл
+ *  identity:attach с секретом) — требуем совпадения заголовка x-install-secret.
+ *  Закрывает возможность дёрнуть decline/cancel по чужому/угаданному installId
+ *  (см. deep link + native HTTP пути из IncomingCallActivity/LiviOutgoingCallService).
+ *  Fail-open только на инфраструктурной ошибке (Mongo недоступна) — не блокируем
+ *  весь call-flow из-за временного сбоя БД. */
+async function verifyInstallSecretForSensitiveCallAction(
+  req: express.Request,
+  installId: string | undefined | null
+): Promise<boolean> {
+  if (!installId) return true;
+  try {
+    const inst = await Install.findOne({ installId }).select('installSecretHash').lean();
+    const storedHash = (inst as any)?.installSecretHash as string | undefined;
+    if (!storedHash) return true; // legacy install, ещё не мигрировал на installSecret
+    const provided = req.header('x-install-secret');
+    return verifyInstallSecret(provided, storedHash);
+  } catch (e: any) {
+    logger.warn('[installSecret] verify failed (http), failing open', { error: e?.message });
+    return true;
+  }
+}
+
 /** Отклонение звонка по HTTP (из IncomingCallActivity без открытия приложения). Auth по x-install-id. */
 app.post('/api/calls/decline', async (req, res) => {
   try {
@@ -2232,6 +2256,10 @@ app.post('/api/calls/decline', async (req, res) => {
         return res.status(503).json({ ok: false, error: 'database_unavailable' });
       }
       logger.warn('[api/calls/decline] unauthorized', { hasInstallId: !!installId, installIdPrefix: installId ? String(installId).slice(0, 20) : '' });
+      return res.status(401).json({ ok: false, error: 'unauthorized' });
+    }
+    if (!(await verifyInstallSecretForSensitiveCallAction(req, installId))) {
+      logger.warn('[api/calls/decline] rejected: invalid x-install-secret', { installIdPrefix: installId ? String(installId).slice(0, 20) : '' });
       return res.status(401).json({ ok: false, error: 'unauthorized' });
     }
     const callId = String(req.body?.callId || '').trim();
@@ -2341,7 +2369,12 @@ app.post('/api/calls/incoming-shown', async (req, res) => {
 app.post('/api/calls/cancel', async (req, res) => {
   try {
     const userId = (req as any).userId;
+    const installIdForCancel = (req as any).installId;
     if (!userId || !isOid(userId)) {
+      return res.status(401).json({ ok: false, error: 'unauthorized' });
+    }
+    if (!(await verifyInstallSecretForSensitiveCallAction(req, installIdForCancel))) {
+      logger.warn('[api/calls/cancel] rejected: invalid x-install-secret', { installIdPrefix: installIdForCancel ? String(installIdForCancel).slice(0, 20) : '' });
       return res.status(401).json({ ok: false, error: 'unauthorized' });
     }
     const callId = String(req.body?.callId || '').trim();

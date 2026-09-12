@@ -14,9 +14,11 @@ import { getAndClearOfflineMessages, getAndClearOfflineChatClearedQueue } from '
 import { auditNickChange } from '../utils/profileNickAudit';
 import { scheduleGlobalFriendPresenceEmit } from '../utils/friendOnlinePresence';
 import { getFriendIds } from '../utils/friendshipUtils';
+import { hashInstallSecret, verifyInstallSecret, isPlausibleInstallSecret } from '../utils/installSecret';
 
 type AttachPayload = {
   installId?: string | null;
+  installSecret?: string | null;
   profile?: { nick?: string; avatar?: string } | null;
 };
 
@@ -222,6 +224,33 @@ export default function registerIdentitySockets(io: Server) {
         const inst = await Install.findOne({ installId }).lean();
         if (inst) {
           const userId = String((inst as any).user);
+
+          // SECURITY: если для этого install уже сохранён секрет — требуем его совпадения.
+          // Без этой проверки знания/подбора одного installId было достаточно, чтобы
+          // привязать чужую сессию к своему сокету (полный захват аккаунта).
+          const storedInstallSecretHash = (inst as any).installSecretHash as string | undefined;
+          if (storedInstallSecretHash) {
+            if (!verifyInstallSecret(payload?.installSecret, storedInstallSecretHash)) {
+              console.warn(`[identity] attach REJECTED: invalid/missing installSecret for install=${installId}`);
+              ack?.({ ok: false, error: 'unauthorized' });
+              setTimeout(() => attachRequestCache.delete(cacheKey), 1000);
+              return;
+            }
+          } else if (isPlausibleInstallSecret(payload?.installSecret)) {
+            // Legacy install без секрета — принимаем и сохраняем секрет от первого клиента,
+            // который его пришлёт ("bootstrap"); дальше для этого install он уже обязателен.
+            try {
+              await Install.updateOne(
+                { installId },
+                { $set: { installSecretHash: hashInstallSecret(payload!.installSecret as string) } }
+              );
+            } catch (e: any) {
+              console.warn(`[identity] failed to bootstrap installSecret for install=${installId}:`, e?.message);
+            }
+          } else {
+            console.warn(`[identity] attach ALLOWED without installSecret (legacy client, install=${installId}) — update app to close this window`);
+          }
+
           console.log(`[identity] Install found for ${installId}, checking user: ${userId}`);
           const exists = await User.exists({ _id: userId });
 
@@ -314,7 +343,14 @@ export default function registerIdentitySockets(io: Server) {
             }],
             opt as any
           );
-          const [newInstall] = await Install.create([{ installId, user: newUserId }], opt as any);
+          const installDocToCreate: { installId: string; user: typeof newUserId; installSecretHash?: string } = {
+            installId,
+            user: newUserId,
+          };
+          if (isPlausibleInstallSecret(payload?.installSecret)) {
+            installDocToCreate.installSecretHash = hashInstallSecret(payload!.installSecret as string);
+          }
+          const [newInstall] = await Install.create([installDocToCreate], opt as any);
           console.log(`[identity] ✅ User created (new): ${newUserId}`, {
             _id: String(newUser._id),
             nick: newUser.nick,
