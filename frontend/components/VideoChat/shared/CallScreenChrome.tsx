@@ -90,7 +90,7 @@ export function CallScreenChrome({
   return (
     <>
       <View
-        style={[styles.headerWrap, { paddingTop: Math.max(14, topInset + 12) }]}
+        style={[styles.headerWrap, { paddingTop: Math.max(26, topInset + 24) }]}
         pointerEvents="box-none"
       >
         <View style={styles.headerRow} pointerEvents="box-none">
@@ -142,7 +142,7 @@ export function CallScreenChrome({
       </View>
 
       <View
-        style={[styles.bottomWrap, { paddingBottom: Math.max(16, bottomInset + 10) }]}
+        style={[styles.bottomWrap, { paddingBottom: Math.max(28, bottomInset + 22) }]}
         pointerEvents="box-none"
       >
         <View style={[styles.capsule, locked && styles.capsuleLocked]}>
@@ -199,7 +199,7 @@ export function CallScreenChrome({
         onRequestClose={() => setMoreOpen(false)}
       >
         <Pressable style={styles.moreBackdrop} onPress={() => setMoreOpen(false)}>
-          <View style={[styles.moreSheet, { marginBottom: Math.max(90, bottomInset + 80) }]}>
+          <View style={[styles.moreSheet, { marginBottom: Math.max(102, bottomInset + 92) }]}>
             {moreItems.map((item) => (
               <Pressable
                 key={item.key}

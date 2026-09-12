@@ -362,6 +362,7 @@ class LiviOutgoingCallService : Service() {
         if (callId.isEmpty()) return
         val prefs = applicationContext.getSharedPreferences(LiviAppModule.PREFS_NAME, Context.MODE_PRIVATE)
         val installId = prefs.getString(LiviAppModule.KEY_INSTALL_ID, null)?.takeIf { it.isNotBlank() }
+        val installSecret = prefs.getString(LiviAppModule.KEY_INSTALL_SECRET, null)?.takeIf { it.isNotBlank() }
         val serverUrl = LiviAppModule.resolveServerBaseUrl(applicationContext)
         if (installId == null || serverUrl == null) return
         Thread {
@@ -371,6 +372,9 @@ class LiviOutgoingCallService : Service() {
                 conn.requestMethod = "POST"
                 conn.setRequestProperty("Content-Type", "application/json")
                 conn.setRequestProperty("x-install-id", installId)
+                if (installSecret != null) {
+                    conn.setRequestProperty("x-install-secret", installSecret)
+                }
                 conn.doOutput = true
                 conn.connectTimeout = 8000
                 conn.readTimeout = 8000
@@ -642,6 +646,7 @@ class LiviOutgoingCallService : Service() {
             if (callId.isEmpty()) return
             val prefs = context.getSharedPreferences(LiviAppModule.PREFS_NAME, Context.MODE_PRIVATE)
             val installId = prefs.getString(LiviAppModule.KEY_INSTALL_ID, null)?.takeIf { it.isNotBlank() }
+            val installSecret = prefs.getString(LiviAppModule.KEY_INSTALL_SECRET, null)?.takeIf { it.isNotBlank() }
             val serverUrl = LiviAppModule.resolveServerBaseUrl(context)
             if (installId == null || serverUrl == null) return
             Thread {
@@ -651,6 +656,9 @@ class LiviOutgoingCallService : Service() {
                     conn.requestMethod = "POST"
                     conn.setRequestProperty("Content-Type", "application/json")
                     conn.setRequestProperty("x-install-id", installId)
+                    if (installSecret != null) {
+                        conn.setRequestProperty("x-install-secret", installSecret)
+                    }
                     conn.doOutput = true
                     conn.connectTimeout = 8000
                     conn.readTimeout = 8000

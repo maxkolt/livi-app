@@ -222,7 +222,8 @@ export default function ChatScreen({ route, navigation }: Props) {
           // Обновляем никнейм из backend
           if (profile.nick && typeof profile.nick === 'string') {
             // Здесь можно обновить никнейм если нужно
-            console.log('[ChatScreen] Profile nick:', profile.nick);
+            // (не логируем сам nick в консоль — PII)
+            logger.debug('[ChatScreen] Profile nick loaded');
           }
         }
       } catch (e) {

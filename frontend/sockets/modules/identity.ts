@@ -1,5 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { getInstallId } from "../../utils/installId";
+import { getInstallId, getInstallSecret } from "../../utils/installId";
 import { __notifyCurrentUserId } from "./authState";
 import { API_BASE, isOid } from "./constants";
 import { emitAck } from "./emit";
@@ -16,6 +16,7 @@ const USER_EXISTS_CACHE_TTL_FALSE = 1500;
 
 export function identityAttach(payload: {
   installId?: string;
+  installSecret?: string | null;
   profile?: { nick?: string; avatarUrl?: string };
 }) {
   return emitAck<{ ok: boolean; userId?: string; error?: string }>(
@@ -208,7 +209,8 @@ async function createUserInternal(): Promise<string | null> {
       console.log(`[createUser] Attempt ${attempt}/5...`);
 
       // Используем identity:attach для создания пользователя
-      const response = await identityAttach({ installId });
+      const installSecret = await getInstallSecret().catch(() => null);
+      const response = await identityAttach({ installId, installSecret });
 
       if (response?.ok && response?.userId) {
         // ВАЖНО: сервер может вернуть userId, который уже удалён из БД (например, по старой связке installId→userId).

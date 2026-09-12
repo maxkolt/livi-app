@@ -1700,6 +1700,16 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     if (prev != enabled) {
       Log.i(NAME, "setShouldEnterPiPOnLeaveHint: $prev -> $enabled")
     }
+    // S+: как только JS взвёл звонок — сразу включаем системный auto-enter на Activity,
+    // пока экран звонка виден. Тогда уход в фон надёжно вводит в PiP на всех устройствах
+    // (без отложенного ручного enterPictureInPictureMode, падавшего с "must be resumed").
+    try {
+      (currentActivity as? MainActivity)?.let { act ->
+        act.runOnUiThread {
+          try { act.syncSystemPiPAutoEnterParams(enabled) } catch (_: Exception) {}
+        }
+      }
+    } catch (_: Exception) {}
   }
 
   /** JS выставляет true, когда виден маленький in-app PiP. Home из этого состояния требует задержки перед system PiP, чтобы не захватить zoomed cover-кадр. */
@@ -1968,6 +1978,18 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     reactApplicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
       .edit()
       .putString(KEY_INSTALL_ID, installId)
+      .apply()
+  }
+
+  /** SECURITY: секрет установки (installSecret) — сервер требует его в заголовке
+   * x-install-secret для decline/cancel, если для этого installId уже сохранён хэш.
+   * Без него простое знание/подбор installId позволяло бы отменять/отклонять чужие звонки. */
+  @ReactMethod
+  fun setInstallSecretForDecline(installSecret: String?) {
+    if (installSecret.isNullOrBlank()) return
+    reactApplicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+      .edit()
+      .putString(KEY_INSTALL_SECRET, installSecret)
       .apply()
   }
 
@@ -3748,6 +3770,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     const val ACTION_MISSED_CALL_DISMISSED = "com.kolt12max.livi.MISSED_CALL_DISMISSED"
     const val EXTRA_USER_ID = "user_id"
     const val KEY_INSTALL_ID = "install_id"
+    const val KEY_INSTALL_SECRET = "install_secret"
     const val KEY_SERVER_URL = "server_url"
     const val KEY_USER_ID_FOR_DECLINE = "user_id_for_decline"
     const val KEY_OUTGOING_CALL_TIMEOUT_MS = "outgoing_call_timeout_ms"

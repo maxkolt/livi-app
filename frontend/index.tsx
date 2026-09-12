@@ -1,3 +1,8 @@
+// ===== TEMP DEBUG: трасса Home→system PiP (снять после отладки PiP) =====
+// Включает [LIVI][SYSPIP][home] и sys_pip_home в [LIVI][REL] без ввода в DevTools.
+// Нативные строки MainActivity/SysPiPHome в logcat пишутся всегда, независимо от флага.
+try { (global as any).__LIVI_SYS_PIP_HOME_TRACE__ = true; } catch {}
+// ===== /TEMP DEBUG =====
 import './polyfills/ensureCoreJsPolyfills';
 import { safeRegisterLiveKitGlobals } from './livekit/safeRegisterGlobals';
 import { installCallRuntimeBridges } from './utils/callRuntime';

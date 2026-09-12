@@ -1,10 +1,49 @@
+import 'react-native-get-random-values';
 import { Platform } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getAndroidId, getIosIdForVendorAsync } from 'expo-application';
 
 const KEY = 'livi.installId';
+/** Секрет установки (installSecret): случайное значение высокой энтропии, доказывающее
+ * владение installId серверу (identity:attach). Хранится ТОЛЬКО в SecureStore (Keychain/Keystore) —
+ * никогда в AsyncStorage — и никогда не логируется целиком. См. backend/utils/installSecret.ts. */
+const SECRET_KEY = 'livi.installSecret';
 const randomId = () => `inst_${Math.random().toString(36).slice(2, 10)}`;
+
+function randomHex(byteLength: number): string {
+  const bytes = new Uint8Array(byteLength);
+  // react-native-get-random-values полифиллит crypto.getRandomValues криптостойким генератором.
+  (globalThis as any).crypto.getRandomValues(bytes);
+  let hex = '';
+  for (let i = 0; i < bytes.length; i++) hex += bytes[i].toString(16).padStart(2, '0');
+  return hex;
+}
+
+let installSecretLoadPromise: Promise<string | null> | null = null;
+
+/** Возвращает (создавая при первом вызове) секрет установки. На web возвращает null —
+ * SecureStore недоступен, эти клиенты остаются в legacy-режиме (без installSecret). */
+export async function getInstallSecret(): Promise<string | null> {
+  if (Platform.OS === 'web') return null;
+  if (!installSecretLoadPromise) {
+    installSecretLoadPromise = (async () => {
+      try {
+        let secret = await SecureStore.getItemAsync(SECRET_KEY);
+        if (!secret) {
+          secret = randomHex(32); // 256 бит энтропии
+          await SecureStore.setItemAsync(SECRET_KEY, secret);
+        }
+        return secret;
+      } catch (e) {
+        return null;
+      } finally {
+        installSecretLoadPromise = null;
+      }
+    })();
+  }
+  return installSecretLoadPromise;
+}
 
 let installIdLoggedOnce = false;
 /** Сериализуем параллельные getInstallId(), чтобы не создать два разных id до записи в SecureStore. */
@@ -93,6 +132,9 @@ export async function getInstallId(): Promise<string> {
 
 export async function resetInstallId(): Promise<void> {
   installIdLoadPromise = null;
-  if (Platform.OS !== 'web') await delSecure(KEY);
+  if (Platform.OS !== 'web') {
+    await delSecure(KEY);
+    try { await SecureStore.deleteItemAsync(SECRET_KEY); } catch {}
+  }
   await AsyncStorage.removeItem(KEY);
 }

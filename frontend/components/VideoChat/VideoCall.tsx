@@ -4085,7 +4085,10 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       const endedFromPiP = endSource === 'pip_close' || noOpenFlag;
       // Без goBack/reset экран остаётся на VideoCall — refs не дают ререндера; через ~1s deferred teardown
       // сбрасывает isEndingCallRef и бейдж/кнопки снова «живые». Синхронизируем React state с «завершённым» UI.
-      const stayOnVideoCallAfterEnd = inSystemPiP || endedFromPiP;
+      // Остаёмся на мёртвом VideoCall только для system PiP / фона. In-app PiP (AppState active) —
+      // нужно уйти на Home, иначе под оверлеем пустой экран.
+      const appInactive = AppState.currentState !== 'active';
+      const stayOnVideoCallAfterEnd = inSystemPiP || (endedFromPiP && appInactive);
       if (stayOnVideoCallAfterEnd) {
         setIsInactiveState(true);
         setWasFriendCallEnded(true);
@@ -4105,11 +4108,11 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
           logger.warn('[VideoCall] closeVideoCallScreen at handleCallEnded failed', e);
         }
       };
-      if (!inSystemPiP && !endedFromPiP) {
+      if (!stayOnVideoCallAfterEnd) {
         try { (global as any).__homeResetByVideoCallRef.current = true; } catch (_) {}
         closeVideoCallScreen();
       }
-      if (!inSystemPiP && !endedFromPiP && Platform.OS === 'android') {
+      if (!stayOnVideoCallAfterEnd && Platform.OS === 'android') {
         try { bringMainActivityToFront(); } catch (_) {}
       }
 
@@ -4842,7 +4845,16 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     useCallback(() => {
       if (!isInactiveState || !wasFriendCallEnded) return;
       if (pipRef.current?.visible === true || isPipOverlayVisibleSync() || pipRef.current?.inSystemPiPMode === true) return;
-      if ((global as any).__callEndedFromPiPNoOpenRef?.current === true) return;
+      // __callEndedFromPiPNoOpenRef ставится при завершении из PiP. Пропуск нужен только для
+      // СИСТЕМНОГО PiP (приложение в фоне — не дёргать навигацию). Но при завершении из IN-APP
+      // PiP приложение на переднем плане и под оверлеем висит экран VideoCall — без ухода на Home
+      // остаётся пустой экран. Поэтому пропускаем ТОЛЬКО когда приложение НЕ активно (фон/system PiP).
+      if (
+        (global as any).__callEndedFromPiPNoOpenRef?.current === true &&
+        AppState.currentState !== 'active'
+      ) {
+        return;
+      }
       const rootNav = (global as any).__navRef;
       if (!rootNav?.isReady?.()) return;
       const route = rootNav.getCurrentRoute();
@@ -7820,7 +7832,7 @@ const styles = StyleSheet.create({
   },
   unifiedFlipBtnOnMain: {
     right: 18,
-    bottom: 118,
+    bottom: 130,
     zIndex: 28,
   },
   audioCallContainer: {

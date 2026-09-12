@@ -6,12 +6,26 @@
     "skipLibCheck": true,
     "noEmit": true,
     "jsx": "react-native",
-    "types": ["react", "react-native", "node"],
-    "typeRoots": ["./node_modules/@types", "./"],
+    "types": [
+      "react",
+      "react-native",
+      "node",
+      "jest"
+    ],
+    "typeRoots": [
+      "./node_modules/@types",
+      "./"
+    ],
     "paths": {
-      "*": ["./*"],
-      "@cometchat/chat-uikit-react-native": ["./src/types/cometchat-stub"],
-      "@cometchat/chat-uikit-react-native/*": ["./src/types/cometchat-stub"]
+      "*": [
+        "./*"
+      ],
+      "@cometchat/chat-uikit-react-native": [
+        "./src/types/cometchat-stub"
+      ],
+      "@cometchat/chat-uikit-react-native/*": [
+        "./src/types/cometchat-stub"
+      ]
     }
   },
   "exclude": [

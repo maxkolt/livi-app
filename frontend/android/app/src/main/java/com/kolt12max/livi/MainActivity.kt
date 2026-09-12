@@ -493,6 +493,24 @@ class MainActivity : ReactActivity() {
   /** LiviAppModule при setEndingCallInProgress(true) — отменить отложенный вход в PiP после goBack. */
   internal fun cancelPendingPiPEnterAttemptsForCallTeardown() {
     cancelPendingPiPEnterAttempts()
+    // Звонок завершается — жёстко убираем нативную PiP-заглушку из иерархии, а не только
+    // прячем (GONE). Иначе при завершении из in-app PiP / в гонке тёмный фон может залипнуть.
+    if (!isInPictureInPictureMode) {
+      forceRemoveSystemPiPBackdropForTeardown()
+    }
+  }
+
+  /** Полностью удалить нативную PiP-заглушку из иерархии (на call teardown), чтобы не залипала. */
+  private fun forceRemoveSystemPiPBackdropForTeardown() {
+    try {
+      systemPiPBackdrop?.let { v ->
+        (v.parent as? ViewGroup)?.removeView(v)
+      }
+      systemPiPBackdrop = null
+      restoreMainWindowBackgroundAfterPiP()
+    } catch (e: Exception) {
+      android.util.Log.w("MainActivity", "forceRemoveSystemPiPBackdropForTeardown failed", e)
+    }
   }
 
   /** JS отрисовал SystemPiPCaptureHost — повторить enter, пока окно leaveHint ещё активно. */
@@ -510,9 +528,11 @@ class MainActivity : ReactActivity() {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
     try {
       if (isFinishing || isDestroyed) return
+      // Раньше auto-enter включался только на время ручной попытки (isPiPEnterAttemptRunning),
+      // поэтому системный вход в PiP фактически не использовался. Теперь разрешаем auto-enter
+      // по armed-состоянию звонка — система сама надёжно вводит в PiP при уходе в фон (S+).
       val allow =
         enabled &&
-          isPiPEnterAttemptRunning &&
           !inRecentsOverview &&
           !LiviAppModule.getEndingCallInProgress() &&
           (LiviAppModule.getShouldEnterPiPOnLeaveHint() || LiviAppModule.isActiveCallForegroundRunning())
@@ -704,6 +724,15 @@ class MainActivity : ReactActivity() {
       pendingShareFromIntent = false
       LiviAppModule.emitPendingShareEvent()
     }
+    // S+: пока идёт звонок и Activity RESUMED — держим системный auto-enter взведённым,
+    // чтобы уход в фон надёжно вводил в PiP на всех устройствах (без ручной гонки).
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !isInPictureInPictureMode) {
+      try {
+        if (shouldArmSystemPiPEnter()) {
+          syncSystemPiPAutoEnterParams(true)
+        }
+      } catch (_: Exception) {}
+    }
   }
 
   override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -772,10 +801,13 @@ class MainActivity : ReactActivity() {
     currentHomePiPTraceId = "hp_${System.currentTimeMillis()}"
     homePiPEnterAttemptSeq = 0
     val now = System.currentTimeMillis()
-    // Сразу гасим S+ auto-enter: иначе Recents сам уводит в PiP до нашего детекта.
-    try {
-      syncSystemPiPAutoEnterParams(false)
-    } catch (_: Exception) {}
+    // ВАЖНО: не глушим здесь S+ auto-enter. Раньше строка syncSystemPiPAutoEnterParams(false)
+    // отключала системный вход, и приложение полагалось на отложенный (400мс) ручной
+    // enterPictureInPictureMode(), который на части устройств (Samsung One UI) падал с
+    // "Activity must be resumed to enter picture-in-picture" — Activity уже уходила в onStop.
+    // Теперь на S+ системный auto-enter (взведённый заранее в onResume/arm) вводит в PiP сам.
+    // Плата: PiP входит и при открытии «Недавних» — это стандартное поведение (как WhatsApp),
+    // и приемлемо, т.к. требование — PiP обязан показываться при любом уходе в фон.
     if (inRecentsOverview || now < suppressSystemPiPOnLeaveHintUntilMs) {
       android.util.Log.i(
         "MainActivity",
@@ -818,6 +850,58 @@ class MainActivity : ReactActivity() {
       "onUserLeaveHint: sdk=${Build.VERSION.SDK_INT} shouldEnterPiP=$shouldEnterPiPEarly inAppPiPVisible=$inAppPiPVisibleEarly isInPiP=$isInPictureInPictureMode — defer ${RECENTS_DETECT_DELAY_MS}ms for Recents detect",
     )
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && shouldEnterPiPEarly) {
+      // Аудио/placeholder: показать нативную заглушку ДО входа, чтобы кадр PiP был чистым.
+      if (placeholderOnlyEarly) {
+        LiviAppModule.setSystemPiPCaptureFrameReadyStatic(true)
+        showSystemPiPBackdropForCapture()
+      }
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        try { syncSystemPiPAutoEnterParams(true) } catch (_: Exception) {}
+      }
+      homePiPTrace("native_s_plus_auto_enter_arm") {
+        putBoolean("placeholderOnly", placeholderOnlyEarly)
+      }
+      // КАНОНИЧНЫЙ путь: входим в PiP СИНХРОННО прямо здесь, пока Activity ещё RESUMED.
+      // onUserLeaveHint — штатное место входа в PiP. Раньше вход откладывался на
+      // RECENTS_DETECT_DELAY_MS(=400мс), из-за чего к моменту вызова Activity уже уходила в
+      // onStop и enterPictureInPictureMode падал с "Activity must be resumed". Для
+      // placeholder/frameReady (аудиозвонок готов) входим немедленно, без задержки.
+      val canEnterNowSync = placeholderOnlyEarly || LiviAppModule.getSystemPiPCaptureFrameReady()
+      var enteredSync = false
+      if (canEnterNowSync && !isInPictureInPictureMode) {
+        try {
+          val ratioSync = if (placeholderOnlyEarly) Rational(16, 9) else Rational(9, 16)
+          val builderSync =
+            PictureInPictureParams.Builder()
+              .setAspectRatio(ratioSync)
+              .setActions(buildSystemPiPActions())
+          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            builderSync.setAutoEnterEnabled(true)
+          }
+          val srcSync = buildSystemPiPSourceRect(placeholderOnlyEarly)
+          if (srcSync != null) builderSync.setSourceRectHint(srcSync)
+          enteredSync = enterPictureInPictureMode(builderSync.build())
+          homePiPTrace(if (enteredSync) "native_enter_pip_ok" else "native_enter_pip_false") {
+            putString("enterReason", "leaveHint_sync")
+            putBoolean("placeholderOnly", placeholderOnlyEarly)
+          }
+          android.util.Log.i(
+            "MainActivity",
+            "onUserLeaveHint sync enterPiP -> $enteredSync (placeholderOnly=$placeholderOnlyEarly)",
+          )
+        } catch (e: Exception) {
+          android.util.Log.w("MainActivity", "onUserLeaveHint sync enter PiP failed", e)
+          homePiPTrace("native_enter_pip_error") {
+            putString("enterReason", "leaveHint_sync")
+            putString("error", e.message ?: "unknown")
+          }
+        }
+      }
+      if (enteredSync || isInPictureInPictureMode) {
+        // Уже вошли в PiP синхронно — отложенный ретрай не нужен (и не гасим заглушку).
+        return
+      }
+      // Фолбэк: вход синхронно не удался (нет кадра видео / отказ) — прежний отложенный путь.
       deferredLeaveHintPiPRunnable?.let { pipEnterHandler.removeCallbacks(it) }
       val deferred =
         Runnable {

@@ -7,6 +7,9 @@ import { logger } from './logger';
 import { setIncomingCallScreenVisible } from '../sockets/socket';
 import { loadLang, t } from './i18n';
 import { prefetchDirectCallIce } from './directCallConnectPrewarm';
+// Константа вынесена в callTimeouts.ts, чтобы её можно было использовать (см. callExpiry.ts)
+// без затягивания тяжёлого графа зависимостей этого файла (react-native, sockets/socket, i18n...).
+import { OUTGOING_CALL_TIMEOUT_MS } from './callTimeouts';
 import {
   type DirectCallMediaHint,
   setCallMediaHint,
@@ -25,8 +28,7 @@ export {
   videoCallNavExtras,
 };
 
-/** Единый источник таймаута исходящего вызова (мс). Передаётся в натив при старте, используется в HomeScreen/App и в LiviOutgoingCallService. */
-export const OUTGOING_CALL_TIMEOUT_MS = 27_000;
+export { OUTGOING_CALL_TIMEOUT_MS };
 
 let isSetup = false;
 /** Android: CallKeep успешно инициализирован и готов к показу системного UI звонка. */

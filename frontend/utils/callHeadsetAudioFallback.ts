@@ -101,13 +101,79 @@ export function isInSystemPiPMode(): boolean {
   }
 }
 
+/**
+ * ============================================================================
+ * Ниже — REFACTOR (без изменения поведения): решение "какой встроенный маршрут
+ * включить после отключения гарнитуры/BT" раньше читало глобальный мутабельный
+ * стейт (global.__pipVisibleRef и т.п.) прямо внутри функций принятия решения,
+ * из-за чего логику было невозможно протестировать без подмены глобалов.
+ *
+ * Теперь чтение внешнего состояния вынесено в один явный "снимок" —
+ * gatherHeadsetRouteState() — а сами решения (*FromState) стали чистыми
+ * функциями от этого снимка: одинаковый вход всегда даёт одинаковый выход,
+ * без обращений к global/модульному стейту. Публичные функции без аргументов
+ * (isOnFullScreenVideoCallUi, preferSpeakerAfterHeadsetDisconnect,
+ * shouldDefaultToEarpieceAfterHeadsetDisconnect, resolveCallRouteAfterHeadsetDisconnect)
+ * сохранили те же имена/сигнатуры и остаются тонкими обёртками — все
+ * существующие вызовы (useAudioRouting.ts, PiPContext.tsx, callAudioRoutePersist.ts,
+ * inAppPiPHeadsetConnect.ts) продолжают работать без изменений.
+ * Тесты: callHeadsetAudioFallback.test.ts (покрывают *FromState).
+ * ============================================================================
+ */
+export type HeadsetRouteState = {
+  /** Маршрут, явно закреплённый пользователем (игнорирует авто-логику), либо null. */
+  lockedRoute: BuiltinCallAudioRoute | null;
+  /** Имя текущего экрана навигации (например, 'VideoCall'), либо null при ошибке чтения. */
+  currentRouteName: string | null;
+  /** Текущий звонок ожидает video-медиа (не чистое audio). */
+  prefersVideoMedia: boolean;
+  /** In-app PiP (плашка) сейчас видима. */
+  pipVisible: boolean;
+  /** Активен системный (Android) PiP. */
+  pipInSystemMode: boolean;
+  /** In-app PiP сейчас рендерит RTC-видео, попав туда из audio-only UI. */
+  pipInAppRtcFromAudioOnly: boolean;
+  /** Открыт audio-only экран звонка (без video UI). */
+  isAudioOnlyCallUi: boolean;
+  /** Сохранённый (до входа в headset/BT) builtin-маршрут, либо null. */
+  storedBuiltinRoute: BuiltinCallAudioRoute | null;
+};
+
+/** Единственное место, где эта логика трогает global/модульный стейт (импуре-граница). */
+export function gatherHeadsetRouteState(): HeadsetRouteState {
+  const g = global as any;
+  let currentRouteName: string | null = null;
+  try {
+    currentRouteName = readRootCurrentRouteName();
+  } catch {}
+  let prefersVideoMedia = false;
+  try {
+    prefersVideoMedia = ongoingCallPrefersVideoMedia();
+  } catch {}
+  let isAudioOnlyCallUi = false;
+  try {
+    isAudioOnlyCallUi = isInAudioOnlyCallUi();
+  } catch {}
+  return {
+    lockedRoute: (readUserLockedBuiltinCallAudioRoute() as BuiltinCallAudioRoute | null) ?? null,
+    currentRouteName,
+    prefersVideoMedia,
+    pipVisible: g?.__pipVisibleRef?.current === true,
+    pipInSystemMode: g?.__pipInSystemModeRef?.current === true,
+    pipInAppRtcFromAudioOnly: g?.__pipInAppRtcFromAudioOnlyRef?.current === true,
+    isAudioOnlyCallUi,
+    storedBuiltinRoute: readBuiltinCallRouteBeforeHeadset(),
+  };
+}
+
+/** Полноэкранный video UI на VideoCall (не audio-only). Чистая версия. */
+export function isOnFullScreenVideoCallUiFromState(state: HeadsetRouteState): boolean {
+  return state.currentRouteName === 'VideoCall' && state.prefersVideoMedia;
+}
+
 /** Полноэкранный video UI на VideoCall (не audio-only). */
 export function isOnFullScreenVideoCallUi(): boolean {
-  try {
-    return readRootCurrentRouteName() === 'VideoCall' && ongoingCallPrefersVideoMedia();
-  } catch {
-    return false;
-  }
+  return isOnFullScreenVideoCallUiFromState(gatherHeadsetRouteState());
 }
 
 /** После снятия BT на video UI / system PiP: громкий + lock для последующих экранов. */
@@ -122,72 +188,80 @@ export function rememberVideoUiSpeakerAfterHeadsetDisconnect(): void {
   armCallAudioRouteUiLock('SPEAKER_PHONE');
 }
 
+/** In-app PiP с video (камера / video UI), не audio-only plaque. Чистая версия. */
+export function isInAppPiPVideoPathContextFromState(state: HeadsetRouteState): boolean {
+  if (!state.pipVisible) return false;
+  if (state.pipInSystemMode) return false;
+  if (state.pipInAppRtcFromAudioOnly) return false;
+  return state.prefersVideoMedia;
+}
+
 /** In-app PiP с video (камера / video UI), не audio-only plaque. */
 export function isInAppPiPVideoPathContext(): boolean {
-  try {
-    const g = global as any;
-    if (g.__pipVisibleRef?.current !== true) return false;
-    if (g.__pipInSystemModeRef?.current === true) return false;
-    if (g.__pipInAppRtcFromAudioOnlyRef?.current === true) return false;
-    return ongoingCallPrefersVideoMedia();
-  } catch {
-    return false;
-  }
+  return isInAppPiPVideoPathContextFromState(gatherHeadsetRouteState());
+}
+
+/** System PiP во время audio-звонка (не video-медиа). Чистая версия. */
+export function isInSystemPiPAudioOnlyContextFromState(state: HeadsetRouteState): boolean {
+  return state.pipInSystemMode && !state.prefersVideoMedia;
 }
 
 /** System PiP во время audio-звонка (не video-медиа). */
 export function isInSystemPiPAudioOnlyContext(): boolean {
-  return isInSystemPiPMode() && !ongoingCallPrefersVideoMedia();
+  return isInSystemPiPAudioOnlyContextFromState(gatherHeadsetRouteState());
+}
+
+/** Громкий после снятия BT: полноэкранное video, system/in-app PiP с video-медиа. Чистая версия. */
+export function preferSpeakerAfterHeadsetDisconnectFromState(state: HeadsetRouteState): boolean {
+  if (isOnFullScreenVideoCallUiFromState(state)) return true;
+  if (isInAppPiPVideoPathContextFromState(state)) return true;
+  if (state.pipInSystemMode && state.prefersVideoMedia) return true;
+  return false;
 }
 
 /** Громкий после снятия BT: полноэкранное video, system/in-app PiP с video-медиа. */
 export function preferSpeakerAfterHeadsetDisconnect(): boolean {
-  if (isOnFullScreenVideoCallUi()) return true;
-  if (isInAppPiPVideoPathContext()) return true;
-  if (isInSystemPiPMode() && ongoingCallPrefersVideoMedia()) return true;
-  return false;
+  return preferSpeakerAfterHeadsetDisconnectFromState(gatherHeadsetRouteState());
+}
+
+/** После снятия гарнитуры: earpiece везде, кроме video UI и PiP с video-медиа. Чистая версия. */
+export function shouldDefaultToEarpieceAfterHeadsetDisconnectFromState(state: HeadsetRouteState): boolean {
+  if (preferSpeakerAfterHeadsetDisconnectFromState(state)) return false;
+  if (isInSystemPiPAudioOnlyContextFromState(state)) return true;
+  if (state.lockedRoute === 'SPEAKER_PHONE') return false;
+  if (state.lockedRoute === 'EARPIECE') return true;
+  if (state.storedBuiltinRoute === 'SPEAKER_PHONE') return false;
+  if (state.isAudioOnlyCallUi) return true;
+  if (state.pipVisible && state.pipInAppRtcFromAudioOnly) return true;
+  if (state.pipVisible) return true;
+  if (state.currentRouteName !== 'VideoCall') return true;
+  return !state.prefersVideoMedia;
 }
 
 /** После снятия гарнитуры: earpiece везде, кроме video UI и PiP с video-медиа. */
 export function shouldDefaultToEarpieceAfterHeadsetDisconnect(): boolean {
-  if (preferSpeakerAfterHeadsetDisconnect()) return false;
-  if (isInSystemPiPAudioOnlyContext()) return true;
-  const locked = readUserLockedBuiltinCallAudioRoute();
-  if (locked === 'SPEAKER_PHONE') return false;
-  if (locked === 'EARPIECE') return true;
-  const stored = readBuiltinCallRouteBeforeHeadset();
-  if (stored === 'SPEAKER_PHONE') return false;
-  if (isInAudioOnlyCallUi()) return true;
-  try {
-    const g = global as any;
-    if (g.__pipVisibleRef?.current === true && g.__pipInAppRtcFromAudioOnlyRef?.current === true) {
-      return true;
-    }
-    if (g.__pipVisibleRef?.current === true) return true;
-    const route = readRootCurrentRouteName();
-    if (route !== 'VideoCall') return true;
-    return !ongoingCallPrefersVideoMedia();
-  } catch {
-    return true;
-  }
+  return shouldDefaultToEarpieceAfterHeadsetDisconnectFromState(gatherHeadsetRouteState());
 }
 
-export function resolveCallRouteAfterHeadsetDisconnect(): BuiltinCallAudioRoute {
-  const locked = readUserLockedBuiltinCallAudioRoute();
-  if (locked === 'SPEAKER_PHONE' || locked === 'EARPIECE') {
-    return locked;
+/** Чистая версия: см. resolveCallRouteAfterHeadsetDisconnect(). */
+export function resolveCallRouteAfterHeadsetDisconnectFromState(state: HeadsetRouteState): BuiltinCallAudioRoute {
+  if (state.lockedRoute === 'SPEAKER_PHONE' || state.lockedRoute === 'EARPIECE') {
+    return state.lockedRoute;
   }
-  if (preferSpeakerAfterHeadsetDisconnect()) {
+  if (preferSpeakerAfterHeadsetDisconnectFromState(state)) {
     return 'SPEAKER_PHONE';
   }
-  const stored = readBuiltinCallRouteBeforeHeadset();
-  if (stored === 'EARPIECE' || stored === 'SPEAKER_PHONE') {
-    return stored;
+  if (state.storedBuiltinRoute === 'EARPIECE' || state.storedBuiltinRoute === 'SPEAKER_PHONE') {
+    return state.storedBuiltinRoute;
   }
-  if (shouldDefaultToEarpieceAfterHeadsetDisconnect()) {
+  if (shouldDefaultToEarpieceAfterHeadsetDisconnectFromState(state)) {
     return 'EARPIECE';
   }
   return 'SPEAKER_PHONE';
+}
+
+export function resolveCallRouteAfterHeadsetDisconnect(): BuiltinCallAudioRoute {
+  return resolveCallRouteAfterHeadsetDisconnectFromState(gatherHeadsetRouteState());
 }
 
 export function clearBuiltinCallRouteBeforeHeadset(): void {

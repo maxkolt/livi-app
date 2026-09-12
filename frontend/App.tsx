@@ -40,7 +40,7 @@ import { ensureCometChatReady } from "./chat/cometchat";
 import type { RootStackParamList } from "./navigation/types";
 import { addNotificationListeners, ensureInitialNotificationPermissions, openIncomingCallScreen, openAnswerCallScreen, handleDeclineCallFromDeepLink, registerAndSendPushToken, clearCallRelatedNotificationsAndSyncBadge, syncAppBadgeFromMissedCount, clearMissedBadgeCleared, recordMissedCallForUser, applyPendingMissedCallsFromNative, getMissedCountByUserFromNative } from './utils/pushNotifications';
 import { flushCallLogUi, forceCallLogUiNow, recordCallLog, recordCancelledCall } from './screens/home/callLog';
-import { getInstallId } from './utils/installId';
+import { getInstallId, getInstallSecret } from './utils/installId';
 import { notifyIncomingShare, pullPendingShareFromNative, subscribeIncomingShare, type IncomingShareItem } from './utils/incomingShare';
 import { ensureInitialMediaPermissions } from './utils/mediaPermissions';
 import {
@@ -2396,8 +2396,17 @@ function AppContent() {
     if (!LiviAppModule?.setInstallIdForDecline || !LiviAppModule?.setServerUrlForDecline) return;
     const syncDeclinePrefs = async () => {
       try {
-        const [installId, url] = await Promise.all([getInstallId(), Promise.resolve(API_BASE)]);
+        const [installId, installSecret, url] = await Promise.all([
+          getInstallId(),
+          getInstallSecret().catch(() => null),
+          Promise.resolve(API_BASE),
+        ]);
         if (installId) LiviAppModule.setInstallIdForDecline(installId);
+        // Секрет нужен native-коду (DeclineCallReceiver/IncomingCallActivity/LiviOutgoingCallService),
+        // чтобы decline/cancel по HTTP без JS тоже проходили проверку x-install-secret на сервере.
+        if (installSecret && LiviAppModule.setInstallSecretForDecline) {
+          LiviAppModule.setInstallSecretForDecline(installSecret);
+        }
         if (url) LiviAppModule.setServerUrlForDecline(url);
         const uid = getCurrentUserId?.() ?? '';
         if (LiviAppModule.setUserIdForDecline) {
@@ -3388,9 +3397,11 @@ function AppContent() {
         });
         return;
       }
-      // Звонок завершили из PiP (флаг выставлен в endCallImpl): call:ended мог прийти после закрытия PiP (inSystem уже false). Не открываем приложение.
-      if (noOpenFlag) {
-        console.log('[App] [call:ended] __callEndedFromPiPNoOpenRef=true → return (НЕ вызываем goHome, приложение не открываем)');
+      // Звонок завершили из PiP (флаг выставлен в endCallImpl): call:ended мог прийти после закрытия PiP (inSystem уже false).
+      // Не открываем приложение только в фоне / system PiP. Если приложение active (in-app PiP) —
+      // нужно уйти с мёртвого VideoCall на Home (иначе пустой экран).
+      if (noOpenFlag && AppState.currentState !== 'active') {
+        console.log('[App] [call:ended] __callEndedFromPiPNoOpenRef=true + app inactive → return (НЕ вызываем goHome)');
         return;
       }
 

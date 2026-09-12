@@ -399,6 +399,7 @@ class IncomingCallActivity : AppCompatActivity() {
     private fun declineCallFromNative(callId: String) {
         val prefs = applicationContext.getSharedPreferences(LiviAppModule.PREFS_NAME, Context.MODE_PRIVATE)
         val installId = prefs.getString(LiviAppModule.KEY_INSTALL_ID, null)?.takeIf { it.isNotBlank() }
+        val installSecret = prefs.getString(LiviAppModule.KEY_INSTALL_SECRET, null)?.takeIf { it.isNotBlank() }
         val serverUrl = LiviAppModule.resolveServerBaseUrl(applicationContext)
         val userIdHeader = prefs.getString(LiviAppModule.KEY_USER_ID_FOR_DECLINE, null)?.takeIf { it.isNotBlank() }
         val declineUri = "livi://decline-call?callId=${Uri.encode(callId)}"
@@ -411,6 +412,9 @@ class IncomingCallActivity : AppCompatActivity() {
                     conn.requestMethod = "POST"
                     conn.setRequestProperty("Content-Type", "application/json")
                     conn.setRequestProperty("x-install-id", installId)
+                    if (installSecret != null) {
+                        conn.setRequestProperty("x-install-secret", installSecret)
+                    }
                     if (userIdHeader != null) {
                         conn.setRequestProperty("x-user-id", userIdHeader)
                     }
@@ -452,6 +456,7 @@ class IncomingCallActivity : AppCompatActivity() {
         if (incomingShownReported || incomingShownInFlight || callId.isBlank()) return
         val prefs = applicationContext.getSharedPreferences(LiviAppModule.PREFS_NAME, Context.MODE_PRIVATE)
         val installId = prefs.getString(LiviAppModule.KEY_INSTALL_ID, null)?.takeIf { it.isNotBlank() }
+        val installSecret = prefs.getString(LiviAppModule.KEY_INSTALL_SECRET, null)?.takeIf { it.isNotBlank() }
         val serverUrl = LiviAppModule.resolveServerBaseUrl(applicationContext)
         val userIdHeader = prefs.getString(LiviAppModule.KEY_USER_ID_FOR_DECLINE, null)?.takeIf { it.isNotBlank() }
         if (installId == null || serverUrl == null) return
@@ -471,6 +476,7 @@ class IncomingCallActivity : AppCompatActivity() {
                         conn.requestMethod = "POST"
                         conn.setRequestProperty("Content-Type", "application/json")
                         conn.setRequestProperty("x-install-id", installId)
+                        if (installSecret != null) conn.setRequestProperty("x-install-secret", installSecret)
                         if (userIdHeader != null) conn.setRequestProperty("x-user-id", userIdHeader)
                         conn.doOutput = true
                         conn.connectTimeout = 5000

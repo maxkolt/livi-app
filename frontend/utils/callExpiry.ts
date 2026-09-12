@@ -1,4 +1,4 @@
-import { OUTGOING_CALL_TIMEOUT_MS } from './callKeep';
+import { OUTGOING_CALL_TIMEOUT_MS } from './callTimeouts';
 
 function toFiniteMs(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value) && value > 0) return value;

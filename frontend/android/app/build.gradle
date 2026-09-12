@@ -180,9 +180,23 @@ android {
 
         def storeFilePath = envOrProp('LIVI_RELEASE_STORE_FILE') ?: 'livi-release.jks'
         def storeFileResolved = file(storeFilePath)
-        def useDebugSigning = isReleaseTaskRequested && (!storeFileResolved.exists() || envOrProp('LIVI_RELEASE_STORE_PASSWORD') == null)
+        def releaseCredsMissing = !storeFileResolved.exists() || envOrProp('LIVI_RELEASE_STORE_PASSWORD') == null
+        // SECURITY: раньше при отсутствии релизного keystore/паролей сборка молча (только println)
+        // подписывалась debug-ключом — можно было случайно залить в Play Store/раздать APK,
+        // подписанный публично известным debug-ключом (androiddebugkey/"android"). Теперь релизная
+        // сборка падает с ошибкой, если явно не разрешить debug-подпись через
+        // LIVI_ALLOW_DEBUG_RELEASE_SIGNING=1 (только для локального теста, не для публикации).
+        def allowDebugReleaseSigning = envOrProp('LIVI_ALLOW_DEBUG_RELEASE_SIGNING') == '1'
+        def useDebugSigning = isReleaseTaskRequested && releaseCredsMissing && allowDebugReleaseSigning
+        if (isReleaseTaskRequested && releaseCredsMissing && !allowDebugReleaseSigning) {
+            throw new GradleException(
+                "[livi] Release keystore missing or credentials not set (LIVI_RELEASE_STORE_FILE/LIVI_RELEASE_STORE_PASSWORD/...).\n" +
+                "Refusing to silently sign a release build with the DEBUG key.\n" +
+                "Set the real release signing env vars, or set LIVI_ALLOW_DEBUG_RELEASE_SIGNING=1 for a local-only test build (NEVER for Play Store / distributed APKs)."
+            )
+        }
         if (useDebugSigning) {
-            println "[livi] WARNING: Release keystore missing or credentials not set. Signing release with DEBUG key — for local test only, not for Play Store."
+            println "[livi] WARNING: Signing release with DEBUG key because LIVI_ALLOW_DEBUG_RELEASE_SIGNING=1 — for local test only, not for Play Store."
             storeFile file('debug.keystore')
             storePassword 'android'
             keyAlias 'androiddebugkey'

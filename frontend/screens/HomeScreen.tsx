@@ -54,7 +54,7 @@ import { t } from '../utils/i18n';
 import type { Lang } from '../utils/i18n';
 import { useLang } from '../store/lang';
 
-import { getInstallId, resetInstallId } from '../utils/installId';
+import { getInstallId, getInstallSecret, resetInstallId } from '../utils/installId';
 import { logger } from '../utils/logger';
 import { markCallPerf, callPerfSpan } from '../utils/callPerfTrace';
 import { trimNick } from '../utils/userDisplayName';
@@ -2544,7 +2544,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
             return { ok: false, error: 'no_installId' };
           }
 
-          const payload = { installId: resolvedInstallId, profile: profilePayload };
+          const resolvedInstallSecret = await getInstallSecret().catch(() => null);
+          const payload = { installId: resolvedInstallId, installSecret: resolvedInstallSecret, profile: profilePayload };
 
           if (!s || !s.connected) { // очередь до коннекта
             pendingAttachRef.current = profilePayload;

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Правила для Auto Backup (Android < 12, adb backup и т.п.).
+  AndroidManifest ссылался на этот файл (android:fullBackupContent), но сам файл
+  отсутствовал в репозитории — без него allowBackup="true" мог не иметь реальных
+  ограничений на то, что уходит в бэкап (см. security review).
+  По умолчанию исключаем ВСЁ, затем явно включаем то, что безопасно бэкапить.
+  SharedPreferences с installId/installSecret/токенами НЕ включаем.
+-->
+<full-backup-content>
+    <exclude domain="sharedpref" path="."/>
+    <exclude domain="database" path="."/>
+    <exclude domain="file" path="."/>
+    <exclude domain="external" path="."/>
+    <!-- expo-secure-store на Android хранит данные в отдельном EncryptedSharedPreferences —
+         экраны/значения оттуда не перечисляем явно, они и так исключены доменом sharedpref. -->
+</full-backup-content>

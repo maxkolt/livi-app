@@ -106,34 +106,163 @@ export function isDirectAudioEarpieceStabilizeWindow(): boolean {
   return false;
 }
 
+export type OngoingCallMediaState = {
+  activeCallId: string;
+  callMediaHintIsAudio: boolean;
+  directCallUserRequestedVideoExpand: boolean;
+  directCallVideoExpandGuardActive: boolean;
+  expandToVideoCallUiFromPiP: boolean;
+  sessionExists: boolean;
+  sessionIsEnded: boolean;
+  sessionCamOn: boolean;
+  sessionDeferRemoteVideoSubscription: boolean | undefined;
+  sessionDirectCallAudioOnlyConsumerDefer: boolean | undefined;
+  sessionIsCameraSuspendedForAppBackground: boolean | undefined;
+  paramsLocalCamOn: unknown;
+  paramsPreferVideoCallUi: unknown;
+  paramsInAudioOnlyUi: unknown;
+  stayOnVideoCallUi: boolean;
+  isDirectAudioEarpieceStabilizeWindowFlag: boolean;
+  isInAudioOnlyCallUiFlag: boolean;
+  isInAudioOnlyUiRuntimeFlag: boolean;
+  isPipInSystemModeFlag: boolean;
+};
+
+/**
+ * Снимок session/globals для ongoingCallPrefersVideoMedia / resolveActiveCallInCallMedia.
+ * Все session-геттеры здесь — чистые чтения полей (проверено в VideoCallSession.ts), поэтому
+ * их можно безопасно вызывать один раз заранее, а не лениво внутри решающей функции.
+ */
+export function gatherOngoingCallMediaState(): OngoingCallMediaState {
+  const g = global as any;
+  let session: any = null;
+  try {
+    session = getWebrtcSession();
+  } catch {}
+  let params: any = null;
+  try {
+    params = g.__currentCallPiPParamsRef?.current;
+  } catch {}
+  let activeCallId = '';
+  try {
+    activeCallId = String(
+      session?.getCallId?.() ?? g.__activeCallAudioRouteCallIdRef?.current ?? '',
+    ).trim();
+  } catch {}
+  let sessionIsEnded = false;
+  let sessionCamOn = false;
+  let sessionDeferRemoteVideoSubscription: boolean | undefined;
+  let sessionDirectCallAudioOnlyConsumerDefer: boolean | undefined;
+  let sessionIsCameraSuspendedForAppBackground: boolean | undefined;
+  try {
+    if (session) {
+      if (typeof session.isEnded === 'function') sessionIsEnded = !!session.isEnded();
+      if (typeof session.getIsCamOn === 'function') sessionCamOn = !!session.getIsCamOn();
+      if (typeof session.getDeferRemoteVideoSubscription === 'function') {
+        // ВАЖНО: НЕ приводить через !! — исходная логика различает false и undefined
+        // (оба геттера должны вернуть буквально false, иначе видео считается активным).
+        sessionDeferRemoteVideoSubscription = session.getDeferRemoteVideoSubscription();
+      }
+      if (typeof session.getDirectCallAudioOnlyConsumerDefer === 'function') {
+        sessionDirectCallAudioOnlyConsumerDefer = session.getDirectCallAudioOnlyConsumerDefer();
+      }
+      if (typeof session.isCameraSuspendedForAppBackground === 'function') {
+        sessionIsCameraSuspendedForAppBackground = !!session.isCameraSuspendedForAppBackground();
+      }
+    }
+  } catch {}
+  let expandToVideoCallUiFromPiP = false;
+  try {
+    expandToVideoCallUiFromPiP = g.__expandToVideoCallUiFromPiPRef?.current === true;
+  } catch {}
+  let callMediaHintIsAudio = false;
+  try {
+    callMediaHintIsAudio = !!activeCallId && getCallMediaHint(activeCallId) === 'audio';
+  } catch {}
+  let directCallUserRequestedVideoExpand = false;
+  try {
+    directCallUserRequestedVideoExpand = isDirectCallUserRequestedVideoExpand();
+  } catch {}
+  let directCallVideoExpandGuardActive = false;
+  try {
+    directCallVideoExpandGuardActive = isDirectCallVideoExpandGuardActive();
+  } catch {}
+  let stayOnVideoCallUi = false;
+  try {
+    stayOnVideoCallUi = isStayOnVideoCallUi();
+  } catch {}
+  let isDirectAudioEarpieceStabilizeWindowFlag = false;
+  try {
+    isDirectAudioEarpieceStabilizeWindowFlag = isDirectAudioEarpieceStabilizeWindow();
+  } catch {}
+  let isInAudioOnlyCallUiFlag = false;
+  try {
+    isInAudioOnlyCallUiFlag = isInAudioOnlyCallUi();
+  } catch {}
+  let isInAudioOnlyUiRuntimeFlag = false;
+  try {
+    isInAudioOnlyUiRuntimeFlag = isInAudioOnlyUi();
+  } catch {}
+  let isPipInSystemModeFlag = false;
+  try {
+    isPipInSystemModeFlag = isPipInSystemMode();
+  } catch {}
+  return {
+    activeCallId,
+    callMediaHintIsAudio,
+    directCallUserRequestedVideoExpand,
+    directCallVideoExpandGuardActive,
+    expandToVideoCallUiFromPiP,
+    sessionExists: !!session,
+    sessionIsEnded,
+    sessionCamOn,
+    sessionDeferRemoteVideoSubscription,
+    sessionDirectCallAudioOnlyConsumerDefer,
+    sessionIsCameraSuspendedForAppBackground,
+    paramsLocalCamOn: params?.localCamOn,
+    paramsPreferVideoCallUi: params?.preferVideoCallUi,
+    paramsInAudioOnlyUi: params?.inAudioOnlyUi,
+    stayOnVideoCallUi,
+    isDirectAudioEarpieceStabilizeWindowFlag,
+    isInAudioOnlyCallUiFlag,
+    isInAudioOnlyUiRuntimeFlag,
+    isPipInSystemModeFlag,
+  };
+}
+
+function isActiveDirectCallAudioFirstWithoutUserVideoFromState(state: OngoingCallMediaState): boolean {
+  if (!state.activeCallId || !state.callMediaHintIsAudio) return false;
+  return !state.directCallUserRequestedVideoExpand;
+}
+
+/** Чистая версия ongoingCallPrefersVideoMedia: та же логика, но на явном snapshot вместо чтения globals/session. */
+export function ongoingCallPrefersVideoMediaFromState(state: OngoingCallMediaState): boolean {
+  if (isActiveDirectCallAudioFirstWithoutUserVideoFromState(state)) {
+    if (state.directCallVideoExpandGuardActive) return true;
+    if (state.expandToVideoCallUiFromPiP) return true;
+    if (state.sessionCamOn) return true;
+    if (state.paramsLocalCamOn === true) return true;
+    return false;
+  }
+  if (state.stayOnVideoCallUi) return true;
+  if (state.paramsPreferVideoCallUi === true) return true;
+  if (state.paramsLocalCamOn === true) return true;
+  if (!state.sessionExists) return false;
+  if (state.sessionIsEnded) return false;
+  if (state.sessionCamOn) return true;
+  if (
+    state.sessionDeferRemoteVideoSubscription === false &&
+    state.sessionDirectCallAudioOnlyConsumerDefer === false
+  ) {
+    return true;
+  }
+  return false;
+}
+
 /** Активный звонок уже на video UI / с камерой — не трактовать как audio-only для маршрута. */
 export function ongoingCallPrefersVideoMedia(): boolean {
   try {
-    const g = global as any;
-    if (isActiveDirectCallAudioFirstWithoutUserVideo()) {
-      if (isDirectCallVideoExpandGuardActive()) return true;
-      try {
-        const gg = global as any;
-        if (gg.__expandToVideoCallUiFromPiPRef?.current === true) return true;
-      } catch {}
-      const session = g.__webrtcSessionRef?.current;
-      if (typeof session?.getIsCamOn === 'function' && session.getIsCamOn()) return true;
-      const params = g.__currentCallPiPParamsRef?.current;
-      if (params?.localCamOn === true) return true;
-      return false;
-    }
-    if (isStayOnVideoCallUi()) return true;
-    const params = g.__currentCallPiPParamsRef?.current;
-    if (params?.preferVideoCallUi === true) return true;
-    if (params?.localCamOn === true) return true;
-    const session = getWebrtcSession();
-    if (!session) return false;
-    if (typeof session.isEnded === 'function' && session.isEnded()) return false;
-    if (typeof session.getIsCamOn === 'function' && session.getIsCamOn()) return true;
-    const defer = session.getDeferRemoteVideoSubscription?.();
-    const audioDefer = session.getDirectCallAudioOnlyConsumerDefer?.();
-    if (defer === false && audioDefer === false) return true;
-    return false;
+    return ongoingCallPrefersVideoMediaFromState(gatherOngoingCallMediaState());
   } catch {
     return false;
   }
@@ -241,57 +370,152 @@ export function shouldDeferRandomChatStopOnAppBackground(): boolean {
   return shouldKeepInCallAudioOnAppBackground();
 }
 
+/** Чистая версия resolveActiveCallInCallMedia: та же логика, но на явном snapshot. */
+export function resolveActiveCallInCallMediaFromState(state: OngoingCallMediaState): 'audio' | 'video' {
+  if (state.isDirectAudioEarpieceStabilizeWindowFlag) return 'audio';
+  if (ongoingCallPrefersVideoMediaFromState(state)) return 'video';
+  if (state.isInAudioOnlyCallUiFlag) return 'audio';
+  if (state.isInAudioOnlyUiRuntimeFlag) return 'audio';
+  if (state.paramsInAudioOnlyUi === true) return 'audio';
+  if (state.paramsPreferVideoCallUi === false) return 'audio';
+  if (state.sessionIsCameraSuspendedForAppBackground === true) return 'audio';
+  if (state.isPipInSystemModeFlag) {
+    if (state.paramsLocalCamOn === false) return 'audio';
+  }
+  return 'video';
+}
+
 export function resolveActiveCallInCallMedia(): 'audio' | 'video' {
   try {
-    if (isDirectAudioEarpieceStabilizeWindow()) return 'audio';
-    if (ongoingCallPrefersVideoMedia()) return 'video';
-    if (isInAudioOnlyCallUi()) return 'audio';
-    const g = global as any;
-    if (isInAudioOnlyUi()) return 'audio';
-    const params = g.__currentCallPiPParamsRef?.current;
-    if (params?.inAudioOnlyUi === true) return 'audio';
-    if (params?.preferVideoCallUi === false) return 'audio';
-    const session = getWebrtcSession();
-    if (session && typeof session.isCameraSuspendedForAppBackground === 'function') {
-      if (session.isCameraSuspendedForAppBackground()) return 'audio';
+    return resolveActiveCallInCallMediaFromState(gatherOngoingCallMediaState());
+  } catch {
+    return 'video';
+  }
+}
+
+export function isAppInCallBackgroundState(): boolean {
+  const s = AppState.currentState;
+  return s === 'background' || s === 'inactive';
+}
+
+/**
+ * Снимок для решения «какой маршрут восстанавливать» (reapply после фона / PiP).
+ * Расширяет OngoingCallMediaState: audio-only контекст звонка строится поверх
+ * того же media-снимка, поэтому media переиспользуется, а не собирается заново.
+ */
+export type CallAudioRouteReapplyState = {
+  media: OngoingCallMediaState;
+  appInBackground: boolean;
+  ongoingCallSession: boolean;
+  pipAudioOnlyPlaceholder: boolean;
+  now: number;
+  returningFromSystemPiPUntil: number;
+  systemPiPEntryInProgressUntil: number;
+  callAudioPreservePriorityUntil: number;
+};
+
+export function gatherCallAudioRouteReapplyState(
+  media: OngoingCallMediaState = gatherOngoingCallMediaState(),
+): CallAudioRouteReapplyState {
+  const g = global as any;
+  const readUntil = (key: string): number => {
+    try {
+      return Number(g[key]?.current || 0);
+    } catch {
+      return 0;
     }
-    if (isPipInSystemMode()) {
-      const localCamOn = params?.localCamOn;
-      if (localCamOn === false) return 'audio';
-    }
+  };
+  let appInBackground = false;
+  try {
+    appInBackground = isAppInCallBackgroundState();
   } catch {}
-  return 'video';
+  let ongoingCallSession = false;
+  try {
+    ongoingCallSession = isOngoingCallSession();
+  } catch {}
+  let pipAudioOnlyPlaceholder = false;
+  try {
+    pipAudioOnlyPlaceholder = isPipAudioOnlyPlaceholder();
+  } catch {}
+  return {
+    media,
+    appInBackground,
+    ongoingCallSession,
+    pipAudioOnlyPlaceholder,
+    now: Date.now(),
+    returningFromSystemPiPUntil: readUntil('__returningFromSystemPiPUntilRef'),
+    systemPiPEntryInProgressUntil: readUntil('__systemPiPEntryInProgressUntilRef'),
+    callAudioPreservePriorityUntil: readUntil('__callAudioPreservePriorityUntilRef'),
+  };
+}
+
+/** Чистая версия: активный аудиозвонок (экран или sticky после Home), не video UI. */
+export function isAudioOnlyOngoingCallContextFromState(state: CallAudioRouteReapplyState): boolean {
+  if (ongoingCallPrefersVideoMediaFromState(state.media)) return false;
+  if (state.media.isInAudioOnlyCallUiFlag) return true;
+  if (!state.ongoingCallSession) return false;
+  if (state.media.paramsInAudioOnlyUi === true) return true;
+  if (state.pipAudioOnlyPlaceholder) return true;
+  return false;
+}
+
+/** Чистая версия resolvePersistedCallAudioRouteForActiveUi. */
+export function resolvePersistedCallAudioRouteForActiveUiFromState(
+  route: InCallAudioRoute | null,
+  state: CallAudioRouteReapplyState,
+): InCallAudioRoute | null {
+  if (!route) return null;
+  if (isExternalHeadsetRoute(route)) return route;
+  if (state.media.isInAudioOnlyCallUiFlag) return route;
+  if (state.media.isDirectAudioEarpieceStabilizeWindowFlag) return route;
+  if (route === 'EARPIECE') return 'SPEAKER_PHONE';
+  return route;
+}
+
+/** Идёт переход enter/exit system PiP — маршрут в этом окне не переписываем. */
+export function isSystemPiPRouteTransitionFromState(state: CallAudioRouteReapplyState): boolean {
+  return (
+    state.now < state.returningFromSystemPiPUntil ||
+    state.media.isPipInSystemModeFlag ||
+    state.now < state.systemPiPEntryInProgressUntil ||
+    state.now < state.callAudioPreservePriorityUntil
+  );
+}
+
+/** Чистая версия resolvePersistedCallAudioRouteForReapply. */
+export function resolvePersistedCallAudioRouteForReapplyFromState(
+  route: InCallAudioRoute | null,
+  state: CallAudioRouteReapplyState,
+): InCallAudioRoute | null {
+  if (state.appInBackground && isAudioOnlyOngoingCallContextFromState(state)) {
+    if (isSystemPiPRouteTransitionFromState(state)) {
+      if (route && isExternalHeadsetRoute(route)) return route;
+      if (route === 'EARPIECE' || route === 'SPEAKER_PHONE') return route;
+      return route || 'EARPIECE';
+    }
+    if (route && isExternalHeadsetRoute(route)) return route;
+    return 'SPEAKER_PHONE';
+  }
+  return resolvePersistedCallAudioRouteForActiveUiFromState(route, state);
 }
 
 /** На video UI не восстанавливаем разговорный из persist (кроме audio-only экрана). */
 export function resolvePersistedCallAudioRouteForActiveUi(
   route: InCallAudioRoute | null,
 ): InCallAudioRoute | null {
-  if (!route) return null;
-  if (isExternalHeadsetRoute(route)) return route;
-  if (isInAudioOnlyCallUi()) return route;
-  if (isDirectAudioEarpieceStabilizeWindow()) return route;
-  if (route === 'EARPIECE') return 'SPEAKER_PHONE';
-  return route;
+  return resolvePersistedCallAudioRouteForActiveUiFromState(
+    route,
+    gatherCallAudioRouteReapplyState(),
+  );
 }
 
 /** Активный аудиозвонок (экран или sticky после Home), не video UI. */
 export function isAudioOnlyOngoingCallContext(): boolean {
-  if (ongoingCallPrefersVideoMedia()) return false;
-  if (isInAudioOnlyCallUi()) return true;
   try {
-    if (!isOngoingCallSession()) return false;
-    const g = global as any;
-    const params = g.__currentCallPiPParamsRef?.current;
-    if (params?.inAudioOnlyUi === true) return true;
-    if (isPipAudioOnlyPlaceholder()) return true;
-  } catch {}
-  return false;
-}
-
-export function isAppInCallBackgroundState(): boolean {
-  const s = AppState.currentState;
-  return s === 'background' || s === 'inactive';
+    return isAudioOnlyOngoingCallContextFromState(gatherCallAudioRouteReapplyState());
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -301,26 +525,10 @@ export function isAppInCallBackgroundState(): boolean {
 export function resolvePersistedCallAudioRouteForReapply(
   route: InCallAudioRoute | null,
 ): InCallAudioRoute | null {
-  const inBackground = isAppInCallBackgroundState();
-  if (inBackground && isAudioOnlyOngoingCallContext()) {
-    try {
-      const g = global as any;
-      const now = Date.now();
-      const pipTransition =
-        now < Number(g.__returningFromSystemPiPUntilRef?.current || 0) ||
-        isPipInSystemMode() ||
-        now < Number(g.__systemPiPEntryInProgressUntilRef?.current || 0) ||
-        now < Number(g.__callAudioPreservePriorityUntilRef?.current || 0);
-      if (pipTransition) {
-        if (route && isExternalHeadsetRoute(route)) return route;
-        if (route === 'EARPIECE' || route === 'SPEAKER_PHONE') return route;
-        return route || 'EARPIECE';
-      }
-    } catch {}
-    if (route && isExternalHeadsetRoute(route)) return route;
-    return 'SPEAKER_PHONE';
-  }
-  return resolvePersistedCallAudioRouteForActiveUi(route);
+  return resolvePersistedCallAudioRouteForReapplyFromState(
+    route,
+    gatherCallAudioRouteReapplyState(),
+  );
 }
 
 /** Сохранить маршрут из PiP params / persisted перед уходом в фон. */
@@ -794,131 +1002,207 @@ export function readAuthoritativeCallAudioRouteAfterPiP(): InCallAudioRoute | nu
   return null;
 }
 
-function externalRouteListedInCall(route: InCallAudioRoute | null | undefined): boolean {
-  if (!route || !isExternalHeadsetRoute(route)) return false;
-  if (route === 'BLUETOOTH' && !isBluetoothHeadsetActiveForCall()) return false;
-  const available = readInCallAvailableAudioRoutesList();
-  if (!available.length) return false;
-  return available.includes(route);
+/**
+ * Снимок для readInAppPiPAudioOutputRoute — самой сложной функции выбора маршрута
+ * (какой динамик показывать/включать в in-app PiP-плашке).
+ * Все чтения здесь без побочных эффектов: nativeCallAudioProbe/BT-кэш/ICM-список
+ * только читаются, поэтому их безопасно снять один раз заранее.
+ */
+export type PiPAudioOutputRouteState = {
+  pipVisible: boolean;
+  fromParams: InCallAudioRoute | null;
+  userSel: InCallAudioRoute | null;
+  icmSelected: InCallAudioRoute | null;
+  stored: InCallAudioRoute | null;
+  lastApplied: InCallAudioRoute | null;
+  explicitToggle: InCallAudioRoute | null;
+  extLocked: InCallAudioRoute | null;
+  availableRoutes: string[];
+  btHeadsetActiveForCall: boolean;
+  uiLockRoute: InCallAudioRoute | null;
+  pipInAppRtcFromAudioOnly: boolean;
+  paramsInAudioOnlyUi: unknown;
+  paramsPreferVideoCallUi: unknown;
+  /** readConnectedExternalCallAudioRoute(hint) || readActiveExternalCallAudioRoute(hint) */
+  externalForHint: InCallAudioRoute | null;
+};
+
+export function gatherPiPAudioOutputRouteState(): PiPAudioOutputRouteState {
+  const g = global as any;
+  function read<T>(fn: () => T, fallback: T): T {
+    try {
+      return fn();
+    } catch {
+      return fallback;
+    }
+  }
+  const params = read<any>(() => g.__currentCallPiPParamsRef?.current, null);
+  const fromParams = read(() => normalizeInCallRoute(params?.audioOutputRoute || ''), null);
+  const userSel = read(() => readUserSelectedCallAudioRoute(), null);
+  const icmSelected = read(
+    () => normalizeInCallRoute(g.__inCallSelectedAudioRouteRef?.current || ''),
+    null,
+  );
+  const stored = read(() => normalizeInCallRoute(g.__persistedCallAudioRouteRef?.current || ''), null);
+  const lastApplied = read(() => readLastAppliedCallAudioRoute(), null);
+  const explicitToggle = read(
+    () => normalizeInCallRoute(g.__inAppPiPExplicitToggleRouteRef?.current || ''),
+    null,
+  );
+  const extLocked = read(() => readUserSelectedExternalCallAudioRoute(), null);
+  const hint = fromParams || userSel || stored || lastApplied;
+  return {
+    pipVisible: read(() => g.__pipVisibleRef?.current === true, false),
+    fromParams,
+    userSel,
+    icmSelected,
+    stored,
+    lastApplied,
+    explicitToggle,
+    extLocked,
+    availableRoutes: read(() => readInCallAvailableAudioRoutesList(), []),
+    btHeadsetActiveForCall: read(() => isBluetoothHeadsetActiveForCall(), false),
+    uiLockRoute: read(() => readCallAudioRouteUiLock(), null),
+    pipInAppRtcFromAudioOnly: read(() => g.__pipInAppRtcFromAudioOnlyRef?.current === true, false),
+    paramsInAudioOnlyUi: read<unknown>(() => params?.inAudioOnlyUi, undefined),
+    paramsPreferVideoCallUi: read<unknown>(() => params?.preferVideoCallUi, undefined),
+    externalForHint: read(
+      () => readConnectedExternalCallAudioRoute(hint) || readActiveExternalCallAudioRoute(hint),
+      null,
+    ),
+  };
 }
 
-function readPiPBuiltinWhenExternalUnavailable(g: any): InCallAudioRoute {
-  const lock = readCallAudioRouteUiLock();
+/** Гарнитура реально числится доступной в текущем звонке (ICM-список + BT-кэш). */
+export function isExternalRouteListedInCallFromState(
+  route: InCallAudioRoute | null | undefined,
+  state: PiPAudioOutputRouteState,
+): boolean {
+  if (!route || !isExternalHeadsetRoute(route)) return false;
+  if (route === 'BLUETOOTH' && !state.btHeadsetActiveForCall) return false;
+  if (!state.availableRoutes.length) return false;
+  return state.availableRoutes.includes(route);
+}
+
+/** Встроенный маршрут, когда выбранная гарнитура недоступна. */
+export function readPiPBuiltinWhenExternalUnavailableFromState(
+  state: PiPAudioOutputRouteState,
+): InCallAudioRoute {
+  const lock = state.uiLockRoute;
   if (lock === 'EARPIECE' || lock === 'SPEAKER_PHONE') return lock;
-  const fromAudioPiP = g.__pipInAppRtcFromAudioOnlyRef?.current === true;
-  const params = g.__currentCallPiPParamsRef?.current;
-  if (fromAudioPiP || params?.inAudioOnlyUi === true) return 'EARPIECE';
-  const stored = normalizeInCallRoute(g.__persistedCallAudioRouteRef?.current || '');
-  const lastApplied = readLastAppliedCallAudioRoute();
-  if (stored === 'EARPIECE' || stored === 'SPEAKER_PHONE') return stored;
-  if (lastApplied === 'EARPIECE' || lastApplied === 'SPEAKER_PHONE') return lastApplied;
-  if (params?.preferVideoCallUi === true && !fromAudioPiP) return 'SPEAKER_PHONE';
+  const fromAudioPiP = state.pipInAppRtcFromAudioOnly;
+  if (fromAudioPiP || state.paramsInAudioOnlyUi === true) return 'EARPIECE';
+  if (state.stored === 'EARPIECE' || state.stored === 'SPEAKER_PHONE') return state.stored;
+  if (state.lastApplied === 'EARPIECE' || state.lastApplied === 'SPEAKER_PHONE') {
+    return state.lastApplied;
+  }
+  if (state.paramsPreferVideoCallUi === true && !fromAudioPiP) return 'SPEAKER_PHONE';
   return 'EARPIECE';
+}
+
+/** Чистая версия readInAppPiPAudioOutputRoute: тот же приоритет источников, но на snapshot. */
+export function readInAppPiPAudioOutputRouteFromState(
+  state: PiPAudioOutputRouteState,
+): InCallAudioRoute {
+  const { fromParams, userSel, icmSelected, stored, lastApplied, explicitToggle, extLocked } = state;
+  const listed = (r: InCallAudioRoute | null | undefined): boolean =>
+    isExternalRouteListedInCallFromState(r, state);
+  const builtinFallback = (): InCallAudioRoute =>
+    readPiPBuiltinWhenExternalUnavailableFromState(state);
+
+  if (state.pipVisible) {
+    if (extLocked && listed(extLocked)) {
+      return extLocked;
+    }
+    if (
+      explicitToggle &&
+      (isExternalHeadsetRoute(explicitToggle) ||
+        explicitToggle === 'EARPIECE' ||
+        explicitToggle === 'SPEAKER_PHONE')
+    ) {
+      if (isExternalHeadsetRoute(explicitToggle)) {
+        if (listed(explicitToggle)) return explicitToggle;
+      } else {
+        return explicitToggle;
+      }
+    }
+  }
+
+  if (
+    state.pipVisible &&
+    (icmSelected === 'EARPIECE' || icmSelected === 'SPEAKER_PHONE') &&
+    isExternalHeadsetRoute(fromParams) &&
+    !listed(fromParams)
+  ) {
+    return icmSelected;
+  }
+
+  if (userSel && isExternalHeadsetRoute(userSel) && listed(userSel)) {
+    return userSel;
+  }
+  if (fromParams && isExternalHeadsetRoute(fromParams) && listed(fromParams)) {
+    return fromParams;
+  }
+  if (lastApplied && isExternalHeadsetRoute(lastApplied) && listed(lastApplied)) {
+    return lastApplied;
+  }
+
+  if (userSel === 'SPEAKER_PHONE' || userSel === 'EARPIECE') return userSel;
+
+  // Video→in-app PiP: ICM часто ещё EARPIECE после audio-only, пока persist/params уже SPEAKER.
+  if (state.pipVisible && !state.pipInAppRtcFromAudioOnly) {
+    const videoBuiltin =
+      (fromParams === 'SPEAKER_PHONE' || fromParams === 'EARPIECE' ? fromParams : null) ||
+      (lastApplied === 'SPEAKER_PHONE' || lastApplied === 'EARPIECE' ? lastApplied : null) ||
+      (stored === 'SPEAKER_PHONE' || stored === 'EARPIECE' ? stored : null);
+    if (videoBuiltin === 'SPEAKER_PHONE') return 'SPEAKER_PHONE';
+    if (videoBuiltin === 'EARPIECE' && icmSelected !== 'SPEAKER_PHONE') return 'EARPIECE';
+  }
+
+  if (icmSelected === 'SPEAKER_PHONE' || icmSelected === 'EARPIECE') return icmSelected;
+
+  if (fromParams && isExternalHeadsetRoute(fromParams) && !listed(fromParams)) {
+    return builtinFallback();
+  }
+  if (userSel && isExternalHeadsetRoute(userSel) && !listed(userSel)) {
+    return builtinFallback();
+  }
+
+  const builtinPersisted =
+    (stored === 'SPEAKER_PHONE' || stored === 'EARPIECE' ? stored : null) ||
+    (lastApplied === 'SPEAKER_PHONE' || lastApplied === 'EARPIECE' ? lastApplied : null);
+  if (builtinPersisted) return builtinPersisted;
+
+  if (userSel && listed(userSel)) return userSel;
+
+  if (fromParams === 'SPEAKER_PHONE' || fromParams === 'EARPIECE') return fromParams;
+
+  if (fromParams && listed(fromParams)) return fromParams;
+
+  const hint = fromParams || userSel || stored || lastApplied;
+  const external = state.externalForHint;
+  if (external && listed(external)) return external;
+
+  if (
+    (userSel && isExternalHeadsetRoute(userSel)) ||
+    (fromParams && isExternalHeadsetRoute(fromParams)) ||
+    (hint && isExternalHeadsetRoute(hint))
+  ) {
+    return builtinFallback();
+  }
+
+  const intent = fromParams || stored || lastApplied;
+  if (intent === 'SPEAKER_PHONE' || intent === 'EARPIECE') return intent;
+  if (isExternalHeadsetRoute(intent)) {
+    return builtinFallback();
+  }
+  return intent || 'EARPIECE';
 }
 
 /** Маршрут из PiP params + persist ref (без импорта callAudioRoutePersist — без циклов). */
 export function readInAppPiPAudioOutputRoute(): InCallAudioRoute {
   try {
-    const g = global as any;
-    const fromParams = normalizeInCallRoute(g.__currentCallPiPParamsRef?.current?.audioOutputRoute || '');
-    const userSel = readUserSelectedCallAudioRoute();
-    const icmSelected = normalizeInCallRoute(g.__inCallSelectedAudioRouteRef?.current || '');
-    const stored = normalizeInCallRoute(g.__persistedCallAudioRouteRef?.current || '');
-    const lastApplied = readLastAppliedCallAudioRoute();
-    const explicitToggle = normalizeInCallRoute(g.__inAppPiPExplicitToggleRouteRef?.current || '');
-    const extLocked = readUserSelectedExternalCallAudioRoute();
-
-    if (g.__pipVisibleRef?.current === true) {
-      if (extLocked && externalRouteListedInCall(extLocked)) {
-        return extLocked;
-      }
-      if (
-        explicitToggle &&
-        (isExternalHeadsetRoute(explicitToggle) ||
-          explicitToggle === 'EARPIECE' ||
-          explicitToggle === 'SPEAKER_PHONE')
-      ) {
-        if (isExternalHeadsetRoute(explicitToggle)) {
-          if (externalRouteListedInCall(explicitToggle)) return explicitToggle;
-        } else {
-          return explicitToggle;
-        }
-      }
-    }
-
-    if (
-      g.__pipVisibleRef?.current === true &&
-      (icmSelected === 'EARPIECE' || icmSelected === 'SPEAKER_PHONE') &&
-      isExternalHeadsetRoute(fromParams) &&
-      !externalRouteListedInCall(fromParams)
-    ) {
-      return icmSelected;
-    }
-
-    if (userSel && isExternalHeadsetRoute(userSel) && externalRouteListedInCall(userSel)) {
-      return userSel;
-    }
-    if (fromParams && isExternalHeadsetRoute(fromParams) && externalRouteListedInCall(fromParams)) {
-      return fromParams;
-    }
-    if (lastApplied && isExternalHeadsetRoute(lastApplied) && externalRouteListedInCall(lastApplied)) {
-      return lastApplied;
-    }
-
-    if (userSel === 'SPEAKER_PHONE' || userSel === 'EARPIECE') return userSel;
-
-    // Video→in-app PiP: ICM часто ещё EARPIECE после audio-only, пока persist/params уже SPEAKER.
-    if (
-      g.__pipVisibleRef?.current === true &&
-      g.__pipInAppRtcFromAudioOnlyRef?.current !== true
-    ) {
-      const videoBuiltin =
-        (fromParams === 'SPEAKER_PHONE' || fromParams === 'EARPIECE' ? fromParams : null) ||
-        (lastApplied === 'SPEAKER_PHONE' || lastApplied === 'EARPIECE' ? lastApplied : null) ||
-        (stored === 'SPEAKER_PHONE' || stored === 'EARPIECE' ? stored : null);
-      if (videoBuiltin === 'SPEAKER_PHONE') return 'SPEAKER_PHONE';
-      if (videoBuiltin === 'EARPIECE' && icmSelected !== 'SPEAKER_PHONE') return 'EARPIECE';
-    }
-
-    if (icmSelected === 'SPEAKER_PHONE' || icmSelected === 'EARPIECE') return icmSelected;
-
-    if (fromParams && isExternalHeadsetRoute(fromParams) && !externalRouteListedInCall(fromParams)) {
-      return readPiPBuiltinWhenExternalUnavailable(g);
-    }
-    if (userSel && isExternalHeadsetRoute(userSel) && !externalRouteListedInCall(userSel)) {
-      return readPiPBuiltinWhenExternalUnavailable(g);
-    }
-
-    const builtinPersisted =
-      (stored === 'SPEAKER_PHONE' || stored === 'EARPIECE' ? stored : null) ||
-      (lastApplied === 'SPEAKER_PHONE' || lastApplied === 'EARPIECE' ? lastApplied : null);
-    if (builtinPersisted) return builtinPersisted;
-
-    if (userSel && externalRouteListedInCall(userSel)) return userSel;
-
-    if (fromParams === 'SPEAKER_PHONE' || fromParams === 'EARPIECE') return fromParams;
-
-    if (fromParams && externalRouteListedInCall(fromParams)) return fromParams;
-
-    const hint = fromParams || userSel || stored || lastApplied;
-    const external =
-      readConnectedExternalCallAudioRoute(hint) || readActiveExternalCallAudioRoute(hint);
-    if (external && externalRouteListedInCall(external)) return external;
-
-    if (
-      (userSel && isExternalHeadsetRoute(userSel)) ||
-      (fromParams && isExternalHeadsetRoute(fromParams)) ||
-      (hint && isExternalHeadsetRoute(hint))
-    ) {
-      return readPiPBuiltinWhenExternalUnavailable(g);
-    }
-
-    const intent = fromParams || stored || lastApplied;
-    if (intent === 'SPEAKER_PHONE' || intent === 'EARPIECE') return intent;
-    if (isExternalHeadsetRoute(intent)) {
-      return readPiPBuiltinWhenExternalUnavailable(g);
-    }
-    return intent || 'EARPIECE';
+    return readInAppPiPAudioOutputRouteFromState(gatherPiPAudioOutputRouteState());
   } catch {
     return 'EARPIECE';
   }
