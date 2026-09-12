@@ -90,6 +90,50 @@ export function selectedAlbumIndices(
   return out;
 }
 
+export type ChatPhotoEntry = {
+  uri: string;
+  messageId: string;
+  /** Index of this photo within its own message's album (0 for single-image messages). */
+  photoIndex: number;
+};
+
+/**
+ * Flatten every image message (single photo or album) in `messages` into one ordered list,
+ * in the same chronological order as `messages` itself. Used to swipe through ALL photos of
+ * the conversation from the full-screen viewer (WhatsApp/Telegram-style), not just the photos
+ * inside the one message that was tapped.
+ */
+export function buildChatPhotoTimeline(
+  messages: any[],
+  resolveMediaUri: (uri?: string) => string,
+): ChatPhotoEntry[] {
+  const out: ChatPhotoEntry[] = [];
+  if (!Array.isArray(messages)) return out;
+  for (const message of messages) {
+    if (String(message?.type || '') !== 'image') continue;
+    const messageId = String(message?.id || '').trim();
+    if (!messageId) continue;
+    const uris = getMessageImageUris(message);
+    uris.forEach((raw, photoIndex) => {
+      const uri = (resolveMediaUri(raw) || raw || '').trim();
+      if (!uri) return;
+      out.push({ uri, messageId, photoIndex });
+    });
+  }
+  return out;
+}
+
+/** Position of one specific photo (by its message id + in-message index) inside the flattened timeline. */
+export function findChatPhotoTimelineIndex(
+  timeline: ChatPhotoEntry[],
+  messageId: string,
+  photoIndex: number,
+): number {
+  const mid = String(messageId || '').trim();
+  if (!mid) return -1;
+  return timeline.findIndex((entry) => entry.messageId === mid && entry.photoIndex === photoIndex);
+}
+
 /** Columns for album grid (Telegram-like equal tiles). */
 export function albumGridColumns(count: number): number {
   const n = Math.max(1, Math.min(CHAT_ALBUM_MAX, count | 0));

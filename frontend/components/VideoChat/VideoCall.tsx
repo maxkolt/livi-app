@@ -48,6 +48,7 @@ import { isValidStream } from '../../utils/streamUtils';
 import { logger } from '../../utils/logger';
 import { markCallPerf, callPerfSpan, beginCallPerfTrace } from '../../utils/callPerfTrace';
 import { isExternalCallHoldActive } from '../../utils/externalCallHold';
+import { peekCallAvatar, primeCallAvatarsFromFriends } from '../../utils/callAvatarPrime';
 import {
   getPartnerExternalHoldSnapshot,
   subscribePartnerExternalHoldUi,
@@ -702,8 +703,12 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     const partnerInPiPForHint =
       !partnerDeclaredAudioUi &&
       (partnerInPiPRef.current || session.getPartnerInPiP?.() === true);
+    // Если партнёр ЯВНО выключил камеру (cam-toggle=false) — гасим подсказку «у партнёра видео»,
+    // даже если он всё ещё формально в video-UI: иначе на audio-экране у собеседника продолжает
+    // подсвечиваться кнопка камеры, будто камера партнёра работает, хотя он её выключил.
+    const partnerCamDeclaredOff = session.getRemoteCamDeclaredOff?.() === true;
     // Не опираемся на remoteCamOn без явного direct-call:video-ui — иначе после PiP→audio оба видят ложный hint.
-    const partnerVideoUi = partnerExplicitVideoUi || partnerInPiPForHint;
+    const partnerVideoUi = (partnerExplicitVideoUi || partnerInPiPForHint) && !partnerCamDeclaredOff;
     setPeerInvitedVideo(!!partnerVideoUi);
   }, []);
 
@@ -2300,6 +2305,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       try {
         const r = await fetchFriends();
         const friendsList = r?.list || [];
+        primeCallAvatarsFromFriends(friendsList);
         setFriends(friendsList);
       } catch (e) {
         logger.warn('[VideoCall] Failed to load friends:', e);
@@ -6559,7 +6565,9 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     } catch {}
     if (!partnerUserId) return undefined;
     const partner = friends.find((fr) => String(fr._id ?? fr.id) === String(partnerUserId));
-    if (!partner) return undefined;
+    // friends грузится по сети — на первом кадре его ещё нет. Синхронный прайм-кэш
+    // отдаёт аватар сразу, чтобы не мигала буква-заглушка (см. callAvatarPrime).
+    if (!partner) return peekCallAvatar(partnerUserId);
     try {
       if (partner.avatarThumbB64 && String(partner.avatarThumbB64).trim()) {
         const thumb = String(partner.avatarThumbB64).trim();
@@ -6576,7 +6584,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
         return `${base.replace(/\/+$/, '')}${a.startsWith('/') ? '' : '/'}${a}`;
       }
     } catch {}
-    return undefined;
+    return peekCallAvatar(partnerUserId);
   }, [friends, partnerUserId, pip.visible]);
 
   const flipLocalCamera = useCallback(() => {
@@ -6735,8 +6743,9 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     return [
       {
         key: 'speaker',
-        label: speakerOn ? t('callSpeakerOff', lang) : t('callSpeakerOn', lang),
-        icon: speakerOn ? 'volume-up' : 'hearing',
+        // Стабильная подпись; «вкл» читается по active (акцент + галочка), не по «Выключить…».
+        label: speakerOn ? t('callSpeakerActive', lang) : t('callSpeakerOn', lang),
+        icon: 'volume-up',
         active: speakerOn,
         onPress: () => {
           if (controlsLockedForLocalHold) return;
@@ -7812,10 +7821,16 @@ const styles = StyleSheet.create({
     backgroundColor: '#000',
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: 'rgba(255,255,255,0.12)',
+    // Скругляем и КЛИПАЕМ: иначе видео-поверхность (Texture/Surface) заходит за
+    // радиус, особенно в момент перехода в системный/ин-апп PiP и назад.
+    borderRadius: 16,
+    overflow: 'hidden',
   },
   unifiedLocalPipInner: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: '#000',
+    borderRadius: 16,
+    overflow: 'hidden',
   },
   unifiedFlipBtn: {
     position: 'absolute',

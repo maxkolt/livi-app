@@ -77,6 +77,8 @@ import {
   isImageAlbumMessage,
   albumSelectionKey,
   selectedAlbumIndices,
+  buildChatPhotoTimeline,
+  findChatPhotoTimelineIndex,
 } from './chat/chatAlbum';
 import { ChatAlbumPickModal } from './chat/ChatAlbumPickModal';
 import {
@@ -135,7 +137,7 @@ import {
 } from './chat/ChatGapStatus';
 import { ChatParallaxWallpaper } from './chat/ChatParallaxWallpaper';
 import { ChatMessageEdgeFade } from './chat/ChatMessageEdgeFade';
-import { WelcomeStageBackground, StageGradient } from './home/WelcomeStageBackground';
+import { WelcomeStageBackground, StageGradient, CHAT_GLASS_OPACITY } from './home/WelcomeStageBackground';
 import { WELCOME_CARD_BG, WELCOME_CHROME_EDGE_RADIUS, WELCOME_HEADER_TITLE, WELCOME_STAGE_BG } from './home/constants';
 import {
   WelcomeOverlayCard,
@@ -1031,26 +1033,6 @@ export default function ChatScreen({ route, navigation }: Props) {
     setAvatarModalVisible(true);
   }, [fullAvatarUri, headerAvatarResolvedReady, headerAvatarResolvedUri, peerId, peerAvatarVerState]);
 
-  // Функция для открытия медиа в полноэкранном режиме
-  const openMediaViewer = React.useCallback((
-    type: 'image',
-    uri: string,
-    name?: string,
-    album?: { uris: string[]; index: number; message?: any },
-  ) => {
-    const albumUris = Array.isArray(album?.uris)
-      ? album.uris.map((item) => String(item || '').trim()).filter(Boolean)
-      : [];
-    setSelectedMedia({
-      type,
-      uri,
-      name,
-      uris: albumUris.length > 1 ? albumUris : undefined,
-      index: albumUris.length > 1 ? Math.max(0, album?.index || 0) : 0,
-    });
-    setMediaViewerVisible(true);
-  }, []);
-
   // Функция для закрытия медиа просмотра
   const closeMediaViewer = React.useCallback(() => {
     setMediaViewerVisible(false);
@@ -1242,6 +1224,54 @@ export default function ChatScreen({ route, navigation }: Props) {
     logger.debug('[ChatScreen] resolveMediaUri: returning as-is', { uri: s });
     return s;
   }, []);
+
+  // Единый список ВСЕХ фото переписки (в хронологическом порядке messages) — чтобы из
+  // полноэкранного просмотра можно было пролистать все фото чата, а не только альбом
+  // одного сообщения (как в WhatsApp/Telegram).
+  const chatPhotoTimeline = React.useMemo(
+    () => buildChatPhotoTimeline(messages, resolveMediaUri),
+    [messages, resolveMediaUri],
+  );
+
+  // Функция для открытия медиа в полноэкранном режиме
+  const openMediaViewer = React.useCallback((
+    type: 'image',
+    uri: string,
+    name?: string,
+    album?: { uris: string[]; index: number; message?: any },
+  ) => {
+    const messageId = String(album?.message?.id ?? '').trim();
+    const photoIndexInMessage = Math.max(0, album?.index || 0);
+    const globalIndex = messageId
+      ? findChatPhotoTimelineIndex(chatPhotoTimeline, messageId, photoIndexInMessage)
+      : -1;
+
+    if (globalIndex >= 0 && chatPhotoTimeline.length > 1) {
+      setSelectedMedia({
+        type,
+        uri: chatPhotoTimeline[globalIndex].uri || uri,
+        name,
+        uris: chatPhotoTimeline.map((entry) => entry.uri),
+        index: globalIndex,
+      });
+      setMediaViewerVisible(true);
+      return;
+    }
+
+    // Фолбэк (сообщение не нашлось в таймлайне — например, ещё грузится история):
+    // прежнее поведение — альбом одного сообщения либо одно фото.
+    const albumUris = Array.isArray(album?.uris)
+      ? album.uris.map((item) => String(item || '').trim()).filter(Boolean)
+      : [];
+    setSelectedMedia({
+      type,
+      uri,
+      name,
+      uris: albumUris.length > 1 ? albumUris : undefined,
+      index: albumUris.length > 1 ? Math.max(0, album?.index || 0) : 0,
+    });
+    setMediaViewerVisible(true);
+  }, [chatPhotoTimeline]);
 
   useChatRealtime({
     peerId,
@@ -1721,7 +1751,9 @@ export default function ChatScreen({ route, navigation }: Props) {
       peerAvatarVer: peerAvatarVerState,
       peerAvatarThumbB64: fullAvatarUri || peerAvatarThumbB64Param || '',
       peerOnline,
-      media: 'video',
+      // Кнопка в шапке — иконка трубки (аудио), не видеокамеры. Раньше жёстко слала 'video',
+      // из-за чего у звонящего сразу включалась камера, хотя он нажимал "звонок", не "видеозвонок".
+      media: 'audio',
     });
   }, [peerId, peerNameState, peerAvatarVerState, fullAvatarUri, peerAvatarThumbB64Param, peerOnline]);
 
@@ -2226,7 +2258,9 @@ export default function ChatScreen({ route, navigation }: Props) {
   );
 
   const ChatChrome = isDark ? StageGradient : View;
-  const chatChromeBottomExtra = isDark ? ({ translucent: true, mirror: true } as const) : {};
+  const chatChromeBottomExtra = isDark
+    ? ({ translucent: true, mirror: true, opacity: CHAT_GLASS_OPACITY } as const)
+    : {};
 
   return (
     <View style={{ flex: 1, backgroundColor: isDark ? WELCOME_STAGE_BG : LIVI.bg }}>

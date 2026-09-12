@@ -234,7 +234,7 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
       <RTCView
         key={rtcViewKey}
         {...(rtcViewProps as any)}
-        style={styles.rtc}
+        style={asPipOverlay ? [styles.rtc, styles.rtcRoundedOverlay] : styles.rtc}
         objectFit="cover"
         mirror={isFrontCamera}
         // Локальный PiP выше remote (0), иначе после появления peer video превью чернеет.
@@ -259,6 +259,12 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     backgroundColor: 'black',
+  },
+  // Радиус для плавающего локального PiP-тайла (совпадает с обёрткой unifiedLocalPip*=16),
+  // чтобы видео-поверхность не выходила за скругление при переходах PiP.
+  rtcRoundedOverlay: {
+    borderRadius: 16,
+    overflow: 'hidden',
   },
   placeholderContainer: {
     justifyContent: 'center',

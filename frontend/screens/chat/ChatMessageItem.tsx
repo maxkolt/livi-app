@@ -352,7 +352,7 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
               }}
               onPress={() => {
                 animateMessagePress(item.id, () => {
-                  onPressImage('image', imageUri, item.name);
+                  onPressImage('image', imageUri, item.name, { uris: [imageUri], index: 0, message: item });
                 });
               }}
               delayLongPress={280}
@@ -381,7 +381,7 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
             }}
             onPress={() => {
               animateMessagePress(item.id, () => {
-                onPressImage('image', imageUri, item.name);
+                onPressImage('image', imageUri, item.name, { uris: [imageUri], index: 0, message: item });
               });
             }}
             delayLongPress={280}

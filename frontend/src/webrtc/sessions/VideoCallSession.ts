@@ -4164,6 +4164,57 @@ export class VideoCallSession extends SimpleEventEmitter {
     }
   }
 
+  /**
+   * Здоров ли ICE-транспорт комнаты прямо сейчас: есть выбранная кандидатная пара, состояние
+   * не failed/disconnected, RTT в разумных пределах. Используется watchdog'ом remote-медиа,
+   * чтобы не делать деструктивный relay-only реконнект живой комнаты — он не решает проблему
+   * publish/subscribe на стороне партнёра, а только рвёт уже работающее соединение.
+   */
+  /**
+   * SDK-уровень: есть ли у партнёра живые/подписанные публикации прямо сейчас.
+   * Watchdog не должен рвать комнату hard-reconnect'ом, если медиа партнёра реально есть
+   * на уровне LiveKit — session-ref (remoteStream/remoteMediaFirstSeenAt) мог устареть после
+   * PiP-перехода/ренеготиации, но это НЕ повод разрушать живой звонок обеим сторонам.
+   */
+  private hasLiveRemotePublications(room: Room): boolean {
+    try {
+      const remotes = Array.from(room.remoteParticipants.values()).filter((p) => !p.isLocal);
+      for (const p of remotes) {
+        const pubs = [
+          ...Array.from(p.audioTrackPublications.values()),
+          ...Array.from(p.videoTrackPublications.values()),
+        ];
+        for (const pub of pubs) {
+          const ready = pub.track?.mediaStreamTrack?.readyState;
+          if (pub.isSubscribed && (!!pub.track || ready === 'live')) return true;
+          if (ready === 'live') return true;
+        }
+      }
+    } catch {}
+    return false;
+  }
+
+  private async hasHealthyIceTransport(room: Room): Promise<boolean> {
+    try {
+      if (this.room !== room) return false;
+      const diagnostics = await getRoomIceTransportDiagnostics(room as any);
+      if (!diagnostics.length) return false;
+      return diagnostics.some((item) => {
+        if (!item.selectedCandidatePairId) return false;
+        if (item.iceConnectionState && ['failed', 'disconnected', 'closed'].includes(item.iceConnectionState)) {
+          return false;
+        }
+        if (item.connectionState && ['failed', 'disconnected', 'closed'].includes(item.connectionState)) {
+          return false;
+        }
+        if (typeof item.currentRoundTripTime === 'number' && item.currentRoundTripTime > 1) return false;
+        return true;
+      });
+    } catch {
+      return false;
+    }
+  }
+
   private scheduleIceTransportLogging(room: Room, reason: string): void {
     const delays = [1500, 5000];
     for (const delayMs of delays) {
@@ -4272,10 +4323,29 @@ export class VideoCallSession extends SimpleEventEmitter {
     }
 
     void sendClientMetrics(API_BASE, { remoteMediaTimeout: true }).catch(() => {});
+    // Диагностика: видим ли мы вообще публикации партнёра на уровне SDK (не только session-refs).
+    // Без этого приходилось гадать по логам, была ли реальная проблема с publish/subscribe
+    // или ложное срабатывание watchdog при уже живой комнате.
+    const publicationDiagnostics = remoteParticipants.map((participant) => ({
+      identity: participant.identity,
+      audio: Array.from(participant.audioTrackPublications.values()).map((publication) => ({
+        subscribed: publication.isSubscribed,
+        hasTrack: !!publication.track,
+        muted: publication.isMuted,
+        trackReady: publication.track?.mediaStreamTrack?.readyState ?? null,
+      })),
+      video: Array.from(participant.videoTrackPublications.values()).map((publication) => ({
+        subscribed: publication.isSubscribed,
+        hasTrack: !!publication.track,
+        muted: publication.isMuted,
+        trackReady: publication.track?.mediaStreamTrack?.readyState ?? null,
+      })),
+    }));
     logger.warn('[VideoCallSession] Remote media watchdog fired; retrying subscriptions', {
       roomName: room.name,
       participantsCount: remoteParticipants.length,
       remoteParticipantIds: remoteParticipants.map((participant) => participant.identity),
+      publicationDiagnostics,
     });
 
     this.remoteMediaRecoveryInProgress = true;
@@ -4308,6 +4378,43 @@ export class VideoCallSession extends SimpleEventEmitter {
       });
       this.remoteMediaRecoveryInProgress = false;
       this.scheduleRemoteMediaWatchdog(context, true, REMOTE_MEDIA_SUBSCRIBE_RETRY_MS);
+      return;
+    }
+
+    // ВАЖНО: если ICE уже здоров (есть выбранная кандидатная пара, разумный RTT, не failed/disconnected),
+    // relay-only реконнект физически не может помочь с проблемой publish/subscribe на стороне партнёра —
+    // а полный disconnect+connect живой комнаты рвёт медиа СРАЗУ ОБЕИМ сторонам (наблюдалось на проде:
+    // healthy prflx-соединение с низким RTT → форс-реконнект → negotiation timed out, двойной publish
+    // микрофона, ~15с восстановления камеры, разваленный system PiP). В этом случае просто прекращаем
+    // watchdog и даём звонку жить дальше на audio-only/уже установленном канале — обычные события
+    // LiveKit (TrackPublished/ParticipantConnected/retry-подписки выше) подхватят медиа сами, если оно появится.
+    // ГЛАВНЫЙ страж (по директиве): если у партнёра есть живые публикации на уровне LiveKit —
+    // медиа реально есть, а session-ref просто устарел (частый случай после выхода из system PiP /
+    // ренеготиации при включении камеры). Hard-reconnect тут гарантированно вреден (рвёт медиа обеим
+    // сторонам → negotiation timed out, двойной publish, ~15с восстановления). Просто перепривязываемся
+    // к уже существующим публикациям (цикл setSubscribed/handleTrackSubscribed выше) и живём дальше.
+    if (this.hasLiveRemotePublications(room)) {
+      this.remoteMediaRelayRecoveryAttempted = true;
+      this.remoteMediaRecoveryInProgress = false;
+      logger.warn(
+        '[VideoCallSession] Remote media watchdog: партнёр в комнате с живыми публикациями — пропускаем hard-reconnect, только ре-подписка',
+        { roomName: room.name, targetRoomName: context.targetRoomName || null },
+      );
+      void sendClientMetrics(API_BASE, { remoteMediaTimeoutLivePublicationSkipRelay: true }).catch(() => {});
+      this.notifyLoadingChange(false);
+      return;
+    }
+
+    const iceHealthy = await this.hasHealthyIceTransport(room);
+    if (iceHealthy) {
+      this.remoteMediaRelayRecoveryAttempted = true;
+      this.remoteMediaRecoveryInProgress = false;
+      logger.warn(
+        '[VideoCallSession] Remote media still missing but ICE transport is healthy — skipping destructive relay reconnect',
+        { roomName: room.name, targetRoomName: context.targetRoomName || null },
+      );
+      void sendClientMetrics(API_BASE, { remoteMediaTimeoutHealthyIceSkipRelay: true }).catch(() => {});
+      this.notifyLoadingChange(false);
       return;
     }
 

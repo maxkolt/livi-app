@@ -8,6 +8,7 @@ import socket, {
 import { getInstallId } from '../../../utils/installId';
 import { logger } from '../../../utils/logger';
 import { putThumb, warmAvatar } from '../../../utils/avatarCache';
+import { primeCallAvatarsFromFriends } from '../../../utils/callAvatarPrime';
 import {
   FRIENDS_CACHE_KEY_LEGACY,
   FRIENDS_MAX_PAGES_PER_LOAD,
@@ -145,6 +146,7 @@ export function useHomeFriends({
 
         const incoming: any[] = res.list;
         const fresh: Friend[] = incoming.map(mapToFriend);
+        primeCallAvatarsFromFriends(incoming);
         const cacheKey = friendsCacheKeyForIdentity(getCurrentUserId(), installId || (await getInstallId().catch(() => '')));
         setFriends((prev) => {
           const merged: Friend[] = fresh.map((f: Friend) => {
@@ -315,6 +317,7 @@ export function useHomeFriends({
           .filter(Boolean) as Friend[];
 
         if (cached.length > 0) {
+          primeCallAvatarsFromFriends(cached);
           setFriends((prev) => {
             if (friendsCacheLoadedKeyRef.current !== cacheKey) return prev;
             return prev && prev.length > 0 ? prev : cached;

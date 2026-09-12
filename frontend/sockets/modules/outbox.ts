@@ -3,6 +3,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { shared } from "./shared";
 import { socket } from "./socketCore";
 import { emitAck } from "./emit";
+import { ensureReauthBeforePrivilegedSocketOp } from "./reauth";
 import type {
   EditOutboxItem,
   MessageOutboxItem,
@@ -272,6 +273,8 @@ export async function drainEditOutbox(): Promise<void> {
   if (shared.editOutboxDrainInFlight) return shared.editOutboxDrainInFlight;
   shared.editOutboxDrainInFlight = (async () => {
     if (!socket.connected) return;
+    const reauthedForEditDrain = await ensureReauthBeforePrivilegedSocketOp();
+    if (!reauthedForEditDrain || !socket.connected) return;
     let items = await loadEditOutbox();
     if (!items.length) return;
 
@@ -308,6 +311,11 @@ export async function drainMessageOutbox(): Promise<void> {
   if (shared.outboxDrainInFlight) return shared.outboxDrainInFlight;
   shared.outboxDrainInFlight = (async () => {
     if (!socket.connected) return;
+    // Гонка: connect уже сработал, но reauth на бэкенде ещё не завершился —
+    // тогда message:send отклоняется, и сообщение зависает в очереди до следующего
+    // connect. Ждём reauth (дедуп с обработчиком connect), как это делает fetchFriends.
+    const reauthedForDrain = await ensureReauthBeforePrivilegedSocketOp();
+    if (!reauthedForDrain || !socket.connected) return;
     await hydrateCancelledOutboxFromDisk();
     let items = await loadMessageOutbox();
     if (!items.length) return;

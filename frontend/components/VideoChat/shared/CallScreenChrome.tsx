@@ -219,11 +219,17 @@ export function CallScreenChrome({
                   color={
                     item.danger
                       ? '#C45A6E'
-                      : WELCOME_PROFILE_ROW_ICON
+                      : item.active
+                        ? WELCOME_NAV_ACTIVE_ACCENT.softText
+                        : WELCOME_PROFILE_ROW_ICON
                   }
                 />
                 <Text
-                  style={[styles.moreLabel, item.danger && { color: '#C45A6E' }]}
+                  style={[
+                    styles.moreLabel,
+                    item.danger && { color: '#C45A6E' },
+                    item.active && { color: WELCOME_NAV_ACTIVE_ACCENT.softText, fontWeight: '600' },
+                  ]}
                   numberOfLines={1}
                 >
                   {item.label}
@@ -472,7 +478,7 @@ const styles = StyleSheet.create({
     minHeight: 48,
   },
   moreRowActive: {
-    backgroundColor: 'rgba(255,255,255,0.04)',
+    backgroundColor: WELCOME_NAV_ACTIVE_ACCENT.solid15,
   },
   moreLabel: {
     color: WELCOME_HEADER_TITLE,

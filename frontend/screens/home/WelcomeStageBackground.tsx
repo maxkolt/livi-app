@@ -37,10 +37,25 @@ type StageGradientProps = {
   translucent?: boolean;
   /** Зеркально по вертикали (нижний chrome чата). */
   mirror?: boolean;
+  /** Множитель альфы градиента (1 = как задано в colors ниже). Меньше — прозрачнее. По умолчанию не меняет поведение. */
+  opacity?: number;
 };
 
+/** Множитель альфы для "стеклянной" шапки/композера чата — сильнее просвечивают обои переписки. */
+export const CHAT_GLASS_OPACITY = 0.85;
+
+function scaleRgbaAlpha(rgba: string, multiplier: number): string {
+  if (multiplier === 1) return rgba;
+  const match = /^rgba\(([^)]+)\)$/.exec(rgba);
+  if (!match) return rgba;
+  const parts = match[1].split(',').map((s) => s.trim());
+  if (parts.length !== 4) return rgba;
+  const alpha = Math.max(0, Math.min(1, parseFloat(parts[3]) * multiplier));
+  return `rgba(${parts[0]}, ${parts[1]}, ${parts[2]}, ${alpha.toFixed(3)})`;
+}
+
 /** Chrome header/composer: bitmap для непрозрачного stage, градиент только для стекла. */
-export function StageGradient({ style, children, onLayout, translucent, mirror }: StageGradientProps) {
+export function StageGradient({ style, children, onLayout, translucent, mirror, opacity = 1 }: StageGradientProps) {
   if (!translucent) {
     return (
       <View style={style} onLayout={onLayout}>
@@ -55,19 +70,22 @@ export function StageGradient({ style, children, onLayout, translucent, mirror }
     );
   }
 
-  const colors = [
+  const baseColors = [
     'rgba(14, 28, 34, 0.72)',
     'rgba(10, 12, 20, 0.66)',
     'rgba(11, 17, 24, 0.68)',
     'rgba(12, 21, 32, 0.74)',
   ] as const;
+  const colors = (
+    opacity === 1 ? baseColors : baseColors.map((c) => scaleRgbaAlpha(c, opacity))
+  ) as unknown as readonly [string, string, string, string];
   const vStart = mirror ? { x: 0.5, y: 1 } : { x: 0.5, y: 0 };
   const vEnd = mirror ? { x: 0.5, y: 0 } : { x: 0.5, y: 1 };
 
   return (
     <View style={style} onLayout={onLayout}>
       <LinearGradient
-        colors={[...colors]}
+        colors={colors}
         locations={[0, 0.32, 0.68, 1]}
         start={vStart}
         end={vEnd}

@@ -12,7 +12,7 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { GestureHandlerRootView, PinchGestureHandler, PanGestureHandler, State, FlatList } from 'react-native-gesture-handler';
+import { GestureHandlerRootView, PinchGestureHandler, PanGestureHandler, TapGestureHandler, State, FlatList } from 'react-native-gesture-handler';
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import { saveImageToGallery } from '../utils/saveToGallery';
@@ -27,6 +27,13 @@ import { t } from '../utils/i18n';
 import PhotoEditor from '@baronha/react-native-photo-editor';
 import { useResolvedImageUri } from '../hooks/useResolvedImageUri';
 import { prefetchImages } from '../utils/imageOptimization';
+import { uiAccent } from '../theme/uiAccent';
+
+/** Как активный Bluetooth на тёмном call UI: uiAccent(false) → фиолетовый. */
+const MEDIA_VIEWER_ACCENT = uiAccent(false);
+/** Тусклее bright (#7B61FF) — softText для иконок, solid для рамки. */
+const MEDIA_VIEWER_ICON = MEDIA_VIEWER_ACCENT.softText;
+const MEDIA_VIEWER_BORDER = MEDIA_VIEWER_ACCENT.solid;
 
 function resolveViewerUri(raw: string): string {
   const value = String(raw || '').trim();
@@ -91,6 +98,75 @@ const AlbumStillSlide = React.memo(function AlbumStillSlide({
   prev.slideKey === next.slideKey,
 );
 
+/**
+ * Слайд альбома с ОДНОЙ и той же структурой дерева всегда (Pan → Pinch → Image) —
+ * меняется только `enabled`/`transform`, а не форма JSX. Если менять форму дерева
+ * (например, статичный <Image> ↔ Pinch-обёртка) в зависимости от того, активен слайд
+ * или нет, React размонтирует и заново монтирует картинку при каждом свайпе → мигание.
+ */
+const ZoomableAlbumSlide = React.memo(function ZoomableAlbumSlide({
+  uri,
+  width,
+  height,
+  slideKey,
+  isActive,
+  scaleNumber,
+  scale,
+  translateX,
+  translateY,
+  onPinchEvent,
+  onPinchStateChange,
+  onPanEvent,
+  onPanStateChange,
+}: {
+  uri: string;
+  width: number;
+  height: number;
+  slideKey: string;
+  isActive: boolean;
+  scaleNumber: number;
+  scale: Animated.AnimatedInterpolation<number> | any;
+  translateX: Animated.Value;
+  translateY: Animated.Value;
+  onPinchEvent: (...args: any[]) => void;
+  onPinchStateChange: (e: any) => void;
+  onPanEvent: (e: any) => void;
+  onPanStateChange: (e: any) => void;
+}) {
+  return (
+    <View style={{ width, height, justifyContent: 'center', alignItems: 'center' }}>
+      <PanGestureHandler
+        enabled={isActive && scaleNumber > 1}
+        onGestureEvent={onPanEvent}
+        onHandlerStateChange={onPanStateChange}
+      >
+        <Animated.View style={{ width: '100%', height: '100%' }}>
+          <PinchGestureHandler
+            enabled={isActive}
+            onGestureEvent={onPinchEvent}
+            onHandlerStateChange={onPinchStateChange}
+          >
+            <Animated.View
+              style={{
+                width: '100%',
+                height: '100%',
+                justifyContent: 'center',
+                alignItems: 'center',
+                // Всегда массив: `undefined` даёт TypeError forEach of null в Animated.
+                transform: isActive
+                  ? [{ scale }, { translateX }, { translateY }]
+                  : [{ scale: 1 }, { translateX: 0 }, { translateY: 0 }],
+              }}
+            >
+              <ViewerImage uri={uri} cacheKey={slideKey} />
+            </Animated.View>
+          </PinchGestureHandler>
+        </Animated.View>
+      </PanGestureHandler>
+    </View>
+  );
+});
+
 interface MediaViewerProps {
   visible: boolean;
   onClose: () => void;
@@ -127,6 +203,25 @@ export default function MediaViewer({
   const activeIndexRef = React.useRef(0);
   const lastScaleRef = React.useRef(1);
   const [cropMode, setCropMode] = React.useState(false);
+  // Тап по фото — скрыть/показать header+footer (WhatsApp/Telegram-стиль immersive-просмотра).
+  const [chromeVisible, setChromeVisible] = React.useState(true);
+  const chromeOpacity = React.useRef(new Animated.Value(1)).current;
+  const toggleChrome = React.useCallback(() => {
+    setChromeVisible((prev) => {
+      const next = !prev;
+      Animated.timing(chromeOpacity, {
+        toValue: next ? 1 : 0,
+        duration: 180,
+        useNativeDriver: true,
+      }).start();
+      return next;
+    });
+  }, [chromeOpacity]);
+  const onMediaTapStateChange = React.useCallback((e: any) => {
+    if (e?.nativeEvent?.state === State.ACTIVE) {
+      toggleChrome();
+    }
+  }, [toggleChrome]);
   const [cropRect, setCropRect] = React.useState<{ x: number; y: number; w: number; h: number }>(() => ({
     x: Math.round(screenWidth * 0.1),
     y: Math.round(screenHeight * 0.2),
@@ -398,7 +493,16 @@ export default function MediaViewer({
     setEditsByIndex({});
     setCropMode(false);
     resetZoomPan();
-  }, [visible, initialIndex, sourceUris.length, resetZoomPan]);
+    setChromeVisible(true);
+    chromeOpacity.setValue(1);
+  }, [visible, initialIndex, sourceUris.length, resetZoomPan, chromeOpacity]);
+
+  // Пока открыт кроп — footer (Готово/Отмена) всегда должен быть виден.
+  React.useEffect(() => {
+    if (!cropMode) return;
+    setChromeVisible(true);
+    chromeOpacity.setValue(1);
+  }, [cropMode, chromeOpacity]);
 
   React.useEffect(() => {
     if (!visible || !isAlbum || displayUris.length === 0) return;
@@ -409,7 +513,8 @@ export default function MediaViewer({
   React.useEffect(() => {
     if (!isAlbum) return;
     setCropMode((prev) => (prev ? false : prev));
-  }, [activeIndex, isAlbum]);
+    resetZoomPan();
+  }, [activeIndex, isAlbum, resetZoomPan]);
 
   const scrollAlbumToRealIndex = React.useCallback(
     (realIndex: number, width = pageWidth, animated = false) => {
@@ -717,15 +822,43 @@ export default function MediaViewer({
   );
 
   const renderAlbumSlide = React.useCallback(
-    ({ item, index }: { item: string; index: number }) => (
-      <AlbumStillSlide
-        uri={item}
-        width={pageWidth}
-        height={pageHeight}
-        slideKey={`album-slide-${index}`}
-      />
-    ),
-    [pageWidth, pageHeight],
+    ({ item, index }: { item: string; index: number }) => {
+      // Только текущий (видимый) слайд — увеличиваемый (pinch/pan); структура дерева
+      // при этом одна и та же для всех слайдов (см. ZoomableAlbumSlide) — без мигания при свайпе.
+      const isActiveSlide = !cropMode && index === loopedAlbumIndex(activeIndex, displayUris.length);
+      return (
+        <ZoomableAlbumSlide
+          uri={item}
+          width={pageWidth}
+          height={pageHeight}
+          slideKey={`album-slide-${index}`}
+          isActive={isActiveSlide}
+          scaleNumber={scaleNumber}
+          scale={scale}
+          translateX={translateX}
+          translateY={translateY}
+          onPinchEvent={onPinchEvent}
+          onPinchStateChange={onPinchStateChange}
+          onPanEvent={onPanEvent}
+          onPanStateChange={onPanStateChange}
+        />
+      );
+    },
+    [
+      pageWidth,
+      pageHeight,
+      cropMode,
+      activeIndex,
+      displayUris.length,
+      scaleNumber,
+      scale,
+      translateX,
+      translateY,
+      onPinchEvent,
+      onPinchStateChange,
+      onPanEvent,
+      onPanStateChange,
+    ],
   );
 
   const albumPagerInitialIndex =
@@ -767,6 +900,11 @@ export default function MediaViewer({
       <GestureHandlerRootView style={styles.root}>
         <View style={styles.container}>
           {/* Media fills the screen; header/footer overlay so photos keep phone aspect. */}
+          <TapGestureHandler
+            numberOfTaps={1}
+            enabled={!cropMode && !busy}
+            onHandlerStateChange={onMediaTapStateChange}
+          >
           <View
             style={styles.mediaLayer}
             pointerEvents="box-none"
@@ -784,7 +922,7 @@ export default function MediaViewer({
                 horizontal
                 pagingEnabled
                 disableIntervalMomentum
-                scrollEnabled={!cropMode && !busy}
+                scrollEnabled={!cropMode && !busy && scaleNumber <= 1}
                 showsHorizontalScrollIndicator={false}
                 bounces={false}
                 decelerationRate="fast"
@@ -818,12 +956,8 @@ export default function MediaViewer({
                   />
                 </View>
               )
-            ) : cropMode ? (
-              renderZoomable(currentUri)
             ) : (
-              <View style={{ width: '100%', height: '100%', justifyContent: 'center', alignItems: 'center' }}>
-                <ViewerImage uri={currentUri} />
-              </View>
+              renderZoomable(currentUri)
             )}
 
             {cropMode ? (
@@ -883,11 +1017,15 @@ export default function MediaViewer({
               </View>
             ) : null}
           </View>
+          </TapGestureHandler>
 
           <SafeAreaView pointerEvents="box-none" edges={['top']} style={styles.headerSafe}>
-            <View style={styles.header}>
+            <Animated.View
+              pointerEvents={chromeVisible ? 'box-none' : 'none'}
+              style={[styles.header, { opacity: chromeOpacity }]}
+            >
               <TouchableOpacity onPress={onClose} style={styles.closeButton}>
-                <Ionicons name="close" size={28} color={LIVI.white} />
+                <Ionicons name="close" size={26} color={LIVI.white} />
               </TouchableOpacity>
               {isAlbum ? (
                 <Text style={styles.fileName} numberOfLines={1}>
@@ -898,7 +1036,7 @@ export default function MediaViewer({
                   {name}
                 </Text>
               ) : null}
-            </View>
+            </Animated.View>
           </SafeAreaView>
 
           {saveToastVisible ? (
@@ -921,6 +1059,10 @@ export default function MediaViewer({
           ) : null}
 
           <SafeAreaView pointerEvents="box-none" edges={['bottom']} style={styles.footerSafe}>
+            <Animated.View
+              pointerEvents={chromeVisible ? 'box-none' : 'none'}
+              style={{ opacity: chromeOpacity }}
+            >
             {isAlbum && !cropMode ? (
               <View pointerEvents="none" style={styles.pageDotsWrap}>
                 {displayUris.map((_, index) => (
@@ -938,7 +1080,7 @@ export default function MediaViewer({
               disabled={busy}
               accessibilityLabel={t('edit', lang)}
             >
-              <Ionicons name="brush-outline" size={24} color={LIVI.white} />
+              <Ionicons name="brush-outline" size={24} color={MEDIA_VIEWER_ICON} />
             </TouchableOpacity>
             {cropMode ? (
               <>
@@ -948,7 +1090,7 @@ export default function MediaViewer({
                   disabled={busy}
                   accessibilityLabel={t('crop', lang)}
                 >
-                  <Ionicons name="checkmark" size={26} color={LIVI.white} />
+                  <Ionicons name="checkmark" size={26} color={MEDIA_VIEWER_ICON} />
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={[styles.actionButton, busy && { opacity: 0.7 }]}
@@ -956,7 +1098,7 @@ export default function MediaViewer({
                   disabled={busy}
                   accessibilityLabel={t('cancel', lang)}
                 >
-                  <Ionicons name="close" size={26} color={LIVI.white} />
+                  <Ionicons name="close" size={26} color={MEDIA_VIEWER_ICON} />
                 </TouchableOpacity>
               </>
             ) : (
@@ -966,7 +1108,7 @@ export default function MediaViewer({
                 disabled={busy}
                 accessibilityLabel={t('crop', lang)}
               >
-                <Ionicons name="crop-outline" size={24} color={LIVI.white} />
+                <Ionicons name="crop-outline" size={24} color={MEDIA_VIEWER_ICON} />
               </TouchableOpacity>
             )}
 
@@ -982,7 +1124,7 @@ export default function MediaViewer({
                 disabled={busy}
                 accessibilityLabel={t('send', lang)}
               >
-                <Ionicons name="send-outline" size={24} color={LIVI.white} />
+                <Ionicons name="send-outline" size={24} color={MEDIA_VIEWER_ICON} />
               </TouchableOpacity>
             ) : (
               <>
@@ -992,7 +1134,7 @@ export default function MediaViewer({
                   disabled={busy}
                   accessibilityLabel={t('save', lang)}
                 >
-                  <Ionicons name="download-outline" size={24} color={LIVI.white} />
+                  <Ionicons name="download-outline" size={24} color={MEDIA_VIEWER_ICON} />
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={[styles.actionButton, busy && { opacity: 0.7 }]}
@@ -1000,11 +1142,12 @@ export default function MediaViewer({
                   disabled={busy}
                   accessibilityLabel={t('share', lang)}
                 >
-                  <Ionicons name="share-outline" size={24} color={LIVI.white} />
+                  <Ionicons name="share-outline" size={24} color={MEDIA_VIEWER_ICON} />
                 </TouchableOpacity>
               </>
             )}
             </View>
+            </Animated.View>
           </SafeAreaView>
         </View>
       </GestureHandlerRootView>
@@ -1039,17 +1182,26 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 16,
     paddingVertical: 8,
-    backgroundColor: 'rgba(0, 0, 0, 0.42)',
+    // Без сплошной плашки — кнопки/текст держат контраст сами (фон-чип + тень).
+    backgroundColor: 'transparent',
   },
   closeButton: {
-    padding: 8,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
     marginRight: 12,
+    backgroundColor: 'rgba(0, 0, 0, 0.32)',
   },
   fileName: {
     color: LIVI.white,
     fontSize: 16,
     fontWeight: '500',
     flex: 1,
+    textShadowColor: 'rgba(0, 0, 0, 0.85)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 4,
   },
   mediaLayer: {
     ...StyleSheet.absoluteFillObject,
@@ -1066,7 +1218,6 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     zIndex: 10,
-    backgroundColor: 'rgba(0, 0, 0, 0.42)',
   },
   pageDotsWrap: {
     flexDirection: 'row',
@@ -1125,9 +1276,11 @@ const styles = StyleSheet.create({
   actionButton: {
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    // Без padding — иначе Ionicons визуально съезжают с центра в круге 52×52.
+    padding: 0,
+    backgroundColor: '#1A1A1A',
+    borderWidth: 1.5,
+    borderColor: MEDIA_VIEWER_BORDER,
     borderRadius: 26,
     width: 52,
     height: 52,

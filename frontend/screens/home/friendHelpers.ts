@@ -212,6 +212,30 @@ export function getFriendDisplay(f: Friend) {
   return { displayName: displayNameValue, avatarLetter, hasAvatar };
 }
 
+/**
+ * Единый источник правды для URI аватара собеседника (звонок/PiP/шапка).
+ * Порядок совпадает с историческим partnerAvatarUri в VideoCall.tsx:
+ * avatarThumbB64 → avatarB64 → avatar(url/path). Принимает «сырой» объект друга
+ * (из fetchFriends) или Friend — читает поля мягко.
+ */
+export function buildFriendAvatarUri(partner: any): string | undefined {
+  if (!partner) return undefined;
+  try {
+    const thumb = partner.avatarThumbB64 != null ? String(partner.avatarThumbB64).trim() : '';
+    if (thumb) return thumb.startsWith('data:') ? thumb : `data:image/jpeg;base64,${thumb}`;
+    const b64 = partner.avatarB64 != null ? String(partner.avatarB64).trim() : '';
+    if (b64) return b64.startsWith('data:') ? b64 : `data:image/jpeg;base64,${b64}`;
+    const avatar =
+      typeof partner.avatar === 'string' && partner.avatar.trim() ? partner.avatar.trim() : '';
+    if (avatar) {
+      if (avatar.startsWith('http') || avatar.startsWith('data:')) return avatar;
+      const base = process.env.EXPO_PUBLIC_SERVER_URL || 'https://api.liviapp.com';
+      return `${base.replace(/\/+$/, '')}${avatar.startsWith('/') ? '' : '/'}${avatar}`;
+    }
+  } catch {}
+  return undefined;
+}
+
 /** Нормализация для поиска по нику (любой язык, без учёта регистра). */
 export function normalizeFriendSearchText(value: string): string {
   return String(value ?? '')

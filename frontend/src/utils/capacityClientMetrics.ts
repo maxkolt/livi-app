@@ -31,6 +31,9 @@ export type ClientMetricsPayload = {
   relayFallback?: boolean;
   remoteMediaNoParticipantTimeout?: boolean;
   remoteMediaNoParticipantAttempts?: number;
+  /** Watchdog нашёл здоровый ICE-транспорт и не стал делать деструктивный relay-only реконнект. */
+  remoteMediaTimeoutHealthyIceSkipRelay?: boolean;
+  remoteMediaTimeoutLivePublicationSkipRelay?: boolean;
 };
 
 function optNonNegInt(n: unknown): number | undefined {
@@ -85,6 +88,8 @@ export async function sendClientMetrics(
     relayFallback: !!payload.relayFallback || undefined,
     remoteMediaNoParticipantTimeout: !!payload.remoteMediaNoParticipantTimeout || undefined,
     remoteMediaNoParticipantAttempts: optNonNegInt(payload.remoteMediaNoParticipantAttempts),
+    remoteMediaTimeoutHealthyIceSkipRelay: !!payload.remoteMediaTimeoutHealthyIceSkipRelay || undefined,
+    remoteMediaTimeoutLivePublicationSkipRelay: !!payload.remoteMediaTimeoutLivePublicationSkipRelay || undefined,
   };
 
   const hasData = Object.values(normalized).some((value) => value !== undefined);
