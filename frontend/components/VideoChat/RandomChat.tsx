@@ -1498,11 +1498,8 @@ const RandomChat: React.FC<Props> = ({ route }) => {
           barStyle="light-content"
         />
       )}
-      <View style={[styles.container, { backgroundColor: isDark ? WELCOME_STAGE_BG : (theme.colors.background as string) }]}>
-      <WelcomeStageBackground
-        isDark={isDark}
-        lightColor={theme.colors.background as string}
-      />
+      <View style={[styles.container, { backgroundColor: WELCOME_STAGE_BG }]}>
+      <WelcomeStageBackground />
       <SafeAreaView 
         style={[styles.container, { backgroundColor: 'transparent' }]}
         // Android: safe-area отступы считаем сами через insets, чтобы ничего не перезатиралось стилями

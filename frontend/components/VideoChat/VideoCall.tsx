@@ -5797,6 +5797,28 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       if (shouldBlockAutomatedDirectCallVideoExpand(route?.params ?? {}, mountKey || null)) {
         return;
       }
+      const sessionCamOn =
+        typeof session.getIsCamOn === 'function' ? session.getIsCamOn() : false;
+      const pipWantsCam = pip.localCamOn === true;
+      const leavingAudioOnly = !!(inAudioOnlyUiRef.current || isInAudioOnlyCallUi());
+      // Remount/PiP return на video shell при cam off: оболочка video ок, камеру не форсим.
+      // Вкл. камеры только при уходе с audio-only или если до PiP cam уже была on.
+      if (!sessionCamOn && !pipWantsCam && !leavingAudioOnly) {
+        setCamOn(false);
+        try {
+          pip.updatePiPState({ localCamOn: false });
+        } catch {}
+        try {
+          const params = (global as any).__currentCallPiPParamsRef?.current;
+          if (params && typeof params === 'object') {
+            params.localCamOn = false;
+            params.preferVideoCallUi = true;
+            params.inAudioOnlyUi = false;
+          }
+        } catch {}
+        logger.info('[VideoCall] enableLocalCameraForVideoUi skip — cam was off');
+        return;
+      }
       try {
         const params = (global as any).__currentCallPiPParamsRef?.current;
         if (params && typeof params === 'object') {
@@ -5813,8 +5835,6 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       const vt = ls?.getVideoTracks?.()?.[0];
       const trackLive =
         !!vt && vt.readyState === 'live' && vt.enabled !== false;
-      const sessionCamOn =
-        typeof session.getIsCamOn === 'function' ? session.getIsCamOn() : false;
 
       if (sessionCamOn && trackLive) {
         if (ls) {
@@ -5849,7 +5869,8 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
         return;
       }
 
-      if (!sessionCamOnAfter || !trackLiveAfter) {
+      // Только явный уход с audio-only (пользователь открыл video) — иначе не toggleCam(true).
+      if (leavingAudioOnly && (!sessionCamOnAfter || !trackLiveAfter)) {
         try {
           await session.toggleCam();
         } catch (e) {
@@ -5859,7 +5880,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
 
       const lsFinal = session.getLocalStream?.();
       const vtFinal = lsFinal?.getVideoTracks?.()?.[0];
-      if (vtFinal && !vtFinal.enabled) {
+      if (vtFinal && !vtFinal.enabled && (session.getIsCamOn?.() === true || leavingAudioOnly)) {
         vtFinal.enabled = true;
       }
       if (lsFinal) {
@@ -7557,14 +7578,11 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     <View
       style={[
         styles.container,
-        { backgroundColor: isDark ? WELCOME_STAGE_BG : (theme.colors.background as string) },
+        { backgroundColor: WELCOME_STAGE_BG },
       ]}
       {...(panResponder?.panHandlers || {})}
     >
-      <WelcomeStageBackground
-        isDark={!!isDark}
-        lightColor={(theme.colors.background as string) || WELCOME_STAGE_BG}
-      />
+      <WelcomeStageBackground />
       <SafeAreaView
         style={[styles.container, { backgroundColor: 'transparent' }]}
         edges={Platform.OS === 'android' ? [] : undefined}
@@ -7821,16 +7839,10 @@ const styles = StyleSheet.create({
     backgroundColor: '#000',
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: 'rgba(255,255,255,0.12)',
-    // Скругляем и КЛИПАЕМ: иначе видео-поверхность (Texture/Surface) заходит за
-    // радиус, особенно в момент перехода в системный/ин-апп PiP и назад.
-    borderRadius: 16,
-    overflow: 'hidden',
   },
   unifiedLocalPipInner: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: '#000',
-    borderRadius: 16,
-    overflow: 'hidden',
   },
   unifiedFlipBtn: {
     position: 'absolute',

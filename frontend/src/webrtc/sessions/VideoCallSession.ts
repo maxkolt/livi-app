@@ -1198,12 +1198,24 @@ export class VideoCallSession extends SimpleEventEmitter {
     const expandingToVideoUi =
       isDirectCallVideoExpandGuardActive() ||
       (global as any).__stayOnVideoCallUiRef?.current === true;
+    // Video shell после PiP ≠ «включи камеру». Если пользователь выключил cam до PiP
+    // (isCamOn=false и не было background-pause с intent «камера была вкл»), не форсим ON.
     if (this.isLocalDirectCallAudioOnlyUi() && !expandingToVideoUi) return;
     if (this.config.startWithCamOff && !expandingToVideoUi && !this.isCamOn) return;
-    if (!this.isCamOn && !this.cameraSuspendedForAppBackground && !expandingToVideoUi) return;
+    if (!this.isCamOn && !this.cameraSuspendedForAppBackground) {
+      logger.info('[VideoCallSession] Skip PiP camera restore — local cam was off', {
+        expandingToVideoUi,
+      });
+      return;
+    }
     return this.enqueueCameraAppLifecycle(async () => {
       if (this.localVideoRecreatePromise) {
         await this.localVideoRecreatePromise.catch(() => {});
+      }
+      // Re-check after queue: cam could have been toggled off while waiting.
+      if (!this.isCamOn && !this.cameraSuspendedForAppBackground) {
+        logger.info('[VideoCallSession] Skip PiP camera restore after queue — cam off');
+        return;
       }
       const pausedForBackground = this.cameraSuspendedForAppBackground;
       const mt = this.localVideoTrack?.mediaStreamTrack;

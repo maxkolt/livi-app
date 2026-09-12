@@ -1,12 +1,7 @@
 import React from 'react';
-import { useColorScheme } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { MD3DarkTheme, MD3LightTheme } from 'react-native-paper';
+import { MD3DarkTheme } from 'react-native-paper';
 
-export type ThemePreference = 'auto' | 'dark' | 'light';
-
-const STORAGE_KEY = 'theme_preference_v1';
-
+/** @deprecated Light theme removed — kept only for legacy imports. */
 export const LightPalette = {
   primary: '#715BA8',
   background: '#B6CBD8',
@@ -17,7 +12,6 @@ export const LightPalette = {
 };
 
 export const DarkPalette = {
-  /** Бирюзовый акцент в тёмной теме (светлая тема — фиолетовый). */
   primary: '#2EC4B6',
   background: '#151F33',
   surface: '#0D0E10',
@@ -34,57 +28,51 @@ export type AppTheme = typeof MD3DarkTheme & {
   };
 };
 
-function buildTheme(isDark: boolean): AppTheme {
-  const base = isDark ? MD3DarkTheme : MD3LightTheme;
-  const palette = isDark ? DarkPalette : LightPalette;
+function buildDarkTheme(): AppTheme {
   return {
-    ...base,
+    ...MD3DarkTheme,
     colors: {
-      ...base.colors,
-      primary: palette.primary,
-      background: palette.background,
-      surface: palette.surface,
-      outline: palette.outline,
-      onSurfaceVariant: palette.onSurfaceVariant,
-      titan: palette.titan,
+      ...MD3DarkTheme.colors,
+      primary: DarkPalette.primary,
+      background: DarkPalette.background,
+      surface: DarkPalette.surface,
+      outline: DarkPalette.outline,
+      onSurfaceVariant: DarkPalette.onSurfaceVariant,
+      titan: DarkPalette.titan,
     },
   } as AppTheme;
 }
 
+/** @deprecated Always `'dark'` — light/auto removed. */
+export type ThemePreference = 'dark';
+
 type ThemeContextValue = {
+  /** @deprecated Always `'dark'`. */
   preference: ThemePreference;
+  /** @deprecated No-op; theme is fixed to dark. */
   setPreference: (p: ThemePreference) => Promise<void>;
   theme: AppTheme;
-  isDark: boolean;
+  /** Always `true` — light theme removed. */
+  isDark: true;
 };
 
 export const ThemeContext = React.createContext<ThemeContextValue | undefined>(undefined);
 
+const DARK_THEME = buildDarkTheme();
+
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const system = useColorScheme();
-  const [preference, setPref] = React.useState<ThemePreference>('auto');
-  const isDark = (preference === 'auto' ? system === 'dark' : preference === 'dark') || false;
-  const theme = React.useMemo(() => buildTheme(isDark), [isDark]);
-
-  React.useEffect(() => {
-    (async () => {
-      try {
-        const saved = await AsyncStorage.getItem(STORAGE_KEY);
-        if (saved === 'dark' || saved === 'light' || saved === 'auto') setPref(saved);
-      } catch {}
-    })();
-  }, []);
-
-  const setPreference = React.useCallback(async (p: ThemePreference) => {
-    setPref(p);
-    try { await AsyncStorage.setItem(STORAGE_KEY, p); } catch {}
-  }, []);
-
-  return (
-    <ThemeContext.Provider value={{ preference, setPreference, theme, isDark }}>
-      {children}
-    </ThemeContext.Provider>
+  const setPreference = React.useCallback(async (_p: ThemePreference) => {}, []);
+  const value = React.useMemo<ThemeContextValue>(
+    () => ({
+      preference: 'dark',
+      setPreference,
+      theme: DARK_THEME,
+      isDark: true,
+    }),
+    [setPreference],
   );
+
+  return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;
 }
 
 export function useAppTheme() {
@@ -92,5 +80,3 @@ export function useAppTheme() {
   if (!ctx) throw new Error('useAppTheme must be used within ThemeProvider');
   return ctx;
 }
-
-

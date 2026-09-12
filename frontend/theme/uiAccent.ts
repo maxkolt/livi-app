@@ -1,6 +1,6 @@
 /**
- * UI accent: фиолетовый в светлой теме, бирюзовый в тёмной (одна роль — разный оттенок).
- * Тона/прозрачности повторяют прежние фиолетовые шаги.
+ * UI accent (тёмная тема): бирюзовый.
+ * Светлая палитра удалена — `isDark` игнорируется (совместимость вызовов).
  */
 export type UiAccent = {
   solid: string;
@@ -20,29 +20,8 @@ export type UiAccent = {
   forwardSendBg: string;
   forwardSendBorder: string;
   forwardSendText: string;
-  /** Подложка заметки в модалке (тёмная тема) — вместо фиолетового тинта */
+  /** Подложка заметки в модалке */
   noteTintBg: string;
-};
-
-const LIGHT: UiAccent = {
-  solid: '#715BA8',
-  bright: '#7B61FF',
-  softText: '#B8A9E8',
-  vivid8: 'rgba(123,97,255,0.08)',
-  vivid10: 'rgba(123,97,255,0.10)',
-  vivid12: 'rgba(123,97,255,0.12)',
-  vivid16: 'rgba(123,97,255,0.16)',
-  vivid22: 'rgba(123,97,255,0.22)',
-  vivid45: 'rgba(123,97,255,0.45)',
-  solid10: 'rgba(113,91,168,0.1)',
-  solid15: 'rgba(113,91,168,0.15)',
-  solid22: 'rgba(113,91,168,0.22)',
-  solid28: 'rgba(113,91,168,0.28)',
-  solid34: 'rgba(113,91,168,0.34)',
-  forwardSendBg: 'rgba(113, 91, 168, 0.14)',
-  forwardSendBorder: '#715BA8',
-  forwardSendText: '#715BA8',
-  noteTintBg: '#F2EEF9',
 };
 
 const DARK: UiAccent = {
@@ -66,6 +45,6 @@ const DARK: UiAccent = {
   noteTintBg: '#0F2428',
 };
 
-export function uiAccent(isDark: boolean): UiAccent {
-  return isDark ? DARK : LIGHT;
+export function uiAccent(_isDark?: boolean): UiAccent {
+  return DARK;
 }

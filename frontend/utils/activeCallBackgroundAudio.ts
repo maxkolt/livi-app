@@ -249,13 +249,10 @@ function onAppStateChange(next: AppStateStatus): void {
       const returningFromPiP = Date.now() < Number(g.__returningFromSystemPiPUntilRef?.current || 0);
       const session = g.__webrtcSessionRef?.current;
       if (returningFromPiP && session && typeof session.restoreLocalCameraAfterPiPReturn === 'function') {
-        const g = global as any;
-        const audioOnlyDirect =
-          g.__inAudioOnlyUiRef?.current === true ||
-          g.__preferAudioOnlyUiOnNextVideoCallRef?.current === true;
+        // Cam intentionally off before PiP → never auto-enable on return (video shell ok, camera stays off).
         const camOff =
           typeof session.getIsCamOn === 'function' && session.getIsCamOn() === false;
-        if (!(audioOnlyDirect && camOff)) {
+        if (!camOff) {
           void session.restoreLocalCameraAfterPiPReturn();
         }
         return;

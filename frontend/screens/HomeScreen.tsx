@@ -5096,11 +5096,8 @@ const handleClearNick = useCallback(async () => {
   const showSplashOverlay = !splashDismissed;
 
   return (
-    <View style={{ flex: 1, backgroundColor: isDark ? WELCOME_STAGE_BG : theme.colors.background }}>
-      <WelcomeStageBackground
-        isDark={isDark}
-        lightColor={theme.colors.background as string}
-      />
+    <View style={{ flex: 1, backgroundColor: WELCOME_STAGE_BG }}>
+      <WelcomeStageBackground />
     <SafeAreaView
         style={[
           styles.container,
@@ -5123,7 +5120,7 @@ const handleClearNick = useCallback(async () => {
           <HomeWelcomeView
             styles={styles}
             isDark={isDark}
-            themeBackground={(isDark ? WELCOME_STAGE_BG : theme.colors.background) as string}
+            themeBackground={WELCOME_STAGE_BG}
             layoutWidth={layoutWidth}
             layoutHeight={layoutHeight}
             L={L}

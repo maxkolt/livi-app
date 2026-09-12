@@ -7,7 +7,7 @@ import AvatarImage from "../../components/AvatarImage";
 import ChatStyleBackButton from "../../components/ChatStyleBackButton";
 import { t, type Lang } from "../../utils/i18n";
 import { WELCOME_CHROME_EDGE_RADIUS } from "../home/constants";
-import { CHAT_GLASS_OPACITY, StageGradient } from "../home/WelcomeStageBackground";
+import { StageGradient } from "../home/WelcomeStageBackground";
 
 type LiviColors = {
   readonly bg: string;
@@ -95,7 +95,7 @@ export function useChatHeader({
 
     return (
       <Shell
-        {...(isDark ? { translucent: true, opacity: CHAT_GLASS_OPACITY } : null)}
+        {...(isDark ? { translucent: true } : null)}
         style={{
           paddingTop: headerTopPadding,
           height: headerH + headerTopPadding,

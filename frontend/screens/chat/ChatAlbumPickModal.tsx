@@ -142,7 +142,7 @@ export function ChatAlbumPickModal({
           }}
         >
           {isDark ? (
-            <WelcomeStageBackground isDark lightColor={bg} />
+            <WelcomeStageBackground />
           ) : null}
           <View style={{ paddingHorizontal: 20, paddingTop: 20, paddingBottom: 10 }}>
             <Text

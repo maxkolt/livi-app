@@ -1,6 +1,6 @@
 /**
- * Локальный выбор обоев чата (светлая / тёмная тема).
- * Меняется только id картинки — overlays/параллакс в ChatParallaxWallpaper без изменений.
+ * Локальный выбор обоев чата (тёмная тема).
+ * lightId в storage оставлен для совместимости со старыми prefs.
  */
 import { useEffect, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -194,12 +194,10 @@ export function getChatWallpaperById(
 }
 
 export function getChatWallpaperSource(
-  isDark: boolean,
+  _isDark?: boolean,
   prefs: ChatWallpaperPrefs = cachedPrefs,
 ): ImageSourcePropType {
-  const theme: ChatWallpaperTheme = isDark ? 'dark' : 'light';
-  const id = isDark ? prefs.darkId : prefs.lightId;
-  return getChatWallpaperById(id, theme).source;
+  return getChatWallpaperById(prefs.darkId, 'dark').source;
 }
 
 export function getCachedChatWallpaperPrefs(): ChatWallpaperPrefs {

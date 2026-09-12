@@ -4523,7 +4523,7 @@ function AppContent() {
                   animation: 'none',
                   animationDuration: 0,
                   contentStyle: {
-                    backgroundColor: isDark ? WELCOME_STAGE_BG : ((theme.colors.background as string) || WELCOME_STAGE_BG),
+                    backgroundColor: WELCOME_STAGE_BG,
                   },
                 }}
               />
@@ -4551,7 +4551,7 @@ function AppContent() {
                   animationDuration: 120,
                   gestureEnabled: true,
                   contentStyle: {
-                    backgroundColor: isDark ? WELCOME_STAGE_BG : ((theme.colors.background as string) || WELCOME_STAGE_BG),
+                    backgroundColor: WELCOME_STAGE_BG,
                   },
                 }}
               />

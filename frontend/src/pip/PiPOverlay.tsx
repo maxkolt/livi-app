@@ -214,6 +214,7 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
   }, [visible]);
 
   const pipFromAudioOnly = pipInAppBarEnteredFromAudioOnly();
+  const localCamOn = ctx?.localCamOn === true;
   const peerHasLiveVideo = remoteCamOn && mediaStreamHasLiveVideo(remoteStream);
   /** Video UI → слот превью; audio UI → слот только когда peer уже шлёт live video (mid-PiP cam on). */
   const showPeerVideoPreviewSlot = !pipFromAudioOnly || peerHasLiveVideo;
@@ -226,8 +227,15 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
     allowVideoRender &&
     peerHasLiveVideo &&
     !!remoteStreamUrl;
-  /** Ушли с видео-экрана в in-app PiP — подсветить «вернуться». */
-  const pipVideoReturnHighlight = !pipFromAudioOnly;
+  /**
+   * Ушли с видео-экрана в in-app PiP — подсветить «вернуться» только если реально есть video
+   * (своя cam или live peer). Иначе video shell с cam off выглядел как «видео вкл»,
+   * хотя у собеседника камера выключена.
+   */
+  const pipVideoReturnHighlight =
+    !pipFromAudioOnly && (localCamOn || peerHasLiveVideo);
+  /** Cam-off video shell → иконка трубки (как audio), но возврат всё ещё на video UI. */
+  const pipReturnUsesPhoneIcon = pipFromAudioOnly || (!localCamOn && !peerHasLiveVideo);
 
   const returnToCallFromPiP = useCallback(() => {
     try {
@@ -454,7 +462,7 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
               <PiPActionButton
                 onPress={returnToCallFromPiP}
                 accessibilityLabel={
-                  pipFromAudioOnly
+                  pipReturnUsesPhoneIcon
                     ? t('returnToAudioCallA11y', lang)
                     : t('returnToVideoCall', lang)
                 }
@@ -462,7 +470,7 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
                 active={pipVideoReturnHighlight}
                 activeAccent={WELCOME_NAV_ACTIVE_ACCENT}
               >
-                {pipFromAudioOnly ? (
+                {pipReturnUsesPhoneIcon ? (
                   <MaterialCommunityIcons
                     name="phone-in-talk"
                     size={PIP_ICON_SIZE}

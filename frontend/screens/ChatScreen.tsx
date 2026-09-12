@@ -137,7 +137,7 @@ import {
 } from './chat/ChatGapStatus';
 import { ChatParallaxWallpaper } from './chat/ChatParallaxWallpaper';
 import { ChatMessageEdgeFade } from './chat/ChatMessageEdgeFade';
-import { WelcomeStageBackground, StageGradient, CHAT_GLASS_OPACITY } from './home/WelcomeStageBackground';
+import { WelcomeStageBackground, StageGradient } from './home/WelcomeStageBackground';
 import { WELCOME_CARD_BG, WELCOME_CHROME_EDGE_RADIUS, WELCOME_HEADER_TITLE, WELCOME_STAGE_BG } from './home/constants';
 import {
   WelcomeOverlayCard,
@@ -2258,16 +2258,11 @@ export default function ChatScreen({ route, navigation }: Props) {
   );
 
   const ChatChrome = isDark ? StageGradient : View;
-  const chatChromeBottomExtra = isDark
-    ? ({ translucent: true, mirror: true, opacity: CHAT_GLASS_OPACITY } as const)
-    : {};
+  const chatChromeBottomExtra = isDark ? ({ translucent: true, mirror: true } as const) : {};
 
   return (
-    <View style={{ flex: 1, backgroundColor: isDark ? WELCOME_STAGE_BG : LIVI.bg }}>
-    <WelcomeStageBackground
-      isDark={isDark}
-      lightColor={String(theme.colors.background || LIVI.bg)}
-    />
+    <View style={{ flex: 1, backgroundColor: WELCOME_STAGE_BG }}>
+    <WelcomeStageBackground />
     {/* Обоина на весь экран: от верхнего края до нижнего, под glass-шапкой и композером. */}
     {!loading && !err ? <ChatParallaxWallpaper isDark={isDark} /> : null}
     <SafeAreaView 
@@ -3497,7 +3492,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 }}
               >
                 {isDark ? (
-                  <WelcomeStageBackground isDark lightColor={String(theme.colors.background)} />
+                  <WelcomeStageBackground />
                 ) : null}
                 <View style={{ alignItems: 'center', paddingTop: 4, paddingBottom: 8 }}>
                   <View
@@ -3623,7 +3618,7 @@ export default function ChatScreen({ route, navigation }: Props) {
               }}
             >
               {isDark ? (
-                <WelcomeStageBackground isDark lightColor={String(theme.colors.background)} />
+                <WelcomeStageBackground />
               ) : null}
               <View style={{ paddingBottom: 2 }}>
                 <PanGestureHandler

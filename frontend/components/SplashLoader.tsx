@@ -8,7 +8,6 @@ import {
   Image,
   useWindowDimensions,
 } from 'react-native';
-import { useAppTheme } from '../theme/ThemeProvider';
 import { WelcomeStageBackground } from '../screens/home/WelcomeStageBackground';
 import { WELCOME_STAGE_BG } from '../screens/home/constants';
 
@@ -26,7 +25,6 @@ interface SplashLoaderProps {
 
 export default function SplashLoader({ dataLoaded, onComplete, overlayMode }: SplashLoaderProps) {
   const [showSplash, setShowSplash] = useState(true);
-  const { theme, isDark } = useAppTheme();
   const { height: windowHeight, width: windowWidth } = useWindowDimensions();
   const logoSize = Math.min(150, Math.max(96, Math.round(Math.min(windowHeight * 0.2, windowWidth * 0.36))));
   const startedAtRef = useRef(Date.now());
@@ -141,11 +139,8 @@ export default function SplashLoader({ dataLoaded, onComplete, overlayMode }: Sp
 
   // Фон сплэша — welcome stage gradient; иконка сразу на прежнем тоне (#151F33).
   return (
-    <View style={[styles.container, { backgroundColor: isDark ? WELCOME_STAGE_BG : (theme.colors.background as string) }]}>
-      <WelcomeStageBackground
-        isDark={!!isDark}
-        lightColor={(theme.colors.background as string) || WELCOME_STAGE_BG}
-      />
+    <View style={[styles.container, { backgroundColor: WELCOME_STAGE_BG }]}>
+      <WelcomeStageBackground />
       <View style={styles.middle}>
         <View style={styles.logoContainer}>
           <Animated.View
