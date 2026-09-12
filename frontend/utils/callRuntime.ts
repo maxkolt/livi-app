@@ -57,11 +57,14 @@ const H = {
   pipSuspendedForSystemPiP: holder(false),
   pipForceHidden: holder(false),
   pendingSystemPiPSync: holder(false),
+  pipReturnToCallInFlight: holder(false),
+  pipReturnToCallJustPressed: holder(false),
   inAudioOnlyUi: holder(false),
   stayOnVideoCallUi: holder(false),
   preferAudioOnlyUiOnNextVideoCall: holder(false),
   pipAudioOnlyPlaceholder: holder(false),
   outgoingCallId: holder('' as string),
+  freshDirectCallAudioAcceptCallId: holder(null as string | null),
 };
 
 let installed = false;
@@ -81,11 +84,14 @@ export function installCallRuntimeBridges(): void {
   installBridgedRef('__pipSuspendedForSystemPiPRef', H.pipSuspendedForSystemPiP);
   installBridgedRef('__pipForceHiddenRef', H.pipForceHidden);
   installBridgedRef('__pendingSystemPiPSyncRef', H.pendingSystemPiPSync);
+  installBridgedRef('__pipReturnToCallInFlightRef', H.pipReturnToCallInFlight);
+  installBridgedRef('__pipReturnToCallJustPressedRef', H.pipReturnToCallJustPressed);
   installBridgedRef('__inAudioOnlyUiRef', H.inAudioOnlyUi);
   installBridgedRef('__stayOnVideoCallUiRef', H.stayOnVideoCallUi);
   installBridgedRef('__preferAudioOnlyUiOnNextVideoCallRef', H.preferAudioOnlyUiOnNextVideoCall);
   installBridgedRef('__pipAudioOnlyPlaceholderRef', H.pipAudioOnlyPlaceholder);
   installBridgedRef('__outgoingCallIdRef', H.outgoingCallId);
+  installBridgedRef('__freshDirectCallAudioAcceptCallIdRef', H.freshDirectCallAudioAcceptCallId);
 }
 
 function ensureInstalled(): void {
@@ -204,6 +210,26 @@ export function isPendingSystemPiPSync(): boolean {
   return H.pendingSystemPiPSync.box.current === true;
 }
 
+export function isPipReturnToCallInFlight(): boolean {
+  ensureInstalled();
+  return H.pipReturnToCallInFlight.box.current === true;
+}
+
+export function setPipReturnToCallInFlight(value: boolean): void {
+  ensureInstalled();
+  H.pipReturnToCallInFlight.box.current = !!value;
+}
+
+export function isPipReturnToCallJustPressed(): boolean {
+  ensureInstalled();
+  return H.pipReturnToCallJustPressed.box.current === true;
+}
+
+export function setPipReturnToCallJustPressed(value: boolean): void {
+  ensureInstalled();
+  H.pipReturnToCallJustPressed.box.current = !!value;
+}
+
 // —— Audio / video UI mode ——
 
 export function isInAudioOnlyUi(): boolean {
@@ -258,6 +284,17 @@ export function setOutgoingCallId(callId: string): void {
   H.outgoingCallId.box.current = String(callId || '');
 }
 
+/** CallId свежего audio-accept: блокирует auto video-expand / preserve churn. */
+export function getFreshDirectCallAudioAcceptCallId(): string {
+  ensureInstalled();
+  return String(H.freshDirectCallAudioAcceptCallId.box.current || '').trim();
+}
+
+export function setFreshDirectCallAudioAcceptCallId(callId: string | null): void {
+  ensureInstalled();
+  H.freshDirectCallAudioAcceptCallId.box.current = callId ? String(callId) : null;
+}
+
 /**
  * Сброс lifecycle-флагов после hangup (не трогает session cleanup —
  * вызывающий код по-прежнему делает endCall / hidePiP).
@@ -270,5 +307,8 @@ export function resetCallRuntimeSurfacesAfterHangup(): void {
   setPipVisible(false);
   setPipInSystemMode(false);
   setPipSuspendedForSystem(false);
+  setPipReturnToCallInFlight(false);
+  setPipReturnToCallJustPressed(false);
   setPreferAudioOnlyUiOnNextVideoCall(false);
+  setFreshDirectCallAudioAcceptCallId(null);
 }

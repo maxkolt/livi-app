@@ -394,7 +394,10 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 Log.d(TAG, "FCM call_ended: endedFromActive, broadcast only (foreground) callId=$callId")
             }
             // Собеседник в системном PiP часто без call:ended по сокету. MainActivity закрывает PiP только если isInPictureInPictureMode.
-            val closePipIntent = Intent(ACTION_CLOSE_PIP_CALL_ENDED).apply { setPackage(packageName) }
+            val closePipIntent = Intent(ACTION_CLOSE_PIP_CALL_ENDED).apply {
+                setPackage(packageName)
+                putExtra(EXTRA_CALL_ID, callId)
+            }
             sendBroadcast(closePipIntent)
             Log.d(TAG, "FCM call_ended: sent ACTION_CLOSE_PIP_CALL_ENDED (endedFromActive=true) callId=$callId")
             return

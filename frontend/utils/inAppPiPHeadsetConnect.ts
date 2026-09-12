@@ -233,7 +233,8 @@ export async function tryAutoSwitchInAppPiPFromDisconnectedHeadset(): Promise<In
 }
 
 /**
- * Опрос (плашка на Home): ICM/onAudioDeviceChanged может не прийти — ловим BT по native probe.
+ * PiP headset sync: primary — onAudioDeviceChanged / AppState; backup poll ловит BT,
+ * если ICM не прислал событие (раньше 1.4s poll с плашки).
  */
 let lastPiPHeadsetPollAttemptAt = 0;
 

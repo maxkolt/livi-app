@@ -16,6 +16,8 @@ interface LocalVideoProps {
   lang: Lang;
   /** Локальный GSM hold на video UI: заглушка «Вы» + «Звонок на удержании...». */
   localExternalHold?: boolean;
+  /** Локальный PiP поверх remote: выше z-order, чтобы Surface/Texture remote не глушил превью. */
+  asPipOverlay?: boolean;
   onStreamReady?: (stream: MediaStream) => void;
 }
 
@@ -33,6 +35,7 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
   localRenderKey,
   lang,
   localExternalHold = false,
+  asPipOverlay = false,
   onStreamReady,
 }) => {
   const L = (key: string) => t(key, lang);
@@ -59,7 +62,7 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
     !!videoTrack &&
     isVideoTrackEnabled &&
     (Platform.OS === 'android' ? true : !isVideoTrackMuted) &&
-    (isVideoTrackLive || trackLiveTick > 0);
+    (isVideoTrackLive || trackLiveTick > 0 || camOn);
   
   // Логирование для отладки на Android
   useEffect(() => {
@@ -84,9 +87,9 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
     setTrackLiveTick(0);
     const t = setTimeout(() => setTrackLiveTick((k) => k + 1), 150);
     return () => clearTimeout(t);
-  }, [localStream?.id, localVideoTrackId]);
+  }, [localStream?.id, localVideoTrackId, localRenderKey]);
 
-  // КРИТИЧНО: На Android нужен force-update для RTCView при изменении стрима
+  // КРИТИЧНО: На Android нужен force-update для RTCView при изменении стрима / remount key
   useEffect(() => {
     if (Platform.OS === 'android' && localStream && isValidStream(localStream)) {
       const vt = (localStream as any)?.getVideoTracks?.()?.[0];
@@ -104,7 +107,7 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
           return next;
         });
       };
-      if (vt.readyState === 'live') {
+      if (vt.readyState === 'live' || camOn) {
         bump();
         return;
       }
@@ -120,7 +123,7 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
         clearTimeout(stop);
       };
     }
-  }, [localStream?.id, localVideoTrackId, localRenderKey]);
+  }, [localStream?.id, localVideoTrackId, localRenderKey, camOn]);
 
   // КРИТИЧНО: На Android RTCView может "залипать" на черном экране при переключении enabled у videoTrack
   // (камера OFF -> ON). Поэтому при изменении enabled/ camOn форсим remount.
@@ -157,7 +160,13 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
 
   if (localExternalHold) {
     return (
-      <View style={[styles.rtc, styles.placeholderContainer, styles.holdPlaceholderRoot]}>
+      <View
+        style={[
+          styles.rtc,
+          styles.placeholderContainer,
+          styles.holdPlaceholderRoot,
+        ]}
+      >
         <Text style={styles.placeholder}>{L('you')}</Text>
         <Text style={styles.holdStatusLabelBottom}>{L('externalCallHoldEllipsis')}</Text>
       </View>
@@ -214,8 +223,8 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
           streamURL: localStreamURL, 
           // На legacy Android (8.1/API27) у некоторых устройств (в т.ч. OPPO) Surface/overlay ломается при HW-texture.
           renderToHardwareTextureAndroid: !isLegacyAndroidSurface,
-          // Важно: не используем overlay-слои для SurfaceView, иначе он может перекрывать RN-кнопки.
-          zOrderMediaOverlay: false,
+          // PiP поверх remote: overlay, иначе remote SurfaceView «пробивает» и локальный кадр пустой.
+          zOrderMediaOverlay: asPipOverlay,
           // prop может отсутствовать в типах, но поддерживается нативно в webrtc-view на Android.
           useTextureView: useTextureViewOnAndroid,
         } // Android: пробрасываем оба
@@ -228,8 +237,8 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
         style={styles.rtc}
         objectFit="cover"
         mirror={isFrontCamera}
-        // Не поднимаем Surface "наверх": на старых Android это прячет RN-кнопки.
-        zOrder={0}
+        // Локальный PiP выше remote (0), иначе после появления peer video превью чернеет.
+        zOrder={asPipOverlay ? 1 : 0}
       />
     );
   }
@@ -238,9 +247,10 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
   // а не заглушку "Вы". Заглушка должна означать именно camOff по UI.
 
   // Если стрим есть, но трек еще не ready/замьючен - показываем черный экран
-  return <View style={[styles.rtc, { backgroundColor: 'black' }]} />;
+  return (
+    <View style={[styles.rtc, { backgroundColor: 'black' }]} />
+  );
 };
-
 const styles = StyleSheet.create({
   rtc: {
     position: 'absolute',

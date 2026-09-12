@@ -64,8 +64,8 @@ export function cycleRoutesForContext(
   context: CallAudioRouteCycleContext,
   _available: string[],
 ): InCallAudioRoute[] {
-  const twoModeVideo = context === 'video_ui' || context === 'system_pip';
-  if (twoModeVideo) {
+  // system PiP: только громкая (как product pin). video UI «Ещё»: ухо ↔ громкая.
+  if (context === 'system_pip') {
     return ['SPEAKER_PHONE'];
   }
   return ['EARPIECE', 'SPEAKER_PHONE'];
@@ -99,13 +99,13 @@ export function nextRouteInCycleForContext(
   context: CallAudioRouteCycleContext,
   _icmDeviceList: string[] = [],
 ): InCallAudioRoute {
-  const twoModeVideo = context === 'video_ui' || context === 'system_pip';
-  if (twoModeVideo) {
-    // Видео: ухо не даём; BT снимаем тапом в громкую (OS иначе держит гарнитуру).
+  if (context === 'system_pip') {
+    // System PiP: ухо не даём; BT снимаем тапом в громкую.
     if (isExternalHeadsetRoute(current)) return 'SPEAKER_PHONE';
     return 'SPEAKER_PHONE';
   }
-  // Аудио / in-app PiP: простой speaker on/off.
+  // Аудио / video UI «Ещё» / in-app PiP: speaker on/off; с BT/провода — в громкую.
+  if (isExternalHeadsetRoute(current)) return 'SPEAKER_PHONE';
   return nextSpeakerToggleRoute(current);
 }
 

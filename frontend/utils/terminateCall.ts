@@ -45,8 +45,18 @@ export type TerminateCallReason =
   | 'outgoing_declined_socket'
   /** Мы отменили исходящий (native Outgoing / deep link). */
   | 'outgoing_canceled_local'
+  /** Локальный safeguard / no-answer: close Outgoing + CallKeep, без emitCloseOutgoing (Home сам гасит UI). */
+  | 'outgoing_timeout'
+  /** Socket timeout/cancel/busy на Home: close Outgoing + visible=false, без CallKeep/emit (App часто уже закрыл). */
+  | 'outgoing_ring_closed'
+  /** Старт не удался / cancel до notify / abort redial: close + visible=false + skipMainReturn. */
+  | 'outgoing_abort_keep_main'
+  /** Только native Outgoing close (before-retry / stale launch); skipMainReturn через opts. */
+  | 'outgoing_native_close'
   /** Инициатор отменил вызов — пуш пришёл через Expo. Закрыть IncomingCallActivity и снять уведомление (то же, что FCM call_canceled). */
   | 'incoming_canceled'
+  /** Socket/local timeout входящего: CallKeep + Incoming FS + close events (App onCallTimeout). */
+  | 'incoming_timeout'
   /** Мы отклонили входящий (Activity / CallKeep / deep link). */
   | 'incoming_declined_local'
   /** Активный звонок завершён — только surfaces (App call:ended / hangup). */
@@ -101,6 +111,27 @@ const PRESETS: Record<TerminateCallReason, SurfacePlan> = {
     emitCloseOutgoing: 'native_cancel',
     callKeepEnd: true,
   },
+  outgoing_timeout: {
+    closeOutgoing: true,
+    forceOutgoing: true,
+    outgoingVisibleFalse: true,
+    callKeepEnd: true,
+  },
+  outgoing_ring_closed: {
+    closeOutgoing: true,
+    forceOutgoing: true,
+    outgoingVisibleFalse: true,
+  },
+  outgoing_abort_keep_main: {
+    closeOutgoing: true,
+    forceOutgoing: true,
+    skipMainReturn: true,
+    outgoingVisibleFalse: true,
+  },
+  outgoing_native_close: {
+    closeOutgoing: true,
+    forceOutgoing: true,
+  },
   incoming_canceled: {
     callKeepEnd: true,
     notifyCanceled: true,
@@ -109,6 +140,20 @@ const PRESETS: Record<TerminateCallReason, SurfacePlan> = {
     incomingVisibleFalse: true,
     incomingFs: true,
     addEndedId: true,
+  },
+  incoming_timeout: {
+    callKeepEnd: true,
+    notifyCanceled: true,
+    incomingRingtone: true,
+    incomingAlert: true,
+    incomingVisibleFalse: true,
+    incomingFs: true,
+    addEndedId: true,
+    emitCloseIncoming: true,
+    emitCloseOutgoing: 'remote_closed',
+    closeOutgoing: true,
+    forceOutgoing: true,
+    outgoingVisibleFalse: true,
   },
   incoming_declined_local: {
     callKeepEnd: true,

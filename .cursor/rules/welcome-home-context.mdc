@@ -1,0 +1,65 @@
+---
+description: LiVi welcome/home redesign context, tab bar, and next steps. Uncommitted work; no git commit unless user asks.
+alwaysApply: true
+---
+
+# LiVi welcome / home — контекст (2026)
+
+## Git
+
+- Welcome/home changes may be **local only** — **do not commit or push** unless the user explicitly asks.
+
+## Product (agreed)
+
+- **Crown** → profile (menu tab `settings`); **long-press crown** → friends menu; badge for unread/missed.
+- **Online count:** `GET /api/presence` → `list.length`; RU plural via `formatWelcomeUsersOnlineLine`.
+- **Aura accent:** `AURA_GRADIENT` (`#14b8a6`, `#3b82f6`, `#00b5ff`) on welcome accents (not mock purple).
+- Welcome stage bg: `WELCOME_STAGE_BG` + `WelcomeStageBackground` (Expo LinearGradient, aura wash).
+
+## Welcome UI — implemented
+
+| Area | Files |
+|------|--------|
+| Layout | `frontend/screens/home/HomeWelcomeView.tsx` |
+| Online pill | `WelcomeOnlineBanner.tsx` — glass surface |
+| Radar | `WelcomeRadar.tsx` — 4 orbit bands, dots, no stroke lines |
+| CTA | `WelcomeSearchCta.tsx` — 1px aura gradient border, dark glass fill; bottom border clip fixed (explicit shell size, `overflow: visible`, `ctaWrap` `paddingBottom: 2`) |
+| Tab bar | `HomeWelcomeTabBar.tsx` — same glass as online; active tab uses **Vi** fill colors (no pill/border); reduced height |
+| Logo | `BrandTitleWithOutline` in `chrome.tsx` — single SVG when `letterGlow={false}`; spacing; **Vi** uses muted teal-blue gradients |
+| Constants | `constants.ts`: `WELCOME_BRAND_VI_FILL_GRADIENT`, `WELCOME_BRAND_VI_STROKE_GRADIENT`, `WELCOME_GLASS_SURFACE`, `WELCOME_GLASS_BORDER` |
+| Integration | `frontend/screens/HomeScreen.tsx` — `welcomeActiveTab`, tab bar when `!menuOpen` |
+| Friends | `HomeWelcomeFriendsView.tsx` + `FriendsListCore.tsx` (`presentation="welcome"`) |
+| Profile | `HomeWelcomeProfileView.tsx` |
+| Chats | `HomeWelcomeChatsView.tsx` — glass cards; segments All/Unread (same chrome as Friends); header search + crown |
+| Calls | `HomeWelcomeCallsView.tsx` — same glass chrome as chats, **no aura**; segments All/Missed; local call log |
+
+## Tab bar behavior (current)
+
+- **Search / Friends / Chat / Calls / Profile:** stay on welcome; `setWelcomeActiveTab(...)` only.
+- Friends list UI: welcome `HomeWelcomeFriendsView`; legacy `HomeMenuOverlay` → `HomeFriendsTab.tsx`.
+
+## Next work
+
+Welcome polish / remaining menu migration. **Do not break:** search → `RandomChat`, call lock, crown/profile, friends, chats, calls, existing menu/friends flows.
+
+## Technical notes
+
+- `@react-native-masked-view/masked-view` added; metro no longer stubs MaskedView (tab gradient via mask was reverted — use solid Vi colors on active tabs).
+- `WelcomeBrandMark.tsx` may be unused — verify before delete.
+- i18n: `frontend/utils/i18n.ts` for welcome/tab strings.
+- Chat unread badge: slightly smaller (17px) with count; color darker blue `#2158c0`.
+- Chat delete: long-press row → multi-select → trash. Clears for me via `clearChatMessages(peerId, false)`. Android Back exits select.
+- Friends welcome: no swipe-delete. Long-press → multi-select → trash removes friends (`removeFriend`). Same chrome as chats select.
+- Last-message preview: `getChatMessagesLocal` only (no cache rewrite).
+- Calls log: local AsyncStorage (`CALL_LOG_KEY`); outgoing on start, missed via `onMissedIncrement`, incoming on accept (not our outgoing). Phone+plus picks a friend to call. Delete: long-press → multi-select → trash (same as chats).
+
+## Layout tweaks (recent)
+
+- Online block: `marginTop: 10` in banner.
+- Top bar: LiVi + crown lowered (`paddingTop` / height in `HomeWelcomeView` welcome styles).
+- Tab bar: glass `rgba(22, 27, 34, 0.52)` matching online pill.
+
+## Conventions
+
+- Prefer minimal diffs; match existing `frontend/screens/home/*` patterns.
+- User communicates in Russian; keep responses clear and proportional.

@@ -551,7 +551,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   fun launchIncomingCallActivity(callId: String, from: String, fromNick: String?, hasVideo: Boolean) {
     val ctx = reactApplicationContext
     if (callId.isNotBlank() && LiviOngoingCallHelper.shouldSuppressStaleIncoming(ctx, callId)) {
-      Log.d(NAME, "launchIncomingCallActivity skipped (stale/ended) callId=$callId")
+      Log.w(NAME, "launchIncomingCallActivity skipped (stale/ended) callId=$callId")
       LiviOngoingCallHelper.clearOngoingCallIfMatches(ctx, callId)
       return
     }
@@ -592,7 +592,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     if (callId.isBlank() || from.isBlank()) return
     val ctx = reactApplicationContext
     if (LiviOngoingCallHelper.shouldSuppressStaleIncoming(ctx, callId)) {
-      Log.d(NAME, "showIncomingCallSystemUI skipped (stale/ended) callId=$callId")
+      Log.w(NAME, "showIncomingCallSystemUI skipped (stale/ended) callId=$callId")
       LiviOngoingCallHelper.clearOngoingCallIfMatches(ctx, callId)
       return
     }
@@ -3449,6 +3449,23 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     @JvmStatic
     fun emitEndCallFromPiP() {
       runOnReactUiQueueIfAlive { it.emitDeviceEvent("EndCallFromPiP", null) }
+    }
+
+    /** FCM endedFromActive while peer is in system PiP — local teardown without waiting for socket call:ended. */
+    @JvmStatic
+    fun emitRemoteCallEndedInSystemPiP(callId: String?) {
+      runOnReactUiQueueIfAlive { ctx ->
+        val params = Arguments.createMap()
+        if (!callId.isNullOrBlank()) {
+          params.putString("callId", callId)
+        }
+        try {
+          if (!pipRoomId.isNullOrBlank()) {
+            params.putString("roomId", pipRoomId)
+          }
+        } catch (_: Exception) {}
+        ctx.emitDeviceEvent("RemoteCallEndedInSystemPiP", params)
+      }
     }
 
     /** Actual IME inset from Android's window, including OEM suggestion strips. */

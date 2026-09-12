@@ -367,6 +367,33 @@ export type SystemPiPLeaveContext = {
 };
 
 /**
+ * Failed/cancelled system PiP enter или return из уведомления:
+ * иначе VideoCall остаётся в systemPiPCompact (peer video без CallScreenChrome).
+ */
+export function clearStickySystemPiPCompactFlags(_reason?: string): void {
+  try {
+    const g = global as any;
+    g.__pendingSystemPiPSyncRef = g.__pendingSystemPiPSyncRef || { current: false };
+    g.__pendingSystemPiPSyncRef.current = false;
+    g.__leavingVideoCallByHomeRef = g.__leavingVideoCallByHomeRef || { current: false };
+    g.__leavingVideoCallByHomeRef.current = false;
+    g.__systemPiPEntryInProgressUntilRef = g.__systemPiPEntryInProgressUntilRef || { current: 0 };
+    g.__systemPiPEntryInProgressUntilRef.current = 0;
+    g.__pipInSystemModeRef = g.__pipInSystemModeRef || { current: false };
+    g.__pipInSystemModeRef.current = false;
+    const upd = g.__pipUpdateStateRef?.current;
+    if (typeof upd === 'function') {
+      upd({
+        pendingSystemPiP: false,
+        systemPiPCaptureActive: false,
+        systemPiPCaptureRequestId: 0,
+        inSystemPiPMode: false,
+      });
+    }
+  } catch (_) {}
+}
+
+/**
  * Accept с нативного Incoming: сбросить sticky «вернуть in-app PiP» и подавить
  * ложный Back/leaveHint от task-switch Incoming→Main (иначе Home+плашка вместо VideoCall).
  */

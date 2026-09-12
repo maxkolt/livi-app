@@ -1,0 +1,38 @@
+---
+description: Keep existing product/call/chat logic working; optimize responsiveness only; no behavior regressions.
+alwaysApply: true
+---
+
+# Preserve working logic (LiVi)
+
+## Hard rule
+
+Current app behavior is considered **correct and must stay working**.
+Optimize **responsiveness / latency only**. Do **not** change product logic, call/chat/PiP semantics, or welcome design unless the user explicitly asks.
+
+## Do not break
+
+- Random search → `RandomChat`
+- Friends add/remove, chats, call log
+- Outgoing/incoming call flow: dial, cancel, redial, accept, reject, hangup
+- Call lock, crown/profile, welcome tabs
+- In-app PiP and Android system PiP enter/exit/end
+- Audio route behavior that already works (earpiece/speaker/headset) — tune timing, don’t rewrite policy
+
+## Performance work priorities (agreed)
+
+1. Cancel → immediate redial (“Вызов” starts again without sticky busy)
+2. Instant welcome/sidebar navigation taps
+3. Accept → VideoCall transition (later)
+4. In-app PiP enter/exit (**last**)
+
+## How to change code
+
+- Prefer removing artificial waits / busy holds / duplicate cancel / heavy sync work on the happy path
+- Keep race guards that protect real edge cases; only shorten or scope them when proven to block UI
+- Minimal diffs; no drive-by refactors; no “simplify the whole call stack”
+- Do **not** commit or push unless the user explicitly asks
+
+## Regression check after any perf patch
+
+Manually verify: cancel→redial, tab switches, accept/hangup still connect and clean up, PiP still works if touched.

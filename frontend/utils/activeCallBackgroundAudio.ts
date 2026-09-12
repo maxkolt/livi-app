@@ -18,8 +18,8 @@ import { readNativeProbedExternalRoute } from './nativeCallAudioProbe';
 import { readRootCurrentRouteName } from './safeRootNavigation';
 import { isExternalCallHoldActive } from './externalCallHold';
 
-const BACKGROUND_REAPPLY_DELAYS_MS = [0, 450, 1200];
-const FOREGROUND_REAPPLY_DELAYS_MS = [0, 350];
+const BACKGROUND_REAPPLY_DELAYS_MS = [0, 450];
+const FOREGROUND_REAPPLY_DELAYS_MS = [0];
 const BACKGROUND_INTERVAL_MS = 12_000;
 const NATIVE_VOICE_MAINTAIN_MIN_MS = 12_000;
 

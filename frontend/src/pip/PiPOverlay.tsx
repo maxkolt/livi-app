@@ -2,6 +2,8 @@
 // In-app: горизонтальная плашка с превью и кнопками (без возврата в звонок по тапу на превью).
 import React, { useContext, useRef, useCallback, useMemo, useState, useEffect } from 'react';
 import {
+  AppState,
+  DeviceEventEmitter,
   Dimensions,
   StyleSheet,
   View,
@@ -134,7 +136,7 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
     };
   }, [visible]);
 
-  // Headset auto-switch без кнопки маршрута на плашке (пункт 5: return · mute · end).
+  // Headset auto-switch: events first; редкий backup poll (ICM иногда молчит на BT).
   useEffect(() => {
     if (!visible) return;
     const syncHeadset = () => {
@@ -149,8 +151,17 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
     };
     setLocalMicMuted(resolvePiPLocalMutedState());
     syncHeadset();
-    const interval = setInterval(syncHeadset, 1400);
+    const subDevice = DeviceEventEmitter.addListener('onAudioDeviceChanged', () => {
+      syncHeadset();
+    });
+    const subAppState = AppState.addEventListener('change', (next) => {
+      if (next === 'active') syncHeadset();
+    });
+    // Backup: 6s вместо 1.4s — ловим BT, если ICM не прислал событие.
+    const interval = setInterval(syncHeadset, 6000);
     return () => {
+      subDevice.remove();
+      subAppState.remove();
       clearInterval(interval);
     };
   }, [visible, isMuted]);
@@ -169,10 +180,10 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
       /** Как заголовок «Звонки» на странице Calls. */
       icon: WELCOME_HEADER_TITLE,
       ripple: 'rgba(255, 255, 255, 0.14)',
-      /** Как audioRoundBtnDanger / AudioCallEndButton на странице аудиозвонка. */
-      dangerBg: '#CC4A1E2A',
+      /** Краповый фон+рамка — muted mic / hangup (как на экране звонка). */
+      dangerBg: 'rgba(163, 59, 79, 0.42)',
       dangerBorder: '#A33B4F',
-      dangerIcon: '#C45A6E',
+      dangerIcon: '#F5E6EA',
     }),
     [isDark],
   );
@@ -478,7 +489,7 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
                 <MaterialIcons
                   name={micIconMuted ? 'mic-off' : 'mic'}
                   size={PIP_ICON_SIZE}
-                  color={chrome.icon}
+                  color={micIconMuted ? chrome.dangerIcon : chrome.icon}
                 />
               </PiPActionButton>
               <PiPActionButton onPress={endCall} accessibilityLabel={t('endCall', lang)} chrome={chrome} danger>

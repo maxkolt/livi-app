@@ -61,7 +61,8 @@ import { trimNick } from '../utils/userDisplayName';
 import { usePiP } from '../src/pip/PiPContext';
 import { onCallTimeout as onCallTimeoutEvent, onCallIncoming as onCallIncomingEvent, onCallDeclined as onCallDeclinedEvent } from '../sockets/socket';
 import { onRequestCloseIncoming, emitCloseIncoming, onCloseOutgoingCall, onCallCancelledOnHome, onCallEndedOnHome, onCloseHomeModals, onRequestDirectCall, shouldSkipHomeUiSettle, armHomeUiSettleSkip, clearHomeUiSettleSkip, setPendingWelcomeCallsFilter, setPendingWelcomeChatsFilter } from '../utils/globalEvents';
-import { displayOutgoingCallImmediate, notifyOutgoingCallId, reportEndCallToCallKeep, closeOutgoingCallActivity, bringMainActivityToFront, OUTGOING_CALL_TIMEOUT_MS, clearOutgoingDeclineHandled, isOutgoingDeclineHandled, setupCallKeep, isCallKeepAvailable, setCallMediaHint } from '../utils/callKeep';
+import { displayOutgoingCallImmediate, notifyOutgoingCallId, reportEndCallToCallKeep, bringMainActivityToFront, OUTGOING_CALL_TIMEOUT_MS, clearOutgoingDeclineHandled, isOutgoingDeclineHandled, setupCallKeep, isCallKeepAvailable, setCallMediaHint } from '../utils/callKeep';
+import { terminateCall } from '../utils/terminateCall';
 import { syncAppBadgeFromMissedCount, dismissMessageNotificationsOnly, getMissedCountByUserFromNative } from '../utils/pushNotifications';
 import {
   LIVI,
@@ -1207,12 +1208,11 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       skipMainReturn: !!options?.skipMainReturn,
     });
     if (!options?.skipNativeClose) {
-      try {
-        closeOutgoingCallActivity(id, {
-          force: true,
-          skipMainReturn: options?.skipMainReturn === true,
-        });
-      } catch {}
+      terminateCall({
+        reason: 'outgoing_native_close',
+        callId: id,
+        skipMainReturn: options?.skipMainReturn === true,
+      });
     }
     // Один cancel сразу; повтор после reconnect — без setTimeout(150), чтобы не тормозить redial.
     try { cancelCall(id); } catch {}
@@ -1742,7 +1742,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     if (!calling.visible) setSwipeActionsHiddenForCall(null);
   }, [calling.visible]);
 
-  // Закрытие по call:declined делают App (closeOutgoingCallActivity) + offDeclined в handleStartVideoCall (setCalling, showNotice).
+  // Закрытие по call:declined делают App (terminateCall) + offDeclined в handleStartVideoCall (setCalling, showNotice).
   // Прямую подписку socket.on('call:declined') убрали — она давала второй setCalling и двойное мерцание.
 
   const handleStartDirectCall = useCallback(async (friend: Friend, media: 'audio' | 'video' = 'video') => {
@@ -1988,9 +1988,11 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         try { setOutgoingCallScreenVisible(false); } catch {}
         // Не closeOutgoing(null): может убить Outgoing уже запущенного redial.
         if (activeOutgoingAttemptRef.current <= 0) {
-          try {
-            closeOutgoingCallActivity(null, { force: true, skipMainReturn: true });
-          } catch {}
+          terminateCall({
+            reason: 'outgoing_native_close',
+            callId: null,
+            skipMainReturn: true,
+          });
         }
         callingVisibleRef.current = false;
         return;
@@ -2028,9 +2030,11 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         try { setOutgoingCallScreenVisible(false); } catch {}
         // Не closeOutgoing(null) при живом новом attempt — иначе redial «тупит» на секунды.
         if (activeOutgoingAttemptRef.current <= 0) {
-          try {
-            closeOutgoingCallActivity(null, { force: true, skipMainReturn: true });
-          } catch {}
+          terminateCall({
+            reason: 'outgoing_native_close',
+            callId: null,
+            skipMainReturn: true,
+          });
         }
         try {
           const orphan = await startCallPromise.catch(() => null);
@@ -2178,8 +2182,10 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           if (!shouldHandleOutgoingEvent('call:timeout', eventCallId)) return;
           finishOutgoing(() => {
             disposeDirectCallAudioPrewarm('home:outgoing-timeout');
-            try { setOutgoingCallScreenVisible(false); } catch {}
-            try { closeOutgoingCallActivity(eventCallId || null, { force: true }); } catch {}
+            terminateCall({
+              reason: 'outgoing_ring_closed',
+              callId: eventCallId || null,
+            });
             forceResetCallBusyRefs();
             clearFriendsCallBusy([String(friend.id), lastOutgoingPeerIdRef.current]);
             lastOutgoingPeerIdRef.current = null;
@@ -2223,8 +2229,10 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           } catch {}
           finishOutgoing(() => {
             disposeDirectCallAudioPrewarm('home:outgoing-canceled');
-            try { setOutgoingCallScreenVisible(false); } catch {}
-            try { closeOutgoingCallActivity(eventCallId || null, { force: true }); } catch {}
+            terminateCall({
+              reason: 'outgoing_ring_closed',
+              callId: eventCallId || null,
+            });
             forceResetCallBusyRefs();
             clearFriendsCallBusy([String(friend.id), lastOutgoingPeerIdRef.current]);
             // Только своя отмена инициатора → «Отменённый» у себя.
@@ -2322,9 +2330,11 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
             attemptId,
           });
           try { cancelCall(finishedCallId); } catch {}
-          try {
-            closeOutgoingCallActivity(finishedCallId || null, { force: true, skipMainReturn: true });
-          } catch {}
+          terminateCall({
+            reason: 'outgoing_native_close',
+            callId: finishedCallId || null,
+            skipMainReturn: true,
+          });
         } else if (finishedCallId && canceledDuringThisAttempt) {
           logger.info('[HomeScreen] cancel outgoing before notify (canceled during attempt)', {
             callId: finishedCallId,
@@ -2340,10 +2350,10 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           pendingCancelRef.current = false;
           finishOutgoing(() => {
             disposeDirectCallAudioPrewarm('home:outgoing-canceled-before-notify');
-            try { setOutgoingCallScreenVisible(false); } catch {}
-            try {
-              closeOutgoingCallActivity(finishedCallId || null, { force: true, skipMainReturn: true });
-            } catch {}
+            terminateCall({
+              reason: 'outgoing_abort_keep_main',
+              callId: finishedCallId || null,
+            });
             forceResetCallBusyRefs();
             clearFriendsCallBusy([String(friend.id), lastOutgoingPeerIdRef.current]);
             lastOutgoingPeerIdRef.current = null;
@@ -2370,9 +2380,10 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       safeguardTimer = setTimeout(() => {
         finishOutgoing(() => {
           disposeDirectCallAudioPrewarm('home:outgoing-safeguard-timeout');
-          try { setOutgoingCallScreenVisible(false); } catch {}
-          try { closeOutgoingCallActivity(callIdForTimeout || null, { force: true }); } catch {}
-          if (callIdForTimeout) try { reportEndCallToCallKeep(callIdForTimeout); } catch {}
+          terminateCall({
+            reason: 'outgoing_timeout',
+            callId: callIdForTimeout || null,
+          });
           forceResetCallBusyRefs();
           clearFriendsCallBusy([String(friend.id), lastOutgoingPeerIdRef.current]);
           lastOutgoingPeerIdRef.current = null;
@@ -2393,12 +2404,10 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       }
       try { setOutgoingCallScreenVisible(false); } catch {}
       // skipMainReturn: busy/cancel не должен REORDER Main и убивать redial/табы.
-      try {
-        closeOutgoingCallActivity(activeOutgoingCallIdRef.current || calling.callId || null, {
-          force: true,
-          skipMainReturn: true,
-        });
-      } catch {}
+      terminateCall({
+        reason: 'outgoing_abort_keep_main',
+        callId: activeOutgoingCallIdRef.current || calling.callId || null,
+      });
       forceResetCallBusyRefs();
       clearFriendsCallBusy([String(friend.id), lastOutgoingPeerIdRef.current]);
       if (errCode === 'initiator_busy' || errCode === 'busy') {
@@ -4846,8 +4855,10 @@ const handleClearNick = useCallback(async () => {
     const onBusy = (_payload: { from: string }) => {
       const callIdToClose = activeOutgoingCallIdRef.current || calling.callId || null;
       setCalling({ visible: false, friend: null, callId: null });
-      try { setOutgoingCallScreenVisible(false); } catch {}
-      try { closeOutgoingCallActivity(callIdToClose, { force: true }); } catch {}
+      terminateCall({
+        reason: 'outgoing_ring_closed',
+        callId: callIdToClose,
+      });
       activeOutgoingAttemptRef.current = 0;
       activeOutgoingCallIdRef.current = null;
       callingVisibleRef.current = false;

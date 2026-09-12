@@ -1,7 +1,7 @@
 /**
- * VideoCall - Компонент для видеозвонка другу
- * Использует компоненты: RemoteVideo, LocalVideo, MediaControls
- * Имеет кнопку: Завершить
+ * VideoCall - звонок другу.
+ * Единый UI (audio/video): CallScreenChrome + remote/local feeds.
+ * Кнопки: Ещё / Камера / Микрофон / Завершить; ↓ — in-app PiP.
  */
 
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
@@ -24,21 +24,25 @@ import { CommonActions, useFocusEffect, useIsFocused } from '@react-navigation/n
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MediaStream } from '@livekit/react-native-webrtc';
-import { MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
+import { MaterialIcons } from '@expo/vector-icons';
 import { VideoCallSession } from '../../src/webrtc/sessions/VideoCallSession';
 import type { CamSide, WebRTCSessionConfig } from '../../src/webrtc/types';
 import { BlurView } from 'expo-blur';
-import { MediaControls } from './shared/MediaControls';
+import { CallScreenChrome, type CallMoreMenuItem } from './shared/CallScreenChrome';
 import { LocalVideo } from './shared/LocalVideo';
 import { RemoteVideo } from './shared/RemoteVideo';
 import { HiddenRemoteAudioSink } from './shared/HiddenRemoteAudioSink';
-import { AudioCallConnectingStatus } from './shared/AudioCallConnectingStatus';
 import { partnerRemoteRtcLikelyVisible, streamHasLiveRemoteAudio } from './shared/callTimerUtils';
 import { t, loadLang, defaultLang } from '../../utils/i18n';
 import type { Lang } from '../../utils/i18n';
 import { useAppTheme } from '../../theme/ThemeProvider';
 import { WelcomeStageBackground } from '../../screens/home/WelcomeStageBackground';
-import { WELCOME_HEADER_TITLE, WELCOME_NAV_ACTIVE_ACCENT, WELCOME_NAV_ACTIVE_ICON, WELCOME_STAGE_BG } from '../../screens/home/constants';
+import {
+  WELCOME_HEADER_TITLE,
+  WELCOME_NAV_ACTIVE_ACCENT,
+  WELCOME_NAV_ACTIVE_ICON,
+  WELCOME_STAGE_BG,
+} from '../../screens/home/constants';
 import { uiAccent } from '../../theme/uiAccent';
 import { isValidStream } from '../../utils/streamUtils';
 import { logger } from '../../utils/logger';
@@ -68,6 +72,7 @@ import {
   clearDirectCallUserRequestedVideoExpand,
   isDirectCallUserRequestedVideoExpand,
   clearSystemPiPSessionAudioOrigin,
+  clearStickySystemPiPCompactFlags,
   shouldSuppressDirectCallAudioOnlyUiTransition,
   markFreshDirectCallAudioAcceptCall,
   isFreshDirectCallAudioAcceptCallActive,
@@ -118,6 +123,7 @@ import { readBuiltinCallRouteBeforeHeadset, rememberBuiltinCallRouteBeforeHeadse
 import { iconNameForRoute, isExternalHeadsetRoute, mapRouteForEnterVideoUi, type InCallAudioRoute, normalizeInCallRoute } from './hooks/audioRouteTypes';
 import { useAudioRouting } from './hooks/useAudioRouting';
 import { usePiP as usePiPHook } from './hooks/usePiP';
+import { useDraggableLocalPip } from './hooks/useDraggableLocalPip';
 import { useIncomingCall } from './hooks/useIncomingCall';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import InCallManager from 'react-native-incall-manager';
@@ -568,6 +574,8 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
   const [roomId, setRoomId] = useState<string | null>(route?.params?.roomId || null);
   const [callId, setCallId] = useState<string | null>(route?.params?.callId || null);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
+  /** Последний video track id из onLocalStreamChange (до in-place мутации getVideoTracks врёт). */
+  const lastEmittedLocalVideoTrackIdRef = useRef<string | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(() => {
     if (!initialLiveSession) return null;
     try {
@@ -1190,7 +1198,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
   // Сохраняем ссылку на enterPiPMode для использования в beforeRemove
   const enterPiPModeRef = useRef<((opts?: { deferVisible?: boolean }) => void) | null>(null);
   
-  const { enterPiPMode, panResponder } = usePiPHook({
+  const { enterPiPMode, minimizeToInAppPiP, panResponder } = usePiPHook({
     roomId,
     callId,
     partnerId,
@@ -1211,6 +1219,56 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     enableAndroidBackHandler: true,
     getAudioOutputRoute: () => userRouteRef.current,
   });
+
+  const [callStageSize, setCallStageSize] = useState(() => {
+    const d = Dimensions.get('window');
+    return { width: d.width || 400, height: d.height || 700 };
+  });
+  const [localPipAnchorGen, setLocalPipAnchorGen] = useState(0);
+  const prevLocalPipCamOnRef = useRef(false);
+  useEffect(() => {
+    const showLocal = !!camOn && !isInactiveState;
+    if (showLocal && !prevLocalPipCamOnRef.current) {
+      setLocalPipAnchorGen((n) => n + 1);
+    }
+    prevLocalPipCamOnRef.current = showLocal;
+  }, [camOn, isInactiveState]);
+  const { localPipPanHandlers, localPipDragStyle } = useDraggableLocalPip(callStageSize, {
+    resetToken: localPipAnchorGen,
+  });
+  /** WhatsApp-style swap local↔remote на полном video UI (не in-app/system PiP). */
+  const [localIsMain, setLocalIsMain] = useState(false);
+
+  // Когда партнёр включает видео, remote SurfaceView на Android глушит local TextureView.
+  // forceTextureView на remote + отложенный remount local.
+  const prevRemoteVideoVisibleRef = useRef(false);
+  useEffect(() => {
+    const remoteVisible = !!remoteCamOn && !isInactiveState;
+    const becameVisible = remoteVisible && !prevRemoteVideoVisibleRef.current;
+    prevRemoteVideoVisibleRef.current = remoteVisible;
+    if (!becameVisible || !camOn) return;
+
+    const remountLocal = (why: string) => {
+      try {
+        const sess = sessionRef.current || (global as any).__webrtcSessionRef?.current;
+        const fresh = sess?.getLocalStream?.() || localStreamRef.current;
+        if (fresh) {
+          localStreamRef.current = fresh;
+          setLocalStream(fresh);
+        }
+      } catch {}
+      setLocalRenderKey((k) => k + 1);
+      logger.info('[VideoCall] Remount local preview after remote video', { why });
+    };
+
+    remountLocal('immediate');
+    const t1 = setTimeout(() => remountLocal('delayed_180'), 180);
+    const t2 = setTimeout(() => remountLocal('delayed_480'), 480);
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+    };
+  }, [remoteCamOn, isInactiveState, camOn]);
   
   // Сохраняем ссылку на enterPiPMode для использования в beforeRemove
   useEffect(() => {
@@ -1798,6 +1856,30 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
   useEffect(() => {
     const sub = AppState.addEventListener('change', (next) => {
       setAppState(next);
+      // OEM bounce: ModeChanged(false) ignored while background, then user expands →
+      // sticky pending/inSystemPiP leaves VideoCall in chrome-less compact. Unstick on active.
+      if (Platform.OS === 'android' && next === 'active') {
+        try {
+          const g = global as any;
+          const now = Date.now();
+          const bounceUntil = Number(g.__systemPiPBounceIgnoreUntilRef?.current || 0);
+          const recentBounceIgnore = now < bounceUntil;
+          const confirmedSystemPiP = pipRef.current?.inSystemPiPMode === true;
+          const stickyCompact =
+            pipRef.current?.pendingSystemPiP === true ||
+            pipRef.current?.systemPiPCaptureActive === true ||
+            g.__pendingSystemPiPSyncRef?.current === true ||
+            g.__leavingVideoCallByHomeRef?.current === true ||
+            g.__pipInSystemModeRef?.current === true;
+          // Clear only if not confirmed in system PiP, or bounce-ignore window + foreground
+          // (quick expand was mistaken for OEM bounce).
+          if (stickyCompact && (!confirmedSystemPiP || recentBounceIgnore)) {
+            clearStickySystemPiPCompactFlags('videocall_appstate_active_unstick');
+            g.__systemPiPBounceIgnoreUntilRef = g.__systemPiPBounceIgnoreUntilRef || { current: 0 };
+            g.__systemPiPBounceIgnoreUntilRef.current = 0;
+          }
+        } catch (_) {}
+      }
     });
     return () => sub.remove();
   }, [callId, roomId]);
@@ -2615,11 +2697,26 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     const returnState = currentReturnToken ? g.__systemPiPReturnStateRef?.current : null;
     const activeReturnState =
       returnState && Number(returnState.token || 0) === currentReturnToken ? returnState : null;
-    const returnRestoreInFlight = !!activeReturnState && (
-      !activeReturnState.owner ||
-      !activeReturnState.restoredAt ||
-      now < Number(activeReturnState.settledUntil || 0)
-    );
+    // token is Date.now() at expand — cap incomplete restore so owner/restoredAt can't stick forever.
+    const SYSTEM_PIP_RETURN_RESTORE_MAX_MS = 8000;
+    const returnTokenAt = Number(activeReturnState?.token || 0);
+    const returnRestoreAgedOut =
+      !!activeReturnState &&
+      returnTokenAt > 0 &&
+      now - returnTokenAt > SYSTEM_PIP_RETURN_RESTORE_MAX_MS;
+    if (returnRestoreAgedOut) {
+      try {
+        if (g.__systemPiPReturnStateRef?.current === activeReturnState) {
+          g.__systemPiPReturnStateRef.current = null;
+        }
+      } catch (_) {}
+    }
+    const returnRestoreInFlight =
+      !!activeReturnState &&
+      !returnRestoreAgedOut &&
+      (!activeReturnState.owner ||
+        !activeReturnState.restoredAt ||
+        now < Number(activeReturnState.settledUntil || 0));
     return {
       now,
       returningUntil,
@@ -3029,16 +3126,16 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       callbacks: {
         onLocalStreamChange: (stream) => {
           const prevStream = localStreamRef.current;
+          const prevVideoId = lastEmittedLocalVideoTrackIdRef.current;
+          const newVideoId = stream?.getVideoTracks?.()?.[0]?.id ?? null;
           localStreamRef.current = stream;
+          lastEmittedLocalVideoTrackIdRef.current = newVideoId;
           setLocalStream(stream);
           if (stream) {
-            const prevVideoId = prevStream?.getVideoTracks?.()?.[0]?.id;
-            const newVideoId = stream.getVideoTracks?.()?.[0]?.id;
             const streamIdChanged = !prevStream || prevStream.id !== stream.id;
-            const videoTrackChanged =
-              !!newVideoId && (prevVideoId !== newVideoId || prevStream !== stream);
-            // КРИТИЧНО: localRenderKey при смене stream.id или video track (flip с preserveStreamId / in-place swap)
-            if (streamIdChanged || videoTrackChanged) {
+            const videoTrackChanged = prevVideoId !== newVideoId;
+            // КРИТИЧНО: localRenderKey при смене stream.id или video track (в т.ч. audio-only → cam on)
+            if (streamIdChanged || videoTrackChanged || prevStream !== stream) {
               const liveSession =
                 sessionRef.current ?? ((global as any).__webrtcSessionRef?.current as VideoCallSession | null);
               const side = liveSession?.getCamSide?.();
@@ -3053,7 +3150,8 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
                 newVideoId,
                 streamIdChanged,
                 videoTrackChanged,
-                hasVideoTrack: !!stream.getVideoTracks()?.[0],
+                instanceChanged: prevStream !== stream,
+                hasVideoTrack: !!newVideoId,
                 camSide: side,
               });
             }
@@ -3062,6 +3160,8 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
             // - через явные callbacks session.onCamStateChange/onMicStateChange
             // - через действия пользователя (кнопки)
             // Иначе при восстановлении/пересоздании MediaStream можно случайно "включить" камеру в UI.
+          } else {
+            lastEmittedLocalVideoTrackIdRef.current = null;
           }
         },
         onRemoteStreamChange: (stream) => {
@@ -6269,7 +6369,9 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
   const shouldShowLocalVideo = camOn && !isInactiveState;
   const shouldShowRemoteVideo = remoteCamOn && !isInactiveState;
   const showControls = hasActiveCall && !isInactiveState;
-  const endCallBlockedBySystemPiPReturn = getSystemPiPReturnGuard().returnRestoreInFlight;
+  // Never disable hangup for system-PiP returnRestoreInFlight — that flag can stick if
+  // owner/restoredAt never settle, leaving X greyed out on an otherwise live call.
+  // onAbortCall('end_button') already bypasses PiP-return abort guards.
   
   // Проверка, является ли партнер другом (по списку friends или по типу звонка)
   const isDirectCall = !!route?.params?.directCall;
@@ -6293,6 +6395,28 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
   /** На video UI при GSM hold блокируем только кнопки в блоке «Вы»; «Собеседник» остаётся интерактивным. */
   const lockControlsOnAudioUiOnly = showAudioPresentation && controlsLockedForLocalHold;
   const hideLocalMediaControlsOnVideoHold = localExternalHoldUi && !showAudioPresentation;
+
+  const canSwapVideoFeeds =
+    !showAudioPresentation &&
+    !isInactiveState &&
+    !hideLocalMediaControlsOnVideoHold &&
+    camOn &&
+    !!localStream &&
+    remoteCamOn &&
+    !!currentRemoteStream;
+
+  useEffect(() => {
+    if (!canSwapVideoFeeds && localIsMain) {
+      setLocalIsMain(false);
+    }
+  }, [canSwapVideoFeeds, localIsMain]);
+
+  const toggleLocalMainSwap = useCallback(() => {
+    if (!canSwapVideoFeeds) return;
+    setLocalIsMain((v) => !v);
+    // Android: remount local после смены слота (Surface/Texture иначе может чернеть).
+    setLocalRenderKey((k) => k + 1);
+  }, [canSwapVideoFeeds]);
 
   const audioControlsOpacity = useRef(
     new Animated.Value(
@@ -6414,6 +6538,53 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     return '—';
   }, [route?.params?.partnerNick, partnerUserId, friends]);
 
+  const partnerAvatarUri = useMemo(() => {
+    try {
+      const fromPiP = String(
+        (global as any).__currentCallPiPParamsRef?.current?.partnerAvatarUrl || '',
+      ).trim();
+      if (fromPiP) return fromPiP;
+    } catch {}
+    if (!partnerUserId) return undefined;
+    const partner = friends.find((fr) => String(fr._id ?? fr.id) === String(partnerUserId));
+    if (!partner) return undefined;
+    try {
+      if (partner.avatarThumbB64 && String(partner.avatarThumbB64).trim()) {
+        const thumb = String(partner.avatarThumbB64).trim();
+        return thumb.startsWith('data:') ? thumb : `data:image/jpeg;base64,${thumb}`;
+      }
+      if (partner.avatarB64 && String(partner.avatarB64).trim()) {
+        const b64 = String(partner.avatarB64).trim();
+        return b64.startsWith('data:') ? b64 : `data:image/jpeg;base64,${b64}`;
+      }
+      if (partner.avatar && typeof partner.avatar === 'string' && partner.avatar.trim()) {
+        const a = partner.avatar.trim();
+        if (a.startsWith('http') || a.startsWith('data:')) return a;
+        const base = process.env.EXPO_PUBLIC_SERVER_URL || 'https://api.liviapp.com';
+        return `${base.replace(/\/+$/, '')}${a.startsWith('/') ? '' : '/'}${a}`;
+      }
+    } catch {}
+    return undefined;
+  }, [friends, partnerUserId, pip.visible]);
+
+  const flipLocalCamera = useCallback(() => {
+    if (localExternalHoldRef.current) return;
+    const session = sessionRef.current ?? (global as any).__webrtcSessionRef?.current;
+    if (!session?.flipCam) return;
+    void (async () => {
+      try {
+        await session.flipCam();
+        const side = session.getCamSide?.();
+        if (side === 'front' || side === 'back') {
+          setLocalCamSide(side);
+        }
+        setLocalRenderKey((k) => k + 1);
+      } catch (e: any) {
+        logger.warn('[VideoCall] flipCam error:', e);
+      }
+    })();
+  }, []);
+
   const remoteAudioLiveForTimer = streamHasLiveRemoteAudio(currentRemoteStream);
 
   const callConnectedForTimer =
@@ -6531,6 +6702,37 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     !localExternalHoldUi &&
     !partnerExternalHoldUi &&
     (!showCallDuration || liveKitReconnectingUi || remoteAudioGapUi);
+
+  const callChromeStatusLine = useMemo(() => {
+    if (localExternalHoldUi) return t('externalCallHoldLocal', lang);
+    if (partnerExternalHoldUi) return t('partnerBusyEllipsis', lang);
+    if (showAudioConnectingStatus) return t('audioCallConnecting', lang);
+    if (showCallDuration) return formatCallDuration(callElapsedSec);
+    return t('audioCallStatus', lang);
+  }, [
+    localExternalHoldUi,
+    partnerExternalHoldUi,
+    showAudioConnectingStatus,
+    showCallDuration,
+    callElapsedSec,
+    lang,
+  ]);
+
+  const callMoreItems = useMemo((): CallMoreMenuItem[] => {
+    const speakerOn = audioRouteForUi === 'SPEAKER_PHONE';
+    return [
+      {
+        key: 'speaker',
+        label: speakerOn ? t('callSpeakerOff', lang) : t('callSpeakerOn', lang),
+        icon: speakerOn ? 'volume-up' : 'hearing',
+        active: speakerOn,
+        onPress: () => {
+          if (controlsLockedForLocalHold) return;
+          cycleAudioRoute();
+        },
+      },
+    ];
+  }, [lang, audioRouteForUi, controlsLockedForLocalHold, cycleAudioRoute]);
 
   const isPartnerFriend = useMemo(() => {
     if (!partnerUserId) return false;
@@ -7244,9 +7446,16 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     leavingForSystemPiP;
   const pipSuspendedForSystem =
     (global as any).__pipSuspendedForSystemPiPRef?.current === true;
+  // Foreground VideoCall must not stay chrome-less after sticky pending / false OEM bounce.
+  // Compact only while confirmed system PiP, or while leaving to background (not fully active).
+  const allowSystemPiPCompact =
+    pip.inSystemPiPMode === true ||
+    appState === 'background' ||
+    appState === 'inactive';
   const systemPiPCompact =
     Platform.OS === 'android' &&
     !showAudioPresentation &&
+    allowSystemPiPCompact &&
     (!pip.visible || pipSuspendedForSystem || pip.inSystemPiPMode || leavingForSystemPiP) &&
     (pip.pendingSystemPiP || pip.inSystemPiPMode || homeSystemPiPPending || leavingForSystemPiP);
   if (systemPiPCompact) {
@@ -7310,194 +7519,100 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     );
   }
 
-  if (showAudioPresentation) {
-    return (
+  const showRemoteFeed =
+    !showAudioPresentation &&
+    !isInactiveState &&
+    remoteCamOn &&
+    !!currentRemoteStream;
+  const showLocalPip =
+    !showAudioPresentation &&
+    !isInactiveState &&
+    !hideLocalMediaControlsOnVideoHold &&
+    camOn &&
+    !!localStream;
+  const mainIsLocal = canSwapVideoFeeds && localIsMain;
+
+  return (
+    <View
+      style={[
+        styles.container,
+        { backgroundColor: isDark ? WELCOME_STAGE_BG : (theme.colors.background as string) },
+      ]}
+      {...(panResponder?.panHandlers || {})}
+    >
+      <WelcomeStageBackground
+        isDark={!!isDark}
+        lightColor={(theme.colors.background as string) || WELCOME_STAGE_BG}
+      />
       <SafeAreaView
-        style={[styles.container, styles.audioCallContainer]}
+        style={[styles.container, { backgroundColor: 'transparent' }]}
         edges={Platform.OS === 'android' ? [] : undefined}
         onLayout={() => {
           try {
-            if (!audioUiOnLayoutLoggedRef.current) {
-              audioUiOnLayoutLoggedRef.current = true;
-              markCallPerf('videocall_audio_ui_onLayout');
+            if (showAudioPresentation) {
+              if (!audioUiOnLayoutLoggedRef.current) {
+                audioUiOnLayoutLoggedRef.current = true;
+                markCallPerf('videocall_audio_ui_onLayout');
+              }
+            } else {
+              markCallPerf('videocall_video_ui_onLayout');
             }
             (global as any).__notifyIncomingAnswerUiReady?.();
           } catch {}
         }}
       >
         {renderCallHiddenAudioSink()}
-        <View style={[styles.audioCallContent, androidContentInsets]}>
-          <View style={styles.audioCallHeader}>
-            <Text
-              style={styles.audioCallName}
-              numberOfLines={2}
-              {...(Platform.OS === 'android' ? { includeFontPadding: false } : {})}
-            >
-              {partnerDisplayName}
-            </Text>
-            {localExternalHoldUi || partnerExternalHoldUi ? (
-              <Text
-                style={[styles.audioCallSubtitle, styles.audioCallSubtitleHold]}
-                {...(Platform.OS === 'android' ? { includeFontPadding: false } : {})}
-              >
-                {localExternalHoldUi
-                  ? t('externalCallHoldLocal', lang)
-                  : t('partnerBusyEllipsis', lang)}
-              </Text>
-            ) : showAudioConnectingStatus ? (
-              <AudioCallConnectingStatus label={t('audioCallConnecting', lang)} />
-            ) : (
-              <>
-                <Text
-                  style={styles.audioCallSubtitle}
-                  {...(Platform.OS === 'android' ? { includeFontPadding: false } : {})}
-                >
-                  {t('audioCallStatus', lang)}
-                </Text>
-                {showCallDuration ? (
-                  <Text style={styles.audioCallTimer}>{formatCallDuration(callElapsedSec)}</Text>
-                ) : null}
-              </>
-            )}
-          </View>
-          <View style={styles.audioCallHeaderSpacer} />
-          <Animated.View
-            style={[
-              styles.audioCallControls,
-              { opacity: audioControlsOpacity },
-              controlsLockedForLocalHold && styles.audioCallControlsLocked,
-            ]}
-            pointerEvents={controlsLockedForLocalHold ? 'box-none' : 'auto'}
-          >
-            <TouchableOpacity
-              style={[
-                styles.audioRoundBtn,
-                audioOutputRouteHighlighted && {
-                  borderWidth: 1,
-                  borderColor: audioOutputRouteAccent.solid,
-                  backgroundColor: audioOutputRouteAccent.solid15,
-                },
-                controlsLockedForLocalHold && styles.audioRoundBtnLocked,
-              ]}
-              onPress={cycleAudioRoute}
-              disabled={controlsLockedForLocalHold}
-              activeOpacity={0.85}
-              accessibilityState={{ selected: audioOutputRouteHighlighted }}
-            >
-              <MaterialIcons
-                name={
-                  audioRouteIcon === 'ear-hearing' || audioRouteIcon === 'volume-up'
-                    ? audioRouteIcon === 'volume-up'
-                      ? 'volume-up'
-                      : 'hearing'
-                    : audioRouteIcon
-                }
-                size={28}
-                color={audioOutputRouteHighlighted ? audioOutputRouteAccent.softText : WELCOME_HEADER_TITLE}
-              />
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[
-                styles.audioRoundBtn,
-                !micOn && styles.audioRoundBtnDanger,
-                controlsLockedForLocalHold && styles.audioRoundBtnLocked,
-              ]}
-              onPress={toggleMic}
-              disabled={controlsLockedForLocalHold}
-              activeOpacity={0.85}
-              accessibilityLabel={micOn ? t('muteMic', lang) : t('unmuteMic', lang)}
-              accessibilityState={{ selected: micOn }}
-            >
-              <MaterialIcons
-                name={micOn ? 'mic' : 'mic-off'}
-                size={28}
-                color={WELCOME_HEADER_TITLE}
-              />
-            </TouchableOpacity>
-            <AudioCallEndButton onPress={() => onAbortCall('end_button')} />
-            <View style={styles.audioVideoBtnWrap}>
-              {pulsePeerVideoButton ? (
-                <Animated.View style={peerVideoPulseHaloStyle} pointerEvents="none" />
-              ) : null}
-              <TouchableOpacity
-                style={[
-                  styles.audioRoundBtn,
-                  pulsePeerVideoButton && {
-                    borderWidth: 1,
-                    borderColor: peerVideoInviteAccent,
-                    backgroundColor: peerVideoInviteAccentBg,
-                  },
-                  controlsLockedForLocalHold && styles.audioRoundBtnLocked,
-                ]}
-                onPress={() => toggleCam()}
-                disabled={controlsLockedForLocalHold}
-                activeOpacity={0.85}
-              >
-                <MaterialIcons
-                  name="videocam"
-                  size={28}
-                  color={pulsePeerVideoButton ? peerVideoInviteAccent : WELCOME_HEADER_TITLE}
-                />
-              </TouchableOpacity>
-            </View>
-          </Animated.View>
-          {pulsePeerVideoButton ? (
-            <Text
-              style={[styles.audioCallPeerVideoHint, { color: peerVideoInviteAccent }]}
-              {...(Platform.OS === 'android' ? { includeFontPadding: false } : {})}
-            >
-              {t('peerEnabledVideo', lang)}
-            </Text>
-          ) : null}
-        </View>
-      </SafeAreaView>
-    );
-  }
-
-  return (
-    <View style={[styles.container, { backgroundColor: isDark ? WELCOME_STAGE_BG : (theme.colors.background as string) }]}>
-      <WelcomeStageBackground
-        isDark={!!isDark}
-        lightColor={(theme.colors.background as string) || WELCOME_STAGE_BG}
-      />
-      <SafeAreaView 
-      style={[styles.container, { backgroundColor: 'transparent' }]}
-      // Android: safe-area отступы считаем сами через insets, чтобы низ/верх точно не прилипали к системе
-      edges={Platform.OS === 'android' ? [] : undefined}
-      onLayout={() => {
-        try {
-          markCallPerf('videocall_video_ui_onLayout');
-          (global as any).__notifyIncomingAnswerUiReady?.();
-        } catch {}
-      }}
-    >
-      {renderCallHiddenAudioSink()}
-      <View style={[styles.content, androidContentInsets]}>
-        <View style={styles.topSection}>
-        {/* Карточка "Собеседник" */}
         <View
-          style={styles.card}
+          style={[styles.unifiedCallStage, androidContentInsets]}
+          pointerEvents="box-none"
+          onLayout={(e) => {
+            const { width, height } = e.nativeEvent.layout;
+            if (width > 0 && height > 0) {
+              setCallStageSize((prev) =>
+                prev.width === width && prev.height === height ? prev : { width, height },
+              );
+            }
+          }}
         >
-          <RemoteVideo
-            remoteStream={currentRemoteStream}
-            remoteCamOn={remoteCamOn}
-            remoteCamSide={remoteCamSide}
-            remoteMuted={remoteMuted}
-            isInactiveState={isInactiveState}
-            wasFriendCallEnded={wasFriendCallEnded}
-            started={started}
-            loading={loading}
-            remoteViewKey={remoteViewKey}
-            showFriendBadge={showFriendBadge}
-            lang={lang}
-            session={sessionRef.current}
-            remoteStreamReceivedAt={remoteStreamReceivedAtRef.current}
-            partnerInPiP={partnerInPiP}
-            partnerExternalHold={partnerExternalHoldUi}
-            objectFit="cover"
-          />
-          
-          {showIncomingFriendOverlay && (
+          {showRemoteFeed || mainIsLocal ? (
+            <View style={styles.unifiedRemoteFill} pointerEvents="none">
+              {mainIsLocal ? (
+                <LocalVideo
+                  localStream={localStream}
+                  camOn={camOn}
+                  isFrontCamera={localCamSide === 'front'}
+                  isInactiveState={isInactiveState}
+                  wasFriendCallEnded={wasFriendCallEnded}
+                  started={started}
+                  localRenderKey={localRenderKey}
+                  lang={lang}
+                  localExternalHold={localExternalHoldUi}
+                />
+              ) : (
+                <RemoteVideo
+                  remoteStream={currentRemoteStream}
+                  remoteCamOn={remoteCamOn}
+                  remoteCamSide={remoteCamSide}
+                  remoteMuted={remoteMuted}
+                  isInactiveState={isInactiveState}
+                  wasFriendCallEnded={wasFriendCallEnded}
+                  started={started}
+                  loading={loading}
+                  remoteViewKey={remoteViewKey}
+                  showFriendBadge={false}
+                  lang={lang}
+                  session={sessionRef.current}
+                  remoteStreamReceivedAt={remoteStreamReceivedAtRef.current}
+                  partnerInPiP={partnerInPiP}
+                  partnerExternalHold={partnerExternalHoldUi}
+                  forceTextureView={Platform.OS === 'android'}
+                  objectFit="cover"
+                />
+              )}
+            </View>
+          ) : null}
+
+          {showIncomingFriendOverlay ? (
             <View style={styles.incomingOverlayContainer}>
               <BlurView intensity={60} tint={isDark ? 'dark' : 'light'} style={StyleSheet.absoluteFill} />
               <View
@@ -7532,143 +7647,119 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
                 </View>
               </View>
             </View>
-          )}
-          
-          {/* Кнопка управления удаленным звуком */}
-          {showControls && (
-            <Animated.View style={[styles.topLeftAudio, { opacity: buttonsOpacity }]}>
-              <TouchableOpacity
-                onPress={toggleRemoteAudio}
-                disabled={!currentRemoteStream || lockControlsOnAudioUiOnly}
-                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                activeOpacity={0.7}
-                style={[
-                  styles.iconBtn,
-                  (!currentRemoteStream || lockControlsOnAudioUiOnly) && styles.iconBtnDisabled,
-                ]}
+          ) : null}
+
+          {canSwapVideoFeeds || showLocalPip ? (
+            <Animated.View
+              style={[styles.unifiedLocalPipDrag, localPipDragStyle]}
+              {...localPipPanHandlers}
+            >
+              <Pressable
+                style={styles.unifiedLocalPip}
+                onPress={canSwapVideoFeeds ? toggleLocalMainSwap : undefined}
+                disabled={!canSwapVideoFeeds}
+                collapsable={false}
               >
-                <View style={{ position: 'relative', justifyContent: 'center', alignItems: 'center' }}>
-                  <MaterialIcons
-                    name={remoteMuted ? "volume-off" : "volume-up"}
-                    size={26}
-                    color={remoteMuted ? "#999" : (currentRemoteStream ? WELCOME_HEADER_TITLE : "#777")}
-                  />
-                  {remoteMuted && (
-                    <View
-                      style={{
-                        position: 'absolute',
-                        width: 28,
-                        height: 2,
-                        backgroundColor: '#999',
-                        transform: [{ rotate: '45deg' }],
-                      }}
+                <View style={styles.unifiedLocalPipInner} pointerEvents="none" collapsable={false}>
+                  {mainIsLocal ? (
+                    <RemoteVideo
+                      remoteStream={currentRemoteStream}
+                      remoteCamOn={remoteCamOn}
+                      remoteCamSide={remoteCamSide}
+                      remoteMuted={remoteMuted}
+                      isInactiveState={isInactiveState}
+                      wasFriendCallEnded={wasFriendCallEnded}
+                      started={started}
+                      loading={loading}
+                      remoteViewKey={remoteViewKey}
+                      showFriendBadge={false}
+                      lang={lang}
+                      session={sessionRef.current}
+                      remoteStreamReceivedAt={remoteStreamReceivedAtRef.current}
+                      partnerInPiP={partnerInPiP}
+                      partnerExternalHold={partnerExternalHoldUi}
+                      forceTextureView={Platform.OS === 'android'}
+                      objectFit="cover"
+                    />
+                  ) : (
+                    <LocalVideo
+                      localStream={localStream}
+                      camOn={camOn}
+                      isFrontCamera={localCamSide === 'front'}
+                      isInactiveState={isInactiveState}
+                      wasFriendCallEnded={wasFriendCallEnded}
+                      started={started}
+                      localRenderKey={localRenderKey}
+                      lang={lang}
+                      localExternalHold={localExternalHoldUi}
+                      asPipOverlay
                     />
                   )}
                 </View>
-              </TouchableOpacity>
+                {showControls && !mainIsLocal ? (
+                  <TouchableOpacity
+                    style={styles.unifiedFlipBtn}
+                    onPress={flipLocalCamera}
+                    disabled={lockControlsOnAudioUiOnly}
+                    activeOpacity={0.8}
+                    hitSlop={8}
+                  >
+                    <MaterialIcons name="flip-camera-ios" size={18} color={WELCOME_HEADER_TITLE} />
+                  </TouchableOpacity>
+                ) : null}
+              </Pressable>
             </Animated.View>
-          )}
-        </View>
+          ) : null}
 
-        {/* Карточка "Вы" */}
-        <View
-          style={styles.card}
-          pointerEvents="box-none"
-        >
-          <LocalVideo
-            localStream={localStream}
-            camOn={camOn}
-            isFrontCamera={localCamSide === 'front'}
-            isInactiveState={isInactiveState}
-            wasFriendCallEnded={wasFriendCallEnded}
-            started={started}
-            localRenderKey={localRenderKey}
-            lang={lang}
-            localExternalHold={localExternalHoldUi}
-          />
-          
-          {/* Кнопки управления медиа */}
-          <MediaControls
-            micOn={micOn}
-            camOn={camOn}
-            onToggleMic={toggleMic}
-            onToggleCam={toggleCam}
-            camToggleEnabled={
-              !!localStream ||
-              !!(sessionRef.current || (global as any).__webrtcSessionRef?.current)
-            }
-            interactionLocked={lockControlsOnAudioUiOnly}
-            onFlipCamera={() => {
-              if (localExternalHoldRef.current) return;
-              const session = sessionRef.current ?? (global as any).__webrtcSessionRef?.current;
-              if (!session?.flipCam) return;
-              void (async () => {
+          {mainIsLocal && showControls ? (
+            <TouchableOpacity
+              style={[styles.unifiedFlipBtn, styles.unifiedFlipBtnOnMain]}
+              onPress={flipLocalCamera}
+              disabled={lockControlsOnAudioUiOnly}
+              activeOpacity={0.8}
+              hitSlop={8}
+            >
+              <MaterialIcons name="flip-camera-ios" size={18} color={WELCOME_HEADER_TITLE} />
+            </TouchableOpacity>
+          ) : null}
+
+          {showControls ? (
+            <CallScreenChrome
+              partnerName={partnerDisplayName}
+              partnerAvatarUri={partnerAvatarUri}
+              statusLine={callChromeStatusLine}
+              onMinimize={minimizeToInAppPiP}
+              onToggleCam={() => toggleCam()}
+              onToggleMic={toggleMic}
+              onEndCall={() => {
                 try {
-                  await session.flipCam();
-                  const side = session.getCamSide?.();
-                  if (side === 'front' || side === 'back') {
-                    setLocalCamSide(side);
-                  }
-                  setLocalRenderKey((k) => k + 1);
-                } catch (e: any) {
-                  logger.warn('[VideoCall] flipCam error:', e);
-                }
-              })();
-            }}
-            localStream={localStream}
-            visible={showControls && !hideLocalMediaControlsOnVideoHold}
-            opacity={buttonsOpacity}
-            showReturnToAudio={isDirectCall && !inAudioOnlyUi && !isInactiveState}
-            onReturnToAudio={() => {
-              if (localExternalHoldRef.current) return;
-              // Только реальный in-app PiP; с video UI inAudioOnlyUi=false ≠ fromPiP.
-              void returnToAudioCallUi({ fromPiP: !!pip.visible });
-            }}
-          />
-        </View>
-        </View>
-
-        {/* Кнопка снизу: Завершить */}
-        <View style={styles.bottomRow}>
-          <TouchableOpacity
-            style={[
-              styles.bigBtn,
-              styles.btnDanger,
-              {
-                flexDirection: 'row',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: 8,
-                opacity: isInactiveState ? 0.5 : 1.0
-              }
-            ]}
-            onPress={
-              isInactiveState
-                ? undefined
-                : () => {
-                    try {
-                      const g = (global as any);
-                      g.__lastEndCallSourceRef = g.__lastEndCallSourceRef || { current: null };
-                      g.__lastEndCallSourceRef.current = 'end_button';
-                    } catch (_) {}
-                    onAbortCall('end_button');
-                  }
-            }
-            disabled={isInactiveState}
-          >
-            <Text style={[styles.bigBtnText, styles.btnDangerText]}>{t('endCall', lang)}</Text>
-            <Image
-              source={require('../../assets/icons/phone-classic.png')}
-              style={styles.endCallPhoneIcon}
-              resizeMode="contain"
-              tintColor="#C5C9CE"
+                  const g = global as any;
+                  g.__lastEndCallSourceRef = g.__lastEndCallSourceRef || { current: null };
+                  g.__lastEndCallSourceRef.current = 'end_button';
+                } catch (_) {}
+                onAbortCall('end_button');
+              }}
+              camOn={camOn}
+              micOn={micOn}
+              moreLabel={t('tabMore', lang)}
+              cameraLabel={t('callCamera', lang)}
+              micLabel={t('microphone', lang)}
+              endLabel={t('endCall', lang)}
+              moreItems={callMoreItems}
+              controlsLocked={controlsLockedForLocalHold}
+              pulseCam={pulsePeerVideoButton}
+              pulseCamAccent={peerVideoInviteAccent}
+              pulseCamAccentBg={peerVideoInviteAccentBg}
+              topInset={Platform.OS === 'android' ? insets.top : 0}
+              bottomInset={Platform.OS === 'android' ? insets.bottom : 0}
+              endDisabled={isInactiveState}
             />
-          </TouchableOpacity>
+          ) : null}
         </View>
-      </View>
-    </SafeAreaView>
+      </SafeAreaView>
     </View>
   );
+
 };
 
 const styles = StyleSheet.create({
@@ -7688,6 +7779,49 @@ const styles = StyleSheet.create({
     width: '100%',
     height: '100%',
     backgroundColor: 'transparent',
+  },
+  unifiedCallStage: {
+    flex: 1,
+    width: '100%',
+    position: 'relative',
+  },
+  unifiedRemoteFill: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'transparent',
+  },
+  unifiedLocalPipDrag: {
+    position: 'absolute',
+    width: 112,
+    height: 168,
+    zIndex: 30,
+  },
+  unifiedLocalPip: {
+    flex: 1,
+    backgroundColor: '#000',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.12)',
+  },
+  unifiedLocalPipInner: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#000',
+  },
+  unifiedFlipBtn: {
+    position: 'absolute',
+    right: 8,
+    bottom: 8,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 4,
+    elevation: 12,
+  },
+  unifiedFlipBtnOnMain: {
+    right: 18,
+    bottom: 118,
+    zIndex: 28,
   },
   audioCallContainer: {
     backgroundColor: '#1B1C22',

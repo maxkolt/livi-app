@@ -1703,21 +1703,8 @@ export class VideoCallSession extends SimpleEventEmitter {
       }
     }
     
-    // Обновляем localStream
-    const mediaStreamTrack = this.localVideoTrack?.mediaStreamTrack;
-    if (this.localStream && mediaStreamTrack) {
-      const videoTracks = this.localStream.getVideoTracks();
-      const hasVideoTrack = videoTracks.some(t => t.id === mediaStreamTrack.id);
-      if (this.isCamOn && !hasVideoTrack) {
-        this.localStream.addTrack(mediaStreamTrack as any);
-      }
-    }
-    
-    // Эмитим обновления
-    if (this.localStream) {
-      this.emit('localStream', this.localStream);
-      this.notifyLocalStreamChange(this.localStream);
-    }
+    // Обновляем localStream через emit (всегда новый MediaStream — remount локального RTCView).
+    this.emitLocalMediaStream({ forceNewStream: true });
     
     this.notifyCamStateChange(this.isCamOn);
     // cam-toggle уже отправлен в начале toggleCam() для мгновенного отображения «Отошел» у партнёра
@@ -3262,6 +3249,12 @@ export class VideoCallSession extends SimpleEventEmitter {
 
       this.notifyRemoteCamStateChange(data.enabled);
       try {
+        // Партнёр включил видео → remount локального preview у нас (Android RTCView иначе часто чернеет).
+        if (data.enabled && this.isCamOn && this.localVideoTrack) {
+          this.emitLocalMediaStream({ forceNewStream: true });
+        }
+      } catch (_) {}
+      try {
         const pipUpdate = (global as any).__pipUpdateStateRef?.current;
         if (typeof pipUpdate === 'function') pipUpdate({ remoteCamOn: data.enabled });
       } catch (_) {}
@@ -3980,6 +3973,14 @@ export class VideoCallSession extends SimpleEventEmitter {
     return false;
   }
 
+  /**
+   * Remote hangup while socket may be offline (system PiP + FCM endedFromActive).
+   * Local teardown only — does not emit call:end.
+   */
+  applyRemoteEnded(endEvent?: { callId?: string; roomId?: string }): void {
+    this.handleCallEnded(endEvent);
+  }
+
   private handleCallEnded(endEvent?: { callId?: string; roomId?: string }): void {
     // Повторный вход (echo call:ended, call:cancel+call:ended, LiveKit+socket): не дублируем PiP/globals/teardown.
     if (this.ended || this.endCallInProgress) {
@@ -4401,30 +4402,40 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.emitLocalMediaStream({ forceNewStream: false });
   }
 
-  /** Собрать local MediaStream; по умолчанию сохраняем stream.id (меньше remount локального RTCView). */
+  /** Собрать local MediaStream. Всегда новый instance для UI — иначе RTCView на Android
+   * остаётся чёрным после cam-on / появления remote video (in-place mutate React не видит). */
   private emitLocalMediaStream(opts?: { forceNewStream?: boolean }): void {
     const forceNew = opts?.forceNewStream === true;
-    let stream = !forceNew && this.localStream ? this.localStream : new MediaStream();
+    const base = !forceNew && this.localStream ? this.localStream : new MediaStream();
     try {
-      for (const t of [...stream.getVideoTracks()]) {
+      for (const t of [...base.getVideoTracks()]) {
         try {
-          stream.removeTrack(t);
+          base.removeTrack(t);
         } catch {}
       }
     } catch {}
     try {
       const vt = this.localVideoTrack?.mediaStreamTrack;
-      if (vt) stream.addTrack(vt as any);
+      if (vt) base.addTrack(vt as any);
     } catch {}
     try {
       const at = this.localAudioTrack?.mediaStreamTrack;
-      if (at && !stream.getAudioTracks().some((t) => t.id === at.id)) {
-        for (const t of [...stream.getAudioTracks()]) {
+      if (at && !base.getAudioTracks().some((t) => t.id === at.id)) {
+        for (const t of [...base.getAudioTracks()]) {
           try {
-            stream.removeTrack(t);
+            base.removeTrack(t);
           } catch {}
         }
-        stream.addTrack(at as any);
+        base.addTrack(at as any);
+      }
+    } catch {}
+    // Всегда свежий MediaStream для notify (даже при тех же track id).
+    const stream = new MediaStream();
+    try {
+      for (const t of base.getTracks()) {
+        try {
+          stream.addTrack(t as any);
+        } catch {}
       }
     } catch {}
     this.localStream = stream;

@@ -559,10 +559,19 @@ export const useAudioRouting = (
     return defaultUserRoute(opts);
   };
 
-  /** На полном video UI встроенный earpiece запрещён — только громкая или BT/провод. */
+  /** На полном video UI по умолчанию ухо → громкая; явный цикл «Ещё» / pin уха — оставляем. */
   const mapBuiltInRouteForActiveCallUi = (route: InCallAudioRoute): InCallAudioRoute => {
     if (route !== 'EARPIECE') return route;
-    // Audio-first: на video UI всё равно нельзя держать ухо (только speaker / BT).
+    const lockedEar =
+      readUserLockedBuiltinCallAudioRoute() === 'EARPIECE' ||
+      readUserSelectedCallAudioRoute() === 'EARPIECE';
+    if (
+      lockedEar &&
+      (userExplicitlyPinnedBuiltinCallAudio() || explicitBuiltInChoiceRef.current)
+    ) {
+      return 'EARPIECE';
+    }
+    // Audio-first: без явного pin на video UI держим speaker / BT.
     if (!isInAudioOnlyCallUi() && ongoingCallPrefersVideoMedia()) {
       return mapRouteForEnterVideoUi('EARPIECE');
     }
@@ -4091,16 +4100,7 @@ export const useAudioRouting = (
         routeLog('cycleUserRoute skipped (in-app PiP — use plaque toggle)');
         return Promise.resolve(readInAppPiPAudioOutputRoute());
       }
-      if (
-        !preferAudioModeRef.current &&
-        !isInAudioOnlyCallUi() &&
-        ongoingCallPrefersVideoMedia()
-      ) {
-        routeLog('cycleUserRoute skipped (full video UI)');
-        return Promise.resolve(
-          normalizeInCallRoute(getUserRoute()) || readUserSelectedCallAudioRoute(),
-        );
-      }
+      // Full video UI: «Ещё» → громкая ↔ ухо (раньше был no-op).
       const g = global as any;
       const now = Date.now();
       const lastAt = Number(g.__lastCycleUserRouteAtRef?.current || 0);

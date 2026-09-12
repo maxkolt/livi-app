@@ -542,7 +542,7 @@ export function armAndroidLeaveHintForVideoCallHome(opts?: { allowFromInAppPiP?:
         pinLoudSpeakerForAudioCallLeavingToBackground();
         scheduleReapplyPersistedCallAudioRoute('audio_home_loud_speaker', {
           media: 'audio',
-          delaysMs: [0, 500],
+          delaysMs: [0, 450],
         });
       }
     }

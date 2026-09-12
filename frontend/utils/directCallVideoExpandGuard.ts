@@ -1,5 +1,9 @@
 import { setPipAudioOnlyPlaceholderSticky } from './callAudioOnlyUiContext';
 import { resolveDirectCallAudioFirst } from './directCallMediaHint';
+import {
+  getFreshDirectCallAudioAcceptCallId,
+  setFreshDirectCallAudioAcceptCallId,
+} from './callRuntime';
 
 function setPipInAppRtcFromAudioOnlySticky(fromAudioOnlyUi: boolean): void {
   try {
@@ -153,10 +157,7 @@ export function markFreshDirectCallAudioAcceptCall(callId?: string | null): void
   const cid = String(callId || '').trim();
   if (!cid) return;
   try {
-    const g = global as any;
-    g.__freshDirectCallAudioAcceptCallIdRef =
-      g.__freshDirectCallAudioAcceptCallIdRef || { current: null as string | null };
-    g.__freshDirectCallAudioAcceptCallIdRef.current = cid;
+    setFreshDirectCallAudioAcceptCallId(cid);
     clearStaleDirectCallVideoExpandFlags();
     clearDirectCallUserRequestedVideoExpand();
   } catch {}
@@ -166,7 +167,7 @@ export function isFreshDirectCallAudioAcceptCallActive(callId?: string | null): 
   const cid = String(callId || '').trim();
   if (!cid) return false;
   try {
-    return String((global as any).__freshDirectCallAudioAcceptCallIdRef?.current || '') === cid;
+    return getFreshDirectCallAudioAcceptCallId() === cid;
   } catch {
     return false;
   }
@@ -174,10 +175,7 @@ export function isFreshDirectCallAudioAcceptCallActive(callId?: string | null): 
 
 export function clearFreshDirectCallAudioAcceptCall(): void {
   try {
-    const g = global as any;
-    if (g.__freshDirectCallAudioAcceptCallIdRef) {
-      g.__freshDirectCallAudioAcceptCallIdRef.current = null;
-    }
+    setFreshDirectCallAudioAcceptCallId(null);
   } catch {}
 }
 

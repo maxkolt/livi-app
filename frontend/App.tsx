@@ -95,6 +95,10 @@ import {
   setEndingFromPiPButton,
   setPipInSystemMode,
   setPipVisible,
+  setPipReturnToCallJustPressed,
+  isPipReturnToCallInFlight,
+  isPipReturnToCallJustPressed,
+  setPipReturnToCallInFlight,
 } from './utils/callRuntime';
 import { addVoipTokenListener } from './utils/voipPush';
 import { useLang } from './store/lang';
@@ -118,6 +122,7 @@ import {
   peekSystemPiPLeaveContextForReturn,
   isSystemPiPSessionAudioOrigin,
   clearStaleInAppPiPRestoreForIncomingAnswer,
+  clearStickySystemPiPCompactFlags,
 } from './src/pip/pipPlaceholderOnly';
 import { installActiveCallBackgroundAudioHandlers } from './utils/activeCallBackgroundAudio';
 import { installExternalCallHoldHandlers } from './utils/externalCallHold';
@@ -293,6 +298,47 @@ function markAcceptedVideoCallNavigationInFlight(callId?: string | null): void {
     } catch {}
   }, ACCEPTED_VIDEO_CALL_NAV_IN_FLIGHT_TTL_MS);
 }
+
+/** LiviPendingAnswerCall + CallKeep/push могут вызвать complete дважды — один in-flight на callId. */
+const androidIncomingAnswerInFlight = new Map<string, Promise<void>>();
+const ANDROID_INCOMING_ANSWER_IN_FLIGHT_TTL_MS = 12000;
+
+function runAndroidIncomingAnswerInFlight(
+  callId: string,
+  work: () => Promise<void>,
+): Promise<void> {
+  const cid = String(callId || '').trim();
+  if (!cid) return work();
+  const existing = androidIncomingAnswerInFlight.get(cid);
+  if (existing) {
+    logger.info('[App] Completing incoming answer skipped: already in flight', { callId: cid });
+    return existing;
+  }
+  let settled = false;
+  let run!: Promise<void>;
+  run = (async () => {
+    try {
+      await work();
+    } finally {
+      settled = true;
+      if (androidIncomingAnswerInFlight.get(cid) === run) {
+        androidIncomingAnswerInFlight.delete(cid);
+      }
+    }
+  })();
+  androidIncomingAnswerInFlight.set(cid, run);
+  setTimeout(() => {
+    if (!settled && androidIncomingAnswerInFlight.get(cid) === run) {
+      androidIncomingAnswerInFlight.delete(cid);
+      logger.warn('[App] incoming answer in-flight TTL cleared', { callId: cid });
+    }
+  }, ANDROID_INCOMING_ANSWER_IN_FLIGHT_TTL_MS);
+  return run;
+}
+
+/** Тап ongoing-уведомления: params/ref могут появиться чуть позже clear pending. */
+const RETURN_FROM_NOTIF_MAX_RETRIES = 15;
+const RETURN_FROM_NOTIF_RETRY_MS = 100;
 
 /** Reasons that mean WE are the caller waiting for accept — not the callee answer flow. */
 const CALLER_EXPECTED_ACCEPT_REASON_RE =
@@ -546,6 +592,7 @@ function AppContent() {
   const incomingAnswerCoverClearTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const incomingAnswerCoverShownRef = React.useRef(false);
   const incomingAnswerTransitionTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const returnFromNotifRetryTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const clearIncomingAnswerCover = React.useCallback(() => {
     if (incomingAnswerCoverClearTimerRef.current) {
       clearTimeout(incomingAnswerCoverClearTimerRef.current);
@@ -908,99 +955,106 @@ function AppContent() {
     callId: string,
     fromNick?: string,
   ) => {
-    logger.info('[App] Completing incoming answer', { callId, from, fromNick: fromNick || null });
-    // До bringMain/AppState(active): иначе Home badge/friends resume (~1–2с) конкурирует с VideoCall paint.
-    try {
-      armHomeUiSettleSkip(8000);
-    } catch {}
-    try {
-      const uid = String(getCurrentUserId() || '').trim();
-      if (uid) setCallPerfDeviceTag(uid);
-      beginCallPerfTrace({
-        callId,
-        role: 'callee',
-        reason: 'android_incoming_answer',
-        extra: { from, appState: AppState.currentState },
-      });
-      markCallPerf('callee_answer_start', { from, appState: AppState.currentState });
-    } catch {}
-    clearEndingCallInProgress();
-    // Крышка ДО foreground / navigate — иначе мелькает Home/Chat.
-    showIncomingAnswerCover();
-    // Cold-start: !initialUrlProcessed больше не нужен — держит только incomingAnswerCover / native.
-    setInitialUrlProcessed(true);
-    incomingCallIdRef.current = callId;
-    const answerMediaHint = getCallMediaHint(callId);
-    const gAns = global as any;
-    gAns.__incomingAnswerPeerUserIdRef = gAns.__incomingAnswerPeerUserIdRef || { current: null as string | null };
-    gAns.__incomingAnswerPeerUserIdRef.current = String(from || '').trim() || null;
-    const partnerNick = String(fromNick || '').trim();
-    if (partnerNick) {
+    const cid = String(callId || '').trim();
+    if (!cid) {
+      logger.warn('[App] Completing incoming answer ignored: empty callId', { from });
+      return;
+    }
+    return runAndroidIncomingAnswerInFlight(cid, async () => {
+      logger.info('[App] Completing incoming answer', { callId: cid, from, fromNick: fromNick || null });
+      // До bringMain/AppState(active): иначе Home badge/friends resume (~1–2с) конкурирует с VideoCall paint.
       try {
-        const prev = gAns.__currentCallPiPParamsRef?.current;
-        gAns.__currentCallPiPParamsRef = gAns.__currentCallPiPParamsRef || { current: null };
-        gAns.__currentCallPiPParamsRef.current = {
-          ...(prev && typeof prev === 'object' ? prev : {}),
-          partnerName: partnerNick,
-          partnerId: String(from || '').trim() || prev?.partnerId,
-        };
+        armHomeUiSettleSkip(8000);
       } catch {}
-    }
-    rememberExpectedCallAccepted(callId, 'incoming-answer');
-    // До leaveHint/bringMain: иначе Incoming→Main task-switch уводит в in-app PiP вместо VideoCall.
-    setIncomingAnswerTransitionGuard(callId, true);
-    try {
-      clearStaleInAppPiPRestoreForIncomingAnswer(10_000);
-    } catch {}
-    beginEarlyIncomingCallAccept(callId);
-    prefetchDirectCallIce('app:android-incoming-answer');
-    if (answerMediaHint === 'audio') {
-      prewarmDirectCallAudioCapture('app:android-incoming-answer');
-    }
-    if (Platform.OS === 'android' && callId) {
       try {
-        primeAndroidCallContextForLeaveHint({ callId });
-        setActiveVideoCall(true);
-      } catch (_) {}
-    }
-    if (Platform.OS === 'android') {
-      try { stopIncomingCallRingtoneAndVibration(); } catch {}
-      try { stopIncomingCallAlert(); } catch {}
-      try { stopIncomingCallForegroundService(); } catch {}
-      try {
-        registerIncomingCallKeepSession(callId, from, {
-          hasVideo: answerMediaHint !== 'audio',
+        const uid = String(getCurrentUserId() || '').trim();
+        if (uid) setCallPerfDeviceTag(uid);
+        beginCallPerfTrace({
+          callId: cid,
+          role: 'callee',
+          reason: 'android_incoming_answer',
+          extra: { from, appState: AppState.currentState },
         });
-      } catch (_) {}
-    }
-    // Сначала VideoCall в стеке (+ крышка), потом Main на передний план — иначе первый кадр = Home/приветствие.
-    // Не ждём double-rAF на active: крышка уже показана, navigate ASAP.
-    const navSpan = callPerfSpan('open_answer_call_screen', { callId });
-    try {
-      await openAnswerCallScreen(from, callId, answerMediaHint, partnerNick || undefined);
-      navSpan.end({ ok: true });
-    } catch (e) {
-      navSpan.end({ ok: false, error: String(e) });
-      logger.warn('[App] openAnswerCallScreen failed', { callId, error: e });
-    }
-    if (Platform.OS === 'android') {
-      // Incoming уже закрыт broadcast'ом из openAnswerCallScreen — поднимаем Main с VideoCall в стеке.
-      // Один bringMain; повторный reinforce только грузил JS и держал крышку.
-      try { sendCallAnsweredBroadcast(callId); } catch {}
-      if (!endedCallIdsFromSocket.has(callId)) {
+        markCallPerf('callee_answer_start', { from, appState: AppState.currentState });
+      } catch {}
+      clearEndingCallInProgress();
+      // Крышка ДО foreground / navigate — иначе мелькает Home/Chat.
+      showIncomingAnswerCover();
+      // Cold-start: !initialUrlProcessed больше не нужен — держит только incomingAnswerCover / native.
+      setInitialUrlProcessed(true);
+      incomingCallIdRef.current = cid;
+      const answerMediaHint = getCallMediaHint(cid);
+      const gAns = global as any;
+      gAns.__incomingAnswerPeerUserIdRef = gAns.__incomingAnswerPeerUserIdRef || { current: null as string | null };
+      gAns.__incomingAnswerPeerUserIdRef.current = String(from || '').trim() || null;
+      const partnerNick = String(fromNick || '').trim();
+      if (partnerNick) {
         try {
-          logger.info('[App] 📱 bringMainActivityToFrontForIncomingAnswer (after VideoCall nav)', { callId });
-          markCallPerf('bring_main_for_incoming_answer', {
-            callId,
-            appState: AppState.currentState,
-            settleSkip: shouldSkipHomeUiSettle(),
-          });
-          bringMainActivityToFrontForIncomingAnswer();
+          const prev = gAns.__currentCallPiPParamsRef?.current;
+          gAns.__currentCallPiPParamsRef = gAns.__currentCallPiPParamsRef || { current: null };
+          gAns.__currentCallPiPParamsRef.current = {
+            ...(prev && typeof prev === 'object' ? prev : {}),
+            partnerName: partnerNick,
+            partnerId: String(from || '').trim() || prev?.partnerId,
+          };
         } catch {}
       }
-      // Крышку снимает только VideoCall.onLayout → __notifyIncomingAnswerUiReady.
-      // InteractionManager clear давал второй answer_cover_clear и мерцание.
-    }
+      rememberExpectedCallAccepted(cid, 'incoming-answer');
+      // До leaveHint/bringMain: иначе Incoming→Main task-switch уводит в in-app PiP вместо VideoCall.
+      setIncomingAnswerTransitionGuard(cid, true);
+      try {
+        clearStaleInAppPiPRestoreForIncomingAnswer(10_000);
+      } catch {}
+      beginEarlyIncomingCallAccept(cid);
+      prefetchDirectCallIce('app:android-incoming-answer');
+      if (answerMediaHint === 'audio') {
+        prewarmDirectCallAudioCapture('app:android-incoming-answer');
+      }
+      if (Platform.OS === 'android') {
+        try {
+          primeAndroidCallContextForLeaveHint({ callId: cid });
+          setActiveVideoCall(true);
+        } catch (_) {}
+      }
+      if (Platform.OS === 'android') {
+        try { stopIncomingCallRingtoneAndVibration(); } catch {}
+        try { stopIncomingCallAlert(); } catch {}
+        try { stopIncomingCallForegroundService(); } catch {}
+        try {
+          registerIncomingCallKeepSession(cid, from, {
+            hasVideo: answerMediaHint !== 'audio',
+          });
+        } catch (_) {}
+      }
+      // Сначала VideoCall в стеке (+ крышка), потом Main на передний план — иначе первый кадр = Home/приветствие.
+      // Не ждём double-rAF на active: крышка уже показана, navigate ASAP.
+      const navSpan = callPerfSpan('open_answer_call_screen', { callId: cid });
+      try {
+        await openAnswerCallScreen(from, cid, answerMediaHint, partnerNick || undefined);
+        navSpan.end({ ok: true });
+      } catch (e) {
+        navSpan.end({ ok: false, error: String(e) });
+        logger.warn('[App] openAnswerCallScreen failed', { callId: cid, error: e });
+      }
+      if (Platform.OS === 'android') {
+        // Incoming уже закрыт broadcast'ом из openAnswerCallScreen — поднимаем Main с VideoCall в стеке.
+        // Один bringMain; повторный reinforce только грузил JS и держал крышку.
+        try { sendCallAnsweredBroadcast(cid); } catch {}
+        if (!endedCallIdsFromSocket.has(cid)) {
+          try {
+            logger.info('[App] 📱 bringMainActivityToFrontForIncomingAnswer (after VideoCall nav)', { callId: cid });
+            markCallPerf('bring_main_for_incoming_answer', {
+              callId: cid,
+              appState: AppState.currentState,
+              settleSkip: shouldSkipHomeUiSettle(),
+            });
+            bringMainActivityToFrontForIncomingAnswer();
+          } catch {}
+        }
+        // Крышку снимает только VideoCall.onLayout → __notifyIncomingAnswerUiReady.
+        // InteractionManager clear давал второй answer_cover_clear и мерцание.
+      }
+    });
   }, [
     rememberExpectedCallAccepted,
     setIncomingAnswerTransitionGuard,
@@ -1020,17 +1074,32 @@ function AppContent() {
   }, []);
 
   const invokeReturnToVideoCallFromNotification = React.useCallback(
-    (opts?: { preferAudioOnlyFromNative?: boolean }) => {
+    (opts?: { preferAudioOnlyFromNative?: boolean; _retry?: number }) => {
+    const retry = Math.max(0, Number(opts?._retry || 0) | 0);
+    if (retry === 0 && returnFromNotifRetryTimerRef.current) {
+      clearTimeout(returnFromNotifRetryTimerRef.current);
+      returnFromNotifRetryTimerRef.current = null;
+    }
+
     const g = global as any;
     const session = g.__webrtcSessionRef?.current;
     const sessionEnded =
       session && typeof session.isEnded === 'function' && session.isEnded();
-    if (sessionEnded) return;
+    if (sessionEnded) {
+      logger.info('[App] return notification ignored: session ended', { retry });
+      return;
+    }
     const endingCall =
       g.__endingCallInProgressRef?.current === true ||
       g.__callEndedFromPiPNoOpenRef?.current === true ||
       g.__endingFromPiPButtonRef?.current === true;
-    if (endingCall) return;
+    if (endingCall) {
+      logger.info('[App] return notification ignored: ending call', { retry });
+      return;
+    }
+
+    // Уведомление / expand: снять sticky compact (peer video без кнопок).
+    clearStickySystemPiPCompactFlags('return_from_notification');
 
     const preferAudioOnlyUi = resolvePreferAudioOnlyUiOnActiveCallReturn({
       preferAudioOnlyFromNative: opts?.preferAudioOnlyFromNative,
@@ -1040,13 +1109,26 @@ function AppContent() {
       ? g.__pipReturnToAudioCallRef?.current
       : g.__pipReturnToCallRef?.current;
     if (typeof fn === 'function') {
+      logger.info('[App] return notification via pip ref', {
+        preferAudioOnlyUi,
+        retry,
+      });
       fn();
       reenableAndroidSystemPiPLeaveHintAfterReturn();
       return;
     }
     const params = g.__currentCallPiPParamsRef?.current;
     const nav = g.__navRef;
-    if (params?.callId && params?.roomId && nav?.isReady?.()) {
+    const hasCallId = !!params?.callId;
+    const hasRoomId = !!params?.roomId;
+    const navReady = !!nav?.isReady?.();
+    if (hasCallId && hasRoomId && navReady) {
+      logger.info('[App] return notification via nav reset', {
+        callId: params.callId,
+        roomId: params.roomId,
+        preferAudioOnlyUi,
+        retry,
+      });
       const returnToken = Number(g.__systemPiPReturnTokenRef?.current || Date.now());
       nav.dispatch(
         CommonActions.reset({
@@ -1064,7 +1146,40 @@ function AppContent() {
         })
       );
       reenableAndroidSystemPiPLeaveHintAfterReturn();
+      return;
     }
+
+    const reason = !hasCallId
+      ? 'missing_callId'
+      : !hasRoomId
+        ? 'missing_roomId'
+        : !navReady
+          ? 'nav_not_ready'
+          : 'missing_pip_ref';
+    if (retry < RETURN_FROM_NOTIF_MAX_RETRIES) {
+      logger.info('[App] return notification deferred', {
+        reason,
+        retry,
+        callId: params?.callId || null,
+        roomId: params?.roomId || null,
+        hasPipRef: typeof fn === 'function',
+      });
+      returnFromNotifRetryTimerRef.current = setTimeout(() => {
+        returnFromNotifRetryTimerRef.current = null;
+        invokeReturnToVideoCallFromNotification({
+          preferAudioOnlyFromNative: opts?.preferAudioOnlyFromNative,
+          _retry: retry + 1,
+        });
+      }, RETURN_FROM_NOTIF_RETRY_MS);
+      return;
+    }
+    logger.warn('[App] return notification ignored: missing params/ref/nav', {
+      reason,
+      retry,
+      callId: params?.callId || null,
+      roomId: params?.roomId || null,
+      preferAudioOnlyUi,
+    });
   },
     [],
   );
@@ -1074,6 +1189,10 @@ function AppContent() {
       if (incomingAnswerTransitionTimerRef.current) {
         clearTimeout(incomingAnswerTransitionTimerRef.current);
         incomingAnswerTransitionTimerRef.current = null;
+      }
+      if (returnFromNotifRetryTimerRef.current) {
+        clearTimeout(returnFromNotifRetryTimerRef.current);
+        returnFromNotifRetryTimerRef.current = null;
       }
       try {
         const g = global as any;
@@ -1260,14 +1379,24 @@ function AppContent() {
       deliverPendingShare();
     }
     const sub4 = emitter.addListener('EndCallFromPiP', () => {
+      // Native already decided X vs expand (timeout without resume). Never swallow hangup —
+      // returningUntil / returnToCallInFlight previously blocked call:end and left the peer mid-call.
       try {
         const g = (global as any);
         const now = Date.now();
         const returningUntil = Number(g.__returningFromSystemPiPUntilRef?.current || 0);
-        const returnToCallInFlight = g.__pipReturnToCallInFlightRef?.current === true;
+        const returnToCallInFlight = isPipReturnToCallInFlight();
         if (returnToCallInFlight || now < returningUntil) {
-          return;
+          logger.info('[App] [PiP] EndCallFromPiP while returning — still hanging up', {
+            returnToCallInFlight,
+            returningUntilLeftMs: Math.max(0, returningUntil - now),
+          });
         }
+        g.__returningFromSystemPiPUntilRef = g.__returningFromSystemPiPUntilRef || { current: 0 };
+        g.__returningFromSystemPiPUntilRef.current = 0;
+        try {
+          setPipReturnToCallInFlight(false);
+        } catch (_) {}
       } catch (_) {}
       try {
         const g = (global as any);
@@ -1291,9 +1420,8 @@ function AppContent() {
     });
     const sub5 = emitter.addListener('SystemPiPModeChanged', (payload: { isInPiP?: boolean }) => {
       if (payload?.isInPiP === false) {
-        const ref = (global as any).__pipReturnToCallJustPressedRef as { current?: boolean } | undefined;
-        if (ref?.current) {
-          ref.current = false;
+        if (isPipReturnToCallJustPressed()) {
+          setPipReturnToCallJustPressed(false);
         }
         // Различие «развернуть» / «закрыть X» делается на нативе: приходит SystemPiPExpanded или EndCallFromPiP
       }
@@ -1307,7 +1435,7 @@ function AppContent() {
         const g = (global as any);
         const returningUntil = Number(g.__returningFromSystemPiPUntilRef?.current || 0);
         const ignoreExpandedUntil = Number(g.__ignoreSystemPiPExpandedUntilRef?.current || 0);
-        const returnToCallInFlight = g.__pipReturnToCallInFlightRef?.current === true;
+        const returnToCallInFlight = isPipReturnToCallInFlight();
         const endingCall =
           g.__endingCallInProgressRef?.current === true ||
           g.__callEndedFromPiPNoOpenRef?.current === true ||
@@ -1359,14 +1487,15 @@ function AppContent() {
         }
         g.__lastSystemPiPExpandedAtRef.current = now;
         g.__returningFromSystemPiPUntilRef = g.__returningFromSystemPiPUntilRef || { current: 0 };
+        // Короткое anti-reenter: 12с ломало быстрый Home сразу после expand.
         g.__returningFromSystemPiPUntilRef.current = Math.max(
           Number(g.__returningFromSystemPiPUntilRef.current || 0),
-          now + 12000,
+          now + 4000,
         );
         g.__blockSystemPiPCaptureHostUntilRef = g.__blockSystemPiPCaptureHostUntilRef || { current: 0 };
         g.__blockSystemPiPCaptureHostUntilRef.current = Math.max(
           Number(g.__blockSystemPiPCaptureHostUntilRef.current || 0),
-          now + 10000,
+          now + 4000,
         );
         try {
           g.__pendingSystemPiPSyncRef = g.__pendingSystemPiPSyncRef || { current: false };
@@ -1584,6 +1713,66 @@ function AppContent() {
         logger.warn('[App] ReturnToAudioCallFromPiP handler failed', e);
       }
     });
+    const subRemoteEnded = emitter.addListener(
+      'RemoteCallEndedInSystemPiP',
+      (payload?: { callId?: string | null; roomId?: string | null }) => {
+        try {
+          const g = global as any;
+          const callId =
+            String(payload?.callId || g.__currentCallPiPParamsRef?.current?.callId || '').trim() || null;
+          const roomId =
+            String(payload?.roomId || g.__currentCallPiPParamsRef?.current?.roomId || '').trim() || null;
+          logger.info('[App] RemoteCallEndedInSystemPiP', { callId, roomId });
+          setEndingCallInProgress(true);
+          setCallEndedFromPiPNoOpen(true);
+          g.__ignoreSystemPiPExpandedUntilRef = g.__ignoreSystemPiPExpandedUntilRef || { current: 0 };
+          g.__ignoreSystemPiPExpandedUntilRef.current = Date.now() + 5000;
+          g.__pipForceHiddenRef = g.__pipForceHiddenRef || { current: false };
+          g.__pipForceHiddenRef.current = true;
+          if (callId) {
+            try {
+              g.__locallyEndedCallRef = g.__locallyEndedCallRef || { current: { callId: '', at: 0 } };
+              g.__locallyEndedCallRef.current = { callId, at: Date.now() };
+              addEndedCallIdFromSocket(callId);
+            } catch (_) {}
+          }
+          terminateCall({
+            reason: 'call_ended_surfaces',
+            callId,
+            roomId,
+          });
+          const session = g.__webrtcSessionRef?.current;
+          if (session && typeof session.applyRemoteEnded === 'function') {
+            session.applyRemoteEnded({ callId: callId || undefined, roomId: roomId || undefined });
+          } else {
+            try {
+              dismissSystemPiPAfterCallEnded();
+            } catch (_) {}
+            try {
+              const hidePiP = g.__pipHidePiPRef?.current;
+              if (typeof hidePiP === 'function') hidePiP();
+            } catch (_) {}
+          }
+          try {
+            g.__videoCallPartnerUserIdRef = g.__videoCallPartnerUserIdRef || { current: null };
+            g.__videoCallPartnerUserIdRef.current = null;
+            g.__videoCallActiveRef = g.__videoCallActiveRef || { current: false };
+            g.__videoCallActiveRef.current = false;
+            g.__onVideoCallEndedRef?.current?.();
+          } catch (_) {}
+          setTimeout(() => {
+            try {
+              setCallEndedFromPiPNoOpen(false);
+            } catch (_) {}
+            try {
+              setEndingCallInProgress(false);
+            } catch (_) {}
+          }, 6000);
+        } catch (e) {
+          logger.warn('[App] RemoteCallEndedInSystemPiP failed', e);
+        }
+      },
+    );
     // AboutToEnterSystemPiP обрабатывается в PiPContext (подготовка capture; enter — только MainActivity.onUserLeaveHint).
     return () => {
       sub1.remove();
@@ -1596,6 +1785,7 @@ function AppContent() {
       sub7.remove();
       subReturnActive.remove();
       subReturnAudio.remove();
+      subRemoteEnded.remove();
     };
   }, [completeAndroidIncomingAnswer, rememberExpectedCallAccepted, shouldRequestPendingCallAccepted, invokeReturnToVideoCallFromNotification, showIncomingAnswerCover, setIncomingAnswerTransitionGuard]);
 
@@ -3283,6 +3473,14 @@ function AppContent() {
         try { NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false); } catch (_) {}
       }
       const g = global as any;
+      try {
+        const session = g.__webrtcSessionRef?.current;
+        if (session && typeof session.applyRemoteEnded === 'function' && !session.isEnded?.()) {
+          const cid = String(g.__currentCallPiPParamsRef?.current?.callId || '').trim() || undefined;
+          const rid = String(g.__currentCallPiPParamsRef?.current?.roomId || '').trim() || undefined;
+          session.applyRemoteEnded({ callId: cid, roomId: rid });
+        }
+      } catch (_) {}
       const inSystem = g.__pipInSystemModeRef?.current === true;
       const pipVisible = g.__pipVisibleRef?.current === true;
       const hidePiP = g.__pipHidePiPRef?.current;
@@ -3346,7 +3544,11 @@ function AppContent() {
           String(navRef.getCurrentRoute?.()?.name ?? '') === 'VideoCall';
         if (hasOutgoing || hasVideo) return;
         logger.info('[App] dismiss stale native outgoing on launch (no JS call context)');
-        closeOutgoingCallActivity(null, { force: true, skipMainReturn: true });
+        terminateCall({
+          reason: 'outgoing_native_close',
+          callId: null,
+          skipMainReturn: true,
+        });
       } catch (e) {
         logger.warn('[App] dismiss stale outgoing on launch failed', e);
       }
@@ -4107,10 +4309,10 @@ function AppContent() {
         }
       } catch (e) {
         logger.error('[App] ❌ Error navigating to VideoCall', { error: e, callId: data?.callId });
-        try { setOutgoingCallScreenVisible(false); } catch {}
-        try { setIncomingCallScreenVisible(false); } catch {}
-        try { emitCloseOutgoingCall({ reason: 'remote_closed', callId: data?.callId || null }); } catch {}
-        try { closeOutgoingCallActivity(data?.callId ? String(data.callId) : null, { force: true }); } catch {}
+        terminateCall({
+          reason: 'accepted_stale_ended',
+          callId: data?.callId ? String(data.callId) : null,
+        });
         try { bringMainActivityToFront(); } catch {}
       }
     });
@@ -4121,22 +4323,18 @@ function AppContent() {
       const wasCanceled = !!(callId && canceledCallsRef.current.has(callId));
       disposeDirectCallAudioPrewarm('app:call-timeout');
       incomingCallIdRef.current = null;
-      if (callId) try { reportEndCallToCallKeep(callId); } catch {}
-      if (callId) {
-        try { notifyCallCanceled(callId); } catch {}
-        try { addEndedCallId(callId); } catch {}
-      }
-      stopIncomingCallRingtoneAndVibration();
-      try { setIncomingCallScreenVisible(false); } catch {}
-      stopIncomingCallAlert();
+      terminateCall({
+        reason: 'incoming_timeout',
+        callId: callId || null,
+      });
       // Сбрасываем refs активного звонка, чтобы кнопки видеозвонка у инициатора снова стали активными
       try {
         (global as any).__videoCallPartnerUserIdRef = { current: null };
         (global as any).__videoCallActiveRef = { current: false };
         (global as any).__onVideoCallEndedRef?.current?.();
       } catch (_) {}
-      // Мгновенно закрываем UI
-      setIncoming(null); stopAnim(); try { emitCloseIncoming(); emitRequestCloseIncoming(); emitCloseOutgoingCall({ reason: 'remote_closed', callId }); } catch {}
+      // Мгновенно закрываем JS-модалку входящего (surfaces уже через terminateCall)
+      setIncoming(null); stopAnim();
       // Переход на Home с бейджем «Вызов отменен» (не дублируем, если уже обработали call:cancel)
       if (!wasCanceled && navRef.isReady()) {
         applyCallCancelledHomeNotice(navRef);
@@ -4514,21 +4712,33 @@ export default function App() {
       roomId: resolvedRoomId || roomId,
     });
 
-    // КРИТИЧНО: Завершение видеозвонка из PiP (кнопка X) завершает звонок у обоих: отправка call:end на сервер,
-    // иначе у собеседника звонок продолжается. Сначала завершаем звонок на сервере, потом локальный cleanup.
-    const hasPiPIds = (!!resolvedCallId && !!resolvedRoomId) || pipVisible || inSystem;
+    // КРИТИЧНО: Завершение из PiP (X) всегда шлёт call:end — иначе у собеседника звонок висит.
+    // endingFromSystemPiP / fromPiPButton: не требовать оба id (native getPiPEndCallParams может дать один).
+    const hasPiPContext =
+      endingFromSystemPiP ||
+      pipVisible ||
+      inSystem ||
+      (!!resolvedCallId && !!resolvedRoomId);
     let endedViaPiPPrimaryPath = false;
-    if (hasPiPIds && (resolvedCallId || resolvedRoomId)) {
+    if (hasPiPContext && (resolvedCallId || resolvedRoomId || endingFromSystemPiP)) {
       try {
         if (session && typeof session.endCall === 'function') {
           session.endCall(resolvedCallId || undefined, resolvedRoomId || undefined);
           endedViaPiPPrimaryPath = true;
-        } else {
+        } else if (resolvedCallId || resolvedRoomId) {
           socket.emit('call:end', buildCallEndSocketPayload(resolvedCallId, resolvedRoomId));
           endedViaPiPPrimaryPath = true;
+        } else {
+          logger.warn('[App] [PiP] endCallImpl: no callId/roomId after EndCallFromPiP');
         }
       } catch (e) {
         console.warn('[App] Error ending call from PiP:', e);
+        try {
+          if (resolvedCallId || resolvedRoomId) {
+            socket.emit('call:end', buildCallEndSocketPayload(resolvedCallId, resolvedRoomId));
+            endedViaPiPPrimaryPath = true;
+          }
+        } catch (_) {}
       }
     }
 
@@ -4540,10 +4750,10 @@ export default function App() {
           g.__lastEndCallSourceRef.current = 'pip_close';
           cleanupFn();
         }
-      } else if (!hasPiPIds) {
-        const session = g.__webrtcSessionRef?.current;
-        if (session && typeof session.endCall === 'function') {
-          session.endCall();
+      } else if (!hasPiPContext) {
+        const sessionFallback = g.__webrtcSessionRef?.current;
+        if (sessionFallback && typeof sessionFallback.endCall === 'function') {
+          sessionFallback.endCall();
         } else {
           socket.emit('call:end', buildCallEndSocketPayload(resolvedCallId, resolvedRoomId));
         }
@@ -4589,13 +4799,10 @@ export default function App() {
 
   const endCallImplRef = React.useRef<(cid: string | null, rid: string | null) => void>(endCallImpl);
   endCallImplRef.current = endCallImpl;
-  const pipReturnToCallJustPressedRef = React.useRef(false);
   React.useEffect(() => {
     (global as any).__endCallFromNativeRef = endCallImplRef;
-    (global as any).__pipReturnToCallJustPressedRef = pipReturnToCallJustPressedRef;
     return () => {
       delete (global as any).__endCallFromNativeRef;
-      delete (global as any).__pipReturnToCallJustPressedRef;
     };
   }, []);
 

@@ -288,22 +288,46 @@ export const usePiP = ({
   }, [roomId, callId, partnerId, isInactiveState, wasFriendCallEnded, pip.visible, friends, partnerUserId, camOn, micOn, remoteMuted, remoteCamOn, localStream, remoteStream, routeParams, session, getAudioOutputRoute]);
 
   // Android Back: goBack + in-app PiP. Системный PiP — только Home / реальный уход в фон.
-  useEffect(() => {
-    if (Platform.OS !== 'android') {
-      return;
-    }
-    if (!enableAndroidBackHandler) {
-      return;
-    }
-
-    const navigateBackFromCallScreen = () => {
+  const minimizeToInAppPiP = useCallback(() => {
+    if (isIncomingAnswerTransitionActive()) return;
+    if (isInactiveStateRef.current || wasFriendCallEndedRef.current) {
       const returnTo = (routeParams as any)?.returnTo as
         | { name: string; params?: object }
         | undefined;
-      if (goBackFromCallScreenOrHome(returnTo)) {
-        return;
+      goBackFromCallScreenOrHome(returnTo);
+      return;
+    }
+    if (!hasActiveCallRef.current) return;
+
+    const now = Date.now();
+    try {
+      const g = global as any;
+      g.__leavingVideoCallByBackRef = g.__leavingVideoCallByBackRef || { current: false };
+      g.__leavingVideoCallByBackRef.current = true;
+      g.__disableSystemPiPUntilRef = g.__disableSystemPiPUntilRef || { current: 0 };
+      g.__disableSystemPiPUntilRef.current = now + 2000;
+      g.__pipVisibleRef = g.__pipVisibleRef || { current: false };
+      g.__pipVisibleRef.current = true;
+      g.__suppressInAppPiPUntilRef = g.__suppressInAppPiPUntilRef || { current: 0 };
+      g.__suppressInAppPiPUntilRef.current = 0;
+      g.__systemPiPEntryInProgressUntilRef = g.__systemPiPEntryInProgressUntilRef || { current: 0 };
+      g.__systemPiPEntryInProgressUntilRef.current = 0;
+      const upd = g.__pipUpdateStateRef?.current;
+      if (typeof upd === 'function') {
+        upd({
+          pendingSystemPiP: false,
+          systemPiPCaptureActive: false,
+          systemPiPCaptureRequestId: 0,
+          decorSizeForPiP: null,
+        });
       }
-    };
+      NativeModules.LiviAppModule?.setSystemPiPCaptureFrameReady?.(false);
+    } catch {}
+
+    const returnTo = (routeParams as any)?.returnTo as
+      | { name: string; params?: object }
+      | undefined;
+    goBackFromCallScreenOrHome(returnTo);
 
     const revealInAppPiPAfterBack = () => {
       enterPiPMode({ deferVisible: true, fromVideoCallBack: true });
@@ -320,70 +344,38 @@ export const usePiP = ({
         }
       } catch {}
     };
+    if (typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(revealInAppPiPAfterBack);
+    } else {
+      revealInAppPiPAfterBack();
+    }
+  }, [enterPiPMode, routeParams]);
+
+  useEffect(() => {
+    if (Platform.OS !== 'android') {
+      return;
+    }
+    if (!enableAndroidBackHandler) {
+      return;
+    }
 
     const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
       if (isIncomingAnswerTransitionActive()) {
-        // Handoff Incoming→Main иногда шлёт KEYCODE_BACK — остаёмся на VideoCall.
         return true;
       }
       if (isInactiveStateRef.current || wasFriendCallEndedRef.current) {
-        navigateBackFromCallScreen();
+        minimizeToInAppPiP();
         return true;
       }
-
       if (!hasActiveCallRef.current) return false;
-
-      const now = Date.now();
-      try {
-        const g = global as any;
-        g.__leavingVideoCallByBackRef = g.__leavingVideoCallByBackRef || { current: false };
-        g.__leavingVideoCallByBackRef.current = true;
-        // Не пускать leave-hint → system PiP во время Back→навигация.
-        g.__disableSystemPiPUntilRef = g.__disableSystemPiPUntilRef || { current: 0 };
-        g.__disableSystemPiPUntilRef.current = now + 2000;
-        g.__pipVisibleRef = g.__pipVisibleRef || { current: false };
-        g.__pipVisibleRef.current = true;
-        g.__suppressInAppPiPUntilRef = g.__suppressInAppPiPUntilRef || { current: 0 };
-        g.__suppressInAppPiPUntilRef.current = 0;
-        g.__systemPiPEntryInProgressUntilRef = g.__systemPiPEntryInProgressUntilRef || { current: 0 };
-        g.__systemPiPEntryInProgressUntilRef.current = 0;
-        const upd = g.__pipUpdateStateRef?.current;
-        if (typeof upd === 'function') {
-          upd({
-            pendingSystemPiP: false,
-            systemPiPCaptureActive: false,
-            systemPiPCaptureRequestId: 0,
-            decorSizeForPiP: null,
-          });
-        }
-        NativeModules.LiviAppModule?.setSystemPiPCaptureFrameReady?.(false);
-      } catch {}
-
-      navigateBackFromCallScreen();
-      if (typeof requestAnimationFrame === 'function') {
-        requestAnimationFrame(revealInAppPiPAfterBack);
-      } else {
-        revealInAppPiPAfterBack();
-      }
+      minimizeToInAppPiP();
       return true;
     });
 
     return () => backHandler.remove();
   }, [
     enableAndroidBackHandler,
-    enterPiPMode,
-    roomId,
-    callId,
-    partnerId,
-    isInactiveState,
-    wasFriendCallEnded,
-    pip.visible,
-    session,
-    routeParams,
-    localStream,
-    remoteStream,
-    camOn,
-    remoteCamOn,
+    minimizeToInAppPiP,
   ]);
 
   // Обработка Swipe Left to Right для входа в PiP и возврата на предыдущую страницу
@@ -549,6 +541,7 @@ export const usePiP = ({
 
   return {
     enterPiPMode,
+    minimizeToInAppPiP,
     panResponder,
     pip,
     pipRef,

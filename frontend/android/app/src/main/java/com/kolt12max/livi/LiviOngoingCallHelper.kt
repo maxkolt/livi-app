@@ -149,7 +149,11 @@ object LiviOngoingCallHelper {
         } catch (_: Exception) {}
     }
 
-    /** Не показывать/не восстанавливать входящий (лаунчер, CallKeep PI, JS peek). */
+    /**
+     * Живой launch / IncomingCallActivity.onCreate: гасить только ended или истекшее ring-окно.
+     * Нет метки старта = свежий звонок (setIncomingCall ещё не вызван / apply не догнал) — НЕ гасить.
+     * Иначе socket/FCM launchIncomingCallActivity молча no-op, а JS всё равно пишет presentIncomingCall success.
+     */
     @JvmStatic
     fun shouldSuppressStaleIncoming(context: Context, callId: String): Boolean {
         if (callId.isBlank()) return true
@@ -157,7 +161,17 @@ object LiviOngoingCallHelper {
         return isIncomingRingWindowExpired(context, callId)
     }
 
-    private fun isIncomingRingWindowExpired(context: Context, callId: String): Boolean {
+    /**
+     * Restore с лаунчера / peek prefs / CallKeep PI: без метки старта prefs считаем мёртвыми.
+     * Не использовать на пути свежего launchIncomingCallActivity.
+     */
+    @JvmStatic
+    fun shouldSuppressIncomingRestore(context: Context, callId: String): Boolean {
+        if (shouldSuppressStaleIncoming(context, callId)) return true
+        return incomingStartMarkMs(context, callId) <= 0L
+    }
+
+    private fun incomingStartMarkMs(context: Context, callId: String): Long {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         var startedAt = 0L
         if (prefs.getString(KEY_CALL_ID, null) == callId.trim()) {
@@ -166,8 +180,13 @@ object LiviOngoingCallHelper {
         if (startedAt <= 0L) {
             startedAt = LiviAppModule.incomingCallMetaStartedAtMs(context, callId)
         }
-        // Нет метки старта — не восстанавливаем входящий с лаунчера (устаревшие prefs).
-        if (startedAt <= 0L) return true
+        return startedAt
+    }
+
+    private fun isIncomingRingWindowExpired(context: Context, callId: String): Boolean {
+        val startedAt = incomingStartMarkMs(context, callId)
+        // Нет метки — окно ещё не началось (свежий launch), не expired.
+        if (startedAt <= 0L) return false
         return System.currentTimeMillis() >= startedAt + INCOMING_RING_WINDOW_MS
     }
 
@@ -197,7 +216,7 @@ object LiviOngoingCallHelper {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         if (prefs.getString(KEY_TYPE, null) != "incoming") return null
         val callId = prefs.getString(KEY_CALL_ID, null) ?: return null
-        if (shouldSuppressStaleIncoming(context, callId)) {
+        if (shouldSuppressIncomingRestore(context, callId)) {
             clearOngoingCallIfMatches(context, callId)
             return null
         }
@@ -215,7 +234,7 @@ object LiviOngoingCallHelper {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val type = prefs.getString(KEY_TYPE, null) ?: return false
         val callId = prefs.getString(KEY_CALL_ID, null) ?: return false
-        if (type == "incoming" && shouldSuppressStaleIncoming(context, callId)) {
+        if (type == "incoming" && shouldSuppressIncomingRestore(context, callId)) {
             clearOngoingCallIfMatches(context, callId)
             return false
         }
@@ -274,7 +293,7 @@ object LiviOngoingCallHelper {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val type = prefs.getString(KEY_TYPE, null) ?: return null
         val callId = prefs.getString(KEY_CALL_ID, null) ?: return null
-        if (type == "incoming" && shouldSuppressStaleIncoming(context, callId)) {
+        if (type == "incoming" && shouldSuppressIncomingRestore(context, callId)) {
             clearOngoingCallIfMatches(context, callId)
             return null
         }
