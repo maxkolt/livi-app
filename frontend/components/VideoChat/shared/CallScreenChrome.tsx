@@ -57,6 +57,10 @@ type Props = {
   topInset?: number;
   bottomInset?: number;
   endDisabled?: boolean;
+  /** Прямая кнопка динамика (аудио/видео): вкл = volume-up + фон/рамка, выкл = volume-mute. */
+  speakerOn?: boolean;
+  onToggleSpeaker?: () => void;
+  speakerLabel?: string;
 };
 
 export function CallScreenChrome({
@@ -81,6 +85,9 @@ export function CallScreenChrome({
   topInset = 0,
   bottomInset = 0,
   endDisabled = false,
+  speakerOn = false,
+  onToggleSpeaker,
+  speakerLabel = '',
 }: Props) {
   const [moreOpen, setMoreOpen] = useState(false);
   const [resolvedUri, ready] = useResolvedImageUri(partnerAvatarUri ?? '');
@@ -146,16 +153,35 @@ export function CallScreenChrome({
         pointerEvents="box-none"
       >
         <View style={[styles.capsule, locked && styles.capsuleLocked]}>
-          <CapsuleAction
-            label={moreLabel}
-            onPress={() => {
-              if (locked) return;
-              setMoreOpen(true);
-            }}
-            disabled={locked}
-          >
-            <MaterialIcons name="more-horiz" size={26} color={WELCOME_HEADER_TITLE} />
-          </CapsuleAction>
+          {onToggleSpeaker ? (
+            <CapsuleAction
+              label={speakerLabel}
+              onPress={() => {
+                if (locked) return;
+                onToggleSpeaker();
+              }}
+              disabled={locked}
+              active={!!speakerOn}
+            >
+              <MaterialIcons
+                name={speakerOn ? 'volume-up' : 'volume-mute'}
+                size={24}
+                color={speakerOn ? WELCOME_NAV_ACTIVE_ACCENT.softText : WELCOME_HEADER_TITLE}
+              />
+            </CapsuleAction>
+          ) : null}
+          {moreItems.length > 0 ? (
+            <CapsuleAction
+              label={moreLabel}
+              onPress={() => {
+                if (locked) return;
+                setMoreOpen(true);
+              }}
+              disabled={locked}
+            >
+              <MaterialIcons name="more-horiz" size={26} color={WELCOME_HEADER_TITLE} />
+            </CapsuleAction>
+          ) : null}
 
           <CapsuleAction
             label={cameraLabel}

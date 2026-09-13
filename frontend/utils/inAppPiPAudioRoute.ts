@@ -177,6 +177,11 @@ export async function toggleInAppPiPAudioOutputRoute(): Promise<InCallAudioRoute
     'in_app_pip_audio_route_toggle',
   ]);
   if (next === 'EARPIECE' || next === 'SPEAKER_PHONE') {
+    // Как cycle на call UI: иначе wear sticky / BT mark залипают после video→PiP.
+    try {
+      (global as any).__btWearStickyUntilRef = { current: 0 };
+      (global as any).__btAutoSuppressUntilRef = { current: Date.now() + 12000 };
+    } catch {}
     armCallAudioRouteUiLock(next);
   } else if (isExternalHeadsetRoute(next)) {
     clearCallAudioRouteUiLock();

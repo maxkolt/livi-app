@@ -974,40 +974,59 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         }
       }
     } else {
-      const lockedExternal = readUserSelectedExternalCallAudioRoute();
-      const externalRoute = resolvePiPExternalAudioRoute(p.audioOutputRoute || readUserSelectedCallAudioRoute());
-      let videoRouteNorm =
-        externalRoute ||
-        lockedExternal ||
-        readUserSelectedCallAudioRoute() ||
-        normalizeInCallRoute(p.audioOutputRoute || '') ||
-        readInAppPiPAudioOutputRoute();
-      const videoAvailable = readAvailableAudioDeviceListFromGlobal();
-      const videoLastApplied = readLastAppliedCallAudioRoute();
-      const activeVideoExternal =
-        resolvePiPExternalAudioRoute(videoRouteNorm);
-      if (activeVideoExternal) {
-        videoRouteNorm = activeVideoExternal;
-      }
-      if (
-        !activeVideoExternal &&
-        !readUserSelectedCallAudioRoute() &&
-        !isExternalHeadsetRoute(videoRouteNorm) &&
-        videoLastApplied &&
-        isExternalHeadsetRoute(videoLastApplied) &&
-        videoAvailable.includes(videoLastApplied)
-      ) {
-        videoRouteNorm = videoLastApplied;
-      }
-      if (!isExternalHeadsetRoute(videoRouteNorm)) {
-        videoRouteNorm = resolveVideoInAppPiPPreserveRoute();
+      const passedRoute = normalizeInCallRoute(p.audioOutputRoute || '');
+      let videoRouteNorm: InCallAudioRoute;
+      if (passedRoute === 'SPEAKER_PHONE' || passedRoute === 'EARPIECE') {
+        // ↓ / Back с video UI: не залипать на stale BT mark поверх громкой с экрана.
+        videoRouteNorm = passedRoute === 'EARPIECE' ? 'SPEAKER_PHONE' : passedRoute;
+      } else if (isExternalHeadsetRoute(passedRoute)) {
+        videoRouteNorm = passedRoute;
+      } else {
+        const lockedExternal = readUserSelectedExternalCallAudioRoute();
+        const externalRoute = resolvePiPExternalAudioRoute(
+          p.audioOutputRoute || readUserSelectedCallAudioRoute(),
+        );
+        videoRouteNorm =
+          externalRoute ||
+          lockedExternal ||
+          readUserSelectedCallAudioRoute() ||
+          normalizeInCallRoute(p.audioOutputRoute || '') ||
+          readInAppPiPAudioOutputRoute() ||
+          'SPEAKER_PHONE';
+        const videoAvailable = readAvailableAudioDeviceListFromGlobal();
+        const videoLastApplied = readLastAppliedCallAudioRoute();
+        const activeVideoExternal = resolvePiPExternalAudioRoute(videoRouteNorm);
+        if (activeVideoExternal) {
+          videoRouteNorm = activeVideoExternal;
+        }
+        if (
+          !activeVideoExternal &&
+          !readUserSelectedCallAudioRoute() &&
+          !isExternalHeadsetRoute(videoRouteNorm) &&
+          videoLastApplied &&
+          isExternalHeadsetRoute(videoLastApplied) &&
+          videoAvailable.includes(videoLastApplied)
+        ) {
+          videoRouteNorm = videoLastApplied;
+        }
+        if (!isExternalHeadsetRoute(videoRouteNorm)) {
+          videoRouteNorm = resolveVideoInAppPiPPreserveRoute();
+        }
       }
       if (isExternalHeadsetRoute(videoRouteNorm)) {
         setUserSelectedCallAudioRoute(videoRouteNorm);
       } else if (videoRouteNorm === 'SPEAKER_PHONE' || videoRouteNorm === 'EARPIECE') {
         // Video→PiP: громкая (или явный earpiece) должна пережить возврат на audio.
+        // Product SPEAKER — не rememberManual (иначе return-to-audio залипает на громкой).
         setUserSelectedCallAudioRoute(videoRouteNorm);
-        rememberManualBuiltinCallAudioRoute(videoRouteNorm);
+        if (videoRouteNorm === 'EARPIECE') {
+          rememberManualBuiltinCallAudioRoute(videoRouteNorm);
+        }
+        try {
+          // Снять wear sticky, иначе toggle на плашке / native apply залипают на BT.
+          (global as any).__btWearStickyUntilRef = { current: 0 };
+          (global as any).__btAutoSuppressUntilRef = { current: Date.now() + 12000 };
+        } catch {}
         armCallAudioRouteUiLock(videoRouteNorm);
         try {
           const gPin = global as any;

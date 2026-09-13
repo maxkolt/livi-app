@@ -623,6 +623,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     } catch {}
   }, [audioFirstOnMount, preferVideoUiOnMount]);
   const userRouteRef = useRef<InCallAudioRoute>(readActiveExternalCallAudioRoute() || 'EARPIECE');
+  const audioRouteForUiRef = useRef<InCallAudioRoute>(userRouteRef.current);
   const speakerOnRef = useRef(false);
   /** После перехода на видео UI не возвращать на экран аудиозвонка при выключении камеры (только mute видео). */
   const stayOnVideoCallUiRef = useRef(
@@ -1222,7 +1223,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     acceptCallTimeRef,
     // Android Back: in-app PiP + серфинг по app. System PiP — Home / фон.
     enableAndroidBackHandler: true,
-    getAudioOutputRoute: () => userRouteRef.current,
+    getAudioOutputRoute: () => audioRouteForUiRef.current || userRouteRef.current,
   });
 
   const [callStageSize, setCallStageSize] = useState(() => {
@@ -1714,7 +1715,10 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     !stayOnVideoCallUiRef.current;
   const externalRouteForUi =
     (isExternalHeadsetRoute(selectedRoute) && selectedRoute) ||
-    readUserSelectedExternalCallAudioRoute();
+    // Не перекрывать явный EAR/SPEAKER старым BT mark — иначе надпись залипает на Bluetooth.
+    (selectedRoute === 'EARPIECE' || selectedRoute === 'SPEAKER_PHONE'
+      ? null
+      : readUserSelectedExternalCallAudioRoute());
   const audioRouteForUi =
     // Живой BT/провод важнее uiLock accept — иначе кнопка мигает EAR при одевании.
     isExternalHeadsetRoute(externalRouteForUi)
@@ -1728,6 +1732,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
             ? resolveCallAudioRouteUiWhileBootstrapPending(selectedRoute)
             : selectedRoute);
   const audioRouteIcon = iconNameForRoute(audioRouteForUi);
+  audioRouteForUiRef.current = audioRouteForUi;
   const btAccent = useMemo(() => uiAccent(!isDark), [isDark]);
   const audioOutputRouteAccent =
     audioRouteForUi === 'BLUETOOTH' ? btAccent : WELCOME_NAV_ACTIVE_ACCENT;
@@ -6759,22 +6764,6 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     lang,
   ]);
 
-  const callMoreItems = useMemo((): CallMoreMenuItem[] => {
-    const speakerOn = audioRouteForUi === 'SPEAKER_PHONE';
-    return [
-      {
-        key: 'speaker',
-        // Стабильная подпись; «вкл» читается по active (акцент + галочка), не по «Выключить…».
-        label: speakerOn ? t('callSpeakerActive', lang) : t('callSpeakerOn', lang),
-        icon: 'volume-up',
-        active: speakerOn,
-        onPress: () => {
-          if (controlsLockedForLocalHold) return;
-          cycleAudioRoute();
-        },
-      },
-    ];
-  }, [lang, audioRouteForUi, controlsLockedForLocalHold, cycleAudioRoute]);
 
   const isPartnerFriend = useMemo(() => {
     if (!partnerUserId) return false;
@@ -7784,7 +7773,23 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
               cameraLabel={t('callCamera', lang)}
               micLabel={t('microphone', lang)}
               endLabel={t('endCall', lang)}
-              moreItems={callMoreItems}
+              moreItems={[]}
+              speakerOn={
+                audioRouteForUi === 'SPEAKER_PHONE' ||
+                audioRouteForUi === 'BLUETOOTH' ||
+                audioRouteForUi === 'WIRED_HEADSET'
+              }
+              onToggleSpeaker={() => {
+                if (controlsLockedForLocalHold) return;
+                cycleAudioRoute();
+              }}
+              speakerLabel={
+                audioRouteForUi === 'BLUETOOTH'
+                  ? t('callBluetooth', lang)
+                  : audioRouteForUi === 'SPEAKER_PHONE'
+                    ? t('callSpeakerActive', lang)
+                    : t('callSpeakerOn', lang)
+              }
               controlsLocked={controlsLockedForLocalHold}
               pulseCam={pulsePeerVideoButton}
               pulseCamAccent={peerVideoInviteAccent}

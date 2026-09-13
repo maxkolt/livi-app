@@ -4168,6 +4168,19 @@ export const useAudioRouting = (
       // Пункт 3: next уже earpiece↔speaker (BT не в цикле кнопки).
       explicitBuiltInChoiceRef.current = next === 'EARPIECE' || next === 'SPEAKER_PHONE';
       setExplicitBuiltInGlobal(explicitBuiltInChoiceRef.current);
+      if (next === 'EARPIECE' || next === 'SPEAKER_PHONE') {
+        // Ручной уход с BT/провода: снять wear sticky / external mark, иначе UI и setUserRoute залипают на Bluetooth.
+        clearBtWearSticky();
+        btWearReconnectInFlightRef.current = false;
+        armBtAutoSuppress(12000);
+        try {
+          (global as any).__userSelectedExternalCallAudioRouteRef = { current: null };
+        } catch {}
+        cancelScheduledCallAudioRouteReappliesMatching([
+          'audio_ui_headset_connect',
+          'in_app_pip_headset_connect',
+        ]);
+      }
       setUserRoute(next);
       setSelectedRoute(next);
       lastSelectedRef.current = next;
@@ -4195,11 +4208,6 @@ export const useAudioRouting = (
           clearTimeout(btAudioDisconnectTimerRef.current);
           btAudioDisconnectTimerRef.current = null;
         }
-      } else {
-        cancelScheduledCallAudioRouteReappliesMatching([
-          'audio_ui_headset_connect',
-          'in_app_pip_headset_connect',
-        ]);
       }
       try {
         const params = g.__currentCallPiPParamsRef?.current;
