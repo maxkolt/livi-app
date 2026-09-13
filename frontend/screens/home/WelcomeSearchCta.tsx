@@ -4,7 +4,6 @@ import {
   Platform,
   Pressable,
   StyleSheet,
-  Text,
   useWindowDimensions,
   View,
   type ViewStyle,
@@ -18,6 +17,7 @@ import {
   WELCOME_HEADER_TITLE,
   WELCOME_MUTED_TEXT,
 } from './constants';
+import FitText from '../../components/FitText';
 import { logger } from '../../utils/logger';
 
 const BORDER_W = 1.35;
@@ -195,9 +195,12 @@ export function WelcomeSearchCta({
               size={compact ? 20 : 22}
               color={WELCOME_MUTED_TEXT}
             />
-            <Text style={[styles.label, compact && styles.labelCompact]} allowFontScaling={false}>
+            <FitText
+              style={[styles.label, compact && styles.labelCompact]}
+              minimumFontScale={0.7}
+            >
               {label}
-            </Text>
+            </FitText>
             <Animated.View
               pointerEvents="none"
               style={[
@@ -254,8 +257,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    paddingHorizontal: 24,
+    paddingHorizontal: 20,
     overflow: 'hidden',
+    minWidth: 0,
   },
   sheen: {
     ...StyleSheet.absoluteFillObject,
@@ -268,6 +272,9 @@ const styles = StyleSheet.create({
     fontSize: 17,
     fontWeight: '500',
     letterSpacing: 0.2,
+    flexShrink: 1,
+    minWidth: 0,
+    textAlign: 'center',
   },
   labelCompact: {
     fontSize: 15,

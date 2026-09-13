@@ -1,7 +1,8 @@
 import React, { useEffect, useRef } from 'react';
-import { Animated, Easing, Platform, Text, TouchableOpacity, View } from 'react-native';
+import { Animated, Easing, Platform, TouchableOpacity, View } from 'react-native';
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { StyleSheet } from 'react-native';
+import AdaptiveText from '../../components/AdaptiveText';
 import {
   ANDROID_FRIEND_ACTION_HIT_SLOP,
   ANDROID_INSTANT_TOUCH,
@@ -93,14 +94,14 @@ export function FriendMarkReadMenuStrip({
       collapsable={false}
     >
       <View style={markReadStripStyles.stripInner} pointerEvents="box-none">
-        <Text
+        <AdaptiveText
           numberOfLines={1}
           ellipsizeMode="tail"
           style={markReadStripStyles.stripText}
-          allowFontScaling={false}
+          minimumFontScale={0.75}
         >
           {label}
-        </Text>
+        </AdaptiveText>
         <View style={markReadStripStyles.btnRow} pointerEvents="box-none">
           <TouchableOpacity
             style={markReadStripStyles.btn}

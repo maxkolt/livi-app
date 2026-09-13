@@ -1,5 +1,6 @@
 import React, { memo } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
+import AdaptiveText from '../../components/AdaptiveText';
 import { Ionicons } from '@expo/vector-icons';
 import { LIVI, WELCOME_CHROME_BTN_BG, WELCOME_HEADER_TITLE } from './constants';
 import { WELCOME_SEGMENT_ACTIVE } from './FriendsListCore';
@@ -45,9 +46,9 @@ function WelcomeSelectModeHeaderInner({
         <Ionicons name="close" size={22} color={LIVI.white} />
       </Pressable>
 
-      <Text style={styles.selectTitle} numberOfLines={1}>
+      <AdaptiveText style={styles.selectTitle} numberOfLines={1}>
         {String(selectedCount)}
-      </Text>
+      </AdaptiveText>
 
       <View style={styles.actions}>
         <Pressable
@@ -68,9 +69,9 @@ function WelcomeSelectModeHeaderInner({
             size={16}
             color={allSelected ? WELCOME_SEGMENT_ACTIVE : LIVI.white}
           />
-          <Text style={[styles.selectAllLabel, allSelected && styles.selectAllLabelActive]}>
+          <AdaptiveText style={[styles.selectAllLabel, allSelected && styles.selectAllLabelActive]}>
             {selectAllLabel}
-          </Text>
+          </AdaptiveText>
         </Pressable>
 
         <Pressable

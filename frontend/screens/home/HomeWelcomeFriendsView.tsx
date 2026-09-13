@@ -4,12 +4,12 @@ import {
   Platform,
   Pressable,
   StyleSheet,
-  Text,
   TextInput,
   TouchableWithoutFeedback,
   View,
   BackHandler,
 } from 'react-native';
+import AdaptiveText from '../../components/AdaptiveText';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { t, type Lang } from '../../utils/i18n';
 import {
@@ -198,8 +198,8 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
           <MaterialCommunityIcons name="gift-outline" size={32} color={WELCOME_BRAND_VI_FILL_GRADIENT[2]} />
         </View>
         <View style={styles.inviteTextCol}>
-          <Text style={styles.inviteTitle}>{t('inviteFriendsTitle', lang)}</Text>
-          <Text style={styles.inviteSubtitle}>{t('inviteFriendsSubtitle', lang)}</Text>
+          <AdaptiveText style={styles.inviteTitle}>{t('inviteFriendsTitle', lang)}</AdaptiveText>
+          <AdaptiveText style={styles.inviteSubtitle}>{t('inviteFriendsSubtitle', lang)}</AdaptiveText>
         </View>
         <Ionicons name="chevron-forward" size={20} color={WELCOME_MUTED_TEXT} />
       </Pressable>
@@ -263,7 +263,7 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
           onPress={searchOpen ? dismissSearchFromEmptyTap : undefined}
           accessibilityRole="header"
         >
-          <Text style={styles.title}>{L('tabFriends')}</Text>
+          <AdaptiveText style={styles.title}>{L('tabFriends')}</AdaptiveText>
         </Pressable>
         <View style={styles.headerActions}>
           <Pressable
@@ -324,7 +324,7 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
           accessibilityRole="button"
           accessibilityState={{ selected: filter === 'all' }}
         >
-          <Text
+          <AdaptiveText
             style={styles.segmentLabel}
             numberOfLines={1}
             allowFontScaling={false}
@@ -332,7 +332,7 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
             minimumFontScale={0.85}
           >
             {L('friendsSegmentAll')}
-          </Text>
+          </AdaptiveText>
         </Pressable>
         <Pressable
           style={[styles.segmentBtn, filter === 'online' && styles.segmentBtnActive]}
@@ -345,7 +345,7 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
         >
           <View style={styles.segmentOnlineInner}>
             {filter !== 'online' ? <View style={styles.segmentOnlineDot} /> : null}
-            <Text
+            <AdaptiveText
               style={styles.segmentLabel}
               numberOfLines={1}
               allowFontScaling={false}
@@ -353,7 +353,7 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
               minimumFontScale={0.85}
             >
               {L('online')}
-            </Text>
+            </AdaptiveText>
           </View>
         </Pressable>
       </View>

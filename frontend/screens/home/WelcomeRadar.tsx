@@ -37,16 +37,19 @@ const ORBIT_BAND_COLOR = mixOrbitBandColor();
 /** 1-я орбита ярче, дальше слабее. */
 const BAND_OPACITIES = [0.22, 0.15, 0.1, 0.04] as const;
 
-/** 4 орбиты: ближе к аватару; 2-е уже, 3/4 чуть сжаты без раздува g. */
+/** 4 орбиты: ближе к аватару; 2-е уже, 3/4 чуть к центру; g от «полной» суммы шагов. */
 function computeRingRadii(half: number, avatarR: number): number[] {
   const avatarOuter = avatarR + 2;
   const maxOuter = half * 0.85;
   const step0 = 0.56;
   const step12 = 0.86;
-  const step23 = 1.18;
-  /** Компенсация сужения 3-го — иначе растёт g и раздувается 2-е. */
-  const step34 = 1.14;
-  const total = step0 + step12 + step23 + step34;
+  /** Чуть меньше — 3-й круг ближе к центру. */
+  const step23 = 1.1;
+  /** База для g (чтобы 1–3 не расползлись). */
+  const step34ForG = 1.22;
+  /** Фактический шаг 4-го — чуть ближе к центру. */
+  const step34 = 1.06;
+  const total = step0 + step12 + step23 + step34ForG;
   const g = Math.max(half * 0.078, (maxOuter - avatarOuter) / total);
   const r1 = avatarOuter + g * step0;
   const r2 = r1 + g * step12;
@@ -121,10 +124,34 @@ export function WelcomeRadar({ size, avatarRadius, children }: WelcomeRadarProps
     [avatarOuter, ringRadii],
   );
 
+  const lastBand = orbitBands[orbitBands.length - 1];
+  const outerSoftPad = Math.max(3, half * 0.028);
+  const outerSoftR = (lastBand?.outerR ?? half * 0.85) + outerSoftPad;
+
   const haloStops = useMemo(
     () => buildCenterHaloStops(avatarOuter, haloR),
     [avatarOuter, haloR],
   );
+
+  const outerSoftStops = useMemo(() => {
+    if (!lastBand) return [];
+    const den = outerSoftR;
+    const innerT = lastBand.innerR / den;
+    const midT = (lastBand.innerR + (lastBand.outerR - lastBand.innerR) * 0.38) / den;
+    const rimT = lastBand.outerR / den;
+    const softT = Math.min(0.995, (lastBand.outerR + outerSoftPad * 0.48) / den);
+    const op = lastBand.opacity;
+    return [
+      { offset: 0, opacity: 0 },
+      { offset: Math.max(0, innerT - 0.002), opacity: 0 },
+      { offset: innerT, opacity: op },
+      { offset: midT, opacity: op },
+      { offset: rimT * 0.975, opacity: op },
+      { offset: rimT, opacity: op * 0.48 },
+      { offset: softT, opacity: op * 0.15 },
+      { offset: 1, opacity: 0 },
+    ];
+  }, [lastBand, outerSoftPad, outerSoftR]);
 
   const dots = useMemo(() => {
     return DOT_SPECS.map((spec, i) => {
@@ -136,6 +163,7 @@ export function WelcomeRadar({ size, avatarRadius, children }: WelcomeRadarProps
 
   const uid = Math.round(s);
   const haloGradId = `radarCenterHalo-${uid}`;
+  const outerSoftGradId = `radarOuterSoft-${uid}`;
 
   return (
     <View style={[styles.wrap, { width: s, height: s }]} onLayout={onLayout}>
@@ -151,7 +179,17 @@ export function WelcomeRadar({ size, avatarRadius, children }: WelcomeRadarProps
               />
             ))}
           </RadialGradient>
-          {orbitBands.map((band) => (
+          <RadialGradient id={outerSoftGradId} cx="50%" cy="50%" r="50%">
+            {outerSoftStops.map((stop, i) => (
+              <Stop
+                key={`os-${i}`}
+                offset={`${(stop.offset * 100).toFixed(1)}%`}
+                stopColor={ORBIT_BAND_COLOR}
+                stopOpacity={stop.opacity}
+              />
+            ))}
+          </RadialGradient>
+          {orbitBands.slice(0, -1).map((band) => (
             <Mask key={band.id} id={`${band.id}-${uid}`}>
               <Circle cx={cx} cy={cy} r={band.outerR} fill="white" />
               <Circle cx={cx} cy={cy} r={band.innerR} fill="black" />
@@ -159,7 +197,7 @@ export function WelcomeRadar({ size, avatarRadius, children }: WelcomeRadarProps
           ))}
         </Defs>
         <Circle cx={cx} cy={cy} r={haloR} fill={`url(#${haloGradId})`} />
-        {orbitBands.map((band) => (
+        {orbitBands.slice(0, -1).map((band) => (
           <Circle
             key={band.id}
             cx={cx}
@@ -170,6 +208,10 @@ export function WelcomeRadar({ size, avatarRadius, children }: WelcomeRadarProps
             mask={`url(#${band.id}-${uid})`}
           />
         ))}
+        {/* 4-й круг: мягкий внешний контур (лёгкая «размытость»). */}
+        {lastBand ? (
+          <Circle cx={cx} cy={cy} r={outerSoftR} fill={`url(#${outerSoftGradId})`} />
+        ) : null}
         {dots.map((d) => (
           <React.Fragment key={d.key}>
             <Circle cx={d.x} cy={d.y} r={d.r + 3} fill={AURA_GLOW} fillOpacity={0.16} />

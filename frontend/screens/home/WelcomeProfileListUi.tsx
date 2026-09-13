@@ -1,5 +1,6 @@
 import React from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
+import AdaptiveText from '../../components/AdaptiveText';
 import { Ionicons } from '@expo/vector-icons';
 import {
   LIVI,
@@ -48,7 +49,7 @@ export function WelcomeProfileSection({
 }) {
   return (
     <View style={[styles.sectionWrap, compact && styles.sectionWrapCompact, dense && styles.sectionWrapDense]}>
-      {title ? <Text style={styles.sectionTitle}>{title}</Text> : null}
+      {title ? <AdaptiveText style={styles.sectionTitle}>{title}</AdaptiveText> : null}
       <View style={styles.sectionBody}>{children}</View>
     </View>
   );
@@ -118,22 +119,22 @@ export function WelcomeProfileRow({
       >
         <View style={styles.rowLeft}>
           <Ionicons name={icon} size={compact ? ROW_ICON_SIZE_COMPACT : ROW_ICON_SIZE} color={iconColor} />
-          <Text
+          <AdaptiveText
             style={[styles.rowLabel, compact && styles.rowLabelCompact, { color: labelColor }]}
             numberOfLines={1}
           >
             {label}
-          </Text>
+          </AdaptiveText>
         </View>
         <View style={styles.rowRight}>
           {value ? (
-            <Text style={[styles.rowValue, largeValue && styles.rowValueLarge]} numberOfLines={1}>
+            <AdaptiveText style={[styles.rowValue, largeValue && styles.rowValueLarge]} numberOfLines={1}>
               {value}
-            </Text>
+            </AdaptiveText>
           ) : null}
           {typeof badgeCount === 'number' && badgeCount > 0 ? (
             <View style={styles.countBadge}>
-              <Text style={styles.countBadgeText}>{badgeCount > 99 ? '99+' : String(badgeCount)}</Text>
+              <AdaptiveText style={styles.countBadgeText}>{badgeCount > 99 ? '99+' : String(badgeCount)}</AdaptiveText>
             </View>
           ) : null}
           {showChevron && onPress ? (
@@ -203,7 +204,7 @@ export function WelcomeProfileLanguageRow({
         accessibilityState={{ selected: !!selected }}
       >
         <View style={[styles.rowLeft, styles.rowLeftLanguage]}>
-          <Text
+          <AdaptiveText
             style={[
               styles.rowLabel,
               { color: WELCOME_HEADER_TITLE },
@@ -212,12 +213,12 @@ export function WelcomeProfileLanguageRow({
             numberOfLines={1}
           >
             {nativeName}
-          </Text>
+          </AdaptiveText>
         </View>
         <View style={styles.rowRight}>
-          <Text style={styles.rowValue} numberOfLines={1}>
+          <AdaptiveText style={styles.rowValue} numberOfLines={1}>
             {englishName}
-          </Text>
+          </AdaptiveText>
           {selected ? (
             <Ionicons
               name="checkmark"

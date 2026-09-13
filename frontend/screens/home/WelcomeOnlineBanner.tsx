@@ -1,5 +1,6 @@
 import React, { memo, useMemo } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
+import AdaptiveText from '../../components/AdaptiveText';
 import type { Lang } from '../../utils/i18n';
 import AvatarImage from '../../components/AvatarImage';
 import { LIVI, WELCOME_GLASS_BORDER, WELCOME_GLASS_SURFACE, WELCOME_HEADER_TITLE, WELCOME_MUTED_TEXT, WELCOME_STAGE_BG } from './constants';
@@ -59,13 +60,13 @@ function WelcomeOnlineBannerInner({
       <View style={styles.textCol}>
         <View style={styles.onlineRow}>
           <View style={styles.onlineDot} />
-          <Text style={[styles.onlineWord, compact && styles.onlineWordCompact]} numberOfLines={1}>
+          <AdaptiveText style={[styles.onlineWord, compact && styles.onlineWordCompact]} numberOfLines={1}>
             {onlineLabel}
-          </Text>
+          </AdaptiveText>
         </View>
-        <Text style={[styles.countText, compact && styles.countTextCompact]} numberOfLines={2}>
+        <AdaptiveText style={[styles.countText, compact && styles.countTextCompact]} numberOfLines={2}>
           {countLine}
-        </Text>
+        </AdaptiveText>
       </View>
       <View style={styles.stack}>
         {stackPeers.map((peer, index) => {

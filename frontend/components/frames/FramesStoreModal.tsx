@@ -5,7 +5,6 @@ import {
   Platform,
   Pressable,
   StyleSheet,
-  Text,
   useWindowDimensions,
   View,
 } from 'react-native';
@@ -16,6 +15,8 @@ import { MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
 import Carousel from 'react-native-reanimated-carousel';
 import { Extrapolation, interpolate } from 'react-native-reanimated';
 import PngFireFrame, { type PngFireFrameHandle } from './PngFireFrame';
+import AdaptiveText from '../AdaptiveText';
+import FitText from '../FitText';
 import { WelcomeStageBackground } from '../../screens/home/WelcomeStageBackground';
 import {
   CROWN_GOLD,
@@ -259,7 +260,9 @@ export function FramesStoreModal({ visible, onClose, onUnlock }: Props) {
           <View style={styles.header}>
             <View style={styles.titleRow}>
               <MaterialCommunityIcons name="crown" size={26} color={CROWN_GOLD} />
-              <Text style={styles.title}>LEGENDARY</Text>
+              <FitText style={styles.title} minimumFontScale={0.8}>
+                LEGENDARY
+              </FitText>
             </View>
             <Pressable
               onPress={onClose}
@@ -318,8 +321,12 @@ export function FramesStoreModal({ visible, onClose, onUnlock }: Props) {
               )}
             </Pressable>
 
-            <Text style={styles.frameTitle}>{activeFrame.label}</Text>
-            <Text style={styles.subtitle}>{activeFrame.blurb}</Text>
+            <FitText style={styles.frameTitle} minimumFontScale={0.75}>
+              {activeFrame.label}
+            </FitText>
+            <AdaptiveText style={styles.subtitle} numberOfLines={3}>
+              {activeFrame.blurb}
+            </AdaptiveText>
 
             <View style={styles.carouselWrap}>
               <Carousel
@@ -335,15 +342,15 @@ export function FramesStoreModal({ visible, onClose, onUnlock }: Props) {
                 renderItem={({ item }) => (
                   <View style={styles.carouselItem}>
                     <CoverFlowCard colors={item.colors} locked={item.locked} kind={item.kind} />
-                    <Text
+                    <FitText
                       style={[
                         styles.carouselLabel,
                         item.key === activeFrame.key && styles.carouselLabelActive,
                       ]}
-                      numberOfLines={1}
+                      minimumFontScale={0.7}
                     >
                       {item.label}
-                    </Text>
+                    </FitText>
                   </View>
                 )}
               />
@@ -390,15 +397,18 @@ export function FramesStoreModal({ visible, onClose, onUnlock }: Props) {
                     size={22}
                     color={activeFrame.locked ? '#C5CCD6' : '#FFC062'}
                   />
-                  <Text style={[styles.ctaText, activeFrame.locked && styles.ctaTextLocked]}>
+                  <FitText
+                    style={[styles.ctaText, activeFrame.locked && styles.ctaTextLocked]}
+                    minimumFontScale={0.7}
+                  >
                     {activeFrame.locked ? 'Скоро в коллекции' : 'Разблокировать · 299 ₽'}
-                  </Text>
+                  </FitText>
                 </View>
               </LinearGradient>
             </Pressable>
-            <Text style={styles.limited}>
+            <FitText style={styles.limited} minimumFontScale={0.75}>
               {activeFrame.locked ? 'Следи за обновлениями' : 'Ограниченная серия · навсегда твоя'}
-            </Text>
+            </FitText>
           </View>
         </View>
       </View>
@@ -428,6 +438,8 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     letterSpacing: 1.4,
+    flexShrink: 1,
+    minWidth: 0,
   },
   closeBtn: {
     width: 28,
@@ -461,7 +473,13 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.35)',
     borderRadius: 66,
   },
-  frameTitle: { marginTop: 12, color: WELCOME_HEADER_TITLE, fontSize: 24, fontWeight: '800' },
+  frameTitle: {
+    marginTop: 12,
+    color: WELCOME_HEADER_TITLE,
+    fontSize: 24,
+    fontWeight: '800',
+    maxWidth: '92%',
+  },
   subtitle: {
     marginTop: 6,
     color: WELCOME_MUTED_TEXT,
@@ -530,11 +548,25 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 9,
-    paddingHorizontal: 24,
+    paddingHorizontal: 20,
+    minWidth: 0,
   },
-  ctaText: { color: '#FFE0B8', fontSize: 17, fontWeight: '800' },
+  ctaText: {
+    color: '#FFE0B8',
+    fontSize: 17,
+    fontWeight: '800',
+    flexShrink: 1,
+    minWidth: 0,
+    textAlign: 'center',
+  },
   ctaTextLocked: { color: '#D1D5DB', fontWeight: '700' },
-  limited: { marginTop: 6, color: WELCOME_MUTED_TEXT, fontSize: 12 },
+  limited: {
+    marginTop: 6,
+    color: WELCOME_MUTED_TEXT,
+    fontSize: 12,
+    maxWidth: '92%',
+    textAlign: 'center',
+  },
 });
 
 export default FramesStoreModal;

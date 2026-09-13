@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef } from 'react';
-import { Animated, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Animated, Pressable, StyleSheet, View } from 'react-native';
+import AdaptiveText from '../../components/AdaptiveText';
 import { FlatList, Swipeable } from 'react-native-gesture-handler';
 import { IconButton } from 'react-native-paper';
 import { Ionicons } from '@expo/vector-icons';
@@ -247,11 +248,11 @@ function FriendsListCoreInner(props: FriendsListCoreProps) {
       return (
         <View style={welcomeListStyles.statusRow}>
           {!isWelcome ? <View style={welcomeListStyles.onlineDot} /> : null}
-          <Text style={[styles.friendStatus, { color: LIVI.green }]}>{L('online')}</Text>
+          <AdaptiveText style={[styles.friendStatus, { color: LIVI.green }]}>{L('online')}</AdaptiveText>
         </View>
       );
     }
-    return <Text style={[styles.friendStatus, { color: LIVI.red }]}>{L('offline')}</Text>;
+    return <AdaptiveText style={[styles.friendStatus, { color: LIVI.red }]}>{L('offline')}</AdaptiveText>;
   };
 
   const renderNameRow = (item: Friend, displayName: string, avatarLetter: string) => {
@@ -281,15 +282,15 @@ function FriendsListCoreInner(props: FriendsListCoreProps) {
               : [styles.nameCol, styles.friendRowNameFlex, { paddingRight: 8 }]
           }
         >
-          <Text style={[styles.friendName, isWelcome && welcomeListStyles.friendName]}>{displayName}</Text>
+          <AdaptiveText style={[styles.friendName, isWelcome && welcomeListStyles.friendName]}>{displayName}</AdaptiveText>
           {isWelcome ? (
             renderStatusLine(item)
           ) : busy ? (
             <FriendBusyStatusLabel label={L('busy')} styles={styles} />
           ) : (
-            <Text style={[styles.friendStatus, { color: item.online ? LIVI.green : LIVI.red }]}>
+            <AdaptiveText style={[styles.friendStatus, { color: item.online ? LIVI.green : LIVI.red }]}>
               {item.online ? L('online') : L('offline')}
-            </Text>
+            </AdaptiveText>
           )}
         </View>
       </>
@@ -553,7 +554,7 @@ function FriendsListCoreInner(props: FriendsListCoreProps) {
       ListEmptyComponent={
         initialized ? (
           <View style={isWelcome ? welcomeListStyles.emptyWrap : { padding: 16 }}>
-            <Text
+            <AdaptiveText
               style={
                 isWelcome
                   ? welcomeListStyles.emptyText
@@ -561,7 +562,7 @@ function FriendsListCoreInner(props: FriendsListCoreProps) {
               }
             >
               {isWelcome ? L('friendsEmpty') : `👤 ${L('friendsEmpty')}`}
-            </Text>
+            </AdaptiveText>
           </View>
         ) : null
       }

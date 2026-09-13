@@ -7,11 +7,11 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
-  Text,
   View,
   BackHandler,
   useWindowDimensions,
 } from 'react-native';
+import AdaptiveText from '../../components/AdaptiveText';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { Image as ExpoImage } from 'expo-image';
@@ -440,7 +440,7 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
         />
       ) : (
         <View style={[homeStyles.centerAvatarImg, { alignItems: 'center', justifyContent: 'center' }]}>
-          <Text style={{ color: LIVI.titan, fontSize: avatarSize > 110 ? 34 : 28, fontWeight: '500' }}>{letter}</Text>
+          <AdaptiveText style={{ color: LIVI.titan, fontSize: avatarSize > 110 ? 34 : 28, fontWeight: '500' }}>{letter}</AdaptiveText>
         </View>
       )}
     </View>
@@ -460,9 +460,9 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
       >
         <Ionicons name="chevron-back" size={22} color={LIVI.white} />
       </Pressable>
-      <Text style={styles.titleCenter} numberOfLines={2}>
+      <AdaptiveText style={styles.titleCenter} numberOfLines={2}>
         {t('chatWallpaperMessages', lang)}
-      </Text>
+      </AdaptiveText>
       <View style={styles.headerBackSpacer} />
     </View>
   );
@@ -488,7 +488,7 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
 
   const headerHub = (
     <View style={styles.header}>
-      <Text style={styles.title}>{t('tabSettings', lang)}</Text>
+      <AdaptiveText style={styles.title}>{t('tabSettings', lang)}</AdaptiveText>
       <WelcomeCrownButton
         myUserId={myUserId}
         myAvatarVer={myAvatarVer}
@@ -508,7 +508,7 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
       >
         <Ionicons name="chevron-back" size={22} color={LIVI.white} />
       </Pressable>
-      <Text style={styles.titleCenter}>{subScreenTitle}</Text>
+      <AdaptiveText style={styles.titleCenter}>{subScreenTitle}</AdaptiveText>
       <View style={styles.headerBackSpacer} />
     </View>
   );
@@ -522,7 +522,7 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
         accessibilityRole="button"
       >
         <Ionicons name="trash-outline" size={22} color="#A63A48" />
-        <Text style={styles.logOutBtnText}>{t('welcomeDeleteProfile', lang)}</Text>
+        <AdaptiveText style={styles.logOutBtnText}>{t('welcomeDeleteProfile', lang)}</AdaptiveText>
       </Pressable>
     </View>
   );
@@ -675,7 +675,7 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
         />
         <View style={styles.accountActions}>
           <Pressable onPress={onClearNick} disabled={busy || !displayNick} style={styles.accountSecondary}>
-            <Text style={styles.accountSecondaryText}>{t('deleteNick', lang)}</Text>
+            <AdaptiveText style={styles.accountSecondaryText}>{t('deleteNick', lang)}</AdaptiveText>
           </Pressable>
           <Pressable
             onPress={() => {
@@ -685,7 +685,7 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
             disabled={busy}
             style={[styles.accountSave, savedToast && styles.accountSaveDone]}
           >
-            <Text style={styles.accountSaveText}>{savedToast ? t('saved', lang) : t('save', lang)}</Text>
+            <AdaptiveText style={styles.accountSaveText}>{savedToast ? t('saved', lang) : t('save', lang)}</AdaptiveText>
           </Pressable>
         </View>
       </View>
@@ -745,26 +745,26 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
     <View style={styles.subScreenBlockOffset}>
       <WelcomeProfileSection>
       <View style={styles.helpCardInner}>
-        <Text style={styles.helpMsg}>{t('profileHelpMessage', lang)}</Text>
+        <AdaptiveText style={styles.helpMsg}>{t('profileHelpMessage', lang)}</AdaptiveText>
         <Pressable
           onPress={() => copyEmail(SUPPORT_EMAIL)}
           style={({ pressed }) => [styles.helpEmailRow, pressed && styles.helpEmailRowPressed]}
           accessibilityRole="button"
         >
-          <Text style={styles.helpEmailText}>{SUPPORT_EMAIL}</Text>
-          <Text style={styles.helpEmailHint}>
+          <AdaptiveText style={styles.helpEmailText}>{SUPPORT_EMAIL}</AdaptiveText>
+          <AdaptiveText style={styles.helpEmailHint}>
             {copiedEmail === SUPPORT_EMAIL ? t('profileEmailCopied', lang) : t('profileCopyEmail', lang)}
-          </Text>
+          </AdaptiveText>
         </Pressable>
         <Pressable
           onPress={() => copyEmail(SUPPORT_EMAIL_2)}
           style={({ pressed }) => [styles.helpEmailRow, pressed && styles.helpEmailRowPressed]}
           accessibilityRole="button"
         >
-          <Text style={styles.helpEmailText}>{SUPPORT_EMAIL_2}</Text>
-          <Text style={styles.helpEmailHint}>
+          <AdaptiveText style={styles.helpEmailText}>{SUPPORT_EMAIL_2}</AdaptiveText>
+          <AdaptiveText style={styles.helpEmailHint}>
             {copiedEmail === SUPPORT_EMAIL_2 ? t('profileEmailCopied', lang) : t('profileCopyEmail', lang)}
-          </Text>
+          </AdaptiveText>
         </Pressable>
       </View>
     </WelcomeProfileSection>
@@ -778,7 +778,7 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
         <View style={styles.supportHeroIcon}>
           <Ionicons name="heart-outline" size={34} color={WELCOME_BRAND_VI_FILL_GRADIENT[1]} />
         </View>
-        <Text style={styles.supportHeroText}>{t('supportProjectSubtitle', lang)}</Text>
+        <AdaptiveText style={styles.supportHeroText}>{t('supportProjectSubtitle', lang)}</AdaptiveText>
       </View>
       <View style={styles.supportTiles}>
         <Pressable
@@ -797,8 +797,8 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
             />
           </View>
           <View style={styles.supportTileText}>
-            <Text style={styles.supportTileTitle}>Boosty</Text>
-            <Text style={styles.supportTileHint}>boosty.to</Text>
+            <AdaptiveText style={styles.supportTileTitle}>Boosty</AdaptiveText>
+            <AdaptiveText style={styles.supportTileHint}>boosty.to</AdaptiveText>
           </View>
           <Ionicons name="chevron-forward" size={20} color={WELCOME_PROFILE_ROW_ICON} />
         </Pressable>
@@ -818,8 +818,8 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
             />
           </View>
           <View style={styles.supportTileText}>
-            <Text style={styles.supportTileTitle}>Patreon</Text>
-            <Text style={styles.supportTileHint}>patreon.com</Text>
+            <AdaptiveText style={styles.supportTileTitle}>Patreon</AdaptiveText>
+            <AdaptiveText style={styles.supportTileHint}>patreon.com</AdaptiveText>
           </View>
           <Ionicons name="chevron-forward" size={20} color={WELCOME_PROFILE_ROW_ICON} />
         </Pressable>

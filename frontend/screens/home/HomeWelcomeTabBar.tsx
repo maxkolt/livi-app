@@ -1,9 +1,10 @@
 import React, { memo, useRef } from 'react';
-import { AppState, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { AppState, Platform, Pressable, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { logger } from '../../utils/logger';
 import { shouldSkipHomeUiSettle } from '../../utils/globalEvents';
+import FitText from '../../components/FitText';
 import {
   WELCOME_BRAND_VI_FILL_GRADIENT,
   WELCOME_CHROME_EDGE_RADIUS,
@@ -169,16 +170,16 @@ function HomeWelcomeTabBarInner({
                   {tab.renderIcon(active, iconColor)}
                   {showDot ? <View style={styles.badge} pointerEvents="none" /> : null}
                 </View>
-                <Text
+                <FitText
                   style={[
                     styles.label,
                     active && styles.labelActive,
                     { color: labelColor },
                   ]}
-                  allowFontScaling={false}
+                  minimumFontScale={0.7}
                 >
                   {tab.label}
-                </Text>
+                </FitText>
               </View>
             </Pressable>
           );
@@ -218,6 +219,8 @@ const styles = StyleSheet.create({
     gap: 3,
     paddingVertical: 6,
     paddingHorizontal: 2,
+    width: '100%',
+    minWidth: 0,
   },
   iconWrap: {
     position: 'relative',
@@ -245,6 +248,8 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '500',
     letterSpacing: 0.05,
+    textAlign: 'center',
+    maxWidth: '100%',
   },
   labelActive: {
     fontWeight: '600',

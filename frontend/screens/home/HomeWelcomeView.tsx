@@ -6,10 +6,10 @@ import {
   Platform,
   Pressable,
   StyleSheet,
-  Text,
   View,
   type LayoutChangeEvent,
 } from 'react-native';
+import AdaptiveText from '../../components/AdaptiveText';
 import * as Haptics from 'expo-haptics';
 import { CHROME_PERIMETER_GLOW_LAYOUT_INSET, LIVI, SEARCH_CTA_TABLET_MIN_WIDTH, WELCOME_HEADER_TITLE, WELCOME_MUTED_TEXT } from './constants';
 import { BrandTitleWithOutline } from './chrome';
@@ -316,9 +316,9 @@ function HomeWelcomeViewInner({
         },
       ]}
     >
-      <Text style={[styles.noticeText, { color: isDark ? 'rgba(240,241,243,0.92)' : 'rgba(47,55,66,0.9)' }]}>
+      <AdaptiveText style={[styles.noticeText, { color: isDark ? 'rgba(240,241,243,0.92)' : 'rgba(47,55,66,0.9)' }]}>
         {L('finishCurrentCallFirst')}
-      </Text>
+      </AdaptiveText>
     </View>
   ) : null;
 
@@ -408,7 +408,7 @@ function HomeWelcomeViewInner({
             onLayout={syncBadgeGap}
             style={[welcomeStyles.copyBlock, { marginBottom: space.copyMarginBottom }]}
           >
-            <Text
+            <AdaptiveText
               style={[
                 welcomeStyles.heading,
                 phoneLandscape && welcomeStyles.headingCompact,
@@ -417,8 +417,8 @@ function HomeWelcomeViewInner({
               numberOfLines={2}
             >
               {L('welcomeSearchHeading')}
-            </Text>
-            <Text
+            </AdaptiveText>
+            <AdaptiveText
               style={[
                 welcomeStyles.matching,
                 phoneLandscape && welcomeStyles.matchingCompact,
@@ -428,7 +428,7 @@ function HomeWelcomeViewInner({
               numberOfLines={3}
             >
               {L('welcomeSearchMatching')}
-            </Text>
+            </AdaptiveText>
           </View>
 
           <View

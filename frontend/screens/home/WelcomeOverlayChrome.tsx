@@ -3,11 +3,11 @@ import {
   Platform,
   Pressable,
   StyleSheet,
-  Text,
   View,
   type StyleProp,
   type ViewStyle,
 } from 'react-native';
+import AdaptiveText from '../../components/AdaptiveText';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
@@ -106,14 +106,14 @@ export function WelcomeOverlayPill({
       ]}
     >
       {leading}
-      <Text
+      <AdaptiveText
         style={[
           styles.pillLabel,
           variant === 'secondary' && styles.pillLabelSecondary,
         ]}
       >
         {label}
-      </Text>
+      </AdaptiveText>
     </Pressable>
   );
 }

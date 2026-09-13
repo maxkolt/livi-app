@@ -6,11 +6,11 @@ import {
   Platform,
   Pressable,
   StyleSheet,
-  Text,
   TextInput,
   TouchableWithoutFeedback,
   View,
 } from 'react-native';
+import AdaptiveText from '../../components/AdaptiveText';
 import { FlatList } from 'react-native-gesture-handler';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
@@ -427,21 +427,21 @@ function HomeWelcomeChatsViewInner({
 
               <View style={styles.bodyCol}>
                 <View style={styles.nameRow}>
-                  <Text style={styles.name} numberOfLines={1}>
+                  <AdaptiveText style={styles.name} numberOfLines={1}>
                     {displayName}
-                  </Text>
-                  {timeLabel ? <Text style={styles.time}>{timeLabel}</Text> : null}
+                  </AdaptiveText>
+                  {timeLabel ? <AdaptiveText style={styles.time}>{timeLabel}</AdaptiveText> : null}
                 </View>
                 <View style={styles.previewRow}>
-                  <Text
+                  <AdaptiveText
                     style={[styles.preview, unread > 0 && styles.previewUnread]}
                     numberOfLines={1}
                   >
                     {previewText}
-                  </Text>
+                  </AdaptiveText>
                   {unread > 0 ? (
                     <View style={styles.unreadBadge}>
-                      <Text style={styles.unreadBadgeText}>{unread > 99 ? '99+' : unread}</Text>
+                      <AdaptiveText style={styles.unreadBadgeText}>{unread > 99 ? '99+' : unread}</AdaptiveText>
                     </View>
                   ) : null}
                 </View>
@@ -481,7 +481,7 @@ function HomeWelcomeChatsViewInner({
                 onPress={searchOpen ? dismissSearchFromEmptyTap : undefined}
                 accessibilityRole="header"
               >
-                <Text style={styles.title}>{L('tabChat')}</Text>
+                <AdaptiveText style={styles.title}>{L('tabChat')}</AdaptiveText>
               </Pressable>
               <View style={styles.headerActions}>
                 <Pressable
@@ -542,7 +542,7 @@ function HomeWelcomeChatsViewInner({
               accessibilityRole="button"
               accessibilityState={{ selected: filter === 'all' }}
             >
-              <Text
+              <AdaptiveText
                 style={styles.segmentLabel}
                 numberOfLines={1}
                 allowFontScaling={false}
@@ -550,7 +550,7 @@ function HomeWelcomeChatsViewInner({
                 minimumFontScale={0.85}
               >
                 {L('friendsSegmentAll')}
-              </Text>
+              </AdaptiveText>
             </Pressable>
             <Pressable
               style={[styles.segmentBtn, filter === 'unread' && styles.segmentBtnActive]}
@@ -561,7 +561,7 @@ function HomeWelcomeChatsViewInner({
               accessibilityRole="button"
               accessibilityState={{ selected: filter === 'unread' }}
             >
-              <Text
+              <AdaptiveText
                 style={styles.segmentLabel}
                 numberOfLines={1}
                 allowFontScaling={false}
@@ -569,7 +569,7 @@ function HomeWelcomeChatsViewInner({
                 minimumFontScale={0.85}
               >
                 {L('chatsSegmentUnread')}
-              </Text>
+              </AdaptiveText>
             </Pressable>
           </View>
 
@@ -596,7 +596,7 @@ function HomeWelcomeChatsViewInner({
             })}
             ListEmptyComponent={
               <View style={styles.emptyWrap}>
-                <Text style={styles.emptyText}>{emptyLabel}</Text>
+                <AdaptiveText style={styles.emptyText}>{emptyLabel}</AdaptiveText>
               </View>
             }
           />

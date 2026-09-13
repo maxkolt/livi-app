@@ -7,11 +7,11 @@ import {
   Platform,
   Pressable,
   StyleSheet,
-  Text,
   TextInput,
   TouchableWithoutFeedback,
   View,
 } from 'react-native';
+import AdaptiveText from '../../components/AdaptiveText';
 import { FlatList } from 'react-native-gesture-handler';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import AvatarImage from '../../components/AvatarImage';
@@ -97,7 +97,7 @@ function MissedCountBadge({ count }: { count: number }) {
   if (count <= 0) return null;
   return (
     <View style={styles.missedBadge}>
-      <Text style={styles.missedBadgeText}>{count > 99 ? '99+' : count}</Text>
+      <AdaptiveText style={styles.missedBadgeText}>{count > 99 ? '99+' : count}</AdaptiveText>
     </View>
   );
 }
@@ -547,7 +547,7 @@ function HomeWelcomeCallsViewInner({
                       }
                     />
                   ) : (
-                    <Text style={styles.avatarFallback}>{avatarFallback}</Text>
+                    <AdaptiveText style={styles.avatarFallback}>{avatarFallback}</AdaptiveText>
                   )}
                 </View>
                 {!selectMode && friend?.online ? <View style={styles.onlineDot} /> : null}
@@ -555,10 +555,10 @@ function HomeWelcomeCallsViewInner({
 
               <View style={styles.bodyCol}>
                 <View style={styles.nameRow}>
-                  <Text style={[styles.name, statusTone && styles.nameMissed]} numberOfLines={1}>
+                  <AdaptiveText style={[styles.name, statusTone && styles.nameMissed]} numberOfLines={1}>
                     {displayName}
-                  </Text>
-                  {timeLabel ? <Text style={styles.time}>{timeLabel}</Text> : null}
+                  </AdaptiveText>
+                  {timeLabel ? <AdaptiveText style={styles.time}>{timeLabel}</AdaptiveText> : null}
                 </View>
                 {statusLabel ? (
                   <View style={styles.statusRow}>
@@ -567,15 +567,15 @@ function HomeWelcomeCallsViewInner({
                       size={14}
                       color={statusColor}
                     />
-                    <Text style={[styles.status, statusTone && styles.statusMissed]} numberOfLines={1}>
+                    <AdaptiveText style={[styles.status, statusTone && styles.statusMissed]} numberOfLines={1}>
                       {statusLabel}
-                    </Text>
+                    </AdaptiveText>
                   </View>
                 ) : (
                   <View style={styles.statusRow}>
-                    <Text style={styles.status} numberOfLines={1}>
+                    <AdaptiveText style={styles.status} numberOfLines={1}>
                       {friend?.online ? L('online') : L('offline')}
-                    </Text>
+                    </AdaptiveText>
                   </View>
                 )}
               </View>
@@ -625,7 +625,7 @@ function HomeWelcomeCallsViewInner({
                 onPress={searchOpen ? dismissSearchFromEmptyTap : undefined}
                 accessibilityRole="header"
               >
-                <Text style={styles.title}>{L('tabCalls')}</Text>
+                <AdaptiveText style={styles.title}>{L('tabCalls')}</AdaptiveText>
               </Pressable>
               <View style={styles.headerActions}>
                 <Pressable
@@ -687,7 +687,7 @@ function HomeWelcomeCallsViewInner({
                 accessibilityRole="button"
                 accessibilityState={{ selected: filter === 'all' }}
               >
-                <Text
+                <AdaptiveText
                   style={styles.segmentLabel}
                   numberOfLines={1}
                   allowFontScaling={false}
@@ -695,7 +695,7 @@ function HomeWelcomeCallsViewInner({
                   minimumFontScale={0.85}
                 >
                   {L('friendsSegmentAll')}
-                </Text>
+                </AdaptiveText>
               </Pressable>
               <Pressable
                 style={[styles.segmentBtn, filter === 'missed' && styles.segmentBtnActive]}
@@ -707,7 +707,7 @@ function HomeWelcomeCallsViewInner({
                 accessibilityState={{ selected: filter === 'missed' }}
               >
                 <View style={styles.segmentLabelRow}>
-                  <Text
+                  <AdaptiveText
                     style={styles.segmentLabel}
                     numberOfLines={1}
                     allowFontScaling={false}
@@ -715,7 +715,7 @@ function HomeWelcomeCallsViewInner({
                     minimumFontScale={0.85}
                   >
                     {L('callsSegmentMissed')}
-                  </Text>
+                  </AdaptiveText>
                   {/* На Calls бейдж не нужен — журнал уже на экране. */}
                   {active ? null : <MissedCountBadge count={missedTotal} />}
                 </View>
@@ -746,7 +746,7 @@ function HomeWelcomeCallsViewInner({
             })}
             ListEmptyComponent={
               <View style={styles.emptyWrap}>
-                <Text style={styles.emptyText}>{emptyLabel}</Text>
+                <AdaptiveText style={styles.emptyText}>{emptyLabel}</AdaptiveText>
               </View>
             }
           />
