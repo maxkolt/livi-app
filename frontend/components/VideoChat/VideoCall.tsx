@@ -683,6 +683,10 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     (opts?: { fromPiP?: boolean; skipNavigation?: boolean }) => void | Promise<void>
   >(() => {});
   const toggleCamInProgressRef = useRef(false);
+  /** Video→audio: блокирует повторный toggleCam (remount-under-finger / stale enable). */
+  const returnToAudioInProgressRef = useRef(false);
+  /** Инкремент отменяет отложенный runHeavyAfterPaint (rAF leave-audio). */
+  const toggleCamGenerationRef = useRef(0);
   const remoteCamOnRef = useRef(false);
 
   /** Обе камеры off → audio shell + beforeVideo (ухо), иначе громкая с video pin остаётся. */
@@ -708,6 +712,73 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     const peerCam = s.getRemoteCamEnabled?.() === true;
     if (localCam || peerCam) return;
     void returnToAudioCallUiRef.current?.({ skipNavigation: true });
+  }, [route?.params?.directCall]);
+
+  /**
+   * Своя камера off, peer ещё с видео → остаёмся на video UI как зритель,
+   * маршрут = beforeVideo (обычно EARPIECE), не product SPEAKER.
+   */
+  const restoreViewerAudioRouteAfterLocalCamOff = useCallback((session?: VideoCallSession | null) => {
+    if (!route?.params?.directCall) return;
+    if (inAudioOnlyUiRef.current || isInAudioOnlyCallUi()) return;
+    if (isInactiveStateRef.current || isEndingCallRef.current || wasFriendCallEndedRef.current) {
+      return;
+    }
+    try {
+      if ((global as any).__pipInSystemModeRef?.current === true) return;
+      if ((global as any).__pipVisibleRef?.current === true) return;
+    } catch {}
+    const s =
+      session ||
+      ((sessionRef.current ||
+        (global as any).__webrtcSessionRef?.current) as VideoCallSession | null);
+    if (!s || s.isEnded?.()) return;
+    if (s.getIsCamOn?.() === true) return;
+    if (s.getRemoteCamEnabled?.() !== true) return;
+
+    const extNow = readActiveExternalCallAudioRoute(userRouteRef.current);
+    const beforeVideo = readDirectCallAudioRouteBeforeVideo();
+    const preservedRoute: InCallAudioRoute =
+      (extNow && isExternalHeadsetRoute(extNow) ? extNow : null) ||
+      (beforeVideo === 'EARPIECE' ||
+      beforeVideo === 'SPEAKER_PHONE' ||
+      (beforeVideo && isExternalHeadsetRoute(beforeVideo))
+        ? beforeVideo
+        : null) ||
+      'EARPIECE';
+
+    cancelScheduledCallAudioRouteReappliesMatching(['direct_call_video_ui_route']);
+    try {
+      clearDirectCallVideoExpandAudioPrepared();
+    } catch {}
+    clearCallAudioRouteUiLock();
+
+    userRouteRef.current = preservedRoute;
+    speakerOnRef.current = preservedRoute === 'SPEAKER_PHONE';
+    setPersistedCallAudioRoute(preservedRoute);
+    if (isExternalHeadsetRoute(preservedRoute)) {
+      setUserSelectedCallAudioRoute(preservedRoute);
+      markUserSelectedExternalCallAudioRoute(preservedRoute);
+    } else if (preservedRoute === 'EARPIECE' || preservedRoute === 'SPEAKER_PHONE') {
+      armCallAudioRouteUiLock(preservedRoute);
+      setUserSelectedCallAudioRoute(preservedRoute);
+      if (preservedRoute === 'SPEAKER_PHONE') {
+        rememberManualBuiltinCallAudioRoute('SPEAKER_PHONE');
+      }
+      void applyCallAudioOutputRouteNow(preservedRoute, {
+        media: 'audio',
+        forceBuiltIn: true,
+      });
+      try {
+        (global as any).__applyCallAudioRouteFromParentRef?.current?.(
+          preservedRoute,
+          'local_cam_off_viewer_restore',
+        );
+      } catch {}
+    }
+    try {
+      markCallPerf('ui_local_cam_off_viewer_restore', { preservedRoute });
+    } catch {}
   }, [route?.params?.directCall]);
 
   const syncPeerVideoInviteHint = useCallback(() => {}, []);
@@ -3476,12 +3547,13 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
             return;
           }
           setRemoteCamOn(enabled);
-          // Только true→false peer cam: не реагировать на notify(false) из enableRemoteVideoConsumption.
-          if (!enabled && remoteCamOnRef.current) {
+          // Peer cam off → если своя тоже off, audio UI + beforeVideo (ухо).
+          // Не требовать remoteCamOnRef edge: false-positive notify мог уже сбросить ref.
+          if (!enabled) {
             remoteCamOnRef.current = false;
             maybeReturnToAudioWhenBothCamsOff(sessionRef.current);
           } else {
-            remoteCamOnRef.current = enabled;
+            remoteCamOnRef.current = true;
           }
           // ВАЖНО: Не дергаем remoteViewKey из UI.
           // Этим управляет сессия через событие remoteViewKeyChanged, иначе на Android легко получить мерцания из-за частых remount RTCView.
@@ -4179,12 +4251,12 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
           return;
         }
         setRemoteCamOn(enabled);
-        // Только true→false peer cam: не реагировать на notify(false) из enableRemoteVideoConsumption.
-        if (!enabled && remoteCamOnRef.current) {
+        // Peer cam off → если своя тоже off, audio UI + beforeVideo (ухо).
+        if (!enabled) {
           remoteCamOnRef.current = false;
           maybeReturnToAudioWhenBothCamsOff(sessionRef.current);
         } else {
-          remoteCamOnRef.current = enabled;
+          remoteCamOnRef.current = true;
         }
       },
       onPeerDirectCallVideoUiChange: handlePeerDirectCallVideoUiChange,
@@ -5232,14 +5304,25 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
   const toggleCam = useCallback(() => {
     if (localExternalHoldRef.current) return;
     if (toggleCamInProgressRef.current) return;
+    // Во время video→audio не принимать cam-on (иконка SPEAKER↔EARPIECE).
+    if (returnToAudioInProgressRef.current) return;
     toggleCamInProgressRef.current = true;
     const session = sessionRef.current || (global as any).__webrtcSessionRef?.current;
+    // Источник истины — session: returnToAudio мог уже обнулить React camOn при ещё живой камере.
+    const sessionCamOn =
+      session && typeof session.getIsCamOn === 'function' ? session.getIsCamOn() === true : !!camOn;
+    const enablingCam = !sessionCamOn;
+    const onAudioShell = !!(inAudioOnlyUiRef.current || isInAudioOnlyCallUi());
+    // Leave-audio только при реальном включении камеры — иначе cam-off на audio shell
+    // ошибочно pin'ит SPEAKER и рисует video shell.
+    const leavingAudioOnlyUi = onAudioShell && enablingCam;
+    const toggleGen = ++toggleCamGenerationRef.current;
     const toggleSpan = callPerfSpan('ui_toggle_cam', {
-      camOn,
-      leavingAudioOnly: !!(inAudioOnlyUiRef.current || isInAudioOnlyCallUi()),
+      camOn: sessionCamOn,
+      leavingAudioOnly: leavingAudioOnlyUi,
+      enablingCam,
     });
     if (session && typeof session.toggleCam === 'function') {
-      const leavingAudioOnlyUi = inAudioOnlyUiRef.current || isInAudioOnlyCallUi();
       // Снимок маршрута ДО stayOnVideo / clear audio flags — иначе remember early-return
       // или подхватывает product SPEAKER с video pin при быстром expand→return.
       if (leavingAudioOnlyUi) {
@@ -5248,8 +5331,6 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       if (!inAudioOnlyUiRef.current) {
         stayOnVideoCallUiRef.current = true;
       }
-      // Включаем камеру на уже открытом video UI (в т.ч. после PiP): userExpand могли сбросить как stale.
-      const enablingCam = !camOn;
       if (enablingCam || leavingAudioOnlyUi) {
         markDirectCallUserRequestedVideoExpand();
         stayOnVideoCallUiRef.current = true;
@@ -5286,7 +5367,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
           if (pip.visible) pip.updatePiPState({ localCamOn: true });
           return true;
         }
-        const next = !prev;
+        const next = enablingCam;
         if (next) {
           setLocalRenderKey((k: number) => k + 1);
         }
@@ -5301,6 +5382,12 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       } catch {}
 
       const runHeavyAfterPaint = () => {
+        // returnToAudio / новый toggle отменил этот проход — не pin SPEAKER.
+        if (toggleGen !== toggleCamGenerationRef.current || returnToAudioInProgressRef.current) {
+          toggleCamInProgressRef.current = false;
+          toggleSpan.end({ ok: false, error: 'cancelled' });
+          return;
+        }
         try {
           if (leavingAudioOnlyUi) {
             try {
@@ -5329,6 +5416,10 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
         void session
           .toggleCam()
           .then(() => {
+            if (toggleGen !== toggleCamGenerationRef.current || returnToAudioInProgressRef.current) {
+              toggleSpan.end({ ok: false, error: 'cancelled' });
+              return;
+            }
             toggleSpan.end({ ok: true });
             const camNow = session.getIsCamOn?.() === true;
             if (
@@ -5349,6 +5440,24 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
                 try {
                   session.notifyPeerDirectCallVideoUi?.(true);
                 } catch {}
+                // Своя камера на уже открытом video UI (peer video раньше) → product SPEAKER.
+                // Pin после toggleCam: resolveFullVideo смотрит getIsCamOn().
+                if (enablingCam) {
+                  try {
+                    clearDirectCallVideoExpandAudioPrepared();
+                  } catch {}
+                  try {
+                    const params = (global as any).__currentCallPiPParamsRef?.current;
+                    if (params && typeof params === 'object') params.localCamOn = true;
+                  } catch {}
+                  // Peer-path писал EARPIECE в userSelected — иначе honorUserRoute откатывает громкую.
+                  try {
+                    if (readUserSelectedCallAudioRoute() === 'EARPIECE') {
+                      setUserSelectedCallAudioRoute(null);
+                    }
+                  } catch {}
+                  pinVideoUiSpeakerAndSyncAudio();
+                }
               }
             }
           })
@@ -5357,17 +5466,33 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
             logger.warn('[VideoCall] toggleCam error:', e);
           })
           .finally(() => {
+            if (toggleGen !== toggleCamGenerationRef.current) {
+              toggleCamInProgressRef.current = false;
+              return;
+            }
             try {
               const actual = session.getIsCamOn?.();
               if (typeof actual === 'boolean') {
                 setCamOn(actual);
                 if (pip.visible) pip.updatePiPState({ localCamOn: actual });
               }
-              // Cam off + peer cam off → снять video-SPEAKER, вернуть beforeVideo (ухо).
+              // Cam off: peer ещё с видео → зритель + beforeVideo (ухо);
+              // обе off → полный returnToAudio (ухо), в т.ч. у «второго» кто выключает.
               if (actual === false && enablingCam === false) {
-                // Снять in-progress ДО maybeReturn — иначе guard глотает restore и громкая зависает.
-                toggleCamInProgressRef.current = false;
-                maybeReturnToAudioWhenBothCamsOff(session as VideoCallSession);
+                const peerCamStillOn = session.getRemoteCamEnabled?.() === true;
+                if (peerCamStillOn) {
+                  // Снять in-progress ДО restore — иначе guard глотает.
+                  toggleCamInProgressRef.current = false;
+                  restoreViewerAudioRouteAfterLocalCamOff(session as VideoCallSession);
+                } else {
+                  // Держим inProgress до конца return — иначе remount кнопки → cam-on + SPEAKER flicker.
+                  void Promise.resolve(
+                    returnToAudioCallUiRef.current?.({ skipNavigation: true }),
+                  ).finally(() => {
+                    toggleCamInProgressRef.current = false;
+                  });
+                  return;
+                }
               }
             } catch {}
             setTimeout(() => {
@@ -5389,7 +5514,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       logger.warn('[VideoCall] Session не найдена для toggleCam');
       toggleCamInProgressRef.current = false;
     }
-  }, [pip, syncDirectCallVideoUiSession, pinVideoUiSpeakerAndSyncAudio, rememberAudioPageRouteBeforeVideoUi, maybeReturnToAudioWhenBothCamsOff, route?.params?.directCall, camOn]);
+  }, [pip, syncDirectCallVideoUiSession, pinVideoUiSpeakerAndSyncAudio, rememberAudioPageRouteBeforeVideoUi, maybeReturnToAudioWhenBothCamsOff, restoreViewerAudioRouteAfterLocalCamOff, route?.params?.directCall, camOn]);
 
   const preserveAudioRouteFromInAppPiP = useCallback(() => {
     try {
@@ -5755,6 +5880,9 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
         'video_call_return_from_pip',
         'in_app_pip_from_video',
         'pinVideoUiSpeaker',
+        // Accept/bootstrap reapply не должен перебить beforeVideo после cam-off.
+        'direct_call_accept_audio_route',
+        'peer_video_preserve_route',
       ]);
     }
     armLocalAudioOnlyUiAudioRoutingQuiet(userExplicitReturn ? 1800 : 1000);
@@ -6208,6 +6336,14 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       const session =
         (sessionRef.current || (global as any).__webrtcSessionRef?.current) as VideoCallSession | null;
       if (!session || session.isEnded?.()) return;
+      // Отменить отложенный leave-audio (rAF pin SPEAKER) и блокировать новый toggleCam.
+      const returnGen = ++toggleCamGenerationRef.current;
+      returnToAudioInProgressRef.current = true;
+      const releaseReturnGuard = () => {
+        if (returnGen === toggleCamGenerationRef.current) {
+          returnToAudioInProgressRef.current = false;
+        }
+      };
       clearDirectCallUserRequestedVideoExpand();
       clearStaleDirectCallVideoExpandFlags();
       const returnSpan = callPerfSpan('ui_return_to_audio', {
@@ -6234,6 +6370,8 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
         } catch (e) {
           returnSpan.end({ ok: false, path: 'already_audio', error: String(e) });
           logger.warn('[VideoCall] returnToAudioCallUi enterDirectCallAudioOnlyMode (already audio) failed', e);
+        } finally {
+          releaseReturnGuard();
         }
         return;
       }
@@ -6284,20 +6422,26 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
         });
       } catch {}
 
-      const runHeavyAfterPaint = () => {
-        void session
-          .enterDirectCallAudioOnlyMode({ forceUserReturn: true })
-          .then(() => {
-            returnSpan.end({ ok: true, path: 'video_to_audio' });
-          })
-          .catch((e) => {
-            returnSpan.end({ ok: false, path: 'video_to_audio', error: String(e) });
-            logger.warn('[VideoCall] returnToAudioCallUi enterDirectCallAudioOnlyMode failed', e);
-          });
-      };
       // setTimeout(0): не ждать rAF — на Android камера/upgrade может голодать кадры на секунды.
       // Audio shell уже в state; teardown после yield к paint.
-      setTimeout(runHeavyAfterPaint, 0);
+      // Ждём teardown, чтобы caller (toggleCam) держал inProgress до конца.
+      await new Promise<void>((resolve) => {
+        setTimeout(() => {
+          void session
+            .enterDirectCallAudioOnlyMode({ forceUserReturn: true })
+            .then(() => {
+              returnSpan.end({ ok: true, path: 'video_to_audio' });
+            })
+            .catch((e) => {
+              returnSpan.end({ ok: false, path: 'video_to_audio', error: String(e) });
+              logger.warn('[VideoCall] returnToAudioCallUi enterDirectCallAudioOnlyMode failed', e);
+            })
+            .finally(() => {
+              releaseReturnGuard();
+              resolve();
+            });
+        }, 0);
+      });
     },
     [
       route?.params?.directCall,

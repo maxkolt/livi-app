@@ -4059,14 +4059,14 @@ function AppContent() {
         hasLivekitRoomName: !!(data as any)?.livekitRoomName,
       });
 
-      // Caller: сразу снять исходящий ringtone/UI — не ждать navigate/VideoCall mount.
+      // Caller: сразу снять ringtone/JS shell. Native Outgoing Activity НЕ finish'им здесь:
+      // finish+skipMainReturn до answer_cover оставляет «дыру» ~1с (см. call-perf
+      // caller_outgoing_shell_closed_early → answer_cover_show → audio_ui_onLayout).
+      // Нативный finish — только после cover в doNavigate (Main уже с крышкой).
       if (isCaller && callId) {
         try { setOutgoingCallScreenVisible(false); } catch {}
         try { emitCloseOutgoingCall({ reason: 'accepted', callId }); } catch {}
-        try {
-          closeOutgoingCallActivity(callId, { force: true, skipMainReturn: true });
-        } catch {}
-        markCallPerf('caller_outgoing_shell_closed_early', { callId });
+        markCallPerf('caller_outgoing_js_shell_closed_early', { callId });
       }
 
       prefetchDirectCallIce(isCaller ? 'app:call-accepted:caller' : 'app:call-accepted:callee');

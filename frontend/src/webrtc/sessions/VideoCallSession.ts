@@ -1166,10 +1166,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     }
     if (this.localVideoTrack) {
       try {
-        await this.localVideoTrack.mute().catch(() => {});
-        if (this.localVideoTrack.mediaStreamTrack) {
-          this.localVideoTrack.mediaStreamTrack.enabled = false;
-        }
+        await this.hardReleaseLocalVideoMute();
       } catch (e) {
         logger.warn('[VideoCallSession] muteLocalCameraForAppBackground failed', e);
       }
@@ -1605,6 +1602,85 @@ export class VideoCallSession extends SimpleEventEmitter {
     }
   }
 
+  /**
+   * Soft mute/unmute: LiveKit LocalVideoTrack.mute() по умолчанию stop’ает Camera2,
+   * а unmute() делает restartTrack — отсюда ~1–2с на каждый повторный toggle.
+   * providedByUser=true → mute только гасит кадры + сигнал, трек остаётся live.
+   */
+  private async softSetLocalVideoMuted(muted: boolean): Promise<boolean> {
+    const track = this.localVideoTrack;
+    if (!track) return false;
+    const mst = track.mediaStreamTrack;
+    if (!mst || mst.readyState === 'ended') return false;
+    try {
+      (track as any).providedByUser = true;
+    } catch {}
+    try {
+      if (muted) {
+        if (!track.isMuted) await track.mute();
+        if (mst.readyState === 'live') mst.enabled = false;
+      } else {
+        if (mst.readyState === 'live') mst.enabled = true;
+        if (track.isMuted) await track.unmute();
+      }
+      return track.mediaStreamTrack?.readyState === 'live';
+    } catch (e) {
+      logger.debug('[VideoCallSession] softSetLocalVideoMuted failed', e);
+      return false;
+    }
+  }
+
+  /** Фон / hard release: stop Camera2 (в т.ч. если до этого был soft mute). */
+  private async hardReleaseLocalVideoMute(): Promise<void> {
+    const track = this.localVideoTrack;
+    if (!track) return;
+    try {
+      (track as any).providedByUser = false;
+    } catch {}
+    try {
+      const mst = track.mediaStreamTrack;
+      // Soft mute уже ставит isMuted — тогда track.mute() no-op и камера не отпускается.
+      if (mst && mst.readyState === 'live') {
+        try {
+          mst.enabled = false;
+          mst.stop();
+        } catch {}
+      }
+      if (!track.isMuted) {
+        await track.mute().catch(() => {});
+      }
+    } catch (e) {
+      logger.warn('[VideoCallSession] hardReleaseLocalVideoMute failed', e);
+    }
+  }
+
+  private async ensureLocalVideoPublishedAfterEnable(): Promise<void> {
+    if (!this.localVideoTrack) return;
+    if (!(this.room && this.room.state === 'connected' && this.room.localParticipant)) return;
+    if (!this.isVideoTrackPublished(this.localVideoTrack)) {
+      await this.unpublishOtherLocalTracks('video', this.localVideoTrack);
+      await this.room.localParticipant.publishTrack(this.localVideoTrack).catch((e) => {
+        const errorMsg = e?.message || String(e || '');
+        if (!errorMsg.includes('already') && !errorMsg.includes('duplicate')) {
+          logger.warn('[VideoCallSession] Failed to publish video track on camera enable', e);
+        }
+      });
+      logger.info('[VideoCallSession] Video track published after camera enable');
+    }
+    if (this.localAudioTrack && this.isMicOn && !this.isAudioTrackPublished(this.localAudioTrack)) {
+      await this.unpublishOtherLocalTracks('audio', this.localAudioTrack);
+      await this.room.localParticipant.publishTrack(this.localAudioTrack).catch((e) => {
+        const errorMsg = e?.message || String(e || '');
+        if (!errorMsg.includes('already') && !errorMsg.includes('duplicate')) {
+          logger.warn('[VideoCallSession] Failed to publish audio track after camera recovery', e);
+        }
+      });
+      logger.info('[VideoCallSession] Audio track published after camera recovery', {
+        trackId: this.localAudioTrack?.sid || this.localAudioTrack?.mediaStreamTrack?.id,
+      });
+    }
+  }
+
   private async applyLocalCameraEnabledNow(enabled: boolean): Promise<void> {
     const cidForMedia = String(this.getCallId?.() || this.callId || '').trim();
     const audioFirstCall =
@@ -1686,71 +1762,26 @@ export class VideoCallSession extends SimpleEventEmitter {
         });
         return;
       }
-      // ВКЛЮЧАЕМ камеру
-      // Проверяем нужно ли восстановить трек
-      const needsRecovery =
-        !this.localVideoTrack ||
-        !this.localVideoTrack.mediaStreamTrack ||
-        this.localVideoTrack.mediaStreamTrack.readyState === 'ended';
+      // ВКЛЮЧАЕМ камеру: live-трек → soft unmute (без recreate); иначе fast-start recreate без upgrade.
+      const hasLiveVideo =
+        !!this.localVideoTrack?.mediaStreamTrack &&
+        this.localVideoTrack.mediaStreamTrack.readyState === 'live';
 
-      if (needsRecovery) {
-        logger.info('[VideoCallSession] Recovering video track for camera enable');
-        // Пересоздаём ТОЛЬКО видео трек (аудио не трогаем для стабильности)
-        await this.recreateLocalVideoTrack('toggleCam:recovery');
+      if (hasLiveVideo) {
         try {
-          this.maybeScheduleFastStartVideoUpgrade('camera-enable-recovery');
-        } catch (_) {}
-      }
-
-      // После восстановления трека - включаем и публикуем
-      if (this.localVideoTrack) {
-        try {
-          // Включаем mediaTrack
-          if (this.localVideoTrack.mediaStreamTrack) {
-            this.localVideoTrack.mediaStreamTrack.enabled = true;
+          const ok = await this.softSetLocalVideoMuted(false);
+          if (ok) {
+            await this.ensureLocalVideoPublishedAfterEnable();
+            logger.info('[VideoCallSession] Camera enabled via soft unmute');
+          } else {
+            logger.info('[VideoCallSession] Soft unmute failed — recovering video track');
+            await this.recreateLocalVideoTrack('toggleCam:recovery');
+            await this.softSetLocalVideoMuted(false);
+            await this.ensureLocalVideoPublishedAfterEnable();
+            logger.info('[VideoCallSession] Camera enabled successfully');
           }
-          
-          // Unmute трек
-          await this.localVideoTrack.unmute().catch((e) => {
-            logger.debug('[VideoCallSession] unmute error (may be ok)', e);
-          });
-
-          // Публикуем трек в комнату если она подключена
-          if (this.room && this.room.state === 'connected' && this.room.localParticipant) {
-            // Проверяем, не опубликован ли трек уже
-            if (!this.isVideoTrackPublished(this.localVideoTrack)) {
-              // Safety: if we recreated the track, LiveKit may still have an older camera publication.
-              // Unpublish other camera tracks first to avoid "publishing a second track with the same source: camera".
-              await this.unpublishOtherLocalTracks('video', this.localVideoTrack);
-              await this.room.localParticipant.publishTrack(this.localVideoTrack).catch((e) => {
-                const errorMsg = e?.message || String(e || '');
-                if (!errorMsg.includes('already') && !errorMsg.includes('duplicate')) {
-                  logger.warn('[VideoCallSession] Failed to publish video track on camera enable', e);
-                }
-              });
-              logger.info('[VideoCallSession] Video track published after camera enable');
-            }
-
-            // КРИТИЧНО: после восстановления/перепубликации камеры некоторые девайсы "теряют" микрофон публикацию
-            // (гонка внутри LiveKit/engine). Поэтому (best-effort) убеждаемся, что аудио трек тоже опубликован.
-            if (this.localAudioTrack && this.isMicOn && !this.isAudioTrackPublished(this.localAudioTrack)) {
-              await this.unpublishOtherLocalTracks('audio', this.localAudioTrack);
-              await this.room.localParticipant.publishTrack(this.localAudioTrack).catch((e) => {
-                const errorMsg = e?.message || String(e || '');
-                if (!errorMsg.includes('already') && !errorMsg.includes('duplicate')) {
-                  logger.warn('[VideoCallSession] Failed to publish audio track after camera recovery', e);
-                }
-              });
-              logger.info('[VideoCallSession] Audio track published after camera recovery', {
-                trackId: this.localAudioTrack?.sid || this.localAudioTrack?.mediaStreamTrack?.id,
-              });
-            }
-          }
-          
-          logger.info('[VideoCallSession] Camera enabled successfully');
         } catch (e) {
-          logger.warn('[VideoCallSession] Failed to enable camera', e);
-          // Fallback: используем setCameraEnabled
+          logger.warn('[VideoCallSession] Failed to enable camera (soft path)', e);
           if (this.room && this.room.localParticipant) {
             try {
               await this.room.localParticipant.setCameraEnabled(true);
@@ -1759,22 +1790,58 @@ export class VideoCallSession extends SimpleEventEmitter {
             }
           }
         }
+      } else {
+        const needsRecovery =
+          !this.localVideoTrack ||
+          !this.localVideoTrack.mediaStreamTrack ||
+          this.localVideoTrack.mediaStreamTrack.readyState === 'ended';
+
+        if (needsRecovery) {
+          logger.info('[VideoCallSession] Recovering video track for camera enable');
+          await this.recreateLocalVideoTrack('toggleCam:recovery');
+          // Без maybeScheduleFastStartVideoUpgrade — restartTrack даёт мерцание и лишние ~2.5с.
+        }
+
+        if (this.localVideoTrack) {
+          try {
+            await this.softSetLocalVideoMuted(false);
+            if (this.localVideoTrack.mediaStreamTrack) {
+              this.localVideoTrack.mediaStreamTrack.enabled = true;
+            }
+            await this.ensureLocalVideoPublishedAfterEnable();
+            logger.info('[VideoCallSession] Camera enabled successfully');
+          } catch (e) {
+            logger.warn('[VideoCallSession] Failed to enable camera', e);
+            if (this.room && this.room.localParticipant) {
+              try {
+                await this.room.localParticipant.setCameraEnabled(true);
+              } catch (e2) {
+                logger.warn('[VideoCallSession] Fallback setCameraEnabled failed', e2);
+              }
+            }
+          }
+        }
       }
     } else {
-      // ВЫКЛЮЧАЕМ камеру
+      // ВЫКЛЮЧАЕМ камеру — soft mute, не stop (повторный enable ≈ unmute).
       if (this.localVideoTrack) {
         try {
-          // Mute и отключаем mediaTrack
-          await this.localVideoTrack.mute().catch(() => {});
-          if (this.localVideoTrack.mediaStreamTrack) {
-            this.localVideoTrack.mediaStreamTrack.enabled = false;
+          const ok = await this.softSetLocalVideoMuted(true);
+          if (!ok) {
+            await this.localVideoTrack.mute().catch(() => {});
+            if (this.localVideoTrack.mediaStreamTrack) {
+              this.localVideoTrack.mediaStreamTrack.enabled = false;
+            }
           }
-          logger.info('[VideoCallSession] Camera disabled successfully');
+          logger.info('[VideoCallSession] Camera disabled successfully', {
+            soft: ok,
+            trackReadyState: this.localVideoTrack?.mediaStreamTrack?.readyState,
+          });
         } catch (e) {
           logger.warn('[VideoCallSession] Failed to disable camera', e);
         }
       }
-      // Сбрасываем ссылку на ended-трек, чтобы повторное включение всегда шло через recovery, а не через «живой» mute.
+      // Null только реально ended — live muted оставляем для быстрого unmute.
       const ended =
         this.localVideoTrack?.mediaStreamTrack?.readyState === 'ended' ||
         !this.localVideoTrack?.mediaStreamTrack;
@@ -4998,6 +5065,10 @@ export class VideoCallSession extends SimpleEventEmitter {
         steadyPreferred.meta.preset !== preferred.meta.preset &&
         preferred.meta.preset === 'low';
       this.clearFastStartVideoUpgradeTimer();
+      // toggleCam:recovery — без отложенного upgrade (restartTrack = мерцание + лишняя нагрузка).
+      if (/toggleCam:recovery/i.test(context)) {
+        this.fastStartVideoProfileActive = false;
+      }
     } else {
       this.fastStartVideoProfileActive = false;
       this.clearFastStartVideoUpgradeTimer();
@@ -5029,9 +5100,7 @@ export class VideoCallSession extends SimpleEventEmitter {
             forceNewStream: context.includes('restartLocalCamera') || context.includes('flip'),
           });
           logger.info('[VideoCallSession] Recovered video via replaceTrack (fast path)', { context });
-          try {
-            this.maybeScheduleFastStartVideoUpgrade('camera-enable-recovery');
-          } catch (_) {}
+          // Не schedule upgrade после toggleCam — оставляем fast-start preset до конца звонка / flip.
           return;
         } catch (e) {
           logger.warn('[VideoCallSession] replaceTrack fast recovery failed; falling back to full recreate', {
@@ -5113,11 +5182,17 @@ export class VideoCallSession extends SimpleEventEmitter {
     const camNow = this.isCamOn;
     try {
       if (this.localVideoTrack?.mediaStreamTrack) {
-        this.localVideoTrack.mediaStreamTrack.enabled = camNow;
-        if (camNow) await this.localVideoTrack.unmute().catch(() => {});
-        else await this.localVideoTrack.mute().catch(() => {});
+        // Soft path: не stop/restart после только что созданного трека.
+        await this.softSetLocalVideoMuted(!camNow);
+        if (this.localVideoTrack.mediaStreamTrack.readyState === 'live') {
+          this.localVideoTrack.mediaStreamTrack.enabled = camNow;
+        }
       }
     } catch {}
+    if (/toggleCam:recovery/i.test(context)) {
+      this.fastStartVideoProfileActive = false;
+      this.clearFastStartVideoUpgradeTimer();
+    }
     if (__DEV__ && camStateBeforeAwait !== camNow) {
       logger.debug('[VideoCallSession] recreateLocalVideoTrack: cam intent changed during await', {
         context,
