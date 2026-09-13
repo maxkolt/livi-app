@@ -352,6 +352,7 @@ const dict: Partial<Record<Lang, Record<string, string>>> = {
     moderationReportAckFailed: 'Не удалось подтвердить действие на сервере. Нажмите «Далее», чтобы продолжить.',
     moderationPartnerBanned: 'Собеседник забанен на час. Он нарушил правила пользования.',
     moderationContentWarning: 'Пожалуйста, соблюдайте правила. Обнаружен нежелательный контент.',
+    moderationUnavailable: 'Проверка безопасности недоступна — видео собеседника скрыто.',
     randomChatServerUnreachable:
       'Нет связи с сервером. VPN блокирует api.liviapp.com — отключите VPN или добавьте сервер в исключения.',
     start: 'Начать',
@@ -710,6 +711,7 @@ const dict: Partial<Record<Lang, Record<string, string>>> = {
     moderationReportAckFailed: 'Could not confirm the action on the server. Tap Next to continue.',
     moderationPartnerBanned: 'Your partner was banned for an hour for violating the rules.',
     moderationContentWarning: 'Please follow the rules. Unwanted content was detected.',
+    moderationUnavailable: 'Safety check is unavailable — the other person\u2019s video is hidden.',
     randomChatServerUnreachable:
       'No connection to the server. Your VPN is blocking api.liviapp.com — disable VPN or exclude the server.',
   
@@ -1017,6 +1019,7 @@ const dict: Partial<Record<Lang, Record<string, string>>> = {
     moderationReportAckFailed: 'No se pudo confirmar la acción en el servidor. Pulsa Siguiente para continuar.',
     moderationPartnerBanned: 'Tu compañero fue bloqueado una hora por infringir las reglas.',
     moderationContentWarning: 'Por favor, cumple las reglas. Se detectó contenido no deseado.',
+    moderationUnavailable: 'La verificación de seguridad no está disponible: el video del interlocutor está oculto.',
     randomChatServerUnreachable:
       'Sin conexión al servidor. La VPN bloquea api.liviapp.com: desactiva la VPN o añade el servidor a las excepciones.',
     nickname: 'Apodo',
@@ -1317,6 +1320,7 @@ const dict: Partial<Record<Lang, Record<string, string>>> = {
     moderationReportAckFailed: 'Aktion auf dem Server nicht bestätigt. Tippe auf Weiter.',
     moderationPartnerBanned: 'Dein Partner wurde für eine Stunde wegen Regelverstoß gesperrt.',
     moderationContentWarning: 'Bitte halte dich an die Regeln. Unerwünschter Inhalt wurde erkannt.',
+    moderationUnavailable: 'Sicherheitsprüfung nicht verfügbar – das Video des Gegenübers ist ausgeblendet.',
     randomChatServerUnreachable:
       'Keine Verbindung zum Server. Das VPN blockiert api.liviapp.com — VPN deaktivieren oder Server ausnehmen.',
     nickname: 'Spitzname',
@@ -1617,6 +1621,7 @@ const dict: Partial<Record<Lang, Record<string, string>>> = {
     moderationReportAckFailed: "Impossible de confirmer l'action sur le serveur. Appuyez sur Suivant.",
     moderationPartnerBanned: 'Votre partenaire a été banni une heure pour infraction aux règles.',
     moderationContentWarning: 'Veuillez respecter les regles. Contenu indesirable detecte.',
+    moderationUnavailable: 'La verification de securite est indisponible - la video de l\u2019interlocuteur est masquee.',
     randomChatServerUnreachable:
       'Pas de connexion au serveur. Votre VPN bloque api.liviapp.com — désactivez le VPN ou ajoutez le serveur en exception.',
     nickname: 'Pseudo',

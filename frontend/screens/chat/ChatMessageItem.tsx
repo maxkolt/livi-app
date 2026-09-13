@@ -119,7 +119,7 @@ export type ChatMessageItemProps = {
   animateMessagePress: (
     messageId: string,
     callback?: () => void,
-    options?: { immediate?: boolean },
+    options?: { immediate?: boolean; haptic?: boolean },
   ) => void;
   getMessageAnimation: (messageId: string) => Animated.Value;
   formatDurationDot: (ms: number) => string;
@@ -353,7 +353,7 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
               onPress={() => {
                 animateMessagePress(item.id, () => {
                   onPressImage('image', imageUri, item.name, { uris: [imageUri], index: 0, message: item });
-                });
+                }, { haptic: false });
               }}
               delayLongPress={280}
               onLongPress={() => {
@@ -382,7 +382,7 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
             onPress={() => {
               animateMessagePress(item.id, () => {
                 onPressImage('image', imageUri, item.name, { uris: [imageUri], index: 0, message: item });
-              });
+              }, { haptic: false });
             }}
             delayLongPress={280}
             onLongPress={() => {

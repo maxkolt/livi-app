@@ -27,13 +27,12 @@ import { t } from '../utils/i18n';
 import PhotoEditor from '@baronha/react-native-photo-editor';
 import { useResolvedImageUri } from '../hooks/useResolvedImageUri';
 import { prefetchImages } from '../utils/imageOptimization';
-import { uiAccent } from '../theme/uiAccent';
+import { WELCOME_NAV_ACTIVE_ICON } from '../screens/home/constants';
 
-/** Как активный Bluetooth на тёмном call UI: uiAccent(false) → фиолетовый. */
-const MEDIA_VIEWER_ACCENT = uiAccent(false);
-/** Тусклее bright (#7B61FF) — softText для иконок, solid для рамки. */
-const MEDIA_VIEWER_ICON = MEDIA_VIEWER_ACCENT.softText;
-const MEDIA_VIEWER_BORDER = MEDIA_VIEWER_ACCENT.solid;
+/** Серые иконки, рамка как у активных иконок навбара, непрозрачный тёмный фон. */
+const MEDIA_VIEWER_ICON = LIVI.titan;
+const MEDIA_VIEWER_BORDER = WELCOME_NAV_ACTIVE_ICON;
+const MEDIA_VIEWER_BUTTON_BG = '#1A1A1A';
 
 function resolveViewerUri(raw: string): string {
   const value = String(raw || '').trim();
@@ -1278,7 +1277,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     // Без padding — иначе Ionicons визуально съезжают с центра в круге 52×52.
     padding: 0,
-    backgroundColor: '#1A1A1A',
+    backgroundColor: MEDIA_VIEWER_BUTTON_BG,
     borderWidth: 1.5,
     borderColor: MEDIA_VIEWER_BORDER,
     borderRadius: 26,

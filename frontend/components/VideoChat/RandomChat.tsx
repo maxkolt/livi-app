@@ -234,6 +234,8 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     L,
   });
 
+  // Fail-closed: сервис модерации недоступен → прячем непроверённое видео собеседника.
+  const [moderationUnavailable, setModerationUnavailable] = useState(false);
   const isModerationBanned = banByModerationUntil > Date.now();
 
   const showWarning = useCallback((message: string) => {
@@ -1316,6 +1318,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     onBan: banUser,
     onRemoteWarning,
     onRemoteViolation,
+    onModerationUnavailable: setModerationUnavailable,
     lang,
   });
 
@@ -1599,6 +1602,15 @@ const RandomChat: React.FC<Props> = ({ route }) => {
                 {networkOverlayVisible && (
                   <View style={styles.networkOverlay} pointerEvents="auto">
                     <MaterialIcons name="wifi-off" size={64} color={WELCOME_HEADER_TITLE} />
+                  </View>
+                )}
+
+                {moderationUnavailable && started && !isInactiveState && (
+                  <View style={styles.moderationUnavailableOverlay} pointerEvents="auto">
+                    <MaterialIcons name="gpp-maybe" size={56} color={WELCOME_HEADER_TITLE} />
+                    <Text style={styles.moderationUnavailableText}>
+                      {t('moderationUnavailable', lang)}
+                    </Text>
                   </View>
                 )}
               </View>

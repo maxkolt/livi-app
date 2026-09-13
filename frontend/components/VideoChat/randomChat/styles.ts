@@ -79,6 +79,23 @@ export const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+  // Fail-closed модерации: полностью перекрывает видео собеседника (не показываем непроверённое).
+  moderationUnavailableOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 10000,
+    elevation: 10000,
+    backgroundColor: 'rgba(0,0,0,0.96)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+  },
+  moderationUnavailableText: {
+    marginTop: 12,
+    color: 'rgba(237,234,234,0.85)',
+    fontSize: 14,
+    lineHeight: 20,
+    textAlign: 'center',
+  },
   placeholder: {
     color: 'rgba(237,234,234,0.6)',
     fontSize: 22,

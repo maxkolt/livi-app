@@ -32,12 +32,18 @@ type UseModerationOptions = {
   onRemoteWarning?: (partnerUserId: string) => void;
   /** Второе нарушение: бан партнёра, зрителю — «Собеседник забанен на час» */
   onRemoteViolation?: (partnerUserId: string) => void;
+  /** Модерация недоступна (сервис не отвечает N раз) → fail-closed. true=скрыть непроверенное видео, false=восстановлено. */
+  onModerationUnavailable?: (unavailable: boolean) => void;
   lang: Lang;
 };
 
 /** Задержка после подключения перед началом захвата — избегаем race с обновлением view hierarchy (IndexOutOfBoundsException в gatherTransparentRegion) */
 const STABLE_DELAY_MS = 3000;
 const STABILITY_KEY_DELAY_MS = 1800;
+/** Circuit-breaker модерации: после N подряд сбоев сервиса делаем backoff, чтобы не долбить сервер, и переходим в fail-closed. */
+const MOD_FAIL_THRESHOLD = 3;
+const MOD_BACKOFF_BASE_MS = 15_000;
+const MOD_BACKOFF_MAX_MS = 120_000;
 
 export function useModeration({
   enabled,
@@ -54,6 +60,7 @@ export function useModeration({
   onBan,
   onRemoteWarning,
   onRemoteViolation,
+  onModerationUnavailable,
   lang,
 }: UseModerationOptions) {
   const WARNING_TO_BAN_DELAY_MS = 10_000;
@@ -72,6 +79,10 @@ export function useModeration({
   const partnerStrikesRef = useRef(0);
   const partnerFirstWarningAtRef = useRef(0);
   const lastPartnerUserIdRef = useRef<string | null>(null);
+  /** Circuit-breaker сервиса модерации (сеть/5xx/429). */
+  const failStreakRef = useRef(0);
+  const backoffUntilRef = useRef(0);
+  const unavailableRef = useRef(false);
 
   const active = useMemo(() => enabled && chatType === 'random' && shouldCheck, [enabled, chatType, shouldCheck]);
 
@@ -89,9 +100,15 @@ export function useModeration({
       partnerStrikesRef.current = 0;
       partnerFirstWarningAtRef.current = 0;
       lastPartnerUserIdRef.current = null;
+      failStreakRef.current = 0;
+      backoffUntilRef.current = 0;
+      if (unavailableRef.current) {
+        unavailableRef.current = false;
+        try { onModerationUnavailable?.(false); } catch {}
+      }
       setStrikes(0);
     }
-  }, [active]);
+  }, [active, onModerationUnavailable]);
 
   useEffect(() => {
     if (!active) return;
@@ -148,6 +165,37 @@ export function useModeration({
     onBan(3600, t('moderationBannedSelf', lang));
   };
 
+  /** Сбой самого сервиса модерации (сеть/5xx/429), НЕ сбой захвата кадра. Включает backoff и fail-closed. */
+  const noteModerationServiceFailure = (reason: string) => {
+    failStreakRef.current += 1;
+    if (failStreakRef.current >= MOD_FAIL_THRESHOLD) {
+      const over = failStreakRef.current - MOD_FAIL_THRESHOLD;
+      const delay = Math.min(MOD_BACKOFF_MAX_MS, MOD_BACKOFF_BASE_MS * Math.pow(2, over));
+      backoffUntilRef.current = Date.now() + delay;
+      if (!unavailableRef.current) {
+        unavailableRef.current = true;
+        logger.warn('[Moderation] service unavailable — fail-closed engaged', {
+          target: moderationTarget,
+          reason,
+          failStreak: failStreakRef.current,
+          backoffMs: delay,
+        });
+        try { onModerationUnavailable?.(true); } catch {}
+      }
+    }
+  };
+
+  /** Успешный ответ сервиса — сбрасываем backoff и снимаем fail-closed. */
+  const noteModerationServiceSuccess = () => {
+    failStreakRef.current = 0;
+    backoffUntilRef.current = 0;
+    if (unavailableRef.current) {
+      unavailableRef.current = false;
+      logger.info('[Moderation] service recovered — fail-closed cleared', { target: moderationTarget });
+      try { onModerationUnavailable?.(false); } catch {}
+    }
+  };
+
   const runCheck = async () => {
     if (!active) return;
     if (isCheckingRef.current) return;
@@ -159,6 +207,8 @@ export function useModeration({
     const activeSince = activeSinceRef.current;
     if (activeSince === null || now - activeSince < STABLE_DELAY_MS) return;
     if (now < suspendCaptureUntilRef.current) return;
+    // Circuit-breaker: пока backoff активен — не долбим сервер и не делаем дорогой захват.
+    if (now < backoffUntilRef.current) return;
     lastCheckAtRef.current = now;
 
     const target = targetRef.current;
@@ -260,18 +310,42 @@ export function useModeration({
 
       if (!base64) return;
 
-      const response = await fetch(`${API_BASE}/api/moderate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ image: base64 }),
-      });
-
-      if (!response.ok) {
+      let response: Response;
+      try {
+        response = await fetch(`${API_BASE}/api/moderate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ image: base64 }),
+        });
+      } catch (netErr) {
+        // Сеть до сервиса не дошла — это недоступность сервиса (не сбой захвата кадра).
+        noteModerationServiceFailure('network');
         return;
       }
 
-      const data = (await response.json()) as ModerationResponse;
-      if (!data?.ok) return;
+      if (!response.ok) {
+        // 5xx/429 = сервис недоступен/перегружен → backoff + fail-closed.
+        // 4xx (например image_too_large) = проблема кадра, не сервиса — просто пропускаем кадр.
+        if (response.status >= 500 || response.status === 429) {
+          noteModerationServiceFailure(`http_${response.status}`);
+        }
+        return;
+      }
+
+      let data: ModerationResponse;
+      try {
+        data = (await response.json()) as ModerationResponse;
+      } catch {
+        noteModerationServiceFailure('bad_json');
+        return;
+      }
+      if (!data?.ok) {
+        noteModerationServiceFailure('resp_not_ok');
+        return;
+      }
+
+      // Сервис ответил корректным вердиктом — он жив.
+      noteModerationServiceSuccess();
 
       if (data.violation) {
         consecutiveBadFramesRef.current += 1;

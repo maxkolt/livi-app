@@ -1829,21 +1829,24 @@ export default function ChatScreen({ route, navigation }: Props) {
 
   // Функция для анимации нажатия на сообщение
   const animateMessagePress = React.useCallback(
-    (messageId: string, callback?: () => void, options?: { immediate?: boolean }) => {
+    (messageId: string, callback?: () => void, options?: { immediate?: boolean; haptic?: boolean }) => {
       const animation = getMessageAnimation(messageId);
+      const withHaptic = options?.haptic !== false;
 
       // Long press: тактиль и лёгкое сжатие облака здесь, а не при показе меню.
       if (options?.immediate) {
-        if (Platform.OS === 'ios') {
-          try {
-            void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-          } catch {
-            Vibration.vibrate(5);
+        if (withHaptic) {
+          if (Platform.OS === 'ios') {
+            try {
+              void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            } catch {
+              Vibration.vibrate(5);
+            }
+          } else {
+            try {
+              Vibration.vibrate(10);
+            } catch {}
           }
-        } else {
-          try {
-            Vibration.vibrate(10);
-          } catch {}
         }
         animation.stopAnimation();
         animation.setValue(1);
@@ -1863,14 +1866,16 @@ export default function ChatScreen({ route, navigation }: Props) {
         return;
       }
 
-      if (Platform.OS === 'ios') {
-        try {
-          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-        } catch {
-          Vibration.vibrate(3);
+      if (withHaptic) {
+        if (Platform.OS === 'ios') {
+          try {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+          } catch {
+            Vibration.vibrate(3);
+          }
+        } else {
+          Vibration.vibrate(25);
         }
-      } else {
-        Vibration.vibrate(25);
       }
 
       Animated.sequence([

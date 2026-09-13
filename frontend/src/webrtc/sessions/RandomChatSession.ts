@@ -1125,9 +1125,20 @@ export class RandomChatSession extends SimpleEventEmitter {
         // 2) then apply enabled state.
         if (this.isCamOn) {
           await this.ensureVideoTrackPublished();
-          await this.room.localParticipant.setCameraEnabled(true);
+          // ВКЛ: unmute уже опубликованного трека (без пересоздания/переподписки).
+          try { await this.localVideoTrack.unmute(); } catch {}
+          if (this.localVideoTrack.mediaStreamTrack) {
+            this.localVideoTrack.mediaStreamTrack.enabled = true;
+          }
         } else {
-          await this.room.localParticipant.setCameraEnabled(false);
+          // ВЫКЛ: МЬЮТ, НЕ setCameraEnabled(false). setCameraEnabled(false) в LiveKit
+          // останавливает камеру → трек ends → на следующем ON нужен recreate + republish +
+          // переподписка у партнёра (шторм ренеготиаций и мерцание). Mute сохраняет публикацию:
+          // у партнёра «камера выкл» мгновенно, повторный ON — просто unmute. Как в VideoCallSession.
+          try { await this.localVideoTrack.mute(); } catch {}
+          if (this.localVideoTrack.mediaStreamTrack) {
+            this.localVideoTrack.mediaStreamTrack.enabled = false;
+          }
         }
         // cam-toggle уже отправлен в начале toggleCam() — см. комментарий выше.
       } catch (e) {

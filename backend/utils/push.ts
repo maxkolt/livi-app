@@ -287,9 +287,13 @@ async function sendCallPushViaFcmWithRetry(
   messaging: { send: (msg: unknown) => Promise<string> },
   token: string,
   dataPayload: Record<string, string>,
-  userId: string
+  userId: string,
+  ttlMs: number
 ): Promise<void> {
   let lastError: unknown = null;
+  // Короткий TTL = окно звонка. FCM трактует high-priority + короткий ttl как срочное сообщение:
+  // будит устройство в Doze без батчинга/отсрочки и НЕ доставляет протухший звонок позже (нет «призрачного» звонка).
+  const safeTtlMs = Math.max(5_000, Math.min(30_000, Math.floor(ttlMs) || 30_000));
   for (let attempt = 1; attempt <= CALL_PUSH_MAX_ATTEMPTS; attempt += 1) {
     try {
       await messaging.send({
@@ -297,6 +301,9 @@ async function sendCallPushViaFcmWithRetry(
         data: dataPayload,
         android: {
           priority: 'high',
+          ttl: safeTtlMs,
+          // Доставка звонка сразу после перезагрузки, до первого разблока (Direct Boot).
+          directBootOk: true,
         },
       });
       if (attempt > 1) {
@@ -780,7 +787,8 @@ export async function sendCallPushToRecipient(userId: string, data: CallPushData
           messaging,
           r.fcmToken,
           Object.fromEntries(Object.entries(fcmDataPayload).map(([k, v]) => [k, String(v)])),
-          userId
+          userId,
+          callExpiresAtMs - Date.now()
         );
         pushLog('call_push_sent_via_FCM', { userId });
         androidDataSignalSent += 1;
@@ -934,6 +942,7 @@ export async function sendCallEscalationPushToRecipient(
           android: {
             priority: 'high',
             ttl: CALL_PUSH_ESCALATION_TTL_SECONDS * 1000,
+            directBootOk: true,
           },
         });
         fcmSent += 1;

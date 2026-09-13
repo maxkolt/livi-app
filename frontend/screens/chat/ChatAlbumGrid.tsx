@@ -107,7 +107,6 @@ function AlbumTile({
     >
       <Pressable
         onPress={() => {
-          tapHaptic(false);
           runScale(false, onPress);
         }}
         onLongPress={
