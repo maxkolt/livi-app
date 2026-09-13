@@ -19,12 +19,21 @@ export const globalMessageStorage = {
     return `chat_messages_${sortedIds[0]}_${sortedIds[1]}`;
   },
 
-  // Сохранение сообщения в AsyncStorage
+  // Сохранение сообщения в AsyncStorage (+ сброс in-memory кэша, чтобы превью/список видели последнее).
   saveMessage: async (message: any, currentUserId: string) => {
     try {
-      const chatKey = globalMessageStorage.getChatKey(currentUserId, message.from);
+      const me = String(currentUserId || "").trim();
+      const from = String(message?.from || "").trim();
+      const to = String(message?.to || "").trim();
+      if (!me || !message?.id) return;
+      // peer = собеседник: для входящего from, для своего — to.
+      const peerId = from === me ? to : from;
+      if (!peerId) return;
+
+      const chatKey = globalMessageStorage.getChatKey(me, peerId);
       const existingMessages = await AsyncStorage.getItem(chatKey);
       const messages = existingMessages ? JSON.parse(existingMessages) : [];
+      const isOwn = from === me;
 
       const replyToPayload =
         message.replyTo && message.replyTo.id
@@ -32,11 +41,11 @@ export const globalMessageStorage = {
               id: String(message.replyTo.id),
               text: message.replyTo.text,
               from: String(message.replyTo.from || ""),
-              isOwn: String(message.replyTo.from || "") === String(currentUserId),
+              isOwn: String(message.replyTo.from || "") === me,
             }
           : null;
 
-      const existingIdx = messages.findIndex((m: any) => m.id === message.id);
+      const existingIdx = messages.findIndex((m: any) => String(m?.id) === String(message.id));
       let didWrite = false;
       if (existingIdx < 0) {
         const newMessage: any = {
@@ -51,9 +60,9 @@ export const globalMessageStorage = {
           stickerPackId: message.stickerPackId,
           stickerEmoji: message.stickerEmoji,
           stickerLabel: message.stickerLabel,
-          sender: "peer",
-          from: message.from,
-          to: message.to,
+          sender: isOwn ? "me" : "peer",
+          from,
+          to,
           timestamp: new Date(message.timestamp),
         };
         if (Array.isArray(message.uris) && message.uris.length > 1) {
@@ -69,6 +78,9 @@ export const globalMessageStorage = {
       }
       if (didWrite) {
         await AsyncStorage.setItem(chatKey, JSON.stringify(messages));
+        // Иначе getChatMessagesLocal до 5 мин отдаёт старый кэш без входящего → превью «своё последнее».
+        const cacheKey = `${me}-${peerId}`;
+        shared.messageCache.delete(cacheKey);
       }
     } catch (error) {
       logger.warn("Failed to save message globally:", error);
@@ -485,6 +497,22 @@ export function onMessageReceived(
     socket.off("message:received", h);
   };
 }
+
+/**
+ * Всегда пишем входящие в локальный чат (не только когда открыт ChatScreen).
+ * Иначе вкладка Чаты показывает превью своего последнего исходящего при unread > 0.
+ */
+socket.on("message:received", (message: any) => {
+  try {
+    const me = String(shared.currentUserId || "").trim();
+    if (!me || !message?.id) return;
+    const from = String(message.from || "").trim();
+    if (!from || from === me) return;
+    void globalMessageStorage.saveMessage(message, me);
+  } catch (error) {
+    logger.warn("[messages] persist incoming for chat preview failed:", error);
+  }
+});
 
 export function onChatCleared(
   cb: (data: { by: string; with: string }) => void,

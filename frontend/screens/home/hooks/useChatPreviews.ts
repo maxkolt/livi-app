@@ -50,6 +50,7 @@ export function useChatPreviews(friendIds: string[], lang: Lang, enabled: boolea
   const idsKey = friendIds.join('|');
   const idsRef = useRef(friendIds);
   const langRef = useRef(lang);
+  const enabledRef = useRef(enabled);
 
   useEffect(() => {
     idsRef.current = friendIds;
@@ -58,6 +59,10 @@ export function useChatPreviews(friendIds: string[], lang: Lang, enabled: boolea
   useEffect(() => {
     langRef.current = lang;
   }, [lang]);
+
+  useEffect(() => {
+    enabledRef.current = enabled;
+  }, [enabled]);
 
   const reload = useCallback(async () => {
     const ids = idsRef.current;
@@ -80,6 +85,14 @@ export function useChatPreviews(friendIds: string[], lang: Lang, enabled: boolea
         }
       }),
     );
+    // Не затирать более свежий live-preview (message:received), если persist ещё догоняет.
+    for (const id of ids) {
+      const mem = previewMemory[id];
+      if (!mem) continue;
+      if (!next[id] || mem.at >= (next[id]?.at || 0)) {
+        next[id] = mem;
+      }
+    }
     previewMemory = next;
     setPreviews(next);
   }, [enabled, idsKey]);
@@ -95,21 +108,21 @@ export function useChatPreviews(friendIds: string[], lang: Lang, enabled: boolea
     void reload();
   }, [enabled, reload]);
 
+  // Слушаем всегда: иначе при выключенной вкладке Чаты memory/превью не обновляются,
+  // а unread растёт → после открытия вкладки reload показывает своё последнее исходящее.
   useEffect(() => {
-    if (!enabled) return;
     const offReceived = onMessageReceived((message) => {
       const me = String(getCurrentUserId() || '');
       const from = String(message?.from || '');
       const to = String(message?.to || '');
       const peerId = from && from === me ? to : from;
-      if (!peerId || !idsRef.current.includes(peerId)) return;
+      if (!peerId) return;
+      if (idsRef.current.length && !idsRef.current.includes(peerId)) return;
       const at = messageTimestampMs(message) || Date.now();
       const text = previewTextFromMessage(message, langRef.current);
-      setPreviews((prev) => {
-        const next = { ...prev, [peerId]: { text, at } };
-        previewMemory = { ...previewMemory, [peerId]: { text, at } };
-        return next;
-      });
+      previewMemory = { ...previewMemory, [peerId]: { text, at } };
+      if (!enabledRef.current) return;
+      setPreviews((prev) => ({ ...prev, [peerId]: { text, at } }));
     });
     const offCleared = onChatCleared((data) => {
       const me = String(getCurrentUserId() || '');
@@ -117,15 +130,16 @@ export function useChatPreviews(friendIds: string[], lang: Lang, enabled: boolea
       const withId = String(data?.with || '');
       const peerId = by === me ? withId : by;
       if (!peerId) return;
+      if (previewMemory[peerId]) {
+        const mem = { ...previewMemory };
+        delete mem[peerId];
+        previewMemory = mem;
+      }
+      if (!enabledRef.current) return;
       setPreviews((prev) => {
         if (!prev[peerId]) return prev;
         const next = { ...prev };
         delete next[peerId];
-        if (previewMemory[peerId]) {
-          const mem = { ...previewMemory };
-          delete mem[peerId];
-          previewMemory = mem;
-        }
         return next;
       });
     });
@@ -133,7 +147,7 @@ export function useChatPreviews(friendIds: string[], lang: Lang, enabled: boolea
       offReceived?.();
       offCleared?.();
     };
-  }, [enabled]);
+  }, []);
 
   const dropPreviews = useCallback((peerIds: string[]) => {
     const ids = new Set(peerIds.map((id) => String(id || '').trim()).filter(Boolean));

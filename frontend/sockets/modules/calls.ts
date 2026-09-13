@@ -152,8 +152,9 @@ async function waitForCurrentUserId(ms = 8000): Promise<string | null> {
 }
 
 /**
- * call:accept с ожиданием connect + identity + reauth.
- * Без этого cold-start шлёт accept до bind userId → callee_socket_not_found.
+ * call:accept: connect + identity обязательны; reauth не блокирует первый emit,
+ * если сокет уже с userId (сервер умеет bind по installId). Иначе initiator ждёт
+ * лишний RTT reauth (~0.5–1.5s) пока callee ещё «звонит».
  */
 export async function emitCallAcceptAck(
   callId: string,
@@ -161,40 +162,81 @@ export async function emitCallAcceptAck(
   const id = String(callId || "").trim();
   if (!id) return { ok: false, error: "missing_callId" };
 
+  const normalize = (resp: { ok?: boolean; error?: string; duplicate?: boolean } | null | undefined) => ({
+    ok: !!resp?.ok || !!resp?.duplicate,
+    duplicate: resp?.duplicate,
+    error: resp?.error ? String(resp.error) : undefined,
+  });
+
   warmCallSignaling();
-  await ensureSocketConnected(CALL_SIGNALING_CONNECT_MS);
+  if (!socket.connected) {
+    await ensureSocketConnected(CALL_SIGNALING_CONNECT_MS);
+  }
   const uid = await waitForCurrentUserId(8000);
   if (!uid) {
     logger.warn("[socket] call:accept deferred — no currentUserId yet", { callId: id });
   }
-  try {
-    const { ensureReauthBeforePrivilegedSocketOp } = await import("./reauth");
-    const reauthed = await ensureReauthBeforePrivilegedSocketOp();
-    if (!reauthed && shared.reauthInFlight) {
-      try {
-        await shared.reauthInFlight;
-      } catch {}
-    } else if (!reauthed) {
-      logger.warn("[socket] call:accept continuing without fresh reauth", { callId: id });
+
+  const kickReauth = async (): Promise<boolean> => {
+    try {
+      const { ensureReauthBeforePrivilegedSocketOp } = await import("./reauth");
+      const reauthed = await ensureReauthBeforePrivilegedSocketOp();
+      if (!reauthed && shared.reauthInFlight) {
+        try {
+          await shared.reauthInFlight;
+        } catch {}
+      }
+      return !!reauthed || !!shared.lastSuccessfulReauthAt;
+    } catch (e: any) {
+      logger.warn("[socket] call:accept reauth wait failed", {
+        callId: id,
+        error: e?.message || String(e),
+      });
+      return false;
     }
-  } catch (e: any) {
-    logger.warn("[socket] call:accept reauth wait failed", {
-      callId: id,
-      error: e?.message || String(e),
-    });
+  };
+
+  const tryEmit = () =>
+    emitAck<{ ok?: boolean; error?: string; duplicate?: boolean }>(
+      "call:accept",
+      { callId: id },
+      7000,
+      1,
+    );
+
+  // Fast path: сокет + uid уже есть — emit сразу, reauth параллельно.
+  if (socket.connected && uid) {
+    const reauthP = kickReauth();
+    try {
+      const resp = await tryEmit();
+      const out = normalize(resp);
+      if (out.ok) {
+        void reauthP;
+        return out;
+      }
+      // Auth/bind race — дождаться reauth и один retry.
+      await reauthP;
+      const retry = await tryEmit();
+      return normalize(retry);
+    } catch (e: any) {
+      await reauthP;
+      try {
+        const retry = await tryEmit();
+        return normalize(retry);
+      } catch (e2: any) {
+        return { ok: false, error: e2?.message || e?.message || "accept_failed" };
+      }
+    }
   }
 
-  const resp = await emitAck<{ ok?: boolean; error?: string; duplicate?: boolean }>(
-    "call:accept",
-    { callId: id },
-    7000,
-    2,
-  );
-  return {
-    ok: !!resp?.ok,
-    duplicate: resp?.duplicate,
-    error: resp?.error ? String(resp.error) : undefined,
-  };
+  // Cold: сначала bind, потом emit.
+  await kickReauth();
+  try {
+    const resp = await tryEmit();
+    return normalize(resp);
+  } catch (e: any) {
+    return { ok: false, error: e?.message || "accept_failed" };
+  }
 }
 
 /**

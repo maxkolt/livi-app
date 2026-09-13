@@ -4057,12 +4057,20 @@ function AppContent() {
         hasLivekitToken: !!(data as any)?.livekitToken,
         hasLivekitRoomName: !!(data as any)?.livekitRoomName,
       });
+
+      // Caller: сразу снять исходящий ringtone/UI — не ждать navigate/VideoCall mount.
+      if (isCaller && callId) {
+        try { setOutgoingCallScreenVisible(false); } catch {}
+        try { emitCloseOutgoingCall({ reason: 'accepted', callId }); } catch {}
+        try {
+          closeOutgoingCallActivity(callId, { force: true, skipMainReturn: true });
+        } catch {}
+        markCallPerf('caller_outgoing_shell_closed_early', { callId });
+      }
+
       prefetchDirectCallIce(isCaller ? 'app:call-accepted:caller' : 'app:call-accepted:callee');
-      const acceptedMedia =
-        isCaller && (global as any).__outgoingCallMediaRef?.current === 'video'
-          ? 'video'
-          : getCallMediaHint(callId);
-      if (Platform.OS === 'android' && acceptedMedia === 'audio') {
+      // Mic prewarm и для video: connect быстрее с уже живым track.
+      if (Platform.OS === 'android') {
         prewarmDirectCallAudioCapture(isCaller ? 'app:call-accepted:caller' : 'app:call-accepted:callee');
       }
       
@@ -4079,6 +4087,7 @@ function AppContent() {
           };
 
           const closeOutgoingNativeShell = (opts?: { skipMainReturn?: boolean }) => {
+            // Early close выше уже снял shell для caller; повтор — no-op / safe.
             try { setOutgoingCallScreenVisible(false); } catch {}
             try { emitCloseOutgoingCall({ reason: 'accepted', callId: callId || null }); } catch {}
             try {

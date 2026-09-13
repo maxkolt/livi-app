@@ -227,16 +227,15 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 }
                 val needsForegroundService = !activityLaunchOk || keyguardLocked || !isInteractive
                 if (needsForegroundService) {
-                    // Экран выключен / заблокирован / запуск Activity из фона заблокирован системой (Android 10+):
-                    // ТОЛЬКО full-screen intent надёжно поднимает экран входящего поверх lock screen (как Telegram/WhatsApp).
-                    // Тихое уведомление (silent) в этом случае экран не поднимает — звонок «теряется». Поэтому здесь всегда full-screen.
-                    val useFullScreenIncoming = !isInteractive || keyguardLocked || !activityLaunchOk
+                    // FGS-уведомление всегда тихое: иконка в статус-баре + запись в шторке (без heads-up).
+                    // Экран входящего поднимает IncomingCallActivity (startActivity выше + retry из FGS).
+                    // Full-screen notification — только fallback, если startForegroundService упадёт.
                     startIncomingCallForegroundService(
                         callId,
                         from,
                         fromNick,
                         headsUpOnly = false,
-                        silentNotification = !useFullScreenIncoming
+                        silentNotification = true
                     )
                 } else {
                     vLog("[INCOMING_CALL] skip FGS: foreground activity launch owns incoming UI callId=$callId")
@@ -609,8 +608,8 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
         const val CHANNEL_ID_CALLS = "livi_incoming_call_v4"
         /** Канал входящего без звука/вибрации уведомления: звук и вибрация запускаются из кода (системная мелодия звонка). */
         const val CHANNEL_ID_CALLS_VISUAL = "livi_incoming_call_visual_v1"
-        /** Тихий канал для входящего: без heads-up, только иконка/шторка (когда телефон разблокирован). */
-        const val CHANNEL_ID_CALLS_SILENT = "livi_incoming_call_silent_v1"
+        /** Тихий канал для входящего: только иконка в статус-баре и запись в шторке (без heads-up). v2 = IMPORTANCE_LOW. */
+        const val CHANNEL_ID_CALLS_SILENT = "livi_incoming_call_silent_v2"
         const val NOTIFICATION_ID_INCOMING_CALL = 1001
         private const val CHANNEL_ID_MISSED_CALL = "missed_call_v2"
         /** Обновления счётчика / sync из JS — без повторного heads-up. */
@@ -665,13 +664,14 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 }
                 nm.createNotificationChannel(visualChannel)
 
-                // Тихий канал: без heads-up. Используем когда телефон разблокирован, чтобы не мешать поверх других приложений.
+                // Тихий канал: без heads-up/звука — только иконка в статус-баре и запись в шторке.
                 val silentChannel = NotificationChannel(
                     CHANNEL_ID_CALLS_SILENT,
                     context.getString(R.string.incoming_call_title),
-                    NotificationManager.IMPORTANCE_DEFAULT
+                    NotificationManager.IMPORTANCE_LOW
                 ).apply {
                     setSound(null, null)
+                    enableVibration(false)
                     setVibrationPattern(longArrayOf(0))
                     setLockscreenVisibility(Notification.VISIBILITY_PUBLIC)
                     setDescription(context.getString(R.string.incoming_call_title))
@@ -1344,8 +1344,9 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 .setOngoing(true)
                 .setAutoCancel(false)
                 .setOnlyAlertOnce(true)
+                .setSilent(true)
                 .setTimeoutAfter(27_000)
-                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                .setPriority(NotificationCompat.PRIORITY_LOW)
                 .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
                 .build()
         }
