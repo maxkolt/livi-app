@@ -1171,29 +1171,7 @@ function registerMessageHandlers(io: Server, sock: Socket) {
         };
       }
 
-      // Добавляем сообщение в дружбу
-      const saveResult = await addMessageToFriendship(friendship, message);
-      if (saveResult.duplicate) {
-        return ack?.(formatExistingMessageAck(
-          { id: messageId, timestamp: saveResult.timestamp || message.timestamp },
-          await isUserOnline(io, payload.to)
-        ));
-      }
-      if (saveResult.conflict) {
-        return ack?.({ ok: false, error: 'message_id_conflict' });
-      }
-      if (!saveResult.ok) {
-        return ack?.({ ok: false, error: 'save_failed' });
-      }
-
-      // Счётчик непрочитанных: не копим, если получатель уже в этом чате (chat:viewing), иначе бейдж/Home дергаются до mark_read.
-      if (!isViewingChatWith(payload.to, me)) {
-        addUnreadMessage(payload.to, messageId, me);
-      }
-
-      // Отправляем сообщение получателю если он онлайн
-      const recipientOnline = await isUserOnline(io, payload.to);
-
+      // Payload получателю строим ЗАРАНЕЕ — чтобы доставить мгновенно, не дожидаясь записи в БД.
       const emitPayload: any = {
         id: messageId,
         from: me,
@@ -1216,16 +1194,42 @@ function registerMessageHandlers(io: Server, sock: Socket) {
       }
       if (message.replyTo) emitPayload.replyTo = message.replyTo;
 
+      // RELAY-FIRST: сразу доставляем получателю (in-memory, мгновенно), НЕ дожидаясь Mongo.
+      // Проверяем online один раз (для offline-save/delivered). Emit в пустую комнату — no-op.
+      // Безопасно при ретраях: и сервер (findOne выше), и клиент (dedup по id) не дублируют.
+      const recipientOnline = await isUserOnline(io, payload.to);
       if (recipientOnline) {
-        const delivered = await sendMessageToUser(io, payload.to, emitPayload);
-        if (delivered) {}
-      } else {
+        io.to(`u:${String(payload.to)}`).emit('message:received', emitPayload);
+      }
+
+      // Персист ПОСЛЕ доставки — больше не задерживает появление сообщения у собеседника.
+      const saveResult = await addMessageToFriendship(friendship, message);
+      if (saveResult.duplicate) {
+        return ack?.(formatExistingMessageAck(
+          { id: messageId, timestamp: saveResult.timestamp || message.timestamp },
+          recipientOnline
+        ));
+      }
+      if (saveResult.conflict) {
+        return ack?.({ ok: false, error: 'message_id_conflict' });
+      }
+      if (!saveResult.ok) {
+        return ack?.({ ok: false, error: 'save_failed' });
+      }
+
+      // Счётчик непрочитанных: не копим, если получатель уже в этом чате (chat:viewing).
+      if (!isViewingChatWith(payload.to, me)) {
+        addUnreadMessage(payload.to, messageId, me);
+      }
+
+      // Оффлайн-очередь, если получатель не онлайн (emit выше был no-op).
+      if (!recipientOnline) {
         await saveOfflineMessage(payload.to, { ...emitPayload, id: messageId });
       }
 
-      // Отправляем подтверждение отправителю
-      ack?.({ 
-        ok: true, 
+      // Подтверждение отправителю после персиста — статусы/ретраи outbox остаются корректными.
+      ack?.({
+        ok: true,
         messageId,
         timestamp: message.timestamp,
         delivered: recipientOnline

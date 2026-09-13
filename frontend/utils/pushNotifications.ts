@@ -19,7 +19,7 @@ import { getInstallId } from './installId';
 import { logger } from './logger';
 import { trackReleaseError, trackReleaseEvent } from './telemetry';
 import { stopIncomingCallAlert } from './incomingCallAlert';
-import { sendCallAnsweredBroadcast, addEndedCallId, isEndedCallId, isOutgoingDeclineHandled, markOutgoingDeclineHandled, setCallMediaHint, getCallMediaHint, videoCallNavExtras, type DirectCallMediaHint } from './callKeep';
+import { sendCallAnsweredBroadcast, addEndedCallId, isEndedCallId, isOutgoingDeclineHandled, markOutgoingDeclineHandled, setCallMediaHint, getCallMediaHint, videoCallNavExtras, isIgnoringBatteryOptimizations, openBatteryOptimizationSettings, type DirectCallMediaHint } from './callKeep';
 import { emitCloseHomeModals, emitMissedClear, emitMissedIncrement, isWelcomeCallsMissedFilterActive, isWelcomeViewingChats, isWelcomeViewingMissedCalls, setPendingWelcomeCallsFilter, setPendingWelcomeChatsFilter, shouldSkipHomeUiSettle } from './globalEvents';
 import { terminateCall } from './terminateCall';
 import { recordCallLog, recordCancelledCall, flushCallLogUi, forceCallLogUiNow } from '../screens/home/callLog';
@@ -1751,6 +1751,8 @@ async function ensureIncomingCallNotificationCategory() {
  * On older Android versions there is no runtime prompt, but this will still
  * return the current permission status.
  */
+const BATTERY_OPT_REQUESTED_KEY = 'livi_battery_opt_requested_v1';
+
 export async function ensureInitialNotificationPermissions(): Promise<void> {
   try {
     await ensureAndroidNotificationChannels();
@@ -1770,6 +1772,28 @@ export async function ensureInitialNotificationPermissions(): Promise<void> {
     logger.info('[push] notification permission status:', finalStatus);
   } catch (e) {
     logger.warn('[push] Failed to request notification permissions', e as any);
+  }
+
+  // Один разовый мягкий запрос исключения из оптимизации батареи (Doze whitelist).
+  // Это единственный код-рычаг против OEM-энергосбережения / force-stop, из-за которого звонок
+  // может не дойти при полностью закрытом приложении и глубоком сне. Спрашиваем ОДИН раз за всё время,
+  // без повторов и только если приложение ещё не в белом списке. Системный диалог локализован ОС.
+  try {
+    if (Platform.OS === 'android') {
+      const alreadyAsked = await AsyncStorage.getItem(BATTERY_OPT_REQUESTED_KEY);
+      if (!alreadyAsked) {
+        await AsyncStorage.setItem(BATTERY_OPT_REQUESTED_KEY, '1');
+        const whitelisted = await isIgnoringBatteryOptimizations();
+        if (!whitelisted) {
+          // небольшая задержка, чтобы системный диалог не наложился на запрос разрешения на уведомления
+          setTimeout(() => {
+            try { openBatteryOptimizationSettings(); } catch {}
+          }, 1500);
+        }
+      }
+    }
+  } catch (e) {
+    logger.warn('[push] one-time battery-optimization request failed', e as any);
   }
 
 }

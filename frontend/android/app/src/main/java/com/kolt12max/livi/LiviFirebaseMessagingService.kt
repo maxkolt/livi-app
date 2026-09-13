@@ -227,12 +227,16 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 }
                 val needsForegroundService = !activityLaunchOk || keyguardLocked || !isInteractive
                 if (needsForegroundService) {
+                    // Экран выключен / заблокирован / запуск Activity из фона заблокирован системой (Android 10+):
+                    // ТОЛЬКО full-screen intent надёжно поднимает экран входящего поверх lock screen (как Telegram/WhatsApp).
+                    // Тихое уведомление (silent) в этом случае экран не поднимает — звонок «теряется». Поэтому здесь всегда full-screen.
+                    val useFullScreenIncoming = !isInteractive || keyguardLocked || !activityLaunchOk
                     startIncomingCallForegroundService(
                         callId,
                         from,
                         fromNick,
                         headsUpOnly = false,
-                        silentNotification = true
+                        silentNotification = !useFullScreenIncoming
                     )
                 } else {
                     vLog("[INCOMING_CALL] skip FGS: foreground activity launch owns incoming UI callId=$callId")
@@ -561,11 +565,29 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                     startService(serviceIntent)
                 }
             } catch (e: Exception) {
-                Log.w(TAG, "startForegroundService failed, launching IncomingCallActivity directly", e)
+                // Система заблокировала старт FGS (Doze-квота high-priority / ограничение фонового старта на Android 12+).
+                // startActivity из фона тоже заблокирован — поэтому публикуем full-screen-уведомление НАПРЯМУЮ:
+                // ему exemption не нужен, и экран входящего всё равно поднимется поверх lock screen (как Telegram/WhatsApp).
+                Log.w(TAG, "startForegroundService failed → direct full-screen notification fallback", e)
                 try {
-                    startActivity(activityIntent)
+                    val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                    val fullScreenAllowed = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                        try { nm.canUseFullScreenIntent() != false } catch (_: Exception) { true }
+                    } else true
+                    val fallbackNotif = if (fullScreenAllowed) {
+                        buildIncomingCallNotification(this, callId, from, fromNick)
+                    } else {
+                        buildIncomingCallNotificationHeadsUpOnly(this, callId, from, fromNick)
+                    }
+                    nm.notify(NOTIFICATION_ID_INCOMING_CALL, fallbackNotif)
+                    Log.i(TAG, "[INCOMING_CALL] direct full-screen notification posted (FGS start blocked) callId=$callId")
                 } catch (e2: Exception) {
-                    Log.w(TAG, "startActivity fallback after FGS failure also failed", e2)
+                    Log.w(TAG, "direct full-screen notification fallback also failed; last resort startActivity", e2)
+                    try {
+                        startActivity(activityIntent)
+                    } catch (e3: Exception) {
+                        Log.w(TAG, "startActivity last-resort fallback also failed", e3)
+                    }
                 }
             }
         } else {
