@@ -571,8 +571,16 @@ export const useAudioRouting = (
     ) {
       return 'EARPIECE';
     }
-    // Audio-first: без явного pin на video UI держим speaker / BT.
+    // Audio-first: без явного pin на video UI держим speaker / BT — но только если своя камера on.
+    // Зритель peer-video со своей cam off сохраняет ухо/динамик.
     if (!isInAudioOnlyCallUi() && ongoingCallPrefersVideoMedia()) {
+      let localCamOn = false;
+      try {
+        localCamOn =
+          (global as any).__webrtcSessionRef?.current?.getIsCamOn?.() === true ||
+          (global as any).__currentCallPiPParamsRef?.current?.localCamOn === true;
+      } catch {}
+      if (!localCamOn) return 'EARPIECE';
       return mapRouteForEnterVideoUi('EARPIECE');
     }
     if (routingOptionsRef.current?.defaultToEarpiece) return 'EARPIECE';

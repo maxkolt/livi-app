@@ -51,9 +51,8 @@ type Props = {
   endLabel: string;
   moreItems: CallMoreMenuItem[];
   controlsLocked?: boolean;
-  pulseCam?: boolean;
-  pulseCamAccent?: string;
-  pulseCamAccentBg?: string;
+  /** Подсказка над капсулой (напр. «Собеседник включил видео»). */
+  peerVideoHint?: string | null;
   topInset?: number;
   bottomInset?: number;
   endDisabled?: boolean;
@@ -79,9 +78,7 @@ export function CallScreenChrome({
   endLabel,
   moreItems,
   controlsLocked = false,
-  pulseCam = false,
-  pulseCamAccent,
-  pulseCamAccentBg,
+  peerVideoHint = null,
   topInset = 0,
   bottomInset = 0,
   endDisabled = false,
@@ -152,6 +149,11 @@ export function CallScreenChrome({
         style={[styles.bottomWrap, { paddingBottom: Math.max(28, bottomInset + 22) }]}
         pointerEvents="box-none"
       >
+        {peerVideoHint ? (
+          <Text style={styles.peerVideoHint} numberOfLines={2}>
+            {peerVideoHint}
+          </Text>
+        ) : null}
         <View style={[styles.capsule, locked && styles.capsuleLocked]}>
           {onToggleSpeaker ? (
             <CapsuleAction
@@ -183,18 +185,11 @@ export function CallScreenChrome({
             </CapsuleAction>
           ) : null}
 
-          <CapsuleAction
-            label={cameraLabel}
-            onPress={onToggleCam}
-            disabled={locked}
-            active={pulseCam}
-            activeBg={pulseCamAccentBg}
-            activeBorder={pulseCamAccent}
-          >
+          <CapsuleAction label={cameraLabel} onPress={onToggleCam} disabled={locked}>
             <MaterialIcons
               name={camOn ? 'videocam' : 'videocam-off'}
               size={24}
-              color={pulseCam && pulseCamAccent ? pulseCamAccent : WELCOME_HEADER_TITLE}
+              color={WELCOME_HEADER_TITLE}
             />
           </CapsuleAction>
 
@@ -425,6 +420,16 @@ const styles = StyleSheet.create({
     zIndex: 40,
     alignItems: 'center',
     paddingHorizontal: 18,
+  },
+  /** Тёмно-титановый hint над капсулой — без подсветки кнопки камеры. */
+  peerVideoHint: {
+    marginBottom: 10,
+    paddingHorizontal: 12,
+    textAlign: 'center',
+    fontSize: 13,
+    fontWeight: '500',
+    letterSpacing: 0.15,
+    color: '#5C616A',
   },
   capsule: {
     flexDirection: 'row',

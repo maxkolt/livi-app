@@ -139,6 +139,7 @@ import {
   prefetchDirectCallIce,
   prewarmDirectCallAudioCapture,
 } from './utils/directCallConnectPrewarm';
+import { bootstrapEarlyDirectCallSession } from './utils/earlyDirectCallSession';
 import {
   restoreCallMediaAfterSystemPiPReturn,
   prepareDirectCallVideoExpandFromInAppPiP,
@@ -4072,6 +4073,27 @@ function AppContent() {
       // Mic prewarm и для video: connect быстрее с уже живым track.
       if (Platform.OS === 'android') {
         prewarmDirectCallAudioCapture(isCaller ? 'app:call-accepted:caller' : 'app:call-accepted:callee');
+      }
+
+      // LiveKit connect до mount VideoCall: токен уже в __pendingCallAcceptedRef.
+      // Сессия уходит в __webrtcSessionRef → VideoCall только rebind (без второго connect).
+      if (hasLivekitAcceptPayload && callId) {
+        try {
+          const earlyNick = isCaller
+            ? String((global as any).__outgoingCallPeerNickRef?.current || '').trim() || null
+            : null;
+          bootstrapEarlyDirectCallSession({
+            callId,
+            peerUserId: peerUserId || null,
+            isCaller,
+            partnerNick: earlyNick,
+          });
+        } catch (earlyErr) {
+          logger.warn('[App] earlyDirectCallSession bootstrap failed', {
+            callId,
+            error: (earlyErr as Error)?.message || String(earlyErr),
+          });
+        }
       }
       
       try { setIncomingCallScreenVisible(false); } catch {}

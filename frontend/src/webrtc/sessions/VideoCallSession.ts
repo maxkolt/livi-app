@@ -201,6 +201,9 @@ export class VideoCallSession extends SimpleEventEmitter {
   private cleaned = false;
   /** ctor запланировал handleCallAccepted из __pendingCallAcceptedRef — UI не должен дублировать connectAsInitiatorAfterAccepted */
   private consumedPendingCallAcceptedAtConstruct = false;
+  /** Flush pending accept connect (early bootstrap может вызвать сразу, не ждать microtask). */
+  private pendingAcceptFlush: (() => void) | null = null;
+  private pendingAcceptFlushed = false;
   /** handleCallAccepted / Room.connect ещё идут — stall-fallback в VideoCall не должен дублировать connect */
   private pendingAcceptConnectBusyDepth = 0;
 
@@ -330,9 +333,14 @@ export class VideoCallSession extends SimpleEventEmitter {
       // React useEffect и уменьшил окно «ответивший один в комнате».
       // Параллельно поднимаем локальные треки тем же тиком, что и handleCallAccepted — пока идёт
       // синхронная часть handleCallAccepted / roomLock, камера успевает стартовать (dedupe в ensureLocalTracks).
-      queueMicrotask(() => {
+      // Early bootstrap вызывает flushPendingCallAcceptedConnect() сразу — microtask станет no-op
+      // (иначе на Android JS часто доезжает до connect только вместе с onLayout ~2с).
+      const flushPendingAccept = () => {
+        if (this.pendingAcceptFlushed) return;
+        this.pendingAcceptFlushed = true;
+        this.pendingAcceptFlush = null;
         if (this.ended || this.endCallInProgress || this.isGlobalCallTeardownInProgress()) {
-          logger.info('[VideoCallSession] ⏭️ Pending call:accepted microtask cancelled during teardown', {
+          logger.info('[VideoCallSession] ⏭️ Pending call:accepted flush cancelled during teardown', {
             callId: pendingSnapshot.callId,
             myUserId: config.myUserId,
           });
@@ -355,7 +363,9 @@ export class VideoCallSession extends SimpleEventEmitter {
           .finally(() => {
             this.endPendingAcceptConnectBusy();
           });
-      });
+      };
+      this.pendingAcceptFlush = flushPendingAccept;
+      queueMicrotask(flushPendingAccept);
     }
   }
 
@@ -441,6 +451,64 @@ export class VideoCallSession extends SimpleEventEmitter {
   /** ctor запланировал обработку __pendingCallAcceptedRef — не дублировать connectAsInitiatorAfterAccepted из VideoCall */
   didSchedulePendingCallAcceptedConnect(): boolean {
     return this.consumedPendingCallAcceptedAtConstruct;
+  }
+
+  /**
+   * Early App bootstrap: стартовать handleCallAccepted сразу в том же тике, что и create session,
+   * не дожидаясь microtask (на Android он часто сдвигается до onLayout ~2с).
+   */
+  flushPendingCallAcceptedConnect(reason?: string): boolean {
+    if (!this.consumedPendingCallAcceptedAtConstruct || this.pendingAcceptFlushed) {
+      return false;
+    }
+    const flush = this.pendingAcceptFlush;
+    if (!flush) return false;
+    logger.info('[VideoCallSession] flushPendingCallAcceptedConnect (immediate)', {
+      reason: reason || null,
+      callId: this.callId,
+      myUserId: this.config.myUserId,
+    });
+    try {
+      markCallPerf('pending_accept_flush_immediate', {
+        reason: reason || null,
+        callId: this.callId,
+      });
+    } catch {}
+    flush();
+    return true;
+  }
+
+  /**
+   * Early App bootstrap / idle remount: применить call:accepted с токеном без ожидания VideoCall mount.
+   * Дедуп внутри handleCallAccepted (lastProcessed / roomLock / connectingPromise).
+   */
+  applyCallAcceptedFromPayload(data: CallAcceptedPayload, reason?: string): Promise<void> {
+    logger.info('[VideoCallSession] applyCallAcceptedFromPayload', {
+      reason: reason || null,
+      callId: data?.callId ?? null,
+      hasLivekitToken: !!data?.livekitToken,
+      roomName: data?.livekitRoomName ?? data?.roomId ?? null,
+      myUserId: this.config.myUserId,
+    });
+    try {
+      markCallPerf('session_apply_call_accepted', {
+        reason: reason || null,
+        callId: data?.callId ?? null,
+      });
+    } catch {}
+    this.beginPendingAcceptConnectBusy();
+    return this.handleCallAccepted(data)
+      .catch((e) => {
+        logger.error('[VideoCallSession] applyCallAcceptedFromPayload failed', {
+          reason: reason || null,
+          callId: data?.callId ?? null,
+          error: e,
+        });
+        throw e;
+      })
+      .finally(() => {
+        this.endPendingAcceptConnectBusy();
+      });
   }
 
   /** Pending accept / LiveKit connect ещё в работе — UI stall-fallback должен ждать. */
@@ -2213,22 +2281,29 @@ export class VideoCallSession extends SimpleEventEmitter {
     keepRestoreDeferAfterPiP?: boolean;
     /** Явный выход с экрана аудиозвонка (кнопка «видео» / toggleCam). */
     leaveAudioOnlyConsumer?: boolean;
+    /** Собеседник включил камеру — подписаться сразу (UI refs могут ещё отставать). */
+    forceForPeerRemoteVideo?: boolean;
   }): void {
-    if (this.isLocalDirectCallAudioOnlyUi()) {
+    const forcePeer = !!opts?.forceForPeerRemoteVideo;
+    if (!forcePeer && this.isLocalDirectCallAudioOnlyUi()) {
       logger.debug('[VideoCallSession] Skip enableRemoteVideoConsumption — local audio-only UI');
       return;
     }
-    if (this.isDirectCallAudioFirstWithoutUserVideo()) {
+    if (!forcePeer && this.isDirectCallAudioFirstWithoutUserVideo()) {
       logger.debug(
         '[VideoCallSession] Skip enableRemoteVideoConsumption — audio-first without user video request',
       );
       return;
     }
-    if (this.directCallAudioOnlyConsumerDefer && !opts?.leaveAudioOnlyConsumer) {
+    if (
+      this.directCallAudioOnlyConsumerDefer &&
+      !opts?.leaveAudioOnlyConsumer &&
+      !forcePeer
+    ) {
       logger.debug('[VideoCallSession] Skip enableRemoteVideoConsumption — direct-call audio-only consumer defer');
       return;
     }
-    if (opts?.leaveAudioOnlyConsumer) {
+    if (opts?.leaveAudioOnlyConsumer || forcePeer) {
       this.directCallAudioOnlyConsumerDefer = false;
       if (isInAudioOnlyCallUi()) {
         logger.debug(
@@ -2241,16 +2316,20 @@ export class VideoCallSession extends SimpleEventEmitter {
       if (!opts?.keepRestoreDeferAfterPiP) this.restoreDeferRemoteVideoAfterPiP = false;
       if (
         this.config.getIsDirectCall?.() &&
-        !this.isLocalDirectCallAudioOnlyUi() &&
-        !this.directCallAudioOnlyConsumerDefer &&
-        !isInAudioOnlyCallUi()
+        (forcePeer ||
+          (!this.isLocalDirectCallAudioOnlyUi() &&
+            !this.directCallAudioOnlyConsumerDefer &&
+            !isInAudioOnlyCallUi()))
       ) {
         markDirectCallVideoMediaActive();
         this.resubscribeRemoteVideoIfNeeded('enable_consumption_idempotent');
       }
       return;
     }
-    if (isInAudioOnlyCallUi() || this.directCallAudioOnlyConsumerDefer) {
+    if (
+      !forcePeer &&
+      (isInAudioOnlyCallUi() || this.directCallAudioOnlyConsumerDefer)
+    ) {
       logger.debug('[VideoCallSession] Skip enableRemoteVideoConsumption — audio-only consumer still active');
       return;
     }
@@ -5436,12 +5515,40 @@ export class VideoCallSession extends SimpleEventEmitter {
     }
     
     if (this.incomingAcceptDeferCapture) {
-      await new Promise((resolve) => setTimeout(resolve, 400));
+      // Видео-входящий: короткая пауза до capture. Аудио — без sleep (блокировало Room.connect).
+      if (this.isCamOn) {
+        await new Promise((resolve) => setTimeout(resolve, 400));
+      }
       this.incomingAcceptDeferCapture = false;
-      logger.info('[VideoCallSession] Deferred incoming capture: starting local tracks before LiveKit connect');
+      logger.info('[VideoCallSession] Deferred incoming capture: starting local tracks before LiveKit connect', {
+        camOn: this.isCamOn,
+      });
     }
-    if (!this.localVideoTrack || !this.localAudioTrack) {
-      await this.ensureLocalTracks();
+    // Room.connect не требует локальных треков — capture параллельно, await только перед publish.
+    // Раньше `!localVideoTrack` на audio-first всегда был true и блокировал connect на 1–2с.
+    const needAudioTrack = !this.localAudioTrack;
+    const needVideoTrack = this.isCamOn && !this.localVideoTrack;
+    let tracksReadyPromise: Promise<void> = Promise.resolve();
+    if (needAudioTrack || needVideoTrack) {
+      try {
+        markCallPerf('livekit_tracks_parallel_with_connect', {
+          needAudioTrack,
+          needVideoTrack,
+          camOn: this.isCamOn,
+          earlyBootstrap: !!(this as any).__earlyDirectCallBootstrap,
+        });
+      } catch {}
+      tracksReadyPromise = this.ensureLocalTracks().catch((e) => {
+        logger.warn('[VideoCallSession] ensureLocalTracks parallel with connect failed', {
+          error: (e as Error)?.message || String(e),
+        });
+      });
+    } else {
+      try {
+        markCallPerf('livekit_tracks_already_ready', {
+          camOn: this.isCamOn,
+        });
+      } catch {}
     }
     
     // КРИТИЧНО: Проверяем еще раз перед созданием новой комнаты
@@ -5608,6 +5715,7 @@ export class VideoCallSession extends SimpleEventEmitter {
           markCallPerf('livekit_connect_start', {
             roomName: targetRoomName,
             connectReason: options?.reason || null,
+            earlyBootstrap: !!(this as any).__earlyDirectCallBootstrap,
           });
         } catch {}
         this.livekitConnectStartedAt = connectStartTime;
@@ -5996,6 +6104,23 @@ export class VideoCallSession extends SimpleEventEmitter {
       const postConnectPublishDelayMs = this.isCamOn ? 350 : 0;
       if (postConnectPublishDelayMs > 0 && !this.ended && this.room === room) {
         await new Promise<void>((r) => setTimeout(r, postConnectPublishDelayMs));
+      }
+
+      // Дожидаемся локальных треков (шли параллельно с Room.connect).
+      try {
+        markCallPerf('livekit_await_tracks_before_publish', {
+          hasAudio: !!this.localAudioTrack,
+          hasVideo: !!this.localVideoTrack,
+          camOn: this.isCamOn,
+        });
+      } catch {}
+      await tracksReadyPromise;
+      if (!this.localAudioTrack || (this.isCamOn && !this.localVideoTrack)) {
+        await this.ensureLocalTracks().catch((e) => {
+          logger.warn('[VideoCallSession] ensureLocalTracks before publish failed', {
+            error: (e as Error)?.message || String(e),
+          });
+        });
       }
 
       // КРИТИЧНО: Проверяем состояние комнаты перед публикацией треков

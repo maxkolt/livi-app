@@ -343,6 +343,16 @@ export function markDirectCallVideoExpandAudioPrepared(): void {
   touchDirectCallVideoExpandAudioPrepared();
 }
 
+/** Video→audio return: снять «expand prepared», иначе late pin/reapply думает, что speaker ещё актуален. */
+export function clearDirectCallVideoExpandAudioPrepared(): void {
+  try {
+    const g = global as any;
+    g.__directCallVideoExpandAudioPreparedAtRef =
+      g.__directCallVideoExpandAudioPreparedAtRef || { current: 0 };
+    g.__directCallVideoExpandAudioPreparedAtRef.current = 0;
+  } catch {}
+}
+
 /** Недавно вызван prepareDirectCallVideoExpandFromInAppPiP — не дублировать native reapply. */
 export function isDirectCallVideoExpandAudioPreparedRecently(
   windowMs = DIRECT_CALL_VIDEO_EXPAND_AUDIO_PREPARED_MS,
@@ -907,6 +917,41 @@ export function resolveFullVideoCallScreenAudioRoute(): InCallAudioRoute {
   if (isExternalHeadsetRoute(ext)) {
     return ext;
   }
+
+  // Только смотрим peer video (своя камера off): не форсить громкую — оставить маршрут audio-страницы.
+  let localCamOn = false;
+  try {
+    const session = (global as any).__webrtcSessionRef?.current as
+      | { getIsCamOn?: () => boolean }
+      | null
+      | undefined;
+    if (session?.getIsCamOn?.() === true) localCamOn = true;
+  } catch {}
+  if (!localCamOn) {
+    try {
+      const params = (global as any).__currentCallPiPParamsRef?.current;
+      if (params?.localCamOn === true) localCamOn = true;
+    } catch {}
+  }
+  if (!localCamOn) {
+    const beforeVideo = readDirectCallAudioRouteBeforeVideo();
+    if (beforeVideo === 'EARPIECE' || beforeVideo === 'SPEAKER_PHONE') {
+      return beforeVideo;
+    }
+    const uiLock = readCallAudioRouteUiLock();
+    if (uiLock === 'EARPIECE' || uiLock === 'SPEAKER_PHONE') {
+      return uiLock;
+    }
+    if (userSel === 'EARPIECE' || userSel === 'SPEAKER_PHONE') {
+      return userSel;
+    }
+    const last = readLastAppliedCallAudioRoute();
+    if (last === 'EARPIECE' || last === 'SPEAKER_PHONE') {
+      return last;
+    }
+    return 'EARPIECE';
+  }
+
   return 'SPEAKER_PHONE';
 }
 
