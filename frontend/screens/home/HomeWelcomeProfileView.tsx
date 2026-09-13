@@ -489,7 +489,12 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
   const headerHub = (
     <View style={styles.header}>
       <Text style={styles.title}>{t('tabSettings', lang)}</Text>
-      <WelcomeCrownButton />
+      <WelcomeCrownButton
+        myUserId={myUserId}
+        myAvatarVer={myAvatarVer}
+        avatarUri={avatarUri}
+        nick={savedNick || nick}
+      />
     </View>
   );
 
