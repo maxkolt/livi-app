@@ -1580,6 +1580,17 @@ function attachSocketToPendingDirectRoom(
     source,
     socketId: sock.id,
   });
+  // Партнёр вернулся в комнату → сразу снимаем «восстановление» у выжившей стороны (не ждём таймаут SFU).
+  try {
+    const peerUserId = pendingRoom.peerUserId;
+    if (peerUserId && peerUserId !== userId) {
+      io.to(`u:${peerUserId}`).emit('call:peerRecovered', {
+        callId: pendingRoom.callId,
+        roomId: pendingRoom.roomId,
+        from: userId,
+      });
+    }
+  } catch {}
 }
 
 async function emitPendingCallAcceptedToSocket(
@@ -4679,6 +4690,25 @@ io.on('connection', async (sock: AuthedSocket) => {
         if (otherSocketsSameUser.length === 0 && appFg !== false) {
           touchStickyForegroundOnline(uidStr);
           armStickyForegroundPresenceResolution(io, uidStr);
+        }
+        // Быстрый сигнал «партнёр переподключается» выжившей стороне direct-call.
+        // Только когда это был последний сокет пользователя — иначе уже есть живой
+        // duplicate/replacement socket и ложное «восстановление» не нужно.
+        if (otherSocketsSameUser.length === 0) {
+          try {
+            const lease = findActiveCallLeaseForUser(uidStr);
+            if (lease) {
+              const peerUserId = lease.a === uidStr ? lease.b : lease.a;
+              if (peerUserId && peerUserId !== uidStr) {
+                touchActiveCallLease(lease.callId, { phase: 'reconnecting' });
+                io.to(`u:${peerUserId}`).emit('call:peerReconnecting', {
+                  callId: lease.callId,
+                  roomId: lease.roomId,
+                  from: uidStr,
+                });
+              }
+            }
+          } catch {}
         }
       }
     } catch {}

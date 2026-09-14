@@ -930,6 +930,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
   const callConnectedAtRef = useRef<number | null>(null);
   const [callElapsedSec, setCallElapsedSec] = useState(0);
   const [liveKitReconnectingUi, setLiveKitReconnectingUi] = useState(false);
+  const [peerReconnectingUi, setPeerReconnectingUi] = useState(false);
   const [remoteAudioGapUi, setRemoteAudioGapUi] = useState(false);
   const [buttonsOpacity] = useState(new Animated.Value(1));
   const incomingCallBounce = useRef(new Animated.Value(0)).current;
@@ -4744,12 +4745,21 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     // Устанавливаем обработчики событий
     const handleLiveKitReconnecting = () => setLiveKitReconnectingUi(true);
     const handleLiveKitReconnected = () => setLiveKitReconnectingUi(false);
+    const handlePeerReconnecting = () => setPeerReconnectingUi(true);
+    const handlePeerRecovered = () => setPeerReconnectingUi(false);
     try {
       if (typeof (session as any).isLiveKitReconnecting === 'function') {
         setLiveKitReconnectingUi(!!(session as any).isLiveKitReconnecting());
       }
     } catch {
       setLiveKitReconnectingUi(false);
+    }
+    try {
+      if (typeof (session as any).isPeerReconnecting === 'function') {
+        setPeerReconnectingUi(!!(session as any).isPeerReconnecting());
+      }
+    } catch {
+      setPeerReconnectingUi(false);
     }
 
     session.on('remoteViewKeyChanged', handleRemoteViewKeyChange);
@@ -4763,6 +4773,8 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     session.on('localExternalHoldChanged', handleLocalExternalHoldChanged);
     session.on('livekitReconnecting', handleLiveKitReconnecting);
     session.on('livekitReconnected', handleLiveKitReconnected);
+    session.on('peerReconnecting', handlePeerReconnecting);
+    session.on('peerRecovered', handlePeerRecovered);
     if (needsStreamBridge) {
       session.on('localStream', handleLocalStreamEvent as any);
       session.on('remoteStream', handleRemoteStreamEvent as any);
@@ -4792,6 +4804,8 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
         session.off('localExternalHoldChanged', handleLocalExternalHoldChanged);
         session.off('livekitReconnecting', handleLiveKitReconnecting);
         session.off('livekitReconnected', handleLiveKitReconnected);
+        session.off('peerReconnecting', handlePeerReconnecting);
+        session.off('peerRecovered', handlePeerRecovered);
         if (needsStreamBridge) {
           session.off('localStream', handleLocalStreamEvent as any);
           session.off('remoteStream', handleRemoteStreamEvent as any);
@@ -7050,7 +7064,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       return;
     }
     // After the call was already timed, brief audio drop → show connecting again.
-    if (!showCallDuration || remoteAudioLiveForTimer || liveKitReconnectingUi) {
+    if (!showCallDuration || remoteAudioLiveForTimer || liveKitReconnectingUi || peerReconnectingUi) {
       setRemoteAudioGapUi(false);
       return;
     }
@@ -7063,6 +7077,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     showCallDuration,
     remoteAudioLiveForTimer,
     liveKitReconnectingUi,
+    peerReconnectingUi,
   ]);
 
   useEffect(() => {
@@ -7086,12 +7101,12 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     !isEndingCall &&
     !localExternalHoldUi &&
     !partnerExternalHoldUi &&
-    (!showCallDuration || liveKitReconnectingUi || remoteAudioGapUi);
+    (!showCallDuration || liveKitReconnectingUi || peerReconnectingUi || remoteAudioGapUi);
 
   const callChromeStatusLine = useMemo(() => {
     if (localExternalHoldUi) return t('externalCallHoldLocal', lang);
     if (partnerExternalHoldUi) return t('partnerBusyEllipsis', lang);
-    if (liveKitReconnectingUi) return t('callRestoringConnection', lang);
+    if (liveKitReconnectingUi || peerReconnectingUi) return t('callRestoringConnection', lang);
     if (showAudioConnectingStatus) return t('audioCallConnecting', lang);
     if (showCallDuration) return formatCallDuration(callElapsedSec);
     return t('audioCallStatus', lang);
@@ -7099,6 +7114,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     localExternalHoldUi,
     partnerExternalHoldUi,
     liveKitReconnectingUi,
+    peerReconnectingUi,
     showAudioConnectingStatus,
     showCallDuration,
     callElapsedSec,

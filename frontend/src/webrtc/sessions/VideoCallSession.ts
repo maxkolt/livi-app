@@ -119,6 +119,8 @@ type LiveKitConnectOptions = {
  * while the peer (or restored socket) can still heartbeat.
  */
 const MEDIA_RECONNECT_GRACE_MS = 45_000;
+/** Короткие socket flap не мигают «Восстановление…». */
+const PEER_RECONNECTING_UI_DEBOUNCE_MS = 1_200;
 
 export class VideoCallSession extends SimpleEventEmitter {
   private hasLoggedLiveKitApiKeyWarning = false;
@@ -165,6 +167,8 @@ export class VideoCallSession extends SimpleEventEmitter {
     camToggle?: (data: { enabled: boolean; from: string; roomId?: string }) => void;
     externalHold?: (data: { hold?: boolean; from: string; roomId?: string }) => void;
     directCallVideoUi?: (data: { inVideoCallUi: boolean; from: string; roomId?: string }) => void;
+    peerReconnecting?: (data?: { callId?: string; roomId?: string; from?: string }) => void;
+    peerRecovered?: (data?: { callId?: string; roomId?: string; from?: string }) => void;
   } = {};
   private lastEmittedPeerVideoCallUi: boolean | null = null;
   /** Партнёр на полноэкранном video UI direct-call; null — ещё не присылал direct-call:video-ui. */
@@ -221,6 +225,9 @@ export class VideoCallSession extends SimpleEventEmitter {
 
   // LiveKit reconnect handling: during reconnect we must NOT treat transient disconnects as "call ended".
   private liveKitReconnecting = false;
+  /** Партнёр потерял сеть (быстрый серверный сигнал call:peerReconnecting). UI держим до медиа/peer в комнате. */
+  private peerReconnecting = false;
+  private peerReconnectingDebounceTimer: ReturnType<typeof setTimeout> | null = null;
   private callLeaseHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private lastLiveKitReconnectingAt = 0;
   /** Unexpected Room Disconnected: try restore within grace; then stop heartbeat (server lease ends busy). */
@@ -887,6 +894,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       return;
     }
     this.endCallInProgress = true;
+    this.clearPeerReconnectingUi('endCall');
     void this.exitExternalCallHold().catch(() => {});
     setPartnerExternalHoldSnapshot(false);
     this.setPartnerExternalHoldState(false);
@@ -2890,6 +2898,86 @@ export class VideoCallSession extends SimpleEventEmitter {
     }
   }
 
+  /** Партнёр потерял сеть (серверный сигнал) — для UI «Восстановление связи…» без ожидания таймаута SFU. */
+  isPeerReconnecting(): boolean {
+    return !!this.peerReconnecting && !this.ended;
+  }
+
+  private matchesPeerCallSignal(data?: { callId?: string; roomId?: string; from?: string } | null): boolean {
+    const callId = String(data?.callId || '').trim();
+    const roomId = String(data?.roomId || '').trim();
+    const myCallId = String(this.callId || '').trim();
+    if (callId && myCallId && callId !== myCallId) return false;
+    if (roomId) {
+      if (this.matchesSignalingRoom(roomId) || this.matchesDirectCallParticipantsRoom(roomId)) {
+        return true;
+      }
+      // Сессия ещё без roomId — принимаем по callId (или без фильтров, если callId тоже пуст).
+      if (this.resolveSignalingRoomId()) return false;
+    }
+    return true;
+  }
+
+  private clearPeerReconnectingDebounce(): void {
+    if (!this.peerReconnectingDebounceTimer) return;
+    clearTimeout(this.peerReconnectingDebounceTimer);
+    this.peerReconnectingDebounceTimer = null;
+  }
+
+  private clearPeerReconnectingUi(reason: string): void {
+    this.clearPeerReconnectingDebounce();
+    if (!this.peerReconnecting) return;
+    this.peerReconnecting = false;
+    logger.info('[VideoCallSession] Cleared peerReconnecting UI', { reason, callId: this.callId });
+    try {
+      this.emit('peerRecovered');
+    } catch {}
+  }
+
+  /**
+   * Socket peerRecovered приходит раньше медиа. UI «Восстановление…» снимаем только когда
+   * партнёр снова в LiveKit и/или есть живой remote audio.
+   */
+  private tryClearPeerReconnectingAfterMedia(reason: string): void {
+    if (!this.peerReconnecting || this.ended || this.endCallInProgress) return;
+    const peerInRoom = this.hasExpectedRemoteParticipantInRoom();
+    let hasLiveAudio = false;
+    try {
+      const mt = this.remoteAudioTrack?.mediaStreamTrack as { readyState?: string } | undefined;
+      hasLiveAudio = !!mt && mt.readyState !== 'ended';
+    } catch {
+      hasLiveAudio = !!this.remoteAudioTrack;
+    }
+    if (!peerInRoom && !hasLiveAudio) {
+      logger.debug('[VideoCallSession] peerRecovered/media check — keep restoring UI', {
+        reason,
+        peerInRoom,
+        hasLiveAudio,
+        callId: this.callId,
+      });
+      return;
+    }
+    this.clearPeerReconnectingUi(reason);
+  }
+
+  private armPeerReconnectingUi(reason: string): void {
+    if (this.ended || this.endCallInProgress || this.peerReconnecting) return;
+    this.clearPeerReconnectingDebounce();
+    this.peerReconnectingDebounceTimer = setTimeout(() => {
+      this.peerReconnectingDebounceTimer = null;
+      if (this.ended || this.endCallInProgress || this.peerReconnecting) return;
+      this.peerReconnecting = true;
+      logger.warn('[VideoCallSession] Peer reconnecting UI (server signal)', {
+        reason,
+        callId: this.callId,
+        partnerUserId: this.partnerUserId,
+      });
+      try {
+        this.emit('peerReconnecting');
+      } catch {}
+    }, PEER_RECONNECTING_UI_DEBOUNCE_MS);
+  }
+
   /** Локальный UI direct-call: экран «Аудиозвонок» (не video UI / не Home-as-video). */
   private isLocalDirectCallAudioOnlyUi(): boolean {
     try {
@@ -3238,6 +3326,8 @@ export class VideoCallSession extends SimpleEventEmitter {
     if (handlers.camToggle) socket.off('cam-toggle', handlers.camToggle);
     if (handlers.externalHold) socket.off('call:external-hold', handlers.externalHold);
     if (handlers.directCallVideoUi) socket.off('direct-call:video-ui', handlers.directCallVideoUi);
+    if (handlers.peerReconnecting) socket.off('call:peerReconnecting', handlers.peerReconnecting);
+    if (handlers.peerRecovered) socket.off('call:peerRecovered', handlers.peerRecovered);
 
     this.socketHandlers = {};
   }
@@ -3530,6 +3620,22 @@ export class VideoCallSession extends SimpleEventEmitter {
       this.config.callbacks.onPeerDirectCallVideoUiChange?.(data.inVideoCallUi);
     };
 
+    const peerReconnectingHandler = (data?: { callId?: string; roomId?: string; from?: string }) => {
+      // Партнёр потерял сеть (быстрый серверный сигнал) — UI после короткого debounce.
+      if (!this.matchesPeerCallSignal(data)) return;
+      if (this.peerReconnecting) return;
+      this.armPeerReconnectingUi('call:peerReconnecting');
+    };
+    const peerRecoveredHandler = (data?: { callId?: string; roomId?: string; from?: string }) => {
+      if (!this.matchesPeerCallSignal(data)) return;
+      // Socket вернулся раньше медиа: не гасим UI сразу. Если debounce ещё не всплыл — отменяем мигание.
+      if (!this.peerReconnecting) {
+        this.clearPeerReconnectingDebounce();
+        return;
+      }
+      this.tryClearPeerReconnectingAfterMedia('call:peerRecovered');
+    };
+
     // Сохраняем ссылки на обработчики для возможности их удаления
     this.socketHandlers.callAccepted = callAcceptedHandler;
     this.socketHandlers.callIncoming = callIncomingHandler;
@@ -3543,6 +3649,8 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.socketHandlers.camToggle = camToggleHandler;
     this.socketHandlers.externalHold = externalHoldHandler;
     this.socketHandlers.directCallVideoUi = directCallVideoUiHandler;
+    this.socketHandlers.peerReconnecting = peerReconnectingHandler;
+    this.socketHandlers.peerRecovered = peerRecoveredHandler;
     
     socket.on('call:accepted', callAcceptedHandler);
     socket.on('call:incoming', callIncomingHandler);
@@ -3555,6 +3663,8 @@ export class VideoCallSession extends SimpleEventEmitter {
     socket.on('cam-toggle', camToggleHandler);
     socket.on('call:external-hold', externalHoldHandler);
     socket.on('direct-call:video-ui', directCallVideoUiHandler);
+    socket.on('call:peerReconnecting', peerReconnectingHandler);
+    socket.on('call:peerRecovered', peerRecoveredHandler);
     
     logger.info('[VideoCallSession] ✅ Socket handlers registered', {
       myUserId: this.config.myUserId,
@@ -3572,6 +3682,8 @@ export class VideoCallSession extends SimpleEventEmitter {
       () => socket.off('cam-toggle', camToggleHandler),
       () => socket.off('call:external-hold', externalHoldHandler),
       () => socket.off('direct-call:video-ui', directCallVideoUiHandler),
+      () => socket.off('call:peerReconnecting', peerReconnectingHandler),
+      () => socket.off('call:peerRecovered', peerRecoveredHandler),
     ];
   }
 
@@ -4693,6 +4805,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.waitingForRemotePeerRejoin = false;
     this.networkLinkDown = false;
     this.liveKitReconnecting = false;
+    this.tryClearPeerReconnectingAfterMedia('media_reconnect_succeeded');
     this.startCallLeaseHeartbeat('active');
     try {
       this.emit('livekitReconnected');
@@ -5037,6 +5150,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       recovered,
     });
     this.noteRemotePeerRejoined(`remote_media_first_seen:${reason}`);
+    this.tryClearPeerReconnectingAfterMedia(`remote_media_first_seen:${reason}`);
     if (this.room) {
       this.scheduleIceTransportLogging(this.room, `remote_media_first_seen:${publication.kind}`);
     }
@@ -5920,6 +6034,7 @@ export class VideoCallSession extends SimpleEventEmitter {
 
   private resetRemoteState(): void {
     this.clearPendingRemoteDisconnectTimer();
+    this.clearPeerReconnectingUi('resetRemoteState');
     this.clearRemoteCamOffTimeout();
     this.clearRemoteMediaWatchdog(true);
     this.clearIceTransportLogTimers();
@@ -7683,6 +7798,7 @@ export class VideoCallSession extends SimpleEventEmitter {
           // If we were about to end the call due to a disconnect, cancel — remote is back.
           this.clearPendingRemoteDisconnectTimer();
           this.noteRemotePeerRejoined('ParticipantConnected');
+          this.tryClearPeerReconnectingAfterMedia('ParticipantConnected');
           logger.info('[VideoCallSession] ✅ Remote participant connected event received', {
             participantId: participant.identity,
             audioTracks: participant.audioTrackPublications.size,
