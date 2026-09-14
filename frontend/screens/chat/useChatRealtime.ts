@@ -26,6 +26,7 @@ import {
 import { CHAT_ALBUM_MAX, getMessageImageUris } from "./chatAlbum";
 import { stickerFieldsFromMessage } from "./chatMessageMeta";
 import { removeMessagesForDeletedIds } from "./chatMessageOps";
+import { onChatCallStatusMessage } from "../../utils/globalEvents";
 
 type ReadStatusMap = Record<string, "sending" | "delivered" | "read" | "failed" | "sent">;
 
@@ -400,6 +401,33 @@ export function useChatRealtime({
       });
     });
 
+    const unsubscribeChatCallStatus = onChatCallStatusMessage(({ peerId: eventPeerId, message }) => {
+      if (String(eventPeerId || '') !== String(peerId || '')) return;
+      if (!message?.id) return;
+      const nextMsg = {
+        ...message,
+        timestamp: message.timestamp instanceof Date ? message.timestamp : new Date(message.timestamp || Date.now()),
+      };
+      setMessages((prev) => {
+        if (prev.some((m) => String(m?.id || '') === String(message.id))) return prev;
+        return [...prev, nextMsg];
+      });
+      // Синхронно в ref, иначе debounce persist может затереть saveMessage старым снимком.
+      try {
+        const cur = latestMessagesForPersistRef.current || [];
+        if (!cur.some((m) => String(m?.id || '') === String(message.id))) {
+          latestMessagesForPersistRef.current = [...cur, nextMsg];
+        }
+      } catch {}
+      try {
+        enqueueMessagesPersist('chat_call_status');
+      } catch {}
+      requestAnimationFrame(() => {
+        scrollToBottom();
+        setTimeout(() => scrollToBottom(), 80);
+      });
+    });
+
     return () => {
       if (pendingDeletedTimer) {
         clearTimeout(pendingDeletedTimer);
@@ -416,6 +444,7 @@ export function useChatRealtime({
       unsubscribeMessageUrisUpdated();
       unsubscribeOutboxDelivered();
       unsubscribeDelivered();
+      unsubscribeChatCallStatus();
     };
   }, [
     currentUserId,

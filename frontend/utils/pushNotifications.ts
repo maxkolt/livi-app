@@ -1055,6 +1055,13 @@ Notifications.setNotificationHandler({
         stopIncomingCallAlert();
       } catch {}
       await dismissCallRelatedNotificationsOnly();
+      // Active call ended while socket may have missed call:ended (airplane reconnect).
+      // Tear down VideoCall even in foreground — native FCM also emits RemoteCallEndedInSystemPiP.
+      if (endedFromActive) {
+        try {
+          (global as any).__onCallEndedFromPush?.();
+        } catch {}
+      }
       // Android: «пропущенный» только из FCM (LiviFirebaseMessagingService), без дубля из Expo.
       // iOS: не показывать, если пользователь уже на Calls → «Пропущенные».
       if (Platform.OS !== 'android' && !endedFromActive && !isWelcomeViewingMissedCalls()) {
@@ -2070,6 +2077,12 @@ export function addNotificationListeners() {
       if (data?.type === 'call_ended' && data?.callId) {
         const endedFromActive = !!data.endedFromActive;
         if (data?.callId) addEndedCallId(String(data.callId));
+        // Foreground/active: socket call:ended can be missed after reconnect — tear down UI.
+        if (endedFromActive) {
+          try {
+            (global as any).__onCallEndedFromPush?.();
+          } catch {}
+        }
         // Android: см. call_canceled — не дублируем notifyMissedCallNativeAndroid.
         return;
       }

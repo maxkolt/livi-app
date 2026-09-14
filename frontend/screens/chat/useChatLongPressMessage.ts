@@ -54,6 +54,7 @@ export function useChatLongPressMessage({
       const isOwn = m?.from === currentUserId || m?.sender === 'me';
       const isText = String(m?.type || '') === 'text';
       const isImage = String(m?.type || '') === 'image';
+      const isCall = String(m?.type || '') === 'call';
       const showEdit = isOwn && isText;
 
       const actionIds: string[] = [];
@@ -63,21 +64,36 @@ export function useChatLongPressMessage({
         options.push(label);
       };
 
-      if (isText || String(m?.stickerId || '').trim()) {
+      if (isCall) {
+        push('select', t('chatActionSelect', lang));
+        push('delete', t('delete', lang));
+        push('cancel', t('cancelAction', lang));
+      } else if (isText || String(m?.stickerId || '').trim()) {
         push('copy', t('chatActionCopy', lang));
-      }
-      if (isImage) {
-        push('save', t('save', lang));
-        push('forward', t('chatActionForward', lang));
+        if (isImage) {
+          push('save', t('save', lang));
+          push('forward', t('chatActionForward', lang));
+        } else {
+          push('forward', t('chatActionForward', lang));
+        }
+        push('select', t('chatActionSelect', lang));
+        push('reply', t('chatActionReply', lang));
+        if (showEdit) push('edit', t('chatActionEdit', lang));
+        push('delete', t('delete', lang));
+        push('cancel', t('cancelAction', lang));
       } else {
-        push('forward', t('chatActionForward', lang));
+        if (isImage) {
+          push('save', t('save', lang));
+          push('forward', t('chatActionForward', lang));
+        } else {
+          push('forward', t('chatActionForward', lang));
+        }
+        push('select', t('chatActionSelect', lang));
+        push('reply', t('chatActionReply', lang));
+        if (showEdit) push('edit', t('chatActionEdit', lang));
+        push('delete', t('delete', lang));
+        push('cancel', t('cancelAction', lang));
       }
-      push('select', t('chatActionSelect', lang));
-      push('reply', t('chatActionReply', lang));
-      if (showEdit) push('edit', t('chatActionEdit', lang));
-      push('delete', t('delete', lang));
-      push('cancel', t('cancelAction', lang));
-
       const cancelButtonIndex = actionIds.length - 1;
       const destructiveButtonIndex = actionIds.indexOf('delete');
 

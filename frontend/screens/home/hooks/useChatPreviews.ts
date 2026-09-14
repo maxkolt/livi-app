@@ -12,6 +12,7 @@ import {
   messageTimestampMs,
   type ChatPreview,
 } from '../chatPreview';
+import { onChatCallStatusMessage } from '../../../utils/globalEvents';
 
 export type { ChatPreview };
 
@@ -143,9 +144,20 @@ export function useChatPreviews(friendIds: string[], lang: Lang, enabled: boolea
         return next;
       });
     });
+    const offCallStatus = onChatCallStatusMessage(({ peerId, message }) => {
+      const id = String(peerId || '').trim();
+      if (!id) return;
+      if (idsRef.current.length && !idsRef.current.includes(id)) return;
+      const at = messageTimestampMs(message) || Date.now();
+      const text = previewTextFromMessage(message, langRef.current);
+      previewMemory = { ...previewMemory, [id]: { text, at } };
+      if (!enabledRef.current) return;
+      setPreviews((prev) => ({ ...prev, [id]: { text, at } }));
+    });
     return () => {
       offReceived?.();
       offCleared?.();
+      offCallStatus?.();
     };
   }, []);
 

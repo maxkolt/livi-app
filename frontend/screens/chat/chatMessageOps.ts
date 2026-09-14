@@ -7,14 +7,18 @@ import {
 
 export function isServerMessageId(messageId: string): boolean {
   const id = String(messageId || "").trim();
-  return !!id && !isOfflineQueuedOrOptimisticOutgoingId(id);
+  if (!id) return false;
+  if (isOfflineQueuedOrOptimisticOutgoingId(id)) return false;
+  if (id.startsWith("local_call_")) return false;
+  return true;
 }
 
 /** Id может быть на сервере (в т.ч. clientMessageId вида 1734…-abc) — только outbox_* ещё не отправлен. */
 export function isDeletableOnServerMessageId(messageId: string): boolean {
   const id = String(messageId || "").trim();
   if (!id) return false;
-  return !id.startsWith("outbox_");
+  if (id.startsWith("outbox_") || id.startsWith("local_call_")) return false;
+  return true;
 }
 
 /** Совпадение исходящего текста ± время — убрать дубликат outbox/optimistic, когда сервер уже отдал msg_*. */

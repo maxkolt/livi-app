@@ -12,7 +12,8 @@ type AdaptiveTextProps = TextProps & {
   style?: StyleProp<TextStyle>;
   /**
    * Однострочный режим: не переносить, сжимать шрифт под ширину.
-   * Включается также при numberOfLines={1}.
+   * По умолчанию включается при numberOfLines={1}.
+   * Передайте fit={false}, чтобы оставить размер шрифта и обрезать хвост (ellipsis).
    */
   fit?: boolean;
   minimumFontScale?: number;
@@ -52,17 +53,19 @@ function AdaptiveTextInner({
 }: AdaptiveTextProps) {
   const scale = useAdaptiveTypeScale();
   const scaled = useMemo(() => scaleTextStyle(style, scale), [style, scale]);
-  const singleLine = fit === true || numberOfLines === 1;
+  // fit={false} — одна строка без сжатия шрифта (обрезка ellipsis).
+  const autoFit = fit ?? numberOfLines === 1;
+  const clampOneLine = autoFit || numberOfLines === 1;
 
   return (
     <Text
       {...rest}
-      numberOfLines={singleLine ? 1 : numberOfLines}
+      numberOfLines={clampOneLine ? 1 : numberOfLines}
       allowFontScaling={false}
       maxFontSizeMultiplier={1}
-      adjustsFontSizeToFit={singleLine ? true : rest.adjustsFontSizeToFit}
-      minimumFontScale={singleLine ? minimumFontScale : rest.minimumFontScale}
-      ellipsizeMode={singleLine ? rest.ellipsizeMode ?? 'tail' : rest.ellipsizeMode}
+      adjustsFontSizeToFit={autoFit ? true : rest.adjustsFontSizeToFit}
+      {...(autoFit ? { minimumFontScale } : null)}
+      ellipsizeMode={clampOneLine ? rest.ellipsizeMode ?? 'tail' : rest.ellipsizeMode}
       style={scaled ? [style, scaled] : style}
     >
       {children}

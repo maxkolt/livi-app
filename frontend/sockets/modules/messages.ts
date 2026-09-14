@@ -65,6 +65,8 @@ export const globalMessageStorage = {
           to,
           timestamp: new Date(message.timestamp),
         };
+        if (message.callDirection) newMessage.callDirection = message.callDirection;
+        if (message.localOnly) newMessage.localOnly = true;
         if (Array.isArray(message.uris) && message.uris.length > 1) {
           newMessage.uris = message.uris.map((u: any) => String(u || "").trim()).filter(Boolean).slice(0, 10);
           if (!newMessage.uri) newMessage.uri = newMessage.uris[0];

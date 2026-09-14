@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getCurrentUserId } from '../../sockets/socket';
 import { CALL_LOG_KEY } from './constants';
+import { appendChatCallStatusIfEligible } from '../chat/chatCallEvents';
 
 export type CallLogDirection = 'outgoing' | 'incoming' | 'missed' | 'cancelled';
 
@@ -272,6 +273,11 @@ export function recordCallLog(
 
   if (memory && memoryUid === uid) apply(memory);
   else void ensureLoaded(uid).then(apply);
+
+  // Финальные статусы в открытой переписке → локальное облако (не silent outgoing при старте).
+  if (!silent && (input.direction === 'incoming' || input.direction === 'missed')) {
+    void appendChatCallStatusIfEligible(peerId, input.direction, { at });
+  }
 }
 
 /**
@@ -342,6 +348,9 @@ export function recordCancelledCall(
   const hadLoadedForUid = !!(memory && memoryUid === uid);
   const base = hadLoadedForUid ? (memory as CallLogEntry[]) : memory || [];
   apply(base, !silent);
+  if (!silent) {
+    void appendChatCallStatusIfEligible(peerId, 'cancelled', { at: now });
+  }
   if (!hadLoadedForUid) {
     void ensureLoaded(uid).then((loaded) => {
       if (memoryUid !== uid) return;

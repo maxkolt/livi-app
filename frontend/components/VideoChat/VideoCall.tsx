@@ -7091,12 +7091,14 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
   const callChromeStatusLine = useMemo(() => {
     if (localExternalHoldUi) return t('externalCallHoldLocal', lang);
     if (partnerExternalHoldUi) return t('partnerBusyEllipsis', lang);
+    if (liveKitReconnectingUi) return t('callRestoringConnection', lang);
     if (showAudioConnectingStatus) return t('audioCallConnecting', lang);
     if (showCallDuration) return formatCallDuration(callElapsedSec);
     return t('audioCallStatus', lang);
   }, [
     localExternalHoldUi,
     partnerExternalHoldUi,
+    liveKitReconnectingUi,
     showAudioConnectingStatus,
     showCallDuration,
     callElapsedSec,

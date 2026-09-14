@@ -104,6 +104,27 @@ export function forceEndDirectCallWithPeer(peerUserId: string, callId?: string |
   }
 }
 
+/** Keepalive for server active-call lease (busy auto-clears if this stops). */
+export function emitCallHeartbeat(opts: {
+  callId?: string | null;
+  roomId?: string | null;
+  phase?: "active" | "reconnecting";
+}): void {
+  const callId = opts.callId != null ? String(opts.callId).trim() : "";
+  const roomId = opts.roomId != null ? String(opts.roomId).trim() : "";
+  if (!callId && !roomId) return;
+  if (!socket.connected) return;
+  try {
+    socket.emit("call:heartbeat", {
+      callId: callId || undefined,
+      roomId: roomId || undefined,
+      phase: opts.phase === "reconnecting" ? "reconnecting" : "active",
+    });
+  } catch (e) {
+    logger.debug("[socket] call:heartbeat failed", e as Error);
+  }
+}
+
 function markIncomingAcceptSent(callId: string): boolean {
   try {
     const g = global as any;

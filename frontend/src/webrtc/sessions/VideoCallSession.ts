@@ -1,5 +1,6 @@
 import { MediaStream } from '@livekit/react-native-webrtc';
 import { Platform, NativeModules, AppState } from 'react-native';
+import NetInfo, { type NetInfoState } from '@react-native-community/netinfo';
 import * as Device from 'expo-device';
 import {
   Room,
@@ -27,14 +28,16 @@ import socket, {
   setActiveVideoCall,
   awaitEarlyIncomingCallAccept,
   emitCallAcceptAck,
+  emitCallHeartbeat,
   hasEarlyIncomingCallAccept,
 } from '../../../sockets/socket';
 import { applyCallEndedGlobalRefsOnce } from '../../../utils/globalEvents';
+import { reportEndCallToCallKeep } from '../../../utils/callKeep';
 import { logger } from '../../../utils/logger';
 import { markCallPerf, callPerfSpan, endCallPerfTrace } from '../../../utils/callPerfTrace';
 import { sendClientMetrics } from '../../utils/capacityClientMetrics';
 import { trackReleaseEvent } from '../../../utils/telemetry';
-import { getIceConfiguration } from '../../../utils/iceConfig';
+import { getIceConfiguration, enableForcedRelayFallback } from '../../../utils/iceConfig';
 import {
   adoptDirectCallAudioPrewarm,
   disposeDirectCallAudioPrewarm,
@@ -110,6 +113,13 @@ type LiveKitConnectOptions = {
   reason?: string;
 };
 
+/**
+ * Client media restore window after unexpected disconnect / network drop.
+ * Server CALL_LEASE_RECONNECTING_TTL_MS is longer so lease does not race this grace
+ * while the peer (or restored socket) can still heartbeat.
+ */
+const MEDIA_RECONNECT_GRACE_MS = 45_000;
+
 export class VideoCallSession extends SimpleEventEmitter {
   private hasLoggedLiveKitApiKeyWarning = false;
   private config: WebRTCSessionConfig;
@@ -139,6 +149,8 @@ export class VideoCallSession extends SimpleEventEmitter {
   private remoteCamOffTimeout: ReturnType<typeof setTimeout> | null = null;
   /** SID последнего отписанного удалённого видео-трека (переворот камеры). Нужен, т.к. TrackSubscribed приходит после TrackUnsubscribed и remoteVideoTrack уже null. */
   private lastUnsubscribedRemoteVideoTrackSid: string | null = null;
+  /** SID последнего отписанного remote audio (peer rejoin) — TrackSubscribed приходит после clear remoteAudioTrack. */
+  private lastUnsubscribedRemoteAudioTrackSid: string | null = null;
   private socketOffs: Array<() => void> = [];
   private socketHandlers: {
     callAccepted?: (data: CallAcceptedPayload) => void;
@@ -209,7 +221,19 @@ export class VideoCallSession extends SimpleEventEmitter {
 
   // LiveKit reconnect handling: during reconnect we must NOT treat transient disconnects as "call ended".
   private liveKitReconnecting = false;
+  private callLeaseHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private lastLiveKitReconnectingAt = 0;
+  /** Unexpected Room Disconnected: try restore within grace; then stop heartbeat (server lease ends busy). */
+  private mediaReconnectInProgress = false;
+  private mediaReconnectGraceTimer: ReturnType<typeof setTimeout> | null = null;
+  private mediaReconnectAttemptedRelay = false;
+  /** OS reachability (airplane / Wi‑Fi): drive reconnect UI + immediate re-join on restore. */
+  private netInfoUnsubscribe: (() => void) | null = null;
+  private lastNetReachable: boolean | null = null;
+  private networkLinkDown = false;
+  private mediaRejoinInFlight = false;
+  /** Survivor side: partner left LiveKit (e.g. airplane) — wait for rejoin within grace, don't hangup. */
+  private waitingForRemotePeerRejoin = false;
   private pendingRemoteDisconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private lastSocketDisconnectLogAt = 0;
   private socketRecoveryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -868,6 +892,9 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.setPartnerExternalHoldState(false);
     resetDirectCallVideoUiGlobalsAfterCallEnd();
     clearDirectCallAudioRouteCarryoverAfterCallEnd();
+    this.stopCallLeaseHeartbeat();
+    this.clearMediaReconnectGrace();
+    this.stopNetworkReachabilityMonitor();
     // КРИТИЧНО: Сразу помечаем звонок завершённым, чтобы асинхронный код (handleCallAccepted, connectToLiveKit)
     // видел ended и не выполнял пост-подключение / setLocalDescription после disconnect
     this.ended = true;
@@ -897,6 +924,12 @@ export class VideoCallSession extends SimpleEventEmitter {
     const callIdToSend = overrideCallId ?? this.callId;
     const roomIdToSend = overrideRoomId ?? this.roomId;
     const callEndDedupKey = String(roomIdToSend || callIdToSend || '').trim();
+
+    // CallKeep Connection teardown на любом локальном финале (hangup / abort),
+    // даже если UI не прошёл через terminateCall с callKeepEnd.
+    try {
+      if (callIdToSend) reportEndCallToCallKeep(callIdToSend, { force: true });
+    } catch {}
 
     logger.info('[VideoCallSession] 🛑 endCall вызван', {
       callId: this.callId,
@@ -2214,6 +2247,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.clearSocketRecoveryTimer();
     this.clearPendingRemoteDisconnectTimer();
     this.clearFastStartVideoUpgradeTimer();
+    this.stopNetworkReachabilityMonitor();
     this.liveKitConnectByRoom.clear();
     void this.disconnectRoom('user');
     this.resetRemoteState();
@@ -2844,7 +2878,13 @@ export class VideoCallSession extends SimpleEventEmitter {
   /** LiveKit reconnect / transient media link drop (for audio-call connecting UI). */
   isLiveKitReconnecting(): boolean {
     try {
-      return !!(this.liveKitReconnecting || this.room?.state === 'reconnecting');
+      return !!(
+        this.liveKitReconnecting ||
+        this.mediaReconnectInProgress ||
+        this.networkLinkDown ||
+        this.waitingForRemotePeerRejoin ||
+        this.room?.state === 'reconnecting'
+      );
     } catch {
       return false;
     }
@@ -3366,17 +3406,29 @@ export class VideoCallSession extends SimpleEventEmitter {
       const currentRoomId = this.getRoomId();
       const incoming = data.roomId;
 
-      if (!currentRoomId) {
+      if (!currentRoomId && !this.roomId && !this.currentRoomName) {
         logger.debug('[VideoCallSession] cam-toggle ignored (no active friend-call room)', {
           enabled: data.enabled,
           partnerRoomId: incoming,
         });
         return;
       }
-      if (!incoming || incoming !== currentRoomId) {
+      // Prefer matchesSignalingRoom: after reconnect getRoomId() / LiveKit name can differ
+      // from peer's roomId string while still being the same call.
+      if (
+        incoming &&
+        !this.matchesSignalingRoom(incoming) &&
+        !this.matchesDirectCallParticipantsRoom(incoming)
+      ) {
         logger.debug('[VideoCallSession] cam-toggle ignored (room mismatch)', {
           receivedRoomId: incoming,
           currentRoomId,
+        });
+        return;
+      }
+      if (!incoming) {
+        logger.debug('[VideoCallSession] cam-toggle ignored (missing roomId)', {
+          enabled: data.enabled,
         });
         return;
       }
@@ -3420,6 +3472,8 @@ export class VideoCallSession extends SimpleEventEmitter {
         const g = global as any;
         const pipVisible = g.__pipVisibleRef?.current === true;
         if (data.enabled) {
+          // After reconnect, peer video publish may already exist — pull it in.
+          this.resubscribeRemoteVideoIfNeeded('cam_toggle_on');
           // Preload remote video even on audio UI — иначе к leave в system PiP track ещё unsub'нут.
           this.ensureRemoteVideoForSystemPiPCapture();
           this.activateSystemPiPPeerVideoCapture('cam_toggle');
@@ -3869,6 +3923,7 @@ export class VideoCallSession extends SimpleEventEmitter {
                 attempt,
               });
             } catch {}
+            this.startCallLeaseHeartbeat('active');
             if (Platform.OS === 'android') {
               try { setAndroidSystemPiPLeaveHintEnabled(true); } catch (_) {}
             }
@@ -4201,6 +4256,9 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.endCallInProgress = true;
     this.lastEmittedPeerVideoCallUi = null;
     this.partnerPeerDirectCallVideoUi = null;
+    this.stopCallLeaseHeartbeat();
+    this.clearMediaReconnectGrace();
+    this.stopNetworkReachabilityMonitor();
     this.unregisterSocketHandlers('callEnded');
     // КРИТИЧНО: Сразу уведомляем UI (выставить refs), чтобы колбэки при disconnectRoom (onRemoteCamStateChange и т.д.) не вызывали setState — без ререндеров при закрытии экрана.
     try { this.config.onCallEnding?.(); } catch (_) {}
@@ -4210,6 +4268,11 @@ export class VideoCallSession extends SimpleEventEmitter {
     const savedRoomId = this.roomId;
     const savedPartnerId = this.partnerId;
     const savedPartnerUserId = this.partnerUserId;
+
+    // Remote / server final: закрыть CallKeep Connection (иначе "no connection found" на следующем звонке).
+    try {
+      if (savedCallId) reportEndCallToCallKeep(savedCallId, { force: true });
+    } catch {}
     
     // КРИТИЧНО: При получении call:ended от сервера (другой участник завершил звонок)
     // нужно завершить звонок локально, но НЕ отправлять call:end на сервер повторно
@@ -4250,6 +4313,536 @@ export class VideoCallSession extends SimpleEventEmitter {
       clearTimeout(this.pendingRemoteDisconnectTimer);
       this.pendingRemoteDisconnectTimer = null;
     }
+  }
+
+  /** Server lease keepalive — without this, sticky busy is force-cleared after ~45–75s. */
+  private startCallLeaseHeartbeat(phase: 'active' | 'reconnecting' = 'active'): void {
+    this.stopCallLeaseHeartbeat();
+    if (this.ended) return;
+    this.ensureNetworkReachabilityMonitor();
+    const tick = () => {
+      if (this.ended || this.endCallInProgress) {
+        this.stopCallLeaseHeartbeat();
+        return;
+      }
+      const callId = this.callId;
+      const roomId = this.roomId || this.currentRoomName;
+      if (!callId && !roomId) return;
+      const reconnecting =
+        this.liveKitReconnecting ||
+        this.mediaReconnectInProgress ||
+        this.networkLinkDown ||
+        phase === 'reconnecting';
+      emitCallHeartbeat({
+        callId,
+        roomId,
+        phase: reconnecting ? 'reconnecting' : 'active',
+      });
+    };
+    tick();
+    this.callLeaseHeartbeatTimer = setInterval(tick, 8_000);
+  }
+
+  private stopCallLeaseHeartbeat(): void {
+    if (this.callLeaseHeartbeatTimer) {
+      clearInterval(this.callLeaseHeartbeatTimer);
+      this.callLeaseHeartbeatTimer = null;
+    }
+  }
+
+  private clearMediaReconnectGrace(): void {
+    if (this.mediaReconnectGraceTimer) {
+      clearTimeout(this.mediaReconnectGraceTimer);
+      this.mediaReconnectGraceTimer = null;
+    }
+    this.mediaReconnectInProgress = false;
+    this.mediaReconnectAttemptedRelay = false;
+    this.waitingForRemotePeerRejoin = false;
+  }
+
+  private hasExpectedRemoteParticipantInRoom(room?: Room | null): boolean {
+    const r = room || this.room;
+    if (!r) return false;
+    const expected = this.partnerUserId ? String(this.partnerUserId) : null;
+    if (expected) {
+      return Array.from(r.remoteParticipants.values()).some((p) => String(p.identity) === expected);
+    }
+    return r.remoteParticipants.size > 0;
+  }
+
+  /**
+   * Partner left LiveKit while our room stays connected (typical airplane on peer).
+   * Show restoring UI + extend lease heartbeat; end only if grace expires without rejoin.
+   */
+  private beginWaitingForRemotePeerRejoin(reason: string): void {
+    if (this.ended || this.endCallInProgress || this.isDisconnecting) return;
+    this.waitingForRemotePeerRejoin = true;
+    this.markMediaLinkRecovering(reason);
+    this.armOrExtendMediaReconnectGrace();
+    logger.warn('[VideoCallSession] Waiting for remote peer rejoin (no local hangup)', {
+      reason,
+      callId: this.callId,
+      partnerUserId: this.partnerUserId,
+      graceMs: MEDIA_RECONNECT_GRACE_MS,
+      roomState: this.room?.state || null,
+    });
+    trackReleaseEvent('signal_reconnect', {
+      phase: 'remote_peer_left_wait',
+      callId: this.callId,
+      roomId: this.roomId || this.currentRoomName || null,
+      userId: this.config.myUserId,
+      partnerUserId: this.partnerUserId,
+      reason,
+    });
+  }
+
+  private noteRemotePeerRejoined(source: string): void {
+    if (!this.waitingForRemotePeerRejoin && !this.mediaReconnectInProgress && !this.liveKitReconnecting) {
+      return;
+    }
+    // Own network recovery without peer yet — keep waiting UI.
+    if (this.waitingForRemotePeerRejoin && !this.hasExpectedRemoteParticipantInRoom()) {
+      return;
+    }
+    logger.info('[VideoCallSession] Remote peer rejoined — clearing reconnect wait', {
+      source,
+      callId: this.callId,
+      partnerUserId: this.partnerUserId,
+      waitingForRemotePeerRejoin: this.waitingForRemotePeerRejoin,
+    });
+    this.waitingForRemotePeerRejoin = false;
+    this.onMediaReconnectSucceeded();
+  }
+
+  private isNetInfoReachable(state: NetInfoState): boolean {
+    return (
+      state.isConnected === true &&
+      (state.isInternetReachable === true || state.isInternetReachable == null)
+    );
+  }
+
+  private hasLiveKitCredsForRejoin(): boolean {
+    return !!(this.lastLiveKitUrl && this.lastLiveKitToken && (this.callId || this.roomId || this.currentRoomName));
+  }
+
+  private ensureNetworkReachabilityMonitor(): void {
+    if (this.netInfoUnsubscribe || this.ended || this.endCallInProgress) return;
+    try {
+      this.netInfoUnsubscribe = NetInfo.addEventListener((state) => {
+        this.handleNetworkReachabilityState(state);
+      });
+      void NetInfo.fetch()
+        .then((state) => {
+          if (this.ended || this.endCallInProgress) return;
+          // Seed without acting on the first snapshot (same as socket NetInfo).
+          this.lastNetReachable = this.isNetInfoReachable(state);
+        })
+        .catch(() => {});
+    } catch (e) {
+      logger.warn('[VideoCallSession] NetInfo monitor failed to start', e);
+    }
+  }
+
+  private stopNetworkReachabilityMonitor(): void {
+    try {
+      this.netInfoUnsubscribe?.();
+    } catch {}
+    this.netInfoUnsubscribe = null;
+    this.lastNetReachable = null;
+    this.networkLinkDown = false;
+    this.mediaRejoinInFlight = false;
+  }
+
+  private handleNetworkReachabilityState(state: NetInfoState): void {
+    if (this.ended || this.endCallInProgress) return;
+    const reachable = this.isNetInfoReachable(state);
+    const wasReachable = this.lastNetReachable;
+    this.lastNetReachable = reachable;
+
+    if (!this.hasLiveKitCredsForRejoin()) return;
+
+    // true → false: airplane / Wi‑Fi drop — show restoring immediately (don't wait for LiveKit Disconnected).
+    if (!reachable && wasReachable === true) {
+      this.onNetworkLinkLost();
+      return;
+    }
+    // false → true: network back — force LiveKit re-join (socket NetInfo alone is not enough).
+    if (reachable && wasReachable === false) {
+      this.onNetworkLinkRestored();
+    }
+  }
+
+  private markMediaLinkRecovering(reason: string): void {
+    if (this.ended || this.endCallInProgress) return;
+    this.liveKitReconnecting = true;
+    this.lastLiveKitReconnectingAt = Date.now();
+    this.startCallLeaseHeartbeat('reconnecting');
+    try {
+      this.emit('livekitReconnecting');
+    } catch {}
+    logger.warn('[VideoCallSession] Media link recovering', { reason, callId: this.callId });
+  }
+
+  /** Arm or refresh grace so NetInfo restore / late LiveKit events get a full window. */
+  private armOrExtendMediaReconnectGrace(): void {
+    if (this.ended || this.endCallInProgress) return;
+    this.mediaReconnectInProgress = true;
+    if (this.mediaReconnectGraceTimer) {
+      clearTimeout(this.mediaReconnectGraceTimer);
+    }
+    this.mediaReconnectGraceTimer = setTimeout(() => {
+      this.mediaReconnectGraceTimer = null;
+      void this.finishMediaReconnectGraceFailed('grace_timeout');
+    }, MEDIA_RECONNECT_GRACE_MS);
+  }
+
+  private onNetworkLinkLost(): void {
+    if (this.ended || this.endCallInProgress) return;
+    this.networkLinkDown = true;
+    this.markMediaLinkRecovering('netinfo_lost');
+    this.armOrExtendMediaReconnectGrace();
+    trackReleaseEvent('signal_reconnect', {
+      phase: 'netinfo_lost',
+      callId: this.callId,
+      roomId: this.roomId || this.currentRoomName || null,
+      userId: this.config.myUserId,
+      partnerUserId: this.partnerUserId,
+    });
+  }
+
+  private onNetworkLinkRestored(): void {
+    if (this.ended || this.endCallInProgress) return;
+    this.networkLinkDown = false;
+    // Brief blip: LiveKit often stays connected — clear «Восстановление…» without tearing the room.
+    if (this.room?.state === 'connected') {
+      this.onMediaReconnectSucceeded();
+      return;
+    }
+    void this.kickMediaRejoinFromNetworkRestore();
+  }
+
+  private async kickMediaRejoinFromNetworkRestore(): Promise<void> {
+    if (this.ended || this.endCallInProgress) return;
+    const url = this.lastLiveKitUrl;
+    const token = this.lastLiveKitToken;
+    if (!url || !token) return;
+    if (this.mediaRejoinInFlight) return;
+
+    this.markMediaLinkRecovering('netinfo_restored');
+    this.armOrExtendMediaReconnectGrace();
+    this.mediaReconnectAttemptedRelay = false;
+
+    const roomName = this.currentRoomName || this.roomId || undefined;
+    logger.warn('[VideoCallSession] Network reachable — forcing LiveKit re-join', {
+      callId: this.callId,
+      roomName: roomName || null,
+      roomState: this.room?.state || null,
+    });
+    trackReleaseEvent('signal_reconnect', {
+      phase: 'netinfo_restored_rejoin',
+      callId: this.callId,
+      roomId: this.roomId || roomName || null,
+      userId: this.config.myUserId,
+      partnerUserId: this.partnerUserId,
+    });
+
+    await this.runMediaReconnectAttempts(url, token, roomName);
+  }
+
+  /**
+   * Unexpected LiveKit Disconnected (engine closed / network flip): try restore within grace.
+   * Do NOT call handleCallEnded — busy clears via server lease after heartbeat stops.
+   */
+  private beginUnexpectedMediaDisconnectRecovery(): void {
+    if (this.ended || this.endCallInProgress || this.disconnectPromise) return;
+    if (this.mediaReconnectInProgress) {
+      // Already in grace (e.g. NetInfo lost first) — still ensure UI + another attempt wave.
+      this.markMediaLinkRecovering('livekit_disconnected_while_recovering');
+      if (this.lastLiveKitUrl && this.lastLiveKitToken) {
+        void this.runMediaReconnectAttempts(
+          this.lastLiveKitUrl,
+          this.lastLiveKitToken,
+          this.currentRoomName || this.roomId || undefined,
+        );
+      }
+      return;
+    }
+
+    const url = this.lastLiveKitUrl;
+    const token = this.lastLiveKitToken;
+    const roomName = this.currentRoomName || this.roomId;
+    if (!url || !token) {
+      logger.warn('[VideoCallSession] Unexpected disconnect without LiveKit creds — stop heartbeat for lease end');
+      this.stopCallLeaseHeartbeat();
+      this.liveKitReconnecting = false;
+      try {
+        this.emit('livekitReconnected');
+      } catch {}
+      return;
+    }
+
+    this.mediaReconnectAttemptedRelay = false;
+    this.markMediaLinkRecovering('livekit_disconnected');
+    this.armOrExtendMediaReconnectGrace();
+
+    logger.warn('[VideoCallSession] Unexpected room disconnect — starting media reconnect grace', {
+      graceMs: MEDIA_RECONNECT_GRACE_MS,
+      roomName,
+      callId: this.callId,
+    });
+    void sendClientMetrics(API_BASE, { roomReconnecting: true }).catch(() => {});
+    trackReleaseEvent('signal_reconnect', {
+      phase: 'unexpected_disconnect_grace',
+      callId: this.callId,
+      roomId: this.roomId || roomName || null,
+      userId: this.config.myUserId,
+      partnerUserId: this.partnerUserId,
+    });
+
+    void this.runMediaReconnectAttempts(url, token, roomName || undefined);
+  }
+
+  private async runMediaReconnectAttempts(
+    url: string,
+    token: string,
+    targetRoomName?: string,
+  ): Promise<void> {
+    if (this.ended || this.endCallInProgress) return;
+    if (!this.mediaReconnectInProgress) {
+      this.armOrExtendMediaReconnectGrace();
+    }
+    if (this.mediaRejoinInFlight) {
+      logger.debug('[VideoCallSession] Media re-join already in flight — skip duplicate');
+      return;
+    }
+    this.mediaRejoinInFlight = true;
+    try {
+      await this.runMediaReconnectAttemptsLocked(url, token, targetRoomName);
+    } finally {
+      this.mediaRejoinInFlight = false;
+    }
+  }
+
+  private async runMediaReconnectAttemptsLocked(
+    url: string,
+    token: string,
+    targetRoomName?: string,
+  ): Promise<void> {
+    const tryOnce = async (forceRelayOnly: boolean): Promise<boolean> => {
+      if (this.ended || this.endCallInProgress || !this.mediaReconnectInProgress) return false;
+      try {
+        if (targetRoomName) {
+          try {
+            this.liveKitConnectByRoom.delete(String(targetRoomName).trim());
+          } catch {}
+        }
+        if (this.room && this.room.state !== 'disconnected') {
+          try {
+            await this.room.disconnect();
+          } catch {}
+        }
+        this.room = null;
+        this.currentRoomName = null;
+        this.isDisconnecting = false;
+        this.disconnectPromise = null;
+        const reqId = ++this.connectRequestId;
+        const ok = await this.connectToLiveKit(url, token, reqId, targetRoomName, {
+          forceRelayOnly,
+          reason: forceRelayOnly ? 'unexpected_disconnect_relay' : 'unexpected_disconnect',
+        });
+        // this.room was nulled above; connectToLiveKit reassigns — avoid TS narrowing to never.
+        return !!ok && (this as VideoCallSession).room?.state === 'connected';
+      } catch (e: any) {
+        logger.warn('[VideoCallSession] Media reconnect attempt failed', {
+          forceRelayOnly,
+          error: e?.message || String(e),
+        });
+        return false;
+      }
+    };
+
+    const okDirect = await tryOnce(false);
+    if (okDirect) {
+      this.onMediaReconnectSucceeded();
+      return;
+    }
+    if (this.ended || !this.mediaReconnectInProgress) return;
+
+    this.mediaReconnectAttemptedRelay = true;
+    enableForcedRelayFallback('video_call_unexpected_disconnect');
+    void sendClientMetrics(API_BASE, { relayFallback: true }).catch(() => {});
+    const okRelay = await tryOnce(true);
+    if (okRelay) {
+      this.onMediaReconnectSucceeded();
+      return;
+    }
+    // Keep grace timer running — NetInfo restore or LiveKit events can kick another wave.
+    logger.warn('[VideoCallSession] Media reconnect attempts exhausted; waiting for grace/lease', {
+      callId: this.callId,
+      roomName: targetRoomName || null,
+    });
+  }
+
+  private onMediaReconnectSucceeded(): void {
+    if (this.mediaReconnectGraceTimer) {
+      clearTimeout(this.mediaReconnectGraceTimer);
+      this.mediaReconnectGraceTimer = null;
+    }
+    this.mediaReconnectInProgress = false;
+    this.mediaReconnectAttemptedRelay = false;
+    this.waitingForRemotePeerRejoin = false;
+    this.networkLinkDown = false;
+    this.liveKitReconnecting = false;
+    this.startCallLeaseHeartbeat('active');
+    try {
+      this.emit('livekitReconnected');
+    } catch {}
+    logger.info('[VideoCallSession] Media reconnect succeeded within grace', {
+      callId: this.callId,
+      roomName: this.currentRoomName,
+    });
+    void sendClientMetrics(API_BASE, { roomReconnected: true, reconnect: true }).catch(() => {});
+    trackReleaseEvent('signal_reconnect', {
+      phase: 'unexpected_disconnect_recovered',
+      callId: this.callId,
+      roomId: this.roomId || this.currentRoomName || null,
+      userId: this.config.myUserId,
+      partnerUserId: this.partnerUserId,
+    });
+    // After airplane/SFU rejoin: re-pull remote tracks (audio always; video if not deferred).
+    // Stale MediaStream / missed TrackPublished during disconnect left peer video blank.
+    this.resubscribeRemoteMediaAfterReconnect('media_reconnect_succeeded');
+  }
+
+  /** Re-subscribe remote publications after LiveKit/peer rejoin (audio + video when allowed). */
+  private resubscribeRemoteMediaAfterReconnect(context: string): void {
+    const room = this.room;
+    if (!room || room.state !== 'connected' || this.ended || this.endCallInProgress) return;
+    try {
+      room.remoteParticipants.forEach((participant) => {
+        if (participant.isLocal) return;
+        participant.audioTrackPublications.forEach((publication) => {
+          try {
+            if (!publication.isSubscribed || !publication.track) {
+              publication.setSubscribed(true);
+            }
+          } catch {}
+          if (publication.track) {
+            try {
+              this.handleTrackSubscribed(publication.track, publication, participant);
+            } catch {}
+          }
+        });
+      });
+    } catch (e) {
+      logger.debug('[VideoCallSession] resubscribeRemoteMediaAfterReconnect audio failed', {
+        context,
+        error: (e as Error)?.message,
+      });
+    }
+
+    // Clear stuck video defer only when already on video UI — never force video while
+    // user is still on audio-only screen (bandwidth / product policy stay intact).
+    const onVideoUi =
+      !isInAudioOnlyCallUi() &&
+      !this.isLocalDirectCallAudioOnlyUi() &&
+      !this.directCallAudioOnlyConsumerDefer;
+    if (onVideoUi && (this.deferRemoteVideoSubscription || !this.remoteStreamHasLiveVideoTrack())) {
+      try {
+        this.enableRemoteVideoConsumption({ leaveAudioOnlyConsumer: true });
+      } catch {
+        this.resubscribeRemoteVideoIfNeeded(context);
+      }
+    } else {
+      // Audio UI: keep defer; shouldKeepRemoteVideoDespiteAudioDefer still pulls if peer cam on.
+      this.resubscribeRemoteVideoIfNeeded(context);
+    }
+
+    try {
+      if (this.remoteStream) {
+        this.remoteViewKey = Date.now();
+        this.emit('remoteStream', this.remoteStream);
+        this.emit('remoteViewKeyChanged', this.remoteViewKey);
+      }
+    } catch {}
+    logger.info('[VideoCallSession] resubscribeRemoteMediaAfterReconnect', {
+      context,
+      callId: this.callId,
+      onVideoUi,
+      deferred: this.deferRemoteVideoSubscription,
+      remoteParticipants: room.remoteParticipants.size,
+      hasRemoteStream: !!this.remoteStream,
+      remoteViewKey: this.remoteViewKey,
+    });
+  }
+
+  private finishMediaReconnectGraceFailed(reason: string): void {
+    if (this.ended || this.endCallInProgress) {
+      this.clearMediaReconnectGrace();
+      return;
+    }
+    // Own room still up AND partner present → treat as recovered (not peer-wait fail).
+    if (
+      this.room?.state === 'connected' &&
+      !this.networkLinkDown &&
+      this.hasExpectedRemoteParticipantInRoom()
+    ) {
+      this.onMediaReconnectSucceeded();
+      return;
+    }
+    // Survivor waited for peer who never returned — end locally (cleaner than sticky UI).
+    if (this.waitingForRemotePeerRejoin) {
+      logger.warn('[VideoCallSession] Remote peer rejoin grace ended — ending call', {
+        reason,
+        callId: this.callId,
+        roomState: this.room?.state || null,
+      });
+      this.waitingForRemotePeerRejoin = false;
+      if (this.mediaReconnectGraceTimer) {
+        clearTimeout(this.mediaReconnectGraceTimer);
+        this.mediaReconnectGraceTimer = null;
+      }
+      this.mediaReconnectInProgress = false;
+      this.mediaReconnectAttemptedRelay = false;
+      this.stopCallLeaseHeartbeat();
+      trackReleaseEvent('signal_reconnect', {
+        phase: 'remote_peer_rejoin_grace_failed',
+        callId: this.callId,
+        roomId: this.roomId || this.currentRoomName || null,
+        userId: this.config.myUserId,
+        partnerUserId: this.partnerUserId,
+        reason,
+      });
+      this.handleCallEnded();
+      return;
+    }
+    logger.warn('[VideoCallSession] Media reconnect grace ended — stopping heartbeat for server lease', {
+      reason,
+      callId: this.callId,
+      roomState: this.room?.state || null,
+      networkLinkDown: this.networkLinkDown,
+    });
+    if (this.mediaReconnectGraceTimer) {
+      clearTimeout(this.mediaReconnectGraceTimer);
+      this.mediaReconnectGraceTimer = null;
+    }
+    this.mediaReconnectInProgress = false;
+    this.mediaReconnectAttemptedRelay = false;
+    // UI остаётся «Восстановление связи…» до call:ended с сервера (lease) or NetInfo restore.
+    this.liveKitReconnecting = true;
+    this.stopCallLeaseHeartbeat();
+    try {
+      this.emit('livekitReconnecting');
+    } catch {}
+    void sendClientMetrics(API_BASE, { roomReconnecting: true }).catch(() => {});
+    trackReleaseEvent('signal_reconnect', {
+      phase: 'unexpected_disconnect_grace_failed',
+      callId: this.callId,
+      roomId: this.roomId || this.currentRoomName || null,
+      userId: this.config.myUserId,
+      partnerUserId: this.partnerUserId,
+      reason,
+    });
   }
 
   private clearFastStartVideoUpgradeTimer(): void {
@@ -4443,6 +5036,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       participantId: participant.identity,
       recovered,
     });
+    this.noteRemotePeerRejoined(`remote_media_first_seen:${reason}`);
     if (this.room) {
       this.scheduleIceTransportLogging(this.room, `remote_media_first_seen:${publication.kind}`);
     }
@@ -5335,6 +5929,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.remoteAudioTrack = null;
     this.remoteVideoTrack = null;
     this.lastUnsubscribedRemoteVideoTrackSid = null;
+    this.lastUnsubscribedRemoteAudioTrackSid = null;
     this.currentRemoteParticipant = null;
     this.remoteCamEnabled = false;
     this.remotePartnerDeclaredCamOff = false;
@@ -5839,6 +6434,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       this.lastLiveKitToken = token;
       this.roomConnectedAt = Date.now();
       this.livekitConnectedAt = this.roomConnectedAt;
+      this.startCallLeaseHeartbeat('active');
       try {
         const pending = (global as any).__pendingCallAcceptedRef?.current;
         const pendingCallId = pending ? String(pending?.callId ?? '').trim() : '';
@@ -6351,7 +6947,37 @@ export class VideoCallSession extends SimpleEventEmitter {
           error: errorMessage,
         });
       } else {
-        const isTransientPcError = /could not establish pc connection|pc connection|negotiation (disconnected|timed out)|transport error/i.test(errorMessage);
+        const isTransientPcError =
+          /could not establish pc connection|pc connection|negotiation (disconnected|timed out)|transport error|ice (failed|disconnected)/i.test(
+            errorMessage,
+          );
+        // VPN / жёсткий NAT: одна попытка через TURN relay (как в RandomChat).
+        if (
+          isTransientPcError &&
+          !options?.forceRelayOnly &&
+          this.connectRequestId === connectRequestId
+        ) {
+          logger.warn('[VideoCallSession] PC connect failed — retrying with TURN relay-only', {
+            error: errorMessage,
+            targetRoomName,
+            connectReason: options?.reason || null,
+          });
+          enableForcedRelayFallback('video_call_pc_connection');
+          void sendClientMetrics(API_BASE, { relayFallback: true }).catch(() => {});
+          try {
+            if (room.state !== 'disconnected') {
+              await room.disconnect();
+            }
+          } catch {}
+          if (this.room === room) {
+            this.room = null;
+            this.currentRoomName = null;
+          }
+          return this.connectToLiveKit(url, token, connectRequestId, targetRoomName, {
+            forceRelayOnly: true,
+            reason: 'pc_connect_relay_retry',
+          });
+        }
         const logFn = isTransientPcError ? logger.warn : logger.error;
         // Не логировать полный стек, если к моменту catch звонок уже завершён (например, retry после end с другой стороны)
         if (this.ended) {
@@ -6369,6 +6995,7 @@ export class VideoCallSession extends SimpleEventEmitter {
             tokenPrefix: token ? token.substring(0, 20) + '...' : 'no-token',
             roomState: room?.state,
             isInvalidApiKey,
+            forceRelayOnly: !!options?.forceRelayOnly,
             stack: e?.stack,
           });
         }
@@ -6556,6 +7183,8 @@ export class VideoCallSession extends SimpleEventEmitter {
   }
 
   private async disconnectRoom(reason: 'user' | 'server' = 'user'): Promise<void> {
+    this.stopCallLeaseHeartbeat();
+    this.clearMediaReconnectGrace();
     this.clearLocalVideoWatchdog();
     this.clearRemoteMediaWatchdog(true);
     this.clearIceTransportLogTimers();
@@ -6975,6 +7604,7 @@ export class VideoCallSession extends SimpleEventEmitter {
           userId: this.config.myUserId,
           partnerUserId: this.partnerUserId,
         });
+        this.startCallLeaseHeartbeat('reconnecting');
         this.clearPendingRemoteDisconnectTimer();
         try {
           this.emit('livekitReconnecting');
@@ -7000,12 +7630,25 @@ export class VideoCallSession extends SimpleEventEmitter {
           partnerUserId: this.partnerUserId,
           participantsCount: room.remoteParticipants.size,
         });
+        if (this.mediaReconnectInProgress) {
+          // Own SFU reconnect while still waiting for peer — keep «Восстановление…».
+          if (this.waitingForRemotePeerRejoin && !this.hasExpectedRemoteParticipantInRoom(room)) {
+            this.markMediaLinkRecovering('room_reconnected_waiting_peer');
+            this.startCallLeaseHeartbeat('reconnecting');
+          } else {
+            this.onMediaReconnectSucceeded();
+          }
+        } else {
+          this.startCallLeaseHeartbeat('active');
+        }
         this.refreshCurrentRemoteParticipant(room);
         this.scheduleIceTransportLogging(room, 'reconnected');
         this.clearPendingRemoteDisconnectTimer();
-        try {
-          this.emit('livekitReconnected');
-        } catch {}
+        if (!(this.waitingForRemotePeerRejoin && !this.hasExpectedRemoteParticipantInRoom(room))) {
+          try {
+            this.emit('livekitReconnected');
+          } catch {}
+        }
         if (
           !this.remoteStream &&
           !this.remoteVideoTrack &&
@@ -7039,6 +7682,7 @@ export class VideoCallSession extends SimpleEventEmitter {
           void sendClientMetrics(API_BASE, { remoteParticipantConnected: true }).catch(() => {});
           // If we were about to end the call due to a disconnect, cancel — remote is back.
           this.clearPendingRemoteDisconnectTimer();
+          this.noteRemotePeerRejoined('ParticipantConnected');
           logger.info('[VideoCallSession] ✅ Remote participant connected event received', {
             participantId: participant.identity,
             audioTracks: participant.audioTrackPublications.size,
@@ -7281,13 +7925,25 @@ export class VideoCallSession extends SimpleEventEmitter {
             const isRoomReconnecting = this.liveKitReconnecting || room.state === 'reconnecting';
             const recentlyReconnecting =
               Date.now() - this.lastLiveKitReconnectingAt < RECENT_RECONNECT_DISCONNECT_GUARD_MS;
-            if (isRoomReconnecting || recentlyReconnecting) {
+            if (
+              isRoomReconnecting ||
+              recentlyReconnecting ||
+              this.waitingForRemotePeerRejoin ||
+              this.mediaReconnectInProgress
+            ) {
               logger.warn('[VideoCallSession] Remote participant disconnected during reconnect (ignored)', {
                 participantIdentity: participant.identity,
                 roomState: room.state,
                 liveKitReconnecting: this.liveKitReconnecting,
                 recentlyReconnecting,
+                waitingForRemotePeerRejoin: this.waitingForRemotePeerRejoin,
+                mediaReconnectInProgress: this.mediaReconnectInProgress,
               });
+              // Refresh wait window if peer flaps while we already wait.
+              if (this.waitingForRemotePeerRejoin || this.mediaReconnectInProgress) {
+                this.markMediaLinkRecovering('remote_peer_disconnect_while_waiting');
+                this.armOrExtendMediaReconnectGrace();
+              }
               return;
             }
 
@@ -7295,16 +7951,8 @@ export class VideoCallSession extends SimpleEventEmitter {
             // гоняется с последующим disconnectRoom и даёт "unable to set answer".
             this.abortIncomingSdpNegotiation(room);
 
-            // Сразу закрываем системный и in-app PiP при уходе партнёра (без задержки 1.5s — UX).
-            if (Platform.OS === 'android') {
-              try { dismissSystemPiPAfterCallEnded(); } catch {}
-            }
-            try {
-              const hidePiP = (global as any).__pipHidePiPRef?.current;
-              if (typeof hidePiP === 'function') hidePiP();
-            } catch {}
-
             // Подтверждаем disconnect через короткую задержку (избегаем ложного срабатывания при reconnect).
+            // Не PiP/hangup сразу: peer может быть в airplane — ждём rejoin в grace.
             this.clearPendingRemoteDisconnectTimer();
             this.pendingRemoteDisconnectTimer = setTimeout(() => {
               this.pendingRemoteDisconnectTimer = null;
@@ -7319,12 +7967,12 @@ export class VideoCallSession extends SimpleEventEmitter {
               const anyRemote = room.remoteParticipants.size > 0;
               if (hasExpected || anyRemote) return;
 
-              logger.info('[VideoCallSession] Remote participant disconnected (confirmed) — treating as call ended', {
+              logger.info('[VideoCallSession] Remote participant disconnected (confirmed) — waiting for rejoin', {
                 participantIdentity: participant.identity,
                 expectedPartnerIdentity: expected,
                 roomState: room.state,
               });
-              this.handleCallEnded();
+              this.beginWaitingForRemotePeerRejoin('remote_participant_disconnected');
             }, REMOTE_PARTICIPANT_DISCONNECT_CONFIRM_MS);
           }
         }
@@ -7335,22 +7983,25 @@ export class VideoCallSession extends SimpleEventEmitter {
         logger.debug('[VideoCallSession] Room disconnected event received', { 
           reason: this.disconnectReason,
           isDisconnecting: this.isDisconnecting,
-          hasDisconnectPromise: !!this.disconnectPromise
+          hasDisconnectPromise: !!this.disconnectPromise,
+          mediaReconnectInProgress: this.mediaReconnectInProgress,
         });
-        // Если отключение не мы инициировали (обрыв связи / сеть) — только закрываем системный PiP.
-        // НЕ вызываем handleCallEnded(): иначе у пользователя сбросится busy и друзья увидят его как свободного,
-        // хотя звонок ещё не завершён. Завершение — только по call:ended с сервера или по нажатию «Завершить».
-        if (!this.disconnectPromise && !this.ended) {
-          this.clearPendingRemoteDisconnectTimer();
-          if (Platform.OS === 'android') {
-            try { dismissSystemPiPAfterCallEnded(); } catch {}
+        // Намеренный teardown (hangup / call:ended) — без recovery.
+        if (this.disconnectPromise || this.ended || this.endCallInProgress) {
+          if (!this.disconnectPromise) {
+            this.disconnectReason = 'unknown';
+            this.isDisconnecting = false;
           }
+          return;
         }
-        // Флаги будут сброшены в disconnectRoom через промис, если он активен
-        if (!this.disconnectPromise) {
-          this.disconnectReason = 'unknown';
-          this.isDisconnecting = false;
+        // Неожиданный обрыв медиа: grace + reconnect (busy снимется серверным lease, если не восстановимся).
+        this.clearPendingRemoteDisconnectTimer();
+        if (Platform.OS === 'android') {
+          try { dismissSystemPiPAfterCallEnded(); } catch {}
         }
+        this.disconnectReason = 'unknown';
+        this.isDisconnecting = false;
+        this.beginUnexpectedMediaDisconnectRecovery();
       });
   }
 
@@ -7495,6 +8146,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       this.restoreDeferRemoteVideoAfterPiP = true;
     }
     const oldVideoTrackSid = this.remoteVideoTrack?.sid;
+    const oldAudioTrackSid = this.remoteAudioTrack?.sid;
     const mediaTrack = track.mediaStreamTrack;
 
     // ParticipantConnected (incl. delayed retries), TrackPublished, and TrackSubscribed often
@@ -7534,6 +8186,12 @@ export class VideoCallSession extends SimpleEventEmitter {
     // потом TrackSubscribed — без сохранённого SID wasVideoTrackChanged был бы false и у собеседника не создавался бы новый MediaStream.
     const previousVideoSid = oldVideoTrackSid ?? this.lastUnsubscribedRemoteVideoTrackSid;
     const wasVideoTrackChanged = isVideoTrack && !!previousVideoSid && previousVideoSid !== track.sid;
+    const previousAudioSid = oldAudioTrackSid ?? this.lastUnsubscribedRemoteAudioTrackSid;
+    const wasAudioTrackChanged = isAudioTrack && !!previousAudioSid && previousAudioSid !== track.sid;
+    const staleAudioInStream =
+      isAudioTrack &&
+      !!mediaTrack &&
+      !!(this.remoteStream?.getAudioTracks?.() || []).some((t: any) => t && t !== mediaTrack);
     
     // Не пересоздаем stream, чтобы не было мерцаний — создаем один раз и переиспользуем
     if (!this.remoteStream) {
@@ -7548,22 +8206,34 @@ export class VideoCallSession extends SimpleEventEmitter {
     const activeRemoteStream = this.remoteStream;
     const trackAlreadyInStream = mediaTrack && activeRemoteStream.getTracks().includes(mediaTrack as any);
     
-    // КРИТИЧНО: Если видео трек изменился (переворот камеры у партнёра), создаём новый MediaStream.
-    // Иначе у собеседника тот же stream.id и UI не вызывает setRemoteStream → превью не обновляется.
-    if (isVideoTrack && wasVideoTrackChanged) {
+    // КРИТИЧНО: новый MediaStream при смене video (camera flip) ИЛИ audio (peer rejoin после airplane).
+    // Иначе тот же stream.id + мёртвый audio track → у собеседника нет звука (tracksCount: 2).
+    if ((isVideoTrack && wasVideoTrackChanged) || wasAudioTrackChanged || staleAudioInStream) {
       const newStream = new MediaStream();
       try {
-        if (mediaTrack) newStream.addTrack(mediaTrack as any);
-        const audioTrack = this.remoteAudioTrack?.mediaStreamTrack;
-        if (audioTrack) newStream.addTrack(audioTrack as any);
+        if (isAudioTrack) {
+          if (mediaTrack) newStream.addTrack(mediaTrack as any);
+          const videoMt = this.remoteVideoTrack?.mediaStreamTrack;
+          if (videoMt && (videoMt as any).readyState !== 'ended') {
+            newStream.addTrack(videoMt as any);
+          }
+        } else {
+          if (mediaTrack) newStream.addTrack(mediaTrack as any);
+          const audioMt = this.remoteAudioTrack?.mediaStreamTrack;
+          if (audioMt && (audioMt as any).readyState !== 'ended') {
+            newStream.addTrack(audioMt as any);
+          }
+        }
         this.remoteStream = newStream;
-        logger.info('[VideoCallSession] New remote MediaStream for replaced video track (camera flip)', {
-          oldTrackId: previousVideoSid,
+        logger.info('[VideoCallSession] New remote MediaStream for replaced remote track', {
+          kind: publication.kind,
+          oldTrackId: isAudioTrack ? previousAudioSid : previousVideoSid,
           newTrackId: track.sid,
           streamId: newStream.id,
+          reason: wasAudioTrackChanged || staleAudioInStream ? 'audio_replace' : 'video_replace',
         });
       } catch (e) {
-        logger.warn('[VideoCallSession] Error creating new remote stream for video track replace', e);
+        logger.warn('[VideoCallSession] Error creating new remote stream for track replace', e);
       }
     } else {
       // Обычный путь: переиспользуем существующий stream
@@ -7598,6 +8268,10 @@ export class VideoCallSession extends SimpleEventEmitter {
 
     if (publication.kind === Track.Kind.Audio) {
       this.remoteAudioTrack = track;
+      this.lastUnsubscribedRemoteAudioTrackSid = null;
+      if (wasAudioTrackChanged || staleAudioInStream) {
+        shouldRemountRemoteView = true;
+      }
       // КРИТИЧНО: гарантируем слышимость аудио (иногда track приходит disabled/muted после reconnect)
       try {
         // sync with local "mute remote" toggle
@@ -7650,12 +8324,15 @@ export class VideoCallSession extends SimpleEventEmitter {
     }
     
     // Всегда эмитим remoteStream для обновления UI/аудио, но remount RTCView делаем только при необходимости.
-    if (isVideoTrack && shouldRemountRemoteView) {
+    if (shouldRemountRemoteView) {
       this.remoteViewKey = Date.now();
-      logger.debug('[VideoCallSession] Updated remoteViewKey for video track', {
+      logger.debug('[VideoCallSession] Updated remoteViewKey after remote track change', {
         remoteViewKey: this.remoteViewKey,
         trackId: track.sid,
+        kind: publication.kind,
         wasVideoTrackChanged,
+        wasAudioTrackChanged,
+        staleAudioInStream,
         streamId: this.remoteStream.id,
         trackReady: track.mediaStreamTrack?.readyState,
         trackMuted: track.isMuted,
@@ -7705,6 +8382,8 @@ export class VideoCallSession extends SimpleEventEmitter {
       remoteCamEnabled: this.remoteCamEnabled,
       remoteViewKey: this.remoteViewKey,
       wasVideoTrackChanged,
+      wasAudioTrackChanged,
+      staleAudioInStream,
     });
   }
 
@@ -7717,6 +8396,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     }
 
     if (publication.kind === Track.Kind.Audio && this.remoteAudioTrack) {
+      this.lastUnsubscribedRemoteAudioTrackSid = this.remoteAudioTrack.sid ?? null;
       const mediaTrack = this.remoteAudioTrack.mediaStreamTrack;
       if (mediaTrack && this.remoteStream) {
         this.remoteStream.removeTrack(mediaTrack as any);

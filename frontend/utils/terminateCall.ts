@@ -121,16 +121,19 @@ const PRESETS: Record<TerminateCallReason, SurfacePlan> = {
     closeOutgoing: true,
     forceOutgoing: true,
     outgoingVisibleFalse: true,
+    callKeepEnd: true,
   },
   outgoing_abort_keep_main: {
     closeOutgoing: true,
     forceOutgoing: true,
     skipMainReturn: true,
     outgoingVisibleFalse: true,
+    callKeepEnd: true,
   },
   outgoing_native_close: {
     closeOutgoing: true,
     forceOutgoing: true,
+    callKeepEnd: true,
   },
   incoming_canceled: {
     callKeepEnd: true,
@@ -247,7 +250,7 @@ export function terminateCall(opts: TerminateCallOptions): void {
 
   if (plan.callKeepEnd && callId) {
     try {
-      reportEndCallToCallKeep(callId);
+      reportEndCallToCallKeep(callId, { force: true });
     } catch {}
   }
   if (plan.setCallKeepAvailableTrue) {

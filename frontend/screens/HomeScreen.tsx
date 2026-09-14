@@ -91,6 +91,10 @@ import { WelcomeStageBackground } from './home/WelcomeStageBackground';
 import { WELCOME_HEADER_TITLE, WELCOME_STAGE_BG } from './home/constants';
 import { recordCallLog, recordCancelledCall, requestCallLogSoftUi, cancelPendingCallLogNotify, flushCallLogUi, forceCallLogUiNow, loadCallLog } from './home/callLog';
 import { prefetchChatPreviews } from './home/hooks/useChatPreviews';
+import {
+  markChatCallBubbleEligibleIfViewing,
+  appendChatCallStatusIfEligible,
+} from './chat/chatCallEvents';
 import { clearEndingCallInProgress } from '../utils/activeCallSession';
 import { clearDirectCallAudioRouteCarryoverAfterCallEnd } from '../utils/callAudioRoutePersist';
 import {
@@ -149,6 +153,7 @@ import socket, {
   startCall,
   warmCallSignaling,
   cancelCall,
+  forceEndDirectCallWithPeer,
   ensureSocketConnected,
   SOCKET_CONNECT_WAIT_MS,
   getMyProfile,
@@ -1927,6 +1932,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     } catch {}
     const isCurrentAttempt = () => activeOutgoingAttemptRef.current === attemptId;
     const friendName = trimNick(friend.nick || friend.name || '');
+    // Если набор из открытого чата с этим peer — потом покажем статусное облако.
+    markChatCallBubbleEligibleIfViewing(String(friend.id), 'caller');
     requestAnimationFrame(() => {
       setSwipeActionsHiddenForCall(friend.id);
       openSwipeableRef.current?.close?.();
@@ -2121,6 +2128,11 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
             logger.debug('Call accepted', { callId });
             if (callId) try { reportEndCallToCallKeep(callId); } catch {}
             try { setOutgoingCallScreenVisible(false); } catch {}
+            try {
+              void appendChatCallStatusIfEligible(String(friend.id), 'outgoing', {
+                callId: callId ? String(callId) : undefined,
+              });
+            } catch {}
             try {
               const friendIdStr = String(friend.id);
               if (Platform.OS === 'android') {
@@ -2412,17 +2424,19 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       clearFriendsCallBusy([String(friend.id), lastOutgoingPeerIdRef.current]);
       if (errCode === 'initiator_busy' || errCode === 'busy') {
         try {
-          // Только cancel известных callId — без forceEnd(room): иначе FCM call_ended
-          // трясёт Incoming/Main у callee и залипает навигация.
+          // C4: снять залипший серверный busy через call:end(room), не слепой cancelCall
+          // (иначе redial сам рвётся / FCM трясёт callee).
+          const peerId = String(friend?.id || lastOutgoingPeerIdRef.current || '').trim();
           const staleCallId =
             String((global as any).__pendingCallAcceptedRef?.current?.callId || '').trim() ||
             String((global as any).__outgoingCallIdRef?.current || '').trim() ||
             String(activeOutgoingCallIdRef.current || '').trim() ||
-            String(calling.callId || '').trim();
-          if (staleCallId) {
-            try { cancelCall(staleCallId); } catch {}
+            String(calling.callId || '').trim() ||
+            null;
+          if (peerId) {
+            try { forceEndDirectCallWithPeer(peerId, staleCallId); } catch {}
             void ensureSocketConnected(SOCKET_CONNECT_WAIT_MS)
-              .then(() => { try { cancelCall(staleCallId); } catch {} })
+              .then(() => { try { forceEndDirectCallWithPeer(peerId, staleCallId); } catch {} })
               .catch(() => {});
           }
         } catch {}

@@ -144,6 +144,7 @@ export {
   cancelCall,
   declineCall,
   emitCallAcceptAck,
+  emitCallHeartbeat,
   forceEndDirectCallWithPeer,
   hasEarlyIncomingCallAccept,
   onCallAccepted,

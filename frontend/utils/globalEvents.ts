@@ -482,3 +482,27 @@ export function emitCometChatStatus(payload: CometChatStatusPayload) {
   }
 }
 
+export type ChatCallStatusMessagePayload = {
+  peerId: string;
+  message: any;
+};
+
+const chatCallStatusListeners = new Set<Listener<ChatCallStatusMessagePayload>>();
+
+export function onChatCallStatusMessage(cb: Listener<ChatCallStatusMessagePayload>): () => void {
+  chatCallStatusListeners.add(cb);
+  return () => {
+    chatCallStatusListeners.delete(cb);
+  };
+}
+
+export function emitChatCallStatusMessage(payload: ChatCallStatusMessagePayload) {
+  const peerId = String(payload?.peerId || '').trim();
+  if (!peerId || !payload?.message) return;
+  for (const l of chatCallStatusListeners) {
+    try {
+      l({ peerId, message: payload.message });
+    } catch {}
+  }
+}
+

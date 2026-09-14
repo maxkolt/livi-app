@@ -12,7 +12,7 @@ import {
   Linking,
   Dimensions,
 } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
+import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { Image as ExpoImage } from "expo-image";
 import * as FileSystem from "expo-file-system";
 import Svg, { Circle as SvgCircle, Defs, LinearGradient, Stop, G } from "react-native-svg";
@@ -829,6 +829,127 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
     ? (item.replyTo.isOwn ? t('you', lang) : (peerDisplayName || '—'))
     : '';
   const replyBodyText = item.replyTo ? (item.replyTo.text || '—') : '';
+
+  if (String(item?.type || '') === 'call') {
+    const direction = String(item?.callDirection || '').trim();
+    const label =
+      direction === 'outgoing'
+        ? t('callsOutgoing', lang)
+        : direction === 'incoming'
+          ? t('callsIncoming', lang)
+          : direction === 'missed'
+            ? t('callsMissed', lang)
+            : direction === 'cancelled'
+              ? t('callsCancelled', lang)
+              : t('tabCalls', lang);
+    const iconName =
+      direction === 'outgoing'
+        ? 'arrow-top-right'
+        : direction === 'incoming'
+          ? 'arrow-bottom-left'
+          : direction === 'missed'
+            ? 'phone-missed'
+            : direction === 'cancelled'
+              ? 'phone-hangup'
+              : 'phone-outline';
+    const toneBad = direction === 'missed' || direction === 'cancelled';
+    const iconColor = toneBad ? LIVI.red : '#34C759';
+    const timeStr = item?.timestamp
+      ? new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      : '';
+    const bubbleBg = isMyMessage ? BUBBLE_BG_OUT : BUBBLE_BG_IN;
+    const textColor = isDark ? 'rgba(244,245,247,0.92)' : 'rgba(28,36,48,0.92)';
+    const timeColor = isDark ? 'rgba(255,255,255,0.55)' : 'rgba(28,36,48,0.55)';
+
+    const checkbox = showSideCheckbox ? (
+      <Pressable
+        onPress={() => onToggleSelect?.(String(item.id))}
+        style={({ pressed }) => ({
+          width: 26,
+          height: 26,
+          borderRadius: 13,
+          borderWidth: 1.5,
+          borderColor: isSelected ? SELECT_CHECK : (isDark ? 'rgba(255,255,255,0.24)' : 'rgba(0,0,0,0.18)'),
+          backgroundColor: pressed
+            ? (isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.06)')
+            : (isSelected ? SELECT_CHECK_BG : (isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)')),
+          alignItems: 'center',
+          justifyContent: 'center',
+          marginRight: isMyMessage ? 0 : 10,
+          marginLeft: isMyMessage ? 10 : 0,
+        })}
+      >
+        {isSelected ? <Ionicons name="checkmark" size={18} color={SELECT_CHECK} /> : null}
+      </Pressable>
+    ) : null;
+
+    return (
+      <Animated.View
+        style={{
+          transform: [{ scale: messageAnimation }],
+          marginHorizontal: 16,
+          marginVertical: 4,
+          alignSelf: isMyMessage ? 'flex-end' : 'flex-start',
+          flexDirection: 'row',
+          alignItems: 'center',
+          maxWidth: '88%',
+        }}
+      >
+        {!isMyMessage && checkbox}
+        <Pressable
+          onPress={handleBubblePress}
+          onLongPress={() => {
+            if (selectionMode) {
+              onToggleSelect?.(String(item.id));
+              return;
+            }
+            bubbleRef.current?.measureInWindow((x, y, w, h) => {
+              if (isLayoutBlockedByChrome?.({ x, y, width: w, height: h })) return;
+              onLongPressMessage(item, { x, y, width: w, height: h });
+            });
+          }}
+          delayLongPress={380}
+        >
+          <View
+            ref={bubbleRef}
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: 8,
+              paddingHorizontal: 12,
+              paddingVertical: 9,
+              borderRadius: 16,
+              backgroundColor: bubbleBg,
+              borderWidth: StyleSheet.hairlineWidth,
+              borderColor: BORDER_COLOR,
+              minWidth: 148,
+            }}
+          >
+            <MaterialCommunityIcons name={iconName as any} size={18} color={iconColor} />
+            <View style={{ flexShrink: 1, minWidth: 0 }}>
+              <Text
+                style={{
+                  color: textColor,
+                  fontSize: 14,
+                  fontWeight: '600',
+                  lineHeight: 18,
+                }}
+                numberOfLines={1}
+              >
+                {label}
+              </Text>
+              {timeStr ? (
+                <Text style={{ color: timeColor, fontSize: 11, marginTop: 2, fontWeight: '400' }}>
+                  {timeStr}
+                </Text>
+              ) : null}
+            </View>
+          </View>
+        </Pressable>
+        {isMyMessage && checkbox}
+      </Animated.View>
+    );
+  }
 
   if (String(item?.type || '') === 'sticker') {
     const sticker = getBuiltInSticker(item.stickerId);

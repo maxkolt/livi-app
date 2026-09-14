@@ -32,6 +32,14 @@ export function pickLatestMessage(messages: any[] | null | undefined): any | nul
 
 export function previewTextFromMessage(msg: any, lang: Lang): string {
   const type = String(msg?.type || '');
+  if (type === 'call') {
+    const direction = String(msg?.callDirection || '').trim();
+    if (direction === 'outgoing') return t('callsOutgoing', lang);
+    if (direction === 'incoming') return t('callsIncoming', lang);
+    if (direction === 'missed') return t('callsMissed', lang);
+    if (direction === 'cancelled') return t('callsCancelled', lang);
+    return t('tabCalls', lang);
+  }
   if (type === 'audio') return t('chatVoiceMessage', lang);
   const text = getChatReplyPreviewText(msg, lang).trim();
   return text;

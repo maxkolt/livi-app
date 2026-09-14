@@ -1605,9 +1605,12 @@ async function emitPendingCallAcceptedToSocket(
     return false;
   }
   const deliveryState = rememberCallAcceptedDelivery(pendingRoom.callId, userId, pendingRoom);
+  // Capture before attach (attach updates deliveredSocketId / deliveredAtMs).
+  const hadPriorDelivery = !!(deliveryState.deliveredAtMs || deliveryState.deliveredSocketId);
   const alreadyHere = socketAlreadyAttachedToPendingRoom(sock, pendingRoom);
   const otherLiveDelivery = hasLiveAcceptedDeliverySocket(io, deliveryState, sock.id);
   const otherAttached = userAlreadyHasSocketAttachedToPendingRoom(io, userId, pendingRoom, sock.id);
+  const activeLease = getActiveCallLease(pendingRoom.callId);
 
   // Always attach THIS socket first. Previous logic returned early when the old
   // duplicate socket was still briefly alive → new socket never joined the room
@@ -1633,6 +1636,22 @@ async function emitPendingCallAcceptedToSocket(
       roomId: pendingRoom.roomId,
       source,
       reason: otherLiveDelivery ? 'other_live_delivery' : 'other_attached',
+      socketId: sock.id,
+    });
+    return false;
+  }
+  // Airplane / socket flap mid-call: old delivery socket is dead, so otherLive*
+  // is false — but lease + prior accept delivery means LiveKit is already running.
+  // Re-emitting call:accepted reboots signaling and breaks peer audio.
+  // Cold FCM / missed accept still uses call:getAccepted (always emits) or reauth
+  // without prior delivery (offline caller at accept).
+  if (source === 'reauth' && activeLease && hadPriorDelivery) {
+    logger.info('[call:accepted_replay] room reattached without re-emit', {
+      userId,
+      callId: pendingRoom.callId,
+      roomId: pendingRoom.roomId,
+      source,
+      reason: 'reauth_active_lease_prior_delivery',
       socketId: sock.id,
     });
     return false;

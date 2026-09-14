@@ -146,6 +146,7 @@ import {
 } from './home/WelcomeOverlayChrome';
 import { styles as homeStyles } from './home/styles';
 import { emitRequestDirectCall } from '../utils/globalEvents';
+import { markChatCallBubbleEligible } from './chat/chatCallEvents';
 import {
   ReactionBarModal,
   ReactionsRowWithSwipe,
@@ -1745,6 +1746,7 @@ export default function ChatScreen({ route, navigation }: Props) {
       if (g.__videoCallActiveRef?.current === true) return;
     } catch {}
     lastChatCallTapAtRef.current = now;
+    markChatCallBubbleEligible(id, 'caller');
     emitRequestDirectCall({
       peerId: id,
       peerName: peerNameState,

@@ -436,6 +436,7 @@ function HomeWelcomeChatsViewInner({
                   <AdaptiveText
                     style={[styles.preview, unread > 0 && styles.previewUnread]}
                     numberOfLines={1}
+                    fit={false}
                   >
                     {previewText}
                   </AdaptiveText>

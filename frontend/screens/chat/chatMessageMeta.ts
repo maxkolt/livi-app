@@ -21,6 +21,14 @@ export function albumUrisFieldFromMessage(msg: any): { uris?: string[] } {
 }
 
 export function getChatReplyPreviewText(message: any, langCode: string): string {
+  if (String(message?.type || "") === "call") {
+    const direction = String(message?.callDirection || "").trim();
+    if (direction === "outgoing") return t("callsOutgoing", langCode as Lang);
+    if (direction === "incoming") return t("callsIncoming", langCode as Lang);
+    if (direction === "missed") return t("callsMissed", langCode as Lang);
+    if (direction === "cancelled") return t("callsCancelled", langCode as Lang);
+    return t("tabCalls", langCode as Lang);
+  }
   if (String(message?.type || "") === "sticker") {
     return getStickerFallbackText(
       {

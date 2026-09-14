@@ -54,8 +54,6 @@ import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
 import com.facebook.react.bridge.WritableArray
 import com.facebook.react.bridge.WritableMap
-import com.facebook.react.jstasks.HeadlessJsTaskConfig
-import com.facebook.react.jstasks.HeadlessJsTaskContext
 
 /**
  * Нативный модуль: moveTaskToBack после decline; хранение installId и serverUrl
@@ -3781,7 +3779,6 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     private const val KEY_PENDING_OPEN_WELCOME_CHAT = "pending_open_welcome_chat"
     private const val KEY_PENDING_RETURN_TO_ACTIVE_CALL = "pending_return_to_active_call"
     private const val KEY_PENDING_RETURN_AUDIO_ONLY = "pending_return_to_active_call_audio_only"
-    private const val HEADLESS_TASK_CALL_KEEP = "RNCallKeepBackgroundMessage"
 
     private var reactContextRef: ReactApplicationContext? = null
 
@@ -4458,37 +4455,14 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     }
 
     /**
-     * Пытается запустить headless-задачу CallKeep (ConnectionService) для входящего звонка.
-     * Вызывается из FCM при type=call. Если задача запущена — системный UI звонка (как в Telegram).
-     * Callback вызывается на main thread; true = headless запущен, не показывать своё уведомление/активность.
+     * RETIRED: входящий UI идёт через FCM → IncomingCallForegroundService / IncomingCallActivity
+     * + JS registerIncomingCallKeepSession (displayIncomingCall).
+     * Headless RNCallKeepBackgroundMessage больше не стартуем — всегда callback(false).
      */
     @JvmStatic
     fun tryStartCallKeepHeadlessTask(callId: String, from: String, fromNick: String, callback: (Boolean) -> Unit) {
-      val ctx = reactContextRef
-      if (ctx == null) {
-        Handler(Looper.getMainLooper()).post { callback(false) }
-        return
-      }
-      Handler(Looper.getMainLooper()).post {
-        var started = false
-        try {
-          if (ctx.hasActiveReactInstance()) {
-            val data = Arguments.createMap().apply {
-              putString("type", "call")
-              putString("callId", callId)
-              putString("from", from)
-              putString("fromNick", fromNick)
-            }
-            val config = HeadlessJsTaskConfig(HEADLESS_TASK_CALL_KEEP, data, 10_000L, false)
-            HeadlessJsTaskContext.getInstance(ctx).startTask(config)
-            started = true
-            Log.d(NAME, "headless task started for callId=$callId")
-          }
-        } catch (e: Exception) {
-          Log.w(NAME, "headless task start failed", e)
-        }
-        callback(started)
-      }
+      Log.d(NAME, "tryStartCallKeepHeadlessTask retired; use FCM IncomingCall path callId=$callId from=$from nick=$fromNick")
+      Handler(Looper.getMainLooper()).post { callback(false) }
     }
 
     /** Флаг: пользователь нажал X на нативном экране исходящего. Читается из JS при переходе в active (на случай потери события). */

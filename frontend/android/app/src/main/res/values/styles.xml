@@ -10,10 +10,9 @@
   -->
   <style name="AppTheme.Base" parent="Theme.AppCompat.DayNight.NoActionBar">
     <item name="android:editTextBackground">@drawable/rn_edit_text_material</item>
-    <item name="android:statusBarColor">@android:color/transparent</item>
-    <item name="android:navigationBarColor">@android:color/transparent</item>
-    <item name="android:enforceStatusBarContrast" tools:targetApi="q">false</item>
-    <item name="android:enforceNavigationBarContrast" tools:targetApi="q">false</item>
+    <!-- statusBarColor/navigationBarColor/enforce*Contrast убраны: задепрекейчены на Android 15/16
+         (Google Play флагует их как edge-to-edge unsupported API). Прозрачность баров задаётся в
+         рантайме EdgeToEdgeHelper.apply() (guarded для Android <=14), поэтому вид не меняется. -->
     <item name="colorPrimary">@color/colorPrimary</item>
   </style>
   <style name="AppTheme" parent="AppTheme.Base" />

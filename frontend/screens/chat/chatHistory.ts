@@ -129,6 +129,8 @@ export function mergeQuietSyncMessages(
     const id = String(m?.id || "");
     if (!id || serverIdSet.has(id)) return false;
 
+    if (String(m?.type || "") === "call" || m?.localOnly === true) return true;
+
     const stUp = statuses.uploadStatus?.[id];
     if (stUp === "sending" || stUp === "failed") return true;
     const uri = String(m?.uri || "");
@@ -171,6 +173,7 @@ export function mergeInitialHistoryMessages(
   const localKeep = prev.filter((m: any) => {
     const id = String(m?.id || "");
     if (!id || serverIds.has(id)) return false;
+    if (String(m?.type || "") === "call" || m?.localOnly === true) return true;
     if (isServerMessageId(id)) return false;
     if (String(m?.sender || "") !== "me") return false;
     const stUp = statuses.uploadStatus?.[id];

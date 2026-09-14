@@ -2,7 +2,7 @@
  * CallKeep (ConnectionService) — нативный экран входящего звонка на Android.
  * Инициализация, displayIncomingCall, обработка answer/end.
  */
-import { Platform, NativeModules, AppState } from 'react-native';
+import { Platform, NativeModules, AppState, PermissionsAndroid } from 'react-native';
 import { logger } from './logger';
 import { setIncomingCallScreenVisible } from '../sockets/socket';
 import { loadLang, t } from './i18n';
@@ -57,13 +57,52 @@ async function resolveAndroidTelecomSupported(): Promise<boolean> {
   }
   return androidTelecomSupportedPromise;
 }
+
+/**
+ * Samsung/API 30+: VoiceConnectionService.getPhoneAccount требует READ_PHONE_NUMBERS.
+ * В Play-сборке permission снят (AndroidManifest tools:node=remove) → displayIncomingCall
+ * крашит процесс SecurityException. Connection создаём только если permission реально есть.
+ */
+let androidTelecomConnectionAllowed: boolean | null = null;
+let androidTelecomConnectionAllowedPromise: Promise<boolean> | null = null;
+
+async function canCreateAndroidTelecomConnection(): Promise<boolean> {
+  if (Platform.OS !== 'android') return true;
+  if (androidTelecomConnectionAllowed !== null) return androidTelecomConnectionAllowed;
+  if (!androidTelecomConnectionAllowedPromise) {
+    androidTelecomConnectionAllowedPromise = (async () => {
+      try {
+        const perm = PermissionsAndroid.PERMISSIONS.READ_PHONE_NUMBERS;
+        if (!perm) {
+          androidTelecomConnectionAllowed = false;
+          return false;
+        }
+        const granted = await PermissionsAndroid.check(perm);
+        androidTelecomConnectionAllowed = granted === true;
+      } catch {
+        androidTelecomConnectionAllowed = false;
+      }
+      if (!androidTelecomConnectionAllowed) {
+        logger.info(
+          '[callKeep] Telecom Connection disabled (no READ_PHONE_NUMBERS) — IncomingCallActivity only',
+        );
+      }
+      return androidTelecomConnectionAllowed;
+    })();
+  }
+  return androidTelecomConnectionAllowedPromise;
+}
 /** raw callId -> { from, fromNick, callKitId, hasVideo? } для навигации при answer из нативного UI */
 const pendingCallById: Record<string, { from: string; fromNick?: string; callKitId?: string; hasVideo?: boolean }> = {};
 const callKitUuidByCallId: Record<string, string> = {};
 const callIdByCallKitUuid: Record<string, string> = {};
 const activeCallKeepCallIds = new Set<string>();
+/** Android: уже вызывали displayIncomingCall (Telecom Connection) для этого callId. */
+const callKeepConnectionRequestedIds = new Set<string>();
 const recentCallKeepEndAtByCallId: Record<string, number> = {};
 const CALLKEEP_END_DEDUP_MS = 4000;
+/** Telecom Connection создаётся асинхронно после addNewIncomingCall — ретраи для answer/active/end. */
+const CALLKEEP_CONNECTION_RETRY_MS = [0, 60, 160, 350, 700, 1200] as const;
 
 function resolveRawCallId(callIdOrUuid: string): string {
   const id = String(callIdOrUuid || '').trim();
@@ -109,7 +148,40 @@ function markCallKeepEnded(callIdOrUuid: string): void {
   if (!callId) return;
   recentCallKeepEndAtByCallId[callId] = Date.now();
   activeCallKeepCallIds.delete(callId);
+  callKeepConnectionRequestedIds.delete(callId);
   clearPendingCall(callId);
+}
+
+/**
+ * Повторить native CallKeep action: Connection появляется не сразу после displayIncomingCall.
+ * Native API при отсутствии connection только логирует warn и не бросает — поэтому ретраим слепо.
+ */
+function runWithCallKeepConnectionRetry(
+  label: string,
+  nativeCallId: string,
+  action: (rnCallKeep: { default: any }) => void,
+): void {
+  let rn: { default: any } | null = null;
+  try {
+    rn = require('react-native-callkeep');
+  } catch (e) {
+    logger.warn(`[callKeep] ${label} require failed`, e as Error);
+    return;
+  }
+  CALLKEEP_CONNECTION_RETRY_MS.forEach((delayMs, attempt) => {
+    setTimeout(() => {
+      try {
+        action(rn!);
+        if (attempt > 0) {
+          logger.debug(`[callKeep] ${label} retry`, { nativeCallId, attempt, delayMs });
+        }
+      } catch (e) {
+        if (attempt === CALLKEEP_CONNECTION_RETRY_MS.length - 1) {
+          logger.warn(`[callKeep] ${label} failed`, e as Error);
+        }
+      }
+    }, delayMs);
+  });
 }
 
 type SetupCallKeepOptions = {
@@ -660,11 +732,27 @@ export function displayIncomingCall(callId: string, fromUserId: string, fromNick
       RNCallKeep.default.displayIncomingCall(nativeCallId, fromUserId, fromNick ?? '', 'generic', hasVideo, {
         ios: { supportsHolding: false, supportsDTMF: false, supportsGrouping: false, supportsUngrouping: false },
       });
-    } else {
-      RNCallKeep.default.displayIncomingCall(nativeCallId, fromUserId, fromNick ?? '', hasVideo);
+      setIncomingCallScreenVisible(true, fromUserId);
+      logger.info('[callKeep] displayIncomingCall', { callId, from: fromUserId });
+      return;
     }
-    setIncomingCallScreenVisible(true, fromUserId);
-    logger.info('[callKeep] displayIncomingCall', { callId, from: fromUserId });
+    // Android: см. canCreateAndroidTelecomConnection — без READ_PHONE_NUMBERS краш на Samsung.
+    void (async () => {
+      const canConnect = await canCreateAndroidTelecomConnection();
+      if (!canConnect) {
+        logger.info('[callKeep] displayIncomingCall skipped (no READ_PHONE_NUMBERS)', { callId });
+        setIncomingCallScreenVisible(true, fromUserId);
+        return;
+      }
+      try {
+        RNCallKeep.default.displayIncomingCall(nativeCallId, fromUserId, fromNick ?? '', hasVideo);
+        callKeepConnectionRequestedIds.add(String(callId).trim());
+        setIncomingCallScreenVisible(true, fromUserId);
+        logger.info('[callKeep] displayIncomingCall', { callId, from: fromUserId });
+      } catch (e) {
+        logger.warn('[callKeep] displayIncomingCall failed', e as Error);
+      }
+    })();
   } catch (e) {
     logger.warn('[callKeep] displayIncomingCall failed', e as Error);
   }
@@ -690,9 +778,9 @@ export type PresentIncomingCallResult = 'shown' | 'skipped' | 'ended';
 /**
  * Пункт 2: один путь показа входящего.
  *
- * Android: только IncomingCallActivity (foreground) или showIncomingCallSystemUI (background).
- * Не вызывает CallKeep.displayIncomingCall — иначе двойной UI/рингтон с FGS/Activity.
- * CallKeep session регистрируется без второго экрана ({@link registerIncomingCallKeepSession}).
+ * Android: IncomingCallActivity (foreground) или showIncomingCallSystemUI (background).
+ * Telecom Connection создаём через {@link registerIncomingCallKeepSession} → CallKeep.displayIncomingCall
+ * (selfManaged: без системного dialer UI; нужен для setCurrentCallActive/endCall).
  *
  * iOS: CallKeep displayIncomingCall.
  */
@@ -773,8 +861,13 @@ export function clearPendingCall(callId: string): void {
 }
 
 /**
- * Входящий через IncomingCallActivity (без displayIncomingCall): зарегистрировать звонок в CallKeep,
- * чтобы endCall/setCurrentCallActive и Telecom не теряли связь.
+ * Зарегистрировать входящий в CallKeep/Telecom.
+ * UI уже показан через IncomingCallActivity / system UI — здесь только Connection:
+ * без displayIncomingCall setCurrentCallActive/endCall дают "no connection found".
+ * selfManaged=true → системный dialer не рисуется поверх нашего Activity.
+ *
+ * Android без READ_PHONE_NUMBERS: не вызываем displayIncomingCall (crash SecurityException
+ * в VoiceConnectionService на Samsung) — UI остаётся на IncomingCallActivity.
  */
 export function registerIncomingCallKeepSession(
   callId: string,
@@ -782,25 +875,69 @@ export function registerIncomingCallKeepSession(
   opts?: { fromNick?: string; hasVideo?: boolean },
 ): void {
   if ((Platform.OS !== 'android' && Platform.OS !== 'ios') || !isSetup) return;
+  if (Platform.OS === 'android' && !isAndroidCallKeepReady) return;
   const raw = String(callId || '').trim();
   const from = String(fromUserId || '').trim();
   if (!raw || !from) return;
-  rememberPendingCall({
-    callId: raw,
-    from,
-    fromNick: opts?.fromNick,
-    hasVideo: opts?.hasVideo === true,
-  });
-  try {
-    const RNCallKeep = require('react-native-callkeep');
-    const nativeCallId = resolveCallKeepUuid(raw);
-    if (Platform.OS === 'android') {
-      RNCallKeep.default.setCurrentCallActive?.(nativeCallId);
-    }
-    logger.info('[callKeep] registerIncomingCallKeepSession', { callId: raw, from });
-  } catch (e) {
-    logger.warn('[callKeep] registerIncomingCallKeepSession failed', e as Error);
+
+  if (Platform.OS !== 'android') {
+    rememberPendingCall({
+      callId: raw,
+      from,
+      fromNick: opts?.fromNick,
+      hasVideo: opts?.hasVideo === true,
+    });
+    return;
   }
+
+  void (async () => {
+    const canConnect = await canCreateAndroidTelecomConnection();
+    if (!canConnect) {
+      // Только метаданные для answer-навигации — без activeCallKeep / Connection.
+      pendingCallById[raw] = {
+        from,
+        fromNick: opts?.fromNick,
+        hasVideo: opts?.hasVideo === true,
+      };
+      setCallMediaHint(raw, opts?.hasVideo === true ? 'video' : 'audio');
+      logger.info('[callKeep] registerIncomingCallKeepSession skip displayIncomingCall', {
+        callId: raw,
+        reason: 'no_READ_PHONE_NUMBERS',
+      });
+      return;
+    }
+
+    rememberPendingCall({
+      callId: raw,
+      from,
+      fromNick: opts?.fromNick,
+      hasVideo: opts?.hasVideo === true,
+    });
+    try {
+      const RNCallKeep = require('react-native-callkeep');
+      const nativeCallId = resolveCallKeepUuid(raw);
+      if (!callKeepConnectionRequestedIds.has(raw)) {
+        callKeepConnectionRequestedIds.add(raw);
+        RNCallKeep.default.displayIncomingCall(
+          nativeCallId,
+          from,
+          opts?.fromNick ?? from,
+          opts?.hasVideo === true,
+        );
+        logger.info('[callKeep] registerIncomingCallKeepSession displayIncomingCall', {
+          callId: raw,
+          from,
+        });
+      } else {
+        logger.debug('[callKeep] registerIncomingCallKeepSession connection already requested', {
+          callId: raw,
+        });
+      }
+    } catch (e) {
+      callKeepConnectionRequestedIds.delete(raw);
+      logger.warn('[callKeep] registerIncomingCallKeepSession failed', e as Error);
+    }
+  })();
 }
 
 /**
@@ -808,18 +945,42 @@ export function registerIncomingCallKeepSession(
  */
 export function reportAnswerIncomingCall(callId: string): void {
   if ((Platform.OS !== 'android' && Platform.OS !== 'ios') || !isSetup) return;
-  try {
-    const RNCallKeep = require('react-native-callkeep');
-    const nativeCallId = resolveCallKeepUuid(callId);
-    RNCallKeep.default.answerIncomingCall(nativeCallId);
+  if (Platform.OS === 'android' && !isAndroidCallKeepReady) return;
+  const raw = resolveRawCallId(callId);
+  const nativeCallId = resolveCallKeepUuid(callId);
+  if (!raw || !nativeCallId) return;
+
+  void (async () => {
     if (Platform.OS === 'android') {
-      RNCallKeep.default.setCurrentCallActive?.(nativeCallId);
+      const canConnect = await canCreateAndroidTelecomConnection();
+      if (!canConnect) {
+        logger.debug('[callKeep] reportAnswerIncomingCall skip (no Telecom Connection)', {
+          callId: raw,
+        });
+        clearPendingCall(callId);
+        return;
+      }
+      if (!callKeepConnectionRequestedIds.has(raw)) {
+        const info = pendingCallById[raw];
+        if (info?.from) {
+          registerIncomingCallKeepSession(raw, info.from, {
+            fromNick: info.fromNick,
+            hasVideo: info.hasVideo === true,
+          });
+          await new Promise((r) => setTimeout(r, 80));
+        }
+      }
     }
+    activeCallKeepCallIds.add(raw);
+    runWithCallKeepConnectionRetry('answerIncomingCall', nativeCallId, (RNCallKeep) => {
+      RNCallKeep.default.answerIncomingCall(nativeCallId);
+      if (Platform.OS === 'android') {
+        RNCallKeep.default.setCurrentCallActive?.(nativeCallId);
+      }
+    });
     clearPendingCall(callId);
-    activeCallKeepCallIds.add(resolveRawCallId(callId));
-  } catch (e) {
-    logger.warn('[callKeep] answerIncomingCall failed', e as Error);
-  }
+    activeCallKeepCallIds.add(raw);
+  })();
 }
 
 /**
@@ -834,7 +995,10 @@ export function reportRejectCall(callId: string): void {
   }
   try {
     const RNCallKeep = require('react-native-callkeep');
-    RNCallKeep.default.rejectCall(resolveCallKeepUuid(endCheck.callId));
+    const uuid = resolveCallKeepUuid(endCheck.callId);
+    runWithCallKeepConnectionRetry('rejectCall', uuid, (RN) => {
+      RN.default.rejectCall(uuid);
+    });
     markCallKeepEnded(endCheck.callId);
   } catch (e) {
     markCallKeepEnded(endCheck.callId);
@@ -845,21 +1009,51 @@ export function reportRejectCall(callId: string): void {
 /**
  * Сообщить CallKeep, что звонок завершён (положили трубку, таймаут и т.д.).
  * Обязательно вызывать при завершении звонка, иначе следующий звонок может не идти.
+ *
+ * @param opts.force — вызвать endCall даже если callId не в active/requested set
+ *   (финал из VideoCallSession / remote ended; идемпотентно через CALLKEEP_END_DEDUP_MS).
  */
-export function reportEndCallToCallKeep(callId: string | null): void {
+export function reportEndCallToCallKeep(
+  callId: string | null,
+  opts?: { force?: boolean },
+): void {
   if ((Platform.OS !== 'android' && Platform.OS !== 'ios') || !isSetup || !callId) return;
-  const endCheck = canEndCallKeepCall(callId);
-  if (!endCheck.ok) {
-    logger.debug('[callKeep] endCall skipped (not active or duplicate)', { callId });
+  const raw = resolveRawCallId(callId) || String(callId || '').trim();
+  if (!raw) return;
+
+  const endCheck = canEndCallKeepCall(raw);
+  const hadConnectionRequest = callKeepConnectionRequestedIds.has(raw);
+  const recentlyEnded =
+    (recentCallKeepEndAtByCallId[raw] || 0) > 0 &&
+    Date.now() - (recentCallKeepEndAtByCallId[raw] || 0) < CALLKEEP_END_DEDUP_MS;
+
+  // Dedupe всегда (в т.ч. force): иначе double endCall → "no connection found" в logcat.
+  if (recentlyEnded) {
+    logger.debug('[callKeep] endCall skipped (recent dedupe)', { callId: raw });
     return;
   }
+  if (!endCheck.ok && !hadConnectionRequest && !opts?.force) {
+    logger.debug('[callKeep] endCall skipped (not active or duplicate)', { callId: raw });
+    return;
+  }
+
+  const id = endCheck.callId || raw;
   try {
-    const RNCallKeep = require('react-native-callkeep');
-    RNCallKeep.default.endCall(resolveCallKeepUuid(endCheck.callId));
-    markCallKeepEnded(endCheck.callId);
-    logger.debug('[callKeep] endCall reported', { callId: endCheck.callId });
+    const uuid = resolveCallKeepUuid(id);
+    // Race: Connection ещё не в map — ретраи; force чистит JS-состояние даже без active set.
+    runWithCallKeepConnectionRetry('endCall', uuid, (RNCallKeep) => {
+      RNCallKeep.default.endCall(uuid);
+    });
+    markCallKeepEnded(id);
+    try {
+      setCallKeepAvailable(true);
+    } catch {}
+    logger.debug('[callKeep] endCall reported', { callId: id, force: !!opts?.force });
   } catch (e) {
-    markCallKeepEnded(endCheck.callId);
+    markCallKeepEnded(id);
+    try {
+      setCallKeepAvailable(true);
+    } catch {}
     logger.warn('[callKeep] endCall failed', e as Error);
   }
 }

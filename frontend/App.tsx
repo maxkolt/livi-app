@@ -40,6 +40,7 @@ import { ensureCometChatReady } from "./chat/cometchat";
 import type { RootStackParamList } from "./navigation/types";
 import { addNotificationListeners, ensureInitialNotificationPermissions, openIncomingCallScreen, openAnswerCallScreen, handleDeclineCallFromDeepLink, registerAndSendPushToken, clearCallRelatedNotificationsAndSyncBadge, syncAppBadgeFromMissedCount, clearMissedBadgeCleared, recordMissedCallForUser, applyPendingMissedCallsFromNative, getMissedCountByUserFromNative } from './utils/pushNotifications';
 import { flushCallLogUi, forceCallLogUiNow, recordCallLog, recordCancelledCall } from './screens/home/callLog';
+import { markChatCallBubbleEligible } from './screens/chat/chatCallEvents';
 import { getInstallId, getInstallSecret } from './utils/installId';
 import { notifyIncomingShare, pullPendingShareFromNative, subscribeIncomingShare, type IncomingShareItem } from './utils/incomingShare';
 import { ensureInitialMediaPermissions } from './utils/mediaPermissions';
@@ -208,6 +209,10 @@ if (__DEV__) {
     LogBox.ignoreLogs([
       'Excessive number of pending callbacks',
       '[expo-av]: Expo AV has been deprecated',
+      // LiveKit expected drops (airplane / brief offline) — not product errors.
+      'Network request failed',
+      'ConnectionError',
+      'ServerUnreachable',
     ]);
   } catch {}
 }
@@ -1025,6 +1030,10 @@ function AppContent() {
           registerIncomingCallKeepSession(cid, from, {
             hasVideo: answerMediaHint !== 'audio',
           });
+        } catch (_) {}
+        // Telecom Connection → ACTIVE (иначе setCurrentCallActive/endCall → no connection found).
+        try {
+          reportAnswerIncomingCall(cid);
         } catch (_) {}
       }
       // Сначала VideoCall в стеке (+ крышка), потом Main на передний план — иначе первый кадр = Home/приветствие.
@@ -3113,6 +3122,12 @@ function AppContent() {
       g.__lastIncomingFromUserIdRef = g.__lastIncomingFromUserIdRef || { current: null };
       g.__lastIncomingFromUserIdRef.current = String(d.from || '').trim() || null;
     } catch {}
+    try {
+      const fromPeer = String(d.from || '').trim();
+      if (fromPeer && String((global as any).__currentChatPeerId || '').trim() === fromPeer) {
+        markChatCallBubbleEligible(fromPeer, 'callee', d.callId);
+      }
+    } catch {}
   }, [routeName]);
 
   // Сохраняем обработчик в ref для использования в fallback и для пуша
@@ -3485,12 +3500,22 @@ function AppContent() {
         try { NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false); } catch (_) {}
       }
       const g = global as any;
+      const callId =
+        String(g.__currentCallPiPParamsRef?.current?.callId || g.__outgoingCallIdRef?.current || '').trim() || null;
+      const roomId =
+        String(g.__currentCallPiPParamsRef?.current?.roomId || '').trim() || null;
+      // Same surfaces teardown as RemoteCallEndedInSystemPiP — push path previously skipped terminateCall.
+      try {
+        terminateCall({
+          reason: 'call_ended_surfaces',
+          callId,
+          roomId,
+        });
+      } catch (_) {}
       try {
         const session = g.__webrtcSessionRef?.current;
         if (session && typeof session.applyRemoteEnded === 'function' && !session.isEnded?.()) {
-          const cid = String(g.__currentCallPiPParamsRef?.current?.callId || '').trim() || undefined;
-          const rid = String(g.__currentCallPiPParamsRef?.current?.roomId || '').trim() || undefined;
-          session.applyRemoteEnded({ callId: cid, roomId: rid });
+          session.applyRemoteEnded({ callId: callId || undefined, roomId: roomId || undefined });
         }
       } catch (_) {}
       const inSystem = g.__pipInSystemModeRef?.current === true;

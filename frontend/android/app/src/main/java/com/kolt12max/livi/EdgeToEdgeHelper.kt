@@ -31,15 +31,19 @@ object EdgeToEdgeHelper {
       }
     }
 
-    // Keep system bars transparent. On API 35+ bar colors are ignored anyway;
-    // translucent scrims are drawn by RN SystemBarsScrim for a consistent look.
-    @Suppress("DEPRECATION")
-    run {
-      window.statusBarColor = Color.TRANSPARENT
-      window.navigationBarColor = Color.TRANSPARENT
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-        window.isStatusBarContrastEnforced = false
-        window.isNavigationBarContrastEnforced = false
+    // Keep system bars transparent. On API 35+ (Android 15/16) bar colors are deprecated and
+    // ignored — the system enforces transparency itself, so we must NOT call the deprecated
+    // setters there (Google Play flags them). Call them only on Android <= 14, where they are
+    // still needed to make the bars transparent. Поведение на старых ОС не меняется.
+    if (Build.VERSION.SDK_INT < 35 /* VANILLA_ICE_CREAM */) {
+      @Suppress("DEPRECATION")
+      run {
+        window.statusBarColor = Color.TRANSPARENT
+        window.navigationBarColor = Color.TRANSPARENT
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+          window.isStatusBarContrastEnforced = false
+          window.isNavigationBarContrastEnforced = false
+        }
       }
     }
   }
