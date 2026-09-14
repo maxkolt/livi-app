@@ -73,6 +73,17 @@ import {
   pruneOrchestratedCall,
   transitionCall,
 } from './utils/callOrchestration';
+import {
+  registerActiveCallLease,
+  touchActiveCallLease,
+  clearActiveCallLease,
+  hasActiveCallLease,
+  getActiveCallLease,
+  findActiveCallLeaseByRoom,
+  findActiveCallLeaseForUser,
+  startActiveCallLeaseSweeper,
+  type ActiveCallLease,
+} from './utils/activeCallLease';
 import { callProviderAdapter, callProviderMode } from './utils/callProvider';
 import { isShuttingDown, setShuttingDown } from './utils/shutdownState';
 import {
@@ -303,6 +314,25 @@ setIoInstance(io);
 
 // Запускаем периодическую очистку устаревших сокетов из очереди матчинга
 startQueueCleanup(io);
+
+// Active direct-call lease: no heartbeat → server ends call + clears sticky busy.
+startActiveCallLeaseSweeper((lease: ActiveCallLease) => {
+  logger.warn('[call:lease] expired — force ending sticky call', {
+    callId: lease.callId,
+    roomId: lease.roomId,
+    a: lease.a,
+    b: lease.b,
+    phase: lease.phase,
+    silentForMs: Date.now() - lease.lastHeartbeatAt,
+  });
+  return endDirectCallServerSide({
+    callId: lease.callId,
+    roomId: lease.roomId,
+    a: lease.a,
+    b: lease.b,
+    reason: 'lease_expired',
+  });
+});
 
 
 // пробрасываем io в req ДО подключения роутеров
@@ -1180,6 +1210,7 @@ async function clearDirectCallSharedState(callId: string, link?: { a: string; b:
 
 /** Accepted / in-call: ringing maps and Redis must not drive incoming_replay or false timeouts. */
 function isDirectCallAcceptedOrActive(callId: string, link?: { a: string; b: string } | null): boolean {
+  if (hasActiveCallLease(callId)) return true;
   const timeline = getCallTimeline(callId);
   if (timeline?.state === 'accepted') return true;
   if (callIdToRoomId.has(callId)) return true;
@@ -1413,6 +1444,7 @@ function clearAcceptedCallStateForUser(userId: string, reason: string): string |
     const linkForRedis = callsById.get(callId);
     callsById.delete(callId);
     callIdToRoomId.delete(callId);
+    clearActiveCallLease(callId);
     const peerForRedis =
       linkForRedis != null
         ? { a: linkForRedis.a, b: linkForRedis.b }
@@ -1814,6 +1846,7 @@ function resolveCallIdFromEndIdentifier(roomOrCallId: string, explicitCallId?: s
   if (ex) {
     if (callsById.has(ex)) return ex;
     if (callIdToRoomId.has(ex)) return ex;
+    if (hasActiveCallLease(ex)) return ex;
     for (const pending of activeRoomByUserId.values()) {
       if (pending.callId === ex) return ex;
     }
@@ -1822,6 +1855,9 @@ function resolveCallIdFromEndIdentifier(roomOrCallId: string, explicitCallId?: s
   if (!id) return null;
   if (callsById.has(id)) return id;
   if (callIdToRoomId.has(id)) return id;
+  if (hasActiveCallLease(id)) return id;
+  const byRoom = findActiveCallLeaseByRoom(id);
+  if (byRoom) return byRoom.callId;
   const rm = id.match(/^room_([a-f\d]{24})_([a-f\d]{24})$/i);
   if (!rm) return null;
   const u1 = normalizeMongoObjectId(rm[1]);
@@ -1830,6 +1866,13 @@ function resolveCallIdFromEndIdentifier(roomOrCallId: string, explicitCallId?: s
   for (const uid of [u1, u2]) {
     const pending = activeRoomByUserId.get(uid);
     if (pending?.callId) return pending.callId;
+    const lease = findActiveCallLeaseForUser(uid);
+    if (
+      lease &&
+      ((lease.a === u1 && lease.b === u2) || (lease.a === u2 && lease.b === u1))
+    ) {
+      return lease.callId;
+    }
     const entry = callOfUser.get(uid);
     if (!entry?.callId) continue;
     const link = callsById.get(entry.callId);
@@ -1838,6 +1881,182 @@ function resolveCallIdFromEndIdentifier(roomOrCallId: string, explicitCallId?: s
     if (pair.has(u1) && pair.has(u2)) return entry.callId;
   }
   return null;
+}
+
+/**
+ * Server-authoritative end for an accepted direct call (hangup path without a sender socket,
+ * or lease expiry). Clears busy + maps and emits call:ended to both participants.
+ */
+async function endDirectCallServerSide(opts: {
+  callId: string;
+  roomId?: string | null;
+  a?: string | null;
+  b?: string | null;
+  reason: 'ended' | 'lease_expired';
+  endedByUserId?: string | null;
+}): Promise<void> {
+  const callIdStr = String(opts.callId || '').trim();
+  if (!callIdStr) return;
+
+  const lease = getActiveCallLease(callIdStr);
+  clearActiveCallLease(callIdStr);
+
+  const roomCandidate =
+    String(opts.roomId || '').trim() ||
+    lease?.roomId ||
+    callIdToRoomId.get(callIdStr) ||
+    '';
+  const roomId = isDirectCallRoomId(roomCandidate) ? roomCandidate : '';
+
+  let a = normalizeMongoObjectId(String(opts.a || lease?.a || ''));
+  let b = normalizeMongoObjectId(String(opts.b || lease?.b || ''));
+  if ((!isOid(a) || !isOid(b)) && roomId) {
+    const rm = roomId.match(/^room_([a-f\d]{24})_([a-f\d]{24})$/i);
+    if (rm) {
+      if (!isOid(a)) a = normalizeMongoObjectId(rm[1]);
+      if (!isOid(b)) b = normalizeMongoObjectId(rm[2]);
+    }
+  }
+  if ((!isOid(a) || !isOid(b))) {
+    const pendingA = [...activeRoomByUserId.entries()].find(([, p]) => p.callId === callIdStr);
+    if (pendingA) {
+      const uid = pendingA[0];
+      const peer = pendingA[1].peerUserId;
+      if (!isOid(a)) a = normalizeMongoObjectId(uid);
+      if (!isOid(b) && peer) b = normalizeMongoObjectId(String(peer));
+    }
+  }
+
+  if (recentlyEndedCalls.has(callIdStr) || (roomId && recentlyEndedCalls.has(roomId))) {
+    if (isOid(a) && isOid(b)) {
+      clearDirectCallSocketStateForUsers([a, b]);
+      try {
+        await emitPresenceUpdateCallToFriends(io, a, b, false);
+      } catch {}
+    }
+    return;
+  }
+
+  markRecentlyEndedCallIdentifier(callIdStr);
+  if (roomId) markRecentlyEndedCallIdentifier(roomId);
+
+  transitionCall(callIdStr, 'ended', {
+    actionKey: `server_end:${opts.reason}:${callIdStr}`,
+    source: opts.reason === 'lease_expired' ? 'lease_expired' : 'server_end',
+  });
+
+  if (roomId) {
+    try {
+      sanitizeDirectCallSocketIoRoom(io, roomId, activeCallBySocket);
+    } catch {}
+  }
+
+  const socketsToNotify = new Set<string>();
+  if (roomId) {
+    const room = io.sockets.adapter.rooms.get(roomId);
+    if (room) {
+      for (const sid of room) socketsToNotify.add(sid);
+    }
+    for (const [sid, activeRoom] of activeCallBySocket.entries()) {
+      if (activeRoom === roomId) socketsToNotify.add(sid);
+    }
+    for (const [sid, socket] of io.sockets.sockets.entries()) {
+      if (String((socket as any)?.data?.roomId || '') === roomId) socketsToNotify.add(sid);
+    }
+  }
+  for (const uid of [a, b]) {
+    if (!isOid(uid)) continue;
+    forEachSocketForUser(io, uid, (s) => socketsToNotify.add(s.id));
+  }
+
+  const emitRoomId = roomId || roomCandidate || undefined;
+  for (const sid of socketsToNotify) {
+    const socket = io.sockets.sockets.get(sid);
+    if (!socket) continue;
+    try {
+      socket.emit('call:ended', {
+        callId: callIdStr,
+        roomId: emitRoomId,
+        reason: opts.reason,
+        scope: 'direct',
+        resolvedRoomId: emitRoomId,
+      });
+    } catch {}
+  }
+
+  const participantUserIds = new Set<string>();
+  for (const sid of socketsToNotify) {
+    const peerSocket = io.sockets.sockets.get(sid);
+    if (!peerSocket) continue;
+    const peerUserId = (peerSocket as any)?.data?.userId;
+    (peerSocket as any).data = (peerSocket as any).data || {};
+    (peerSocket as any).data.busy = false;
+    delete (peerSocket as any).data.roomId;
+    delete (peerSocket as any).data.partnerSid;
+    delete (peerSocket as any).data.inCall;
+    if (peerUserId) participantUserIds.add(String(peerUserId));
+    try {
+      activeCallBySocket.delete(sid);
+    } catch {}
+  }
+  if (isOid(a)) participantUserIds.add(a);
+  if (isOid(b)) participantUserIds.add(b);
+
+  if (isOid(a) && isOid(b)) {
+    try {
+      await emitPresenceUpdateCallToFriends(io, a, b, false);
+    } catch {}
+  } else {
+    for (const uid of participantUserIds) {
+      try {
+        await emitPresenceUpdateToFriends(io, uid, false);
+      } catch {}
+    }
+  }
+  for (const uid of participantUserIds) {
+    applyFastOfflineAfterCallIfAllSocketsBackground(io, uid);
+  }
+
+  callIdToRoomId.delete(callIdStr);
+  for (const uid of [a, b]) {
+    if (!isOid(uid)) continue;
+    activeRoomByUserId.delete(uid);
+    clearCallOfUserIfMatches(uid, callIdStr);
+    callAcceptedDeliveryByKey.delete(getCallAcceptedDeliveryKey(callIdStr, uid));
+  }
+  cleanupCall(callIdStr, 'ended');
+
+  if (roomId) {
+    try {
+      dissolveSocketIoRoom(io, roomId);
+    } catch {}
+  }
+
+  const endedBy = opts.endedByUserId ? normalizeMongoObjectId(String(opts.endedByUserId)) : '';
+  if (isOid(endedBy) && isOid(a) && isOid(b)) {
+    const peer = endedBy === a ? b : endedBy === b ? a : null;
+    if (peer) {
+      try {
+        const fromUser = await User.findById(endedBy).select('nick').lean();
+        await sendCallEndedToPeer(peer, callIdStr, endedBy, (fromUser as any)?.nick ?? '');
+      } catch (e: any) {
+        logger.warn('[call:endDirect] send call_ended push failed', {
+          callId: callIdStr,
+          reason: opts.reason,
+          error: e?.message,
+        });
+      }
+    }
+  }
+
+  logger.info('[call:endDirect] completed', {
+    callId: callIdStr,
+    roomId: emitRoomId || null,
+    reason: opts.reason,
+    participants: socketsToNotify.size,
+    a: isOid(a) ? a : null,
+    b: isOid(b) ? b : null,
+  });
 }
 
 /** Снять залипший callOfUser, если звонка уже нет в callsById (после сбоя или старого бага). */
@@ -2595,6 +2814,7 @@ io.on('connection', async (sock: AuthedSocket) => {
           } else {
             const emitted = await emitPendingCallAcceptedToSocket(io, sock, mappedUserId, pendingRoom, 'reauth');
             if (emitted) {
+              touchActiveCallLease(pendingRoom.callId, { phase: 'active' });
               logger.info('[reauth] Sent call:accepted to reconnected participant', {
                 userId: mappedUserId,
                 roomId: pendingRoom.roomId,
@@ -2673,6 +2893,37 @@ io.on('connection', async (sock: AuthedSocket) => {
     // и duplicate source (connect + reauth + call:getAccepted) порождал лишние accepted.
   }
 
+  // Heartbeat for active direct-call lease (client emits while LiveKit connected/reconnecting).
+  sock.on(
+    'call:heartbeat',
+    (payload?: { callId?: string; roomId?: string; phase?: 'active' | 'reconnecting' }) => {
+      try {
+        const userId = String((sock as any)?.data?.userId || '').trim();
+        if (!userId) return;
+        const callIdRaw = String(payload?.callId || '').trim();
+        const roomIdRaw = String(payload?.roomId || '').trim();
+        let callId = callIdRaw;
+        if (!callId && roomIdRaw) {
+          callId = resolveCallIdFromEndIdentifier(roomIdRaw) || '';
+        }
+        if (!callId) {
+          const pending = activeRoomByUserId.get(userId);
+          if (pending?.callId) callId = pending.callId;
+        }
+        if (!callId) return;
+        const lease = getActiveCallLease(callId);
+        if (!lease) return;
+        const uid = normalizeMongoObjectId(userId);
+        if (uid !== lease.a && uid !== lease.b) return;
+        const phase =
+          payload?.phase === 'reconnecting' ? 'reconnecting' : 'active';
+        touchActiveCallLease(callId, { phase });
+      } catch (e: any) {
+        logger.warn('[call:heartbeat] failed', { error: e?.message || String(e) });
+      }
+    },
+  );
+
   // === call:end → транслируем call:ended обоим участникам (УПРОЩЕНО для 1-на-1) ===
   sock.on('call:end', async ({ callId, roomId }: { callId?: string; roomId?: string }) => {
     try {
@@ -2735,10 +2986,14 @@ io.on('connection', async (sock: AuthedSocket) => {
       markRecentlyEndedCallIdentifier(id);
       if (callId) markRecentlyEndedCallIdentifier(String(callId));
       if (callId) {
+        clearActiveCallLease(String(callId));
         transitionCall(String(callId), 'ended', {
           actionKey: `socket_end:${String(callId)}`,
           source: 'socket_end',
         });
+      } else {
+        const leaseCallId = resolveCallIdFromEndIdentifier(id, callId);
+        if (leaseCallId) clearActiveCallLease(leaseCallId);
       }
 
       try {
@@ -3995,6 +4250,12 @@ io.on('connection', async (sock: AuthedSocket) => {
         activeRoomByUserId.set(link.b, pendingRoomForB);
         rememberCallAcceptedDelivery(id, link.a, pendingRoomForA);
         rememberCallAcceptedDelivery(id, link.b, pendingRoomForB);
+        registerActiveCallLease({
+          callId: id,
+          roomId,
+          a: link.a,
+          b: link.b,
+        });
         if (!aSock) logger.info('[call:accept] Caller offline, stored pending call for reauth', { userId: link.a, roomId, callId: id });
         await releaseRingingCallPersistence(id, { a: link.a, b: link.b });
       } catch {}
@@ -4046,6 +4307,7 @@ io.on('connection', async (sock: AuthedSocket) => {
       }
       const emitted = await emitPendingCallAcceptedToSocket(io, sock, String(userId), pendingRoom, 'call:getAccepted');
       if (emitted) {
+        touchActiveCallLease(id, { phase: 'active' });
         logger.info('[call:getAccepted] Sent call:accepted to caller', { userId, callId: id });
         scheduleGlobalFriendPresenceEmit(io, userId);
       }
