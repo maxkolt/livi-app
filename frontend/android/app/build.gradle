@@ -108,9 +108,14 @@ react {
 }
 
 /**
- * Set this to true to Run Proguard on Release builds to minify the Java bytecode.
+ * R8 minify/obfuscate for release (Google Play App Optimization / obfuscation score).
+ * Accepts legacy enableProguard* and newer Expo enableMinify* property names.
  */
-def enableProguardInReleaseBuilds = (findProperty('android.enableProguardInReleaseBuilds') ?: false).toBoolean()
+def enableProguardInReleaseBuilds = (
+    findProperty('android.enableProguardInReleaseBuilds')
+        ?: findProperty('android.enableMinifyInReleaseBuilds')
+        ?: false
+).toBoolean()
 
 /**
  * The preferred build flavor of JavaScriptCore (JSC)
@@ -140,7 +145,7 @@ android {
         applicationId 'com.kolt12max.livi'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 189
+        versionCode 191
         versionName "1.1.22"
         buildConfigField "String", "APPMETRICA_API_KEY", "\"${appMetricaApiKeyEscaped}\""
     }
@@ -189,7 +194,7 @@ android {
         def allowDebugReleaseSigning = envOrProp('LIVI_ALLOW_DEBUG_RELEASE_SIGNING') == '1'
         def useDebugSigning = isReleaseTaskRequested && releaseCredsMissing && allowDebugReleaseSigning
         if (isReleaseTaskRequested && releaseCredsMissing && !allowDebugReleaseSigning) {
-            throw new GradleException(
+            throw new RuntimeException(
                 "[livi] Release keystore missing or credentials not set (LIVI_RELEASE_STORE_FILE/LIVI_RELEASE_STORE_PASSWORD/...).\n" +
                 "Refusing to silently sign a release build with the DEBUG key.\n" +
                 "Set the real release signing env vars, or set LIVI_ALLOW_DEBUG_RELEASE_SIGNING=1 for a local-only test build (NEVER for Play Store / distributed APKs)."
@@ -227,7 +232,7 @@ android {
         buildConfigField "String", "API_BASE_URL", "\"${apiBaseUrlEscaped}\""
         shrinkResources (findProperty('android.enableShrinkResourcesInReleaseBuilds')?.toBoolean() ?: false)
         minifyEnabled enableProguardInReleaseBuilds
-        proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
+        proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
         crunchPngs (findProperty('android.enablePngCrunchInReleaseBuilds')?.toBoolean() ?: true)
     }
 }
