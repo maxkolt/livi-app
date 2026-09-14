@@ -123,6 +123,9 @@ const MEDIA_RECONNECT_GRACE_MS = 45_000;
 const PEER_RECONNECTING_UI_DEBOUNCE_MS = 250;
 /** Survivor: remote audio track ended/missing after call was live → arm peer UI without SFU wait. */
 const REMOTE_AUDIO_SILENCE_UI_MS = 2_500;
+/** Survivor: inbound RTP packets stalled (airplane: track often stays readyState=live). */
+const REMOTE_AUDIO_PACKET_STALL_MS = 2_500;
+const REMOTE_AUDIO_PACKET_POLL_MS = 1_000;
 
 export class VideoCallSession extends SimpleEventEmitter {
   private hasLoggedLiveKitApiKeyWarning = false;
@@ -232,6 +235,9 @@ export class VideoCallSession extends SimpleEventEmitter {
   private peerReconnectingDebounceTimer: ReturnType<typeof setTimeout> | null = null;
   private remoteAudioSilenceUiTimer: ReturnType<typeof setTimeout> | null = null;
   private hadLiveRemoteAudioInCall = false;
+  private remoteAudioPacketPollTimer: ReturnType<typeof setInterval> | null = null;
+  private lastRemoteAudioPacketsReceived: number | null = null;
+  private remoteAudioPacketsStalledSince: number | null = null;
   private callLeaseHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private lastLiveKitReconnectingAt = 0;
   /** Unexpected Room Disconnected: try restore within grace; then stop heartbeat (server lease ends busy). */
@@ -901,6 +907,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     }
     this.endCallInProgress = true;
     this.clearRemoteAudioSilenceUiTimer();
+    this.stopRemoteAudioPacketWatch();
     this.hadLiveRemoteAudioInCall = false;
     this.clearPeerReconnectingUi('endCall');
     void this.exitExternalCallHold().catch(() => {});
@@ -2936,6 +2943,9 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.clearPeerReconnectingDebounce();
     if (!this.peerReconnecting) return;
     this.peerReconnecting = false;
+    // Fresh baseline after recovery so a brief stall during rejoin doesn't re-arm UI.
+    this.remoteAudioPacketsStalledSince = null;
+    this.lastRemoteAudioPacketsReceived = null;
     logger.info('[VideoCallSession] Cleared peerReconnecting UI', { reason, callId: this.callId });
     try {
       this.emit('peerRecovered');
@@ -2943,8 +2953,8 @@ export class VideoCallSession extends SimpleEventEmitter {
   }
 
   /**
-   * Socket peerRecovered приходит раньше медиа. UI «Восстановление…» снимаем только когда
-   * есть живой remote audio (peerInRoom alone too early during SFU rejoin flap).
+   * Socket peerRecovered приходит раньше медиа. UI снимаем только когда партнёр снова
+   * в LiveKit И есть живой remote audio (stale track readyState=live alone is too early).
    */
   private tryClearPeerReconnectingAfterMedia(reason: string): void {
     if (!this.peerReconnecting || this.ended || this.endCallInProgress) return;
@@ -2956,7 +2966,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     } catch {
       hasLiveAudio = false;
     }
-    if (!hasLiveAudio) {
+    if (!peerInRoom || !hasLiveAudio) {
       logger.debug('[VideoCallSession] peerRecovered/media check — keep restoring UI', {
         reason,
         peerInRoom,
@@ -2974,12 +2984,90 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.remoteAudioSilenceUiTimer = null;
   }
 
+  private stopRemoteAudioPacketWatch(): void {
+    if (this.remoteAudioPacketPollTimer) {
+      clearInterval(this.remoteAudioPacketPollTimer);
+      this.remoteAudioPacketPollTimer = null;
+    }
+    this.lastRemoteAudioPacketsReceived = null;
+    this.remoteAudioPacketsStalledSince = null;
+  }
+
+  private ensureRemoteAudioPacketWatch(): void {
+    if (this.remoteAudioPacketPollTimer || this.ended || this.endCallInProgress) return;
+    if (!this.hadLiveRemoteAudioInCall) return;
+    this.remoteAudioPacketPollTimer = setInterval(() => {
+      void this.tickRemoteAudioPacketWatch();
+    }, REMOTE_AUDIO_PACKET_POLL_MS);
+  }
+
+  /** Best-effort inbound-rtp audio packetsReceived from subscriber PC. */
+  private async readInboundRemoteAudioPackets(): Promise<number | null> {
+    try {
+      const room: any = this.room;
+      if (!room || room.state !== 'connected') return null;
+      const pc =
+        room.engine?.pcManager?.subscriber?.pc ||
+        room.engine?.subscriber?.pc ||
+        room.engine?.pcManager?.subscriberPC ||
+        null;
+      if (!pc || typeof pc.getStats !== 'function') return null;
+      const report = await pc.getStats();
+      let packets = 0;
+      let found = false;
+      report.forEach((r: any) => {
+        const isInbound = r?.type === 'inbound-rtp';
+        const isAudio = r?.kind === 'audio' || r?.mediaType === 'audio';
+        if (!isInbound || !isAudio) return;
+        const n = Number(r.packetsReceived);
+        if (!Number.isFinite(n)) return;
+        found = true;
+        packets = Math.max(packets, n);
+      });
+      return found ? packets : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async tickRemoteAudioPacketWatch(): Promise<void> {
+    if (this.ended || this.endCallInProgress || this.networkLinkDown) {
+      return;
+    }
+    if (!this.hadLiveRemoteAudioInCall || this.room?.state !== 'connected') return;
+    const packets = await this.readInboundRemoteAudioPackets();
+    if (packets == null) return;
+    const prev = this.lastRemoteAudioPacketsReceived;
+    this.lastRemoteAudioPacketsReceived = packets;
+    if (prev == null) {
+      this.remoteAudioPacketsStalledSince = null;
+      return;
+    }
+    if (packets > prev) {
+      this.remoteAudioPacketsStalledSince = null;
+      // Keep polling during peerReconnecting so a brief stall can clear without SFU leave/rejoin.
+      if (this.peerReconnecting) {
+        this.tryClearPeerReconnectingAfterMedia('remote_audio_packets_resume');
+      }
+      return;
+    }
+    if (this.peerReconnecting) return;
+    const now = Date.now();
+    if (this.remoteAudioPacketsStalledSince == null) {
+      this.remoteAudioPacketsStalledSince = now;
+      return;
+    }
+    if (now - this.remoteAudioPacketsStalledSince < REMOTE_AUDIO_PACKET_STALL_MS) return;
+    this.armPeerReconnectingUi('remote_audio_packet_stall');
+  }
+
   /** After we once heard the peer: silence / ended track → restoring UI without waiting ICE ~20s. */
   private noteRemoteAudioPresence(hasLive: boolean): void {
     if (this.ended || this.endCallInProgress) return;
     if (hasLive) {
       this.hadLiveRemoteAudioInCall = true;
       this.clearRemoteAudioSilenceUiTimer();
+      this.ensureRemoteAudioPacketWatch();
       if (this.peerReconnecting) {
         this.tryClearPeerReconnectingAfterMedia('remote_audio_live');
       }
@@ -3005,15 +3093,18 @@ export class VideoCallSession extends SimpleEventEmitter {
   /** Best-effort: tell peer we lost network while socket may still flush one frame. */
   private emitNetworkDownToPeer(reason: string): void {
     try {
-      if (!socket?.connected) return;
       const callId = String(this.callId || '').trim() || undefined;
       const roomId =
         String(this.resolveSignalingRoomId?.() || this.roomId || this.currentRoomName || '').trim() ||
         undefined;
       if (!callId && !roomId) return;
+      const connected = !!socket?.connected;
+      // Always attempt emit: on airplane the transport often dies in the same tick as NetInfo;
+      // connected=false still logs so we can see misses; connected=true notifies survivor ASAP.
       socket.emit('call:networkDown', { callId, roomId });
       logger.warn('[VideoCallSession] Emitted call:networkDown', {
         reason,
+        connected,
         callId: callId || null,
         roomId: roomId || null,
       });
@@ -3690,6 +3781,11 @@ export class VideoCallSession extends SimpleEventEmitter {
     };
     const peerRecoveredHandler = (data?: { callId?: string; roomId?: string; from?: string }) => {
       if (!this.matchesPeerCallSignal(data)) return;
+      // Socket reattach ≠ media. While still waiting for LiveKit peer, extend grace so
+      // stale peerRecovered + grace_timeout don't hang up before real rejoin.
+      if (this.waitingForRemotePeerRejoin || this.mediaReconnectInProgress) {
+        this.armOrExtendMediaReconnectGrace();
+      }
       // Socket вернулся раньше медиа: не гасим UI сразу. Если debounce ещё не всплыл — отменяем мигание.
       if (!this.peerReconnecting) {
         this.clearPeerReconnectingDebounce();
@@ -4553,6 +4649,8 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.waitingForRemotePeerRejoin = true;
     this.markMediaLinkRecovering(reason);
     this.armOrExtendMediaReconnectGrace();
+    // Don't wait for socket networkDown / SFU ~20s — show restoring as soon as peer left room.
+    this.armPeerReconnectingUi(reason);
     logger.warn('[VideoCallSession] Waiting for remote peer rejoin (no local hangup)', {
       reason,
       callId: this.callId,
@@ -6103,6 +6201,7 @@ export class VideoCallSession extends SimpleEventEmitter {
   private resetRemoteState(): void {
     this.clearPendingRemoteDisconnectTimer();
     this.clearRemoteAudioSilenceUiTimer();
+    this.stopRemoteAudioPacketWatch();
     this.hadLiveRemoteAudioInCall = false;
     this.clearPeerReconnectingUi('resetRemoteState');
     this.clearRemoteCamOffTimeout();
@@ -7789,6 +7888,8 @@ export class VideoCallSession extends SimpleEventEmitter {
           userId: this.config.myUserId,
           partnerUserId: this.partnerUserId,
         });
+        // Second chance to notify survivor if NetInfo lost the race with socket death.
+        this.emitNetworkDownToPeer('livekit_reconnecting');
         this.startCallLeaseHeartbeat('reconnecting');
         this.clearPendingRemoteDisconnectTimer();
         try {

@@ -3033,6 +3033,12 @@ io.on('connection', async (sock: AuthedSocket) => {
         if (!userId) return;
         const callIdRaw = String(payload?.callId || '').trim();
         const roomIdRaw = String(payload?.roomId || '').trim();
+        logger.info('[call:networkDown]', {
+          userId,
+          callId: callIdRaw || null,
+          roomId: roomIdRaw || null,
+          socketId: sock.id,
+        });
         if (callIdRaw) {
           const lease = getActiveCallLease(callIdRaw);
           if (lease) {
