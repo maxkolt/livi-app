@@ -25,6 +25,9 @@ import {
 } from '../../../screens/home/constants';
 import { WELCOME_PROFILE_ROW_ICON } from '../../../screens/home/WelcomeProfileListUi';
 
+/** Краповый slash как у «нет сети» / hangup. */
+const STATUS_WEAK_SLASH = '#A33B4F';
+
 export type CallMoreMenuItem = {
   key: string;
   label: string;
@@ -35,10 +38,24 @@ export type CallMoreMenuItem = {
   active?: boolean;
 };
 
+/** Три палочки (низ → выше → ещё выше) + краповое перечёркивание. */
+function WeakSignalGlyph() {
+  return (
+    <View style={styles.weakSignalGlyph} accessibilityElementsHidden>
+      <View style={[styles.weakBar, styles.weakBar1]} />
+      <View style={[styles.weakBar, styles.weakBar2]} />
+      <View style={[styles.weakBar, styles.weakBar3]} />
+      <View style={styles.weakSignalSlash} />
+    </View>
+  );
+}
+
 type Props = {
   partnerName: string;
   partnerAvatarUri?: string;
   statusLine: string;
+  /** Иконка перечёркнутых палочек + акцентный цвет статуса (слабая связь). */
+  statusWeak?: boolean;
   onMinimize: () => void;
   onToggleCam: () => void;
   onToggleMic: () => void;
@@ -66,6 +83,7 @@ export function CallScreenChrome({
   partnerName,
   partnerAvatarUri,
   statusLine,
+  statusWeak = false,
   onMinimize,
   onToggleCam,
   onToggleMic,
@@ -123,9 +141,12 @@ export function CallScreenChrome({
               <Text style={styles.partnerName} numberOfLines={1}>
                 {partnerName}
               </Text>
-              <Text style={styles.statusLine} numberOfLines={1}>
-                {statusLine}
-              </Text>
+              <View style={styles.statusRow}>
+                {statusWeak ? <WeakSignalGlyph /> : null}
+                <Text style={styles.statusLine} numberOfLines={1}>
+                  {statusLine}
+                </Text>
+              </View>
             </View>
           </View>
 
@@ -405,12 +426,47 @@ const styles = StyleSheet.create({
     letterSpacing: -0.2,
     textAlign: 'left',
   },
-  statusLine: {
+  statusRow: {
     marginTop: 2,
+    flexDirection: 'row',
+    alignItems: 'center',
+    minWidth: 0,
+  },
+  statusLine: {
     color: WELCOME_MUTED_TEXT,
     fontSize: 13,
     fontVariant: ['tabular-nums'],
     textAlign: 'left',
+    flexShrink: 1,
+  },
+  weakSignalGlyph: {
+    width: 16,
+    height: 13,
+    marginRight: 5,
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    justifyContent: 'flex-start',
+  },
+  weakBar: {
+    width: 3,
+    borderRadius: 1,
+    backgroundColor: WELCOME_MUTED_TEXT,
+    opacity: 0.85,
+    marginRight: 2,
+  },
+  weakBar1: { height: 4 },
+  weakBar2: { height: 8 },
+  weakBar3: { height: 12, marginRight: 0 },
+  weakSignalSlash: {
+    position: 'absolute',
+    left: -2,
+    right: -2,
+    // Через середину палочек (не по верху).
+    top: 8,
+    height: 2,
+    borderRadius: 1,
+    backgroundColor: STATUS_WEAK_SLASH,
+    transform: [{ rotate: '-38deg' }],
   },
   bottomWrap: {
     position: 'absolute',

@@ -7081,19 +7081,24 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
   ]);
 
   useEffect(() => {
-    if (!showAudioPresentation || wasFriendCallEnded || isEndingCall) return;
+    if (wasFriendCallEnded || isEndingCall) return;
     const sync = () => {
       try {
         const s = sessionRef.current as VideoCallSession | null;
-        if (s && typeof s.isLiveKitReconnecting === 'function') {
+        if (!s) return;
+        if (typeof s.isLiveKitReconnecting === 'function') {
           setLiveKitReconnectingUi(!!s.isLiveKitReconnecting());
+        }
+        // peerReconnecting раньше полагался только на emit — без poll UI мог отставать ~20с до SFU.
+        if (typeof s.isPeerReconnecting === 'function') {
+          setPeerReconnectingUi(!!s.isPeerReconnecting());
         }
       } catch {}
     };
     sync();
-    const id = setInterval(sync, 700);
+    const id = setInterval(sync, 400);
     return () => clearInterval(id);
-  }, [showAudioPresentation, wasFriendCallEnded, isEndingCall, sessionTick]);
+  }, [wasFriendCallEnded, isEndingCall, sessionTick]);
 
   const showAudioConnectingStatus =
     showAudioPresentation &&
@@ -7103,11 +7108,14 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     !partnerExternalHoldUi &&
     (!showCallDuration || liveKitReconnectingUi || peerReconnectingUi || remoteAudioGapUi);
 
+  const connectionDegradedUi =
+    liveKitReconnectingUi || peerReconnectingUi || remoteAudioGapUi;
+
   const callChromeStatusLine = useMemo(() => {
     if (localExternalHoldUi) return t('externalCallHoldLocal', lang);
     if (partnerExternalHoldUi) return t('partnerBusyEllipsis', lang);
-    if (liveKitReconnectingUi || peerReconnectingUi || remoteAudioGapUi) {
-      return t('callRestoringConnection', lang);
+    if (connectionDegradedUi) {
+      return t('callWeakConnection', lang);
     }
     if (showAudioConnectingStatus) return t('audioCallConnecting', lang);
     if (showCallDuration) return formatCallDuration(callElapsedSec);
@@ -7115,15 +7123,12 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
   }, [
     localExternalHoldUi,
     partnerExternalHoldUi,
-    liveKitReconnectingUi,
-    peerReconnectingUi,
-    remoteAudioGapUi,
+    connectionDegradedUi,
     showAudioConnectingStatus,
     showCallDuration,
     callElapsedSec,
     lang,
   ]);
-
 
   const isPartnerFriend = useMemo(() => {
     if (!partnerUserId) return false;
@@ -8116,6 +8121,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
               partnerName={partnerDisplayName}
               partnerAvatarUri={partnerAvatarUri}
               statusLine={callChromeStatusLine}
+              statusWeak={connectionDegradedUi}
               onMinimize={minimizeToInAppPiP}
               onToggleCam={() => toggleCam()}
               onToggleMic={toggleMic}

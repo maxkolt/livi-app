@@ -122,10 +122,10 @@ const MEDIA_RECONNECT_GRACE_MS = 45_000;
 /** Короткие socket flap не мигают «Восстановление…». */
 const PEER_RECONNECTING_UI_DEBOUNCE_MS = 250;
 /** Survivor: remote audio track ended/missing after call was live → arm peer UI without SFU wait. */
-const REMOTE_AUDIO_SILENCE_UI_MS = 2_500;
+const REMOTE_AUDIO_SILENCE_UI_MS = 1_800;
 /** Survivor: inbound RTP packets stalled (airplane: track often stays readyState=live). */
-const REMOTE_AUDIO_PACKET_STALL_MS = 2_500;
-const REMOTE_AUDIO_PACKET_POLL_MS = 1_000;
+const REMOTE_AUDIO_PACKET_STALL_MS = 1_600;
+const REMOTE_AUDIO_PACKET_POLL_MS = 700;
 
 export class VideoCallSession extends SimpleEventEmitter {
   private hasLoggedLiveKitApiKeyWarning = false;
@@ -259,6 +259,8 @@ export class VideoCallSession extends SimpleEventEmitter {
   private ensureLocalTracksPromise: Promise<void> | null = null;
   /** Coalesce concurrent recoverLocalTracksAfterReconnect (Reconnected + grace success). */
   private recoverLocalTracksAfterReconnectPromise: Promise<void> | null = null;
+  /** Avoid back-to-back unpublish+publish after Reconnected then peer rejoin (LiveKit RedBox). */
+  private lastForceAudioRepublishAt = 0;
   /**
    * Входящий accept: не открываем камеру в acceptCall / параллельном prewarm до connectToLiveKit,
    * чтобы захват не стартовал в момент перехода из landscape (YouTube) в звонок.
@@ -8311,14 +8313,36 @@ export class VideoCallSession extends SimpleEventEmitter {
    * After LiveKit ICE/PC rebuild, publication map can still list the mic track while the
    * RTP sender is dead ("Sender does not belong to this peer connection"). Trusting
    * isAudioTrackPublished alone skips republish → peer hears silence forever.
+   *
+   * Force unpublish+publish ONLY on RoomEvent.Reconnected (own PC rebuild).
+   * media_reconnect_succeeded (peer rejoin / grace) must stay soft — otherwise the
+   * survivor hits LiveKit "could not find published track" RedBox while the peer flaps.
    */
   private async doRecoverLocalTracksAfterReconnect(room: Room, context: string): Promise<void> {
+    const FORCE_AUDIO_REPUBLISH_COOLDOWN_MS = 8_000;
+    const connectIdAtStart = this.connectRequestId;
+    const roomStable = (): boolean => {
+      if (this.ended || this.isDisconnecting || this.endCallInProgress) return false;
+      if (this.room !== room) return false;
+      if (this.connectRequestId !== connectIdAtStart) return false;
+      if (this.disconnectPromise) return false;
+      if (this.liveKitReconnecting || room.state === 'reconnecting') return false;
+      if (!room.localParticipant || room.state !== 'connected') return false;
+      return true;
+    };
     try {
-      // Give LiveKit engine a moment to settle after reconnect.
-      await new Promise((r) => setTimeout(r, 250));
-      if (this.ended || this.isDisconnecting) return;
-      if (this.room !== room) return;
-      if (!room.localParticipant || room.state !== 'connected') return;
+      // Give LiveKit engine a moment to settle after reconnect / PC rebuild.
+      await new Promise((r) => setTimeout(r, 450));
+      if (!roomStable()) {
+        logger.debug('[VideoCallSession] recoverLocalTracks aborted (room unstable)', {
+          context,
+          roomState: room.state,
+          liveKitReconnecting: this.liveKitReconnecting,
+          connectIdAtStart,
+          connectRequestId: this.connectRequestId,
+        });
+        return;
+      }
 
       const audioReady = this.localAudioTrack?.mediaStreamTrack?.readyState;
       if (!this.localAudioTrack || audioReady === 'ended') {
@@ -8326,6 +8350,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       } else if (!this.localVideoTrack && this.isCamOn) {
         await this.ensureLocalTracks(false);
       }
+      if (!roomStable()) return;
 
       // If camera track was ended by OS, recreate video only.
       const vState = this.localVideoTrack?.mediaStreamTrack?.readyState;
@@ -8333,6 +8358,7 @@ export class VideoCallSession extends SimpleEventEmitter {
         logger.warn('[VideoCallSession] Local video track ended after reconnect; recreating video track', { context });
         await this.recreateLocalVideoTrack('reconnect');
       }
+      if (!roomStable()) return;
 
       // Re-apply mic enabled state (some devices flip enabled=false transiently).
       try {
@@ -8348,28 +8374,122 @@ export class VideoCallSession extends SimpleEventEmitter {
       // Video: only publish if missing (avoid camera flicker on every reconnect).
       if (this.localVideoTrack && this.isCamOn && !this.isVideoTrackPublished(this.localVideoTrack)) {
         await this.unpublishOtherLocalTracks('video', this.localVideoTrack);
+        if (!roomStable()) return;
         await room.localParticipant.publishTrack(this.localVideoTrack).catch(() => {});
       }
 
-      // Audio: always force unpublish+publish when mic is on — stale publication after PC
-      // rebuild leaves outbound silent even when isAudioTrackPublished() is true.
-      if (this.localAudioTrack && this.isMicOn) {
-        const hadStalePublication = this.isAudioTrackPublished(this.localAudioTrack);
-        try {
-          await room.localParticipant.unpublishTrack(this.localAudioTrack, false).catch(() => {});
-        } catch {}
-        await this.unpublishOtherLocalTracks('audio', this.localAudioTrack);
-        try {
-          await room.localParticipant.publishTrack(this.localAudioTrack);
-          logger.info('[VideoCallSession] Force republished local audio after reconnect', {
+      if (!this.localAudioTrack || !this.isMicOn) return;
+      if (!roomStable()) return;
+
+      const published = this.isAudioTrackPublished(this.localAudioTrack);
+
+      // Peer rejoin / grace success: never unpublish — connect path already (re)publishes.
+      // Force cycle here races LiveKit PC rebuild → Metro RedBox on the survivor.
+      if (context !== 'RoomEvent.Reconnected') {
+        if (!published) {
+          try {
+            await this.unpublishOtherLocalTracks('audio', this.localAudioTrack);
+            if (!roomStable()) return;
+            await room.localParticipant.publishTrack(this.localAudioTrack);
+            this.lastForceAudioRepublishAt = Date.now();
+            logger.info('[VideoCallSession] Soft published local audio after reconnect', {
+              context,
+              trackSid: this.localAudioTrack.sid || null,
+            });
+          } catch (e) {
+            logger.debug('[VideoCallSession] Soft publish after reconnect failed', {
+              context,
+              error: (e as any)?.message || String(e || ''),
+            });
+          }
+        } else {
+          logger.info('[VideoCallSession] Soft recover — local audio already published', {
             context,
-            hadStalePublication,
-            trackSid: this.localAudioTrack.sid,
+            trackSid: this.localAudioTrack.sid || null,
           });
+        }
+        return;
+      }
+
+      // Own SFU reconnected but peer not in room yet — keep mic alive without unpublish cycle.
+      if (this.waitingForRemotePeerRejoin) {
+        if (!published) {
+          try {
+            await this.unpublishOtherLocalTracks('audio', this.localAudioTrack);
+            if (!roomStable()) return;
+            await room.localParticipant.publishTrack(this.localAudioTrack);
+            this.lastForceAudioRepublishAt = Date.now();
+            logger.info('[VideoCallSession] Published local audio while waiting for peer (no force cycle)', {
+              context,
+              trackSid: this.localAudioTrack.sid || null,
+            });
+          } catch (e) {
+            logger.debug('[VideoCallSession] Soft publish while waiting for peer failed', {
+              context,
+              error: (e as any)?.message || String(e || ''),
+            });
+          }
+        } else {
+          logger.info('[VideoCallSession] Defer force audio republish until peer rejoins', {
+            context,
+            callId: this.callId,
+            trackSid: this.localAudioTrack.sid || null,
+          });
+        }
+        return;
+      }
+
+      const sinceLast = Date.now() - this.lastForceAudioRepublishAt;
+      if (published && sinceLast >= 0 && sinceLast < FORCE_AUDIO_REPUBLISH_COOLDOWN_MS) {
+        logger.info('[VideoCallSession] Skip force republish local audio (cooldown)', {
+          context,
+          sinceLastMs: sinceLast,
+          trackSid: this.localAudioTrack.sid || null,
+        });
+        return;
+      }
+
+      // Audio: force unpublish+publish after own PC rebuild (stale sender / silent outbound).
+      const hadStalePublication = published;
+      if (published) {
+        try {
+          await room.localParticipant.unpublishTrack(this.localAudioTrack, false);
         } catch (e) {
+          const msg = String((e as any)?.message || e || '');
+          if (!/could not find published track/i.test(msg)) {
+            logger.debug('[VideoCallSession] unpublish local audio before republish', {
+              context,
+              error: msg,
+            });
+          }
+        }
+      }
+      if (!roomStable()) {
+        logger.debug('[VideoCallSession] Abort force republish — room unstable after unpublish', {
+          context,
+        });
+        return;
+      }
+      try {
+        await this.unpublishOtherLocalTracks('audio', this.localAudioTrack);
+      } catch {}
+      if (!roomStable()) return;
+      try {
+        await room.localParticipant.publishTrack(this.localAudioTrack);
+        this.lastForceAudioRepublishAt = Date.now();
+        logger.info('[VideoCallSession] Force republished local audio after reconnect', {
+          context,
+          hadStalePublication,
+          trackSid: this.localAudioTrack.sid,
+        });
+      } catch (e) {
+        const msg = String((e as any)?.message || e || '');
+        if (/could not find published track/i.test(msg)) {
+          logger.debug('[VideoCallSession] Force republish race (ignored)', { context, error: msg });
+        } else {
           logger.warn('[VideoCallSession] Force republish local audio after reconnect failed', {
             context,
-            error: (e as any)?.message || String(e || ''),
+            error: msg,
           });
         }
       }
