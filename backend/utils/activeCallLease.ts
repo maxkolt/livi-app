@@ -15,8 +15,13 @@ export type ActiveCallLease = {
   createdAtMs: number;
 };
 
-/** Max silence before server force-ends (align with reconnect grace ~30–60s). */
+/** Max silence before server force-ends (active phase). */
 export const CALL_LEASE_TTL_MS = 45_000;
+/**
+ * Longer TTL while client reports phase=reconnecting (airplane / media restore).
+ * Avoids racing MEDIA_RECONNECT_GRACE_MS (~45s) when heartbeats are sparse.
+ */
+export const CALL_LEASE_RECONNECTING_TTL_MS = 75_000;
 export const CALL_LEASE_SWEEP_MS = 5_000;
 
 const leasesByCallId = new Map<string, ActiveCallLease>();
@@ -99,7 +104,11 @@ export function listExpiredActiveCallLeases(
 ): ActiveCallLease[] {
   const out: ActiveCallLease[] = [];
   for (const lease of leasesByCallId.values()) {
-    if (now - lease.lastHeartbeatAt > ttlMs) out.push({ ...lease });
+    const effectiveTtl =
+      lease.phase === 'reconnecting'
+        ? Math.max(ttlMs, CALL_LEASE_RECONNECTING_TTL_MS)
+        : ttlMs;
+    if (now - lease.lastHeartbeatAt > effectiveTtl) out.push({ ...lease });
   }
   return out;
 }
