@@ -2977,6 +2977,22 @@ io.on('connection', async (sock: AuthedSocket) => {
     // и duplicate source (connect + reauth + call:getAccepted) порождал лишние accepted.
   }
 
+  /** Notify surviving peer that this user is reconnecting (NetInfo / last-socket drop). */
+  const emitPeerReconnectingForUser = (fromUserId: string) => {
+    const uidStr = String(fromUserId || '').trim();
+    if (!uidStr) return;
+    const lease = findActiveCallLeaseForUser(uidStr);
+    if (!lease) return;
+    const peerUserId = lease.a === uidStr ? lease.b : lease.a;
+    if (!peerUserId || peerUserId === uidStr) return;
+    touchActiveCallLease(lease.callId, { phase: 'reconnecting' });
+    io.to(`u:${peerUserId}`).emit('call:peerReconnecting', {
+      callId: lease.callId,
+      roomId: lease.roomId,
+      from: uidStr,
+    });
+  };
+
   // Heartbeat for active direct-call lease (client emits while LiveKit connected/reconnecting).
   sock.on(
     'call:heartbeat',
@@ -3004,6 +3020,42 @@ io.on('connection', async (sock: AuthedSocket) => {
         touchActiveCallLease(callId, { phase });
       } catch (e: any) {
         logger.warn('[call:heartbeat] failed', { error: e?.message || String(e) });
+      }
+    },
+  );
+
+  // Client NetInfo lost while socket still briefly alive — notify peer immediately (don't wait pingTimeout).
+  sock.on(
+    'call:networkDown',
+    (payload?: { callId?: string; roomId?: string }) => {
+      try {
+        const userId = String((sock as any)?.data?.userId || '').trim();
+        if (!userId) return;
+        const callIdRaw = String(payload?.callId || '').trim();
+        const roomIdRaw = String(payload?.roomId || '').trim();
+        if (callIdRaw) {
+          const lease = getActiveCallLease(callIdRaw);
+          if (lease) {
+            const uid = normalizeMongoObjectId(userId);
+            if (uid === lease.a || uid === lease.b) {
+              emitPeerReconnectingForUser(uid);
+              return;
+            }
+          }
+        }
+        if (roomIdRaw) {
+          const byRoom = findActiveCallLeaseByRoom(roomIdRaw);
+          if (byRoom) {
+            const uid = normalizeMongoObjectId(userId);
+            if (uid === byRoom.a || uid === byRoom.b) {
+              emitPeerReconnectingForUser(uid);
+              return;
+            }
+          }
+        }
+        emitPeerReconnectingForUser(normalizeMongoObjectId(userId) || userId);
+      } catch (e: any) {
+        logger.warn('[call:networkDown] failed', { error: e?.message || String(e) });
       }
     },
   );
@@ -4696,18 +4748,7 @@ io.on('connection', async (sock: AuthedSocket) => {
         // duplicate/replacement socket и ложное «восстановление» не нужно.
         if (otherSocketsSameUser.length === 0) {
           try {
-            const lease = findActiveCallLeaseForUser(uidStr);
-            if (lease) {
-              const peerUserId = lease.a === uidStr ? lease.b : lease.a;
-              if (peerUserId && peerUserId !== uidStr) {
-                touchActiveCallLease(lease.callId, { phase: 'reconnecting' });
-                io.to(`u:${peerUserId}`).emit('call:peerReconnecting', {
-                  callId: lease.callId,
-                  roomId: lease.roomId,
-                  from: uidStr,
-                });
-              }
-            }
+            emitPeerReconnectingForUser(uidStr);
           } catch {}
         }
       }

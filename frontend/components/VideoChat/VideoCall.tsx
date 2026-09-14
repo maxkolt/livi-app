@@ -7106,7 +7106,9 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
   const callChromeStatusLine = useMemo(() => {
     if (localExternalHoldUi) return t('externalCallHoldLocal', lang);
     if (partnerExternalHoldUi) return t('partnerBusyEllipsis', lang);
-    if (liveKitReconnectingUi || peerReconnectingUi) return t('callRestoringConnection', lang);
+    if (liveKitReconnectingUi || peerReconnectingUi || remoteAudioGapUi) {
+      return t('callRestoringConnection', lang);
+    }
     if (showAudioConnectingStatus) return t('audioCallConnecting', lang);
     if (showCallDuration) return formatCallDuration(callElapsedSec);
     return t('audioCallStatus', lang);
@@ -7115,6 +7117,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     partnerExternalHoldUi,
     liveKitReconnectingUi,
     peerReconnectingUi,
+    remoteAudioGapUi,
     showAudioConnectingStatus,
     showCallDuration,
     callElapsedSec,

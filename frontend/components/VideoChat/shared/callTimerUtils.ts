@@ -5,7 +5,7 @@ export function streamHasLiveRemoteAudio(stream: MediaStream | null | undefined)
   try {
     const tracks = stream.getAudioTracks?.() ?? [];
     if (!tracks.length) return false;
-    return tracks.some((t) => t.readyState === 'live') || tracks.length > 0;
+    return tracks.some((t) => t.readyState === 'live');
   } catch {
     return false;
   }

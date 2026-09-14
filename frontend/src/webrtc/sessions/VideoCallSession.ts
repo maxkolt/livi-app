@@ -120,7 +120,9 @@ type LiveKitConnectOptions = {
  */
 const MEDIA_RECONNECT_GRACE_MS = 45_000;
 /** Короткие socket flap не мигают «Восстановление…». */
-const PEER_RECONNECTING_UI_DEBOUNCE_MS = 1_200;
+const PEER_RECONNECTING_UI_DEBOUNCE_MS = 250;
+/** Survivor: remote audio track ended/missing after call was live → arm peer UI without SFU wait. */
+const REMOTE_AUDIO_SILENCE_UI_MS = 2_500;
 
 export class VideoCallSession extends SimpleEventEmitter {
   private hasLoggedLiveKitApiKeyWarning = false;
@@ -228,6 +230,8 @@ export class VideoCallSession extends SimpleEventEmitter {
   /** Партнёр потерял сеть (быстрый серверный сигнал call:peerReconnecting). UI держим до медиа/peer в комнате. */
   private peerReconnecting = false;
   private peerReconnectingDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+  private remoteAudioSilenceUiTimer: ReturnType<typeof setTimeout> | null = null;
+  private hadLiveRemoteAudioInCall = false;
   private callLeaseHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private lastLiveKitReconnectingAt = 0;
   /** Unexpected Room Disconnected: try restore within grace; then stop heartbeat (server lease ends busy). */
@@ -247,6 +251,8 @@ export class VideoCallSession extends SimpleEventEmitter {
   private lastSocketRecoveryAttemptAt = 0;
   private cameraSwitchInProgress = false;
   private ensureLocalTracksPromise: Promise<void> | null = null;
+  /** Coalesce concurrent recoverLocalTracksAfterReconnect (Reconnected + grace success). */
+  private recoverLocalTracksAfterReconnectPromise: Promise<void> | null = null;
   /**
    * Входящий accept: не открываем камеру в acceptCall / параллельном prewarm до connectToLiveKit,
    * чтобы захват не стартовал в момент перехода из landscape (YouTube) в звонок.
@@ -894,6 +900,8 @@ export class VideoCallSession extends SimpleEventEmitter {
       return;
     }
     this.endCallInProgress = true;
+    this.clearRemoteAudioSilenceUiTimer();
+    this.hadLiveRemoteAudioInCall = false;
     this.clearPeerReconnectingUi('endCall');
     void this.exitExternalCallHold().catch(() => {});
     setPartnerExternalHoldSnapshot(false);
@@ -2936,7 +2944,7 @@ export class VideoCallSession extends SimpleEventEmitter {
 
   /**
    * Socket peerRecovered приходит раньше медиа. UI «Восстановление…» снимаем только когда
-   * партнёр снова в LiveKit и/или есть живой remote audio.
+   * есть живой remote audio (peerInRoom alone too early during SFU rejoin flap).
    */
   private tryClearPeerReconnectingAfterMedia(reason: string): void {
     if (!this.peerReconnecting || this.ended || this.endCallInProgress) return;
@@ -2944,11 +2952,11 @@ export class VideoCallSession extends SimpleEventEmitter {
     let hasLiveAudio = false;
     try {
       const mt = this.remoteAudioTrack?.mediaStreamTrack as { readyState?: string } | undefined;
-      hasLiveAudio = !!mt && mt.readyState !== 'ended';
+      hasLiveAudio = !!mt && mt.readyState === 'live';
     } catch {
-      hasLiveAudio = !!this.remoteAudioTrack;
+      hasLiveAudio = false;
     }
-    if (!peerInRoom && !hasLiveAudio) {
+    if (!hasLiveAudio) {
       logger.debug('[VideoCallSession] peerRecovered/media check — keep restoring UI', {
         reason,
         peerInRoom,
@@ -2960,6 +2968,60 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.clearPeerReconnectingUi(reason);
   }
 
+  private clearRemoteAudioSilenceUiTimer(): void {
+    if (!this.remoteAudioSilenceUiTimer) return;
+    clearTimeout(this.remoteAudioSilenceUiTimer);
+    this.remoteAudioSilenceUiTimer = null;
+  }
+
+  /** After we once heard the peer: silence / ended track → restoring UI without waiting ICE ~20s. */
+  private noteRemoteAudioPresence(hasLive: boolean): void {
+    if (this.ended || this.endCallInProgress) return;
+    if (hasLive) {
+      this.hadLiveRemoteAudioInCall = true;
+      this.clearRemoteAudioSilenceUiTimer();
+      if (this.peerReconnecting) {
+        this.tryClearPeerReconnectingAfterMedia('remote_audio_live');
+      }
+      return;
+    }
+    if (!this.hadLiveRemoteAudioInCall || this.peerReconnecting) return;
+    if (this.remoteAudioSilenceUiTimer) return;
+    this.remoteAudioSilenceUiTimer = setTimeout(() => {
+      this.remoteAudioSilenceUiTimer = null;
+      if (this.ended || this.endCallInProgress || this.peerReconnecting) return;
+      let stillLive = false;
+      try {
+        const mt = this.remoteAudioTrack?.mediaStreamTrack as { readyState?: string } | undefined;
+        stillLive = !!mt && mt.readyState === 'live';
+      } catch {
+        stillLive = false;
+      }
+      if (stillLive) return;
+      this.armPeerReconnectingUi('remote_audio_silence');
+    }, REMOTE_AUDIO_SILENCE_UI_MS);
+  }
+
+  /** Best-effort: tell peer we lost network while socket may still flush one frame. */
+  private emitNetworkDownToPeer(reason: string): void {
+    try {
+      if (!socket?.connected) return;
+      const callId = String(this.callId || '').trim() || undefined;
+      const roomId =
+        String(this.resolveSignalingRoomId?.() || this.roomId || this.currentRoomName || '').trim() ||
+        undefined;
+      if (!callId && !roomId) return;
+      socket.emit('call:networkDown', { callId, roomId });
+      logger.warn('[VideoCallSession] Emitted call:networkDown', {
+        reason,
+        callId: callId || null,
+        roomId: roomId || null,
+      });
+    } catch (e) {
+      logger.debug('[VideoCallSession] call:networkDown emit failed', e);
+    }
+  }
+
   private armPeerReconnectingUi(reason: string): void {
     if (this.ended || this.endCallInProgress || this.peerReconnecting) return;
     this.clearPeerReconnectingDebounce();
@@ -2967,7 +3029,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       this.peerReconnectingDebounceTimer = null;
       if (this.ended || this.endCallInProgress || this.peerReconnecting) return;
       this.peerReconnecting = true;
-      logger.warn('[VideoCallSession] Peer reconnecting UI (server signal)', {
+      logger.warn('[VideoCallSession] Peer reconnecting UI', {
         reason,
         callId: this.callId,
         partnerUserId: this.partnerUserId,
@@ -4611,6 +4673,8 @@ export class VideoCallSession extends SimpleEventEmitter {
   private onNetworkLinkLost(): void {
     if (this.ended || this.endCallInProgress) return;
     this.networkLinkDown = true;
+    // Notify survivor immediately (before socket.io pingTimeout ~25–55s).
+    this.emitNetworkDownToPeer('netinfo_lost');
     this.markMediaLinkRecovering('netinfo_lost');
     this.armOrExtendMediaReconnectGrace();
     trackReleaseEvent('signal_reconnect', {
@@ -4825,6 +4889,10 @@ export class VideoCallSession extends SimpleEventEmitter {
     // After airplane/SFU rejoin: re-pull remote tracks (audio always; video if not deferred).
     // Stale MediaStream / missed TrackPublished during disconnect left peer video blank.
     this.resubscribeRemoteMediaAfterReconnect('media_reconnect_succeeded');
+    // Also force-republish local mic — grace path used to only fix inbound (remote) media.
+    if (this.room) {
+      void this.recoverLocalTracksAfterReconnect(this.room, 'media_reconnect_succeeded');
+    }
   }
 
   /** Re-subscribe remote publications after LiveKit/peer rejoin (audio + video when allowed). */
@@ -6034,6 +6102,8 @@ export class VideoCallSession extends SimpleEventEmitter {
 
   private resetRemoteState(): void {
     this.clearPendingRemoteDisconnectTimer();
+    this.clearRemoteAudioSilenceUiTimer();
+    this.hadLiveRemoteAudioInCall = false;
     this.clearPeerReconnectingUi('resetRemoteState');
     this.clearRemoteCamOffTimeout();
     this.clearRemoteMediaWatchdog(true);
@@ -8122,6 +8192,26 @@ export class VideoCallSession extends SimpleEventEmitter {
   }
 
   private async recoverLocalTracksAfterReconnect(room: Room, context: string): Promise<void> {
+    if (this.recoverLocalTracksAfterReconnectPromise) {
+      await this.recoverLocalTracksAfterReconnectPromise;
+      return;
+    }
+    const run = this.doRecoverLocalTracksAfterReconnect(room, context);
+    const wrapped = run.finally(() => {
+      if (this.recoverLocalTracksAfterReconnectPromise === wrapped) {
+        this.recoverLocalTracksAfterReconnectPromise = null;
+      }
+    });
+    this.recoverLocalTracksAfterReconnectPromise = wrapped;
+    await wrapped;
+  }
+
+  /**
+   * After LiveKit ICE/PC rebuild, publication map can still list the mic track while the
+   * RTP sender is dead ("Sender does not belong to this peer connection"). Trusting
+   * isAudioTrackPublished alone skips republish → peer hears silence forever.
+   */
+  private async doRecoverLocalTracksAfterReconnect(room: Room, context: string): Promise<void> {
     try {
       // Give LiveKit engine a moment to settle after reconnect.
       await new Promise((r) => setTimeout(r, 250));
@@ -8129,8 +8219,10 @@ export class VideoCallSession extends SimpleEventEmitter {
       if (this.room !== room) return;
       if (!room.localParticipant || room.state !== 'connected') return;
 
-      // Ensure local tracks exist (non-forced; avoids camera/audio churn).
-      if (!this.localAudioTrack || !this.localVideoTrack) {
+      const audioReady = this.localAudioTrack?.mediaStreamTrack?.readyState;
+      if (!this.localAudioTrack || audioReady === 'ended') {
+        await this.ensureLocalTracks(audioReady === 'ended');
+      } else if (!this.localVideoTrack && this.isCamOn) {
         await this.ensureLocalTracks(false);
       }
 
@@ -8152,14 +8244,33 @@ export class VideoCallSession extends SimpleEventEmitter {
         }
       } catch {}
 
-      // Re-publish tracks if needed (best-effort).
+      // Video: only publish if missing (avoid camera flicker on every reconnect).
       if (this.localVideoTrack && this.isCamOn && !this.isVideoTrackPublished(this.localVideoTrack)) {
         await this.unpublishOtherLocalTracks('video', this.localVideoTrack);
         await room.localParticipant.publishTrack(this.localVideoTrack).catch(() => {});
       }
-      if (this.localAudioTrack && this.isMicOn && !this.isAudioTrackPublished(this.localAudioTrack)) {
+
+      // Audio: always force unpublish+publish when mic is on — stale publication after PC
+      // rebuild leaves outbound silent even when isAudioTrackPublished() is true.
+      if (this.localAudioTrack && this.isMicOn) {
+        const hadStalePublication = this.isAudioTrackPublished(this.localAudioTrack);
+        try {
+          await room.localParticipant.unpublishTrack(this.localAudioTrack, false).catch(() => {});
+        } catch {}
         await this.unpublishOtherLocalTracks('audio', this.localAudioTrack);
-        await room.localParticipant.publishTrack(this.localAudioTrack).catch(() => {});
+        try {
+          await room.localParticipant.publishTrack(this.localAudioTrack);
+          logger.info('[VideoCallSession] Force republished local audio after reconnect', {
+            context,
+            hadStalePublication,
+            trackSid: this.localAudioTrack.sid,
+          });
+        } catch (e) {
+          logger.warn('[VideoCallSession] Force republish local audio after reconnect failed', {
+            context,
+            error: (e as any)?.message || String(e || ''),
+          });
+        }
       }
     } catch (e) {
       logger.debug('[VideoCallSession] recoverLocalTracksAfterReconnect failed (ignored)', {
@@ -8403,6 +8514,12 @@ export class VideoCallSession extends SimpleEventEmitter {
           mt.enabled = !this.remoteAudioMuted;
         }
       } catch {}
+      try {
+        const mt = this.remoteAudioTrack?.mediaStreamTrack as { readyState?: string } | undefined;
+        this.noteRemoteAudioPresence(!!mt && mt.readyState === 'live');
+      } catch {
+        this.noteRemoteAudioPresence(!!this.remoteAudioTrack);
+      }
     } else if (publication.kind === Track.Kind.Video) {
       const prevVideoTrack = this.remoteVideoTrack;
       const wasMutedStateChanged = !!prevVideoTrack && (prevVideoTrack.isMuted !== track.isMuted);
@@ -8518,6 +8635,7 @@ export class VideoCallSession extends SimpleEventEmitter {
         this.remoteStream.removeTrack(mediaTrack as any);
       }
       this.remoteAudioTrack = null;
+      this.noteRemoteAudioPresence(false);
     }
     if (publication.kind === Track.Kind.Video && this.remoteVideoTrack) {
       const duringPartnerSideFlip =
