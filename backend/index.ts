@@ -56,6 +56,7 @@ import { onSocketDisconnectWebRTC } from './sockets/webrtc';
 import {
   dissolveSocketIoRoom,
   evictExtraUserSocketsInDirectRoom,
+  parseDirectCallRoomParticipants,
   sanitizeDirectCallSocketIoRoom,
   setOnCallSocketDetached,
 } from './sockets/directCallRoom';
@@ -1540,6 +1541,47 @@ function userAlreadyHasSocketAttachedToPendingRoom(
   return false;
 }
 
+/**
+ * Put this socket into the direct-call Socket.IO room + maps.
+ * Critical after airplane/reconnect: without join, call:end cannot find the peer
+ * (only the hangup sender remains in the room → peer stuck on VideoCall).
+ */
+function attachSocketToPendingDirectRoom(
+  io: Server,
+  sock: AuthedSocket,
+  userId: string,
+  pendingRoom: PendingAcceptedRoom,
+  source: string,
+): void {
+  evictExtraUserSocketsInDirectRoom(io, pendingRoom.roomId, userId, sock.id);
+  try {
+    sock.join(pendingRoom.roomId);
+  } catch {}
+  activeCallBySocket.set(sock.id, pendingRoom.roomId);
+  (sock as any).data = (sock as any).data || {};
+  (sock as any).data.busy = true;
+  (sock as any).data.roomId = pendingRoom.roomId;
+  (sock as any).data.inCall = true;
+  // partnerSid may be stale after peer reconnect; leave null — signaling uses user rooms / room broadcast.
+  if ((sock as any).data.partnerSid == null) {
+    (sock as any).data.partnerSid = null;
+  }
+  try {
+    sanitizeDirectCallSocketIoRoom(io, pendingRoom.roomId, activeCallBySocket);
+  } catch {}
+  rememberCallAcceptedDelivery(pendingRoom.callId, userId, pendingRoom, {
+    source: source as CallAcceptedDeliverySource,
+    socketId: sock.id,
+  });
+  logger.info('[call:room_reattach]', {
+    userId,
+    callId: pendingRoom.callId,
+    roomId: pendingRoom.roomId,
+    source,
+    socketId: sock.id,
+  });
+}
+
 async function emitPendingCallAcceptedToSocket(
   io: Server,
   sock: AuthedSocket,
@@ -1563,30 +1605,40 @@ async function emitPendingCallAcceptedToSocket(
     return false;
   }
   const deliveryState = rememberCallAcceptedDelivery(pendingRoom.callId, userId, pendingRoom);
-  if (socketAlreadyAttachedToPendingRoom(sock, pendingRoom)) {
-    return false;
+  const alreadyHere = socketAlreadyAttachedToPendingRoom(sock, pendingRoom);
+  const otherLiveDelivery = hasLiveAcceptedDeliverySocket(io, deliveryState, sock.id);
+  const otherAttached = userAlreadyHasSocketAttachedToPendingRoom(io, userId, pendingRoom, sock.id);
+
+  // Always attach THIS socket first. Previous logic returned early when the old
+  // duplicate socket was still briefly alive → new socket never joined the room
+  // → call:end notified only the hangup side.
+  if (!alreadyHere) {
+    attachSocketToPendingDirectRoom(io, sock, userId, pendingRoom, source);
+  } else {
+    rememberCallAcceptedDelivery(pendingRoom.callId, userId, pendingRoom, {
+      source,
+      socketId: sock.id,
+    });
   }
 
-  if (hasLiveAcceptedDeliverySocket(io, deliveryState, sock.id)) {
+  // Already on this socket, or mid-call reconnect replacing another live socket:
+  // do not re-emit call:accepted (LiveKit already up; client ignores same-room anyway).
+  if (alreadyHere) {
     return false;
   }
-
-  if (userAlreadyHasSocketAttachedToPendingRoom(io, userId, pendingRoom, sock.id)) {
+  if (otherLiveDelivery || otherAttached) {
+    logger.info('[call:accepted_replay] room reattached without re-emit', {
+      userId,
+      callId: pendingRoom.callId,
+      roomId: pendingRoom.roomId,
+      source,
+      reason: otherLiveDelivery ? 'other_live_delivery' : 'other_attached',
+      socketId: sock.id,
+    });
     return false;
   }
 
   const token = await createToken({ identity: userId, roomName: pendingRoom.livekitRoomName });
-  evictExtraUserSocketsInDirectRoom(io, pendingRoom.roomId, userId, sock.id);
-  sock.join(pendingRoom.roomId);
-  activeCallBySocket.set(sock.id, pendingRoom.roomId);
-  (sock as any).data = (sock as any).data || {};
-  (sock as any).data.busy = true;
-  (sock as any).data.roomId = pendingRoom.roomId;
-  (sock as any).data.partnerSid = null;
-  (sock as any).data.inCall = true;
-  try {
-    sanitizeDirectCallSocketIoRoom(io, pendingRoom.roomId, activeCallBySocket);
-  } catch {}
   sock.emit('call:accepted', {
     callId: pendingRoom.callId,
     from: null,
@@ -2219,7 +2271,7 @@ function isUserInLiveDirectCall(io: Server, userId: string): boolean {
   return false;
 }
 
-/** pending после accept — держим только пока кто-то реально inCall; не по одному callIdToRoomId. */
+/** pending после accept — держим пока live inCall ИЛИ активный lease (авиарежим: оба могут кратко выпасть из inCall). */
 function shouldRetainPendingAcceptedRoomForUser(
   io: Server,
   userId: string,
@@ -2231,6 +2283,8 @@ function shouldRetainPendingAcceptedRoomForUser(
   const peer = normalizeMongoObjectId(String(pending.peerUserId || ''));
   if (isUserInLiveDirectCall(io, uid)) return true;
   if (isOid(peer) && isUserInLiveDirectCall(io, peer)) return true;
+  // Airplane / socket flap: LiveKit may still be up while Socket.IO inCall maps are empty.
+  if (getActiveCallLease(pending.callId)) return true;
   return false;
 }
 
@@ -2985,6 +3039,25 @@ io.on('connection', async (sock: AuthedSocket) => {
       }
       markRecentlyEndedCallIdentifier(id);
       if (callId) markRecentlyEndedCallIdentifier(String(callId));
+
+      // Snapshot lease participants BEFORE clear — used when peer socket left Socket.IO room
+      // after airplane reconnect (duplicate connection) and never re-joined.
+      const leaseCallIdForEnd =
+        (callId ? String(callId) : '') ||
+        resolveCallIdFromEndIdentifier(id, callId) ||
+        '';
+      const leaseBeforeClear = leaseCallIdForEnd ? getActiveCallLease(leaseCallIdForEnd) : null;
+      const roomParticipantIds = parseDirectCallRoomParticipants(id);
+      const endParticipantUserIds = new Set<string>();
+      if (roomParticipantIds) {
+        endParticipantUserIds.add(normalizeMongoObjectId(roomParticipantIds.a));
+        endParticipantUserIds.add(normalizeMongoObjectId(roomParticipantIds.b));
+      }
+      if (leaseBeforeClear) {
+        if (isOid(leaseBeforeClear.a)) endParticipantUserIds.add(leaseBeforeClear.a);
+        if (isOid(leaseBeforeClear.b)) endParticipantUserIds.add(leaseBeforeClear.b);
+      }
+
       if (callId) {
         clearActiveCallLease(String(callId));
         transitionCall(String(callId), 'ended', {
@@ -3061,6 +3134,24 @@ io.on('connection', async (sock: AuthedSocket) => {
         }
       }
 
+      // Same as endDirectCallServerSide / lease expiry: notify by userId even when the peer
+      // socket is not in the Socket.IO room after reconnect (airplane → duplicate connection).
+      for (const uid of endParticipantUserIds) {
+        if (!isOid(uid)) continue;
+        forEachSocketForUser(io, uid, (s) => {
+          socketsToNotify.add(s.id);
+        });
+      }
+      if (endParticipantUserIds.size > 0) {
+        logger.info('[call:end] notify by room/lease userIds', {
+          callId: callId || null,
+          roomId: id,
+          userIds: Array.from(endParticipantUserIds),
+          socketsBeforeEmit: socketsToNotify.size,
+          socketIoRoomSize: participantCount,
+        });
+      }
+
       // КРИТИЧНО: Сначала мгновенно уведомляем обоих клиентов о завершении звонка,
       // а уже потом делаем более тяжёлую серверную очистку (presence, room cleanup, push).
       // Иначе второй участник ждёт server-side await и экран VideoCall закрывается заметно позже.
@@ -3081,7 +3172,7 @@ io.on('connection', async (sock: AuthedSocket) => {
       }
 
       // Снимаем busy со всех участников и очищаем состояние
-      const callEndedParticipantUserIds = new Set<string>();
+      const callEndedParticipantUserIds = new Set<string>(endParticipantUserIds);
       for (const sid of socketsToNotify) {
         const peerSocket = io.sockets.sockets.get(sid);
         if (peerSocket) {
@@ -3102,12 +3193,30 @@ io.on('connection', async (sock: AuthedSocket) => {
           // Снимаем presence (только друзьям)
           if (peerUserId) {
             callEndedParticipantUserIds.add(String(peerUserId));
-            await emitPresenceUpdateToFriends(io, peerUserId, false);
           }
         }
 
         // Очищаем activeCallBySocket
         try { activeCallBySocket.delete(sid); } catch {}
+      }
+      // Presence for both room users even if one had no live socket in socketsToNotify.
+      const endUsersArr = Array.from(callEndedParticipantUserIds).filter((u) => isOid(u));
+      if (endUsersArr.length >= 2) {
+        try {
+          await emitPresenceUpdateCallToFriends(io, endUsersArr[0], endUsersArr[1], false);
+        } catch {
+          for (const uid of endUsersArr) {
+            try {
+              await emitPresenceUpdateToFriends(io, uid, false);
+            } catch {}
+          }
+        }
+      } else {
+        for (const uid of endUsersArr) {
+          try {
+            await emitPresenceUpdateToFriends(io, uid, false);
+          } catch {}
+        }
       }
       for (const uid of callEndedParticipantUserIds) {
         applyFastOfflineAfterCallIfAllSocketsBackground(io, uid);
