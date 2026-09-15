@@ -272,7 +272,11 @@ export function shouldAllowRtcVideoRenderInInAppPiP(opts?: {
   if (shouldUsePipPlaceholderOnly(opts)) {
     return false;
   }
-  return !!(opts?.remoteStream && mediaStreamHasLiveVideo(opts.remoteStream));
+  return !!(
+    (opts?.remoteStream && mediaStreamHasLiveVideo(opts.remoteStream)) ||
+    opts?.localCamOn === true ||
+    mediaStreamHasLiveVideo(opts?.localStream)
+  );
 }
 
 /** System / in-app PiP: не монтировать RTCView, показывать заглушку LiVi. */
@@ -495,11 +499,12 @@ export function isSystemPiPLeaveAudioOrigin(): boolean {
 }
 
 /**
- * System PiP: лого (native backdrop) vs peer RTC.
+ * System PiP: лого (native backdrop) vs video capture (peer и/или local).
  * Product:
- * - enter с audio UI → лого (пока peer без video)
+ * - enter с audio UI без video → лого
+ * - peer cam/live → peer RTC (+ local inset если своя cam)
+ * - своя cam on без peer → local RTC (не лого): иначе Home→PiP прячет работающую камеру
  * - уже в system PiP + peer cam/live → peer RTC (апгрейд, даже с audio UI)
- * - peer cam OFF / нет live → лого
  */
 export function shouldUseSystemPiPPlaceholderOnly(opts?: {
   localCamOn?: boolean;
@@ -536,10 +541,25 @@ export function shouldUseSystemPiPPlaceholderOnly(opts?: {
       hasLiveRemote || remoteCamOn === true || opts?.remoteCamOn === true;
 
     // Peer video уже есть → RTC в system PiP (и на enter с audio UI, и mid-PiP upgrade).
-    // Раньше audio UI форсил logo раньше проверки live remote — собеседник не видел видео.
     if (peerVideo) return false;
 
-    // Enter с audio-страницы без peer video → logo.
+    const sessionLocalStream =
+      typeof session?.getLocalStream === 'function' ? session.getLocalStream() : null;
+    const localStream =
+      opts?.localStream ?? params?.localStream ?? sessionLocalStream ?? null;
+    const hasLiveLocal = mediaStreamHasLiveVideo(localStream);
+    const sessionLocalCam =
+      typeof session?.getIsCamOn === 'function' ? !!session.getIsCamOn() : undefined;
+    const localCamOn =
+      opts?.localCamOn === true ||
+      params?.localCamOn === true ||
+      sessionLocalCam === true ||
+      hasLiveLocal;
+
+    // Video UI / своя камера on → capture с local (inset или fill), не native logo.
+    if (localCamOn) return false;
+
+    // Enter с audio-страницы без peer/local video → logo.
     if (isInAudioOnlyCallUi()) return true;
 
     if (isSystemPiPLeaveAudioOrigin()) return true;

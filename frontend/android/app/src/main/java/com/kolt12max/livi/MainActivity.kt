@@ -122,8 +122,8 @@ class MainActivity : ReactActivity() {
   /** Нативная заглушка LiVi поверх RN — единый кадр system PiP на всех устройствах. */
   private var systemPiPBackdrop: View? = null
   /**
-   * Непрозрачная крышка цвета audio-call (#1B1C22) поверх RN, пока VideoCall не отрисован.
-   * Нужна при accept с Incoming/lock/фона: Main поднимается раньше, чем JS успеет поставить cover.
+   * Крышка accept: тот же welcome_stage_bg, что у audio VideoCall / Incoming.
+   * Нужна при подъёме Main раньше JS ConnectingCover.
    */
   private var incomingAnswerCoverView: View? = null
 
@@ -132,21 +132,33 @@ class MainActivity : ReactActivity() {
       armIncomingAnswerCover = true
       val decor = window?.decorView as? ViewGroup ?: return
       val cover = incomingAnswerCoverView ?: run {
-        val v = View(this).apply {
-          setBackgroundColor(Color.parseColor("#1B1C22"))
+        val frame = android.widget.FrameLayout(this).apply {
+          setBackgroundColor(Color.parseColor("#0A0C14"))
           importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }
+        val stage = android.widget.ImageView(this).apply {
+          setImageResource(R.drawable.welcome_stage_bg)
+          scaleType = android.widget.ImageView.ScaleType.CENTER_CROP
+          importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }
+        frame.addView(
+          stage,
+          android.widget.FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT,
+          ),
+        )
         decor.addView(
-          v,
+          frame,
           ViewGroup.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.MATCH_PARENT,
           ),
         )
-        v.elevation = 20000f
-        v.translationZ = 20000f
-        incomingAnswerCoverView = v
-        v
+        frame.elevation = 20000f
+        frame.translationZ = 20000f
+        incomingAnswerCoverView = frame
+        frame
       }
       cover.visibility = View.VISIBLE
       cover.bringToFront()
@@ -798,6 +810,11 @@ class MainActivity : ReactActivity() {
    */
   override fun onUserLeaveHint() {
     super.onUserLeaveHint()
+    // GSM/WA поверх видеозвонка: hold должен стартовать до/вместе с system PiP, иначе партнёр
+    // видит только PiP без «Звонок на удержании».
+    try {
+      LiviAppModule.onActiveCallUserLeaveHintStatic(applicationContext)
+    } catch (_: Exception) {}
     currentHomePiPTraceId = "hp_${System.currentTimeMillis()}"
     homePiPEnterAttemptSeq = 0
     val now = System.currentTimeMillis()
@@ -1298,7 +1315,7 @@ class MainActivity : ReactActivity() {
     const val EXTRA_PENDING_ANSWER_CALL_ID = "pending_answer_call_id"
     const val EXTRA_PENDING_ANSWER_FROM = "pending_answer_from"
     const val EXTRA_PENDING_ANSWER_FROM_NICK = "pending_answer_from_nick"
-    /** Accept входящего: показать #1B1C22 поверх RN до VideoCall.onLayout. */
+    /** Accept входящего: показать welcome_stage_bg поверх RN до VideoCall.onLayout. */
     const val EXTRA_INCOMING_ANSWER_COVER = "incoming_answer_cover"
     const val EXTRA_OPEN_TAB_FRIENDS = "open_tab_friends"
     /** Тап по уведомлению о непрочитанном сообщении → welcome Chat. */

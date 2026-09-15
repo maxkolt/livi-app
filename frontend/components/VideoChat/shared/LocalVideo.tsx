@@ -4,6 +4,8 @@ import { RTCView, MediaStream } from '@livekit/react-native-webrtc';
 import { isValidStream } from '../../../utils/streamUtils';
 import { t, type Lang } from '../../../utils/i18n';
 import { logger } from '../../../utils/logger';
+import { setCallVideoHoldBlurForRole } from '../../../utils/callVideoHoldBlur';
+import { HoldPauseIcon } from './HoldPauseIcon';
 
 interface LocalVideoProps {
   localStream: MediaStream | null;
@@ -14,7 +16,7 @@ interface LocalVideoProps {
   started: boolean;
   localRenderKey: number;
   lang: Lang;
-  /** Локальный GSM hold на video UI: заглушка «Вы» + «Звонок на удержании...». */
+  /** Локальный GSM hold на video UI: blur кадра + «Звонок на удержании...». */
   localExternalHold?: boolean;
   /** Локальный PiP поверх remote: выше z-order, чтобы Surface/Texture remote не глушил превью. */
   asPipOverlay?: boolean;
@@ -47,6 +49,10 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
 
   const [trackLiveTick, setTrackLiveTick] = useState(0);
   const [forceUpdateKey, setForceUpdateKey] = useState(0);
+  const holdBlurHostRef = useRef<View>(null);
+  // Стабильный RTCView key на hold — не remount при mute track.
+  const lastRtcViewKeyRef = useRef<string>('');
+
 
   // КРИТИЧНО: Все хуки должны быть вызваны ДО любых условных return
   // Проверяем готовность стрима
@@ -60,9 +66,9 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
   // из-за чего UI ошибочно показывает плейсхолдер "Вы". Поэтому для Android игнорируем `muted` при решении рендера.
   const canRenderVideo =
     !!videoTrack &&
-    isVideoTrackEnabled &&
-    (Platform.OS === 'android' ? true : !isVideoTrackMuted) &&
-    (isVideoTrackLive || trackLiveTick > 0 || camOn);
+    (isVideoTrackEnabled || !!localExternalHold) &&
+    (Platform.OS === 'android' ? true : !isVideoTrackMuted || !!localExternalHold) &&
+    (isVideoTrackLive || trackLiveTick > 0 || camOn || !!localExternalHold);
   
   // Логирование для отладки на Android
   useEffect(() => {
@@ -91,6 +97,7 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
 
   // КРИТИЧНО: На Android нужен force-update для RTCView при изменении стрима / remount key
   useEffect(() => {
+    if (localExternalHold) return;
     if (Platform.OS === 'android' && localStream && isValidStream(localStream)) {
       const vt = (localStream as any)?.getVideoTracks?.()?.[0];
       if (!vt) return;
@@ -123,7 +130,7 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
         clearTimeout(stop);
       };
     }
-  }, [localStream?.id, localVideoTrackId, localRenderKey, camOn]);
+  }, [localStream?.id, localVideoTrackId, localRenderKey, camOn, localExternalHold]);
 
   // КРИТИЧНО: На Android RTCView может "залипать" на черном экране при переключении enabled у videoTrack
   // (камера OFF -> ON). Поэтому при изменении enabled/ camOn форсим remount.
@@ -138,9 +145,11 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
     }
     if (lastEnabledRef.current !== currentEnabled) {
       lastEnabledRef.current = currentEnabled;
+      // На hold mute не remount'им — иначе потеряем застывший кадр под blur.
+      if (localExternalHold) return;
       setForceUpdateKey((prev) => prev + 1);
     }
-  }, [camOn, localStream?.id, isVideoTrackEnabled]);
+  }, [camOn, localStream?.id, isVideoTrackEnabled, localExternalHold]);
 
   // Уведомляем о готовности стрима
   useEffect(() => {
@@ -148,6 +157,23 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
       onStreamReady(localStream);
     }
   }, [localStream, onStreamReady]);
+
+  // GSM / сторонний звонок: blur локального TextureView (Android 12+).
+  useEffect(() => {
+    if (!localExternalHold) {
+      setCallVideoHoldBlurForRole('local', false);
+      return;
+    }
+    const apply = () => setCallVideoHoldBlurForRole('local', true);
+    apply();
+    const t1 = setTimeout(apply, 60);
+    const t2 = setTimeout(apply, 220);
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+      setCallVideoHoldBlurForRole('local', false);
+    };
+  }, [localExternalHold]);
 
   // После завершения звонка показываем надпись "Вы"
   if (isInactiveState || wasFriendCallEnded) {
@@ -158,7 +184,17 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
     );
   }
 
-  if (localExternalHold) {
+  // Если UI считает, что камера выключена — всегда показываем заглушку "Вы".
+  // На hold камера логически всё ещё «включена» (camOn), mute только uplink.
+  if (!camOn && !localExternalHold) {
+    return (
+      <View style={[styles.rtc, styles.placeholderContainer]}>
+        <Text style={styles.placeholder}>{L('you')}</Text>
+      </View>
+    );
+  }
+
+  if (localExternalHold && !(hasLocalStream && canRenderVideo)) {
     return (
       <View
         style={[
@@ -167,18 +203,12 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
           styles.holdPlaceholderRoot,
         ]}
       >
-        <Text style={styles.placeholder}>{L('you')}</Text>
-        <Text style={styles.holdStatusLabelBottom}>{L('externalCallHoldEllipsis')}</Text>
-      </View>
-    );
-  }
-
-  // Если UI считает, что камера выключена — всегда показываем заглушку "Вы".
-  // Это должно иметь приоритет над попытками рендера RTCView, иначе получаем "черный прямоугольник".
-  if (!camOn) {
-    return (
-      <View style={[styles.rtc, styles.placeholderContainer]}>
-        <Text style={styles.placeholder}>{L('you')}</Text>
+        <View style={styles.holdStatusRow}>
+          <View style={styles.holdStatusIcon}>
+            <HoldPauseIcon size={20} />
+          </View>
+          <Text style={styles.holdStatusLabel}>{L('externalCallHoldLocal')}</Text>
+        </View>
       </View>
     );
   }
@@ -190,9 +220,18 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
     // Это более надежный способ для @livekit/react-native-webrtc на Android, но добавляем streamURL как fallback
     const localStreamURL = localStream.toURL?.();
     const mirrorKey = isFrontCamera ? 'mirror' : 'nomirror';
-    const rtcViewKey = Platform.OS === 'android'
-      ? `local-video-${localStream.id}-${localRenderKey}-${forceUpdateKey}-${mirrorKey}-${isVideoTrackEnabled ? 1 : 0}`
-      : `local-video-${localStream.id}-${localRenderKey}-${mirrorKey}`;
+    const candidateKey =
+      Platform.OS === 'android'
+        ? `local-video-${localStream.id}-${localRenderKey}-${forceUpdateKey}-${mirrorKey}-${isVideoTrackEnabled ? 1 : 0}`
+        : `local-video-${localStream.id}-${localRenderKey}-${mirrorKey}`;
+    // На hold оставляем предыдущий key — иначе mute/remount съедает кадр под blur.
+    const rtcViewKey =
+      localExternalHold && lastRtcViewKeyRef.current
+        ? lastRtcViewKeyRef.current
+        : candidateKey;
+    if (!localExternalHold) {
+      lastRtcViewKeyRef.current = candidateKey;
+    }
     
     logger.debug('[LocalVideo] Render RTCView', {
       platform: Platform.OS,
@@ -203,6 +242,7 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
       isVideoTrackMuted,
       streamId: localStream.id,
       isFrontCamera,
+      localExternalHold,
       usingStreamProp: Platform.OS === 'android'
     });
 
@@ -230,7 +270,7 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
         } // Android: пробрасываем оба
       : { streamURL: localStreamURL! }; // iOS: используем streamURL (уже проверили выше)
 
-    return (
+    const rtcView = (
       <RTCView
         key={rtcViewKey}
         {...(rtcViewProps as any)}
@@ -240,6 +280,24 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
         // Локальный PiP выше remote (0), иначе после появления peer video превью чернеет.
         zOrder={asPipOverlay ? 1 : 0}
       />
+    );
+
+    if (!localExternalHold) {
+      return rtcView;
+    }
+
+    return (
+      <View ref={holdBlurHostRef} collapsable={false} style={styles.rtc}>
+        {rtcView}
+        <View style={styles.holdStatusOverlay} pointerEvents="none">
+          <View style={styles.holdStatusRow}>
+            <View style={styles.holdStatusIcon}>
+              <HoldPauseIcon size={20} />
+            </View>
+            <Text style={styles.holdStatusLabel}>{L('externalCallHoldLocal')}</Text>
+          </View>
+        </View>
+      </View>
     );
   }
 
@@ -266,21 +324,34 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(13,14,16,0.85)',
   },
   holdPlaceholderRoot: {
-    justifyContent: 'center',
+    justifyContent: 'flex-start',
+    paddingTop: '38%',
   },
   placeholder: {
     color: 'rgba(237,234,234,0.6)',
     fontSize: 22,
   },
-  holdStatusLabelBottom: {
-    position: 'absolute',
-    left: 12,
-    right: 12,
-    bottom: 14,
-    color: 'rgba(255,255,255,0.88)',
-    fontSize: 16,
-    fontWeight: '400',
-    letterSpacing: 0.2,
+  holdStatusOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'flex-start',
+    alignItems: 'center',
+    paddingTop: '38%',
+    zIndex: 6,
+  },
+  holdStatusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+  },
+  holdStatusIcon: {
+    marginRight: 6,
+  },
+  holdStatusLabel: {
+    color: 'rgba(255,255,255,0.92)',
+    fontSize: 14,
+    fontWeight: '500',
+    letterSpacing: 0.15,
     textAlign: 'center',
   },
 });

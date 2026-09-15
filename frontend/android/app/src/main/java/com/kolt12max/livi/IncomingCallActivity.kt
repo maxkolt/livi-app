@@ -27,7 +27,6 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.ImageButton
-import android.widget.ImageView
 import android.widget.TextView
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
@@ -194,7 +193,7 @@ class IncomingCallActivity : AppCompatActivity() {
             declineButton.isEnabled = false
             stopCallRingtone()
             stopRepeatingVibration()
-            // Последний кадр Incoming = цвет audio/cover (#1B1C22), иначе task-switch даёт скачок welcome→audio.
+            // Последний кадр Incoming = welcome-фон (#0A0C14), иначе task-switch даёт серый скачок.
             paintAnswerHandoffCover()
             LiviAppModule.setPendingAnswerCall(callId, from, fromNick)
             val deliveredToJs = LiviAppModule.tryDeliverPendingAnswerToJs()
@@ -514,22 +513,17 @@ class IncomingCallActivity : AppCompatActivity() {
     }
 
     /**
-     * Сразу довести Incoming до цвета audio-call / answer-cover (#1B1C22),
-     * чтобы при подъёме Main не мелькал welcome-фон (#0A0C14 + image).
+     * Accept → скрыть кнопки/аватар, оставить welcome_stage_bg как на audio VideoCall.
+     * Не затирать ImageView сплошным цветом — иначе серый/плоский кадр вместо сцены.
      */
     private fun paintAnswerHandoffCover() {
         try {
-            val handoff = Color.parseColor("#1B1C22")
+            val stage = Color.parseColor("#0A0C14")
             val root = findViewById<ViewGroup>(R.id.incoming_call_root)
-            root?.setBackgroundColor(handoff)
+            root?.setBackgroundColor(stage)
             findViewById<View>(R.id.incoming_call_content)?.visibility = View.INVISIBLE
-            if (root != null) {
-                for (i in 0 until root.childCount) {
-                    val child = root.getChildAt(i)
-                    if (child is ImageView) child.visibility = View.INVISIBLE
-                }
-            }
-            window?.decorView?.setBackgroundColor(handoff)
+            // ImageView welcome_stage_bg остаётся видимым — тот же фон, что у аудиозвонка.
+            window?.decorView?.setBackgroundColor(stage)
         } catch (_: Exception) {}
     }
 
@@ -545,6 +539,7 @@ class IncomingCallActivity : AppCompatActivity() {
             putExtra(MainActivity.EXTRA_PENDING_ANSWER_CALL_ID, callId)
             putExtra(MainActivity.EXTRA_PENDING_ANSWER_FROM, from)
             putExtra(MainActivity.EXTRA_PENDING_ANSWER_FROM_NICK, fromNick)
+            // Native welcome_stage_bg поверх RN до VideoCall.onLayout — без этого мелькает Home.
             putExtra(MainActivity.EXTRA_INCOMING_ANSWER_COVER, true)
         }
         MainActivity.armIncomingAnswerCover = true

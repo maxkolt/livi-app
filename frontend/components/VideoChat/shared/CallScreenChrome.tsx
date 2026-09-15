@@ -27,6 +27,8 @@ import { WELCOME_PROFILE_ROW_ICON } from '../../../screens/home/WelcomeProfileLi
 
 /** Краповый slash как у «нет сети» / hangup. */
 const STATUS_WEAK_SLASH = '#A33B4F';
+/** Hint над капсулой — тёмный титан (не статусные надписи). */
+const PEER_VIDEO_HINT_TITAN = '#5C616A';
 
 export type CallMoreMenuItem = {
   key: string;
@@ -56,6 +58,10 @@ type Props = {
   statusLine: string;
   /** Иконка перечёркнутых палочек + акцентный цвет статуса (слабая связь). */
   statusWeak?: boolean;
+  /** «Соединение» / transient — тот же светлый chrome, что и обычный статус. */
+  statusMuted?: boolean;
+  /** GSM / сторонний звонок: строка под временем с иконкой паузы. */
+  holdLine?: string | null;
   onMinimize: () => void;
   onToggleCam: () => void;
   onToggleMic: () => void;
@@ -84,6 +90,8 @@ export function CallScreenChrome({
   partnerAvatarUri,
   statusLine,
   statusWeak = false,
+  statusMuted = false,
+  holdLine = null,
   onMinimize,
   onToggleCam,
   onToggleMic,
@@ -108,6 +116,7 @@ export function CallScreenChrome({
   const [resolvedUri, ready] = useResolvedImageUri(partnerAvatarUri ?? '');
   const letter = displayAvatarLetter(partnerName);
   const locked = controlsLocked;
+  const holdText = typeof holdLine === 'string' ? holdLine.trim() : '';
 
   return (
     <>
@@ -115,7 +124,10 @@ export function CallScreenChrome({
         style={[styles.headerWrap, { paddingTop: Math.max(26, topInset + 24) }]}
         pointerEvents="box-none"
       >
-        <View style={styles.headerRow} pointerEvents="box-none">
+        <View
+          style={[styles.headerRow, holdText ? styles.headerRowWithHold : null]}
+          pointerEvents="box-none"
+        >
           <Pressable
             onPress={onMinimize}
             style={({ pressed }) => [styles.roundChromeBtn, pressed && styles.pressed]}
@@ -147,6 +159,19 @@ export function CallScreenChrome({
                   {statusLine}
                 </Text>
               </View>
+              {holdText ? (
+                <View style={styles.holdRow}>
+                  <MaterialIcons
+                    name="pause-circle-filled"
+                    size={14}
+                    color={WELCOME_HEADER_TITLE}
+                    style={styles.holdIcon}
+                  />
+                  <Text style={styles.holdLine} numberOfLines={1}>
+                    {holdText}
+                  </Text>
+                </View>
+              ) : null}
             </View>
           </View>
 
@@ -359,6 +384,9 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: 16,
   },
+  headerRowWithHold: {
+    height: 74,
+  },
   roundChromeBtn: {
     width: 38,
     height: 38,
@@ -420,11 +448,15 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   partnerName: {
+    // Same light chrome as minimize (left) icon — readable over remote video.
     color: WELCOME_HEADER_TITLE,
     fontSize: 16,
     fontWeight: '600',
     letterSpacing: -0.2,
     textAlign: 'left',
+    textShadowColor: 'rgba(0,0,0,0.55)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 3,
   },
   statusRow: {
     marginTop: 2,
@@ -433,11 +465,39 @@ const styles = StyleSheet.create({
     minWidth: 0,
   },
   statusLine: {
-    color: WELCOME_MUTED_TEXT,
+    // Match left chrome btn icon (was muted gray — invisible on bright video).
+    color: WELCOME_HEADER_TITLE,
     fontSize: 13,
     fontVariant: ['tabular-nums'],
     textAlign: 'left',
     flexShrink: 1,
+    textShadowColor: 'rgba(0,0,0,0.55)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 3,
+  },
+  holdRow: {
+    marginTop: 3,
+    flexDirection: 'row',
+    alignItems: 'center',
+    minWidth: 0,
+    gap: 4,
+  },
+  holdIcon: {
+    marginTop: 0.5,
+    textShadowColor: 'rgba(0,0,0,0.55)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 3,
+  },
+  holdLine: {
+    color: WELCOME_HEADER_TITLE,
+    fontSize: 12,
+    fontWeight: '500',
+    letterSpacing: 0.1,
+    textAlign: 'left',
+    flexShrink: 1,
+    textShadowColor: 'rgba(0,0,0,0.55)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 3,
   },
   weakSignalGlyph: {
     width: 16,
@@ -450,8 +510,8 @@ const styles = StyleSheet.create({
   weakBar: {
     width: 3,
     borderRadius: 1,
-    backgroundColor: WELCOME_MUTED_TEXT,
-    opacity: 0.85,
+    backgroundColor: WELCOME_HEADER_TITLE,
+    opacity: 0.9,
     marginRight: 2,
   },
   weakBar1: { height: 4 },
@@ -485,7 +545,7 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '500',
     letterSpacing: 0.15,
-    color: '#5C616A',
+    color: PEER_VIDEO_HINT_TITAN,
   },
   capsule: {
     flexDirection: 'row',

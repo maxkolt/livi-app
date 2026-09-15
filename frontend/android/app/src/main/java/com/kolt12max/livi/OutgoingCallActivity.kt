@@ -18,7 +18,6 @@ import android.graphics.PixelFormat
 import android.view.WindowManager
 import androidx.activity.OnBackPressedCallback
 import android.widget.ImageButton
-import android.widget.ImageView
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 
@@ -208,7 +207,7 @@ class OutgoingCallActivity : AppCompatActivity() {
                 if (finishRequested || isFinishing || isDestroyed) {
                     return
                 }
-                // Accept/remote-end → VideoCall: последний кадр = audio/cover (#1B1C22), не welcome.
+                // Accept/remote-end → VideoCall: последний кадр = welcome-фон (#0A0C14).
                 paintAcceptedHandoffCover()
                 LiviOutgoingCallService.stop(this@OutgoingCallActivity, this@OutgoingCallActivity.callId)
                 finish()
@@ -320,21 +319,17 @@ class OutgoingCallActivity : AppCompatActivity() {
     }
 
     /**
-     * Accept → audio/VideoCall: довести Outgoing до цвета answer-cover (#1B1C22),
-     * иначе finish() даёт скачок welcome (#0A0C14 + image) → Main.
-     * Cancel (X) не вызывает — там возврат на Home, не на audio UI.
+     * Accept → скрыть chrome Outgoing, оставить welcome_stage_bg как на audio VideoCall.
+     * Cancel (X) не вызывает — там возврат на Home.
      */
     private fun paintAcceptedHandoffCover() {
         try {
-            val handoff = Color.parseColor("#1B1C22")
+            val stage = Color.parseColor("#0A0C14")
             val root = findViewById<ViewGroup>(R.id.outgoing_call_root) ?: return
-            root.setBackgroundColor(handoff)
+            root.setBackgroundColor(stage)
             findViewById<View>(R.id.outgoing_call_content)?.visibility = View.INVISIBLE
-            for (i in 0 until root.childCount) {
-                val child = root.getChildAt(i)
-                if (child is ImageView) child.visibility = View.INVISIBLE
-            }
-            window?.decorView?.setBackgroundColor(handoff)
+            // ImageView welcome_stage_bg остаётся видимым.
+            window?.decorView?.setBackgroundColor(stage)
         } catch (_: Exception) {}
     }
 

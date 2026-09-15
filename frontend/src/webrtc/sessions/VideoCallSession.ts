@@ -16,7 +16,12 @@ import {
   VideoPresets,
   ConnectionState,
 } from 'livekit-client';
-import { setExternalCallHoldActive } from '../../../utils/externalCallHold';
+import {
+  setExternalCallHoldActive,
+  isExternalCallHoldActive,
+  shouldSuppressPeerReconnectForExternalHold,
+  noteExternalHoldEnded,
+} from '../../../utils/externalCallHold';
 import { dispatchPartnerExternalHoldFromSocket, setPartnerExternalHoldSnapshot } from '../../../utils/partnerExternalHoldUi';
 import { SimpleEventEmitter } from '../base/SimpleEventEmitter';
 import type { WebRTCSessionConfig, WebRTCSessionCallbacks, CamSide } from '../types';
@@ -1510,6 +1515,28 @@ export class VideoCallSession extends SimpleEventEmitter {
     }
     this.partnerExternalHoldActive = hold;
     setPartnerExternalHoldSnapshot(hold);
+    if (hold) {
+      this.clearPeerReconnectingForExternalHold();
+      // Soft-mute uplink у партнёра даёт TrackMuted — не переводим UI в «Отошёл».
+      this.clearRemoteCamOffTimeout();
+    } else {
+      // Hold снят: не дать stall за время mute вспыхнуть «нет сети».
+      noteExternalHoldEnded();
+      this.clearPeerReconnectingForExternalHold();
+      this.remoteAudioPacketsStalledSince = null;
+      this.lastRemoteAudioPacketsReceived = null;
+      this.clearRemoteCamOffTimeout();
+      // После hold: вернуть remote cam, если трек снова live (TrackUnmuted мог обогнать exit).
+      if (
+        !this.remotePartnerDeclaredCamOff &&
+        this.partnerPeerDirectCallVideoUi !== false &&
+        this.remoteVideoTrack &&
+        !this.remoteVideoTrack.isMuted
+      ) {
+        this.remoteCamEnabled = true;
+        this.notifyRemoteCamStateChange(true);
+      }
+    }
     this.emit('partnerExternalHoldChanged', { hold });
   }
 
@@ -1541,13 +1568,21 @@ export class VideoCallSession extends SimpleEventEmitter {
     if (this.ended || this.endCallInProgress) return;
     if (this.localExternalHoldActive) return;
     setExternalCallHoldActive(true);
+    this.clearPeerReconnectingForExternalHold();
     this.syncExternalHoldStateToCanonicalSessions('local', true);
-    const currentRoomId = this.resolveSignalingRoomId();
+    const currentRoomId =
+      this.resolveSignalingRoomId() ||
+      String(this.roomId || this.currentRoomName || '').trim() ||
+      null;
     try {
       socket.emit('call:external-hold', {
         hold: true,
         from: socket.id,
         ...(currentRoomId ? { roomId: currentRoomId } : {}),
+      });
+      logger.info('[VideoCallSession] call:external-hold (hold) emitted', {
+        roomId: currentRoomId,
+        socketConnected: !!socket?.connected,
       });
     } catch (e) {
       logger.warn('[VideoCallSession] call:external-hold (hold) emit failed', e);
@@ -1562,14 +1597,18 @@ export class VideoCallSession extends SimpleEventEmitter {
         this.externalHoldMicSuspended = true;
       } catch {}
     }
-    if (this.isCamOn && this.localVideoTrack) {
-      try {
-        await this.localVideoTrack.mute();
-        if (this.localVideoTrack.mediaStreamTrack) {
-          this.localVideoTrack.mediaStreamTrack.enabled = false;
-        }
-        this.externalHoldVideoTrackSuspended = true;
-      } catch {}
+    // После last-frame для партнёра отпускаем Camera2 (GSM иначе оставляет
+    // «живой» muted-трек без кадров — soft-unmute потом врёт readyState=live).
+    // Флаг ставим по isCamOn даже без трека — иначе exit пропускает restore.
+    if (this.isCamOn) {
+      this.externalHoldVideoTrackSuspended = true;
+      if (this.localVideoTrack) {
+        setTimeout(() => {
+          if (!this.localExternalHoldActive || this.ended || this.endCallInProgress) return;
+          if (!this.externalHoldVideoTrackSuspended) return;
+          void this.hardReleaseLocalVideoMute().catch(() => {});
+        }, 450);
+      }
     }
     try {
       this.config.callbacks.onExternalHoldRemotePlaybackChange?.(true);
@@ -1600,10 +1639,93 @@ export class VideoCallSession extends SimpleEventEmitter {
         await this.restoreMicrophoneAfterAppBackground().catch(() => {});
       }
     }
-    if (this.externalHoldVideoTrackSuspended) {
-      this.externalHoldVideoTrackSuspended = false;
-      if (this.isCamOn && !this.ended && !this.endCallInProgress) {
-        await this.restoreCameraAfterAppBackground().catch(() => {});
+    // После hold: baseline audio packets + grace (иначе partner видит «нет сети»).
+    this.remoteAudioPacketsStalledSince = null;
+    this.lastRemoteAudioPacketsReceived = null;
+    this.clearPeerReconnectingForExternalHold();
+
+    // Restore even if suspended-флаг не выставился на enter (нет трека / race):
+    // иначе после GSM остаётся мёртвый last-frame без video restored в логах.
+    // Android + cam on: всегда restart — readyState=live часто врёт после GSM.
+    const wasVideoSuspended = this.externalHoldVideoTrackSuspended;
+    this.externalHoldVideoTrackSuspended = false;
+    if (!this.ended && !this.endCallInProgress) {
+      const wantCam = this.isCamOn !== false;
+      if (wantCam) {
+        const mst = this.localVideoTrack?.mediaStreamTrack;
+        const trackDead =
+          !this.localVideoTrack ||
+          !mst ||
+          mst.readyState !== 'live' ||
+          mst.enabled === false ||
+          !!this.localVideoTrack?.isMuted;
+        const needsRestore =
+          wasVideoSuspended || Platform.OS === 'android' || trackDead;
+        if (needsRestore) {
+          this.isCamOn = true;
+          // Soft-unmute недостаточно: после GSM MediaStreamTrack часто остаётся
+          // readyState=live без новых кадров → у партнёра вечный last-frame.
+          try {
+            (this.localVideoTrack as any).providedByUser = false;
+          } catch {}
+          if (Platform.OS === 'android') {
+            await new Promise((r) => setTimeout(r, 280));
+          }
+          if (this.ended || this.endCallInProgress) {
+            logger.info('[VideoCallSession] exitExternalCallHold');
+            return;
+          }
+          let restored = false;
+          try {
+            await this.restartLocalCamera();
+            restored =
+              !!this.localVideoTrack?.mediaStreamTrack &&
+              this.localVideoTrack.mediaStreamTrack.readyState === 'live' &&
+              this.localVideoTrack.mediaStreamTrack.enabled !== false;
+          } catch (e) {
+            logger.warn('[VideoCallSession] exitExternalCallHold restartLocalCamera failed', e);
+          }
+          if (!restored) {
+            await this.applyLocalCameraEnabled(true).catch((e) => {
+              logger.warn('[VideoCallSession] exitExternalCallHold camera re-enable failed', e);
+            });
+            restored =
+              !!this.localVideoTrack?.mediaStreamTrack &&
+              this.localVideoTrack.mediaStreamTrack.readyState === 'live';
+          } else {
+            try {
+              await this.ensureLocalVideoPublishedAfterEnable();
+            } catch {}
+          }
+          if (this.localStream) {
+            this.emit('localStream', this.localStream);
+            this.notifyLocalStreamChange(this.localStream);
+          }
+          try {
+            this.notifyCamStateChange(true);
+          } catch {}
+          // Явно сказать партнёру, что камера снова on (TrackMuted во время hold).
+          const roomIdForCam = this.resolveSignalingRoomId() || this.getRoomId();
+          if (roomIdForCam && !this.ended) {
+            try {
+              socket.emit('cam-toggle', {
+                enabled: true,
+                from: socket.id,
+                roomId: roomIdForCam,
+                camSide: this.camSide,
+              });
+            } catch {}
+          }
+          logger.info('[VideoCallSession] exitExternalCallHold video restored', {
+            restored,
+            wasVideoSuspended,
+            trackDead,
+            trackEnabled: this.localVideoTrack?.mediaStreamTrack?.enabled,
+            trackMuted: this.localVideoTrack?.isMuted,
+            readyState: this.localVideoTrack?.mediaStreamTrack?.readyState,
+            streamId: this.localStream?.id,
+          });
+        }
       }
     }
     logger.info('[VideoCallSession] exitExternalCallHold');
@@ -3117,10 +3239,35 @@ export class VideoCallSession extends SimpleEventEmitter {
 
   private armPeerReconnectingUi(reason: string): void {
     if (this.ended || this.endCallInProgress || this.peerReconnecting) return;
+    // Hold (GSM/WA) ≠ слабая сеть: не подменять статус «Звонок на удержании».
+    try {
+      if (
+        this.localExternalHoldActive ||
+        this.partnerExternalHoldActive ||
+        isExternalCallHoldActive() ||
+        shouldSuppressPeerReconnectForExternalHold()
+      ) {
+        logger.info('[VideoCallSession] skip peerReconnecting — external hold / focus loss', {
+          reason,
+          callId: this.callId,
+        });
+        return;
+      }
+    } catch {}
     this.clearPeerReconnectingDebounce();
     this.peerReconnectingDebounceTimer = setTimeout(() => {
       this.peerReconnectingDebounceTimer = null;
       if (this.ended || this.endCallInProgress || this.peerReconnecting) return;
+      try {
+        if (
+          this.localExternalHoldActive ||
+          this.partnerExternalHoldActive ||
+          isExternalCallHoldActive() ||
+          shouldSuppressPeerReconnectForExternalHold()
+        ) {
+          return;
+        }
+      } catch {}
       this.peerReconnecting = true;
       logger.warn('[VideoCallSession] Peer reconnecting UI', {
         reason,
@@ -3131,6 +3278,11 @@ export class VideoCallSession extends SimpleEventEmitter {
         this.emit('peerReconnecting');
       } catch {}
     }, PEER_RECONNECTING_UI_DEBOUNCE_MS);
+  }
+
+  /** Hold вместо «слабая сеть»: снять reconnecting UI. */
+  clearPeerReconnectingForExternalHold(): void {
+    this.clearPeerReconnectingUi('external_call_hold');
   }
 
   /** Локальный UI direct-call: экран «Аудиозвонок» (не video UI / не Home-as-video). */
@@ -8926,6 +9078,11 @@ export class VideoCallSession extends SimpleEventEmitter {
     if (this.partnerPeerDirectCallVideoUi === false || this.remotePartnerDeclaredCamOff) {
       return;
     }
+    // GSM/messenger hold: soft-mute даёт TrackMuted — не уходим в «Отошёл» / audio shell.
+    if (this.partnerExternalHoldActive) {
+      logger.debug('[VideoCallSession] skip remote cam off — partner external hold', { reason });
+      return;
+    }
     // If we already consider camera off, don't spam timers/callbacks.
     if (!this.remoteCamEnabled && !this.remoteCamOffTimeout) {
       return;
@@ -8934,6 +9091,7 @@ export class VideoCallSession extends SimpleEventEmitter {
 
     this.remoteCamOffTimeout = setTimeout(() => {
       this.remoteCamOffTimeout = null;
+      if (this.partnerExternalHoldActive) return;
       // If a new video track appeared since scheduling, we should have cancelled; still guard.
       if (this.remoteVideoTrack && !this.remoteVideoTrack.isMuted) {
         return;

@@ -2116,7 +2116,11 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         if (!placeholderOnlyHome) {
           // Не сбрасывать pre-armed frameReady при live video — иначе leave-hint
           // снова ждёт и промахивает OEM-окно enter.
-          if (sessionHasLiveRemoteVideo || remoteCamForPlaceholder) {
+          if (
+            sessionHasLiveRemoteVideo ||
+            remoteCamForPlaceholder ||
+            localCamForPlaceholder
+          ) {
             NativeModules.LiviAppModule?.setSystemPiPCaptureFrameReady?.(true);
           } else {
             NativeModules.LiviAppModule?.setSystemPiPCaptureFrameReady?.(false);

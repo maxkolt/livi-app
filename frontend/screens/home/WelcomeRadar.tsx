@@ -43,12 +43,12 @@ function computeRingRadii(half: number, avatarR: number): number[] {
   const maxOuter = half * 0.85;
   const step0 = 0.56;
   const step12 = 0.86;
-  /** Чуть меньше — 3-й круг ближе к центру. */
-  const step23 = 1.1;
+  /** 3-й обод чуть ближе к аватару (δ компенсируем в step34*, g/r1/r2/r4 без изменений). */
+  const step23 = 1.04;
   /** База для g (чтобы 1–3 не расползлись). */
-  const step34ForG = 1.22;
+  const step34ForG = 1.28;
   /** Фактический шаг 4-го — чуть ближе к центру. */
-  const step34 = 1.06;
+  const step34 = 1.12;
   const total = step0 + step12 + step23 + step34ForG;
   const g = Math.max(half * 0.078, (maxOuter - avatarOuter) / total);
   const r1 = avatarOuter + g * step0;

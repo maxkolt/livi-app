@@ -1,6 +1,6 @@
 // src/pip/PiPOverlay.tsx
 // In-app: горизонтальная плашка с превью и кнопками (без возврата в звонок по тапу на превью).
-import React, { useContext, useRef, useCallback, useMemo, useState, useEffect } from 'react';
+import React, { useContext, useRef, useCallback, useMemo, useState, useEffect, useSyncExternalStore } from 'react';
 import {
   AppState,
   DeviceEventEmitter,
@@ -18,6 +18,7 @@ import { MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
 import { RTCView } from '@livekit/react-native-webrtc';
 import { PiPContext } from './PiPContext';
 import { logger } from '../../utils/logger';
+import { HoldPauseIcon } from '../../components/VideoChat/shared/HoldPauseIcon';
 import { useResolvedImageUri } from '../../hooks/useResolvedImageUri';
 import { useAppTheme } from '../../theme/ThemeProvider';
 import { WELCOME_HEADER_TITLE, WELCOME_NAV_ACTIVE_ACCENT } from '../../screens/home/constants';
@@ -37,6 +38,11 @@ import {
   isInAppPiPManualRouteLockActive,
 } from '../../utils/inAppPiPHeadsetConnect';
 import { isSystemPiPActiveOrEnteringSync } from '../../utils/pipMutex';
+import { isExternalCallHoldActive } from '../../utils/externalCallHold';
+import {
+  getPartnerExternalHoldSnapshot,
+  subscribePartnerExternalHoldUi,
+} from '../../utils/partnerExternalHoldUi';
 import { t, loadLang, defaultLang, type Lang } from '../../utils/i18n';
 import { useLang } from '../../store/lang';
 
@@ -48,6 +54,27 @@ const PIP_VIDEO_PREVIEW_H = 140;
 const PIP_ACTION_BTN = 36;
 const PIP_ACTION_OUTER = PIP_ACTION_BTN + 2;
 const PIP_ACTION_GAP = 6;
+/** Как на CallScreenChrome — слабая сеть / hold. */
+const CALL_STATUS_DARK_TITAN = '#5C616A';
+
+/** Три палочки + перечёркивание — тот же глиф, что на полном экране звонка. */
+function PipWeakSignalGlyph({ color = CALL_STATUS_DARK_TITAN }: { color?: string }) {
+  return (
+    <View style={styles.weakSignalGlyph} accessibilityElementsHidden>
+      <View style={[styles.weakBar, styles.weakBar1, { backgroundColor: color }]} />
+      <View style={[styles.weakBar, styles.weakBar2, { backgroundColor: color }]} />
+      <View style={[styles.weakBar, styles.weakBar3, { backgroundColor: color }]} />
+      <View style={[styles.weakSignalSlash, { backgroundColor: color }]} />
+    </View>
+  );
+}
+
+function PipCallStatusIcon({ hold }: { hold: boolean }) {
+  if (hold) {
+    return <HoldPauseIcon size={22} color="rgba(255,255,255,0.95)" />;
+  }
+  return <PipWeakSignalGlyph color="rgba(255,255,255,0.92)" />;
+}
 const PIP_BAR_H_PAD = 6;
 const PIP_AVATAR_ACTION_GAP = 12;
 const PIP_ICON_SIZE = 19;
@@ -119,12 +146,19 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
   const partnerName = ctx?.partnerName ?? '';
   const isMuted = ctx?.isMuted ?? false;
   const remoteStream = ctx?.remoteStream ?? null;
+  const localStream = ctx?.localStream ?? null;
   const remoteCamOn = ctx?.remoteCamOn !== false;
   const allowVideoRender = ctx?.allowVideoRender === true;
   const remoteStreamVersion = ctx?.remoteStreamVersion ?? 0;
   const pipRemoteViewKey = ctx?.pipRemoteViewKey ?? 0;
   const [localMicMuted, setLocalMicMuted] = useState(isMuted);
   const [lang, setLang] = useState<Lang>(defaultLang);
+  const [callStatusTick, setCallStatusTick] = useState(0);
+  const partnerExternalHold = useSyncExternalStore(
+    subscribePartnerExternalHoldUi,
+    getPartnerExternalHoldSnapshot,
+    getPartnerExternalHoldSnapshot,
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -135,6 +169,33 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
       cancelled = true;
     };
   }, [visible]);
+
+  // Hold / слабая сеть: те же источники, что на полном экране (session + external hold).
+  useEffect(() => {
+    if (!visible) return;
+    const bump = () => setCallStatusTick((n) => n + 1);
+    bump();
+    const interval = setInterval(bump, 900);
+    return () => clearInterval(interval);
+  }, [visible]);
+
+  const localExternalHold = visible && isExternalCallHoldActive();
+  const onHoldUi = !!(partnerExternalHold || localExternalHold);
+  const connectionDegradedUi = useMemo(() => {
+    if (!visible || onHoldUi) return false;
+    try {
+      const s = (global as any).__webrtcSessionRef?.current;
+      if (!s || s.isEnded?.()) return false;
+      if (typeof s.isPeerReconnecting === 'function' && s.isPeerReconnecting()) return true;
+      if (typeof s.isLiveKitReconnecting === 'function' && s.isLiveKitReconnecting()) return true;
+      const roomState =
+        typeof s.getLiveKitRoomState === 'function' ? s.getLiveKitRoomState() : undefined;
+      if (roomState === 'reconnecting') return true;
+    } catch {}
+    return false;
+    // callStatusTick: poll session flags while PiP visible
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible, onHoldUi, callStatusTick]);
 
   // Headset auto-switch: events first; редкий backup poll (ICM иногда молчит на BT).
   useEffect(() => {
@@ -216,17 +277,28 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
   const pipFromAudioOnly = pipInAppBarEnteredFromAudioOnly();
   const localCamOn = ctx?.localCamOn === true;
   const peerHasLiveVideo = remoteCamOn && mediaStreamHasLiveVideo(remoteStream);
-  /** Video UI → слот превью; audio UI → слот только когда peer уже шлёт live video (mid-PiP cam on). */
-  const showPeerVideoPreviewSlot = !pipFromAudioOnly || peerHasLiveVideo;
+  const localHasLiveVideo = localCamOn && mediaStreamHasLiveVideo(localStream);
+  /** Превью только при live video (peer или local). Cam off у обоих → audio-бар без тёмного/лого слота.
+   *  pipFromAudioOnly не трогаем: возврат из PiP по-прежнему на video UI, если ушли с видео. */
+  const showPeerVideoPreviewSlot = peerHasLiveVideo || localHasLiveVideo;
   const remoteStreamUrl =
     remoteStream && typeof (remoteStream as any).toURL === 'function'
       ? String((remoteStream as any).toURL())
+      : '';
+  const localStreamUrl =
+    localStream && typeof (localStream as any).toURL === 'function'
+      ? String((localStream as any).toURL())
       : '';
   const showPeerLiveVideo =
     showPeerVideoPreviewSlot &&
     allowVideoRender &&
     peerHasLiveVideo &&
     !!remoteStreamUrl;
+  const showLocalLiveVideo =
+    showPeerVideoPreviewSlot &&
+    allowVideoRender &&
+    localHasLiveVideo &&
+    !!localStreamUrl;
   /**
    * Ушли с видео-экрана в in-app PiP — подсветить «вернуться» только если реально есть video
    * (своя cam или live peer). Иначе video shell с cam off выглядел как «видео вкл»,
@@ -410,9 +482,35 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
                   mirror={false}
                   zOrder={0}
                 />
+              ) : showLocalLiveVideo ? (
+                <RTCView
+                  key={`pip-local-main-${remoteStreamVersion}`}
+                  streamURL={localStreamUrl}
+                  style={styles.pipVideoRtc}
+                  objectFit="cover"
+                  mirror={true}
+                  zOrder={0}
+                />
               ) : (
                 <AwayPlaceholder logoSize={44} />
               )}
+              {showPeerLiveVideo && showLocalLiveVideo ? (
+                <View style={styles.pipLocalInset} pointerEvents="none" collapsable={false}>
+                  <RTCView
+                    key={`pip-local-inset-${remoteStreamVersion}`}
+                    streamURL={localStreamUrl}
+                    style={styles.pipLocalInsetRtc}
+                    objectFit="cover"
+                    mirror={true}
+                    zOrder={1}
+                  />
+                </View>
+              ) : null}
+              {onHoldUi || connectionDegradedUi ? (
+                <View style={styles.pipStatusBadge} pointerEvents="none">
+                  <PipCallStatusIcon hold={onHoldUi} />
+                </View>
+              ) : null}
             </View>
           ) : null}
           <View
@@ -456,6 +554,11 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
                   compact
                   avatarSize={PIP_PREVIEW_SIZE}
                 />
+                {onHoldUi || connectionDegradedUi ? (
+                  <View style={styles.pipAvatarStatusOverlay} pointerEvents="none">
+                    <PipCallStatusIcon hold={onHoldUi} />
+                  </View>
+                ) : null}
               </View>
 
               <View style={[styles.pipActionsRow, { gap: PIP_ACTION_GAP }]} pointerEvents="box-none">
@@ -674,6 +777,68 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     backgroundColor: '#000',
   },
+  pipLocalInset: {
+    position: 'absolute',
+    right: 6,
+    bottom: 6,
+    width: 44,
+    height: 66,
+    borderRadius: 8,
+    overflow: 'hidden',
+    backgroundColor: '#000',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.22)',
+    zIndex: 2,
+  },
+  pipLocalInsetRtc: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#000',
+  },
+  pipStatusBadge: {
+    position: 'absolute',
+    left: 8,
+    top: 8,
+    zIndex: 4,
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(8,10,14,0.58)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.14)',
+  },
+  pipAvatarStatusOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: PIP_PREVIEW_SIZE / 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(8,10,14,0.62)',
+    zIndex: 3,
+  },
+  weakSignalGlyph: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    height: 14,
+    paddingRight: 1,
+  },
+  weakBar: {
+    width: 3,
+    borderRadius: 1,
+    marginRight: 2,
+  },
+  weakBar1: { height: 4 },
+  weakBar2: { height: 8 },
+  weakBar3: { height: 12, marginRight: 0 },
+  weakSignalSlash: {
+    position: 'absolute',
+    left: -1,
+    top: 6,
+    width: 16,
+    height: 2,
+    borderRadius: 1,
+    transform: [{ rotate: '-45deg' }],
+  },
   pipBar: {
     overflow: 'hidden',
   },
@@ -695,9 +860,11 @@ const styles = StyleSheet.create({
   pipAvatarSlot: {
     width: PIP_PREVIEW_SIZE,
     height: PIP_PREVIEW_SIZE,
+    borderRadius: PIP_PREVIEW_SIZE / 2,
     justifyContent: 'center',
     alignItems: 'center',
     overflow: 'hidden',
+    position: 'relative',
   },
   pipAvatarClip: {
     overflow: 'hidden',

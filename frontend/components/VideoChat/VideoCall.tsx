@@ -32,6 +32,7 @@ import { CallScreenChrome, type CallMoreMenuItem } from './shared/CallScreenChro
 import { LocalVideo } from './shared/LocalVideo';
 import { RemoteVideo } from './shared/RemoteVideo';
 import { HiddenRemoteAudioSink } from './shared/HiddenRemoteAudioSink';
+import PartnerCallStatusOverlay from '../PartnerCallStatusOverlay';
 import { partnerRemoteRtcLikelyVisible, streamHasLiveRemoteAudio } from './shared/callTimerUtils';
 import { t, loadLang, defaultLang } from '../../utils/i18n';
 import type { Lang } from '../../utils/i18n';
@@ -49,7 +50,7 @@ import { logger } from '../../utils/logger';
 import { markCallPerf, callPerfSpan, beginCallPerfTrace } from '../../utils/callPerfTrace';
 import { isExternalCallHoldActive } from '../../utils/externalCallHold';
 import { wasEarlyDirectCallBootstrap } from '../../utils/earlyDirectCallSession';
-import { peekCallAvatar, primeCallAvatarsFromFriends } from '../../utils/callAvatarPrime';
+import { peekCallAvatar, peekCallNick, primeCallAvatarsFromFriends } from '../../utils/callAvatarPrime';
 import {
   getPartnerExternalHoldSnapshot,
   subscribePartnerExternalHoldUi,
@@ -623,6 +624,9 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       g.__expandToVideoCallUiFromPiPRef.current = false;
     } catch {}
   }, [audioFirstOnMount, preferVideoUiOnMount]);
+
+  // Крышку «Соединение» снимает только SafeArea onLayout (ниже): mount в background
+  // до bringMain раньше давал clear → мелькание Home после нативных экранов.
   const userRouteRef = useRef<InCallAudioRoute>(readActiveExternalCallAudioRoute() || 'EARPIECE');
   const audioRouteForUiRef = useRef<InCallAudioRoute>(userRouteRef.current);
   const speakerOnRef = useRef(false);
@@ -699,6 +703,9 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     if (isInactiveStateRef.current || isEndingCallRef.current || wasFriendCallEndedRef.current) {
       return;
     }
+    // GSM/WA hold: mute камеры партнёра не должен сбрасывать video UI в audio.
+    if (localExternalHoldRef.current || partnerExternalHoldRef.current) return;
+    if (isExternalCallHoldActive()) return;
     try {
       if ((global as any).__pipInSystemModeRef?.current === true) return;
       if ((global as any).__pipVisibleRef?.current === true) return;
@@ -708,6 +715,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       ((sessionRef.current ||
         (global as any).__webrtcSessionRef?.current) as VideoCallSession | null);
     if (!s || s.isEnded?.()) return;
+    if (s.getLocalExternalHoldActive?.() || s.getPartnerExternalHoldActive?.()) return;
     const localCam = s.getIsCamOn?.() === true;
     const peerCam = s.getRemoteCamEnabled?.() === true;
     if (localCam || peerCam) return;
@@ -929,6 +937,9 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
   const [friendCallAccepted, setFriendCallAccepted] = useState(() => initialLiveCallAccepted);
   const callConnectedAtRef = useRef<number | null>(null);
   const [callElapsedSec, setCallElapsedSec] = useState(0);
+  /** Суммарная пауза таймера на GSM/стороннем hold (чтобы после hold время не прыгало). */
+  const callTimerPausedMsRef = useRef(0);
+  const callTimerHoldSinceRef = useRef<number | null>(null);
   const [liveKitReconnectingUi, setLiveKitReconnectingUi] = useState(false);
   const [peerReconnectingUi, setPeerReconnectingUi] = useState(false);
   const [remoteAudioGapUi, setRemoteAudioGapUi] = useState(false);
@@ -993,6 +1004,8 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     timerCallIdRef.current = nextTimerCallId;
     acceptCallTimeRef.current = 0;
     callConnectedAtRef.current = null;
+    callTimerPausedMsRef.current = 0;
+    callTimerHoldSinceRef.current = null;
     setCallElapsedSec(0);
     getGlobalCallTimerRefs(nextTimerCallId);
   }, [callId, route?.params?.callId]);
@@ -4672,7 +4685,16 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
         setPartnerExternalHold(false);
         return;
       }
-      setPartnerExternalHold(!!hold);
+      const next = !!hold;
+      setPartnerExternalHold(next);
+      if (!next) {
+        // После soft-unmute партнёра: подтянуть remote cam UI и remount.
+        try {
+          const s = sessionRef.current;
+          if (s?.getRemoteCamEnabled?.()) setRemoteCamOn(true);
+        } catch {}
+        setRemoteViewKey((k) => k + 1);
+      }
     };
 
     const handleLocalExternalHoldChanged = ({ hold }: { hold: boolean }) => {
@@ -4681,7 +4703,16 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
         setLocalExternalHold(false);
         return;
       }
-      setLocalExternalHold(!!hold);
+      const next = !!hold;
+      setLocalExternalHold(next);
+      // После hold soft-unmute: remount local RTCView (Android иначе часто остаётся чёрным).
+      if (!next) {
+        setLocalRenderKey((k: number) => k + 1);
+        try {
+          const s = sessionRef.current;
+          if (s?.getIsCamOn?.()) setCamOn(true);
+        } catch {}
+      }
     };
 
     const needsStreamBridge = !createdSessionsRef.current.has(session as any);
@@ -6927,7 +6958,13 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       const fromPiP = String((global as any).__currentCallPiPParamsRef?.current?.partnerName || '').trim();
       if (fromPiP) return fromPiP;
     } catch {}
+    try {
+      const fromOutgoing = String((global as any).__outgoingCallPeerNickRef?.current || '').trim();
+      if (fromOutgoing) return fromOutgoing;
+    } catch {}
     if (partnerUserId) {
+      const primed = peekCallNick(partnerUserId);
+      if (primed) return primed;
       const f = friends.find((fr) => String(fr._id ?? fr.id) === String(partnerUserId));
       const name = (f?.name || f?.nick || '').trim();
       if (name) return name;
@@ -6996,6 +7033,8 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
   useEffect(() => {
     if (wasFriendCallEnded || isEndingCall) {
       callConnectedAtRef.current = null;
+      callTimerPausedMsRef.current = 0;
+      callTimerHoldSinceRef.current = null;
       setCallElapsedSec(0);
       return;
     }
@@ -7015,15 +7054,38 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     if (callConnectedAtRef.current == null) {
       return;
     }
+
+    const onHold = !!(localExternalHoldUi || partnerExternalHoldUi);
+    if (onHold) {
+      if (callTimerHoldSinceRef.current == null) {
+        callTimerHoldSinceRef.current = Date.now();
+      }
+      // Заморозить отображаемое время на hold — интервал не крутим.
+      return;
+    }
+    if (callTimerHoldSinceRef.current != null) {
+      callTimerPausedMsRef.current += Date.now() - callTimerHoldSinceRef.current;
+      callTimerHoldSinceRef.current = null;
+    }
+
     const tick = () => {
       const startedAt = callConnectedAtRef.current;
       if (startedAt == null) return;
-      setCallElapsedSec(Math.floor((Date.now() - startedAt) / 1000));
+      const paused = callTimerPausedMsRef.current;
+      setCallElapsedSec(Math.max(0, Math.floor((Date.now() - startedAt - paused) / 1000)));
     };
     tick();
     const id = setInterval(tick, 1000);
     return () => clearInterval(id);
-  }, [friendCallAccepted, hasActiveCall, wasFriendCallEnded, isEndingCall, remoteAudioLiveForTimer]);
+  }, [
+    friendCallAccepted,
+    hasActiveCall,
+    wasFriendCallEnded,
+    isEndingCall,
+    remoteAudioLiveForTimer,
+    localExternalHoldUi,
+    partnerExternalHoldUi,
+  ]);
 
   const renderCallHiddenAudioSink = useCallback(
     (opts?: { forceSystemPiP?: boolean }) => {
@@ -7109,11 +7171,23 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     (!showCallDuration || liveKitReconnectingUi || peerReconnectingUi || remoteAudioGapUi);
 
   const connectionDegradedUi =
-    liveKitReconnectingUi || peerReconnectingUi || remoteAudioGapUi;
+    !localExternalHoldUi &&
+    !partnerExternalHoldUi &&
+    (liveKitReconnectingUi || peerReconnectingUi || remoteAudioGapUi);
+
+  const callChromeHoldLine = useMemo(() => {
+    if (localExternalHoldUi) return t('externalCallHoldLocal', lang);
+    if (partnerExternalHoldUi) return t('partnerCallOnHold', lang);
+    return null;
+  }, [localExternalHoldUi, partnerExternalHoldUi, lang]);
 
   const callChromeStatusLine = useMemo(() => {
-    if (localExternalHoldUi) return t('externalCallHoldLocal', lang);
-    if (partnerExternalHoldUi) return t('partnerBusyEllipsis', lang);
+    // Слабая сеть и hold — разные статусы. Hold: время заморожено + holdLine ниже.
+    // Слабая сеть: только при реальных провалах связи, никогда вместо hold.
+    if (callChromeHoldLine) {
+      if (showCallDuration) return formatCallDuration(callElapsedSec);
+      return t('audioCallStatus', lang);
+    }
     if (connectionDegradedUi) {
       return t('callWeakConnection', lang);
     }
@@ -7121,8 +7195,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     if (showCallDuration) return formatCallDuration(callElapsedSec);
     return t('audioCallStatus', lang);
   }, [
-    localExternalHoldUi,
-    partnerExternalHoldUi,
+    callChromeHoldLine,
     connectionDegradedUi,
     showAudioConnectingStatus,
     showCallDuration,
@@ -7873,6 +7946,19 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       localCamOn: camOn,
       localStream: localStream ?? null,
     });
+    const remoteLiveForSystemPiP = (() => {
+      try {
+        const t = (sessionRemoteStream as any)?.getVideoTracks?.()?.[0];
+        return !!t && t.readyState === 'live' && t.enabled !== false;
+      } catch {
+        return false;
+      }
+    })();
+    const showSystemPiPRemote =
+      !systemPiPLogoOnly &&
+      !!sessionRemoteStream &&
+      (sessionRemoteCamOn || remoteLiveForSystemPiP);
+    const showSystemPiPLocal = !systemPiPLogoOnly && camOn && !!localStream;
     return (
       <SafeAreaView
         style={[
@@ -7889,7 +7975,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       >
         {renderCallHiddenAudioSink({ forceSystemPiP: true })}
         <View style={styles.systemPiPVideoFill} pointerEvents="none" collapsable={false}>
-          {systemPiPLogoOnly ? null : (
+          {showSystemPiPRemote ? (
             <RemoteVideo
               remoteStream={sessionRemoteStream}
               remoteCamOn={sessionRemoteCamOn}
@@ -7909,7 +7995,35 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
               forceTextureView={true}
               objectFit="cover"
             />
-          )}
+          ) : showSystemPiPLocal ? (
+            <LocalVideo
+              localStream={localStream}
+              camOn={camOn}
+              isFrontCamera={localCamSide === 'front'}
+              isInactiveState={isInactiveState}
+              wasFriendCallEnded={wasFriendCallEnded}
+              started={started}
+              localRenderKey={localRenderKey}
+              lang={lang}
+              localExternalHold={localExternalHoldUi}
+            />
+          ) : null}
+          {showSystemPiPLocal && showSystemPiPRemote ? (
+            <View style={styles.systemPiPLocalInset} collapsable={false}>
+              <LocalVideo
+                localStream={localStream}
+                camOn={camOn}
+                isFrontCamera={localCamSide === 'front'}
+                isInactiveState={isInactiveState}
+                wasFriendCallEnded={wasFriendCallEnded}
+                started={started}
+                localRenderKey={localRenderKey}
+                lang={lang}
+                localExternalHold={localExternalHoldUi}
+                asPipOverlay
+              />
+            </View>
+          ) : null}
         </View>
       </SafeAreaView>
     );
@@ -7950,7 +8064,10 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
             } else {
               markCallPerf('videocall_video_ui_onLayout');
             }
-            (global as any).__notifyIncomingAnswerUiReady?.();
+            (global as any).__notifyIncomingAnswerUiReady?.({
+              source: 'videocall_layout',
+              callId: callId || route?.params?.callId || null,
+            });
           } catch {}
         }}
       >
@@ -8116,12 +8233,34 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
             </TouchableOpacity>
           ) : null}
 
+          {localExternalHoldUi && !showAudioPresentation && !isInactiveState && !wasFriendCallEnded ? (
+            <View style={styles.localHoldStageOverlay} pointerEvents="none">
+              <PartnerCallStatusOverlay lang={lang} mode="busy" />
+            </View>
+          ) : null}
+
+          {/* Audio UI: нет video-сцены — hold по центру stage (не в chrome под таймером). */}
+          {showAudioPresentation &&
+          (localExternalHoldUi || partnerExternalHoldUi) &&
+          !isInactiveState &&
+          !wasFriendCallEnded ? (
+            <View style={styles.localHoldStageOverlay} pointerEvents="none">
+              <PartnerCallStatusOverlay lang={lang} mode="busy" />
+            </View>
+          ) : null}
+
           {showControls ? (
             <CallScreenChrome
               partnerName={partnerDisplayName}
               partnerAvatarUri={partnerAvatarUri}
               statusLine={callChromeStatusLine}
-              statusWeak={connectionDegradedUi}
+              statusWeak={connectionDegradedUi && !callChromeHoldLine}
+              statusMuted={
+                !callChromeHoldLine &&
+                (showAudioConnectingStatus || connectionDegradedUi)
+              }
+              // Hold только на сцене (video Remote/Local или audio overlay выше).
+              holdLine={null}
               onMinimize={minimizeToInAppPiP}
               onToggleCam={() => toggleCam()}
               onToggleMic={toggleMic}
@@ -8133,7 +8272,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
                 } catch (_) {}
                 onAbortCall('end_button');
               }}
-              camOn={camOn}
+              camOn={camOn || (localExternalHoldUi && !!sessionRef.current?.getIsCamOn?.())}
               micOn={micOn}
               moreLabel={t('tabMore', lang)}
               cameraLabel={t('callCamera', lang)}
@@ -8180,13 +8319,26 @@ const styles = StyleSheet.create({
     backgroundColor: '#000',
   },
   systemPiPAudioMatch: {
-    backgroundColor: '#1B1C22',
+    backgroundColor: WELCOME_STAGE_BG,
   },
   systemPiPVideoFill: {
     flex: 1,
     width: '100%',
     height: '100%',
     backgroundColor: 'transparent',
+  },
+  systemPiPLocalInset: {
+    position: 'absolute',
+    right: 6,
+    bottom: 6,
+    width: 48,
+    height: 72,
+    borderRadius: 0,
+    overflow: 'hidden',
+    backgroundColor: '#000',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.18)',
+    zIndex: 4,
   },
   unifiedCallStage: {
     flex: 1,
@@ -8196,6 +8348,10 @@ const styles = StyleSheet.create({
   unifiedRemoteFill: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: 'transparent',
+  },
+  localHoldStageOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 25,
   },
   unifiedLocalPipDrag: {
     position: 'absolute',
@@ -8232,7 +8388,7 @@ const styles = StyleSheet.create({
     zIndex: 28,
   },
   audioCallContainer: {
-    backgroundColor: '#1B1C22',
+    backgroundColor: WELCOME_STAGE_BG,
   },
   audioCallContent: {
     flex: 1,

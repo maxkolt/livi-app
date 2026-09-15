@@ -4,8 +4,10 @@ import { RTCView, MediaStream } from '@livekit/react-native-webrtc';
 import { MaterialIcons } from '@expo/vector-icons';
 import AwayPlaceholder from '../../../components/AwayPlaceholder';
 import PartnerCallStatusOverlay from '../../../components/PartnerCallStatusOverlay';
+import { HoldPauseIcon } from './HoldPauseIcon';
 import { t, type Lang } from '../../../utils/i18n';
 import { logger } from '../../../utils/logger';
+import { setCallVideoHoldBlurForRole } from '../../../utils/callVideoHoldBlur';
 import {
   WELCOME_NAV_ACTIVE_ACCENT,
   WELCOME_NAV_ACTIVE_ICON,
@@ -73,7 +75,10 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
   const isLegacyAndroidSurface = Platform.OS === 'android' && Number(Platform.Version) <= 27;
   // На старых Android используем TextureView, чтобы RN-оверлеи (кнопки) гарантированно рисовались поверх видео.
   // Также принудительно включаем TextureView для системного PiP, чтобы не оставались чёрные Surface-слои поверх лаунчера.
-  const useTextureViewOnAndroid = Platform.OS === 'android' && (isLegacyAndroidSurface || forceTextureView);
+  // Hold blur (RenderEffect) требует TextureView.
+  const useTextureViewOnAndroid =
+    Platform.OS === 'android' &&
+    (isLegacyAndroidSurface || forceTextureView || partnerExternalHold);
   const logRenderState = useCallback(
     (reason: string, extra?: Record<string, unknown>) => {
       // Noisy render-state logs should be DEBUG-level (hidden by default LOG_LEVEL=info).
@@ -104,6 +109,23 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
   useEffect(() => {
     lastGoodStreamRef.current = null;
   }, [remoteStream?.id]);
+
+  // GSM / сторонний звонок: blur TextureView собеседника (Android 12+). Снимаем при выходе из hold.
+  useEffect(() => {
+    if (!partnerExternalHold) {
+      setCallVideoHoldBlurForRole('remote', false);
+      return;
+    }
+    const apply = () => setCallVideoHoldBlurForRole('remote', true);
+    apply();
+    const t1 = setTimeout(apply, 60);
+    const t2 = setTimeout(apply, 220);
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+      setCallVideoHoldBlurForRole('remote', false);
+    };
+  }, [partnerExternalHold]);
 
   const renderLastGoodFrame = useCallback(
     (reason: string, extra?: Record<string, unknown>) => {
@@ -223,11 +245,24 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
     !!(session && typeof session.shouldSuppressRemoteTransientUi === 'function' && session.shouldSuppressRemoteTransientUi());
 
   // Синхронно сбрасываем "последний кадр" при смене stream (переворот камеры), чтобы не рендерить старый stream без трека (чёрный экран).
-  if (streamToUse?.id && lastGoodStreamRef.current && lastGoodStreamRef.current.id !== streamToUse.id) {
+  if (
+    !partnerExternalHold &&
+    streamToUse?.id &&
+    lastGoodStreamRef.current &&
+    lastGoodStreamRef.current.id !== streamToUse.id
+  ) {
     lastGoodStreamRef.current = null;
   }
   // Когда партнер выключил камеру (cam-toggle) — не показывать застывший последний кадр, сбрасываем last good frame.
-  if (started && !wasFriendCallEnded && !isInactiveState && !effectiveRemoteCamOn && !shouldSuppressTransientRemoteUi) {
+  // На GSM hold кадр нужен для blur — не сбрасываем.
+  if (
+    started &&
+    !wasFriendCallEnded &&
+    !isInactiveState &&
+    !effectiveRemoteCamOn &&
+    !shouldSuppressTransientRemoteUi &&
+    !partnerExternalHold
+  ) {
     lastGoodStreamRef.current = null;
     lastGoodAtRef.current = 0;
   }
@@ -381,7 +416,57 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
   }
 
   if (partnerExternalHold && started && !wasFriendCallEnded) {
-    logRenderState('partner-external-hold', { streamId: streamToUse?.id });
+    // Партнёр на hold: застывший кадр + RenderEffect blur (не «Отошёл» / не «Занято»).
+    const holdStream = lastGoodStreamRef.current || streamToUse;
+    logRenderState('partner-external-hold', {
+      streamId: holdStream?.id ?? streamToUse?.id,
+      hasHeldFrame: !!holdStream,
+    });
+    if (holdStream) {
+      const streamURL = holdStream.toURL?.();
+      // Стабильный key как last-good — меньше шансов сбросить кадр при входе в hold.
+      const rtcViewKey = `remote-lastgood-${holdStream.id}`;
+      const rtcViewProps =
+        Platform.OS === 'android'
+          ? {
+              stream: holdStream,
+              streamURL,
+              renderToHardwareTextureAndroid: !isLegacyAndroidSurface,
+              zOrderMediaOverlay: false,
+              useTextureView: true,
+            }
+          : { streamURL: streamURL! };
+      return (
+        <View collapsable={false} style={styles.videoContainer}>
+          {Platform.OS === 'ios' && (!streamURL || streamURL.length === 0) ? (
+            <View style={[styles.rtc, { backgroundColor: 'black' }]} />
+          ) : (
+            <RTCView
+              key={rtcViewKey}
+              {...(rtcViewProps as any)}
+              style={styles.rtc}
+              objectFit={objectFitProp}
+              mirror={remoteCamSide === 'front'}
+              zOrder={0}
+            />
+          )}
+          <View style={styles.holdOverlay} pointerEvents="none">
+            <View style={styles.holdRow}>
+              <View style={styles.holdIcon}>
+                <HoldPauseIcon size={20} />
+              </View>
+              <Text style={styles.holdLabel}>{L('partnerCallOnHold')}</Text>
+            </View>
+          </View>
+          {showFriendBadge && (
+            <View style={styles.friendBadge}>
+              <MaterialIcons name="check-circle" size={16} color={WELCOME_NAV_ACTIVE_ICON} />
+              <Text style={styles.friendBadgeText}>{L('friend')}</Text>
+            </View>
+          )}
+        </View>
+      );
+    }
     return (
       <View style={styles.videoContainer}>
         <PartnerCallStatusOverlay lang={lang} mode="busy" />
@@ -583,12 +668,14 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
   if (canRenderVideo) {
     // Партнер выключил камеру (трек disabled) — RTCView покажет застывший кадр; показываем заглушку.
     // System PiP: не мигать лого, пока remoteCamOn ещё true (renegotiation).
+    // Hold: не сбрасывать last-good и не уходить в «Отошёл».
     if (
       hasVideoTrack &&
       !videoTrackEnabled &&
       started &&
       !wasFriendCallEnded &&
       !isInactiveState &&
+      !partnerExternalHold &&
       !(forceTextureView && effectiveRemoteCamOn)
     ) {
       stallSinceRef.current = null;
@@ -608,8 +695,10 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
     }
     // We are able to render (or intentionally render during PiP recovery) -> reset stall + remember last good
     stallSinceRef.current = null;
-    lastGoodStreamRef.current = streamToUse;
-    lastGoodAtRef.current = Date.now();
+    if (!partnerExternalHold || !lastGoodStreamRef.current) {
+      lastGoodStreamRef.current = streamToUse;
+      lastGoodAtRef.current = Date.now();
+    }
 
     // КРИТИЧНО: На Android используем prop `stream` напрямую вместо `streamURL`
     // Это более надежный способ для @livekit/react-native-webrtc на Android, но дублируем streamURL как fallback
@@ -937,6 +1026,29 @@ const styles = StyleSheet.create({
     width: '100%',
     height: '100%',
     backgroundColor: 'black',
+  },
+  holdOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'flex-start',
+    alignItems: 'center',
+    paddingTop: '38%',
+    zIndex: 6,
+  },
+  holdRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 20,
+  },
+  holdIcon: {
+    marginRight: 6,
+  },
+  holdLabel: {
+    color: 'rgba(255,255,255,0.92)',
+    fontSize: 14,
+    fontWeight: '500',
+    letterSpacing: 0.2,
+    textAlign: 'center',
   },
   friendBadge: {
     position: 'absolute',

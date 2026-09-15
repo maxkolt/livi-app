@@ -369,7 +369,7 @@ export function bringMainActivityToFrontForIncomingAnswer(): void {
   } catch {}
 }
 
-/** Снять нативную крышку accept (#1B1C22) после отрисовки VideoCall. */
+/** Снять нативную крышку accept (#0A0C14) после отрисовки VideoCall. */
 export function clearIncomingAnswerNativeCover(): void {
   if (Platform.OS !== 'android') return;
   try {

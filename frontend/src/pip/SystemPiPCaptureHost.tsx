@@ -7,8 +7,9 @@ import { mediaStreamHasLiveVideo } from './pipPlaceholderOnly';
 
 /**
  * Product:
- * - peer cam ON / live remote → RTC (TextureView)
- * - иначе тихий fill; LiVi logo в system PiP — только native backdrop (без spinning AwayPlaceholder)
+ * - peer cam ON / live remote → RTC full (TextureView) + local inset if local cam on
+ * - local cam ON без peer → local RTC full
+ * - иначе тихий fill; LiVi logo в system PiP — только native backdrop
  */
 export default function SystemPiPCaptureHost() {
   const {
@@ -17,6 +18,8 @@ export default function SystemPiPCaptureHost() {
     pendingSystemPiP,
     remoteStream,
     remoteCamOn,
+    localStream,
+    localCamOn,
     pipRemoteViewKey,
     remoteStreamVersion,
   } = usePiP();
@@ -52,12 +55,19 @@ export default function SystemPiPCaptureHost() {
 
   let sessionRemoteStream: unknown = null;
   let sessionRemoteCamOn: boolean | undefined;
+  let sessionLocalStream: unknown = null;
+  let sessionLocalCamOn: boolean | undefined;
   try {
     const session = (global as any).__webrtcSessionRef?.current;
     sessionRemoteStream =
       typeof session?.getRemoteStream === 'function' ? session.getRemoteStream() : null;
     if (typeof session?.getRemoteCamEnabled === 'function') {
       sessionRemoteCamOn = !!session.getRemoteCamEnabled();
+    }
+    sessionLocalStream =
+      typeof session?.getLocalStream === 'function' ? session.getLocalStream() : null;
+    if (typeof session?.getIsCamOn === 'function') {
+      sessionLocalCamOn = !!session.getIsCamOn();
     }
   } catch (_) {}
 
@@ -67,18 +77,35 @@ export default function SystemPiPCaptureHost() {
     sessionRemoteStream ??
     remoteStream;
 
-  const hasLive = mediaStreamHasLiveVideo(effectiveRemoteStream);
+  const effectiveLocalStream =
+    (mediaStreamHasLiveVideo(sessionLocalStream) ? sessionLocalStream : null) ??
+    (mediaStreamHasLiveVideo(localStream) ? localStream : null) ??
+    sessionLocalStream ??
+    localStream;
+
+  const hasLiveRemote = mediaStreamHasLiveVideo(effectiveRemoteStream);
+  const hasLiveLocal = mediaStreamHasLiveVideo(effectiveLocalStream);
   const peerCamOn =
     remoteCamOn === true ||
     sessionRemoteCamOn === true ||
-    hasLive;
+    hasLiveRemote;
+  const selfCamOn =
+    localCamOn === true ||
+    sessionLocalCamOn === true ||
+    hasLiveLocal;
 
-  // Не блокируем RTC из‑за sticky allowVideoRender=false после logo-enter.
   const remoteStreamUrl =
     effectiveRemoteStream && typeof (effectiveRemoteStream as any).toURL === 'function'
       ? (effectiveRemoteStream as any).toURL()
       : null;
-  const canBindRtc = hasLive && !!effectiveRemoteStream && !!remoteStreamUrl;
+  const localStreamUrl =
+    effectiveLocalStream && typeof (effectiveLocalStream as any).toURL === 'function'
+      ? (effectiveLocalStream as any).toURL()
+      : null;
+
+  const canBindRemote = peerCamOn && !!effectiveRemoteStream && !!remoteStreamUrl && hasLiveRemote;
+  const canBindLocal = selfCamOn && !!effectiveLocalStream && !!localStreamUrl && hasLiveLocal;
+  const canBindRtc = canBindRemote || canBindLocal;
 
   const markFrameReady = useCallback(() => {
     try {
@@ -91,7 +118,15 @@ export default function SystemPiPCaptureHost() {
     markFrameReady();
     const t = setTimeout(markFrameReady, 32);
     return () => clearTimeout(t);
-  }, [active, peerCamOn, canBindRtc, pipRemoteViewKey, remoteStreamVersion, markFrameReady]);
+  }, [
+    active,
+    peerCamOn,
+    selfCamOn,
+    canBindRtc,
+    pipRemoteViewKey,
+    remoteStreamVersion,
+    markFrameReady,
+  ]);
 
   useEffect(() => {
     if (!active || !peerCamOn) return;
@@ -109,12 +144,15 @@ export default function SystemPiPCaptureHost() {
       } catch (_) {}
     };
     arm();
-    // Retry once after TrackPublished lag — without remoteStreamVersion (avoids update-depth loop).
     const t = setTimeout(arm, 500);
     return () => clearTimeout(t);
   }, [active, peerCamOn, effectiveRemoteStream]);
 
   if (!active) return null;
+
+  const mainIsRemote = canBindRemote;
+  const mainIsLocalOnly = !canBindRemote && canBindLocal;
+  const showLocalInset = canBindRemote && canBindLocal;
 
   return (
     <View
@@ -123,7 +161,7 @@ export default function SystemPiPCaptureHost() {
       collapsable={false}
       onLayout={canBindRtc ? markFrameReady : undefined}
     >
-      {canBindRtc ? (
+      {mainIsRemote ? (
         <RTCView
           key={`sys-pip-remote-${pipRemoteViewKey}-${remoteStreamVersion}-${(effectiveRemoteStream as any)?.id || 's'}`}
           {...({
@@ -138,6 +176,40 @@ export default function SystemPiPCaptureHost() {
           mirror={false}
           zOrder={0}
         />
+      ) : null}
+      {mainIsLocalOnly ? (
+        <RTCView
+          key={`sys-pip-local-main-${(effectiveLocalStream as any)?.id || 'l'}`}
+          {...({
+            stream: effectiveLocalStream,
+            streamURL: localStreamUrl,
+            useTextureView: true,
+            renderToHardwareTextureAndroid: true,
+            zOrderMediaOverlay: false,
+          } as any)}
+          style={styles.video}
+          objectFit="cover"
+          mirror={true}
+          zOrder={0}
+        />
+      ) : null}
+      {showLocalInset ? (
+        <View style={styles.localInset} collapsable={false}>
+          <RTCView
+            key={`sys-pip-local-inset-${(effectiveLocalStream as any)?.id || 'l'}`}
+            {...({
+              stream: effectiveLocalStream,
+              streamURL: localStreamUrl,
+              useTextureView: true,
+              renderToHardwareTextureAndroid: true,
+              zOrderMediaOverlay: true,
+            } as any)}
+            style={styles.localInsetVideo}
+            objectFit="cover"
+            mirror={true}
+            zOrder={1}
+          />
+        </View>
       ) : null}
     </View>
   );
@@ -159,6 +231,23 @@ const styles = StyleSheet.create({
     backgroundColor: 'transparent',
   },
   video: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#000',
+  },
+  localInset: {
+    position: 'absolute',
+    right: 6,
+    bottom: 6,
+    width: 48,
+    height: 72,
+    borderRadius: 0,
+    overflow: 'hidden',
+    backgroundColor: '#000',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.2)',
+    zIndex: 2,
+  },
+  localInsetVideo: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: '#000',
   },

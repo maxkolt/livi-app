@@ -1,9 +1,10 @@
 /**
- * Синхронный in-memory кэш аватара собеседника по userId — чтобы экран звонка
- * показал аватар на ПЕРВОМ кадре, не дожидаясь сетевого fetchFriends
- * (иначе видна буква-заглушка, а через мгновение аватар — «мерцание»).
+ * Синхронный in-memory кэш аватара/ника собеседника по userId — чтобы экран звонка
+ * показал их на ПЕРВОМ кадре, не дожидаясь сетевого fetchFriends
+ * (иначе видна буква-заглушка / «—», а через мгновение аватар/ник — «мерцание»).
  *
- * Наполняется там, где список друзей и так загружается (home + VideoCall).
+ * Наполняется там, где список друзей и так загружается (home + VideoCall),
+ * и при старте исходящего (ник известен сразу).
  * Дополнительно на Android заранее прогревает data:→file: резолв (resolveDataUriForAndroid),
  * чтобы peekResolvedDataUriCache() дал синхронный хит и не было второго мерцания
  * (буква → аватар) уже на уровне ExpoImage.
@@ -16,6 +17,7 @@ import { buildFriendAvatarUri } from '../screens/home/friendHelpers';
 import { resolveDataUriForAndroid } from './dataUriToFileUri';
 
 const avatarByUserId = new Map<string, string>();
+const nickByUserId = new Map<string, string>();
 
 function warmAndroidResolve(uri: string): void {
   if (Platform.OS !== 'android') return;
@@ -35,6 +37,16 @@ export function primeCallAvatar(userId: unknown, uri: unknown): void {
   } catch {}
 }
 
+/** Прямая запись userId → ник (для первого кадра CallScreenChrome). */
+export function primeCallNick(userId: unknown, nick: unknown): void {
+  try {
+    const id = String(userId ?? '').trim();
+    const value = typeof nick === 'string' ? nick.trim() : '';
+    if (!id || !value) return;
+    nickByUserId.set(id, value);
+  } catch {}
+}
+
 /** Прайм из «сырого» объекта друга (fetchFriends) или Friend. */
 export function primeCallAvatarFromFriend(partner: any): void {
   try {
@@ -43,6 +55,8 @@ export function primeCallAvatarFromFriend(partner: any): void {
     if (!id) return;
     const uri = buildFriendAvatarUri(partner);
     if (uri) primeCallAvatar(id, uri);
+    const nick = String(partner.name || partner.nick || '').trim();
+    if (nick) primeCallNick(id, nick);
   } catch {}
 }
 
@@ -60,6 +74,17 @@ export function peekCallAvatar(userId: unknown): string | undefined {
     const id = String(userId ?? '').trim();
     if (!id) return undefined;
     return avatarByUserId.get(id);
+  } catch {
+    return undefined;
+  }
+}
+
+/** Синхронный ник — undefined, если ещё не праймили. */
+export function peekCallNick(userId: unknown): string | undefined {
+  try {
+    const id = String(userId ?? '').trim();
+    if (!id) return undefined;
+    return nickByUserId.get(id);
   } catch {
     return undefined;
   }

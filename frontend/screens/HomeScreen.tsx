@@ -58,6 +58,7 @@ import { getInstallId, getInstallSecret, resetInstallId } from '../utils/install
 import { logger } from '../utils/logger';
 import { markCallPerf, callPerfSpan } from '../utils/callPerfTrace';
 import { trimNick } from '../utils/userDisplayName';
+import { primeCallNick } from '../utils/callAvatarPrime';
 import { usePiP } from '../src/pip/PiPContext';
 import { onCallTimeout as onCallTimeoutEvent, onCallIncoming as onCallIncomingEvent, onCallDeclined as onCallDeclinedEvent } from '../sockets/socket';
 import { onRequestCloseIncoming, emitCloseIncoming, onCloseOutgoingCall, onCallCancelledOnHome, onCallEndedOnHome, onCloseHomeModals, onRequestDirectCall, shouldSkipHomeUiSettle, armHomeUiSettleSkip, clearHomeUiSettleSkip, setPendingWelcomeCallsFilter, setPendingWelcomeChatsFilter } from '../utils/globalEvents';
@@ -1336,8 +1337,14 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       (global as any).__outgoingCallPeerNickRef =
         (global as any).__outgoingCallPeerNickRef || { current: null };
       const nick = trimNick(calling.friend?.nick || calling.friend?.name || '');
-      (global as any).__outgoingCallPeerNickRef.current =
-        outgoingLive && nick ? nick : null;
+      // Не обнуляем ник при сбросе outgoing (accept): navigate ещё читает ref.
+      // Иначе первый кадр VideoCall = «—», потом friends → мерцание ника.
+      if (outgoingLive && nick) {
+        (global as any).__outgoingCallPeerNickRef.current = nick;
+        try {
+          primeCallNick(calling.friend?.id, nick);
+        } catch {}
+      }
     } catch {}
     if (Platform.OS === 'android' && outgoingLive && calling.callId) {
       const media = (global as any).__outgoingCallMediaRef?.current;
@@ -1983,6 +1990,11 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         (global as any).__outgoingCallPeerNickRef =
           (global as any).__outgoingCallPeerNickRef || { current: null };
         (global as any).__outgoingCallPeerNickRef.current = friendName || null;
+        if (friendName) {
+          try {
+            primeCallNick(friend.id, friendName);
+          } catch {}
+        }
       } catch {}
       // Outgoing в журнал сразу (silent) — cancel сможет перевести в cancelled без гонки setTimeout(0).
       try {
