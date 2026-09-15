@@ -128,8 +128,12 @@ const MEDIA_RECONNECT_GRACE_MS = 45_000;
 const PEER_RECONNECTING_UI_DEBOUNCE_MS = 250;
 /** Survivor: remote audio track ended/missing after call was live → arm peer UI without SFU wait. */
 const REMOTE_AUDIO_SILENCE_UI_MS = 1_800;
-/** Survivor: inbound RTP packets stalled (airplane: track often stays readyState=live). */
-const REMOTE_AUDIO_PACKET_STALL_MS = 1_600;
+/**
+ * Survivor: inbound RTP stalled (airplane: track often stays readyState=live).
+ * Arm «Слабая сеть» only when audio AND video RTP stay flat this long — audio-only
+ * flat getStats on good Wi‑Fi (PiP / route / BT) must not flash the UI.
+ */
+const REMOTE_MEDIA_PACKET_STALL_MS = 6_000;
 const REMOTE_AUDIO_PACKET_POLL_MS = 700;
 
 export class VideoCallSession extends SimpleEventEmitter {
@@ -242,6 +246,7 @@ export class VideoCallSession extends SimpleEventEmitter {
   private hadLiveRemoteAudioInCall = false;
   private remoteAudioPacketPollTimer: ReturnType<typeof setInterval> | null = null;
   private lastRemoteAudioPacketsReceived: number | null = null;
+  private lastRemoteVideoPacketsReceived: number | null = null;
   private remoteAudioPacketsStalledSince: number | null = null;
   private callLeaseHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private lastLiveKitReconnectingAt = 0;
@@ -1525,6 +1530,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       this.clearPeerReconnectingForExternalHold();
       this.remoteAudioPacketsStalledSince = null;
       this.lastRemoteAudioPacketsReceived = null;
+      this.lastRemoteVideoPacketsReceived = null;
       this.clearRemoteCamOffTimeout();
       // После hold: вернуть remote cam, если трек снова live (TrackUnmuted мог обогнать exit).
       if (
@@ -1642,6 +1648,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     // После hold: baseline audio packets + grace (иначе partner видит «нет сети»).
     this.remoteAudioPacketsStalledSince = null;
     this.lastRemoteAudioPacketsReceived = null;
+    this.lastRemoteVideoPacketsReceived = null;
     this.clearPeerReconnectingForExternalHold();
 
     // Restore even if suspended-флаг не выставился на enter (нет трека / race):
@@ -3067,9 +3074,13 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.clearPeerReconnectingDebounce();
     if (!this.peerReconnecting) return;
     this.peerReconnecting = false;
-    // Fresh baseline after recovery so a brief stall during rejoin doesn't re-arm UI.
     this.remoteAudioPacketsStalledSince = null;
-    this.lastRemoteAudioPacketsReceived = null;
+    // Video-healthy clear: keep RTP baselines. Nulling them re-arms stall every ~4.5s
+    // while audio getStats stays flat (flash «Слабая сеть»).
+    if (reason !== 'remote_video_packets_healthy') {
+      this.lastRemoteAudioPacketsReceived = null;
+      this.lastRemoteVideoPacketsReceived = null;
+    }
     logger.info('[VideoCallSession] Cleared peerReconnecting UI', { reason, callId: this.callId });
     try {
       this.emit('peerRecovered');
@@ -3114,6 +3125,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       this.remoteAudioPacketPollTimer = null;
     }
     this.lastRemoteAudioPacketsReceived = null;
+    this.lastRemoteVideoPacketsReceived = null;
     this.remoteAudioPacketsStalledSince = null;
   }
 
@@ -3125,8 +3137,25 @@ export class VideoCallSession extends SimpleEventEmitter {
     }, REMOTE_AUDIO_PACKET_POLL_MS);
   }
 
-  /** Best-effort inbound-rtp audio packetsReceived from subscriber PC. */
-  private async readInboundRemoteAudioPackets(): Promise<number | null> {
+  /**
+   * PiP enter/exit / return-from-system-PiP briefly freezes subscriber getStats while A/V
+   * still plays — do not arm «Слабая сеть» from packet stall in that window.
+   */
+  private isRemoteAudioStallWatchSuppressed(): boolean {
+    try {
+      const g = global as any;
+      const now = Date.now();
+      if (g.__pipInSystemModeRef?.current === true) return true;
+      if (g.__pendingSystemPiPSyncRef?.current === true) return true;
+      if (now < Number(g.__systemPiPEntryInProgressUntilRef?.current || 0)) return true;
+      if (now < Number(g.__returningFromSystemPiPUntilRef?.current || 0)) return true;
+      if (g.__pipVisibleRef?.current === true) return true;
+    } catch {}
+    return false;
+  }
+
+  /** Best-effort inbound-rtp packetsReceived from subscriber PC. */
+  private async readInboundRemotePackets(kind: 'audio' | 'video'): Promise<number | null> {
     try {
       const room: any = this.room;
       if (!room || room.state !== 'connected') return null;
@@ -3141,8 +3170,8 @@ export class VideoCallSession extends SimpleEventEmitter {
       let found = false;
       report.forEach((r: any) => {
         const isInbound = r?.type === 'inbound-rtp';
-        const isAudio = r?.kind === 'audio' || r?.mediaType === 'audio';
-        if (!isInbound || !isAudio) return;
+        const isKind = r?.kind === kind || r?.mediaType === kind;
+        if (!isInbound || !isKind) return;
         const n = Number(r.packetsReceived);
         if (!Number.isFinite(n)) return;
         found = true;
@@ -3154,13 +3183,69 @@ export class VideoCallSession extends SimpleEventEmitter {
     }
   }
 
+  /** True when we expect inbound video RTP (cam on + subscribed track). */
+  private expectsInboundRemoteVideoRtp(): boolean {
+    if (!this.remoteCamEnabled || this.remotePartnerDeclaredCamOff) return false;
+    if (this.deferRemoteVideoSubscription || this.directCallAudioOnlyConsumerDefer) return false;
+    try {
+      const mt = this.remoteVideoTrack?.mediaStreamTrack as { readyState?: string } | undefined;
+      if (mt && mt.readyState === 'live') return true;
+    } catch {}
+    return !!this.remoteVideoTrack;
+  }
+
+  /**
+   * Sample inbound video RTP. Returns true when counters advanced since last sample.
+   * Used to clear false weak-network UI while A/V still flows.
+   */
+  private async sampleRemoteVideoPacketsGrowing(): Promise<boolean> {
+    const videoPackets = await this.readInboundRemotePackets('video');
+    if (videoPackets == null) return false;
+    const prevVideo = this.lastRemoteVideoPacketsReceived;
+    this.lastRemoteVideoPacketsReceived = videoPackets;
+    return prevVideo != null && videoPackets > prevVideo;
+  }
+
+  /**
+   * Audio getStats can stay flat on good Wi‑Fi while video RTP still advances.
+   * Airplane / real drop: both stall — clear only when video moves again.
+   */
+  private async tryClearPeerReconnectingIfVideoPacketsHealthy(): Promise<boolean> {
+    if (!this.peerReconnecting || this.ended || this.endCallInProgress) return false;
+    if (!this.hasExpectedRemoteParticipantInRoom()) return false;
+    if (!(await this.sampleRemoteVideoPacketsGrowing())) return false;
+    this.clearPeerReconnectingUi('remote_video_packets_healthy');
+    return true;
+  }
+
   private async tickRemoteAudioPacketWatch(): Promise<void> {
     if (this.ended || this.endCallInProgress || this.networkLinkDown) {
       return;
     }
     if (!this.hadLiveRemoteAudioInCall || this.room?.state !== 'connected') return;
-    const packets = await this.readInboundRemoteAudioPackets();
-    if (packets == null) return;
+
+    if (this.isRemoteAudioStallWatchSuppressed()) {
+      // Fresh baseline after PiP so a freeze during transition does not arm / stick.
+      this.remoteAudioPacketsStalledSince = null;
+      this.lastRemoteAudioPacketsReceived = null;
+      this.lastRemoteVideoPacketsReceived = null;
+      if (this.peerReconnecting) {
+        this.tryClearPeerReconnectingAfterMedia('pip_lifecycle_media_check');
+        if (this.peerReconnecting) {
+          await this.tryClearPeerReconnectingIfVideoPacketsHealthy();
+        }
+      }
+      return;
+    }
+
+    const packets = await this.readInboundRemotePackets('audio');
+    if (packets == null) {
+      // Stats missing after remount — don't arm; if already showing weak UI, try video health.
+      if (this.peerReconnecting) {
+        await this.tryClearPeerReconnectingIfVideoPacketsHealthy();
+      }
+      return;
+    }
     const prev = this.lastRemoteAudioPacketsReceived;
     this.lastRemoteAudioPacketsReceived = packets;
     if (prev == null) {
@@ -3175,13 +3260,43 @@ export class VideoCallSession extends SimpleEventEmitter {
       }
       return;
     }
-    if (this.peerReconnecting) return;
+    if (this.peerReconnecting) {
+      // Flat audio counters must not stick UI forever while media clearly flows (video RTP).
+      await this.tryClearPeerReconnectingIfVideoPacketsHealthy();
+      return;
+    }
+
+    // Without expected video RTP, audio-only flat getStats is too noisy on good networks.
+    // Real drops still arm via NetInfo / LiveKit disconnect / call:peerReconnecting / silence.
+    if (!this.expectsInboundRemoteVideoRtp()) {
+      this.remoteAudioPacketsStalledSince = null;
+      return;
+    }
+
+    const videoPackets = await this.readInboundRemotePackets('video');
+    if (videoPackets == null) {
+      this.remoteAudioPacketsStalledSince = null;
+      return;
+    }
+    const prevVideo = this.lastRemoteVideoPacketsReceived;
+    this.lastRemoteVideoPacketsReceived = videoPackets;
+    if (prevVideo == null) {
+      this.remoteAudioPacketsStalledSince = null;
+      return;
+    }
+    // Flat audio but video still advancing → good link, do not flash «Слабая сеть».
+    if (videoPackets > prevVideo) {
+      this.remoteAudioPacketsStalledSince = null;
+      return;
+    }
+
+    // Both audio and video RTP flat — only then treat as real-time weak network.
     const now = Date.now();
     if (this.remoteAudioPacketsStalledSince == null) {
       this.remoteAudioPacketsStalledSince = now;
       return;
     }
-    if (now - this.remoteAudioPacketsStalledSince < REMOTE_AUDIO_PACKET_STALL_MS) return;
+    if (now - this.remoteAudioPacketsStalledSince < REMOTE_MEDIA_PACKET_STALL_MS) return;
     this.armPeerReconnectingUi('remote_audio_packet_stall');
   }
 
@@ -3254,6 +3369,12 @@ export class VideoCallSession extends SimpleEventEmitter {
         return;
       }
     } catch {}
+    // Packet-stall only: PiP churn freezes getStats while media still plays.
+    if (reason === 'remote_audio_packet_stall' && this.isRemoteAudioStallWatchSuppressed()) {
+      this.remoteAudioPacketsStalledSince = null;
+      this.lastRemoteAudioPacketsReceived = null;
+      return;
+    }
     this.clearPeerReconnectingDebounce();
     this.peerReconnectingDebounceTimer = setTimeout(() => {
       this.peerReconnectingDebounceTimer = null;
@@ -3268,6 +3389,11 @@ export class VideoCallSession extends SimpleEventEmitter {
           return;
         }
       } catch {}
+      if (reason === 'remote_audio_packet_stall' && this.isRemoteAudioStallWatchSuppressed()) {
+        this.remoteAudioPacketsStalledSince = null;
+        this.lastRemoteAudioPacketsReceived = null;
+        return;
+      }
       this.peerReconnecting = true;
       logger.warn('[VideoCallSession] Peer reconnecting UI', {
         reason,

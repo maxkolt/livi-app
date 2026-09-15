@@ -19,6 +19,31 @@ type ReadStatusMap = Record<string, "sending" | "delivered" | "read" | "failed" 
 
 type ReplyTo = { id: string; text: string; from?: string; isOwn?: boolean } | null;
 
+/** Удаляет последний графемный символ (эмодзи / ZWJ / skin tone — целиком). */
+function removeLastGrapheme(text: string): string {
+  if (!text) return text;
+  try {
+    const Segmenter = (Intl as any)?.Segmenter;
+    if (typeof Segmenter === 'function') {
+      const seg = new Segmenter(undefined, { granularity: 'grapheme' });
+      const parts = Array.from(seg.segment(text) as Iterable<{ segment: string }>).map(
+        (s) => s.segment,
+      );
+      if (parts.length === 0) return '';
+      parts.pop();
+      return parts.join('');
+    }
+  } catch {
+    // fall through
+  }
+  const chars = Array.from(text);
+  chars.pop();
+  return chars.join('');
+}
+
+/** Зазор между подряд выбранными эмодзи в композере (не слипаются в строке). */
+const COMPOSER_EMOJI_GAP = '  ';
+
 type Options = {
   peerId: string;
   currentUserId: string | null;
@@ -223,11 +248,6 @@ export function useChatComposer({
       }
       return next;
     });
-    try {
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    } catch {
-      Vibration.vibrate(10);
-    }
   }, []);
 
   /** Тап по пустой области списка / скролл — закрыть клавиатуру и панель эмодзи. */
@@ -243,7 +263,8 @@ export function useChatComposer({
       const ch = String(emoji?.emoji || '');
       if (!ch) return;
       setMessageText((prev) => {
-        const next = prev + ch;
+        const needsGap = prev.length > 0 && !/\s$/u.test(prev);
+        const next = prev + (needsGap ? COMPOSER_EMOJI_GAP : '') + ch;
         messageTextRef.current = next;
         return next;
       });
@@ -251,6 +272,18 @@ export function useChatComposer({
     },
     [signalLocalTyping],
   );
+
+  const handleComposerEmojiBackspace = React.useCallback(() => {
+    setMessageText((prev) => {
+      let next = removeLastGrapheme(prev);
+      // Убираем зазор, который вставили перед эмодзи при выборе из панели.
+      if (next.endsWith(COMPOSER_EMOJI_GAP)) {
+        next = next.slice(0, -COMPOSER_EMOJI_GAP.length);
+      }
+      messageTextRef.current = next;
+      return next;
+    });
+  }, []);
 
   const handleComposerStickerSelected = React.useCallback(
     (sticker: BuiltInSticker) => {
@@ -343,6 +376,7 @@ export function useChatComposer({
     toggleEmojiPanel,
     dismissComposerKeyboard,
     handleComposerEmojiSelected,
+    handleComposerEmojiBackspace,
     handleComposerStickerSelected,
   };
 }

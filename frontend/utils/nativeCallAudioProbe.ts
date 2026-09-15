@@ -178,24 +178,19 @@ export async function probeNativeCallAudioRoutes(): Promise<NativeCallAudioProbe
 
 export function mergeNativeProbeIntoGlobal(probe: NativeCallAudioProbe): InCallAudioRoute[] {
   const g = global as any;
-  // Paired в кейсе: держим BLUETOOTH в available для cycle, даже без call-audio active.
-  if (probe.btPairedAvailable === true && !probe.available.includes('BLUETOOTH')) {
-    probe = {
-      ...probe,
-      available: Array.from(new Set([...probe.available, 'BLUETOOTH'])),
-    };
-  }
+  // Paired в кейсе НЕ держим BLUETOOTH в available для cycle — только call-audio / preferred.
   g.__nativeCallAudioRoutesRef = { current: probe };
   const prev: InCallAudioRoute[] = Array.isArray(g.__inCallAvailableAudioRoutesRef?.current)
     ? g.__inCallAvailableAudioRoutesRef.current
     : [];
   const probeHas = new Set(probe.available);
+  const btLiveForCycle =
+    probe.btCallAudioActive === true || probe.preferred === 'BLUETOOTH';
   const merged = Array.from(
     new Set([...probe.available, ...prev]),
   ).filter((r) => {
     if (r === 'BLUETOOTH') {
-      if (probeHas.has('BLUETOOTH') || probe.btPairedAvailable === true) return true;
-      return false;
+      return btLiveForCycle && (probeHas.has('BLUETOOTH') || probe.btCallAudioActive === true);
     }
     if (r === 'WIRED_HEADSET' && !probeHas.has('WIRED_HEADSET')) return false;
     return true;
@@ -316,30 +311,20 @@ export function clearNativeProbeBluetoothRoute(): void {
     const g = global as any;
     const probe = g.__nativeCallAudioRoutesRef?.current as NativeCallAudioProbe | undefined;
     if (probe) {
-      // Paired (в кейсе) оставляем в available для cycle; снимаем только call-audio / preferred.
-      const keepPaired =
-        probe.btPairedAvailable === true || probe.available.includes('BLUETOOTH');
-      const available = keepPaired
-        ? Array.from(new Set([...probe.available.filter((r) => r !== 'BLUETOOTH'), 'BLUETOOTH']))
-        : probe.available.filter((r) => r !== 'BLUETOOTH');
+      // В кейсе paired может остаться — из cycle/available BT убираем всегда.
       g.__nativeCallAudioRoutesRef = {
         current: {
-          available,
+          available: probe.available.filter((r) => r !== 'BLUETOOTH'),
           preferred: probe.preferred === 'BLUETOOTH' ? 'EARPIECE' : probe.preferred,
           btCallAudioActive: false,
-          btPairedAvailable: keepPaired,
+          btPairedAvailable: probe.btPairedAvailable === true,
         },
       };
     }
     const av = g.__inCallAvailableAudioRoutesRef?.current;
     if (Array.isArray(av)) {
-      const keepPaired =
-        (g.__nativeCallAudioRoutesRef?.current as NativeCallAudioProbe | undefined)
-          ?.btPairedAvailable === true;
       g.__inCallAvailableAudioRoutesRef = {
-        current: keepPaired
-          ? Array.from(new Set([...av.filter((r: string) => r !== 'BLUETOOTH'), 'BLUETOOTH']))
-          : av.filter((r: string) => r !== 'BLUETOOTH'),
+        current: av.filter((r: string) => r !== 'BLUETOOTH'),
       };
     }
     const ext = g.__userSelectedExternalCallAudioRouteRef?.current;

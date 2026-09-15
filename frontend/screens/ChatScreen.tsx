@@ -138,7 +138,14 @@ import {
 import { ChatParallaxWallpaper } from './chat/ChatParallaxWallpaper';
 import { ChatMessageEdgeFade } from './chat/ChatMessageEdgeFade';
 import { WelcomeStageBackground, StageGradient } from './home/WelcomeStageBackground';
-import { WELCOME_CARD_BG, WELCOME_CHROME_EDGE_RADIUS, WELCOME_HEADER_TITLE, WELCOME_STAGE_BG } from './home/constants';
+import {
+  WELCOME_CARD_BG,
+  WELCOME_CHROME_EDGE_RADIUS,
+  WELCOME_HEADER_TITLE,
+  WELCOME_NAV_ACTIVE_ACCENT,
+  WELCOME_NAV_ACTIVE_ICON,
+  WELCOME_STAGE_BG,
+} from './home/constants';
 import {
   WelcomeOverlayCard,
   WelcomeOverlayDim,
@@ -1931,6 +1938,7 @@ export default function ChatScreen({ route, navigation }: Props) {
     toggleEmojiPanel,
     dismissComposerKeyboard,
     handleComposerEmojiSelected,
+    handleComposerEmojiBackspace,
     handleComposerStickerSelected,
   } = useChatComposer({
     peerId,
@@ -2671,6 +2679,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                   textColor={LIVI.text}
                   langCode={lang}
                   onEmojiSelected={handleComposerEmojiSelected}
+                  onEmojiBackspace={handleComposerEmojiBackspace}
                   onStickerSelected={handleComposerStickerSelected}
                 />
               ) : null}
@@ -3063,6 +3072,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                   textColor={LIVI.text}
                   langCode={lang}
                   onEmojiSelected={handleComposerEmojiSelected}
+                  onEmojiBackspace={handleComposerEmojiBackspace}
                   onStickerSelected={handleComposerStickerSelected}
                 />
               </ChatChrome>
@@ -3772,7 +3782,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                           <Ionicons
                             name={isSelected ? 'checkmark-circle' : 'ellipse-outline'}
                             size={24}
-                            color={isSelected ? LIVI.accent.bright : (theme.colors.titan as string)}
+                            color={isSelected ? WELCOME_NAV_ACTIVE_ICON : (theme.colors.titan as string)}
                           />
                         </Pressable>
                       );
@@ -3807,12 +3817,12 @@ export default function ChatScreen({ route, navigation }: Props) {
                   paddingVertical: 14,
                   backgroundColor:
                     forwardSelectedFriendIds.size > 0
-                      ? LIVI.accent.forwardSendBg
+                      ? WELCOME_NAV_ACTIVE_ACCENT.solid15
                       : 'transparent',
-                  borderWidth: forwardSelectedFriendIds.size > 0 ? StyleSheet.hairlineWidth : 1,
+                  borderWidth: 1,
                   borderColor:
                     forwardSelectedFriendIds.size > 0
-                      ? LIVI.accent.forwardSendBorder
+                      ? WELCOME_NAV_ACTIVE_ICON
                       : isDark
                         ? 'rgba(255,255,255,0.2)'
                         : 'rgba(0,0,0,0.15)',
@@ -3825,7 +3835,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                   style={{
                     color:
                       forwardSelectedFriendIds.size > 0
-                        ? LIVI.accent.forwardSendText
+                        ? WELCOME_NAV_ACTIVE_ACCENT.softText
                         : LIVI.titan,
                     fontSize: 16,
                     fontWeight: '600',

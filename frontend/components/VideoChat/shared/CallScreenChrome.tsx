@@ -83,6 +83,14 @@ type Props = {
   speakerOn?: boolean;
   onToggleSpeaker?: () => void;
   speakerLabel?: string;
+  /** Иконка маршрута (bluetooth / headset / volume-*). По умолчанию volume-up|mute. */
+  speakerIcon?: React.ComponentProps<typeof MaterialIcons>['name'];
+  /** Акцент кнопки маршрута (BT — тусклый фиолет). */
+  speakerAccent?: {
+    softText: string;
+    solid15: string;
+    solid30: string;
+  };
 };
 
 export function CallScreenChrome({
@@ -111,12 +119,18 @@ export function CallScreenChrome({
   speakerOn = false,
   onToggleSpeaker,
   speakerLabel = '',
+  speakerIcon,
+  speakerAccent,
 }: Props) {
   const [moreOpen, setMoreOpen] = useState(false);
   const [resolvedUri, ready] = useResolvedImageUri(partnerAvatarUri ?? '');
   const letter = displayAvatarLetter(partnerName);
   const locked = controlsLocked;
   const holdText = typeof holdLine === 'string' ? holdLine.trim() : '';
+  const routeAccent = speakerAccent || WELCOME_NAV_ACTIVE_ACCENT;
+  const routeIconName =
+    speakerIcon || (speakerOn ? 'volume-up' : 'volume-mute');
+  const routeIconColor = speakerOn ? routeAccent.softText : WELCOME_HEADER_TITLE;
 
   return (
     <>
@@ -210,11 +224,13 @@ export function CallScreenChrome({
               }}
               disabled={locked}
               active={!!speakerOn}
+              activeBg={routeAccent.solid15}
+              activeBorder={routeAccent.solid30}
             >
               <MaterialIcons
-                name={speakerOn ? 'volume-up' : 'volume-mute'}
+                name={routeIconName}
                 size={24}
-                color={speakerOn ? WELCOME_NAV_ACTIVE_ACCENT.softText : WELCOME_HEADER_TITLE}
+                color={routeIconColor}
               />
             </CapsuleAction>
           ) : null}

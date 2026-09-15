@@ -117,6 +117,13 @@ describe('shouldDefaultToEarpieceAfterHeadsetDisconnectFromState', () => {
   it('storedBuiltinRoute=SPEAKER_PHONE побеждает дефолт earpiece (если ничего не заблокировано)', () => {
     expect(shouldDefaultToEarpieceAfterHeadsetDisconnectFromState(baseState({ storedBuiltinRoute: 'SPEAKER_PHONE' }))).toBe(false);
   });
+  it('audio-only: stored SPEAKER не побеждает — после кейса ухо', () => {
+    expect(
+      shouldDefaultToEarpieceAfterHeadsetDisconnectFromState(
+        baseState({ isAudioOnlyCallUi: true, storedBuiltinRoute: 'SPEAKER_PHONE' })
+      )
+    ).toBe(true);
+  });
   it('true на audio-only экране звонка', () => {
     expect(shouldDefaultToEarpieceAfterHeadsetDisconnectFromState(baseState({ isAudioOnlyCallUi: true }))).toBe(true);
   });
@@ -154,6 +161,14 @@ describe('resolveCallRouteAfterHeadsetDisconnectFromState (главная точ
     expect(resolveCallRouteAfterHeadsetDisconnectFromState(baseState({ storedBuiltinRoute: 'SPEAKER_PHONE' }))).toBe(
       'SPEAKER_PHONE'
     );
+  });
+
+  it('audio-only: после снятия BT всегда ухо, даже если до BT выбирали громкую', () => {
+    expect(
+      resolveCallRouteAfterHeadsetDisconnectFromState(
+        baseState({ isAudioOnlyCallUi: true, storedBuiltinRoute: 'SPEAKER_PHONE' })
+      )
+    ).toBe('EARPIECE');
   });
 
   it('дефолт: обычный audio-звонок без истории и блокировок -> earpiece', () => {

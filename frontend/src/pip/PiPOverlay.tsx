@@ -21,7 +21,7 @@ import { logger } from '../../utils/logger';
 import { HoldPauseIcon } from '../../components/VideoChat/shared/HoldPauseIcon';
 import { useResolvedImageUri } from '../../hooks/useResolvedImageUri';
 import { useAppTheme } from '../../theme/ThemeProvider';
-import { WELCOME_HEADER_TITLE, WELCOME_NAV_ACTIVE_ACCENT } from '../../screens/home/constants';
+import { WELCOME_HEADER_TITLE } from '../../screens/home/constants';
 import AwayPlaceholder from '../../components/AwayPlaceholder';
 import {
   prepareDirectCallAudioReturnFromPiP,
@@ -299,13 +299,6 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
     allowVideoRender &&
     localHasLiveVideo &&
     !!localStreamUrl;
-  /**
-   * Ушли с видео-экрана в in-app PiP — подсветить «вернуться» только если реально есть video
-   * (своя cam или live peer). Иначе video shell с cam off выглядел как «видео вкл»,
-   * хотя у собеседника камера выключена.
-   */
-  const pipVideoReturnHighlight =
-    !pipFromAudioOnly && (localCamOn || peerHasLiveVideo);
   /** Cam-off video shell → иконка трубки (как audio), но возврат всё ещё на video UI. */
   const pipReturnUsesPhoneIcon = pipFromAudioOnly || (!localCamOn && !peerHasLiveVideo);
 
@@ -570,24 +563,18 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
                     : t('returnToVideoCall', lang)
                 }
                 chrome={chrome}
-                active={pipVideoReturnHighlight}
-                activeAccent={WELCOME_NAV_ACTIVE_ACCENT}
               >
                 {pipReturnUsesPhoneIcon ? (
                   <MaterialCommunityIcons
                     name="phone-in-talk"
                     size={PIP_ICON_SIZE}
-                    color={
-                      pipVideoReturnHighlight
-                        ? WELCOME_NAV_ACTIVE_ACCENT.softText
-                        : chrome.icon
-                    }
+                    color={chrome.icon}
                   />
                 ) : (
                   <MaterialIcons
                     name="videocam"
                     size={PIP_ICON_SIZE}
-                    color={pipVideoReturnHighlight ? WELCOME_NAV_ACTIVE_ACCENT.softText : chrome.icon}
+                    color={chrome.icon}
                   />
                 )}
               </PiPActionButton>

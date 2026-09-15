@@ -1533,6 +1533,10 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
           promise.resolve(true)
           return@runOnUiThread
         }
+        if (!speakerOn) {
+          @Suppress("DEPRECATION")
+          am.isSpeakerphoneOn = false
+        }
         var applied = false
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
           try {
@@ -1706,6 +1710,12 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
             bluetoothRouteSettleRunnable = null
             var applied = false
             stopBluetoothScoForBuiltIn(am)
+            // SPEAKER→EAR: сначала гасим speakerphone, потом setCommunicationDevice —
+            // иначе громкая «висит» до конца bridge round-trip.
+            if (route == "EARPIECE") {
+              @Suppress("DEPRECATION")
+              am.isSpeakerphoneOn = false
+            }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
               val device = findCommunicationDeviceForRoute(am, route)
               if (device != null) {

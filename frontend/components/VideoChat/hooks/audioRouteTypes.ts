@@ -18,24 +18,25 @@ export function isExternalHeadsetRoute(
 export type CallAudioRouteCycleContext = 'audio_ui' | 'in_app_pip' | 'video_ui' | 'system_pip';
 
 /**
- * WA-like пункт 3: кнопка только earpiece ↔ speaker.
- * BT/провод подключает OS (plug events), не крутим их в цикле кнопки.
+ * Порядок для UI/иконок и цикла кнопки.
+ * audio_ui / video_ui / in_app_pip: при BT — Bluetooth → ухо → громкая;
+ * без BT — ухо ↔ громкая (на video раньше SPEAKER-only → залипание SPEAKER→SPEAKER).
+ * system_pip: BT (если есть) + громкая, без уха.
  */
 export function nextSpeakerToggleRoute(current: InCallAudioRoute): InCallAudioRoute {
   if (current === 'SPEAKER_PHONE') return 'EARPIECE';
   return 'SPEAKER_PHONE';
 }
 
-/** Порядок для UI/иконок (BT может быть «доступен»), не для цикла кнопки. */
 export function routeOrderForContext(
   context: CallAudioRouteCycleContext,
   available: string[],
 ): InCallAudioRoute[] {
   const hasBt = available.includes('BLUETOOTH');
   const hasWired = available.includes('WIRED_HEADSET');
-  const twoModeVideo = context === 'video_ui' || context === 'system_pip';
 
-  if (twoModeVideo) {
+  // System PiP: ухо не предлагаем (product pin на громкую).
+  if (context === 'system_pip') {
     const order: InCallAudioRoute[] = [];
     if (hasBt) order.push('BLUETOOTH');
     order.push('SPEAKER_PHONE');
@@ -44,6 +45,7 @@ export function routeOrderForContext(
     return order;
   }
 
+  // audio_ui / video_ui / in_app_pip — полный цикл с ухом.
   const order: InCallAudioRoute[] = [];
   if (hasBt) {
     order.push('BLUETOOTH', 'EARPIECE', 'SPEAKER_PHONE');
@@ -62,16 +64,16 @@ export function routeOrderForAvailable(available: string[]): InCallAudioRoute[] 
 
 export function cycleRoutesForContext(
   context: CallAudioRouteCycleContext,
-  _available: string[],
+  available: string[],
 ): InCallAudioRoute[] {
-  // system PiP: только громкая (как product pin). video UI «Ещё»: ухо ↔ громкая.
+  // system PiP: только громкая (как product pin).
   if (context === 'system_pip') {
     return ['SPEAKER_PHONE'];
   }
-  return ['EARPIECE', 'SPEAKER_PHONE'];
+  return routeOrderForContext(context, available);
 }
 
-/** Список маршрутов для кнопки (только built-in). */
+/** Список маршрутов для кнопки. */
 export function cycleRoutesForAvailable(available: string[]): InCallAudioRoute[] {
   return cycleRoutesForContext('audio_ui', available);
 }
@@ -95,7 +97,7 @@ export function sanitizeRoutesForAudioCycle(
 
 export function nextRouteInCycleForContext(
   current: InCallAudioRoute,
-  _available: string[],
+  available: string[],
   context: CallAudioRouteCycleContext,
   _icmDeviceList: string[] = [],
 ): InCallAudioRoute {
@@ -104,9 +106,14 @@ export function nextRouteInCycleForContext(
     if (isExternalHeadsetRoute(current)) return 'SPEAKER_PHONE';
     return 'SPEAKER_PHONE';
   }
-  // Аудио / video UI «Ещё» / in-app PiP: speaker on/off; с BT/провода — в громкую.
-  if (isExternalHeadsetRoute(current)) return 'SPEAKER_PHONE';
-  return nextSpeakerToggleRoute(current);
+  const order = routeOrderForContext(context, available);
+  if (order.length === 0) return nextSpeakerToggleRoute(current);
+  const idx = order.indexOf(current);
+  if (idx < 0) {
+    // Текущий маршрут пропал из available (например BT) — следующий = первый в порядке.
+    return order[0];
+  }
+  return order[(idx + 1) % order.length];
 }
 
 export function nextRouteInCycle(current: InCallAudioRoute, available: string[]): InCallAudioRoute {

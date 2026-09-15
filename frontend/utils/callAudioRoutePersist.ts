@@ -65,6 +65,7 @@ import {
   isBluetoothHeadsetActiveForCall,
   isBluetoothPreferredForAutoRoute,
   isBluetoothAvailableForAutoRoute,
+  isBluetoothPairedAvailable,
 } from './nativeCallAudioProbe';
 import {
   isCallAudioPiPTransitionWindow,
@@ -606,6 +607,8 @@ export function isInAppPiPContextIncludingSuspended(): boolean {
 
 function shouldKeepExternalRouteDespiteMissingFromList(route: InCallAudioRoute): boolean {
   if (!isExternalHeadsetRoute(route)) return false;
+  // Paired BT без SCO ещё — accept должен дожать setCommunicationDevice, не сбрасывать в EAR.
+  if (route === 'BLUETOOTH' && isBluetoothPairedAvailable()) return true;
   if (route === 'BLUETOOTH' && !isBluetoothHeadsetActiveForCall()) return false;
   try {
     const list = readAvailableAudioDeviceList();
@@ -639,6 +642,10 @@ function coercePersistedRouteForAvailableDevices(route: InCallAudioRoute): InCal
     const list = readAvailableAudioDeviceList();
     const bluetoothInactive =
       route === 'BLUETOOTH' && !isBluetoothHeadsetActiveForCall();
+    // Accept: paired без call-audio active — не откатывать в EAR (иначе SCO не стартует).
+    if (route === 'BLUETOOTH' && bluetoothInactive && isBluetoothPairedAvailable()) {
+      return route;
+    }
     if (!list.length) {
       if (bluetoothInactive) {
         const locked = readUserLockedBuiltinCallAudioRoute();
@@ -914,11 +921,8 @@ export function resolveFullVideoCallScreenAudioRoute(): InCallAudioRoute {
   const ext =
     readUserSelectedExternalCallAudioRoute() ||
     readActiveExternalCallAudioRoute(readInAppPiPAudioOutputRoute());
-  if (isExternalHeadsetRoute(ext)) {
-    return ext;
-  }
-
-  // Только смотрим peer video (своя камера off): не форсить громкую — оставить маршрут audio-страницы.
+  // Только смотрим peer video (своя камера off): не форсить громкую / paired BT —
+  // оставить маршрут audio-страницы (в т.ч. ручное ухо при надетых buds).
   let localCamOn = false;
   try {
     const session = (global as any).__webrtcSessionRef?.current as
@@ -945,11 +949,22 @@ export function resolveFullVideoCallScreenAudioRoute(): InCallAudioRoute {
     if (userSel === 'EARPIECE' || userSel === 'SPEAKER_PHONE') {
       return userSel;
     }
+    // BT только если пользователь реально на headset, не paired idle.
+    if (isExternalHeadsetRoute(ext) && isBluetoothHeadsetActiveForCall()) {
+      return ext;
+    }
     const last = readLastAppliedCallAudioRoute();
     if (last === 'EARPIECE' || last === 'SPEAKER_PHONE') {
       return last;
     }
+    if (isExternalHeadsetRoute(last)) {
+      return last;
+    }
     return 'EARPIECE';
+  }
+
+  if (isExternalHeadsetRoute(ext)) {
+    return ext;
   }
 
   return 'SPEAKER_PHONE';
@@ -1328,6 +1343,19 @@ function isHeavyInCallRestartBlockedForReason(reason: string): boolean {
   return true;
 }
 
+function shouldHoldBluetoothScoAgainstBuiltInOutput(): boolean {
+  try {
+    const userSel = readUserSelectedCallAudioRoute();
+    if (userSel === 'EARPIECE' || userSel === 'SPEAKER_PHONE') return false;
+    if (Date.now() < Number((global as any).__btWearStickyUntilRef?.current || 0)) return true;
+    if (Date.now() < Number((global as any).__btExpectReconnectUntilRef?.current || 0)) return true;
+    if (readUserSelectedExternalCallAudioRoute() === 'BLUETOOTH') return true;
+    return userSel === 'BLUETOOTH';
+  } catch {
+    return false;
+  }
+}
+
 async function applyNativeOutputRouteImmediate(
   route: InCallAudioRoute,
   media: 'audio' | 'video',
@@ -1348,13 +1376,25 @@ async function applyNativeOutputRouteImmediate(
     return want != null && want !== target;
   };
 
-  if (route === 'EARPIECE') {
-    if (isStaleBuiltInApply('EARPIECE')) return;
-    const lock = readCallAudioRouteUiLock();
-    const userSel = readUserSelectedCallAudioRoute();
-    if (lock === 'SPEAKER_PHONE' || userSel === 'SPEAKER_PHONE') {
-      return;
-    }
+  // Accept/wear BT: не слать EAR/SPEAKER в InCallManager — иначе рвётся SCO и звук «не сразу».
+  if (
+    (route === 'EARPIECE' || route === 'SPEAKER_PHONE') &&
+    shouldHoldBluetoothScoAgainstBuiltInOutput()
+  ) {
+    try {
+      const nativeP = applyNativeVoiceCallRoute('BLUETOOTH');
+      try {
+        (InCallManager as any).setForceSpeakerphoneOn?.(false);
+        InCallManager.setSpeakerphoneOn(false);
+        void (InCallManager as any).chooseAudioRoute?.('BLUETOOTH');
+      } catch {}
+      await nativeP;
+    } catch {}
+    return;
+  }
+
+  if (route === 'EARPIECE' && isStaleBuiltInApply('EARPIECE')) {
+    return;
   }
   if (isExternalHeadsetRoute(route)) {
     try {
@@ -1382,7 +1422,7 @@ async function applyNativeOutputRouteImmediate(
   }
   if (route === 'EARPIECE') {
     if (isStaleBuiltInApply('EARPIECE')) return;
-    void applyNativeVoiceCallSpeaker(false, { forceBuiltIn });
+    void applyNativeVoiceCallRoute('EARPIECE');
     try {
       (InCallManager as any).setForceSpeakerphoneOn?.(false);
       InCallManager.setSpeakerphoneOn(false);
@@ -1495,11 +1535,21 @@ async function nativeOutputDiffersFromTarget(target: InCallAudioRoute): Promise<
     mergeNativeProbeIntoGlobal(probe);
     const preferred = probe.preferred;
     if (isExternalHeadsetRoute(target)) {
-      if (target === 'BLUETOOTH' && !isBluetoothHeadsetActiveForCall()) return false;
+      if (
+        target === 'BLUETOOTH' &&
+        !isBluetoothHeadsetActiveForCall() &&
+        !isBluetoothPairedAvailable()
+      ) {
+        return false;
+      }
       if (preferred === target) return false;
       if (probe.available.includes(target)) {
         if (target === 'BLUETOOTH' && isBluetoothHeadsetActiveForCall()) {
           return false;
+        }
+        // Paired accept: preferred ещё EAR — считаем mismatch, чтобы дожать SCO.
+        if (target === 'BLUETOOTH' && isBluetoothPairedAvailable() && preferred !== 'BLUETOOTH') {
+          return true;
         }
         return preferred != null && preferred !== target;
       }
@@ -1918,6 +1968,12 @@ export function resolveDirectCallAcceptAudioReapplyRoute(): InCallAudioRoute {
   if (connected && isExternalHeadsetRoute(connected)) {
     return coercePersistedRouteForAvailableDevices(connected);
   }
+  // Наушники уже paired/HFP до accept: SCO ещё не up — всё равно целимся в BT.
+  try {
+    if (isBluetoothPairedAvailable()) {
+      return 'BLUETOOTH';
+    }
+  } catch {}
   return 'EARPIECE';
 }
 
@@ -2668,9 +2724,13 @@ export async function reapplyPersistedCallAudioRoute(
             readActiveExternalCallAudioRoute();
           if (
             isExternalHeadsetRoute(liveExt) &&
-            (liveExt !== 'BLUETOOTH' || isBluetoothHeadsetActiveForCall())
+            (liveExt !== 'BLUETOOTH' ||
+              isBluetoothHeadsetActiveForCall() ||
+              isBluetoothPairedAvailable())
           ) {
             route = liveExt;
+          } else if (isBluetoothPairedAvailable()) {
+            route = 'BLUETOOTH';
           }
         }
         route = coerceDirectAudioAcceptBuiltinRoute(route);

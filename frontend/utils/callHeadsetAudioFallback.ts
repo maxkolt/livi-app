@@ -230,8 +230,9 @@ export function shouldDefaultToEarpieceAfterHeadsetDisconnectFromState(state: He
   if (isInSystemPiPAudioOnlyContextFromState(state)) return true;
   if (state.lockedRoute === 'SPEAKER_PHONE') return false;
   if (state.lockedRoute === 'EARPIECE') return true;
-  if (state.storedBuiltinRoute === 'SPEAKER_PHONE') return false;
+  // Audio UI: кейс/снятие → ухо, даже если до BT вручную выбирали громкую.
   if (state.isAudioOnlyCallUi) return true;
+  if (state.storedBuiltinRoute === 'SPEAKER_PHONE') return false;
   if (state.pipVisible && state.pipInAppRtcFromAudioOnly) return true;
   if (state.pipVisible) return true;
   if (state.currentRouteName !== 'VideoCall') return true;
@@ -250,6 +251,10 @@ export function resolveCallRouteAfterHeadsetDisconnectFromState(state: HeadsetRo
   }
   if (preferSpeakerAfterHeadsetDisconnectFromState(state)) {
     return 'SPEAKER_PHONE';
+  }
+  // Audio UI: не восстанавливать SPEAKER из cycle перед BT — только ухо.
+  if (state.isAudioOnlyCallUi) {
+    return 'EARPIECE';
   }
   if (state.storedBuiltinRoute === 'EARPIECE' || state.storedBuiltinRoute === 'SPEAKER_PHONE') {
     return state.storedBuiltinRoute;

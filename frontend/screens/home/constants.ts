@@ -3,21 +3,13 @@ import { FRIEND_ACTION_BUTTON, FRIEND_ROW_ACTION_GAP } from '../../constants/uiT
 
 /** Фон welcome-экрана (макет). */
 export const WELCOME_STAGE_BG = '#0A0C14';
-/**
- * Вертикальный градиент сцены — aura «запечена» в непрозрачные stops.
- * Без полупрозрачных wash-слоёв: на Android они дают banding (полосы).
- */
-export const WELCOME_STAGE_GRADIENT = ['#0B141A', '#0A0C14', '#0A1016', '#0A141A'] as const;
 /** Accent gradient (aura) — вместо фиолетового на макете. */
 export const AURA_GRADIENT = ['#14b8a6', '#3b82f6', '#00b5ff'] as const;
 export const AURA_GLOW = '#3b82f6';
 /** Unread / missed count badge on welcome chats and friend action buttons. */
 export const WELCOME_UNREAD_BADGE = '#2158c0';
-/** Надписи welcome / активный tab — в тон aura-рамки CTA. */
-export const WELCOME_AURA_TEXT = AURA_GRADIENT[2];
 export const CROWN_GOLD = '#E4C065';
 export const WELCOME_CARD_BG = '#161B22';
-export const WELCOME_NAV_BG = '#151921';
 /** Скругление «полки» tab bar / шапки и композера чата по краям к контенту. */
 export const WELCOME_CHROME_EDGE_RADIUS = 24;
 export const WELCOME_MUTED_TEXT = '#8B949E';
@@ -57,6 +49,14 @@ export const WELCOME_NAV_ACTIVE_ACCENT = {
   softText: WELCOME_NAV_ACTIVE_ICON,
   solid15: 'rgba(74, 122, 140, 0.15)',
   solid30: 'rgba(74, 122, 140, 0.30)',
+} as const;
+
+/** Активный Bluetooth на кнопке маршрута звонка — приглушённый фиолет (чуть ярче fill/рамка). */
+export const CALL_BLUETOOTH_ACCENT = {
+  solid: '#9B82C4',
+  softText: '#C9B6E8',
+  solid15: 'rgba(155, 130, 196, 0.24)',
+  solid30: 'rgba(155, 130, 196, 0.48)',
 } as const;
 
 /** Обводка «Vi» — teal → blue. */
@@ -122,12 +122,9 @@ export const ANDROID_INSTANT_TOUCH =
     : ({} as const);
 
 export const ANDROID_FRIEND_ACTION_HIT_SLOP = { top: 14, bottom: 14, left: 14, right: 14 };
-export const ANDROID_MENU_HIT_SLOP = { top: 12, bottom: 12, left: 12, right: 12 };
 
 export const MENU_BTN_RADIUS = 12;
 export const MENU_BTN_SIZE = 42;
-/** Высота контролов вкладки «Ещё» (язык и т.п.): pad 14+14 + текст 14/line 20. */
-export const MORE_TAB_CONTROL_HEIGHT = 48;
 export const BRAND_OUTLINE_STROKE = 1.35;
 export const BRAND_FONT_FAMILY = Platform.OS === 'ios' ? 'System' : 'sans-serif-medium';
 export const BRAND_3D_LAYERS = 5;
@@ -145,9 +142,6 @@ export const CHROME_PERIMETER_GLOW_SPREAD = 2.8;
 export const CHROME_PERIMETER_GLOW_LAYOUT_INSET =
   CHROME_PERIMETER_GLOW_LAYERS * CHROME_PERIMETER_GLOW_SPREAD;
 export const ANIMATED_BORDER_WIDTH = StyleSheet.hairlineWidth;
-/** Рамка аватара на вкладке «Профиль» — толще, чем у CTA/меню. */
-export const PROFILE_AVATAR_BORDER_WIDTH = 1;
-export const ANDROID_SEG_RIPPLE = { color: 'rgba(255,255,255,0.14)', borderless: false as const };
 export const FRIENDS_PAGE_SIZE = 50;
 export const FRIENDS_MAX_PAGES_PER_LOAD = 10;
 

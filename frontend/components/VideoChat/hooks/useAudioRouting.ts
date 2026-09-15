@@ -191,6 +191,66 @@ function clearBtAutoSuppress(): void {
   } catch {}
 }
 
+/**
+ * Ручной cycle BT→ухо/громкая рвёт SCO, но buds ещё на ушах — BT оставляем в кнопке.
+ * Сброс только на физический unplug / кейс.
+ */
+function armBtKeepInCycleAfterManualLeave(): void {
+  try {
+    (global as any).__btKeepInCycleAfterManualLeaveRef = { current: true };
+    (global as any).__btRemovedFromCycleByUnplugRef = { current: false };
+  } catch {}
+}
+
+function clearBtKeepInCycleAfterManualLeave(): void {
+  try {
+    (global as any).__btKeepInCycleAfterManualLeaveRef = { current: false };
+  } catch {}
+}
+
+function isBtKeepInCycleAfterManualLeave(): boolean {
+  try {
+    return !!(global as any).__btKeepInCycleAfterManualLeaveRef?.current;
+  } catch {
+    return false;
+  }
+}
+
+function markBtRemovedFromCycleByUnplug(): void {
+  try {
+    (global as any).__btRemovedFromCycleByUnplugRef = { current: true };
+    (global as any).__btKeepInCycleAfterManualLeaveRef = { current: false };
+  } catch {}
+}
+
+function clearBtRemovedFromCycleByUnplug(): void {
+  try {
+    (global as any).__btRemovedFromCycleByUnplugRef = { current: false };
+  } catch {}
+}
+
+function isBtRemovedFromCycleByUnplug(): boolean {
+  try {
+    return !!(global as any).__btRemovedFromCycleByUnplugRef?.current;
+  } catch {
+    return false;
+  }
+}
+
+/** BT в цикле кнопки: live / wear / ручной уход с BT (buds ещё надеты). Не paired-in-case после unplug. */
+function shouldShowBluetoothInCycle(opts?: {
+  userRoute?: string | null;
+  lastApplied?: string | null;
+  wearInFlight?: boolean;
+}): boolean {
+  if (isBtRemovedFromCycleByUnplug()) return false;
+  if (isBluetoothHeadsetActiveForCall()) return true;
+  if (opts?.userRoute === 'BLUETOOTH' || opts?.lastApplied === 'BLUETOOTH') return true;
+  if (opts?.wearInFlight) return true;
+  if (isBtWearStickyActive() || isBtKeepInCycleAfterManualLeave()) return true;
+  return false;
+}
+
 /** После wear: UI hold пока SCO поднимается (не путать с unplug). */
 function armBtWearSticky(ms = 8000): void {
   const until = Date.now() + ms;
@@ -249,12 +309,15 @@ function isBtScoSettleActive(lastBtApplyAt: number, ms = 2500): boolean {
 /** После снятия BT: блокировать sticky reconnect, кроме нового физического connect. */
 function shouldSuppressBluetoothAutoReconnect(reason: string): boolean {
   if (Date.now() >= readBtAutoSuppressUntil()) return false;
-  // Новый connect наушников/колонки — можно.
-  if (/acl_connected|profile_connected|device_added|a2dp_connected|expect|_rising/.test(reason)) {
+  // Только физический connect — не expect_* (иначе кейс → expect → снова BT).
+  if (
+    /acl_connected|profile_connected|device_added|a2dp_connected|_rising/.test(reason) &&
+    !/expect/.test(reason)
+  ) {
     clearBtAutoSuppress();
     return false;
   }
-  // audio_connected / poll после снятия — нет (иначе bounce обратно на BT).
+  // audio_connected / poll / expect после снятия — нет (иначе bounce обратно на BT).
   return true;
 }
 
@@ -481,6 +544,9 @@ export const useAudioRouting = (
   /** После apply BT — игнор ложного audio_disconnected (SCO renegotiation). */
   const lastBluetoothRouteApplyAtRef = useRef(0);
   const btAudioDisconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Кейс: цепочка retry unplug (один check часто рано — SCO ещё sticky). */
+  const btUnplugRetryTimersRef = useRef<Array<ReturnType<typeof setTimeout>>>([]);
+  const btUnplugRetryGenRef = useRef(0);
   /** Poll: UI на BT, но SCO уже нет (снял buds) → unplug. */
   const btInactivePollCountRef = useRef(0);
   /** После accept SCO false хотя бы раз — дальше rising edge = одел. */
@@ -488,6 +554,21 @@ export const useAudioRouting = (
   /** Coalesce wear reconnect — иначе acl+device_added мерцают кнопкой. */
   const btWearReconnectInFlightRef = useRef(false);
   const btWearReconnectQueuedAtRef = useRef(0);
+  const applyBluetoothReconnectRef = useRef<((reason: string) => Promise<void>) | null>(null);
+
+  const clearBtUnplugRetries = () => {
+    for (const t of btUnplugRetryTimersRef.current) {
+      try {
+        clearTimeout(t);
+      } catch {}
+    }
+    btUnplugRetryTimersRef.current = [];
+    if (btAudioDisconnectTimerRef.current) {
+      clearTimeout(btAudioDisconnectTimerRef.current);
+      btAudioDisconnectTimerRef.current = null;
+    }
+    btUnplugRetryGenRef.current += 1;
+  };
 
   const enqueueInCallOp = (op: () => void | Promise<void>) => {
     incallOpChainRef.current = incallOpChainRef.current
@@ -546,10 +627,12 @@ export const useAudioRouting = (
   const getUserRoute = (): InCallAudioRoute => {
     const opts = routingOptionsRef.current;
     // Весь wear/SCO settle: UI = BT (VideoCall может писать userRouteRef=EAR напрямую).
+    // После кейса/unplug — не форсить BT (иначе кнопка и cycle залипают).
     if (
-      isBtWearStickyActive() ||
-      btWearReconnectInFlightRef.current ||
-      isBtScoSettleActive(lastBluetoothRouteApplyAtRef.current, 4000)
+      !isBtRemovedFromCycleByUnplug() &&
+      (isBtWearStickyActive() ||
+        btWearReconnectInFlightRef.current ||
+        isBtScoSettleActive(lastBluetoothRouteApplyAtRef.current, 4000))
     ) {
       return 'BLUETOOTH';
     }
@@ -681,8 +764,10 @@ export const useAudioRouting = (
   ) => {
     const opts = routingOptionsRef.current;
     // Wear sticky / SCO settle: не даём гонкам откатить userRoute/UI на EAR после BT.
+    // После физического unplug/кейса — не блокировать (иначе cycle «зависает» на BT).
     if (
       (route === 'EARPIECE' || route === 'SPEAKER_PHONE') &&
+      !isBtRemovedFromCycleByUnplug() &&
       (isBtWearStickyActive() ||
         btWearReconnectInFlightRef.current ||
         isBtScoSettleActive(lastBluetoothRouteApplyAtRef.current, 4000))
@@ -2028,10 +2113,16 @@ export const useAudioRouting = (
     const applyBluetoothUnplugFallback = async (icmAvailable: string[], reason: string) => {
       btWearReconnectInFlightRef.current = false;
       clearBtWearSticky();
-      // Paired (в кейсе) оставляем в cycle — убираем только call-audio / UI route.
-      const keepPairedInCycle =
-        Platform.OS === 'android' &&
-        (isBluetoothPairedAvailable() || icmAvailable.includes('BLUETOOTH'));
+      clearExpectBtReconnect();
+      clearBtKeepInCycleAfterManualLeave();
+      markBtRemovedFromCycleByUnplug();
+      // Сброс SCO settle — иначе getUserRoute/setUserRoute ещё ~4с форсят BT после кейса.
+      lastBluetoothRouteApplyAtRef.current = 0;
+      try {
+        (global as any).__lastBluetoothRouteApplyAtRef = { current: 0 };
+        (global as any).__btUnplugConfirmPendingRef = { current: false };
+      } catch {}
+      // Снял / в кейс → BT убираем из cycle кнопки (paired не оставляем).
       clearNativeProbeBluetoothRoute();
       setCallBluetoothHeadsetConnectedCache(false);
       // Не давать audio_connected / poll вернуть BT сразу после снятия.
@@ -2039,9 +2130,7 @@ export const useAudioRouting = (
       try {
         (global as any).__userSelectedExternalCallAudioRouteRef = { current: null };
       } catch {}
-      const without = keepPairedInCycle
-        ? Array.from(new Set([...icmAvailable.filter((d) => d !== 'BLUETOOTH'), 'BLUETOOTH']))
-        : icmAvailable.filter((d) => d !== 'BLUETOOTH');
+      const without = icmAvailable.filter((d) => d !== 'BLUETOOTH');
       lastAvailableRef.current = without;
       previousAvailableRef.current = without;
       setAvailableRoutes(without);
@@ -2049,11 +2138,40 @@ export const useAudioRouting = (
         (global as any).__inCallAvailableAudioRoutesRef = { current: without };
       } catch {}
       explicitBuiltInChoiceRef.current = false;
+      // Уже на ухо/громкой (зритель peer-video / ручной cycle) — только убрать BT из cycle,
+      // не прыгать на SPEAKER из‑за video UI preferSpeaker.
+      const prevBuiltin = (() => {
+        const a = normalizeInCallRoute(lastAppliedRouteRef.current || '');
+        if (a === 'EARPIECE' || a === 'SPEAKER_PHONE') return a;
+        const u = normalizeInCallRoute(getUserRoute() || '');
+        if (u === 'EARPIECE' || u === 'SPEAKER_PHONE') return u;
+        return null;
+      })();
+      const leavingHeadset =
+        lastAppliedRouteRef.current === 'BLUETOOTH' ||
+        lastAppliedRouteRef.current === 'WIRED_HEADSET' ||
+        getUserRoute() === 'BLUETOOTH' ||
+        getUserRoute() === 'WIRED_HEADSET';
       let fallback = resolveCallRouteAfterHeadsetDisconnect();
-      if (preferSpeakerAfterHeadsetDisconnect()) {
+      if (!leavingHeadset && prevBuiltin) {
+        fallback = prevBuiltin;
+        if (fallback === 'EARPIECE') {
+          armCallAudioRouteUiLock('EARPIECE');
+        } else {
+          armCallAudioRouteUiLock('SPEAKER_PHONE');
+        }
+      } else if (preferSpeakerAfterHeadsetDisconnect()) {
         fallback = 'SPEAKER_PHONE';
         rememberVideoUiSpeakerAfterHeadsetDisconnect();
         explicitBuiltInChoiceRef.current = true;
+      } else if (
+        !!routingOptionsRef.current?.defaultToEarpiece ||
+        isInAudioOnlyCallUi()
+      ) {
+        // Audio UI: кейс/снятие → всегда ухо (не последняя SPEAKER из ручного cycle).
+        fallback = 'EARPIECE';
+        rememberBuiltinCallRouteBeforeHeadset('EARPIECE', true);
+        armCallAudioRouteUiLock('EARPIECE');
       } else if (fallback === 'SPEAKER_PHONE') {
         rememberManualBuiltinCallAudioRoute('SPEAKER_PHONE');
         setExplicitBuiltInGlobal(true);
@@ -2089,6 +2207,179 @@ export const useAudioRouting = (
 
     const isRoutedOnBluetooth = () => lastAppliedRouteRef.current === 'BLUETOOTH';
 
+    /** Кнопка сразу: убрать BT из cycle + иконка ухо/громкая (native — после confirm). */
+    const pinOptimisticCaseUnplugButton = () => {
+      clearBtWearSticky();
+      clearExpectBtReconnect();
+      clearBtKeepInCycleAfterManualLeave();
+      markBtRemovedFromCycleByUnplug();
+      setCallBluetoothHeadsetConnectedCache(false);
+      clearNativeProbeBluetoothRoute();
+      // Не armBtAutoSuppress здесь — иначе audio_connected flap при одевании не вернёт BT.
+      lastBluetoothRouteApplyAtRef.current = 0;
+      try {
+        (global as any).__lastBluetoothRouteApplyAtRef = { current: 0 };
+      } catch {}
+      const without = lastAvailableRef.current.filter((d) => d !== 'BLUETOOTH');
+      lastAvailableRef.current = without;
+      previousAvailableRef.current = without;
+      setAvailableRoutes(without);
+      try {
+        (global as any).__inCallAvailableAudioRoutesRef = { current: without };
+      } catch {}
+      let fallback: InCallAudioRoute = 'EARPIECE';
+      if (preferSpeakerAfterHeadsetDisconnect()) {
+        fallback = 'SPEAKER_PHONE';
+      } else if (
+        !!routingOptionsRef.current?.defaultToEarpiece ||
+        isInAudioOnlyCallUi()
+      ) {
+        fallback = 'EARPIECE';
+      } else {
+        fallback = resolveCallRouteAfterHeadsetDisconnect();
+        if (fallback !== 'EARPIECE' && fallback !== 'SPEAKER_PHONE') {
+          fallback = 'EARPIECE';
+        }
+      }
+      // lastApplied тоже — иначе poll keepBtInCycleNow держит BT по «ещё routed on BT».
+      lastAppliedRouteRef.current = fallback;
+      setSelectedRoute(fallback);
+      lastSelectedRef.current = fallback;
+      setUserRoute(fallback);
+      setPersistedCallAudioRoute(fallback);
+      setUserSelectedCallAudioRoute(fallback);
+      try {
+        (global as any).__btUnplugConfirmPendingRef = { current: true };
+      } catch {}
+      // Native сразу — звук не ждёт probe (если flap → audio_connected вернёт BT).
+      void (async () => {
+        try {
+          await chooseInCallRoute(fallback);
+          await applyNativeVoiceCallRoute(fallback);
+        } catch {}
+      })();
+      routeLog('LiviBluetoothHeadsetWear', {
+        optimistic: 'case_unplug_button',
+        fallback,
+      });
+    };
+
+    /** Call-audio мёртв для кейса: не ждать HFP profile (часто живёт секунды после кейса). */
+    const isBtCallAudioDeadForUnplug = (probe: {
+      btCallAudioActive?: boolean;
+      preferred?: string | null;
+    }): boolean => {
+      if (probe.preferred === 'EARPIECE' || probe.preferred === 'SPEAKER_PHONE') {
+        return true;
+      }
+      if (probe.btCallAudioActive === true) return false;
+      if (isBluetoothAvailableForAutoRoute(probe as any)) return false;
+      if (isBluetoothPreferredForAutoRoute(probe as any)) return false;
+      return true;
+    };
+
+    const runBtDeadUnplugCheck = async (
+      reason: string,
+      opts?: { physical?: boolean; gen?: number },
+    ): Promise<boolean> => {
+      const gen = opts?.gen;
+      if (typeof gen === 'number' && gen !== btUnplugRetryGenRef.current) return false;
+      // Optimistic уже сменил lastApplied на EAR — всё равно добить полный unplug fallback.
+      let confirmPending = false;
+      try {
+        confirmPending = !!(global as any).__btUnplugConfirmPendingRef?.current;
+      } catch {}
+      const stillNeedUnplug =
+        isRoutedOnBluetooth() ||
+        confirmPending ||
+        (isBtRemovedFromCycleByUnplug() &&
+          Date.now() < readBtAutoSuppressUntil());
+      if (!stillNeedUnplug) return false;
+      const physical = !!opts?.physical;
+      try {
+        setCallBluetoothHeadsetConnectedCache(false);
+        const probe = await probeNativeCallAudioRoutes();
+        mergeNativeProbeIntoGlobal(probe);
+        if (typeof gen === 'number' && gen !== btUnplugRetryGenRef.current) return false;
+        const scoDead = probe.btCallAudioActive !== true;
+        const dead =
+          isBtCallAudioDeadForUnplug(probe) || (physical && scoDead);
+        if (!dead) {
+          routeLog('LiviBluetoothHeadsetWear', {
+            skipped: 'disconnect_still_call_audio',
+            reason,
+            preferred: probe.preferred,
+            physical,
+            btCallAudioActive: probe.btCallAudioActive,
+          });
+          return false;
+        }
+      } catch {}
+      if (typeof gen === 'number' && gen !== btUnplugRetryGenRef.current) return false;
+      clearBtUnplugRetries();
+      await applyBluetoothUnplugFallback(
+        lastAvailableRef.current,
+        `native_bt_unwear_${reason}`,
+      );
+      try {
+        (global as any).__btUnplugConfirmPendingRef = { current: false };
+      } catch {}
+      return true;
+    };
+
+    const scheduleBtDeadUnplugCheck = (
+      reason: string,
+      opts?: { physical?: boolean },
+    ) => {
+      const physical = !!opts?.physical;
+      // Уже идёт retry по кейсу — не сбрасывать цепочку на каждый acl/a2dp.
+      if (btUnplugRetryTimersRef.current.length > 0 && physical) {
+        routeLog('LiviBluetoothHeadsetWear', {
+          coalesced: 'bt_dead_unplug_check',
+          reason,
+          physical,
+        });
+        return;
+      }
+      clearBtUnplugRetries();
+      const gen = btUnplugRetryGenRef.current;
+
+      // Физический disconnect (device_removed / audio_disconnected) — optimistic сразу,
+      // даже при sticky: иначе кейс после wear ждёт 8с и poll успевает вернуть BT.
+      const onBtUi =
+        isRoutedOnBluetooth() ||
+        getUserRoute() === 'BLUETOOTH' ||
+        lastSelectedRef.current === 'BLUETOOTH';
+      if (physical && onBtUi) {
+        pinOptimisticCaseUnplugButton();
+      }
+
+      // Несколько попыток: первый probe часто ещё SCO=true ~0.5–2с после кейса.
+      const delays = physical
+        ? [0, 80, 180, 350, 600, 1000]
+        : [150, 400, 900];
+      routeLog('LiviBluetoothHeadsetWear', {
+        scheduled: 'bt_dead_unplug_retries',
+        reason,
+        delays,
+        physical,
+        gen,
+      });
+      for (const delay of delays) {
+        const t = setTimeout(() => {
+          void (async () => {
+            const ok = await runBtDeadUnplugCheck(reason, { physical, gen });
+            if (ok) clearBtUnplugRetries();
+          })();
+        }, delay);
+        btUnplugRetryTimersRef.current.push(t);
+        // Совместимость со старым clear на audio_connected.
+        if (delay === delays[0]) {
+          btAudioDisconnectTimerRef.current = t;
+        }
+      }
+    };
+
     /** Реально начали/закончили apply BT (не только UI-pin от sticky). */
     const hasLiveBluetoothApply = () => {
       if (btWearReconnectInFlightRef.current) return true;
@@ -2107,7 +2398,7 @@ export const useAudioRouting = (
       // Физический connect / SCO up (audio_connected) / mid-call gain — wearForce.
       // audio_connected вызываем только после подтверждения call-audio (см. wear handler).
       const wearForce =
-        /(acl_connected|profile_connected|device_added|a2dp_connected|audio_connected|expect|_rising)/.test(
+        /(acl_connected|profile_connected|device_added|a2dp_connected|audio_connected|expect|_rising|_bt_accept)/.test(
           reason,
         ) || /gained|_gain/.test(reason);
       // Ручной EAR/SPEAKER pin не блокирует физический wear (достал из кейса → BT).
@@ -2148,8 +2439,11 @@ export const useAudioRouting = (
       btWearReconnectQueuedAtRef.current = nowWear;
       // Сначала снять EAR uiLock — иначе кнопка рисует uiLock поверх BT.
       clearCallAudioRouteUiLock();
+      clearBtRemovedFromCycleByUnplug();
+      clearBtKeepInCycleAfterManualLeave();
       // Optimistic UI + sticky сразу — до await probe (иначе ICM/preferAudioMode мерцают EAR).
-      armBtWearSticky();
+      // Accept: длиннее sticky — иначе reapply EAR рвёт SCO до первого verified.
+      armBtWearSticky(reason.includes('_bt_accept') ? 12000 : undefined);
       lastAppliedRouteRef.current = 'BLUETOOTH';
       setUserRoute('BLUETOOTH');
       setSelectedRoute('BLUETOOTH');
@@ -2161,9 +2455,15 @@ export const useAudioRouting = (
         (global as any).__lastBluetoothRouteApplyAtRef = {
           current: lastBluetoothRouteApplyAtRef.current,
         };
+        (global as any).__btUnplugConfirmPendingRef = { current: false };
       } catch {}
       clearExpectBtReconnect();
       routeLog('applyBluetoothReconnect', { reason, wearForce });
+      // Сразу native BT — не ждать probe (звук «не сразу» из-за EAR↔BT гонки).
+      void applyNativeVoiceCallRoute('BLUETOOTH');
+      try {
+        void (InCallManager as any).chooseAudioRoute?.('BLUETOOTH');
+      } catch {}
       try {
         const probe = await probeNativeCallAudioRoutes();
         // Wear: ACL/profile/device_added — форсим BT даже если probe ещё без BLUETOOTH
@@ -2175,6 +2475,25 @@ export const useAudioRouting = (
         if (!wearForce && !isBluetoothAvailableForAutoRoute(probe)) {
           clearBtWearSticky();
           return;
+        }
+        // Accept paired: без HFP/SCO — buds в кейсе, не держать BT UI.
+        if (reason.includes('_bt_accept') && !probe.btCallAudioActive) {
+          let profileUp = false;
+          try {
+            profileUp = await isNativeBluetoothHeadsetProfileConnected();
+          } catch {}
+          let scoUp = false;
+          try {
+            scoUp = await isNativeBluetoothHeadsetScoAudioConnected();
+          } catch {}
+          if (!profileUp && !scoUp && !isBluetoothHeadsetActiveForCall()) {
+            clearBtWearSticky();
+            setUserRoute('EARPIECE', { persist: false });
+            setSelectedRoute('EARPIECE');
+            applySpecificRoute('EARPIECE', 'preferAudioMode_bt_accept_fallback', true);
+            routeLog('applyBluetoothReconnect fallback earpiece (no HFP/SCO)', { reason });
+            return;
+          }
         }
         // Poll/sticky: preferred EAR при «active» после снятия — не reconnect.
         if (
@@ -2224,8 +2543,8 @@ export const useAudioRouting = (
         await applySpecificRoute('BLUETOOTH', reason, true);
         deviceChangeContextRef.current = { gainedWired: false, gainedBt: false };
         publishRouteState(withBt, 'BLUETOOTH');
-        // Дожать SCO/communicationDevice: после ACL preferred ещё EAR 1–3с.
-        const verifyDelays = [400, 900, 1600, 2600, 4000];
+        // Дожать SCO быстрее: первый pin раньше, меньше окно для EAR tear-down.
+        const verifyDelays = [120, 400, 900, 1800, 3200];
         for (const ms of verifyDelays) {
           setTimeout(() => {
             if (!isRoutedOnBluetooth()) return;
@@ -2241,14 +2560,14 @@ export const useAudioRouting = (
                   ok;
                 if (live && (probe2.preferred === 'BLUETOOTH' || probe2.btCallAudioActive)) {
                   btInactivePollCountRef.current = 0;
-                  armBtWearSticky(4000);
+                  armBtWearSticky(reason.includes('_bt_accept') ? 8000 : 4000);
                   routeLog('applyBluetoothReconnect verified', {
                     preferred: probe2.preferred,
                     active: probe2.btCallAudioActive,
                     ms,
                   });
                 } else {
-                  armBtWearSticky();
+                  armBtWearSticky(reason.includes('_bt_accept') ? 10000 : undefined);
                   routeLog('applyBluetoothReconnect repin', {
                     preferred: probe2.preferred,
                     active: probe2.btCallAudioActive,
@@ -2262,7 +2581,7 @@ export const useAudioRouting = (
         }
         scheduleReapplyPersistedCallAudioRoute('audio_ui_headset_connect', {
           media: 'audio',
-          delaysMs: [700, 1600],
+          delaysMs: [500, 1400],
           skipInCallRestart: true,
           honorUserRoute: true,
         });
@@ -2273,6 +2592,7 @@ export const useAudioRouting = (
         btWearReconnectInFlightRef.current = false;
       }
     };
+    applyBluetoothReconnectRef.current = applyBluetoothReconnect;
 
     const onDeviceChanged = (data: any) => {
       const available = parseList(data?.availableAudioDeviceList);
@@ -2637,6 +2957,8 @@ export const useAudioRouting = (
           // Уже реально применили BT — только repin native на audio_connected.
           if (hasLiveBluetoothApply() && isRoutedOnBluetooth()) {
             if (reason === 'audio_connected') {
+              clearBtUnplugRetries();
+              clearBtRemovedFromCycleByUnplug();
               if (btAudioDisconnectTimerRef.current) {
                 clearTimeout(btAudioDisconnectTimerRef.current);
                 btAudioDisconnectTimerRef.current = null;
@@ -2662,6 +2984,8 @@ export const useAudioRouting = (
 
           // SCO up broadcast сам по себе = wear. Не re-probe preferred EAR → idle_case.
           if (reason === 'audio_connected') {
+            clearBtUnplugRetries();
+            clearBtRemovedFromCycleByUnplug();
             if (btAudioDisconnectTimerRef.current) {
               clearTimeout(btAudioDisconnectTimerRef.current);
               btAudioDisconnectTimerRef.current = null;
@@ -2693,8 +3017,31 @@ export const useAudioRouting = (
         }
         // audio_disconnected: снял buds. Settle только от недавнего apply BT (SCO flap).
         if (reason === 'audio_disconnected') {
-          if (!isRoutedOnBluetooth()) {
+          // Ручной cycle на ухо/громкую — не ждать «ожидаемый» reconnect в BT.
+          if (
+            !isRoutedOnBluetooth() ||
+            getUserRoute() === 'EARPIECE' ||
+            getUserRoute() === 'SPEAKER_PHONE' ||
+            readUserSelectedCallAudioRoute() === 'EARPIECE' ||
+            readUserSelectedCallAudioRoute() === 'SPEAKER_PHONE' ||
+            userExplicitlyPinnedBuiltinCallAudio()
+          ) {
             setCallBluetoothHeadsetConnectedCache(false);
+            if (
+              getUserRoute() === 'EARPIECE' ||
+              getUserRoute() === 'SPEAKER_PHONE' ||
+              readUserSelectedCallAudioRoute() === 'EARPIECE' ||
+              readUserSelectedCallAudioRoute() === 'SPEAKER_PHONE' ||
+              userExplicitlyPinnedBuiltinCallAudio()
+            ) {
+              clearExpectBtReconnect();
+              routeLog('LiviBluetoothHeadsetWear', {
+                skipped: 'audio_disconnected_user_builtin',
+                reason,
+                userRoute: getUserRoute(),
+              });
+              return;
+            }
             armExpectBtReconnect(10000);
             routeLog('LiviBluetoothHeadsetWear', {
               armed: 'expect_reconnect',
@@ -2702,54 +3049,8 @@ export const useAudioRouting = (
             });
             return;
           }
-          if (btAudioDisconnectTimerRef.current) {
-            clearTimeout(btAudioDisconnectTimerRef.current);
-          }
-          // Пока wear sticky / SCO settle — НЕ unplug (иначе BT↔EAR цикл при одевании).
-          if (
-            isBtWearStickyActive() ||
-            isBtScoSettleActive(lastBluetoothRouteApplyAtRef.current, 4000)
-          ) {
-            routeLog('LiviBluetoothHeadsetWear', {
-              skipped: 'audio_disconnected_wear_hold',
-              reason,
-            });
-            return;
-          }
-          btAudioDisconnectTimerRef.current = setTimeout(() => {
-            btAudioDisconnectTimerRef.current = null;
-            void (async () => {
-              try {
-                if (!isRoutedOnBluetooth()) return;
-                if (
-                  isBtWearStickyActive() ||
-                  isBtScoSettleActive(lastBluetoothRouteApplyAtRef.current, 4000)
-                ) {
-                  return;
-                }
-                const probe = await probeNativeCallAudioRoutes();
-                mergeNativeProbeIntoGlobal(probe);
-                const nativeLive =
-                  probe.btCallAudioActive === true ||
-                  (await isNativeBluetoothHeadsetConnectedForCall());
-                if (
-                  nativeLive ||
-                  isBluetoothAvailableForAutoRoute(probe) ||
-                  isBluetoothPreferredForAutoRoute(probe)
-                ) {
-                  routeLog('LiviBluetoothHeadsetWear', {
-                    skipped: 'audio_disconnected_still_active',
-                    reason,
-                  });
-                  return;
-                }
-                await applyBluetoothUnplugFallback(
-                  lastAvailableRef.current,
-                  'native_bt_unwear_audio_disconnected',
-                );
-              } catch {}
-            })();
-          }, 200);
+          // На BT: SCO down = кейс/снятие. Не глотать на sticky — быстрый unplug.
+          scheduleBtDeadUnplugCheck(reason, { physical: true });
           return;
         }
         // profile/acl/device_removed при EAR: buds часто шлют disconnect, оставаясь paired.
@@ -2762,6 +3063,18 @@ export const useAudioRouting = (
               reason,
             )
           ) {
+            // После кейса/unplug не ждать «ожидаемый» reconnect — иначе BT снова в цикле + sticky.
+            if (
+              isBtRemovedFromCycleByUnplug() ||
+              Date.now() < readBtAutoSuppressUntil()
+            ) {
+              clearExpectBtReconnect();
+              routeLog('LiviBluetoothHeadsetWear', {
+                skipped: 'after_unplug_no_expect',
+                reason,
+              });
+              return;
+            }
             armExpectBtReconnect(10000);
             routeLog('LiviBluetoothHeadsetWear', {
               armed: 'expect_reconnect',
@@ -2774,6 +3087,8 @@ export const useAudioRouting = (
                 if (!isExpectBtReconnectActive()) return;
                 if (isRoutedOnBluetooth()) return;
                 if (isCallAudioBootstrapPending()) return;
+                if (isBtRemovedFromCycleByUnplug()) return;
+                if (Date.now() < readBtAutoSuppressUntil()) return;
                 void (async () => {
                   try {
                     const probe = await probeNativeCallAudioRoutes();
@@ -2800,48 +3115,15 @@ export const useAudioRouting = (
           }
           return;
         }
-        // Wear hold: не unplug и не re-apply (иначе цикл connect/disconnect).
+        // На BT + физический disconnect (кейc): быстрый unplug, не ждать poll/profile.
         if (
-          isBtWearStickyActive() ||
-          isBtScoSettleActive(lastBluetoothRouteApplyAtRef.current, 4000)
+          /device_removed|profile_disconnected|acl_disconnected|a2dp_disconnected/.test(reason)
         ) {
-          routeLog('LiviBluetoothHeadsetWear', {
-            skipped: 'acl_settle_after_wear',
-            reason,
-          });
+          scheduleBtDeadUnplugCheck(reason, { physical: true });
           return;
         }
-        if (btAudioDisconnectTimerRef.current) {
-          clearTimeout(btAudioDisconnectTimerRef.current);
-          btAudioDisconnectTimerRef.current = null;
-        }
-        // После settle: unplug только если call-audio уже мёртв.
-        void (async () => {
-          try {
-            const probe = await probeNativeCallAudioRoutes();
-            mergeNativeProbeIntoGlobal(probe);
-            const nativeLive =
-              probe.btCallAudioActive === true ||
-              (await isNativeBluetoothHeadsetConnectedForCall());
-            if (
-              nativeLive ||
-              isBluetoothAvailableForAutoRoute(probe) ||
-              isBluetoothPreferredForAutoRoute(probe)
-            ) {
-              routeLog('LiviBluetoothHeadsetWear', {
-                skipped: 'disconnect_still_call_audio',
-                reason,
-                preferred: probe.preferred,
-              });
-              return;
-            }
-          } catch {}
-          if (!isRoutedOnBluetooth()) return;
-          await applyBluetoothUnplugFallback(
-            lastAvailableRef.current,
-            `native_bt_unwear_${reason}`,
-          );
-        })();
+        // Прочий disconnect на BT: та же быстрая проверка.
+        scheduleBtDeadUnplugCheck(reason, { physical: false });
       });
       // Flush queued wear после settle/bootstrap.
       const wearFlushTimers = [600, 1400, 2400].map((ms) =>
@@ -2901,13 +3183,49 @@ export const useAudioRouting = (
           await applyDesiredRoute(without, 'headset_poll_unplug', true);
         }
 
-        // Paired (даже idle) → в available для cycle. Auto только call-audio / wear.
+        // Paired idle (в кейсе) НЕ держим BT в cycle. В available — только call-audio / routed / wear.
         // Не auto на midCallGain A2DP — paired output ≠ «уже в call-audio».
         const hadPairedBefore = lastAvailableRef.current.includes('BLUETOOTH');
         const probe = await probeNativeCallAudioRoutes();
         mergeNativeProbeIntoGlobal(probe);
         const paired = isBluetoothPairedAvailable(probe);
         const callAudioActive = isBluetoothAvailableForAutoRoute(probe);
+        // После кейса (removed) не держать BT в cycle — иначе poll каждые 1.5с возвращает кнопку.
+        if (isBtRemovedFromCycleByUnplug()) {
+          const without = lastAvailableRef.current.filter((d) => d !== 'BLUETOOTH');
+          if (without.length !== lastAvailableRef.current.length) {
+            lastAvailableRef.current = without;
+            previousAvailableRef.current = without;
+            setAvailableRoutes(without);
+            try {
+              (global as any).__inCallAvailableAudioRoutesRef = { current: without };
+            } catch {}
+          }
+          // OS уже builtin + pending confirm → добить unplug (не ждать next retry).
+          let confirmPending = false;
+          try {
+            confirmPending = !!(global as any).__btUnplugConfirmPendingRef?.current;
+          } catch {}
+          if (
+            confirmPending &&
+            (probe.preferred === 'EARPIECE' ||
+              probe.preferred === 'SPEAKER_PHONE' ||
+              probe.btCallAudioActive !== true)
+          ) {
+            await applyBluetoothUnplugFallback(
+              without,
+              'headset_poll_bt_case_confirm',
+            );
+            return;
+          }
+        }
+        const keepBtInCycleNow =
+          !isBtRemovedFromCycleByUnplug() &&
+          (callAudioActive ||
+            isRoutedOnBluetooth() ||
+            isBtWearStickyActive() ||
+            btWearReconnectInFlightRef.current ||
+            isBtKeepInCycleAfterManualLeave());
         // Rising-edge raw SCO / expect после TWS disconnect.
         // Idle sticky isAudioConnected без false → не armed → не ложный auto.
         // Не auto на одном paired-in-case (иначе «в кейс» → снова BT).
@@ -2953,7 +3271,7 @@ export const useAudioRouting = (
             }
           } catch {}
         }
-        if (paired) {
+        if (keepBtInCycleNow) {
           const withBt = Array.from(
             new Set([...lastAvailableRef.current, ...probe.available, 'BLUETOOTH']),
           );
@@ -2986,7 +3304,7 @@ export const useAudioRouting = (
               probe.preferred === 'EARPIECE' ||
               probe.preferred === 'SPEAKER_PHONE'
             ) {
-              // keep available for cycle; no auto reconnect
+              // keep available for cycle while live; no auto reconnect
             } else if (!recentManualBuiltin) {
               btInactivePollCountRef.current = 0;
               await applyBluetoothReconnect('headset_poll_bt');
@@ -2994,22 +3312,38 @@ export const useAudioRouting = (
           } else if (isRoutedOnBluetooth() && callAudioActive) {
             btInactivePollCountRef.current = 0;
           } else if (isRoutedOnBluetooth() && !callAudioActive) {
-            // UI BT, SCO ещё поднимается после wear — не unplug; дожимать native.
+            // OS уже на ухо/громкую = кейс/снятие — сразу unplug.
+            // Sticky НЕ должен форсить BT обратно (это удлиняло «режим BT» после кейса).
             if (
-              isBtWearStickyActive() ||
-              btWearReconnectInFlightRef.current ||
-              isBtScoSettleActive(lastBluetoothRouteApplyAtRef.current, 6000) ||
-              isExpectBtReconnectActive()
+              probe.preferred === 'EARPIECE' ||
+              probe.preferred === 'SPEAKER_PHONE'
             ) {
               btInactivePollCountRef.current = 0;
-              if (probe.preferred === 'EARPIECE' || probe.preferred === 'SPEAKER_PHONE') {
-                void (async () => {
-                  try {
-                    await chooseInCallRoute('BLUETOOTH');
-                    await applyNativeVoiceCallRoute('BLUETOOTH');
-                  } catch {}
-                })();
-              }
+              await applyBluetoothUnplugFallback(
+                lastAvailableRef.current,
+                'headset_poll_bt_inactive',
+              );
+            } else if (
+              isBtWearStickyActive() ||
+              btWearReconnectInFlightRef.current ||
+              isBtScoSettleActive(lastBluetoothRouteApplyAtRef.current, 1500) ||
+              isExpectBtReconnectActive()
+            ) {
+              // SCO поднимается после wear — дожимать native BT.
+              btInactivePollCountRef.current = 0;
+              void (async () => {
+                try {
+                  await chooseInCallRoute('BLUETOOTH');
+                  await applyNativeVoiceCallRoute('BLUETOOTH');
+                } catch {}
+              })();
+            } else if (probe.btCallAudioActive !== true) {
+              // Кейс: SCO down — не ждать HFP profile (секунды).
+              btInactivePollCountRef.current = 0;
+              await applyBluetoothUnplugFallback(
+                lastAvailableRef.current,
+                'headset_poll_bt_inactive',
+              );
             } else {
               // Profile ещё up — не unplug, дожать SCO.
               let profileUp = false;
@@ -3026,8 +3360,8 @@ export const useAudioRouting = (
                 })();
               } else {
                 btInactivePollCountRef.current += 1;
-                // Два poll подряд (~3с) без SCO и без profile — реально снял.
-                if (btInactivePollCountRef.current >= 2) {
+                // Один poll без SCO и без profile — реально снял.
+                if (btInactivePollCountRef.current >= 1) {
                   btInactivePollCountRef.current = 0;
                   await applyBluetoothUnplugFallback(
                     lastAvailableRef.current,
@@ -3042,29 +3376,42 @@ export const useAudioRouting = (
           if (cancelled) return;
           const probe2 = await probeNativeCallAudioRoutes();
           mergeNativeProbeIntoGlobal(probe2);
-          if (isBluetoothAvailableForAutoRoute(probe2) || isBluetoothPairedAvailable(probe2)) {
-            if (isBluetoothAvailableForAutoRoute(probe2)) {
-              const withBt = Array.from(
-                new Set([...lastAvailableRef.current, ...probe2.available, 'BLUETOOTH']),
-              );
-              lastAvailableRef.current = withBt;
-              previousAvailableRef.current = withBt;
-              setAvailableRoutes(withBt);
-              return;
-            }
+          if (isBluetoothAvailableForAutoRoute(probe2)) {
+            const withBt = Array.from(
+              new Set([...lastAvailableRef.current, ...probe2.available, 'BLUETOOTH']),
+            );
+            lastAvailableRef.current = withBt;
+            previousAvailableRef.current = withBt;
+            setAvailableRoutes(withBt);
+            return;
           }
+          // Paired-only в кейсе при UI на BT — unplug + убрать из cycle.
           await applyBluetoothUnplugFallback(
             lastAvailableRef.current.filter((d) => d !== 'BLUETOOTH'),
             'headset_bt_unplug',
           );
         } else if (hadPairedBefore || lastAvailableRef.current.includes('BLUETOOTH')) {
-          // Probe без paired: реально unpaired — убрать из cycle. Иначе оставить.
-          if (!isBluetoothPairedAvailable(probe) && !probe.available.includes('BLUETOOTH')) {
+          // Ручной уход с BT (SCO down, buds ещё надеты) — не снимать из cycle.
+          if (isBtKeepInCycleAfterManualLeave() && !isBtRemovedFromCycleByUnplug()) {
+            const withBt = Array.from(
+              new Set([...lastAvailableRef.current.filter((d) => d !== 'BLUETOOTH'), 'BLUETOOTH']),
+            );
+            lastAvailableRef.current = withBt;
+            previousAvailableRef.current = withBt;
+            setAvailableRoutes(withBt);
+            try {
+              (global as any).__inCallAvailableAudioRoutesRef = { current: withBt };
+            } catch {}
+          } else {
+            // В кейс / физический unplug — убрать BT из cycle.
             clearNativeProbeBluetoothRoute();
             const without = lastAvailableRef.current.filter((d) => d !== 'BLUETOOTH');
             lastAvailableRef.current = without;
             previousAvailableRef.current = without;
             setAvailableRoutes(without);
+            try {
+              (global as any).__inCallAvailableAudioRoutesRef = { current: without };
+            } catch {}
           }
         }
       } catch {}
@@ -3432,11 +3779,9 @@ export const useAudioRouting = (
     return () => {
       cancelled = true;
       bootstrapPendingRef.current = false;
+      applyBluetoothReconnectRef.current = null;
       if (headsetPollTimer) clearInterval(headsetPollTimer);
-      if (btAudioDisconnectTimerRef.current) {
-        clearTimeout(btAudioDisconnectTimerRef.current);
-        btAudioDisconnectTimerRef.current = null;
-      }
+      clearBtUnplugRetries();
       subs.forEach((s) => {
         try { s?.remove?.(); } catch {}
       });
@@ -3536,6 +3881,23 @@ export const useAudioRouting = (
           applySpecificRoute('BLUETOOTH', 'preferAudioMode', true);
           return;
         }
+        // Наушники уже надеты до accept: SCO ещё не up → preferred EAR, но HFP/paired есть.
+        // Иначе UI залипает на «динамик/ухо» до wear-edge (которого не будет).
+        const avStabilize = lastAvailableRef.current;
+        if (
+          (avStabilize.includes('BLUETOOTH') || isBluetoothPairedAvailable()) &&
+          !readUserLockedBuiltinCallAudioRoute() &&
+          !userExplicitlyPinnedBuiltinCallAudio() &&
+          !readExplicitUserSelectedBuiltInRoute()
+        ) {
+          const reconnect = applyBluetoothReconnectRef.current;
+          if (reconnect) {
+            void reconnect('preferAudioMode_bt_accept');
+          } else {
+            applySpecificRoute('BLUETOOTH', 'preferAudioMode_bt_accept', true);
+          }
+          return;
+        }
         setUserRoute('EARPIECE', { persist: false });
         setSelectedRoute('EARPIECE');
         applySpecificRoute('EARPIECE', 'preferAudioMode', true);
@@ -3598,6 +3960,22 @@ export const useAudioRouting = (
         !readExplicitUserSelectedBuiltInRoute()
       ) {
         applySpecificRoute('BLUETOOTH', 'preferAudioMode', true);
+        return;
+      }
+      // Accept: paired/HFP уже есть, SCO ещё нет — поднять BT (иначе только EAR до wear).
+      if (
+        (avPref.includes('BLUETOOTH') || isBluetoothPairedAvailable()) &&
+        !isInAppPiPExplicitBuiltinRouteChoiceActive() &&
+        !readUserLockedBuiltinCallAudioRoute() &&
+        !userExplicitlyPinnedBuiltinCallAudio() &&
+        !readExplicitUserSelectedBuiltInRoute()
+      ) {
+        const reconnect = applyBluetoothReconnectRef.current;
+        if (reconnect) {
+          void reconnect('preferAudioMode_bt_accept');
+        } else {
+          applySpecificRoute('BLUETOOTH', 'preferAudioMode_bt_accept', true);
+        }
         return;
       }
       let uiLockPrefer = readCallAudioRouteUiLock();
@@ -3956,12 +4334,48 @@ export const useAudioRouting = (
         }
         const av = lastAvailableRef.current;
         // Video UI: держим speaker/BT даже на audio-first (defaultToEarpiece не отменяет video-политику).
+        // Зритель peer-video (своя cam off): не перебивать peer_video_preserve / ручной cycle.
         const videoUiSync =
           !preferAudioModeRef.current &&
           !isInAudioOnlyCallUi() &&
           ongoingCallPrefersVideoMedia();
         if (videoUiSync) {
+          let localCamOn = false;
+          try {
+            const session = (global as any).__webrtcSessionRef?.current as
+              | { getIsCamOn?: () => boolean }
+              | null
+              | undefined;
+            if (session?.getIsCamOn?.() === true) localCamOn = true;
+          } catch {}
+          const uiLockPeer = readCallAudioRouteUiLock();
+          const userSelPeer = readUserSelectedCallAudioRoute();
+          const preservedPeer: InCallAudioRoute | null =
+            !localCamOn &&
+            (uiLockPeer === 'EARPIECE' ||
+              uiLockPeer === 'SPEAKER_PHONE' ||
+              ((userSelPeer === 'EARPIECE' || userSelPeer === 'SPEAKER_PHONE') &&
+                userExplicitlyPinnedBuiltinCallAudio()))
+              ? uiLockPeer === 'EARPIECE' || uiLockPeer === 'SPEAKER_PHONE'
+                ? uiLockPeer
+                : (userSelPeer as InCallAudioRoute)
+              : null;
+          if (preservedPeer) {
+            if (normalizeInCallRoute(lastAppliedRouteRef.current) !== preservedPeer) {
+              applySpecificRoute(preservedPeer, 'manualSync_video_ctx_peer_preserve', true);
+            }
+            publishRouteState(
+              av.length ? av : ['EARPIECE', 'SPEAKER_PHONE'],
+              preservedPeer,
+            );
+            return;
+          }
           const route = resolveOngoingVideoCallAudioRoute();
+          // Уже на том же маршруте — не гонять native повторно (cam-toggle peer).
+          if (normalizeInCallRoute(lastAppliedRouteRef.current) === route) {
+            publishRouteState(av.length ? av : ['EARPIECE', 'SPEAKER_PHONE'], route);
+            return;
+          }
           applySpecificRoute(route, 'manualSync_video_ctx', true);
           publishRouteState(av.length ? av : ['EARPIECE', 'SPEAKER_PHONE'], route);
           return;
@@ -4136,17 +4550,19 @@ export const useAudioRouting = (
           av = Array.from(new Set([...av, ...probe.available]));
         }
       } catch {}
-      // Cycle: BT если paired (в кейсе) или уже call-audio — не только SCO active.
+      // Cycle: BT при live/wear; после ручного ухода с BT (buds ещё надеты) — тоже; не после кейса.
       const showBtInCycle =
         Platform.OS === 'android' &&
-        (isBluetoothPairedAvailable() ||
-          isBluetoothHeadsetActiveForCall() ||
-          av.includes('BLUETOOTH'));
+        shouldShowBluetoothInCycle({
+          userRoute: getUserRoute(),
+          lastApplied: lastAppliedRouteRef.current,
+          wearInFlight: btWearReconnectInFlightRef.current,
+        });
       if (Platform.OS === 'android' && !showBtInCycle) {
         av = av.filter((r) => r !== 'BLUETOOTH');
       }
       av = sanitizeRoutesForAudioCycle(av, icm);
-      // sanitize доверяет ICM; ICM часто без BT до SCO — вернуть paired в cycle.
+      // sanitize доверяет ICM; ICM часто без BT до SCO — вернуть live/manual-keep BT в cycle.
       if (showBtInCycle && !av.includes('BLUETOOTH')) {
         av = [...av, 'BLUETOOTH'];
       }
@@ -4173,14 +4589,33 @@ export const useAudioRouting = (
       );
 
       // Optimistic UI + intent — сразу, до любого await.
-      // Пункт 3: next уже earpiece↔speaker (BT не в цикле кнопки).
       explicitBuiltInChoiceRef.current = next === 'EARPIECE' || next === 'SPEAKER_PHONE';
       setExplicitBuiltInGlobal(explicitBuiltInChoiceRef.current);
       if (next === 'EARPIECE' || next === 'SPEAKER_PHONE') {
-        // Ручной уход с BT/провода: снять wear sticky / external mark, иначе UI и setUserRoute залипают на Bluetooth.
+        // Ручной уход с BT/провода: снять wear sticky / expect / external mark, иначе UI и setUserRoute залипают на Bluetooth.
+        const leavingBt =
+          current === 'BLUETOOTH' ||
+          lastAppliedRouteRef.current === 'BLUETOOTH' ||
+          getUserRoute() === 'BLUETOOTH';
         clearBtWearSticky();
+        clearExpectBtReconnect();
         btWearReconnectInFlightRef.current = false;
+        // Ручной уход тоже сбрасывает SCO settle, иначе setUserRoute блокируется.
+        lastBluetoothRouteApplyAtRef.current = 0;
+        try {
+          (global as any).__lastBluetoothRouteApplyAtRef = { current: 0 };
+        } catch {}
+        clearBtUnplugRetries();
         armBtAutoSuppress(12000);
+        if (leavingBt && !isBtRemovedFromCycleByUnplug()) {
+          // SCO сорвётся, buds могут остаться на ушах — BT оставляем в цикле кнопки.
+          // Не после кейса: иначе markRemoved сбрасывается и BT снова «залипает».
+          armBtKeepInCycleAfterManualLeave();
+          if (!av.includes('BLUETOOTH')) {
+            av = [...av, 'BLUETOOTH'];
+            lastAvailableRef.current = av;
+          }
+        }
         try {
           (global as any).__userSelectedExternalCallAudioRouteRef = { current: null };
         } catch {}
@@ -4188,6 +4623,12 @@ export const useAudioRouting = (
           'audio_ui_headset_connect',
           'in_app_pip_headset_connect',
         ]);
+      } else if (isExternalHeadsetRoute(next)) {
+        // Ручной возврат на BT: снять suppress, иначе auto/wear не мешают, а pin сразу.
+        clearBtAutoSuppress();
+        clearExpectBtReconnect();
+        clearBtRemovedFromCycleByUnplug();
+        clearBtKeepInCycleAfterManualLeave();
       }
       setUserRoute(next);
       setSelectedRoute(next);
@@ -4243,13 +4684,17 @@ export const useAudioRouting = (
       };
       routeLog('cycleUserRoute', { from: current, next, available: av, cycleCtx });
 
-      // Sync poke: только InCallManager. Native — строго через latest-очередь
-      // (параллельный void applyNativeVoiceCallSpeaker гонял SPEAKER поверх EAR).
+      // Built-in: native сразу (до ICM/очереди) — SPEAKER→EAR иначе ждёт bridge.
+      // userRoute/uiLock уже next; stale apply отсечёт догоняющий SPEAKER.
       if (next === 'SPEAKER_PHONE' || next === 'EARPIECE') {
         const wantSpeaker = next === 'SPEAKER_PHONE';
+        if (Platform.OS === 'android') {
+          void applyNativeVoiceCallRoute(next);
+        }
         try {
           (InCallManager as any).setForceSpeakerphoneOn?.(wantSpeaker);
           InCallManager.setSpeakerphoneOn(wantSpeaker);
+          void (InCallManager as any).chooseAudioRoute?.(next);
         } catch {}
       }
 
@@ -4257,11 +4702,12 @@ export const useAudioRouting = (
         'in_app_pip_from_',
         'audio_ui_route_cycle',
         'in_app_pip_headset_connect',
+        'direct_call_accept_audio_route',
+        'handleCallAnswered_audio_first',
       ]);
+      // Не defaultToEarpiece: на video UI иначе media=audio и лишний InCall-путь.
       const media =
-        preferAudioModeRef.current || routingOptionsRef.current?.defaultToEarpiece
-          ? 'audio'
-          : 'video';
+        preferAudioModeRef.current || isInAudioOnlyCallUi() ? 'audio' : 'video';
       if (Platform.OS === 'android') {
         void applyCallAudioOutputRouteLatest(next, {
           media,
@@ -4280,9 +4726,13 @@ export const useAudioRouting = (
               new Set([...lastAvailableRef.current, ...probe.available]),
             );
             const keepBt =
-              isBluetoothPairedAvailable(probe) ||
-              isBluetoothHeadsetActiveForCall() ||
-              probe.available.includes('BLUETOOTH');
+              shouldShowBluetoothInCycle({
+                userRoute: getUserRoute(),
+                lastApplied: lastAppliedRouteRef.current,
+                wearInFlight: btWearReconnectInFlightRef.current,
+              }) ||
+              probe.btCallAudioActive === true ||
+              probe.preferred === 'BLUETOOTH';
             if (!keepBt) {
               merged = merged.filter((r) => r !== 'BLUETOOTH');
             }

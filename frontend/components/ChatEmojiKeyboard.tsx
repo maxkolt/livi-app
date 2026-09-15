@@ -1,5 +1,6 @@
 import React from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { EmojiKeyboard, en, ru, type EmojiType } from 'rn-emoji-keyboard';
 import { BUILT_IN_STICKER_PACKS, StickerView, type BuiltInSticker } from './chatStickers';
 import { StageGradient } from '../screens/home/WelcomeStageBackground';
@@ -16,6 +17,8 @@ type Props = {
   langCode: string;
   onEmojiSelected: (emoji: EmojiType) => void;
   onStickerSelected?: (sticker: BuiltInSticker) => void;
+  /** Backspace: удалить последний символ/эмодзи в поле ввода. */
+  onEmojiBackspace?: () => void;
 };
 
 export default function ChatEmojiKeyboard({
@@ -25,6 +28,7 @@ export default function ChatEmojiKeyboard({
   langCode,
   onEmojiSelected,
   onStickerSelected,
+  onEmojiBackspace,
 }: Props) {
   const lang = (langCode || 'ru') as Lang;
   const [tab, setTab] = React.useState<'emoji' | 'stickers'>('emoji');
@@ -205,6 +209,29 @@ export default function ChatEmojiKeyboard({
             </Pressable>
           );
         })}
+        {tab === 'emoji' && onEmojiBackspace ? (
+          <Pressable
+            onPress={onEmojiBackspace}
+            hitSlop={8}
+            accessibilityRole="button"
+            accessibilityLabel="backspace"
+            style={({ pressed }) => [
+              styles.backspaceButton,
+              {
+                backgroundColor: pressed
+                  ? (isDark ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.08)')
+                  : (isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)'),
+                opacity: pressed ? 0.85 : 1,
+              },
+            ]}
+          >
+            <Ionicons
+              name="backspace-outline"
+              size={22}
+              color={isDark ? 'rgba(255,255,255,0.78)' : 'rgba(0,0,0,0.55)'}
+            />
+          </Pressable>
+        ) : null}
       </View>
     </Shell>
   );
@@ -269,6 +296,15 @@ const styles = StyleSheet.create({
   },
   switchButton: {
     minWidth: 104,
+    height: 30,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  backspaceButton: {
+    position: 'absolute',
+    right: 12,
+    width: 40,
     height: 30,
     borderRadius: 15,
     alignItems: 'center',

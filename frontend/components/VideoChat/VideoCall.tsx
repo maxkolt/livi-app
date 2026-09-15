@@ -39,12 +39,12 @@ import type { Lang } from '../../utils/i18n';
 import { useAppTheme } from '../../theme/ThemeProvider';
 import { WelcomeStageBackground } from '../../screens/home/WelcomeStageBackground';
 import {
+  CALL_BLUETOOTH_ACCENT,
   WELCOME_HEADER_TITLE,
   WELCOME_NAV_ACTIVE_ACCENT,
   WELCOME_NAV_ACTIVE_ICON,
   WELCOME_STAGE_BG,
 } from '../../screens/home/constants';
-import { uiAccent } from '../../theme/uiAccent';
 import { isValidStream } from '../../utils/streamUtils';
 import { logger } from '../../utils/logger';
 import { markCallPerf, callPerfSpan, beginCallPerfTrace } from '../../utils/callPerfTrace';
@@ -123,7 +123,7 @@ import {
 import type { RootStackParamList } from '../../navigation/types';
 import { getPersistedCallAudioRoute, persistVideoInAppPiPAudioRoute, readPreferredCallAudioRouteForTransition, setPersistedCallAudioRoute, scheduleReapplyPersistedCallAudioRoute, scheduleVideoCallReturnFromPiPAudioReapply, isCallAudioPiPTransitionWindow, shouldPreserveCallAudioRouteInInAppPiP, shouldDeferPreserveDuringCallBootstrap, hasRealInAppPiPOrSystemReturnContext, prepareDirectCallVideoExpandFromInAppPiP, resolveFullVideoCallScreenAudioRoute, readExplicitVideoCallBuiltInRoute, armCallAudioRouteUiLock, readCallAudioRouteUiLock, applyCallAudioOutputRouteNow, clearScheduledCallAudioRouteReapplies, clearCallAudioRouteUiLock, isDirectCallVideoExpandAudioPreparedRecently, markDirectCallVideoExpandAudioPrepared, clearDirectCallVideoExpandAudioPrepared, cancelScheduledCallAudioRouteReappliesMatching, resolveStayOnAudioUiRouteWhenPartnerEntersVideo, markCallAudioReturnToUiSyncApplied, shouldSkipScheduledReturnToAudioUiReapply, clearStaleVideoSpeakerUiLockForAudioOnlyUi, cancelDeferredVideoMediaAudioReappliesForLocalAudioUi, armLocalAudioOnlyUiAudioRoutingQuiet } from '../../utils/callAudioRoutePersist';
 import { readBuiltinCallRouteBeforeHeadset, rememberBuiltinCallRouteBeforeHeadset, rememberDirectCallAudioRouteBeforeVideo, readDirectCallAudioRouteBeforeVideo } from '../../utils/callHeadsetAudioFallback';
-import { iconNameForRoute, isExternalHeadsetRoute, mapRouteForEnterVideoUi, type InCallAudioRoute, normalizeInCallRoute } from './hooks/audioRouteTypes';
+import { isExternalHeadsetRoute, mapRouteForEnterVideoUi, type InCallAudioRoute, normalizeInCallRoute } from './hooks/audioRouteTypes';
 import { useAudioRouting } from './hooks/useAudioRouting';
 import { usePiP as usePiPHook } from './hooks/usePiP';
 import { useDraggableLocalPip } from './hooks/useDraggableLocalPip';
@@ -1328,6 +1328,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
   }, [camOn, isInactiveState]);
   const { localPipPanHandlers, localPipDragStyle } = useDraggableLocalPip(callStageSize, {
     resetToken: localPipAnchorGen,
+    topInset: Platform.OS === 'android' ? insets.top : 0,
   });
   /** WhatsApp-style swap local↔remote на полном video UI (не in-app/system PiP). */
   const [localIsMain, setLocalIsMain] = useState(false);
@@ -1818,16 +1819,18 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
           : callAudioRouteUiPending
             ? resolveCallAudioRouteUiWhileBootstrapPending(selectedRoute)
             : selectedRoute);
-  const audioRouteIcon = iconNameForRoute(audioRouteForUi);
   audioRouteForUiRef.current = audioRouteForUi;
-  const btAccent = useMemo(() => uiAccent(!isDark), [isDark]);
   const audioOutputRouteAccent =
-    audioRouteForUi === 'BLUETOOTH' ? btAccent : WELCOME_NAV_ACTIVE_ACCENT;
-  const audioOutputRouteHighlighted =
-    audioRouteForUi === 'SPEAKER_PHONE' ||
-    audioRouteForUi === 'BLUETOOTH' ||
-    audioRouteForUi === 'WIRED_HEADSET';
-
+    audioRouteForUi === 'BLUETOOTH' ? CALL_BLUETOOTH_ACCENT : WELCOME_NAV_ACTIVE_ACCENT;
+  // MaterialIcons: ear-hearing нет — для уха оставляем volume-mute; BT/headset/speaker — свои.
+  const speakerRouteIcon: React.ComponentProps<typeof MaterialIcons>['name'] =
+    audioRouteForUi === 'BLUETOOTH'
+      ? 'bluetooth'
+      : audioRouteForUi === 'WIRED_HEADSET'
+        ? 'headset'
+        : audioRouteForUi === 'SPEAKER_PHONE'
+          ? 'volume-up'
+          : 'volume-mute';
   
   // Refs
   const focusEffectGuardRef = useRef(false);
@@ -3041,13 +3044,22 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     try {
       clearSystemPiPSessionAudioOrigin();
     } catch {}
+    // Не давать accept/bootstrap reapply перебить preserved маршрут зрителя.
+    cancelScheduledCallAudioRouteReappliesMatching([
+      'direct_call_accept_audio_route',
+      'direct_call_video_ui_route',
+      'audio_ui_headset_connect',
+    ]);
 
     // Зафиксировать текущий маршрут зрителя до video shell (ухо/динамик/BT).
     const extNow = readActiveExternalCallAudioRoute(userRouteRef.current);
     const liveBuiltin = normalizeInCallRoute(userRouteRef.current);
+    // Ручное ухо/громкая побеждает paired BT (buds надеты, но cycle на EAR).
     const preservedRoute: InCallAudioRoute =
+      (liveBuiltin === 'EARPIECE' || liveBuiltin === 'SPEAKER_PHONE'
+        ? liveBuiltin
+        : null) ||
       (extNow && isExternalHeadsetRoute(extNow) ? extNow : null) ||
-      (liveBuiltin === 'EARPIECE' || liveBuiltin === 'SPEAKER_PHONE' ? liveBuiltin : null) ||
       readDirectCallAudioRouteBeforeVideo() ||
       'EARPIECE';
 
@@ -4609,6 +4621,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
         cancelScheduledCallAudioRouteReappliesMatching([
           'direct_call_video_ui_route',
           'video_call_return_from_pip',
+          'direct_call_accept_audio_route',
         ]);
         const target = resolveStayOnAudioUiRouteWhenPartnerEntersVideo();
         userRouteRef.current = target;
@@ -4624,12 +4637,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
         try {
           syncRouteNowRef.current?.();
         } catch {}
-        scheduleReapplyPersistedCallAudioRoute('direct_call_accept_audio_route', {
-          media: 'audio',
-          honorUserRoute: true,
-          skipInCallRestart: true,
-          delaysMs: [0],
-        });
+        // Без schedule accept reapply — иначе cam-toggle peer дёргает BT/ухо.
       }
     };
 
@@ -5945,10 +5953,19 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       userBuiltinLocked === 'SPEAKER_PHONE'
         ? null
         : userBuiltinLocked;
-    // fromPiP: BT → маршрут плашки. Иначе: BT → beforeVideo → lock → resolve.
+    // Ручной EAR/SPEAKER (cycle) важнее paired BT при возврате с peer-video.
+    const preferBeforeVideoBuiltin =
+      !fromPiP &&
+      !bootstrapAcceptRoute &&
+      (beforeVideo === 'EARPIECE' || beforeVideo === 'SPEAKER_PHONE') &&
+      (userExplicitlyPinnedBuiltinCallAudio() ||
+        userBuiltinLocked === beforeVideo ||
+        readCallAudioRouteUiLock() === beforeVideo);
+    // fromPiP: BT → маршрут плашки. Иначе: beforeVideo (явный) → BT → lock → resolve.
     // Явный return без beforeVideo: EARPIECE (не residue SPEAKER с video).
-    const audioRoute: InCallAudioRoute =
-      externalNow && isExternalHeadsetRoute(externalNow)
+    const audioRoute: InCallAudioRoute = preferBeforeVideoBuiltin
+      ? beforeVideo!
+      : externalNow && isExternalHeadsetRoute(externalNow)
         ? externalNow
         : fromPiP && pipReturnRoute
           ? pipReturnRoute
@@ -8295,6 +8312,8 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
                     ? t('callSpeakerActive', lang)
                     : t('callSpeakerOn', lang)
               }
+              speakerIcon={speakerRouteIcon}
+              speakerAccent={audioOutputRouteAccent}
               controlsLocked={controlsLockedForLocalHold}
               peerVideoHint={null}
               topInset={Platform.OS === 'android' ? insets.top : 0}
