@@ -5,6 +5,7 @@ import { usePiP } from './PiPContext';
 /**
  * Fallback для iOS / если нативный backdrop не поднялся.
  * На Android system PiP — нативный overlay в MainActivity (system_pip_backdrop.xml + livi_pip_placeholder).
+ * Логотип: только камера на прозрачном фоне (как away / cam-off).
  */
 export default function SystemPiPLogoLayer() {
   const { inSystemPiPMode, pendingSystemPiP } = usePiP();
@@ -19,7 +20,7 @@ export default function SystemPiPLogoLayer() {
 
   return (
     <View style={styles.root} pointerEvents="none" collapsable={false}>
-      <Image source={require('../../assets/splash-icon.png')} style={styles.logo} resizeMode="contain" />
+      <Image source={require('../../assets/away-logo.png')} style={styles.logo} resizeMode="contain" />
     </View>
   );
 }

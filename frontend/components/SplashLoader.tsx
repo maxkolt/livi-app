@@ -26,7 +26,7 @@ interface SplashLoaderProps {
 export default function SplashLoader({ dataLoaded, onComplete, overlayMode }: SplashLoaderProps) {
   const [showSplash, setShowSplash] = useState(true);
   const { height: windowHeight, width: windowWidth } = useWindowDimensions();
-  const logoSize = Math.min(150, Math.max(96, Math.round(Math.min(windowHeight * 0.2, windowWidth * 0.36))));
+  const logoSize = Math.min(168, Math.max(112, Math.round(Math.min(windowHeight * 0.22, windowWidth * 0.40))));
   const startedAtRef = useRef(Date.now());
   const finishScheduledRef = useRef(false);
 
@@ -85,17 +85,18 @@ export default function SplashLoader({ dataLoaded, onComplete, overlayMode }: Sp
   }, [dataLoaded, finishSplash, overlayMode]);
 
   useEffect(() => {
+    // «Дыхание»: камера чуть поднимается, объектив (справа) приподнимается вверх под углом.
     const logoFloat3D = Animated.loop(
       Animated.sequence([
         Animated.parallel([
           Animated.timing(logoTranslateY, {
-            toValue: -15,
+            toValue: -12,
             duration: 2000,
             easing: Easing.inOut(Easing.cubic),
             useNativeDriver: true,
           }),
           Animated.timing(logoScale, {
-            toValue: 1.08,
+            toValue: 1.06,
             duration: 2000,
             easing: Easing.inOut(Easing.cubic),
             useNativeDriver: true,
@@ -137,7 +138,7 @@ export default function SplashLoader({ dataLoaded, onComplete, overlayMode }: Sp
     return null;
   }
 
-  // Фон сплэша — welcome stage gradient; иконка сразу на прежнем тоне (#151F33).
+  // Фон сплэша — welcome stage gradient; логотип камеры на полупрозрачном стекле.
   return (
     <View style={[styles.container, { backgroundColor: WELCOME_STAGE_BG }]}>
       <WelcomeStageBackground />
@@ -151,9 +152,10 @@ export default function SplashLoader({ dataLoaded, onComplete, overlayMode }: Sp
                   { scale: logoScale },
                   { translateY: logoTranslateY },
                   {
+                    // Отрицательный угол: правый край (объектив) поднимается вверх
                     rotate: logoRotate.interpolate({
                       inputRange: [0, 1],
-                      outputRange: ['0deg', '5deg'],
+                      outputRange: ['0deg', '-9deg'],
                     }),
                   },
                 ],
@@ -162,7 +164,7 @@ export default function SplashLoader({ dataLoaded, onComplete, overlayMode }: Sp
             ]}
           >
             <Image
-              source={require('../assets/adaptive-icon.png')}
+              source={require('../assets/splash-icon.png')}
               style={[styles.logo, { width: logoSize, height: logoSize }]}
               resizeMode="contain"
             />

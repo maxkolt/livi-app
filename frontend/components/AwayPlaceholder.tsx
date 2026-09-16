@@ -64,13 +64,12 @@ const AwayPlaceholder = ({ logoSize = 90 }: AwayPlaceholderProps) => {
         }}
       >
         <Image
-          source={require('../assets/favicon.png')}
+          source={require('../assets/away-logo.png')}
           style={[
             styles.logo,
             {
               width: logoSize,
               height: logoSize,
-              borderRadius: Math.max(6, Math.round(logoSize * 0.18)),
             },
           ]}
         />
