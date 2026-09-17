@@ -2589,6 +2589,202 @@ async function verifyInstallSecretForSensitiveCallAction(
   }
 }
 
+/**
+ * HTTP fallback для инициации прямого звонка.
+ * Нужен, когда интернет доступен, но Socket.IO ещё переподключается: клиент не
+ * должен терять вызов и push только из-за недоступного signaling transport.
+ * Полностью офлайн-вызовы намеренно не ставятся в очередь как устаревающие.
+ */
+app.post('/api/calls/initiate', async (req, res) => {
+  try {
+    const callerIdRaw = String((req as any).userId || '').trim();
+    const installId = String((req as any).installId || '').trim();
+    if (!callerIdRaw || !isOid(callerIdRaw)) {
+      if (mongoose.connection.readyState !== 1) {
+        return res.status(503).json({ ok: false, error: 'database_unavailable' });
+      }
+      return res.status(401).json({ ok: false, error: 'unauthorized' });
+    }
+    if (!(await verifyInstallSecretForSensitiveCallAction(req, installId))) {
+      return res.status(401).json({ ok: false, error: 'unauthorized' });
+    }
+
+    const callerId = normalizeMongoObjectId(callerIdRaw);
+    const calleeRaw = String(req.body?.to || '').trim();
+    if (!isOid(calleeRaw)) return res.status(400).json({ ok: false, error: 'bad_peer' });
+    const calleeId = normalizeMongoObjectId(calleeRaw);
+    if (callerId === calleeId) return res.status(400).json({ ok: false, error: 'bad_peer' });
+    const callMedia: 'audio' | 'video' =
+      String(req.body?.media || '').trim().toLowerCase() === 'audio' ? 'audio' : 'video';
+    const callerNickHint = String(req.body?.callerNick || '').trim().slice(0, 64);
+
+    pruneOrphanCallOfUserEntry(callerId);
+    pruneOrphanCallOfUserEntry(calleeId);
+
+    const reusableCallId = await findReusableFreshRingingCallId(callerId, calleeId);
+    if (reusableCallId) {
+      logger.info('[call:initiate] reusing fresh ringing call (http)', {
+        callId: reusableCallId,
+        callerId,
+        calleeId,
+      });
+      return res.json({ ok: true, callId: reusableCallId, reused: true });
+    }
+
+    await cleanupStaleRingingCallForImmediateRetry(callerId, calleeId);
+
+    if (await getUserCallEntryFromAnyStore(callerId)) {
+      return res.status(409).json({ ok: false, error: 'busy' });
+    }
+    if (await getUserCallEntryFromAnyStore(calleeId)) {
+      return res.status(409).json({ ok: false, error: 'peer_busy' });
+    }
+    const calleeSocket = findSocketForUser(io, calleeId);
+    if (calleeSocket && (calleeSocket as any)?.data?.busy === true) {
+      return res.status(409).json({ ok: false, error: 'peer_busy' });
+    }
+
+    const createdAtMs = Date.now();
+    const expiresAtMs = createdAtMs + CALL_RING_TIMEOUT_MS;
+    const callId = `${createdAtMs}_${Math.random().toString(36).slice(2, 8)}`;
+    const link: CallLink = {
+      a: callerId,
+      b: calleeId,
+      createdAtMs,
+      expiresAtMs,
+      media: callMedia,
+    };
+    callsById.set(callId, link);
+    createOrchestratedCall({ callId, callerId, calleeId });
+    callOfUser.set(callerId, { with: calleeId, callId });
+    callOfUser.set(calleeId, { with: callerId, callId });
+    callDeliveryById.set(callId, {
+      callerId,
+      calleeId,
+      createdAtMs,
+      expiresAtMs,
+    });
+    void persistDirectCallSharedState(callId, link).catch((e: any) => {
+      logger.warn('[call:initiate] persistDirectCallSharedState failed (http)', {
+        callId,
+        error: e?.message,
+      });
+    });
+
+    const roomId = `room_${[callerId, calleeId].sort().join('_')}`;
+    const callerSockets = getSocketsForUser(io, callerId);
+    for (const callerSocket of callerSockets) {
+      try {
+        evictExtraUserSocketsInDirectRoom(io, roomId, callerId, callerSocket.id);
+        callerSocket.join(roomId);
+        (callerSocket as any).data = (callerSocket as any).data || {};
+        (callerSocket as any).data.busy = true;
+        (callerSocket as any).data.roomId = roomId;
+        if (calleeSocket) (callerSocket as any).data.partnerSid = calleeSocket.id;
+        callerSocket.emit('call:room:created', {
+          callId,
+          roomId,
+          partnerId: calleeId,
+          from: calleeSocket?.id || null,
+        });
+      } catch {}
+    }
+
+    let fromNick =
+      callerSockets.map((s) => String((s as any)?.data?.nick || '').trim()).find(Boolean) ||
+      callerNickHint ||
+      undefined;
+    if (!fromNick && isMongoReady()) {
+      try {
+        const user = await User.findById(callerId).select('nick').lean();
+        fromNick = String((user as any)?.nick || '').trim() || undefined;
+      } catch {}
+    }
+    const telemetry = callDeliveryById.get(callId);
+    if (telemetry) {
+      telemetry.callerNick = fromNick || '';
+      callDeliveryById.set(callId, telemetry);
+    }
+
+    emitCallIncomingToCallee(io, callId, link, fromNick || '');
+
+    link.timer = setTimeout(async () => {
+      const activeLink = await getCallLinkFromAnyStore(callId);
+      if (!activeLink) {
+        cleanupCall(callId);
+        return;
+      }
+      const shouldProcess = transitionCall(callId, 'timeout', {
+        actionKey: `timeout:${callId}`,
+        source: 'timer_timeout',
+      });
+      if (!shouldProcess) {
+        if (callsById.has(callId)) cleanupCall(callId);
+        return;
+      }
+      clearDirectCallSessionForUser(io, activeLink.a);
+      clearDirectCallSessionForUser(io, activeLink.b);
+      await emitPresenceUpdateCallToFriends(io, activeLink.a, activeLink.b, false);
+      try { io.to(`u:${activeLink.a}`).emit('call:timeout', { callId, from: activeLink.a }); } catch {}
+      try { io.to(`u:${activeLink.b}`).emit('call:timeout', { callId, from: activeLink.a }); } catch {}
+      let timeoutNick = fromNick || '';
+      if (!timeoutNick && isMongoReady()) {
+        try {
+          const user = await User.findById(activeLink.a).select('nick').lean();
+          timeoutNick = String((user as any)?.nick || '').trim();
+        } catch {}
+      }
+      try {
+        await sendCallMissedToRecipient(activeLink.b, callId, activeLink.a, timeoutNick);
+      } catch (e: any) {
+        logger.warn('[call:timeout] call_ended push failed (http initiate)', {
+          callId,
+          error: e?.message,
+        });
+      }
+      if (!hasSocketForUser(io, activeLink.b)) {
+        await saveMissedCall(activeLink.b, activeLink.a, timeoutNick);
+      }
+      cleanupCall(callId, 'timeout');
+    }, CALL_RING_TIMEOUT_MS);
+
+    // Клиенту отвечаем до внешнего push provider. Созданный сервером звонок уже
+    // валиден, а push будет отправлен и повторён независимо от HTTP соединения.
+    res.json({ ok: true, callId });
+
+    void (async () => {
+      try {
+        await sendCallPushToRecipient(calleeId, {
+          callId,
+          from: callerId,
+          fromNick: fromNick || '',
+          createdAtMs,
+          expiresAtMs,
+          media: callMedia,
+        });
+        addCallEvent(callId, 'push_sent', 'backend_initial', {
+          providerMode: callProviderMode,
+          providerPrimary: callFeatureFlags.providerSignalingEnabled,
+          pushFallbackEnabled: callFeatureFlags.pushFallbackEnabled,
+        });
+        const latest = callDeliveryById.get(callId);
+        if (latest && !latest.pushSentAtMs) latest.pushSentAtMs = Date.now();
+      } catch (e: any) {
+        logger.warn('[call:initiate] push to recipient failed (http)', {
+          callId,
+          calleeId,
+          error: e?.message,
+        });
+      }
+      scheduleCallPushRetry(callId, CALL_DELIVERY_ACK_WAIT_MS);
+    })();
+  } catch (e: any) {
+    if (!res.headersSent) {
+      return res.status(500).json({ ok: false, error: e?.message || 'server_error' });
+    }
+  }
+});
+
 /** Отклонение звонка по HTTP (из IncomingCallActivity без открытия приложения). Auth по x-install-id. */
 app.post('/api/calls/decline', async (req, res) => {
   try {
