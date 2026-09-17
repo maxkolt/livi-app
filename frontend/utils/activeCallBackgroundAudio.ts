@@ -125,6 +125,22 @@ function onAppStateChange(next: AppStateStatus): void {
   if (next === 'active') {
     clearBackgroundInterval();
     lastNativeVoiceMaintainAt = 0;
+    // Вернулись на передний план, так и не войдя в system PiP — снять "уходим по Home".
+    // Иначе флаги остаются sticky на весь звонок: у инициатора bringMainActivityToFront
+    // после accept даёт короткий background→active блип (~13мс), он взводит их, PiP не
+    // происходит, и VideoCall потом считает, что мы уходим в PiP (compact без кнопок).
+    try {
+      const g = global as any;
+      const inSystemPiP = g.__pipInSystemModeRef?.current === true;
+      const pendingEnter = g.__pendingSystemPiPSyncRef?.current === true;
+      const entryUntil = Number(g.__systemPiPEntryInProgressUntilRef?.current || 0);
+      if (!inSystemPiP && entryUntil <= Date.now()) {
+        if (g.__leavingVideoCallByHomeRef) g.__leavingVideoCallByHomeRef.current = false;
+        if (pendingEnter && g.__pendingSystemPiPSyncRef) {
+          g.__pendingSystemPiPSyncRef.current = false;
+        }
+      }
+    } catch (_) {}
     syncAndroidLeaveHintForOngoingCall();
     try {
       const g = global as any;
@@ -177,8 +193,12 @@ function onAppStateChange(next: AppStateStatus): void {
         const external =
           readActiveExternalCallAudioRoute() || readNativeProbedExternalRoute();
         // Страховка: ModeChanged/Expanded могли промахнуться — вернуть in-app плашку.
+        // Но только если мы НЕ на полноэкранном экране звонка: после разворота из системного
+        // PiP пользователь уже на VideoCall, и sticky-флаг здесь сворачивал его обратно в
+        // плашку через пару секунд (restore_in_app_pip_from_system поверх успешного возврата).
         const needsInAppRestore =
           !plaqueVisible &&
+          readRootCurrentRouteName() !== 'VideoCall' &&
           !isIncomingAnswerTransitionActive() &&
           (g.__systemPiPNeedsInAppRestoreRef?.current === true ||
             g.__pendingInAppPiPRestoreAfterSystemRef?.current === true ||
@@ -248,15 +268,6 @@ function onAppStateChange(next: AppStateStatus): void {
       const g = global as any;
       const returningFromPiP = Date.now() < Number(g.__returningFromSystemPiPUntilRef?.current || 0);
       const session = g.__webrtcSessionRef?.current;
-      if (returningFromPiP && session && typeof session.restoreLocalCameraAfterPiPReturn === 'function') {
-        // Cam intentionally off before PiP → never auto-enable on return (video shell ok, camera stays off).
-        const camOff =
-          typeof session.getIsCamOn === 'function' && session.getIsCamOn() === false;
-        if (!camOff) {
-          void session.restoreLocalCameraAfterPiPReturn();
-        }
-        return;
-      }
       if (
         session &&
         typeof session.restoreCameraAfterAppBackground === 'function' &&
@@ -264,6 +275,8 @@ function onAppStateChange(next: AppStateStatus): void {
       ) {
         void session.restoreCameraAfterAppBackground();
       }
+      // System PiP return is owned by the focused VideoCall. AppState can fire
+      // before navigation settles and must not open Camera2 in parallel.
     } catch {}
   }
 }

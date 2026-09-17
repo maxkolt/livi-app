@@ -95,7 +95,8 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
     return () => clearTimeout(t);
   }, [localStream?.id, localVideoTrackId, localRenderKey]);
 
-  // КРИТИЧНО: На Android нужен force-update для RTCView при изменении стрима / remount key
+  // Если новый Camera2 track ещё не live, один раз обновляем RTCView после запуска.
+  // Живой track уже обновляется через localRenderKey; второй немедленный remount мерцал.
   useEffect(() => {
     if (localExternalHold) return;
     if (Platform.OS === 'android' && localStream && isValidStream(localStream)) {
@@ -114,10 +115,7 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
           return next;
         });
       };
-      if (vt.readyState === 'live' || camOn) {
-        bump();
-        return;
-      }
+      if (vt.readyState === 'live') return;
       const poll = setInterval(() => {
         if (vt.readyState === 'live') {
           clearInterval(poll);
@@ -130,26 +128,7 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
         clearTimeout(stop);
       };
     }
-  }, [localStream?.id, localVideoTrackId, localRenderKey, camOn, localExternalHold]);
-
-  // КРИТИЧНО: На Android RTCView может "залипать" на черном экране при переключении enabled у videoTrack
-  // (камера OFF -> ON). Поэтому при изменении enabled/ camOn форсим remount.
-  const lastEnabledRef = useRef<boolean | null>(null);
-  useEffect(() => {
-    if (Platform.OS !== 'android') return;
-    if (!localStream || !isValidStream(localStream)) return;
-    const currentEnabled = !!(videoTrack?.enabled ?? false);
-    if (lastEnabledRef.current === null) {
-      lastEnabledRef.current = currentEnabled;
-      return;
-    }
-    if (lastEnabledRef.current !== currentEnabled) {
-      lastEnabledRef.current = currentEnabled;
-      // На hold mute не remount'им — иначе потеряем застывший кадр под blur.
-      if (localExternalHold) return;
-      setForceUpdateKey((prev) => prev + 1);
-    }
-  }, [camOn, localStream?.id, isVideoTrackEnabled, localExternalHold]);
+  }, [localStream?.id, localVideoTrackId, localRenderKey, localExternalHold]);
 
   // Уведомляем о готовности стрима
   useEffect(() => {
@@ -222,7 +201,7 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
     const mirrorKey = isFrontCamera ? 'mirror' : 'nomirror';
     const candidateKey =
       Platform.OS === 'android'
-        ? `local-video-${localStream.id}-${localRenderKey}-${forceUpdateKey}-${mirrorKey}-${isVideoTrackEnabled ? 1 : 0}`
+        ? `local-video-${localStream.id}-${localRenderKey}-${forceUpdateKey}-${mirrorKey}`
         : `local-video-${localStream.id}-${localRenderKey}-${mirrorKey}`;
     // На hold оставляем предыдущий key — иначе mute/remount съедает кадр под blur.
     const rtcViewKey =

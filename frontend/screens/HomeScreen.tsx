@@ -1997,9 +1997,10 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           } catch {}
         }
       } catch {}
-      // Outgoing в журнал сразу (silent) — cancel сможет перевести в cancelled без гонки setTimeout(0).
+      // Outgoing в журнал сразу и с notify: локальная строка должна быть видна даже если
+      // signaling/HTTP не успеют дойти до сервера из-за потери сети.
       try {
-        recordCallLog({ peerId: String(friend.id), direction: 'outgoing', silent: true });
+        recordCallLog({ peerId: String(friend.id), direction: 'outgoing' });
       } catch {}
       callingVisibleRef.current = true;
       clearOutgoingRedialGrace();
@@ -2414,7 +2415,10 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           lastOutgoingPeerIdRef.current = null;
           callingVisibleRef.current = false;
           setCalling({ visible: false, friend: null, callId: null });
-          try { flushCallLogUi(); } catch {}
+          try {
+            recordCancelledCall(String(friend.id));
+            forceCallLogUiNow('safeguard_timeout');
+          } catch {}
           showNotice(t('noAnswer', lang), 'error', 3000);
         });
       }, OUTGOING_CALL_TIMEOUT_MS);
@@ -2463,6 +2467,14 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         outgoingCallUserCanceledRef.current ||
         pendingCancelRef.current ||
         canceledByNative;
+      // Сервер не подтвердил создание звонка. Локальная строка остаётся доступной
+      // без сети, но не должна выглядеть как состоявшийся исходящий вызов.
+      if (!skipNetworkBanner) {
+        try {
+          recordCancelledCall(String(friend.id));
+          forceCallLogUiNow('start_failed');
+        } catch {}
+      }
       if (!skipNetworkBanner) {
         if (errCode === 'initiator_busy' || errCode === 'busy') {
           showNotice(t('finishCurrentCallFirst', lang), 'info', 2500);

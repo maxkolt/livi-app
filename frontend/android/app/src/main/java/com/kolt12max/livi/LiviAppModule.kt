@@ -1878,8 +1878,18 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   @ReactMethod
   fun setSystemPiPCaptureFrameReady(ready: Boolean) {
     LiviAppModule.setSystemPiPCaptureFrameReadyStatic(ready)
-    if (ready) {
-      (currentActivity as? MainActivity)?.retryEnterSystemPiPIfLeaveHintPending()
+    (currentActivity as? MainActivity)?.let { activity ->
+      activity.runOnUiThread {
+        // Video auto-enter нельзя держать включённым на обычном VideoCall: тогда Android
+        // успевает захватить controls до React compact. Включаем его только после clean onLayout.
+        activity.applySystemPiPPlaceholderOnlyUi(
+          LiviAppModule.getSystemPiPCapturePlaceholderOnly(),
+        )
+        activity.syncSystemPiPAutoEnterParams(
+          LiviAppModule.getShouldEnterPiPOnLeaveHint() || LiviAppModule.isActiveCallForegroundRunning(),
+        )
+        if (ready) activity.retryEnterSystemPiPIfLeaveHintPending()
+      }
     }
   }
 
@@ -2907,11 +2917,21 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
           return
         }
         if (activeCallVoiceFocusLost) {
-          Log.d(NAME, "onActiveCallUserLeaveHint: voice focus already lost — re-emit interrupt")
-          emitActiveCallExternalAudioInterruptedStatic(
-            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
-            appCtx,
-          )
+          // Sticky-флаг с давнего блипа (не связанного с этим Home) не должен сам по себе
+          // открывать hold — как и probeExternalCallHoldSignal, проверяем возраст перед re-emit.
+          val stale =
+            pendingExternalHoldAtMs <= 0L ||
+              System.currentTimeMillis() - pendingExternalHoldAtMs > EXTERNAL_HOLD_PENDING_FRESH_MS
+          if (stale) {
+            Log.d(NAME, "onActiveCallUserLeaveHint: stale voice focus lost — clearing, no hold")
+            activeCallVoiceFocusLost = false
+          } else {
+            Log.d(NAME, "onActiveCallUserLeaveHint: voice focus already lost — re-emit interrupt")
+            emitActiveCallExternalAudioInterruptedStatic(
+              AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
+              appCtx,
+            )
+          }
         }
       } catch (e: Exception) {
         Log.w(NAME, "onActiveCallUserLeaveHint failed", e)
@@ -3710,9 +3730,9 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     @JvmStatic
     internal fun setSystemPiPCapturePlaceholderOnlyStatic(value: Boolean) {
       systemPiPCapturePlaceholderOnly = value
-      if (value) {
-        systemPiPCaptureFrameReady = true
-      }
+      // Logo backdrop готов сразу. Переход logo/full UI → video всегда требует нового
+      // подтверждения onLayout чистого capture-слоя; старый ready переносить нельзя.
+      systemPiPCaptureFrameReady = value
       try {
         val activity =
           (reactContextRef?.currentActivity as? MainActivity) ?: MainActivity.lastResumedInstance

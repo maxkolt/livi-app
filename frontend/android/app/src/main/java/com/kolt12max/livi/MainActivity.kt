@@ -226,6 +226,10 @@ class MainActivity : ReactActivity() {
       }
       if (placeholderOnly) {
         showSystemPiPBackdropForCapture()
+      } else if (!LiviAppModule.getSystemPiPCaptureFrameReady()) {
+        // Пока clean video-only слой не готов, держим native backdrop поверх RN.
+        // Так даже fallback-вход никогда не захватит кнопки полноэкранного звонка.
+        showSystemPiPBackdropForCapture()
       } else {
         hideSystemPiPBackdropForCapture()
       }
@@ -359,6 +363,11 @@ class MainActivity : ReactActivity() {
     if (placeholderOnlyEnter) {
       LiviAppModule.setSystemPiPCaptureFrameReadyStatic(true)
     }
+    // Backdrop раньше показывался только внутри tryEnterPiP — к этому моменту auto-enter уже
+    // мог быть armed без защиты кадра. Показываем сразу, как и в onUserLeaveHint, и по той же
+    // причине передаём backdropAlreadyShown=true — иначе этот вызов гасит allow, выставленный
+    // чуть раньше в onUserLeaveHint, откатывая единственный надёжный путь на строгих устройствах.
+    showSystemPiPBackdropForCapture()
     syncSystemPiPAutoEnterParams(true)
     android.util.Log.i(
       "MainActivity",
@@ -416,14 +425,14 @@ class MainActivity : ReactActivity() {
         if (!placeholderOnly && !frameReady && waitedMs >= VIDEO_FRAME_GRACE_MS) {
           android.util.Log.w(
             "MainActivity",
-            "tryEnterPiP enter video PiP without frameReady (waitedMs=$waitedMs reason=$reason)",
+            "tryEnterPiP enter video PiP with protective backdrop (waitedMs=$waitedMs reason=$reason)",
           )
-          homePiPTrace("native_enter_without_frame") {
+          homePiPTrace("native_enter_with_backdrop") {
             putLong("waitedMs", waitedMs)
             putString("enterReason", reason)
           }
         }
-        if (placeholderOnly) {
+        if (placeholderOnly || !frameReady) {
           showSystemPiPBackdropForCapture()
         } else {
           hideSystemPiPBackdropForCapture()
@@ -493,6 +502,24 @@ class MainActivity : ReactActivity() {
           pendingPiPEnterRunnables.add(r)
           pipEnterHandler.postDelayed(r, d)
         }
+        val requestToken = lastPiPEnterRequestAtMs
+        val giveUpDelay = (PIP_ENTER_RETRY_DELAYS_MS.maxOrNull() ?: 0L) + PIP_ENTER_GIVE_UP_BUFFER_MS
+        val giveUp = Runnable {
+          if (
+            !isInPictureInPictureMode &&
+            isPiPEnterAttemptRunning &&
+            lastPiPEnterRequestAtMs == requestToken
+          ) {
+            android.util.Log.i(
+              "MainActivity",
+              "beginSystemPiPEnterSequence give up — retries exhausted ($reason)",
+            )
+            homePiPTrace("native_enter_give_up") { putString("enterReason", reason) }
+            cancelPendingPiPEnterAttempts()
+          }
+        }
+        pendingPiPEnterRunnables.add(giveUp)
+        pipEnterHandler.postDelayed(giveUp, giveUpDelay)
       }
     }
   }
@@ -543,12 +570,23 @@ class MainActivity : ReactActivity() {
       // Раньше auto-enter включался только на время ручной попытки (isPiPEnterAttemptRunning),
       // поэтому системный вход в PiP фактически не использовался. Теперь разрешаем auto-enter
       // по armed-состоянию звонка — система сама надёжно вводит в PiP при уходе в фон (S+).
+      val placeholderOnly = LiviAppModule.getSystemPiPCapturePlaceholderOnly()
+      // ВАЖНО: auto-enter больше не ждёт frameReady/backdrop здесь. setPiPOnLeaveHintEnabled
+      // вооружает этот флаг ПРОАКТИВНО, как только звонок становится PiP-eligible (задолго до
+      // любого Home) — именно так и задуман setAutoEnterEnabled в системе. Гейт по frameReady
+      // держал allow=false весь звонок (для видео он не готов синхронно почти никогда), из-за
+      // чего auto-enter реально вооружался только реактивно внутри onUserLeaveHint — а на части
+      // устройств/версий Android (напр. API 36) к этому моменту система уже не учитывает флаг
+      // для текущего перехода: ручной enterPictureInPictureMode() там возвращает false/бросает
+      // "Activity must be resumed", и БЕЗ заранее armed auto-enter Home просто сворачивает
+      // приложение без всякого PiP. Защита от захваченного chrome теперь не здесь, а в
+      // onPictureInPictureModeChanged(true) — backdrop остаётся/показывается там же, независимо
+      // от того, кто вызвал вход (ручной путь или сама система).
       val allow =
         enabled &&
           !inRecentsOverview &&
           !LiviAppModule.getEndingCallInProgress() &&
           (LiviAppModule.getShouldEnterPiPOnLeaveHint() || LiviAppModule.isActiveCallForegroundRunning())
-      val placeholderOnly = LiviAppModule.getSystemPiPCapturePlaceholderOnly()
       val ratio = if (placeholderOnly) Rational(16, 9) else Rational(9, 16)
       val builder =
         PictureInPictureParams.Builder()
@@ -867,12 +905,21 @@ class MainActivity : ReactActivity() {
       "onUserLeaveHint: sdk=${Build.VERSION.SDK_INT} shouldEnterPiP=$shouldEnterPiPEarly inAppPiPVisible=$inAppPiPVisibleEarly isInPiP=$isInPictureInPictureMode — defer ${RECENTS_DETECT_DELAY_MS}ms for Recents detect",
     )
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && shouldEnterPiPEarly) {
-      // Аудио/placeholder: показать нативную заглушку ДО входа, чтобы кадр PiP был чистым.
+      val frameReadyEarly = LiviAppModule.getSystemPiPCaptureFrameReady()
+      // Заглушка ДО входа всегда, а не только для placeholderOnly: чистый video-only кадр
+      // не может стать готовым синхронно (JS не успевает отрисовать layout внутри
+      // onUserLeaveHint) — backdrop, а не ожидание frameReady, гарантирует отсутствие
+      // захваченных кнопок звонка в первом кадре PiP.
       if (placeholderOnlyEarly) {
         LiviAppModule.setSystemPiPCaptureFrameReadyStatic(true)
-        showSystemPiPBackdropForCapture()
       }
+      showSystemPiPBackdropForCapture()
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        // Заглушка выше уже защищает кадр (syncSystemPiPAutoEnterParams сам увидит её
+        // видимость), поэтому системный auto-enter вооружается не дожидаясь frameReady —
+        // единственный надёжный путь на устройствах/версиях Android, где ручной
+        // enterPictureInPictureMode() ниже может отказать ("Activity must be resumed")
+        // из-за более узкого resumed-окна.
         try { syncSystemPiPAutoEnterParams(true) } catch (_: Exception) {}
       }
       homePiPTrace("native_s_plus_auto_enter_arm") {
@@ -881,11 +928,11 @@ class MainActivity : ReactActivity() {
       // КАНОНИЧНЫЙ путь: входим в PiP СИНХРОННО прямо здесь, пока Activity ещё RESUMED.
       // onUserLeaveHint — штатное место входа в PiP. Раньше вход откладывался на
       // RECENTS_DETECT_DELAY_MS(=400мс), из-за чего к моменту вызова Activity уже уходила в
-      // onStop и enterPictureInPictureMode падал с "Activity must be resumed". Для
-      // placeholder/frameReady (аудиозвонок готов) входим немедленно, без задержки.
-      val canEnterNowSync = placeholderOnlyEarly || LiviAppModule.getSystemPiPCaptureFrameReady()
+      // onStop и enterPictureInPictureMode падал с "Activity must be resumed". Backdrop выше
+      // уже защищает кадр, поэтому синхронная попытка не ждёт frameReady — иначе для видео
+      // он никогда не готов синхронно и этот путь всегда пустой.
       var enteredSync = false
-      if (canEnterNowSync && !isInPictureInPictureMode) {
+      if (!isInPictureInPictureMode) {
         try {
           val ratioSync = if (placeholderOnlyEarly) Rational(16, 9) else Rational(9, 16)
           val builderSync =
@@ -904,7 +951,7 @@ class MainActivity : ReactActivity() {
           }
           android.util.Log.i(
             "MainActivity",
-            "onUserLeaveHint sync enterPiP -> $enteredSync (placeholderOnly=$placeholderOnlyEarly)",
+            "onUserLeaveHint sync enterPiP -> $enteredSync (placeholderOnly=$placeholderOnlyEarly frameReady=$frameReadyEarly)",
           )
         } catch (e: Exception) {
           android.util.Log.w("MainActivity", "onUserLeaveHint sync enter PiP failed", e)
@@ -916,9 +963,10 @@ class MainActivity : ReactActivity() {
       }
       if (enteredSync || isInPictureInPictureMode) {
         // Уже вошли в PiP синхронно — отложенный ретрай не нужен (и не гасим заглушку).
+        // Backdrop снимет сам JS через setSystemPiPCaptureFrameReady(true) после чистого onLayout.
         return
       }
-      // Фолбэк: вход синхронно не удался (нет кадра видео / отказ) — прежний отложенный путь.
+      // Фолбэк: синхронный вход не удался (Android отказал/бросил) — прежний отложенный путь.
       deferredLeaveHintPiPRunnable?.let { pipEnterHandler.removeCallbacks(it) }
       val deferred =
         Runnable {
@@ -948,7 +996,9 @@ class MainActivity : ReactActivity() {
       if (isInPictureInPictureMode) {
         cancelPendingPiPEnterAttempts()
         val placeholderOnly = LiviAppModule.getSystemPiPCapturePlaceholderOnly()
-        if (placeholderOnly) {
+        // Auto-enter теперь armed заранее и может сработать без чистого video-only кадра —
+        // держим backdrop, пока JS не подтвердит frameReady, а не только для placeholderOnly.
+        if (placeholderOnly || !LiviAppModule.getSystemPiPCaptureFrameReady()) {
           showSystemPiPBackdropForCapture()
           try {
             window.setBackgroundDrawableResource(R.color.system_pip_backdrop)
@@ -1118,19 +1168,18 @@ class MainActivity : ReactActivity() {
         if (intent?.action != Intent.ACTION_CLOSE_SYSTEM_DIALOGS) return
         when (intent.getStringExtra("reason")) {
           "homekey" -> {
-            // Home подтверждён системой — входим сразу (не ждать RECENTS_DETECT_DELAY_MS).
+            // Home подтверждён системой — не ждать RECENTS_DETECT_DELAY_MS для уже
+            // запланированного фолбэка из onUserLeaveHint. Не стартуем здесь отдельную
+            // beginSystemPiPEnterSequence: ACTION_CLOSE_SYSTEM_DIALOGS — необязательный
+            // broadcast (на части OEM/версий Android не доставляется вовсе, на других
+            // приходит с опозданием) и своя независимая попытка входа гонялась с уже
+            // запущенным официальным путём onUserLeaveHint — это и давало device-specific
+            // разброс (двойной вход/флик на одних устройствах, тишина на других).
             clearRecentsOverviewFlag("homekey")
-            deferredLeaveHintPiPRunnable?.let { pipEnterHandler.removeCallbacks(it) }
-            deferredLeaveHintPiPRunnable = null
-            if (
-              Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
-              !isInPictureInPictureMode &&
-              shouldArmSystemPiPEnter()
-            ) {
-              if (currentHomePiPTraceId.isBlank()) {
-                currentHomePiPTraceId = "hp_${System.currentTimeMillis()}"
-              }
-              beginSystemPiPEnterSequence("homekey")
+            deferredLeaveHintPiPRunnable?.let {
+              pipEnterHandler.removeCallbacks(it)
+              deferredLeaveHintPiPRunnable = null
+              it.run()
             }
           }
           "recentapps" -> {
@@ -1337,6 +1386,11 @@ class MainActivity : ReactActivity() {
     private const val PIP_ENTER_DEDUP_MS = 2500L
     private val PIP_ENTER_RETRY_DELAYS_MS =
       longArrayOf(16L, 48L, 96L, 160L, 280L, 450L, 700L, 1100L, 1600L)
+    /** После последнего ретрая — если вход так и не удался, снять isPiPEnterAttemptRunning.
+     * Иначе флаг висит "running" бесконечно, и случайный поздний retryEnterSystemPiPIfLeaveHintPending
+     * (например от setSystemPiPCaptureFrameReady) резолвит протухшую попытку через десятки секунд,
+     * когда Activity давно не resumed — гарантированный "Activity must be resumed" и шум в логах. */
+    private const val PIP_ENTER_GIVE_UP_BUFFER_MS = 300L
 
     /** true когда приложение на переднем плане (в т.ч. во время видеозвонка) — тогда не показываем heads-up уведомление о звонке */
     @JvmField

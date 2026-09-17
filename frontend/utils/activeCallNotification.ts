@@ -4,7 +4,6 @@ import {
   shouldUseSystemPiPPlaceholderOnly,
   refreshSystemPiPLeaveContextSnapshot,
   markSystemPiPSessionAudioOrigin,
-  mediaStreamHasLiveVideo,
 } from '../src/pip/pipPlaceholderOnly';
 import { logHomePiPTrace } from './systemPiPHomeTrace';
 import {
@@ -23,34 +22,6 @@ import {
 } from './callAudioRoutePersist';
 import { isFreshDirectCallAudioAcceptCallActive } from './directCallVideoExpandGuard';
 
-/**
- * Video system PiP: кадр уже есть до leave-hint — enterPictureInPictureMode
- * должен вызваться сразу в onUserLeaveHint (задержки → OEM не даёт войти).
- */
-function hasSystemPiPVideoCaptureReady(): boolean {
-  try {
-    const g = global as any;
-    const params = g.__currentCallPiPParamsRef?.current;
-    const session = g.__webrtcSessionRef?.current;
-    if (params?.localCamOn === true || params?.remoteCamOn === true) return true;
-    if (ongoingCallPrefersVideoMedia()) return true;
-    if (g.__stayOnVideoCallUiRef?.current === true) return true;
-    const remote =
-      (typeof session?.getRemoteStream === 'function' ? session.getRemoteStream() : null) ??
-      params?.remoteStream ??
-      null;
-    const local =
-      (typeof session?.getLocalStream === 'function' ? session.getLocalStream() : null) ??
-      params?.localStream ??
-      null;
-    if (mediaStreamHasLiveVideo(remote) || mediaStreamHasLiveVideo(local)) return true;
-    if (typeof session?.getRemoteCamEnabled === 'function' && session.getRemoteCamEnabled()) {
-      return true;
-    }
-    if (typeof session?.getIsCamOn === 'function' && session.getIsCamOn()) return true;
-  } catch (_) {}
-  return false;
-}
 /**
  * Ongoing FGS label: только явный audio-only UI.
  * Не выводить из PiP placeholder / cam-off — иначе video-звонок попадает в «аудио» канал
@@ -200,13 +171,14 @@ function resolveLeaveHintPlaceholderOnly(): boolean {
 function applyAndroidLeaveHintNativeFlags(allowPiP: boolean): void {
   const effectiveAllow = allowPiP && shouldAllowAndroidSystemPiPOnLeaveHint();
   const placeholderOnly = effectiveAllow ? resolveLeaveHintPlaceholderOnly() : false;
-  // Video path: pre-arm frameReady пока камеры/live track уже есть —
-  // иначе leave-hint ждёт кадр и промахивает окно enter на OEM.
+  // Наличие live track ещё не означает, что кадр безопасен для захвата: пока VideoCall
+  // полноэкранный, Android захватит вместе с видео нижние кнопки. Для video окончательное
+  // true выставляет только onLayout отдельного systemPiPContainer/CaptureHost.
   const frameReady = !effectiveAllow
     ? false
     : placeholderOnly
       ? true
-      : hasSystemPiPVideoCaptureReady();
+      : false;
   if (
     lastNativeLeaveHintAllow === effectiveAllow &&
     lastNativePlaceholderOnly === placeholderOnly &&
@@ -593,7 +565,9 @@ export function armAndroidLeaveHintForVideoCallHome(opts?: { allowFromInAppPiP?:
       }
       NativeModules.LiviAppModule?.setSystemPiPCapturePlaceholderOnly?.(placeholderOnly);
       if (!placeholderOnly) {
-        NativeModules.LiviAppModule?.setSystemPiPCaptureFrameReady?.(true);
+        // Не разрешать native capture до VideoCall.systemPiPContainer.onLayout.
+        // Именно этот барьер гарантирует, что в первый PiP-кадр не попадёт chrome.
+        NativeModules.LiviAppModule?.setSystemPiPCaptureFrameReady?.(false);
       }
     } catch (_) {}
   } catch (_) {}

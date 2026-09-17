@@ -1654,7 +1654,6 @@ function AppContent() {
       let forceInAppRestore = false;
       try {
         const g = (global as any);
-        const returningUntil = Number(g.__returningFromSystemPiPUntilRef?.current || 0);
         const ignoreExpandedUntil = Number(g.__ignoreSystemPiPExpandedUntilRef?.current || 0);
         const returnToCallInFlight = isPipReturnToCallInFlight();
         const endingCall =
@@ -1692,7 +1691,9 @@ function AppContent() {
           } catch (_) {}
           return;
         }
-        // ModeChanged(false) уже ставит returningUntil — не глушить expand, если ещё нужна in-app плашка.
+        // ModeChanged(false) выставляет returningUntil до SystemPiPExpanded.
+        // Это окно защищает от повторного входа, но не должно глушить сам expand:
+        // иначе не вызывается returnToCall и партнёру остаётся pip:state=true.
         const plaqueMissing = !plaqueVisible;
         const allowInAppRestoreDespiteReturning =
           forceInAppRestore && plaqueMissing && !endingCall && !returnToCallInFlight;
@@ -1701,7 +1702,6 @@ function AppContent() {
           now < ignoreExpandedUntil ||
           (!allowInAppRestoreDespiteReturning &&
             (returnToCallInFlight ||
-              now < returningUntil ||
               now - Number(g.__lastSystemPiPExpandedAtRef.current || 0) < 1200))
         ) {
           return;
@@ -1802,23 +1802,27 @@ function AppContent() {
       try {
         restoreCallMediaAfterSystemPiPReturn({ preferAudioOnly: preferAudioOnly });
       } catch (_) {}
-      try {
-        const session = (global as any).__webrtcSessionRef?.current;
-        const appliedSnap = (global as any).__lastAppliedSystemPiPSnapRef as
-          | { camOn?: boolean; preferAudioOnlyUi?: boolean }
-          | undefined;
-        const shouldRestoreCam =
-          appliedSnap?.camOn === true && appliedSnap?.preferAudioOnlyUi !== true;
-        if (
-          shouldRestoreCam &&
-          session &&
-          typeof session.getIsCamOn === 'function' &&
-          session.getIsCamOn() &&
-          typeof session.restoreLocalCameraAfterPiPReturn === 'function'
-        ) {
-          void session.restoreLocalCameraAfterPiPReturn();
-        }
-      } catch (_) {}
+      // Камеру восстанавливает только сфокусированный VideoCall после навигации.
+      // Ранний restore отсюда гонялся с AppState/focus и повторно открывал Camera2.
+      // Исключение — возврат на in-app PiP: полного VideoCall там нет, поэтому
+      // компактный overlay остаётся единственным владельцем восстановления.
+      if (restoreInAppPiP) {
+        try {
+          const session = (global as any).__webrtcSessionRef?.current;
+          const appliedSnap = (global as any).__lastAppliedSystemPiPSnapRef as
+            | { camOn?: boolean; preferAudioOnlyUi?: boolean }
+            | undefined;
+          const shouldRestoreCam =
+            appliedSnap?.camOn === true && appliedSnap?.preferAudioOnlyUi !== true;
+          if (
+            shouldRestoreCam &&
+            session?.getIsCamOn?.() === true &&
+            typeof session.restoreLocalCameraAfterPiPReturn === 'function'
+          ) {
+            void session.restoreLocalCameraAfterPiPReturn();
+          }
+        } catch (_) {}
+      }
       const fn = restoreInAppPiP
         ? (global as any).__pipReturnToCallRef?.current
         : preferAudioOnly
@@ -3559,6 +3563,12 @@ function AppContent() {
       setIncoming(null);
       stopAnim();
 
+      // Обновить локальный журнал до любых ранних выходов для system PiP/фона.
+      // Данные звонка уже записаны локально; этот вызов только синхронизирует UI.
+      try {
+        forceCallLogUiNow('call_ended');
+      } catch (_) {}
+
       const wasInSystemSnapshot = g.__pipCallEndedWasInSystemRef?.current === true;
       const inSystem =
         g.__pipInSystemModeRef?.current === true || wasInSystemSnapshot;
@@ -5039,6 +5049,12 @@ export default function App() {
       callId: resolvedCallId || callId,
       roomId: resolvedRoomId || roomId,
     });
+    // Нативный экран/PiP завершает звонок локально раньше серверного echo.
+    // Echo затем дедуплицируется через __locallyEndedCallRef, поэтому журнал
+    // необходимо обновить прямо в этом подтверждённом локальном пути.
+    try {
+      forceCallLogUiNow('call_ended_native');
+    } catch (_) {}
 
     // КРИТИЧНО: Завершение из PiP (X) всегда шлёт call:end — иначе у собеседника звонок висит.
     // endingFromSystemPiP / fromPiPButton: не требовать оба id (native getPiPEndCallParams может дать один).

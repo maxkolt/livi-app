@@ -1,4 +1,4 @@
-import { getInstallId } from "../../utils/installId";
+import { getInstallId, getInstallSecret } from "../../utils/installId";
 import { logger } from "../../utils/logger";
 import { API_BASE, CALL_SIGNALING_CONNECT_MS, isOid } from "./constants";
 import { emitAck, ensureSocketConnected, warmCallSignaling } from "./emit";
@@ -28,9 +28,13 @@ export function startCall(toUserId: string, options?: { media?: DirectCallMedia;
     );
 
   const viaHttp = async () => {
-    const installId = await getInstallId().catch(() => "");
+    const [installId, installSecret] = await Promise.all([
+      getInstallId().catch(() => ""),
+      getInstallSecret().catch(() => null),
+    ]);
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (installId) headers["x-install-id"] = String(installId);
+    if (installSecret) headers["x-install-secret"] = String(installSecret);
     if (shared.currentUserId) headers["x-user-id"] = String(shared.currentUserId);
 
     const controller = new AbortController();

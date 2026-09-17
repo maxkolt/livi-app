@@ -570,6 +570,9 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
           g.__systemPiPEntryInProgressUntilRef =
             g.__systemPiPEntryInProgressUntilRef || { current: 0 };
           g.__systemPiPEntryInProgressUntilRef.current = 0;
+          // Готовность относится только к уже отрисованному compact-кадру текущего входа.
+          // Не переносить её на следующий Home, иначе Android снова захватит full-screen chrome.
+          NativeModules.LiviAppModule?.setSystemPiPCaptureFrameReady?.(false);
           // Не дать late AboutToEnter / enter_preserve перебить return_to_audio.
           cancelScheduledCallAudioRouteReappliesMatching([
             'system_pip_enter_',
@@ -585,6 +588,17 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
           // Stale optimistic enter из AboutToEnter — не оставить pending для late activate.
           g.__pendingSystemPiPSyncRef.current = false;
           g.__pipInSystemModeRef.current = false;
+          // Выход подтверждён нативом: сразу снять session PiP и отправить
+          // pip:state=false. Не ждать Expanded/focus — они могут прийти позже.
+          const session = g.__webrtcSessionRef?.current;
+          if (session && typeof session.exitPiP === 'function') {
+            session.exitPiP();
+          } else {
+            const syncPiPState = g.__pipSyncSessionStateRef?.current;
+            if (typeof syncPiPState === 'function') {
+              syncPiPState(false, 'SystemPiPModeChanged.exit');
+            }
+          }
           // SYNC: leaveUi может быть 'audio' даже при in-app leave — prepare убивает плашку (exitPiP).
           const leaveCtxSync = peekSystemPiPLeaveContextForReturn();
           const restoreInAppSync =
@@ -630,6 +644,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         const shouldIgnoreLateEnter =
           inPiP &&
           (
+            (g.__pipInSystemModeRef?.current !== true && now < returningUntil) ||
             returnToCallInFlightRef.current ||
             isPipReturnToCallJustPressed() ||
             (now < settledUntil && now < returningUntil)
@@ -1394,14 +1409,16 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     try {
       const g = global as any;
       const now = Date.now();
-      const inSys =
-        inSystemPiPMode === true ||
-        g.__pipInSystemModeRef?.current === true ||
-        pendingSystemPiP === true;
-      // Block/returning только вне PiP — иначе mid-PiP peer video не поднимется.
-      if (!inSys) {
-        if (now < Number(g.__returningFromSystemPiPUntilRef?.current || 0)) return;
-        if (now < Number(g.__blockSystemPiPCaptureHostUntilRef?.current || 0)) return;
+      // Native/global refs are authoritative. Local React state may still contain
+      // pending=true for one render after ModeChanged(false) and must not re-arm PiP.
+      const nativeInSystemPiP = g.__pipInSystemModeRef?.current === true;
+      const nativePendingEnter = g.__pendingSystemPiPSyncRef?.current === true;
+      if (!nativeInSystemPiP && !nativePendingEnter) return;
+      if (
+        !nativeInSystemPiP &&
+        (now < Number(g.__returningFromSystemPiPUntilRef?.current || 0) ||
+          now < Number(g.__blockSystemPiPCaptureHostUntilRef?.current || 0))
+      ) {
         return;
       }
     } catch (_) {}
@@ -2114,17 +2131,9 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       try {
         NativeModules.LiviAppModule?.setSystemPiPCapturePlaceholderOnly?.(placeholderOnlyHome);
         if (!placeholderOnlyHome) {
-          // Не сбрасывать pre-armed frameReady при live video — иначе leave-hint
-          // снова ждёт и промахивает OEM-окно enter.
-          if (
-            sessionHasLiveRemoteVideo ||
-            remoteCamForPlaceholder ||
-            localCamForPlaceholder
-          ) {
-            NativeModules.LiviAppModule?.setSystemPiPCaptureFrameReady?.(true);
-          } else {
-            NativeModules.LiviAppModule?.setSystemPiPCaptureFrameReady?.(false);
-          }
+          // Live track может быть готов, но обычный VideoCall всё ещё содержит chrome.
+          // Разрешит capture только onLayout чистого video-only слоя ниже.
+          NativeModules.LiviAppModule?.setSystemPiPCaptureFrameReady?.(false);
         } else {
           NativeModules.LiviAppModule?.setSystemPiPCaptureFrameReady?.(true);
         }
@@ -2343,6 +2352,31 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       return;
     }
 
+    // Пользователь уже на полноэкранном VideoCall — сворачивать его в плашку нельзя.
+    // Сюда сходятся все инициаторы restore (SystemPiPExpanded, ModeChanged, AppState-страховка),
+    // и по залипшему sticky-флагу любой из них сворачивал экран через 1-2с после успешного
+    // разворота из системного PiP. Легитимный путь (плашка была до Home) сюда не попадает:
+    // там текущий роут — Home/чат, а не VideoCall.
+    if (
+      restoreInAppPiP &&
+      readRootCurrentRouteName() === 'VideoCall' &&
+      g.__pipVisibleRef?.current !== true
+    ) {
+      logger.info('[PiPContext] returnToCall restoreInAppPiP ignored — already on fullscreen VideoCall');
+      try {
+        if (g.__systemPiPNeedsInAppRestoreRef) g.__systemPiPNeedsInAppRestoreRef.current = false;
+        if (g.__pendingInAppPiPRestoreAfterSystemRef) {
+          g.__pendingInAppPiPRestoreAfterSystemRef.current = false;
+        }
+        if (g.__restoringInAppPiPFromSystemRef) {
+          g.__restoringInAppPiPFromSystemRef.current = false;
+        }
+        clearSystemPiPLeaveContextSnapshot();
+      } catch (_) {}
+      releaseReturnToCallInFlight();
+      return;
+    }
+
     if (restoreInAppPiP) {
       try {
         g.__restoringInAppPiPFromSystemRef = g.__restoringInAppPiPFromSystemRef || { current: false };
@@ -2365,6 +2399,10 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       setTimeout(() => {
         setSuppressOverlayForReturn(false);
         clearInAppPiPSystemSuspendFlags();
+        // Sticky-флаг "нужен in-app restore" живёт для восстановления после OEM bounce, но
+        // должен погаснуть, как только return фактически завершился (в т.ч. на full VideoCall) —
+        // иначе он переживает этот цикл и на следующем system PiP exit снова уводит в плашку.
+        clearSystemPiPNeedsInAppRestore();
         try {
           clearSystemPiPLeaveContextSnapshot();
         } catch (_) {}

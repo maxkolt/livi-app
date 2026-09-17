@@ -219,6 +219,8 @@ export class VideoCallSession extends SimpleEventEmitter {
   private lastSentPiPRoomId: string | null = null;
   /** Камера сознательно выключена при уходе приложения в фон (cam-toggle → заглушка у партнёра). */
   private cameraSuspendedForAppBackground = false;
+  /** Возврат камеры из system PiP ждёт завершения LiveKit reconnect. */
+  private cameraRestorePendingAfterPiP = false;
   /** Сериализация pause/restore и recreate, чтобы App + VideoCall не гоняли два reconnect подряд. */
   private cameraAppLifecyclePromise: Promise<void> | null = null;
   /** Serialize camera enable/disable/recreate paths so rapid PiP/camera taps cannot publish two camera tracks. */
@@ -939,6 +941,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       }
     } catch {}
     this.cameraSuspendedForAppBackground = false;
+    this.cameraRestorePendingAfterPiP = false;
     // КРИТИЧНО: При завершении звонка выключаем системный PiP hint максимально рано,
     // чтобы на некоторых устройствах не происходил автовход в PiP (onUserLeaveHint) во время очистки.
     if (Platform.OS === 'android') {
@@ -1352,15 +1355,26 @@ export class VideoCallSession extends SimpleEventEmitter {
       }
       const pausedForBackground = this.cameraSuspendedForAppBackground;
       const mt = this.localVideoTrack?.mediaStreamTrack;
+      const needsCameraWork = mt?.readyState !== 'live' || mt.enabled === false;
+      if (needsCameraWork && this.room && !this.isLiveKitRoomConnected()) {
+        // Не держим возврат из PiP на 12-секундном ожидании. Reconnected
+        // продолжит этот единственный pending restore.
+        this.cameraRestorePendingAfterPiP = true;
+        this.cameraSuspendedForAppBackground = true;
+        logger.info('[VideoCallSession] Defer PiP camera restore until LiveKit reconnect completes', {
+          roomState: this.room.state,
+        });
+        return;
+      }
       if (mt?.readyState === 'live') {
         if (!mt.enabled) {
-          await this.applyLocalCameraEnabled(true);
+          await this.applyLocalCameraEnabled(true, { recoveryContext: 'pip-return' });
         } else if (
           this.room?.state === 'connected' &&
           this.localVideoTrack &&
           !this.isVideoTrackPublished(this.localVideoTrack)
         ) {
-          await this.applyLocalCameraEnabled(true);
+          await this.applyLocalCameraEnabled(true, { recoveryContext: 'pip-return' });
         } else if (pausedForBackground) {
           const currentRoomId = this.getRoomId();
           if (!this.ended && !this.endCallInProgress && currentRoomId) {
@@ -1375,6 +1389,7 @@ export class VideoCallSession extends SimpleEventEmitter {
           }
         }
         this.cameraSuspendedForAppBackground = false;
+        this.cameraRestorePendingAfterPiP = false;
         this.skipReconnectCameraOnResumeUntil = Date.now() + 8000;
         try {
           const pipUpdate = (global as any).__pipUpdateStateRef?.current;
@@ -1384,7 +1399,8 @@ export class VideoCallSession extends SimpleEventEmitter {
       }
       this.cameraSuspendedForAppBackground = false;
       logger.info('[VideoCallSession] Fast restore local camera after PiP return');
-      await this.applyLocalCameraEnabled(true);
+      await this.applyLocalCameraEnabled(true, { recoveryContext: 'pip-return' });
+      this.cameraRestorePendingAfterPiP = false;
       this.skipReconnectCameraOnResumeUntil = Date.now() + 8000;
       try {
         const pipUpdate = (global as any).__pipUpdateStateRef?.current;
@@ -1438,8 +1454,13 @@ export class VideoCallSession extends SimpleEventEmitter {
 
   /** После Reconnected: догнать restore, если foreground пришёл во время reconnecting. */
   private tryRestoreCameraAfterReconnect(): void {
-    if (this.ended || this.endCallInProgress || !this.cameraSuspendedForAppBackground) return;
+    if (this.ended || this.endCallInProgress) return;
     if (AppState.currentState !== 'active') return;
+    if (this.cameraRestorePendingAfterPiP) {
+      void this.restoreLocalCameraAfterPiPReturn();
+      return;
+    }
+    if (!this.cameraSuspendedForAppBackground) return;
     void this.restoreCameraAfterAppBackground();
   }
 
@@ -1774,7 +1795,10 @@ export class VideoCallSession extends SimpleEventEmitter {
     return this.isLiveKitRoomConnected();
   }
 
-  private async applyLocalCameraEnabled(enabled: boolean): Promise<void> {
+  private async applyLocalCameraEnabled(
+    enabled: boolean,
+    opts?: { recoveryContext?: string },
+  ): Promise<void> {
     const camSpan = callPerfSpan('session_toggle_cam', {
       enabled,
       hasLocalVideoTrack: !!this.localVideoTrack,
@@ -1782,7 +1806,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     });
     const work = (this.cameraMutationPromise ?? Promise.resolve())
       .catch(() => {})
-      .then(() => this.applyLocalCameraEnabledNow(enabled));
+      .then(() => this.applyLocalCameraEnabledNow(enabled, opts));
     this.cameraMutationPromise = work;
     try {
       await work;
@@ -1876,7 +1900,15 @@ export class VideoCallSession extends SimpleEventEmitter {
     }
   }
 
-  private async applyLocalCameraEnabledNow(enabled: boolean): Promise<void> {
+  private async applyLocalCameraEnabledNow(
+    enabled: boolean,
+    opts?: { recoveryContext?: string },
+  ): Promise<void> {
+    if (!enabled) {
+      // Явный cam-off/audio-only отменяет отложенное восстановление после PiP.
+      this.cameraRestorePendingAfterPiP = false;
+      this.cameraSuspendedForAppBackground = false;
+    }
     const cidForMedia = String(this.getCallId?.() || this.callId || '').trim();
     const audioFirstCall =
       !!this.config.startWithCamOff ||
@@ -1970,7 +2002,7 @@ export class VideoCallSession extends SimpleEventEmitter {
             logger.info('[VideoCallSession] Camera enabled via soft unmute');
           } else {
             logger.info('[VideoCallSession] Soft unmute failed — recovering video track');
-            await this.recreateLocalVideoTrack('toggleCam:recovery');
+            await this.recreateLocalVideoTrack(opts?.recoveryContext || 'toggleCam:recovery');
             await this.softSetLocalVideoMuted(false);
             await this.ensureLocalVideoPublishedAfterEnable();
             logger.info('[VideoCallSession] Camera enabled successfully');
@@ -1993,7 +2025,7 @@ export class VideoCallSession extends SimpleEventEmitter {
 
         if (needsRecovery) {
           logger.info('[VideoCallSession] Recovering video track for camera enable');
-          await this.recreateLocalVideoTrack('toggleCam:recovery');
+          await this.recreateLocalVideoTrack(opts?.recoveryContext || 'toggleCam:recovery');
           // Без maybeScheduleFastStartVideoUpgrade — restartTrack даёт мерцание и лишние ~2.5с.
         }
 
@@ -2045,8 +2077,9 @@ export class VideoCallSession extends SimpleEventEmitter {
       }
     }
     
-    // Обновляем localStream через emit (всегда новый MediaStream — remount локального RTCView).
-    this.emitLocalMediaStream({ forceNewStream: true });
+    // Track replacement определяется UI по track id. Стабильный MediaStream
+    // не заставляет Android RTCView мигать при обычном mute/unmute.
+    this.emitLocalMediaStream({ forceNewStream: false });
     
     this.notifyCamStateChange(this.isCamOn);
     // cam-toggle уже отправлен в начале toggleCam() для мгновенного отображения «Отошел» у партнёра
@@ -5829,8 +5862,8 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.emitLocalMediaStream({ forceNewStream: false });
   }
 
-  /** Собрать local MediaStream. Всегда новый instance для UI — иначе RTCView на Android
-   * остаётся чёрным после cam-on / появления remote video (in-place mutate React не видит). */
+  /** Собрать local MediaStream. Сохраняем instance при том же capture lifecycle,
+   * а явный flip/restart может запросить новый для корректного rebind RTCView. */
   private emitLocalMediaStream(opts?: { forceNewStream?: boolean }): void {
     const forceNew = opts?.forceNewStream === true;
     const base = !forceNew && this.localStream ? this.localStream : new MediaStream();
@@ -5856,15 +5889,10 @@ export class VideoCallSession extends SimpleEventEmitter {
         base.addTrack(at as any);
       }
     } catch {}
-    // Всегда свежий MediaStream для notify (даже при тех же track id).
-    const stream = new MediaStream();
-    try {
-      for (const t of base.getTracks()) {
-        try {
-          stream.addTrack(t as any);
-        } catch {}
-      }
-    } catch {}
+    // Сохраняем instance, если меняется только состояние существующего трека.
+    // Новый объект нужен для явного flip/restart; лишняя смена instance заставляет
+    // Android пересоздавать RTCView и даёт чёрный кадр при возврате из PiP.
+    const stream = base;
     this.localStream = stream;
     this.emit('localStream', stream);
     this.notifyLocalStreamChange(stream);
@@ -6223,15 +6251,19 @@ export class VideoCallSession extends SimpleEventEmitter {
 
     const facingMode = this.camSide === 'front' ? 'user' : 'environment';
     // Первое включение камеры из audio-only (нет трека): fast-start → upgrade.
-    // Steady (high) оставляем для pip-return / recovery существующего трека.
+    // PiP-return должен открыть Camera2 как можно быстрее; steady-профиль можно
+    // оставить для обычного ручного recovery.
     const firstToggleCamEnable =
       /toggleCam:recovery/i.test(context) && !this.localVideoTrack;
+    const isPiPReturnRecovery = /pipReturn|pip-return/i.test(context);
     const preferSteadyCaptureForDirectCall =
       this.config.getIsDirectCall?.() &&
       !firstToggleCamEnable &&
+      !isPiPReturnRecovery &&
       (isDirectCallVideoExpandGuardActive() ||
         /toggleCam:recovery|pip-return|reconnectCameraOnResume|camera-enable-recovery/i.test(context));
     const useFastRecovery =
+      isPiPReturnRecovery ||
       firstToggleCamEnable ||
       (!preferSteadyCaptureForDirectCall &&
         /recovery|pipReturn|pip-return|reconnectCameraOnResume/i.test(context));
@@ -6244,8 +6276,8 @@ export class VideoCallSession extends SimpleEventEmitter {
         steadyPreferred.meta.preset !== preferred.meta.preset &&
         preferred.meta.preset === 'low';
       this.clearFastStartVideoUpgradeTimer();
-      // toggleCam:recovery — без отложенного upgrade (restartTrack = мерцание + лишняя нагрузка).
-      if (/toggleCam:recovery/i.test(context)) {
+      // Recovery/PiP return — без отложенного upgrade (restartTrack = мерцание + лишняя нагрузка).
+      if (/toggleCam:recovery|pipReturn|pip-return/i.test(context)) {
         this.fastStartVideoProfileActive = false;
       }
     } else {
@@ -6368,7 +6400,7 @@ export class VideoCallSession extends SimpleEventEmitter {
         }
       }
     } catch {}
-    if (/toggleCam:recovery/i.test(context)) {
+    if (/toggleCam:recovery|pipReturn|pip-return/i.test(context)) {
       this.fastStartVideoProfileActive = false;
       this.clearFastStartVideoUpgradeTimer();
     }
@@ -8253,8 +8285,12 @@ export class VideoCallSession extends SimpleEventEmitter {
             targetRoomName: room.name || this.currentRoomName,
           }, this.remoteMediaRecoveryInProgress || this.remoteMediaRelayRecoveryAttempted);
         }
-        void this.recoverLocalTracksAfterReconnect(room, 'RoomEvent.Reconnected');
-        this.tryRestoreCameraAfterReconnect();
+        // Сначала даём LiveKit стабилизировать/перепубликовать существующие tracks,
+        // затем продолжаем PiP camera restore — без двух параллельных recreate.
+        void this.recoverLocalTracksAfterReconnect(room, 'RoomEvent.Reconnected').then(
+          () => this.tryRestoreCameraAfterReconnect(),
+          () => this.tryRestoreCameraAfterReconnect(),
+        );
       })
       .on(RoomEvent.ParticipantConnected, (participant) => {
         // КРИТИЧНО: При подключении участника подписываемся на все его существующие треки
@@ -8650,14 +8686,18 @@ export class VideoCallSession extends SimpleEventEmitter {
       const audioReady = this.localAudioTrack?.mediaStreamTrack?.readyState;
       if (!this.localAudioTrack || audioReady === 'ended') {
         await this.ensureLocalTracks(audioReady === 'ended');
-      } else if (!this.localVideoTrack && this.isCamOn) {
+      } else if (
+        !this.localVideoTrack &&
+        this.isCamOn &&
+        !this.cameraRestorePendingAfterPiP
+      ) {
         await this.ensureLocalTracks(false);
       }
       if (!roomStable()) return;
 
       // If camera track was ended by OS, recreate video only.
       const vState = this.localVideoTrack?.mediaStreamTrack?.readyState;
-      if (this.isCamOn && vState === 'ended') {
+      if (this.isCamOn && vState === 'ended' && !this.cameraRestorePendingAfterPiP) {
         logger.warn('[VideoCallSession] Local video track ended after reconnect; recreating video track', { context });
         await this.recreateLocalVideoTrack('reconnect');
       }
@@ -8675,7 +8715,12 @@ export class VideoCallSession extends SimpleEventEmitter {
       } catch {}
 
       // Video: only publish if missing (avoid camera flicker on every reconnect).
-      if (this.localVideoTrack && this.isCamOn && !this.isVideoTrackPublished(this.localVideoTrack)) {
+      if (
+        this.localVideoTrack &&
+        this.isCamOn &&
+        !this.cameraRestorePendingAfterPiP &&
+        !this.isVideoTrackPublished(this.localVideoTrack)
+      ) {
         await this.unpublishOtherLocalTracks('video', this.localVideoTrack);
         if (!roomStable()) return;
         await room.localParticipant.publishTrack(this.localVideoTrack).catch(() => {});

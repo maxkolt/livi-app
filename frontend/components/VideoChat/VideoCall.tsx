@@ -607,6 +607,8 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
   const [camOn, setCamOn] = useState(
     preferVideoUiOnMount ? true : preferAudioFromPiPOnMount || audioFirstOnMount ? false : !initialCamOff,
   );
+  const camOnRef = useRef(camOn);
+  camOnRef.current = camOn;
   const [inAudioOnlyUi, setInAudioOnlyUi] = useState(
     preferVideoUiOnMount ? false : preferAudioFromPiPOnMount || audioFirstOnMount || initialCamOff,
   );
@@ -1342,6 +1344,12 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     prevRemoteVideoVisibleRef.current = remoteVisible;
     if (!becameVisible || !camOn) return;
 
+    // При возврате из system PiP RTCView уже привязывает сфокусированный экран.
+    // Дополнительные remount здесь давали серию видимых чёрных кадров.
+    const returningFromSystemPiP =
+      Date.now() < Number((global as any).__returningFromSystemPiPUntilRef?.current || 0);
+    if (returningFromSystemPiP) return;
+
     const remountLocal = (why: string) => {
       try {
         const sess = sessionRef.current || (global as any).__webrtcSessionRef?.current;
@@ -1355,12 +1363,9 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       logger.info('[VideoCall] Remount local preview after remote video', { why });
     };
 
-    remountLocal('immediate');
     const t1 = setTimeout(() => remountLocal('delayed_180'), 180);
-    const t2 = setTimeout(() => remountLocal('delayed_480'), 480);
     return () => {
       clearTimeout(t1);
-      clearTimeout(t2);
     };
   }, [remoteCamOn, isInactiveState, camOn]);
   
@@ -3186,13 +3191,21 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
         isDirectCallVideoExpandGuardActive() ||
         (global as any).__expandToVideoCallUiFromPiPRef?.current === true;
       if (pip.localStream) {
-        setLocalStream(pip.localStream);
-        setLocalRenderKey((k: number) => k + 1);
+        const previous = localStreamRef.current;
+        const previousVideoId = previous?.getVideoTracks?.()?.[0]?.id ?? null;
+        const nextVideoId = pip.localStream.getVideoTracks?.()?.[0]?.id ?? null;
+        localStreamRef.current = pip.localStream as any;
+        if (previous !== pip.localStream) {
+          setLocalStream(pip.localStream);
+        }
+        if (!previous || previous.id !== pip.localStream.id || previousVideoId !== nextVideoId) {
+          setLocalRenderKey((k: number) => k + 1);
+        }
         if (!skipStaleCamSnapshot || desiredCamOn) {
           try {
             const videoTrack = (pip.localStream as any)?.getVideoTracks?.()?.[0];
-            if (videoTrack) {
-              videoTrack.enabled = !!desiredCamOn;
+            if (videoTrack && !desiredCamOn) {
+              videoTrack.enabled = false;
             }
           } catch {}
           setCamOn(!!desiredCamOn);
@@ -3351,7 +3364,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
             const streamIdChanged = !prevStream || prevStream.id !== stream.id;
             const videoTrackChanged = prevVideoId !== newVideoId;
             // КРИТИЧНО: localRenderKey при смене stream.id или video track (в т.ч. audio-only → cam on)
-            if (streamIdChanged || videoTrackChanged || prevStream !== stream) {
+            if (streamIdChanged || videoTrackChanged) {
               const liveSession =
                 sessionRef.current ?? ((global as any).__webrtcSessionRef?.current as VideoCallSession | null);
               const side = liveSession?.getCamSide?.();
@@ -3366,7 +3379,6 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
                 newVideoId,
                 streamIdChanged,
                 videoTrackChanged,
-                instanceChanged: prevStream !== stream,
                 hasVideoTrack: !!newVideoId,
                 camSide: side,
               });
@@ -4245,7 +4257,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
         } catch {}
       },
       onCamStateChange: (enabled: boolean) => {
-        if (enabled) setLocalRenderKey((k: number) => k + 1);
+        if (enabled && !camOnRef.current) setLocalRenderKey((k: number) => k + 1);
         try {
           if ((global as any).__pipVisibleRef?.current === true) {
             pip.updatePiPState({ localCamOn: enabled });
@@ -4743,15 +4755,21 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       if (isInactiveStateRef.current || isEndingCallRef.current || wasFriendCallEndedRef.current) return;
       if (sessionRef.current?.isEnded?.()) return;
       const prev = localStreamRef.current;
+      const prevVideoId = lastEmittedLocalVideoTrackIdRef.current;
+      const nextVideoId = stream?.getVideoTracks?.()?.[0]?.id ?? null;
       localStreamRef.current = stream as any;
-      setLocalStream(stream as any);
+      lastEmittedLocalVideoTrackIdRef.current = nextVideoId;
+      if (prev !== stream) {
+        setLocalStream(stream as any);
+      }
 
-      if (stream && (!prev || prev.id !== stream.id)) {
+      if (stream && (!prev || prev.id !== stream.id || prevVideoId !== nextVideoId)) {
         setLocalRenderKey((k: number) => k + 1);
         logger.info('[VideoCall] (bridge) Local stream event - updating render key', {
           prevStreamId: prev?.id,
           newStreamId: stream.id,
-          hasVideoTrack: !!(stream as any)?.getVideoTracks?.()?.[0],
+          prevVideoId,
+          nextVideoId,
         });
       }
     };
@@ -7499,17 +7517,24 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
               !skipStaleCamSnapshot ||
               mediaStreamHasLiveVideo(sessionLocalStream);
             if (bindSessionLocalToUi) {
-              setLocalStream(sessionLocalStream);
+              const previous = localStreamRef.current;
+              const previousVideoId = previous?.getVideoTracks?.()?.[0]?.id ?? null;
+              const nextVideoId = sessionLocalStream.getVideoTracks?.()?.[0]?.id ?? null;
               localStreamRef.current = sessionLocalStream as any;
-              setLocalRenderKey((k: number) => k + 1);
+              if (previous !== sessionLocalStream) {
+                setLocalStream(sessionLocalStream);
+              }
+              if (!previous || previous.id !== sessionLocalStream.id || previousVideoId !== nextVideoId) {
+                setLocalRenderKey((k: number) => k + 1);
+              }
             }
             
             // Применяем сохранённое состояние камеры (best-effort)
             if (applyCamUiFromPiPReturn) {
               try {
                 const videoTrack = (sessionLocalStream as any)?.getVideoTracks?.()?.[0];
-                if (videoTrack) {
-                  videoTrack.enabled = !!desiredCamOn;
+                if (videoTrack && !desiredCamOn) {
+                  videoTrack.enabled = false;
                 }
               } catch {}
               setCamOn(!!desiredCamOn);
@@ -7531,17 +7556,23 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
               bindSessionLocalToUi,
             });
           } else if (pipLocalStream) {
-            setLocalStream(pipLocalStream);
+            const previous = localStreamRef.current;
+            const previousVideoId = previous?.getVideoTracks?.()?.[0]?.id ?? null;
+            const nextVideoId = pipLocalStream.getVideoTracks?.()?.[0]?.id ?? null;
             localStreamRef.current = pipLocalStream as any;
-            // Обновляем localRenderKey чтобы видео обновилось в UI
-            setLocalRenderKey((k: number) => k + 1);
+            if (previous !== pipLocalStream) {
+              setLocalStream(pipLocalStream);
+            }
+            if (!previous || previous.id !== pipLocalStream.id || previousVideoId !== nextVideoId) {
+              setLocalRenderKey((k: number) => k + 1);
+            }
             
             // Применяем сохранённое состояние камеры (best-effort)
             if (applyCamUiFromPiPReturn) {
               try {
                 const videoTrack = (pipLocalStream as any)?.getVideoTracks?.()?.[0];
-                if (videoTrack) {
-                  videoTrack.enabled = !!desiredCamOn;
+                if (videoTrack && !desiredCamOn) {
+                  videoTrack.enabled = false;
                 }
               } catch {}
               setCamOn(!!desiredCamOn);
@@ -7635,7 +7666,9 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
               localStream;
             const lt = currentLocalStream?.getVideoTracks?.()?.[0];
             if (lt) {
-              lt.enabled = !!desiredCamOn;
+              // OFF можно применить сразу. ON оставляем сессии: она отличит
+              // живой track от ended/unpublished и выполнит ровно один restore.
+              if (!desiredCamOn) lt.enabled = false;
               logger.info('[VideoCall] ✅ Локальный видеотрек обработан после возврата из PiP', {
                 trackId: lt.id,
                 trackEnabled: lt.enabled,
@@ -7645,7 +7678,6 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
               });
               if (
                 desiredCamOn &&
-                (lt.readyState === 'ended' || lt.enabled === false) &&
                 typeof (session as VideoCallSession).restoreLocalCameraAfterPiPReturn === 'function'
               ) {
                 void (session as VideoCallSession).restoreLocalCameraAfterPiPReturn().catch((e) => {
@@ -7663,16 +7695,6 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
               ) {
                 void (session as VideoCallSession)
                   .restoreLocalCameraAfterPiPReturn()
-                  .then(() => {
-                    const refreshed = session.getLocalStream?.();
-                    if (!refreshed) return;
-                    localStreamRef.current = refreshed as any;
-                    setLocalStream(refreshed as any);
-                    setLocalRenderKey((k: number) => k + 1);
-                    setCamOn(!!session.getIsCamOn?.());
-                    const vt = refreshed.getVideoTracks?.()?.[0];
-                    if (vt) vt.enabled = true;
-                  })
                   .catch((e) => {
                     logger.warn('[VideoCall] restoreLocalCameraAfterPiPReturn failed', e);
                   });
@@ -7954,8 +7976,14 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     leavingForSystemPiP;
   const pipSuspendedForSystem =
     (global as any).__pipSuspendedForSystemPiPRef?.current === true;
-  // Foreground VideoCall must not stay chrome-less after sticky pending / false OEM bounce.
-  // Compact only while confirmed system PiP, or while leaving to background (not fully active).
+  // Compact — только когда приложение реально в system PiP или уже ушло в фон.
+  // Раньше здесь был ещё (homeSystemPiPPending && leavingForSystemPiP), чтобы подготовить
+  // чистый кадр ДО входа в PiP. Но оба флага — sticky глобальные refs, и на foreground они
+  // иногда оставались true (напр. после включения камеры из audio UI: пока идёт audio
+  // presentation, compact замаскирован, а в момент showAudioPresentation=false он мгновенно
+  // подменял весь экран звонка на video-only без панели кнопок). Защиту кадра от chrome
+  // теперь держит native backdrop (см. onUserLeaveHint/onPictureInPictureModeChanged),
+  // поэтому подменять UI заранее в активном приложении больше не нужно.
   const allowSystemPiPCompact =
     pip.inSystemPiPMode === true ||
     appState === 'background' ||
@@ -7967,6 +7995,28 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     (!pip.visible || pipSuspendedForSystem || pip.inSystemPiPMode || leavingForSystemPiP) &&
     (pip.pendingSystemPiP || pip.inSystemPiPMode || homeSystemPiPPending || leavingForSystemPiP);
   if (systemPiPCompact) {
+    // ДИАГНОСТИКА (временная): compact не должен рисоваться на переднем плане.
+    try {
+      const gDiag = global as any;
+      const lastAt = Number(gDiag.__systemPiPCompactDiagAtRef?.current || 0);
+      if (Date.now() - lastAt > 1500) {
+        gDiag.__systemPiPCompactDiagAtRef = { current: Date.now() };
+        logger.warn('[VideoCall][DIAG] systemPiPCompact render', {
+          appState,
+          inSystemPiPMode: pip.inSystemPiPMode,
+          pendingSystemPiP: pip.pendingSystemPiP,
+          systemPiPCaptureActive: pip.systemPiPCaptureActive,
+          pipVisible: pip.visible,
+          pipSuspendedForSystem,
+          leavingForSystemPiP,
+          homeSystemPiPPending,
+          showAudioPresentation,
+          camOn,
+          leavingByHomeRef: gDiag.__leavingVideoCallByHomeRef?.current === true,
+          pendingSyncRef: gDiag.__pendingSystemPiPSyncRef?.current === true,
+        });
+      }
+    } catch {}
     let sessionRemoteCamOn = remoteCamOn;
     let sessionRemoteStream = currentRemoteStream;
     try {
