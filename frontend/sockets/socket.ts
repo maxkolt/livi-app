@@ -127,6 +127,7 @@ export {
   sendMessageReaction,
   sendReadReceipt,
   updateMessageUris,
+  fetchChatPreviews,
 } from "./modules/messages";
 
 export {

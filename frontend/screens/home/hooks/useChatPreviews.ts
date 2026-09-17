@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
+  fetchChatPreviews,
   getChatMessagesLocal,
   getCurrentUserId,
+  globalMessageStorage,
   onChatCleared,
   onMessageReceived,
 } from '../../../sockets/socket';
@@ -13,6 +15,11 @@ import {
   type ChatPreview,
 } from '../chatPreview';
 import { onChatCallStatusMessage } from '../../../utils/globalEvents';
+import {
+  getClearedForMePeerIds,
+  markChatsClearedForMe,
+  unmarkChatsClearedForMe,
+} from '../chatClearedForMe';
 
 export type { ChatPreview };
 
@@ -20,6 +27,66 @@ let previewMemory: Record<string, ChatPreview> = {};
 
 export function getChatPreviewSnapshot(): Record<string, ChatPreview> {
   return previewMemory;
+}
+
+function previewFromServerMessage(msg: any, lang: Lang): ChatPreview | null {
+  if (!msg?.id) return null;
+  const at = messageTimestampMs(msg);
+  const text = previewTextFromMessage(msg, lang);
+  if (!at && !text) return null;
+  return { text, at: at || Date.now() };
+}
+
+async function hydrateMissingPreviewsFromServer(
+  friendIds: string[],
+  local: Record<string, ChatPreview>,
+  lang: Lang,
+): Promise<Record<string, ChatPreview>> {
+  const missing = friendIds.filter((id) => !local[id]);
+  if (!missing.length) return local;
+
+  let cleared: Set<string>;
+  try {
+    cleared = await getClearedForMePeerIds();
+  } catch {
+    cleared = new Set();
+  }
+  const toFetch = missing.filter((id) => !cleared.has(id));
+  if (!toFetch.length) return local;
+
+  try {
+    const result = await fetchChatPreviews(toFetch);
+    if (!result?.ok || !result.previews) return local;
+    const next = { ...local };
+    const me = String(getCurrentUserId() || '').trim();
+    for (const peerId of toFetch) {
+      const msg = result.previews[peerId];
+      const preview = previewFromServerMessage(msg, lang);
+      if (!preview) continue;
+      next[peerId] = preview;
+      if (me && msg) {
+        void globalMessageStorage.saveMessage(msg, me).catch(() => {});
+      }
+    }
+    return next;
+  } catch {
+    return local;
+  }
+}
+
+function mergeLiveMemory(
+  ids: string[],
+  base: Record<string, ChatPreview>,
+): Record<string, ChatPreview> {
+  const next = { ...base };
+  for (const id of ids) {
+    const mem = previewMemory[id];
+    if (!mem) continue;
+    if (!next[id] || mem.at >= (next[id]?.at || 0)) {
+      next[id] = mem;
+    }
+  }
+  return next;
 }
 
 /** Prefetch до открытия вкладки Chat — первый paint с полными превью. */
@@ -41,7 +108,8 @@ export async function prefetchChatPreviews(friendIds: string[], lang: Lang): Pro
       }
     }),
   );
-  previewMemory = next;
+  const hydrated = await hydrateMissingPreviewsFromServer(ids, next, lang);
+  previewMemory = mergeLiveMemory(ids, hydrated);
 }
 
 export function useChatPreviews(friendIds: string[], lang: Lang, enabled: boolean) {
@@ -87,15 +155,11 @@ export function useChatPreviews(friendIds: string[], lang: Lang, enabled: boolea
       }),
     );
     // Не затирать более свежий live-preview (message:received), если persist ещё догоняет.
-    for (const id of ids) {
-      const mem = previewMemory[id];
-      if (!mem) continue;
-      if (!next[id] || mem.at >= (next[id]?.at || 0)) {
-        next[id] = mem;
-      }
-    }
-    previewMemory = next;
-    setPreviews(next);
+    const withLive = mergeLiveMemory(ids, next);
+    const hydrated = await hydrateMissingPreviewsFromServer(ids, withLive, langRef.current);
+    const finalMap = mergeLiveMemory(ids, hydrated);
+    previewMemory = finalMap;
+    setPreviews(finalMap);
   }, [enabled, idsKey]);
 
   useLayoutEffect(() => {
@@ -118,6 +182,7 @@ export function useChatPreviews(friendIds: string[], lang: Lang, enabled: boolea
       const to = String(message?.to || '');
       const peerId = from && from === me ? to : from;
       if (!peerId) return;
+      void unmarkChatsClearedForMe([peerId]);
       if (idsRef.current.length && !idsRef.current.includes(peerId)) return;
       const at = messageTimestampMs(message) || Date.now();
       const text = previewTextFromMessage(message, langRef.current);
@@ -131,6 +196,10 @@ export function useChatPreviews(friendIds: string[], lang: Lang, enabled: boolea
       const withId = String(data?.with || '');
       const peerId = by === me ? withId : by;
       if (!peerId) return;
+      // clear «для себя» — серверный lastMessage остаётся; не поднимать строку снова.
+      if (!(data as any)?.forAll) {
+        void markChatsClearedForMe([peerId]);
+      }
       if (previewMemory[peerId]) {
         const mem = { ...previewMemory };
         delete mem[peerId];
@@ -164,6 +233,7 @@ export function useChatPreviews(friendIds: string[], lang: Lang, enabled: boolea
   const dropPreviews = useCallback((peerIds: string[]) => {
     const ids = new Set(peerIds.map((id) => String(id || '').trim()).filter(Boolean));
     if (ids.size === 0) return;
+    void markChatsClearedForMe([...ids]);
     setPreviews((prev) => {
       let changed = false;
       const next = { ...prev };

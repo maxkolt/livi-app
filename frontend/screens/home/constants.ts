@@ -170,6 +170,8 @@ export const FRIEND_SWIPE_DELETE_WIDTH = FRIEND_ROW_ACTION_GAP + FRIEND_ACTION_B
 export const DRAFT_KEY = 'profile_draft_v1';
 export const MISSED_CALLS_KEY = 'missed_calls_by_user_v1';
 export const UNREAD_BY_USER_KEY = 'unread_by_user_v1';
+/** Пиры, у которых чат очищен «для себя» — не поднимать строку из server lastMessage. */
+export const CHAT_CLEARED_FOR_ME_KEY = 'chat_cleared_for_me_v1';
 export const CHAT_FAVORITES_KEY = 'welcome_chat_favorites_v1';
 export const CALL_LOG_KEY = 'welcome_call_log_v1';
 export const PROFILE_KEY = 'livi.profile.v1';

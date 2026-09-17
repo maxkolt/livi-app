@@ -305,8 +305,9 @@ const io = new Server(server, {
     credentials: true,
   },
   transports: ["websocket", "polling"], // websocket + polling для надежности
-  pingInterval: 25000,
-  pingTimeout: 30000,
+  // Короче ping: под VPN TCP часто «висит» без пакетов — при 25+30s звонок (27s) не успевает на FCM/reconnect.
+  pingInterval: 12000,
+  pingTimeout: 12000,
 });
 let closeSocketIoRedisAdapter: (() => Promise<void>) | null = null;
 
@@ -2154,10 +2155,10 @@ function pruneOrphanCallOfUserEntry(userId: string): void {
   if (other && isOid(other)) callOfUser.delete(other);
 }
 
-const CALL_DELIVERY_ACK_WAIT_MS = 3_000;
-const CALL_DELIVERY_RETRY_EVERY_MS = 4_000;
+const CALL_DELIVERY_ACK_WAIT_MS = 2_000;
+const CALL_DELIVERY_RETRY_EVERY_MS = 2_500;
 const CALL_DELIVERY_ESCALATE_AFTER_RETRY = 1;
-const CALL_DELIVERY_RETRY_MAX_WINDOW_MS = 18_000;
+const CALL_DELIVERY_RETRY_MAX_WINDOW_MS = 22_000;
 
 function scheduleCallPushRetry(callId: string, delayMs: number) {
   const link = callsById.get(callId);
@@ -2168,6 +2169,44 @@ function scheduleCallPushRetry(callId: string, delayMs: number) {
   link.retryPushTimer = setTimeout(() => {
     void runCallPushRetryCycle(callId);
   }, delayMs);
+}
+
+/** Повторный socket emit (VPN: старый сокет мог быть зомби, новый уже в комнате). */
+function emitCallIncomingToCallee(io: Server, callId: string, link: CallLink, fromNick: string): void {
+  const peerId = link.b;
+  const callMedia = link.media === 'video' ? 'video' : 'audio';
+  const payload = {
+    callId,
+    callKitId: getCallKitUuid(callId),
+    from: link.a,
+    fromNick: fromNick || undefined,
+    media: callMedia,
+    ts: link.createdAtMs,
+    expiresAt: link.expiresAtMs,
+  };
+  try {
+    const recipientSockets = getSocketsForUser(io, peerId);
+    for (const recipientSocket of recipientSockets) {
+      try {
+        (recipientSocket as any).emit('call:incoming', payload);
+        (recipientSocket as any).emit('friend:call:incoming', {
+          callId,
+          from: link.a,
+          nick: fromNick || undefined,
+        });
+      } catch {}
+    }
+    if (recipientSockets.length === 0) {
+      io.to(`u:${peerId}`).emit('call:incoming', payload);
+      io.to(`u:${peerId}`).emit('friend:call:incoming', {
+        callId,
+        from: link.a,
+        nick: fromNick || undefined,
+      });
+    }
+  } catch (e: any) {
+    logger.warn('[call:incoming] emit to callee failed', { callId, peerId, error: e?.message });
+  }
 }
 
 async function runCallPushRetryCycle(callId: string): Promise<void> {
@@ -2197,6 +2236,11 @@ async function runCallPushRetryCycle(callId: string): Promise<void> {
   }
 
   const callerNick = telemetry.callerNick ?? '';
+  // Socket again first — callee could have reconnected after VPN flap.
+  try {
+    emitCallIncomingToCallee(io, callId, link, callerNick);
+  } catch {}
+
   const retryPushCount = telemetry.retryPushCount ?? 0;
   const shouldEscalate = retryPushCount >= CALL_DELIVERY_ESCALATE_AFTER_RETRY;
   try {

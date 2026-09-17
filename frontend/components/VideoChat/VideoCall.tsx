@@ -4388,12 +4388,14 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
         gEnd.__pipInSystemModeRef?.current === true;
       const noOpenFlag = gEnd.__callEndedFromPiPNoOpenRef?.current === true;
       const endedFromPiP = endSource === 'pip_close' || noOpenFlag;
+      const explicitEndButton = endSource === 'end_button';
       // Без goBack/reset экран остаётся на VideoCall — refs не дают ререндера; через ~1s deferred teardown
       // сбрасывает isEndingCallRef и бейдж/кнопки снова «живые». Синхронизируем React state с «завершённым» UI.
-      // Остаёмся на мёртвом VideoCall только для system PiP / фона. In-app PiP (AppState active) —
-      // нужно уйти на Home, иначе под оверлеем пустой экран.
+      // Остаёмся на мёртвом VideoCall только для system PiP / фона. In-app PiP / «Завершить» на переднем плане —
+      // нужно уйти на Home, иначе пустой экран (фон без chrome).
       const appInactive = AppState.currentState !== 'active';
-      const stayOnVideoCallAfterEnd = inSystemPiP || (endedFromPiP && appInactive);
+      const stayOnVideoCallAfterEnd =
+        !explicitEndButton && (inSystemPiP || (endedFromPiP && appInactive)) && appInactive;
       if (stayOnVideoCallAfterEnd) {
         setIsInactiveState(true);
         setWasFriendCallEnded(true);
@@ -4415,6 +4417,11 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       };
       if (!stayOnVideoCallAfterEnd) {
         try { (global as any).__homeResetByVideoCallRef.current = true; } catch (_) {}
+        try {
+          if (pipRef.current.visible || isPipOverlayVisibleSync()) {
+            pipRef.current.hidePiP();
+          }
+        } catch (_) {}
         closeVideoCallScreen();
       }
       if (!stayOnVideoCallAfterEnd && Platform.OS === 'android') {
@@ -5002,7 +5009,11 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     setIsEndingCall(true);
 
     const g = global as any;
-    const wasInPiP = g.__pipVisibleRef?.current === true || g.__pipInSystemModeRef?.current === true;
+    const inSystemPiP =
+      pipRef.current?.inSystemPiPMode === true || g.__pipInSystemModeRef?.current === true;
+    // Sticky in-app PiP / ложный system-флаг при AppState active не должны оставлять мёртвый VideoCall.
+    const stayOnDeadVideoCall =
+      inSystemPiP && AppState.currentState !== 'active' && source !== 'end_button';
     const effectivePartnerSocketId =
       (typeof (session as any)?.getPartnerId === 'function' ? (session as any).getPartnerId() : null) ?? partnerId;
     const effectivePartnerUserId =
@@ -5014,6 +5025,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       partnerSocketId: effectivePartnerSocketId,
       partnerUserId: effectivePartnerUserId,
       source,
+      stayOnDeadVideoCall,
     });
 
     // КРИТИЧНО: Сразу выставляем refs завершения (до навигации и session.endCall), чтобы колбэки сессии
@@ -5090,8 +5102,15 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     }
 
     // Закрываем экран видеозвонка после call:end — собеседник получает завершение до размонтирования UI.
-    if (!wasInPiP) {
+    // «Завершить» / in-app PiP при active → всегда уходим (иначе пустой фон без chrome).
+    if (!stayOnDeadVideoCall) {
       try {
+        try { (global as any).__homeResetByVideoCallRef.current = true; } catch (_) {}
+        try {
+          if (pipRef.current.visible || isPipOverlayVisibleSync()) {
+            pipRef.current.hidePiP();
+          }
+        } catch (_) {}
         const rootNav = (global as any).__navRef;
         if (rootNav?.isReady?.()) {
           const currentRoute = rootNav.getCurrentRoute();
@@ -5177,37 +5196,40 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
   // Если открыли приложение и попали на неактивный видеозвонок (например после закрытия PiP при завершении) — закрываем экран: goBack или reset на Home. Не редиректить, если звонок только что завершили из PiP.
   useFocusEffect(
     useCallback(() => {
-      if (!isInactiveState || !wasFriendCallEnded) return;
-      if (pipRef.current?.visible === true || isPipOverlayVisibleSync() || pipRef.current?.inSystemPiPMode === true) return;
-      // __callEndedFromPiPNoOpenRef ставится при завершении из PiP. Пропуск нужен только для
-      // СИСТЕМНОГО PiP (приложение в фоне — не дёргать навигацию). Но при завершении из IN-APP
-      // PiP приложение на переднем плане и под оверлеем висит экран VideoCall — без ухода на Home
-      // остаётся пустой экран. Поэтому пропускаем ТОЛЬКО когда приложение НЕ активно (фон/system PiP).
-      if (
-        (global as any).__callEndedFromPiPNoOpenRef?.current === true &&
-        AppState.currentState !== 'active'
-      ) {
-        return;
-      }
-      const rootNav = (global as any).__navRef;
-      if (!rootNav?.isReady?.()) return;
-      const route = rootNav.getCurrentRoute();
-      if (route?.name !== 'VideoCall') return;
-      const returnTo = (route as any)?.params?.returnTo;
-      const state = rootNav.getState();
-      const routes = state?.routes ?? [];
-      const canGoBack = typeof rootNav.canGoBack === 'function' ? rootNav.canGoBack() : routes.length > 1;
-      if (canGoBack) {
-        rootNav.dispatch(CommonActions.goBack());
+      const leaveDeadVideoCallIfNeeded = () => {
+        if (!isInactiveStateRef.current || !wasFriendCallEndedRef.current) return;
+        if (pipRef.current?.visible === true || isPipOverlayVisibleSync() || pipRef.current?.inSystemPiPMode === true) {
+          return;
+        }
+        // __callEndedFromPiPNoOpenRef ставится при завершении из PiP. Пропуск нужен только для
+        // СИСТЕМНОГО PiP (приложение в фоне — не дёргать навигацию). Но при завершении из IN-APP
+        // PiP приложение на переднем плане и под оверлеем висит экран VideoCall — без ухода на Home
+        // остаётся пустой экран. Поэтому пропускаем ТОЛЬКО когда приложение НЕ активно (фон/system PiP).
+        if (
+          (global as any).__callEndedFromPiPNoOpenRef?.current === true &&
+          AppState.currentState !== 'active'
+        ) {
+          return;
+        }
+        const rootNav = (global as any).__navRef;
+        if (!rootNav?.isReady?.()) return;
+        const route = rootNav.getCurrentRoute();
+        if (route?.name !== 'VideoCall') return;
+        const returnTo = (route as any)?.params?.returnTo;
+        try { (global as any).__homeResetByVideoCallRef.current = true; } catch (_) {}
+        dispatchLeaveVideoCallScreen(rootNav, { returnTo, callEnded: true });
         try { emitCallEndedOnHome(); } catch (_) {}
-      } else if (returnTo?.name) {
-        rootNav.dispatch(CommonActions.reset({
-          index: 0,
-          routes: [{ name: returnTo.name as any, params: { ...(returnTo.params || {}), callEnded: true } }],
-        }));
-      } else {
-        rootNav.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'Home' as any, params: { callEnded: true } }] }));
-      }
+      };
+
+      leaveDeadVideoCallIfNeeded();
+      const sub = AppState.addEventListener('change', (next) => {
+        if (next === 'active') leaveDeadVideoCallIfNeeded();
+      });
+      return () => {
+        try {
+          sub.remove();
+        } catch {}
+      };
     }, [isInactiveState, wasFriendCallEnded])
   );
 

@@ -693,14 +693,18 @@ async function sendMessageToUser(io: Server, userId: string, message: any): Prom
 }
 
 /**
- * Добавить непрочитанное сообщение
+ * Добавить непрочитанное сообщение (дедуп по messageId — иначе ретрай/гонка → unread 2 при одном msg).
  */
 function addUnreadMessage(userId: string, messageId: string, fromUser: string) {
+  const id = String(messageId || '').trim();
+  if (!id) return;
   if (!unreadMessages.has(userId)) {
     unreadMessages.set(userId, []);
   }
-  unreadMessages.get(userId)!.push({
-    id: messageId,
+  const list = unreadMessages.get(userId)!;
+  if (list.some((msg) => msg.id === id)) return;
+  list.push({
+    id,
     from: fromUser,
     timestamp: new Date().toISOString()
   });
@@ -1510,6 +1514,71 @@ function registerMessageHandlers(io: Server, sock: Socket) {
       ack?.({ ok: true, counts });
     } catch (e: any) {
       console.error('[messages:unread_counts] error:', e?.message || e);
+      return ack?.({ ok: false, error: 'server_error' });
+    }
+  });
+
+  /** ===== Batch: lastMessage для списка Чаты (после переустановки локальный кэш пуст) ===== */
+  sock.on('messages:chat_previews', async (payload: {
+    withIds?: string[];
+  }, ack?: Function) => {
+    try {
+      const me = meId();
+      if (!isOid(me)) {
+        return ack?.({ ok: false, error: 'unauthorized' });
+      }
+
+      const withIds = Array.isArray(payload?.withIds)
+        ? [...new Set(payload.withIds.map((id) => String(id || '').trim()).filter((id) => isOid(id)))]
+            .slice(0, MAX_MESSAGE_BATCH_SIZE)
+        : [];
+      if (withIds.length === 0) {
+        return ack?.({ ok: true, previews: {} });
+      }
+
+      const meOid = new mongoose.Types.ObjectId(me);
+      const peerOids = withIds.map((id) => new mongoose.Types.ObjectId(id));
+      const docs = await FriendshipMessages.find({
+        $or: [
+          { user1: meOid, user2: { $in: peerOids } },
+          { user2: meOid, user1: { $in: peerOids } },
+        ],
+      })
+        .select('user1 user2 lastMessage')
+        .lean();
+
+      const previews: Record<string, any> = {};
+      const needLatest: Array<{ peerId: string; friendshipId: mongoose.Types.ObjectId }> = [];
+
+      for (const doc of docs as any[]) {
+        const u1 = String(doc.user1);
+        const u2 = String(doc.user2);
+        const peerId = u1 === me ? u2 : u1;
+        const lm = doc.lastMessage;
+        if (lm && lm.id) {
+          previews[peerId] = formatMessageForClient(lm);
+        } else if (doc._id) {
+          needLatest.push({ peerId, friendshipId: doc._id as mongoose.Types.ObjectId });
+        }
+      }
+
+      if (needLatest.length > 0) {
+        await Promise.all(
+          needLatest.map(async ({ peerId, friendshipId }) => {
+            if (previews[peerId]) return;
+            const latest = await FriendshipMessageItem.findOne({ friendshipId })
+              .sort({ timestamp: -1 })
+              .lean();
+            if (latest && (latest as any).id) {
+              previews[peerId] = formatMessageForClient(latest);
+            }
+          }),
+        );
+      }
+
+      ack?.({ ok: true, previews });
+    } catch (e: any) {
+      console.error('[messages:chat_previews] error:', e?.message || e);
       return ack?.({ ok: false, error: 'server_error' });
     }
   });

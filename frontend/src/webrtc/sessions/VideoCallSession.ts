@@ -1463,6 +1463,14 @@ export class VideoCallSession extends SimpleEventEmitter {
       try {
         logger.info('[VideoCallSession] Recreating local audio track after background');
         const tracks = await createLocalTracks({ audio: true, video: false });
+        if (this.ended || this.endCallInProgress || !this.isMicOn) {
+          for (const t of tracks) {
+            try {
+              t.stop();
+            } catch {}
+          }
+          return;
+        }
         const newAudio = tracks.find((t) => t.kind === Track.Kind.Audio) as LocalAudioTrack | undefined;
         if (newAudio) {
           try {
@@ -5863,11 +5871,13 @@ export class VideoCallSession extends SimpleEventEmitter {
   }
 
   private async ensureLocalTracks(force = false): Promise<void> {
+    if (this.ended || this.endCallInProgress || this.cleaned) return;
     if (!force && this.ensureLocalTracksPromise) {
       await this.ensureLocalTracksPromise;
       return;
     }
     const run = async () => {
+    if (this.ended || this.endCallInProgress || this.cleaned) return;
     if (this.localAudioTrack && !force) {
       if (!this.isCamOn || this.localVideoTrack) {
         this.emit('localStream', this.localStream);
@@ -5942,6 +5952,17 @@ export class VideoCallSession extends SimpleEventEmitter {
       }
     }
 
+    // Hangup во время createLocalTracks — не поднимать mic/cam после завершения.
+    if (this.ended || this.endCallInProgress || this.cleaned) {
+      for (const track of tracks) {
+        try {
+          track.stop();
+        } catch {}
+      }
+      logger.info('[VideoCallSession] ensureLocalTracks discarded — call already ended');
+      return;
+    }
+
     tracks.forEach((track) => {
       if (track.kind === Track.Kind.Video) {
         this.localVideoTrack = track as LocalVideoTrack;
@@ -5972,6 +5993,10 @@ export class VideoCallSession extends SimpleEventEmitter {
         }
       }
     } catch {}
+    if (this.ended || this.endCallInProgress || this.cleaned) {
+      this.stopLocalTracks();
+      return;
+    }
     try {
       if (this.localAudioTrack) {
         if (this.isMicOn) this.localAudioTrack.unmute();

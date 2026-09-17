@@ -7,6 +7,7 @@ import {
   markMessagesAsRead,
 } from '../../sockets/socket';
 import { dismissMessageNotificationForUser } from '../../utils/pushNotifications';
+import { markChatsClearedForMe } from './chatClearedForMe';
 
 export async function clearWelcomeChatForMe(peerId: string): Promise<boolean> {
   const id = String(peerId || '').trim();
@@ -22,6 +23,10 @@ export async function clearWelcomeChatForMe(peerId: string): Promise<boolean> {
   } catch {
     // local wipe should not block server clear
   }
+
+  try {
+    await markChatsClearedForMe([id]);
+  } catch {}
 
   const serverOk = await clearChatMessages(id, false);
   try {

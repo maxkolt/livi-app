@@ -224,6 +224,7 @@ async function hardLocalReset() {
       const chatKeys = allKeys.filter(k => 
         k.startsWith('chat_messages_') || 
         k.startsWith('chat_statuses_') ||
+        k.startsWith('chat_cleared_') ||
         k.startsWith(`${FRIENDS_CACHE_PREFIX}:`)
       );
       if (chatKeys.length > 0) {

@@ -291,9 +291,10 @@ async function sendCallPushViaFcmWithRetry(
   ttlMs: number
 ): Promise<void> {
   let lastError: unknown = null;
-  // Короткий TTL = окно звонка. FCM трактует high-priority + короткий ttl как срочное сообщение:
-  // будит устройство в Doze без батчинга/отсрочки и НЕ доставляет протухший звонок позже (нет «призрачного» звонка).
-  const safeTtlMs = Math.max(5_000, Math.min(30_000, Math.floor(ttlMs) || 30_000));
+  // Короткий TTL = окно звонка. +slack для VPN/Doze: иначе FCM выбрасывает сообщение в очереди,
+  // пока пуш ещё мог бы дойти внутри ring window. UI всё равно режет по expiresAt.
+  const remainingMs = Math.max(0, Math.floor(ttlMs) || 0);
+  const safeTtlMs = Math.max(20_000, Math.min(55_000, remainingMs + 20_000));
   for (let attempt = 1; attempt <= CALL_PUSH_MAX_ATTEMPTS; attempt += 1) {
     try {
       await messaging.send({

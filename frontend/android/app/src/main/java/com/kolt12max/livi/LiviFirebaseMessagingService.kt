@@ -103,8 +103,12 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             }
             // Extra stale guard by FCM envelope time.
             // Some delayed deliveries may carry incomplete payload timestamps; sentTime still reflects old push.
+            // Under VPN a retry can arrive late by sentTime but still within expiresAt — don't drop those.
             val sentAtMs = remoteMessage.sentTime.takeIf { it > 0L }
             if (sentAtMs != null && (System.currentTimeMillis() - sentAtMs) >= CALL_RING_TIMEOUT_MS) {
+                val stillInRingWindow =
+                    callExpiresAtMs != null && System.currentTimeMillis() < callExpiresAtMs!!
+                if (!stillInRingWindow) {
                     Log.i(TAG, "[INCOMING_CALL] FCM call push stale by sentTime callId=$callId sentAtMs=$sentAtMs")
                     EndedCallIds.add(this, callId)
                     try {
@@ -113,6 +117,11 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                     } catch (_: Exception) {}
                     showMissedCallNotification(callId, from, fromNick)
                     return
+                }
+                Log.i(
+                    TAG,
+                    "[INCOMING_CALL] FCM sentTime old but expiresAt still valid — show incoming callId=$callId",
+                )
             }
             // Inclusive end of ring window (same as JS callExpiry / backend). No grace after expiresAt:
             // otherwise delayed FCM briefly opens IncomingCallActivity after a missed/ended call.

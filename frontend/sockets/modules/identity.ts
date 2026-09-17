@@ -448,6 +448,7 @@ export async function clearAllUserData(): Promise<{ success: boolean; error?: an
       key.startsWith("friends") ||
       key.startsWith("chat_messages_") ||
       key.startsWith("chat_statuses_") ||
+      key.startsWith("chat_cleared_") ||
       key.startsWith("profile_") ||
       key.startsWith("profile_draft_") ||
       key.startsWith("livi.profile") ||

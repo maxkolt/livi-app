@@ -710,22 +710,46 @@ socket.on("connect_error", (e) => {
   console.warn(`[socket] error ${e?.message || e}`);
 });
 
-// VPN / airplane-mode / Wi‑Fi↔LTE: when the OS reports reachability again, nudge Socket.IO.
+// VPN / airplane-mode / Wi‑Fi↔LTE: when the OS reports reachability again, recycle Socket.IO.
+// Important: under VPN the socket often stays socket.connected===true but is a zombie (no events).
 try {
   let lastNetReachable: boolean | null = null;
+  let lastNetTypeKey = '';
+  let lastPathRecycleAt = 0;
   NetInfo.addEventListener((state) => {
     const reachable =
       state.isConnected === true &&
       (state.isInternetReachable === true || state.isInternetReachable == null);
     const wasReachable = lastNetReachable;
     lastNetReachable = reachable;
-    // Skip initial NetInfo callback (null → true) — boot already connects.
-    // Only act on false → true (VPN toggle, airplane off, network restore).
-    if (!reachable || wasReachable !== false) return;
+
+    const typeKey = `${String(state.type || '')}:${String((state.details as any)?.isConnectionExpensive ?? '')}`;
+    const typeChanged = !!lastNetTypeKey && typeKey !== lastNetTypeKey;
+    lastNetTypeKey = typeKey || lastNetTypeKey;
+
     if (!shouldAttemptRealtimeConnection()) return;
-    if (socket.connected) return;
-    logger.info("[socket] network reachable again — reconnecting");
-    applyAuthAndConnect().catch(() => {});
+
+    const now = Date.now();
+    const recyclePath = () => {
+      if (now - lastPathRecycleAt < 6_000) return;
+      lastPathRecycleAt = now;
+      void hardRecycleSocketConnection(
+        wasReachable === false ? 'netinfo_reachable_again' : 'netinfo_type_change',
+      ).catch(() => {});
+    };
+
+    // false → true (VPN on/off, airplane off): always hard recycle, even if still "connected".
+    if (reachable && wasReachable === false) {
+      logger.info("[socket] network reachable again — hard recycle (VPN/path)");
+      recyclePath();
+      return;
+    }
+
+    // Type change while online (wifi↔cellular / some VPN attachments).
+    if (reachable && typeChanged) {
+      logger.info("[socket] network type changed — hard recycle", { typeKey });
+      recyclePath();
+    }
   });
 } catch {}
 // Busy handler (for logging/forwarding to UI screens)

@@ -29,6 +29,20 @@ type UseHomeBadgesArgs = {
 
 const UNREAD_FLOOR_TTL_MS = 2500;
 const UNREAD_SERVER_RECONCILE_DELAY_MS = 900;
+/** Дедуп optimistic +1 по message.id (повторный message:received → бейдж «2» при одном пузыре). */
+const COUNTED_UNREAD_MESSAGE_IDS_MAX = 300;
+
+function rememberCountedUnreadMessageId(seen: Set<string>, messageId: string): boolean {
+  const id = String(messageId || '').trim();
+  if (!id) return true; // без id не дедупим — лучше +1, чем пропуск
+  if (seen.has(id)) return false;
+  seen.add(id);
+  if (seen.size > COUNTED_UNREAD_MESSAGE_IDS_MAX) {
+    const oldest = seen.values().next().value;
+    if (oldest) seen.delete(oldest);
+  }
+  return true;
+}
 
 function persistUnreadMap(map: Record<string, number>) {
   const cleaned: Record<string, number> = {};
@@ -48,6 +62,8 @@ export function useHomeBadges({ friends, friendsRef }: UseHomeBadgesArgs) {
   const missedByUserRef = useRef<Record<string, number>>({});
   /** Не даём серверному 0 сразу после нового сообщения стереть красную точку (гонка ack). */
   const unreadFloorRef = useRef<Map<string, { min: number; until: number }>>(new Map());
+  /** message.id уже учтён в unread — переживает remount слушателя (friendsIdsKey). */
+  const countedUnreadMessageIdsRef = useRef<Set<string>>(new Set());
 
   const clearUnreadFloor = useCallback((userId: string) => {
     unreadFloorRef.current.delete(String(userId));
@@ -461,6 +477,10 @@ export function useHomeBadges({ friends, friendsRef }: UseHomeBadgesArgs) {
       const messageFromStr = String(message.from);
       const isFriend = friendsRef.current.some((f) => String(f.id) === messageFromStr);
       if (!isFriend) return;
+      // Повтор того же message:received не должен давать второй +1 в бейдже.
+      if (!rememberCountedUnreadMessageId(countedUnreadMessageIdsRef.current, message?.id)) {
+        return;
+      }
       const openChatPeer = String((global as any).__currentChatPeerId || '').trim();
       if (openChatPeer && openChatPeer === messageFromStr) {
         if (!disposed) {

@@ -475,6 +475,89 @@ export function getUnreadCounts(fromIds?: string[]) {
   })();
 }
 
+export function fetchChatPreviews(withIds: string[]) {
+  const ids = [...new Set(
+    (Array.isArray(withIds) ? withIds : [])
+      .map((id) => String(id || "").trim())
+      .filter(Boolean),
+  )].slice(0, 100);
+
+  type PreviewMsg = {
+    id: string;
+    from: string;
+    to: string;
+    type: "text" | "image" | "audio" | "sticker";
+    text?: string;
+    uri?: string;
+    uris?: string[];
+    stickerId?: string;
+    stickerPackId?: string;
+    stickerEmoji?: string;
+    stickerLabel?: string;
+    timestamp: string;
+    read?: boolean;
+  };
+
+  if (!ids.length) {
+    return Promise.resolve({ ok: true as const, previews: {} as Record<string, PreviewMsg> });
+  }
+
+  const viaSocket = () =>
+    emitAck<{
+      ok: boolean;
+      previews?: Record<string, PreviewMsg>;
+      error?: string;
+    }>("messages:chat_previews", { withIds: ids }, 12000, 2);
+
+  const viaFetchFallback = async () => {
+    const previews: Record<string, PreviewMsg> = {};
+    const concurrency = 4;
+    let cursor = 0;
+    const workers = Array.from({ length: Math.min(concurrency, ids.length) }, async () => {
+      while (cursor < ids.length) {
+        const idx = cursor;
+        cursor += 1;
+        const peerId = ids[idx]!;
+        try {
+          const page = await fetchMessages({ with: peerId, limit: 1 });
+          const list = page?.ok && Array.isArray(page.messages) ? page.messages : [];
+          const last = list.length ? list[list.length - 1] : null;
+          if (last?.id) previews[peerId] = last as PreviewMsg;
+        } catch {
+          // skip peer
+        }
+      }
+    });
+    await Promise.all(workers);
+    return { ok: true as const, previews };
+  };
+
+  return (async () => {
+    try {
+      const r = await viaSocket();
+      if (r?.ok && r.previews && typeof r.previews === "object") return r;
+      return viaFetchFallback();
+    } catch (e: any) {
+      const msg = String(e?.message || e || "");
+      const retriable = msg.includes("offline") || msg.includes("timeout") || msg.includes("Ack timeout");
+      if (retriable) {
+        try {
+          await waitForConnect(20000);
+          const r = await viaSocket();
+          if (r?.ok && r.previews && typeof r.previews === "object") return r;
+        } catch {
+          // fall through
+        }
+      }
+      try {
+        return await viaFetchFallback();
+      } catch {
+        return { ok: false as const, previews: {} as Record<string, PreviewMsg>, error: msg };
+      }
+    }
+  })();
+}
+
 export function onMessageReceived(
   cb: (message: {
     id: string;
