@@ -38,6 +38,8 @@ type FriendRowIconActionButtonProps = {
   onLongPress?: () => void;
   /** Welcome-список друзей: круглее кнопка и иконка в тон tab bar. */
   variant?: 'menu' | 'welcome';
+  /** Увеличенный контрол для планшета. */
+  large?: boolean;
 };
 
 export function FriendRowIconActionButton({
@@ -53,6 +55,7 @@ export function FriendRowIconActionButton({
   onPress,
   onLongPress,
   variant = 'menu',
+  large = false,
 }: FriendRowIconActionButtonProps) {
   const pressStartedAtRef = React.useRef(0);
   const pressHandledRef = React.useRef(false);
@@ -128,6 +131,9 @@ export function FriendRowIconActionButton({
   const btnPressedSurface = isWelcomeVariant
     ? WELCOME_FRIEND_ACTION_BTN_PRESSED_SURFACE
     : FRIEND_ACTION_BTN_PRESSED_SURFACE;
+  const buttonWidth = large ? FRIEND_ACTION_BUTTON.width + 4 : FRIEND_ACTION_BUTTON.width;
+  const buttonHeight = large ? FRIEND_ACTION_BUTTON.height + 4 : FRIEND_ACTION_BUTTON.height;
+  const buttonRadius = large ? Math.max(btnRadius, buttonHeight / 2) : btnRadius;
 
   return (
     <Pressable
@@ -174,9 +180,9 @@ export function FriendRowIconActionButton({
       onLongPress={longPressEnabled ? fireLongPress : undefined}
       style={({ pressed }) => [
         {
-          width: FRIEND_ACTION_BUTTON.width,
-          height: FRIEND_ACTION_BUTTON.height,
-          borderRadius: btnRadius,
+          width: buttonWidth,
+          height: buttonHeight,
+          borderRadius: buttonRadius,
         },
         btnSurface,
         inactiveLook
@@ -194,7 +200,7 @@ export function FriendRowIconActionButton({
         <View style={flipIcon ? { transform: [{ scaleX: -1 }] } : undefined}>
           <MaterialCommunityIcons
             name={icon}
-            size={FRIEND_ACTION_ICON_SIZE}
+            size={large ? FRIEND_ACTION_ICON_SIZE + 2 : FRIEND_ACTION_ICON_SIZE}
             color={
               inactiveLook
                 ? ANDROID_VIDEO_CALL_DISABLED_ICON

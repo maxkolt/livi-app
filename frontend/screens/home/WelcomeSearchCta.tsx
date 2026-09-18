@@ -4,16 +4,16 @@ import {
   Platform,
   Pressable,
   StyleSheet,
-  useWindowDimensions,
   View,
   type ViewStyle,
 } from 'react-native';
+import { useHomeLayout } from './HomeLayoutContext';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import {
   SEARCH_CTA_MAX_WIDTH,
   SEARCH_CTA_TABLET_MAX_WIDTH,
-  SEARCH_CTA_TABLET_MIN_WIDTH,
+  isWelcomeTabletLayout,
   WELCOME_HEADER_TITLE,
   WELCOME_MUTED_TEXT,
 } from './constants';
@@ -23,6 +23,16 @@ import { logger } from '../../utils/logger';
 const BORDER_W = 1.35;
 /** Темнее/приглушённее aura — только рамка CTA, без смены глобального градиента. */
 const CTA_BORDER_GRADIENT = ['#0b7f74', '#255db8', '#007fbc'] as const;
+
+/**
+ * Высота CTA. Вынесена отдельно, чтобы раскладка Search могла заранее
+ * зарезервировать под кнопку ровно столько же, сколько она реально займёт.
+ */
+export function welcomeSearchCtaHeight(tabletLayout: boolean, compact: boolean): number {
+  if (tabletLayout) return 56;
+  if (compact) return Platform.OS === 'ios' ? 48 : 44;
+  return Platform.OS === 'ios' ? 52 : 48;
+}
 
 type WelcomeSearchCtaProps = {
   label: string;
@@ -41,12 +51,15 @@ export function WelcomeSearchCta({
   compact = false,
   style,
 }: WelcomeSearchCtaProps) {
-  const { width: windowWidth } = useWindowDimensions();
+  // Размер берём из safe-area frame: он приходит от нативного провайдера и
+  // обновляется при повороте, в отличие от Dimensions.
+  const { width: windowWidth, height: windowHeight } = useHomeLayout();
+  const tabletLayout = isWelcomeTabletLayout(windowWidth, windowHeight);
   const sideInset = 44;
   const maxCtaWidth =
-    windowWidth >= SEARCH_CTA_TABLET_MIN_WIDTH ? SEARCH_CTA_TABLET_MAX_WIDTH : SEARCH_CTA_MAX_WIDTH;
+    tabletLayout ? SEARCH_CTA_TABLET_MAX_WIDTH : SEARCH_CTA_MAX_WIDTH;
   const buttonWidth = Math.min(Math.max(0, windowWidth - sideInset * 2), maxCtaWidth);
-  const buttonHeight = compact ? (Platform.OS === 'ios' ? 48 : 44) : Platform.OS === 'ios' ? 52 : 48;
+  const buttonHeight = welcomeSearchCtaHeight(tabletLayout, compact);
   const borderRadius = buttonHeight / 2;
   const innerRadius = Math.max(0, borderRadius - BORDER_W);
   const blockedFlash = useRef(new Animated.Value(0)).current;
@@ -114,6 +127,10 @@ export function WelcomeSearchCta({
     const t0 = Date.now();
     try {
       const g = global as any;
+      // CTA is a foreground navigation action just like a chat/call row tap.
+      // Let Home's delayed resume/badge work yield so the RandomChat screen can paint first.
+      g.__homeRowActionAtRef = g.__homeRowActionAtRef || { current: 0 };
+      g.__homeRowActionAtRef.current = t0;
       g.__searchNavT0 = t0;
       g.__searchNavSteps = [{ step: 'cta.firePress', at: t0, elapsedMs: 0 }];
       // Только первый focus/onStateChange после CTA — иначе поздние remount/focus шумят (200–1100ms).
@@ -192,11 +209,15 @@ export function WelcomeSearchCta({
           >
             <MaterialCommunityIcons
               name="lightning-bolt"
-              size={compact ? 20 : 22}
+              size={tabletLayout ? 24 : compact ? 20 : 22}
               color={WELCOME_MUTED_TEXT}
             />
             <FitText
-              style={[styles.label, compact && styles.labelCompact]}
+              style={[
+                styles.label,
+                tabletLayout && styles.labelTablet,
+                compact && styles.labelCompact,
+              ]}
               minimumFontScale={0.7}
             >
               {label}
@@ -278,5 +299,8 @@ const styles = StyleSheet.create({
   },
   labelCompact: {
     fontSize: 15,
+  },
+  labelTablet: {
+    fontSize: 17,
   },
 });

@@ -3,7 +3,7 @@ import { getCurrentUserId } from '../../sockets/socket';
 import { CALL_LOG_KEY } from './constants';
 import { appendChatCallStatusIfEligible } from '../chat/chatCallEvents';
 
-export type CallLogDirection = 'outgoing' | 'incoming' | 'missed' | 'cancelled';
+export type CallLogDirection = 'outgoing' | 'incoming' | 'missed' | 'cancelled' | 'no_answer';
 
 export type CallLogEntry = {
   id: string;
@@ -17,7 +17,17 @@ const DEDUPE_MS = 1800;
 /** Окно, в котором исходящий можно перевести в «отменённый». */
 const OUTGOING_TO_CANCELLED_MS = 15 * 60 * 1000;
 
-const VALID_DIRECTIONS = new Set<CallLogDirection>(['outgoing', 'incoming', 'missed', 'cancelled']);
+const VALID_DIRECTIONS = new Set<CallLogDirection>([
+  'outgoing',
+  'incoming',
+  'missed',
+  'cancelled',
+  'no_answer',
+]);
+
+function isOutgoingFinalDirection(direction: CallLogDirection): boolean {
+  return direction === 'cancelled' || direction === 'no_answer';
+}
 
 let memory: CallLogEntry[] | null = null;
 let memoryUid = '';
@@ -105,7 +115,7 @@ function mergeCallLogPreferMemory(mem: CallLogEntry[], disk: CallLogEntry[]): Ca
     if (e.direction !== 'outgoing') return true;
     const superseded = list.some(
       (c) =>
-        c.direction === 'cancelled' &&
+        isOutgoingFinalDirection(c.direction) &&
         c.peerId === e.peerId &&
         Math.abs(c.at - e.at) <= OUTGOING_TO_CANCELLED_MS,
     );
@@ -235,18 +245,18 @@ export function recordCallLog(
   };
 
   const apply = (prev: CallLogEntry[]) => {
-    // После cancel late silent-outgoing не должен снова положить «Исходящий» поверх «Отменённый».
+    // После финального статуса late silent-outgoing не должен снова положить «Исходящий» сверху.
     if (input.direction === 'outgoing') {
-      const recentCancelled = prev.some(
+      const recentFinal = prev.some(
         (item) =>
           item.peerId === peerId &&
-          item.direction === 'cancelled' &&
+          isOutgoingFinalDirection(item.direction) &&
           at - item.at <= OUTGOING_TO_CANCELLED_MS,
       );
-      if (recentCancelled) return;
+      if (recentFinal) return;
     }
     let base = prev;
-    if (input.direction === 'cancelled') {
+    if (isOutgoingFinalDirection(input.direction)) {
       base = prev.filter(
         (item) =>
           !(
@@ -290,6 +300,22 @@ export function recordCancelledCall(
   peerIdRaw: string,
   opts?: { deferNotifyMs?: number; silent?: boolean },
 ): void {
+  recordOutgoingFinalCall(peerIdRaw, 'cancelled', opts);
+}
+
+/** Таймаут исходящего дозвона: исходящий → «Нет ответа». */
+export function recordNoAnswerCall(
+  peerIdRaw: string,
+  opts?: { deferNotifyMs?: number; silent?: boolean },
+): void {
+  recordOutgoingFinalCall(peerIdRaw, 'no_answer', opts);
+}
+
+function recordOutgoingFinalCall(
+  peerIdRaw: string,
+  direction: 'cancelled' | 'no_answer',
+  opts?: { deferNotifyMs?: number; silent?: boolean },
+): void {
   const peerId = String(peerIdRaw || '').trim();
   if (!peerId) return;
   const uid = currentUid();
@@ -298,32 +324,47 @@ export function recordCancelledCall(
   const silent = opts?.silent === true;
 
   const apply = (prev: CallLogEntry[], doNotify: boolean) => {
+    // Timeout и cancel могут прилететь почти одновременно. «Нет ответа» — более точный
+    // итог таймаута и не должен быть затёрт поздним cancel из native/server race.
+    if (
+      direction === 'cancelled' &&
+      prev.some(
+        (item) =>
+          item.peerId === peerId &&
+          item.direction === 'no_answer' &&
+          now - item.at < DEDUPE_MS * 4,
+      )
+    ) {
+      return;
+    }
     const idx = prev.findIndex(
       (item) =>
         item.peerId === peerId &&
-        item.direction === 'outgoing' &&
-        now - item.at <= OUTGOING_TO_CANCELLED_MS,
+        ((item.direction === 'outgoing' && now - item.at <= OUTGOING_TO_CANCELLED_MS) ||
+          (direction === 'no_answer' &&
+            item.direction === 'cancelled' &&
+            now - item.at < DEDUPE_MS * 4)),
     );
     let next: CallLogEntry[];
     if (idx >= 0) {
       next = prev.slice();
-      next[idx] = { ...next[idx], direction: 'cancelled' };
-      lastRecord = { key: `${uid}:${peerId}:cancelled`, at: now };
+      next[idx] = { ...next[idx], direction };
+      lastRecord = { key: `${uid}:${peerId}:${direction}`, at: now };
     } else {
-      const recentCancelled = prev.some(
+      const recentFinal = prev.some(
         (item) =>
           item.peerId === peerId &&
-          item.direction === 'cancelled' &&
+          item.direction === direction &&
           now - item.at < DEDUPE_MS * 4,
       );
-      if (recentCancelled) return;
-      const dedupeKey = `${uid}:${peerId}:cancelled`;
+      if (recentFinal) return;
+      const dedupeKey = `${uid}:${peerId}:${direction}`;
       if (lastRecord && lastRecord.key === dedupeKey && now - lastRecord.at < DEDUPE_MS) return;
       lastRecord = { key: dedupeKey, at: now };
       const entry: CallLogEntry = {
         id: `${now.toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
         peerId,
-        direction: 'cancelled',
+        direction,
         at: now,
       };
       next = [entry, ...prev].slice(0, MAX_ENTRIES);
@@ -349,23 +390,23 @@ export function recordCancelledCall(
   const base = hadLoadedForUid ? (memory as CallLogEntry[]) : memory || [];
   apply(base, !silent);
   if (!silent) {
-    void appendChatCallStatusIfEligible(peerId, 'cancelled', { at: now });
+    void appendChatCallStatusIfEligible(peerId, direction, { at: now });
   }
   if (!hadLoadedForUid) {
     void ensureLoaded(uid).then((loaded) => {
       if (memoryUid !== uid) return;
-      const cancelled = (memory || []).filter(
-        (e) => e.peerId === peerId && e.direction === 'cancelled' && now - e.at < DEDUPE_MS * 4,
+      const finalEntries = (memory || []).filter(
+        (e) => e.peerId === peerId && e.direction === direction && now - e.at < DEDUPE_MS * 4,
       );
       const withoutDupOut = loaded.filter(
         (e) =>
           !(
             e.peerId === peerId &&
-            (e.direction === 'outgoing' || e.direction === 'cancelled') &&
+            (e.direction === 'outgoing' || isOutgoingFinalDirection(e.direction)) &&
             now - e.at <= OUTGOING_TO_CANCELLED_MS
           ),
       );
-      const next = [...cancelled, ...withoutDupOut].slice(0, MAX_ENTRIES);
+      const next = [...finalEntries, ...withoutDupOut].slice(0, MAX_ENTRIES);
       memory = next;
       memoryUid = uid;
       persist(uid, next);

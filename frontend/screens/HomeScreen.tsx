@@ -1,5 +1,5 @@
 // screens/HomeScreen.tsx
-import React, { useEffect, useState, useCallback, useRef, startTransition } from 'react';
+import React, { useEffect, useState, useCallback, useMemo, useRef, startTransition } from 'react';
 import {
   BackHandler,
   StatusBar,
@@ -9,8 +9,8 @@ import {
   Pressable,
   View,
   Dimensions,
-  useWindowDimensions,
   Platform,
+  type LayoutChangeEvent,
   ActionSheetIOS,
   Animated,
   StyleProp,
@@ -26,12 +26,12 @@ import {
 import * as Haptics from 'expo-haptics';
 
 import { syncMyStreamProfile } from '../chat/cometchat';
-import { useSafeAreaInsets, SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaFrame, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { BlurView } from 'expo-blur';
 import * as ImagePicker from 'expo-image-picker';
 import * as Clipboard from 'expo-clipboard';
-import { Swipeable, PinchGestureHandler, State } from 'react-native-gesture-handler';
+import { PinchGestureHandler, State } from 'react-native-gesture-handler';
 import { Portal } from 'react-native-paper';
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { Image as ExpoImage } from 'expo-image';
@@ -79,18 +79,17 @@ import {
   mergeMissedFromSources,
   buildFriendBadgesSignature,
   isDirectCallSessionLive,
-  useLiviNotice,
   useLiviConfirm,
   useHomeUpdatePromo,
   useHomeBadges,
   useHomeFriends,
 } from './home';
-import type { NoticeKind } from './home';
 import { HomeWelcomeTabBar, type WelcomeTabId } from './home/HomeWelcomeTabBar';
 import { WelcomeKeepAlivePane } from './home/WelcomeKeepAlivePane';
 import { WelcomeStageBackground } from './home/WelcomeStageBackground';
+import { HomeLayoutProvider } from './home/HomeLayoutContext';
 import { WELCOME_HEADER_TITLE, WELCOME_STAGE_BG } from './home/constants';
-import { recordCallLog, recordCancelledCall, requestCallLogSoftUi, cancelPendingCallLogNotify, flushCallLogUi, forceCallLogUiNow, loadCallLog } from './home/callLog';
+import { recordCallLog, recordCancelledCall, recordNoAnswerCall, requestCallLogSoftUi, cancelPendingCallLogNotify, flushCallLogUi, forceCallLogUiNow, loadCallLog } from './home/callLog';
 import { prefetchChatPreviews } from './home/hooks/useChatPreviews';
 import {
   markChatCallBubbleEligibleIfViewing,
@@ -310,7 +309,28 @@ export function markHomeScreenBootedForSession() {
 }
 
 export default function HomeScreen({ navigation, route }: Props & { route?: { params?: HomeRouteParams } }) {
-  const { width: layoutWidth, height: layoutHeight } = useWindowDimensions();
+  // Корень Home меряем сами и раздаём через HomeLayoutProvider: тогда
+  // ориентация и размеры у всех потребителей меняются в одном кадре.
+  const frame = useSafeAreaFrame();
+  const [rootSize, setRootSize] = useState<{ width: number; height: number }>({
+    width: 0,
+    height: 0,
+  });
+  const onHomeRootLayout = useCallback((e: LayoutChangeEvent) => {
+    const { width, height } = e.nativeEvent.layout;
+    if (!(width > 0 && height > 0)) return;
+    setRootSize((prev) =>
+      Math.abs(prev.width - width) < 1 && Math.abs(prev.height - height) < 1
+        ? prev
+        : { width, height },
+    );
+  }, []);
+  const layoutWidth = rootSize.width || frame.width;
+  const layoutHeight = rootSize.height || frame.height;
+  const homeLayoutSize = useMemo(
+    () => ({ width: layoutWidth, height: layoutHeight }),
+    [layoutWidth, layoutHeight],
+  );
   const insets = useSafeAreaInsets();
   const pip = usePiP();
   const { theme, isDark } = useAppTheme();
@@ -318,8 +338,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const [resolvedUserId, setResolvedUserId] = useState<string>('');
   const [installId, setInstallId] = useState<string>('');
 
-  /** Legacy menu removed; friendsListShellProps still accepts the flag. */
-  const menuOpen = false;
   const [wallpaperPickerTheme, setWallpaperPickerTheme] = useState<'light' | 'dark' | null>(null);
   const [welcomeActiveTab, setWelcomeActiveTab] = useState<WelcomeTabId>('search');
   const welcomeActiveTabRef = useRef<WelcomeTabId>('search');
@@ -338,17 +356,37 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   }, []);
   /** One-shot: idle + dial. Скрытые pane (active=false) без call log / chat previews UI. */
   const welcomeShellsWarmedRef = useRef(false);
+  const warmTimersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
   const warmWelcomeListShells = useCallback(
     (reason: string) => {
       const toWarm: WelcomeTabId[] = ['friends', 'chat', 'calls', 'profile'];
-      // Sync mount: startTransition опаздывал → alreadyMounted:false при быстром тапе.
-      for (const id of toWarm) ensureWelcomeTabMounted(id);
       welcomeShellsWarmedRef.current = true;
+      // Dial-path монтирует синхронно: там вкладка нужна мгновенно.
+      // Idle-path разносит по кадрам — четыре панели разом роняли кадры поверх
+      // анимации появления welcome (замеряли: 20 медленных кадров, худший 81ms).
+      if (reason.startsWith('idle')) {
+        toWarm.forEach((id, index) => {
+          const timer = setTimeout(() => {
+            warmTimersRef.current.delete(timer);
+            ensureWelcomeTabMounted(id);
+          }, index * 90);
+          warmTimersRef.current.add(timer);
+        });
+      } else {
+        for (const id of toWarm) ensureWelcomeTabMounted(id);
+      }
       // Данные в memory до первого открытия вкладки — иначе «1 строка → догрузка».
       void loadCallLog().catch(() => {});
       logger.info('[welcome-tab] shell prewarm', { reason, tabs: toWarm });
     },
     [ensureWelcomeTabMounted],
+  );
+  useEffect(
+    () => () => {
+      warmTimersRef.current.forEach((timer) => clearTimeout(timer));
+      warmTimersRef.current.clear();
+    },
+    [],
   );
 
   // Пикер фона — welcome-профиль.
@@ -416,9 +454,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
 
   const pendingPresenceOfflineTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
-  // Закрытие свайпа строки при нажатии «Видеозвонок», чтобы не видеть кнопку удаления друга до появления нативного экрана
-  const openSwipeableRef = useRef<React.ElementRef<typeof Swipeable> | null>(null);
-  const swipeableRefsMap = useRef<Record<string, React.ElementRef<typeof Swipeable>>>({});
+  // Скрыть swipe-actions колонки на время исходящего (legacy flag, still gates busy delete).
   const [swipeActionsHiddenForCall, setSwipeActionsHiddenForCall] = useState<string | null>(null);
 
   // Единый фон для "титановой" кнопки меню и кружка аватара (в светлой теме),
@@ -428,9 +464,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     : Platform.OS === 'android'
       ? 'rgba(59, 68, 83, 0.10)' // чуть легче на Android
       : 'rgba(59, 68, 83, 0.15)'; // iOS
-
-  // Внутри кнопки меню: тот же фон, что у кнопки «Начать поиск» (theme.colors.background).
-  const MENU_BTN_INNER_BG = theme.colors.background as string;
 
   // На Android обработка выхода на корне (Back → системный PiP) централизована в App.tsx,
   // чтобы избежать конфликтов порядка BackHandler'ов (и неожиданного системного PiP на VideoCall).
@@ -627,18 +660,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const [langPickerVisible, setLangPickerVisible] = useState(false);
   const L = useCallback((key: string) => t(key, lang), [lang]);
 
-  // ===== Notice (toast) =====
-  // ВАЖНО: держим showNotice выше по файлу, потому что он используется в колбэках ниже.
-  const { showNotice: baseShowNotice, NoticeView } = useLiviNotice();
-  const showNotice = useCallback((text: string, kind: NoticeKind = 'info', ms = 3000) => {
-    const normalized = (text ?? '').trim().toLowerCase();
-    if (normalized === t('saved', lang).toLowerCase() || normalized === `${t('saved', lang).toLowerCase()}!`) {
-      setSavedToast(true);
-      return;
-    }
-    baseShowNotice(text, kind, ms);
-  }, [baseShowNotice, setSavedToast, lang]);
-  
   // ===== Donate modal =====
   const [donateVisible, setDonateVisible] = useState(false);
   const [pressedButton, setPressedButton] = useState<'boosty' | 'patreon' | null>(null);
@@ -711,7 +732,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     try {
       const userId = getCurrentUserId();
       if (!userId) {
-        showNotice(t('unauthorizedError', lang), 'error', 3000);
         return;
       }
       // Используем веб-ссылку, которая автоматически редиректит на приложение
@@ -740,9 +760,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       await incrCounter('invite_link_generated');
     } catch (e) {
       logger.error('Failed to generate invite link:', e);
-      showNotice(t('inviteLinkCreateFailed', lang), 'error', 3000);
     }
-  }, [showNotice, incrCounter]);
+  }, [ incrCounter]);
   
   const closeLangPicker = () => setLangPickerVisible(false);
   const handleSelectLang = async (code: Lang) => { await setLang(code); setLangPickerVisible(false); };
@@ -778,7 +797,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         const result = await checkInviteLink(inviteCode);
         
         if (!result.ok) {
-          showNotice(t('inviteLinkInvalid', lang), 'error', 3000);
           await clearPendingInviteCode();
           clearInviteRouteParams();
           processedInviteRef.current = null;
@@ -786,7 +804,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         }
 
         if (result.areFriends) {
-          showNotice(t('inviteAlreadyFriendsWithUser', lang), 'info', 3000);
           await clearPendingInviteCode();
           clearInviteRouteParams();
           processedInviteRef.current = null;
@@ -794,7 +811,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         }
 
         if (result.hasPendingRequest) {
-          showNotice(t('inviteRequestAlreadySent', lang), 'info', 3000);
           await clearPendingInviteCode();
           clearInviteRouteParams();
           processedInviteRef.current = null;
@@ -815,7 +831,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         }
       } catch (e) {
         logger.error('Failed to check invite from route:', e);
-        showNotice(t('inviteLinkProcessFailed', lang), 'error', 3000);
         processedInviteRef.current = null;
       }
     };
@@ -827,7 +842,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       
       return () => clearTimeout(timer);
     }
-  }, [route?.params?.showInviteModal, route?.params?.inviteCode, showNotice, clearInviteRouteParams]);
+  }, [route?.params?.showInviteModal, route?.params?.inviteCode, clearInviteRouteParams]);
 
   useEffect(() => {
     if (!inviteRequestVisible || !inviteRequestData?.inviter?.id) return;
@@ -861,18 +876,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     try {
       const result = await acceptInvite(inviteRequestData.inviter.id);
       
-      if (result?.ok) {
-        if (result.status === 'already') {
-          showNotice(t('already_friends', lang), 'info', 3000);
-        } else if (result.status === 'accepted') {
-          showNotice(t('inviteUserAdded', lang), 'success', 3000);
-          loadFriendsFnRef.current();
-        } else {
-          showNotice(t('inviteUserAdded', lang), 'success', 3000);
-          loadFriendsFnRef.current();
-        }
-      } else {
-        showNotice(result?.error || t('friendAddFailed', lang), 'error', 3000);
+      if (result?.ok && result.status !== 'already') {
+        loadFriendsFnRef.current();
       }
       
       setInviteRequestVisible(false);
@@ -882,14 +887,13 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       clearInviteRouteParams();
     } catch (e) {
       logger.error('Failed to accept invite:', e);
-      showNotice(t('friendAddFailed', lang), 'error', 3000);
       setInviteRequestVisible(false);
       setInviteRequestData(null);
       processedInviteRef.current = null;
       await clearPendingInviteCode();
       clearInviteRouteParams();
     }
-  }, [inviteRequestData, showNotice, clearInviteRouteParams]);
+  }, [inviteRequestData, clearInviteRouteParams]);
 
   const handleDeclineInvite = useCallback(async () => {
     setInviteRequestVisible(false);
@@ -923,13 +927,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   }, []);
   const [markReadMenu, setMarkReadMenu] = useState<{ friendId: string; type: 'video' | 'chat' } | null>(null);
   const [friendActionsGestureResetSeq, setFriendActionsGestureResetSeq] = useState(0);
-  const openMarkReadMenu = useCallback((friendId: string, type: 'video' | 'chat') => {
-    try {
-      openSwipeableRef.current?.close?.();
-    } catch {}
-    openSwipeableRef.current = null;
-    setMarkReadMenu({ friendId, type });
-  }, []);
   const lastIncomingFromRef = useRef<string | null>(null);
   const [roomFull, setRoomFull] = useState<{ visible: boolean; name?: string }>({ visible: false });
 
@@ -966,12 +963,14 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     };
     const handle = InteractionManager.runAfterInteractions(() => {
       // Сразу после splash: sync mount + prefetch call log (не ждать 700ms).
+      // 650ms — после анимации появления welcome (560ms), иначе монтирование
+      // панелей конкурирует с ней за UI-поток.
       timer = setTimeout(() => {
         if (tryWarm('idle-after-splash')) return;
         retryTimer = setTimeout(() => {
           tryWarm('idle-retry');
         }, 1200);
-      }, 120);
+      }, 650);
     });
     return () => {
       cancelled = true;
@@ -1228,7 +1227,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       .catch(() => {});
   }, []);
 
-  /** Перед тапом по чату/звонку: снять залипшие refs и не мешать Swipeable. */
+  /** Перед тапом по чату/звонку: сбросить залипшие outgoing refs. */
   const clearNativeCanceledOutgoingAttempt = useCallback((source: string) => {
     const canceledByNative =
       typeof global !== 'undefined' &&
@@ -1283,10 +1282,9 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
 
   const prepareFriendRowActionTap = useCallback(() => {
     try {
-      openSwipeableRef.current?.close?.();
-    } catch {}
-    try {
       const g = global as any;
+      g.__homeRowActionAtRef = g.__homeRowActionAtRef || { current: 0 };
+      g.__homeRowActionAtRef.current = Date.now();
       if (g.__videoCallActiveRef?.current === true && !isDirectCallSessionLive(g)) {
         forceResetCallBusyRefs();
       }
@@ -1402,6 +1400,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     ).trim();
     const isActiveOutgoingAttempt = activeOutgoingAttemptRef.current > 0;
     const isNativeCancel = source.includes('native_cancel');
+    const isTimeoutPath = source.includes('timeout');
     const canceledByNative = (global as any).__outgoingCanceledByNativeRef?.current === true;
     const resolvedCloseCallId = closeCallId || (isNativeCancel ? currentCallId : '');
     const allowUnscopedActiveReset =
@@ -1410,6 +1409,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     const allowScopedActiveReset =
       allowUnscopedActiveReset ||
       isNativeCancel ||
+      isTimeoutPath ||
       source.includes('remote_closed');
     if (
       resolvedCloseCallId &&
@@ -1467,7 +1467,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     const hadOutgoingState =
       activeOutgoingAttemptRef.current > 0 ||
       callingVisibleRef.current ||
-      !!openSwipeableRef.current ||
       !!markReadMenu;
     const now = Date.now();
     // Только refs: calling.visible после cancel ещё true кадр–два и пропускал duplicate-guard,
@@ -1494,7 +1493,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       callingVisibleRef: callingVisibleRef.current,
       callingVisible: calling.visible,
       hasMarkReadMenu: !!markReadMenu,
-      openSwipeable: !!openSwipeableRef.current,
     });
     const outgoingPeerId =
       (calling.friend?.id != null ? String(calling.friend.id) : '') ||
@@ -1518,7 +1516,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     // pendingCancel=true здесь отравляет следующий startCall (cancel только что созданного callId).
     const isRetryClear =
       source === 'call-press-stale-outgoing' || source === 'video-start-native-flag';
-    if (isRetryClear) {
+    if (isRetryClear || isTimeoutPath) {
       pendingCancelRef.current = false;
       outgoingCallUserCanceledRef.current = false;
     } else {
@@ -1559,6 +1557,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     // Native уже HTTP cancel; App уже emit call:cancel — не дублировать на hot path.
     if (
       !isNativeCancel &&
+      !isTimeoutPath &&
       callIdToCancel &&
       !canceledByNative &&
       !isOutgoingDeclineHandled(callIdToCancel)
@@ -1576,6 +1575,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       if (g.__outgoingCanceledByNativeRef) g.__outgoingCanceledByNativeRef.current = false;
       if (g.__outgoingCallIdRef) g.__outgoingCallIdRef.current = null;
       if (g.__outgoingCallPeerUserIdRef) g.__outgoingCallPeerUserIdRef.current = null;
+      if (g.__outgoingCallStartedAtRef) g.__outgoingCallStartedAtRef.current = 0;
     } catch {}
     try { setOutgoingCallScreenVisible(false); } catch {}
     // Важно: ставим ref сразу, чтобы следующий tap не упёрся в stale calling.visible до рендера.
@@ -1627,10 +1627,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     } else {
       clearFriendsCallBusy(busyPeers);
     }
-    if (!isCancelPath) {
-      try { openSwipeableRef.current?.close?.(); } catch {}
-    }
-    openSwipeableRef.current = null;
     if (hadOutgoingState) {
       // Remount кнопок не на cancel — даёт лишнюю перерисовку списка звонков.
       if (!isCancelPath) {
@@ -1643,21 +1639,26 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     forceResetCallBusyRefs({
       skipEndedCallback: isCancelPath,
     });
-    // callLog: cancelled сразу в UI (All). Silent+grace 3.4с убирали строку после отмены.
+    // Финальный статус сразу в UI (All). Timeout не должен выглядеть как ручная отмена.
     if (
       !isRetryClear &&
       outgoingPeerId &&
-      (isNativeCancel || outgoingCallUserCanceledRef.current || /cancel/i.test(source))
+      (isTimeoutPath || isNativeCancel || outgoingCallUserCanceledRef.current || /cancel/i.test(source))
     ) {
       const peerForLog = outgoingPeerId;
       try {
         cancelPendingCallLogNotify();
       } catch {}
       try {
-        recordCancelledCall(peerForLog);
-        forceCallLogUiNow('native_cancel');
-        logger.info('[welcome-tab] callLog cancelled', {
+        if (isTimeoutPath) {
+          recordNoAnswerCall(peerForLog);
+        } else {
+          recordCancelledCall(peerForLog);
+        }
+        forceCallLogUiNow(isTimeoutPath ? 'timeout' : 'native_cancel');
+        logger.info('[welcome-tab] callLog finalized', {
           peerId: peerForLog,
+          direction: isTimeoutPath ? 'no_answer' : 'cancelled',
           sinceCancelMs: Date.now() - Number((global as any).__lastOutgoingCancelAtRef?.current || Date.now()),
         });
       } catch {}
@@ -1755,7 +1756,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     if (!calling.visible) setSwipeActionsHiddenForCall(null);
   }, [calling.visible]);
 
-  // Закрытие по call:declined делают App (terminateCall) + offDeclined в handleStartVideoCall (setCalling, showNotice).
+  // Закрытие по call:declined делают App (terminateCall) + offDeclined в handleStartVideoCall (setCalling).
   // Прямую подписку socket.on('call:declined') убрали — она давала второй setCalling и двойное мерцание.
 
   const handleStartDirectCall = useCallback(async (friend: Friend, media: 'audio' | 'video' = 'video') => {
@@ -1779,7 +1780,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         incomingVisible: incomingCallScreen.visible,
         sessionLive: isDirectCallSessionLive(gStart),
       });
-      showNotice(t('finishCurrentCallFirst', lang), 'info', 2500);
       return;
     }
     const peerId = String(friend.id || '').trim();
@@ -1811,6 +1811,25 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         media,
         recentSamePeerTap,
         sinceMs: Date.now() - Number(lastOutgoingDialTapRef.current?.at || 0),
+        callingVisible: callingVisibleRef.current,
+        inFlight: gStart.__outgoingStartInFlightRef?.current === true,
+        activeAttempt: activeOutgoingAttemptRef.current,
+      });
+      return;
+    }
+    const differentPeerWhileDialing =
+      !!peerId &&
+      !!dialingPeerId &&
+      peerId !== dialingPeerId &&
+      dialActive &&
+      !outgoingCallUserCanceledRef.current;
+    if (differentPeerWhileDialing) {
+      // Нельзя менять адресата поверх активного Outgoing UI. На Android такой tap мог
+      // пройти сквозь нативный overlay в кнопку другой строки под ним.
+      logger.info('[HomeScreen] ignore dial tap for another peer while outgoing active', {
+        peerId,
+        dialingPeerId,
+        media,
         callingVisible: callingVisibleRef.current,
         inFlight: gStart.__outgoingStartInFlightRef?.current === true,
         activeAttempt: activeOutgoingAttemptRef.current,
@@ -1929,6 +1948,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       setCalling({ visible: false, friend: null, callId: null });
     }
     const attemptId = ++outgoingAttemptSeqRef.current;
+    const outgoingStartedAt = Date.now();
     activeOutgoingAttemptRef.current = attemptId;
     activeOutgoingCallIdRef.current = null;
     try {
@@ -1937,6 +1957,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       g.__activeOutgoingAttemptRef.current = attemptId;
       g.__outgoingCallUiActiveRef = g.__outgoingCallUiActiveRef || { current: false };
       g.__outgoingCallUiActiveRef.current = true;
+      g.__outgoingCallStartedAtRef = g.__outgoingCallStartedAtRef || { current: 0 };
+      g.__outgoingCallStartedAtRef.current = outgoingStartedAt;
     } catch {}
     const isCurrentAttempt = () => activeOutgoingAttemptRef.current === attemptId;
     const friendName = trimNick(friend.nick || friend.name || '');
@@ -1944,7 +1966,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     markChatCallBubbleEligibleIfViewing(String(friend.id), 'caller');
     requestAnimationFrame(() => {
       setSwipeActionsHiddenForCall(friend.id);
-      openSwipeableRef.current?.close?.();
     });
     clearOutgoingDeclineHandled();
     const callKeepReadyPromise =
@@ -2176,7 +2197,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           if (!shouldHandleOutgoingEvent('call:declined', eventCallId)) return;
           finishOutgoing(() => {
             disposeDirectCallAudioPrewarm('home:outgoing-declined');
-            logger.info('[decline/инициатор] HomeScreen offDeclined: setCalling(false), showNotice');
+            logger.info('[decline/инициатор] HomeScreen offDeclined: setCalling(false)');
             try { setOutgoingCallScreenVisible(false); } catch {}
             try {
               armHomeUiSettleSkip(1200);
@@ -2197,7 +2218,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
                 peerId: String(friend.id),
               });
             } catch {}
-            showNotice(t('callDeclined', lang), 'error', 3000);
           });
         }),
       );
@@ -2218,7 +2238,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
             callingVisibleRef.current = false;
             setCalling({ visible: false, friend: null, callId: null });
             try {
-              recordCancelledCall(String(friend.id));
+              recordNoAnswerCall(String(friend.id));
               forceCallLogUiNow('timeout');
             } catch {}
           });
@@ -2416,10 +2436,9 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           callingVisibleRef.current = false;
           setCalling({ visible: false, friend: null, callId: null });
           try {
-            recordCancelledCall(String(friend.id));
+            recordNoAnswerCall(String(friend.id));
             forceCallLogUiNow('safeguard_timeout');
           } catch {}
-          showNotice(t('noAnswer', lang), 'error', 3000);
         });
       }, OUTGOING_CALL_TIMEOUT_MS);
     } catch (e: any) {
@@ -2475,13 +2494,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           forceCallLogUiNow('start_failed');
         } catch {}
       }
-      if (!skipNetworkBanner) {
-        if (errCode === 'initiator_busy' || errCode === 'busy') {
-          showNotice(t('finishCurrentCallFirst', lang), 'info', 2500);
-        } else {
-          showNotice(t('callStartFailed', lang), 'error', 3000);
-        }
-      }
       if (canceledByNative) {
         try {
           (global as any).__outgoingCanceledByNativeRef.current = false;
@@ -2495,7 +2507,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         gStart.__outgoingStartInFlightRef.current = false;
       }
     }
-  }, [navigation, showNotice, resetOutgoingAfterExternalClose, clearNativeCanceledOutgoingAttempt, clearStaleOutgoingAttemptIfIdle, teardownOutgoingAttemptSubs, forceResetCallBusyRefs, clearFriendsCallBusy, closeAndCancelOutgoingBeforeRetry, lang, pip.visible, pip.inSystemPiPMode, pip.pendingSystemPiP, incomingCallScreen.visible]);
+  }, [navigation, resetOutgoingAfterExternalClose, clearNativeCanceledOutgoingAttempt, clearStaleOutgoingAttemptIfIdle, teardownOutgoingAttemptSubs, forceResetCallBusyRefs, clearFriendsCallBusy, closeAndCancelOutgoingBeforeRetry, lang, pip.visible, pip.inSystemPiPMode, pip.pendingSystemPiP, incomingCallScreen.visible]);
 
   const handleStartFriendCall = useCallback(
     (friend: Friend) => handleStartDirectCall(friend, 'audio'),
@@ -2725,9 +2737,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           saveDraftProfile({ nick: preservedNick }).catch(() => {});
         }
         
-        if (typeof showNotice === 'function') {
-          showNotice(t('userDeletedDataCleared', lang), 'error', 3000);
-        }
         return false; // Пользователь не существует
       }
       
@@ -2738,7 +2747,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       // В случае ошибки не очищаем данные - возможно просто нет интернета
       return true; // Продолжаем загрузку данных
     }
-  }, [showNotice, resetAllState]);
+  }, [ resetAllState]);
 
   /* ===== ensureIdentity ===== */
   const ensureIdentity = useCallback(async () => {
@@ -3301,7 +3310,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       })().catch(() => {});
     }
     prevAvatarRef.current = avatarUri;
-  }, [avatarUri, attachIdentitySafe, installId, loadFriends, lang, nick, savedNick, showNotice]);
+  }, [avatarUri, attachIdentitySafe, installId, loadFriends, lang, nick, savedNick]);
 
   /* draft pull for Settings removed with legacy menu */
 
@@ -3398,8 +3407,12 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const lastBadgeResumeAtRef = useRef(0);
   const RESUME_SYNC_DEBOUNCE_MS = 30 * 1000; // не чаще раза в 30 сек — убирает мерцание при частых active (два устройства, блокировка)
   const BADGE_RESUME_DEBOUNCE_MS = 400; // точки Chat/Calls — почти сразу, без 30s throttle
+  const HEAVY_RESUME_DELAY_MS = 1400; // дать навигации/тапу строки первый кадр без конкуренции с identity+friends
   useEffect(() => {
-    const sub = AppState.addEventListener('change', async (state) => {
+    const resumeTimers = new Set<ReturnType<typeof setTimeout>>();
+    const resumeInteractions = new Set<{ cancel?: () => void }>();
+
+    const sub = AppState.addEventListener('change', (state) => {
       const wasBg = /inactive|background/.test(appStateRef.current);
       appStateRef.current = state;
       const recentCancelAt = (() => {
@@ -3477,56 +3490,103 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         const now = Date.now();
         if (now - lastResumeSyncAtRef.current < RESUME_SYNC_DEBOUNCE_MS) return;
         lastResumeSyncAtRef.current = now;
-        logger.info('[welcome-tab] AppState resume sync start', { state });
-        const activeSession = (global as any).__webrtcSessionRef?.current;
-        const sessionLive =
-          !!activeSession &&
-          (typeof activeSession.isEnded !== 'function' || !activeSession.isEnded());
-        const activeCallId = sessionLive
-          ? String(
-              (global as any).__activeCallAudioRouteCallIdRef?.current ||
-                activeSession?.getCallId?.() ||
-                '',
-            ).trim()
-          : '';
-        const resumeSpan = callPerfSpan('home_resume_sync', {
-          state,
-          activeCallId: activeCallId || null,
-          activeVideoCall: !!(global as any).__socketActiveVideoCallRef?.current,
-          settleSkip: shouldSkipHomeUiSettle(),
+        const interaction = InteractionManager.runAfterInteractions(() => {
+          resumeInteractions.delete(interaction);
+          const timer = setTimeout(() => {
+            resumeTimers.delete(timer);
+            const rowActionAt = Number((global as any).__homeRowActionAtRef?.current || 0);
+            const sinceRowActionMs = rowActionAt > 0 ? Date.now() - rowActionAt : null;
+            // Если пользователь уже открыл чат/звонок, Home не должен начинать тяжёлую
+            // синхронизацию под его переходом. Данные догонят socket/focus-обработчики.
+            if (
+              AppState.currentState !== 'active' ||
+              (sinceRowActionMs != null && sinceRowActionMs < 2500) ||
+              (typeof navigation.isFocused === 'function' && !navigation.isFocused())
+            ) {
+              logger.info('[welcome-tab] AppState resume sync skipped for foreground action', {
+                appState: AppState.currentState,
+                sinceRowActionMs,
+              });
+              return;
+            }
+
+            void (async () => {
+              logger.info('[welcome-tab] AppState resume sync start', { state });
+              const activeSession = (global as any).__webrtcSessionRef?.current;
+              const sessionLive =
+                !!activeSession &&
+                (typeof activeSession.isEnded !== 'function' || !activeSession.isEnded());
+              const activeCallId = sessionLive
+                ? String(
+                    (global as any).__activeCallAudioRouteCallIdRef?.current ||
+                      activeSession?.getCallId?.() ||
+                      '',
+                  ).trim()
+                : '';
+              const resumeSpan = callPerfSpan('home_resume_sync', {
+                state,
+                activeCallId: activeCallId || null,
+                activeVideoCall: !!(global as any).__socketActiveVideoCallRef?.current,
+                settleSkip: shouldSkipHomeUiSettle(),
+              });
+              const abortForForegroundAction = (phase: string): boolean => {
+                const actionAt = Number((global as any).__homeRowActionAtRef?.current || 0);
+                const sinceActionMs = actionAt > 0 ? Date.now() - actionAt : null;
+                const shouldAbort =
+                  AppState.currentState !== 'active' ||
+                  (sinceActionMs != null && sinceActionMs < 2500) ||
+                  (typeof navigation.isFocused === 'function' && !navigation.isFocused());
+                if (!shouldAbort) return false;
+                logger.info('[welcome-tab] AppState resume sync interrupted for foreground action', {
+                  phase,
+                  appState: AppState.currentState,
+                  sinceActionMs,
+                });
+                resumeSpan.end({ ok: true, skipped: 'foreground_action', phase });
+                return true;
+              };
+              try {
+                await waitSocketConnected();
+                if (abortForForegroundAction('after_socket')) return;
+                markCallPerf('home_resume_after_socket', {
+                  activeCallId: activeCallId || null,
+                  elapsedMs: Date.now() - now,
+                });
+                const userExists = await syncUserData();
+                if (abortForForegroundAction('after_user_sync')) return;
+                if (userExists) {
+                  await ensureIdentity();
+                  getCurrentUserId();
+                }
+                if (abortForForegroundAction('after_identity')) return;
+                markCallPerf('home_resume_after_identity', {
+                  activeCallId: activeCallId || null,
+                  elapsedMs: Date.now() - now,
+                  userExists: !!userExists,
+                });
+                syncSelfPresenceOnlineIfIdle('app-resume');
+                await loadFriends();
+                logger.info('[welcome-tab] AppState resume sync done', {
+                  elapsedMs: Date.now() - now,
+                });
+                resumeSpan.end({ ok: true });
+              } catch (e) {
+                resumeSpan.end({ ok: false, error: String(e) });
+                console.warn('resume error', e);
+              }
+            })();
+          }, HEAVY_RESUME_DELAY_MS);
+          resumeTimers.add(timer);
         });
-        try {
-          await waitSocketConnected();
-          markCallPerf('home_resume_after_socket', {
-            activeCallId: activeCallId || null,
-            elapsedMs: Date.now() - now,
-          });
-          const userExists = await syncUserData();
-          if (userExists) {
-            await ensureIdentity();
-            getCurrentUserId();
-          }
-          markCallPerf('home_resume_after_identity', {
-            activeCallId: activeCallId || null,
-            elapsedMs: Date.now() - now,
-            userExists: !!userExists,
-          });
-          syncSelfPresenceOnlineIfIdle('app-resume');
-          await loadFriends();
-          // После friends — ещё раз unread (на случай пустого friendsRef на первом проходе).
-          void refreshBadgesOnAppResume();
-          logger.info('[welcome-tab] AppState resume sync done', {
-            elapsedMs: Date.now() - now,
-          });
-          resumeSpan.end({ ok: true });
-        } catch (e) {
-          resumeSpan.end({ ok: false, error: String(e) });
-          console.warn('resume error', e);
-        }
+        resumeInteractions.add(interaction);
       }
     });
-    return () => sub.remove();
-  }, [syncUserData, ensureIdentity, loadFriends, syncSelfPresenceOnlineIfIdle, refreshBadgesOnAppResume]);
+    return () => {
+      sub.remove();
+      resumeTimers.forEach((timer) => clearTimeout(timer));
+      resumeInteractions.forEach((handle) => handle.cancel?.());
+    };
+  }, [syncUserData, ensureIdentity, loadFriends, navigation, syncSelfPresenceOnlineIfIdle, refreshBadgesOnAppResume]);
 
 
 
@@ -4091,7 +4151,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         const newUserId = getCurrentUserId();
         if (!newUserId) {
           console.error('[handleSaveProfile] Still no userId after ensureIdentity');
-          showNotice(t('unauthorized', lang), 'error');
           await ensureMinSpinner();
           setSaving(false);
           return;
@@ -4155,7 +4214,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           finalAvatarUrl = ''; // Аватар теперь хранится как data URI в БД
         } catch (e: any) {
           console.error('[handleSaveProfile] Avatar upload error:', e);
-          showNotice(t('cloudUploadFailed', lang), 'error');
           await ensureMinSpinner();
           setSaving(false);
           return;
@@ -4227,10 +4285,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       }
 
       shouldToast = true;
-      showNotice(t('saved', lang), 'success', 3000);
     } catch (e) {
       console.error('[handleSaveProfile] ❌ Save profile error:', e);
-      showNotice(t('saveFailed', lang), 'error', 3000);
       shouldToast = false; // Не показываем тост при ошибке
     } finally {
       await ensureMinSpinner();
@@ -4335,22 +4391,10 @@ const handleClearNick = useCallback(async () => {
       await saveProfileToStorage({ nick: nick || '', avatar: '' });
       await saveDraftProfile({ nick: nick || '', avatar: '' });
 
-      showNotice(t('avatarDeleted', lang), 'success');
     } catch (e: any) {
       console.error('[handleDeleteAvatar] Error:', e);
-      const raw = String(e?.message || '').trim();
-      const errorCode = raw.toLowerCase();
-      const errorToast =
-        errorCode === 'unauthorized'
-          ? t('unauthorized', lang)
-          : (errorCode === 'timeout' || errorCode === 'network_error' || errorCode === 'socket_emit_failed' || errorCode === 'no_response')
-          ? (t('timeoutExceeded', lang) || t('noServer', lang))
-          : (errorCode === 'no_user_id')
-          ? t('noUserIdTryReopen', lang)
-          : t('deleteFailed', lang);
-      showNotice(errorToast, 'error');
     }
-  }, [nick, lang, showNotice, installId]);
+  }, [nick, lang, installId]);
 
 
   /* avatar pick flow (gallery/camera/files) */
@@ -4386,7 +4430,7 @@ const handleClearNick = useCallback(async () => {
         } else if (pendingPicker === 'camera') {
           let cam = await ImagePicker.getCameraPermissionsAsync();
           if (!cam.granted) cam = await ImagePicker.requestCameraPermissionsAsync();
-          if (!cam.granted) { showNotice(t('noCamera', lang), 'error'); return; }
+          if (!cam.granted) return;
 
           const res = await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], allowsEditing: true, aspect: [1, 1], quality: 0.9 });
           if (!res.canceled) {
@@ -4431,7 +4475,6 @@ const handleClearNick = useCallback(async () => {
         await saveDraftProfile({ nick: currentNick, avatar: localUri });
       } catch (e) {
         console.warn('avatar pick flow error:', e);
-        showNotice(t('pickImageFailed', lang), 'error');
       } finally {
         if (!cancelled) setPendingPicker(null);
       }
@@ -4439,7 +4482,7 @@ const handleClearNick = useCallback(async () => {
 
 
     return () => { cancelled = true; };
-  }, [pendingPicker, showNotice, lang]);
+  }, [pendingPicker, lang]);
 
   /* draft autosave for nick */
   useEffect(() => { saveDraftProfile({ nick }); }, [nick]);
@@ -4488,7 +4531,6 @@ const handleClearNick = useCallback(async () => {
 
     try {
       if (!(socket as any)?.connected) { 
-        showNotice(t('noServer', lang), 'error', 3000);
         setWiping(false);
         return;
       }
@@ -4539,20 +4581,14 @@ const handleClearNick = useCallback(async () => {
       // Это предотвращает сброс флагов после установки
       setProfileKey(prev => prev + 1);
 
-      // 10. Показываем уведомление ПОСЛЕ всех операций сброса и установки флагов
-      // Используем setTimeout, чтобы компонент успел отрендериться после сброса состояния
-      setTimeout(() => {
-        showNotice(t('accountWiped', lang), 'success', 3000);
-      }, 300);
     } catch (e: any) {
-      showNotice(`${t('wipeFailed', lang)}: ${e?.message || e}`, 'error', 3000);
       // При ошибке также устанавливаем флаги, чтобы не зависнуть на SplashLoader
       setProfileLoaded(true);
       setDataLoaded(true);
     } finally { 
       setWiping(false); 
     }
-  }, [wiping, installId, showNotice, attachIdentitySafe, wipeAccountOnServer, lang, resetAllState]);
+  }, [wiping, installId, attachIdentitySafe, wipeAccountOnServer, lang, resetAllState]);
 
 
   /* ================= UI ================= */
@@ -4564,7 +4600,7 @@ const handleClearNick = useCallback(async () => {
     setRefreshing(false);
   };
 
-  const friendRowBlocksSwipeDelete = useCallback(
+  const friendRowBlocksDelete = useCallback(
     (friend: Friend) => {
       const friendIdStr = String(friend.id);
       if (swipeActionsHiddenForCall === friendIdStr) return true;
@@ -4610,11 +4646,7 @@ const handleClearNick = useCallback(async () => {
   const handleRemoveFriend = useCallback(
     async (peerId: string, opts?: { quiet?: boolean }) => {
       const friend = friendsRef.current.find((f) => String(f.id) === String(peerId));
-      if (friend && friendRowBlocksSwipeDelete(friend)) return false;
-      try {
-        openSwipeableRef.current?.close?.();
-      } catch {}
-      openSwipeableRef.current = null;
+      if (friend && friendRowBlocksDelete(friend)) return false;
       if (!opts?.quiet) {
         try {
           Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -4627,15 +4659,13 @@ const handleClearNick = useCallback(async () => {
       try {
         const res = await removeFriend(peerId);
         if (!res?.ok) throw new Error(res?.error || 'remove failed');
-        if (!opts?.quiet) showNotice(L('friendRemoved'), 'success', 3000);
         return true;
       } catch (e: any) {
         setFriends(prevFriends);
-        if (!opts?.quiet) showNotice(`${L('friendRemoveFailed')}: ${e?.message || 'error'}`, 'error', 3000);
         return false;
       }
     },
-    [showNotice, L, friendRowBlocksSwipeDelete],
+    [friendRowBlocksDelete],
   );
 
   const clearMissedCallsForFriend = useCallback(async (friendIdStr: string) => {
@@ -4723,14 +4753,13 @@ const handleClearNick = useCallback(async () => {
       prepareFriendRowActionTap,
       handleStartFriendCall,
       clearMissedCallsForFriend,
-      friendRowBlocksSwipeDelete,
+      friendRowBlocksDelete,
       handleRemoveFriend,
       calling,
       callingVisibleRef,
       activeOutgoingAttemptRef,
       activeOutgoingCallIdRef,
       lastChatOpenRef,
-      menuOpen,
       donateVisible,
       shareVisible,
       inviteRequestVisible,
@@ -4740,8 +4769,6 @@ const handleClearNick = useCallback(async () => {
       unreadByUser,
       isRecentlyEndedCallFriend,
       resetOutgoingAfterExternalClose,
-      openSwipeableRef,
-      swipeableRefsMap,
     }),
     [
       friends,
@@ -4758,14 +4785,13 @@ const handleClearNick = useCallback(async () => {
       prepareFriendRowActionTap,
       handleStartFriendCall,
       clearMissedCallsForFriend,
-      friendRowBlocksSwipeDelete,
+      friendRowBlocksDelete,
       handleRemoveFriend,
       calling,
       callingVisibleRef,
       activeOutgoingAttemptRef,
       activeOutgoingCallIdRef,
       lastChatOpenRef,
-      menuOpen,
       donateVisible,
       shareVisible,
       inviteRequestVisible,
@@ -4775,8 +4801,6 @@ const handleClearNick = useCallback(async () => {
       unreadByUser,
       isRecentlyEndedCallFriend,
       resetOutgoingAfterExternalClose,
-      openSwipeableRef,
-      swipeableRefsMap,
     ],
   );
 
@@ -4903,12 +4927,11 @@ const handleClearNick = useCallback(async () => {
       activeOutgoingCallIdRef.current = null;
       callingVisibleRef.current = false;
       try { flushCallLogUi(); } catch {}
-      showNotice(t('user_busy', lang), 'error', 3000);
     };
 
     socket.on('call:busy', onBusy);
     return () => { socket.off('call:busy', onBusy as any); };
-  }, [calling.callId, showNotice, lang]);
+  }, [calling.callId, lang]);
 
   // Старый обработчик удален - используем новую систему статусов
 
@@ -4917,7 +4940,6 @@ const handleClearNick = useCallback(async () => {
   const currentNick = savedNick || nick || '';
   const currentAvatar = avatarUri || savedAvatarUrl || '';
   const hasRealData = (currentNick && currentNick.trim()) || (currentAvatar && currentAvatar.trim());
-  const [showCallSearchLockBadge, setShowCallSearchLockBadge] = useState(false);
   const hasActiveCallForSearch =
     pip.visible ||
     pip.inSystemPiPMode ||
@@ -4934,9 +4956,6 @@ const handleClearNick = useCallback(async () => {
     pip.pendingSystemPiP ||
     incomingCallScreen.visible ||
     isDirectCallSessionLive(global as any);
-  const handleBlockedStartSearchPress = useCallback(() => {
-    setShowCallSearchLockBadge(true);
-  }, []);
   const handleWelcomeTabPress = useCallback(
     (tabId: WelcomeTabId) => {
       const g = global as any;
@@ -4951,6 +4970,8 @@ const handleClearNick = useCallback(async () => {
         });
         return;
       }
+      g.__homeRowActionAtRef = g.__homeRowActionAtRef || { current: 0 };
+      g.__homeRowActionAtRef.current = t0;
       logger.info('[welcome-tab] handlePress start', {
         tabId,
         from: welcomeActiveTab,
@@ -5049,15 +5070,17 @@ const handleClearNick = useCallback(async () => {
       try {
         const { clearAllMessageCache } = require('../sockets/socket') as typeof import('../sockets/socket');
         clearAllMessageCache();
-        showNotice(t('welcomeClearMessagesDone', lang), 'info', 3000);
-      } catch {
-        showNotice(t('wipeFailed', lang), 'error');
-      }
+      } catch {}
     });
-  }, [askConfirm, lang, showNotice]);
+  }, [askConfirm, lang]);
   const searchNavLockUntilRef = useRef(0);
   const handleStartSearch = useCallback(() => {
     const now = Date.now();
+    try {
+      const g = global as any;
+      g.__homeRowActionAtRef = g.__homeRowActionAtRef || { current: 0 };
+      g.__homeRowActionAtRef.current = now;
+    } catch {}
     if (now < searchNavLockUntilRef.current) {
       try {
         const g = global as any;
@@ -5121,12 +5144,6 @@ const handleClearNick = useCallback(async () => {
     ],
   );
 
-  useEffect(() => {
-    if (!hasActiveCallForSearch) {
-      setShowCallSearchLockBadge(false);
-    }
-  }, [hasActiveCallForSearch]);
-
   const showFriendsTab = welcomeActiveTab === 'friends';
   const showChatTab = welcomeActiveTab === 'chat';
   const showCallsTab = welcomeActiveTab === 'calls';
@@ -5135,7 +5152,11 @@ const handleClearNick = useCallback(async () => {
   const showSplashOverlay = !splashDismissed;
 
   return (
-    <View style={{ flex: 1, backgroundColor: WELCOME_STAGE_BG }}>
+    <View
+      style={{ flex: 1, backgroundColor: WELCOME_STAGE_BG }}
+      onLayout={onHomeRootLayout}
+    >
+      <HomeLayoutProvider size={homeLayoutSize}>
       <WelcomeStageBackground />
     <SafeAreaView
         style={[
@@ -5168,11 +5189,8 @@ const handleClearNick = useCallback(async () => {
             onlineCount={welcomeOnlineCount}
             bannerPeers={welcomeBannerPeers}
             centerProfile={centerProfile}
-            NoticeView={NoticeView}
             hasActiveCallForSearch={hasActiveCallForSearch}
-            showCallSearchLockBadge={showCallSearchLockBadge}
             onStartSearch={handleStartSearch}
-            onBlockedStartSearch={handleBlockedStartSearchPress}
             splashGone={!showSplashOverlay}
           />
         </WelcomeKeepAlivePane>
@@ -5186,7 +5204,6 @@ const handleClearNick = useCallback(async () => {
             allFriends={friends}
             onInviteFriends={generateInviteLink}
             askConfirm={askConfirm}
-            showNotice={showNotice}
           />
         </WelcomeKeepAlivePane>
         ) : null}
@@ -5207,7 +5224,6 @@ const handleClearNick = useCallback(async () => {
             refreshing={refreshing}
             onRefresh={onRefreshFriends}
             askConfirm={askConfirm}
-            showNotice={showNotice}
             setUnreadByUser={setUnreadByUser}
           />
         </WelcomeKeepAlivePane>
@@ -5229,16 +5245,17 @@ const handleClearNick = useCallback(async () => {
             refreshing={refreshing}
             onRefresh={onRefreshFriends}
             askConfirm={askConfirm}
-            showNotice={showNotice}
             callActionsLocked={callActionsLocked}
           />
         </WelcomeKeepAlivePane>
         ) : null}
         {showProfileTab && !mountedWelcomeTabs.has('profile') ? (
-          <WelcomeKeepAlivePane visible mode="block" />
+          <WelcomeKeepAlivePane visible mode="list" />
         ) : null}
+        {/* keep-alive по opacity, а не display:none: иначе вся панель профиля
+            раскладывается в момент тапа и первый переход роняет кадры. */}
         {mountedWelcomeTabs.has('profile') ? (
-        <WelcomeKeepAlivePane visible={showProfileTab} mode="block">
+        <WelcomeKeepAlivePane visible={showProfileTab} mode="list">
           <HomeWelcomeProfileView
             lang={lang}
             isDark={isDark}
@@ -5504,11 +5521,9 @@ const handleClearNick = useCallback(async () => {
                     onPress={async () => {
                       try {
                         await Clipboard.setStringAsync(inviteLink);
-                        showNotice(t('linkCopied', lang), 'success', 3000);
                         await incrCounter('invite_link_copied');
                       } catch (e) {
                         logger.error('Failed to copy link:', e);
-                        showNotice(t('copyFailed', lang), 'error', 3000);
                       }
                     }}
                     activeOpacity={0.7}
@@ -5546,10 +5561,7 @@ const handleClearNick = useCallback(async () => {
                     logger.error('Failed to share link:', e);
                     try {
                       await Clipboard.setStringAsync(inviteLink);
-                      showNotice(t('linkCopied', lang), 'success', 3000);
-                    } catch (copyError) {
-                      showNotice(t('shareFailed', lang), 'error', 3000);
-                    }
+                    } catch {}
                   }
                 }}
                 leading={<Ionicons name="share-outline" size={18} color={WELCOME_HEADER_TITLE} />}
@@ -5638,6 +5650,7 @@ const handleClearNick = useCallback(async () => {
         />
       </View>
     )}
+      </HomeLayoutProvider>
     </View>
   );
 }

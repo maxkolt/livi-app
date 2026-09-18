@@ -27,7 +27,7 @@ import java.lang.ref.WeakReference
 /**
  * Foreground-сервис исходящего вызова: воспроизводит WAV в верхнем динамике в фоне,
  * показывает уведомление «LiVi — видеозвонок», по тапу открывает OutgoingCallActivity.
- * Через 20 сек бездействия отменяет вызов по HTTP и останавливается.
+ * По истечении окна дозвона закрывает исходящий экран и останавливается.
  */
 class LiviOutgoingCallService : Service() {
 
@@ -345,7 +345,9 @@ class LiviOutgoingCallService : Service() {
                 EndedCallIds.add(applicationContext, id)
                 LiviOngoingCallHelper.clearOngoingCallIfMatches(applicationContext, id)
             }
-            cancelCallByHttp(id)
+            // Это истечение времени дозвона, а не нажатие пользователем «Отмена».
+            // Сервер сам завершает вызов как timeout на той же отметке; HTTP cancel здесь
+            // создавал гонку call:cancel vs call:timeout и неверный статус у инициатора.
             val closeIntent = Intent(OutgoingCallActivity.ACTION_CLOSE_OUTGOING_CALL).apply {
                 setPackage(applicationContext.packageName)
                 if (id.isNotEmpty()) {
@@ -356,37 +358,6 @@ class LiviOutgoingCallService : Service() {
             requestStop()
         }
         mainHandler.postDelayed(timeoutRunnable!!, timeoutMs)
-    }
-
-    private fun cancelCallByHttp(callId: String) {
-        if (callId.isEmpty()) return
-        val prefs = applicationContext.getSharedPreferences(LiviAppModule.PREFS_NAME, Context.MODE_PRIVATE)
-        val installId = prefs.getString(LiviAppModule.KEY_INSTALL_ID, null)?.takeIf { it.isNotBlank() }
-        val installSecret = prefs.getString(LiviAppModule.KEY_INSTALL_SECRET, null)?.takeIf { it.isNotBlank() }
-        val serverUrl = LiviAppModule.resolveServerBaseUrl(applicationContext)
-        if (installId == null || serverUrl == null) return
-        Thread {
-            try {
-                val url = URL("$serverUrl/api/calls/cancel")
-                val conn = url.openConnection() as java.net.HttpURLConnection
-                conn.requestMethod = "POST"
-                conn.setRequestProperty("Content-Type", "application/json")
-                conn.setRequestProperty("x-install-id", installId)
-                if (installSecret != null) {
-                    conn.setRequestProperty("x-install-secret", installSecret)
-                }
-                conn.doOutput = true
-                conn.connectTimeout = 8000
-                conn.readTimeout = 8000
-                conn.outputStream.use { os ->
-                    os.write("{\"callId\":\"${callId.replace("\"", "\\\"")}\"}".toByteArray(Charsets.UTF_8))
-                }
-                conn.responseCode
-                conn.disconnect()
-            } catch (e: Exception) {
-                android.util.Log.w(TAG, "cancel HTTP failed", e)
-            }
-        }.start()
     }
 
     /** Мгновенно заглушить ringback на main; stop/release — вне критического пути cancel. */

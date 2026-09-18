@@ -6,8 +6,8 @@ import {
   Animated,
   Easing,
   Image,
-  useWindowDimensions,
 } from 'react-native';
+import { useSafeAreaFrame } from 'react-native-safe-area-context';
 import { WelcomeStageBackground } from '../screens/home/WelcomeStageBackground';
 import { WELCOME_STAGE_BG } from '../screens/home/constants';
 
@@ -25,7 +25,7 @@ interface SplashLoaderProps {
 
 export default function SplashLoader({ dataLoaded, onComplete, overlayMode }: SplashLoaderProps) {
   const [showSplash, setShowSplash] = useState(true);
-  const { height: windowHeight, width: windowWidth } = useWindowDimensions();
+  const { height: windowHeight, width: windowWidth } = useSafeAreaFrame();
   const logoSize = Math.min(168, Math.max(112, Math.round(Math.min(windowHeight * 0.22, windowWidth * 0.40))));
   const startedAtRef = useRef(Date.now());
   const finishScheduledRef = useRef(false);

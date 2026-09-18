@@ -5,9 +5,9 @@ import {
   StyleSheet,
   Text,
   TouchableOpacity,
-  useWindowDimensions,
   View,
 } from 'react-native';
+import { useHomeLayout } from './HomeLayoutContext';
 import Carousel from 'react-native-reanimated-carousel';
 import { uiAccent } from '../../theme/uiAccent';
 import { t, type Lang } from '../../utils/i18n';
@@ -46,7 +46,7 @@ function ChatWallpaperPickerPanelInner({
   onBack,
   onApply,
 }: ChatWallpaperPickerPanelProps) {
-  const { width: windowWidth } = useWindowDimensions();
+  const { width: windowWidth } = useHomeLayout();
   const prefs = useChatWallpaperPrefs();
   const catalog = useMemo(() => getChatWallpaperCatalog(theme), [theme]);
   const selectedId = theme === 'light' ? prefs.lightId : prefs.darkId;

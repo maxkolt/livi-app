@@ -1,5 +1,3 @@
-export { useLiviNotice } from './useLiviNotice';
-export type { NoticeKind } from './useLiviNotice';
 export { useLiviConfirm } from './useLiviConfirm';
 export { useHomeUpdatePromo } from './useHomeUpdatePromo';
 export { useHomeBadges } from './useHomeBadges';

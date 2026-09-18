@@ -18,12 +18,14 @@ export const WELCOME_PROFILE_ROW_ICON = '#828A96';
 
 const ROW_ICON_SIZE = 22;
 const ROW_ICON_SIZE_COMPACT = 20;
+const ROW_ICON_SIZE_TABLET = 24;
 const ROW_CHEVRON_SIZE = 20;
 /**
  * Внутри glass-карточки — как padding у cardRow чатов/звонков.
  */
 const ROW_PAD_H = 12;
 const ROW_PAD_H_COMPACT = 12;
+const ROW_PAD_H_TABLET = 16;
 const ROW_ICON_GAP = 12;
 
 /** Линия: от начала текста (после иконки) до начала стрелки. */
@@ -31,6 +33,8 @@ const DIVIDER_MARGIN_LEFT = ROW_PAD_H + ROW_ICON_SIZE + ROW_ICON_GAP;
 const DIVIDER_MARGIN_RIGHT = ROW_PAD_H + ROW_CHEVRON_SIZE;
 const DIVIDER_MARGIN_LEFT_COMPACT = ROW_PAD_H_COMPACT + ROW_ICON_SIZE_COMPACT + ROW_ICON_GAP;
 const DIVIDER_MARGIN_RIGHT_COMPACT = ROW_PAD_H_COMPACT + ROW_CHEVRON_SIZE;
+const DIVIDER_MARGIN_LEFT_TABLET = ROW_PAD_H_TABLET + ROW_ICON_SIZE_TABLET + ROW_ICON_GAP;
+const DIVIDER_MARGIN_RIGHT_TABLET = ROW_PAD_H_TABLET + ROW_CHEVRON_SIZE;
 /** Строки без иконки (язык): от начала надписи. */
 const DIVIDER_MARGIN_LEFT_TEXT_ONLY = ROW_PAD_H;
 const DIVIDER_MARGIN_LEFT_TEXT_ONLY_COMPACT = ROW_PAD_H_COMPACT;
@@ -39,16 +43,29 @@ export function WelcomeProfileSection({
   title,
   compact,
   dense,
+  tablet,
+  twoColumns,
   children,
 }: {
   title?: string;
   compact?: boolean;
   /** Меньше отступы между блоками (hub профиля). */
   dense?: boolean;
+  tablet?: boolean;
+  /** Две колонки секций: landscape, где по высоте одна колонка не помещается. */
+  twoColumns?: boolean;
   children: React.ReactNode;
 }) {
   return (
-    <View style={[styles.sectionWrap, compact && styles.sectionWrapCompact, dense && styles.sectionWrapDense]}>
+    <View
+      style={[
+        styles.sectionWrap,
+        compact && styles.sectionWrapCompact,
+        dense && styles.sectionWrapDense,
+        tablet && styles.sectionWrapTablet,
+        twoColumns && styles.sectionWrapTwoColumns,
+      ]}
+    >
       {title ? <AdaptiveText style={styles.sectionTitle}>{title}</AdaptiveText> : null}
       <View style={styles.sectionBody}>{children}</View>
     </View>
@@ -68,8 +85,11 @@ type WelcomeProfileRowProps = {
   onPress?: () => void;
   disabled?: boolean;
   compact?: boolean;
+  tablet?: boolean;
   /** Уже строка по высоте, шрифты как обычно. */
   dense?: boolean;
+  /** Точная высота строки: hub считает её из реально свободного места. */
+  rowHeight?: number;
   /** Ещё плотнее по высоте, шрифты как у dense (короткие телефоны). */
   tight?: boolean;
   /** Аккордеон: chevron вниз / вверх вместо вправо. */
@@ -89,7 +109,9 @@ export function WelcomeProfileRow({
   onPress,
   disabled,
   compact,
+  tablet,
   dense,
+  rowHeight,
   tight,
   expandable,
   expanded,
@@ -113,14 +135,25 @@ export function WelcomeProfileRow({
           dense && styles.rowDense,
           tight && styles.rowTight,
           compact && styles.rowCompact,
+          tablet && styles.rowTablet,
+          rowHeight != null ? { minHeight: rowHeight, paddingVertical: 0 } : null,
           pressed && onPress ? styles.rowPressed : null,
         ]}
         accessibilityRole="button"
       >
         <View style={styles.rowLeft}>
-          <Ionicons name={icon} size={compact ? ROW_ICON_SIZE_COMPACT : ROW_ICON_SIZE} color={iconColor} />
+          <Ionicons
+            name={icon}
+            size={tablet ? ROW_ICON_SIZE_TABLET : compact ? ROW_ICON_SIZE_COMPACT : ROW_ICON_SIZE}
+            color={iconColor}
+          />
           <AdaptiveText
-            style={[styles.rowLabel, compact && styles.rowLabelCompact, { color: labelColor }]}
+            style={[
+              styles.rowLabel,
+              compact && styles.rowLabelCompact,
+              tablet && styles.rowLabelTablet,
+              { color: labelColor },
+            ]}
             numberOfLines={1}
           >
             {label}
@@ -128,7 +161,14 @@ export function WelcomeProfileRow({
         </View>
         <View style={styles.rowRight}>
           {value ? (
-            <AdaptiveText style={[styles.rowValue, largeValue && styles.rowValueLarge]} numberOfLines={1}>
+            <AdaptiveText
+              style={[
+                styles.rowValue,
+                largeValue && styles.rowValueLarge,
+                tablet && styles.rowValueTablet,
+              ]}
+              numberOfLines={1}
+            >
               {value}
             </AdaptiveText>
           ) : null}
@@ -142,16 +182,18 @@ export function WelcomeProfileRow({
           ) : null}
         </View>
       </Pressable>
-      {showDivider ? <WelcomeProfileRowDivider compact={compact} /> : null}
+      {showDivider ? <WelcomeProfileRowDivider compact={compact} tablet={tablet} /> : null}
     </View>
   );
 }
 
 export function WelcomeProfileRowDivider({
   compact,
+  tablet,
   textOnly,
 }: {
   compact?: boolean;
+  tablet?: boolean;
   /** Без иконки слева — линия от начала текста. */
   textOnly?: boolean;
 }) {
@@ -163,9 +205,11 @@ export function WelcomeProfileRowDivider({
           ? compact
             ? styles.dividerTextOnlyCompact
             : styles.dividerTextOnly
-          : compact
-            ? styles.dividerCompact
-            : null,
+          : tablet
+            ? styles.dividerTablet
+            : compact
+              ? styles.dividerCompact
+              : null,
       ]}
     />
   );
@@ -179,6 +223,7 @@ type WelcomeProfileLanguageRowProps = {
   onPress: () => void;
   showDivider?: boolean;
   compact?: boolean;
+  tablet?: boolean;
 };
 
 /** Строка выбора языка (экран профиля, как «О приложении»). */
@@ -190,6 +235,7 @@ export function WelcomeProfileLanguageRow({
   onPress,
   showDivider = false,
   compact,
+  tablet,
 }: WelcomeProfileLanguageRowProps) {
   return (
     <View>
@@ -198,6 +244,7 @@ export function WelcomeProfileLanguageRow({
         style={({ pressed }) => [
           styles.row,
           compact && styles.rowCompact,
+          tablet && styles.rowTablet,
           pressed && styles.rowPressed,
         ]}
         accessibilityRole="button"
@@ -244,6 +291,20 @@ const styles = StyleSheet.create({
   sectionWrapDense: {
     marginBottom: 0,
   },
+  sectionWrapTablet: {
+    width: '92%',
+    maxWidth: 900,
+    alignSelf: 'center',
+    marginHorizontal: 0,
+    marginBottom: 14,
+  },
+  sectionWrapTwoColumns: {
+    width: '48.5%',
+    maxWidth: 480,
+    alignSelf: 'auto',
+    marginHorizontal: 0,
+    marginBottom: 0,
+  },
   sectionTitle: {
     color: WELCOME_HEADER_TITLE,
     fontSize: 12,
@@ -273,6 +334,11 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     paddingHorizontal: ROW_PAD_H_COMPACT,
     minHeight: 42,
+  },
+  rowTablet: {
+    paddingVertical: 15,
+    paddingHorizontal: ROW_PAD_H_TABLET,
+    minHeight: 54,
   },
   rowDense: {
     paddingVertical: 12,
@@ -310,6 +376,9 @@ const styles = StyleSheet.create({
   rowLabelCompact: {
     fontSize: 13,
   },
+  rowLabelTablet: {
+    fontSize: 15,
+  },
   rowRight: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -326,6 +395,9 @@ const styles = StyleSheet.create({
     color: WELCOME_PROFILE_ROW_ICON,
     fontSize: 14,
     fontWeight: '400',
+  },
+  rowValueTablet: {
+    fontSize: 14,
   },
   countBadge: {
     minWidth: 17,
@@ -352,6 +424,10 @@ const styles = StyleSheet.create({
   dividerCompact: {
     marginLeft: DIVIDER_MARGIN_LEFT_COMPACT,
     marginRight: DIVIDER_MARGIN_RIGHT_COMPACT,
+  },
+  dividerTablet: {
+    marginLeft: DIVIDER_MARGIN_LEFT_TABLET,
+    marginRight: DIVIDER_MARGIN_RIGHT_TABLET,
   },
   dividerTextOnly: {
     marginLeft: DIVIDER_MARGIN_LEFT_TEXT_ONLY,

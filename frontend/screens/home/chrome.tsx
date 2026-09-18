@@ -8,10 +8,10 @@ import {
   StyleSheet,
   Text,
   TouchableOpacity,
-  useWindowDimensions,
   View,
   ViewStyle,
 } from 'react-native';
+import { useHomeLayout } from './HomeLayoutContext';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import Svg, {
@@ -1069,7 +1069,7 @@ export const AnimatedBorderButton: React.FC<AnimatedBorderButtonProps> = ({
   onDisabledPress,
   compact = false,
 }) => {
-  const { width: windowWidth } = useWindowDimensions();
+  const { width: windowWidth } = useHomeLayout();
   const [blurIntensity, setBlurIntensity] = useState<number>(isDark ? 15 : 20);
   const titanOpacity = useRef(new Animated.Value(0.25)).current;
   const blockedFlashOpacity = useRef(new Animated.Value(0)).current;

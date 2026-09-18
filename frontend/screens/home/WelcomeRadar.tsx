@@ -7,6 +7,12 @@ type WelcomeRadarProps = {
   size: number;
   isDark: boolean;
   avatarRadius?: number;
+  /**
+   * Сжатие орбит к центру (1 = как на макете). Меньше единицы — кольца уже и
+   * ближе к аватару, вокруг остаётся воздух. Нужно в landscape, где радар
+   * маленький и полосы читаются толстыми, а внешнее кольцо подходит под блоки.
+   */
+  orbitScale?: number;
   children: React.ReactNode;
 };
 
@@ -38,7 +44,7 @@ const ORBIT_BAND_COLOR = mixOrbitBandColor();
 const BAND_OPACITIES = [0.22, 0.15, 0.1, 0.04] as const;
 
 /** 4 орбиты: ближе к аватару; 2-е уже, 3/4 чуть к центру; g от «полной» суммы шагов. */
-function computeRingRadii(half: number, avatarR: number): number[] {
+function computeRingRadii(half: number, avatarR: number, orbitScale: number): number[] {
   const avatarOuter = avatarR + 2;
   const maxOuter = half * 0.85;
   const step0 = 0.56;
@@ -50,7 +56,8 @@ function computeRingRadii(half: number, avatarR: number): number[] {
   /** Фактический шаг 4-го — чуть ближе к центру. */
   const step34 = 1.02;
   const total = step0 + step12 + step23 + step34ForG;
-  const g = Math.max(half * 0.078, (maxOuter - avatarOuter) / total);
+  // orbitScale применяется и к «полу»: иначе минимальный шаг не даёт сжать кольца.
+  const g = Math.max(half * 0.078, (maxOuter - avatarOuter) / total) * orbitScale;
   const r1 = avatarOuter + g * step0;
   const r2 = r1 + g * step12;
   const r3 = r2 + g * step23;
@@ -101,7 +108,7 @@ function buildOrbitBands(avatarOuter: number, ringRadii: number[]): OrbitBand[] 
   }));
 }
 
-export function WelcomeRadar({ size, avatarRadius, children }: WelcomeRadarProps) {
+export function WelcomeRadar({ size, avatarRadius, orbitScale = 1, children }: WelcomeRadarProps) {
   const [layoutSize, setLayoutSize] = React.useState(size);
 
   const onLayout = (e: LayoutChangeEvent) => {
@@ -116,7 +123,10 @@ export function WelcomeRadar({ size, avatarRadius, children }: WelcomeRadarProps
 
   const avatarR = avatarRadius ?? half * 0.38;
   const avatarOuter = avatarR + 2;
-  const ringRadii = useMemo(() => computeRingRadii(half, avatarR), [avatarR, half]);
+  const ringRadii = useMemo(
+    () => computeRingRadii(half, avatarR, orbitScale),
+    [avatarR, half, orbitScale],
+  );
   const haloR = ringRadii[0] ?? avatarOuter + half * 0.08;
 
   const orbitBands = useMemo(

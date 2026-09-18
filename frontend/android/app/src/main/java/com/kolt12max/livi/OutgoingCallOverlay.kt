@@ -157,6 +157,10 @@ object OutgoingCallOverlay {
     }
 
     val inflated = activity.layoutInflater.inflate(R.layout.activity_outgoing_call, decor, false)
+    // Overlay lives inside MainActivity's decor. Without a clickable root, taps outside the
+    // cancel button can fall through to React Native call buttons underneath and replace peer.
+    inflated.isClickable = true
+    inflated.isFocusable = true
     root = inflated
     bindUi(inflated, toNick, hasVideo)
     wireCancel(inflated)

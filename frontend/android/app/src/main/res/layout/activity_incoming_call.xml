@@ -11,6 +11,7 @@
         android:contentDescription="@null"
         android:importantForAccessibility="no"
         android:scaleType="centerCrop"
+        android:alpha="0.88"
         android:src="@drawable/welcome_stage_bg" />
 
     <LinearLayout

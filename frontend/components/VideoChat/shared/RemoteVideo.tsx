@@ -404,15 +404,10 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
     return () => clearTimeout(t);
   }, [partnerInPiP, effectiveRemoteCamOn, streamToUse?.id, streamToUseVideoTrackId]);
 
-  // Неактивное состояние звонка - показываем надпись "Собеседник" как в эталонном файле
-  // КРИТИЧНО: Завершение звонка имеет приоритет над заглушкой "Отошел".
+  // Завершённый звонок: VideoCall не монтирует RemoteVideo (showRemoteFeed=false) и уходит с экрана.
   if (wasFriendCallEnded || isInactiveState) {
     logRenderState('inactive-call', { remoteCamOn, wasFriendCallEnded, started });
-    return (
-      <View style={[styles.rtc, styles.placeholderContainer]}>
-        <Text style={styles.placeholder}>{L('peer')}</Text>
-      </View>
-    );
+    return <View style={[styles.rtc, { backgroundColor: 'black' }]} />;
   }
 
   if (partnerExternalHold && started && !wasFriendCallEnded) {
@@ -1069,15 +1064,6 @@ const styles = StyleSheet.create({
     color: WELCOME_NAV_ACTIVE_ICON,
     fontSize: 12,
     fontWeight: '600',
-  },
-  placeholderContainer: {
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: 'rgba(13,14,16,0.85)',
-  },
-  placeholder: {
-    color: 'rgba(237,234,234,0.6)',
-    fontSize: 22,
   },
   loadingContainer: {
     position: 'absolute',

@@ -12,9 +12,8 @@ import {
   FRIEND_ROW_LAYOUT_HEIGHT,
   FRIENDS_LIST_HORIZONTAL_PAD,
   LIVI,
-  MENU_BTN_RADIUS,
-  MENU_BTN_SIZE,
   WELCOME_FRIENDS_SEGMENT_SHELL_RADIUS,
+  WELCOME_TOP_BAR_CONTROL_SIZE,
   WELCOME_GLASS_BORDER,
   WELCOME_GLASS_SURFACE,
   WELCOME_HEADER_TITLE,
@@ -40,7 +39,7 @@ export const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'flex-start',
-    minHeight: MENU_BTN_SIZE + ANIMATED_BORDER_WIDTH * 2,
+    minHeight: WELCOME_TOP_BAR_CONTROL_SIZE + ANIMATED_BORDER_WIDTH * 2,
   },
   brandMeasureProbe: {
     position: 'absolute',
@@ -57,18 +56,7 @@ export const styles = StyleSheet.create({
     letterSpacing: 0.3,
     fontFamily: BRAND_FONT_FAMILY,
   },
-  menuBtnInner: {
-    borderRadius: MENU_BTN_RADIUS,
-    overflow: 'hidden',
-    width: '100%',
-    height: '100%',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  menuBtnPressed: { opacity: 0.9 },
-  menuBtnIconWrap: { margin: 0, backgroundColor: 'transparent', justifyContent: 'center', alignItems: 'center' },
   // Симметричные отступы: левый padding у FlatList; правый — paddingRight у блока кнопок.
-  // Swipeable только на аватар+ник; звонок/чат в отдельной колонке справа.
   friendsList: {
     flex: 1,
     backgroundColor: FRIEND_LIST_ROW_BG,
@@ -343,8 +331,6 @@ export const styles = StyleSheet.create({
   input: { marginBottom: 16, backgroundColor: 'rgba(255,255,255,0.04)', borderRadius: 12 },
   fieldLabel: { color: LIVI.text2, fontSize: 14, fontWeight: '500', marginBottom: 8, marginTop: 16 },
 
-  swipeRight: { justifyContent: 'center' },
-
   // SettingsTab needs
   avatarCircle: {
     width: 64, height: 64, borderRadius: 32, overflow: 'hidden' as ViewStyle['overflow'],
@@ -377,23 +363,6 @@ export const styles = StyleSheet.create({
     paddingHorizontal: 4,
   },
   // Резерв высоты как раньше — чтобы аватар/тексты не съезжали; сами бейджи рисуются absolute поверх.
-  noticeSlot: {
-    minHeight: 72,
-    marginBottom: 24,
-    width: '100%',
-  },
-  // notice (бейдж «Вызов завершён» и др.): по центру между подзаголовком и кнопкой
-  notice: {
-    borderRadius: 12,
-    paddingVertical: 7,
-    paddingHorizontal: 9,
-    borderWidth: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    alignSelf: 'center',
-    maxWidth: '60%',
-  },
-  noticeText: { color: LIVI.text2, fontSize: 12, fontWeight: '400', textAlign: 'center' },
 
   confirmCard: {
     width: '92%',

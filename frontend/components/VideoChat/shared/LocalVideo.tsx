@@ -11,9 +11,6 @@ interface LocalVideoProps {
   localStream: MediaStream | null;
   camOn: boolean;
   isFrontCamera: boolean;
-  isInactiveState: boolean;
-  wasFriendCallEnded: boolean;
-  started: boolean;
   localRenderKey: number;
   lang: Lang;
   /** Локальный GSM hold на video UI: blur кадра + «Звонок на удержании...». */
@@ -25,15 +22,12 @@ interface LocalVideoProps {
 
 /**
  * Компонент для отображения локального видео
- * Обрабатывает рендер камеры, заглушки "Вы", проверки готовности стрима, контроль renderKey
+ * Обрабатывает рендер камеры, заглушку cam-off, проверки готовности стрима, контроль renderKey
  */
 export const LocalVideo: React.FC<LocalVideoProps> = ({
   localStream,
   camOn,
   isFrontCamera,
-  isInactiveState,
-  wasFriendCallEnded,
-  started,
   localRenderKey,
   lang,
   localExternalHold = false,
@@ -154,23 +148,10 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
     };
   }, [localExternalHold]);
 
-  // После завершения звонка показываем надпись "Вы"
-  if (isInactiveState || wasFriendCallEnded) {
-    return (
-      <View style={[styles.rtc, styles.placeholderContainer]}>
-        <Text style={styles.placeholder}>{L('you')}</Text>
-      </View>
-    );
-  }
-
-  // Если UI считает, что камера выключена — всегда показываем заглушку "Вы".
-  // На hold камера логически всё ещё «включена» (camOn), mute только uplink.
+  // Defensive: VideoCall при cam-off уходит в audio UI и LocalVideo не монтирует.
+  // Если компонент всё же вызвали с camOn=false — не рисуем кадр и не текст «Вы».
   if (!camOn && !localExternalHold) {
-    return (
-      <View style={[styles.rtc, styles.placeholderContainer]}>
-        <Text style={styles.placeholder}>{L('you')}</Text>
-      </View>
-    );
+    return <View style={[styles.rtc, { backgroundColor: 'black' }]} />;
   }
 
   if (localExternalHold && !(hasLocalStream && canRenderVideo)) {
@@ -280,10 +261,7 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
     );
   }
 
-  // Если camOn=true, но трек ещё не готов/не рендерится — показываем черный экран (как "идет восстановление"),
-  // а не заглушку "Вы". Заглушка должна означать именно camOff по UI.
-
-  // Если стрим есть, но трек еще не ready/замьючен - показываем черный экран
+  // Если camOn=true, но трек ещё не готов/не рендерится — чёрный экран (восстановление).
   return (
     <View style={[styles.rtc, { backgroundColor: 'black' }]} />
   );
@@ -305,10 +283,6 @@ const styles = StyleSheet.create({
   holdPlaceholderRoot: {
     justifyContent: 'flex-start',
     paddingTop: '38%',
-  },
-  placeholder: {
-    color: 'rgba(237,234,234,0.6)',
-    fontSize: 22,
   },
   holdStatusOverlay: {
     ...StyleSheet.absoluteFillObject,

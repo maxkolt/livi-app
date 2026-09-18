@@ -31,10 +31,8 @@ export {
   getFriendDisplay,
 } from './friendHelpers';
 export {
-  useLiviNotice,
   useLiviConfirm,
   useHomeUpdatePromo,
   useHomeBadges,
   useHomeFriends,
 } from './hooks';
-export type { NoticeKind } from './hooks';

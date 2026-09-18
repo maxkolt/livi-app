@@ -1,5 +1,6 @@
 import React, { memo, useRef } from 'react';
 import { AppState, Platform, Pressable, StyleSheet, View } from 'react-native';
+import { useHomeLayout } from './HomeLayoutContext';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { logger } from '../../utils/logger';
@@ -11,6 +12,7 @@ import {
   WELCOME_GLASS_BORDER,
   WELCOME_GLASS_SURFACE,
   WELCOME_STAGE_BG,
+  isWelcomeTabletLayout,
 } from './constants';
 
 /** Активная вкладка — заливка как у «Vi» (верх/низ градиента логотипа). */
@@ -56,7 +58,16 @@ function HomeWelcomeTabBarInner({
   showProfileDot,
 }: HomeWelcomeTabBarProps) {
   const insets = useSafeAreaInsets();
+  // Размер берём из safe-area frame: он приходит от нативного провайдера и
+  // обновляется при повороте, в отличие от Dimensions.
+  const { width, height } = useHomeLayout();
+  const tabletLayout = isWelcomeTabletLayout(width, height);
+  const compactLandscape =
+    !tabletLayout && width > 0 && height > 0 && width / height > 1.05;
   const bottomPad = Math.max(insets.bottom, Platform.OS === 'android' ? 6 : 2);
+  const iconSize = tabletLayout ? 29 : compactLandscape ? 24 : 26;
+  const callIconSize = tabletLayout ? 28 : compactLandscape ? 23 : 25;
+  const profileDiscSize = tabletLayout ? 32 : compactLandscape ? 26 : PROFILE_ACTIVE_DOT;
   /** После cancel onPress часто опаздывает на 1.5–3с — переключаем на pressIn и держим длинное окно. */
   const pressInHandledRef = useRef<{ id: WelcomeTabId; at: number } | null>(null);
 
@@ -65,21 +76,21 @@ function HomeWelcomeTabBarInner({
       id: 'search',
       label: labels.search,
       renderIcon: (active, color) => (
-        <Ionicons name={active ? 'search' : 'search-outline'} size={26} color={color} />
+        <Ionicons name={active ? 'search' : 'search-outline'} size={iconSize} color={color} />
       ),
     },
     {
       id: 'friends',
       label: labels.friends,
       renderIcon: (active, color) => (
-        <Ionicons name={active ? 'people' : 'people-outline'} size={26} color={color} />
+        <Ionicons name={active ? 'people' : 'people-outline'} size={iconSize} color={color} />
       ),
     },
     {
       id: 'calls',
       label: labels.calls,
       renderIcon: (active, color) => (
-        <Ionicons name={active ? 'call' : 'call-outline'} size={25} color={color} />
+        <Ionicons name={active ? 'call' : 'call-outline'} size={callIconSize} color={color} />
       ),
     },
     {
@@ -88,7 +99,7 @@ function HomeWelcomeTabBarInner({
       renderIcon: (active, color) => (
         <MaterialCommunityIcons
           name={active ? 'chat-processing' : 'chat-processing-outline'}
-          size={26}
+          size={iconSize}
           color={color}
         />
       ),
@@ -101,20 +112,41 @@ function HomeWelcomeTabBarInner({
           <View
             style={[
               styles.profileActiveDisc,
-              { backgroundColor: ACTIVE_ICON, width: PROFILE_ACTIVE_DOT, height: PROFILE_ACTIVE_DOT, borderRadius: PROFILE_ACTIVE_DOT / 2 },
+              {
+                backgroundColor: ACTIVE_ICON,
+                width: profileDiscSize,
+                height: profileDiscSize,
+                borderRadius: profileDiscSize / 2,
+              },
             ]}
           >
-            <Ionicons name="person" size={17} color={WELCOME_STAGE_BG} />
+            <Ionicons name="person" size={tabletLayout ? 19 : compactLandscape ? 16 : 17} color={WELCOME_STAGE_BG} />
           </View>
         ) : (
-          <Ionicons name="person-outline" size={26} color={color} />
+          <Ionicons name="person-outline" size={iconSize} color={color} />
         ),
     },
   ];
 
   return (
-    <View style={[styles.shell, { paddingBottom: bottomPad }]} pointerEvents="box-none">
-      <View style={styles.row}>
+    <View
+      style={[
+        styles.shell,
+        // В landscape боковой отступ как у баннера «Онлайн»: иначе бар уходит
+        // под системную навигацию справа и не выравнивается с контентом сверху.
+        compactLandscape ? styles.shellLandscape : null,
+        tabletLayout ? styles.shellTablet : null,
+        { paddingBottom: bottomPad },
+      ]}
+      pointerEvents="box-none"
+    >
+      <View
+        style={[
+          styles.row,
+          tabletLayout && styles.rowTablet,
+          compactLandscape && styles.rowLandscape,
+        ]}
+      >
         {tabs.map((tab) => {
           const active = tab.id === activeTab;
           const iconColor = active ? ACTIVE_ICON : INACTIVE;
@@ -165,14 +197,22 @@ function HomeWelcomeTabBarInner({
               accessibilityRole="tab"
               accessibilityState={{ selected: active }}
             >
-              <View style={styles.tabInner}>
-                <View style={styles.iconWrap}>
+              <View
+                style={[
+                  styles.tabInner,
+                  tabletLayout && styles.tabInnerTablet,
+                  compactLandscape && styles.tabInnerLandscape,
+                ]}
+              >
+                <View style={[styles.iconWrap, tabletLayout && styles.iconWrapTablet]}>
                   {tab.renderIcon(active, iconColor)}
                   {showDot ? <View style={styles.badge} pointerEvents="none" /> : null}
                 </View>
                 <FitText
                   style={[
                     styles.label,
+                    tabletLayout && styles.labelTablet,
+                    compactLandscape && styles.labelLandscape,
                     active && styles.labelActive,
                     { color: labelColor },
                   ]}
@@ -190,6 +230,14 @@ function HomeWelcomeTabBarInner({
 }
 
 const styles = StyleSheet.create({
+  shellLandscape: {
+    marginHorizontal: 14,
+    borderBottomLeftRadius: WELCOME_CHROME_EDGE_RADIUS,
+    borderBottomRightRadius: WELCOME_CHROME_EDGE_RADIUS,
+  },
+  shellTablet: {
+    marginHorizontal: 20,
+  },
   shell: {
     borderTopLeftRadius: WELCOME_CHROME_EDGE_RADIUS,
     borderTopRightRadius: WELCOME_CHROME_EDGE_RADIUS,
@@ -205,6 +253,14 @@ const styles = StyleSheet.create({
     paddingTop: 6,
     paddingHorizontal: 2,
     minHeight: 52,
+  },
+  rowLandscape: {
+    paddingTop: 2,
+    minHeight: 46,
+  },
+  rowTablet: {
+    paddingTop: 8,
+    minHeight: 60,
   },
   item: {
     flex: 1,
@@ -222,12 +278,24 @@ const styles = StyleSheet.create({
     width: '100%',
     minWidth: 0,
   },
+  tabInnerLandscape: {
+    gap: 1,
+    paddingVertical: 3,
+  },
+  tabInnerTablet: {
+    gap: 4,
+    paddingVertical: 8,
+  },
   iconWrap: {
     position: 'relative',
     alignItems: 'center',
     justifyContent: 'center',
     width: 32,
     height: 30,
+  },
+  iconWrapTablet: {
+    width: 36,
+    height: 34,
   },
   badge: {
     position: 'absolute',
@@ -250,6 +318,12 @@ const styles = StyleSheet.create({
     letterSpacing: 0.05,
     textAlign: 'center',
     maxWidth: '100%',
+  },
+  labelLandscape: {
+    fontSize: 9,
+  },
+  labelTablet: {
+    fontSize: 12,
   },
   labelActive: {
     fontWeight: '600',

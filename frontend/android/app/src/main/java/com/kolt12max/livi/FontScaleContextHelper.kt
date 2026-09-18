@@ -30,9 +30,22 @@ object FontScaleContextHelper {
     return patchConfiguration(configuration)
   }
 
+  /**
+   * Override-конфиг содержит ТОЛЬКО fontScale и density.
+   *
+   * Копия всей [Configuration] делала override-полями ещё и orientation,
+   * screenWidthDp/screenHeightDp и windowConfiguration.appBounds. Override
+   * перебивает системный конфиг навсегда, поэтому resources этого контекста
+   * замерзали на ориентации старта процесса: RN читает
+   * applicationContext.resources.displayMetrics (DisplayMetricsHolder), и
+   * Dimensions.get('window') после поворота не менялся.
+   */
   fun wrap(context: Context): Context {
-    val configuration = Configuration(context.resources.configuration)
-    patchConfiguration(configuration)
-    return context.createConfigurationContext(configuration)
+    val override = Configuration()
+    override.fontScale = 1f
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+      override.densityDpi = DisplayMetrics.DENSITY_DEVICE_STABLE
+    }
+    return context.createConfigurationContext(override)
   }
 }

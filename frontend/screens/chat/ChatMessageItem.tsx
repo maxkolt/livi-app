@@ -841,6 +841,8 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
             ? t('callsMissed', lang)
             : direction === 'cancelled'
               ? t('callsCancelled', lang)
+              : direction === 'no_answer'
+                ? t('noAnswer', lang)
               : t('tabCalls', lang);
     const iconName =
       direction === 'outgoing'
@@ -851,8 +853,10 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
             ? 'phone-missed'
             : direction === 'cancelled'
               ? 'phone-hangup'
+              : direction === 'no_answer'
+                ? 'phone-missed'
               : 'phone-outline';
-    const toneBad = direction === 'missed' || direction === 'cancelled';
+    const toneBad = direction === 'missed' || direction === 'cancelled' || direction === 'no_answer';
     const iconColor = toneBad ? LIVI.red : '#34C759';
     const timeStr = item?.timestamp
       ? new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })

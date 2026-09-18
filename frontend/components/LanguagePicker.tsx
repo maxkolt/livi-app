@@ -9,10 +9,9 @@ import {
   ScrollView,
   Platform,
   Pressable,
-  useWindowDimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useSafeAreaFrame, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { type Lang, defaultLang } from '../utils/i18n';
 import {
   LIVI,
@@ -69,7 +68,7 @@ const LanguagePicker: React.FC<Props> = ({
   if (!visible) return null;
 
   const insets = useSafeAreaInsets();
-  const { height: winH } = useWindowDimensions();
+  const { height: winH } = useSafeAreaFrame();
 
   const isRtlLang = (code: Lang) => code === 'ar';
 

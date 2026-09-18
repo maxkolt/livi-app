@@ -23,6 +23,7 @@ import {
   loadCallLog,
   recordCallLog,
   recordCancelledCall,
+  recordNoAnswerCall,
   subscribeCallLog,
 } from './callLog';
 
@@ -54,5 +55,29 @@ describe('local call log', () => {
     const peerRows = getCallLogSnapshot().filter((entry) => entry.peerId === peerId);
     expect(peerRows).toHaveLength(1);
     expect(peerRows[0]?.direction).toBe('cancelled');
+  });
+
+  it('при таймауте дозвона заменяет исходящий на «Нет ответа»', () => {
+    const peerId = '507f191e810c19729de860ec';
+    recordCallLog({ peerId, direction: 'outgoing', at: Date.now() - 100 });
+
+    recordNoAnswerCall(peerId);
+
+    const peerRows = getCallLogSnapshot().filter((entry) => entry.peerId === peerId);
+    expect(peerRows).toHaveLength(1);
+    expect(peerRows[0]?.direction).toBe('no_answer');
+  });
+
+  it('таймаут имеет приоритет над cancel, пришедшим в той же гонке', () => {
+    const peerId = '507f191e810c19729de860ed';
+    recordCallLog({ peerId, direction: 'outgoing', at: Date.now() - 100 });
+    recordCancelledCall(peerId);
+
+    recordNoAnswerCall(peerId);
+    recordCancelledCall(peerId);
+
+    const peerRows = getCallLogSnapshot().filter((entry) => entry.peerId === peerId);
+    expect(peerRows).toHaveLength(1);
+    expect(peerRows[0]?.direction).toBe('no_answer');
   });
 });

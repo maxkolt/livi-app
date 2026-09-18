@@ -10,6 +10,7 @@ import {
   TouchableWithoutFeedback,
   View,
 } from 'react-native';
+import { useHomeLayout } from './HomeLayoutContext';
 import AdaptiveText from '../../components/AdaptiveText';
 import { FlatList } from 'react-native-gesture-handler';
 import { useFocusEffect } from '@react-navigation/native';
@@ -21,8 +22,14 @@ import {
   LIVI,
   WELCOME_CHROME_BTN_BG,
   WELCOME_FRIEND_AVATAR_SIZE,
+  WELCOME_FRIEND_AVATAR_SIZE_LANDSCAPE,
   WELCOME_FRIEND_CARD_GAP,
+  WELCOME_FRIEND_CARD_GAP_LANDSCAPE,
   WELCOME_FRIEND_CARD_ROW_HEIGHT,
+  WELCOME_FRIEND_CARD_ROW_HEIGHT_LANDSCAPE,
+  WELCOME_FRIEND_AVATAR_SIZE_TABLET,
+  WELCOME_FRIEND_CARD_GAP_TABLET,
+  WELCOME_FRIEND_CARD_ROW_HEIGHT_TABLET,
   WELCOME_FRIENDS_LIST_INSET,
   WELCOME_FRIENDS_SEGMENT_SHELL_RADIUS,
   WELCOME_GLASS_BORDER,
@@ -31,6 +38,7 @@ import {
   WELCOME_MUTED_TEXT,
   WELCOME_UNREAD_BADGE,
   WELCOME_BRAND_VI_FILL_GRADIENT,
+  isWelcomeTabletLayout,
 } from './constants';
 import { WELCOME_SEGMENT_ACTIVE } from './FriendsListCore';
 import { friendMatchesNameSearch, getFriendDisplay } from './friendHelpers';
@@ -43,7 +51,6 @@ import { WelcomeCrownButton } from './WelcomeCrownButton';
 import { WelcomeSelectModeHeader } from './WelcomeSelectModeHeader';
 import { welcomeSelectHaptic } from './welcomeSelectHaptic';
 import type { Friend } from './types';
-import type { NoticeKind } from './hooks';
 
 type ChatsFilter = 'all' | 'unread';
 
@@ -65,7 +72,6 @@ export type HomeWelcomeChatsViewProps = {
     confirmText?: string;
     cancelText?: string;
   }) => Promise<boolean>;
-  showNotice: (text: string, kind?: NoticeKind, ms?: number) => void;
   setUnreadByUser: React.Dispatch<React.SetStateAction<Record<string, number>>>;
 };
 
@@ -81,9 +87,14 @@ function HomeWelcomeChatsViewInner({
   refreshing,
   onRefresh,
   askConfirm,
-  showNotice,
   setUnreadByUser,
 }: HomeWelcomeChatsViewProps) {
+  // Размер берём из safe-area frame: он приходит от нативного провайдера и
+  // обновляется при повороте, в отличие от Dimensions.
+  const { width: windowWidth, height: windowHeight } = useHomeLayout();
+  const tabletLayout = isWelcomeTabletLayout(windowWidth, windowHeight);
+  const compactLandscape =
+    !tabletLayout && windowWidth > 0 && windowHeight > 0 && windowWidth / windowHeight > 1.05;
   const [filter, setFilter] = useState<ChatsFilter>('all');
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -324,7 +335,7 @@ function HomeWelcomeChatsViewInner({
     if (!ok) return;
     setDeleting(true);
     try {
-      const result = await clearWelcomeChatsForMe(ids);
+      await clearWelcomeChatsForMe(ids);
       // Сразу убираем строки: список строится по previews/unread.
       dropPreviews(ids);
       setUnreadByUser((prev) => {
@@ -334,15 +345,10 @@ function HomeWelcomeChatsViewInner({
         });
         return next;
       });
-      if (result.failed.length > 0) {
-        showNotice(t('chatClearFailedServer', lang), 'error');
-      } else {
-        showNotice(t('chatClearedMineSuccess', lang), 'info');
-      }
       exitSelect();
       void reloadPreviews();
     } catch {
-      showNotice(t('chatClearFailedServer', lang), 'error');
+      // Ошибку не показываем: тосты на Home убраны.
     } finally {
       setDeleting(false);
     }
@@ -355,7 +361,6 @@ function HomeWelcomeChatsViewInner({
     reloadPreviews,
     selectedIds,
     setUnreadByUser,
-    showNotice,
   ]);
 
   const listExtraData = useMemo(
@@ -375,7 +380,12 @@ function HomeWelcomeChatsViewInner({
 
       return (
         <Pressable
-          style={({ pressed }) => [styles.cardWrap, pressed && styles.cardPressed]}
+          style={({ pressed }) => [
+            styles.cardWrap,
+            tabletLayout && styles.cardWrapTablet,
+            compactLandscape && styles.cardWrapLandscape,
+            pressed && styles.cardPressed,
+          ]}
           onPress={() => {
             if (selectMode) {
               toggleSelect(id);
@@ -395,8 +405,21 @@ function HomeWelcomeChatsViewInner({
           accessibilityLabel={displayName}
           accessibilityState={{ selected: isSelected }}
         >
-          <View style={[styles.glassCard, isSelected && styles.glassCardSelected]}>
-            <View style={styles.cardRow}>
+          <View
+            style={[
+              styles.glassCard,
+              tabletLayout && styles.glassCardTablet,
+              compactLandscape && styles.glassCardLandscape,
+              isSelected && styles.glassCardSelected,
+            ]}
+          >
+            <View
+              style={[
+                styles.cardRow,
+                tabletLayout && styles.cardRowTablet,
+                compactLandscape && styles.cardRowLandscape,
+              ]}
+            >
               {selectMode ? (
                 <View style={styles.selectMark}>
                   {isSelected ? (
@@ -406,13 +429,31 @@ function HomeWelcomeChatsViewInner({
                   )}
                 </View>
               ) : null}
-              <View style={styles.avatarWrap}>
-                <View style={styles.avatarBox}>
+              <View
+                style={[
+                  styles.avatarWrap,
+                  tabletLayout && styles.avatarWrapTablet,
+                  compactLandscape && styles.avatarWrapLandscape,
+                ]}
+              >
+                <View
+                  style={[
+                    styles.avatarBox,
+                    tabletLayout && styles.avatarBoxTablet,
+                    compactLandscape && styles.avatarBoxLandscape,
+                  ]}
+                >
                   <AvatarImage
                     userId={item.id}
                     avatarVer={item.avatarVer || 0}
                     uri={item.avatarThumbB64 || undefined}
-                    size={WELCOME_FRIEND_AVATAR_SIZE}
+                    size={
+                      tabletLayout
+                        ? WELCOME_FRIEND_AVATAR_SIZE_TABLET
+                        : compactLandscape
+                        ? WELCOME_FRIEND_AVATAR_SIZE_LANDSCAPE
+                        : WELCOME_FRIEND_AVATAR_SIZE
+                    }
                     fallbackText={avatarLetter || '—'}
                     containerStyle={{ overflow: 'hidden' }}
                     fallbackTextStyle={
@@ -425,16 +466,44 @@ function HomeWelcomeChatsViewInner({
                 {!selectMode && item.online ? <View style={styles.onlineDot} /> : null}
               </View>
 
-              <View style={styles.bodyCol}>
+              <View
+                style={[
+                  styles.bodyCol,
+                  tabletLayout && styles.bodyColTablet,
+                  compactLandscape && styles.bodyColLandscape,
+                ]}
+              >
                 <View style={styles.nameRow}>
-                  <AdaptiveText style={styles.name} numberOfLines={1}>
+                  <AdaptiveText
+                    style={[
+                      styles.name,
+                      tabletLayout && styles.nameTablet,
+                      compactLandscape && styles.nameLandscape,
+                    ]}
+                    numberOfLines={1}
+                  >
                     {displayName}
                   </AdaptiveText>
-                  {timeLabel ? <AdaptiveText style={styles.time}>{timeLabel}</AdaptiveText> : null}
+                  {timeLabel ? (
+                    <AdaptiveText
+                      style={[
+                        styles.time,
+                        tabletLayout && styles.timeTablet,
+                        compactLandscape && styles.timeLandscape,
+                      ]}
+                    >
+                      {timeLabel}
+                    </AdaptiveText>
+                  ) : null}
                 </View>
                 <View style={styles.previewRow}>
                   <AdaptiveText
-                    style={[styles.preview, unread > 0 && styles.previewUnread]}
+                    style={[
+                      styles.preview,
+                      tabletLayout && styles.previewTablet,
+                      compactLandscape && styles.previewLandscape,
+                      unread > 0 && styles.previewUnread,
+                    ]}
                     numberOfLines={1}
                     fit={false}
                   >
@@ -452,13 +521,30 @@ function HomeWelcomeChatsViewInner({
         </Pressable>
       );
     },
-    [L, enterSelect, openChat, previews, selectMode, selectedIds, toggleSelect, unreadByUser],
+    [
+      L,
+      compactLandscape,
+      enterSelect,
+      openChat,
+      previews,
+      selectMode,
+      selectedIds,
+      toggleSelect,
+      unreadByUser,
+      tabletLayout,
+    ],
   );
 
   return (
     <TouchableWithoutFeedback onPress={searchOpen ? dismissSearchFromEmptyTap : undefined} accessible={false}>
       <View style={styles.root}>
-        <View style={styles.header}>
+        <View
+          style={[
+            styles.header,
+            tabletLayout && styles.headerTablet,
+            compactLandscape && styles.headerLandscape,
+          ]}
+        >
           {selectMode ? (
             <WelcomeSelectModeHeader
               selectedCount={selectedIds.size}
@@ -482,12 +568,22 @@ function HomeWelcomeChatsViewInner({
                 onPress={searchOpen ? dismissSearchFromEmptyTap : undefined}
                 accessibilityRole="header"
               >
-                <AdaptiveText style={styles.title}>{L('tabChat')}</AdaptiveText>
+                <AdaptiveText
+                  style={[
+                    styles.title,
+                    tabletLayout && styles.titleTablet,
+                    compactLandscape && styles.titleLandscape,
+                  ]}
+                >
+                  {L('tabChat')}
+                </AdaptiveText>
               </Pressable>
               <View style={styles.headerActions}>
                 <Pressable
                   style={({ pressed }) => [
                     styles.iconBtn,
+                    tabletLayout && styles.iconBtnTablet,
+                    compactLandscape && styles.iconBtnLandscape,
                     searchOpen && styles.iconBtnActive,
                     pressed && styles.iconBtnPressed,
                   ]}
@@ -498,19 +594,26 @@ function HomeWelcomeChatsViewInner({
                 >
                   <Ionicons
                     name={searchOpen ? 'search' : 'search-outline'}
-                    size={22}
+                    size={tabletLayout ? 24 : 22}
                     color={searchOpen ? WELCOME_SEGMENT_ACTIVE : LIVI.white}
                   />
                 </Pressable>
-                <WelcomeCrownButton />
+                <WelcomeCrownButton compact={compactLandscape} large={tabletLayout} />
               </View>
             </>
           )}
         </View>
 
-        <View style={styles.body}>
+        <View style={[styles.body, tabletLayout && styles.bodyTablet, compactLandscape && styles.bodyLandscape]}>
           {searchOpen ? (
-            <View style={styles.searchShell} onStartShouldSetResponder={() => true}>
+            <View
+              style={[
+                styles.searchShell,
+                tabletLayout && styles.searchShellTablet,
+                compactLandscape && styles.searchShellLandscape,
+              ]}
+              onStartShouldSetResponder={() => true}
+            >
               <Ionicons name="search-outline" size={18} color={WELCOME_MUTED_TEXT} style={styles.searchIcon} />
               <TextInput
                 ref={searchInputRef}
@@ -518,7 +621,7 @@ function HomeWelcomeChatsViewInner({
                 onChangeText={setSearchQuery}
                 placeholder={t('friendsSearchPlaceholder', lang)}
                 placeholderTextColor={WELCOME_MUTED_TEXT}
-                style={styles.searchInput}
+                style={[styles.searchInput, tabletLayout && styles.searchInputTablet]}
                 autoCorrect={false}
                 autoCapitalize="none"
                 clearButtonMode={Platform.OS === 'ios' ? 'while-editing' : 'never'}
@@ -533,9 +636,21 @@ function HomeWelcomeChatsViewInner({
             </View>
           ) : null}
 
-          <View style={styles.segmentShell} onStartShouldSetResponder={() => true}>
+          <View
+            style={[
+              styles.segmentShell,
+              tabletLayout && styles.segmentShellTablet,
+              compactLandscape && styles.segmentShellLandscape,
+            ]}
+            onStartShouldSetResponder={() => true}
+          >
             <Pressable
-              style={[styles.segmentBtn, filter === 'all' && styles.segmentBtnActive]}
+              style={[
+                styles.segmentBtn,
+                tabletLayout && styles.segmentBtnTablet,
+                compactLandscape && styles.segmentBtnLandscape,
+                filter === 'all' && styles.segmentBtnActive,
+              ]}
               onPress={() => {
                 pauseSearchDismissOnKeyboardHide();
                 setFilter('all');
@@ -544,7 +659,11 @@ function HomeWelcomeChatsViewInner({
               accessibilityState={{ selected: filter === 'all' }}
             >
               <AdaptiveText
-                style={styles.segmentLabel}
+                style={[
+                  styles.segmentLabel,
+                  tabletLayout && styles.segmentLabelTablet,
+                  compactLandscape && styles.segmentLabelLandscape,
+                ]}
                 numberOfLines={1}
                 allowFontScaling={false}
                 adjustsFontSizeToFit
@@ -554,7 +673,12 @@ function HomeWelcomeChatsViewInner({
               </AdaptiveText>
             </Pressable>
             <Pressable
-              style={[styles.segmentBtn, filter === 'unread' && styles.segmentBtnActive]}
+              style={[
+                styles.segmentBtn,
+                tabletLayout && styles.segmentBtnTablet,
+                compactLandscape && styles.segmentBtnLandscape,
+                filter === 'unread' && styles.segmentBtnActive,
+              ]}
               onPress={() => {
                 pauseSearchDismissOnKeyboardHide();
                 setFilter('unread');
@@ -563,7 +687,11 @@ function HomeWelcomeChatsViewInner({
               accessibilityState={{ selected: filter === 'unread' }}
             >
               <AdaptiveText
-                style={styles.segmentLabel}
+                style={[
+                  styles.segmentLabel,
+                  tabletLayout && styles.segmentLabelTablet,
+                  compactLandscape && styles.segmentLabelLandscape,
+                ]}
                 numberOfLines={1}
                 allowFontScaling={false}
                 adjustsFontSizeToFit
@@ -575,14 +703,20 @@ function HomeWelcomeChatsViewInner({
           </View>
 
           <FlatList
+            key={tabletLayout ? 'chats-tablet' : compactLandscape ? 'chats-landscape' : 'chats-portrait'}
             style={styles.list}
-            contentContainerStyle={styles.listContent}
+            contentContainerStyle={[
+              styles.listContent,
+              tabletLayout && styles.listContentTablet,
+              compactLandscape && styles.listContentLandscape,
+            ]}
             data={filteredChats}
             keyExtractor={(item) => item.id}
             extraData={listExtraData}
             renderItem={renderItem}
             refreshing={selectMode ? false : refreshing}
             onRefresh={selectMode ? undefined : onRefresh}
+            nestedScrollEnabled
             keyboardShouldPersistTaps={searchOpen ? 'never' : 'always'}
             onScrollBeginDrag={searchOpen ? closeSearch : undefined}
             showsVerticalScrollIndicator={false}
@@ -591,8 +725,17 @@ function HomeWelcomeChatsViewInner({
             maxToRenderPerBatch={10}
             windowSize={7}
             getItemLayout={(_, index) => ({
-              length: WELCOME_FRIEND_CARD_ROW_HEIGHT + WELCOME_FRIEND_CARD_GAP,
-              offset: (WELCOME_FRIEND_CARD_ROW_HEIGHT + WELCOME_FRIEND_CARD_GAP) * index,
+              length: tabletLayout
+                ? WELCOME_FRIEND_CARD_ROW_HEIGHT_TABLET + WELCOME_FRIEND_CARD_GAP_TABLET
+                : compactLandscape
+                  ? WELCOME_FRIEND_CARD_ROW_HEIGHT_LANDSCAPE + WELCOME_FRIEND_CARD_GAP_LANDSCAPE
+                  : WELCOME_FRIEND_CARD_ROW_HEIGHT + WELCOME_FRIEND_CARD_GAP,
+              offset:
+                (tabletLayout
+                  ? WELCOME_FRIEND_CARD_ROW_HEIGHT_TABLET + WELCOME_FRIEND_CARD_GAP_TABLET
+                  : compactLandscape
+                    ? WELCOME_FRIEND_CARD_ROW_HEIGHT_LANDSCAPE + WELCOME_FRIEND_CARD_GAP_LANDSCAPE
+                    : WELCOME_FRIEND_CARD_ROW_HEIGHT + WELCOME_FRIEND_CARD_GAP) * index,
               index,
             })}
             ListEmptyComponent={
@@ -620,10 +763,25 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingBottom: 8,
   },
+  headerLandscape: {
+    paddingTop: 2,
+    paddingBottom: 2,
+  },
+  headerTablet: {
+    paddingTop: 14,
+    paddingHorizontal: 28,
+    paddingBottom: 10,
+  },
   body: {
     flex: 1,
     minHeight: 0,
     marginTop: 10,
+  },
+  bodyLandscape: {
+    marginTop: 2,
+  },
+  bodyTablet: {
+    marginTop: 12,
   },
   titleHit: {
     flex: 1,
@@ -635,6 +793,12 @@ const styles = StyleSheet.create({
     fontSize: 28,
     fontWeight: '500',
     letterSpacing: -0.3,
+  },
+  titleLandscape: {
+    fontSize: 22,
+  },
+  titleTablet: {
+    fontSize: 30,
   },
   selectTitle: {
     flex: 1,
@@ -658,6 +822,16 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: WELCOME_CHROME_BTN_BG,
   },
+  iconBtnLandscape: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+  },
+  iconBtnTablet: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+  },
   iconBtnActive: {
     backgroundColor: 'rgba(42, 88, 104, 0.45)',
   },
@@ -679,6 +853,18 @@ const styles = StyleSheet.create({
     backgroundColor: WELCOME_GLASS_SURFACE,
     gap: 8,
   },
+  searchShellLandscape: {
+    marginBottom: 6,
+    paddingVertical: 2,
+  },
+  searchShellTablet: {
+    width: '92%',
+    maxWidth: 900,
+    alignSelf: 'center',
+    marginHorizontal: 0,
+    marginBottom: 12,
+    paddingVertical: 10,
+  },
   searchIcon: {
     flexShrink: 0,
   },
@@ -688,6 +874,9 @@ const styles = StyleSheet.create({
     color: LIVI.white,
     fontSize: 16,
     paddingVertical: Platform.OS === 'android' ? 4 : 0,
+  },
+  searchInputTablet: {
+    fontSize: 17,
   },
   segmentShell: {
     flexDirection: 'row',
@@ -703,6 +892,20 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     marginBottom: 12,
   },
+  segmentShellLandscape: {
+    minHeight: 44,
+    padding: 4,
+    marginBottom: 6,
+  },
+  segmentShellTablet: {
+    width: '92%',
+    maxWidth: 900,
+    alignSelf: 'center',
+    minHeight: 72,
+    padding: 8,
+    marginHorizontal: 0,
+    marginBottom: 14,
+  },
   segmentBtn: {
     flex: 1,
     minWidth: 0,
@@ -711,6 +914,12 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  segmentBtnLandscape: {
+    paddingVertical: 6,
+  },
+  segmentBtnTablet: {
+    paddingVertical: 11,
   },
   segmentBtnActive: {
     backgroundColor: 'rgba(42, 88, 104, 0.62)',
@@ -721,6 +930,12 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     textAlign: 'center',
     width: '100%',
+  },
+  segmentLabelLandscape: {
+    fontSize: 13,
+  },
+  segmentLabelTablet: {
+    fontSize: 15,
   },
   list: {
     flex: 1,
@@ -733,9 +948,29 @@ const styles = StyleSheet.create({
     paddingBottom: 12,
     flexGrow: 1,
   },
+  listContentLandscape: {
+    paddingTop: 2,
+    paddingBottom: 6,
+  },
+  listContentTablet: {
+    width: '100%',
+    maxWidth: 960,
+    alignSelf: 'center',
+    paddingHorizontal: 28,
+    paddingTop: 6,
+    paddingBottom: 16,
+  },
   cardWrap: {
     height: WELCOME_FRIEND_CARD_ROW_HEIGHT,
     marginBottom: WELCOME_FRIEND_CARD_GAP,
+  },
+  cardWrapLandscape: {
+    height: WELCOME_FRIEND_CARD_ROW_HEIGHT_LANDSCAPE,
+    marginBottom: WELCOME_FRIEND_CARD_GAP_LANDSCAPE,
+  },
+  cardWrapTablet: {
+    height: WELCOME_FRIEND_CARD_ROW_HEIGHT_TABLET,
+    marginBottom: WELCOME_FRIEND_CARD_GAP_TABLET,
   },
   cardPressed: {
     opacity: 0.82,
@@ -746,6 +981,14 @@ const styles = StyleSheet.create({
     backgroundColor: WELCOME_GLASS_SURFACE,
     borderRadius: 16,
     overflow: 'hidden',
+  },
+  glassCardLandscape: {
+    height: WELCOME_FRIEND_CARD_ROW_HEIGHT_LANDSCAPE,
+    borderRadius: 14,
+  },
+  glassCardTablet: {
+    height: WELCOME_FRIEND_CARD_ROW_HEIGHT_TABLET,
+    borderRadius: 18,
   },
   glassCardSelected: {
     backgroundColor: 'rgba(33, 88, 192, 0.18)',
@@ -771,10 +1014,28 @@ const styles = StyleSheet.create({
     paddingLeft: 12,
     paddingRight: 12,
   },
+  cardRowLandscape: {
+    height: WELCOME_FRIEND_CARD_ROW_HEIGHT_LANDSCAPE,
+    paddingLeft: 10,
+    paddingRight: 10,
+  },
+  cardRowTablet: {
+    height: WELCOME_FRIEND_CARD_ROW_HEIGHT_TABLET,
+    paddingLeft: 14,
+    paddingRight: 14,
+  },
   avatarWrap: {
     width: WELCOME_FRIEND_AVATAR_SIZE,
     height: WELCOME_FRIEND_AVATAR_SIZE,
     position: 'relative',
+  },
+  avatarWrapLandscape: {
+    width: WELCOME_FRIEND_AVATAR_SIZE_LANDSCAPE,
+    height: WELCOME_FRIEND_AVATAR_SIZE_LANDSCAPE,
+  },
+  avatarWrapTablet: {
+    width: WELCOME_FRIEND_AVATAR_SIZE_TABLET,
+    height: WELCOME_FRIEND_AVATAR_SIZE_TABLET,
   },
   avatarBox: {
     width: WELCOME_FRIEND_AVATAR_SIZE,
@@ -784,6 +1045,16 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(132, 135, 140, 0.17)',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  avatarBoxLandscape: {
+    width: WELCOME_FRIEND_AVATAR_SIZE_LANDSCAPE,
+    height: WELCOME_FRIEND_AVATAR_SIZE_LANDSCAPE,
+    borderRadius: WELCOME_FRIEND_AVATAR_SIZE_LANDSCAPE / 2,
+  },
+  avatarBoxTablet: {
+    width: WELCOME_FRIEND_AVATAR_SIZE_TABLET,
+    height: WELCOME_FRIEND_AVATAR_SIZE_TABLET,
+    borderRadius: WELCOME_FRIEND_AVATAR_SIZE_TABLET / 2,
   },
   onlineDot: {
     position: 'absolute',
@@ -803,6 +1074,14 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 3,
   },
+  bodyColLandscape: {
+    marginLeft: 8,
+    gap: 1,
+  },
+  bodyColTablet: {
+    marginLeft: 12,
+    gap: 4,
+  },
   nameRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -816,12 +1095,26 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     lineHeight: 20,
   },
+  nameLandscape: {
+    fontSize: 14,
+    lineHeight: 17,
+  },
+  nameTablet: {
+    fontSize: 17,
+    lineHeight: 22,
+  },
   time: {
     color: WELCOME_MUTED_TEXT,
     fontSize: 12,
     fontWeight: '500',
     flexShrink: 0,
     marginRight: 6,
+  },
+  timeLandscape: {
+    fontSize: 11,
+  },
+  timeTablet: {
+    fontSize: 13,
   },
   previewRow: {
     flexDirection: 'row',
@@ -835,6 +1128,14 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '400',
     lineHeight: 18,
+  },
+  previewLandscape: {
+    fontSize: 12,
+    lineHeight: 15,
+  },
+  previewTablet: {
+    fontSize: 14,
+    lineHeight: 19,
   },
   previewUnread: {
     color: 'rgba(244, 245, 247, 0.82)',

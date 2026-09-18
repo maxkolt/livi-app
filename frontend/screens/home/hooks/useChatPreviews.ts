@@ -89,6 +89,16 @@ function mergeLiveMemory(
   return next;
 }
 
+function previewMapsEqual(
+  a: Record<string, ChatPreview>,
+  b: Record<string, ChatPreview>,
+): boolean {
+  const aKeys = Object.keys(a);
+  const bKeys = Object.keys(b);
+  if (aKeys.length !== bKeys.length) return false;
+  return aKeys.every((key) => a[key]?.at === b[key]?.at && a[key]?.text === b[key]?.text);
+}
+
 /** Prefetch до открытия вкладки Chat — первый paint с полными превью. */
 export async function prefetchChatPreviews(friendIds: string[], lang: Lang): Promise<void> {
   const ids = friendIds.map((id) => String(id || '').trim()).filter(Boolean);
@@ -120,6 +130,8 @@ export function useChatPreviews(friendIds: string[], lang: Lang, enabled: boolea
   const idsRef = useRef(friendIds);
   const langRef = useRef(lang);
   const enabledRef = useRef(enabled);
+  const reloadPromiseRef = useRef<Promise<void> | null>(null);
+  const lastReloadCompletedAtRef = useRef(0);
 
   useEffect(() => {
     idsRef.current = friendIds;
@@ -133,39 +145,53 @@ export function useChatPreviews(friendIds: string[], lang: Lang, enabled: boolea
     enabledRef.current = enabled;
   }, [enabled]);
 
-  const reload = useCallback(async () => {
-    const ids = idsRef.current;
-    if (!enabled || ids.length === 0) {
-      if (!ids.length) setPreviews({});
-      return;
-    }
-    const next: Record<string, ChatPreview> = {};
-    await Promise.all(
-      ids.map(async (id) => {
-        try {
-          const messages = await getChatMessagesLocal(id);
-          const last = pickLatestMessage(messages);
-          if (!last) return;
-          const at = messageTimestampMs(last);
-          const text = previewTextFromMessage(last, langRef.current);
-          next[id] = { text, at };
-        } catch {
-          // keep missing preview
-        }
-      }),
-    );
-    // Не затирать более свежий live-preview (message:received), если persist ещё догоняет.
-    const withLive = mergeLiveMemory(ids, next);
-    const hydrated = await hydrateMissingPreviewsFromServer(ids, withLive, langRef.current);
-    const finalMap = mergeLiveMemory(ids, hydrated);
-    previewMemory = finalMap;
-    setPreviews(finalMap);
+  const reload = useCallback((): Promise<void> => {
+    if (reloadPromiseRef.current) return reloadPromiseRef.current;
+    if (Date.now() - lastReloadCompletedAtRef.current < 750) return Promise.resolve();
+
+    let tracked: Promise<void>;
+    const task = (async () => {
+      const ids = idsRef.current;
+      if (!enabled || ids.length === 0) {
+        if (!ids.length) setPreviews((prev) => (Object.keys(prev).length ? {} : prev));
+        return;
+      }
+      const next: Record<string, ChatPreview> = {};
+      await Promise.all(
+        ids.map(async (id) => {
+          try {
+            const messages = await getChatMessagesLocal(id);
+            const last = pickLatestMessage(messages);
+            if (!last) return;
+            const at = messageTimestampMs(last);
+            const text = previewTextFromMessage(last, langRef.current);
+            next[id] = { text, at };
+          } catch {
+            // keep missing preview
+          }
+        }),
+      );
+      // Не затирать более свежий live-preview (message:received), если persist ещё догоняет.
+      const withLive = mergeLiveMemory(ids, next);
+      const hydrated = await hydrateMissingPreviewsFromServer(ids, withLive, langRef.current);
+      const finalMap = mergeLiveMemory(ids, hydrated);
+      previewMemory = finalMap;
+      setPreviews((prev) => (previewMapsEqual(prev, finalMap) ? prev : finalMap));
+    })();
+    tracked = task.finally(() => {
+      lastReloadCompletedAtRef.current = Date.now();
+      if (reloadPromiseRef.current === tracked) reloadPromiseRef.current = null;
+    });
+    reloadPromiseRef.current = tracked;
+    return tracked;
   }, [enabled, idsKey]);
 
   useLayoutEffect(() => {
     if (!enabled) return;
     const snap = getChatPreviewSnapshot();
-    if (Object.keys(snap).length) setPreviews({ ...snap });
+    if (Object.keys(snap).length) {
+      setPreviews((prev) => (previewMapsEqual(prev, snap) ? prev : { ...snap }));
+    }
   }, [enabled, idsKey]);
 
   useEffect(() => {

@@ -27,6 +27,7 @@ export function getChatReplyPreviewText(message: any, langCode: string): string 
     if (direction === "incoming") return t("callsIncoming", langCode as Lang);
     if (direction === "missed") return t("callsMissed", langCode as Lang);
     if (direction === "cancelled") return t("callsCancelled", langCode as Lang);
+    if (direction === "no_answer") return t("noAnswer", langCode as Lang);
     return t("tabCalls", langCode as Lang);
   }
   if (String(message?.type || "") === "sticker") {

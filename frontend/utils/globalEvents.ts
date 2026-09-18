@@ -268,8 +268,8 @@ export function emitRequestCloseIncoming() {
 }
 
 export type CloseOutgoingCallPayload = {
-  /** accepted — звонок принят; native_cancel — инициатор нажал X; remote_closed — сервер/пуш сообщил decline/cancel/timeout. */
-  reason?: 'external' | 'accepted' | 'native_cancel' | 'remote_closed';
+  /** accepted — звонок принят; native_cancel — инициатор нажал X; timeout — истёк дозвон. */
+  reason?: 'external' | 'accepted' | 'native_cancel' | 'remote_closed' | 'timeout';
   /** callId события закрытия, если известен. Нужен, чтобы старые native/push события не сбрасывали новый исходящий. */
   callId?: string | null;
 };
@@ -505,4 +505,3 @@ export function emitChatCallStatusMessage(payload: ChatCallStatusMessagePayload)
     } catch {}
   }
 }
-

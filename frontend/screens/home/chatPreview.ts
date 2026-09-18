@@ -38,6 +38,7 @@ export function previewTextFromMessage(msg: any, lang: Lang): string {
     if (direction === 'incoming') return t('callsIncoming', lang);
     if (direction === 'missed') return t('callsMissed', lang);
     if (direction === 'cancelled') return t('callsCancelled', lang);
+    if (direction === 'no_answer') return t('noAnswer', lang);
     return t('tabCalls', lang);
   }
   if (type === 'audio') return t('chatVoiceMessage', lang);

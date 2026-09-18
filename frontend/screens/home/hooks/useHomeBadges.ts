@@ -60,6 +60,7 @@ export function useHomeBadges({ friends, friendsRef }: UseHomeBadgesArgs) {
   const pendingUnreadBatchRefreshRef = useRef(false);
   const badgeSyncDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const missedByUserRef = useRef<Record<string, number>>({});
+  const badgeResumeHeavyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** Не даём серверному 0 сразу после нового сообщения стереть красную точку (гонка ack). */
   const unreadFloorRef = useRef<Map<string, { min: number; until: number }>>(new Map());
   /** message.id уже учтён в unread — переживает remount слушателя (friendsIdsKey). */
@@ -402,21 +403,45 @@ export function useHomeBadges({ friends, friendsRef }: UseHomeBadgesArgs) {
       }
     }
 
-    try {
-      const list = friendsRef.current;
-      if (list.length) {
-        await refreshUnreadCountsForFriends(list);
+    // Точный server unread + системный badge не нужны для первого кадра после resume.
+    // Раньше этот блок занимал до 1.7с и конкурировал с тапом по Chat/Calls.
+    if (badgeResumeHeavyTimerRef.current) clearTimeout(badgeResumeHeavyTimerRef.current);
+    badgeResumeHeavyTimerRef.current = setTimeout(() => {
+      badgeResumeHeavyTimerRef.current = null;
+      const actionAt = Number((global as any).__homeRowActionAtRef?.current || 0);
+      const sinceActionMs = actionAt > 0 ? Date.now() - actionAt : null;
+      if (sinceActionMs != null && sinceActionMs < 2500) {
+        logger.info('[welcome-tab] badge resume heavy refresh skipped for foreground action', {
+          sinceActionMs,
+        });
+        return;
       }
-    } catch (e) {
-      logger.warn('[welcome-tab] badge resume unread server refresh failed', e as any);
-    }
+      void (async () => {
+        try {
+          const list = friendsRef.current;
+          if (list.length) {
+            await refreshUnreadCountsForFriends(list);
+          }
+        } catch (e) {
+          logger.warn('[welcome-tab] badge resume unread server refresh failed', e as any);
+        }
 
-    try {
-      await syncAppBadgeFromMissedCount();
-    } catch (_) {}
+        try {
+          await syncAppBadgeFromMissedCount();
+        } catch (_) {}
 
-    logger.info('[welcome-tab] badge resume refresh done', { elapsedMs: Date.now() - started });
+        logger.info('[welcome-tab] badge resume refresh done', { elapsedMs: Date.now() - started });
+      })();
+    }, 1400);
+    logger.info('[welcome-tab] badge resume local refresh done', { elapsedMs: Date.now() - started });
   }, [bumpUnreadFloor, friendsRef, refreshUnreadCountsForFriends]);
+
+  useEffect(() => () => {
+    if (badgeResumeHeavyTimerRef.current) {
+      clearTimeout(badgeResumeHeavyTimerRef.current);
+      badgeResumeHeavyTimerRef.current = null;
+    }
+  }, []);
 
   /* ===== unread counters (через сокеты) =====
    * Слушатель не пересоздаём на каждый presence/loadFriends (только при смене набора friend ids),

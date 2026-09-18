@@ -1,6 +1,7 @@
 // screens/chat/ChatAlbumGrid.tsx
 import React from "react";
-import { View, Pressable, Platform, Animated, Vibration, useWindowDimensions } from "react-native";
+import { View, Pressable, Platform, Animated, Vibration } from "react-native";
+import { useSafeAreaFrame } from 'react-native-safe-area-context';
 import { Image as ExpoImage } from "expo-image";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
@@ -181,7 +182,7 @@ export function ChatAlbumGrid({
   onToggleTileSelect,
 }: Props) {
   const uris = React.useMemo(() => getMessageImageUris(item), [item]);
-  const { width: windowWidth } = useWindowDimensions();
+  const { width: windowWidth } = useSafeAreaFrame();
   const layout = albumGridLayout(windowWidth, uris.length);
   const selectedSet = React.useMemo(() => new Set(selectedIndices), [selectedIndices]);
   const messageId = String(item?.id || "img");

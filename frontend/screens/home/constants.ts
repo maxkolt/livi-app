@@ -1,5 +1,4 @@
 import { Platform, StyleSheet } from 'react-native';
-import { FRIEND_ACTION_BUTTON, FRIEND_ROW_ACTION_GAP } from '../../constants/uiTokens';
 
 /** Фон welcome-экрана (макет). */
 export const WELCOME_STAGE_BG = '#0A0C14';
@@ -78,6 +77,18 @@ export const WELCOME_FRIEND_CARD_GAP = 6;
 export const WELCOME_FRIEND_ROW_STRIDE = WELCOME_FRIEND_CARD_ROW_HEIGHT + WELCOME_FRIEND_CARD_GAP;
 /** Диаметр аватара в welcome-карточке. */
 export const WELCOME_FRIEND_AVATAR_SIZE = 44;
+/** Компактные размеры списков только для горизонтальной ориентации. */
+export const WELCOME_FRIEND_CARD_ROW_HEIGHT_LANDSCAPE = 54;
+export const WELCOME_FRIEND_CARD_GAP_LANDSCAPE = 4;
+export const WELCOME_FRIEND_ROW_STRIDE_LANDSCAPE =
+  WELCOME_FRIEND_CARD_ROW_HEIGHT_LANDSCAPE + WELCOME_FRIEND_CARD_GAP_LANDSCAPE;
+export const WELCOME_FRIEND_AVATAR_SIZE_LANDSCAPE = 38;
+/** Слегка увеличенные размеры списков на планшетах в обеих ориентациях. */
+export const WELCOME_FRIEND_CARD_ROW_HEIGHT_TABLET = 72;
+export const WELCOME_FRIEND_CARD_GAP_TABLET = 8;
+export const WELCOME_FRIEND_ROW_STRIDE_TABLET =
+  WELCOME_FRIEND_CARD_ROW_HEIGHT_TABLET + WELCOME_FRIEND_CARD_GAP_TABLET;
+export const WELCOME_FRIEND_AVATAR_SIZE_TABLET = 48;
 /** Скругление внешней оболочки сегментов «Все / Онлайн» (не pill). */
 export const WELCOME_FRIENDS_SEGMENT_SHELL_RADIUS = 14;
 /** Кнопки звонка/чата в welcome-строке — скругление (круг при 42×42). */
@@ -123,8 +134,8 @@ export const ANDROID_INSTANT_TOUCH =
 
 export const ANDROID_FRIEND_ACTION_HIT_SLOP = { top: 14, bottom: 14, left: 14, right: 14 };
 
-export const MENU_BTN_RADIUS = 12;
-export const MENU_BTN_SIZE = 42;
+/** Align brand row height with crown / top-bar controls. */
+export const WELCOME_TOP_BAR_CONTROL_SIZE = 42;
 export const BRAND_OUTLINE_STROKE = 1.35;
 export const BRAND_FONT_FAMILY = Platform.OS === 'ios' ? 'System' : 'sans-serif-medium';
 export const BRAND_3D_LAYERS = 5;
@@ -138,7 +149,7 @@ export const BRAND_LETTER_GLOW_INTENSITY = 0.58;
 export const BRAND_LETTER_GLOW_OVERLAP = 1.2;
 export const CHROME_PERIMETER_GLOW_LAYERS = 5;
 export const CHROME_PERIMETER_GLOW_SPREAD = 2.8;
-/** Компенсация ширины ореола справа — кнопка меню на прежнем отступе. */
+/** Компенсация ширины ореола справа у chrome-контролов. */
 export const CHROME_PERIMETER_GLOW_LAYOUT_INSET =
   CHROME_PERIMETER_GLOW_LAYERS * CHROME_PERIMETER_GLOW_SPREAD;
 export const ANIMATED_BORDER_WIDTH = StyleSheet.hairlineWidth;
@@ -165,7 +176,6 @@ export const FRIEND_ROW_HEIGHT = FRIEND_ROW_LAYOUT_HEIGHT;
 export const SHEET_CONTENT_PAD_H = 12;
 /** Совпадает с sheetTopBar paddingHorizontal + marginLeft у ChatStyleBackButton (5). */
 export const FRIENDS_LIST_PAD_H = SHEET_CONTENT_PAD_H + 5;
-export const FRIEND_SWIPE_DELETE_WIDTH = FRIEND_ROW_ACTION_GAP + FRIEND_ACTION_BUTTON.width;
 
 export const DRAFT_KEY = 'profile_draft_v1';
 export const MISSED_CALLS_KEY = 'missed_calls_by_user_v1';
@@ -186,3 +196,14 @@ export const CHAT_OPEN_DEBOUNCE_MS = 220;
 export const SEARCH_CTA_MAX_WIDTH = 360;
 export const SEARCH_CTA_TABLET_MAX_WIDTH = 520;
 export const SEARCH_CTA_TABLET_MIN_WIDTH = 600;
+
+/** Телефон в landscape не становится планшетом только из-за большой длинной стороны. */
+export function isWelcomeTabletLayout(width: number, height: number): boolean {
+  if (!(width > 0) || !(height > 0)) return false;
+  const shortSide = Math.min(width, height);
+  const longSide = Math.max(width, height);
+  return (
+    shortSide >= SEARCH_CTA_TABLET_MIN_WIDTH ||
+    (width >= SEARCH_CTA_TABLET_MIN_WIDTH && longSide / shortSide < 1.6)
+  );
+}

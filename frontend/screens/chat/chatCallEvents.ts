@@ -9,7 +9,7 @@ import { globalMessageStorage } from '../../sockets/modules/messages';
 import { shared } from '../../sockets/modules/shared';
 import { emitChatCallStatusMessage } from '../../utils/globalEvents';
 
-export type ChatCallBubbleDirection = 'outgoing' | 'incoming' | 'missed' | 'cancelled';
+export type ChatCallBubbleDirection = 'outgoing' | 'incoming' | 'missed' | 'cancelled' | 'no_answer';
 
 const ELIGIBLE_TTL_MS = 120_000;
 const APPEND_DEDUPE_MS = 4_000;
@@ -92,7 +92,7 @@ export function peekChatCallBubbleEligible(peerIdRaw: string): EligibleEntry | n
 }
 
 function directionIsMine(direction: ChatCallBubbleDirection): boolean {
-  return direction === 'outgoing' || direction === 'cancelled';
+  return direction === 'outgoing' || direction === 'cancelled' || direction === 'no_answer';
 }
 
 function buildMessageId(
@@ -116,7 +116,7 @@ export async function appendChatCallStatusIfEligible(
 ): Promise<any | null> {
   const peerId = String(peerIdRaw || '').trim();
   if (!peerId) return null;
-  if (!['outgoing', 'incoming', 'missed', 'cancelled'].includes(direction)) return null;
+  if (!['outgoing', 'incoming', 'missed', 'cancelled', 'no_answer'].includes(direction)) return null;
 
   const eligible = consumeChatCallBubbleEligible(peerId);
   if (!eligible) return null;

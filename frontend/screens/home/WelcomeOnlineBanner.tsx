@@ -22,12 +22,16 @@ type WelcomeOnlineBannerProps = {
   /** До 4 онлайн-друзей; realtime с родителя. */
   peers: WelcomeBannerPeer[];
   compact?: boolean;
+  /** Низкий экран: минимальная высота pill, аватары и текст мельче, счётчик в одну строку. */
+  dense?: boolean;
   /** Переопределить верхний отступ pill (адаптив Search). */
   marginTop?: number;
 };
 
 const STACK_SIZE = 32;
+const STACK_SIZE_DENSE = 24;
 const STACK_OVERLAP = 12;
+const STACK_OVERLAP_DENSE = 9;
 const STACK_VISIBLE = 4;
 
 function WelcomeOnlineBannerInner({
@@ -36,9 +40,14 @@ function WelcomeOnlineBannerInner({
   onlineCount,
   peers,
   compact = false,
+  dense = false,
   marginTop,
 }: WelcomeOnlineBannerProps) {
   const countLine = formatWelcomeUsersOnlineLine(onlineCount, lang);
+  const stackSize = dense ? STACK_SIZE_DENSE : STACK_SIZE;
+  const stackOverlap = dense ? STACK_OVERLAP_DENSE : STACK_OVERLAP;
+  const stackItemStyle = { borderRadius: stackSize / 2, borderWidth: dense ? 1.5 : 2 };
+  const stackAvatarStyle = { width: stackSize, height: stackSize, borderRadius: stackSize / 2 };
 
   const stackPeers = useMemo(() => {
     const live = peers.slice(0, STACK_VISIBLE);
@@ -54,17 +63,24 @@ function WelcomeOnlineBannerInner({
       style={[
         styles.pill,
         compact && styles.pillCompact,
+        dense && styles.pillDense,
         marginTop != null ? { marginTop } : null,
       ]}
     >
-      <View style={styles.textCol}>
-        <View style={styles.onlineRow}>
-          <View style={styles.onlineDot} />
-          <AdaptiveText style={[styles.onlineWord, compact && styles.onlineWordCompact]} numberOfLines={1}>
+      <View style={[styles.textCol, dense && styles.textColDense]}>
+        <View style={[styles.onlineRow, dense && styles.onlineRowDense]}>
+          <View style={[styles.onlineDot, dense && styles.onlineDotDense]} />
+          <AdaptiveText
+            style={[styles.onlineWord, compact && styles.onlineWordCompact, dense && styles.onlineWordDense]}
+            numberOfLines={1}
+          >
             {onlineLabel}
           </AdaptiveText>
         </View>
-        <AdaptiveText style={[styles.countText, compact && styles.countTextCompact]} numberOfLines={2}>
+        <AdaptiveText
+          style={[styles.countText, compact && styles.countTextCompact, dense && styles.countTextDense]}
+          numberOfLines={dense ? 1 : 2}
+        >
           {countLine}
         </AdaptiveText>
       </View>
@@ -81,22 +97,23 @@ function WelcomeOnlineBannerInner({
               key={isPlaceholder ? `placeholder-${index}` : peer.id}
               style={[
                 styles.stackItem,
+                stackItemStyle,
                 {
-                  marginLeft: index === 0 ? 0 : -STACK_OVERLAP,
+                  marginLeft: index === 0 ? 0 : -stackOverlap,
                   zIndex: STACK_VISIBLE - index,
                 },
               ]}
             >
               {isPlaceholder ? (
-                <View style={styles.stackPlaceholder} />
+                <View style={[styles.stackPlaceholder, stackAvatarStyle]} />
               ) : (
                 <AvatarImage
                   userId={peer.id}
                   avatarVer={hasAvatar ? peer.avatarVer || 0 : 0}
                   uri={hasAvatar ? uri : undefined}
-                  size={STACK_SIZE}
+                  size={stackSize}
                   fallbackText="—"
-                  containerStyle={styles.stackAvatar}
+                  containerStyle={[styles.stackAvatar, stackAvatarStyle]}
                   fallbackTextStyle={styles.stackFallback}
                 />
               )}
@@ -124,26 +141,44 @@ const styles = StyleSheet.create({
     gap: 14,
   },
   pillCompact: {
-    paddingVertical: 14,
+    paddingVertical: 10,
     paddingHorizontal: 16,
     borderRadius: 22,
     marginHorizontal: 16,
+  },
+  pillDense: {
+    paddingVertical: 7,
+    paddingHorizontal: 14,
+    borderRadius: 18,
+    marginHorizontal: 14,
+    gap: 10,
   },
   textCol: {
     flex: 1,
     minWidth: 0,
     gap: 3,
   },
+  textColDense: {
+    gap: 1,
+  },
   onlineRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
+  },
+  onlineRowDense: {
+    gap: 6,
   },
   onlineDot: {
     width: 8,
     height: 8,
     borderRadius: 4,
     backgroundColor: '#3DDC84',
+  },
+  onlineDotDense: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
   },
   onlineWord: {
     color: WELCOME_HEADER_TITLE,
@@ -154,6 +189,9 @@ const styles = StyleSheet.create({
   onlineWordCompact: {
     fontSize: 14,
   },
+  onlineWordDense: {
+    fontSize: 13,
+  },
   countText: {
     color: WELCOME_MUTED_TEXT,
     fontSize: 13,
@@ -163,27 +201,23 @@ const styles = StyleSheet.create({
   countTextCompact: {
     fontSize: 11,
   },
+  countTextDense: {
+    fontSize: 10,
+    lineHeight: 13,
+  },
   stack: {
     flexDirection: 'row',
     alignItems: 'center',
     flexShrink: 0,
   },
   stackItem: {
-    borderRadius: STACK_SIZE / 2,
-    borderWidth: 2,
     borderColor: WELCOME_STAGE_BG,
     overflow: 'hidden',
   },
   stackAvatar: {
-    width: STACK_SIZE,
-    height: STACK_SIZE,
-    borderRadius: STACK_SIZE / 2,
     overflow: 'hidden',
   },
   stackPlaceholder: {
-    width: STACK_SIZE,
-    height: STACK_SIZE,
-    borderRadius: STACK_SIZE / 2,
     backgroundColor: 'rgba(59,130,246,0.22)',
   },
   stackFallback: {

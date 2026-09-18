@@ -9,9 +9,8 @@ import {
   Animated,
   Platform,
   Image,
-  useWindowDimensions,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaFrame } from 'react-native-safe-area-context';
 import { GestureHandlerRootView, PinchGestureHandler, PanGestureHandler, TapGestureHandler, State, FlatList } from 'react-native-gesture-handler';
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
@@ -191,7 +190,7 @@ export default function MediaViewer({
   uris,
   initialIndex = 0,
 }: MediaViewerProps) {
-  const { width: screenWidth, height: screenHeight } = useWindowDimensions();
+  const { width: screenWidth, height: screenHeight } = useSafeAreaFrame();
   const lang = useLang((s) => s.lang);
   const [busy, setBusy] = React.useState(false);
   const pagerRef = React.useRef<FlatList<string>>(null);

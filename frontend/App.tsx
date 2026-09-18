@@ -4,7 +4,7 @@ import React from "react";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { Provider as PaperProvider } from "react-native-paper";
 import { Platform } from "react-native";
-import { SafeAreaProvider, useSafeAreaInsets } from "react-native-safe-area-context";
+import { SafeAreaProvider, initialWindowMetrics, useSafeAreaInsets } from "react-native-safe-area-context";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import * as NavigationBar from "expo-navigation-bar";
 import { NavigationContainer, createNavigationContainerRef, CommonActions, DefaultTheme } from "@react-navigation/native";
@@ -41,7 +41,7 @@ import SystemPiPCaptureHost from "./src/pip/SystemPiPCaptureHost";
 import { ensureCometChatReady } from "./chat/cometchat";
 import type { RootStackParamList } from "./navigation/types";
 import { addNotificationListeners, ensureInitialNotificationPermissions, openIncomingCallScreen, openAnswerCallScreen, handleDeclineCallFromDeepLink, registerAndSendPushToken, clearCallRelatedNotificationsAndSyncBadge, syncAppBadgeFromMissedCount, clearMissedBadgeCleared, recordMissedCallForUser, applyPendingMissedCallsFromNative, getMissedCountByUserFromNative } from './utils/pushNotifications';
-import { flushCallLogUi, forceCallLogUiNow, recordCallLog, recordCancelledCall } from './screens/home/callLog';
+import { flushCallLogUi, forceCallLogUiNow, recordCallLog, recordCancelledCall, recordNoAnswerCall } from './screens/home/callLog';
 import { markChatCallBubbleEligible } from './screens/chat/chatCallEvents';
 import { getInstallId, getInstallSecret } from './utils/installId';
 import { notifyIncomingShare, pullPendingShareFromNative, subscribeIncomingShare, type IncomingShareItem } from './utils/incomingShare';
@@ -3965,6 +3965,31 @@ function AppContent() {
           }
         } catch {}
       }
+      // Старые Android-сборки на 27-й секунде отправляли обычный HTTP cancel.
+      // Классифицируем такой server echo по возрасту активного исходящего как timeout,
+      // чтобы JS-обновление сразу давало инициатору «Нет ответа» даже до переустановки APK.
+      const outgoingStartedAt = Number((global as any).__outgoingCallStartedAtRef?.current || 0);
+      const outgoingCallId = String((global as any).__outgoingCallIdRef?.current || '').trim();
+      const outgoingPeerId = String((global as any).__outgoingCallPeerUserIdRef?.current || '').trim();
+      const outgoingAgeMs = outgoingStartedAt > 0 ? Date.now() - outgoingStartedAt : 0;
+      const isCallerTimeoutRace =
+        !isCallee &&
+        !!outgoingPeerId &&
+        outgoingStartedAt > 0 &&
+        outgoingAgeMs >= OUTGOING_CALL_TIMEOUT_MS - 1500 &&
+        (!callIdStr || !outgoingCallId || callIdStr === outgoingCallId);
+      if (isCallerTimeoutRace) {
+        if (outgoingPeerId) {
+          try {
+            recordNoAnswerCall(outgoingPeerId);
+            forceCallLogUiNow('caller_cancel_timeout_race');
+          } catch {}
+        }
+        if (callIdStr) timedOutCallsRef.current.set(callIdStr, Date.now());
+        terminateCall({ reason: 'outgoing_ring_closed', callId: callIdStr || null });
+        try { emitCloseOutgoingCall({ reason: 'timeout', callId: callIdStr || null }); } catch {}
+        return;
+      }
       const liveIncomingId = String(incomingCallIdRef.current || '').trim();
       // Поздний cancel старого callId во время нового redial — не гасить новый Incoming/UI.
       if (callIdStr && liveIncomingId && callIdStr !== liveIncomingId) {
@@ -4646,12 +4671,32 @@ function AppContent() {
       logger.debug('Call timeout received', { callId: d?.callId });
       const callId = String((d as any)?.callId || '');
       const wasCanceled = !!(callId && canceledCallsRef.current.has(callId));
+      const myUserId = String(getCurrentUserId?.() ?? '').trim();
+      const callerId = String((d as any)?.from || '').trim();
+      const outgoingCallId = String((global as any).__outgoingCallIdRef?.current || '').trim();
+      const outgoingPeerId = String((global as any).__outgoingCallPeerUserIdRef?.current || '').trim();
+      const isCaller =
+        !wasCanceled &&
+        ((callerId && myUserId && callerId === myUserId) ||
+          (!!callId && !!outgoingCallId && callId === outgoingCallId));
+
+      // Инициатору timeout надо зафиксировать до закрытия native UI: общий incoming teardown
+      // эмитит remote_closed и раньше успевал превратить строку в «Отменённый звонок».
+      if (isCaller && outgoingPeerId) {
+        try {
+          recordNoAnswerCall(outgoingPeerId);
+          forceCallLogUiNow('caller_timeout_no_answer');
+        } catch {}
+      }
       disposeDirectCallAudioPrewarm('app:call-timeout');
       incomingCallIdRef.current = null;
       terminateCall({
-        reason: 'incoming_timeout',
+        reason: isCaller ? 'outgoing_ring_closed' : 'incoming_timeout',
         callId: callId || null,
       });
+      if (isCaller) {
+        try { emitCloseOutgoingCall({ reason: 'timeout', callId: callId || null }); } catch {}
+      }
       // Сбрасываем refs активного звонка, чтобы кнопки видеозвонка у инициатора снова стали активными
       try {
         (global as any).__videoCallPartnerUserIdRef = { current: null };
@@ -4661,7 +4706,7 @@ function AppContent() {
       // Мгновенно закрываем JS-модалку входящего (surfaces уже через terminateCall)
       setIncoming(null); stopAnim();
       // Переход на Home с бейджем «Вызов отменен» (не дублируем, если уже обработали call:cancel)
-      if (!wasCanceled && navRef.isReady()) {
+      if (!wasCanceled && !isCaller && navRef.isReady()) {
         applyCallCancelledHomeNotice(navRef);
       }
       try {
@@ -4671,8 +4716,6 @@ function AppContent() {
       } catch {}
       // Инкремент пропущенного только у получателя (callee), не у инициатора
       try {
-        const myUserId = getCurrentUserId?.() ?? '';
-        const callerId = String((d as any)?.from || '');
         if (!wasCanceled && callerId && myUserId && callerId !== myUserId && callId) {
           await recordMissedCallForUser(callerId, {
             callId,
@@ -5195,11 +5238,17 @@ export default function App() {
 
   // Дефолтные insets, чтобы SafeAreaProvider никогда не рендерил null (иначе при уходе в PiP/фон
   // insets могут стать null и React при реконсиляции даёт "Cannot read property 'forEach' of null").
+  // Остаются как страховка; основные значения берём из initialWindowMetrics — они приходят
+  // синхронно из нативных констант. Без них первый кадр рендерился с insets.bottom = 0,
+  // таб-бар был ниже на высоту жестовой зоны, и вся раскладка Home потом съезжала.
   const defaultSafeAreaInsets = { top: 0, left: 0, right: 0, bottom: 0 };
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-      <SafeAreaProvider initialSafeAreaInsets={defaultSafeAreaInsets}>
+      <SafeAreaProvider
+        initialMetrics={initialWindowMetrics ?? undefined}
+        initialSafeAreaInsets={defaultSafeAreaInsets}
+      >
         {/* IME WindowInsets for chat; isEdgeToEdge() auto-enables translucent system bars. */}
         <KeyboardProvider>
           <ThemeProvider>

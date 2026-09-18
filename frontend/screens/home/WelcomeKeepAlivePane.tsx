@@ -22,7 +22,7 @@ export function welcomeBlockPaneStyle(visible: boolean): ViewStyle {
 
 type Props = {
   visible: boolean;
-  /** list = opacity keep-alive; block = display:none (search/profile). */
+  /** list = opacity keep-alive (списки и профиль); block = display:none (search). */
   mode?: 'list' | 'block';
   children?: React.ReactNode;
   style?: StyleProp<ViewStyle>;

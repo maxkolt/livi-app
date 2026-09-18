@@ -34,13 +34,13 @@ export function FriendRowChatButton({
   callingVisibleRef,
   activeOutgoingAttemptRef,
   markReadMenu,
-  menuOpen,
   donateVisible,
   shareVisible,
   inviteRequestVisible,
   roomFullVisible,
   openMarkReadMenu,
   actionButtonVariant = 'menu',
+  largeActionButton = false,
 }: {
   friend: Friend;
   styles: HomeStyles;
@@ -52,13 +52,13 @@ export function FriendRowChatButton({
   callingVisibleRef: React.MutableRefObject<boolean>;
   activeOutgoingAttemptRef: React.MutableRefObject<number>;
   markReadMenu: MarkReadMenu;
-  menuOpen: boolean;
   donateVisible: boolean;
   shareVisible: boolean;
   inviteRequestVisible: boolean;
   roomFullVisible: boolean;
   openMarkReadMenu: (friendId: string, type: 'video' | 'chat') => void;
   actionButtonVariant?: 'menu' | 'welcome';
+  largeActionButton?: boolean;
 }) {
   const friendIdStr = String(friend.id);
   const count = unreadByUser[friendIdStr] || 0;
@@ -75,7 +75,6 @@ export function FriendRowChatButton({
       callingVisibleRef: callingVisibleRef.current,
       activeOutgoingAttempt: activeOutgoingAttemptRef.current,
       hasMarkReadMenu: !!markReadMenu,
-      menuOpen,
       donateVisible,
       shareVisible,
       inviteRequestVisible,
@@ -129,7 +128,6 @@ export function FriendRowChatButton({
     friendIdStr,
     calling.visible,
     markReadMenu,
-    menuOpen,
     donateVisible,
     shareVisible,
     inviteRequestVisible,
@@ -146,6 +144,7 @@ export function FriendRowChatButton({
         <FriendRowIconActionButton
           icon="chat-processing-outline"
           variant={actionButtonVariant}
+          large={largeActionButton}
           hitSlop={FRIEND_ROW_HIT_CHAT}
           delayLongPress={280}
           rescueMissedPress
@@ -186,6 +185,7 @@ export function FriendRowInviteButton({
   resetOutgoingAfterExternalClose,
   openMarkReadMenu,
   actionButtonVariant = 'menu',
+  largeActionButton = false,
 }: {
   friend: Friend;
   styles: HomeStyles;
@@ -203,6 +203,7 @@ export function FriendRowInviteButton({
   resetOutgoingAfterExternalClose: (source: string, callId: string | null) => void;
   openMarkReadMenu: (friendId: string, type: 'video' | 'chat') => void;
   actionButtonVariant?: 'menu' | 'welcome';
+  largeActionButton?: boolean;
 }) {
   const friendIdStr = String(friend.id);
   const missedCount = missedByUser[friendIdStr] || 0;
@@ -327,6 +328,7 @@ export function FriendRowInviteButton({
         <FriendRowIconActionButton
           icon="phone-in-talk-outline"
           variant={actionButtonVariant}
+          large={largeActionButton}
           disabled={hardVideoDisabled && missedCount === 0}
           appearanceDisabled={hardVideoDisabled}
           accessibilityState={{ disabled: !!videoDisabled }}

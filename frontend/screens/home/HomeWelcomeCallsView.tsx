@@ -11,6 +11,7 @@ import {
   TouchableWithoutFeedback,
   View,
 } from 'react-native';
+import { useHomeLayout } from './HomeLayoutContext';
 import AdaptiveText from '../../components/AdaptiveText';
 import { FlatList } from 'react-native-gesture-handler';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
@@ -20,8 +21,14 @@ import {
   LIVI,
   WELCOME_CHROME_BTN_BG,
   WELCOME_FRIEND_AVATAR_SIZE,
+  WELCOME_FRIEND_AVATAR_SIZE_LANDSCAPE,
   WELCOME_FRIEND_CARD_GAP,
+  WELCOME_FRIEND_CARD_GAP_LANDSCAPE,
   WELCOME_FRIEND_CARD_ROW_HEIGHT,
+  WELCOME_FRIEND_CARD_ROW_HEIGHT_LANDSCAPE,
+  WELCOME_FRIEND_AVATAR_SIZE_TABLET,
+  WELCOME_FRIEND_CARD_GAP_TABLET,
+  WELCOME_FRIEND_CARD_ROW_HEIGHT_TABLET,
   WELCOME_FRIENDS_LIST_INSET,
   WELCOME_FRIENDS_SEGMENT_SHELL_RADIUS,
   WELCOME_GLASS_BORDER,
@@ -30,6 +37,7 @@ import {
   WELCOME_MUTED_TEXT,
   WELCOME_UNREAD_BADGE,
   WELCOME_BRAND_VI_FILL_GRADIENT,
+  isWelcomeTabletLayout,
 } from './constants';
 import { WELCOME_SEGMENT_ACTIVE } from './FriendsListCore';
 import { friendMatchesNameSearch, getFriendDisplay, displayAvatarLetter } from './friendHelpers';
@@ -43,7 +51,6 @@ import { WelcomeSelectModeHeader } from './WelcomeSelectModeHeader';
 import { welcomeSelectHaptic } from './welcomeSelectHaptic';
 import type { CallLogDirection, CallLogEntry } from './callLog';
 import type { Friend } from './types';
-import type { NoticeKind } from './hooks';
 
 type CallsFilter = 'all' | 'missed';
 
@@ -72,7 +79,6 @@ export type HomeWelcomeCallsViewProps = {
     confirmText?: string;
     cancelText?: string;
   }) => Promise<boolean>;
-  showNotice: (text: string, kind?: NoticeKind, ms?: number) => void;
   /** Активный звонок / PiP — не стартовать новый вызов с строки. */
   callActionsLocked?: boolean;
 };
@@ -114,9 +120,14 @@ function HomeWelcomeCallsViewInner({
   refreshing,
   onRefresh,
   askConfirm,
-  showNotice,
   callActionsLocked = false,
 }: HomeWelcomeCallsViewProps) {
+  // Размер берём из safe-area frame: он приходит от нативного провайдера и
+  // обновляется при повороте, в отличие от Dimensions.
+  const { width: windowWidth, height: windowHeight } = useHomeLayout();
+  const tabletLayout = isWelcomeTabletLayout(windowWidth, windowHeight);
+  const compactLandscape =
+    !tabletLayout && windowWidth > 0 && windowHeight > 0 && windowWidth / windowHeight > 1.05;
   const [filter, setFilter] = useState<CallsFilter>('all');
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -381,7 +392,6 @@ function HomeWelcomeCallsViewInner({
   const startCall = useCallback(
     (friend: Friend) => {
       if (callActionsLocked) {
-        showNotice(t('finishCurrentCallFirst', lang), 'info', 2500);
         return;
       }
       prepareFriendRowActionTap();
@@ -398,7 +408,6 @@ function HomeWelcomeCallsViewInner({
       lang,
       pickMode,
       prepareFriendRowActionTap,
-      showNotice,
     ],
   );
 
@@ -421,14 +430,13 @@ function HomeWelcomeCallsViewInner({
         selectedRows.filter((row) => row.direction === 'missed').map((row) => row.peerId),
       );
       await Promise.all([...missedPeers].map((peerId) => clearMissedCallsForFriend(peerId)));
-      showNotice(t('callsDeleted', lang), 'info');
       exitSelect();
     } catch {
-      showNotice(t('wipeFailed', lang), 'error');
+      // Ошибку не показываем: тосты на Home убраны.
     } finally {
       setDeleting(false);
     }
-  }, [askConfirm, clearMissedCallsForFriend, deleting, exitSelect, lang, rows, selectedIds, showNotice]);
+  }, [askConfirm, clearMissedCallsForFriend, deleting, exitSelect, lang, rows, selectedIds]);
 
   // Нужен signature направлений: outgoing→cancelled / новый missed при тех же id — иначе FlatList не перерисует статус.
   const listExtraData = useMemo(
@@ -458,6 +466,7 @@ function HomeWelcomeCallsViewInner({
       const timeLabel = item.at ? formatWelcomeChatTime(item.at) : '';
       const missed = item.direction === 'missed';
       const cancelled = item.direction === 'cancelled';
+      const noAnswer = item.direction === 'no_answer';
       const statusLabel =
         item.direction === 'outgoing'
           ? L('callsOutgoing')
@@ -467,6 +476,8 @@ function HomeWelcomeCallsViewInner({
               ? L('callsMissed')
               : item.direction === 'cancelled'
                 ? L('callsCancelled')
+                : item.direction === 'no_answer'
+                  ? L('noAnswer')
                 : '';
       const statusIcon =
         item.direction === 'outgoing'
@@ -477,9 +488,11 @@ function HomeWelcomeCallsViewInner({
               ? 'phone-missed'
               : item.direction === 'cancelled'
                 ? 'phone-hangup'
+                : item.direction === 'no_answer'
+                  ? 'phone-missed'
                 : 'phone-outline';
       const statusTone = missed;
-      const statusColor = missed || cancelled ? LIVI.red : LIVI.green;
+      const statusColor = missed || cancelled || noAnswer ? LIVI.red : LIVI.green;
 
       const isSelected = selectedIds.has(item.id);
 
@@ -487,6 +500,8 @@ function HomeWelcomeCallsViewInner({
         <Pressable
           style={({ pressed }) => [
             styles.cardWrap,
+            tabletLayout && styles.cardWrapTablet,
+            compactLandscape && styles.cardWrapLandscape,
             pressed && !callActionsLocked && styles.cardPressed,
             callActionsLocked && styles.cardLocked,
           ]}
@@ -519,8 +534,21 @@ function HomeWelcomeCallsViewInner({
           accessibilityLabel={displayName}
           accessibilityState={{ selected: isSelected, disabled: callActionsLocked && !selectMode }}
         >
-          <View style={[styles.glassCard, isSelected && styles.glassCardSelected]}>
-            <View style={styles.cardRow}>
+          <View
+            style={[
+              styles.glassCard,
+              tabletLayout && styles.glassCardTablet,
+              compactLandscape && styles.glassCardLandscape,
+              isSelected && styles.glassCardSelected,
+            ]}
+          >
+            <View
+              style={[
+                styles.cardRow,
+                tabletLayout && styles.cardRowTablet,
+                compactLandscape && styles.cardRowLandscape,
+              ]}
+            >
               {selectMode ? (
                 <View style={styles.selectMark}>
                   {isSelected ? (
@@ -530,14 +558,32 @@ function HomeWelcomeCallsViewInner({
                   )}
                 </View>
               ) : null}
-              <View style={styles.avatarWrap}>
-                <View style={styles.avatarBox}>
+              <View
+                style={[
+                  styles.avatarWrap,
+                  tabletLayout && styles.avatarWrapTablet,
+                  compactLandscape && styles.avatarWrapLandscape,
+                ]}
+              >
+                <View
+                  style={[
+                    styles.avatarBox,
+                    tabletLayout && styles.avatarBoxTablet,
+                    compactLandscape && styles.avatarBoxLandscape,
+                  ]}
+                >
                   {friend ? (
                     <AvatarImage
                       userId={friend.id}
                       avatarVer={friend.avatarVer || 0}
                       uri={friend.avatarThumbB64 || undefined}
-                      size={WELCOME_FRIEND_AVATAR_SIZE}
+                      size={
+                        tabletLayout
+                          ? WELCOME_FRIEND_AVATAR_SIZE_TABLET
+                          : compactLandscape
+                          ? WELCOME_FRIEND_AVATAR_SIZE_LANDSCAPE
+                          : WELCOME_FRIEND_AVATAR_SIZE
+                      }
                       fallbackText={avatarFallback}
                       containerStyle={{ overflow: 'hidden' }}
                       fallbackTextStyle={
@@ -547,33 +593,76 @@ function HomeWelcomeCallsViewInner({
                       }
                     />
                   ) : (
-                    <AdaptiveText style={styles.avatarFallback}>{avatarFallback}</AdaptiveText>
+                    <AdaptiveText
+                      style={[styles.avatarFallback, compactLandscape && styles.avatarFallbackLandscape]}
+                    >
+                      {avatarFallback}
+                    </AdaptiveText>
                   )}
                 </View>
                 {!selectMode && friend?.online ? <View style={styles.onlineDot} /> : null}
               </View>
 
-              <View style={styles.bodyCol}>
+              <View
+                style={[
+                  styles.bodyCol,
+                  tabletLayout && styles.bodyColTablet,
+                  compactLandscape && styles.bodyColLandscape,
+                ]}
+              >
                 <View style={styles.nameRow}>
-                  <AdaptiveText style={[styles.name, statusTone && styles.nameMissed]} numberOfLines={1}>
+                  <AdaptiveText
+                    style={[
+                      styles.name,
+                      tabletLayout && styles.nameTablet,
+                      compactLandscape && styles.nameLandscape,
+                      statusTone && styles.nameMissed,
+                    ]}
+                    numberOfLines={1}
+                  >
                     {displayName}
                   </AdaptiveText>
-                  {timeLabel ? <AdaptiveText style={styles.time}>{timeLabel}</AdaptiveText> : null}
+                  {timeLabel ? (
+                    <AdaptiveText
+                      style={[
+                        styles.time,
+                        tabletLayout && styles.timeTablet,
+                        compactLandscape && styles.timeLandscape,
+                      ]}
+                    >
+                      {timeLabel}
+                    </AdaptiveText>
+                  ) : null}
                 </View>
                 {statusLabel ? (
                   <View style={styles.statusRow}>
                     <MaterialCommunityIcons
                       name={statusIcon as keyof typeof MaterialCommunityIcons.glyphMap}
-                      size={14}
+                      size={compactLandscape ? 13 : tabletLayout ? 15 : 14}
                       color={statusColor}
                     />
-                    <AdaptiveText style={[styles.status, statusTone && styles.statusMissed]} numberOfLines={1}>
+                    <AdaptiveText
+                      style={[
+                        styles.status,
+                        tabletLayout && styles.statusTablet,
+                        compactLandscape && styles.statusLandscape,
+                        statusTone && styles.statusMissed,
+                      ]}
+                      numberOfLines={1}
+                    >
                       {statusLabel}
                     </AdaptiveText>
                   </View>
                 ) : (
                   <View style={styles.statusRow}>
-                    <AdaptiveText style={styles.status} numberOfLines={1}>
+                    <AdaptiveText
+                      style={[
+                        styles.status,
+                        tabletLayout && styles.statusTablet,
+                        compactLandscape && styles.statusLandscape,
+                      ]}
+                      numberOfLines={1}
+                    >
                       {friend?.online ? L('online') : L('offline')}
                     </AdaptiveText>
                   </View>
@@ -587,6 +676,7 @@ function HomeWelcomeCallsViewInner({
     [
       L,
       callActionsLocked,
+      compactLandscape,
       enterSelect,
       friendsById,
       lang,
@@ -595,13 +685,20 @@ function HomeWelcomeCallsViewInner({
       selectedIds,
       startCall,
       toggleSelect,
+      tabletLayout,
     ],
   );
 
   return (
     <TouchableWithoutFeedback onPress={searchOpen ? dismissSearchFromEmptyTap : undefined} accessible={false}>
       <View style={styles.root}>
-        <View style={styles.header}>
+        <View
+          style={[
+            styles.header,
+            tabletLayout && styles.headerTablet,
+            compactLandscape && styles.headerLandscape,
+          ]}
+        >
           {selectMode ? (
             <WelcomeSelectModeHeader
               selectedCount={selectedIds.size}
@@ -625,12 +722,22 @@ function HomeWelcomeCallsViewInner({
                 onPress={searchOpen ? dismissSearchFromEmptyTap : undefined}
                 accessibilityRole="header"
               >
-                <AdaptiveText style={styles.title}>{L('tabCalls')}</AdaptiveText>
+                <AdaptiveText
+                  style={[
+                    styles.title,
+                    tabletLayout && styles.titleTablet,
+                    compactLandscape && styles.titleLandscape,
+                  ]}
+                >
+                  {L('tabCalls')}
+                </AdaptiveText>
               </Pressable>
               <View style={styles.headerActions}>
                 <Pressable
-                  style={({ pressed }) => [
-                    styles.iconBtn,
+                style={({ pressed }) => [
+                  styles.iconBtn,
+                  tabletLayout && styles.iconBtnTablet,
+                  compactLandscape && styles.iconBtnLandscape,
                     searchOpen && styles.iconBtnActive,
                     pressed && styles.iconBtnPressed,
                   ]}
@@ -641,19 +748,26 @@ function HomeWelcomeCallsViewInner({
                 >
                   <Ionicons
                     name={searchOpen ? 'search' : 'search-outline'}
-                    size={22}
+                    size={tabletLayout ? 24 : 22}
                     color={searchOpen ? WELCOME_SEGMENT_ACTIVE : LIVI.white}
                   />
                 </Pressable>
-                <WelcomeCrownButton />
+              <WelcomeCrownButton compact={compactLandscape} large={tabletLayout} />
               </View>
             </>
           )}
         </View>
 
-        <View style={styles.body}>
+        <View style={[styles.body, tabletLayout && styles.bodyTablet, compactLandscape && styles.bodyLandscape]}>
           {searchOpen ? (
-            <View style={styles.searchShell} onStartShouldSetResponder={() => true}>
+            <View
+              style={[
+                styles.searchShell,
+                tabletLayout && styles.searchShellTablet,
+                compactLandscape && styles.searchShellLandscape,
+              ]}
+              onStartShouldSetResponder={() => true}
+            >
               <Ionicons name="search-outline" size={18} color={WELCOME_MUTED_TEXT} style={styles.searchIcon} />
               <TextInput
                 ref={searchInputRef}
@@ -661,7 +775,7 @@ function HomeWelcomeCallsViewInner({
                 onChangeText={setSearchQuery}
                 placeholder={t('friendsSearchPlaceholder', lang)}
                 placeholderTextColor={WELCOME_MUTED_TEXT}
-                style={styles.searchInput}
+                style={[styles.searchInput, tabletLayout && styles.searchInputTablet]}
                 autoCorrect={false}
                 autoCapitalize="none"
                 clearButtonMode={Platform.OS === 'ios' ? 'while-editing' : 'never'}
@@ -677,9 +791,21 @@ function HomeWelcomeCallsViewInner({
           ) : null}
 
           {!pickMode ? (
-            <View style={styles.segmentShell} onStartShouldSetResponder={() => true}>
+            <View
+              style={[
+                styles.segmentShell,
+                tabletLayout && styles.segmentShellTablet,
+                compactLandscape && styles.segmentShellLandscape,
+              ]}
+              onStartShouldSetResponder={() => true}
+            >
               <Pressable
-                style={[styles.segmentBtn, filter === 'all' && styles.segmentBtnActive]}
+                style={[
+                  styles.segmentBtn,
+                  tabletLayout && styles.segmentBtnTablet,
+                  compactLandscape && styles.segmentBtnLandscape,
+                  filter === 'all' && styles.segmentBtnActive,
+                ]}
                 onPress={() => {
                   pauseSearchDismissOnKeyboardHide();
                   setFilter('all');
@@ -688,7 +814,11 @@ function HomeWelcomeCallsViewInner({
                 accessibilityState={{ selected: filter === 'all' }}
               >
                 <AdaptiveText
-                  style={styles.segmentLabel}
+                  style={[
+                    styles.segmentLabel,
+                    tabletLayout && styles.segmentLabelTablet,
+                    compactLandscape && styles.segmentLabelLandscape,
+                  ]}
                   numberOfLines={1}
                   allowFontScaling={false}
                   adjustsFontSizeToFit
@@ -698,7 +828,12 @@ function HomeWelcomeCallsViewInner({
                 </AdaptiveText>
               </Pressable>
               <Pressable
-                style={[styles.segmentBtn, filter === 'missed' && styles.segmentBtnActive]}
+                style={[
+                  styles.segmentBtn,
+                  tabletLayout && styles.segmentBtnTablet,
+                  compactLandscape && styles.segmentBtnLandscape,
+                  filter === 'missed' && styles.segmentBtnActive,
+                ]}
                 onPress={() => {
                   pauseSearchDismissOnKeyboardHide();
                   setFilter('missed');
@@ -708,7 +843,11 @@ function HomeWelcomeCallsViewInner({
               >
                 <View style={styles.segmentLabelRow}>
                   <AdaptiveText
-                    style={styles.segmentLabel}
+                    style={[
+                      styles.segmentLabel,
+                      tabletLayout && styles.segmentLabelTablet,
+                      compactLandscape && styles.segmentLabelLandscape,
+                    ]}
                     numberOfLines={1}
                     allowFontScaling={false}
                     adjustsFontSizeToFit
@@ -724,14 +863,20 @@ function HomeWelcomeCallsViewInner({
           ) : null}
 
           <FlatList
+            key={tabletLayout ? 'calls-tablet' : compactLandscape ? 'calls-landscape' : 'calls-portrait'}
             style={styles.list}
-            contentContainerStyle={styles.listContent}
+            contentContainerStyle={[
+              styles.listContent,
+              tabletLayout && styles.listContentTablet,
+              compactLandscape && styles.listContentLandscape,
+            ]}
             data={rows}
             keyExtractor={(item) => item.id}
             extraData={listExtraData}
             renderItem={renderItem}
             refreshing={pickMode || selectMode ? false : refreshing}
             onRefresh={pickMode || selectMode ? undefined : onRefresh}
+            nestedScrollEnabled
             keyboardShouldPersistTaps={searchOpen ? 'never' : 'always'}
             onScrollBeginDrag={searchOpen ? closeSearch : undefined}
             showsVerticalScrollIndicator={false}
@@ -740,8 +885,17 @@ function HomeWelcomeCallsViewInner({
             maxToRenderPerBatch={10}
             windowSize={7}
             getItemLayout={(_, index) => ({
-              length: WELCOME_FRIEND_CARD_ROW_HEIGHT + WELCOME_FRIEND_CARD_GAP,
-              offset: (WELCOME_FRIEND_CARD_ROW_HEIGHT + WELCOME_FRIEND_CARD_GAP) * index,
+              length: tabletLayout
+                ? WELCOME_FRIEND_CARD_ROW_HEIGHT_TABLET + WELCOME_FRIEND_CARD_GAP_TABLET
+                : compactLandscape
+                  ? WELCOME_FRIEND_CARD_ROW_HEIGHT_LANDSCAPE + WELCOME_FRIEND_CARD_GAP_LANDSCAPE
+                  : WELCOME_FRIEND_CARD_ROW_HEIGHT + WELCOME_FRIEND_CARD_GAP,
+              offset:
+                (tabletLayout
+                  ? WELCOME_FRIEND_CARD_ROW_HEIGHT_TABLET + WELCOME_FRIEND_CARD_GAP_TABLET
+                  : compactLandscape
+                    ? WELCOME_FRIEND_CARD_ROW_HEIGHT_LANDSCAPE + WELCOME_FRIEND_CARD_GAP_LANDSCAPE
+                    : WELCOME_FRIEND_CARD_ROW_HEIGHT + WELCOME_FRIEND_CARD_GAP) * index,
               index,
             })}
             ListEmptyComponent={
@@ -769,10 +923,25 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingBottom: 8,
   },
+  headerLandscape: {
+    paddingTop: 2,
+    paddingBottom: 2,
+  },
+  headerTablet: {
+    paddingTop: 14,
+    paddingHorizontal: 28,
+    paddingBottom: 10,
+  },
   body: {
     flex: 1,
     minHeight: 0,
     marginTop: 10,
+  },
+  bodyLandscape: {
+    marginTop: 2,
+  },
+  bodyTablet: {
+    marginTop: 12,
   },
   titleHit: {
     flex: 1,
@@ -784,6 +953,12 @@ const styles = StyleSheet.create({
     fontSize: 28,
     fontWeight: '500',
     letterSpacing: -0.3,
+  },
+  titleLandscape: {
+    fontSize: 22,
+  },
+  titleTablet: {
+    fontSize: 30,
   },
   selectTitle: {
     flex: 1,
@@ -807,6 +982,16 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: WELCOME_CHROME_BTN_BG,
   },
+  iconBtnLandscape: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+  },
+  iconBtnTablet: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+  },
   iconBtnActive: {
     backgroundColor: 'rgba(42, 88, 104, 0.45)',
   },
@@ -828,6 +1013,18 @@ const styles = StyleSheet.create({
     backgroundColor: WELCOME_GLASS_SURFACE,
     gap: 8,
   },
+  searchShellLandscape: {
+    marginBottom: 6,
+    paddingVertical: 2,
+  },
+  searchShellTablet: {
+    width: '92%',
+    maxWidth: 900,
+    alignSelf: 'center',
+    marginHorizontal: 0,
+    marginBottom: 12,
+    paddingVertical: 10,
+  },
   searchIcon: {
     flexShrink: 0,
   },
@@ -837,6 +1034,9 @@ const styles = StyleSheet.create({
     color: LIVI.white,
     fontSize: 16,
     paddingVertical: Platform.OS === 'android' ? 4 : 0,
+  },
+  searchInputTablet: {
+    fontSize: 17,
   },
   segmentShell: {
     flexDirection: 'row',
@@ -852,6 +1052,20 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     marginBottom: 12,
   },
+  segmentShellLandscape: {
+    minHeight: 44,
+    padding: 4,
+    marginBottom: 6,
+  },
+  segmentShellTablet: {
+    width: '92%',
+    maxWidth: 900,
+    alignSelf: 'center',
+    minHeight: 72,
+    padding: 8,
+    marginHorizontal: 0,
+    marginBottom: 14,
+  },
   segmentBtn: {
     flex: 1,
     minWidth: 0,
@@ -860,6 +1074,12 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  segmentBtnLandscape: {
+    paddingVertical: 6,
+  },
+  segmentBtnTablet: {
+    paddingVertical: 11,
   },
   segmentLabelRow: {
     flexDirection: 'row',
@@ -877,6 +1097,12 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     flexShrink: 1,
   },
+  segmentLabelLandscape: {
+    fontSize: 13,
+  },
+  segmentLabelTablet: {
+    fontSize: 15,
+  },
   list: {
     flex: 1,
     backgroundColor: 'transparent',
@@ -888,9 +1114,29 @@ const styles = StyleSheet.create({
     paddingBottom: 12,
     flexGrow: 1,
   },
+  listContentLandscape: {
+    paddingTop: 2,
+    paddingBottom: 6,
+  },
+  listContentTablet: {
+    width: '100%',
+    maxWidth: 960,
+    alignSelf: 'center',
+    paddingHorizontal: 28,
+    paddingTop: 6,
+    paddingBottom: 16,
+  },
   cardWrap: {
     height: WELCOME_FRIEND_CARD_ROW_HEIGHT,
     marginBottom: WELCOME_FRIEND_CARD_GAP,
+  },
+  cardWrapLandscape: {
+    height: WELCOME_FRIEND_CARD_ROW_HEIGHT_LANDSCAPE,
+    marginBottom: WELCOME_FRIEND_CARD_GAP_LANDSCAPE,
+  },
+  cardWrapTablet: {
+    height: WELCOME_FRIEND_CARD_ROW_HEIGHT_TABLET,
+    marginBottom: WELCOME_FRIEND_CARD_GAP_TABLET,
   },
   cardPressed: {
     opacity: 0.82,
@@ -904,6 +1150,14 @@ const styles = StyleSheet.create({
     backgroundColor: WELCOME_GLASS_SURFACE,
     borderRadius: 16,
     overflow: 'hidden',
+  },
+  glassCardLandscape: {
+    height: WELCOME_FRIEND_CARD_ROW_HEIGHT_LANDSCAPE,
+    borderRadius: 14,
+  },
+  glassCardTablet: {
+    height: WELCOME_FRIEND_CARD_ROW_HEIGHT_TABLET,
+    borderRadius: 18,
   },
   glassCardSelected: {
     backgroundColor: 'rgba(33, 88, 192, 0.18)',
@@ -929,10 +1183,28 @@ const styles = StyleSheet.create({
     paddingLeft: 12,
     paddingRight: 10,
   },
+  cardRowLandscape: {
+    height: WELCOME_FRIEND_CARD_ROW_HEIGHT_LANDSCAPE,
+    paddingLeft: 10,
+    paddingRight: 9,
+  },
+  cardRowTablet: {
+    height: WELCOME_FRIEND_CARD_ROW_HEIGHT_TABLET,
+    paddingLeft: 14,
+    paddingRight: 12,
+  },
   avatarWrap: {
     width: WELCOME_FRIEND_AVATAR_SIZE,
     height: WELCOME_FRIEND_AVATAR_SIZE,
     position: 'relative',
+  },
+  avatarWrapLandscape: {
+    width: WELCOME_FRIEND_AVATAR_SIZE_LANDSCAPE,
+    height: WELCOME_FRIEND_AVATAR_SIZE_LANDSCAPE,
+  },
+  avatarWrapTablet: {
+    width: WELCOME_FRIEND_AVATAR_SIZE_TABLET,
+    height: WELCOME_FRIEND_AVATAR_SIZE_TABLET,
   },
   avatarBox: {
     width: WELCOME_FRIEND_AVATAR_SIZE,
@@ -943,10 +1215,23 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  avatarBoxLandscape: {
+    width: WELCOME_FRIEND_AVATAR_SIZE_LANDSCAPE,
+    height: WELCOME_FRIEND_AVATAR_SIZE_LANDSCAPE,
+    borderRadius: WELCOME_FRIEND_AVATAR_SIZE_LANDSCAPE / 2,
+  },
+  avatarBoxTablet: {
+    width: WELCOME_FRIEND_AVATAR_SIZE_TABLET,
+    height: WELCOME_FRIEND_AVATAR_SIZE_TABLET,
+    borderRadius: WELCOME_FRIEND_AVATAR_SIZE_TABLET / 2,
+  },
   avatarFallback: {
     color: LIVI.white,
     fontSize: 16,
     fontWeight: '700',
+  },
+  avatarFallbackLandscape: {
+    fontSize: 14,
   },
   onlineDot: {
     position: 'absolute',
@@ -966,6 +1251,14 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 3,
   },
+  bodyColLandscape: {
+    marginLeft: 8,
+    gap: 1,
+  },
+  bodyColTablet: {
+    marginLeft: 12,
+    gap: 4,
+  },
   nameRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -979,6 +1272,14 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     lineHeight: 20,
   },
+  nameLandscape: {
+    fontSize: 14,
+    lineHeight: 17,
+  },
+  nameTablet: {
+    fontSize: 17,
+    lineHeight: 22,
+  },
   nameMissed: {
     color: LIVI.white,
   },
@@ -988,6 +1289,12 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     flexShrink: 0,
     marginRight: 6,
+  },
+  timeLandscape: {
+    fontSize: 11,
+  },
+  timeTablet: {
+    fontSize: 13,
   },
   statusRow: {
     flexDirection: 'row',
@@ -1001,6 +1308,14 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '400',
     lineHeight: 18,
+  },
+  statusLandscape: {
+    fontSize: 12,
+    lineHeight: 15,
+  },
+  statusTablet: {
+    fontSize: 14,
+    lineHeight: 19,
   },
   statusMissed: {
     color: LIVI.red,

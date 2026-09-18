@@ -79,6 +79,9 @@ class MainActivity : ReactActivity() {
 
   override fun onConfigurationChanged(newConfig: Configuration) {
     super.onConfigurationChanged(FontScaleContextHelper.copyPatched(newConfig))
+    // Samsung и некоторые другие OEM после смены ориентации заново применяют
+    // системные insets и могут вернуть непрозрачную боковую navigation bar.
+    EdgeToEdgeHelper.apply(this)
   }
 
   // Выход из системного PiP: «развернуть» (стрелки) даёт onResume, «закрыть X» — нет. Ставим таймер (pipExitDecideMs):
@@ -139,6 +142,7 @@ class MainActivity : ReactActivity() {
         val stage = android.widget.ImageView(this).apply {
           setImageResource(R.drawable.welcome_stage_bg)
           scaleType = android.widget.ImageView.ScaleType.CENTER_CROP
+          alpha = 0.88f
           importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }
         frame.addView(
@@ -792,6 +796,9 @@ class MainActivity : ReactActivity() {
     // системной навигационной панели при получении фокуса.
     if (hasFocus) {
       restoreNavigationBarVisibility()
+      // restoreNavigationBarVisibility() показывает системные кнопки, после чего
+      // ещё раз возвращаем прозрачные бары и layout под ними.
+      EdgeToEdgeHelper.apply(this)
     }
   }
 

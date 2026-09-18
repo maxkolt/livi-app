@@ -9,6 +9,7 @@ import {
   View,
   BackHandler,
 } from 'react-native';
+import { useHomeLayout } from './HomeLayoutContext';
 import AdaptiveText from '../../components/AdaptiveText';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { t, type Lang } from '../../utils/i18n';
@@ -22,6 +23,7 @@ import {
   WELCOME_FRIENDS_LIST_INSET,
   WELCOME_FRIENDS_SEGMENT_SHELL_RADIUS,
   WELCOME_HEADER_TITLE,
+  isWelcomeTabletLayout,
 } from './constants';
 import { FriendsListCore, WELCOME_SEGMENT_ACTIVE, type FriendsListCoreProps } from './FriendsListCore';
 import { friendMatchesNameSearch } from './friendHelpers';
@@ -37,6 +39,7 @@ export type HomeWelcomeFriendsViewProps = Omit<FriendsListCoreProps, 'presentati
   allFriends: Friend[];
   unreadByUser: Record<string, number>;
   missedByUser: Record<string, number>;
+  handleRemoveFriend: (peerId: string, opts?: { quiet?: boolean }) => Promise<void | boolean>;
   onInviteFriends: () => void | Promise<void>;
   askConfirm: (opts: {
     title: string;
@@ -44,7 +47,6 @@ export type HomeWelcomeFriendsViewProps = Omit<FriendsListCoreProps, 'presentati
     confirmText?: string;
     cancelText?: string;
   }) => Promise<boolean>;
-  showNotice: (text: string, kind?: 'info' | 'success' | 'error', ms?: number) => void;
 };
 
 function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
@@ -55,12 +57,17 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
     missedByUser,
     onInviteFriends,
     askConfirm,
-    showNotice,
     L,
     handleRemoveFriend,
     friends: _ignoredFriends,
     ...listProps
   } = props as HomeWelcomeFriendsViewProps & { friends?: Friend[] };
+  // Размер берём из safe-area frame: он приходит от нативного провайдера и
+  // обновляется при повороте, в отличие от Dimensions.
+  const { width: windowWidth, height: windowHeight } = useHomeLayout();
+  const tabletLayout = isWelcomeTabletLayout(windowWidth, windowHeight);
+  const compactLandscape =
+    !tabletLayout && windowWidth > 0 && windowHeight > 0 && windowWidth / windowHeight > 1.05;
   const [filter, setFilter] = useState<FriendsFilter>('all');
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -188,23 +195,54 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
     if (filter === 'online' || trimmedQuery || selectMode) return null;
     return (
       <Pressable
-        style={({ pressed }) => [styles.inviteCard, pressed && styles.inviteCardPressed]}
+        style={({ pressed }) => [
+          styles.inviteCard,
+          tabletLayout && styles.inviteCardTablet,
+          compactLandscape && styles.inviteCardLandscape,
+          pressed && styles.inviteCardPressed,
+        ]}
         onPress={() => {
           void onInviteFriends();
         }}
         accessibilityRole="button"
       >
-        <View style={styles.inviteIconWrap}>
-          <MaterialCommunityIcons name="gift-outline" size={32} color={WELCOME_BRAND_VI_FILL_GRADIENT[2]} />
+        <View
+          style={[
+            styles.inviteIconWrap,
+            tabletLayout && styles.inviteIconWrapTablet,
+            compactLandscape && styles.inviteIconWrapLandscape,
+          ]}
+        >
+          <MaterialCommunityIcons
+            name="gift-outline"
+            size={compactLandscape ? 24 : tabletLayout ? 34 : 32}
+            color={WELCOME_BRAND_VI_FILL_GRADIENT[2]}
+          />
         </View>
         <View style={styles.inviteTextCol}>
-          <AdaptiveText style={styles.inviteTitle}>{t('inviteFriendsTitle', lang)}</AdaptiveText>
-          <AdaptiveText style={styles.inviteSubtitle}>{t('inviteFriendsSubtitle', lang)}</AdaptiveText>
+          <AdaptiveText
+            style={[
+              styles.inviteTitle,
+              tabletLayout && styles.inviteTitleTablet,
+              compactLandscape && styles.inviteTitleLandscape,
+            ]}
+          >
+            {t('inviteFriendsTitle', lang)}
+          </AdaptiveText>
+          <AdaptiveText
+            style={[
+              styles.inviteSubtitle,
+              tabletLayout && styles.inviteSubtitleTablet,
+              compactLandscape && styles.inviteSubtitleLandscape,
+            ]}
+          >
+            {t('inviteFriendsSubtitle', lang)}
+          </AdaptiveText>
         </View>
         <Ionicons name="chevron-forward" size={20} color={WELCOME_MUTED_TEXT} />
       </Pressable>
     );
-  }, [filter, lang, onInviteFriends, selectMode, trimmedQuery]);
+  }, [compactLandscape, filter, lang, onInviteFriends, selectMode, tabletLayout, trimmedQuery]);
 
   const deleteSelected = useCallback(async () => {
     if (deleting) return;
@@ -219,27 +257,27 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
     if (!ok) return;
     setDeleting(true);
     try {
-      let okCount = 0;
-      let failed = 0;
       for (const id of ids) {
-        const success = await handleRemoveFriend(id, { quiet: true });
-        if (success === false) failed += 1;
-        else okCount += 1;
+        await handleRemoveFriend(id, { quiet: true });
       }
-      if (okCount > 0) showNotice(t('friendRemoved', lang), 'success', 3000);
-      if (failed > 0) showNotice(t('friendRemoveFailed', lang), 'error', 3000);
       exitSelect();
     } finally {
       setDeleting(false);
     }
-  }, [askConfirm, deleting, exitSelect, handleRemoveFriend, lang, selectedIds, showNotice]);
+  }, [askConfirm, deleting, exitSelect, handleRemoveFriend, lang, selectedIds]);
 
   const listEmptyOverride = trimmedQuery ? L('friendsSearchEmpty') : undefined;
 
   return (
     <TouchableWithoutFeedback onPress={searchOpen ? dismissSearchFromEmptyTap : undefined} accessible={false}>
       <View style={styles.root}>
-      <View style={styles.header}>
+      <View
+        style={[
+          styles.header,
+          tabletLayout && styles.headerTablet,
+          compactLandscape && styles.headerLandscape,
+        ]}
+      >
         {selectMode ? (
           <WelcomeSelectModeHeader
             selectedCount={selectedIds.size}
@@ -263,12 +301,22 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
           onPress={searchOpen ? dismissSearchFromEmptyTap : undefined}
           accessibilityRole="header"
         >
-          <AdaptiveText style={styles.title}>{L('tabFriends')}</AdaptiveText>
+          <AdaptiveText
+            style={[
+              styles.title,
+              tabletLayout && styles.titleTablet,
+              compactLandscape && styles.titleLandscape,
+            ]}
+          >
+            {L('tabFriends')}
+          </AdaptiveText>
         </Pressable>
         <View style={styles.headerActions}>
           <Pressable
             style={({ pressed }) => [
               styles.iconBtn,
+              tabletLayout && styles.iconBtnTablet,
+              compactLandscape && styles.iconBtnLandscape,
               searchOpen && styles.iconBtnActive,
               pressed && styles.iconBtnPressed,
             ]}
@@ -279,19 +327,26 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
           >
             <Ionicons
               name={searchOpen ? 'search' : 'search-outline'}
-              size={22}
+              size={tabletLayout ? 24 : 22}
               color={searchOpen ? WELCOME_SEGMENT_ACTIVE : LIVI.white}
             />
           </Pressable>
-          <WelcomeCrownButton />
+          <WelcomeCrownButton compact={compactLandscape} large={tabletLayout} />
         </View>
           </>
         )}
       </View>
 
-      <View style={styles.body}>
+      <View style={[styles.body, tabletLayout && styles.bodyTablet, compactLandscape && styles.bodyLandscape]}>
       {searchOpen ? (
-        <View style={styles.searchShell} onStartShouldSetResponder={() => true}>
+        <View
+          style={[
+            styles.searchShell,
+            tabletLayout && styles.searchShellTablet,
+            compactLandscape && styles.searchShellLandscape,
+          ]}
+          onStartShouldSetResponder={() => true}
+        >
           <Ionicons name="search-outline" size={18} color={WELCOME_MUTED_TEXT} style={styles.searchIcon} />
           <TextInput
             ref={searchInputRef}
@@ -299,7 +354,7 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
             onChangeText={setSearchQuery}
             placeholder={t('friendsSearchPlaceholder', lang)}
             placeholderTextColor={WELCOME_MUTED_TEXT}
-            style={styles.searchInput}
+            style={[styles.searchInput, tabletLayout && styles.searchInputTablet]}
             autoCorrect={false}
             autoCapitalize="none"
             clearButtonMode={Platform.OS === 'ios' ? 'while-editing' : 'never'}
@@ -314,9 +369,21 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
         </View>
       ) : null}
 
-      <View style={styles.segmentShell} onStartShouldSetResponder={() => true}>
+      <View
+        style={[
+          styles.segmentShell,
+          tabletLayout && styles.segmentShellTablet,
+          compactLandscape && styles.segmentShellLandscape,
+        ]}
+        onStartShouldSetResponder={() => true}
+      >
         <Pressable
-          style={[styles.segmentBtn, filter === 'all' && styles.segmentBtnActive]}
+          style={[
+            styles.segmentBtn,
+            tabletLayout && styles.segmentBtnTablet,
+            compactLandscape && styles.segmentBtnLandscape,
+            filter === 'all' && styles.segmentBtnActive,
+          ]}
           onPress={() => {
             pauseSearchDismissOnKeyboardHide();
             setFilter('all');
@@ -325,7 +392,11 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
           accessibilityState={{ selected: filter === 'all' }}
         >
           <AdaptiveText
-            style={styles.segmentLabel}
+            style={[
+              styles.segmentLabel,
+              tabletLayout && styles.segmentLabelTablet,
+              compactLandscape && styles.segmentLabelLandscape,
+            ]}
             numberOfLines={1}
             allowFontScaling={false}
             adjustsFontSizeToFit
@@ -335,7 +406,12 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
           </AdaptiveText>
         </Pressable>
         <Pressable
-          style={[styles.segmentBtn, filter === 'online' && styles.segmentBtnActive]}
+          style={[
+            styles.segmentBtn,
+            tabletLayout && styles.segmentBtnTablet,
+            compactLandscape && styles.segmentBtnLandscape,
+            filter === 'online' && styles.segmentBtnActive,
+          ]}
           onPress={() => {
             pauseSearchDismissOnKeyboardHide();
             setFilter('online');
@@ -346,7 +422,11 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
           <View style={styles.segmentOnlineInner}>
             {filter !== 'online' ? <View style={styles.segmentOnlineDot} /> : null}
             <AdaptiveText
-              style={styles.segmentLabel}
+              style={[
+                styles.segmentLabel,
+                tabletLayout && styles.segmentLabelTablet,
+                compactLandscape && styles.segmentLabelLandscape,
+              ]}
               numberOfLines={1}
               allowFontScaling={false}
               adjustsFontSizeToFit
@@ -360,7 +440,6 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
 
       <FriendsListCore
         {...listProps}
-        handleRemoveFriend={handleRemoveFriend}
         lang={lang}
         unreadByUser={unreadByUser}
         missedByUser={missedByUser}
@@ -374,6 +453,8 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
         selectedIds={selectedIds}
         onEnterSelect={enterSelect}
         onToggleSelect={toggleSelect}
+        compactLandscape={compactLandscape}
+        tabletLayout={tabletLayout}
         refreshing={selectMode ? false : listProps.refreshing}
         onRefresh={selectMode ? (async () => {}) : listProps.onRefresh}
       />
@@ -396,10 +477,25 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingBottom: 8,
   },
+  headerLandscape: {
+    paddingTop: 2,
+    paddingBottom: 2,
+  },
+  headerTablet: {
+    paddingTop: 14,
+    paddingHorizontal: 28,
+    paddingBottom: 10,
+  },
   body: {
     flex: 1,
     minHeight: 0,
     marginTop: 10,
+  },
+  bodyLandscape: {
+    marginTop: 2,
+  },
+  bodyTablet: {
+    marginTop: 12,
   },
   titleHit: {
     flex: 1,
@@ -411,6 +507,12 @@ const styles = StyleSheet.create({
     fontSize: 28,
     fontWeight: '500',
     letterSpacing: -0.3,
+  },
+  titleLandscape: {
+    fontSize: 22,
+  },
+  titleTablet: {
+    fontSize: 30,
   },
   selectTitle: {
     flex: 1,
@@ -434,6 +536,16 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: WELCOME_CHROME_BTN_BG,
   },
+  iconBtnLandscape: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+  },
+  iconBtnTablet: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+  },
   iconBtnActive: {
     backgroundColor: 'rgba(42, 88, 104, 0.45)',
   },
@@ -455,6 +567,18 @@ const styles = StyleSheet.create({
     backgroundColor: WELCOME_GLASS_SURFACE,
     gap: 8,
   },
+  searchShellLandscape: {
+    marginBottom: 6,
+    paddingVertical: 2,
+  },
+  searchShellTablet: {
+    width: '92%',
+    maxWidth: 900,
+    alignSelf: 'center',
+    marginHorizontal: 0,
+    marginBottom: 12,
+    paddingVertical: 10,
+  },
   searchIcon: {
     flexShrink: 0,
   },
@@ -464,6 +588,9 @@ const styles = StyleSheet.create({
     color: LIVI.white,
     fontSize: 16,
     paddingVertical: Platform.OS === 'android' ? 4 : 0,
+  },
+  searchInputTablet: {
+    fontSize: 17,
   },
   segmentShell: {
     flexDirection: 'row',
@@ -479,6 +606,20 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     marginBottom: 12,
   },
+  segmentShellLandscape: {
+    minHeight: 44,
+    padding: 4,
+    marginBottom: 6,
+  },
+  segmentShellTablet: {
+    width: '92%',
+    maxWidth: 900,
+    alignSelf: 'center',
+    minHeight: 72,
+    padding: 8,
+    marginHorizontal: 0,
+    marginBottom: 14,
+  },
   segmentBtn: {
     flex: 1,
     minWidth: 0,
@@ -488,6 +629,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  segmentBtnLandscape: {
+    paddingVertical: 6,
+  },
+  segmentBtnTablet: {
+    paddingVertical: 11,
+  },
   segmentBtnActive: {
     backgroundColor: 'rgba(42, 88, 104, 0.62)',
   },
@@ -496,6 +643,12 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '500',
     textAlign: 'center',
+  },
+  segmentLabelLandscape: {
+    fontSize: 13,
+  },
+  segmentLabelTablet: {
+    fontSize: 15,
   },
   segmentOnlineInner: {
     flexDirection: 'row',
@@ -522,6 +675,19 @@ const styles = StyleSheet.create({
     borderColor: WELCOME_GLASS_BORDER,
     gap: 12,
   },
+  inviteCardLandscape: {
+    marginTop: 4,
+    marginBottom: 4,
+    paddingVertical: 8,
+    borderRadius: 14,
+    gap: 10,
+  },
+  inviteCardTablet: {
+    paddingVertical: 18,
+    paddingHorizontal: 16,
+    borderRadius: 18,
+    gap: 14,
+  },
   inviteCardPressed: {
     opacity: 0.92,
   },
@@ -533,6 +699,16 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: 'rgba(255,255,255,0.04)',
   },
+  inviteIconWrapLandscape: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+  },
+  inviteIconWrapTablet: {
+    width: 52,
+    height: 52,
+    borderRadius: 16,
+  },
   inviteTextCol: {
     flex: 1,
     minWidth: 0,
@@ -543,11 +719,25 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
   },
+  inviteTitleLandscape: {
+    fontSize: 14,
+  },
+  inviteTitleTablet: {
+    fontSize: 17,
+  },
   inviteSubtitle: {
     color: WELCOME_MUTED_TEXT,
     fontSize: 12,
     fontWeight: '400',
     lineHeight: 16,
+  },
+  inviteSubtitleLandscape: {
+    fontSize: 11,
+    lineHeight: 14,
+  },
+  inviteSubtitleTablet: {
+    fontSize: 13,
+    lineHeight: 18,
   },
 });
 

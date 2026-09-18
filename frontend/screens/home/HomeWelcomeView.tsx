@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Animated,
-  Dimensions,
   Easing,
   Platform,
   Pressable,
@@ -9,16 +8,18 @@ import {
   View,
   type LayoutChangeEvent,
 } from 'react-native';
+import { useHomeLayout } from './HomeLayoutContext';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AdaptiveText from '../../components/AdaptiveText';
 import * as Haptics from 'expo-haptics';
-import { CHROME_PERIMETER_GLOW_LAYOUT_INSET, LIVI, SEARCH_CTA_TABLET_MIN_WIDTH, WELCOME_HEADER_TITLE, WELCOME_MUTED_TEXT } from './constants';
+import { LIVI, WELCOME_HEADER_TITLE, WELCOME_MUTED_TEXT, isWelcomeTabletLayout } from './constants';
 import { BrandTitleWithOutline } from './chrome';
 import { HomeBrandConfetti, type BrandConfettiOrigin } from './HomeBrandConfetti';
 import { HomeCenterProfile } from './HomeCenterProfile';
 import { WelcomeCrownButton } from './WelcomeCrownButton';
 import { WelcomeOnlineBanner, type WelcomeBannerPeer } from './WelcomeOnlineBanner';
 import { WelcomeRadar } from './WelcomeRadar';
-import { WelcomeSearchCta } from './WelcomeSearchCta';
+import { WelcomeSearchCta, welcomeSearchCtaHeight } from './WelcomeSearchCta';
 import type { Lang } from '../../utils/i18n';
 import { logger } from '../../utils/logger';
 import type { HomeStyles } from './styles';
@@ -38,11 +39,8 @@ export type HomeWelcomeViewProps = {
     React.ComponentProps<typeof HomeCenterProfile>,
     'styles' | 'isDark' | 'layoutWidth' | 'menuChromeBg' | 'compact' | 'dense' | 'radarStage' | 'avatarAnchorRef'
   >;
-  NoticeView: React.ReactNode;
   hasActiveCallForSearch: boolean;
-  showCallSearchLockBadge: boolean;
   onStartSearch: () => void;
-  onBlockedStartSearch: () => void;
   splashGone?: boolean;
 };
 
@@ -53,6 +51,18 @@ function resolveIsLandscape(width: number, height: number) {
 function resolveIsPhone(width: number, height: number) {
   const shortest = Math.min(width, height);
   return shortest > 0 && shortest < 600;
+}
+
+/**
+ * Ниже этой высоты вертикальный стек (радар + текст + CTA) уже не помещается,
+ * и сцена раскладывается в две колонки: радар слева, текст и кнопка справа.
+ * Порог по высоте, а не по классу устройства — так одинаково работает телефон
+ * в landscape и невысокий планшет.
+ */
+const STAGE_STACK_MIN_HEIGHT = 620;
+
+function resolveIsSplitStage(width: number, height: number) {
+  return resolveIsLandscape(width, height) && height > 0 && height < STAGE_STACK_MIN_HEIGHT;
 }
 
 let brandEntryShinePlayedThisSession = false;
@@ -69,27 +79,21 @@ function HomeWelcomeViewInner({
   onlineCount,
   bannerPeers,
   centerProfile,
-  NoticeView,
   hasActiveCallForSearch,
-  showCallSearchLockBadge,
   onStartSearch,
-  onBlockedStartSearch,
   splashGone = true,
 }: HomeWelcomeViewProps) {
   const welcomeRootRef = useRef<View>(null);
   const avatarAnchorRef = useRef<View>(null);
-  const welcomeBlockRef = useRef<View>(null);
-  const copyAnchorRef = useRef<View>(null);
-  const searchBtnAnchorRef = useRef<View>(null);
   const burstActiveRef = useRef(false);
   const [burst, setBurst] = useState<{ id: number; origin: BrandConfettiOrigin } | null>(null);
   const [shineNonce, setShineNonce] = useState(0);
   const reveal = useRef(new Animated.Value(welcomeRevealPlayedThisSession ? 1 : 0)).current;
-  const [badgeGap, setBadgeGap] = useState<{ top: number; height: number } | null>(null);
-  const [measured, setMeasured] = useState<{ w: number; h: number }>(() => ({
-    w: layoutWidth,
-    h: layoutHeight,
-  }));
+  const frame = useHomeLayout();
+  const insets = useSafeAreaInsets();
+  const [measured, setMeasured] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
+  /** Фактическая область под радар/текст/CTA — всё, что осталось от панели под шапкой. */
+  const [stageBox, setStageBox] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
 
   useEffect(() => {
     if (!splashGone) return;
@@ -121,18 +125,12 @@ function HomeWelcomeViewInner({
     };
   }, [splashGone]);
 
-  useEffect(() => {
-    setMeasured((prev) =>
-      prev.w === layoutWidth && prev.h === layoutHeight ? prev : { w: layoutWidth, h: layoutHeight },
+  const onStageLayout = useCallback((e: LayoutChangeEvent) => {
+    const { width, height } = e.nativeEvent.layout;
+    if (!(width > 0 && height > 0)) return;
+    setStageBox((prev) =>
+      Math.abs(prev.w - width) < 1 && Math.abs(prev.h - height) < 1 ? prev : { w: width, h: height },
     );
-  }, [layoutWidth, layoutHeight]);
-
-  useEffect(() => {
-    const onChange = ({ window }: { window: { width: number; height: number } }) => {
-      setMeasured({ w: window.width, h: window.height });
-    };
-    const sub = Dimensions.addEventListener('change', onChange);
-    return () => sub.remove();
   }, []);
 
   const onRootLayout = (e: LayoutChangeEvent) => {
@@ -143,36 +141,129 @@ function HomeWelcomeViewInner({
     );
   };
 
-  const viewWidth = measured.w || layoutWidth;
-  const viewHeight = measured.h || layoutHeight;
-  const isTabletLayout = viewWidth >= SEARCH_CTA_TABLET_MIN_WIDTH;
-  const isPhone = resolveIsPhone(viewWidth, viewHeight);
-  const isLandscape = resolveIsLandscape(viewWidth, viewHeight);
-  const shortPhone = isPhone && !isLandscape && viewHeight > 0 && viewHeight < 700;
-  const phoneLandscape = isPhone && isLandscape;
+  /**
+   * Ориентация и класс устройства — от safe-area frame: он приходит из нативного
+   * провайдера и обновляется при повороте. Собственная измеренная область панели
+   * (measured) короче окна на tab bar и используется только для «влезает / не влезает».
+   */
+  const stageWidth = frame.width || layoutWidth;
+  const stageHeight = frame.height || layoutHeight;
+  const viewWidth = measured.w || stageWidth;
+  const isTabletLayout = isWelcomeTabletLayout(stageWidth, stageHeight);
+  const isPhone = resolveIsPhone(stageWidth, stageHeight);
+  const isLandscape = resolveIsLandscape(stageWidth, stageHeight);
+  const splitStage = resolveIsSplitStage(stageWidth, stageHeight);
+  const shortPhone = isPhone && !isLandscape && stageHeight > 0 && stageHeight < 700;
   /** Только экстремально низкая высота (ландшафт телефона / SE crouch) — размеры контролов не трогаем. */
-  const compactLayout = isPhone && !isLandscape && viewHeight < 520;
+  const compactLayout = isPhone && !isLandscape && stageHeight < 520;
+  /** Телефон в landscape: на верхний блок остаётся совсем мало высоты. */
+  const tightStage = splitStage && stageHeight > 0 && stageHeight < 420;
+
+  /** Верхний блок ужимается вместе с экраном: иначе он съедает треть высоты в landscape. */
+  const topBarHeight = tightStage ? 42 : splitStage ? 52 : compactLayout ? 48 : 54;
+  const topBarPadTop = tightStage ? 4 : splitStage ? 6 : Platform.OS === 'ios' ? 8 : 12;
+  const brandFontSize = tightStage ? 26 : splitStage ? 30 : isTabletLayout ? 40 : 36;
+  const bannerCompact = splitStage || compactLayout || shortPhone;
+
+  /**
+   * Высота панели на первый кадр, пока не пришёл onLayout: окно минус верхний
+   * inset и таб-бар. Без этого первый рендер считал, что места целое окно, и на
+   * следующем кадре контент заметно ужимался.
+   */
+  const estimatedTabBar =
+    (isTabletLayout ? 60 : splitStage ? 46 : 52) +
+    Math.max(insets.bottom, Platform.OS === 'android' ? 6 : 2);
+  const viewHeight =
+    measured.h || Math.max(160, stageHeight - insets.top - estimatedTabBar);
+
+  /** Один источник размеров текста: по ним и рисуем, и резервируем место под радаром. */
+  const type = {
+    headingFont: isTabletLayout && !splitStage ? 22 : splitStage ? 17 : 18,
+    matchingFont: isTabletLayout && !splitStage ? 15 : splitStage ? 12 : 13,
+    matchingLineH: isTabletLayout && !splitStage ? 22 : splitStage ? 17 : 19,
+    matchingMaxWidth: isTabletLayout && !splitStage ? 420 : 292,
+  };
+  const headingLineH = Math.round(type.headingFont * 1.32);
 
   /** Радар ближе к online; CTA выше tab bar за счёт большего paddingBottom (auto). */
   const space = {
-    bannerMarginTop: phoneLandscape || compactLayout ? 6 : 8,
-    radarPaddingTop: phoneLandscape ? 2 : compactLayout ? 2 : 4,
-    stageCopyMarginTop: phoneLandscape ? -2 : -6,
+    bannerMarginTop: tightStage ? 4 : bannerCompact ? 6 : 8,
+    radarPaddingTop: splitStage ? 0 : compactLayout ? 2 : 4,
+    stageCopyMarginTop: splitStage ? 0 : -6,
     stageCopyPaddingBottom: 0,
-    ctaMinGap: phoneLandscape ? 10 : compactLayout ? 12 : 16,
+    ctaMinGap: splitStage ? 6 : compactLayout || shortPhone ? 12 : 16,
     /** Больше = кнопка выше над навигацией. */
-    ctaBottomPad: phoneLandscape ? 14 : compactLayout ? 22 : 32,
+    ctaBottomPad: tightStage
+      ? 6
+      : splitStage
+        ? 8
+        : compactLayout
+          ? 20
+          : shortPhone
+            ? 22
+            : isTabletLayout
+              ? 40
+              : 32,
     copyMarginBottom: 4,
   };
 
-  const radarSize = phoneLandscape
-    ? Math.min(viewWidth * 0.68, 248)
-    : compactLayout
-      ? Math.min(viewWidth * 0.84, 288)
-      : Math.min(viewWidth * 0.88, isTabletLayout ? 340 : 328);
+  /**
+   * Высоту сцены берём из onLayout самого контейнера, а не из оценки «панель минус
+   * шапка»: шапка меняется от языка, переносов и плотности, и любая оценка рано или
+   * поздно расходится с реальностью. Оценка нужна только на первый кадр.
+   */
+  const estimatedChrome =
+    topBarHeight + (tightStage ? 48 : bannerCompact ? 62 : 70) + space.bannerMarginTop;
+  const stageW = stageBox.w || viewWidth;
+  const stageH = stageBox.h || Math.max(150, viewHeight - estimatedChrome);
+
+  /**
+   * Сцена настолько низкая (split-screen, совсем маленькие экраны), что радар с
+   * текстом и кнопкой вместе не помещаются. Уступает подзаголовок: он поясняющий,
+   * а радар и кнопка несут смысл экрана.
+   */
+  const hideSubtitle = stageH > 0 && (splitStage ? stageH < 130 : stageH < 340);
+  const matchingLines = splitStage ? 2 : 3;
+
+  /** Реальная высота текста с кнопкой под радаром — считаем из тех же размеров, что и рисуем. */
+  const ctaHeight = welcomeSearchCtaHeight(isTabletLayout, splitStage);
+  const stageCopyReserve = splitStage
+    ? 0
+    : headingLineH * 2 +
+      (hideSubtitle ? 0 : type.matchingLineH * matchingLines) +
+      space.copyMarginBottom +
+      space.ctaMinGap +
+      space.ctaBottomPad +
+      ctaHeight +
+      8;
+
+  /**
+   * Жёсткий потолок по высоте: больше этого радар не влезет ни при каких условиях.
+   * В стеке под ним ещё текст с кнопкой, в строке они сбоку — нужен только зазор.
+   */
+  // 0.78 вместо «минус пара пикселей»: радар не должен касаться баннера онлайн
+  // сверху и таб-бара снизу — между ними нужен видимый воздух.
+  const radarHeightLimit = splitStage ? stageH * 0.78 : stageH - stageCopyReserve;
+  /** Желаемый размер по ширине — им управляет дизайн, а не теснота экрана. */
+  const radarPreferred = splitStage
+    ? Math.min(stageW * 0.42, Math.max(150, stageW - 288), isTabletLayout ? 300 : 248)
+    : Math.min(stageW * (compactLayout ? 0.84 : 0.88), isTabletLayout ? 380 : 328);
+  /**
+   * Потолок по высоте всегда сильнее желаемого размера: на низком экране радар
+   * ужимается сам, вместо того чтобы выдавить текст с кнопкой за границу панели.
+   * 96 — предел, ниже которого радар уже не читается как радар.
+   */
+  const radarSize = Math.max(96, Math.min(radarPreferred, Math.max(96, radarHeightLimit)));
 
   // Базовый аватар для раскладки колец; визуально больше на ⅓ ширины 1-го кольца (перекрывает его).
-  const welcomeAvatarBase = viewWidth < 400 ? 112 : 124;
+  // В стеке размеры те же, что были до адаптива, — вертикальная раскладка не меняется.
+  // Потолок 0.42 от радара нужен только для экранов, где сам радар ужался.
+  const stackAvatarBase = isTabletLayout ? 136 : viewWidth < 400 ? 112 : 124;
+  const welcomeAvatarBase = Math.round(
+    splitStage
+      ? Math.max(54, Math.min(128, radarSize * 0.52))
+      : Math.min(stackAvatarBase, radarSize * 0.42),
+  );
   const welcomeAvatarRadius = Math.round(welcomeAvatarBase / 2);
   const welcomeAvatarSize = (() => {
     const half = radarSize / 2;
@@ -209,7 +300,7 @@ function HomeWelcomeViewInner({
   const onBrandPress = useCallback(() => {
     if (burstActiveRef.current) return;
     burstActiveRef.current = true;
-    const fallbackSize = phoneLandscape ? 56 : compactLayout ? 76 : 118;
+    const fallbackSize = splitStage ? 56 : compactLayout ? 76 : 118;
     const fallback = () => {
       if (!burstActiveRef.current) return;
       fireBurst({
@@ -238,7 +329,7 @@ function HomeWelcomeViewInner({
         });
       });
     });
-  }, [compactLayout, fireBurst, phoneLandscape, viewHeight, viewWidth]);
+  }, [compactLayout, fireBurst, splitStage, viewHeight, viewWidth]);
 
   const handleStartSearchPress = useCallback(() => {
     const now = Date.now();
@@ -257,11 +348,6 @@ function HomeWelcomeViewInner({
     onStartSearch();
   }, [cancelBurst, onStartSearch]);
 
-  const handleBlockedSearchPress = useCallback(() => {
-    cancelBurst();
-    onBlockedStartSearch();
-  }, [cancelBurst, onBlockedStartSearch]);
-
   const handleOpenAvatarModal = useCallback(
     (uri: string) => {
       cancelBurst();
@@ -269,58 +355,6 @@ function HomeWelcomeViewInner({
     },
     [cancelBurst, centerProfile],
   );
-
-  const syncBadgeGap = React.useCallback(() => {
-    const block = welcomeBlockRef.current;
-    const copyTop = copyAnchorRef.current;
-    const button = searchBtnAnchorRef.current;
-    if (!block || !copyTop || !button) return;
-    block.measureInWindow((_bx, blockY) => {
-      copyTop.measureInWindow((_cx, copyY, _cw, copyH) => {
-        button.measureInWindow((_sx, btnY) => {
-          const top = copyY + copyH - blockY;
-          const frameTop = btnY - blockY;
-          const height = frameTop - top;
-          if (height > 0) {
-            setBadgeGap((prev) =>
-              prev && prev.top === top && prev.height === height ? prev : { top, height },
-            );
-          }
-        });
-      });
-    });
-  }, []);
-
-  useEffect(() => {
-    const id = requestAnimationFrame(() => syncBadgeGap());
-    return () => cancelAnimationFrame(id);
-  }, [
-    syncBadgeGap,
-    viewWidth,
-    viewHeight,
-    compactLayout,
-    phoneLandscape,
-    showCallSearchLockBadge,
-    hasActiveCallForSearch,
-    NoticeView,
-  ]);
-
-  const showCallLock = hasActiveCallForSearch && showCallSearchLockBadge;
-  const callLockBadge = showCallLock ? (
-    <View
-      style={[
-        styles.notice,
-        {
-          backgroundColor: isDark ? 'rgba(138,143,153,0.16)' : 'rgba(59,68,83,0.16)',
-          borderColor: isDark ? 'rgba(138,143,153,0.36)' : 'rgba(59,68,83,0.34)',
-        },
-      ]}
-    >
-      <AdaptiveText style={[styles.noticeText, { color: isDark ? 'rgba(240,241,243,0.92)' : 'rgba(47,55,66,0.9)' }]}>
-        {L('finishCurrentCallFirst')}
-      </AdaptiveText>
-    </View>
-  ) : null;
 
   const revealStyle = {
     opacity: reveal,
@@ -339,8 +373,12 @@ function HomeWelcomeViewInner({
       <View
         style={[
           welcomeStyles.topBar,
-          phoneLandscape && welcomeStyles.topBarLandscape,
-          compactLayout && welcomeStyles.topBarCompact,
+          {
+            minHeight: topBarHeight,
+            paddingTop: topBarPadTop,
+            paddingBottom: tightStage ? 2 : 6,
+            paddingHorizontal: tightStage ? 14 : 20,
+          },
         ]}
       >
         <BrandTitleWithOutline
@@ -348,11 +386,11 @@ function HomeWelcomeViewInner({
           onPress={onBrandPress}
           pressLocked={!!burst}
           shineNonce={shineNonce}
-          fontSize={36}
+          fontSize={brandFontSize}
           tailAuraFromIndex={2}
           letterGlow={false}
         />
-        <WelcomeCrownButton />
+        <WelcomeCrownButton large={isTabletLayout} small={tightStage} />
       </View>
 
       <Animated.View style={revealStyle}>
@@ -361,28 +399,33 @@ function HomeWelcomeViewInner({
           onlineLabel={L('online')}
           onlineCount={onlineCount}
           peers={bannerPeers}
-          compact={phoneLandscape || compactLayout || shortPhone}
+          compact={bannerCompact}
+          dense={tightStage}
           marginTop={space.bannerMarginTop}
         />
       </Animated.View>
 
       <Animated.View
-        ref={welcomeBlockRef}
         collapsable={false}
-        onLayout={syncBadgeGap}
+        onLayout={onStageLayout}
         style={[
-          welcomeStyles.radarFlex,
+          splitStage ? welcomeStyles.stageRow : welcomeStyles.radarFlex,
           { paddingTop: space.radarPaddingTop },
           revealStyle,
         ]}
       >
-        <WelcomeRadar size={radarSize} isDark={isDark} avatarRadius={welcomeAvatarRadius}>
+        <WelcomeRadar
+          size={radarSize}
+          isDark={isDark}
+          avatarRadius={welcomeAvatarRadius}
+          orbitScale={splitStage ? 0.72 : 1}
+        >
           <HomeCenterProfile
             styles={styles}
             isDark={isDark}
             layoutWidth={viewWidth}
             compact={compactLayout}
-            dense={phoneLandscape}
+            dense={splitStage}
             radarStage
             radarAvatarSize={welcomeAvatarSize}
             menuChromeBg={menuChromeBg}
@@ -395,6 +438,7 @@ function HomeWelcomeViewInner({
         <Animated.View
           style={[
             welcomeStyles.stageCopy,
+            splitStage && welcomeStyles.stageCopyRow,
             {
               marginTop: space.stageCopyMarginTop,
               paddingBottom: space.stageCopyPaddingBottom,
@@ -402,51 +446,41 @@ function HomeWelcomeViewInner({
             revealStyle,
           ]}
         >
-          <View
-            ref={copyAnchorRef}
-            collapsable={false}
-            onLayout={syncBadgeGap}
-            style={[welcomeStyles.copyBlock, { marginBottom: space.copyMarginBottom }]}
-          >
+          <View style={[welcomeStyles.copyBlock, { marginBottom: space.copyMarginBottom }]}>
             <AdaptiveText
               style={[
                 welcomeStyles.heading,
-                phoneLandscape && welcomeStyles.headingCompact,
+                { fontSize: type.headingFont, lineHeight: headingLineH },
               ]}
               allowFontScaling={false}
               numberOfLines={2}
             >
               {L('welcomeSearchHeading')}
             </AdaptiveText>
-            <AdaptiveText
-              style={[
-                welcomeStyles.matching,
-                phoneLandscape && welcomeStyles.matchingCompact,
-                !isDark && { color: LIVI.text2 },
-              ]}
-              allowFontScaling={false}
-              numberOfLines={3}
-            >
-              {L('welcomeSearchMatching')}
-            </AdaptiveText>
+            {hideSubtitle ? null : (
+              <AdaptiveText
+                style={[
+                  welcomeStyles.matching,
+                  {
+                    fontSize: type.matchingFont,
+                    lineHeight: type.matchingLineH,
+                    maxWidth: type.matchingMaxWidth,
+                  },
+                  !isDark && { color: LIVI.text2 },
+                ]}
+                allowFontScaling={false}
+                numberOfLines={matchingLines}
+              >
+                {L('welcomeSearchMatching')}
+              </AdaptiveText>
+            )}
           </View>
 
           <View
             style={[
-              styles.noticeSlot,
-              { minHeight: phoneLandscape ? 10 : 12, marginBottom: phoneLandscape ? 2 : 3 },
-            ]}
-            pointerEvents="none"
-          />
-
-          <View
-            ref={searchBtnAnchorRef}
-            collapsable={false}
-            onLayout={syncBadgeGap}
-            style={[
               welcomeStyles.ctaWrap,
               {
-                marginTop: 'auto' as const,
+                marginTop: splitStage ? 0 : ('auto' as const),
                 paddingTop: space.ctaMinGap,
                 paddingBottom: space.ctaBottomPad,
               },
@@ -456,26 +490,12 @@ function HomeWelcomeViewInner({
               label={L('welcomeFindPartnerBtn')}
               onPress={handleStartSearchPress}
               disabled={hasActiveCallForSearch}
-              onDisabledPress={handleBlockedSearchPress}
-              compact={phoneLandscape}
+              compact={splitStage}
               style={{
                 marginBottom: 0,
               }}
             />
           </View>
-
-          {badgeGap ? (
-            <View
-              pointerEvents="box-none"
-              style={[
-                welcomeStyles.badgeOverlay,
-                { top: badgeGap.top - (phoneLandscape ? 28 : 48), height: badgeGap.height },
-              ]}
-            >
-              {NoticeView}
-              {callLockBadge}
-            </View>
-          ) : null}
         </Animated.View>
       </Animated.View>
 
@@ -499,27 +519,26 @@ const welcomeStyles = StyleSheet.create({
     overflow: 'hidden',
   },
   topBar: {
-    height: 54,
-    paddingTop: Platform.OS === 'ios' ? 8 : 12,
-    paddingHorizontal: 20,
-    paddingBottom: 6,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-  },
-  topBarLandscape: {
-    height: 48,
-    paddingTop: 6,
-  },
-  topBarCompact: {
-    height: 48,
-    paddingTop: 8,
   },
   radarFlex: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'flex-start',
     minHeight: 0,
+    overflow: 'hidden',
+  },
+  /** Короткая landscape: радар слева, текст и CTA справа — без скролла. */
+  stageRow: {
+    flex: 1,
+    minHeight: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+    gap: 18,
     overflow: 'hidden',
   },
   stageCopy: {
@@ -529,6 +548,12 @@ const welcomeStyles = StyleSheet.create({
     minHeight: 0,
     alignItems: 'center',
     position: 'relative',
+  },
+  stageCopyRow: {
+    width: 'auto',
+    flexBasis: 0,
+    maxWidth: 440,
+    justifyContent: 'center',
   },
   copyBlock: {
     paddingHorizontal: 28,
@@ -543,10 +568,6 @@ const welcomeStyles = StyleSheet.create({
     letterSpacing: 0.08,
     marginBottom: 4,
   },
-  headingCompact: {
-    fontSize: 17,
-    marginBottom: 4,
-  },
   matching: {
     color: WELCOME_MUTED_TEXT,
     fontSize: 13,
@@ -556,25 +577,11 @@ const welcomeStyles = StyleSheet.create({
     maxWidth: 292,
     paddingHorizontal: 12,
   },
-  matchingCompact: {
-    fontSize: 12,
-    lineHeight: 17,
-  },
   ctaWrap: {
     alignSelf: 'stretch',
     alignItems: 'center',
     flexShrink: 0,
     zIndex: 1,
-  },
-  badgeOverlay: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: 8,
-    zIndex: 2,
-    paddingHorizontal: CHROME_PERIMETER_GLOW_LAYOUT_INSET,
   },
 });
 

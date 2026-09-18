@@ -8089,9 +8089,6 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
               localStream={localStream}
               camOn={camOn}
               isFrontCamera={localCamSide === 'front'}
-              isInactiveState={isInactiveState}
-              wasFriendCallEnded={wasFriendCallEnded}
-              started={started}
               localRenderKey={localRenderKey}
               lang={lang}
               localExternalHold={localExternalHoldUi}
@@ -8103,9 +8100,6 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
                 localStream={localStream}
                 camOn={camOn}
                 isFrontCamera={localCamSide === 'front'}
-                isInactiveState={isInactiveState}
-                wasFriendCallEnded={wasFriendCallEnded}
-                started={started}
                 localRenderKey={localRenderKey}
                 lang={lang}
                 localExternalHold={localExternalHoldUi}
@@ -8180,9 +8174,6 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
                   localStream={localStream}
                   camOn={camOn}
                   isFrontCamera={localCamSide === 'front'}
-                  isInactiveState={isInactiveState}
-                  wasFriendCallEnded={wasFriendCallEnded}
-                  started={started}
                   localRenderKey={localRenderKey}
                   lang={lang}
                   localExternalHold={localExternalHoldUi}
@@ -8285,9 +8276,6 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
                       localStream={localStream}
                       camOn={camOn}
                       isFrontCamera={localCamSide === 'front'}
-                      isInactiveState={isInactiveState}
-                      wasFriendCallEnded={wasFriendCallEnded}
-                      started={started}
                       localRenderKey={localRenderKey}
                       lang={lang}
                       localExternalHold={localExternalHoldUi}

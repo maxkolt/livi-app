@@ -1,17 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useRef } from 'react';
 import { Animated, Pressable, StyleSheet, View } from 'react-native';
 import AdaptiveText from '../../components/AdaptiveText';
-import { FlatList, Swipeable } from 'react-native-gesture-handler';
-import { IconButton } from 'react-native-paper';
+import { FlatList } from 'react-native-gesture-handler';
 import { Ionicons } from '@expo/vector-icons';
 import AvatarImage from '../../components/AvatarImage';
-import { FRIEND_ROW_ACTION_GAP } from '../../constants/uiTokens';
 import { dismissMessageNotificationForUser, syncAppBadgeFromMissedCount } from '../../utils/pushNotifications';
 import { markMessagesAsRead } from '../../sockets/socket';
 import { t, type Lang } from '../../utils/i18n';
 import {
-  FRIEND_ROW_HEIGHT,
-  FRIEND_SWIPE_DELETE_WIDTH,
   LIVI,
   WELCOME_BRAND_VI_FILL_GRADIENT,
   WELCOME_GLASS_SURFACE,
@@ -19,9 +15,17 @@ import {
   WELCOME_FRIENDS_LIST_INSET,
   WELCOME_FRIEND_ROW_TRAILING_PAD,
   WELCOME_FRIEND_CARD_ROW_HEIGHT,
+  WELCOME_FRIEND_CARD_ROW_HEIGHT_LANDSCAPE,
   WELCOME_FRIEND_CARD_GAP,
+  WELCOME_FRIEND_CARD_GAP_LANDSCAPE,
   WELCOME_FRIEND_ROW_STRIDE,
+  WELCOME_FRIEND_ROW_STRIDE_LANDSCAPE,
   WELCOME_FRIEND_AVATAR_SIZE,
+  WELCOME_FRIEND_AVATAR_SIZE_LANDSCAPE,
+  WELCOME_FRIEND_CARD_ROW_HEIGHT_TABLET,
+  WELCOME_FRIEND_CARD_GAP_TABLET,
+  WELCOME_FRIEND_ROW_STRIDE_TABLET,
+  WELCOME_FRIEND_AVATAR_SIZE_TABLET,
 } from './constants';
 import { FriendMarkReadMenuStrip } from './FriendMarkReadMenuStrip';
 import { FriendRowChatButton, FriendRowInviteButton } from './FriendRowActionButtons';
@@ -29,6 +33,7 @@ import { getFriendDisplay, isDirectCallSessionLive } from './friendHelpers';
 import type { Friend, MarkReadMenu } from './types';
 import type { HomeStyles } from './styles';
 
+/** @deprecated Only welcome list remains; kept for call-site compatibility. */
 export type FriendsListPresentation = 'menu' | 'welcome';
 
 /** Бирюза для статуса «Занято». */
@@ -101,14 +106,13 @@ export type FriendsListCoreProps = {
   prepareFriendRowActionTap: () => void;
   handleStartFriendCall: (friend: Friend) => void;
   clearMissedCallsForFriend: (friendIdStr: string) => Promise<void>;
-  friendRowBlocksSwipeDelete: (friend: Friend) => boolean;
-  handleRemoveFriend: (peerId: string, opts?: { quiet?: boolean }) => Promise<void | boolean>;
+  /** Block multi-select delete while friend is in an active call / busy. */
+  friendRowBlocksDelete: (friend: Friend) => boolean;
   calling: { visible: boolean; friend?: Friend | null; callId?: string | null };
   callingVisibleRef: React.MutableRefObject<boolean>;
   activeOutgoingAttemptRef: React.MutableRefObject<number>;
   activeOutgoingCallIdRef: React.MutableRefObject<string | null>;
   lastChatOpenRef: React.MutableRefObject<{ peerId: string; at: number } | null>;
-  menuOpen: boolean;
   donateVisible: boolean;
   shareVisible: boolean;
   inviteRequestVisible: boolean;
@@ -118,8 +122,6 @@ export type FriendsListCoreProps = {
   unreadByUser: Record<string, number>;
   isRecentlyEndedCallFriend: (userId: string | null | undefined) => boolean;
   resetOutgoingAfterExternalClose: (source: string, callId: string | null) => void;
-  openSwipeableRef: React.MutableRefObject<any>;
-  swipeableRefsMap: React.MutableRefObject<Record<string, any>>;
   ListFooterComponent?: React.ComponentType<any> | React.ReactElement | null;
   keyboardShouldPersistTaps?: 'always' | 'handled' | 'never';
   onScrollBeginDragExtra?: () => void;
@@ -127,11 +129,15 @@ export type FriendsListCoreProps = {
   selectedIds?: Set<string>;
   onEnterSelect?: (friendId: string) => void;
   onToggleSelect?: (friendId: string) => void;
+  /** Плотные строки только в горизонтальной ориентации. */
+  compactLandscape?: boolean;
+  /** Увеличенные строки в обеих ориентациях планшета. */
+  tabletLayout?: boolean;
 };
 
 function FriendsListCoreInner(props: FriendsListCoreProps) {
   const {
-    presentation = 'menu',
+    presentation = 'welcome',
     friends,
     refreshing,
     onRefresh,
@@ -147,14 +153,12 @@ function FriendsListCoreInner(props: FriendsListCoreProps) {
     prepareFriendRowActionTap,
     handleStartFriendCall,
     clearMissedCallsForFriend,
-    friendRowBlocksSwipeDelete,
-    handleRemoveFriend,
+    friendRowBlocksDelete,
     calling,
     callingVisibleRef,
     activeOutgoingAttemptRef,
     activeOutgoingCallIdRef,
     lastChatOpenRef,
-    menuOpen,
     donateVisible,
     shareVisible,
     inviteRequestVisible,
@@ -164,8 +168,6 @@ function FriendsListCoreInner(props: FriendsListCoreProps) {
     unreadByUser,
     isRecentlyEndedCallFriend,
     resetOutgoingAfterExternalClose,
-    openSwipeableRef,
-    swipeableRefsMap,
     ListFooterComponent,
     keyboardShouldPersistTaps = 'always',
     onScrollBeginDragExtra,
@@ -173,70 +175,47 @@ function FriendsListCoreInner(props: FriendsListCoreProps) {
     selectedIds,
     onEnterSelect,
     onToggleSelect,
+    compactLandscape = false,
+    tabletLayout = false,
   } = props;
 
-  const isWelcome = presentation === 'welcome';
-  const rowHeight = isWelcome ? WELCOME_FRIEND_ROW_STRIDE : FRIEND_ROW_HEIGHT;
-  const welcomeCardHeight = WELCOME_FRIEND_CARD_ROW_HEIGHT;
+  // presentation kept for call-site compatibility; list is welcome-only.
+  void presentation;
+  const rowHeight = tabletLayout
+    ? WELCOME_FRIEND_ROW_STRIDE_TABLET
+    : compactLandscape
+      ? WELCOME_FRIEND_ROW_STRIDE_LANDSCAPE
+      : WELCOME_FRIEND_ROW_STRIDE;
+  const welcomeCardHeight = tabletLayout
+    ? WELCOME_FRIEND_CARD_ROW_HEIGHT_TABLET
+    : compactLandscape
+      ? WELCOME_FRIEND_CARD_ROW_HEIGHT_LANDSCAPE
+      : WELCOME_FRIEND_CARD_ROW_HEIGHT;
+  const welcomeAvatarSize = tabletLayout
+    ? WELCOME_FRIEND_AVATAR_SIZE_TABLET
+    : compactLandscape
+      ? WELCOME_FRIEND_AVATAR_SIZE_LANDSCAPE
+      : WELCOME_FRIEND_AVATAR_SIZE;
 
   const openMarkReadMenu = useCallback(
     (friendId: string, type: 'video' | 'chat') => {
-      try {
-        openSwipeableRef.current?.close?.();
-      } catch {}
-      openSwipeableRef.current = null;
       setMarkReadMenu({ friendId, type });
     },
-    [setMarkReadMenu, openSwipeableRef],
-  );
-
-  const renderRightActions = useCallback(
-    (friend: Friend) => {
-      const id = String(friend.id);
-      const panelStyle = [
-        styles.swipeRight,
-        {
-          width: FRIEND_SWIPE_DELETE_WIDTH,
-          minHeight: isWelcome ? welcomeCardHeight - 4 : FRIEND_ROW_HEIGHT,
-          alignSelf: 'stretch' as const,
-          flexDirection: 'row' as const,
-          alignItems: 'center' as const,
-          backgroundColor: 'transparent',
-        },
-      ];
-      if (friendRowBlocksSwipeDelete(friend)) return <View style={panelStyle} />;
-      return (
-        <View style={panelStyle}>
-          <IconButton
-            icon="close"
-            size={23}
-            iconColor="rgb(255,90,103)"
-            style={[
-              styles.actionBtn,
-              styles.friendActionBtnSize,
-              {
-                backgroundColor: 'rgba(255,90,103,0.18)',
-                borderWidth: 1,
-                borderColor: 'rgba(200,50,65,0.7)',
-              },
-            ]}
-            onPress={() => handleRemoveFriend(id)}
-          />
-          <View style={{ width: FRIEND_ROW_ACTION_GAP }} />
-        </View>
-      );
-    },
-    [friendRowBlocksSwipeDelete, handleRemoveFriend, isWelcome, rowHeight, styles],
+    [setMarkReadMenu],
   );
 
   const listStyle = useMemo(
-    () => [styles.friendsList, isWelcome && welcomeListStyles.list],
-    [isWelcome, styles.friendsList],
+    () => [styles.friendsList, welcomeListStyles.list],
+    [styles.friendsList],
   );
 
   const contentContainerStyle = useMemo(
-    () => [styles.friendsListContent, isWelcome && welcomeListStyles.content],
-    [isWelcome, styles.friendsListContent],
+    () => [
+      styles.friendsListContent,
+      welcomeListStyles.content,
+      tabletLayout && welcomeListStyles.contentTablet,
+    ],
+    [styles.friendsListContent, tabletLayout],
   );
 
   const renderStatusLine = (item: Friend) => {
@@ -247,7 +226,6 @@ function FriendsListCoreInner(props: FriendsListCoreProps) {
     if (item.online) {
       return (
         <View style={welcomeListStyles.statusRow}>
-          {!isWelcome ? <View style={welcomeListStyles.onlineDot} /> : null}
           <AdaptiveText style={[styles.friendStatus, { color: LIVI.green }]}>{L('online')}</AdaptiveText>
         </View>
       );
@@ -255,54 +233,48 @@ function FriendsListCoreInner(props: FriendsListCoreProps) {
     return <AdaptiveText style={[styles.friendStatus, { color: LIVI.red }]}>{L('offline')}</AdaptiveText>;
   };
 
-  const renderNameRow = (item: Friend, displayName: string, avatarLetter: string) => {
-    const avatarSize = isWelcome ? WELCOME_FRIEND_AVATAR_SIZE : 48;
-    const busy = friendRowIsBusy(item, isRecentlyEndedCallFriend);
-    return (
-      <>
-        <View style={isWelcome ? welcomeListStyles.avatarBox : styles.avatarBox}>
-          <AvatarImage
-            userId={item.id}
-            avatarVer={item.avatarVer || 0}
-            uri={item.avatarThumbB64 || undefined}
-            size={avatarSize}
-            fallbackText={avatarLetter || '—'}
-            containerStyle={{ overflow: 'hidden' }}
-            fallbackTextStyle={
-              avatarLetter
-                ? { fontWeight: '800', color: LIVI.white }
-                : { fontWeight: '400', color: LIVI.text2 }
-            }
-          />
-        </View>
-        <View
-          style={
-            isWelcome
-              ? welcomeListStyles.nameCol
-              : [styles.nameCol, styles.friendRowNameFlex, { paddingRight: 8 }]
+  const renderNameRow = (item: Friend, displayName: string, avatarLetter: string) => (
+    <>
+      <View
+        style={[
+          welcomeListStyles.avatarBox,
+          tabletLayout && welcomeListStyles.avatarBoxTablet,
+          compactLandscape && welcomeListStyles.avatarBoxLandscape,
+        ]}
+      >
+        <AvatarImage
+          userId={item.id}
+          avatarVer={item.avatarVer || 0}
+          uri={item.avatarThumbB64 || undefined}
+          size={welcomeAvatarSize}
+          fallbackText={avatarLetter || '—'}
+          containerStyle={{ overflow: 'hidden' }}
+          fallbackTextStyle={
+            avatarLetter
+              ? { fontWeight: '800', color: LIVI.white }
+              : { fontWeight: '400', color: LIVI.text2 }
           }
+        />
+      </View>
+      <View style={welcomeListStyles.nameCol}>
+        <AdaptiveText
+          style={[
+            styles.friendName,
+            welcomeListStyles.friendName,
+            tabletLayout && welcomeListStyles.friendNameTablet,
+            compactLandscape && welcomeListStyles.friendNameLandscape,
+          ]}
         >
-          <AdaptiveText style={[styles.friendName, isWelcome && welcomeListStyles.friendName]}>{displayName}</AdaptiveText>
-          {isWelcome ? (
-            renderStatusLine(item)
-          ) : busy ? (
-            <FriendBusyStatusLabel label={L('busy')} styles={styles} />
-          ) : (
-            <AdaptiveText style={[styles.friendStatus, { color: item.online ? LIVI.green : LIVI.red }]}>
-              {item.online ? L('online') : L('offline')}
-            </AdaptiveText>
-          )}
-        </View>
-      </>
-    );
-  };
+          {displayName}
+        </AdaptiveText>
+        {renderStatusLine(item)}
+      </View>
+    </>
+  );
 
   const renderActions = (item: Friend) => (
     <View
-      style={[
-        styles.rowRightActionsTray,
-        isWelcome && { paddingRight: WELCOME_FRIEND_ROW_TRAILING_PAD },
-      ]}
+      style={[styles.rowRightActionsTray, { paddingRight: WELCOME_FRIEND_ROW_TRAILING_PAD }]}
       pointerEvents="box-none"
     >
       <FriendRowInviteButton
@@ -321,7 +293,8 @@ function FriendsListCoreInner(props: FriendsListCoreProps) {
         incomingCallScreen={incomingCallScreen}
         resetOutgoingAfterExternalClose={resetOutgoingAfterExternalClose}
         openMarkReadMenu={openMarkReadMenu}
-        actionButtonVariant={isWelcome ? 'welcome' : 'menu'}
+        actionButtonVariant="welcome"
+        largeActionButton={tabletLayout}
       />
       <FriendRowChatButton
         friend={item}
@@ -334,21 +307,23 @@ function FriendsListCoreInner(props: FriendsListCoreProps) {
         callingVisibleRef={callingVisibleRef}
         activeOutgoingAttemptRef={activeOutgoingAttemptRef}
         markReadMenu={markReadMenu}
-        menuOpen={menuOpen}
         donateVisible={donateVisible}
         shareVisible={shareVisible}
         inviteRequestVisible={inviteRequestVisible}
         roomFullVisible={roomFullVisible}
         openMarkReadMenu={openMarkReadMenu}
-        actionButtonVariant={isWelcome ? 'welcome' : 'menu'}
+        actionButtonVariant="welcome"
+        largeActionButton={tabletLayout}
       />
     </View>
   );
 
   return (
     <FlatList
+      key={tabletLayout ? 'friends-tablet' : compactLandscape ? 'friends-landscape' : 'friends-portrait'}
       style={listStyle}
       keyboardShouldPersistTaps={keyboardShouldPersistTaps}
+      nestedScrollEnabled
       showsVerticalScrollIndicator={false}
       overScrollMode="never"
       removeClippedSubviews={false}
@@ -363,7 +338,7 @@ function FriendsListCoreInner(props: FriendsListCoreProps) {
       })}
       data={friends}
       keyExtractor={(item) => item.id}
-      extraData={{ ...friendsListExtraData, selectMode, selectedIds }}
+      extraData={{ ...friendsListExtraData, selectMode, selectedIds, compactLandscape, tabletLayout }}
       refreshing={refreshing}
       onRefresh={onRefresh}
       onScrollBeginDrag={() => {
@@ -371,25 +346,20 @@ function FriendsListCoreInner(props: FriendsListCoreProps) {
         onScrollBeginDragExtra?.();
       }}
       ListFooterComponent={ListFooterComponent}
-      renderItem={({ item, index }) => {
+      renderItem={({ item }) => {
         const { displayName, avatarLetter } = getFriendDisplay(item);
         const rowHidden = markReadMenu?.friendId === item.id;
-        const showTopDivider = !isWelcome && index > 0;
-        const swipeDeleteBlocked = friendRowBlocksSwipeDelete(item);
+        const deleteBlocked = friendRowBlocksDelete(item);
         const isSelected = !!selectedIds?.has(item.id);
 
         const innerRow = (
           <View
-            style={
-              isWelcome
-                ? [welcomeListStyles.welcomeRow, selectMode && welcomeListStyles.welcomeRowSelecting]
-                : [
-                    styles.listRow,
-                    styles.listRowAligned,
-                    styles.listRowOverflowVisible,
-                    styles.listRowContainerOverflowVisible,
-                  ]
-            }
+            style={[
+              welcomeListStyles.welcomeRow,
+              tabletLayout && welcomeListStyles.welcomeRowTablet,
+              compactLandscape && welcomeListStyles.welcomeRowLandscape,
+              selectMode && welcomeListStyles.welcomeRowSelecting,
+            ]}
           >
             {renderNameRow(item, displayName, avatarLetter)}
           </View>
@@ -397,121 +367,80 @@ function FriendsListCoreInner(props: FriendsListCoreProps) {
 
         return (
           <View
-            style={isWelcome ? welcomeListStyles.cardWrap : styles.listRowWrap}
+            style={[
+              welcomeListStyles.cardWrap,
+              tabletLayout && welcomeListStyles.cardWrapTablet,
+              compactLandscape && welcomeListStyles.cardWrapLandscape,
+            ]}
             collapsable={false}
           >
-            {showTopDivider ? <View style={styles.friendRowDivider} pointerEvents="none" /> : null}
-            {isWelcome ? (
-              <View style={[welcomeListStyles.glassCard, isSelected && welcomeListStyles.glassCardSelected]}>
-                <View style={welcomeListStyles.glassRow}>
-                  <Pressable
-                    style={[styles.friendRowSwipeColumn, welcomeListStyles.swipeColumnWelcome]}
-                    onPress={() => {
-                      if (selectMode) onToggleSelect?.(item.id);
-                    }}
-                    onLongPress={() => {
-                      if (swipeDeleteBlocked) return;
-                      if (selectMode) onToggleSelect?.(item.id);
-                      else onEnterSelect?.(item.id);
-                    }}
-                    delayLongPress={380}
-                    disabled={rowHidden}
+            <View
+              style={[
+                welcomeListStyles.glassCard,
+                tabletLayout && welcomeListStyles.glassCardTablet,
+                compactLandscape && welcomeListStyles.glassCardLandscape,
+                isSelected && welcomeListStyles.glassCardSelected,
+              ]}
+            >
+              <View
+                style={[
+                  welcomeListStyles.glassRow,
+                  tabletLayout && welcomeListStyles.glassRowTablet,
+                  compactLandscape && welcomeListStyles.glassRowLandscape,
+                ]}
+              >
+                <Pressable
+                  style={[
+                    styles.friendRowSwipeColumn,
+                    welcomeListStyles.swipeColumnWelcome,
+                    tabletLayout && welcomeListStyles.swipeColumnWelcomeTablet,
+                    compactLandscape && welcomeListStyles.swipeColumnWelcomeLandscape,
+                  ]}
+                  onPress={() => {
+                    if (selectMode) onToggleSelect?.(item.id);
+                  }}
+                  onLongPress={() => {
+                    if (deleteBlocked) return;
+                    if (selectMode) onToggleSelect?.(item.id);
+                    else onEnterSelect?.(item.id);
+                  }}
+                  delayLongPress={380}
+                  disabled={rowHidden}
+                >
+                  <View
+                    style={[
+                      styles.friendRowSwipeContainer,
+                      welcomeListStyles.swipeContainer,
+                      tabletLayout && welcomeListStyles.swipeContainerTablet,
+                      compactLandscape && welcomeListStyles.swipeContainerLandscape,
+                      welcomeListStyles.welcomeSelectRow,
+                    ]}
                   >
-                    <View
-                      style={[
-                        styles.friendRowSwipeContainer,
-                        welcomeListStyles.swipeContainer,
-                        welcomeListStyles.welcomeSelectRow,
-                      ]}
-                    >
-                      {selectMode ? (
-                        <View style={welcomeListStyles.selectMark}>
-                          {isSelected ? (
-                            <Ionicons
-                              name="checkmark-circle"
-                              size={22}
-                              color={WELCOME_BRAND_VI_FILL_GRADIENT[2]}
-                            />
-                          ) : (
-                            <View style={welcomeListStyles.selectEmpty} />
-                          )}
-                        </View>
-                      ) : null}
-                      {innerRow}
-                    </View>
-                  </Pressable>
-                  {!rowHidden && !selectMode ? renderActions(item) : null}
-                </View>
+                    {selectMode ? (
+                      <View style={welcomeListStyles.selectMark}>
+                        {isSelected ? (
+                          <Ionicons
+                            name="checkmark-circle"
+                            size={22}
+                            color={WELCOME_BRAND_VI_FILL_GRADIENT[2]}
+                          />
+                        ) : (
+                          <View style={welcomeListStyles.selectEmpty} />
+                        )}
+                      </View>
+                    ) : null}
+                    {innerRow}
+                  </View>
+                </Pressable>
+                {!rowHidden && !selectMode ? renderActions(item) : null}
               </View>
-            ) : (
-              <>
-                <View style={styles.friendRowSwipeColumn}>
-                  {!rowHidden ? (
-                    <Swipeable
-                      containerStyle={styles.friendRowSwipeContainer}
-                      enabled={!swipeDeleteBlocked}
-                      ref={(r) => {
-                        if (r) {
-                          swipeableRefsMap.current[item.id] = r;
-                          return;
-                        }
-                        const existing = swipeableRefsMap.current[item.id];
-                        if (openSwipeableRef.current === existing) openSwipeableRef.current = null;
-                        delete swipeableRefsMap.current[item.id];
-                      }}
-                      onSwipeableWillOpen={() => {
-                        if (swipeDeleteBlocked) {
-                          try {
-                            swipeableRefsMap.current[item.id]?.close?.();
-                          } catch {}
-                          return;
-                        }
-                        setMarkReadMenu(null);
-                        const opening = swipeableRefsMap.current[item.id];
-                        const prev = openSwipeableRef.current;
-                        if (prev && prev !== opening) {
-                          try {
-                            prev.close?.();
-                          } catch {}
-                        }
-                      }}
-                      onSwipeableOpen={() => {
-                        openSwipeableRef.current = swipeableRefsMap.current[item.id] ?? null;
-                      }}
-                      onSwipeableClose={() => {
-                        if (openSwipeableRef.current === swipeableRefsMap.current[item.id]) {
-                          openSwipeableRef.current = null;
-                        }
-                      }}
-                      renderRightActions={() => renderRightActions(item)}
-                      dragOffsetFromRightEdge={0}
-                      dragOffsetFromLeftEdge={0}
-                      activeOffsetX={[-6, 6]}
-                      failOffsetY={[-14, 14]}
-                      rightThreshold={16}
-                      leftThreshold={24}
-                      overshootRight={false}
-                      friction={1}
-                      overshootFriction={6}
-                      enableTrackpadTwoFingerGesture={false}
-                    >
-                      {innerRow}
-                    </Swipeable>
-                  ) : (
-                    <View style={styles.friendRowSwipeContainer} pointerEvents="none">
-                      {innerRow}
-                    </View>
-                  )}
-                </View>
-                {!rowHidden ? renderActions(item) : null}
-              </>
-            )}
+            </View>
             {markReadMenu && markReadMenu.friendId === item.id && (
               <View
                 style={[
                   styles.markReadMenuOverlay,
-                  isWelcome && {
-                    left: 12 + WELCOME_FRIEND_AVATAR_SIZE + 10,
+                  {
+                    left: 12 + welcomeAvatarSize + 10,
                     height: welcomeCardHeight,
                     top: 0,
                   },
@@ -553,16 +482,8 @@ function FriendsListCoreInner(props: FriendsListCoreProps) {
       contentContainerStyle={contentContainerStyle}
       ListEmptyComponent={
         initialized ? (
-          <View style={isWelcome ? welcomeListStyles.emptyWrap : { padding: 16 }}>
-            <AdaptiveText
-              style={
-                isWelcome
-                  ? welcomeListStyles.emptyText
-                  : { color: LIVI.text2 }
-              }
-            >
-              {isWelcome ? L('friendsEmpty') : `👤 ${L('friendsEmpty')}`}
-            </AdaptiveText>
+          <View style={welcomeListStyles.emptyWrap}>
+            <AdaptiveText style={welcomeListStyles.emptyText}>{L('friendsEmpty')}</AdaptiveText>
           </View>
         ) : null
       }
@@ -580,17 +501,41 @@ const welcomeListStyles = StyleSheet.create({
     paddingTop: 4,
     paddingBottom: 12,
   },
+  contentTablet: {
+    width: '100%',
+    maxWidth: 960,
+    alignSelf: 'center',
+    paddingHorizontal: 28,
+    paddingTop: 6,
+    paddingBottom: 16,
+  },
   cardWrap: {
     position: 'relative',
     height: WELCOME_FRIEND_CARD_ROW_HEIGHT,
     marginBottom: WELCOME_FRIEND_CARD_GAP,
     overflow: 'visible',
   },
+  cardWrapLandscape: {
+    height: WELCOME_FRIEND_CARD_ROW_HEIGHT_LANDSCAPE,
+    marginBottom: WELCOME_FRIEND_CARD_GAP_LANDSCAPE,
+  },
+  cardWrapTablet: {
+    height: WELCOME_FRIEND_CARD_ROW_HEIGHT_TABLET,
+    marginBottom: WELCOME_FRIEND_CARD_GAP_TABLET,
+  },
   glassCard: {
     height: WELCOME_FRIEND_CARD_ROW_HEIGHT,
     backgroundColor: WELCOME_GLASS_SURFACE,
     borderRadius: 16,
     overflow: 'hidden',
+  },
+  glassCardLandscape: {
+    height: WELCOME_FRIEND_CARD_ROW_HEIGHT_LANDSCAPE,
+    borderRadius: 14,
+  },
+  glassCardTablet: {
+    height: WELCOME_FRIEND_CARD_ROW_HEIGHT_TABLET,
+    borderRadius: 18,
   },
   glassCardSelected: {
     backgroundColor: 'rgba(42, 88, 104, 0.28)',
@@ -620,11 +565,23 @@ const welcomeListStyles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
   },
+  glassRowLandscape: {
+    height: WELCOME_FRIEND_CARD_ROW_HEIGHT_LANDSCAPE,
+  },
+  glassRowTablet: {
+    height: WELCOME_FRIEND_CARD_ROW_HEIGHT_TABLET,
+  },
   swipeColumnWelcome: {
     flex: 1,
     minWidth: 0,
     height: WELCOME_FRIEND_CARD_ROW_HEIGHT,
     backgroundColor: 'transparent',
+  },
+  swipeColumnWelcomeLandscape: {
+    height: WELCOME_FRIEND_CARD_ROW_HEIGHT_LANDSCAPE,
+  },
+  swipeColumnWelcomeTablet: {
+    height: WELCOME_FRIEND_CARD_ROW_HEIGHT_TABLET,
   },
   welcomeRow: {
     flex: 1,
@@ -635,6 +592,14 @@ const welcomeListStyles = StyleSheet.create({
     backgroundColor: 'transparent',
     paddingLeft: 12,
     paddingRight: 4,
+  },
+  welcomeRowLandscape: {
+    height: WELCOME_FRIEND_CARD_ROW_HEIGHT_LANDSCAPE,
+    paddingLeft: 10,
+  },
+  welcomeRowTablet: {
+    height: WELCOME_FRIEND_CARD_ROW_HEIGHT_TABLET,
+    paddingLeft: 14,
   },
   welcomeRowSelecting: {
     paddingLeft: 8,
@@ -648,6 +613,16 @@ const welcomeListStyles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  avatarBoxLandscape: {
+    width: WELCOME_FRIEND_AVATAR_SIZE_LANDSCAPE,
+    height: WELCOME_FRIEND_AVATAR_SIZE_LANDSCAPE,
+    borderRadius: WELCOME_FRIEND_AVATAR_SIZE_LANDSCAPE / 2,
+  },
+  avatarBoxTablet: {
+    width: WELCOME_FRIEND_AVATAR_SIZE_TABLET,
+    height: WELCOME_FRIEND_AVATAR_SIZE_TABLET,
+    borderRadius: WELCOME_FRIEND_AVATAR_SIZE_TABLET / 2,
+  },
   nameCol: {
     marginLeft: 10,
     flexGrow: 1,
@@ -660,9 +635,23 @@ const welcomeListStyles = StyleSheet.create({
     fontSize: 16,
     lineHeight: 20,
   },
+  friendNameLandscape: {
+    fontSize: 14,
+    lineHeight: 17,
+  },
+  friendNameTablet: {
+    fontSize: 17,
+    lineHeight: 22,
+  },
   swipeContainer: {
     height: WELCOME_FRIEND_CARD_ROW_HEIGHT,
     justifyContent: 'center',
+  },
+  swipeContainerLandscape: {
+    height: WELCOME_FRIEND_CARD_ROW_HEIGHT_LANDSCAPE,
+  },
+  swipeContainerTablet: {
+    height: WELCOME_FRIEND_CARD_ROW_HEIGHT_TABLET,
   },
   statusRow: {
     flexDirection: 'row',
