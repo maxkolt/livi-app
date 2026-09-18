@@ -9,7 +9,11 @@ import InCallManager from 'react-native-incall-manager';
 import { beginBackgroundMediaSuppression, pauseBackgroundMediaAfterCall } from '../../../utils/callKeep';
 import { logger } from '../../../utils/logger';
 import { markCallPerfAudioRoute } from '../../../utils/callPerfTrace';
-import { applyNativeVoiceCallSpeaker, applyNativeVoiceCallRoute } from '../../../utils/voiceCallAudioRoute';
+import {
+  applyNativeVoiceCallSpeaker,
+  applyNativeVoiceCallRoute,
+  applyInCallManagerBuiltInRoute,
+} from '../../../utils/voiceCallAudioRoute';
 import {
   isCallAudioBootstrapPending,
   mergeNativeProbeIntoGlobal,
@@ -1014,29 +1018,14 @@ export const useAudioRouting = (
     setUserRoute(route, { persist: shouldPersistAppliedRoute(route, reason) });
 
     if (Platform.OS === 'android') {
-      enqueueInCallOp(async () => {
-        try {
-          // Повторная проверка: за время очереди пользователь мог сменить режим.
-          const lockNow = readCallAudioRouteUiLock();
-          const userNow = readUserSelectedCallAudioRoute();
-          let applySpeaker = finalWantSpeaker;
-          if (
-            applySpeaker &&
-            (lockNow === 'EARPIECE' || userNow === 'EARPIECE') &&
-            !userIntent
-          ) {
-            applySpeaker = false;
-          }
-          if (applySpeaker) {
-            (InCallManager as any).setForceSpeakerphoneOn?.(true);
-            InCallManager.setSpeakerphoneOn(true);
-            await (InCallManager as any).chooseAudioRoute?.('SPEAKER_PHONE');
-          } else {
-            (InCallManager as any).setForceSpeakerphoneOn?.(false);
-            InCallManager.setSpeakerphoneOn(false);
-            await (InCallManager as any).chooseAudioRoute?.('EARPIECE');
-          }
-        } catch {}
+      enqueueInCallOp(() => {
+        // Повторная проверка: за время очереди пользователь мог сменить режим.
+        const lockNow = readCallAudioRouteUiLock();
+        const userNow = readUserSelectedCallAudioRoute();
+        const applySpeaker =
+          finalWantSpeaker &&
+          !(!userIntent && (lockNow === 'EARPIECE' || userNow === 'EARPIECE'));
+        applyInCallManagerBuiltInRoute(applySpeaker);
       });
       applyNativeSpeakerThrottled(
         finalWantSpeaker,
@@ -4684,20 +4673,6 @@ export const useAudioRouting = (
       };
       routeLog('cycleUserRoute', { from: current, next, available: av, cycleCtx });
 
-      // Built-in: native сразу (до ICM/очереди) — SPEAKER→EAR иначе ждёт bridge.
-      // userRoute/uiLock уже next; stale apply отсечёт догоняющий SPEAKER.
-      if (next === 'SPEAKER_PHONE' || next === 'EARPIECE') {
-        const wantSpeaker = next === 'SPEAKER_PHONE';
-        if (Platform.OS === 'android') {
-          void applyNativeVoiceCallRoute(next);
-        }
-        try {
-          (InCallManager as any).setForceSpeakerphoneOn?.(wantSpeaker);
-          InCallManager.setSpeakerphoneOn(wantSpeaker);
-          void (InCallManager as any).chooseAudioRoute?.(next);
-        } catch {}
-      }
-
       cancelScheduledCallAudioRouteReappliesMatching([
         'in_app_pip_from_',
         'audio_ui_route_cycle',
@@ -4717,8 +4692,18 @@ export const useAudioRouting = (
         applySpecificRoute(next, 'cycleUserRoute', true);
       }
 
-      // Probe в фоне — для следующего цикла с BT, не блокирует этот тап.
-      if (Platform.OS === 'android') {
+      // Probe нужен только чтобы пересобрать цикл с внешним маршрутом.
+      // Без BT/провода он ничего не меняет, но ставит в очередь audio-потока ещё два
+      // задания (getVoiceCallCommunicationRoutes + isBluetoothHeadsetConnectedForCall)
+      // ровно за setCommunicationDevice этого тапа.
+      const externalMayBeInCycle =
+        showBtInCycle ||
+        isBluetoothHeadsetActiveForCall() ||
+        av.some((r) => r === 'BLUETOOTH' || r === 'WIRED_HEADSET') ||
+        icm.some((r) => r === 'BLUETOOTH' || r === 'WIRED_HEADSET') ||
+        // Без earpiece-режима нет poll каждые 1.5с — обновлять список больше некому.
+        !routingOptionsRef.current?.defaultToEarpiece;
+      if (Platform.OS === 'android' && externalMayBeInCycle) {
         void probeNativeCallAudioRoutes()
           .then((probe) => {
             mergeNativeProbeIntoGlobal(probe);

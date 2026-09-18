@@ -4,7 +4,11 @@ import type { InCallAudioRoute } from '../components/VideoChat/hooks/audioRouteT
 import { isExternalHeadsetRoute, mapRouteForEnterVideoUi, normalizeInCallRoute } from '../components/VideoChat/hooks/audioRouteTypes';
 import { beginBackgroundMediaSuppression } from './backgroundMediaSuppression';
 import { isExternalCallHoldActive } from './externalCallHold';
-import { applyNativeVoiceCallSpeaker, applyNativeVoiceCallRoute } from './voiceCallAudioRoute';
+import {
+  applyNativeVoiceCallSpeaker,
+  applyNativeVoiceCallRoute,
+  applyInCallManagerBuiltInRoute,
+} from './voiceCallAudioRoute';
 import { logger } from './logger';
 import { markCallPerfAudioRoute } from './callPerfTrace';
 import {
@@ -1413,21 +1417,13 @@ async function applyNativeOutputRouteImmediate(
     // Android 12+: setCommunicationDevice сразу — не ждать InCallManager.
     // Не await bridge: ручной cycle ear↔speaker не должен стоять в очереди.
     void applyNativeVoiceCallSpeaker(true, { forceBuiltIn });
-    try {
-      (InCallManager as any).setForceSpeakerphoneOn?.(true);
-      InCallManager.setSpeakerphoneOn(true);
-      void (InCallManager as any).chooseAudioRoute?.('SPEAKER_PHONE');
-    } catch {}
+    applyInCallManagerBuiltInRoute(true);
     return;
   }
   if (route === 'EARPIECE') {
     if (isStaleBuiltInApply('EARPIECE')) return;
     void applyNativeVoiceCallRoute('EARPIECE');
-    try {
-      (InCallManager as any).setForceSpeakerphoneOn?.(false);
-      InCallManager.setSpeakerphoneOn(false);
-      void (InCallManager as any).chooseAudioRoute?.('EARPIECE');
-    } catch {}
+    applyInCallManagerBuiltInRoute(false);
   }
 }
 
@@ -1673,58 +1669,31 @@ let manualRouteApplyChain: Promise<void> = Promise.resolve();
 /**
  * Ручной цикл кнопки: latest-wins очередь.
  * Повторный тап во время apply не откатывает звук «догоняющим» предыдущим маршрутом.
- * EAR↔SPEAKER не await'им native — иначе тап ждёт bridge и звук «тупит».
+ * EAR↔SPEAKER идут мимо очереди — иначе тап ждёт bridge и звук «тупит».
  */
 export function applyCallAudioOutputRouteLatest(
   route: InCallAudioRoute,
   opts?: { media?: 'audio' | 'video'; forceBuiltIn?: boolean },
 ): Promise<void> {
-  manualRouteApplyLatest = { route, opts };
   // Не пропускать по signature — ручной тап всегда доходит до native.
   lastNativeInCallSignature = '';
+  if (route === 'EARPIECE' || route === 'SPEAKER_PHONE') {
+    // Built-in мимо очереди: за BT-джобом native settle тянется до ~8.5s,
+    // и ухо/громкая ждали бы его. Догоняющий job отменяем — ручной выбор последний.
+    manualRouteApplyLatest = null;
+    return applyCallAudioOutputRouteNow(route, opts);
+  }
+  // Сюда доходят только внешние маршруты: BT/провод действительно надо сериализовать.
+  manualRouteApplyLatest = { route, opts };
   const drain = async () => {
     while (manualRouteApplyLatest) {
       const job = manualRouteApplyLatest;
       manualRouteApplyLatest = null;
-      const lock = readCallAudioRouteUiLock();
-      const userSel = readUserSelectedCallAudioRoute();
-      const want =
-        lock === 'EARPIECE' || lock === 'SPEAKER_PHONE'
-          ? lock
-          : userSel === 'EARPIECE' || userSel === 'SPEAKER_PHONE'
-            ? userSel
-            : isExternalHeadsetRoute(userSel)
-              ? userSel
-              : null;
-      let routeToApply = job.route;
-      if (
-        want &&
-        (job.route === 'EARPIECE' || job.route === 'SPEAKER_PHONE') &&
-        want !== job.route
-      ) {
-        if (manualRouteApplyLatest) {
-          // Есть более новый job — он в while.
-          continue;
-        }
-        // Lock уже новый, а job устарел — применяем актуальный want.
-        routeToApply = want;
-      }
       lastNativeInCallSignature = '';
-      const applyOpts = {
+      await applyCallAudioOutputRouteNow(job.route, {
         ...job.opts,
-        forceBuiltIn:
-          job.opts?.forceBuiltIn ?? !isExternalHeadsetRoute(routeToApply),
-      };
-      const isBuiltIn =
-        routeToApply === 'EARPIECE' || routeToApply === 'SPEAKER_PHONE';
-      if (isBuiltIn) {
-        // Fire-and-forget: очередь не блокируется на RN bridge / AudioManager.
-        void applyCallAudioOutputRouteNow(routeToApply, applyOpts).catch(() => {});
-        // Дать шанс схлопнуть быстрые повторные тапы в том же тике.
-        await Promise.resolve();
-        continue;
-      }
-      await applyCallAudioOutputRouteNow(routeToApply, applyOpts);
+        forceBuiltIn: job.opts?.forceBuiltIn ?? !isExternalHeadsetRoute(job.route),
+      });
     }
   };
   manualRouteApplyChain = manualRouteApplyChain.then(drain, drain);

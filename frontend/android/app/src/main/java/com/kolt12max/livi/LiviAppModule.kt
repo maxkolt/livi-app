@@ -30,6 +30,7 @@ import android.media.RingtoneManager
 import android.net.Uri
 import android.os.Build
 import android.os.Handler
+import android.os.HandlerThread
 import android.os.Looper
 import android.os.Process
 import android.os.SystemClock
@@ -75,6 +76,13 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   }
 
   override fun getName(): String = NAME
+
+  override fun invalidate() {
+    super.invalidate()
+    try {
+      audioRouteThread.quitSafely()
+    } catch (_: Exception) {}
+  }
 
   /** false on many tablets / emulators without android.software.telecom — CallKeep must not register PhoneAccount. */
   @ReactMethod
@@ -1070,6 +1078,16 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       type == AudioDeviceInfo.TYPE_BLE_HEADSET ||
       type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP
 
+  /** Адаптер выключен — BT-аудио быть не может; профиль и списки устройств опрашивать незачем. */
+  private fun isBluetoothAdapterEnabled(): Boolean =
+    try {
+      (reactApplicationContext.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)
+        ?.adapter
+        ?.isEnabled == true
+    } catch (_: Exception) {
+      false
+    }
+
   /**
    * Paired / HFP / A2DP виден (в т.ч. idle) — для cycle UI.
    * Любые BT-наушники / колонки / гарнитуры, не OEM-specific.
@@ -1077,6 +1095,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
    */
   private fun isBluetoothHeadsetPairedAvailable(am: AudioManager): Boolean {
     ensureBluetoothHeadsetWearMonitor()
+    if (!isBluetoothAdapterEnabled()) return false
     if (isBluetoothHeadsetConnectedForUi(am)) return true
     // HFP/LE_AUDIO profile — даже без SCO в communication list.
     if (isBluetoothHeadsetProfileConnected()) return true
@@ -1107,6 +1126,10 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
    */
   private fun isBluetoothHeadsetConnectedForUi(am: AudioManager): Boolean {
     ensureBluetoothHeadsetWearMonitor()
+    if (!isBluetoothAdapterEnabled()) {
+      bluetoothHeadsetAudioConnected = false
+      return false
+    }
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
       val comm = am.communicationDevice
       if (comm != null) {
@@ -1199,11 +1222,28 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   private var bluetoothAudioDeviceCallback: AudioDeviceCallback? = null
   private val bluetoothWearHandler = Handler(Looper.getMainLooper())
   @Volatile private var bluetoothRouteSettleRunnable: Runnable? = null
+  /** startBluetoothSco уже вызван, но SCO ещё не поднялся — stop всё равно нужен. */
+  @Volatile private var bluetoothScoStartRequested: Boolean = false
+
+  /**
+   * setCommunicationDevice / startBluetoothSco / getProfileConnectionState — блокирующие
+   * биндеры в audio- и bluetooth-процессы: десятки, на части устройств сотни мс.
+   * На главном потоке они вставали в одну очередь с отрисовкой видеозвонка, и тап по
+   * кнопке режима ждал и её, и соседние audio-задания. Держим их на своём потоке —
+   * один looper, поэтому порядок вызовов сохраняется, как и на главном.
+   */
+  private val audioRouteThread =
+    HandlerThread("livi-audio-route", Process.THREAD_PRIORITY_FOREGROUND).apply { start() }
+  private val audioRouteHandler = Handler(audioRouteThread.looper)
+
+  private fun runOnAudioRouteThread(block: () -> Unit) {
+    audioRouteHandler.post(block)
+  }
 
   /** JS: подписка на ACL/HFP/SCO wear до первого probe (иначе edge теряется). */
   @ReactMethod
   fun startBluetoothHeadsetWearMonitor(promise: Promise) {
-    UiThreadUtil.runOnUiThread {
+    runOnAudioRouteThread {
       try {
         ensureBluetoothHeadsetWearMonitor()
         promise.resolve(true)
@@ -1216,7 +1256,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   /** Raw SCO/HFP audio — без preferred-EAR kill (для rising-edge poll после accept). */
   @ReactMethod
   fun isBluetoothHeadsetScoAudioConnected(promise: Promise) {
-    UiThreadUtil.runOnUiThread {
+    runOnAudioRouteThread {
       try {
         val am = reactApplicationContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
         @Suppress("DEPRECATION")
@@ -1232,7 +1272,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   /** HFP/LE profile connected — даже если communicationDevice ещё EAR (после TWS flap). */
   @ReactMethod
   fun isBluetoothHeadsetProfileConnectedForCall(promise: Promise) {
-    UiThreadUtil.runOnUiThread {
+    runOnAudioRouteThread {
       try {
         ensureBluetoothHeadsetWearMonitor()
         promise.resolve(isBluetoothHeadsetProfileConnected())
@@ -1435,7 +1475,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   /** JS: реально подключённая BT-гарнитура (профиль + comm), не idle A2DP в списке OEM. */
   @ReactMethod
   fun isBluetoothHeadsetConnectedForCall(promise: Promise) {
-    UiThreadUtil.runOnUiThread {
+    runOnAudioRouteThread {
       try {
         val am = reactApplicationContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
         val connected = if (am != null) isBluetoothHeadsetConnectedForUi(am) else false
@@ -1449,12 +1489,12 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   /** Список маршрутов до событий InCallManager (availableCommunicationDevices / legacy flags). */
   @ReactMethod
   fun getVoiceCallCommunicationRoutes(promise: Promise) {
-    UiThreadUtil.runOnUiThread {
+    runOnAudioRouteThread {
       try {
         val am = reactApplicationContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
         if (am == null) {
           promise.resolve(Arguments.createMap())
-          return@runOnUiThread
+          return@runOnAudioRouteThread
         }
         am.mode = AudioManager.MODE_IN_COMMUNICATION
         val available = Arguments.createArray()
@@ -1510,12 +1550,12 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
    */
   @ReactMethod
   fun setVoiceCallSpeakerOn(speakerOn: Boolean, promise: Promise) {
-    UiThreadUtil.runOnUiThread {
+    runOnAudioRouteThread {
       try {
         val am = reactApplicationContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
         if (am == null) {
           promise.resolve(false)
-          return@runOnUiThread
+          return@runOnAudioRouteThread
         }
         am.mode = AudioManager.MODE_IN_COMMUNICATION
         // Явный ear/speaker: всегда снимаем SCO, иначе UI ear а голос «залипает» / flap.
@@ -1531,7 +1571,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
           }
           Log.i(NAME, "setVoiceCallSpeakerOn kept BLUETOOTH (call-audio active)")
           promise.resolve(true)
-          return@runOnUiThread
+          return@runOnAudioRouteThread
         }
         if (!speakerOn) {
           @Suppress("DEPRECATION")
@@ -1587,20 +1627,33 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   }
 
   private fun stopBluetoothScoForBuiltIn(am: AudioManager) {
+    val btComm =
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        try {
+          am.communicationDevice?.let { isBluetoothCommunicationDeviceType(it.type) } == true
+        } catch (_: Exception) {
+          false
+        }
+      } else {
+        false
+      }
+    @Suppress("DEPRECATION")
+    val scoOn = try { am.isBluetoothScoOn } catch (_: Exception) { false }
+    // Без активного (и без поднимающегося) SCO раскручивать нечего, а stopBluetoothSco —
+    // из самых медленных биндеров: на каждом ухо↔громкая он стоил впустую.
+    if (!scoOn && !btComm && !bluetoothScoStartRequested) return
+    bluetoothScoStartRequested = false
     try {
       @Suppress("DEPRECATION")
-      if (am.isBluetoothScoOn) {
+      if (scoOn) {
         am.isBluetoothScoOn = false
       }
       @Suppress("DEPRECATION")
       am.stopBluetoothSco()
     } catch (_: Exception) {}
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+    if (btComm) {
       try {
-        val comm = am.communicationDevice
-        if (comm != null && isBluetoothCommunicationDeviceType(comm.type)) {
-          am.clearCommunicationDevice()
-        }
+        am.clearCommunicationDevice()
       } catch (_: Exception) {}
     }
   }
@@ -1608,17 +1661,17 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   /** Явный маршрут звонка (BT / провод / earpiece / speaker) через setCommunicationDevice / SCO. */
   @ReactMethod
   fun setVoiceCallAudioRoute(route: String, promise: Promise) {
-    UiThreadUtil.runOnUiThread {
+    runOnAudioRouteThread {
       try {
         val am = reactApplicationContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
         if (am == null) {
           promise.resolve(false)
-          return@runOnUiThread
+          return@runOnAudioRouteThread
         }
         am.mode = AudioManager.MODE_IN_COMMUNICATION
         when (route) {
           "BLUETOOTH" -> {
-            bluetoothRouteSettleRunnable?.let { bluetoothWearHandler.removeCallbacks(it) }
+            bluetoothRouteSettleRunnable?.let { audioRouteHandler.removeCallbacks(it) }
             bluetoothRouteSettleRunnable = null
             @Suppress("DEPRECATION")
             am.isSpeakerphoneOn = false
@@ -1628,6 +1681,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
             }
             @Suppress("DEPRECATION")
             am.isBluetoothScoOn = true
+            bluetoothScoStartRequested = true
 
             fun tryApplyBtDevice(): Boolean {
               if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -1655,7 +1709,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
                 "setVoiceCallAudioRoute route=BLUETOOTH applied=true scoOn=${am.isBluetoothScoOn} commDev=${if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) am.communicationDevice?.type else null}",
               )
               promise.resolve(true)
-              return@runOnUiThread
+              return@runOnAudioRouteThread
             }
 
             // SCO появляется в availableCommunicationDevices с задержкой после ACL — дожимаем.
@@ -1669,6 +1723,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
                     if (!am.isBluetoothScoOn) {
                       am.startBluetoothSco()
                       am.isBluetoothScoOn = true
+                      bluetoothScoStartRequested = true
                     }
                     val ok = tryApplyBtDevice()
                     if (ok || attempt >= delays.size) {
@@ -1691,7 +1746,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
                       return
                     }
                     val delay = delays[attempt++]
-                    bluetoothWearHandler.postDelayed(this, delay)
+                    audioRouteHandler.postDelayed(this, delay)
                   } catch (e: Exception) {
                     Log.e(NAME, "setVoiceCallAudioRoute BT settle failed", e)
                     if (bluetoothRouteSettleRunnable === this) {
@@ -1702,11 +1757,11 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
                 }
               }
             bluetoothRouteSettleRunnable = settle
-            bluetoothWearHandler.postDelayed(settle, delays[attempt++])
-            return@runOnUiThread
+            audioRouteHandler.postDelayed(settle, delays[attempt++])
+            return@runOnAudioRouteThread
           }
           "EARPIECE", "SPEAKER_PHONE" -> {
-            bluetoothRouteSettleRunnable?.let { bluetoothWearHandler.removeCallbacks(it) }
+            bluetoothRouteSettleRunnable?.let { audioRouteHandler.removeCallbacks(it) }
             bluetoothRouteSettleRunnable = null
             var applied = false
             stopBluetoothScoForBuiltIn(am)

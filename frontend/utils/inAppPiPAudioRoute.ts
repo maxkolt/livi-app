@@ -30,6 +30,7 @@ import {
 import { armCallAudioRouteUiLock, clearCallAudioRouteUiLock } from './callAudioRouteTransitionGuards';
 import { rememberBuiltinCallRouteBeforeHeadset, rememberDirectCallAudioRouteBeforeVideo } from './callHeadsetAudioFallback';
 import { notifyInAppPiPAudioRouteUi } from './callInAppPiPAudioRouteUi';
+import { applyInCallManagerBuiltInRoute } from './voiceCallAudioRoute';
 import { logger } from './logger';
 
 export { readInAppPiPAudioOutputRoute } from './activeCallSession';
@@ -114,11 +115,7 @@ function persistInAppPiPAudioRoute(route: InCallAudioRoute): void {
 
 function pokeBuiltInSpeakerImmediate(route: InCallAudioRoute): void {
   if (route !== 'SPEAKER_PHONE' && route !== 'EARPIECE') return;
-  const wantSpeaker = route === 'SPEAKER_PHONE';
-  try {
-    (InCallManager as any).setForceSpeakerphoneOn?.(wantSpeaker);
-    InCallManager.setSpeakerphoneOn(wantSpeaker);
-  } catch {}
+  applyInCallManagerBuiltInRoute(route === 'SPEAKER_PHONE');
 }
 
 /** In-app PiP: всегда 3 режима (как аудио-страница), не делегировать в video UI (2 режима). */

@@ -1,4 +1,5 @@
 import { NativeModules, Platform } from 'react-native';
+import InCallManager from 'react-native-incall-manager';
 import type { InCallAudioRoute } from '../components/VideoChat/hooks/audioRouteTypes';
 import { isExternalHeadsetRoute } from '../components/VideoChat/hooks/audioRouteTypes';
 import { logger } from './logger';
@@ -32,6 +33,24 @@ function shouldHoldBluetoothScoAgainstBuiltIn(): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * ICM для built-in EAR/SPEAKER.
+ * Android: одного setForceSpeakerphoneOn достаточно —
+ *   chooseAudioRoute('EARPIECE'|'SPEAKER_PHONE') гоняет тот же selectAudioDevice(),
+ *   то есть второй updateAudioDeviceState на UI-потоке впустую, а setSpeakerphoneOn
+ *   на API 31+ дёргает clearCommunicationDevice с native-потока и сбивает только что
+ *   выставленный setCommunicationDevice — лишнее переключение устройства.
+ * iOS: override порта делает именно setSpeakerphoneOn, его оставляем.
+ */
+export function applyInCallManagerBuiltInRoute(wantSpeaker: boolean): void {
+  try {
+    (InCallManager as any).setForceSpeakerphoneOn?.(wantSpeaker);
+    if (Platform.OS !== 'android') {
+      InCallManager.setSpeakerphoneOn(wantSpeaker);
+    }
+  } catch {}
 }
 
 /** Android: BT / wired / earpiece / speaker через AudioManager.setCommunicationDevice. */
