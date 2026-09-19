@@ -1,5 +1,7 @@
 <resources>
   <color name="splashscreen_background">#0B0B0C</color>
+  <!-- WELCOME_STAGE_BG из JS: фон окна при повороте не должен отличаться от фона экрана. -->
+  <color name="window_background">#0A0C14</color>
   <color name="system_pip_backdrop">#0A0A0C</color>
   <color name="iconBackground">#0A1A36</color>
   <color name="colorPrimary">#023c69</color>

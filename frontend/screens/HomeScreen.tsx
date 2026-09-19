@@ -9,6 +9,7 @@ import {
   Pressable,
   View,
   Dimensions,
+  DeviceEventEmitter,
   Platform,
   type LayoutChangeEvent,
   ActionSheetIOS,
@@ -86,7 +87,7 @@ import {
 } from './home';
 import { HomeWelcomeTabBar, type WelcomeTabId } from './home/HomeWelcomeTabBar';
 import { WelcomeKeepAlivePane } from './home/WelcomeKeepAlivePane';
-import { WelcomeStageBackground } from './home/WelcomeStageBackground';
+import { STAGE_TRANSITION_BG, WelcomeStageBackground } from './home/WelcomeStageBackground';
 import { HomeLayoutProvider } from './home/HomeLayoutContext';
 import { WELCOME_HEADER_TITLE, WELCOME_STAGE_BG } from './home/constants';
 import { recordCallLog, recordCancelledCall, recordNoAnswerCall, requestCallLogSoftUi, cancelPendingCallLogNotify, flushCallLogUi, forceCallLogUiNow, loadCallLog } from './home/callLog';
@@ -316,17 +317,148 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     width: 0,
     height: 0,
   });
-  const onHomeRootLayout = useCallback((e: LayoutChangeEvent) => {
-    const { width, height } = e.nativeEvent.layout;
-    if (!(width > 0 && height > 0)) return;
-    setRootSize((prev) =>
-      Math.abs(prev.width - width) < 1 && Math.abs(prev.height - height) < 1
-        ? prev
-        : { width, height },
-    );
-  }, []);
-  const layoutWidth = rootSize.width || frame.width;
-  const layoutHeight = rootSize.height || frame.height;
+  /**
+   * Пересбор раскладки при повороте виден пользователем: система проигрывает
+   * анимацию поворота ~300мс, а RN за это время успевает отрисовать несколько
+   * промежуточных кадров — кнопки и подписи «съезжают» вниз-вправо.
+   *
+   * На время ресайза гасим контент. Фон сцены лежит отдельным слоем и остаётся
+   * на экране, поэтому это читается как переход, а не как мигание. Возврат —
+   * когда размеры перестали меняться (debounce), коротким fade.
+   */
+  const contentOpacity = useRef(new Animated.Value(1)).current;
+  const lastRootSizeRef = useRef<{ width: number; height: number }>({ width: 0, height: 0 });
+  const revealTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /**
+   * После нативного события не разрешаем ранний reveal по одному лишь таймеру:
+   * на тяжёлых вкладках новый root layout приходит почти через секунду.
+   */
+  const orientationLayoutPendingRef = useRef(false);
+  const expectedLandscapeRef = useRef<boolean | null>(null);
+  /**
+   * Размеры при повороте сходятся не за один проход: окно → safe-area → шапка →
+   * сцена, с паузами до ~220мс между проходами (замерено). Показываем контент
+   * только когда сигналы о перекладке прекратились, но не дольше максимума —
+   * иначе при непрерывной анимации внутри экрана он остался бы скрытым.
+   */
+  const revealDeadlineRef = useRef(0);
+  const RESIZE_SETTLE_MS = 240;
+  const RESIZE_MAX_HIDE_MS = 1400;
+  const revealContent = useCallback(() => {
+    console.log('[rot-diag] REVEAL at', Date.now() % 100000); // TEMP-DIAG
+    Animated.timing(contentOpacity, {
+      toValue: 1,
+      duration: 140,
+      useNativeDriver: true,
+    }).start();
+  }, [contentOpacity]);
+  const scheduleContentReveal = useCallback(() => {
+    if (revealTimerRef.current) clearTimeout(revealTimerRef.current);
+    const now = Date.now();
+    const capLeft = Math.max(0, revealDeadlineRef.current - now);
+    const wait = Math.min(RESIZE_SETTLE_MS, capLeft);
+    revealTimerRef.current = setTimeout(() => {
+      revealTimerRef.current = null;
+      revealContent();
+    }, wait);
+  }, [revealContent]);
+  const hideContentForResize = useCallback(() => {
+    contentOpacity.stopAnimation();
+    contentOpacity.setValue(0);
+    revealDeadlineRef.current = Date.now() + RESIZE_MAX_HIDE_MS;
+    scheduleContentReveal();
+  }, [contentOpacity, scheduleContentReveal]);
+  const hideContentUntilOrientationLayout = useCallback(
+    (isLandscape: boolean) => {
+      contentOpacity.stopAnimation();
+      contentOpacity.setValue(0);
+      orientationLayoutPendingRef.current = true;
+      expectedLandscapeRef.current = isLandscape;
+      revealDeadlineRef.current = Date.now() + RESIZE_MAX_HIDE_MS;
+      if (revealTimerRef.current) clearTimeout(revealTimerRef.current);
+      // Страховка: даже если layout-событие потерялось, экран не останется пустым.
+      revealTimerRef.current = setTimeout(() => {
+        revealTimerRef.current = null;
+        orientationLayoutPendingRef.current = false;
+        expectedLandscapeRef.current = null;
+        revealContent();
+      }, RESIZE_MAX_HIDE_MS);
+    },
+    [contentOpacity, revealContent],
+  );
+  /** Вложенный onLayout во время ресайза — откладываем показ. */
+  const notifyLayoutActivity = useCallback(() => {
+    if (orientationLayoutPendingRef.current) return;
+    if (revealDeadlineRef.current <= Date.now()) return;
+    scheduleContentReveal();
+  }, [scheduleContentReveal]);
+  useEffect(
+    () => () => {
+      if (revealTimerRef.current) clearTimeout(revealTimerRef.current);
+    },
+    [],
+  );
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    // Нативное событие из onConfigurationChanged приходит до пересборки раскладки.
+    // onLayout для этого поздно: он срабатывает, когда кадр уже отрисован.
+    const sub = DeviceEventEmitter.addListener('LiviOrientationWillChange', (land) => {
+      console.log('[rot-diag] native orientation event, landscape=', land, 'at', Date.now() % 100000); // TEMP-DIAG
+      hideContentUntilOrientationLayout(!!land);
+    });
+    return () => sub.remove();
+  }, [hideContentUntilOrientationLayout]);
+  const onHomeRootLayout = useCallback(
+    (e: LayoutChangeEvent) => {
+      const { width, height } = e.nativeEvent.layout;
+      if (!(width > 0 && height > 0)) return;
+      const prev = lastRootSizeRef.current;
+      // Только смена ширины: высота меняется и от клавиатуры (adjustResize),
+      // а гасить контент при вводе ника нельзя.
+      console.log('[rot-diag] root layout', Math.round(width), 'x', Math.round(height), 'at', Date.now() % 100000); // TEMP-DIAG
+      // Ширина или заметная смена высоты. Клавиатура окно не ресайзит: при
+      // edge-to-edge IME приходит инсетами (observeImeInsets в MainActivity),
+      // поэтому высота — валидный признак поворота и пробуждения.
+      const rotated =
+        prev.width > 0 &&
+        (Math.abs(prev.width - width) > 1 || Math.abs(prev.height - height) > 24);
+      lastRootSizeRef.current = { width, height };
+      const expectedLandscape = expectedLandscapeRef.current;
+      const confirmsNativeOrientation =
+        orientationLayoutPendingRef.current &&
+        expectedLandscape != null &&
+        (width > height) === expectedLandscape;
+      if (confirmsNativeOrientation) {
+        orientationLayoutPendingRef.current = false;
+        expectedLandscapeRef.current = null;
+        // Новый root уже в ожидаемой ориентации. Теперь ждём короткую тишину
+        // layout-событий и только после неё плавно возвращаем весь Home.
+        hideContentForResize();
+      } else if (rotated && !orientationLayoutPendingRef.current) {
+        // Страховка для iOS и для случаев, когда нативное событие не пришло.
+        hideContentForResize();
+      } else if (!orientationLayoutPendingRef.current) {
+        notifyLayoutActivity();
+      }
+      setRootSize((prevSize) =>
+        Math.abs(prevSize.width - width) < 1 && Math.abs(prevSize.height - height) < 1
+          ? prevSize
+          : { width, height },
+      );
+    },
+    [hideContentForResize, notifyLayoutActivity],
+  );
+  /**
+   * Замер корня сверяем с safe-area frame. При засыпании и пробуждении onLayout
+   * успевает отдать промежуточный размер, и раньше он застревал в состоянии:
+   * фон оставался разделённым, радар — сжатым даже после возврата в вертикаль.
+   */
+  const plausibleSize = (measured: number, reference: number) =>
+    measured > 0 && (reference <= 0 || Math.abs(measured - reference) <= reference * 0.25);
+  const layoutWidth = plausibleSize(rootSize.width, frame.width) ? rootSize.width : frame.width;
+  const layoutHeight = plausibleSize(rootSize.height, frame.height)
+    ? rootSize.height
+    : frame.height;
   const homeLayoutSize = useMemo(
     () => ({ width: layoutWidth, height: layoutHeight }),
     [layoutWidth, layoutHeight],
@@ -5153,10 +5285,16 @@ const handleClearNick = useCallback(async () => {
 
   return (
     <View
-      style={{ flex: 1, backgroundColor: WELCOME_STAGE_BG }}
+      style={{ flex: 1, backgroundColor: STAGE_TRANSITION_BG }}
       onLayout={onHomeRootLayout}
     >
-      <HomeLayoutProvider size={homeLayoutSize}>
+      <HomeLayoutProvider size={homeLayoutSize} onLayoutActivity={notifyLayoutActivity}>
+      {/* Фон гаснет вместе с контентом. Замер показал, что слой градиента точно
+          следует за контейнером (расхождение 2–6мс), то есть раскладка верна —
+          стык даёт нативная перерисовка поверхности при повороте, и скрыть его
+          можно только не показывая этот кадр. Под фоном лежит STAGE_TRANSITION_BG,
+          взятый из середины градиента, поэтому подмена незаметна. */}
+      <Animated.View style={{ flex: 1, minHeight: 0, opacity: contentOpacity }}>
       <WelcomeStageBackground />
     <SafeAreaView
         style={[
@@ -5650,6 +5788,7 @@ const handleClearNick = useCallback(async () => {
         />
       </View>
     )}
+      </Animated.View>
       </HomeLayoutProvider>
     </View>
   );

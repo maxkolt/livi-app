@@ -255,8 +255,8 @@ const styles = StyleSheet.create({
     minHeight: 52,
   },
   rowLandscape: {
-    paddingTop: 2,
-    minHeight: 46,
+    paddingTop: 1,
+    minHeight: 40,
   },
   rowTablet: {
     paddingTop: 8,

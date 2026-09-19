@@ -28,6 +28,12 @@ const CTA_BORDER_GRADIENT = ['#0b7f74', '#255db8', '#007fbc'] as const;
  * Высота CTA. Вынесена отдельно, чтобы раскладка Search могла заранее
  * зарезервировать под кнопку ровно столько же, сколько она реально займёт.
  */
+export function welcomeSearchCtaWidth(windowWidth: number, tabletLayout: boolean): number {
+  const sideInset = 44;
+  const maxCtaWidth = tabletLayout ? SEARCH_CTA_TABLET_MAX_WIDTH : SEARCH_CTA_MAX_WIDTH;
+  return Math.min(Math.max(0, windowWidth - sideInset * 2), maxCtaWidth);
+}
+
 export function welcomeSearchCtaHeight(tabletLayout: boolean, compact: boolean): number {
   if (tabletLayout) return 56;
   if (compact) return Platform.OS === 'ios' ? 48 : 44;
@@ -40,6 +46,8 @@ type WelcomeSearchCtaProps = {
   disabled?: boolean;
   onDisabledPress?: () => void;
   compact?: boolean;
+  /** Жёсткий потолок ширины: в две колонки кнопка равна ширине своей колонки. */
+  maxWidth?: number;
   style?: ViewStyle;
 };
 
@@ -49,16 +57,17 @@ export function WelcomeSearchCta({
   disabled = false,
   onDisabledPress,
   compact = false,
+  maxWidth,
   style,
 }: WelcomeSearchCtaProps) {
   // Размер берём из safe-area frame: он приходит от нативного провайдера и
   // обновляется при повороте, в отличие от Dimensions.
   const { width: windowWidth, height: windowHeight } = useHomeLayout();
   const tabletLayout = isWelcomeTabletLayout(windowWidth, windowHeight);
-  const sideInset = 44;
-  const maxCtaWidth =
-    tabletLayout ? SEARCH_CTA_TABLET_MAX_WIDTH : SEARCH_CTA_MAX_WIDTH;
-  const buttonWidth = Math.min(Math.max(0, windowWidth - sideInset * 2), maxCtaWidth);
+  const buttonWidth = Math.min(
+    welcomeSearchCtaWidth(windowWidth, tabletLayout),
+    maxWidth && maxWidth > 0 ? maxWidth : Number.POSITIVE_INFINITY,
+  );
   const buttonHeight = welcomeSearchCtaHeight(tabletLayout, compact);
   const borderRadius = buttonHeight / 2;
   const innerRadius = Math.max(0, borderRadius - BORDER_W);

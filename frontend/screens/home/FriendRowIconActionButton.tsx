@@ -40,6 +40,8 @@ type FriendRowIconActionButtonProps = {
   variant?: 'menu' | 'welcome';
   /** Увеличенный контрол для планшета. */
   large?: boolean;
+  /** Телефон в landscape: строки ниже, кнопки должны ужаться вместе с ними. */
+  compact?: boolean;
 };
 
 export function FriendRowIconActionButton({
@@ -56,6 +58,7 @@ export function FriendRowIconActionButton({
   onLongPress,
   variant = 'menu',
   large = false,
+  compact = false,
 }: FriendRowIconActionButtonProps) {
   const pressStartedAtRef = React.useRef(0);
   const pressHandledRef = React.useRef(false);
@@ -131,9 +134,30 @@ export function FriendRowIconActionButton({
   const btnPressedSurface = isWelcomeVariant
     ? WELCOME_FRIEND_ACTION_BTN_PRESSED_SURFACE
     : FRIEND_ACTION_BTN_PRESSED_SURFACE;
-  const buttonWidth = large ? FRIEND_ACTION_BUTTON.width + 4 : FRIEND_ACTION_BUTTON.width;
-  const buttonHeight = large ? FRIEND_ACTION_BUTTON.height + 4 : FRIEND_ACTION_BUTTON.height;
-  const buttonRadius = large ? Math.max(btnRadius, buttonHeight / 2) : btnRadius;
+  // В welcome-списке портретные размеры совпадают с кнопками поиска/короны
+  // в шапке. Landscape оставляем компактным, планшет — 44×44 как chrome.
+  const welcomeButtonSize = large ? 44 : compact ? 34 : 40;
+  const sizeDelta = large ? 4 : compact ? -8 : 0;
+  const buttonWidth = isWelcomeVariant
+    ? welcomeButtonSize
+    : FRIEND_ACTION_BUTTON.width + sizeDelta;
+  const buttonHeight = isWelcomeVariant
+    ? welcomeButtonSize
+    : FRIEND_ACTION_BUTTON.height + sizeDelta;
+  const buttonRadius = isWelcomeVariant
+    ? buttonHeight / 2
+    : large
+      ? Math.max(btnRadius, buttonHeight / 2)
+      : compact
+        ? Math.min(btnRadius, buttonHeight / 2)
+        : btnRadius;
+  const iconSize = isWelcomeVariant
+    ? large
+      ? 24
+      : compact
+        ? 19
+        : 22
+    : FRIEND_ACTION_ICON_SIZE + (large ? 2 : compact ? -4 : 0);
 
   return (
     <Pressable
@@ -200,7 +224,7 @@ export function FriendRowIconActionButton({
         <View style={flipIcon ? { transform: [{ scaleX: -1 }] } : undefined}>
           <MaterialCommunityIcons
             name={icon}
-            size={large ? FRIEND_ACTION_ICON_SIZE + 2 : FRIEND_ACTION_ICON_SIZE}
+            size={iconSize}
             color={
               inactiveLook
                 ? ANDROID_VIDEO_CALL_DISABLED_ICON

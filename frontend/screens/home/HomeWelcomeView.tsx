@@ -8,7 +8,7 @@ import {
   View,
   type LayoutChangeEvent,
 } from 'react-native';
-import { useHomeLayout } from './HomeLayoutContext';
+import { useHomeLayout, useHomeLayoutActivity } from './HomeLayoutContext';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AdaptiveText from '../../components/AdaptiveText';
 import * as Haptics from 'expo-haptics';
@@ -19,7 +19,7 @@ import { HomeCenterProfile } from './HomeCenterProfile';
 import { WelcomeCrownButton } from './WelcomeCrownButton';
 import { WelcomeOnlineBanner, type WelcomeBannerPeer } from './WelcomeOnlineBanner';
 import { WelcomeRadar } from './WelcomeRadar';
-import { WelcomeSearchCta, welcomeSearchCtaHeight } from './WelcomeSearchCta';
+import { WelcomeSearchCta, welcomeSearchCtaHeight, welcomeSearchCtaWidth } from './WelcomeSearchCta';
 import type { Lang } from '../../utils/i18n';
 import { logger } from '../../utils/logger';
 import type { HomeStyles } from './styles';
@@ -90,6 +90,7 @@ function HomeWelcomeViewInner({
   const [shineNonce, setShineNonce] = useState(0);
   const reveal = useRef(new Animated.Value(welcomeRevealPlayedThisSession ? 1 : 0)).current;
   const frame = useHomeLayout();
+  const notifyLayoutActivity = useHomeLayoutActivity();
   const insets = useSafeAreaInsets();
   const [measured, setMeasured] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
   /** Фактическая область под радар/текст/CTA — всё, что осталось от панели под шапкой. */
@@ -128,10 +129,12 @@ function HomeWelcomeViewInner({
   const onStageLayout = useCallback((e: LayoutChangeEvent) => {
     const { width, height } = e.nativeEvent.layout;
     if (!(width > 0 && height > 0)) return;
+    console.log('[rot-diag] stage layout', Math.round(width), 'x', Math.round(height), 'at', Date.now() % 100000); // TEMP-DIAG
+    notifyLayoutActivity();
     setStageBox((prev) =>
       Math.abs(prev.w - width) < 1 && Math.abs(prev.h - height) < 1 ? prev : { w: width, h: height },
     );
-  }, []);
+  }, [notifyLayoutActivity]);
 
   const onRootLayout = (e: LayoutChangeEvent) => {
     const { width, height } = e.nativeEvent.layout;
@@ -148,7 +151,7 @@ function HomeWelcomeViewInner({
    */
   const stageWidth = frame.width || layoutWidth;
   const stageHeight = frame.height || layoutHeight;
-  const viewWidth = measured.w || stageWidth;
+  const viewWidth = measured.w > stageWidth * 0.6 ? measured.w : stageWidth;
   const isTabletLayout = isWelcomeTabletLayout(stageWidth, stageHeight);
   const isPhone = resolveIsPhone(stageWidth, stageHeight);
   const isLandscape = resolveIsLandscape(stageWidth, stageHeight);
@@ -173,8 +176,8 @@ function HomeWelcomeViewInner({
   const estimatedTabBar =
     (isTabletLayout ? 60 : splitStage ? 46 : 52) +
     Math.max(insets.bottom, Platform.OS === 'android' ? 6 : 2);
-  const viewHeight =
-    measured.h || Math.max(160, stageHeight - insets.top - estimatedTabBar);
+  const expectedPaneH = Math.max(160, stageHeight - insets.top - estimatedTabBar);
+  const viewHeight = measured.h > expectedPaneH * 0.6 ? measured.h : expectedPaneH;
 
   /** Один источник размеров текста: по ним и рисуем, и резервируем место под радаром. */
   const type = {
@@ -194,9 +197,9 @@ function HomeWelcomeViewInner({
     ctaMinGap: splitStage ? 6 : compactLayout || shortPhone ? 12 : 16,
     /** Больше = кнопка выше над навигацией. */
     ctaBottomPad: tightStage
-      ? 6
+      ? 20
       : splitStage
-        ? 8
+        ? 22
         : compactLayout
           ? 20
           : shortPhone
@@ -213,9 +216,16 @@ function HomeWelcomeViewInner({
    * поздно расходится с реальностью. Оценка нужна только на первый кадр.
    */
   const estimatedChrome =
-    topBarHeight + (tightStage ? 48 : bannerCompact ? 62 : 70) + space.bannerMarginTop;
-  const stageW = stageBox.w || viewWidth;
-  const stageH = stageBox.h || Math.max(150, viewHeight - estimatedChrome);
+    topBarHeight +
+    (splitStage ? 0 : (bannerCompact ? 62 : 70) + space.bannerMarginTop);
+  /**
+   * Замер сцены принимаем только если он правдоподобен. При засыпании и повороте
+   * onLayout отдаёт промежуточные значения (ловил кадр 726×95 при реальных 239),
+   * и такой замер застревал в состоянии — радар оставался сжатым навсегда.
+   */
+  const expectedStageH = Math.max(150, viewHeight - estimatedChrome);
+  const stageW = stageBox.w > viewWidth * 0.6 ? stageBox.w : viewWidth;
+  const stageH = stageBox.h > expectedStageH * 0.6 ? stageBox.h : expectedStageH;
 
   /**
    * Сцена настолько низкая (split-screen, совсем маленькие экраны), что радар с
@@ -227,6 +237,18 @@ function HomeWelcomeViewInner({
 
   /** Реальная высота текста с кнопкой под радаром — считаем из тех же размеров, что и рисуем. */
   const ctaHeight = welcomeSearchCtaHeight(isTabletLayout, splitStage);
+  /** Правая колонка в строке шириной ровно с кнопку — баннер, текст и CTA в одну линию. */
+  /**
+   * Колонка занимает половину строки, но не шире максимума кнопки. Без привязки
+   * к строке композиция плыла: на узком landscape колонка забирала 63% ширины и
+   * радар оставался зажатым, на широком — 41%.
+   */
+  const ctaWidth = Math.min(
+    welcomeSearchCtaWidth(stageWidth, isTabletLayout),
+    Math.max(240, stageW * 0.5),
+  );
+  /** Остаток строки под радар (минус боковые отступы и зазор между колонками). */
+  const radarSlotWidth = Math.max(120, stageW - ctaWidth - 18 - 32);
   const stageCopyReserve = splitStage
     ? 0
     : headingLineH * 2 +
@@ -246,14 +268,14 @@ function HomeWelcomeViewInner({
   const radarHeightLimit = splitStage ? stageH * 0.78 : stageH - stageCopyReserve;
   /** Желаемый размер по ширине — им управляет дизайн, а не теснота экрана. */
   const radarPreferred = splitStage
-    ? Math.min(stageW * 0.42, Math.max(150, stageW - 288), isTabletLayout ? 300 : 248)
+    ? Math.min(radarSlotWidth * 0.9, isTabletLayout ? 340 : 248)
     : Math.min(stageW * (compactLayout ? 0.84 : 0.88), isTabletLayout ? 380 : 328);
   /**
    * Потолок по высоте всегда сильнее желаемого размера: на низком экране радар
    * ужимается сам, вместо того чтобы выдавить текст с кнопкой за границу панели.
    * 96 — предел, ниже которого радар уже не читается как радар.
    */
-  const radarSize = Math.max(96, Math.min(radarPreferred, Math.max(96, radarHeightLimit)));
+  const radarSize = Math.round(Math.max(96, Math.min(radarPreferred, Math.max(96, radarHeightLimit))));
 
   // Базовый аватар для раскладки колец; визуально больше на ⅓ ширины 1-го кольца (перекрывает его).
   // В стеке размеры те же, что были до адаптива, — вертикальная раскладка не меняется.
@@ -261,16 +283,23 @@ function HomeWelcomeViewInner({
   const stackAvatarBase = isTabletLayout ? 136 : viewWidth < 400 ? 112 : 124;
   const welcomeAvatarBase = Math.round(
     splitStage
-      ? Math.max(54, Math.min(128, radarSize * 0.52))
+      ? Math.max(54, Math.min(128, radarSize * 0.487))
       : Math.min(stackAvatarBase, radarSize * 0.42),
   );
   const welcomeAvatarRadius = Math.round(welcomeAvatarBase / 2);
+  /** Сжатие орбит к центру — одно значение и для геометрии колец, и для аватара. */
+  const orbitScale = splitStage ? 0.72 : 1;
   const welcomeAvatarSize = (() => {
     const half = radarSize / 2;
     const avatarOuter = welcomeAvatarRadius + 2;
     const stepTotal = 0.56 + 0.86 + 1.18 + 1.14;
-    const g = Math.max(half * 0.078, (half * 0.85 - avatarOuter) / stepTotal);
+    const g = Math.max(half * 0.078, (half * 0.85 - avatarOuter) / stepTotal) * orbitScale;
     const firstRingWidth = g * 0.56;
+    if (splitStage) {
+      // Аватар доходит почти до первой орбиты: она становится уже, аватар крупнее,
+      // остальные кольца остаются на своих радиусах.
+      return Math.round((avatarOuter + firstRingWidth - 1) * 2);
+    }
     return Math.round(welcomeAvatarBase + (firstRingWidth * 2) / 3);
   })();
 
@@ -393,17 +422,19 @@ function HomeWelcomeViewInner({
         <WelcomeCrownButton large={isTabletLayout} small={tightStage} />
       </View>
 
-      <Animated.View style={revealStyle}>
-        <WelcomeOnlineBanner
-          lang={lang}
-          onlineLabel={L('online')}
-          onlineCount={onlineCount}
-          peers={bannerPeers}
-          compact={bannerCompact}
-          dense={tightStage}
-          marginTop={space.bannerMarginTop}
-        />
-      </Animated.View>
+      {splitStage ? null : (
+        <Animated.View style={revealStyle}>
+          <WelcomeOnlineBanner
+            lang={lang}
+            onlineLabel={L('online')}
+            onlineCount={onlineCount}
+            peers={bannerPeers}
+            compact={bannerCompact}
+            dense={tightStage}
+            marginTop={space.bannerMarginTop}
+          />
+        </Animated.View>
+      )}
 
       <Animated.View
         collapsable={false}
@@ -414,11 +445,13 @@ function HomeWelcomeViewInner({
           revealStyle,
         ]}
       >
+        <View style={splitStage ? welcomeStyles.radarSlot : null}>
+        <View style={splitStage ? welcomeStyles.radarShift : null}>
         <WelcomeRadar
           size={radarSize}
           isDark={isDark}
           avatarRadius={welcomeAvatarRadius}
-          orbitScale={splitStage ? 0.72 : 1}
+          orbitScale={orbitScale}
         >
           <HomeCenterProfile
             styles={styles}
@@ -434,11 +467,14 @@ function HomeWelcomeViewInner({
             onOpenAvatarModal={handleOpenAvatarModal}
           />
         </WelcomeRadar>
+        </View>
+        </View>
 
         <Animated.View
           style={[
             welcomeStyles.stageCopy,
             splitStage && welcomeStyles.stageCopyRow,
+            splitStage ? { width: ctaWidth, maxWidth: ctaWidth } : null,
             {
               marginTop: space.stageCopyMarginTop,
               paddingBottom: space.stageCopyPaddingBottom,
@@ -446,6 +482,19 @@ function HomeWelcomeViewInner({
             revealStyle,
           ]}
         >
+          {splitStage ? (
+            <WelcomeOnlineBanner
+              lang={lang}
+              onlineLabel={L('online')}
+              onlineCount={onlineCount}
+              peers={bannerPeers}
+              compact={bannerCompact}
+              dense={tightStage}
+              marginTop={0}
+              sideMargin={0}
+            />
+          ) : null}
+
           <View style={[welcomeStyles.copyBlock, { marginBottom: space.copyMarginBottom }]}>
             <AdaptiveText
               style={[
@@ -491,6 +540,7 @@ function HomeWelcomeViewInner({
               onPress={handleStartSearchPress}
               disabled={hasActiveCallForSearch}
               compact={splitStage}
+              maxWidth={splitStage ? ctaWidth : undefined}
               style={{
                 marginBottom: 0,
               }}
@@ -535,7 +585,7 @@ const welcomeStyles = StyleSheet.create({
     flex: 1,
     minHeight: 0,
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'stretch',
     justifyContent: 'center',
     paddingHorizontal: 16,
     gap: 18,
@@ -550,10 +600,20 @@ const welcomeStyles = StyleSheet.create({
     position: 'relative',
   },
   stageCopyRow: {
-    width: 'auto',
-    flexBasis: 0,
-    maxWidth: 440,
+    flexGrow: 0,
+    flexShrink: 0,
+    justifyContent: 'space-between',
+  },
+  /** Радар занимает весь остаток строки: прижат влево, чуть опущен. */
+  radarSlot: {
+    flex: 1,
+    minWidth: 0,
+    alignItems: 'center',
     justifyContent: 'center',
+  },
+  /** Подъём радара в строке. Запас по высоте ~26, так что за границу не уходит. */
+  radarShift: {
+    marginTop: -12,
   },
   copyBlock: {
     paddingHorizontal: 28,

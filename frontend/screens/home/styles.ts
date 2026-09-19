@@ -248,10 +248,10 @@ export const styles = StyleSheet.create({
   /** Отступ между видео и чатом — снаружи якоря кнопки, чтобы hitSlop-зоны не пересекались. */
   chatBtnOuter: { marginLeft: FRIEND_ROW_ACTION_GAP },
   friendActionBadgeAnchor: {
-    width: FRIEND_ACTION_BUTTON.width,
-    height: FRIEND_ACTION_BUTTON.height,
     position: 'relative' as const,
     overflow: 'visible' as const,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
   },
   friendCallActionsAnchor: {
     flexDirection: 'row' as const,

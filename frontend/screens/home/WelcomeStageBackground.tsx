@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   Animated,
+  AppState,
   Image,
   StyleSheet,
   View,
@@ -17,6 +18,32 @@ const STAGE_BG = require('../../assets/welcome-stage-bg.png');
 /** Тон снят с welcome-stage-bg.png — градиент читается как та же сцена без «шва». */
 const STAGE_GRADIENT_COLORS = ['#0E1D24', '#0C171F', '#0A111B', '#0B1821'] as const;
 const STAGE_GRADIENT_LOCATIONS = [0, 0.16, 0.38, 1] as const;
+/**
+ * Виден только в момент поворота, когда слой градиента скрыт. Взят из середины
+ * самого градиента: раньше здесь была почти чёрная WELCOME_STAGE_BG, и подмена
+ * читалась как вспышка «плоского синего».
+ */
+export const STAGE_TRANSITION_BG = '#0C1720';
+
+/**
+ * Счётчик пробуждений. Нативный слой LinearGradient после сна переиспользуется
+ * со старой геометрией: в горизонтали именно он служит фоном, и экран приходил
+ * разделённым по вертикали на два тона. Пересоздаём слой при возврате в active —
+ * под ним лежит сплошной WELCOME_STAGE_BG, поэтому смена кадра незаметна.
+ */
+function useResumeEpoch(): number {
+  const [epoch, setEpoch] = useState(0);
+  useEffect(() => {
+    let last = AppState.currentState;
+    const sub = AppState.addEventListener('change', (next) => {
+      const wasHidden = /inactive|background/.test(last);
+      last = next;
+      if (next === 'active' && wasHidden) setEpoch((v) => v + 1);
+    });
+    return () => sub.remove();
+  }, []);
+  return epoch;
+}
 
 function resolveIsWide(width: number, height: number): boolean {
   return (
@@ -41,22 +68,34 @@ function resolveIsWide(width: number, height: number): boolean {
  */
 export function WelcomeStageBackground() {
   const frame = useSafeAreaFrame();
+  const resumeEpoch = useResumeEpoch();
   const [box, setBox] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
   const isWide = resolveIsWide(box.w || frame.width, box.h || frame.height);
   const bitmapOpacity = useRef(new Animated.Value(isWide ? 0 : 1)).current;
 
+  /**
+   * Показ битмапа отложен, скрытие — мгновенное.
+   *
+   * При пробуждении система на ~400мс отдаёт портретные размеры, хотя окно
+   * остаётся горизонтальным (замерено: frame 755×360 → 360×800 → 755×360).
+   * За это время успевал включиться портретный PNG и оставлял на экране
+   * вертикальный стык. С задержкой этот всплеск проходит мимо: к моменту
+   * срабатывания таймера размеры уже вернулись, и показ отменяется.
+   */
   useEffect(() => {
     if (isWide) {
-      // Скрываем сразу: растянутый портретный PNG не должен быть виден ни кадра.
       bitmapOpacity.stopAnimation();
       bitmapOpacity.setValue(0);
       return;
     }
-    Animated.timing(bitmapOpacity, {
-      toValue: 1,
-      duration: 220,
-      useNativeDriver: true,
-    }).start();
+    const timer = setTimeout(() => {
+      Animated.timing(bitmapOpacity, {
+        toValue: 1,
+        duration: 200,
+        useNativeDriver: true,
+      }).start();
+    }, 500);
+    return () => clearTimeout(timer);
   }, [bitmapOpacity, isWide]);
 
   const onLayout = (e: LayoutChangeEvent) => {
@@ -74,6 +113,7 @@ export function WelcomeStageBackground() {
       pointerEvents="none"
     >
       <LinearGradient
+        key={`stage-gradient-${resumeEpoch}`}
         colors={STAGE_GRADIENT_COLORS}
         locations={STAGE_GRADIENT_LOCATIONS}
         start={{ x: 0.5, y: 0 }}
@@ -103,6 +143,7 @@ type StageGradientProps = {
 /** Chrome header/composer: bitmap для непрозрачного stage, градиент только для стекла. */
 export function StageGradient({ style, children, onLayout, translucent, mirror }: StageGradientProps) {
   const frame = useSafeAreaFrame();
+  const resumeEpoch = useResumeEpoch();
   // Ориентацию считаем от окна, но подтверждаем собственным layout — иначе при
   // повороте картинка на кадр остаётся в старой ветке и мелькает обрезанной.
   const [box, setBox] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
@@ -124,6 +165,7 @@ export function StageGradient({ style, children, onLayout, translucent, mirror }
         onLayout={handleLayout}
       >
         <LinearGradient
+          key={`chrome-gradient-${resumeEpoch}`}
           colors={STAGE_GRADIENT_COLORS}
           locations={STAGE_GRADIENT_LOCATIONS}
           start={mirror ? { x: 0.5, y: 1 } : { x: 0.5, y: 0 }}

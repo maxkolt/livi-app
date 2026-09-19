@@ -41,6 +41,7 @@ export function FriendRowChatButton({
   openMarkReadMenu,
   actionButtonVariant = 'menu',
   largeActionButton = false,
+  compactActionButton = false,
 }: {
   friend: Friend;
   styles: HomeStyles;
@@ -59,6 +60,7 @@ export function FriendRowChatButton({
   openMarkReadMenu: (friendId: string, type: 'video' | 'chat') => void;
   actionButtonVariant?: 'menu' | 'welcome';
   largeActionButton?: boolean;
+  compactActionButton?: boolean;
 }) {
   const friendIdStr = String(friend.id);
   const count = unreadByUser[friendIdStr] || 0;
@@ -145,6 +147,7 @@ export function FriendRowChatButton({
           icon="chat-processing-outline"
           variant={actionButtonVariant}
           large={largeActionButton}
+          compact={compactActionButton}
           hitSlop={FRIEND_ROW_HIT_CHAT}
           delayLongPress={280}
           rescueMissedPress
@@ -186,6 +189,7 @@ export function FriendRowInviteButton({
   openMarkReadMenu,
   actionButtonVariant = 'menu',
   largeActionButton = false,
+  compactActionButton = false,
 }: {
   friend: Friend;
   styles: HomeStyles;
@@ -204,6 +208,7 @@ export function FriendRowInviteButton({
   openMarkReadMenu: (friendId: string, type: 'video' | 'chat') => void;
   actionButtonVariant?: 'menu' | 'welcome';
   largeActionButton?: boolean;
+  compactActionButton?: boolean;
 }) {
   const friendIdStr = String(friend.id);
   const missedCount = missedByUser[friendIdStr] || 0;
@@ -329,6 +334,7 @@ export function FriendRowInviteButton({
           icon="phone-in-talk-outline"
           variant={actionButtonVariant}
           large={largeActionButton}
+          compact={compactActionButton}
           disabled={hardVideoDisabled && missedCount === 0}
           appearanceDisabled={hardVideoDisabled}
           accessibilityState={{ disabled: !!videoDisabled }}

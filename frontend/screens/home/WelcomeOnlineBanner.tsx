@@ -26,6 +26,8 @@ type WelcomeOnlineBannerProps = {
   dense?: boolean;
   /** Переопределить верхний отступ pill (адаптив Search). */
   marginTop?: number;
+  /** Боковые поля pill: 0, когда баннер уже лежит в колонке нужной ширины. */
+  sideMargin?: number;
 };
 
 const STACK_SIZE = 32;
@@ -42,6 +44,7 @@ function WelcomeOnlineBannerInner({
   compact = false,
   dense = false,
   marginTop,
+  sideMargin,
 }: WelcomeOnlineBannerProps) {
   const countLine = formatWelcomeUsersOnlineLine(onlineCount, lang);
   const stackSize = dense ? STACK_SIZE_DENSE : STACK_SIZE;
@@ -65,6 +68,7 @@ function WelcomeOnlineBannerInner({
         compact && styles.pillCompact,
         dense && styles.pillDense,
         marginTop != null ? { marginTop } : null,
+        sideMargin != null ? { marginHorizontal: sideMargin } : null,
       ]}
     >
       <View style={[styles.textCol, dense && styles.textColDense]}>

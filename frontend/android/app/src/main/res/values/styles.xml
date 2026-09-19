@@ -14,6 +14,10 @@
          (Google Play флагует их как edge-to-edge unsupported API). Прозрачность баров задаётся в
          рантайме EdgeToEdgeHelper.apply() (guarded для Android <=14), поэтому вид не меняется. -->
     <item name="colorPrimary">@color/colorPrimary</item>
+    <!-- Во время анимации поворота система показывает снимок старого кадра, а поля
+         вокруг него закрашивает windowBackground. Без этого по краям была чёрная
+         рамка, не совпадающая с фоном приложения. -->
+    <item name="android:windowBackground">@color/window_background</item>
   </style>
   <style name="AppTheme" parent="AppTheme.Base" />
   <style name="Theme.App.SplashScreen" parent="AppTheme">

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Image,
   Pressable,
@@ -6,9 +6,10 @@ import {
   Text,
   TouchableOpacity,
   View,
+  type LayoutChangeEvent,
 } from 'react-native';
 import { useHomeLayout } from './HomeLayoutContext';
-import Carousel from 'react-native-reanimated-carousel';
+import Carousel, { type ICarouselInstance } from 'react-native-reanimated-carousel';
 import { uiAccent } from '../../theme/uiAccent';
 import { t, type Lang } from '../../utils/i18n';
 import {
@@ -46,7 +47,8 @@ function ChatWallpaperPickerPanelInner({
   onBack,
   onApply,
 }: ChatWallpaperPickerPanelProps) {
-  const { width: windowWidth } = useHomeLayout();
+  const { width: windowWidth, height: windowHeight } = useHomeLayout();
+  const isLandscape = windowWidth > 0 && windowHeight > 0 && windowWidth / windowHeight > 1.05;
   const prefs = useChatWallpaperPrefs();
   const catalog = useMemo(() => getChatWallpaperCatalog(theme), [theme]);
   const selectedId = theme === 'light' ? prefs.lightId : prefs.darkId;
@@ -58,6 +60,29 @@ function ChatWallpaperPickerPanelInner({
     return idx >= 0 ? idx : 0;
   }, [catalog, selectedId]);
 
+  /** Реальная высота панели: оценка «окно минус 150» занижала слайд почти вдвое. */
+  const [paneHeight, setPaneHeight] = useState(0);
+  /** Высота футера тоже меряется: в ней слот успеха (32 + 16) плюс кнопка, а не 44. */
+  const [footerHeight, setFooterHeight] = useState(0);
+  const onFooterLayout = useCallback((e: LayoutChangeEvent) => {
+    const h = e.nativeEvent.layout.height;
+    if (!(h > 0)) return;
+    setFooterHeight((prev) => (Math.abs(prev - h) < 1 ? prev : h));
+  }, []);
+  const onPaneLayout = useCallback((e: LayoutChangeEvent) => {
+    const h = e.nativeEvent.layout.height;
+    if (!(h > 0)) return;
+    setPaneHeight((prev) => (Math.abs(prev - h) < 1 ? prev : h));
+  }, []);
+
+  const carouselRef = useRef<ICarouselInstance>(null);
+  const goPrev = useCallback(() => {
+    if (catalog.length > 1) carouselRef.current?.prev();
+  }, [catalog.length]);
+  const goNext = useCallback(() => {
+    if (catalog.length > 1) carouselRef.current?.next();
+  }, [catalog.length]);
+
   const [index, setIndex] = useState(defaultIndex);
   const [applying, setApplying] = useState(false);
   const [applied, setApplied] = useState(false);
@@ -68,9 +93,26 @@ function ChatWallpaperPickerPanelInner({
     };
   }, []);
 
-  const pageWidth = Math.min(windowWidth * 0.82, 340);
-  const itemHeight = Math.min(Math.round(pageWidth * (1024 / 576)), 470);
-  const cardGap = 10;
+  /**
+   * В горизонтали карточку задаёт высота, а не ширина: обои вертикальные (576×1024),
+   * и при расчёте только по ширине карусель выходила ~470 в высоту при доступных ~250 —
+   * кнопка «Применить» уезжала за экран.
+   */
+  /**
+   * В вертикали карточка точно повторяет пропорции обоев (576×1024). В горизонтали
+   * высоты мало, и при том же соотношении карточка выходит слишком узкой — берём
+   * 1.35, изображение докрывается по cover.
+   */
+  const cardAspect = isLandscape ? 1.35 : 1024 / 576;
+  /** Под слайдом кнопка со слотом статуса — вычитаем её реальную высоту. */
+  const landscapeFooter = footerHeight > 0 ? footerHeight : 90;
+  const availableHeight = isLandscape
+    ? Math.max(120, (paneHeight > 0 ? paneHeight : windowHeight - 150) - landscapeFooter)
+    : 470;
+  const widthLimited = Math.min(windowWidth * (isLandscape ? 0.5 : 0.82), isLandscape ? 320 : 340);
+  const itemHeight = Math.min(Math.round(widthLimited * cardAspect), availableHeight);
+  const pageWidth = Math.min(widthLimited, Math.round(itemHeight / cardAspect));
+  const cardGap = isLandscape ? 8 : 10;
   const cardWidth = pageWidth - cardGap * 2;
 
   const title =
@@ -95,8 +137,15 @@ function ChatWallpaperPickerPanelInner({
   };
 
   const carouselBlock = (
-    <View style={[styles.carouselWrap, welcomeLayout && styles.carouselWrapWelcome]}>
+    <View
+      style={[
+        styles.carouselWrap,
+        welcomeLayout && styles.carouselWrapWelcome,
+        isLandscape && [styles.carouselWrapLandscape, { width: pageWidth }],
+      ]}
+    >
       <Carousel
+        ref={carouselRef}
         width={pageWidth}
         height={itemHeight}
         data={catalog}
@@ -108,7 +157,7 @@ function ChatWallpaperPickerPanelInner({
           parallaxScrollingOffset: 50,
         }}
         style={{
-          width: welcomeLayout ? windowWidth : windowWidth,
+          width: isLandscape ? Math.min(windowWidth, Math.round(pageWidth * 1.6)) : windowWidth,
           justifyContent: 'center',
         }}
         enabled={!applying && !applied}
@@ -138,7 +187,10 @@ function ChatWallpaperPickerPanelInner({
   );
 
   const successSlot = (
-    <View style={styles.successSlot} pointerEvents="none">
+    <View
+      style={[styles.successSlot, isLandscape && styles.successSlotLandscape]}
+      pointerEvents="none"
+    >
       {applied ? (
         <View style={styles.successBadge}>
           <Text style={styles.successText}>{t('chatWallpaperApplied', lang)}</Text>
@@ -149,19 +201,41 @@ function ChatWallpaperPickerPanelInner({
 
   if (welcomeLayout) {
     return (
-      <View style={styles.rootWelcome}>
+      <View style={styles.rootWelcome} onLayout={onPaneLayout}>
         {welcomeNavHeader ? null : (
           <Text style={styles.titleWelcome} numberOfLines={2}>
             {title}
           </Text>
         )}
-        <View style={styles.blockWelcome}>
-          {carouselBlock}
-          <View style={styles.footerWelcome}>
+        <View style={[styles.blockWelcome, isLandscape && styles.blockWelcomeLandscape]}>
+          {isLandscape ? (
+            <View style={styles.tapRowLandscape}>
+              <Pressable
+                style={styles.tapZone}
+                onPress={goPrev}
+                accessibilityRole="button"
+                accessibilityLabel="Предыдущий фон"
+              />
+              {carouselBlock}
+              <Pressable
+                style={styles.tapZone}
+                onPress={goNext}
+                accessibilityRole="button"
+                accessibilityLabel="Следующий фон"
+              />
+            </View>
+          ) : (
+            carouselBlock
+          )}
+          <View
+            style={[styles.footerWelcome, isLandscape && styles.footerWelcomeLandscape]}
+            onLayout={onFooterLayout}
+          >
             {successSlot}
             <Pressable
               style={({ pressed }) => [
                 styles.applyBtnWelcome,
+                isLandscape && styles.applyBtnWelcomeLandscape,
                 (applying || applied) && styles.applyBtnWelcomeDisabled,
                 pressed && !applying && !applied && styles.applyBtnWelcomePressed,
               ]}
@@ -171,7 +245,14 @@ function ChatWallpaperPickerPanelInner({
               }}
               accessibilityRole="button"
             >
-              <Text style={styles.applyTextWelcome}>{t('chatWallpaperApply', lang)}</Text>
+              <Text
+                style={[
+                  styles.applyTextWelcome,
+                  isLandscape && styles.applyTextWelcomeLandscape,
+                ]}
+              >
+                {t('chatWallpaperApply', lang)}
+              </Text>
             </Pressable>
           </View>
         </View>
@@ -268,6 +349,37 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingTop: 36,
   },
+  /** Пустые поля слева и справа от слайда листают карусель тапом. */
+  tapRowLandscape: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  tapZone: {
+    flex: 1,
+    alignSelf: 'stretch',
+    minWidth: 0,
+  },
+  /** Горизонталь: слайд по центру, под ним узкая кнопка. */
+  blockWelcomeLandscape: {
+    paddingTop: 0,
+    justifyContent: 'center',
+  },
+  /** Карусель по центру, без сдвига, рассчитанного на вертикальную раскладку. */
+  carouselWrapLandscape: {
+    marginHorizontal: 0,
+    alignSelf: 'center',
+    flexShrink: 0,
+    transform: [{ translateY: 0 }],
+  },
+  footerWelcomeLandscape: {
+    marginHorizontal: 0,
+    alignSelf: 'center',
+    width: 240,
+    paddingTop: 6,
+    paddingBottom: 12,
+    transform: [{ translateY: 0 }],
+  },
   footerWelcome: {
     marginHorizontal: WELCOME_FRIENDS_LIST_INSET,
     paddingTop: 8,
@@ -275,11 +387,21 @@ const styles = StyleSheet.create({
     flexShrink: 0,
     transform: [{ translateY: -28 }],
   },
+  successSlotLandscape: {
+    minHeight: 0,
+    marginBottom: 6,
+  },
   successSlot: {
     minHeight: 32,
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 16,
+  },
+  applyBtnWelcomeLandscape: {
+    paddingVertical: 6,
+  },
+  applyTextWelcomeLandscape: {
+    fontSize: 14,
   },
   applyBtnWelcome: {
     paddingVertical: 11,

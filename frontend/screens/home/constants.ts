@@ -70,7 +70,7 @@ export const WELCOME_FRIENDS_LIST_INSET = 22;
 /** Отступ справа у кнопок звонка/чата в welcome-карточке. */
 export const WELCOME_FRIEND_ROW_TRAILING_PAD = 12;
 /** Высота welcome-карточки (контент). */
-export const WELCOME_FRIEND_CARD_ROW_HEIGHT = 66;
+export const WELCOME_FRIEND_CARD_ROW_HEIGHT = 62;
 /** Зазор между welcome-карточками. */
 export const WELCOME_FRIEND_CARD_GAP = 6;
 /** Шаг для getItemLayout (высота + зазор). */
@@ -78,13 +78,13 @@ export const WELCOME_FRIEND_ROW_STRIDE = WELCOME_FRIEND_CARD_ROW_HEIGHT + WELCOM
 /** Диаметр аватара в welcome-карточке. */
 export const WELCOME_FRIEND_AVATAR_SIZE = 44;
 /** Компактные размеры списков только для горизонтальной ориентации. */
-export const WELCOME_FRIEND_CARD_ROW_HEIGHT_LANDSCAPE = 54;
-export const WELCOME_FRIEND_CARD_GAP_LANDSCAPE = 4;
+export const WELCOME_FRIEND_CARD_ROW_HEIGHT_LANDSCAPE = 46;
+export const WELCOME_FRIEND_CARD_GAP_LANDSCAPE = 3;
 export const WELCOME_FRIEND_ROW_STRIDE_LANDSCAPE =
   WELCOME_FRIEND_CARD_ROW_HEIGHT_LANDSCAPE + WELCOME_FRIEND_CARD_GAP_LANDSCAPE;
-export const WELCOME_FRIEND_AVATAR_SIZE_LANDSCAPE = 38;
+export const WELCOME_FRIEND_AVATAR_SIZE_LANDSCAPE = 34;
 /** Слегка увеличенные размеры списков на планшетах в обеих ориентациях. */
-export const WELCOME_FRIEND_CARD_ROW_HEIGHT_TABLET = 72;
+export const WELCOME_FRIEND_CARD_ROW_HEIGHT_TABLET = 68;
 export const WELCOME_FRIEND_CARD_GAP_TABLET = 8;
 export const WELCOME_FRIEND_ROW_STRIDE_TABLET =
   WELCOME_FRIEND_CARD_ROW_HEIGHT_TABLET + WELCOME_FRIEND_CARD_GAP_TABLET;

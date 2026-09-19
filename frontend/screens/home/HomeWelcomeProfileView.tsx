@@ -11,7 +11,7 @@ import {
   BackHandler,
   type LayoutChangeEvent,
 } from 'react-native';
-import { useHomeLayout } from './HomeLayoutContext';
+import { useHomeLayout, useHomeLayoutActivity } from './HomeLayoutContext';
 import AdaptiveText from '../../components/AdaptiveText';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -112,15 +112,15 @@ const HUB_PRESET_PHONE: HubMetricsPreset = {
 };
 
 const HUB_PRESET_PHONE_LANDSCAPE: HubMetricsPreset = {
-  avatarSize: 84,
+  avatarSize: 80,
   cameraBtnSize: 32,
-  gapTop: 8,
-  gapUnderAvatar: 10,
-  gapAboveDelete: 6,
-  gapBottom: 10,
-  deleteHeight: 28,
+  gapTop: -18,
+  gapUnderAvatar: 12,
+  gapAboveDelete: 4,
+  gapBottom: 6,
+  deleteHeight: 20,
   rowMax: 42,
-  rowMin: 34,
+  rowMin: 30,
   gapMax: 8,
   gapMin: 4,
 };
@@ -169,13 +169,28 @@ function resolveHubPreset(isTablet: boolean, isLandscape: boolean): HubMetricsPr
   return isLandscape ? HUB_PRESET_PHONE_LANDSCAPE : HUB_PRESET_PHONE;
 }
 
+/**
+ * Аватар профиля в вертикали должен совпадать с аватаром на Поиске по внешнему
+ * диаметру. Там рамка нарисована внутри размера, здесь кольцо добавляется
+ * снаружи (+AVATAR_RING_WIDTH×2), поэтому вычитаем его.
+ */
+function portraitPhoneAvatarSize(width: number): number {
+  const searchAvatarOuter = width < 400 ? 120 : 132;
+  return searchAvatarOuter - AVATAR_RING_WIDTH * 2;
+}
+
 function resolveHubMetrics(
   paneHeight: number,
+  width: number,
   isTablet: boolean,
   isLandscape: boolean,
   twoColumns: boolean,
 ): HubMetrics {
-  const preset = resolveHubPreset(isTablet, isLandscape);
+  const basePreset = resolveHubPreset(isTablet, isLandscape);
+  const preset =
+    !isTablet && !isLandscape
+      ? { ...basePreset, avatarSize: portraitPhoneAvatarSize(width) }
+      : basePreset;
   const fixed =
     preset.gapTop +
     preset.avatarSize +
@@ -208,16 +223,16 @@ function resolveHubMetrics(
 
 function estimateTabBarHeight(bottomInset: number, isTablet: boolean, isLandscape: boolean) {
   // Совпадает с minHeight строки таб-бара в HomeWelcomeTabBar.
-  const base = isTablet ? 60 : isLandscape ? 46 : 52;
+  const base = isTablet ? 60 : isLandscape ? 40 : 52;
   return base + Math.max(bottomInset, Platform.OS === 'android' ? 6 : 2);
 }
 
 /** Считается из тех же констант, что и стиль header + размер короны. */
 function estimateProfileHeaderHeight(isTablet: boolean, isLandscape: boolean) {
-  const padTop = isTablet ? 14 : isLandscape ? 2 : Platform.OS === 'ios' ? 8 : 12;
-  const padBottom = isTablet ? 10 : isLandscape ? 2 : 8;
+  const padTop = isTablet ? 14 : isLandscape ? 0 : Platform.OS === 'ios' ? 8 : 12;
+  const padBottom = isTablet ? 10 : isLandscape ? 0 : 8;
   const titleFont = isTablet ? 30 : isLandscape ? 22 : 28;
-  const crownSize = isLandscape && !isTablet ? 36 : isTablet ? 44 : 40;
+  const crownSize = isLandscape && !isTablet ? 32 : isTablet ? 44 : 40;
   return Math.round(padTop + Math.max(titleFont * 1.25, crownSize) + padBottom);
 }
 
@@ -331,6 +346,7 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
   // Размер берём из safe-area frame: он приходит от нативного провайдера и
   // обновляется при повороте, в отличие от Dimensions.
   const { width: windowWidth, height: windowHeight } = useHomeLayout();
+  const notifyLayoutActivity = useHomeLayoutActivity();
   const isLandscape =
     windowWidth > 0 && windowHeight > 0 && windowWidth / windowHeight > 1.05;
   const isTablet = isWelcomeTabletLayout(windowWidth, windowHeight);
@@ -347,26 +363,40 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
    * Высоту берём из onLayout самой панели: она уже учитывает шапку, таб-бар и
    * системные insets, поэтому отступы не зависят от оценок.
    */
+  const expectedHubPaneHeight = estimateHubPaneHeight(
+    windowHeight,
+    insets.top,
+    insets.bottom,
+    isTablet,
+    isLandscape,
+  );
+  /** Промежуточный замер при повороте/пробуждении отбрасываем — иначе он застревает. */
   const hubPaneHeight =
-    hubViewportHeight > 0
-      ? hubViewportHeight
-      : estimateHubPaneHeight(windowHeight, insets.top, insets.bottom, isTablet, isLandscape);
+    hubViewportHeight > expectedHubPaneHeight * 0.6 ? hubViewportHeight : expectedHubPaneHeight;
 
   const hubMetrics = useMemo(
-    () => resolveHubMetrics(hubPaneHeight, isTablet, isLandscape, twoColumnList),
-    [hubPaneHeight, isTablet, isLandscape, twoColumnList],
+    () => resolveHubMetrics(hubPaneHeight, windowWidth, isTablet, isLandscape, twoColumnList),
+    [hubPaneHeight, windowWidth, isTablet, isLandscape, twoColumnList],
   );
 
   /** Скролл при редактировании ника или когда даже минимальные строки не влезают. */
   const needsHubScroll = accountOpen || hubMetrics.scroll;
+  /**
+   * В landscape аватар скроллится вместе со списком, но дойдя до верха прилипает
+   * и дальше рисуется поверх карточек — так он виден всегда и не уезжает под
+   * верхний блок. При редактировании ника раскладка другая: панель ввода идёт
+   * следом за аватаром и должна ехать вместе с ним.
+   */
+  const stickyAvatarOnScroll = isLandscape && !accountOpen;
 
   const handleHubPaneLayout = useCallback((event: LayoutChangeEvent) => {
     const nextHeight = event.nativeEvent.layout.height;
     if (!(nextHeight > 0)) return;
+    notifyLayoutActivity();
     setHubViewportHeight((current) =>
       Math.abs(current - nextHeight) < 1 ? current : nextHeight,
     );
-  }, []);
+  }, [notifyLayoutActivity]);
 
   const myUserId = getCurrentUserId();
   const displayNick = displayName(savedNick || nick);
@@ -630,14 +660,16 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
       >
         {t('tabSettings', lang)}
       </AdaptiveText>
+      <View style={compactLandscape ? styles.headerCrownLandscape : null}>
       <WelcomeCrownButton
-        compact={compactLandscape}
+        small={compactLandscape}
         large={isTablet}
         myUserId={myUserId}
         myAvatarVer={myAvatarVer}
         avatarUri={avatarUri}
         nick={savedNick || nick}
       />
+      </View>
     </View>
   );
 
@@ -688,7 +720,7 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
         disabled={busy || !onLogOutAccount}
         accessibilityRole="button"
       >
-        <Ionicons name="trash-outline" size={22} color="#A63A48" />
+        <Ionicons name="trash-outline" size={compactLandscape ? 18 : 22} color="#A63A48" />
         <AdaptiveText
           style={[
             styles.logOutBtnText,
@@ -707,7 +739,7 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
       style={[
         styles.avatarBlock,
         {
-          paddingTop: hubMetrics.gapTop,
+          marginTop: hubMetrics.gapTop,
           marginBottom: hubMetrics.gapUnderAvatar,
         },
       ]}
@@ -877,9 +909,8 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
     </View>
   );
 
-  const hubScrollBody = accountOpen ? (
-    <View>
-      {hubAvatarSection}
+  /** Панель ввода ника — отдельно, чтобы в landscape скроллить её без аватара. */
+  const hubAccountPanel = (
       <View
         style={[
           styles.accountPanel,
@@ -919,6 +950,12 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
           </Pressable>
         </View>
       </View>
+  );
+
+  const hubScrollBody = accountOpen ? (
+    <View>
+      {hubAvatarSection}
+      {hubAccountPanel}
       {hubListStack}
       {hubLogoutButton}
     </View>
@@ -1013,20 +1050,30 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
   );
 
   const supportBody = (
-    <View style={styles.subScreenBlockOffset}>
+    <View style={compactLandscape ? styles.supportWrapLandscape : styles.subScreenBlockOffset}>
       <WelcomeProfileSection compact={compactLandscape} tablet={isTablet}>
-      <View style={styles.supportHero}>
-        <View style={styles.supportHeroIcon}>
-          <Ionicons name="heart-outline" size={34} color={WELCOME_BRAND_VI_FILL_GRADIENT[1]} />
+      {/* Горизонталь: описание слева, ссылки справа — по высоте столбиком не влезает. */}
+      <View style={compactLandscape ? styles.supportContentLandscape : null}>
+      <View style={[styles.supportHero, compactLandscape && styles.supportHeroLandscape]}>
+        <View style={[styles.supportHeroIcon, compactLandscape && styles.supportHeroIconLandscape]}>
+          <Ionicons
+            name="heart-outline"
+            size={compactLandscape ? 26 : 34}
+            color={WELCOME_BRAND_VI_FILL_GRADIENT[1]}
+          />
         </View>
         <AdaptiveText style={styles.supportHeroText}>{t('supportProjectSubtitle', lang)}</AdaptiveText>
       </View>
-      <View style={styles.supportTiles}>
+      <View style={[styles.supportTiles, compactLandscape && styles.supportTilesLandscape]}>
         <Pressable
           onPress={() => {
             void openBoosty();
           }}
-          style={({ pressed }) => [styles.supportTile, pressed && styles.supportTilePressed]}
+          style={({ pressed }) => [
+            styles.supportTile,
+            compactLandscape && styles.supportTileLandscape,
+            pressed && styles.supportTilePressed,
+          ]}
           accessibilityRole="button"
         >
           <View style={styles.supportTileLogoWrap}>
@@ -1047,7 +1094,11 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
           onPress={() => {
             void openPatreon();
           }}
-          style={({ pressed }) => [styles.supportTile, pressed && styles.supportTilePressed]}
+          style={({ pressed }) => [
+            styles.supportTile,
+            compactLandscape && styles.supportTileLandscape,
+            pressed && styles.supportTilePressed,
+          ]}
           accessibilityRole="button"
         >
           <View style={styles.supportTileLogoWrap}>
@@ -1064,6 +1115,7 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
           </View>
           <Ionicons name="chevron-forward" size={20} color={WELCOME_PROFILE_ROW_ICON} />
         </Pressable>
+      </View>
       </View>
     </WelcomeProfileSection>
     </View>
@@ -1088,8 +1140,55 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
         {screen === 'hub' ? headerHub : headerSettings}
 
         {screen === 'hub' ? (
-          <View style={styles.hubPane} onLayout={handleHubPaneLayout}>
-            {needsHubScroll ? (
+          <View
+            style={[
+              styles.hubPane,
+              // Аватар поднят отрицательным отступом и заходит в шапку —
+              // обрезка панели его срезает. Снимаем во всей горизонтали:
+              // и на хабе, и при скролле, и при редактировании ника.
+              isLandscape && styles.hubPaneOverflowVisible,
+            ]}
+            onLayout={handleHubPaneLayout}
+          >
+            {accountOpen && isLandscape ? (
+              /* Ввод ника: аватар остаётся на своём месте, прокручивается только
+                 панель со списком — иначе открытие поля сдвигало аватар. */
+              <View style={styles.hubMainDock}>
+                {hubAvatarSection}
+                <ScrollView
+                  style={styles.hubScrollBelowAvatar}
+                  contentContainerStyle={styles.hubMainDockScroll}
+                  scrollEnabled
+                  nestedScrollEnabled
+                  keyboardShouldPersistTaps="handled"
+                  showsVerticalScrollIndicator={false}
+                  bounces={false}
+                  overScrollMode="never"
+                >
+                  {hubAccountPanel}
+                  {hubListStack}
+                  {hubLogoutButton}
+                </ScrollView>
+              </View>
+            ) : needsHubScroll && stickyAvatarOnScroll ? (
+              <ScrollView
+                style={styles.hubMainDock}
+                contentContainerStyle={styles.hubMainDockScroll}
+                // Аватар — липкий заголовок: прокручивается, у верха фиксируется
+                // и остаётся поверх карточек, которые уезжают под него.
+                stickyHeaderIndices={[0]}
+                scrollEnabled
+                nestedScrollEnabled
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator={false}
+                bounces={false}
+                overScrollMode="never"
+              >
+                {hubAvatarSection}
+                {hubListStack}
+                {hubLogoutButton}
+              </ScrollView>
+            ) : needsHubScroll ? (
               <ScrollView
                 style={styles.hubMainDock}
                 contentContainerStyle={styles.hubMainDockScroll}
@@ -1103,7 +1202,14 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
                 {hubScrollBody}
               </ScrollView>
             ) : (
-              <View style={[styles.hubMainDock, styles.hubMainDockClip]}>{hubScrollBody}</View>
+              <View
+                style={[
+                  styles.hubMainDock,
+                  isLandscape ? null : styles.hubMainDockClip,
+                ]}
+              >
+                {hubScrollBody}
+              </View>
             )}
           </View>
         ) : (
@@ -1112,9 +1218,16 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
               style={styles.subScreenScroll}
               contentContainerStyle={[
                 styles.scrollContent,
+                // «Поддержать» в горизонтали — короткий блок, выравниваем его
+                // по центру между шапкой и навигацией, а не прижимаем к верху.
+                compactLandscape && screen === 'support' && styles.subScreenScrollCentered,
                 {
                   paddingBottom:
-                    screen === 'language' ? 14 : 24 + insets.bottom,
+                    screen === 'language'
+                      ? 14
+                      : compactLandscape && screen === 'support'
+                        ? 4
+                        : 24 + insets.bottom,
                 },
               ]}
               keyboardShouldPersistTaps="handled"
@@ -1144,8 +1257,12 @@ const styles = StyleSheet.create({
     paddingBottom: 8,
   },
   headerLandscape: {
-    paddingTop: 2,
-    paddingBottom: 2,
+    paddingTop: 0,
+    paddingBottom: 0,
+  },
+  /** Сдвиг только визуальный: высоту шапки корона поднимать не должна. */
+  headerCrownLandscape: {
+    transform: [{ translateY: 6 }],
   },
   headerTablet: {
     paddingTop: 14,
@@ -1220,6 +1337,13 @@ const styles = StyleSheet.create({
     minHeight: 0,
     overflow: 'hidden',
   },
+  /**
+   * Landscape без скролла: обрезку снимаем, чтобы аватар мог заходить в шапку.
+   * Высоты посчитаны так, что содержимое гарантированно помещается.
+   */
+  hubPaneOverflowVisible: {
+    overflow: 'visible',
+  },
   hubMainDock: {
     flex: 1,
     minHeight: 0,
@@ -1231,7 +1355,6 @@ const styles = StyleSheet.create({
     flex: 1,
     minHeight: 0,
     justifyContent: 'space-between',
-    overflow: 'hidden',
   },
   hubMainTop: {
     flexShrink: 0,
@@ -1240,6 +1363,10 @@ const styles = StyleSheet.create({
   hubMainDockScroll: {
     flexGrow: 1,
     paddingBottom: 0,
+  },
+  hubScrollBelowAvatar: {
+    flex: 1,
+    minHeight: 0,
   },
   scrollContent: { paddingTop: 4 },
   avatarBlock: { alignItems: 'center', marginBottom: 0, marginTop: 0 },
@@ -1365,11 +1492,51 @@ const styles = StyleSheet.create({
   subScreenBlockOffset: {
     marginTop: 12,
   },
+  /** Блок «Поддержать» в горизонтали не тянется на всю ширину, а стоит по центру. */
+  supportWrapLandscape: {
+    width: '100%',
+    maxWidth: 620,
+    alignSelf: 'center',
+  },
+  subScreenScrollCentered: {
+    flexGrow: 1,
+    justifyContent: 'center',
+    // Верхний паддинг смещает центр вниз на половину своей величины.
+    paddingTop: 44,
+  },
   supportHero: {
     alignItems: 'center',
     paddingTop: 22,
     paddingBottom: 4,
     paddingHorizontal: 20,
+  },
+  supportContentLandscape: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  supportHeroLandscape: {
+    flex: 1,
+    minWidth: 0,
+    paddingTop: 10,
+    paddingBottom: 10,
+    paddingHorizontal: 14,
+  },
+  supportHeroIconLandscape: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    marginBottom: 8,
+  },
+  supportTilesLandscape: {
+    flex: 1,
+    minWidth: 0,
+    paddingTop: 10,
+    paddingBottom: 10,
+    paddingRight: 12,
+    gap: 8,
+  },
+  supportTileLandscape: {
+    paddingVertical: 8,
   },
   supportHeroIcon: {
     width: 68,

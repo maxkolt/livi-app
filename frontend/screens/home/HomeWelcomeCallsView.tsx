@@ -748,11 +748,11 @@ function HomeWelcomeCallsViewInner({
                 >
                   <Ionicons
                     name={searchOpen ? 'search' : 'search-outline'}
-                    size={tabletLayout ? 24 : 22}
+                    size={tabletLayout ? 24 : compactLandscape ? 19 : 22}
                     color={searchOpen ? WELCOME_SEGMENT_ACTIVE : LIVI.white}
                   />
                 </Pressable>
-              <WelcomeCrownButton compact={compactLandscape} large={tabletLayout} />
+              <WelcomeCrownButton small={compactLandscape} large={tabletLayout} />
               </View>
             </>
           )}
@@ -983,9 +983,9 @@ const styles = StyleSheet.create({
     backgroundColor: WELCOME_CHROME_BTN_BG,
   },
   iconBtnLandscape: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
   },
   iconBtnTablet: {
     width: 44,
@@ -1043,7 +1043,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginHorizontal: WELCOME_FRIENDS_LIST_INSET,
     padding: 7,
-    minHeight: 68,
+    minHeight: 72,
     borderRadius: WELCOME_FRIENDS_SEGMENT_SHELL_RADIUS,
     backgroundColor: 'rgba(22, 27, 34, 0.58)',
     borderWidth: StyleSheet.hairlineWidth,

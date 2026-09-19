@@ -1,9 +1,10 @@
-import React, { createContext, useContext, useMemo } from 'react';
+import React, { createContext, useCallback, useContext, useMemo } from 'react';
 import { useSafeAreaFrame } from 'react-native-safe-area-context';
 
 export type HomeLayoutSize = { width: number; height: number };
 
 const HomeLayoutContext = createContext<HomeLayoutSize | null>(null);
+const HomeLayoutActivityContext = createContext<(() => void) | null>(null);
 
 /**
  * Единственный источник размеров для экранов Home.
@@ -19,16 +20,38 @@ const HomeLayoutContext = createContext<HomeLayoutSize | null>(null);
  */
 export function HomeLayoutProvider({
   size,
+  onLayoutActivity,
   children,
 }: {
   size: HomeLayoutSize;
+  /** Любой вложенный onLayout во время ресайза — раскладка ещё «едет». */
+  onLayoutActivity?: () => void;
   children: React.ReactNode;
 }) {
   const value = useMemo(
     () => ({ width: size.width, height: size.height }),
     [size.width, size.height],
   );
-  return <HomeLayoutContext.Provider value={value}>{children}</HomeLayoutContext.Provider>;
+  const activity = useMemo(() => onLayoutActivity ?? null, [onLayoutActivity]);
+  return (
+    <HomeLayoutContext.Provider value={value}>
+      <HomeLayoutActivityContext.Provider value={activity}>
+        {children}
+      </HomeLayoutActivityContext.Provider>
+    </HomeLayoutContext.Provider>
+  );
+}
+
+/**
+ * Сообщить, что раскладка всё ещё пересчитывается. Корень Home держит контент
+ * скрытым, пока такие сигналы приходят: размеры сходятся не за один проход —
+ * сначала окно, потом safe-area, потом шапка и сцена, и это занимает ~700мс.
+ */
+export function useHomeLayoutActivity(): () => void {
+  const notify = useContext(HomeLayoutActivityContext);
+  return useCallback(() => {
+    notify?.();
+  }, [notify]);
 }
 
 /**

@@ -295,6 +295,7 @@ function FriendsListCoreInner(props: FriendsListCoreProps) {
         openMarkReadMenu={openMarkReadMenu}
         actionButtonVariant="welcome"
         largeActionButton={tabletLayout}
+        compactActionButton={compactLandscape}
       />
       <FriendRowChatButton
         friend={item}
@@ -314,6 +315,7 @@ function FriendsListCoreInner(props: FriendsListCoreProps) {
         openMarkReadMenu={openMarkReadMenu}
         actionButtonVariant="welcome"
         largeActionButton={tabletLayout}
+        compactActionButton={compactLandscape}
       />
     </View>
   );

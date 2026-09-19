@@ -40,8 +40,8 @@ function mixOrbitBandColor(): string {
 }
 
 const ORBIT_BAND_COLOR = mixOrbitBandColor();
-/** 1-я орбита ярче, дальше слабее. */
-const BAND_OPACITIES = [0.22, 0.15, 0.1, 0.04] as const;
+/** 1-я орбита ярче, дальше слабее. Внутренние три чуть бледнее внешней — 4-я не трогается. */
+const BAND_OPACITIES = [0.18, 0.12, 0.08, 0.04] as const;
 
 /** 4 орбиты: ближе к аватару; 2-е уже, 3/4 чуть к центру; g от «полной» суммы шагов. */
 function computeRingRadii(half: number, avatarR: number, orbitScale: number): number[] {

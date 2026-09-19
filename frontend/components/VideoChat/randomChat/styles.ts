@@ -23,6 +23,47 @@ export const styles = StyleSheet.create({
     width: '100%',
     alignItems: 'center',
   },
+  /** Горизонталь: карточки рядом, иначе каждая получает ~150 по высоте. */
+  topSectionLandscape: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: 8,
+    paddingHorizontal: 8,
+  },
+  cardLandscape: {
+    flex: 1,
+    flexBasis: 0,
+    width: undefined,
+    height: undefined,
+    minHeight: 0,
+  },
+  /** Кнопки в карточке: вертикальная полоса у свободного края, размер меньше. */
+  controlsColumnLandscape: {
+    position: 'absolute',
+    top: 8,
+    bottom: 8,
+    flexDirection: 'column',
+    justifyContent: 'flex-end',
+    gap: 8,
+    right: undefined,
+    left: undefined,
+  },
+  topLeftLandscape: {
+    top: 8,
+    left: undefined,
+    right: undefined,
+  },
+  iconBtnLandscape: {
+    padding: 6,
+    borderRadius: 18,
+  },
+  bottomRowLandscape: {
+    marginTop: 4,
+    marginBottom: 4,
+  },
+  bigBtnLandscape: {
+    height: 40,
+  },
   card: {
     ...CARD_BASE,
     width: Platform.OS === 'android' ? '100%' : '94%',

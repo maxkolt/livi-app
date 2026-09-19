@@ -7,6 +7,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Dimensions,
   View,
   Text,
   TouchableOpacity,
@@ -23,7 +24,7 @@ import {
 } from 'react-native';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { CommonActions } from '@react-navigation/native';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaFrame, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MediaStream, mediaDevices, RTCView } from '@livekit/react-native-webrtc';
 import { RandomChatSession } from '../../src/webrtc/sessions/RandomChatSession';
 import type { CamSide, WebRTCSessionConfig } from '../../src/webrtc/types';
@@ -80,6 +81,26 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     } catch {}
   }
   const insets = useSafeAreaInsets();
+  const frame = useSafeAreaFrame();
+  const isLandscape = frame.width > 0 && frame.height > 0 && frame.width / frame.height > 1.05;
+  const ctrlIconSize = isLandscape ? 20 : 26;
+
+  // TEMP-DIAG
+  const rcDiagLayout = React.useCallback((tag: string, e: any) => {
+    const { width, height } = e.nativeEvent.layout;
+    console.log('[rc-diag]', JSON.stringify({
+      at: tag, w: Math.round(width), h: Math.round(height), isLandscape,
+    }));
+  }, [isLandscape]);
+  React.useEffect(() => {
+    const win = Dimensions.get('window');
+    console.log('[rc-diag]', JSON.stringify({
+      at: 'frame',
+      frameW: Math.round(frame.width), frameH: Math.round(frame.height),
+      winW: Math.round(win.width), winH: Math.round(win.height),
+      isLandscape,
+    }));
+  }, [frame.width, frame.height, isLandscape]);
   const { theme, isDark } = useAppTheme();
   const lang = useLang((s) => s.lang);
   const androidContentInsets = useMemo(() => {
@@ -1509,9 +1530,17 @@ const RandomChat: React.FC<Props> = ({ route }) => {
         edges={Platform.OS === 'android' ? [] : undefined}
       >
         <View style={[styles.content, androidContentInsets]}>
-        <View style={styles.topSection}>
+        <View
+          style={[styles.topSection, isLandscape && styles.topSectionLandscape]}
+          onLayout={(e) => rcDiagLayout('topSection', e)}
+        >
         {/* Карточка "Собеседник" — ref для модерации (проверяем партнёра, не себя) */}
-        <View style={styles.card} ref={remoteModerationTargetRef} collapsable={false}>
+        <View
+          style={[styles.card, isLandscape && styles.cardLandscape]}
+          ref={remoteModerationTargetRef}
+          collapsable={false}
+          onLayout={(e) => rcDiagLayout('cardRemote', e)}
+        >
           {(() => {
             // КРИТИЧНО: Если поиск остановлен (started=false), всегда показываем текст "Собеседник"
             if (!started) {
@@ -1635,12 +1664,12 @@ const RandomChat: React.FC<Props> = ({ route }) => {
                   disabled={!remoteStream}
                   hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                   activeOpacity={0.7}
-                  style={styles.iconBtn}
+                  style={[styles.iconBtn, isLandscape && styles.iconBtnLandscape]}
                 >
                   <View style={{ position: 'relative', justifyContent: 'center', alignItems: 'center' }}>
                     <MaterialIcons
                       name={remoteMuted ? "volume-off" : "volume-up"}
-                      size={26}
+                      size={ctrlIconSize}
                       color={remoteMuted ? "#999" : (remoteStream ? WELCOME_HEADER_TITLE : "#777")}
                     />
                     {remoteMuted && (
@@ -1667,11 +1696,11 @@ const RandomChat: React.FC<Props> = ({ route }) => {
                 <TouchableOpacity
                   onPress={onAddFriend}
                   disabled={addPending || addBlocked}
-                  style={styles.iconBtn}
+                  style={[styles.iconBtn, isLandscape && styles.iconBtnLandscape]}
                 >
                   <MaterialIcons
                     name={addBlocked ? "person-add-disabled" : "person-add"}
-                    size={26}
+                    size={ctrlIconSize}
                     color={WELCOME_HEADER_TITLE}
                   />
                 </TouchableOpacity>
@@ -1691,7 +1720,11 @@ const RandomChat: React.FC<Props> = ({ route }) => {
         {/* Эквалайзер отключен */}
         
         {/* Карточка "Вы" */}
-        <View style={styles.card} collapsable={false}>
+        <View
+          style={[styles.card, isLandscape && styles.cardLandscape]}
+          collapsable={false}
+          onLayout={(e) => rcDiagLayout('cardLocal', e)}
+        >
           {(() => {
             // КРИТИЧНО: Если поиск не начат, всегда показываем "Вы"
             if (!started) {
@@ -1799,9 +1832,14 @@ const RandomChat: React.FC<Props> = ({ route }) => {
                   disabled={!camOn}
                   hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                   activeOpacity={0.7}
-                  style={[styles.iconBtn, !camOn && { opacity: 0.5 }]}
+                  style={[styles.iconBtn,
+                    isLandscape && styles.iconBtnLandscape, !camOn && { opacity: 0.5 }]}
                 >
-                  <MaterialIcons name="flip-camera-ios" size={26} color={WELCOME_HEADER_TITLE} />
+                  <MaterialIcons
+                    name="flip-camera-ios"
+                    size={ctrlIconSize}
+                    color={WELCOME_HEADER_TITLE}
+                  />
                 </TouchableOpacity>
               </Animated.View>
               
@@ -1812,11 +1850,12 @@ const RandomChat: React.FC<Props> = ({ route }) => {
                   disabled={isModerationBanned}
                   hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                   activeOpacity={0.7}
-                  style={[styles.iconBtn, isModerationBanned && styles.iconBtnDisabled]}
+                  style={[styles.iconBtn,
+                    isLandscape && styles.iconBtnLandscape, isModerationBanned && styles.iconBtnDisabled]}
                 >
                   <MaterialIcons
                     name={micOn ? "mic" : "mic-off"}
-                    size={26}
+                    size={ctrlIconSize}
                     color={micOn ? WELCOME_HEADER_TITLE : "#888"}
                   />
                 </TouchableOpacity>
@@ -1825,11 +1864,11 @@ const RandomChat: React.FC<Props> = ({ route }) => {
                   onPress={toggleCam}
                   hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                   activeOpacity={0.7}
-                  style={styles.iconBtn}
+                  style={[styles.iconBtn, isLandscape && styles.iconBtnLandscape]}
                 >
                   <MaterialIcons
                     name={camOn ? "videocam" : "videocam-off"}
-                    size={26}
+                    size={ctrlIconSize}
                     color={camOn ? WELCOME_HEADER_TITLE : "#888"}
                   />
                 </TouchableOpacity>
@@ -1840,7 +1879,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
 
         </View>
         {/* Кнопки снизу: Начать/Стоп и Далее */}
-        <View style={styles.bottomRow}>
+        <View style={[styles.bottomRow, isLandscape && styles.bottomRowLandscape]}>
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={started ? L('stop') : L('start')}
@@ -1855,6 +1894,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
             }}
             style={({ pressed }) => [
               styles.bigBtn,
+              isLandscape && styles.bigBtnLandscape,
               started ? styles.btnDanger : styles.btnTitan,
               (pressed || startStopTapHighlight) &&
                 (started ? styles.bigBtnPressedDanger : styles.bigBtnPressed),
@@ -1880,6 +1920,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
             }}
             style={({ pressed }) => [
               styles.bigBtn,
+              isLandscape && styles.bigBtnLandscape,
               styles.btnTitan,
               (pressed || nextTapHighlight) && styles.bigBtnPressed,
             ]}

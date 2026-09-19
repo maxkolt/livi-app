@@ -3901,6 +3901,17 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       runOnReactUiQueueIfAlive { it.emitDeviceEvent("LiviAndroidImeInsets", height) }
     }
 
+    /**
+     * Ориентация поменялась — приходит из onConfigurationChanged, то есть ДО того,
+     * как RN пересоберёт раскладку. JS успевает скрыть контент раньше, чем на экран
+     * попадёт кадр со старой раскладкой в новых границах окна. onLayout для этого не
+     * годится: он срабатывает уже после того, как кадр разложен и отрисован.
+     */
+    @JvmStatic
+    fun emitOrientationWillChange(isLandscape: Boolean) {
+      runOnReactUiQueueIfAlive { it.emitDeviceEvent("LiviOrientationWillChange", isLandscape) }
+    }
+
     @JvmStatic
     fun emitActiveCallExternalAudioInterruptedStatic(focusChange: Int, appCtx: Context? = null) {
       runOnReactUiQueueIfAlive { ctx ->

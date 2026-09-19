@@ -77,7 +77,16 @@ class MainActivity : ReactActivity() {
     }
   }
 
+  private var lastKnownOrientation = Configuration.ORIENTATION_UNDEFINED
+
   override fun onConfigurationChanged(newConfig: Configuration) {
+    // До super: сообщаем JS о повороте раньше, чем RN начнёт пересобирать раскладку.
+    if (newConfig.orientation != lastKnownOrientation) {
+      lastKnownOrientation = newConfig.orientation
+      LiviAppModule.emitOrientationWillChange(
+        newConfig.orientation == Configuration.ORIENTATION_LANDSCAPE,
+      )
+    }
     super.onConfigurationChanged(FontScaleContextHelper.copyPatched(newConfig))
     // Samsung и некоторые другие OEM после смены ориентации заново применяют
     // системные insets и могут вернуть непрозрачную боковую navigation bar.

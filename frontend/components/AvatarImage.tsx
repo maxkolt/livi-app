@@ -89,7 +89,13 @@ const AvatarImage = memo<AvatarImageProps>(({
     (uri && !/^data:/i.test(uri) ? uri : '');
 
   const borderRadius = size / 2;
-  const key = `avatar_${userId || 'none'}_v${avatarVer || 0}_${size}`;
+  /**
+   * Без size: это recyclingKey для expo-image, и при его смене view пересоздаётся —
+   * картинка на миг пропадает, видно серую подложку. Размер аватара пересчитывается
+   * при каждом замере раскладки, поэтому от него ключ зависеть не должен.
+   * Идентичность аватара определяют userId и avatarVer.
+   */
+  const key = `avatar_${userId || 'none'}_v${avatarVer || 0}`;
 
   const showFallbackLetter = fallbackText && !loading && !uri;
   if (!displayUri) {
