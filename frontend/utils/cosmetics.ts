@@ -1,5 +1,10 @@
 import { useEffect, useState } from 'react';
-import { API_BASE, getCurrentUserId } from '../sockets/socket';
+// Импортируем из листовых модулей, а не из бареля sockets/socket: барель
+// реэкспортирует presence.ts, который сам подписывается на cosmetics:frame и
+// зовёт этот файл. Через барель получался цикл, и при инициализации значения
+// могли оказаться неопределёнными.
+import { API_BASE } from '../sockets/modules/constants';
+import { getCurrentUserId } from '../sockets/modules/authState';
 import { getInstallId } from './installId';
 import { DEFAULT_DARK_WALLPAPER_ID, setChatWallpaperId } from './chatWallpaper';
 

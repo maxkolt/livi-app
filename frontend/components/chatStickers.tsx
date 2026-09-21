@@ -1,5 +1,5 @@
 import React from 'react';
-import { Animated, StyleSheet, Text, View } from 'react-native';
+import { Animated, Easing, StyleSheet, Text, View } from 'react-native';
 import { t, type Lang } from '../utils/i18n';
 
 export type BuiltInStickerAnimation = 'none' | 'bounce' | 'pulse' | 'wiggle';
@@ -65,6 +65,23 @@ export function getStickerFallbackText(sticker?: Partial<BuiltInSticker> | null,
   return t('chatStickerFallback', lang);
 }
 
+/**
+ * Свой ритм для каждого стикера, выведенный из его id.
+ *
+ * Нужен только чтобы прилёт не выглядел залпом, когда на экране сразу несколько
+ * стикеров. Хеш от id даёт устойчивый разброс задержки: один и тот же стикер
+ * всегда прилетает одинаково, но не в такт соседям.
+ */
+function stickerRhythm(id: string): { duration: number; delay: number; overshoot: number } {
+  let h = 0;
+  for (let i = 0; i < id.length; i += 1) h = (h * 31 + id.charCodeAt(i)) >>> 0;
+  return {
+    duration: 520 + (h % 270),
+    delay: (h >>> 8) % 380,
+    overshoot: 1.1 + ((h >>> 16) % 7) / 100,
+  };
+}
+
 export function StickerView({
   stickerId,
   sticker,
@@ -80,22 +97,35 @@ export function StickerView({
 }) {
   const resolved = sticker || getBuiltInSticker(stickerId);
   const progress = React.useRef(new Animated.Value(0)).current;
+  /** Прилёт: 0 — ещё нет, 1 — на месте. */
+  const enter = React.useRef(new Animated.Value(animated ? 0 : 1)).current;
+  const rhythm = stickerRhythm(resolved?.id || 'x');
 
   React.useEffect(() => {
-    if (!animated || !resolved || resolved.animation === 'none') {
+    if (!animated || !resolved) {
+      enter.setValue(1);
       progress.stopAnimation();
       progress.setValue(0);
       return;
     }
-    const loop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(progress, { toValue: 1, duration: 620, useNativeDriver: true }),
-        Animated.timing(progress, { toValue: 0, duration: 620, useNativeDriver: true }),
-      ]),
-    );
-    loop.start();
-    return () => loop.stop();
-  }, [animated, progress, resolved?.id, resolved?.animation]);
+
+    // Стикер должен прилетать, а не просто оказываться на экране: момент
+    // появления — половина ощущения от стикера.
+    const entrance = Animated.spring(enter, {
+      toValue: 1,
+      damping: 11,
+      stiffness: 190,
+      mass: 0.7,
+      useNativeDriver: true,
+    });
+
+    const run = Animated.sequence([Animated.delay(rhythm.delay), entrance]);
+    run.start();
+    return () => {
+      run.stop();
+      progress.stopAnimation();
+    };
+  }, [animated, enter, progress, rhythm.delay, resolved?.id]);
 
   if (!resolved) {
     return (
@@ -105,10 +135,30 @@ export function StickerView({
     );
   }
 
-  const translateY = progress.interpolate({ inputRange: [0, 1], outputRange: [0, resolved.animation === 'bounce' ? -8 : 0] });
-  const scale = progress.interpolate({ inputRange: [0, 1], outputRange: [1, resolved.animation === 'pulse' ? 1.1 : 1] });
-  const rotate = progress.interpolate({ inputRange: [0, 1], outputRange: ['0deg', resolved.animation === 'wiggle' ? '8deg' : '0deg'] });
-  const haloOpacity = progress.interpolate({ inputRange: [0, 1], outputRange: [0.28, resolved.animation === 'pulse' ? 0.5 : 0.34] });
+  const translateY = progress.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, resolved.animation === 'bounce' ? -size * 0.09 : 0],
+  });
+  const idleScale = progress.interpolate({
+    inputRange: [0, 1],
+    // Амплитуда пульса своя у каждого стикера — иначе одинаковые эмодзи
+    // выглядят как один повторённый элемент.
+    outputRange: [1, resolved.animation === 'pulse' ? rhythm.overshoot : 1],
+  });
+  const rotate = progress.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['0deg', resolved.animation === 'wiggle' ? '8deg' : '0deg'],
+  });
+  const haloOpacity = progress.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0.28, resolved.animation === 'pulse' ? 0.5 : 0.34],
+  });
+
+  // Прилёт домножается на дыхание: одна общая шкала вместо двух подряд в
+  // transform, чтобы порядок применения не зависел от платформы.
+  const enterScale = enter.interpolate({ inputRange: [0, 1], outputRange: [0.55, 1] });
+  const scale = Animated.multiply(enterScale, idleScale);
+  const enterOpacity = enter.interpolate({ inputRange: [0, 0.55, 1], outputRange: [0, 1, 1] });
 
   return (
     <Animated.View
@@ -117,6 +167,7 @@ export function StickerView({
         {
           width: size,
           height: size,
+          opacity: enterOpacity,
           transform: [{ translateY }, { scale }, { rotate }],
         },
       ]}

@@ -1,6 +1,7 @@
 /** Notice + confirm dialog state for ChatScreen. */
 
 import React from "react";
+import { Keyboard } from "react-native";
 
 export type NoticeKind = "error" | "info";
 
@@ -42,6 +43,9 @@ export function useChatDialogs() {
   );
 
   const openConfirm = React.useCallback((opts: OpenConfirmOpts) => {
+    // Подтверждения открываются в том числе из чата с активным вводом —
+    // клавиатура закрыла бы кнопки так же, как в меню очистки.
+    Keyboard.dismiss();
     setConfirmTitle(opts.title);
     setConfirmMessage(opts.message);
     setConfirmOkText(opts.okText);

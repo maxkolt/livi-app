@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef } from 'react';
-import { Animated, Easing, StyleSheet, View, type LayoutChangeEvent } from 'react-native';
+import { Animated, Easing, StyleSheet, View } from 'react-native';
 import Svg, { Circle, Defs, Mask, RadialGradient, Stop } from 'react-native-svg';
 import { AURA_GLOW, AURA_GRADIENT } from './constants';
 
@@ -81,18 +81,69 @@ function clockHourToDeg(hour: number): number {
  * dir — направление: соседние орбиты крутятся встречно, так заметнее, что кольца
  * независимы друг от друга, а не вращается вся картинка целиком.
  */
-const DOT_SPECS: ReadonlyArray<{
-  ring: number;
-  hour: number;
-  r: number;
-  seconds: number;
-  dir: 1 | -1;
-}> = [
-  { ring: 0, hour: 11, r: 3.2, seconds: 37, dir: 1 },
-  { ring: 1, hour: 8, r: 3.2, seconds: 43, dir: -1 },
-  { ring: 2, hour: 5, r: 3.2, seconds: 53, dir: -1 },
-  { ring: 3, hour: 2, r: 3.2, seconds: 61, dir: 1 },
+/**
+ * Направление жёстко закреплено за орбитой и чередуется от центра наружу:
+ * 1-я против часовой, 2-я по, 3-я против, 4-я по. Встречное движение соседей
+ * читается как независимые кольца, а не как поворот всей картинки целиком,
+ * поэтому разыгрывать его случайно нельзя — иногда выпадали бы две соседние
+ * орбиты в одну сторону, и эффект пропадал.
+ */
+const DOT_SPECS: ReadonlyArray<{ ring: number; hour: number; r: number; dir: 1 | -1 }> = [
+  { ring: 0, hour: 11, r: 3.2, dir: -1 },
+  { ring: 1, hour: 8, r: 3.2, dir: 1 },
+  { ring: 2, hour: 5, r: 3.2, dir: -1 },
+  { ring: 3, hour: 2, r: 3.2, dir: 1 },
 ];
+
+/** Самый быстрый оборот. Быстрее точки читаются как индикатор загрузки. */
+const ORBIT_FASTEST_SECONDS = 37;
+/** Самый медленный — движение едва заметно боковым зрением. */
+const ORBIT_SLOWEST_SECONDS = 150;
+/** Минимальный разрыв между самой быстрой и самой медленной орбитой. */
+const ORBIT_MIN_SPREAD_SECONDS = 55;
+/** Минимальный разрыв между любыми двумя соседними по скорости орбитами. */
+const ORBIT_MIN_GAP_SECONDS = 14;
+
+/**
+ * Периоды вращения: каждая орбита получает свой, независимо от остальных.
+ *
+ * Раньше здесь были жёсткие множители от общей базы — соотношение скоростей
+ * всегда оставалось одним и тем же, менялся только общий темп. Это выглядело
+ * упорядоченно, а не хаотично.
+ *
+ * Разброс проверяется и при необходимости переразыгрывается: случайные числа
+ * иногда сбиваются в кучу, и тогда все четыре точки идут почти одинаково — а это
+ * читается как один вращающийся слой вместо четырёх независимых.
+ *
+ * Значения дробные намеренно. Кратные периоды через круг-другой снова сходятся
+ * в исходный узор, и движение начинает выглядеть как заведённый механизм.
+ */
+function orbitSpinSeconds(count: number): number[] {
+  const span = ORBIT_SLOWEST_SECONDS - ORBIT_FASTEST_SECONDS;
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    const seconds = Array.from(
+      { length: count },
+      () => ORBIT_FASTEST_SECONDS + Math.random() * span,
+    );
+    const sorted = [...seconds].sort((a, b) => a - b);
+    const spreadOk = sorted[sorted.length - 1] - sorted[0] >= ORBIT_MIN_SPREAD_SECONDS;
+    // Общего разброса мало: две орбиты могут выпасть почти одинаковыми внутри
+    // него, и тогда их точки идут парой — выглядит как сбой, а не как хаос.
+    const gapsOk = sorted.every((v, i) => i === 0 || v - sorted[i - 1] >= ORBIT_MIN_GAP_SECONDS);
+    if (spreadOk && gapsOk) return seconds;
+  }
+  // Крайний случай: раскладываем равномерно по диапазону — так разрывы заведомо
+  // одинаковые и максимально возможные — и перемешиваем по орбитам.
+  const fallback = Array.from(
+    { length: count },
+    (_, i) => ORBIT_FASTEST_SECONDS + (span * i) / Math.max(1, count - 1),
+  );
+  for (let i = fallback.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [fallback[i], fallback[j]] = [fallback[j], fallback[i]];
+  }
+  return fallback;
+}
 
 function buildCenterHaloStops(avatarOuter: number, haloR: number): Array<{ offset: number; color: string; opacity: number }> {
   const avatarT = Math.min(0.98, avatarOuter / haloR);
@@ -118,14 +169,15 @@ function buildOrbitBands(avatarOuter: number, ringRadii: number[]): OrbitBand[] 
 }
 
 export function WelcomeRadar({ size, avatarRadius, orbitScale = 1, children }: WelcomeRadarProps) {
-  const [layoutSize, setLayoutSize] = React.useState(size);
-
-  const onLayout = (e: LayoutChangeEvent) => {
-    const w = e.nativeEvent.layout.width;
-    if (w > 0) setLayoutSize(w);
-  };
-
-  const s = layoutSize || size;
+  /**
+   * Размер целиком задаёт родитель. Своего onLayout здесь нет намеренно.
+   *
+   * Раньше радар измерял себя сам и принимал любое положительное значение. При
+   * возврате из фона RN отдаёт промежуточные замеры, каждый чуть больше
+   * предыдущего; они закреплялись, и радиусы орбит ползли вверх от цикла к
+   * циклу — 205 → 209 → 213 → 215. Точки при этом дёргались.
+   */
+  const s = size;
   const cx = s / 2;
   const cy = s / 2;
   const half = s / 2;
@@ -172,6 +224,9 @@ export function WelcomeRadar({ size, avatarRadius, orbitScale = 1, children }: W
     ];
   }, [lastBand, outerSoftPad, outerSoftR]);
 
+  /** Скорости разыгрываются один раз на монтирование. */
+  const spinConfig = useRef(orbitSpinSeconds(DOT_SPECS.length)).current;
+
   const dots = useMemo(
     () =>
       DOT_SPECS.map((spec, i) => ({
@@ -196,7 +251,7 @@ export function WelcomeRadar({ size, avatarRadius, orbitScale = 1, children }: W
       Animated.loop(
         Animated.timing(value, {
           toValue: 1,
-          duration: DOT_SPECS[i].seconds * 1000,
+          duration: Math.round(spinConfig[i] * 1000),
           easing: Easing.linear,
           useNativeDriver: true,
         }),
@@ -204,14 +259,14 @@ export function WelcomeRadar({ size, avatarRadius, orbitScale = 1, children }: W
     );
     loops.forEach((loop) => loop.start());
     return () => loops.forEach((loop) => loop.stop());
-  }, [spins]);
+  }, [spins, spinConfig]);
 
   const uid = Math.round(s);
   const haloGradId = `radarCenterHalo-${uid}`;
   const outerSoftGradId = `radarOuterSoft-${uid}`;
 
   return (
-    <View style={[styles.wrap, { width: s, height: s }]} onLayout={onLayout}>
+    <View style={[styles.wrap, { width: s, height: s }]}>
       <Svg width={s} height={s} viewBox={`0 0 ${s} ${s}`} pointerEvents="none">
         <Defs>
           <RadialGradient id={haloGradId} cx="50%" cy="50%" r="50%">

@@ -338,31 +338,7 @@ export function buildSystemShareContent(opts: {
   return { shareText, shareUrl };
 }
 
-export function computeForwardPickerLayout(opts: {
-  maxSheet: number;
-  padBottom: number;
-  forwardLoading: boolean;
-  friendsCount: number;
-}): { sheetHeight: number } {
-  const { maxSheet, padBottom, forwardLoading, friendsCount } = opts;
-  const padTop = 30;
-  const headerAndSep = 86;
-  const footerBlock = 140;
-  const maxList = Math.max(110, maxSheet - padTop - padBottom - headerAndSep - footerBlock);
-  const rowApprox = 62;
-  const listPadding = 16;
-  let listNeed: number;
-  if (forwardLoading) {
-    listNeed = Math.min(168, maxList);
-  } else if (friendsCount === 0) {
-    listNeed = Math.min(96, maxList);
-  } else {
-    const contentH = friendsCount * rowApprox + listPadding;
-    listNeed = Math.min(Math.max(contentH, 72), maxList);
-  }
-  const sheetHeight = Math.min(maxSheet, padTop + headerAndSep + listNeed + footerBlock + padBottom);
-  return { sheetHeight };
-}
+export { computeForwardPickerLayout } from './chatForwardLayout';
 
 /** Paginate fetchFriends until exhausted (same caps as ChatScreen). */
 export async function loadAllFriendsForForward(

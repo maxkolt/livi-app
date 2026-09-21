@@ -12,6 +12,7 @@ import {
 import { Image as ExpoImage } from "expo-image";
 import { Ionicons } from "@expo/vector-icons";
 import { CHAT_ALBUM_GAP, albumGridColumns } from "./chatAlbum";
+import { useModalLayout } from "../../utils/modalLayout";
 import { WelcomeStageBackground } from "../home/WelcomeStageBackground";
 
 export type AlbumPickKind = "save" | "forward" | "delete";
@@ -76,7 +77,13 @@ export function ChatAlbumPickModal({
     setSelected(next);
   }, [visible, initialSelected, uris.length]);
 
-  const cols = albumGridColumns(Math.min(Math.max(uris.length, 2), 6));
+  const layout = useModalLayout();
+  // В landscape карточка шире, а высоты мало — добавляем колонку, чтобы рядов стало меньше.
+  const baseCols = albumGridColumns(Math.min(Math.max(uris.length, 2), 6));
+  const cols = layout.isLandscape && uris.length >= 4 ? 4 : baseCols;
+  const cardMaxWidth = layout.isLandscape
+    ? Math.min(Math.max(320, layout.width - layout.padH * 2), 560)
+    : 400;
   const tile =
     innerW > 0
       ? Math.max(1, Math.floor((innerW - CHAT_ALBUM_GAP * (cols - 1)) / cols))
@@ -117,14 +124,16 @@ export function ChatAlbumPickModal({
           backgroundColor: isDark ? "rgba(0,0,0,0.58)" : "rgba(0,0,0,0.36)",
           alignItems: "center",
           justifyContent: "center",
-          padding: 20,
+          paddingHorizontal: layout.padH,
+          paddingVertical: layout.padV,
         }}
       >
         <Pressable
           onPress={() => {}}
           style={{
             width: "100%",
-            maxWidth: 400,
+            maxWidth: cardMaxWidth,
+            maxHeight: layout.maxCardHeight,
             borderRadius: 22,
             backgroundColor: bg,
             overflow: "hidden",
@@ -144,7 +153,13 @@ export function ChatAlbumPickModal({
           {isDark ? (
             <WelcomeStageBackground />
           ) : null}
-          <View style={{ paddingHorizontal: 20, paddingTop: 20, paddingBottom: 10 }}>
+          <View
+            style={{
+              paddingHorizontal: 20,
+              paddingTop: layout.isLandscape ? 14 : 20,
+              paddingBottom: layout.isLandscape ? 8 : 10,
+            }}
+          >
             <Text
               style={{
                 color: text,
@@ -197,7 +212,8 @@ export function ChatAlbumPickModal({
           </View>
 
           <ScrollView
-            style={{ maxHeight: 320 }}
+            // В портрете потолок прежний; в landscape сетка ужимается под высоту карточки.
+            style={{ flexShrink: 1, maxHeight: layout.isLandscape ? undefined : 320 }}
             contentContainerStyle={{ paddingHorizontal: 14, paddingBottom: 8 }}
             showsVerticalScrollIndicator={false}
           >
@@ -282,15 +298,15 @@ export function ChatAlbumPickModal({
               flexDirection: "row",
               gap: 10,
               paddingHorizontal: 16,
-              paddingTop: 12,
-              paddingBottom: 16,
+              paddingTop: layout.isLandscape ? 8 : 12,
+              paddingBottom: layout.isLandscape ? 10 : 16,
             }}
           >
             <Pressable
               onPress={onClose}
               style={({ pressed }) => ({
                 flex: 1,
-                paddingVertical: 13,
+                paddingVertical: layout.isLandscape ? 10 : 13,
                 borderRadius: 14,
                 alignItems: "center",
                 backgroundColor: pressed
@@ -310,7 +326,7 @@ export function ChatAlbumPickModal({
               }}
               style={({ pressed }) => ({
                 flex: 1.35,
-                paddingVertical: 13,
+                paddingVertical: layout.isLandscape ? 10 : 13,
                 borderRadius: 14,
                 alignItems: "center",
                 opacity: canConfirm ? 1 : 0.45,

@@ -1,6 +1,7 @@
 /** Clear-chat confirm actions (for me / for everyone). */
 
 import React from "react";
+import { Keyboard } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { clearChatMessages, clearMessageCache, globalMessageStorage } from "../../sockets/socket";
 import { t, type Lang } from "../../utils/i18n";
@@ -26,6 +27,10 @@ export function useChatClear({
   showNotice,
 }: Options) {
   const openClearMenu = () => {
+    // Клавиатура перекрывает кнопки модалки: она рисуется поверх, а окно
+    // остаётся на своём месте. Гасим её до открытия, иначе пользователь видит
+    // заголовок и половину первой кнопки.
+    Keyboard.dismiss();
     setShowClearMenu(true);
   };
 

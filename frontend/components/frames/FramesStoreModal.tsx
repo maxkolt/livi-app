@@ -495,7 +495,10 @@ export function FramesStoreModal({ visible, onClose, onUnlock }: Props) {
             styles.page,
             {
               paddingTop: insets.top + (compact ? 2 : Platform.OS === 'ios' ? 7 : 10),
-              paddingBottom: Math.max(insets.bottom, compact ? 2 : 8),
+              // Именно insets.bottom + зазор, а не max(): max() прижимал кнопку
+              // вплотную к системной навигации, и на трёхкнопочной она визуально
+              // сливалась с панелью. Зазор нужен поверх инсета, а не вместо него.
+              paddingBottom: insets.bottom + (compact ? 10 : 16),
               paddingLeft: insets.left + pageHorizontalPadding,
               paddingRight: insets.right + pageHorizontalPadding,
             },

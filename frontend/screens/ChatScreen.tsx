@@ -163,6 +163,7 @@ import {
 
 import { API_BASE, getMyProfile } from '../sockets/socket';
 import { logger } from '../utils/logger';
+import { useModalLayout } from '../utils/modalLayout';
 import { toAvatarThumb } from '../utils/uploadAvatar';
 import {
   onFriendProfile,
@@ -210,6 +211,25 @@ export default function ChatScreen({ route, navigation }: Props) {
   const insets = useSafeAreaInsets();
   const { theme, isDark } = useAppTheme();
   const lang = useLang((s) => s.lang);
+  // Геометрия всех модалок чата: реагирует на поворот экрана.
+  const modalLayout = useModalLayout();
+  const chatChromeSideInset = modalLayout.isLandscape
+    ? modalLayout.isTablet
+      ? 20
+      : 14
+    : 0;
+  // Меню по долгому нажатию всегда идёт стопкой: реакции сверху, действия ниже.
+  // В landscape оба блока компактнее, чтобы сохранить ту же структуру по высоте.
+  const msgActionsLandscape = modalLayout.isLandscape;
+  const msgActionsReactionsWidth = msgActionsLandscape ? 224 : 256;
+  const msgActionsListWidth = msgActionsLandscape ? 216 : 245;
+  const msgActionsCardWidth = msgActionsLandscape ? 224 : 280;
+  const msgActionsBlockGap = msgActionsLandscape ? 8 : 12;
+  // В стопке над списком ещё лежат реакции (~54) и зазор (12), в портрете — плюс отступ снизу.
+  const msgActionsListMaxH = Math.max(
+    msgActionsLandscape ? 140 : 160,
+    modalLayout.maxCardHeight - (msgActionsLandscape ? 58 : 166),
+  );
   // Android: одинаковый нижний отступ для bottom sheet на всех девайсах.
   // На кнопочной навигации insets.bottom часто = 0, поэтому фиксируем минимальный паддинг.
   // Важно: на жестовой навигации insets.bottom может быть большим, и лист визуально "висит" слишком высоко.
@@ -583,8 +603,9 @@ export default function ChatScreen({ route, navigation }: Props) {
     openForwardPicker,
   } = useChatForward({
     lang,
-    insetsTop: insets.top,
     sheetBottomPad: ANDROID_SHEET_BOTTOM_PAD,
+    sheetMaxHeight: modalLayout.sheetMaxHeight,
+    isLandscape: modalLayout.isLandscape,
   });
   /** Подсветка сообщения при переходе по цитате в ответе */
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
@@ -2416,8 +2437,8 @@ export default function ChatScreen({ route, navigation }: Props) {
               {...chatChromeBottomExtra}
               style={{
                 position: 'absolute',
-                left: 0,
-                right: 0,
+                left: chatChromeSideInset,
+                right: chatChromeSideInset,
                 bottom: 0,
                 zIndex: 20,
                 backgroundColor: isDark ? undefined : INPUT_BAR_BG,
@@ -2792,8 +2813,8 @@ export default function ChatScreen({ route, navigation }: Props) {
               style={[
                 {
                   position: 'absolute',
-                  left: 0,
-                  right: 0,
+                  left: chatChromeSideInset,
+                  right: chatChromeSideInset,
                   bottom: 0,
                   zIndex: 20,
                   elevation: 20,
@@ -3087,8 +3108,8 @@ export default function ChatScreen({ route, navigation }: Props) {
           style={{
             position: 'absolute',
             top: 0,
-            left: 0,
-            right: 0,
+            left: chatChromeSideInset,
+            right: chatChromeSideInset,
             zIndex: 40,
             elevation: 40,
           }}
@@ -3254,15 +3275,18 @@ export default function ChatScreen({ route, navigation }: Props) {
             style={{
               flex: 1,
               backgroundColor: isDark ? 'rgba(0,0,0,0.80)' : 'rgba(0,0,0,0.66)',
-              justifyContent: 'flex-end',
+              // В landscape высоты нет на отступ в 100px — центрируем карточку.
+              justifyContent: msgActionsLandscape ? 'center' : 'flex-end',
               alignItems: 'center',
-              paddingBottom: 100,
+              paddingHorizontal: modalLayout.padH,
+              paddingBottom: msgActionsLandscape ? modalLayout.padV : 100,
+              paddingTop: msgActionsLandscape ? modalLayout.padV : 0,
             }}
           >
             <Pressable
               onPress={() => {}}
               style={{
-                width: 280,
+                width: msgActionsCardWidth,
                 alignSelf: 'center',
                 shadowColor: '#000',
                 shadowOffset: { width: 0, height: 4 },
@@ -3278,6 +3302,13 @@ export default function ChatScreen({ route, navigation }: Props) {
                 const row1 = reactionsAll.slice(0, 5);
                 const row2 = reactionsAll.slice(5, 10);
                 const CardShell = isDark ? StageGradient : View;
+                const emojiFontSize = msgActionsLandscape ? 19 : 22;
+                const emojiPadding = msgActionsLandscape ? 4 : 6;
+                const reactionControlSize = msgActionsLandscape ? 30 : 36;
+                const actionPaddingV = msgActionsLandscape ? 8 : 12;
+                const actionPaddingH = msgActionsLandscape ? 12 : 14;
+                const actionFontSize = msgActionsLandscape ? 14 : 15;
+                const actionIconSize = msgActionsLandscape ? 18 : 20;
                 const cardShellStyle = {
                   overflow: 'hidden' as const,
                   backgroundColor: isDark ? undefined : LIVI.bg,
@@ -3290,45 +3321,52 @@ export default function ChatScreen({ route, navigation }: Props) {
                   if (msgId) sendMessageReaction(msgId, emoji, peerId).catch(() => {});
                 };
                 return (
-                <View style={{ width: 280, alignItems: 'center' }}>
+                <View
+                  style={{
+                    width: msgActionsCardWidth,
+                    alignItems: 'center',
+                    flexDirection: 'column',
+                    justifyContent: 'flex-start',
+                  }}
+                >
                   {/* Блок 1: реакции (лежит на фоне модалки) */}
-                  <CardShell style={{ width: 256, borderRadius: 28, ...cardShellStyle }}>
+                  <CardShell style={{ width: msgActionsReactionsWidth, borderRadius: msgActionsLandscape ? 24 : 28, ...cardShellStyle }}>
                       <ScrollView
                         ref={reactionsScrollRef}
                         horizontal
                         pagingEnabled
                         showsHorizontalScrollIndicator={false}
                         decelerationRate="fast"
-                        snapToInterval={256}
+                        snapToInterval={msgActionsReactionsWidth}
                         snapToAlignment="start"
-                        contentContainerStyle={{ paddingVertical: 4 }}
-                        style={{ width: 256 }}
+                        contentContainerStyle={{ paddingVertical: msgActionsLandscape ? 3 : 4 }}
+                        style={{ width: msgActionsReactionsWidth }}
                       >
-                        <View style={{ width: 256, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 8 }}>
+                        <View style={{ width: msgActionsReactionsWidth, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: msgActionsLandscape ? 6 : 8 }}>
                           {row1.map((emoji) => (
-                            <Pressable key={emoji} onPress={() => emojiPress(emoji)} style={({ pressed }) => ({ padding: 6, borderRadius: 10, backgroundColor: pressed ? (isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)') : 'transparent' })} hitSlop={4}>
-                              <Text style={{ fontSize: 22 }}>{emoji}</Text>
+                            <Pressable key={emoji} onPress={() => emojiPress(emoji)} style={({ pressed }) => ({ padding: emojiPadding, borderRadius: 10, backgroundColor: pressed ? (isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)') : 'transparent' })} hitSlop={4}>
+                              <Text style={{ fontSize: emojiFontSize }}>{emoji}</Text>
                             </Pressable>
                           ))}
                           <Pressable
-                            onPress={() => reactionsScrollRef.current?.scrollTo({ x: 256, animated: true })}
+                            onPress={() => reactionsScrollRef.current?.scrollTo({ x: msgActionsReactionsWidth, animated: true })}
                             style={({ pressed }) => ({
-                              width: 36,
-                              height: 36,
-                              borderRadius: 18,
+                              width: reactionControlSize,
+                              height: reactionControlSize,
+                              borderRadius: reactionControlSize / 2,
                               alignItems: 'center',
                               justifyContent: 'center',
                               backgroundColor: pressed ? (isDark ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.12)') : (isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)'),
                             })}
                             hitSlop={4}
                           >
-                            <Ionicons name="chevron-back" size={20} color={isDark ? 'rgba(255,255,255,0.8)' : 'rgba(0,0,0,0.7)'} />
+                            <Ionicons name="chevron-back" size={actionIconSize} color={isDark ? 'rgba(255,255,255,0.8)' : 'rgba(0,0,0,0.7)'} />
                           </Pressable>
                         </View>
-                        <View style={{ width: 256, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-around', paddingHorizontal: 8 }}>
+                        <View style={{ width: msgActionsReactionsWidth, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-around', paddingHorizontal: msgActionsLandscape ? 6 : 8 }}>
                           {row2.map((emoji) => (
-                            <Pressable key={emoji} onPress={() => emojiPress(emoji)} style={({ pressed }) => ({ padding: 6, borderRadius: 10, backgroundColor: pressed ? (isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)') : 'transparent' })} hitSlop={4}>
-                              <Text style={{ fontSize: 22 }}>{emoji}</Text>
+                            <Pressable key={emoji} onPress={() => emojiPress(emoji)} style={({ pressed }) => ({ padding: emojiPadding, borderRadius: 10, backgroundColor: pressed ? (isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)') : 'transparent' })} hitSlop={4}>
+                              <Text style={{ fontSize: emojiFontSize }}>{emoji}</Text>
                             </Pressable>
                           ))}
                         </View>
@@ -3336,7 +3374,15 @@ export default function ChatScreen({ route, navigation }: Props) {
                   </CardShell>
                   {/* Отступ 12px — виден фон модалки (на нём лежат оба блока) */}
                   {/* Блок 2: список действий */}
-                  <CardShell style={{ marginTop: 12, width: 245, borderRadius: 12, ...cardShellStyle }}>
+                  <CardShell
+                    style={{
+                      marginTop: msgActionsBlockGap,
+                      width: msgActionsListWidth,
+                      maxHeight: msgActionsListMaxH,
+                      borderRadius: 12,
+                      ...cardShellStyle,
+                    }}
+                  >
                     {(() => {
                       const isImageMsg = String(selectedMessage?.type || '') === 'image';
                       const row = (
@@ -3353,8 +3399,8 @@ export default function ChatScreen({ route, navigation }: Props) {
                               flexDirection: 'row',
                               alignItems: 'center',
                               justifyContent: 'space-between',
-                              paddingVertical: 12,
-                              paddingHorizontal: 14,
+                              paddingVertical: actionPaddingV,
+                              paddingHorizontal: actionPaddingH,
                               backgroundColor: pressed
                                 ? danger
                                   ? 'rgba(255,90,103,0.08)'
@@ -3362,15 +3408,21 @@ export default function ChatScreen({ route, navigation }: Props) {
                                 : 'transparent',
                             })}
                           >
-                            <Text style={{ color: danger ? '#FF5A67' : LIVI.white, fontSize: 15, fontWeight: '400' }}>
+                            <Text style={{ color: danger ? '#FF5A67' : LIVI.white, fontSize: actionFontSize, fontWeight: '400' }}>
                               {label}
                             </Text>
-                            <Ionicons name={icon} size={20} color={danger ? '#FF5A67' : LIVI.titan} />
+                            <Ionicons name={icon} size={actionIconSize} color={danger ? '#FF5A67' : LIVI.titan} />
                           </Pressable>
                         </React.Fragment>
                       );
                       return (
                         <>
+                        <ScrollView
+                          style={{ flexShrink: 1 }}
+                          contentContainerStyle={{ flexGrow: 0 }}
+                          showsVerticalScrollIndicator={false}
+                          bounces={false}
+                        >
                     {(String(selectedMessage?.text || '').trim() || String(selectedMessage?.uri || '').trim() || String(selectedMessage?.stickerId || '').trim() || isImageMsg) && (
                       <>
                         {!isImageMsg && (String(selectedMessage?.text || '').trim() || String(selectedMessage?.stickerId || '').trim()) ? (
@@ -3439,29 +3491,30 @@ export default function ChatScreen({ route, navigation }: Props) {
                         flexDirection: 'row',
                         alignItems: 'center',
                         justifyContent: 'space-between',
-                        paddingVertical: 12,
-                        paddingHorizontal: 14,
+                        paddingVertical: actionPaddingV,
+                        paddingHorizontal: actionPaddingH,
                         backgroundColor: pressed ? 'rgba(255,90,103,0.08)' : 'transparent',
                       })}
                     >
-                      <Text style={{ color: '#FF5A67', fontSize: 15, fontWeight: '400' }}>
+                      <Text style={{ color: '#FF5A67', fontSize: actionFontSize, fontWeight: '400' }}>
                         {t('delete', lang)}
                       </Text>
-                      <Ionicons name="trash-outline" size={20} color="#FF5A67" />
+                      <Ionicons name="trash-outline" size={actionIconSize} color="#FF5A67" />
                     </Pressable>
-                    <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: dividerColor }} />
-                    <Pressable
-                      onPress={hideMessageActions}
-                      style={({ pressed }) => ({
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        paddingVertical: 12,
-                        paddingHorizontal: 14,
-                        backgroundColor: pressed ? (isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)') : 'transparent',
-                      })}
-                    >
-                      <Text style={{ color: LIVI.titan, fontSize: 15, fontWeight: '400' }}>{t('cancelAction', lang)}</Text>
-                    </Pressable>
+                        </ScrollView>
+                        <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: dividerColor }} />
+                        <Pressable
+                          onPress={hideMessageActions}
+                          style={({ pressed }) => ({
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            paddingVertical: actionPaddingV,
+                            paddingHorizontal: actionPaddingH,
+                            backgroundColor: pressed ? (isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)') : 'transparent',
+                          })}
+                        >
+                          <Text style={{ color: LIVI.titan, fontSize: actionFontSize, fontWeight: '400' }}>{t('cancelAction', lang)}</Text>
+                        </Pressable>
                         </>
                       );
                     })()}
@@ -3609,13 +3662,19 @@ export default function ChatScreen({ route, navigation }: Props) {
           <GestureHandlerRootView style={{ flex: 1 }}>
           <Pressable
             onPress={() => setShowForwardPicker(false)}
-            style={{ flex: 1, backgroundColor: isDark ? 'rgba(0,0,0,0.50)' : 'rgba(0,0,0,0.40)', justifyContent: 'flex-end' }}
+            style={{
+              flex: 1,
+              backgroundColor: isDark ? 'rgba(0,0,0,0.50)' : 'rgba(0,0,0,0.40)',
+              justifyContent: 'flex-end',
+              // В landscape лист во всю ширину слишком растянут — центрируем.
+              alignItems: 'center',
+            }}
           >
             <Animated.View
               style={{
                 transform: [{ translateY: forwardSheetTranslateY }],
                 maxHeight: forwardPickerSheetMaxH,
-                width: '100%',
+                width: modalLayout.sheetWidth,
               }}
             >
             <Pressable
@@ -3809,12 +3868,20 @@ export default function ChatScreen({ route, navigation }: Props) {
                 </NativeViewGestureHandler>
               </View>
 
-              <View style={{ paddingTop: 8 }}>
+              <View
+                style={{
+                  paddingTop: 8,
+                  // row-reverse: «Отмена» слева, «Переслать» справа — как в остальных диалогах.
+                  flexDirection: modalLayout.isLandscape ? 'row-reverse' : 'column',
+                  gap: modalLayout.isLandscape ? 10 : 0,
+                }}
+              >
               <TouchableOpacity
                 onPress={() => void forwardToSelectedFriends()}
                 disabled={forwardSelectedFriendIds.size === 0}
                 style={{
-                  paddingVertical: 14,
+                  flex: modalLayout.isLandscape ? 1 : undefined,
+                  paddingVertical: modalLayout.isLandscape ? 11 : 14,
                   backgroundColor:
                     forwardSelectedFriendIds.size > 0
                       ? WELCOME_NAV_ACTIVE_ACCENT.solid15
@@ -3827,7 +3894,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                         ? 'rgba(255,255,255,0.2)'
                         : 'rgba(0,0,0,0.15)',
                   borderRadius: 12,
-                  marginBottom: 8,
+                  marginBottom: modalLayout.isLandscape ? 0 : 8,
                 }}
                 activeOpacity={0.85}
               >
@@ -3850,7 +3917,8 @@ export default function ChatScreen({ route, navigation }: Props) {
               <TouchableOpacity
                 onPress={() => setShowForwardPicker(false)}
                 style={{
-                  paddingVertical: 14,
+                  flex: modalLayout.isLandscape ? 1 : undefined,
+                  paddingVertical: modalLayout.isLandscape ? 11 : 14,
                   backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)',
                   borderRadius: 12,
                 }}
@@ -3920,14 +3988,16 @@ export default function ChatScreen({ route, navigation }: Props) {
             backgroundColor: isDark ? 'rgba(0,0,0,0.90)' : 'rgba(0,0,0,0.58)',
             alignItems: 'center',
             justifyContent: 'center',
-            padding: 24,
+            paddingHorizontal: modalLayout.padH,
+            paddingVertical: modalLayout.padV,
           }}
         >
           <Pressable
             onPress={() => {}}
             style={{
               width: '100%',
-              maxWidth: 380,
+              maxWidth: modalLayout.dialogMaxWidth,
+              maxHeight: modalLayout.maxCardHeight,
               borderRadius: 18,
               backgroundColor: isDark ? WELCOME_CARD_BG : 'rgba(255,255,255,0.98)',
               borderWidth: StyleSheet.hairlineWidth,
@@ -3935,14 +4005,21 @@ export default function ChatScreen({ route, navigation }: Props) {
               overflow: 'hidden',
             }}
           >
-            <View style={{ paddingHorizontal: 18, paddingTop: 18, paddingBottom: 14 }}>
-              <Text style={{ color: isDark ? LIVI.white : 'rgba(0,0,0,0.92)', fontSize: 18, fontWeight: '700' }}>
-                {confirmTitle || t('confirmActionTitle', lang)}
-              </Text>
-              <Text style={{ marginTop: 8, color: isDark ? 'rgba(255,255,255,0.55)' : 'rgba(0,0,0,0.55)', fontSize: 14, lineHeight: 18 }}>
-                {confirmMessage || ''}
-              </Text>
-            </View>
+            <ScrollView
+              style={{ flexShrink: 1 }}
+              contentContainerStyle={{ flexGrow: 0 }}
+              showsVerticalScrollIndicator={false}
+              bounces={false}
+            >
+              <View style={{ paddingHorizontal: 18, paddingTop: 18, paddingBottom: 14 }}>
+                <Text style={{ color: isDark ? LIVI.white : 'rgba(0,0,0,0.92)', fontSize: 18, fontWeight: '700' }}>
+                  {confirmTitle || t('confirmActionTitle', lang)}
+                </Text>
+                <Text style={{ marginTop: 8, color: isDark ? 'rgba(255,255,255,0.55)' : 'rgba(0,0,0,0.55)', fontSize: 14, lineHeight: 18 }}>
+                  {confirmMessage || ''}
+                </Text>
+              </View>
+            </ScrollView>
 
             <View
               style={{
@@ -4018,14 +4095,16 @@ export default function ChatScreen({ route, navigation }: Props) {
             backgroundColor: isDark ? 'rgba(0,0,0,0.90)' : 'rgba(0,0,0,0.58)',
             alignItems: 'center',
             justifyContent: 'center',
-            padding: 24,
+            paddingHorizontal: modalLayout.padH,
+            paddingVertical: modalLayout.padV,
           }}
         >
           <Pressable
             onPress={() => {}}
             style={{
               width: '100%',
-              maxWidth: 380,
+              maxWidth: modalLayout.dialogMaxWidth,
+              maxHeight: modalLayout.maxCardHeight,
               borderRadius: 18,
               backgroundColor: isDark ? WELCOME_CARD_BG : 'rgba(255,255,255,0.98)',
               borderWidth: StyleSheet.hairlineWidth,
@@ -4033,73 +4112,80 @@ export default function ChatScreen({ route, navigation }: Props) {
               overflow: 'hidden',
             }}
           >
-            <View style={{ paddingHorizontal: 18, paddingTop: 18, paddingBottom: 14 }}>
-              <Text style={{ color: isDark ? LIVI.white : 'rgba(0,0,0,0.92)', fontSize: 18, fontWeight: '700' }}>
-                {deleteConfirmKind === 'multi' ? t('chatDeleteMessagesTitle', lang) : t('chatDeleteMessageTitle', lang)}
-              </Text>
-              <Text style={{ marginTop: 8, color: isDark ? 'rgba(255,255,255,0.55)' : 'rgba(0,0,0,0.55)', fontSize: 14, lineHeight: 18 }}>
-                {deleteConfirmKind === 'multi'
-                  ? (selectedCount === 1
-                    ? t('chatDeleteSelectedOne', lang)
-                    : t('chatDeleteSelectedMany', lang).replace('{count}', String(selectedCount)))
-                  : t('chatActionCannotUndo', lang)}
-              </Text>
-            </View>
-
-            <View
-              style={{
-                height: StyleSheet.hairlineWidth,
-                backgroundColor: isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.10)',
-              }}
-            />
-
-            <Pressable
-              onPress={() => setDeleteForBoth((v) => !v)}
-              style={({ pressed }) => ({
-                marginHorizontal: 12,
-                marginTop: 12,
-                paddingHorizontal: 12,
-                paddingVertical: 12,
-                borderRadius: 14,
-                flexDirection: 'row',
-                alignItems: 'center',
-                backgroundColor: pressed
-                  ? (isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.06)')
-                  : (isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.035)'),
-                borderWidth: StyleSheet.hairlineWidth,
-                borderColor: deleteForBoth ? 'rgba(255,90,103,0.45)' : (isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.12)'),
-              })}
+            <ScrollView
+              style={{ flexShrink: 1 }}
+              contentContainerStyle={{ flexGrow: 0 }}
+              showsVerticalScrollIndicator={false}
+              bounces={false}
             >
+              <View style={{ paddingHorizontal: 18, paddingTop: 18, paddingBottom: 14 }}>
+                <Text style={{ color: isDark ? LIVI.white : 'rgba(0,0,0,0.92)', fontSize: 18, fontWeight: '700' }}>
+                  {deleteConfirmKind === 'multi' ? t('chatDeleteMessagesTitle', lang) : t('chatDeleteMessageTitle', lang)}
+                </Text>
+                <Text style={{ marginTop: 8, color: isDark ? 'rgba(255,255,255,0.55)' : 'rgba(0,0,0,0.55)', fontSize: 14, lineHeight: 18 }}>
+                  {deleteConfirmKind === 'multi'
+                    ? (selectedCount === 1
+                      ? t('chatDeleteSelectedOne', lang)
+                      : t('chatDeleteSelectedMany', lang).replace('{count}', String(selectedCount)))
+                    : t('chatActionCannotUndo', lang)}
+                </Text>
+              </View>
+
               <View
                 style={{
-                  width: 22,
-                  height: 22,
-                  borderRadius: 6,
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  marginRight: 10,
-                  backgroundColor: deleteForBoth ? 'rgba(255,90,103,0.18)' : 'transparent',
-                  borderWidth: 1,
-                  borderColor: deleteForBoth ? '#FF5A67' : (isDark ? 'rgba(255,255,255,0.45)' : 'rgba(0,0,0,0.35)'),
+                  height: StyleSheet.hairlineWidth,
+                  backgroundColor: isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.10)',
                 }}
+              />
+
+              <Pressable
+                onPress={() => setDeleteForBoth((v) => !v)}
+                style={({ pressed }) => ({
+                  marginHorizontal: 12,
+                  marginTop: 12,
+                  paddingHorizontal: 12,
+                  paddingVertical: 12,
+                  borderRadius: 14,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  backgroundColor: pressed
+                    ? (isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.06)')
+                    : (isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.035)'),
+                  borderWidth: StyleSheet.hairlineWidth,
+                  borderColor: deleteForBoth ? 'rgba(255,90,103,0.45)' : (isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.12)'),
+                })}
               >
-                {deleteForBoth ? <Ionicons name="checkmark" size={16} color="#FF5A67" /> : null}
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={{ color: isDark ? LIVI.white : 'rgba(0,0,0,0.88)', fontSize: 15, fontWeight: '700' }}>
-                  {t('chatDeleteForEveryoneTitle', lang)}
-                </Text>
-                <Text style={{ marginTop: 3, color: isDark ? 'rgba(255,255,255,0.50)' : 'rgba(0,0,0,0.50)', fontSize: 13, lineHeight: 17 }}>
-                  {deleteForBoth
-                    ? (deleteConfirmKind === 'multi'
-                      ? t('chatDeleteForEveryoneBothMulti', lang)
-                      : t('chatDeleteForEveryoneBothSingle', lang))
-                    : (deleteConfirmKind === 'multi'
-                      ? t('chatDeleteForEveryoneMeMulti', lang)
-                      : t('chatDeleteForEveryoneMeSingle', lang))}
-                </Text>
-              </View>
-            </Pressable>
+                <View
+                  style={{
+                    width: 22,
+                    height: 22,
+                    borderRadius: 6,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    marginRight: 10,
+                    backgroundColor: deleteForBoth ? 'rgba(255,90,103,0.18)' : 'transparent',
+                    borderWidth: 1,
+                    borderColor: deleteForBoth ? '#FF5A67' : (isDark ? 'rgba(255,255,255,0.45)' : 'rgba(0,0,0,0.35)'),
+                  }}
+                >
+                  {deleteForBoth ? <Ionicons name="checkmark" size={16} color="#FF5A67" /> : null}
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={{ color: isDark ? LIVI.white : 'rgba(0,0,0,0.88)', fontSize: 15, fontWeight: '700' }}>
+                    {t('chatDeleteForEveryoneTitle', lang)}
+                  </Text>
+                  <Text style={{ marginTop: 3, color: isDark ? 'rgba(255,255,255,0.50)' : 'rgba(0,0,0,0.50)', fontSize: 13, lineHeight: 17 }}>
+                    {deleteForBoth
+                      ? (deleteConfirmKind === 'multi'
+                        ? t('chatDeleteForEveryoneBothMulti', lang)
+                        : t('chatDeleteForEveryoneBothSingle', lang))
+                      : (deleteConfirmKind === 'multi'
+                        ? t('chatDeleteForEveryoneMeMulti', lang)
+                        : t('chatDeleteForEveryoneMeSingle', lang))}
+                  </Text>
+                </View>
+              </Pressable>
+            </ScrollView>
 
             <View style={{ flexDirection: 'row', padding: 12, gap: 10 }}>
               <Pressable
@@ -4156,14 +4242,16 @@ export default function ChatScreen({ route, navigation }: Props) {
             backgroundColor: isDark ? 'rgba(0,0,0,0.62)' : 'rgba(0,0,0,0.38)',
             alignItems: 'center',
             justifyContent: 'center',
-            padding: 24,
+            paddingHorizontal: modalLayout.padH,
+            paddingVertical: modalLayout.padV,
           }}
         >
           <Pressable
             onPress={() => {}}
             style={{
               width: '100%',
-              maxWidth: 380,
+              maxWidth: modalLayout.dialogMaxWidth,
+              maxHeight: modalLayout.maxCardHeight,
               borderRadius: 18,
               backgroundColor: isDark ? WELCOME_STAGE_BG : 'rgba(255,255,255,0.98)',
               borderWidth: StyleSheet.hairlineWidth,
@@ -4171,24 +4259,31 @@ export default function ChatScreen({ route, navigation }: Props) {
               overflow: 'hidden',
             }}
           >
-            <View style={{ paddingHorizontal: 18, paddingTop: 18, paddingBottom: 14 }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                <Ionicons
-                  name={noticeKind === 'error' ? 'alert-circle-outline' : 'information-circle-outline'}
-                  size={18}
-                  color={noticeKind === 'error' ? '#FF5A67' : LIVI.titan}
-                  style={{ marginRight: 10 }}
-                />
-                <Text style={{ color: isDark ? LIVI.white : 'rgba(0,0,0,0.92)', fontSize: 18, fontWeight: '700', flex: 1 }}>
-                  {noticeTitle || (noticeKind === 'error' ? t('errorTitle', lang) : '')}
-                </Text>
+            <ScrollView
+              style={{ flexShrink: 1 }}
+              contentContainerStyle={{ flexGrow: 0 }}
+              showsVerticalScrollIndicator={false}
+              bounces={false}
+            >
+              <View style={{ paddingHorizontal: 18, paddingTop: 18, paddingBottom: 14 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                  <Ionicons
+                    name={noticeKind === 'error' ? 'alert-circle-outline' : 'information-circle-outline'}
+                    size={18}
+                    color={noticeKind === 'error' ? '#FF5A67' : LIVI.titan}
+                    style={{ marginRight: 10 }}
+                  />
+                  <Text style={{ color: isDark ? LIVI.white : 'rgba(0,0,0,0.92)', fontSize: 18, fontWeight: '700', flex: 1 }}>
+                    {noticeTitle || (noticeKind === 'error' ? t('errorTitle', lang) : '')}
+                  </Text>
+                </View>
+                {!!noticeMessage && (
+                  <Text style={{ marginTop: 10, color: isDark ? 'rgba(255,255,255,0.55)' : 'rgba(0,0,0,0.55)', fontSize: 14, lineHeight: 18 }}>
+                    {noticeMessage}
+                  </Text>
+                )}
               </View>
-              {!!noticeMessage && (
-                <Text style={{ marginTop: 10, color: isDark ? 'rgba(255,255,255,0.55)' : 'rgba(0,0,0,0.55)', fontSize: 14, lineHeight: 18 }}>
-                  {noticeMessage}
-                </Text>
-              )}
-            </View>
+            </ScrollView>
 
             <View
               style={{

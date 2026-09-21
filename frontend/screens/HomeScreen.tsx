@@ -1,6 +1,6 @@
 // screens/HomeScreen.tsx
 import React, { useEffect, useState, useCallback, useMemo, useRef, startTransition } from 'react';
-import {
+import { Alert,
   BackHandler,
   StatusBar,
   StyleSheet,
@@ -46,6 +46,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   toAvatarThumb,
   normalizeLocalImageUri,
+  uploadAvatarAndSave,
 } from '../utils/uploadAvatar';
 
 import LanguagePicker from '../components/LanguagePicker';
@@ -648,6 +649,32 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   }, [avatarUri]);
   const [savedAvatarUrl, setSavedAvatarUrl] = useState<string>(''); // ТОЛЬКО https или ''
   const [myAvatarVer, setMyAvatarVer] = useState<number>(0);   // версия моего аватара
+
+  /**
+   * Версия аватара только растёт.
+   *
+   * Источников у неё несколько и они асинхронные: восстановление из хранилища,
+   * ответ getMyProfile(), пуш user.avatar, результат загрузки. Они приходят в
+   * произвольном порядке, и профиль с сервера вполне может принести версию
+   * старее уже известной. Раньше она применялась безусловно — счётчик откатывался,
+   * эффект загрузки перезапускался и доставал из кеша ПРЕДЫДУЩИЙ аватар. Со
+   * стороны это выглядело так, будто аватар сам меняется через несколько секунд
+   * после входа.
+   *
+   * Сброс в 0 (удаление аватара) делается прямым setMyAvatarVer(0) — он намеренный
+   * и через этот путь не идёт.
+   */
+  /** Актуальная версия для асинхронных замыканий: state в них успевает устареть. */
+  const myAvatarVerRef = React.useRef(0);
+  React.useEffect(() => {
+    myAvatarVerRef.current = myAvatarVer;
+  }, [myAvatarVer]);
+
+  const applyAvatarVer = React.useCallback((next: unknown) => {
+    const value = Number(next);
+    if (!Number.isFinite(value) || value <= 0) return;
+    setMyAvatarVer((prev) => (value > prev ? value : prev));
+  }, []);
   const [avatarVerChecked, setAvatarVerChecked] = useState(false); // true после первой проверки кэша (убирает мелькание буквы при переходе на Home после звонка)
   const [profileKey, setProfileKey] = useState(0);
 
@@ -3207,8 +3234,29 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
               void updateProfile({ nick: cachedNick }).catch(() => {});
             }
             
+            /**
+             * Картинку из профиля применяем, только если её версия не старее
+             * уже показанной. Ответ getMyProfile() приходит через сеть спустя
+             * секунды после входа и вполне может нести предыдущий аватар —
+             * раньше он ставился безусловно, поверх свежего.
+             *
+             * avatarVer нет в ответе (старый бэкенд) — считаем данные валидными,
+             * иначе пользователь без версии остался бы вовсе без аватара.
+             */
+            const profileAvatarVer = typeof profile.avatarVer === 'number' ? profile.avatarVer : null;
+            const profileAvatarIsFresh = profileAvatarVer === null || profileAvatarVer >= myAvatarVerRef.current;
+            if (!profileAvatarIsFresh) {
+              // Намеренно info, а не debug: это аномалия, её надо видеть при
+              // обычном уровне логов, и срабатывает она только когда сервер
+              // действительно прислал версию старее известной.
+              logger.info('[HomeScreen] Профиль принёс устаревший аватар — не применяем', {
+                profileAvatarVer,
+                known: myAvatarVerRef.current,
+              });
+            }
+
             // Обновляем аватар из backend
-            if (avatarB64) {
+            if (profileAvatarIsFresh && avatarB64) {
               const avatarDataUri = toDataUri(avatarB64);
               loadedAvatar = avatarDataUri;
               setMyFullAvatarUri(avatarDataUri);
@@ -3217,7 +3265,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
               logger.debug('[HomeScreen] Set avatar from backend avatarB64');
               logger.debug('Set avatar from backend avatarB64');
               hasActualData = true;
-            } else if (avatarThumbB64) {
+            } else if (profileAvatarIsFresh && avatarThumbB64) {
               const avatarDataUri = toDataUri(avatarThumbB64);
               loadedAvatar = avatarDataUri;
               setMyFullAvatarUri(avatarDataUri);
@@ -3230,7 +3278,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
             
             // Обновляем версию аватара
             if (typeof profile.avatarVer === 'number') {
-              setMyAvatarVer(profile.avatarVer);
+              applyAvatarVer(profile.avatarVer);
               // Persist avatarVer for cold start / offline avatar render
               try {
                 const uid = getCurrentUserId();
@@ -4060,7 +4108,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           setMyFullAvatarUri(res.avatarB64);
           // Обновляем версию если изменилась
           if (res.avatarVer !== myAvatarVer) {
-            setMyAvatarVer(res.avatarVer);
+            applyAvatarVer(res.avatarVer);
             // Сохраняем версию в AsyncStorage для восстановления при перезапуске
             try {
               const currentUserId = getCurrentUserId();
@@ -4088,7 +4136,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
 
       // Обновляем версию
       if (typeof avatarVer === 'number') {
-        setMyAvatarVer(avatarVer);
+        applyAvatarVer(avatarVer);
         // Сохраняем версию в AsyncStorage для восстановления при перезапуске
         try {
           const currentUserId = getCurrentUserId();
@@ -4256,7 +4304,14 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   };
 
   /* ===== save profile (ник + аватар) ===== */
-  const handleSaveProfile = async () => {
+  /**
+   * @param avatarOverride URI только что выбранного аватара.
+   *
+   * Нужен для автосохранения при выборе: setAvatarUri() асинхронный, и вызванный
+   * следом handleSaveProfile() прочитал бы из замыкания ещё прежнее значение —
+   * то есть загрузил бы старый аватар вместо нового.
+   */
+  const handleSaveProfile = async (avatarOverride?: string) => {
     if (savingRef.current) return;
     savingRef.current = true;
 
@@ -4292,28 +4347,58 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       const finalNick = String((nickLiveRef.current || nick || '')).trim();
       // Android часто возвращает content://... (а не file://). Считаем это "локальным"
       // и прогоняем через normalizeLocalImageUri перед конвертацией в base64.
-      const isLocalFile = /^(file|content|ph|assets-library):\/\//i.test(avatarUri);
-      let finalAvatarUrl = avatarUri; // По умолчанию текущий URI
+      const avatarSource = String(avatarOverride || avatarUri || '');
+      const isLocalFile = /^(file|content|ph|assets-library):\/\//i.test(avatarSource);
+      let finalAvatarUrl = avatarSource; // По умолчанию текущий URI
 
       // Если выбран локальный файл - загружаем через socket
       if (isLocalFile) {
         try {
-          const fileUri = await normalizeLocalImageUri(avatarUri);
+          const fileUri = await normalizeLocalImageUri(avatarSource);
           const base64 = await imageToBase64(fileUri);
 
+          /**
+           * Таймаут обязателен: socket.io копит emit'ы, пока нет соединения, и
+           * ack тогда не приходит вовсе. Без ограничения промис не резолвился
+           * никогда — сохранение висело молча, пользователь считал аватар
+           * применённым, а на сервер он не уезжал.
+           */
           const result = await new Promise<{ ok: boolean; avatarVer?: number; error?: string }>((resolve) => {
+            let settled = false;
+            const finish = (value: { ok: boolean; avatarVer?: number; error?: string }) => {
+              if (settled) return;
+              settled = true;
+              resolve(value);
+            };
+            const timer = setTimeout(() => finish({ ok: false, error: 'upload_timeout' }), 15000);
             socket.emit('user.uploadAvatar', { base64 }, (ack: any) => {
-              resolve(ack || { ok: false, error: 'no_response' });
+              clearTimeout(timer);
+              finish(ack || { ok: false, error: 'no_response' });
             });
           });
 
           if (!result.ok) {
-            throw new Error(result.error || 'upload_failed');
+            /**
+             * Запасной путь по HTTP.
+             *
+             * Под VPN WebSocket часто рвётся — про это есть отдельный
+             * комментарий в socketCore.ts. Загрузка аватара шла только через
+             * socket, поэтому под VPN она молча не доезжала: локальный превью
+             * оставался на экране, а на сервере продолжал жить прежний аватар.
+             * Эндпоинт /api/upload/avatar/dataUri и клиент к нему уже
+             * существовали, оставалось их связать.
+             */
+            logger.warn('[handleSaveProfile] Avatar upload via socket failed, trying HTTP', {
+              error: result.error,
+            });
+            const httpResult = await uploadAvatarAndSave(avatarSource);
+            result.ok = true;
+            result.avatarVer = httpResult.avatarVer;
           }
 
           // Обновляем версию аватара
           if (result.avatarVer) {
-            setMyAvatarVer(result.avatarVer);
+            applyAvatarVer(result.avatarVer);
 
             // Сохраняем версию в AsyncStorage для восстановления при перезапуске
             try {
@@ -4345,9 +4430,15 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           setSavedAvatarUrl('');
           finalAvatarUrl = ''; // Аватар теперь хранится как data URI в БД
         } catch (e: any) {
-          console.error('[handleSaveProfile] Avatar upload error:', e);
+          // Молчать тут нельзя: раньше ошибка уходила только в console.error,
+          // локальный превью оставался на экране, и пользователь был уверен,
+          // что аватар сохранён. На следующем запуске ответ профиля возвращал
+          // прежний аватар — со стороны это выглядело как самопроизвольная
+          // подмена, хотя новый просто никогда не доезжал до сервера.
+          logger.warn('[handleSaveProfile] Avatar upload failed', { error: e?.message });
           await ensureMinSpinner();
           setSaving(false);
+          Alert.alert(t('errorTitle', lang), t('avatarUploadFailed', lang));
           return;
         }
       } else {
@@ -4590,7 +4681,7 @@ const handleClearNick = useCallback(async () => {
           console.warn('🔄 Image prefetch failed:', e);
         }
         
-        // Только локальное превью - загрузка будет при сохранении
+        // Превью показываем сразу, а загрузку запускаем тут же — ниже.
         setAvatarUri(localUri);
         
         // Принудительно обновляем изображение для Android
@@ -4605,6 +4696,18 @@ const handleClearNick = useCallback(async () => {
         // Сохраняем текущий никнейм в черновик, если он есть
         const currentNick = nick || '';
         await saveDraftProfile({ nick: currentNick, avatar: localUri });
+
+        /**
+         * Автосохранение выбранного аватара.
+         *
+         * Раньше выбор лишь показывал локальное превью, а загрузка шла только по
+         * кнопке «Сохранить». Пользователь видел новый аватар и считал дело
+         * сделанным — а на сервер тот не уезжал. При следующем входе профиль
+         * возвращал прежний, и это выглядело как самопроизвольная подмена.
+         *
+         * URI передаём явно: setAvatarUri() выше ещё не успел попасть в state.
+         */
+        void handleSaveProfile(localUri);
       } catch (e) {
         console.warn('avatar pick flow error:', e);
       } finally {

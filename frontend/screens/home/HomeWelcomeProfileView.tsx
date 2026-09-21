@@ -702,16 +702,7 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
     </View>
   );
 
-  const hubAvatarSection = (
-    <View
-      style={[
-        styles.avatarBlock,
-        {
-          marginTop: hubMetrics.gapTop,
-          marginBottom: hubMetrics.gapUnderAvatar,
-        },
-      ]}
-    >
+  const hubAvatarBody = (
       <View style={styles.avatarWrap}>
         <Pressable
           onPress={() => openAvatarSheet?.()}
@@ -745,6 +736,33 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
           <Ionicons name="camera-outline" size={cameraBtnSize > 34 ? 20 : 18} color={LIVI.white} />
         </Pressable>
       </View>
+  );
+
+  const hubAvatarSection = (
+    <View
+      style={[
+        styles.avatarBlock,
+        {
+          marginTop: hubMetrics.gapTop,
+          marginBottom: hubMetrics.gapUnderAvatar,
+        },
+      ]}
+    >
+      {hubAvatarBody}
+    </View>
+  );
+
+  // Липкая шапка не переносит отрицательный верхний отступ: RN складывает из него
+  // немонотонный inputRange (-1, 0, gapTop, gapTop+1) и роняет экран. Поэтому у
+  // sticky-варианта отступ нулевой, а сдвиг переезжает на сам ScrollView.
+  const hubAvatarSectionSticky = (
+    <View
+      style={[
+        styles.avatarBlock,
+        { marginTop: 0, marginBottom: hubMetrics.gapUnderAvatar },
+      ]}
+    >
+      {hubAvatarBody}
     </View>
   );
 
@@ -1143,7 +1161,7 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
               </View>
             ) : needsHubScroll && stickyAvatarOnScroll ? (
               <ScrollView
-                style={styles.hubMainDock}
+                style={[styles.hubMainDock, { marginTop: hubMetrics.gapTop }]}
                 contentContainerStyle={styles.hubMainDockScroll}
                 // Аватар — липкий заголовок: прокручивается, у верха фиксируется
                 // и остаётся поверх карточек, которые уезжают под него.
@@ -1155,7 +1173,7 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
                 bounces={false}
                 overScrollMode="never"
               >
-                {hubAvatarSection}
+                {hubAvatarSectionSticky}
                 {hubListStack}
                 {hubLogoutButton}
               </ScrollView>

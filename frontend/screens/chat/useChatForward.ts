@@ -5,18 +5,19 @@ import { Animated, Dimensions } from "react-native";
 import { State } from "react-native-gesture-handler";
 import { fetchFriends } from "../../sockets/socket";
 import { t, type Lang } from "../../utils/i18n";
-import {
-  computeForwardPickerLayout,
-  loadAllFriendsForForward,
-} from "./chatForward";
+import { loadAllFriendsForForward } from "./chatForward";
+import { computeForwardPickerLayout } from "./chatForwardLayout";
 
 type Options = {
   lang: Lang;
-  insetsTop: number;
   sheetBottomPad: number;
+  /** Потолок высоты листа — приходит из useModalLayout, реагирует на поворот. */
+  sheetMaxHeight: number;
+  /** В landscape футер кнопок раскладывается в строку и занимает меньше высоты. */
+  isLandscape: boolean;
 };
 
-export function useChatForward({ lang, insetsTop, sheetBottomPad }: Options) {
+export function useChatForward({ lang, sheetBottomPad, sheetMaxHeight, isLandscape }: Options) {
   const [showForwardPicker, setShowForwardPicker] = React.useState(false);
   const [forwardFriends, setForwardFriends] = React.useState<any[]>([]);
   const [forwardLoading, setForwardLoading] = React.useState(false);
@@ -39,10 +40,7 @@ export function useChatForward({ lang, insetsTop, sheetBottomPad }: Options) {
   );
   const forwardSheetTranslateY = React.useRef(new Animated.Value(0)).current;
 
-  const forwardPickerSheetMaxH = React.useMemo(() => {
-    const h = Dimensions.get("window").height;
-    return Math.min(Math.round(h * 0.72), Math.round(h - insetsTop - 12));
-  }, [insetsTop, showForwardPicker]);
+  const forwardPickerSheetMaxH = sheetMaxHeight;
 
   const forwardPickerLayout = React.useMemo(
     () =>
@@ -51,8 +49,9 @@ export function useChatForward({ lang, insetsTop, sheetBottomPad }: Options) {
         padBottom: sheetBottomPad,
         forwardLoading,
         friendsCount: forwardFriends.length,
+        landscape: isLandscape,
       }),
-    [forwardPickerSheetMaxH, sheetBottomPad, forwardLoading, forwardFriends.length],
+    [forwardPickerSheetMaxH, sheetBottomPad, forwardLoading, forwardFriends.length, isLandscape],
   );
 
   React.useEffect(() => {
