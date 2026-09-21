@@ -6,7 +6,6 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
 import Carousel from 'react-native-reanimated-carousel';
 import { Extrapolation, interpolate } from 'react-native-reanimated';
-import PngFireFrame from './PngFireFrame';
 import AdaptiveText from '../AdaptiveText';
 import FitText from '../FitText';
 import {
@@ -49,7 +48,7 @@ type FrameItem = {
   label: string;
   blurb: string;
   colors: readonly [string, string, ...string[]];
-  kind: 'fire' | 'ring';
+  kind: 'ring';
 };
 
 type ChatBackgroundItem = {
@@ -119,7 +118,7 @@ const FRAME_CATALOG: FrameItem[] = [
     label: 'Огонь',
     blurb: 'Живая рамка вокруг аватара. Тебя видно первым в списках, звонках и профиле.',
     colors: ['#FFC062', '#FF8A34', '#FF4D1C'],
-    kind: 'fire',
+    kind: 'ring',
   },
   {
     key: 'diamond',
@@ -195,22 +194,8 @@ function ChatBackgroundCard({ item, width, height }: { item: ChatBackgroundItem;
 
 function FrameCoverCard({ item, size }: { item: FrameItem; size: number }) {
   const ringWidth = Math.max(2, Math.round(size * 0.025));
-  const avatarSize = item.kind === 'fire' ? Math.round(size * 0.78) : size - ringWidth * 2;
+  const avatarSize = size - ringWidth * 2;
 
-  if (item.kind === 'fire') {
-    return (
-      <View style={styles.cardShadow}>
-        <PngFireFrame size={avatarSize} ringScale={1.24} calm>
-          <ExpoImage
-            source={SHOWCASE_AVATAR}
-            style={{ width: avatarSize, height: avatarSize }}
-            contentFit="cover"
-            cachePolicy="memory-disk"
-          />
-        </PngFireFrame>
-      </View>
-    );
-  }
 
   return (
     <View style={styles.cardShadow}>

@@ -3,7 +3,6 @@ import { Pressable, StyleSheet, View } from 'react-native';
 import { Image as ExpoImage } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import AdaptiveText from '../../components/AdaptiveText';
-import PngFireFrame from '../../components/frames/PngFireFrame';
 import { setActiveCosmetic, useCosmetics, type CosmeticKind } from '../../utils/cosmetics';
 import { LIVI, WELCOME_GLASS_BORDER, WELCOME_GLASS_SURFACE, WELCOME_MUTED_TEXT } from './constants';
 
@@ -49,15 +48,6 @@ const BACKGROUND_IMAGES: Record<string, number> = {
 
 function FramePreview({ itemId }: { itemId: string }) {
   const colors = FRAME_COLORS[itemId];
-  if (itemId === 'fire') {
-    return (
-      <View style={styles.framePreviewBox}>
-        <PngFireFrame size={34} ringScale={1.2} calm>
-          <ExpoImage source={SHOWCASE_AVATAR} style={styles.fireAvatar} contentFit="cover" cachePolicy="memory-disk" />
-        </PngFireFrame>
-      </View>
-    );
-  }
   if (!colors) return <View style={styles.emptyFrame} />;
   return (
     <LinearGradient
@@ -187,7 +177,6 @@ const styles = StyleSheet.create({
   emptyHint: { marginTop: 2, color: WELCOME_MUTED_TEXT, fontSize: 12 },
   itemRow: { minHeight: 62, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, gap: 12 },
   framePreviewBox: { width: 42, height: 42, alignItems: 'center', justifyContent: 'center' },
-  fireAvatar: { width: 34, height: 34 },
   frameSwatch: {
     width: 42,
     height: 42,

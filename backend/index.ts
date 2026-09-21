@@ -479,6 +479,8 @@ app.use('/api', avatarRouter);
 app.use('/api', messagesRouter);
 app.use('/api', livekitRouter);
 app.use('/api', moderationRouter);
+// Роутам нужен io, чтобы разослать друзьям смену косметики без перезапуска приложения.
+app.set('io', io);
 app.use('/api', cosmeticsRouter);
 
 // Stream utility убран - больше не используется

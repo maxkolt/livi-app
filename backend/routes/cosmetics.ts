@@ -4,6 +4,7 @@ import mongoose from 'mongoose';
 import UserModel from '../models/User';
 import CosmeticPurchaseModel, { type CosmeticKind } from '../models/CosmeticPurchase';
 import { logger } from '../utils/logger';
+import { getFriendIds } from '../utils/friendshipUtils';
 
 const router = Router();
 
@@ -226,6 +227,27 @@ router.get('/cosmetics/payments/:paymentId', async (req, res) => {
   }
 });
 
+/**
+ * Разослать смену рамки друзьям и самому пользователю (у него могут быть другие
+ * устройства). Ошибки глушим: смена косметики не должна падать из-за сокета.
+ */
+async function broadcastFrameChange(req: any, userId: string, frameId: string): Promise<void> {
+  try {
+    const io = req.app?.get?.('io');
+    if (!io) return;
+    const payload = { userId, frameId };
+    io.to(`u:${userId}`).emit('cosmetics:frame', payload);
+    const friends = await getFriendIds(userId);
+    for (const friendId of friends) {
+      try {
+        io.to(`u:${friendId}`).emit('cosmetics:frame', payload);
+      } catch {}
+    }
+  } catch (e: any) {
+    logger.warn('[cosmetics] broadcastFrameChange failed', { userId, error: e?.message });
+  }
+}
+
 router.patch('/cosmetics/active', async (req, res) => {
   const userId = String((req as any).userId || '').trim();
   if (!mongoose.isValidObjectId(userId)) return res.status(401).json({ ok: false, error: 'unauthorized' });
@@ -245,6 +267,14 @@ router.patch('/cosmetics/active', async (req, res) => {
   const updated = await UserModel.findByIdAndUpdate(userId, { $set: { [activeField]: itemId } }, { new: true })
     .select('purchasedFrameIds purchasedBackgroundIds activeFrameId activeBackgroundId')
     .lean();
+
+  // Рамка видна другим людям, поэтому её смену надо разослать сразу.
+  // Без этого друзья увидят новую рамку только когда протухнет их пятиминутный
+  // кеш И перемонтируется компонент — на практике после перезапуска приложения.
+  if (kind === 'frame') {
+    void broadcastFrameChange(req, userId, itemId);
+  }
+
   return res.json({ ok: true, entitlements: serializeEntitlements(updated) });
 });
 

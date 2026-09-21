@@ -147,6 +147,28 @@ export function useCosmetics(): CosmeticEntitlements {
   return value;
 }
 
+/**
+ * Применить рамку, пришедшую пушем по сокету.
+ *
+ * Без этого друзья видели новую рамку только после протухания пятиминутного
+ * кеша И перемонтирования компонента — то есть на практике после перезапуска
+ * приложения. Сервер шлёт `cosmetics:frame` сразу при смене, здесь мы освежаем
+ * кеш и будим всех подписчиков этого userId.
+ */
+export function applyRemoteFrameChange(userId: string, frameId: string): void {
+  const id = String(userId || '');
+  if (!id) return;
+  const next = String(frameId || '');
+  const current = userFrameCache.get(id);
+  userFrameCache.set(id, { frameId: next, loadedAt: Date.now() });
+  if (String(getCurrentUserId() || '') === id) {
+    cached = { ...cached, activeFrameId: next };
+    listeners.forEach((listener) => listener(cached));
+  }
+  if (current?.frameId === next) return;
+  userFrameListeners.get(id)?.forEach((listener) => listener(next));
+}
+
 async function loadUserActiveFrame(userId: string): Promise<string> {
   const cachedFrame = userFrameCache.get(userId);
   if (cachedFrame && Date.now() - cachedFrame.loadedAt < 5 * 60_000) return cachedFrame.frameId;

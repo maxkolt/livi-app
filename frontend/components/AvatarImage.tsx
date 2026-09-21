@@ -8,7 +8,6 @@ import { getAvatarImageProps } from '../utils/imageOptimization';
 import { getAvatarUri } from '../utils/avatarCache';
 import { useUserActiveFrame } from '../utils/cosmetics';
 
-const FIRE_RING = require('../assets/frames/fire-ring-alpha.png');
 /**
  * Единая толщина рамки для всех экранов, в dp.
  *
@@ -19,6 +18,7 @@ const FIRE_RING = require('../assets/frames/fire-ring-alpha.png');
 const ACTIVE_FRAME_RING_RATIO = 0.027;
 const ACTIVE_FRAME_RING_MIN = 2;
 const ACTIVE_FRAME_RING_MAX = 5;
+
 
 /**
  * Толщина рамки от размера аватара, в целых dp.
@@ -44,6 +44,7 @@ export function activeFrameRingWidth(avatarSize: number): number {
   return Math.round(Math.min(ACTIVE_FRAME_RING_MAX, Math.max(ACTIVE_FRAME_RING_MIN, raw)));
 }
 const FRAME_COLORS: Record<string, readonly [string, string, ...string[]]> = {
+  fire: ['#FFC062', '#FF8A34', '#FF4D1C'],
   diamond: ['#E8F6FF', '#9ED0FF', '#6AA9FF'],
   aurora: ['#7CF5C8', '#5AA9FF', '#3B82F6'],
   palladium: ['#F2F4F7', '#C5CCD6', '#8B93A0'],
@@ -161,9 +162,8 @@ const AvatarImage = memo<AvatarImageProps>(({
   const key = `avatar_${userId || 'none'}_v${avatarVer || 0}`;
 
   const showFallbackLetter = fallbackText && !loading && !uri;
-  const hasFireFrame = activeFrameId === 'fire';
   const frameColors = FRAME_COLORS[activeFrameId];
-  const hasActiveFrame = hasFireFrame || !!frameColors;
+  const hasActiveFrame = !!frameColors;
   /**
    * Вся геометрия в целых dp. Дробные размеры (приходило 120.99882…) SVG и
    * раскладка округляют по-разному, и кольцо переставало совпадать с краем
@@ -222,15 +222,6 @@ const AvatarImage = memo<AvatarImageProps>(({
       />
     </Svg>
   ) : null;
-  const fireOverlay = hasFireFrame ? (
-    <ExpoImage
-      source={FIRE_RING}
-      style={[StyleSheet.absoluteFillObject, { zIndex: 3 }]}
-      contentFit="contain"
-      cachePolicy="memory-disk"
-      pointerEvents="none"
-    />
-  ) : null;
 
   return (
     <View
@@ -239,7 +230,12 @@ const AvatarImage = memo<AvatarImageProps>(({
         containerStyle,
         { width: outerSize, height: outerSize, borderRadius: outerRadius },
         hasActiveFrame
-          ? { borderWidth: 0, borderColor: 'transparent', backgroundColor: 'transparent', overflow: 'hidden' }
+          ? {
+              borderWidth: 0,
+              borderColor: 'transparent',
+              backgroundColor: 'transparent',
+              overflow: 'hidden',
+            }
           : null,
       ]}
     >
@@ -284,7 +280,30 @@ const AvatarImage = memo<AvatarImageProps>(({
           </Text>
         ) : null}
       </View>
-      {fireOverlay}
+      {hasActiveFrame ? (
+        /*
+         * Волосяной ободок по краю фотографии.
+         *
+         * Тёмный верх снимка сливается с тёмным фоном приложения, и круг
+         * читается как срезанный по прямой — особенно там, где в рисунке рамки
+         * нет плотного контура. Ободок держит форму на тёмных участках и
+         * практически не виден на светлых.
+         */
+        <View
+          pointerEvents="none"
+          style={{
+            position: 'absolute',
+            left: hasActiveFrame ? ringInsetPct : 0,
+            top: hasActiveFrame ? ringInsetPct : 0,
+            right: hasActiveFrame ? ringInsetPct : 0,
+            bottom: hasActiveFrame ? ringInsetPct : 0,
+            borderRadius: outerRadius,
+            borderWidth: 1,
+            borderColor: 'rgba(255,255,255,0.38)',
+            zIndex: 2,
+          }}
+        />
+      ) : null}
     </View>
   );
 });

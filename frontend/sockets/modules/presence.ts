@@ -1,4 +1,5 @@
 import { logger } from "../../utils/logger";
+import { applyRemoteFrameChange } from '../../utils/cosmetics';
 import { shared } from "./shared";
 import { socket } from "./socketCore";
 import { applyMissedFromReauth } from "./missedCalls";
@@ -179,6 +180,16 @@ socket.on("connect", () => {
   void drainMessageOutbox()
     .then(() => drainEditOutbox())
     .catch(() => {});
+});
+
+/**
+ * Смена рамки у себя или у друга. Сервер шлёт это сразу при применении
+ * косметики, чтобы аватар обновился везде без перезапуска приложения.
+ */
+socket.on("cosmetics:frame", (data: { userId?: string; frameId?: string }) => {
+  try {
+    applyRemoteFrameChange(String(data?.userId || ''), String(data?.frameId || ''));
+  } catch {}
 });
 
 socket.on("presence:update", __dispatchPresenceUpdate);
