@@ -1,5 +1,5 @@
-import React, { useMemo } from 'react';
-import { StyleSheet, View, type LayoutChangeEvent } from 'react-native';
+import React, { useEffect, useMemo, useRef } from 'react';
+import { Animated, Easing, StyleSheet, View, type LayoutChangeEvent } from 'react-native';
 import Svg, { Circle, Defs, Mask, RadialGradient, Stop } from 'react-native-svg';
 import { AURA_GLOW, AURA_GRADIENT } from './constants';
 
@@ -65,24 +65,33 @@ function computeRingRadii(half: number, avatarR: number, orbitScale: number): nu
   return [r1, r2, r3, r4];
 }
 
-function polar(cx: number, cy: number, r: number, deg: number) {
-  const rad = (deg * Math.PI) / 180;
-  return { x: cx + Math.cos(rad) * r, y: cy + Math.sin(rad) * r };
-}
-
 /** Час на циферблате → угол для SVG (0° = 3h, по часовой). */
 function clockHourToDeg(hour: number): number {
   return hour * 30 - 90;
 }
 
 /**
- * По одной точке на орбите r1…r4 — как на скрине: 10h, 8h, 6h, 2h.
+ * По одной точке на орбите r1…r4 — стартовые позиции как на макете: 11h, 8h, 5h, 2h.
+ *
+ * Периоды намеренно взаимно непериодичные (простые числа секунд): кратные периоды
+ * через круг-другой снова сходятся в исходный узор, и движение начинает читаться
+ * как заведённый механизм. С 37/43/53/61 точки не повторяют взаимное расположение
+ * часами, и вращение выглядит хаотичным.
+ *
+ * dir — направление: соседние орбиты крутятся встречно, так заметнее, что кольца
+ * независимы друг от друга, а не вращается вся картинка целиком.
  */
-const DOT_SPECS: ReadonlyArray<{ ring: number; hour: number; r: number }> = [
-  { ring: 0, hour: 11, r: 3.2 },
-  { ring: 1, hour: 8, r: 3.2 },
-  { ring: 2, hour: 5, r: 3.2 },
-  { ring: 3, hour: 2, r: 3.2 },
+const DOT_SPECS: ReadonlyArray<{
+  ring: number;
+  hour: number;
+  r: number;
+  seconds: number;
+  dir: 1 | -1;
+}> = [
+  { ring: 0, hour: 11, r: 3.2, seconds: 37, dir: 1 },
+  { ring: 1, hour: 8, r: 3.2, seconds: 43, dir: -1 },
+  { ring: 2, hour: 5, r: 3.2, seconds: 53, dir: -1 },
+  { ring: 3, hour: 2, r: 3.2, seconds: 61, dir: 1 },
 ];
 
 function buildCenterHaloStops(avatarOuter: number, haloR: number): Array<{ offset: number; color: string; opacity: number }> {
@@ -163,13 +172,39 @@ export function WelcomeRadar({ size, avatarRadius, orbitScale = 1, children }: W
     ];
   }, [lastBand, outerSoftPad, outerSoftR]);
 
-  const dots = useMemo(() => {
-    return DOT_SPECS.map((spec, i) => {
-      const orbit = ringRadii[spec.ring] ?? ringRadii[0];
-      const pt = polar(cx, cy, orbit, clockHourToDeg(spec.hour));
-      return { key: i, ...pt, r: spec.r };
-    });
-  }, [cx, cy, ringRadii]);
+  const dots = useMemo(
+    () =>
+      DOT_SPECS.map((spec, i) => ({
+        key: i,
+        orbitR: ringRadii[spec.ring] ?? ringRadii[0],
+        r: spec.r,
+        startDeg: clockHourToDeg(spec.hour),
+        dir: spec.dir,
+      })),
+    [ringRadii],
+  );
+
+  /**
+   * По значению на орбиту. Количество орбит фиксировано, так что ref с массивом
+   * создаётся один раз и переживает перерисовки от layout/размера — иначе каждый
+   * ресайз сбрасывал бы точки в стартовые позиции.
+   */
+  const spins = useRef(DOT_SPECS.map(() => new Animated.Value(0))).current;
+
+  useEffect(() => {
+    const loops = spins.map((value, i) =>
+      Animated.loop(
+        Animated.timing(value, {
+          toValue: 1,
+          duration: DOT_SPECS[i].seconds * 1000,
+          easing: Easing.linear,
+          useNativeDriver: true,
+        }),
+      ),
+    );
+    loops.forEach((loop) => loop.start());
+    return () => loops.forEach((loop) => loop.stop());
+  }, [spins]);
 
   const uid = Math.round(s);
   const haloGradId = `radarCenterHalo-${uid}`;
@@ -222,13 +257,54 @@ export function WelcomeRadar({ size, avatarRadius, orbitScale = 1, children }: W
         {lastBand ? (
           <Circle cx={cx} cy={cy} r={outerSoftR} fill={`url(#${outerSoftGradId})`} />
         ) : null}
-        {dots.map((d) => (
-          <React.Fragment key={d.key}>
-            <Circle cx={d.x} cy={d.y} r={d.r + 3} fill={AURA_GLOW} fillOpacity={0.16} />
-            <Circle cx={d.x} cy={d.y} r={d.r} fill={AURA_GRADIENT[2]} fillOpacity={0.88} />
-          </React.Fragment>
-        ))}
       </Svg>
+
+      {/*
+        Точки вынесены из SVG в отдельные слои: вращение идёт через transform на
+        нативном драйвере, без пересчёта координат в JS на каждый кадр. Кольца
+        остаются в SVG статикой — они идеальные окружности, их вращение невидимо.
+        Аватар с рамкой лежит ниже в своём слое и не затрагивается.
+      */}
+      {dots.map((d) => {
+        const glowR = d.r + 3;
+        const rotate = spins[d.key].interpolate({
+          inputRange: [0, 1],
+          outputRange: [`${d.startDeg}deg`, `${d.startDeg + 360 * d.dir}deg`],
+        });
+        return (
+          <Animated.View
+            key={d.key}
+            pointerEvents="none"
+            style={[StyleSheet.absoluteFill, { transform: [{ rotate }] }]}
+          >
+            <View
+              style={{
+                position: 'absolute',
+                left: cx + d.orbitR - glowR,
+                top: cy - glowR,
+                width: glowR * 2,
+                height: glowR * 2,
+                borderRadius: glowR,
+                backgroundColor: AURA_GLOW,
+                opacity: 0.16,
+              }}
+            />
+            <View
+              style={{
+                position: 'absolute',
+                left: cx + d.orbitR - d.r,
+                top: cy - d.r,
+                width: d.r * 2,
+                height: d.r * 2,
+                borderRadius: d.r,
+                backgroundColor: AURA_GRADIENT[2],
+                opacity: 0.88,
+              }}
+            />
+          </Animated.View>
+        );
+      })}
+
       <View style={styles.center}>{children}</View>
     </View>
   );

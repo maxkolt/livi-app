@@ -302,19 +302,30 @@ function HomeWelcomeViewInner({
   const welcomeAvatarRadius = Math.round(welcomeAvatarBase / 2);
   /** Сжатие орбит к центру — одно значение и для геометрии колец, и для аватара. */
   const orbitScale = splitStage ? 0.72 : 1;
-  const welcomeAvatarSize = (() => {
+  const welcomeAvatarGeometry = (() => {
     const half = radarSize / 2;
     const avatarOuter = welcomeAvatarRadius + 2;
     const stepTotal = 0.56 + 0.86 + 1.18 + 1.14;
     const g = Math.max(half * 0.078, (half * 0.85 - avatarOuter) / stepTotal) * orbitScale;
     const firstRingWidth = g * 0.56;
+    // Рамка начинается у края фотографии, проходит через служебный зазор 2 px
+    // и перекрывает только внутреннюю часть первой орбиты.
+    const frameOutset = 2 + firstRingWidth * 0.22;
     if (splitStage) {
       // Аватар доходит почти до первой орбиты: она становится уже, аватар крупнее,
       // остальные кольца остаются на своих радиусах.
-      return Math.round((avatarOuter + firstRingWidth - 1) * 2);
+      return {
+        avatarSize: Math.round((avatarOuter + firstRingWidth - 1) * 2),
+        frameOutset,
+      };
     }
-    return Math.round(welcomeAvatarBase + (firstRingWidth * 2) / 3);
+    return {
+      avatarSize: Math.round(welcomeAvatarBase + (firstRingWidth * 2) / 3),
+      frameOutset,
+    };
   })();
+  const welcomeAvatarSize = welcomeAvatarGeometry.avatarSize;
+  const welcomeFrameOutset = welcomeAvatarGeometry.frameOutset;
 
   const cancelBurst = useCallback(() => {
     if (!burstActiveRef.current) return;
@@ -474,6 +485,8 @@ function HomeWelcomeViewInner({
             dense={splitStage}
             radarStage
             radarAvatarSize={welcomeAvatarSize}
+            radarFramedAvatarSize={welcomeAvatarBase}
+            radarFrameOutset={welcomeFrameOutset}
             menuChromeBg={menuChromeBg}
             {...centerProfile}
             avatarAnchorRef={avatarAnchorRef}

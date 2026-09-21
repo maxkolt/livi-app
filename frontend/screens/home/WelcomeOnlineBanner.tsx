@@ -216,10 +216,10 @@ const styles = StyleSheet.create({
   },
   stackItem: {
     borderColor: WELCOME_STAGE_BG,
-    overflow: 'hidden',
+    overflow: 'visible',
   },
   stackAvatar: {
-    overflow: 'hidden',
+    overflow: 'visible',
   },
   stackPlaceholder: {
     backgroundColor: 'rgba(59,130,246,0.22)',

@@ -610,7 +610,7 @@ const welcomeListStyles = StyleSheet.create({
     width: WELCOME_FRIEND_AVATAR_SIZE,
     height: WELCOME_FRIEND_AVATAR_SIZE,
     borderRadius: WELCOME_FRIEND_AVATAR_SIZE / 2,
-    overflow: 'hidden',
+    overflow: 'visible',
     backgroundColor: 'rgba(132, 135, 140, 0.17)',
     alignItems: 'center',
     justifyContent: 'center',

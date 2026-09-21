@@ -17,7 +17,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { Image as ExpoImage } from 'expo-image';
 import * as Clipboard from 'expo-clipboard';
-import AvatarImage from '../../components/AvatarImage';
+import AvatarImage, { activeFrameRingWidth } from '../../components/AvatarImage';
 import { TextInput as PaperInput } from 'react-native-paper';
 import { getCurrentUserId } from '../../sockets/socket';
 import { t, languages, type Lang } from '../../utils/i18n';
@@ -28,6 +28,7 @@ import {
   PLAY_STORE_UPDATE_URL,
 } from '../../utils/updateCheck';
 import type { ChatWallpaperTheme } from '../../utils/chatWallpaper';
+import { useUserActiveFrame } from '../../utils/cosmetics';
 import { WelcomeCrownButton } from './WelcomeCrownButton';
 import { PurchasesManagementPanel } from './PurchasesManagementPanel';
 import {
@@ -53,7 +54,20 @@ const SUPPORT_EMAIL = '12345kolt@gmal.com';
 const SUPPORT_EMAIL_2 = 'kolt12max@mail.ru';
 const BOOSTY_URL = process.env.EXPO_PUBLIC_BOOSTY_URL || 'https://boosty.to/liviapp/donate';
 const PATREON_URL = process.env.EXPO_PUBLIC_PATREON_URL || 'https://www.patreon.com/c/LiViApp';
-const AVATAR_RING_WIDTH = 2.5;
+/**
+ * Толщина рамки берётся из общего источника: раньше здесь была своя константа
+ * 2.5, а «Поиск» считал ~4.5 — одна и та же купленная рамка отличалась на глаз.
+ */
+/**
+ * Толщина серого кольца-заглушки (когда рамка не надета) и резерв места под него.
+ *
+ * Купленная рамка считается отдельно — activeFrameRingWidth() от размера аватара.
+ * Здесь нужна константа: portraitPhoneAvatarSize() вычитает кольцо ещё до того,
+ * как размер аватара известен, и брать адаптивное значение было бы циклично.
+ * Значение совпадает с адаптивным на характерных для этого экрана размерах
+ * (112–132 dp → 3 dp), поэтому резерв всегда достаточен.
+ */
+const AVATAR_RING_WIDTH = 3;
 const CAMERA_BTN_SIZE = 38;
 /** Строк в hub-профиле: 4 секции по 2 строки. */
 const PROFILE_HUB_ROW_COUNT = 8;
@@ -396,6 +410,8 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
   }, [notifyLayoutActivity]);
 
   const myUserId = getCurrentUserId();
+  const activeFrameId = useUserActiveFrame(myUserId);
+  const hasActiveFrame = !!activeFrameId;
   const displayNick = displayName(savedNick || nick);
   const letter = displayAvatarLetter(savedNick || nick);
   const busy = !!saving || !!wiping;
@@ -543,28 +559,46 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
   ]);
 
   const avatarSize = hubMetrics.avatarSize;
+  const avatarFrameSize = Math.round(avatarSize) + activeFrameRingWidth(avatarSize) * 2;
+  const avatarContainerSize = hasActiveFrame ? avatarFrameSize : avatarSize;
   const cameraBtnSize = hubMetrics.cameraBtnSize;
+  const hasLocalAvatarPreview = avatarUri && /^(file|content|ph|assets-library):\/\//i.test(avatarUri);
 
   const avatarInner = (
     <View
       style={[
         homeStyles.centerAvatarWrap,
         {
-          width: avatarSize,
-          height: avatarSize,
-          borderRadius: avatarSize / 2,
+          width: avatarContainerSize,
+          height: avatarContainerSize,
+          borderRadius: avatarContainerSize / 2,
           backgroundColor: menuChromeBg,
         },
       ]}
     >
-      {avatarUri && /^(file|content|ph|assets-library):\/\//i.test(avatarUri) ? (
+      {myUserId && hasActiveFrame ? (
+        <AvatarImage
+          key="avatar-framed"
+          userId={myUserId}
+          avatarVer={myAvatarVer}
+          uri={hasLocalAvatarPreview ? avatarUri : myFullAvatarUri || undefined}
+          size={avatarSize}
+          frameSize={avatarFrameSize}
+          frameId={activeFrameId}
+          fallbackText={letter}
+          containerStyle={homeStyles.centerAvatarImg}
+          fallbackTextStyle={{ fontSize: avatarSize > 110 ? 34 : 28, fontWeight: '800' }}
+        />
+      ) : hasLocalAvatarPreview ? (
         <ExpoImage source={{ uri: avatarUri }} style={homeStyles.centerAvatarImg} cachePolicy="memory-disk" />
       ) : myUserId && myAvatarVer > 0 ? (
         <AvatarImage
+          key="avatar-plain"
           userId={myUserId}
           avatarVer={myAvatarVer}
           uri={myFullAvatarUri || undefined}
           size={avatarSize}
+          frameId={activeFrameId || null}
           fallbackText={letter}
           containerStyle={homeStyles.centerAvatarImg}
           fallbackTextStyle={{ fontSize: avatarSize > 110 ? 34 : 28, fontWeight: '800' }}
@@ -684,10 +718,11 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
           disabled={busy}
           style={[
             styles.avatarRing,
+            hasActiveFrame && styles.avatarRingPurchased,
             {
-              width: avatarSize + AVATAR_RING_WIDTH * 2,
-              height: avatarSize + AVATAR_RING_WIDTH * 2,
-              borderRadius: (avatarSize + AVATAR_RING_WIDTH * 2) / 2,
+              width: avatarFrameSize,
+              height: avatarFrameSize,
+              borderRadius: avatarFrameSize / 2,
             },
           ]}
         >
@@ -1332,6 +1367,11 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(180,186,196,0.38)',
     backgroundColor: 'rgba(180,186,196,0.06)',
     overflow: 'hidden',
+  },
+  avatarRingPurchased: {
+    borderWidth: 0,
+    borderColor: 'transparent',
+    backgroundColor: 'transparent',
   },
   cameraBtn: {
     position: 'absolute',

@@ -3110,9 +3110,63 @@ function AppContent() {
         }
       }
     };
-    
+
+    /**
+     * Пересчёт «держать ли экран» на момент вызова, а не на момент запуска эффекта.
+     *
+     * shouldKeepOn выше — снимок. Часть его входов (__pipVisibleRef) живёт в
+     * глобальном ref, которого нет в зависимостях эффекта, поэтому после звонка
+     * он мог остаться true: эффект пересчитывался один раз при смене маршрута,
+     * заводил интервал и больше не запускался — переключение вкладок внутри
+     * главного экрана routeName не меняет. Флаг «не гасить» висел часами.
+     */
+    const computeShouldKeepOn = () => {
+      let route: string | undefined;
+      try {
+        route = navRef.isReady() ? navRef.getCurrentRoute()?.name : routeName;
+      } catch {
+        route = routeName;
+      }
+      const forceHidden = !!(global as any).__pipForceHiddenRef?.current;
+      const visible =
+        !forceHidden && (!!(pip as any)?.visible || !!(global as any).__pipVisibleRef?.current);
+      // PiP засчитываем только при живом звонке. Иначе зависший __pipVisibleRef
+      // держал бы экран бесконечно: сам он к тому моменту уже ни на что не влияет,
+      // плашки на экране нет, а условие всё ещё истинно. Маршрут и входящий
+      // не оборачиваем — это состояния, которые пользователь видит своими глазами.
+      const pipHoldsScreen = visible && isOngoingCallSession();
+      return isVideoSessionRoute(route) || !!incoming || pipHoldsScreen;
+    };
+
+    /** Отдать экран системе: дальше он гаснет по тайм-ауту из настроек. */
+    const releaseKeepScreenOn = () => {
+      if (Platform.OS === 'android') {
+        try {
+          (InCallManager as any).setKeepScreenOn?.(false);
+        } catch {}
+      }
+      try {
+        deactivateKeepAwakeAsync?.().catch(() => {});
+      } catch {}
+    };
+
+    /** Тик переактивации: сам гаснет, когда условие отпало. */
+    const keepScreenOnTick = () => {
+      if (!computeShouldKeepOn()) {
+        releaseKeepScreenOn();
+        if (androidKeepScreenOnInterval) {
+          clearInterval(androidKeepScreenOnInterval);
+          androidKeepScreenOnInterval = null;
+        }
+        return;
+      }
+      if (AppState.currentState === 'active' || AppState.currentState === 'inactive') {
+        activateAndroidKeepScreenOn();
+      }
+    };
+
     const handleAppStateChange = (nextAppState: string) => {
-      if (!shouldKeepOn) return;
+      if (!computeShouldKeepOn()) return;
       if (nextAppState === 'active' || nextAppState === 'inactive') {
         // Останавливаем интервал «экран не гаснет в PiP», когда вернулись из фона
         if (pipKeepScreenOnInterval) {
@@ -3133,11 +3187,7 @@ function AppContent() {
           // Запускаем периодическую переактивацию для Android (каждые 3 секунды)
           // чтобы предотвратить затемнение экрана системой
           if (!androidKeepScreenOnInterval) {
-            androidKeepScreenOnInterval = setInterval(() => {
-              if (AppState.currentState === 'active' || AppState.currentState === 'inactive') {
-                activateAndroidKeepScreenOn();
-              }
-            }, 3000); // Переактивируем каждые 3 секунды для Android (максимально агрессивная защита)
+            androidKeepScreenOnInterval = setInterval(keepScreenOnTick, 3000);
           }
         }
       } else if (nextAppState === 'background') {
@@ -3245,11 +3295,7 @@ function AppContent() {
         activateAndroidKeepScreenOn();
         
         // Запускаем периодическую переактивацию реже, чтобы не спамить нативные вызовы
-        androidKeepScreenOnInterval = setInterval(() => {
-          if (AppState.currentState === 'active' || AppState.currentState === 'inactive') {
-            activateAndroidKeepScreenOn();
-          }
-        }, 8000);
+        androidKeepScreenOnInterval = setInterval(keepScreenOnTick, 8000);
       }
     }
 

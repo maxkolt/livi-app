@@ -1,27 +1,74 @@
 // components/AvatarImage.tsx
 import React, { memo, useEffect, useRef, useState } from 'react';
-import { View, Text, StyleProp, ViewStyle, TextStyle, ImageStyle } from 'react-native';
+import { StyleSheet, View, Text, StyleProp, ViewStyle, TextStyle, ImageStyle } from 'react-native';
 import { Image as ExpoImage } from 'expo-image';
+import Svg, { Circle, Defs, LinearGradient as SvgLinearGradient, Stop } from 'react-native-svg';
 import { useResolvedImageUri } from '../hooks/useResolvedImageUri';
 import { getAvatarImageProps } from '../utils/imageOptimization';
 import { getAvatarUri } from '../utils/avatarCache';
 import { useUserActiveFrame } from '../utils/cosmetics';
 
 const FIRE_RING = require('../assets/frames/fire-ring-alpha.png');
-const FRAME_COLORS: Record<string, string> = {
-  diamond: '#9ED0FF',
-  aurora: '#5AA9FF',
-  palladium: '#C5CCD6',
-  frost: '#7EC8E8',
-  jade: '#3DCF8E',
-  void: '#7B5CFF',
-  obsidian: '#6B7280',
+/**
+ * Единая толщина рамки для всех экранов, в dp.
+ *
+ * Раньше каждый экран считал её сам: Профиль брал константу 2.5, радар на
+ * «Поиске» — формулу от размера орбит и получал ~4.5. Одна и та же купленная
+ * рамка выглядела по-разному в двух местах. Теперь источник один.
+ */
+const ACTIVE_FRAME_RING_RATIO = 0.027;
+const ACTIVE_FRAME_RING_MIN = 2;
+const ACTIVE_FRAME_RING_MAX = 5;
+
+/**
+ * Толщина рамки от размера аватара, в целых dp.
+ *
+ * Фиксированное число плохо масштабируется: 3 dp вокруг аватара 112 dp на
+ * главной выглядят уместно, а вокруг 34 dp в списке друзей — грубо. Доля от
+ * диаметра держит пропорцию, а границы не дают рамке пропасть на крошечных
+ * аватарах и превратиться в бублик на крупных.
+ *
+ * Целое значение принципиально: дробные размеры SVG и раскладка округляют
+ * по-разному, и кольцо переставало совпадать с краем фотографии.
+ *
+ * Один источник для всех экранов. Раньше «Профиль» брал константу 2.5, а
+ * «Поиск» считал по формуле от орбит и получал ~4.5 — одна и та же купленная
+ * рамка выглядела по-разному в двух местах.
+ *
+ * Границы целые не случайно: outerSize = photoSize + ringWidth × 2, и дробная
+ * толщина (те же 1.8) вернула бы дробный размер контейнера — ровно то, с чего
+ * начиналось расхождение кольца с краем фотографии.
+ */
+export function activeFrameRingWidth(avatarSize: number): number {
+  const raw = Math.round(avatarSize) * ACTIVE_FRAME_RING_RATIO;
+  return Math.round(Math.min(ACTIVE_FRAME_RING_MAX, Math.max(ACTIVE_FRAME_RING_MIN, raw)));
+}
+const FRAME_COLORS: Record<string, readonly [string, string, ...string[]]> = {
+  diamond: ['#E8F6FF', '#9ED0FF', '#6AA9FF'],
+  aurora: ['#7CF5C8', '#5AA9FF', '#3B82F6'],
+  palladium: ['#F2F4F7', '#C5CCD6', '#8B93A0'],
+  frost: ['#D9F4FF', '#7EC8E8', '#4A9BC7'],
+  jade: ['#B8F0D0', '#3DCF8E', '#1B8F5A'],
+  void: ['#D4B5FF', '#7B5CFF', '#2A1B4A'],
+  obsidian: ['#6B7280', '#374151', '#111827'],
 };
 
 export interface AvatarImageProps {
   userId?: string;
   avatarVer?: number;
   uri?: string; // для обратной совместимости или локальных файлов
+  /** Внешний диаметр купленной рамки. Сам аватар при этом остаётся размера `size`. */
+  frameSize?: number;
+  /**
+   * Какая рамка надета. Если проп передан — он главнее внутреннего хука.
+   *
+   * Нужен, потому что родитель и этот компонент зовут useUserActiveFrame
+   * независимо и в пределах одного прохода рендера могут разойтись: родитель
+   * рендерится первым и ещё не видит рамку, а ребёнок к своему рендеру уже
+   * видит. Тогда кольцо рисуется по одной геометрии, а фотография приходит
+   * от другой, и рамка оказывается не по центру.
+   */
+  frameId?: string | null;
   size?: number;
   style?: StyleProp<ImageStyle>;
   fallbackText?: string;
@@ -38,6 +85,8 @@ const AvatarImage = memo<AvatarImageProps>(({
   avatarVer,
   uri: propsUri, // для локальных файлов или обратной совместимости
   size = 48,
+  frameSize,
+  frameId,
   style,
   fallbackText,
   fallbackTextStyle,
@@ -45,7 +94,9 @@ const AvatarImage = memo<AvatarImageProps>(({
 }) => {
   const [uri, setUri] = useState<string>(propsUri || '');
   const [loading, setLoading] = useState(false);
-  const activeFrameId = useUserActiveFrame(userId);
+  const hookFrameId = useUserActiveFrame(userId);
+  // undefined = проп не передан, решает хук. Пустая строка/null = «рамки нет».
+  const activeFrameId = frameId !== undefined ? frameId || '' : hookFrameId;
 
   // Загрузка аватара через систему кеширования
   useEffect(() => {
@@ -101,7 +152,6 @@ const AvatarImage = memo<AvatarImageProps>(({
     lastGoodDisplayRef.current ||
     (uri && !/^data:/i.test(uri) ? uri : '');
 
-  const borderRadius = size / 2;
   /**
    * Без size: это recyclingKey для expo-image, и при его смене view пересоздаётся —
    * картинка на миг пропадает, видно серую подложку. Размер аватара пересчитывается
@@ -111,46 +161,115 @@ const AvatarImage = memo<AvatarImageProps>(({
   const key = `avatar_${userId || 'none'}_v${avatarVer || 0}`;
 
   const showFallbackLetter = fallbackText && !loading && !uri;
-  const frameOverlay = activeFrameId === 'fire' ? (
+  const hasFireFrame = activeFrameId === 'fire';
+  const frameColors = FRAME_COLORS[activeFrameId];
+  const hasActiveFrame = hasFireFrame || !!frameColors;
+  /**
+   * Вся геометрия в целых dp. Дробные размеры (приходило 120.99882…) SVG и
+   * раскладка округляют по-разному, и кольцо переставало совпадать с краем
+   * фотографии на доли пикселя, которые складывались в заметное смещение.
+   */
+  const photoSize = Math.round(size);
+  const ringWidth = activeFrameRingWidth(photoSize);
+  const outerSize = hasActiveFrame ? photoSize + ringWidth * 2 : photoSize;
+  const outerRadius = outerSize / 2;
+  const avatarRadius = photoSize / 2;
+  const avatarOffset = hasActiveFrame ? ringWidth : 0;
+  // Кольцо целиком занимает пространство снаружи фотографии. Его внутренняя
+  // граница совпадает с краем аватара и не перекрывает изображение.
+  /**
+   * Обводка SVG рисуется по центру линии, поэтому окружность радиуса
+   * (outerSize − ringWidth)/2 занимает полосу ровно от photoSize/2 до
+   * outerSize/2 — её внутренний край ложится точно на край фотографии.
+   */
+  const ringRadius = Math.max(1, (outerSize - ringWidth) / 2);
+  /**
+   * Врезка фотографии задаётся долей от контейнера, а не числом в dp.
+   *
+   * На устройстве с изменённым «Размером экрана» плотность раскладки (450)
+   * и плотность растеризации (480) расходятся, и одно и то же значение в dp
+   * превращается в разное число пикселей. Процент считается от реального
+   * размера контейнера, поэтому внутренний край кольца и край фотографии
+   * совпадают при любой плотности.
+   */
+  const ringInsetPct: `${number}%` = `${(ringWidth / outerSize) * 100}%`;
+  const frameGradientId = `avatar-frame-${activeFrameId || 'none'}-${Math.round(outerSize)}`;
+
+  const frameBase = frameColors ? (
+    <Svg
+      pointerEvents="none"
+      viewBox={`0 0 ${outerSize} ${outerSize}`}
+      style={[StyleSheet.absoluteFillObject, { zIndex: 3 }]}
+    >
+      <Defs>
+        <SvgLinearGradient id={frameGradientId} x1="0" y1="0" x2="1" y2="1">
+          {frameColors.map((color, index) => (
+            <Stop
+              key={`${color}-${index}`}
+              offset={`${(index / Math.max(1, frameColors.length - 1)) * 100}%`}
+              stopColor={color}
+            />
+          ))}
+        </SvgLinearGradient>
+      </Defs>
+      <Circle
+        cx={outerSize / 2}
+        cy={outerSize / 2}
+        r={ringRadius}
+        fill="none"
+        stroke={`url(#${frameGradientId})`}
+        strokeWidth={ringWidth}
+      />
+    </Svg>
+  ) : null;
+  const fireOverlay = hasFireFrame ? (
     <ExpoImage
       source={FIRE_RING}
-      style={{ position: 'absolute', left: -size * 0.03, top: -size * 0.03, width: size * 1.06, height: size * 1.06, zIndex: 3 }}
+      style={[StyleSheet.absoluteFillObject, { zIndex: 3 }]}
       contentFit="contain"
       cachePolicy="memory-disk"
       pointerEvents="none"
     />
-  ) : activeFrameId && FRAME_COLORS[activeFrameId] ? (
-    <View
-      pointerEvents="none"
-      style={{
-        position: 'absolute',
-        left: 0,
-        top: 0,
-        width: size,
-        height: size,
-        borderRadius,
-        borderWidth: Math.max(2, size * 0.045),
-        borderColor: FRAME_COLORS[activeFrameId],
-        zIndex: 3,
-      }}
-    />
   ) : null;
-  if (!displayUri) {
-    return (
+
+  return (
+    <View
+      style={[
+        { backgroundColor: '#2A2C31' },
+        containerStyle,
+        { width: outerSize, height: outerSize, borderRadius: outerRadius },
+        hasActiveFrame
+          ? { borderWidth: 0, borderColor: 'transparent', backgroundColor: 'transparent', overflow: 'hidden' }
+          : null,
+      ]}
+    >
+      {frameBase}
       <View
-        style={[
-          {
-            width: size,
-            height: size,
-            borderRadius,
-            backgroundColor: '#2A2C31',
-            alignItems: 'center',
-            justifyContent: 'center',
-          },
-          containerStyle,
-        ]}
+        style={{
+          position: 'absolute',
+          left: hasActiveFrame ? ringInsetPct : 0,
+          top: hasActiveFrame ? ringInsetPct : 0,
+          right: hasActiveFrame ? ringInsetPct : 0,
+          bottom: hasActiveFrame ? ringInsetPct : 0,
+          borderRadius: outerRadius,
+          backgroundColor: '#2A2C31',
+          alignItems: 'center',
+          justifyContent: 'center',
+          overflow: 'hidden',
+          zIndex: 2,
+        }}
       >
-        {showFallbackLetter ? (
+        {displayUri ? (
+          <ExpoImage
+            key={key}
+            {...getAvatarImageProps(displayUri, key)}
+            style={[
+              StyleSheet.absoluteFillObject,
+              { borderRadius: outerRadius },
+              style,
+            ]}
+          />
+        ) : showFallbackLetter ? (
           <Text
             style={[
               {
@@ -164,26 +283,8 @@ const AvatarImage = memo<AvatarImageProps>(({
             {fallbackText}
           </Text>
         ) : null}
-        {frameOverlay}
       </View>
-    );
-  }
-
-  return (
-    <View style={[{ width: size, height: size, borderRadius }, containerStyle]}>
-      <ExpoImage
-        key={key}
-        {...getAvatarImageProps(displayUri, key)}
-        style={[
-          {
-            width: size,
-            height: size,
-            borderRadius,
-          },
-          style,
-        ]}
-      />
-      {frameOverlay}
+      {fireOverlay}
     </View>
   );
 });

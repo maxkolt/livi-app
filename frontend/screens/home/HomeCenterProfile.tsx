@@ -1,12 +1,14 @@
 import React from 'react';
 import { Platform, Pressable, StyleProp, Text, View, ViewStyle } from 'react-native';
 import { Image as ExpoImage } from 'expo-image';
-import AvatarImage from '../../components/AvatarImage';
+import AvatarImage, { activeFrameRingWidth } from '../../components/AvatarImage';
 import { getCurrentUserId } from '../../sockets/socket';
 import { CHROME_PERIMETER_GLOW_LAYOUT_INSET, LIVI } from './constants';
 import { ChromePerimeterGlow } from './chrome';
 import { displayAvatarLetter, displayName } from './friendHelpers';
 import type { HomeStyles } from './styles';
+import { useUserActiveFrame } from '../../utils/cosmetics';
+
 
 export type HomeCenterProfileProps = {
   styles: HomeStyles;
@@ -19,6 +21,10 @@ export type HomeCenterProfileProps = {
   radarStage?: boolean;
   /** Явный диаметр аватара на radar (иначе layoutWidth → 112/124). */
   radarAvatarSize?: number;
+  /** Диаметр фотографии при купленной рамке: рамка занимает край 1-й орбиты. */
+  radarFramedAvatarSize?: number;
+  /** Насколько рамка выходит наружу от фотографии в радаре. */
+  radarFrameOutset?: number;
   savedNick: string;
   avatarUri: string;
   myFullAvatarUri: string;
@@ -39,6 +45,8 @@ function HomeCenterProfileInner({
   dense = false,
   radarStage = false,
   radarAvatarSize,
+  radarFramedAvatarSize,
+  radarFrameOutset,
   savedNick,
   avatarUri,
   myFullAvatarUri,
@@ -69,12 +77,17 @@ function HomeCenterProfileInner({
   const hasDirectAvatarUri =
     !!avatarUri && (/^data:image\//i.test(avatarUri) || /^https?:\/\//i.test(avatarUri));
   const myUserId = getCurrentUserId();
+  const activeFrameId = useUserActiveFrame(myUserId);
   const hasCachedAvatar = !!(myUserId && myAvatarVer > 0);
   const noAvatar = !isLocalPreview && !hasCachedAvatar && !hasDirectAvatarUri;
   const noNick = !(savedNick && String(savedNick).trim());
 
   const centerAvatarSize = radarStage
-    ? Math.round(radarAvatarSize ?? (layoutWidth < 400 ? 112 : 124))
+    ? Math.round(
+        activeFrameId && radarFramedAvatarSize
+          ? radarFramedAvatarSize
+          : radarAvatarSize ?? (layoutWidth < 400 ? 112 : 124),
+      )
     : dense
       ? 56
       : compact
@@ -83,7 +96,16 @@ function HomeCenterProfileInner({
           ? 136
           : 120;
   const centerAvatarRadius = centerAvatarSize / 2;
+  // Толщина рамки одна на все экраны — см. ACTIVE_FRAME_RING_WIDTH.
+  // radarFrameOutset больше не участвует: из-за него «Поиск» рисовал 4.5 dp,
+  // а «Профиль» — 2.5, и одна и та же рамка выглядела по-разному.
+  const frameOutset = activeFrameRingWidth(centerAvatarSize);
+  const centerAvatarFrameSize = Math.round(centerAvatarSize) + frameOutset * 2;
+  const centerAvatarContainerSize = activeFrameId ? centerAvatarFrameSize : centerAvatarSize;
   const letterFontSize = dense ? 22 : radarStage ? 36 : 48;
+  const framedAvatarUri = isLocalPreview
+    ? resolvedAvatarUri || avatarUri
+    : myFullAvatarUri || (resolvedAvatarReady ? resolvedAvatarUri : '') || avatarUri || undefined;
 
   const avatarInner = (
     <View
@@ -92,14 +114,27 @@ function HomeCenterProfileInner({
       style={[
         styles.centerAvatarWrap,
         {
-          width: centerAvatarSize,
-          height: centerAvatarSize,
-          borderRadius: centerAvatarRadius,
+          width: centerAvatarContainerSize,
+          height: centerAvatarContainerSize,
+          borderRadius: centerAvatarContainerSize / 2,
           backgroundColor: menuChromeBg,
         },
       ]}
     >
-      {isLocalPreview ? (
+      {myUserId && activeFrameId ? (
+        <AvatarImage
+          key="avatar-framed"
+          userId={myUserId}
+          avatarVer={myAvatarVer}
+          uri={framedAvatarUri}
+          size={centerAvatarSize}
+          frameSize={centerAvatarFrameSize}
+          frameId={activeFrameId}
+          fallbackText={letter}
+          containerStyle={styles.centerAvatarImg}
+          fallbackTextStyle={{ fontSize: letterFontSize, fontWeight: '800' }}
+        />
+      ) : isLocalPreview ? (
         <ExpoImage
           source={{ uri: resolvedAvatarUri || avatarUri }}
           style={styles.centerAvatarImg}
@@ -107,10 +142,12 @@ function HomeCenterProfileInner({
         />
       ) : myUserId && myAvatarVer > 0 ? (
         <AvatarImage
+          key="avatar-plain"
           userId={myUserId}
           avatarVer={myAvatarVer}
           uri={myFullAvatarUri || undefined}
           size={centerAvatarSize}
+          frameId={activeFrameId || null}
           fallbackText={letter}
           containerStyle={styles.centerAvatarImg}
           fallbackTextStyle={{ fontSize: letterFontSize, fontWeight: '800' }}
@@ -145,7 +182,7 @@ function HomeCenterProfileInner({
         onPress={() => onOpenAvatarModal(myFullAvatarUri || avatarUri || '')}
         style={{ alignSelf: 'center' }}
       >
-        {radarStage ? (
+        {radarStage || activeFrameId ? (
           avatarInner
         ) : (
           <ChromePerimeterGlow
