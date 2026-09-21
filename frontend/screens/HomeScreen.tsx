@@ -5385,6 +5385,13 @@ const handleClearNick = useCallback(async () => {
   const showProfileTab = welcomeActiveTab === 'profile';
   const showSearchWelcome = !showFriendsTab && !showChatTab && !showCallsTab && !showProfileTab;
   const showSplashOverlay = !splashDismissed;
+  const hasAvatarSourceForFirstPaint = !!String(
+    avatarUri || myFullAvatarUri || savedAvatarUrl || '',
+  ).trim();
+  const avatarReadyForFirstPaint =
+    !hasAvatarSourceForFirstPaint ||
+    ((!avatarUri || resolvedAvatarReady) &&
+      (!myFullAvatarUri || myFullAvatarResolvedReady));
 
   return (
     <View
@@ -5885,6 +5892,7 @@ const handleClearNick = useCallback(async () => {
       <View style={[StyleSheet.absoluteFillObject, { zIndex: 9998 }]} pointerEvents="box-none">
         <SplashLoader
           dataLoaded={dataLoaded}
+          hasAvatarReady={avatarReadyForFirstPaint}
           hasNick={!!(currentNick && currentNick.trim())}
           hasAvatar={!!(currentAvatar && currentAvatar.trim())}
           onComplete={() => setSplashDismissed(true)}

@@ -13,6 +13,7 @@ import { WELCOME_STAGE_BG } from '../screens/home/constants';
 
 const MIN_SPLASH_DURATION_MS = 3000;
 const SPLASH_FADE_DURATION_MS = 620;
+const MAX_SPLASH_DURATION_MS = 5000;
 
 interface SplashLoaderProps {
   dataLoaded: boolean;
@@ -23,7 +24,12 @@ interface SplashLoaderProps {
   overlayMode?: boolean;
 }
 
-export default function SplashLoader({ dataLoaded, onComplete, overlayMode }: SplashLoaderProps) {
+export default function SplashLoader({
+  dataLoaded,
+  hasAvatarReady = true,
+  onComplete,
+  overlayMode,
+}: SplashLoaderProps) {
   const [showSplash, setShowSplash] = useState(true);
   const { height: windowHeight, width: windowWidth } = useSafeAreaFrame();
   const logoSize = Math.min(168, Math.max(112, Math.round(Math.min(windowHeight * 0.22, windowWidth * 0.40))));
@@ -66,7 +72,7 @@ export default function SplashLoader({ dataLoaded, onComplete, overlayMode }: Sp
     const elapsedMs = now - startedAtRef.current;
     const remainingTotalMs = Math.max(0, MIN_SPLASH_DURATION_MS - elapsedMs);
 
-    if (dataLoaded) {
+    if (dataLoaded && hasAvatarReady) {
       if (remainingTotalMs > SPLASH_FADE_DURATION_MS) {
         const fadeTimer = setTimeout(() => {
           finishSplash(SPLASH_FADE_DURATION_MS);
@@ -78,11 +84,17 @@ export default function SplashLoader({ dataLoaded, onComplete, overlayMode }: Sp
       return;
     }
 
+    // Не держим экран бесконечно при ошибке диска/кэша, но даём аватару
+    // закончить data: → file: преобразование до ухода заставки.
+    const remainingHardStopMs = Math.max(
+      0,
+      MAX_SPLASH_DURATION_MS - elapsedMs,
+    );
     const hardStopTimer = setTimeout(() => {
       finishSplash(0);
-    }, remainingTotalMs);
+    }, remainingHardStopMs);
     return () => clearTimeout(hardStopTimer);
-  }, [dataLoaded, finishSplash, overlayMode]);
+  }, [dataLoaded, finishSplash, hasAvatarReady, overlayMode]);
 
   useEffect(() => {
     // «Дыхание»: камера чуть поднимается, объектив (справа) приподнимается вверх под углом.

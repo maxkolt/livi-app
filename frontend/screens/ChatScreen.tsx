@@ -33,6 +33,7 @@ import { useSafeAreaInsets, SafeAreaView } from "react-native-safe-area-context"
 import {
   KeyboardController,
   AndroidSoftInputModes,
+  useKeyboardContext,
 } from "react-native-keyboard-controller";
 import {
   PanGestureHandler,
@@ -209,6 +210,7 @@ type Props = { route: { params?: RouteParams }; navigation: any };
 
 export default function ChatScreen({ route, navigation }: Props) {
   const insets = useSafeAreaInsets();
+  const keyboardAnimation = useKeyboardContext().animated;
   const { theme, isDark } = useAppTheme();
   const lang = useLang((s) => s.lang);
   // Геометрия всех модалок чата: реагирует на поворот экрана.
@@ -732,16 +734,6 @@ export default function ChatScreen({ route, navigation }: Props) {
     }, delay);
   };
 
-  // При открытии IME увеличивается нижний spacer инвертированного списка.
-  // Сразу прижимаем его к новому низу, чтобы были видны последнее сообщение,
-  // статусы «отправлено/прочитано» и индикатор «печатает…».
-  useEffect(() => {
-    if (Platform.OS !== 'android' || !keyboardVisible || androidImeInset <= 0) return;
-    scheduleScrollToBottom(0);
-    const settleTimer = setTimeout(() => scheduleScrollToBottom(0), 90);
-    return () => clearTimeout(settleTimer);
-  }, [androidImeInset, keyboardVisible, inputHeight]);
-
   // Реальная высота контейнера (по onLayout), чтобы корректно понять, ресайзит ли система окно при клавиатуре
   const [rootLayoutH, setRootLayoutH] = useState<number>(0);
   const baseRootLayoutHRef = useRef<number>(0);
@@ -811,7 +803,6 @@ export default function ChatScreen({ route, navigation }: Props) {
         }
         setAndroidImeInset(0);
         scheduleScrollToBottom(0);
-        setTimeout(() => scheduleScrollToBottom(0), 90);
       } else {
         setKeyboardVisible(false);
         setKeyboardInset(0);
@@ -865,6 +856,21 @@ export default function ChatScreen({ route, navigation }: Props) {
   const androidKeyboardPad = emojiPanelOpen
     ? CHAT_EMOJI_PANEL_HEIGHT + Math.max(0, insets.bottom)
     : Math.max(0, androidImeInset);
+  /**
+   * Движение Android IME приходит напрямую в native Animated.Value. Поэтому
+   * dock и лента едут вместе с клавиатурой в том же кадре, без запоздалого
+   * React setState → layout-прыжка после окончания системной анимации.
+   */
+  const androidDockKeyboardTranslateY = emojiPanelOpen
+    ? 0
+    : Animated.add(
+        keyboardAnimation.height,
+        Animated.multiply(keyboardAnimation.progress, Math.max(0, insets.bottom)),
+      );
+  const androidListKeyboardTranslateY = androidDockKeyboardTranslateY;
+  const androidEmptyKeyboardTranslateY = emojiPanelOpen
+    ? 0
+    : Animated.multiply(androidDockKeyboardTranslateY, 0.5);
 
   const resolvedInputBarHForChrome = inputHeight > 0 ? inputHeight : estimatedInputHeight;
   /** Середина облака под шапкой/композером → long-press нельзя. */
@@ -2127,7 +2133,10 @@ export default function ChatScreen({ route, navigation }: Props) {
   // One persistent status slot on every Android device. Typing/recording and
   // transient delivery/deletion labels use it without moving chat bubbles.
   const androidInlineStatusGapH = 24;
-  const androidListBottomReserve = androidKeyboardPad;
+  const androidEmojiBottomReserve = emojiPanelOpen
+    ? CHAT_EMOJI_PANEL_HEIGHT + Math.max(0, insets.bottom)
+    : 0;
+  const androidListBottomReserve = androidEmojiBottomReserve;
   useEffect(() => {
     if (Platform.OS !== 'android') return;
     scheduleScrollToBottom(0);
@@ -2135,13 +2144,13 @@ export default function ChatScreen({ route, navigation }: Props) {
   // Empty: центр в зоне над композером (+IME / emoji).
   const androidEmptyBottomPad = Math.max(
     72,
-    resolvedInputBarH + androidKeyboardPad + 10,
+    resolvedInputBarH + androidEmojiBottomReserve + 10,
   );
   // Центр видимой области сообщений (между шапкой и композером).
   const chatEmptyFeedPlaceholder = React.useMemo(() => {
     if (!showEmpty) return null;
     return (
-      <View
+      <Animated.View
         pointerEvents="none"
         style={{
           position: 'absolute',
@@ -2154,6 +2163,10 @@ export default function ChatScreen({ route, navigation }: Props) {
           alignItems: 'center',
           paddingHorizontal: 28,
           zIndex: 1,
+          transform:
+            Platform.OS === 'android'
+              ? [{ translateY: androidEmptyKeyboardTranslateY }]
+              : undefined,
         }}
       >
         <Ionicons
@@ -2172,9 +2185,18 @@ export default function ChatScreen({ route, navigation }: Props) {
         >
           {t('chatStartWith', lang).replace('{name}', peerNameParam)}
         </Text>
-      </View>
+      </Animated.View>
     );
-  }, [showEmpty, androidEmptyBottomPad, isDark, peerNameParam, lang, headerTotalH, resolvedInputBarH]);
+  }, [
+    showEmpty,
+    androidEmptyBottomPad,
+    androidEmptyKeyboardTranslateY,
+    isDark,
+    peerNameParam,
+    lang,
+    headerTotalH,
+    resolvedInputBarH,
+  ]);
 
   const renderMessageRow = React.useCallback(
     ({ item }: { item: ChatListRow }) => {
@@ -2710,7 +2732,7 @@ export default function ChatScreen({ route, navigation }: Props) {
         ) : (
           // Android: ADJUST_NOTHING + KeyboardStickyView — dock клеится к верху IME.
           (<View style={{ flex: 1, overflow: 'hidden' }}>
-            <View
+            <Animated.View
               style={{
                 position: 'absolute',
                 top: 0,
@@ -2718,6 +2740,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 right: 0,
                 bottom: androidListBottomReserve,
                 overflow: 'hidden',
+                transform: [{ translateY: androidListKeyboardTranslateY }],
               }}
             >
             <ChatMessageEdgeFade
@@ -2771,44 +2794,46 @@ export default function ChatScreen({ route, navigation }: Props) {
               }}
             />
             </ChatMessageEdgeFade>
-            </View>
+            </Animated.View>
 
             {chatEmptyFeedPlaceholder}
             {DeleteToastInline ? (
-              <View
+              <Animated.View
                 pointerEvents="none"
                 style={{
                   position: 'absolute',
                   left: 0,
                   right: 0,
-                  bottom: resolvedInputBarH + androidKeyboardPad + 8,
+                  bottom: resolvedInputBarH + androidEmojiBottomReserve + 8,
                   alignItems: 'center',
                   zIndex: 8,
                   elevation: 8,
+                  transform: [{ translateY: androidListKeyboardTranslateY }],
                 }}
               >
                 {DeleteToastInline}
-              </View>
+              </Animated.View>
             ) : null}
 
             {!isEmpty && GapCenterIndicator ? (
-              <View
+              <Animated.View
                 pointerEvents="none"
                 style={{
                   position: 'absolute',
                   left: 0,
                   right: 0,
-                  bottom: resolvedInputBarH + androidKeyboardPad + 4,
+                  bottom: resolvedInputBarH + androidEmojiBottomReserve + 4,
                   alignItems: 'center',
                   zIndex: 8,
                   elevation: 8,
+                  transform: [{ translateY: androidListKeyboardTranslateY }],
                 }}
               >
                 {GapCenterIndicator}
-              </View>
+              </Animated.View>
             ) : null}
 
-            <View
+            <Animated.View
               collapsable={false}
               style={[
                 {
@@ -2819,7 +2844,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                   zIndex: 20,
                   elevation: 20,
                   transform: [
-                    { translateY: emojiPanelOpen ? 0 : -androidImeInset },
+                    { translateY: androidDockKeyboardTranslateY },
                   ],
                 },
               ]}
@@ -2833,7 +2858,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 // Nav inset только когда клавиатуры/emoji нет.
                 paddingBottom:
                   18 +
-                  (keyboardVisible || emojiPanelOpen ? 0 : Math.max(0, insets.bottom)),
+                  (emojiPanelOpen ? 0 : Math.max(0, insets.bottom)),
                 overflow: 'hidden',
                 borderTopLeftRadius: WELCOME_CHROME_EDGE_RADIUS,
                 borderTopRightRadius: WELCOME_CHROME_EDGE_RADIUS,
@@ -3098,7 +3123,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 />
               </ChatChrome>
             ) : null}
-            </View>
+            </Animated.View>
           </View>)
         )}
         </View>
