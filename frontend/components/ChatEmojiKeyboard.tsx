@@ -7,7 +7,9 @@ import { StageGradient } from '../screens/home/WelcomeStageBackground';
 import { t, type Lang } from '../utils/i18n';
 
 export const CHAT_EMOJI_PANEL_HEIGHT = 280;
+export const CHAT_EMOJI_PANEL_LANDSCAPE_HEIGHT = 184;
 const CHAT_EXPRESSION_SWITCH_HEIGHT = 42;
+const CHAT_EXPRESSION_SWITCH_LANDSCAPE_HEIGHT = 34;
 const CHAT_STICKER_PACK_HEIGHT = 42;
 
 type Props = {
@@ -19,6 +21,8 @@ type Props = {
   onStickerSelected?: (sticker: BuiltInSticker) => void;
   /** Backspace: удалить последний символ/эмодзи в поле ввода. */
   onEmojiBackspace?: () => void;
+  /** Компактная панель для телефона/планшета в горизонтальной ориентации. */
+  compact?: boolean;
 };
 
 export default function ChatEmojiKeyboard({
@@ -29,6 +33,7 @@ export default function ChatEmojiKeyboard({
   onEmojiSelected,
   onStickerSelected,
   onEmojiBackspace,
+  compact = false,
 }: Props) {
   const lang = (langCode || 'ru') as Lang;
   const [tab, setTab] = React.useState<'emoji' | 'stickers'>('emoji');
@@ -38,6 +43,12 @@ export default function ChatEmojiKeyboard({
   // Тёмная тема: тот же StageGradient, что у модалки long-press (прозрачный fill поверх bitmap).
   const panelFill = isDark ? 'transparent' : surfaceBg;
   const Shell = isDark ? StageGradient : View;
+  const panelHeight = compact
+    ? CHAT_EMOJI_PANEL_LANDSCAPE_HEIGHT
+    : CHAT_EMOJI_PANEL_HEIGHT;
+  const switchHeight = compact
+    ? CHAT_EXPRESSION_SWITCH_LANDSCAPE_HEIGHT
+    : CHAT_EXPRESSION_SWITCH_HEIGHT;
 
   const theme = React.useMemo(
     () =>
@@ -96,11 +107,13 @@ export default function ChatEmojiKeyboard({
   );
 
   return (
-    <Shell style={StyleSheet.flatten([styles.wrap, !isDark ? { backgroundColor: surfaceBg } : null])}>
-      <View style={styles.content}>
+    <Shell style={StyleSheet.flatten([styles.wrap, { height: panelHeight }, !isDark ? { backgroundColor: surfaceBg } : null])}>
+      <View style={[styles.content, { height: panelHeight - switchHeight }]}>
         {tab === 'emoji' ? (
           <EmojiKeyboard
+            key={compact ? 'emoji-landscape' : 'emoji-portrait'}
             onEmojiSelected={onEmojiSelected}
+            emojiSize={compact ? 22 : 28}
             enableSearchBar={false}
             enableRecentlyUsed
             hideHeader
@@ -126,6 +139,14 @@ export default function ChatEmojiKeyboard({
                 marginBottom: 0,
                 opacity: 0,
               },
+              category: compact
+                ? {
+                    container: {
+                      paddingTop: 4,
+                      paddingBottom: 2,
+                    },
+                  }
+                : undefined,
             }}
           />
         ) : (
@@ -133,7 +154,10 @@ export default function ChatEmojiKeyboard({
             <ScrollView
               horizontal
               showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.packSelector}
+              contentContainerStyle={[
+                styles.packSelector,
+                compact && styles.packSelectorCompact,
+              ]}
             >
               {BUILT_IN_STICKER_PACKS.map((pack) => {
                 const active = pack.id === activePack.id;
@@ -143,6 +167,7 @@ export default function ChatEmojiKeyboard({
                     onPress={() => setPackId(pack.id)}
                     style={({ pressed }) => [
                       styles.packButton,
+                      compact && styles.packButtonCompact,
                       {
                         backgroundColor: active
                           ? (isDark ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.08)')
@@ -151,8 +176,8 @@ export default function ChatEmojiKeyboard({
                       },
                     ]}
                   >
-                    <Text style={styles.packIcon}>{pack.icon}</Text>
-                    <Text style={[styles.packName, { color: textColor }]} numberOfLines={1}>
+                    <Text style={[styles.packIcon, compact && styles.packIconCompact]}>{pack.icon}</Text>
+                    <Text style={[styles.packName, compact && styles.packNameCompact, { color: textColor }]} numberOfLines={1}>
                       {pack.name}
                     </Text>
                   </Pressable>
@@ -161,7 +186,7 @@ export default function ChatEmojiKeyboard({
             </ScrollView>
             <ScrollView
               showsVerticalScrollIndicator={false}
-              contentContainerStyle={styles.stickerGrid}
+              contentContainerStyle={[styles.stickerGrid, compact && styles.stickerGridCompact]}
               keyboardShouldPersistTaps="always"
             >
               {activePack.stickers.map((sticker) => (
@@ -170,6 +195,7 @@ export default function ChatEmojiKeyboard({
                   onPress={() => onStickerSelected?.(sticker)}
                   style={({ pressed }) => [
                     styles.stickerCell,
+                    compact && styles.stickerCellCompact,
                     {
                       backgroundColor: pressed
                         ? (isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)')
@@ -178,14 +204,14 @@ export default function ChatEmojiKeyboard({
                     },
                   ]}
                 >
-                  <StickerView sticker={sticker} size={62} animated isDark={isDark} />
+                  <StickerView sticker={sticker} size={compact ? 44 : 62} animated isDark={isDark} />
                 </Pressable>
               ))}
             </ScrollView>
           </View>
         )}
       </View>
-      <View style={[styles.switchBar, { borderTopColor: isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.08)' }]}>
+      <View style={[styles.switchBar, compact && styles.switchBarCompact, { borderTopColor: isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.08)' }]}>
         {(['emoji', 'stickers'] as const).map((id) => {
           const active = tab === id;
           const label = id === 'emoji' ? t('chatEmojiTab', lang) : t('chatStickersTab', lang);
@@ -195,6 +221,7 @@ export default function ChatEmojiKeyboard({
               onPress={() => setTab(id)}
               style={({ pressed }) => [
                 styles.switchButton,
+                compact && styles.switchButtonCompact,
                 {
                   backgroundColor: active
                     ? (isDark ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.08)')
@@ -203,7 +230,7 @@ export default function ChatEmojiKeyboard({
                 },
               ]}
             >
-              <Text style={{ color: active ? textColor : (isDark ? 'rgba(255,255,255,0.55)' : 'rgba(0,0,0,0.45)'), fontWeight: active ? '700' : '600', fontSize: 13 }}>
+              <Text style={{ color: active ? textColor : (isDark ? 'rgba(255,255,255,0.55)' : 'rgba(0,0,0,0.45)'), fontWeight: active ? '700' : '600', fontSize: compact ? 12 : 13 }}>
                 {label}
               </Text>
             </Pressable>
@@ -217,6 +244,7 @@ export default function ChatEmojiKeyboard({
             accessibilityLabel="backspace"
             style={({ pressed }) => [
               styles.backspaceButton,
+              compact && styles.backspaceButtonCompact,
               {
                 backgroundColor: pressed
                   ? (isDark ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.08)')
@@ -227,7 +255,7 @@ export default function ChatEmojiKeyboard({
           >
             <Ionicons
               name="backspace-outline"
-              size={22}
+              size={compact ? 19 : 22}
               color={isDark ? 'rgba(255,255,255,0.78)' : 'rgba(0,0,0,0.55)'}
             />
           </Pressable>
@@ -255,6 +283,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     gap: 8,
   },
+  packSelectorCompact: {
+    height: 32,
+    paddingHorizontal: 8,
+    gap: 6,
+  },
   packButton: {
     height: 32,
     minWidth: 78,
@@ -264,13 +297,26 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  packButtonCompact: {
+    height: 26,
+    minWidth: 68,
+    borderRadius: 13,
+    paddingHorizontal: 8,
+  },
   packIcon: {
     fontSize: 17,
     marginRight: 5,
   },
+  packIconCompact: {
+    fontSize: 15,
+    marginRight: 4,
+  },
   packName: {
     fontSize: 12,
     fontWeight: '700',
+  },
+  packNameCompact: {
+    fontSize: 11,
   },
   stickerGrid: {
     paddingHorizontal: 12,
@@ -279,12 +325,22 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
   },
+  stickerGridCompact: {
+    paddingHorizontal: 8,
+    paddingTop: 2,
+    paddingBottom: 6,
+  },
   stickerCell: {
     width: '25%',
     height: 78,
     borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  stickerCellCompact: {
+    width: '16.6667%',
+    height: 52,
+    borderRadius: 14,
   },
   switchBar: {
     height: CHAT_EXPRESSION_SWITCH_HEIGHT,
@@ -294,12 +350,21 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 8,
   },
+  switchBarCompact: {
+    height: CHAT_EXPRESSION_SWITCH_LANDSCAPE_HEIGHT,
+    gap: 6,
+  },
   switchButton: {
     minWidth: 104,
     height: 30,
     borderRadius: 15,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  switchButtonCompact: {
+    minWidth: 88,
+    height: 26,
+    borderRadius: 13,
   },
   backspaceButton: {
     position: 'absolute',
@@ -309,5 +374,11 @@ const styles = StyleSheet.create({
     borderRadius: 15,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  backspaceButtonCompact: {
+    right: 8,
+    width: 36,
+    height: 26,
+    borderRadius: 13,
   },
 });

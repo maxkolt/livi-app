@@ -55,7 +55,10 @@ import {
 } from "../constants/uiTokens";
 import { Image as ExpoImage } from "expo-image";
 import AvatarImage from "../components/AvatarImage";
-import ChatEmojiKeyboard, { CHAT_EMOJI_PANEL_HEIGHT } from "../components/ChatEmojiKeyboard";
+import ChatEmojiKeyboard, {
+  CHAT_EMOJI_PANEL_HEIGHT,
+  CHAT_EMOJI_PANEL_LANDSCAPE_HEIGHT,
+} from "../components/ChatEmojiKeyboard";
 import {
   getStickerFallbackText,
 } from "../components/chatStickers";
@@ -220,6 +223,9 @@ export default function ChatScreen({ route, navigation }: Props) {
       ? 20
       : 14
     : 0;
+  const chatEmojiPanelHeight = modalLayout.isLandscape
+    ? CHAT_EMOJI_PANEL_LANDSCAPE_HEIGHT
+    : CHAT_EMOJI_PANEL_HEIGHT;
   // Меню по долгому нажатию всегда идёт стопкой: реакции сверху, действия ниже.
   // В landscape оба блока компактнее, чтобы сохранить ту же структуру по высоте.
   const msgActionsLandscape = modalLayout.isLandscape;
@@ -851,10 +857,10 @@ export default function ChatScreen({ route, navigation }: Props) {
       ? 0
       : (keyboardVisible ? Math.max(0, keyboardInset - systemResizeDelta) : 0);
 
-  const composerBottomLift = emojiPanelOpen ? CHAT_EMOJI_PANEL_HEIGHT : keyboardLift;
+  const composerBottomLift = emojiPanelOpen ? chatEmojiPanelHeight : keyboardLift;
   // Android: pad для списка/empty/overlays — IME (окно не resize) или emoji-панель.
   const androidKeyboardPad = emojiPanelOpen
-    ? CHAT_EMOJI_PANEL_HEIGHT + Math.max(0, insets.bottom)
+    ? chatEmojiPanelHeight + Math.max(0, insets.bottom)
     : Math.max(0, androidImeInset);
   /**
    * Движение Android IME приходит напрямую в native Animated.Value. Поэтому
@@ -2134,7 +2140,7 @@ export default function ChatScreen({ route, navigation }: Props) {
   // transient delivery/deletion labels use it without moving chat bubbles.
   const androidInlineStatusGapH = 24;
   const androidEmojiBottomReserve = emojiPanelOpen
-    ? CHAT_EMOJI_PANEL_HEIGHT + Math.max(0, insets.bottom)
+    ? chatEmojiPanelHeight + Math.max(0, insets.bottom)
     : 0;
   const androidListBottomReserve = androidEmojiBottomReserve;
   useEffect(() => {
@@ -2717,6 +2723,7 @@ export default function ChatScreen({ route, navigation }: Props) {
               </View>
               {emojiPanelOpen ? (
                 <ChatEmojiKeyboard
+                  compact={modalLayout.isLandscape}
                   isDark={isDark}
                   surfaceBg={EMOJI_SURFACE_BG}
                   textColor={LIVI.text}
@@ -3113,6 +3120,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 }}
               >
                 <ChatEmojiKeyboard
+                  compact={modalLayout.isLandscape}
                   isDark={isDark}
                   surfaceBg={EMOJI_SURFACE_BG}
                   textColor={LIVI.text}
