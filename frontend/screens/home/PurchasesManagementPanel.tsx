@@ -1,10 +1,13 @@
 import React, { useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
+import { Image as ExpoImage } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Ionicons } from '@expo/vector-icons';
 import AdaptiveText from '../../components/AdaptiveText';
+import PngFireFrame from '../../components/frames/PngFireFrame';
 import { setActiveCosmetic, useCosmetics, type CosmeticKind } from '../../utils/cosmetics';
 import { LIVI, WELCOME_GLASS_BORDER, WELCOME_GLASS_SURFACE, WELCOME_MUTED_TEXT } from './constants';
+
+const SHOWCASE_AVATAR = require('../../assets/frames/showcase-avatar.jpg');
 
 const FRAME_LABELS: Record<string, string> = {
   fire: 'Огонь',
@@ -35,6 +38,49 @@ const BACKGROUND_LABELS: Record<string, string> = {
   'ocean-flow': 'Бирюза',
   'graphite-chat': 'Письма',
 };
+
+const BACKGROUND_IMAGES: Record<string, number> = {
+  'aurora-chat': require('../../assets/chat-wallpapers/dark/doodles-cyan.jpeg'),
+  'deep-space': require('../../assets/chat-wallpapers/dark/cosmos.jpeg'),
+  poetry: require('../../assets/chat-wallpapers/dark/pushkin.jpeg'),
+  'ocean-flow': require('../../assets/chat-wallpapers/dark/doodles-teal.jpeg'),
+  'graphite-chat': require('../../assets/chat-wallpapers/dark/letters.jpeg'),
+};
+
+function FramePreview({ itemId }: { itemId: string }) {
+  const colors = FRAME_COLORS[itemId];
+  if (itemId === 'fire') {
+    return (
+      <View style={styles.framePreviewBox}>
+        <PngFireFrame size={34} ringScale={1.2} calm>
+          <ExpoImage source={SHOWCASE_AVATAR} style={styles.fireAvatar} contentFit="cover" cachePolicy="memory-disk" />
+        </PngFireFrame>
+      </View>
+    );
+  }
+  if (!colors) return <View style={styles.emptyFrame} />;
+  return (
+    <LinearGradient
+      colors={colors as [string, string, ...string[]]}
+      start={{ x: 0, y: 0 }}
+      end={{ x: 1, y: 1 }}
+      style={styles.frameSwatch}
+    >
+      <ExpoImage source={SHOWCASE_AVATAR} style={styles.frameAvatar} contentFit="cover" cachePolicy="memory-disk" />
+    </LinearGradient>
+  );
+}
+
+function BackgroundPreview({ itemId }: { itemId: string }) {
+  const source = BACKGROUND_IMAGES[itemId];
+  if (!source) return <View style={styles.emptyBackground} />;
+  return (
+    <View style={styles.backgroundSwatch}>
+      <ExpoImage source={source} style={StyleSheet.absoluteFillObject} contentFit="cover" cachePolicy="memory-disk" />
+      <View style={styles.backgroundPreviewBorder} pointerEvents="none" />
+    </View>
+  );
+}
 
 function EmptyPurchase({ kind }: { kind: CosmeticKind }) {
   return (
@@ -67,18 +113,9 @@ export function PurchasesManagementPanel() {
 
   const renderItem = (kind: CosmeticKind, itemId: string) => {
     const active = kind === 'frame' ? cosmetics.activeFrameId === itemId : cosmetics.activeBackgroundId === itemId;
-    const colors = FRAME_COLORS[itemId];
     return (
       <View key={`${kind}:${itemId}`} style={styles.itemRow}>
-        {kind === 'frame' && colors ? (
-          <LinearGradient colors={colors as [string, string, ...string[]]} style={styles.frameSwatch}>
-            <View style={styles.frameSwatchInner} />
-          </LinearGradient>
-        ) : (
-          <View style={styles.backgroundSwatch}>
-            <Ionicons name="image-outline" size={20} color="#EDE6F1" />
-          </View>
-        )}
+        {kind === 'frame' ? <FramePreview itemId={itemId} /> : <BackgroundPreview itemId={itemId} />}
         <AdaptiveText style={styles.itemLabel} numberOfLines={1}>
           {kind === 'frame' ? FRAME_LABELS[itemId] || itemId : BACKGROUND_LABELS[itemId] || itemId}
         </AdaptiveText>
@@ -149,17 +186,29 @@ const styles = StyleSheet.create({
   emptyTitle: { color: LIVI.text, fontSize: 14, fontWeight: '600' },
   emptyHint: { marginTop: 2, color: WELCOME_MUTED_TEXT, fontSize: 12 },
   itemRow: { minHeight: 62, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, gap: 12 },
-  frameSwatch: { width: 40, height: 40, borderRadius: 20, padding: 2 },
-  frameSwatchInner: { flex: 1, borderRadius: 18, backgroundColor: '#242932' },
-  backgroundSwatch: {
-    width: 48,
-    height: 34,
-    borderRadius: 8,
+  framePreviewBox: { width: 42, height: 42, alignItems: 'center', justifyContent: 'center' },
+  fireAvatar: { width: 34, height: 34 },
+  frameSwatch: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    padding: 2.5,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  frameAvatar: { width: 37, height: 37, borderRadius: 18.5 },
+  backgroundSwatch: {
+    width: 54,
+    height: 38,
+    borderRadius: 8,
+    overflow: 'hidden',
+    backgroundColor: '#111923',
+  },
+  backgroundPreviewBorder: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: 8,
     borderWidth: 1,
-    borderColor: 'rgba(238,229,244,0.6)',
-    backgroundColor: 'rgba(238,229,244,0.1)',
+    borderColor: 'rgba(238,229,244,0.72)',
   },
   itemLabel: { flex: 1, minWidth: 0, color: LIVI.text, fontSize: 14, fontWeight: '600' },
   action: {

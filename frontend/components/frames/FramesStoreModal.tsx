@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Alert, AppState, Linking, Modal, Platform, Pressable, StyleSheet, View } from 'react-native';
+import { AppState, Linking, Modal, Platform, Pressable, StyleSheet, View } from 'react-native';
 import { useSafeAreaFrame, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Image as ExpoImage } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -25,6 +25,11 @@ import {
   WELCOME_HEADER_TITLE,
   WELCOME_MUTED_TEXT,
 } from '../../screens/home/constants';
+import {
+  WelcomeOverlayCard,
+  WelcomeOverlayDim,
+  WelcomeOverlayPill,
+} from '../../screens/home/WelcomeOverlayChrome';
 
 const SHOWCASE_AVATAR = require('../../assets/frames/showcase-avatar.jpg');
 
@@ -54,8 +59,17 @@ type ChatBackgroundItem = {
   source: number;
 };
 
+type PurchaseNotice = {
+  kind: 'success' | 'canceled' | 'error';
+  title: string;
+  message: string;
+};
+
 const PEARL_BORDER = 'rgba(238,229,244,0.9)';
 const LEGENDARY_BACKGROUND = ['#0E1D24', '#0C171F', '#0A111B', '#0B1821'] as const;
+const CHAT_BUBBLE_IN = 'rgba(26, 32, 42, 0.98)';
+const CHAT_BUBBLE_OUT = 'rgba(14, 20, 32, 0.99)';
+const CHAT_BUBBLE_BORDER = 'rgba(255,255,255,0.12)';
 
 function withAlpha(hex: string, alpha: number): string {
   const value = hex.replace('#', '');
@@ -232,6 +246,9 @@ function PurchaseButton({
   borderColor,
   surfaceColor,
   contentColor,
+  compact,
+  topMargin,
+  verticalOffset = 0,
   disabled,
   onPress,
 }: {
@@ -242,6 +259,9 @@ function PurchaseButton({
   borderColor: string;
   surfaceColor: string;
   contentColor: string;
+  compact?: boolean;
+  topMargin?: number;
+  verticalOffset?: number;
   disabled?: boolean;
   onPress: () => void;
 }) {
@@ -252,7 +272,14 @@ function PurchaseButton({
       disabled={disabled}
       accessibilityRole="button"
       accessibilityLabel={label}
-      style={({ pressed }) => [styles.ctaWrap, { width }, disabled && styles.ctaDisabled, pressed && !disabled && styles.ctaPressed]}
+      style={({ pressed }) => [
+        styles.ctaWrap,
+        compact && styles.ctaWrapCompact,
+        { width, ...(topMargin !== undefined ? { marginTop: topMargin } : null) },
+        disabled && styles.ctaDisabled,
+        pressed && !disabled && styles.ctaPressed,
+        { transform: [{ translateY: verticalOffset }, ...(pressed && !disabled ? [{ scale: 0.985 }] : [])] },
+      ]}
     >
       <View
         style={[
@@ -279,11 +306,14 @@ export function FramesStoreModal({ visible, onClose, onUnlock }: Props) {
   const insets = useSafeAreaInsets();
   const { width: windowWidth, height: windowHeight } = useSafeAreaFrame();
   const landscape = windowWidth > windowHeight;
-  const compact = windowHeight < (landscape ? 430 : 680);
+  const compact = windowHeight < (landscape ? 430 : 720);
   const pageHorizontalPadding = landscape ? 12 : 0;
   const sectionsGap = landscape ? 12 : 0;
   const safeContentWidth = Math.max(0, windowWidth - insets.left - insets.right - pageHorizontalPadding * 2);
-  const sectionWidth = landscape ? Math.max(0, (safeContentWidth - sectionsGap) / 2) : safeContentWidth;
+  const portraitContentWidth = Math.min(safeContentWidth, 720);
+  const sectionWidth = landscape
+    ? Math.max(0, (safeContentWidth - sectionsGap) / 2)
+    : portraitContentWidth;
 
   const backgroundCardWidth = compact ? 128 : landscape ? 144 : 158;
   const backgroundCardHeight = Math.round(backgroundCardWidth * 0.61);
@@ -292,16 +322,24 @@ export function FramesStoreModal({ visible, onClose, onUnlock }: Props) {
   const frameSize = compact ? 84 : landscape ? 96 : 106;
   const framePageWidth = compact ? 54 : 62;
   const framePageHeight = frameSize + (compact ? 26 : 34);
+  const backgroundHeadingOffset = landscape ? 0 : compact ? -16 : -25;
+  const backgroundContentOffset = landscape ? 0 : compact ? -5 : -8;
+  const backgroundCarouselOffset = backgroundContentOffset + (landscape ? 0 : compact ? -8 : -11);
+  const frameHeadingTopOffset = landscape ? 0 : compact ? 6 : 12;
+  const frameCarouselTopOffset = landscape ? 0 : compact ? 12 : 21;
+  const frameDescriptionTopOffset = landscape ? 0 : compact ? 30 : 47;
 
   const maxCtaWidth =
     sectionWidth >= SEARCH_CTA_TABLET_MIN_WIDTH ? SEARCH_CTA_TABLET_MAX_WIDTH : SEARCH_CTA_MAX_WIDTH;
   const buttonWidth = Math.min(Math.max(180, sectionWidth - (compact ? 28 : 44)), maxCtaWidth);
   const buttonHeight = compact ? 40 : Platform.OS === 'ios' ? 46 : 44;
+  const contentTopOffset = landscape ? 0 : compact ? 16 : 28;
 
   const [activeBackgroundIndex, setActiveBackgroundIndex] = useState(0);
   const [activeFrameIndex, setActiveFrameIndex] = useState(0);
   const [paymentBusy, setPaymentBusy] = useState<CosmeticKind | null>(null);
   const [pendingPaymentId, setPendingPaymentId] = useState('');
+  const [purchaseNotice, setPurchaseNotice] = useState<PurchaseNotice | null>(null);
   const entitlements = useCosmetics();
   const activeBackground = CHAT_BACKGROUND_CATALOG[activeBackgroundIndex] ?? CHAT_BACKGROUND_CATALOG[0];
   const activeFrame = FRAME_CATALOG[activeFrameIndex] ?? FRAME_CATALOG[0];
@@ -319,11 +357,19 @@ export function FramesStoreModal({ visible, onClose, onUnlock }: Props) {
         setPendingPaymentId('');
         setPaymentBusy(null);
         onUnlock?.();
-        Alert.alert('Покупка готова', 'Выбранное оформление применено к вашему профилю.');
+        setPurchaseNotice({
+          kind: 'success',
+          title: 'Покупка готова',
+          message: 'Выбранное оформление применено к вашему профилю.',
+        });
       } else if (result.status === 'canceled') {
         setPendingPaymentId('');
         setPaymentBusy(null);
-        Alert.alert('Оплата отменена', 'Покупка не была завершена.');
+        setPurchaseNotice({
+          kind: 'canceled',
+          title: 'Оплата отменена',
+          message: 'Покупка не была завершена. Вы можете попробовать ещё раз.',
+        });
       }
     } catch {
       setPaymentBusy(null);
@@ -427,7 +473,11 @@ export function FramesStoreModal({ visible, onClose, onUnlock }: Props) {
       await Linking.openURL(payment.confirmationUrl);
     } catch {
       setPendingPaymentId('');
-      Alert.alert('Не удалось открыть оплату', 'Проверьте подключение и попробуйте ещё раз.');
+      setPurchaseNotice({
+        kind: 'error',
+        title: 'Не удалось открыть оплату',
+        message: 'Проверьте подключение и попробуйте ещё раз.',
+      });
     } finally {
       setPaymentBusy(null);
     }
@@ -437,9 +487,14 @@ export function FramesStoreModal({ visible, onClose, onUnlock }: Props) {
   const frameOwned = entitlements.purchasedFrameIds.includes(activeFrame.key);
   const backgroundActive = entitlements.activeBackgroundId === activeBackground.key;
   const frameActive = entitlements.activeFrameId === activeFrame.key;
+  const closePurchaseNotice = () => setPurchaseNotice(null);
+  const handleRequestClose = () => {
+    if (purchaseNotice) closePurchaseNotice();
+    else onClose();
+  };
 
   return (
-    <Modal visible={visible} animationType="fade" onRequestClose={onClose} statusBarTranslucent>
+    <Modal visible={visible} animationType="fade" onRequestClose={handleRequestClose} statusBarTranslucent>
       <View style={styles.root}>
         <LinearGradient
           key={`legendary-background-${landscape ? 'landscape' : 'portrait'}-${Math.round(windowWidth)}x${Math.round(windowHeight)}`}
@@ -479,16 +534,36 @@ export function FramesStoreModal({ visible, onClose, onUnlock }: Props) {
             </Pressable>
           </View>
 
-          <View style={[styles.sections, landscape && styles.sectionsLandscape, { gap: sectionsGap }]}>
-            <View style={[styles.storeSection, landscape && styles.storeSectionLandscape]}>
-              <View style={styles.sectionHeadingRow}>
+          <View
+            style={[
+              styles.lowerContent,
+              {
+                paddingTop: contentTopOffset,
+                width: landscape ? '100%' : portraitContentWidth,
+                alignSelf: 'center',
+              },
+            ]}
+          >
+            <View style={[styles.sections, landscape && styles.sectionsLandscape, { gap: sectionsGap }]}>
+              <View style={[styles.storeSection, landscape && styles.storeSectionLandscape]}>
+              <View
+                style={[
+                  styles.sectionHeadingRow,
+                  { transform: [{ translateY: backgroundHeadingOffset }] },
+                ]}
+              >
                 <MaterialCommunityIcons name="message-image-outline" size={compact ? 17 : 19} color={CROWN_GOLD} />
                 <FitText style={[styles.sectionHeading, compact && styles.sectionHeadingCompact]} minimumFontScale={0.75}>
                   ФОНЫ ДЛЯ ЧАТА
                 </FitText>
               </View>
 
-              <View style={[styles.carouselWrap, { height: backgroundPageHeight }]}>
+              <View
+                style={[
+                  styles.carouselWrap,
+                  { height: backgroundPageHeight, transform: [{ translateY: backgroundCarouselOffset }] },
+                ]}
+              >
                 <Carousel
                   width={backgroundPageWidth}
                   height={backgroundPageHeight}
@@ -514,7 +589,13 @@ export function FramesStoreModal({ visible, onClose, onUnlock }: Props) {
                 />
               </View>
 
-              <View style={[styles.selectionCopy, compact && styles.selectionCopyCompact]}>
+              <View
+                style={[
+                  styles.selectionCopy,
+                  compact && styles.selectionCopyCompact,
+                  { transform: [{ translateY: backgroundContentOffset }] },
+                ]}
+              >
                 <FitText style={[styles.itemTitle, compact && styles.itemTitleCompact]} minimumFontScale={0.75}>
                   {activeBackground.label}
                 </FitText>
@@ -528,27 +609,40 @@ export function FramesStoreModal({ visible, onClose, onUnlock }: Props) {
                   ? 'Открываем оплату…'
                   : backgroundOwned
                     ? backgroundActive ? 'Снять фон' : 'Применить фон'
-                    : 'Купить фон · 299 ₽'}
+                    : 'Купить фон · 99 ₽'}
                 icon="image-outline"
                 width={buttonWidth}
                 height={buttonHeight}
                 borderColor={PEARL_BORDER}
                 surfaceColor="rgba(244,240,232,0.12)"
                 contentColor="#F6F0E5"
+                compact={compact}
+                topMargin={compact ? 2 : 5}
+                verticalOffset={backgroundContentOffset}
                 disabled={paymentBusy !== null}
                 onPress={() => void openSharedCheckout('background')}
               />
-            </View>
+              </View>
 
-            <View style={[styles.storeSection, landscape && styles.storeSectionLandscape]}>
-              <View style={styles.sectionHeadingRow}>
+              <View style={[styles.storeSection, landscape && styles.storeSectionLandscape]}>
+              <View
+                style={[
+                  styles.sectionHeadingRow,
+                  { transform: [{ translateY: frameHeadingTopOffset }] },
+                ]}
+              >
                 <MaterialCommunityIcons name="account-star-outline" size={compact ? 17 : 19} color={CROWN_GOLD} />
                 <FitText style={[styles.sectionHeading, compact && styles.sectionHeadingCompact]} minimumFontScale={0.75}>
                   РАМКИ ДЛЯ АВАТАРА
                 </FitText>
               </View>
 
-              <View style={[styles.carouselWrap, { height: framePageHeight }]}>
+              <View
+                style={[
+                  styles.carouselWrap,
+                  { height: framePageHeight, transform: [{ translateY: frameCarouselTopOffset }] },
+                ]}
+              >
                 <Carousel
                   width={framePageWidth}
                   height={framePageHeight}
@@ -574,7 +668,13 @@ export function FramesStoreModal({ visible, onClose, onUnlock }: Props) {
                 />
               </View>
 
-              <View style={[styles.selectionCopy, compact && styles.selectionCopyCompact]}>
+              <View
+                style={[
+                  styles.selectionCopy,
+                  compact && styles.selectionCopyCompact,
+                  { transform: [{ translateY: frameDescriptionTopOffset }] },
+                ]}
+              >
                 <FitText style={[styles.itemTitle, compact && styles.itemTitleCompact]} minimumFontScale={0.75}>
                   {activeFrame.label}
                 </FitText>
@@ -588,23 +688,85 @@ export function FramesStoreModal({ visible, onClose, onUnlock }: Props) {
                   ? 'Открываем оплату…'
                   : frameOwned
                     ? frameActive ? 'Снять рамку' : 'Применить рамку'
-                    : 'Купить рамку · 299 ₽'}
+                    : 'Купить рамку · 199 ₽'}
                 icon="account-circle-outline"
                 width={buttonWidth}
                 height={buttonHeight}
                 borderColor={activeFrame.colors[1]}
                 surfaceColor={withAlpha(activeFrame.colors[0], 0.12)}
                 contentColor={activeFrame.colors[0]}
+                compact={compact}
+                topMargin={landscape ? (compact ? 8 : 16) : compact ? 35 : 61}
                 disabled={paymentBusy !== null}
                 onPress={() => void openSharedCheckout('frame')}
               />
+              </View>
             </View>
           </View>
-
-          <FitText style={[styles.sharedPaymentHint, compact && styles.sharedPaymentHintCompact]} minimumFontScale={0.72}>
-            Обе кнопки открывают единую оплату Legendary
-          </FitText>
         </View>
+
+        {purchaseNotice ? (
+          <View style={styles.purchaseNoticeLayer} accessibilityViewIsModal>
+            <WelcomeOverlayDim strong={purchaseNotice.kind === 'error'} />
+            <Pressable
+              style={StyleSheet.absoluteFillObject}
+              onPress={closePurchaseNotice}
+              accessibilityRole="button"
+              accessibilityLabel="Закрыть"
+            />
+            <WelcomeOverlayCard style={styles.purchaseNoticeCard} opaque>
+              <View style={styles.purchaseNoticeHeader}>
+                <LinearGradient
+                  colors={purchaseNotice.kind === 'success'
+                    ? ['rgba(218,178,92,0.30)', 'rgba(46,196,182,0.12)']
+                    : purchaseNotice.kind === 'error'
+                      ? ['rgba(255,90,103,0.26)', 'rgba(255,90,103,0.08)']
+                      : ['rgba(188,196,208,0.18)', 'rgba(188,196,208,0.06)']}
+                  style={[
+                    styles.purchaseNoticeIcon,
+                    purchaseNotice.kind === 'success'
+                      ? styles.purchaseNoticeIconSuccess
+                      : purchaseNotice.kind === 'error'
+                        ? styles.purchaseNoticeIconError
+                        : styles.purchaseNoticeIconCanceled,
+                  ]}
+                >
+                  <MaterialCommunityIcons
+                    name={purchaseNotice.kind === 'success'
+                      ? 'check-circle-outline'
+                      : purchaseNotice.kind === 'error'
+                        ? 'alert-circle-outline'
+                        : 'close-circle-outline'}
+                    size={27}
+                    color={purchaseNotice.kind === 'success'
+                      ? CROWN_GOLD
+                      : purchaseNotice.kind === 'error'
+                        ? '#FF5A67'
+                        : WELCOME_MUTED_TEXT}
+                  />
+                </LinearGradient>
+                <FitText style={styles.purchaseNoticeTitle} minimumFontScale={0.78} numberOfLines={2}>
+                  {purchaseNotice.title}
+                </FitText>
+              </View>
+
+              <AdaptiveText style={styles.purchaseNoticeMessage}>
+                {purchaseNotice.message}
+              </AdaptiveText>
+
+              <View style={styles.purchaseNoticeDivider} />
+              <WelcomeOverlayPill
+                label={purchaseNotice.kind === 'error' ? 'Закрыть' : 'Хорошо'}
+                onPress={closePurchaseNotice}
+                variant={purchaseNotice.kind === 'error'
+                  ? 'danger'
+                  : purchaseNotice.kind === 'canceled'
+                    ? 'secondary'
+                    : 'primary'}
+              />
+            </WelcomeOverlayCard>
+          </View>
+        ) : null}
       </View>
     </Modal>
   );
@@ -633,6 +795,57 @@ const styles = StyleSheet.create({
   titleCompact: { fontSize: 14 },
   closeBtn: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center' },
   closeBtnPressed: { opacity: 0.72 },
+  lowerContent: { flex: 1, minHeight: 0 },
+  purchaseNoticeLayer: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 100,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 22,
+  },
+  purchaseNoticeCard: {
+    zIndex: 1,
+    width: '100%',
+    maxWidth: 380,
+    padding: 20,
+    borderColor: 'rgba(238,229,244,0.16)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 14 },
+    shadowOpacity: 0.5,
+    shadowRadius: 24,
+    elevation: 18,
+  },
+  purchaseNoticeHeader: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  purchaseNoticeIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+  },
+  purchaseNoticeIconSuccess: { borderColor: 'rgba(218,178,92,0.50)' },
+  purchaseNoticeIconError: { borderColor: 'rgba(255,90,103,0.56)' },
+  purchaseNoticeIconCanceled: { borderColor: 'rgba(188,196,208,0.28)' },
+  purchaseNoticeTitle: {
+    flex: 1,
+    minWidth: 0,
+    color: WELCOME_HEADER_TITLE,
+    fontSize: 19,
+    lineHeight: 24,
+    fontWeight: '800',
+  },
+  purchaseNoticeMessage: {
+    marginTop: 14,
+    color: WELCOME_MUTED_TEXT,
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  purchaseNoticeDivider: {
+    height: StyleSheet.hairlineWidth,
+    marginVertical: 16,
+    backgroundColor: 'rgba(255,255,255,0.10)',
+  },
   sections: { flex: 1, minHeight: 0 },
   sectionsLandscape: { flexDirection: 'row', alignItems: 'stretch' },
   storeSection: {
@@ -669,18 +882,24 @@ const styles = StyleSheet.create({
     elevation: 9,
   },
   backgroundCard: { overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(255,255,255,0.13)' },
-  chatBubble: { position: 'absolute', height: '13%', borderRadius: 999 },
+  chatBubble: {
+    position: 'absolute',
+    height: '13%',
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: CHAT_BUBBLE_BORDER,
+  },
   chatBubbleLeft: {
     width: '34%',
     left: '10%',
     bottom: '26%',
-    backgroundColor: 'rgba(255,255,255,0.35)',
+    backgroundColor: CHAT_BUBBLE_IN,
   },
   chatBubbleRight: {
     width: '42%',
     right: '9%',
     bottom: '9%',
-    backgroundColor: 'rgba(107,232,209,0.72)',
+    backgroundColor: CHAT_BUBBLE_OUT,
   },
   carouselLabel: {
     color: 'rgba(139,148,158,0.48)',
@@ -691,13 +910,14 @@ const styles = StyleSheet.create({
   },
   carouselLabelActive: { color: WELCOME_HEADER_TITLE },
   selectionCopy: {
+    marginTop: 12,
     minHeight: 48,
     width: '100%',
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 22,
   },
-  selectionCopyCompact: { minHeight: 34, paddingHorizontal: 14 },
+  selectionCopyCompact: { marginTop: 6, minHeight: 34, paddingHorizontal: 14 },
   itemTitle: { color: WELCOME_HEADER_TITLE, fontSize: 18, fontWeight: '800', textAlign: 'center' },
   itemTitleCompact: { fontSize: 15 },
   subtitle: {
@@ -708,9 +928,10 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   subtitleCompact: { marginTop: 1, fontSize: 10, lineHeight: 13 },
-  ctaWrap: { overflow: 'visible', flexShrink: 0 },
+  ctaWrap: { overflow: 'visible', flexShrink: 0, marginTop: 16 },
+  ctaWrapCompact: { marginTop: 8 },
   ctaDisabled: { opacity: 0.62 },
-  ctaPressed: { opacity: 0.88, transform: [{ scale: 0.985 }] },
+  ctaPressed: { opacity: 0.88 },
   ctaInner: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -727,15 +948,6 @@ const styles = StyleSheet.create({
     minWidth: 0,
     textAlign: 'center',
   },
-  sharedPaymentHint: {
-    color: WELCOME_MUTED_TEXT,
-    fontSize: 11,
-    lineHeight: 16,
-    textAlign: 'center',
-    paddingHorizontal: 18,
-    paddingTop: 5,
-  },
-  sharedPaymentHintCompact: { fontSize: 9, lineHeight: 12, paddingTop: 2 },
 });
 
 export default FramesStoreModal;

@@ -4,7 +4,7 @@ import React, { useContext, useRef, useCallback, useMemo, useState, useEffect, u
 import {
   AppState,
   DeviceEventEmitter,
-  Dimensions,
+  useWindowDimensions,
   StyleSheet,
   View,
   Pressable,
@@ -336,7 +336,10 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
     } catch (_) {}
   }, [returnToCall, currentRouteName, hidePiP, pipFromAudioOnly]);
 
-  const dims = Dimensions.get('window');
+  // Dimensions.get() — разовый снимок: при повороте он не обновляется, и плашка
+  // остаётся с координатами прошлой ориентации. В ландшафте высота вдвое меньше
+  // портретной, поэтому сохранённый y уезжал за нижний край и PiP пропадал с экрана.
+  const dims = useWindowDimensions();
   const W = typeof dims?.width === 'number' && dims.width > 0 ? dims.width : 400;
   const H = typeof dims?.height === 'number' && dims.height > 0 ? dims.height : 700;
 
@@ -387,6 +390,21 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
     }),
     [W, H, pipClusterW, pipClusterH],
   );
+
+  /**
+   * Поворот экрана меняет границы, но не сохранённую позицию плашки. Раньше её
+   * пересчитывал только отпущенный drag, поэтому после portrait → landscape PiP
+   * оставался по старым координатам и оказывался за пределами экрана.
+   * clampPosition пересоздаётся при смене W/H, так что эффект срабатывает ровно
+   * на поворот; позицию читаем из ref, чтобы не перезапускаться на каждый сдвиг.
+   */
+  useEffect(() => {
+    const pos = pipPosRef.current;
+    const clamped = clampPosition(pos.x, pos.y);
+    if (clamped.x !== pos.x || clamped.y !== pos.y) {
+      updatePiPPosition(clamped.x, clamped.y);
+    }
+  }, [clampPosition, updatePiPPosition]);
 
   const panResponder = useRef(
     PanResponder.create({

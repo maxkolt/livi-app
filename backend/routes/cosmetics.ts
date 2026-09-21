@@ -19,7 +19,10 @@ const PUBLIC_BASE_URL = String(process.env.PUBLIC_BASE_URL || 'https://api.livia
 const RETURN_URL = CONFIGURED_RETURN_URL.startsWith('https://')
   ? CONFIGURED_RETURN_URL
   : `${PUBLIC_BASE_URL}/api/cosmetics/payment-return`;
-const PRICE = '299.00';
+const PRICE_BY_KIND: Record<CosmeticKind, string> = {
+  background: '99.00',
+  frame: '199.00',
+};
 
 const FRAME_IDS = new Set(['fire', 'diamond', 'aurora', 'palladium', 'frost', 'jade', 'void', 'obsidian']);
 const BACKGROUND_IDS = new Set(['aurora-chat', 'deep-space', 'poetry', 'ocean-flow', 'graphite-chat']);
@@ -79,14 +82,20 @@ function serializeEntitlements(user: any) {
 async function grantVerifiedPayment(payment: YooPayment) {
   const paymentId = String(payment.id || '').trim();
   if (!paymentId || payment.status !== 'succeeded' || payment.paid !== true) return null;
-  if (String(payment.amount?.value || '') !== PRICE || payment.amount?.currency !== 'RUB') {
-    logger.warn('[cosmetics] payment amount mismatch', { paymentId, amount: payment.amount });
-    return null;
-  }
 
   const purchase = await CosmeticPurchaseModel.findOne({ yookassaPaymentId: paymentId });
   if (!purchase) {
     logger.warn('[cosmetics] verified YooKassa payment has no local purchase', { paymentId });
+    return null;
+  }
+  const expectedAmount = String(purchase.amount || '');
+  if (String(payment.amount?.value || '') !== expectedAmount || payment.amount?.currency !== purchase.currency) {
+    logger.warn('[cosmetics] payment amount mismatch', {
+      paymentId,
+      expectedAmount,
+      expectedCurrency: purchase.currency,
+      amount: payment.amount,
+    });
     return null;
   }
   if (purchase.status === 'succeeded') {
@@ -146,6 +155,7 @@ router.post('/cosmetics/payments', async (req, res) => {
     if ((kind !== 'frame' && kind !== 'background') || !isValidItem(kind, itemId)) {
       return res.status(400).json({ ok: false, error: 'invalid_item' });
     }
+    const price = PRICE_BY_KIND[kind];
 
     const user = await UserModel.findById(userId)
       .select('purchasedFrameIds purchasedBackgroundIds activeFrameId activeBackgroundId')
@@ -161,7 +171,7 @@ router.post('/cosmetics/payments', async (req, res) => {
       method: 'POST',
       headers: { 'Idempotence-Key': idempotenceKey },
       body: JSON.stringify({
-        amount: { value: PRICE, currency: 'RUB' },
+        amount: { value: price, currency: 'RUB' },
         capture: true,
         confirmation: { type: 'redirect', return_url: RETURN_URL },
         description: `${kind === 'frame' ? 'Рамка' : 'Фон чата'} Legendary: ${itemId}`,
@@ -176,7 +186,7 @@ router.post('/cosmetics/payments', async (req, res) => {
       user: userId,
       kind,
       itemId,
-      amount: PRICE,
+      amount: price,
       currency: 'RUB',
       yookassaPaymentId: paymentId,
       // Право выдаёт только grantVerifiedPayment после независимой проверки ответа ЮKassa.
