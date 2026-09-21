@@ -22,6 +22,7 @@ import livekitRouter from './routes/livekit';
 import avatarRouter from './routes/avatar';
 import messagesRouter from './routes/messages';
 import moderationRouter from './routes/moderation';
+import cosmeticsRouter from './routes/cosmetics';
 import registerFriendSockets from './sockets/friends';
 import registerIdentitySockets, { bindUser as bindUserIdentity } from './sockets/identity';
 import registerMessageSockets from './sockets/messagesReliable';
@@ -478,6 +479,7 @@ app.use('/api', avatarRouter);
 app.use('/api', messagesRouter);
 app.use('/api', livekitRouter);
 app.use('/api', moderationRouter);
+app.use('/api', cosmeticsRouter);
 
 // Stream utility убран - больше не используется
 

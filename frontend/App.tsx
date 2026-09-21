@@ -45,7 +45,7 @@ import { flushCallLogUi, forceCallLogUiNow, recordCallLog, recordCancelledCall, 
 import { markChatCallBubbleEligible } from './screens/chat/chatCallEvents';
 import { getInstallId, getInstallSecret } from './utils/installId';
 import { notifyIncomingShare, pullPendingShareFromNative, subscribeIncomingShare, type IncomingShareItem } from './utils/incomingShare';
-import { ensureInitialMediaPermissions } from './utils/mediaPermissions';
+import { ensureInitialMediaPermissions, needsNearbyDevicesPermission, requestNearbyDevicesPermissionAndroid } from './utils/mediaPermissions';
 import {
   captureDeferredInviteCode,
   clearPendingInviteCode,
@@ -83,6 +83,8 @@ import {
   pauseBackgroundMediaAfterCall,
   canDrawOverlays,
   openOverlayPermissionSettings,
+  isIgnoringBatteryOptimizations,
+  openBatteryOptimizationSettings,
   notifyCallCanceled,
   addEndedCallId,
   isEndedCallId,
@@ -880,6 +882,8 @@ function AppContent() {
   }, []);
   /** Android: модалка «Разрешить отображение поверх других окон», пока разрешение не выдано. */
   const [overlayPermissionModalVisible, setOverlayPermissionModalVisible] = React.useState(false);
+  const [batteryOptimizationModalVisible, setBatteryOptimizationModalVisible] = React.useState(false);
+  const [bluetoothPermissionModalVisible, setBluetoothPermissionModalVisible] = React.useState(false);
   const [incomingShareVisible, setIncomingShareVisible] = React.useState(false);
   const [incomingShareItems, setIncomingShareItems] = React.useState<IncomingShareItem[]>([]);
   const closeIncomingShareFlow = React.useCallback(() => {
@@ -905,6 +909,9 @@ function AppContent() {
 
   /** Пока false — не показываем overlay-модалку (ждём уведомления, камеру, микрофон, BT, CallKeep). */
   const androidInitialPermissionsDoneRef = React.useRef(false);
+  /** Бампается после стартовых разрешений: будит эффект запроса энергосбережения,
+   *  который иначе мог бы отработать раньше, чем взведён ref выше, и больше не повториться. */
+  const [androidPermissionsGate, setAndroidPermissionsGate] = React.useState(0);
   /** Runtime-разрешения старта завершены (Android + iOS) — после этого можно показать invite modal. */
   const initialStartupPermissionsDoneRef = React.useRef(false);
   const tryProcessPendingInviteRef = React.useRef<null | (() => Promise<void>)>(null);
@@ -916,6 +923,8 @@ function AppContent() {
    * Не показываем при возврате из фона и при повторном переходе на Home в том же сеансе.
    */
   const overlayColdStartPromptAttemptedRef = React.useRef(false);
+  const batteryOptimizationPromptAttemptedRef = React.useRef(false);
+  const bluetoothPromptAttemptedRef = React.useRef(false);
   /** Актуальный экран навигации (дублирует routeName, обновляется в onStateChange до setState). */
   const activeRouteNameRef = React.useRef<string | undefined>(undefined);
 
@@ -959,6 +968,70 @@ function AppContent() {
     } catch (_) {}
   }, [isHomeRouteNow]);
 
+  /**
+   * Android держит приложение в App Standby Bucket и режет квоту high-priority FCM,
+   * пока оно не исключено из оптимизации батареи. На практике это даёт задержку
+   * звонкового пуша в десятки секунд (при ring timeout 27 с звонок просто срывается)
+   * или потерю пуша, если телефон долго лежал в глубоком Doze.
+   *
+   * Очередь с overlay-модалкой разводит эффект ниже, здесь её не проверяем.
+   */
+  const syncBatteryOptimizationModal = React.useCallback(async () => {
+    if (Platform.OS !== 'android') return;
+    if (!androidInitialPermissionsDoneRef.current) return;
+    if (batteryOptimizationPromptAttemptedRef.current) {
+      if (!isHomeRouteNow()) setBatteryOptimizationModalVisible(false);
+      return;
+    }
+    if (!isHomeRouteNow()) return;
+    try {
+      const pendingInvite = await getPendingInviteCode();
+      if (pendingInvite) {
+        setBatteryOptimizationModalVisible(false);
+        return;
+      }
+    } catch {}
+    batteryOptimizationPromptAttemptedRef.current = true;
+    try {
+      if (await isIgnoringBatteryOptimizations()) {
+        setBatteryOptimizationModalVisible(false);
+        return;
+      }
+      setBatteryOptimizationModalVisible(true);
+    } catch (_) {}
+  }, [isHomeRouteNow]);
+
+  /**
+   * «Устройства рядом» (BLUETOOTH_CONNECT) нужен только для вывода звука в гарнитуру.
+   * Системная формулировка про «находить устройства поблизости» без контекста читается
+   * как слежка, поэтому сначала объясняем своей модалкой, и только по «Разрешить»
+   * показываем системный диалог.
+   */
+  const syncBluetoothPermissionModal = React.useCallback(async () => {
+    if (Platform.OS !== 'android') return;
+    if (!androidInitialPermissionsDoneRef.current) return;
+    if (bluetoothPromptAttemptedRef.current) {
+      if (!isHomeRouteNow()) setBluetoothPermissionModalVisible(false);
+      return;
+    }
+    if (!isHomeRouteNow()) return;
+    try {
+      const pendingInvite = await getPendingInviteCode();
+      if (pendingInvite) {
+        setBluetoothPermissionModalVisible(false);
+        return;
+      }
+    } catch {}
+    bluetoothPromptAttemptedRef.current = true;
+    try {
+      if (!(await needsNearbyDevicesPermission())) {
+        setBluetoothPermissionModalVisible(false);
+        return;
+      }
+      setBluetoothPermissionModalVisible(true);
+    } catch (_) {}
+  }, [isHomeRouteNow]);
+
   React.useEffect(() => {
     void hydrateLang();
   }, [hydrateLang]);
@@ -974,6 +1047,9 @@ function AppContent() {
         void (async () => {
           try {
             if (await canDrawOverlays()) setOverlayPermissionModalVisible(false);
+          } catch (_) {}
+          try {
+            if (await isIgnoringBatteryOptimizations()) setBatteryOptimizationModalVisible(false);
           } catch (_) {}
         })();
       }
@@ -2097,6 +2173,33 @@ function AppContent() {
     if (Platform.OS !== 'android' || !androidInitialPermissionsDoneRef.current) return;
     void syncOverlayPermissionModal();
   }, [routeName, syncOverlayPermissionModal]);
+
+  /**
+   * Запрос на исключение из оптимизации батареи показываем только когда overlay-модалка
+   * не на экране: два запроса разрешений одновременно стакаются друг на друга.
+   *
+   * Отдельный эффект, а не проверка внутри колбэка, — намеренно: React-state там читался бы
+   * из замыкания предыдущего рендера, и на холодном старте обе модалки успевали открыться.
+   * Здесь же overlayPermissionModalVisible уже закоммичен, гонки нет.
+   */
+  React.useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    if (overlayPermissionModalVisible) return;
+    void syncBatteryOptimizationModal();
+  }, [routeName, androidPermissionsGate, overlayPermissionModalVisible, syncBatteryOptimizationModal]);
+
+  /** Третьей в очереди: только когда ни overlay, ни батарейная модалка не на экране. */
+  React.useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    if (overlayPermissionModalVisible || batteryOptimizationModalVisible) return;
+    void syncBluetoothPermissionModal();
+  }, [
+    routeName,
+    androidPermissionsGate,
+    overlayPermissionModalVisible,
+    batteryOptimizationModalVisible,
+    syncBluetoothPermissionModal,
+  ]);
   const lastLoggedRouteRef = React.useRef<string | undefined>(undefined);
   const systemPiPDecisionLogRef = React.useRef<string>('');
   /** Форсирует пересчёт Android leaveHint/PiP guard после call:end/call:ended (refs меняются без смены route/pip). */
@@ -2274,6 +2377,7 @@ function AppContent() {
         try {
           await syncOverlayPermissionModal();
         } catch (_) {}
+        setAndroidPermissionsGate((n) => n + 1);
       }
 
       })();
@@ -3291,6 +3395,8 @@ function AppContent() {
 
     if (Platform.OS === 'android') {
       setOverlayPermissionModalVisible(false);
+      setBatteryOptimizationModalVisible(false);
+      setBluetoothPermissionModalVisible(false);
     }
 
     const incomingMedia =
@@ -4984,6 +5090,108 @@ function AppContent() {
                     >
                       <View style={isDark ? overlayPermissionModalStyles.overlayPermissionButtonPrimaryDark : overlayPermissionModalStyles.overlayPermissionButtonPrimaryLightInner}>
                         <Text style={overlayPermissionModalStyles.overlayPermissionButtonPrimaryText}>{t('openSettings', lang)}</Text>
+                      </View>
+                    </TouchableOpacity>
+                  </View>
+                </TouchableOpacity>
+              </TouchableOpacity>
+            </Modal>
+          )}
+
+          {/* Android: исключение из оптимизации батареи — без него звонковый пуш в глубоком Doze опаздывает или теряется */}
+          {Platform.OS === 'android' && (
+            <Modal
+              visible={batteryOptimizationModalVisible}
+              transparent
+              animationType="fade"
+              onRequestClose={() => setBatteryOptimizationModalVisible(false)}
+            >
+              <TouchableOpacity
+                activeOpacity={1}
+                style={overlayPermissionModalStyles.overlayPermissionBackdrop}
+                onPress={() => setBatteryOptimizationModalVisible(false)}
+              >
+                <TouchableOpacity activeOpacity={1} onPress={(e) => e.stopPropagation()} style={overlayPermissionModalStyles.overlayPermissionCard}>
+                  <View style={overlayPermissionModalStyles.overlayPermissionHeader}>
+                    <View style={overlayPermissionModalStyles.overlayPermissionIconWrap}>
+                      <MaterialIcons name="bolt" size={20} color={isDark ? WELCOME_NAV_ACTIVE_ICON : theme.colors.primary} />
+                    </View>
+                    <View style={overlayPermissionModalStyles.overlayPermissionTitleWrap}>
+                      <Text style={overlayPermissionModalStyles.overlayPermissionTitle}>{t('batteryOptimizationTitle', lang)}</Text>
+                    </View>
+                  </View>
+                  <Text style={overlayPermissionModalStyles.overlayPermissionText}>
+                    {t('batteryOptimizationMessage', lang)}
+                  </Text>
+                  <View style={overlayPermissionModalStyles.overlayPermissionButtons}>
+                    <TouchableOpacity style={overlayPermissionModalStyles.overlayPermissionButtonSecondary} onPress={() => setBatteryOptimizationModalVisible(false)}>
+                      <Text style={overlayPermissionModalStyles.overlayPermissionButtonSecondaryText}>{t('notNow', lang)}</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[
+                        overlayPermissionModalStyles.overlayPermissionButtonPrimary,
+                        isDark
+                          ? overlayPermissionModalStyles.overlayPermissionButtonPrimaryDarkOuter
+                          : overlayPermissionModalStyles.overlayPermissionButtonPrimaryLightOuter,
+                      ]}
+                      onPress={() => {
+                        openBatteryOptimizationSettings();
+                        setBatteryOptimizationModalVisible(false);
+                      }}
+                    >
+                      <View style={isDark ? overlayPermissionModalStyles.overlayPermissionButtonPrimaryDark : overlayPermissionModalStyles.overlayPermissionButtonPrimaryLightInner}>
+                        <Text style={overlayPermissionModalStyles.overlayPermissionButtonPrimaryText}>{t('openSettings', lang)}</Text>
+                      </View>
+                    </TouchableOpacity>
+                  </View>
+                </TouchableOpacity>
+              </TouchableOpacity>
+            </Modal>
+          )}
+
+          {/* Android 12+: пояснение перед системным диалогом «Устройства рядом» — иначе формулировка пугает */}
+          {Platform.OS === 'android' && (
+            <Modal
+              visible={bluetoothPermissionModalVisible}
+              transparent
+              animationType="fade"
+              onRequestClose={() => setBluetoothPermissionModalVisible(false)}
+            >
+              <TouchableOpacity
+                activeOpacity={1}
+                style={overlayPermissionModalStyles.overlayPermissionBackdrop}
+                onPress={() => setBluetoothPermissionModalVisible(false)}
+              >
+                <TouchableOpacity activeOpacity={1} onPress={(e) => e.stopPropagation()} style={overlayPermissionModalStyles.overlayPermissionCard}>
+                  <View style={overlayPermissionModalStyles.overlayPermissionHeader}>
+                    <View style={overlayPermissionModalStyles.overlayPermissionIconWrap}>
+                      <MaterialIcons name="bluetooth-audio" size={20} color={isDark ? WELCOME_NAV_ACTIVE_ICON : theme.colors.primary} />
+                    </View>
+                    <View style={overlayPermissionModalStyles.overlayPermissionTitleWrap}>
+                      <Text style={overlayPermissionModalStyles.overlayPermissionTitle}>{t('bluetoothPermissionTitle', lang)}</Text>
+                    </View>
+                  </View>
+                  <Text style={overlayPermissionModalStyles.overlayPermissionText}>
+                    {t('bluetoothPermissionMessage', lang)}
+                  </Text>
+                  <View style={overlayPermissionModalStyles.overlayPermissionButtons}>
+                    <TouchableOpacity style={overlayPermissionModalStyles.overlayPermissionButtonSecondary} onPress={() => setBluetoothPermissionModalVisible(false)}>
+                      <Text style={overlayPermissionModalStyles.overlayPermissionButtonSecondaryText}>{t('notNow', lang)}</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[
+                        overlayPermissionModalStyles.overlayPermissionButtonPrimary,
+                        isDark
+                          ? overlayPermissionModalStyles.overlayPermissionButtonPrimaryDarkOuter
+                          : overlayPermissionModalStyles.overlayPermissionButtonPrimaryLightOuter,
+                      ]}
+                      onPress={() => {
+                        setBluetoothPermissionModalVisible(false);
+                        void requestNearbyDevicesPermissionAndroid();
+                      }}
+                    >
+                      <View style={isDark ? overlayPermissionModalStyles.overlayPermissionButtonPrimaryDark : overlayPermissionModalStyles.overlayPermissionButtonPrimaryLightInner}>
+                        <Text style={overlayPermissionModalStyles.overlayPermissionButtonPrimaryText}>{t('allowAction', lang)}</Text>
                       </View>
                     </TouchableOpacity>
                   </View>

@@ -11,6 +11,7 @@ import android.content.Intent
 import android.media.AudioAttributes
 import android.media.RingtoneManager
 import android.net.Uri
+import android.app.usage.UsageStatsManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -178,6 +179,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                     deliverIncomingCallCanceled(applicationContext, activeId)
                 } catch (_: Exception) {}
             }
+            logPushDeliveryDiagnostics(callId, callTs, remoteMessage.sentTime)
             Log.i(TAG, "[INCOMING_CALL] proceed callId=$callId keyguardLocked=$keyguardLocked isInteractive=$isInteractive")
             vLog("[INCOMING_CALL] proceeding: main thread → dismiss → startActivity → FGS")
             // Всегда показываем входящий из FCM: без условий по foreground/фоне/блокировке. Пуши — единственный надёжный канал; сокет может быть отключён, приложение убито, экран выключен.
@@ -478,6 +480,48 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
         }
         vLog("FCM unhandled typeNorm=$typeNorm → Expo")
         super.onMessageReceived(remoteMessage)
+    }
+
+    /**
+     * Одна строка с полной картиной доставки звонкового пуша — для разбора жалоб
+     * «звонок пришёл с задержкой / не пришёл».
+     *
+     * totalMs   — от создания звонка на бэкенде до момента, когда мы его увидели.
+     *             Сравнивать с CALL_RING_TIMEOUT_MS (27 с): всё, что близко, — сорванный звонок.
+     * queuedMs  — сколько пуш пролежал в очереди Google после отправки. Большое значение
+     *             означает, что FCM-соединение GMS было мертво (типично для глубокого Doze).
+     * doze      — был ли на устройстве активен Doze в момент прихода.
+     * bucket    — App Standby Bucket: 10 ACTIVE, 20 WORKING_SET, 30 FREQUENT, 40 RARE, 45 RESTRICTED.
+     *             Всё, что хуже ACTIVE, режет high-priority FCM суточной квотой.
+     * battOpt   — исключено ли приложение из оптимизации батареи (Doze whitelist).
+     */
+    private fun logPushDeliveryDiagnostics(callId: String, callTs: Long?, fcmSentTime: Long) {
+        try {
+            val now = System.currentTimeMillis()
+            val totalMs = if (callTs != null && callTs > 0L) now - callTs else -1L
+            val queuedMs = if (fcmSentTime > 0L) now - fcmSentTime else -1L
+            val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager
+            val doze = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                pm?.isDeviceIdleMode == true
+            } else {
+                false
+            }
+            val battOpt = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                pm?.isIgnoringBatteryOptimizations(packageName) == true
+            } else {
+                true
+            }
+            val bucket = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                (getSystemService(Context.USAGE_STATS_SERVICE) as? UsageStatsManager)?.appStandbyBucket ?: -1
+            } else {
+                -1
+            }
+            Log.i(
+                TAG,
+                "[PUSH_DELIVERY] callId=$callId totalMs=$totalMs queuedMs=$queuedMs " +
+                    "doze=$doze bucket=$bucket battOptIgnored=$battOpt",
+            )
+        } catch (_: Exception) {}
     }
 
     private fun isDeviceLocked(): Boolean {

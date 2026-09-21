@@ -116,7 +116,7 @@ class IncomingCallActivity : AppCompatActivity() {
             return
         }
         isAlive = true
-        android.util.Log.e(TAG, "IncomingCallActivity onCreate: isAlive=true isInForeground=(set in onResume) callId=$callIdFromIntent")
+        android.util.Log.d(TAG, "IncomingCallActivity onCreate: isAlive=true isInForeground=(set in onResume) callId=$callIdFromIntent")
         // Сначала broadcast: FGS делает stopForeground(DETACH) и оставляет уведомление в шторке (без отмены — иначе ломаем
         // foreground до detach и на части OEM обрывается рингтон FGS/Activity).
         if (callIdFromIntent.isNotEmpty()) {
@@ -224,7 +224,7 @@ class IncomingCallActivity : AppCompatActivity() {
             LiviAppModule.emitIncomingCallDeclinedByUser(callId)
             EndedCallIds.add(this, callId)
             isInForeground = false
-            android.util.Log.e(TAG, "IncomingCallActivity Decline pressed: isInForeground=false callId=$callId sending ACTION_INCOMING_CALL_DECLINED so FGS stops")
+            android.util.Log.d(TAG, "IncomingCallActivity Decline pressed: isInForeground=false callId=$callId sending ACTION_INCOMING_CALL_DECLINED so FGS stops")
             val declinedIntent = Intent(IncomingCallForegroundService.ACTION_INCOMING_CALL_DECLINED).apply {
                 setPackage(packageName)
                 putExtra(LiviFirebaseMessagingService.EXTRA_CALL_ID, callId)
@@ -265,7 +265,7 @@ class IncomingCallActivity : AppCompatActivity() {
             return
         }
         isInForeground = true
-        android.util.Log.e(TAG, "IncomingCallActivity onResume: isInForeground=true callId=$currentCallId")
+        android.util.Log.d(TAG, "IncomingCallActivity onResume: isInForeground=true callId=$currentCallId")
         reportIncomingShownFromNative(currentCallId)
     }
 
@@ -279,7 +279,7 @@ class IncomingCallActivity : AppCompatActivity() {
                     // иначе поверх Home мелькает «вторая страница».
                     closeIncomingScreen(bringMainOnDismiss = false)
                 } else {
-                    android.util.Log.e(
+                    android.util.Log.w(
                         TAG,
                         "IncomingCallActivity CALL_CANCELED ignored stale callId=$canceledCallId current=$currentCallId",
                     )
@@ -305,7 +305,7 @@ class IncomingCallActivity : AppCompatActivity() {
     override fun onPause() {
         super.onPause()
         isInForeground = false
-        android.util.Log.e(TAG, "IncomingCallActivity onPause: isInForeground=false callId=$currentCallId")
+        android.util.Log.d(TAG, "IncomingCallActivity onPause: isInForeground=false callId=$currentCallId")
     }
 
     /**
@@ -328,7 +328,7 @@ class IncomingCallActivity : AppCompatActivity() {
         if (activeCallId == currentCallId) {
             activeCallId = ""
         }
-        android.util.Log.e(TAG, "IncomingCallActivity onDestroy: isInForeground=false isAlive=false callId=$currentCallId")
+        android.util.Log.d(TAG, "IncomingCallActivity onDestroy: isInForeground=false isAlive=false callId=$currentCallId")
         if (closingForCompletion) {
             LiviOngoingCallHelper.clearOngoingCall(applicationContext)
             (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_INCOMING_CALL)
@@ -426,11 +426,11 @@ class IncomingCallActivity : AppCompatActivity() {
                     val code = conn.responseCode
                     httpOk = code in 200..299
                     if (!httpOk) {
-                        android.util.Log.e(TAG, "decline HTTP failed code=$code callId=$callId (will try deep link fallback)")
+                        android.util.Log.w(TAG, "decline HTTP failed code=$code callId=$callId (will try deep link fallback)")
                     }
                     conn.disconnect()
                 } catch (e: Exception) {
-                    android.util.Log.e(TAG, "decline HTTP exception callId=$callId (will try deep link fallback)", e)
+                    android.util.Log.w(TAG, "decline HTTP exception callId=$callId (will try deep link fallback)", e)
                 }
                 runOnUiThread {
                     if (!httpOk) {
@@ -567,7 +567,7 @@ class IncomingCallActivity : AppCompatActivity() {
             val cid = intent.getStringExtra(EXTRA_CALL_ID) ?: ""
             // JUST_CLOSE от старого callId не должен гасить новый Incoming (cancel→redial race).
             if (cid.isNotEmpty() && currentCallId.isNotEmpty() && cid != currentCallId) {
-                android.util.Log.e(
+                android.util.Log.w(
                     TAG,
                     "IncomingCallActivity onNewIntent JUST_CLOSE ignored stale callId=$cid current=$currentCallId",
                 )
@@ -812,7 +812,7 @@ class IncomingCallActivity : AppCompatActivity() {
                 LiviAppModule.releaseBackgroundMediaSuppressionStatic(applicationContext)
             } catch (_: Exception) {}
             LiviOngoingCallHelper.clearOngoingCall(applicationContext)
-            android.util.Log.e(TAG, "IncomingCallActivity timeout 20s: isInForeground=false calling finish() callId=$callId")
+            android.util.Log.d(TAG, "IncomingCallActivity timeout 20s: isInForeground=false calling finish() callId=$callId")
             finish()
         }
         timeoutHandler.postDelayed(timeoutRunnable!!, INCOMING_TIMEOUT_MS)
@@ -901,7 +901,7 @@ class IncomingCallActivity : AppCompatActivity() {
     }
 
     private fun closeIncomingScreen(callIdToEnd: String? = null, bringMainOnDismiss: Boolean? = null) {
-        android.util.Log.e(TAG, "IncomingCallActivity closeIncomingScreen: callIdToEnd=$callIdToEnd closeHandled=$closeHandled isFinishing=$isFinishing isDestroyed=$isDestroyed bringMain=$bringMainOnDismiss")
+        android.util.Log.d(TAG, "IncomingCallActivity closeIncomingScreen: callIdToEnd=$callIdToEnd closeHandled=$closeHandled isFinishing=$isFinishing isDestroyed=$isDestroyed bringMain=$bringMainOnDismiss")
         callIdToEnd?.takeIf { it.isNotEmpty() }?.let { EndedCallIds.add(this, it) }
         clearIncomingTimeout()
         stopCallRingtone()
@@ -932,7 +932,7 @@ class IncomingCallActivity : AppCompatActivity() {
                 LiviAppModule.scheduleMainActivityAfterIncomingCancelDismiss(applicationContext)
             }
         }
-        android.util.Log.e(TAG, "IncomingCallActivity closeIncomingScreen: setting isInForeground=false, calling finish()")
+        android.util.Log.d(TAG, "IncomingCallActivity closeIncomingScreen: setting isInForeground=false, calling finish()")
         finish()
     }
 

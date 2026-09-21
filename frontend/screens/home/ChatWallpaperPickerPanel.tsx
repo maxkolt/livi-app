@@ -214,14 +214,14 @@ function ChatWallpaperPickerPanelInner({
                 style={styles.tapZone}
                 onPress={goPrev}
                 accessibilityRole="button"
-                accessibilityLabel="Предыдущий фон"
+                accessibilityLabel={t('wallpaperPrevA11y', lang)}
               />
               {carouselBlock}
               <Pressable
                 style={styles.tapZone}
                 onPress={goNext}
                 accessibilityRole="button"
-                accessibilityLabel="Следующий фон"
+                accessibilityLabel={t('wallpaperNextA11y', lang)}
               />
             </View>
           ) : (

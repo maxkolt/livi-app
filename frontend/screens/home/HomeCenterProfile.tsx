@@ -96,12 +96,6 @@ function HomeCenterProfileInner({
           height: centerAvatarSize,
           borderRadius: centerAvatarRadius,
           backgroundColor: menuChromeBg,
-          ...(radarStage
-            ? {
-                borderWidth: 2.5,
-                borderColor: 'rgba(59, 130, 246, 0.78)',
-              }
-            : null),
         },
       ]}
     >

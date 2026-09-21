@@ -18,7 +18,7 @@ type WelcomeCrownButtonProps = {
   nick?: string;
 };
 
-/** Корона в welcome chrome. Магазин рамок — только в __DEV__; в релизе некликабельный декор. */
+/** Корона в welcome chrome. Витрина Legendary — только в __DEV__; в релизе некликабельный декор. */
 function WelcomeCrownButtonInner({ compact, large, small, myUserId, myAvatarVer, avatarUri, nick }: WelcomeCrownButtonProps) {
   const [storeOpen, setStoreOpen] = useState(false);
   const btnSize = small ? 32 : compact ? 36 : large ? 44 : 40;
@@ -46,7 +46,7 @@ function WelcomeCrownButtonInner({ compact, large, small, myUserId, myAvatarVer,
         onPress={() => setStoreOpen(true)}
         hitSlop={8}
         accessibilityRole="button"
-        accessibilityLabel="Магазин рамок"
+        accessibilityLabel="Витрина Legendary"
         style={({ pressed }) => [...btnStyle, pressed && styles.pressed]}
       >
         {icon}

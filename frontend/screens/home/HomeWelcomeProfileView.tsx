@@ -28,12 +28,11 @@ import {
   PLAY_STORE_UPDATE_URL,
 } from '../../utils/updateCheck';
 import type { ChatWallpaperTheme } from '../../utils/chatWallpaper';
-import { ChatWallpaperPickerPanel } from './ChatWallpaperPickerPanel';
 import { WelcomeCrownButton } from './WelcomeCrownButton';
+import { PurchasesManagementPanel } from './PurchasesManagementPanel';
 import {
   LIVI,
   isWelcomeTabletLayout,
-  WELCOME_BRAND_VI_STROKE_GRADIENT,
   WELCOME_BRAND_VI_FILL_GRADIENT,
   WELCOME_FRIENDS_LIST_INSET,
   WELCOME_GLASS_BORDER,
@@ -279,7 +278,7 @@ function appendSupportUtm(url: string, params: Record<string, string>): string {
   }
 }
 
-type ProfileScreen = 'hub' | 'about' | 'language' | 'help' | 'support';
+type ProfileScreen = 'hub' | 'about' | 'language' | 'help' | 'support' | 'purchases';
 
 export type HomeWelcomeProfileViewProps = {
   lang: Lang;
@@ -336,8 +335,6 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
     onLogOutAccount,
     wiping,
     updateAvailable,
-    wallpaperPickerTheme,
-    setWallpaperPickerTheme,
     onBackFromHub,
     active = true,
   } = props;
@@ -446,6 +443,7 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
     if (screen === 'about') return t('welcomeAboutApp', lang);
     if (screen === 'help') return t('profileHelp', lang);
     if (screen === 'support') return t('supportProjectTitle', lang);
+    if (screen === 'purchases') return 'Управление покупками';
     return t('chooseLanguage', lang);
   }, [screen, lang]);
 
@@ -462,9 +460,9 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
     setScreen('help');
   }, []);
 
-  const openChatWallpaper = useCallback(() => {
-    setWallpaperPickerTheme('dark');
-  }, [setWallpaperPickerTheme]);
+  const openPurchases = useCallback(() => {
+    setScreen('purchases');
+  }, []);
 
   const openSupport = useCallback(() => {
     setAccountOpen(false);
@@ -515,20 +513,11 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
     [onSelectLang],
   );
 
-  const handleApplyChatWallpaper = useCallback(async (wallpaperId: string) => {
-    const { setChatWallpaperId } = await import('../../utils/chatWallpaper');
-    await setChatWallpaperId('dark', wallpaperId);
-  }, []);
-
   useEffect(() => {
     if (Platform.OS !== 'android') return;
     if (!active) return;
 
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
-      if (wallpaperPickerTheme) {
-        setWallpaperPickerTheme(null);
-        return true;
-      }
       if (screen !== 'hub') {
         goHub();
         return true;
@@ -546,8 +535,6 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
     return () => sub.remove();
   }, [
     active,
-    wallpaperPickerTheme,
-    setWallpaperPickerTheme,
     screen,
     goHub,
     accountOpen,
@@ -589,59 +576,6 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
       )}
     </View>
   );
-
-  const closeWallpaperPicker = useCallback(() => {
-    setWallpaperPickerTheme(null);
-  }, [setWallpaperPickerTheme]);
-
-  const headerWallpaper = (
-    <View
-      style={[
-        styles.headerCenter,
-        isTablet && styles.headerCenterTablet,
-        compactLandscape && styles.headerCenterLandscape,
-      ]}
-    >
-      <Pressable
-        style={({ pressed }) => [styles.headerBackBtn, styles.headerBack, pressed && styles.headerBackBtnPressed]}
-        onPress={closeWallpaperPicker}
-        accessibilityRole="button"
-        accessibilityLabel={t('cancelAction', lang)}
-      >
-        <Ionicons name="chevron-back" size={22} color={LIVI.white} />
-      </Pressable>
-      <AdaptiveText
-        style={[
-          styles.titleCenter,
-          isTablet && styles.titleCenterTablet,
-          compactLandscape && styles.titleCenterLandscape,
-        ]}
-        numberOfLines={2}
-      >
-        {t('chatWallpaperMessages', lang)}
-      </AdaptiveText>
-      <View style={styles.headerBackSpacer} />
-    </View>
-  );
-
-  if (wallpaperPickerTheme) {
-    return (
-      <View style={styles.root}>
-        <View style={styles.rootInner}>
-          {headerWallpaper}
-          <ChatWallpaperPickerPanel
-            key="dark"
-            theme="dark"
-            lang={lang}
-            welcomeLayout
-            welcomeNavHeader
-            onBack={closeWallpaperPicker}
-            onApply={handleApplyChatWallpaper}
-          />
-        </View>
-      </View>
-    );
-  }
 
   const headerHub = (
     <View
@@ -864,9 +798,9 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
           compact={compactLandscape}
           tablet={isTablet}
           showDivider
-          icon="image-outline"
-          label={t('chatWallpaper', lang)}
-          onPress={openChatWallpaper}
+          icon="bag-handle-outline"
+          label="Управление покупками"
+          onPress={openPurchases}
         />
         <WelcomeProfileRow
           dense
@@ -1128,7 +1062,9 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
         ? helpBody
         : screen === 'support'
           ? supportBody
-          : languageBody;
+          : screen === 'purchases'
+            ? <PurchasesManagementPanel />
+            : languageBody;
 
   return (
     <KeyboardAvoidingView
@@ -1393,7 +1329,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: AVATAR_RING_WIDTH,
-    borderColor: WELCOME_BRAND_VI_STROKE_GRADIENT[2],
+    borderColor: 'rgba(180,186,196,0.38)',
+    backgroundColor: 'rgba(180,186,196,0.06)',
     overflow: 'hidden',
   },
   cameraBtn: {

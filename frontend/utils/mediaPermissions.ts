@@ -4,10 +4,29 @@ import { Platform, PermissionsAndroid } from 'react-native';
 import { logger } from './logger';
 
 /**
- * Запрашивает разрешение «Устройства рядом» (Bluetooth) на Android 12+ при старте.
- * Системный диалог: «Разрешить приложению LiVi находить устройства поблизости…»
+ * Нужно ли вообще спрашивать «Устройства рядом»: только Android 12+ и только если ещё не выдано.
  */
-async function requestNearbyDevicesPermissionAndroid(): Promise<void> {
+export async function needsNearbyDevicesPermission(): Promise<boolean> {
+  if (Platform.OS !== 'android') return false;
+  const ver = typeof Platform.Version === 'number' ? Platform.Version : Number(Platform.Version);
+  if (!Number.isFinite(ver) || ver < 31) return false;
+  const perm = (PermissionsAndroid as any)?.PERMISSIONS?.BLUETOOTH_CONNECT;
+  if (!perm) return false;
+  try {
+    return !(await PermissionsAndroid.check(perm));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Запрашивает разрешение «Устройства рядом» (Bluetooth) на Android 12+.
+ * Системный диалог: «Разрешить приложению LiVi находить устройства поблизости…»
+ *
+ * Формулировка Android пугает без контекста, поэтому вызывается не на холодном старте,
+ * а из модалки, которая сначала объясняет, что речь про вывод звука в гарнитуру.
+ */
+export async function requestNearbyDevicesPermissionAndroid(): Promise<void> {
   if (Platform.OS !== 'android') return;
   const ver = typeof Platform.Version === 'number' ? Platform.Version : Number(Platform.Version);
   if (!Number.isFinite(ver) || ver < 31) return; // BLUETOOTH_CONNECT с Android 12 (API 31)
@@ -53,5 +72,5 @@ export async function ensureInitialMediaPermissions(): Promise<void> {
     logger.warn('[mediaPermissions] Failed to request microphone permission', e);
   }
 
-  await requestNearbyDevicesPermissionAndroid();
+  // «Устройства рядом» намеренно НЕ спрашиваем здесь: диалог идёт из модалки с пояснением.
 }

@@ -4,6 +4,7 @@ import android.app.NotificationManager
 import android.app.Notification
 import android.app.PictureInPictureParams
 import android.app.RemoteAction
+import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.content.pm.PackageManager
 import android.util.Rational
@@ -1995,6 +1996,9 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
           )
           return
         }
+        // Ретраи ловят единственный случай — exit запрошен, пока вход в PiP ещё в полёте.
+        // Если вход даже не начинался, PiP не появится: выходим молча, без 3×150 мс и без лога.
+        if ((activity as? MainActivity)?.isSystemPiPEnterInFlight() != true) return
         // Короткий race: exit запрошен до полного входа в PiP.
         if (retryCount < 3) {
           Handler(Looper.getMainLooper()).postDelayed({
@@ -2334,7 +2338,17 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     }
   }
 
-  /** Открыть системный экран отключения battery optimization для приложения. */
+  /**
+   * Открыть системный экран отключения battery optimization для приложения.
+   *
+   * Первый intent показывает прямой диалог «Разрешить?» — он требует permission
+   * REQUEST_IGNORE_BATTERY_OPTIMIZATIONS в манифесте, иначе система его отвергает.
+   * Дальше — фоллбэки на общий список и на карточку приложения.
+   *
+   * resolveActivity() здесь намеренно не используется: при targetSdk 30+ package
+   * visibility может вернуть null для вполне рабочего системного intent, и тогда
+   * мы молча не открыли бы ничего. Пробуем startActivity напрямую.
+   */
   @ReactMethod
   fun openBatteryOptimizationSettings() {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
@@ -2355,12 +2369,43 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     )
     for (intent in intents) {
       try {
-        if (intent.resolveActivity(ctx.packageManager) != null) {
-          ctx.startActivity(intent)
-          return
-        }
+        ctx.startActivity(intent)
+        return
       } catch (_: Exception) {}
     }
+  }
+
+  /**
+   * Диагностика доставки пушей: исключено ли приложение из Doze и в каком оно
+   * App Standby Bucket. Бакет напрямую определяет суточную квоту high-priority FCM
+   * (ACTIVE — без лимита, FREQUENT/RARE — единицы в сутки), поэтому его видно в логах
+   * рядом с каждым входящим звонком.
+   */
+  @ReactMethod
+  fun getPushDeliveryDiagnostics(promise: Promise) {
+    val result = Arguments.createMap()
+    val ctx = reactApplicationContext
+    var ignoring = true
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+      ignoring = try {
+        val pm = ctx.getSystemService(Context.POWER_SERVICE) as? PowerManager
+        pm?.isIgnoringBatteryOptimizations(ctx.packageName) == true
+      } catch (_: Exception) {
+        false
+      }
+    }
+    result.putBoolean("ignoringBatteryOptimizations", ignoring)
+    var bucket = -1
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+      bucket = try {
+        val usm = ctx.getSystemService(Context.USAGE_STATS_SERVICE) as? UsageStatsManager
+        usm?.appStandbyBucket ?: -1
+      } catch (_: Exception) {
+        -1
+      }
+    }
+    result.putInt("standbyBucket", bucket)
+    promise.resolve(result)
   }
 
   /** OEM fallback: открыть экран автозапуска/фоновой активности (Xiaomi/Oppo/Vivo/Huawei/Realme и др.). */

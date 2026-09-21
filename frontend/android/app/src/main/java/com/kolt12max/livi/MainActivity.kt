@@ -116,6 +116,12 @@ class MainActivity : ReactActivity() {
   private val pendingPiPEnterRunnables = mutableListOf<Runnable>()
   private var lastPiPEnterRequestAtMs = 0L
   private var isPiPEnterAttemptRunning = false
+
+  /**
+   * Идёт ли прямо сейчас попытка входа в system PiP.
+   * Нужен выходу из PiP: ретраить «ещё не в PiP» осмысленно только пока вход в полёте.
+   */
+  fun isSystemPiPEnterInFlight(): Boolean = isPiPEnterAttemptRunning
   /** Runnable из onUserLeaveHint — повторный enter после setSystemPiPCaptureFrameReady(true) из JS. */
   private var leaveHintPiPEnterRunnable: Runnable? = null
   /** Анти-реэнтри: сразу после выхода из system PiP игнорируем ложный onUserLeaveHint этого же transition. */

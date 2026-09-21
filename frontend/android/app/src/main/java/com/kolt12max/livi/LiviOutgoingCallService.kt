@@ -560,7 +560,11 @@ class LiviOutgoingCallService : Service() {
         fun adoptRealCallId(context: Context, newCallId: String, toUserId: String, toNick: String): Boolean {
             val id = newCallId.trim()
             if (id.isEmpty()) return false
-            if (ringingActive && (ringingCallId.startsWith("pending_") || ringingCallId == id)) {
+            // К этому callId уже привязаны. Повтор прилетает штатно: notifyOutgoingCallId шлёт
+            // и broadcast, и startService, а оба пути ведут сюда. Работа уже сделана — выходим
+            // молча, иначе на один звонок получаем 3-4 круга adopt + adoptOnly в логах.
+            if (ringingActive && ringingCallId == id) return true
+            if (ringingActive && ringingCallId.startsWith("pending_")) {
                 ringingCallId = id
                 android.util.Log.d(TAG, "adoptRealCallId: rebound ringing to ${id.take(24)}")
                 // Обновить prefs/notification context без stop/start MediaPlayer.

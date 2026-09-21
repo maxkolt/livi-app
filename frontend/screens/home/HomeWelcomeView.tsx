@@ -62,7 +62,13 @@ function resolveIsPhone(width: number, height: number) {
 const STAGE_STACK_MIN_HEIGHT = 620;
 
 function resolveIsSplitStage(width: number, height: number) {
-  return resolveIsLandscape(width, height) && height > 0 && height < STAGE_STACK_MIN_HEIGHT;
+  if (!resolveIsLandscape(width, height) || !(height > 0)) return false;
+  // Телефон в landscape: вертикальный стек просто не влезает по высоте.
+  if (height < STAGE_STACK_MIN_HEIGHT) return true;
+  // Планшет в landscape: по высоте стек влезает, но ширины столько, что узкая
+  // колонка по центру теряется, а баннер онлайн растягивается на весь экран.
+  // Две колонки тут нужны по композиции, а не от тесноты.
+  return isWelcomeTabletLayout(width, height);
 }
 
 let brandEntryShinePlayedThisSession = false;
@@ -161,12 +167,17 @@ function HomeWelcomeViewInner({
   const compactLayout = isPhone && !isLandscape && stageHeight < 520;
   /** Телефон в landscape: на верхний блок остаётся совсем мало высоты. */
   const tightStage = splitStage && stageHeight > 0 && stageHeight < 420;
+  /**
+   * Две колонки от тесноты, а не от ширины. На планшете раскладка та же, но
+   * ужимать под неё шрифты и отступы не надо — там высоты хватает с запасом.
+   */
+  const splitTight = splitStage && !isTabletLayout;
 
   /** Верхний блок ужимается вместе с экраном: иначе он съедает треть высоты в landscape. */
   const topBarHeight = tightStage ? 42 : splitStage ? 52 : compactLayout ? 48 : 54;
   const topBarPadTop = tightStage ? 4 : splitStage ? 6 : Platform.OS === 'ios' ? 8 : 12;
-  const brandFontSize = tightStage ? 26 : splitStage ? 30 : isTabletLayout ? 40 : 36;
-  const bannerCompact = splitStage || compactLayout || shortPhone;
+  const brandFontSize = tightStage ? 26 : isTabletLayout ? 40 : splitStage ? 30 : 36;
+  const bannerCompact = splitTight || compactLayout || shortPhone;
 
   /**
    * Высота панели на первый кадр, пока не пришёл onLayout: окно минус верхний
@@ -181,10 +192,10 @@ function HomeWelcomeViewInner({
 
   /** Один источник размеров текста: по ним и рисуем, и резервируем место под радаром. */
   const type = {
-    headingFont: isTabletLayout && !splitStage ? 22 : splitStage ? 17 : 18,
-    matchingFont: isTabletLayout && !splitStage ? 15 : splitStage ? 12 : 13,
-    matchingLineH: isTabletLayout && !splitStage ? 22 : splitStage ? 17 : 19,
-    matchingMaxWidth: isTabletLayout && !splitStage ? 420 : 292,
+    headingFont: isTabletLayout ? 22 : splitStage ? 17 : 18,
+    matchingFont: isTabletLayout ? 15 : splitStage ? 12 : 13,
+    matchingLineH: isTabletLayout ? 22 : splitStage ? 17 : 19,
+    matchingMaxWidth: isTabletLayout ? 420 : 292,
   };
   const headingLineH = Math.round(type.headingFont * 1.32);
 
@@ -194,18 +205,20 @@ function HomeWelcomeViewInner({
     radarPaddingTop: splitStage ? 0 : compactLayout ? 2 : 4,
     stageCopyMarginTop: splitStage ? 0 : -6,
     stageCopyPaddingBottom: 0,
-    ctaMinGap: splitStage ? 6 : compactLayout || shortPhone ? 12 : 16,
+    ctaMinGap: splitTight ? 6 : compactLayout || shortPhone ? 12 : 16,
     /** Больше = кнопка выше над навигацией. */
     ctaBottomPad: tightStage
       ? 20
-      : splitStage
-        ? 22
-        : compactLayout
-          ? 20
-          : shortPhone
-            ? 22
-            : isTabletLayout
-              ? 40
+      : isTabletLayout
+        ? splitStage
+          ? 28
+          : 40
+        : splitStage
+          ? 22
+          : compactLayout
+            ? 20
+            : shortPhone
+              ? 22
               : 32,
     copyMarginBottom: 4,
   };
@@ -233,10 +246,10 @@ function HomeWelcomeViewInner({
    * а радар и кнопка несут смысл экрана.
    */
   const hideSubtitle = stageH > 0 && (splitStage ? stageH < 130 : stageH < 340);
-  const matchingLines = splitStage ? 2 : 3;
+  const matchingLines = splitTight ? 2 : 3;
 
   /** Реальная высота текста с кнопкой под радаром — считаем из тех же размеров, что и рисуем. */
-  const ctaHeight = welcomeSearchCtaHeight(isTabletLayout, splitStage);
+  const ctaHeight = welcomeSearchCtaHeight(isTabletLayout, splitTight);
   /** Правая колонка в строке шириной ровно с кнопку — баннер, текст и CTA в одну линию. */
   /**
    * Колонка занимает половину строки, но не шире максимума кнопки. Без привязки
@@ -539,7 +552,7 @@ function HomeWelcomeViewInner({
               label={L('welcomeFindPartnerBtn')}
               onPress={handleStartSearchPress}
               disabled={hasActiveCallForSearch}
-              compact={splitStage}
+              compact={splitTight}
               maxWidth={splitStage ? ctaWidth : undefined}
               style={{
                 marginBottom: 0,

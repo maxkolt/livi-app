@@ -16,6 +16,10 @@ export interface IUser {
   avatarVer?: number; // Версия аватара для инвалидации кеша
   friends: Types.ObjectId[];
   friendRequests?: Types.ObjectId[]; // входящие заявки (userIds, кто пригласил)
+  purchasedFrameIds?: string[];
+  purchasedBackgroundIds?: string[];
+  activeFrameId?: string;
+  activeBackgroundId?: string;
 }
 
 const isHttp = (s?: string) =>
@@ -74,6 +78,26 @@ const UserSchema = new Schema<IUser>(
       type: [{ type: Schema.Types.ObjectId, ref: 'User' }],
       default: [],
       index: true,
+    },
+
+    purchasedFrameIds: {
+      type: [String],
+      default: [],
+    },
+
+    purchasedBackgroundIds: {
+      type: [String],
+      default: [],
+    },
+
+    activeFrameId: {
+      type: String,
+      default: '',
+    },
+
+    activeBackgroundId: {
+      type: String,
+      default: '',
     },
   },
   {

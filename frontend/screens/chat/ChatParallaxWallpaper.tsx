@@ -13,12 +13,9 @@ import {
 import { Accelerometer } from "expo-sensors";
 import { LinearGradient } from "expo-linear-gradient";
 import {
-  getChatWallpaperSource,
-  useChatWallpaperPrefs,
+  getChatWallpaperById,
 } from "../../utils/chatWallpaper";
-import {
-  WELCOME_STAGE_BG,
-} from "../home/constants";
+import { cosmeticBackgroundToWallpaperId, useCosmetics } from "../../utils/cosmetics";
 
 /** Max translate in px — subtle but noticeable. */
 const MAX_SHIFT = 5;
@@ -29,7 +26,9 @@ const SMOOTH = 0.16;
 
 /** Match jpeg plate so letterbox/parallax edges never show a seam. */
 const PLATE_LIGHT = "#AACABB";
-const PLATE_DARK = WELCOME_STAGE_BG;
+/** Дефолт без покупки: один синий тон welcome, без картинки и градиента. */
+const DEFAULT_CHAT_BLUE = "#0C1720";
+const PLATE_DARK = DEFAULT_CHAT_BLUE;
 
 /** Тёмный stage-tint поверх обоев — картинка читается, тон как у welcome. */
 const WALLPAPER_STAGE_TINT = [
@@ -47,8 +46,11 @@ export function ChatParallaxWallpaper({ isDark }: { isDark: boolean }) {
   // Use the actual container size. Starting with window metrics and then
   // replacing them onLayout remounted the Image and looked like a wallpaper zoom.
   const [box, setBox] = useState<{ w: number; h: number } | null>(null);
-  const wallpaperPrefs = useChatWallpaperPrefs();
-  const source = getChatWallpaperSource(isDark, wallpaperPrefs);
+  const cosmetics = useCosmetics();
+  const hasPurchasedWallpaper = !!cosmetics.activeBackgroundId;
+  const source = hasPurchasedWallpaper
+    ? getChatWallpaperById(cosmeticBackgroundToWallpaperId(cosmetics.activeBackgroundId), 'dark').source
+    : null;
 
   const tx = useRef(new Animated.Value(0)).current;
   const ty = useRef(new Animated.Value(0)).current;
@@ -176,7 +178,10 @@ export function ChatParallaxWallpaper({ isDark }: { isDark: boolean }) {
 
   return (
     <View
-      style={[styles.root, { backgroundColor: isDark ? PLATE_DARK : PLATE_LIGHT }]}
+      style={[
+        styles.root,
+        { backgroundColor: hasPurchasedWallpaper ? (isDark ? PLATE_DARK : PLATE_LIGHT) : DEFAULT_CHAT_BLUE },
+      ]}
       pointerEvents="none"
       onLayout={onRootLayout}
     >
@@ -185,7 +190,7 @@ export function ChatParallaxWallpaper({ isDark }: { isDark: boolean }) {
         остаётся в intrinsic aspect → справа/снизу plate после поворота.
         Двигаем обёртку (parallax), саму картинку — обычный Image на весь box.
       */}
-      {box ? (
+      {box && source ? (
         <Animated.View
           style={{
             position: "absolute",
@@ -204,7 +209,7 @@ export function ChatParallaxWallpaper({ isDark }: { isDark: boolean }) {
           />
         </Animated.View>
       ) : null}
-      {isDark ? (
+      {!hasPurchasedWallpaper ? null : isDark ? (
         <LinearGradient
           colors={[...WALLPAPER_STAGE_TINT]}
           locations={[0, 0.32, 0.68, 1]}
