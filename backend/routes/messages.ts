@@ -19,6 +19,7 @@ import {
   normalizeMessageIdBatch,
   removeLegacyFriendshipMessages,
   removeUnreadMessage,
+  clearUnreadMessagesFrom,
 } from '../sockets/messagesReliable';
 import { emitToUser } from '../utils/emitToUser';
 
@@ -398,6 +399,10 @@ router.post('/messages/mark_read', async (req, res) => {
         }
       } catch {}
     });
+
+    // Счётчик для messages:unread_counts живёт в памяти, а не в БД — чистим и его,
+    // иначе прочтение через HTTP-фоллбэк оставляет непрочитанное висеть на вкладке.
+    clearUnreadMessagesFrom(me, from);
 
     return res.json({ ok: true });
   } catch (e: any) {

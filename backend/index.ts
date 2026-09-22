@@ -4323,7 +4323,11 @@ io.on('connection', async (sock: AuthedSocket) => {
           recipientSocketsCount: recipientSockets.length,
           roomUSize: roomSize,
         });
-        if (recipientSockets.length === 0 && roomSize > 0) {
+        // roomSize считает только сокеты этого инстанса: при нескольких инстансах (redis-adapter)
+        // callee на другом узле дал бы roomSize=0 и не получил бы socket-emit вовсе. io.to()
+        // по пустой комнате — no-op, поэтому условие можно снять без последствий для одного узла.
+        // Ретрай-путь (emitCallIncomingToCallee) уже шлёт безусловно — приводим к нему.
+        if (recipientSockets.length === 0) {
           io.to(`u:${peerId}`).emit('call:incoming', {
             callId,
             callKitId: getCallKitUuid(callId),

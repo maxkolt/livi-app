@@ -440,8 +440,18 @@ export async function upsertExpoPushToken(opts: {
   voipToken?: string;
 }) {
   const { userId, installId, platform, token, fcmToken, voipToken } = opts;
+  // Токен звонка (FCM data-only / APNs VoIP) не зависит от Expo, поэтому запись принимается и
+  // без валидного Expo-токена — иначе недоступность Expo Push API оставляет устройство вообще
+  // без канала входящих звонков. Ключ тогда синтетический (`noexpo:<platform>:<installId>`),
+  // Expo-рассылки его не затронут: все они фильтруют по Expo.isExpoPushToken.
   if (!Expo.isExpoPushToken(token)) {
-    throw new Error('invalid_expo_push_token');
+    const hasNativeCallToken =
+      (platform === 'android' && typeof fcmToken === 'string' && fcmToken.length > 0) ||
+      (platform === 'ios' && typeof voipToken === 'string' && voipToken.length > 0);
+    if (!hasNativeCallToken) {
+      throw new Error('invalid_expo_push_token');
+    }
+    logger.info('[push] upsert without expo token (native call token only)', { userId, platform });
   }
 
   const update: Record<string, unknown> = {
@@ -894,6 +904,7 @@ export async function sendCallPushToRecipient(userId: string, data: CallPushData
 /**
  * Эскалация входящего звонка (fallback-path):
  * - Android FCM data-only (high priority, короткий TTL);
+ * - iOS APNs VoIP (PushKit → CallKit), иначе у iOS-получателя эскалации нет вовсе;
  * - без Android notification payload/Expo fallback для call, чтобы исключить
  *   системное "Откройте, чтобы ответить" на просроченных звонках.
  * Используется сервером, когда ACK incoming_shown не получен в срок.
@@ -901,19 +912,22 @@ export async function sendCallPushToRecipient(userId: string, data: CallPushData
 export async function sendCallEscalationPushToRecipient(
   userId: string,
   data: CallPushData
-): Promise<{ androidTargets: number; fcmSent: number; expoSent: number }> {
+): Promise<{ androidTargets: number; fcmSent: number; expoSent: number; voipSent: number }> {
   const userIdObj = new mongoose.Types.ObjectId(userId);
   const recs = await PushTokenModel.find({ userId: userIdObj })
     .read('primary')
     .select('_id token platform fcmToken voipToken')
     .lean();
-  if (!recs?.length) return { androidTargets: 0, fcmSent: 0, expoSent: 0 };
+  if (!recs?.length) return { androidTargets: 0, fcmSent: 0, expoSent: 0, voipSent: 0 };
 
   type Rec = { _id?: unknown; token: string; platform: string; fcmToken?: string; voipToken?: string };
   const list = recs as unknown as Rec[];
   const androidRecs = list.filter((r) => r.platform === 'android');
   const androidTargets = androidRecs.length;
-  if (!androidTargets) return { androidTargets: 0, fcmSent: 0, expoSent: 0 };
+  const iosVoipRecs = list.filter((r) => r.platform === 'ios' && r.voipToken);
+  if (!androidTargets && !iosVoipRecs.length) {
+    return { androidTargets: 0, fcmSent: 0, expoSent: 0, voipSent: 0 };
+  }
 
   const messaging = getFirebaseMessaging();
   const callTs = Number(data.createdAtMs) > 0 ? Number(data.createdAtMs) : Date.now();
@@ -961,12 +975,35 @@ export async function sendCallEscalationPushToRecipient(
   // Android Expo fallback intentionally disabled for call escalation.
   // Expo notification payload can surface stale "answer" card after offline recovery.
 
+  // iOS: повторный VoIP-пуш. Без него у iOS-получателя эскалации не было вообще — ретраи
+  // после первого уходили только на Android, и звонок терялся молча.
+  let voipSent = 0;
+  if (iosVoipRecs.length > 0) {
+    voipSent = await sendVoipPushToRecipient(
+      userId,
+      iosVoipRecs,
+      {
+        type: 'call',
+        callId: data.callId,
+        callKitId,
+        from: data.from,
+        fromNick: data.fromNick || '',
+        ts: String(callTs),
+        expiresAt: String(callExpiresAtMs),
+        escalation: '1',
+      },
+      { expirationMs: callExpiresAtMs }
+    );
+  }
+
   logger.info('[push] call escalation push sent', {
     userId,
     callId: data.callId,
     androidTargets,
     fcmSent,
     expoSent,
+    voipSent,
+    iosVoipTargets: iosVoipRecs.length,
     hasFirebase: !!messaging,
   });
   pushLog('call_push_escalation_sent', {
@@ -975,9 +1012,11 @@ export async function sendCallEscalationPushToRecipient(
     androidTargets,
     fcmSent,
     expoSent,
+    voipSent,
+    iosVoipTargets: iosVoipRecs.length,
     hasFirebase: !!messaging,
   });
-  return { androidTargets, fcmSent, expoSent };
+  return { androidTargets, fcmSent, expoSent, voipSent };
 }
 
 /**

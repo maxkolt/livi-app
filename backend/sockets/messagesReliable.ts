@@ -744,6 +744,15 @@ export function removeUnreadMessage(userId: string, fromUser: string, messageId:
   markSingleMessageAsRead(userId, fromUser, messageId);
 }
 
+/**
+ * Очистить in-memory счётчик непрочитанных от одного отправителя.
+ * Нужен HTTP-пути mark_read: сокетный хэндлер чистит и БД, и эту карту,
+ * а маршрут раньше обновлял только БД — счётчик для unread_counts оставался висеть.
+ */
+export function clearUnreadMessagesFrom(userId: string, fromUser: string) {
+  markMessagesAsRead(userId, fromUser);
+}
+
 export function removeUnreadMessages(userId: string, fromUser: string, messageIds: string[]) {
   const ids = new Set(messageIds.map((id) => String(id || '').trim()).filter(Boolean));
   if (ids.size === 0) return;
