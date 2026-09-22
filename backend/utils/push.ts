@@ -334,11 +334,46 @@ async function pruneStalePushTokensForUser(opts: {
   platform: 'android' | 'ios';
   currentToken: string;
   installId: string;
+  fcmToken?: string;
+  voipToken?: string;
 }): Promise<void> {
   const userIdObj = new mongoose.Types.ObjectId(opts.userId);
   const installId = String(opts.installId || '').trim();
   const now = Date.now();
   const staleBeforeMs = now - PUSH_TOKEN_STALE_TTL_MS;
+
+  // 0) Same physical device, но installId сменился (очистка данных / переустановка): записи по
+  // installId не сойдутся, и устройство начнёт получать по копии пуша на каждую старую запись.
+  // Ориентируемся на нативный токен доставки — он и есть адрес устройства.
+  const nativeToken =
+    opts.platform === 'android'
+      ? String(opts.fcmToken || '').trim()
+      : String(opts.voipToken || '').trim();
+  if (nativeToken) {
+    try {
+      const nativeField = opts.platform === 'android' ? 'fcmToken' : 'voipToken';
+      const dupRes = await PushTokenModel.deleteMany({
+        userId: userIdObj,
+        platform: opts.platform,
+        [nativeField]: nativeToken,
+        token: { $ne: opts.currentToken },
+      }).exec();
+      const deleted = (dupRes as { deletedCount?: number })?.deletedCount ?? 0;
+      if (deleted > 0) {
+        logger.info('[push] pruned duplicate tokens for same device', {
+          userId: opts.userId,
+          platform: opts.platform,
+          deleted,
+        });
+      }
+    } catch (e) {
+      logger.warn('[push] prune duplicate device tokens failed', {
+        userId: opts.userId,
+        platform: opts.platform,
+        error: (e as Error)?.message,
+      });
+    }
+  }
 
   // 1) Same install + same platform should keep only current token.
   if (installId) {
@@ -404,9 +439,12 @@ async function pruneStalePushTokensForUser(opts: {
     const list = (docs || []) as Array<{ _id?: unknown; token?: string }>;
     if (list.length <= MAX_PUSH_TOKENS_PER_USER_PLATFORM) return;
 
-    const toDelete = list
-      .slice(MAX_PUSH_TOKENS_PER_USER_PLATFORM)
-      .filter((d) => String(d.token || '') !== opts.currentToken)
+    // Текущий токен держим всегда, остальные — только самые свежие до лимита. Раньше отрезался
+    // хвост списка, и если текущий токен оказывался в этом хвосте, он исключался из удаления —
+    // записей оставалось на одну больше лимита, а устройство получало лишнюю копию пуша.
+    const others = list.filter((d) => String(d.token || '') !== opts.currentToken);
+    const toDelete = others
+      .slice(Math.max(0, MAX_PUSH_TOKENS_PER_USER_PLATFORM - 1))
       .map((d) => d._id)
       .filter(Boolean);
 
@@ -517,6 +555,8 @@ export async function upsertExpoPushToken(opts: {
     platform,
     currentToken: token,
     installId: String(installId || ''),
+    fcmToken,
+    voipToken,
   });
 }
 
