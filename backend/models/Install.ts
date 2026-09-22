@@ -10,6 +10,8 @@ export interface IInstall {
    *  в этом случае identity:attach принимает и сохраняет секрет от первого клиента,
    *  который его пришлёт ("bootstrap"), не требуя его для уже существующих сессий. */
   installSecretHash?: string;
+  /** Когда секрет был перепривязан после переустановки приложения (см. isDeviceBoundInstallId). */
+  secretRotatedAt?: Date;
 }
 
 const InstallSchema = new Schema<IInstall>(
@@ -17,6 +19,7 @@ const InstallSchema = new Schema<IInstall>(
     installId: { type: String, required: true, unique: true, index: true },
     user: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
     installSecretHash: { type: String, required: false },
+    secretRotatedAt: { type: Date, required: false },
   },
   { timestamps: true, collection: 'installs' }
 );

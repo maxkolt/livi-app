@@ -8,13 +8,15 @@ import FriendshipMessages from '../models/FriendshipMessages';
 import FriendshipMessageItem from '../models/FriendshipMessageItem';
 import Install from '../models/Install';
 import MissedCall from '../models/MissedCall';
+import PushToken from '../models/PushToken';
 import FriendshipEdge from '../models/FriendshipEdge';
 // Cloudinary удален, используем только MongoDB
 import { getAndClearOfflineMessages, getAndClearOfflineChatClearedQueue } from './messagesReliable';
 import { auditNickChange } from '../utils/profileNickAudit';
 import { scheduleGlobalFriendPresenceEmit } from '../utils/friendOnlinePresence';
 import { getFriendIds } from '../utils/friendshipUtils';
-import { hashInstallSecret, verifyInstallSecret, isPlausibleInstallSecret } from '../utils/installSecret';
+import { hashInstallSecret, verifyInstallSecret, isPlausibleInstallSecret, isDeviceBoundInstallId } from '../utils/installSecret';
+import { checkRateLimit } from '../utils/rateLimit';
 
 type AttachPayload = {
   installId?: string | null;
@@ -231,10 +233,48 @@ export default function registerIdentitySockets(io: Server) {
           const storedInstallSecretHash = (inst as any).installSecretHash as string | undefined;
           if (storedInstallSecretHash) {
             if (!verifyInstallSecret(payload?.installSecret, storedInstallSecretHash)) {
-              console.warn(`[identity] attach REJECTED: invalid/missing installSecret for install=${installId}`);
-              ack?.({ ok: false, error: 'unauthorized' });
-              setTimeout(() => attachRequestCache.delete(cacheKey), 1000);
-              return;
+              // Переустановка приложения: installId выведен из ANDROID_ID и вернулся тем же,
+              // а секрет утерян вместе с ключом AndroidKeyStore. Без ротации установка навсегда
+              // занята мёртвой привязкой, и пользователь теряет друзей, переписки и покупки.
+              // Доказательством владения здесь служит сам id: ANDROID_ID недоступен другим
+              // приложениям. Для случайных installId ротация запрещена — там нужен секрет.
+              const canRotate =
+                isDeviceBoundInstallId(installId) && isPlausibleInstallSecret(payload?.installSecret);
+              const rotateLimit = canRotate
+                ? await checkRateLimit(`install_secret_rotate:${installId}`, 5, 24 * 60 * 60_000, {
+                    sensitive: true,
+                  })
+                : null;
+              if (canRotate && rotateLimit?.ok) {
+                try {
+                  await Install.updateOne(
+                    { installId },
+                    {
+                      $set: {
+                        installSecretHash: hashInstallSecret(payload!.installSecret as string),
+                        secretRotatedAt: new Date(),
+                      },
+                    }
+                  );
+                  // Аудит: ротация меняет владельца установки, такое должно быть видно в логах.
+                  console.warn(
+                    `[identity] installSecret ROTATED for device-bound install=${installId} user=${userId} (reinstall recovery)`
+                  );
+                } catch (e: any) {
+                  console.warn(`[identity] failed to rotate installSecret for install=${installId}:`, e?.message);
+                  ack?.({ ok: false, error: 'unauthorized' });
+                  setTimeout(() => attachRequestCache.delete(cacheKey), 1000);
+                  return;
+                }
+              } else {
+                console.warn(
+                  `[identity] attach REJECTED: invalid/missing installSecret for install=${installId}` +
+                    (canRotate ? ' (rotation rate limit exceeded)' : '')
+                );
+                ack?.({ ok: false, error: 'unauthorized' });
+                setTimeout(() => attachRequestCache.delete(cacheKey), 1000);
+                return;
+              }
             }
           } else if (isPlausibleInstallSecret(payload?.installSecret)) {
             // Legacy install без секрета — принимаем и сохраняем секрет от первого клиента,
@@ -433,6 +473,15 @@ export default function registerIdentitySockets(io: Server) {
         const userId = inst && (inst as any).user ? String((inst as any).user) : '';
         if (!userId) return ack?.({ ok: false, error: 'not_found' });
 
+        // Список друзей нужно снять ДО разрыва связей: после удаления сообщать будет некому,
+        // и у них запись об удалённом пользователе висела бы в списке до перезапуска приложения.
+        let formerFriendIds: string[] = [];
+        try {
+          formerFriendIds = (await getFriendIds(userId)).map((f) => String(f));
+        } catch (e: any) {
+          console.warn('[identity:wipeMe] failed to collect friends before wipe', e?.message);
+        }
+
         try { session = await mongoose.startSession(); } catch {}
 
         const work = async (s?: ClientSession) => {
@@ -474,7 +523,25 @@ export default function registerIdentitySockets(io: Server) {
           if (friendshipIds.length) await FriendshipMessageItem.deleteMany({ friendshipId: { $in: friendshipIds } }, opt as any);
           await FriendshipMessages.deleteMany({ $or: [{ user1: userId }, { user2: userId }] }, opt as any);
 
-          // 4) Очищаем данные пользователя вместо удаления
+          // 4) Пуш-токены: без этого удалённому аккаунту продолжают слать пуши, а записи
+          // висят на мёртвом userId и тратят квоту FCM.
+          await PushToken.deleteMany({ userId: new mongoose.Types.ObjectId(userId) }, opt as any);
+
+          // 5) Пропущенные звонки в обе стороны — они бесполезны и после удаления профиля.
+          await MissedCall.deleteMany(
+            {
+              $or: [
+                { calleeId: new mongoose.Types.ObjectId(userId) },
+                { callerId: new mongoose.Types.ObjectId(userId) },
+              ],
+            },
+            opt as any,
+          );
+
+          // 6) Сам пользователь. Раньше поля только обнулялись, и документ оставался навсегда:
+          // все инсталлы удаляются, добраться до него уже нельзя, так что это был мусор
+          // с аватаром в base64 внутри. Профиль удаляют — значит удаляем.
+          // Записи об оплатах (cosmetic_purchases) намеренно остаются: это финансовый след.
           const beforeWipe = await User.findById(userId).select('nick').lean();
           const prevNickWipe = String((beforeWipe as any)?.nick ?? '');
           auditNickChange({
@@ -485,23 +552,9 @@ export default function registerIdentitySockets(io: Server) {
             socketId: sock.id,
             installId: id.length > 80 ? id.slice(0, 80) : id,
           });
-          await User.updateOne(
-            { _id: userId }, 
-            { 
-              $set: { 
-                nick: '', 
-                avatar: '', 
-                avatarB64: '', 
-                avatarThumbB64: '', 
-                avatarVer: 0,
-                friends: [],
-                friendRequests: []
-              } 
-            }, 
-            opt as any
-          );
-          
-          // Удаляем только инсталлы (пользователь остается с тем же ID)
+          await User.deleteOne({ _id: userId }, opt as any);
+
+          // 7) Инсталлы: после их удаления следующий identity:attach заведёт новый профиль.
           await Install.deleteMany({ user: userId }, opt as any);
         };
 
@@ -510,6 +563,12 @@ export default function registerIdentitySockets(io: Server) {
           await session.endSession();
         } else {
           await work();
+        }
+
+        // Бывшим друзьям — то же событие, что и при обычном удалении из друзей,
+        // иначе у них в списке остаётся исчезнувший пользователь.
+        for (const fid of formerFriendIds) {
+          try { io.to(`u:${fid}`).emit('friend:removed', { userId }); } catch {}
         }
 
         // отвязываем сокет и обновляем presence
