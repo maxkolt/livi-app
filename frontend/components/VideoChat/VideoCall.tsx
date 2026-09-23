@@ -155,6 +155,9 @@ import {
   logDirectCallUiGate,
   stripStaleDirectCallPiPNavParamsIfNeeded,
 } from './callScreen/callRouteIntent';
+import { stopStreamTracks } from './callScreen/stopLocalStreamTracks';
+import { resolveCallAudioRouteUiWhileBootstrapPending } from './callScreen/callAudioRouteUi';
+import { clearVideoCallHomeScreenLocks } from './callScreen/videoCallHomeLocks';
 
 type Props = { 
   route?: { 
@@ -196,124 +199,9 @@ const CARD_BASE = {
 };
 
 
-/** Пока bootstrap pending: не всегда ухо — если маршрут уже SPEAKER/BT, показать сразу. */
-function resolveCallAudioRouteUiWhileBootstrapPending(
-  selectedRoute: InCallAudioRoute,
-): InCallAudioRoute {
-  const uiLock = readCallAudioRouteUiLock();
-  if (uiLock) return uiLock;
-  if (
-    isInAudioOnlyCallUi() &&
-    isDirectAudioEarpieceStabilizeWindow() &&
-    !readUserLockedBuiltinCallAudioRoute() &&
-    selectedRoute === 'SPEAKER_PHONE'
-  ) {
-    return 'EARPIECE';
-  }
-  if (
-    selectedRoute === 'SPEAKER_PHONE' ||
-    selectedRoute === 'EARPIECE' ||
-    isExternalHeadsetRoute(selectedRoute)
-  ) {
-    return selectedRoute;
-  }
-  const candidates: (InCallAudioRoute | null | undefined)[] = [
-    readUserSelectedCallAudioRoute(),
-    getPersistedCallAudioRoute(),
-    normalizeInCallRoute(readInAppPiPAudioOutputRoute() || ''),
-    readLastAppliedCallAudioRoute(),
-  ];
-  for (const raw of candidates) {
-    const route = normalizeInCallRoute(raw || '');
-    if (
-      route === 'SPEAKER_PHONE' ||
-      route === 'EARPIECE' ||
-      isExternalHeadsetRoute(route)
-    ) {
-      return route;
-    }
-  }
-  return 'EARPIECE';
-}
 
-const stopStreamTracks = (stream: MediaStream | null | undefined, context: string) => {
-  if (!stream) {
-    return;
-  }
-
-  try {
-    const baseTracks = stream.getTracks?.() || [];
-    const videoTracks = (stream as any)?.getVideoTracks?.() || [];
-    const audioTracks = (stream as any)?.getAudioTracks?.() || [];
-
-    const allTracks: any[] = [...baseTracks];
-    const appendUnique = (tracks: any[]) => {
-      tracks.forEach((track: any) => {
-        if (track && !allTracks.includes(track)) {
-          allTracks.push(track);
-        }
-      });
-    };
-
-    appendUnique(videoTracks);
-    appendUnique(audioTracks);
-
-    const uniqueTracks = Array.from(new Set(allTracks));
-
-    // Менее шумно: детали остановки стримов/треков — только в debug.
-    logger.debug('[VideoCall] Stopping local stream tracks', {
-      context,
-      totalTracks: uniqueTracks.length,
-      videoTracks: uniqueTracks.filter((t: any) => (t.kind || (t as any).type) === 'video').length,
-      audioTracks: uniqueTracks.filter((t: any) => (t.kind || (t as any).type) === 'audio').length,
-    });
-
-    uniqueTracks.forEach((track: any, index: number) => {
-      try {
-        if (track && track.readyState !== 'ended' && track.readyState !== null) {
-          const trackKind = track.kind || (track as any).type;
-          track.enabled = false;
-          track.stop();
-
-          logger.debug('[VideoCall] Track stopped', {
-            context,
-            trackKind,
-            trackId: track.id,
-            index,
-          });
-
-          setTimeout(() => {
-            try {
-              if (track && track.readyState !== 'ended' && track.readyState !== null) {
-                track.enabled = false;
-                track.stop();
-              }
-            } catch (err) {
-              logger.warn('[VideoCall] Error in delayed track stop', { context, err });
-            }
-          }, 100);
-        }
-      } catch (err) {
-        logger.warn('[VideoCall] Error stopping track', { context, err });
-      }
-    });
-  } catch (err) {
-    logger.warn('[VideoCall] Error stopping stream', { context, err });
-  }
-};
 
 /** Снимает блокировку кнопок видеозвонка на Home (callRuntime videoCallActive / partner) и дергает сброс busy у друзей. */
-function clearVideoCallHomeScreenLocks(reason: string) {
-  try {
-    const g = global as any;
-    if (!g.__videoCallPartnerUserIdRef) g.__videoCallPartnerUserIdRef = { current: null };
-    else g.__videoCallPartnerUserIdRef.current = null;
-    setVideoCallActive(false);
-    g.__onVideoCallEndedRef?.current?.();
-  } catch (e) {
-    logger.warn('[VideoCall] clearVideoCallHomeScreenLocks failed', { reason, e });
-  }
-}
 
 const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
   const isFocused = useIsFocused();
