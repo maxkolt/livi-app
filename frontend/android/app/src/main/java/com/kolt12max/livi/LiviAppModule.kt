@@ -184,6 +184,12 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   /** Короткая пауза перед новым входящим: старый IncomingCallActivity должен успеть обработать JUST_CLOSE. */
   private val INCOMING_RELAUNCH_DELAY_MS = 120L
 
+  /**
+   * Через сколько после startActivity проверять, что экран входящего реально появился:
+   * блокировку background activity start система выполняет молча, без исключения.
+   */
+  private val INCOMING_ACTIVITY_VERIFY_DELAY_MS = 700L
+
   /** Показать нативный экран исходящего сразу (без callId). callId придёт позже через notifyOutgoingCallId. Сохраняем toUserId/toNick, чтобы запустить звук из notifyOutgoingCallId даже если broadcast не успел дойти до Activity. */
   @ReactMethod
   fun launchOutgoingCallActivityWithoutCallId(toUserId: String, toNick: String?, hasVideo: Boolean) {
@@ -630,7 +636,12 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       true
     }
     var fgsStarted = false
-    fun startIncomingFgs(reason: String) {
+    /**
+     * [forceVisibleNotification] — экран входящего поднять не удалось: тихая строчка в шторке
+     * такой звонок не спасает, нужно уведомление с full-screen intent (его система показывает
+     * сама, без разрешения на фоновый старт активити).
+     */
+    fun startIncomingFgs(reason: String, forceVisibleNotification: Boolean = false) {
       if (fgsStarted) return
       fgsStarted = true
       try {
@@ -640,12 +651,41 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
           putExtra(IncomingCallForegroundService.EXTRA_FROM, from)
           putExtra(IncomingCallForegroundService.EXTRA_FROM_NICK, fromNick ?: "")
           putExtra(IncomingCallForegroundService.EXTRA_HEADS_UP_ONLY, false)
-          putExtra(IncomingCallForegroundService.EXTRA_SILENT_NOTIFICATION, !keyguardLocked)
+          // Тихое уведомление — только когда экран включён, разблокирован и показ не провалился.
+          // При погашенном экране (даже без замка) нужен full-screen intent: система поднимает
+          // экран входящего по нему сама, без разрешения на фоновый старт активити. Раньше здесь
+          // стояло `!keyguardLocked`, и «экран погашен, но замка нет» давало тихую строчку в шторке —
+          // без оверлея звонок оставался только рингтоном, ответить было негде.
+          putExtra(
+            IncomingCallForegroundService.EXTRA_SILENT_NOTIFICATION,
+            isInteractive && !keyguardLocked && !forceVisibleNotification
+          )
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) ctx.startForegroundService(serviceIntent) else ctx.startService(serviceIntent)
-        Log.d(NAME, "showIncomingCallSystemUI: started IncomingCallForegroundService reason=$reason silentShade=${!keyguardLocked}")
+        Log.d(
+          NAME,
+          "showIncomingCallSystemUI: started IncomingCallForegroundService reason=$reason silentShade=${isInteractive && !keyguardLocked && !forceVisibleNotification}"
+        )
       } catch (e: Exception) {
-        Log.w(NAME, "showIncomingCallSystemUI: failed to start IncomingCallForegroundService reason=$reason", e)
+        // Система заблокировала старт FGS из фона (Android 12+). Публикуем full-screen-уведомление
+        // напрямую — ему exemption не нужен, экран входящего поднимется поверх lock screen.
+        // Тот же fallback, что в LiviFirebaseMessagingService: без него здесь была полная тишина.
+        Log.w(NAME, "showIncomingCallSystemUI: failed to start IncomingCallForegroundService reason=$reason → direct notification", e)
+        try {
+          val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+          val fullScreenAllowed = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            try { nm.canUseFullScreenIntent() != false } catch (_: Exception) { true }
+          } else true
+          val notif = if (fullScreenAllowed) {
+            LiviFirebaseMessagingService.buildIncomingCallNotification(ctx, callId, from, fromNick ?: "")
+          } else {
+            LiviFirebaseMessagingService.buildIncomingCallNotificationHeadsUpOnly(ctx, callId, from, fromNick ?: "")
+          }
+          nm.notify(LiviFirebaseMessagingService.NOTIFICATION_ID_INCOMING_CALL, notif)
+          Log.i(NAME, "showIncomingCallSystemUI: direct full-screen notification posted callId=$callId")
+        } catch (e2: Exception) {
+          Log.w(NAME, "showIncomingCallSystemUI: direct notification fallback failed", e2)
+        }
       }
     }
 
@@ -677,7 +717,25 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     if (keyguardLocked || !isInteractive) {
       startIncomingFgs("locked_or_sleep")
     } else {
-      Log.d(NAME, "showIncomingCallSystemUI: skip FGS, Activity owns unlocked incoming UI callId=$callId")
+      // Приложение в фоне с живым сокетом: startActivity выше мог быть заблокирован молча (BAL),
+      // исключения в этом случае нет. Проверяем, поднялся ли экран, и только тогда поднимаем FGS —
+      // storm'а не будет, потому что при успешном показе эта ветка ничего не делает.
+      Handler(Looper.getMainLooper()).postDelayed({
+        val shown =
+          IncomingCallActivity.isAlive && IncomingCallActivity.activeCallId == normalizedCallId
+        val ended = try {
+          EndedCallIds.isEnded(ctx, normalizedCallId)
+        } catch (_: Exception) { false }
+        if (!shown && !ended) {
+          Log.w(
+            NAME,
+            "showIncomingCallSystemUI: activity not visible after startActivity (BAL?) → FGS fallback callId=$normalizedCallId"
+          )
+          startIncomingFgs("activity_not_visible", forceVisibleNotification = true)
+        } else {
+          Log.d(NAME, "showIncomingCallSystemUI: activity launch confirmed callId=$normalizedCallId shown=$shown")
+        }
+      }, INCOMING_RELAUNCH_DELAY_MS + INCOMING_ACTIVITY_VERIFY_DELAY_MS)
     }
   }
 
@@ -2303,6 +2361,53 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     } catch (_: Exception) { }
   }
 
+  /**
+   * Открыть настройку «Полноэкранные уведомления» (Android 14+) — второй, независимый от оверлея
+   * путь показа входящего: по нему систему поднимает экран сама. На старых версиях разрешение
+   * выдано по умолчанию, поэтому просто открываем настройки уведомлений приложения.
+   */
+  @ReactMethod
+  fun openFullScreenIntentSettings() {
+    val ctx = reactApplicationContext
+    if (Build.VERSION.SDK_INT >= 34) {
+      val intent = Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT).apply {
+        data = android.net.Uri.parse("package:${ctx.packageName}")
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+      }
+      try {
+        ctx.startActivity(intent)
+        return
+      } catch (_: Exception) { }
+    }
+    openAppNotificationSettings()
+  }
+
+  /**
+   * Входящий, который не удалось показать: FGS записывает сюда факт, когда экран так и не
+   * поднялся. JS забирает запись один раз и показывает напоминание про разрешение —
+   * не на пустом месте, а после реально пропущенного из-за настроек звонка.
+   */
+  @ReactMethod
+  fun getAndClearIncomingCallDisplayFailure(promise: Promise) {
+    try {
+      val prefs = reactApplicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+      val atMs = prefs.getLong(KEY_DISPLAY_FAILURE_AT, 0L)
+      if (atMs <= 0L) {
+        promise.resolve(null)
+        return
+      }
+      val nick = prefs.getString(KEY_DISPLAY_FAILURE_NICK, "") ?: ""
+      prefs.edit().remove(KEY_DISPLAY_FAILURE_AT).remove(KEY_DISPLAY_FAILURE_NICK).apply()
+      val map = Arguments.createMap().apply {
+        putDouble("atMs", atMs.toDouble())
+        putString("fromNick", nick)
+      }
+      promise.resolve(map)
+    } catch (_: Exception) {
+      promise.resolve(null)
+    }
+  }
+
   /** Открыть настройки уведомлений приложения (Android 8+). Включите «Полноэкранные уведомления» или «Показ как всплывающее окно» для входящих звонков. */
   @ReactMethod
   fun openAppNotificationSettings() {
@@ -2939,6 +3044,22 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     /** Остановить рингтон/вибрацию на IncomingCallActivity (отдельный MediaPlayer), чтобы не накладывался на CallKeep. */
     const val ACTION_STOP_INCOMING_ACTIVITY_RINGTONE = "com.kolt12max.livi.STOP_INCOMING_ACTIVITY_RINGTONE"
     const val PREFS_NAME = "LiviDeclinePrefs"
+    /** Время последнего входящего, который не удалось показать (экран заблокирован системой). */
+    const val KEY_DISPLAY_FAILURE_AT = "incoming_display_failure_at"
+    const val KEY_DISPLAY_FAILURE_NICK = "incoming_display_failure_nick"
+
+    /** Пометить, что входящий не показался: JS потом напомнит про разрешение по факту, а не заранее. */
+    @JvmStatic
+    fun markIncomingCallDisplayFailure(context: Context, fromNick: String?) {
+      try {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+          .edit()
+          .putLong(KEY_DISPLAY_FAILURE_AT, System.currentTimeMillis())
+          .putString(KEY_DISPLAY_FAILURE_NICK, fromNick ?: "")
+          .apply()
+      } catch (_: Exception) {}
+    }
+
     @Volatile
     var ringtonePlayerForCallKeep: MediaPlayer? = null
       internal set

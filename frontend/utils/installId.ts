@@ -130,6 +130,29 @@ export async function getInstallId(): Promise<string> {
   return installIdLoadPromise;
 }
 
+/**
+ * Завести новую установку с заведомо случайным installId.
+ *
+ * Нужно, когда сервер отверг привязку (`unauthorized`): такое бывает после удаления и повторной
+ * установки приложения. installId на Android выводится из ANDROID_ID и переживает переустановку,
+ * а installSecret лежит в SecureStore и намеренно исключён из бэкапа — то есть теряется всегда.
+ * В итоге id занят прошлой установкой, секрет которой доказать уже невозможно, и обычный
+ * resetInstallId() не спасает: он вернёт ровно тот же выведенный из ANDROID_ID идентификатор.
+ * Поэтому здесь id именно случайный — иначе приложение не сможет ни войти, ни создать аккаунт.
+ */
+export async function regenerateRandomInstallId(): Promise<string> {
+  installIdLoadPromise = null;
+  installSecretLoadPromise = null;
+  const id = `inst_${randomHex(12)}`;
+  if (Platform.OS !== 'web') {
+    await setSecure(KEY, id);
+    // Старый секрет больше ни к чему не привязан: следующий getInstallSecret() создаст новый.
+    await delSecure(SECRET_KEY);
+  }
+  await AsyncStorage.setItem(KEY, id);
+  return id;
+}
+
 export async function resetInstallId(): Promise<void> {
   installIdLoadPromise = null;
   if (Platform.OS !== 'web') {

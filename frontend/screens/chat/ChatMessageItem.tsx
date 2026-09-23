@@ -101,7 +101,7 @@ export type ChatMessageItemProps = {
   ) => void;
   /** Highlight album tile while actions sheet is open. */
   albumFocusIndex?: number | null;
-  onMessagePress?: (item: any) => void;
+  onMessagePress?: (item: any, layout?: { x: number; y: number; width: number; height: number }) => void;
   onReactionPress?: (messageId: string, emoji: string) => void;
   selectionMode: boolean;
   isSelected: boolean;
@@ -119,7 +119,7 @@ export type ChatMessageItemProps = {
   animateMessagePress: (
     messageId: string,
     callback?: () => void,
-    options?: { immediate?: boolean; haptic?: boolean },
+    options?: { immediate?: boolean },
   ) => void;
   getMessageAnimation: (messageId: string) => Animated.Value;
   formatDurationDot: (ms: number) => string;
@@ -353,7 +353,7 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
               onPress={() => {
                 animateMessagePress(item.id, () => {
                   onPressImage('image', imageUri, item.name, { uris: [imageUri], index: 0, message: item });
-                }, { haptic: false });
+                });
               }}
               delayLongPress={280}
               onLongPress={() => {
@@ -382,7 +382,7 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
             onPress={() => {
               animateMessagePress(item.id, () => {
                 onPressImage('image', imageUri, item.name, { uris: [imageUri], index: 0, message: item });
-              }, { haptic: false });
+              });
             }}
             delayLongPress={280}
             onLongPress={() => {
@@ -806,11 +806,19 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
       onToggleSelect?.(String(item.id));
       return;
     }
-    if (String(item?.type || '') === 'audio') {
+    // Позиция облака нужна полосе реакций по двойному тапу — она к нему привязана.
+    const node = bubbleRef.current;
+    if (!node) {
       onMessagePress?.(item);
       return;
     }
-    onMessagePress?.(item);
+    const measure = () => {
+      node.measureInWindow((x, y, w, h) => {
+        onMessagePress?.(item, { x, y, width: w, height: h });
+      });
+    };
+    if (Platform.OS === 'android') requestAnimationFrame(measure);
+    else measure();
   }, [canToggle, item, onToggleSelect, onMessagePress]);
   const isQuotedTargetHighlighted =
     highlightedMessageId != null && String(highlightedMessageId) === String(item.id);

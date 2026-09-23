@@ -1797,6 +1797,12 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
         inAudioOnly: !!(inAudioOnlyUiRef.current || isInAudioOnlyCallUi()),
       });
     } catch {}
+    // «Устройства рядом» спрашиваем здесь, а не на старте приложения: пользователь сам полез
+    // переключать аудиовыход, и системный запрос про поиск устройств поблизости читается
+    // как часть этого действия, а не как слежка на пустом месте.
+    try {
+      (global as any).__promptBluetoothPermissionRef?.current?.();
+    } catch {}
     void cycleUserRoute();
   }, [cycleUserRoute, selectedRoute]);
   const callAudioRouteUiPending = isCallAudioBootstrapPending();

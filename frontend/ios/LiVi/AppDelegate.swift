@@ -128,46 +128,54 @@ public class AppDelegate: ExpoAppDelegate, PKPushRegistryDelegate {
     let eventType = stringValue(data["type"])?.lowercased() ?? ""
     let callId = stringValue(data["callId"]) ?? ""
     let callKitId = callKitId(from: data)
+    let from = stringValue(data["from"]) ?? stringValue(data["fromUserId"]) ?? "unknown"
+    let fromNick = stringValue(data["fromNick"]) ?? ""
 
-    if eventType == "call" {
-      if isIncomingCallExpired(data) {
-        completion()
-        return
-      }
-      let from = stringValue(data["from"]) ?? stringValue(data["fromUserId"]) ?? "unknown"
-      let fromNick = stringValue(data["fromNick"]) ?? ""
-      RNCallKeep.reportNewIncomingCall(
-        callKitId,
-        handle: from,
-        handleType: "generic",
-        hasVideo: true,
-        localizedCallerName: fromNick,
-        supportsHolding: false,
-        supportsDTMF: false,
-        supportsGrouping: false,
-        supportsUngrouping: false,
-        fromPushKit: true,
-        payload: [
-          "type": "call",
-          "callId": callId,
-          "callKitId": callKitId,
-          "from": from,
-          "fromNick": fromNick,
-          "ts": stringValue(data["ts"]) ?? "",
-          "expiresAt": stringValue(data["expiresAt"]) ?? "",
-        ],
-        withCompletionHandler: completion
-      )
-      return
-    }
+    // iOS 13+ требует reportNewIncomingCall на КАЖДЫЙ VoIP-пуш: иначе система убивает процесс,
+    // а после нескольких нарушений перестаёт доставлять VoIP-пуши вообще (звонки не дойдут).
+    // Поэтому отмена / завершение / просроченный звонок тоже репортятся и сразу закрываются:
+    // CallKit запишет их как пропущенные вместо того, чтобы звонить.
+    let shouldRing = (eventType == "call") && !isIncomingCallExpired(data)
+    // 3 = unanswered (пропущенный), 2 = remoteEnded (собеседник завершил).
+    let endReason: Int32 = eventType == "call" ? 3 : 2
 
-    if eventType == "call_canceled" || eventType == "call_ended" {
-      RNCallKeep.endCall(withUUID: callKitId, reason: 2)
+    // isCallActive == hasConnected: звонок уже принят, для этого UUID репорт был раньше —
+    // обязательство перед PushKit выполнено, достаточно закрыть.
+    if !shouldRing && RNCallKeep.isCallActive(callKitId) {
+      RNCallKeep.endCall(withUUID: callKitId, reason: endReason)
       completion()
       return
     }
 
-    completion()
+    RNCallKeep.reportNewIncomingCall(
+      callKitId,
+      handle: from,
+      handleType: "generic",
+      hasVideo: shouldRing,
+      localizedCallerName: fromNick,
+      supportsHolding: false,
+      supportsDTMF: false,
+      supportsGrouping: false,
+      supportsUngrouping: false,
+      fromPushKit: true,
+      payload: [
+        "type": eventType.isEmpty ? "call" : eventType,
+        "callId": callId,
+        "callKitId": callKitId,
+        "from": from,
+        "fromNick": fromNick,
+        "ts": stringValue(data["ts"]) ?? "",
+        "expiresAt": stringValue(data["expiresAt"]) ?? "",
+      ],
+      // Закрываем только после того, как CallKit принял репорт (completion вызывается и при
+      // ошибке CallUUIDAlreadyExists — это ожидаемо для отмены уже звонящего вызова).
+      withCompletionHandler: {
+        if !shouldRing {
+          RNCallKeep.endCall(withUUID: callKitId, reason: endReason)
+        }
+        completion()
+      }
+    )
   }
 
   // Linking API

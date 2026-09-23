@@ -1,7 +1,5 @@
 import { MediaStream } from '@livekit/react-native-webrtc';
 import { Platform, NativeModules, AppState } from 'react-native';
-import NetInfo, { type NetInfoState } from '@react-native-community/netinfo';
-import * as Device from 'expo-device';
 import {
   Room,
   RoomEvent,
@@ -10,10 +8,11 @@ import {
   type RemoteTrack,
   type RemoteTrackPublication,
   type LocalTrack,
+  type Participant,
+  type TrackPublication,
   LocalAudioTrack,
   LocalVideoTrack,
   createLocalTracks,
-  VideoPresets,
   ConnectionState,
 } from 'livekit-client';
 import {
@@ -63,78 +62,68 @@ import { markDirectCallVideoMediaActive, resetDirectCallVideoUiGlobalsAfterCallE
 import { clearDirectCallAudioRouteCarryoverAfterCallEnd } from '../../../utils/callAudioRoutePersist';
 import { getCallMediaHint } from '../../../utils/directCallMediaHint';
 
-const LIVEKIT_URL = ((process.env.EXPO_PUBLIC_LIVEKIT_URL as string | undefined) ?? '').trim();
-
-// During camera flip / track replacement LiveKit can briefly unpublish/unsubscribe video.
-// We should not treat that as "partner turned camera off" (otherwise UI flashes "Отошел").
-// Slightly longer to cover renegotiation bursts during camera flip/restart on Android.
-const REMOTE_CAM_OFF_GRACE_MS = 1400;
-// Remote participant can briefly disappear during LiveKit renegotiation/reconnect.
-// Keep this guard short: a long window makes real remote hangup wait for delayed socket call:ended.
-const RECENT_RECONNECT_DISCONNECT_GUARD_MS = 2000;
-const REMOTE_PARTICIPANT_DISCONNECT_CONFIRM_MS = 250;
-const REMOTE_MEDIA_WATCHDOG_MS = 12_000;
-const REMOTE_MEDIA_SUBSCRIBE_RETRY_MS = 5_000;
-
-function parsePublicFlag(value: string | undefined, fallback: boolean): boolean {
-  const v = String(value ?? '').trim().toLowerCase();
-  if (!v) return fallback;
-  return v === '1' || v === 'true' || v === 'yes' || v === 'on';
-}
-
-// Safe defaults for 1:1 mobile calls:
-// - dynacast ON gives bandwidth/CPU savings with low behavior risk.
-// - adaptiveStream OFF by default; can be enabled via env after soak testing.
-const LIVEKIT_ADAPTIVE_STREAM_ENABLED = parsePublicFlag(process.env.EXPO_PUBLIC_LIVEKIT_ADAPTIVE_STREAM, false);
-const LIVEKIT_DYNACAST_ENABLED = parsePublicFlag(process.env.EXPO_PUBLIC_LIVEKIT_DYNACAST, true);
-
-type CallAcceptedPayload = {
-  callId?: string;
-  from?: string;
-  fromUserId?: string;
-  roomId?: string;
-  livekitToken?: string | null;
-  livekitRoomName?: string | null;
-  livekitUrl?: string | null;
-  acceptedAt?: number | string | null;
-};
-
-type CallIncomingPayload = {
-  callId: string;
-  from: string;
-  fromNick?: string;
-};
-
-type CallEndedPayload = {
-  callId?: string;
-  roomId?: string;
-  reason?: string;
-  scope?: string;
-  from?: string;
-};
-
-type LiveKitConnectOptions = {
-  forceRelayOnly?: boolean;
-  reason?: string;
-};
-
-/**
- * Client media restore window after unexpected disconnect / network drop.
- * Server CALL_LEASE_RECONNECTING_TTL_MS is longer so lease does not race this grace
- * while the peer (or restored socket) can still heartbeat.
- */
-const MEDIA_RECONNECT_GRACE_MS = 45_000;
-/** Короткие socket flap не мигают «Восстановление…». */
-const PEER_RECONNECTING_UI_DEBOUNCE_MS = 250;
-/** Survivor: remote audio track ended/missing after call was live → arm peer UI without SFU wait. */
-const REMOTE_AUDIO_SILENCE_UI_MS = 1_800;
-/**
- * Survivor: inbound RTP stalled (airplane: track often stays readyState=live).
- * Arm «Слабая сеть» only when audio AND video RTP stay flat this long — audio-only
- * flat getStats on good Wi‑Fi (PiP / route / BT) must not flash the UI.
- */
-const REMOTE_MEDIA_PACKET_STALL_MS = 6_000;
-const REMOTE_AUDIO_PACKET_POLL_MS = 700;
+import {
+  LIVEKIT_URL,
+  REMOTE_CAM_OFF_GRACE_MS,
+  RECENT_RECONNECT_DISCONNECT_GUARD_MS,
+  REMOTE_PARTICIPANT_DISCONNECT_CONFIRM_MS,
+  REMOTE_MEDIA_WATCHDOG_MS,
+  REMOTE_MEDIA_SUBSCRIBE_RETRY_MS,
+  MEDIA_RECONNECT_GRACE_MS,
+  PEER_RECONNECTING_UI_DEBOUNCE_MS,
+  REMOTE_AUDIO_SILENCE_UI_MS,
+  REMOTE_MEDIA_PACKET_STALL_MS,
+  REMOTE_AUDIO_PACKET_POLL_MS,
+  LIVEKIT_ADAPTIVE_STREAM_ENABLED,
+  LIVEKIT_DYNACAST_ENABLED,
+  LIVEKIT_APPLY_CLIENT_ICE,
+  LIVEKIT_PEER_CONNECTION_TIMEOUT_MS,
+  SDK_RECONNECT_ADOPT_TICKS,
+  SDK_RECONNECT_POLL_MS,
+  ACCEPTED_ROOM_CONNECT_MAX_RETRIES,
+  ACCEPTED_ROOM_CONNECT_RETRY_DELAY_MS,
+  CALL_ACCEPTED_DEDUP_MS,
+} from './videoCall/constants';
+import type {
+  CallAcceptedPayload,
+  CallIncomingPayload,
+  CallEndedPayload,
+  LiveKitConnectOptions,
+} from './videoCall/types';
+import type { AcceptedCallIds } from './videoCall/types';
+import {
+  isCurrentCallEvent,
+  matchesDirectCallParticipantsRoom as matchesDirectCallParticipantsRoomOf,
+  matchesPeerCallSignal as matchesPeerCallSignalOf,
+  matchesSignalingRoom as matchesSignalingRoomOf,
+  resolveSignalingRoomId as resolveSignalingRoomIdOf,
+  type CallParticipantsIdentity,
+  type CallRoomIdentity,
+} from './videoCall/callIdentity';
+import {
+  getLocalVideoPublication as getLocalVideoPublicationOf,
+  isAudioTrackPublished as isAudioTrackPublishedIn,
+  isVideoTrackPublished as isVideoTrackPublishedIn,
+  stopLocalAudioTrackSafely,
+  stopLocalVideoTrackSafely,
+  type LocalVideoPublicationLike,
+} from './videoCall/localTrackPublications';
+import { readInboundRemotePackets } from './videoCall/mediaStats';
+import { describeRemoteTrackChange, type RemoteTrackChange } from './videoCall/remoteTrackChange';
+import { buildLiveKitRoomOptions } from './videoCall/roomOptions';
+import { buildLiveKitConnectOptions } from './videoCall/iceConnectOptions';
+import {
+  isClientDisconnectError,
+  isIgnorablePublishError,
+  isInvalidApiKeyError,
+  isLikelyDnsResolutionError,
+  isTransientPcConnectionError,
+} from './videoCall/connectErrors';
+import { CallFlowMetrics } from './videoCall/CallFlowMetrics';
+import { IceTransportLogger } from './videoCall/IceTransportLogger';
+import { NetworkReachabilityMonitor } from './videoCall/NetworkReachabilityMonitor';
+import { LocalVideoHealthWatchdog } from './videoCall/LocalVideoHealthWatchdog';
+import { RemoteTrackSubscriber } from './videoCall/RemoteTrackSubscriber';
 
 export class VideoCallSession extends SimpleEventEmitter {
   private hasLoggedLiveKitApiKeyWarning = false;
@@ -257,8 +246,12 @@ export class VideoCallSession extends SimpleEventEmitter {
   private mediaReconnectGraceTimer: ReturnType<typeof setTimeout> | null = null;
   private mediaReconnectAttemptedRelay = false;
   /** OS reachability (airplane / Wi‑Fi): drive reconnect UI + immediate re-join on restore. */
-  private netInfoUnsubscribe: (() => void) | null = null;
-  private lastNetReachable: boolean | null = null;
+  private readonly networkMonitor = new NetworkReachabilityMonitor({
+    isCallActive: () => !this.ended && !this.endCallInProgress,
+    hasLiveKitCredsForRejoin: () => this.hasLiveKitCredsForRejoin(),
+    onLinkLost: () => this.onNetworkLinkLost(),
+    onLinkRestored: () => this.onNetworkLinkRestored(),
+  });
   private networkLinkDown = false;
   private mediaRejoinInFlight = false;
   /** Survivor side: partner left LiveKit (e.g. airplane) — wait for rejoin within grace, don't hangup. */
@@ -286,16 +279,24 @@ export class VideoCallSession extends SimpleEventEmitter {
   private lastRemotePartnerCameraSideFlipAt = 0;
   private lastRebindVideoCallMountAt = 0;
 
-  private localVideoHealthTimeout: ReturnType<typeof setTimeout> | null = null;
-  private localVideoHealthAttempts = 0;
-  private roomConnectedAt = 0;
-  private remoteMediaFirstSeenAt = 0;
-  private acceptAckStartedAt = 0;
-  private acceptAckCompletedAt = 0;
-  private livekitConnectStartedAt = 0;
-  private livekitConnectedAt = 0;
-  private publishCompletedAt = 0;
-  private subscribeFirstSeenAt = 0;
+  /** Явная подписка на медиа партнёра + два страховочных прохода после connect. */
+  private readonly remoteTrackSubscriber = new RemoteTrackSubscriber({
+    isCurrentRoom: (room) => this.room === room,
+    shouldDeferVideo: (publication, context) => this.deferRemoteVideoPublication(publication, context),
+    shouldSkipRedundantDelayedApply: (track, publication) =>
+      this.shouldSkipRedundantDelayedTrackApply(track, publication),
+    applyTrack: (track, publication, participant) => this.handleTrackSubscribed(track, publication, participant),
+  });
+  /** Сторож залипшей камеры на проблемных Android (API ≤ 27 / OPPO). */
+  private readonly localVideoWatchdog = new LocalVideoHealthWatchdog({
+    isCamOn: () => this.isCamOn,
+    getRoom: () => this.room,
+    getLocalVideoTrack: () => this.localVideoTrack,
+    getCamSide: () => this.camSide,
+    recoverLocalVideo: (context) => this.recoverStuckLocalVideo(context),
+  });
+  /** Тайминги этапов подключения: accept-ack → connect → publish → первое удалённое медиа. */
+  private readonly metrics = new CallFlowMetrics();
   private remoteMediaWatchdogTimer: ReturnType<typeof setTimeout> | null = null;
   private remoteMediaRecoveryInProgress = false;
   private remoteMediaRelayRecoveryAttempted = false;
@@ -304,8 +305,11 @@ export class VideoCallSession extends SimpleEventEmitter {
   private remoteMediaParticipantWatchdogCount = 0;
   private lastLiveKitUrl: string | null = null;
   private lastLiveKitToken: string | null = null;
-  private iceTransportLogTimers: Array<ReturnType<typeof setTimeout>> = [];
-  private lastIceTransportLogSignature: string | null = null;
+  /** Отложенные снимки выбранного ICE-пути (только логи/диагностика). */
+  private readonly iceTransportLogger = new IceTransportLogger({
+    isCurrentRoom: (room) => this.room === room,
+    describeParticipants: () => ({ myUserId: this.config.myUserId, partnerUserId: this.partnerUserId }),
+  });
   private directCallAudioOnlyModePromise: Promise<void> | null = null;
 
   constructor(config: WebRTCSessionConfig) {
@@ -594,12 +598,7 @@ export class VideoCallSession extends SimpleEventEmitter {
   }
 
   private resetCallFlowMetrics(): void {
-    this.acceptAckStartedAt = 0;
-    this.acceptAckCompletedAt = 0;
-    this.livekitConnectStartedAt = 0;
-    this.livekitConnectedAt = 0;
-    this.publishCompletedAt = 0;
-    this.subscribeFirstSeenAt = 0;
+    this.metrics.resetConnectStages();
   }
 
   private acceptCallInFlight: Promise<void> | null = null;
@@ -742,7 +741,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     const run = (async () => {
       try {
         await socketReadyPromise;
-        this.acceptAckStartedAt = Date.now();
+        this.metrics.markAcceptAckStarted();
         let resp: { ok?: boolean; error?: string; duplicate?: boolean } | null = null;
         const early = await awaitEarlyIncomingCallAccept(id);
         if (early?.ok) {
@@ -762,7 +761,7 @@ export class VideoCallSession extends SimpleEventEmitter {
           // Cold-start: не кэшируем failed early; emitCallAcceptAck ждёт identity+reauth.
           resp = await emitCallAcceptAck(id);
         }
-        this.acceptAckCompletedAt = Date.now();
+        this.metrics.markAcceptAckCompleted();
         if (!resp?.ok) {
           const err = resp?.error || 'call_accept_failed';
           if (await this.recoverFromAcceptFailure(id, err)) {
@@ -773,10 +772,9 @@ export class VideoCallSession extends SimpleEventEmitter {
         if (resp.duplicate) {
           logger.info('[VideoCallSession] call:accept duplicate ack — continuing', { callId: id });
         }
-        if (this.acceptAckStartedAt > 0 && this.acceptAckCompletedAt >= this.acceptAckStartedAt) {
-          void sendClientMetrics(API_BASE, {
-            acceptAckLatencyMs: this.acceptAckCompletedAt - this.acceptAckStartedAt,
-          }).catch(() => {});
+        const acceptAckLatencyMs = this.metrics.getAcceptAckLatencyMs();
+        if (acceptAckLatencyMs !== undefined) {
+          void sendClientMetrics(API_BASE, { acceptAckLatencyMs }).catch(() => {});
         }
       } catch (e) {
         const err = (e as Error)?.message || String(e);
@@ -2309,12 +2307,7 @@ export class VideoCallSession extends SimpleEventEmitter {
           await this.unpublishOtherLocalTracks('video', this.localVideoTrack);
           await this.room.localParticipant.publishTrack(this.localVideoTrack).catch((e) => {
             const errorMsg = e?.message || String(e || '');
-            if (
-              errorMsg.includes('already') ||
-              errorMsg.includes('duplicate') ||
-              errorMsg.includes('closed') ||
-              errorMsg.includes('disconnected')
-            ) {
+            if (isIgnorablePublishError(errorMsg)) {
               logger.debug('[VideoCallSession] Ignoring publish error (already/closed)', { error: errorMsg });
               return;
             }
@@ -2329,12 +2322,7 @@ export class VideoCallSession extends SimpleEventEmitter {
           await this.unpublishOtherLocalTracks('audio', this.localAudioTrack);
           await this.room.localParticipant.publishTrack(this.localAudioTrack).catch((e) => {
             const errorMsg = e?.message || String(e || '');
-            if (
-              errorMsg.includes('already') ||
-              errorMsg.includes('duplicate') ||
-              errorMsg.includes('closed') ||
-              errorMsg.includes('disconnected')
-            ) {
+            if (isIgnorablePublishError(errorMsg)) {
               logger.debug('[VideoCallSession] Ignoring audio publish error (already/closed)', { error: errorMsg });
               return;
             }
@@ -2503,37 +2491,30 @@ export class VideoCallSession extends SimpleEventEmitter {
 
   /** roomId для socket relay (LiveKit name, pairing roomId, call:accepted room). */
   private resolveSignalingRoomId(): string | null {
-    for (const raw of [this.getRoomId(), this.currentRoomName, this.roomId, this.room?.name]) {
-      if (raw == null) continue;
-      const s = String(raw).trim();
-      if (s) return s;
-    }
-    return null;
+    return resolveSignalingRoomIdOf(this.getRoomIdentity());
+  }
+
+  /** Снимок идентификаторов комнаты для чистых предикатов из ./videoCall/callIdentity. */
+  private getRoomIdentity(): CallRoomIdentity {
+    return {
+      liveKitRoomName: this.room?.name ?? null,
+      socketRoomId: this.roomId,
+      currentRoomName: this.currentRoomName,
+    };
+  }
+
+  private getParticipantsIdentity(): CallParticipantsIdentity {
+    return { myUserId: this.config.myUserId, partnerUserId: this.partnerUserId };
   }
 
   /** roomId в pip/cam-toggle/direct-call:video-ui может совпадать с socket roomId или именем LiveKit-комнаты. */
   private matchesSignalingRoom(incoming?: string | null): boolean {
-    if (!incoming) return false;
-    const normalized = String(incoming).trim();
-    if (!normalized) return false;
-    const ids = new Set<string>();
-    for (const raw of [this.getRoomId(), this.roomId, this.room?.name, this.currentRoomName]) {
-      if (raw == null) continue;
-      const s = String(raw).trim();
-      if (s) ids.add(s);
-    }
-    return ids.has(normalized);
+    return matchesSignalingRoomOf(this.getRoomIdentity(), incoming);
   }
 
   /** room_<userA>_<userB> из call:accepted / LiveKit — когда getRoomId() ещё не заполнен на «лишней» сессии. */
   private matchesDirectCallParticipantsRoom(incoming?: string | null): boolean {
-    const normalized = String(incoming ?? '').trim();
-    if (!normalized.startsWith('room_')) return false;
-    const me = String(this.config.myUserId ?? '').trim();
-    const partner = String(this.partnerUserId ?? '').trim();
-    if (!me || !partner) return false;
-    const body = normalized.slice(5);
-    return body.includes(me) && body.includes(partner);
+    return matchesDirectCallParticipantsRoomOf(this.getParticipantsIdentity(), incoming);
   }
 
   /** Партнёр ушёл в GSM — только каноническая сессия (см. partnerExternalHoldUi.ts). */
@@ -3091,18 +3072,10 @@ export class VideoCallSession extends SimpleEventEmitter {
   }
 
   private matchesPeerCallSignal(data?: { callId?: string; roomId?: string; from?: string } | null): boolean {
-    const callId = String(data?.callId || '').trim();
-    const roomId = String(data?.roomId || '').trim();
-    const myCallId = String(this.callId || '').trim();
-    if (callId && myCallId && callId !== myCallId) return false;
-    if (roomId) {
-      if (this.matchesSignalingRoom(roomId) || this.matchesDirectCallParticipantsRoom(roomId)) {
-        return true;
-      }
-      // Сессия ещё без roomId — принимаем по callId (или без фильтров, если callId тоже пуст).
-      if (this.resolveSignalingRoomId()) return false;
-    }
-    return true;
+    return matchesPeerCallSignalOf(
+      { callId: this.callId, identity: this.getRoomIdentity(), participants: this.getParticipantsIdentity() },
+      data,
+    );
   }
 
   private clearPeerReconnectingDebounce(): void {
@@ -3197,31 +3170,7 @@ export class VideoCallSession extends SimpleEventEmitter {
 
   /** Best-effort inbound-rtp packetsReceived from subscriber PC. */
   private async readInboundRemotePackets(kind: 'audio' | 'video'): Promise<number | null> {
-    try {
-      const room: any = this.room;
-      if (!room || room.state !== 'connected') return null;
-      const pc =
-        room.engine?.pcManager?.subscriber?.pc ||
-        room.engine?.subscriber?.pc ||
-        room.engine?.pcManager?.subscriberPC ||
-        null;
-      if (!pc || typeof pc.getStats !== 'function') return null;
-      const report = await pc.getStats();
-      let packets = 0;
-      let found = false;
-      report.forEach((r: any) => {
-        const isInbound = r?.type === 'inbound-rtp';
-        const isKind = r?.kind === kind || r?.mediaType === kind;
-        if (!isInbound || !isKind) return;
-        const n = Number(r.packetsReceived);
-        if (!Number.isFinite(n)) return;
-        found = true;
-        packets = Math.max(packets, n);
-      });
-      return found ? packets : null;
-    } catch {
-      return null;
-    }
+    return readInboundRemotePackets(this.room, kind);
   }
 
   /** True when we expect inbound video RTP (cam on + subscribed track). */
@@ -3814,28 +3763,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     // КРИТИЧНО: повторный setup не должен наслаивать обработчики на тот же экземпляр.
     this.unregisterSocketHandlers('setup');
     
-    const callAcceptedHandler = (data: CallAcceptedPayload) => {
-      logger.info('[VideoCallSession] 📡 Socket event call:accepted received in handler', {
-        callId: data.callId,
-        roomId: data.roomId,
-        from: data.from,
-        fromUserId: data.fromUserId,
-        myUserId: this.config.myUserId,
-        hasLivekitToken: !!data.livekitToken,
-        hasLivekitRoomName: !!data.livekitRoomName,
-      });
-      // КРИТИЧНО: Если сессия еще не полностью инициализирована, сохраняем событие
-      // Это может произойти, если событие приходит сразу после создания сессии
-      // Но обычно это не нужно, так как setupSocketHandlers вызывается в конструкторе
-      this.handleCallAccepted(data).catch((e) => {
-        logger.error('[VideoCallSession] ❌ Failed to handle call:accepted', {
-          error: e,
-          callId: data.callId,
-          roomId: data.roomId,
-          myUserId: this.config.myUserId,
-        });
-      });
-    };
+    const callAcceptedHandler = (data: CallAcceptedPayload) => this.onSocketCallAccepted(data);
     
     const callIncomingHandler = (data: CallIncomingPayload) => {
       this.handleCallIncoming(data);
@@ -3875,80 +3803,10 @@ export class VideoCallSession extends SimpleEventEmitter {
       this.emit('callDeclined');
     };
     
-    const disconnectedHandler = () => {
-      // Временный обрыв сокета НЕ должен рвать LiveKit и сбрасывать remoteStream.
-      // Иначе UI показывает "ошибка/нет видео" и потом "соединяет" после reconnect.
-      const now = Date.now();
-      // Защита от log-spam во время нестабильной сети.
-      if (now - this.lastSocketDisconnectLogAt < 5000) return;
-      this.lastSocketDisconnectLogAt = now;
-      logger.warn('[VideoCallSession] Socket disconnected (ignored; LiveKit call continues)', {
-        callId: this.callId,
-        roomId: this.roomId,
-        hasRoom: !!this.room,
-        roomState: this.room?.state,
-      });
-      // Best-effort recovery: signaling reconnect is idempotent and should not affect active LiveKit media.
-      this.scheduleSocketRecovery();
-    };
+    const disconnectedHandler = () => this.onSocketDisconnected();
 
-    const pipStateHandler = (data: { inPiP: boolean; roomId: string; from: string }) => {
-      // Не обновлять PiP-состояние после завершения звонка — иначе у партнёра мерцание (pip:state может прийти после call:ended).
-      if (this.ended || this.endCallInProgress) {
-        logger.debug('[VideoCallSession] pip:state проигнорировано — звонок уже завершён');
-        return;
-      }
-      const currentRoomId = this.getRoomId();
-      logger.info('[VideoCallSession] 📡 Socket event pip:state received', {
-        inPiP: data.inPiP,
-        roomId: data.roomId,
-        from: data.from,
-        currentRoomId: currentRoomId,
-        roomIdsMatch: data.roomId === currentRoomId,
-      });
-      
-      // Проверяем что это событие для нашей комнаты
-      // КРИТИЧНО: Сравниваем roomId как строки, учитывая возможные различия в формате
-      const roomIdsMatch = data.roomId && currentRoomId && (
-        data.roomId === currentRoomId || 
-        data.roomId.trim() === currentRoomId.trim()
-      );
-      
-      logger.info('[VideoCallSession] pip:state - проверка совпадения roomId', {
-        receivedRoomId: data.roomId,
-        currentRoomId: currentRoomId,
-        roomIdsMatch,
-        inPiP: data.inPiP,
-        from: data.from
-      });
-      
-      if (roomIdsMatch) {
-        const previousState = this.partnerInPiP;
-        this.partnerInPiP = data.inPiP;
-        logger.info('[VideoCallSession] ✅ Обновлено состояние партнера в PiP', {
-          previousState,
-          newState: this.partnerInPiP,
-          roomId: data.roomId,
-        });
-        
-        // Уведомляем компонент об изменении состояния партнера
-        this.emit('partnerPiPStateChanged', { inPiP: data.inPiP });
-        logger.info('[VideoCallSession] ✅ Событие partnerPiPStateChanged отправлено компоненту', { inPiP: data.inPiP });
-        if (previousState === true && data.inPiP === false) {
-          this.flushPiPRemoteVideoState();
-        }
-      } else {
-        logger.warn('[VideoCallSession] ⚠️ pip:state событие проигнорировано - не совпадает roomId', {
-          receivedRoomId: data.roomId,
-          currentRoomId: currentRoomId,
-          hasReceivedRoomId: !!data.roomId,
-          hasCurrentRoomId: !!currentRoomId,
-          roomIdsMatch,
-          receivedType: typeof data.roomId,
-          currentType: typeof currentRoomId,
-        });
-      }
-    };
+    const pipStateHandler = (data: { inPiP: boolean; roomId: string; from: string }) =>
+      this.onSocketPartnerPiPState(data);
 
     const externalHoldHandler = (data: { hold?: boolean; from: string; roomId?: string }) => {
       if (data.from && data.from === socket.id) return;
@@ -3966,133 +3824,13 @@ export class VideoCallSession extends SimpleEventEmitter {
       roomId?: string;
       camSide?: CamSide;
       sideOnly?: boolean;
-    }) => {
-      const currentRoomId = this.getRoomId();
-      const incoming = data.roomId;
-
-      if (!currentRoomId && !this.roomId && !this.currentRoomName) {
-        logger.debug('[VideoCallSession] cam-toggle ignored (no active friend-call room)', {
-          enabled: data.enabled,
-          partnerRoomId: incoming,
-        });
-        return;
-      }
-      // Prefer matchesSignalingRoom: after reconnect getRoomId() / LiveKit name can differ
-      // from peer's roomId string while still being the same call.
-      if (
-        incoming &&
-        !this.matchesSignalingRoom(incoming) &&
-        !this.matchesDirectCallParticipantsRoom(incoming)
-      ) {
-        logger.debug('[VideoCallSession] cam-toggle ignored (room mismatch)', {
-          receivedRoomId: incoming,
-          currentRoomId,
-        });
-        return;
-      }
-      if (!incoming) {
-        logger.debug('[VideoCallSession] cam-toggle ignored (missing roomId)', {
-          enabled: data.enabled,
-        });
-        return;
-      }
-
-      logger.info('[VideoCallSession] 📡 cam-toggle applied', {
-        enabled: data.enabled,
-        from: data.from,
-        roomId: incoming,
-        camSide: data.camSide,
-        sideOnly: !!data.sideOnly,
-      });
-
-      const nextCamSide: CamSide = data.camSide === 'back' ? 'back' : 'front';
-      if (this.remoteCamSide !== nextCamSide) {
-        this.remoteCamSide = nextCamSide;
-        this.notifyRemoteCamSideChange(nextCamSide);
-      }
-      if (data.sideOnly) {
-        this.lastRemotePartnerCameraSideFlipAt = Date.now();
-        return;
-      }
-      this.remotePartnerDeclaredCamOff = !data.enabled;
-      this.remoteCamEnabled = data.enabled;
-      this.clearRemoteCamOffTimeout();
-
-      this.remoteViewKey = Date.now();
-      this.emit('remoteViewKeyChanged', this.remoteViewKey);
-
-      this.notifyRemoteCamStateChange(data.enabled);
-      try {
-        // Партнёр включил видео → remount локального preview у нас (Android RTCView иначе часто чернеет).
-        if (data.enabled && this.isCamOn && this.localVideoTrack) {
-          this.emitLocalMediaStream({ forceNewStream: true });
-        }
-      } catch (_) {}
-      try {
-        const pipUpdate = (global as any).__pipUpdateStateRef?.current;
-        if (typeof pipUpdate === 'function') pipUpdate({ remoteCamOn: data.enabled });
-      } catch (_) {}
-      try {
-        const g = global as any;
-        const pipVisible = g.__pipVisibleRef?.current === true;
-        if (data.enabled) {
-          // After reconnect, peer video publish may already exist — pull it in.
-          this.resubscribeRemoteVideoIfNeeded('cam_toggle_on');
-          // Preload remote video even on audio UI — иначе к leave в system PiP track ещё unsub'нут.
-          this.ensureRemoteVideoForSystemPiPCapture();
-          this.activateSystemPiPPeerVideoCapture('cam_toggle');
-          if (pipVisible && g.__pipInSystemModeRef?.current !== true) {
-            if (this.deferRemoteVideoSubscription || !this.remoteStreamHasLiveVideoTrack()) {
-              this.ensureRemoteVideoForPiP();
-            } else {
-              this.flushPiPRemoteVideoState({ bumpKey: true });
-            }
-          }
-        }
-      } catch (_) {}
-      logger.info('[VideoCallSession] ✅ onRemoteCamStateChange via cam-toggle', { enabled: data.enabled });
-    };
+    }) => this.onSocketPartnerCamToggle(data);
 
     const directCallVideoUiHandler = (data: {
       inVideoCallUi: boolean;
       from: string;
       roomId?: string;
-    }) => {
-      const incoming = data.roomId;
-      if (incoming && !this.matchesSignalingRoom(incoming)) {
-        logger.debug('[VideoCallSession] direct-call:video-ui ignored (room mismatch)', {
-          receivedRoomId: incoming,
-          currentRoomId: this.getRoomId(),
-          socketRoomId: this.roomId,
-          livekitRoomName: this.room?.name,
-        });
-        return;
-      }
-      if (this.ended || this.endCallInProgress) return;
-      if (data.from && data.from === socket.id) return;
-      logger.info('[VideoCallSession] direct-call:video-ui received', {
-        inVideoCallUi: data.inVideoCallUi,
-        roomId: incoming,
-      });
-      this.partnerPeerDirectCallVideoUi = !!data.inVideoCallUi;
-      if (!data.inVideoCallUi) {
-        this.remotePartnerDeclaredCamOff = true;
-        if (this.remoteCamEnabled) {
-          this.remoteCamEnabled = false;
-          this.notifyRemoteCamStateChange(false);
-          try {
-            const pipUpdate = (global as any).__pipUpdateStateRef?.current;
-            if (typeof pipUpdate === 'function') pipUpdate({ remoteCamOn: false });
-          } catch (_) {}
-        }
-      }
-      if (!data.inVideoCallUi && this.config.getIsDirectCall?.() && this.partnerInPiP) {
-        this.partnerInPiP = false;
-        this.emit('partnerPiPStateChanged', { inPiP: false });
-      }
-      this.emit('partnerDirectCallVideoUiChanged', { inVideoCallUi: !!data.inVideoCallUi });
-      this.config.callbacks.onPeerDirectCallVideoUiChange?.(data.inVideoCallUi);
-    };
+    }) => this.onSocketPartnerDirectCallVideoUi(data);
 
     const peerReconnectingHandler = (data?: { callId?: string; roomId?: string; from?: string }) => {
       // Партнёр потерял сеть (быстрый серверный сигнал) — UI после короткого debounce.
@@ -4100,20 +3838,8 @@ export class VideoCallSession extends SimpleEventEmitter {
       if (this.peerReconnecting) return;
       this.armPeerReconnectingUi('call:peerReconnecting');
     };
-    const peerRecoveredHandler = (data?: { callId?: string; roomId?: string; from?: string }) => {
-      if (!this.matchesPeerCallSignal(data)) return;
-      // Socket reattach ≠ media. While still waiting for LiveKit peer, extend grace so
-      // stale peerRecovered + grace_timeout don't hang up before real rejoin.
-      if (this.waitingForRemotePeerRejoin || this.mediaReconnectInProgress) {
-        this.armOrExtendMediaReconnectGrace();
-      }
-      // Socket вернулся раньше медиа: не гасим UI сразу. Если debounce ещё не всплыл — отменяем мигание.
-      if (!this.peerReconnecting) {
-        this.clearPeerReconnectingDebounce();
-        return;
-      }
-      this.tryClearPeerReconnectingAfterMedia('call:peerRecovered');
-    };
+    const peerRecoveredHandler = (data?: { callId?: string; roomId?: string; from?: string }) =>
+      this.onSocketPeerRecovered(data);
 
     // Сохраняем ссылки на обработчики для возможности их удаления
     this.socketHandlers.callAccepted = callAcceptedHandler;
@@ -4166,6 +3892,259 @@ export class VideoCallSession extends SimpleEventEmitter {
     ];
   }
 
+  /** call:accepted — партнёр принял звонок: поднимаем LiveKit по пришедшим кредам. */
+  private onSocketCallAccepted(data: CallAcceptedPayload): void {
+    logger.info('[VideoCallSession] 📡 Socket event call:accepted received in handler', {
+      callId: data.callId,
+      roomId: data.roomId,
+      from: data.from,
+      fromUserId: data.fromUserId,
+      myUserId: this.config.myUserId,
+      hasLivekitToken: !!data.livekitToken,
+      hasLivekitRoomName: !!data.livekitRoomName,
+    });
+    // КРИТИЧНО: Если сессия еще не полностью инициализирована, сохраняем событие
+    // Это может произойти, если событие приходит сразу после создания сессии
+    // Но обычно это не нужно, так как setupSocketHandlers вызывается в конструкторе
+    this.handleCallAccepted(data).catch((e) => {
+      logger.error('[VideoCallSession] ❌ Failed to handle call:accepted', {
+        error: e,
+        callId: data.callId,
+        roomId: data.roomId,
+        myUserId: this.config.myUserId,
+      });
+    });
+  }
+
+  /** Socket отвалился: сам по себе это не конец звонка — медиа может жить дальше. */
+  private onSocketDisconnected(): void {
+    // Временный обрыв сокета НЕ должен рвать LiveKit и сбрасывать remoteStream.
+    // Иначе UI показывает "ошибка/нет видео" и потом "соединяет" после reconnect.
+    const now = Date.now();
+    // Защита от log-spam во время нестабильной сети.
+    if (now - this.lastSocketDisconnectLogAt < 5000) return;
+    this.lastSocketDisconnectLogAt = now;
+    logger.warn('[VideoCallSession] Socket disconnected (ignored; LiveKit call continues)', {
+      callId: this.callId,
+      roomId: this.roomId,
+      hasRoom: !!this.room,
+      roomState: this.room?.state,
+    });
+    // Best-effort recovery: signaling reconnect is idempotent and should not affect active LiveKit media.
+    this.scheduleSocketRecovery();
+  }
+
+  /** pip:state — партнёр свернул/развернул звонок в PiP. */
+  private onSocketPartnerPiPState(data: { inPiP: boolean; roomId: string; from: string }): void {
+    // Не обновлять PiP-состояние после завершения звонка — иначе у партнёра мерцание (pip:state может прийти после call:ended).
+    if (this.ended || this.endCallInProgress) {
+      logger.debug('[VideoCallSession] pip:state проигнорировано — звонок уже завершён');
+      return;
+    }
+    const currentRoomId = this.getRoomId();
+    logger.info('[VideoCallSession] 📡 Socket event pip:state received', {
+      inPiP: data.inPiP,
+      roomId: data.roomId,
+      from: data.from,
+      currentRoomId: currentRoomId,
+      roomIdsMatch: data.roomId === currentRoomId,
+    });
+    
+    // Проверяем что это событие для нашей комнаты
+    // КРИТИЧНО: Сравниваем roomId как строки, учитывая возможные различия в формате
+    const roomIdsMatch = data.roomId && currentRoomId && (
+      data.roomId === currentRoomId || 
+      data.roomId.trim() === currentRoomId.trim()
+    );
+    
+    logger.info('[VideoCallSession] pip:state - проверка совпадения roomId', {
+      receivedRoomId: data.roomId,
+      currentRoomId: currentRoomId,
+      roomIdsMatch,
+      inPiP: data.inPiP,
+      from: data.from
+    });
+    
+    if (roomIdsMatch) {
+      const previousState = this.partnerInPiP;
+      this.partnerInPiP = data.inPiP;
+      logger.info('[VideoCallSession] ✅ Обновлено состояние партнера в PiP', {
+        previousState,
+        newState: this.partnerInPiP,
+        roomId: data.roomId,
+      });
+      
+      // Уведомляем компонент об изменении состояния партнера
+      this.emit('partnerPiPStateChanged', { inPiP: data.inPiP });
+      logger.info('[VideoCallSession] ✅ Событие partnerPiPStateChanged отправлено компоненту', { inPiP: data.inPiP });
+      if (previousState === true && data.inPiP === false) {
+        this.flushPiPRemoteVideoState();
+      }
+    } else {
+      logger.warn('[VideoCallSession] ⚠️ pip:state событие проигнорировано - не совпадает roomId', {
+        receivedRoomId: data.roomId,
+        currentRoomId: currentRoomId,
+        hasReceivedRoomId: !!data.roomId,
+        hasCurrentRoomId: !!currentRoomId,
+        roomIdsMatch,
+        receivedType: typeof data.roomId,
+        currentType: typeof currentRoomId,
+      });
+    }
+  }
+
+  /** cam-toggle — партнёр включил/выключил камеру или развернул её (sideOnly). */
+  private onSocketPartnerCamToggle(data: {
+      enabled: boolean;
+      from: string;
+      roomId?: string;
+      camSide?: CamSide;
+      sideOnly?: boolean;
+    }): void {
+    const currentRoomId = this.getRoomId();
+    const incoming = data.roomId;
+
+    if (!currentRoomId && !this.roomId && !this.currentRoomName) {
+      logger.debug('[VideoCallSession] cam-toggle ignored (no active friend-call room)', {
+        enabled: data.enabled,
+        partnerRoomId: incoming,
+      });
+      return;
+    }
+    // Prefer matchesSignalingRoom: after reconnect getRoomId() / LiveKit name can differ
+    // from peer's roomId string while still being the same call.
+    if (
+      incoming &&
+      !this.matchesSignalingRoom(incoming) &&
+      !this.matchesDirectCallParticipantsRoom(incoming)
+    ) {
+      logger.debug('[VideoCallSession] cam-toggle ignored (room mismatch)', {
+        receivedRoomId: incoming,
+        currentRoomId,
+      });
+      return;
+    }
+    if (!incoming) {
+      logger.debug('[VideoCallSession] cam-toggle ignored (missing roomId)', {
+        enabled: data.enabled,
+      });
+      return;
+    }
+
+    logger.info('[VideoCallSession] 📡 cam-toggle applied', {
+      enabled: data.enabled,
+      from: data.from,
+      roomId: incoming,
+      camSide: data.camSide,
+      sideOnly: !!data.sideOnly,
+    });
+
+    const nextCamSide: CamSide = data.camSide === 'back' ? 'back' : 'front';
+    if (this.remoteCamSide !== nextCamSide) {
+      this.remoteCamSide = nextCamSide;
+      this.notifyRemoteCamSideChange(nextCamSide);
+    }
+    if (data.sideOnly) {
+      this.lastRemotePartnerCameraSideFlipAt = Date.now();
+      return;
+    }
+    this.remotePartnerDeclaredCamOff = !data.enabled;
+    this.remoteCamEnabled = data.enabled;
+    this.clearRemoteCamOffTimeout();
+
+    this.remoteViewKey = Date.now();
+    this.emit('remoteViewKeyChanged', this.remoteViewKey);
+
+    this.notifyRemoteCamStateChange(data.enabled);
+    try {
+      // Партнёр включил видео → remount локального preview у нас (Android RTCView иначе часто чернеет).
+      if (data.enabled && this.isCamOn && this.localVideoTrack) {
+        this.emitLocalMediaStream({ forceNewStream: true });
+      }
+    } catch (_) {}
+    try {
+      const pipUpdate = (global as any).__pipUpdateStateRef?.current;
+      if (typeof pipUpdate === 'function') pipUpdate({ remoteCamOn: data.enabled });
+    } catch (_) {}
+    try {
+      const g = global as any;
+      const pipVisible = g.__pipVisibleRef?.current === true;
+      if (data.enabled) {
+        // After reconnect, peer video publish may already exist — pull it in.
+        this.resubscribeRemoteVideoIfNeeded('cam_toggle_on');
+        // Preload remote video even on audio UI — иначе к leave в system PiP track ещё unsub'нут.
+        this.ensureRemoteVideoForSystemPiPCapture();
+        this.activateSystemPiPPeerVideoCapture('cam_toggle');
+        if (pipVisible && g.__pipInSystemModeRef?.current !== true) {
+          if (this.deferRemoteVideoSubscription || !this.remoteStreamHasLiveVideoTrack()) {
+            this.ensureRemoteVideoForPiP();
+          } else {
+            this.flushPiPRemoteVideoState({ bumpKey: true });
+          }
+        }
+      }
+    } catch (_) {}
+    logger.info('[VideoCallSession] ✅ onRemoteCamStateChange via cam-toggle', { enabled: data.enabled });
+  }
+
+  /** direct-call:video-ui — партнёр перешёл между видео- и аудио-экраном звонка. */
+  private onSocketPartnerDirectCallVideoUi(data: {
+      inVideoCallUi: boolean;
+      from: string;
+      roomId?: string;
+    }): void {
+    const incoming = data.roomId;
+    if (incoming && !this.matchesSignalingRoom(incoming)) {
+      logger.debug('[VideoCallSession] direct-call:video-ui ignored (room mismatch)', {
+        receivedRoomId: incoming,
+        currentRoomId: this.getRoomId(),
+        socketRoomId: this.roomId,
+        livekitRoomName: this.room?.name,
+      });
+      return;
+    }
+    if (this.ended || this.endCallInProgress) return;
+    if (data.from && data.from === socket.id) return;
+    logger.info('[VideoCallSession] direct-call:video-ui received', {
+      inVideoCallUi: data.inVideoCallUi,
+      roomId: incoming,
+    });
+    this.partnerPeerDirectCallVideoUi = !!data.inVideoCallUi;
+    if (!data.inVideoCallUi) {
+      this.remotePartnerDeclaredCamOff = true;
+      if (this.remoteCamEnabled) {
+        this.remoteCamEnabled = false;
+        this.notifyRemoteCamStateChange(false);
+        try {
+          const pipUpdate = (global as any).__pipUpdateStateRef?.current;
+          if (typeof pipUpdate === 'function') pipUpdate({ remoteCamOn: false });
+        } catch (_) {}
+      }
+    }
+    if (!data.inVideoCallUi && this.config.getIsDirectCall?.() && this.partnerInPiP) {
+      this.partnerInPiP = false;
+      this.emit('partnerPiPStateChanged', { inPiP: false });
+    }
+    this.emit('partnerDirectCallVideoUiChanged', { inVideoCallUi: !!data.inVideoCallUi });
+    this.config.callbacks.onPeerDirectCallVideoUiChange?.(data.inVideoCallUi);
+  }
+
+  /** call:peerRecovered — у партнёра связь восстановилась. */
+  private onSocketPeerRecovered(data?: { callId?: string; roomId?: string; from?: string }): void {
+    if (!this.matchesPeerCallSignal(data)) return;
+    // Socket reattach ≠ media. While still waiting for LiveKit peer, extend grace so
+    // stale peerRecovered + grace_timeout don't hang up before real rejoin.
+    if (this.waitingForRemotePeerRejoin || this.mediaReconnectInProgress) {
+      this.armOrExtendMediaReconnectGrace();
+    }
+    // Socket вернулся раньше медиа: не гасим UI сразу. Если debounce ещё не всплыл — отменяем мигание.
+    if (!this.peerReconnecting) {
+      this.clearPeerReconnectingDebounce();
+      return;
+    }
+    this.tryClearPeerReconnectingAfterMedia('call:peerRecovered');
+  }
+
   private clearSocketRecoveryTimer(): void {
     if (!this.socketRecoveryTimer) return;
     clearTimeout(this.socketRecoveryTimer);
@@ -4192,6 +4171,149 @@ export class VideoCallSession extends SimpleEventEmitter {
     }, 700);
   }
 
+  /**
+   * call:accepted обрабатывает только «активная» сессия — та, что лежит в глобальном
+   * __webrtcSessionRef. Иначе после ремаунта VideoCall несколько экземпляров разом
+   * полезут в комнату, и одна из попыток упадёт с «could not establish pc connection».
+   *
+   * Ref забираем себе, если владелец уже мёртв или занят другим звонком: иначе ремаунт
+   * проглатывает первый accept. Уступаем только живой сессии того же звонка.
+   *
+   * false → этим звонком занимается другая сессия.
+   */
+  private claimActiveSessionForCallAccepted(callId: string | null, targetRoomName: string | null): boolean {
+    const globalSessionRef = (global as any).__webrtcSessionRef;
+    const globalSession = globalSessionRef?.current;
+    if (globalSession == null || globalSession === this) return true;
+
+    const claimRef = () => {
+      if (globalSessionRef && typeof globalSessionRef.current !== 'undefined') {
+        globalSessionRef.current = this;
+      }
+    };
+
+    if (this.isSessionEndedLike(globalSession)) {
+      claimRef();
+      logger.info('[VideoCallSession] Reclaimed global session ref from ended session', {
+        callId,
+        roomName: targetRoomName,
+        myUserId: this.config.myUserId,
+      });
+      return true;
+    }
+
+    const otherCallId =
+      typeof (globalSession as any).getCallId === 'function'
+        ? String((globalSession as any).getCallId() || '').trim()
+        : '';
+    const otherRoomState = (globalSession as any)?.room?.state as string | undefined;
+    const otherBusy =
+      otherRoomState === 'connected' || otherRoomState === 'connecting' || otherRoomState === 'reconnecting';
+    const sameCall = !!callId && otherCallId === String(callId);
+
+    if (sameCall && otherBusy) {
+      logger.info('[VideoCallSession] ⏭️ Another session is active for same call, skipping call:accepted', {
+        callId,
+        roomName: targetRoomName,
+        otherRoomState,
+        myUserId: this.config.myUserId,
+      });
+      this.detachFromCall();
+      return false;
+    }
+
+    claimRef();
+    logger.info('[VideoCallSession] Reclaimed global session ref from idle/mismatched session', {
+      callId,
+      otherCallId: otherCallId || null,
+      otherRoomState: otherRoomState || null,
+      myUserId: this.config.myUserId,
+    });
+    try {
+      if (typeof (globalSession as any).detachFromCall === 'function') {
+        (globalSession as any).detachFromCall();
+      }
+    } catch (_) {}
+    return true;
+  }
+
+  /**
+   * Одно и то же call:accepted приезжает и сокетом, и пушем, и после reauth.
+   * Тот же звонок с НОВЫМ токеном дубликатом не считаем — его надо обработать заново.
+   */
+  private isDuplicateCallAccepted(callId: string | null, targetRoomName: string | null, tokenFp: string): boolean {
+    const last = this.lastProcessedCallAccepted;
+    if (
+      !last ||
+      last.callId !== callId ||
+      last.roomName !== targetRoomName ||
+      last.tokenFp !== tokenFp ||
+      Date.now() - last.timestamp >= CALL_ACCEPTED_DEDUP_MS
+    ) {
+      return false;
+    }
+    logger.info('[VideoCallSession] ⏭️ Already processed this call:accepted event, skipping', {
+      callId,
+      roomName: targetRoomName,
+      lastProcessed: last.timestamp,
+      timeSince: Date.now() - last.timestamp,
+    });
+    return true;
+  }
+
+  private markCallAcceptedProcessed(callId: string | null, targetRoomName: string | null, tokenFp: string): void {
+    this.lastProcessedCallAccepted = { callId, roomName: targetRoomName, tokenFp, timestamp: Date.now() };
+  }
+
+  /**
+   * Мы уже в нужной комнате (повторный accept после ремаунта / пуша). Переподключаться
+   * нельзя — это как раз и даёт «could not establish pc connection». Вместо этого
+   * освежаем данные партнёра и подтверждаем UI, что звонок принят.
+   *
+   * true → событие обработано здесь.
+   */
+  private refreshAlreadyConnectedCall(ids: AcceptedCallIds): boolean {
+    const { callId, roomId, partnerId, partnerUserId, acceptedAt, targetRoomName, tokenFp } = ids;
+    const alreadyInTargetRoom =
+      !!this.room &&
+      this.room.state === 'connected' &&
+      !!this.currentRoomName &&
+      !!targetRoomName &&
+      this.currentRoomName === targetRoomName;
+    if (!alreadyInTargetRoom) return false;
+
+    logger.info('[VideoCallSession] ⏭️ Already connected to this room, skipping reconnection', {
+      roomName: targetRoomName,
+      currentRoomName: this.currentRoomName,
+      roomState: this.room?.state,
+      callId,
+    });
+
+    if (partnerUserId && partnerUserId !== this.partnerUserId) {
+      this.partnerUserId = partnerUserId;
+      this.notifyPartnerIdChange(partnerId);
+    }
+    if (partnerId && partnerId !== this.partnerId) {
+      this.partnerId = partnerId;
+      this.notifyPartnerIdChange(partnerId);
+    }
+    if (callId && callId !== this.callId) {
+      this.callId = callId;
+      this.notifyCallIdChange(callId);
+    }
+    if (Number.isFinite(acceptedAt) && acceptedAt > 0) {
+      this.config.callbacks.onCallAcceptedAtChange?.(acceptedAt);
+    }
+    if (roomId && roomId !== this.roomId) {
+      this.roomId = roomId;
+      this.notifyRoomIdChange(roomId);
+    }
+    this.config.setIsInactiveState?.(false);
+    this.config.setFriendCallAccepted?.(true);
+    this.markCallAcceptedProcessed(callId, targetRoomName, tokenFp);
+    return true;
+  }
+
   private async handleCallAccepted(data: CallAcceptedPayload): Promise<void> {
     const targetRoomName = data.livekitRoomName ?? data.roomId ?? null;
     const callId = data.callId ?? null;
@@ -4210,87 +4332,12 @@ export class VideoCallSession extends SimpleEventEmitter {
     }
     prefetchDirectCallIce('session:call-accepted');
     
-    // КРИТИЧНО: Обрабатывать call:accepted должна только "активная" сессия (та, что в глобальном ref).
-    // Иначе несколько экземпляров сессии (например, до очистки старых при ремаунте) все подключаются к комнате
-    // и одна попытка падает с "could not establish pc connection".
-    const globalSessionRef = (global as any).__webrtcSessionRef;
-    const globalSession = globalSessionRef?.current;
-    if (globalSession != null && globalSession !== this) {
-      if (this.isSessionEndedLike(globalSession)) {
-        if (globalSessionRef && typeof globalSessionRef.current !== 'undefined') {
-          globalSessionRef.current = this;
-        }
-        logger.info('[VideoCallSession] Reclaimed global session ref from ended session', {
-          callId,
-          roomName: targetRoomName,
-          myUserId: this.config.myUserId,
-        });
-      } else {
-        const otherCallId =
-          typeof (globalSession as any).getCallId === 'function'
-            ? String((globalSession as any).getCallId() || '').trim()
-            : '';
-        const otherRoomState = (globalSession as any)?.room?.state as string | undefined;
-        const otherBusy =
-          otherRoomState === 'connected' ||
-          otherRoomState === 'connecting' ||
-          otherRoomState === 'reconnecting';
-        const sameCall = !!callId && otherCallId === String(callId);
-        if (sameCall && otherBusy) {
-          logger.info('[VideoCallSession] ⏭️ Another session is active for same call, skipping call:accepted', {
-            callId,
-            roomName: targetRoomName,
-            otherRoomState,
-            myUserId: this.config.myUserId,
-          });
-          this.detachFromCall();
-          return;
-        }
-        // Другая сессия жива, но не к этому звонку / ещё не подключается — забираем ref,
-        // иначе remount глотает первый accept.
-        if (globalSessionRef && typeof globalSessionRef.current !== 'undefined') {
-          globalSessionRef.current = this;
-        }
-        logger.info('[VideoCallSession] Reclaimed global session ref from idle/mismatched session', {
-          callId,
-          otherCallId: otherCallId || null,
-          otherRoomState: otherRoomState || null,
-          myUserId: this.config.myUserId,
-        });
-        try {
-          if (typeof (globalSession as any).detachFromCall === 'function') {
-            (globalSession as any).detachFromCall();
-          }
-        } catch (_) {}
-      }
-    }
+    if (!this.claimActiveSessionForCallAccepted(callId, targetRoomName)) return;
     
-    // КРИТИЧНО: Защита от повторной обработки одного и того же события (socket + FCM + reauth).
-    // Учитываем префикс JWT: повтор с тем же callId/room, но новым токеном — обрабатываем снова.
     const tokenFp = (data.livekitToken || '').slice(0, 48);
-    if (
-      this.lastProcessedCallAccepted &&
-      this.lastProcessedCallAccepted.callId === callId &&
-      this.lastProcessedCallAccepted.roomName === targetRoomName &&
-      this.lastProcessedCallAccepted.tokenFp === tokenFp &&
-      Date.now() - this.lastProcessedCallAccepted.timestamp < 60_000
-    ) {
-      logger.info('[VideoCallSession] ⏭️ Already processed this call:accepted event, skipping', {
-        callId,
-        roomName: targetRoomName,
-        lastProcessed: this.lastProcessedCallAccepted.timestamp,
-        timeSince: Date.now() - this.lastProcessedCallAccepted.timestamp,
-      });
-      return;
-    }
-
-    // Сразу помечаем событие как обрабатываемое, чтобы параллельные вызовы не стартовали второй Room.connect
-    this.lastProcessedCallAccepted = {
-      callId,
-      roomName: targetRoomName,
-      tokenFp,
-      timestamp: Date.now(),
-    };
+    if (this.isDuplicateCallAccepted(callId, targetRoomName, tokenFp)) return;
+    // Помечаем сразу, чтобы параллельные вызовы не стартовали второй Room.connect.
+    this.markCallAcceptedProcessed(callId, targetRoomName, tokenFp);
     
     logger.info('[VideoCallSession] 📥 Received call:accepted event', {
       callId: data.callId,
@@ -4312,48 +4359,15 @@ export class VideoCallSession extends SimpleEventEmitter {
     const partnerUserId = data.fromUserId ?? null;
     const acceptedAt = Number(data.acceptedAt || 0);
 
-    // КРИТИЧНО: Проверяем, не подключены ли уже к этой комнате
-    // Это предотвращает повторное подключение и ошибку "could not establish pc connection"
-    if (this.room && 
-        this.room.state === 'connected' && 
-        this.currentRoomName && 
-        targetRoomName && 
-        this.currentRoomName === targetRoomName) {
-      logger.info('[VideoCallSession] ⏭️ Already connected to this room, skipping reconnection', {
-        roomName: targetRoomName,
-        currentRoomName: this.currentRoomName,
-        roomState: this.room.state,
-        callId: data.callId,
-      });
-      // Обновляем данные о партнере, если они изменились
-      if (partnerUserId && partnerUserId !== this.partnerUserId) {
-        this.partnerUserId = partnerUserId;
-        this.notifyPartnerIdChange(partnerId);
-      }
-      if (partnerId && partnerId !== this.partnerId) {
-        this.partnerId = partnerId;
-        this.notifyPartnerIdChange(partnerId);
-      }
-      if (callId && callId !== this.callId) {
-        this.callId = callId;
-        this.notifyCallIdChange(callId);
-      }
-      if (Number.isFinite(acceptedAt) && acceptedAt > 0) {
-        this.config.callbacks.onCallAcceptedAtChange?.(acceptedAt);
-      }
-      if (roomId && roomId !== this.roomId) {
-        this.roomId = roomId;
-        this.notifyRoomIdChange(roomId);
-      }
-      this.config.setIsInactiveState?.(false);
-      this.config.setFriendCallAccepted?.(true);
-      // Сохраняем информацию о том, что событие обработано
-      this.lastProcessedCallAccepted = {
-        callId,
-        roomName: targetRoomName,
-        tokenFp: (data.livekitToken || '').slice(0, 48),
-        timestamp: Date.now(),
-      };
+    if (this.refreshAlreadyConnectedCall({
+      callId,
+      roomId,
+      partnerId,
+      partnerUserId,
+      acceptedAt,
+      targetRoomName,
+      tokenFp,
+    })) {
       return;
     }
     
@@ -4394,159 +4408,218 @@ export class VideoCallSession extends SimpleEventEmitter {
     
     // Если токен пришел в событии (новый формат)
     if (data.livekitToken && data.livekitRoomName) {
-      // Параллельный prewarm пропускаем для входящего accept: иначе камера стартует до portrait UI.
-      if (!this.incomingAcceptDeferCapture) {
-        void this.ensureLocalTracks().catch((e) => {
-          logger.warn('[VideoCallSession] ensureLocalTracks (call:accepted token path) failed', {
-            error: (e as Error)?.message || String(e),
-            callId: data.callId,
-          });
+      await this.connectUsingAcceptedToken(data, targetRoomName, callId, partnerUserId, resolvedLivekitUrl);
+      return;
+    }
+    
+    // Fallback: запрашиваем токен через API
+    if (roomId) {
+      await this.connectUsingTokenApiFallback(roomId, targetRoomName);
+    } else {
+      this.notifyLoadingChange(false);
+    }
+  }
+
+  /**
+   * call:accepted принёс готовый LiveKit-токен — подключаемся напрямую.
+   * Все выходы здесь терминальные: до fallback-пути через token API дело не доходит.
+   */
+  /**
+   * К той же комнате уже идёт подключение — дожидаемся его вместо второго Room.connect.
+   * currentRoomName до успешного join ещё пуст, поэтому сравниваем «пусто или совпало».
+   *
+   * true → соединение переиспользовано, вызывающему больше делать нечего.
+   */
+  private async reuseInFlightConnection(targetRoomName: string | null): Promise<boolean> {
+    if (!this.connectingPromise || !targetRoomName) return false;
+    if (this.currentRoomName && this.currentRoomName !== targetRoomName) return false;
+
+    logger.info('[VideoCallSession] ⏳ Connection to same room already in progress, waiting for completion', {
+      targetRoomName,
+      currentRoomName: this.currentRoomName,
+    });
+    try {
+      const result = await this.connectingPromise;
+      if (result && this.room && this.room.state === 'connected' && this.currentRoomName === targetRoomName) {
+        if (this.ended) return true;
+        logger.info('[VideoCallSession] ✅ Reused existing connection to room', {
+          roomName: this.currentRoomName,
         });
+        this.config.setIsInactiveState?.(false);
+        this.config.setFriendCallAccepted?.(true);
+        this.emit('callAnswered');
+        return true;
       }
-      logger.info('[VideoCallSession] 🔑 Connecting to LiveKit with token from call:accepted', {
-        roomName: data.livekitRoomName,
-        tokenLength: data.livekitToken.length,
+    } catch (e) {
+      logger.warn('[VideoCallSession] Existing connection failed, will create new one', e);
+    }
+    return false;
+  }
+
+  /**
+   * Девайс-глобальная блокировка: к одной комнате подключается ровно одна сессия.
+   *
+   * При ремаунте VideoCall новый экземпляр перезаписывает __webrtcSessionRef, и без
+   * блокировки несколько сессий успевают стартовать подключение — у второго участника
+   * вечный лоадер. Если комнату уже занял кто-то живой, эта сессия уступает и уводит
+   * UI на владельца блокировки, иначе пользователь смотрит на спиннер чужой сессии.
+   *
+   * false → подключаться не нам.
+   */
+  private acquireRoomConnectLock(targetRoomName: string | null): boolean {
+    const g = global as any;
+    if (!g.__connectingToRoomRef) {
+      g.__connectingToRoomRef = { roomName: null as string | null, session: null as VideoCallSession | null };
+    }
+    const roomLock = g.__connectingToRoomRef as { roomName: string | null; session: VideoCallSession | null };
+
+    const heldByOther = roomLock.roomName === targetRoomName && roomLock.session != null && roomLock.session !== this;
+    if (heldByOther && this.isSessionEndedLike(roomLock.session)) {
+      logger.info('[VideoCallSession] Cleared stale room connect lock from ended session', {
+        roomName: targetRoomName,
         myUserId: this.config.myUserId,
-        partnerUserId: partnerUserId,
       });
-      
-      // КРИТИЧНО: Если уже идёт подключение к целевой комнате — ждём (currentRoomName ещё null до успешного join)
-      if (
-        this.connectingPromise &&
-        targetRoomName &&
-        (!this.currentRoomName || this.currentRoomName === targetRoomName)
-      ) {
-        logger.info('[VideoCallSession] ⏳ Connection to same room already in progress, waiting for completion', {
-          targetRoomName,
-          currentRoomName: this.currentRoomName,
-        });
-        try {
-          const result = await this.connectingPromise;
-          if (result && this.room && this.room.state === 'connected' && this.currentRoomName === targetRoomName) {
-            if (this.ended) return;
-            logger.info('[VideoCallSession] ✅ Reused existing connection to room', {
-              roomName: this.currentRoomName,
-            });
-            this.config.setIsInactiveState?.(false);
-            this.config.setFriendCallAccepted?.(true);
-            this.emit('callAnswered');
-            return;
-          }
-        } catch (e) {
-          logger.warn('[VideoCallSession] Existing connection failed, will create new one', e);
-        }
-      }
-      
-      // Глобальная блокировка: на устройстве к одной комнате подключается только одна сессия.
-      // При ремаунте VideoCall новый экземпляр перезаписывает __webrtcSessionRef, и без этой блокировки
-      // несколько сессий успевают стартовать подключение → лоадер/залипание у второго участника.
-      if (!(global as any).__connectingToRoomRef) {
-        (global as any).__connectingToRoomRef = { roomName: null as string | null, session: null as VideoCallSession | null };
-      }
-      const roomLock = (global as any).__connectingToRoomRef as { roomName: string | null; session: VideoCallSession | null };
-      if (
-        roomLock.roomName === targetRoomName &&
-        roomLock.session != null &&
-        roomLock.session !== this &&
-        this.isSessionEndedLike(roomLock.session)
-      ) {
-        logger.info('[VideoCallSession] Cleared stale room connect lock from ended session', {
+      roomLock.roomName = null;
+      roomLock.session = null;
+    } else if (heldByOther) {
+      logger.info('[VideoCallSession] ⏭️ Another session is already connecting to this room, skipping', {
+        roomName: targetRoomName,
+        myUserId: this.config.myUserId,
+      });
+      // КРИТИЧНО: UI привязан к __webrtcSessionRef; эта сессия не подключается — переключаем ref на ту, что подключается,
+      // иначе у пользователя вечный спиннер и чёрный экран (особенно на 3–4 звонке при ремаунте).
+      const globalRef = g.__webrtcSessionRef;
+      if (globalRef && typeof globalRef.current !== 'undefined') {
+        globalRef.current = roomLock.session;
+        logger.info('[VideoCallSession] ✅ Переключили __webrtcSessionRef на сессию, которая подключается к комнате', {
           roomName: targetRoomName,
-          myUserId: this.config.myUserId,
         });
-        roomLock.roomName = null;
-        roomLock.session = null;
       }
-      if (roomLock.roomName === targetRoomName && roomLock.session != null && roomLock.session !== this) {
-        logger.info('[VideoCallSession] ⏭️ Another session is already connecting to this room, skipping', {
-          roomName: targetRoomName,
-          myUserId: this.config.myUserId,
-        });
-        // КРИТИЧНО: UI привязан к __webrtcSessionRef; эта сессия не подключается — переключаем ref на ту, что подключается,
-        // иначе у пользователя вечный спиннер и чёрный экран (особенно на 3–4 звонке при ремаунте).
-        const globalRef = (global as any).__webrtcSessionRef;
-        if (globalRef && typeof globalRef.current !== 'undefined') {
-          globalRef.current = roomLock.session;
-          logger.info('[VideoCallSession] ✅ Переключили __webrtcSessionRef на сессию, которая подключается к комнате', {
-            roomName: targetRoomName,
-          });
-        }
-        this.config.onSwitchToConnectingSession?.(roomLock.session);
-        // КРИТИЧНО: отписываем эту сессию от сокета, чтобы не накапливать зомби к 3–4 звонку
-        this.detachFromCall();
-        return;
+      this.config.onSwitchToConnectingSession?.(roomLock.session);
+      // КРИТИЧНО: отписываем эту сессию от сокета, чтобы не накапливать зомби к 3–4 звонку
+      this.detachFromCall();
+      return false;
+    }
+
+    roomLock.roomName = targetRoomName;
+    roomLock.session = this;
+    return true;
+  }
+
+  /**
+   * Подключение к комнате из call:accepted с повторами: короткий провал сети не должен
+   * ронять звонок. Пауза растёт с номером попытки; завершённый звонок прерывает цикл.
+   */
+  private async connectToAcceptedRoomWithRetries(
+    url: string,
+    token: string,
+    roomName: string,
+  ): Promise<{ connected: boolean; lastError: Error | null }> {
+    const maxRetries = ACCEPTED_ROOM_CONNECT_MAX_RETRIES;
+    let connected = false;
+    let lastError: Error | null = null;
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      if (this.ended) {
+        logger.info('[VideoCallSession] ⏭️ Stopping retries: call ended (call:ended received)');
+        break;
       }
-      roomLock.roomName = targetRoomName;
-      roomLock.session = this;
-      
-      // КРИТИЧНО: Используем retry механизм для надежного подключения при проблемах с сетью
-      let connected = false;
-      let lastError: Error | null = null;
-      const maxRetries = 3;
-      const retryDelay = 500; // 500ms между попытками
-      
       try {
-      for (let attempt = 1; attempt <= maxRetries; attempt++) {
-        if (this.ended) {
-          logger.info('[VideoCallSession] ⏭️ Stopping retries: call ended (call:ended received)');
+        const connectRequestId = ++this.connectRequestId;
+        logger.info('[VideoCallSession] Connection attempt', {
+          attempt,
+          maxRetries,
+          roomName,
+          connectRequestId,
+        });
+
+        connected = await this.connectToLiveKit(url, token, connectRequestId, roomName);
+
+        if (connected) {
+          logger.info('[VideoCallSession] ✅ Successfully connected to LiveKit after call:accepted', {
+            roomName,
+            myUserId: this.config.myUserId,
+            attempt,
+          });
+          try {
+            markCallPerf('livekit_connected_after_accepted', { roomName, attempt });
+          } catch {}
+          this.startCallLeaseHeartbeat('active');
+          if (Platform.OS === 'android') {
+            try { setAndroidSystemPiPLeaveHintEnabled(true); } catch (_) {}
+          }
           break;
         }
-        try {
-          const connectRequestId = ++this.connectRequestId;
-          logger.info('[VideoCallSession] Connection attempt', {
+        // Неуспех без исключения (например, вытеснили более свежим запросом) — пробуем ещё раз.
+        if (attempt < maxRetries && !this.ended) {
+          logger.warn('[VideoCallSession] Connection attempt failed, retrying', {
             attempt,
             maxRetries,
-            roomName: data.livekitRoomName,
-            connectRequestId,
+            roomName,
+            willRetry: true,
           });
-          
-          connected = await this.connectToLiveKit(resolvedLivekitUrl, data.livekitToken, connectRequestId, data.livekitRoomName);
-          
-          if (connected) {
-            logger.info('[VideoCallSession] ✅ Successfully connected to LiveKit after call:accepted', {
-              roomName: data.livekitRoomName,
-              myUserId: this.config.myUserId,
-              attempt,
-            });
-            try {
-              markCallPerf('livekit_connected_after_accepted', {
-                roomName: data.livekitRoomName,
-                attempt,
-              });
-            } catch {}
-            this.startCallLeaseHeartbeat('active');
-            if (Platform.OS === 'android') {
-              try { setAndroidSystemPiPLeaveHintEnabled(true); } catch (_) {}
-            }
-            break;
-          } else {
-            // Если подключение не удалось, но это не из-за stale request, пробуем еще раз
-            if (attempt < maxRetries && !this.ended) {
-              logger.warn('[VideoCallSession] Connection attempt failed, retrying', {
-                attempt,
-                maxRetries,
-                roomName: data.livekitRoomName,
-                willRetry: true,
-              });
-              await new Promise(resolve => setTimeout(resolve, retryDelay * attempt));
-            }
-          }
-        } catch (e) {
-          lastError = e as Error;
-          if (!this.ended) {
-            logger.warn('[VideoCallSession] Connection attempt error', {
-              attempt,
-              maxRetries,
-              error: e,
-              willRetry: attempt < maxRetries,
-            });
-          }
-          if (attempt < maxRetries && !this.ended) {
-            await new Promise(resolve => setTimeout(resolve, retryDelay * attempt));
-          }
+          await this.waitBeforeConnectRetry(attempt);
+        }
+      } catch (e) {
+        lastError = e as Error;
+        if (!this.ended) {
+          logger.warn('[VideoCallSession] Connection attempt error', {
+            attempt,
+            maxRetries,
+            error: e,
+            willRetry: attempt < maxRetries,
+          });
+        }
+        if (attempt < maxRetries && !this.ended) {
+          await this.waitBeforeConnectRetry(attempt);
         }
       }
-      
+    }
+
+    return { connected, lastError };
+  }
+
+  private waitBeforeConnectRetry(attempt: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ACCEPTED_ROOM_CONNECT_RETRY_DELAY_MS * attempt));
+  }
+
+  private async connectUsingAcceptedToken(
+    data: CallAcceptedPayload,
+    targetRoomName: string | null,
+    callId: string | null,
+    partnerUserId: string | null,
+    resolvedLivekitUrl: string,
+  ): Promise<void> {
+    // Условие вызывающего кода, повторённое для сужения типов: без токена и имени комнаты
+    // этот путь не запускается.
+    if (!data.livekitToken || !data.livekitRoomName) return;
+    // Параллельный prewarm пропускаем для входящего accept: иначе камера стартует до portrait UI.
+    if (!this.incomingAcceptDeferCapture) {
+      void this.ensureLocalTracks().catch((e) => {
+        logger.warn('[VideoCallSession] ensureLocalTracks (call:accepted token path) failed', {
+          error: (e as Error)?.message || String(e),
+          callId: data.callId,
+        });
+      });
+    }
+    logger.info('[VideoCallSession] 🔑 Connecting to LiveKit with token from call:accepted', {
+      roomName: data.livekitRoomName,
+      tokenLength: data.livekitToken.length,
+      myUserId: this.config.myUserId,
+      partnerUserId: partnerUserId,
+    });
+    
+    if (await this.reuseInFlightConnection(targetRoomName)) return;
+
+    if (!this.acquireRoomConnectLock(targetRoomName)) return;
+
+    try {
+      const { connected, lastError } = await this.connectToAcceptedRoomWithRetries(
+        resolvedLivekitUrl,
+        data.livekitToken,
+        data.livekitRoomName,
+      );
+
       if (!connected) {
         if (this.ended) {
           logger.info('[VideoCallSession] Call ended before connection completed, skipping');
@@ -4555,7 +4628,7 @@ export class VideoCallSession extends SimpleEventEmitter {
         logger.error('[VideoCallSession] ❌ Failed to connect to LiveKit after all retries', {
           roomName: data.livekitRoomName,
           myUserId: this.config.myUserId,
-          maxRetries,
+          maxRetries: ACCEPTED_ROOM_CONNECT_MAX_RETRIES,
           lastError: lastError?.message,
         });
         // НЕ прерываем обработку - возможно подключение уже установлено через другой запрос
@@ -4576,7 +4649,7 @@ export class VideoCallSession extends SimpleEventEmitter {
         this.notifyLoadingChange(false);
         return;
       }
-      
+    
       // КРИТИЧНО: Если звонок уже завершён (call:ended), не обновлять UI и не эмитить callAnswered
       if (this.ended) {
         this.incomingAcceptDeferCapture = false;
@@ -4592,33 +4665,128 @@ export class VideoCallSession extends SimpleEventEmitter {
       this.config.setFriendCallAccepted?.(true);
       this.emit('callAnswered');
       return;
-      } finally {
-        // НЕ сбрасываем setActiveVideoCall(false) здесь — звонок активен, сокет не должен отключаться в фоне.
-        // setActiveVideoCall(false) вызывается только при disconnectRoom/endCall.
-        if ((global as any).__connectingToRoomRef?.session === this) {
-          (global as any).__connectingToRoomRef.roomName = null;
-          (global as any).__connectingToRoomRef.session = null;
+    } finally {
+      // НЕ сбрасываем setActiveVideoCall(false) здесь — звонок активен, сокет не должен отключаться в фоне.
+      // setActiveVideoCall(false) вызывается только при disconnectRoom/endCall.
+      if ((global as any).__connectingToRoomRef?.session === this) {
+        (global as any).__connectingToRoomRef.roomName = null;
+        (global as any).__connectingToRoomRef.session = null;
+      }
+    }
+  }
+
+  /** Старый формат call:accepted без токена — просим токен у бэкенда и подключаемся. */
+  private async connectUsingTokenApiFallback(roomId: string, targetRoomName: string | null): Promise<void> {
+    // КРИТИЧНО: Если уже идёт подключение — ждём (currentRoomName до join ещё не выставлен)
+    if (
+      this.connectingPromise &&
+      targetRoomName &&
+      (!this.currentRoomName || this.currentRoomName === targetRoomName)
+    ) {
+      logger.info('[VideoCallSession] ⏳ Connection to same room already in progress (fallback), waiting for completion', {
+        targetRoomName,
+        currentRoomName: this.currentRoomName,
+      });
+      try {
+        const result = await this.connectingPromise;
+        if (result && this.room && this.room.state === 'connected' && this.currentRoomName === targetRoomName) {
+          if (this.ended) return;
+          logger.info('[VideoCallSession] ✅ Reused existing connection to room (fallback)', {
+            roomName: this.currentRoomName,
+          });
+          this.config.setIsInactiveState?.(false);
+          this.config.setFriendCallAccepted?.(true);
+          this.emit('callAnswered');
+          return;
         }
+      } catch (e) {
+        logger.warn('[VideoCallSession] Existing connection failed (fallback), will create new one', e);
       }
     }
     
-    // Fallback: запрашиваем токен через API
-    if (roomId) {
-      // КРИТИЧНО: Если уже идёт подключение — ждём (currentRoomName до join ещё не выставлен)
-      if (
-        this.connectingPromise &&
-        targetRoomName &&
-        (!this.currentRoomName || this.currentRoomName === targetRoomName)
-      ) {
-        logger.info('[VideoCallSession] ⏳ Connection to same room already in progress (fallback), waiting for completion', {
-          targetRoomName,
-          currentRoomName: this.currentRoomName,
-        });
-        try {
-          const result = await this.connectingPromise;
-          if (result && this.room && this.room.state === 'connected' && this.currentRoomName === targetRoomName) {
+    try {
+      const installId = await getInstallId().catch(() => '');
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (installId) headers['x-install-id'] = String(installId);
+      const response = await fetch(`${process.env.EXPO_PUBLIC_SERVER_URL}/api/livekit/token`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          userId: this.config.myUserId,
+          roomName: roomId,
+        }),
+      });
+      const tokenData = await response.json();
+      if (tokenData.ok && tokenData.token) {
+        const resolvedUrl = (LIVEKIT_URL || (tokenData.url as string | undefined) || '').trim();
+        // КРИТИЧНО: Используем retry механизм для надежного подключения
+        let connected = false;
+        const maxRetries = 3;
+        const retryDelay = 500;
+        
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+          if (this.ended) {
+            logger.info('[VideoCallSession] ⏭️ Stopping retries (fallback): call ended');
+            break;
+          }
+          try {
+            const connectRequestId = ++this.connectRequestId;
+            logger.info('[VideoCallSession] Connection attempt (fallback)', {
+              attempt,
+              maxRetries,
+              roomId,
+              connectRequestId,
+            });
+            
+            connected = await this.connectToLiveKit(resolvedUrl, tokenData.token, connectRequestId, roomId);
+            
+            if (connected) {
+              logger.info('[VideoCallSession] ✅ Successfully connected to LiveKit (fallback)', {
+                roomId,
+                attempt,
+              });
+              break;
+            } else {
+              if (attempt < maxRetries && !this.ended) {
+                logger.warn('[VideoCallSession] Connection attempt failed (fallback), retrying', {
+                  attempt,
+                  maxRetries,
+                  roomId,
+                  willRetry: true,
+                });
+                await new Promise(resolve => setTimeout(resolve, retryDelay * attempt));
+              }
+            }
+          } catch (e) {
+            if (!this.ended) {
+              logger.warn('[VideoCallSession] Connection attempt error (fallback)', {
+                attempt,
+                maxRetries,
+                error: e,
+                willRetry: attempt < maxRetries,
+              });
+            }
+            if (attempt < maxRetries && !this.ended) {
+              await new Promise(resolve => setTimeout(resolve, retryDelay * attempt));
+            }
+          }
+        }
+        
+        if (!connected) {
+          if (this.ended) {
+            logger.info('[VideoCallSession] Call ended before connection completed (fallback), skipping');
+            return;
+          }
+          logger.error('[VideoCallSession] ❌ Failed to connect to LiveKit after all retries (fallback)', {
+            roomId,
+            maxRetries,
+          });
+          // Проверяем, не подключены ли уже к этой комнате
+          if (this.room &&
+              this.room.state === 'connected' &&
+              this.currentRoomName === targetRoomName) {
             if (this.ended) return;
-            logger.info('[VideoCallSession] ✅ Reused existing connection to room (fallback)', {
+            logger.info('[VideoCallSession] ✅ Room connected via another request (fallback), continuing', {
               roomName: this.currentRoomName,
             });
             this.config.setIsInactiveState?.(false);
@@ -4626,123 +4794,25 @@ export class VideoCallSession extends SimpleEventEmitter {
             this.emit('callAnswered');
             return;
           }
-        } catch (e) {
-          logger.warn('[VideoCallSession] Existing connection failed (fallback), will create new one', e);
+          this.notifyLoadingChange(false);
+          return;
         }
-      }
-      
-      try {
-        const installId = await getInstallId().catch(() => '');
-        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-        if (installId) headers['x-install-id'] = String(installId);
-        const response = await fetch(`${process.env.EXPO_PUBLIC_SERVER_URL}/api/livekit/token`, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({
-            userId: this.config.myUserId,
-            roomName: roomId,
-          }),
-        });
-        const tokenData = await response.json();
-        if (tokenData.ok && tokenData.token) {
-          const resolvedUrl = (LIVEKIT_URL || (tokenData.url as string | undefined) || '').trim();
-          // КРИТИЧНО: Используем retry механизм для надежного подключения
-          let connected = false;
-          const maxRetries = 3;
-          const retryDelay = 500;
-          
-          for (let attempt = 1; attempt <= maxRetries; attempt++) {
-            if (this.ended) {
-              logger.info('[VideoCallSession] ⏭️ Stopping retries (fallback): call ended');
-              break;
-            }
-            try {
-              const connectRequestId = ++this.connectRequestId;
-              logger.info('[VideoCallSession] Connection attempt (fallback)', {
-                attempt,
-                maxRetries,
-                roomId,
-                connectRequestId,
-              });
-              
-              connected = await this.connectToLiveKit(resolvedUrl, tokenData.token, connectRequestId, roomId);
-              
-              if (connected) {
-                logger.info('[VideoCallSession] ✅ Successfully connected to LiveKit (fallback)', {
-                  roomId,
-                  attempt,
-                });
-                break;
-              } else {
-                if (attempt < maxRetries && !this.ended) {
-                  logger.warn('[VideoCallSession] Connection attempt failed (fallback), retrying', {
-                    attempt,
-                    maxRetries,
-                    roomId,
-                    willRetry: true,
-                  });
-                  await new Promise(resolve => setTimeout(resolve, retryDelay * attempt));
-                }
-              }
-            } catch (e) {
-              if (!this.ended) {
-                logger.warn('[VideoCallSession] Connection attempt error (fallback)', {
-                  attempt,
-                  maxRetries,
-                  error: e,
-                  willRetry: attempt < maxRetries,
-                });
-              }
-              if (attempt < maxRetries && !this.ended) {
-                await new Promise(resolve => setTimeout(resolve, retryDelay * attempt));
-              }
-            }
-          }
-          
-          if (!connected) {
-            if (this.ended) {
-              logger.info('[VideoCallSession] Call ended before connection completed (fallback), skipping');
-              return;
-            }
-            logger.error('[VideoCallSession] ❌ Failed to connect to LiveKit after all retries (fallback)', {
-              roomId,
-              maxRetries,
-            });
-            // Проверяем, не подключены ли уже к этой комнате
-            if (this.room &&
-                this.room.state === 'connected' &&
-                this.currentRoomName === targetRoomName) {
-              if (this.ended) return;
-              logger.info('[VideoCallSession] ✅ Room connected via another request (fallback), continuing', {
-                roomName: this.currentRoomName,
-              });
-              this.config.setIsInactiveState?.(false);
-              this.config.setFriendCallAccepted?.(true);
-              this.emit('callAnswered');
-              return;
-            }
-            this.notifyLoadingChange(false);
-            return;
-          }
-          
-          if (this.ended) {
-            logger.info('[VideoCallSession] ⏭️ Skipping post-connect (fallback): call already ended');
-            return;
-          }
-          // КРИТИЧНО: НЕ устанавливаем loading=false сразу - пусть он остается true пока не придет remoteStream
-          // loading будет установлен в false в handleTrackSubscribed когда придет remoteStream
-          // Это предотвращает черный экран при принятии звонка
-          // this.config.callbacks.onLoadingChange?.(false);
-          // this.config.onLoadingChange?.(false);
-          this.config.setIsInactiveState?.(false);
-          this.config.setFriendCallAccepted?.(true);
-          this.emit('callAnswered');
+        
+        if (this.ended) {
+          logger.info('[VideoCallSession] ⏭️ Skipping post-connect (fallback): call already ended');
+          return;
         }
-      } catch (e) {
-        logger.error('[VideoCallSession] Error fetching LiveKit token', e);
-        this.notifyLoadingChange(false);
+        // КРИТИЧНО: НЕ устанавливаем loading=false сразу - пусть он остается true пока не придет remoteStream
+        // loading будет установлен в false в handleTrackSubscribed когда придет remoteStream
+        // Это предотвращает черный экран при принятии звонка
+        // this.config.callbacks.onLoadingChange?.(false);
+        // this.config.onLoadingChange?.(false);
+        this.config.setIsInactiveState?.(false);
+        this.config.setFriendCallAccepted?.(true);
+        this.emit('callAnswered');
       }
-    } else {
+    } catch (e) {
+      logger.error('[VideoCallSession] Error fetching LiveKit token', e);
       this.notifyLoadingChange(false);
     }
   }
@@ -4758,21 +4828,13 @@ export class VideoCallSession extends SimpleEventEmitter {
   }
 
   private matchesCurrentCallEvent(data?: { callId?: string; roomId?: string }): boolean {
-    const incomingCallId = String(data?.callId || '').trim();
-    const incomingRoomId = String(data?.roomId || '').trim();
-    // Для обратной совместимости: если сервер не прислал идентификаторы, обрабатываем как текущий звонок.
-    if (!incomingCallId && !incomingRoomId) return true;
-
-    const currentCallId = String(this.callId || '').trim();
-    const currentRoomId = String(this.roomId || '').trim();
-    if (incomingCallId && currentCallId && incomingCallId === currentCallId) return true;
-    if (incomingRoomId && currentRoomId && incomingRoomId === currentRoomId) return true;
+    if (isCurrentCallEvent({ callId: this.callId, roomId: this.roomId }, data)) return true;
 
     logger.info('[VideoCallSession] Ignored call event for another call', {
-      incomingCallId: incomingCallId || null,
-      incomingRoomId: incomingRoomId || null,
-      currentCallId: currentCallId || null,
-      currentRoomId: currentRoomId || null,
+      incomingCallId: String(data?.callId || '').trim() || null,
+      incomingRoomId: String(data?.roomId || '').trim() || null,
+      currentCallId: String(this.callId || '').trim() || null,
+      currentRoomId: String(this.roomId || '').trim() || null,
     });
     return false;
   }
@@ -5007,62 +5069,18 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.onMediaReconnectSucceeded();
   }
 
-  private isNetInfoReachable(state: NetInfoState): boolean {
-    return (
-      state.isConnected === true &&
-      (state.isInternetReachable === true || state.isInternetReachable == null)
-    );
-  }
-
   private hasLiveKitCredsForRejoin(): boolean {
     return !!(this.lastLiveKitUrl && this.lastLiveKitToken && (this.callId || this.roomId || this.currentRoomName));
   }
 
   private ensureNetworkReachabilityMonitor(): void {
-    if (this.netInfoUnsubscribe || this.ended || this.endCallInProgress) return;
-    try {
-      this.netInfoUnsubscribe = NetInfo.addEventListener((state) => {
-        this.handleNetworkReachabilityState(state);
-      });
-      void NetInfo.fetch()
-        .then((state) => {
-          if (this.ended || this.endCallInProgress) return;
-          // Seed without acting on the first snapshot (same as socket NetInfo).
-          this.lastNetReachable = this.isNetInfoReachable(state);
-        })
-        .catch(() => {});
-    } catch (e) {
-      logger.warn('[VideoCallSession] NetInfo monitor failed to start', e);
-    }
+    this.networkMonitor.start();
   }
 
   private stopNetworkReachabilityMonitor(): void {
-    try {
-      this.netInfoUnsubscribe?.();
-    } catch {}
-    this.netInfoUnsubscribe = null;
-    this.lastNetReachable = null;
+    this.networkMonitor.stop();
     this.networkLinkDown = false;
     this.mediaRejoinInFlight = false;
-  }
-
-  private handleNetworkReachabilityState(state: NetInfoState): void {
-    if (this.ended || this.endCallInProgress) return;
-    const reachable = this.isNetInfoReachable(state);
-    const wasReachable = this.lastNetReachable;
-    this.lastNetReachable = reachable;
-
-    if (!this.hasLiveKitCredsForRejoin()) return;
-
-    // true → false: airplane / Wi‑Fi drop — show restoring immediately (don't wait for LiveKit Disconnected).
-    if (!reachable && wasReachable === true) {
-      this.onNetworkLinkLost();
-      return;
-    }
-    // false → true: network back — force LiveKit re-join (socket NetInfo alone is not enough).
-    if (reachable && wasReachable === false) {
-      this.onNetworkLinkRestored();
-    }
   }
 
   private markMediaLinkRecovering(reason: string): void {
@@ -5463,58 +5481,6 @@ export class VideoCallSession extends SimpleEventEmitter {
     }
   }
 
-  private clearIceTransportLogTimers(): void {
-    for (const timer of this.iceTransportLogTimers) {
-      clearTimeout(timer);
-    }
-    this.iceTransportLogTimers = [];
-  }
-
-  private buildIceTransportSignature(diagnostics: Awaited<ReturnType<typeof getRoomIceTransportDiagnostics>>): string {
-    return JSON.stringify(
-      diagnostics.map((item) => ({
-        source: item.source,
-        usingRelay: item.usingRelay,
-        localCandidateType: item.localCandidateType,
-        localProtocol: item.localProtocol,
-        localRelayProtocol: item.localRelayProtocol,
-        remoteCandidateType: item.remoteCandidateType,
-        remoteProtocol: item.remoteProtocol,
-        selectedCandidatePairId: item.selectedCandidatePairId,
-      }))
-    );
-  }
-
-  private async logSelectedIceTransport(room: Room, reason: string): Promise<void> {
-    try {
-      if (this.room !== room) return;
-      const diagnostics = await getRoomIceTransportDiagnostics(room as any);
-      if (!diagnostics.length) {
-        logger.debug('[VideoCallSession] ICE transport diagnostics unavailable', {
-          reason,
-          roomName: room.name,
-          roomState: room.state,
-        });
-        return;
-      }
-
-      const signature = this.buildIceTransportSignature(diagnostics);
-      if (signature === this.lastIceTransportLogSignature) return;
-      this.lastIceTransportLogSignature = signature;
-
-      logger.info('[VideoCallSession] Selected ICE transport path', {
-        reason,
-        roomName: room.name,
-        roomState: room.state,
-        myUserId: this.config.myUserId,
-        partnerUserId: this.partnerUserId,
-        transports: diagnostics,
-      });
-    } catch (e) {
-      logger.debug('[VideoCallSession] ICE transport diagnostics failed (ignored)', e);
-    }
-  }
-
   /**
    * Здоров ли ICE-транспорт комнаты прямо сейчас: есть выбранная кандидатная пара, состояние
    * не failed/disconnected, RTT в разумных пределах. Используется watchdog'ом remote-медиа,
@@ -5566,24 +5532,13 @@ export class VideoCallSession extends SimpleEventEmitter {
     }
   }
 
-  private scheduleIceTransportLogging(room: Room, reason: string): void {
-    const delays = [1500, 5000];
-    for (const delayMs of delays) {
-      const timer = setTimeout(() => {
-        this.iceTransportLogTimers = this.iceTransportLogTimers.filter((entry) => entry !== timer);
-        void this.logSelectedIceTransport(room, `${reason}:${delayMs}ms`);
-      }, delayMs);
-      this.iceTransportLogTimers.push(timer);
-    }
-  }
-
   private scheduleRemoteMediaWatchdog(
     context: { url: string; token: string; targetRoomName?: string | null },
     preserveRecovery = false,
     delayMs = REMOTE_MEDIA_WATCHDOG_MS,
   ): void {
     this.clearRemoteMediaWatchdog(!preserveRecovery);
-    this.remoteMediaFirstSeenAt = 0;
+    this.metrics.resetRemoteMediaFirstSeen();
     if (!preserveRecovery) {
       this.remoteMediaNoParticipantWatchdogCount = 0;
       this.remoteMediaParticipantWatchdogCount = 0;
@@ -5594,33 +5549,15 @@ export class VideoCallSession extends SimpleEventEmitter {
   }
 
   private markRemoteMediaSeen(reason: string, publication: RemoteTrackPublication, participant: RemoteParticipant): void {
-    if (this.remoteMediaFirstSeenAt !== 0) return;
-    this.remoteMediaFirstSeenAt = Date.now();
-    this.subscribeFirstSeenAt = this.remoteMediaFirstSeenAt;
-    const firstRemoteMediaMs = this.roomConnectedAt > 0 ? Math.max(0, this.remoteMediaFirstSeenAt - this.roomConnectedAt) : undefined;
+    if (this.metrics.hasSeenRemoteMedia()) return;
+    this.metrics.markRemoteMediaFirstSeen();
+    const firstRemoteMediaMs = this.metrics.getFirstRemoteMediaMs();
     const recovered = this.remoteMediaRecoveryInProgress || this.remoteMediaRelayRecoveryAttempted;
     this.clearRemoteMediaWatchdog(false);
     this.remoteMediaRecoveryInProgress = false;
     this.remoteMediaRelayRecoveryAttempted = false;
-    const stageMetrics: Record<string, number> = {};
-    if (this.acceptAckStartedAt > 0 && this.acceptAckCompletedAt >= this.acceptAckStartedAt) {
-      stageMetrics.acceptAckLatencyMs = this.acceptAckCompletedAt - this.acceptAckStartedAt;
-    }
-    if (this.livekitConnectStartedAt > 0 && this.livekitConnectedAt >= this.livekitConnectStartedAt) {
-      stageMetrics.livekitConnectLatencyMs = this.livekitConnectedAt - this.livekitConnectStartedAt;
-    }
-    if (this.livekitConnectedAt > 0 && this.publishCompletedAt >= this.livekitConnectedAt) {
-      stageMetrics.publishLatencyMs = this.publishCompletedAt - this.livekitConnectedAt;
-    }
-    if (this.publishCompletedAt > 0 && this.subscribeFirstSeenAt >= this.publishCompletedAt) {
-      stageMetrics.subscribeLatencyMs = this.subscribeFirstSeenAt - this.publishCompletedAt;
-    } else if (this.livekitConnectedAt > 0 && this.subscribeFirstSeenAt >= this.livekitConnectedAt) {
-      stageMetrics.subscribeLatencyMs = this.subscribeFirstSeenAt - this.livekitConnectedAt;
-    }
-    const totalFromAcceptMs =
-      this.acceptAckStartedAt > 0
-        ? Math.max(0, this.remoteMediaFirstSeenAt - this.acceptAckStartedAt)
-        : undefined;
+    const stageMetrics = this.metrics.buildStageMetrics();
+    const totalFromAcceptMs = this.metrics.getTotalFromAcceptMs();
     void sendClientMetrics(API_BASE, {
       remoteMediaStageBreakdown: true,
       ...(typeof firstRemoteMediaMs === 'number' ? { remoteMediaFirstSeenMs: firstRemoteMediaMs } : {}),
@@ -5639,7 +5576,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.noteRemotePeerRejoined(`remote_media_first_seen:${reason}`);
     this.tryClearPeerReconnectingAfterMedia(`remote_media_first_seen:${reason}`);
     if (this.room) {
-      this.scheduleIceTransportLogging(this.room, `remote_media_first_seen:${publication.kind}`);
+      this.iceTransportLogger.schedule(this.room, `remote_media_first_seen:${publication.kind}`);
     }
   }
 
@@ -5649,7 +5586,7 @@ export class VideoCallSession extends SimpleEventEmitter {
 
     const room = this.room;
     if (!room || room.state !== 'connected') return;
-    if (this.remoteMediaFirstSeenAt > 0 || this.remoteStream || this.remoteVideoTrack || this.remoteAudioTrack) return;
+    if (this.metrics.hasSeenRemoteMedia() || this.remoteStream || this.remoteVideoTrack || this.remoteAudioTrack) return;
 
     const remoteParticipants = Array.from(room.remoteParticipants.values()).filter((participant) => !participant.isLocal);
     if (remoteParticipants.length === 0) {
@@ -5715,7 +5652,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       });
     }
 
-    if (this.remoteMediaFirstSeenAt > 0 || this.remoteStream || this.remoteVideoTrack || this.remoteAudioTrack) {
+    if (this.metrics.hasSeenRemoteMedia() || this.remoteStream || this.remoteVideoTrack || this.remoteAudioTrack) {
       return;
     }
     if (this.remoteMediaRelayRecoveryAttempted) {
@@ -6052,14 +5989,7 @@ export class VideoCallSession extends SimpleEventEmitter {
 
   private stopLocalVideoTrackWithoutStateReset(): void {
     if (!this.localVideoTrack) return;
-    // КРИТИЧНО: Сначала отключаем захват кадров, затем stop() — снижает CameraDeviceClient errorCode 4/5 на Android
-    try {
-      if (this.localVideoTrack.mediaStreamTrack) {
-        this.localVideoTrack.mediaStreamTrack.enabled = false;
-      }
-      this.localVideoTrack.mute().catch(() => {});
-    } catch {}
-    try { this.localVideoTrack.stop(); } catch {}
+    stopLocalVideoTrackSafely(this.localVideoTrack);
     this.localVideoTrack = null;
   }
 
@@ -6196,12 +6126,7 @@ export class VideoCallSession extends SimpleEventEmitter {
         await this.unpublishOtherLocalTracks('video', newVideoTrack);
         await this.room.localParticipant.publishTrack(newVideoTrack).catch((e) => {
           const errorMsg = e?.message || String(e || '');
-          if (
-            errorMsg.includes('already') ||
-            errorMsg.includes('duplicate') ||
-            errorMsg.includes('closed') ||
-            errorMsg.includes('disconnected')
-          ) {
+          if (isIgnorablePublishError(errorMsg)) {
             logger.debug('[VideoCallSession] Ignoring publish error (already/closed)', { error: errorMsg });
             return;
           }
@@ -6419,22 +6344,11 @@ export class VideoCallSession extends SimpleEventEmitter {
 
   private stopLocalTracksWithoutStateReset(): void {
     if (this.localAudioTrack) {
-      try {
-        this.localAudioTrack.stop();
-      } catch {}
+      stopLocalAudioTrackSafely(this.localAudioTrack);
       this.localAudioTrack = null;
     }
     if (this.localVideoTrack) {
-      // КРИТИЧНО: Сначала отключаем захват кадров, затем stop() — снижает CameraDeviceClient errorCode 4/5 на Android
-      try {
-        if (this.localVideoTrack.mediaStreamTrack) {
-          this.localVideoTrack.mediaStreamTrack.enabled = false;
-        }
-        this.localVideoTrack.mute().catch(() => {});
-      } catch {}
-      try {
-        this.localVideoTrack.stop();
-      } catch {}
+      stopLocalVideoTrackSafely(this.localVideoTrack);
       this.localVideoTrack = null;
     }
     this.localStream = null;
@@ -6456,83 +6370,22 @@ export class VideoCallSession extends SimpleEventEmitter {
    * Проверяет, опубликован ли видео трек в комнате
    */
   private isVideoTrackPublished(track: LocalVideoTrack | null): boolean {
-    if (!this.room || !track || !this.room.localParticipant) return false;
-    
-    const publications = this.room.localParticipant.videoTrackPublications;
-    if (!publications) return false;
-    
-    try {
-      if (typeof publications.values === 'function') {
-        // Это Map - проверяем через values()
-        for (const pub of publications.values()) {
-          if (pub.track === track || pub.trackSid === track.sid) {
-            return true;
-          }
-        }
-      } else if (Array.isArray(publications)) {
-        // Это массив - используем find
-        return publications.some(
-          pub => pub.track === track || pub.trackSid === track.sid
-        );
-      }
-    } catch (e) {
-      logger.debug('[VideoCallSession] Error checking video track publication', e);
-    }
-    
-    return false;
+    return isVideoTrackPublishedIn(this.room, track);
   }
 
   /**
    * Проверяет, опубликован ли аудио трек в комнате
    */
   private isAudioTrackPublished(track: LocalAudioTrack | null): boolean {
-    if (!this.room || !track || !this.room.localParticipant) return false;
-    
-    const publications = this.room.localParticipant.audioTrackPublications;
-    if (!publications) return false;
-    
-    try {
-      if (typeof publications.values === 'function') {
-        // Это Map - проверяем через values()
-        for (const pub of publications.values()) {
-          if (pub.track === track || pub.trackSid === track.sid) {
-            return true;
-          }
-        }
-      } else if (Array.isArray(publications)) {
-        // Это массив - используем find
-        return publications.some(
-          pub => pub.track === track || pub.trackSid === track.sid
-        );
-      }
-    } catch (e) {
-      logger.debug('[VideoCallSession] Error checking audio track publication', e);
-    }
-    
-    return false;
+    return isAudioTrackPublishedIn(this.room, track);
   }
 
   /**
    * Returns the current local video publication (first camera track) for replaceTrack flow.
    * Same logic as RandomChatSession.getLocalVideoPublication.
    */
-  private getLocalVideoPublication(): { replaceTrack?: (track: LocalVideoTrack, stopProcessor?: boolean) => Promise<void>; track?: LocalVideoTrack } | null {
-    if (!this.room || !this.room.localParticipant) return null;
-    const publications = this.room.localParticipant.videoTrackPublications;
-    if (!publications) return null;
-    try {
-      if (typeof (publications as any).values === 'function') {
-        for (const pub of (publications as any).values()) {
-          return pub || null;
-        }
-      } else if (Array.isArray(publications)) {
-        return (publications as any)[0] || null;
-      } else if (typeof publications === 'object') {
-        const vals = Object.values(publications as any);
-        return (vals?.[0] as any) || null;
-      }
-    } catch {}
-    return null;
+  private getLocalVideoPublication(): LocalVideoPublicationLike | null {
+    return getLocalVideoPublicationOf(this.room);
   }
 
   private resetRemoteState(): void {
@@ -6543,9 +6396,8 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.clearPeerReconnectingUi('resetRemoteState');
     this.clearRemoteCamOffTimeout();
     this.clearRemoteMediaWatchdog(true);
-    this.clearIceTransportLogTimers();
-    this.lastIceTransportLogSignature = null;
-    this.remoteMediaFirstSeenAt = 0;
+    this.iceTransportLogger.reset();
+    this.metrics.resetRemoteMediaFirstSeen();
     this.remoteStream = null;
     this.remoteAudioTrack = null;
     this.remoteVideoTrack = null;
@@ -6572,61 +6424,57 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.emit('remoteViewKeyChanged', this.remoteViewKey);
   }
 
-  private async connectToLiveKit(
-    url: string,
-    token: string,
-    connectRequestId: number,
-    targetRoomName?: string,
-    options?: LiveKitConnectOptions
-  ): Promise<boolean> {
-    if (this.ended) {
-      this.incomingAcceptDeferCapture = false;
-      logger.info('[VideoCallSession] ⏭️ Skipping connectToLiveKit: call already ended');
-      return false;
+  /**
+   * Публикация локального трека на этапе connect.
+   * Пропускаем, если комната уже отвалилась или трек опубликован; гонку publish/unpublish
+   * («already» / «closed») глушим — она безобидна и раньше тоже игнорировалась.
+   */
+  private async publishLocalTrackOnConnect(
+    room: Room,
+    track: LocalVideoTrack | LocalAudioTrack | null,
+    kind: 'video' | 'audio',
+  ): Promise<void> {
+    if (!track) return;
+    const label = kind === 'video' ? 'Video' : 'Audio';
+    const trackId = () => track.sid || track.mediaStreamTrack?.id;
+
+    // КРИТИЧНО: Дополнительная проверка состояния перед публикацией
+    if (room.state !== 'connected' || !room.localParticipant) {
+      logger.debug(`[VideoCallSession] Room disconnected before ${kind} track publish, skipping`);
+      return;
     }
-    const coalesceKey = (targetRoomName || '').trim();
-    if (coalesceKey) {
-      const inflight = this.liveKitConnectByRoom.get(coalesceKey);
-      if (inflight) {
-        logger.info('[VideoCallSession] ⏭️ Coalescing LiveKit connect (duplicate path / reauth)', {
-          room: coalesceKey,
-        });
-        return inflight;
-      }
-      let resolveGate!: (v: boolean) => void;
-      let rejectGate!: (e: unknown) => void;
-      const gate = new Promise<boolean>((res, rej) => {
-        resolveGate = res;
-        rejectGate = rej;
+    // КРИТИЧНО: Проверяем, не опубликован ли трек уже
+    const alreadyPublished =
+      kind === 'video'
+        ? this.isVideoTrackPublished(track as LocalVideoTrack)
+        : this.isAudioTrackPublished(track as LocalAudioTrack);
+    if (alreadyPublished) {
+      logger.debug(`[VideoCallSession] ${label} track already published in connectToLiveKit, skipping`, {
+        trackId: trackId(),
       });
-      this.liveKitConnectByRoom.set(coalesceKey, gate);
-      void this.executeConnectToLiveKit(url, token, connectRequestId, targetRoomName, options)
-        .then(
-          (v) => resolveGate(v),
-          (e) => rejectGate(e)
-        )
-        .finally(() => {
-          if (this.liveKitConnectByRoom.get(coalesceKey) === gate) {
-            this.liveKitConnectByRoom.delete(coalesceKey);
-          }
-        });
-      return gate;
+      return;
     }
-    return this.executeConnectToLiveKit(url, token, connectRequestId, targetRoomName, options);
+
+    await room.localParticipant.publishTrack(track).catch((e) => {
+      // Игнорируем ошибки дубликатов и закрытых соединений
+      const errorMsg = e?.message || String(e || '');
+      if (isIgnorablePublishError(errorMsg)) {
+        logger.debug('[VideoCallSession] Ignoring publish error (already/closed)', { error: errorMsg });
+        return;
+      }
+      logger.warn(`[VideoCallSession] Failed to publish ${kind} track`, e);
+    });
+    logger.info(`[VideoCallSession] ${label} track published`, { trackId: trackId() });
   }
 
-  private async executeConnectToLiveKit(
-    url: string,
-    token: string,
-    connectRequestId: number,
-    targetRoomName?: string,
-    options?: LiveKitConnectOptions
-  ): Promise<boolean> {
-    if (this.ended) {
-      this.incomingAcceptDeferCapture = false;
-      logger.info('[VideoCallSession] ⏭️ Skipping connectToLiveKit: call already ended');
-      return false;
-    }
+  /**
+   * Расчистить путь к Room.connect: дождаться чужого connect/disconnect, переиспользовать
+   * уже подключённую комнату, добить застрявшую.
+   *
+   * Возвращает boolean — если подключаться больше не нужно и это готовый результат
+   * connectToLiveKit; null — если можно продолжать создание новой комнаты.
+   */
+  private async prepareRoomForLiveKitConnect(targetRoomName?: string): Promise<boolean | null> {
     try {
       const pending = (global as any).__videoCallRoomDisconnectPromiseRef?.current as Promise<void> | null;
       if (pending) {
@@ -6804,44 +6652,18 @@ export class VideoCallSession extends SimpleEventEmitter {
         logger.info('[VideoCallSession] Forced cleanup completed, continuing with connection');
       }
     }
-    
-    if (this.incomingAcceptDeferCapture) {
-      // Видео-входящий: короткая пауза до capture. Аудио — без sleep (блокировало Room.connect).
-      if (this.isCamOn) {
-        await new Promise((resolve) => setTimeout(resolve, 400));
-      }
-      this.incomingAcceptDeferCapture = false;
-      logger.info('[VideoCallSession] Deferred incoming capture: starting local tracks before LiveKit connect', {
-        camOn: this.isCamOn,
-      });
-    }
-    // Room.connect не требует локальных треков — capture параллельно, await только перед publish.
-    // Раньше `!localVideoTrack` на audio-first всегда был true и блокировал connect на 1–2с.
-    const needAudioTrack = !this.localAudioTrack;
-    const needVideoTrack = this.isCamOn && !this.localVideoTrack;
-    let tracksReadyPromise: Promise<void> = Promise.resolve();
-    if (needAudioTrack || needVideoTrack) {
-      try {
-        markCallPerf('livekit_tracks_parallel_with_connect', {
-          needAudioTrack,
-          needVideoTrack,
-          camOn: this.isCamOn,
-          earlyBootstrap: !!(this as any).__earlyDirectCallBootstrap,
-        });
-      } catch {}
-      tracksReadyPromise = this.ensureLocalTracks().catch((e) => {
-        logger.warn('[VideoCallSession] ensureLocalTracks parallel with connect failed', {
-          error: (e as Error)?.message || String(e),
-        });
-      });
-    } else {
-      try {
-        markCallPerf('livekit_tracks_already_ready', {
-          camOn: this.isCamOn,
-        });
-      } catch {}
-    }
-    
+    return null;
+  }
+
+  /**
+   * Последняя проверка перед созданием новой Room: комната могла остаться от прошлой
+   * попытки (race между connect и disconnect) или застрять в connecting.
+   *
+   * Возвращает boolean — готовый результат connectToLiveKit; null — можно создавать новую.
+   * Застрявшую комнату чистим и всё равно продолжаем: это единственный способ выбраться
+   * из зависшего состояния, поэтому ошибка очистки не прерывает подключение.
+   */
+  private async clearStuckRoomBeforeConnect(targetRoomName?: string): Promise<boolean | null> {
     // КРИТИЧНО: Проверяем еще раз перед созданием новой комнаты
     // Это защита от race conditions
     // Но если комната уже подключена к нужной комнате, не создаем новую
@@ -6937,54 +6759,560 @@ export class VideoCallSession extends SimpleEventEmitter {
         this.disconnectPromise = null;
       }
     }
+    return null;
+  }
+
+  /**
+   * Room.connect упал — решаем, что это было.
+   *
+   * Порядок важен: сначала проверяем, не поднялся ли SDK уже сам (промис мог упасть
+   * после успешного connect — рвать живую комнату нельзя), затем один раз пробуем
+   * TURN relay-only для VPN/NAT, и только потом признаём попытку неудачной.
+   * Возвращает результат connectToLiveKit либо пробрасывает исходную ошибку.
+   */
+  /**
+   * Промис connect упал — но SDK мог уже поднять комнату сам (или как раз поднимает).
+   * Рвать такую комнату нельзя: у обоих участников звонок уже идёт.
+   *
+   * true → комнату оставляем себе и считаем connect успешным.
+   */
+  private async adoptRoomIfSdkRecovered(
+    room: Room,
+    url: string,
+    token: string,
+    targetRoomName: string | undefined,
+    errorMessage: string,
+  ): Promise<boolean> {
+    if (this.room !== room) return false;
+
+    if (room.state === 'connected') {
+      this.keepConnectedRoom(room, url, token, targetRoomName);
+      logger.info(
+        '[VideoCallSession] Connect promise failed after SDK already connected; keeping room',
+        { roomState: room.state, targetRoomName, error: errorMessage },
+      );
+      return true;
+    }
+    if (room.state !== 'reconnecting') return false;
+
+    let waitCount = 0;
+    while (this.room === room && room.state === 'reconnecting' && waitCount < SDK_RECONNECT_ADOPT_TICKS) {
+      await new Promise((resolve) => setTimeout(resolve, SDK_RECONNECT_POLL_MS));
+      waitCount++;
+    }
+    if (this.room === room && (room.state as ConnectionState) === ConnectionState.Connected) {
+      this.keepConnectedRoom(room, url, token, targetRoomName);
+      logger.info(
+        '[VideoCallSession] Room reconnected after connect promise error; keeping session',
+        { targetRoomName, error: errorMessage },
+      );
+      return true;
+    }
+    return false;
+  }
+
+  /** Закрепить за сессией уже подключённую комнату и её креды (для будущего re-join). */
+  private keepConnectedRoom(room: Room, url: string, token: string, targetRoomName?: string): void {
+    this.currentRoomName = this.currentRoomName || room.name || targetRoomName || null;
+    this.lastLiveKitUrl = url;
+    this.lastLiveKitToken = token;
+  }
+
+  /**
+   * VPN / жёсткий NAT: PeerConnection не поднялся по прямому пути — одна попытка через
+   * TURN relay (как в RandomChat). Старую комнату гасим, иначе SFU будет держать призрака.
+   */
+  private async retryConnectWithRelayOnly(
+    room: Room,
+    url: string,
+    token: string,
+    connectRequestId: number,
+    targetRoomName: string | undefined,
+    options: LiveKitConnectOptions | undefined,
+    errorMessage: string,
+  ): Promise<boolean> {
+    logger.warn('[VideoCallSession] PC connect failed — retrying with TURN relay-only', {
+      error: errorMessage,
+      targetRoomName,
+      connectReason: options?.reason || null,
+    });
+    enableForcedRelayFallback('video_call_pc_connection');
+    void sendClientMetrics(API_BASE, { relayFallback: true }).catch(() => {});
+    try {
+      if (room.state !== 'disconnected') {
+        await room.disconnect();
+      }
+    } catch {}
+    if (this.room === room) {
+      this.room = null;
+      this.currentRoomName = null;
+    }
+    return this.connectToLiveKit(url, token, connectRequestId, targetRoomName, {
+      forceRelayOnly: true,
+      reason: 'pc_connect_relay_retry',
+    });
+  }
+
+  /**
+   * Токен не приняли. На iOS это часто транзиентно при reconnect / смене комнаты,
+   * поэтому громко ругаемся только один раз за сессию.
+   */
+  private warnAboutInvalidLiveKitApiKey(url: string): void {
+    if (this.hasLoggedLiveKitApiKeyWarning) {
+      logger.debug('[VideoCallSession] LiveKit API key validation failed (suppressed повтор)', { url });
+      return;
+    }
+    this.hasLoggedLiveKitApiKeyWarning = true;
+    logger.warn('[VideoCallSession] ⚠️ LiveKit API key validation failed!', {
+      url,
+      possibleCauses: [
+        'API key/secret mismatch between backend and LiveKit server',
+        'LiveKit URL points to wrong server',
+        'Token expired or malformed',
+        'Backend environment variables not set correctly'
+      ],
+      suggestion: 'Check LIVEKIT_API_KEY and LIVEKIT_API_SECRET in backend .env file match LiveKit server credentials'
+    });
+  }
+
+  /**
+   * Пока шёл connect, его мог вытеснить более свежий запрос.
+   *
+   * Но «устаревший» — не всегда «провалившийся»: если комната уже подключена к той же
+   * цели, переиспользуем её. Иначе быстрые повторные вызовы рвали бы живое соединение.
+   *
+   * null → запрос актуален, решение принимает вызывающий код.
+   */
+  private resolveStaleConnectRequest(
+    room: Room,
+    connectRequestId: number,
+    targetRoomName?: string,
+  ): boolean | null {
+    const isStaleRequest = this.connectRequestId !== connectRequestId || this.room !== room;
+    if (!isStaleRequest) return null;
+
+    const isSameRoom = !!(
+      targetRoomName &&
+      this.currentRoomName === targetRoomName &&
+      this.room &&
+      this.room.state === 'connected'
+    );
+
+    if (!isSameRoom) {
+      logger.debug('[VideoCallSession] Request is stale and not for same room', {
+        connectRequestId,
+        currentConnectRequestId: this.connectRequestId,
+        targetRoomName,
+        currentRoomName: this.currentRoomName,
+        roomState: this.room?.state,
+      });
+      return false;
+    }
+
+    logger.info('[VideoCallSession] Request is stale but room already connected, reusing connection', {
+      connectRequestId,
+      currentConnectRequestId: this.connectRequestId,
+      targetRoomName,
+      currentRoomName: this.currentRoomName,
+    });
+    return true;
+  }
+
+  private async recoverFromLiveKitConnectError(
+    e: any,
+    room: Room,
+    url: string,
+    token: string,
+    connectRequestId: number,
+    targetRoomName?: string,
+    options?: LiveKitConnectOptions,
+  ): Promise<boolean> {
+    sendClientMetrics(API_BASE, { joinFailure: true }).catch(() => {});
+    const errorMessage = e?.message || String(e);
+    const isInvalidApiKey = isInvalidApiKeyError(errorMessage);
+    const isClientDisconnect = isClientDisconnectError(errorMessage);
+
+    if (
+      !this.ended &&
+      !isClientDisconnect &&
+      (await this.adoptRoomIfSdkRecovered(room, url, token, targetRoomName, errorMessage))
+    ) {
+      return true;
+    }
+
+    if (this.ended || isClientDisconnect) {
+      logger.info('[VideoCallSession] Connect aborted (call ended or user disconnect)', {
+        ended: this.ended,
+        error: errorMessage,
+      });
+    } else {
+      const isTransientPcError = isTransientPcConnectionError(errorMessage);
+      // VPN / жёсткий NAT: одна попытка через TURN relay (как в RandomChat).
+      if (
+        isTransientPcError &&
+        !options?.forceRelayOnly &&
+        this.connectRequestId === connectRequestId
+      ) {
+        return this.retryConnectWithRelayOnly(room, url, token, connectRequestId, targetRoomName, options, errorMessage);
+      }
+      const logFn = isTransientPcError ? logger.warn : logger.error;
+      // Не логировать полный стек, если к моменту catch звонок уже завершён (например, retry после end с другой стороны)
+      if (this.ended) {
+        logger.debug('[VideoCallSession] Connect failed after call ended', { error: errorMessage });
+      } else {
+        logFn('[VideoCallSession] Error connecting to LiveKit', {
+          error: errorMessage,
+          errorCode: e?.code,
+          errorName: e?.name,
+          url,
+          urlHost: url ? new URL(url).hostname : 'unknown',
+          targetRoomName,
+          hasToken: !!token,
+          tokenLength: token?.length || 0,
+          tokenPrefix: token ? token.substring(0, 20) + '...' : 'no-token',
+          roomState: room?.state,
+          isInvalidApiKey,
+          forceRelayOnly: !!options?.forceRelayOnly,
+          stack: e?.stack,
+        });
+      }
+    }
+    
+    if (isInvalidApiKey) this.warnAboutInvalidLiveKitApiKey(url);
+    
+    if (this.room === room) {
+      const sdkRecovered = room.state === 'connected' || room.state === 'reconnecting';
+      if (sdkRecovered) {
+        if (await this.adoptRoomIfSdkRecovered(room, url, token, targetRoomName, errorMessage)) {
+          return true;
+        }
+        logger.info(
+          '[VideoCallSession] Connect promise failed while room reconnecting; not tearing down',
+          { roomState: room.state, targetRoomName, error: errorMessage },
+        );
+      } else {
+        this.room = null;
+        this.currentRoomName = null;
+        setActiveVideoCall(false);
+      }
+    }
+    
+    const staleResult = this.resolveStaleConnectRequest(room, connectRequestId, targetRoomName);
+    if (staleResult !== null) return staleResult;
+
+    throw e;
+  }
+
+  /**
+   * Комната поднялась: фиксируем её как текущую, запускаем lease-heartbeat,
+   * диагностику ICE и watchdog удалённого медиа.
+   *
+   * fastStartVideoProfileActive гасим намеренно: автоматический апгрейд качества через
+   * ~2.5 с заметно мигал локальным окном «Вы» у обоих участников.
+   */
+  private markLiveKitRoomConnected(
+    room: Room,
+    url: string,
+    token: string,
+    targetRoomName?: string,
+    options?: LiveKitConnectOptions,
+  ): void {
+      // КРИТИЧНО: Логируем детальную информацию о подключении
+      const localIdentity = room.localParticipant?.identity;
+      const remoteParticipantsList = Array.from(room.remoteParticipants.values()).map(p => ({
+        identity: p.identity,
+        audioTracks: p.audioTrackPublications.size,
+        videoTracks: p.videoTrackPublications.size,
+      }));
+        
+      logger.info('[VideoCallSession] Successfully connected to LiveKit', {
+        roomName: room.name,
+        state: room.state,
+        targetRoomName,
+        localIdentity,
+        participantsCount: room.remoteParticipants.size,
+        remoteParticipants: remoteParticipantsList,
+        myUserId: this.config.myUserId,
+        partnerUserId: this.partnerUserId,
+      });
+      
+    // Сохраняем имя подключенной комнаты для проверки переиспользования
+    this.currentRoomName = room.name || targetRoomName || null;
+    this.lastLiveKitUrl = url;
+    this.lastLiveKitToken = token;
+    this.metrics.markRoomConnected();
+    this.startCallLeaseHeartbeat('active');
+    try {
+      const pending = (global as any).__pendingCallAcceptedRef?.current;
+      const pendingCallId = pending ? String(pending?.callId ?? '').trim() : '';
+      if (pendingCallId && this.callId && pendingCallId === String(this.callId)) {
+        (global as any).__pendingCallAcceptedRef.current = null;
+        logger.info('[VideoCallSession] Cleared pending call:accepted after LiveKit connect', {
+          callId: pendingCallId,
+        });
+      }
+    } catch (_) {}
+    this.iceTransportLogger.schedule(room, options?.reason ? `connect:${options.reason}` : 'connect');
+    this.scheduleRemoteMediaWatchdog({
+      url,
+      token,
+      targetRoomName: this.currentRoomName || targetRoomName || null,
+    }, !!options?.reason && options.reason === 'remote_media_watchdog');
+      
+    // КРИТИЧНО: Логируем детальную информацию о состоянии комнаты
+    const roomLocalIdentity = room.localParticipant?.identity;
+    const roomRemoteParticipantsList = Array.from(room.remoteParticipants.values()).map(p => ({
+      identity: p.identity,
+      audioTracks: p.audioTrackPublications.size,
+      videoTracks: p.videoTrackPublications.size,
+    }));
+      
+    logger.info('[VideoCallSession] Room connected successfully', {
+      roomName: this.currentRoomName,
+      roomState: room.state,
+      participantsCount: room.remoteParticipants.size,
+      localParticipant: !!room.localParticipant,
+      localParticipantIdentity: roomLocalIdentity,
+      remoteParticipants: roomRemoteParticipantsList,
+      myUserId: this.config.myUserId,
+      partnerUserId: this.partnerUserId,
+      expectedPartnerIdentity: this.partnerUserId,
+    });
+    // Временный guard: автоматический fast-start upgrade через ~2.5s давал
+    // заметное мерцание локального блока "Вы" у обоих участников после соединения.
+    // Оставляем fast-start только для быстрого старта звонка, без пост-апгрейда качества.
+    this.fastStartVideoProfileActive = false;
+  }
+
+  /**
+   * Room.connect не требует локальных треков — снимаем их параллельно, await только
+   * перед publish. Раньше проверка `!localVideoTrack` на audio-first всегда была
+   * истинной и блокировала connect на 1–2 секунды.
+   */
+  private startLocalTracksInParallel(): Promise<void> {
+    const needAudioTrack = !this.localAudioTrack;
+    const needVideoTrack = this.isCamOn && !this.localVideoTrack;
+
+    if (!needAudioTrack && !needVideoTrack) {
+      try {
+        markCallPerf('livekit_tracks_already_ready', { camOn: this.isCamOn });
+      } catch {}
+      return Promise.resolve();
+    }
+
+    try {
+      markCallPerf('livekit_tracks_parallel_with_connect', {
+        needAudioTrack,
+        needVideoTrack,
+        camOn: this.isCamOn,
+        earlyBootstrap: !!(this as any).__earlyDirectCallBootstrap,
+      });
+    } catch {}
+    return this.ensureLocalTracks().catch((e) => {
+      logger.warn('[VideoCallSession] ensureLocalTracks parallel with connect failed', {
+        error: (e as Error)?.message || String(e),
+      });
+    });
+  }
+
+  /**
+   * ICE/TURN-креды с /api/turn-credentials — стабильнее на мобильной сети и VPN.
+   * Не загрузились — не беда, LiveKit возьмёт серверные (см. ./videoCall/iceConnectOptions).
+   */
+  private async loadIceConfiguration(options?: LiveKitConnectOptions): Promise<RTCConfiguration | undefined> {
+    try {
+      return await getIceConfiguration(false, { forceRelayOnly: !!options?.forceRelayOnly });
+    } catch (e: any) {
+      logger.warn('[VideoCallSession] Failed to load ICE config, using LiveKit defaults', {
+        error: e?.message || String(e),
+        forceRelayOnly: !!options?.forceRelayOnly,
+      });
+      return undefined;
+    }
+  }
+
+  /** Новая Room с профилем публикации под это устройство; сразу становится текущей. */
+  private createLiveKitRoomForConnect(): Room {
+    const facingMode = this.camSide === 'front' ? 'user' : 'environment';
+    const capture = getPreferredVideoCaptureOptions(facingMode);
+    const isHighCapture = capture?.meta?.preset === 'high';
+
+    logger.info('[VideoCallSession] LiveKit feature flags', {
+      adaptiveStream: LIVEKIT_ADAPTIVE_STREAM_ENABLED,
+      dynacast: LIVEKIT_DYNACAST_ENABLED,
+    });
+
+    const room = new Room(
+      buildLiveKitRoomOptions({
+        isHighCapture,
+        adaptiveStream: LIVEKIT_ADAPTIVE_STREAM_ENABLED,
+        dynacast: LIVEKIT_DYNACAST_ENABLED,
+      }),
+    );
+    this.room = room;
+    const partnerDisplayName = this.config.getPartnerDisplayName?.() ?? null;
+    setActiveVideoCall(true, partnerDisplayName || undefined);
+    this.registerRoomEvents(room);
+    return room;
+  }
+
+  /**
+   * Публикация локальных треков после успешного connect.
+   * Комната могла отвалиться, пока мы ждали треки, — тогда просто синхронизируем UI:
+   * само подключение всё равно состоялось.
+   */
+  private async publishLocalTracksAfterConnect(room: Room, tracksReadyPromise: Promise<void>): Promise<void> {
+    // Даём движку LiveKit время поднять транспорт перед публикацией (снижает "publication timed out" и "connection state mismatch").
+    const postConnectPublishDelayMs = this.isCamOn ? 350 : 0;
+    if (postConnectPublishDelayMs > 0 && !this.ended && this.room === room) {
+      await new Promise<void>((r) => setTimeout(r, postConnectPublishDelayMs));
+    }
+
+    // Дожидаемся локальных треков (шли параллельно с Room.connect).
+    try {
+      markCallPerf('livekit_await_tracks_before_publish', {
+        hasAudio: !!this.localAudioTrack,
+        hasVideo: !!this.localVideoTrack,
+        camOn: this.isCamOn,
+      });
+    } catch {}
+    await tracksReadyPromise;
+    if (!this.localAudioTrack || (this.isCamOn && !this.localVideoTrack)) {
+      await this.ensureLocalTracks().catch((e) => {
+        logger.warn('[VideoCallSession] ensureLocalTracks before publish failed', {
+          error: (e as Error)?.message || String(e),
+        });
+      });
+    }
+
+    // КРИТИЧНО: Проверяем состояние комнаты перед публикацией треков
+    // LiveKit автоматически управляет WebRTC соединениями, но нужно убедиться что комната подключена
+    if (room.state !== 'connected' || !room.localParticipant) {
+      logger.warn('[VideoCallSession] Room not connected or no local participant, skipping track publish', {
+        state: room.state,
+        hasLocalParticipant: !!room.localParticipant
+      });
+      // Синхронизируем UI с флагами сессии (пользователь мог выключить мик/камеру до конца connect).
+      this.notifyMicStateChange(this.isMicOn);
+      this.notifyCamStateChange(this.isCamOn);
+      return; // Подключение успешно, просто публиковать нечего
+    }
+
+    if (this.localVideoTrack && this.isCamOn) {
+      await this.publishLocalTrackOnConnect(room, this.localVideoTrack, 'video');
+    } else if (this.localVideoTrack && !this.isCamOn) {
+      logger.debug('[VideoCallSession] Skipping video publish in connectToLiveKit — camera off', {
+        trackId: this.localVideoTrack?.sid || this.localVideoTrack?.mediaStreamTrack?.id,
+      });
+    }
+    await this.publishLocalTrackOnConnect(room, this.localAudioTrack, 'audio');
+    this.metrics.markPublishCompleted();
+    const publishLatencyMs = this.metrics.getPublishLatencyMs();
+    if (publishLatencyMs !== undefined) {
+      void sendClientMetrics(API_BASE, { publishLatencyMs }).catch(() => {});
+    }
+
+    // Пользователь мог выключить мик во время connecting — publish не меняет желаемое состояние в комнате.
+    if (room.state === 'connected' && room.localParticipant) {
+      await room.localParticipant.setMicrophoneEnabled(this.isMicOn).catch((e) => {
+        logger.warn('[VideoCallSession] setMicrophoneEnabled after publish failed', e);
+      });
+      // Только выкл: видео публикуем вручную через publishTrack; при isCamOn=true не дёргаем setCameraEnabled(true),
+      // чтобы не плодить вторую публикацию на части девайсов.
+      if (!this.isCamOn) {
+        await room.localParticipant.setCameraEnabled(false).catch((e) => {
+          logger.warn('[VideoCallSession] setCameraEnabled(false) after publish failed', e);
+        });
+      }
+    }
+
+    // Синхронизируем UI с флагами сессии (не предполагаем «всё включено»).
+    this.notifyMicStateChange(this.isMicOn);
+    this.notifyCamStateChange(this.isCamOn);
+
+    // КРИТИЧНО: После подключения к комнате на iOS может "останавливаться" нативный аудио-рекордер.
+    // Перезапускаем мониторинг микрофона, чтобы эквалайзер продолжал работать как в RandomChat.
+    // 🩺 Android 8.1 / OPPO: watchdog — если видео "залипло" (есть трек, но не идут кадры), пересоздаем автоматически.
+    this.localVideoWatchdog.schedule('connectToLiveKit:post-publish');
+  }
+
+  private async connectToLiveKit(
+    url: string,
+    token: string,
+    connectRequestId: number,
+    targetRoomName?: string,
+    options?: LiveKitConnectOptions
+  ): Promise<boolean> {
+    if (this.ended) {
+      this.incomingAcceptDeferCapture = false;
+      logger.info('[VideoCallSession] ⏭️ Skipping connectToLiveKit: call already ended');
+      return false;
+    }
+    const coalesceKey = (targetRoomName || '').trim();
+    if (coalesceKey) {
+      const inflight = this.liveKitConnectByRoom.get(coalesceKey);
+      if (inflight) {
+        logger.info('[VideoCallSession] ⏭️ Coalescing LiveKit connect (duplicate path / reauth)', {
+          room: coalesceKey,
+        });
+        return inflight;
+      }
+      let resolveGate!: (v: boolean) => void;
+      let rejectGate!: (e: unknown) => void;
+      const gate = new Promise<boolean>((res, rej) => {
+        resolveGate = res;
+        rejectGate = rej;
+      });
+      this.liveKitConnectByRoom.set(coalesceKey, gate);
+      void this.executeConnectToLiveKit(url, token, connectRequestId, targetRoomName, options)
+        .then(
+          (v) => resolveGate(v),
+          (e) => rejectGate(e)
+        )
+        .finally(() => {
+          if (this.liveKitConnectByRoom.get(coalesceKey) === gate) {
+            this.liveKitConnectByRoom.delete(coalesceKey);
+          }
+        });
+      return gate;
+    }
+    return this.executeConnectToLiveKit(url, token, connectRequestId, targetRoomName, options);
+  }
+
+  private async executeConnectToLiveKit(
+    url: string,
+    token: string,
+    connectRequestId: number,
+    targetRoomName?: string,
+    options?: LiveKitConnectOptions
+  ): Promise<boolean> {
+    if (this.ended) {
+      this.incomingAcceptDeferCapture = false;
+      logger.info('[VideoCallSession] ⏭️ Skipping connectToLiveKit: call already ended');
+      return false;
+    }
+    const reusedOrBlocked = await this.prepareRoomForLiveKitConnect(targetRoomName);
+    if (reusedOrBlocked !== null) return reusedOrBlocked;
+    
+    if (this.incomingAcceptDeferCapture) {
+      // Видео-входящий: короткая пауза до capture. Аудио — без sleep (блокировало Room.connect).
+      if (this.isCamOn) {
+        await new Promise((resolve) => setTimeout(resolve, 400));
+      }
+      this.incomingAcceptDeferCapture = false;
+      logger.info('[VideoCallSession] Deferred incoming capture: starting local tracks before LiveKit connect', {
+        camOn: this.isCamOn,
+      });
+    }
+    const tracksReadyPromise = this.startLocalTracksInParallel();
+    
+    const reusedAfterCleanup = await this.clearStuckRoomBeforeConnect(targetRoomName);
+    if (reusedAfterCleanup !== null) return reusedAfterCleanup;
     
     // КРИТИЧНО: Создаем промис подключения для защиты от множественных вызовов
     const connectionPromise = (async (): Promise<boolean> => {
-      // ICE/TURN: используем креды с /api/turn-credentials для стабильности на мобильной сети/VPN
-      let rtcConfig: RTCConfiguration | undefined = undefined;
-      try {
-        rtcConfig = await getIceConfiguration(false, { forceRelayOnly: !!options?.forceRelayOnly });
-      } catch (e: any) {
-        logger.warn('[VideoCallSession] Failed to load ICE config, using LiveKit defaults', {
-          error: e?.message || String(e),
-          forceRelayOnly: !!options?.forceRelayOnly,
-        });
-      }
-
-      // Publish defaults:
-      // - Start reasonably high on capable devices (720p capture is handled separately),
-      // - Allow network-based adaptation via simulcast layers.
-      // We keep adaptiveStream/dynacast disabled because this project previously had
-      // stability issues with "unknown track" quality updates.
-      const facingMode = this.camSide === 'front' ? 'user' : 'environment';
-      const capture = getPreferredVideoCaptureOptions(facingMode);
-      const isHighCapture = capture?.meta?.preset === 'high';
-
-      // IMPORTANT: livekit-client expects VideoPreset objects here (not width/height literals).
-      // Keep it minimal (1 additional layer) to avoid overloading mobile devices.
-      const simulcast = !!isHighCapture;
-      const videoSimulcastLayers = simulcast ? [VideoPresets.h180] : undefined;
-
-      logger.info('[VideoCallSession] LiveKit feature flags', {
-        adaptiveStream: LIVEKIT_ADAPTIVE_STREAM_ENABLED,
-        dynacast: LIVEKIT_DYNACAST_ENABLED,
-      });
-
-      const room = new Room({
-        adaptiveStream: LIVEKIT_ADAPTIVE_STREAM_ENABLED,
-        dynacast: LIVEKIT_DYNACAST_ENABLED,
-        ...(rtcConfig ? { rtcConfig } : {}),
-        publishDefaults: {
-          // Allow higher ceiling on high-capture devices; WebRTC congestion control will still scale down.
-          videoEncoding: { maxBitrate: isHighCapture ? 2_500_000 : 1_200_000, maxFramerate: 30 },
-          simulcast,
-          ...(videoSimulcastLayers ? { videoSimulcastLayers } : {}),
-        },
-      });
-      this.room = room;
-      const partnerDisplayName = this.config.getPartnerDisplayName?.() ?? null;
-      setActiveVideoCall(true, partnerDisplayName || undefined);
-      this.registerRoomEvents(room);
+      const rtcConfig = await this.loadIceConfiguration(options);
+      const room = this.createLiveKitRoomForConnect();
 
       try {
         // КРИТИЧНО: Новая комната всегда в состоянии 'disconnected' до connect()
@@ -7009,10 +7337,10 @@ export class VideoCallSession extends SimpleEventEmitter {
             earlyBootstrap: !!(this as any).__earlyDirectCallBootstrap,
           });
         } catch {}
-        this.livekitConnectStartedAt = connectStartTime;
+        this.metrics.markLiveKitConnectStarted(connectStartTime);
         // Увеличиваем peerConnectionTimeout: при одновременном подключении обоих участников
         // переговоры (negotiation) могут не уложиться в 15s → "negotiation timed out" и повторная попытка.
-        await this.connectRoomWithDnsRetry(room, url, token, targetRoomName, options);
+        await this.connectRoomWithDnsRetry(room, url, token, targetRoomName, options, rtcConfig);
       
         // КРИТИЧНО: Проверяем состояние после подключения
         if (room.state !== 'connected') {
@@ -7030,72 +7358,7 @@ export class VideoCallSession extends SimpleEventEmitter {
           return false;
         }
         
-        // КРИТИЧНО: Логируем детальную информацию о подключении
-        const localIdentity = room.localParticipant?.identity;
-        const remoteParticipantsList = Array.from(room.remoteParticipants.values()).map(p => ({
-          identity: p.identity,
-          audioTracks: p.audioTrackPublications.size,
-          videoTracks: p.videoTrackPublications.size,
-        }));
-        
-        logger.info('[VideoCallSession] Successfully connected to LiveKit', {
-          roomName: room.name,
-          state: room.state,
-          targetRoomName,
-          localIdentity,
-          participantsCount: room.remoteParticipants.size,
-          remoteParticipants: remoteParticipantsList,
-          myUserId: this.config.myUserId,
-          partnerUserId: this.partnerUserId,
-        });
-      
-      // Сохраняем имя подключенной комнаты для проверки переиспользования
-      this.currentRoomName = room.name || targetRoomName || null;
-      this.lastLiveKitUrl = url;
-      this.lastLiveKitToken = token;
-      this.roomConnectedAt = Date.now();
-      this.livekitConnectedAt = this.roomConnectedAt;
-      this.startCallLeaseHeartbeat('active');
-      try {
-        const pending = (global as any).__pendingCallAcceptedRef?.current;
-        const pendingCallId = pending ? String(pending?.callId ?? '').trim() : '';
-        if (pendingCallId && this.callId && pendingCallId === String(this.callId)) {
-          (global as any).__pendingCallAcceptedRef.current = null;
-          logger.info('[VideoCallSession] Cleared pending call:accepted after LiveKit connect', {
-            callId: pendingCallId,
-          });
-        }
-      } catch (_) {}
-      this.scheduleIceTransportLogging(room, options?.reason ? `connect:${options.reason}` : 'connect');
-      this.scheduleRemoteMediaWatchdog({
-        url,
-        token,
-        targetRoomName: this.currentRoomName || targetRoomName || null,
-      }, !!options?.reason && options.reason === 'remote_media_watchdog');
-      
-      // КРИТИЧНО: Логируем детальную информацию о состоянии комнаты
-      const roomLocalIdentity = room.localParticipant?.identity;
-      const roomRemoteParticipantsList = Array.from(room.remoteParticipants.values()).map(p => ({
-        identity: p.identity,
-        audioTracks: p.audioTrackPublications.size,
-        videoTracks: p.videoTrackPublications.size,
-      }));
-      
-      logger.info('[VideoCallSession] Room connected successfully', {
-        roomName: this.currentRoomName,
-        roomState: room.state,
-        participantsCount: room.remoteParticipants.size,
-        localParticipant: !!room.localParticipant,
-        localParticipantIdentity: roomLocalIdentity,
-        remoteParticipants: roomRemoteParticipantsList,
-        myUserId: this.config.myUserId,
-        partnerUserId: this.partnerUserId,
-        expectedPartnerIdentity: this.partnerUserId,
-      });
-      // Временный guard: автоматический fast-start upgrade через ~2.5s давал
-      // заметное мерцание локального блока "Вы" у обоих участников после соединения.
-      // Оставляем fast-start только для быстрого старта звонка, без пост-апгрейда качества.
-      this.fastStartVideoProfileActive = false;
+        this.markLiveKitRoomConnected(room, url, token, targetRoomName, options);
       const joinTimeMs = Date.now() - connectStartTime;
       const shouldWarnAboutMissingTrack = () => {
         // В первые секунды после join LiveKit может еще не успеть довезти remote tracks.
@@ -7104,138 +7367,15 @@ export class VideoCallSession extends SimpleEventEmitter {
         return elapsedMs > 5000 && room.state === 'connected';
       };
       sendClientMetrics(API_BASE, { joinTimeMs, joinSuccess: true }).catch(() => {});
-      if (this.livekitConnectStartedAt > 0 && this.livekitConnectedAt >= this.livekitConnectStartedAt) {
+      const livekitConnectLatencyMs = this.metrics.getLiveKitConnectLatencyMs();
+      if (livekitConnectLatencyMs !== undefined) {
         void sendClientMetrics(API_BASE, {
-          livekitConnectLatencyMs: this.livekitConnectedAt - this.livekitConnectStartedAt,
+          livekitConnectLatencyMs,
         }).catch(() => {});
       }
 
       // Аудио-роутинг управляется на уровне UI (useAudioRouting) — без агрессивных "пинков" из сессии.
-      
-      // КРИТИЧНО: Функция для подписки на все треки участника
-      const subscribeToParticipantTracks = (participant: RemoteParticipant, context: string) => {
-        logger.info(`[VideoCallSession] ${context} - subscribing to participant tracks`, {
-          participantId: participant.identity,
-          audioTracks: participant.audioTrackPublications.size,
-          videoTracks: participant.videoTrackPublications.size,
-        });
-        
-        // Подписываемся на все аудио треки
-        participant.audioTrackPublications.forEach((publication) => {
-          // КРИТИЧНО: Всегда подписываемся явно, даже если уже подписаны
-          // Это гарантирует, что событие TrackSubscribed будет отправлено
-          // КРИТИЧНО: Если трек уже подписан, но не загружен - принудительно переподписываемся
-          // Это может помочь получить событие TrackSubscribed
-          const wasSubscribed = publication.isSubscribed;
-          const hadTrack = !!publication.track;
-          
-          if (!publication.isSubscribed || !publication.track) {
-            publication.setSubscribed(true);
-            logger.info(`[VideoCallSession] ${context} - subscribed to audio track`, {
-              trackSid: publication.trackSid,
-              wasSubscribed,
-              hasTrack: hadTrack,
-              isSubscribedAfter: publication.isSubscribed,
-            });
-          } else {
-            logger.info(`[VideoCallSession] ${context} - audio track already subscribed and loaded`, {
-              trackSid: publication.trackSid,
-            });
-          }
-          
-          // КРИТИЧНО: Если трек уже загружен - обрабатываем сразу
-          // Это важно при принятии звонка, когда инициатор уже подключен и опубликовал треки
-          if (publication.track) {
-            logger.info(`[VideoCallSession] ${context} - processing existing audio track immediately`, {
-              trackSid: publication.trackSid,
-              isSubscribed: publication.isSubscribed,
-              trackReady: publication.track.mediaStreamTrack?.readyState,
-            });
-            this.handleTrackSubscribed(publication.track, publication, participant);
-          } else {
-            // КРИТИЧНО: Если трек не загружен, но подписка выполнена - ждем немного и проверяем снова
-            // Это решает проблему, когда трек загружается асинхронно после setSubscribed
-            setTimeout(() => {
-              if (publication.track && this.room === room && room.state === 'connected') {
-                logger.info(`[VideoCallSession] ${context} - audio track loaded after subscription`, {
-                  trackSid: publication.trackSid,
-                });
-                this.handleTrackSubscribed(publication.track, publication, participant);
-              } else {
-                logger.debug(`[VideoCallSession] ${context} - audio track still not loaded after subscription`, {
-                  trackSid: publication.trackSid,
-                  isSubscribed: publication.isSubscribed,
-                  hasTrack: !!publication.track,
-                });
-              }
-            }, 100);
-            
-            logger.debug(`[VideoCallSession] ${context} - audio track not loaded yet, waiting for TrackSubscribed event or delayed check`, {
-              trackSid: publication.trackSid,
-              isSubscribed: publication.isSubscribed,
-            });
-          }
-        });
-        
-        // Подписываемся на все видео треки
-        participant.videoTrackPublications.forEach((publication) => {
-          if (this.deferRemoteVideoPublication(publication, context)) return;
-          // КРИТИЧНО: Всегда подписываемся явно, даже если уже подписаны
-          // Это гарантирует, что событие TrackSubscribed будет отправлено
-          // КРИТИЧНО: Если трек уже подписан, но не загружен - принудительно переподписываемся
-          // Это может помочь получить событие TrackSubscribed
-          const wasSubscribed = publication.isSubscribed;
-          const hadTrack = !!publication.track;
-          
-          if (!publication.isSubscribed || !publication.track) {
-            publication.setSubscribed(true);
-            logger.info(`[VideoCallSession] ${context} - subscribed to video track`, {
-              trackSid: publication.trackSid,
-              wasSubscribed,
-              hasTrack: hadTrack,
-              isSubscribedAfter: publication.isSubscribed,
-            });
-          } else {
-            logger.info(`[VideoCallSession] ${context} - video track already subscribed and loaded`, {
-              trackSid: publication.trackSid,
-            });
-          }
-          
-          // КРИТИЧНО: Если трек уже загружен - обрабатываем сразу
-          // Это важно при принятии звонка, когда инициатор уже подключен и опубликовал треки
-          if (publication.track) {
-            logger.info(`[VideoCallSession] ${context} - processing existing video track immediately`, {
-              trackSid: publication.trackSid,
-              isSubscribed: publication.isSubscribed,
-              trackReady: publication.track.mediaStreamTrack?.readyState,
-            });
-            this.handleTrackSubscribed(publication.track, publication, participant);
-          } else {
-            // КРИТИЧНО: Если трек не загружен, но подписка выполнена - ждем немного и проверяем снова
-            // Это решает проблему, когда трек загружается асинхронно после setSubscribed
-            setTimeout(() => {
-              if (publication.track && this.room === room && room.state === 'connected') {
-                logger.info(`[VideoCallSession] ${context} - video track loaded after subscription`, {
-                  trackSid: publication.trackSid,
-                });
-                this.handleTrackSubscribed(publication.track, publication, participant);
-              } else {
-                logger.debug(`[VideoCallSession] ${context} - video track still not loaded after subscription`, {
-                  trackSid: publication.trackSid,
-                  isSubscribed: publication.isSubscribed,
-                  hasTrack: !!publication.track,
-                });
-              }
-            }, 100);
-            
-            logger.debug(`[VideoCallSession] ${context} - video track not loaded yet, waiting for TrackSubscribed event or delayed check`, {
-              trackSid: publication.trackSid,
-              isSubscribed: publication.isSubscribed,
-            });
-          }
-        });
-      };
-      
+
       // КРИТИЧНО: Проверяем существующих участников и их треки сразу после подключения
       // Это важно, если участник уже подключен и опубликовал треки до нашего подключения
       // Для звонка 1 на 1 достаточно проверить один раз при подключении
@@ -7246,7 +7386,7 @@ export class VideoCallSession extends SimpleEventEmitter {
           participantsCount: room.remoteParticipants.size,
         });
         room.remoteParticipants.forEach((participant) => {
-          subscribeToParticipantTracks(participant, 'Found existing remote participant after connect');
+          this.remoteTrackSubscriber.subscribeToParticipant(participant, room, 'Found existing remote participant after connect');
         });
       } else {
         logger.info('[VideoCallSession] No remote participants yet, will wait for ParticipantConnected event');
@@ -7254,474 +7394,24 @@ export class VideoCallSession extends SimpleEventEmitter {
       
       // КРИТИЧНО: Повторная проверка через 500ms на случай если треки еще не были загружены
       // Это решает проблему когда событие TrackSubscribed не приходит или приходит с задержкой
-      setTimeout(() => {
-        if (this.room === room && room.state === 'connected') {
-          logger.info('[VideoCallSession] First delayed check for tracks (500ms)', {
-            participantsCount: room.remoteParticipants.size,
-          });
-          room.remoteParticipants.forEach((participant) => {
-            // КРИТИЧНО: Подписываемся на все треки явно, даже если они уже подписаны
-            // Это гарантирует, что треки будут обработаны
-            participant.audioTrackPublications.forEach((publication) => {
-              // Подписываемся явно если еще не подписаны
-              if (!publication.isSubscribed) {
-                publication.setSubscribed(true);
-                logger.info('[VideoCallSession] First delayed subscription to audio track', {
-                  trackSid: publication.trackSid,
-                });
-              }
-              // Обрабатываем трек если он загружен; пропуск если уже применён при первом subscribe
-              if (publication.track) {
-                if (this.shouldSkipRedundantDelayedTrackApply(publication.track, publication)) {
-                  logger.debug('[VideoCallSession] First delayed check skipped (audio already wired)', {
-                    trackSid: publication.trackSid,
-                  });
-                } else {
-                  logger.info('[VideoCallSession] First delayed processing of audio track', {
-                    trackSid: publication.trackSid,
-                  });
-                  this.handleTrackSubscribed(publication.track, publication, participant);
-                }
-              } else {
-                const log = shouldWarnAboutMissingTrack() ? logger.warn : logger.debug;
-                log('[VideoCallSession] First delayed check - audio track still not loaded', {
-                  trackSid: publication.trackSid,
-                  isSubscribed: publication.isSubscribed,
-                  roomState: room.state,
-                });
-              }
-            });
-            participant.videoTrackPublications.forEach((publication) => {
-              if (this.deferRemoteVideoPublication(publication, 'delayed_check_500ms')) return;
-              // Подписываемся явно если еще не подписаны
-              if (!publication.isSubscribed) {
-                publication.setSubscribed(true);
-                logger.info('[VideoCallSession] First delayed subscription to video track', {
-                  trackSid: publication.trackSid,
-                });
-              }
-              if (publication.track) {
-                if (this.shouldSkipRedundantDelayedTrackApply(publication.track, publication)) {
-                  logger.debug('[VideoCallSession] First delayed check skipped (video already wired)', {
-                    trackSid: publication.trackSid,
-                  });
-                } else {
-                  logger.info('[VideoCallSession] First delayed processing of video track', {
-                    trackSid: publication.trackSid,
-                  });
-                  this.handleTrackSubscribed(publication.track, publication, participant);
-                }
-              } else {
-                const log = shouldWarnAboutMissingTrack() ? logger.warn : logger.debug;
-                log('[VideoCallSession] First delayed check - video track still not loaded', {
-                  trackSid: publication.trackSid,
-                  isSubscribed: publication.isSubscribed,
-                  roomState: room.state,
-                });
-              }
-            });
-          });
-        }
-      }, 500);
-      
+      this.remoteTrackSubscriber.scheduleDelayedCheck(room, 'First', 500, shouldWarnAboutMissingTrack);
+
       // КРИТИЧНО: Дополнительная проверка через 1000ms для гарантированной обработки треков
       // Это особенно важно при принятии звонка, когда инициатор уже подключен
-      setTimeout(() => {
-        if (this.room === room && room.state === 'connected') {
-          logger.info('[VideoCallSession] Second delayed check for tracks (1000ms)', {
-            participantsCount: room.remoteParticipants.size,
-          });
-          room.remoteParticipants.forEach((participant) => {
-            // Проверяем и обрабатываем все треки еще раз
-            participant.audioTrackPublications.forEach((publication) => {
-              if (!publication.isSubscribed) {
-                publication.setSubscribed(true);
-                logger.info('[VideoCallSession] Second delayed subscription to audio track', {
-                  trackSid: publication.trackSid,
-                });
-              }
-              if (publication.track) {
-                if (this.shouldSkipRedundantDelayedTrackApply(publication.track, publication)) {
-                  logger.debug('[VideoCallSession] Second delayed check skipped (audio already wired)', {
-                    trackSid: publication.trackSid,
-                  });
-                } else {
-                  logger.info('[VideoCallSession] Second delayed processing of audio track', {
-                    trackSid: publication.trackSid,
-                  });
-                  this.handleTrackSubscribed(publication.track, publication, participant);
-                }
-              } else {
-                const log = shouldWarnAboutMissingTrack() ? logger.warn : logger.debug;
-                log('[VideoCallSession] Second delayed check - audio track still not loaded', {
-                  trackSid: publication.trackSid,
-                  isSubscribed: publication.isSubscribed,
-                  roomState: room.state,
-                });
-              }
-            });
-            participant.videoTrackPublications.forEach((publication) => {
-              if (this.deferRemoteVideoPublication(publication, 'delayed_check_1000ms')) return;
-              if (!publication.isSubscribed) {
-                publication.setSubscribed(true);
-                logger.info('[VideoCallSession] Second delayed subscription to video track', {
-                  trackSid: publication.trackSid,
-                });
-              }
-              if (publication.track) {
-                if (this.shouldSkipRedundantDelayedTrackApply(publication.track, publication)) {
-                  logger.debug('[VideoCallSession] Second delayed check skipped (video already wired)', {
-                    trackSid: publication.trackSid,
-                  });
-                } else {
-                  logger.info('[VideoCallSession] Second delayed processing of video track', {
-                    trackSid: publication.trackSid,
-                  });
-                  this.handleTrackSubscribed(publication.track, publication, participant);
-                }
-              } else {
-                const log = shouldWarnAboutMissingTrack() ? logger.warn : logger.debug;
-                log('[VideoCallSession] Second delayed check - video track still not loaded', {
-                  trackSid: publication.trackSid,
-                  isSubscribed: publication.isSubscribed,
-                  roomState: room.state,
-                });
-              }
-            });
-          });
-        }
-      }, 1000);
+      this.remoteTrackSubscriber.scheduleDelayedCheck(room, 'Second', 1000, shouldWarnAboutMissingTrack);
 
-      // Даём движку LiveKit время поднять транспорт перед публикацией (снижает "publication timed out" и "connection state mismatch").
-      const postConnectPublishDelayMs = this.isCamOn ? 350 : 0;
-      if (postConnectPublishDelayMs > 0 && !this.ended && this.room === room) {
-        await new Promise<void>((r) => setTimeout(r, postConnectPublishDelayMs));
-      }
-
-      // Дожидаемся локальных треков (шли параллельно с Room.connect).
-      try {
-        markCallPerf('livekit_await_tracks_before_publish', {
-          hasAudio: !!this.localAudioTrack,
-          hasVideo: !!this.localVideoTrack,
-          camOn: this.isCamOn,
-        });
-      } catch {}
-      await tracksReadyPromise;
-      if (!this.localAudioTrack || (this.isCamOn && !this.localVideoTrack)) {
-        await this.ensureLocalTracks().catch((e) => {
-          logger.warn('[VideoCallSession] ensureLocalTracks before publish failed', {
-            error: (e as Error)?.message || String(e),
-          });
-        });
-      }
-
-      // КРИТИЧНО: Проверяем состояние комнаты перед публикацией треков
-      // LiveKit автоматически управляет WebRTC соединениями, но нужно убедиться что комната подключена
-      if (room.state !== 'connected' || !room.localParticipant) {
-        logger.warn('[VideoCallSession] Room not connected or no local participant, skipping track publish', {
-          state: room.state,
-          hasLocalParticipant: !!room.localParticipant
-        });
-        // Синхронизируем UI с флагами сессии (пользователь мог выключить мик/камеру до конца connect).
-        this.notifyMicStateChange(this.isMicOn);
-        this.notifyCamStateChange(this.isCamOn);
-        return true; // Возвращаем true, так как подключение успешно, просто треки не опубликованы
-      }
-
-      if (this.localVideoTrack && this.isCamOn) {
-        // КРИТИЧНО: Дополнительная проверка состояния перед публикацией
-        if (room.state !== 'connected' || !room.localParticipant) {
-          logger.debug('[VideoCallSession] Room disconnected before video track publish, skipping');
-        } else {
-          // КРИТИЧНО: Проверяем, не опубликован ли трек уже
-          if (this.isVideoTrackPublished(this.localVideoTrack)) {
-            logger.debug('[VideoCallSession] Video track already published in connectToLiveKit, skipping', {
-              trackId: this.localVideoTrack?.sid || this.localVideoTrack?.mediaStreamTrack?.id,
-            });
-          } else if (this.localVideoTrack) {
-            await room.localParticipant.publishTrack(this.localVideoTrack).catch((e) => {
-              // Игнорируем ошибки дубликатов и закрытых соединений
-              const errorMsg = e?.message || String(e || '');
-              if (errorMsg.includes('already') || 
-                  errorMsg.includes('duplicate') ||
-                  errorMsg.includes('closed') || 
-                  errorMsg.includes('disconnected')) {
-                logger.debug('[VideoCallSession] Ignoring publish error (already/closed)', { error: errorMsg });
-                return;
-              }
-              logger.warn('[VideoCallSession] Failed to publish video track', e);
-            });
-            logger.info('[VideoCallSession] Video track published', {
-              trackId: this.localVideoTrack?.sid || this.localVideoTrack?.mediaStreamTrack?.id,
-            });
-          }
-        }
-      } else if (this.localVideoTrack && !this.isCamOn) {
-        logger.debug('[VideoCallSession] Skipping video publish in connectToLiveKit — camera off', {
-          trackId: this.localVideoTrack?.sid || this.localVideoTrack?.mediaStreamTrack?.id,
-        });
-      }
-      if (this.localAudioTrack) {
-        // КРИТИЧНО: Дополнительная проверка состояния перед публикацией
-        if (room.state !== 'connected' || !room.localParticipant) {
-          logger.debug('[VideoCallSession] Room disconnected before audio track publish, skipping');
-        } else {
-          // КРИТИЧНО: Проверяем, не опубликован ли трек уже
-          if (this.isAudioTrackPublished(this.localAudioTrack)) {
-            logger.debug('[VideoCallSession] Audio track already published in connectToLiveKit, skipping', {
-              trackId: this.localAudioTrack?.sid || this.localAudioTrack?.mediaStreamTrack?.id,
-            });
-          } else if (this.localAudioTrack) {
-            await room.localParticipant.publishTrack(this.localAudioTrack).catch((e) => {
-              // Игнорируем ошибки дубликатов и закрытых соединений
-              const errorMsg = e?.message || String(e || '');
-              if (errorMsg.includes('already') || 
-                  errorMsg.includes('duplicate') ||
-                  errorMsg.includes('closed') || 
-                  errorMsg.includes('disconnected')) {
-                logger.debug('[VideoCallSession] Ignoring publish error (already/closed)', { error: errorMsg });
-                return;
-              }
-              logger.warn('[VideoCallSession] Failed to publish audio track', e);
-            });
-            logger.info('[VideoCallSession] Audio track published', {
-              trackId: this.localAudioTrack?.sid || this.localAudioTrack?.mediaStreamTrack?.id,
-            });
-          }
-        }
-      }
-      this.publishCompletedAt = Date.now();
-      if (this.livekitConnectedAt > 0 && this.publishCompletedAt >= this.livekitConnectedAt) {
-        void sendClientMetrics(API_BASE, {
-          publishLatencyMs: this.publishCompletedAt - this.livekitConnectedAt,
-        }).catch(() => {});
-      }
-
-      // Пользователь мог выключить мик во время connecting — publish не меняет желаемое состояние в комнате.
-      if (room.state === 'connected' && room.localParticipant) {
-        await room.localParticipant.setMicrophoneEnabled(this.isMicOn).catch((e) => {
-          logger.warn('[VideoCallSession] setMicrophoneEnabled after publish failed', e);
-        });
-        // Только выкл: видео публикуем вручную через publishTrack; при isCamOn=true не дёргаем setCameraEnabled(true),
-        // чтобы не плодить вторую публикацию на части девайсов.
-        if (!this.isCamOn) {
-          await room.localParticipant.setCameraEnabled(false).catch((e) => {
-            logger.warn('[VideoCallSession] setCameraEnabled(false) after publish failed', e);
-          });
-        }
-      }
-
-      // Синхронизируем UI с флагами сессии (не предполагаем «всё включено»).
-      this.notifyMicStateChange(this.isMicOn);
-      this.notifyCamStateChange(this.isCamOn);
-
-      // КРИТИЧНО: После подключения к комнате на iOS может "останавливаться" нативный аудио-рекордер.
-      // Перезапускаем мониторинг микрофона, чтобы эквалайзер продолжал работать как в RandomChat.
-      // 🩺 Android 8.1 / OPPO: watchdog — если видео "залипло" (есть трек, но не идут кадры), пересоздаем автоматически.
-      this.scheduleLocalVideoHealthCheck('connectToLiveKit:post-publish');
+      await this.publishLocalTracksAfterConnect(room, tracksReadyPromise);
       return true;
     } catch (e: any) {
-      sendClientMetrics(API_BASE, { joinFailure: true }).catch(() => {});
-      const errorMessage = e?.message || String(e);
-      const isInvalidApiKey = errorMessage.includes('invalid API key') || 
-                               errorMessage.includes('401') ||
-                               errorMessage.includes('Unauthorized');
-      const isClientDisconnect = errorMessage.includes('Client initiated disconnect') || errorMessage.includes('user initiated disconnect');
-
-      if (
-        !this.ended &&
-        !isClientDisconnect &&
-        this.room === room &&
-        (room.state === 'connected' || room.state === 'reconnecting')
-      ) {
-        if (room.state === 'connected') {
-          this.currentRoomName = this.currentRoomName || room.name || targetRoomName || null;
-          this.lastLiveKitUrl = url;
-          this.lastLiveKitToken = token;
-          logger.info(
-            '[VideoCallSession] Connect promise failed after SDK already connected; keeping room',
-            { roomState: room.state, targetRoomName, error: errorMessage },
-          );
-          return true;
-        }
-        let earlyWait = 0;
-        while (this.room === room && room.state === 'reconnecting' && earlyWait < 120) {
-          await new Promise((resolve) => setTimeout(resolve, 100));
-          earlyWait++;
-        }
-        const stateAfterEarlyReconnect = room.state as ConnectionState;
-        if (this.room === room && stateAfterEarlyReconnect === ConnectionState.Connected) {
-          this.currentRoomName = this.currentRoomName || room.name || targetRoomName || null;
-          this.lastLiveKitUrl = url;
-          this.lastLiveKitToken = token;
-          logger.info(
-            '[VideoCallSession] Room reconnected after connect promise error; keeping session',
-            { targetRoomName, error: errorMessage },
-          );
-          return true;
-        }
-      }
-
-      if (this.ended || isClientDisconnect) {
-        logger.info('[VideoCallSession] Connect aborted (call ended or user disconnect)', {
-          ended: this.ended,
-          error: errorMessage,
-        });
-      } else {
-        const isTransientPcError =
-          /could not establish pc connection|pc connection|negotiation (disconnected|timed out)|transport error|ice (failed|disconnected)/i.test(
-            errorMessage,
-          );
-        // VPN / жёсткий NAT: одна попытка через TURN relay (как в RandomChat).
-        if (
-          isTransientPcError &&
-          !options?.forceRelayOnly &&
-          this.connectRequestId === connectRequestId
-        ) {
-          logger.warn('[VideoCallSession] PC connect failed — retrying with TURN relay-only', {
-            error: errorMessage,
-            targetRoomName,
-            connectReason: options?.reason || null,
-          });
-          enableForcedRelayFallback('video_call_pc_connection');
-          void sendClientMetrics(API_BASE, { relayFallback: true }).catch(() => {});
-          try {
-            if (room.state !== 'disconnected') {
-              await room.disconnect();
-            }
-          } catch {}
-          if (this.room === room) {
-            this.room = null;
-            this.currentRoomName = null;
-          }
-          return this.connectToLiveKit(url, token, connectRequestId, targetRoomName, {
-            forceRelayOnly: true,
-            reason: 'pc_connect_relay_retry',
-          });
-        }
-        const logFn = isTransientPcError ? logger.warn : logger.error;
-        // Не логировать полный стек, если к моменту catch звонок уже завершён (например, retry после end с другой стороны)
-        if (this.ended) {
-          logger.debug('[VideoCallSession] Connect failed after call ended', { error: errorMessage });
-        } else {
-          logFn('[VideoCallSession] Error connecting to LiveKit', {
-            error: errorMessage,
-            errorCode: e?.code,
-            errorName: e?.name,
-            url,
-            urlHost: url ? new URL(url).hostname : 'unknown',
-            targetRoomName,
-            hasToken: !!token,
-            tokenLength: token?.length || 0,
-            tokenPrefix: token ? token.substring(0, 20) + '...' : 'no-token',
-            roomState: room?.state,
-            isInvalidApiKey,
-            forceRelayOnly: !!options?.forceRelayOnly,
-            stack: e?.stack,
-          });
-        }
-      }
-      
-      // Если ошибка связана с API ключом, логируем дополнительную информацию
-      if (isInvalidApiKey) {
-        // This warning is often transient during reconnects/room switches; avoid surfacing it as a hard "Console Error" on iOS.
-        if (!this.hasLoggedLiveKitApiKeyWarning) {
-          this.hasLoggedLiveKitApiKeyWarning = true;
-          logger.warn('[VideoCallSession] ⚠️ LiveKit API key validation failed!', {
-            url,
-            possibleCauses: [
-              'API key/secret mismatch between backend and LiveKit server',
-              'LiveKit URL points to wrong server',
-              'Token expired or malformed',
-              'Backend environment variables not set correctly'
-            ],
-            suggestion: 'Check LIVEKIT_API_KEY and LIVEKIT_API_SECRET in backend .env file match LiveKit server credentials'
-          });
-        } else {
-          logger.debug('[VideoCallSession] LiveKit API key validation failed (suppressed повтор)', { url });
-        }
-      }
-      
-      if (this.room === room) {
-        const sdkRecovered =
-          room.state === 'connected' || room.state === 'reconnecting';
-        if (sdkRecovered) {
-          if (room.state === 'connected') {
-            this.currentRoomName = this.currentRoomName || room.name || targetRoomName || null;
-            this.lastLiveKitUrl = url;
-            this.lastLiveKitToken = token;
-            logger.info(
-              '[VideoCallSession] Connect promise failed after SDK already connected; keeping room',
-              {
-                roomState: room.state,
-                targetRoomName,
-                error: errorMessage,
-              },
-            );
-            return true;
-          }
-          let waitCount = 0;
-          while (
-            this.room === room &&
-            room.state === 'reconnecting' &&
-            waitCount < 120
-          ) {
-            await new Promise((resolve) => setTimeout(resolve, 100));
-            waitCount++;
-          }
-          const stateAfterReconnect = room.state as ConnectionState;
-          if (this.room === room && stateAfterReconnect === ConnectionState.Connected) {
-            this.currentRoomName = this.currentRoomName || room.name || targetRoomName || null;
-            this.lastLiveKitUrl = url;
-            this.lastLiveKitToken = token;
-            logger.info(
-              '[VideoCallSession] Room reconnected after connect promise error; keeping session',
-              { targetRoomName, error: errorMessage },
-            );
-            return true;
-          }
-          logger.info(
-            '[VideoCallSession] Connect promise failed while room reconnecting; not tearing down',
-            { roomState: room.state, targetRoomName, error: errorMessage },
-          );
-        } else {
-          this.room = null;
-          this.currentRoomName = null;
-          setActiveVideoCall(false);
-        }
-      }
-      
-      // КРИТИЧНО: Не считаем запрос "stale" если он для той же комнаты
-      // Это позволяет обрабатывать быстрые повторные запросы на подключение к одной комнате
-      const isStaleRequest = this.connectRequestId !== connectRequestId || this.room !== room;
-      const isSameRoom = targetRoomName && 
-                         this.currentRoomName === targetRoomName && 
-                         this.room && 
-                         this.room.state === 'connected';
-      
-      if (isStaleRequest && !isSameRoom) {
-        logger.debug('[VideoCallSession] Request is stale and not for same room', {
-          connectRequestId,
-          currentConnectRequestId: this.connectRequestId,
-          targetRoomName,
-          currentRoomName: this.currentRoomName,
-          roomState: this.room?.state,
-        });
-        return false;
-      }
-      
-      // Если запрос "stale", но для той же комнаты, и комната уже подключена - возвращаем успех
-      if (isStaleRequest && isSameRoom) {
-        logger.info('[VideoCallSession] Request is stale but room already connected, reusing connection', {
-          connectRequestId,
-          currentConnectRequestId: this.connectRequestId,
-          targetRoomName,
-          currentRoomName: this.currentRoomName,
-        });
-        return true;
-      }
-      
-      throw e;
+      return await this.recoverFromLiveKitConnectError(
+        e,
+        room,
+        url,
+        token,
+        connectRequestId,
+        targetRoomName,
+        options,
+      );
     }
     })();
     
@@ -7743,33 +7433,34 @@ export class VideoCallSession extends SimpleEventEmitter {
     }
   }
 
-  private isLikelyDnsResolutionError(errorMessage: string): boolean {
-    const msg = String(errorMessage || '').toLowerCase();
-    return (
-      msg.includes('unable to resolve host') ||
-      msg.includes('ename_not_resolved') ||
-      msg.includes('dns') ||
-      msg.includes('host lookup')
-    );
-  }
-
   private async connectRoomWithDnsRetry(
     room: Room,
     url: string,
     token: string,
     targetRoomName?: string,
-    options?: LiveKitConnectOptions
+    options?: LiveKitConnectOptions,
+    rtcConfig?: RTCConfiguration,
   ): Promise<void> {
+    // КРИТИЧНО: свой ICE/TURN передаём именно здесь. В опциях конструктора Room
+    // livekit-client его игнорирует — см. ./videoCall/iceConnectOptions.
+    const connectOptions = buildLiveKitConnectOptions({
+      peerConnectionTimeoutMs: LIVEKIT_PEER_CONNECTION_TIMEOUT_MS,
+      rtcConfig,
+      applyClientIce: LIVEKIT_APPLY_CLIENT_ICE,
+    });
+    logger.info('[VideoCallSession] LiveKit connect ICE policy', {
+      appliedClientRtcConfig: !!connectOptions.rtcConfig,
+      iceTransportPolicy: (connectOptions.rtcConfig as any)?.iceTransportPolicy ?? 'server_default',
+      forceRelayOnly: !!options?.forceRelayOnly,
+      targetRoomName,
+    });
     const maxAttempts = 3;
     let attempt = 0;
     let lastError: unknown = null;
     while (attempt < maxAttempts) {
       attempt += 1;
       try {
-        await room.connect(url, token, {
-          autoSubscribe: true,
-          peerConnectionTimeout: 30_000,
-        });
+        await room.connect(url, token, connectOptions);
         if (attempt > 1) {
           logger.info('[VideoCallSession] LiveKit connect recovered after DNS retry', {
             url,
@@ -7783,7 +7474,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       } catch (e: any) {
         lastError = e;
         const message = e?.message || String(e);
-        const isDnsError = this.isLikelyDnsResolutionError(message);
+        const isDnsError = isLikelyDnsResolutionError(message);
         const canRetry = isDnsError && attempt < maxAttempts && !this.ended;
         logger.warn('[VideoCallSession] LiveKit connect attempt failed', {
           url,
@@ -7803,45 +7494,15 @@ export class VideoCallSession extends SimpleEventEmitter {
     throw lastError;
   }
 
-  private async disconnectRoom(reason: 'user' | 'server' = 'user'): Promise<void> {
-    this.stopCallLeaseHeartbeat();
-    this.clearMediaReconnectGrace();
-    this.clearLocalVideoWatchdog();
-    this.clearRemoteMediaWatchdog(true);
-    this.clearIceTransportLogTimers();
-    setActiveVideoCall(false);
-    // КРИТИЧНО: Защита от множественных вызовов disconnectRoom
-    // Если уже идет отключение, возвращаем существующий промис
-    if (this.isDisconnecting && this.disconnectPromise) {
-      logger.debug('[VideoCallSession] disconnectRoom already in progress, waiting...');
-      return this.disconnectPromise;
-    }
-    
-    const room = this.room;
-    if (!room) {
-      logger.debug('[VideoCallSession] disconnectRoom: no room to disconnect');
-      return;
-    }
-    
-      // Проверяем, не отключена ли комната уже
-      if (room.state === 'disconnected') {
-        logger.debug('[VideoCallSession] disconnectRoom: room already disconnected');
-        this.room = null;
-        this.currentRoomName = null; // Очищаем имя комнаты
-        return;
-      }
-    
-    this.isDisconnecting = true;
-    this.disconnectReason = reason;
-    this.connectRequestId++;
-    // Сразу глушим входящие SDP: иначе offer от SFU после ухода партнёра
-    // доезжает до createAnswer параллельно с leave/close → "Called in wrong state: stable".
-    // PC не закрываем здесь — это сделает room.disconnect() в правильном порядке (leave → close).
-    this.abortIncomingSdpNegotiation(room);
-    
-    // КРИТИЧНО: Создаем промис, который разрешится только когда комната полностью отключится
-    // Это гарантирует, что все ресурсы (включая ping/pong handlers) будут очищены перед новым подключением
-    this.disconnectPromise = new Promise<void>((resolve) => {
+  /**
+   * Промис, который разрешается только когда комната реально отключилась.
+   *
+   * Без этого следующий connect стартует раньше, чем SDK освободит ping/pong-обработчики
+   * и PeerConnection, и новый Room.connect падает. Поэтому здесь и обработчик Disconnected,
+   * и таймаут с принудительной утилизацией — разрешить промис обязаны в любом случае.
+   */
+  private createRoomDisconnectPromise(room: Room): Promise<void> {
+    return new Promise<void>((resolve) => {
       // КРИТИЧНО: Сохраняем ссылку на room, чтобы не потерять её при установке this.room = null
       const roomToDisconnect = room;
       let disconnectedHandler: (() => void) | null = null;
@@ -7969,6 +7630,47 @@ export class VideoCallSession extends SimpleEventEmitter {
         }
       })();
     });
+  }
+
+  private async disconnectRoom(reason: 'user' | 'server' = 'user'): Promise<void> {
+    this.stopCallLeaseHeartbeat();
+    this.clearMediaReconnectGrace();
+    this.localVideoWatchdog.clear();
+    this.clearRemoteMediaWatchdog(true);
+    this.iceTransportLogger.clear();
+    setActiveVideoCall(false);
+    // КРИТИЧНО: Защита от множественных вызовов disconnectRoom
+    // Если уже идет отключение, возвращаем существующий промис
+    if (this.isDisconnecting && this.disconnectPromise) {
+      logger.debug('[VideoCallSession] disconnectRoom already in progress, waiting...');
+      return this.disconnectPromise;
+    }
+    
+    const room = this.room;
+    if (!room) {
+      logger.debug('[VideoCallSession] disconnectRoom: no room to disconnect');
+      return;
+    }
+    
+      // Проверяем, не отключена ли комната уже
+      if (room.state === 'disconnected') {
+        logger.debug('[VideoCallSession] disconnectRoom: room already disconnected');
+        this.room = null;
+        this.currentRoomName = null; // Очищаем имя комнаты
+        return;
+      }
+    
+    this.isDisconnecting = true;
+    this.disconnectReason = reason;
+    this.connectRequestId++;
+    // Сразу глушим входящие SDP: иначе offer от SFU после ухода партнёра
+    // доезжает до createAnswer параллельно с leave/close → "Called in wrong state: stable".
+    // PC не закрываем здесь — это сделает room.disconnect() в правильном порядке (leave → close).
+    this.abortIncomingSdpNegotiation(room);
+    
+    // КРИТИЧНО: Создаем промис, который разрешится только когда комната полностью отключится
+    // Это гарантирует, что все ресурсы (включая ping/pong handlers) будут очищены перед новым подключением
+    this.disconnectPromise = this.createRoomDisconnectPromise(room);
     
     // КРИТИЧНО: Очистка this.room теперь происходит СИНХРОННО в обработчике Disconnected
     // или в таймауте, поэтому этот .then() колбэк больше не нужен для очистки,
@@ -8066,130 +7768,29 @@ export class VideoCallSession extends SimpleEventEmitter {
     }
   }
 
-  private shouldRunLocalVideoWatchdog(): boolean {
-    if (Platform.OS !== 'android') return false;
-    const api = Number(Platform.Version);
-    const isOldAndroid = Number.isFinite(api) && api <= 27; // Android 8.1 and below
-    const brand = String((Device as any)?.brand || '').toLowerCase();
-    const manufacturer = String((Device as any)?.manufacturer || '').toLowerCase();
-    const isOppoLike = brand.includes('oppo') || manufacturer.includes('oppo');
-    return isOldAndroid || isOppoLike;
-  }
-
-  private clearLocalVideoWatchdog(): void {
-    if (this.localVideoHealthTimeout) {
-      try { clearTimeout(this.localVideoHealthTimeout); } catch {}
-      this.localVideoHealthTimeout = null;
-    }
-  }
-
-  private scheduleLocalVideoHealthCheck(context: string): void {
-    if (!this.shouldRunLocalVideoWatchdog()) return;
-    if (!this.isCamOn) return;
-    if (!this.room || this.room.state !== 'connected') return;
-    if (!this.localVideoTrack || this.localVideoTrack.mediaStreamTrack?.readyState === 'ended') return;
-
-    this.clearLocalVideoWatchdog();
-    if (this.localVideoHealthAttempts > 3) this.localVideoHealthAttempts = 0;
-
-    this.localVideoHealthTimeout = setTimeout(() => {
-      void this.runLocalVideoHealthCheckOnce(context);
-    }, 2800);
-  }
-
-  private pickLocalVideoStat(stats: any[]): any | null {
-    if (!Array.isArray(stats) || stats.length === 0) return null;
-    const sid = this.localVideoTrack?.sid;
-    const isVideo = (s: any) => String(s?.kind || '').toLowerCase() === 'video';
-    const matchesSid = (s: any) =>
-      sid && (String((s as any)?.trackSid || '') === String(sid) || String((s as any)?.mediaTrackId || '') === String(sid));
-
-    const bySid = sid ? stats.find((s) => isVideo(s) && matchesSid(s)) : null;
-    if (bySid) return bySid;
-    return stats.find((s) => isVideo(s)) || null;
-  }
-
-  private extractVideoProgress(stat: any): { frames: number; bytes: number; packets: number } {
-    const frames = Number(
-      (stat as any)?.framesSent ??
-      (stat as any)?.framesEncoded ??
-      (stat as any)?.frames ??
-      0
-    ) || 0;
-    const bytes = Number(
-      (stat as any)?.bytesSent ??
-      (stat as any)?.bytes ??
-      (stat as any)?.bytesSentTotal ??
-      0
-    ) || 0;
-    const packets = Number(
-      (stat as any)?.packetsSent ??
-      (stat as any)?.packets ??
-      0
-    ) || 0;
-    return { frames, bytes, packets };
-  }
-
-  private async runLocalVideoHealthCheckOnce(context: string): Promise<void> {
+  /**
+   * Best-effort ремонт залипшей камеры: снять публикацию, пересоздать трек, опубликовать снова.
+   * Вызывается только сторожем localVideoWatchdog.
+   */
+  private async recoverStuckLocalVideo(context: string): Promise<void> {
     try {
-      if (!this.shouldRunLocalVideoWatchdog()) return;
-      if (!this.isCamOn) return;
-      if (!this.room || this.room.state !== 'connected') return;
-      if (!this.localVideoTrack || this.localVideoTrack.mediaStreamTrack?.readyState === 'ended') return;
-      if (this.localVideoHealthAttempts >= 2) return;
-
-      const getStats = async () => {
-        const stats = await (this.room?.localParticipant as any)?.getTrackStats?.();
-        const st = this.pickLocalVideoStat(stats || []);
-        return this.extractVideoProgress(st);
-      };
-
-      const a = await getStats().catch(() => ({ frames: 0, bytes: 0, packets: 0 }));
-      await new Promise((r) => setTimeout(r, 1200));
-      const b = await getStats().catch(() => ({ frames: 0, bytes: 0, packets: 0 }));
-
-      const framesDelta = b.frames - a.frames;
-      const bytesDelta = b.bytes - a.bytes;
-      const packetsDelta = b.packets - a.packets;
-
-      const stuck = framesDelta <= 0 && bytesDelta <= 5120 && packetsDelta <= 0;
-      if (!stuck) return;
-
-      this.localVideoHealthAttempts += 1;
-      logger.warn('[VideoCallSession] 🔧 Local video seems stuck; restarting camera', {
-        context,
-        attempt: this.localVideoHealthAttempts,
-        framesDelta,
-        bytesDelta,
-        packetsDelta,
-        roomState: this.room.state,
-        camSide: this.camSide,
-      });
-
-      // Best-effort: unpublish old track, recreate, and republish.
-      try {
-        if (this.room?.localParticipant && this.localVideoTrack) {
-          await this.room.localParticipant.unpublishTrack(this.localVideoTrack, false).catch(() => {});
-        }
-      } catch {}
-
-      await this.recreateLocalVideoTrack(`watchdog:${context}`);
-      if (this.room && this.room.state === 'connected' && this.room.localParticipant) {
-        if (this.localVideoTrack && this.isCamOn && !this.isVideoTrackPublished(this.localVideoTrack)) {
-          await this.unpublishOtherLocalTracks('video', this.localVideoTrack);
-          await this.room.localParticipant.publishTrack(this.localVideoTrack).catch(() => {});
-        }
-        // КРИТИЧНО: аудио перепубликовываем только если оно ещё не опубликовано.
-        // Иначе повторный publish может сломать звук у собеседника (дубликат/замена трека).
-        if (this.localAudioTrack && this.isMicOn && !this.isAudioTrackPublished(this.localAudioTrack)) {
-          await this.unpublishOtherLocalTracks('audio', this.localAudioTrack);
-          await this.room.localParticipant.publishTrack(this.localAudioTrack).catch(() => {});
-        }
+      if (this.room?.localParticipant && this.localVideoTrack) {
+        await this.room.localParticipant.unpublishTrack(this.localVideoTrack, false).catch(() => {});
       }
+    } catch {}
 
-      this.scheduleLocalVideoHealthCheck('post-recovery');
-    } catch (e) {
-      logger.debug('[VideoCallSession] Local video health check failed (ignored)', e);
+    await this.recreateLocalVideoTrack(`watchdog:${context}`);
+    if (this.room && this.room.state === 'connected' && this.room.localParticipant) {
+      if (this.localVideoTrack && this.isCamOn && !this.isVideoTrackPublished(this.localVideoTrack)) {
+        await this.unpublishOtherLocalTracks('video', this.localVideoTrack);
+        await this.room.localParticipant.publishTrack(this.localVideoTrack).catch(() => {});
+      }
+      // КРИТИЧНО: аудио перепубликовываем только если оно ещё не опубликовано.
+      // Иначе повторный publish может сломать звук у собеседника (дубликат/замена трека).
+      if (this.localAudioTrack && this.isMicOn && !this.isAudioTrackPublished(this.localAudioTrack)) {
+        await this.unpublishOtherLocalTracks('audio', this.localAudioTrack);
+        await this.room.localParticipant.publishTrack(this.localAudioTrack).catch(() => {});
+      }
     }
   }
 
@@ -8207,430 +7808,460 @@ export class VideoCallSession extends SimpleEventEmitter {
 
   private registerRoomEvents(room: Room): void {
     room
-      .on(RoomEvent.Reconnecting, () => {
-        this.liveKitReconnecting = true;
-        this.lastLiveKitReconnectingAt = Date.now();
-        void sendClientMetrics(API_BASE, { roomReconnecting: true }).catch(() => {});
-        // Do NOT reset streams/UI here. LiveKit will recover by itself.
-        logger.warn('[VideoCallSession] LiveKit room reconnecting (transient)', {
-          roomName: room.name,
-          roomState: room.state,
-          myUserId: this.config.myUserId,
-          partnerUserId: this.partnerUserId,
-        });
-        trackReleaseEvent('signal_reconnect', {
-          phase: 'reconnecting',
-          callId: this.callId,
-          roomId: this.roomId || room.name || null,
-          userId: this.config.myUserId,
-          partnerUserId: this.partnerUserId,
-        });
-        // Second chance to notify survivor if NetInfo lost the race with socket death.
-        this.emitNetworkDownToPeer('livekit_reconnecting');
-        this.startCallLeaseHeartbeat('reconnecting');
-        this.clearPendingRemoteDisconnectTimer();
-        try {
-          this.emit('livekitReconnecting');
-        } catch {}
-      })
-      .on(RoomEvent.Reconnected, () => {
-        this.liveKitReconnecting = false;
-        // Старый room.connect() мог ещё висеть в очереди — не даём ему обнулить уже живую комнату.
-        this.connectRequestId++;
-        void sendClientMetrics(API_BASE, { roomReconnected: true, reconnect: true }).catch(() => {});
-        logger.info('[VideoCallSession] LiveKit room reconnected', {
-          roomName: room.name,
-          roomState: room.state,
-          myUserId: this.config.myUserId,
-          partnerUserId: this.partnerUserId,
-          participantsCount: room.remoteParticipants.size,
-        });
-        trackReleaseEvent('signal_reconnect', {
-          phase: 'reconnected',
-          callId: this.callId,
-          roomId: this.roomId || room.name || null,
-          userId: this.config.myUserId,
-          partnerUserId: this.partnerUserId,
-          participantsCount: room.remoteParticipants.size,
-        });
-        if (this.mediaReconnectInProgress) {
-          // Own SFU reconnect while still waiting for peer — keep «Восстановление…».
-          if (this.waitingForRemotePeerRejoin && !this.hasExpectedRemoteParticipantInRoom(room)) {
-            this.markMediaLinkRecovering('room_reconnected_waiting_peer');
-            this.startCallLeaseHeartbeat('reconnecting');
-          } else {
-            this.onMediaReconnectSucceeded();
-          }
-        } else {
-          this.startCallLeaseHeartbeat('active');
-        }
-        this.refreshCurrentRemoteParticipant(room);
-        this.scheduleIceTransportLogging(room, 'reconnected');
-        this.clearPendingRemoteDisconnectTimer();
-        if (!(this.waitingForRemotePeerRejoin && !this.hasExpectedRemoteParticipantInRoom(room))) {
-          try {
-            this.emit('livekitReconnected');
-          } catch {}
-        }
-        if (
-          !this.remoteStream &&
-          !this.remoteVideoTrack &&
-          !this.remoteAudioTrack &&
-          this.lastLiveKitUrl &&
-          this.lastLiveKitToken
-        ) {
-          this.scheduleRemoteMediaWatchdog({
-            url: this.lastLiveKitUrl,
-            token: this.lastLiveKitToken,
-            targetRoomName: room.name || this.currentRoomName,
-          }, this.remoteMediaRecoveryInProgress || this.remoteMediaRelayRecoveryAttempted);
-        }
-        // Сначала даём LiveKit стабилизировать/перепубликовать существующие tracks,
-        // затем продолжаем PiP camera restore — без двух параллельных recreate.
-        void this.recoverLocalTracksAfterReconnect(room, 'RoomEvent.Reconnected').then(
-          () => this.tryRestoreCameraAfterReconnect(),
-          () => this.tryRestoreCameraAfterReconnect(),
-        );
-      })
-      .on(RoomEvent.ParticipantConnected, (participant) => {
-        // КРИТИЧНО: При подключении участника подписываемся на все его существующие треки
-        if (!participant.isLocal) {
-          const liveParticipant = this.resolveLiveRemoteParticipant(participant);
-          if (!liveParticipant) {
-            logger.debug('[VideoCallSession] Ignoring ParticipantConnected for stale participant', {
-              participantIdentity: participant.identity,
-              participantSid: participant.sid,
-              roomState: room.state,
-            });
-            return;
-          }
-          participant = liveParticipant;
-          this.currentRemoteParticipant = liveParticipant;
-          void sendClientMetrics(API_BASE, { remoteParticipantConnected: true }).catch(() => {});
-          // If we were about to end the call due to a disconnect, cancel — remote is back.
-          this.clearPendingRemoteDisconnectTimer();
-          this.noteRemotePeerRejoined('ParticipantConnected');
-          this.tryClearPeerReconnectingAfterMedia('ParticipantConnected');
-          logger.info('[VideoCallSession] ✅ Remote participant connected event received', {
-            participantId: participant.identity,
-            audioTracks: participant.audioTrackPublications.size,
-            videoTracks: participant.videoTrackPublications.size,
-            roomName: room.name,
-            roomState: room.state,
-            totalRemoteParticipants: room.remoteParticipants.size,
-            myUserId: this.config.myUserId,
-            partnerUserId: this.partnerUserId,
-            expectedPartnerIdentity: this.partnerUserId,
-            identityMatches: participant.identity === this.partnerUserId,
-          });
-          
-          // КРИТИЧНО: Функция для подписки на треки участника
-          const subscribeToTracks = () => {
-            // Подписываемся на все аудио треки
-            participant.audioTrackPublications.forEach((publication) => {
-              // КРИТИЧНО: Всегда подписываемся явно, даже если autoSubscribe включен
-              // Это гарантирует, что трек будет получен
-              if (!publication.isSubscribed || !publication.track) {
-                publication.setSubscribed(true);
-                logger.info('[VideoCallSession] ParticipantConnected - subscribed to audio track', {
-                  trackSid: publication.trackSid,
-                  wasSubscribed: publication.isSubscribed,
-                  hasTrack: !!publication.track,
-                });
-              }
-              
-              // Если трек уже загружен - обрабатываем сразу
-              if (publication.track) {
-                logger.info('[VideoCallSession] ParticipantConnected - processing audio track immediately', {
-                  trackSid: publication.trackSid,
-                });
-                this.handleTrackSubscribed(publication.track, publication, participant);
-              } else {
-                // КРИТИЧНО: Если трек не загружен, проверяем через 100ms
-                setTimeout(() => {
-                  if (publication.track && this.room === room && room.state === 'connected') {
-                    logger.info('[VideoCallSession] ParticipantConnected - audio track loaded after subscription', {
-                      trackSid: publication.trackSid,
-                    });
-                    this.handleTrackSubscribed(publication.track, publication, participant);
-                  }
-                }, 100);
-              }
-            });
-            
-            participant.videoTrackPublications.forEach((publication) => {
-              if (this.deferRemoteVideoPublication(publication, 'ParticipantConnected')) return;
-              // КРИТИЧНО: Всегда подписываемся явно, даже если autoSubscribe включен
-              // Это гарантирует, что трек будет получен
-              if (!publication.isSubscribed || !publication.track) {
-                publication.setSubscribed(true);
-                logger.info('[VideoCallSession] ParticipantConnected - subscribed to video track', {
-                  trackSid: publication.trackSid,
-                  wasSubscribed: publication.isSubscribed,
-                  hasTrack: !!publication.track,
-                });
-              }
-              
-              // Если трек уже загружен - обрабатываем сразу
-              if (publication.track) {
-                logger.info('[VideoCallSession] ParticipantConnected - processing video track immediately', {
-                  trackSid: publication.trackSid,
-                });
-                this.handleTrackSubscribed(publication.track, publication, participant);
-              } else {
-                // КРИТИЧНО: Если трек не загружен, проверяем через 100ms
-                setTimeout(() => {
-                  if (publication.track && this.room === room && room.state === 'connected') {
-                    logger.info('[VideoCallSession] ParticipantConnected - video track loaded after subscription', {
-                      trackSid: publication.trackSid,
-                    });
-                    this.handleTrackSubscribed(publication.track, publication, participant);
-                  }
-                }, 100);
-              }
-            });
-          };
-          
-          // Подписываемся сразу
-          subscribeToTracks();
-          
-          // КРИТИЧНО: Дополнительная проверка через 200ms на случай если треки загружаются с задержкой
-          setTimeout(() => {
-            if (this.room === room && room.state === 'connected' && !participant.isLocal) {
-              subscribeToTracks();
-            }
-          }, 200);
-        }
-      })
-      .on(RoomEvent.TrackPublished, (publication, participant) => {
-        // КРИТИЧНО: При публикации трека удаленным участником подписываемся на него
-        if (!participant.isLocal) {
-          const liveParticipant = this.resolveLiveRemoteParticipant(participant);
-          if (!liveParticipant) {
-            logger.debug('[VideoCallSession] Ignoring TrackPublished for stale participant', {
-              participantIdentity: participant.identity,
-              participantSid: participant.sid,
-              trackSid: publication.trackSid,
-              roomState: room.state,
-            });
-            return;
-          }
-          participant = liveParticipant;
-          this.currentRemoteParticipant = liveParticipant;
-          logger.info('[VideoCallSession] Remote track published', {
-            kind: publication.kind,
-            trackSid: publication.trackSid,
-            participantId: participant.identity,
-            isSubscribed: publication.isSubscribed,
-            hasTrack: !!publication.track,
-          });
+      .on(RoomEvent.Reconnecting, () => this.onRoomReconnecting(room))
+      .on(RoomEvent.Reconnected, () => this.onRoomReconnected(room))
+      .on(RoomEvent.ParticipantConnected, (participant) => this.onRemoteParticipantConnected(room, participant))
+      .on(RoomEvent.TrackPublished, (publication, participant) => this.onRemoteTrackPublished(room, publication, participant))
+      .on(RoomEvent.TrackSubscribed, (track, publication, participant) => this.onRoomTrackSubscribed(room, track, publication, participant))
+      .on(RoomEvent.TrackUnsubscribed, (_track, publication, participant) => this.onRoomTrackUnsubscribed(room, _track, publication, participant))
+      .on(RoomEvent.TrackMuted, (pub, participant) => this.onRemoteTrackMuted(pub, participant))
+      .on(RoomEvent.TrackUnmuted, (pub, participant) => this.onRemoteTrackUnmuted(pub, participant))
+      .on(RoomEvent.ParticipantDisconnected, (participant) => this.onRemoteParticipantDisconnected(room, participant))
+      .once(RoomEvent.Disconnected, () => this.onRoomDisconnected());
+  }
 
-          if (this.deferRemoteVideoPublication(publication, 'TrackPublished')) {
-            return;
-          }
-          
+  /** Транзиентный реконнект SDK: стримы и UI НЕ трогаем — LiveKit восстановится сам. */
+  private onRoomReconnecting(room: Room): void {
+    this.liveKitReconnecting = true;
+    this.lastLiveKitReconnectingAt = Date.now();
+    void sendClientMetrics(API_BASE, { roomReconnecting: true }).catch(() => {});
+    // Do NOT reset streams/UI here. LiveKit will recover by itself.
+    logger.warn('[VideoCallSession] LiveKit room reconnecting (transient)', {
+      roomName: room.name,
+      roomState: room.state,
+      myUserId: this.config.myUserId,
+      partnerUserId: this.partnerUserId,
+    });
+    trackReleaseEvent('signal_reconnect', {
+      phase: 'reconnecting',
+      callId: this.callId,
+      roomId: this.roomId || room.name || null,
+      userId: this.config.myUserId,
+      partnerUserId: this.partnerUserId,
+    });
+    // Second chance to notify survivor if NetInfo lost the race with socket death.
+    this.emitNetworkDownToPeer('livekit_reconnecting');
+    this.startCallLeaseHeartbeat('reconnecting');
+    this.clearPendingRemoteDisconnectTimer();
+    try {
+      this.emit('livekitReconnecting');
+    } catch {}
+  }
+
+  /** Комната вернулась: снимаем «восстановление», чиним локальные треки, пересобираем подписки. */
+  private onRoomReconnected(room: Room): void {
+    this.liveKitReconnecting = false;
+    // Старый room.connect() мог ещё висеть в очереди — не даём ему обнулить уже живую комнату.
+    this.connectRequestId++;
+    void sendClientMetrics(API_BASE, { roomReconnected: true, reconnect: true }).catch(() => {});
+    logger.info('[VideoCallSession] LiveKit room reconnected', {
+      roomName: room.name,
+      roomState: room.state,
+      myUserId: this.config.myUserId,
+      partnerUserId: this.partnerUserId,
+      participantsCount: room.remoteParticipants.size,
+    });
+    trackReleaseEvent('signal_reconnect', {
+      phase: 'reconnected',
+      callId: this.callId,
+      roomId: this.roomId || room.name || null,
+      userId: this.config.myUserId,
+      partnerUserId: this.partnerUserId,
+      participantsCount: room.remoteParticipants.size,
+    });
+    if (this.mediaReconnectInProgress) {
+      // Own SFU reconnect while still waiting for peer — keep «Восстановление…».
+      if (this.waitingForRemotePeerRejoin && !this.hasExpectedRemoteParticipantInRoom(room)) {
+        this.markMediaLinkRecovering('room_reconnected_waiting_peer');
+        this.startCallLeaseHeartbeat('reconnecting');
+      } else {
+        this.onMediaReconnectSucceeded();
+      }
+    } else {
+      this.startCallLeaseHeartbeat('active');
+    }
+    this.refreshCurrentRemoteParticipant(room);
+    this.iceTransportLogger.schedule(room, 'reconnected');
+    this.clearPendingRemoteDisconnectTimer();
+    if (!(this.waitingForRemotePeerRejoin && !this.hasExpectedRemoteParticipantInRoom(room))) {
+      try {
+        this.emit('livekitReconnected');
+      } catch {}
+    }
+    if (
+      !this.remoteStream &&
+      !this.remoteVideoTrack &&
+      !this.remoteAudioTrack &&
+      this.lastLiveKitUrl &&
+      this.lastLiveKitToken
+    ) {
+      this.scheduleRemoteMediaWatchdog({
+        url: this.lastLiveKitUrl,
+        token: this.lastLiveKitToken,
+        targetRoomName: room.name || this.currentRoomName,
+      }, this.remoteMediaRecoveryInProgress || this.remoteMediaRelayRecoveryAttempted);
+    }
+    // Сначала даём LiveKit стабилизировать/перепубликовать существующие tracks,
+    // затем продолжаем PiP camera restore — без двух параллельных recreate.
+    void this.recoverLocalTracksAfterReconnect(room, 'RoomEvent.Reconnected').then(
+      () => this.tryRestoreCameraAfterReconnect(),
+      () => this.tryRestoreCameraAfterReconnect(),
+    );
+  }
+
+  /** Партнёр вошёл в комнату: подписываемся на его треки, не дожидаясь TrackSubscribed. */
+  private onRemoteParticipantConnected(room: Room, participant: RemoteParticipant): void {
+    // КРИТИЧНО: При подключении участника подписываемся на все его существующие треки
+    if (!participant.isLocal) {
+      const liveParticipant = this.resolveLiveRemoteParticipant(participant);
+      if (!liveParticipant) {
+        logger.debug('[VideoCallSession] Ignoring ParticipantConnected for stale participant', {
+          participantIdentity: participant.identity,
+          participantSid: participant.sid,
+          roomState: room.state,
+        });
+        return;
+      }
+      participant = liveParticipant;
+      this.currentRemoteParticipant = liveParticipant;
+      void sendClientMetrics(API_BASE, { remoteParticipantConnected: true }).catch(() => {});
+      // If we were about to end the call due to a disconnect, cancel — remote is back.
+      this.clearPendingRemoteDisconnectTimer();
+      this.noteRemotePeerRejoined('ParticipantConnected');
+      this.tryClearPeerReconnectingAfterMedia('ParticipantConnected');
+      logger.info('[VideoCallSession] ✅ Remote participant connected event received', {
+        participantId: participant.identity,
+        audioTracks: participant.audioTrackPublications.size,
+        videoTracks: participant.videoTrackPublications.size,
+        roomName: room.name,
+        roomState: room.state,
+        totalRemoteParticipants: room.remoteParticipants.size,
+        myUserId: this.config.myUserId,
+        partnerUserId: this.partnerUserId,
+        expectedPartnerIdentity: this.partnerUserId,
+        identityMatches: participant.identity === this.partnerUserId,
+      });
+      
+      // КРИТИЧНО: Функция для подписки на треки участника
+      const subscribeToTracks = () => {
+        // Подписываемся на все аудио треки
+        participant.audioTrackPublications.forEach((publication) => {
           // КРИТИЧНО: Всегда подписываемся явно, даже если autoSubscribe включен
-          if (!publication.isSubscribed) {
+          // Это гарантирует, что трек будет получен
+          if (!publication.isSubscribed || !publication.track) {
             publication.setSubscribed(true);
-            logger.info('[VideoCallSession] Subscribing to newly published track', {
-              kind: publication.kind,
+            logger.info('[VideoCallSession] ParticipantConnected - subscribed to audio track', {
               trackSid: publication.trackSid,
+              wasSubscribed: publication.isSubscribed,
+              hasTrack: !!publication.track,
             });
           }
           
           // Если трек уже загружен - обрабатываем сразу
           if (publication.track) {
-            logger.info('[VideoCallSession] Processing newly published track (already loaded)', {
-              kind: publication.kind,
+            logger.info('[VideoCallSession] ParticipantConnected - processing audio track immediately', {
               trackSid: publication.trackSid,
             });
             this.handleTrackSubscribed(publication.track, publication, participant);
           } else {
-            logger.debug('[VideoCallSession] Track published but not loaded yet, waiting for TrackSubscribed', {
-              kind: publication.kind,
+            // КРИТИЧНО: Если трек не загружен, проверяем через 100ms
+            setTimeout(() => {
+              if (publication.track && this.room === room && room.state === 'connected') {
+                logger.info('[VideoCallSession] ParticipantConnected - audio track loaded after subscription', {
+                  trackSid: publication.trackSid,
+                });
+                this.handleTrackSubscribed(publication.track, publication, participant);
+              }
+            }, 100);
+          }
+        });
+        
+        participant.videoTrackPublications.forEach((publication) => {
+          if (this.deferRemoteVideoPublication(publication, 'ParticipantConnected')) return;
+          // КРИТИЧНО: Всегда подписываемся явно, даже если autoSubscribe включен
+          // Это гарантирует, что трек будет получен
+          if (!publication.isSubscribed || !publication.track) {
+            publication.setSubscribed(true);
+            logger.info('[VideoCallSession] ParticipantConnected - subscribed to video track', {
               trackSid: publication.trackSid,
+              wasSubscribed: publication.isSubscribed,
+              hasTrack: !!publication.track,
             });
           }
-        }
-      })
-      .on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
-        // КРИТИЧНО: Игнорируем подписки на локальные треки
-        // LiveKit может отправлять события подписки на локальные треки, но они не должны обрабатываться
-        // Это предотвращает предупреждение "could not find local track subscription for subscribed event"
-        if (participant.isLocal) {
-          logger.debug('[VideoCallSession] Ignoring TrackSubscribed for local participant', {
-            kind: publication.kind,
-            trackSid: publication.trackSid,
-          });
-          return;
-        }
-        logger.info('[VideoCallSession] ✅ TrackSubscribed event received', {
-          kind: publication.kind,
-          trackSid: track.sid,
-          publicationTrackSid: publication.trackSid,
-          participantId: participant.identity,
-          isMuted: track.isMuted,
-          trackReady: track.mediaStreamTrack?.readyState,
-        });
-        const liveParticipant = this.resolveLiveRemoteParticipant(participant);
-        if (!liveParticipant) {
-          logger.debug('[VideoCallSession] Ignoring TrackSubscribed for stale participant', {
-            participantIdentity: participant.identity,
-            participantSid: participant.sid,
-            trackSid: publication.trackSid,
-            roomState: room.state,
-          });
-          return;
-        }
-        participant = liveParticipant;
-        if (publication.kind === Track.Kind.Video && this.deferRemoteVideoSubscription) {
-          // Peer cam on / system PiP: не unsub — иначе leave→PiP без live track (см. removetrack в логах).
-          if (!this.shouldKeepRemoteVideoDespiteAudioDefer()) {
-            try {
-              if (publication.isSubscribed) publication.setSubscribed(false);
-            } catch {}
-            return;
-          }
-          this.deferRemoteVideoSubscription = false;
-          this.restoreDeferRemoteVideoAfterPiP = true;
-        }
-        this.handleTrackSubscribed(track, publication, participant);
-      })
-      .on(RoomEvent.TrackUnsubscribed, (_track, publication, participant) => {
-        // КРИТИЧНО: Проверяем тип участника перед обработкой
-        // Локальные треки не должны влиять на remoteStream
-        if (participant.isLocal) {
-          logger.debug('[VideoCallSession] Ignoring TrackUnsubscribed for local participant', {
-            kind: publication.kind,
-            trackSid: publication.trackSid,
-          });
-          return;
-        }
-        const liveParticipant = this.resolveLiveRemoteParticipant(participant);
-        if (!liveParticipant) {
-          logger.debug('[VideoCallSession] Ignoring TrackUnsubscribed for stale participant', {
-            participantIdentity: participant.identity,
-            participantSid: participant.sid,
-            trackSid: publication.trackSid,
-            roomState: room.state,
-          });
-          return;
-        }
-        this.handleTrackUnsubscribed(publication, liveParticipant);
-      })
-      .on(RoomEvent.TrackMuted, (pub, participant) => {
-        if (!participant.isLocal && pub.kind === Track.Kind.Video) {
-          // TrackMuted can happen transiently during track replacement; debounce before showing "away".
-          this.scheduleRemoteCamOff('TrackMuted');
-        }
-      })
-      .on(RoomEvent.TrackUnmuted, (pub, participant) => {
-        if (!participant.isLocal && pub.kind === Track.Kind.Video) {
-          if (this.partnerPeerDirectCallVideoUi === false || this.remotePartnerDeclaredCamOff) {
-            return;
-          }
-          this.remoteCamEnabled = true;
-          this.clearRemoteCamOffTimeout();
-          this.notifyRemoteCamStateChange(true);
-          try {
-            const g = global as any;
-            const pipVisible = g.__pipVisibleRef?.current === true;
-            if (pipVisible && g.__pipInSystemModeRef?.current !== true) {
-              this.flushPiPRemoteVideoState({ bumpKey: true });
-            } else {
-              const pipUpdate = g.__pipUpdateStateRef?.current;
-              if (typeof pipUpdate === 'function') pipUpdate({ remoteCamOn: true });
-            }
-          } catch (_) {}
-        }
-      })
-      .on(RoomEvent.ParticipantDisconnected, (participant) => {
-        if (this.ended || this.endCallInProgress || this.isDisconnecting) return;
-        if (this.isSameRemoteParticipant(participant)) {
-          if (!this.isDisconnecting) {
-            // LiveKit can emit ParticipantDisconnected transiently during reconnect/negotiation.
-            // We must NOT end the call immediately in that case, otherwise UI shows "error" and then "connects".
-            const isRoomReconnecting = this.liveKitReconnecting || room.state === 'reconnecting';
-            const recentlyReconnecting =
-              Date.now() - this.lastLiveKitReconnectingAt < RECENT_RECONNECT_DISCONNECT_GUARD_MS;
-            if (
-              isRoomReconnecting ||
-              recentlyReconnecting ||
-              this.waitingForRemotePeerRejoin ||
-              this.mediaReconnectInProgress
-            ) {
-              logger.warn('[VideoCallSession] Remote participant disconnected during reconnect (ignored)', {
-                participantIdentity: participant.identity,
-                roomState: room.state,
-                liveKitReconnecting: this.liveKitReconnecting,
-                recentlyReconnecting,
-                waitingForRemotePeerRejoin: this.waitingForRemotePeerRejoin,
-                mediaReconnectInProgress: this.mediaReconnectInProgress,
-              });
-              // Refresh wait window if peer flaps while we already wait.
-              if (this.waitingForRemotePeerRejoin || this.mediaReconnectInProgress) {
-                this.markMediaLinkRecovering('remote_peer_disconnect_while_waiting');
-                this.armOrExtendMediaReconnectGrace();
+          
+          // Если трек уже загружен - обрабатываем сразу
+          if (publication.track) {
+            logger.info('[VideoCallSession] ParticipantConnected - processing video track immediately', {
+              trackSid: publication.trackSid,
+            });
+            this.handleTrackSubscribed(publication.track, publication, participant);
+          } else {
+            // КРИТИЧНО: Если трек не загружен, проверяем через 100ms
+            setTimeout(() => {
+              if (publication.track && this.room === room && room.state === 'connected') {
+                logger.info('[VideoCallSession] ParticipantConnected - video track loaded after subscription', {
+                  trackSid: publication.trackSid,
+                });
+                this.handleTrackSubscribed(publication.track, publication, participant);
               }
-              return;
-            }
-
-            // Не принимать late SDP от SFU, пока ждём confirm disconnect — иначе createAnswer
-            // гоняется с последующим disconnectRoom и даёт "unable to set answer".
-            this.abortIncomingSdpNegotiation(room);
-
-            // Подтверждаем disconnect через короткую задержку (избегаем ложного срабатывания при reconnect).
-            // Не PiP/hangup сразу: peer может быть в airplane — ждём rejoin в grace.
-            this.clearPendingRemoteDisconnectTimer();
-            this.pendingRemoteDisconnectTimer = setTimeout(() => {
-              this.pendingRemoteDisconnectTimer = null;
-              if (this.ended || this.isDisconnecting) return;
-              const stillReconnecting = this.liveKitReconnecting || room.state === 'reconnecting';
-              if (stillReconnecting) return;
-
-              const expected = this.partnerUserId ? String(this.partnerUserId) : null;
-              const hasExpected =
-                !!expected &&
-                Array.from(room.remoteParticipants.values()).some((p) => String(p.identity) === expected);
-              const anyRemote = room.remoteParticipants.size > 0;
-              if (hasExpected || anyRemote) return;
-
-              logger.info('[VideoCallSession] Remote participant disconnected (confirmed) — waiting for rejoin', {
-                participantIdentity: participant.identity,
-                expectedPartnerIdentity: expected,
-                roomState: room.state,
-              });
-              this.beginWaitingForRemotePeerRejoin('remote_participant_disconnected');
-            }, REMOTE_PARTICIPANT_DISCONNECT_CONFIRM_MS);
+            }, 100);
           }
-        }
-      })
-      .once(RoomEvent.Disconnected, () => {
-        // КРИТИЧНО: Если идет процесс disconnectRoom через промис, не сбрасываем флаги здесь -
-        // это сделает промис в disconnectRoom
-        logger.debug('[VideoCallSession] Room disconnected event received', { 
-          reason: this.disconnectReason,
-          isDisconnecting: this.isDisconnecting,
-          hasDisconnectPromise: !!this.disconnectPromise,
-          mediaReconnectInProgress: this.mediaReconnectInProgress,
         });
-        // Намеренный teardown (hangup / call:ended) — без recovery.
-        if (this.disconnectPromise || this.ended || this.endCallInProgress) {
-          if (!this.disconnectPromise) {
-            this.disconnectReason = 'unknown';
-            this.isDisconnecting = false;
+      };
+      
+      // Подписываемся сразу
+      subscribeToTracks();
+      
+      // КРИТИЧНО: Дополнительная проверка через 200ms на случай если треки загружаются с задержкой
+      setTimeout(() => {
+        if (this.room === room && room.state === 'connected' && !participant.isLocal) {
+          subscribeToTracks();
+        }
+      }, 200);
+    }
+  }
+
+  /** Партнёр опубликовал трек — подписываемся (с учётом audio-only defer). */
+  private onRemoteTrackPublished(room: Room, publication: RemoteTrackPublication, participant: RemoteParticipant): void {
+    // КРИТИЧНО: При публикации трека удаленным участником подписываемся на него
+    if (!participant.isLocal) {
+      const liveParticipant = this.resolveLiveRemoteParticipant(participant);
+      if (!liveParticipant) {
+        logger.debug('[VideoCallSession] Ignoring TrackPublished for stale participant', {
+          participantIdentity: participant.identity,
+          participantSid: participant.sid,
+          trackSid: publication.trackSid,
+          roomState: room.state,
+        });
+        return;
+      }
+      participant = liveParticipant;
+      this.currentRemoteParticipant = liveParticipant;
+      logger.info('[VideoCallSession] Remote track published', {
+        kind: publication.kind,
+        trackSid: publication.trackSid,
+        participantId: participant.identity,
+        isSubscribed: publication.isSubscribed,
+        hasTrack: !!publication.track,
+      });
+
+      if (this.deferRemoteVideoPublication(publication, 'TrackPublished')) {
+        return;
+      }
+      
+      // КРИТИЧНО: Всегда подписываемся явно, даже если autoSubscribe включен
+      if (!publication.isSubscribed) {
+        publication.setSubscribed(true);
+        logger.info('[VideoCallSession] Subscribing to newly published track', {
+          kind: publication.kind,
+          trackSid: publication.trackSid,
+        });
+      }
+      
+      // Если трек уже загружен - обрабатываем сразу
+      if (publication.track) {
+        logger.info('[VideoCallSession] Processing newly published track (already loaded)', {
+          kind: publication.kind,
+          trackSid: publication.trackSid,
+        });
+        this.handleTrackSubscribed(publication.track, publication, participant);
+      } else {
+        logger.debug('[VideoCallSession] Track published but not loaded yet, waiting for TrackSubscribed', {
+          kind: publication.kind,
+          trackSid: publication.trackSid,
+        });
+      }
+    }
+  }
+
+  /** Штатный путь появления удалённого медиа. */
+  private onRoomTrackSubscribed(room: Room, track: RemoteTrack, publication: RemoteTrackPublication, participant: RemoteParticipant): void {
+    // КРИТИЧНО: Игнорируем подписки на локальные треки
+    // LiveKit может отправлять события подписки на локальные треки, но они не должны обрабатываться
+    // Это предотвращает предупреждение "could not find local track subscription for subscribed event"
+    if (participant.isLocal) {
+      logger.debug('[VideoCallSession] Ignoring TrackSubscribed for local participant', {
+        kind: publication.kind,
+        trackSid: publication.trackSid,
+      });
+      return;
+    }
+    logger.info('[VideoCallSession] ✅ TrackSubscribed event received', {
+      kind: publication.kind,
+      trackSid: track.sid,
+      publicationTrackSid: publication.trackSid,
+      participantId: participant.identity,
+      isMuted: track.isMuted,
+      trackReady: track.mediaStreamTrack?.readyState,
+    });
+    const liveParticipant = this.resolveLiveRemoteParticipant(participant);
+    if (!liveParticipant) {
+      logger.debug('[VideoCallSession] Ignoring TrackSubscribed for stale participant', {
+        participantIdentity: participant.identity,
+        participantSid: participant.sid,
+        trackSid: publication.trackSid,
+        roomState: room.state,
+      });
+      return;
+    }
+    participant = liveParticipant;
+    if (publication.kind === Track.Kind.Video && this.deferRemoteVideoSubscription) {
+      // Peer cam on / system PiP: не unsub — иначе leave→PiP без live track (см. removetrack в логах).
+      if (!this.shouldKeepRemoteVideoDespiteAudioDefer()) {
+        try {
+          if (publication.isSubscribed) publication.setSubscribed(false);
+        } catch {}
+        return;
+      }
+      this.deferRemoteVideoSubscription = false;
+      this.restoreDeferRemoteVideoAfterPiP = true;
+    }
+    this.handleTrackSubscribed(track, publication, participant);
+  }
+
+  /** Трек пропал: может быть флипом камеры, а не уходом партнёра. */
+  private onRoomTrackUnsubscribed(room: Room, _track: RemoteTrack, publication: RemoteTrackPublication, participant: RemoteParticipant): void {
+    // КРИТИЧНО: Проверяем тип участника перед обработкой
+    // Локальные треки не должны влиять на remoteStream
+    if (participant.isLocal) {
+      logger.debug('[VideoCallSession] Ignoring TrackUnsubscribed for local participant', {
+        kind: publication.kind,
+        trackSid: publication.trackSid,
+      });
+      return;
+    }
+    const liveParticipant = this.resolveLiveRemoteParticipant(participant);
+    if (!liveParticipant) {
+      logger.debug('[VideoCallSession] Ignoring TrackUnsubscribed for stale participant', {
+        participantIdentity: participant.identity,
+        participantSid: participant.sid,
+        trackSid: publication.trackSid,
+        roomState: room.state,
+      });
+      return;
+    }
+    this.handleTrackUnsubscribed(publication, liveParticipant);
+  }
+
+  /** Видео партнёра заглушено — «Отошёл» показываем с задержкой (бывает при смене трека). */
+  private onRemoteTrackMuted(pub: TrackPublication, participant: Participant): void {
+    if (!participant.isLocal && pub.kind === Track.Kind.Video) {
+      // TrackMuted can happen transiently during track replacement; debounce before showing "away".
+      this.scheduleRemoteCamOff('TrackMuted');
+    }
+  }
+
+  /** Видео партнёра вернулось — снимаем «Отошёл» и обновляем PiP. */
+  private onRemoteTrackUnmuted(pub: TrackPublication, participant: Participant): void {
+    if (!participant.isLocal && pub.kind === Track.Kind.Video) {
+      if (this.partnerPeerDirectCallVideoUi === false || this.remotePartnerDeclaredCamOff) {
+        return;
+      }
+      this.remoteCamEnabled = true;
+      this.clearRemoteCamOffTimeout();
+      this.notifyRemoteCamStateChange(true);
+      try {
+        const g = global as any;
+        const pipVisible = g.__pipVisibleRef?.current === true;
+        if (pipVisible && g.__pipInSystemModeRef?.current !== true) {
+          this.flushPiPRemoteVideoState({ bumpKey: true });
+        } else {
+          const pipUpdate = g.__pipUpdateStateRef?.current;
+          if (typeof pipUpdate === 'function') pipUpdate({ remoteCamOn: true });
+        }
+      } catch (_) {}
+    }
+  }
+
+  /** Партнёр вышел из комнаты: может быть уходом в самолётный режим — подтверждаем с задержкой. */
+  private onRemoteParticipantDisconnected(room: Room, participant: RemoteParticipant): void {
+    if (this.ended || this.endCallInProgress || this.isDisconnecting) return;
+    if (this.isSameRemoteParticipant(participant)) {
+      if (!this.isDisconnecting) {
+        // LiveKit can emit ParticipantDisconnected transiently during reconnect/negotiation.
+        // We must NOT end the call immediately in that case, otherwise UI shows "error" and then "connects".
+        const isRoomReconnecting = this.liveKitReconnecting || room.state === 'reconnecting';
+        const recentlyReconnecting =
+          Date.now() - this.lastLiveKitReconnectingAt < RECENT_RECONNECT_DISCONNECT_GUARD_MS;
+        if (
+          isRoomReconnecting ||
+          recentlyReconnecting ||
+          this.waitingForRemotePeerRejoin ||
+          this.mediaReconnectInProgress
+        ) {
+          logger.warn('[VideoCallSession] Remote participant disconnected during reconnect (ignored)', {
+            participantIdentity: participant.identity,
+            roomState: room.state,
+            liveKitReconnecting: this.liveKitReconnecting,
+            recentlyReconnecting,
+            waitingForRemotePeerRejoin: this.waitingForRemotePeerRejoin,
+            mediaReconnectInProgress: this.mediaReconnectInProgress,
+          });
+          // Refresh wait window if peer flaps while we already wait.
+          if (this.waitingForRemotePeerRejoin || this.mediaReconnectInProgress) {
+            this.markMediaLinkRecovering('remote_peer_disconnect_while_waiting');
+            this.armOrExtendMediaReconnectGrace();
           }
           return;
         }
-        // Неожиданный обрыв медиа: grace + reconnect (busy снимется серверным lease, если не восстановимся).
+
+        // Не принимать late SDP от SFU, пока ждём confirm disconnect — иначе createAnswer
+        // гоняется с последующим disconnectRoom и даёт "unable to set answer".
+        this.abortIncomingSdpNegotiation(room);
+
+        // Подтверждаем disconnect через короткую задержку (избегаем ложного срабатывания при reconnect).
+        // Не PiP/hangup сразу: peer может быть в airplane — ждём rejoin в grace.
         this.clearPendingRemoteDisconnectTimer();
-        if (Platform.OS === 'android') {
-          try { dismissSystemPiPAfterCallEnded(); } catch {}
-        }
+        this.pendingRemoteDisconnectTimer = setTimeout(() => {
+          this.pendingRemoteDisconnectTimer = null;
+          if (this.ended || this.isDisconnecting) return;
+          const stillReconnecting = this.liveKitReconnecting || room.state === 'reconnecting';
+          if (stillReconnecting) return;
+
+          const expected = this.partnerUserId ? String(this.partnerUserId) : null;
+          const hasExpected =
+            !!expected &&
+            Array.from(room.remoteParticipants.values()).some((p) => String(p.identity) === expected);
+          const anyRemote = room.remoteParticipants.size > 0;
+          if (hasExpected || anyRemote) return;
+
+          logger.info('[VideoCallSession] Remote participant disconnected (confirmed) — waiting for rejoin', {
+            participantIdentity: participant.identity,
+            expectedPartnerIdentity: expected,
+            roomState: room.state,
+          });
+          this.beginWaitingForRemotePeerRejoin('remote_participant_disconnected');
+        }, REMOTE_PARTICIPANT_DISCONNECT_CONFIRM_MS);
+      }
+    }
+  }
+
+  /** Комната закрылась. Намеренный teardown пропускаем, неожиданный — уводим в media-recovery. */
+  private onRoomDisconnected(): void {
+    // КРИТИЧНО: Если идет процесс disconnectRoom через промис, не сбрасываем флаги здесь -
+    // это сделает промис в disconnectRoom
+    logger.debug('[VideoCallSession] Room disconnected event received', { 
+      reason: this.disconnectReason,
+      isDisconnecting: this.isDisconnecting,
+      hasDisconnectPromise: !!this.disconnectPromise,
+      mediaReconnectInProgress: this.mediaReconnectInProgress,
+    });
+    // Намеренный teardown (hangup / call:ended) — без recovery.
+    if (this.disconnectPromise || this.ended || this.endCallInProgress) {
+      if (!this.disconnectPromise) {
         this.disconnectReason = 'unknown';
         this.isDisconnecting = false;
-        this.beginUnexpectedMediaDisconnectRecovery();
-      });
+      }
+      return;
+    }
+    // Неожиданный обрыв медиа: grace + reconnect (busy снимется серверным lease, если не восстановимся).
+    this.clearPendingRemoteDisconnectTimer();
+    if (Platform.OS === 'android') {
+      try { dismissSystemPiPAfterCallEnded(); } catch {}
+    }
+    this.disconnectReason = 'unknown';
+    this.isDisconnecting = false;
+    this.beginUnexpectedMediaDisconnectRecovery();
   }
 
   private async recoverLocalTracksAfterReconnect(room: Room, context: string): Promise<void> {
@@ -8945,29 +8576,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     const oldAudioTrackSid = this.remoteAudioTrack?.sid;
     const mediaTrack = track.mediaStreamTrack;
 
-    // ParticipantConnected (incl. delayed retries), TrackPublished, and TrackSubscribed often
-    // notify the same underlying MediaStreamTrack — skip duplicate work/emits (avoids extra
-    // remoteStream churn and RTCView flicker). Still run when video mute state diverges.
-    if (mediaTrack && this.remoteStream?.getTracks().includes(mediaTrack as any)) {
-      if (
-        isVideoTrack &&
-        this.remoteVideoTrack?.mediaStreamTrack === mediaTrack &&
-        this.remoteVideoTrack.isMuted === track.isMuted
-      ) {
-        logger.debug('[VideoCallSession] Track subscribed (already applied, skipping duplicate)', {
-          trackSid: track.sid,
-          streamId: this.remoteStream.id,
-        });
-        return;
-      }
-      if (isAudioTrack && this.remoteAudioTrack?.mediaStreamTrack === mediaTrack) {
-        logger.debug('[VideoCallSession] Track subscribed (already applied, skipping duplicate)', {
-          trackSid: track.sid,
-          streamId: this.remoteStream.id,
-        });
-        return;
-      }
-    }
+    if (this.isDuplicateRemoteTrackNotification(track, isVideoTrack, isAudioTrack, mediaTrack)) return;
 
     logger.info('[VideoCallSession] Track subscribed', {
       kind: publication.kind,
@@ -8977,19 +8586,74 @@ export class VideoCallSession extends SimpleEventEmitter {
       trackReady: track.mediaStreamTrack?.readyState,
     });
     this.markRemoteMediaSeen('track_subscribed', publication, participant);
-    
-    // Учёт lastUnsubscribedRemoteVideoTrackSid: при перевороте камеры сначала приходит TrackUnsubscribed (remoteVideoTrack обнуляется),
-    // потом TrackSubscribed — без сохранённого SID wasVideoTrackChanged был бы false и у собеседника не создавался бы новый MediaStream.
-    const previousVideoSid = oldVideoTrackSid ?? this.lastUnsubscribedRemoteVideoTrackSid;
-    const wasVideoTrackChanged = isVideoTrack && !!previousVideoSid && previousVideoSid !== track.sid;
-    const previousAudioSid = oldAudioTrackSid ?? this.lastUnsubscribedRemoteAudioTrackSid;
-    const wasAudioTrackChanged = isAudioTrack && !!previousAudioSid && previousAudioSid !== track.sid;
-    const staleAudioInStream =
-      isAudioTrack &&
-      !!mediaTrack &&
-      !!(this.remoteStream?.getAudioTracks?.() || []).some((t: any) => t && t !== mediaTrack);
-    
-    // Не пересоздаем stream, чтобы не было мерцаний — создаем один раз и переиспользуем
+
+    const change = describeRemoteTrackChange({
+      isVideoTrack,
+      isAudioTrack,
+      newTrackSid: track.sid,
+      // При перевороте камеры TrackUnsubscribed приходит раньше подписки и обнуляет
+      // remoteVideoTrack — тогда предыдущий sid берём из запомненного.
+      previousVideoSid: oldVideoTrackSid ?? this.lastUnsubscribedRemoteVideoTrackSid,
+      previousAudioSid: oldAudioTrackSid ?? this.lastUnsubscribedRemoteAudioTrackSid,
+      incomingMediaTrack: mediaTrack,
+      existingAudioMediaTracks: this.remoteStream?.getAudioTracks?.() ?? [],
+    });
+
+    this.attachRemoteTrackToStream(track, publication, mediaTrack, change, oldVideoTrackSid);
+
+    let shouldRemountRemoteView = false;
+    if (isAudioTrack) {
+      shouldRemountRemoteView = this.applyRemoteAudioTrack(track, change);
+    } else if (isVideoTrack) {
+      shouldRemountRemoteView = this.applyRemoteVideoTrack(track, change, oldVideoTrackSid);
+    }
+
+    this.publishRemoteStreamUpdate(track, publication, change, shouldRemountRemoteView);
+  }
+
+  /**
+   * ParticipantConnected (включая отложенные проходы), TrackPublished и TrackSubscribed
+   * часто сообщают об одном и том же MediaStreamTrack. Повторную работу пропускаем —
+   * иначе remoteStream дёргается и RTCView мигает. Но если у видео разошлось
+   * состояние mute, обработать надо.
+   */
+  private isDuplicateRemoteTrackNotification(
+    track: RemoteTrack,
+    isVideoTrack: boolean,
+    isAudioTrack: boolean,
+    mediaTrack: MediaStreamTrack | undefined,
+  ): boolean {
+    if (!mediaTrack || !this.remoteStream?.getTracks().includes(mediaTrack as any)) return false;
+
+    const sameVideo =
+      isVideoTrack &&
+      this.remoteVideoTrack?.mediaStreamTrack === mediaTrack &&
+      this.remoteVideoTrack.isMuted === track.isMuted;
+    const sameAudio = isAudioTrack && this.remoteAudioTrack?.mediaStreamTrack === mediaTrack;
+    if (!sameVideo && !sameAudio) return false;
+
+    logger.debug('[VideoCallSession] Track subscribed (already applied, skipping duplicate)', {
+      trackSid: track.sid,
+      streamId: this.remoteStream.id,
+    });
+    return true;
+  }
+
+  /**
+   * Поместить приехавшую дорожку в remoteStream.
+   *
+   * КРИТИЧНО: при смене video (переворот камеры) или audio (возврат партнёра после
+   * самолётного режима) нужен НОВЫЙ MediaStream. Тот же stream.id с мёртвой дорожкой
+   * внутри — это «tracksCount: 2» и тишина у собеседника.
+   */
+  private attachRemoteTrackToStream(
+    track: RemoteTrack,
+    publication: RemoteTrackPublication,
+    mediaTrack: MediaStreamTrack | undefined,
+    change: RemoteTrackChange,
+    oldVideoTrackSid: string | undefined,
+  ): void {
+    // Не пересоздаем stream без нужды — иначе мерцает картинка.
     if (!this.remoteStream) {
       this.remoteStream = new MediaStream();
       logger.info('[VideoCallSession] ✅ Created new remote MediaStream', {
@@ -8998,133 +8662,148 @@ export class VideoCallSession extends SimpleEventEmitter {
         trackSid: track.sid,
       });
     }
-    
+
     const activeRemoteStream = this.remoteStream;
     const trackAlreadyInStream = mediaTrack && activeRemoteStream.getTracks().includes(mediaTrack as any);
-    
-    // КРИТИЧНО: новый MediaStream при смене video (camera flip) ИЛИ audio (peer rejoin после airplane).
-    // Иначе тот же stream.id + мёртвый audio track → у собеседника нет звука (tracksCount: 2).
-    if ((isVideoTrack && wasVideoTrackChanged) || wasAudioTrackChanged || staleAudioInStream) {
+
+    if (change.needsFreshStream) {
       const newStream = new MediaStream();
       try {
-        if (isAudioTrack) {
-          if (mediaTrack) newStream.addTrack(mediaTrack as any);
-          const videoMt = this.remoteVideoTrack?.mediaStreamTrack;
-          if (videoMt && (videoMt as any).readyState !== 'ended') {
-            newStream.addTrack(videoMt as any);
-          }
-        } else {
-          if (mediaTrack) newStream.addTrack(mediaTrack as any);
-          const audioMt = this.remoteAudioTrack?.mediaStreamTrack;
-          if (audioMt && (audioMt as any).readyState !== 'ended') {
-            newStream.addTrack(audioMt as any);
-          }
+        if (mediaTrack) newStream.addTrack(mediaTrack as any);
+        // Живую дорожку другого вида переносим в новый стрим, мёртвую — оставляем позади.
+        const keepMt = change.isAudioTrack
+          ? this.remoteVideoTrack?.mediaStreamTrack
+          : this.remoteAudioTrack?.mediaStreamTrack;
+        if (keepMt && (keepMt as any).readyState !== 'ended') {
+          newStream.addTrack(keepMt as any);
         }
         this.remoteStream = newStream;
         logger.info('[VideoCallSession] New remote MediaStream for replaced remote track', {
           kind: publication.kind,
-          oldTrackId: isAudioTrack ? previousAudioSid : previousVideoSid,
+          oldTrackId: change.isAudioTrack ? change.previousAudioSid : change.previousVideoSid,
           newTrackId: track.sid,
           streamId: newStream.id,
-          reason: wasAudioTrackChanged || staleAudioInStream ? 'audio_replace' : 'video_replace',
+          reason: change.freshStreamReason,
         });
       } catch (e) {
         logger.warn('[VideoCallSession] Error creating new remote stream for track replace', e);
       }
-    } else {
-      // Обычный путь: переиспользуем существующий stream
-      if (
-        isVideoTrack &&
-        wasVideoTrackChanged &&
-        this.remoteVideoTrack?.mediaStreamTrack &&
-        activeRemoteStream.getTracks().includes(this.remoteVideoTrack.mediaStreamTrack as any)
-      ) {
-        try {
-          activeRemoteStream.removeTrack(this.remoteVideoTrack.mediaStreamTrack as any);
-          logger.info('[VideoCallSession] Removed previous remote video track from stream', {
-            oldTrackId: oldVideoTrackSid,
-            newTrackId: track.sid,
-          });
-        } catch (e) {
-          logger.warn('[VideoCallSession] Error removing previous video track', e);
-        }
-      }
-      if (mediaTrack && !trackAlreadyInStream) {
-        activeRemoteStream.addTrack(mediaTrack as any);
-        logger.debug('[VideoCallSession] Added track to remote stream', {
-          kind: publication.kind,
-          streamId: activeRemoteStream.id,
-          tracksCount: activeRemoteStream.getTracks().length,
-          trackId: track.sid,
-        });
-      }
+      return;
     }
-    
-    let shouldRemountRemoteView = false;
 
-    if (publication.kind === Track.Kind.Audio) {
-      this.remoteAudioTrack = track;
-      this.lastUnsubscribedRemoteAudioTrackSid = null;
-      if (wasAudioTrackChanged || staleAudioInStream) {
-        shouldRemountRemoteView = true;
-      }
-      // КРИТИЧНО: гарантируем слышимость аудио (иногда track приходит disabled/muted после reconnect)
+    // Обычный путь: переиспользуем существующий stream
+    if (
+      change.isVideoTrack &&
+      change.wasVideoTrackChanged &&
+      this.remoteVideoTrack?.mediaStreamTrack &&
+      activeRemoteStream.getTracks().includes(this.remoteVideoTrack.mediaStreamTrack as any)
+    ) {
       try {
-        // sync with local "mute remote" toggle
-        (this.remoteAudioTrack as any).setMuted?.(this.remoteAudioMuted);
-      } catch {}
-      try {
-        // RN: setVolume влияет на нативный трек через _setVolume
-        (this.remoteAudioTrack as any).setVolume?.(this.remoteAudioMuted ? 0 : 1);
-      } catch {}
-      try {
-        const mt = (this.remoteAudioTrack as any)?.mediaStreamTrack;
-        if (mt && typeof mt.enabled === 'boolean') {
-          mt.enabled = !this.remoteAudioMuted;
-        }
-      } catch {}
-      try {
-        const mt = this.remoteAudioTrack?.mediaStreamTrack as { readyState?: string } | undefined;
-        this.noteRemoteAudioPresence(!!mt && mt.readyState === 'live');
-      } catch {
-        this.noteRemoteAudioPresence(!!this.remoteAudioTrack);
-      }
-    } else if (publication.kind === Track.Kind.Video) {
-      const prevVideoTrack = this.remoteVideoTrack;
-      const wasMutedStateChanged = !!prevVideoTrack && (prevVideoTrack.isMuted !== track.isMuted);
-      this.remoteVideoTrack = track;
-      this.lastUnsubscribedRemoteVideoTrackSid = null;
-      // A new video track arriving usually means "camera is on".
-      // But during re-subscribe it can briefly be muted; avoid flashing "away" by debouncing OFF.
-      // Если партнёр уже прислал cam-toggle(false), не перетираем заглушку «Отошёл» первым кадром трека.
-      if (!track.isMuted) {
-        if (!this.remotePartnerDeclaredCamOff && this.partnerPeerDirectCallVideoUi !== false) {
-          this.remoteCamEnabled = true;
-          this.clearRemoteCamOffTimeout();
-        }
-      } else {
-        // Keep the previous value for a short grace period; if it stays muted, we'll mark OFF.
-        this.scheduleRemoteCamOff('TrackSubscribedMuted');
-      }
-      
-      const isFirstVideoTrack = !oldVideoTrackSid;
-      if (isFirstVideoTrack || wasVideoTrackChanged || wasMutedStateChanged) {
-        logger.debug('[VideoCallSession] Video track muted state changed', {
-          wasMuted: prevVideoTrack?.isMuted,
-          isMuted: track.isMuted,
+        activeRemoteStream.removeTrack(this.remoteVideoTrack.mediaStreamTrack as any);
+        logger.info('[VideoCallSession] Removed previous remote video track from stream', {
+          oldTrackId: oldVideoTrackSid,
+          newTrackId: track.sid,
         });
-        shouldRemountRemoteView = true;
-      }
-      
-      if (!track.isMuted && !this.remotePartnerDeclaredCamOff && this.partnerPeerDirectCallVideoUi !== false) {
-        this.notifyRemoteCamStateChange(true);
-        try {
-          const pipUpdate = (global as any).__pipUpdateStateRef?.current;
-          if (typeof pipUpdate === 'function') pipUpdate({ remoteCamOn: true });
-        } catch (_) {}
+      } catch (e) {
+        logger.warn('[VideoCallSession] Error removing previous video track', e);
       }
     }
-    
+    if (mediaTrack && !trackAlreadyInStream) {
+      activeRemoteStream.addTrack(mediaTrack as any);
+      logger.debug('[VideoCallSession] Added track to remote stream', {
+        kind: publication.kind,
+        streamId: activeRemoteStream.id,
+        tracksCount: activeRemoteStream.getTracks().length,
+        trackId: track.sid,
+      });
+    }
+  }
+
+  /**
+   * Новая аудио-дорожка партнёра. Возвращает true, если RTCView надо перемонтировать.
+   * КРИТИЧНО: после reconnect трек иногда приходит disabled/muted — приводим его
+   * к текущему состоянию «звук выключен» тремя способами, какой-то из них сработает.
+   */
+  private applyRemoteAudioTrack(track: RemoteTrack, change: RemoteTrackChange): boolean {
+    this.remoteAudioTrack = track;
+    this.lastUnsubscribedRemoteAudioTrackSid = null;
+    const shouldRemountRemoteView = change.wasAudioTrackChanged || change.staleAudioInStream;
+
+    try {
+      // sync with local "mute remote" toggle
+      (this.remoteAudioTrack as any).setMuted?.(this.remoteAudioMuted);
+    } catch {}
+    try {
+      // RN: setVolume влияет на нативный трек через _setVolume
+      (this.remoteAudioTrack as any).setVolume?.(this.remoteAudioMuted ? 0 : 1);
+    } catch {}
+    try {
+      const mt = (this.remoteAudioTrack as any)?.mediaStreamTrack;
+      if (mt && typeof mt.enabled === 'boolean') {
+        mt.enabled = !this.remoteAudioMuted;
+      }
+    } catch {}
+    try {
+      const mt = this.remoteAudioTrack?.mediaStreamTrack as { readyState?: string } | undefined;
+      this.noteRemoteAudioPresence(!!mt && mt.readyState === 'live');
+    } catch {
+      this.noteRemoteAudioPresence(!!this.remoteAudioTrack);
+    }
+    return shouldRemountRemoteView;
+  }
+
+  /**
+   * Новая видео-дорожка партнёра. Возвращает true, если RTCView надо перемонтировать.
+   * Приход трека обычно значит «камера включена», но при переподписке он может
+   * кратко быть muted — выключение показываем с задержкой, чтобы не мигать «Отошёл».
+   */
+  private applyRemoteVideoTrack(
+    track: RemoteTrack,
+    change: RemoteTrackChange,
+    oldVideoTrackSid: string | undefined,
+  ): boolean {
+    const prevVideoTrack = this.remoteVideoTrack;
+    const wasMutedStateChanged = !!prevVideoTrack && prevVideoTrack.isMuted !== track.isMuted;
+    this.remoteVideoTrack = track;
+    this.lastUnsubscribedRemoteVideoTrackSid = null;
+
+    // Если партнёр уже прислал cam-toggle(false), не перетираем заглушку «Отошёл» первым кадром трека.
+    if (!track.isMuted) {
+      if (!this.remotePartnerDeclaredCamOff && this.partnerPeerDirectCallVideoUi !== false) {
+        this.remoteCamEnabled = true;
+        this.clearRemoteCamOffTimeout();
+      }
+    } else {
+      this.scheduleRemoteCamOff('TrackSubscribedMuted');
+    }
+
+    const isFirstVideoTrack = !oldVideoTrackSid;
+    let shouldRemountRemoteView = false;
+    if (isFirstVideoTrack || change.wasVideoTrackChanged || wasMutedStateChanged) {
+      logger.debug('[VideoCallSession] Video track muted state changed', {
+        wasMuted: prevVideoTrack?.isMuted,
+        isMuted: track.isMuted,
+      });
+      shouldRemountRemoteView = true;
+    }
+
+    if (!track.isMuted && !this.remotePartnerDeclaredCamOff && this.partnerPeerDirectCallVideoUi !== false) {
+      this.notifyRemoteCamStateChange(true);
+      try {
+        const pipUpdate = (global as any).__pipUpdateStateRef?.current;
+        if (typeof pipUpdate === 'function') pipUpdate({ remoteCamOn: true });
+      } catch (_) {}
+    }
+    return shouldRemountRemoteView;
+  }
+
+  /** Разослать обновлённый remoteStream в UI и PiP. */
+  private publishRemoteStreamUpdate(
+    track: RemoteTrack,
+    publication: RemoteTrackPublication,
+    change: RemoteTrackChange,
+    shouldRemountRemoteView: boolean,
+  ): void {
     // Всегда эмитим remoteStream для обновления UI/аудио, но remount RTCView делаем только при необходимости.
     if (shouldRemountRemoteView) {
       this.remoteViewKey = Date.now();
@@ -9132,27 +8811,23 @@ export class VideoCallSession extends SimpleEventEmitter {
         remoteViewKey: this.remoteViewKey,
         trackId: track.sid,
         kind: publication.kind,
-        wasVideoTrackChanged,
-        wasAudioTrackChanged,
-        staleAudioInStream,
-        streamId: this.remoteStream.id,
+        wasVideoTrackChanged: change.wasVideoTrackChanged,
+        wasAudioTrackChanged: change.wasAudioTrackChanged,
+        staleAudioInStream: change.staleAudioInStream,
+        streamId: this.remoteStream!.id,
         trackReady: track.mediaStreamTrack?.readyState,
         trackMuted: track.isMuted,
       });
     }
-    
-    // КРИТИЧНО: Эмитим события в правильном порядке - сначала remoteViewKeyChanged, потом remoteStream
-    // Это гарантирует, что компонент обновится с правильным ключом
-    // КРИТИЧНО: Эмитим события синхронно для немедленного обновления RTCView
-    // Задержка была удалена, так как она вызывала зависание видео
-    // КРИТИЧНО: Всегда эмитим remoteStream, даже если трек еще не добавлен
-    // Это гарантирует, что UI получит стрим и сможет отобразить его когда трек станет готовым
+
+    // КРИТИЧНО: порядок событий — сначала remoteViewKeyChanged, затем remoteStream,
+    // чтобы компонент перерисовался с правильным ключом. Синхронно: задержка вешала видео.
     this.emit('remoteViewKeyChanged', this.remoteViewKey);
     this.emit('remoteStream', this.remoteStream);
     this.notifyRemoteStreamChange(this.remoteStream);
     // КРИТИЧНО: Обновляем PiP (в т.ч. системный) при смене удалённого стрима — иначе при включении камеры партнёром из app PiP видео не восстановится у пользователя в системном PiP
     try {
-      if (isVideoTrack && this.getRemoteCamEnabled()) {
+      if (change.isVideoTrack && this.getRemoteCamEnabled()) {
         this.flushPiPRemoteVideoState({ bumpKey: false });
       } else {
         const pipUpdate = (global as any).__pipUpdateStateRef?.current;
@@ -9166,26 +8841,25 @@ export class VideoCallSession extends SimpleEventEmitter {
       }
     } catch (_) {}
     // System PiP после audio-enter: peer video track → снять logo, показать RTC через CaptureHost.
-    if (isVideoTrack && this.getRemoteCamEnabled()) {
+    if (change.isVideoTrack && this.getRemoteCamEnabled()) {
       this.activateSystemPiPPeerVideoCapture('track_subscribed');
     }
 
-    // КРИТИЧНО: Устанавливаем loading=false только когда приходит remoteStream с треками
-    // Это предотвращает черный экран при принятии звонка
+    // КРИТИЧНО: loading=false только когда remoteStream уже с треками — иначе чёрный экран при принятии звонка.
     if (this.remoteStream && (this.remoteVideoTrack || this.remoteAudioTrack)) {
       this.notifyLoadingChange(false);
     }
-    
+
     logger.info('[VideoCallSession] Remote stream updated after track subscription', {
-      streamId: this.remoteStream.id,
-      tracksCount: this.remoteStream.getTracks().length,
+      streamId: this.remoteStream!.id,
+      tracksCount: this.remoteStream!.getTracks().length,
       hasVideoTrack: !!this.remoteVideoTrack,
       hasAudioTrack: !!this.remoteAudioTrack,
       remoteCamEnabled: this.remoteCamEnabled,
       remoteViewKey: this.remoteViewKey,
-      wasVideoTrackChanged,
-      wasAudioTrackChanged,
-      staleAudioInStream,
+      wasVideoTrackChanged: change.wasVideoTrackChanged,
+      wasAudioTrackChanged: change.wasAudioTrackChanged,
+      staleAudioInStream: change.staleAudioInStream,
     });
   }
 

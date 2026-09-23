@@ -51,6 +51,7 @@ import {
 
 import LanguagePicker from '../components/LanguagePicker';
 import { clearPendingInviteCode } from '../utils/inviteLink';
+import { ensureCallMediaPermissions } from '../utils/mediaPermissions';
 import { useAppTheme } from '../theme/ThemeProvider';
 import { t } from '../utils/i18n';
 import type { Lang } from '../utils/i18n';
@@ -2199,6 +2200,10 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         return;
       }
 
+      // Отказ на старте не должен навсегда ломать звонки: переспрашиваем в момент, когда причина
+      // очевидна — пользователь сам нажал «Позвонить». Без await, чтобы не задерживать нативный
+      // экран исходящего: диалог всплывёт поверх и всё равно опередит захват медиа.
+      void ensureCallMediaPermissions({ video: media !== 'audio' });
       displayOutgoingCallImmediate(friend.id, friendName, media !== 'audio');
 
       setCalling({ visible: true, friend, callId: null });
@@ -4765,8 +4770,12 @@ const handleClearNick = useCallback(async () => {
     setInitialized(false); // Сбрасываем флаг инициализации
 
     try {
-      if (!(socket as any)?.connected) { 
+      if (!(socket as any)?.connected) {
+        // Раньше здесь был молчаливый выход: пользователь подтверждал удаление, ничего не
+        // происходило и он не получал никакого объяснения. Удаление требует сервера — говорим прямо.
         setWiping(false);
+        setInitialized(true);
+        Alert.alert(t('errorTitle', lang), t('wipeFailed', lang));
         return;
       }
 
@@ -4820,8 +4829,16 @@ const handleClearNick = useCallback(async () => {
       // При ошибке также устанавливаем флаги, чтобы не зависнуть на SplashLoader
       setProfileLoaded(true);
       setDataLoaded(true);
-    } finally { 
-      setWiping(false); 
+      // И обязательно сообщаем: молча проглоченная ошибка выглядит как «кнопка не работает»,
+      // а данные при этом могут быть уже удалены на сервере или ещё нет — пользователь должен знать.
+      const reason = String(e?.message || '').trim();
+      logger.warn('[handleWipeAccount] failed', { reason });
+      Alert.alert(
+        t('errorTitle', lang),
+        reason ? t('wipeFailedWithReason', lang).replace('{reason}', reason) : t('wipeFailed', lang),
+      );
+    } finally {
+      setWiping(false);
     }
   }, [wiping, installId, attachIdentitySafe, wipeAccountOnServer, lang, resetAllState]);
 

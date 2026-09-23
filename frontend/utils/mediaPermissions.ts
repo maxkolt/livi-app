@@ -47,6 +47,58 @@ export async function requestNearbyDevicesPermissionAndroid(): Promise<void> {
   }
 }
 
+/** Микрофон уже выдан в этой сессии — чтобы горячий путь звонка не ходил в систему лишний раз. */
+let micGrantedCache = false;
+let cameraGrantedCache = false;
+
+/**
+ * Разрешения для самого звонка, запрашиваются по факту начала разговора.
+ *
+ * На старте пользователь мог отказать — тогда без перезапроса звонок молча остаётся без звука
+ * или без картинки. Здесь отказ переспрашивается в момент, когда причина очевидна: пользователь
+ * сам нажал «Позвонить» или «Ответить». Камеру трогаем только для видеозвонка.
+ */
+export async function ensureCallMediaPermissions(opts?: { video?: boolean }): Promise<boolean> {
+  const needCamera = opts?.video === true;
+  if (micGrantedCache && (!needCamera || cameraGrantedCache)) return true;
+
+  let micOk = micGrantedCache;
+  if (!micOk) {
+    try {
+      const mic = await Audio.getPermissionsAsync();
+      micOk = mic.status === 'granted';
+      if (!micOk && mic.canAskAgain !== false) {
+        const requested = await Audio.requestPermissionsAsync();
+        micOk = requested.status === 'granted';
+        logger.info('[mediaPermissions] microphone re-requested at call time:', requested.status);
+      }
+      micGrantedCache = micOk;
+    } catch (e) {
+      logger.warn('[mediaPermissions] microphone check at call time failed', e);
+    }
+  }
+
+  if (!needCamera) return micOk;
+
+  let camOk = cameraGrantedCache;
+  if (!camOk) {
+    try {
+      const cam = await Camera.getCameraPermissionsAsync();
+      camOk = cam.status === 'granted';
+      if (!camOk && cam.canAskAgain !== false) {
+        const requested = await Camera.requestCameraPermissionsAsync();
+        camOk = requested.status === 'granted';
+        logger.info('[mediaPermissions] camera re-requested at call time:', requested.status);
+      }
+      cameraGrantedCache = camOk;
+    } catch (e) {
+      logger.warn('[mediaPermissions] camera check at call time failed', e);
+    }
+  }
+
+  return micOk && camOk;
+}
+
 /**
  * Запрашивает разрешения на камеру, микрофон и «Устройства рядом» при первом запуске приложения.
  * На iOS — камера и микрофон. На Android — камера, микрофон и (с Android 12) «Устройства рядом».
@@ -57,6 +109,9 @@ export async function ensureInitialMediaPermissions(): Promise<void> {
     if (cam.status !== 'granted') {
       const requested = await Camera.requestCameraPermissionsAsync();
       logger.info('[mediaPermissions] Camera permission status:', requested.status);
+      cameraGrantedCache = requested.status === 'granted';
+    } else {
+      cameraGrantedCache = true;
     }
   } catch (e) {
     logger.warn('[mediaPermissions] Failed to request camera permission', e);
@@ -67,6 +122,9 @@ export async function ensureInitialMediaPermissions(): Promise<void> {
     if (mic.status !== 'granted') {
       const requested = await Audio.requestPermissionsAsync();
       logger.info('[mediaPermissions] Microphone permission status:', requested.status);
+      micGrantedCache = requested.status === 'granted';
+    } else {
+      micGrantedCache = true;
     }
   } catch (e) {
     logger.warn('[mediaPermissions] Failed to request microphone permission', e);

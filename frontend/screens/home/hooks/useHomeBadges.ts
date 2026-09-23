@@ -10,7 +10,7 @@ import {
   getUnreadCounts,
 } from '../../../sockets/socket';
 import socket from '../../../sockets/socket';
-import { onMissedIncrement, onMissedClear, onMissedFetchedFromServer } from '../../../utils/globalEvents';
+import { onMissedIncrement, onMissedClear, onMissedFetchedFromServer, onChatOpened } from '../../../utils/globalEvents';
 import {
   applyPendingMissedCallsFromNative,
   clearMissedBadgeCleared,
@@ -76,6 +76,25 @@ export function useHomeBadges({ friends, friendsRef }: UseHomeBadgesArgs) {
     unreadFloorRef.current.set(id, {
       min: Math.max(minCount, prev?.min || 0),
       until: Date.now() + ttlMs,
+    });
+  }, []);
+
+  /**
+   * Вход в переписку гасит бейдж сразу. Раньше его снимал только ответ сервера
+   * либо сообщение, прилетевшее в уже открытый чат, — при лежащем сокете
+   * непрочитанное висело на вкладке, хотя прочитано оно было в чате.
+   */
+  useEffect(() => {
+    return onChatOpened(({ userId }) => {
+      const id = String(userId || '').trim();
+      if (!id) return;
+      unreadFloorRef.current.delete(id);
+      setUnreadByUserState((prev) => {
+        if ((prev[id] || 0) <= 0) return prev;
+        const next = patchUnreadCountsIfChanged(prev, { [id]: 0 });
+        if (next !== prev) persistUnreadMap(next);
+        return next;
+      });
     });
   }, []);
 

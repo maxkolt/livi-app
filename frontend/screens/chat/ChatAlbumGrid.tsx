@@ -1,10 +1,9 @@
 // screens/chat/ChatAlbumGrid.tsx
 import React from "react";
-import { View, Pressable, Platform, Animated, Vibration } from "react-native";
+import { View, Pressable, Animated } from "react-native";
 import { useSafeAreaFrame } from 'react-native-safe-area-context';
 import { Image as ExpoImage } from "expo-image";
 import { Ionicons } from "@expo/vector-icons";
-import * as Haptics from "expo-haptics";
 import {
   CHAT_ALBUM_GAP,
   albumGridLayout,
@@ -27,20 +26,6 @@ type Props = {
   /** @deprecated kept for API compatibility — no focus frame. */
   focusedIndex?: number | null;
 };
-
-function tapHaptic(immediate?: boolean) {
-  if (Platform.OS === "ios") {
-    try {
-      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    } catch {
-      Vibration.vibrate(immediate ? 5 : 3);
-    }
-  } else {
-    try {
-      Vibration.vibrate(immediate ? 10 : 25);
-    } catch {}
-  }
-}
 
 type TileProps = {
   uri: string;
@@ -114,7 +99,6 @@ function AlbumTile({
           selectionMode
             ? undefined
             : () => {
-                tapHaptic(true);
                 runScale(true, onLongPress);
               }
         }

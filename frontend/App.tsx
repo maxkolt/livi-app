@@ -45,7 +45,7 @@ import { flushCallLogUi, forceCallLogUiNow, recordCallLog, recordCancelledCall, 
 import { markChatCallBubbleEligible } from './screens/chat/chatCallEvents';
 import { getInstallId, getInstallSecret } from './utils/installId';
 import { notifyIncomingShare, pullPendingShareFromNative, subscribeIncomingShare, type IncomingShareItem } from './utils/incomingShare';
-import { ensureInitialMediaPermissions, needsNearbyDevicesPermission, requestNearbyDevicesPermissionAndroid } from './utils/mediaPermissions';
+import { ensureInitialMediaPermissions, ensureCallMediaPermissions, needsNearbyDevicesPermission, requestNearbyDevicesPermissionAndroid } from './utils/mediaPermissions';
 import {
   captureDeferredInviteCode,
   clearPendingInviteCode,
@@ -82,6 +82,10 @@ import {
   stopIncomingCallRingtoneAndVibration,
   pauseBackgroundMediaAfterCall,
   canDrawOverlays,
+  canShowIncomingCallScreen,
+  canUseFullScreenIntent,
+  openFullScreenIntentSettings,
+  consumeIncomingCallDisplayFailure,
   openOverlayPermissionSettings,
   isIgnoringBatteryOptimizations,
   openBatteryOptimizationSettings,
@@ -959,14 +963,31 @@ function AppContent() {
     if (!isHomeRouteNow()) return;
     overlayColdStartPromptAttemptedRef.current = true;
     try {
-      const can = await canDrawOverlays();
-      if (can) {
+      // Раньше спрашивали «поверх других приложений» всегда. Теперь достаточно любого из двух
+      // путей показа входящего, поэтому на Android ниже 14 модалка не появится вовсе
+      // (полноэкранные уведомления там разрешены по умолчанию), а на 14+ спросим одно разрешение.
+      if (await canShowIncomingCallScreen()) {
         setOverlayPermissionModalVisible(false);
         return;
       }
       setOverlayPermissionModalVisible(true);
     } catch (_) {}
   }, [isHomeRouteNow]);
+
+  /**
+   * Куда вести пользователя за разрешением показывать входящий: на Android 14+ это
+   * «Полноэкранные уведомления» — один переключатель с понятной формулировкой про звонки,
+   * вместо пугающего «Отображение поверх других окон». Оверлей остаётся запасным вариантом.
+   */
+  const openIncomingCallDisplaySettings = React.useCallback(async () => {
+    try {
+      if (!(await canUseFullScreenIntent())) {
+        openFullScreenIntentSettings();
+        return;
+      }
+    } catch (_) {}
+    openOverlayPermissionSettings();
+  }, []);
 
   /**
    * Android держит приложение в App Standby Bucket и режет квоту high-priority FCM,
@@ -1007,14 +1028,17 @@ function AppContent() {
    * как слежка, поэтому сначала объясняем своей модалкой, и только по «Разрешить»
    * показываем системный диалог.
    */
-  const syncBluetoothPermissionModal = React.useCallback(async () => {
+  const syncBluetoothPermissionModal = React.useCallback(async (opts?: { force?: boolean }) => {
     if (Platform.OS !== 'android') return;
     if (!androidInitialPermissionsDoneRef.current) return;
-    if (bluetoothPromptAttemptedRef.current) {
+    // force — запрос по требованию (пользователь переключает аудиовыход во время звонка):
+    // там нет экрана Home и разрешение спрашивается осознанно, поэтому обе проверки пропускаем.
+    const force = opts?.force === true;
+    if (bluetoothPromptAttemptedRef.current && !force) {
       if (!isHomeRouteNow()) setBluetoothPermissionModalVisible(false);
       return;
     }
-    if (!isHomeRouteNow()) return;
+    if (!force && !isHomeRouteNow()) return;
     try {
       const pendingInvite = await getPendingInviteCode();
       if (pendingInvite) {
@@ -1036,7 +1060,7 @@ function AppContent() {
     void hydrateLang();
   }, [hydrateLang]);
 
-  /** После включения overlay в системных настройках — скрыть модалку при возврате в приложение (без повторного показа). */
+  /** После включения разрешения в системных настройках — скрыть модалку при возврате в приложение (без повторного показа). */
   React.useEffect(() => {
     if (Platform.OS !== 'android') return;
     const prevRef = { current: AppState.currentState };
@@ -1046,7 +1070,7 @@ function AppContent() {
       if (next === 'active' && (prev === 'background' || prev === 'inactive')) {
         void (async () => {
           try {
-            if (await canDrawOverlays()) setOverlayPermissionModalVisible(false);
+            if (await canShowIncomingCallScreen()) setOverlayPermissionModalVisible(false);
           } catch (_) {}
           try {
             if (await isIgnoringBatteryOptimizations()) setBatteryOptimizationModalVisible(false);
@@ -1297,6 +1321,9 @@ function AppContent() {
         clearStaleInAppPiPRestoreForIncomingAnswer(10_000);
       } catch {}
       beginEarlyIncomingCallAccept(cid);
+      // Переспрос микрофона/камеры по факту ответа, если на старте отказали. Без await:
+      // ранний accept — горячий путь, задерживать его нельзя.
+      void ensureCallMediaPermissions({ video: answerMediaHint !== 'audio' });
       prefetchDirectCallIce('app:android-incoming-answer');
       if (answerMediaHint === 'audio') {
         prewarmDirectCallAudioCapture('app:android-incoming-answer');
@@ -2188,18 +2215,56 @@ function AppContent() {
     void syncBatteryOptimizationModal();
   }, [routeName, androidPermissionsGate, overlayPermissionModalVisible, syncBatteryOptimizationModal]);
 
-  /** Третьей в очереди: только когда ни overlay, ни батарейная модалка не на экране. */
+  /**
+   * «Устройства рядом» со старта убрано намеренно: разрешение нужно только для вывода звука
+   * в Bluetooth-гарнитуру, а на старте оно читается как «приложение ищет устройства вокруг»
+   * и дорого стоит в доверии. Спрашиваем по факту — когда пользователь выбирает аудиовыход.
+   */
+  const promptBluetoothPermissionOnDemand = React.useCallback(() => {
+    if (Platform.OS !== 'android') return;
+    void syncBluetoothPermissionModal({ force: true });
+  }, [syncBluetoothPermissionModal]);
+
+  React.useEffect(() => {
+    const g = global as any;
+    g.__promptBluetoothPermissionRef = g.__promptBluetoothPermissionRef || { current: null as (() => void) | null };
+    g.__promptBluetoothPermissionRef.current = promptBluetoothPermissionOnDemand;
+    return () => {
+      g.__promptBluetoothPermissionRef.current = null;
+    };
+  }, [promptBluetoothPermissionOnDemand]);
+
+  /**
+   * Напоминание по факту: нативный сервис отметил входящий, который не удалось показать
+   * из-за настроек. Показываем модалку при возвращении в приложение — у пользователя уже есть
+   * собственный повод («звонок не появился»), а не абстрактная просьба на пустом месте.
+   */
+  const checkIncomingCallDisplayFailure = React.useCallback(async () => {
+    if (Platform.OS !== 'android') return;
+    try {
+      const failure = await consumeIncomingCallDisplayFailure();
+      if (!failure) return;
+      if (await canShowIncomingCallScreen()) return;
+      overlayColdStartPromptAttemptedRef.current = true;
+      setOverlayPermissionModalVisible(true);
+      logger.info('[permissions] incoming call was not displayed — prompting for display permission', {
+        atMs: failure.atMs,
+      });
+    } catch (_) {}
+  }, []);
+
   React.useEffect(() => {
     if (Platform.OS !== 'android') return;
-    if (overlayPermissionModalVisible || batteryOptimizationModalVisible) return;
-    void syncBluetoothPermissionModal();
-  }, [
-    routeName,
-    androidPermissionsGate,
-    overlayPermissionModalVisible,
-    batteryOptimizationModalVisible,
-    syncBluetoothPermissionModal,
-  ]);
+    void checkIncomingCallDisplayFailure();
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next === 'active') void checkIncomingCallDisplayFailure();
+    });
+    return () => {
+      try {
+        sub.remove();
+      } catch {}
+    };
+  }, [checkIncomingCallDisplayFailure]);
   const lastLoggedRouteRef = React.useRef<string | undefined>(undefined);
   const systemPiPDecisionLogRef = React.useRef<string>('');
   /** Форсирует пересчёт Android leaveHint/PiP guard после call:end/call:ended (refs меняются без смены route/pip). */
@@ -3464,8 +3529,11 @@ function AppContent() {
       isOnVideoScreen,
       isInactiveVideoState,
     });
-    // Метрика E2E: подтверждаем серверу фактический показ входящего UI.
-    try { reportIncomingCallShown(d.callId); } catch {}
+    // ACK показа входящего. Сервер по нему ГАСИТ ретраи и эскалацию пушей, поэтому слать его
+    // до фактического показа нельзя: если экран не поднимется (BAL, дедуп, stale-guard),
+    // звонок останется недоставленным, а сервер будет считать его доставленным.
+    // Android: ACK шлёт сама IncomingCallActivity по HTTP в onCreate — по факту показа.
+    // iOS: CallKit рисует экран сам, подтверждаем после displayIncomingCall ниже.
     incomingCallIdRef.current = d.callId;
     try { Keyboard.dismiss(); } catch {}
 
@@ -3482,6 +3550,7 @@ function AppContent() {
       });
     } else if (isCallKeepAvailable()) {
       displayIncomingCall(d.callId, d.from, d.fromNick ?? '', hasVideo, d.callKitId);
+      try { reportIncomingCallShown(d.callId); } catch {}
     }
     try { AsyncStorage.setItem('last_incoming_from', String(d.from || '')); } catch {}
     try {
@@ -5130,7 +5199,7 @@ function AppContent() {
                           : overlayPermissionModalStyles.overlayPermissionButtonPrimaryLightOuter,
                       ]}
                       onPress={() => {
-                        openOverlayPermissionSettings();
+                        void openIncomingCallDisplaySettings();
                         setOverlayPermissionModalVisible(false);
                       }}
                     >

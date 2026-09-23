@@ -596,6 +596,50 @@ export function canUseFullScreenIntent(): Promise<boolean> {
   }
 }
 
+/**
+ * Может ли приложение вообще показать экран входящего.
+ *
+ * Путей два и они взаимозаменяемы: полноэкранное уведомление (систему поднимает экран сама)
+ * и «поверх других приложений» (экран стартует напрямую). Достаточно любого — поэтому
+ * спрашивать оба разрешения не нужно, и на Android ниже 14 не нужно спрашивать ничего:
+ * там полноэкранные уведомления разрешены по умолчанию.
+ */
+export async function canShowIncomingCallScreen(): Promise<boolean> {
+  if (Platform.OS !== 'android') return true;
+  try {
+    const [fullScreen, overlay] = await Promise.all([
+      canUseFullScreenIntent(),
+      canDrawOverlays(),
+    ]);
+    return !!fullScreen || !!overlay;
+  } catch {
+    return true;
+  }
+}
+
+/** Открыть настройку «Полноэкранные уведомления» (Android 14+) — самый короткий путь к показу входящего. */
+export function openFullScreenIntentSettings(): void {
+  if (Platform.OS !== 'android') return;
+  try {
+    NativeModules.LiviAppModule?.openFullScreenIntentSettings?.();
+  } catch {}
+}
+
+/**
+ * Входящий, который не удалось показать из-за настроек. Запись создаёт нативный сервис,
+ * забирается один раз — по ней показываем напоминание после реально пропущенного звонка.
+ */
+export async function consumeIncomingCallDisplayFailure(): Promise<{ atMs: number; fromNick?: string } | null> {
+  if (Platform.OS !== 'android') return null;
+  try {
+    const res = await NativeModules.LiviAppModule?.getAndClearIncomingCallDisplayFailure?.();
+    if (!res || typeof res.atMs !== 'number' || res.atMs <= 0) return null;
+    return { atMs: res.atMs, fromNick: typeof res.fromNick === 'string' ? res.fromNick : undefined };
+  } catch {
+    return null;
+  }
+}
+
 /** Проверить, разрешено ли приложению «отображение поверх других окон» (Всегда сверху). */
 export function canDrawOverlays(): Promise<boolean> {
   if (Platform.OS !== 'android') return Promise.resolve(true);

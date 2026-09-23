@@ -7,8 +7,9 @@ import {
   Pressable,
   ScrollView,
   Animated,
-  Dimensions,
+  useWindowDimensions,
 } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { StageGradient } from "../home/WelcomeStageBackground";
 
@@ -20,19 +21,37 @@ export const SHEET_REACTIONS_ROW_2 = ["😊", "😮", "😢", "👎", "😍", "�
 export const SHEET_REACTIONS_ALL = [...SHEET_REACTIONS_ROW_1, ...SHEET_REACTIONS_ROW_2];
 export const REACTIONS_PAGE_SIZE = 4;
 
+export type ReactionBarAnchor = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  /** Своё сообщение — полоса уходит под облако, чужое — над ним. */
+  isOwn: boolean;
+};
+
+const BAR_BUBBLE_GAP = 8;
+const BAR_EDGE_PAD = 12;
+const BAR_HEIGHT_FALLBACK = 64;
+
 export function ReactionBarModal({
   visible,
   onClose,
   onPickEmoji,
   isDark,
+  anchor,
 }: {
   visible: boolean;
   onClose: () => void;
   onPickEmoji: (emoji: string) => void;
   isDark: boolean;
+  anchor?: ReactionBarAnchor | null;
 }) {
   const scrollRef = React.useRef<ScrollView>(null);
   const hintBounce = React.useRef(new Animated.Value(0)).current;
+  const { width: winW, height: winH } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+  const [barH, setBarH] = React.useState(0);
 
   React.useEffect(() => {
     if (visible) {
@@ -53,8 +72,29 @@ export function ReactionBarModal({
     return () => loop.stop();
   }, [visible, hintBounce]);
 
-  const barWidth = Math.min(320, Dimensions.get("window").width * 0.88);
+  const barWidth = Math.min(320, winW * 0.88);
   const Shell = isDark ? StageGradient : View;
+
+  const position = React.useMemo(() => {
+    const height = barH > 0 ? barH : BAR_HEIGHT_FALLBACK;
+    const minTop = insets.top + BAR_EDGE_PAD;
+    const maxTop = Math.max(minTop, winH - insets.bottom - BAR_EDGE_PAD - height);
+    const minLeft = insets.left + BAR_EDGE_PAD;
+    const maxLeft = Math.max(minLeft, winW - insets.right - BAR_EDGE_PAD - barWidth);
+    const clamp = (v: number, lo: number, hi: number) =>
+      Math.round(Math.min(Math.max(v, lo), hi));
+
+    if (!anchor || !(anchor.height > 0)) {
+      return { top: clamp((winH - height) / 2, minTop, maxTop), left: clamp((winW - barWidth) / 2, minLeft, maxLeft) };
+    }
+    const preferred = anchor.isOwn
+      ? anchor.y + anchor.height + BAR_BUBBLE_GAP
+      : anchor.y - BAR_BUBBLE_GAP - height;
+    return {
+      top: clamp(preferred, minTop, maxTop),
+      left: clamp(anchor.x + anchor.width / 2 - barWidth / 2, minLeft, maxLeft),
+    };
+  }, [anchor, barH, barWidth, winW, winH, insets.top, insets.bottom, insets.left, insets.right]);
 
   const barStyle = {
     width: barWidth,
@@ -96,13 +136,25 @@ export function ReactionBarModal({
       <Pressable
         style={{
           flex: 1,
-          justifyContent: "center",
-          alignItems: "center",
-          backgroundColor: "rgba(0,0,0,0.4)",
+          justifyContent: "flex-start",
+          alignItems: "flex-start",
         }}
         onPress={onClose}
       >
-        <Pressable onPress={() => {}} style={{ width: barWidth, overflow: "hidden", borderRadius: 24 }}>
+        <Pressable
+          onPress={() => {}}
+          onLayout={(e) => {
+            const h = Math.round(e.nativeEvent.layout.height);
+            if (h > 0 && h !== barH) setBarH(h);
+          }}
+          style={{
+            width: barWidth,
+            marginTop: position.top,
+            marginLeft: position.left,
+            overflow: "hidden",
+            borderRadius: 24,
+          }}
+        >
           <ScrollView
             ref={scrollRef}
             horizontal

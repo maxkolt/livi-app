@@ -8,6 +8,7 @@ type Listener<T> = (payload: T) => void;
 
 const missedListeners = new Set<Listener<{ userId: string; count?: number }>>();
 const missedClearListeners = new Set<Listener<{ userId: string }>>();
+const chatOpenedListeners = new Set<Listener<{ userId: string }>>();
 const closeIncomingListeners = new Set<Listener<{}>>();
 const closeIncomingRequestListeners = new Set<Listener<{}>>();
 const closeOutgoingCallListeners = new Set<Listener<{}>>();
@@ -239,6 +240,22 @@ export function emitMissedClear(userId: string) {
   if (!userId) return;
   const uid = String(userId);
   for (const l of missedClearListeners) {
+    try { l({ userId: uid }); } catch {}
+  }
+}
+
+/** Пользователь вошёл в переписку с userId — бейдж непрочитанных гасим сразу, не дожидаясь ответа сервера. */
+export function onChatOpened(cb: Listener<{ userId: string }>): () => void {
+  chatOpenedListeners.add(cb);
+  return () => {
+    chatOpenedListeners.delete(cb);
+  };
+}
+
+export function emitChatOpened(userId: string) {
+  if (!userId) return;
+  const uid = String(userId);
+  for (const l of chatOpenedListeners) {
     try { l({ userId: uid }); } catch {}
   }
 }

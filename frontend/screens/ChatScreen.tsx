@@ -18,7 +18,6 @@ import {
   Modal,
   Pressable,
   Animated,
-  Vibration,
   NativeModules,
   DeviceEventEmitter,
   PixelRatio,
@@ -43,7 +42,7 @@ import {
   NativeViewGestureHandler,
   FlatList as GHFlatList,
 } from "react-native-gesture-handler";
-import { onCloseIncoming, emitCloseIncoming } from '../utils/globalEvents';
+import { onCloseIncoming, emitCloseIncoming, emitChatOpened } from '../utils/globalEvents';
 import { displayAvatarLetter } from './home/friendHelpers';
 import socket from '../sockets/socket';
 import { Ionicons } from "@expo/vector-icons";
@@ -232,7 +231,7 @@ export default function ChatScreen({ route, navigation }: Props) {
   const msgActionsReactionsWidth = msgActionsLandscape ? 224 : 256;
   const msgActionsListWidth = msgActionsLandscape ? 216 : 245;
   const msgActionsCardWidth = msgActionsLandscape ? 224 : 280;
-  const msgActionsBlockGap = msgActionsLandscape ? 8 : 12;
+  const msgActionsBlockGap = msgActionsLandscape ? 3 : 4;
   // В стопке над списком ещё лежат реакции (~54) и зазор (12), в портрете — плюс отступ снизу.
   const msgActionsListMaxH = Math.max(
     msgActionsLandscape ? 140 : 160,
@@ -355,6 +354,9 @@ export default function ChatScreen({ route, navigation }: Props) {
       if (peerId) {
         setCurrentChatPeerId(peerId);
         sendChatViewing(peerId);
+        // Гасим бейдж непрочитанных сразу на входе: сервер узнает о прочтении
+        // через markMessagesAsRead, но ответ может и не дойти (сокет лёг).
+        emitChatOpened(peerId);
         dismissMessageNotificationForUser(peerId).catch(() => {});
       }
       // Голос: режим аудио поднимаем при входе в чат — первый тап не ждёт setAudioModeAsync
@@ -570,6 +572,59 @@ export default function ChatScreen({ route, navigation }: Props) {
     showMessageActionsSheet,
     clearAndroidLayoutIfNeeded,
   } = useChatMessageActions({ onHidden: clearAlbumFocusOnActionsHidden });
+  /**
+   * Меню держим у зажатого облака, как в Telegram: под ним, если хватает места,
+   * иначе над ним, иначе прижимаем к краю экрана. Координаты облака приходят из
+   * measureInWindow — та же система, что у isLayoutBlockedByChrome.
+   */
+  const MSG_ACTIONS_EDGE_PAD = 12;
+  const MSG_ACTIONS_BUBBLE_GAP = 8;
+  const MSG_ACTIONS_GROUP_H_FALLBACK = 360;
+  const [msgActionsGroupH, setMsgActionsGroupH] = useState(0);
+  const msgActionsAnchor = React.useMemo(() => {
+    // Рендер ограничен maxCardHeight, поэтому и в расчёте берём не больше него —
+    // иначе устаревший замер уводит якорь мимо реальной высоты меню.
+    const groupH = Math.min(
+      modalLayout.maxCardHeight,
+      msgActionsGroupH > 0 ? msgActionsGroupH : MSG_ACTIONS_GROUP_H_FALLBACK,
+    );
+    const minTop = insets.top + MSG_ACTIONS_EDGE_PAD;
+    const maxBottom = modalLayout.height - insets.bottom - MSG_ACTIONS_EDGE_PAD;
+    const maxTop = Math.max(minTop, maxBottom - groupH);
+    const minLeft = insets.left + MSG_ACTIONS_EDGE_PAD;
+    const maxLeft = Math.max(
+      minLeft,
+      modalLayout.width - insets.right - MSG_ACTIONS_EDGE_PAD - msgActionsCardWidth,
+    );
+    const clamp = (v: number, lo: number, hi: number) =>
+      Math.round(Math.min(Math.max(v, lo), hi));
+
+    const layout = selectedMessageLayout;
+    if (!layout || !(layout.height > 0)) {
+      return {
+        top: maxTop,
+        left: clamp((modalLayout.width - msgActionsCardWidth) / 2, minLeft, maxLeft),
+      };
+    }
+    const below = layout.y + layout.height + MSG_ACTIONS_BUBBLE_GAP;
+    const above = layout.y - MSG_ACTIONS_BUBBLE_GAP - groupH;
+    const preferred = below + groupH <= maxBottom ? below : above >= minTop ? above : maxTop;
+    return {
+      top: clamp(preferred, minTop, maxTop),
+      left: clamp(layout.x + layout.width / 2 - msgActionsCardWidth / 2, minLeft, maxLeft),
+    };
+  }, [
+    selectedMessageLayout,
+    msgActionsGroupH,
+    msgActionsCardWidth,
+    insets.top,
+    insets.bottom,
+    insets.left,
+    insets.right,
+    modalLayout.height,
+    modalLayout.width,
+    modalLayout.maxCardHeight,
+  ]);
   const closeActionsOnEnterSelection = React.useCallback(() => {
     try {
       hideMessageActionsRef.current();
@@ -620,6 +675,10 @@ export default function ChatScreen({ route, navigation }: Props) {
   const highlightClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Для панели реакций: id сообщения, по которому дважды нажали (показать полосу эмодзи)
   const [reactionBarForMessageId, setReactionBarForMessageId] = useState<string | null>(null);
+  /** Облако, по которому был двойной тап: полоса реакций встаёт рядом с ним. */
+  const [reactionBarAnchor, setReactionBarAnchor] = useState<
+    { x: number; y: number; width: number; height: number; isOwn: boolean } | null
+  >(null);
   /** ID сообщения, которое пользователь редактирует (текст в поле ввода). */
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   /** Сообщение, на которое отвечаем (показываем превью над полем ввода). */
@@ -1871,25 +1930,11 @@ export default function ChatScreen({ route, navigation }: Props) {
 
   // Функция для анимации нажатия на сообщение
   const animateMessagePress = React.useCallback(
-    (messageId: string, callback?: () => void, options?: { immediate?: boolean; haptic?: boolean }) => {
+    (messageId: string, callback?: () => void, options?: { immediate?: boolean }) => {
       const animation = getMessageAnimation(messageId);
-      const withHaptic = options?.haptic !== false;
 
-      // Long press: тактиль и лёгкое сжатие облака здесь, а не при показе меню.
+      // Long press: только лёгкое сжатие облака, без виброотклика.
       if (options?.immediate) {
-        if (withHaptic) {
-          if (Platform.OS === 'ios') {
-            try {
-              void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-            } catch {
-              Vibration.vibrate(5);
-            }
-          } else {
-            try {
-              Vibration.vibrate(10);
-            } catch {}
-          }
-        }
         animation.stopAnimation();
         animation.setValue(1);
         Animated.sequence([
@@ -1906,18 +1951,6 @@ export default function ChatScreen({ route, navigation }: Props) {
         ]).start();
         callback?.();
         return;
-      }
-
-      if (withHaptic) {
-        if (Platform.OS === 'ios') {
-          try {
-            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-          } catch {
-            Vibration.vibrate(3);
-          }
-        } else {
-          Vibration.vibrate(25);
-        }
       }
 
       Animated.sequence([
@@ -1940,17 +1973,22 @@ export default function ChatScreen({ route, navigation }: Props) {
 
   // Двойной тап по облачку сообщения — показать полосу реакций
   const lastTapForReactionRef = useRef({ time: 0, id: '' });
-  const handleMessagePress = React.useCallback((item: any) => {
+  const handleMessagePress = React.useCallback((
+    item: any,
+    layout?: { x: number; y: number; width: number; height: number },
+  ) => {
     const now = Date.now();
     const prev = lastTapForReactionRef.current;
     if (prev.id === item.id && now - prev.time < 400) {
+      const isOwn = item?.from === currentUserId || item?.sender === 'me';
+      setReactionBarAnchor(layout ? { ...layout, isOwn } : null);
       setReactionBarForMessageId(item.id);
       lastTapForReactionRef.current = { time: 0, id: '' };
       return;
     }
     lastTapForReactionRef.current = { time: now, id: item.id };
     animateMessagePress(item.id);
-  }, [animateMessagePress]);
+  }, [animateMessagePress, currentUserId]);
 
   /** Нажатие на реакцию — снять свою реакцию (toggle), обновляется у обоих. */
   const handleReactionPress = React.useCallback((messageId: string, emoji: string) => {
@@ -3286,10 +3324,15 @@ export default function ChatScreen({ route, navigation }: Props) {
       {reactionBarForMessageId !== null && (
         <ReactionBarModal
           visible={true}
-          onClose={() => setReactionBarForMessageId(null)}
+          anchor={reactionBarAnchor}
+          onClose={() => {
+            setReactionBarForMessageId(null);
+            setReactionBarAnchor(null);
+          }}
           onPickEmoji={(emoji) => {
             sendMessageReaction(reactionBarForMessageId, emoji, peerId).catch(() => {});
             setReactionBarForMessageId(null);
+            setReactionBarAnchor(null);
           }}
           isDark={isDark}
         />
@@ -3308,19 +3351,17 @@ export default function ChatScreen({ route, navigation }: Props) {
             style={{
               flex: 1,
               backgroundColor: isDark ? 'rgba(0,0,0,0.80)' : 'rgba(0,0,0,0.66)',
-              // В landscape высоты нет на отступ в 100px — центрируем карточку.
-              justifyContent: msgActionsLandscape ? 'center' : 'flex-end',
-              alignItems: 'center',
-              paddingHorizontal: modalLayout.padH,
-              paddingBottom: msgActionsLandscape ? modalLayout.padV : 100,
-              paddingTop: msgActionsLandscape ? modalLayout.padV : 0,
+              // Позицию задаёт якорь у облака, поэтому без выравнивания и паддингов.
+              justifyContent: 'flex-start',
+              alignItems: 'flex-start',
             }}
           >
             <Pressable
               onPress={() => {}}
               style={{
                 width: msgActionsCardWidth,
-                alignSelf: 'center',
+                marginTop: msgActionsAnchor.top,
+                marginLeft: msgActionsAnchor.left,
                 shadowColor: '#000',
                 shadowOffset: { width: 0, height: 4 },
                 shadowOpacity: 0.25,
@@ -3355,8 +3396,15 @@ export default function ChatScreen({ route, navigation }: Props) {
                 };
                 return (
                 <View
+                  onLayout={(e) => {
+                    const h = Math.round(e.nativeEvent.layout.height);
+                    if (h > 0 && h !== msgActionsGroupH) setMsgActionsGroupH(h);
+                  }}
                   style={{
                     width: msgActionsCardWidth,
+                    // Жёсткий потолок: якорь считается по замеру, а тот отстаёт на кадр
+                    // и на поворот экрана — без этого нижние пункты уезжают за край.
+                    maxHeight: modalLayout.maxCardHeight,
                     alignItems: 'center',
                     flexDirection: 'column',
                     justifyContent: 'flex-start',
@@ -3412,6 +3460,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                       marginTop: msgActionsBlockGap,
                       width: msgActionsListWidth,
                       maxHeight: msgActionsListMaxH,
+                      flexShrink: 1,
                       borderRadius: 12,
                       ...cardShellStyle,
                     }}

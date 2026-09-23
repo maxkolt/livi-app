@@ -89,13 +89,18 @@ class IncomingCallForegroundService : Service() {
         vl("[INCOMING_FGS] onStartCommand callId=$callId minimized=$minimized")
 
         // Любой startForegroundService() обязан быстро вызвать startForeground() (в т.ч. после DETACH).
+        // ВАЖНО: здесь публикуется ПЕРВОЕ уведомление сервиса, и именно по нему система решает,
+        // запускать ли full-screen intent. Повторный startForeground ниже — уже обновление того же
+        // id, а на обновление FSI не срабатывает. Поэтому режим берём фактический: раньше тут было
+        // жёстко silent, из-за чего экран входящего никогда не поднимался через FSI и держался
+        // только на разрешении «поверх других приложений».
         LiviFirebaseMessagingService.ensureCallChannel(this)
         promoteForegroundIfNeeded(
             callId.ifEmpty { "abort" },
             from,
             fromNick,
-            silentNotification = true,
-            headsUpOnly = false,
+            silentNotification = silentNotification || callId.isEmpty() || from.isEmpty(),
+            headsUpOnly = headsUpOnly,
         )
 
         if (callId.isEmpty() || from.isEmpty()) {
@@ -254,6 +259,41 @@ class IncomingCallForegroundService : Service() {
                 }
                 pendingActivityLaunchRunnables.add(runnable)
                 handler.postDelayed(runnable, delaysMs[i])
+            }
+
+            // Все попытки прошли, а экрана нет — значит система молча заблокировала фоновый старт
+            // (нет разрешения «поверх других приложений»). Тихая строчка в шторке такой звонок не
+            // спасает: перевыпускаем уведомление как full-screen/heads-up — его система показывает
+            // сама, без exemption на старт активити. На рабочем пути не срабатывает: если экран
+            // поднялся, shouldSkipActivityLaunch отсекает.
+            if (silentNotification) {
+                val escalateRunnable = Runnable {
+                    if (currentCallId != callId) return@Runnable
+                    if (shouldSkipActivityLaunch(callId)) {
+                        vl("[INCOMING_FGS] notification escalation SKIP: activity visible callId=$callId")
+                        return@Runnable
+                    }
+                    if (EndedCallIds.isEnded(applicationContext, callId)) return@Runnable
+                    if (LiviOngoingCallHelper.shouldSuppressStaleIncoming(applicationContext, callId)) return@Runnable
+                    try {
+                        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                        nm.notify(
+                            LiviFirebaseMessagingService.NOTIFICATION_ID_INCOMING_CALL,
+                            buildIncomingCallNotificationResolved(callId, from, fromNick)
+                        )
+                        Log.w(
+                            TAG,
+                            "[INCOMING_FGS] activity still not visible → notification escalated to full-screen callId=$callId"
+                        )
+                        // Экран показать не удалось — повод напомнить пользователю про разрешение,
+                        // но по факту, а не заранее. JS заберёт эту отметку при следующем открытии.
+                        LiviAppModule.markIncomingCallDisplayFailure(applicationContext, fromNick)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "[INCOMING_FGS] notification escalation failed callId=$callId", e)
+                    }
+                }
+                pendingActivityLaunchRunnables.add(escalateRunnable)
+                handler.postDelayed(escalateRunnable, NOTIFICATION_ESCALATE_DELAY_MS)
             }
         } else {
             vl("[INCOMING_FGS] minimized=true: skip delayed startActivity")
@@ -428,6 +468,12 @@ class IncomingCallForegroundService : Service() {
         private const val TAG = "IncomingCallFGS"
         /** 20 сек без ответа — совпадает с таймаутом на сервере и с IncomingCallActivity.INCOMING_TIMEOUT_MS. */
         private const val TIMEOUT_MS = 27_000L
+        /**
+         * Сразу после последней отложенной попытки startActivity (2200 мс): если экрана всё ещё нет,
+         * тихое уведомление повышаем до full-screen — иначе при заблокированном фоновом старте
+         * звонок остаётся только рингтоном без способа ответить.
+         */
+        private const val NOTIFICATION_ESCALATE_DELAY_MS = 2_600L
         const val EXTRA_FROM = "from"
         const val EXTRA_FROM_NICK = "fromNick"
         /** Broadcast: IncomingCallActivity открылась, сервис может снять уведомление и остановиться */

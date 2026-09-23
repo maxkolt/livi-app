@@ -238,18 +238,56 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 }
                 val needsForegroundService = !activityLaunchOk || keyguardLocked || !isInteractive
                 if (needsForegroundService) {
-                    // FGS-уведомление всегда тихое: иконка в статус-баре + запись в шторке (без heads-up).
-                    // Экран входящего поднимает IncomingCallActivity (startActivity выше + retry из FGS).
-                    // Full-screen notification — только fallback, если startForegroundService упадёт.
+                    // Тихое уведомление (иконка + запись в шторке, без heads-up) допустимо только когда
+                    // startActivity прошёл и экран включён/разблокирован — там UI ведёт IncomingCallActivity.
+                    // При погашенном или заблокированном экране, а также при провале startActivity нужен
+                    // full-screen intent: система сама поднимает по нему экран входящего, без exemption
+                    // на фоновый старт активити. Иначе без разрешения «поверх других приложений»
+                    // звонок оставался только рингтоном.
                     startIncomingCallForegroundService(
                         callId,
                         from,
                         fromNick,
                         headsUpOnly = false,
-                        silentNotification = true
+                        silentNotification = activityLaunchOk && isInteractive && !keyguardLocked
                     )
                 } else {
-                    vLog("[INCOMING_CALL] skip FGS: foreground activity launch owns incoming UI callId=$callId")
+                    // startActivity из фона система блокирует МОЛЧА (background activity start):
+                    // исключения нет, activityLaunchOk=true, а экрана нет. Проверяем факт показа и
+                    // поднимаем FGS, если экран не появился — он же ретраит startActivity.
+                    // Отложенная проверка (а не безусловный FGS) сохраняет защиту от start/stop storm.
+                    val verifyCallId = callId
+                    val verifyFrom = from
+                    val verifyNick = fromNick
+                    val verifyExpiresAtMs = callExpiresAtMs
+                    Handler(Looper.getMainLooper()).postDelayed({
+                        val shown =
+                            IncomingCallActivity.isAlive &&
+                                IncomingCallActivity.activeCallId == verifyCallId
+                        val ended = try {
+                            EndedCallIds.isEnded(this@LiviFirebaseMessagingService, verifyCallId)
+                        } catch (_: Exception) { false }
+                        val expired =
+                            verifyExpiresAtMs != null && System.currentTimeMillis() >= verifyExpiresAtMs
+                        if (!shown && !ended && !expired) {
+                            Log.w(
+                                TAG,
+                                "[INCOMING_CALL] activity not visible after startActivity (BAL?) → FGS fallback callId=$verifyCallId"
+                            )
+                            // Не silent: экран поднять не удалось, тихая строчка в шторке звонок не спасает.
+                            // Уведомление с full-screen intent система показывает сама, без exemption на
+                            // фоновый старт активити — это единственный путь, когда BAL заблокировал запуск.
+                            startIncomingCallForegroundService(
+                                verifyCallId,
+                                verifyFrom,
+                                verifyNick,
+                                headsUpOnly = false,
+                                silentNotification = false
+                            )
+                        } else {
+                            vLog("[INCOMING_CALL] activity launch confirmed callId=$verifyCallId shown=$shown")
+                        }
+                    }, INCOMING_ACTIVITY_VERIFY_DELAY_MS)
                 }
                 try {
                     if (!appForegroundNow) {
@@ -947,6 +985,12 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
         const val UNREAD_CHANNEL_ID = CHANNEL_ID_UNREAD
         const val UNREAD_SILENT_CHANNEL_ID = CHANNEL_ID_UNREAD_SILENT
         private const val RECENT_INCOMING_DEDUP_WINDOW_MS = 10_000L
+        /**
+         * Через сколько после startActivity проверять, что экран входящего реально появился.
+         * Блокировка background activity start проходит молча — исключения нет. Укладываемся
+         * в temporary allowlist высокоприоритетного FCM, поэтому FGS ещё можно стартовать.
+         */
+        private const val INCOMING_ACTIVITY_VERIFY_DELAY_MS = 700L
         private val recentIncomingByCallId = HashMap<String, Long>()
 
         @Synchronized

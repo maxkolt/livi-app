@@ -7,6 +7,8 @@ module.exports = {
   moduleNameMapper: {
     '^react-native$': '<rootDir>/__mocks__/react-native.ts',
     '^@livekit/react-native-webrtc$': '<rootDir>/__mocks__/@livekit/react-native-webrtc.ts',
+    '^expo-device$': '<rootDir>/__mocks__/expo-device.ts',
+    '^@react-native-community/netinfo$': '<rootDir>/__mocks__/@react-native-community/netinfo.ts',
   },
   clearMocks: true,
   forceExit: true,

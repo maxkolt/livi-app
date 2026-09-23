@@ -28,6 +28,8 @@ import socket, {
 import { logger } from '../../../utils/logger';
 import { sendClientMetrics } from '../../utils/capacityClientMetrics';
 import { getIceConfiguration, enableForcedRelayFallback } from '../../../utils/iceConfig';
+import { buildLiveKitConnectOptions } from './videoCall/iceConnectOptions';
+import { LIVEKIT_APPLY_CLIENT_ICE } from './videoCall/constants';
 import { getPreferredVideoCaptureOptions } from '../videoCaptureProfile';
 import { getRoomIceTransportDiagnostics } from '../iceTransportDiagnostics';
 
@@ -3045,7 +3047,7 @@ export class RandomChatSession extends SimpleEventEmitter {
       // из-за чего они становятся readyState='ended' -> пересоздание localStream -> мерцания в блоке "Вы".
       // Отключаем авт-стоп на unpublish/disconnect и освобождаем ресурсы вручную в stopRandomChat().
       stopLocalTrackOnUnpublish: false,
-      ...(rtcConfig ? { rtcConfig } : {}),
+      // ICE/TURN здесь НЕ указываем: livekit читает rtcConfig только из опций connect (ниже).
       publishDefaults: {
         videoEncoding: { maxBitrate: isHighCapture ? 2_500_000 : 1_200_000, maxFramerate: 30 },
         simulcast,
@@ -3075,10 +3077,20 @@ export class RandomChatSession extends SimpleEventEmitter {
       });
       const connectStartTime = Date.now();
       // VPN / медленный ICE: дефолтные ~15s LiveKit часто рвут до готовности TURN/TCP.
-      await room.connect(url, token, {
-        autoSubscribe: true,
-        peerConnectionTimeout: LIVEKIT_PEER_CONNECTION_TIMEOUT_MS,
+      // КРИТИЧНО: свой ICE/TURN передаётся именно здесь — в опциях конструктора Room
+      // livekit-client его игнорирует (см. videoCall/iceConnectOptions).
+      const connectOptions = buildLiveKitConnectOptions({
+        peerConnectionTimeoutMs: LIVEKIT_PEER_CONNECTION_TIMEOUT_MS,
+        rtcConfig,
+        applyClientIce: LIVEKIT_APPLY_CLIENT_ICE,
       });
+      logger.info('[RandomChatSession] LiveKit connect ICE policy', {
+        appliedClientRtcConfig: !!connectOptions.rtcConfig,
+        iceTransportPolicy: (connectOptions.rtcConfig as any)?.iceTransportPolicy ?? 'server_default',
+        forceRelayOnly: !!options?.forceRelayOnly,
+        targetRoomName,
+      });
+      await room.connect(url, token, connectOptions);
       
       // КРИТИЧНО: Проверяем состояние после подключения
       if (room.state !== 'connected') {

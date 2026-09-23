@@ -274,6 +274,34 @@ async function createUserInternal(): Promise<string | null> {
         }
       }
 
+      // installId занят прошлой установкой этого же устройства, а её installSecret удалён вместе
+      // с приложением (SecureStore исключён из бэкапа намеренно). Доказать владение нечем, и
+      // повторять с тем же id бессмысленно — на Android он выводится из ANDROID_ID и переживает
+      // переустановку, поэтому все 5 попыток получали бы тот же отказ, а пользователь оставался
+      // бы без возможности даже завести новый аккаунт. Уходим на случайный installId.
+      if (response?.error === "unauthorized") {
+        // Тот же отказ приходит, если SecureStore временно не отдал секрет. Стереть привязку
+        // в этом случае значит потерять живой аккаунт, поэтому меняем installId только когда
+        // секрет реально прочитан (значит отвергнут именно он) и первая попытка уже провалилась.
+        // Сервер сам перепривязывает установку, выведенную из ANDROID_ID (см. isDeviceBoundInstallId),
+        // поэтому отказ здесь означает либо старый бэкенд, либо исчерпанный лимит ротаций. Даём
+        // несколько попыток: смена installId — это потеря аккаунта, к ней переходим в последнюю очередь.
+        const secretReadOk = typeof installSecret === "string" && installSecret.length >= 16;
+        if (!secretReadOk || attempt < 4) {
+          console.warn("[createUser] attach unauthorized — retrying before touching installId", {
+            attempt,
+            secretReadOk,
+          });
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+          continue;
+        }
+        console.warn("[createUser] attach rejected (installId belongs to a previous install) — switching to a fresh random installId");
+        const { regenerateRandomInstallId } = await import("../../utils/installId");
+        installId = await regenerateRandomInstallId();
+        clearCurrentUserId();
+        continue;
+      }
+
       // КРИТИЧНО: Если БД недоступна, не бросаем ошибку сразу - ждем и повторяем
       // Это позволяет приложению работать даже если БД временно недоступна
       if (response?.error === "database_unavailable") {

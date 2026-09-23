@@ -1825,9 +1825,12 @@ export async function registerAndSendPushToken(userId?: string, options?: Regist
         const req = await Notifications.requestPermissionsAsync();
         finalStatus = req.status;
       }
+      // Раньше здесь был return: отказ от уведомлений отключал регистрацию токена целиком,
+      // а вместе с ней — весь канал входящих звонков. Но звонок приходит не уведомлением:
+      // Android — data-only FCM (POST_NOTIFICATIONS не нужен), iOS — PushKit/CallKit
+      // (независим от разрешения на уведомления). Поэтому продолжаем регистрацию.
       if (finalStatus !== 'granted') {
-        logger.info('[push] permission not granted');
-        return;
+        logger.info('[push] permission not granted — registering call tokens anyway (data-only FCM / PushKit)');
       }
 
       // FCM token (Android): для data-only пуша звонка — бэкенд шлёт в FCM, onMessageReceived вызывается в фоне → нативный экран.
@@ -1859,26 +1862,52 @@ export async function registerAndSendPushToken(userId?: string, options?: Regist
         }
       }
 
-      // Получаем Expo push token
+      // Получаем Expo push token. Он нужен только для Expo-рассылок (сообщения, iOS-fallback):
+      // звонок на Android идёт data-only через FCM, на iOS — через PushKit. Поэтому недоступность
+      // Expo не должна отменять регистрацию нативных токенов — иначе 503 у Expo = недозвон.
       const projectId =
         (Constants.expoConfig as any)?.extra?.eas?.projectId ||
         (Constants as any)?.easConfig?.projectId;
 
-      const tokenResp = await Notifications.getExpoPushTokenAsync(
-        projectId ? { projectId } : undefined
-      );
-      const token = tokenResp?.data;
-      if (!token) return;
+      let expoToken = '';
       try {
-        logger.debug('[push] expo token acquired', {
+        const tokenResp = await Notifications.getExpoPushTokenAsync(
+          projectId ? { projectId } : undefined
+        );
+        expoToken = String(tokenResp?.data || '');
+      } catch (e) {
+        logger.warn('[push] failed to get expo push token', e as any);
+      }
+
+      const installId = await getInstallId();
+      const voipToken = Platform.OS === 'ios' ? await getVoipPushToken() : undefined;
+
+      // Нет Expo-токена, но есть нативный токен звонка — регистрируем по синтетическому ключу.
+      // Бэкенд примет такую запись и будет слать по ней FCM / APNs VoIP; Expo-рассылки её
+      // отфильтруют сами (везде стоит Expo.isExpoPushToken).
+      const nativeCallToken = Platform.OS === 'android' ? fcmToken : voipToken;
+      const token =
+        expoToken || (nativeCallToken && installId ? `noexpo:${Platform.OS}:${installId}` : '');
+      if (!token) {
+        logger.warn('[push] no usable push token (expo and native both unavailable)');
+        return;
+      }
+      if (!expoToken) {
+        logger.warn('[push] registering without expo token (native-only key)', {
+          platform: Platform.OS,
+          hasFcmToken: !!fcmToken,
+          hasVoipToken: !!voipToken,
+        });
+      }
+      try {
+        logger.debug('[push] push token acquired', {
           userId,
           tokenPrefix: String(token).slice(0, 18),
           platform: Platform.OS,
           hasProjectId: !!projectId,
+          hasExpoToken: !!expoToken,
         });
       } catch {}
-
-      const installId = await getInstallId();
 
       const snapshotNow: PushTokenSnapshot = {
         userId: String(userId),
@@ -1903,7 +1932,6 @@ export async function registerAndSendPushToken(userId?: string, options?: Regist
       }
 
       // Регистрируем токен на backend. Для Android входящий звонок с кнопками возможен только при отправке fcmToken — бэкенд шлёт FCM data-only.
-      const voipToken = Platform.OS === 'ios' ? await getVoipPushToken() : undefined;
       const body: Record<string, unknown> = {
         token,
         platform: Platform.OS,
