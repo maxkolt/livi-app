@@ -139,6 +139,7 @@ import {
   isPhysicalHeadsetGainReason,
   shouldPreferBluetoothEarlyInCall,
 } from './audioRouting/routeReasons';
+import { isBluetoothSettlingWindow, isBuiltInRouteCoercible } from './audioRouting/bluetoothSettling';
 
 /**
  * WA-like: proximity только на audio + earpiece (экран гаснет у уха).
@@ -897,11 +898,10 @@ export const useAudioRouting = (
     let effectiveRoute = route;
     // После wear ICM/bootstrap часто шлёт EAR — не отдавать кнопку, пока SCO поднимается.
     if (
-      (effectiveRoute === 'EARPIECE' || effectiveRoute === 'SPEAKER_PHONE') &&
-      !isHeadsetDisconnectFallbackReason(reason) &&
-      !reason.startsWith('cycle') &&
-      !reason.startsWith('toggle') &&
-      !isExplicitBuiltInRouteChoice(reason, effectiveRoute)
+      isBuiltInRouteCoercible(effectiveRoute, reason, {
+        isHeadsetDisconnectFallbackReason,
+        isExplicitBuiltInRouteChoice,
+      })
     ) {
       const lastBtAt = Math.max(
         lastBluetoothRouteApplyAtRef.current,
@@ -912,7 +912,12 @@ export const useAudioRouting = (
         getUserRoute() === 'BLUETOOTH' ||
         lastAppliedRouteRef.current === 'BLUETOOTH' ||
         readUserSelectedCallAudioRoute() === 'BLUETOOTH';
-      if (wantBt && (isBtWearStickyActive() || Date.now() - lastBtAt < 5000 || btWearReconnectInFlightRef.current)) {
+      const settling = isBluetoothSettlingWindow({
+        lastBluetoothApplyAt: lastBtAt,
+        wearSticky: isBtWearStickyActive(),
+        wearReconnectInFlight: btWearReconnectInFlightRef.current,
+      });
+      if (wantBt && settling) {
         effectiveRoute = 'BLUETOOTH';
       }
     }
@@ -1063,11 +1068,10 @@ export const useAudioRouting = (
     const previousApplied = lastAppliedRouteRef.current;
     // Финальный hold: wear sticky / только что применили BT — не коммитить EAR от гонок.
     if (
-      (effectiveRoute === 'EARPIECE' || effectiveRoute === 'SPEAKER_PHONE') &&
-      !isHeadsetDisconnectFallbackReason(reason) &&
-      !reason.startsWith('cycle') &&
-      !reason.startsWith('toggle') &&
-      !isExplicitBuiltInRouteChoice(reason, effectiveRoute)
+      isBuiltInRouteCoercible(effectiveRoute, reason, {
+        isHeadsetDisconnectFallbackReason,
+        isExplicitBuiltInRouteChoice,
+      })
     ) {
       const lastBtAt = Math.max(
         lastBluetoothRouteApplyAtRef.current,
@@ -1080,7 +1084,12 @@ export const useAudioRouting = (
         readUserSelectedCallAudioRoute() === 'BLUETOOTH' ||
         btWearReconnectInFlightRef.current ||
         Date.now() - lastBtAt < 3500;
-      if (wantBt && (isBtWearStickyActive() || Date.now() - lastBtAt < 5000 || btWearReconnectInFlightRef.current)) {
+      const settling = isBluetoothSettlingWindow({
+        lastBluetoothApplyAt: lastBtAt,
+        wearSticky: isBtWearStickyActive(),
+        wearReconnectInFlight: btWearReconnectInFlightRef.current,
+      });
+      if (wantBt && settling) {
         routeLog('applySpecificRoute sticky BT hold', {
           reason,
           attempted: effectiveRoute,
