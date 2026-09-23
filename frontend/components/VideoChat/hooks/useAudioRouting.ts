@@ -100,6 +100,26 @@ import {
   normalizeInCallRoute,
   sanitizeRoutesForAudioCycle,
 } from './audioRouteTypes';
+import {
+  armBtAutoSuppress,
+  armBtKeepInCycleAfterManualLeave,
+  armBtWearSticky,
+  armExpectBtReconnect,
+  clearBtAutoSuppress,
+  clearBtKeepInCycleAfterManualLeave,
+  clearBtRemovedFromCycleByUnplug,
+  clearBtWearSticky,
+  clearExpectBtReconnect,
+  isBtKeepInCycleAfterManualLeave,
+  isBtRemovedFromCycleByUnplug,
+  isBtScoSettleActive,
+  isBtWearStickyActive,
+  isExpectBtReconnectActive,
+  markBtRemovedFromCycleByUnplug,
+  readBtAutoSuppressUntil,
+  shouldShowBluetoothInCycle,
+  shouldSuppressBluetoothAutoReconnect,
+} from './audioRouting/bluetoothCycleState';
 
 /**
  * WA-like: proximity только на audio + earpiece (экран гаснет у уха).
@@ -172,157 +192,6 @@ function isHeadsetDisconnectFallbackReason(reason: string): boolean {
     reason.startsWith('headset_unplug') ||
     reason.startsWith('native_bt_unwear')
   );
-}
-
-function readBtAutoSuppressUntil(): number {
-  try {
-    return Number((global as any).__btAutoSuppressUntilRef?.current || 0);
-  } catch {
-    return 0;
-  }
-}
-
-function armBtAutoSuppress(ms = 12000): void {
-  const until = Date.now() + ms;
-  try {
-    (global as any).__btAutoSuppressUntilRef = { current: until };
-  } catch {}
-}
-
-function clearBtAutoSuppress(): void {
-  try {
-    (global as any).__btAutoSuppressUntilRef = { current: 0 };
-  } catch {}
-}
-
-/**
- * Ручной cycle BT→ухо/громкая рвёт SCO, но buds ещё на ушах — BT оставляем в кнопке.
- * Сброс только на физический unplug / кейс.
- */
-function armBtKeepInCycleAfterManualLeave(): void {
-  try {
-    (global as any).__btKeepInCycleAfterManualLeaveRef = { current: true };
-    (global as any).__btRemovedFromCycleByUnplugRef = { current: false };
-  } catch {}
-}
-
-function clearBtKeepInCycleAfterManualLeave(): void {
-  try {
-    (global as any).__btKeepInCycleAfterManualLeaveRef = { current: false };
-  } catch {}
-}
-
-function isBtKeepInCycleAfterManualLeave(): boolean {
-  try {
-    return !!(global as any).__btKeepInCycleAfterManualLeaveRef?.current;
-  } catch {
-    return false;
-  }
-}
-
-function markBtRemovedFromCycleByUnplug(): void {
-  try {
-    (global as any).__btRemovedFromCycleByUnplugRef = { current: true };
-    (global as any).__btKeepInCycleAfterManualLeaveRef = { current: false };
-  } catch {}
-}
-
-function clearBtRemovedFromCycleByUnplug(): void {
-  try {
-    (global as any).__btRemovedFromCycleByUnplugRef = { current: false };
-  } catch {}
-}
-
-function isBtRemovedFromCycleByUnplug(): boolean {
-  try {
-    return !!(global as any).__btRemovedFromCycleByUnplugRef?.current;
-  } catch {
-    return false;
-  }
-}
-
-/** BT в цикле кнопки: live / wear / ручной уход с BT (buds ещё надеты). Не paired-in-case после unplug. */
-function shouldShowBluetoothInCycle(opts?: {
-  userRoute?: string | null;
-  lastApplied?: string | null;
-  wearInFlight?: boolean;
-}): boolean {
-  if (isBtRemovedFromCycleByUnplug()) return false;
-  if (isBluetoothHeadsetActiveForCall()) return true;
-  if (opts?.userRoute === 'BLUETOOTH' || opts?.lastApplied === 'BLUETOOTH') return true;
-  if (opts?.wearInFlight) return true;
-  if (isBtWearStickyActive() || isBtKeepInCycleAfterManualLeave()) return true;
-  return false;
-}
-
-/** После wear: UI hold пока SCO поднимается (не путать с unplug). */
-function armBtWearSticky(ms = 8000): void {
-  const until = Date.now() + ms;
-  try {
-    const prev = Number((global as any).__btWearStickyUntilRef?.current || 0);
-    (global as any).__btWearStickyUntilRef = { current: Math.max(prev, until) };
-  } catch {}
-}
-
-function clearBtWearSticky(): void {
-  try {
-    (global as any).__btWearStickyUntilRef = { current: 0 };
-  } catch {}
-}
-
-function isBtWearStickyActive(): boolean {
-  try {
-    return Date.now() < Number((global as any).__btWearStickyUntilRef?.current || 0);
-  } catch {
-    return false;
-  }
-}
-
-/** TWS: disconnect часто перед connect при одевании — ждём reconnect, не гасить SCO EAR-repin. */
-function armExpectBtReconnect(ms = 10000): void {
-  const until = Date.now() + ms;
-  try {
-    const prev = Number((global as any).__btExpectReconnectUntilRef?.current || 0);
-    (global as any).__btExpectReconnectUntilRef = { current: Math.max(prev, until) };
-  } catch {}
-}
-
-function clearExpectBtReconnect(): void {
-  try {
-    (global as any).__btExpectReconnectUntilRef = { current: 0 };
-  } catch {}
-}
-
-function isExpectBtReconnectActive(): boolean {
-  try {
-    return Date.now() < Number((global as any).__btExpectReconnectUntilRef?.current || 0);
-  } catch {
-    return false;
-  }
-}
-
-/** Короткое окно: игнор ACL/SCO flap при одевании (не блокировать реальное снятие). */
-function isBtScoSettleActive(lastBtApplyAt: number, ms = 2500): boolean {
-  const last = Math.max(
-    lastBtApplyAt,
-    Number((global as any).__lastBluetoothRouteApplyAtRef?.current || 0),
-  );
-  return Date.now() - last < ms;
-}
-
-/** После снятия BT: блокировать sticky reconnect, кроме нового физического connect. */
-function shouldSuppressBluetoothAutoReconnect(reason: string): boolean {
-  if (Date.now() >= readBtAutoSuppressUntil()) return false;
-  // Только физический connect — не expect_* (иначе кейс → expect → снова BT).
-  if (
-    /acl_connected|profile_connected|device_added|a2dp_connected|_rising/.test(reason) &&
-    !/expect/.test(reason)
-  ) {
-    clearBtAutoSuppress();
-    return false;
-  }
-  // audio_connected / poll / expect после снятия — нет (иначе bounce обратно на BT).
-  return true;
 }
 
 /** Явный выбор разговорного/громкого — не подменять Bluetooth вне PiP-перехода. */
