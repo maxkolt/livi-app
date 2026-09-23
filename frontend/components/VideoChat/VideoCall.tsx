@@ -139,6 +139,22 @@ import {
 } from '../../utils/callKeep';
 import { clearCallRelatedNotificationsAndSyncBadge, syncAppBadgeFromMissedCount } from '../../utils/pushNotifications';
 import { emitMissedClear, emitCallEndedOnHome } from '../../utils/globalEvents';
+import {
+  clearGlobalCallTimer,
+  getGlobalCallTimerRefs,
+  normalizeTimerCallId,
+  persistCallTimerToGlobal,
+  syncCallTimerFromGlobal,
+} from './callScreen/callTimerStore';
+import { boostMicLevel, formatCallDuration } from './callScreen/callFormatting';
+import {
+  hasAuthenticDirectCallVideoPiPReturnIntent,
+  isAcceptedVideoCallNavCallId,
+  isExplicitDirectCallVideoPiPReturnRoute,
+  isFreshDirectCallAudioAcceptRoute,
+  logDirectCallUiGate,
+  stripStaleDirectCallPiPNavParamsIfNeeded,
+} from './callScreen/callRouteIntent';
 
 type Props = { 
   route?: { 
@@ -179,169 +195,6 @@ const CARD_BASE = {
   position: 'relative' as const,
 };
 
-
-const boostMicLevel = (level: number) => {
-  if (!level || level <= 0) return 0;
-  const shaped = Math.pow(level, 0.55) * 2.4;
-  return Math.min(1, shaped);
-};
-
-const formatCallDuration = (totalSeconds: number): string => {
-  const s = Math.max(0, Math.floor(totalSeconds));
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  const sec = s % 60;
-  if (h > 0) {
-    return `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
-  }
-  return `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
-};
-
-function logDirectCallUiGate(
-  gate: string,
-  details: Record<string, unknown>,
-): void {
-  logger.info(`[VideoCall][directCallUi] ${gate}`, details);
-}
-
-function isAcceptedVideoCallNavCallId(callId?: string | null): boolean {
-  const cid = String(callId || '').trim();
-  if (!cid) return false;
-  try {
-    return String((global as any).__acceptedVideoCallNavCallIdRef?.current || '') === cid;
-  } catch {
-    return false;
-  }
-}
-
-function hasAuthenticDirectCallVideoPiPReturnIntent(): boolean {
-  try {
-    const g = global as any;
-    // Не считать stayOnVideo / in-app PiP «возвратом из PiP» — иначе remount/layout шум
-    // и ложный restore fromPiP пока партнёр в system PiP.
-    return (
-      isDirectCallUserRequestedVideoExpand() ||
-      isDirectCallVideoExpandGuardActive() ||
-      g.__expandToVideoCallUiFromPiPRef?.current === true ||
-      (g.__pipReturnToCallInFlightRef?.current === true &&
-        Number(g.__systemPiPReturnTokenRef?.current || 0) > 0)
-    );
-  } catch {
-    return false;
-  }
-}
-
-function isExplicitDirectCallVideoPiPReturnRoute(params?: {
-  fromPiP?: boolean;
-  resume?: boolean;
-  preferVideoCallUi?: boolean;
-  audioOnlyPiPReturn?: boolean;
-  callId?: string | null;
-} | null): boolean {
-  if (
-    params?.fromPiP !== true ||
-    params?.resume !== true ||
-    params?.preferVideoCallUi !== true ||
-    params?.audioOnlyPiPReturn === true
-  ) {
-    return false;
-  }
-  const cid = String(params.callId ?? '').trim();
-  if (!cid || !isDirectCallAudioAcceptBootstrapped(cid)) return false;
-  return hasAuthenticDirectCallVideoPiPReturnIntent();
-}
-
-function stripStaleDirectCallPiPNavParamsIfNeeded(
-  params: {
-    fromPiP?: boolean;
-    resume?: boolean;
-    preferVideoCallUi?: boolean;
-    audioOnlyPiPReturn?: boolean;
-    callId?: string | null;
-  },
-  mountKey: string,
-): void {
-  const routePiPFlags = params.fromPiP === true || params.resume === true;
-  if (!routePiPFlags) return;
-  if (params.audioOnlyPiPReturn === true) {
-    // Sticky video-expand после Back→video-PiP→«на аудио» не должен restore'ить video nav.
-    if (hasAuthenticDirectCallVideoPiPReturnIntent()) {
-      clearStaleDirectCallVideoExpandFlags();
-    }
-    return;
-  }
-  if (isExplicitDirectCallVideoPiPReturnRoute({ ...params, callId: mountKey })) {
-    return;
-  }
-  // Remount race: globals already say video return, но preferVideoCallUi ещё не в route.
-  if (hasAuthenticDirectCallVideoPiPReturnIntent()) {
-    // Явный audio return (preferVideoCallUi: false) — не форсить video nav.
-    if (params.preferVideoCallUi === false) {
-      clearStaleDirectCallVideoExpandFlags();
-      return;
-    }
-    if (params.preferVideoCallUi !== true) {
-      logDirectCallUiGate('layout_restore_video_pip_nav', {
-        callId: mountKey,
-        fromPiP: params.fromPiP,
-        resume: params.resume,
-        preferVideoCallUi: params.preferVideoCallUi,
-      });
-      mergeActiveVideoCallParams({
-        fromPiP: true,
-        resume: true,
-        audioOnlyPiPReturn: false,
-        preferVideoCallUi: true,
-      });
-    }
-    return;
-  }
-  logDirectCallUiGate('layout_strip_stale_pip_nav', {
-    callId: mountKey,
-    fromPiP: params.fromPiP,
-    resume: params.resume,
-    preferVideoCallUi: params.preferVideoCallUi,
-    bootstrapped: isDirectCallAudioAcceptBootstrapped(mountKey),
-    authenticIntent: hasAuthenticDirectCallVideoPiPReturnIntent(),
-  });
-  mergeActiveVideoCallParams({
-    fromPiP: false,
-    resume: false,
-    audioOnlyPiPReturn: false,
-    preferVideoCallUi: false,
-  });
-  // Не затираем userExpand, если пользователь уже на video UI (иначе после PiP
-  // повторное включение камеры тихо блокируется audio-first guard'ом).
-  const stayOnVideoUi = (global as any).__stayOnVideoCallUiRef?.current === true;
-  clearStaleDirectCallVideoExpandGlobalHints();
-  if (stayOnVideoUi) {
-    markDirectCallUserRequestedVideoExpand();
-  }
-}
-
-function isFreshDirectCallAudioAcceptRoute(params?: {
-  isIncoming?: boolean;
-  directInitiator?: boolean;
-  peerUserId?: string;
-  callId?: string | null;
-  fromPiP?: boolean;
-  resume?: boolean;
-  preferVideoCallUi?: boolean;
-  audioOnlyPiPReturn?: boolean;
-} | null): boolean {
-  if (!params) return false;
-  if (params.fromPiP === true || params.resume === true) return false;
-  if (params.preferVideoCallUi === true || params.audioOnlyPiPReturn === true) return false;
-  if (isExplicitDirectCallVideoPiPReturnRoute(params)) return false;
-  const callId = String(params.callId ?? '').trim();
-  if (callId && isDirectCallAudioAcceptBootstrapped(callId)) return false;
-  if (callId && isAcceptedVideoCallNavCallId(callId)) return true;
-  if (params.isIncoming === true) return true;
-  if (params.directInitiator === true) return true;
-  const outgoingPeer = String((global as any).__outgoingCallPeerUserIdRef?.current || '').trim();
-  const peer = String(params.peerUserId || '').trim();
-  return !!outgoingPeer && outgoingPeer === peer;
-}
 
 /** Пока bootstrap pending: не всегда ухо — если маршрут уже SPEAKER/BT, показать сразу. */
 function resolveCallAudioRouteUiWhileBootstrapPending(
@@ -460,61 +313,6 @@ function clearVideoCallHomeScreenLocks(reason: string) {
   } catch (e) {
     logger.warn('[VideoCall] clearVideoCallHomeScreenLocks failed', { reason, e });
   }
-}
-
-function normalizeTimerCallId(callId?: string | null): string {
-  return String(callId || '').trim();
-}
-
-function getGlobalCallTimerRefs(callId?: string | null) {
-  const g = global as any;
-  const nextCallId = normalizeTimerCallId(callId);
-  g.__callTimerCallIdRef = g.__callTimerCallIdRef || { current: '' };
-  if (nextCallId && g.__callTimerCallIdRef.current !== nextCallId) {
-    g.__callTimerCallIdRef.current = nextCallId;
-    g.__acceptCallTimeRef = { current: 0 };
-    g.__callConnectedAtRef = { current: null as number | null };
-  }
-  g.__acceptCallTimeRef = g.__acceptCallTimeRef || { current: 0 };
-  g.__callConnectedAtRef = g.__callConnectedAtRef || { current: null as number | null };
-  return {
-    callId: g.__callTimerCallIdRef as { current: string },
-    accept: g.__acceptCallTimeRef as { current: number },
-    connected: g.__callConnectedAtRef as { current: number | null },
-  };
-}
-
-function syncCallTimerFromGlobal(
-  acceptCallTimeRef: React.MutableRefObject<number>,
-  callConnectedAtRef: React.MutableRefObject<number | null>,
-  callId?: string | null,
-) {
-  const requestedCallId = normalizeTimerCallId(callId);
-  const { callId: globalCallId, accept, connected } = getGlobalCallTimerRefs(callId);
-  if (requestedCallId && globalCallId.current !== requestedCallId) return;
-  if (accept.current > 0) acceptCallTimeRef.current = accept.current;
-  if (connected.current != null) callConnectedAtRef.current = connected.current;
-}
-
-function persistCallTimerToGlobal(
-  acceptCallTimeRef: React.MutableRefObject<number>,
-  callConnectedAtRef: React.MutableRefObject<number | null>,
-  callId?: string | null,
-) {
-  const { accept, connected } = getGlobalCallTimerRefs(callId);
-  if (acceptCallTimeRef.current > 0) accept.current = acceptCallTimeRef.current;
-  if (callConnectedAtRef.current != null) connected.current = callConnectedAtRef.current;
-}
-
-function clearGlobalCallTimer(callId?: string | null): void {
-  const g = global as any;
-  const requestedCallId = normalizeTimerCallId(callId);
-  const currentCallId = normalizeTimerCallId(g.__callTimerCallIdRef?.current || '');
-  if (requestedCallId && currentCallId && requestedCallId !== currentCallId) return;
-  g.__callTimerCallIdRef = g.__callTimerCallIdRef || { current: '' };
-  g.__callTimerCallIdRef.current = '';
-  g.__acceptCallTimeRef = { current: 0 };
-  g.__callConnectedAtRef = { current: null as number | null };
 }
 
 const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
