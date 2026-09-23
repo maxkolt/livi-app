@@ -120,6 +120,17 @@ import {
   shouldShowBluetoothInCycle,
   shouldSuppressBluetoothAutoReconnect,
 } from './audioRouting/bluetoothCycleState';
+import {
+  hasExplicitBuiltInIntent,
+  isExplicitBuiltInRouteChoice,
+  isManualRouteReason,
+  readExplicitBuiltInFromGlobal,
+  readExplicitUserSelectedBuiltInRoute,
+  readUserSelectedBuiltInRoute,
+  readUserSelectedExternalRoute,
+  setExplicitBuiltInGlobal,
+  userLockedBuiltinAudioOutput,
+} from './audioRouting/explicitRouteChoice';
 
 /**
  * WA-like: proximity только на audio + earpiece (экран гаснет у уха).
@@ -194,50 +205,6 @@ function isHeadsetDisconnectFallbackReason(reason: string): boolean {
   );
 }
 
-/** Явный выбор разговорного/громкого — не подменять Bluetooth вне PiP-перехода. */
-function readExplicitBuiltInFromGlobal(): boolean {
-  try {
-    return !!(global as any).__explicitBuiltInCallAudioRouteRef?.current;
-  } catch {
-    return false;
-  }
-}
-
-function setExplicitBuiltInGlobal(explicit: boolean): void {
-  try {
-    const g = global as any;
-    g.__explicitBuiltInCallAudioRouteRef =
-      g.__explicitBuiltInCallAudioRouteRef || { current: false };
-    g.__explicitBuiltInCallAudioRouteRef.current = explicit;
-  } catch {}
-}
-
-function readUserSelectedBuiltInRoute(): InCallAudioRoute | null {
-  const userSel = readUserSelectedCallAudioRoute();
-  if (userSel === 'SPEAKER_PHONE' || userSel === 'EARPIECE') return userSel;
-  return null;
-}
-
-function readExplicitUserSelectedBuiltInRoute(): InCallAudioRoute | null {
-  const locked = readUserLockedBuiltinCallAudioRoute();
-  if (locked) return locked;
-  const userSel = readUserSelectedBuiltInRoute();
-  if (!userSel) return null;
-  if (readExplicitBuiltInFromGlobal()) return userSel;
-  return null;
-}
-
-function hasExplicitBuiltInIntent(route?: InCallAudioRoute | null): boolean {
-  const explicit = readExplicitUserSelectedBuiltInRoute();
-  if (explicit) return !route || explicit === route;
-  return readExplicitBuiltInFromGlobal();
-}
-
-/** Ухо/громкая через cycle или lock — не подменять кнопку на BT, пока пользователь сам не сменит режим. */
-function userLockedBuiltinAudioOutput(): boolean {
-  return !!readUserLockedBuiltinCallAudioRoute();
-}
-
 function resolveExternalRouteForUiSync(
   available: string[],
   norm: InCallAudioRoute,
@@ -260,67 +227,6 @@ function resolveExternalRouteForUiSync(
   if (available.includes('BLUETOOTH')) return 'BLUETOOTH';
   if (available.includes('WIRED_HEADSET')) return 'WIRED_HEADSET';
   return norm;
-}
-
-function isManualRouteReason(reason: string): boolean {
-  return (
-    reason.startsWith('cycle') ||
-    reason.startsWith('toggle') ||
-    reason === 'in_app_pip_audio_route_toggle'
-  );
-}
-
-function readUserSelectedExternalRoute(): InCallAudioRoute | null {
-  const userSel = readUserSelectedCallAudioRoute();
-  if (userSel === 'BLUETOOTH' || userSel === 'WIRED_HEADSET') return userSel;
-  return null;
-}
-
-function isExplicitBuiltInRouteChoice(reason: string, route: InCallAudioRoute): boolean {
-  if (route !== 'EARPIECE' && route !== 'SPEAKER_PHONE') return false;
-  if (
-    route === 'SPEAKER_PHONE' &&
-    readExplicitVideoCallBuiltInRoute() === 'SPEAKER_PHONE'
-  ) {
-    return true;
-  }
-  const lockedBuiltin = readExplicitUserSelectedBuiltInRoute();
-  if (lockedBuiltin === route) {
-    return true;
-  }
-  if (isManualRouteReason(reason)) {
-    return true;
-  }
-  if (reason === 'return_to_audio_ui' && readUserSelectedCallAudioRoute() === route) {
-    return true;
-  }
-  if (
-    reason === 'direct_call_accept_audio_route' ||
-    reason === 'handleCallAnswered_audio_first' ||
-    reason === 'applyRouting_deferred_earpiece'
-  ) {
-    if (route === 'EARPIECE') return true;
-    if (!readUserLockedBuiltinCallAudioRoute()) return false;
-    return route === 'SPEAKER_PHONE';
-  }
-  if (
-    reason === 'applyRouting_locked_bootstrap' ||
-    reason.endsWith('_native_repin')
-  ) {
-    return route === 'EARPIECE' || route === 'SPEAKER_PHONE';
-  }
-  if (readExplicitBuiltInFromGlobal()) {
-    const userSel = readUserSelectedBuiltInRoute();
-    if (userSel === route) {
-      return true;
-    }
-    return reason === 'preferAudioMode' || reason === 'return_to_audio_ui';
-  }
-  const userSel = readUserSelectedCallAudioRoute();
-  if (userSel === route && reason.startsWith('cycle')) {
-    return true;
-  }
-  return false;
 }
 
 function shouldPreferBluetoothEarlyInCall(reason: string): boolean {
