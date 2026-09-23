@@ -131,6 +131,14 @@ import {
   setExplicitBuiltInGlobal,
   userLockedBuiltinAudioOutput,
 } from './audioRouting/explicitRouteChoice';
+import { pickDesiredRoute as pickDesiredRouteWith } from './audioRouting/pickDesiredRoute';
+import {
+  defaultUserRoute,
+  isHeadsetDisconnectFallbackReason,
+  isHeadsetUnplugReason,
+  isPhysicalHeadsetGainReason,
+  shouldPreferBluetoothEarlyInCall,
+} from './audioRouting/routeReasons';
 
 /**
  * WA-like: proximity только на audio + earpiece (экран гаснет у уха).
@@ -194,16 +202,6 @@ function readGlobalBuiltinRouteForSync(): InCallAudioRoute | null {
   return null;
 }
 
-function isHeadsetDisconnectFallbackReason(reason: string): boolean {
-  return (
-    reason === 'headset_unplug' ||
-    reason === 'headset_bt_unplug' ||
-    reason === 'headset_poll_unplug' ||
-    reason === 'headset_poll_bt_inactive' ||
-    reason.startsWith('headset_unplug') ||
-    reason.startsWith('native_bt_unwear')
-  );
-}
 
 function resolveExternalRouteForUiSync(
   available: string[],
@@ -229,41 +227,11 @@ function resolveExternalRouteForUiSync(
   return norm;
 }
 
-function shouldPreferBluetoothEarlyInCall(reason: string): boolean {
-  return (
-    reason === 'bootstrap' ||
-    reason.startsWith('poll_') ||
-    reason === 'headset_poll_bt' ||
-    reason === 'onAudioDeviceChanged_gained_bt' ||
-    reason === 'applyRouting' ||
-    reason === 'applyRouting_repin' ||
-    reason === 'onAudioDeviceChanged' ||
-    reason === 'remote_stream' ||
-    reason === 'remote_stream_repin' ||
-    reason === 'session_re_enable' ||
-    reason === 'preferAudioMode' ||
-    reason === 'native_probe'
-  );
-}
 
-function isPhysicalHeadsetGainReason(
-  reason: string,
-  ctx: { gainedBt: boolean; gainedWired: boolean },
-): boolean {
-  return (
-    ctx.gainedBt ||
-    ctx.gainedWired ||
-    reason === 'headset_poll_bt' ||
-    reason === 'onAudioDeviceChanged_gained_bt' ||
-    reason === 'WiredHeadset'
-  );
-}
 
 const MIN_HARD_ROUTE_MS = 500;
 const MIN_NATIVE_ROUTE_MS = 600;
 
-const defaultUserRoute = (opts?: AudioRoutingOptions): InCallAudioRoute =>
-  opts?.defaultToEarpiece ? 'EARPIECE' : 'SPEAKER_PHONE';
 
 export const useAudioRouting = (
   enabled: boolean,
@@ -845,11 +813,6 @@ export const useAudioRouting = (
     }
   };
 
-  const isHeadsetUnplugReason = (reason: string) =>
-    reason === 'WiredHeadset_unplug' ||
-    reason === 'headset_poll_unplug' ||
-    reason === 'headset_bt_unplug' ||
-    reason === 'headset_unplug';
 
   /** После отключения BT/провода — сохранённый разговорный или громкий. */
   const reconcileRouteAfterHeadsetDisconnect = (available: string[]): InCallAudioRoute | null => {
@@ -916,296 +879,17 @@ export const useAudioRouting = (
     return null;
   };
 
-  const pickDesiredRoute = (available: string[], reason: string): InCallAudioRoute => {
-    const earpieceMode = !!routingOptionsRef.current?.defaultToEarpiece;
-    const { gainedWired, gainedBt } = deviceChangeContextRef.current;
-    const headsetGain = isPhysicalHeadsetGainReason(reason, { gainedBt, gainedWired });
-
-    if (headsetGain && available.includes('BLUETOOTH') && (gainedBt || reason === 'headset_poll_bt')) {
-      rememberBuiltinCallRouteBeforeHeadset(getUserRoute(), earpieceMode);
-      return 'BLUETOOTH';
-    }
-    if (
-      headsetGain &&
-      available.includes('WIRED_HEADSET') &&
-      (gainedWired || reason === 'WiredHeadset')
-    ) {
-      rememberBuiltinCallRouteBeforeHeadset(getUserRoute(), earpieceMode);
-      return 'WIRED_HEADSET';
-    }
-
-    const uiLock = readCallAudioRouteUiLock();
-    if (uiLock) {
-      return uiLock;
-    }
-    if (isHeadsetUnplugReason(reason)) {
-      const afterDisconnect = reconcileRouteAfterHeadsetDisconnect(available);
-      if (afterDisconnect) {
-        return afterDisconnect;
-      }
-      const lostAllHeadsets =
-        !available.includes('BLUETOOTH') && !available.includes('WIRED_HEADSET');
-      if (lostAllHeadsets) {
-        const fallback = resolveCallRouteAfterHeadsetDisconnect();
-        setUserRoute(fallback);
-        return fallback;
-      }
-    }
-    const stickyExt = readStickyExternalRouteForAutoRepin(available, reason);
-    if (stickyExt) {
-      return stickyExt;
-    }
-    const userSelExt = readUserSelectedExternalRoute();
-    if (userSelExt && (!available.length || available.includes(userSelExt))) {
-      return userSelExt;
-    }
-    const userSelBuiltin = readExplicitUserSelectedBuiltInRoute();
-    if (userSelBuiltin) {
-      return userSelBuiltin;
-    }
-    const userNow = getUserRoute();
-    if (explicitBuiltInChoiceRef.current && (userNow === 'SPEAKER_PHONE' || userNow === 'EARPIECE')) {
-      return userNow;
-    }
-    if (isExternalHeadsetRoute(userNow) && available.includes(userNow)) {
-      return userNow;
-    }
-    if (
-      isBluetoothAvailableForAutoRoute() &&
-      shouldPreferBluetoothEarlyInCall(reason) &&
-      !isExplicitBuiltInRouteChoice(reason, userNow)
-    ) {
-      return 'BLUETOOTH';
-    }
-    const extPersisted = readActiveExternalCallAudioRoute(userNow);
-    if (extPersisted) {
-      const keepHeadset =
-        reason === 'manualSync' ||
-        reason === 'applyRouting' ||
-        reason === 'applyRouting_repin' ||
-        reason === 'remote_stream' ||
-        reason === 'remote_stream_repin' ||
-        reason === 'remote_stream+1200ms' ||
-        reason === 'bootstrap' ||
-        reason === 'refresh' ||
-        reason === 'session_re_enable' ||
-        reason.startsWith('stopSpeaker') ||
-        reason.startsWith('manualSync') ||
-        isCallAudioPiPTransitionWindow();
-      if (keepHeadset && (available.includes(extPersisted) || isExternalHeadsetRoute(extPersisted))) {
-        return extPersisted;
-      }
-    }
-
-    if (isDirectAudioEarpieceStabilizeWindow() && !readExplicitUserSelectedBuiltInRoute() && !explicitBuiltInChoiceRef.current) {
-      const userIntentStabilize =
-        reason.startsWith('cycle') ||
-        reason.startsWith('toggle') ||
-        reason === 'in_app_pip_audio_route_toggle';
-      if (!userIntentStabilize) {
-        const connected = readConnectedExternalCallAudioRoute(getUserRoute());
-        if (isExternalHeadsetRoute(connected) && (!available.length || available.includes(connected))) {
-          return connected;
-        }
-        const nativeExt = readNativeProbedExternalRoute();
-        if (isExternalHeadsetRoute(nativeExt) && (!available.length || available.includes(nativeExt))) {
-          return nativeExt;
-        }
-        const lockedExt = readUserSelectedExternalRoute();
-        if (lockedExt && (!available.length || available.includes(lockedExt))) {
-          return lockedExt;
-        }
-        if (isExternalHeadsetRoute(userNow) && available.includes(userNow)) {
-          return userNow;
-        }
-        if (!userLockedBuiltinAudioOutput()) {
-          if (available.includes('BLUETOOTH')) return 'BLUETOOTH';
-          if (available.includes('WIRED_HEADSET')) return 'WIRED_HEADSET';
-        }
-        return 'EARPIECE';
-      }
-    }
-
-    if (earpieceMode) {
-      if (isHeadsetUnplugReason(reason)) {
-        const nativeExt = readNativeProbedExternalRoute();
-        if (nativeExt === 'BLUETOOTH' || nativeExt === 'WIRED_HEADSET') {
-          return nativeExt;
-        }
-        if (available.includes('WIRED_HEADSET')) {
-          return 'WIRED_HEADSET';
-        }
-        if (available.includes('BLUETOOTH')) {
-          return 'BLUETOOTH';
-        }
-        const fallback = resolveCallRouteAfterHeadsetDisconnect();
-        setUserRoute(fallback);
-        return fallback;
-      }
-
-      const afterDisconnect = reconcileRouteAfterHeadsetDisconnect(available);
-      if (afterDisconnect) {
-        return afterDisconnect;
-      }
-
-      if (available.includes('WIRED_HEADSET')) {
-        if (
-          reason === 'WiredHeadset' ||
-          reason === 'headset_poll' ||
-          gainedWired ||
-          (reason === 'onAudioDeviceChanged' && gainedWired) ||
-          reason === 'remote_stream_repin'
-        ) {
-          rememberBuiltinCallRouteBeforeHeadset(getUserRoute(), true);
-          return 'WIRED_HEADSET';
-        }
-      }
-      if (
-        available.includes('BLUETOOTH') &&
-        (gainedBt || reason === 'headset_poll_bt')
-      ) {
-        rememberBuiltinCallRouteBeforeHeadset(getUserRoute(), true);
-        return 'BLUETOOTH';
-      }
-
-      if (
-        available.includes('BLUETOOTH') &&
-        !explicitBuiltInChoiceRef.current &&
-        !userExplicitlyPinnedBuiltinCallAudio() &&
-        (reason === 'manualSync' ||
-          reason === 'remote_stream' ||
-          reason === 'remote_stream_repin' ||
-          reason === 'remote_stream+1200ms' ||
-          reason === 'preferAudioMode' ||
-          reason === 'bootstrap' ||
-          reason.startsWith('poll_') ||
-          reason === 'native_probe' ||
-          reason === 'native_probe_bootstrap' ||
-          gainedBt)
-      ) {
-        rememberBuiltinCallRouteBeforeHeadset(getUserRoute(), true);
-        return 'BLUETOOTH';
-      }
-
-      const autoReapplyReason =
-        reason === 'manualSync' ||
-        reason === 'preferAudioMode' ||
-        reason === 'applyRouting' ||
-        reason === 'applyRouting_repin' ||
-        reason === 'remote_stream' ||
-        reason === 'remote_stream_repin' ||
-        reason === 'remote_stream+1200ms' ||
-        reason === 'session_re_enable' ||
-        reason === 'bootstrap' ||
-        reason === 'bootstrap_done' ||
-        reason.startsWith('poll_');
-
-      if (autoReapplyReason || isManualRouteReason(reason)) {
-        const user = getUserRoute();
-        const last = normalizeInCallRoute(lastAppliedRouteRef.current);
-        if (
-          isExternalHeadsetRoute(last) &&
-          available.includes(last) &&
-          (user === 'EARPIECE' || user === 'SPEAKER_PHONE') &&
-          !explicitBuiltInChoiceRef.current &&
-          !readExplicitUserSelectedBuiltInRoute()
-        ) {
-          return last;
-        }
-        if (available.includes(user) && isExternalHeadsetRoute(user)) {
-          return user;
-        }
-        if (user === 'SPEAKER_PHONE' || user === 'EARPIECE') {
-          return userLockedBuiltinAudioOutput() || isManualRouteReason(reason)
-            ? user
-            : defaultUserRoute(routingOptionsRef.current);
-        }
-      }
-
-      const stable = lastAppliedRouteRef.current;
-      if (stable && (stable === 'EARPIECE' || stable === 'SPEAKER_PHONE' || available.includes(stable))) {
-        return stable as InCallAudioRoute;
-      }
-      return 'EARPIECE';
-    }
-
-    if (isHeadsetUnplugReason(reason)) {
-      if (available.includes('WIRED_HEADSET')) {
-        return 'WIRED_HEADSET';
-      }
-      const fallback = resolveCallRouteAfterHeadsetDisconnect();
-      setUserRoute(fallback);
-      return fallback;
-    }
-
-    const user = getUserRoute();
-    if (user === 'BLUETOOTH' && available.includes('BLUETOOTH')) {
-      return 'BLUETOOTH';
-    }
-    if (user === 'WIRED_HEADSET' && available.includes('WIRED_HEADSET')) {
-      return 'WIRED_HEADSET';
-    }
-    if (
-      (user === 'SPEAKER_PHONE' || user === 'EARPIECE') &&
-      userLockedBuiltinAudioOutput()
-    ) {
-      return user;
-    }
-
-    if (gainedBt && available.includes('BLUETOOTH')) {
-      rememberBuiltinCallRouteBeforeHeadset(getUserRoute(), false);
-      return 'BLUETOOTH';
-    }
-    if (gainedWired && available.includes('WIRED_HEADSET')) {
-      rememberBuiltinCallRouteBeforeHeadset(getUserRoute(), false);
-      return 'WIRED_HEADSET';
-    }
-
-    const autoReapplyReason =
-      reason === 'manualSync' ||
-      reason === 'preferAudioMode' ||
-      reason === 'applyRouting' ||
-      reason === 'applyRouting_repin' ||
-      reason === 'remote_stream' ||
-      reason === 'remote_stream_repin' ||
-      reason === 'session_re_enable';
-
-    if (autoReapplyReason || isManualRouteReason(reason)) {
-      if (available.includes(user) && isExternalHeadsetRoute(user)) {
-        return user;
-      }
-      if (
-        (user === 'SPEAKER_PHONE' || user === 'EARPIECE') &&
-        (userLockedBuiltinAudioOutput() || isManualRouteReason(reason))
-      ) {
-        return user;
-      }
-      if (
-        (user === 'SPEAKER_PHONE' || user === 'EARPIECE') &&
-        !userLockedBuiltinAudioOutput() &&
-        !isManualRouteReason(reason)
-      ) {
-        return defaultUserRoute(routingOptionsRef.current);
-      }
-    }
-
-    if (reason === 'applyRouting' || reason === 'bootstrap' || reason === 'refresh') {
-      const persisted = getPersistedCallAudioRoute();
-      if (persisted === 'BLUETOOTH' && available.includes('BLUETOOTH')) {
-        rememberBuiltinCallRouteBeforeHeadset(null, false);
-        return 'BLUETOOTH';
-      }
-      if (persisted === 'WIRED_HEADSET' && available.includes('WIRED_HEADSET')) {
-        rememberBuiltinCallRouteBeforeHeadset(null, false);
-        return 'WIRED_HEADSET';
-      }
-      if (persisted === 'EARPIECE' || persisted === 'SPEAKER_PHONE') {
-        return persisted;
-      }
-    }
-
-    return 'SPEAKER_PHONE';
-  };
+  const pickDesiredRoute = (available: string[], reason: string): InCallAudioRoute =>
+    pickDesiredRouteWith(available, reason, {
+      routingOptionsRef,
+      deviceChangeContextRef,
+      explicitBuiltInChoiceRef,
+      lastAppliedRouteRef,
+      getUserRoute,
+      setUserRoute,
+      readStickyExternalRouteForAutoRepin,
+      reconcileRouteAfterHeadsetDisconnect,
+    });
 
   const applySpecificRoute = (route: InCallAudioRoute, reason: string, force = false) => {
     if (!enabled) return;
