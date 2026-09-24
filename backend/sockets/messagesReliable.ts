@@ -5,6 +5,7 @@ import User from '../models/User';
 import FriendshipMessages, { IFriendshipMessages } from '../models/FriendshipMessages';
 import FriendshipMessageItem from '../models/FriendshipMessageItem';
 import OfflineMessage from '../models/OfflineMessage';
+import type { ClaimedOfflineMessage, OfflineQueuePort } from './offlineMessageDelivery';
 import { areFriendsCached, getOrCreateFriendship, invalidateFriendshipCache } from '../utils/friendshipUtils';
 import { sendMessagePushToUser } from '../utils/push';
 import { emitToUser } from '../utils/emitToUser';
@@ -644,6 +645,37 @@ export async function getAndClearOfflineMessages(userId: string): Promise<any[]>
 }
 
 /**
+ * Офлайн-очередь в Mongo для deliverOfflineMessages.
+ * claim берёт записи по одной атомарным findOneAndUpdate — два параллельных
+ * bind'а одного пользователя не выдадут одну запись дважды, пока жива аренда.
+ */
+export const mongoOfflineQueue: OfflineQueuePort = {
+  async claim(userId, drainStartedAt, leaseUntil) {
+    const recipientId = new mongoose.Types.ObjectId(userId);
+    const claimed: ClaimedOfflineMessage[] = [];
+    while (true) {
+      const doc = await OfflineMessage.findOneAndUpdate(
+        {
+          recipientId,
+          createdAt: { $lte: drainStartedAt },
+          $or: [{ claimedUntil: null }, { claimedUntil: { $lte: drainStartedAt } }],
+        },
+        { $set: { claimedUntil: leaseUntil } },
+      )
+        .sort({ createdAt: 1, _id: 1 })
+        .lean();
+      if (!doc) break;
+      claimed.push({ queueId: (doc as any)._id, messageData: (doc as any).messageData });
+    }
+    return claimed;
+  },
+  async remove(queueId) {
+    await OfflineMessage.deleteOne({ _id: queueId as any });
+  },
+  takeAll: getAndClearOfflineMessages,
+};
+
+/**
  * Получить и очистить очередь офлайн уведомлений об очистке чата
  */
 export function getAndClearOfflineChatClearedQueue(userId: string): Array<any> {
@@ -1095,7 +1127,6 @@ function registerMessageHandlers(io: Server, sock: Socket) {
         };
       }
 
-      // Payload получателю строим ЗАРАНЕЕ — чтобы доставить мгновенно, не дожидаясь записи в БД.
       const emitPayload: any = {
         id: messageId,
         from: me,
@@ -1118,20 +1149,14 @@ function registerMessageHandlers(io: Server, sock: Socket) {
       }
       if (message.replyTo) emitPayload.replyTo = message.replyTo;
 
-      // RELAY-FIRST: сразу доставляем получателю (in-memory, мгновенно), НЕ дожидаясь Mongo.
-      // Проверяем online один раз (для offline-save/delivered). Emit в пустую комнату — no-op.
-      // Безопасно при ретраях: и сервер (findOne выше), и клиент (dedup по id) не дублируют.
-      const recipientOnline = await isUserOnline(io, payload.to);
-      if (recipientOnline) {
-        io.to(`u:${String(payload.to)}`).emit('message:received', emitPayload);
-      }
-
-      // Персист ПОСЛЕ доставки — больше не задерживает появление сообщения у собеседника.
+      // PERSIST-FIRST: получатель видит только то, что уже лежит в БД. При relay-first
+      // упавшая запись оставляла у него «фантом», исчезающий после перезагрузки.
       const saveResult = await addMessageToFriendship(friendship, message);
       if (saveResult.duplicate) {
+        // Параллельный ретрай уже сохранил и доставил это сообщение.
         return ack?.(formatExistingMessageAck(
           { id: messageId, timestamp: saveResult.timestamp || message.timestamp },
-          recipientOnline
+          await isUserOnline(io, payload.to)
         ));
       }
       if (saveResult.conflict) {
@@ -1139,6 +1164,12 @@ function registerMessageHandlers(io: Server, sock: Socket) {
       }
       if (!saveResult.ok) {
         return ack?.({ ok: false, error: 'save_failed' });
+      }
+
+      // Online проверяем один раз (для offline-save/delivered). Emit в пустую комнату — no-op.
+      const recipientOnline = await isUserOnline(io, payload.to);
+      if (recipientOnline) {
+        io.to(`u:${String(payload.to)}`).emit('message:received', emitPayload);
       }
 
       // Счётчик непрочитанных: не копим, если получатель уже в этом чате (chat:viewing).

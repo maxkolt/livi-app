@@ -13,6 +13,7 @@ export interface IOfflineMessage extends Document {
     type: 'text' | 'image' | 'audio' | 'sticker';
     text?: string;
     uri?: string;
+    uris?: string[];
     name?: string;
     size?: number;
     duration?: number;
@@ -25,6 +26,8 @@ export interface IOfflineMessage extends Document {
     replyTo?: { id: string; text?: string; from: string };
   };
   createdAt: Date;
+  /** Аренда на время ожидания ack клиента (см. sockets/offlineMessageDelivery.ts). */
+  claimedUntil?: Date | null;
   expiresAt: Date; // Автоматическое удаление через 30 дней
 }
 
@@ -54,6 +57,7 @@ const OfflineMessageSchema = new Schema<IOfflineMessage>({
     type: { type: String, enum: ['text', 'image', 'audio', 'sticker'], required: true },
     text: { type: String },
     uri: { type: String },
+    uris: { type: [String], default: undefined },
     name: { type: String },
     size: { type: Number },
     duration: { type: Number },
@@ -76,6 +80,10 @@ const OfflineMessageSchema = new Schema<IOfflineMessage>({
     type: Date,
     default: Date.now,
     index: true
+  },
+  claimedUntil: {
+    type: Date,
+    default: null
   },
   expiresAt: {
     type: Date,

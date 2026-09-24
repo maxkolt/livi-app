@@ -11,7 +11,8 @@ import MissedCall from '../models/MissedCall';
 import PushToken from '../models/PushToken';
 import FriendshipEdge from '../models/FriendshipEdge';
 // Cloudinary удален, используем только MongoDB
-import { getAndClearOfflineMessages, getAndClearOfflineChatClearedQueue } from './messagesReliable';
+import { mongoOfflineQueue, getAndClearOfflineChatClearedQueue } from './messagesReliable';
+import { deliverOfflineMessages } from './offlineMessageDelivery';
 import { auditNickChange } from '../utils/profileNickAudit';
 import { scheduleGlobalFriendPresenceEmit } from '../utils/friendOnlinePresence';
 import { getFriendIds } from '../utils/friendshipUtils';
@@ -74,19 +75,8 @@ export async function bindUser(io: Server, sock: any, userId: string) {
     }, 0);
   }
 
-  // Доставляем офлайн сообщения после установки userId
-  const offlineMessages = await getAndClearOfflineMessages(canonical);
-  if (offlineMessages.length) {}
-
-  if (offlineMessages.length > 0) {
-    offlineMessages.forEach((message) => {
-      sock.emit('message:received', message);
-    });
-    
-    // delivered
-  } else {
-    // no offline
-  }
+  // Доставляем офлайн сообщения после установки userId (с ack для новых клиентов)
+  await deliverOfflineMessages(sock, canonical, mongoOfflineQueue);
 
   // Доставляем офлайн уведомления об очистке чата
   const offlineChatClearedNotifications = getAndClearOfflineChatClearedQueue(canonical);
