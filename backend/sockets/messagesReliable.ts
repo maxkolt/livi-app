@@ -6,6 +6,13 @@ import FriendshipMessages, { IFriendshipMessages } from '../models/FriendshipMes
 import FriendshipMessageItem from '../models/FriendshipMessageItem';
 import OfflineMessage from '../models/OfflineMessage';
 import type { ClaimedOfflineMessage, OfflineQueuePort } from './offlineMessageDelivery';
+import {
+  asValidDate,
+  compareMessagesNewestFirst,
+  isOlderThanCursor,
+  messagePageCursorQuery,
+  MessagePageCursor,
+} from './messagePageCursor';
 import { areFriendsCached, getOrCreateFriendship, invalidateFriendshipCache } from '../utils/friendshipUtils';
 import { sendMessagePushToUser } from '../utils/push';
 import { emitToUser } from '../utils/emitToUser';
@@ -188,11 +195,6 @@ export async function clearLegacyFriendshipMessages(friendshipId: mongoose.Types
 function asObjectId(value: any): mongoose.Types.ObjectId | null {
   const raw = String(value || '').trim();
   return mongoose.Types.ObjectId.isValid(raw) ? new mongoose.Types.ObjectId(raw) : null;
-}
-
-function asValidDate(value: any): Date {
-  const date = value ? new Date(value) : new Date();
-  return Number.isNaN(date.getTime()) ? new Date() : date;
 }
 
 function legacyMessageToItem(friendshipId: mongoose.Types.ObjectId, message: any, fallbackType: string) {
@@ -386,7 +388,7 @@ export async function fetchFriendshipMessagesPage(
     ? await readLegacyFriendshipMessageItems(friendshipId)
     : [];
 
-  let beforeTimestamp: Date | null = null;
+  let cursor: MessagePageCursor | null = null;
   const beforeId = String(before || '').trim();
   if (beforeId) {
     const beforeDoc = await FriendshipMessageItem.findOne(
@@ -394,17 +396,17 @@ export async function fetchFriendshipMessagesPage(
       { timestamp: 1 }
     ).lean();
     if (beforeDoc && (beforeDoc as any).timestamp) {
-      beforeTimestamp = asValidDate((beforeDoc as any).timestamp);
+      cursor = { timestamp: asValidDate((beforeDoc as any).timestamp), id: beforeId };
     } else if (needLegacyMerge) {
       const legacyBefore = legacyItems.find((item) => String(item.id) === beforeId);
-      if (legacyBefore) beforeTimestamp = asValidDate(legacyBefore.timestamp);
+      if (legacyBefore) cursor = { timestamp: asValidDate(legacyBefore.timestamp), id: beforeId };
     }
   }
 
   const query: any = { friendshipId };
-  if (beforeTimestamp) query.timestamp = { $lt: beforeTimestamp };
+  if (cursor) Object.assign(query, messagePageCursorQuery(cursor));
   const itemDocs = await FriendshipMessageItem.find(query)
-    .sort({ timestamp: -1 })
+    .sort({ timestamp: -1, id: -1 })
     .limit(limit + 1)
     .lean();
 
@@ -418,17 +420,16 @@ export async function fetchFriendshipMessagesPage(
   }
 
   const byId = new Map<string, any>();
-  const isBeforeCursor = (msg: any) => !beforeTimestamp || asValidDate(msg.timestamp).getTime() < beforeTimestamp.getTime();
   for (const msg of legacyItems) {
     const id = String(msg?.id || '');
-    if (id && isBeforeCursor(msg)) byId.set(id, msg);
+    if (id && isOlderThanCursor(msg, cursor)) byId.set(id, msg);
   }
   for (const msg of itemDocs as any[]) {
     const id = String(msg?.id || '');
-    if (id && isBeforeCursor(msg)) byId.set(id, msg);
+    if (id && isOlderThanCursor(msg, cursor)) byId.set(id, msg);
   }
 
-  const raw = [...byId.values()].sort((a, b) => asValidDate(b.timestamp).getTime() - asValidDate(a.timestamp).getTime());
+  const raw = [...byId.values()].sort(compareMessagesNewestFirst);
   const hasMore = raw.length > limit;
   const slice = hasMore ? raw.slice(0, limit) : raw;
   return { messages: slice.reverse().map(formatMessageForClient), hasMore };
@@ -437,7 +438,7 @@ export async function fetchFriendshipMessagesPage(
 async function refreshFriendshipLastMessage(friendshipId: mongoose.Types.ObjectId | null) {
   if (!friendshipId) return;
   const latestItem = await FriendshipMessageItem.findOne({ friendshipId })
-    .sort({ timestamp: -1 })
+    .sort({ timestamp: -1, id: -1 })
     .lean();
   if (latestItem) {
     const snapshot = toFriendshipMessageSnapshot(latestItem);

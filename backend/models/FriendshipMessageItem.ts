@@ -74,6 +74,8 @@ const FriendshipMessageItemSchema = new Schema<IFriendshipMessageItem>(
 );
 
 FriendshipMessageItemSchema.index({ friendshipId: 1, timestamp: -1 });
+// Пагинация истории: курсор (timestamp, id) и сортировка по нему же без in-memory sort.
+FriendshipMessageItemSchema.index({ friendshipId: 1, timestamp: -1, id: -1 });
 FriendshipMessageItemSchema.index({ friendshipId: 1, id: 1 }, { unique: true });
 // Unread scan only — keep small via partial filter (read:false docs only).
 FriendshipMessageItemSchema.index(
