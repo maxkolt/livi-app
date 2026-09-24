@@ -11,6 +11,20 @@ import {
 import { shared } from "./shared";
 import { socket } from "./socketCore";
 
+// saveMessage делает read-modify-write одного ключа AsyncStorage. Без очереди пачка входящих
+// (офлайн-очередь на reconnect) читала один и тот же массив, и последняя запись затирала остальные.
+const chatWriteChains = new Map<string, Promise<unknown>>();
+function withChatWriteLock<T>(chatKey: string, work: () => Promise<T>): Promise<T> {
+  const prev = chatWriteChains.get(chatKey) ?? Promise.resolve();
+  const next = prev.then(work, work);
+  const settled = next.catch(() => undefined);
+  chatWriteChains.set(chatKey, settled);
+  void settled.then(() => {
+    if (chatWriteChains.get(chatKey) === settled) chatWriteChains.delete(chatKey);
+  });
+  return next;
+}
+
 // Глобальное хранение сообщений
 export const globalMessageStorage = {
   // Функция для получения ключа чата
@@ -20,73 +34,78 @@ export const globalMessageStorage = {
   },
 
   // Сохранение сообщения в AsyncStorage (+ сброс in-memory кэша, чтобы превью/список видели последнее).
-  saveMessage: async (message: any, currentUserId: string) => {
-    try {
-      const me = String(currentUserId || "").trim();
-      const from = String(message?.from || "").trim();
-      const to = String(message?.to || "").trim();
-      if (!me || !message?.id) return;
-      // peer = собеседник: для входящего from, для своего — to.
-      const peerId = from === me ? to : from;
-      if (!peerId) return;
+  // true — сообщение лежит в хранилище (записано сейчас или уже было).
+  saveMessage: async (message: any, currentUserId: string): Promise<boolean> => {
+    const me = String(currentUserId || "").trim();
+    const from = String(message?.from || "").trim();
+    const to = String(message?.to || "").trim();
+    if (!me || !message?.id) return false;
+    // peer = собеседник: для входящего from, для своего — to.
+    const peerId = from === me ? to : from;
+    if (!peerId) return false;
 
-      const chatKey = globalMessageStorage.getChatKey(me, peerId);
-      const existingMessages = await AsyncStorage.getItem(chatKey);
-      const messages = existingMessages ? JSON.parse(existingMessages) : [];
-      const isOwn = from === me;
+    const chatKey = globalMessageStorage.getChatKey(me, peerId);
+    return withChatWriteLock(chatKey, async () => {
+      try {
+        const existingMessages = await AsyncStorage.getItem(chatKey);
+        const messages = existingMessages ? JSON.parse(existingMessages) : [];
+        const isOwn = from === me;
 
-      const replyToPayload =
-        message.replyTo && message.replyTo.id
-          ? {
-              id: String(message.replyTo.id),
-              text: message.replyTo.text,
-              from: String(message.replyTo.from || ""),
-              isOwn: String(message.replyTo.from || "") === me,
-            }
-          : null;
+        const replyToPayload =
+          message.replyTo && message.replyTo.id
+            ? {
+                id: String(message.replyTo.id),
+                text: message.replyTo.text,
+                from: String(message.replyTo.from || ""),
+                isOwn: String(message.replyTo.from || "") === me,
+              }
+            : null;
 
-      const existingIdx = messages.findIndex((m: any) => String(m?.id) === String(message.id));
-      let didWrite = false;
-      if (existingIdx < 0) {
-        const newMessage: any = {
-          id: message.id,
-          text: message.text,
-          type: message.type,
-          uri: message.uri,
-          name: message.name,
-          size: message.size,
-          duration: message.duration,
-          stickerId: message.stickerId,
-          stickerPackId: message.stickerPackId,
-          stickerEmoji: message.stickerEmoji,
-          stickerLabel: message.stickerLabel,
-          sender: isOwn ? "me" : "peer",
-          from,
-          to,
-          timestamp: new Date(message.timestamp),
-        };
-        if (message.callDirection) newMessage.callDirection = message.callDirection;
-        if (message.localOnly) newMessage.localOnly = true;
-        if (Array.isArray(message.uris) && message.uris.length > 1) {
-          newMessage.uris = message.uris.map((u: any) => String(u || "").trim()).filter(Boolean).slice(0, 10);
-          if (!newMessage.uri) newMessage.uri = newMessage.uris[0];
+        const existingIdx = messages.findIndex((m: any) => String(m?.id) === String(message.id));
+        let didWrite = false;
+        if (existingIdx < 0) {
+          const newMessage: any = {
+            id: message.id,
+            text: message.text,
+            type: message.type,
+            uri: message.uri,
+            name: message.name,
+            size: message.size,
+            duration: message.duration,
+            stickerId: message.stickerId,
+            stickerPackId: message.stickerPackId,
+            stickerEmoji: message.stickerEmoji,
+            stickerLabel: message.stickerLabel,
+            sender: isOwn ? "me" : "peer",
+            from,
+            to,
+            timestamp: new Date(message.timestamp),
+          };
+          if (message.callDirection) newMessage.callDirection = message.callDirection;
+          if (message.localOnly) newMessage.localOnly = true;
+          if (Array.isArray(message.uris) && message.uris.length > 1) {
+            newMessage.uris = message.uris.map((u: any) => String(u || "").trim()).filter(Boolean).slice(0, 10);
+            if (!newMessage.uri) newMessage.uri = newMessage.uris[0];
+          }
+          if (replyToPayload) newMessage.replyTo = replyToPayload;
+          messages.push(newMessage);
+          didWrite = true;
+        } else if (replyToPayload && !messages[existingIdx]?.replyTo?.id) {
+          messages[existingIdx] = { ...messages[existingIdx], replyTo: replyToPayload };
+          didWrite = true;
         }
-        if (replyToPayload) newMessage.replyTo = replyToPayload;
-        messages.push(newMessage);
-        didWrite = true;
-      } else if (replyToPayload && !messages[existingIdx]?.replyTo?.id) {
-        messages[existingIdx] = { ...messages[existingIdx], replyTo: replyToPayload };
-        didWrite = true;
+        if (didWrite) {
+          await AsyncStorage.setItem(chatKey, JSON.stringify(messages));
+          // Иначе getChatMessagesLocal до 5 мин отдаёт старый кэш без входящего → превью «своё последнее».
+          const cacheKey = `${me}-${peerId}`;
+          shared.messageCache.delete(cacheKey);
+        }
+        return true;
+      } catch (error) {
+        logger.warn("Failed to save message globally:", error);
+        return false;
       }
-      if (didWrite) {
-        await AsyncStorage.setItem(chatKey, JSON.stringify(messages));
-        // Иначе getChatMessagesLocal до 5 мин отдаёт старый кэш без входящего → превью «своё последнее».
-        const cacheKey = `${me}-${peerId}`;
-        shared.messageCache.delete(cacheKey);
-      }
-    } catch (error) {
-      logger.warn("Failed to save message globally:", error);
-    }
+    });
   },
 };
 
@@ -587,13 +606,16 @@ export function onMessageReceived(
  * Всегда пишем входящие в локальный чат (не только когда открыт ChatScreen).
  * Иначе вкладка Чаты показывает превью своего последнего исходящего при unread > 0.
  */
-socket.on("message:received", (message: any) => {
+socket.on("message:received", (message: any, ack?: (res: { ok: boolean }) => void) => {
   try {
     const me = String(shared.currentUserId || "").trim();
     if (!me || !message?.id) return;
     const from = String(message.from || "").trim();
     if (!from || from === me) return;
-    void globalMessageStorage.saveMessage(message, me);
+    // ack есть только у офлайн-очереди: сервер удалит запись, когда она уже у нас на диске.
+    void globalMessageStorage.saveMessage(message, me).then((saved) => {
+      if (saved) ack?.({ ok: true });
+    });
   } catch (error) {
     logger.warn("[messages] persist incoming for chat preview failed:", error);
   }
