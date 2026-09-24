@@ -622,6 +622,8 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
   const callTimerHoldSinceRef = useRef<number | null>(null);
   const [liveKitReconnectingUi, setLiveKitReconnectingUi] = useState(false);
   const [peerReconnectingUi, setPeerReconnectingUi] = useState(false);
+  /** Звонок идёт со сквозным шифрованием — пульс под щитом в шапке. */
+  const [callE2eeActive, setCallE2eeActive] = useState(false);
   const [remoteAudioGapUi, setRemoteAudioGapUi] = useState(false);
   const [buttonsOpacity] = useState(new Animated.Value(1));
   const incomingCallBounce = useRef(new Animated.Value(0)).current;
@@ -4452,6 +4454,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     const handleLiveKitReconnected = () => setLiveKitReconnectingUi(false);
     const handlePeerReconnecting = () => setPeerReconnectingUi(true);
     const handlePeerRecovered = () => setPeerReconnectingUi(false);
+    const handleCallE2eeChanged = (active: boolean) => setCallE2eeActive(!!active);
     try {
       if (typeof (session as any).isLiveKitReconnecting === 'function') {
         setLiveKitReconnectingUi(!!(session as any).isLiveKitReconnecting());
@@ -4480,6 +4483,9 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     session.on('livekitReconnected', handleLiveKitReconnected);
     session.on('peerReconnecting', handlePeerReconnecting);
     session.on('peerRecovered', handlePeerRecovered);
+    session.on('callE2eeChanged', handleCallE2eeChanged);
+    // Шифрование могли включить до подписки (комната подключилась раньше экрана).
+    setCallE2eeActive(!!(session as any).isCallE2eeActive?.());
     if (needsStreamBridge) {
       session.on('localStream', handleLocalStreamEvent as any);
       session.on('remoteStream', handleRemoteStreamEvent as any);
@@ -4511,6 +4517,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
         session.off('livekitReconnected', handleLiveKitReconnected);
         session.off('peerReconnecting', handlePeerReconnecting);
         session.off('peerRecovered', handlePeerRecovered);
+        session.off('callE2eeChanged', handleCallE2eeChanged);
         if (needsStreamBridge) {
           session.off('localStream', handleLocalStreamEvent as any);
           session.off('remoteStream', handleRemoteStreamEvent as any);
@@ -7997,6 +8004,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
               micLabel={t('microphone', lang)}
               endLabel={t('endCall', lang)}
               moreItems={[]}
+              encrypted={callE2eeActive}
               speakerOn={
                 audioRouteForUi === 'SPEAKER_PHONE' ||
                 audioRouteForUi === 'BLUETOOTH' ||

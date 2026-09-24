@@ -60,7 +60,7 @@ export const cleanupStaleStates = (isSocketConnected: (sid: string) => boolean) 
 export const setBusy = (userId: string, busy: boolean) => store.setBusy(userId, busy);
 export const setDirectCall = (
   callId: string,
-  state: { a: string; b: string; createdAtMs: number; expiresAtMs: number }
+  state: { a: string; b: string; createdAtMs: number; expiresAtMs: number; e2eeA?: string }
 ) => store.setDirectCall(callId, state);
 export const getDirectCall = (callId: string) => store.getDirectCall(callId);
 export const removeDirectCall = (callId: string) => store.removeDirectCall(callId);

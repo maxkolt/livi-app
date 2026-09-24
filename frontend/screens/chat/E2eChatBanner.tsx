@@ -10,33 +10,84 @@ import {
 } from 'react-native';
 import { BlurView } from 'expo-blur';
 import { LIVI, t, type Lang } from '../../utils/i18n';
+import { WELCOME_NAV_ACTIVE_ACCENT } from '../home/constants';
 import {
+  changeE2eBackupPassword,
   getE2eStatus,
+  markE2eSetupPromptSeen,
   onE2eStatus,
   onPeerKeyChanged,
   resetE2e,
   restoreE2e,
   setupE2e,
+  wasE2eSetupPromptSeen,
   type E2eStatus,
 } from '../../sockets/modules/e2e';
 import { isAcceptableBackupPassword } from '../../sockets/modules/e2eCrypto';
 
-type Mode = 'setup' | 'restore' | 'reset';
+export type E2eModalMode = 'setup' | 'restore' | 'reset' | 'change';
+type Mode = E2eModalMode;
 
-/** Плашку «включите шифрование» можно скрыть до перезапуска; «восстановите ключ» — нельзя. */
-let setupBannerDismissed = false;
+/** Пункт меню чата для текущего состояния шифрования (null — пункта нет). */
+export function e2eMenuAction(status: E2eStatus): { mode: E2eModalMode; labelKey: string } | null {
+  if (status === 'needs_setup') return { mode: 'setup', labelKey: 'e2eMenuEnable' };
+  if (status === 'needs_restore') return { mode: 'restore', labelKey: 'e2eMenuRestore' };
+  if (status === 'ready') return { mode: 'change', labelKey: 'e2eMenuChangePassword' };
+  return null;
+}
+
+/** Состояние шифрования для экрана (меню чата). */
+export function useE2eStatus(): E2eStatus {
+  const [status, setStatus] = useState<E2eStatus>(() => getE2eStatus());
+  useEffect(() => onE2eStatus(setStatus), []);
+  return status;
+}
 
 /**
- * Над полем ввода чата: предложение включить сквозное шифрование, требование
- * восстановить ключ после переустановки и уведомление о смене ключа собеседника.
+ * Над полем ввода чата. Предложение включить шифрование — один раз, при первом
+ * открытии чата (дальше оно в меню справа вверху). Требование восстановить ключ
+ * после переустановки остаётся, пока ключ не восстановлен: без него отправка
+ * заблокирована. Плюс уведомление о смене ключа собеседника.
  */
-export function E2eChatBanner({ lang, peerId }: { lang: Lang; peerId: string }) {
-  const [status, setStatus] = useState<E2eStatus>(() => getE2eStatus());
-  const [dismissed, setDismissed] = useState(setupBannerDismissed);
+export function E2eChatBanner({
+  lang,
+  peerId,
+  requestedMode,
+  onRequestedModeHandled,
+}: {
+  lang: Lang;
+  peerId: string;
+  /** Открыть окно из меню чата. */
+  requestedMode?: E2eModalMode | null;
+  onRequestedModeHandled?: () => void;
+}) {
+  const status = useE2eStatus();
+  const [showSetupPrompt, setShowSetupPrompt] = useState(false);
   const [peerKeyChanged, setPeerKeyChanged] = useState(false);
   const [mode, setMode] = useState<Mode | null>(null);
 
-  useEffect(() => onE2eStatus(setStatus), []);
+  useEffect(() => {
+    if (!requestedMode) return;
+    setMode(requestedMode);
+    onRequestedModeHandled?.();
+  }, [requestedMode, onRequestedModeHandled]);
+
+  // Первый раз, когда пользователь без шифрования открыл чат: показываем и запоминаем.
+  useEffect(() => {
+    if (status !== 'needs_setup') {
+      setShowSetupPrompt(false);
+      return;
+    }
+    let cancelled = false;
+    void wasE2eSetupPromptSeen().then((seen) => {
+      if (cancelled || seen) return;
+      setShowSetupPrompt(true);
+      void markE2eSetupPromptSeen();
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [status]);
   useEffect(
     () =>
       onPeerKeyChanged((changedPeerId) => {
@@ -45,11 +96,6 @@ export function E2eChatBanner({ lang, peerId }: { lang: Lang; peerId: string }) 
     [peerId],
   );
 
-  const dismissSetup = useCallback(() => {
-    setupBannerDismissed = true;
-    setDismissed(true);
-  }, []);
-
   let banner: React.ReactNode = null;
   if (status === 'needs_restore') {
     banner = (
@@ -57,13 +103,13 @@ export function E2eChatBanner({ lang, peerId }: { lang: Lang; peerId: string }) 
         <Text style={styles.bannerText}>{t('e2eBannerRestore', lang)}</Text>
       </TouchableOpacity>
     );
-  } else if (status === 'needs_setup' && !dismissed) {
+  } else if (status === 'needs_setup' && showSetupPrompt) {
     banner = (
       <View style={styles.banner}>
         <TouchableOpacity style={{ flex: 1 }} onPress={() => setMode('setup')} accessibilityRole="button">
           <Text style={styles.bannerText}>{t('e2eBannerSetup', lang)}</Text>
         </TouchableOpacity>
-        <TouchableOpacity onPress={dismissSetup} hitSlop={10} accessibilityLabel={t('e2eLater', lang)}>
+        <TouchableOpacity onPress={() => setShowSetupPrompt(false)} hitSlop={10} accessibilityLabel={t('e2eLater', lang)}>
           <Text style={styles.close}>×</Text>
         </TouchableOpacity>
       </View>
@@ -121,7 +167,14 @@ function E2ePasswordModal({
     setBusy(true);
     setError(null);
     try {
-      const action = mode === 'setup' ? setupE2e : mode === 'restore' ? restoreE2e : resetE2e;
+      const action =
+        mode === 'setup'
+          ? setupE2e
+          : mode === 'restore'
+            ? restoreE2e
+            : mode === 'change'
+              ? changeE2eBackupPassword
+              : resetE2e;
       const r = await action(password);
       if (r.ok) {
         onClose();
@@ -141,9 +194,9 @@ function E2ePasswordModal({
     }
   }, [busy, needsRepeat, password, repeat, mode, lang, onClose]);
 
-  const title = mode === 'setup' ? 'e2eSetupTitle' : mode === 'restore' ? 'e2eRestoreTitle' : 'e2eResetTitle';
-  const text = mode === 'setup' ? 'e2eSetupText' : mode === 'restore' ? 'e2eRestoreText' : 'e2eResetText';
-  const action = mode === 'restore' ? 'e2eRestore' : 'e2eEnable';
+  const title = { setup: 'e2eSetupTitle', restore: 'e2eRestoreTitle', reset: 'e2eResetTitle', change: 'e2eChangeTitle' }[mode];
+  const text = { setup: 'e2eSetupText', restore: 'e2eRestoreText', reset: 'e2eResetText', change: 'e2eChangeText' }[mode];
+  const action = { setup: 'e2eEnable', restore: 'e2eRestore', reset: 'e2eEnable', change: 'e2eSave' }[mode];
 
   return (
     <Modal visible transparent animationType="fade" onRequestClose={busy ? () => {} : onClose}>
@@ -216,9 +269,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 12,
-    backgroundColor: 'rgba(46, 204, 113, 0.12)',
+    backgroundColor: WELCOME_NAV_ACTIVE_ACCENT.solid15,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(46, 204, 113, 0.35)',
+    borderColor: WELCOME_NAV_ACTIVE_ACCENT.solid30,
   },
   bannerText: { color: LIVI.text, fontSize: 13, lineHeight: 17 },
   close: { color: LIVI.titan, fontSize: 20, lineHeight: 20, marginLeft: 10 },
@@ -244,7 +297,7 @@ const styles = StyleSheet.create({
   error: { color: LIVI.red, fontSize: 13, marginBottom: 8 },
   row: { flexDirection: 'row', gap: 12, marginTop: 6 },
   btn: { flex: 1, borderRadius: 12, paddingVertical: 12, alignItems: 'center', justifyContent: 'center' },
-  btnPrimary: { backgroundColor: 'rgba(46, 204, 113, 0.35)' },
+  btnPrimary: { backgroundColor: WELCOME_NAV_ACTIVE_ACCENT.solid },
   btnSecondary: { backgroundColor: 'rgba(138, 143, 153, 0.25)' },
   btnText: { color: LIVI.white, fontSize: 15, fontWeight: '600' },
   busyRow: { flexDirection: 'row', alignItems: 'center' },

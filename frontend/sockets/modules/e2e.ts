@@ -21,6 +21,7 @@ import { shared } from "./shared";
 import { socket } from "./socketCore";
 import {
   createKeyBackup,
+  deriveCallFrameKey,
   deriveRestoreKeys,
   fromBase64,
   generateKeyPair,
@@ -118,7 +119,7 @@ export async function deleteLocalE2eKey(userId: string): Promise<void> {
     await SecureStore.deleteItemAsync(SECRET_KEY_PREFIX + userId);
   } catch {}
   try {
-    await AsyncStorage.removeItem(`${PINS_KEY}:${userId}`);
+    await AsyncStorage.multiRemove([`${PINS_KEY}:${userId}`, `e2e_setup_prompt_seen_v1:${userId}`]);
   } catch {}
   if (state.userId === userId) {
     state.own = null;
@@ -431,4 +432,62 @@ export async function toWireEditPayload(
   if (!to) return { messageId, text };
   const enc = await sealOutgoingText({ id: messageId, to, text });
   return enc ? { messageId, enc } : { messageId, text };
+}
+
+const SETUP_PROMPT_SEEN_KEY = "e2e_setup_prompt_seen_v1";
+
+/** Предложение включить шифрование показываем в чате один раз на аккаунт — дальше оно в меню чата. */
+export async function wasE2eSetupPromptSeen(): Promise<boolean> {
+  const me = syncUser();
+  if (!me) return true;
+  try {
+    return (await AsyncStorage.getItem(`${SETUP_PROMPT_SEEN_KEY}:${me}`)) === "1";
+  } catch {
+    return true;
+  }
+}
+
+export async function markE2eSetupPromptSeen(): Promise<void> {
+  const me = syncUser();
+  if (!me) return;
+  try {
+    await AsyncStorage.setItem(`${SETUP_PROMPT_SEEN_KEY}:${me}`, "1");
+  } catch {}
+}
+
+/* ---------- звонки ---------- */
+
+/**
+ * Объявление для call:initiate / call:accept: «умею шифровать звонок, мой ключ такой».
+ * Только когда свой ключ сверен с сервером — иначе сервер не включит шифрование,
+ * и звонок пройдёт как обычный у обеих сторон.
+ */
+export function getCallE2eeDeclaration(): { pk: string } | undefined {
+  syncUser();
+  if (state.status !== "ready" || !state.own) return undefined;
+  return { pk: toBase64(state.own.publicKey) };
+}
+
+/** Ключ шифрования кадров для принятого звонка (см. deriveCallFrameKey). */
+export async function deriveCallKey(peerPublicKey: string, callId: string): Promise<Uint8Array | null> {
+  const me = syncUser();
+  const own = me ? await loadOwnKey(me) : null;
+  const peer = fromBase64(peerPublicKey);
+  if (!own || !peer) return null;
+  return deriveCallFrameKey(own, peer, callId);
+}
+
+/**
+ * То же, но если после холодного старта (приняли звонок из пуша) сверки ещё не было —
+ * ждём её недолго: дольше нельзя, это задерживает соединение звонка.
+ */
+export async function getCallE2eeDeclarationSoon(maxWaitMs = 1200): Promise<{ pk: string } | undefined> {
+  syncUser();
+  if (state.status === "unknown" && socket.connected) {
+    await Promise.race([
+      refreshE2eState().catch(() => undefined),
+      new Promise((resolve) => setTimeout(resolve, maxWaitMs)),
+    ]);
+  }
+  return getCallE2eeDeclaration();
 }

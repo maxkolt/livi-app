@@ -1,4 +1,6 @@
 // backend/index.ts
+import { callAcceptedE2eeField, decideCallE2ee, parseCallE2eeDeclaration, type CallE2eeDecision } from './utils/callE2ee';
+import { loadE2ePublicKeys } from './sockets/e2eKeys';
 import dotenv from "dotenv";
 dotenv.config();
 
@@ -1151,6 +1153,10 @@ type CallLink = {
   timer?: NodeJS.Timeout;
   retryPushTimer?: NodeJS.Timeout;
   media?: 'audio' | 'video';
+  /** Публичный ключ E2E, объявленный звонящим (см. utils/callE2ee.ts). */
+  e2eeA?: string;
+  /** Решение о шифровании, принятое при call:accept. */
+  e2ee?: CallE2eeDecision | null;
 };
 const callsById = new Map<string, CallLink>();
 const callOfUser = new Map<string, { with: string; callId: string }>();
@@ -1189,6 +1195,7 @@ async function persistDirectCallSharedState(callId: string, link: CallLink): Pro
     b: link.b,
     createdAtMs: link.createdAtMs,
     expiresAtMs: link.expiresAtMs,
+    ...(link.e2eeA ? { e2eeA: link.e2eeA } : {}),
   });
   await queueStore.setUserDirectCall(link.a, {
     with: link.b,
@@ -1304,6 +1311,8 @@ async function getCallLinkFromAnyStore(callId: string): Promise<CallLink | null>
     b: shared.b,
     createdAtMs: shared.createdAtMs,
     expiresAtMs: shared.expiresAtMs,
+    // Звонок принимают на другом инстансе — объявление звонящего должно дойти и туда.
+    ...(shared.e2eeA ? { e2eeA: shared.e2eeA } : {}),
   };
   callsById.set(callId, hydrated);
   return hydrated;
@@ -1406,8 +1415,19 @@ type PendingAcceptedRoom = {
   livekitRoomName: string;
   peerUserId: string;
   acceptedAt?: number;
+  /** Ключ собеседника для шифрования звонка; повторный call:accepted обязан нести то же решение. */
+  e2eePeerPublicKey?: string;
 };
 const activeRoomByUserId = new Map<string, PendingAcceptedRoom>();
+/**
+ * /api/livekit/token (возврат в идущий звонок) должен отдать то же решение о шифровании,
+ * что и call:accepted, — иначе клиент зайдёт без шифрования к шифрующему собеседнику.
+ */
+app.locals.getCallE2eeForToken = (userId: string, roomName: string) => {
+  const pending = activeRoomByUserId.get(userId);
+  if (!pending || pending.livekitRoomName !== roomName || !pending.e2eePeerPublicKey) return null;
+  return { callId: pending.callId, e2ee: { peerPublicKey: pending.e2eePeerPublicKey } };
+};
 type CallAcceptedDeliverySource = 'call:accept' | 'reauth' | 'call:getAccepted';
 type CallAcceptedDeliveryState = PendingAcceptedRoom & {
   deliveredAtMs?: number;
@@ -1683,6 +1703,7 @@ async function emitPendingCallAcceptedToSocket(
     livekitRoomName: pendingRoom.livekitRoomName,
     livekitUrl: getLiveKitUrl() || null,
     acceptedAt: pendingRoom.acceptedAt,
+    ...(pendingRoom.e2eePeerPublicKey ? { e2ee: { peerPublicKey: pendingRoom.e2eePeerPublicKey } } : {}),
   });
   rememberCallAcceptedDelivery(pendingRoom.callId, userId, pendingRoom, {
     source,
@@ -2651,12 +2672,14 @@ app.post('/api/calls/initiate', async (req, res) => {
     const createdAtMs = Date.now();
     const expiresAtMs = createdAtMs + CALL_RING_TIMEOUT_MS;
     const callId = `${createdAtMs}_${Math.random().toString(36).slice(2, 8)}`;
+    const e2eeA = parseCallE2eeDeclaration(req.body?.e2ee) ?? undefined;
     const link: CallLink = {
       a: callerId,
       b: calleeId,
       createdAtMs,
       expiresAtMs,
       media: callMedia,
+      e2eeA,
     };
     callsById.set(callId, link);
     createOrchestratedCall({ callId, callerId, calleeId });
@@ -4091,7 +4114,7 @@ io.on('connection', async (sock: AuthedSocket) => {
   });
 
   /* ---- Direct Calls ---- */
-  sock.on('call:initiate', async ({ to, media: mediaRaw, callerNick: callerNickRaw }: { to?: string; media?: string; callerNick?: string }, ack?: Function) => {
+  sock.on('call:initiate', async ({ to, media: mediaRaw, callerNick: callerNickRaw, e2ee: e2eeRaw }: { to?: string; media?: string; callerNick?: string; e2ee?: unknown }, ack?: Function) => {
     try {
       const meRaw = String((sock as any).data?.userId || '');
       if (!meRaw) return ack?.({ ok: false, error: 'unauthorized' });
@@ -4160,7 +4183,8 @@ io.on('connection', async (sock: AuthedSocket) => {
       const createdAtMs = Date.now();
       const expiresAtMs = createdAtMs + CALL_RING_TIMEOUT_MS;
       const callId = `${createdAtMs}_${Math.random().toString(36).slice(2, 8)}`;
-      callsById.set(callId, { a: me, b: peerId, createdAtMs, expiresAtMs, media: callMedia });
+      const e2eeA = parseCallE2eeDeclaration(e2eeRaw) ?? undefined;
+      callsById.set(callId, { a: me, b: peerId, createdAtMs, expiresAtMs, media: callMedia, e2eeA });
       createOrchestratedCall({ callId, callerId: me, calleeId: peerId });
       callDeliveryById.set(callId, {
         callerId: me,
@@ -4171,7 +4195,7 @@ io.on('connection', async (sock: AuthedSocket) => {
       callOfUser.set(me, { with: peerId, callId });
       callOfUser.set(peerId, { with: me, callId });
       // Redis persist не на hot path — иначе ack/incoming ждут queueStore (сотни мс+).
-      void persistDirectCallSharedState(callId, { a: me, b: peerId, createdAtMs, expiresAtMs }).catch(
+      void persistDirectCallSharedState(callId, { a: me, b: peerId, createdAtMs, expiresAtMs, e2eeA }).catch(
         (e: any) => logger.warn('[call:initiate] persistDirectCallSharedState failed', { callId, error: e?.message }),
       );
 
@@ -4437,7 +4461,7 @@ io.on('connection', async (sock: AuthedSocket) => {
     }
   );
 
-  sock.on('call:accept', async ({ callId }: { callId?: string }, ack?: (resp: { ok: boolean; error?: string; duplicate?: boolean }) => void) => {
+  sock.on('call:accept', async ({ callId, e2ee: e2eeRaw }: { callId?: string; e2ee?: unknown }, ack?: (resp: { ok: boolean; error?: string; duplicate?: boolean }) => void) => {
     const id = String(callId || '');
     const link = await getCallLinkFromAnyStore(id);
     if (!link) {
@@ -4621,6 +4645,22 @@ io.on('connection', async (sock: AuthedSocket) => {
         return;
       }
 
+      // Шифровать ли звонок: оба объявили ключи, совпадающие с опубликованными.
+      // Ошибка сверки — обычный звонок у обоих, а не сорванный.
+      const e2eeDecision = await decideCallE2ee({
+        a: link.a,
+        b: link.b,
+        declaredA: link.e2eeA,
+        declaredB: parseCallE2eeDeclaration(e2eeRaw),
+        loadPublicKeys: loadE2ePublicKeys,
+      }).catch((e: any) => {
+        logger.warn('[call:accept] e2ee decision failed, call stays unencrypted', { callId: id, error: e?.message });
+        return null;
+      });
+      link.e2ee = e2eeDecision;
+      const e2eeForA = callAcceptedE2eeField(link.a, link, e2eeDecision);
+      const e2eeForB = callAcceptedE2eeField(link.b, link, e2eeDecision);
+
       // Отправляем call:accepted с LiveKit credentials
       const acceptedAt = Date.now();
       if (aSock) {
@@ -4634,6 +4674,7 @@ io.on('connection', async (sock: AuthedSocket) => {
             livekitRoomName,
             livekitUrl: getLiveKitUrl() || null,
             acceptedAt,
+            ...e2eeForA,
           });
           rememberCallAcceptedDelivery(id, link.a, {
             callId: id,
@@ -4660,6 +4701,7 @@ io.on('connection', async (sock: AuthedSocket) => {
             livekitRoomName,
             livekitUrl: getLiveKitUrl() || null,
             acceptedAt,
+            ...e2eeForB,
           });
           rememberCallAcceptedDelivery(id, link.b, {
             callId: id,
@@ -4688,8 +4730,14 @@ io.on('connection', async (sock: AuthedSocket) => {
 
       // Сохраняем pending room для обоих участников, чтобы reconnect/reauth могли
       // восстановить call:accepted и подключение к LiveKit без повторного входящего.
-      const pendingRoomForA: PendingAcceptedRoom = { callId: id, roomId, livekitRoomName, peerUserId: link.b, acceptedAt };
-      const pendingRoomForB: PendingAcceptedRoom = { callId: id, roomId, livekitRoomName, peerUserId: link.a, acceptedAt };
+      const pendingRoomForA: PendingAcceptedRoom = {
+        callId: id, roomId, livekitRoomName, peerUserId: link.b, acceptedAt,
+        e2eePeerPublicKey: e2eeForA.e2ee?.peerPublicKey,
+      };
+      const pendingRoomForB: PendingAcceptedRoom = {
+        callId: id, roomId, livekitRoomName, peerUserId: link.a, acceptedAt,
+        e2eePeerPublicKey: e2eeForB.e2ee?.peerPublicKey,
+      };
       try {
         activeRoomByUserId.set(link.a, pendingRoomForA);
         activeRoomByUserId.set(link.b, pendingRoomForB);
@@ -4717,6 +4765,7 @@ io.on('connection', async (sock: AuthedSocket) => {
             callId: id, from: aSock?.id, fromUserId: link.a, roomId,
             livekitToken: livekitTokenB, livekitRoomName, livekitUrl: getLiveKitUrl() || null,
             acceptedAt,
+            ...e2eeForB,
           });
         }
       } catch {}

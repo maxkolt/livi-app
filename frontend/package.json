@@ -35,6 +35,7 @@
     "@baronha/react-native-photo-editor": "^1.1.6",
     "@cometchat/chat-sdk-react-native": "^4.0.14",
     "@cometchat/chat-uikit-react-native": "^5.2.5",
+    "@expo-google-fonts/fredoka": "^0.4.1",
     "@expo/vector-icons": "^14.1.0",
     "@livekit/react-native": "^2.9.3",
     "@livekit/react-native-webrtc": "^137.0.2",

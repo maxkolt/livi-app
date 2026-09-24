@@ -305,3 +305,21 @@ export function openKeyBackup(backup: E2eBackup, wrapKey: Uint8Array): E2eKeyPai
   // Копия обязана соответствовать заявленному публичному ключу.
   return toBase64(pair.publicKey) === backup.pk ? pair : null;
 }
+
+/* ---------- ключ шифрования звонка ---------- */
+
+/**
+ * Ключ шифрования кадров звонка (LiveKit frame encryption). Обе стороны получают
+ * один и тот же ключ из своих ключей чата: X25519(свой секретный, публичный собеседника)
+ * симметричен. HKDF с callId делает ключ своим для каждого звонка, а отдельная метка
+ * не пересекается с шифрованием сообщений. Сервер этот ключ вычислить не может.
+ */
+export function deriveCallFrameKey(own: E2eKeyPair, peerPublicKey: Uint8Array, callId: string): Uint8Array | null {
+  if (peerPublicKey.length !== 32 || !callId) return null;
+  const shared = nacl.scalarMult(own.secretKey, peerPublicKey);
+  // Точка малого порядка даёт нулевой секрет — такой «ключ» знает любой.
+  if (shared.every((b) => b === 0)) return null;
+  const key = hkdf(sha256, shared, utf8Encode(callId), "livi-call-e2ee/v1", 32);
+  shared.fill(0);
+  return key;
+}

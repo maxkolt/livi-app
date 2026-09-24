@@ -16,7 +16,7 @@ const moderationBans = new Map<string, number>();
 const lastMatchAttempt = new Map<string, number>();
 const lastStart = new Map<string, number>();
 const lastSearch = new Map<string, number>();
-const directCalls = new Map<string, { a: string; b: string; createdAtMs: number; expiresAtMs: number }>();
+const directCalls = new Map<string, { a: string; b: string; createdAtMs: number; expiresAtMs: number; e2eeA?: string }>();
 const userDirectCalls = new Map<string, { with: string; callId: string; expiresAtMs: number }>();
 
 const LOCK_TTL_MS = 30_000;
@@ -238,7 +238,7 @@ export function createMemoryStore() {
 
     async setDirectCall(
       callId: string,
-      state: { a: string; b: string; createdAtMs: number; expiresAtMs: number }
+      state: { a: string; b: string; createdAtMs: number; expiresAtMs: number; e2eeA?: string }
     ): Promise<void> {
       const id = String(callId).trim();
       if (!id) return;
@@ -247,10 +247,13 @@ export function createMemoryStore() {
         b: String(state.b),
         createdAtMs: Number(state.createdAtMs) || now(),
         expiresAtMs: Number(state.expiresAtMs) || now(),
+        ...(state.e2eeA ? { e2eeA: String(state.e2eeA) } : {}),
       });
     },
 
-    async getDirectCall(callId: string): Promise<{ a: string; b: string; createdAtMs: number; expiresAtMs: number } | null> {
+    async getDirectCall(
+      callId: string
+    ): Promise<{ a: string; b: string; createdAtMs: number; expiresAtMs: number; e2eeA?: string } | null> {
       const id = String(callId).trim();
       if (!id) return null;
       const state = directCalls.get(id);

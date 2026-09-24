@@ -146,6 +146,7 @@ import {
   WELCOME_CHROME_EDGE_RADIUS,
   WELCOME_HEADER_TITLE,
   WELCOME_NAV_ACTIVE_ACCENT,
+  WELCOME_MUTED_TEXT,
   WELCOME_NAV_ACTIVE_ICON,
   WELCOME_STAGE_BG,
 } from './home/constants';
@@ -193,7 +194,7 @@ import {
   ensureGloballyDeletedMessageIdsLoaded,
 } from "../sockets/socket";
 import { MAX_MESSAGE_TEXT_LENGTH } from "../sockets/modules/constants";
-import { E2eChatBanner } from "./chat/E2eChatBanner";
+import { E2eChatBanner, e2eMenuAction, useE2eStatus, type E2eModalMode } from "./chat/E2eChatBanner";
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useLang } from "../store/lang";
 import { t, type Lang } from "../utils/i18n";
@@ -540,6 +541,11 @@ export default function ChatScreen({ route, navigation }: Props) {
   const uploadStatusRef = useRef(uploadStatus);
   uploadStatusRef.current = uploadStatus;
   const [showClearMenu, setShowClearMenu] = useState(false);
+  // Сквозное шифрование: пункт в меню справа вверху открывает окно пароля.
+  const e2eStatus = useE2eStatus();
+  const e2eMenu = e2eMenuAction(e2eStatus);
+  const [e2eRequestedMode, setE2eRequestedMode] = useState<E2eModalMode | null>(null);
+  const clearE2eRequest = useCallback(() => setE2eRequestedMode(null), []);
   const [selectedMessage, setSelectedMessage] = useState<any>(null);
   /** Index of album tile under long-press (null = whole message). */
   const [albumFocusIndex, setAlbumFocusIndex] = useState<number | null>(null);
@@ -2554,7 +2560,12 @@ export default function ChatScreen({ route, navigation }: Props) {
                   </View>
                 </View>
               )}
-              <E2eChatBanner lang={lang} peerId={peerId} />
+              <E2eChatBanner
+                lang={lang}
+                peerId={peerId}
+                requestedMode={e2eRequestedMode}
+                onRequestedModeHandled={clearE2eRequest}
+              />
               {replyingToMessage && (
                 <View
                   style={{
@@ -2947,7 +2958,12 @@ export default function ChatScreen({ route, navigation }: Props) {
                   </View>
                 </View>
               )}
-              <E2eChatBanner lang={lang} peerId={peerId} />
+              <E2eChatBanner
+                lang={lang}
+                peerId={peerId}
+                requestedMode={e2eRequestedMode}
+                onRequestedModeHandled={clearE2eRequest}
+              />
               {replyingToMessage && (
                 <View
                   style={{
@@ -3298,8 +3314,34 @@ export default function ChatScreen({ route, navigation }: Props) {
         <View style={homeStyles.overlayModal}>
           <WelcomeOverlayDim strong />
           <WelcomeOverlayCard opaque>
-            <Text style={homeStyles.confirmTitle}>{t('chatClearMenuTitle', lang)}</Text>
-            <View style={{ gap: 10, marginTop: 16 }}>
+            {e2eMenu ? (
+              <View style={{ marginBottom: 18 }}>
+                <WelcomeOverlayPill
+                  label={t(e2eMenu.labelKey, lang)}
+                  onPress={() => {
+                    setShowClearMenu(false);
+                    setE2eRequestedMode(e2eMenu.mode);
+                  }}
+                  variant="primary"
+                  style={{
+                    // Бирюзовый активной навигации: полупрозрачная заливка и рамка того же цвета.
+                    backgroundColor: WELCOME_NAV_ACTIVE_ACCENT.solid30,
+                    borderWidth: 1,
+                    borderColor: WELCOME_NAV_ACTIVE_ACCENT.solid,
+                  }}
+                />
+              </View>
+            ) : null}
+            <Text
+              style={[
+                homeStyles.confirmTitle,
+                // Подпись раздела, а не крупный заголовок: мельче, разрядка, приглушённый цвет.
+                { fontSize: 13, letterSpacing: 0.8, textTransform: 'uppercase', color: WELCOME_MUTED_TEXT, marginBottom: 0 },
+              ]}
+            >
+              {t('chatClearMenuTitle', lang)}
+            </Text>
+            <View style={{ gap: 10, marginTop: 12 }}>
               <WelcomeOverlayPill
                 label={t('chatClearForAllOption', lang)}
                 onPress={() => {

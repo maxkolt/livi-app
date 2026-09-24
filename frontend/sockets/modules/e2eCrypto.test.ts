@@ -1,5 +1,6 @@
 import {
   createKeyBackup,
+  deriveCallFrameKey,
   deriveRestoreKeys,
   fromBase64,
   generateKeyPair,
@@ -153,5 +154,38 @@ describe('key backup', () => {
     expect(isAcceptableBackupPassword('1234567')).toBe(false);
     expect(isAcceptableBackupPassword('12345678')).toBe(true);
     expect(isAcceptableBackupPassword('😀😀😀😀😀😀😀')).toBe(false);
+  });
+});
+
+describe('call frame key', () => {
+  it('is the same on both sides of the call', () => {
+    const forAlice = deriveCallFrameKey(alice, bob.publicKey, 'call_1');
+    const forBob = deriveCallFrameKey(bob, alice.publicKey, 'call_1');
+    expect(forAlice).not.toBeNull();
+    expect(toBase64(forAlice!)).toBe(toBase64(forBob!));
+  });
+
+  it('differs for every call between the same pair', () => {
+    const one = deriveCallFrameKey(alice, bob.publicKey, 'call_1')!;
+    const two = deriveCallFrameKey(alice, bob.publicKey, 'call_2')!;
+    expect(toBase64(one)).not.toBe(toBase64(two));
+  });
+
+  it('cannot be derived by a third party', () => {
+    const real = deriveCallFrameKey(alice, bob.publicKey, 'call_1')!;
+    const mallorys = deriveCallFrameKey(mallory, bob.publicKey, 'call_1')!;
+    expect(toBase64(mallorys)).not.toBe(toBase64(real));
+  });
+
+  it('is not the chat message key for the same pair', () => {
+    // Разные метки HKDF: утечка ключа звонка не раскрывает переписку и наоборот.
+    const callKey = deriveCallFrameKey(alice, bob.publicKey, 'call_1')!;
+    const nacl = require('tweetnacl');
+    expect(toBase64(callKey)).not.toBe(toBase64(nacl.box.before(bob.publicKey, alice.secretKey)));
+  });
+
+  it('refuses a low-order peer key that would give everyone the same secret', () => {
+    expect(deriveCallFrameKey(alice, new Uint8Array(32), 'call_1')).toBeNull();
+    expect(deriveCallFrameKey(alice, bob.publicKey, '')).toBeNull();
   });
 });

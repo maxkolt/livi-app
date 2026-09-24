@@ -1,3 +1,4 @@
+import { useBrandFont } from './brandFont';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
@@ -28,7 +29,6 @@ import {
   BRAND_3D_LAYERS,
   BRAND_3D_STEP_X,
   BRAND_3D_STEP_Y,
-  BRAND_FONT_FAMILY,
   BRAND_LETTER_GLOW_INSET,
   BRAND_LETTER_GLOW_INTENSITY,
   BRAND_LETTER_GLOW_LAYERS,
@@ -469,14 +469,14 @@ const BrandLetterWithOutlineAndGlow: React.FC<BrandLetterWithOutlineAndGlowProps
   const stroke = BRAND_OUTLINE_STROKE;
   const extrudeXLocal = extrudeX;
   const svgW = textSize.w + pad * 2 + extrudeXLocal;
-  const fontWeight = '600';
+  const { fontFamily: brandFontFamily, fontWeight } = useBrandFont();
   const shineGradId = `liviBrandShine${BRAND_LETTER_GRAD_SUFFIX[letterIndex]}`;
   const shineSweepW = Math.max(18, textSize.w * 0.85);
 
   const brandSvgTextLayout = {
     fontSize,
     fontWeight,
-    fontFamily: BRAND_FONT_FAMILY,
+    fontFamily: brandFontFamily,
     letterSpacing: 0,
     x: pad,
     y: baselineY,
@@ -553,7 +553,7 @@ const BrandLetterWithOutlineAndGlow: React.FC<BrandLetterWithOutlineAndGlowProps
         style={[
           styles.brand,
           styles.brandMeasureProbe,
-          { fontSize, lineHeight, letterSpacing: 0 },
+          { fontSize, lineHeight, letterSpacing: 0, fontFamily: brandFontFamily, fontWeight },
         ]}
         onLayout={(e) => {
           const { width } = e.nativeEvent.layout;
@@ -699,7 +699,7 @@ const BrandTitleOutlineFlat: React.FC<BrandTitleOutlineFlatProps> = ({
   const { lineHeight, pad, extrudeX, extrudeY, svgH, baselineY } =
     brandTitleMetrics(fontSize);
   const stroke = BRAND_OUTLINE_STROKE;
-  const fontWeight = '600';
+  const { fontFamily: brandFontFamily, fontWeight } = useBrandFont();
   const extrusionLayers = Array.from(
     { length: BRAND_3D_LAYERS },
     (_, idx) => BRAND_3D_LAYERS - idx
@@ -817,7 +817,7 @@ const BrandTitleOutlineFlat: React.FC<BrandTitleOutlineFlatProps> = ({
   const svgTextBase = {
     fontSize,
     fontWeight,
-    fontFamily: BRAND_FONT_FAMILY,
+    fontFamily: brandFontFamily,
     letterSpacing: 0,
   };
 
@@ -829,7 +829,7 @@ const BrandTitleOutlineFlat: React.FC<BrandTitleOutlineFlatProps> = ({
           style={[
             styles.brand,
             styles.brandMeasureProbe,
-            { fontSize, lineHeight, letterSpacing: 0 },
+            { fontSize, lineHeight, letterSpacing: 0, fontFamily: brandFontFamily, fontWeight },
           ]}
           onLayout={(e) => {
             const { width } = e.nativeEvent.layout;

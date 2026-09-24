@@ -121,8 +121,10 @@ router.post('/livekit/token', async (req, res) => {
     }
 
     const token = await createToken({ identity: trustedUserId, roomName });
+    // Звонок друзьям со сквозным шифрованием: клиенту нужен ключ собеседника и callId.
+    const callE2ee = req.app.locals.getCallE2eeForToken?.(trustedUserId, roomName) ?? null;
 
-    res.json({ ok: true, token, url: LIVEKIT_URL });
+    res.json({ ok: true, token, url: LIVEKIT_URL, ...(callE2ee ?? {}) });
   } catch (e: any) {
     recordTokenFailure();
     logger.error('LiveKit token creation failed:', e);

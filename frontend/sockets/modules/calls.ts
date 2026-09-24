@@ -4,6 +4,7 @@ import { API_BASE, CALL_SIGNALING_CONNECT_MS, isOid } from "./constants";
 import { emitAck, ensureSocketConnected, warmCallSignaling } from "./emit";
 import { shared } from "./shared";
 import { socket } from "./socketCore";
+import { getCallE2eeDeclarationSoon } from "./e2e";
 
 export type DirectCallMedia = "audio" | "video";
 
@@ -13,9 +14,14 @@ export function startCall(toUserId: string, options?: { media?: DirectCallMedia;
   const to = /^[a-f\d]{24}$/i.test(raw) ? raw.toLowerCase() : raw;
   const media = options?.media === "audio" ? "audio" : undefined;
   const callerNick = String(options?.callerNick || "").trim().slice(0, 64);
-  const payload: { to: string; media?: DirectCallMedia; callerNick?: string } = { to };
+  const payload: { to: string; media?: DirectCallMedia; callerNick?: string; e2ee?: { pk: string } } = { to };
   if (media) payload.media = media;
   if (callerNick) payload.callerNick = callerNick;
+  // Сквозное шифрование звонка: сервер включит его, только если и собеседник объявит ключ.
+  const withE2ee = async () => {
+    const e2ee = await getCallE2eeDeclarationSoon();
+    if (e2ee) payload.e2ee = e2ee;
+  };
 
   const viaSocket = () =>
     emitAck<{ ok: boolean; callId?: string; error?: string }>(
@@ -63,6 +69,7 @@ export function startCall(toUserId: string, options?: { media?: DirectCallMedia;
   };
 
   return (async () => {
+    await withE2ee();
     if (!socket.connected || shared.reconnecting) {
       logger.info("[call:initiate] socket unavailable, using HTTP fallback", {
         connected: socket.connected,
@@ -221,13 +228,15 @@ export async function emitCallAcceptAck(
     }
   };
 
-  const tryEmit = () =>
-    emitAck<{ ok?: boolean; error?: string; duplicate?: boolean }>(
+  const tryEmit = async () => {
+    const e2ee = await getCallE2eeDeclarationSoon();
+    return emitAck<{ ok?: boolean; error?: string; duplicate?: boolean }>(
       "call:accept",
-      { callId: id },
+      e2ee ? { callId: id, e2ee } : { callId: id },
       7000,
       1,
     );
+  };
 
   // Fast path: сокет + uid уже есть — emit сразу, reauth параллельно.
   if (socket.connected && uid) {
@@ -293,7 +302,8 @@ export function beginEarlyIncomingCallAccept(callId: string): void {
         error: e?.message || String(e),
       });
       try {
-        socket.emit("call:accept", { callId: id });
+        const e2ee = await getCallE2eeDeclarationSoon(0);
+        socket.emit("call:accept", e2ee ? { callId: id, e2ee } : { callId: id });
       } catch {}
       // Оптимистично: emit мог дойти; VideoCallSession всё равно дождётся call:accepted / recover.
       return { ok: true };

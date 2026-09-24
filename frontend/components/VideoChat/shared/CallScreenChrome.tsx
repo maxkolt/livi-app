@@ -2,8 +2,10 @@
  * Единый chrome экрана звонка (audio + video): шапка + нижняя капсула.
  * Только UI — без логики сессии / PiP / маршрута.
  */
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
+  Animated,
+  Easing,
   View,
   Text,
   Image,
@@ -91,7 +93,38 @@ type Props = {
     solid15: string;
     solid30: string;
   };
+  /** Звонок со сквозным шифрованием: под щитом пульсирует бирюзовый фон. */
+  encrypted?: boolean;
 };
+
+/** Расходящаяся волна под щитом — видно, что звонок зашифрован. */
+function ShieldPulse() {
+  const progress = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.timing(progress, {
+        toValue: 1,
+        duration: 1800,
+        easing: Easing.out(Easing.quad),
+        useNativeDriver: true,
+      }),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [progress]);
+  return (
+    <Animated.View
+      pointerEvents="none"
+      style={[
+        styles.shieldPulse,
+        {
+          opacity: progress.interpolate({ inputRange: [0, 1], outputRange: [0.55, 0] }),
+          transform: [{ scale: progress.interpolate({ inputRange: [0, 1], outputRange: [1, 1.75] }) }],
+        },
+      ]}
+    />
+  );
+}
 
 export function CallScreenChrome({
   partnerName,
@@ -121,6 +154,7 @@ export function CallScreenChrome({
   speakerLabel = '',
   speakerIcon,
   speakerAccent,
+  encrypted = false,
 }: Props) {
   const [moreOpen, setMoreOpen] = useState(false);
   const [resolvedUri, ready] = useResolvedImageUri(partnerAvatarUri ?? '');
@@ -189,18 +223,23 @@ export function CallScreenChrome({
             </View>
           </View>
 
-          <View
-            style={[
-              styles.roundChromeBtn,
-              { borderColor: WELCOME_NAV_ACTIVE_ACCENT.solid30 },
-            ]}
-            pointerEvents="none"
-          >
-            <MaterialIcons
-              name="verified-user"
-              size={20}
-              color={WELCOME_NAV_ACTIVE_ACCENT.softText}
-            />
+          <View style={styles.shieldSlot} pointerEvents="none">
+            {encrypted ? <ShieldPulse /> : null}
+            <View
+              style={[
+                styles.roundChromeBtn,
+                { borderColor: WELCOME_NAV_ACTIVE_ACCENT.solid30 },
+                encrypted ? styles.shieldBtnEncrypted : null,
+              ]}
+              accessible
+              accessibilityLabel={encrypted ? 'end-to-end encrypted' : undefined}
+            >
+              <MaterialIcons
+                name="verified-user"
+                size={20}
+                color={WELCOME_NAV_ACTIVE_ACCENT.softText}
+              />
+            </View>
           </View>
         </View>
       </View>
@@ -402,6 +441,24 @@ const styles = StyleSheet.create({
   },
   headerRowWithHold: {
     height: 74,
+  },
+  shieldSlot: {
+    width: 38,
+    height: 38,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 2,
+  },
+  shieldPulse: {
+    position: 'absolute',
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: WELCOME_NAV_ACTIVE_ACCENT.solid,
+  },
+  shieldBtnEncrypted: {
+    backgroundColor: Platform.OS === 'android' ? 'rgba(33, 58, 68, 0.96)' : WELCOME_NAV_ACTIVE_ACCENT.solid30,
+    borderColor: WELCOME_NAV_ACTIVE_ACCENT.solid,
   },
   roundChromeBtn: {
     width: 38,

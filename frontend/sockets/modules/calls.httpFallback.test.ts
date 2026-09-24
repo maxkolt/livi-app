@@ -35,6 +35,8 @@ jest.mock('./shared', () => ({
 }));
 
 jest.mock('./socketCore', () => ({ socket: mockSocket }));
+// Шифрование звонка здесь не проверяем: без объявления ключа звонок идёт как обычный.
+jest.mock('./e2e', () => ({ getCallE2eeDeclarationSoon: jest.fn(async () => undefined) }));
 
 import { startCall } from './calls';
 

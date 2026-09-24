@@ -15,6 +15,8 @@ import {
   createLocalTracks,
   ConnectionState,
 } from 'livekit-client';
+import { RNE2EEManager, RNKeyProvider } from '@livekit/react-native';
+import { deriveCallKey, getCallE2eeDeclaration } from '../../../sockets/modules/e2e';
 import {
   setExternalCallHoldActive,
   isExternalCallHoldActive,
@@ -125,10 +127,35 @@ import { NetworkReachabilityMonitor } from './videoCall/NetworkReachabilityMonit
 import { LocalVideoHealthWatchdog } from './videoCall/LocalVideoHealthWatchdog';
 import { RemoteTrackSubscriber } from './videoCall/RemoteTrackSubscriber';
 
+/**
+ * Ключи шифрования звонков в этом процессе. Возврат в идущий звонок может создать новый
+ * объект сессии без call:accepted — он обязан шифровать так же, как собеседник.
+ */
+const callE2eeKeyByCallId = new Map<string, Uint8Array>();
+const CALL_E2EE_KEY_CACHE_LIMIT = 8;
+
+function rememberCallE2eeKey(callId: string, key: Uint8Array): void {
+  callE2eeKeyByCallId.delete(callId);
+  callE2eeKeyByCallId.set(callId, key);
+  while (callE2eeKeyByCallId.size > CALL_E2EE_KEY_CACHE_LIMIT) {
+    const oldest = callE2eeKeyByCallId.keys().next().value;
+    if (oldest === undefined) break;
+    callE2eeKeyByCallId.delete(oldest);
+  }
+}
+
 export class VideoCallSession extends SimpleEventEmitter {
   private hasLoggedLiveKitApiKeyWarning = false;
   private config: WebRTCSessionConfig;
   private room: Room | null = null;
+  /**
+   * Сквозное шифрование звонка друзьям: ключ кадров этого звонка (null — обычный звонок).
+   * Решение принимает сервер одинаково для обеих сторон (backend/utils/callE2ee.ts),
+   * ключ выводится из ключей чата и callId (deriveCallFrameKey) и по сети не ходит.
+   */
+  private callE2ee: { callId: string; key: Uint8Array } | null = null;
+  private callE2eeKeyProvider: RNKeyProvider | null = null;
+  private callE2eeActive = false;
   private localVideoTrack: LocalVideoTrack | null = null;
   private localAudioTrack: LocalAudioTrack | null = null;
   private localStream: MediaStream | null = null;
@@ -499,7 +526,9 @@ export class VideoCallSession extends SimpleEventEmitter {
       const to = /^[a-f\d]{24}$/i.test(String(friendUserId || '').trim())
         ? String(friendUserId).trim().toLowerCase()
         : String(friendUserId || '').trim();
-      socket.emit('call:initiate', { to });
+      // Без ожидания сверки ключа: этот путь синхронный. Нет объявления — обычный звонок.
+      const e2ee = getCallE2eeDeclaration();
+      socket.emit('call:initiate', e2ee ? { to, e2ee } : { to });
       void localTracksPromise.catch((e) => {
         logger.warn('[VideoCallSession] ensureLocalTracks during callFriend failed', e);
       });
@@ -883,6 +912,7 @@ export class VideoCallSession extends SimpleEventEmitter {
           tokenLength: tokenData.token.length,
         });
         const connectRequestId = ++this.connectRequestId;
+        await this.restoreCallE2eeForRejoin(tokenData as any);
         const connected = await this.connectToLiveKit(resolvedLivekitUrl, tokenData.token, connectRequestId, roomId);
         if (!connected) {
           logger.debug('[VideoCallSession] connectAsInitiatorAfterAccepted aborted (stale request)');
@@ -2399,6 +2429,7 @@ export class VideoCallSession extends SimpleEventEmitter {
         const data = await response.json();
         if (data.ok && data.token) {
           const resolvedUrl = ((data.url as string | undefined) || LIVEKIT_URL || '').trim();
+          await this.restoreCallE2eeForRejoin({ callId: data.callId ?? params.callId, e2ee: data.e2ee });
           await this.connectToLiveKit(resolvedUrl, data.token, ++this.connectRequestId, params.roomId);
         }
       } catch (e) {
@@ -2427,6 +2458,9 @@ export class VideoCallSession extends SimpleEventEmitter {
   cleanup(): void {
     if (this.cleaned) return;
     this.cleaned = true;
+    this.disposeCallE2eeKeyProvider();
+    this.callE2ee = null;
+    this.setCallE2eeActive(false);
     this.clearSocketRecoveryTimer();
     this.clearPendingRemoteDisconnectTimer();
     this.clearFastStartVideoUpgradeTimer();
@@ -4317,6 +4351,8 @@ export class VideoCallSession extends SimpleEventEmitter {
   private async handleCallAccepted(data: CallAcceptedPayload): Promise<void> {
     const targetRoomName = data.livekitRoomName ?? data.roomId ?? null;
     const callId = data.callId ?? null;
+    // До любого подключения к комнате: шифрование нельзя включить после публикации треков.
+    await this.applyAcceptedCallE2ee(data);
     if (this.ended || this.endCallInProgress || this.isGlobalCallTeardownInProgress()) {
       logger.info('[VideoCallSession] ⏭️ call:accepted ignored during teardown', {
         callId,
@@ -4738,6 +4774,7 @@ export class VideoCallSession extends SimpleEventEmitter {
               connectRequestId,
             });
             
+            await this.restoreCallE2eeForRejoin(tokenData as any);
             connected = await this.connectToLiveKit(resolvedUrl, tokenData.token, connectRequestId, roomId);
             
             if (connected) {
@@ -7131,6 +7168,91 @@ export class VideoCallSession extends SimpleEventEmitter {
     }
   }
 
+  /** Решение сервера из call:accepted → ключ кадров этого звонка. Повтор того же call:accepted — no-op. */
+  private async applyAcceptedCallE2ee(data: CallAcceptedPayload): Promise<void> {
+    const callId = String(data.callId || '');
+    const peerPublicKey = data.e2ee?.peerPublicKey;
+    if (!callId) return;
+    if (!peerPublicKey) {
+      this.callE2ee = null;
+      callE2eeKeyByCallId.delete(callId);
+      return;
+    }
+    if (this.callE2ee?.callId === callId) return;
+    const key = await deriveCallKey(peerPublicKey, callId).catch(() => null);
+    if (!key) {
+      // Сервер включил шифрование по нашему же объявлению, а ключ не вывелся (ключ чата
+      // сбросили во время звонка). Собеседник шифрует — звонок будет без звука/видео.
+      logger.error('[VideoCallSession] call e2ee: failed to derive key', { callId });
+      this.callE2ee = null;
+      return;
+    }
+    this.callE2ee = { callId, key };
+    rememberCallE2eeKey(callId, key);
+    logger.info('[VideoCallSession] call e2ee enabled for call', { callId });
+  }
+
+  /**
+   * Возврат в идущий звонок по /api/livekit/token: сервер отдаёт то же решение, что в
+   * call:accepted. Ответ без него (другой инстанс) не отменяет уже известный ключ.
+   */
+  private async restoreCallE2eeForRejoin(tokenData: {
+    callId?: string;
+    e2ee?: { peerPublicKey?: string } | null;
+  } | null | undefined): Promise<void> {
+    const callId = String(tokenData?.callId || this.callId || '');
+    if (!callId) return;
+    const peerPublicKey = tokenData?.e2ee?.peerPublicKey;
+    if (peerPublicKey) {
+      await this.applyAcceptedCallE2ee({ callId, e2ee: { peerPublicKey } });
+      return;
+    }
+    if (this.callE2ee?.callId === callId) return;
+    const cached = callE2eeKeyByCallId.get(callId);
+    if (cached) this.callE2ee = { callId, key: cached };
+  }
+
+  private disposeCallE2eeKeyProvider(): void {
+    const provider = this.callE2eeKeyProvider;
+    this.callE2eeKeyProvider = null;
+    if (!provider) return;
+    try {
+      provider.dispose();
+    } catch {}
+  }
+
+  /** Менеджер шифрования для новой комнаты (свой на каждую: комнату пересоздают при переподключении). */
+  private createCallE2eeManager(): RNE2EEManager | null {
+    this.disposeCallE2eeKeyProvider();
+    if (!this.callE2ee) return null;
+    const provider = new RNKeyProvider({ sharedKey: true });
+    this.callE2eeKeyProvider = provider;
+    return new RNE2EEManager(provider);
+  }
+
+  /** До room.connect(): ключ в провайдер и шифрование для всех публикуемых треков. */
+  private async enableCallE2eeOnRoom(room: Room): Promise<void> {
+    const provider = this.callE2eeKeyProvider;
+    if (!this.callE2ee || !provider) {
+      this.setCallE2eeActive(false);
+      return;
+    }
+    await provider.setSharedKey(this.callE2ee.key);
+    await room.setE2EEEnabled(true);
+    this.setCallE2eeActive(true);
+  }
+
+  private setCallE2eeActive(active: boolean): void {
+    if (this.callE2eeActive === active) return;
+    this.callE2eeActive = active;
+    this.emit('callE2eeChanged', active);
+  }
+
+  /** Звонок идёт со сквозным шифрованием (для значка на экране звонка). */
+  isCallE2eeActive(): boolean {
+    return this.callE2eeActive;
+  }
+
   /** Новая Room с профилем публикации под это устройство; сразу становится текущей. */
   private createLiveKitRoomForConnect(): Room {
     const facingMode = this.camSide === 'front' ? 'user' : 'environment';
@@ -7142,13 +7264,15 @@ export class VideoCallSession extends SimpleEventEmitter {
       dynacast: LIVEKIT_DYNACAST_ENABLED,
     });
 
-    const room = new Room(
-      buildLiveKitRoomOptions({
+    const e2eeManager = this.createCallE2eeManager();
+    const room = new Room({
+      ...buildLiveKitRoomOptions({
         isHighCapture,
         adaptiveStream: LIVEKIT_ADAPTIVE_STREAM_ENABLED,
         dynacast: LIVEKIT_DYNACAST_ENABLED,
       }),
-    );
+      ...(e2eeManager ? { e2ee: { e2eeManager } } : {}),
+    });
     this.room = room;
     const partnerDisplayName = this.config.getPartnerDisplayName?.() ?? null;
     setActiveVideoCall(true, partnerDisplayName || undefined);
@@ -7315,6 +7439,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       const room = this.createLiveKitRoomForConnect();
 
       try {
+        await this.enableCallE2eeOnRoom(room);
         // КРИТИЧНО: Новая комната всегда в состоянии 'disconnected' до connect()
         // Проверяем состояние только после попытки подключения
         logger.info('[VideoCallSession] Attempting to connect to LiveKit', {

@@ -9,6 +9,8 @@ export type CallAcceptedPayload = {
   livekitRoomName?: string | null;
   livekitUrl?: string | null;
   acceptedAt?: number | string | null;
+  /** Сервер включил сквозное шифрование звонка: ключ собеседника для вывода ключа кадров. */
+  e2ee?: { peerPublicKey: string } | null;
 };
 
 export type CallIncomingPayload = {

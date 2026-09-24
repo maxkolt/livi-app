@@ -25,6 +25,9 @@ jest.mock('@react-native-async-storage/async-storage', () => ({
   removeItem: jest.fn(async (k: string) => {
     storage.delete(k);
   }),
+  multiRemove: jest.fn(async (keys: string[]) => {
+    for (const k of keys) storage.delete(k);
+  }),
 }));
 
 const mockShared: { currentUserId?: string } = {};
@@ -82,8 +85,10 @@ import {
   resetE2e,
   restoreE2e,
   setupE2e,
+  markE2eSetupPromptSeen,
   toWireEditPayload,
   toWireMessagePayload,
+  wasE2eSetupPromptSeen,
 } from './e2e';
 
 jest.setTimeout(60_000);
@@ -267,8 +272,19 @@ describe('local key lifetime', () => {
 
   it('forgets the key when the profile is deleted', async () => {
     await enable(ALICE, 'alice-password');
+    await markE2eSetupPromptSeen();
     await deleteLocalE2eKey(ALICE);
     expect([...secure.keys()].some((k) => k.includes(ALICE))).toBe(false);
+    expect([...storage.keys()].some((k) => k.includes(ALICE))).toBe(false);
+  });
+
+  it('offers encryption in the chat only once per account', async () => {
+    as(ALICE);
+    expect(await wasE2eSetupPromptSeen()).toBe(false);
+    await markE2eSetupPromptSeen();
+    expect(await wasE2eSetupPromptSeen()).toBe(true);
+    as(BOB);
+    expect(await wasE2eSetupPromptSeen()).toBe(false);
   });
 
   it('queues instead of sending plain text when this device had encryption on but the server is unreachable', async () => {

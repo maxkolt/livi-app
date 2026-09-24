@@ -252,7 +252,7 @@ export function createRedisStore(redisUrl: string) {
 
     async setDirectCall(
       callId: string,
-      state: { a: string; b: string; createdAtMs: number; expiresAtMs: number }
+      state: { a: string; b: string; createdAtMs: number; expiresAtMs: number; e2eeA?: string }
     ): Promise<void> {
       const key = directCallKey(callId);
       if (!String(callId || '').trim()) return;
@@ -263,13 +263,16 @@ export function createRedisStore(redisUrl: string) {
           b: String(state.b),
           createdAtMs: Number(state.createdAtMs) || now(),
           expiresAtMs: Number(state.expiresAtMs) || now(),
+          ...(state.e2eeA ? { e2eeA: String(state.e2eeA) } : {}),
         }),
         'PX',
         activeCallTtlMs(Number(state.expiresAtMs) || now())
       );
     },
 
-    async getDirectCall(callId: string): Promise<{ a: string; b: string; createdAtMs: number; expiresAtMs: number } | null> {
+    async getDirectCall(
+      callId: string
+    ): Promise<{ a: string; b: string; createdAtMs: number; expiresAtMs: number; e2eeA?: string } | null> {
       const id = String(callId || '').trim();
       if (!id) return null;
       const raw = await redis.get(directCallKey(id));
@@ -286,6 +289,7 @@ export function createRedisStore(redisUrl: string) {
           b: String(parsed?.b || ''),
           createdAtMs: Number(parsed?.createdAtMs) || 0,
           expiresAtMs,
+          ...(parsed?.e2eeA ? { e2eeA: String(parsed.e2eeA) } : {}),
         };
       } catch {
         await redis.del(directCallKey(id));

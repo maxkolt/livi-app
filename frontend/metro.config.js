@@ -23,6 +23,17 @@ config.resolver.resolveRequest = (context, moduleName, platform) => {
       filePath: require("path").resolve(__dirname, "polyfills/wellKnownSymbolsStub.js"),
     };
   }
+  // @noble/hashes ссылается на свой `crypto` через поле "browser" (./crypto → ./crypto.js),
+  // которого нет в "exports" — Metro предупреждает и всё равно берёт тот же файл. Отдаём его
+  // явно: это браузерная версия на globalThis.crypto (у нас — react-native-get-random-values).
+  if (moduleName === "@noble/hashes/crypto") {
+    const path = require("path");
+    const fromEsm = /[\\/]@noble[\\/]hashes[\\/]esm[\\/]/.test(context.originModulePath || "");
+    return {
+      type: "sourceFile",
+      filePath: path.resolve(__dirname, "node_modules/@noble/hashes", fromEsm ? "esm/crypto.js" : "crypto.js"),
+    };
+  }
   if (moduleName === "event-target-shim/index") {
     return metroResolve(
       { ...context, resolveRequest: metroResolve },
