@@ -192,6 +192,7 @@ import {
   sendChatViewing,
   ensureGloballyDeletedMessageIdsLoaded,
 } from "../sockets/socket";
+import { MAX_MESSAGE_TEXT_LENGTH } from "../sockets/modules/constants";
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useLang } from "../store/lang";
 import { t, type Lang } from "../utils/i18n";
@@ -2663,6 +2664,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                     }}
                     placeholder={t('chatMessagePlaceholder', lang)}
                     placeholderTextColor={voiceIsRecording ? 'transparent' : LIVI.titan}
+                    maxLength={MAX_MESSAGE_TEXT_LENGTH}
                     value={messageText}
                     onChangeText={(txt) => {
                       messageTextRef.current = txt;
@@ -3053,6 +3055,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                     }}
                     placeholder={t('chatMessagePlaceholder', lang)}
                     placeholderTextColor={voiceIsRecording ? 'transparent' : LIVI.titan}
+                    maxLength={MAX_MESSAGE_TEXT_LENGTH}
                     value={messageText}
                     onChangeText={(txt) => {
                       messageTextRef.current = txt;

@@ -77,6 +77,43 @@ function isLikelyOfflineError(err: unknown): boolean {
   );
 }
 
+/**
+ * Сервер отказал по rate-limit (socket `rate_limited` или HTTP 429 — его sendMessage
+ * отдаёт строкой `http_429:<body>`). Возвращает, через сколько секунд повторить, иначе null.
+ */
+export function readRateLimitRetryAfterSec(resp: unknown): number | null {
+  const r = resp as any;
+  const error = String(r?.error || '');
+  let retryAfter: unknown;
+  if (error === 'rate_limited') {
+    retryAfter = r?.retryAfterSec;
+  } else if (error.startsWith('http_429')) {
+    try {
+      retryAfter = JSON.parse(error.slice(error.indexOf(':') + 1))?.retryAfterSec;
+    } catch {}
+  } else {
+    return null;
+  }
+  const sec = Number(retryAfter);
+  return Number.isFinite(sec) && sec > 0 ? Math.min(sec, 600) : 5;
+}
+
+let messageOutboxRetryTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Повторить drain позже (после rate-limit). Держим один таймер — берём более ранний срок. */
+export function scheduleMessageOutboxDrain(delaySec: number): void {
+  const delayMs = Math.max(1, delaySec) * 1000;
+  const dueAt = Date.now() + delayMs;
+  if (messageOutboxRetryTimer && (messageOutboxRetryTimer as any).__dueAt <= dueAt) return;
+  if (messageOutboxRetryTimer) clearTimeout(messageOutboxRetryTimer);
+  const timer = setTimeout(() => {
+    if (messageOutboxRetryTimer === timer) messageOutboxRetryTimer = null;
+    void drainMessageOutbox().catch(() => {});
+  }, delayMs);
+  (timer as any).__dueAt = dueAt;
+  messageOutboxRetryTimer = timer;
+}
+
 async function loadMessageOutbox(): Promise<MessageOutboxItem[]> {
   try {
     const raw = await AsyncStorage.getItem(MESSAGE_OUTBOX_KEY);
@@ -335,10 +372,19 @@ export async function drainMessageOutbox(): Promise<void> {
         continue;
       }
       try {
-        const resp = await emitAck<{ ok: boolean; messageId?: string; delivered?: boolean }>(
+        const resp = await emitAck<{ ok: boolean; messageId?: string; delivered?: boolean; error?: string; retryAfterSec?: number }>(
           'message:send',
           row.payload,
         );
+        const retryAfterSec = readRateLimitRetryAfterSec(resp);
+        if (retryAfterSec != null) {
+          // Остаток пачки тоже упрётся в лимит — останавливаемся и повторяем по таймеру,
+          // а не ждём следующего connect.
+          keep.push(row);
+          keep.push(...items.slice(items.indexOf(item) + 1));
+          scheduleMessageOutboxDrain(retryAfterSec);
+          break;
+        }
         if (resp?.ok === true && resp.messageId) {
           const serverMessageId = String(resp.messageId);
           const oldIds = [row.id, row.optimisticUiId].map((x) => String(x || '').trim()).filter(Boolean);

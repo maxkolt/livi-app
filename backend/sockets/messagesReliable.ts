@@ -6,6 +6,7 @@ import FriendshipMessages, { IFriendshipMessages } from '../models/FriendshipMes
 import FriendshipMessageItem from '../models/FriendshipMessageItem';
 import OfflineMessage from '../models/OfflineMessage';
 import type { ClaimedOfflineMessage, OfflineQueuePort } from './offlineMessageDelivery';
+import { checkMessageSendRateLimit, isMessageTextTooLong, truncateReplyQuote } from '../utils/messageLimits';
 import {
   asValidDate,
   compareMessagesNewestFirst,
@@ -1062,6 +1063,9 @@ function registerMessageHandlers(io: Server, sock: Socket) {
       if (payload.type !== 'text' && payload.type !== 'image' && payload.type !== 'audio' && payload.type !== 'sticker') {
         return ack?.({ ok: false, error: 'invalid_type' });
       }
+      if (isMessageTextTooLong(payload.text)) {
+        return ack?.({ ok: false, error: 'text_too_long' });
+      }
 
       const imageUris =
         payload.type === 'image' ? normalizeIncomingImageUris(payload) : [];
@@ -1096,6 +1100,12 @@ function registerMessageHandlers(io: Server, sock: Socket) {
         }
       }
 
+      // После дедупа: ретрай уже сохранённого сообщения лимит не тратит.
+      const rate = await checkMessageSendRateLimit(me);
+      if (!rate.ok) {
+        return ack?.({ ok: false, error: 'rate_limited', retryAfterSec: rate.retryAfterSec });
+      }
+
       // Создаем ID сообщения. New clients provide an optimistic id, old clients keep generated ids.
       const messageId = clientMessageId || `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
@@ -1123,7 +1133,7 @@ function registerMessageHandlers(io: Server, sock: Socket) {
       if (payload.replyTo && typeof payload.replyTo === 'object' && payload.replyTo.id) {
         message.replyTo = {
           id: String(payload.replyTo.id),
-          text: payload.replyTo.text != null ? String(payload.replyTo.text) : undefined,
+          text: truncateReplyQuote(payload.replyTo.text != null ? String(payload.replyTo.text) : undefined),
           from: String(payload.replyTo.from || ''),
         };
       }
@@ -1708,6 +1718,7 @@ function registerMessageHandlers(io: Server, sock: Socket) {
       const text = typeof payload?.text === 'string' ? String(payload.text).trim() : '';
       if (!isOid(me)) return ack?.({ ok: false, error: 'unauthorized' });
       if (!messageId || text === '') return ack?.({ ok: false, error: 'bad_request' });
+      if (isMessageTextTooLong(text)) return ack?.({ ok: false, error: 'text_too_long' });
 
       let u1 = '';
       let u2 = '';

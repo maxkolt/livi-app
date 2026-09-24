@@ -3,6 +3,7 @@ import mongoose from 'mongoose';
 import FriendshipMessages from '../models/FriendshipMessages';
 import FriendshipMessageItem from '../models/FriendshipMessageItem';
 import OfflineMessage from '../models/OfflineMessage';
+import { checkMessageSendRateLimit, isMessageTextTooLong, truncateReplyQuote } from '../utils/messageLimits';
 import { areFriendsCached, getOrCreateFriendship, invalidateFriendshipCache } from '../utils/friendshipUtils';
 import {
   MAX_MESSAGE_BATCH_SIZE,
@@ -171,11 +172,12 @@ router.post('/messages/send', async (req, res) => {
     const stickerLabel = typeof req.body?.stickerLabel === 'string' ? String(req.body.stickerLabel) : undefined;
     const clientMessageId = normalizeClientMessageId(req.body);
     const replyTo = req.body?.replyTo && typeof req.body.replyTo === 'object' && req.body.replyTo.id
-      ? { id: String(req.body.replyTo.id), text: req.body.replyTo.text != null ? String(req.body.replyTo.text) : undefined, from: String(req.body.replyTo.from || '') }
+      ? { id: String(req.body.replyTo.id), text: truncateReplyQuote(req.body.replyTo.text != null ? String(req.body.replyTo.text) : undefined), from: String(req.body.replyTo.from || '') }
       : undefined;
 
     if (!isOid(to)) return res.status(400).json({ ok: false, error: 'invalid_to' });
     if (type !== 'text' && type !== 'image' && type !== 'audio' && type !== 'sticker') return res.status(400).json({ ok: false, error: 'invalid_type' });
+    if (isMessageTextTooLong(text)) return res.status(400).json({ ok: false, error: 'text_too_long' });
 
     const isFriend = await areFriendsCached(me, to);
     if (!isFriend) return res.status(403).json({ ok: false, error: 'not_friends' });
@@ -202,6 +204,13 @@ router.post('/messages/send', async (req, res) => {
           delivered,
         });
       }
+    }
+
+    // После дедупа: ретрай уже сохранённого сообщения лимит не тратит.
+    const rate = await checkMessageSendRateLimit(me);
+    if (!rate.ok) {
+      res.setHeader('Retry-After', String(rate.retryAfterSec));
+      return res.status(429).json({ ok: false, error: 'rate_limited', retryAfterSec: rate.retryAfterSec });
     }
 
     const messageId = clientMessageId || `msg_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
@@ -422,6 +431,7 @@ router.post('/messages/edit', async (req, res) => {
     const messageId = String(req.body?.messageId || '').trim();
     const text = typeof req.body?.text === 'string' ? String(req.body.text).trim() : '';
     if (!messageId || text === '') return res.status(400).json({ ok: false, error: 'bad_request' });
+    if (isMessageTextTooLong(text)) return res.status(400).json({ ok: false, error: 'text_too_long' });
 
     let u1 = '';
     let u2 = '';

@@ -60,6 +60,9 @@ if (__DEV__) {
 /* ========= helpers ========= */
 export const isOid = (s?: string) => !!s && /^[a-f\d]{24}$/i.test(s);
 
+/** Максимум символов в сообщении — тот же лимит, что в backend/utils/messageLimits.ts. */
+export const MAX_MESSAGE_TEXT_LENGTH = 10_000;
+
 export const SOCKET_RECONNECT_DELAY_MS = 1000;
 export const SOCKET_RECONNECT_DELAY_MAX_MS = 10000;
 /** После server:restarting (деплой) — быстрее цепляемся к поднявшемуся инстансу. */

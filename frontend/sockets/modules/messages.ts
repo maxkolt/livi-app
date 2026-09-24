@@ -7,6 +7,8 @@ import {
   enqueueEditOutbox,
   enqueueMessageOutbox,
   mergePendingMessageOutboxEdit,
+  readRateLimitRetryAfterSec,
+  scheduleMessageOutboxDrain,
 } from "./outbox";
 import { shared } from "./shared";
 import { socket } from "./socketCore";
@@ -237,11 +239,30 @@ export function sendMessage(payload: {
 
   return (async () => {
     const outboxId = `outbox_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+    // Rate-limit — не ошибка сообщения: кладём в outbox и отправим, когда лимит отпустит.
+    const queueAfterRateLimit = async (retryAfterSec: number) => {
+      const enq = await enqueueMessageOutbox({
+        id: outboxId,
+        optimisticUiId,
+        createdAt: Date.now(),
+        payload: socketPayload,
+      });
+      if (!enq) {
+        return { ok: true, localCancelled: true as const, delivered: false };
+      }
+      scheduleMessageOutboxDrain(retryAfterSec);
+      return { ok: true, queued: true, messageId: outboxId, delivered: false };
+    };
     try {
       const r = await viaSocket();
       if ((r as any)?.ok === true) return r;
+      // HTTP-фолбэк упрётся в тот же серверный лимит — не тратим запрос.
+      const socketRetryAfter = readRateLimitRetryAfterSec(r);
+      if (socketRetryAfter != null) return await queueAfterRateLimit(socketRetryAfter);
       const http = await viaHttp();
       if ((http as any)?.ok === true) return http;
+      const httpRetryAfter = readRateLimitRetryAfterSec(http);
+      if (httpRetryAfter != null) return await queueAfterRateLimit(httpRetryAfter);
       if (isLikelyOfflineError((http as any)?.error)) {
         const enq = await enqueueMessageOutbox({
           id: outboxId,
@@ -259,6 +280,8 @@ export function sendMessage(payload: {
       try {
         const http = await viaHttp();
         if ((http as any)?.ok === true) return http;
+        const httpRetryAfter = readRateLimitRetryAfterSec(http);
+        if (httpRetryAfter != null) return await queueAfterRateLimit(httpRetryAfter);
         if (isLikelyOfflineError((http as any)?.error)) {
           const enq = await enqueueMessageOutbox({
             id: outboxId,

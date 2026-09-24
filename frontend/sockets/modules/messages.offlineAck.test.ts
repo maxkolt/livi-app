@@ -41,6 +41,8 @@ jest.mock('./outbox', () => ({
   enqueueEditOutbox: jest.fn(),
   enqueueMessageOutbox: jest.fn(),
   mergePendingMessageOutboxEdit: jest.fn(),
+  readRateLimitRetryAfterSec: jest.fn(() => null),
+  scheduleMessageOutboxDrain: jest.fn(),
 }));
 jest.mock('./constants', () => ({ API_BASE: 'https://api.test' }));
 jest.mock('../../utils/installId', () => ({ getInstallId: jest.fn(async () => 'inst') }));
