@@ -120,7 +120,7 @@ export const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  // Fail-closed модерации: полностью перекрывает видео собеседника (не показываем непроверённое).
+  // Модерация: полностью перекрывает видео при недоступности проверки или подтверждённой блокировке.
   moderationUnavailableOverlay: {
     ...StyleSheet.absoluteFillObject,
     zIndex: 10000,

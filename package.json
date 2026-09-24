@@ -2,6 +2,10 @@
   "name": "livi-app-root",
   "private": true,
   "scripts": {
+    "lint": "eslint frontend backend",
+    "typecheck": "npm --prefix frontend run typecheck && npm --prefix backend run typecheck",
+    "test": "npm --prefix frontend run test:ci && npm --prefix backend run test:ci",
+    "check": "npm run lint && npm run typecheck && npm test",
     "dev": "sh -c 'npm --prefix backend run dev & BACK_PID=$!; npm --prefix frontend run start -- --dev-client; kill $BACK_PID'",
     "dev:lan": "sh -c 'npm --prefix backend run dev & BACK_PID=$!; npm --prefix frontend run start:lan; kill $BACK_PID'",
     "dev:tunnel": "sh -c 'npm --prefix backend run dev & BACK_PID=$!; npm --prefix frontend run start:tunnel; kill $BACK_PID'",
@@ -9,7 +13,12 @@
     "frontend:dev": "npm --prefix frontend run start -- --dev-client"
   },
   "devDependencies": {
-    "concurrently": "^9.2.0"
+    "@eslint/js": "^9.39.5",
+    "concurrently": "^9.2.0",
+    "eslint": "^9.39.5",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "globals": "^16.5.0",
+    "typescript-eslint": "^8.70.1"
   },
   "dependencies": {
     "apn": "^2.2.0"

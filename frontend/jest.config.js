@@ -13,5 +13,6 @@ module.exports = {
     '^@react-navigation/native$': '<rootDir>/__mocks__/@react-navigation/native.ts',
   },
   clearMocks: true,
+  watchman: false,
   forceExit: true,
 };

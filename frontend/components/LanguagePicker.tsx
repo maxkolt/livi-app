@@ -65,10 +65,10 @@ const LanguagePicker: React.FC<Props> = ({
   onSelect,
   current = defaultLang,
 }) => {
-  if (!visible) return null;
-
   const insets = useSafeAreaInsets();
   const { height: winH } = useSafeAreaFrame();
+
+  if (!visible) return null;
 
   const isRtlLang = (code: Lang) => code === 'ar';
 

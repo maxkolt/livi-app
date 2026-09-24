@@ -32,6 +32,35 @@ type ModerationCategory = {
   reasons: string[];
 };
 
+type ModerationProviderFailure = {
+  publicError: string;
+  retryAfterSeconds: number;
+};
+
+/**
+ * Google Vision uses gRPC status codes. Provider/configuration failures are not
+ * application bugs and should be reported as 503, so clients can back off while
+ * keeping the video fail-closed.
+ */
+export function classifyModerationProviderFailure(error: any): ModerationProviderFailure | null {
+  const code = Number(error?.code);
+  const message = String(error?.message || error || '').toLowerCase();
+
+  if (code === 7 && message.includes('billing')) {
+    return { publicError: 'moderation_provider_billing_required', retryAfterSeconds: 300 };
+  }
+  if (code === 7) {
+    return { publicError: 'moderation_provider_permission_denied', retryAfterSeconds: 300 };
+  }
+  if (code === 8) {
+    return { publicError: 'moderation_provider_quota_exceeded', retryAfterSeconds: 60 };
+  }
+  if (code === 4 || code === 14) {
+    return { publicError: 'moderation_provider_unavailable', retryAfterSeconds: 30 };
+  }
+  return null;
+}
+
 if (moderationEnabled) {
   logger.info('[Moderation] API enabled', {
     minLabelConfidence,
@@ -161,7 +190,16 @@ router.post('/moderate', async (req, res) => {
       },
     });
   } catch (e: any) {
-    logger.error('[Moderation] Request failed', { error: e?.message || String(e) });
+    const providerFailure = classifyModerationProviderFailure(e);
+    logger.error('[Moderation] Request failed', {
+      error: e?.message || String(e),
+      providerCode: e?.code ?? null,
+      providerFailure: providerFailure?.publicError ?? null,
+    });
+    if (providerFailure) {
+      res.setHeader('Retry-After', String(providerFailure.retryAfterSeconds));
+      return res.status(503).json({ ok: false, error: providerFailure.publicError });
+    }
     return res.status(500).json({ ok: false, error: 'moderation_failed' });
   }
 });

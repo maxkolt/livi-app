@@ -257,7 +257,39 @@ const RandomChat: React.FC<Props> = ({ route }) => {
 
   // Fail-closed: сервис модерации недоступен → прячем непроверённое видео собеседника.
   const [moderationUnavailable, setModerationUnavailable] = useState(false);
+  // Подтверждённая сервером блокировка — отдельное состояние, чтобы не путать её
+  // с технической недоступностью проверки и явно объяснить замену видео заглушкой.
+  const [moderationPartnerBlocked, setModerationPartnerBlocked] = useState(false);
+  const moderationPartnerBlockedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Кого именно заблокировали: собеседник может смениться, пока показываем причину. */
+  const moderationBlockedPartnerIdRef = useRef<string | null>(null);
   const isModerationBanned = banByModerationUntil > Date.now();
+
+  const clearModerationPartnerBlocked = useCallback(() => {
+    if (moderationPartnerBlockedTimerRef.current) {
+      clearTimeout(moderationPartnerBlockedTimerRef.current);
+      moderationPartnerBlockedTimerRef.current = null;
+    }
+    moderationBlockedPartnerIdRef.current = null;
+    setModerationPartnerBlocked(false);
+  }, []);
+
+  useEffect(() => () => {
+    if (moderationPartnerBlockedTimerRef.current) {
+      clearTimeout(moderationPartnerBlockedTimerRef.current);
+      moderationPartnerBlockedTimerRef.current = null;
+    }
+  }, []);
+
+  // Собеседник сменился, пока висела заглушка — она объясняла чужую блокировку
+  // и не должна перекрывать видео нового человека.
+  useEffect(() => {
+    const blockedId = moderationBlockedPartnerIdRef.current;
+    if (!blockedId) return;
+    if (partnerUserId && partnerUserId !== blockedId) {
+      clearModerationPartnerBlocked();
+    }
+  }, [partnerUserId, clearModerationPartnerBlocked]);
 
   const showWarning = useCallback((message: string) => {
     showToast(message, 4000, true);
@@ -754,6 +786,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     
     if (startedRef.current) {
       // STOP
+      clearModerationPartnerBlocked();
       isStoppingRef.current = true;
       startedRef.current = false;
       setStarted(false);
@@ -1239,6 +1272,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   }, []);
   
   const forceStopRandomChat = useCallback(() => {
+    clearModerationPartnerBlocked();
     try {
       const session = sessionRef.current;
       if (session) {
@@ -1308,8 +1342,24 @@ const RandomChat: React.FC<Props> = ({ route }) => {
               return;
             }
             if (res?.ok) {
-              showToast(t('moderationPartnerBanned', lang), 4000, true);
-              sessionRef.current?.next();
+              // Сервер подтвердил именно модерационную блокировку. Сначала закрываем
+              // последний кадр и показываем причину в видеоблоке, затем продолжаем поиск.
+              setModerationUnavailable(false);
+              setModerationPartnerBlocked(true);
+              moderationBlockedPartnerIdRef.current = reportedUserId;
+              if (moderationPartnerBlockedTimerRef.current) {
+                clearTimeout(moderationPartnerBlockedTimerRef.current);
+              }
+              moderationPartnerBlockedTimerRef.current = setTimeout(() => {
+                moderationPartnerBlockedTimerRef.current = null;
+                moderationBlockedPartnerIdRef.current = null;
+                setModerationPartnerBlocked(false);
+                // Собеседник мог отключиться сам за эти 2.5 с — тогда сессия уже нашла
+                // следующего, и next() выбросил бы только что найденного человека.
+                const current = partnerUserIdRef.current;
+                if (current && current !== reportedUserId) return;
+                sessionRef.current?.next();
+              }, 2500);
             } else {
               logger.warn('[RandomChat] moderation:reportPartner rejected', { res });
               sessionRef.current?.next();
@@ -1634,14 +1684,21 @@ const RandomChat: React.FC<Props> = ({ route }) => {
                   </View>
                 )}
 
-                {moderationUnavailable && started && !isInactiveState && (
+                {moderationPartnerBlocked && started && !isInactiveState ? (
+                  <View style={styles.moderationUnavailableOverlay} pointerEvents="auto">
+                    <MaterialIcons name="gpp-bad" size={56} color={WELCOME_HEADER_TITLE} />
+                    <Text style={styles.moderationUnavailableText}>
+                      {t('moderationPartnerBanned', lang)}
+                    </Text>
+                  </View>
+                ) : moderationUnavailable && started && !isInactiveState ? (
                   <View style={styles.moderationUnavailableOverlay} pointerEvents="auto">
                     <MaterialIcons name="gpp-maybe" size={56} color={WELCOME_HEADER_TITLE} />
                     <Text style={styles.moderationUnavailableText}>
                       {t('moderationUnavailable', lang)}
                     </Text>
                   </View>
-                )}
+                ) : null}
               </View>
             );
           })()}

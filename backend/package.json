@@ -8,7 +8,8 @@
     "typecheck": "tsc --noEmit",
     "start": "NODE_ENV=production node dist/index.js",
     "dev": "NODE_ENV=development ts-node-dev --respawn --transpile-only index.ts",
-    "test": "NODE_ENV=test jest"
+    "test": "NODE_ENV=test jest",
+    "test:ci": "NODE_ENV=test jest --ci --runInBand"
   },
   "dependencies": {
     "@google-cloud/vision": "^4.3.3",

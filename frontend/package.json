@@ -12,6 +12,8 @@
     "start:tunnel": "NODE_ENV=development expo start --dev-client --tunnel --port 8081",
     "start:tunnel:clean": "NODE_ENV=development expo start --dev-client --tunnel --port 8081 -c",
     "start": "NODE_ENV=development expo start",
+    "lint": "npm --prefix .. run lint -- frontend",
+    "typecheck": "tsc --noEmit",
     "android": "NODE_ENV=development LIVI_APP_VARIANT=dev expo run:android",
     "android:install": "adb install -r android/app/build/outputs/apk/debug/app-debug.apk",
     "android:build-install": "cd android && NODE_ENV=development ./gradlew assembleDebug -q && cd .. && adb install -r android/app/build/outputs/apk/debug/app-debug.apk",
@@ -25,7 +27,8 @@
     "android:dev:run": "node ./scripts/adb-reverse-usb.js 8081 && NODE_ENV=development EXPO_PACKAGER_HOSTNAME=127.0.0.1 REACT_NATIVE_PACKAGER_HOSTNAME=127.0.0.1 LIVI_APP_VARIANT=dev expo start --dev-client --host localhost --port 8081",
     "ios": "NODE_ENV=development expo run:ios",
     "web": "NODE_ENV=development expo start --web",
-    "test": "NODE_ENV=test jest"
+    "test": "NODE_ENV=test jest",
+    "test:ci": "NODE_ENV=test jest --ci --runInBand --watchman=false"
   },
   "dependencies": {
     "@babel/runtime": "^7.28.3",
