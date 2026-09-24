@@ -497,6 +497,16 @@ export async function clearAllUserData(): Promise<{ success: boolean; error?: an
     clearAllMessageCache();
 
     try {
+      const uid = String(shared.currentUserId || "").trim();
+      if (uid) {
+        const { deleteLocalE2eKey } = await import("./e2e");
+        await deleteLocalE2eKey(uid);
+      }
+    } catch (e) {
+      console.warn("Failed to clear e2e key:", e);
+    }
+
+    try {
       const { clearProfileStorage } = await import("../../utils/profileStorage");
       await clearProfileStorage();
     } catch (e) {

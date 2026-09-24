@@ -7,6 +7,8 @@ import FriendshipMessageItem from '../models/FriendshipMessageItem';
 import OfflineMessage from '../models/OfflineMessage';
 import type { ClaimedOfflineMessage, OfflineQueuePort } from './offlineMessageDelivery';
 import { checkMessageSendRateLimit, isMessageTextTooLong, truncateReplyQuote } from '../utils/messageLimits';
+import { resolveIncomingEnvelope } from '../utils/e2eEnvelope';
+import { loadE2ePublicKeys, registerE2eKeyHandlers } from './e2eKeys';
 import {
   asValidDate,
   compareMessagesNewestFirst,
@@ -121,6 +123,7 @@ function toFriendshipMessageSnapshot(message: any): any {
     timestamp: message.timestamp instanceof Date ? message.timestamp : new Date(message.timestamp || Date.now()),
     read: !!message.read,
   };
+  if (message.enc) snapshot.enc = message.enc;
   if (Array.isArray(message.uris) && message.uris.length > 0) {
     snapshot.uris = message.uris.map((u: any) => String(u || '').trim()).filter(Boolean).slice(0, 10);
     if (!snapshot.uri && snapshot.uris[0]) snapshot.uri = snapshot.uris[0];
@@ -342,6 +345,10 @@ export async function findLegacyMessageForUser(
   };
 }
 
+function formatEnvelope(enc: any) {
+  return { v: enc.v, n: enc.n, c: enc.c, spk: enc.spk, rpk: enc.rpk };
+}
+
 function formatMessageForClient(msg: any) {
   const uris = Array.isArray(msg.uris)
     ? msg.uris.map((u: any) => String(u || '').trim()).filter(Boolean).slice(0, 10)
@@ -365,6 +372,7 @@ function formatMessageForClient(msg: any) {
     read: !!msg.read,
     reactions: Array.isArray(msg.reactions) ? msg.reactions.map((r: any) => ({ emoji: r.emoji, userId: String(r.userId) })) : [],
     ...(msg.replyTo && msg.replyTo.id ? { replyTo: { id: String(msg.replyTo.id), text: msg.replyTo.text, from: String(msg.replyTo.from || '') } } : {}),
+    ...(msg.enc ? { enc: formatEnvelope(msg.enc) } : {}),
   };
 }
 
@@ -542,6 +550,7 @@ async function addMessageToFriendship(friendship: IFriendshipMessages, message: 
       timestamp: message.timestamp,
       read: message.read
     };
+    if (message.enc) messageItem.enc = message.enc;
     if (Array.isArray(message.uris) && message.uris.length > 0) {
       messageItem.uris = message.uris.map((u: any) => String(u || '').trim()).filter(Boolean).slice(0, 10);
       if (!messageItem.uri) messageItem.uri = messageItem.uris[0];
@@ -576,6 +585,7 @@ async function addMessageToFriendship(friendship: IFriendshipMessages, message: 
       createPayload.uris = messageItem.uris;
     }
     if (messageItem.replyTo) createPayload.replyTo = messageItem.replyTo;
+    if (message.enc) createPayload.enc = message.enc;
     await FriendshipMessageItem.create(createPayload);
     await (friendship as any).addMessage(messageItem);
     return { ok: true };
@@ -964,6 +974,68 @@ export async function clearChatMessagesForUsers(me: string, withId: string, forA
   return { ok: true, payload: { by: me, with: withId, forAll } };
 }
 
+/**
+ * Редактирование своего текстового сообщения (socket и HTTP). Зашифрованная правка
+ * приходит новым конвертом; правка открытым текстом стирает старый конверт.
+ */
+export async function applyMessageEdit(
+  me: string,
+  payload: { messageId?: unknown; text?: unknown; enc?: unknown },
+): Promise<
+  | { ok: true; participants: string[]; event: { messageId: string; text?: string; from?: string; to?: string; enc?: any } }
+  | { ok: false; error: string }
+> {
+  const messageId = String(payload?.messageId || '').trim();
+  const hasEnc = payload?.enc != null;
+  const text = !hasEnc && typeof payload?.text === 'string' ? String(payload.text).trim() : '';
+  if (!messageId || (!hasEnc && text === '')) return { ok: false, error: 'bad_request' };
+  if (isMessageTextTooLong(text)) return { ok: false, error: 'text_too_long' };
+
+  const meOid = new mongoose.Types.ObjectId(me);
+  let doc = await FriendshipMessageItem.findOne({ id: messageId, from: meOid }).select('from to type friendshipId').lean();
+  if (!doc) {
+    const legacyFriendshipId = await findLegacyMessageFriendshipId(messageId);
+    if (legacyFriendshipId) {
+      await backfillFriendshipMessageItems(legacyFriendshipId);
+      doc = await FriendshipMessageItem.findOne({ id: messageId, from: meOid }).select('from to type friendshipId').lean();
+    }
+  }
+  if (!doc || (doc as any).type !== 'text' || String((doc as any).from) !== me) {
+    return { ok: false, error: 'not_found_or_forbidden' };
+  }
+
+  const envelope = await resolveIncomingEnvelope({
+    rawEnc: payload?.enc,
+    type: 'text',
+    clientMessageId: messageId,
+    from: me,
+    to: String((doc as any).to),
+    loadPublicKeys: loadE2ePublicKeys,
+  });
+  if (!envelope.ok) return { ok: false, error: envelope.error };
+  const enc = envelope.enc;
+
+  const friendshipId = (doc as any).friendshipId;
+  await FriendshipMessageItem.updateOne(
+    { friendshipId, id: messageId },
+    enc ? { $set: { enc }, $unset: { text: 1 } } : { $set: { text }, $unset: { enc: 1 } }
+  ).exec();
+  await FriendshipMessages.updateOne(
+    { _id: friendshipId, 'lastMessage.id': messageId },
+    enc
+      ? { $set: { 'lastMessage.enc': enc, lastActivity: new Date() }, $unset: { 'lastMessage.text': 1 } }
+      : { $set: { 'lastMessage.text': text, lastActivity: new Date() }, $unset: { 'lastMessage.enc': 1 } }
+  ).exec();
+
+  const fr = await FriendshipMessages.findById(friendshipId).select('user1 user2').lean();
+  const participants = fr ? [String((fr as any).user1), String((fr as any).user2)].filter(Boolean) : [];
+  // from/to нужны получателю, чтобы сверить их с телом конверта.
+  const event = enc
+    ? { messageId, from: me, to: String((doc as any).to), enc: formatEnvelope(enc) }
+    : { messageId, text };
+  return { ok: true, participants, event };
+}
+
 export default function registerMessageSockets(io: Server) {
   io.on('connection', (sock) => {
     registerMessageHandlers(io, sock);
@@ -972,6 +1044,7 @@ export default function registerMessageSockets(io: Server) {
 
 function registerMessageHandlers(io: Server, sock: Socket) {
   const meId = () => String((sock as any).data?.userId || '');
+  registerE2eKeyHandlers(io, sock, meId);
 
   // per-socket handlers
   // console.log(`[sockets] handlers for ${sock.id} user=${meId()}`);
@@ -1050,6 +1123,7 @@ function registerMessageHandlers(io: Server, sock: Socket) {
     clientMessageId?: string;
     clientId?: string;
     replyTo?: { id: string; text?: string; from: string };
+    enc?: unknown;
   }, ack?: Function) => {
     try {
       const me = meId();
@@ -1106,6 +1180,19 @@ function registerMessageHandlers(io: Server, sock: Socket) {
         return ack?.({ ok: false, error: 'rate_limited', retryAfterSec: rate.retryAfterSec });
       }
 
+      const envelope = await resolveIncomingEnvelope({
+        rawEnc: payload.enc,
+        type: payload.type,
+        clientMessageId,
+        from: me,
+        to: payload.to,
+        loadPublicKeys: loadE2ePublicKeys,
+      });
+      if (!envelope.ok) return ack?.({ ok: false, error: envelope.error });
+      const enc = envelope.enc;
+      // Зашифрованное сообщение: открытый текст и цитата живут только внутри конверта.
+      const plainText = enc ? undefined : payload.text;
+
       // Создаем ID сообщения. New clients provide an optimistic id, old clients keep generated ids.
       const messageId = clientMessageId || `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
@@ -1115,7 +1202,7 @@ function registerMessageHandlers(io: Server, sock: Socket) {
         from: me,
         to: payload.to,
         type: payload.type,
-        text: payload.text,
+        text: plainText,
         uri: primaryUri,
         name: payload.name,
         size: payload.size,
@@ -1127,13 +1214,14 @@ function registerMessageHandlers(io: Server, sock: Socket) {
         timestamp: new Date(),
         read: false
       };
+      if (enc) message.enc = enc;
       if (payload.type === 'image' && imageUris.length > 1) {
         message.uris = imageUris;
       }
       if (payload.replyTo && typeof payload.replyTo === 'object' && payload.replyTo.id) {
         message.replyTo = {
           id: String(payload.replyTo.id),
-          text: truncateReplyQuote(payload.replyTo.text != null ? String(payload.replyTo.text) : undefined),
+          text: enc ? undefined : truncateReplyQuote(payload.replyTo.text != null ? String(payload.replyTo.text) : undefined),
           from: String(payload.replyTo.from || ''),
         };
       }
@@ -1143,7 +1231,7 @@ function registerMessageHandlers(io: Server, sock: Socket) {
         from: me,
         to: payload.to,
         type: payload.type,
-        text: payload.text,
+        text: plainText,
         uri: primaryUri,
         name: payload.name,
         size: payload.size,
@@ -1155,6 +1243,7 @@ function registerMessageHandlers(io: Server, sock: Socket) {
         timestamp: message.timestamp.toISOString(),
         read: false
       };
+      if (enc) emitPayload.enc = enc;
       if (payload.type === 'image' && imageUris.length > 1) {
         emitPayload.uris = imageUris;
       }
@@ -1217,7 +1306,7 @@ function registerMessageHandlers(io: Server, sock: Socket) {
           const albumCount = payload.type === 'image' ? imageUris.length : 0;
           const messagePreview =
             msgType === 'text'
-              ? (typeof payload.text === 'string' ? String(payload.text).trim().slice(0, 80) : '')
+              ? (typeof plainText === 'string' ? String(plainText).trim().slice(0, 80) : '')
               : msgType === 'image'
                 ? (albumCount > 1 ? `[Фото ×${albumCount}]` : '[Фото]')
                 : msgType === 'sticker'
@@ -1711,50 +1800,14 @@ function registerMessageHandlers(io: Server, sock: Socket) {
   });
 
   /** ===== Редактирование текстового сообщения (только отправитель). Поиск по messageId в БД. ===== */
-  sock.on('message:edit', async (payload: { messageId: string; text: string }, ack?: Function) => {
+  sock.on('message:edit', async (payload: { messageId: string; text?: string; enc?: unknown }, ack?: Function) => {
     try {
       const me = meId();
-      const messageId = String(payload?.messageId || '').trim();
-      const text = typeof payload?.text === 'string' ? String(payload.text).trim() : '';
       if (!isOid(me)) return ack?.({ ok: false, error: 'unauthorized' });
-      if (!messageId || text === '') return ack?.({ ok: false, error: 'bad_request' });
-      if (isMessageTextTooLong(text)) return ack?.({ ok: false, error: 'text_too_long' });
-
-      let u1 = '';
-      let u2 = '';
-
-      const meOid = new mongoose.Types.ObjectId(me);
-      let doc = await FriendshipMessageItem.findOne({ id: messageId, from: meOid }).select('from type friendshipId').lean();
-      if (!doc) {
-        const legacyFriendshipId = await findLegacyMessageFriendshipId(messageId);
-        if (legacyFriendshipId) {
-          await backfillFriendshipMessageItems(legacyFriendshipId);
-          doc = await FriendshipMessageItem.findOne({ id: messageId, from: meOid }).select('from type friendshipId').lean();
-        }
-      }
-      if (!doc) return ack?.({ ok: false, error: 'not_found_or_forbidden' });
-      if ((doc as any).type !== 'text') return ack?.({ ok: false, error: 'not_found_or_forbidden' });
-      if (String((doc as any).from) !== me) return ack?.({ ok: false, error: 'not_found_or_forbidden' });
-      await FriendshipMessageItem.updateOne(
-        { friendshipId: (doc as any).friendshipId, id: messageId },
-        { $set: { text } }
-      ).exec();
-      const fr = await FriendshipMessages.findById((doc as any).friendshipId).select('user1 user2').lean();
-      if (fr) {
-        u1 = String((fr as any).user1);
-        u2 = String((fr as any).user2);
-      }
-      await FriendshipMessages.updateOne(
-        { _id: (doc as any).friendshipId, 'lastMessage.id': messageId },
-        { $set: { 'lastMessage.text': text, lastActivity: new Date() } }
-      ).exec();
-
-      const payloadOut = { messageId, text };
-      if (u1 || u2) {
-        if (u1) io.to(`u:${String(u1)}`).emit('message:edited', payloadOut);
-        if (u2) io.to(`u:${String(u2)}`).emit('message:edited', payloadOut);
-      }
-      return ack?.({ ok: true, messageId, text });
+      const result = await applyMessageEdit(me, payload);
+      if (!result.ok) return ack?.({ ok: false, error: result.error });
+      for (const u of result.participants) io.to(`u:${u}`).emit('message:edited', result.event);
+      return ack?.({ ok: true, ...result.event });
     } catch (e: any) {
       console.error('[message:edit] error:', e?.message || e);
       return ack?.({ ok: false, error: 'server_error' });

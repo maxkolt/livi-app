@@ -4,9 +4,12 @@ import FriendshipMessages from '../models/FriendshipMessages';
 import FriendshipMessageItem from '../models/FriendshipMessageItem';
 import OfflineMessage from '../models/OfflineMessage';
 import { checkMessageSendRateLimit, isMessageTextTooLong, truncateReplyQuote } from '../utils/messageLimits';
+import { resolveIncomingEnvelope } from '../utils/e2eEnvelope';
+import { loadE2ePublicKeys } from '../sockets/e2eKeys';
 import { areFriendsCached, getOrCreateFriendship, invalidateFriendshipCache } from '../utils/friendshipUtils';
 import {
   MAX_MESSAGE_BATCH_SIZE,
+  applyMessageEdit,
   backfillFriendshipMessageItems,
   clearChatMessagesForUsers,
   deleteMessagesForBothUsersBatch,
@@ -70,6 +73,7 @@ function toFriendshipMessageSnapshot(message: any): any {
   }
   if (Array.isArray(message.reactions)) snapshot.reactions = message.reactions;
   if (message.replyTo && message.replyTo.id) snapshot.replyTo = message.replyTo;
+  if (message.enc) snapshot.enc = message.enc;
   return snapshot;
 }
 
@@ -160,7 +164,7 @@ router.post('/messages/send', async (req, res) => {
 
     const to = String(req.body?.to || '').trim();
     const type = String(req.body?.type || '').trim() as 'text' | 'image' | 'audio' | 'sticker';
-    const text = typeof req.body?.text === 'string' ? String(req.body.text) : undefined;
+    let text = typeof req.body?.text === 'string' ? String(req.body.text) : undefined;
     const uri = typeof req.body?.uri === 'string' ? String(req.body.uri) : undefined;
     const rawUris = Array.isArray(req.body?.uris) ? req.body.uris : undefined;
     const name = typeof req.body?.name === 'string' ? String(req.body.name) : undefined;
@@ -171,7 +175,7 @@ router.post('/messages/send', async (req, res) => {
     const stickerEmoji = typeof req.body?.stickerEmoji === 'string' ? String(req.body.stickerEmoji) : undefined;
     const stickerLabel = typeof req.body?.stickerLabel === 'string' ? String(req.body.stickerLabel) : undefined;
     const clientMessageId = normalizeClientMessageId(req.body);
-    const replyTo = req.body?.replyTo && typeof req.body.replyTo === 'object' && req.body.replyTo.id
+    let replyTo = req.body?.replyTo && typeof req.body.replyTo === 'object' && req.body.replyTo.id
       ? { id: String(req.body.replyTo.id), text: truncateReplyQuote(req.body.replyTo.text != null ? String(req.body.replyTo.text) : undefined), from: String(req.body.replyTo.from || '') }
       : undefined;
 
@@ -213,6 +217,24 @@ router.post('/messages/send', async (req, res) => {
       return res.status(429).json({ ok: false, error: 'rate_limited', retryAfterSec: rate.retryAfterSec });
     }
 
+    const envelope = await resolveIncomingEnvelope({
+      rawEnc: req.body?.enc,
+      type,
+      clientMessageId,
+      from: me,
+      to,
+      loadPublicKeys: loadE2ePublicKeys,
+    });
+    if (!envelope.ok) {
+      return res.status(envelope.error === 'e2e_key_mismatch' ? 409 : 400).json({ ok: false, error: envelope.error });
+    }
+    const enc = envelope.enc;
+    if (enc) {
+      // Открытый текст и цитата зашифрованного сообщения живут только внутри конверта.
+      text = undefined;
+      if (replyTo) replyTo = { id: replyTo.id, text: undefined, from: replyTo.from };
+    }
+
     const messageId = clientMessageId || `msg_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
     const timestamp = new Date();
 
@@ -241,6 +263,7 @@ router.post('/messages/send', async (req, res) => {
     };
     if (type === 'image' && imageUris.length > 1) messageItem.uris = imageUris;
     if (replyTo) messageItem.replyTo = replyTo;
+    if (enc) messageItem.enc = enc;
 
     const createItem: any = {
       friendshipId,
@@ -262,6 +285,7 @@ router.post('/messages/send', async (req, res) => {
     };
     if (type === 'image' && imageUris.length > 1) createItem.uris = imageUris;
     if (replyTo) createItem.replyTo = replyTo;
+    if (enc) createItem.enc = enc;
     try {
       await FriendshipMessageItem.create(createItem);
     } catch (error: any) {
@@ -312,6 +336,7 @@ router.post('/messages/send', async (req, res) => {
         };
         if (type === 'image' && imageUris.length > 1) payload.uris = imageUris;
         if (replyTo) payload.replyTo = replyTo;
+        if (enc) payload.enc = enc;
         io.to(`u:${String(to)}`).emit('message:received', payload);
         return res.json({ ok: true, messageId, timestamp, delivered: true });
       }
@@ -336,6 +361,7 @@ router.post('/messages/send', async (req, res) => {
       };
       if (type === 'image' && imageUris.length > 1) messageData.uris = imageUris;
       if (replyTo) messageData.replyTo = replyTo;
+      if (enc) messageData.enc = enc;
       await OfflineMessage.create({
         recipientId: new mongoose.Types.ObjectId(to),
         senderId: new mongoose.Types.ObjectId(me),
@@ -428,50 +454,21 @@ router.post('/messages/edit', async (req, res) => {
     const me = String((req as any)?.userId || '').trim();
     if (!isOid(me)) return res.status(401).json({ ok: false, error: 'unauthorized' });
 
-    const messageId = String(req.body?.messageId || '').trim();
-    const text = typeof req.body?.text === 'string' ? String(req.body.text).trim() : '';
-    if (!messageId || text === '') return res.status(400).json({ ok: false, error: 'bad_request' });
-    if (isMessageTextTooLong(text)) return res.status(400).json({ ok: false, error: 'text_too_long' });
-
-    let u1 = '';
-    let u2 = '';
-    const meOid = new mongoose.Types.ObjectId(me);
-    let doc = await FriendshipMessageItem.findOne({ id: messageId, from: meOid }).select('from type friendshipId').lean();
-    if (!doc) {
-      const legacyFriendshipId = await findLegacyMessageFriendshipId(messageId);
-      if (legacyFriendshipId) {
-        await backfillFriendshipMessageItems(legacyFriendshipId);
-        doc = await FriendshipMessageItem.findOne({ id: messageId, from: meOid }).select('from type friendshipId').lean();
+    const result = await applyMessageEdit(me, req.body || {});
+    if (!result.ok) {
+      if (result.error === 'bad_request' || result.error === 'text_too_long' || result.error === 'invalid_enc') {
+        return res.status(400).json({ ok: false, error: result.error });
       }
+      if (result.error === 'e2e_key_mismatch') return res.status(409).json({ ok: false, error: result.error });
+      return res.json({ ok: false, error: result.error });
     }
-    if (!doc) return res.json({ ok: false, error: 'not_found_or_forbidden' });
-    if ((doc as any).type !== 'text' || String((doc as any).from) !== me) {
-      return res.json({ ok: false, error: 'not_found_or_forbidden' });
-    }
-    await FriendshipMessageItem.updateOne(
-      { friendshipId: (doc as any).friendshipId, id: messageId },
-      { $set: { text } }
-    ).exec();
-    const fr = await FriendshipMessages.findById((doc as any).friendshipId).select('user1 user2').lean();
-    if (fr) {
-      u1 = String((fr as any).user1);
-      u2 = String((fr as any).user2);
-    }
-    await FriendshipMessages.updateOne(
-      { _id: (doc as any).friendshipId, 'lastMessage.id': messageId },
-      { $set: { 'lastMessage.text': text, lastActivity: new Date() } }
-    ).exec();
 
     try {
       const io = (req as any).io as any | undefined;
-      if (io && (u1 || u2)) {
-        const payload = { messageId, text };
-        if (u1) io.to(`u:${u1}`).emit('message:edited', payload);
-        if (u2) io.to(`u:${u2}`).emit('message:edited', payload);
-      }
+      if (io) for (const u of result.participants) io.to(`u:${u}`).emit('message:edited', result.event);
     } catch {}
 
-    return res.json({ ok: true, messageId, text });
+    return res.json({ ok: true, ...result.event });
   } catch (e: any) {
     return res.status(500).json({ ok: false, error: e?.message || 'server_error' });
   }

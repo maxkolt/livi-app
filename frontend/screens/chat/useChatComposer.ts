@@ -104,7 +104,7 @@ export function useChatComposer({
       messageTextRef.current = '';
       setMessageText('');
       setEditingMessageId(null);
-      const result = await editMessage(editingMessageId, newText);
+      const result = await editMessage(editingMessageId, newText, peerId);
       if (result.ok || result.queued) {
         setMessages((prev) => {
           const updated = prev.map((m) =>

@@ -206,6 +206,17 @@ async function loadDraftProfile(): Promise<{ nick?: string; avatar?: string }> {
 /* ===== Жёсткий локальный сброс - single place ===== */
 async function hardLocalReset() {
   try {
+    // 0. Ключ сквозного шифрования удаляемого аккаунта (хранится в SecureStore под userId).
+    try {
+      const prevUserId = await AsyncStorage.getItem(USER_ID_KEY);
+      if (prevUserId) {
+        const { deleteLocalE2eKey } = await import('../sockets/modules/e2e');
+        await deleteLocalE2eKey(prevUserId);
+      }
+    } catch (e) {
+      logger.warn('Failed to clear e2e key:', e);
+    }
+
     // 1. Очищаем все ключи AsyncStorage
     const keysToRemove = [
       DRAFT_KEY,              // profile_draft_v1

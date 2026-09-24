@@ -193,6 +193,7 @@ import {
   ensureGloballyDeletedMessageIdsLoaded,
 } from "../sockets/socket";
 import { MAX_MESSAGE_TEXT_LENGTH } from "../sockets/modules/constants";
+import { E2eChatBanner } from "./chat/E2eChatBanner";
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useLang } from "../store/lang";
 import { t, type Lang } from "../utils/i18n";
@@ -2553,6 +2554,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                   </View>
                 </View>
               )}
+              <E2eChatBanner lang={lang} peerId={peerId} />
               {replyingToMessage && (
                 <View
                   style={{
@@ -2945,6 +2947,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                   </View>
                 </View>
               )}
+              <E2eChatBanner lang={lang} peerId={peerId} />
               {replyingToMessage && (
                 <View
                   style={{

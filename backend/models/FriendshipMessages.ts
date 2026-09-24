@@ -1,4 +1,6 @@
 import mongoose, { Schema, Document } from 'mongoose';
+import { E2eEnvelopeSchema } from './e2eEnvelopeSchema';
+import type { E2eEnvelope } from '../utils/e2eEnvelope';
 
 // Реакция на сообщение (эмодзи + кто поставил)
 export interface IMessageReaction {
@@ -20,6 +22,7 @@ export interface IMessageItem {
   to: mongoose.Types.ObjectId;
   type: 'text' | 'image' | 'audio' | 'sticker';
   text?: string; // Текст сообщения
+  enc?: E2eEnvelope; // Зашифрованный текст (сквозное шифрование), text при этом пустой
   uri?: string; // URL изображения (или первое фото альбома)
   uris?: string[]; // Альбом: до 10 URL в одном сообщении
   name?: string; // original filename (optional)
@@ -69,6 +72,10 @@ const MessageItemSchema = new Schema<IMessageItem>({
   },
   text: {
     type: String
+  },
+  enc: {
+    type: E2eEnvelopeSchema,
+    default: undefined
   },
   uri: {
     type: String

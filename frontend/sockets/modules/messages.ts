@@ -7,11 +7,44 @@ import {
   enqueueEditOutbox,
   enqueueMessageOutbox,
   mergePendingMessageOutboxEdit,
+  drainEditOutbox,
+  drainMessageOutbox,
   readRateLimitRetryAfterSec,
   scheduleMessageOutboxDrain,
 } from "./outbox";
 import { shared } from "./shared";
 import { socket } from "./socketCore";
+import {
+  decryptIncomingMessage,
+  E2eUnavailableError,
+  invalidateKeysAfterMismatch,
+  onE2eStatus,
+  toWireEditPayload,
+  toWireMessagePayload,
+} from "./e2e";
+import { e2eUndecryptableText } from "./e2eText";
+
+/** Повтор отправки, когда ключи шифрования временно недоступны (нет связи для сверки). */
+const E2E_RETRY_AFTER_SEC = 5;
+
+/**
+ * Ключ восстановлен или шифрование включено: сбрасываем кэши, чтобы история
+ * перечиталась с сервера уже расшифрованной, и отправляем то, что ждало ключа.
+ */
+onE2eStatus((status) => {
+  if (status !== "ready") return;
+  clearAllMessageCache();
+  void drainMessageOutbox()
+    .then(() => drainEditOutbox())
+    .catch(() => {});
+});
+
+const decryptForApp = <M extends Record<string, any>>(m: M): Promise<M> =>
+  decryptIncomingMessage(m, e2eUndecryptableText).catch(() => m);
+
+async function decryptMessageList<M extends Record<string, any>>(list: M[]): Promise<M[]> {
+  return Promise.all(list.map((m) => decryptForApp(m)));
+}
 
 // saveMessage делает read-modify-write одного ключа AsyncStorage. Без очереди пачка входящих
 // (офлайн-очередь на reconnect) читала один и тот же массив, и последняя запись затирала остальные.
@@ -84,6 +117,7 @@ export const globalMessageStorage = {
             timestamp: new Date(message.timestamp),
           };
           if (message.callDirection) newMessage.callDirection = message.callDirection;
+        if (message.e2eUndecryptable) newMessage.e2eUndecryptable = true;
           if (message.localOnly) newMessage.localOnly = true;
           if (Array.isArray(message.uris) && message.uris.length > 1) {
             newMessage.uris = message.uris.map((u: any) => String(u || "").trim()).filter(Boolean).slice(0, 10);
@@ -92,7 +126,12 @@ export const globalMessageStorage = {
           if (replyToPayload) newMessage.replyTo = replyToPayload;
           messages.push(newMessage);
           didWrite = true;
-        } else if (replyToPayload && !messages[existingIdx]?.replyTo?.id) {
+        } else if (messages[existingIdx]?.e2eUndecryptable && !message.e2eUndecryptable && typeof message.text === "string") {
+        // Ключ восстановили — заглушку заменяем расшифрованным текстом.
+        const { e2eUndecryptable: _stale, ...prevMsg } = messages[existingIdx];
+        messages[existingIdx] = { ...prevMsg, text: message.text, ...(replyToPayload ? { replyTo: replyToPayload } : {}) };
+        didWrite = true;
+      } else if (replyToPayload && !messages[existingIdx]?.replyTo?.id) {
           messages[existingIdx] = { ...messages[existingIdx], replyTo: replyToPayload };
           didWrite = true;
         }
@@ -183,39 +222,18 @@ export function sendMessage(payload: {
     socketPayload.replyTo = { id: payload.replyTo.id, text: payload.replyTo.text, from: payload.replyTo.from };
   }
 
-  const viaSocket = () =>
+  const viaSocket = (wire: any) =>
     emitAck<{ ok: boolean; messageId?: string; timestamp?: Date; delivered?: boolean; error?: string }>(
       "message:send",
-      socketPayload,
+      wire,
     );
 
-  const viaHttp = async () => {
+  // Тело HTTP совпадает с socket-payload (включая конверт шифрования).
+  const viaHttp = async (wire: any) => {
     const installId = await getInstallId().catch(() => "");
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (installId) headers["x-install-id"] = String(installId);
     if (shared.currentUserId) headers["x-user-id"] = String(shared.currentUserId);
-
-    const body: any = {
-      to: payload.to,
-      text: payload.text,
-      type: messageType,
-      uri: primaryUri,
-      name: payload.name,
-      size: payload.size,
-      duration: payload.duration,
-      stickerId: payload.stickerId,
-      stickerPackId: payload.stickerPackId,
-      stickerEmoji: payload.stickerEmoji,
-      stickerLabel: payload.stickerLabel,
-    };
-    if (messageType === "image" && albumUris.length > 1) {
-      body.uris = albumUris;
-    }
-    if (optimisticUiId) {
-      body.clientMessageId = optimisticUiId;
-      body.clientId = optimisticUiId;
-    }
-    if (payload.replyTo?.id) body.replyTo = { id: payload.replyTo.id, text: payload.replyTo.text, from: payload.replyTo.from };
 
     const url = `${API_BASE}/api/messages/send`;
     const controller = new AbortController();
@@ -224,7 +242,7 @@ export function sendMessage(payload: {
       const res = await fetch(url, {
         method: "POST",
         headers,
-        body: JSON.stringify(body),
+        body: JSON.stringify(wire),
         signal: controller.signal,
       });
       if (!res.ok) {
@@ -239,8 +257,8 @@ export function sendMessage(payload: {
 
   return (async () => {
     const outboxId = `outbox_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
-    // Rate-limit — не ошибка сообщения: кладём в outbox и отправим, когда лимит отпустит.
-    const queueAfterRateLimit = async (retryAfterSec: number) => {
+    // В очередь кладём открытый payload: шифруем при каждой попытке отправки.
+    const enqueue = async () => {
       const enq = await enqueueMessageOutbox({
         id: outboxId,
         optimisticUiId,
@@ -250,64 +268,59 @@ export function sendMessage(payload: {
       if (!enq) {
         return { ok: true, localCancelled: true as const, delivered: false };
       }
-      scheduleMessageOutboxDrain(retryAfterSec);
       return { ok: true, queued: true, messageId: outboxId, delivered: false };
     };
+    // Rate-limit или временно недоступные ключи — не ошибка сообщения: отправим позже.
+    const queueForRetry = async (retryAfterSec: number) => {
+      const queued = await enqueue();
+      if ((queued as any).queued) scheduleMessageOutboxDrain(retryAfterSec);
+      return queued;
+    };
+    const toWire = async (): Promise<{ wire: any } | { result: any }> => {
+      try {
+        return { wire: await toWireMessagePayload(socketPayload) };
+      } catch (e) {
+        if (!(e instanceof E2eUnavailableError)) throw e;
+        // Свой ключ не восстановлен — открытым текстом не шлём, ждём восстановления.
+        if (e.reason === "locked") return { result: { ok: false, error: "e2e_locked" } };
+        return { result: await queueForRetry(E2E_RETRY_AFTER_SEC) };
+      }
+    };
+
+    let prepared = await toWire();
+    if ("result" in prepared) return prepared.result;
+    let wire = prepared.wire;
     try {
-      const r = await viaSocket();
-      if ((r as any)?.ok === true) return r;
+      let r: any = await viaSocket(wire);
+      if (r?.ok === true) return r;
+      if (r?.error === "e2e_key_mismatch") {
+        // Собеседник или мы сменили ключ — перечитываем ключи и шифруем заново, один раз.
+        await invalidateKeysAfterMismatch(payload.to);
+        prepared = await toWire();
+        if ("result" in prepared) return prepared.result;
+        wire = prepared.wire;
+        r = await viaSocket(wire);
+        if (r?.ok === true) return r;
+      }
       // HTTP-фолбэк упрётся в тот же серверный лимит — не тратим запрос.
       const socketRetryAfter = readRateLimitRetryAfterSec(r);
-      if (socketRetryAfter != null) return await queueAfterRateLimit(socketRetryAfter);
-      const http = await viaHttp();
+      if (socketRetryAfter != null) return await queueForRetry(socketRetryAfter);
+      const http = await viaHttp(wire);
       if ((http as any)?.ok === true) return http;
       const httpRetryAfter = readRateLimitRetryAfterSec(http);
-      if (httpRetryAfter != null) return await queueAfterRateLimit(httpRetryAfter);
-      if (isLikelyOfflineError((http as any)?.error)) {
-        const enq = await enqueueMessageOutbox({
-          id: outboxId,
-          optimisticUiId,
-          createdAt: Date.now(),
-          payload: socketPayload,
-        });
-        if (!enq) {
-          return { ok: true, localCancelled: true as const, delivered: false };
-        }
-        return { ok: true, queued: true, messageId: outboxId, delivered: false };
-      }
+      if (httpRetryAfter != null) return await queueForRetry(httpRetryAfter);
+      if (isLikelyOfflineError((http as any)?.error)) return await enqueue();
       return http;
     } catch {
       try {
-        const http = await viaHttp();
+        const http = await viaHttp(wire);
         if ((http as any)?.ok === true) return http;
         const httpRetryAfter = readRateLimitRetryAfterSec(http);
-        if (httpRetryAfter != null) return await queueAfterRateLimit(httpRetryAfter);
-        if (isLikelyOfflineError((http as any)?.error)) {
-          const enq = await enqueueMessageOutbox({
-            id: outboxId,
-            optimisticUiId,
-            createdAt: Date.now(),
-            payload: socketPayload,
-          });
-          if (!enq) {
-            return { ok: true, localCancelled: true as const, delivered: false };
-          }
-          return { ok: true, queued: true, messageId: outboxId, delivered: false };
-        }
+        if (httpRetryAfter != null) return await queueForRetry(httpRetryAfter);
+        if (isLikelyOfflineError((http as any)?.error)) return await enqueue();
         return http;
       } catch (e) {
-        if (isLikelyOfflineError(e)) {
-          const enq = await enqueueMessageOutbox({
-            id: outboxId,
-            optimisticUiId,
-            createdAt: Date.now(),
-            payload: socketPayload,
-          });
-          if (!enq) {
-            return { ok: true, localCancelled: true as const, delivered: false };
-          }
-          return { ok: true, queued: true, messageId: outboxId, delivered: false };
-        }
+        if (isLikelyOfflineError(e)) return await enqueue();
         throw e;
       }
     }
@@ -469,13 +482,16 @@ export function fetchMessages(payload: {
     }
   };
 
+  const decryptPage = async (r: any) =>
+    r?.ok === true && Array.isArray(r.messages) ? { ...r, messages: await decryptMessageList(r.messages) } : r;
+
   return (async () => {
     try {
       const r: any = await viaSocket();
-      if (r?.ok === true) return r;
-      return await viaHttp();
+      if (r?.ok === true) return await decryptPage(r);
+      return await decryptPage(await viaHttp());
     } catch {
-      return await viaHttp();
+      return await decryptPage(await viaHttp());
     }
   })();
 }
@@ -574,10 +590,18 @@ export function fetchChatPreviews(withIds: string[]) {
     return { ok: true as const, previews };
   };
 
+  const decryptPreviews = async <R extends { previews?: Record<string, PreviewMsg> }>(r: R): Promise<R> => {
+    if (!r?.previews) return r;
+    const entries = await Promise.all(
+      Object.entries(r.previews).map(async ([peer, m]) => [peer, await decryptForApp(m)] as const),
+    );
+    return { ...r, previews: Object.fromEntries(entries) };
+  };
+
   return (async () => {
     try {
       const r = await viaSocket();
-      if (r?.ok && r.previews && typeof r.previews === "object") return r;
+      if (r?.ok && r.previews && typeof r.previews === "object") return await decryptPreviews(r);
       return viaFetchFallback();
     } catch (e: any) {
       const msg = String(e?.message || e || "");
@@ -586,7 +610,7 @@ export function fetchChatPreviews(withIds: string[]) {
         try {
           await waitForConnect(20000);
           const r = await viaSocket();
-          if (r?.ok && r.previews && typeof r.previews === "object") return r;
+          if (r?.ok && r.previews && typeof r.previews === "object") return await decryptPreviews(r);
         } catch {
           // fall through
         }
@@ -600,48 +624,60 @@ export function fetchChatPreviews(withIds: string[]) {
   })();
 }
 
-export function onMessageReceived(
-  cb: (message: {
-    id: string;
-    from: string;
-    to: string;
-    type: "text" | "image" | "audio" | "sticker";
-    text?: string;
-    uri?: string;
-    stickerId?: string;
-    stickerPackId?: string;
-    stickerEmoji?: string;
-    stickerLabel?: string;
-    timestamp: string;
-    read: boolean;
-  }) => void,
-): () => void {
-  const h = (message: any) => {
-    cb(message);
-  };
-  socket.on("message:received", h);
+type IncomingMessage = {
+  id: string;
+  from: string;
+  to: string;
+  type: "text" | "image" | "audio" | "sticker";
+  text?: string;
+  uri?: string;
+  stickerId?: string;
+  stickerPackId?: string;
+  stickerEmoji?: string;
+  stickerLabel?: string;
+  timestamp: string;
+  read: boolean;
+};
+
+const receivedSubs = new Set<(message: IncomingMessage) => void>();
+
+export function onMessageReceived(cb: (message: IncomingMessage) => void): () => void {
+  receivedSubs.add(cb);
   return () => {
-    socket.off("message:received", h);
+    receivedSubs.delete(cb);
   };
 }
 
 /**
- * Всегда пишем входящие в локальный чат (не только когда открыт ChatScreen).
- * Иначе вкладка Чаты показывает превью своего последнего исходящего при unread > 0.
+ * Единственный слушатель входящих: расшифровать, раздать подписчикам и записать
+ * локально. Цепочка сохраняет порядок сообщений, пока идёт расшифровка.
+ * Всегда пишем входящие в локальный чат (не только когда открыт ChatScreen) —
+ * иначе вкладка Чаты показывает превью своего последнего исходящего при unread > 0.
  */
-socket.on("message:received", (message: any, ack?: (res: { ok: boolean }) => void) => {
-  try {
-    const me = String(shared.currentUserId || "").trim();
-    if (!me || !message?.id) return;
-    const from = String(message.from || "").trim();
-    if (!from || from === me) return;
-    // ack есть только у офлайн-очереди: сервер удалит запись, когда она уже у нас на диске.
-    void globalMessageStorage.saveMessage(message, me).then((saved) => {
-      if (saved) ack?.({ ok: true });
-    });
-  } catch (error) {
-    logger.warn("[messages] persist incoming for chat preview failed:", error);
-  }
+let incomingChain: Promise<void> = Promise.resolve();
+socket.on("message:received", (raw: any, ack?: (res: { ok: boolean }) => void) => {
+  incomingChain = incomingChain.then(async () => {
+    const message = await decryptForApp(raw);
+    for (const cb of receivedSubs) {
+      try {
+        cb(message);
+      } catch (error) {
+        logger.warn("[messages] message:received subscriber failed:", error);
+      }
+    }
+    try {
+      const me = String(shared.currentUserId || "").trim();
+      if (!me || !message?.id) return;
+      const from = String(message.from || "").trim();
+      if (!from || from === me) return;
+      // ack есть только у офлайн-очереди: сервер удалит запись, когда она уже у нас на диске.
+      void globalMessageStorage.saveMessage(message, me).then((saved) => {
+        if (saved) ack?.({ ok: true });
+      });
+    } catch (error) {
+      logger.warn("[messages] persist incoming for chat preview failed:", error);
+    }
+  });
 });
 
 export function onChatCleared(
@@ -1131,6 +1167,8 @@ export async function deleteMessages(messageIds: string[]): Promise<DeleteMessag
 export async function editMessage(
   messageId: string,
   text: string,
+  /** Собеседник: без него правку нельзя зашифровать. */
+  peerId?: string,
 ): Promise<{ ok: boolean; queued?: boolean; error?: string }> {
   const trimmedMid = String(messageId || "").trim();
   const trimmedText = String(text ?? "");
@@ -1148,16 +1186,32 @@ export async function editMessage(
       id: `edit_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
       messageId: trimmedMid,
       text: trimmedText,
+      ...(peerId ? { to: peerId } : {}),
       createdAt: Date.now(),
     });
     return { ok: true, queued: true };
   };
 
-  const viaSocket = async () =>
-    emitAck<{ ok: boolean; error?: string }>("message:edit", {
-      messageId: trimmedMid,
-      text: trimmedText,
-    });
+  let wire: Awaited<ReturnType<typeof toWireEditPayload>>;
+  try {
+    wire = await toWireEditPayload(trimmedMid, trimmedText, peerId);
+  } catch (e) {
+    if (!(e instanceof E2eUnavailableError)) throw e;
+    if (e.reason === "locked") return { ok: false, error: "e2e_locked" };
+    // Ключи временно недоступны: правка ждёт в очереди, открытым текстом не уходит.
+    const queued = await queueOffline();
+    setTimeout(() => void drainEditOutbox().catch(() => {}), E2E_RETRY_AFTER_SEC * 1000);
+    return queued;
+  }
+
+  const viaSocket = async () => {
+    const r: any = await emitAck<{ ok: boolean; error?: string }>("message:edit", wire);
+    if (r?.error !== "e2e_key_mismatch" || !peerId) return r;
+    // Ключ сменился — перечитываем и шифруем правку заново, один раз.
+    await invalidateKeysAfterMismatch(peerId);
+    wire = await toWireEditPayload(trimmedMid, trimmedText, peerId);
+    return emitAck<{ ok: boolean; error?: string }>("message:edit", wire);
+  };
 
   const viaHttp = async () => {
     const installId = await getInstallId().catch(() => "");
@@ -1170,7 +1224,7 @@ export async function editMessage(
       const res = await fetch(`${API_BASE}/api/messages/edit`, {
         method: "POST",
         headers,
-        body: JSON.stringify({ messageId: trimmedMid, text: trimmedText }),
+        body: JSON.stringify(wire),
         signal: controller.signal,
       });
       if (!res.ok) return { ok: false, error: `http_${res.status}` };
@@ -1219,8 +1273,18 @@ export async function editMessage(
   }
 }
 
-export function onMessageEdited(cb: (data: { messageId: string; text: string }) => void): () => void {
-  const h = (data: any) => cb(data);
+export function onMessageEdited(
+  cb: (data: { messageId: string; text: string; e2eUndecryptable?: boolean }) => void,
+): () => void {
+  const h = (data: any) => {
+    if (data?.enc == null) {
+      cb(data);
+      return;
+    }
+    void decryptForApp({ id: data.messageId, from: data.from, to: data.to, enc: data.enc }).then((m: any) =>
+      cb({ messageId: data.messageId, text: m.text, ...(m.e2eUndecryptable ? { e2eUndecryptable: true } : {}) }),
+    );
+  };
   socket.on("message:edited", h);
   return () => {
     socket.off("message:edited", h);

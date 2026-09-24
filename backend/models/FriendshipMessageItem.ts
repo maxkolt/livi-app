@@ -1,4 +1,6 @@
 import mongoose, { Schema, Document } from 'mongoose';
+import { E2eEnvelopeSchema } from './e2eEnvelopeSchema';
+import type { E2eEnvelope } from '../utils/e2eEnvelope';
 
 export interface IReaction {
   emoji: string;
@@ -19,6 +21,8 @@ export interface IFriendshipMessageItem extends Document {
   to: mongoose.Types.ObjectId;
   type: 'text' | 'image' | 'audio' | 'sticker';
   text?: string;
+  /** Зашифрованный текст (сквозное шифрование). При enc поле text пустое. */
+  enc?: E2eEnvelope;
   uri?: string;
   /** Album: up to 10 image URLs in one message. `uri` stays as first for back-compat. */
   uris?: string[];
@@ -48,6 +52,7 @@ const FriendshipMessageItemSchema = new Schema<IFriendshipMessageItem>(
     to: { type: Schema.Types.ObjectId, ref: 'User', required: true },
     type: { type: String, enum: ['text', 'image', 'audio', 'sticker'], required: true },
     text: String,
+    enc: { type: E2eEnvelopeSchema, default: undefined },
     uri: String,
     uris: { type: [String], default: undefined },
     name: String,

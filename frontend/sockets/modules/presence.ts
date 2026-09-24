@@ -4,6 +4,7 @@ import { shared } from "./shared";
 import { socket } from "./socketCore";
 import { applyMissedFromReauth } from "./missedCalls";
 import { drainEditOutbox, drainMessageOutbox } from "./outbox";
+import { refreshE2eState } from "./e2e";
 
 /** Дедуп повторных presence:update с одним и тем же status/roomId (useEffect в VideoCall/PiP и т.д.). Сброс при connect. */
 function __presenceUpdateKey(payload: { status?: string; roomId?: string | undefined }): string {
@@ -177,7 +178,9 @@ socket.on("connect", () => {
   shared.hasConnectedEver = true;
   shared.lastPresenceUpdateKey = null;
   shared.lastSocketConnectAt = Date.now();
-  void drainMessageOutbox()
+  void refreshE2eState()
+    .catch(() => undefined)
+    .then(() => drainMessageOutbox())
     .then(() => drainEditOutbox())
     .catch(() => {});
 });

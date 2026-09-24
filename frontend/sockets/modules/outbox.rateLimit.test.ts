@@ -19,6 +19,13 @@ const emitAckMock = jest.fn();
 jest.mock('./emit', () => ({ emitAck: (...args: unknown[]) => emitAckMock(...args) }));
 jest.mock('./reauth', () => ({ ensureReauthBeforePrivilegedSocketOp: jest.fn(async () => true) }));
 jest.mock('./socketCore', () => ({ socket: { connected: true } }));
+// Шифрование здесь не проверяем: payload уходит как есть (см. e2e.test.ts).
+jest.mock('./e2e', () => ({
+  E2eUnavailableError: class extends Error {},
+  invalidateKeysAfterMismatch: jest.fn(async () => undefined),
+  toWireMessagePayload: jest.fn(async (p: unknown) => p),
+  toWireEditPayload: jest.fn(async (messageId: string, text: string) => ({ messageId, text })),
+}));
 jest.mock('./shared', () => ({
   shared: {
     cancelledOutboxSendIds: new Set<string>(),

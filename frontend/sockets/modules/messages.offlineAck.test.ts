@@ -42,9 +42,21 @@ jest.mock('./outbox', () => ({
   enqueueMessageOutbox: jest.fn(),
   mergePendingMessageOutboxEdit: jest.fn(),
   readRateLimitRetryAfterSec: jest.fn(() => null),
+  drainMessageOutbox: jest.fn(async () => undefined),
+  drainEditOutbox: jest.fn(async () => undefined),
   scheduleMessageOutboxDrain: jest.fn(),
 }));
 jest.mock('./constants', () => ({ API_BASE: 'https://api.test' }));
+// Шифрование здесь не проверяем: сообщения без конверта проходят как есть (см. e2e.test.ts).
+jest.mock('./e2e', () => ({
+  decryptIncomingMessage: jest.fn(async (m: unknown) => m),
+  E2eUnavailableError: class extends Error {},
+  invalidateKeysAfterMismatch: jest.fn(),
+  onE2eStatus: jest.fn(),
+  toWireEditPayload: jest.fn(),
+  toWireMessagePayload: jest.fn(async (p: unknown) => p),
+}));
+jest.mock('./e2eText', () => ({ e2eUndecryptableText: () => 'undecryptable' }));
 jest.mock('../../utils/installId', () => ({ getInstallId: jest.fn(async () => 'inst') }));
 jest.mock('../../utils/logger', () => ({
   logger: { debug: jest.fn(), info: jest.fn(), warn: jest.fn(), error: jest.fn() },

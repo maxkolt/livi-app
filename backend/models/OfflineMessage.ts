@@ -1,4 +1,6 @@
 import mongoose, { Schema, Document } from 'mongoose';
+import { E2eEnvelopeSchema } from './e2eEnvelopeSchema';
+import type { E2eEnvelope } from '../utils/e2eEnvelope';
 
 // Интерфейс для офлайн сообщения
 export interface IOfflineMessage extends Document {
@@ -12,6 +14,7 @@ export interface IOfflineMessage extends Document {
     to: string;
     type: 'text' | 'image' | 'audio' | 'sticker';
     text?: string;
+    enc?: E2eEnvelope;
     uri?: string;
     uris?: string[];
     name?: string;
@@ -56,6 +59,7 @@ const OfflineMessageSchema = new Schema<IOfflineMessage>({
     to: { type: String, required: true },
     type: { type: String, enum: ['text', 'image', 'audio', 'sticker'], required: true },
     text: { type: String },
+    enc: { type: E2eEnvelopeSchema, default: undefined },
     uri: { type: String },
     uris: { type: [String], default: undefined },
     name: { type: String },

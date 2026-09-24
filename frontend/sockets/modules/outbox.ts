@@ -4,6 +4,15 @@ import { shared } from "./shared";
 import { socket } from "./socketCore";
 import { emitAck } from "./emit";
 import { ensureReauthBeforePrivilegedSocketOp } from "./reauth";
+import {
+  E2eUnavailableError,
+  invalidateKeysAfterMismatch,
+  toWireEditPayload,
+  toWireMessagePayload,
+} from "./e2e";
+
+/** Повтор, когда ключи шифрования временно недоступны. */
+const E2E_RETRY_AFTER_SEC = 5;
 import type {
   EditOutboxItem,
   MessageOutboxItem,
@@ -321,14 +330,22 @@ export async function drainEditOutbox(): Promise<void> {
     for (let i = 0; i < items.length; i++) {
       const item = items[i];
       try {
-        const resp = await emitAck<{ ok: boolean; error?: string }>('message:edit', {
-          messageId: item.messageId,
-          text: item.text,
-        });
+        const resp = await emitAck<{ ok: boolean; error?: string }>(
+          'message:edit',
+          await toWireEditPayload(item.messageId, item.text, item.to),
+        );
+        if (resp?.error === 'e2e_key_mismatch' && item.to) {
+          await invalidateKeysAfterMismatch(item.to);
+        }
         if (!resp?.ok) {
           keep.push(item);
         }
       } catch (e) {
+        if (e instanceof E2eUnavailableError) {
+          // Правка зашифрованного чата не уходит открытым текстом — ждёт ключей.
+          keep.push(...items.slice(i));
+          break;
+        }
         if (isLikelyOfflineError(e)) {
           keep.push(...items.slice(i));
           break;
@@ -371,11 +388,29 @@ export async function drainMessageOutbox(): Promise<void> {
       if (!row) {
         continue;
       }
+      let wire: Record<string, unknown>;
+      try {
+        wire = await toWireMessagePayload(row.payload);
+      } catch (e) {
+        if (!(e instanceof E2eUnavailableError)) throw e;
+        // Открытым текстом не шлём. locked ждёт восстановления ключа (оно само запустит drain).
+        keep.push(row);
+        keep.push(...items.slice(items.indexOf(item) + 1));
+        if (e.reason === 'unavailable') scheduleMessageOutboxDrain(E2E_RETRY_AFTER_SEC);
+        break;
+      }
       try {
         const resp = await emitAck<{ ok: boolean; messageId?: string; delivered?: boolean; error?: string; retryAfterSec?: number }>(
           'message:send',
-          row.payload,
+          wire,
         );
+        if (resp?.error === 'e2e_key_mismatch') {
+          await invalidateKeysAfterMismatch(String(row.payload?.to || ''));
+          keep.push(row);
+          keep.push(...items.slice(items.indexOf(item) + 1));
+          scheduleMessageOutboxDrain(1);
+          break;
+        }
         const retryAfterSec = readRateLimitRetryAfterSec(resp);
         if (retryAfterSec != null) {
           // Остаток пачки тоже упрётся в лимит — останавливаемся и повторяем по таймеру,

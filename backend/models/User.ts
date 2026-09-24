@@ -20,6 +20,24 @@ export interface IUser {
   purchasedBackgroundIds?: string[];
   activeFrameId?: string;
   activeBackgroundId?: string;
+  /** Публичный X25519-ключ сквозного шифрования чата (base64, 32 байта). Пусто — шифрование не включено. */
+  e2ePublicKey?: string;
+  e2eKeyUpdatedAt?: Date;
+  /** Резервная копия приватного ключа под паролем пользователя. Никогда не отдаётся без authKey. */
+  e2eBackup?: IE2eKeyBackup;
+}
+
+export interface IE2eKeyBackup {
+  v: number;
+  /** Параметры KDF: из пароля выводятся ключ шифрования копии и authKey. */
+  kdf: { alg: string; N: number; r: number; p: number; salt: string };
+  n: string;
+  c: string;
+  /** Публичный ключ, которому соответствует копия. */
+  pk: string;
+  /** HMAC(authKey) — сервер отдаёт копию только знающему пароль. */
+  authHash: string;
+  updatedAt: Date;
 }
 
 const isHttp = (s?: string) =>
@@ -98,6 +116,36 @@ const UserSchema = new Schema<IUser>(
     activeBackgroundId: {
       type: String,
       default: '',
+    },
+
+    e2ePublicKey: {
+      type: String,
+      default: '',
+    },
+
+    e2eKeyUpdatedAt: {
+      type: Date,
+    },
+
+    // select: false — ни один существующий запрос профиля не должен унести копию наружу.
+    e2eBackup: {
+      type: {
+        v: { type: Number, required: true },
+        kdf: {
+          alg: { type: String, required: true },
+          N: { type: Number, required: true },
+          r: { type: Number, required: true },
+          p: { type: Number, required: true },
+          salt: { type: String, required: true },
+        },
+        n: { type: String, required: true },
+        c: { type: String, required: true },
+        pk: { type: String, required: true },
+        authHash: { type: String, required: true },
+        updatedAt: { type: Date, required: true },
+      },
+      default: undefined,
+      select: false,
     },
   },
   {

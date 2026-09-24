@@ -26,6 +26,8 @@ export type EditOutboxItem = {
   id: string;
   messageId: string;
   text: string;
+  /** Собеседник — нужен, чтобы зашифровать правку. В старых записях отсутствует. */
+  to?: string;
   createdAt: number;
 };
 
