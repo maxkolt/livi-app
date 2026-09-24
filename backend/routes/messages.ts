@@ -18,9 +18,8 @@ import {
   normalizeIncomingImageUris,
   normalizeMessageIdBatch,
   removeLegacyFriendshipMessages,
-  removeUnreadMessage,
-  clearUnreadMessagesFrom,
 } from '../sockets/messagesReliable';
+import { markAllReadFrom, removeUnreadOne } from '../utils/unreadStore';
 import { emitToUser } from '../utils/emitToUser';
 
 const router = Router();
@@ -136,7 +135,7 @@ async function deleteMessageForBothUsers(me: string, messageId: string): Promise
 
   try {
     if (toUserId && fromUserId) {
-      removeUnreadMessage(toUserId, fromUserId, messageId);
+      await removeUnreadOne(toUserId, fromUserId, messageId);
       await OfflineMessage.deleteMany({
         recipientId: new mongoose.Types.ObjectId(toUserId),
         senderId: new mongoose.Types.ObjectId(fromUserId),
@@ -402,7 +401,7 @@ router.post('/messages/mark_read', async (req, res) => {
 
     // Счётчик для messages:unread_counts живёт в памяти, а не в БД — чистим и его,
     // иначе прочтение через HTTP-фоллбэк оставляет непрочитанное висеть на вкладке.
-    clearUnreadMessagesFrom(me, from);
+    await markAllReadFrom(me, from);
 
     return res.json({ ok: true });
   } catch (e: any) {

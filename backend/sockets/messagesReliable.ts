@@ -8,6 +8,18 @@ import OfflineMessage from '../models/OfflineMessage';
 import { areFriendsCached, getOrCreateFriendship, invalidateFriendshipCache } from '../utils/friendshipUtils';
 import { sendMessagePushToUser } from '../utils/push';
 import { emitToUser } from '../utils/emitToUser';
+import {
+  addUnread,
+  clearUnreadBetween,
+  countUnreadBySender,
+  countUnreadFrom,
+  countUnreadTotal,
+  isViewingChatWithUser,
+  markAllReadFrom,
+  removeUnreadMany,
+  removeUnreadOne,
+  setViewingChatState,
+} from '../utils/unreadStore';
 
 const isOid = (s?: string) => !!s && mongoose.Types.ObjectId.isValid(String(s));
 const CLIENT_MESSAGE_ID_RE = /^[A-Za-z0-9:_-]{1,120}$/;
@@ -484,7 +496,7 @@ async function deleteMessageForBothUsers(me: string, messageId: string): Promise
 
   try {
     if (toUserId && fromUserId) {
-      removeUnreadMessage(toUserId, fromUserId, messageId);
+      await removeUnreadOne(toUserId, fromUserId, messageId);
       await OfflineMessage.deleteMany({
         recipientId: new mongoose.Types.ObjectId(toUserId),
         senderId: new mongoose.Types.ObjectId(fromUserId),
@@ -497,32 +509,6 @@ async function deleteMessageForBothUsers(me: string, messageId: string): Promise
   }
 
   return { ok: true, fromUserId, toUserId };
-}
-
-// Простое хранение непрочитанных сообщений в памяти (для быстрого доступа)
-const unreadMessages = new Map<string, Array<{ id: string; from: string; timestamp: string }>>();
-
-/** Присутствие "смотрит чат": userId -> { with: peerId, at: timestamp }. TTL 90s — не слать пуш о сообщении, если получатель в этом чате (как в Telegram). */
-const viewingChat = new Map<string, { with: string; at: number }>();
-const VIEWING_CHAT_TTL_MS = 90_000;
-
-function isViewingChatWith(recipientUserId: string, senderUserId: string): boolean {
-  const entry = viewingChat.get(recipientUserId);
-  if (!entry) return false;
-  if (Date.now() - entry.at > VIEWING_CHAT_TTL_MS) {
-    viewingChat.delete(recipientUserId);
-    return false;
-  }
-  return entry.with === senderUserId;
-}
-
-function setViewingChat(userId: string, withPeerId: string | null) {
-  if (!userId) return;
-  if (withPeerId) {
-    viewingChat.set(userId, { with: withPeerId, at: Date.now() });
-  } else {
-    viewingChat.delete(userId);
-  }
 }
 
 /**
@@ -690,82 +676,6 @@ async function sendMessageToUser(io: Server, userId: string, message: any): Prom
     console.error('Error sending message to user:', error);
     return false;
   }
-}
-
-/**
- * Добавить непрочитанное сообщение (дедуп по messageId — иначе ретрай/гонка → unread 2 при одном msg).
- */
-function addUnreadMessage(userId: string, messageId: string, fromUser: string) {
-  const id = String(messageId || '').trim();
-  if (!id) return;
-  if (!unreadMessages.has(userId)) {
-    unreadMessages.set(userId, []);
-  }
-  const list = unreadMessages.get(userId)!;
-  if (list.some((msg) => msg.id === id)) return;
-  list.push({
-    id,
-    from: fromUser,
-    timestamp: new Date().toISOString()
-  });
-}
-
-/**
- * Отметить сообщения как прочитанные
- */
-function markMessagesAsRead(userId: string, fromUser: string) {
-  const userUnreads = unreadMessages.get(userId) || [];
-  const filtered = userUnreads.filter(msg => msg.from !== fromUser);
-  unreadMessages.set(userId, filtered);
-}
-
-/**
- * Получить количество непрочитанных сообщений
- */
-function getUnreadCount(userId: string, fromUser: string): number {
-  const userUnreads = unreadMessages.get(userId) || [];
-  return userUnreads.filter(msg => msg.from === fromUser).length;
-}
-
-/**
- * Отметить одно сообщение как прочитанное (из in-memory очереди)
- */
-function markSingleMessageAsRead(userId: string, fromUser: string, messageId: string) {
-  const userUnreads = unreadMessages.get(userId) || [];
-  const filtered = userUnreads.filter(msg => !(msg.from === fromUser && msg.id === messageId));
-  unreadMessages.set(userId, filtered);
-}
-
-/**
- * Удалить одно сообщение из server-side unread очереди.
- * Нужен для delete-for-both, когда сообщение еще не было прочитано получателем.
- */
-export function removeUnreadMessage(userId: string, fromUser: string, messageId: string) {
-  markSingleMessageAsRead(userId, fromUser, messageId);
-}
-
-/**
- * Очистить in-memory счётчик непрочитанных от одного отправителя.
- * Нужен HTTP-пути mark_read: сокетный хэндлер чистит и БД, и эту карту,
- * а маршрут раньше обновлял только БД — счётчик для unread_counts оставался висеть.
- */
-export function clearUnreadMessagesFrom(userId: string, fromUser: string) {
-  markMessagesAsRead(userId, fromUser);
-}
-
-export function removeUnreadMessages(userId: string, fromUser: string, messageIds: string[]) {
-  const ids = new Set(messageIds.map((id) => String(id || '').trim()).filter(Boolean));
-  if (ids.size === 0) return;
-  const userUnreads = unreadMessages.get(userId) || [];
-  unreadMessages.set(
-    userId,
-    userUnreads.filter((msg) => !(msg.from === fromUser && ids.has(msg.id)))
-  );
-}
-
-function clearUnreadMessagesBetween(userA: string, userB: string) {
-  markMessagesAsRead(userA, userB);
-  markMessagesAsRead(userB, userA);
 }
 
 export async function markMessagesReadForUser(
@@ -969,7 +879,7 @@ export async function deleteMessagesForBothUsersBatch(me: string, rawMessageIds:
   await Promise.all([...friendshipIds.values()].map((friendshipId) => refreshFriendshipLastMessage(friendshipId)));
 
   for (const unread of unreadByRecipientAndSender.values()) {
-    removeUnreadMessages(unread.recipientId, unread.senderId, unread.ids);
+    await removeUnreadMany(unread.recipientId, unread.senderId, unread.ids);
   }
   for (const pair of cachePairs) {
     const [fromUserId, toUserId] = pair.split(':');
@@ -1013,7 +923,7 @@ export async function clearChatMessagesForUsers(me: string, withId: string, forA
       }).exec(),
     ]);
 
-    clearUnreadMessagesBetween(me, withId);
+    await clearUnreadBetween(me, withId);
     invalidateFriendshipCache(me, withId);
   }
 
@@ -1033,12 +943,12 @@ function registerMessageHandlers(io: Server, sock: Socket) {
   // console.log(`[sockets] handlers for ${sock.id} user=${meId()}`);
 
   /** ===== Присутствие "смотрю чат с X" — не слать пуш о сообщении получателю, пока он в этом чате (как в Telegram) ===== */
-  sock.on('chat:viewing', (payload: { with: string | null }, ack?: Function) => {
+  sock.on('chat:viewing', async (payload: { with: string | null }, ack?: Function) => {
     try {
       const me = meId();
       if (!isOid(me)) return ack?.({ ok: false, error: 'unauthorized' });
       const withPeer = payload?.with && isOid(String(payload.with)) ? String(payload.with).trim() : null;
-      setViewingChat(me, withPeer);
+      await setViewingChatState(me, withPeer);
       ack?.({ ok: true });
     } catch (e: any) {
       ack?.({ ok: false, error: e?.message || 'server_error' });
@@ -1047,7 +957,8 @@ function registerMessageHandlers(io: Server, sock: Socket) {
 
   sock.on('disconnect', () => {
     const me = meId();
-    if (me) setViewingChat(me, null);
+    // Отметка «смотрит чат» живёт с TTL, поэтому снятие можно не дожидаться.
+    if (me) void setViewingChatState(me, null);
   });
 
   /** ===== Typing/Recording indicator (chat) ===== */
@@ -1231,8 +1142,8 @@ function registerMessageHandlers(io: Server, sock: Socket) {
       }
 
       // Счётчик непрочитанных: не копим, если получатель уже в этом чате (chat:viewing).
-      if (!isViewingChatWith(payload.to, me)) {
-        addUnreadMessage(payload.to, messageId, me);
+      if (!(await isViewingChatWithUser(payload.to, me))) {
+        await addUnread(payload.to, messageId, me);
       }
 
       // Оффлайн-очередь, если получатель не онлайн (emit выше был no-op).
@@ -1250,7 +1161,7 @@ function registerMessageHandlers(io: Server, sock: Socket) {
 
       // 📲 PUSH: новое сообщение. Не слать пуш, если получатель сейчас в этом чате (как в Telegram).
       try {
-        if (isViewingChatWith(payload.to, me)) {
+        if (await isViewingChatWithUser(payload.to, me)) {
           // Получатель смотрит чат с отправителем — пуш не отправляем
         } else {
           let fromNick: string | undefined;
@@ -1259,7 +1170,7 @@ function registerMessageHandlers(io: Server, sock: Socket) {
             if (u && typeof (u as any).nick === 'string') fromNick = String((u as any).nick).trim() || undefined;
           } catch {}
 
-          const unreadCount = (unreadMessages.get(payload.to) || []).length;
+          const unreadCount = await countUnreadTotal(payload.to);
           const msgType = payload.type === 'image' ? 'image' : payload.type === 'audio' ? 'audio' : payload.type === 'sticker' ? 'sticker' : 'text';
           const albumCount = payload.type === 'image' ? imageUris.length : 0;
           const messagePreview =
@@ -1350,7 +1261,7 @@ function registerMessageHandlers(io: Server, sock: Socket) {
       });
 
       // In-memory очередь непрочитанных
-      markMessagesAsRead(me, payload.from);
+      await markAllReadFrom(me, payload.from);
 
       ack?.({ ok: true });
     } catch (e: any) {
@@ -1380,7 +1291,7 @@ function registerMessageHandlers(io: Server, sock: Socket) {
       }
 
       // Чистим из in-memory очереди одно сообщение
-      markSingleMessageAsRead(me, payload.from, payload.messageId);
+      await removeUnreadOne(me, payload.from, payload.messageId);
 
       const receipt = {
         messageId: payload.messageId,
@@ -1476,12 +1387,11 @@ function registerMessageHandlers(io: Server, sock: Socket) {
 
       if (payload.from && isOid(payload.from)) {
         // Количество непрочитанных от конкретного пользователя
-        const count = getUnreadCount(me, payload.from);
+        const count = await countUnreadFrom(me, payload.from);
         ack?.({ ok: true, count });
       } else {
         // Общее количество непрочитанных сообщений
-        const allUnreads = unreadMessages.get(me) || [];
-        const count = allUnreads.length;
+        const count = await countUnreadTotal(me);
         ack?.({ ok: true, count });
       }
 
@@ -1509,14 +1419,12 @@ function registerMessageHandlers(io: Server, sock: Socket) {
 
       if (ids.length > 0) {
         for (const from of ids) {
-          counts[from] = getUnreadCount(me, from);
+          counts[from] = await countUnreadFrom(me, from);
         }
       } else {
-        const allUnreads = unreadMessages.get(me) || [];
-        for (const msg of allUnreads) {
-          const from = String(msg.from || '').trim();
+        for (const [from, n] of Object.entries(await countUnreadBySender(me))) {
           if (!isOid(from)) continue;
-          counts[from] = (counts[from] || 0) + 1;
+          counts[from] = n;
         }
       }
 
