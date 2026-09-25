@@ -16,7 +16,12 @@ import {
   ConnectionState,
 } from 'livekit-client';
 import { RNE2EEManager, RNKeyProvider } from '@livekit/react-native';
-import { deriveCallKey, getCallE2eeDeclaration } from '../../../sockets/modules/e2e';
+import {
+  bindOutgoingCallE2ee,
+  clearCallE2ee,
+  createOutgoingCallE2eeDeclaration,
+  deriveCallKey,
+} from '../../../sockets/modules/callE2ee';
 import {
   setExternalCallHoldActive,
   isExternalCallHoldActive,
@@ -156,9 +161,8 @@ export class VideoCallSession extends SimpleEventEmitter {
   private config: WebRTCSessionConfig;
   private room: Room | null = null;
   /**
-   * Сквозное шифрование звонка друзьям: ключ кадров этого звонка (null — обычный звонок).
-   * Решение принимает сервер одинаково для обеих сторон (backend/utils/callE2ee.ts),
-   * ключ выводится из ключей чата и callId (deriveCallFrameKey) и по сети не ходит.
+   * Автоматическое E2EE звонка: ключ кадров выводится из эфемерных
+   * ключей обеих сторон и callId. Ключи чата и его настройки на звонок не влияют.
    */
   private callE2ee: { callId: string; key: Uint8Array } | null = null;
   private callE2eeKeyProvider: RNKeyProvider | null = null;
@@ -534,9 +538,15 @@ export class VideoCallSession extends SimpleEventEmitter {
       const to = /^[a-f\d]{24}$/i.test(String(friendUserId || '').trim())
         ? String(friendUserId).trim().toLowerCase()
         : String(friendUserId || '').trim();
-      // Без ожидания сверки ключа: этот путь синхронный. Нет объявления — обычный звонок.
-      const e2ee = getCallE2eeDeclaration();
-      socket.emit('call:initiate', e2ee ? { to, e2ee } : { to });
+      const e2ee = createOutgoingCallE2eeDeclaration(to);
+      socket.emit('call:initiate', { to, e2ee }, (response?: { ok?: boolean; callId?: string; error?: string }) => {
+        if (!response?.ok || !response.callId) return;
+        void bindOutgoingCallE2ee(response.callId, to, e2ee).then((bound) => {
+          if (bound) return;
+          logger.error('[VideoCallSession] Unable to bind mandatory call E2EE key', { callId: response.callId });
+          try { socket.emit('call:cancel', { callId: response.callId }); } catch {}
+        });
+      });
       void localTracksPromise.catch((e) => {
         logger.warn('[VideoCallSession] ensureLocalTracks during callFriend failed', e);
       });
@@ -1000,6 +1010,10 @@ export class VideoCallSession extends SimpleEventEmitter {
     const callIdToSend = overrideCallId ?? this.callId;
     const roomIdToSend = overrideRoomId ?? this.roomId;
     const callEndDedupKey = String(roomIdToSend || callIdToSend || '').trim();
+    if (callIdToSend) {
+      callE2eeKeyByCallId.delete(String(callIdToSend));
+      void clearCallE2ee(String(callIdToSend));
+    }
 
     // CallKeep Connection teardown на любом локальном финале (hangup / abort),
     // даже если UI не прошёл через terminateCall с callKeepEnd.
@@ -7227,16 +7241,14 @@ export class VideoCallSession extends SimpleEventEmitter {
     if (!peerPublicKey) {
       this.callE2ee = null;
       callE2eeKeyByCallId.delete(callId);
-      return;
+      throw new Error('call_e2ee_required');
     }
     if (this.callE2ee?.callId === callId) return;
     const key = await deriveCallKey(peerPublicKey, callId).catch(() => null);
     if (!key) {
-      // Сервер включил шифрование по нашему же объявлению, а ключ не вывелся (ключ чата
-      // сбросили во время звонка). Собеседник шифрует — звонок будет без звука/видео.
       logger.error('[VideoCallSession] call e2ee: failed to derive key', { callId });
       this.callE2ee = null;
-      return;
+      throw new Error('call_e2ee_key_unavailable');
     }
     this.callE2ee = { callId, key };
     rememberCallE2eeKey(callId, key);

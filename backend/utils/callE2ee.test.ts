@@ -3,8 +3,6 @@ import { callAcceptedE2eeField, decideCallE2ee, parseCallE2eeDeclaration } from 
 const b64 = (fill: number) => Buffer.alloc(32, fill).toString('base64');
 const PK_A = b64(1);
 const PK_B = b64(2);
-const published = jest.fn(async () => ({ a: PK_A, b: PK_B }));
-const base = { a: 'a', b: 'b', loadPublicKeys: published };
 
 describe('parseCallE2eeDeclaration', () => {
   it('accepts a 32-byte public key and nothing else', () => {
@@ -16,18 +14,20 @@ describe('parseCallE2eeDeclaration', () => {
 });
 
 describe('decideCallE2ee', () => {
-  it('encrypts when both sides declared their published keys', async () => {
-    await expect(decideCallE2ee({ ...base, declaredA: PK_A, declaredB: PK_B })).resolves.toEqual({ pkA: PK_A, pkB: PK_B });
+  it('accepts independent ephemeral keys from both call participants', () => {
+    expect(decideCallE2ee({ declaredA: PK_A, declaredB: PK_B })).toEqual({ pkA: PK_A, pkB: PK_B });
   });
 
-  it('keeps the call plain when either side did not declare (older app)', async () => {
-    await expect(decideCallE2ee({ ...base, declaredA: PK_A, declaredB: null })).resolves.toBeNull();
-    await expect(decideCallE2ee({ ...base, declaredA: undefined, declaredB: PK_B })).resolves.toBeNull();
+  it('rejects a call when either mandatory declaration is absent', () => {
+    expect(decideCallE2ee({ declaredA: PK_A, declaredB: null })).toBeNull();
+    expect(decideCallE2ee({ declaredA: undefined, declaredB: PK_B })).toBeNull();
   });
 
-  it('keeps the call plain when a declared key is stale, so both sides agree', async () => {
-    await expect(decideCallE2ee({ ...base, declaredA: b64(9), declaredB: PK_B })).resolves.toBeNull();
-    await expect(decideCallE2ee({ ...base, declaredA: PK_A, declaredB: b64(9) })).resolves.toBeNull();
+  it('does not depend on published chat keys', () => {
+    expect(decideCallE2ee({ declaredA: b64(9), declaredB: b64(8) })).toEqual({
+      pkA: b64(9),
+      pkB: b64(8),
+    });
   });
 });
 

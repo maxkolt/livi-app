@@ -8007,6 +8007,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
               endLabel={t('endCall', lang)}
               moreItems={[]}
               encrypted={callE2eeActive}
+              encryptedLabel={t('e2eEncryptedBadge', lang)}
               speakerOn={
                 audioRouteForUi === 'SPEAKER_PHONE' ||
                 audioRouteForUi === 'BLUETOOTH' ||

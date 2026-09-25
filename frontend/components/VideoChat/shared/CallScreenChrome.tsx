@@ -93,36 +93,51 @@ type Props = {
     solid15: string;
     solid30: string;
   };
-  /** Звонок со сквозным шифрованием: под щитом пульсирует бирюзовый фон. */
+  /** Звонок со сквозным шифрованием: показываем спокойный подтверждённый статус. */
   encrypted?: boolean;
+  encryptedLabel?: string;
 };
 
-/** Расходящаяся волна под щитом — видно, что звонок зашифрован. */
-function ShieldPulse() {
-  const progress = useRef(new Animated.Value(0)).current;
+/** Однократное мягкое появление — без отвлекающей бесконечной пульсации. */
+function EncryptedShieldBadge({ label }: { label: string }) {
+  const entrance = useRef(new Animated.Value(0)).current;
   useEffect(() => {
-    const loop = Animated.loop(
-      Animated.timing(progress, {
-        toValue: 1,
-        duration: 1800,
-        easing: Easing.out(Easing.quad),
-        useNativeDriver: true,
-      }),
-    );
-    loop.start();
-    return () => loop.stop();
-  }, [progress]);
+    const animation = Animated.timing(entrance, {
+      toValue: 1,
+      duration: 320,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    });
+    animation.start();
+    return () => animation.stop();
+  }, [entrance]);
+
   return (
     <Animated.View
-      pointerEvents="none"
+      accessible
+      accessibilityLabel={label}
       style={[
-        styles.shieldPulse,
+        styles.encryptedShieldBadge,
         {
-          opacity: progress.interpolate({ inputRange: [0, 1], outputRange: [0.55, 0] }),
-          transform: [{ scale: progress.interpolate({ inputRange: [0, 1], outputRange: [1, 1.75] }) }],
+          opacity: entrance,
+          transform: [
+            { translateY: entrance.interpolate({ inputRange: [0, 1], outputRange: [-3, 0] }) },
+            { scale: entrance.interpolate({ inputRange: [0, 1], outputRange: [0.96, 1] }) },
+          ],
         },
       ]}
-    />
+    >
+      <View style={styles.encryptedShieldIcon}>
+        <MaterialIcons
+          name="verified-user"
+          size={19}
+          color={WELCOME_NAV_ACTIVE_ACCENT.softText}
+        />
+      </View>
+      <Text style={styles.encryptedShieldLabel} numberOfLines={1}>
+        {label}
+      </Text>
+    </Animated.View>
   );
 }
 
@@ -155,6 +170,7 @@ export function CallScreenChrome({
   speakerIcon,
   speakerAccent,
   encrypted = false,
+  encryptedLabel = 'Encrypted',
 }: Props) {
   const [moreOpen, setMoreOpen] = useState(false);
   const [resolvedUri, ready] = useResolvedImageUri(partnerAvatarUri ?? '');
@@ -186,7 +202,10 @@ export function CallScreenChrome({
             <MaterialIcons name="keyboard-arrow-down" size={26} color={WELCOME_HEADER_TITLE} />
           </Pressable>
 
-          <View style={styles.partnerChip} pointerEvents="none">
+          <View
+            style={[styles.partnerChip, encrypted ? styles.partnerChipEncrypted : null]}
+            pointerEvents="none"
+          >
             <View style={styles.avatarWrap}>
               {ready && resolvedUri ? (
                 <Image source={{ uri: resolvedUri }} style={styles.avatar} />
@@ -223,23 +242,11 @@ export function CallScreenChrome({
             </View>
           </View>
 
-          <View style={styles.shieldSlot} pointerEvents="none">
-            {encrypted ? <ShieldPulse /> : null}
-            <View
-              style={[
-                styles.roundChromeBtn,
-                { borderColor: WELCOME_NAV_ACTIVE_ACCENT.solid30 },
-                encrypted ? styles.shieldBtnEncrypted : null,
-              ]}
-              accessible
-              accessibilityLabel={encrypted ? 'end-to-end encrypted' : undefined}
-            >
-              <MaterialIcons
-                name="verified-user"
-                size={20}
-                color={WELCOME_NAV_ACTIVE_ACCENT.softText}
-              />
-            </View>
+          <View
+            style={[styles.shieldSlot, encrypted ? styles.shieldSlotEncrypted : null]}
+            pointerEvents="none"
+          >
+            {encrypted ? <EncryptedShieldBadge label={encryptedLabel} /> : null}
           </View>
         </View>
       </View>
@@ -449,16 +456,35 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     zIndex: 2,
   },
-  shieldPulse: {
-    position: 'absolute',
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: WELCOME_NAV_ACTIVE_ACCENT.solid,
+  shieldSlotEncrypted: {
+    width: 72,
+    height: 48,
   },
-  shieldBtnEncrypted: {
-    backgroundColor: Platform.OS === 'android' ? 'rgba(33, 58, 68, 0.96)' : WELCOME_NAV_ACTIVE_ACCENT.solid30,
+  encryptedShieldBadge: {
+    width: 72,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  encryptedShieldIcon: {
+    width: 29,
+    height: 29,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor:
+      Platform.OS === 'android' ? 'rgba(33, 58, 68, 0.96)' : WELCOME_NAV_ACTIVE_ACCENT.solid15,
+    borderWidth: StyleSheet.hairlineWidth,
     borderColor: WELCOME_NAV_ACTIVE_ACCENT.solid,
+  },
+  encryptedShieldLabel: {
+    maxWidth: 72,
+    marginTop: 2,
+    color: WELCOME_NAV_ACTIVE_ACCENT.softText,
+    fontSize: 9,
+    lineHeight: 11,
+    fontWeight: '600',
+    letterSpacing: 0.1,
+    textAlign: 'center',
   },
   roundChromeBtn: {
     width: 38,
@@ -484,6 +510,9 @@ const styles = StyleSheet.create({
     gap: 10,
     paddingHorizontal: 52,
     zIndex: 1,
+  },
+  partnerChipEncrypted: {
+    paddingRight: 84,
   },
   avatarWrap: {
     width: 48,

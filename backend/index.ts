@@ -1,6 +1,5 @@
 // backend/index.ts
 import { callAcceptedE2eeField, decideCallE2ee, parseCallE2eeDeclaration, type CallE2eeDecision } from './utils/callE2ee';
-import { loadE2ePublicKeys } from './sockets/e2eKeys';
 import dotenv from "dotenv";
 dotenv.config();
 
@@ -2642,6 +2641,8 @@ app.post('/api/calls/initiate', async (req, res) => {
     const callMedia: 'audio' | 'video' =
       String(req.body?.media || '').trim().toLowerCase() === 'audio' ? 'audio' : 'video';
     const callerNickHint = String(req.body?.callerNick || '').trim().slice(0, 64);
+    const e2eeA = parseCallE2eeDeclaration(req.body?.e2ee) ?? undefined;
+    if (!e2eeA) return res.status(400).json({ ok: false, error: 'call_e2ee_required' });
 
     pruneOrphanCallOfUserEntry(callerId);
     pruneOrphanCallOfUserEntry(calleeId);
@@ -2672,7 +2673,6 @@ app.post('/api/calls/initiate', async (req, res) => {
     const createdAtMs = Date.now();
     const expiresAtMs = createdAtMs + CALL_RING_TIMEOUT_MS;
     const callId = `${createdAtMs}_${Math.random().toString(36).slice(2, 8)}`;
-    const e2eeA = parseCallE2eeDeclaration(req.body?.e2ee) ?? undefined;
     const link: CallLink = {
       a: callerId,
       b: calleeId,
@@ -4124,6 +4124,8 @@ io.on('connection', async (sock: AuthedSocket) => {
       const peerId = normalizeMongoObjectId(peerRaw);
       const callMedia = String(mediaRaw || '').trim().toLowerCase() === 'audio' ? 'audio' : 'video';
       const callerNickHint = String(callerNickRaw || '').trim().slice(0, 64);
+      const e2eeA = parseCallE2eeDeclaration(e2eeRaw) ?? undefined;
+      if (!e2eeA) return ack?.({ ok: false, error: 'call_e2ee_required' });
 
       pruneOrphanCallOfUserEntry(me);
       pruneOrphanCallOfUserEntry(peerId);
@@ -4183,7 +4185,6 @@ io.on('connection', async (sock: AuthedSocket) => {
       const createdAtMs = Date.now();
       const expiresAtMs = createdAtMs + CALL_RING_TIMEOUT_MS;
       const callId = `${createdAtMs}_${Math.random().toString(36).slice(2, 8)}`;
-      const e2eeA = parseCallE2eeDeclaration(e2eeRaw) ?? undefined;
       callsById.set(callId, { a: me, b: peerId, createdAtMs, expiresAtMs, media: callMedia, e2eeA });
       createOrchestratedCall({ callId, callerId: me, calleeId: peerId });
       callDeliveryById.set(callId, {
@@ -4480,6 +4481,20 @@ io.on('connection', async (sock: AuthedSocket) => {
       ack?.({ ok: false, error: 'callee_socket_not_found' });
       return;
     }
+    const e2eeDecision = decideCallE2ee({
+      declaredA: link.e2eeA,
+      declaredB: parseCallE2eeDeclaration(e2eeRaw),
+    });
+    if (!e2eeDecision) {
+      logger.warn('[call:accept] rejected call without mandatory E2EE declarations', { callId: id });
+      try { aSock?.emit('call:error', { callId: id, reason: 'call_e2ee_required' }); } catch {}
+      try { bSock.emit('call:error', { callId: id, reason: 'call_e2ee_required' }); } catch {}
+      cleanupCall(id, 'ended');
+      clearDirectCallSocketStateForUsers([link.a, link.b]);
+      ack?.({ ok: false, error: 'call_e2ee_required' });
+      return;
+    }
+    link.e2ee = e2eeDecision;
     const shouldProcess = transitionCall(id, 'accepted', {
       actionKey: `socket_accept:${id}:${link.b}`,
       source: 'socket_accept',
@@ -4645,19 +4660,6 @@ io.on('connection', async (sock: AuthedSocket) => {
         return;
       }
 
-      // Шифровать ли звонок: оба объявили ключи, совпадающие с опубликованными.
-      // Ошибка сверки — обычный звонок у обоих, а не сорванный.
-      const e2eeDecision = await decideCallE2ee({
-        a: link.a,
-        b: link.b,
-        declaredA: link.e2eeA,
-        declaredB: parseCallE2eeDeclaration(e2eeRaw),
-        loadPublicKeys: loadE2ePublicKeys,
-      }).catch((e: any) => {
-        logger.warn('[call:accept] e2ee decision failed, call stays unencrypted', { callId: id, error: e?.message });
-        return null;
-      });
-      link.e2ee = e2eeDecision;
       const e2eeForA = callAcceptedE2eeField(link.a, link, e2eeDecision);
       const e2eeForB = callAcceptedE2eeField(link.b, link, e2eeDecision);
 

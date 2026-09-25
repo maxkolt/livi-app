@@ -264,7 +264,7 @@ const dict: Partial<Record<Lang, Record<string, string>>> = {
     e2eDisableConfirm: 'Отключить',
     e2eEnableAgainTitle: 'Включить шифрование?',
     e2eEnableAgainText: 'Новые сообщения и звонки снова будут защищены сквозным шифрованием с вашим прежним паролем.',
-    e2eEncryptedBadge: 'Защищено',
+    e2eEncryptedBadge: 'Зашифровано',
     chatTyping: 'Печатает',
     chatRecording: 'Записывает',
     chatSent: 'Отправлено',

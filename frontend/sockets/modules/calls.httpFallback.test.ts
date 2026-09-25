@@ -35,8 +35,13 @@ jest.mock('./shared', () => ({
 }));
 
 jest.mock('./socketCore', () => ({ socket: mockSocket }));
-// Шифрование звонка здесь не проверяем: без объявления ключа звонок идёт как обычный.
-jest.mock('./e2e', () => ({ getCallE2eeDeclarationSoon: jest.fn(async () => undefined) }));
+const mockBindOutgoingCallE2ee = jest.fn<Promise<boolean>, [string, string, { pk: string }]>(async () => true);
+jest.mock('./callE2ee', () => ({
+  createOutgoingCallE2eeDeclaration: jest.fn(() => ({ pk: 'ephemeral-public-key' })),
+  bindOutgoingCallE2ee: (callId: string, peerUserId: string, declaration: { pk: string }) =>
+    mockBindOutgoingCallE2ee(callId, peerUserId, declaration),
+  getOrCreateIncomingCallE2eeDeclaration: jest.fn(async () => ({ pk: 'incoming-public-key' })),
+}));
 
 import { startCall } from './calls';
 
@@ -67,6 +72,16 @@ describe('startCall HTTP fallback', () => {
           'x-user-id': '507f1f77bcf86cd799439011',
         }),
       }),
+    );
+    const request = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(JSON.parse(String(request.body))).toMatchObject({
+      to: '507f191e810c19729de860ea',
+      e2ee: { pk: 'ephemeral-public-key' },
+    });
+    expect(mockBindOutgoingCallE2ee).toHaveBeenCalledWith(
+      'call-http-1',
+      '507f191e810c19729de860ea',
+      { pk: 'ephemeral-public-key' },
     );
   });
 });

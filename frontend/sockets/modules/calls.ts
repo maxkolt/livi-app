@@ -4,7 +4,11 @@ import { API_BASE, CALL_SIGNALING_CONNECT_MS, isOid } from "./constants";
 import { emitAck, ensureSocketConnected, warmCallSignaling } from "./emit";
 import { shared } from "./shared";
 import { socket } from "./socketCore";
-import { getCallE2eeDeclarationSoon } from "./e2e";
+import {
+  bindOutgoingCallE2ee,
+  createOutgoingCallE2eeDeclaration,
+  getOrCreateIncomingCallE2eeDeclaration,
+} from "./callE2ee";
 
 export type DirectCallMedia = "audio" | "video";
 
@@ -17,11 +21,9 @@ export function startCall(toUserId: string, options?: { media?: DirectCallMedia;
   const payload: { to: string; media?: DirectCallMedia; callerNick?: string; e2ee?: { pk: string } } = { to };
   if (media) payload.media = media;
   if (callerNick) payload.callerNick = callerNick;
-  // Сквозное шифрование звонка: сервер включит его, только если и собеседник объявит ключ.
-  const withE2ee = async () => {
-    const e2ee = await getCallE2eeDeclarationSoon();
-    if (e2ee) payload.e2ee = e2ee;
-  };
+  // Звонки всегда E2EE: отдельный эфемерный ключ не зависит от настроек E2EE чата.
+  const e2ee = createOutgoingCallE2eeDeclaration(to);
+  payload.e2ee = e2ee;
 
   const viaSocket = () =>
     emitAck<{ ok: boolean; callId?: string; error?: string }>(
@@ -69,27 +71,34 @@ export function startCall(toUserId: string, options?: { media?: DirectCallMedia;
   };
 
   return (async () => {
-    await withE2ee();
+    let result: { ok: boolean; callId?: string; error?: string };
     if (!socket.connected || shared.reconnecting) {
       logger.info("[call:initiate] socket unavailable, using HTTP fallback", {
         connected: socket.connected,
         reconnecting: shared.reconnecting,
       });
-      return viaHttp();
+      result = await viaHttp();
+    } else {
+      try {
+        const socketResp = await viaSocket();
+        result = socketResp;
+      } catch (e: any) {
+        logger.warn("[call:initiate] socket initiate failed, trying HTTP fallback", {
+          error: e?.message || String(e),
+          connected: socket.connected,
+          reconnecting: shared.reconnecting,
+        });
+        result = await viaHttp();
+      }
     }
-
-    try {
-      const socketResp = await viaSocket();
-      if (socketResp?.ok === true) return socketResp;
-      return socketResp;
-    } catch (e: any) {
-      logger.warn("[call:initiate] socket initiate failed, trying HTTP fallback", {
-        error: e?.message || String(e),
-        connected: socket.connected,
-        reconnecting: shared.reconnecting,
-      });
-      return viaHttp();
+    if (result?.ok && result.callId) {
+      const bound = await bindOutgoingCallE2ee(result.callId, to, e2ee);
+      if (!bound) {
+        logger.error("[call:initiate] failed to bind call E2EE key", { callId: result.callId });
+        return { ok: false, error: "call_e2ee_key_unavailable" };
+      }
     }
+    return result;
   })();
 }
 
@@ -229,10 +238,10 @@ export async function emitCallAcceptAck(
   };
 
   const tryEmit = async () => {
-    const e2ee = await getCallE2eeDeclarationSoon();
+    const e2ee = await getOrCreateIncomingCallE2eeDeclaration(id);
     return emitAck<{ ok?: boolean; error?: string; duplicate?: boolean }>(
       "call:accept",
-      e2ee ? { callId: id, e2ee } : { callId: id },
+      { callId: id, e2ee },
       7000,
       1,
     );
@@ -302,8 +311,8 @@ export function beginEarlyIncomingCallAccept(callId: string): void {
         error: e?.message || String(e),
       });
       try {
-        const e2ee = await getCallE2eeDeclarationSoon(0);
-        socket.emit("call:accept", e2ee ? { callId: id, e2ee } : { callId: id });
+        const e2ee = await getOrCreateIncomingCallE2eeDeclaration(id);
+        socket.emit("call:accept", { callId: id, e2ee });
       } catch {}
       // Оптимистично: emit мог дойти; VideoCallSession всё равно дождётся call:accepted / recover.
       return { ok: true };
