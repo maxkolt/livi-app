@@ -9,6 +9,7 @@ import type { ClaimedOfflineMessage, OfflineQueuePort } from './offlineMessageDe
 import { checkMessageSendRateLimit, isMessageTextTooLong, truncateReplyQuote } from '../utils/messageLimits';
 import { resolveIncomingEnvelope } from '../utils/e2eEnvelope';
 import { loadE2ePublicKeys, registerE2eKeyHandlers } from './e2eKeys';
+import { deliverLiveMessage } from './liveMessageDelivery';
 import {
   asValidDate,
   compareMessagesNewestFirst,
@@ -1266,35 +1267,12 @@ function registerMessageHandlers(io: Server, sock: Socket) {
         return ack?.({ ok: false, error: 'save_failed' });
       }
 
-      // Online проверяем один раз (для offline-save/delivered). Emit в пустую комнату — no-op.
-      const recipientOnline = await isUserOnline(io, payload.to);
-      if (recipientOnline) {
-        io.to(`u:${String(payload.to)}`).emit('message:received', emitPayload);
-      }
-
-      // Счётчик непрочитанных: не копим, если получатель уже в этом чате (chat:viewing).
-      if (!(await isViewingChatWithUser(payload.to, me))) {
-        await addUnread(payload.to, messageId, me);
-      }
-
-      // Оффлайн-очередь, если получатель не онлайн (emit выше был no-op).
-      if (!recipientOnline) {
-        await saveOfflineMessage(payload.to, { ...emitPayload, id: messageId });
-      }
-
-      // Подтверждение отправителю после персиста — статусы/ретраи outbox остаются корректными.
-      ack?.({
-        ok: true,
-        messageId,
-        timestamp: message.timestamp,
-        delivered: recipientOnline
-      });
-
-      // 📲 PUSH: новое сообщение. Не слать пуш, если получатель сейчас в этом чате (как в Telegram).
-      try {
-        if (await isViewingChatWithUser(payload.to, me)) {
-          // Получатель смотрит чат с отправителем — пуш не отправляем
-        } else {
+      // 📲 PUSH: не слать, если получатель сейчас в этом чате (как в Telegram).
+      // force — живая доставка не подтвердилась: отметка «смотрит чат» могла остаться
+      // от сокета, который уже мёртв.
+      const sendNewMessagePush = async (force: boolean) => {
+        try {
+          if (!force && (await isViewingChatWithUser(payload.to, me))) return;
           let fromNick: string | undefined;
           try {
             const u = await User.findById(me).select('nick').lean();
@@ -1314,17 +1292,45 @@ function registerMessageHandlers(io: Server, sock: Socket) {
                   : '[Голосовое]';
 
           await sendMessagePushToUser(String(payload.to), {
-          type: 'message',
-          messageId,
-          from: String(me),
-          to: String(payload.to),
-          fromNick: fromNick || '',
-          sentAt: message.timestamp.toISOString(),
-          unreadCount,
-          messagePreview,
-        });
-        }
-      } catch {}
+            type: 'message',
+            messageId,
+            from: String(me),
+            to: String(payload.to),
+            fromNick: fromNick || '',
+            sentAt: message.timestamp.toISOString(),
+            unreadCount,
+            messagePreview,
+          });
+        } catch {}
+      };
+
+      // Живая доставка с подтверждением (sockets/liveMessageDelivery.ts): не дошло —
+      // офлайн-очередь и пуш, как если бы получатель был офлайн.
+      const delivery = await deliverLiveMessage(io as any, payload.to, emitPayload, () => {
+        void saveOfflineMessage(payload.to, { ...emitPayload, id: messageId });
+        void sendNewMessagePush(true);
+      });
+      const recipientOnline = delivery !== 'offline';
+
+      // Счётчик непрочитанных: не копим, если получатель уже в этом чате (chat:viewing).
+      if (!(await isViewingChatWithUser(payload.to, me))) {
+        await addUnread(payload.to, messageId, me);
+      }
+
+      // Оффлайн-очередь, если получатель не онлайн (emit выше не отправлялся).
+      if (!recipientOnline) {
+        await saveOfflineMessage(payload.to, { ...emitPayload, id: messageId });
+      }
+
+      // Подтверждение отправителю после персиста — статусы/ретраи outbox остаются корректными.
+      ack?.({
+        ok: true,
+        messageId,
+        timestamp: message.timestamp,
+        delivered: recipientOnline
+      });
+
+      await sendNewMessagePush(false);
     } catch (e: any) {
       console.error('[message:send] error:', e?.message || e);
       return ack?.({ ok: false, error: 'server_error' });

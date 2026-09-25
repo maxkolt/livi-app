@@ -2,6 +2,7 @@
 
 import React from "react";
 import { AppState } from "react-native";
+import NetInfo from "@react-native-community/netinfo";
 import socket, {
   fetchMessages,
   getChatMessages,
@@ -22,6 +23,9 @@ import {
   mergeInitialHistoryMessages,
   mergeQuietSyncMessages,
 } from "./chatHistory";
+
+/** Повторы синхронизации открытого чата после переподключения сокета. */
+const RECONNECT_SYNC_DELAYS_MS = [650, 2500, 6000];
 
 type ReadStatusMap = Record<string, "sending" | "delivered" | "read" | "failed" | "sent">;
 
@@ -339,6 +343,13 @@ export function useChatHistorySync({
     currentUserIdRef.current = currentUserId;
   }, [currentUserId]);
 
+  // Свежие колбэки для подписок, созданных один раз (см. эффект ниже).
+  const setMessagesRef = React.useRef(setMessages);
+  setMessagesRef.current = setMessages;
+  const updateReadStatusesRef = React.useRef(updateReadStatuses);
+  updateReadStatusesRef.current = updateReadStatuses;
+  const wasReachableRef = React.useRef<boolean | null>(null);
+
   React.useEffect(() => {
     let t: ReturnType<typeof setTimeout> | null = null;
     const run = () => {
@@ -347,70 +358,83 @@ export function useChatHistorySync({
       const uid = currentUserIdRef.current;
       if (!pid || !uid) return;
       if (t) clearTimeout(t);
-      t = setTimeout(() => {
-        if (!isFocusedRef.current || peerIdRef.current !== pid || currentUserIdRef.current !== uid) {
-          return;
-        }
-        (async () => {
-          try {
-            const serverMessages = await fetchMessages({ with: pid, limit: 50 });
-            if (!serverMessages?.ok || !Array.isArray(serverMessages.messages)) return;
-
-            const hiddenForMeIds = hiddenForMeMessageIdsRef.current;
-            const formattedMessages = serverMessages.messages
-              .filter((msg: any) => !hiddenForMeIds.has(String(msg?.id || "").trim()))
-              .map((msg: any) => formatServerChatMessage(msg, String(uid)));
-
-            setMessages((prev) =>
-              mergeInitialHistoryMessages(
-                prev,
-                formattedMessages,
-                {
-                  uploadStatus: uploadStatusRef.current as any,
-                  readStatuses: readStatusesRef.current as any,
-                },
-                { dropOptimisticDupes: false },
-              ),
-            );
-
-            try {
-              const serverStatuses = buildOutgoingReadStatusesFromHistory(formattedMessages);
-              if (Object.keys(serverStatuses).length) {
-                updateReadStatuses((prev) => mergeChatReadStatuses(prev, serverStatuses));
-              }
-            } catch {}
-
-            await markMessagesAsRead(pid);
-            try {
-              await dismissMessageNotificationForUser(pid);
-              await syncAppBadgeFromMissedCount();
-            } catch {}
-            logger.debug("[ChatScreen] Merged messages after socket connect/reconnect", {
-              n: formattedMessages.length,
-              peerId: pid,
-            });
-          } catch (e) {
-            logger.warn("[ChatScreen] Post-reconnect message sync failed:", e);
+      // Сразу после возврата сети запрос часто падает (reauth ещё не прошёл, путь
+      // не прогрелся) — без повтора открытый чат не видел сообщений, пришедших
+      // в «мёртвый» сокет, пока его не переоткроют.
+      const attempt = (index: number) => {
+        t = setTimeout(() => {
+          if (!isFocusedRef.current || peerIdRef.current !== pid || currentUserIdRef.current !== uid) {
+            return;
           }
-        })().catch(() => {});
-      }, 650);
+          (async () => {
+            try {
+              const serverMessages = await fetchMessages({ with: pid, limit: 50 });
+              if (!serverMessages?.ok || !Array.isArray(serverMessages.messages)) {
+                if (index + 1 < RECONNECT_SYNC_DELAYS_MS.length) attempt(index + 1);
+                return;
+              }
+
+              const hiddenForMeIds = hiddenForMeMessageIdsRef.current;
+              const formattedMessages = serverMessages.messages
+                .filter((msg: any) => !hiddenForMeIds.has(String(msg?.id || "").trim()))
+                .map((msg: any) => formatServerChatMessage(msg, String(uid)));
+
+              setMessagesRef.current((prev) =>
+                mergeInitialHistoryMessages(
+                  prev,
+                  formattedMessages,
+                  {
+                    uploadStatus: uploadStatusRef.current as any,
+                    readStatuses: readStatusesRef.current as any,
+                  },
+                  { dropOptimisticDupes: false },
+                ),
+              );
+
+              try {
+                const serverStatuses = buildOutgoingReadStatusesFromHistory(formattedMessages);
+                if (Object.keys(serverStatuses).length) {
+                  updateReadStatusesRef.current((prev) => mergeChatReadStatuses(prev, serverStatuses));
+                }
+              } catch {}
+
+              await markMessagesAsRead(pid);
+              try {
+                await dismissMessageNotificationForUser(pid);
+                await syncAppBadgeFromMissedCount();
+              } catch {}
+              logger.debug("[ChatScreen] Merged messages after socket connect/reconnect", {
+                n: formattedMessages.length,
+                peerId: pid,
+              });
+            } catch (e) {
+              logger.warn("[ChatScreen] Post-reconnect message sync failed:", e);
+              if (index + 1 < RECONNECT_SYNC_DELAYS_MS.length) attempt(index + 1);
+            }
+          })().catch(() => {});
+        }, RECONNECT_SYNC_DELAYS_MS[index]);
+      };
+      attempt(0);
     };
 
     socket.on("connect", run);
     socket.on("reconnect", run);
+    // Сеть вернулась (режим полёта, VPN, лифт): синхронизируем, не дожидаясь connect
+    // сокета — сообщения, ушедшие в «мёртвый» сокет, иначе не видны до переоткрытия чата.
+    const unsubscribeNet = NetInfo.addEventListener((state) => {
+      const reachable = state.isConnected === true && state.isInternetReachable !== false;
+      if (wasReachableRef.current === false && reachable) run();
+      wasReachableRef.current = reachable;
+    });
     return () => {
       socket.off("connect", run);
       socket.off("reconnect", run);
+      unsubscribeNet();
       if (t) clearTimeout(t);
     };
-  }, [
-    isFocusedRef,
-    setMessages,
-    updateReadStatuses,
-    hiddenForMeMessageIdsRef,
-    uploadStatusRef,
-    readStatusesRef,
-  ]);
+    // Подписки — один раз на экран: с нестабильными колбэками в deps эффект
+    // перезапускался на каждом рендере (несколько раз в секунду) и терял переход сети.
+  }, []);
 
   return { quietSyncChat };
 }

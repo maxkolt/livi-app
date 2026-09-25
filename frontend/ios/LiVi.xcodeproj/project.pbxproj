@@ -11,10 +11,12 @@
 		3E461D99554A48A4959DE609 /* SplashScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = AA286B85B6C04FC6940260E9 /* SplashScreen.storyboard */; };
 		646B5E5B3869D409959E0665 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 34D770273033ABAF37F3567E /* PrivacyInfo.xcprivacy */; };
 		72E8E769E9FDFD548444BECD /* ExpoModulesProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 831ED26739C2415BD83C1900 /* ExpoModulesProvider.swift */; };
+		A1211CD857A9FC7BCDA7F773 /* LiviCrypto.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B3E98A6489CC9790A1E01BC /* LiviCrypto.swift */; };
 		A1C0D1E22F1234567890ABCD /* LiviVoipPushManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1C0D1E12F1234567890ABCD /* LiviVoipPushManager.swift */; };
 		A1C0D1E42F1234567890ABCD /* LiviVoipPushManager.m in Sources */ = {isa = PBXBuildFile; fileRef = A1C0D1E32F1234567890ABCD /* LiviVoipPushManager.m */; };
 		BB2F792D24A3F905000567C9 /* Expo.plist in Resources */ = {isa = PBXBuildFile; fileRef = BB2F792C24A3F905000567C9 /* Expo.plist */; };
 		C41038094E0DA4325B03441F /* libPods-LiVi.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 048125F832E91824F6F03B4A /* libPods-LiVi.a */; };
+		CFBB5EEACC8739135DFF9E3A /* LiviCrypto.m in Sources */ = {isa = PBXBuildFile; fileRef = 4F99046D6796243F9E8476D9 /* LiviCrypto.m */; };
 		F11748422D0307B40044C1D9 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11748412D0307B40044C1D9 /* AppDelegate.swift */; };
 /* End PBXBuildFile section */
 
@@ -23,7 +25,9 @@
 		13B07F961A680F5B00A75B9A /* LiVi.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LiVi.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		13B07FB51A68108700A75B9A /* Images.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; name = Images.xcassets; path = LiVi/Images.xcassets; sourceTree = "<group>"; };
 		13B07FB61A68108700A75B9A /* Info.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; name = Info.plist; path = LiVi/Info.plist; sourceTree = "<group>"; };
+		2B3E98A6489CC9790A1E01BC /* LiviCrypto.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = LiviCrypto.swift; path = LiVi/LiviCrypto.swift; sourceTree = "<group>"; };
 		34D770273033ABAF37F3567E /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xml; name = PrivacyInfo.xcprivacy; path = LiVi/PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		4F99046D6796243F9E8476D9 /* LiviCrypto.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; name = LiviCrypto.m; path = LiVi/LiviCrypto.m; sourceTree = "<group>"; };
 		831ED26739C2415BD83C1900 /* ExpoModulesProvider.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ExpoModulesProvider.swift; path = "Pods/Target Support Files/Pods-LiVi/ExpoModulesProvider.swift"; sourceTree = "<group>"; };
 		96215C51B28DD9242503110C /* Pods-LiVi.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-LiVi.debug.xcconfig"; path = "Target Support Files/Pods-LiVi/Pods-LiVi.debug.xcconfig"; sourceTree = "<group>"; };
 		A1C0D1E12F1234567890ABCD /* LiviVoipPushManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LiviVoipPushManager.swift; path = LiVi/LiviVoipPushManager.swift; sourceTree = "<group>"; };
@@ -60,6 +64,8 @@
 				13B07FB61A68108700A75B9A /* Info.plist */,
 				AA286B85B6C04FC6940260E9 /* SplashScreen.storyboard */,
 				34D770273033ABAF37F3567E /* PrivacyInfo.xcprivacy */,
+				2B3E98A6489CC9790A1E01BC /* LiviCrypto.swift */,
+				4F99046D6796243F9E8476D9 /* LiviCrypto.m */,
 			);
 			name = LiVi;
 			sourceTree = "<group>";
@@ -385,6 +391,8 @@
 				A1C0D1E22F1234567890ABCD /* LiviVoipPushManager.swift in Sources */,
 				A1C0D1E42F1234567890ABCD /* LiviVoipPushManager.m in Sources */,
 				72E8E769E9FDFD548444BECD /* ExpoModulesProvider.swift in Sources */,
+				A1211CD857A9FC7BCDA7F773 /* LiviCrypto.swift in Sources */,
+				CFBB5EEACC8739135DFF9E3A /* LiviCrypto.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

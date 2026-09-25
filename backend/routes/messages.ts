@@ -6,6 +6,7 @@ import OfflineMessage from '../models/OfflineMessage';
 import { checkMessageSendRateLimit, isMessageTextTooLong, truncateReplyQuote } from '../utils/messageLimits';
 import { resolveIncomingEnvelope } from '../utils/e2eEnvelope';
 import { loadE2ePublicKeys } from '../sockets/e2eKeys';
+import { deliverLiveMessage } from '../sockets/liveMessageDelivery';
 import { areFriendsCached, getOrCreateFriendship, invalidateFriendshipCache } from '../utils/friendshipUtils';
 import {
   MAX_MESSAGE_BATCH_SIZE,
@@ -314,30 +315,38 @@ router.post('/messages/send', async (req, res) => {
     // If recipient is offline, persist as offline message (same semantics as socket flow)
     try {
       const io = (req as any).io as any | undefined;
-      const isRecipientOnline = io ? await isUserRoomOnline(io, to) : false;
-
-      if (io && isRecipientOnline) {
-        const payload: any = {
-          id: messageId,
-          from: me,
-          to,
-          type,
-          text,
-          uri: primaryUri,
-          name,
-          size,
-          duration,
-          stickerId,
-          stickerPackId,
-          stickerEmoji,
-          stickerLabel,
-          timestamp: timestamp.toISOString(),
-          read: false,
-        };
-        if (type === 'image' && imageUris.length > 1) payload.uris = imageUris;
-        if (replyTo) payload.replyTo = replyTo;
-        if (enc) payload.enc = enc;
-        io.to(`u:${String(to)}`).emit('message:received', payload);
+      const payload: any = {
+        id: messageId,
+        from: me,
+        to,
+        type,
+        text,
+        uri: primaryUri,
+        name,
+        size,
+        duration,
+        stickerId,
+        stickerPackId,
+        stickerEmoji,
+        stickerLabel,
+        timestamp: timestamp.toISOString(),
+        read: false,
+      };
+      if (type === 'image' && imageUris.length > 1) payload.uris = imageUris;
+      if (replyTo) payload.replyTo = replyTo;
+      if (enc) payload.enc = enc;
+      // Живая доставка с подтверждением (sockets/liveMessageDelivery.ts): не дошло — в офлайн-очередь.
+      const delivery = io
+        ? await deliverLiveMessage(io, to, payload, () => {
+            OfflineMessage.create({
+              recipientId: new mongoose.Types.ObjectId(to),
+              senderId: new mongoose.Types.ObjectId(me),
+              messageId,
+              messageData: payload,
+            }).catch(() => {});
+          })
+        : 'offline';
+      if (delivery !== 'offline') {
         return res.json({ ok: true, messageId, timestamp, delivered: true });
       }
 

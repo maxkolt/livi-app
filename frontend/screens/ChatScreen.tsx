@@ -194,7 +194,14 @@ import {
   ensureGloballyDeletedMessageIdsLoaded,
 } from "../sockets/socket";
 import { MAX_MESSAGE_TEXT_LENGTH } from "../sockets/modules/constants";
-import { E2eChatBanner, e2eMenuAction, useE2eStatus, type E2eModalMode } from "./chat/E2eChatBanner";
+import {
+  E2eChatBanner,
+  e2eMenuActions,
+  usePeerChatEncrypted,
+  useE2eStatus,
+  type E2eModalMode,
+} from "./chat/E2eChatBanner";
+import { hasLocalE2eKey } from "../sockets/modules/e2e";
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useLang } from "../store/lang";
 import { t, type Lang } from "../utils/i18n";
@@ -543,7 +550,8 @@ export default function ChatScreen({ route, navigation }: Props) {
   const [showClearMenu, setShowClearMenu] = useState(false);
   // Сквозное шифрование: пункт в меню справа вверху открывает окно пароля.
   const e2eStatus = useE2eStatus();
-  const e2eMenu = e2eMenuAction(e2eStatus);
+  const e2eMenu = e2eMenuActions(e2eStatus, hasLocalE2eKey());
+  const chatEncrypted = usePeerChatEncrypted(peerId, e2eStatus);
   const [e2eRequestedMode, setE2eRequestedMode] = useState<E2eModalMode | null>(null);
   const clearE2eRequest = useCallback(() => setE2eRequestedMode(null), []);
   const [selectedMessage, setSelectedMessage] = useState<any>(null);
@@ -1884,6 +1892,7 @@ export default function ChatScreen({ route, navigation }: Props) {
     openAvatarModal,
     onPressCall: handleHeaderCall,
     onPressMore: openClearMenu,
+    encrypted: chatEncrypted,
     selectionMode,
     selectedCount,
     exitSelectionMode,
@@ -3314,22 +3323,29 @@ export default function ChatScreen({ route, navigation }: Props) {
         <View style={homeStyles.overlayModal}>
           <WelcomeOverlayDim strong />
           <WelcomeOverlayCard opaque>
-            {e2eMenu ? (
-              <View style={{ marginBottom: 18 }}>
-                <WelcomeOverlayPill
-                  label={t(e2eMenu.labelKey, lang)}
-                  onPress={() => {
-                    setShowClearMenu(false);
-                    setE2eRequestedMode(e2eMenu.mode);
-                  }}
-                  variant="primary"
-                  style={{
-                    // Бирюзовый активной навигации: полупрозрачная заливка и рамка того же цвета.
-                    backgroundColor: WELCOME_NAV_ACTIVE_ACCENT.solid30,
-                    borderWidth: 1,
-                    borderColor: WELCOME_NAV_ACTIVE_ACCENT.solid,
-                  }}
-                />
+            {e2eMenu.length > 0 ? (
+              <View style={{ gap: 10, marginBottom: 18 }}>
+                {e2eMenu.map((item) => (
+                  <WelcomeOverlayPill
+                    key={item.mode}
+                    label={t(item.labelKey, lang)}
+                    onPress={() => {
+                      setShowClearMenu(false);
+                      setE2eRequestedMode(item.mode);
+                    }}
+                    variant={item.tone === 'accent' ? 'primary' : 'secondary'}
+                    style={
+                      item.tone === 'accent'
+                        ? {
+                            // Бирюзовый активной навигации: полупрозрачная заливка и рамка того же цвета.
+                            backgroundColor: WELCOME_NAV_ACTIVE_ACCENT.solid30,
+                            borderWidth: 1,
+                            borderColor: WELCOME_NAV_ACTIVE_ACCENT.solid,
+                          }
+                        : undefined
+                    }
+                  />
+                ))}
               </View>
             ) : null}
             <Text

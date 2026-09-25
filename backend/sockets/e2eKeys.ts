@@ -4,6 +4,7 @@ import User from '../models/User';
 import { checkRateLimit } from '../utils/rateLimit';
 import { hashInstallSecret, verifyInstallSecret } from '../utils/installSecret';
 import { isE2ePublicKey, strictBase64Length } from '../utils/e2eEnvelope';
+import { getFriendIds } from '../utils/friendshipUtils';
 
 /**
  * Ключи сквозного шифрования чата.
@@ -28,7 +29,12 @@ export const BACKUP_FETCH_LIMITS = [
   { key: 'e2e_backup_fetch_d', max: 20, windowMs: 24 * 60 * 60_000 },
 ];
 
-export type BackupKdf = { alg: 'scrypt'; N: number; r: number; p: number; salt: string };
+export type BackupKdf =
+  | { alg: 'scrypt'; N: number; r: number; p: number; salt: string }
+  | { alg: 'pbkdf2-sha256'; iterations: number; salt: string };
+
+/** Нижняя граница PBKDF2 (OWASP 2023: 600 000; 310 000 — прежняя рекомендация). */
+export const PBKDF2_MIN_ITERATIONS = 310_000;
 export type BackupUpload = { v: number; kdf: BackupKdf; n: string; c: string; pk: string; authKey: string };
 
 function isPowerOfTwo(n: number): boolean {
@@ -37,13 +43,18 @@ function isPowerOfTwo(n: number): boolean {
 
 export function parseBackupKdf(raw: unknown): BackupKdf | null {
   const k = raw as any;
+  const saltLen = strictBase64Length(k?.salt);
+  if (saltLen == null || saltLen < 16 || saltLen > 64) return null;
+  if (k?.alg === 'pbkdf2-sha256') {
+    // Нативный PBKDF2 на устройстве (LiviCrypto). Нижняя граница — чтобы копию не ослабили.
+    if (!Number.isInteger(k.iterations) || k.iterations < PBKDF2_MIN_ITERATIONS || k.iterations > 10_000_000) return null;
+    return { alg: 'pbkdf2-sha256', iterations: k.iterations, salt: k.salt };
+  }
   if (!k || k.alg !== 'scrypt') return null;
   // Нижняя граница — не дать клиенту (или атакующему с сессией) ослабить копию.
   if (!isPowerOfTwo(k.N) || k.N < 2 ** 15 || k.N > 2 ** 20) return null;
   if (!Number.isInteger(k.r) || k.r < 8 || k.r > 16) return null;
   if (!Number.isInteger(k.p) || k.p < 1 || k.p > 4) return null;
-  const saltLen = strictBase64Length(k.salt);
-  if (saltLen == null || saltLen < 16 || saltLen > 64) return null;
   return { alg: 'scrypt', N: k.N, r: k.r, p: k.p, salt: k.salt };
 }
 
@@ -76,6 +87,17 @@ export async function loadE2ePublicKeys(userIds: string[]): Promise<Record<strin
   const out: Record<string, string | undefined> = {};
   for (const d of docs as any[]) out[String(d._id)] = d.e2ePublicKey || undefined;
   return out;
+}
+
+/**
+ * Друзья узнают о смене ключа. Дружба живёт в FriendshipEdge (getFriendIds);
+ * User.friends — устаревшее поле, по нему ключи никому не доходили.
+ */
+async function notifyFriendsKeyChanged(io: Server, me: string, publicKey: string): Promise<void> {
+  const friendIds = await getFriendIds(me).catch(() => [] as string[]);
+  for (const friendId of friendIds) {
+    io.to(`u:${String(friendId)}`).emit('e2e:key_changed', { userId: me, publicKey });
+  }
 }
 
 export function registerE2eKeyHandlers(io: Server, sock: Socket, meId: () => string) {
@@ -112,7 +134,7 @@ export function registerE2eKeyHandlers(io: Server, sock: Socket, meId: () => str
       const backup = parseBackupUpload(payload?.backup, publicKey);
       if (!backup) return ack?.({ ok: false, error: 'invalid_backup' });
 
-      const prev = await User.findById(me).select('e2ePublicKey friends').lean();
+      const prev = await User.findById(me).select('e2ePublicKey').lean();
       if (!prev) return ack?.({ ok: false, error: 'not_found' });
       const now = new Date();
       await User.updateOne(
@@ -135,15 +157,57 @@ export function registerE2eKeyHandlers(io: Server, sock: Socket, meId: () => str
       );
 
       if ((prev as any).e2ePublicKey !== publicKey) {
-        const changed = { userId: me, publicKey };
-        for (const friendId of ((prev as any).friends || []) as any[]) {
-          io.to(`u:${String(friendId)}`).emit('e2e:key_changed', changed);
-        }
+        await notifyFriendsKeyChanged(io, me, publicKey);
         console.log(`[e2e] public key ${(prev as any).e2ePublicKey ? 'rotated' : 'published'} user=${me}`);
       }
       return ack?.({ ok: true });
     } catch (e: any) {
       console.error('[e2e:publish] error:', e?.message || e);
+      return ack?.({ ok: false, error: 'server_error' });
+    }
+  });
+
+  /**
+   * Отключить шифрование: ключ снимается с публикации, копия и ключ на устройстве
+   * остаются — старая зашифрованная переписка по-прежнему читается, а новые
+   * сообщения и звонки идут обычными. Друзья перечитают ключ по e2e:key_changed.
+   */
+  sock.on('e2e:disable', async (_payload: unknown, ack?: Function) => {
+    try {
+      const me = authed();
+      if (!me) return ack?.({ ok: false, error: 'unauthorized' });
+      const prev = await User.findById(me).select('e2ePublicKey').lean();
+      if (!prev) return ack?.({ ok: false, error: 'not_found' });
+      await User.updateOne({ _id: me }, { $set: { e2ePublicKey: '', e2eKeyUpdatedAt: new Date() } });
+      if ((prev as any).e2ePublicKey) {
+        await notifyFriendsKeyChanged(io, me, '');
+        console.log(`[e2e] disabled user=${me}`);
+      }
+      return ack?.({ ok: true });
+    } catch (e: any) {
+      console.error('[e2e:disable] error:', e?.message || e);
+      return ack?.({ ok: false, error: 'server_error' });
+    }
+  });
+
+  /** Включить снова без пароля: только тот ключ, для которого на сервере уже лежит копия. */
+  sock.on('e2e:enable', async (payload: { publicKey?: string }, ack?: Function) => {
+    try {
+      const me = authed();
+      if (!me) return ack?.({ ok: false, error: 'unauthorized' });
+      const publicKey = payload?.publicKey;
+      if (!isE2ePublicKey(publicKey)) return ack?.({ ok: false, error: 'invalid_key' });
+      const u = await User.findById(me).select('e2ePublicKey +e2eBackup').lean();
+      if (!u) return ack?.({ ok: false, error: 'not_found' });
+      if ((u as any).e2eBackup?.pk !== publicKey) return ack?.({ ok: false, error: 'no_backup' });
+      await User.updateOne({ _id: me }, { $set: { e2ePublicKey: publicKey, e2eKeyUpdatedAt: new Date() } });
+      if ((u as any).e2ePublicKey !== publicKey) {
+        await notifyFriendsKeyChanged(io, me, publicKey);
+        console.log(`[e2e] re-enabled user=${me}`);
+      }
+      return ack?.({ ok: true });
+    } catch (e: any) {
+      console.error('[e2e:enable] error:', e?.message || e);
       return ack?.({ ok: false, error: 'server_error' });
     }
   });
@@ -181,8 +245,7 @@ export function registerE2eKeyHandlers(io: Server, sock: Socket, meId: () => str
             .slice(0, MAX_KEY_LOOKUP)
         : [];
       if (requested.length === 0) return ack?.({ ok: true, keys: {} });
-      const meDoc = await User.findById(me).select('friends').lean();
-      const allowed = new Set([me, ...(((meDoc as any)?.friends || []) as any[]).map(String)]);
+      const allowed = new Set([me, ...(await getFriendIds(me)).map(String)]);
       const ids = requested.filter((id) => allowed.has(id));
       const found = await loadE2ePublicKeys(ids);
       const keys: Record<string, string> = {};

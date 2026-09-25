@@ -1604,6 +1604,8 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       const partnerFromSession = !!s.getPartnerExternalHoldActive?.();
       const partnerFromRef = (global as any).__partnerExternalHoldRef?.current === true;
       setPartnerExternalHold(partnerFromSession || partnerFromRef);
+      // Щит шифрования: у принимающего событие callE2eeChanged уходит в другой инстанс сессии.
+      setCallE2eeActive(!!s.isCallE2eeActive?.());
     };
     syncHoldUiFromSession();
     const timer = setInterval(syncHoldUiFromSession, 400);

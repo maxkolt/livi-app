@@ -71,15 +71,15 @@
       </dict>
     </dict>
     <key>NSCameraUsageDescription</key>
-    <string>Разрешите доступ к камере, чтобы сделать фото для аватара.</string>
+    <string>Камера нужна для видеозвонков, видеочата и фото профиля.</string>
     <key>NSFaceIDUsageDescription</key>
     <string>Allow $(PRODUCT_NAME) to access your Face ID biometric data.</string>
     <key>NSMicrophoneUsageDescription</key>
-    <string>Это необходимо для аудиосвязи.</string>
+    <string>Микрофон нужен для звонков, видеочата и голосовых сообщений.</string>
     <key>NSPhotoLibraryAddUsageDescription</key>
     <string>Разрешите сохранять изображения в медиатеку.</string>
     <key>NSPhotoLibraryUsageDescription</key>
-    <string>Разрешите доступ к фото, чтобы выбрать аватар.</string>
+    <string>Доступ к фото нужен, чтобы отправлять изображения в чат и выбрать аватар.</string>
     <key>UIBackgroundModes</key>
     <array>
       <string>voip</string>

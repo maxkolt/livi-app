@@ -1,7 +1,9 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Keyboard,
   Modal,
+  Platform,
   StyleSheet,
   Text,
   TextInput,
@@ -13,7 +15,11 @@ import { LIVI, t, type Lang } from '../../utils/i18n';
 import { WELCOME_NAV_ACTIVE_ACCENT } from '../home/constants';
 import {
   changeE2eBackupPassword,
+  disableE2e,
+  enableE2eAgain,
   getE2eStatus,
+  getPeerPublicKey,
+  onPeerE2eUpdated,
   markE2eSetupPromptSeen,
   onE2eStatus,
   onPeerKeyChanged,
@@ -25,15 +31,61 @@ import {
 } from '../../sockets/modules/e2e';
 import { isAcceptableBackupPassword } from '../../sockets/modules/e2eCrypto';
 
-export type E2eModalMode = 'setup' | 'restore' | 'reset' | 'change';
+export type E2eModalMode = 'setup' | 'restore' | 'reset' | 'change' | 'disable' | 'enable';
 type Mode = E2eModalMode;
+type PasswordMode = 'setup' | 'restore' | 'reset' | 'change';
 
-/** Пункт меню чата для текущего состояния шифрования (null — пункта нет). */
-export function e2eMenuAction(status: E2eStatus): { mode: E2eModalMode; labelKey: string } | null {
-  if (status === 'needs_setup') return { mode: 'setup', labelKey: 'e2eMenuEnable' };
-  if (status === 'needs_restore') return { mode: 'restore', labelKey: 'e2eMenuRestore' };
-  if (status === 'ready') return { mode: 'change', labelKey: 'e2eMenuChangePassword' };
-  return null;
+export type E2eMenuAction = { mode: E2eModalMode; labelKey: string; tone: 'accent' | 'plain' };
+
+/** Пункты меню чата для текущего состояния шифрования (пусто — пока состояние неизвестно). */
+export function e2eMenuActions(status: E2eStatus, hasLocalKey: boolean): E2eMenuAction[] {
+  if (status === 'needs_setup') return [{ mode: 'setup', labelKey: 'e2eMenuEnable', tone: 'accent' }];
+  if (status === 'needs_restore') return [{ mode: 'restore', labelKey: 'e2eMenuRestore', tone: 'accent' }];
+  if (status === 'ready') {
+    return [
+      { mode: 'change', labelKey: 'e2eMenuChangePassword', tone: 'accent' },
+      { mode: 'disable', labelKey: 'e2eMenuDisable', tone: 'plain' },
+    ];
+  }
+  if (status === 'disabled') {
+    // Ключ на устройстве есть — включаем без пароля; нет (переустановка) — сначала восстановить.
+    return hasLocalKey
+      ? [{ mode: 'enable', labelKey: 'e2eMenuEnableAgain', tone: 'accent' }]
+      : [{ mode: 'restore', labelKey: 'e2eMenuRestore', tone: 'accent' }];
+  }
+  return [];
+}
+
+/**
+ * Переписка с этим собеседником шифруется: у меня шифрование включено и у него
+ * опубликован ключ. Обновляется, когда кто-то из двоих включает или отключает его.
+ */
+export function usePeerChatEncrypted(peerId: string, status: E2eStatus): boolean {
+  const [peerHasKey, setPeerHasKey] = useState(false);
+  const [refreshTick, setRefreshTick] = useState(0);
+  useEffect(
+    () =>
+      onPeerE2eUpdated((changed) => {
+        if (changed === peerId) setRefreshTick((n) => n + 1);
+      }),
+    [peerId],
+  );
+  useEffect(() => {
+    if (status !== 'ready' || !peerId) {
+      setPeerHasKey(false);
+      return;
+    }
+    let cancelled = false;
+    getPeerPublicKey(peerId, { force: refreshTick > 0 })
+      .then((pk) => {
+        if (!cancelled) setPeerHasKey(!!pk);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [peerId, status, refreshTick]);
+  return status === 'ready' && peerHasKey;
 }
 
 /** Состояние шифрования для экрана (меню чата). */
@@ -128,8 +180,62 @@ export function E2eChatBanner({
   return (
     <>
       {banner}
-      {mode ? <E2ePasswordModal lang={lang} mode={mode} onModeChange={setMode} onClose={() => setMode(null)} /> : null}
+      {mode === 'disable' || mode === 'enable' ? (
+        <E2eConfirmModal lang={lang} mode={mode} onClose={() => setMode(null)} />
+      ) : mode ? (
+        <E2ePasswordModal lang={lang} mode={mode} onModeChange={setMode} onClose={() => setMode(null)} />
+      ) : null}
     </>
+  );
+}
+
+/** Отключить / включить снова — без пароля, только подтверждение. */
+function E2eConfirmModal({ lang, mode, onClose }: { lang: Lang; mode: 'disable' | 'enable'; onClose: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const confirm = useCallback(async () => {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const r = mode === 'disable' ? await disableE2e() : await enableE2eAgain();
+      if (r.ok) onClose();
+      else setError(t('e2eNetworkError', lang));
+    } catch {
+      setError(t('e2eNetworkError', lang));
+    } finally {
+      setBusy(false);
+    }
+  }, [busy, mode, lang, onClose]);
+  const disabling = mode === 'disable';
+  return (
+    <Modal visible transparent animationType="fade" onRequestClose={busy ? () => {} : onClose}>
+      <View style={styles.overlay}>
+        <BlurView intensity={60} tint="dark" style={StyleSheet.absoluteFill} />
+        <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.5)' }]} />
+        <View style={styles.card}>
+          <Text style={styles.title}>{t(disabling ? 'e2eDisableTitle' : 'e2eEnableAgainTitle', lang)}</Text>
+          <Text style={styles.text}>{t(disabling ? 'e2eDisableText' : 'e2eEnableAgainText', lang)}</Text>
+          {error ? <Text style={styles.error}>{error}</Text> : null}
+          <View style={styles.row}>
+            <TouchableOpacity style={[styles.btn, styles.btnSecondary]} onPress={onClose} disabled={busy}>
+              <Text style={styles.btnText}>{t('e2eLater', lang)}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.btn, disabling ? styles.btnDanger : styles.btnPrimary]}
+              onPress={confirm}
+              disabled={busy}
+            >
+              {busy ? (
+                <ActivityIndicator color={LIVI.white} size="small" />
+              ) : (
+                <Text style={styles.btnText}>{t(disabling ? 'e2eDisableConfirm' : 'e2eEnable', lang)}</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
   );
 }
 
@@ -140,7 +246,7 @@ function E2ePasswordModal({
   onClose,
 }: {
   lang: Lang;
-  mode: Mode;
+  mode: PasswordMode;
   onModeChange: (m: Mode) => void;
   onClose: () => void;
 }) {
@@ -149,6 +255,26 @@ function E2ePasswordModal({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const needsRepeat = mode !== 'restore';
+  const passwordRef = useRef<TextInput>(null);
+  const repeatRef = useRef<TextInput>(null);
+  // Окно поднимаем над клавиатурой: иначе второе поле и кнопки уходят под неё,
+  // а «Назад», чтобы её убрать, закрывает окно вместе с введённым паролем.
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
+  useEffect(() => {
+    const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvt = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const show = Keyboard.addListener(showEvt, (e) => setKeyboardHeight(e.endCoordinates?.height ?? 0));
+    const hide = Keyboard.addListener(hideEvt, () => setKeyboardHeight(0));
+    return () => {
+      show.remove();
+      hide.remove();
+    };
+  }, []);
+  // autoFocus в Android-модалке не открывает клавиатуру — фокусируем после появления окна.
+  useEffect(() => {
+    const id = setTimeout(() => passwordRef.current?.focus(), 250);
+    return () => clearTimeout(id);
+  }, [mode]);
 
   useEffect(() => {
     setPassword('');
@@ -200,13 +326,14 @@ function E2ePasswordModal({
 
   return (
     <Modal visible transparent animationType="fade" onRequestClose={busy ? () => {} : onClose}>
-      <View style={styles.overlay}>
+      <View style={[styles.overlay, { paddingBottom: 20 + keyboardHeight }]}>
         <BlurView intensity={60} tint="dark" style={StyleSheet.absoluteFill} />
         <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.5)' }]} />
         <View style={styles.card}>
           <Text style={styles.title}>{t(title, lang)}</Text>
           <Text style={styles.text}>{t(text, lang)}</Text>
           <TextInput
+            ref={passwordRef}
             style={styles.input}
             value={password}
             onChangeText={setPassword}
@@ -217,13 +344,18 @@ function E2ePasswordModal({
             autoCorrect={false}
             textContentType={needsRepeat ? 'newPassword' : 'password'}
             editable={!busy}
-            autoFocus
+            returnKeyType={needsRepeat ? 'next' : 'done'}
+            blurOnSubmit={!needsRepeat}
+            onSubmitEditing={() => (needsRepeat ? repeatRef.current?.focus() : void submit())}
           />
           {needsRepeat ? (
             <TextInput
+              ref={repeatRef}
               style={styles.input}
               value={repeat}
               onChangeText={setRepeat}
+              returnKeyType="done"
+              onSubmitEditing={() => void submit()}
               placeholder={t('e2ePasswordRepeat', lang)}
               placeholderTextColor={LIVI.titan}
               secureTextEntry
@@ -299,6 +431,7 @@ const styles = StyleSheet.create({
   btn: { flex: 1, borderRadius: 12, paddingVertical: 12, alignItems: 'center', justifyContent: 'center' },
   btnPrimary: { backgroundColor: WELCOME_NAV_ACTIVE_ACCENT.solid },
   btnSecondary: { backgroundColor: 'rgba(138, 143, 153, 0.25)' },
+  btnDanger: { backgroundColor: 'rgba(255, 90, 103, 0.35)' },
   btnText: { color: LIVI.white, fontSize: 15, fontWeight: '600' },
   busyRow: { flexDirection: 'row', alignItems: 'center' },
   link: { alignSelf: 'center', marginTop: 14, padding: 4 },

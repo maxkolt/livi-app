@@ -7,15 +7,19 @@
  *   needs_restore — на сервере опубликован ключ, а на устройстве его нет (переустановка):
  *                   нужен пароль копии, иначе старая переписка не читается
  *   ready         — ключ на устройстве совпадает с опубликованным
+ *   disabled      — пользователь отключил шифрование: ключ снят с публикации, копия
+ *                   осталась; новые сообщения обычные, старые читаются (если ключ здесь)
  *
  * Ключ публикуется только вместе с копией под паролем (правило держит и сервер):
  * переустановка на Android сохраняет аккаунт, но стирает SecureStore.
  * Ключ хранится под userId: удаление профиля даёт новый аккаунт, ключи не смешиваются.
  */
 import "react-native-get-random-values";
+import { NativeModules } from "react-native";
 import * as SecureStore from "expo-secure-store";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { emitAck } from "./emit";
+import { logger } from "../../utils/logger";
 import { ensureReauthBeforePrivilegedSocketOp } from "./reauth";
 import { shared } from "./shared";
 import { socket } from "./socketCore";
@@ -26,7 +30,10 @@ import {
   fromBase64,
   generateKeyPair,
   keyPairFromSecretKey,
+  nativePbkdf2MatchesJs,
   openKeyBackup,
+  setNativePbkdf2,
+  type Pbkdf2Impl,
   openMessage,
   sealMessage,
   toBase64,
@@ -36,7 +43,7 @@ import {
   type E2eKeyPair,
 } from "./e2eCrypto";
 
-export type E2eStatus = "unknown" | "needs_setup" | "needs_restore" | "ready";
+export type E2eStatus = "unknown" | "needs_setup" | "needs_restore" | "ready" | "disabled";
 
 /** Свой ключ есть, а зашифровать сейчас нельзя — сообщение не должно уйти открытым текстом. */
 export class E2eUnavailableError extends Error {
@@ -58,9 +65,12 @@ type State = {
   own: E2eKeyPair | null;
   serverPublicKey: string;
   backupKdf: E2eBackupKdf | null;
+  /** Публичный ключ, которому соответствует копия на сервере. */
+  backupPk: string;
 };
 
-const state: State = { userId: null, status: "unknown", own: null, serverPublicKey: "", backupKdf: null };
+const state: State = { userId: null, status: "unknown", own: null, serverPublicKey: "", backupKdf: null, backupPk: "" };
+const peerE2eSubs = new Set<(peerId: string) => void>();
 const statusSubs = new Set<(s: E2eStatus) => void>();
 const keyChangeSubs = new Set<(peerId: string) => void>();
 const peerKeys = new Map<string, { pk: string; at: number }>();
@@ -89,6 +99,7 @@ function syncUser(): string | null {
     state.own = null;
     state.serverPublicKey = "";
     state.backupKdf = null;
+    state.backupPk = "";
     peerKeys.clear();
     pins = null;
     stateFailedAt = 0;
@@ -158,8 +169,11 @@ export function refreshE2eState(): Promise<E2eStatus> {
     stateFailedAt = 0;
     state.serverPublicKey = String(resp.publicKey || "");
     state.backupKdf = resp.backup?.kdf ?? null;
+    state.backupPk = String(resp.backup?.pk || "");
     if (own && state.serverPublicKey === toBase64(own.publicKey)) setStatus("ready");
     else if (state.serverPublicKey && state.backupKdf) setStatus("needs_restore");
+    // Отключено (ключ снят, копия есть): отправка обычная, восстановить/включить — из меню.
+    else if (!state.serverPublicKey && state.backupKdf && state.backupPk) setStatus("disabled");
     else setStatus("needs_setup");
     return state.status;
   })().finally(() => {
@@ -170,9 +184,61 @@ export function refreshE2eState(): Promise<E2eStatus> {
 
 type ActionResult = { ok: true } | { ok: false; error: string; retryAfterSec?: number };
 
+let nativeKdfReady: Promise<void> | null = null;
+
+/**
+ * Нативный PBKDF2 (LiviCrypto) — только если он даёт те же байты, что JS:
+ * копию, сделанную на одном устройстве, должно открыть любое другое.
+ */
+function ensureNativeKdf(): Promise<void> {
+  if (nativeKdfReady) return nativeKdfReady;
+  nativeKdfReady = (async () => {
+    const mod = (NativeModules as any)?.LiviCrypto;
+    if (typeof mod?.pbkdf2Sha256 !== "function") return;
+    const impl: Pbkdf2Impl = async (password, salt, iterations, dkLen) => {
+      const out = fromBase64(await mod.pbkdf2Sha256(toBase64(password), toBase64(salt), iterations, dkLen));
+      if (!out || out.length !== dkLen) throw new Error("e2e: native pbkdf2 returned bad output");
+      return out;
+    };
+    try {
+      if (await nativePbkdf2MatchesJs(impl)) setNativePbkdf2(impl);
+      else logger.error("[e2e] native pbkdf2 differs from JS, falling back to JS");
+    } catch (e) {
+      logger.warn("[e2e] native pbkdf2 self-check failed, falling back to JS", { error: String((e as Error)?.message || e) });
+    }
+  })();
+  return nativeKdfReady;
+}
+
+/**
+ * Запрос к серверу шифрования от имени пользователя. После переподключения сокет
+ * какое-то время не авторизован (сервер ответит unauthorized) — дожидаемся reauth
+ * и повторяем один раз, а не показываем «нет соединения».
+ */
+async function emitAuthed(event: string, payload: Record<string, unknown>): Promise<any> {
+  await ensureReauthBeforePrivilegedSocketOp().catch(() => false);
+  let resp: any = await emitAck(event, payload).catch(() => null);
+  if (resp?.error === "unauthorized") {
+    await ensureReauthBeforePrivilegedSocketOp().catch(() => false);
+    resp = await emitAck(event, payload).catch(() => null);
+  }
+  return resp;
+}
+
 async function publish(me: string, pair: E2eKeyPair, password: string): Promise<ActionResult> {
+  await ensureNativeKdf();
+  const kdfStartedAt = Date.now();
   const backup = await createKeyBackup(pair, password);
-  const resp: any = await emitAck("e2e:publish", { publicKey: toBase64(pair.publicKey), backup }).catch(() => null);
+  const kdfMs = Date.now() - kdfStartedAt;
+  const publishStartedAt = Date.now();
+  const resp: any = await emitAuthed("e2e:publish", { publicKey: toBase64(pair.publicKey), backup });
+  logger.info("[e2e] publish", {
+    ok: !!resp?.ok,
+    error: resp?.error ?? (resp ? null : "no_ack"),
+    kdf: backup.kdf.alg,
+    kdfMs,
+    publishMs: Date.now() - publishStartedAt,
+  });
   if (!resp?.ok) return { ok: false, error: resp?.error || "network" };
   if (state.userId === me) {
     state.serverPublicKey = toBase64(pair.publicKey);
@@ -211,22 +277,64 @@ export async function restoreE2e(password: string): Promise<ActionResult> {
   if (!state.backupKdf) await refreshE2eState();
   const kdf = state.backupKdf;
   if (!kdf) return { ok: false, error: "no_backup" };
+  await ensureNativeKdf();
   const { wrapKey, authKey } = await deriveRestoreKeys(password, kdf);
-  const resp: any = await emitAck("e2e:backup_fetch", { authKey }).catch(() => null);
+  const resp: any = await emitAuthed("e2e:backup_fetch", { authKey });
   if (!resp?.ok) {
     wrapKey.fill(0);
     return { ok: false, error: resp?.error || "network", retryAfterSec: resp?.retryAfterSec };
   }
   const pair = openKeyBackup(resp.backup as E2eBackup, wrapKey);
   wrapKey.fill(0);
-  if (!pair || toBase64(pair.publicKey) !== state.serverPublicKey) return { ok: false, error: "wrong_password" };
+  if (!pair || toBase64(pair.publicKey) !== state.backupPk) return { ok: false, error: "wrong_password" };
   try {
     await saveOwnKey(me, pair);
   } catch {
     return { ok: false, error: "secure_store" };
   }
-  if (state.userId === me) setStatus("ready");
+  // Восстановили ключ при отключённом шифровании — остаётся отключённым, пока не включат.
+  if (state.userId === me) setStatus(state.serverPublicKey === state.backupPk ? "ready" : "disabled");
   return { ok: true };
+}
+
+/** Есть ли ключ на этом устройстве (отключённое шифрование можно включить без пароля). */
+export function hasLocalE2eKey(): boolean {
+  syncUser();
+  return state.own != null;
+}
+
+/** Отключить шифрование во всех чатах: ключ снимается с публикации, копия остаётся. */
+export async function disableE2e(): Promise<ActionResult> {
+  const me = syncUser();
+  if (!me) return { ok: false, error: "unauthorized" };
+  const resp: any = await emitAuthed("e2e:disable", {});
+  if (!resp?.ok) return { ok: false, error: resp?.error || "network" };
+  if (state.userId === me) {
+    state.serverPublicKey = "";
+    setStatus("disabled");
+  }
+  return { ok: true };
+}
+
+/** Включить снова тот же ключ — без пароля: копия для него на сервере уже есть. */
+export async function enableE2eAgain(): Promise<ActionResult> {
+  const me = syncUser();
+  const own = me ? await loadOwnKey(me) : null;
+  if (!me || !own) return { ok: false, error: "no_local_key" };
+  const publicKey = toBase64(own.publicKey);
+  const resp: any = await emitAuthed("e2e:enable", { publicKey });
+  if (!resp?.ok) return { ok: false, error: resp?.error || "network" };
+  if (state.userId === me) {
+    state.serverPublicKey = publicKey;
+    setStatus("ready");
+  }
+  return { ok: true };
+}
+
+/** Собеседник включил/отключил/сменил шифрование (e2e:key_changed). */
+export function onPeerE2eUpdated(cb: (peerId: string) => void): () => void {
+  peerE2eSubs.add(cb);
+  return () => peerE2eSubs.delete(cb);
 }
 
 /**
@@ -283,7 +391,7 @@ export async function getPeerPublicKey(peerId: string, opts?: { force?: boolean 
   const cached = peerKeys.get(peerId);
   const ttl = cached?.pk ? PEER_KEY_TTL_MS : PEER_NO_KEY_TTL_MS;
   if (cached && !opts?.force && Date.now() - cached.at < ttl) return cached.pk || null;
-  const resp: any = await emitAck("e2e:keys", { userIds: [peerId] });
+  const resp: any = await emitAuthed("e2e:keys", { userIds: [peerId] });
   if (!resp?.ok) throw new E2eUnavailableError("unavailable");
   const pk = String(resp.keys?.[peerId] || "");
   peerKeys.set(peerId, { pk, at: Date.now() });
@@ -293,7 +401,13 @@ export async function getPeerPublicKey(peerId: string, opts?: { force?: boolean 
 
 socket.on("e2e:key_changed", (data: { userId?: string }) => {
   const peerId = String(data?.userId || "");
-  if (peerId) peerKeys.delete(peerId);
+  if (!peerId) return;
+  peerKeys.delete(peerId);
+  for (const cb of peerE2eSubs) {
+    try {
+      cb(peerId);
+    } catch {}
+  }
 });
 
 /* ---------- шифрование на границе сети ---------- */

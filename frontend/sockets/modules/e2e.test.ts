@@ -64,6 +64,15 @@ const mockEmitAck = jest.fn(async (event: string, payload: any, ..._opts: unknow
       const { authKey: _secret, ...rest } = b;
       return { ok: true, backup: rest };
     }
+    case 'e2e:disable':
+      server.keys.set(me, '');
+      return { ok: true };
+    case 'e2e:enable': {
+      const b = server.backups.get(me);
+      if (!b || b.pk !== payload.publicKey) return { ok: false, error: 'no_backup' };
+      server.keys.set(me, payload.publicKey);
+      return { ok: true };
+    }
     case 'e2e:keys': {
       const keys: Record<string, string> = {};
       for (const id of payload.userIds) keys[id] = server.keys.get(id) ?? '';
@@ -79,7 +88,10 @@ import {
   decryptIncomingMessage,
   deleteLocalE2eKey,
   E2eUnavailableError,
+  disableE2e,
+  enableE2eAgain,
   getE2eStatus,
+  hasLocalE2eKey,
   onPeerKeyChanged,
   refreshE2eState,
   resetE2e,
@@ -303,5 +315,51 @@ describe('local key lifetime', () => {
     const calls = mockEmitAck.mock.calls.length;
     expect(await toWireMessagePayload(textPayload())).toEqual(textPayload());
     expect(mockEmitAck.mock.calls.length).toBe(calls);
+  });
+});
+
+describe('turning encryption off and on again', () => {
+  beforeEach(async () => {
+    await enable(BOB, 'bob-password');
+    await enable(ALICE, 'alice-password');
+  });
+
+  it('sends plain text after turning it off, while old messages stay readable', async () => {
+    const oldWire = await toWireMessagePayload(textPayload());
+    expect(await disableE2e()).toEqual({ ok: true });
+    expect(getE2eStatus()).toBe('disabled');
+    expect(await toWireMessagePayload(textPayload())).toEqual(textPayload());
+    const m: any = await decryptIncomingMessage(delivered(oldWire), placeholder);
+    expect(m.text).toBe('секретный текст');
+  });
+
+  it('makes the contact send plain text too', async () => {
+    as(BOB);
+    await disableE2e();
+    as(ALICE);
+    const { getPeerPublicKey } = await import('./e2e');
+    expect(await getPeerPublicKey(BOB, { force: true })).toBeNull();
+    expect(await toWireMessagePayload(textPayload())).toEqual(textPayload());
+  });
+
+  it('turns back on without a password, with the same key', async () => {
+    const before = server.keys.get(ALICE);
+    await disableE2e();
+    expect(await enableE2eAgain()).toEqual({ ok: true });
+    expect(getE2eStatus()).toBe('ready');
+    expect(server.keys.get(ALICE)).toBe(before);
+  });
+
+  it('after reinstalling with encryption off, sending is not blocked and the key can be restored', async () => {
+    await disableE2e();
+    secure.clear();
+    as('');
+    as(ALICE);
+    expect(await refreshE2eState()).toBe('disabled');
+    expect(hasLocalE2eKey()).toBe(false);
+    expect(await toWireMessagePayload(textPayload())).toEqual(textPayload());
+    expect(await restoreE2e('alice-password')).toEqual({ ok: true });
+    expect(getE2eStatus()).toBe('disabled');
+    expect(hasLocalE2eKey()).toBe(true);
   });
 });

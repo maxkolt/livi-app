@@ -135,7 +135,6 @@ function HomeWelcomeViewInner({
   const onStageLayout = useCallback((e: LayoutChangeEvent) => {
     const { width, height } = e.nativeEvent.layout;
     if (!(width > 0 && height > 0)) return;
-    console.log('[rot-diag] stage layout', Math.round(width), 'x', Math.round(height), 'at', Date.now() % 100000); // TEMP-DIAG
     notifyLayoutActivity();
     setStageBox((prev) =>
       Math.abs(prev.w - width) < 1 && Math.abs(prev.h - height) < 1 ? prev : { w: width, h: height },

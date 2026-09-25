@@ -6,7 +6,7 @@ import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import AvatarImage from "../../components/AvatarImage";
 import ChatStyleBackButton from "../../components/ChatStyleBackButton";
 import { t, type Lang } from "../../utils/i18n";
-import { WELCOME_CHROME_EDGE_RADIUS } from "../home/constants";
+import { WELCOME_CHROME_EDGE_RADIUS, WELCOME_NAV_ACTIVE_ACCENT } from "../home/constants";
 import { StageGradient } from "../home/WelcomeStageBackground";
 
 type LiviColors = {
@@ -35,6 +35,8 @@ type Options = {
   openAvatarModal: () => void | Promise<void>;
   onPressCall?: () => void;
   onPressMore?: () => void;
+  /** Переписка с этим собеседником идёт со сквозным шифрованием. */
+  encrypted?: boolean;
   selectionMode: boolean;
   selectedCount: number;
   exitSelectionMode: () => void;
@@ -66,6 +68,7 @@ export function useChatHeader({
   openAvatarModal,
   onPressCall,
   onPressMore,
+  encrypted = false,
   selectionMode,
   selectedCount,
   exitSelectionMode,
@@ -222,18 +225,40 @@ export function useChatHeader({
               >
                 {peerNameState}
               </Text>
-              <Text
-                style={{
-                  marginTop: 2,
-                  fontSize: Platform.OS === "android" ? 10 : 11,
-                  lineHeight: Platform.OS === "android" ? 13 : 14,
-                  color: peerOnline ? LIVI.presenceGreen : LIVI.presenceRed,
-                  fontWeight: "300",
-                  ...(Platform.OS === "android" && { fontFamily: "sans-serif-light" }),
-                }}
-              >
-                {peerOnline ? t("online", lang) : t("offline", lang)}
-              </Text>
+              <View style={{ flexDirection: "row", alignItems: "center", marginTop: 2 }}>
+                <Text
+                  style={{
+                    fontSize: Platform.OS === "android" ? 10 : 11,
+                    lineHeight: Platform.OS === "android" ? 13 : 14,
+                    color: peerOnline ? LIVI.presenceGreen : LIVI.presenceRed,
+                    fontWeight: "300",
+                    ...(Platform.OS === "android" && { fontFamily: "sans-serif-light" }),
+                  }}
+                >
+                  {peerOnline ? t("online", lang) : t("offline", lang)}
+                </Text>
+                {encrypted ? (
+                  <View
+                    style={{ flexDirection: "row", alignItems: "center", marginLeft: 6 }}
+                    accessible
+                    accessibilityLabel={t("e2eEncryptedBadge", lang)}
+                  >
+                    <Ionicons name="lock-closed" size={Platform.OS === "android" ? 9 : 10} color={WELCOME_NAV_ACTIVE_ACCENT.softText} />
+                    <Text
+                      numberOfLines={1}
+                      style={{
+                        marginLeft: 3,
+                        fontSize: Platform.OS === "android" ? 10 : 11,
+                        lineHeight: Platform.OS === "android" ? 13 : 14,
+                        color: WELCOME_NAV_ACTIVE_ACCENT.softText,
+                        fontWeight: "500",
+                      }}
+                    >
+                      {t("e2eEncryptedBadge", lang)}
+                    </Text>
+                  </View>
+                ) : null}
+              </View>
             </View>
 
             <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
@@ -280,6 +305,7 @@ export function useChatHeader({
     openAvatarModal,
     onPressCall,
     onPressMore,
+    encrypted,
     selectionMode,
     selectedCount,
     exitSelectionMode,

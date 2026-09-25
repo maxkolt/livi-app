@@ -358,7 +358,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const RESIZE_SETTLE_MS = 240;
   const RESIZE_MAX_HIDE_MS = 1400;
   const revealContent = useCallback(() => {
-    console.log('[rot-diag] REVEAL at', Date.now() % 100000); // TEMP-DIAG
     Animated.timing(contentOpacity, {
       toValue: 1,
       duration: 140,
@@ -416,7 +415,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     // Нативное событие из onConfigurationChanged приходит до пересборки раскладки.
     // onLayout для этого поздно: он срабатывает, когда кадр уже отрисован.
     const sub = DeviceEventEmitter.addListener('LiviOrientationWillChange', (land) => {
-      console.log('[rot-diag] native orientation event, landscape=', land, 'at', Date.now() % 100000); // TEMP-DIAG
       hideContentUntilOrientationLayout(!!land);
     });
     return () => sub.remove();
@@ -428,7 +426,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       const prev = lastRootSizeRef.current;
       // Только смена ширины: высота меняется и от клавиатуры (adjustResize),
       // а гасить контент при вводе ника нельзя.
-      console.log('[rot-diag] root layout', Math.round(width), 'x', Math.round(height), 'at', Date.now() % 100000); // TEMP-DIAG
       // Ширина или заметная смена высоты. Клавиатура окно не ресайзит: при
       // edge-to-edge IME приходит инсетами (observeImeInsets в MainActivity),
       // поэтому высота — валидный признак поворота и пробуждения.

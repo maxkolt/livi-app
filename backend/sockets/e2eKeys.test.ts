@@ -1,7 +1,21 @@
-jest.mock('../models/User', () => ({}));
+const mockUsers: Record<string, { e2ePublicKey?: string; friends?: string[] }> = {};
+jest.mock('../models/User', () => ({
+  __esModule: true,
+  default: {
+    find: (q: any) => ({
+      select: () => ({
+        lean: async () =>
+          (q._id.$in as string[]).filter((id) => mockUsers[id]).map((id) => ({ _id: id, ...mockUsers[id] })),
+      }),
+    }),
+  },
+}));
+const mockFriendIds = jest.fn(async (_userId: string) => [] as string[]);
+jest.mock('../utils/friendshipUtils', () => ({ getFriendIds: (id: string) => mockFriendIds(id) }));
 jest.mock('../utils/rateLimit', () => ({ checkRateLimit: jest.fn() }));
 
 import {
+  registerE2eKeyHandlers,
   hashBackupAuthKey,
   parseBackupKdf,
   parseBackupUpload,
@@ -37,6 +51,20 @@ describe('parseBackupKdf', () => {
     ['a short salt', { salt: b64(8) }],
   ])('rejects %s', (_name, over) => {
     expect(parseBackupKdf(kdf(over))).toBeNull();
+  });
+});
+
+describe('parseBackupKdf with native PBKDF2', () => {
+  const pbkdf2 = (over: Record<string, unknown> = {}) => ({ alg: 'pbkdf2-sha256', iterations: 600_000, salt: b64(16), ...over });
+
+  it('accepts the device default', () => {
+    expect(parseBackupKdf(pbkdf2())).toEqual(pbkdf2());
+  });
+
+  it('refuses a weakened iteration count or a short salt', () => {
+    expect(parseBackupKdf(pbkdf2({ iterations: 1000 }))).toBeNull();
+    expect(parseBackupKdf(pbkdf2({ iterations: 600_000.5 }))).toBeNull();
+    expect(parseBackupKdf(pbkdf2({ salt: b64(8) }))).toBeNull();
   });
 });
 
@@ -79,5 +107,36 @@ describe('backup auth key', () => {
   it('bounds online password guessing', () => {
     const perDay = BACKUP_FETCH_LIMITS.find((l) => l.windowMs === 24 * 60 * 60_000);
     expect(perDay?.max).toBeLessThanOrEqual(20);
+  });
+});
+
+describe('e2e:keys', () => {
+  const ME = 'aaaaaaaaaaaaaaaaaaaaaaaa';
+  const FRIEND = 'bbbbbbbbbbbbbbbbbbbbbbbb';
+  const STRANGER = 'cccccccccccccccccccccccc';
+
+  function keysHandler() {
+    const handlers: Record<string, Function> = {};
+    const sock = { on: (event: string, h: Function) => (handlers[event] = h) } as any;
+    registerE2eKeyHandlers({ to: () => ({ emit: jest.fn() }) } as any, sock, () => ME);
+    return (payload: unknown) => new Promise<any>((resolve) => handlers['e2e:keys'](payload, resolve));
+  }
+
+  beforeEach(() => {
+    for (const k of Object.keys(mockUsers)) delete mockUsers[k];
+    mockUsers[FRIEND] = { e2ePublicKey: b64(32, 1), friends: [] }; // устаревшее поле пустое
+    mockUsers[STRANGER] = { e2ePublicKey: b64(32, 2) };
+    mockFriendIds.mockResolvedValue([FRIEND]);
+  });
+
+  it('returns keys of friends from the friendship edges, not the legacy User.friends field', async () => {
+    const res = await keysHandler()({ userIds: [FRIEND] });
+    expect(res).toEqual({ ok: true, keys: { [FRIEND]: b64(32, 1) } });
+    expect(mockFriendIds).toHaveBeenCalledWith(ME);
+  });
+
+  it('does not reveal keys of non-friends', async () => {
+    const res = await keysHandler()({ userIds: [STRANGER] });
+    expect(res).toEqual({ ok: true, keys: {} });
   });
 });

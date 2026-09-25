@@ -14,20 +14,60 @@
  */
 import nacl from "tweetnacl";
 import { scryptAsync } from "@noble/hashes/scrypt";
+import { pbkdf2Async } from "@noble/hashes/pbkdf2";
 import { hkdf } from "@noble/hashes/hkdf";
 import { sha256 } from "@noble/hashes/sha2";
 
 export const E2E_ENVELOPE_VERSION = 1;
 export const E2E_BACKUP_VERSION = 1;
 export const E2E_MIN_PASSWORD_LENGTH = 8;
-/** 32 МБ памяти: терпимо для слабых Android, не ниже серверного минимума (2^15). */
+/** Запасной KDF без нативного модуля: 32 МБ памяти, не ниже серверного минимума (2^15). */
 export const E2E_BACKUP_KDF = { alg: "scrypt" as const, N: 2 ** 15, r: 8, p: 1 };
+/** Основной KDF — нативный PBKDF2-HMAC-SHA256 (OWASP: 600 000 итераций). */
+export const E2E_BACKUP_PBKDF2_ITERATIONS = 600_000;
 const PAD_BLOCK = 32;
 
 export type E2eEnvelope = { v: number; n: string; c: string; spk: string; rpk: string };
 export type E2eKeyPair = { publicKey: Uint8Array; secretKey: Uint8Array };
 export type E2eMessageBody = { id: string; from: string; to: string; text: string; replyText?: string };
-export type E2eBackupKdf = { alg: "scrypt"; N: number; r: number; p: number; salt: string };
+export type E2eBackupKdf =
+  | { alg: "scrypt"; N: number; r: number; p: number; salt: string }
+  | { alg: "pbkdf2-sha256"; iterations: number; salt: string };
+
+/**
+ * PBKDF2-HMAC-SHA256 над байтами пароля. В Hermes (без JIT) scrypt/PBKDF2 на JS идут
+ * десятки секунд и держат JS-поток — сокет отваливается по пингу. Поэтому приложение
+ * подставляет нативную реализацию (LiviCrypto), проверенную против JS на старте.
+ */
+export type Pbkdf2Impl = (password: Uint8Array, salt: Uint8Array, iterations: number, dkLen: number) => Promise<Uint8Array>;
+let nativePbkdf2: Pbkdf2Impl | null = null;
+
+export function setNativePbkdf2(impl: Pbkdf2Impl | null): void {
+  nativePbkdf2 = impl;
+}
+
+export function hasNativePbkdf2(): boolean {
+  return nativePbkdf2 != null;
+}
+
+const jsPbkdf2: Pbkdf2Impl = (password, salt, iterations, dkLen) =>
+  pbkdf2Async(sha256, password, salt, { c: iterations, dkLen, asyncTick: 20 });
+
+/** Нативная реализация обязана давать те же байты, что JS, — иначе копию не открыть на другом устройстве. */
+export async function nativePbkdf2MatchesJs(impl: Pbkdf2Impl): Promise<boolean> {
+  const cases: Array<[string, string, number]> = [
+    ["password", "salt", 1],
+    ["пароль-😀", "соль-livi", 1000],
+  ];
+  for (const [pw, salt, c] of cases) {
+    const [a, b] = await Promise.all([
+      impl(utf8Encode(pw), utf8Encode(salt), c, 32),
+      jsPbkdf2(utf8Encode(pw), utf8Encode(salt), c, 32),
+    ]);
+    if (toBase64(a) !== toBase64(b)) return false;
+  }
+  return true;
+}
 export type E2eBackup = { v: number; kdf: E2eBackupKdf; n: string; c: string; pk: string };
 export type E2eBackupUpload = E2eBackup & { authKey: string };
 
@@ -259,13 +299,12 @@ async function deriveBackupKeys(password: string, kdf: E2eBackupKdf): Promise<{ 
   // NFKC: один и тот же пароль с разных клавиатур даёт одинаковые байты.
   // Hermes без Intl может не иметь normalize — тогда берём пароль как есть, а не падаем.
   const normalized = typeof password.normalize === "function" ? password.normalize("NFKC") : password;
-  const master = await scryptAsync(utf8Encode(normalized), salt, {
-    N: kdf.N,
-    r: kdf.r,
-    p: kdf.p,
-    dkLen: 32,
-    asyncTick: 20,
-  });
+  const passwordBytes = utf8Encode(normalized);
+  const master =
+    kdf.alg === "pbkdf2-sha256"
+      ? await (nativePbkdf2 ?? jsPbkdf2)(passwordBytes, salt, kdf.iterations, 32)
+      : await scryptAsync(passwordBytes, salt, { N: kdf.N, r: kdf.r, p: kdf.p, dkLen: 32, asyncTick: 20 });
+  passwordBytes.fill(0);
   const wrapKey = hkdf(sha256, master, undefined, "livi-e2e-backup/wrap/v1", 32);
   const authKey = hkdf(sha256, master, undefined, "livi-e2e-backup/auth/v1", 32);
   master.fill(0);
@@ -273,7 +312,11 @@ async function deriveBackupKeys(password: string, kdf: E2eBackupKdf): Promise<{ 
 }
 
 export async function createKeyBackup(own: E2eKeyPair, password: string): Promise<E2eBackupUpload> {
-  const kdf: E2eBackupKdf = { ...E2E_BACKUP_KDF, salt: toBase64(nacl.randomBytes(16)) };
+  const salt = toBase64(nacl.randomBytes(16));
+  // Без нативного модуля (старая сборка) — прежний scrypt: PBKDF2 на 600 000 итераций в JS ещё медленнее.
+  const kdf: E2eBackupKdf = nativePbkdf2
+    ? { alg: "pbkdf2-sha256", iterations: E2E_BACKUP_PBKDF2_ITERATIONS, salt }
+    : { ...E2E_BACKUP_KDF, salt };
   const { wrapKey, authKey } = await deriveBackupKeys(password, kdf);
   const nonce = nacl.randomBytes(nacl.secretbox.nonceLength);
   const c = nacl.secretbox(own.secretKey, nonce, wrapKey);

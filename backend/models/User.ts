@@ -30,7 +30,7 @@ export interface IUser {
 export interface IE2eKeyBackup {
   v: number;
   /** Параметры KDF: из пароля выводятся ключ шифрования копии и authKey. */
-  kdf: { alg: string; N: number; r: number; p: number; salt: string };
+  kdf: { alg: string; N?: number; r?: number; p?: number; iterations?: number; salt: string };
   n: string;
   c: string;
   /** Публичный ключ, которому соответствует копия. */
@@ -131,11 +131,13 @@ const UserSchema = new Schema<IUser>(
     e2eBackup: {
       type: {
         v: { type: Number, required: true },
+        // scrypt: N/r/p; pbkdf2-sha256: iterations (см. sockets/e2eKeys.ts parseBackupKdf).
         kdf: {
           alg: { type: String, required: true },
-          N: { type: Number, required: true },
-          r: { type: Number, required: true },
-          p: { type: Number, required: true },
+          N: { type: Number },
+          r: { type: Number },
+          p: { type: Number },
+          iterations: { type: Number },
           salt: { type: String, required: true },
         },
         n: { type: String, required: true },

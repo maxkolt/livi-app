@@ -7,7 +7,6 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Dimensions,
   View,
   Text,
   TouchableOpacity,
@@ -85,22 +84,6 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   const isLandscape = frame.width > 0 && frame.height > 0 && frame.width / frame.height > 1.05;
   const ctrlIconSize = isLandscape ? 20 : 26;
 
-  // TEMP-DIAG
-  const rcDiagLayout = React.useCallback((tag: string, e: any) => {
-    const { width, height } = e.nativeEvent.layout;
-    console.log('[rc-diag]', JSON.stringify({
-      at: tag, w: Math.round(width), h: Math.round(height), isLandscape,
-    }));
-  }, [isLandscape]);
-  React.useEffect(() => {
-    const win = Dimensions.get('window');
-    console.log('[rc-diag]', JSON.stringify({
-      at: 'frame',
-      frameW: Math.round(frame.width), frameH: Math.round(frame.height),
-      winW: Math.round(win.width), winH: Math.round(win.height),
-      isLandscape,
-    }));
-  }, [frame.width, frame.height, isLandscape]);
   const { theme, isDark } = useAppTheme();
   const lang = useLang((s) => s.lang);
   const androidContentInsets = useMemo(() => {
@@ -1582,14 +1565,12 @@ const RandomChat: React.FC<Props> = ({ route }) => {
         <View style={[styles.content, androidContentInsets]}>
         <View
           style={[styles.topSection, isLandscape && styles.topSectionLandscape]}
-          onLayout={(e) => rcDiagLayout('topSection', e)}
         >
         {/* Карточка "Собеседник" — ref для модерации (проверяем партнёра, не себя) */}
         <View
           style={[styles.card, isLandscape && styles.cardLandscape]}
           ref={remoteModerationTargetRef}
           collapsable={false}
-          onLayout={(e) => rcDiagLayout('cardRemote', e)}
         >
           {(() => {
             // КРИТИЧНО: Если поиск остановлен (started=false), всегда показываем текст "Собеседник"
@@ -1780,7 +1761,6 @@ const RandomChat: React.FC<Props> = ({ route }) => {
         <View
           style={[styles.card, isLandscape && styles.cardLandscape]}
           collapsable={false}
-          onLayout={(e) => rcDiagLayout('cardLocal', e)}
         >
           {(() => {
             // КРИТИЧНО: Если поиск не начат, всегда показываем "Вы"

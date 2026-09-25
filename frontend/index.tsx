@@ -1,11 +1,7 @@
-// ===== TEMP DEBUG: трасса Home→system PiP (снять после отладки PiP) =====
-// Включает [LIVI][SYSPIP][home] и sys_pip_home в [LIVI][REL] без ввода в DevTools.
-// Нативные строки MainActivity/SysPiPHome в logcat пишутся всегда, независимо от флага.
-try { (global as any).__LIVI_SYS_PIP_HOME_TRACE__ = true; } catch {}
-// ===== /TEMP DEBUG =====
 import './polyfills/ensureCoreJsPolyfills';
 import { safeRegisterLiveKitGlobals } from './livekit/safeRegisterGlobals';
 import { installCallRuntimeBridges } from './utils/callRuntime';
+import { trackReleaseError } from './utils/telemetry';
 
 // Пункт 6: lifecycle/policy флаги звонка — callRuntime; global.__*Ref только bridge.
 installCallRuntimeBridges();
@@ -124,13 +120,17 @@ try {
       name: error?.name
     });
 
-    // Показываем понятную ошибку на устройстве (иначе часто виден просто чёрный экран)
+    // В релиз — в AppMetrica (иначе падения JS в проде не видны), пользователю не
+    // показываем сырой текст ошибки; окно с ошибкой — только при разработке.
+    try {
+      trackReleaseError(isFatal ? 'js_fatal_error' : 'js_error', error, {});
+    } catch {}
     try {
       // Защита от спама алертами
       const msg = String(error?.message || error || 'Unknown error');
       const key = '__lastJsFatalAlert';
       const last = (global as any)[key];
-      if (isFatal && last !== msg) {
+      if (__DEV__ && isFatal && last !== msg) {
         (global as any)[key] = msg;
         Alert.alert('JS Error', msg);
       }

@@ -20,9 +20,9 @@
       "infoPlist": {
         "CFBundleDisplayName": "LiVi",
         "ITSAppUsesNonExemptEncryption": false,
-        "NSCameraUsageDescription": "Разрешите доступ к камере, чтобы сделать фото для аватара.",
-        "NSMicrophoneUsageDescription": "Это необходимо для аудиосвязи.",
-        "NSPhotoLibraryUsageDescription": "Разрешите доступ к фото, чтобы выбрать аватар.",
+        "NSCameraUsageDescription": "Камера нужна для видеозвонков, видеочата и фото профиля.",
+        "NSMicrophoneUsageDescription": "Микрофон нужен для звонков, видеочата и голосовых сообщений.",
+        "NSPhotoLibraryUsageDescription": "Доступ к фото нужен, чтобы отправлять изображения в чат и выбрать аватар.",
         "NSPhotoLibraryAddUsageDescription": "Разрешите сохранять изображения в медиатеку.",
         "UISupportedInterfaceOrientations": [
           "UIInterfaceOrientationPortrait",

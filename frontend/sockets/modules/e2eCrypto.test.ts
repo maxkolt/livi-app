@@ -1,6 +1,8 @@
 import {
   createKeyBackup,
   deriveCallFrameKey,
+  nativePbkdf2MatchesJs,
+  setNativePbkdf2,
   deriveRestoreKeys,
   fromBase64,
   generateKeyPair,
@@ -187,5 +189,50 @@ describe('call frame key', () => {
   it('refuses a low-order peer key that would give everyone the same secret', () => {
     expect(deriveCallFrameKey(alice, new Uint8Array(32), 'call_1')).toBeNull();
     expect(deriveCallFrameKey(alice, bob.publicKey, '')).toBeNull();
+  });
+});
+
+describe('native PBKDF2 backups', () => {
+  jest.setTimeout(60_000);
+  const { pbkdf2Async } = require('@noble/hashes/pbkdf2');
+  const { sha256 } = require('@noble/hashes/sha2');
+  const { pbkdf2Sync } = require('crypto');
+  // Эталон — PBKDF2 из OpenSSL (node:crypto), как нативный модуль на устройстве.
+  const openssl = async (pw: Uint8Array, salt: Uint8Array, c: number, dkLen: number) =>
+    new Uint8Array(pbkdf2Sync(Buffer.from(pw), Buffer.from(salt), c, dkLen, 'sha256'));
+
+  afterEach(() => setNativePbkdf2(null));
+
+  it('accepts a native implementation only when it matches JS byte for byte', async () => {
+    await expect(nativePbkdf2MatchesJs(openssl)).resolves.toBe(true);
+    const wrongEncoding = async (pw: Uint8Array, salt: Uint8Array, c: number, dkLen: number) =>
+      openssl(Buffer.from(Buffer.from(pw).toString('latin1'), 'utf16le'), salt, c, dkLen);
+    await expect(nativePbkdf2MatchesJs(wrongEncoding)).resolves.toBe(false);
+  });
+
+  it('uses PBKDF2 when the device has it, and the backup opens without it', async () => {
+    setNativePbkdf2(openssl);
+    const backup = await createKeyBackup(alice, 'correct horse');
+    expect(backup.kdf).toMatchObject({ alg: 'pbkdf2-sha256', iterations: 600_000 });
+    // Другое устройство без нативного модуля открывает копию JS-реализацией.
+    setNativePbkdf2(null);
+    const { wrapKey, authKey } = await deriveRestoreKeys('correct horse', backup.kdf);
+    expect(authKey).toBe(backup.authKey);
+    expect(openKeyBackup(backup, wrapKey)).not.toBeNull();
+  });
+
+  it('keeps scrypt backups working when the device has no native module', async () => {
+    const backup = await createKeyBackup(alice, 'correct horse');
+    expect(backup.kdf.alg).toBe('scrypt');
+    setNativePbkdf2(openssl);
+    const { wrapKey } = await deriveRestoreKeys('correct horse', backup.kdf);
+    expect(openKeyBackup(backup, wrapKey)).not.toBeNull();
+  });
+
+  it('matches the RFC 7914 PBKDF2-HMAC-SHA256 vector', async () => {
+    const out = await pbkdf2Async(sha256, 'passwd', 'salt', { c: 1, dkLen: 64 });
+    expect(Buffer.from(out).toString('hex')).toBe(
+      '55ac046e56e3089fec1691c22544b605f94185216dde0465e68b9d57c20dacbc49ca9cccf179b645991664b39d77ef317c71b845b1e30bd509112041d3a19783',
+    );
   });
 });
