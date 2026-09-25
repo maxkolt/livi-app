@@ -13,7 +13,6 @@ import {
   ActionSheetIOS,
   FlatList,
   ScrollView,
-  KeyboardAvoidingView,
   Keyboard,
   Modal,
   Pressable,
@@ -133,6 +132,12 @@ import {
   getChatStatusesKey,
 } from './chat/chatStorageKeys';
 import {
+  getAndroidImeLiftCacheDp,
+  setAndroidImeLiftCacheDp,
+  subscribeAndroidImeLiftCache,
+  preloadAndroidImeLiftCache,
+} from './chat/androidImeLiftCache';
+import {
   ChatDeleteToastInline,
   ChatGapCenterIndicator,
   shouldShowChatDeleteToast,
@@ -140,6 +145,12 @@ import {
 } from './chat/ChatGapStatus';
 import { ChatParallaxWallpaper } from './chat/ChatParallaxWallpaper';
 import { ChatMessageEdgeFade } from './chat/ChatMessageEdgeFade';
+import { resolveKeyboardAvoidance } from './chat/chatKeyboardGeometry';
+import {
+  formatAndroidImeDockLog,
+  resolveAndroidImeGapDp,
+  resolveAndroidImeHeightScale,
+} from './chat/chatAndroidImeDock';
 import { WelcomeStageBackground, StageGradient } from './home/WelcomeStageBackground';
 import {
   WELCOME_CARD_BG,
@@ -458,11 +469,148 @@ export default function ChatScreen({ route, navigation }: Props) {
   const [emojiPanelOpen, setEmojiPanelOpen] = useState(false);
   const androidNativeImeAvailableRef = useRef(false);
   const androidFallbackImeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
+  const androidKeyboardProgressRef = useRef(0);
+  const androidImeHidePendingRef = useRef(false);
   /**
-   * Edge-to-edge: layout не должен одновременно сжиматься и сдвигаться.
-   * Позицию dock определяет только нативная IME-высота из keyboard-controller.
+   * progress×(−imeTarget)+(1−p)×(−nav).
+   * Target из WindowInsets; cache в memory+AsyncStorage прогревается с App boot,
+   * чтобы первый open сессии не ждал insets с p≈0.9.
    */
+  const androidImeLiftTargetAnim = useRef(
+    new Animated.Value(getAndroidImeLiftCacheDp()),
+  ).current;
+  const androidImeLiftTargetRef = useRef(getAndroidImeLiftCacheDp());
+  const androidImeLiftCacheRef = useRef(getAndroidImeLiftCacheDp());
+  const androidKcHeightAbsRef = useRef(0);
+  const androidImeDockLogAtRef = useRef(0);
+  const safeAreaBottomRef = useRef(insets.bottom);
+  safeAreaBottomRef.current = insets.bottom;
+  const androidPinnedNavInsetRef = useRef(Math.max(0, insets.bottom));
+  const [androidPinnedNavInset, setAndroidPinnedNavInset] = useState(Math.max(0, insets.bottom));
+
+  const syncAndroidPinnedNavInset = React.useCallback((nextRaw: number) => {
+    const next = Math.max(0, Math.round(Number(nextRaw) || 0));
+    if (Math.abs(androidPinnedNavInsetRef.current - next) <= 1) return;
+    androidPinnedNavInsetRef.current = next;
+    setAndroidPinnedNavInset(next);
+  }, []);
+
+  const applyAndroidImeLiftTarget = React.useCallback(
+    (heightDp: number, source: 'insets' | 'cache') => {
+      if (androidImeHidePendingRef.current && source !== 'insets') return;
+      const next = Math.max(0, Number(heightDp) || 0);
+      if (next < 1) return;
+
+      if (source === 'insets') {
+        const changed = Math.abs(androidImeLiftTargetRef.current - next) > 0.5;
+        androidImeLiftCacheRef.current = next;
+        if (changed) {
+          androidImeLiftTargetRef.current = next;
+          androidImeLiftTargetAnim.setValue(next);
+        }
+        setAndroidImeLiftCacheDp(next);
+        return;
+      }
+
+      if (androidImeLiftTargetRef.current + 0.5 >= next) return;
+      androidImeLiftTargetRef.current = next;
+      androidImeLiftTargetAnim.setValue(next);
+    },
+    [androidImeLiftTargetAnim],
+  );
+
+  const seedAndroidImeLiftFromCache = React.useCallback(() => {
+    if (androidImeHidePendingRef.current) return;
+    const cached = Math.max(androidImeLiftCacheRef.current, getAndroidImeLiftCacheDp());
+    if (cached < 1) return;
+    androidImeLiftCacheRef.current = cached;
+    applyAndroidImeLiftTarget(cached, 'cache');
+  }, [applyAndroidImeLiftTarget]);
+
+  const logAndroidImeDock = React.useCallback((progress: number) => {
+    if (!__DEV__) return;
+    const now = Date.now();
+    if (now - androidImeDockLogAtRef.current < 120) return;
+    androidImeDockLogAtRef.current = now;
+    const kc = androidKcHeightAbsRef.current;
+    const ime = androidImeLiftTargetRef.current;
+    const nav = androidPinnedNavInsetRef.current;
+    const scale = resolveAndroidImeHeightScale(ime, kc, nav);
+    const gap = resolveAndroidImeGapDp(ime, kc, 1);
+    const translateY = progress * -ime + (1 - progress) * -nav;
+    // eslint-disable-next-line no-console
+    console.log(
+      formatAndroidImeDockLog({
+        progress,
+        kcAbsDp: kc,
+        imeDp: ime,
+        navDp: nav,
+        scale,
+        gapDp: gap,
+        translateY,
+        pixelRatio: PixelRatio.get(),
+        windowH: Dimensions.get('window').height,
+      }),
+    );
+  }, []);
+
+  const clearAndroidImeAfterHide = React.useCallback(() => {
+    androidImeHidePendingRef.current = false;
+    if (androidFallbackImeTimerRef.current) {
+      clearTimeout(androidFallbackImeTimerRef.current);
+      androidFallbackImeTimerRef.current = null;
+    }
+    setAndroidImeInset(0);
+    androidNativeImeAvailableRef.current = false;
+    androidKcHeightAbsRef.current = 0;
+    const cached = Math.max(androidImeLiftCacheRef.current, getAndroidImeLiftCacheDp());
+    if (cached > 1) {
+      androidImeLiftCacheRef.current = cached;
+      androidImeLiftTargetRef.current = cached;
+      androidImeLiftTargetAnim.setValue(cached);
+    }
+    syncAndroidPinnedNavInset(safeAreaBottomRef.current);
+  }, [androidImeLiftTargetAnim, syncAndroidPinnedNavInset]);
+  const clearAndroidImeAfterHideRef = useRef(clearAndroidImeAfterHide);
+  clearAndroidImeAfterHideRef.current = clearAndroidImeAfterHide;
+  const applyAndroidImeLiftTargetRef = useRef(applyAndroidImeLiftTarget);
+  applyAndroidImeLiftTargetRef.current = applyAndroidImeLiftTarget;
+  const seedAndroidImeLiftFromCacheRef = useRef(seedAndroidImeLiftFromCache);
+  seedAndroidImeLiftFromCacheRef.current = seedAndroidImeLiftFromCache;
+  const logAndroidImeDockRef = useRef(logAndroidImeDock);
+  logAndroidImeDockRef.current = logAndroidImeDock;
+
+  // Прогрев + подписка: cache может прийти после mount ChatScreen, до фокуса.
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    let cancelled = false;
+    const applyCached = (cached: number) => {
+      if (cancelled || cached < 1) return;
+      androidImeLiftCacheRef.current = cached;
+      if (androidImeLiftTargetRef.current < 1) {
+        androidImeLiftTargetRef.current = cached;
+        androidImeLiftTargetAnim.setValue(cached);
+      }
+    };
+    applyCached(getAndroidImeLiftCacheDp());
+    const unsubscribe = subscribeAndroidImeLiftCache(applyCached);
+    preloadAndroidImeLiftCache().then((cached) => {
+      if (!cancelled) applyCached(cached);
+    });
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [androidImeLiftTargetAnim]);
+
+  // Пока IME закрыт — держим pinned nav в актуальном safe-area.
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    if (androidImeInset > 0 || keyboardVisible) return;
+    if (androidKeyboardProgressRef.current > 0.02) return;
+    syncAndroidPinnedNavInset(insets.bottom);
+  }, [androidImeInset, insets.bottom, keyboardVisible, syncAndroidPinnedNavInset]);
+
   useEffect(() => {
     if (Platform.OS !== 'android') return;
     KeyboardController.setInputMode(AndroidSoftInputModes.SOFT_INPUT_ADJUST_NOTHING);
@@ -471,22 +619,66 @@ export default function ChatScreen({ route, navigation }: Props) {
     };
   }, []);
 
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    let prevProgress = 0;
+    const id = keyboardAnimation.progress.addListener(({ value }) => {
+      const progress = Math.max(0, Math.min(1, Number(value) || 0));
+      if (progress > prevProgress && progress > 0.01 && !androidImeHidePendingRef.current) {
+        seedAndroidImeLiftFromCacheRef.current();
+      }
+      if (progress + 0.03 < prevProgress && prevProgress > 0.4) {
+        androidImeHidePendingRef.current = true;
+      }
+      if (progress > prevProgress + 0.02 && progress > 0.05 && androidImeHidePendingRef.current) {
+        androidImeHidePendingRef.current = false;
+        seedAndroidImeLiftFromCacheRef.current();
+      }
+      prevProgress = progress;
+      androidKeyboardProgressRef.current = progress;
+      logAndroidImeDockRef.current(progress);
+      if (androidImeHidePendingRef.current && progress <= 0.02) {
+        clearAndroidImeAfterHideRef.current();
+      }
+    });
+    return () => keyboardAnimation.progress.removeListener(id);
+  }, [keyboardAnimation.progress]);
+
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    const id = keyboardAnimation.height.addListener(({ value }) => {
+      androidKcHeightAbsRef.current = Math.abs(Number(value) || 0);
+    });
+    return () => keyboardAnimation.height.removeListener(id);
+  }, [keyboardAnimation.height]);
+
   // Android delivers this directly from WindowInsets.Type.ime() in MainActivity.
-  // The Keyboard event below remains a fallback for an older development build.
   useEffect(() => {
     if (Platform.OS !== 'android') return;
     const subscription = DeviceEventEmitter.addListener(
       'LiviAndroidImeInsets',
       (rawHeight: unknown) => {
-        const heightPx = Math.max(0, Number(rawHeight) || 0);
-        // Android WindowInsets are pixels; React Native layout coordinates are dp.
-        const height = Math.round(heightPx / PixelRatio.get());
+        // MainActivity (после FontScale density lock) шлёт dp.
+        // Старые APK слали px — только их делим через PixelRatio.
+        // Нельзя порог от короткой стороны: 363dp > 0.85×360 → ложный /3 → 121 и блок не встаёт.
+        const raw = Math.max(0, Number(rawHeight) || 0);
+        const { width: winW, height: winH } = Dimensions.get('window');
+        const longSide = Math.max(winW, winH);
+        const height =
+          raw > longSide * 0.9
+            ? Math.round(raw / PixelRatio.get())
+            : Math.round(raw);
         androidNativeImeAvailableRef.current = true;
         if (androidFallbackImeTimerRef.current) {
           clearTimeout(androidFallbackImeTimerRef.current);
           androidFallbackImeTimerRef.current = null;
         }
-        setAndroidImeInset(height);
+        if (height > 0) {
+          androidImeHidePendingRef.current = false;
+          setKeyboardVisible(true);
+          setAndroidImeInset(height);
+          applyAndroidImeLiftTarget(height, 'insets');
+        }
       },
     );
     return () => {
@@ -495,12 +687,12 @@ export default function ChatScreen({ route, navigation }: Props) {
         clearTimeout(androidFallbackImeTimerRef.current);
       }
     };
-  }, []);
+  }, [applyAndroidImeLiftTarget]);
 
   const composerTextInputMaxHeight = 76;
   // Android: до первого onLayout — оценка нижней панели (после более низкого инпута).
   // Не завышать: иначе ListHeader spacer держит лишний зазор до последнего сообщения.
-  const estimatedInputHeight = 100 + Math.max(0, insets.bottom);
+  const estimatedInputHeight = 100;
   const [inputHeight, setInputHeight] = useState(estimatedInputHeight);
   const [messageText, setMessageText] = useState("");
   const messageTextRef = useRef("");
@@ -815,10 +1007,6 @@ export default function ChatScreen({ route, navigation }: Props) {
     }, delay);
   };
 
-  // Реальная высота контейнера (по onLayout), чтобы корректно понять, ресайзит ли система окно при клавиатуре
-  const [rootLayoutH, setRootLayoutH] = useState<number>(0);
-  const baseRootLayoutHRef = useRef<number>(0);
-
   // Всегда прижимаем к низу при показе/скрытии клавиатуры
   useEffect(() => {
     // Закрыть возможный глобальный оверлей входящего, если звонящий отменил/таймаут
@@ -844,6 +1032,18 @@ export default function ChatScreen({ route, navigation }: Props) {
     try { socket.on('call:declined', clearIncomingTimer); } catch {}
     try { socket.on('call:cancel', clearIncomingTimer); } catch {}
     try { socket.on('call:timeout', clearIncomingTimer); } catch {}
+    const applyIosKeyboardFrame = (event: any) => {
+      if (Platform.OS !== 'ios') return;
+      try { Keyboard.scheduleLayoutAnimation(event); } catch {}
+      const nextInset = resolveKeyboardAvoidance(
+        event?.endCoordinates,
+        Dimensions.get('screen').height,
+        safeAreaBottomRef.current,
+      );
+      setKeyboardVisible(nextInset > 0);
+      setKeyboardInset(nextInset);
+      scheduleScrollToBottom(0);
+    };
     const onShow = (event: any) => {
       if (Platform.OS === 'android') {
         // StickyView двигает dock; inset — для pad списка/empty.
@@ -852,9 +1052,7 @@ export default function ChatScreen({ route, navigation }: Props) {
         if (height > 0) {
           const resolvedHeight = Math.round(height);
           setKeyboardInset(resolvedHeight);
-          // Current builds receive the native inset in the same animation.
-          // Older dev-builds still get a delayed RN fallback instead of a
-          // visible 318dp → native-inset correction.
+          // Dock уже едет по keyboardAnimation.height; inset — только pad/hit-test.
           if (!androidNativeImeAvailableRef.current) {
             if (androidFallbackImeTimerRef.current) {
               clearTimeout(androidFallbackImeTimerRef.current);
@@ -862,51 +1060,58 @@ export default function ChatScreen({ route, navigation }: Props) {
             androidFallbackImeTimerRef.current = setTimeout(() => {
               if (!androidNativeImeAvailableRef.current) {
                 setAndroidImeInset(resolvedHeight);
+                applyAndroidImeLiftTargetRef.current(resolvedHeight, 'insets');
               }
               androidFallbackImeTimerRef.current = null;
             }, 100);
           }
         }
       } else {
-        setKeyboardVisible(true);
-        const height = Number(event?.endCoordinates?.height || 0);
-        if (height > 0) setKeyboardInset(Math.round(height));
-        scheduleScrollToBottom(0);
+        applyIosKeyboardFrame(event);
       }
     };
     const onHide = () => {
       if (Platform.OS === 'android') {
         setKeyboardVisible(false);
         setKeyboardInset(0);
-        if (androidFallbackImeTimerRef.current) {
-          clearTimeout(androidFallbackImeTimerRef.current);
-          androidFallbackImeTimerRef.current = null;
+        // ime target держим: progress 1→0 опустит dock; clear после progress≈0.
+        if (androidKeyboardProgressRef.current <= 0.02) {
+          clearAndroidImeAfterHideRef.current();
+        } else {
+          androidImeHidePendingRef.current = true;
         }
-        setAndroidImeInset(0);
-        scheduleScrollToBottom(0);
       } else {
         setKeyboardVisible(false);
         setKeyboardInset(0);
         scheduleScrollToBottom(0);
       }
     };
-    const onWillShow = (event: any) => { 
-      setKeyboardVisible(true); 
-      if (Platform.OS === 'ios' && event?.endCoordinates?.height) {
-        // On iOS KeyboardAvoidingView will handle offsets; we keep this for potential diagnostics only.
-      }
-      scheduleScrollToBottom(0); 
-    };
+    const onWillShow = (event: any) => applyIosKeyboardFrame(event);
     const onWillHide = () => { 
       setKeyboardVisible(false); 
+      setKeyboardInset(0);
       scheduleScrollToBottom(0); 
+    };
+    const onWillChangeFrame = (event: any) => applyIosKeyboardFrame(event);
+    const onDidChangeFrame = (event: any) => {
+      if (Platform.OS === 'ios') {
+        applyIosKeyboardFrame(event);
+        return;
+      }
+      if (androidNativeImeAvailableRef.current) return;
+      const height = Math.max(0, Math.round(Number(event?.endCoordinates?.height || 0)));
+      setKeyboardVisible(height > 0);
+      setKeyboardInset(height);
+      // Не трогаем dock здесь — подъём только через keyboardAnimation.height.
     };
 
     const subs = [
       Keyboard.addListener('keyboardWillShow', onWillShow), // iOS
       Keyboard.addListener('keyboardWillHide', onWillHide), // iOS
+      Keyboard.addListener('keyboardWillChangeFrame', onWillChangeFrame),
       Keyboard.addListener('keyboardDidShow', onShow),       // Android
       Keyboard.addListener('keyboardDidHide', onHide),       // Android
+      Keyboard.addListener('keyboardDidChangeFrame', onDidChangeFrame),
     ];
     return () => { subs.forEach(s => s.remove()); offClose?.(); try { socket.off('call:timeout', forceClose); } catch {}; try { socket.off('call:declined', forceClose); } catch {}; try { socket.off('call:cancel', forceClose); } catch {}; try { socket.off('call:incoming', onIncoming); } catch {}; try { socket.off('call:accepted', clearIncomingTimer); } catch {}; try { socket.off('call:declined', clearIncomingTimer); } catch {}; try { socket.off('call:cancel', clearIncomingTimer); } catch {}; try { socket.off('call:timeout', clearIncomingTimer); } catch {}; clearIncomingTimer(); };
   }, []);
@@ -922,31 +1127,25 @@ export default function ChatScreen({ route, navigation }: Props) {
     }
   }, [messages.length]);
 
-  // Android: композер (+ emoji) в одном dock; IME поднимает KeyboardStickyView.
-  const systemResizeDelta =
-    Platform.OS === 'ios' && keyboardVisible
-      ? Math.max(0, baseRootLayoutHRef.current - rootLayoutH)
-      : 0;
-  const keyboardLift =
-    Platform.OS === 'android'
-      ? 0
-      : (keyboardVisible ? Math.max(0, keyboardInset - systemResizeDelta) : 0);
-
-  const composerBottomLift = emojiPanelOpen ? chatEmojiPanelHeight : keyboardLift;
   // Android: pad для списка/empty/overlays — IME (окно не resize) или emoji-панель.
   const androidKeyboardPad = emojiPanelOpen
-    ? chatEmojiPanelHeight + Math.max(0, insets.bottom)
+    ? chatEmojiPanelHeight + Math.max(0, androidPinnedNavInset)
     : Math.max(0, androidImeInset);
   /**
-   * Движение Android IME приходит напрямую в native Animated.Value. Поэтому
-   * dock и лента едут вместе с клавиатурой в том же кадре, без запоздалого
-   * React setState → layout-прыжка после окончания системной анимации.
+   * progress×(−ime) + (1−p)×(−nav).
+   * ime из WindowInsets (логи: kc=0, ime=363) — единственный рабочий источник высоты.
    */
   const androidDockKeyboardTranslateY = emojiPanelOpen
     ? 0
     : Animated.add(
-        keyboardAnimation.height,
-        Animated.multiply(keyboardAnimation.progress, Math.max(0, insets.bottom)),
+        Animated.multiply(
+          keyboardAnimation.progress,
+          Animated.multiply(androidImeLiftTargetAnim, -1),
+        ),
+        Animated.multiply(
+          Animated.add(1, Animated.multiply(keyboardAnimation.progress, -1)),
+          -androidPinnedNavInset,
+        ),
       );
   const androidListKeyboardTranslateY = androidDockKeyboardTranslateY;
   const androidEmptyKeyboardTranslateY = emojiPanelOpen
@@ -2171,20 +2370,18 @@ export default function ChatScreen({ route, navigation }: Props) {
     setRetryUiForId((prev) => (prev === id ? null : id));
   }, []);
 
-  const handleRootLayout = React.useCallback((e: any) => {
-    const h = Math.max(0, Math.round(Number(e?.nativeEvent?.layout?.height || 0)));
-    if (!h) return;
-    if (Math.abs(rootLayoutH - h) > 1) {
-      setRootLayoutH(h);
-    }
-    if (!keyboardVisible) {
-      baseRootLayoutHRef.current = h;
-    }
-  }, [keyboardVisible, rootLayoutH]);
-
   const handleInputBarLayout = React.useCallback((e: any) => {
     const h = Math.max(0, Math.round(Number(e?.nativeEvent?.layout?.height || 0)));
     if (!h || Math.abs(inputHeight - h) <= 1) return;
+    // Во время IME-анимации на Android не переписываем высоту — иначе paddingTop
+    // списка меняется поверх native translate и даёт прыжок в конце.
+    if (
+      Platform.OS === 'android' &&
+      androidKeyboardProgressRef.current > 0.02 &&
+      androidKeyboardProgressRef.current < 0.98
+    ) {
+      return;
+    }
     setInputHeight(h);
   }, [inputHeight]);
 
@@ -2218,7 +2415,7 @@ export default function ChatScreen({ route, navigation }: Props) {
           left: 0,
           right: 0,
           top: headerTotalH,
-          // Android: над инпутом (+IME). iOS: родитель уже ужат KeyboardAvoidingView.
+          // Android: над инпутом (+IME). iOS: родитель уже ужат по точному frame клавиатуры.
           bottom: Platform.OS === 'android' ? androidEmptyBottomPad : resolvedInputBarH,
           justifyContent: 'center',
           alignItems: 'center',
@@ -2401,7 +2598,6 @@ export default function ChatScreen({ route, navigation }: Props) {
         style={{ flex: 1, backgroundColor: 'transparent' }}
         // Не блокируем весь экран pointerEvents='none': на Android это иногда "съедало" первый тап.
         pointerEvents="auto"
-        onLayout={handleRootLayout}
       >
         <View style={{ flex: 1, overflow: 'hidden', backgroundColor: 'transparent' }}>
         {loading ? (
@@ -2426,12 +2622,8 @@ export default function ChatScreen({ route, navigation }: Props) {
             </TouchableOpacity>
           </View>
         ) : Platform.OS === 'ios' ? (
-          // iOS версия с KeyboardAvoidingView
-          (<KeyboardAvoidingView
-            style={{ flex: 1 }}
-            behavior="padding"
-            keyboardVerticalOffset={0}
-          >
+          // iOS: padding из фактического frame обновляется и при смене высоты уже открытой клавиатуры.
+          (<View style={{ flex: 1, paddingBottom: emojiPanelOpen ? 0 : keyboardInset }}>
             <View style={{ flex: 1, overflow: 'hidden' }}>
             <ChatMessageEdgeFade
               style={{ flex: 1 }}
@@ -2797,7 +2989,7 @@ export default function ChatScreen({ route, navigation }: Props) {
               ) : null}
             </ChatChrome>
             </View>
-          </KeyboardAvoidingView>)
+          </View>)
         ) : (
           // Android: ADJUST_NOTHING + KeyboardStickyView — dock клеится к верху IME.
           (<View style={{ flex: 1, overflow: 'hidden' }}>
@@ -2924,10 +3116,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 backgroundColor: isDark ? undefined : INPUT_BAR_BG,
                 paddingHorizontal: 16,
                 paddingTop: voiceIsRecording ? 8 : 18,
-                // Nav inset только когда клавиатуры/emoji нет.
-                paddingBottom:
-                  18 +
-                  (emojiPanelOpen ? 0 : Math.max(0, insets.bottom)),
+                paddingBottom: 18,
                 overflow: 'hidden',
                 borderTopLeftRadius: WELCOME_CHROME_EDGE_RADIUS,
                 borderTopRightRadius: WELCOME_CHROME_EDGE_RADIUS,

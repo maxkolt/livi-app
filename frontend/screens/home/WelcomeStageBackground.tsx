@@ -186,13 +186,13 @@ export function StageGradient({ style, children, onLayout, translucent, mirror }
     );
   }
 
-  // Стекло шапки/панели ввода чата: обои лишь угадываются. При ~0.7 сквозь шапку
-  // читались проскролленные под неё сообщения (время и текст под кнопками).
+  // Рассеивание на весь блок: у края экрана плотнее, к ленте — всё меньше.
+  // Бирюза чуть приглушена. Прозрачность снижена (блоки плотнее).
   const colors = [
-    'rgba(14, 28, 34, 0.97)',
-    'rgba(10, 12, 20, 0.96)',
-    'rgba(11, 17, 24, 0.96)',
-    'rgba(12, 21, 32, 0.97)',
+    'rgba(11, 22, 28, 1)',
+    'rgba(9, 15, 21, 0.97)',
+    'rgba(8, 12, 18, 0.88)',
+    'rgba(8, 11, 16, 0.50)',
   ] as const;
   const vStart = mirror ? { x: 0.5, y: 1 } : { x: 0.5, y: 0 };
   const vEnd = mirror ? { x: 0.5, y: 0 } : { x: 0.5, y: 1 };
@@ -201,7 +201,7 @@ export function StageGradient({ style, children, onLayout, translucent, mirror }
     <View style={style} onLayout={onLayout}>
       <LinearGradient
         colors={[...colors]}
-        locations={[0, 0.32, 0.68, 1]}
+        locations={[0, 0.34, 0.68, 1]}
         start={vStart}
         end={vEnd}
         style={StyleSheet.absoluteFill}

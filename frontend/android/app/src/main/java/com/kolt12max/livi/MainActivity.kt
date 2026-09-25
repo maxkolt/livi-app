@@ -39,18 +39,18 @@ class MainActivity : ReactActivity() {
     val root = window?.decorView ?: return
     fun reportImeInsets(insets: WindowInsetsCompat) {
       val imeVisible = insets.isVisible(WindowInsetsCompat.Type.ime())
-      val imeInset = if (imeVisible) {
+      val imeInsetPx = if (imeVisible) {
         insets.getInsets(WindowInsetsCompat.Type.ime()).bottom
       } else {
         0
       }
-      // `WindowInsets.Type.ime()` shares the same coordinate system as the
-      // React Native root. Do not mix it with physical display rectangles:
-      // their coordinates differ after rotation on some OEM devices.
-      val imeBottom = imeInset
-      if (imeBottom != lastReportedImeInset) {
-        lastReportedImeInset = imeBottom
-        LiviAppModule.emitAndroidImeInsets(imeBottom)
+      // В те же dp, что RN layout (density зафиксирован FontScaleContextHelper).
+      // Иначе после «масштаба экрана» px/PixelRatio расходятся и композер уезжает.
+      val density = resources.displayMetrics.density.coerceAtLeast(0.01f)
+      val imeBottomDp = kotlin.math.round(imeInsetPx / density).toInt()
+      if (imeBottomDp != lastReportedImeInset) {
+        lastReportedImeInset = imeBottomDp
+        LiviAppModule.emitAndroidImeInsets(imeBottomDp)
       }
     }
     ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->

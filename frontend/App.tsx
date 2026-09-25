@@ -20,6 +20,8 @@ import { emitCloseIncoming, emitRequestCloseIncoming, emitCloseOutgoingCall, emi
 import { buildCallEndSocketPayload } from './utils/callEndPayload';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { logger } from './utils/logger';
+// Android chat IME dock: прогреть cache высоты до первого фокуса в инпут.
+import './screens/chat/androidImeLiftCache';
 import {
   beginCallPerfTrace,
   markCallPerf,
@@ -2137,7 +2139,7 @@ function AppContent() {
           disposeDirectCallAudioPrewarm('app:callkeep-end');
           stopIncomingCallRingtoneAndVibration();
           try { stopIncomingCallForegroundService(); } catch {}
-          const routeName = navRef.getCurrentRoute()?.name;
+          const routeName = readRootCurrentRouteName();
           if (routeName === 'VideoCall') {
             const endFn = (global as any).__endCallFromNativeRef?.current;
             if (typeof endFn === 'function') endFn(callId, null);
@@ -4020,7 +4022,7 @@ function AppContent() {
           g.__outgoingCallScreenVisibleRef?.current === true;
         const hasVideo =
           g.__videoCallActiveRef?.current === true ||
-          String(navRef.getCurrentRoute?.()?.name ?? '') === 'VideoCall';
+          readRootCurrentRouteName() === 'VideoCall';
         if (hasOutgoing || hasVideo) return;
         logger.info('[App] dismiss stale native outgoing on launch (no JS call context)');
         terminateCall({
@@ -4441,7 +4443,7 @@ function AppContent() {
               alreadyOnVideoCall,
               calleeOwnsNavigation,
               incomingAnswerInFlight,
-              route: navRef.getCurrentRoute()?.name ?? null,
+              route: readRootCurrentRouteName() || null,
               appState: AppState.currentState,
             },
           });
@@ -4449,7 +4451,7 @@ function AppContent() {
             isCaller,
             calleeOwnsNavigation,
             alreadyOnVideoCall,
-            route: navRef.getCurrentRoute()?.name ?? null,
+            route: readRootCurrentRouteName() || null,
             appState: AppState.currentState,
             hasLivekitToken: !!(data as any)?.livekitToken,
           });
@@ -4612,8 +4614,9 @@ function AppContent() {
       setIncoming(null);
       stopAnim();
       try {
-        const currentRoute = navRef.getCurrentRoute();
-        if (navRef.isReady() && currentRoute?.name !== 'VideoCall') {
+        const navigationReady = navRef.isReady();
+        const currentRoute = navigationReady ? navRef.getCurrentRoute() : undefined;
+        if (navigationReady && currentRoute?.name !== 'VideoCall') {
           const resolveOutgoingPartnerNick = (): string | undefined => {
             const nick =
               String(callerPartnerNickEarly || '').trim() ||
@@ -4765,7 +4768,7 @@ function AppContent() {
               markCallPerf('nav_videocall_start', {
                 isCaller,
                 peerUserId,
-                route: navRef.getCurrentRoute()?.name ?? null,
+                route: readRootCurrentRouteName() || null,
               });
             } catch {}
             // Outgoing→Main / accept UI: не гонять Home resume/badge поверх VideoCall.

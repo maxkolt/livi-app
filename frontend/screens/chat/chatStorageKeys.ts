@@ -19,3 +19,6 @@ export function getChatHiddenForMeKey(userId: string, peerId: string): string {
   const sortedIds = [userId, peerId].sort();
   return `chat_hidden_message_ids_${sortedIds[0]}_${sortedIds[1]}`;
 }
+
+/** Последняя точная высота IME (dp) с WindowInsets — seed dock без мерцания KC. */
+export const ANDROID_IME_LIFT_CACHE_KEY = 'livi_android_ime_lift_cache_dp';
