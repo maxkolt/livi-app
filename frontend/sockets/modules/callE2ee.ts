@@ -151,7 +151,50 @@ export async function clearCallE2ee(callIdRaw: string): Promise<void> {
     if (pending.pair === pair) pendingByPeer.delete(peerId);
   }
   erasePair(pair);
+  clearCallE2eeUi(callId);
   try {
     await SecureStore.deleteItemAsync(SECRET_KEY_PREFIX + callId);
   } catch {}
+}
+
+/* ---------- UI: щит на экране звонка (caller + callee) ---------- */
+
+let callE2eeUiActive = false;
+let callE2eeUiCallId: string | null = null;
+const callE2eeUiListeners = new Set<() => void>();
+
+function notifyCallE2eeUi(): void {
+  callE2eeUiListeners.forEach((listener) => listener());
+}
+
+/** Включить/выключить щит; привязка к callId, чтобы старый звонок не гасил новый. */
+export function setCallE2eeUiActive(active: boolean, callIdRaw?: string | null): void {
+  const callId = String(callIdRaw || "").trim() || null;
+  if (active) {
+    if (callE2eeUiActive && callE2eeUiCallId === callId) return;
+    callE2eeUiActive = true;
+    callE2eeUiCallId = callId;
+    notifyCallE2eeUi();
+    return;
+  }
+  if (callId && callE2eeUiCallId && callId !== callE2eeUiCallId) return;
+  if (!callE2eeUiActive && !callE2eeUiCallId) return;
+  callE2eeUiActive = false;
+  callE2eeUiCallId = null;
+  notifyCallE2eeUi();
+}
+
+export function clearCallE2eeUi(callIdRaw?: string | null): void {
+  setCallE2eeUiActive(false, callIdRaw);
+}
+
+export function getCallE2eeUiSnapshot(): boolean {
+  return callE2eeUiActive;
+}
+
+export function subscribeCallE2eeUi(onStoreChange: () => void): () => void {
+  callE2eeUiListeners.add(onStoreChange);
+  return () => {
+    callE2eeUiListeners.delete(onStoreChange);
+  };
 }

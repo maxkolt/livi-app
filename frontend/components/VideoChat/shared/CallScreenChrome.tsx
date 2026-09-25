@@ -1,11 +1,10 @@
 /**
  * Единый chrome экрана звонка (audio + video): шапка + нижняя капсула.
  * Только UI — без логики сессии / PiP / маршрута.
+ * Щит E2EE: статичная иконка, без пульсации и без текстовой подписи.
  */
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useState } from 'react';
 import {
-  Animated,
-  Easing,
   View,
   Text,
   Image,
@@ -93,53 +92,9 @@ type Props = {
     solid15: string;
     solid30: string;
   };
-  /** Звонок со сквозным шифрованием: показываем спокойный подтверждённый статус. */
+  /** Звонок со сквозным шифрованием: щит без пульсации. */
   encrypted?: boolean;
-  encryptedLabel?: string;
 };
-
-/** Однократное мягкое появление — без отвлекающей бесконечной пульсации. */
-function EncryptedShieldBadge({ label }: { label: string }) {
-  const entrance = useRef(new Animated.Value(0)).current;
-  useEffect(() => {
-    const animation = Animated.timing(entrance, {
-      toValue: 1,
-      duration: 320,
-      easing: Easing.out(Easing.cubic),
-      useNativeDriver: true,
-    });
-    animation.start();
-    return () => animation.stop();
-  }, [entrance]);
-
-  return (
-    <Animated.View
-      accessible
-      accessibilityLabel={label}
-      style={[
-        styles.encryptedShieldBadge,
-        {
-          opacity: entrance,
-          transform: [
-            { translateY: entrance.interpolate({ inputRange: [0, 1], outputRange: [-3, 0] }) },
-            { scale: entrance.interpolate({ inputRange: [0, 1], outputRange: [0.96, 1] }) },
-          ],
-        },
-      ]}
-    >
-      <View style={styles.encryptedShieldIcon}>
-        <MaterialIcons
-          name="verified-user"
-          size={19}
-          color={WELCOME_NAV_ACTIVE_ACCENT.softText}
-        />
-      </View>
-      <Text style={styles.encryptedShieldLabel} numberOfLines={1}>
-        {label}
-      </Text>
-    </Animated.View>
-  );
-}
 
 export function CallScreenChrome({
   partnerName,
@@ -170,7 +125,6 @@ export function CallScreenChrome({
   speakerIcon,
   speakerAccent,
   encrypted = false,
-  encryptedLabel = 'Encrypted',
 }: Props) {
   const [moreOpen, setMoreOpen] = useState(false);
   const [resolvedUri, ready] = useResolvedImageUri(partnerAvatarUri ?? '');
@@ -202,10 +156,7 @@ export function CallScreenChrome({
             <MaterialIcons name="keyboard-arrow-down" size={26} color={WELCOME_HEADER_TITLE} />
           </Pressable>
 
-          <View
-            style={[styles.partnerChip, encrypted ? styles.partnerChipEncrypted : null]}
-            pointerEvents="none"
-          >
+          <View style={styles.partnerChip} pointerEvents="none">
             <View style={styles.avatarWrap}>
               {ready && resolvedUri ? (
                 <Image source={{ uri: resolvedUri }} style={styles.avatar} />
@@ -242,11 +193,20 @@ export function CallScreenChrome({
             </View>
           </View>
 
-          <View
-            style={[styles.shieldSlot, encrypted ? styles.shieldSlotEncrypted : null]}
-            pointerEvents="none"
-          >
-            {encrypted ? <EncryptedShieldBadge label={encryptedLabel} /> : null}
+          <View style={styles.shieldSlot} pointerEvents="none">
+            {encrypted ? (
+              <View
+                style={styles.shieldBtnEncrypted}
+                accessible
+                accessibilityLabel="end-to-end encrypted"
+              >
+                <MaterialIcons
+                  name="verified-user"
+                  size={20}
+                  color={WELCOME_NAV_ACTIVE_ACCENT.softText}
+                />
+              </View>
+            ) : null}
           </View>
         </View>
       </View>
@@ -456,35 +416,16 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     zIndex: 2,
   },
-  shieldSlotEncrypted: {
-    width: 72,
-    height: 48,
-  },
-  encryptedShieldBadge: {
-    width: 72,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  encryptedShieldIcon: {
-    width: 29,
-    height: 29,
-    borderRadius: 15,
+  shieldBtnEncrypted: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor:
-      Platform.OS === 'android' ? 'rgba(33, 58, 68, 0.96)' : WELCOME_NAV_ACTIVE_ACCENT.solid15,
+      Platform.OS === 'android' ? 'rgba(33, 58, 68, 0.28)' : 'rgba(74, 122, 140, 0.10)',
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: WELCOME_NAV_ACTIVE_ACCENT.solid,
-  },
-  encryptedShieldLabel: {
-    maxWidth: 72,
-    marginTop: 2,
-    color: WELCOME_NAV_ACTIVE_ACCENT.softText,
-    fontSize: 9,
-    lineHeight: 11,
-    fontWeight: '600',
-    letterSpacing: 0.1,
-    textAlign: 'center',
+    borderColor: WELCOME_NAV_ACTIVE_ACCENT.solid30,
   },
   roundChromeBtn: {
     width: 38,
@@ -510,9 +451,6 @@ const styles = StyleSheet.create({
     gap: 10,
     paddingHorizontal: 52,
     zIndex: 1,
-  },
-  partnerChipEncrypted: {
-    paddingRight: 84,
   },
   avatarWrap: {
     width: 48,

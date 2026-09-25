@@ -21,6 +21,7 @@ import {
   clearCallE2ee,
   createOutgoingCallE2eeDeclaration,
   deriveCallKey,
+  setCallE2eeUiActive,
 } from '../../../sockets/modules/callE2ee';
 import {
   setExternalCallHoldActive,
@@ -7241,17 +7242,25 @@ export class VideoCallSession extends SimpleEventEmitter {
     if (!peerPublicKey) {
       this.callE2ee = null;
       callE2eeKeyByCallId.delete(callId);
+      this.setCallE2eeActive(false);
       throw new Error('call_e2ee_required');
     }
-    if (this.callE2ee?.callId === callId) return;
+    if (this.callE2ee?.callId === callId) {
+      // Ключ уже есть (ранний bootstrap) — UI всё равно должен увидеть щит у обеих сторон.
+      this.setCallE2eeActive(true);
+      return;
+    }
     const key = await deriveCallKey(peerPublicKey, callId).catch(() => null);
     if (!key) {
       logger.error('[VideoCallSession] call e2ee: failed to derive key', { callId });
       this.callE2ee = null;
+      this.setCallE2eeActive(false);
       throw new Error('call_e2ee_key_unavailable');
     }
     this.callE2ee = { callId, key };
     rememberCallE2eeKey(callId, key);
+    // Щит на экране звонка сразу у caller и callee, не ждём room.setE2EEEnabled.
+    this.setCallE2eeActive(true);
     logger.info('[VideoCallSession] call e2ee enabled for call', { callId });
   }
 
@@ -7270,9 +7279,15 @@ export class VideoCallSession extends SimpleEventEmitter {
       await this.applyAcceptedCallE2ee({ callId, e2ee: { peerPublicKey } });
       return;
     }
-    if (this.callE2ee?.callId === callId) return;
+    if (this.callE2ee?.callId === callId) {
+      this.setCallE2eeActive(true);
+      return;
+    }
     const cached = callE2eeKeyByCallId.get(callId);
-    if (cached) this.callE2ee = { callId, key: cached };
+    if (cached) {
+      this.callE2ee = { callId, key: cached };
+      this.setCallE2eeActive(true);
+    }
   }
 
   private disposeCallE2eeKeyProvider(): void {
@@ -7295,9 +7310,19 @@ export class VideoCallSession extends SimpleEventEmitter {
 
   /** До room.connect(): ключ в провайдер и шифрование для всех публикуемых треков. */
   private async enableCallE2eeOnRoom(room: Room): Promise<void> {
-    const provider = this.callE2eeKeyProvider;
-    if (!this.callE2ee || !provider) {
+    if (!this.callE2ee) {
       this.setCallE2eeActive(false);
+      return;
+    }
+    // createLiveKitRoomForConnect мог ещё не положить provider — не гасим щит UI.
+    if (!this.callE2eeKeyProvider) {
+      this.createCallE2eeManager();
+    }
+    const provider = this.callE2eeKeyProvider;
+    if (!provider) {
+      logger.error('[VideoCallSession] call e2ee: key provider missing', {
+        callId: this.callE2ee.callId,
+      });
       return;
     }
     await provider.setSharedKey(this.callE2ee.key);
@@ -7306,14 +7331,17 @@ export class VideoCallSession extends SimpleEventEmitter {
   }
 
   private setCallE2eeActive(active: boolean): void {
-    if (this.callE2eeActive === active) return;
-    this.callE2eeActive = active;
-    this.emit('callE2eeChanged', active);
+    if (this.callE2eeActive !== active) {
+      this.callE2eeActive = active;
+      this.emit('callE2eeChanged', active);
+    }
+    // Глобальный снимок: VideoCall на callee мог подписаться после emit.
+    setCallE2eeUiActive(active, this.callId || this.callE2ee?.callId || null);
   }
 
   /** Звонок идёт со сквозным шифрованием (для значка на экране звонка). */
   isCallE2eeActive(): boolean {
-    return this.callE2eeActive;
+    return this.callE2eeActive || !!this.callE2ee;
   }
 
   /** Новая Room с профилем публикации под это устройство; сразу становится текущей. */

@@ -3324,29 +3324,39 @@ export default function ChatScreen({ route, navigation }: Props) {
           <WelcomeOverlayDim strong />
           <WelcomeOverlayCard opaque>
             {e2eMenu.length > 0 ? (
-              <View style={{ gap: 10, marginBottom: 18 }}>
-                {e2eMenu.map((item) => (
-                  <WelcomeOverlayPill
-                    key={item.mode}
-                    label={t(item.labelKey, lang)}
-                    onPress={() => {
-                      setShowClearMenu(false);
-                      setE2eRequestedMode(item.mode);
-                    }}
-                    variant={item.tone === 'accent' ? 'primary' : 'secondary'}
-                    style={
-                      item.tone === 'accent'
-                        ? {
-                            // Бирюзовый активной навигации: полупрозрачная заливка и рамка того же цвета.
-                            backgroundColor: WELCOME_NAV_ACTIVE_ACCENT.solid30,
-                            borderWidth: 1,
-                            borderColor: WELCOME_NAV_ACTIVE_ACCENT.solid,
-                          }
-                        : undefined
-                    }
-                  />
-                ))}
-              </View>
+              <>
+                <Text
+                  style={[
+                    homeStyles.confirmTitle,
+                    { fontSize: 13, letterSpacing: 0.8, textTransform: 'uppercase', color: WELCOME_MUTED_TEXT, marginBottom: 0 },
+                  ]}
+                >
+                  {t('e2eMenuSectionTitle', lang)}
+                </Text>
+                <View style={{ gap: 10, marginTop: 12, marginBottom: 18 }}>
+                  {e2eMenu.map((item) => (
+                    <WelcomeOverlayPill
+                      key={item.mode}
+                      label={t(item.labelKey, lang)}
+                      onPress={() => {
+                        setShowClearMenu(false);
+                        setE2eRequestedMode(item.mode);
+                      }}
+                      variant={item.tone === 'accent' ? 'primary' : 'secondary'}
+                      style={
+                        item.tone === 'accent'
+                          ? {
+                              // Бирюзовый активной навигации: полупрозрачная заливка и рамка того же цвета.
+                              backgroundColor: WELCOME_NAV_ACTIVE_ACCENT.solid30,
+                              borderWidth: 1,
+                              borderColor: WELCOME_NAV_ACTIVE_ACCENT.solid,
+                            }
+                          : undefined
+                      }
+                    />
+                  ))}
+                </View>
+              </>
             ) : null}
             <Text
               style={[
@@ -3378,6 +3388,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 label={t('cancelAction', lang)}
                 onPress={() => setShowClearMenu(false)}
                 variant="secondary"
+                style={{ marginTop: 18 }}
               />
             </View>
           </WelcomeOverlayCard>

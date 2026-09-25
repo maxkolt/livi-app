@@ -2,7 +2,7 @@
 
 import React from "react";
 import { Platform, Pressable, Text, TouchableOpacity, View } from "react-native";
-import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
+import { Ionicons, MaterialCommunityIcons, MaterialIcons } from "@expo/vector-icons";
 import AvatarImage from "../../components/AvatarImage";
 import ChatStyleBackButton from "../../components/ChatStyleBackButton";
 import { t, type Lang } from "../../utils/i18n";
@@ -214,51 +214,42 @@ export function useChatHeader({
             </Pressable>
 
             <View style={{ flex: 1, minWidth: 0, marginLeft: 10, marginRight: 8, justifyContent: "center" }}>
-              <Text
-                style={{
-                  color: isDark ? LIVI.white : LIVI.titan,
-                  fontSize: 17,
-                  fontWeight: "600",
-                  lineHeight: 21,
-                }}
-                numberOfLines={1}
-              >
-                {peerNameState}
-              </Text>
-              <View style={{ flexDirection: "row", alignItems: "center", marginTop: 2 }}>
+              <View style={{ flexDirection: "row", alignItems: "center" }}>
                 <Text
                   style={{
-                    fontSize: Platform.OS === "android" ? 10 : 11,
-                    lineHeight: Platform.OS === "android" ? 13 : 14,
-                    color: peerOnline ? LIVI.presenceGreen : LIVI.presenceRed,
-                    fontWeight: "300",
-                    ...(Platform.OS === "android" && { fontFamily: "sans-serif-light" }),
+                    flexShrink: 1,
+                    color: isDark ? LIVI.white : LIVI.titan,
+                    fontSize: 17,
+                    fontWeight: "600",
+                    lineHeight: 21,
                   }}
+                  numberOfLines={1}
                 >
-                  {peerOnline ? t("online", lang) : t("offline", lang)}
+                  {peerNameState}
                 </Text>
                 {encrypted ? (
-                  <View
-                    style={{ flexDirection: "row", alignItems: "center", marginLeft: 6 }}
+                  <MaterialIcons
+                    name="verified-user"
+                    size={12}
+                    color={WELCOME_NAV_ACTIVE_ACCENT.softText}
+                    style={{ marginLeft: 5 }}
                     accessible
                     accessibilityLabel={t("e2eEncryptedBadge", lang)}
-                  >
-                    <Ionicons name="lock-closed" size={Platform.OS === "android" ? 9 : 10} color={WELCOME_NAV_ACTIVE_ACCENT.softText} />
-                    <Text
-                      numberOfLines={1}
-                      style={{
-                        marginLeft: 3,
-                        fontSize: Platform.OS === "android" ? 10 : 11,
-                        lineHeight: Platform.OS === "android" ? 13 : 14,
-                        color: WELCOME_NAV_ACTIVE_ACCENT.softText,
-                        fontWeight: "500",
-                      }}
-                    >
-                      {t("e2eEncryptedBadge", lang)}
-                    </Text>
-                  </View>
+                  />
                 ) : null}
               </View>
+              <Text
+                style={{
+                  marginTop: 2,
+                  fontSize: Platform.OS === "android" ? 10 : 11,
+                  lineHeight: Platform.OS === "android" ? 13 : 14,
+                  color: peerOnline ? LIVI.presenceGreen : LIVI.presenceRed,
+                  fontWeight: "300",
+                  ...(Platform.OS === "android" && { fontFamily: "sans-serif-light" }),
+                }}
+              >
+                {peerOnline ? t("online", lang) : t("offline", lang)}
+              </Text>
             </View>
 
             <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>

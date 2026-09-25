@@ -44,7 +44,7 @@ export function e2eMenuActions(status: E2eStatus, hasLocalKey: boolean): E2eMenu
   if (status === 'ready') {
     return [
       { mode: 'change', labelKey: 'e2eMenuChangePassword', tone: 'accent' },
-      { mode: 'disable', labelKey: 'e2eMenuDisable', tone: 'plain' },
+      { mode: 'disable', labelKey: 'e2eMenuDisable', tone: 'accent' },
     ];
   }
   if (status === 'disabled') {
