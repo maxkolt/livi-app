@@ -80,6 +80,15 @@ describe('matchesPeerCallSignal', () => {
     expect(matchesPeerCallSignal({ callId: 'c1', identity, participants }, { callId: 'c2' })).toBe(false);
   });
 
+  it('callId важнее совпавшей комнаты, которая переиспользуется в следующем звонке', () => {
+    expect(
+      matchesPeerCallSignal(
+        { callId: 'new-call', identity: { socketRoomId: 'room_aaa_bbb' }, participants },
+        { callId: 'old-call', roomId: 'room_aaa_bbb' },
+      ),
+    ).toBe(false);
+  });
+
   it('принимает сигнал по своей комнате', () => {
     expect(matchesPeerCallSignal({ callId: 'c1', identity, participants }, { roomId: 'lk-1' })).toBe(true);
   });

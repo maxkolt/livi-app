@@ -50,6 +50,8 @@ let lastMediaFocusLossHint: NativeHoldHint = {};
  * tryEnter сбрасывал sticky и партнёр видел стоп-кадр без «Звонок на удержании».
  */
 let callMediaEstablishedOnce = false;
+/** callId, которому принадлежат local hold и bootstrap/media guards. */
+let externalHoldCallId: string | null = null;
 
 export function isExternalCallHoldActive(): boolean {
   return holdActive;
@@ -163,6 +165,39 @@ function noteCallMediaEstablishedIfNeeded(session: HoldSession): void {
 
 function clearCallMediaEstablished(): void {
   callMediaEstablishedOnce = false;
+}
+
+function resetExternalCallHoldRuntimeState(): void {
+  clearBackgroundTelephonyTimers();
+  clearForegroundExitTimers();
+  clearDeferredFocusHoldTimer();
+  holdActive = false;
+  lastExternalHoldEndedAt = 0;
+  clearMediaFocusLossNote();
+  clearCallMediaEstablished();
+  try {
+    NativeModules.LiviAppModule?.setExternalCallAudioHoldActive?.(false);
+  } catch {}
+  clearNativeHoldSticky();
+}
+
+/**
+ * Новый callId начинает чистый lifecycle hold. Повторный mount/сессия того же звонка
+ * состояние не сбрасывает.
+ */
+export function prepareExternalCallHoldForCall(callId?: string | null): void {
+  const nextCallId = String(callId ?? '').trim();
+  if (!nextCallId || nextCallId === externalHoldCallId) return;
+  externalHoldCallId = nextCallId;
+  resetExternalCallHoldRuntimeState();
+}
+
+/** Позднее завершение старой сессии не имеет права очищать hold нового звонка. */
+export function clearExternalCallHoldForCall(callId?: string | null): void {
+  const endingCallId = String(callId ?? '').trim();
+  if (endingCallId && externalHoldCallId && endingCallId !== externalHoldCallId) return;
+  externalHoldCallId = null;
+  resetExternalCallHoldRuntimeState();
 }
 
 /** Hold после первого connect: remote может ещё быть, room — reconnecting. */

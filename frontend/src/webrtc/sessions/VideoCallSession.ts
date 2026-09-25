@@ -22,8 +22,15 @@ import {
   isExternalCallHoldActive,
   shouldSuppressPeerReconnectForExternalHold,
   noteExternalHoldEnded,
+  prepareExternalCallHoldForCall,
+  clearExternalCallHoldForCall,
 } from '../../../utils/externalCallHold';
-import { dispatchPartnerExternalHoldFromSocket, setPartnerExternalHoldSnapshot } from '../../../utils/partnerExternalHoldUi';
+import {
+  dispatchPartnerExternalHoldFromSocket,
+  preparePartnerExternalHoldSnapshotForCall,
+  setPartnerExternalHoldSnapshot,
+  type PartnerExternalHoldSignal,
+} from '../../../utils/partnerExternalHoldUi';
 import { SimpleEventEmitter } from '../base/SimpleEventEmitter';
 import type { WebRTCSessionConfig, WebRTCSessionCallbacks, CamSide } from '../types';
 import socket, {
@@ -195,7 +202,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     disconnected?: () => void;
     pipState?: (data: { inPiP: boolean; roomId: string; from: string }) => void;
     camToggle?: (data: { enabled: boolean; from: string; roomId?: string }) => void;
-    externalHold?: (data: { hold?: boolean; from: string; roomId?: string }) => void;
+    externalHold?: (data: { hold?: boolean; from: string; callId?: string; roomId?: string }) => void;
     directCallVideoUi?: (data: { inVideoCallUi: boolean; from: string; roomId?: string }) => void;
     peerReconnecting?: (data?: { callId?: string; roomId?: string; from?: string }) => void;
     peerRecovered?: (data?: { callId?: string; roomId?: string; from?: string }) => void;
@@ -344,6 +351,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.config = config;
     const initialCallId = String((config as { initialCallId?: string | null }).initialCallId || '').trim();
     if (initialCallId) {
+      this.prepareExternalHoldStateForCall(initialCallId);
       this.callId = initialCallId;
     }
     if (config.startWithCamOff) {
@@ -750,6 +758,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       this.currentRoomName = null;
     }
 
+    this.prepareExternalHoldStateForCall(id);
     this.callId = id;
     this.partnerUserId = fromUserId;
     this.resetCallFlowMetrics();
@@ -849,6 +858,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       this.currentRoomName = null;
     }
     
+    this.prepareExternalHoldStateForCall(callId);
     this.callId = callId;
     this.partnerUserId = peerUserId;
     this.resetCallFlowMetrics();
@@ -953,7 +963,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.hadLiveRemoteAudioInCall = false;
     this.clearPeerReconnectingUi('endCall');
     void this.exitExternalCallHold().catch(() => {});
-    setPartnerExternalHoldSnapshot(false);
+    clearExternalCallHoldForCall(this.callId);
     this.setPartnerExternalHoldState(false);
     resetDirectCallVideoUiGlobalsAfterCallEnd();
     clearDirectCallAudioRouteCarryoverAfterCallEnd();
@@ -1571,12 +1581,13 @@ export class VideoCallSession extends SimpleEventEmitter {
   }
 
   setPartnerExternalHoldState(hold: boolean): void {
+    const scope = { callId: this.callId, roomId: this.resolveSignalingRoomId() };
     if (this.partnerExternalHoldActive === hold) {
-      setPartnerExternalHoldSnapshot(hold);
+      setPartnerExternalHoldSnapshot(hold, scope);
       return;
     }
     this.partnerExternalHoldActive = hold;
-    setPartnerExternalHoldSnapshot(hold);
+    setPartnerExternalHoldSnapshot(hold, scope);
     if (hold) {
       this.clearPeerReconnectingForExternalHold();
       // Soft-mute uplink у партнёра даёт TrackMuted — не переводим UI в «Отошёл».
@@ -1601,6 +1612,15 @@ export class VideoCallSession extends SimpleEventEmitter {
       }
     }
     this.emit('partnerExternalHoldChanged', { hold });
+  }
+
+  /** Состояние GSM-hold принадлежит конкретному звонку, а не переиспользуемой комнате. */
+  private prepareExternalHoldStateForCall(callId?: string | null): void {
+    const nextCallId = String(callId ?? '').trim();
+    if (!nextCallId || nextCallId === String(this.callId ?? '').trim()) return;
+    this.partnerExternalHoldActive = false;
+    prepareExternalCallHoldForCall(nextCallId);
+    preparePartnerExternalHoldSnapshotForCall(nextCallId);
   }
 
   setLocalExternalHoldState(hold: boolean): void {
@@ -1641,6 +1661,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       socket.emit('call:external-hold', {
         hold: true,
         from: socket.id,
+        ...(this.callId ? { callId: this.callId } : {}),
         ...(currentRoomId ? { roomId: currentRoomId } : {}),
       });
       logger.info('[VideoCallSession] call:external-hold (hold) emitted', {
@@ -1684,12 +1705,14 @@ export class VideoCallSession extends SimpleEventEmitter {
     setExternalCallHoldActive(false);
     this.syncExternalHoldStateToCanonicalSessions('local', false);
     const currentRoomId = this.resolveSignalingRoomId();
-    if (currentRoomId && !this.ended) {
+    const currentCallId = String(this.callId || '').trim() || null;
+    if ((currentRoomId || currentCallId) && !this.ended) {
       try {
         socket.emit('call:external-hold', {
           hold: false,
           from: socket.id,
-          roomId: currentRoomId,
+          ...(currentCallId ? { callId: currentCallId } : {}),
+          ...(currentRoomId ? { roomId: currentRoomId } : {}),
         });
       } catch {}
     }
@@ -2399,6 +2422,7 @@ export class VideoCallSession extends SimpleEventEmitter {
   }): Promise<void> {
     this.roomId = params.roomId;
     this.partnerId = params.partnerId;
+    this.prepareExternalHoldStateForCall(params.callId);
     this.callId = params.callId;
     this.partnerUserId = params.partnerUserId;
     
@@ -2552,8 +2576,20 @@ export class VideoCallSession extends SimpleEventEmitter {
   }
 
   /** Партнёр ушёл в GSM — только каноническая сессия (см. partnerExternalHoldUi.ts). */
-  applyRemoteExternalHoldState(hold: boolean, incoming?: string | null): void {
-    dispatchPartnerExternalHoldFromSocket(hold, incoming ?? null);
+  applyRemoteExternalHoldState(hold: boolean, signal?: PartnerExternalHoldSignal | null): void {
+    dispatchPartnerExternalHoldFromSocket(hold, signal);
+  }
+
+  matchesExternalHoldSignal(signal?: PartnerExternalHoldSignal | null): boolean {
+    return this.matchesPeerCallSignal(
+      signal
+        ? {
+            callId: signal.callId ?? undefined,
+            roomId: signal.roomId ?? undefined,
+            from: signal.from ?? undefined,
+          }
+        : signal,
+    );
   }
 
   getCallId(): string | null {
@@ -3842,14 +3878,15 @@ export class VideoCallSession extends SimpleEventEmitter {
     const pipStateHandler = (data: { inPiP: boolean; roomId: string; from: string }) =>
       this.onSocketPartnerPiPState(data);
 
-    const externalHoldHandler = (data: { hold?: boolean; from: string; roomId?: string }) => {
+    const externalHoldHandler = (data: { hold?: boolean; from: string; callId?: string; roomId?: string }) => {
       if (data.from && data.from === socket.id) return;
       const hold = data.hold === true;
       logger.info('[VideoCallSession] call:external-hold partner state', {
         hold,
+        callId: data.callId ?? null,
         roomId: data.roomId ?? this.resolveSignalingRoomId(),
       });
-      this.applyRemoteExternalHoldState(hold, data.roomId);
+      this.applyRemoteExternalHoldState(hold, data);
     };
 
     const camToggleHandler = (data: {
@@ -4332,6 +4369,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       this.notifyPartnerIdChange(partnerId);
     }
     if (callId && callId !== this.callId) {
+      this.prepareExternalHoldStateForCall(callId);
       this.callId = callId;
       this.notifyCallIdChange(callId);
     }
@@ -4410,6 +4448,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     // lastProcessedCallAccepted уже установлен в начале handleCallAccepted
 
     this.roomId = roomId;
+    this.prepareExternalHoldStateForCall(callId);
     this.callId = callId;
     this.partnerId = partnerId;
     this.partnerUserId = partnerUserId;
@@ -4855,6 +4894,7 @@ export class VideoCallSession extends SimpleEventEmitter {
   }
 
   private handleCallIncoming(data: CallIncomingPayload): void {
+    this.prepareExternalHoldStateForCall(data.callId);
     this.callId = data.callId;
     this.partnerUserId = data.from;
     this.emit('incomingCall', {
@@ -4939,6 +4979,17 @@ export class VideoCallSession extends SimpleEventEmitter {
       this.unregisterSocketHandlers('callEnded-inactive');
       return;
     }
+
+    // Remote hangup must clear both the per-session state and the shared UI snapshot.
+    // Otherwise the next call between the same users inherits «Звонок на удержании».
+    clearExternalCallHoldForCall(this.callId);
+    this.setLocalExternalHoldState(false);
+    this.externalHoldMicSuspended = false;
+    this.externalHoldVideoTrackSuspended = false;
+    this.setPartnerExternalHoldState(false);
+    try {
+      this.config.callbacks.onExternalHoldRemotePlaybackChange?.(false);
+    } catch {}
 
     // КРИТИЧНО: Сразу помечаем завершение, чтобы повторный вызов (socket call:ended + ParticipantDisconnected
     // почти одновременно) не выполнял очистку и emit('callEnded') дважды.

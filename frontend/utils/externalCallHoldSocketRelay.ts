@@ -6,8 +6,8 @@ export function installExternalHoldSocketRelay(): void {
   const g = global as any;
   if (g.__externalHoldSocketRelayInstalled) return;
   g.__externalHoldSocketRelayInstalled = true;
-  socket.on('call:external-hold', (data: { hold?: boolean; from: string; roomId?: string }) => {
+  socket.on('call:external-hold', (data: { hold?: boolean; from: string; callId?: string; roomId?: string }) => {
     if (data.from && data.from === socket.id) return;
-    dispatchPartnerExternalHoldFromSocket(data.hold === true, data.roomId ?? null);
+    dispatchPartnerExternalHoldFromSocket(data.hold === true, data);
   });
 }

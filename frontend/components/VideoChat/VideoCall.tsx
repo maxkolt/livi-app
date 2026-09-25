@@ -1602,7 +1602,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       if (s.isEnded?.()) return;
       setLocalExternalHold(!!s.getLocalExternalHoldActive() || isExternalCallHoldActive());
       const partnerFromSession = !!s.getPartnerExternalHoldActive?.();
-      const partnerFromRef = (global as any).__partnerExternalHoldRef?.current === true;
+      const partnerFromRef = getPartnerExternalHoldSnapshot();
       setPartnerExternalHold(partnerFromSession || partnerFromRef);
       // Щит шифрования: у принимающего событие callE2eeChanged уходит в другой инстанс сессии.
       setCallE2eeActive(!!s.isCallE2eeActive?.());

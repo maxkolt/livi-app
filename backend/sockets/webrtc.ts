@@ -161,12 +161,14 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
   /** =========================
    *  External call hold (сторонний GSM / мессенджер)
    *  ========================= */
-  socket.on("call:external-hold", (data: { hold?: boolean; from: string; roomId?: string }) => {
+  socket.on("call:external-hold", (data: { hold?: boolean; from: string; callId?: string; roomId?: string }) => {
     const { hold, from, roomId } = data;
+    const callId = String(data.callId || "").trim() || undefined;
     const holdVal = hold === true;
     const payload = (resolvedRoomId: string) => ({
       hold: holdVal,
       from,
+      ...(callId ? { callId } : {}),
       roomId: resolvedRoomId,
     });
 
@@ -222,7 +224,7 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
           "call:external-hold",
           sidRoomId
             ? payload(sidRoomId)
-            : { hold: holdVal, from, to: partnerSocket.id },
+            : { hold: holdVal, from, ...(callId ? { callId } : {}), to: partnerSocket.id },
         );
         logger.info("call:external-hold forwarded to partnerSid", {
           partnerSid,
