@@ -11,7 +11,7 @@ import { NavigationContainer, createNavigationContainerRef, CommonActions, Defau
 import { ThemeProvider, useAppTheme } from "./theme/ThemeProvider";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { Audio } from "expo-av";
-import { View, Text, TextInput, Animated, TouchableOpacity, StyleSheet, Easing, AppState, StatusBar, Linking, LogBox, Keyboard, InteractionManager, NativeModules, NativeEventEmitter, BackHandler, Modal } from "react-native";
+import { View, Text, Animated, TouchableOpacity, StyleSheet, Easing, AppState, StatusBar, Linking, LogBox, Keyboard, InteractionManager, NativeModules, NativeEventEmitter, BackHandler, Modal } from "react-native";
 import { BlurView } from "expo-blur";
 import { MaterialIcons } from "@expo/vector-icons";
 import { PanGestureHandler } from "react-native-gesture-handler";
@@ -174,11 +174,6 @@ import {
   navigateToVideoCallScreen,
 } from './utils/appNavigationGuard';
 import { readRootCurrentRouteName } from './utils/safeRootNavigation';
-
-// Повторяем index.tsx: дефолты у RN Text часто не цепляются к Fabric/Paper; нативный фикс fontScale/density — MainApplication/MainActivity + onConfigurationChanged (FontScaleContextHelper).
-const __noAccessibilityFontScale = { allowFontScaling: false as const, maxFontSizeMultiplier: 1 as const };
-(Text as any).defaultProps = { ...(Text as any).defaultProps, ...__noAccessibilityFontScale };
-(TextInput as any).defaultProps = { ...(TextInput as any).defaultProps, ...__noAccessibilityFontScale };
 
 // Импорт expo-keep-awake с безопасной загрузкой
 let activateKeepAwakeAsync: (() => Promise<void>) | null = null;

@@ -174,7 +174,9 @@ export function WelcomeProfileRow({
           ) : null}
           {typeof badgeCount === 'number' && badgeCount > 0 ? (
             <View style={styles.countBadge}>
-              <AdaptiveText style={styles.countBadgeText}>{badgeCount > 99 ? '99+' : String(badgeCount)}</AdaptiveText>
+              <AdaptiveText numberOfLines={1} style={styles.countBadgeText}>
+                {badgeCount > 99 ? '99+' : String(badgeCount)}
+              </AdaptiveText>
             </View>
           ) : null}
           {showChevron && onPress ? (

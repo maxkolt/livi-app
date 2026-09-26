@@ -29,12 +29,6 @@ public class AppDelegate: ExpoAppDelegate, PKPushRegistryDelegate {
     bindReactNativeFactory(factory)
 
 #if os(iOS) || os(tvOS)
-    // Не следовать системному Dynamic Type для нативных UILabel/TextField (JS уже ставит allowFontScaling: false на Text).
-    if #available(iOS 10.0, *) {
-      UILabel.appearance().adjustsFontForContentSizeCategory = false
-      UITextField.appearance().adjustsFontForContentSizeCategory = false
-      UITextView.appearance().adjustsFontForContentSizeCategory = false
-    }
     window = UIWindow(frame: UIScreen.main.bounds)
     factory.startReactNative(
       withModuleName: "main",

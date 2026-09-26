@@ -19,7 +19,6 @@ import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
 import android.os.VibrationAttributes
-import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.view.WindowManager
@@ -40,22 +39,6 @@ import java.net.URL
  * При отмене инициатором приходит FCM call_canceled → broadcast → finish() без мельканий.
  */
 class IncomingCallActivity : AppCompatActivity() {
-
-    override fun attachBaseContext(newBase: Context) {
-        super.attachBaseContext(FontScaleContextHelper.wrap(newBase))
-    }
-
-    override fun applyOverrideConfiguration(overrideConfiguration: Configuration?) {
-        if (overrideConfiguration != null) {
-            super.applyOverrideConfiguration(FontScaleContextHelper.copyPatched(overrideConfiguration))
-        } else {
-            super.applyOverrideConfiguration(null)
-        }
-    }
-
-    override fun onConfigurationChanged(newConfig: Configuration) {
-        super.onConfigurationChanged(FontScaleContextHelper.copyPatched(newConfig))
-    }
 
     private var currentCallId: String = ""
     private var callCanceledReceiver: BroadcastReceiver? = null

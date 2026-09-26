@@ -17,6 +17,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import AvatarImage from '../../components/AvatarImage';
 import { t, type Lang } from '../../utils/i18n';
+import { APP_INPUT_MAX_FONT_SIZE_MULTIPLIER } from '../../utils/accessibilityTypography';
 import {
   CHAT_OPEN_DEBOUNCE_MS,
   LIVI,
@@ -491,6 +492,7 @@ function HomeWelcomeChatsViewInner({
                         tabletLayout && styles.timeTablet,
                         compactLandscape && styles.timeLandscape,
                       ]}
+                      numberOfLines={1}
                     >
                       {timeLabel}
                     </AdaptiveText>
@@ -511,7 +513,9 @@ function HomeWelcomeChatsViewInner({
                   </AdaptiveText>
                   {unread > 0 ? (
                     <View style={styles.unreadBadge}>
-                      <AdaptiveText style={styles.unreadBadgeText}>{unread > 99 ? '99+' : unread}</AdaptiveText>
+                      <AdaptiveText numberOfLines={1} style={styles.unreadBadgeText}>
+                        {unread > 99 ? '99+' : unread}
+                      </AdaptiveText>
                     </View>
                   ) : null}
                 </View>
@@ -574,6 +578,7 @@ function HomeWelcomeChatsViewInner({
                     tabletLayout && styles.titleTablet,
                     compactLandscape && styles.titleLandscape,
                   ]}
+                  numberOfLines={1}
                 >
                   {L('tabChat')}
                 </AdaptiveText>
@@ -622,6 +627,7 @@ function HomeWelcomeChatsViewInner({
                 placeholder={t('friendsSearchPlaceholder', lang)}
                 placeholderTextColor={WELCOME_MUTED_TEXT}
                 style={[styles.searchInput, tabletLayout && styles.searchInputTablet]}
+                maxFontSizeMultiplier={APP_INPUT_MAX_FONT_SIZE_MULTIPLIER}
                 autoCorrect={false}
                 autoCapitalize="none"
                 clearButtonMode={Platform.OS === 'ios' ? 'while-editing' : 'never'}
@@ -665,7 +671,6 @@ function HomeWelcomeChatsViewInner({
                   compactLandscape && styles.segmentLabelLandscape,
                 ]}
                 numberOfLines={1}
-                allowFontScaling={false}
                 adjustsFontSizeToFit
                 minimumFontScale={0.85}
               >
@@ -693,7 +698,6 @@ function HomeWelcomeChatsViewInner({
                   compactLandscape && styles.segmentLabelLandscape,
                 ]}
                 numberOfLines={1}
-                allowFontScaling={false}
                 adjustsFontSizeToFit
                 minimumFontScale={0.85}
               >

@@ -3,8 +3,8 @@ import { useWindowDimensions } from 'react-native';
 import { SEARCH_CTA_TABLET_MIN_WIDTH } from '../screens/home/constants';
 
 /**
- * Масштаб UI-шрифта от ширины экрана (не системный accessibility scale —
- * тот уже выключен в App/index).
+ * Базовый масштаб UI-шрифта от ширины экрана.
+ * Системный accessibility scale React Native применит поверх него.
  * Узкий телефон чуть меньше, планшет чуть крупнее.
  */
 export function useAdaptiveTypeScale(): number {

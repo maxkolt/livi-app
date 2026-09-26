@@ -17,6 +17,7 @@ import { FlatList } from 'react-native-gesture-handler';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import AvatarImage from '../../components/AvatarImage';
 import { t, type Lang } from '../../utils/i18n';
+import { APP_INPUT_MAX_FONT_SIZE_MULTIPLIER } from '../../utils/accessibilityTypography';
 import {
   LIVI,
   WELCOME_CHROME_BTN_BG,
@@ -103,7 +104,9 @@ function MissedCountBadge({ count }: { count: number }) {
   if (count <= 0) return null;
   return (
     <View style={styles.missedBadge}>
-      <AdaptiveText style={styles.missedBadgeText}>{count > 99 ? '99+' : count}</AdaptiveText>
+      <AdaptiveText numberOfLines={1} style={styles.missedBadgeText}>
+        {count > 99 ? '99+' : count}
+      </AdaptiveText>
     </View>
   );
 }
@@ -629,6 +632,7 @@ function HomeWelcomeCallsViewInner({
                         tabletLayout && styles.timeTablet,
                         compactLandscape && styles.timeLandscape,
                       ]}
+                      numberOfLines={1}
                     >
                       {timeLabel}
                     </AdaptiveText>
@@ -728,6 +732,7 @@ function HomeWelcomeCallsViewInner({
                     tabletLayout && styles.titleTablet,
                     compactLandscape && styles.titleLandscape,
                   ]}
+                  numberOfLines={1}
                 >
                   {L('tabCalls')}
                 </AdaptiveText>
@@ -776,6 +781,7 @@ function HomeWelcomeCallsViewInner({
                 placeholder={t('friendsSearchPlaceholder', lang)}
                 placeholderTextColor={WELCOME_MUTED_TEXT}
                 style={[styles.searchInput, tabletLayout && styles.searchInputTablet]}
+                maxFontSizeMultiplier={APP_INPUT_MAX_FONT_SIZE_MULTIPLIER}
                 autoCorrect={false}
                 autoCapitalize="none"
                 clearButtonMode={Platform.OS === 'ios' ? 'while-editing' : 'never'}
@@ -820,7 +826,6 @@ function HomeWelcomeCallsViewInner({
                     compactLandscape && styles.segmentLabelLandscape,
                   ]}
                   numberOfLines={1}
-                  allowFontScaling={false}
                   adjustsFontSizeToFit
                   minimumFontScale={0.85}
                 >
@@ -849,7 +854,6 @@ function HomeWelcomeCallsViewInner({
                       compactLandscape && styles.segmentLabelLandscape,
                     ]}
                     numberOfLines={1}
-                    allowFontScaling={false}
                     adjustsFontSizeToFit
                     minimumFontScale={0.85}
                   >

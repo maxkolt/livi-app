@@ -49,6 +49,7 @@ import {
   WELCOME_PROFILE_ROW_ICON,
 } from './WelcomeProfileListUi';
 import type { HomeStyles } from './styles';
+import { APP_INPUT_MAX_FONT_SIZE_MULTIPLIER } from '../../utils/accessibilityTypography';
 
 const SUPPORT_EMAIL = '12345kolt@gmal.com';
 const SUPPORT_EMAIL_2 = 'kolt12max@mail.ru';
@@ -625,6 +626,7 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
           isTablet && styles.titleTablet,
           compactLandscape && styles.titleLandscape,
         ]}
+        numberOfLines={1}
       >
         {t('tabSettings', lang)}
       </AdaptiveText>
@@ -663,6 +665,7 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
           isTablet && styles.titleCenterTablet,
           compactLandscape && styles.titleCenterLandscape,
         ]}
+        numberOfLines={1}
       >
         {subScreenTitle}
       </AdaptiveText>
@@ -695,6 +698,7 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
             isTablet && styles.logOutBtnTextTablet,
             compactLandscape && styles.logOutBtnTextLandscape,
           ]}
+          numberOfLines={1}
         >
           {t('welcomeDeleteProfile', lang)}
         </AdaptiveText>
@@ -917,13 +921,16 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
           textColor={LIVI.white}
           placeholder={t('nickname', lang)}
           placeholderTextColor={WELCOME_MUTED_TEXT}
+          maxFontSizeMultiplier={APP_INPUT_MAX_FONT_SIZE_MULTIPLIER}
           autoCorrect={false}
           autoCapitalize="none"
           editable={!busy}
         />
         <View style={styles.accountActions}>
           <Pressable onPress={onClearNick} disabled={busy || !displayNick} style={styles.accountSecondary}>
-            <AdaptiveText style={styles.accountSecondaryText}>{t('deleteNick', lang)}</AdaptiveText>
+            <AdaptiveText style={styles.accountSecondaryText} numberOfLines={1}>
+              {t('deleteNick', lang)}
+            </AdaptiveText>
           </Pressable>
           <Pressable
             onPress={() => {
@@ -933,7 +940,9 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
             disabled={busy}
             style={[styles.accountSave, savedToast && styles.accountSaveDone]}
           >
-            <AdaptiveText style={styles.accountSaveText}>{savedToast ? t('saved', lang) : t('save', lang)}</AdaptiveText>
+            <AdaptiveText style={styles.accountSaveText} numberOfLines={1}>
+              {savedToast ? t('saved', lang) : t('save', lang)}
+            </AdaptiveText>
           </Pressable>
         </View>
       </View>

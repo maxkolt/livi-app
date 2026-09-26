@@ -43,6 +43,7 @@ import {
   LIVI,
 } from './constants';
 import { styles } from './styles';
+import FitText from '../../components/FitText';
 
 /* ================= Animated gradient border (кнопка «Начать поиск», меню) ================= */
 
@@ -1244,7 +1245,7 @@ export const AnimatedBorderButton: React.FC<AnimatedBorderButtonProps> = ({
                   paddingHorizontal: 32,
                 }}
               >
-                <Text
+                <FitText
                   style={[
                     styles.buttonLabel,
                     {
@@ -1254,11 +1255,10 @@ export const AnimatedBorderButton: React.FC<AnimatedBorderButtonProps> = ({
                       ...(labelFontSize ? { fontSize: labelFontSize } : null),
                     },
                   ]}
-                  allowFontScaling={false}
-                  maxFontSizeMultiplier={1}
+                  minimumFontScale={0.72}
                 >
                   {label}
-                </Text>
+                </FitText>
               </Pressable>
             ) : (
               <TouchableOpacity
@@ -1299,7 +1299,7 @@ export const AnimatedBorderButton: React.FC<AnimatedBorderButtonProps> = ({
                   paddingHorizontal: 32,
                 }}
               >
-                <Text
+                <FitText
                   style={[
                     styles.buttonLabel,
                     {
@@ -1309,11 +1309,10 @@ export const AnimatedBorderButton: React.FC<AnimatedBorderButtonProps> = ({
                       ...(labelFontSize ? { fontSize: labelFontSize } : null),
                     },
                   ]}
-                  allowFontScaling={false}
-                  maxFontSizeMultiplier={1}
+                  minimumFontScale={0.72}
                 >
                   {label}
-                </Text>
+                </FitText>
               </TouchableOpacity>
             )}
             {disabled && (

@@ -4,7 +4,6 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.content.res.Configuration
 import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
@@ -27,22 +26,6 @@ import androidx.appcompat.app.AppCompatActivity
  * Кнопка «Назад» → уход в фон без завершения вызова. По уведомлению — возврат на экран.
  */
 class OutgoingCallActivity : AppCompatActivity() {
-
-    override fun attachBaseContext(newBase: Context) {
-        super.attachBaseContext(FontScaleContextHelper.wrap(newBase))
-    }
-
-    override fun applyOverrideConfiguration(overrideConfiguration: Configuration?) {
-        if (overrideConfiguration != null) {
-            super.applyOverrideConfiguration(FontScaleContextHelper.copyPatched(overrideConfiguration))
-        } else {
-            super.applyOverrideConfiguration(null)
-        }
-    }
-
-    override fun onConfigurationChanged(newConfig: Configuration) {
-        super.onConfigurationChanged(FontScaleContextHelper.copyPatched(newConfig))
-    }
 
     private var closeReceiver: BroadcastReceiver? = null
     private var callIdReadyReceiver: BroadcastReceiver? = null

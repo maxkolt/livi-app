@@ -44,8 +44,8 @@ class MainActivity : ReactActivity() {
       } else {
         0
       }
-      // В те же dp, что RN layout (density зафиксирован FontScaleContextHelper).
-      // Иначе после «масштаба экрана» px/PixelRatio расходятся и композер уезжает.
+      // В те же dp, что RN layout, используя текущую плотность экрана
+      // из системных настроек, а не physical/stable density устройства.
       val density = resources.displayMetrics.density.coerceAtLeast(0.01f)
       val imeBottomDp = kotlin.math.round(imeInsetPx / density).toInt()
       if (imeBottomDp != lastReportedImeInset) {
@@ -65,18 +65,6 @@ class MainActivity : ReactActivity() {
     ViewCompat.requestApplyInsets(root)
   }
 
-  override fun attachBaseContext(newBase: Context) {
-    super.attachBaseContext(FontScaleContextHelper.wrap(newBase))
-  }
-
-  override fun applyOverrideConfiguration(overrideConfiguration: Configuration?) {
-    if (overrideConfiguration != null) {
-      super.applyOverrideConfiguration(FontScaleContextHelper.copyPatched(overrideConfiguration))
-    } else {
-      super.applyOverrideConfiguration(null)
-    }
-  }
-
   private var lastKnownOrientation = Configuration.ORIENTATION_UNDEFINED
 
   override fun onConfigurationChanged(newConfig: Configuration) {
@@ -87,7 +75,7 @@ class MainActivity : ReactActivity() {
         newConfig.orientation == Configuration.ORIENTATION_LANDSCAPE,
       )
     }
-    super.onConfigurationChanged(FontScaleContextHelper.copyPatched(newConfig))
+    super.onConfigurationChanged(newConfig)
     // Samsung и некоторые другие OEM после смены ориентации заново применяют
     // системные insets и могут вернуть непрозрачную боковую navigation bar.
     EdgeToEdgeHelper.apply(this)

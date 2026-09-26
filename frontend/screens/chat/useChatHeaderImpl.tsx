@@ -6,6 +6,7 @@ import { Ionicons, MaterialCommunityIcons, MaterialIcons } from "@expo/vector-ic
 import AvatarImage from "../../components/AvatarImage";
 import ChatStyleBackButton from "../../components/ChatStyleBackButton";
 import { t, type Lang } from "../../utils/i18n";
+import { APP_TEXT_MAX_FONT_SIZE_MULTIPLIER } from "../../utils/accessibilityTypography";
 import { WELCOME_CHROME_EDGE_RADIUS, WELCOME_NAV_ACTIVE_ACCENT } from "../home/constants";
 import { StageGradient } from "../home/WelcomeStageBackground";
 
@@ -160,7 +161,11 @@ export function useChatHeader({
                   justifyContent: "center",
                 }}
               >
-                <Text style={{ color: LIVI.titan, fontSize: 13, fontWeight: "600" }}>
+                <Text
+                  style={{ color: LIVI.titan, fontSize: 13, fontWeight: "600" }}
+                  numberOfLines={1}
+                  maxFontSizeMultiplier={APP_TEXT_MAX_FONT_SIZE_MULTIPLIER}
+                >
                   {t("chatSelectAll", lang)}
                 </Text>
               </TouchableOpacity>
@@ -224,6 +229,7 @@ export function useChatHeader({
                     lineHeight: 21,
                   }}
                   numberOfLines={1}
+                  maxFontSizeMultiplier={APP_TEXT_MAX_FONT_SIZE_MULTIPLIER}
                 >
                   {peerNameState}
                 </Text>
@@ -247,6 +253,8 @@ export function useChatHeader({
                   fontWeight: "300",
                   ...(Platform.OS === "android" && { fontFamily: "sans-serif-light" }),
                 }}
+                numberOfLines={1}
+                maxFontSizeMultiplier={APP_TEXT_MAX_FONT_SIZE_MULTIPLIER}
               >
                 {peerOnline ? t("online", lang) : t("offline", lang)}
               </Text>

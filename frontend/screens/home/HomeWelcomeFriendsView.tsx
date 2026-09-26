@@ -13,6 +13,7 @@ import { useHomeLayout } from './HomeLayoutContext';
 import AdaptiveText from '../../components/AdaptiveText';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { t, type Lang } from '../../utils/i18n';
+import { APP_INPUT_MAX_FONT_SIZE_MULTIPLIER } from '../../utils/accessibilityTypography';
 import {
   LIVI,
   WELCOME_BRAND_VI_FILL_GRADIENT,
@@ -307,6 +308,7 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
               tabletLayout && styles.titleTablet,
               compactLandscape && styles.titleLandscape,
             ]}
+            numberOfLines={1}
           >
             {L('tabFriends')}
           </AdaptiveText>
@@ -355,6 +357,7 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
             placeholder={t('friendsSearchPlaceholder', lang)}
             placeholderTextColor={WELCOME_MUTED_TEXT}
             style={[styles.searchInput, tabletLayout && styles.searchInputTablet]}
+            maxFontSizeMultiplier={APP_INPUT_MAX_FONT_SIZE_MULTIPLIER}
             autoCorrect={false}
             autoCapitalize="none"
             clearButtonMode={Platform.OS === 'ios' ? 'while-editing' : 'never'}
@@ -398,7 +401,6 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
               compactLandscape && styles.segmentLabelLandscape,
             ]}
             numberOfLines={1}
-            allowFontScaling={false}
             adjustsFontSizeToFit
             minimumFontScale={0.85}
           >
@@ -428,7 +430,6 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
                 compactLandscape && styles.segmentLabelLandscape,
               ]}
               numberOfLines={1}
-              allowFontScaling={false}
               adjustsFontSizeToFit
               minimumFontScale={0.85}
             >

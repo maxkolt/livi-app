@@ -103,9 +103,13 @@ function HomeCenterProfileInner({
   const centerAvatarFrameSize = Math.round(centerAvatarSize) + frameOutset * 2;
   const centerAvatarContainerSize = activeFrameId ? centerAvatarFrameSize : centerAvatarSize;
   const letterFontSize = dense ? 22 : radarStage ? 36 : 48;
-  const framedAvatarUri = isLocalPreview
+  // myFullAvatarUri / avatarUri из HomeScreen уже могут быть file: (после splash resolve).
+  const centerAvatarUri = isLocalPreview
     ? resolvedAvatarUri || avatarUri
-    : myFullAvatarUri || (resolvedAvatarReady ? resolvedAvatarUri : '') || avatarUri || undefined;
+    : myFullAvatarUri ||
+      (resolvedAvatarReady ? resolvedAvatarUri : '') ||
+      avatarUri ||
+      undefined;
 
   const avatarInner = (
     <View
@@ -123,10 +127,10 @@ function HomeCenterProfileInner({
     >
       {myUserId && activeFrameId ? (
         <AvatarImage
-          key="avatar-framed"
+          key={`avatar-center-${myUserId}`}
           userId={myUserId}
           avatarVer={myAvatarVer}
-          uri={framedAvatarUri}
+          uri={centerAvatarUri}
           size={centerAvatarSize}
           frameSize={centerAvatarFrameSize}
           frameId={activeFrameId}
@@ -142,10 +146,10 @@ function HomeCenterProfileInner({
         />
       ) : myUserId && myAvatarVer > 0 ? (
         <AvatarImage
-          key="avatar-plain"
+          key={`avatar-center-${myUserId}`}
           userId={myUserId}
           avatarVer={myAvatarVer}
-          uri={myFullAvatarUri || undefined}
+          uri={centerAvatarUri}
           size={centerAvatarSize}
           frameId={activeFrameId || null}
           fallbackText={letter}

@@ -21,4 +21,4 @@ export function getChatHiddenForMeKey(userId: string, peerId: string): string {
 }
 
 /** Последняя точная высота IME (dp) с WindowInsets — seed dock без мерцания KC. */
-export const ANDROID_IME_LIFT_CACHE_KEY = 'livi_android_ime_lift_cache_dp';
+export const ANDROID_IME_LIFT_CACHE_KEY = 'livi_android_ime_lift_cache_dp_system_density_v2';

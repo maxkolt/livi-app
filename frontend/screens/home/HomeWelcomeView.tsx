@@ -526,7 +526,6 @@ function HomeWelcomeViewInner({
                 welcomeStyles.heading,
                 { fontSize: type.headingFont, lineHeight: headingLineH },
               ]}
-              allowFontScaling={false}
               numberOfLines={2}
             >
               {L('welcomeSearchHeading')}
@@ -542,7 +541,6 @@ function HomeWelcomeViewInner({
                   },
                   !isDark && { color: LIVI.text2 },
                 ]}
-                allowFontScaling={false}
                 numberOfLines={matchingLines}
               >
                 {L('welcomeSearchMatching')}

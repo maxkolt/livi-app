@@ -2,6 +2,7 @@
 import React, { useEffect, useState } from "react";
 import { View, Text } from "react-native";
 import { t, type Lang } from "../../utils/i18n";
+import { APP_TEXT_MAX_FONT_SIZE_MULTIPLIER } from "../../utils/accessibilityTypography";
 import { LightPalette } from "../../theme/ThemeProvider";
 
 /** Animated "..." for peer typing/recording — isolated so ChatScreen doesn't re-render every ~420ms. */
@@ -38,7 +39,13 @@ export function ChatPeerActivityLabel({
 
   return (
     <View style={{ flexDirection: "row", alignItems: "center" }}>
-      <Text style={{ ...baseStyle, color }}>{text}</Text>
+      <Text
+        style={{ ...baseStyle, color }}
+        numberOfLines={1}
+        maxFontSizeMultiplier={APP_TEXT_MAX_FONT_SIZE_MULTIPLIER}
+      >
+        {text}
+      </Text>
     </View>
   );
 }

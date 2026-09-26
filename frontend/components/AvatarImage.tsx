@@ -93,8 +93,10 @@ const AvatarImage = memo<AvatarImageProps>(({
   fallbackTextStyle,
   containerStyle,
 }) => {
+  const willFetchFromCache = !propsUri && !!(userId && avatarVer && avatarVer > 0);
   const [uri, setUri] = useState<string>(propsUri || '');
-  const [loading, setLoading] = useState(false);
+  // true с первого кадра, если ждём кэш — иначе буква мелькает до useEffect.
+  const [loading, setLoading] = useState(willFetchFromCache);
   const hookFrameId = useUserActiveFrame(userId);
   // undefined = проп не передан, решает хук. Пустая строка/null = «рамки нет».
   const activeFrameId = frameId !== undefined ? frameId || '' : hookFrameId;
@@ -161,7 +163,10 @@ const AvatarImage = memo<AvatarImageProps>(({
    */
   const key = `avatar_${userId || 'none'}_v${avatarVer || 0}`;
 
-  const showFallbackLetter = fallbackText && !loading && !uri;
+  // Буква только когда точно нет аватара — не на первом кадре до useEffect (loading стартует true).
+  const showFallbackLetter = !!(fallbackText && !loading && !uri);
+  // Пока фото ещё нет — прозрачный фон: виден chrome родителя, не жёсткий #2A2C31.
+  const placeholderBg = displayUri || showFallbackLetter ? '#2A2C31' : 'transparent';
   const frameColors = FRAME_COLORS[activeFrameId];
   const hasActiveFrame = !!frameColors;
   /**
@@ -226,7 +231,7 @@ const AvatarImage = memo<AvatarImageProps>(({
   return (
     <View
       style={[
-        { backgroundColor: '#2A2C31' },
+        { backgroundColor: placeholderBg },
         containerStyle,
         { width: outerSize, height: outerSize, borderRadius: outerRadius },
         hasActiveFrame
@@ -248,7 +253,7 @@ const AvatarImage = memo<AvatarImageProps>(({
           right: hasActiveFrame ? ringInsetPct : 0,
           bottom: hasActiveFrame ? ringInsetPct : 0,
           borderRadius: outerRadius,
-          backgroundColor: '#2A2C31',
+          backgroundColor: placeholderBg,
           alignItems: 'center',
           justifyContent: 'center',
           overflow: 'hidden',

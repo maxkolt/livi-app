@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import { BlurView } from 'expo-blur';
 import { LIVI, t, type Lang } from '../../utils/i18n';
+import { APP_INPUT_MAX_FONT_SIZE_MULTIPLIER } from '../../utils/accessibilityTypography';
 import { WELCOME_NAV_ACTIVE_ACCENT } from '../home/constants';
 import {
   changeE2eBackupPassword,
@@ -342,6 +343,7 @@ function E2ePasswordModal({
             secureTextEntry
             autoCapitalize="none"
             autoCorrect={false}
+            maxFontSizeMultiplier={APP_INPUT_MAX_FONT_SIZE_MULTIPLIER}
             textContentType={needsRepeat ? 'newPassword' : 'password'}
             editable={!busy}
             returnKeyType={needsRepeat ? 'next' : 'done'}
@@ -361,6 +363,7 @@ function E2ePasswordModal({
               secureTextEntry
               autoCapitalize="none"
               autoCorrect={false}
+              maxFontSizeMultiplier={APP_INPUT_MAX_FONT_SIZE_MULTIPLIER}
               textContentType="newPassword"
               editable={!busy}
             />

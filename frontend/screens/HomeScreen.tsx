@@ -641,7 +641,9 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   /** Один отложенный callLog после cancel — иначе стек таймеров от redial стреляет в settle. */
   const cancelCallLogTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [resolvedAvatarUri, resolvedAvatarReady] = useResolvedImageUri(avatarUri || ''); // на Android data: -> file: для Glide
-  const [, myFullAvatarResolvedReady] = useResolvedImageUri(myFullAvatarUri || ''); // кешированный аватар (data:) -> file: для Glide на Android
+  // Важно: resolved URI нужен в UI. Раньше брали только ready для splash, а в радар
+  // снова уходил raw data: → AvatarImage резолвил второй раз → кадр с #2A2C31.
+  const [myFullAvatarResolvedUri, myFullAvatarResolvedReady] = useResolvedImageUri(myFullAvatarUri || '');
   const [savedNick, setSavedNick] = useState<string>('');      // сохранённый ник
   
   // Отладочная версия setSavedNick с логированием
@@ -685,6 +687,9 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     setMyAvatarVer((prev) => (value > prev ? value : prev));
   }, []);
   const [avatarVerChecked, setAvatarVerChecked] = useState(false); // true после первой проверки кэша (убирает мелькание буквы при переходе на Home после звонка)
+  /** Splash ждёт не только URI в state, но и decode в ExpoImage — иначе после fade виден серый кадр. */
+  const [searchAvatarPrefetched, setSearchAvatarPrefetched] = useState(false);
+  const searchAvatarPrefetchKeyRef = useRef('');
   const [profileKey, setProfileKey] = useState(0);
 
   // Make currentUserId reactive for this screen (module state changes don't trigger re-render).
@@ -716,6 +721,58 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     })();
     return () => { cancelled = true; };
   }, [resolvedUserId]);
+
+  /**
+   * URI центра Поиска (file: на Android). Splash не отпускаем, пока ExpoImage.prefetch
+   * не прогреет кадр — иначе после fade на радаре серый круг.
+   */
+  const searchAvatarDisplayUri = React.useMemo(() => {
+    const prefer =
+      (myFullAvatarResolvedReady && myFullAvatarResolvedUri) ||
+      (resolvedAvatarReady && resolvedAvatarUri) ||
+      '';
+    if (prefer) return String(prefer).trim();
+    const raw = String(myFullAvatarUri || avatarUri || savedAvatarUrl || '').trim();
+    if (!raw) return '';
+    if (Platform.OS === 'android' && /^data:/i.test(raw)) return '';
+    return raw;
+  }, [
+    myFullAvatarResolvedReady,
+    myFullAvatarResolvedUri,
+    resolvedAvatarReady,
+    resolvedAvatarUri,
+    myFullAvatarUri,
+    avatarUri,
+    savedAvatarUrl,
+  ]);
+
+  useEffect(() => {
+    const uri = searchAvatarDisplayUri;
+    if (!uri) {
+      searchAvatarPrefetchKeyRef.current = '';
+      setSearchAvatarPrefetched(false);
+      return;
+    }
+    if (searchAvatarPrefetchKeyRef.current === uri) {
+      setSearchAvatarPrefetched(true);
+      return;
+    }
+    let cancelled = false;
+    setSearchAvatarPrefetched(false);
+    (async () => {
+      try {
+        await ExpoImage.prefetch(uri);
+      } catch {
+        // Prefetch fail: hard-stop splash всё ещё отпустит экран.
+      }
+      if (cancelled) return;
+      searchAvatarPrefetchKeyRef.current = uri;
+      setSearchAvatarPrefetched(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [searchAvatarDisplayUri]);
 
   // Всегда синхронизируем ref со state (на случай, если nick меняется НЕ через onChangeText профиля),
   // например после загрузки профиля с сервера).
@@ -5384,11 +5441,16 @@ const handleClearNick = useCallback(async () => {
   const centerProfile = React.useMemo(
     () => ({
       savedNick,
-      avatarUri,
-      myFullAvatarUri,
+      // В радар/профиль — уже готовый к ExpoImage URI (file: на Android), не raw data:.
+      avatarUri:
+        (resolvedAvatarReady && resolvedAvatarUri) || avatarUri,
+      myFullAvatarUri:
+        (myFullAvatarResolvedReady && myFullAvatarResolvedUri) ||
+        searchAvatarDisplayUri ||
+        myFullAvatarUri,
       myAvatarVer,
       resolvedAvatarUri,
-      resolvedAvatarReady,
+      resolvedAvatarReady: resolvedAvatarReady || myFullAvatarResolvedReady,
       avatarVerChecked,
       onOpenAvatarModal: handleOpenAvatarModal,
     }),
@@ -5396,6 +5458,9 @@ const handleClearNick = useCallback(async () => {
       savedNick,
       avatarUri,
       myFullAvatarUri,
+      myFullAvatarResolvedUri,
+      myFullAvatarResolvedReady,
+      searchAvatarDisplayUri,
       myAvatarVer,
       resolvedAvatarUri,
       resolvedAvatarReady,
@@ -5410,13 +5475,21 @@ const handleClearNick = useCallback(async () => {
   const showProfileTab = welcomeActiveTab === 'profile';
   const showSearchWelcome = !showFriendsTab && !showChatTab && !showCallsTab && !showProfileTab;
   const showSplashOverlay = !splashDismissed;
+  // Splash = «Поиск готов к первому кадру»: версия проверена, URI есть (если аватар
+  // ожидается), data:→file готов, ExpoImage уже prefetch'нул байты.
   const hasAvatarSourceForFirstPaint = !!String(
     avatarUri || myFullAvatarUri || savedAvatarUrl || '',
   ).trim();
-  const avatarReadyForFirstPaint =
+  const waitingForKnownAvatar =
+    !avatarVerChecked || (myAvatarVer > 0 && !hasAvatarSourceForFirstPaint);
+  const avatarUriResolvedForPaint =
     !hasAvatarSourceForFirstPaint ||
     ((!avatarUri || resolvedAvatarReady) &&
       (!myFullAvatarUri || myFullAvatarResolvedReady));
+  const avatarReadyForFirstPaint =
+    !waitingForKnownAvatar &&
+    avatarUriResolvedForPaint &&
+    (!hasAvatarSourceForFirstPaint || searchAvatarPrefetched);
 
   return (
     <View

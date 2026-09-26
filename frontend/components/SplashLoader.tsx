@@ -13,7 +13,8 @@ import { WELCOME_STAGE_BG } from '../screens/home/constants';
 
 const MIN_SPLASH_DURATION_MS = 3000;
 const SPLASH_FADE_DURATION_MS = 620;
-const MAX_SPLASH_DURATION_MS = 5000;
+/** Даём аватару resolve+prefetch; раньше 5с hard-stop часто обгонял готовность. */
+const MAX_SPLASH_DURATION_MS = 9000;
 
 interface SplashLoaderProps {
   dataLoaded: boolean;

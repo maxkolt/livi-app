@@ -69,7 +69,10 @@ function WelcomeSelectModeHeaderInner({
             size={16}
             color={allSelected ? WELCOME_SEGMENT_ACTIVE : LIVI.white}
           />
-          <AdaptiveText style={[styles.selectAllLabel, allSelected && styles.selectAllLabelActive]}>
+          <AdaptiveText
+            style={[styles.selectAllLabel, allSelected && styles.selectAllLabelActive]}
+            numberOfLines={1}
+          >
             {selectAllLabel}
           </AdaptiveText>
         </Pressable>

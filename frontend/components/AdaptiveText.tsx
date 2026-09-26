@@ -7,6 +7,7 @@ import {
   type TextStyle,
 } from 'react-native';
 import { scaleFont, useAdaptiveTypeScale } from '../utils/adaptiveType';
+import { APP_TEXT_MAX_FONT_SIZE_MULTIPLIER } from '../utils/accessibilityTypography';
 
 type AdaptiveTextProps = TextProps & {
   style?: StyleProp<TextStyle>;
@@ -40,14 +41,16 @@ function scaleTextStyle(style: StyleProp<TextStyle>, scale: number): TextStyle |
 }
 
 /**
- * Текст с адаптивным размером под телефон/планшет.
- * Системный accessibility fontScale уже выключен глобально.
+ * Текст с адаптивным базовым размером под телефон/планшет.
+ * Поверх него React Native применяет системный accessibility font scale.
  */
 function AdaptiveTextInner({
   style,
   fit,
   numberOfLines,
   minimumFontScale = 0.72,
+  allowFontScaling = true,
+  maxFontSizeMultiplier = APP_TEXT_MAX_FONT_SIZE_MULTIPLIER,
   children,
   ...rest
 }: AdaptiveTextProps) {
@@ -61,8 +64,8 @@ function AdaptiveTextInner({
     <Text
       {...rest}
       numberOfLines={clampOneLine ? 1 : numberOfLines}
-      allowFontScaling={false}
-      maxFontSizeMultiplier={1}
+      allowFontScaling={allowFontScaling}
+      maxFontSizeMultiplier={maxFontSizeMultiplier}
       adjustsFontSizeToFit={autoFit ? true : rest.adjustsFontSizeToFit}
       {...(autoFit ? { minimumFontScale } : null)}
       ellipsizeMode={clampOneLine ? rest.ellipsizeMode ?? 'tail' : rest.ellipsizeMode}

@@ -35,11 +35,21 @@ import { installAppNavigationGuard } from './utils/appNavigationGuard';
 installAppNavigationGuard();
 
 import { Alert, AppRegistry, Platform, Text, TextInput } from 'react-native';
+import {
+  APP_INPUT_MAX_FONT_SIZE_MULTIPLIER,
+  APP_TEXT_MAX_FONT_SIZE_MULTIPLIER,
+} from './utils/accessibilityTypography';
 
-// Не следовать системной настройке «Размер шрифта» (iOS/Android JS). На Android плотность dp и fontScale дополнительно фиксируются в MainApplication/MainActivity (FontScaleContextHelper).
-const noFontScaling = { allowFontScaling: false as const, maxFontSizeMultiplier: 1 as const };
-(Text as any).defaultProps = { ...(Text as any).defaultProps, ...noFontScaling };
-(TextInput as any).defaultProps = { ...(TextInput as any).defaultProps, ...noFontScaling };
+// RN scales text from the user's system setting by default. Keep that behavior,
+// with a safety ceiling for compact mobile layouts and text inputs.
+(Text as any).defaultProps = {
+  ...(Text as any).defaultProps,
+  maxFontSizeMultiplier: APP_TEXT_MAX_FONT_SIZE_MULTIPLIER,
+};
+(TextInput as any).defaultProps = {
+  ...(TextInput as any).defaultProps,
+  maxFontSizeMultiplier: APP_INPUT_MAX_FONT_SIZE_MULTIPLIER,
+};
 import { registerRootComponent } from 'expo';
 import App from './App';
 import { isEndedCallId, setupCallKeep, presentIncomingCall, stopIncomingCallForegroundService } from './utils/callKeep';

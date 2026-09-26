@@ -83,7 +83,8 @@ function WelcomeOnlineBannerInner({
         </View>
         <AdaptiveText
           style={[styles.countText, compact && styles.countTextCompact, dense && styles.countTextDense]}
-          numberOfLines={dense ? 1 : 2}
+          numberOfLines={1}
+          minimumFontScale={0.72}
         >
           {countLine}
         </AdaptiveText>

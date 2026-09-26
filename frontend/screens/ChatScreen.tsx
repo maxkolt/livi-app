@@ -178,6 +178,9 @@ import {
 
 import { API_BASE, getMyProfile } from '../sockets/socket';
 import { logger } from '../utils/logger';
+import {
+  APP_COMPOSER_MAX_FONT_SIZE_MULTIPLIER,
+} from '../utils/accessibilityTypography';
 import { useModalLayout } from '../utils/modalLayout';
 import { toAvatarThumb } from '../utils/uploadAvatar';
 import {
@@ -658,7 +661,7 @@ export default function ChatScreen({ route, navigation }: Props) {
     const subscription = DeviceEventEmitter.addListener(
       'LiviAndroidImeInsets',
       (rawHeight: unknown) => {
-        // MainActivity (после FontScale density lock) шлёт dp.
+        // MainActivity шлёт IME inset в dp по текущей displayMetrics.density.
         // Старые APK слали px — только их делим через PixelRatio.
         // Нельзя порог от короткой стороны: 363dp > 0.85×360 → ложный /3 → 121 и блок не встаёт.
         const raw = Math.max(0, Number(rawHeight) || 0);
@@ -689,7 +692,16 @@ export default function ChatScreen({ route, navigation }: Props) {
     };
   }, [applyAndroidImeLiftTarget]);
 
-  const composerTextInputMaxHeight = 76;
+  // RN scales fontSize with system fontScale, but a fixed lineHeight:20 stays put —
+  // at max a11y scale glyphs clip and the placeholder wraps the last letter down.
+  const composerFontScale = Math.min(
+    PixelRatio.getFontScale() || 1,
+    APP_COMPOSER_MAX_FONT_SIZE_MULTIPLIER,
+  );
+  const composerFontSize = 16;
+  const composerLineHeight = Math.round(20 * composerFontScale);
+  const composerTextInputMaxHeight = Math.round(76 * composerFontScale);
+  const composerPlaceholder = t('chatMessagePlaceholder', lang);
   // Android: до первого onLayout — оценка нижней панели (после более низкого инпута).
   // Не завышать: иначе ListHeader spacer держит лишний зазор до последнего сообщения.
   const estimatedInputHeight = 100;
@@ -2470,7 +2482,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 textAlign: 'center',
                 ...(Platform.OS === 'android' && !isDark ? { fontFamily: 'sans-serif-medium' } : null),
               }}
-              allowFontScaling={false}
+              numberOfLines={1}
             >
               {item.label}
             </Text>
@@ -2870,15 +2882,16 @@ export default function ChatScreen({ route, navigation }: Props) {
                     style={{
                       flex: 1,
                       color: voiceIsRecording ? 'transparent' : LIVI.white,
-                      fontSize: 16,
-                      lineHeight: 20,
+                      fontSize: composerFontSize,
+                      lineHeight: composerLineHeight,
                       paddingTop: 2,
                       paddingBottom: 2,
                       maxHeight: composerTextInputMaxHeight,
                     }}
-                    placeholder={t('chatMessagePlaceholder', lang)}
-                    placeholderTextColor={voiceIsRecording ? 'transparent' : LIVI.titan}
+                    placeholder=""
+                    accessibilityLabel={composerPlaceholder}
                     maxLength={MAX_MESSAGE_TEXT_LENGTH}
+                    maxFontSizeMultiplier={APP_COMPOSER_MAX_FONT_SIZE_MULTIPLIER}
                     value={messageText}
                     onChangeText={(txt) => {
                       messageTextRef.current = txt;
@@ -2894,6 +2907,29 @@ export default function ChatScreen({ route, navigation }: Props) {
                     autoCorrect={true}
                     spellCheck={true}
                   />
+                  {!messageText && !voiceIsRecording ? (
+                    <View
+                      pointerEvents="none"
+                      style={{
+                        ...StyleSheet.absoluteFillObject,
+                        justifyContent: 'center',
+                      }}
+                    >
+                      <Text
+                        numberOfLines={1}
+                        adjustsFontSizeToFit
+                        minimumFontScale={0.82}
+                        maxFontSizeMultiplier={APP_COMPOSER_MAX_FONT_SIZE_MULTIPLIER}
+                        style={{
+                          color: LIVI.titan,
+                          fontSize: composerFontSize,
+                          lineHeight: composerLineHeight,
+                        }}
+                      >
+                        {composerPlaceholder}
+                      </Text>
+                    </View>
+                  ) : null}
                   {voiceIsRecording ? (
                     <View
                       pointerEvents="none"
@@ -3263,16 +3299,17 @@ export default function ChatScreen({ route, navigation }: Props) {
                     style={{
                       flex: 1,
                       color: voiceIsRecording ? 'transparent' : LIVI.white,
-                      fontSize: 16,
-                      lineHeight: 20,
+                      fontSize: composerFontSize,
+                      lineHeight: composerLineHeight,
                       paddingTop: 0,
                       paddingBottom: 0,
                       maxHeight: composerTextInputMaxHeight,
                       includeFontPadding: false,
                     }}
-                    placeholder={t('chatMessagePlaceholder', lang)}
-                    placeholderTextColor={voiceIsRecording ? 'transparent' : LIVI.titan}
+                    placeholder=""
+                    accessibilityLabel={composerPlaceholder}
                     maxLength={MAX_MESSAGE_TEXT_LENGTH}
+                    maxFontSizeMultiplier={APP_COMPOSER_MAX_FONT_SIZE_MULTIPLIER}
                     value={messageText}
                     onChangeText={(txt) => {
                       messageTextRef.current = txt;
@@ -3288,6 +3325,30 @@ export default function ChatScreen({ route, navigation }: Props) {
                     autoCorrect={true}
                     spellCheck={true}
                   />
+                  {!messageText && !voiceIsRecording ? (
+                    <View
+                      pointerEvents="none"
+                      style={{
+                        ...StyleSheet.absoluteFillObject,
+                        justifyContent: 'center',
+                      }}
+                    >
+                      <Text
+                        numberOfLines={1}
+                        adjustsFontSizeToFit
+                        minimumFontScale={0.82}
+                        maxFontSizeMultiplier={APP_COMPOSER_MAX_FONT_SIZE_MULTIPLIER}
+                        style={{
+                          color: LIVI.titan,
+                          fontSize: composerFontSize,
+                          lineHeight: composerLineHeight,
+                          ...(Platform.OS === 'android' ? { includeFontPadding: false } : null),
+                        }}
+                      >
+                        {composerPlaceholder}
+                      </Text>
+                    </View>
+                  ) : null}
                   {voiceIsRecording ? (
                     <View
                       pointerEvents="none"

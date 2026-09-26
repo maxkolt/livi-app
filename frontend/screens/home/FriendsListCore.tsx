@@ -7,6 +7,7 @@ import AvatarImage from '../../components/AvatarImage';
 import { dismissMessageNotificationForUser, syncAppBadgeFromMissedCount } from '../../utils/pushNotifications';
 import { markMessagesAsRead } from '../../sockets/socket';
 import { t, type Lang } from '../../utils/i18n';
+import { APP_TEXT_MAX_FONT_SIZE_MULTIPLIER } from '../../utils/accessibilityTypography';
 import {
   LIVI,
   WELCOME_BRAND_VI_FILL_GRADIENT,
@@ -82,6 +83,8 @@ function FriendBusyStatusLabel({ label, styles }: { label: string; styles: HomeS
           opacity: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.45, 1] }),
         },
       ]}
+      numberOfLines={1}
+      maxFontSizeMultiplier={APP_TEXT_MAX_FONT_SIZE_MULTIPLIER}
       pointerEvents="none"
     >
       {label}
@@ -226,11 +229,17 @@ function FriendsListCoreInner(props: FriendsListCoreProps) {
     if (item.online) {
       return (
         <View style={welcomeListStyles.statusRow}>
-          <AdaptiveText style={[styles.friendStatus, { color: LIVI.green }]}>{L('online')}</AdaptiveText>
+          <AdaptiveText numberOfLines={1} style={[styles.friendStatus, { color: LIVI.green }]}>
+            {L('online')}
+          </AdaptiveText>
         </View>
       );
     }
-    return <AdaptiveText style={[styles.friendStatus, { color: LIVI.red }]}>{L('offline')}</AdaptiveText>;
+    return (
+      <AdaptiveText numberOfLines={1} style={[styles.friendStatus, { color: LIVI.red }]}>
+        {L('offline')}
+      </AdaptiveText>
+    );
   };
 
   const renderNameRow = (item: Friend, displayName: string, avatarLetter: string) => (
@@ -264,6 +273,7 @@ function FriendsListCoreInner(props: FriendsListCoreProps) {
             tabletLayout && welcomeListStyles.friendNameTablet,
             compactLandscape && welcomeListStyles.friendNameLandscape,
           ]}
+          numberOfLines={1}
         >
           {displayName}
         </AdaptiveText>

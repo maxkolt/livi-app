@@ -29,14 +29,6 @@ import io.appmetrica.analytics.AppMetricaConfig
 
 class MainApplication : Application(), ReactApplication {
 
-  /**
-   * Базовый масштаб UI: фиксируем fontScale и (API 24+) densityDpi = DENSITY_DEVICE_STABLE —
-   * игнор «Размер шрифта» и «Масштаб экрана» в настройках Android.
-   */
-  override fun attachBaseContext(base: Context) {
-    super.attachBaseContext(FontScaleContextHelper.wrap(base))
-  }
-
   override val reactNativeHost: ReactNativeHost = ReactNativeHostWrapper(
         this,
         object : DefaultReactNativeHost(this) {
@@ -96,8 +88,7 @@ class MainApplication : Application(), ReactApplication {
   }
 
   override fun onConfigurationChanged(newConfig: Configuration) {
-    val patched = FontScaleContextHelper.copyPatched(newConfig)
-    super.onConfigurationChanged(patched)
-    ApplicationLifecycleDispatcher.onConfigurationChanged(this, patched)
+    super.onConfigurationChanged(newConfig)
+    ApplicationLifecycleDispatcher.onConfigurationChanged(this, newConfig)
   }
 }
