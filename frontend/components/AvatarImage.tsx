@@ -7,6 +7,48 @@ import { useResolvedImageUri } from '../hooks/useResolvedImageUri';
 import { getAvatarImageProps } from '../utils/imageOptimization';
 import { getAvatarUri } from '../utils/avatarCache';
 import { useUserActiveFrame } from '../utils/cosmetics';
+import { logger } from '../utils/logger';
+
+/**
+ * Лок размера/file URI для крупного аватара Поиска.
+ * Родитель после splash меняет size 120→114 и снова кидает data: —
+ * без модуля ExpoImage пересоздаётся (логи: второй image-onLoad).
+ */
+const searchAvatarSizeByUser = new Map<string, number>();
+const searchAvatarFileByKey = new Map<string, string>();
+
+export function lockSearchAvatarSize(userId: string | undefined, size: number): number {
+  const rounded = Math.round(size);
+  if (!userId || rounded < 90) return rounded;
+  const prev = searchAvatarSizeByUser.get(userId);
+  if (prev && prev > 0) return prev;
+  searchAvatarSizeByUser.set(userId, rounded);
+  return rounded;
+}
+
+function searchAvatarFileKey(userId?: string, avatarVer?: number): string {
+  if (!userId || !(avatarVer && avatarVer > 0)) return '';
+  return `${userId}_v${avatarVer}`;
+}
+
+function rememberSearchAvatarFile(key: string, uri: string) {
+  if (!key || !uri || !/^file:/i.test(uri)) return;
+  searchAvatarFileByKey.set(key, uri);
+}
+
+function pickSearchAvatarUri(
+  key: string,
+  next: string,
+  prev: string,
+): string {
+  if (key && next && /^file:/i.test(next)) {
+    rememberSearchAvatarFile(key, next);
+  }
+  const locked = key ? searchAvatarFileByKey.get(key) || '' : '';
+  if (locked && (!next || /^data:/i.test(next))) return locked;
+  if (prev && /^file:/i.test(prev) && next && /^data:/i.test(next)) return prev;
+  return next || prev || locked;
+}
 
 /**
  * Единая толщина рамки для всех экранов, в dp.
@@ -75,6 +117,8 @@ export interface AvatarImageProps {
   fallbackText?: string;
   fallbackTextStyle?: StyleProp<TextStyle>;
   containerStyle?: StyleProp<ViewStyle>;
+  /** Search splash: parent ждёт decode, не только prefetch. */
+  onDisplayLoad?: () => void;
 }
 
 /**
@@ -92,9 +136,12 @@ const AvatarImage = memo<AvatarImageProps>(({
   fallbackText,
   fallbackTextStyle,
   containerStyle,
+  onDisplayLoad,
 }) => {
-  const willFetchFromCache = !propsUri && !!(userId && avatarVer && avatarVer > 0);
-  const [uri, setUri] = useState<string>(propsUri || '');
+  const fileLockKey = searchAvatarFileKey(userId, avatarVer);
+  const initialUri = pickSearchAvatarUri(fileLockKey, propsUri || '', '');
+  const willFetchFromCache = !initialUri && !!(userId && avatarVer && avatarVer > 0);
+  const [uri, setUri] = useState<string>(initialUri);
   // true с первого кадра, если ждём кэш — иначе буква мелькает до useEffect.
   const [loading, setLoading] = useState(willFetchFromCache);
   const hookFrameId = useUserActiveFrame(userId);
@@ -105,22 +152,32 @@ const AvatarImage = memo<AvatarImageProps>(({
   useEffect(() => {
     let alive = true;
 
-    // Если передан прямой URI (data URI или локальный файл), используем его
+    // Если передан прямой URI (data URI или локальный файл), используем его.
+    // Не вытесняем уже показанный file: сырым data: — иначе uriKind прыгает
+    // и Glide/ExpoImage перезагружает кадр после splash.
     if (propsUri) {
-      setUri(propsUri);
+      setUri((prev) => pickSearchAvatarUri(fileLockKey, propsUri, prev));
       setLoading(false);
       return;
     }
 
     // Иначе загружаем через систему кеширования
     if (userId && avatarVer && avatarVer > 0) {
+      const lockedFile = fileLockKey ? searchAvatarFileByKey.get(fileLockKey) : '';
+      if (lockedFile) {
+        setUri(lockedFile);
+        setLoading(false);
+        return;
+      }
       setLoading(true);
       (async () => {
         try {
           // Пытаемся загрузить миниатюру (для списков друзей)
           const cachedUri = await getAvatarUri(userId, avatarVer || 0, true);
           if (alive) {
-            setUri(cachedUri || '');
+            const next = pickSearchAvatarUri(fileLockKey, cachedUri || '', '');
+            setUri(next);
+            // При ver>0 и пустом кэше не снимаем «ожидание» буквой — URI скоро придёт с родителя.
             setLoading(false);
           }
         } catch (e) {
@@ -140,7 +197,7 @@ const AvatarImage = memo<AvatarImageProps>(({
     return () => {
       alive = false;
     };
-  }, [userId, avatarVer, propsUri]);
+  }, [userId, avatarVer, propsUri, fileLockKey]);
 
   const [resolvedUri, resolvedReady] = useResolvedImageUri(uri);
   const lastGoodDisplayRef = useRef('');
@@ -149,9 +206,14 @@ const AvatarImage = memo<AvatarImageProps>(({
   }, [userId, avatarVer]);
   if (resolvedReady && resolvedUri) {
     lastGoodDisplayRef.current = resolvedUri;
+    rememberSearchAvatarFile(fileLockKey, resolvedUri);
   }
   const displayUri =
-    (resolvedReady && resolvedUri) ||
+    pickSearchAvatarUri(
+      fileLockKey,
+      (resolvedReady && resolvedUri) || '',
+      lastGoodDisplayRef.current || (uri && !/^data:/i.test(uri) ? uri : ''),
+    ) ||
     lastGoodDisplayRef.current ||
     (uri && !/^data:/i.test(uri) ? uri : '');
 
@@ -163,10 +225,20 @@ const AvatarImage = memo<AvatarImageProps>(({
    */
   const key = `avatar_${userId || 'none'}_v${avatarVer || 0}`;
 
-  // Буква только когда точно нет аватара — не на первом кадре до useEffect (loading стартует true).
-  const showFallbackLetter = !!(fallbackText && !loading && !uri);
-  // Пока фото ещё нет — прозрачный фон: виден chrome родителя, не жёсткий #2A2C31.
-  const placeholderBg = displayUri || showFallbackLetter ? '#2A2C31' : 'transparent';
+  // Буква только если аватара точно нет. При avatarVer>0 кэш может быть пуст на кадр —
+  // логи показывали paintMode:"letter" + #2A2C31 до прихода data URI.
+  const expectAvatar = !!(avatarVer && avatarVer > 0);
+  const showFallbackLetter = !!(fallbackText && !loading && !uri && !expectAvatar);
+  // Серый только под буквой. Под фото/ожиданием — transparent (иначе onLoad flash).
+  const placeholderBg = showFallbackLetter ? '#2A2C31' : 'transparent';
+  const paintMode = displayUri
+    ? 'image'
+    : showFallbackLetter
+      ? 'letter'
+      : loading || expectAvatar || (!!uri && !displayUri)
+        ? 'empty-wait'
+        : 'empty';
+
   const frameColors = FRAME_COLORS[activeFrameId];
   const hasActiveFrame = !!frameColors;
   /**
@@ -174,12 +246,63 @@ const AvatarImage = memo<AvatarImageProps>(({
    * раскладка округляют по-разному, и кольцо переставало совпадать с краем
    * фотографии на доли пикселя, которые складывались в заметное смещение.
    */
-  const photoSize = Math.round(size);
+  const photoSize = onDisplayLoad
+    ? lockSearchAvatarSize(userId, size)
+    : Math.round(size);
   const ringWidth = activeFrameRingWidth(photoSize);
   const outerSize = hasActiveFrame ? photoSize + ringWidth * 2 : photoSize;
   const outerRadius = outerSize / 2;
   const avatarRadius = photoSize / 2;
   const avatarOffset = hasActiveFrame ? ringWidth : 0;
+
+  // Центр Поиска: логируем только радар (onDisplayLoad), иначе prewarm Профиля
+  // даёт ложный size 114 / второй image-onLoad в тех же тегах.
+  useEffect(() => {
+    if (!onDisplayLoad || photoSize < 90) return;
+    const uriKind = !uri
+      ? 'none'
+      : /^file:/i.test(uri)
+        ? 'file'
+        : /^data:/i.test(uri)
+          ? 'data'
+          : /^https?:/i.test(uri)
+            ? 'http'
+            : 'other';
+    const displayKind = !displayUri
+      ? 'none'
+      : /^file:/i.test(displayUri)
+        ? 'file'
+        : /^data:/i.test(displayUri)
+          ? 'data'
+          : 'other';
+    logger.info('[search-avatar] paint', {
+      paintMode,
+      placeholderBg,
+      loading,
+      size: photoSize,
+      outerSize,
+      uriKind,
+      uriLen: uri ? uri.length : 0,
+      displayKind,
+      displayLen: displayUri ? displayUri.length : 0,
+      hasFrame: !!activeFrameId,
+      userIdTail: userId ? String(userId).slice(-6) : null,
+      avatarVer,
+    });
+  }, [
+    onDisplayLoad,
+    photoSize,
+    outerSize,
+    paintMode,
+    placeholderBg,
+    loading,
+    uri,
+    displayUri,
+    activeFrameId,
+    userId,
+    avatarVer,
+  ]);
+
   // Кольцо целиком занимает пространство снаружи фотографии. Его внутренняя
   // граница совпадает с краем аватара и не перекрывает изображение.
   /**
@@ -264,6 +387,25 @@ const AvatarImage = memo<AvatarImageProps>(({
           <ExpoImage
             key={key}
             {...getAvatarImageProps(displayUri, key)}
+            onLoad={() => {
+              try {
+                onDisplayLoad?.();
+              } catch {}
+              if (!onDisplayLoad || photoSize < 90) return;
+              logger.info('[search-avatar] image-onLoad', {
+                size: photoSize,
+                displayKind: /^file:/i.test(displayUri) ? 'file' : 'other',
+                displayLen: displayUri.length,
+              });
+            }}
+            onError={(e) => {
+              if (!onDisplayLoad || photoSize < 90) return;
+              logger.warn('[search-avatar] image-onError', {
+                size: photoSize,
+                displayKind: /^file:/i.test(displayUri) ? 'file' : 'other',
+                error: String((e as any)?.error ?? e ?? ''),
+              });
+            }}
             style={[
               StyleSheet.absoluteFillObject,
               { borderRadius: outerRadius },

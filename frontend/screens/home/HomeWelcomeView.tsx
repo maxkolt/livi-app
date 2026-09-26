@@ -10,9 +10,8 @@ import {
 } from 'react-native';
 import { useHomeLayout, useHomeLayoutActivity } from './HomeLayoutContext';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import AdaptiveText from '../../components/AdaptiveText';
 import * as Haptics from 'expo-haptics';
-import { LIVI, WELCOME_HEADER_TITLE, WELCOME_MUTED_TEXT, isWelcomeTabletLayout } from './constants';
+import { isWelcomeTabletLayout } from './constants';
 import { BrandTitleWithOutline } from './chrome';
 import { HomeBrandConfetti, type BrandConfettiOrigin } from './HomeBrandConfetti';
 import { HomeCenterProfile } from './HomeCenterProfile';
@@ -73,6 +72,8 @@ function resolveIsSplitStage(width: number, height: number) {
 
 let brandEntryShinePlayedThisSession = false;
 let welcomeRevealPlayedThisSession = false;
+/** Первый размер аватара Поиска за сессию — переживает remount HomeWelcomeView. */
+let lockedWelcomeSearchAvatarSize = 0;
 
 function HomeWelcomeViewInner({
   styles,
@@ -189,20 +190,11 @@ function HomeWelcomeViewInner({
   const expectedPaneH = Math.max(160, stageHeight - insets.top - estimatedTabBar);
   const viewHeight = measured.h > expectedPaneH * 0.6 ? measured.h : expectedPaneH;
 
-  /** Один источник размеров текста: по ним и рисуем, и резервируем место под радаром. */
-  const type = {
-    headingFont: isTabletLayout ? 22 : splitStage ? 17 : 18,
-    matchingFont: isTabletLayout ? 15 : splitStage ? 12 : 13,
-    matchingLineH: isTabletLayout ? 22 : splitStage ? 17 : 19,
-    matchingMaxWidth: isTabletLayout ? 420 : 292,
-  };
-  const headingLineH = Math.round(type.headingFont * 1.32);
-
-  /** Радар ближе к online; CTA выше tab bar за счёт большего paddingBottom (auto). */
+  /** Баннер сверху, CTA снизу; радар центрируется в оставшемся зазоре. */
   const space = {
     bannerMarginTop: tightStage ? 4 : bannerCompact ? 6 : 8,
-    radarPaddingTop: splitStage ? 0 : compactLayout ? 2 : 4,
-    stageCopyMarginTop: splitStage ? 0 : -6,
+    radarPaddingTop: 0,
+    stageCopyMarginTop: 0,
     stageCopyPaddingBottom: 0,
     ctaMinGap: splitTight ? 6 : compactLayout || shortPhone ? 12 : 16,
     /** Больше = кнопка выше над навигацией. */
@@ -219,7 +211,6 @@ function HomeWelcomeViewInner({
             : shortPhone
               ? 22
               : 32,
-    copyMarginBottom: 4,
   };
 
   /**
@@ -241,15 +232,11 @@ function HomeWelcomeViewInner({
 
   /**
    * Сцена настолько низкая (split-screen, совсем маленькие экраны), что радар с
-   * текстом и кнопкой вместе не помещаются. Уступает подзаголовок: он поясняющий,
-   * а радар и кнопка несут смысл экрана.
+   * кнопкой вместе не помещаются — радар ужимается по stageCopyReserve.
    */
-  const hideSubtitle = stageH > 0 && (splitStage ? stageH < 130 : stageH < 340);
-  const matchingLines = splitTight ? 2 : 3;
 
-  /** Реальная высота текста с кнопкой под радаром — считаем из тех же размеров, что и рисуем. */
+  /** Реальная высота кнопки под радаром — считаем из тех же размеров, что и рисуем. */
   const ctaHeight = welcomeSearchCtaHeight(isTabletLayout, splitTight);
-  /** Правая колонка в строке шириной ровно с кнопку — баннер, текст и CTA в одну линию. */
   /**
    * Колонка занимает половину строки, но не шире максимума кнопки. Без привязки
    * к строке композиция плыла: на узком landscape колонка забирала 63% ширины и
@@ -261,19 +248,14 @@ function HomeWelcomeViewInner({
   );
   /** Остаток строки под радар (минус боковые отступы и зазор между колонками). */
   const radarSlotWidth = Math.max(120, stageW - ctaWidth - 18 - 32);
+  /** Резерв только под CTA — радар центрируется между online и кнопкой. */
   const stageCopyReserve = splitStage
     ? 0
-    : headingLineH * 2 +
-      (hideSubtitle ? 0 : type.matchingLineH * matchingLines) +
-      space.copyMarginBottom +
-      space.ctaMinGap +
-      space.ctaBottomPad +
-      ctaHeight +
-      8;
+    : space.ctaMinGap + space.ctaBottomPad + ctaHeight;
 
   /**
    * Жёсткий потолок по высоте: больше этого радар не влезет ни при каких условиях.
-   * В стеке под ним ещё текст с кнопкой, в строке они сбоку — нужен только зазор.
+   * В стеке под ним ещё CTA, в строке кнопка сбоку — нужен только зазор.
    */
   // 0.78 вместо «минус пара пикселей»: радар не должен касаться баннера онлайн
   // сверху и таб-бара снизу — между ними нужен видимый воздух.
@@ -323,7 +305,15 @@ function HomeWelcomeViewInner({
       frameOutset,
     };
   })();
-  const welcomeAvatarSize = welcomeAvatarGeometry.avatarSize;
+  const welcomeAvatarSizeRaw = welcomeAvatarGeometry.avatarSize;
+  // Module-level: ref сбрасывался при remount после splash → снова 114 и onLoad.
+  if (welcomeAvatarSizeRaw > 0 && lockedWelcomeSearchAvatarSize <= 0) {
+    lockedWelcomeSearchAvatarSize = welcomeAvatarSizeRaw;
+  }
+  const welcomeAvatarSize =
+    lockedWelcomeSearchAvatarSize > 0
+      ? lockedWelcomeSearchAvatarSize
+      : welcomeAvatarSizeRaw;
   const welcomeFrameOutset = welcomeAvatarGeometry.frameOutset;
 
   const cancelBurst = useCallback(() => {
@@ -464,42 +454,47 @@ function HomeWelcomeViewInner({
         onLayout={onStageLayout}
         style={[
           splitStage ? welcomeStyles.stageRow : welcomeStyles.radarFlex,
-          { paddingTop: space.radarPaddingTop },
           revealStyle,
         ]}
       >
-        <View style={splitStage ? welcomeStyles.radarSlot : null}>
-        <View style={splitStage ? welcomeStyles.radarShift : null}>
-        <WelcomeRadar
-          size={radarSize}
-          isDark={isDark}
-          avatarRadius={welcomeAvatarRadius}
-          orbitScale={orbitScale}
+        <View
+          style={
+            splitStage
+              ? welcomeStyles.radarSlot
+              : welcomeStyles.radarCenter
+          }
         >
-          <HomeCenterProfile
-            styles={styles}
-            isDark={isDark}
-            layoutWidth={viewWidth}
-            compact={compactLayout}
-            dense={splitStage}
-            radarStage
-            radarAvatarSize={welcomeAvatarSize}
-            radarFramedAvatarSize={welcomeAvatarBase}
-            radarFrameOutset={welcomeFrameOutset}
-            menuChromeBg={menuChromeBg}
-            {...centerProfile}
-            avatarAnchorRef={avatarAnchorRef}
-            onOpenAvatarModal={handleOpenAvatarModal}
-          />
-        </WelcomeRadar>
-        </View>
+          <View style={splitStage ? welcomeStyles.radarShift : null}>
+            <WelcomeRadar
+              size={radarSize}
+              isDark={isDark}
+              avatarRadius={welcomeAvatarRadius}
+              orbitScale={orbitScale}
+            >
+              <HomeCenterProfile
+                styles={styles}
+                isDark={isDark}
+                layoutWidth={viewWidth}
+                compact={compactLayout}
+                dense={splitStage}
+                radarStage
+                radarAvatarSize={welcomeAvatarSize}
+                radarFramedAvatarSize={welcomeAvatarBase}
+                radarFrameOutset={welcomeFrameOutset}
+                menuChromeBg={menuChromeBg}
+                {...centerProfile}
+                avatarAnchorRef={avatarAnchorRef}
+                onOpenAvatarModal={handleOpenAvatarModal}
+              />
+            </WelcomeRadar>
+          </View>
         </View>
 
         <Animated.View
           style={[
             welcomeStyles.stageCopy,
             splitStage && welcomeStyles.stageCopyRow,
-            splitStage ? { width: ctaWidth, maxWidth: ctaWidth } : null,
+            splitStage ? { width: ctaWidth, maxWidth: ctaWidth } : welcomeStyles.stageCopyStack,
             {
               marginTop: space.stageCopyMarginTop,
               paddingBottom: space.stageCopyPaddingBottom,
@@ -520,39 +515,10 @@ function HomeWelcomeViewInner({
             />
           ) : null}
 
-          <View style={[welcomeStyles.copyBlock, { marginBottom: space.copyMarginBottom }]}>
-            <AdaptiveText
-              style={[
-                welcomeStyles.heading,
-                { fontSize: type.headingFont, lineHeight: headingLineH },
-              ]}
-              numberOfLines={2}
-            >
-              {L('welcomeSearchHeading')}
-            </AdaptiveText>
-            {hideSubtitle ? null : (
-              <AdaptiveText
-                style={[
-                  welcomeStyles.matching,
-                  {
-                    fontSize: type.matchingFont,
-                    lineHeight: type.matchingLineH,
-                    maxWidth: type.matchingMaxWidth,
-                  },
-                  !isDark && { color: LIVI.text2 },
-                ]}
-                numberOfLines={matchingLines}
-              >
-                {L('welcomeSearchMatching')}
-              </AdaptiveText>
-            )}
-          </View>
-
           <View
             style={[
               welcomeStyles.ctaWrap,
               {
-                marginTop: splitStage ? 0 : ('auto' as const),
                 paddingTop: space.ctaMinGap,
                 paddingBottom: space.ctaBottomPad,
               },
@@ -598,10 +564,17 @@ const welcomeStyles = StyleSheet.create({
   },
   radarFlex: {
     flex: 1,
-    alignItems: 'center',
-    justifyContent: 'flex-start',
+    flexDirection: 'column',
     minHeight: 0,
     overflow: 'hidden',
+  },
+  /** Центр аватара строго между online и кнопкой «Найти…». */
+  radarCenter: {
+    flex: 1,
+    minHeight: 0,
+    width: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   /** Короткая landscape: радар слева, текст и CTA справа — без скролла. */
   stageRow: {
@@ -622,6 +595,12 @@ const welcomeStyles = StyleSheet.create({
     alignItems: 'center',
     position: 'relative',
   },
+  /** Портрет: CTA не растягивается — иначе съедает центр радара. */
+  stageCopyStack: {
+    flexGrow: 0,
+    flexShrink: 0,
+    width: '100%',
+  },
   stageCopyRow: {
     flexGrow: 0,
     flexShrink: 0,
@@ -637,28 +616,6 @@ const welcomeStyles = StyleSheet.create({
   /** Подъём радара в строке. Запас по высоте ~26, так что за границу не уходит. */
   radarShift: {
     marginTop: -12,
-  },
-  copyBlock: {
-    paddingHorizontal: 28,
-    alignItems: 'center',
-    flexShrink: 0,
-  },
-  heading: {
-    color: WELCOME_HEADER_TITLE,
-    fontSize: 18,
-    fontWeight: '600',
-    textAlign: 'center',
-    letterSpacing: 0.08,
-    marginBottom: 4,
-  },
-  matching: {
-    color: WELCOME_MUTED_TEXT,
-    fontSize: 13,
-    fontWeight: '400',
-    textAlign: 'center',
-    lineHeight: 19,
-    maxWidth: 292,
-    paddingHorizontal: 12,
   },
   ctaWrap: {
     alignSelf: 'stretch',

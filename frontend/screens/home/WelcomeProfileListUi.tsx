@@ -368,7 +368,7 @@ const styles = StyleSheet.create({
   },
   rowLabel: {
     fontSize: 14,
-    fontWeight: '500',
+    fontWeight: '400',
     flexShrink: 1,
   },
   rowLabelRtl: {

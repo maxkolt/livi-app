@@ -188,7 +188,7 @@ const styles = StyleSheet.create({
   onlineWord: {
     color: WELCOME_HEADER_TITLE,
     fontSize: 16,
-    fontWeight: '600',
+    fontWeight: '400',
     letterSpacing: 0.1,
   },
   onlineWordCompact: {
@@ -199,16 +199,16 @@ const styles = StyleSheet.create({
   },
   countText: {
     color: WELCOME_MUTED_TEXT,
-    fontSize: 13,
+    fontSize: 11,
     fontWeight: '400',
-    lineHeight: 16,
+    lineHeight: 14,
   },
   countTextCompact: {
-    fontSize: 11,
+    fontSize: 10,
   },
   countTextDense: {
-    fontSize: 10,
-    lineHeight: 13,
+    fontSize: 9,
+    lineHeight: 12,
   },
   stack: {
     flexDirection: 'row',
@@ -223,7 +223,8 @@ const styles = StyleSheet.create({
     overflow: 'visible',
   },
   stackPlaceholder: {
-    backgroundColor: 'rgba(59,130,246,0.22)',
+    /** Тот же акцент, что волны радара / CTA. */
+    backgroundColor: 'rgba(0, 181, 255, 0.12)',
   },
   stackFallback: {
     fontSize: 11,

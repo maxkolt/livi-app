@@ -568,43 +568,25 @@ function HomeWelcomeChatsViewInner({
           ) : (
             <>
               <Pressable
-                style={styles.titleHit}
-                onPress={searchOpen ? dismissSearchFromEmptyTap : undefined}
-                accessibilityRole="header"
+                style={({ pressed }) => [
+                  styles.iconBtn,
+                  tabletLayout && styles.iconBtnTablet,
+                  compactLandscape && styles.iconBtnLandscape,
+                  searchOpen && styles.iconBtnActive,
+                  pressed && styles.iconBtnPressed,
+                ]}
+                accessibilityRole="button"
+                accessibilityLabel={L('tabSearch')}
+                accessibilityState={{ selected: searchOpen }}
+                onPress={toggleSearch}
               >
-                <AdaptiveText
-                  style={[
-                    styles.title,
-                    tabletLayout && styles.titleTablet,
-                    compactLandscape && styles.titleLandscape,
-                  ]}
-                  numberOfLines={1}
-                >
-                  {L('tabChat')}
-                </AdaptiveText>
+                <Ionicons
+                  name={searchOpen ? 'search' : 'search-outline'}
+                  size={tabletLayout ? 24 : compactLandscape ? 19 : 22}
+                  color={searchOpen ? WELCOME_SEGMENT_ACTIVE : LIVI.white}
+                />
               </Pressable>
-              <View style={styles.headerActions}>
-                <Pressable
-                  style={({ pressed }) => [
-                    styles.iconBtn,
-                    tabletLayout && styles.iconBtnTablet,
-                    compactLandscape && styles.iconBtnLandscape,
-                    searchOpen && styles.iconBtnActive,
-                    pressed && styles.iconBtnPressed,
-                  ]}
-                  accessibilityRole="button"
-                  accessibilityLabel={L('tabSearch')}
-                  accessibilityState={{ selected: searchOpen }}
-                  onPress={toggleSearch}
-                >
-                  <Ionicons
-                    name={searchOpen ? 'search' : 'search-outline'}
-                    size={tabletLayout ? 24 : compactLandscape ? 19 : 22}
-                    color={searchOpen ? WELCOME_SEGMENT_ACTIVE : LIVI.white}
-                  />
-                </Pressable>
-                <WelcomeCrownButton small={compactLandscape} large={tabletLayout} />
-              </View>
+              <WelcomeCrownButton small={compactLandscape} large={tabletLayout} />
             </>
           )}
         </View>

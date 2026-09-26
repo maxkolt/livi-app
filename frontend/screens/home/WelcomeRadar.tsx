@@ -40,8 +40,27 @@ function mixOrbitBandColor(): string {
 }
 
 const ORBIT_BAND_COLOR = mixOrbitBandColor();
-/** 1-я орбита ярче, дальше слабее. Внутренние три чуть бледнее внешней — 4-я не трогается. */
-const BAND_OPACITIES = [0.18, 0.12, 0.08, 0.04] as const;
+/** 1-я орбита чуть ярче остальных, но без кричащей насыщенности у аватара. */
+const BAND_OPACITIES = [0.155, 0.12, 0.08, 0.04] as const;
+
+/**
+ * Две волны с одной скоростью. Вторая стартует, когда первая на середине пути
+ * (delay = duration / 2) — так не обгоняют друг друга.
+ */
+const RIPPLE_DURATION_MS = 7200;
+const RIPPLE_SPECS = [
+  { durationMs: RIPPLE_DURATION_MS, startDelayMs: 0 },
+  { durationMs: RIPPLE_DURATION_MS, startDelayMs: RIPPLE_DURATION_MS / 2 },
+] as const;
+
+/** Слои одной волны — сильнее размытый край линии. */
+const RIPPLE_SOFT_LAYERS = [
+  { borderWidth: 14, opacityMul: 0.07, scalePad: 1.028 },
+  { borderWidth: 9, opacityMul: 0.12, scalePad: 1.018 },
+  { borderWidth: 5.5, opacityMul: 0.2, scalePad: 1.01 },
+  { borderWidth: 3.2, opacityMul: 0.34, scalePad: 1.004 },
+  { borderWidth: 1.4, opacityMul: 0.55, scalePad: 1 },
+] as const;
 
 /** 4 орбиты: ближе к аватару; 2-е уже, 3/4 чуть к центру; g от «полной» суммы шагов. */
 function computeRingRadii(half: number, avatarR: number, orbitScale: number): number[] {
@@ -89,10 +108,10 @@ function clockHourToDeg(hour: number): number {
  * орбиты в одну сторону, и эффект пропадал.
  */
 const DOT_SPECS: ReadonlyArray<{ ring: number; hour: number; r: number; dir: 1 | -1 }> = [
-  { ring: 0, hour: 11, r: 3.2, dir: -1 },
-  { ring: 1, hour: 8, r: 3.2, dir: 1 },
-  { ring: 2, hour: 5, r: 3.2, dir: -1 },
-  { ring: 3, hour: 2, r: 3.2, dir: 1 },
+  { ring: 0, hour: 11, r: 2.7, dir: -1 },
+  { ring: 1, hour: 8, r: 2.7, dir: 1 },
+  { ring: 2, hour: 5, r: 2.7, dir: -1 },
+  { ring: 3, hour: 2, r: 2.7, dir: 1 },
 ];
 
 /** Самый быстрый оборот. Быстрее точки читаются как индикатор загрузки. */
@@ -227,43 +246,94 @@ export function WelcomeRadar({ size, avatarRadius, orbitScale = 1, children }: W
   /** Скорости разыгрываются один раз на монтирование. */
   const spinConfig = useRef(orbitSpinSeconds(DOT_SPECS.length)).current;
 
-  const dots = useMemo(
-    () =>
-      DOT_SPECS.map((spec, i) => ({
-        key: i,
-        orbitR: ringRadii[spec.ring] ?? ringRadii[0],
-        r: spec.r,
-        startDeg: clockHourToDeg(spec.hour),
-        dir: spec.dir,
-      })),
-    [ringRadii],
-  );
-
   /**
    * По значению на орбиту. Количество орбит фиксировано, так что ref с массивом
    * создаётся один раз и переживает перерисовки от layout/размера — иначе каждый
    * ресайз сбрасывал бы точки в стартовые позиции.
    */
   const spins = useRef(DOT_SPECS.map(() => new Animated.Value(0))).current;
+  const ripples = useRef(RIPPLE_SPECS.map(() => new Animated.Value(0))).current;
+  /**
+   * Interpolate один раз: на каждом рендере новый узел + Animated.loop(0→1)
+   * давали скачок точек (сброс угла / отвал native driver).
+   */
+  const spinRotates = useRef(
+    spins.map((spin, i) => {
+      const startDeg = clockHourToDeg(DOT_SPECS[i].hour);
+      const dir = DOT_SPECS[i].dir;
+      return spin.interpolate({
+        inputRange: [0, 1],
+        outputRange: [`${startDeg}deg`, `${startDeg + 360 * dir}deg`],
+        extrapolate: 'extend',
+      });
+    }),
+  ).current;
+  /** Доли радиусов орбит — масштабируются с size без прыжков. */
+  const stableDotFracsRef = useRef<number[] | null>(null);
+  if (!stableDotFracsRef.current && half > 0) {
+    stableDotFracsRef.current = ringRadii.map((r) => r / half);
+  }
+  const dotFracs = stableDotFracsRef.current;
 
   useEffect(() => {
-    const loops = spins.map((value, i) =>
-      Animated.loop(
+    // loop 0→1 безопасен при стабильном interpolate (кэш выше).
+    // Раньше duration на 1e5 оборотов переполнял int32 и приложение зависало.
+    const loops = spins.map((value, i) => {
+      value.setValue(0);
+      return Animated.loop(
         Animated.timing(value, {
           toValue: 1,
           duration: Math.round(spinConfig[i] * 1000),
           easing: Easing.linear,
           useNativeDriver: true,
         }),
-      ),
-    );
+      );
+    });
     loops.forEach((loop) => loop.start());
     return () => loops.forEach((loop) => loop.stop());
   }, [spins, spinConfig]);
 
+  useEffect(() => {
+    let stopped = false;
+    const timers: Array<ReturnType<typeof setTimeout>> = [];
+    const runners = ripples.map((value, i) => {
+      const spec = RIPPLE_SPECS[i];
+      const tick = () => {
+        if (stopped) return;
+        value.setValue(0);
+        Animated.timing(value, {
+          toValue: 1,
+          duration: spec.durationMs,
+          easing: Easing.linear,
+          useNativeDriver: true,
+        }).start(({ finished }) => {
+          if (finished && !stopped) tick();
+        });
+      };
+      timers.push(setTimeout(tick, spec.startDelayMs));
+      return () => value.stopAnimation();
+    });
+    return () => {
+      stopped = true;
+      timers.forEach(clearTimeout);
+      runners.forEach((stop) => stop());
+    };
+  }, [ripples]);
+
+  const rippleStartScale = Math.max(0.22, Math.min(0.55, (avatarOuter * 2) / s));
+
   const uid = Math.round(s);
   const haloGradId = `radarCenterHalo-${uid}`;
   const outerSoftGradId = `radarOuterSoft-${uid}`;
+
+  const stableDots = useMemo(() => {
+    if (!dotFracs) return [];
+    return DOT_SPECS.map((spec, i) => ({
+      key: i,
+      orbitR: (dotFracs[spec.ring] ?? dotFracs[0]) * half,
+      r: spec.r,
+    }));
+  }, [dotFracs, half]);
 
   return (
     <View style={[styles.wrap, { width: s, height: s }]}>
@@ -308,7 +378,6 @@ export function WelcomeRadar({ size, avatarRadius, orbitScale = 1, children }: W
             mask={`url(#${band.id}-${uid})`}
           />
         ))}
-        {/* 4-й круг: мягкий внешний контур (лёгкая «размытость»). */}
         {lastBand ? (
           <Circle cx={cx} cy={cy} r={outerSoftR} fill={`url(#${outerSoftGradId})`} />
         ) : null}
@@ -316,21 +385,15 @@ export function WelcomeRadar({ size, avatarRadius, orbitScale = 1, children }: W
 
       {/*
         Точки вынесены из SVG в отдельные слои: вращение идёт через transform на
-        нативном драйвере, без пересчёта координат в JS на каждый кадр. Кольца
-        остаются в SVG статикой — они идеальные окружности, их вращение невидимо.
-        Аватар с рамкой лежит ниже в своём слое и не затрагивается.
+        нативном драйвере, без пересчёта координат в JS на каждый кадр.
       */}
-      {dots.map((d) => {
+      {stableDots.map((d) => {
         const glowR = d.r + 3;
-        const rotate = spins[d.key].interpolate({
-          inputRange: [0, 1],
-          outputRange: [`${d.startDeg}deg`, `${d.startDeg + 360 * d.dir}deg`],
-        });
         return (
           <Animated.View
             key={d.key}
             pointerEvents="none"
-            style={[StyleSheet.absoluteFill, { transform: [{ rotate }] }]}
+            style={[StyleSheet.absoluteFill, { transform: [{ rotate: spinRotates[d.key] }] }]}
           >
             <View
               style={{
@@ -360,6 +423,47 @@ export function WelcomeRadar({ size, avatarRadius, orbitScale = 1, children }: W
         );
       })}
 
+      {/* Рябь: разные периоды + мягкий край линии (несколько слоёв). */}
+      {ripples.map((value, i) => {
+        const scale = value.interpolate({
+          inputRange: [0, 1],
+          outputRange: [rippleStartScale, 0.98],
+        });
+        const baseOpacity = value.interpolate({
+          // Сразу видна у аватара — как только первая дошла до середины.
+          inputRange: [0, 0.06, 0.7, 1],
+          outputRange: [0.22, 0.28, 0.1, 0],
+        });
+        return (
+          <Animated.View
+            key={`ripple-${i}`}
+            pointerEvents="none"
+            style={[
+              StyleSheet.absoluteFill,
+              { opacity: baseOpacity, transform: [{ scale }] },
+            ]}
+          >
+            {RIPPLE_SOFT_LAYERS.map((layer, li) => (
+              <View
+                key={`ripple-${i}-l${li}`}
+                style={[
+                  styles.ripple,
+                  {
+                    width: s,
+                    height: s,
+                    borderRadius: s / 2,
+                    borderWidth: layer.borderWidth,
+                    borderColor: AURA_GRADIENT[2],
+                    opacity: layer.opacityMul,
+                    transform: [{ scale: layer.scalePad }],
+                  },
+                ]}
+              />
+            ))}
+          </Animated.View>
+        );
+      })}
+
       <View style={styles.center}>{children}</View>
     </View>
   );
@@ -374,5 +478,11 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  ripple: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    backgroundColor: 'transparent',
   },
 });

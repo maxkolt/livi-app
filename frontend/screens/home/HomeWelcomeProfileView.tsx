@@ -29,7 +29,6 @@ import {
 } from '../../utils/updateCheck';
 import type { ChatWallpaperTheme } from '../../utils/chatWallpaper';
 import { useUserActiveFrame } from '../../utils/cosmetics';
-import { WelcomeCrownButton } from './WelcomeCrownButton';
 import { PurchasesManagementPanel } from './PurchasesManagementPanel';
 import {
   LIVI,
@@ -114,7 +113,7 @@ type HubMetricsPreset = {
 const HUB_PRESET_PHONE: HubMetricsPreset = {
   avatarSize: 120,
   cameraBtnSize: CAMERA_BTN_SIZE,
-  gapTop: 14,
+  gapTop: 24,
   gapUnderAvatar: 14,
   gapAboveDelete: 10,
   gapBottom: 14,
@@ -128,7 +127,7 @@ const HUB_PRESET_PHONE: HubMetricsPreset = {
 const HUB_PRESET_PHONE_LANDSCAPE: HubMetricsPreset = {
   avatarSize: 80,
   cameraBtnSize: 32,
-  gapTop: -18,
+  gapTop: -8,
   gapUnderAvatar: 12,
   gapAboveDelete: 4,
   gapBottom: 6,
@@ -142,7 +141,7 @@ const HUB_PRESET_PHONE_LANDSCAPE: HubMetricsPreset = {
 const HUB_PRESET_TABLET: HubMetricsPreset = {
   avatarSize: 136,
   cameraBtnSize: 40,
-  gapTop: 20,
+  gapTop: 26,
   gapUnderAvatar: 20,
   gapAboveDelete: 12,
   gapBottom: 18,
@@ -156,7 +155,7 @@ const HUB_PRESET_TABLET: HubMetricsPreset = {
 const HUB_PRESET_TABLET_LANDSCAPE: HubMetricsPreset = {
   avatarSize: 112,
   cameraBtnSize: 38,
-  gapTop: 12,
+  gapTop: 14,
   gapUnderAvatar: 14,
   gapAboveDelete: 8,
   gapBottom: 14,
@@ -241,13 +240,11 @@ function estimateTabBarHeight(bottomInset: number, isTablet: boolean, isLandscap
   return base + Math.max(bottomInset, Platform.OS === 'android' ? 6 : 2);
 }
 
-/** Считается из тех же констант, что и стиль header + размер короны. */
+/** Небольшая шапка без короны — контент не прилипает к верху. */
 function estimateProfileHeaderHeight(isTablet: boolean, isLandscape: boolean) {
-  const padTop = isTablet ? 14 : isLandscape ? 0 : Platform.OS === 'ios' ? 8 : 12;
-  const padBottom = isTablet ? 10 : isLandscape ? 0 : 8;
-  const titleFont = isTablet ? 30 : isLandscape ? 22 : 28;
-  const crownSize = isLandscape && !isTablet ? 32 : isTablet ? 44 : 40;
-  return Math.round(padTop + Math.max(titleFont * 1.25, crownSize) + padBottom);
+  if (isLandscape && !isTablet) return 4;
+  if (isTablet) return isLandscape ? 8 : 12;
+  return Platform.OS === 'ios' ? 10 : 12;
 }
 
 /**
@@ -612,37 +609,6 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
     </View>
   );
 
-  const headerHub = (
-    <View
-      style={[
-        styles.header,
-        isTablet && styles.headerTablet,
-        compactLandscape && styles.headerLandscape,
-      ]}
-    >
-      <AdaptiveText
-        style={[
-          styles.title,
-          isTablet && styles.titleTablet,
-          compactLandscape && styles.titleLandscape,
-        ]}
-        numberOfLines={1}
-      >
-        {t('tabSettings', lang)}
-      </AdaptiveText>
-      <View style={compactLandscape ? styles.headerCrownLandscape : null}>
-      <WelcomeCrownButton
-        small={compactLandscape}
-        large={isTablet}
-        myUserId={myUserId}
-        myAvatarVer={myAvatarVer}
-        avatarUri={avatarUri}
-        nick={savedNick || nick}
-      />
-      </View>
-    </View>
-  );
-
   const headerSettings = (
     <View
       style={[
@@ -677,32 +643,45 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
     <View
       style={[
         styles.hubActions,
-        { minHeight: hubMetrics.deleteHeight, paddingBottom: hubMetrics.gapBottom },
+        { paddingBottom: hubMetrics.gapBottom },
       ]}
     >
-      <Pressable
-        style={({ pressed }) => [
-          styles.logOutBtn,
-          isTablet && styles.logOutBtnTablet,
-          compactLandscape && styles.logOutBtnLandscape,
-          pressed && styles.hubBtnPressed,
-        ]}
-        onPress={() => onLogOutAccount?.()}
-        disabled={busy || !onLogOutAccount}
-        accessibilityRole="button"
+      <WelcomeProfileSection
+        dense
+        compact={compactLandscape}
+        tablet={isTablet}
       >
-        <Ionicons name="trash-outline" size={compactLandscape ? 18 : 22} color="#A63A48" />
-        <AdaptiveText
-          style={[
-            styles.logOutBtnText,
-            isTablet && styles.logOutBtnTextTablet,
-            compactLandscape && styles.logOutBtnTextLandscape,
+        <Pressable
+          style={({ pressed }) => [
+            styles.logOutRow,
+            isTablet && styles.logOutRowTablet,
+            compactLandscape && styles.logOutRowLandscape,
+            hubMetrics.rowHeight != null
+              ? { minHeight: hubMetrics.rowHeight }
+              : null,
+            pressed && styles.logOutRowPressed,
           ]}
-          numberOfLines={1}
+          onPress={() => onLogOutAccount?.()}
+          disabled={busy || !onLogOutAccount}
+          accessibilityRole="button"
         >
-          {t('welcomeDeleteProfile', lang)}
-        </AdaptiveText>
-      </Pressable>
+          <Ionicons
+            name="trash-outline"
+            size={isTablet ? 22 : compactLandscape ? 18 : 20}
+            color="#A63A48"
+          />
+          <AdaptiveText
+            style={[
+              styles.logOutBtnText,
+              isTablet && styles.logOutBtnTextTablet,
+              compactLandscape && styles.logOutBtnTextLandscape,
+            ]}
+            numberOfLines={1}
+          >
+            {t('welcomeDeleteProfile', lang)}
+          </AdaptiveText>
+        </Pressable>
+      </WelcomeProfileSection>
     </View>
   );
 
@@ -1135,7 +1114,7 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
       keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}
     >
       <View style={styles.rootInner}>
-        {screen === 'hub' ? headerHub : headerSettings}
+        {screen === 'hub' ? null : headerSettings}
 
         {screen === 'hub' ? (
           <View
@@ -1257,10 +1236,6 @@ const styles = StyleSheet.create({
   headerLandscape: {
     paddingTop: 0,
     paddingBottom: 0,
-  },
-  /** Сдвиг только визуальный: высоту шапки корона поднимать не должна. */
-  headerCrownLandscape: {
-    transform: [{ translateY: 6 }],
   },
   headerTablet: {
     paddingTop: 14,
@@ -1608,40 +1583,42 @@ const styles = StyleSheet.create({
     fontWeight: '400',
   },
   hubActions: {
-    marginHorizontal: WELCOME_FRIENDS_LIST_INSET,
+    marginHorizontal: 0,
     paddingTop: 0,
     flexShrink: 0,
-    alignItems: 'center',
-    justifyContent: 'center',
   },
-  logOutBtn: {
-    alignSelf: 'center',
+  logOutRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: 7,
-    paddingVertical: 0,
-    paddingHorizontal: 16,
+    gap: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    minHeight: 48,
   },
-  logOutBtnLandscape: {
+  logOutRowLandscape: {
+    paddingVertical: 8,
     paddingHorizontal: 12,
+    minHeight: 40,
   },
-  logOutBtnTablet: {
-    paddingHorizontal: 20,
+  logOutRowTablet: {
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    minHeight: 54,
+  },
+  logOutRowPressed: {
+    backgroundColor: 'rgba(255,255,255,0.04)',
   },
   logOutBtnText: {
     color: '#A63A48',
     fontSize: 14,
-    fontWeight: '600',
+    fontWeight: '400',
+    flexShrink: 1,
   },
   logOutBtnTextLandscape: {
-    fontSize: 12,
+    fontSize: 13,
   },
   logOutBtnTextTablet: {
     fontSize: 15,
-  },
-  hubBtnPressed: {
-    opacity: 0.72,
   },
 });
 

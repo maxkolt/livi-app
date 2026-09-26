@@ -690,6 +690,9 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   /** Splash ждёт не только URI в state, но и decode в ExpoImage — иначе после fade виден серый кадр. */
   const [searchAvatarPrefetched, setSearchAvatarPrefetched] = useState(false);
   const searchAvatarPrefetchKeyRef = useRef('');
+  /** true после onLoad аватара на Поиске — prefetch ≠ кадр в радаре (логи: dismiss до image paint). */
+  const [searchAvatarDecoded, setSearchAvatarDecoded] = useState(false);
+  const searchAvatarDecodeKeyRef = useRef('');
   const [profileKey, setProfileKey] = useState(0);
 
   // Make currentUserId reactive for this screen (module state changes don't trigger re-render).
@@ -701,14 +704,16 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   }, []);
 
   // Restore cached avatar version ASAP so avatar can render offline / on slow mobile networks.
-  // После первой проверки ставим avatarVerChecked=true, чтобы не показывать букву до загрузки (мелькание при переходе на Home после звонка).
+  // Не ставим avatarVerChecked=true при пустом uid: иначе splash на миг ready=true
+  // (логи: myAvatarVer:0 → сразу ready), потом приходит ver=1 и буква/#2A2C31.
   useEffect(() => {
     let cancelled = false;
     const uid = String(resolvedUserId || '').trim();
     if (!uid) {
-      setAvatarVerChecked(true);
+      setAvatarVerChecked(false);
       return;
     }
+    setAvatarVerChecked(false);
     (async () => {
       try {
         const raw = await AsyncStorage.getItem(`avatarVer_${uid}`);
@@ -751,7 +756,13 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     if (!uri) {
       searchAvatarPrefetchKeyRef.current = '';
       setSearchAvatarPrefetched(false);
+      searchAvatarDecodeKeyRef.current = '';
+      setSearchAvatarDecoded(false);
       return;
+    }
+    if (searchAvatarDecodeKeyRef.current !== uri) {
+      searchAvatarDecodeKeyRef.current = uri;
+      setSearchAvatarDecoded(false);
     }
     if (searchAvatarPrefetchKeyRef.current === uri) {
       setSearchAvatarPrefetched(true);
@@ -772,6 +783,12 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     return () => {
       cancelled = true;
     };
+  }, [searchAvatarDisplayUri]);
+
+  const handleSearchAvatarDecoded = useCallback(() => {
+    const key = searchAvatarDisplayUri || searchAvatarDecodeKeyRef.current || 'ok';
+    searchAvatarDecodeKeyRef.current = key;
+    setSearchAvatarDecoded(true);
   }, [searchAvatarDisplayUri]);
 
   // Всегда синхронизируем ref со state (на случай, если nick меняется НЕ через onChangeText профиля),
@@ -5438,36 +5455,49 @@ const handleClearNick = useCallback(async () => {
     setModalAvatarUri(uri);
     setAvatarModalVisible(true);
   }, []);
-  const centerProfile = React.useMemo(
-    () => ({
+  const centerProfile = React.useMemo(() => {
+    const pickPaintUri = (...cands: Array<string | null | undefined>) => {
+      const list = cands.map((u) => String(u || '').trim()).filter(Boolean);
+      const file = list.find((u) => /^file:/i.test(u));
+      if (file) return file;
+      const nonData = list.find((u) => !/^data:/i.test(u));
+      if (nonData) return nonData;
+      return list[0] || '';
+    };
+    return {
       savedNick,
-      // В радар/профиль — уже готовый к ExpoImage URI (file: на Android), не raw data:.
-      avatarUri:
-        (resolvedAvatarReady && resolvedAvatarUri) || avatarUri,
-      myFullAvatarUri:
-        (myFullAvatarResolvedReady && myFullAvatarResolvedUri) ||
-        searchAvatarDisplayUri ||
+      // В радар/профиль — file: важнее raw data: (иначе после splash uriKind→data).
+      avatarUri: pickPaintUri(
+        resolvedAvatarReady ? resolvedAvatarUri : '',
+        searchAvatarDisplayUri,
+        avatarUri,
+      ),
+      myFullAvatarUri: pickPaintUri(
+        searchAvatarDisplayUri,
+        myFullAvatarResolvedReady ? myFullAvatarResolvedUri : '',
         myFullAvatarUri,
+      ),
       myAvatarVer,
       resolvedAvatarUri,
       resolvedAvatarReady: resolvedAvatarReady || myFullAvatarResolvedReady,
       avatarVerChecked,
       onOpenAvatarModal: handleOpenAvatarModal,
-    }),
-    [
-      savedNick,
-      avatarUri,
-      myFullAvatarUri,
-      myFullAvatarResolvedUri,
-      myFullAvatarResolvedReady,
-      searchAvatarDisplayUri,
-      myAvatarVer,
-      resolvedAvatarUri,
-      resolvedAvatarReady,
-      avatarVerChecked,
-      handleOpenAvatarModal,
-    ],
-  );
+      onSearchAvatarDecoded: handleSearchAvatarDecoded,
+    };
+  }, [
+    savedNick,
+    avatarUri,
+    myFullAvatarUri,
+    myFullAvatarResolvedUri,
+    myFullAvatarResolvedReady,
+    searchAvatarDisplayUri,
+    myAvatarVer,
+    resolvedAvatarUri,
+    resolvedAvatarReady,
+    avatarVerChecked,
+    handleOpenAvatarModal,
+    handleSearchAvatarDecoded,
+  ]);
 
   const showFriendsTab = welcomeActiveTab === 'friends';
   const showChatTab = welcomeActiveTab === 'chat';
@@ -5489,7 +5519,45 @@ const handleClearNick = useCallback(async () => {
   const avatarReadyForFirstPaint =
     !waitingForKnownAvatar &&
     avatarUriResolvedForPaint &&
-    (!hasAvatarSourceForFirstPaint || searchAvatarPrefetched);
+    (!hasAvatarSourceForFirstPaint || (searchAvatarPrefetched && searchAvatarDecoded));
+
+  useEffect(() => {
+    logger.info('[search-avatar] splash-gate', {
+      splashDismissed,
+      showSplash: !splashDismissed,
+      avatarVerChecked,
+      myAvatarVer,
+      hasSource: hasAvatarSourceForFirstPaint,
+      waitingKnown: waitingForKnownAvatar,
+      uriResolved: avatarUriResolvedForPaint,
+      prefetched: searchAvatarPrefetched,
+      decoded: searchAvatarDecoded,
+      ready: avatarReadyForFirstPaint,
+      displayUriKind: !searchAvatarDisplayUri
+        ? 'none'
+        : /^file:/i.test(searchAvatarDisplayUri)
+          ? 'file'
+          : /^data:/i.test(searchAvatarDisplayUri)
+            ? 'data'
+            : 'other',
+      displayUriLen: searchAvatarDisplayUri.length,
+      avatarUriLen: String(avatarUri || '').length,
+      fullUriLen: String(myFullAvatarUri || '').length,
+    });
+  }, [
+    splashDismissed,
+    avatarVerChecked,
+    myAvatarVer,
+    hasAvatarSourceForFirstPaint,
+    waitingForKnownAvatar,
+    avatarUriResolvedForPaint,
+    searchAvatarPrefetched,
+    searchAvatarDecoded,
+    avatarReadyForFirstPaint,
+    searchAvatarDisplayUri,
+    avatarUri,
+    myFullAvatarUri,
+  ]);
 
   return (
     <View
@@ -5993,7 +6061,19 @@ const handleClearNick = useCallback(async () => {
           hasAvatarReady={avatarReadyForFirstPaint}
           hasNick={!!(currentNick && currentNick.trim())}
           hasAvatar={!!(currentAvatar && currentAvatar.trim())}
-          onComplete={() => setSplashDismissed(true)}
+          onComplete={() => {
+            logger.info('[search-avatar] splash-dismiss', {
+              ready: avatarReadyForFirstPaint,
+              prefetched: searchAvatarPrefetched,
+              decoded: searchAvatarDecoded,
+              displayUriKind: !searchAvatarDisplayUri
+                ? 'none'
+                : /^file:/i.test(searchAvatarDisplayUri)
+                  ? 'file'
+                  : 'other',
+            });
+            setSplashDismissed(true);
+          }}
         />
       </View>
     )}

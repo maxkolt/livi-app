@@ -8,9 +8,9 @@ import {
   type ViewStyle,
 } from 'react-native';
 import { useHomeLayout } from './HomeLayoutContext';
-import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import {
+  AURA_GRADIENT,
   SEARCH_CTA_MAX_WIDTH,
   SEARCH_CTA_TABLET_MAX_WIDTH,
   isWelcomeTabletLayout,
@@ -20,9 +20,14 @@ import {
 import FitText from '../../components/FitText';
 import { logger } from '../../utils/logger';
 
-const BORDER_W = 1.35;
-/** Темнее/приглушённее aura — только рамка CTA, без смены глобального градиента. */
-const CTA_BORDER_GRADIENT = ['#0b7f74', '#255db8', '#007fbc'] as const;
+const BORDER_W = 1;
+/** Цвет волн/точек радара — приглушённо. */
+const CTA_WAVE = AURA_GRADIENT[2];
+const CTA_BORDER = 'rgba(0, 181, 255, 0.36)';
+/** Фон в тон волны, лёгкий. */
+const CTA_FILL = 'rgba(0, 181, 255, 0.08)';
+/** Мягкое кольцо вокруг рамки. */
+const CTA_BORDER_SOFT = 'rgba(0, 181, 255, 0.12)';
 
 /**
  * Высота CTA. Вынесена отдельно, чтобы раскладка Search могла заранее
@@ -35,9 +40,9 @@ export function welcomeSearchCtaWidth(windowWidth: number, tabletLayout: boolean
 }
 
 export function welcomeSearchCtaHeight(tabletLayout: boolean, compact: boolean): number {
-  if (tabletLayout) return 56;
-  if (compact) return Platform.OS === 'ios' ? 48 : 44;
-  return Platform.OS === 'ios' ? 52 : 48;
+  if (tabletLayout) return 54;
+  if (compact) return Platform.OS === 'ios' ? 46 : 42;
+  return Platform.OS === 'ios' ? 50 : 46;
 }
 
 type WelcomeSearchCtaProps = {
@@ -192,79 +197,97 @@ export function WelcomeSearchCta({
         accessibilityState={{ disabled }}
         style={[styles.shadow, disabled ? { opacity: 0.45 } : null]}
       >
-        <LinearGradient
-          colors={[CTA_BORDER_GRADIENT[0], CTA_BORDER_GRADIENT[1], CTA_BORDER_GRADIENT[2]]}
-          start={{ x: 0, y: 0.35 }}
-          end={{ x: 1, y: 0.65 }}
-          style={[
-            styles.borderShell,
-            {
-              borderRadius,
-              padding: BORDER_W,
-              width: buttonWidth,
-              height: buttonHeight,
-            },
-          ]}
+        <View
+          style={{
+            width: buttonWidth,
+            height: buttonHeight,
+            borderRadius,
+            overflow: 'visible',
+          }}
         >
+          {/* Мягкое свечение рамки (размытый край). */}
+          <View
+            pointerEvents="none"
+            style={[
+              styles.borderGlow,
+              {
+                borderRadius,
+                shadowColor: CTA_WAVE,
+              },
+            ]}
+          />
           <View
             style={[
-              styles.inner,
+              styles.borderShell,
               {
-                height: buttonHeight - BORDER_W * 2,
-                borderRadius: innerRadius,
-                backgroundColor: 'rgba(5, 7, 13, 0.68)',
+                borderRadius,
+                width: buttonWidth,
+                height: buttonHeight,
+                borderWidth: BORDER_W,
+                borderColor: CTA_BORDER,
+                backgroundColor: CTA_FILL,
               },
             ]}
           >
-            <MaterialCommunityIcons
-              name="lightning-bolt"
-              size={tabletLayout ? 24 : compact ? 20 : 22}
-              color={WELCOME_MUTED_TEXT}
-            />
-            <FitText
+            <View
               style={[
-                styles.label,
-                tabletLayout && styles.labelTablet,
-                compact && styles.labelCompact,
+                styles.inner,
+                {
+                  height: buttonHeight - BORDER_W * 2,
+                  borderRadius: innerRadius,
+                },
               ]}
-              minimumFontScale={0.7}
             >
-              {label}
-            </FitText>
-            <Animated.View
-              pointerEvents="none"
-              style={[
-                StyleSheet.absoluteFillObject,
-                {
-                  borderRadius: innerRadius,
-                  backgroundColor: '#000',
-                  opacity: depthOpacity,
-                },
-              ]}
-            />
-            <Animated.View
-              pointerEvents="none"
-              style={[
-                styles.sheen,
-                {
-                  borderRadius: innerRadius,
-                  opacity: sheenOpacity,
-                },
-              ]}
-            />
-            <Animated.View
-              pointerEvents="none"
-              style={[
-                StyleSheet.absoluteFillObject,
-                {
-                  borderRadius: innerRadius,
-                  backgroundColor: 'rgba(255,90,103,0.4)',
-                  opacity: blockedFlash,
-                },
-              ]}
-            />
+              <MaterialCommunityIcons
+                name="lightning-bolt"
+                size={tabletLayout ? 24 : compact ? 20 : 22}
+                color={WELCOME_MUTED_TEXT}
+              />
+              <FitText
+                style={[
+                  styles.label,
+                  tabletLayout && styles.labelTablet,
+                  compact && styles.labelCompact,
+                ]}
+                minimumFontScale={0.7}
+              >
+                {label}
+              </FitText>
+              <Animated.View
+                pointerEvents="none"
+                style={[
+                  StyleSheet.absoluteFillObject,
+                  {
+                    borderRadius: innerRadius,
+                    backgroundColor: '#000',
+                    opacity: depthOpacity,
+                  },
+                ]}
+              />
+              <Animated.View
+                pointerEvents="none"
+                style={[
+                  styles.sheen,
+                  {
+                    borderRadius: innerRadius,
+                    opacity: sheenOpacity,
+                  },
+                ]}
+              />
+              <Animated.View
+                pointerEvents="none"
+                style={[
+                  StyleSheet.absoluteFillObject,
+                  {
+                    borderRadius: innerRadius,
+                    backgroundColor: 'rgba(255,90,103,0.4)',
+                    opacity: blockedFlash,
+                  },
+                ]}
+              />
+            </View>
           </View>
-        </LinearGradient>
+        </View>
       </Pressable>
     </Animated.View>
   );
@@ -272,15 +295,26 @@ export function WelcomeSearchCta({
 
 const styles = StyleSheet.create({
   shadow: {
-    shadowColor: CTA_BORDER_GRADIENT[1],
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.2,
-    shadowRadius: 14,
-    elevation: 6,
+    shadowColor: CTA_WAVE,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.08,
+    shadowRadius: 10,
+    elevation: 3,
     overflow: 'visible',
+  },
+  borderGlow: {
+    ...StyleSheet.absoluteFillObject,
+    borderWidth: 2,
+    borderColor: CTA_BORDER_SOFT,
+    // лёгкий bloom по периметру
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.32,
+    shadowRadius: 5,
+    elevation: 0,
   },
   borderShell: {
     overflow: 'hidden',
+    justifyContent: 'center',
   },
   inner: {
     flexDirection: 'row',
@@ -300,7 +334,7 @@ const styles = StyleSheet.create({
   label: {
     color: WELCOME_HEADER_TITLE,
     fontSize: 17,
-    fontWeight: '500',
+    fontWeight: '400',
     letterSpacing: 0.2,
     flexShrink: 1,
     minWidth: 0,
