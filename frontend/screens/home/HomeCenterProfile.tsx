@@ -1,7 +1,7 @@
 import React from 'react';
 import { Platform, Pressable, StyleProp, Text, View, ViewStyle } from 'react-native';
 import { Image as ExpoImage } from 'expo-image';
-import AvatarImage, { activeFrameRingWidth, lockSearchAvatarSize } from '../../components/AvatarImage';
+import AvatarImage, { activeFrameRingWidth } from '../../components/AvatarImage';
 import { getCurrentUserId } from '../../sockets/socket';
 import { CHROME_PERIMETER_GLOW_LAYOUT_INSET, LIVI } from './constants';
 import { ChromePerimeterGlow } from './chrome';
@@ -88,7 +88,8 @@ function HomeCenterProfileInner({
   const noAvatar = !isLocalPreview && !hasCachedAvatar && !hasDirectAvatarUri;
   const noNick = !(savedNick && String(savedNick).trim());
 
-  const rawCenterAvatarSize = radarStage
+  // Размер радара Поиска стабилен уже в HomeWelcomeView (лок на геометрию окна).
+  const centerAvatarSize = radarStage
     ? Math.round(
         activeFrameId && radarFramedAvatarSize
           ? radarFramedAvatarSize
@@ -101,10 +102,6 @@ function HomeCenterProfileInner({
         : Platform.OS === 'ios'
           ? 136
           : 120;
-  // Только радар Поиска: иначе 120 с Поиска прилипнет к Профилю (136).
-  const centerAvatarSize = radarStage
-    ? lockSearchAvatarSize(myUserId || undefined, rawCenterAvatarSize)
-    : rawCenterAvatarSize;
   const centerAvatarRadius = centerAvatarSize / 2;
   // Толщина рамки одна на все экраны — см. ACTIVE_FRAME_RING_WIDTH.
   // radarFrameOutset больше не участвует: из-за него «Поиск» рисовал 4.5 dp,

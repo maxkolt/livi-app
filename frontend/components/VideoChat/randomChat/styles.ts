@@ -30,11 +30,15 @@ export const styles = StyleSheet.create({
     gap: 8,
     paddingHorizontal: 8,
   },
+  /**
+   * Горизонталь: карточка целиком, а не поверх styles.card. `width: undefined` в
+   * накладываемом стиле RN (old arch) сбрасывал ширину и после поворота обратно не
+   * возвращал '100%' из styles.card — карточки сжимались до ширины текста.
+   */
   cardLandscape: {
+    ...CARD_BASE,
     flex: 1,
     flexBasis: 0,
-    width: undefined,
-    height: undefined,
     minHeight: 0,
   },
   /** Кнопки в карточке: вертикальная полоса у свободного края, размер меньше. */

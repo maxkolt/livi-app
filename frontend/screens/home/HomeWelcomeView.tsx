@@ -77,7 +77,7 @@ let welcomeRevealPlayedThisSession = false;
  * splash (иначе снова onLoad и мигание), но пересчитывается при повороте,
  * раскрытии Fold, split-screen и смене масштаба экрана.
  */
-let lockedWelcomeSearchAvatar: { key: string; size: number } | null = null;
+let lockedWelcomeSearchAvatar: { key: string; size: number; base: number } | null = null;
 
 function HomeWelcomeViewInner({
   styles,
@@ -161,7 +161,15 @@ function HomeWelcomeViewInner({
    */
   const stageWidth = frame.width || layoutWidth;
   const stageHeight = frame.height || layoutHeight;
-  const viewWidth = measured.w > stageWidth * 0.6 ? measured.w : stageWidth;
+  /**
+   * Замер принимаем, только если он соответствует текущему окну — и снизу, и сверху.
+   * Сразу после поворота onLayout ещё отдаёт размеры прежней ориентации: портретная
+   * высота в landscape проходила нижнюю границу, радар считался почти вдвое выше
+   * реального, и аватар закрывал кольца.
+   */
+  const fitsExpected = (value: number, expected: number, max: number) =>
+    value > expected * 0.6 && value <= expected * max;
+  const viewWidth = fitsExpected(measured.w, stageWidth, 1.05) ? measured.w : stageWidth;
   const isTabletLayout = isWelcomeTabletLayout(stageWidth, stageHeight);
   const isPhone = resolveIsPhone(stageWidth, stageHeight);
   const isLandscape = resolveIsLandscape(stageWidth, stageHeight);
@@ -192,7 +200,7 @@ function HomeWelcomeViewInner({
     (isTabletLayout ? 60 : splitStage ? 46 : 52) +
     Math.max(insets.bottom, Platform.OS === 'android' ? 6 : 2);
   const expectedPaneH = Math.max(160, stageHeight - insets.top - estimatedTabBar);
-  const viewHeight = measured.h > expectedPaneH * 0.6 ? measured.h : expectedPaneH;
+  const viewHeight = fitsExpected(measured.h, expectedPaneH, 1.3) ? measured.h : expectedPaneH;
 
   /** Баннер сверху, CTA снизу; радар центрируется в оставшемся зазоре. */
   const space = {
@@ -231,8 +239,14 @@ function HomeWelcomeViewInner({
    * и такой замер застревал в состоянии — радар оставался сжатым навсегда.
    */
   const expectedStageH = Math.max(150, viewHeight - estimatedChrome);
-  const stageW = stageBox.w > viewWidth * 0.6 ? stageBox.w : viewWidth;
-  const stageH = stageBox.h > expectedStageH * 0.6 ? stageBox.h : expectedStageH;
+  const stageW = fitsExpected(stageBox.w, viewWidth, 1.05) ? stageBox.w : viewWidth;
+  const stageH = fitsExpected(stageBox.h, expectedStageH, 1.5) ? stageBox.h : expectedStageH;
+  /** Все замеры либо ещё не пришли (первый кадр по оценке), либо уже от текущего окна. */
+  const geometryFresh =
+    (!(measured.w > 0) || viewWidth === measured.w) &&
+    (!(measured.h > 0) || viewHeight === measured.h) &&
+    (!(stageBox.w > 0) || stageW === stageBox.w) &&
+    (!(stageBox.h > 0) || stageH === stageBox.h);
 
   /**
    * Сцена настолько низкая (split-screen, совсем маленькие экраны), что радар с
@@ -261,12 +275,12 @@ function HomeWelcomeViewInner({
    * Жёсткий потолок по высоте: больше этого радар не влезет ни при каких условиях.
    * В стеке под ним ещё CTA, в строке кнопка сбоку — нужен только зазор.
    */
-  // 0.78 вместо «минус пара пикселей»: радар не должен касаться баннера онлайн
-  // сверху и таб-бара снизу — между ними нужен видимый воздух.
-  const radarHeightLimit = splitStage ? stageH * 0.78 : stageH - stageCopyReserve;
+  // У рисунка есть внутреннее свободное поле за внешней орбитой, поэтому в
+  // landscape контейнер может быть немного больше колонки без обрезки колец.
+  const radarHeightLimit = splitStage ? stageH * 1.1 : stageH - stageCopyReserve;
   /** Желаемый размер по ширине — им управляет дизайн, а не теснота экрана. */
   const radarPreferred = splitStage
-    ? Math.min(radarSlotWidth * 0.9, isTabletLayout ? 340 : 248)
+    ? Math.min(radarSlotWidth * 1.1, isTabletLayout ? 480 : 360)
     : isTabletLayout
       ? Math.min(stageW * 0.62, 560)
       : searchPhoneRadarPreferred(stageW, compactLayout);
@@ -277,21 +291,20 @@ function HomeWelcomeViewInner({
    */
   const radarSize = Math.round(Math.max(96, Math.min(radarPreferred, Math.max(96, radarHeightLimit))));
 
-  // Базовый аватар для раскладки колец; визуально больше на ⅓ ширины 1-го кольца (перекрывает его).
-  // В стеке размеры те же, что были до адаптива, — вертикальная раскладка не меняется.
-  // Потолок 0.42 от радара нужен только для экранов, где сам радар ужался.
-  // На широком телефоне и планшете аватар растёт вместе с радаром.
+  // Базовый аватар для раскладки колец. Во всех ориентациях используем одну
+  // пропорцию: landscape отличается только меньшим общим диаметром радара.
+  // Так центральный аватар не съедает внутренние орбиты на низком экране.
   const stackAvatarBase = isTabletLayout
     ? 136 * Math.max(1, radarSize / 380)
     : (viewWidth < 400 ? 112 : 124) * searchPhoneScale(viewWidth);
-  const welcomeAvatarBase = Math.round(
-    splitStage
-      ? Math.max(54, Math.min(128, radarSize * 0.487))
-      : Math.min(stackAvatarBase, radarSize * 0.42),
-  );
+  const welcomeAvatarBase = Math.round(Math.min(stackAvatarBase, radarSize * 0.42));
   const welcomeAvatarRadius = Math.round(welcomeAvatarBase / 2);
-  /** Сжатие орбит к центру — одно значение и для геометрии колец, и для аватара. */
-  const orbitScale = splitStage ? 0.72 : 1;
+  /**
+   * Не сжимаем орбиты в landscape: сам радар уже ограничен высотой сцены, а
+   * дополнительный коэффициент 0.72 делал четыре полосы слишком узкими и они
+   * визуально слипались вокруг крупного центрального аватара.
+   */
+  const orbitScale = 1;
   const welcomeAvatarGeometry = (() => {
     const half = radarSize / 2;
     const avatarOuter = welcomeAvatarRadius + 2;
@@ -301,14 +314,6 @@ function HomeWelcomeViewInner({
     // Рамка начинается у края фотографии, проходит через служебный зазор 2 px
     // и перекрывает только внутреннюю часть первой орбиты.
     const frameOutset = 2 + firstRingWidth * 0.22;
-    if (splitStage) {
-      // Аватар доходит почти до первой орбиты: она становится уже, аватар крупнее,
-      // остальные кольца остаются на своих радиусах.
-      return {
-        avatarSize: Math.round((avatarOuter + firstRingWidth - 1) * 2),
-        frameOutset,
-      };
-    }
     return {
       avatarSize: Math.round(welcomeAvatarBase + (firstRingWidth * 2) / 3),
       frameOutset,
@@ -317,11 +322,15 @@ function HomeWelcomeViewInner({
   const welcomeAvatarSizeRaw = welcomeAvatarGeometry.avatarSize;
   // Module-level: ref сбрасывался при remount после splash → снова 114 и onLoad.
   const avatarLockKey = `${Math.round(stageWidth)}x${Math.round(stageHeight)}`;
-  if (welcomeAvatarSizeRaw > 0 && lockedWelcomeSearchAvatar?.key !== avatarLockKey) {
-    lockedWelcomeSearchAvatar = { key: avatarLockKey, size: welcomeAvatarSizeRaw };
+  // Промежуточный кадр поворота не закрепляем — иначе неверный размер держится до перезапуска.
+  if (welcomeAvatarSizeRaw > 0 && geometryFresh && lockedWelcomeSearchAvatar?.key !== avatarLockKey) {
+    lockedWelcomeSearchAvatar = { key: avatarLockKey, size: welcomeAvatarSizeRaw, base: welcomeAvatarBase };
   }
-  const welcomeAvatarSize =
-    lockedWelcomeSearchAvatar?.key === avatarLockKey ? lockedWelcomeSearchAvatar.size : welcomeAvatarSizeRaw;
+  const avatarLock =
+    geometryFresh && lockedWelcomeSearchAvatar?.key === avatarLockKey ? lockedWelcomeSearchAvatar : null;
+  const welcomeAvatarSize = avatarLock ? avatarLock.size : welcomeAvatarSizeRaw;
+  /** Аватар с рамкой (radarFramedAvatarSize) держим так же, иначе у него мигание осталось бы. */
+  const welcomeFramedAvatarSize = avatarLock ? avatarLock.base : welcomeAvatarBase;
   const welcomeFrameOutset = welcomeAvatarGeometry.frameOutset;
 
   const cancelBurst = useCallback(() => {
@@ -487,7 +496,7 @@ function HomeWelcomeViewInner({
                 dense={splitStage}
                 radarStage
                 radarAvatarSize={welcomeAvatarSize}
-                radarFramedAvatarSize={welcomeAvatarBase}
+                radarFramedAvatarSize={welcomeFramedAvatarSize}
                 radarFrameOutset={welcomeFrameOutset}
                 menuChromeBg={menuChromeBg}
                 {...centerProfile}
@@ -621,9 +630,9 @@ const welcomeStyles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  /** Подъём радара в строке. Запас по высоте ~26, так что за границу не уходит. */
+  /** Увеличенный радар слегка поднимаем относительно центра landscape-колонки. */
   radarShift: {
-    marginTop: -12,
+    marginTop: -8,
   },
   ctaWrap: {
     alignSelf: 'stretch',

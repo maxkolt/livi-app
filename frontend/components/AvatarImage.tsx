@@ -10,21 +10,12 @@ import { useUserActiveFrame } from '../utils/cosmetics';
 import { logger } from '../utils/logger';
 
 /**
- * Лок размера/file URI для крупного аватара Поиска.
- * Родитель после splash меняет size 120→114 и снова кидает data: —
- * без модуля ExpoImage пересоздаётся (логи: второй image-onLoad).
+ * Лок file URI для крупного аватара Поиска: после splash родитель снова кидает
+ * data: — без модуля ExpoImage пересоздаётся (логи: второй image-onLoad).
+ * Размер здесь не лочится: его держит HomeWelcomeView на геометрию окна. Лок на
+ * пользователя оставлял портретный размер в landscape, и фото закрывало кольца.
  */
-const searchAvatarSizeByUser = new Map<string, number>();
 const searchAvatarFileByKey = new Map<string, string>();
-
-export function lockSearchAvatarSize(userId: string | undefined, size: number): number {
-  const rounded = Math.round(size);
-  if (!userId || rounded < 90) return rounded;
-  const prev = searchAvatarSizeByUser.get(userId);
-  if (prev && prev > 0) return prev;
-  searchAvatarSizeByUser.set(userId, rounded);
-  return rounded;
-}
 
 function searchAvatarFileKey(userId?: string, avatarVer?: number): string {
   if (!userId || !(avatarVer && avatarVer > 0)) return '';
@@ -246,9 +237,7 @@ const AvatarImage = memo<AvatarImageProps>(({
    * раскладка округляют по-разному, и кольцо переставало совпадать с краем
    * фотографии на доли пикселя, которые складывались в заметное смещение.
    */
-  const photoSize = onDisplayLoad
-    ? lockSearchAvatarSize(userId, size)
-    : Math.round(size);
+  const photoSize = Math.round(size);
   const ringWidth = activeFrameRingWidth(photoSize);
   const outerSize = hasActiveFrame ? photoSize + ringWidth * 2 : photoSize;
   const outerRadius = outerSize / 2;

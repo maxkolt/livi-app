@@ -20,6 +20,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
 import androidx.activity.OnBackPressedCallback
+import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 
@@ -32,6 +33,7 @@ import expo.modules.ReactActivityDelegateWrapper
 
 class MainActivity : ReactActivity() {
   private var lastReportedImeInset = -1
+  private var navBarOnSide: Boolean? = null
 
   /**
    * Exposes the platform's actual IME inset to JS. This avoids screen-coordinate
@@ -40,6 +42,7 @@ class MainActivity : ReactActivity() {
   private fun observeImeInsets() {
     val root = window?.decorView ?: return
     fun reportImeInsets(insets: WindowInsetsCompat) {
+      reportNavBarSideInsets(insets)
       val imeVisible = insets.isVisible(WindowInsetsCompat.Type.ime())
       val imeInsetPx = if (imeVisible) {
         insets.getInsets(WindowInsetsCompat.Type.ime()).bottom
@@ -65,6 +68,21 @@ class MainActivity : ReactActivity() {
       ViewCompat.getRootWindowInsets(root)?.let(::reportImeInsets)
     }
     ViewCompat.requestApplyInsets(root)
+  }
+
+  /**
+   * В landscape панель с кнопками стоит сбоку, и RN-контент под неё не заходит — там
+   * виден фон окна (#0A0C14), светлее строки состояния с затемнением SystemBarsScrim.
+   * Пока панель сбоку, красим фон окна в цвет строки состояния, чтобы панели совпадали.
+   */
+  private fun reportNavBarSideInsets(insets: WindowInsetsCompat) {
+    val nav = insets.getInsets(WindowInsetsCompat.Type.navigationBars())
+    val onSide = nav.left > 0 || nav.right > 0
+    if (onSide == navBarOnSide) return
+    navBarOnSide = onSide
+    window?.decorView?.setBackgroundColor(
+      if (onSide) SIDE_NAV_BAR_COLOR else ContextCompat.getColor(this, R.color.window_background),
+    )
   }
 
   private var lastKnownOrientation = Configuration.ORIENTATION_UNDEFINED
@@ -1430,6 +1448,9 @@ class MainActivity : ReactActivity() {
     /** Последний MainActivity в onResume — для закрытия system PiP при call:ended, когда currentActivity == null. */
     @JvmField
     var lastResumedInstance: MainActivity? = null
+
+    /** Цвет строки состояния в landscape: SystemBarsScrim (70% чёрного) поверх фона приложения. */
+    private val SIDE_NAV_BAR_COLOR = Color.rgb(5, 8, 10)
 
     /** Текущий экземпляр (singleTask): пока Activity под IncomingCallActivity, lastResumedInstance ещё пуст. */
     @Volatile

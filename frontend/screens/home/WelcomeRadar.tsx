@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef } from 'react';
 import { Animated, Easing, StyleSheet, View } from 'react-native';
 import Svg, { Circle, Defs, Mask, RadialGradient, Stop } from 'react-native-svg';
-import { AURA_GLOW, AURA_GRADIENT } from './constants';
+import { AURA_GRADIENT } from './constants';
 
 type WelcomeRadarProps = {
   size: number;
@@ -84,86 +84,6 @@ function computeRingRadii(half: number, avatarR: number, orbitScale: number): nu
   return [r1, r2, r3, r4];
 }
 
-/** Час на циферблате → угол для SVG (0° = 3h, по часовой). */
-function clockHourToDeg(hour: number): number {
-  return hour * 30 - 90;
-}
-
-/**
- * По одной точке на орбите r1…r4 — стартовые позиции как на макете: 11h, 8h, 5h, 2h.
- *
- * Периоды намеренно взаимно непериодичные (простые числа секунд): кратные периоды
- * через круг-другой снова сходятся в исходный узор, и движение начинает читаться
- * как заведённый механизм. С 37/43/53/61 точки не повторяют взаимное расположение
- * часами, и вращение выглядит хаотичным.
- *
- * dir — направление: соседние орбиты крутятся встречно, так заметнее, что кольца
- * независимы друг от друга, а не вращается вся картинка целиком.
- */
-/**
- * Направление жёстко закреплено за орбитой и чередуется от центра наружу:
- * 1-я против часовой, 2-я по, 3-я против, 4-я по. Встречное движение соседей
- * читается как независимые кольца, а не как поворот всей картинки целиком,
- * поэтому разыгрывать его случайно нельзя — иногда выпадали бы две соседние
- * орбиты в одну сторону, и эффект пропадал.
- */
-const DOT_SPECS: ReadonlyArray<{ ring: number; hour: number; r: number; dir: 1 | -1 }> = [
-  { ring: 0, hour: 11, r: 2.7, dir: -1 },
-  { ring: 1, hour: 8, r: 2.7, dir: 1 },
-  { ring: 2, hour: 5, r: 2.7, dir: -1 },
-  { ring: 3, hour: 2, r: 2.7, dir: 1 },
-];
-
-/** Самый быстрый оборот. Быстрее точки читаются как индикатор загрузки. */
-const ORBIT_FASTEST_SECONDS = 37;
-/** Самый медленный — движение едва заметно боковым зрением. */
-const ORBIT_SLOWEST_SECONDS = 150;
-/** Минимальный разрыв между самой быстрой и самой медленной орбитой. */
-const ORBIT_MIN_SPREAD_SECONDS = 55;
-/** Минимальный разрыв между любыми двумя соседними по скорости орбитами. */
-const ORBIT_MIN_GAP_SECONDS = 14;
-
-/**
- * Периоды вращения: каждая орбита получает свой, независимо от остальных.
- *
- * Раньше здесь были жёсткие множители от общей базы — соотношение скоростей
- * всегда оставалось одним и тем же, менялся только общий темп. Это выглядело
- * упорядоченно, а не хаотично.
- *
- * Разброс проверяется и при необходимости переразыгрывается: случайные числа
- * иногда сбиваются в кучу, и тогда все четыре точки идут почти одинаково — а это
- * читается как один вращающийся слой вместо четырёх независимых.
- *
- * Значения дробные намеренно. Кратные периоды через круг-другой снова сходятся
- * в исходный узор, и движение начинает выглядеть как заведённый механизм.
- */
-function orbitSpinSeconds(count: number): number[] {
-  const span = ORBIT_SLOWEST_SECONDS - ORBIT_FASTEST_SECONDS;
-  for (let attempt = 0; attempt < 12; attempt += 1) {
-    const seconds = Array.from(
-      { length: count },
-      () => ORBIT_FASTEST_SECONDS + Math.random() * span,
-    );
-    const sorted = [...seconds].sort((a, b) => a - b);
-    const spreadOk = sorted[sorted.length - 1] - sorted[0] >= ORBIT_MIN_SPREAD_SECONDS;
-    // Общего разброса мало: две орбиты могут выпасть почти одинаковыми внутри
-    // него, и тогда их точки идут парой — выглядит как сбой, а не как хаос.
-    const gapsOk = sorted.every((v, i) => i === 0 || v - sorted[i - 1] >= ORBIT_MIN_GAP_SECONDS);
-    if (spreadOk && gapsOk) return seconds;
-  }
-  // Крайний случай: раскладываем равномерно по диапазону — так разрывы заведомо
-  // одинаковые и максимально возможные — и перемешиваем по орбитам.
-  const fallback = Array.from(
-    { length: count },
-    (_, i) => ORBIT_FASTEST_SECONDS + (span * i) / Math.max(1, count - 1),
-  );
-  for (let i = fallback.length - 1; i > 0; i -= 1) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [fallback[i], fallback[j]] = [fallback[j], fallback[i]];
-  }
-  return fallback;
-}
-
 function buildCenterHaloStops(avatarOuter: number, haloR: number): Array<{ offset: number; color: string; opacity: number }> {
   const avatarT = Math.min(0.98, avatarOuter / haloR);
   return [
@@ -194,7 +114,7 @@ export function WelcomeRadar({ size, avatarRadius, orbitScale = 1, children }: W
    * Раньше радар измерял себя сам и принимал любое положительное значение. При
    * возврате из фона RN отдаёт промежуточные замеры, каждый чуть больше
    * предыдущего; они закреплялись, и радиусы орбит ползли вверх от цикла к
-   * циклу — 205 → 209 → 213 → 215. Точки при этом дёргались.
+   * циклу — 205 → 209 → 213 → 215.
    */
   const s = size;
   const cx = s / 2;
@@ -243,55 +163,7 @@ export function WelcomeRadar({ size, avatarRadius, orbitScale = 1, children }: W
     ];
   }, [lastBand, outerSoftPad, outerSoftR]);
 
-  /** Скорости разыгрываются один раз на монтирование. */
-  const spinConfig = useRef(orbitSpinSeconds(DOT_SPECS.length)).current;
-
-  /**
-   * По значению на орбиту. Количество орбит фиксировано, так что ref с массивом
-   * создаётся один раз и переживает перерисовки от layout/размера — иначе каждый
-   * ресайз сбрасывал бы точки в стартовые позиции.
-   */
-  const spins = useRef(DOT_SPECS.map(() => new Animated.Value(0))).current;
   const ripples = useRef(RIPPLE_SPECS.map(() => new Animated.Value(0))).current;
-  /**
-   * Interpolate один раз: на каждом рендере новый узел + Animated.loop(0→1)
-   * давали скачок точек (сброс угла / отвал native driver).
-   */
-  const spinRotates = useRef(
-    spins.map((spin, i) => {
-      const startDeg = clockHourToDeg(DOT_SPECS[i].hour);
-      const dir = DOT_SPECS[i].dir;
-      return spin.interpolate({
-        inputRange: [0, 1],
-        outputRange: [`${startDeg}deg`, `${startDeg + 360 * dir}deg`],
-        extrapolate: 'extend',
-      });
-    }),
-  ).current;
-  /** Доли радиусов орбит — масштабируются с size без прыжков. */
-  const stableDotFracsRef = useRef<number[] | null>(null);
-  if (!stableDotFracsRef.current && half > 0) {
-    stableDotFracsRef.current = ringRadii.map((r) => r / half);
-  }
-  const dotFracs = stableDotFracsRef.current;
-
-  useEffect(() => {
-    // loop 0→1 безопасен при стабильном interpolate (кэш выше).
-    // Раньше duration на 1e5 оборотов переполнял int32 и приложение зависало.
-    const loops = spins.map((value, i) => {
-      value.setValue(0);
-      return Animated.loop(
-        Animated.timing(value, {
-          toValue: 1,
-          duration: Math.round(spinConfig[i] * 1000),
-          easing: Easing.linear,
-          useNativeDriver: true,
-        }),
-      );
-    });
-    loops.forEach((loop) => loop.start());
-    return () => loops.forEach((loop) => loop.stop());
-  }, [spins, spinConfig]);
 
   useEffect(() => {
     let stopped = false;
@@ -325,15 +197,6 @@ export function WelcomeRadar({ size, avatarRadius, orbitScale = 1, children }: W
   const uid = Math.round(s);
   const haloGradId = `radarCenterHalo-${uid}`;
   const outerSoftGradId = `radarOuterSoft-${uid}`;
-
-  const stableDots = useMemo(() => {
-    if (!dotFracs) return [];
-    return DOT_SPECS.map((spec, i) => ({
-      key: i,
-      orbitR: (dotFracs[spec.ring] ?? dotFracs[0]) * half,
-      r: spec.r,
-    }));
-  }, [dotFracs, half]);
 
   return (
     <View style={[styles.wrap, { width: s, height: s }]}>
@@ -382,46 +245,6 @@ export function WelcomeRadar({ size, avatarRadius, orbitScale = 1, children }: W
           <Circle cx={cx} cy={cy} r={outerSoftR} fill={`url(#${outerSoftGradId})`} />
         ) : null}
       </Svg>
-
-      {/*
-        Точки вынесены из SVG в отдельные слои: вращение идёт через transform на
-        нативном драйвере, без пересчёта координат в JS на каждый кадр.
-      */}
-      {stableDots.map((d) => {
-        const glowR = d.r + 3;
-        return (
-          <Animated.View
-            key={d.key}
-            pointerEvents="none"
-            style={[StyleSheet.absoluteFill, { transform: [{ rotate: spinRotates[d.key] }] }]}
-          >
-            <View
-              style={{
-                position: 'absolute',
-                left: cx + d.orbitR - glowR,
-                top: cy - glowR,
-                width: glowR * 2,
-                height: glowR * 2,
-                borderRadius: glowR,
-                backgroundColor: AURA_GLOW,
-                opacity: 0.16,
-              }}
-            />
-            <View
-              style={{
-                position: 'absolute',
-                left: cx + d.orbitR - d.r,
-                top: cy - d.r,
-                width: d.r * 2,
-                height: d.r * 2,
-                borderRadius: d.r,
-                backgroundColor: AURA_GRADIENT[2],
-                opacity: 0.88,
-              }}
-            />
-          </Animated.View>
-        );
-      })}
 
       {/* Рябь: разные периоды + мягкий край линии (несколько слоёв). */}
       {ripples.map((value, i) => {

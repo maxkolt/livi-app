@@ -90,7 +90,6 @@ type HubMetrics = {
   gapAboveDelete: number;
   /** «Удалить профиль» → таб-бар. */
   gapBottom: number;
-  deleteHeight: number;
   rowHeight: number;
   listGap: number;
   /** Даже на минимумах не помещается — отдаём скролл. */
@@ -104,7 +103,6 @@ type HubMetricsPreset = {
   gapUnderAvatar: number;
   gapAboveDelete: number;
   gapBottom: number;
-  deleteHeight: number;
   rowMax: number;
   rowMin: number;
   gapMax: number;
@@ -118,7 +116,6 @@ const HUB_PRESET_PHONE: HubMetricsPreset = {
   gapUnderAvatar: 14,
   gapAboveDelete: 10,
   gapBottom: 14,
-  deleteHeight: 40,
   rowMax: 48,
   rowMin: 40,
   gapMax: 12,
@@ -128,11 +125,11 @@ const HUB_PRESET_PHONE: HubMetricsPreset = {
 const HUB_PRESET_PHONE_LANDSCAPE: HubMetricsPreset = {
   avatarSize: 80,
   cameraBtnSize: 32,
-  gapTop: -8,
+  // Не отрицательный: шапки в landscape нет, и аватар уходил под строку состояния.
+  gapTop: 2,
   gapUnderAvatar: 12,
   gapAboveDelete: 4,
   gapBottom: 6,
-  deleteHeight: 20,
   rowMax: 42,
   rowMin: 30,
   gapMax: 8,
@@ -146,7 +143,6 @@ const HUB_PRESET_TABLET: HubMetricsPreset = {
   gapUnderAvatar: 20,
   gapAboveDelete: 12,
   gapBottom: 18,
-  deleteHeight: 46,
   rowMax: 56,
   rowMin: 48,
   gapMax: 16,
@@ -160,7 +156,6 @@ const HUB_PRESET_TABLET_LANDSCAPE: HubMetricsPreset = {
   gapUnderAvatar: 14,
   gapAboveDelete: 8,
   gapBottom: 14,
-  deleteHeight: 42,
   rowMax: 54,
   rowMin: 44,
   gapMax: 14,
@@ -209,7 +204,6 @@ function scaleHubPreset(preset: HubMetricsPreset, k: number): HubMetricsPreset {
     gapUnderAvatar: r(preset.gapUnderAvatar),
     gapAboveDelete: r(preset.gapAboveDelete),
     gapBottom: r(preset.gapBottom),
-    deleteHeight: r(preset.deleteHeight),
     rowMax: r(preset.rowMax),
     gapMax: r(preset.gapMax),
   };
@@ -236,9 +230,10 @@ function resolveHubMetrics(
     AVATAR_RING_WIDTH * 2 +
     preset.gapUnderAvatar +
     preset.gapAboveDelete +
-    preset.deleteHeight +
     preset.gapBottom;
-  const rows = hubRowsPerColumn(twoColumns);
+  // «Удалить профиль» — такая же строка высотой rowHeight. Раньше на неё закладывали
+  // фиксированные 20–40 dp при реальных 40–48, и в landscape она уезжала под таб-бар.
+  const rows = hubRowsPerColumn(twoColumns) + 1;
   const gaps = Math.max(0, hubSectionRows(twoColumns) - 1);
   const listBudget = Math.max(0, paneHeight - fixed);
   const maxTotal = rows * preset.rowMax + gaps * preset.gapMax;

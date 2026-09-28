@@ -1651,7 +1651,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
         >
         {/* Карточка "Собеседник" — ref для модерации (проверяем партнёра, не себя) */}
         <View
-          style={[styles.card, isLandscape && styles.cardLandscape]}
+          style={isLandscape ? styles.cardLandscape : styles.card}
           ref={remoteModerationTargetRef}
           collapsable={false}
         >
@@ -1858,7 +1858,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
         
         {/* Карточка "Вы" */}
         <View
-          style={[styles.card, isLandscape && styles.cardLandscape]}
+          style={isLandscape ? styles.cardLandscape : styles.card}
           collapsable={false}
         >
           {(() => {
