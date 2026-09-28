@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <string name="incoming_call_title">Входящий вызов</string>
+  <string name="incoming_call_title_audio">Входящий вызов</string>
+  <string name="incoming_call_unknown">Кто-то звонит</string>
+  <string name="incoming_call_accept">Принять</string>
+  <string name="incoming_call_decline">Отклонить</string>
+  <string name="outgoing_call_title">Исходящий видеозвонок</string>
+  <string name="outgoing_call_subtitle">Вызов…</string>
+  <string name="outgoing_call_subtitle_base">Вызов</string>
+  <string name="outgoing_call_subtitle_base_audio">Звонок</string>
+  <string name="outgoing_call_cancel">Отменить</string>
+  <string name="outgoing_call_notification_channel">Исходящий вызов</string>
+  <string name="outgoing_call_notification_title">LiVi — вызов</string>
+  <string name="pip_action_end_call">Завершить</string>
+  <string name="pip_action_audio_call">Аудио</string>
+  <string name="pip_action_audio_call_desc">На экран аудиозвонка</string>
+  <string name="active_call_notification_channel">Вызов</string>
+  <string name="active_call_notification_title">Вызов</string>
+  <string name="active_call_notification_title_from">Вызов от %s</string>
+  <string name="active_call_notification_title_someone">Вызов от кого-то</string>
+  <string name="active_call_notification_text">Нажмите, чтобы вернуться к вызову</string>
+  <string name="active_audio_call_notification_channel">Вызов</string>
+  <string name="active_audio_call_notification_title_from">Вызов от %s</string>
+  <string name="active_audio_call_notification_title_someone">Вызов от кого-то</string>
+  <string name="active_audio_call_notification_text">Нажмите, чтобы вернуться к вызову</string>
+  <string name="missed_call_title">Пропущенный вызов</string>
+  <string name="missed_call_video">Пропущенный вызов</string>
+  <string name="missed_call_from">От %s</string>
+  <string name="notification_new_message">Новое сообщение</string>
+  <string name="summary_missed_calls_title">Пропущенные вызовы</string>
+  <string name="summary_unread_title">Непрочитанные сообщения</string>
+  <string name="summary_unread_from_time">От %1$s в %2$s</string>
+  <plurals name="summary_missed_calls_count">
+    <item quantity="one">%d пропущенный вызов</item>
+    <item quantity="few">%d пропущенных вызова</item>
+    <item quantity="many">%d пропущенных вызовов</item>
+    <item quantity="other">%d пропущенного вызова</item>
+  </plurals>
+  <plurals name="summary_unread_count">
+    <item quantity="one">%d непрочитанное сообщение</item>
+    <item quantity="few">%d непрочитанных сообщения</item>
+    <item quantity="many">%d непрочитанных сообщений</item>
+    <item quantity="other">%d непрочитанного сообщения</item>
+  </plurals>
+</resources>

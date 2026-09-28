@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <string name="incoming_call_title">Eingehender Anruf</string>
+  <string name="incoming_call_title_audio">Eingehender Anruf</string>
+  <string name="incoming_call_unknown">Jemand ruft an</string>
+  <string name="incoming_call_accept">Annehmen</string>
+  <string name="incoming_call_decline">Ablehnen</string>
+  <string name="outgoing_call_title">Ausgehender Videoanruf</string>
+  <string name="outgoing_call_subtitle">Wird angerufen…</string>
+  <string name="outgoing_call_subtitle_base">Wird angerufen</string>
+  <string name="outgoing_call_subtitle_base_audio">Wird angerufen</string>
+  <string name="outgoing_call_cancel">Abbrechen</string>
+  <string name="outgoing_call_notification_channel">Ausgehender Anruf</string>
+  <string name="outgoing_call_notification_title">LiVi — Anruf</string>
+  <string name="pip_action_end_call">Beenden</string>
+  <string name="pip_action_audio_call">Audio</string>
+  <string name="pip_action_audio_call_desc">Zum Audioanruf wechseln</string>
+  <string name="active_call_notification_channel">Laufender Anruf</string>
+  <string name="active_call_notification_title">Anruf</string>
+  <string name="active_call_notification_title_from">Anruf mit %s</string>
+  <string name="active_call_notification_title_someone">Laufender Anruf</string>
+  <string name="active_call_notification_text">Tippe, um zum Anruf zurückzukehren</string>
+  <string name="active_audio_call_notification_channel">Laufender Anruf</string>
+  <string name="active_audio_call_notification_title_from">Anruf mit %s</string>
+  <string name="active_audio_call_notification_title_someone">Laufender Anruf</string>
+  <string name="active_audio_call_notification_text">Tippe, um zum Anruf zurückzukehren</string>
+  <string name="missed_call_title">Verpasster Anruf</string>
+  <string name="missed_call_video">Verpasster Anruf</string>
+  <string name="missed_call_from">Von %s</string>
+  <string name="notification_new_message">Neue Nachricht</string>
+  <string name="summary_missed_calls_title">Verpasste Anrufe</string>
+  <string name="summary_unread_title">Ungelesene Nachrichten</string>
+  <string name="summary_unread_from_time">Von %1$s um %2$s</string>
+  <plurals name="summary_missed_calls_count">
+    <item quantity="one">%d verpasster Anruf</item>
+    <item quantity="other">%d verpasste Anrufe</item>
+  </plurals>
+  <plurals name="summary_unread_count">
+    <item quantity="one">%d ungelesene Nachricht</item>
+    <item quantity="other">%d ungelesene Nachrichten</item>
+  </plurals>
+</resources>

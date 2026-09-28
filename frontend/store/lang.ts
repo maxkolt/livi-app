@@ -1,7 +1,19 @@
 // store/lang.ts
+import { NativeModules, Platform } from 'react-native';
 import { create, StateCreator } from 'zustand';
 import type { Lang } from '../utils/i18n';
 import { defaultLang, getSystemLang, loadLang, saveLang, setLangModeSystem } from '../utils/i18n';
+
+/**
+ * Нативные экраны звонка и уведомления показываются и без JS (FCM в убитом
+ * процессе), поэтому фактический язык UI сохраняем в нативные prefs.
+ */
+function syncNativeLang(lang: Lang) {
+  if (Platform.OS !== 'android') return;
+  try {
+    NativeModules.LiviAppModule?.setAppLanguage?.(lang);
+  } catch {}
+}
 
 export interface LangState {
   lang: Lang;
@@ -19,6 +31,7 @@ const creator: StateCreator<LangState> = (set, get) => ({
     try {
       const stored = await loadLang();
       set({ lang: stored, hydrated: true });
+      syncNativeLang(stored);
     } catch {
       set({ hydrated: true });
     }
@@ -27,6 +40,7 @@ const creator: StateCreator<LangState> = (set, get) => ({
   setLang: async (lang) => {
     // обновляем UI сразу
     set({ lang });
+    syncNativeLang(lang);
     try {
       await saveLang(lang);
     } catch {}
@@ -35,6 +49,7 @@ const creator: StateCreator<LangState> = (set, get) => ({
   setSystemLang: async () => {
     const sys = getSystemLang();
     set({ lang: sys });
+    syncNativeLang(sys);
     try {
       await setLangModeSystem();
     } catch {}
@@ -42,4 +57,3 @@ const creator: StateCreator<LangState> = (set, get) => ({
 });
 
 export const useLang = create<LangState>(creator);
-

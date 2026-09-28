@@ -79,6 +79,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
 
         if (typeNorm == "call" && callId != null && from != null) {
             LiviAppModule.saveIncomingCallMeta(this, callId, from, fromNick)
+            MainActivity.markIncomingCallOverLock()
             val hasVideoCall = data["media"]?.trim()?.lowercase() == "video"
             // Пуш «call» пришёл с задержкой (устройство было офлайн): показываем только «Пропущенный вызов», не полноэкранный входящий.
             val CALL_RING_TIMEOUT_MS = 27_000L
@@ -589,7 +590,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             val today = cal.get(Calendar.DAY_OF_YEAR) == now.get(Calendar.DAY_OF_YEAR) && cal.get(Calendar.YEAR) == now.get(Calendar.YEAR)
             val yesterday = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, -1) }
             val wasYesterday = cal.get(Calendar.DAY_OF_YEAR) == yesterday.get(Calendar.DAY_OF_YEAR) && cal.get(Calendar.YEAR) == yesterday.get(Calendar.YEAR)
-            val locale = Locale.getDefault()
+            val locale = AppLocale.locale(this)
             val timeStr = SimpleDateFormat("HH:mm", locale).format(d)
             when {
                 today -> timeStr
@@ -620,7 +621,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             lang == "hi" -> "कल"
             lang == "vi" -> "hôm qua"
             lang == "th" -> "เมื่อวาน"
-            lang == "id" -> "kemarin"
+            lang == "id" || lang == "in" -> "kemarin"
             else -> "yesterday"
         }
     }
@@ -726,7 +727,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
                 val channel = NotificationChannel(
                     CHANNEL_ID_CALLS,
-                    context.getString(R.string.incoming_call_title),
+                    AppLocale.str(context, R.string.incoming_call_title),
                     NotificationManager.IMPORTANCE_HIGH
                 ).apply {
                     val ringtoneUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
@@ -737,35 +738,35 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                     setSound(ringtoneUri, attrs)
                     enableVibration(true)
                     setLockscreenVisibility(Notification.VISIBILITY_PUBLIC)
-                    setDescription(context.getString(R.string.incoming_call_title))
+                    setDescription(AppLocale.str(context, R.string.incoming_call_title))
                 }
                 nm.createNotificationChannel(channel)
 
                 // Визуальный канал: HIGH для heads-up/full-screen, без звука и вибрации уведомления — мелодия и вибрация из кода (системный звонок).
                 val visualChannel = NotificationChannel(
                     CHANNEL_ID_CALLS_VISUAL,
-                    context.getString(R.string.incoming_call_title),
+                    AppLocale.str(context, R.string.incoming_call_title),
                     NotificationManager.IMPORTANCE_HIGH
                 ).apply {
                     setSound(null, null)
                     enableVibration(false)
                     setVibrationPattern(longArrayOf(0))
                     setLockscreenVisibility(Notification.VISIBILITY_PUBLIC)
-                    setDescription(context.getString(R.string.incoming_call_title))
+                    setDescription(AppLocale.str(context, R.string.incoming_call_title))
                 }
                 nm.createNotificationChannel(visualChannel)
 
                 // Тихий канал: без heads-up/звука — только иконка в статус-баре и запись в шторке.
                 val silentChannel = NotificationChannel(
                     CHANNEL_ID_CALLS_SILENT,
-                    context.getString(R.string.incoming_call_title),
+                    AppLocale.str(context, R.string.incoming_call_title),
                     NotificationManager.IMPORTANCE_LOW
                 ).apply {
                     setSound(null, null)
                     enableVibration(false)
                     setVibrationPattern(longArrayOf(0))
                     setLockscreenVisibility(Notification.VISIBILITY_PUBLIC)
-                    setDescription(context.getString(R.string.incoming_call_title))
+                    setDescription(AppLocale.str(context, R.string.incoming_call_title))
                 }
                 nm.createNotificationChannel(silentChannel)
             }
@@ -778,7 +779,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
                 val channel = NotificationChannel(
                     CHANNEL_ID_MISSED_CALL,
-                    context.getString(R.string.missed_call_title),
+                    AppLocale.str(context, R.string.missed_call_title),
                     NotificationManager.IMPORTANCE_HIGH
                 ).apply {
                     setSound(null, null)
@@ -798,7 +799,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
                 val channel = NotificationChannel(
                     CHANNEL_ID_MISSED_CALL_SILENT,
-                    context.getString(R.string.missed_call_title),
+                    AppLocale.str(context, R.string.missed_call_title),
                     NotificationManager.IMPORTANCE_DEFAULT
                 ).apply {
                     setSound(null, null)
@@ -1043,7 +1044,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
                 val channel = NotificationChannel(
                     CHANNEL_ID_UNREAD,
-                    context.getString(R.string.summary_unread_title),
+                    AppLocale.str(context, R.string.summary_unread_title),
                     NotificationManager.IMPORTANCE_HIGH
                 ).apply {
                     val soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
@@ -1066,7 +1067,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
                 val channel = NotificationChannel(
                     CHANNEL_ID_UNREAD_SILENT,
-                    context.getString(R.string.summary_unread_title),
+                    AppLocale.str(context, R.string.summary_unread_title),
                     NotificationManager.IMPORTANCE_DEFAULT
                 ).apply {
                     setSound(null, null)
@@ -1085,8 +1086,8 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             if (allowAlert) ensureMissedCallChannel(context) else ensureMissedCallSilentChannel(context)
             val channelId = if (allowAlert) CHANNEL_ID_MISSED_CALL else CHANNEL_ID_MISSED_CALL_SILENT
             val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            val title = context.getString(R.string.summary_missed_calls_count, total)
-            val body = context.getString(R.string.summary_missed_calls_title)
+            val title = AppLocale.plural(context, R.plurals.summary_missed_calls_count, total, total)
+            val body = AppLocale.str(context, R.string.summary_missed_calls_title)
             val contentIntent = Intent(context, MainActivity::class.java).apply {
                 action = ACTION_OPEN_MISSED_CALLS
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
@@ -1123,8 +1124,8 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
         @JvmStatic
         fun updateSummaryUnreadNotification(context: Context, total: Int, allowAlert: Boolean = false) {
             if (total <= 0) return
-            val title = context.getString(R.string.summary_unread_count, total)
-            val body = context.getString(R.string.summary_unread_title)
+            val title = AppLocale.plural(context, R.plurals.summary_unread_count, total, total)
+            val body = AppLocale.str(context, R.string.summary_unread_title)
             buildAndShowUnreadNotification(context, NOTIFICATION_ID_SUMMARY_UNREAD, title, body, allowAlert, number = total)
         }
 
@@ -1132,9 +1133,9 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
         @JvmStatic
         fun updateSummaryUnreadNotificationWithLast(context: Context, total: Int, lastFromNick: String, timeStr: String, allowAlert: Boolean = false) {
             if (total <= 0) return
-            val title = context.getString(R.string.summary_unread_count, total)
+            val title = AppLocale.plural(context, R.plurals.summary_unread_count, total, total)
             val fromLabel = lastFromNick.trim().ifEmpty { "—" }
-            val body = context.getString(R.string.summary_unread_from_time, fromLabel, timeStr)
+            val body = AppLocale.str(context, R.string.summary_unread_from_time, fromLabel, timeStr)
             buildAndShowUnreadNotification(context, NOTIFICATION_ID_SUMMARY_UNREAD, title, body, allowAlert, number = total)
         }
 
@@ -1160,9 +1161,9 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 val old = existing.notification
                 val extras = old.extras
                 val title = extras?.getCharSequence(Notification.EXTRA_TITLE)?.toString()
-                    ?: context.getString(R.string.summary_unread_title)
+                    ?: AppLocale.str(context, R.string.summary_unread_title)
                 val body = extras?.getCharSequence(Notification.EXTRA_TEXT)?.toString()
-                    ?: context.getString(R.string.summary_unread_count, number)
+                    ?: AppLocale.plural(context, R.plurals.summary_unread_count, number, number)
                 buildAndShowUnreadNotification(
                     context,
                     NOTIFICATION_ID_SUMMARY_UNREAD,
@@ -1216,8 +1217,8 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             }
             if (allowAlert) ensureUnreadChannel(context) else ensureUnreadSilentChannel(context)
             val channelId = if (allowAlert) CHANNEL_ID_UNREAD else CHANNEL_ID_UNREAD_SILENT
-            val safeTitle = title.trim().ifEmpty { context.getString(R.string.summary_unread_title) }
-            val safeBody = body.trim().ifEmpty { context.getString(R.string.notification_new_message) }
+            val safeTitle = title.trim().ifEmpty { AppLocale.str(context, R.string.summary_unread_title) }
+            val safeBody = body.trim().ifEmpty { AppLocale.str(context, R.string.notification_new_message) }
             val contentIntent = Intent(context, MainActivity::class.java).apply {
                 action = ACTION_OPEN_UNREAD_CHAT
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
@@ -1363,8 +1364,8 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 fullScreenIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
-            val title = if (fromNick.isNotEmpty()) fromNick else context.getString(R.string.incoming_call_title)
-            val subtitle = context.getString(R.string.incoming_call_title)
+            val title = if (fromNick.isNotEmpty()) fromNick else AppLocale.str(context, R.string.incoming_call_title)
+            val subtitle = AppLocale.str(context, R.string.incoming_call_title)
             val smallIconRes = getSafeSmallIconRes(context, android.R.drawable.ic_menu_call)
 
             return NotificationCompat.Builder(context, CHANNEL_ID_CALLS_VISUAL)
@@ -1388,10 +1389,10 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
         /** Постоянное уведомление (heads-up): LiVi, имя звонящего, «Входящий видеозвонок». Без кнопок. */
         @JvmStatic
         fun buildIncomingCallNotificationHeadsUpOnly(context: Context, callId: String, from: String, fromNick: String): Notification {
-            val appName = context.getString(R.string.app_name)
-            val callerName = if (fromNick.isNotEmpty()) fromNick else context.getString(R.string.incoming_call_unknown)
+            val appName = AppLocale.str(context, R.string.app_name)
+            val callerName = if (fromNick.isNotEmpty()) fromNick else AppLocale.str(context, R.string.incoming_call_unknown)
             val title = appName
-            val subtitle = "${callerName} — ${context.getString(R.string.incoming_call_title)}"
+            val subtitle = "${callerName} — ${AppLocale.str(context, R.string.incoming_call_title)}"
             val smallIconRes = getSafeSmallIconRes(context, android.R.drawable.ic_menu_call)
 
             val contentIntent = buildIncomingCallActivityIntent(context, callId, from, fromNick)
@@ -1420,8 +1421,8 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
         /** Тихое уведомление входящего: без heads-up, только иконка в статус-баре и запись в шторке. Без кнопок. */
         @JvmStatic
         fun buildIncomingCallNotificationSilent(context: Context, callId: String, from: String, fromNick: String): Notification {
-            val title = if (fromNick.isNotEmpty()) fromNick else context.getString(R.string.incoming_call_title)
-            val subtitle = context.getString(R.string.incoming_call_title)
+            val title = if (fromNick.isNotEmpty()) fromNick else AppLocale.str(context, R.string.incoming_call_title)
+            val subtitle = AppLocale.str(context, R.string.incoming_call_title)
             val smallIconRes = getSafeSmallIconRes(context, android.R.drawable.ic_menu_call)
 
             val contentIntent = buildIncomingCallActivityIntent(context, callId, from, fromNick)

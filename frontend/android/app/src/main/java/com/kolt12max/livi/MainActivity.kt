@@ -14,9 +14,11 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Rational
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowManager
 import androidx.activity.OnBackPressedCallback
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
@@ -718,6 +720,7 @@ class MainActivity : ReactActivity() {
     handleAudioOnlyFromPiPIntent(intent)
     if (tryStashPendingAnswerFromIntent(intent)) {
       pendingAnswerFromIntent = true
+      markIncomingCallOverLock()
     }
     if (tryStashShareFromIntent(intent)) {
       pendingShareFromIntent = true
@@ -741,6 +744,7 @@ class MainActivity : ReactActivity() {
   override fun onResume() {
     super.onResume()
     lastResumedInstance = this
+    applyShowOverLock(shouldShowOverLock())
     isInForeground = true
     // Вернулись в приложение из Недавних — снова обычный режим (без sticky suppress).
     clearRecentsOverviewFlag("onResume")
@@ -1093,6 +1097,8 @@ class MainActivity : ReactActivity() {
       setTheme(R.style.AppTheme)
     }
     super.onCreate(null)
+    liveInstance = this
+    applyShowOverLock(shouldShowOverLock())
     // targetSdk 36: edge-to-edge is enforced; RN SafeAreaProvider pads content.
     EdgeToEdgeHelper.apply(this)
     observeImeInsets()
@@ -1130,6 +1136,7 @@ class MainActivity : ReactActivity() {
     handleAudioOnlyFromPiPIntent(intent)
     if (tryStashPendingAnswerFromIntent(intent)) {
       pendingAnswerFromIntent = true
+      markIncomingCallOverLock()
     }
     if (tryStashShareFromIntent(intent)) {
       pendingShareFromIntent = true
@@ -1207,7 +1214,21 @@ class MainActivity : ReactActivity() {
     }
   }
 
+  private fun applyShowOverLock(show: Boolean) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+      setShowWhenLocked(show)
+      setTurnScreenOn(show)
+    } else {
+      @Suppress("DEPRECATION")
+      val flags = WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+      if (show) window.addFlags(flags) else window.clearFlags(flags)
+    }
+  }
+
   override fun onDestroy() {
+    if (liveInstance === this) {
+      liveInstance = null
+    }
     if (lastResumedInstance === this) {
       lastResumedInstance = null
     }
@@ -1409,6 +1430,46 @@ class MainActivity : ReactActivity() {
     /** Последний MainActivity в onResume — для закрытия system PiP при call:ended, когда currentActivity == null. */
     @JvmField
     var lastResumedInstance: MainActivity? = null
+
+    /** Текущий экземпляр (singleTask): пока Activity под IncomingCallActivity, lastResumedInstance ещё пуст. */
+    @Volatile
+    private var liveInstance: MainActivity? = null
+
+    /**
+     * Поверх экрана блокировки — только пока идёт звонок. Постоянный showWhenLocked
+     * в манифесте открывал чаты на заблокированном телефоне любому, кто его взял.
+     */
+    @Volatile
+    private var overLockActiveCall = false
+
+    /** Входящий звонит или только что принят — пока не поднялся сервис активного звонка. */
+    @Volatile
+    private var overLockIncomingUntil = 0L
+    private const val OVER_LOCK_INCOMING_MS = 60_000L
+
+    private fun shouldShowOverLock(): Boolean =
+      overLockActiveCall || SystemClock.elapsedRealtime() < overLockIncomingUntil
+
+    @JvmStatic
+    fun setOverLockActiveCall(active: Boolean) {
+      overLockActiveCall = active
+      refreshOverLock()
+    }
+
+    @JvmStatic
+    fun markIncomingCallOverLock() {
+      overLockIncomingUntil = SystemClock.elapsedRealtime() + OVER_LOCK_INCOMING_MS
+      refreshOverLock()
+      // Звонок так и не стал активным — по истечении окна снова прячемся за блокировку.
+      Handler(Looper.getMainLooper()).postDelayed({ refreshOverLock() }, OVER_LOCK_INCOMING_MS + 500)
+    }
+
+    private fun refreshOverLock() {
+      val act = liveInstance ?: return
+      if (act.isFinishing || act.isDestroyed) return
+      val show = shouldShowOverLock()
+      act.runOnUiThread { act.applyShowOverLock(show) }
+    }
 
     /** Accept уже нажат — держим крышку даже если Activity ещё не получила intent extra. */
     @JvmField

@@ -89,9 +89,9 @@ class ActiveCallForegroundService : Service() {
         val channelId = if (audioOnly) CHANNEL_ID_AUDIO else CHANNEL_ID
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channelName = if (audioOnly) {
-                getString(R.string.active_audio_call_notification_channel)
+                AppLocale.str(applicationContext, R.string.active_audio_call_notification_channel)
             } else {
-                getString(R.string.active_call_notification_channel)
+                AppLocale.str(applicationContext, R.string.active_call_notification_channel)
             }
             val channel = NotificationChannel(
                 channelId,
@@ -103,20 +103,20 @@ class ActiveCallForegroundService : Service() {
 
         val title = if (audioOnly) {
             if (!partnerNick.isNullOrEmpty()) {
-                getString(R.string.active_audio_call_notification_title_from, partnerNick)
+                AppLocale.str(applicationContext, R.string.active_audio_call_notification_title_from, partnerNick)
             } else {
-                getString(R.string.active_audio_call_notification_title_someone)
+                AppLocale.str(applicationContext, R.string.active_audio_call_notification_title_someone)
             }
         } else if (!partnerNick.isNullOrEmpty()) {
-            getString(R.string.active_call_notification_title_from, partnerNick)
+            AppLocale.str(applicationContext, R.string.active_call_notification_title_from, partnerNick)
         } else {
-            getString(R.string.active_call_notification_title_someone)
+            AppLocale.str(applicationContext, R.string.active_call_notification_title_someone)
         }
 
         val contentText = if (audioOnly) {
-            getString(R.string.active_audio_call_notification_text)
+            AppLocale.str(applicationContext, R.string.active_audio_call_notification_text)
         } else {
-            getString(R.string.active_call_notification_text)
+            AppLocale.str(applicationContext, R.string.active_call_notification_text)
         }
 
         // Dumb return: только «вернуть к звонку». Audio vs video UI решает JS по живому состоянию.

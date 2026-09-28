@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <string name="incoming_call_title">مكالمة واردة</string>
+  <string name="incoming_call_title_audio">مكالمة واردة</string>
+  <string name="incoming_call_unknown">شخص ما يتصل</string>
+  <string name="incoming_call_accept">قبول</string>
+  <string name="incoming_call_decline">رفض</string>
+  <string name="outgoing_call_title">مكالمة فيديو صادرة</string>
+  <string name="outgoing_call_subtitle">جارٍ الاتصال…</string>
+  <string name="outgoing_call_subtitle_base">جارٍ الاتصال</string>
+  <string name="outgoing_call_subtitle_base_audio">جارٍ الاتصال</string>
+  <string name="outgoing_call_cancel">إلغاء</string>
+  <string name="outgoing_call_notification_channel">مكالمة صادرة</string>
+  <string name="outgoing_call_notification_title">LiVi — جارٍ الاتصال</string>
+  <string name="pip_action_end_call">إنهاء</string>
+  <string name="pip_action_audio_call">صوت</string>
+  <string name="pip_action_audio_call_desc">الانتقال إلى شاشة المكالمة الصوتية</string>
+  <string name="active_call_notification_channel">مكالمة جارية</string>
+  <string name="active_call_notification_title">مكالمة</string>
+  <string name="active_call_notification_title_from">مكالمة مع %s</string>
+  <string name="active_call_notification_title_someone">مكالمة جارية</string>
+  <string name="active_call_notification_text">اضغط للعودة إلى المكالمة</string>
+  <string name="active_audio_call_notification_channel">مكالمة جارية</string>
+  <string name="active_audio_call_notification_title_from">مكالمة مع %s</string>
+  <string name="active_audio_call_notification_title_someone">مكالمة جارية</string>
+  <string name="active_audio_call_notification_text">اضغط للعودة إلى المكالمة</string>
+  <string name="missed_call_title">مكالمة فائتة</string>
+  <string name="missed_call_video">مكالمة فائتة</string>
+  <string name="missed_call_from">من %s</string>
+  <string name="notification_new_message">رسالة جديدة</string>
+  <string name="summary_missed_calls_title">المكالمات الفائتة</string>
+  <string name="summary_unread_title">رسائل غير مقروءة</string>
+  <string name="summary_unread_from_time">من %1$s في %2$s</string>
+  <plurals name="summary_missed_calls_count">
+    <item quantity="zero">%d مكالمة فائتة</item>
+    <item quantity="one">مكالمة فائتة واحدة</item>
+    <item quantity="two">مكالمتان فائتتان</item>
+    <item quantity="few">%d مكالمات فائتة</item>
+    <item quantity="many">%d مكالمة فائتة</item>
+    <item quantity="other">%d مكالمة فائتة</item>
+  </plurals>
+  <plurals name="summary_unread_count">
+    <item quantity="zero">%d رسالة غير مقروءة</item>
+    <item quantity="one">رسالة واحدة غير مقروءة</item>
+    <item quantity="two">رسالتان غير مقروءتين</item>
+    <item quantity="few">%d رسائل غير مقروءة</item>
+    <item quantity="many">%d رسالة غير مقروءة</item>
+    <item quantity="other">%d رسالة غير مقروءة</item>
+  </plurals>
+</resources>

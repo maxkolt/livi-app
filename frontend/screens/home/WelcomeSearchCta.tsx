@@ -14,6 +14,7 @@ import {
   SEARCH_CTA_MAX_WIDTH,
   SEARCH_CTA_TABLET_MAX_WIDTH,
   isWelcomeTabletLayout,
+  searchPhoneScale,
   WELCOME_HEADER_TITLE,
   WELCOME_MUTED_TEXT,
 } from './constants';
@@ -33,9 +34,14 @@ const CTA_BORDER_SOFT = 'rgba(0, 181, 255, 0.12)';
  * Высота CTA. Вынесена отдельно, чтобы раскладка Search могла заранее
  * зарезервировать под кнопку ровно столько же, сколько она реально займёт.
  */
-export function welcomeSearchCtaWidth(windowWidth: number, tabletLayout: boolean): number {
+export function welcomeSearchCtaWidth(windowWidth: number, tabletLayout: boolean, windowHeight = 0): number {
   const sideInset = 44;
-  const maxCtaWidth = tabletLayout ? SEARCH_CTA_TABLET_MAX_WIDTH : SEARCH_CTA_MAX_WIDTH;
+  // Широкий телефон — кнопка растёт вместе с радаром. По короткой стороне,
+  // чтобы в landscape колонка кнопки не менялась.
+  const shortSide = windowHeight > 0 ? Math.min(windowWidth, windowHeight) : windowWidth;
+  const maxCtaWidth = tabletLayout
+    ? SEARCH_CTA_TABLET_MAX_WIDTH
+    : Math.round(SEARCH_CTA_MAX_WIDTH * searchPhoneScale(shortSide));
   return Math.min(Math.max(0, windowWidth - sideInset * 2), maxCtaWidth);
 }
 
@@ -70,7 +76,7 @@ export function WelcomeSearchCta({
   const { width: windowWidth, height: windowHeight } = useHomeLayout();
   const tabletLayout = isWelcomeTabletLayout(windowWidth, windowHeight);
   const buttonWidth = Math.min(
-    welcomeSearchCtaWidth(windowWidth, tabletLayout),
+    welcomeSearchCtaWidth(windowWidth, tabletLayout, windowHeight),
     maxWidth && maxWidth > 0 ? maxWidth : Number.POSITIVE_INFINITY,
   );
   const buttonHeight = welcomeSearchCtaHeight(tabletLayout, compact);

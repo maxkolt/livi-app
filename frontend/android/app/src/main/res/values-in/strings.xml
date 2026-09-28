@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <string name="incoming_call_title">Panggilan masuk</string>
+  <string name="incoming_call_title_audio">Panggilan masuk</string>
+  <string name="incoming_call_unknown">Seseorang menelepon</string>
+  <string name="incoming_call_accept">Terima</string>
+  <string name="incoming_call_decline">Tolak</string>
+  <string name="outgoing_call_title">Panggilan video keluar</string>
+  <string name="outgoing_call_subtitle">Memanggil…</string>
+  <string name="outgoing_call_subtitle_base">Memanggil</string>
+  <string name="outgoing_call_subtitle_base_audio">Memanggil</string>
+  <string name="outgoing_call_cancel">Batal</string>
+  <string name="outgoing_call_notification_channel">Panggilan keluar</string>
+  <string name="outgoing_call_notification_title">LiVi — memanggil</string>
+  <string name="pip_action_end_call">Akhiri</string>
+  <string name="pip_action_audio_call">Audio</string>
+  <string name="pip_action_audio_call_desc">Beralih ke layar panggilan suara</string>
+  <string name="active_call_notification_channel">Panggilan berlangsung</string>
+  <string name="active_call_notification_title">Panggilan</string>
+  <string name="active_call_notification_title_from">Panggilan dengan %s</string>
+  <string name="active_call_notification_title_someone">Panggilan berlangsung</string>
+  <string name="active_call_notification_text">Ketuk untuk kembali ke panggilan</string>
+  <string name="active_audio_call_notification_channel">Panggilan berlangsung</string>
+  <string name="active_audio_call_notification_title_from">Panggilan dengan %s</string>
+  <string name="active_audio_call_notification_title_someone">Panggilan berlangsung</string>
+  <string name="active_audio_call_notification_text">Ketuk untuk kembali ke panggilan</string>
+  <string name="missed_call_title">Panggilan tak terjawab</string>
+  <string name="missed_call_video">Panggilan tak terjawab</string>
+  <string name="missed_call_from">Dari %s</string>
+  <string name="notification_new_message">Pesan baru</string>
+  <string name="summary_missed_calls_title">Panggilan tak terjawab</string>
+  <string name="summary_unread_title">Pesan belum dibaca</string>
+  <string name="summary_unread_from_time">Dari %1$s pukul %2$s</string>
+  <plurals name="summary_missed_calls_count">
+    <item quantity="other">%d panggilan tak terjawab</item>
+  </plurals>
+  <plurals name="summary_unread_count">
+    <item quantity="other">%d pesan belum dibaca</item>
+  </plurals>
+</resources>

@@ -159,13 +159,15 @@ class IncomingCallActivity : AppCompatActivity() {
         reportIncomingShownFromNative(callId)
         scheduleIncomingTimeout(callId)
 
-        findViewById<TextView>(R.id.caller_name).text = if (fromNick.isNotEmpty()) fromNick else getString(R.string.incoming_call_unknown)
+        findViewById<TextView>(R.id.caller_name).text = if (fromNick.isNotEmpty()) fromNick else AppLocale.str(applicationContext, R.string.incoming_call_unknown)
         val hasVideo = intent.getBooleanExtra(EXTRA_HAS_VIDEO, true)
         findViewById<TextView>(R.id.call_subtitle).text =
-            getString(if (hasVideo) R.string.incoming_call_title else R.string.incoming_call_title_audio)
+            AppLocale.str(applicationContext, if (hasVideo) R.string.incoming_call_title else R.string.incoming_call_title_audio)
 
         val acceptButton = findViewById<ImageButton>(R.id.btn_accept)
         val declineButton = findViewById<ImageButton>(R.id.btn_decline)
+        acceptButton.contentDescription = AppLocale.str(applicationContext, R.string.incoming_call_accept)
+        declineButton.contentDescription = AppLocale.str(applicationContext, R.string.incoming_call_decline)
         installPressFeedback(acceptButton)
         installPressFeedback(declineButton)
 

@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <string name="incoming_call_title">Chamada recebida</string>
+  <string name="incoming_call_title_audio">Chamada recebida</string>
+  <string name="incoming_call_unknown">Alguém está ligando</string>
+  <string name="incoming_call_accept">Atender</string>
+  <string name="incoming_call_decline">Recusar</string>
+  <string name="outgoing_call_title">Videochamada efetuada</string>
+  <string name="outgoing_call_subtitle">Chamando…</string>
+  <string name="outgoing_call_subtitle_base">Chamando</string>
+  <string name="outgoing_call_subtitle_base_audio">Chamando</string>
+  <string name="outgoing_call_cancel">Cancelar</string>
+  <string name="outgoing_call_notification_channel">Chamada efetuada</string>
+  <string name="outgoing_call_notification_title">LiVi — chamando</string>
+  <string name="pip_action_end_call">Encerrar</string>
+  <string name="pip_action_audio_call">Áudio</string>
+  <string name="pip_action_audio_call_desc">Ir para a tela de chamada de voz</string>
+  <string name="active_call_notification_channel">Chamada em andamento</string>
+  <string name="active_call_notification_title">Chamada</string>
+  <string name="active_call_notification_title_from">Chamada com %s</string>
+  <string name="active_call_notification_title_someone">Chamada em andamento</string>
+  <string name="active_call_notification_text">Toque para voltar à chamada</string>
+  <string name="active_audio_call_notification_channel">Chamada em andamento</string>
+  <string name="active_audio_call_notification_title_from">Chamada com %s</string>
+  <string name="active_audio_call_notification_title_someone">Chamada em andamento</string>
+  <string name="active_audio_call_notification_text">Toque para voltar à chamada</string>
+  <string name="missed_call_title">Chamada perdida</string>
+  <string name="missed_call_video">Chamada perdida</string>
+  <string name="missed_call_from">De %s</string>
+  <string name="notification_new_message">Nova mensagem</string>
+  <string name="summary_missed_calls_title">Chamadas perdidas</string>
+  <string name="summary_unread_title">Mensagens não lidas</string>
+  <string name="summary_unread_from_time">De %1$s às %2$s</string>
+  <plurals name="summary_missed_calls_count">
+    <item quantity="one">%d chamada perdida</item>
+    <item quantity="many">%d chamadas perdidas</item>
+    <item quantity="other">%d chamadas perdidas</item>
+  </plurals>
+  <plurals name="summary_unread_count">
+    <item quantity="one">%d mensagem não lida</item>
+    <item quantity="many">%d mensagens não lidas</item>
+    <item quantity="other">%d mensagens não lidas</item>
+  </plurals>
+</resources>

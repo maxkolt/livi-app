@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <string name="incoming_call_title">इनकमिंग कॉल</string>
+  <string name="incoming_call_title_audio">इनकमिंग कॉल</string>
+  <string name="incoming_call_unknown">कोई कॉल कर रहा है</string>
+  <string name="incoming_call_accept">स्वीकार करें</string>
+  <string name="incoming_call_decline">अस्वीकार करें</string>
+  <string name="outgoing_call_title">आउटगोइंग वीडियो कॉल</string>
+  <string name="outgoing_call_subtitle">कॉल हो रही है…</string>
+  <string name="outgoing_call_subtitle_base">कॉल हो रही है</string>
+  <string name="outgoing_call_subtitle_base_audio">कॉल हो रही है</string>
+  <string name="outgoing_call_cancel">रद्द करें</string>
+  <string name="outgoing_call_notification_channel">आउटगोइंग कॉल</string>
+  <string name="outgoing_call_notification_title">LiVi — कॉल हो रही है</string>
+  <string name="pip_action_end_call">समाप्त करें</string>
+  <string name="pip_action_audio_call">ऑडियो</string>
+  <string name="pip_action_audio_call_desc">ऑडियो कॉल स्क्रीन पर जाएं</string>
+  <string name="active_call_notification_channel">चल रही कॉल</string>
+  <string name="active_call_notification_title">कॉल</string>
+  <string name="active_call_notification_title_from">%s के साथ कॉल</string>
+  <string name="active_call_notification_title_someone">चल रही कॉल</string>
+  <string name="active_call_notification_text">कॉल पर लौटने के लिए टैप करें</string>
+  <string name="active_audio_call_notification_channel">चल रही कॉल</string>
+  <string name="active_audio_call_notification_title_from">%s के साथ कॉल</string>
+  <string name="active_audio_call_notification_title_someone">चल रही कॉल</string>
+  <string name="active_audio_call_notification_text">कॉल पर लौटने के लिए टैप करें</string>
+  <string name="missed_call_title">मिस्ड कॉल</string>
+  <string name="missed_call_video">मिस्ड कॉल</string>
+  <string name="missed_call_from">%s से</string>
+  <string name="notification_new_message">नया संदेश</string>
+  <string name="summary_missed_calls_title">मिस्ड कॉल</string>
+  <string name="summary_unread_title">अपठित संदेश</string>
+  <string name="summary_unread_from_time">%1$s से, %2$s बजे</string>
+  <plurals name="summary_missed_calls_count">
+    <item quantity="one">%d मिस्ड कॉल</item>
+    <item quantity="other">%d मिस्ड कॉल</item>
+  </plurals>
+  <plurals name="summary_unread_count">
+    <item quantity="one">%d अपठित संदेश</item>
+    <item quantity="other">%d अपठित संदेश</item>
+  </plurals>
+</resources>

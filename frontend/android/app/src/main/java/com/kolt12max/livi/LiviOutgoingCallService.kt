@@ -176,7 +176,7 @@ class LiviOutgoingCallService : Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 channelId,
-                getString(R.string.outgoing_call_notification_channel),
+                AppLocale.str(applicationContext, R.string.outgoing_call_notification_channel),
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
                 setShowBadge(true)
@@ -220,11 +220,11 @@ class LiviOutgoingCallService : Service() {
         val title = if (toNick.isNotBlank()) {
             toNick
         } else {
-            getString(R.string.outgoing_call_notification_title)
+            AppLocale.str(applicationContext, R.string.outgoing_call_notification_title)
         }
         return NotificationCompat.Builder(this, channelId)
             .setContentTitle(title)
-            .setContentText(getString(R.string.outgoing_call_notification_title))
+            .setContentText(AppLocale.str(applicationContext, R.string.outgoing_call_notification_title))
             .setSmallIcon(applicationInfo.icon.takeIf { it != 0 } ?: android.R.drawable.ic_menu_call)
             .setContentIntent(pendingIntent)
             .setOngoing(true)

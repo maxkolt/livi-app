@@ -12,6 +12,8 @@ const PushTokenSchema = new mongoose.Schema(
     fcmToken: { type: String, default: '', index: true },
     /** APNs VoIP token (iOS only). Для PushKit/CallKit входящего при фоне/убитом приложении. */
     voipToken: { type: String, default: '', index: true },
+    /** Язык UI устройства для серверных текстов push (utils/pushI18n). Пусто — старая версия приложения. */
+    lang: { type: String, default: '' },
     updatedAtMs: { type: Number, default: () => Date.now(), index: true },
   },
   { timestamps: true }

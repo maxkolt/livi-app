@@ -185,6 +185,11 @@ export const styles = StyleSheet.create({
     top: 10,
     right: 10,
   },
+  bottomRight: {
+    position: 'absolute',
+    bottom: 10,
+    right: 10,
+  },
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.5)',

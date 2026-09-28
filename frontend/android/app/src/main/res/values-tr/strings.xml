@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <string name="incoming_call_title">Gelen arama</string>
+  <string name="incoming_call_title_audio">Gelen arama</string>
+  <string name="incoming_call_unknown">Biri arıyor</string>
+  <string name="incoming_call_accept">Kabul et</string>
+  <string name="incoming_call_decline">Reddet</string>
+  <string name="outgoing_call_title">Giden görüntülü arama</string>
+  <string name="outgoing_call_subtitle">Aranıyor…</string>
+  <string name="outgoing_call_subtitle_base">Aranıyor</string>
+  <string name="outgoing_call_subtitle_base_audio">Aranıyor</string>
+  <string name="outgoing_call_cancel">İptal</string>
+  <string name="outgoing_call_notification_channel">Giden arama</string>
+  <string name="outgoing_call_notification_title">LiVi — aranıyor</string>
+  <string name="pip_action_end_call">Bitir</string>
+  <string name="pip_action_audio_call">Sesli</string>
+  <string name="pip_action_audio_call_desc">Sesli arama ekranına geç</string>
+  <string name="active_call_notification_channel">Devam eden arama</string>
+  <string name="active_call_notification_title">Arama</string>
+  <string name="active_call_notification_title_from">%s ile arama</string>
+  <string name="active_call_notification_title_someone">Devam eden arama</string>
+  <string name="active_call_notification_text">Aramaya dönmek için dokunun</string>
+  <string name="active_audio_call_notification_channel">Devam eden arama</string>
+  <string name="active_audio_call_notification_title_from">%s ile arama</string>
+  <string name="active_audio_call_notification_title_someone">Devam eden arama</string>
+  <string name="active_audio_call_notification_text">Aramaya dönmek için dokunun</string>
+  <string name="missed_call_title">Cevapsız arama</string>
+  <string name="missed_call_video">Cevapsız arama</string>
+  <string name="missed_call_from">Arayan: %s</string>
+  <string name="notification_new_message">Yeni mesaj</string>
+  <string name="summary_missed_calls_title">Cevapsız aramalar</string>
+  <string name="summary_unread_title">Okunmamış mesajlar</string>
+  <string name="summary_unread_from_time">%1$s, %2$s</string>
+  <plurals name="summary_missed_calls_count">
+    <item quantity="one">%d cevapsız arama</item>
+    <item quantity="other">%d cevapsız arama</item>
+  </plurals>
+  <plurals name="summary_unread_count">
+    <item quantity="one">%d okunmamış mesaj</item>
+    <item quantity="other">%d okunmamış mesaj</item>
+  </plurals>
+</resources>

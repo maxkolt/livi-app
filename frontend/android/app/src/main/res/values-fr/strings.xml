@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <string name="incoming_call_title">Appel entrant</string>
+  <string name="incoming_call_title_audio">Appel entrant</string>
+  <string name="incoming_call_unknown">Quelqu\'un vous appelle</string>
+  <string name="incoming_call_accept">Accepter</string>
+  <string name="incoming_call_decline">Refuser</string>
+  <string name="outgoing_call_title">Appel vidéo sortant</string>
+  <string name="outgoing_call_subtitle">Appel en cours…</string>
+  <string name="outgoing_call_subtitle_base">Appel en cours</string>
+  <string name="outgoing_call_subtitle_base_audio">Appel en cours</string>
+  <string name="outgoing_call_cancel">Annuler</string>
+  <string name="outgoing_call_notification_channel">Appel sortant</string>
+  <string name="outgoing_call_notification_title">LiVi — appel en cours</string>
+  <string name="pip_action_end_call">Raccrocher</string>
+  <string name="pip_action_audio_call">Audio</string>
+  <string name="pip_action_audio_call_desc">Passer à l\'écran d\'appel audio</string>
+  <string name="active_call_notification_channel">Appel en cours</string>
+  <string name="active_call_notification_title">Appel</string>
+  <string name="active_call_notification_title_from">Appel avec %s</string>
+  <string name="active_call_notification_title_someone">Appel en cours</string>
+  <string name="active_call_notification_text">Appuyez pour revenir à l\'appel</string>
+  <string name="active_audio_call_notification_channel">Appel en cours</string>
+  <string name="active_audio_call_notification_title_from">Appel avec %s</string>
+  <string name="active_audio_call_notification_title_someone">Appel en cours</string>
+  <string name="active_audio_call_notification_text">Appuyez pour revenir à l\'appel</string>
+  <string name="missed_call_title">Appel manqué</string>
+  <string name="missed_call_video">Appel manqué</string>
+  <string name="missed_call_from">De %s</string>
+  <string name="notification_new_message">Nouveau message</string>
+  <string name="summary_missed_calls_title">Appels manqués</string>
+  <string name="summary_unread_title">Messages non lus</string>
+  <string name="summary_unread_from_time">De %1$s à %2$s</string>
+  <plurals name="summary_missed_calls_count">
+    <item quantity="one">%d appel manqué</item>
+    <item quantity="many">%d appels manqués</item>
+    <item quantity="other">%d appels manqués</item>
+  </plurals>
+  <plurals name="summary_unread_count">
+    <item quantity="one">%d message non lu</item>
+    <item quantity="many">%d messages non lus</item>
+    <item quantity="other">%d messages non lus</item>
+  </plurals>
+</resources>

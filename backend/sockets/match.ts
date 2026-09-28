@@ -6,8 +6,24 @@ import { createToken, getLiveKitUrl } from '../routes/livekit';
 import * as queueStore from '../utils/queueStore';
 import { getFriendIds } from '../utils/friendshipUtils';
 import { scheduleGlobalFriendPresenceEmit } from '../utils/friendOnlinePresence';
+import { checkRateLimit } from '../utils/rateLimit';
+import UserReportModel, { isUserReportReason } from '../models/UserReport';
 
 const MODERATION_BAN_MS = 60 * 60 * 1000; // 1 час
+
+/** После ручной жалобы эта пара пользователей больше не сводится. */
+const REPORT_PAIR_BLOCK_MS = 180 * 24 * 60 * 60 * 1000;
+/** Столько разных пользователей за окно — и на пожаловавшегося накладывается бан. */
+const REPORT_BAN_THRESHOLD = 3;
+const REPORT_BAN_WINDOW_MS = 24 * 60 * 60 * 1000;
+const REPORT_BAN_MS = 24 * 60 * 60 * 1000;
+const REPORT_RATE_LIMIT_MAX = 20;
+const REPORT_RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000;
+
+/** Блокировка пары по userId в том же хранилище, что и rematch-баны по socket id. */
+function reportPairKey(userId: string): string {
+  return `user:${userId}`;
+}
 
 /** Единое время окончания бана на клиенте (не продлевается при повторных start) */
 async function emitModerationBannedToSocket(s: AuthedSocket, userId: string) {
@@ -248,6 +264,14 @@ export async function tryMatch(io: Server, socket: AuthedSocket): Promise<boolea
       cleanedSkipped++;
       continue;
     }
+    // Один пожаловался на другого — эту пару больше не сводим.
+    if (
+      myUserId &&
+      otherUserId &&
+      (await queueStore.isBannedTogether(reportPairKey(myUserId), reportPairKey(otherUserId)))
+    ) {
+      continue;
+    }
     
     // КРИТИЧНО: Друзья могут попадаться в рандомном чате - это нормально и не блокирует работу
     // Проверка на дружбу НЕ выполняется здесь, так как друзья имеют право общаться в рандомном чате
@@ -386,6 +410,40 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
       .finally(() => {
         matchInProgress.delete(target.id);
       });
+  };
+
+  /**
+   * Бан собеседника и выход из пары. moderation:banned → клиент сам stopRandomChat;
+   * peer:left не шлём — иначе последующий next() репортёра снова пометит
+   * забаненного busy и вернёт в очередь.
+   */
+  const banAndEvictPartner = async (
+    partner: AuthedSocket,
+    partnerSid: string,
+    partnerUserId: string,
+    banMs: number,
+  ) => {
+    await queueStore.banModerationUser(partnerUserId, banMs);
+    await banPair(socket.id, partnerSid);
+    await emitModerationBannedToSocket(partner, partnerUserId);
+
+    partner.data.partnerSid = undefined;
+    partner.data.inCall = false;
+    partner.data.roomId = undefined;
+    partner.rooms.forEach((r) => {
+      if (r !== partner.id) partner.leave(r);
+    });
+    clearDelayedRetry(partner.id);
+    await unlockPair(partner.id);
+    await removeFromQueue(partner.id);
+    await markBusy(io, partner, false);
+
+    // Отвязываем репортёра от пары до его next(), иначе next найдёт prevPartner
+    // и сделает markBusy(banned, true) + requeue.
+    socket.data.partnerSid = undefined;
+    socket.data.inCall = false;
+    socket.data.roomId = undefined;
+    await unlockPair(socket.id);
   };
 
   // === START ================================================================
@@ -661,32 +719,84 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
         reporterSocketId: socket.id,
       });
 
-      await queueStore.banModerationUser(actualPartnerUserId, MODERATION_BAN_MS);
-      await banPair(socket.id, partnerSid);
-      // moderation:banned → клиент сам stopRandomChat; peer:left не шлём —
-      // иначе последующий next() репортёра снова пометит забаненного busy и вернёт в очередь.
-      await emitModerationBannedToSocket(partner, actualPartnerUserId);
-
-      partner.data.partnerSid = undefined;
-      partner.data.inCall = false;
-      partner.data.roomId = undefined;
-      partner.rooms.forEach((r) => {
-        if (r !== partner.id) partner.leave(r);
-      });
-      clearDelayedRetry(partner.id);
-      await unlockPair(partner.id);
-      await removeFromQueue(partner.id);
-      await markBusy(io, partner, false);
-
-      // Отвязываем репортёра от пары до его next(), иначе next найдёт prevPartner
-      // и сделает markBusy(banned, true) + requeue.
-      socket.data.partnerSid = undefined;
-      socket.data.inCall = false;
-      socket.data.roomId = undefined;
-      await unlockPair(socket.id);
+      await banAndEvictPartner(partner, partnerSid, actualPartnerUserId, MODERATION_BAN_MS);
 
       done({ ok: true });
     }
+  );
+
+  type UserReportAck = { ok: boolean; reason?: string; banned?: boolean };
+
+  // === REPORT: ручная жалоба из карточки «Собеседник» ======================
+  // Не банит сразу (иначе любой мог бы забанить любого): сохраняет жалобу для
+  // разбора, навсегда разводит эту пару, а бан — только когда жалуются разные люди.
+  socket.on(
+    'user:reportPartner',
+    async (
+      { partnerUserId, reason }: { partnerUserId?: string; reason?: string },
+      ack?: (r: UserReportAck) => void,
+    ) => {
+      const done = (r: UserReportAck) => {
+        try {
+          if (typeof ack === 'function') ack(r);
+        } catch {}
+      };
+      try {
+        const reporterId = String((socket as any)?.data?.userId || '').trim();
+        const reported = String(partnerUserId || '').trim();
+        if (!reporterId) return done({ ok: false, reason: 'unauthorized' });
+        if (!reported) return done({ ok: false, reason: 'no_partner_user_id' });
+        if (!isUserReportReason(reason)) return done({ ok: false, reason: 'invalid_reason' });
+
+        const rl = await checkRateLimit(`user_report:${reporterId}`, REPORT_RATE_LIMIT_MAX, REPORT_RATE_LIMIT_WINDOW_MS);
+        if (!rl.ok) return done({ ok: false, reason: 'rate_limited' });
+
+        // Жаловаться можно только на текущего собеседника этой пары.
+        const partnerSid = socket.data.partnerSid as string | undefined;
+        const partner = partnerSid ? safeGet(io, partnerSid) : undefined;
+        const actualPartnerUserId = String((partner as any)?.data?.userId || '').trim();
+        if (!partnerSid || !partner || !actualPartnerUserId) {
+          return done({ ok: false, reason: 'partner_not_connected' });
+        }
+        if (reported !== actualPartnerUserId) {
+          logger.warn('[Report] Reject user:reportPartner due to mismatched partnerUserId', {
+            reporterUserId: reporterId,
+            providedPartnerUserId: reported,
+            actualPartnerUserId,
+          });
+          return done({ ok: false, reason: 'partner_mismatch' });
+        }
+
+        await UserReportModel.updateOne(
+          { reporter: reporterId, reported: actualPartnerUserId },
+          { $set: { reason, source: 'random_chat', status: 'open' } },
+          { upsert: true },
+        );
+        await queueStore.banPair(reportPairKey(reporterId), reportPairKey(actualPartnerUserId), REPORT_PAIR_BLOCK_MS);
+
+        const distinctReporters = await UserReportModel.countDocuments({
+          reported: actualPartnerUserId,
+          updatedAt: { $gte: new Date(Date.now() - REPORT_BAN_WINDOW_MS) },
+        });
+        const shouldBan = distinctReporters >= REPORT_BAN_THRESHOLD;
+        logger.info('[Report] partner reported', {
+          reporterUserId: reporterId,
+          reportedUserId: actualPartnerUserId,
+          reason,
+          distinctReporters,
+          banned: shouldBan,
+        });
+
+        if (shouldBan) {
+          await banAndEvictPartner(partner, partnerSid, actualPartnerUserId, REPORT_BAN_MS);
+        }
+        // Без бана пару разводит обычный next() репортёра — как при «Далее».
+        done({ ok: true, banned: shouldBan });
+      } catch (e: any) {
+        logger.warn('[Report] user:reportPartner failed', { error: e?.message || String(e) });
+        done({ ok: false, reason: 'server_error' });
+      }
+    },
   );
 
   // === STOP ================================================================

@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <string name="incoming_call_title">Chiamata in arrivo</string>
+  <string name="incoming_call_title_audio">Chiamata in arrivo</string>
+  <string name="incoming_call_unknown">Qualcuno ti sta chiamando</string>
+  <string name="incoming_call_accept">Accetta</string>
+  <string name="incoming_call_decline">Rifiuta</string>
+  <string name="outgoing_call_title">Videochiamata in uscita</string>
+  <string name="outgoing_call_subtitle">Chiamata in corso…</string>
+  <string name="outgoing_call_subtitle_base">Chiamata in corso</string>
+  <string name="outgoing_call_subtitle_base_audio">Chiamata in corso</string>
+  <string name="outgoing_call_cancel">Annulla</string>
+  <string name="outgoing_call_notification_channel">Chiamata in uscita</string>
+  <string name="outgoing_call_notification_title">LiVi — chiamata in corso</string>
+  <string name="pip_action_end_call">Termina</string>
+  <string name="pip_action_audio_call">Audio</string>
+  <string name="pip_action_audio_call_desc">Passa alla schermata della chiamata vocale</string>
+  <string name="active_call_notification_channel">Chiamata in corso</string>
+  <string name="active_call_notification_title">Chiamata</string>
+  <string name="active_call_notification_title_from">Chiamata con %s</string>
+  <string name="active_call_notification_title_someone">Chiamata in corso</string>
+  <string name="active_call_notification_text">Tocca per tornare alla chiamata</string>
+  <string name="active_audio_call_notification_channel">Chiamata in corso</string>
+  <string name="active_audio_call_notification_title_from">Chiamata con %s</string>
+  <string name="active_audio_call_notification_title_someone">Chiamata in corso</string>
+  <string name="active_audio_call_notification_text">Tocca per tornare alla chiamata</string>
+  <string name="missed_call_title">Chiamata persa</string>
+  <string name="missed_call_video">Chiamata persa</string>
+  <string name="missed_call_from">Da %s</string>
+  <string name="notification_new_message">Nuovo messaggio</string>
+  <string name="summary_missed_calls_title">Chiamate perse</string>
+  <string name="summary_unread_title">Messaggi non letti</string>
+  <string name="summary_unread_from_time">Da %1$s alle %2$s</string>
+  <plurals name="summary_missed_calls_count">
+    <item quantity="one">%d chiamata persa</item>
+    <item quantity="many">%d chiamate perse</item>
+    <item quantity="other">%d chiamate perse</item>
+  </plurals>
+  <plurals name="summary_unread_count">
+    <item quantity="one">%d messaggio non letto</item>
+    <item quantity="many">%d messaggi non letti</item>
+    <item quantity="other">%d messaggi non letti</item>
+  </plurals>
+</resources>

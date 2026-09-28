@@ -17,6 +17,8 @@ public class AppDelegate: ExpoAppDelegate, PKPushRegistryDelegate {
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
   ) -> Bool {
+    // Раскладка всегда слева направо, как на Android (MainApplication.onCreate).
+    RCTI18nUtil.sharedInstance().allowRTL(false)
     configureCallKeep()
     configureVoipPushRegistry()
 

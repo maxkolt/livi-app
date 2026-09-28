@@ -11,7 +11,7 @@ import {
 import { useHomeLayout, useHomeLayoutActivity } from './HomeLayoutContext';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
-import { isWelcomeTabletLayout } from './constants';
+import { isWelcomeTabletLayout, searchPhoneRadarPreferred, searchPhoneScale } from './constants';
 import { BrandTitleWithOutline } from './chrome';
 import { HomeBrandConfetti, type BrandConfettiOrigin } from './HomeBrandConfetti';
 import { HomeCenterProfile } from './HomeCenterProfile';
@@ -72,8 +72,12 @@ function resolveIsSplitStage(width: number, height: number) {
 
 let brandEntryShinePlayedThisSession = false;
 let welcomeRevealPlayedThisSession = false;
-/** Первый размер аватара Поиска за сессию — переживает remount HomeWelcomeView. */
-let lockedWelcomeSearchAvatarSize = 0;
+/**
+ * Размер аватара Поиска для текущей геометрии окна — переживает remount после
+ * splash (иначе снова onLoad и мигание), но пересчитывается при повороте,
+ * раскрытии Fold, split-screen и смене масштаба экрана.
+ */
+let lockedWelcomeSearchAvatar: { key: string; size: number } | null = null;
 
 function HomeWelcomeViewInner({
   styles,
@@ -243,7 +247,7 @@ function HomeWelcomeViewInner({
    * радар оставался зажатым, на широком — 41%.
    */
   const ctaWidth = Math.min(
-    welcomeSearchCtaWidth(stageWidth, isTabletLayout),
+    welcomeSearchCtaWidth(stageWidth, isTabletLayout, stageHeight),
     Math.max(240, stageW * 0.5),
   );
   /** Остаток строки под радар (минус боковые отступы и зазор между колонками). */
@@ -263,7 +267,9 @@ function HomeWelcomeViewInner({
   /** Желаемый размер по ширине — им управляет дизайн, а не теснота экрана. */
   const radarPreferred = splitStage
     ? Math.min(radarSlotWidth * 0.9, isTabletLayout ? 340 : 248)
-    : Math.min(stageW * (compactLayout ? 0.84 : 0.88), isTabletLayout ? 380 : 328);
+    : isTabletLayout
+      ? Math.min(stageW * 0.62, 560)
+      : searchPhoneRadarPreferred(stageW, compactLayout);
   /**
    * Потолок по высоте всегда сильнее желаемого размера: на низком экране радар
    * ужимается сам, вместо того чтобы выдавить текст с кнопкой за границу панели.
@@ -274,7 +280,10 @@ function HomeWelcomeViewInner({
   // Базовый аватар для раскладки колец; визуально больше на ⅓ ширины 1-го кольца (перекрывает его).
   // В стеке размеры те же, что были до адаптива, — вертикальная раскладка не меняется.
   // Потолок 0.42 от радара нужен только для экранов, где сам радар ужался.
-  const stackAvatarBase = isTabletLayout ? 136 : viewWidth < 400 ? 112 : 124;
+  // На широком телефоне и планшете аватар растёт вместе с радаром.
+  const stackAvatarBase = isTabletLayout
+    ? 136 * Math.max(1, radarSize / 380)
+    : (viewWidth < 400 ? 112 : 124) * searchPhoneScale(viewWidth);
   const welcomeAvatarBase = Math.round(
     splitStage
       ? Math.max(54, Math.min(128, radarSize * 0.487))
@@ -307,13 +316,12 @@ function HomeWelcomeViewInner({
   })();
   const welcomeAvatarSizeRaw = welcomeAvatarGeometry.avatarSize;
   // Module-level: ref сбрасывался при remount после splash → снова 114 и onLoad.
-  if (welcomeAvatarSizeRaw > 0 && lockedWelcomeSearchAvatarSize <= 0) {
-    lockedWelcomeSearchAvatarSize = welcomeAvatarSizeRaw;
+  const avatarLockKey = `${Math.round(stageWidth)}x${Math.round(stageHeight)}`;
+  if (welcomeAvatarSizeRaw > 0 && lockedWelcomeSearchAvatar?.key !== avatarLockKey) {
+    lockedWelcomeSearchAvatar = { key: avatarLockKey, size: welcomeAvatarSizeRaw };
   }
   const welcomeAvatarSize =
-    lockedWelcomeSearchAvatarSize > 0
-      ? lockedWelcomeSearchAvatarSize
-      : welcomeAvatarSizeRaw;
+    lockedWelcomeSearchAvatar?.key === avatarLockKey ? lockedWelcomeSearchAvatar.size : welcomeAvatarSizeRaw;
   const welcomeFrameOutset = welcomeAvatarGeometry.frameOutset;
 
   const cancelBurst = useCallback(() => {

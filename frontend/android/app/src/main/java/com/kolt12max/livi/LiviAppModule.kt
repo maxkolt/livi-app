@@ -85,6 +85,21 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     } catch (_: Exception) {}
   }
 
+  /**
+   * Язык UI из JS для нативных экранов звонка и уведомлений.
+   * Пустая строка — режим «как в системе».
+   */
+  /** Входящий показан из JS (сокет, CallKeep): после ответа звонок должен открыться поверх блокировки. */
+  @ReactMethod
+  fun markIncomingCallOverLock() {
+    MainActivity.markIncomingCallOverLock()
+  }
+
+  @ReactMethod
+  fun setAppLanguage(lang: String?) {
+    AppLocale.setAppLanguage(reactApplicationContext, lang)
+  }
+
   /** false on many tablets / emulators without android.software.telecom — CallKeep must not register PhoneAccount. */
   @ReactMethod
   fun isTelecomSupported(promise: Promise) {
@@ -819,6 +834,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   fun startActiveCallForegroundService(partnerNick: String?, audioOnly: Boolean) {
     try {
       ActiveCallForegroundService.start(reactApplicationContext, partnerNick?.takeIf { it.isNotBlank() }, audioOnly)
+      MainActivity.setOverLockActiveCall(true)
       LiviAppModule.beginActiveCallVoiceAudioHoldStatic(reactApplicationContext)
       LiviAppModule.setActiveCallForegroundRunningStatic(true)
       setPiPOnLeaveHintEnabled(true)
@@ -844,6 +860,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     try {
       LiviAppModule.endActiveCallVoiceAudioHoldStatic(reactApplicationContext)
       ActiveCallForegroundService.stop(reactApplicationContext)
+      MainActivity.setOverLockActiveCall(false)
       LiviAppModule.setActiveCallForegroundRunningStatic(false)
       setPiPOnLeaveHintEnabled(false)
       setSystemPiPCapturePlaceholderOnlyStatic(false)
@@ -2444,11 +2461,12 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   }
 
   /**
-   * Открыть системный экран отключения battery optimization для приложения.
+   * Открыть системный список battery optimization, где пользователь сам отключает её
+   * для LiVi; фоллбэк — карточка приложения.
    *
-   * Первый intent показывает прямой диалог «Разрешить?» — он требует permission
-   * REQUEST_IGNORE_BATTERY_OPTIMIZATIONS в манифесте, иначе система его отвергает.
-   * Дальше — фоллбэки на общий список и на карточку приложения.
+   * Прямой диалог ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS не используем: он требует
+   * permission REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, а Google Play не допускает его для
+   * приложений, получающих звонки через FCM high-priority.
    *
    * resolveActivity() здесь намеренно не используется: при targetSdk 30+ package
    * visibility может вернуть null для вполне рабочего системного intent, и тогда
@@ -2460,10 +2478,6 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     val ctx = reactApplicationContext
     val pkgUri = Uri.parse("package:${ctx.packageName}")
     val intents = listOf(
-      Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-        data = pkgUri
-        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-      },
       Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS).apply {
         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
       },

@@ -1283,13 +1283,10 @@ function registerMessageHandlers(io: Server, sock: Socket) {
           const msgType = payload.type === 'image' ? 'image' : payload.type === 'audio' ? 'audio' : payload.type === 'sticker' ? 'sticker' : 'text';
           const albumCount = payload.type === 'image' ? imageUris.length : 0;
           const messagePreview =
-            msgType === 'text'
-              ? (typeof plainText === 'string' ? String(plainText).trim().slice(0, 80) : '')
-              : msgType === 'image'
-                ? (albumCount > 1 ? `[Фото ×${albumCount}]` : '[Фото]')
-                : msgType === 'sticker'
-                  ? '[Стикер]'
-                  : '[Голосовое]';
+            msgType === 'text' && typeof plainText === 'string' ? String(plainText).trim().slice(0, 80) : '';
+          // Медиа: «[Фото]» и т.п. собираются в push.ts на языке каждого устройства.
+          const previewKind =
+            msgType === 'image' ? 'photo' : msgType === 'sticker' ? 'sticker' : msgType === 'audio' ? 'voice' : undefined;
 
           await sendMessagePushToUser(String(payload.to), {
             type: 'message',
@@ -1300,6 +1297,8 @@ function registerMessageHandlers(io: Server, sock: Socket) {
             sentAt: message.timestamp.toISOString(),
             unreadCount,
             messagePreview,
+            previewKind,
+            albumCount,
           });
         } catch {}
       };

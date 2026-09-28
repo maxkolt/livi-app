@@ -6,6 +6,7 @@ import type { ExpoPushTicket } from 'expo-server-sdk';
 import PushTokenModel from '../models/PushToken';
 import { logger } from './logger';
 import { pushLog } from './pushLogBuffer';
+import { mediaPreviewText, missedCallBody, normalizePushLang, pushText, type MediaPreviewKind } from './pushI18n';
 
 const expo = new Expo();
 const IOS_VOIP_BUNDLE_ID = String(process.env.APNS_BUNDLE_ID || 'com.kolt12max.livi').trim();
@@ -476,8 +477,10 @@ export async function upsertExpoPushToken(opts: {
   token: string;
   fcmToken?: string;
   voipToken?: string;
+  /** Язык UI устройства; пустой — не менять сохранённый. */
+  lang?: string;
 }) {
-  const { userId, installId, platform, token, fcmToken, voipToken } = opts;
+  const { userId, installId, platform, token, fcmToken, voipToken, lang } = opts;
   // Токен звонка (FCM data-only / APNs VoIP) не зависит от Expo, поэтому запись принимается и
   // без валидного Expo-токена — иначе недоступность Expo Push API оставляет устройство вообще
   // без канала входящих звонков. Ключ тогда синтетический (`noexpo:<platform>:<installId>`),
@@ -504,6 +507,10 @@ export async function upsertExpoPushToken(opts: {
   }
   if (platform === 'ios' && typeof voipToken === 'string' && voipToken.length > 0) {
     update.voipToken = voipToken;
+  }
+  const normalizedLang = normalizePushLang(lang);
+  if (normalizedLang) {
+    update.lang = normalizedLang;
   }
 
   const result = await PushTokenModel.updateOne(
@@ -572,8 +579,13 @@ export async function sendMessagePushToUser(
     sentAt: string;
     unreadCount: number;
     messagePreview: string;
+    /** Медиа: превью собирается на языке каждого устройства вместо messagePreview. */
+    previewKind?: MediaPreviewKind;
+    albumCount?: number;
   }
 ): Promise<void> {
+  const previewFor = (lang?: string) =>
+    data.previewKind ? mediaPreviewText(lang, data.previewKind, data.albumCount || 0) : data.messagePreview;
   const dataStr = {
     type: data.type,
     messageId: data.messageId,
@@ -596,8 +608,8 @@ export async function sendMessagePushToUser(
     messagePreview: dataStr.messagePreview,
   };
   const messaging = getFirebaseMessaging();
-  const recs = await PushTokenModel.find({ userId }).select('token platform fcmToken voipToken').lean();
-  type Rec = { token: string; platform: string; fcmToken?: string; voipToken?: string };
+  const recs = await PushTokenModel.find({ userId }).select('token platform fcmToken voipToken lang').lean();
+  type Rec = { token: string; platform: string; fcmToken?: string; voipToken?: string; lang?: string };
   const list = (recs || []) as unknown as Rec[];
   let androidSent = false;
   if (messaging) {
@@ -606,7 +618,7 @@ export async function sendMessagePushToUser(
         try {
           await messaging.send({
             token: r.fcmToken,
-            data: dataStrFcm,
+            data: { ...dataStrFcm, messagePreview: previewFor(r.lang) },
             android: { priority: 'high' },
           });
           logger.info('[push] message sent via FCM (data-only)', { userId });
@@ -627,17 +639,17 @@ export async function sendMessagePushToUser(
       }
     }
   }
-  const iosTokens = list.filter((r) => r.platform === 'ios').map((r) => r.token).filter((t) => Expo.isExpoPushToken(t));
-  const androidTokens = list.filter((r) => r.platform === 'android').map((r) => r.token).filter((t) => Expo.isExpoPushToken(t));
+  const iosTokens = list.filter((r) => r.platform === 'ios' && Expo.isExpoPushToken(r.token));
+  const androidTokens = list.filter((r) => r.platform === 'android' && Expo.isExpoPushToken(r.token));
 
   if (iosTokens.length > 0) {
     try {
-      const messages: ExpoPushMessage[] = iosTokens.map((to) => ({
-        to,
+      const messages: ExpoPushMessage[] = iosTokens.map((r) => ({
+        to: r.token,
         sound: 'default',
         priority: 'high',
         channelId: 'messages',
-        data: { ...dataStr, unreadCount: data.unreadCount },
+        data: { ...dataStr, messagePreview: previewFor(r.lang), unreadCount: data.unreadCount },
       }));
       const chunks = expo.chunkPushNotifications(messages);
       for (const chunk of chunks) {
@@ -653,18 +665,19 @@ export async function sendMessagePushToUser(
   if (!androidSent && androidTokens.length > 0) {
     const timeStr = formatPushTime(data.sentAt);
     const nick = (data.fromNick || '').trim() || '—';
-    const title = `${nick} ${timeStr}`.trim() || 'Новое сообщение';
-    const body = (data.messagePreview || '').trim() || 'Новое сообщение';
     try {
-      const messages: ExpoPushMessage[] = androidTokens.map((to) => ({
-        to,
-        sound: 'default',
-        priority: 'high',
-        channelId: 'messages',
-        title,
-        body,
-        data: { ...dataStr, unreadCount: data.unreadCount },
-      }));
+      const messages: ExpoPushMessage[] = androidTokens.map((r) => {
+        const preview = previewFor(r.lang);
+        return {
+          to: r.token,
+          sound: 'default',
+          priority: 'high',
+          channelId: 'messages',
+          title: `${nick} ${timeStr}`.trim() || pushText(r.lang, 'newMessage'),
+          body: (preview || '').trim() || pushText(r.lang, 'newMessage'),
+          data: { ...dataStr, messagePreview: preview, unreadCount: data.unreadCount },
+        };
+      });
       const chunks = expo.chunkPushNotifications(messages);
       for (const chunk of chunks) {
         await expo.sendPushNotificationsAsync(chunk);
@@ -689,12 +702,19 @@ function formatPushTime(iso: string): string {
   }
 }
 
-export async function sendPushToUser(userId: string, msg: Omit<ExpoPushMessage, 'to'> & { kind: PushKind }) {
+/** Заголовок и текст на языке устройства (PushToken.lang). */
+type LocalizePush = (lang: string) => Pick<ExpoPushMessage, 'title' | 'body'>;
+
+export async function sendPushToUser(
+  userId: string,
+  msg: Omit<ExpoPushMessage, 'to'> & { kind: PushKind },
+  localize?: LocalizePush,
+) {
   try {
-    const recs = await PushTokenModel.find({ userId }).select('token').lean();
+    const recs = await PushTokenModel.find({ userId }).select('token lang').lean();
     const tokens = (recs || [])
-      .map((r: any) => String(r.token || ''))
-      .filter((t) => Expo.isExpoPushToken(t));
+      .map((r: any) => ({ token: String(r.token || ''), lang: String(r.lang || '') }))
+      .filter((r) => Expo.isExpoPushToken(r.token));
 
     if (!tokens.length) {
       logger.warn('[push] sendPushToUser: no tokens for user', { userId, kind: msg.kind });
@@ -703,11 +723,12 @@ export async function sendPushToUser(userId: string, msg: Omit<ExpoPushMessage, 
 
     logger.info('[push] sendPushToUser: sending', { userId, kind: msg.kind, tokenCount: tokens.length });
 
-    const messages: ExpoPushMessage[] = tokens.map((to) => ({
-      to,
+    const messages: ExpoPushMessage[] = tokens.map((r) => ({
+      to: r.token,
       sound: 'default',
       priority: 'high',
       ...msg,
+      ...(localize ? localize(r.lang) : null),
     }));
 
     const chunks = expo.chunkPushNotifications(messages);
@@ -753,7 +774,7 @@ export async function sendCallPushToRecipient(userId: string, data: CallPushData
   const userIdObj = new mongoose.Types.ObjectId(userId);
   const recs = await PushTokenModel.find({ userId: userIdObj })
     .read('primary')
-    .select('_id token platform fcmToken voipToken')
+    .select('_id token platform fcmToken voipToken lang')
     .lean();
   if (!recs?.length) {
     logger.warn('[push] sendCallPushToRecipient: no tokens for user', { userId });
@@ -787,7 +808,7 @@ export async function sendCallPushToRecipient(userId: string, data: CallPushData
   };
 
   const messaging = getFirebaseMessaging();
-  type Rec = { _id?: unknown; token: string; platform: string; fcmToken?: string; voipToken?: string };
+  type Rec = { _id?: unknown; token: string; platform: string; fcmToken?: string; voipToken?: string; lang?: string };
   const list = recs as unknown as Rec[];
   const androidWithFcm = list.filter((r) => r.platform === 'android' && r.fcmToken).length;
   const androidTotal = list.filter((r) => r.platform === 'android').length;
@@ -825,7 +846,7 @@ export async function sendCallPushToRecipient(userId: string, data: CallPushData
     logger.warn('[push] No Android FCM tokens for user — call push will use Expo. Ensure app registered push token with fcmToken (open app, check token register 200 OK).');
   }
 
-  const expoTokens: string[] = [];
+  const expoTokens: Array<{ token: string; lang?: string }> = [];
   let androidDataSignalSent = 0;
   let androidNotificationSignalSent = 0;
   let iosVoipSent = 0;
@@ -866,7 +887,7 @@ export async function sendCallPushToRecipient(userId: string, data: CallPushData
       // Оставляем только data-only FCM: клиент сам решает incoming vs missed по expiresAt/ts.
     } else if (r.platform !== 'android') {
       // Только iOS получает звонок через Expo (с кнопками через categoryId).
-      if (Expo.isExpoPushToken(r.token)) expoTokens.push(r.token);
+      if (Expo.isExpoPushToken(r.token)) expoTokens.push({ token: r.token, lang: r.lang });
     }
   }
 
@@ -917,17 +938,16 @@ export async function sendCallPushToRecipient(userId: string, data: CallPushData
       iosVoipSent,
     });
     pushLog('call_push_sending_via_Expo', { userId, tokenCount: expoTokens.length });
-    const callTitle = (data.fromNick || '').trim() || 'Входящий вызов';
-    const callBody = 'Входящий вызов';
-    const messages: ExpoPushMessage[] = expoTokens.map((to) => ({
-      to,
+    const nick = (data.fromNick || '').trim();
+    const messages: ExpoPushMessage[] = expoTokens.map((r) => ({
+      to: r.token,
       sound: 'default',
       priority: 'high',
       kind: 'call' as PushKind,
       channelId: 'calls',
       categoryId: 'incoming_call',
-      title: callTitle,
-      body: callBody,
+      title: nick || pushText(r.lang, 'incomingCall'),
+      body: pushText(r.lang, 'incomingCall'),
       data: { ...fcmData, categoryId: 'incoming_call', tag: 'incoming_call' },
     }));
     const chunks = expo.chunkPushNotifications(messages);
@@ -956,11 +976,11 @@ export async function sendCallEscalationPushToRecipient(
   const userIdObj = new mongoose.Types.ObjectId(userId);
   const recs = await PushTokenModel.find({ userId: userIdObj })
     .read('primary')
-    .select('_id token platform fcmToken voipToken')
+    .select('_id token platform fcmToken voipToken lang')
     .lean();
   if (!recs?.length) return { androidTargets: 0, fcmSent: 0, expoSent: 0, voipSent: 0 };
 
-  type Rec = { _id?: unknown; token: string; platform: string; fcmToken?: string; voipToken?: string };
+  type Rec = { _id?: unknown; token: string; platform: string; fcmToken?: string; voipToken?: string; lang?: string };
   const list = recs as unknown as Rec[];
   const androidRecs = list.filter((r) => r.platform === 'android');
   const androidTargets = androidRecs.length;
@@ -1069,9 +1089,9 @@ export async function sendCallDeclinedToCaller(callerUserId: string, callId: str
   const messaging = getFirebaseMessaging();
   if (messaging) {
     const recs = await PushTokenModel.find({ userId: callerUserId })
-      .select('token platform fcmToken voipToken')
+      .select('token platform fcmToken voipToken lang')
       .lean();
-    type Rec = { token: string; platform: string; fcmToken?: string; voipToken?: string };
+    type Rec = { token: string; platform: string; fcmToken?: string; voipToken?: string; lang?: string };
     const list = (recs || []) as unknown as Rec[];
     for (const r of list) {
       if (r.platform === 'android' && r.fcmToken) {
@@ -1093,12 +1113,14 @@ export async function sendCallDeclinedToCaller(callerUserId: string, callId: str
     }
   }
   try {
-    await sendPushToUser(callerUserId, {
-      kind: 'message',
-      title: 'Звонок отклонён',
-      body: 'Собеседник отклонил вызов',
-      data: { type: 'call_declined', callId: String(callId) },
-    });
+    await sendPushToUser(
+      callerUserId,
+      {
+        kind: 'message',
+        data: { type: 'call_declined', callId: String(callId) },
+      },
+      (lang) => ({ title: pushText(lang, 'callDeclined'), body: pushText(lang, 'callDeclinedBody') }),
+    );
     logger.info('[push] call_declined sent via Expo to caller', { userId: callerUserId });
   } catch (e) {
     logger.warn('[push] Expo call_declined to caller failed', { userId: callerUserId, error: (e as Error)?.message });
@@ -1123,9 +1145,9 @@ export async function sendCallAcceptedToCaller(callerUserId: string, callId: str
   const messaging = getFirebaseMessaging();
   if (messaging) {
     const recs = await PushTokenModel.find({ userId: callerUserId })
-      .select('token platform fcmToken voipToken')
+      .select('token platform fcmToken voipToken lang')
       .lean();
-    type Rec = { token: string; platform: string; fcmToken?: string; voipToken?: string };
+    type Rec = { token: string; platform: string; fcmToken?: string; voipToken?: string; lang?: string };
     const list = (recs || []) as unknown as Rec[];
     for (const r of list) {
       if (r.platform === 'android' && r.fcmToken) {
@@ -1161,9 +1183,9 @@ export async function sendCallCanceledToRecipient(
   logger.info('[push] sendCallCanceledToRecipient start', { calleeUserId, callId, fromUserId });
   const messaging = getFirebaseMessaging();
   const recs = await PushTokenModel.find({ userId: calleeUserId })
-    .select('token platform fcmToken voipToken')
+    .select('token platform fcmToken voipToken lang')
     .lean();
-  type Rec = { token: string; platform: string; fcmToken?: string; voipToken?: string };
+  type Rec = { token: string; platform: string; fcmToken?: string; voipToken?: string; lang?: string };
   const list = (recs || []) as unknown as Rec[];
   let androidSent = false;
   const iosVoipRecs = list.filter((r) => r.platform === 'ios' && r.voipToken);
@@ -1208,17 +1230,15 @@ export async function sendCallCanceledToRecipient(
       }
     }
   }
-  const iosTokens = list.filter((r) => r.platform === 'ios').map((r) => r.token).filter((t) => Expo.isExpoPushToken(t));
+  const iosTokens = list.filter((r) => r.platform === 'ios' && Expo.isExpoPushToken(r.token));
   if (iosTokens.length > 0) {
     try {
-      const title = 'Пропущенный вызов';
-      const body = fromNick?.trim() ? `От ${fromNick.trim()}` : 'Входящий вызов';
-      const messages: ExpoPushMessage[] = iosTokens.map((to) => ({
-        to,
+      const messages: ExpoPushMessage[] = iosTokens.map((r) => ({
+        to: r.token,
         sound: 'default',
         priority: 'high',
-        title,
-        body,
+        title: pushText(r.lang, 'missedCall'),
+        body: missedCallBody(r.lang, fromNick),
         data: {
           type: 'call_canceled',
           callId: String(callId),
@@ -1236,20 +1256,20 @@ export async function sendCallCanceledToRecipient(
   }
   if (!androidSent && list.some((r) => r.platform === 'android')) {
     try {
-      const title = 'Пропущенный вызов';
-      const body = fromNick?.trim() ? `От ${fromNick.trim()}` : 'Входящий вызов';
-      await sendPushToUser(calleeUserId, {
-        kind: 'message',
-        title,
-        body,
-        data: {
-          type: 'call_canceled',
-          callId: String(callId),
-          callKitId: getCallKitUuid(callId),
-          from: fromUserId,
-          fromNick: fromNick ?? '',
+      await sendPushToUser(
+        calleeUserId,
+        {
+          kind: 'message',
+            data: {
+            type: 'call_canceled',
+            callId: String(callId),
+            callKitId: getCallKitUuid(callId),
+            from: fromUserId,
+            fromNick: fromNick ?? '',
+          },
         },
-      });
+        (lang) => ({ title: pushText(lang, 'missedCall'), body: missedCallBody(lang, fromNick) }),
+      );
       logger.info('[push] call_canceled sent via Expo (Android fallback)');
     } catch (e) {
       logger.warn('[push] Expo call_canceled Android fallback failed', { userId: calleeUserId, error: (e as Error)?.message });
@@ -1270,9 +1290,9 @@ export async function sendCallMissedToRecipient(
   logger.info('[push] sendCallMissedToRecipient start', { calleeUserId, callId, fromUserId });
   const messaging = getFirebaseMessaging();
   const recs = await PushTokenModel.find({ userId: calleeUserId })
-    .select('token platform fcmToken voipToken')
+    .select('token platform fcmToken voipToken lang')
     .lean();
-  type Rec = { token: string; platform: string; fcmToken?: string; voipToken?: string };
+  type Rec = { token: string; platform: string; fcmToken?: string; voipToken?: string; lang?: string };
   const list = (recs || []) as unknown as Rec[];
   let androidSent = false;
   const callKitId = getCallKitUuid(callId);
@@ -1304,17 +1324,15 @@ export async function sendCallMissedToRecipient(
       }
     }
   }
-  const iosTokens = list.filter((r) => r.platform === 'ios').map((r) => r.token).filter((t) => Expo.isExpoPushToken(t));
+  const iosTokens = list.filter((r) => r.platform === 'ios' && Expo.isExpoPushToken(r.token));
   if (iosTokens.length > 0) {
     try {
-      const title = 'Пропущенный вызов';
-      const body = fromNick?.trim() ? `От ${fromNick.trim()}` : 'Входящий вызов';
-      const messages: ExpoPushMessage[] = iosTokens.map((to) => ({
-        to,
+      const messages: ExpoPushMessage[] = iosTokens.map((r) => ({
+        to: r.token,
         sound: 'default',
         priority: 'high',
-        title,
-        body,
+        title: pushText(r.lang, 'missedCall'),
+        body: missedCallBody(r.lang, fromNick),
         channelId: 'missed_call',
         data: {
           type: 'call_ended',
@@ -1333,21 +1351,21 @@ export async function sendCallMissedToRecipient(
   }
   if (!androidSent && list.some((r) => r.platform === 'android')) {
     try {
-      const title = 'Пропущенный вызов';
-      const body = fromNick?.trim() ? `От ${fromNick.trim()}` : 'Входящий вызов';
-      await sendPushToUser(calleeUserId, {
-        kind: 'call',
-        title,
-        body,
-        channelId: 'missed_call',
-        data: {
-          type: 'call_ended',
-          callId: String(callId),
-          callKitId,
-          from: fromUserId,
-          fromNick: fromNick ?? '',
+      await sendPushToUser(
+        calleeUserId,
+        {
+          kind: 'call',
+            channelId: 'missed_call',
+          data: {
+            type: 'call_ended',
+            callId: String(callId),
+            callKitId,
+            from: fromUserId,
+            fromNick: fromNick ?? '',
+          },
         },
-      });
+        (lang) => ({ title: pushText(lang, 'missedCall'), body: missedCallBody(lang, fromNick) }),
+      );
       logger.info('[push] call_ended (missed) sent via Expo (Android fallback)', { userId: calleeUserId, callId });
     } catch (e) {
       logger.warn('[push] Expo call_ended (missed) Android fallback failed', {
@@ -1372,9 +1390,9 @@ export async function sendCallEndedToPeer(
   logger.info('[push] sendCallEndedToPeer start', { peerUserId, callId, fromUserId });
   const messaging = getFirebaseMessaging();
   const recs = await PushTokenModel.find({ userId: peerUserId })
-    .select('token platform fcmToken voipToken')
+    .select('token platform fcmToken voipToken lang')
     .lean();
-  type Rec = { token: string; platform: string; fcmToken?: string; voipToken?: string };
+  type Rec = { token: string; platform: string; fcmToken?: string; voipToken?: string; lang?: string };
   const list = (recs || []) as unknown as Rec[];
   let androidSent = false;
   const iosVoipRecs = list.filter((r) => r.platform === 'ios' && r.voipToken);
@@ -1421,15 +1439,15 @@ export async function sendCallEndedToPeer(
       }
     }
   }
-  const iosTokens = list.filter((r) => r.platform === 'ios').map((r) => r.token).filter((t) => Expo.isExpoPushToken(t));
+  const iosTokens = list.filter((r) => r.platform === 'ios' && Expo.isExpoPushToken(r.token));
   if (iosTokens.length > 0) {
     try {
-      const messages: ExpoPushMessage[] = iosTokens.map((to) => ({
-        to,
+      const messages: ExpoPushMessage[] = iosTokens.map((r) => ({
+        to: r.token,
         sound: 'default',
         priority: 'high',
-        title: 'Звонок завершён',
-        body: 'Собеседник завершил разговор',
+        title: pushText(r.lang, 'callEnded'),
+        body: pushText(r.lang, 'callEndedBody'),
         data: {
           type: 'call_ended',
           from: fromUserId,

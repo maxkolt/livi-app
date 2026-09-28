@@ -113,6 +113,7 @@ import {
 } from './utils/callRuntime';
 import { addVoipTokenListener } from './utils/voipPush';
 import { useLang } from './store/lang';
+import { AppErrorBoundary } from './components/AppErrorBoundary';
 import { t } from './utils/i18n';
 import { connectStreamIfNeeded } from './chat/cometchat';
 import {
@@ -2693,6 +2694,18 @@ function AppContent() {
     });
     return () => sub.remove();
   }, []);
+
+  // Сервер переводит свои тексты push по языку токена — после смены языка обновляем его.
+  const langHydrated = useLang((s) => s.hydrated);
+  const pushLangRef = React.useRef<string | null>(null);
+  React.useEffect(() => {
+    if (!langHydrated) return;
+    const prev = pushLangRef.current;
+    pushLangRef.current = lang;
+    if (prev == null || prev === lang) return;
+    const uid = getCurrentUserId?.();
+    if (uid) registerAndSendPushToken(uid, { force: true, reason: 'lang_changed' }).catch(() => {});
+  }, [lang, langHydrated]);
 
   React.useEffect(() => {
     if (Platform.OS !== 'ios') return;
@@ -5574,7 +5587,9 @@ export default function App() {
         <KeyboardProvider>
           <ThemeProvider>
             <PiPProvider onReturnToCall={navigateToCall} onEndCall={endCallImpl}>
-              <AppContent />
+              <AppErrorBoundary>
+                <AppContent />
+              </AppErrorBoundary>
             </PiPProvider>
             <SystemBarsScrim />
           </ThemeProvider>

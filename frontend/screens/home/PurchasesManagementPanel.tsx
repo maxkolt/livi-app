@@ -3,21 +3,12 @@ import { Pressable, StyleSheet, View } from 'react-native';
 import { Image as ExpoImage } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import AdaptiveText from '../../components/AdaptiveText';
-import { setActiveCosmetic, useCosmetics, type CosmeticKind } from '../../utils/cosmetics';
+import { cosmeticNameKey, setActiveCosmetic, useCosmetics, type CosmeticKind } from '../../utils/cosmetics';
+import { t, type Lang } from '../../utils/i18n';
+import { useLang } from '../../store/lang';
 import { LIVI, WELCOME_GLASS_BORDER, WELCOME_GLASS_SURFACE, WELCOME_MUTED_TEXT } from './constants';
 
 const SHOWCASE_AVATAR = require('../../assets/frames/showcase-avatar.jpg');
-
-const FRAME_LABELS: Record<string, string> = {
-  fire: 'Огонь',
-  diamond: 'Бриллиант',
-  aurora: 'Аврора',
-  palladium: 'Палладий',
-  frost: 'Лёд',
-  jade: 'Нефрит',
-  void: 'Опал',
-  obsidian: 'Обсидиан',
-};
 
 const FRAME_COLORS: Record<string, readonly [string, string, ...string[]]> = {
   fire: ['#FFC062', '#FF8A34', '#FF4D1C'],
@@ -30,14 +21,6 @@ const FRAME_COLORS: Record<string, readonly [string, string, ...string[]]> = {
   obsidian: ['#6B7280', '#374151', '#111827'],
 };
 
-const BACKGROUND_LABELS: Record<string, string> = {
-  'aurora-chat': 'Неон',
-  'deep-space': 'Космос',
-  poetry: 'Пушкин',
-  'ocean-flow': 'Бирюза',
-  'graphite-chat': 'Письма',
-};
-
 const BACKGROUND_IMAGES: Record<string, number> = {
   'aurora-chat': require('../../assets/chat-wallpapers/dark/doodles-cyan.jpeg'),
   'deep-space': require('../../assets/chat-wallpapers/dark/cosmos.jpeg'),
@@ -45,6 +28,13 @@ const BACKGROUND_IMAGES: Record<string, number> = {
   'ocean-flow': require('../../assets/chat-wallpapers/dark/doodles-teal.jpeg'),
   'graphite-chat': require('../../assets/chat-wallpapers/dark/letters.jpeg'),
 };
+
+/** Название купленной рамки или фона; неизвестный id показываем как есть. */
+function cosmeticName(itemId: string, lang: Lang): string {
+  const key = cosmeticNameKey(itemId);
+  const name = t(key, lang);
+  return name === key ? itemId : name;
+}
 
 function FramePreview({ itemId }: { itemId: string }) {
   const colors = FRAME_COLORS[itemId];
@@ -72,21 +62,22 @@ function BackgroundPreview({ itemId }: { itemId: string }) {
   );
 }
 
-function EmptyPurchase({ kind }: { kind: CosmeticKind }) {
+function EmptyPurchase({ kind, lang }: { kind: CosmeticKind; lang: Lang }) {
   return (
     <View style={styles.emptyRow}>
       <View style={kind === 'frame' ? styles.emptyFrame : styles.emptyBackground} />
       <View style={styles.copy}>
         <AdaptiveText style={styles.emptyTitle}>
-          {kind === 'frame' ? 'Рамок пока нет' : 'Фонов пока нет'}
+          {t(kind === 'frame' ? 'purchasesNoFrames' : 'purchasesNoBackgrounds', lang)}
         </AdaptiveText>
-        <AdaptiveText style={styles.emptyHint}>Купленные варианты появятся здесь.</AdaptiveText>
+        <AdaptiveText style={styles.emptyHint}>{t('purchasesEmptyHint', lang)}</AdaptiveText>
       </View>
     </View>
   );
 }
 
 export function PurchasesManagementPanel() {
+  const lang = useLang((state) => state.lang);
   const cosmetics = useCosmetics();
   const [busyKey, setBusyKey] = useState('');
 
@@ -107,7 +98,7 @@ export function PurchasesManagementPanel() {
       <View key={`${kind}:${itemId}`} style={styles.itemRow}>
         {kind === 'frame' ? <FramePreview itemId={itemId} /> : <BackgroundPreview itemId={itemId} />}
         <AdaptiveText style={styles.itemLabel} numberOfLines={1}>
-          {kind === 'frame' ? FRAME_LABELS[itemId] || itemId : BACKGROUND_LABELS[itemId] || itemId}
+          {cosmeticName(itemId, lang)}
         </AdaptiveText>
         <Pressable
           onPress={() => void toggle(kind, itemId, active)}
@@ -115,7 +106,7 @@ export function PurchasesManagementPanel() {
           style={({ pressed }) => [styles.action, active && styles.actionActive, pressed && styles.actionPressed]}
         >
           <AdaptiveText style={[styles.actionText, active && styles.actionTextActive]}>
-            {busyKey === `${kind}:${itemId}` ? '…' : active ? 'Снять' : 'Применить'}
+            {busyKey === `${kind}:${itemId}` ? '…' : t(active ? 'purchasesRemove' : 'purchasesApply', lang)}
           </AdaptiveText>
         </Pressable>
       </View>
@@ -125,19 +116,19 @@ export function PurchasesManagementPanel() {
   return (
     <View style={styles.root}>
       <View style={styles.section}>
-        <AdaptiveText style={styles.sectionTitle}>РАМКИ АВАТАРА</AdaptiveText>
+        <AdaptiveText style={styles.sectionTitle}>{t('storeAvatarFrames', lang)}</AdaptiveText>
         <View style={styles.card}>
           {cosmetics.purchasedFrameIds.length
             ? cosmetics.purchasedFrameIds.map((id) => renderItem('frame', id))
-            : <EmptyPurchase kind="frame" />}
+            : <EmptyPurchase kind="frame" lang={lang} />}
         </View>
       </View>
       <View style={styles.section}>
-        <AdaptiveText style={styles.sectionTitle}>ФОНЫ ЧАТА</AdaptiveText>
+        <AdaptiveText style={styles.sectionTitle}>{t('storeChatBackgrounds', lang)}</AdaptiveText>
         <View style={styles.card}>
           {cosmetics.purchasedBackgroundIds.length
             ? cosmetics.purchasedBackgroundIds.map((id) => renderItem('background', id))
-            : <EmptyPurchase kind="background" />}
+            : <EmptyPurchase kind="background" lang={lang} />}
         </View>
       </View>
     </View>

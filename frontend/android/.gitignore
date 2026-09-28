@@ -18,3 +18,6 @@ local.properties
 # Release signing (secrets)
 keystore.properties
 *.jks
+
+# Kotlin 2.x build cache
+.kotlin/

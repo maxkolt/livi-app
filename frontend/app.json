@@ -69,7 +69,9 @@
         {
           "action": "VIEW",
           "data": {
-            "scheme": "https"
+            "scheme": "https",
+            "host": "api.liviapp.com",
+            "pathPrefix": "/invite/"
           },
           "category": [
             "BROWSABLE",

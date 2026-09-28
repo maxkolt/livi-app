@@ -52,6 +52,7 @@ import { useRandomChatToast } from './randomChat/useRandomChatToast';
 import { RandomChatToast } from './randomChat/RandomChatToast';
 import { useRandomChatFriends } from './randomChat/useRandomChatFriends';
 import { FriendRequestModal } from './randomChat/FriendRequestModal';
+import { ReportPartnerModal, type ReportReason } from './randomChat/ReportPartnerModal';
 
 type Props = { 
   route?: { 
@@ -243,10 +244,36 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   // Подтверждённая сервером блокировка — отдельное состояние, чтобы не путать её
   // с технической недоступностью проверки и явно объяснить замену видео заглушкой.
   const [moderationPartnerBlocked, setModerationPartnerBlocked] = useState(false);
+  const [reportVisible, setReportVisible] = useState(false);
+  const [reportBusy, setReportBusy] = useState(false);
+  /** На кого жалуемся — фиксируем при открытии, собеседник может смениться. */
+  const reportTargetRef = useRef<string | null>(null);
   const moderationPartnerBlockedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** Кого именно заблокировали: собеседник может смениться, пока показываем причину. */
   const moderationBlockedPartnerIdRef = useRef<string | null>(null);
   const isModerationBanned = banByModerationUntil > Date.now();
+  /**
+   * Бан модерации — час, бан по жалобам — сутки. Для длинного показываем время
+   * окончания: текст «на 1 час» там был бы неправдой.
+   */
+  const moderationBanMessage = useCallback(
+    (until: number) => {
+      if (!(until - Date.now() > 61 * 60_000)) return t('moderationBannedSelf', lang);
+      let time: string;
+      try {
+        time = new Date(until).toLocaleString(lang, {
+          day: 'numeric',
+          month: 'short',
+          hour: '2-digit',
+          minute: '2-digit',
+        });
+      } catch {
+        time = new Date(until).toISOString().slice(0, 16).replace('T', ' ');
+      }
+      return t('moderationBannedUntil', lang).replace('{time}', time);
+    },
+    [lang],
+  );
 
   const clearModerationPartnerBlocked = useCallback(() => {
     if (moderationPartnerBlockedTimerRef.current) {
@@ -755,7 +782,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   const onStartStop = useCallback(async () => {
     if (!canRunAction()) return;
     if (!startedRef.current && isModerationBanned) {
-      showToast(t('moderationBannedSelf', lang), 4000, true);
+      showToast(moderationBanMessage(banByModerationUntil), 4000, true);
       return;
     }
     const session = sessionRef.current;
@@ -825,7 +852,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
         loadingRef.current = false;
       }
     }
-  }, [requestPermissions, isModerationBanned, showToast, lang]);
+  }, [requestPermissions, isModerationBanned, showToast, moderationBanMessage, banByModerationUntil, lang]);
   
   // Дополнительная защита от спама кнопок: минимальный интервал между действиями
   const lastActionRef = useRef<number>(0);
@@ -1357,6 +1384,65 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     [showToast]
   );
 
+  const openReport = useCallback(() => {
+    const target = partnerUserIdRef.current;
+    if (!target) return;
+    reportTargetRef.current = target;
+    setReportVisible(true);
+  }, []);
+
+  const closeReport = useCallback(() => {
+    if (reportBusy) return;
+    reportTargetRef.current = null;
+    setReportVisible(false);
+  }, [reportBusy]);
+
+  // Собеседник сменился, пока окно открыто, — жалоба ушла бы не на того.
+  useEffect(() => {
+    if (!reportVisible || reportBusy) return;
+    if (reportTargetRef.current && partnerUserId !== reportTargetRef.current) {
+      reportTargetRef.current = null;
+      setReportVisible(false);
+    }
+  }, [partnerUserId, reportBusy, reportVisible]);
+
+  const onReportSelect = useCallback(
+    (reason: ReportReason) => {
+      const target = reportTargetRef.current;
+      if (!target || reportBusy) return;
+      setReportBusy(true);
+      const finish = (ok: boolean) => {
+        setReportBusy(false);
+        setReportVisible(false);
+        reportTargetRef.current = null;
+        if (!ok) {
+          showToast(t('reportFailed', lang), 4000, true);
+          return;
+        }
+        showToast(t('reportSent', lang), 4000);
+        // Сразу уходим от этого собеседника, как по «Далее».
+        const current = partnerUserIdRef.current;
+        if (!current || current === target) void onNext();
+      };
+      try {
+        socket.timeout(10_000).emit(
+          'user:reportPartner',
+          { partnerUserId: target, reason },
+          (err: Error | null, res?: { ok?: boolean; reason?: string }) => {
+            if (err || !res?.ok) {
+              logger.warn('[RandomChat] user:reportPartner failed', { message: err?.message, res });
+            }
+            finish(!err && !!res?.ok);
+          },
+        );
+      } catch (e) {
+        logger.warn('[RandomChat] Failed to send user report', e);
+        finish(false);
+      }
+    },
+    [lang, onNext, reportBusy, showToast],
+  );
+
   useModeration({
     enabled: moderationEnabled,
     chatType: 'random',
@@ -1378,12 +1464,9 @@ const RandomChat: React.FC<Props> = ({ route }) => {
 
   // Слушаем предупреждение от модерации (мы — нарушитель, первое нарушение)
   useEffect(() => {
-    const handler = (payload?: { message?: string }) => {
-      const text =
-        payload && typeof payload.message === 'string' && payload.message.trim()
-          ? payload.message.trim()
-          : t('moderationWarningFallback', lang);
-      showToast(text, 4000, true);
+    // Сервер шлёт текст только по-русски (для старых версий) — показываем свой перевод.
+    const handler = () => {
+      showToast(t('moderationWarningFallback', lang), 4000, true);
     };
     socket.on('moderation:warning', handler);
     return () => {
@@ -1398,13 +1481,13 @@ const RandomChat: React.FC<Props> = ({ route }) => {
         typeof payload?.bannedUntil === 'number' && payload.bannedUntil > Date.now()
           ? payload.bannedUntil
           : Date.now() + 3600_000;
-      applyModerationBanUntil(until, t('moderationBannedSelf', lang), true);
+      applyModerationBanUntil(until, moderationBanMessage(until), true);
     };
     socket.on('moderation:banned', handler);
     return () => {
       socket.off('moderation:banned', handler);
     };
-  }, [applyModerationBanUntil, lang]);
+  }, [applyModerationBanUntil, moderationBanMessage]);
 
   // Обработка AppState - при уходе приложения в фон рандомный чат должен
   // немедленно завершаться, чтобы при возврате экран был в неактивном состоянии.
@@ -1753,6 +1836,22 @@ const RandomChat: React.FC<Props> = ({ route }) => {
               <Text style={styles.friendBadgeText}>{L('friend')}</Text>
             </View>
           )}
+
+          {/* Кнопка "Пожаловаться" */}
+          {started && !isInactiveState && !!remoteStream && !!partnerUserId && (
+            <Animated.View style={[styles.bottomRight, { opacity: buttonsOpacity }]}>
+              <TouchableOpacity
+                onPress={openReport}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                activeOpacity={0.7}
+                accessibilityRole="button"
+                accessibilityLabel={L('reportPartner')}
+                style={[styles.iconBtn, isLandscape && styles.iconBtnLandscape]}
+              >
+                <MaterialIcons name="outlined-flag" size={ctrlIconSize} color={WELCOME_HEADER_TITLE} />
+              </TouchableOpacity>
+            </Animated.View>
+          )}
         </View>
         
         {/* Эквалайзер отключен */}
@@ -1983,6 +2082,17 @@ const RandomChat: React.FC<Props> = ({ route }) => {
         styles={styles}
       />
       
+      {/* Жалоба на собеседника */}
+      <ReportPartnerModal
+        visible={reportVisible}
+        isDark={isDark}
+        busy={reportBusy}
+        L={L}
+        onSelect={onReportSelect}
+        onRequestClose={closeReport}
+        styles={styles}
+      />
+
       {/* Toast уведомления */}
       <RandomChatToast
         toastVisible={toastVisible}

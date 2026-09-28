@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <string name="incoming_call_title">สายเรียกเข้า</string>
+  <string name="incoming_call_title_audio">สายเรียกเข้า</string>
+  <string name="incoming_call_unknown">มีคนโทรมา</string>
+  <string name="incoming_call_accept">รับสาย</string>
+  <string name="incoming_call_decline">ปฏิเสธ</string>
+  <string name="outgoing_call_title">วิดีโอคอลออก</string>
+  <string name="outgoing_call_subtitle">กำลังโทร…</string>
+  <string name="outgoing_call_subtitle_base">กำลังโทร</string>
+  <string name="outgoing_call_subtitle_base_audio">กำลังโทร</string>
+  <string name="outgoing_call_cancel">ยกเลิก</string>
+  <string name="outgoing_call_notification_channel">สายโทรออก</string>
+  <string name="outgoing_call_notification_title">LiVi — กำลังโทร</string>
+  <string name="pip_action_end_call">วางสาย</string>
+  <string name="pip_action_audio_call">เสียง</string>
+  <string name="pip_action_audio_call_desc">สลับไปที่หน้าจอโทรด้วยเสียง</string>
+  <string name="active_call_notification_channel">การโทรที่กำลังดำเนินอยู่</string>
+  <string name="active_call_notification_title">การโทร</string>
+  <string name="active_call_notification_title_from">กำลังโทรกับ %s</string>
+  <string name="active_call_notification_title_someone">การโทรที่กำลังดำเนินอยู่</string>
+  <string name="active_call_notification_text">แตะเพื่อกลับไปที่การโทร</string>
+  <string name="active_audio_call_notification_channel">การโทรที่กำลังดำเนินอยู่</string>
+  <string name="active_audio_call_notification_title_from">กำลังโทรกับ %s</string>
+  <string name="active_audio_call_notification_title_someone">การโทรที่กำลังดำเนินอยู่</string>
+  <string name="active_audio_call_notification_text">แตะเพื่อกลับไปที่การโทร</string>
+  <string name="missed_call_title">สายที่ไม่ได้รับ</string>
+  <string name="missed_call_video">สายที่ไม่ได้รับ</string>
+  <string name="missed_call_from">จาก %s</string>
+  <string name="notification_new_message">ข้อความใหม่</string>
+  <string name="summary_missed_calls_title">สายที่ไม่ได้รับ</string>
+  <string name="summary_unread_title">ข้อความที่ยังไม่ได้อ่าน</string>
+  <string name="summary_unread_from_time">จาก %1$s เวลา %2$s</string>
+  <plurals name="summary_missed_calls_count">
+    <item quantity="other">สายที่ไม่ได้รับ %d สาย</item>
+  </plurals>
+  <plurals name="summary_unread_count">
+    <item quantity="other">ข้อความที่ยังไม่ได้อ่าน %d ข้อความ</item>
+  </plurals>
+</resources>

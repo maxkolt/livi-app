@@ -7,6 +7,8 @@ import { MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
 import Carousel from 'react-native-reanimated-carousel';
 import { Extrapolation, interpolate } from 'react-native-reanimated';
 import AdaptiveText from '../AdaptiveText';
+import { t } from '../../utils/i18n';
+import { useLang } from '../../store/lang';
 import FitText from '../FitText';
 import {
   checkCosmeticPayment,
@@ -14,6 +16,8 @@ import {
   loadCosmetics,
   setActiveCosmetic,
   useCosmetics,
+  cosmeticBlurbKey,
+  cosmeticNameKey,
   type CosmeticKind,
 } from '../../utils/cosmetics';
 import {
@@ -43,18 +47,15 @@ type Props = {
   onUnlock?: () => void;
 };
 
+/** Название и описание — в i18n по ключу предмета (cosmeticNameKey / cosmeticBlurbKey). */
 type FrameItem = {
   key: string;
-  label: string;
-  blurb: string;
   colors: readonly [string, string, ...string[]];
   kind: 'ring';
 };
 
 type ChatBackgroundItem = {
   key: string;
-  label: string;
-  blurb: string;
   source: number;
 };
 
@@ -82,32 +83,22 @@ function withAlpha(hex: string, alpha: number): string {
 const CHAT_BACKGROUND_CATALOG: ChatBackgroundItem[] = [
   {
     key: 'aurora-chat',
-    label: 'Неон',
-    blurb: 'Глубокий синий узор для спокойных ночных разговоров.',
     source: require('../../assets/chat-wallpapers/dark/doodles-cyan.jpeg'),
   },
   {
     key: 'deep-space',
-    label: 'Космос',
-    blurb: 'Глубокий синий фон со звёздами и лёгким свечением.',
     source: require('../../assets/chat-wallpapers/dark/cosmos.jpeg'),
   },
   {
     key: 'poetry',
-    label: 'Пушкин',
-    blurb: 'Литературный фон с характером для тёплых личных диалогов.',
     source: require('../../assets/chat-wallpapers/dark/pushkin.jpeg'),
   },
   {
     key: 'ocean-flow',
-    label: 'Бирюза',
-    blurb: 'Прохладный узор и чистые оттенки бирюзы для каждого диалога.',
     source: require('../../assets/chat-wallpapers/dark/doodles-teal.jpeg'),
   },
   {
     key: 'graphite-chat',
-    label: 'Письма',
-    blurb: 'Сдержанный тёмный фон с рукописными деталями и ясным контрастом.',
     source: require('../../assets/chat-wallpapers/dark/letters.jpeg'),
   },
 ];
@@ -115,57 +106,41 @@ const CHAT_BACKGROUND_CATALOG: ChatBackgroundItem[] = [
 const FRAME_CATALOG: FrameItem[] = [
   {
     key: 'fire',
-    label: 'Огонь',
-    blurb: 'Живая рамка вокруг аватара. Тебя видно первым в списках, звонках и профиле.',
     colors: ['#FFC062', '#FF8A34', '#FF4D1C'],
     kind: 'ring',
   },
   {
     key: 'diamond',
-    label: 'Бриллиант',
-    blurb: 'Холодные блики по ободу, вдохновлённые сиянием граней камня.',
     colors: ['#E8F6FF', '#9ED0FF', '#6AA9FF'],
     kind: 'ring',
   },
   {
     key: 'aurora',
-    label: 'Аврора',
-    blurb: 'Перелив бирюзового и синего в узнаваемом стиле LiVi.',
     colors: ['#7CF5C8', '#5AA9FF', '#3B82F6'],
     kind: 'ring',
   },
   {
     key: 'palladium',
-    label: 'Палладий',
-    blurb: 'Спокойный металлический обод с мягким световым бликом.',
     colors: ['#F2F4F7', '#C5CCD6', '#8B93A0'],
     kind: 'ring',
   },
   {
     key: 'frost',
-    label: 'Лёд',
-    blurb: 'Кристальная кромка с холодным голубым свечением.',
     colors: ['#D9F4FF', '#7EC8E8', '#4A9BC7'],
     kind: 'ring',
   },
   {
     key: 'jade',
-    label: 'Нефрит',
-    blurb: 'Глубокий зелёный обод с мягким внутренним сиянием.',
     colors: ['#B8F0D0', '#3DCF8E', '#1B8F5A'],
     kind: 'ring',
   },
   {
     key: 'void',
-    label: 'Опал',
-    blurb: 'Тёмный обод с редким фиолетовым и радужным отблеском.',
     colors: ['#D4B5FF', '#7B5CFF', '#2A1B4A'],
     kind: 'ring',
   },
   {
     key: 'obsidian',
-    label: 'Обсидиан',
-    blurb: 'Матовый чёрный контур с тонкой серебряной искрой.',
     colors: ['#6B7280', '#374151', '#111827'],
     kind: 'ring',
   },
@@ -288,6 +263,8 @@ function PurchaseButton({
 }
 
 export function FramesStoreModal({ visible, onClose, onUnlock }: Props) {
+  const lang = useLang((state) => state.lang);
+  const L = useCallback((key: string) => t(key, lang), [lang]);
   const insets = useSafeAreaInsets();
   const { width: windowWidth, height: windowHeight } = useSafeAreaFrame();
   const landscape = windowWidth > windowHeight;
@@ -344,16 +321,16 @@ export function FramesStoreModal({ visible, onClose, onUnlock }: Props) {
         onUnlock?.();
         setPurchaseNotice({
           kind: 'success',
-          title: 'Покупка готова',
-          message: 'Выбранное оформление применено к вашему профилю.',
+          title: 'storePurchaseDoneTitle',
+          message: 'storePurchaseDoneText',
         });
       } else if (result.status === 'canceled') {
         setPendingPaymentId('');
         setPaymentBusy(null);
         setPurchaseNotice({
           kind: 'canceled',
-          title: 'Оплата отменена',
-          message: 'Покупка не была завершена. Вы можете попробовать ещё раз.',
+          title: 'storePaymentCanceledTitle',
+          message: 'storePaymentCanceledText',
         });
       }
     } catch {
@@ -460,8 +437,8 @@ export function FramesStoreModal({ visible, onClose, onUnlock }: Props) {
       setPendingPaymentId('');
       setPurchaseNotice({
         kind: 'error',
-        title: 'Не удалось открыть оплату',
-        message: 'Проверьте подключение и попробуйте ещё раз.',
+        title: 'storePaymentOpenFailedTitle',
+        message: 'storePaymentOpenFailedText',
       });
     } finally {
       setPaymentBusy(null);
@@ -516,7 +493,7 @@ export function FramesStoreModal({ visible, onClose, onUnlock }: Props) {
               hitSlop={10}
               style={({ pressed }) => [styles.closeBtn, pressed && styles.closeBtnPressed]}
               accessibilityRole="button"
-              accessibilityLabel="Закрыть"
+              accessibilityLabel={L('storeClose')}
             >
               <MaterialIcons name="close" size={22} color={CROWN_GOLD} />
             </Pressable>
@@ -542,7 +519,7 @@ export function FramesStoreModal({ visible, onClose, onUnlock }: Props) {
               >
                 <MaterialCommunityIcons name="message-image-outline" size={compact ? 17 : 19} color={CROWN_GOLD} />
                 <FitText style={[styles.sectionHeading, compact && styles.sectionHeadingCompact]} minimumFontScale={0.75}>
-                  ФОНЫ ДЛЯ ЧАТА
+                  {L('storeChatBackgrounds')}
                 </FitText>
               </View>
 
@@ -570,7 +547,7 @@ export function FramesStoreModal({ visible, onClose, onUnlock }: Props) {
                         minimumFontScale={0.65}
                         numberOfLines={1}
                       >
-                        {item.label}
+                        {L(cosmeticNameKey(item.key))}
                       </FitText>
                     </View>
                   )}
@@ -585,19 +562,19 @@ export function FramesStoreModal({ visible, onClose, onUnlock }: Props) {
                 ]}
               >
                 <FitText style={[styles.itemTitle, compact && styles.itemTitleCompact]} minimumFontScale={0.75}>
-                  {activeBackground.label}
+                  {L(cosmeticNameKey(activeBackground.key))}
                 </FitText>
                 <AdaptiveText style={[styles.subtitle, compact && styles.subtitleCompact]} numberOfLines={compact ? 1 : 2}>
-                  {activeBackground.blurb}
+                  {L(cosmeticBlurbKey(activeBackground.key))}
                 </AdaptiveText>
               </View>
 
               <PurchaseButton
                 label={paymentBusy === 'background'
-                  ? 'Открываем оплату…'
+                  ? L('storeOpeningPayment')
                   : backgroundOwned
-                    ? backgroundActive ? 'Снять фон' : 'Применить фон'
-                    : 'Купить фон · 99 ₽'}
+                    ? backgroundActive ? L('storeRemoveBackground') : L('storeApplyBackground')
+                    : L('storeBuyBackground').replace('{price}', '99 ₽')}
                 icon="image-outline"
                 width={buttonWidth}
                 height={buttonHeight}
@@ -621,7 +598,7 @@ export function FramesStoreModal({ visible, onClose, onUnlock }: Props) {
               >
                 <MaterialCommunityIcons name="account-star-outline" size={compact ? 17 : 19} color={CROWN_GOLD} />
                 <FitText style={[styles.sectionHeading, compact && styles.sectionHeadingCompact]} minimumFontScale={0.75}>
-                  РАМКИ ДЛЯ АВАТАРА
+                  {L('storeAvatarFrames')}
                 </FitText>
               </View>
 
@@ -649,7 +626,7 @@ export function FramesStoreModal({ visible, onClose, onUnlock }: Props) {
                         minimumFontScale={0.65}
                         numberOfLines={1}
                       >
-                        {item.label}
+                        {L(cosmeticNameKey(item.key))}
                       </FitText>
                     </View>
                   )}
@@ -664,19 +641,19 @@ export function FramesStoreModal({ visible, onClose, onUnlock }: Props) {
                 ]}
               >
                 <FitText style={[styles.itemTitle, compact && styles.itemTitleCompact]} minimumFontScale={0.75}>
-                  {activeFrame.label}
+                  {L(cosmeticNameKey(activeFrame.key))}
                 </FitText>
                 <AdaptiveText style={[styles.subtitle, compact && styles.subtitleCompact]} numberOfLines={compact ? 1 : 2}>
-                  {activeFrame.blurb}
+                  {L(cosmeticBlurbKey(activeFrame.key))}
                 </AdaptiveText>
               </View>
 
               <PurchaseButton
                 label={paymentBusy === 'frame'
-                  ? 'Открываем оплату…'
+                  ? L('storeOpeningPayment')
                   : frameOwned
-                    ? frameActive ? 'Снять рамку' : 'Применить рамку'
-                    : 'Купить рамку · 199 ₽'}
+                    ? frameActive ? L('storeRemoveFrame') : L('storeApplyFrame')
+                    : L('storeBuyFrame').replace('{price}', '199 ₽')}
                 icon="account-circle-outline"
                 width={buttonWidth}
                 height={buttonHeight}
@@ -700,7 +677,7 @@ export function FramesStoreModal({ visible, onClose, onUnlock }: Props) {
               style={StyleSheet.absoluteFillObject}
               onPress={closePurchaseNotice}
               accessibilityRole="button"
-              accessibilityLabel="Закрыть"
+              accessibilityLabel={L('storeClose')}
             />
             <WelcomeOverlayCard style={styles.purchaseNoticeCard} opaque>
               <View style={styles.purchaseNoticeHeader}>
@@ -734,17 +711,17 @@ export function FramesStoreModal({ visible, onClose, onUnlock }: Props) {
                   />
                 </LinearGradient>
                 <FitText style={styles.purchaseNoticeTitle} minimumFontScale={0.78} numberOfLines={2}>
-                  {purchaseNotice.title}
+                  {L(purchaseNotice.title)}
                 </FitText>
               </View>
 
               <AdaptiveText style={styles.purchaseNoticeMessage}>
-                {purchaseNotice.message}
+                {L(purchaseNotice.message)}
               </AdaptiveText>
 
               <View style={styles.purchaseNoticeDivider} />
               <WelcomeOverlayPill
-                label={purchaseNotice.kind === 'error' ? 'Закрыть' : 'Хорошо'}
+                label={purchaseNotice.kind === 'error' ? L('storeClose') : L('storeOk')}
                 onPress={closePurchaseNotice}
                 variant={purchaseNotice.kind === 'error'
                   ? 'danger'

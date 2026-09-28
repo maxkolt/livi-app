@@ -18,6 +18,8 @@ import { scheduleGlobalFriendPresenceEmit } from '../utils/friendOnlinePresence'
 import { getFriendIds } from '../utils/friendshipUtils';
 import { hashInstallSecret, verifyInstallSecret, isPlausibleInstallSecret, isDeviceBoundInstallId } from '../utils/installSecret';
 import { checkRateLimit } from '../utils/rateLimit';
+import { collectUploadedMediaNames, deleteUnreferencedUploadedMedia } from '../utils/uploadedMedia';
+import { UPLOADS_MEDIA_DIR } from '../routes/upload';
 
 type AttachPayload = {
   installId?: string | null;
@@ -472,6 +474,27 @@ export default function registerIdentitySockets(io: Server) {
           console.warn('[identity:wipeMe] failed to collect friends before wipe', e?.message);
         }
 
+        // Файлы фото и голосовых из удаляемых чатов: после удаления сообщений на них
+        // больше никто не ссылается, и без этого они остались бы на диске навсегда.
+        let mediaNames: string[] = [];
+        try {
+          const chatIds = (await FriendshipMessages.find({ $or: [{ user1: userId }, { user2: userId }] }).select('_id').lean()).map((d: any) => d._id);
+          const [chatItems, directMessages, offlineMessages] = await Promise.all([
+            chatIds.length
+              ? FriendshipMessageItem.find({ friendshipId: { $in: chatIds }, type: { $in: ['image', 'audio'] } }).select('uri uris').lean()
+              : Promise.resolve([]),
+            Message.find({ $or: [{ from: userId }, { to: userId }], uri: { $exists: true, $ne: '' } }).select('uri').lean(),
+            OfflineMessage.find({ $or: [{ senderId: userId }, { recipientId: userId }] }).select('messageData.uri messageData.uris').lean(),
+          ]);
+          mediaNames = collectUploadedMediaNames([
+            ...(chatItems as any[]),
+            ...(directMessages as any[]),
+            ...(offlineMessages as any[]).map((doc) => doc?.messageData || {}),
+          ]);
+        } catch (e: any) {
+          console.warn('[identity:wipeMe] failed to collect chat media before wipe', e?.message);
+        }
+
         try { session = await mongoose.startSession(); } catch {}
 
         const work = async (s?: ClientSession) => {
@@ -567,6 +590,10 @@ export default function registerIdentitySockets(io: Server) {
         scheduleGlobalFriendPresenceEmit(io, userId);
 
         ack?.({ ok: true });
+
+        void deleteUnreferencedUploadedMedia(mediaNames, UPLOADS_MEDIA_DIR).catch((e: any) => {
+          console.warn('[identity:wipeMe] failed to delete chat media', e?.message);
+        });
       } catch (e: any) {
         try { session?.endSession(); } catch {}
         ack?.({ ok: false, error: e?.message || 'server_error' });

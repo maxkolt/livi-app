@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <string name="incoming_call_title">Cuộc gọi đến</string>
+  <string name="incoming_call_title_audio">Cuộc gọi đến</string>
+  <string name="incoming_call_unknown">Có người đang gọi</string>
+  <string name="incoming_call_accept">Chấp nhận</string>
+  <string name="incoming_call_decline">Từ chối</string>
+  <string name="outgoing_call_title">Cuộc gọi video đi</string>
+  <string name="outgoing_call_subtitle">Đang gọi…</string>
+  <string name="outgoing_call_subtitle_base">Đang gọi</string>
+  <string name="outgoing_call_subtitle_base_audio">Đang gọi</string>
+  <string name="outgoing_call_cancel">Hủy</string>
+  <string name="outgoing_call_notification_channel">Cuộc gọi đi</string>
+  <string name="outgoing_call_notification_title">LiVi — đang gọi</string>
+  <string name="pip_action_end_call">Kết thúc</string>
+  <string name="pip_action_audio_call">Âm thanh</string>
+  <string name="pip_action_audio_call_desc">Chuyển sang màn hình cuộc gọi thoại</string>
+  <string name="active_call_notification_channel">Cuộc gọi đang diễn ra</string>
+  <string name="active_call_notification_title">Cuộc gọi</string>
+  <string name="active_call_notification_title_from">Cuộc gọi với %s</string>
+  <string name="active_call_notification_title_someone">Cuộc gọi đang diễn ra</string>
+  <string name="active_call_notification_text">Nhấn để quay lại cuộc gọi</string>
+  <string name="active_audio_call_notification_channel">Cuộc gọi đang diễn ra</string>
+  <string name="active_audio_call_notification_title_from">Cuộc gọi với %s</string>
+  <string name="active_audio_call_notification_title_someone">Cuộc gọi đang diễn ra</string>
+  <string name="active_audio_call_notification_text">Nhấn để quay lại cuộc gọi</string>
+  <string name="missed_call_title">Cuộc gọi nhỡ</string>
+  <string name="missed_call_video">Cuộc gọi nhỡ</string>
+  <string name="missed_call_from">Từ %s</string>
+  <string name="notification_new_message">Tin nhắn mới</string>
+  <string name="summary_missed_calls_title">Cuộc gọi nhỡ</string>
+  <string name="summary_unread_title">Tin nhắn chưa đọc</string>
+  <string name="summary_unread_from_time">Từ %1$s lúc %2$s</string>
+  <plurals name="summary_missed_calls_count">
+    <item quantity="other">%d cuộc gọi nhỡ</item>
+  </plurals>
+  <plurals name="summary_unread_count">
+    <item quantity="other">%d tin nhắn chưa đọc</item>
+  </plurals>
+</resources>

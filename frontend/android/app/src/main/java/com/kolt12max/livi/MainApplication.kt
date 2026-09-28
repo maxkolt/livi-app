@@ -18,6 +18,7 @@ import com.facebook.react.ReactPackage
 import com.facebook.react.ReactHost
 import com.facebook.react.defaults.DefaultNewArchitectureEntryPoint.load
 import com.facebook.react.defaults.DefaultReactNativeHost
+import com.facebook.react.modules.i18nmanager.I18nUtil
 import com.facebook.react.soloader.OpenSourceMergedSoMapping
 import com.facebook.soloader.SoLoader
 
@@ -60,6 +61,11 @@ class MainApplication : Application(), ReactApplication {
 
   override fun onCreate() {
     super.onCreate()
+    // Раскладка всегда слева направо, текст на арабском внутри строк остаётся RTL.
+    // Иначе на арабском устройстве RN зеркалит весь UI (радар, жесты, сдвиги),
+    // а при выборе арабского в самом приложении — нет. До загрузки JS, чтобы
+    // действовало с первого запуска, а не после перезапуска.
+    I18nUtil.instance.allowRTL(this, false)
     val appMetricaApiKey = BuildConfig.APPMETRICA_API_KEY
     if (appMetricaApiKey.isNotBlank()) {
       val config = AppMetricaConfig.newConfigBuilder(appMetricaApiKey).build()

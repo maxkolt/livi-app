@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <string name="incoming_call_title">来电</string>
+  <string name="incoming_call_title_audio">来电</string>
+  <string name="incoming_call_unknown">有人来电</string>
+  <string name="incoming_call_accept">接听</string>
+  <string name="incoming_call_decline">拒绝</string>
+  <string name="outgoing_call_title">视频通话呼出</string>
+  <string name="outgoing_call_subtitle">正在呼叫…</string>
+  <string name="outgoing_call_subtitle_base">正在呼叫</string>
+  <string name="outgoing_call_subtitle_base_audio">正在呼叫</string>
+  <string name="outgoing_call_cancel">取消</string>
+  <string name="outgoing_call_notification_channel">呼出电话</string>
+  <string name="outgoing_call_notification_title">LiVi — 正在呼叫</string>
+  <string name="pip_action_end_call">挂断</string>
+  <string name="pip_action_audio_call">语音</string>
+  <string name="pip_action_audio_call_desc">切换到语音通话界面</string>
+  <string name="active_call_notification_channel">通话中</string>
+  <string name="active_call_notification_title">通话</string>
+  <string name="active_call_notification_title_from">与 %s 通话中</string>
+  <string name="active_call_notification_title_someone">通话中</string>
+  <string name="active_call_notification_text">点按返回通话</string>
+  <string name="active_audio_call_notification_channel">通话中</string>
+  <string name="active_audio_call_notification_title_from">与 %s 通话中</string>
+  <string name="active_audio_call_notification_title_someone">通话中</string>
+  <string name="active_audio_call_notification_text">点按返回通话</string>
+  <string name="missed_call_title">未接来电</string>
+  <string name="missed_call_video">未接来电</string>
+  <string name="missed_call_from">来自 %s</string>
+  <string name="notification_new_message">新消息</string>
+  <string name="summary_missed_calls_title">未接来电</string>
+  <string name="summary_unread_title">未读消息</string>
+  <string name="summary_unread_from_time">来自 %1$s，%2$s</string>
+  <plurals name="summary_missed_calls_count">
+    <item quantity="other">%d 个未接来电</item>
+  </plurals>
+  <plurals name="summary_unread_count">
+    <item quantity="other">%d 条未读消息</item>
+  </plurals>
+</resources>

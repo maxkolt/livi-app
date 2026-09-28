@@ -289,11 +289,13 @@ router.post('/push-token', async (req, res) => {
       return res.status(401).json({ ok: false, error: 'unauthorized' });
     }
 
-    const { token, platform, fcmToken, voipToken } = (req.body || {}) as {
+    const { token, platform, fcmToken, voipToken, lang } = (req.body || {}) as {
       token?: string;
       platform?: 'ios' | 'android';
       fcmToken?: string;
       voipToken?: string;
+      /** Язык UI устройства — для серверных текстов push. */
+      lang?: string;
     };
 
     if (!token || typeof token !== 'string') {
@@ -305,7 +307,15 @@ router.post('/push-token', async (req, res) => {
 
     const fcm = typeof fcmToken === 'string' && fcmToken.length > 0 ? fcmToken : undefined;
     const voip = typeof voipToken === 'string' && voipToken.length > 0 ? voipToken : undefined;
-    await upsertExpoPushToken({ userId, installId, platform, token, fcmToken: fcm, voipToken: voip });
+    await upsertExpoPushToken({
+      userId,
+      installId,
+      platform,
+      token,
+      fcmToken: fcm,
+      voipToken: voip,
+      lang: typeof lang === 'string' ? lang : undefined,
+    });
     pushLog('token_registered', {
       userId: String(userId),
       platform,

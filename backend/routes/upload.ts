@@ -63,6 +63,8 @@ function resolvePublicDir(): string {
 
 // Создаем директорию для uploads если её нет
 const uploadsDir = path.join(resolvePublicDir(), 'uploads', 'media');
+/** Папка медиа из чатов — нужна удалению аккаунта, чтобы стереть файлы. */
+export const UPLOADS_MEDIA_DIR = uploadsDir;
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }

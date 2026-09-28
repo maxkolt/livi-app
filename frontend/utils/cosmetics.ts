@@ -32,6 +32,23 @@ const BACKGROUND_TO_WALLPAPER: Record<string, string> = {
   'graphite-chat': 'dark-letters',
 };
 
+function cosmeticKeySuffix(itemId: string): string {
+  return itemId
+    .split('-')
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join('');
+}
+
+/** i18n-ключ названия рамки или фона: 'aurora-chat' → 'cosmeticNameAuroraChat'. */
+export function cosmeticNameKey(itemId: string): string {
+  return `cosmeticName${cosmeticKeySuffix(itemId)}`;
+}
+
+/** i18n-ключ описания рамки или фона. */
+export function cosmeticBlurbKey(itemId: string): string {
+  return `cosmeticBlurb${cosmeticKeySuffix(itemId)}`;
+}
+
 export function cosmeticBackgroundToWallpaperId(itemId: string): string {
   return BACKGROUND_TO_WALLPAPER[itemId] || DEFAULT_DARK_WALLPAPER_ID;
 }

@@ -183,12 +183,14 @@ type PushTokenSnapshot = {
   userId: string;
   expoToken: string;
   fcmToken: string;
+  /** Язык UI, с которым токен зарегистрирован: сервер переводит по нему свои тексты push. */
+  lang?: string;
   atMs: number;
 };
 
 type RegisterPushTokenOptions = {
   force?: boolean;
-  reason?: 'startup' | 'app_active' | 'socket_reconnect' | 'manual' | 'ios_voip_token';
+  reason?: 'startup' | 'app_active' | 'socket_reconnect' | 'manual' | 'ios_voip_token' | 'lang_changed';
 };
 
 let lastRegisteredPushToken: PushTokenSnapshot | null = null;
@@ -212,6 +214,7 @@ async function loadPersistedPushTokenSnapshot(): Promise<void> {
       userId,
       expoToken,
       fcmToken: String(parsed.fcmToken || ''),
+      lang: String(parsed.lang || ''),
       atMs: Number(parsed.atMs || 0) || 0,
     };
   } catch {}
@@ -1909,10 +1912,12 @@ export async function registerAndSendPushToken(userId?: string, options?: Regist
         });
       } catch {}
 
+      const lang = await loadLang();
       const snapshotNow: PushTokenSnapshot = {
         userId: String(userId),
         expoToken: String(token),
         fcmToken: String(fcmToken || ''),
+        lang,
         atMs: Date.now(),
       };
       const last = lastRegisteredPushToken;
@@ -1920,7 +1925,8 @@ export async function registerAndSendPushToken(userId?: string, options?: Regist
         !!last &&
         last.userId === snapshotNow.userId &&
         last.expoToken === snapshotNow.expoToken &&
-        last.fcmToken === snapshotNow.fcmToken;
+        last.fcmToken === snapshotNow.fcmToken &&
+        last.lang === snapshotNow.lang;
       const withinCooldown = !!last && snapshotNow.atMs - last.atMs < PUSH_TOKEN_REGISTER_COOLDOWN_MS;
       const force = options?.force === true;
       if (!force && unchanged && withinCooldown) {
@@ -1935,6 +1941,7 @@ export async function registerAndSendPushToken(userId?: string, options?: Regist
       const body: Record<string, unknown> = {
         token,
         platform: Platform.OS,
+        lang,
         ...(Platform.OS === 'android' && fcmToken ? { fcmToken } : {}),
         ...(Platform.OS === 'ios' && voipToken ? { voipToken } : {}),
       };

@@ -92,7 +92,7 @@ class OutgoingCallActivity : AppCompatActivity() {
 
         Log.d(TAG, "onCreate: activity created callId=$callId toUserId=$toUserId toNick=${toNick.take(20)}")
 
-        findViewById<TextView>(R.id.callee_name).text = if (toNick.isNotEmpty()) toNick else getString(R.string.outgoing_call_title)
+        findViewById<TextView>(R.id.callee_name).text = if (toNick.isNotEmpty()) toNick else AppLocale.str(applicationContext, R.string.outgoing_call_title)
         val subtitleView = findViewById<TextView>(R.id.call_subtitle)
         val hasVideo = intent.getBooleanExtra(EXTRA_HAS_VIDEO, true)
         startDotsAnimation(subtitleView, hasVideo)
@@ -146,6 +146,7 @@ class OutgoingCallActivity : AppCompatActivity() {
         }
 
         val cancelButton = findViewById<ImageButton>(R.id.btn_cancel)
+        cancelButton.contentDescription = AppLocale.str(applicationContext, R.string.outgoing_call_cancel)
         installPressFeedback(cancelButton)
 
         cancelButton.setOnClickListener {
@@ -245,7 +246,7 @@ class OutgoingCallActivity : AppCompatActivity() {
         LiviOngoingCallHelper.setOutgoingCall(this, newCallId, toUserId, toNick)
         // Гасим только предыдущий ringback, не unscoped (иначе убьём только что стартовавший).
         LiviOutgoingCallService.stop(this, previousCallId)
-        findViewById<TextView>(R.id.callee_name).text = if (toNick.isNotEmpty()) toNick else getString(R.string.outgoing_call_title)
+        findViewById<TextView>(R.id.callee_name).text = if (toNick.isNotEmpty()) toNick else AppLocale.str(applicationContext, R.string.outgoing_call_title)
         findViewById<TextView>(R.id.call_subtitle)?.let { startDotsAnimation(it, newHasVideo) }
         if (newCallId.isNotEmpty()) {
             callIdEmptyTimeoutRunnable?.let { timeoutHandler.removeCallbacks(it) }
@@ -372,7 +373,7 @@ class OutgoingCallActivity : AppCompatActivity() {
 
     private var dotsCount = 0
     private fun startDotsAnimation(subtitleView: TextView, hasVideo: Boolean = true) {
-        val base = getString(if (hasVideo) R.string.outgoing_call_subtitle_base else R.string.outgoing_call_subtitle_base_audio)
+        val base = AppLocale.str(applicationContext, if (hasVideo) R.string.outgoing_call_subtitle_base else R.string.outgoing_call_subtitle_base_audio)
         dotsRunnable = object : Runnable {
             override fun run() {
                 dotsCount = (dotsCount % 3) + 1

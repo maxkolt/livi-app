@@ -190,13 +190,14 @@ object OutgoingCallOverlay {
 
   private fun bindUi(rootView: View, nick: String, video: Boolean) {
     rootView.findViewById<TextView>(R.id.callee_name)?.text =
-      if (nick.isNotEmpty()) nick else rootView.context.getString(R.string.outgoing_call_title)
+      if (nick.isNotEmpty()) nick else AppLocale.str(rootView.context, R.string.outgoing_call_title)
     val subtitle = rootView.findViewById<TextView>(R.id.call_subtitle) ?: return
     startDotsAnimation(subtitle, video)
   }
 
   private fun wireCancel(rootView: View) {
     val cancelButton = rootView.findViewById<ImageButton>(R.id.btn_cancel) ?: return
+    cancelButton.contentDescription = AppLocale.str(rootView.context, R.string.outgoing_call_cancel)
     installPressFeedback(cancelButton)
     cancelButton.setOnClickListener {
       if (hideRequested) return@setOnClickListener
@@ -367,7 +368,7 @@ object OutgoingCallOverlay {
 
   private fun startDotsAnimation(subtitleView: TextView, video: Boolean) {
     dotsRunnable?.let { handler.removeCallbacks(it) }
-    val base = subtitleView.context.getString(
+    val base = AppLocale.str(subtitleView.context, 
       if (video) R.string.outgoing_call_subtitle_base else R.string.outgoing_call_subtitle_base_audio,
     )
     dotsCount = 1

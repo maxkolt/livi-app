@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <string name="incoming_call_title">着信</string>
+  <string name="incoming_call_title_audio">着信</string>
+  <string name="incoming_call_unknown">着信があります</string>
+  <string name="incoming_call_accept">応答</string>
+  <string name="incoming_call_decline">拒否</string>
+  <string name="outgoing_call_title">発信中のビデオ通話</string>
+  <string name="outgoing_call_subtitle">呼び出し中…</string>
+  <string name="outgoing_call_subtitle_base">呼び出し中</string>
+  <string name="outgoing_call_subtitle_base_audio">呼び出し中</string>
+  <string name="outgoing_call_cancel">キャンセル</string>
+  <string name="outgoing_call_notification_channel">発信</string>
+  <string name="outgoing_call_notification_title">LiVi — 呼び出し中</string>
+  <string name="pip_action_end_call">終了</string>
+  <string name="pip_action_audio_call">音声</string>
+  <string name="pip_action_audio_call_desc">音声通話画面に切り替え</string>
+  <string name="active_call_notification_channel">通話中</string>
+  <string name="active_call_notification_title">通話</string>
+  <string name="active_call_notification_title_from">%s さんと通話中</string>
+  <string name="active_call_notification_title_someone">通話中</string>
+  <string name="active_call_notification_text">タップして通話に戻る</string>
+  <string name="active_audio_call_notification_channel">通話中</string>
+  <string name="active_audio_call_notification_title_from">%s さんと通話中</string>
+  <string name="active_audio_call_notification_title_someone">通話中</string>
+  <string name="active_audio_call_notification_text">タップして通話に戻る</string>
+  <string name="missed_call_title">不在着信</string>
+  <string name="missed_call_video">不在着信</string>
+  <string name="missed_call_from">%s さんから</string>
+  <string name="notification_new_message">新着メッセージ</string>
+  <string name="summary_missed_calls_title">不在着信</string>
+  <string name="summary_unread_title">未読メッセージ</string>
+  <string name="summary_unread_from_time">%1$s さんから %2$s</string>
+  <plurals name="summary_missed_calls_count">
+    <item quantity="other">不在着信 %d件</item>
+  </plurals>
+  <plurals name="summary_unread_count">
+    <item quantity="other">未読メッセージ %d件</item>
+  </plurals>
+</resources>

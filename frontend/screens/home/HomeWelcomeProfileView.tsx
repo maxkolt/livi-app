@@ -33,6 +33,7 @@ import { PurchasesManagementPanel } from './PurchasesManagementPanel';
 import {
   LIVI,
   isWelcomeTabletLayout,
+  searchPhoneScale,
   WELCOME_BRAND_VI_FILL_GRADIENT,
   WELCOME_FRIENDS_LIST_INSET,
   WELCOME_GLASS_BORDER,
@@ -50,7 +51,7 @@ import {
 import type { HomeStyles } from './styles';
 import { APP_INPUT_MAX_FONT_SIZE_MULTIPLIER } from '../../utils/accessibilityTypography';
 
-const SUPPORT_EMAIL = '12345kolt@gmal.com';
+const SUPPORT_EMAIL = '12345kolt@gmail.com';
 const SUPPORT_EMAIL_2 = 'kolt12max@mail.ru';
 const BOOSTY_URL = process.env.EXPO_PUBLIC_BOOSTY_URL || 'https://boosty.to/liviapp/donate';
 const PATREON_URL = process.env.EXPO_PUBLIC_PATREON_URL || 'https://www.patreon.com/c/LiViApp';
@@ -188,8 +189,30 @@ function resolveHubPreset(isTablet: boolean, isLandscape: boolean): HubMetricsPr
  * снаружи (+AVATAR_RING_WIDTH×2), поэтому вычитаем его.
  */
 function portraitPhoneAvatarSize(width: number): number {
-  const searchAvatarOuter = width < 400 ? 120 : 132;
+  const searchAvatarOuter = Math.round((width < 400 ? 120 : 132) * searchPhoneScale(width));
   return searchAvatarOuter - AVATAR_RING_WIDTH * 2;
+}
+
+/** Предел масштаба строк: дальше экран уже не телефон, а «лопата». */
+const PHONE_HUB_MAX_SCALE = 1.25;
+
+/**
+ * На широком телефоне строки и отступы растут вместе с аватаром — как на Поиске.
+ * Минимумы не трогаем: они нужны, чтобы на низком экране список ужимался.
+ */
+function scaleHubPreset(preset: HubMetricsPreset, k: number): HubMetricsPreset {
+  if (!(k > 1)) return preset;
+  const r = (v: number) => Math.round(v * k);
+  return {
+    ...preset,
+    gapTop: r(preset.gapTop),
+    gapUnderAvatar: r(preset.gapUnderAvatar),
+    gapAboveDelete: r(preset.gapAboveDelete),
+    gapBottom: r(preset.gapBottom),
+    deleteHeight: r(preset.deleteHeight),
+    rowMax: r(preset.rowMax),
+    gapMax: r(preset.gapMax),
+  };
 }
 
 function resolveHubMetrics(
@@ -202,7 +225,10 @@ function resolveHubMetrics(
   const basePreset = resolveHubPreset(isTablet, isLandscape);
   const preset =
     !isTablet && !isLandscape
-      ? { ...basePreset, avatarSize: portraitPhoneAvatarSize(width) }
+      ? scaleHubPreset(
+          { ...basePreset, avatarSize: portraitPhoneAvatarSize(width) },
+          Math.min(PHONE_HUB_MAX_SCALE, searchPhoneScale(width)),
+        )
       : basePreset;
   const fixed =
     preset.gapTop +
@@ -457,7 +483,7 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
     if (screen === 'about') return t('welcomeAboutApp', lang);
     if (screen === 'help') return t('profileHelp', lang);
     if (screen === 'support') return t('supportProjectTitle', lang);
-    if (screen === 'purchases') return 'Управление покупками';
+    if (screen === 'purchases') return t('purchasesManagement', lang);
     return t('chooseLanguage', lang);
   }, [screen, lang]);
 
@@ -835,7 +861,7 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
           tablet={isTablet}
           showDivider
           icon="bag-handle-outline"
-          label="Управление покупками"
+          label={t('purchasesManagement', lang)}
           onPress={openPurchases}
         />
         <WelcomeProfileRow
@@ -941,7 +967,7 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
       {hubLogoutButton}
     </View>
   ) : (
-    <View style={styles.hubMainBalance}>
+    <View style={[styles.hubMainBalance, isTablet && styles.hubMainBalanceTablet]}>
       <View style={styles.hubMainTop}>{hubAvatarSection}</View>
       {hubListStack}
       {hubLogoutButton}
@@ -1328,6 +1354,14 @@ const styles = StyleSheet.create({
     flex: 1,
     minHeight: 0,
     justifyContent: 'space-between',
+  },
+  /**
+   * Планшет: высоты с запасом, и space-between раздвигал аватар, список и
+   * «Удалить» дырами по 150–200 dp. Держим блок вместе по центру.
+   */
+  hubMainBalanceTablet: {
+    justifyContent: 'center',
+    gap: 24,
   },
   hubMainTop: {
     flexShrink: 0,

@@ -768,6 +768,12 @@ export function displayIncomingCall(callId: string, fromUserId: string, fromNick
   }
   lastDisplayedCallId.id = callId;
   lastDisplayedCallId.at = now;
+  if (Platform.OS === 'android') {
+    // Принятый звонок должен открыться поверх блокировки; без звонка MainActivity за ней.
+    try {
+      NativeModules.LiviAppModule?.markIncomingCallOverLock?.();
+    } catch {}
+  }
   try {
     rememberPendingCall({ callId, from: fromUserId, fromNick, callKitId, hasVideo });
     const RNCallKeep = require('react-native-callkeep');

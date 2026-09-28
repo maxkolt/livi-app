@@ -197,6 +197,29 @@ export const SEARCH_CTA_MAX_WIDTH = 360;
 export const SEARCH_CTA_TABLET_MAX_WIDTH = 520;
 export const SEARCH_CTA_TABLET_MIN_WIDTH = 600;
 
+/**
+ * Радар Поиска в портрете телефона. До 384 dp (A35, S25 по умолчанию) — как было:
+ * 88% ширины, не больше 328. На более широких телефонах (Pixel, Pro Max, уменьшенный
+ * «Масштаб экрана») растёт вместе с шириной, иначе вокруг остаётся пустота.
+ */
+export const SEARCH_RADAR_PHONE_BASE = 328;
+const SEARCH_RADAR_PHONE_BASE_WIDTH = 384;
+const SEARCH_RADAR_PHONE_MAX = 440;
+
+export function searchPhoneRadarPreferred(width: number, compact = false): number {
+  return Math.min(
+    width * (compact ? 0.84 : 0.88),
+    SEARCH_RADAR_PHONE_BASE * Math.max(1, width / SEARCH_RADAR_PHONE_BASE_WIDTH),
+    SEARCH_RADAR_PHONE_MAX,
+  );
+}
+
+/** Во сколько раз содержимое крупнее базового на широком телефоне (1 — до 384 dp). */
+export function searchPhoneScale(width: number): number {
+  if (!(width > 0)) return 1;
+  return Math.max(1, searchPhoneRadarPreferred(width) / SEARCH_RADAR_PHONE_BASE);
+}
+
 /** Телефон в landscape не становится планшетом только из-за большой длинной стороны. */
 export function isWelcomeTabletLayout(width: number, height: number): boolean {
   if (!(width > 0) || !(height > 0)) return false;
