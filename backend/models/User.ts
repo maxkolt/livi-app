@@ -25,6 +25,8 @@ export interface IUser {
   e2eKeyUpdatedAt?: Date;
   /** Резервная копия приватного ключа под паролем пользователя. Никогда не отдаётся без authKey. */
   e2eBackup?: IE2eKeyBackup;
+  /** Пользователь сам отключил шифрование: клиент не публикует ключ автоматически. */
+  e2eDisabled?: boolean;
 }
 
 export interface IE2eKeyBackup {
@@ -125,6 +127,11 @@ const UserSchema = new Schema<IUser>(
 
     e2eKeyUpdatedAt: {
       type: Date,
+    },
+
+    e2eDisabled: {
+      type: Boolean,
+      default: false,
     },
 
     // select: false — ни один существующий запрос профиля не должен унести копию наружу.

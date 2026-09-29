@@ -8,7 +8,7 @@ import com.facebook.react.uimanager.ViewManager
 class LiviAppPackage : ReactPackage {
 
   override fun createNativeModules(reactContext: ReactApplicationContext): List<NativeModule> {
-    return listOf(LiviAppModule(reactContext), LiviCryptoModule(reactContext))
+    return listOf(LiviAppModule(reactContext), LiviCryptoModule(reactContext), LiviKeyVaultModule(reactContext))
   }
 
   override fun createViewManagers(reactContext: ReactApplicationContext): List<ViewManager<*, *>> {

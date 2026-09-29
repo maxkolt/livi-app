@@ -44,14 +44,15 @@ const ORBIT_BAND_COLOR = mixOrbitBandColor();
 const BAND_OPACITIES = [0.155, 0.12, 0.08, 0.04] as const;
 
 /**
- * Две волны с одной скоростью. Вторая стартует, когда первая на середине пути
- * (delay = duration / 2) — так не обгоняют друг друга.
+ * Две волны с одной скоростью, вторая всегда отстаёт ровно на полпериода.
+ * Обе считаются из одного нативного цикла. Раньше каждая волна перезапускала
+ * себя из JS после окончания: задержки копились, волны сползали друг к другу и
+ * на экране было то одна, то две, а прерванная анимация (finished=false)
+ * обрывала цепочку — одна волна пропадала насовсем.
  */
 const RIPPLE_DURATION_MS = 7200;
-const RIPPLE_SPECS = [
-  { durationMs: RIPPLE_DURATION_MS, startDelayMs: 0 },
-  { durationMs: RIPPLE_DURATION_MS, startDelayMs: RIPPLE_DURATION_MS / 2 },
-] as const;
+/** Сдвиг фазы каждой волны в долях периода. */
+const RIPPLE_PHASES = [0, 0.5] as const;
 
 /** Слои одной волны — сильнее размытый край линии. */
 const RIPPLE_SOFT_LAYERS = [
@@ -163,34 +164,35 @@ export function WelcomeRadar({ size, avatarRadius, orbitScale = 1, children }: W
     ];
   }, [lastBand, outerSoftPad, outerSoftR]);
 
-  const ripples = useRef(RIPPLE_SPECS.map(() => new Animated.Value(0))).current;
+  const rippleClock = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    let stopped = false;
-    const timers: Array<ReturnType<typeof setTimeout>> = [];
-    const runners = ripples.map((value, i) => {
-      const spec = RIPPLE_SPECS[i];
-      const tick = () => {
-        if (stopped) return;
-        value.setValue(0);
-        Animated.timing(value, {
-          toValue: 1,
-          duration: spec.durationMs,
-          easing: Easing.linear,
-          useNativeDriver: true,
-        }).start(({ finished }) => {
-          if (finished && !stopped) tick();
-        });
-      };
-      timers.push(setTimeout(tick, spec.startDelayMs));
-      return () => value.stopAnimation();
-    });
-    return () => {
-      stopped = true;
-      timers.forEach(clearTimeout);
-      runners.forEach((stop) => stop());
-    };
-  }, [ripples]);
+    // С нативным драйвером loop крутится целиком на UI-потоке, без JS между кругами.
+    const loop = Animated.loop(
+      Animated.timing(rippleClock, {
+        toValue: 1,
+        duration: RIPPLE_DURATION_MS,
+        easing: Easing.linear,
+        useNativeDriver: true,
+      }),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [rippleClock]);
+
+  /** Прогресс каждой волны 0→1: общий цикл, сдвинутый на фазу по кругу. */
+  const ripples = useMemo(
+    () =>
+      RIPPLE_PHASES.map((phase) =>
+        phase === 0
+          ? rippleClock.interpolate({ inputRange: [0, 1], outputRange: [0, 1] })
+          : rippleClock.interpolate({
+              inputRange: [0, 1 - phase, 1 - phase + 0.0001, 1],
+              outputRange: [phase, 1, 0, phase],
+            }),
+      ),
+    [rippleClock],
+  );
 
   const rippleStartScale = Math.max(0.22, Math.min(0.55, (avatarOuter * 2) / s));
 
@@ -246,7 +248,7 @@ export function WelcomeRadar({ size, avatarRadius, orbitScale = 1, children }: W
         ) : null}
       </Svg>
 
-      {/* Рябь: разные периоды + мягкий край линии (несколько слоёв). */}
+      {/* Рябь: две волны через полпериода + мягкий край линии (несколько слоёв). */}
       {ripples.map((value, i) => {
         const scale = value.interpolate({
           inputRange: [0, 1],

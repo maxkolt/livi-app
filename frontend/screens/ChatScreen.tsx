@@ -215,7 +215,7 @@ import {
   useE2eStatus,
   type E2eModalMode,
 } from "./chat/E2eChatBanner";
-import { hasLocalE2eKey } from "../sockets/modules/e2e";
+import { hasLocalE2eKey, hasPasswordBackup } from "../sockets/modules/e2e";
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useLang } from "../store/lang";
 import { t, type Lang } from "../utils/i18n";
@@ -752,9 +752,10 @@ export default function ChatScreen({ route, navigation }: Props) {
   const uploadStatusRef = useRef(uploadStatus);
   uploadStatusRef.current = uploadStatus;
   const [showClearMenu, setShowClearMenu] = useState(false);
-  // Сквозное шифрование: пункт в меню справа вверху открывает окно пароля.
+  // Сквозное шифрование включается само; в меню справа вверху — отключить / включить снова
+  // и пароль для тех, кто включал шифрование по паролю раньше.
   const e2eStatus = useE2eStatus();
-  const e2eMenu = e2eMenuActions(e2eStatus, hasLocalE2eKey());
+  const e2eMenu = e2eMenuActions(e2eStatus, hasLocalE2eKey(), hasPasswordBackup());
   const chatEncrypted = usePeerChatEncrypted(peerId, e2eStatus);
   const [e2eRequestedMode, setE2eRequestedMode] = useState<E2eModalMode | null>(null);
   const clearE2eRequest = useCallback(() => setE2eRequestedMode(null), []);

@@ -282,6 +282,8 @@ dependencies {
     implementation("io.appmetrica.analytics:analytics:8.5.0")
     // Same as expo-notifications — прямой вызов для бейджа иконки без cancelAll().
     implementation("me.leolin:ShortcutBadger:1.1.22@aar")
+    // Block Store: ключ сквозного шифрования чата переживает переустановку (LiviKeyVaultModule).
+    implementation("com.google.android.gms:play-services-auth-blockstore:16.4.0")
 
     def isGifEnabled = (findProperty('expo.gif.enabled') ?: "") == "true";
     def isWebpEnabled = (findProperty('expo.webp.enabled') ?: "") == "true";

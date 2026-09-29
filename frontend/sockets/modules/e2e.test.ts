@@ -1,13 +1,30 @@
 /**
  * Сквозное шифрование целиком на клиенте: два пользователя и поддельный сервер,
- * который ведёт себя как backend/sockets/e2eKeys.ts. Главный сценарий —
- * переустановка: аккаунт остаётся, SecureStore стирается, переписку возвращает пароль.
+ * который ведёт себя как backend/sockets/e2eKeys.ts. Ключ создаётся без пароля
+ * и переживает переустановку в KeyVault; пароль нужен только для миграции старых копий.
  */
 
 const secure = new Map<string, string>();
+const vault = new Map<string, string>();
 const storage = new Map<string, string>();
+const mockKeyVault = {
+  readFails: false,
+  save: jest.fn(async (k: string, v: string) => {
+    vault.set(k, v);
+    return true;
+  }),
+  load: jest.fn(async (k: string) => {
+    if (mockKeyVault.readFails) throw new Error('vault unavailable');
+    return vault.get(k) ?? null;
+  }),
+  remove: jest.fn(async (k: string) => {
+    vault.delete(k);
+    return true;
+  }),
+};
 
 jest.mock('react-native-get-random-values', () => ({}), { virtual: true });
+jest.mock('react-native', () => ({ NativeModules: { LiviKeyVault: mockKeyVault } }));
 jest.mock('expo-secure-store', () => ({
   getItemAsync: jest.fn(async (k: string) => secure.get(k) ?? null),
   setItemAsync: jest.fn(async (k: string, v: string) => {
@@ -40,6 +57,7 @@ jest.mock('./reauth', () => ({ ensureReauthBeforePrivilegedSocketOp: jest.fn(asy
 const server = {
   keys: new Map<string, string>(),
   backups: new Map<string, any>(),
+  disabled: new Set<string>(),
   fetchAttempts: 0,
   down: false,
 };
@@ -49,12 +67,18 @@ const mockEmitAck = jest.fn(async (event: string, payload: any, ..._opts: unknow
   switch (event) {
     case 'e2e:state': {
       const b = server.backups.get(me);
-      return { ok: true, publicKey: server.keys.get(me) ?? '', backup: b ? { kdf: b.kdf, pk: b.pk } : null };
+      return {
+        ok: true,
+        publicKey: server.keys.get(me) ?? '',
+        backup: b ? { kdf: b.kdf, pk: b.pk } : null,
+        disabled: server.disabled.has(me),
+      };
     }
     case 'e2e:publish':
-      if (!payload.backup || payload.backup.pk !== payload.publicKey) return { ok: false, error: 'invalid_backup' };
+      if (payload.backup && payload.backup.pk !== payload.publicKey) return { ok: false, error: 'invalid_backup' };
       server.keys.set(me, payload.publicKey);
-      server.backups.set(me, payload.backup);
+      server.disabled.delete(me);
+      if (payload.backup) server.backups.set(me, payload.backup);
       return { ok: true };
     case 'e2e:backup_fetch': {
       server.fetchAttempts += 1;
@@ -66,11 +90,13 @@ const mockEmitAck = jest.fn(async (event: string, payload: any, ..._opts: unknow
     }
     case 'e2e:disable':
       server.keys.set(me, '');
+      server.disabled.add(me);
       return { ok: true };
     case 'e2e:enable': {
       const b = server.backups.get(me);
       if (!b || b.pk !== payload.publicKey) return { ok: false, error: 'no_backup' };
       server.keys.set(me, payload.publicKey);
+      server.disabled.delete(me);
       return { ok: true };
     }
     case 'e2e:keys': {
@@ -86,6 +112,7 @@ jest.mock('./emit', () => ({ emitAck: (e: string, p: any, ...opts: unknown[]) =>
 
 import {
   decryptIncomingMessage,
+  changeE2eBackupPassword,
   deleteLocalE2eKey,
   E2eUnavailableError,
   disableE2e,
@@ -96,11 +123,8 @@ import {
   refreshE2eState,
   resetE2e,
   restoreE2e,
-  setupE2e,
-  markE2eSetupPromptSeen,
   toWireEditPayload,
   toWireMessagePayload,
-  wasE2eSetupPromptSeen,
 } from './e2e';
 
 jest.setTimeout(60_000);
@@ -119,19 +143,27 @@ const delivered = (wire: any) => ({ id: wire.clientMessageId, from: ALICE, to: B
 
 beforeEach(() => {
   secure.clear();
+  vault.clear();
   storage.clear();
   server.keys.clear();
   server.backups.clear();
+  server.disabled.clear();
   server.fetchAttempts = 0;
   server.down = false;
+  mockKeyVault.readFails = false;
   mockSocket.connected = true;
   as('');
 });
 
-async function enable(user: string, password: string) {
+async function enable(user: string) {
   as(user);
-  await refreshE2eState();
-  expect(await setupE2e(password)).toEqual({ ok: true });
+  expect(await refreshE2eState()).toBe('ready');
+}
+
+/** Создать копию прежней схемы для проверки миграции. */
+async function enableLegacy(user: string, password: string) {
+  await enable(user);
+  expect(await changeE2eBackupPassword(password)).toEqual({ ok: true });
 }
 
 const textPayload = (over: Record<string, unknown> = {}) => ({
@@ -143,29 +175,25 @@ const textPayload = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
-describe('before encryption is enabled', () => {
-  it('sends plain text while the user has not set a password', async () => {
+describe('automatic setup without a password', () => {
+  it('creates, stores and publishes a key on the first state refresh', async () => {
     as(ALICE);
-    expect(await refreshE2eState()).toBe('needs_setup');
-    expect(await toWireMessagePayload(textPayload())).toEqual(textPayload());
+    expect(await refreshE2eState()).toBe('ready');
+    expect(server.keys.get(ALICE)).toBeTruthy();
+    expect(server.backups.has(ALICE)).toBe(false);
+    expect([...secure.values()]).toEqual([...vault.values()]);
   });
 
-  it('sends plain text to a contact who has no key yet', async () => {
-    await enable(ALICE, 'alice-password');
+  it('sends plain text to a contact who has not published a key yet', async () => {
+    await enable(ALICE);
     expect(await toWireMessagePayload(textPayload())).toEqual(textPayload());
-  });
-
-  it('does not publish a key just by checking the state', async () => {
-    as(ALICE);
-    await refreshE2eState();
-    expect(server.keys.size).toBe(0);
   });
 });
 
 describe('between two users with encryption on', () => {
   beforeEach(async () => {
-    await enable(BOB, 'bob-password');
-    await enable(ALICE, 'alice-password');
+    await enable(BOB);
+    await enable(ALICE);
   });
 
   it('never puts the text or the quote on the wire', async () => {
@@ -225,82 +253,111 @@ describe('between two users with encryption on', () => {
     beforeEach(async () => {
       as(ALICE);
       oldWire = await toWireMessagePayload(textPayload());
-      // Переустановка: аккаунт и сервер те же, SecureStore пуст.
+      // Переустановка: SecureStore пуст, но KeyVault пережил её.
       secure.clear();
       as('');
       as(BOB);
     });
 
-    it('asks for the password instead of silently starting over', async () => {
-      expect(await refreshE2eState()).toBe('needs_restore');
-      const m: any = await decryptIncomingMessage(delivered(oldWire), placeholder);
-      expect(m.e2eUndecryptable).toBe(true);
-    });
-
-    it('blocks sending until the key is restored, rather than sending plain text', async () => {
-      await refreshE2eState();
-      await expect(toWireMessagePayload(textPayload({ to: ALICE }))).rejects.toMatchObject({ reason: 'locked' });
-    });
-
-    it('rejects a wrong password and keeps the old key on the server', async () => {
-      await refreshE2eState();
-      expect(await restoreE2e('not-bobs-password')).toEqual({ ok: false, error: 'wrong_password', retryAfterSec: undefined });
-      expect(getE2eStatus()).toBe('needs_restore');
-    });
-
-    it('brings the old chats back with the right password', async () => {
-      await refreshE2eState();
-      expect(await restoreE2e('bob-password')).toEqual({ ok: true });
+    it('restores the same key from KeyVault without asking for a password', async () => {
+      const before = server.keys.get(BOB);
+      expect(await refreshE2eState()).toBe('ready');
+      expect(server.keys.get(BOB)).toBe(before);
+      expect(hasLocalE2eKey()).toBe(true);
+      const bobStorageKey = [...vault.keys()].find((k) => k.includes(BOB));
+      expect(bobStorageKey).toBeTruthy();
+      expect(secure.get(bobStorageKey!)).toBe(vault.get(bobStorageKey!));
       expect(getE2eStatus()).toBe('ready');
       const m: any = await decryptIncomingMessage(delivered(oldWire), placeholder);
       expect(m.text).toBe('секретный текст');
     });
 
-    it('can start over with a new password; the contact is told the key changed', async () => {
-      await refreshE2eState();
-      expect(await resetE2e('new-bob-password')).toEqual({ ok: true });
-      expect(getE2eStatus()).toBe('ready');
-      // Старое сообщение этому ключу уже не открыть.
-      expect(((await decryptIncomingMessage(delivered(oldWire), placeholder)) as any).e2eUndecryptable).toBe(true);
-
-      as(ALICE);
-      await refreshE2eState();
-      const changed: string[] = [];
-      const off = onPeerKeyChanged((peer) => changed.push(peer));
-      const { getPeerPublicKey } = await import('./e2e');
-      await getPeerPublicKey(BOB, { force: true });
-      off();
-      expect(changed).toEqual([BOB]);
+    it('does not rotate the server key when KeyVault is temporarily unavailable', async () => {
+      const before = server.keys.get(BOB);
+      mockKeyVault.readFails = true;
+      expect(await refreshE2eState()).toBe('needs_setup');
+      expect(server.keys.get(BOB)).toBe(before);
     });
+  });
+});
+
+describe('migration from password-protected backups', () => {
+  let oldWire: any;
+
+  beforeEach(async () => {
+    await enableLegacy(BOB, 'bob-password');
+    await enable(ALICE);
+    oldWire = await toWireMessagePayload(textPayload());
+    // На старой установке ключ ещё не был скопирован в KeyVault.
+    secure.clear();
+    vault.clear();
+    as('');
+    as(BOB);
+  });
+
+  it('asks for the old password and blocks encrypted sending until recovery', async () => {
+    expect(await refreshE2eState()).toBe('needs_restore');
+    expect(((await decryptIncomingMessage(delivered(oldWire), placeholder)) as any).e2eUndecryptable).toBe(true);
+    await expect(toWireMessagePayload(textPayload({ to: ALICE }))).rejects.toMatchObject({ reason: 'locked' });
+  });
+
+  it('rejects a wrong password and keeps the published key', async () => {
+    const before = server.keys.get(BOB);
+    await refreshE2eState();
+    expect(await restoreE2e('not-bobs-password')).toEqual({
+      ok: false,
+      error: 'wrong_password',
+      retryAfterSec: undefined,
+    });
+    expect(getE2eStatus()).toBe('needs_restore');
+    expect(server.keys.get(BOB)).toBe(before);
+  });
+
+  it('restores old chats and copies the recovered key into KeyVault', async () => {
+    await refreshE2eState();
+    expect(await restoreE2e('bob-password')).toEqual({ ok: true });
+    expect(getE2eStatus()).toBe('ready');
+    expect(vault.size).toBe(1);
+    expect(((await decryptIncomingMessage(delivered(oldWire), placeholder)) as any).text).toBe('секретный текст');
+  });
+
+  it('can start over without a password and tells the contact that the key changed', async () => {
+    await refreshE2eState();
+    expect(await resetE2e()).toEqual({ ok: true });
+    expect(((await decryptIncomingMessage(delivered(oldWire), placeholder)) as any).e2eUndecryptable).toBe(true);
+
+    as(ALICE);
+    await refreshE2eState();
+    const changed: string[] = [];
+    const off = onPeerKeyChanged((peer) => changed.push(peer));
+    const { getPeerPublicKey } = await import('./e2e');
+    await getPeerPublicKey(BOB, { force: true });
+    off();
+    expect(changed).toEqual([BOB]);
   });
 });
 
 describe('local key lifetime', () => {
   it('keeps keys per account, so a new account on the same device starts clean', async () => {
-    await enable(ALICE, 'alice-password');
+    await enable(ALICE);
+    const aliceKey = server.keys.get(ALICE);
     as(BOB);
-    expect(await refreshE2eState()).toBe('needs_setup');
+    expect(await refreshE2eState()).toBe('ready');
+    expect(server.keys.get(BOB)).toBeTruthy();
+    expect(server.keys.get(BOB)).not.toBe(aliceKey);
   });
 
-  it('forgets the key when the profile is deleted', async () => {
-    await enable(ALICE, 'alice-password');
-    await markE2eSetupPromptSeen();
+  it('forgets both local copies when the profile is deleted', async () => {
+    await enable(ALICE);
+    storage.set(`e2e_peer_key_pins_v1:${ALICE}`, '{}');
     await deleteLocalE2eKey(ALICE);
     expect([...secure.keys()].some((k) => k.includes(ALICE))).toBe(false);
+    expect([...vault.keys()].some((k) => k.includes(ALICE))).toBe(false);
     expect([...storage.keys()].some((k) => k.includes(ALICE))).toBe(false);
   });
 
-  it('offers encryption in the chat only once per account', async () => {
-    as(ALICE);
-    expect(await wasE2eSetupPromptSeen()).toBe(false);
-    await markE2eSetupPromptSeen();
-    expect(await wasE2eSetupPromptSeen()).toBe(true);
-    as(BOB);
-    expect(await wasE2eSetupPromptSeen()).toBe(false);
-  });
-
   it('queues instead of sending plain text when this device had encryption on but the server is unreachable', async () => {
-    await enable(ALICE, 'alice-password');
+    await enable(ALICE);
     as(''); // перезапуск приложения: состояние в памяти потеряно
     as(ALICE);
     server.down = true;
@@ -320,8 +377,8 @@ describe('local key lifetime', () => {
 
 describe('turning encryption off and on again', () => {
   beforeEach(async () => {
-    await enable(BOB, 'bob-password');
-    await enable(ALICE, 'alice-password');
+    await enable(BOB);
+    await enable(ALICE);
   });
 
   it('sends plain text after turning it off, while old messages stay readable', async () => {
@@ -350,16 +407,17 @@ describe('turning encryption off and on again', () => {
     expect(server.keys.get(ALICE)).toBe(before);
   });
 
-  it('after reinstalling with encryption off, sending is not blocked and the key can be restored', async () => {
+  it('after reinstalling while disabled, loads the same key without a password', async () => {
+    const before = server.keys.get(ALICE);
     await disableE2e();
     secure.clear();
     as('');
     as(ALICE);
     expect(await refreshE2eState()).toBe('disabled');
-    expect(hasLocalE2eKey()).toBe(false);
-    expect(await toWireMessagePayload(textPayload())).toEqual(textPayload());
-    expect(await restoreE2e('alice-password')).toEqual({ ok: true });
-    expect(getE2eStatus()).toBe('disabled');
     expect(hasLocalE2eKey()).toBe(true);
+    expect(await toWireMessagePayload(textPayload())).toEqual(textPayload());
+    expect(await enableE2eAgain()).toEqual({ ok: true });
+    expect(getE2eStatus()).toBe('ready');
+    expect(server.keys.get(ALICE)).toBe(before);
   });
 });

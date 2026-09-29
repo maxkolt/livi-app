@@ -91,6 +91,10 @@ export const WELCOME_FRIEND_ROW_STRIDE_TABLET =
 export const WELCOME_FRIEND_AVATAR_SIZE_TABLET = 48;
 /** Скругление внешней оболочки сегментов «Все / Онлайн» (не pill). */
 export const WELCOME_FRIENDS_SEGMENT_SHELL_RADIUS = 14;
+/** Отступ под блоком «Все / Онлайн» — от него считается и надпись пустого списка. */
+export const WELCOME_FRIENDS_SEGMENT_GAP = { phone: 12, landscape: 6, tablet: 14 } as const;
+/** Отступ над карточкой «Пригласить друзей» (футер списка друзей). */
+export const WELCOME_FRIENDS_INVITE_GAP = { phone: 8, landscape: 4, tablet: 8 } as const;
 /** Кнопки звонка/чата в welcome-строке — скругление (круг при 42×42). */
 export const WELCOME_FRIEND_ACTION_BTN_RADIUS = 21;
 /** Иконки звонка/чата welcome — чуть светлее активных иконок tab bar (Vi). */
@@ -218,6 +222,47 @@ export function searchPhoneRadarPreferred(width: number, compact = false): numbe
 export function searchPhoneScale(width: number): number {
   if (!(width > 0)) return 1;
   return Math.max(1, searchPhoneRadarPreferred(width) / SEARCH_RADAR_PHONE_BASE);
+}
+
+/**
+ * Ширина первой (внутренней) орбиты радара вокруг аватара. Орбиты не сжимаем
+ * дополнительным коэффициентом: радар и так ограничен высотой сцены, а лишнее
+ * сжатие склеивало полосы вокруг крупного аватара.
+ */
+export function welcomeRadarFirstRingWidth(radarSize: number, avatarBase: number): number {
+  const half = radarSize / 2;
+  const avatarOuter = Math.round(avatarBase / 2) + 2;
+  const stepTotal = 0.56 + 0.86 + 1.18 + 1.14;
+  const g = Math.max(half * 0.078, (half * 0.85 - avatarOuter) / stepTotal);
+  return g * 0.56;
+}
+
+/**
+ * Аватар Поиска в вертикали телефона — эталон для всех раскладок: Поиск и
+ * Профиль в обеих ориентациях показывают аватар ровно этого размера. Считается
+ * от короткой стороны окна (ширины в вертикали), поэтому при повороте не меняется.
+ *
+ * base — фото без захода на орбиту (от него строятся кольца и аватар с рамкой),
+ * outer — внешний диаметр: фото заходит на 2/3 первой орбиты,
+ * frameOutset — вынос купленной рамки за край фото.
+ */
+export function welcomePhoneAvatarMetrics(shortSide: number): {
+  base: number;
+  outer: number;
+  frameOutset: number;
+} {
+  const radar = searchPhoneRadarPreferred(shortSide);
+  const base = Math.round(
+    Math.min((shortSide < 400 ? 112 : 124) * searchPhoneScale(shortSide), radar * 0.42),
+  );
+  const ring = welcomeRadarFirstRingWidth(radar, base);
+  return {
+    base,
+    outer: Math.round(base + (ring * 2) / 3),
+    // Рамка начинается у края фото, проходит служебный зазор 2 px и перекрывает
+    // только внутреннюю часть первой орбиты.
+    frameOutset: 2 + ring * 0.22,
+  };
 }
 
 /** Телефон в landscape не становится планшетом только из-за большой длинной стороны. */

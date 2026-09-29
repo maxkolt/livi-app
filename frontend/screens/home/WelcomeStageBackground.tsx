@@ -1,6 +1,5 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
-  Animated,
   AppState,
   Image,
   StyleSheet,
@@ -18,12 +17,6 @@ const STAGE_BG = require('../../assets/welcome-stage-bg.png');
 /** Тон снят с welcome-stage-bg.png — градиент читается как та же сцена без «шва». */
 const STAGE_GRADIENT_COLORS = ['#0E1D24', '#0C171F', '#0A111B', '#0B1821'] as const;
 const STAGE_GRADIENT_LOCATIONS = [0, 0.16, 0.38, 1] as const;
-/**
- * Виден только в момент поворота, когда слой градиента скрыт. Взят из середины
- * самого градиента: раньше здесь была почти чёрная WELCOME_STAGE_BG, и подмена
- * читалась как вспышка «плоского синего».
- */
-export const STAGE_TRANSITION_BG = '#0C1720';
 
 /**
  * Счётчик пробуждений. Нативный слой LinearGradient после сна переиспользуется
@@ -54,76 +47,25 @@ function resolveIsWide(width: number, height: number): boolean {
 }
 
 /**
- * Full-bleed stage.
- * Phone portrait: dithered bitmap + cover (как на макете).
- * Tablet / landscape: только градиент — портретный PNG на широком экране даёт
- * вертикальный «шов» (две колонки тона).
+ * Full-bleed stage — один и тот же слой в любой ориентации и на любом экране.
  *
- * Под картинкой всегда лежит нативный вертикальный градиент того же тона, а не
- * плоская заливка: в широкой раскладке именно он и остаётся фоном, поэтому при
- * повороте градиент не «исчезает», а просто перестаёт перекрываться битмапом.
- * Сама картинка не размонтируется, а гасится по opacity, и ориентацию берём из
- * собственного onLayout, а не из frame: frame приходит на кадр позже, и за этот
- * кадр портретный PNG успевал растянуться в landscape-коробку.
+ * Картинка по сути вертикальный градиент (светлее сверху и снизу, темнее в
+ * середине), поэтому её растягиваем на весь экран, а не обрезаем: в горизонтали
+ * сохраняется тот же переход тона сверху вниз. Раньше в широкой раскладке PNG
+ * подменялся градиентом-имитацией, и при повороте менялся сам фон, а не только
+ * контент. Тот же PNG стоит нативным фоном окна (window_stage_background.xml):
+ * полосы, которые RN после поворота ещё не перерисовал, выглядят так же.
  */
 export function WelcomeStageBackground() {
-  const frame = useSafeAreaFrame();
-  const resumeEpoch = useResumeEpoch();
-  const [box, setBox] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
-  const isWide = resolveIsWide(box.w || frame.width, box.h || frame.height);
-  const bitmapOpacity = useRef(new Animated.Value(isWide ? 0 : 1)).current;
-
-  /**
-   * Показ битмапа отложен, скрытие — мгновенное.
-   *
-   * При пробуждении система на ~400мс отдаёт портретные размеры, хотя окно
-   * остаётся горизонтальным (замерено: frame 755×360 → 360×800 → 755×360).
-   * За это время успевал включиться портретный PNG и оставлял на экране
-   * вертикальный стык. С задержкой этот всплеск проходит мимо: к моменту
-   * срабатывания таймера размеры уже вернулись, и показ отменяется.
-   */
-  useEffect(() => {
-    if (isWide) {
-      bitmapOpacity.stopAnimation();
-      bitmapOpacity.setValue(0);
-      return;
-    }
-    const timer = setTimeout(() => {
-      Animated.timing(bitmapOpacity, {
-        toValue: 1,
-        duration: 200,
-        useNativeDriver: true,
-      }).start();
-    }, 500);
-    return () => clearTimeout(timer);
-  }, [bitmapOpacity, isWide]);
-
-  const onLayout = (e: LayoutChangeEvent) => {
-    const { width, height } = e.nativeEvent.layout;
-    if (!(width > 0 && height > 0)) return;
-    setBox((prev) =>
-      Math.abs(prev.w - width) < 1 && Math.abs(prev.h - height) < 1 ? prev : { w: width, h: height },
-    );
-  };
-
   return (
     <View
       style={[StyleSheet.absoluteFill, { backgroundColor: WELCOME_STAGE_BG }]}
-      onLayout={onLayout}
       pointerEvents="none"
     >
-      <LinearGradient
-        key={`stage-gradient-${resumeEpoch}`}
-        colors={STAGE_GRADIENT_COLORS}
-        locations={STAGE_GRADIENT_LOCATIONS}
-        start={{ x: 0.5, y: 0 }}
-        end={{ x: 0.5, y: 1 }}
-        style={StyleSheet.absoluteFill}
-      />
-      <Animated.Image
+      <Image
         source={STAGE_BG}
-        style={[StyleSheet.absoluteFill, { opacity: bitmapOpacity }]}
-        resizeMode="cover"
+        style={styles.stageImage}
+        resizeMode="stretch"
         fadeDuration={0}
       />
     </View>
@@ -213,6 +155,16 @@ export function StageGradient({ style, children, onLayout, translucent, mirror }
 }
 
 const styles = StyleSheet.create({
+  /**
+   * Image.android.js подставляет в стиль width/height из require (540×1200), и
+   * они сильнее absoluteFill: картинка была коробкой 540×1200dp в левом верхнем
+   * углу — в горизонтали обрывалась на 540dp вертикальным «швом».
+   */
+  stageImage: {
+    ...StyleSheet.absoluteFillObject,
+    width: '100%',
+    height: '100%',
+  },
   mirror: {
     transform: [{ scaleY: -1 }],
   },

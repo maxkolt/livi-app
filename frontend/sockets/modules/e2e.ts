@@ -1,17 +1,20 @@
 /**
- * Сквозное шифрование чата: ключи, их резервная копия и шифрование на границе сети.
+ * Сквозное шифрование чата: ключи и шифрование на границе сети.
+ *
+ * Включается само, без пароля: ключ создаётся на устройстве и публикуется при первой
+ * сверке с сервером. Переустановку переживает через системное хранилище — Android
+ * Block Store (LiviKeyVault), на iOS Keychain (SecureStore) переживает её и так.
  *
  * Состояния своего ключа:
  *   unknown       — ещё не сверялись с сервером
- *   needs_setup   — ключа нет: сообщения идут как раньше, пока пользователь не задаст пароль
- *   needs_restore — на сервере опубликован ключ, а на устройстве его нет (переустановка):
- *                   нужен пароль копии, иначе старая переписка не читается
+ *   needs_setup   — ключ не удалось опубликовать (нет связи, старый сервер): сообщения
+ *                   идут как раньше, пробуем снова при следующей сверке
+ *   needs_restore — ключ включали по паролю (прежняя схема), а на устройстве его нет:
+ *                   старую переписку вернёт только пароль копии
  *   ready         — ключ на устройстве совпадает с опубликованным
- *   disabled      — пользователь отключил шифрование: ключ снят с публикации, копия
- *                   осталась; новые сообщения обычные, старые читаются (если ключ здесь)
+ *   disabled      — пользователь отключил шифрование: ключ снят с публикации;
+ *                   новые сообщения обычные, старые читаются (если ключ здесь)
  *
- * Ключ публикуется только вместе с копией под паролем (правило держит и сервер):
- * переустановка на Android сохраняет аккаунт, но стирает SecureStore.
  * Ключ хранится под userId: удаление профиля даёт новый аккаунт, ключи не смешиваются.
  */
 import "react-native-get-random-values";
@@ -107,10 +110,45 @@ function syncUser(): string | null {
   return me;
 }
 
+/**
+ * Хранилище ключа, переживающее переустановку: Android Block Store. На iOS модуля нет —
+ * там Keychain (SecureStore) сам переживает переустановку.
+ */
+type KeyVault = {
+  save(key: string, valueB64: string): Promise<boolean>;
+  /** null — ключа нет; reject — временный сбой (не путать с «нет»). */
+  load(key: string): Promise<string | null>;
+  remove(key: string): Promise<boolean>;
+};
+const keyVault = (NativeModules as any)?.LiviKeyVault as KeyVault | undefined;
+/** Последнее чтение хранилища сорвалось: ключ мог там быть, новый создавать нельзя. */
+let vaultReadFailed = false;
+/** Для кого копия в хранилище уже сверена в этом запуске. */
+let vaultSyncedFor: string | null = null;
+
+async function vaultSave(key: string, valueB64: string): Promise<void> {
+  try {
+    await keyVault?.save(key, valueB64);
+  } catch {}
+}
+
 async function loadOwnKey(me: string): Promise<E2eKeyPair | null> {
   if (state.own) return state.own;
+  vaultReadFailed = false;
   try {
-    const raw = await SecureStore.getItemAsync(SECRET_KEY_PREFIX + me);
+    let raw = await SecureStore.getItemAsync(SECRET_KEY_PREFIX + me);
+    if (!raw && keyVault) {
+      // Переустановка на Android: SecureStore пуст, ключ ждёт в Block Store.
+      try {
+        raw = await keyVault.load(SECRET_KEY_PREFIX + me);
+      } catch {
+        vaultReadFailed = true;
+      }
+      if (raw) {
+        await SecureStore.setItemAsync(SECRET_KEY_PREFIX + me, raw).catch(() => {});
+        vaultSyncedFor = me;
+      }
+    }
     const sk = raw ? fromBase64(raw) : null;
     if (sk && sk.length === 32 && state.userId === me) state.own = keyPairFromSecretKey(sk);
   } catch {}
@@ -119,8 +157,18 @@ async function loadOwnKey(me: string): Promise<E2eKeyPair | null> {
 
 async function saveOwnKey(me: string, pair: E2eKeyPair): Promise<void> {
   // Сначала на устройство, потом на сервер: опубликованный ключ без локальной копии — потеря переписки.
-  await SecureStore.setItemAsync(SECRET_KEY_PREFIX + me, toBase64(pair.secretKey));
+  const b64 = toBase64(pair.secretKey);
+  await SecureStore.setItemAsync(SECRET_KEY_PREFIX + me, b64);
   if (state.userId === me) state.own = pair;
+  await vaultSave(SECRET_KEY_PREFIX + me, b64);
+  vaultSyncedFor = me;
+}
+
+/** Ключ включали до хранилища (или по паролю): кладём копию туда один раз за запуск. */
+function ensureVaultCopy(me: string, own: E2eKeyPair): void {
+  if (!keyVault || vaultSyncedFor === me) return;
+  vaultSyncedFor = me;
+  void vaultSave(SECRET_KEY_PREFIX + me, toBase64(own.secretKey));
 }
 
 /** Удаление профиля: ключ и запомненные ключи собеседников этого аккаунта больше не нужны. */
@@ -128,6 +176,10 @@ export async function deleteLocalE2eKey(userId: string): Promise<void> {
   try {
     await SecureStore.deleteItemAsync(SECRET_KEY_PREFIX + userId);
   } catch {}
+  try {
+    await keyVault?.remove(SECRET_KEY_PREFIX + userId);
+  } catch {}
+  if (vaultSyncedFor === userId) vaultSyncedFor = null;
   try {
     await AsyncStorage.multiRemove([`${PINS_KEY}:${userId}`, `e2e_setup_prompt_seen_v1:${userId}`]);
   } catch {}
@@ -169,16 +221,46 @@ export function refreshE2eState(): Promise<E2eStatus> {
     state.serverPublicKey = String(resp.publicKey || "");
     state.backupKdf = resp.backup?.kdf ?? null;
     state.backupPk = String(resp.backup?.pk || "");
-    if (own && state.serverPublicKey === toBase64(own.publicKey)) setStatus("ready");
-    else if (state.serverPublicKey && state.backupKdf) setStatus("needs_restore");
-    // Отключено (ключ снят, копия есть): отправка обычная, восстановить/включить — из меню.
-    else if (!state.serverPublicKey && state.backupKdf && state.backupPk) setStatus("disabled");
-    else setStatus("needs_setup");
+    // Отключил сам. Сервер до автошифрования флага не шлёт: там признак — ключ снят, копия есть.
+    const disabled =
+      resp.disabled === true || (!state.serverPublicKey && !!state.backupKdf && !!state.backupPk);
+    if (disabled) setStatus("disabled");
+    else if (own && state.serverPublicKey === toBase64(own.publicKey)) {
+      setStatus("ready");
+      ensureVaultCopy(me, own);
+    }
+    // Ключ включали по паролю (прежняя схема), а здесь его нет: переписку вернёт только пароль.
+    else if (state.serverPublicKey && state.backupKdf && state.backupPk === state.serverPublicKey) {
+      setStatus("needs_restore");
+    }
+    // Хранилище не ответило, а ключ на сервере есть: он мог лежать там — новый не создаём,
+    // иначе старая переписка станет нечитаемой. Повторим при следующей сверке.
+    else if (!own && vaultReadFailed && state.serverPublicKey) setStatus("needs_setup");
+    else await autoEnable(me, own);
     return state.status;
   })().finally(() => {
     refreshInFlight = null;
   });
   return refreshInFlight;
+}
+
+/**
+ * Шифрование включается само: свой ключ (с этого устройства или из хранилища после
+ * переустановки) либо новый. Не удалось опубликовать (нет связи или старый сервер,
+ * требующий копию под паролем) — остаёмся без шифрования до следующей сверки.
+ */
+async function autoEnable(me: string, own: E2eKeyPair | null): Promise<void> {
+  const pair = own ?? generateKeyPair();
+  if (!own) {
+    try {
+      await saveOwnKey(me, pair);
+    } catch {
+      if (state.userId === me) setStatus("needs_setup");
+      return;
+    }
+  }
+  const r = await publishDeviceKey(me, pair);
+  if (!r.ok && state.userId === me) setStatus("needs_setup");
 }
 
 type ActionResult = { ok: true } | { ok: false; error: string; retryAfterSec?: number };
@@ -224,6 +306,24 @@ async function emitAuthed(event: string, payload: Record<string, unknown>): Prom
   return resp;
 }
 
+/** Публикация ключа без копии под паролем: переустановку он переживёт через хранилище. */
+async function publishDeviceKey(me: string, pair: E2eKeyPair): Promise<ActionResult> {
+  const publicKey = toBase64(pair.publicKey);
+  const resp: any = await emitAuthed("e2e:publish", { publicKey });
+  logger.info("[e2e] publish device key", {
+    ok: !!resp?.ok,
+    error: resp?.error ?? (resp ? null : "no_ack"),
+    vault: !!keyVault,
+  });
+  if (!resp?.ok) return { ok: false, error: resp?.error || "network" };
+  if (state.userId === me) {
+    state.serverPublicKey = publicKey;
+    setStatus("ready");
+  }
+  return { ok: true };
+}
+
+/** Публикация ключа вместе с новой копией под паролем — только смена пароля старой схемы. */
 async function publish(me: string, pair: E2eKeyPair, password: string): Promise<ActionResult> {
   await ensureNativeKdf();
   const kdfStartedAt = Date.now();
@@ -247,18 +347,10 @@ async function publish(me: string, pair: E2eKeyPair, password: string): Promise<
   return { ok: true };
 }
 
-/** Включить шифрование: создать (или взять недопубликованный) ключ и сохранить копию под паролем. */
-export async function setupE2e(password: string): Promise<ActionResult> {
-  const me = syncUser();
-  if (!me) return { ok: false, error: "unauthorized" };
-  if (state.status === "needs_restore") return { ok: false, error: "needs_restore" };
-  const pair = (await loadOwnKey(me)) ?? generateKeyPair();
-  try {
-    await saveOwnKey(me, pair);
-  } catch {
-    return { ok: false, error: "secure_store" };
-  }
-  return publish(me, pair, password);
+/** Есть копия под паролем для текущего ключа (включали по паролю) — можно сменить пароль. */
+export function hasPasswordBackup(): boolean {
+  syncUser();
+  return !!state.backupKdf && !!state.backupPk && state.backupPk === state.serverPublicKey;
 }
 
 /** Сменить пароль копии для того же ключа. */
@@ -315,19 +407,23 @@ export async function disableE2e(): Promise<ActionResult> {
   return { ok: true };
 }
 
-/** Включить снова тот же ключ — без пароля: копия для него на сервере уже есть. */
+/**
+ * Включить снова — без пароля: тот же ключ, а если его здесь нет (переустановка с
+ * отключённым шифрованием) — новый.
+ */
 export async function enableE2eAgain(): Promise<ActionResult> {
   const me = syncUser();
-  const own = me ? await loadOwnKey(me) : null;
-  if (!me || !own) return { ok: false, error: "no_local_key" };
-  const publicKey = toBase64(own.publicKey);
-  const resp: any = await emitAuthed("e2e:enable", { publicKey });
-  if (!resp?.ok) return { ok: false, error: resp?.error || "network" };
-  if (state.userId === me) {
-    state.serverPublicKey = publicKey;
-    setStatus("ready");
+  if (!me) return { ok: false, error: "unauthorized" };
+  const own = await loadOwnKey(me);
+  const pair = own ?? generateKeyPair();
+  if (!own) {
+    try {
+      await saveOwnKey(me, pair);
+    } catch {
+      return { ok: false, error: "secure_store" };
+    }
   }
-  return { ok: true };
+  return publishDeviceKey(me, pair);
 }
 
 /** Собеседник включил/отключил/сменил шифрование (e2e:key_changed). */
@@ -337,10 +433,10 @@ export function onPeerE2eUpdated(cb: (peerId: string) => void): () => void {
 }
 
 /**
- * Пароль забыт: новый ключ и новая копия. Старые зашифрованные сообщения у этого
- * пользователя больше не прочитать (у собеседников они остаются читаемыми).
+ * Пароль прежней схемы забыт: новый ключ, уже без пароля. Старые зашифрованные сообщения
+ * у этого пользователя больше не прочитать (у собеседников они остаются читаемыми).
  */
-export async function resetE2e(password: string): Promise<ActionResult> {
+export async function resetE2e(): Promise<ActionResult> {
   const me = syncUser();
   if (!me) return { ok: false, error: "unauthorized" };
   const pair = generateKeyPair();
@@ -349,7 +445,7 @@ export async function resetE2e(password: string): Promise<ActionResult> {
   } catch {
     return { ok: false, error: "secure_store" };
   }
-  return publish(me, pair, password);
+  return publishDeviceKey(me, pair);
 }
 
 /* ---------- ключи собеседников ---------- */
@@ -545,25 +641,4 @@ export async function toWireEditPayload(
   if (!to) return { messageId, text };
   const enc = await sealOutgoingText({ id: messageId, to, text });
   return enc ? { messageId, enc } : { messageId, text };
-}
-
-const SETUP_PROMPT_SEEN_KEY = "e2e_setup_prompt_seen_v1";
-
-/** Предложение включить шифрование показываем в чате один раз на аккаунт — дальше оно в меню чата. */
-export async function wasE2eSetupPromptSeen(): Promise<boolean> {
-  const me = syncUser();
-  if (!me) return true;
-  try {
-    return (await AsyncStorage.getItem(`${SETUP_PROMPT_SEEN_KEY}:${me}`)) === "1";
-  } catch {
-    return true;
-  }
-}
-
-export async function markE2eSetupPromptSeen(): Promise<void> {
-  const me = syncUser();
-  if (!me) return;
-  try {
-    await AsyncStorage.setItem(`${SETUP_PROMPT_SEEN_KEY}:${me}`, "1");
-  } catch {}
 }

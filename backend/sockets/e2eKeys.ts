@@ -9,11 +9,12 @@ import { getFriendIds } from '../utils/friendshipUtils';
 /**
  * Ключи сквозного шифрования чата.
  *
- * Правило: публичный ключ публикуется только вместе с резервной копией приватного
- * под паролем. Переустановка на Android сохраняет аккаунт, но не SecureStore —
- * без копии вся зашифрованная переписка стала бы нечитаемой.
+ * Клиент включает шифрование сам, без пароля: ключ создаётся на устройстве и
+ * переживает переустановку через системное хранилище (Android Block Store, iOS
+ * Keychain). Поэтому ключ публикуется и без резервной копии.
  *
- * Копия: из пароля (scrypt) клиент выводит ключ шифрования копии и authKey.
+ * Копия под паролем осталась у тех, кто включал шифрование раньше (по паролю):
+ * из пароля (scrypt/PBKDF2) клиент выводит ключ шифрования копии и authKey.
  * Сервер хранит HMAC(authKey) и отдаёт копию только тому, кто прислал верный
  * authKey, с лимитом попыток — перебор пароля через сервер невозможен.
  */
@@ -111,12 +112,13 @@ export function registerE2eKeyHandlers(io: Server, sock: Socket, meId: () => str
     try {
       const me = authed();
       if (!me) return ack?.({ ok: false, error: 'unauthorized' });
-      const u = await User.findById(me).select('e2ePublicKey +e2eBackup').lean();
+      const u = await User.findById(me).select('e2ePublicKey e2eDisabled +e2eBackup').lean();
       const backup = (u as any)?.e2eBackup;
       return ack?.({
         ok: true,
         publicKey: (u as any)?.e2ePublicKey || '',
         backup: backup ? { kdf: backup.kdf, pk: backup.pk } : null,
+        disabled: (u as any)?.e2eDisabled === true,
       });
     } catch (e: any) {
       console.error('[e2e:state] error:', e?.message || e);
@@ -124,15 +126,19 @@ export function registerE2eKeyHandlers(io: Server, sock: Socket, meId: () => str
     }
   });
 
-  /** Публикация ключа (или смена пароля копии для того же ключа). Только вместе с копией. */
+  /**
+   * Публикация ключа. Копия под паролем необязательна (автоматическое шифрование
+   * её не делает); если прислана — должна быть копией именно этого ключа.
+   */
   sock.on('e2e:publish', async (payload: { publicKey?: string; backup?: unknown }, ack?: Function) => {
     try {
       const me = authed();
       if (!me) return ack?.({ ok: false, error: 'unauthorized' });
       const publicKey = payload?.publicKey;
       if (!isE2ePublicKey(publicKey)) return ack?.({ ok: false, error: 'invalid_key' });
-      const backup = parseBackupUpload(payload?.backup, publicKey);
-      if (!backup) return ack?.({ ok: false, error: 'invalid_backup' });
+      const hasBackup = payload?.backup != null;
+      const backup = hasBackup ? parseBackupUpload(payload.backup, publicKey) : null;
+      if (hasBackup && !backup) return ack?.({ ok: false, error: 'invalid_backup' });
 
       const prev = await User.findById(me).select('e2ePublicKey').lean();
       if (!prev) return ack?.({ ok: false, error: 'not_found' });
@@ -143,15 +149,21 @@ export function registerE2eKeyHandlers(io: Server, sock: Socket, meId: () => str
           $set: {
             e2ePublicKey: publicKey,
             e2eKeyUpdatedAt: now,
-            e2eBackup: {
-              v: backup.v,
-              kdf: backup.kdf,
-              n: backup.n,
-              c: backup.c,
-              pk: backup.pk,
-              authHash: hashBackupAuthKey(backup.authKey),
-              updatedAt: now,
-            },
+            e2eDisabled: false,
+            // Без копии старую не трогаем: она от прежнего ключа, клиент сверяет её pk.
+            ...(backup
+              ? {
+                  e2eBackup: {
+                    v: backup.v,
+                    kdf: backup.kdf,
+                    n: backup.n,
+                    c: backup.c,
+                    pk: backup.pk,
+                    authHash: hashBackupAuthKey(backup.authKey),
+                    updatedAt: now,
+                  },
+                }
+              : {}),
           },
         }
       );
@@ -178,7 +190,10 @@ export function registerE2eKeyHandlers(io: Server, sock: Socket, meId: () => str
       if (!me) return ack?.({ ok: false, error: 'unauthorized' });
       const prev = await User.findById(me).select('e2ePublicKey').lean();
       if (!prev) return ack?.({ ok: false, error: 'not_found' });
-      await User.updateOne({ _id: me }, { $set: { e2ePublicKey: '', e2eKeyUpdatedAt: new Date() } });
+      await User.updateOne(
+        { _id: me },
+        { $set: { e2ePublicKey: '', e2eKeyUpdatedAt: new Date(), e2eDisabled: true } },
+      );
       if ((prev as any).e2ePublicKey) {
         await notifyFriendsKeyChanged(io, me, '');
         console.log(`[e2e] disabled user=${me}`);
@@ -200,7 +215,10 @@ export function registerE2eKeyHandlers(io: Server, sock: Socket, meId: () => str
       const u = await User.findById(me).select('e2ePublicKey +e2eBackup').lean();
       if (!u) return ack?.({ ok: false, error: 'not_found' });
       if ((u as any).e2eBackup?.pk !== publicKey) return ack?.({ ok: false, error: 'no_backup' });
-      await User.updateOne({ _id: me }, { $set: { e2ePublicKey: publicKey, e2eKeyUpdatedAt: new Date() } });
+      await User.updateOne(
+        { _id: me },
+        { $set: { e2ePublicKey: publicKey, e2eKeyUpdatedAt: new Date(), e2eDisabled: false } },
+      );
       if ((u as any).e2ePublicKey !== publicKey) {
         await notifyFriendsKeyChanged(io, me, publicKey);
         console.log(`[e2e] re-enabled user=${me}`);

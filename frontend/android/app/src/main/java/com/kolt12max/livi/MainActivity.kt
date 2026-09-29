@@ -16,11 +16,12 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.util.Rational
+import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
+import android.widget.FrameLayout
 import androidx.activity.OnBackPressedCallback
-import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 
@@ -33,7 +34,9 @@ import expo.modules.ReactActivityDelegateWrapper
 
 class MainActivity : ReactActivity() {
   private var lastReportedImeInset = -1
-  private var navBarOnSide: Boolean? = null
+  /** Затемнение боковой панели навигации в landscape (см. reportNavBarSideInsets). */
+  private var sideNavScrim: View? = null
+  private var sideNavScrimSpec: Pair<Int, Int>? = null
 
   /**
    * Exposes the platform's actual IME inset to JS. This avoids screen-coordinate
@@ -72,17 +75,33 @@ class MainActivity : ReactActivity() {
 
   /**
    * В landscape панель с кнопками стоит сбоку, и RN-контент под неё не заходит — там
-   * виден фон окна (#0A0C14), светлее строки состояния с затемнением SystemBarsScrim.
-   * Пока панель сбоку, красим фон окна в цвет строки состояния, чтобы панели совпадали.
+   * виден фон окна (та же сцена, что и в JS). Кладём поверх панели полосу с тем же
+   * затемнением, что SystemBarsScrim рисует под строкой состояния.
+   * Сам фон окна не перекрашиваем: при повороте RN ещё ~полсекунды рисует старую
+   * раскладку, и всё остальное окно становилось почти чёрным — экран делился на два тона.
    */
   private fun reportNavBarSideInsets(insets: WindowInsetsCompat) {
+    val decor = window?.decorView as? ViewGroup ?: return
     val nav = insets.getInsets(WindowInsetsCompat.Type.navigationBars())
-    val onSide = nav.left > 0 || nav.right > 0
-    if (onSide == navBarOnSide) return
-    navBarOnSide = onSide
-    window?.decorView?.setBackgroundColor(
-      if (onSide) SIDE_NAV_BAR_COLOR else ContextCompat.getColor(this, R.color.window_background),
-    )
+    val width = if (nav.right > 0) nav.right else nav.left
+    val gravity = if (nav.right > 0) Gravity.END else Gravity.START
+    // Зовётся на каждый global layout — трогаем view только при реальной смене.
+    val spec = width to gravity
+    if (spec == sideNavScrimSpec) return
+    sideNavScrimSpec = spec
+    val scrim = sideNavScrim ?: View(this).apply {
+      setBackgroundColor(SIDE_NAV_SCRIM_COLOR)
+      importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+    }.also {
+      decor.addView(it, FrameLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT))
+      sideNavScrim = it
+    }
+    if (width <= 0) {
+      scrim.visibility = View.GONE
+      return
+    }
+    scrim.layoutParams = FrameLayout.LayoutParams(width, ViewGroup.LayoutParams.MATCH_PARENT, gravity)
+    scrim.visibility = View.VISIBLE
   }
 
   private var lastKnownOrientation = Configuration.ORIENTATION_UNDEFINED
@@ -265,7 +284,9 @@ class MainActivity : ReactActivity() {
 
   private fun restoreMainWindowBackgroundAfterPiP() {
     try {
-      window.setBackgroundDrawable(null)
+      // Та же сцена, что в теме: без фона окна при повороте в полосах, которые RN
+      // ещё не перерисовал, был бы чёрный.
+      window.setBackgroundDrawableResource(R.drawable.window_stage_background)
     } catch (_: Exception) {
       try {
         window.decorView.setBackgroundColor(android.graphics.Color.TRANSPARENT)
@@ -1449,8 +1470,8 @@ class MainActivity : ReactActivity() {
     @JvmField
     var lastResumedInstance: MainActivity? = null
 
-    /** Цвет строки состояния в landscape: SystemBarsScrim (70% чёрного) поверх фона приложения. */
-    private val SIDE_NAV_BAR_COLOR = Color.rgb(5, 8, 10)
+    /** Как SystemBarsScrim в JS: 70% чёрного поверх фона сцены. */
+    private val SIDE_NAV_SCRIM_COLOR = Color.argb(0xB3, 0, 0, 0)
 
     /** Текущий экземпляр (singleTask): пока Activity под IncomingCallActivity, lastResumedInstance ещё пуст. */
     @Volatile

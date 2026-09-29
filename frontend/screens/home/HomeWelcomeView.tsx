@@ -11,7 +11,12 @@ import {
 import { useHomeLayout, useHomeLayoutActivity } from './HomeLayoutContext';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
-import { isWelcomeTabletLayout, searchPhoneRadarPreferred, searchPhoneScale } from './constants';
+import {
+  isWelcomeTabletLayout,
+  searchPhoneRadarPreferred,
+  welcomePhoneAvatarMetrics,
+  welcomeRadarFirstRingWidth,
+} from './constants';
 import { BrandTitleWithOutline } from './chrome';
 import { HomeBrandConfetti, type BrandConfettiOrigin } from './HomeBrandConfetti';
 import { HomeCenterProfile } from './HomeCenterProfile';
@@ -291,34 +296,27 @@ function HomeWelcomeViewInner({
    */
   const radarSize = Math.round(Math.max(96, Math.min(radarPreferred, Math.max(96, radarHeightLimit))));
 
-  // Базовый аватар для раскладки колец. Во всех ориентациях используем одну
-  // пропорцию: landscape отличается только меньшим общим диаметром радара.
-  // Так центральный аватар не съедает внутренние орбиты на низком экране.
-  const stackAvatarBase = isTabletLayout
-    ? 136 * Math.max(1, radarSize / 380)
-    : (viewWidth < 400 ? 112 : 124) * searchPhoneScale(viewWidth);
-  const welcomeAvatarBase = Math.round(Math.min(stackAvatarBase, radarSize * 0.42));
-  const welcomeAvatarRadius = Math.round(welcomeAvatarBase / 2);
   /**
-   * Не сжимаем орбиты в landscape: сам радар уже ограничен высотой сцены, а
-   * дополнительный коэффициент 0.72 делал четыре полосы слишком узкими и они
-   * визуально слипались вокруг крупного центрального аватара.
+   * Телефон: аватар в любой ориентации — как на Поиске в вертикали (тот же
+   * эталон берёт Профиль). Радар в landscape меньше, и под аватар подстраиваются
+   * только кольца, а не наоборот.
+   * Планшет: аватар растёт вместе с радаром, но не больше 0.42 его диаметра.
    */
-  const orbitScale = 1;
   const welcomeAvatarGeometry = (() => {
-    const half = radarSize / 2;
-    const avatarOuter = welcomeAvatarRadius + 2;
-    const stepTotal = 0.56 + 0.86 + 1.18 + 1.14;
-    const g = Math.max(half * 0.078, (half * 0.85 - avatarOuter) / stepTotal) * orbitScale;
-    const firstRingWidth = g * 0.56;
-    // Рамка начинается у края фотографии, проходит через служебный зазор 2 px
-    // и перекрывает только внутреннюю часть первой орбиты.
-    const frameOutset = 2 + firstRingWidth * 0.22;
+    if (!isTabletLayout) {
+      const phone = welcomePhoneAvatarMetrics(Math.min(stageWidth, stageHeight));
+      return { base: phone.base, avatarSize: phone.outer, frameOutset: phone.frameOutset };
+    }
+    const base = Math.round(Math.min(136 * Math.max(1, radarSize / 380), radarSize * 0.42));
+    const firstRingWidth = welcomeRadarFirstRingWidth(radarSize, base);
     return {
-      avatarSize: Math.round(welcomeAvatarBase + (firstRingWidth * 2) / 3),
-      frameOutset,
+      base,
+      avatarSize: Math.round(base + (firstRingWidth * 2) / 3),
+      frameOutset: 2 + firstRingWidth * 0.22,
     };
   })();
+  const welcomeAvatarBase = welcomeAvatarGeometry.base;
+  const welcomeAvatarRadius = Math.round(welcomeAvatarBase / 2);
   const welcomeAvatarSizeRaw = welcomeAvatarGeometry.avatarSize;
   // Module-level: ref сбрасывался при remount после splash → снова 114 и onLoad.
   const avatarLockKey = `${Math.round(stageWidth)}x${Math.round(stageHeight)}`;
@@ -486,7 +484,6 @@ function HomeWelcomeViewInner({
               size={radarSize}
               isDark={isDark}
               avatarRadius={welcomeAvatarRadius}
-              orbitScale={orbitScale}
             >
               <HomeCenterProfile
                 styles={styles}

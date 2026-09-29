@@ -89,7 +89,7 @@ import {
 } from './home';
 import { HomeWelcomeTabBar, type WelcomeTabId } from './home/HomeWelcomeTabBar';
 import { WelcomeKeepAlivePane } from './home/WelcomeKeepAlivePane';
-import { STAGE_TRANSITION_BG, WelcomeStageBackground } from './home/WelcomeStageBackground';
+import { WelcomeStageBackground } from './home/WelcomeStageBackground';
 import { HomeLayoutProvider } from './home/HomeLayoutContext';
 import { WELCOME_HEADER_TITLE, WELCOME_STAGE_BG } from './home/constants';
 import { recordCallLog, recordCancelledCall, recordNoAnswerCall, requestCallLogSoftUi, cancelPendingCallLogNotify, flushCallLogUi, forceCallLogUiNow, loadCallLog } from './home/callLog';
@@ -5561,17 +5561,15 @@ const handleClearNick = useCallback(async () => {
 
   return (
     <View
-      style={{ flex: 1, backgroundColor: STAGE_TRANSITION_BG }}
+      style={{ flex: 1, backgroundColor: WELCOME_STAGE_BG }}
       onLayout={onHomeRootLayout}
     >
       <HomeLayoutProvider size={homeLayoutSize} onLayoutActivity={notifyLayoutActivity}>
-      {/* Фон гаснет вместе с контентом. Замер показал, что слой градиента точно
-          следует за контейнером (расхождение 2–6мс), то есть раскладка верна —
-          стык даёт нативная перерисовка поверхности при повороте, и скрыть его
-          можно только не показывая этот кадр. Под фоном лежит STAGE_TRANSITION_BG,
-          взятый из середины градиента, поэтому подмена незаметна. */}
-      <Animated.View style={{ flex: 1, minHeight: 0, opacity: contentOpacity }}>
+      {/* Фон один на все ориентации и при повороте не гаснет — меняется только
+          контент. Раньше фон гас вместе с контентом, и на его месте ~0.7с стояла
+          плоская заливка: читалось как смена фона. */}
       <WelcomeStageBackground />
+      <Animated.View style={{ flex: 1, minHeight: 0, opacity: contentOpacity }}>
     <SafeAreaView
         style={[
           styles.container,

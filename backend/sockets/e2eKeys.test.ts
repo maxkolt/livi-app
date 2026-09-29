@@ -1,4 +1,4 @@
-const mockUsers: Record<string, { e2ePublicKey?: string; friends?: string[] }> = {};
+const mockUsers: Record<string, Record<string, any>> = {};
 jest.mock('../models/User', () => ({
   __esModule: true,
   default: {
@@ -8,6 +8,16 @@ jest.mock('../models/User', () => ({
           (q._id.$in as string[]).filter((id) => mockUsers[id]).map((id) => ({ _id: id, ...mockUsers[id] })),
       }),
     }),
+    findById: (id: string) => ({
+      select: () => ({
+        lean: async () => (mockUsers[id] ? { _id: id, ...mockUsers[id] } : null),
+      }),
+    }),
+    updateOne: async (q: { _id: string }, update: { $set?: Record<string, unknown> }) => {
+      if (!mockUsers[q._id]) return { matchedCount: 0 };
+      Object.assign(mockUsers[q._id], update.$set ?? {});
+      return { matchedCount: 1 };
+    },
   },
 }));
 const mockFriendIds = jest.fn(async (_userId: string) => [] as string[]);
@@ -73,7 +83,7 @@ describe('parseBackupUpload', () => {
     expect(parseBackupUpload(upload(), PK)).toEqual(upload());
   });
 
-  it('refuses to publish a key without a matching backup', () => {
+  it('rejects absent or non-matching input when a backup is being parsed', () => {
     expect(parseBackupUpload(undefined, PK)).toBeNull();
     expect(parseBackupUpload(upload({ pk: b64(32, 4) }), PK)).toBeNull();
   });
@@ -107,6 +117,65 @@ describe('backup auth key', () => {
   it('bounds online password guessing', () => {
     const perDay = BACKUP_FETCH_LIMITS.find((l) => l.windowMs === 24 * 60 * 60_000);
     expect(perDay?.max).toBeLessThanOrEqual(20);
+  });
+});
+
+describe('passwordless key state', () => {
+  const ME = 'aaaaaaaaaaaaaaaaaaaaaaaa';
+  const OLD_PK = b64(32, 1);
+
+  function handlers() {
+    const registered: Record<string, Function> = {};
+    const sock = { on: (event: string, h: Function) => (registered[event] = h) } as any;
+    registerE2eKeyHandlers({ to: () => ({ emit: jest.fn() }) } as any, sock, () => ME);
+    return registered;
+  }
+
+  const call = (handler: Function, payload: unknown = {}) =>
+    new Promise<any>((resolve) => handler(payload, resolve));
+
+  beforeEach(() => {
+    for (const k of Object.keys(mockUsers)) delete mockUsers[k];
+    mockUsers[ME] = { e2ePublicKey: '', e2eDisabled: false };
+    mockFriendIds.mockResolvedValue([]);
+  });
+
+  it('publishes a device key without creating a password backup', async () => {
+    const h = handlers();
+    expect(await call(h['e2e:publish'], { publicKey: PK })).toEqual({ ok: true });
+    expect(mockUsers[ME]).toMatchObject({ e2ePublicKey: PK, e2eDisabled: false });
+    expect(mockUsers[ME].e2eBackup).toBeUndefined();
+  });
+
+  it('still validates a backup when a legacy client sends one', async () => {
+    const h = handlers();
+    expect(await call(h['e2e:publish'], { publicKey: PK, backup: upload({ pk: OLD_PK }) })).toEqual({
+      ok: false,
+      error: 'invalid_backup',
+    });
+    expect(mockUsers[ME].e2ePublicKey).toBe('');
+  });
+
+  it('keeps an old password backup when a new device key is published', async () => {
+    const oldBackup = { ...upload({ pk: OLD_PK }), authHash: 'stored-hash' };
+    mockUsers[ME] = { e2ePublicKey: OLD_PK, e2eBackup: oldBackup, e2eDisabled: false };
+    const h = handlers();
+    expect(await call(h['e2e:publish'], { publicKey: PK })).toEqual({ ok: true });
+    expect(mockUsers[ME].e2ePublicKey).toBe(PK);
+    expect(mockUsers[ME].e2eBackup).toBe(oldBackup);
+  });
+
+  it('reports an explicit disabled flag and clears it on publication', async () => {
+    mockUsers[ME] = { e2ePublicKey: '', e2eDisabled: true };
+    const h = handlers();
+    expect(await call(h['e2e:state'])).toEqual({
+      ok: true,
+      publicKey: '',
+      backup: null,
+      disabled: true,
+    });
+    expect(await call(h['e2e:publish'], { publicKey: PK })).toEqual({ ok: true });
+    expect(mockUsers[ME].e2eDisabled).toBe(false);
   });
 });
 

@@ -27,6 +27,8 @@ import {
   WELCOME_FRIEND_CARD_GAP_TABLET,
   WELCOME_FRIEND_ROW_STRIDE_TABLET,
   WELCOME_FRIEND_AVATAR_SIZE_TABLET,
+  WELCOME_FRIENDS_INVITE_GAP,
+  WELCOME_FRIENDS_SEGMENT_GAP,
 } from './constants';
 import { FriendMarkReadMenuStrip } from './FriendMarkReadMenuStrip';
 import { FriendRowChatButton, FriendRowInviteButton } from './FriendRowActionButtons';
@@ -494,13 +496,40 @@ function FriendsListCoreInner(props: FriendsListCoreProps) {
       contentContainerStyle={contentContainerStyle}
       ListEmptyComponent={
         initialized ? (
-          <View style={welcomeListStyles.emptyWrap}>
+          <View
+            style={[
+              welcomeListStyles.emptyWrap,
+              emptyWrapPadding(
+                tabletLayout ? 'tablet' : compactLandscape ? 'landscape' : 'phone',
+                ListFooterComponent != null,
+              ),
+            ]}
+          >
             <AdaptiveText style={welcomeListStyles.emptyText}>{L('friendsEmpty')}</AdaptiveText>
           </View>
         ) : null
       }
     />
   );
+}
+
+/** Верхний отступ содержимого списка. */
+const LIST_PAD_TOP = 4;
+/** Прежний отступ надписи пустого списка — от него зависит, где стоит «Пригласить друзей». */
+const EMPTY_TEXT_OFFSET = 36;
+
+/**
+ * «Список друзей пуст» — ровно посередине между блоком «Все / Онлайн» и
+ * карточкой «Пригласить друзей». Карточка остаётся на прежнем месте: общий
+ * зазор тот же, он просто делится поровну над и под надписью.
+ * Без карточки (вкладка «Онлайн», поиск) — прежний отступ сверху.
+ */
+function emptyWrapPadding(layout: 'phone' | 'landscape' | 'tablet', hasFooter: boolean) {
+  if (!hasFooter) return { paddingTop: EMPTY_TEXT_OFFSET };
+  const above = WELCOME_FRIENDS_SEGMENT_GAP[layout] + LIST_PAD_TOP;
+  const below = WELCOME_FRIENDS_INVITE_GAP[layout];
+  const half = (above + EMPTY_TEXT_OFFSET + below) / 2;
+  return { paddingTop: half - above, paddingBottom: half - below };
 }
 
 const welcomeListStyles = StyleSheet.create({
@@ -510,7 +539,7 @@ const welcomeListStyles = StyleSheet.create({
   content: {
     backgroundColor: 'transparent',
     paddingHorizontal: WELCOME_FRIENDS_LIST_INSET,
-    paddingTop: 4,
+    paddingTop: LIST_PAD_TOP,
     paddingBottom: 12,
   },
   contentTablet: {
@@ -678,7 +707,6 @@ const welcomeListStyles = StyleSheet.create({
     backgroundColor: LIVI.green,
   },
   emptyWrap: {
-    paddingTop: 36,
     paddingHorizontal: 16,
     alignItems: 'center',
   },

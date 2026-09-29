@@ -23,27 +23,33 @@ export async function needsNearbyDevicesPermission(): Promise<boolean> {
  * Запрашивает разрешение «Устройства рядом» (Bluetooth) на Android 12+.
  * Системный диалог: «Разрешить приложению LiVi находить устройства поблизости…»
  *
- * Формулировка Android пугает без контекста, поэтому вызывается не на холодном старте,
- * а из модалки, которая сначала объясняет, что речь про вывод звука в гарнитуру.
+ * Вызывается только при подключённой Bluetooth-гарнитуре — из контекста понятно, зачем.
+ * 'never_ask_again' — Android диалог уже не покажет, включить можно только в настройках.
  */
-export async function requestNearbyDevicesPermissionAndroid(): Promise<void> {
-  if (Platform.OS !== 'android') return;
+export async function requestNearbyDevicesPermissionAndroid(): Promise<
+  'granted' | 'denied' | 'never_ask_again'
+> {
+  if (Platform.OS !== 'android') return 'granted';
   const ver = typeof Platform.Version === 'number' ? Platform.Version : Number(Platform.Version);
-  if (!Number.isFinite(ver) || ver < 31) return; // BLUETOOTH_CONNECT с Android 12 (API 31)
+  if (!Number.isFinite(ver) || ver < 31) return 'granted'; // BLUETOOTH_CONNECT с Android 12 (API 31)
 
   const perm = (PermissionsAndroid as any)?.PERMISSIONS?.BLUETOOTH_CONNECT;
-  if (!perm) return;
+  if (!perm) return 'granted';
 
   try {
     const already = await PermissionsAndroid.check(perm);
-    if (already) return;
+    if (already) return 'granted';
   } catch {}
 
   try {
     const res = await PermissionsAndroid.request(perm);
     logger.info('[mediaPermissions] Nearby devices (BLUETOOTH_CONNECT) permission:', res);
+    if (res === PermissionsAndroid.RESULTS.GRANTED) return 'granted';
+    if (res === PermissionsAndroid.RESULTS.NEVER_ASK_AGAIN) return 'never_ask_again';
+    return 'denied';
   } catch (e) {
     logger.warn('[mediaPermissions] Nearby devices permission request failed', e);
+    return 'denied';
   }
 }
 
@@ -51,15 +57,38 @@ export async function requestNearbyDevicesPermissionAndroid(): Promise<void> {
 let micGrantedCache = false;
 let cameraGrantedCache = false;
 
+/** Микрофон уже выдан — только проверка, без системного диалога. */
+export async function hasMicPermission(): Promise<boolean> {
+  if (micGrantedCache) return true;
+  try {
+    const mic = await Audio.getPermissionsAsync();
+    micGrantedCache = mic.status === 'granted';
+  } catch {}
+  return micGrantedCache;
+}
+
+/** Системные диалоги по очереди: два запроса разом Android не показывает, второй молча отклоняется. */
+let callPermissionsChain: Promise<unknown> = Promise.resolve();
+
 /**
  * Разрешения для самого звонка, запрашиваются по факту начала разговора.
  *
- * На старте пользователь мог отказать — тогда без перезапроса звонок молча остаётся без звука
- * или без картинки. Здесь отказ переспрашивается в момент, когда причина очевидна: пользователь
+ * Обычно всё уже выдано на старте (ensureInitialMediaPermissions) и ответ идёт из кэша без
+ * диалога. Если там отказали, переспрашиваем в момент, когда причина очевидна: пользователь
  * сам нажал «Позвонить» или «Ответить». Камеру трогаем только для видеозвонка.
  */
-export async function ensureCallMediaPermissions(opts?: { video?: boolean }): Promise<boolean> {
+export function ensureCallMediaPermissions(opts?: { video?: boolean }): Promise<boolean> {
   const needCamera = opts?.video === true;
+  if (micGrantedCache && (!needCamera || cameraGrantedCache)) return Promise.resolve(true);
+  const run = callPermissionsChain.then(
+    () => ensureCallMediaPermissionsNow(needCamera),
+    () => ensureCallMediaPermissionsNow(needCamera),
+  );
+  callPermissionsChain = run.catch(() => {});
+  return run;
+}
+
+async function ensureCallMediaPermissionsNow(needCamera: boolean): Promise<boolean> {
   if (micGrantedCache && (!needCamera || cameraGrantedCache)) return true;
 
   let micOk = micGrantedCache;
@@ -100,8 +129,9 @@ export async function ensureCallMediaPermissions(opts?: { video?: boolean }): Pr
 }
 
 /**
- * Запрашивает разрешения на камеру, микрофон и «Устройства рядом» при первом запуске приложения.
- * На iOS — камера и микрофон. На Android — камера, микрофон и (с Android 12) «Устройства рядом».
+ * Камера и микрофон при первом запуске, сразу после уведомлений: запрос посреди звонка
+ * другу мешает больше. Если здесь отказали — переспросит ensureCallMediaPermissions
+ * перед захватом в звонке.
  */
 export async function ensureInitialMediaPermissions(): Promise<void> {
   try {

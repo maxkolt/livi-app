@@ -34,6 +34,7 @@ import {
   LIVI,
   isWelcomeTabletLayout,
   searchPhoneScale,
+  welcomePhoneAvatarMetrics,
   WELCOME_BRAND_VI_FILL_GRADIENT,
   WELCOME_FRIENDS_LIST_INSET,
   WELCOME_GLASS_BORDER,
@@ -60,16 +61,19 @@ const PATREON_URL = process.env.EXPO_PUBLIC_PATREON_URL || 'https://www.patreon.
  * 2.5, а «Поиск» считал ~4.5 — одна и та же купленная рамка отличалась на глаз.
  */
 /**
- * Толщина серого кольца-заглушки (когда рамка не надета) и резерв места под него.
+ * Резерв места под купленную рамку вокруг фото. Без рамки фото занимает этот резерв
+ * целиком (серого кольца-заглушки больше нет), так что внешний размер одинаковый.
  *
- * Купленная рамка считается отдельно — activeFrameRingWidth() от размера аватара.
- * Здесь нужна константа: portraitPhoneAvatarSize() вычитает кольцо ещё до того,
+ * Сама рамка считается отдельно — activeFrameRingWidth() от размера аватара.
+ * Здесь нужна константа: phoneAvatarSize() вычитает кольцо ещё до того,
  * как размер аватара известен, и брать адаптивное значение было бы циклично.
  * Значение совпадает с адаптивным на характерных для этого экрана размерах
  * (112–132 dp → 3 dp), поэтому резерв всегда достаточен.
  */
 const AVATAR_RING_WIDTH = 3;
-const CAMERA_BTN_SIZE = 38;
+const CAMERA_BTN_SIZE = 32;
+/** Кнопка камеры чуть внутрь от угла аватара — ближе к самому кругу, а не в пустом углу. */
+const CAMERA_BTN_INSET = 7;
 /** Строк в hub-профиле: 4 секции по 2 строки. */
 const PROFILE_HUB_ROW_COUNT = 8;
 
@@ -123,22 +127,26 @@ const HUB_PRESET_PHONE: HubMetricsPreset = {
 };
 
 const HUB_PRESET_PHONE_LANDSCAPE: HubMetricsPreset = {
-  avatarSize: 80,
-  cameraBtnSize: 32,
+  // Аватар и кнопка камеры — как в вертикали (avatarSize заменяет phoneAvatarSize()).
+  avatarSize: 120,
+  cameraBtnSize: CAMERA_BTN_SIZE,
   // Не отрицательный: шапки в landscape нет, и аватар уходил под строку состояния.
   gapTop: 2,
-  gapUnderAvatar: 12,
+  // Минимумы ниже, чем в вертикали: аватар тут того же размера, и при строках 30 dp
+  // «Удалить профиль» не влезал на 5–10 dp — список уходил в скролл. Строки ужимаются
+  // ровно настолько, насколько нужно, скролл — только для совсем низких экранов.
+  gapUnderAvatar: 8,
   gapAboveDelete: 4,
   gapBottom: 6,
   rowMax: 42,
-  rowMin: 30,
+  rowMin: 26,
   gapMax: 8,
   gapMin: 4,
 };
 
 const HUB_PRESET_TABLET: HubMetricsPreset = {
   avatarSize: 136,
-  cameraBtnSize: 40,
+  cameraBtnSize: 34,
   gapTop: 26,
   gapUnderAvatar: 20,
   gapAboveDelete: 12,
@@ -151,7 +159,7 @@ const HUB_PRESET_TABLET: HubMetricsPreset = {
 
 const HUB_PRESET_TABLET_LANDSCAPE: HubMetricsPreset = {
   avatarSize: 112,
-  cameraBtnSize: 38,
+  cameraBtnSize: CAMERA_BTN_SIZE,
   gapTop: 14,
   gapUnderAvatar: 14,
   gapAboveDelete: 8,
@@ -179,13 +187,12 @@ function resolveHubPreset(isTablet: boolean, isLandscape: boolean): HubMetricsPr
 }
 
 /**
- * Аватар профиля в вертикали должен совпадать с аватаром на Поиске по внешнему
- * диаметру. Там рамка нарисована внутри размера, здесь кольцо добавляется
- * снаружи (+AVATAR_RING_WIDTH×2), поэтому вычитаем его.
+ * Аватар профиля на телефоне в обеих ориентациях совпадает с аватаром Поиска в
+ * вертикали по внешнему диаметру. Там рамка нарисована внутри размера, здесь
+ * кольцо добавляется снаружи (+AVATAR_RING_WIDTH×2), поэтому вычитаем его.
  */
-function portraitPhoneAvatarSize(width: number): number {
-  const searchAvatarOuter = Math.round((width < 400 ? 120 : 132) * searchPhoneScale(width));
-  return searchAvatarOuter - AVATAR_RING_WIDTH * 2;
+function phoneAvatarSize(shortSide: number): number {
+  return welcomePhoneAvatarMetrics(shortSide).outer - AVATAR_RING_WIDTH * 2;
 }
 
 /** Предел масштаба строк: дальше экран уже не телефон, а «лопата». */
@@ -211,19 +218,21 @@ function scaleHubPreset(preset: HubMetricsPreset, k: number): HubMetricsPreset {
 
 function resolveHubMetrics(
   paneHeight: number,
-  width: number,
+  /** Короткая сторона окна — ширина телефона в вертикали, от поворота не зависит. */
+  shortSide: number,
   isTablet: boolean,
   isLandscape: boolean,
   twoColumns: boolean,
 ): HubMetrics {
   const basePreset = resolveHubPreset(isTablet, isLandscape);
-  const preset =
-    !isTablet && !isLandscape
-      ? scaleHubPreset(
-          { ...basePreset, avatarSize: portraitPhoneAvatarSize(width) },
-          Math.min(PHONE_HUB_MAX_SCALE, searchPhoneScale(width)),
-        )
-      : basePreset;
+  const preset = isTablet
+    ? basePreset
+    : isLandscape
+      ? { ...basePreset, avatarSize: phoneAvatarSize(shortSide) }
+      : scaleHubPreset(
+          { ...basePreset, avatarSize: phoneAvatarSize(shortSide) },
+          Math.min(PHONE_HUB_MAX_SCALE, searchPhoneScale(shortSide)),
+        );
   const fixed =
     preset.gapTop +
     preset.avatarSize +
@@ -405,8 +414,15 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
     hubViewportHeight > expectedHubPaneHeight * 0.6 ? hubViewportHeight : expectedHubPaneHeight;
 
   const hubMetrics = useMemo(
-    () => resolveHubMetrics(hubPaneHeight, windowWidth, isTablet, isLandscape, twoColumnList),
-    [hubPaneHeight, windowWidth, isTablet, isLandscape, twoColumnList],
+    () =>
+      resolveHubMetrics(
+        hubPaneHeight,
+        Math.min(windowWidth, windowHeight),
+        isTablet,
+        isLandscape,
+        twoColumnList,
+      ),
+    [hubPaneHeight, windowWidth, windowHeight, isTablet, isLandscape, twoColumnList],
   );
 
   /** Скролл при редактировании ника или когда даже минимальные строки не влезают. */
@@ -579,7 +595,9 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
 
   const avatarSize = hubMetrics.avatarSize;
   const avatarFrameSize = Math.round(avatarSize) + activeFrameRingWidth(avatarSize) * 2;
-  const avatarContainerSize = hasActiveFrame ? avatarFrameSize : avatarSize;
+  // Без купленной рамки серого кольца-заглушки нет: фото занимает весь круг, и внешний
+  // размер тот же, что с рамкой и что на Поиске.
+  const avatarContainerSize = avatarFrameSize;
   const cameraBtnSize = hubMetrics.cameraBtnSize;
   const hasLocalAvatarPreview = avatarUri && /^(file|content|ph|assets-library):\/\//i.test(avatarUri);
 
@@ -616,7 +634,7 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
           userId={myUserId}
           avatarVer={myAvatarVer}
           uri={myFullAvatarUri || undefined}
-          size={avatarSize}
+          size={avatarContainerSize}
           frameId={activeFrameId || null}
           fallbackText={letter}
           containerStyle={homeStyles.centerAvatarImg}
@@ -677,8 +695,11 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
             styles.logOutRow,
             isTablet && styles.logOutRowTablet,
             compactLandscape && styles.logOutRowLandscape,
+            isLandscape && styles.logOutRowCentered,
+            // Как у строк списка: высоту задаёт rowHeight, без своих вертикальных отступов —
+            // иначе строка выходила выше расчётной и низом уезжала под таб-бар.
             hubMetrics.rowHeight != null
-              ? { minHeight: hubMetrics.rowHeight }
+              ? { minHeight: hubMetrics.rowHeight, paddingVertical: 0 }
               : null,
             pressed && styles.logOutRowPressed,
           ]}
@@ -713,7 +734,6 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
           disabled={busy}
           style={[
             styles.avatarRing,
-            hasActiveFrame && styles.avatarRingPurchased,
             {
               width: avatarFrameSize,
               height: avatarFrameSize,
@@ -737,7 +757,7 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
           accessibilityRole="button"
           accessibilityLabel={t('takePhoto', lang)}
         >
-          <Ionicons name="camera-outline" size={cameraBtnSize > 34 ? 20 : 18} color={LIVI.white} />
+          <Ionicons name="camera-outline" size={Math.round(cameraBtnSize / 2)} color={WELCOME_PROFILE_ROW_ICON} />
         </Pressable>
       </View>
   );
@@ -1394,20 +1414,12 @@ const styles = StyleSheet.create({
   avatarRing: {
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: AVATAR_RING_WIDTH,
-    borderColor: 'rgba(180,186,196,0.38)',
-    backgroundColor: 'rgba(180,186,196,0.06)',
     overflow: 'hidden',
-  },
-  avatarRingPurchased: {
-    borderWidth: 0,
-    borderColor: 'transparent',
-    backgroundColor: 'transparent',
   },
   cameraBtn: {
     position: 'absolute',
-    right: 0,
-    bottom: 0,
+    right: CAMERA_BTN_INSET,
+    bottom: CAMERA_BTN_INSET,
     width: CAMERA_BTN_SIZE,
     height: CAMERA_BTN_SIZE,
     borderRadius: CAMERA_BTN_SIZE / 2,
@@ -1628,6 +1640,10 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     paddingHorizontal: 12,
     minHeight: 40,
+  },
+  /** Горизонталь: строка на всю ширину под двумя колонками — содержимое по центру. */
+  logOutRowCentered: {
+    justifyContent: 'center',
   },
   logOutRowTablet: {
     paddingVertical: 14,

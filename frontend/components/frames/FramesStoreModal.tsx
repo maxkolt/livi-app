@@ -1,6 +1,6 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState, Linking, Modal, Platform, Pressable, StyleSheet, View } from 'react-native';
-import { useSafeAreaFrame, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaProvider, useSafeAreaFrame, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Image as ExpoImage } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
@@ -262,7 +262,36 @@ function PurchaseButton({
   );
 }
 
-export function FramesStoreModal({ visible, onClose, onUnlock }: Props) {
+/**
+ * У RN-модалки своё окно (Dialog), и в landscape оно заходит под боковую панель навигации,
+ * а insets главного окна там нулевые — контент уезжал вправо под системные кнопки. Поэтому
+ * окно модалки рисуется под обе системные панели, а отступы считает свой SafeAreaProvider
+ * внутри неё: он меряет именно это окно (шторка, вырез камеры, панель навигации сбоку).
+ */
+export function FramesStoreModal(props: Props) {
+  const requestCloseRef = useRef(props.onClose);
+  if (!props.visible) return null;
+  return (
+    <Modal
+      visible
+      animationType="fade"
+      onRequestClose={() => requestCloseRef.current()}
+      statusBarTranslucent
+      navigationBarTranslucent
+    >
+      <SafeAreaProvider>
+        <FramesStoreContent {...props} requestCloseRef={requestCloseRef} />
+      </SafeAreaProvider>
+    </Modal>
+  );
+}
+
+function FramesStoreContent({
+  visible,
+  onClose,
+  onUnlock,
+  requestCloseRef,
+}: Props & { requestCloseRef: React.MutableRefObject<() => void> }) {
   const lang = useLang((state) => state.lang);
   const L = useCallback((key: string) => t(key, lang), [lang]);
   const insets = useSafeAreaInsets();
@@ -454,9 +483,10 @@ export function FramesStoreModal({ visible, onClose, onUnlock }: Props) {
     if (purchaseNotice) closePurchaseNotice();
     else onClose();
   };
+  // Системное «Назад» ловит Modal снаружи — отдаём ему актуальный обработчик.
+  requestCloseRef.current = handleRequestClose;
 
   return (
-    <Modal visible={visible} animationType="fade" onRequestClose={handleRequestClose} statusBarTranslucent>
       <View style={styles.root}>
         <LinearGradient
           key={`legendary-background-${landscape ? 'landscape' : 'portrait'}-${Math.round(windowWidth)}x${Math.round(windowHeight)}`}
@@ -733,7 +763,6 @@ export function FramesStoreModal({ visible, onClose, onUnlock }: Props) {
           </View>
         ) : null}
       </View>
-    </Modal>
   );
 }
 

@@ -21,7 +21,9 @@ import {
   WELCOME_GLASS_BORDER,
   WELCOME_GLASS_SURFACE,
   WELCOME_MUTED_TEXT,
+  WELCOME_FRIENDS_INVITE_GAP,
   WELCOME_FRIENDS_LIST_INSET,
+  WELCOME_FRIENDS_SEGMENT_GAP,
   WELCOME_FRIENDS_SEGMENT_SHELL_RADIUS,
   WELCOME_HEADER_TITLE,
   isWelcomeTabletLayout,
@@ -587,12 +589,12 @@ const styles = StyleSheet.create({
     borderColor: WELCOME_GLASS_BORDER,
     gap: 5,
     overflow: 'hidden',
-    marginBottom: 12,
+    marginBottom: WELCOME_FRIENDS_SEGMENT_GAP.phone,
   },
   segmentShellLandscape: {
     minHeight: 44,
     padding: 4,
-    marginBottom: 6,
+    marginBottom: WELCOME_FRIENDS_SEGMENT_GAP.landscape,
   },
   segmentShellTablet: {
     width: '92%',
@@ -601,7 +603,7 @@ const styles = StyleSheet.create({
     minHeight: 72,
     padding: 8,
     marginHorizontal: 0,
-    marginBottom: 14,
+    marginBottom: WELCOME_FRIENDS_SEGMENT_GAP.tablet,
   },
   segmentBtn: {
     flex: 1,
@@ -648,7 +650,7 @@ const styles = StyleSheet.create({
   inviteCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 8,
+    marginTop: WELCOME_FRIENDS_INVITE_GAP.phone,
     marginBottom: 8,
     paddingVertical: 16,
     paddingHorizontal: 14,
@@ -659,7 +661,7 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   inviteCardLandscape: {
-    marginTop: 4,
+    marginTop: WELCOME_FRIENDS_INVITE_GAP.landscape,
     marginBottom: 4,
     paddingVertical: 8,
     borderRadius: 14,

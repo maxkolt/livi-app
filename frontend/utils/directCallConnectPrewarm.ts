@@ -2,6 +2,7 @@ import { createLocalTracks, type LocalAudioTrack, type LocalTrack } from 'liveki
 import { Platform } from 'react-native';
 import { getIceConfiguration } from './iceConfig';
 import { logger } from './logger';
+import { hasMicPermission } from './mediaPermissions';
 import { mergeNativeProbeIntoGlobal, probeNativeCallAudioRoutes } from './nativeCallAudioProbe';
 
 const PREWARM_TTL_MS = 120_000;
@@ -65,7 +66,10 @@ export function prewarmDirectCallAudioCapture(reason: string): void {
   disposeDirectCallAudioPrewarm('replace-before-prewarm');
   const generation = audioPrewarmGeneration;
 
-  audioPrewarmInFlight = createLocalTracks({ audio: true, video: false })
+  audioPrewarmInFlight = hasMicPermission()
+    // Микрофон не выдан (отказали на старте): не захватываем параллельно с системным
+    // диалогом — сессия сама дождётся разрешения и создаст трек.
+    .then((granted) => (granted ? createLocalTracks({ audio: true, video: false }) : []))
     .then((tracks: LocalTrack[]) => {
       const audioTrack = tracks.find((track) => track.kind === 'audio') as LocalAudioTrack | undefined;
       for (const track of tracks) {

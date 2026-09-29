@@ -1485,11 +1485,10 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
         inAudioOnly: !!(inAudioOnlyUiRef.current || isInAudioOnlyCallUi()),
       });
     } catch {}
-    // «Устройства рядом» спрашиваем здесь, а не на старте приложения: пользователь сам полез
-    // переключать аудиовыход, и системный запрос про поиск устройств поблизости читается
-    // как часть этого действия, а не как слежка на пустом месте.
+    // «Устройства рядом» — только если Bluetooth-гарнитура реально подключена (гарнитура
+    // могла подключиться уже во время звонка): системный диалог сразу, без своего окна.
     try {
-      (global as any).__promptBluetoothPermissionRef?.current?.();
+      void (global as any).__promptBluetoothPermissionRef?.current?.({ ifHeadsetPresent: true });
     } catch {}
     void cycleUserRoute();
   }, [cycleUserRoute, selectedRoute]);

@@ -1822,12 +1822,10 @@ export async function registerAndSendPushToken(userId?: string, options?: Regist
     try {
       await ensureAndroidNotificationChannels();
 
-      const settings = await Notifications.getPermissionsAsync();
-      let finalStatus = settings.status;
-      if (finalStatus !== 'granted') {
-        const req = await Notifications.requestPermissionsAsync();
-        finalStatus = req.status;
-      }
+      // Только проверка, без запроса: спрашивает один раз ensureInitialNotificationPermissions на
+      // старте. У нового пользователя токен регистрируется сразу после создания аккаунта, и
+      // запрос отсюда показывал второй системный диалог (Android 13+ разрешает спросить дважды).
+      const finalStatus = (await Notifications.getPermissionsAsync()).status;
       // Раньше здесь был return: отказ от уведомлений отключал регистрацию токена целиком,
       // а вместе с ней — весь канал входящих звонков. Но звонок приходит не уведомлением:
       // Android — data-only FCM (POST_NOTIFICATIONS не нужен), iOS — PushKit/CallKit

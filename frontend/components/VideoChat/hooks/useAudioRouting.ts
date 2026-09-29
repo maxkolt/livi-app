@@ -2898,6 +2898,11 @@ export const useAudioRouting = (
       btPermissionRequestedRef.current = true;
 
       try {
+        // Общий запрос из App: системный диалог, а при отказе — пояснение, куда пропал звук.
+        const prompt = (global as any).__promptBluetoothPermissionRef?.current as
+          | undefined
+          | (() => Promise<boolean>);
+        if (typeof prompt === 'function') return await prompt();
         const res = await PermissionsAndroid.request(perm);
         return res === PermissionsAndroid.RESULTS.GRANTED;
       } catch (e) {
@@ -2934,9 +2939,14 @@ export const useAudioRouting = (
         });
         return;
       }
-      const ok = await ensureBluetoothConnectPermission();
+      let ok = true;
       if (Platform.OS === 'android') {
         const probe = await probeNativeCallAudioRoutes();
+        // «Устройства рядом» — только если Bluetooth-гарнитура реально подключена: без неё
+        // разрешение ничего не даёт, а системный вопрос «находить устройства поблизости» на
+        // первом же звонке у всех пугал. Список устройств AudioManager отдаёт и без разрешения.
+        const btPresent = probe.available.includes('BLUETOOTH') || probe.btCallAudioActive === true;
+        if (btPresent) ok = await ensureBluetoothConnectPermission();
         const merged = mergeNativeProbeIntoGlobal(probe);
         if (merged.length) {
           lastAvailableRef.current = merged;

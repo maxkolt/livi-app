@@ -21,38 +21,43 @@ import {
   getE2eStatus,
   getPeerPublicKey,
   onPeerE2eUpdated,
-  markE2eSetupPromptSeen,
   onE2eStatus,
   onPeerKeyChanged,
   resetE2e,
   restoreE2e,
-  setupE2e,
-  wasE2eSetupPromptSeen,
   type E2eStatus,
 } from '../../sockets/modules/e2e';
 import { isAcceptableBackupPassword } from '../../sockets/modules/e2eCrypto';
 
-export type E2eModalMode = 'setup' | 'restore' | 'reset' | 'change' | 'disable' | 'enable';
+export type E2eModalMode = 'restore' | 'reset' | 'change' | 'disable' | 'enable';
 type Mode = E2eModalMode;
-type PasswordMode = 'setup' | 'restore' | 'reset' | 'change';
+/** Пароль остался только у тех, кто включал шифрование по паролю (прежняя схема). */
+type PasswordMode = 'restore' | 'change';
+type ConfirmMode = 'disable' | 'enable' | 'reset';
 
 export type E2eMenuAction = { mode: E2eModalMode; labelKey: string; tone: 'accent' | 'plain' };
 
-/** Пункты меню чата для текущего состояния шифрования (пусто — пока состояние неизвестно). */
-export function e2eMenuActions(status: E2eStatus, hasLocalKey: boolean): E2eMenuAction[] {
-  if (status === 'needs_setup') return [{ mode: 'setup', labelKey: 'e2eMenuEnable', tone: 'accent' }];
+/**
+ * Пункты меню чата для текущего состояния шифрования (пусто — пока состояние неизвестно).
+ * Включать шифрование не нужно: оно включается само, без пароля.
+ */
+export function e2eMenuActions(
+  status: E2eStatus,
+  hasLocalKey: boolean,
+  hasPasswordBackup: boolean,
+): E2eMenuAction[] {
   if (status === 'needs_restore') return [{ mode: 'restore', labelKey: 'e2eMenuRestore', tone: 'accent' }];
   if (status === 'ready') {
-    return [
-      { mode: 'change', labelKey: 'e2eMenuChangePassword', tone: 'accent' },
-      { mode: 'disable', labelKey: 'e2eMenuDisable', tone: 'accent' },
-    ];
+    const actions: E2eMenuAction[] = [];
+    if (hasPasswordBackup) actions.push({ mode: 'change', labelKey: 'e2eMenuChangePassword', tone: 'accent' });
+    actions.push({ mode: 'disable', labelKey: 'e2eMenuDisable', tone: 'accent' });
+    return actions;
   }
   if (status === 'disabled') {
-    // Ключ на устройстве есть — включаем без пароля; нет (переустановка) — сначала восстановить.
-    return hasLocalKey
-      ? [{ mode: 'enable', labelKey: 'e2eMenuEnableAgain', tone: 'accent' }]
-      : [{ mode: 'restore', labelKey: 'e2eMenuRestore', tone: 'accent' }];
+    // Ключа здесь нет, а копия под паролем есть — сначала вернуть переписку паролем.
+    return !hasLocalKey && hasPasswordBackup
+      ? [{ mode: 'restore', labelKey: 'e2eMenuRestore', tone: 'accent' }]
+      : [{ mode: 'enable', labelKey: 'e2eMenuEnableAgain', tone: 'accent' }];
   }
   return [];
 }
@@ -97,10 +102,9 @@ export function useE2eStatus(): E2eStatus {
 }
 
 /**
- * Над полем ввода чата. Предложение включить шифрование — один раз, при первом
- * открытии чата (дальше оно в меню справа вверху). Требование восстановить ключ
- * после переустановки остаётся, пока ключ не восстановлен: без него отправка
- * заблокирована. Плюс уведомление о смене ключа собеседника.
+ * Над полем ввода чата. Шифрование включается само, предлагать его не нужно. Остаются:
+ * требование восстановить ключ, включённый по паролю (прежняя схема), — пока он не
+ * восстановлен, отправка заблокирована; и уведомление о смене ключа собеседника.
  */
 export function E2eChatBanner({
   lang,
@@ -115,7 +119,6 @@ export function E2eChatBanner({
   onRequestedModeHandled?: () => void;
 }) {
   const status = useE2eStatus();
-  const [showSetupPrompt, setShowSetupPrompt] = useState(false);
   const [peerKeyChanged, setPeerKeyChanged] = useState(false);
   const [mode, setMode] = useState<Mode | null>(null);
 
@@ -125,22 +128,6 @@ export function E2eChatBanner({
     onRequestedModeHandled?.();
   }, [requestedMode, onRequestedModeHandled]);
 
-  // Первый раз, когда пользователь без шифрования открыл чат: показываем и запоминаем.
-  useEffect(() => {
-    if (status !== 'needs_setup') {
-      setShowSetupPrompt(false);
-      return;
-    }
-    let cancelled = false;
-    void wasE2eSetupPromptSeen().then((seen) => {
-      if (cancelled || seen) return;
-      setShowSetupPrompt(true);
-      void markE2eSetupPromptSeen();
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [status]);
   useEffect(
     () =>
       onPeerKeyChanged((changedPeerId) => {
@@ -156,17 +143,6 @@ export function E2eChatBanner({
         <Text style={styles.bannerText}>{t('e2eBannerRestore', lang)}</Text>
       </TouchableOpacity>
     );
-  } else if (status === 'needs_setup' && showSetupPrompt) {
-    banner = (
-      <View style={styles.banner}>
-        <TouchableOpacity style={{ flex: 1 }} onPress={() => setMode('setup')} accessibilityRole="button">
-          <Text style={styles.bannerText}>{t('e2eBannerSetup', lang)}</Text>
-        </TouchableOpacity>
-        <TouchableOpacity onPress={() => setShowSetupPrompt(false)} hitSlop={10} accessibilityLabel={t('e2eLater', lang)}>
-          <Text style={styles.close}>×</Text>
-        </TouchableOpacity>
-      </View>
-    );
   } else if (peerKeyChanged) {
     banner = (
       <View style={styles.banner}>
@@ -181,7 +157,7 @@ export function E2eChatBanner({
   return (
     <>
       {banner}
-      {mode === 'disable' || mode === 'enable' ? (
+      {mode === 'disable' || mode === 'enable' || mode === 'reset' ? (
         <E2eConfirmModal lang={lang} mode={mode} onClose={() => setMode(null)} />
       ) : mode ? (
         <E2ePasswordModal lang={lang} mode={mode} onModeChange={setMode} onClose={() => setMode(null)} />
@@ -191,7 +167,11 @@ export function E2eChatBanner({
 }
 
 /** Отключить / включить снова — без пароля, только подтверждение. */
-function E2eConfirmModal({ lang, mode, onClose }: { lang: Lang; mode: 'disable' | 'enable'; onClose: () => void }) {
+/**
+ * Отключить / включить снова / начать заново без пароля — только подтверждение.
+ * reset — «Не помню пароль» прежней схемы: новый ключ, старая переписка здесь не читается.
+ */
+function E2eConfirmModal({ lang, mode, onClose }: { lang: Lang; mode: ConfirmMode; onClose: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const confirm = useCallback(async () => {
@@ -199,7 +179,8 @@ function E2eConfirmModal({ lang, mode, onClose }: { lang: Lang; mode: 'disable' 
     setBusy(true);
     setError(null);
     try {
-      const r = mode === 'disable' ? await disableE2e() : await enableE2eAgain();
+      const r =
+        mode === 'disable' ? await disableE2e() : mode === 'reset' ? await resetE2e() : await enableE2eAgain();
       if (r.ok) onClose();
       else setError(t('e2eNetworkError', lang));
     } catch {
@@ -209,14 +190,17 @@ function E2eConfirmModal({ lang, mode, onClose }: { lang: Lang; mode: 'disable' 
     }
   }, [busy, mode, lang, onClose]);
   const disabling = mode === 'disable';
+  const title = { disable: 'e2eDisableTitle', enable: 'e2eEnableAgainTitle', reset: 'e2eSetupTitle' }[mode];
+  // У «включить снова» текст про прежний пароль — без пароля он неверен, хватает заголовка.
+  const text = { disable: 'e2eDisableText', enable: null, reset: 'e2eResetText' }[mode];
   return (
     <Modal visible transparent animationType="fade" onRequestClose={busy ? () => {} : onClose}>
       <View style={styles.overlay}>
         <BlurView intensity={60} tint="dark" style={StyleSheet.absoluteFill} />
         <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.5)' }]} />
         <View style={styles.card}>
-          <Text style={styles.title}>{t(disabling ? 'e2eDisableTitle' : 'e2eEnableAgainTitle', lang)}</Text>
-          <Text style={styles.text}>{t(disabling ? 'e2eDisableText' : 'e2eEnableAgainText', lang)}</Text>
+          <Text style={styles.title}>{t(title, lang)}</Text>
+          {text ? <Text style={styles.text}>{t(text, lang)}</Text> : null}
           {error ? <Text style={styles.error}>{error}</Text> : null}
           <View style={styles.row}>
             <TouchableOpacity style={[styles.btn, styles.btnSecondary]} onPress={onClose} disabled={busy}>
@@ -294,14 +278,7 @@ function E2ePasswordModal({
     setBusy(true);
     setError(null);
     try {
-      const action =
-        mode === 'setup'
-          ? setupE2e
-          : mode === 'restore'
-            ? restoreE2e
-            : mode === 'change'
-              ? changeE2eBackupPassword
-              : resetE2e;
+      const action = mode === 'restore' ? restoreE2e : changeE2eBackupPassword;
       const r = await action(password);
       if (r.ok) {
         onClose();
@@ -321,9 +298,9 @@ function E2ePasswordModal({
     }
   }, [busy, needsRepeat, password, repeat, mode, lang, onClose]);
 
-  const title = { setup: 'e2eSetupTitle', restore: 'e2eRestoreTitle', reset: 'e2eResetTitle', change: 'e2eChangeTitle' }[mode];
-  const text = { setup: 'e2eSetupText', restore: 'e2eRestoreText', reset: 'e2eResetText', change: 'e2eChangeText' }[mode];
-  const action = { setup: 'e2eEnable', restore: 'e2eRestore', reset: 'e2eEnable', change: 'e2eSave' }[mode];
+  const title = { restore: 'e2eRestoreTitle', change: 'e2eChangeTitle' }[mode];
+  const text = { restore: 'e2eRestoreText', change: 'e2eChangeText' }[mode];
+  const action = { restore: 'e2eRestore', change: 'e2eSave' }[mode];
 
   return (
     <Modal visible transparent animationType="fade" onRequestClose={busy ? () => {} : onClose}>

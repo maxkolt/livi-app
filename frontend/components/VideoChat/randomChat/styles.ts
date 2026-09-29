@@ -6,6 +6,9 @@ import {
 } from '../../../screens/home/constants';
 import { CARD_BASE } from './constants';
 
+/** Горизонталь: отступ от краёв и зазор между карточками. */
+const LANDSCAPE_CARD_GAP = 8;
+
 export const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -27,8 +30,8 @@ export const styles = StyleSheet.create({
   topSectionLandscape: {
     flexDirection: 'row',
     alignItems: 'stretch',
-    gap: 8,
-    paddingHorizontal: 8,
+    gap: LANDSCAPE_CARD_GAP,
+    paddingHorizontal: LANDSCAPE_CARD_GAP,
   },
   /**
    * Горизонталь: карточка целиком, а не поверх styles.card. `width: undefined` в
@@ -61,7 +64,11 @@ export const styles = StyleSheet.create({
     padding: 6,
     borderRadius: 18,
   },
+  /** Каждая кнопка ровно под своей карточкой: те же отступы от краёв и тот же зазор. */
   bottomRowLandscape: {
+    width: '100%',
+    paddingHorizontal: LANDSCAPE_CARD_GAP,
+    gap: LANDSCAPE_CARD_GAP,
     marginTop: 4,
     marginBottom: 4,
   },
@@ -146,14 +153,13 @@ export const styles = StyleSheet.create({
     fontSize: 22,
   },
   bottomRow: {
-    // Ширина как у карточек (блок «Вы»): на iOS 94%, на Android 100%
+    // Вертикаль: края кнопок совпадают с краями карточек — та же ширина, без своих отступов
+    // (на iOS 94%, на Android 100%).
     width: Platform.OS === 'android' ? '100%' : '94%',
     flexDirection: 'row',
     gap: Platform.OS === "android" ? 11 : 16,
     marginTop: Platform.OS === "android" ? 5 : 10,
     marginBottom: Platform.OS === "android" ? 4 : 32,
-    // Смещаем кнопки к центру: «Начать» от левого края, «Далее» от правого
-    paddingHorizontal: Platform.OS === "android" ? 2 : 16,
   },
   bigBtn: {
     flex: 1,

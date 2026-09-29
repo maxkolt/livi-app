@@ -53,6 +53,7 @@ import socket, {
 import { applyCallEndedGlobalRefsOnce } from '../../../utils/globalEvents';
 import { reportEndCallToCallKeep } from '../../../utils/callKeep';
 import { logger } from '../../../utils/logger';
+import { ensureCallMediaPermissions } from '../../../utils/mediaPermissions';
 import { markCallPerf, callPerfSpan, endCallPerfTrace } from '../../../utils/callPerfTrace';
 import { sendClientMetrics } from '../../utils/capacityClientMetrics';
 import { trackReleaseEvent } from '../../../utils/telemetry';
@@ -5987,6 +5988,13 @@ export class VideoCallSession extends SimpleEventEmitter {
     const adoptedAudioTrack = !wantVideo ? adoptDirectCallAudioPrewarm() : null;
     if (!wantVideo && !adoptedAudioTrack) {
       disposeDirectCallAudioPrewarm('session:create-own-audio');
+    }
+    if (!adoptedAudioTrack) {
+      // Камеру/микрофон спрашивают на старте приложения, здесь — ответ из кэша. Если там
+      // отказали, системный диалог появится тут: ждём ответа до захвата, иначе треки
+      // создавались бы параллельно с диалогом и звонок мог остаться без звука.
+      await ensureCallMediaPermissions({ video: wantVideo });
+      if (this.ended || this.endCallInProgress || this.cleaned) return;
     }
     try {
       if (adoptedAudioTrack) {
