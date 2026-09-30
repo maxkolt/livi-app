@@ -24,6 +24,7 @@ import socket, {
   getCurrentUserId,
   hardRecycleSocketConnection,
   onConnected,
+  onDisconnected,
 } from '../../../sockets/socket';
 import { logger } from '../../../utils/logger';
 import { sendClientMetrics } from '../../utils/capacityClientMetrics';
@@ -59,6 +60,11 @@ type MatchPayload = {
 type PartnerGonePayload = {
   nextTransitionId?: string | null;
 };
+
+/** Ответ сервера на random:resume — возврат в ту же пару после обрыва. */
+type ResumeAck =
+  | { ok: true; id: string; livekitToken: string | null; livekitRoomName: string; livekitUrl: string | null }
+  | { ok: false; reason: string };
 
 export class RandomChatSession extends SimpleEventEmitter {
   private hasLoggedLiveKitApiKeyWarning = false;
@@ -104,6 +110,25 @@ export class RandomChatSession extends SimpleEventEmitter {
   // Socket-level match room id (can differ from LiveKit roomName when we use userId-based room names).
   // Used for cam-toggle filtering to ensure "Отошел" is driven only by explicit UI camera toggles.
   private matchRoomId: string | null = null;
+  /** userId собеседника текущей пары: по нему сервер возвращает нас в пару после обрыва (random:resume). */
+  private matchPartnerUserId: string | null = null;
+  /**
+   * Переподключение посреди разговора. Собеседник пропал: сервер держит пару (partnerAwayServer)
+   * или LiveKit потерял участника (partnerAwayLiveKit). Мы сами: оборвался сокет (socketDownMidPair),
+   * LiveKit восстанавливает связь (roomReconnecting) или идёт random:resume (resumeInFlight).
+   */
+  private partnerAwayServer = false;
+  private partnerAwayLiveKit = false;
+  private socketDownMidPair = false;
+  private roomReconnecting = false;
+  private resumeInFlight: Promise<void> | null = null;
+  private partnerAwayGiveUpTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnectingSoftTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnectingShown = false;
+  /** Сервер ждёт вернувшегося 10 с; ещё 5 с — запас на доставку «вернулся/ушёл». */
+  private readonly partnerAwayGiveUpMs = 15_000;
+  /** Короткие просадки LiveKit и уход собеседника через «Далее» не должны мигать оверлеем. */
+  private readonly reconnectingSoftDelayMs = 1_200;
   private localVideoHealthTimeout: NodeJS.Timeout | null = null;
   private localVideoHealthAttempts = 0;
   private localVideoWatchdogForcedUntil = 0;
@@ -611,6 +636,8 @@ export class RandomChatSession extends SimpleEventEmitter {
     this.config.setStarted?.(false);
     this.notifyLoadingChange(false);
     this.matchRoomId = null;
+    this.matchPartnerUserId = null;
+    this.clearReconnectState('stop');
     void this.disconnectRoom('user', 'stopRandomChat');
     this.stopLocalTracks();
     this.resetRemoteState();
@@ -739,6 +766,8 @@ export class RandomChatSession extends SimpleEventEmitter {
     try {
       // Clear match room id early to avoid applying stale cam-toggle events during transition.
       this.matchRoomId = null;
+      this.matchPartnerUserId = null;
+      this.clearReconnectState('next');
       socket.emit('next', { transitionId: nextTransitionId });
     } catch (e) {
       logger.warn('[RandomChatSession] Error emitting next', e);
@@ -888,13 +917,13 @@ export class RandomChatSession extends SimpleEventEmitter {
     
     // КРИТИЧНО: Проверяем состояние комнаты - если она connected или connecting, не запускаем поиск
     // Но если комната disconnected или null, можно запускать поиск (fallback после next())
-    if (this.room && (this.room.state === 'connected' || this.room.state === 'connecting' || this.room.state === 'reconnecting')) {
+    if (this.isRoomLive()) {
       logger.debug('[RandomChatSession] autoNext: skipping (room is active)', {
-        roomState: this.room.state
+        roomState: this.room?.state
       });
       this.logReconnectTrace('auto_next_skipped_room_active', {
         reason: reason || 'unspecified',
-        roomState: this.room.state,
+        roomState: this.room?.state,
       });
       return;
     }
@@ -917,10 +946,186 @@ export class RandomChatSession extends SimpleEventEmitter {
   /** True while UI is searching and we are not in an active LiveKit room. */
   private isSearchingForPartner(): boolean {
     if (!this.started || this.isDisconnecting || this.stopRequested) return false;
-    if (this.room && (this.room.state === 'connected' || this.room.state === 'connecting' || this.room.state === 'reconnecting')) {
-      return false;
-    }
+    if (this.isRoomLive()) return false;
     return true;
+  }
+
+  /**
+   * Комната LiveKit жива или восстанавливается. signalReconnecting — тоже разговор, а не поиск:
+   * иначе после обрыва сокета мы вставали в очередь посреди разговора.
+   */
+  private isRoomLive(): boolean {
+    const state = this.room?.state;
+    return (
+      state === 'connected' ||
+      state === 'connecting' ||
+      state === 'reconnecting' ||
+      state === 'signalReconnecting'
+    );
+  }
+
+  /** Есть собеседник, в пару с которым стоит возвращаться после обрыва. */
+  private hasActivePair(): boolean {
+    return this.started && !this.stopRequested && !this.nextInProgress && !!this.matchPartnerUserId;
+  }
+
+  /* ---------- Переподключение посреди разговора ---------- */
+
+  /** Пересчитать оверлей «Восстанавливаем связь» и таймер «собеседник так и не вернулся». */
+  private updateReconnectingState(): void {
+    const partnerAway = this.partnerAwayServer || this.partnerAwayLiveKit;
+    if (partnerAway && !this.partnerAwayGiveUpTimer) {
+      this.partnerAwayGiveUpTimer = setTimeout(() => {
+        this.partnerAwayGiveUpTimer = null;
+        if (!(this.partnerAwayServer || this.partnerAwayLiveKit) || !this.hasActivePair()) return;
+        this.leavePairAfterFailedReconnect('partner_away_timeout');
+      }, this.partnerAwayGiveUpMs);
+    } else if (!partnerAway && this.partnerAwayGiveUpTimer) {
+      clearTimeout(this.partnerAwayGiveUpTimer);
+      this.partnerAwayGiveUpTimer = null;
+    }
+
+    const urgent = this.partnerAwayServer || this.socketDownMidPair || !!this.resumeInFlight;
+    const soft = this.partnerAwayLiveKit || this.roomReconnecting;
+    if (urgent) {
+      this.setReconnectingShown(true);
+    } else if (soft) {
+      if (!this.reconnectingShown && !this.reconnectingSoftTimer) {
+        this.reconnectingSoftTimer = setTimeout(() => {
+          this.reconnectingSoftTimer = null;
+          if (this.partnerAwayLiveKit || this.roomReconnecting) this.setReconnectingShown(true);
+        }, this.reconnectingSoftDelayMs);
+      }
+    } else {
+      this.setReconnectingShown(false);
+    }
+  }
+
+  private setReconnectingShown(value: boolean): void {
+    if (this.reconnectingSoftTimer) {
+      clearTimeout(this.reconnectingSoftTimer);
+      this.reconnectingSoftTimer = null;
+    }
+    if (this.reconnectingShown === value) return;
+    this.reconnectingShown = value;
+    this.emit('reconnecting', value);
+  }
+
+  private clearReconnectState(reason: string): void {
+    const had =
+      this.partnerAwayServer || this.partnerAwayLiveKit || this.socketDownMidPair || this.roomReconnecting;
+    this.partnerAwayServer = false;
+    this.partnerAwayLiveKit = false;
+    this.socketDownMidPair = false;
+    this.roomReconnecting = false;
+    if (had) this.logReconnectTrace('reconnect_state_cleared', { reason });
+    this.updateReconnectingState();
+  }
+
+  private emitResume(partnerUserId: string): Promise<ResumeAck | null> {
+    return new Promise((resolve) => {
+      try {
+        socket
+          .timeout(2_500)
+          .emit('random:resume', { partnerUserId }, (err: Error | null, res?: ResumeAck) => {
+            resolve(err || !res ? null : res);
+          });
+      } catch {
+        resolve(null);
+      }
+    });
+  }
+
+  /**
+   * Вернуться в ту же пару после обрыва: переподключился сокет или сдался LiveKit.
+   * Сервер держит пару ~10 с; если LiveKit-комнаты уже нет — заходим в неё заново по свежему
+   * токену. Не вышло — уходим в поиск, как раньше.
+   */
+  private resumePair(reason: string): Promise<void> {
+    if (this.resumeInFlight) return this.resumeInFlight;
+    const partnerUserId = this.matchPartnerUserId;
+    if (!partnerUserId) return Promise.resolve();
+    const samePair = () => this.hasActivePair() && this.matchPartnerUserId === partnerUserId;
+
+    const run = async () => {
+      this.logReconnectTrace('resume_begin', { reason, roomState: this.room?.state ?? 'none' });
+      let res: ResumeAck | null = null;
+      let noAck = 0;
+      for (let attempt = 1; attempt <= 6; attempt++) {
+        if (!samePair()) return;
+        // Сокета нет — вернёмся сюда из onConnected.
+        if (!socket.connected) {
+          this.logReconnectTrace('resume_wait_socket', { reason, attempt });
+          return;
+        }
+        res = await this.emitResume(partnerUserId);
+        if (res?.ok) break;
+        // not_ready: сервер ещё не привязал новый сокет к пользователю — ждём.
+        if (res && res.reason !== 'not_ready') break;
+        // Дважды без ответа — сервер не знает random:resume (старая версия): не держим оверлей зря.
+        if (!res && ++noAck >= 2) break;
+        await new Promise((r) => setTimeout(r, 600));
+      }
+      if (!samePair()) return;
+      if (!res?.ok) {
+        this.logReconnectTrace('resume_rejected', { reason, serverReason: res ? res.reason : 'no_ack' });
+        this.handlePartnerGone('disconnected');
+        return;
+      }
+      this.logReconnectTrace('resume_ok', { reason, partnerId: res.id, roomState: this.room?.state ?? 'none' });
+      this.notifyPartnerIdChange(res.id);
+
+      if (!this.isRoomLive() && !this.connectingInProgress) {
+        const url = (LIVEKIT_URL || res.livekitUrl || '').trim();
+        let connected = false;
+        if (url && res.livekitToken && res.livekitRoomName) {
+          // Звук собеседника выключали кнопкой — после перезахода в комнату он должен остаться выключенным.
+          const keepRemoteMuted = this.remoteAudioMuted;
+          this.resetRemoteState();
+          if (keepRemoteMuted) {
+            this.remoteAudioMuted = true;
+            this.emit('remoteState', { muted: true });
+          }
+          const connectRequestId = ++this.connectRequestId;
+          this.pendingConnectRequestId = connectRequestId;
+          try {
+            connected = await this.connectToLiveKit(url, res.livekitToken, connectRequestId, res.livekitRoomName, 'resume');
+          } finally {
+            if (this.pendingConnectRequestId === connectRequestId) this.pendingConnectRequestId = null;
+          }
+        }
+        if (!samePair()) return;
+        if (!connected) {
+          this.leavePairAfterFailedReconnect('resume_livekit_failed');
+          return;
+        }
+      }
+      // Собеседник мог пропустить наш cam-toggle, пока нас не было.
+      this.emitCamToggleRelay('resume');
+    };
+
+    const inFlight = run()
+      .catch((e) => {
+        logger.warn('[RandomChatSession] resumePair failed', { reason, error: (e as any)?.message || String(e) });
+      })
+      .finally(() => {
+        if (this.resumeInFlight === inFlight) this.resumeInFlight = null;
+        this.updateReconnectingState();
+      });
+    this.resumeInFlight = inFlight;
+    this.updateReconnectingState();
+    return inFlight;
+  }
+
+  /** Вернуть пару не вышло: рвём её на сервере (как «Далее») и ищем дальше. */
+  private leavePairAfterFailedReconnect(reason: string): void {
+    this.logReconnectTrace('leave_pair_after_failed_reconnect', { reason });
+    const transitionId = this.createNextTransitionId();
+    this.activeNextTransitionId = transitionId;
+    try {
+      socket.emit('next', { transitionId });
+    } catch {}
+    this.handlePartnerGone('disconnected');
   }
 
   private startSearchWatchdog(): void {
@@ -1204,14 +1409,26 @@ export class RandomChatSession extends SimpleEventEmitter {
 
   toggleRemoteAudio(): void {
     this.remoteAudioMuted = !this.remoteAudioMuted;
-    if (this.remoteAudioTrack) {
-      try {
-        this.remoteAudioTrack.setMuted(this.remoteAudioMuted);
-      } catch (e) {
-        logger.warn('[RandomChatSession] Failed to toggle remote audio', e);
-      }
-    }
+    this.applyRemoteAudioMute();
     this.emit('remoteState', { muted: this.remoteAudioMuted });
+  }
+
+  /**
+   * Приводит аудио собеседника к кнопке динамика. Одного setMuted мало: LiveKit сам
+   * зовёт setMuted(false), когда собеседник включает свой микрофон, — громкость 0
+   * это переживает. Зовём и при подписке: трек мог прийти уже после нажатия.
+   */
+  private applyRemoteAudioMute(): void {
+    const track = this.remoteAudioTrack as any;
+    if (!track) return;
+    try {
+      track.setMuted?.(this.remoteAudioMuted);
+    } catch (e) {
+      logger.warn('[RandomChatSession] Failed to toggle remote audio', e);
+    }
+    try {
+      track.setVolume?.(this.remoteAudioMuted ? 0 : 1);
+    } catch {}
   }
 
   async flipCam(): Promise<void> {
@@ -1275,6 +1492,8 @@ export class RandomChatSession extends SimpleEventEmitter {
 
   /** Единая точка обработки «партнёр ушёл» (peer:left или disconnected). Защита от двойного вызова. */
   private handlePartnerGone(reason: 'peer_left' | 'disconnected'): void {
+    this.matchPartnerUserId = null;
+    this.clearReconnectState(`partner_gone:${reason}`);
     if (this.isDisconnecting || this.disconnectHandled) {
       logger.debug('[RandomChatSession] handlePartnerGone already in progress, skipping', { reason });
       this.logReconnectTrace('partner_gone_skipped_already_handling', { reason });
@@ -1459,16 +1678,48 @@ export class RandomChatSession extends SimpleEventEmitter {
       }
     };
 
+    // У собеседника оборвался сокет — сервер держит пару, пока он не вернётся.
+    const partnerReconnectingHandler = (data?: { graceMs?: number }) => {
+      if (!this.hasActivePair()) return;
+      this.logReconnectTrace('partner_reconnecting', { graceMs: data?.graceMs ?? null });
+      this.partnerAwayServer = true;
+      this.updateReconnectingState();
+    };
+    const partnerResumedHandler = (data?: { id?: string }) => {
+      if (!this.hasActivePair()) return;
+      this.logReconnectTrace('partner_resumed', { partnerId: data?.id ?? null });
+      this.partnerAwayServer = false;
+      this.updateReconnectingState();
+      if (data?.id) this.notifyPartnerIdChange(data.id);
+      // Пока собеседника не было, наш cam-toggle мог до него не дойти.
+      this.emitCamToggleRelay('partner_resumed');
+    };
+
     socket.on('match_found', matchHandler);
     socket.on('peer:stopped', peerStoppedHandler);
     socket.on('peer:left', peerLeftHandler);
     socket.on('disconnected', socketDisconnectedHandler);
     socket.on('hangup', hangupHandler);
     socket.on('cam-toggle', camToggleHandler);
+    socket.on('random:partnerReconnecting', partnerReconnectingHandler);
+    socket.on('random:partnerResumed', partnerResumedHandler);
+
+    // Оборвался наш сокет посреди разговора: LiveKit продолжает сам, а пару вернём после переподключения.
+    const offSocketDisconnected = onDisconnected(() => {
+      if (!this.hasActivePair()) return;
+      this.logReconnectTrace('socket_down_mid_pair');
+      this.socketDownMidPair = true;
+      this.updateReconnectingState();
+    });
 
     // After VPN / network drop the server removes us from the queue on disconnect.
     // Re-join as soon as Socket.IO is back while the user is still searching.
     const offSocketConnected = onConnected(() => {
+      if (this.hasActivePair()) {
+        this.socketDownMidPair = false;
+        void this.resumePair('socket_reconnect');
+        return;
+      }
       if (!this.isSearchingForPartner()) return;
       logger.info('[RandomChatSession] Socket reconnected while searching — re-queue', {
         sessionId: this.sessionId,
@@ -1485,6 +1736,9 @@ export class RandomChatSession extends SimpleEventEmitter {
       () => socket.off('disconnected', socketDisconnectedHandler),
       () => socket.off('hangup', hangupHandler),
       () => socket.off('cam-toggle', camToggleHandler),
+      () => socket.off('random:partnerReconnecting', partnerReconnectingHandler),
+      () => socket.off('random:partnerResumed', partnerResumedHandler),
+      offSocketDisconnected,
       offSocketConnected,
     ];
   }
@@ -1532,6 +1786,8 @@ export class RandomChatSession extends SimpleEventEmitter {
     this.clearPartnerGoneFallbackTimer();
     // Save socket-level match room id (used for cam-toggle relay).
     this.matchRoomId = roomId;
+    this.matchPartnerUserId = userId;
+    this.clearReconnectState('match_found');
     this.stopSearchWatchdog();
     this.stopSearchConnectLoop();
 
@@ -3826,12 +4082,21 @@ export class RandomChatSession extends SimpleEventEmitter {
 
   private registerRoomEvents(room: Room): void {
     room
+      .on(RoomEvent.SignalReconnecting, () => {
+        if (this.room !== room || !this.hasActivePair()) return;
+        this.roomReconnecting = true;
+        this.updateReconnectingState();
+      })
       .on(RoomEvent.Reconnecting, () => {
         this.logReconnectTrace('room_reconnecting', {
           sessionId: this.sessionId,
           reconnectCycleId: this.reconnectCycleId,
           roomName: room.name || null,
         });
+        if (this.room === room && this.hasActivePair()) {
+          this.roomReconnecting = true;
+          this.updateReconnectingState();
+        }
         void sendClientMetrics(API_BASE, { roomReconnecting: true, reconnect: true }).catch(() => {});
       })
       .on(RoomEvent.Reconnected, () => {
@@ -3841,6 +4106,10 @@ export class RandomChatSession extends SimpleEventEmitter {
           roomName: room.name || null,
         });
         void sendClientMetrics(API_BASE, { roomReconnected: true, reconnect: true }).catch(() => {});
+        if (this.room === room && this.roomReconnecting) {
+          this.roomReconnecting = false;
+          this.updateReconnectingState();
+        }
         this.refreshCurrentRemoteParticipant(room);
         this.scheduleIceTransportLogging(room, 'reconnected');
       })
@@ -3857,6 +4126,11 @@ export class RandomChatSession extends SimpleEventEmitter {
         }
         participant = liveParticipant;
         this.currentRemoteParticipant = liveParticipant;
+        if (this.partnerAwayLiveKit) {
+          this.logReconnectTrace('partner_livekit_back', { participantId: participant.identity });
+          this.partnerAwayLiveKit = false;
+          this.updateReconnectingState();
+        }
         void sendClientMetrics(API_BASE, { remoteParticipantConnected: true }).catch(() => {});
         // When the peer finishes joining, they always have matchRoomId — replay our cam state so
         // «Отошёл» is instant even if earlier cam-toggle was dropped during the match handshake.
@@ -3984,6 +4258,14 @@ export class RandomChatSession extends SimpleEventEmitter {
       })
       .on(RoomEvent.ParticipantDisconnected, (participant) => {
         if (this.isSameRemoteParticipant(participant)) {
+          // Не уходим сразу: это может быть переподключение собеседника. Решит сервер
+          // (peer:left / disconnected / random:partnerResumed) или таймер partnerAwayGiveUpMs.
+          if (this.room === room && this.hasActivePair() && !this.isDisconnecting && !this.disconnectHandled) {
+            this.logReconnectTrace('partner_livekit_away', { participantId: participant.identity });
+            this.partnerAwayLiveKit = true;
+            this.updateReconnectingState();
+            return;
+          }
           // КРИТИЧНО: Если партнер отключился, мы должны отключиться от комнаты
           // Даже если уже идет процесс отключения, убеждаемся что комната отключена
           if (!this.isDisconnecting && !this.disconnectHandled) {
@@ -4015,9 +4297,19 @@ export class RandomChatSession extends SimpleEventEmitter {
         });
         // Флаги будут сброшены в disconnectRoom через промис, если он активен
         // Если disconnectRoom не был вызван (например, неожиданное отключение), сбрасываем флаги
+        if (this.roomReconnecting && (this.room === room || !this.room)) {
+          this.roomReconnecting = false;
+          this.updateReconnectingState();
+        }
         if (!this.disconnectPromise) {
           this.disconnectReason = 'unknown';
           this.isDisconnecting = false;
+          // LiveKit сдался сам посреди разговора — возвращаемся в ту же комнату со свежим токеном.
+          if (this.room === room && this.hasActivePair() && !this.connectingInProgress) {
+            this.logReconnectTrace('room_lost_mid_pair');
+            this.roomReconnecting = false;
+            void this.resumePair('livekit_disconnected');
+          }
         }
       });
   }
@@ -4145,6 +4437,7 @@ export class RandomChatSession extends SimpleEventEmitter {
     
     if (publication.kind === Track.Kind.Audio) {
       this.remoteAudioTrack = track;
+      if (this.remoteAudioMuted) this.applyRemoteAudioMute();
     } else if (publication.kind === Track.Kind.Video) {
       this.clearPendingRemoteVideoReset('video_track_subscribed');
       this.clearRemoteCamImplicitOffTimer('video_track_subscribed');

@@ -127,6 +127,8 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   const [remoteMuted, setRemoteMuted] = useState(false);
   const [remoteCamEnabled, setRemoteCamEnabled] = useState(false);
   const [remoteCamSide, setRemoteCamSide] = useState<CamSide>('front');
+  /** Посреди разговора оборвалась связь (у нас или у собеседника) — сессия пытается вернуть пару. */
+  const [peerReconnecting, setPeerReconnecting] = useState(false);
   // Once we have rendered remote video at least once, we should never show a spinner again for camera on/off.
   const hasEverRemoteVideoRef = useRef(false);
   // Full-screen network overlay (black screen with icon) for network-origin video failures.
@@ -689,8 +691,13 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       // УПРОЩЕНО: Для iOS обновляем key при matchFound (подключение к новой комнате)
       // Флаг needsIOSUpdateAfterNextRef уже установлен при next(), обновление произойдет при следующем localStream
     });
+
+    session.on('reconnecting', (value: boolean) => {
+      setPeerReconnecting(!!value);
+    });
     
     return () => {
+      setPeerReconnecting(false);
       const activeSession = sessionRef.current;
       if (activeSession) {
         activeSession.cleanup();
@@ -719,9 +726,11 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     const hasEverNow = hasEverRemoteVideoRef.current || remoteVideoRenderableForUi;
     const remoteCamKnown = remoteCamStateKnownRef.current;
 
+    // Во время переподключения пары вместо «нет сети» показываем «Восстанавливаем связь».
     const shouldShowNetwork =
       started &&
       !loading &&
+      !peerReconnecting &&
       hasEverNow &&
       remoteCamKnown &&
       remoteCamEnabled === true &&
@@ -757,6 +766,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     remoteViewKey,
     remoteVideoRenderableForUi,
     networkOverlayVisible,
+    peerReconnecting,
   ]);
   
   // Обработка разрешений
@@ -982,11 +992,25 @@ const RandomChat: React.FC<Props> = ({ route }) => {
         setIsNexting(false);
       }, nextStarted ? 1500 : 0);
     }
-  }, [isNexting, started, loading, isInactiveState, canRunAction]);
+  }, [
+    isNexting,
+    started,
+    loading,
+    isInactiveState,
+    canRunAction,
+    // Снимок для отката при отказе next(): со старыми значениями откат вернул бы
+    // активную «Добавить в друзья» после уже отправленной заявки.
+    partnerUserId,
+    addPending,
+    addBlocked,
+    remoteCamEnabled,
+    lang,
+  ]);
   
-  // Функция для переключения динамика собеседника
+  // Функция для переключения динамика собеседника.
+  // Кнопки в карточках не делят canRunAction с «Начать/Стоп» и «Далее»: иначе нажатие
+  // «Далее» сразу после динамика или переворота камеры молча терялось.
   const toggleRemoteAudio = useCallback(() => {
-    if (!canRunAction()) return;
     // Защита от двойных нажатий
     if (toggleRemoteAudioRef.current) return;
     toggleRemoteAudioRef.current = true;
@@ -1007,12 +1031,13 @@ const RandomChat: React.FC<Props> = ({ route }) => {
         toggleRemoteAudioRef.current = false;
       }, 300);
     }
-  }, [canRunAction]);
-  
+  }, []);
+
   // КРИТИЧНО: ЗАЩИТА ОТ ДВОЙНЫХ НАЖАТИЙ для всех кнопок управления
   const toggleMicRef = useRef(false);
   const toggleCamRef = useRef(false);
   const toggleRemoteAudioRef = useRef(false);
+  const flipInFlightRef = useRef(false);
   
   const toggleMic = useCallback(() => {
     if (isModerationBanned) return;
@@ -1045,12 +1070,15 @@ const RandomChat: React.FC<Props> = ({ route }) => {
         toggleCamRef.current = false;
       }, 400); // чуть больше, чтобы игнорировать даблтап/спам
     }
-  }, [canRunAction]);
-  
+  }, []);
+
   const handleFlipCamera = useCallback(async () => {
-    if (!sessionRef.current || !canRunAction()) return;
+    if (!sessionRef.current || flipInFlightRef.current) return;
     if (!camOn) return; // Кнопка должна быть disabled, но на всякий случай проверяем
-    
+
+    // Пока камера перезапускается, повторный тап сессия всё равно отбросит, а UI
+    // перемонтировал бы превью «Вы» впустую — отсекаем здесь.
+    flipInFlightRef.current = true;
     try {
       await sessionRef.current.flipCam();
       const side = sessionRef.current.getCamSide?.();
@@ -1071,8 +1099,10 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       });
     } catch (e) {
       logger.warn('[RandomChat] Error flipping camera', e);
+    } finally {
+      flipInFlightRef.current = false;
     }
-  }, [canRunAction, camOn, localRenderKey]);
+  }, [camOn, localRenderKey]);
   
   // Вычисляемые значения
   const hasActiveCall = !!partnerId || !!roomId;
@@ -1140,8 +1170,8 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     }
   }, [camOn, localStream, started, isInactiveState]);
   
-  // Показывать ли бейдж "Друг"
-  const showFriendBadge = useMemo(() => {
+  // Показывать ли отметку «Друг» (на месте «Добавить в друзья»)
+  const showFriendMark = useMemo(() => {
     const hasPartnerUserId = !!partnerUserId;
     const hasStarted = !!started;
     const isInactive = !!isInactiveState;
@@ -1717,7 +1747,9 @@ const RandomChat: React.FC<Props> = ({ route }) => {
               : { streamURL };
 
             return (
-              <View style={styles.remoteStage}>
+              // collapsable={false}: иначе Android вливает этот слой в карточку, и оверлеи
+              // сети/модерации (zIndex 9999+) ложатся поверх кнопок собеседника.
+              <View style={styles.remoteStage} collapsable={false}>
                 {streamToRender ? (
                   <RTCView
                     key={rtcViewKey}
@@ -1748,6 +1780,13 @@ const RandomChat: React.FC<Props> = ({ route }) => {
                   </View>
                 )}
 
+                {peerReconnecting && !showLoader && (
+                  <View style={styles.reconnectingOverlay} pointerEvents="none">
+                    <ActivityIndicator size="large" color={WELCOME_HEADER_TITLE} />
+                    <Text style={styles.reconnectingText}>{L('randomReconnecting')}</Text>
+                  </View>
+                )}
+
                 {moderationPartnerBlocked && started && !isInactiveState ? (
                   <View style={styles.moderationUnavailableOverlay} pointerEvents="auto">
                     <MaterialIcons name="gpp-bad" size={56} color={WELCOME_HEADER_TITLE} />
@@ -1767,56 +1806,40 @@ const RandomChat: React.FC<Props> = ({ route }) => {
             );
           })()}
           
-          {/* Кнопка выключения динамика */}
+          {/* Кнопка выключения динамика. Как в «Вы»: выключено — серая иконка, недоступна — полупрозрачная. */}
           {started && !isInactiveState && (
-            <Animated.View
-              style={[
-                {
-                  position: "absolute",
-                  top: 8,
-                  left: 8,
-                  opacity: buttonsOpacity,
-                },
-              ]}
-            >
-              <View style={{ opacity: remoteStream ? (remoteMuted ? 0.6 : 1) : 0.5 }}>
-                <TouchableOpacity
-                  onPress={toggleRemoteAudio}
-                  disabled={!remoteStream}
-                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                  activeOpacity={0.7}
-                  style={[styles.iconBtn, isLandscape && styles.iconBtnLandscape]}
-                >
-                  <View style={{ position: 'relative', justifyContent: 'center', alignItems: 'center' }}>
-                    <MaterialIcons
-                      name={remoteMuted ? "volume-off" : "volume-up"}
-                      size={ctrlIconSize}
-                      color={remoteMuted ? "#999" : (remoteStream ? WELCOME_HEADER_TITLE : "#777")}
-                    />
-                    {remoteMuted && (
-                      <View
-                        style={{
-                          position: 'absolute',
-                          width: 28,
-                          height: 2,
-                          backgroundColor: '#999',
-                          transform: [{ rotate: '45deg' }],
-                        }}
-                      />
-                    )}
-                  </View>
-                </TouchableOpacity>
-              </View>
+            <Animated.View style={[styles.topLeft, { opacity: buttonsOpacity }]}>
+              <TouchableOpacity
+                onPress={toggleRemoteAudio}
+                disabled={!remoteStream}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                activeOpacity={0.7}
+                accessibilityRole="switch"
+                accessibilityLabel={L('randomPartnerSoundA11y')}
+                accessibilityState={{ checked: !remoteMuted }}
+                style={[styles.iconBtn,
+                  isLandscape && styles.iconBtnLandscape, !remoteStream && { opacity: 0.5 }]}
+              >
+                <MaterialIcons
+                  name={remoteMuted ? "volume-off" : "volume-up"}
+                  size={ctrlIconSize}
+                  color={remoteMuted ? "#888" : WELCOME_HEADER_TITLE}
+                />
+              </TouchableOpacity>
             </Animated.View>
           )}
           
           {/* Кнопка "Добавить в друзья" */}
-          {started && !isInactiveState && !!partnerId && !!remoteStream && !!partnerUserId && !isPartnerFriend && (
+          {started && !isInactiveState && !!partnerId && !!remoteStream && !!partnerUserId && !isPartnerFriend && !moderationPartnerBlocked && (
             <Animated.View style={[styles.topRight, { opacity: buttonsOpacity }]}>
               <View style={{ opacity: addPending || addBlocked ? 0.5 : 1 }}>
                 <TouchableOpacity
                   onPress={onAddFriend}
                   disabled={addPending || addBlocked}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  activeOpacity={0.7}
+                  accessibilityRole="button"
+                  accessibilityLabel={L('randomAddFriendA11y')}
                   style={[styles.iconBtn, isLandscape && styles.iconBtnLandscape]}
                 >
                   <MaterialIcons
@@ -1829,16 +1852,22 @@ const RandomChat: React.FC<Props> = ({ route }) => {
             </Animated.View>
           )}
           
-          {/* Бейдж "Друг" */}
-          {!isInactiveState && showFriendBadge && !!remoteStream && (
-            <View style={[styles.friendBadge, { position: "absolute", top: 8, right: 8 }]}>
-              <MaterialIcons name="check-circle" size={16} color={WELCOME_NAV_ACTIVE_ICON} />
-              <Text style={styles.friendBadgeText}>{L('friend')}</Text>
-            </View>
+          {/* Отметка «Друг»: круг как у кнопок, но не нажимается — это статус, а не действие */}
+          {showFriendMark && (
+            <Animated.View style={[styles.topRight, { opacity: buttonsOpacity }]}>
+              <View
+                accessible
+                accessibilityRole="image"
+                accessibilityLabel={L('friend')}
+                style={[styles.iconBtn, isLandscape && styles.iconBtnLandscape]}
+              >
+                <MaterialIcons name="how-to-reg" size={ctrlIconSize} color={WELCOME_NAV_ACTIVE_ICON} />
+              </View>
+            </Animated.View>
           )}
 
           {/* Кнопка "Пожаловаться" */}
-          {started && !isInactiveState && !!remoteStream && !!partnerUserId && (
+          {started && !isInactiveState && !!remoteStream && !!partnerUserId && !moderationPartnerBlocked && (
             <Animated.View style={[styles.bottomRight, { opacity: buttonsOpacity }]}>
               <TouchableOpacity
                 onPress={openReport}
@@ -1848,7 +1877,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
                 accessibilityLabel={L('reportPartner')}
                 style={[styles.iconBtn, isLandscape && styles.iconBtnLandscape]}
               >
-                <MaterialIcons name="outlined-flag" size={ctrlIconSize} color={WELCOME_HEADER_TITLE} />
+                <MaterialIcons name="report" size={ctrlIconSize} color={WELCOME_HEADER_TITLE} />
               </TouchableOpacity>
             </Animated.View>
           )}
@@ -1968,6 +1997,8 @@ const RandomChat: React.FC<Props> = ({ route }) => {
                   disabled={!camOn}
                   hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                   activeOpacity={0.7}
+                  accessibilityRole="button"
+                  accessibilityLabel={L('randomFlipCameraA11y')}
                   style={[styles.iconBtn,
                     isLandscape && styles.iconBtnLandscape, !camOn && { opacity: 0.5 }]}
                 >
@@ -1986,6 +2017,9 @@ const RandomChat: React.FC<Props> = ({ route }) => {
                   disabled={isModerationBanned}
                   hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                   activeOpacity={0.7}
+                  accessibilityRole="switch"
+                  accessibilityLabel={L('microphone')}
+                  accessibilityState={{ checked: micOn }}
                   style={[styles.iconBtn,
                     isLandscape && styles.iconBtnLandscape, isModerationBanned && styles.iconBtnDisabled]}
                 >
@@ -2000,6 +2034,9 @@ const RandomChat: React.FC<Props> = ({ route }) => {
                   onPress={toggleCam}
                   hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                   activeOpacity={0.7}
+                  accessibilityRole="switch"
+                  accessibilityLabel={L('callCamera')}
+                  accessibilityState={{ checked: camOn }}
                   style={[styles.iconBtn, isLandscape && styles.iconBtnLandscape]}
                 >
                   <MaterialIcons

@@ -1,9 +1,5 @@
 import { Platform, Dimensions, StyleSheet } from 'react-native';
-import {
-  WELCOME_HEADER_TITLE,
-  WELCOME_NAV_ACTIVE_ACCENT,
-  WELCOME_NAV_ACTIVE_ICON,
-} from '../../../screens/home/constants';
+import { WELCOME_HEADER_TITLE } from '../../../screens/home/constants';
 import { CARD_BASE } from './constants';
 
 /** Горизонталь: отступ от краёв и зазор между карточками. */
@@ -44,22 +40,7 @@ export const styles = StyleSheet.create({
     flexBasis: 0,
     minHeight: 0,
   },
-  /** Кнопки в карточке: вертикальная полоса у свободного края, размер меньше. */
-  controlsColumnLandscape: {
-    position: 'absolute',
-    top: 8,
-    bottom: 8,
-    flexDirection: 'column',
-    justifyContent: 'flex-end',
-    gap: 8,
-    right: undefined,
-    left: undefined,
-  },
-  topLeftLandscape: {
-    top: 8,
-    left: undefined,
-    right: undefined,
-  },
+  /** Горизонталь: кнопки остаются в углах карточки, только мельче. */
   iconBtnLandscape: {
     padding: 6,
     borderRadius: 18,
@@ -140,6 +121,21 @@ export const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: 20,
+  },
+  /** Переподключение посреди разговора: последний кадр виден сквозь затемнение. */
+  reconnectingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+  },
+  reconnectingText: {
+    marginTop: 12,
+    color: 'rgba(237,234,234,0.85)',
+    fontSize: 14,
+    lineHeight: 20,
+    textAlign: 'center',
   },
   moderationUnavailableText: {
     marginTop: 12,
@@ -242,22 +238,6 @@ export const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 16,
     fontWeight: '700',
-  },
-  friendBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: WELCOME_NAV_ACTIVE_ACCENT.solid15,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: WELCOME_NAV_ACTIVE_ACCENT.solid30,
-  },
-  friendBadgeText: {
-    color: WELCOME_NAV_ACTIVE_ICON,
-    fontSize: 12,
-    fontWeight: '600',
   },
   toast: {
     position: 'absolute',

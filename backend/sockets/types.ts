@@ -11,5 +11,9 @@ export interface AuthedSocket extends Socket {
     inCall?: boolean;
     isNexting?: boolean;
     lastNextTransitionId?: string;
+    /** Собеседник по рандому (отличает рандом-пару от direct-call, где тоже ставится partnerSid). */
+    randomPartnerSid?: string;
+    /** Этот сокет отвалился, и его рандом-пару уже забрал новый сокет того же пользователя. */
+    resumedBy?: string;
   };
 }

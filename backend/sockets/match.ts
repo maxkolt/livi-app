@@ -41,6 +41,20 @@ export const MODERATION_FIRST_WARNING_TEXT =
 const matchInProgress = new Set<string>(); // Локальный Set для предотвращения одновременных матчей на одном инстансе
 const delayedRetryTimers = new Map<string, NodeJS.Timeout>();
 
+/**
+ * Рандом-пары, где у одного собеседника оборвался сокет (моргнула сеть, VPN, лифт).
+ * Ключ — userId пропавшего. Пока идёт пауза (reconnectGraceMs), собеседник не уходит в поиск, а новый сокет
+ * того же пользователя возвращается в пару через random:resume. Держим в памяти процесса,
+ * как и остальной матчинг (safeGet, matchInProgress): бэкенд работает одним инстансом.
+ */
+type HeldPair = {
+  oldSocket: AuthedSocket;
+  partnerSid: string;
+  partnerUserId: string;
+  timer: NodeJS.Timeout;
+};
+const heldPairs = new Map<string, HeldPair>();
+
 // === Константы ===============================================================
 const NEXT_DEBOUNCE_MS = 500;
 const REMATCH_BAN_MS = 5000; // Увеличили до 5 секунд для предотвращения немедленного рематча
@@ -49,6 +63,11 @@ const MATCH_RATE_LIMIT_MS = 1500; // Максимум 1 попытка матч�
 const QUEUE_TIMEOUT_MS = 5 * 60 * 1000; // 5 минут - максимальное время ожидания в очереди
 const QUEUE_CLEANUP_INTERVAL_MS = 30 * 1000; // Очистка каждые 30 секунд
 const MATCH_CANDIDATE_SCAN_LIMIT = 64; // Не читаем всю очередь на один подбор
+/** Столько ждём, пока собеседник с оборвавшимся сокетом вернётся в ту же пару (env — для тестов и тонкой настройки). */
+function reconnectGraceMs(): number {
+  const fromEnv = Number(process.env.RANDOM_RECONNECT_GRACE_MS);
+  return Number.isFinite(fromEnv) && fromEnv > 0 ? fromEnv : 10_000;
+}
 
 // === Вспомогательные =========================================================
 function safeGet(io: Server, sid: string): AuthedSocket | undefined {
@@ -158,6 +177,15 @@ function makeRoomId(aSid: string, bSid: string) {
   return `room_${sorted[0]}_${sorted[1]}`;
 }
 /**
+ * Выход из комнат пары/звонка. Личную комнату `u:<userId>` не трогаем: через неё идут
+ * сообщения, presence и звонки, и по ней сервер ищет сокеты пользователя.
+ */
+function leaveCallRooms(s: AuthedSocket) {
+  s.rooms.forEach((r) => {
+    if (r !== s.id && !r.startsWith('u:')) s.leave(r);
+  });
+}
+/**
  * LiveKit room for random chat must differ from friend VideoCall (`room_<uid>_<uid>` in index.ts call:accept).
  * Reusing the same name after a call ends causes SDK races ("track for participant not present").
  */
@@ -177,6 +205,7 @@ async function clearPartner(
   // КРИТИЧНО: Всегда очищаем состояние текущего сокета, даже если партнера нет
   // Это важно для случаев, когда партнер уже отключился или очистил свое состояние
   me.data.partnerSid = undefined;
+  me.data.randomPartnerSid = undefined;
   me.data.inCall = false;
   me.data.roomId = undefined;
   await unlockPair(me.id);
@@ -186,6 +215,7 @@ async function clearPartner(
     const other = safeGet(io, otherSid);
     if (other) {
       other.data.partnerSid = undefined;
+      other.data.randomPartnerSid = undefined;
       other.data.inCall = false;
       other.data.roomId = undefined;
       if (notifyOther) {
@@ -196,6 +226,104 @@ async function clearPartner(
       await unlockPair(other.id);
     }
   }
+}
+
+// === Пауза на переподключение ================================================
+/**
+ * Сокет из рандом-пары оборвался: не разводим пару сразу, а ждём reconnectGraceMs(),
+ * пока тот же пользователь вернётся (random:resume). Собеседник видит «переподключение»,
+ * LiveKit-комната у обоих остаётся. false — пауза не нужна, обрабатываем как раньше.
+ */
+function holdPairForReconnect(io: Server, s: AuthedSocket): boolean {
+  const userId = String(s.data.userId || '').trim();
+  const partnerSid = s.data.partnerSid;
+  if (!userId || !partnerSid || s.data.randomPartnerSid !== partnerSid) return false;
+  const partner = safeGet(io, partnerSid);
+  if (!partner || partner.data.partnerSid !== s.id) return false;
+  const partnerUserId = String(partner.data.userId || '').trim();
+  if (!partnerUserId) return false;
+
+  const prev = heldPairs.get(userId);
+  if (prev) {
+    clearTimeout(prev.timer);
+    heldPairs.delete(userId);
+    void releaseHeldPartner(io, prev, 'replaced');
+  }
+
+  // Старый сокет больше не в паре; собеседник пока ждёт именно его (partnerSid = s.id).
+  s.data.partnerSid = undefined;
+  s.data.randomPartnerSid = undefined;
+  s.data.inCall = false;
+  const graceMs = reconnectGraceMs();
+  const timer = setTimeout(() => {
+    const held = heldPairs.get(userId);
+    if (!held || held.oldSocket !== s) return;
+    heldPairs.delete(userId);
+    void releaseHeldPartner(io, held, 'expired');
+  }, graceMs);
+  heldPairs.set(userId, { oldSocket: s, partnerSid, partnerUserId, timer });
+
+  partner.emit('random:partnerReconnecting', { graceMs });
+  logger.info('[Match] socket dropped mid-chat, holding pair for reconnect', {
+    userId,
+    socketId: s.id,
+    partnerSocketId: partnerSid,
+    partnerUserId,
+    graceMs,
+  });
+  return true;
+}
+
+/** Пауза кончилась без возврата: собеседник уходит в поиск, как при обычном обрыве. */
+async function releaseHeldPartner(io: Server, held: HeldPair, reason: 'expired' | 'replaced' | 'restarted') {
+  const userId = String(held.oldSocket.data.userId || '').trim();
+  const partner = safeGet(io, held.partnerSid);
+  // Собеседник мог сам нажать «Далее»/«Стоп» за это время — тогда он уже не ждёт.
+  const partnerWaiting = !!partner && partner.data.partnerSid === held.oldSocket.id;
+  if (partner && partnerWaiting) {
+    partner.data.partnerSid = undefined;
+    partner.data.randomPartnerSid = undefined;
+    partner.data.inCall = false;
+    partner.data.roomId = undefined;
+    partner.emit('disconnected', { nextTransitionId: null });
+    await markBusy(io, partner, false);
+    await unlockPair(partner.id);
+  }
+  // Presence пропавшего не трогаем, если он уже снова в рандоме с нового сокета.
+  if (reason !== 'restarted') {
+    await markBusy(io, held.oldSocket, false);
+  }
+  logger.info('[Match] held pair released', {
+    userId,
+    socketId: held.oldSocket.id,
+    partnerSocketId: held.partnerSid,
+    partnerWaiting,
+    reason,
+  });
+}
+
+/** Пользователь начал поиск заново вместо возврата (старый клиент или не дождался) — не держим собеседника. */
+async function releaseHeldPairOf(io: Server, userId: string) {
+  const held = heldPairs.get(userId);
+  if (!held) return;
+  clearTimeout(held.timer);
+  heldPairs.delete(userId);
+  await releaseHeldPartner(io, held, 'restarted');
+}
+
+/**
+ * Старый сокет пользователя, который сервер ещё считает живым в рандом-паре: клиент
+ * переподключился раньше, чем сервер заметил обрыв (pingInterval + pingTimeout — до ~24 с).
+ */
+function findStalePairedSocketOfUser(io: Server, userId: string, exceptSid: string): AuthedSocket | undefined {
+  const sids = io.sockets.adapter.rooms.get(`u:${userId}`);
+  if (!sids) return undefined;
+  for (const sid of sids) {
+    if (sid === exceptSid) continue;
+    const s = io.sockets.sockets.get(sid) as AuthedSocket | undefined;
+    if (s && s.data.partnerSid && s.data.randomPartnerSid === s.data.partnerSid) return s;
+  }
+  return undefined;
 }
 
 // === Матчинг ================================================================
@@ -333,6 +461,8 @@ export async function tryMatch(io: Server, socket: AuthedSocket): Promise<boolea
 
   socket.data.partnerSid = other.id;
   other.data.partnerSid = socket.id;
+  socket.data.randomPartnerSid = other.id;
+  other.data.randomPartnerSid = socket.id;
 
   await lockPair(socket, other);
   await markBusy(io, socket, true);
@@ -428,11 +558,11 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
     await emitModerationBannedToSocket(partner, partnerUserId);
 
     partner.data.partnerSid = undefined;
+
+    partner.data.randomPartnerSid = undefined;
     partner.data.inCall = false;
     partner.data.roomId = undefined;
-    partner.rooms.forEach((r) => {
-      if (r !== partner.id) partner.leave(r);
-    });
+    leaveCallRooms(partner);
     clearDelayedRetry(partner.id);
     await unlockPair(partner.id);
     await removeFromQueue(partner.id);
@@ -441,6 +571,7 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
     // Отвязываем репортёра от пары до его next(), иначе next найдёт prevPartner
     // и сделает markBusy(banned, true) + requeue.
     socket.data.partnerSid = undefined;
+    socket.data.randomPartnerSid = undefined;
     socket.data.inCall = false;
     socket.data.roomId = undefined;
     await unlockPair(socket.id);
@@ -463,6 +594,8 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
       await emitModerationBannedToSocket(socket, myUserId);
       return;
     }
+    // Начал поиск заново вместо random:resume — собеседника на паузе не держим.
+    if (myUserId) await releaseHeldPairOf(io, myUserId);
     // Rate limiting: защита от DDoS через множественные start запросы
     const now = Date.now();
     const lastStart = await queueStore.getLastStart(socket.id) || 0;
@@ -496,6 +629,7 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
         transitionId,
       });
       socket.data.partnerSid = undefined;
+      socket.data.randomPartnerSid = undefined;
       socket.data.inCall = false;
       await unlockPair(socket.id);
     }
@@ -513,8 +647,9 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
     }
     
     // КРИТИЧНО: Всегда очищаем состояние перед добавлением в очередь
-    socket.rooms.forEach(r => { if (r !== socket.id) socket.leave(r); });
+    leaveCallRooms(socket);
     socket.data.partnerSid = undefined;
+    socket.data.randomPartnerSid = undefined;
     socket.data.roomId = undefined;
     socket.data.busy = false;
     socket.data.inCall = false;
@@ -556,11 +691,12 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
         await banPair(socket.id, other.id);
         // КРИТИЧНО: Полностью очищаем состояние партнера
         other.data.partnerSid = undefined;
+        other.data.randomPartnerSid = undefined;
         other.data.inCall = false;
         await unlockPair(other.id);
         // КРИТИЧНО: Удаляем партнера из очереди и очищаем комнаты
         await removeFromQueue(other.id);
-        other.rooms.forEach(r => { if (r !== other.id) other.leave(r); });
+        leaveCallRooms(other);
         other.data.roomId = undefined;
 
         const otherUserId = String(other.data.userId || '').trim();
@@ -604,6 +740,7 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
               return;
             }
             currentOther.data.partnerSid = undefined;
+            currentOther.data.randomPartnerSid = undefined;
             currentOther.data.inCall = false;
             await unlockPair(currentOther.id);
             await pushToQueue(currentOther.id);
@@ -620,9 +757,10 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
 
     // 2. Полностью очищаем состояние текущего сокета
     await removeFromQueue(socket.id);
-    socket.rooms.forEach(r => { if (r !== socket.id) socket.leave(r); });
+    leaveCallRooms(socket);
     socket.data.roomId = undefined;
     socket.data.partnerSid = undefined;
+    socket.data.randomPartnerSid = undefined;
     socket.data.inCall = false;
     await unlockPair(socket.id);
     
@@ -639,6 +777,7 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
         return;
       }
       currentSocket.data.partnerSid = undefined;
+      currentSocket.data.randomPartnerSid = undefined;
       currentSocket.data.inCall = false;
       await unlockPair(currentSocket.id);
       currentSocket.data.isNexting = false;
@@ -799,10 +938,145 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
     },
   );
 
+  // === RESUME: возврат в пару после обрыва сокета ==========================
+  type ResumeAck =
+    | {
+        ok: true;
+        id: string;
+        livekitToken: string | null;
+        livekitRoomName: string;
+        livekitUrl: string | null;
+      }
+    | { ok: false; reason: string };
+
+  socket.on(
+    'random:resume',
+    async (payload: { partnerUserId?: string } | undefined, ack?: (r: ResumeAck) => void) => {
+      const done = (r: ResumeAck) => {
+        try {
+          if (typeof ack === 'function') ack(r);
+        } catch {}
+      };
+      try {
+        const userId = String(socket.data.userId || '').trim();
+        // Сокет ещё не привязан к пользователю (reauth в процессе) — клиент повторит.
+        if (!userId) return done({ ok: false, reason: 'not_ready' });
+        const expectedPartnerUserId = String(payload?.partnerUserId || '').trim();
+        if (!expectedPartnerUserId) return done({ ok: false, reason: 'bad_request' });
+
+        // Сокет не рвался, сдался только LiveKit: пара цела — нужен лишь свежий токен в ту же комнату.
+        const currentPartner =
+          socket.data.partnerSid && socket.data.randomPartnerSid === socket.data.partnerSid
+            ? safeGet(io, socket.data.partnerSid)
+            : undefined;
+        if (currentPartner && currentPartner.data.partnerSid === socket.id) {
+          const currentPartnerUserId = String(currentPartner.data.userId || '').trim();
+          if (currentPartnerUserId !== expectedPartnerUserId) {
+            return done({ ok: false, reason: 'partner_mismatch' });
+          }
+          const roomName = makeRandomMatchLiveKitRoomName(userId, currentPartnerUserId);
+          let token: string | null = null;
+          try {
+            token = await createToken({ identity: userId, roomName });
+          } catch (e: any) {
+            logger.error('[Match] resume: failed to create LiveKit token', { error: e?.message || String(e) });
+          }
+          logger.info('[Match] resume on a live socket — LiveKit rejoin', { userId, socketId: socket.id });
+          return done({
+            ok: true,
+            id: currentPartner.id,
+            livekitToken: token,
+            livekitRoomName: roomName,
+            livekitUrl: getLiveKitUrl() || null,
+          });
+        }
+
+        // Пара либо на паузе (сервер уже заметил обрыв), либо старый сокет ещё числится живым.
+        const held = heldPairs.get(userId);
+        const staleSocket = held ? undefined : findStalePairedSocketOfUser(io, userId, socket.id);
+        const oldSocket = held ? held.oldSocket : staleSocket;
+        const partnerSid = held ? held.partnerSid : staleSocket?.data.partnerSid;
+        const partner = partnerSid ? safeGet(io, partnerSid) : undefined;
+        const partnerUserId = String(partner?.data.userId || '').trim();
+
+        const stillWaiting = !!oldSocket && !!partner && partner.data.partnerSid === oldSocket.id;
+        if (!stillWaiting || partnerUserId !== expectedPartnerUserId) {
+          if (held) {
+            clearTimeout(held.timer);
+            heldPairs.delete(userId);
+            await releaseHeldPartner(io, held, 'restarted');
+          }
+          logger.info('[Match] resume rejected', {
+            userId,
+            socketId: socket.id,
+            hadHeldPair: !!held,
+            hadStaleSocket: !!staleSocket,
+            partnerMismatch: stillWaiting && partnerUserId !== expectedPartnerUserId,
+          });
+          return done({ ok: false, reason: stillWaiting ? 'partner_mismatch' : 'expired' });
+        }
+        if (socket.data.partnerSid && socket.data.partnerSid !== partner.id) {
+          return done({ ok: false, reason: 'already_paired' });
+        }
+
+        if (held) {
+          clearTimeout(held.timer);
+          heldPairs.delete(userId);
+        }
+        // Старый сокет отпускаем: его поздний disconnect не должен разорвать пару.
+        oldSocket.data.resumedBy = socket.id;
+        oldSocket.data.partnerSid = undefined;
+        oldSocket.data.randomPartnerSid = undefined;
+        oldSocket.data.inCall = false;
+        await unlockPair(oldSocket.id);
+
+        clearDelayedRetry(socket.id);
+        await removeFromQueue(socket.id);
+        socket.data.partnerSid = partner.id;
+        socket.data.randomPartnerSid = partner.id;
+        partner.data.partnerSid = socket.id;
+        partner.data.randomPartnerSid = socket.id;
+        await lockPair(socket, partner);
+        await markBusy(io, socket, true);
+
+        // Свежий токен — если LiveKit у вернувшегося успел сдаться, он зайдёт в ту же комнату.
+        const livekitRoomName = makeRandomMatchLiveKitRoomName(userId, partnerUserId);
+        let livekitToken: string | null = null;
+        try {
+          livekitToken = await createToken({ identity: userId, roomName: livekitRoomName });
+        } catch (e: any) {
+          logger.error('[Match] resume: failed to create LiveKit token', { error: e?.message || String(e) });
+        }
+
+        partner.emit('random:partnerResumed', { id: socket.id });
+        logger.info('[Match] pair resumed after reconnect', {
+          userId,
+          socketId: socket.id,
+          oldSocketId: oldSocket.id,
+          partnerSocketId: partner.id,
+          partnerUserId,
+          viaHeldPair: !!held,
+        });
+        done({
+          ok: true,
+          id: partner.id,
+          livekitToken,
+          livekitRoomName,
+          livekitUrl: getLiveKitUrl() || null,
+        });
+      } catch (e: any) {
+        logger.warn('[Match] random:resume failed', { error: e?.message || String(e) });
+        done({ ok: false, reason: 'server_error' });
+      }
+    },
+  );
+
   // === STOP ================================================================
   socket.on('stop', async () => {
     clearDelayedRetry(socket.id);
     await removeFromQueue(socket.id);
+    const stopUserId = String(socket.data.userId || '').trim();
+    if (stopUserId) await releaseHeldPairOf(io, stopUserId);
     // Ban pair to prevent immediate rematch (same race as "Next" — device may still be reconnecting)
     const partnerSid = socket.data.partnerSid as string | undefined;
     if (partnerSid) {
@@ -857,6 +1131,24 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
       return;
     }
 
+    // Пару уже забрал новый сокет этого же пользователя (random:resume) — собеседника не трогаем.
+    if (socket.data.resumedBy) {
+      await removeFromQueue(socket.id);
+      await queueStore.clearSocketData(socket.id);
+      await unlockPair(socket.id);
+      return;
+    }
+    // Моргнула сеть посреди разговора — даём вернуться в ту же пару. Намеренное отключение
+    // (клиент или сервер закрыл сокет сам) — не обрыв, ждать нечего.
+    const deliberate = reason === 'client namespace disconnect' || reason === 'server namespace disconnect';
+    if (!deliberate && holdPairForReconnect(io, socket)) {
+      await removeFromQueue(socket.id);
+      await queueStore.clearSocketData(socket.id);
+      socket.data.lastNextTransitionId = undefined;
+      await unlockPair(socket.id);
+      return;
+    }
+
     await queueStore.clearSocketData(socket.id);
     await clearPartner(io, socket, true, 'disconnect', {
       nextTransitionId: socket.data.lastNextTransitionId ?? null,
@@ -906,6 +1198,7 @@ export function startQueueCleanup(io: Server): void {
           if (socket) {
             // Если сокет все еще существует, но был удален из очереди, очищаем его состояние
             socket.data.partnerSid = undefined;
+            socket.data.randomPartnerSid = undefined;
             socket.data.inCall = false;
             await markBusy(io, socket, false);
             await unlockPair(sid);
