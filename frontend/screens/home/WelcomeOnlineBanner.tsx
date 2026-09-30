@@ -3,7 +3,13 @@ import { StyleSheet, View } from 'react-native';
 import AdaptiveText from '../../components/AdaptiveText';
 import type { Lang } from '../../utils/i18n';
 import AvatarImage from '../../components/AvatarImage';
-import { LIVI, WELCOME_GLASS_BORDER, WELCOME_GLASS_SURFACE, WELCOME_HEADER_TITLE, WELCOME_MUTED_TEXT, WELCOME_STAGE_BG } from './constants';
+import {
+  LIVI,
+  WELCOME_GLASS_SURFACE,
+  WELCOME_HEADER_TITLE,
+  WELCOME_MUTED_TEXT,
+  WELCOME_SEARCH_CTA_BORDER,
+} from './constants';
 import { formatWelcomeUsersOnlineLine } from './utils/welcomeOnlineLabel';
 
 export type WelcomeBannerPeer = {
@@ -30,10 +36,10 @@ type WelcomeOnlineBannerProps = {
   sideMargin?: number;
 };
 
-const STACK_SIZE = 32;
-const STACK_SIZE_DENSE = 24;
-const STACK_OVERLAP = 12;
-const STACK_OVERLAP_DENSE = 9;
+const STACK_SIZE = 30;
+const STACK_SIZE_DENSE = 22;
+const STACK_OVERLAP = 11;
+const STACK_OVERLAP_DENSE = 8;
 const STACK_VISIBLE = 4;
 
 function WelcomeOnlineBannerInner({
@@ -49,7 +55,7 @@ function WelcomeOnlineBannerInner({
   const countLine = formatWelcomeUsersOnlineLine(onlineCount, lang);
   const stackSize = dense ? STACK_SIZE_DENSE : STACK_SIZE;
   const stackOverlap = dense ? STACK_OVERLAP_DENSE : STACK_OVERLAP;
-  const stackItemStyle = { borderRadius: stackSize / 2, borderWidth: dense ? 1.5 : 2 };
+  const stackItemStyle = { borderRadius: stackSize / 2, borderWidth: 1 };
   const stackAvatarStyle = { width: stackSize, height: stackSize, borderRadius: stackSize / 2 };
 
   const stackPeers = useMemo(() => {
@@ -141,8 +147,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     borderRadius: 26,
     backgroundColor: WELCOME_GLASS_SURFACE,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: WELCOME_GLASS_BORDER,
+    borderWidth: 0,
     gap: 14,
   },
   pillCompact: {
@@ -216,7 +221,7 @@ const styles = StyleSheet.create({
     flexShrink: 0,
   },
   stackItem: {
-    borderColor: WELCOME_STAGE_BG,
+    borderColor: WELCOME_SEARCH_CTA_BORDER,
     overflow: 'visible',
   },
   stackAvatar: {

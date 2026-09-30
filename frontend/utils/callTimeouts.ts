@@ -5,4 +5,4 @@
 
 /** Единый источник таймаута исходящего вызова (мс). Передаётся в натив при старте,
  * используется в HomeScreen/App и в LiviOutgoingCallService. */
-export const OUTGOING_CALL_TIMEOUT_MS = 27_000;
+export const OUTGOING_CALL_TIMEOUT_MS = 45_000;

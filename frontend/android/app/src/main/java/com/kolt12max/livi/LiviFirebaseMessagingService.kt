@@ -82,7 +82,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             MainActivity.markIncomingCallOverLock()
             val hasVideoCall = data["media"]?.trim()?.lowercase() == "video"
             // Пуш «call» пришёл с задержкой (устройство было офлайн): показываем только «Пропущенный вызов», не полноэкранный входящий.
-            val CALL_RING_TIMEOUT_MS = 27_000L
+            val CALL_RING_TIMEOUT_MS = 45_000L
             val MIN_REMAINING_WINDOW_TO_OPEN_UI_MS = 2_000L
             var callTs: Long? = data["ts"]?.toLongOrNull()
             var callExpiresAtMs: Long? = data["expiresAt"]?.toLongOrNull()
@@ -526,7 +526,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
      * «звонок пришёл с задержкой / не пришёл».
      *
      * totalMs   — от создания звонка на бэкенде до момента, когда мы его увидели.
-     *             Сравнивать с CALL_RING_TIMEOUT_MS (27 с): всё, что близко, — сорванный звонок.
+     *             Сравнивать с CALL_RING_TIMEOUT_MS (45 с): всё, что близко, — сорванный звонок.
      * queuedMs  — сколько пуш пролежал в очереди Google после отправки. Большое значение
      *             означает, что FCM-соединение GMS было мертво (типично для глубокого Doze).
      * doze      — был ли на устройстве активен Doze в момент прихода.
@@ -1378,7 +1378,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 .setOngoing(true)
                 .setAutoCancel(true)
                 .setOnlyAlertOnce(true)
-                .setTimeoutAfter(27_000)
+                .setTimeoutAfter(45_000)
                 .setPriority(NotificationCompat.PRIORITY_MAX)
                 .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
                 .build()
@@ -1412,7 +1412,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 .setOngoing(true)
                 .setAutoCancel(false)
                 .setOnlyAlertOnce(true)
-                .setTimeoutAfter(27_000)
+                .setTimeoutAfter(45_000)
                 .setPriority(NotificationCompat.PRIORITY_MAX)
                 .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
                 .build()
@@ -1443,7 +1443,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 .setAutoCancel(false)
                 .setOnlyAlertOnce(true)
                 .setSilent(true)
-                .setTimeoutAfter(27_000)
+                .setTimeoutAfter(45_000)
                 .setPriority(NotificationCompat.PRIORITY_LOW)
                 .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
                 .build()

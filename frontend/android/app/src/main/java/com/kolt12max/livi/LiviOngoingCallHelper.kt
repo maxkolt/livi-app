@@ -21,8 +21,8 @@ object LiviOngoingCallHelper {
     private const val KEY_OUTGOING_STARTED_AT_MS = "outgoingStartedAtMs"
 
     /** Совпадает с JS OUTGOING_CALL_TIMEOUT_MS / FCM ring window. */
-    private const val INCOMING_RING_WINDOW_MS = 27_000L
-    private const val OUTGOING_RING_WINDOW_MS = 27_000L
+    private const val INCOMING_RING_WINDOW_MS = 45_000L
+    private const val OUTGOING_RING_WINDOW_MS = 45_000L
 
     fun setOutgoingCall(context: Context, callId: String, toUserId: String, toNick: String) {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)

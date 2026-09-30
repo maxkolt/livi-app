@@ -467,7 +467,7 @@ class IncomingCallForegroundService : Service() {
     companion object {
         private const val TAG = "IncomingCallFGS"
         /** 20 сек без ответа — совпадает с таймаутом на сервере и с IncomingCallActivity.INCOMING_TIMEOUT_MS. */
-        private const val TIMEOUT_MS = 27_000L
+        private const val TIMEOUT_MS = 45_000L
         /**
          * Сразу после последней отложенной попытки startActivity (2200 мс): если экрана всё ещё нет,
          * тихое уведомление повышаем до full-screen — иначе при заблокированном фоновом старте

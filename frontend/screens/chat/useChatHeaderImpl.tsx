@@ -212,8 +212,7 @@ export function useChatHeader({
                 containerStyle={{
                   overflow: "hidden",
                   backgroundColor: isDark ? "rgba(255,255,255,0.2)" : "rgba(0,0,0,0.06)",
-                  borderWidth: 1,
-                  borderColor: outlineColor,
+                  borderWidth: 0,
                 }}
               />
             </Pressable>

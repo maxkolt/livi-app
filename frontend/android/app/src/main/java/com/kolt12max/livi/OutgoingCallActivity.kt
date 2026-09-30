@@ -133,7 +133,7 @@ class OutgoingCallActivity : AppCompatActivity() {
             } else {
                 registerReceiver(callIdReadyReceiver, filterReady)
             }
-            // Холодный старт: если callId так и не пришёл (нет реального исходящего вызова) — закрыть экран. 27 сек — как серверный таймаут входящего.
+            // Холодный старт: если callId так и не пришёл (нет реального исходящего вызова) — закрыть экран. 45 сек — как серверный таймаут входящего.
             callIdEmptyTimeoutRunnable = Runnable {
                 callIdEmptyTimeoutRunnable = null
                 if (this@OutgoingCallActivity.callId.startsWith("pending_")) {
@@ -142,7 +142,7 @@ class OutgoingCallActivity : AppCompatActivity() {
                     finish()
                 }
             }
-            timeoutHandler.postDelayed(callIdEmptyTimeoutRunnable!!, 27000L)
+            timeoutHandler.postDelayed(callIdEmptyTimeoutRunnable!!, 45_000L)
         }
 
         val cancelButton = findViewById<ImageButton>(R.id.btn_cancel)
@@ -298,7 +298,7 @@ class OutgoingCallActivity : AppCompatActivity() {
                     finish()
                 }
             }
-            timeoutHandler.postDelayed(callIdEmptyTimeoutRunnable!!, 27000L)
+            timeoutHandler.postDelayed(callIdEmptyTimeoutRunnable!!, 45_000L)
         }
     }
 

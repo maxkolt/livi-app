@@ -7,7 +7,6 @@ import { logger } from '../../utils/logger';
 import { shouldSkipHomeUiSettle } from '../../utils/globalEvents';
 import FitText from '../../components/FitText';
 import {
-  WELCOME_BRAND_VI_FILL_GRADIENT,
   WELCOME_CHROME_EDGE_RADIUS,
   WELCOME_GLASS_BORDER,
   WELCOME_GLASS_SURFACE,
@@ -15,9 +14,10 @@ import {
   isWelcomeTabletLayout,
 } from './constants';
 
-/** Активная вкладка — заливка как у «Vi» (верх/низ градиента логотипа). */
-const ACTIVE_ICON = WELCOME_BRAND_VI_FILL_GRADIENT[2];
-const ACTIVE_LABEL = WELCOME_BRAND_VI_FILL_GRADIENT[1];
+/** Активная вкладка — чуть мягче акцента рамок Search. */
+const ACTIVE_NAV_ACCENT = 'rgba(0, 181, 255, 0.32)';
+const ACTIVE_ICON = ACTIVE_NAV_ACCENT;
+const ACTIVE_LABEL = ACTIVE_NAV_ACCENT;
 
 export type WelcomeTabId = 'search' | 'friends' | 'calls' | 'chat' | 'profile';
 

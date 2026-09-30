@@ -63,10 +63,11 @@ function applyPresenceList(
   setPeers: (p: WelcomeBannerPeer[]) => void,
   lastGoodRef: { current: number | null },
 ) {
-  const n = list.length;
+  const peers = normalizePresencePeers(list, excludeUserId);
+  const n = peers.length;
   lastGoodRef.current = n;
   setCount(n);
-  setPeers(normalizePresencePeers(list, excludeUserId));
+  setPeers(peers);
 }
 
 export function useWelcomeOnlineCount(enabled = true, excludeUserId?: string | null) {
@@ -137,13 +138,13 @@ export function useWelcomeOnlineCount(enabled = true, excludeUserId?: string | n
 
   // Пересчитать peers при смене своего id (исключить себя из стека).
   useEffect(() => {
-    setPeers((prev) => {
-      const exclude = String(excludeUserId || '').trim().toLowerCase();
-      if (!exclude) return prev;
-      const next = prev.filter((p) => String(p.id).toLowerCase() !== exclude);
-      return next.length === prev.length ? prev : next;
-    });
-  }, [excludeUserId]);
+    const exclude = String(excludeUserId || '').trim().toLowerCase();
+    if (!exclude || !peers.some((p) => String(p.id).toLowerCase() === exclude)) return;
+    const next = peers.filter((p) => String(p.id).toLowerCase() !== exclude);
+    lastGoodRef.current = next.length;
+    setCount(next.length);
+    setPeers(next);
+  }, [excludeUserId, peers]);
 
   return { onlineCount: count, peers, refreshOnlineCount: refresh };
 }

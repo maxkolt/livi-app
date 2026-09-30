@@ -5,6 +5,8 @@ export const WELCOME_STAGE_BG = '#0A0C14';
 /** Accent gradient (aura) — вместо фиолетового на макете. */
 export const AURA_GRADIENT = ['#14b8a6', '#3b82f6', '#00b5ff'] as const;
 export const AURA_GLOW = '#3b82f6';
+/** Голубой акцент связанных элементов страницы поиска. */
+export const WELCOME_SEARCH_CTA_BORDER = 'rgba(0, 181, 255, 0.36)';
 /** Unread / missed count badge on welcome chats and friend action buttons. */
 export const WELCOME_UNREAD_BADGE = '#2158c0';
 export const CROWN_GOLD = '#E4C065';
@@ -91,6 +93,8 @@ export const WELCOME_FRIEND_ROW_STRIDE_TABLET =
 export const WELCOME_FRIEND_AVATAR_SIZE_TABLET = 48;
 /** Скругление внешней оболочки сегментов «Все / Онлайн» (не pill). */
 export const WELCOME_FRIENDS_SEGMENT_SHELL_RADIUS = 14;
+/** Высота блока верхних переключателей и карточки «Пригласить друзей». */
+export const WELCOME_FRIENDS_SEGMENT_HEIGHT = { phone: 72, landscape: 44, tablet: 72 } as const;
 /** Отступ под блоком «Все / Онлайн» — от него считается и надпись пустого списка. */
 export const WELCOME_FRIENDS_SEGMENT_GAP = { phone: 12, landscape: 6, tablet: 14 } as const;
 /** Отступ над карточкой «Пригласить друзей» (футер списка друзей). */

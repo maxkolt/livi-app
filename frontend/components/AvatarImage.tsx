@@ -87,6 +87,17 @@ const FRAME_COLORS: Record<string, readonly [string, string, ...string[]]> = {
   obsidian: ['#6B7280', '#374151', '#111827'],
 };
 
+/** Цвета градиента купленной рамки; null — такой рамки нет, кольцо не рисуется. */
+export function avatarFrameColors(frameId?: string | null): readonly string[] | null {
+  return (frameId && FRAME_COLORS[frameId]) || null;
+}
+
+/** Что аватар показывает прямо сейчас. */
+export type AvatarDisplay =
+  | { kind: 'image'; uri: string }
+  | { kind: 'letter' }
+  | { kind: 'empty' };
+
 export interface AvatarImageProps {
   userId?: string;
   avatarVer?: number;
@@ -110,6 +121,8 @@ export interface AvatarImageProps {
   containerStyle?: StyleProp<ViewStyle>;
   /** Search splash: parent ждёт decode, не только prefetch. */
   onDisplayLoad?: () => void;
+  /** Радар Поиска: из этого строится текстура для рассыпания аватара. */
+  onDisplayChange?: (display: AvatarDisplay) => void;
 }
 
 /**
@@ -128,6 +141,7 @@ const AvatarImage = memo<AvatarImageProps>(({
   fallbackTextStyle,
   containerStyle,
   onDisplayLoad,
+  onDisplayChange,
 }) => {
   const fileLockKey = searchAvatarFileKey(userId, avatarVer);
   const initialUri = pickSearchAvatarUri(fileLockKey, propsUri || '', '');
@@ -229,6 +243,15 @@ const AvatarImage = memo<AvatarImageProps>(({
       : loading || expectAvatar || (!!uri && !displayUri)
         ? 'empty-wait'
         : 'empty';
+
+  useEffect(() => {
+    if (!onDisplayChange) return;
+    onDisplayChange(
+      displayUri
+        ? { kind: 'image', uri: displayUri }
+        : { kind: showFallbackLetter ? 'letter' : 'empty' },
+    );
+  }, [displayUri, onDisplayChange, showFallbackLetter]);
 
   const frameColors = FRAME_COLORS[activeFrameId];
   const hasActiveFrame = !!frameColors;

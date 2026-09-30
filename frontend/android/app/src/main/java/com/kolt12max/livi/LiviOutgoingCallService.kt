@@ -420,7 +420,7 @@ class LiviOutgoingCallService : Service() {
     companion object {
         private const val TAG = "LiviOutgoingCallService"
         private const val NOTIFICATION_ID = 1003
-        private const val DEFAULT_TIMEOUT_MS = 27_000L
+        private const val DEFAULT_TIMEOUT_MS = 45_000L
 
         @Volatile
         private var ringingActive: Boolean = false

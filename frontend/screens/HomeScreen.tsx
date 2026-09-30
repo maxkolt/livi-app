@@ -576,7 +576,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     resolvedUserId,
   );
 
-  // Online-блок: только друзья онлайн (realtime). Счётчик — все в приложении (welcomeOnlineCount).
+  // Online-блок: только друзья онлайн (realtime). Счётчик — все остальные пользователи в приложении.
   const welcomeBannerPeers = React.useMemo(() => {
     const me = String(resolvedUserId || '').trim().toLowerCase();
     return friends

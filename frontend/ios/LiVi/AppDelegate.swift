@@ -93,7 +93,7 @@ public class AppDelegate: ExpoAppDelegate, PKPushRegistryDelegate {
   /// Same rule as `frontend/utils/callExpiry.ts`: ring ended when now >= expiresAt (absolute ms); no grace after expiresAt.
   private func isIncomingCallExpired(_ payload: [AnyHashable: Any]) -> Bool {
     let createdAtMs = toMs(payload["ts"])
-    let expiresAtMs = toMs(payload["expiresAt"]) ?? createdAtMs.map { $0 + 27_000 }
+    let expiresAtMs = toMs(payload["expiresAt"]) ?? createdAtMs.map { $0 + 45_000 }
     guard let expiresAtMs else { return false }
     let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
     return nowMs >= expiresAtMs

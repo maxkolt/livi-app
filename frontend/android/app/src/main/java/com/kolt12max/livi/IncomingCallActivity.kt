@@ -947,7 +947,7 @@ class IncomingCallActivity : AppCompatActivity() {
         private const val TAG = "IncomingCallActivity"
         /** Совпадает с [android.media.AudioAttributes.USAGE_RINGTONE] (добавлен в API 29). */
         private const val AUDIO_USAGE_RINGTONE = 6
-        private const val INCOMING_TIMEOUT_MS = 27_000L
+        private const val INCOMING_TIMEOUT_MS = 45_000L
         const val EXTRA_CALL_ID = "callId"
         const val EXTRA_FROM = "from"
         const val EXTRA_FROM_NICK = "fromNick"

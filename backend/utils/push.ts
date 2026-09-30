@@ -782,7 +782,7 @@ export async function sendCallPushToRecipient(userId: string, data: CallPushData
   }
 
   const callTs = Number(data.createdAtMs) > 0 ? Number(data.createdAtMs) : Date.now();
-  const callExpiresAtMs = Number(data.expiresAtMs) > 0 ? Number(data.expiresAtMs) : callTs + 27_000;
+  const callExpiresAtMs = Number(data.expiresAtMs) > 0 ? Number(data.expiresAtMs) : callTs + 45_000;
   const callKitId = getCallKitUuid(data.callId);
   const callMedia = data.media === 'audio' ? 'audio' : 'video';
   const fcmData = {
@@ -991,7 +991,7 @@ export async function sendCallEscalationPushToRecipient(
 
   const messaging = getFirebaseMessaging();
   const callTs = Number(data.createdAtMs) > 0 ? Number(data.createdAtMs) : Date.now();
-  const callExpiresAtMs = Number(data.expiresAtMs) > 0 ? Number(data.expiresAtMs) : callTs + 27_000;
+  const callExpiresAtMs = Number(data.expiresAtMs) > 0 ? Number(data.expiresAtMs) : callTs + 45_000;
   const callKitId = getCallKitUuid(data.callId);
   const dataPayload: Record<string, string> = {
     type: 'call',

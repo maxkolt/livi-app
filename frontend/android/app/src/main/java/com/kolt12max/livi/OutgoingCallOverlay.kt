@@ -254,7 +254,7 @@ object OutgoingCallOverlay {
         hideInternal(host, stopRingback = true)
       }
     }
-    handler.postDelayed(callIdEmptyTimeoutRunnable!!, 27_000L)
+    handler.postDelayed(callIdEmptyTimeoutRunnable!!, 45_000L)
   }
 
   private fun restartProvisionalRingback(activity: MainActivity) {

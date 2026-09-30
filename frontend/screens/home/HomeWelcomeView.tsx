@@ -10,6 +10,8 @@ import {
 } from 'react-native';
 import { useHomeLayout, useHomeLayoutActivity } from './HomeLayoutContext';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { GestureDetector } from 'react-native-gesture-handler';
+import { useAnimatedRef } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
 import {
   isWelcomeTabletLayout,
@@ -17,6 +19,12 @@ import {
   welcomePhoneAvatarMetrics,
   welcomeRadarFirstRingWidth,
 } from './constants';
+import {
+  AvatarDustOverlay,
+  useAvatarDustController,
+  useAvatarDustGesture,
+  type AvatarDustSource,
+} from './AvatarDust';
 import { BrandTitleWithOutline } from './chrome';
 import { HomeBrandConfetti, type BrandConfettiOrigin } from './HomeBrandConfetti';
 import { HomeCenterProfile } from './HomeCenterProfile';
@@ -41,7 +49,16 @@ export type HomeWelcomeViewProps = {
   bannerPeers: WelcomeBannerPeer[];
   centerProfile: Omit<
     React.ComponentProps<typeof HomeCenterProfile>,
-    'styles' | 'isDark' | 'layoutWidth' | 'menuChromeBg' | 'compact' | 'dense' | 'radarStage' | 'avatarAnchorRef'
+    | 'styles'
+    | 'isDark'
+    | 'layoutWidth'
+    | 'menuChromeBg'
+    | 'compact'
+    | 'dense'
+    | 'radarStage'
+    | 'avatarAnchorRef'
+    | 'avatarDust'
+    | 'onAvatarDustSource'
   >;
   hasActiveCallForSearch: boolean;
   onStartSearch: () => void;
@@ -100,7 +117,10 @@ function HomeWelcomeViewInner({
   splashGone = true,
 }: HomeWelcomeViewProps) {
   const welcomeRootRef = useRef<View>(null);
-  const avatarAnchorRef = useRef<View>(null);
+  // Animated ref: слой частиц меряет по нему аватар прямо на UI-потоке.
+  const avatarAnchorRef = useAnimatedRef<View>();
+  const avatarDust = useAvatarDustController();
+  const [avatarDustSource, setAvatarDustSource] = useState<AvatarDustSource | null>(null);
   const burstActiveRef = useRef(false);
   const [burst, setBurst] = useState<{ id: number; origin: BrandConfettiOrigin } | null>(null);
   const [shineNonce, setShineNonce] = useState(0);
@@ -209,25 +229,25 @@ function HomeWelcomeViewInner({
 
   /** Баннер сверху, CTA снизу; радар центрируется в оставшемся зазоре. */
   const space = {
-    bannerMarginTop: tightStage ? 4 : bannerCompact ? 6 : 8,
+    bannerMarginTop: tightStage ? 12 : bannerCompact ? 14 : 16,
     radarPaddingTop: 0,
     stageCopyMarginTop: 0,
     stageCopyPaddingBottom: 0,
     ctaMinGap: splitTight ? 6 : compactLayout || shortPhone ? 12 : 16,
     /** Больше = кнопка выше над навигацией. */
     ctaBottomPad: tightStage
-      ? 20
+      ? 24
       : isTabletLayout
         ? splitStage
-          ? 28
-          : 40
+          ? 32
+          : 44
         : splitStage
-          ? 22
+          ? 26
           : compactLayout
-            ? 20
+            ? 24
             : shortPhone
-              ? 22
-              : 32,
+              ? 26
+              : 36,
   };
 
   /**
@@ -413,6 +433,18 @@ function HomeWelcomeViewInner({
     [cancelBurst, centerProfile],
   );
 
+  // Жест радара пересоздаётся только при смене геометрии, а не на каждый рендер.
+  const openAvatarRef = useRef(() => {});
+  openAvatarRef.current = () =>
+    handleOpenAvatarModal(centerProfile.myFullAvatarUri || centerProfile.avatarUri || '');
+  const handleAvatarTap = useCallback(() => openAvatarRef.current(), []);
+  const radarGesture = useAvatarDustGesture(
+    avatarDust,
+    radarSize,
+    avatarDustSource?.size ?? welcomeAvatarSize,
+    handleAvatarTap,
+  );
+
   const revealStyle = {
     opacity: reveal,
     transform: [
@@ -481,6 +513,9 @@ function HomeWelcomeViewInner({
           }
         >
           <View style={splitStage ? welcomeStyles.radarShift : null}>
+            <GestureDetector gesture={radarGesture}>
+            {/* collapsable: иначе Android выкидывает «пустой» view и жесту не к чему крепиться. */}
+            <View collapsable={false}>
             <WelcomeRadar
               size={radarSize}
               isDark={isDark}
@@ -500,8 +535,12 @@ function HomeWelcomeViewInner({
                 {...centerProfile}
                 avatarAnchorRef={avatarAnchorRef}
                 onOpenAvatarModal={handleOpenAvatarModal}
+                avatarDust={avatarDust}
+                onAvatarDustSource={setAvatarDustSource}
               />
             </WelcomeRadar>
+            </View>
+            </GestureDetector>
           </View>
         </View>
 
@@ -552,6 +591,9 @@ function HomeWelcomeViewInner({
           </View>
         </Animated.View>
       </Animated.View>
+
+      {/* Поверх всего экрана: рассыпавшийся аватар не обрезается о радар и блоки. */}
+      <AvatarDustOverlay dust={avatarDust} source={avatarDustSource} avatarRef={avatarAnchorRef} />
 
       {burst ? (
         <HomeBrandConfetti

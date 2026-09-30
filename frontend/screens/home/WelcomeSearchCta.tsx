@@ -21,14 +21,11 @@ import {
 import FitText from '../../components/FitText';
 import { logger } from '../../utils/logger';
 
-const BORDER_W = 1;
+const BORDER_W = 0;
 /** Цвет волн/точек радара — приглушённо. */
 const CTA_WAVE = AURA_GRADIENT[2];
-const CTA_BORDER = 'rgba(0, 181, 255, 0.36)';
 /** Фон в тон волны, лёгкий. */
-const CTA_FILL = 'rgba(0, 181, 255, 0.08)';
-/** Мягкое кольцо вокруг рамки. */
-const CTA_BORDER_SOFT = 'rgba(0, 181, 255, 0.12)';
+const CTA_FILL = 'rgba(0, 181, 255, 0.06)';
 
 /**
  * Высота CTA. Вынесена отдельно, чтобы раскладка Search могла заранее
@@ -211,17 +208,6 @@ export function WelcomeSearchCta({
             overflow: 'visible',
           }}
         >
-          {/* Мягкое свечение рамки (размытый край). */}
-          <View
-            pointerEvents="none"
-            style={[
-              styles.borderGlow,
-              {
-                borderRadius,
-                shadowColor: CTA_WAVE,
-              },
-            ]}
-          />
           <View
             style={[
               styles.borderShell,
@@ -230,7 +216,6 @@ export function WelcomeSearchCta({
                 width: buttonWidth,
                 height: buttonHeight,
                 borderWidth: BORDER_W,
-                borderColor: CTA_BORDER,
                 backgroundColor: CTA_FILL,
               },
             ]}
@@ -307,16 +292,6 @@ const styles = StyleSheet.create({
     shadowRadius: 10,
     elevation: 3,
     overflow: 'visible',
-  },
-  borderGlow: {
-    ...StyleSheet.absoluteFillObject,
-    borderWidth: 2,
-    borderColor: CTA_BORDER_SOFT,
-    // лёгкий bloom по периметру
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.32,
-    shadowRadius: 5,
-    elevation: 0,
   },
   borderShell: {
     overflow: 'hidden',

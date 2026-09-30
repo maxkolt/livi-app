@@ -307,7 +307,7 @@ const io = new Server(server, {
     credentials: true,
   },
   transports: ["websocket", "polling"], // websocket + polling для надежности
-  // Короче ping: под VPN TCP часто «висит» без пакетов — при 25+30s звонок (27s) не успевает на FCM/reconnect.
+  // Короче ping: под VPN TCP часто «висит» без пакетов — при 25+30s звонок не успевал на FCM/reconnect.
   pingInterval: 12000,
   pingTimeout: 12000,
 });
@@ -1143,7 +1143,8 @@ const updateFriendRoomState = async (io: Server, roomId: string) => {
 // findRandom/cancelRandom удалены - используется match.ts
 
 /* ========= Direct Calls (P2P invite) ========= */
-const CALL_RING_TIMEOUT_MS = 27_000;
+/** Сколько звонит входящий. 45 с, а не 27: телефону с VPN во сне нужно время, чтобы проснуться и получить пуш. */
+const CALL_RING_TIMEOUT_MS = 45_000;
 type CallLink = {
   a: string;
   b: string;
@@ -2182,7 +2183,10 @@ function pruneOrphanCallOfUserEntry(userId: string): void {
 const CALL_DELIVERY_ACK_WAIT_MS = 2_000;
 const CALL_DELIVERY_RETRY_EVERY_MS = 2_500;
 const CALL_DELIVERY_ESCALATE_AFTER_RETRY = 1;
-const CALL_DELIVERY_RETRY_MAX_WINDOW_MS = 22_000;
+/** Первые 22 с шлём повторный пуш часто, потом реже — лишние high-priority пуши без уведомления Android засчитывает против приложения. */
+const CALL_DELIVERY_FAST_RETRY_WINDOW_MS = 22_000;
+const CALL_DELIVERY_SLOW_RETRY_EVERY_MS = 6_000;
+const CALL_DELIVERY_RETRY_MAX_WINDOW_MS = 40_000;
 
 function scheduleCallPushRetry(callId: string, delayMs: number) {
   const link = callsById.get(callId);
@@ -2324,7 +2328,10 @@ async function runCallPushRetryCycle(callId: string): Promise<void> {
   if (!callsById.has(callId)) return;
   const latest = callDeliveryById.get(callId);
   if (!latest || latest.incomingShownAtMs) return;
-  scheduleCallPushRetry(callId, CALL_DELIVERY_RETRY_EVERY_MS);
+  scheduleCallPushRetry(
+    callId,
+    elapsedMs < CALL_DELIVERY_FAST_RETRY_WINDOW_MS ? CALL_DELIVERY_RETRY_EVERY_MS : CALL_DELIVERY_SLOW_RETRY_EVERY_MS,
+  );
 }
 
 function socketDataLooksRandomOrQueueBusy(sdata: Record<string, unknown>, uid: string): boolean {

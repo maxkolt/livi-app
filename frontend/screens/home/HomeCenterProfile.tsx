@@ -1,10 +1,20 @@
-import React from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Platform, Pressable, StyleProp, Text, View, ViewStyle } from 'react-native';
 import { Image as ExpoImage } from 'expo-image';
-import AvatarImage, { activeFrameRingWidth } from '../../components/AvatarImage';
+import AvatarImage, {
+  activeFrameRingWidth,
+  avatarFrameColors,
+  type AvatarDisplay,
+} from '../../components/AvatarImage';
 import { getCurrentUserId } from '../../sockets/socket';
 import { CHROME_PERIMETER_GLOW_LAYOUT_INSET, LIVI } from './constants';
 import { ChromePerimeterGlow } from './chrome';
+import {
+  AvatarDustHide,
+  avatarDustSourceKey,
+  type AvatarDustController,
+  type AvatarDustSource,
+} from './AvatarDust';
 import { displayAvatarLetter, displayName } from './friendHelpers';
 import type { HomeStyles } from './styles';
 import { useUserActiveFrame } from '../../utils/cosmetics';
@@ -37,6 +47,12 @@ export type HomeCenterProfileProps = {
   /** Splash: onLoad аватара на радаре Поиска. */
   onSearchAvatarDecoded?: () => void;
   avatarAnchorRef?: React.Ref<View>;
+  /**
+   * Радар Поиска: аватар рассыпается под пальцем. Тап тогда ловит жест
+   * радара, а сюда приходит только, что спрятать и из чего строить текстуру.
+   */
+  avatarDust?: AvatarDustController;
+  onAvatarDustSource?: (source: AvatarDustSource | null) => void;
 };
 
 function HomeCenterProfileInner({
@@ -60,6 +76,8 @@ function HomeCenterProfileInner({
   onOpenAvatarModal,
   onSearchAvatarDecoded,
   avatarAnchorRef,
+  avatarDust,
+  onAvatarDustSource,
 }: HomeCenterProfileProps) {
   const letter = displayAvatarLetter(savedNick);
   const wrapperStyle: StyleProp<ViewStyle> = {
@@ -128,6 +146,73 @@ function HomeCenterProfileInner({
     return candidates[0] || undefined;
   })();
 
+  const [avatarDisplay, setAvatarDisplay] = useState<AvatarDisplay>({ kind: 'empty' });
+  const handleAvatarDisplay = useCallback((next: AvatarDisplay) => {
+    setAvatarDisplay((prev) =>
+      prev.kind === next.kind &&
+      (prev.kind !== 'image' || next.kind !== 'image' || prev.uri === next.uri)
+        ? prev
+        : next,
+    );
+  }, []);
+
+  // Ветки те же, что в разметке ниже: текстура должна совпасть с тем, что видно.
+  const dustSource = useMemo((): AvatarDustSource | null => {
+    if (!avatarDust || !radarStage || isLocalPreview) return null;
+    const size = centerAvatarContainerSize;
+    const snapshot: AvatarDustSource = {
+      kind: 'snapshot',
+      size,
+      key: `${letter}|${activeFrameId || ''}|${menuChromeBg}`,
+    };
+    const photo = (uri: string, framed: boolean): AvatarDustSource | null => {
+      const frameColors = framed ? avatarFrameColors(activeFrameId) : null;
+      // Рамка без известных цветов: AvatarImage рисует её без кольца, повторить нечем.
+      if (framed && !frameColors) return null;
+      return {
+        kind: 'photo',
+        uri,
+        size,
+        photoSize: Math.round(centerAvatarSize),
+        ringWidth: framed ? frameOutset : 0,
+        frameColors,
+        backdrop: menuChromeBg,
+      };
+    };
+    const usesAvatarImage = !!myUserId && (!!activeFrameId || myAvatarVer > 0);
+    if (usesAvatarImage) {
+      if (avatarDisplay.kind === 'image') return photo(avatarDisplay.uri, !!activeFrameId);
+      if (avatarDisplay.kind === 'letter') return snapshot;
+      return null;
+    }
+    if (hasDirectAvatarUri && resolvedAvatarReady) return photo(resolvedAvatarUri, false);
+    return avatarVerChecked ? snapshot : null;
+  }, [
+    activeFrameId,
+    avatarDisplay,
+    avatarDust,
+    avatarVerChecked,
+    centerAvatarContainerSize,
+    centerAvatarSize,
+    frameOutset,
+    hasDirectAvatarUri,
+    isLocalPreview,
+    letter,
+    menuChromeBg,
+    myAvatarVer,
+    myUserId,
+    radarStage,
+    resolvedAvatarReady,
+    resolvedAvatarUri,
+  ]);
+  const dustSourceKey = avatarDustSourceKey(dustSource);
+  useEffect(() => {
+    onAvatarDustSource?.(dustSource);
+    // Ключ описывает источник целиком; сам объект пересоздаётся при любом рендере зависимостей.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dustSourceKey, onAvatarDustSource]);
+  const reportAvatarDisplay = avatarDust && radarStage ? handleAvatarDisplay : undefined;
+
   const avatarInner = (
     <View
       ref={avatarAnchorRef}
@@ -155,6 +240,7 @@ function HomeCenterProfileInner({
           containerStyle={styles.centerAvatarImg}
           fallbackTextStyle={{ fontSize: letterFontSize, fontWeight: '800' }}
           onDisplayLoad={radarStage ? onSearchAvatarDecoded : undefined}
+          onDisplayChange={reportAvatarDisplay}
         />
       ) : isLocalPreview ? (
         <ExpoImage
@@ -175,6 +261,7 @@ function HomeCenterProfileInner({
           containerStyle={styles.centerAvatarImg}
           fallbackTextStyle={{ fontSize: letterFontSize, fontWeight: '800' }}
           onDisplayLoad={radarStage ? onSearchAvatarDecoded : undefined}
+          onDisplayChange={reportAvatarDisplay}
         />
       ) : hasDirectAvatarUri && resolvedAvatarReady ? (
         <ExpoImage
@@ -203,6 +290,11 @@ function HomeCenterProfileInner({
 
   return (
     <View style={wrapperStyle}>
+      {avatarDust && radarStage ? (
+        <View style={{ alignSelf: 'center' }}>
+          <AvatarDustHide dust={avatarDust}>{avatarInner}</AvatarDustHide>
+        </View>
+      ) : (
       <Pressable
         onPress={() => onOpenAvatarModal(myFullAvatarUri || avatarUri || '')}
         style={{ alignSelf: 'center' }}
@@ -222,6 +314,7 @@ function HomeCenterProfileInner({
           </ChromePerimeterGlow>
         )}
       </Pressable>
+      )}
       {!radarStage ? (
       <Text
         style={[
