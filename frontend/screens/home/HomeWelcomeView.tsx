@@ -434,7 +434,8 @@ function HomeWelcomeViewInner({
             minHeight: topBarHeight,
             paddingTop: topBarPadTop,
             paddingBottom: tightStage ? 2 : 6,
-            paddingHorizontal: tightStage ? 14 : 20,
+            // Search header: bring the brand and crown slightly inward as a pair.
+            paddingHorizontal: tightStage ? 18 : 26,
           },
         ]}
       >

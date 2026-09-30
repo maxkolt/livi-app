@@ -37,6 +37,10 @@ import { getRoomIceTransportDiagnostics } from '../iceTransportDiagnostics';
 const LIVEKIT_URL = ((process.env.EXPO_PUBLIC_LIVEKIT_URL as string | undefined) ?? '').trim();
 /** LiveKit default PC timeout (~15s) is too short for VPN / slow ICE; match VideoCallSession. */
 const LIVEKIT_PEER_CONNECTION_TIMEOUT_MS = 30_000;
+/** Вход в комнату после match: попытки, пауза (× номер попытки) и общий бюджет — меньше сторожа собеседника (30 с). */
+const LIVEKIT_JOIN_MAX_ATTEMPTS = 3;
+const LIVEKIT_JOIN_RETRY_DELAY_MS = 800;
+const LIVEKIT_JOIN_RETRY_BUDGET_MS = 20_000;
 
 function parsePublicFlag(value: string | undefined, fallback: boolean): boolean {
   const v = String(value ?? '').trim().toLowerCase();
@@ -129,6 +133,10 @@ export class RandomChatSession extends SimpleEventEmitter {
   private readonly partnerAwayGiveUpMs = 15_000;
   /** Короткие просадки LiveKit и уход собеседника через «Далее» не должны мигать оверлеем. */
   private readonly reconnectingSoftDelayMs = 1_200;
+  /** Собеседник так и не зашёл в комнату (у него не вышло подключиться к LiveKit) — не ждём вечно. */
+  private partnerJoinTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Больше бюджета своих попыток входа у собеседника (LIVEKIT_JOIN_RETRY_BUDGET_MS) — через VPN вход бывает долгим. */
+  private readonly partnerJoinTimeoutMs = 30_000;
   private localVideoHealthTimeout: NodeJS.Timeout | null = null;
   private localVideoHealthAttempts = 0;
   private localVideoWatchdogForcedUntil = 0;
@@ -1018,8 +1026,32 @@ export class RandomChatSession extends SimpleEventEmitter {
     this.partnerAwayLiveKit = false;
     this.socketDownMidPair = false;
     this.roomReconnecting = false;
+    this.clearPartnerJoinWatchdog();
     if (had) this.logReconnectTrace('reconnect_state_cleared', { reason });
     this.updateReconnectingState();
+  }
+
+  /** После входа в комнату ждём собеседника partnerJoinTimeoutMs; не пришёл — рвём пару и ищем дальше. */
+  private armPartnerJoinWatchdog(): void {
+    this.clearPartnerJoinWatchdog();
+    const partnerUserId = this.matchPartnerUserId;
+    if (!partnerUserId) return;
+    this.partnerJoinTimer = setTimeout(() => {
+      this.partnerJoinTimer = null;
+      if (!this.hasActivePair() || this.matchPartnerUserId !== partnerUserId) return;
+      const partnerInRoom =
+        !!this.currentRemoteParticipant || (this.room?.remoteParticipants?.size ?? 0) > 0;
+      // Сервер держит паузу на переподключение — решение за ним.
+      if (partnerInRoom || this.remoteMediaFirstSeenAt > 0 || this.partnerAwayServer) return;
+      this.leavePairAfterFailedReconnect('partner_never_joined');
+    }, this.partnerJoinTimeoutMs);
+  }
+
+  private clearPartnerJoinWatchdog(): void {
+    if (this.partnerJoinTimer) {
+      clearTimeout(this.partnerJoinTimer);
+      this.partnerJoinTimer = null;
+    }
   }
 
   private emitResume(partnerUserId: string): Promise<ResumeAck | null> {
@@ -1086,12 +1118,23 @@ export class RandomChatSession extends SimpleEventEmitter {
             this.remoteAudioMuted = true;
             this.emit('remoteState', { muted: true });
           }
-          const connectRequestId = ++this.connectRequestId;
-          this.pendingConnectRequestId = connectRequestId;
-          try {
-            connected = await this.connectToLiveKit(url, res.livekitToken, connectRequestId, res.livekitRoomName, 'resume');
-          } finally {
-            if (this.pendingConnectRequestId === connectRequestId) this.pendingConnectRequestId = null;
+          // Два захода: после смены сети (VPN, Wi-Fi → LTE) первый вход в комнату часто не проходит.
+          for (let attempt = 1; attempt <= 2 && !connected && samePair(); attempt++) {
+            if (attempt > 1) await new Promise((r) => setTimeout(r, LIVEKIT_JOIN_RETRY_DELAY_MS));
+            if (!samePair() || this.isRoomLive() || this.connectingInProgress) break;
+            const connectRequestId = ++this.connectRequestId;
+            this.pendingConnectRequestId = connectRequestId;
+            try {
+              connected = await this.connectToLiveKit(
+                url,
+                res.livekitToken,
+                connectRequestId,
+                res.livekitRoomName,
+                attempt === 1 ? 'resume' : 'resume_retry'
+              );
+            } finally {
+              if (this.pendingConnectRequestId === connectRequestId) this.pendingConnectRequestId = null;
+            }
           }
         }
         if (!samePair()) return;
@@ -1856,22 +1899,44 @@ export class RandomChatSession extends SimpleEventEmitter {
     // Partner may not have had matchRoomId yet when our LiveKit connect fired — resync early + on ParticipantConnected.
     this.emitCamToggleRelay('match_found');
 
-    const connectRequestId = ++this.connectRequestId;
+    let connectRequestId = ++this.connectRequestId;
     this.pendingConnectRequestId = connectRequestId;
-    
+    // Этот match всё ещё наш: нового match / «Далее» / «Стоп» не было и комнаты нет.
+    const matchStillPending = () =>
+      this.connectRequestId === connectRequestId &&
+      this.started &&
+      !this.isDisconnecting &&
+      !this.connectingInProgress &&
+      !this.isRoomLive() &&
+      this.matchRoomId === roomId &&
+      !!this.matchPartnerUserId;
+
     try {
       this.logReconnectTrace('handle_match_found_connect_start', {
         connectRequestId,
         targetRoomName: data.livekitRoomName ?? null,
         nextTransitionId,
       });
-      const connected = await this.connectToLiveKit(
-        resolvedLivekitUrl,
-        data.livekitToken,
-        connectRequestId,
-        data.livekitRoomName,
-        'handleMatchFound'
-      );
+      // VPN и мобильная сеть дают разовые «Network request failed» на вход в комнату —
+      // пробуем ещё, но укладываемся в бюджет, чтобы собеседник не ждал дольше своего сторожа.
+      const joinStartedAt = Date.now();
+      let connected = false;
+      for (let attempt = 1; ; attempt++) {
+        connected = await this.connectToLiveKit(
+          resolvedLivekitUrl,
+          data.livekitToken,
+          connectRequestId,
+          data.livekitRoomName,
+          attempt === 1 ? 'handleMatchFound' : 'handleMatchFound_retry'
+        );
+        if (connected || !matchStillPending()) break;
+        if (attempt >= LIVEKIT_JOIN_MAX_ATTEMPTS || Date.now() - joinStartedAt > LIVEKIT_JOIN_RETRY_BUDGET_MS) break;
+        this.logReconnectTrace('handle_match_found_connect_retry', { attempt, connectRequestId, partnerId });
+        await new Promise((r) => setTimeout(r, LIVEKIT_JOIN_RETRY_DELAY_MS * attempt));
+        if (!matchStillPending()) break;
+        connectRequestId = ++this.connectRequestId;
+        this.pendingConnectRequestId = connectRequestId;
+      }
       if (!connected) {
         logger.debug('[RandomChatSession] Match handling aborted (stale request)', {
           connectRequestId,
@@ -1882,6 +1947,11 @@ export class RandomChatSession extends SimpleEventEmitter {
           partnerId,
           nextTransitionId,
         });
+        // Все попытки не прошли, а match всё ещё наш — LiveKit не пустил (сеть, VPN). Молча выйти
+        // нельзя: собеседник ждал бы нас вечно. Рвём пару и ищем дальше.
+        if (matchStillPending()) {
+          this.leavePairAfterFailedReconnect('livekit_connect_failed');
+        }
         return;
       }
       if (!this.started) {
@@ -1899,6 +1969,7 @@ export class RandomChatSession extends SimpleEventEmitter {
         targetRoomName: data.livekitRoomName ?? null,
         nextTransitionId,
       });
+      this.armPartnerJoinWatchdog();
       this.notifyLoadingChange(false);
       this.config.setIsInactiveState?.(false);
     } finally {
@@ -4126,6 +4197,7 @@ export class RandomChatSession extends SimpleEventEmitter {
         }
         participant = liveParticipant;
         this.currentRemoteParticipant = liveParticipant;
+        this.clearPartnerJoinWatchdog();
         if (this.partnerAwayLiveKit) {
           this.logReconnectTrace('partner_livekit_back', { participantId: participant.identity });
           this.partnerAwayLiveKit = false;

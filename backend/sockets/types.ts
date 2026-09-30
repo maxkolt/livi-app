@@ -15,5 +15,7 @@ export interface AuthedSocket extends Socket {
     randomPartnerSid?: string;
     /** Этот сокет отвалился, и его рандом-пару уже забрал новый сокет того же пользователя. */
     resumedBy?: string;
+    /** Сервер отключил этот сокет, потому что тот же пользователь подключился заново (sockets/identity.ts). */
+    evictedBy?: string;
   };
 }

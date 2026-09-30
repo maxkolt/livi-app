@@ -247,6 +247,21 @@ describe('random chat: pause for reconnect', () => {
     expect(b.got('disconnected')).toHaveLength(1);
   });
 
+  it('pauses when the server evicts the old socket because the user reconnected', async () => {
+    const { io, a, b, aUser, bUser } = await pairUp();
+    const a2 = new FakeSocket(io, aUser);
+    // Так делает sockets/identity.ts: помечает вытесненный сокет и отключает его сам.
+    a.data.evictedBy = a2.id;
+    a.connected = false;
+    io.sockets.sockets.delete(a.id);
+    await a.fire('disconnect', 'server namespace disconnect');
+    expect(b.got('random:partnerReconnecting')).toHaveLength(1);
+    expect(b.got('disconnected')).toHaveLength(0);
+
+    const res = await a2.request('random:resume', { partnerUserId: bUser });
+    expect(res).toMatchObject({ ok: true, id: b.id });
+  });
+
   it('keeps sockets in their personal user room through start and next', async () => {
     const { a, b, aUser, bUser } = await pairUp();
     await a.fire('next');

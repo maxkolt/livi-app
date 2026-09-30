@@ -253,7 +253,7 @@ export default function ChatScreen({ route, navigation }: Props) {
   // В landscape оба блока компактнее, чтобы сохранить ту же структуру по высоте.
   const msgActionsLandscape = modalLayout.isLandscape;
   const msgActionsReactionsWidth = msgActionsLandscape ? 224 : 256;
-  const msgActionsListWidth = msgActionsLandscape ? 216 : 245;
+  const msgActionsListWidth = msgActionsLandscape ? 196 : 225;
   const msgActionsCardWidth = msgActionsLandscape ? 224 : 280;
   const msgActionsBlockGap = msgActionsLandscape ? 3 : 4;
   // В стопке над списком ещё лежат реакции (~54) и зазор (12), в портрете — плюс отступ снизу.
@@ -3676,7 +3676,9 @@ export default function ChatScreen({ route, navigation }: Props) {
             onPress={hideMessageActions}
             style={{
               flex: 1,
-              backgroundColor: isDark ? 'rgba(0,0,0,0.80)' : 'rgba(0,0,0,0.66)',
+              // Telegram-like message actions: keep the chat fully visible behind
+              // the reaction/action cards instead of dimming the whole screen.
+              backgroundColor: 'transparent',
               // Позицию задаёт якорь у облака, поэтому без выравнивания и паддингов.
               justifyContent: 'flex-start',
               alignItems: 'flex-start',
@@ -3697,7 +3699,6 @@ export default function ChatScreen({ route, navigation }: Props) {
             >
               {(() => {
                 const borderColor = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)';
-                const dividerColor = isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.10)';
                 const reactionsAll = [...SHEET_REACTIONS_ROW_1, ...SHEET_REACTIONS_ROW_2];
                 const row1 = reactionsAll.slice(0, 5);
                 const row2 = reactionsAll.slice(5, 10);
@@ -3781,7 +3782,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                   </CardShell>
                   {/* Отступ 12px — виден фон модалки (на нём лежат оба блока) */}
                   {/* Блок 2: список действий */}
-                  <CardShell
+                  <View
                     style={{
                       marginTop: msgActionsBlockGap,
                       width: msgActionsListWidth,
@@ -3789,8 +3790,16 @@ export default function ChatScreen({ route, navigation }: Props) {
                       flexShrink: 1,
                       borderRadius: 12,
                       ...cardShellStyle,
+                      backgroundColor: 'transparent',
                     }}
                   >
+                    <View pointerEvents="none" style={StyleSheet.absoluteFill}>
+                      {isDark ? (
+                        <StageGradient style={{ flex: 1, opacity: 0.90 }} />
+                      ) : (
+                        <View style={{ flex: 1, backgroundColor: 'rgba(21,31,51,0.90)' }} />
+                      )}
+                    </View>
                     {(() => {
                       const isImageMsg = String(selectedMessage?.type || '') === 'image';
                       const row = (
@@ -3799,14 +3808,13 @@ export default function ChatScreen({ route, navigation }: Props) {
                         onPress: () => void,
                         danger?: boolean,
                       ) => (
-                        <React.Fragment key={label + String(icon)}>
-                          <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: dividerColor }} />
                           <Pressable
+                            key={label + String(icon)}
                             onPress={onPress}
                             style={({ pressed }) => ({
                               flexDirection: 'row',
                               alignItems: 'center',
-                              justifyContent: 'space-between',
+                              justifyContent: 'flex-start',
                               paddingVertical: actionPaddingV,
                               paddingHorizontal: actionPaddingH,
                               backgroundColor: pressed
@@ -3816,12 +3824,16 @@ export default function ChatScreen({ route, navigation }: Props) {
                                 : 'transparent',
                             })}
                           >
+                            <Ionicons
+                              name={icon}
+                              size={actionIconSize}
+                              color={danger ? '#FF5A67' : LIVI.titan}
+                              style={{ marginRight: 12 }}
+                            />
                             <Text style={{ color: danger ? '#FF5A67' : LIVI.white, fontSize: actionFontSize, fontWeight: '400' }}>
                               {label}
                             </Text>
-                            <Ionicons name={icon} size={actionIconSize} color={danger ? '#FF5A67' : LIVI.titan} />
                           </Pressable>
-                        </React.Fragment>
                       );
                       return (
                         <>
@@ -3882,10 +3894,8 @@ export default function ChatScreen({ route, navigation }: Props) {
                                 setReplyingToMessage(null);
                               })
                         )}
-                        <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: dividerColor }} />
                       </>
                     )}
-                    <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: dividerColor }} />
                     <Pressable
                       onPress={() => {
                         hideMessageActions();
@@ -3898,19 +3908,23 @@ export default function ChatScreen({ route, navigation }: Props) {
                       style={({ pressed }) => ({
                         flexDirection: 'row',
                         alignItems: 'center',
-                        justifyContent: 'space-between',
+                        justifyContent: 'flex-start',
                         paddingVertical: actionPaddingV,
                         paddingHorizontal: actionPaddingH,
                         backgroundColor: pressed ? 'rgba(255,90,103,0.08)' : 'transparent',
                       })}
                     >
+                      <Ionicons
+                        name="trash-outline"
+                        size={actionIconSize}
+                        color="#FF5A67"
+                        style={{ marginRight: 12 }}
+                      />
                       <Text style={{ color: '#FF5A67', fontSize: actionFontSize, fontWeight: '400' }}>
                         {t('delete', lang)}
                       </Text>
-                      <Ionicons name="trash-outline" size={actionIconSize} color="#FF5A67" />
                     </Pressable>
                         </ScrollView>
-                        <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: dividerColor }} />
                         <Pressable
                           onPress={hideMessageActions}
                           style={({ pressed }) => ({
@@ -3926,7 +3940,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                         </>
                       );
                     })()}
-                  </CardShell>
+                  </View>
                 </View>
                 );
               })()}

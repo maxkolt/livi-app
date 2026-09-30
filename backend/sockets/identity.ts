@@ -70,6 +70,9 @@ export async function bindUser(io: Server, sock: any, userId: string) {
         try {
           if ((oldSocket as any)?.connected) {
             console.warn(`[user] duplicate connection ${canonical} old=${oldSocket.id} -> disconnect`);
+            // Старый сокет вытеснен новым того же пользователя — это обрыв сети, а не выход:
+            // рандом-пара на нём должна уйти в паузу и дождаться random:resume (sockets/match.ts).
+            (oldSocket as any).data.evictedBy = sock.id;
             oldSocket.disconnect(true);
           }
         } catch {}

@@ -1139,8 +1139,11 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
       return;
     }
     // Моргнула сеть посреди разговора — даём вернуться в ту же пару. Намеренное отключение
-    // (клиент или сервер закрыл сокет сам) — не обрыв, ждать нечего.
-    const deliberate = reason === 'client namespace disconnect' || reason === 'server namespace disconnect';
+    // (клиент или сервер закрыл сокет сам) — не обрыв, ждать нечего. Исключение: сервер вытеснил
+    // сокет, потому что пользователь уже переподключился новым, — это как раз обрыв.
+    const deliberate =
+      reason === 'client namespace disconnect' ||
+      (reason === 'server namespace disconnect' && !socket.data.evictedBy);
     if (!deliberate && holdPairForReconnect(io, socket)) {
       await removeFromQueue(socket.id);
       await queueStore.clearSocketData(socket.id);

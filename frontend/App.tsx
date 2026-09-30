@@ -207,18 +207,13 @@ export { activateKeepAwakeAsync, deactivateKeepAwakeAsync };
 
 try { (React as any).useInsertionEffect = (React as any).useEffect; } catch {}
 
-// Dev: hide extremely noisy warning that can spam logs on slower Android devices.
-// This does NOT fix the root cause, but makes Metro logs usable while we iterate.
+// Dev: без всплывающих плашек LogBox (серые с «!» внизу экрана). Обрывы сети, VPN и
+// переподключения LiveKit — штатные ситуации, которые приложение обрабатывает само, а список
+// фраз для игнора их не покрывал. Всё по-прежнему печатается в Metro; настоящие падения
+// (fatal/syntax) LogBox всё равно открывает на весь экран. В релизе LogBox нет вовсе.
 if (__DEV__) {
   try {
-    LogBox.ignoreLogs([
-      'Excessive number of pending callbacks',
-      '[expo-av]: Expo AV has been deprecated',
-      // LiveKit expected drops (airplane / brief offline) — not product errors.
-      'Network request failed',
-      'ConnectionError',
-      'ServerUnreachable',
-    ]);
+    LogBox.ignoreAllLogs(true);
   } catch {}
 }
 
