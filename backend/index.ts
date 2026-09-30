@@ -5229,6 +5229,15 @@ async function gracefulShutdown(signal: string): Promise<void> {
   process.exit(0);
 }
 
+// Отклонённый промис в async-обработчике (например, моргнул Redis) не должен ронять весь сервер
+// со всеми разговорами и звонками: Node 20 по умолчанию завершает процесс. Логируем и работаем дальше.
+process.on('unhandledRejection', (reason: unknown) => {
+  const err = reason as { message?: string; stack?: string } | undefined;
+  const details = { error: err?.message || String(reason), stack: err?.stack };
+  if (isShuttingDown()) logger.warn('Unhandled promise rejection during shutdown', details);
+  else logger.error('Unhandled promise rejection', details);
+});
+
 process.on('SIGTERM', () => {
   void gracefulShutdown('SIGTERM');
 });

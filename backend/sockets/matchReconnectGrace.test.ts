@@ -11,6 +11,8 @@ jest.mock('../utils/rateLimit', () => ({ checkRateLimit: async () => ({ ok: true
 jest.mock('../models/UserReport', () => ({ __esModule: true, default: {}, isUserReportReason: () => true }));
 
 import { bindMatch } from './match';
+import * as queueStore from '../utils/queueStore';
+import * as shutdownState from '../utils/shutdownState';
 
 const GRACE_MS = 300;
 process.env.RANDOM_RECONNECT_GRACE_MS = String(GRACE_MS);
@@ -260,6 +262,19 @@ describe('random chat: pause for reconnect', () => {
 
     const res = await a2.request('random:resume', { partnerUserId: bUser });
     expect(res).toMatchObject({ ok: true, id: b.id });
+  });
+
+  it('does not throw when Redis is already closed during server shutdown', async () => {
+    const { a } = await pairUp();
+    const shutting = jest.spyOn(shutdownState, 'isShuttingDown').mockReturnValue(true);
+    const unlock = jest.spyOn(queueStore, 'unlockSocket').mockRejectedValue(new Error('Connection is closed.'));
+    try {
+      a.connected = false;
+      await expect(a.fire('disconnect', 'server shutting down')).resolves.toBeUndefined();
+    } finally {
+      shutting.mockRestore();
+      unlock.mockRestore();
+    }
   });
 
   it('keeps sockets in their personal user room through start and next', async () => {

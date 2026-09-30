@@ -1101,9 +1101,13 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
         await queueStore.clearSocketData(socket.id);
       } catch {}
       socket.data.isNexting = false;
-      await clearPartner(io, socket, false, 'disconnect', {
-        nextTransitionId: socket.data.lastNextTransitionId ?? null,
-      });
+      // Shutdown закрывает Redis, пока обработчики disconnect ещё работают: без try отказ Redis
+      // становился unhandled rejection и ронял процесс с кодом 1 посреди деплоя.
+      try {
+        await clearPartner(io, socket, false, 'disconnect', {
+          nextTransitionId: socket.data.lastNextTransitionId ?? null,
+        });
+      } catch {}
       socket.data.inCall = false;
       socket.data.lastNextTransitionId = undefined;
       try {
