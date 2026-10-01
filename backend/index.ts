@@ -107,6 +107,7 @@ import {
 import { areFriendsCached, getFriendIds, getFriendIdsForUsers } from './utils/friendshipUtils';
 import { isSocketIoRedisAdapterActive, setupSocketIoRedisAdapter } from './utils/socketIoRedisAdapter';
 import { buildWelcomeOnlinePresenceList } from './utils/welcomeOnlinePresence';
+import { attachLiveKitSignalProxy } from './utils/livekitSignalProxy';
 
 /* ========= Типы ========= */
 type LeanUser = {
@@ -298,9 +299,13 @@ app.use(async (req, _res, next) => {
 
 /* ========= Создаём HTTP + Socket.IO ========= */
 const server = http.createServer(app);
+attachLiveKitSignalProxy(server, getLiveKitUrl());
 
 const io = new Server(server, {
   path: "/socket.io",
+  // На этом же HTTP server живёт /livekit/rtc. Engine.IO по умолчанию закрывает
+  // любой «чужой» upgrade через 1 с, не давая signaling-proxy дождаться upstream.
+  destroyUpgrade: false,
   cors: {
     origin: "*", // для теста
     methods: ["GET", "POST"],

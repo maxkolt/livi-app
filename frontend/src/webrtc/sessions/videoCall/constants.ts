@@ -71,6 +71,12 @@ export const SDK_RECONNECT_ADOPT_TICKS = 120;
 export const LIVEKIT_PEER_CONNECTION_TIMEOUT_MS = 30_000;
 
 /**
+ * Отдельный таймаут signaling WebSocket. Заблокированный VPN домен не должен держать
+ * экран принятого звонка 30 секунд: после этого окна пробуем proxy через API-домен.
+ */
+export const LIVEKIT_WEBSOCKET_TIMEOUT_MS = 8_000;
+
+/**
  * Передавать ли в room.connect() клиентский ICE/TURN-конфиг с /api/turn-credentials.
  * Kill-switch на случай, если свой TURN окажется хуже серверного: EXPO_PUBLIC_LIVEKIT_APPLY_CLIENT_ICE=0.
  */

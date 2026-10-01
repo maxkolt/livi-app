@@ -55,6 +55,7 @@ export function resolveConnectRtcConfig(
 
 export type LiveKitConnectOptionsInput = {
   peerConnectionTimeoutMs: number;
+  websocketTimeoutMs?: number;
   rtcConfig?: RTCConfiguration;
   /** Kill-switch: false → ведём себя как до фикса (свой ICE не передаём). */
   applyClientIce?: boolean;
@@ -63,6 +64,7 @@ export type LiveKitConnectOptionsInput = {
 export type LiveKitConnectRoomOptions = {
   autoSubscribe: true;
   peerConnectionTimeout: number;
+  websocketTimeout?: number;
   rtcConfig?: RTCConfiguration;
 };
 
@@ -71,6 +73,9 @@ export function buildLiveKitConnectOptions(input: LiveKitConnectOptionsInput): L
   return {
     autoSubscribe: true,
     peerConnectionTimeout: input.peerConnectionTimeoutMs,
+    ...(input.websocketTimeoutMs !== undefined
+      ? { websocketTimeout: input.websocketTimeoutMs }
+      : {}),
     ...(rtcConfig ? { rtcConfig } : {}),
   };
 }

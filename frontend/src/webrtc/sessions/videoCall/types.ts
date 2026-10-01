@@ -29,6 +29,8 @@ export type CallEndedPayload = {
 
 export type LiveKitConnectOptions = {
   forceRelayOnly?: boolean;
+  /** Уже пробовали signaling через API-домен; защищает от бесконечного fallback-цикла. */
+  signalProxyTried?: boolean;
   reason?: string;
 };
 

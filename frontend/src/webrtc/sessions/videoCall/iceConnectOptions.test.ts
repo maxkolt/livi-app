@@ -68,9 +68,13 @@ describe('resolveConnectRtcConfig', () => {
 
 describe('buildLiveKitConnectOptions', () => {
   it('всегда просит autoSubscribe и заданный таймаут PeerConnection', () => {
-    const opts = buildLiveKitConnectOptions({ peerConnectionTimeoutMs: 30_000 });
+    const opts = buildLiveKitConnectOptions({
+      peerConnectionTimeoutMs: 30_000,
+      websocketTimeoutMs: 8_000,
+    });
     expect(opts.autoSubscribe).toBe(true);
     expect(opts.peerConnectionTimeout).toBe(30_000);
+    expect(opts.websocketTimeout).toBe(8_000);
   });
 
   it('со своим TURN кладёт rtcConfig — это и есть починка relay-фоллбэка', () => {

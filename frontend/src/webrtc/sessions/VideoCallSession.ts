@@ -94,6 +94,7 @@ import {
   LIVEKIT_DYNACAST_ENABLED,
   LIVEKIT_APPLY_CLIENT_ICE,
   LIVEKIT_PEER_CONNECTION_TIMEOUT_MS,
+  LIVEKIT_WEBSOCKET_TIMEOUT_MS,
   SDK_RECONNECT_ADOPT_TICKS,
   SDK_RECONNECT_POLL_MS,
   ACCEPTED_ROOM_CONNECT_MAX_RETRIES,
@@ -128,6 +129,11 @@ import { readInboundRemotePackets } from './videoCall/mediaStats';
 import { describeRemoteTrackChange, type RemoteTrackChange } from './videoCall/remoteTrackChange';
 import { buildLiveKitRoomOptions } from './videoCall/roomOptions';
 import { buildLiveKitConnectOptions } from './videoCall/iceConnectOptions';
+import {
+  buildLiveKitSignalProxyUrl,
+  isLikelyLiveKitSignalError,
+  isLiveKitSignalProxyUrl,
+} from './videoCall/signalProxy';
 import {
   isClientDisconnectError,
   isIgnorablePublishError,
@@ -6958,10 +6964,68 @@ export class VideoCallSession extends SimpleEventEmitter {
       this.room = null;
       this.currentRoomName = null;
     }
-    return this.connectToLiveKit(url, token, connectRequestId, targetRoomName, {
-      forceRelayOnly: true,
-      reason: 'pc_connect_relay_retry',
+    // Внутренний retry обязан обойти coalescing-gate текущего connect, иначе он
+    // начнёт ждать собственный promise и зависнет навсегда.
+    return this.executeConnectToLiveKit(
+      url,
+      token,
+      connectRequestId,
+      targetRoomName,
+      {
+        forceRelayOnly: true,
+        signalProxyTried: options?.signalProxyTried,
+        reason: 'pc_connect_relay_retry',
+      },
+      true,
+    );
+  }
+
+  /**
+   * VPN не открыл прямой signaling WebSocket LiveKit. Повторяем connect через
+   * /livekit на основном API-домене, который уже используется сокетами и сообщениями.
+   */
+  private async retryConnectWithSignalProxy(
+    room: Room,
+    token: string,
+    connectRequestId: number,
+    targetRoomName: string | undefined,
+    options: LiveKitConnectOptions | undefined,
+    errorMessage: string,
+  ): Promise<boolean> {
+    const proxyUrl = buildLiveKitSignalProxyUrl(API_BASE);
+    if (!proxyUrl) {
+      throw new Error(`LiveKit signal proxy URL is unavailable after: ${errorMessage}`);
+    }
+
+    logger.warn('[VideoCallSession] LiveKit signaling unavailable — retrying through API proxy', {
+      targetRoomName,
+      proxyHost: new URL(proxyUrl).hostname,
+      connectReason: options?.reason || null,
+      error: errorMessage,
     });
+    try {
+      if (room.state !== 'disconnected') {
+        await room.disconnect();
+      }
+    } catch {}
+    if (this.room === room) {
+      this.room = null;
+      this.currentRoomName = null;
+    }
+
+    // Это продолжение уже идущего connect: не ждём coalescing-gate самих себя.
+    return this.executeConnectToLiveKit(
+      proxyUrl,
+      token,
+      connectRequestId,
+      targetRoomName,
+      {
+        forceRelayOnly: options?.forceRelayOnly,
+        signalProxyTried: true,
+        reason: 'signal_proxy_retry',
+      },
+      true,
+    );
   }
 
   /**
@@ -7057,6 +7121,22 @@ export class VideoCallSession extends SimpleEventEmitter {
         error: errorMessage,
       });
     } else {
+      const isSignalError = isLikelyLiveKitSignalError(errorMessage);
+      if (
+        isSignalError &&
+        !options?.signalProxyTried &&
+        !isLiveKitSignalProxyUrl(url, API_BASE) &&
+        this.connectRequestId === connectRequestId
+      ) {
+        return this.retryConnectWithSignalProxy(
+          room,
+          token,
+          connectRequestId,
+          targetRoomName,
+          options,
+          errorMessage,
+        );
+      }
       const isTransientPcError = isTransientPcConnectionError(errorMessage);
       // VPN / жёсткий NAT: одна попытка через TURN relay (как в RandomChat).
       if (
@@ -7084,6 +7164,7 @@ export class VideoCallSession extends SimpleEventEmitter {
           roomState: room?.state,
           isInvalidApiKey,
           forceRelayOnly: !!options?.forceRelayOnly,
+          signalProxyTried: !!options?.signalProxyTried,
           stack: e?.stack,
         });
       }
@@ -7507,15 +7588,20 @@ export class VideoCallSession extends SimpleEventEmitter {
     token: string,
     connectRequestId: number,
     targetRoomName?: string,
-    options?: LiveKitConnectOptions
+    options?: LiveKitConnectOptions,
+    internalRetry = false,
   ): Promise<boolean> {
     if (this.ended) {
       this.incomingAcceptDeferCapture = false;
       logger.info('[VideoCallSession] ⏭️ Skipping connectToLiveKit: call already ended');
       return false;
     }
-    const reusedOrBlocked = await this.prepareRoomForLiveKitConnect(targetRoomName);
-    if (reusedOrBlocked !== null) return reusedOrBlocked;
+    // Relay/proxy retry выполняется внутри текущего connectionPromise. Ожидание
+    // existing connect здесь создало бы self-await и навсегда подвесило звонок.
+    if (!internalRetry) {
+      const reusedOrBlocked = await this.prepareRoomForLiveKitConnect(targetRoomName);
+      if (reusedOrBlocked !== null) return reusedOrBlocked;
+    }
     
     if (this.incomingAcceptDeferCapture) {
       // Видео-входящий: короткая пауза до capture. Аудио — без sleep (блокировало Room.connect).
@@ -7669,6 +7755,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     // livekit-client его игнорирует — см. ./videoCall/iceConnectOptions.
     const connectOptions = buildLiveKitConnectOptions({
       peerConnectionTimeoutMs: LIVEKIT_PEER_CONNECTION_TIMEOUT_MS,
+      websocketTimeoutMs: LIVEKIT_WEBSOCKET_TIMEOUT_MS,
       rtcConfig,
       applyClientIce: LIVEKIT_APPLY_CLIENT_ICE,
     });
