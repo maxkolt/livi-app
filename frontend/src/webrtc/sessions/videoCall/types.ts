@@ -31,6 +31,10 @@ export type LiveKitConnectOptions = {
   forceRelayOnly?: boolean;
   /** Уже пробовали signaling через API-домен; защищает от бесконечного fallback-цикла. */
   signalProxyTried?: boolean;
+  /** Исходный LiveKit URL — обратный резерв, если основной API-proxy недоступен. */
+  directSignalUrl?: string;
+  /** Уже пробовали обратный fallback с proxy на прямой LiveKit URL. */
+  directSignalTried?: boolean;
   reason?: string;
 };
 

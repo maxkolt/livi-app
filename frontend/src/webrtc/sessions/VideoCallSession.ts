@@ -14,6 +14,7 @@ import {
   LocalVideoTrack,
   createLocalTracks,
   ConnectionState,
+  DisconnectReason,
 } from 'livekit-client';
 import { RNE2EEManager, RNKeyProvider } from '@livekit/react-native';
 import {
@@ -95,6 +96,10 @@ import {
   LIVEKIT_APPLY_CLIENT_ICE,
   LIVEKIT_PEER_CONNECTION_TIMEOUT_MS,
   LIVEKIT_WEBSOCKET_TIMEOUT_MS,
+  LIVEKIT_PREFER_SIGNAL_PROXY,
+  FAILED_ROOM_DISCONNECT_WAIT_MS,
+  LIVEKIT_TEST_BLOCK_DIRECT_SIGNAL,
+  LIVEKIT_TEST_BLACKHOLE_URL,
   SDK_RECONNECT_ADOPT_TICKS,
   SDK_RECONNECT_POLL_MS,
   ACCEPTED_ROOM_CONNECT_MAX_RETRIES,
@@ -133,7 +138,9 @@ import {
   buildLiveKitSignalProxyUrl,
   isLikelyLiveKitSignalError,
   isLiveKitSignalProxyUrl,
+  resolveInitialLiveKitSignalRoute,
 } from './videoCall/signalProxy';
+import { connectWithSignalWatchdog } from './videoCall/signalWatchdog';
 import {
   isClientDisconnectError,
   isIgnorablePublishError,
@@ -6936,6 +6943,23 @@ export class VideoCallSession extends SimpleEventEmitter {
   }
 
   /**
+   * Бросаем неудавшуюся попытку connect. Наши обработчики снимаем ДО disconnect: события
+   * регистрируются при создании комнаты, и её Disconnected иначе запустил бы media-recovery
+   * живого звонка. SDK, зависший на signaling, может не отпустить и disconnect — ждём его
+   * не дольше FAILED_ROOM_DISCONNECT_WAIT_MS.
+   */
+  private async abortFailedConnectRoom(room: Room): Promise<void> {
+    try {
+      room.removeAllListeners();
+    } catch {}
+    if (room.state === 'disconnected') return;
+    await Promise.race([
+      room.disconnect().catch(() => {}),
+      new Promise<void>((resolve) => setTimeout(resolve, FAILED_ROOM_DISCONNECT_WAIT_MS)),
+    ]);
+  }
+
+  /**
    * VPN / жёсткий NAT: PeerConnection не поднялся по прямому пути — одна попытка через
    * TURN relay (как в RandomChat). Старую комнату гасим, иначе SFU будет держать призрака.
    */
@@ -6955,11 +6979,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     });
     enableForcedRelayFallback('video_call_pc_connection');
     void sendClientMetrics(API_BASE, { relayFallback: true }).catch(() => {});
-    try {
-      if (room.state !== 'disconnected') {
-        await room.disconnect();
-      }
-    } catch {}
+    await this.abortFailedConnectRoom(room);
     if (this.room === room) {
       this.room = null;
       this.currentRoomName = null;
@@ -6974,6 +6994,8 @@ export class VideoCallSession extends SimpleEventEmitter {
       {
         forceRelayOnly: true,
         signalProxyTried: options?.signalProxyTried,
+        directSignalUrl: options?.directSignalUrl,
+        directSignalTried: options?.directSignalTried,
         reason: 'pc_connect_relay_retry',
       },
       true,
@@ -6986,6 +7008,7 @@ export class VideoCallSession extends SimpleEventEmitter {
    */
   private async retryConnectWithSignalProxy(
     room: Room,
+    directUrl: string,
     token: string,
     connectRequestId: number,
     targetRoomName: string | undefined,
@@ -7003,11 +7026,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       connectReason: options?.reason || null,
       error: errorMessage,
     });
-    try {
-      if (room.state !== 'disconnected') {
-        await room.disconnect();
-      }
-    } catch {}
+    await this.abortFailedConnectRoom(room);
     if (this.room === room) {
       this.room = null;
       this.currentRoomName = null;
@@ -7022,7 +7041,47 @@ export class VideoCallSession extends SimpleEventEmitter {
       {
         forceRelayOnly: options?.forceRelayOnly,
         signalProxyTried: true,
+        directSignalUrl: options?.directSignalUrl || directUrl,
+        directSignalTried: options?.directSignalTried,
         reason: 'signal_proxy_retry',
+      },
+      true,
+    );
+  }
+
+  /** API-proxy не ответил — один обратный retry на исходный домен LiveKit. */
+  private async retryConnectWithDirectSignal(
+    room: Room,
+    token: string,
+    connectRequestId: number,
+    targetRoomName: string | undefined,
+    options: LiveKitConnectOptions,
+    errorMessage: string,
+  ): Promise<boolean> {
+    const directUrl = String(options.directSignalUrl || '').trim();
+    if (!directUrl) throw new Error(`Direct LiveKit URL is unavailable after: ${errorMessage}`);
+
+    logger.warn('[VideoCallSession] API signaling proxy unavailable — retrying direct LiveKit', {
+      targetRoomName,
+      directHost: new URL(directUrl).hostname,
+      error: errorMessage,
+    });
+    await this.abortFailedConnectRoom(room);
+    if (this.room === room) {
+      this.room = null;
+      this.currentRoomName = null;
+    }
+    return this.executeConnectToLiveKit(
+      directUrl,
+      token,
+      connectRequestId,
+      targetRoomName,
+      {
+        forceRelayOnly: options.forceRelayOnly,
+        signalProxyTried: true,
+        directSignalUrl: directUrl,
+        directSignalTried: true,
+        reason: 'direct_signal_retry',
       },
       true,
     );
@@ -7124,12 +7183,29 @@ export class VideoCallSession extends SimpleEventEmitter {
       const isSignalError = isLikelyLiveKitSignalError(errorMessage);
       if (
         isSignalError &&
+        isLiveKitSignalProxyUrl(url, API_BASE) &&
+        !!options?.directSignalUrl &&
+        !options.directSignalTried &&
+        this.connectRequestId === connectRequestId
+      ) {
+        return this.retryConnectWithDirectSignal(
+          room,
+          token,
+          connectRequestId,
+          targetRoomName,
+          options,
+          errorMessage,
+        );
+      }
+      if (
+        isSignalError &&
         !options?.signalProxyTried &&
         !isLiveKitSignalProxyUrl(url, API_BASE) &&
         this.connectRequestId === connectRequestId
       ) {
         return this.retryConnectWithSignalProxy(
           room,
+          url,
           token,
           connectRequestId,
           targetRoomName,
@@ -7165,6 +7241,7 @@ export class VideoCallSession extends SimpleEventEmitter {
           isInvalidApiKey,
           forceRelayOnly: !!options?.forceRelayOnly,
           signalProxyTried: !!options?.signalProxyTried,
+          directSignalTried: !!options?.directSignalTried,
           stack: e?.stack,
         });
       }
@@ -7552,6 +7629,18 @@ export class VideoCallSession extends SimpleEventEmitter {
       logger.info('[VideoCallSession] ⏭️ Skipping connectToLiveKit: call already ended');
       return false;
     }
+    const initialRoute = resolveInitialLiveKitSignalRoute(
+      url,
+      API_BASE,
+      LIVEKIT_PREFER_SIGNAL_PROXY && !LIVEKIT_TEST_BLOCK_DIRECT_SIGNAL && !options?.reason,
+    );
+    const connectUrl = initialRoute.url;
+    const connectOptions: LiveKitConnectOptions = {
+      ...options,
+      signalProxyTried: options?.signalProxyTried ?? initialRoute.signalProxyTried,
+      directSignalUrl: options?.directSignalUrl ?? initialRoute.directSignalUrl,
+      ...(connectUrl !== url && !options?.reason ? { reason: 'signal_proxy_primary' } : {}),
+    };
     const coalesceKey = (targetRoomName || '').trim();
     if (coalesceKey) {
       const inflight = this.liveKitConnectByRoom.get(coalesceKey);
@@ -7568,7 +7657,7 @@ export class VideoCallSession extends SimpleEventEmitter {
         rejectGate = rej;
       });
       this.liveKitConnectByRoom.set(coalesceKey, gate);
-      void this.executeConnectToLiveKit(url, token, connectRequestId, targetRoomName, options)
+      void this.executeConnectToLiveKit(connectUrl, token, connectRequestId, targetRoomName, connectOptions)
         .then(
           (v) => resolveGate(v),
           (e) => rejectGate(e)
@@ -7580,7 +7669,7 @@ export class VideoCallSession extends SimpleEventEmitter {
         });
       return gate;
     }
-    return this.executeConnectToLiveKit(url, token, connectRequestId, targetRoomName, options);
+    return this.executeConnectToLiveKit(connectUrl, token, connectRequestId, targetRoomName, connectOptions);
   }
 
   private async executeConnectToLiveKit(
@@ -7765,13 +7854,45 @@ export class VideoCallSession extends SimpleEventEmitter {
       forceRelayOnly: !!options?.forceRelayOnly,
       targetRoomName,
     });
+    // Dev-имитация VPN: глушим только прямой адрес, proxy-ретрай идёт на настоящий сервер.
+    const blackholeDirect =
+      LIVEKIT_TEST_BLOCK_DIRECT_SIGNAL && !isLiveKitSignalProxyUrl(url, API_BASE);
+    if (blackholeDirect) {
+      logger.warn('[VideoCallSession] DEV: direct LiveKit signaling blackholed to test proxy fallback', {
+        url,
+        blackhole: LIVEKIT_TEST_BLACKHOLE_URL,
+        websocketTimeoutMs: LIVEKIT_WEBSOCKET_TIMEOUT_MS,
+      });
+    }
+    const connectUrl = blackholeDirect ? LIVEKIT_TEST_BLACKHOLE_URL : url;
     const maxAttempts = 3;
     let attempt = 0;
     let lastError: unknown = null;
     while (attempt < maxAttempts) {
       attempt += 1;
       try {
-        await room.connect(url, token, connectOptions);
+        await connectWithSignalWatchdog({
+          connect: () => room.connect(connectUrl, token, connectOptions),
+          onSignalConnected: (listener) => {
+            room.once(RoomEvent.SignalConnected, listener);
+            return () => {
+              room.off(RoomEvent.SignalConnected, listener);
+            };
+          },
+          deadlineMs: LIVEKIT_WEBSOCKET_TIMEOUT_MS,
+          onTimeout: () => {
+            logger.warn('[VideoCallSession] LiveKit signaling watchdog fired — SDK connect never settled', {
+              urlHost: url ? new URL(url).hostname : 'unknown',
+              attempt,
+              roomState: room.state,
+              deadlineMs: LIVEKIT_WEBSOCKET_TIMEOUT_MS,
+              targetRoomName,
+              connectReason: options?.reason || null,
+            });
+            // Зависший SDK-шный connect иначе мог бы подключиться позже — призрак в SFU.
+            void this.abortFailedConnectRoom(room);
+          },
+        });
         if (attempt > 1) {
           logger.info('[VideoCallSession] LiveKit connect recovered after DNS retry', {
             url,
@@ -8128,7 +8249,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       .on(RoomEvent.TrackMuted, (pub, participant) => this.onRemoteTrackMuted(pub, participant))
       .on(RoomEvent.TrackUnmuted, (pub, participant) => this.onRemoteTrackUnmuted(pub, participant))
       .on(RoomEvent.ParticipantDisconnected, (participant) => this.onRemoteParticipantDisconnected(room, participant))
-      .once(RoomEvent.Disconnected, () => this.onRoomDisconnected());
+      .once(RoomEvent.Disconnected, (reason) => this.onRoomDisconnected(reason));
   }
 
   /** Транзиентный реконнект SDK: стримы и UI НЕ трогаем — LiveKit восстановится сам. */
@@ -8548,10 +8669,13 @@ export class VideoCallSession extends SimpleEventEmitter {
   }
 
   /** Комната закрылась. Намеренный teardown пропускаем, неожиданный — уводим в media-recovery. */
-  private onRoomDisconnected(): void {
+  private onRoomDisconnected(sdkReason?: DisconnectReason): void {
     // КРИТИЧНО: Если идет процесс disconnectRoom через промис, не сбрасываем флаги здесь -
     // это сделает промис в disconnectRoom
-    logger.debug('[VideoCallSession] Room disconnected event received', { 
+    // info, не debug: причина от SFU (DUPLICATE_IDENTITY, SERVER_SHUTDOWN, …) — единственный
+    // способ отличить свою брошенную попытку connect от реального обрыва.
+    logger.info('[VideoCallSession] Room disconnected event received', {
+      sdkReason: sdkReason === undefined ? null : DisconnectReason[sdkReason] ?? sdkReason,
       reason: this.disconnectReason,
       isDisconnecting: this.isDisconnecting,
       hasDisconnectPromise: !!this.disconnectPromise,

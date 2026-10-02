@@ -73,8 +73,35 @@ export const LIVEKIT_PEER_CONNECTION_TIMEOUT_MS = 30_000;
 /**
  * Отдельный таймаут signaling WebSocket. Заблокированный VPN домен не должен держать
  * экран принятого звонка 30 секунд: после этого окна пробуем proxy через API-домен.
+ *
+ * Срок держит наш watchdog (./signalWatchdog), а не SDK: livekit-client 2.16 на «чёрной
+ * дыре» снимает свой таймер, когда Android рвёт сокет (~10 с), и уходит в HTTP
+ * /rtc/validate без таймаута — connect висел больше минуты (тест 2026-10-01).
  */
 export const LIVEKIT_WEBSOCKET_TIMEOUT_MS = 8_000;
+
+/**
+ * Основной signaling через API-домен: он уже обязан быть доступен для call:accept,
+ * сообщений и TURN credentials, тогда как отдельный livekit-домен часть VPN глушит.
+ * Медиа через API не идёт — только короткие управляющие WebSocket-сообщения.
+ */
+export const LIVEKIT_PREFER_SIGNAL_PROXY = parsePublicFlag(
+  process.env.EXPO_PUBLIC_LIVEKIT_PREFER_SIGNAL_PROXY,
+  true,
+);
+
+/** Брошенная попытка connect: дольше не ждём room.disconnect(), SDK мог зависнуть. */
+export const FAILED_ROOM_DISCONNECT_WAIT_MS = 1_500;
+
+/**
+ * Только dev-сборка: имитация VPN, который молча глушит домен LiveKit. Прямой signaling
+ * уходит в TEST-NET-1 (никуда не маршрутизируется), и звонок обязан через
+ * LIVEKIT_WEBSOCKET_TIMEOUT_MS уйти в /livekit proxy. Включение:
+ * EXPO_PUBLIC_LIVEKIT_TEST_BLOCK_DIRECT=1 + перезапуск Metro.
+ */
+export const LIVEKIT_TEST_BLOCK_DIRECT_SIGNAL =
+  __DEV__ && parsePublicFlag(process.env.EXPO_PUBLIC_LIVEKIT_TEST_BLOCK_DIRECT, false);
+export const LIVEKIT_TEST_BLACKHOLE_URL = 'wss://192.0.2.1';
 
 /**
  * Передавать ли в room.connect() клиентский ICE/TURN-конфиг с /api/turn-credentials.

@@ -41,3 +41,33 @@ export function isLiveKitSignalProxyUrl(url: string, apiBase: string): boolean {
   if (!proxyUrl) return false;
   return String(url || '').replace(/\/+$/, '') === proxyUrl;
 }
+
+export type InitialLiveKitSignalRoute = {
+  url: string;
+  directSignalUrl?: string;
+  signalProxyTried: boolean;
+};
+
+/**
+ * API-proxy — основной путь для VPN-safe звонка. Прямой URL сохраняется как обратный
+ * fallback на случай локальной проблемы proxy, но не используется первым.
+ */
+export function resolveInitialLiveKitSignalRoute(
+  liveKitUrl: string,
+  apiBase: string,
+  preferProxy: boolean,
+): InitialLiveKitSignalRoute {
+  const directUrl = String(liveKitUrl || '').trim();
+  const proxyUrl = buildLiveKitSignalProxyUrl(apiBase);
+  if (!preferProxy || !proxyUrl || isLiveKitSignalProxyUrl(directUrl, apiBase)) {
+    return {
+      url: directUrl,
+      signalProxyTried: isLiveKitSignalProxyUrl(directUrl, apiBase),
+    };
+  }
+  return {
+    url: proxyUrl,
+    directSignalUrl: directUrl,
+    signalProxyTried: true,
+  };
+}
