@@ -3,7 +3,7 @@ import { applyRemoteFrameChange } from '../../utils/cosmetics';
 import { shared } from "./shared";
 import { socket } from "./socketCore";
 import { applyMissedFromReauth } from "./missedCalls";
-import { drainEditOutbox, drainMessageOutbox } from "./outbox";
+import { drainAllOutboxes } from "./outboxTriggers";
 import { refreshE2eState } from "./e2e";
 
 /** Дедуп повторных presence:update с одним и тем же status/roomId (useEffect в VideoCall/PiP и т.д.). Сброс при connect. */
@@ -80,7 +80,7 @@ function __dispatchPresenceUpdate(raw: unknown): void {
   if (Array.isArray(payload)) {
     ingestVisibleOnlinePresenceList(payload);
   }
-  for (const cb of shared.presenceUpdateSubscribers) {
+  for (const cb of [...shared.presenceUpdateSubscribers]) {
     try {
       cb(payload);
     } catch (e) {
@@ -180,9 +180,7 @@ socket.on("connect", () => {
   shared.lastSocketConnectAt = Date.now();
   void refreshE2eState()
     .catch(() => undefined)
-    .then(() => drainMessageOutbox())
-    .then(() => drainEditOutbox())
-    .catch(() => {});
+    .then(() => drainAllOutboxes());
 });
 
 /**
@@ -198,7 +196,7 @@ socket.on("cosmetics:frame", (data: { userId?: string; frameId?: string }) => {
 socket.on("presence:update", __dispatchPresenceUpdate);
 socket.on("presence_update", __dispatchPresenceUpdate);
 socket.on("presence:welcome", (data: WelcomePresencePayload) => {
-  for (const cb of shared.welcomePresenceSubscribers) {
+  for (const cb of [...shared.welcomePresenceSubscribers]) {
     try {
       cb(data);
     } catch (e) {

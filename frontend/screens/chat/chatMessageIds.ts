@@ -14,4 +14,22 @@ export function isOfflineQueuedOrOptimisticOutgoingId(messageId: string): boolea
   return /^\d{10,}-[a-z0-9]+$/i.test(id);
 }
 
+/**
+ * Строка ленты со старым локальным id outbox_* (прежняя версия переименовывала так сообщения
+ * из очереди). Только у неё id не совпадает с серверным, и «близнеца» приходится искать по тексту.
+ * Оптимистичный id (1734…-abc) и есть id в Mongo — по тексту его не сверяем: иначе второе «ок»
+ * без сети пропадало из ленты как «дубль» первого.
+ */
+export function isLegacyOutboxLocalId(messageId: string): boolean {
+  return String(messageId || '').trim().startsWith('outbox_');
+}
+
 export type ChatReadStatus = 'sending' | 'delivered' | 'read' | 'failed' | 'sent';
+
+/** Статус своего сообщения по ответу sendMessage: ещё в очереди — «часы», сервер принял — галочки. */
+export function outgoingStatusFromSendResult(
+  r: { queued?: boolean; delivered?: boolean } | null | undefined,
+): ChatReadStatus {
+  if (r?.queued) return 'sending';
+  return r?.delivered ? 'delivered' : 'sent';
+}

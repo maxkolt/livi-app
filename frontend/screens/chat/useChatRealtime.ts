@@ -16,6 +16,7 @@ import {
   onMessageEdited,
   onMessageUrisUpdated,
   onOutboxMessageDelivered,
+  onOutboxMessageFailed,
   globalMessageStorage,
 } from "../../sockets/socket";
 import { logger } from "../../utils/logger";
@@ -29,6 +30,8 @@ import { removeMessagesForDeletedIds } from "./chatMessageOps";
 import { onChatCallStatusMessage } from "../../utils/globalEvents";
 
 type ReadStatusMap = Record<string, "sending" | "delivered" | "read" | "failed" | "sent">;
+
+const STATUS_RANK: Record<string, number> = { failed: 0, sending: 1, sent: 2, delivered: 3, read: 4 };
 
 type Options = {
   peerId: string;
@@ -388,17 +391,35 @@ export function useChatRealtime({
           return true;
         });
       });
+      // Обычно server id = optimistic id: «часы»/«ошибку» под этим же id поднимаем до галочек,
+      // но не опускаем уже пришедшие «доставлено»/«прочитано».
       updateReadStatuses((prev) => {
         const next: any = { ...prev };
-        let st = next[serverMessageId] || 'sent';
-        for (const oid of olds) {
-          const v = next[oid];
-          if (v === 'delivered') st = 'delivered';
+        let best: string = ev.delivered ? 'delivered' : 'sent';
+        for (const id of [serverMessageId, ...olds]) {
+          const v = next[id];
+          if (v && v !== 'sending' && v !== 'failed' && STATUS_RANK[v] > STATUS_RANK[best]) best = v;
         }
         for (const oid of olds) delete next[oid];
-        if (!next[serverMessageId]) next[serverMessageId] = st;
+        next[serverMessageId] = best;
         return next;
       });
+      setUploadStatus((prev) => {
+        if (![serverMessageId, ...olds].some((id) => prev[id] === 'failed')) return prev;
+        const next = { ...prev };
+        for (const id of olds) delete next[id];
+        next[serverMessageId] = 'sent';
+        return next;
+      });
+    });
+
+    // Сервер окончательно отказал (не друзья, слишком длинный текст…) — «!» с кнопкой повтора.
+    const unsubscribeOutboxFailed = onOutboxMessageFailed((ev) => {
+      if (String(ev.to || '') !== peerId) return;
+      const uiId = String(ev.optimisticUiId || ev.outboxId || '').trim();
+      if (!uiId) return;
+      updateReadStatuses((prev) => ({ ...prev, [uiId]: 'failed' }));
+      setUploadStatus((prev) => ({ ...prev, [uiId]: 'failed' }));
     });
 
     const unsubscribeChatCallStatus = onChatCallStatusMessage(({ peerId: eventPeerId, message }) => {
@@ -443,6 +464,7 @@ export function useChatRealtime({
       unsubscribeMessageEdited();
       unsubscribeMessageUrisUpdated();
       unsubscribeOutboxDelivered();
+      unsubscribeOutboxFailed();
       unsubscribeDelivered();
       unsubscribeChatCallStatus();
     };

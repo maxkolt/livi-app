@@ -1037,6 +1037,61 @@ export async function applyMessageEdit(
   return { ok: true, participants, event };
 }
 
+export type MessageReaction = { emoji: string; userId: string };
+
+/**
+ * Поставить или снять свою реакцию. `on` задаёт итоговое состояние, поэтому повтор
+ * из офлайн-очереди клиента не снимает реакцию обратно. Без `on` — прежний toggle
+ * (клиенты, у которых ещё нет очереди реакций).
+ */
+export async function applyMessageReaction(
+  me: string,
+  payload: { messageId?: unknown; emoji?: unknown; with?: unknown; on?: unknown },
+): Promise<
+  | { ok: true; participants: string[]; event: { messageId: string; reactions: MessageReaction[] } }
+  | { ok: false; error: string }
+> {
+  const messageId = String(payload?.messageId || '').trim();
+  const emoji = String(payload?.emoji || '').trim();
+  const peerId = String(payload?.with || '').trim();
+  if (!messageId || !emoji || !isOid(peerId)) return { ok: false, error: 'bad_payload' };
+
+  const isFriend = await areFriendsCached(me, peerId);
+  if (!isFriend) return { ok: false, error: 'not_friends' };
+
+  const friendship = await getOrCreateFriendship(me, peerId);
+  if (!friendship) return { ok: false, error: 'friendship_not_found' };
+
+  const fid = (friendship as any)._id;
+  const filter = { friendshipId: fid, id: messageId };
+  const exists = await FriendshipMessageItem.findOne(filter).select('_id').lean();
+  if (!exists) return { ok: false, error: 'message_not_found' };
+
+  const myReaction = { emoji, userId: me };
+  if (payload?.on === true) {
+    await FriendshipMessageItem.updateOne(filter, { $addToSet: { reactions: myReaction } }).exec();
+  } else if (payload?.on === false) {
+    await FriendshipMessageItem.updateOne(filter, { $pull: { reactions: myReaction } }).exec();
+  } else {
+    const pullResult = await FriendshipMessageItem.updateOne(filter, { $pull: { reactions: myReaction } }).exec();
+    if (!((pullResult as any)?.modifiedCount || 0)) {
+      await FriendshipMessageItem.updateOne(filter, { $addToSet: { reactions: myReaction } }).exec();
+    }
+  }
+
+  const updated = await FriendshipMessageItem.findOne(filter, { reactions: 1 }).lean();
+  const reactions: MessageReaction[] = Array.isArray((updated as any)?.reactions)
+    ? (updated as any).reactions.map((r: any) => ({ emoji: String(r.emoji), userId: String(r.userId) }))
+    : [];
+
+  await FriendshipMessages.updateOne(
+    { _id: fid, 'lastMessage.id': messageId },
+    { $set: { 'lastMessage.reactions': reactions } }
+  ).exec();
+
+  return { ok: true, participants: [me, peerId], event: { messageId, reactions } };
+}
+
 export default function registerMessageSockets(io: Server) {
   io.on('connection', (sock) => {
     registerMessageHandlers(io, sock);
@@ -1449,61 +1504,20 @@ function registerMessageHandlers(io: Server, sock: Socket) {
     messageId: string;
     emoji: string;
     with: string; // peerId чата
+    on?: boolean; // итоговое состояние; без него — toggle (старые клиенты)
   }, ack?: Function) => {
     try {
       const me = meId();
-      const messageId = String(payload?.messageId || '').trim();
-      const emoji = String(payload?.emoji || '').trim();
-      const peerId = String(payload?.with || '').trim();
-
       if (!isOid(me)) return ack?.({ ok: false, error: 'unauthorized' });
-      if (!messageId || !emoji || !isOid(peerId)) return ack?.({ ok: false, error: 'bad_payload' });
 
-      const isFriend = await areFriendsCached(me, peerId);
-      if (!isFriend) return ack?.({ ok: false, error: 'not_friends' });
+      const result = await applyMessageReaction(me, payload || {});
+      if (!result.ok) return ack?.(result);
 
-      const friendship = await getOrCreateFriendship(me, peerId);
-      if (!friendship) return ack?.({ ok: false, error: 'friendship_not_found' });
-
-      const fid = (friendship as any)._id;
-      const itemDoc = await FriendshipMessageItem.findOne({
-        friendshipId: fid,
-        id: messageId,
-      }).select('_id').lean();
-      const msg = itemDoc;
-      if (!msg) return ack?.({ ok: false, error: 'message_not_found' });
-
-      const myReaction = { emoji, userId: me };
-      const pullResult = await FriendshipMessageItem.updateOne(
-        { friendshipId: fid, id: messageId },
-        { $pull: { reactions: myReaction } }
-      ).exec();
-
-      if (!((pullResult as any)?.modifiedCount || 0)) {
-        await FriendshipMessageItem.updateOne(
-          { friendshipId: fid, id: messageId },
-          { $addToSet: { reactions: myReaction } }
-        ).exec();
+      for (const uid of result.participants) {
+        io.to(`u:${String(uid)}`).emit('message:reaction', result.event);
       }
 
-      const updated = await FriendshipMessageItem.findOne(
-        { friendshipId: fid, id: messageId },
-        { reactions: 1 }
-      ).lean();
-      const newReactions = Array.isArray((updated as any)?.reactions)
-        ? (updated as any).reactions.map((r: any) => ({ emoji: String(r.emoji), userId: String(r.userId) }))
-        : [];
-
-      await FriendshipMessages.updateOne(
-        { _id: fid, 'lastMessage.id': messageId },
-        { $set: { 'lastMessage.reactions': newReactions } }
-      ).exec();
-
-      const payloadOut = { messageId, reactions: newReactions };
-      io.to(`u:${String(me)}`).emit('message:reaction', payloadOut);
-      io.to(`u:${String(peerId)}`).emit('message:reaction', payloadOut);
-
-      return ack?.({ ok: true, reactions: newReactions });
+      return ack?.({ ok: true, reactions: result.event.reactions });
     } catch (e: any) {
       console.error('[message:react] error:', e?.message || e);
       return ack?.({ ok: false, error: 'server_error' });

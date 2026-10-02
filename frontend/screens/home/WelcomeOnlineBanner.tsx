@@ -8,7 +8,6 @@ import {
   WELCOME_GLASS_SURFACE,
   WELCOME_HEADER_TITLE,
   WELCOME_MUTED_TEXT,
-  WELCOME_SEARCH_CTA_BORDER,
 } from './constants';
 import { formatWelcomeUsersOnlineLine } from './utils/welcomeOnlineLabel';
 
@@ -55,7 +54,7 @@ function WelcomeOnlineBannerInner({
   const countLine = formatWelcomeUsersOnlineLine(onlineCount, lang);
   const stackSize = dense ? STACK_SIZE_DENSE : STACK_SIZE;
   const stackOverlap = dense ? STACK_OVERLAP_DENSE : STACK_OVERLAP;
-  const stackItemStyle = { borderRadius: stackSize / 2, borderWidth: 1 };
+  const stackItemStyle = { borderRadius: stackSize / 2 };
   const stackAvatarStyle = { width: stackSize, height: stackSize, borderRadius: stackSize / 2 };
 
   const stackPeers = useMemo(() => {
@@ -123,6 +122,8 @@ function WelcomeOnlineBannerInner({
                   avatarVer={hasAvatar ? peer.avatarVer || 0 : 0}
                   uri={hasAvatar ? uri : undefined}
                   size={stackSize}
+                  // В стеке онлайна — просто кружки: купленные рамки профиля здесь не рисуем.
+                  frameId={null}
                   fallbackText="—"
                   containerStyle={[styles.stackAvatar, stackAvatarStyle]}
                   fallbackTextStyle={styles.stackFallback}
@@ -221,7 +222,6 @@ const styles = StyleSheet.create({
     flexShrink: 0,
   },
   stackItem: {
-    borderColor: WELCOME_SEARCH_CTA_BORDER,
     overflow: 'visible',
   },
   stackAvatar: {

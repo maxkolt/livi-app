@@ -4,6 +4,8 @@ export type MessageOutboxItem = {
   /** Совпадает с id сообщения в UI до замены на outbox_/msg_* (чтобы удалить из очереди при отмене до ack). */
   optimisticUiId?: string;
   createdAt: number;
+  /** Сколько раз сервер отказал временной ошибкой — после лимита сообщение «не отправлено». */
+  attempts?: number;
   payload: {
     to: string;
     text?: string;
@@ -36,4 +38,14 @@ export type OutboxMessageDeliveredPayload = {
   outboxId: string;
   optimisticUiId?: string;
   serverMessageId: string;
+  /** Получатель был онлайн — сразу две галочки. */
+  delivered?: boolean;
+};
+
+/** Сервер окончательно отказал (не друзья, слишком длинный текст…) — повтор не поможет. */
+export type OutboxMessageFailedPayload = {
+  to: string;
+  outboxId: string;
+  optimisticUiId?: string;
+  error: string;
 };

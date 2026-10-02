@@ -7,17 +7,27 @@ import "./modules/calls";
 
 export { API_BASE, CALL_SIGNALING_CONNECT_MS, SOCKET_CONNECT_WAIT_MS } from "./modules/constants";
 export type { SocketReauthResponse } from "./modules/types";
-export type { OutboxMessageDeliveredPayload } from "./modules/outboxTypes";
+export type { OutboxMessageDeliveredPayload, OutboxMessageFailedPayload } from "./modules/outboxTypes";
 export type { FriendListItem } from "./modules/friends";
-export type { DeleteMessagesBatchResult } from "./modules/messages";
+export type { DeleteMessagesBatchResult, SendMessageResult } from "./modules/messages";
 export type { DirectCallMedia } from "./modules/calls";
 
 export {
   clearCancelledOutboxFingerprints,
+  isMessagePendingInOutbox,
   onOutboxMessageDelivered,
+  onOutboxMessageFailed,
+  onOutboxPendingChange,
   removeQueuedEditsMatching,
   removeQueuedMessagesMatching,
 } from "./modules/outbox";
+
+export {
+  hasPendingReactions,
+  onReactionOutboxChange,
+  withPendingReactions,
+} from "./modules/reactionOutbox";
+export type { MessageReaction } from "./modules/reactionOutbox";
 
 export { recordAppliedFromPending, wasAppliedFromReauth } from "./modules/missedCalls";
 

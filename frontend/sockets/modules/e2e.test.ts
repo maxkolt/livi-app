@@ -119,12 +119,14 @@ import {
   enableE2eAgain,
   getE2eStatus,
   hasLocalE2eKey,
+  markE2eChatNoticeSeen,
   onPeerKeyChanged,
   refreshE2eState,
   resetE2e,
   restoreE2e,
   toWireEditPayload,
   toWireMessagePayload,
+  wasE2eChatNoticeSeen,
 } from './e2e';
 
 jest.setTimeout(60_000);
@@ -419,5 +421,24 @@ describe('turning encryption off and on again', () => {
     expect(await enableE2eAgain()).toEqual({ ok: true });
     expect(getE2eStatus()).toBe('ready');
     expect(server.keys.get(ALICE)).toBe(before);
+  });
+});
+
+describe('"chat is protected" notice in an empty chat', () => {
+  it('is shown once per contact and per account', async () => {
+    as(ALICE);
+    expect(await wasE2eChatNoticeSeen(BOB)).toBe(false);
+    await markE2eChatNoticeSeen(BOB);
+    expect(await wasE2eChatNoticeSeen(BOB)).toBe(true);
+    // Другой собеседник — своё первое знакомство с чатом.
+    expect(await wasE2eChatNoticeSeen('cccccccccccccccccccccccc')).toBe(false);
+    // Другой аккаунт на том же телефоне видит его заново.
+    as(BOB);
+    expect(await wasE2eChatNoticeSeen(BOB)).toBe(false);
+  });
+
+  it('is not shown before the account is known', async () => {
+    as('');
+    expect(await wasE2eChatNoticeSeen(BOB)).toBe(true);
   });
 });

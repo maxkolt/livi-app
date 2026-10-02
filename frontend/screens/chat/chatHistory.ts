@@ -1,6 +1,7 @@
 /** Pure history / quiet-sync helpers for chat message lists. */
 
 import {
+  isLegacyOutboxLocalId,
   isOfflineQueuedOrOptimisticOutgoingId,
   type ChatReadStatus,
 } from "./chatMessageIds";
@@ -93,7 +94,7 @@ function dropOptimisticDupesAgainstServer(
   const dropLocalIds = new Set<string>();
   for (const loc of localKeep) {
     const lid = String(loc?.id || "");
-    if (!isOfflineQueuedOrOptimisticOutgoingId(lid)) continue;
+    if (!isLegacyOutboxLocalId(lid)) continue;
     for (const sv of serverMine) {
       if (approxSameOutgoingTextMessage(loc, sv)) {
         dropLocalIds.add(lid);

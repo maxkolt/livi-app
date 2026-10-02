@@ -279,6 +279,22 @@ export function clearEndingCallInProgress(): void {
 }
 
 /**
+ * Пользователь принял НОВЫЙ звонок — снять guard'ы teardown предыдущего.
+ *
+ * __callEndedFromPiPNoOpenRef держится 6 с после конца звонка в system PiP. Перезвон в это
+ * окно получал «call:accepted ignored during teardown»: callee висел на экране звонка и так
+ * и не входил в LiveKit (тест 2026-10-01, ответ через 5.0 и 5.5 с). Исходящий набор
+ * (HomeScreen) этот guard уже снимал, входящий — нет.
+ */
+export function clearPreviousCallTeardownGuards(): void {
+  clearEndingCallInProgress();
+  try {
+    const g = global as any;
+    if (g.__callEndedFromPiPNoOpenRef) g.__callEndedFromPiPNoOpenRef.current = false;
+  } catch {}
+}
+
+/**
  * Не вызывать InCallManager.stop / сброс маршрута при unmount дубликата VideoCall
  * или во время отложенного teardown (иначе мерцание earpiece/speaker между звонками).
  */

@@ -141,6 +141,7 @@ import { installExternalHoldSocketRelay } from './utils/externalCallHoldSocketRe
 import {
   isOngoingCallSession,
   clearEndingCallInProgress,
+  clearPreviousCallTeardownGuards,
   shouldKeepInCallAudioOnAppBackground,
   markActiveCallAudioRouteCallId,
   armDirectAudioEarpieceStabilizeWindow,
@@ -1247,7 +1248,7 @@ function AppContent() {
         });
         markCallPerf('callee_answer_start', { from, appState: AppState.currentState });
       } catch {}
-      clearEndingCallInProgress();
+      clearPreviousCallTeardownGuards();
       const partnerNick = String(fromNick || '').trim();
       const gAns = global as any;
       gAns.__incomingAnswerPeerUserIdRef = gAns.__incomingAnswerPeerUserIdRef || { current: null as string | null };
@@ -1284,6 +1285,9 @@ function AppContent() {
         clearStaleInAppPiPRestoreForIncomingAnswer(10_000);
       } catch {}
       beginEarlyIncomingCallAccept(cid);
+      // Ответили, пока печатали в чате: инпут под VideoCall остаётся в фокусе, и IME
+      // всплывает поверх экрана звонка, как только Main вернётся на передний план.
+      Keyboard.dismiss();
       // Переспрос микрофона/камеры по факту ответа, если на старте отказали. Без await:
       // ранний accept — горячий путь, задерживать его нельзя.
       void ensureCallMediaPermissions({ video: answerMediaHint !== 'audio' });

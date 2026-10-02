@@ -198,6 +198,11 @@ import {
   getMyUserId,
   sendMessage as sendSocketMessage,
   sendMessageReaction,
+  isMessagePendingInOutbox,
+  onOutboxPendingChange,
+  onReactionOutboxChange,
+  hasPendingReactions,
+  withPendingReactions,
   markMessagesAsRead,
   onUserPresence,
   hasVisibleOnlinePresenceSnapshot,
@@ -922,14 +927,17 @@ export default function ChatScreen({ route, navigation }: Props) {
     setShowAttachSheet,
   } = useChatMediaViewers();
 
-  // Обертка для setReadStatuses с автосохранением
-  const updateReadStatuses = (updater: (prev: Record<string, 'sending' | 'delivered' | 'read' | 'failed' | 'sent'>) => Record<string, 'sending' | 'delivered' | 'read' | 'failed' | 'sent'>) => {
+  // Обертка для setReadStatuses с автосохранением. Стабильная: она в deps подписок useChatRealtime,
+  // и новая функция на каждый рендер переподписывала их — а событие очереди, пришедшее во время
+  // синхронного рендера, тогда крутилось по новым подписчикам бесконечно (JS 100%, чат замирал).
+  // saveStatuses берёт id из ref, поэтому версия первого рендера актуальна.
+  const updateReadStatuses = React.useCallback((updater: (prev: Record<string, 'sending' | 'delivered' | 'read' | 'failed' | 'sent'>) => Record<string, 'sending' | 'delivered' | 'read' | 'failed' | 'sent'>) => {
     setReadStatuses(prev => {
       const updated = updater(prev);
       saveStatuses(updated); // Автоматически сохраняем
       return updated;
     });
-  };
+  }, []);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const currentUserIdForPersistRef = useRef<string | null>(null);
   currentUserIdForPersistRef.current = currentUserId;
@@ -982,8 +990,8 @@ export default function ChatScreen({ route, navigation }: Props) {
   const iosChatListDataRef = useRef<ChatListRow[]>([]);
   const androidChatListDataRef = useRef<ChatListRow[]>([]);
 
-  // Функция автоскролла к последнему сообщению
-  const scrollToBottom = () => {
+  // Функция автоскролла к последнему сообщению (стабильная — в deps подписок useChatRealtime)
+  const scrollToBottom = React.useCallback(() => {
     try {
       if (flatListRef.current) {
         if (Platform.OS === 'android') {
@@ -1008,7 +1016,7 @@ export default function ChatScreen({ route, navigation }: Props) {
         console.warn('Fallback scroll also failed:', e);
       }
     }
-  };
+  }, []);
 
   // Коалесируем многократные вызовы скролла, чтобы избежать дёрганий
   const scrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1519,6 +1527,17 @@ export default function ChatScreen({ route, navigation }: Props) {
   // Слушатели сообщений через сокеты
 
   const messagesRef = useRef<any[]>([]);
+  // Очереди отправки (сообщения, реакции) живут вне React — версия перерисовывает ленту.
+  const [outboxVersion, setOutboxVersion] = useState(0);
+  useEffect(() => {
+    const bump = () => setOutboxVersion((v) => v + 1);
+    const offPending = onOutboxPendingChange(bump);
+    const offReactions = onReactionOutboxChange(bump);
+    return () => {
+      offPending();
+      offReactions();
+    };
+  }, []);
 
   const headerH = 56;
   const headerTopPadding = 14;
@@ -1666,7 +1685,7 @@ export default function ChatScreen({ route, navigation }: Props) {
   const formatDuration = formatVoiceDuration;
   const formatDurationDot = formatVoiceDurationDot;
 
-  useChatHistorySync({
+  const { serverHistoryEmpty } = useChatHistorySync({
     peerId,
     currentUserId,
     setCurrentUserId,
@@ -2073,6 +2092,10 @@ export default function ChatScreen({ route, navigation }: Props) {
       if (g.__videoCallActiveRef?.current === true) return;
     } catch {}
     lastChatCallTapAtRef.current = now;
+    // Экран звонка — отдельная Activity: без blur инпута IME висит поверх «Звонок..»
+    // и снова всплывает, когда звонок закрывается и чат получает фокус.
+    Keyboard.dismiss();
+    setEmojiPanelOpen(false);
     markChatCallBubbleEligible(id, 'caller');
     emitRequestDirectCall({
       peerId: id,
@@ -2219,18 +2242,21 @@ export default function ChatScreen({ route, navigation }: Props) {
     animateMessagePress(item.id);
   }, [animateMessagePress, currentUserId]);
 
-  /** Нажатие на реакцию — снять свою реакцию (toggle), обновляется у обоих. */
-  const handleReactionPress = React.useCallback((messageId: string, emoji: string) => {
-    setMessages((prev) =>
-      prev.map((m) => {
-        if (String(m?.id) !== messageId) return m;
-        const reactions = Array.isArray(m.reactions) ? m.reactions : [];
-        const next = reactions.filter((r: any) => !(r.emoji === emoji && r.userId === currentUserId));
-        return { ...m, reactions: next };
-      })
-    );
-    sendMessageReaction(messageId, emoji, peerId).catch(() => {});
+  /**
+   * Своя реакция — переключатель: стоит (в т.ч. ещё не отправленная) — снять, нет — поставить.
+   * В ленте видна сразу (очередь реакций), на сервер уходит, когда есть сеть.
+   */
+  const toggleMyReaction = React.useCallback((messageId: string, emoji: string) => {
+    const mid = String(messageId || '');
+    if (!mid || !emoji || !currentUserId) return;
+    const msg = messagesRef.current.find((m) => String(m?.id) === mid);
+    const current = withPendingReactions(msg?.reactions, mid, currentUserId);
+    const hasMine = current.some((r) => r.emoji === emoji && String(r.userId) === String(currentUserId));
+    sendMessageReaction(mid, emoji, peerId, !hasMine);
   }, [currentUserId, peerId]);
+
+  /** Нажатие на реакцию под сообщением — поставить/снять свою, обновляется у обоих. */
+  const handleReactionPress = toggleMyReaction;
 
   const {
     sendMessage,
@@ -2366,15 +2392,31 @@ export default function ChatScreen({ route, navigation }: Props) {
 
   // КРИТИЧНО: на каждый ввод нельзя пересоздавать массив data для FlatList,
   // иначе он будет перерисовывать (а иногда и переразмещать) все элементы -> мерцание изображений.
+  // Свои реакции, которые ещё в очереди (нет сети), — поверх серверных: видны сразу и не
+  // пропадают, когда с сервера приходит история или чужая реакция. Тот же объект, если нечего менять.
+  const messagesForList = React.useMemo(() => {
+    if (!currentUserId) return messages;
+    let changed = false;
+    const out = messages.map((m) => {
+      const mid = String(m?.id || '');
+      if (!hasPendingReactions(mid)) return m;
+      const reactions = withPendingReactions(m.reactions, mid, currentUserId);
+      if (reactions === m.reactions) return m;
+      changed = true;
+      return { ...m, reactions };
+    });
+    return changed ? out : messages;
+  }, [messages, outboxVersion, currentUserId]);
+
   const iosChatListData = React.useMemo(
-    () => (!chatFeedReady || isEmpty ? [] : buildChatListRows(messages)),
-    [chatFeedReady, isEmpty, messages],
+    () => (!chatFeedReady || isEmpty ? [] : buildChatListRows(messagesForList)),
+    [chatFeedReady, isEmpty, messagesForList],
   );
 
   const androidChatListData = React.useMemo(() => {
     if (!chatFeedReady || isEmpty) return [];
-    return [...buildChatListRows(messages)].reverse();
-  }, [chatFeedReady, isEmpty, messages]);
+    return [...buildChatListRows(messagesForList)].reverse();
+  }, [chatFeedReady, isEmpty, messagesForList]);
 
   iosChatListDataRef.current = iosChatListData;
   androidChatListDataRef.current = androidChatListData;
@@ -2496,7 +2538,13 @@ export default function ChatScreen({ route, navigation }: Props) {
         <ChatMessageItem
           item={msg}
           currentUserId={currentUserId}
-          readStatus={isOwnMessage ? readStatuses[msg.id] : undefined}
+          readStatus={
+            isOwnMessage
+              ? isMessagePendingInOutbox(String(msg.id))
+                ? 'sending'
+                : readStatuses[msg.id]
+              : undefined
+          }
           uploadStatus={isOwnMessage ? uploadStatus[msg.id] : undefined}
           onPressImage={openMediaViewer}
           onPressAudio={togglePlayAudioMessage}
@@ -2550,6 +2598,7 @@ export default function ChatScreen({ route, navigation }: Props) {
     [
       currentUserId,
       readStatuses,
+      outboxVersion,
       uploadStatus,
       openMediaViewer,
       togglePlayAudioMessage,
@@ -2777,6 +2826,8 @@ export default function ChatScreen({ route, navigation }: Props) {
               <E2eChatBanner
                 lang={lang}
                 peerId={peerId}
+                encrypted={chatEncrypted}
+                emptyChat={serverHistoryEmpty && showEmpty}
                 requestedMode={e2eRequestedMode}
                 onRequestedModeHandled={clearE2eRequest}
               />
@@ -3196,6 +3247,8 @@ export default function ChatScreen({ route, navigation }: Props) {
               <E2eChatBanner
                 lang={lang}
                 peerId={peerId}
+                encrypted={chatEncrypted}
+                emptyChat={serverHistoryEmpty && showEmpty}
                 requestedMode={e2eRequestedMode}
                 onRequestedModeHandled={clearE2eRequest}
               />
@@ -3656,7 +3709,7 @@ export default function ChatScreen({ route, navigation }: Props) {
             setReactionBarAnchor(null);
           }}
           onPickEmoji={(emoji) => {
-            sendMessageReaction(reactionBarForMessageId, emoji, peerId).catch(() => {});
+            toggleMyReaction(reactionBarForMessageId, emoji);
             setReactionBarForMessageId(null);
             setReactionBarAnchor(null);
           }}
@@ -3719,7 +3772,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 const emojiPress = (emoji: string) => {
                   hideMessageActions();
                   const msgId = selectedMessage?.id != null ? String(selectedMessage.id) : null;
-                  if (msgId) sendMessageReaction(msgId, emoji, peerId).catch(() => {});
+                  if (msgId) toggleMyReaction(msgId, emoji);
                 };
                 return (
                 <View

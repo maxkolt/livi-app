@@ -20,11 +20,13 @@ import {
   enableE2eAgain,
   getE2eStatus,
   getPeerPublicKey,
+  markE2eChatNoticeSeen,
   onPeerE2eUpdated,
   onE2eStatus,
   onPeerKeyChanged,
   resetE2e,
   restoreE2e,
+  wasE2eChatNoticeSeen,
   type E2eStatus,
 } from '../../sockets/modules/e2e';
 import { isAcceptableBackupPassword } from '../../sockets/modules/e2eCrypto';
@@ -104,22 +106,30 @@ export function useE2eStatus(): E2eStatus {
 /**
  * Над полем ввода чата. Шифрование включается само, предлагать его не нужно. Остаются:
  * требование восстановить ключ, включённый по паролю (прежняя схема), — пока он не
- * восстановлен, отправка заблокирована; и уведомление о смене ключа собеседника.
+ * восстановлен, отправка заблокирована; уведомление о смене ключа собеседника; и один раз
+ * на собеседника — что пустой чат защищён и где это отключить.
  */
 export function E2eChatBanner({
   lang,
   peerId,
+  encrypted = false,
+  emptyChat = false,
   requestedMode,
   onRequestedModeHandled,
 }: {
   lang: Lang;
   peerId: string;
+  /** Переписка с собеседником шифруется (ключи есть у обоих). */
+  encrypted?: boolean;
+  /** Сервер подтвердил, что сообщений ещё не было. */
+  emptyChat?: boolean;
   /** Открыть окно из меню чата. */
   requestedMode?: E2eModalMode | null;
   onRequestedModeHandled?: () => void;
 }) {
   const status = useE2eStatus();
   const [peerKeyChanged, setPeerKeyChanged] = useState(false);
+  const [showChatNotice, setShowChatNotice] = useState(false);
   const [mode, setMode] = useState<Mode | null>(null);
 
   useEffect(() => {
@@ -127,6 +137,21 @@ export function E2eChatBanner({
     setMode(requestedMode);
     onRequestedModeHandled?.();
   }, [requestedMode, onRequestedModeHandled]);
+
+  // Первый вход в пустой зашифрованный чат с этим собеседником: показываем и запоминаем.
+  // Висит до крестика или выхода из чата, даже если переписка уже началась.
+  useEffect(() => {
+    if (!encrypted || !emptyChat) return;
+    let cancelled = false;
+    void wasE2eChatNoticeSeen(peerId).then((seen) => {
+      if (cancelled || seen) return;
+      setShowChatNotice(true);
+      void markE2eChatNoticeSeen(peerId);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [encrypted, emptyChat, peerId]);
 
   useEffect(
     () =>
@@ -148,6 +173,15 @@ export function E2eChatBanner({
       <View style={styles.banner}>
         <Text style={[styles.bannerText, { flex: 1 }]}>{t('e2ePeerKeyChanged', lang)}</Text>
         <TouchableOpacity onPress={() => setPeerKeyChanged(false)} hitSlop={10}>
+          <Text style={styles.close}>×</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  } else if (showChatNotice && encrypted) {
+    banner = (
+      <View style={styles.banner}>
+        <Text style={[styles.bannerText, { flex: 1 }]}>{t('e2eChatNotice', lang)}</Text>
+        <TouchableOpacity onPress={() => setShowChatNotice(false)} hitSlop={10} accessibilityLabel={t('e2eLater', lang)}>
           <Text style={styles.close}>×</Text>
         </TouchableOpacity>
       </View>

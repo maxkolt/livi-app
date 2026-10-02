@@ -5,6 +5,7 @@ import { Platform, Share } from "react-native";
 import { sendMessage as sendSocketMessage } from "../../sockets/socket";
 import { t, type Lang } from "../../utils/i18n";
 import type { NoticeKind } from "./useChatDialogs";
+import { outgoingStatusFromSendResult } from "./chatMessageIds";
 import {
   buildOptimisticForwardRow,
   buildSystemShareContent,
@@ -98,7 +99,7 @@ export function useChatForwardSend({
         });
         updateReadStatuses((prev) => ({
           ...prev,
-          [mid]: (r as any)?.delivered ? 'delivered' : 'sent',
+          [mid]: outgoingStatusFromSendResult(r),
         }));
         if (Platform.OS === 'android') {
           requestAnimationFrame(() => {

@@ -9,9 +9,10 @@ import {
   mergePendingMessageOutboxEdit,
   drainEditOutbox,
   drainMessageOutbox,
-  readRateLimitRetryAfterSec,
-  scheduleMessageOutboxDrain,
+  markMessagePendingInOutbox,
+  waitForOutboxOutcome,
 } from "./outbox";
+import { onReactionsConfirmed, queueMessageReaction } from "./reactionOutbox";
 import { shared } from "./shared";
 import { socket } from "./socketCore";
 import {
@@ -20,7 +21,6 @@ import {
   invalidateKeysAfterMismatch,
   onE2eStatus,
   toWireEditPayload,
-  toWireMessagePayload,
 } from "./e2e";
 import { e2eUndecryptableText } from "./e2eText";
 
@@ -169,6 +169,23 @@ function trimMessageId(raw: unknown): string {
   return String(raw || "").trim();
 }
 
+/** Сколько sendMessage ждёт сервер, прежде чем вернуть «в очереди». Пузырь уже в чате с часами. */
+const SEND_RESULT_WAIT_MS = 12000;
+/** Сокета нет — HTTP либо ответит быстро, либо сети нет: долго не держим вызывающего. */
+const SEND_RESULT_WAIT_OFFLINE_MS = 1500;
+
+export type SendMessageResult = {
+  ok: boolean;
+  messageId?: string;
+  delivered?: boolean;
+  timestamp?: unknown;
+  /** Сервер ещё не ответил: сообщение в очереди и уйдёт само, статус придёт событием. */
+  queued?: boolean;
+  /** Пользователь удалил сообщение до отправки. */
+  localCancelled?: boolean;
+  error?: string;
+};
+
 export function sendMessage(payload: {
   to: string;
   text?: string;
@@ -184,11 +201,14 @@ export function sendMessage(payload: {
   stickerLabel?: string;
   replyTo?: { id: string; text?: string; from: string; isOwn?: boolean };
   clientUiMessageId?: string;
-}) {
+}): Promise<SendMessageResult> {
   // Ограничиваем типы сообщений для новой системы
   const messageType = payload.type === "video" || payload.type === "document" ? "text" : payload.type;
 
-  const optimisticUiId = String(payload.clientUiMessageId || "").trim() || undefined;
+  // id сообщения задаёт клиент: сервер дедупит по нему повторы из очереди, и он же — id в Mongo.
+  const clientId =
+    String(payload.clientUiMessageId || "").trim() ||
+    `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
   const albumUris =
     messageType === "image" && Array.isArray(payload.uris)
       ? payload.uris.map((u) => String(u || "").trim()).filter(Boolean).slice(0, 10)
@@ -210,120 +230,52 @@ export function sendMessage(payload: {
     stickerPackId: payload.stickerPackId,
     stickerEmoji: payload.stickerEmoji,
     stickerLabel: payload.stickerLabel,
+    clientMessageId: clientId,
+    clientId,
   };
   if (messageType === "image" && albumUris.length > 1) {
     socketPayload.uris = albumUris;
-  }
-  if (optimisticUiId) {
-    socketPayload.clientMessageId = optimisticUiId;
-    socketPayload.clientId = optimisticUiId;
   }
   if (payload.replyTo?.id) {
     socketPayload.replyTo = { id: payload.replyTo.id, text: payload.replyTo.text, from: payload.replyTo.from };
   }
 
-  const viaSocket = (wire: any) =>
-    emitAck<{ ok: boolean; messageId?: string; timestamp?: Date; delivered?: boolean; error?: string }>(
-      "message:send",
-      wire,
+  // Сначала очередь на диске, потом сеть: сообщение переживает обрыв, VPN и закрытие приложения.
+  // Отправляет только drain — по порядку; шифрует при каждой попытке (в очереди открытый payload).
+  const outboxId = `outbox_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+  // Синхронно, в одном кадре с оптимистичным пузырём: «часы» до записи на диск.
+  markMessagePendingInOutbox(clientId, true);
+  return (async (): Promise<SendMessageResult> => {
+    const wait = waitForOutboxOutcome(
+      outboxId,
+      socket.connected && !shared.reconnecting ? SEND_RESULT_WAIT_MS : SEND_RESULT_WAIT_OFFLINE_MS,
     );
-
-  // Тело HTTP совпадает с socket-payload (включая конверт шифрования).
-  const viaHttp = async (wire: any) => {
-    const installId = await getInstallId().catch(() => "");
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (installId) headers["x-install-id"] = String(installId);
-    if (shared.currentUserId) headers["x-user-id"] = String(shared.currentUserId);
-
-    const url = `${API_BASE}/api/messages/send`;
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 20000);
     try {
-      const res = await fetch(url, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(wire),
-        signal: controller.signal,
-      });
-      if (!res.ok) {
-        const txt = await res.text().catch(() => "");
-        return { ok: false, error: `http_${res.status}${txt ? `:${txt}` : ""}` };
-      }
-      return await res.json();
-    } finally {
-      clearTimeout(timeoutId);
-    }
-  };
-
-  return (async () => {
-    const outboxId = `outbox_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
-    // В очередь кладём открытый payload: шифруем при каждой попытке отправки.
-    const enqueue = async () => {
       const enq = await enqueueMessageOutbox({
         id: outboxId,
-        optimisticUiId,
+        optimisticUiId: clientId,
         createdAt: Date.now(),
         payload: socketPayload,
       });
       if (!enq) {
-        return { ok: true, localCancelled: true as const, delivered: false };
+        wait.cancel();
+        return { ok: true, localCancelled: true, delivered: false };
       }
-      return { ok: true, queued: true, messageId: outboxId, delivered: false };
-    };
-    // Rate-limit или временно недоступные ключи — не ошибка сообщения: отправим позже.
-    const queueForRetry = async (retryAfterSec: number) => {
-      const queued = await enqueue();
-      if ((queued as any).queued) scheduleMessageOutboxDrain(retryAfterSec);
-      return queued;
-    };
-    const toWire = async (): Promise<{ wire: any } | { result: any }> => {
-      try {
-        return { wire: await toWireMessagePayload(socketPayload) };
-      } catch (e) {
-        if (!(e instanceof E2eUnavailableError)) throw e;
-        // Свой ключ не восстановлен — открытым текстом не шлём, ждём восстановления.
-        if (e.reason === "locked") return { result: { ok: false, error: "e2e_locked" } };
-        return { result: await queueForRetry(E2E_RETRY_AFTER_SEC) };
-      }
-    };
-
-    let prepared = await toWire();
-    if ("result" in prepared) return prepared.result;
-    let wire = prepared.wire;
-    try {
-      let r: any = await viaSocket(wire);
-      if (r?.ok === true) return r;
-      if (r?.error === "e2e_key_mismatch") {
-        // Собеседник или мы сменили ключ — перечитываем ключи и шифруем заново, один раз.
-        await invalidateKeysAfterMismatch(payload.to);
-        prepared = await toWire();
-        if ("result" in prepared) return prepared.result;
-        wire = prepared.wire;
-        r = await viaSocket(wire);
-        if (r?.ok === true) return r;
-      }
-      // HTTP-фолбэк упрётся в тот же серверный лимит — не тратим запрос.
-      const socketRetryAfter = readRateLimitRetryAfterSec(r);
-      if (socketRetryAfter != null) return await queueForRetry(socketRetryAfter);
-      const http = await viaHttp(wire);
-      if ((http as any)?.ok === true) return http;
-      const httpRetryAfter = readRateLimitRetryAfterSec(http);
-      if (httpRetryAfter != null) return await queueForRetry(httpRetryAfter);
-      if (isLikelyOfflineError((http as any)?.error)) return await enqueue();
-      return http;
-    } catch {
-      try {
-        const http = await viaHttp(wire);
-        if ((http as any)?.ok === true) return http;
-        const httpRetryAfter = readRateLimitRetryAfterSec(http);
-        if (httpRetryAfter != null) return await queueForRetry(httpRetryAfter);
-        if (isLikelyOfflineError((http as any)?.error)) return await enqueue();
-        return http;
-      } catch (e) {
-        if (isLikelyOfflineError(e)) return await enqueue();
-        throw e;
-      }
+    } finally {
+      markMessagePendingInOutbox(clientId, false);
     }
+    void drainMessageOutbox().catch(() => {});
+
+    const outcome = await wait.promise;
+    if (!outcome) return { ok: true, queued: true, messageId: clientId, delivered: false };
+    if (outcome.kind === "cancelled") return { ok: true, localCancelled: true, delivered: false };
+    if (outcome.kind === "failed") return { ok: false, error: outcome.error };
+    return {
+      ok: true,
+      messageId: outcome.messageId,
+      delivered: outcome.delivered,
+      timestamp: outcome.timestamp,
+    };
   })();
 }
 
@@ -658,7 +610,7 @@ let incomingChain: Promise<void> = Promise.resolve();
 socket.on("message:received", (raw: any, ack?: (res: { ok: boolean }) => void) => {
   incomingChain = incomingChain.then(async () => {
     const message = await decryptForApp(raw);
-    for (const cb of receivedSubs) {
+    for (const cb of [...receivedSubs]) {
       try {
         cb(message);
       } catch (error) {
@@ -736,12 +688,12 @@ export function onMessageReadReceipt(
   };
 }
 
-/** Поставить/снять реакцию на сообщение. with = peerId чата. */
-export function sendMessageReaction(messageId: string, emoji: string, withPeerId: string) {
-  return emitAck<{ ok: boolean; reactions?: { emoji: string; userId: string }[]; error?: string }>(
-    "message:react",
-    { messageId, emoji, with: withPeerId },
-  );
+/**
+ * Поставить (on) или снять свою реакцию. with = peerId чата.
+ * Через офлайн-очередь: в чате видна сразу, на сервер уйдёт, когда появится сеть.
+ */
+export function sendMessageReaction(messageId: string, emoji: string, withPeerId: string, on: boolean): void {
+  queueMessageReaction(messageId, emoji, withPeerId, on);
 }
 
 export function onMessageReaction(
@@ -749,7 +701,11 @@ export function onMessageReaction(
 ): () => void {
   const h = (data: any) => cb(data);
   socket.on("message:reaction", h);
-  return () => socket.off("message:reaction", h);
+  const offConfirmed = onReactionsConfirmed(h);
+  return () => {
+    socket.off("message:reaction", h);
+    offConfirmed();
+  };
 }
 
 export function getUnreadMessageCount(fromUserId: string) {

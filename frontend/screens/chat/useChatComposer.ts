@@ -14,6 +14,7 @@ import {
   type BuiltInSticker,
 } from "../../components/chatStickers";
 import { type Lang } from "../../utils/i18n";
+import { outgoingStatusFromSendResult } from "./chatMessageIds";
 
 type ReadStatusMap = Record<string, "sending" | "delivered" | "read" | "failed" | "sent">;
 
@@ -176,7 +177,7 @@ export function useChatComposer({
         if (result.ok) {
           clearMessageCache(peerId, currentUserId);
 
-          const deliveryStatus = result.delivered ? 'delivered' : 'sent';
+          const deliveryStatus = outgoingStatusFromSendResult(result);
 
           updateReadStatuses(prev => ({
             ...prev,
@@ -341,7 +342,7 @@ export function useChatComposer({
           if (!result.ok) throw new Error((result as any).error || 'Failed to send sticker');
 
           if (currentUserId) clearMessageCache(peerId, currentUserId);
-          const deliveryStatus: 'delivered' | 'sent' = result.delivered ? 'delivered' : 'sent';
+          const deliveryStatus = outgoingStatusFromSendResult(result);
           updateReadStatuses((prev) => ({ ...prev, [messageId]: deliveryStatus }));
 
           const serverMessageId = String(result.messageId || '');

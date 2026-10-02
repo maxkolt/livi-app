@@ -5604,6 +5604,7 @@ const handleClearNick = useCallback(async () => {
             hasActiveCallForSearch={hasActiveCallForSearch}
             onStartSearch={handleStartSearch}
             splashGone={!showSplashOverlay}
+            active={showSearchWelcome}
           />
         </WelcomeKeepAlivePane>
         {showFriendsTab && !mountedWelcomeTabs.has('friends') ? (

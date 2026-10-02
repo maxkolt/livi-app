@@ -6,6 +6,8 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import socket, { sendMessage as sendSocketMessage } from "../../sockets/socket";
 import { uploadMediaToServer } from "../../utils/mediaUpload";
 import { getChatMediaOutboxKey } from "./chatStorageKeys";
+import { outgoingStatusFromSendResult } from "./chatMessageIds";
+import { stickerFieldsFromMessage } from "./chatMessageMeta";
 
 type ReadStatusMap = Record<string, "sending" | "delivered" | "read" | "failed" | "sent">;
 
@@ -155,7 +157,7 @@ export function useChatMediaOutbox({
 
             updateReadStatuses((prev) => {
               const next = { ...prev };
-              const delivery = socketResult.delivered ? "delivered" : "sent";
+              const delivery = outgoingStatusFromSendResult(socketResult);
               next[newId] = delivery;
               delete next[mid];
               return next;
@@ -223,7 +225,7 @@ export function useChatMediaOutbox({
 
             updateReadStatuses((prev) => {
               const next = { ...prev };
-              const delivery = socketResult.delivered ? "delivered" : "sent";
+              const delivery = outgoingStatusFromSendResult(socketResult);
               next[newId] = delivery;
               delete next[mid];
               return next;
@@ -231,6 +233,39 @@ export function useChatMediaOutbox({
             return true;
           }
 
+          updateReadStatuses((prev) => ({ ...prev, [mid]: "failed" }));
+          setUploadStatus((prev) => ({ ...prev, [mid]: "failed" }));
+          return false;
+        }
+
+        if (type === "text" || type === "sticker") {
+          // Тот же id: если первая попытка всё же дошла, сервер не задвоит сообщение.
+          const replyTo = m?.replyTo?.id
+            ? {
+                id: String(m.replyTo.id),
+                text: m.replyTo.text,
+                from: String(m.replyTo.from || ""),
+                isOwn: m.replyTo.isOwn,
+              }
+            : undefined;
+          const socketResult = await sendSocketMessage({
+            to: peerId,
+            type,
+            text: m?.text,
+            ...(type === "sticker" ? stickerFieldsFromMessage(m) : {}),
+            ...(replyTo ? { replyTo } : {}),
+            clientUiMessageId: mid,
+          });
+          if (socketResult?.localCancelled) return true;
+          if (socketResult?.ok) {
+            setUploadStatus((prev) => {
+              const next = { ...prev };
+              delete next[mid];
+              return next;
+            });
+            updateReadStatuses((prev) => ({ ...prev, [mid]: outgoingStatusFromSendResult(socketResult) }));
+            return true;
+          }
           updateReadStatuses((prev) => ({ ...prev, [mid]: "failed" }));
           setUploadStatus((prev) => ({ ...prev, [mid]: "failed" }));
           return false;

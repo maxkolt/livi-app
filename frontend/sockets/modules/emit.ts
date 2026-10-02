@@ -1,4 +1,5 @@
 import { getInstallId } from "../../utils/installId";
+import { logger } from "../../utils/logger";
 import { shared } from "./shared";
 import { socket } from "./socketCore";
 import { SOCKET_CONNECT_WAIT_MS } from "./constants";
@@ -125,11 +126,33 @@ export async function emitAck<T = any>(
 
   // 2) ретраи на таймаут
   let lastErr: any;
+  const startedAt = Date.now();
   for (let i = 0; i <= retries; i++) {
+    const attemptStartedAt = Date.now();
     try {
-      return await tryOnce();
+      const resp = await tryOnce();
+      if (i > 0) {
+        logger.info("[socket] emitAck succeeded after retry", {
+          event,
+          attempt: i + 1,
+          totalMs: Date.now() - startedAt,
+        });
+      }
+      return resp;
     } catch (e: any) {
       lastErr = e;
+      // Ретрай раньше был немым: VPN терял первый emit, а в логах — просто дыра в 7 с.
+      logger.warn("[socket] emitAck attempt failed", {
+        event,
+        attempt: i + 1,
+        of: retries + 1,
+        attemptMs: Date.now() - attemptStartedAt,
+        error: e?.message || String(e),
+        connected: socket.connected,
+        reconnecting: !!shared.reconnecting,
+        transport: (socket as any)?.io?.engine?.transport?.name ?? null,
+        socketId: socket.id ?? null,
+      });
       // если снова ушли в реконнект — подождём и повторим
       if (!socket.connected || shared.reconnecting) {
         try {

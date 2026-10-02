@@ -27,6 +27,8 @@ import {
   WELCOME_FRIENDS_SEGMENT_HEIGHT,
   WELCOME_FRIENDS_SEGMENT_SHELL_RADIUS,
   WELCOME_HEADER_TITLE,
+  WELCOME_BRAND_GLYPH_INSET,
+  WELCOME_TOP_BAR_SIDE_PAD,
   isWelcomeTabletLayout,
 } from './constants';
 import { FriendsListCore, WELCOME_SEGMENT_ACTIVE, type FriendsListCoreProps } from './FriendsListCore';
@@ -279,6 +281,7 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
         style={[
           styles.header,
           tabletLayout && styles.headerTablet,
+          tabletLayout && windowWidth > windowHeight && styles.headerTabletLandscape,
           compactLandscape && styles.headerLandscape,
         ]}
       >
@@ -460,17 +463,25 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingTop: Platform.OS === 'ios' ? 8 : 12,
-    paddingHorizontal: 20,
+    // Вертикаль: кнопка поиска — вровень с «LiVi», корона — как на «Поиске».
+    paddingLeft: WELCOME_TOP_BAR_SIDE_PAD + WELCOME_BRAND_GLYPH_INSET,
+    paddingRight: WELCOME_TOP_BAR_SIDE_PAD,
     paddingBottom: 8,
   },
+  // Горизонталь — прежние отступы.
   headerLandscape: {
     paddingTop: 2,
+    paddingLeft: 20,
+    paddingRight: 20,
     paddingBottom: 2,
   },
   headerTablet: {
     paddingTop: 14,
-    paddingHorizontal: 28,
     paddingBottom: 10,
+  },
+  headerTabletLandscape: {
+    paddingLeft: 28,
+    paddingRight: 28,
   },
   body: {
     flex: 1,

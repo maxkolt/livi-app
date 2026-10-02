@@ -57,6 +57,7 @@ export class E2eUnavailableError extends Error {
 
 const SECRET_KEY_PREFIX = "livi.e2e.sk.";
 const PINS_KEY = "e2e_peer_key_pins_v1";
+const CHAT_NOTICE_SEEN_KEY = "e2e_chat_notice_seen_v1";
 const PEER_KEY_TTL_MS = 30 * 60_000;
 /** «Ключа нет» проверяем чаще: собеседник мог только что включить шифрование. */
 const PEER_NO_KEY_TTL_MS = 2 * 60_000;
@@ -86,7 +87,7 @@ const STATE_TIMEOUT_MS = 8_000;
 function setStatus(next: E2eStatus) {
   if (state.status === next) return;
   state.status = next;
-  for (const cb of statusSubs) {
+  for (const cb of [...statusSubs]) {
     try {
       cb(next);
     } catch {}
@@ -448,6 +449,29 @@ export async function resetE2e(): Promise<ActionResult> {
   return publishDeviceKey(me, pair);
 }
 
+/* ---------- уведомление «чат защищён» ---------- */
+
+/** Показываем один раз на собеседника — при первом входе в пустой зашифрованный чат. */
+export async function wasE2eChatNoticeSeen(peerId: string): Promise<boolean> {
+  const me = syncUser();
+  const pid = String(peerId || "").trim();
+  if (!me || !pid) return true;
+  try {
+    return (await AsyncStorage.getItem(`${CHAT_NOTICE_SEEN_KEY}:${me}:${pid}`)) === "1";
+  } catch {
+    return true;
+  }
+}
+
+export async function markE2eChatNoticeSeen(peerId: string): Promise<void> {
+  const me = syncUser();
+  const pid = String(peerId || "").trim();
+  if (!me || !pid) return;
+  try {
+    await AsyncStorage.setItem(`${CHAT_NOTICE_SEEN_KEY}:${me}:${pid}`, "1");
+  } catch {}
+}
+
 /* ---------- ключи собеседников ---------- */
 
 async function loadPins(): Promise<Record<string, string>> {
@@ -472,7 +496,7 @@ async function notePeerKey(peerId: string, pk: string): Promise<void> {
     await AsyncStorage.setItem(`${PINS_KEY}:${state.userId}`, JSON.stringify(table));
   } catch {}
   if (prev) {
-    for (const cb of keyChangeSubs) {
+    for (const cb of [...keyChangeSubs]) {
       try {
         cb(peerId);
       } catch {}
@@ -498,7 +522,7 @@ socket.on("e2e:key_changed", (data: { userId?: string }) => {
   const peerId = String(data?.userId || "");
   if (!peerId) return;
   peerKeys.delete(peerId);
-  for (const cb of peerE2eSubs) {
+  for (const cb of [...peerE2eSubs]) {
     try {
       cb(peerId);
     } catch {}

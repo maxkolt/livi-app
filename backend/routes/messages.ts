@@ -11,6 +11,7 @@ import { areFriendsCached, getOrCreateFriendship, invalidateFriendshipCache } fr
 import {
   MAX_MESSAGE_BATCH_SIZE,
   applyMessageEdit,
+  applyMessageReaction,
   backfillFriendshipMessageItems,
   clearChatMessagesForUsers,
   deleteMessagesForBothUsersBatch,
@@ -478,6 +479,33 @@ router.post('/messages/edit', async (req, res) => {
     } catch {}
 
     return res.json({ ok: true, ...result.event });
+  } catch (e: any) {
+    return res.status(500).json({ ok: false, error: e?.message || 'server_error' });
+  }
+});
+
+/**
+ * POST /api/messages/react
+ * Body: { messageId, emoji, with, on? }
+ * Фолбэк офлайн-очереди реакций, когда сокет завис (VPN), а HTTP проходит.
+ */
+router.post('/messages/react', async (req, res) => {
+  try {
+    const me = String((req as any)?.userId || '').trim();
+    if (!isOid(me)) return res.status(401).json({ ok: false, error: 'unauthorized' });
+
+    const result = await applyMessageReaction(me, req.body || {});
+    if (!result.ok) {
+      if (result.error === 'bad_payload') return res.status(400).json({ ok: false, error: result.error });
+      return res.json({ ok: false, error: result.error });
+    }
+
+    try {
+      const io = (req as any).io as any | undefined;
+      if (io) for (const u of result.participants) emitToUser(io, u, 'message:reaction', result.event);
+    } catch {}
+
+    return res.json({ ok: true, reactions: result.event.reactions });
   } catch (e: any) {
     return res.status(500).json({ ok: false, error: e?.message || 'server_error' });
   }

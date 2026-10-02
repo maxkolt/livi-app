@@ -8,6 +8,7 @@ import { uploadMediaToServer } from "../../utils/mediaUpload";
 import { getInstallId } from "../../utils/installId";
 import type { IncomingShareItem } from "../../utils/incomingShare";
 import { t, type Lang } from "../../utils/i18n";
+import { outgoingStatusFromSendResult } from "./chatMessageIds";
 
 type ReadStatusMap = Record<string, "sending" | "delivered" | "read" | "failed" | "sent">;
 
@@ -114,7 +115,7 @@ export function useChatIncomingShare({
           if (result?.localCancelled) continue;
           if (result?.ok) {
             sent += 1;
-            const deliveryStatus = result.delivered ? 'delivered' : 'sent';
+            const deliveryStatus = outgoingStatusFromSendResult(result);
             if (result.messageId && result.messageId !== messageId) {
               setMessages((prev) =>
                 prev.map((msg) =>
@@ -188,7 +189,7 @@ export function useChatIncomingShare({
                   : msg,
               ),
             );
-            const delivery = socketResult.delivered ? 'delivered' : 'sent';
+            const delivery = outgoingStatusFromSendResult(socketResult);
             updateReadStatuses((prev) => {
               const next = { ...prev };
               next[socketResult.messageId] = delivery;
@@ -240,7 +241,7 @@ export function useChatIncomingShare({
           });
           if (result?.ok) {
             sent += 1;
-            const deliveryStatus = result.delivered ? 'delivered' : 'sent';
+            const deliveryStatus = outgoingStatusFromSendResult(result);
             if (result.messageId && result.messageId !== messageId) {
               setMessages((prev) =>
                 prev.map((msg) =>

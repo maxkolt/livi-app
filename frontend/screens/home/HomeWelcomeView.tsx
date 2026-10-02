@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Animated,
   Easing,
+  Image,
   Platform,
   Pressable,
   StyleSheet,
@@ -14,6 +15,8 @@ import { GestureDetector } from 'react-native-gesture-handler';
 import { useAnimatedRef } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
 import {
+  WELCOME_TOP_BAR_SIDE_PAD,
+  WELCOME_TOP_BAR_SIDE_PAD_TIGHT,
   isWelcomeTabletLayout,
   searchPhoneRadarPreferred,
   welcomePhoneAvatarMetrics,
@@ -25,7 +28,6 @@ import {
   useAvatarDustGesture,
   type AvatarDustSource,
 } from './AvatarDust';
-import { BrandTitleWithOutline } from './chrome';
 import { HomeBrandConfetti, type BrandConfettiOrigin } from './HomeBrandConfetti';
 import { HomeCenterProfile } from './HomeCenterProfile';
 import { WelcomeCrownButton } from './WelcomeCrownButton';
@@ -63,6 +65,8 @@ export type HomeWelcomeViewProps = {
   hasActiveCallForSearch: boolean;
   onStartSearch: () => void;
   splashGone?: boolean;
+  /** Вкладка «Поиск» на экране — иначе радар не анимируется. */
+  active?: boolean;
 };
 
 function resolveIsLandscape(width: number, height: number) {
@@ -92,8 +96,11 @@ function resolveIsSplitStage(width: number, height: number) {
   return isWelcomeTabletLayout(width, height);
 }
 
-let brandEntryShinePlayedThisSession = false;
 let welcomeRevealPlayedThisSession = false;
+
+/** Камера с заставки (splash-icon без полей) — логотип в шапке «Поиска». */
+const BRAND_LOGO = require('../../assets/brand-camera-logo.png');
+const BRAND_LOGO_ASPECT = 360 / 244;
 /**
  * Размер аватара Поиска для текущей геометрии окна — переживает remount после
  * splash (иначе снова onLoad и мигание), но пересчитывается при повороте,
@@ -115,6 +122,7 @@ function HomeWelcomeViewInner({
   hasActiveCallForSearch,
   onStartSearch,
   splashGone = true,
+  active = true,
 }: HomeWelcomeViewProps) {
   const welcomeRootRef = useRef<View>(null);
   // Animated ref: слой частиц меряет по нему аватар прямо на UI-потоке.
@@ -123,7 +131,6 @@ function HomeWelcomeViewInner({
   const [avatarDustSource, setAvatarDustSource] = useState<AvatarDustSource | null>(null);
   const burstActiveRef = useRef(false);
   const [burst, setBurst] = useState<{ id: number; origin: BrandConfettiOrigin } | null>(null);
-  const [shineNonce, setShineNonce] = useState(0);
   const reveal = useRef(new Animated.Value(welcomeRevealPlayedThisSession ? 1 : 0)).current;
   const frame = useHomeLayout();
   const notifyLayoutActivity = useHomeLayoutActivity();
@@ -147,20 +154,6 @@ function HomeWelcomeViewInner({
       welcomeRevealPlayedThisSession = true;
     });
   }, [reveal, splashGone]);
-
-  useEffect(() => {
-    if (!splashGone || brandEntryShinePlayedThisSession) return;
-    let cancelled = false;
-    const timer = setTimeout(() => {
-      if (cancelled || brandEntryShinePlayedThisSession) return;
-      brandEntryShinePlayedThisSession = true;
-      setShineNonce((nonce) => nonce + 1);
-    }, 320);
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, [splashGone]);
 
   const onStageLayout = useCallback((e: LayoutChangeEvent) => {
     const { width, height } = e.nativeEvent.layout;
@@ -213,7 +206,7 @@ function HomeWelcomeViewInner({
   /** Верхний блок ужимается вместе с экраном: иначе он съедает треть высоты в landscape. */
   const topBarHeight = tightStage ? 42 : splitStage ? 52 : compactLayout ? 48 : 54;
   const topBarPadTop = tightStage ? 4 : splitStage ? 6 : Platform.OS === 'ios' ? 8 : 12;
-  const brandFontSize = tightStage ? 26 : isTabletLayout ? 40 : splitStage ? 30 : 36;
+  const brandLogoHeight = tightStage ? 24 : isTabletLayout ? 38 : splitStage ? 28 : 34;
   const bannerCompact = splitTight || compactLayout || shortPhone;
 
   /**
@@ -336,7 +329,6 @@ function HomeWelcomeViewInner({
     };
   })();
   const welcomeAvatarBase = welcomeAvatarGeometry.base;
-  const welcomeAvatarRadius = Math.round(welcomeAvatarBase / 2);
   const welcomeAvatarSizeRaw = welcomeAvatarGeometry.avatarSize;
   // Module-level: ref сбрасывался при remount после splash → снова 114 и onLoad.
   const avatarLockKey = `${Math.round(stageWidth)}x${Math.round(stageHeight)}`;
@@ -361,7 +353,6 @@ function HomeWelcomeViewInner({
     if (!burstActiveRef.current) return;
     setBurst((current) => (current?.id === burstId ? null : current));
     burstActiveRef.current = false;
-    setShineNonce((nonce) => nonce + 1);
   }, []);
 
   const fireBurst = useCallback((origin: BrandConfettiOrigin) => {
@@ -467,19 +458,23 @@ function HomeWelcomeViewInner({
             paddingTop: topBarPadTop,
             paddingBottom: tightStage ? 2 : 6,
             // Search header: bring the brand and crown slightly inward as a pair.
-            paddingHorizontal: tightStage ? 18 : 26,
+            paddingHorizontal: tightStage ? WELCOME_TOP_BAR_SIDE_PAD_TIGHT : WELCOME_TOP_BAR_SIDE_PAD,
           },
         ]}
       >
-        <BrandTitleWithOutline
-          isDark={isDark}
-          onPress={onBrandPress}
-          pressLocked={!!burst}
-          shineNonce={shineNonce}
-          fontSize={brandFontSize}
-          tailAuraFromIndex={2}
-          letterGlow={false}
-        />
+        <Pressable
+          onPress={burst ? undefined : onBrandPress}
+          hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+          accessibilityRole="header"
+          accessibilityLabel="LiVi"
+        >
+          <Image
+            source={BRAND_LOGO}
+            style={{ width: Math.round(brandLogoHeight * BRAND_LOGO_ASPECT), height: brandLogoHeight }}
+            resizeMode="contain"
+            fadeDuration={0}
+          />
+        </Pressable>
         <WelcomeCrownButton large={isTabletLayout} small={tightStage} />
       </View>
 
@@ -518,8 +513,8 @@ function HomeWelcomeViewInner({
             <View collapsable={false}>
             <WelcomeRadar
               size={radarSize}
-              isDark={isDark}
-              avatarRadius={welcomeAvatarRadius}
+              avatarSize={welcomeAvatarSize}
+              active={active}
             >
               <HomeCenterProfile
                 styles={styles}

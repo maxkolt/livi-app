@@ -1,6 +1,7 @@
 /** Chat message id / delete / read-status helpers (pure). */
 
 import {
+  isLegacyOutboxLocalId,
   isOfflineQueuedOrOptimisticOutgoingId,
   type ChatReadStatus,
 } from "./chatMessageIds";
@@ -66,7 +67,7 @@ export function filterRemoveMessageAndOutgoingDupes(prev: any[], deletedId: stri
       victim &&
       String(victim?.sender || "") === "me" &&
       String(msg?.sender || "") === "me" &&
-      isOfflineQueuedOrOptimisticOutgoingId(id) &&
+      isLegacyOutboxLocalId(id) &&
       approxSameOutgoingTextMessage(msg, victim)
     ) {
       return false;

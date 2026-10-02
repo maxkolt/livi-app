@@ -9,7 +9,7 @@ const __currentUserIdListeners = new Set<CurrentUserIdListener>();
 
 export function __notifyCurrentUserId() {
   try {
-    for (const cb of __currentUserIdListeners) {
+    for (const cb of [...__currentUserIdListeners]) {
       try {
         cb(shared.currentUserId);
       } catch {}

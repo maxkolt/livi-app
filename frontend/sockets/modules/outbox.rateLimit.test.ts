@@ -18,6 +18,7 @@ jest.mock('@react-native-async-storage/async-storage', () => ({
 const emitAckMock = jest.fn();
 jest.mock('./emit', () => ({ emitAck: (...args: unknown[]) => emitAckMock(...args) }));
 jest.mock('./reauth', () => ({ ensureReauthBeforePrivilegedSocketOp: jest.fn(async () => true) }));
+jest.mock('./apiHttp', () => ({ postApiJson: jest.fn() }));
 jest.mock('./socketCore', () => ({ socket: { connected: true } }));
 // Шифрование здесь не проверяем: payload уходит как есть (см. e2e.test.ts).
 jest.mock('./e2e', () => ({

@@ -5,6 +5,7 @@ import * as FileSystem from "expo-file-system";
 import { sendMessage as sendSocketMessage } from "../../sockets/socket";
 import { uploadMediaToServer } from "../../utils/mediaUpload";
 import { CHAT_ALBUM_MAX } from "./chatAlbum";
+import { outgoingStatusFromSendResult } from "./chatMessageIds";
 
 type ReadStatusMap = Record<string, "sending" | "delivered" | "read" | "failed" | "sent">;
 
@@ -110,7 +111,7 @@ export function useChatSendMedia({
 
         updateReadStatuses((prev) => {
           const next = { ...prev };
-          const delivery = socketResult.delivered ? 'delivered' : 'sent';
+          const delivery = outgoingStatusFromSendResult(socketResult);
           next[socketResult.messageId!] = delivery;
           delete next[messageId];
           return next;
@@ -215,7 +216,7 @@ export function useChatSendMedia({
 
         updateReadStatuses((prev) => {
           const newStatuses = { ...prev };
-          const delivery = socketResult.delivered ? 'delivered' : 'sent';
+          const delivery = outgoingStatusFromSendResult(socketResult);
           newStatuses[socketResult.messageId!] = delivery;
           delete newStatuses[messageId];
           return newStatuses;
@@ -339,7 +340,7 @@ export function useChatSendMedia({
         });
         updateReadStatuses((prev) => {
           const newStatuses = { ...prev };
-          newStatuses[socketResult.messageId!] = socketResult.delivered ? 'delivered' : 'sent';
+          newStatuses[socketResult.messageId!] = outgoingStatusFromSendResult(socketResult);
           delete newStatuses[messageId];
           return newStatuses;
         });

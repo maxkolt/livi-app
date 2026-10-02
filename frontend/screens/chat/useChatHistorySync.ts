@@ -82,6 +82,8 @@ export function useChatHistorySync({
   navigation,
   resolveMediaUri,
 }: Options) {
+  /** Сервер ответил, что переписки нет совсем (для уведомления о шифровании в пустом чате). */
+  const [serverHistoryEmpty, setServerHistoryEmpty] = React.useState(false);
   const lastQuietSyncAtRef = React.useRef(0);
   const quietSyncInFlightRef = React.useRef(false);
   const messagesLenRef = React.useRef(0);
@@ -210,6 +212,7 @@ export function useChatHistorySync({
 
     const loadHistory = async () => {
       setHistoryReady(false);
+      setServerHistoryEmpty(false);
       setChatImagesWarm(false);
       clearMessageCache(pid, uid);
 
@@ -243,6 +246,8 @@ export function useChatHistorySync({
           if (historySyncGenerationRef.current !== syncGen) return;
 
           if (serverMessages?.ok && serverMessages.messages) {
+            // По серверу, а не по ленте: пустой локальный кэш ещё не значит, что переписки не было.
+            setServerHistoryEmpty(serverMessages.messages.length === 0);
             const hiddenForMeIds = hiddenForMeMessageIdsRef.current;
             const visible = filterVisibleServerMessages(serverMessages.messages, {
               hiddenForMeIds,
@@ -436,5 +441,5 @@ export function useChatHistorySync({
     // перезапускался на каждом рендере (несколько раз в секунду) и терял переход сети.
   }, []);
 
-  return { quietSyncChat };
+  return { quietSyncChat, serverHistoryEmpty };
 }

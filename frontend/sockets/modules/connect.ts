@@ -485,7 +485,7 @@ export function setIncomingCallScreenVisible(visible: boolean, fromUserId?: stri
   shared.incomingCallScreenVisible = visible;
   shared.incomingCallFromUserId = visible && fromUserId != null ? String(fromUserId) : null;
   mirrorCallPresenceFlagsToGlobal({ incomingScreen: visible });
-  shared.incomingCallScreenChangeListeners.forEach((cb) => {
+  [...shared.incomingCallScreenChangeListeners].forEach((cb) => {
     try {
       cb(shared.incomingCallScreenVisible, shared.incomingCallFromUserId);
     } catch {}

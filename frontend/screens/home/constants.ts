@@ -144,6 +144,15 @@ export const ANDROID_FRIEND_ACTION_HIT_SLOP = { top: 14, bottom: 14, left: 14, r
 
 /** Align brand row height with crown / top-bar controls. */
 export const WELCOME_TOP_BAR_CONTROL_SIZE = 42;
+/**
+ * Боковые отступы верхней панели вкладок. На «Поиске» слева логотип «LiVi», справа корона;
+ * на «Друзьях», «Звонках» и «Чате» кнопка поиска и корона стоят на тех же местах.
+ */
+export const WELCOME_TOP_BAR_SIDE_PAD = 26;
+/** Телефон в landscape: верхней панели почти не остаётся высоты. */
+export const WELCOME_TOP_BAR_SIDE_PAD_TIGHT = 18;
+/** «L» логотипа видна правее края его SVG (обводка + поле буквы) — кнопку поиска ставим вровень с ней. */
+export const WELCOME_BRAND_GLYPH_INSET = 4;
 export const BRAND_OUTLINE_STROKE = 1.35;
 export const BRAND_FONT_FAMILY = Platform.OS === 'ios' ? 'System' : 'sans-serif-medium';
 export const BRAND_3D_LAYERS = 5;
