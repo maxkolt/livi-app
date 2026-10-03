@@ -27,9 +27,11 @@ import socket, {
   onDisconnected,
 } from '../../../sockets/socket';
 import { logger } from '../../../utils/logger';
+import { prewarmApiConnections } from '../../../utils/warmConnections';
 import { sendClientMetrics } from '../../utils/capacityClientMetrics';
 import { getIceConfiguration, enableForcedRelayFallback } from '../../../utils/iceConfig';
 import { buildLiveKitConnectOptions } from './videoCall/iceConnectOptions';
+import { buildLiveKitSignalProxyUrl } from './videoCall/signalProxy';
 import { LIVEKIT_APPLY_CLIENT_ICE } from './videoCall/constants';
 import { getPreferredVideoCaptureOptions } from '../videoCaptureProfile';
 import { getRoomIceTransportDiagnostics } from '../iceTransportDiagnostics';
@@ -3417,7 +3419,11 @@ export class RandomChatSession extends SimpleEventEmitter {
         forceRelayOnly: !!options?.forceRelayOnly,
         targetRoomName,
       });
-      await room.connect(url, token, connectOptions);
+      // Сигналинг — через /livekit на API-домене, как у звонков: с зарубежного выхода VPN
+      // домен LiveKit почти недоступен, а API — да, и к нему уже есть тёплые соединения.
+      const signalUrl = buildLiveKitSignalProxyUrl(API_BASE) || url;
+      prewarmApiConnections('random_chat_connect', 2);
+      await room.connect(signalUrl, token, connectOptions);
       
       // КРИТИЧНО: Проверяем состояние после подключения
       if (room.state !== 'connected') {

@@ -3,7 +3,7 @@
  * Только UI — без логики сессии / PiP / маршрута.
  * Щит E2EE: статичная иконка, без пульсации и без текстовой подписи.
  */
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -132,6 +132,8 @@ export function CallScreenChrome({
   const locked = controlsLocked;
   const holdText = typeof holdLine === 'string' ? holdLine.trim() : '';
   const routeAccent = speakerAccent || WELCOME_NAV_ACTIVE_ACCENT;
+  // Громкая (не Bluetooth) — в тон щита шифрования: та же заливка и рамка.
+  const routeShieldTone = routeAccent === WELCOME_NAV_ACTIVE_ACCENT;
   const routeIconName =
     speakerIcon || (speakerOn ? 'volume-up' : 'volume-mute');
   const routeIconColor = speakerOn ? routeAccent.softText : WELCOME_HEADER_TITLE;
@@ -230,8 +232,9 @@ export function CallScreenChrome({
               }}
               disabled={locked}
               active={!!speakerOn}
-              activeBg={routeAccent.solid15}
+              activeBg={routeShieldTone ? ENCRYPTION_SHIELD_BG : routeAccent.solid15}
               activeBorder={routeAccent.solid30}
+              guardRapidPress
             >
               <MaterialIcons
                 name={routeIconName}
@@ -350,6 +353,7 @@ function CapsuleAction({
   active,
   activeBg,
   activeBorder,
+  guardRapidPress,
 }: {
   label: string;
   onPress: () => void;
@@ -360,10 +364,53 @@ function CapsuleAction({
   active?: boolean;
   activeBg?: string;
   activeBorder?: string;
+  /** Только короткий одиночный тап; защищает аудиомаршрут от double tap / hold. */
+  guardRapidPress?: boolean;
 }) {
+  const pressStartedAtRef = useRef(0);
+  const longPressTriggeredRef = useRef(false);
+  const lastAcceptedPressAtRef = useRef(0);
+
+  const handlePress = () => {
+    const now = Date.now();
+    const heldFor = pressStartedAtRef.current > 0 ? now - pressStartedAtRef.current : 0;
+    if (
+      guardRapidPress &&
+      (longPressTriggeredRef.current || heldFor >= 360 || now - lastAcceptedPressAtRef.current < 420)
+    ) {
+      pressStartedAtRef.current = 0;
+      longPressTriggeredRef.current = false;
+      return;
+    }
+    lastAcceptedPressAtRef.current = now;
+    pressStartedAtRef.current = 0;
+    longPressTriggeredRef.current = false;
+    onPress();
+  };
+
   return (
     <Pressable
-      onPress={onPress}
+      onPress={handlePress}
+      onPressIn={() => {
+        pressStartedAtRef.current = Date.now();
+        longPressTriggeredRef.current = false;
+      }}
+      onPressOut={() => {
+        if (!guardRapidPress) return;
+        // onPress идёт сразу после onPressOut; сбрасываем уже на следующем tick.
+        setTimeout(() => {
+          pressStartedAtRef.current = 0;
+          longPressTriggeredRef.current = false;
+        }, 0);
+      }}
+      onLongPress={
+        guardRapidPress
+          ? () => {
+              longPressTriggeredRef.current = true;
+            }
+          : undefined
+      }
+      delayLongPress={guardRapidPress ? 360 : undefined}
       disabled={disabled}
       style={({ pressed }) => [styles.capsuleItem, pressed && !disabled && styles.pressed]}
       accessibilityRole="button"
@@ -390,6 +437,10 @@ function CapsuleAction({
     </Pressable>
   );
 }
+
+/** Заливка кнопки щита шифрования; в неё же красится включённая громкая. */
+const ENCRYPTION_SHIELD_BG =
+  Platform.OS === 'android' ? 'rgba(33, 58, 68, 0.28)' : 'rgba(74, 122, 140, 0.10)';
 
 const styles = StyleSheet.create({
   headerWrap: {
@@ -422,8 +473,7 @@ const styles = StyleSheet.create({
     borderRadius: 19,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor:
-      Platform.OS === 'android' ? 'rgba(33, 58, 68, 0.28)' : 'rgba(74, 122, 140, 0.10)',
+    backgroundColor: ENCRYPTION_SHIELD_BG,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: WELCOME_NAV_ACTIVE_ACCENT.solid30,
   },

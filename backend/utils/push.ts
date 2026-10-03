@@ -304,6 +304,10 @@ async function sendCallPushViaFcmWithRetry(
         android: {
           priority: 'high',
           ttl: safeTtlMs,
+          // Один звонок = одна группа: если устройство было без связи (VPN рвёт соединение FCM
+          // во сне), Google после переподключения отдаёт только последний пуш по callId, а не
+          // пачку первый+ретраи+эскалация — иначе входящий поднимался дважды подряд.
+          ...(dataPayload.callId ? { collapseKey: `call_${dataPayload.callId}` } : {}),
           // Доставка звонка сразу после перезагрузки, до первого разблока (Direct Boot).
           directBootOk: true,
         },
@@ -1017,6 +1021,8 @@ export async function sendCallEscalationPushToRecipient(
           android: {
             priority: 'high',
             ttl: CALL_PUSH_ESCALATION_TTL_SECONDS * 1000,
+            // Та же группа, что у обычного пуша звонка: после переподключения — один пуш.
+            collapseKey: `call_${data.callId}`,
             directBootOk: true,
           },
         });

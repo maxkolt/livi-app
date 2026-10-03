@@ -167,7 +167,7 @@ class MainActivity : ReactActivity() {
   /** Нативная заглушка LiVi поверх RN — единый кадр system PiP на всех устройствах. */
   private var systemPiPBackdrop: View? = null
   /**
-   * Крышка accept: тот же welcome_stage_bg, что у audio VideoCall / Incoming.
+   * Крышка accept: тот же фон сцены (StageBackgroundView), что у audio VideoCall / Incoming.
    * Нужна при подъёме Main раньше JS ConnectingCover.
    */
   private var incomingAnswerCoverView: View? = null
@@ -181,12 +181,8 @@ class MainActivity : ReactActivity() {
           setBackgroundColor(Color.parseColor("#0A0C14"))
           importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }
-        val stage = android.widget.ImageView(this).apply {
-          setImageResource(R.drawable.welcome_stage_bg)
-          // Растягиваем, как JS WelcomeStageBackground: градиент на всю высоту в любой ориентации.
-          scaleType = android.widget.ImageView.ScaleType.FIT_XY
-          importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-        }
+        // Тот же фон, что у JS WelcomeStageBackground: на всю высоту в любой ориентации.
+        val stage = StageBackgroundView(this)
         frame.addView(
           stage,
           android.widget.FrameLayout.LayoutParams(
@@ -284,9 +280,9 @@ class MainActivity : ReactActivity() {
 
   private fun restoreMainWindowBackgroundAfterPiP() {
     try {
-      // Та же сцена, что в теме: без фона окна при повороте в полосах, которые RN
+      // Та же сцена, что в JS: без фона окна при повороте в полосах, которые RN
       // ещё не перерисовал, был бы чёрный.
-      window.setBackgroundDrawableResource(R.drawable.window_stage_background)
+      window.setBackgroundDrawable(StageBackgroundDrawable(this))
     } catch (_: Exception) {
       try {
         window.decorView.setBackgroundColor(android.graphics.Color.TRANSPARENT)
@@ -1136,6 +1132,10 @@ class MainActivity : ReactActivity() {
       setTheme(R.style.AppTheme)
     }
     super.onCreate(null)
+    if (!isDeclineCallIntent(intent)) {
+      // windowBackground из темы — растянутая PNG; рисуем ту же сцену, что JS, пиксель-в-пиксель.
+      window.setBackgroundDrawable(StageBackgroundDrawable(this))
+    }
     liveInstance = this
     applyShowOverLock(shouldShowOverLock())
     // targetSdk 36: edge-to-edge is enforced; RN SafeAreaProvider pads content.
@@ -1434,7 +1434,7 @@ class MainActivity : ReactActivity() {
     const val EXTRA_PENDING_ANSWER_CALL_ID = "pending_answer_call_id"
     const val EXTRA_PENDING_ANSWER_FROM = "pending_answer_from"
     const val EXTRA_PENDING_ANSWER_FROM_NICK = "pending_answer_from_nick"
-    /** Accept входящего: показать welcome_stage_bg поверх RN до VideoCall.onLayout. */
+    /** Accept входящего: показать фон сцены поверх RN до VideoCall.onLayout. */
     const val EXTRA_INCOMING_ANSWER_COVER = "incoming_answer_cover"
     const val EXTRA_OPEN_TAB_FRIENDS = "open_tab_friends"
     /** Тап по уведомлению о непрочитанном сообщении → welcome Chat. */

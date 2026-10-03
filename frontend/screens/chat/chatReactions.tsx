@@ -11,7 +11,7 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { StageGradient } from "../home/WelcomeStageBackground";
+import { WelcomeStageBackground } from "../home/WelcomeStageBackground";
 
 export const REACTION_EMOJIS_PAGE_1 = ["👍", "😊", "❤️", "😮", "😢", "👎"];
 export const REACTION_EMOJIS_PAGE_2 = ["😉", "😂", "😍", "😭", "🙏", "🔥"];
@@ -51,7 +51,6 @@ export function ReactionBarModal({
   const hintBounce = React.useRef(new Animated.Value(0)).current;
   const { width: winW, height: winH } = useWindowDimensions();
   const insets = useSafeAreaInsets();
-  const [barH, setBarH] = React.useState(0);
 
   React.useEffect(() => {
     if (visible) {
@@ -73,10 +72,8 @@ export function ReactionBarModal({
   }, [visible, hintBounce]);
 
   const barWidth = Math.min(320, winW * 0.88);
-  const Shell = isDark ? StageGradient : View;
-
   const position = React.useMemo(() => {
-    const height = barH > 0 ? barH : BAR_HEIGHT_FALLBACK;
+    const height = BAR_HEIGHT_FALLBACK;
     const minTop = insets.top + BAR_EDGE_PAD;
     const maxTop = Math.max(minTop, winH - insets.bottom - BAR_EDGE_PAD - height);
     const minLeft = insets.left + BAR_EDGE_PAD;
@@ -94,10 +91,11 @@ export function ReactionBarModal({
       top: clamp(preferred, minTop, maxTop),
       left: clamp(anchor.x + anchor.width / 2 - barWidth / 2, minLeft, maxLeft),
     };
-  }, [anchor, barH, barWidth, winW, winH, insets.top, insets.bottom, insets.left, insets.right]);
+  }, [anchor, barWidth, winW, winH, insets.top, insets.bottom, insets.left, insets.right]);
 
   const barStyle = {
     width: barWidth,
+    height: BAR_HEIGHT_FALLBACK,
     flexDirection: "row" as const,
     alignItems: "center" as const,
     backgroundColor: isDark ? undefined : "#2d3238",
@@ -143,10 +141,6 @@ export function ReactionBarModal({
       >
         <Pressable
           onPress={() => {}}
-          onLayout={(e) => {
-            const h = Math.round(e.nativeEvent.layout.height);
-            if (h > 0 && h !== barH) setBarH(h);
-          }}
           style={{
             width: barWidth,
             marginTop: position.top,
@@ -166,7 +160,8 @@ export function ReactionBarModal({
             contentContainerStyle={{ flexGrow: 1 }}
             style={{ borderRadius: 24, overflow: "hidden" }}
           >
-            <Shell style={barStyle}>
+            <View style={barStyle}>
+              {isDark ? <WelcomeStageBackground /> : null}
               <Animated.View
                 style={{
                   marginRight: 6,
@@ -180,8 +175,11 @@ export function ReactionBarModal({
                 <Ionicons name="chevron-back" size={18} color="rgba(255,255,255,0.8)" />
               </Animated.View>
               {renderEmojiRow(REACTION_EMOJIS_PAGE_1)}
-            </Shell>
-            <Shell style={barStyle}>{renderEmojiRow(REACTION_EMOJIS_PAGE_2)}</Shell>
+            </View>
+            <View style={barStyle}>
+              {isDark ? <WelcomeStageBackground /> : null}
+              {renderEmojiRow(REACTION_EMOJIS_PAGE_2)}
+            </View>
           </ScrollView>
         </Pressable>
       </Pressable>

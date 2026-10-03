@@ -2,11 +2,15 @@ import React, { useEffect, useState } from 'react';
 import {
   AppState,
   Image,
+  Platform,
   StyleSheet,
+  UIManager,
   View,
+  requireNativeComponent,
   useWindowDimensions,
   type LayoutChangeEvent,
   type StyleProp,
+  type ViewProps,
   type ViewStyle,
 } from 'react-native';
 import { useSafeAreaFrame } from 'react-native-safe-area-context';
@@ -57,6 +61,16 @@ const {
 } = buildHomeStageGradient();
 
 /**
+ * Android: тот же профиль рисует натив (StageBackground.kt) — bitmap ровно в пиксели
+ * экрана с blue-noise дизерингом. Градиент HWUI дизерит регулярной шахматкой Байера,
+ * и на OLED (Galaxy S26 Ultra) фон с ней рябил. Сборка без менеджера — прежний градиент.
+ */
+const NativeStageBackground =
+  Platform.OS === 'android' && UIManager.hasViewManagerConfig('LiviStageBackground')
+    ? requireNativeComponent<ViewProps>('LiviStageBackground')
+    : null;
+
+/**
  * Счётчик пробуждений. Нативный слой LinearGradient после сна переиспользуется
  * со старой геометрией: в горизонтали именно он служит фоном, и экран приходил
  * разделённым по вертикали на два тона. Пересоздаём слой при возврате в active —
@@ -92,6 +106,18 @@ function resolveIsWide(width: number, height: number): boolean {
  * повороте или пробуждении не возникает светлого шва.
  */
 export function WelcomeStageBackground() {
+  if (NativeStageBackground) {
+    // Тот же bitmap, что у фона окна, — при повороте и пробуждении шва нет.
+    return (
+      <View style={StyleSheet.absoluteFill} pointerEvents="none">
+        <NativeStageBackground style={StyleSheet.absoluteFill} />
+      </View>
+    );
+  }
+  return <GradientStageBackground />;
+}
+
+function GradientStageBackground() {
   const resumeEpoch = useResumeEpoch();
   // Как и после сна, после поворота нативный слой может остаться со старой геометрией.
   const { width, height } = useWindowDimensions();

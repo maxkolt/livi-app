@@ -180,6 +180,7 @@ class IncomingCallActivity : AppCompatActivity() {
             stopRepeatingVibration()
             // Последний кадр Incoming = welcome-фон (#0A0C14), иначе task-switch даёт серый скачок.
             paintAnswerHandoffCover()
+            LiviFirebaseMessagingService.markIncomingCallAnswered(callId)
             LiviAppModule.setPendingAnswerCall(callId, from, fromNick)
             val deliveredToJs = LiviAppModule.tryDeliverPendingAnswerToJs()
             // Incoming = singleInstance. Без подъёма Main после finish() остаётся лаунчер.
@@ -498,7 +499,7 @@ class IncomingCallActivity : AppCompatActivity() {
     }
 
     /**
-     * Accept → скрыть кнопки/аватар, оставить welcome_stage_bg как на audio VideoCall.
+     * Accept → скрыть кнопки/аватар, оставить фон сцены (StageBackgroundView) как на audio VideoCall.
      * Не затирать ImageView сплошным цветом — иначе серый/плоский кадр вместо сцены.
      */
     private fun paintAnswerHandoffCover() {
@@ -507,7 +508,7 @@ class IncomingCallActivity : AppCompatActivity() {
             val root = findViewById<ViewGroup>(R.id.incoming_call_root)
             root?.setBackgroundColor(stage)
             findViewById<View>(R.id.incoming_call_content)?.visibility = View.INVISIBLE
-            // ImageView welcome_stage_bg остаётся видимым — тот же фон, что у аудиозвонка.
+            // StageBackgroundView остаётся видимым — тот же фон, что у аудиозвонка.
             window?.decorView?.setBackgroundColor(stage)
         } catch (_: Exception) {}
     }
@@ -524,7 +525,7 @@ class IncomingCallActivity : AppCompatActivity() {
             putExtra(MainActivity.EXTRA_PENDING_ANSWER_CALL_ID, callId)
             putExtra(MainActivity.EXTRA_PENDING_ANSWER_FROM, from)
             putExtra(MainActivity.EXTRA_PENDING_ANSWER_FROM_NICK, fromNick)
-            // Native welcome_stage_bg поверх RN до VideoCall.onLayout — без этого мелькает Home.
+            // Нативный фон сцены поверх RN до VideoCall.onLayout — без этого мелькает Home.
             putExtra(MainActivity.EXTRA_INCOMING_ANSWER_COVER, true)
         }
         MainActivity.armIncomingAnswerCover = true

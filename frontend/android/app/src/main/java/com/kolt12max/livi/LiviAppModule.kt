@@ -95,6 +95,12 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     MainActivity.markIncomingCallOverLock()
   }
 
+  /** Держать наготове count соединений к API для WebSocket'ов (см. WarmConnections). */
+  @ReactMethod
+  fun prewarmApiConnections(reason: String?, count: Double) {
+    WarmConnections.warm(reactApplicationContext, reason ?: "js", count.toInt())
+  }
+
   @ReactMethod
   fun setAppLanguage(lang: String?) {
     AppLocale.setAppLanguage(reactApplicationContext, lang)
@@ -632,6 +638,11 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       return
     }
     val normalizedCallId = callId.trim()
+    // Уже принят: сокет после пробуждения повторяет call:incoming — второй входящий не поднимаем.
+    if (LiviFirebaseMessagingService.isIncomingCallAnswered(normalizedCallId)) {
+      Log.i(NAME, "showIncomingCallSystemUI skipped (already answered) callId=$normalizedCallId")
+      return
+    }
     // FCM уже поднял Incoming для этого callId — socket/headless не должен «перезапускать»
     // через closeAnyIncomingScreen(deliverIncomingCallCanceled), иначе экран мелькает и гаснет.
     if (IncomingCallActivity.isAlive && IncomingCallActivity.activeCallId == normalizedCallId) {
@@ -1905,6 +1916,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   /** При обработке livi://answer-call — закрыть IncomingCallActivity по callId (если открыта из уведомления). */
   @ReactMethod
   fun sendCallAnsweredBroadcast(callId: String) {
+    LiviFirebaseMessagingService.markIncomingCallAnswered(callId)
     val intent = Intent(IncomingCallActivity.ACTION_CALL_ANSWERED).apply {
       setPackage(reactApplicationContext.packageName)
       putExtra(IncomingCallActivity.EXTRA_CALL_ID, callId)

@@ -13,43 +13,41 @@ function builtinRef(): { current: BuiltinCallAudioRoute | null } {
   return g.__builtinCallAudioRouteBeforeHeadsetRef;
 }
 
-function beforeVideoRef(): { current: BuiltinCallAudioRoute | null } {
+function builtinChoiceRef(): { current: BuiltinCallAudioRoute | null } {
   const g = global as any;
-  g.__directCallAudioRouteBeforeVideoRef = g.__directCallAudioRouteBeforeVideoRef || { current: null };
-  return g.__directCallAudioRouteBeforeVideoRef;
+  g.__callBuiltinRouteChoiceRef = g.__callBuiltinRouteChoiceRef || { current: null };
+  return g.__callBuiltinRouteChoiceRef;
 }
 
-/** Маршрут (разговорный/громкий) на экране audio до перехода на video UI — не перезаписывается video pin. */
-export function rememberDirectCallAudioRouteBeforeVideo(
+/**
+ * Режим звука звонка — ухо или громкая. Камера его не меняет: включил видео на ухе —
+ * остаёшься на ухе; включил громкую на видео и выключил видео — громкая остаётся.
+ *
+ * Пишут сюда только кнопка маршрута (экран звонка, плашка PiP) и переходы audio↔video,
+ * которые переносят текущий маршрут как есть. Автоматика (video pin, reapply, poll) режим
+ * не выбирает — она его читает. Живёт до конца звонка (сброс в markActiveCallAudioRouteCallId),
+ * без TTL, в отличие от readManualBuiltinCallAudioRoute.
+ */
+export function rememberCallBuiltinRouteChoice(
   fromRoute?: InCallAudioRoute | string | null,
 ): void {
   const norm = normalizeInCallRoute(fromRoute || '') as BuiltinCallAudioRoute | null;
   if (norm !== 'EARPIECE' && norm !== 'SPEAKER_PHONE') return;
-  const existing = beforeVideoRef().current;
-  // Только вне audio UI: product SPEAKER с video pin не затирает earpiece.
-  // На audio (cycle / expand snapshot) SPEAKER должен свободно перезаписывать EARPIECE.
-  if (
-    existing === 'EARPIECE' &&
-    norm === 'SPEAKER_PHONE' &&
-    !isInAudioOnlyCallUi()
-  ) {
-    return;
-  }
-  beforeVideoRef().current = norm;
+  builtinChoiceRef().current = norm;
   builtinRef().current = norm;
 }
 
-export function readDirectCallAudioRouteBeforeVideo(): BuiltinCallAudioRoute | null {
+export function readCallBuiltinRouteChoice(): BuiltinCallAudioRoute | null {
   try {
-    return normalizeInCallRoute(beforeVideoRef().current || '') as BuiltinCallAudioRoute | null;
+    return normalizeInCallRoute(builtinChoiceRef().current || '') as BuiltinCallAudioRoute | null;
   } catch {
     return null;
   }
 }
 
-export function clearDirectCallAudioRouteBeforeVideo(): void {
+export function clearCallBuiltinRouteChoice(): void {
   try {
-    beforeVideoRef().current = null;
+    builtinChoiceRef().current = null;
   } catch {}
 }
 
@@ -68,10 +66,10 @@ export function rememberBuiltinCallRouteBeforeHeadset(
 ): void {
   const norm = normalizeInCallRoute(fromRoute || '');
   if (norm === 'EARPIECE' || norm === 'SPEAKER_PHONE') {
-    // Video pin SPEAKER через setUserRoute не должен портить fallback для return-to-audio.
+    // Авто-SPEAKER на video через setUserRoute не должен портить fallback, если выбрано ухо.
     if (
       norm === 'SPEAKER_PHONE' &&
-      readDirectCallAudioRouteBeforeVideo() === 'EARPIECE' &&
+      readCallBuiltinRouteChoice() === 'EARPIECE' &&
       !isInAudioOnlyCallUi()
     ) {
       return;
@@ -137,6 +135,8 @@ export type HeadsetRouteState = {
   isAudioOnlyCallUi: boolean;
   /** Сохранённый (до входа в headset/BT) builtin-маршрут, либо null. */
   storedBuiltinRoute: BuiltinCallAudioRoute | null;
+  /** Режим звука звонка (ухо/громкая), см. rememberCallBuiltinRouteChoice, либо null. */
+  builtinChoice: BuiltinCallAudioRoute | null;
 };
 
 /** Единственное место, где эта логика трогает global/модульный стейт (импуре-граница). */
@@ -163,6 +163,7 @@ export function gatherHeadsetRouteState(): HeadsetRouteState {
     pipInAppRtcFromAudioOnly: g?.__pipInAppRtcFromAudioOnlyRef?.current === true,
     isAudioOnlyCallUi,
     storedBuiltinRoute: readBuiltinCallRouteBeforeHeadset(),
+    builtinChoice: readCallBuiltinRouteChoice(),
   };
 }
 
@@ -250,7 +251,8 @@ export function resolveCallRouteAfterHeadsetDisconnectFromState(state: HeadsetRo
     return state.lockedRoute;
   }
   if (preferSpeakerAfterHeadsetDisconnectFromState(state)) {
-    return 'SPEAKER_PHONE';
+    // Video: вернуть режим звонка; громкая — только если режим ещё не выбран.
+    return state.builtinChoice ?? 'SPEAKER_PHONE';
   }
   // Audio UI: не восстанавливать SPEAKER из cycle перед BT — только ухо.
   if (state.isAudioOnlyCallUi) {
@@ -272,6 +274,6 @@ export function resolveCallRouteAfterHeadsetDisconnect(): BuiltinCallAudioRoute 
 export function clearBuiltinCallRouteBeforeHeadset(): void {
   try {
     builtinRef().current = null;
-    clearDirectCallAudioRouteBeforeVideo();
+    clearCallBuiltinRouteChoice();
   } catch {}
 }

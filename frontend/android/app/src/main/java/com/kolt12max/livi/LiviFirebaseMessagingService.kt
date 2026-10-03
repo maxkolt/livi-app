@@ -78,6 +78,9 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
         vLog("FCM parsed typeNorm=$typeNorm callId=$callId")
 
         if (typeNorm == "call" && callId != null && from != null) {
+            // Пока звонит, открываем соединения к API: после «Принять» сигналинг LiveKit
+            // пойдёт по готовому, а не будет ждать новое рукопожатие через VPN.
+            WarmConnections.warm(this, "fcm_call", 3)
             LiviAppModule.saveIncomingCallMeta(this, callId, from, fromNick)
             MainActivity.markIncomingCallOverLock()
             val hasVideoCall = data["media"]?.trim()?.lowercase() == "video"
@@ -150,6 +153,21 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                     showMissedCallNotification(callId, from, fromNick)
                     return
                 }
+            }
+            // Звонок уже обработан (принят/отклонён/завершён). Под VPN во сне соединение FCM рвётся,
+            // и первый пуш, ретраи и эскалация сервера по этому callId копятся у Google — после
+            // пробуждения приходят пачкой. Без этой проверки второй входящий поднимался поверх
+            // уже принятого/сброшенного звонка («два звонка подряд»).
+            val alreadyEnded = try { EndedCallIds.isEnded(this, callId) } catch (_: Exception) { false }
+            val alreadyAnswered = isIncomingCallAnswered(callId)
+            if (alreadyEnded || alreadyAnswered) {
+                val lateMs = remoteMessage.sentTime.takeIf { it > 0L }?.let { System.currentTimeMillis() - it }
+                Log.i(
+                    TAG,
+                    "[INCOMING_CALL] SKIP already handled callId=$callId ended=$alreadyEnded " +
+                        "answered=$alreadyAnswered lateMs=$lateMs escalation=${data["escalation"] == "1"}",
+                )
+                return
             }
             // Dual-signal режим (data + notification) может доставить одно и то же call событие дважды.
             // Отсекаем дубликаты по callId в коротком окне, чтобы не было двойного запуска экрана.
@@ -343,6 +361,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
         // Абонент принял вызов — закрыть нативный экран исходящего, вывести MainActivity, сохранить callId для JS (call:getAccepted → call:accepted → переход на VideoCall).
         if (typeNorm == "call_accepted" && callId != null) {
             vLog("FCM call_accepted: closing outgoing, MainActivity callId=$callId")
+            WarmConnections.warm(this, "fcm_call_accepted", 3)
             // 1) Broadcast — если OutgoingCallActivity на экране, закроется по нему
             val closeOutgoing = Intent(OutgoingCallActivity.ACTION_CLOSE_OUTGOING_CALL).apply {
                 setPackage(packageName)
@@ -986,6 +1005,25 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
         const val UNREAD_CHANNEL_ID = CHANNEL_ID_UNREAD
         const val UNREAD_SILENT_CHANNEL_ID = CHANNEL_ID_UNREAD_SILENT
         private const val RECENT_INCOMING_DEDUP_WINDOW_MS = 10_000L
+        /** Сколько помнить принятый звонок: дольше любого ring window с ретраями/эскалацией. */
+        private const val ANSWERED_CALL_MEMORY_MS = 10 * 60 * 1000L
+        private val answeredCallIds = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+        /** Звонок принят (кнопка «Принять» или JS подтвердил ответ) — поздние пуши по нему не поднимают входящий. */
+        @JvmStatic
+        fun markIncomingCallAnswered(callId: String?) {
+            if (callId.isNullOrBlank()) return
+            val now = System.currentTimeMillis()
+            answeredCallIds.entries.removeIf { now - it.value > ANSWERED_CALL_MEMORY_MS }
+            answeredCallIds[callId] = now
+        }
+
+        @JvmStatic
+        fun isIncomingCallAnswered(callId: String?): Boolean {
+            if (callId.isNullOrBlank()) return false
+            val at = answeredCallIds[callId] ?: return false
+            return System.currentTimeMillis() - at <= ANSWERED_CALL_MEMORY_MS
+        }
         /**
          * Через сколько после startActivity проверять, что экран входящего реально появился.
          * Блокировка background activity start проходит молча — исключения нет. Укладываемся

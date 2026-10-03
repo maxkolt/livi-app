@@ -766,8 +766,8 @@ export function markActiveCallAudioRouteCallId(callId?: string | null): void {
       if (g.__builtinCallAudioRouteBeforeHeadsetRef) {
         g.__builtinCallAudioRouteBeforeHeadsetRef.current = null;
       }
-      if (g.__directCallAudioRouteBeforeVideoRef) {
-        g.__directCallAudioRouteBeforeVideoRef.current = null;
+      if (g.__callBuiltinRouteChoiceRef) {
+        g.__callBuiltinRouteChoiceRef.current = null;
       }
       if (g.__directAudioInitialRouteNormalizedKeyRef) {
         g.__directAudioInitialRouteNormalizedKeyRef.current = '';

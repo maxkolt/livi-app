@@ -127,6 +127,7 @@ import { useChatComposer } from './chat/useChatComposer';
 import { useChatClear } from './chat/useChatClear';
 import { useChatHeader } from './chat/useChatHeader';
 import { useChatLongPressMessage } from './chat/useChatLongPressMessage';
+import { ChatMessagePreviewFit } from './chat/ChatMessagePreviewFit';
 import {
   getChatHiddenForMeKey,
   getChatStatusesKey,
@@ -255,11 +256,15 @@ export default function ChatScreen({ route, navigation }: Props) {
       ? 20
       : 14
     : 0;
+  // Landscape: облака переписки чуть ближе к центру; шапка и поле ввода — на всю ширину.
+  const chatListSideInset = modalLayout.isLandscape
+    ? Math.round(Math.min(96, modalLayout.width * 0.07))
+    : 0;
   const chatEmojiPanelHeight = modalLayout.isLandscape
     ? CHAT_EMOJI_PANEL_LANDSCAPE_HEIGHT
     : CHAT_EMOJI_PANEL_HEIGHT;
-  // Меню по долгому нажатию всегда идёт стопкой: реакции сверху, действия ниже.
-  // В landscape оба блока компактнее, чтобы сохранить ту же структуру по высоте.
+  // Меню по долгому нажатию: в portrait стопкой (реакции, облако, действия), в landscape
+  // компактной группой: реакции над облаком, действия вплотную справа — по высоте места мало.
   const msgActionsLandscape = modalLayout.isLandscape;
   /** Строка реакций: MSG_REACTIONS_COLLAPSED эмодзи и стрелка; ячейка — от ширины экрана. */
   const msgReactionCell = msgActionsLandscape
@@ -360,6 +365,10 @@ export default function ChatScreen({ route, navigation }: Props) {
   const BUBBLE_BG_IN = 'rgba(42, 88, 104, 0.25)';
   // Исходящие — как активные кнопки нижней навигации.
   const BUBBLE_BG_OUT = 'rgba(0, 181, 255, 0.08)';
+  // В long-press меню копия сообщения должна оставаться плотной поверх scrim.
+  // Цвета соответствуют обычным полупрозрачным облакам, сведённым с их подложкой.
+  const MESSAGE_ACTIONS_BUBBLE_BG_IN = isDark ? '#1D2D38' : '#B4BDC0';
+  const MESSAGE_ACTIONS_BUBBLE_BG_OUT = isDark ? '#0D2132' : '#B4C0D7';
   const BORDER_WIDTH = 1;
 
   const peerId = String(route?.params?.peerId || "");
@@ -820,7 +829,6 @@ export default function ChatScreen({ route, navigation }: Props) {
   const MSG_ACTIONS_PREVIEW_MIN_H = 56;
   const chatComposerDockRef = useRef<View>(null);
   const msgActionsRootRef = useRef<View>(null);
-  const [msgActionsModalH, setMsgActionsModalH] = useState(0);
   const [msgActionsComposerTop, setMsgActionsComposerTop] = useState<number | null>(null);
   useEffect(() => {
     if (!showMessageActions) setMsgActionsComposerTop(null);
@@ -832,15 +840,17 @@ export default function ChatScreen({ route, navigation }: Props) {
     if (!root || !dock) return;
     root.measureInWindow((_rx, rootY) => {
       dock.measureInWindow((_x, y, _w, h) => {
-        if (h > 0) setMsgActionsComposerTop(Math.round(y - rootY));
+        if (h > 0) {
+          const measuredTop = Math.round(y - rootY);
+          // Один точный замер на открытие: последующие layout-кадры не двигают меню.
+          setMsgActionsComposerTop((current) => current ?? measuredTop);
+        }
       });
     });
   }, []);
   /** Низ стопки меню в координатах модалки. */
   const msgActionsStackBottom =
-    (msgActionsComposerTop ??
-      (msgActionsModalH > 0 ? msgActionsModalH : modalLayout.height - insets.top - insets.bottom) -
-        inputHeight) - MSG_ACTIONS_COMPOSER_GAP;
+    (msgActionsComposerTop ?? MSG_ACTIONS_EDGE_PAD) - MSG_ACTIONS_COMPOSER_GAP;
   const msgActionsStackH = Math.max(0, msgActionsStackBottom - MSG_ACTIONS_EDGE_PAD);
   const closeActionsOnEnterSelection = React.useCallback(() => {
     try {
@@ -951,6 +961,7 @@ export default function ChatScreen({ route, navigation }: Props) {
   }, [showForwardToastBadge, lang]);
   const {
     voiceIsRecording,
+    voiceLocked,
     voiceRecordMs,
     setVoiceRecordMs,
     voiceDragX,
@@ -2578,8 +2589,8 @@ export default function ChatScreen({ route, navigation }: Props) {
           animateMessagePress={animateMessagePress}
           getMessageAnimation={getMessageAnimation}
           formatDurationDot={formatDurationDot}
-          BUBBLE_BG_OUT={BUBBLE_BG_OUT}
-          BUBBLE_BG_IN={BUBBLE_BG_IN}
+          BUBBLE_BG_OUT={centered ? MESSAGE_ACTIONS_BUBBLE_BG_OUT : BUBBLE_BG_OUT}
+          BUBBLE_BG_IN={centered ? MESSAGE_ACTIONS_BUBBLE_BG_IN : BUBBLE_BG_IN}
           LIVI={LIVI}
           isDark={isDark}
           lang={lang}
@@ -2620,6 +2631,8 @@ export default function ChatScreen({ route, navigation }: Props) {
       formatDurationDot,
       BUBBLE_BG_OUT,
       BUBBLE_BG_IN,
+      MESSAGE_ACTIONS_BUBBLE_BG_OUT,
+      MESSAGE_ACTIONS_BUBBLE_BG_IN,
       LIVI,
       isDark,
       lang,
@@ -2697,6 +2710,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 justifyContent: showEmpty ? 'center' : 'flex-end',
                 paddingTop: headerTotalH + 10,
                 paddingBottom: resolvedInputBarH + 14,
+                paddingHorizontal: chatListSideInset,
               }}
               ListFooterComponent={null}
               keyboardShouldPersistTaps="handled"
@@ -2914,7 +2928,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                     <Ionicons
                       name={emojiPanelOpen ? 'keypad-outline' : 'happy-outline'}
                       size={26}
-                      color={emojiPanelOpen ? LIVI.accent.bright : LIVI.titan}
+                      color={emojiPanelOpen ? WELCOME_NAV_ACTIVE_ACCENT.softText : LIVI.titan}
                     />
                   </TouchableOpacity>
                 ) : null}
@@ -2973,7 +2987,8 @@ export default function ChatScreen({ route, navigation }: Props) {
                       </Text>
                     </View>
                   ) : null}
-                  {voiceIsRecording ? (
+                  {/* «Влево — отмена» — только пока держат: запись по тапу отменяют корзиной. */}
+                  {voiceIsRecording && !voiceLocked ? (
                     <View
                       pointerEvents="none"
                       style={{
@@ -3103,6 +3118,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 // inverted: paddingTop = низ (под композер), paddingBottom = верх (под шапку)
                 paddingTop: showEmpty ? 0 : resolvedInputBarH + androidInlineStatusGapH,
                 paddingBottom: showEmpty ? 0 : headerTotalH + 8,
+                paddingHorizontal: chatListSideInset,
               }}
               showsVerticalScrollIndicator={false}
               keyboardShouldPersistTaps="handled"
@@ -3335,7 +3351,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                     <Ionicons
                       name={emojiPanelOpen ? 'keypad-outline' : 'happy-outline'}
                       size={26}
-                      color={emojiPanelOpen ? LIVI.accent.bright : LIVI.titan}
+                      color={emojiPanelOpen ? WELCOME_NAV_ACTIVE_ACCENT.softText : LIVI.titan}
                     />
                   </TouchableOpacity>
                 ) : null}
@@ -3395,7 +3411,8 @@ export default function ChatScreen({ route, navigation }: Props) {
                       </Text>
                     </View>
                   ) : null}
-                  {voiceIsRecording ? (
+                  {/* «Влево — отмена» — только пока держат: запись по тапу отменяют корзиной. */}
+                  {voiceIsRecording && !voiceLocked ? (
                     <View
                       pointerEvents="none"
                       style={{
@@ -3716,29 +3733,28 @@ export default function ChatScreen({ route, navigation }: Props) {
           visible={showMessageActions}
           animationType="fade"
           onRequestClose={hideMessageActions}
+          onShow={measureMsgActionsComposer}
         >
           <Pressable
             ref={msgActionsRootRef}
             onPress={hideMessageActions}
-            onLayout={(e) => {
-              const h = Math.round(e.nativeEvent.layout.height);
-              if (h > 0 && h !== msgActionsModalH) setMsgActionsModalH(h);
-              measureMsgActionsComposer();
-            }}
+            onLayout={measureMsgActionsComposer}
             style={{
               flex: 1,
               // Чат приглушён — видно, какое облако выбрано (его копия над меню).
-              backgroundColor: 'rgba(0,0,0,0.5)',
+              backgroundColor: 'rgba(0,0,0,0.58)',
             }}
           >
             <View
-              pointerEvents="box-none"
+              pointerEvents={msgActionsComposerTop == null ? 'none' : 'box-none'}
               style={{
                 position: 'absolute',
                 left: 0,
                 right: 0,
                 top: MSG_ACTIONS_EDGE_PAD,
                 height: msgActionsStackH,
+                overflow: 'hidden',
+                opacity: msgActionsComposerTop == null ? 0 : 1,
               }}
             >
               {(() => {
@@ -3759,12 +3775,6 @@ export default function ChatScreen({ route, navigation }: Props) {
                   ? SHEET_REACTIONS_ALL
                   : SHEET_REACTIONS_ALL.slice(0, MSG_REACTIONS_COLLAPSED);
                 const emojiFontSize = msgActionsLandscape ? 22 : 26;
-                const rowHeight = msgActionsLandscape ? 40 : 48;
-                const rowPadH = msgActionsLandscape ? 12 : 16;
-                const iconGap = msgActionsLandscape ? 12 : 16;
-                const actionFontSize = msgActionsLandscape ? 14 : 16;
-                const actionIconSize = msgActionsLandscape ? 19 : 22;
-                const CardShell = isDark ? StageGradient : View;
                 const surface = {
                   overflow: 'hidden' as const,
                   backgroundColor: isDark ? undefined : LIVI.bg,
@@ -3858,29 +3868,35 @@ export default function ChatScreen({ route, navigation }: Props) {
                   },
                 });
 
-                // Высоту стопки делят так: реакции и список целиком, копия облака —
-                // сколько останется (длинное сообщение обрезается, а не меню).
+                // Landscape: список — своя колонка во всю высоту; не влезает — строки
+                // чуть мельче (не меньше 80%), дальше прокрутка.
+                const baseRowHeight = msgActionsLandscape ? 40 : 48;
+                const listNaturalH = rows.length * baseRowHeight + 8 + (isRead ? baseRowHeight : 0);
+                const listFit = msgActionsLandscape
+                  ? Math.min(1, Math.max(0.8, msgActionsStackH / listNaturalH))
+                  : 1;
+                const rowHeight = Math.round(baseRowHeight * listFit);
+                const rowPadH = msgActionsLandscape ? 12 : 16;
+                const iconGap = Math.round((msgActionsLandscape ? 12 : 16) * listFit);
+                const actionFontSize = Math.round((msgActionsLandscape ? 14 : 16) * listFit);
+                const actionIconSize = Math.round((msgActionsLandscape ? 19 : 22) * listFit);
+
+                // Portrait: реакции и список целиком, копия облака — сколько останется
+                // (длинное сообщение обрезается, а не меню).
                 const pillRows = msgReactionsExpanded
                   ? Math.ceil((SHEET_REACTIONS_ALL.length + 1) / (MSG_REACTIONS_COLLAPSED + 1))
                   : 1;
                 const pillH = pillRows * msgReactionCell + 10;
-                const listMaxH = Math.max(
-                  msgActionsLandscape ? 120 : 160,
-                  msgActionsStackH - pillH - msgActionsBlockGap * 2 - MSG_ACTIONS_PREVIEW_MIN_H,
-                );
+                const listMaxH = msgActionsLandscape
+                  ? msgActionsStackH
+                  : Math.max(
+                      160,
+                      msgActionsStackH - pillH - msgActionsBlockGap * 2 - MSG_ACTIONS_PREVIEW_MIN_H,
+                    );
 
-                return (
-                <View
-                  pointerEvents="box-none"
-                  style={{
-                    flex: 1,
-                    // Стопка прижата к низу — над полем ввода; реакции и список по центру.
-                    justifyContent: 'flex-end',
-                    alignItems: 'center',
-                  }}
-                >
-                  {/* Реакции: строка эмодзи и стрелка, которая раскрывает все. */}
-                  <CardShell
+                // Реакции: строка эмодзи и стрелка, которая раскрывает все.
+                const reactionsPill = (
+                  <View
                     style={{
                       ...surface,
                       width: msgActionsCardWidth,
@@ -3891,6 +3907,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                       alignItems: 'center',
                     }}
                   >
+                    {isDark ? <WelcomeStageBackground /> : null}
                     {emojis.map((emoji) => (
                       <Pressable
                         key={emoji}
@@ -3937,23 +3954,9 @@ export default function ChatScreen({ route, navigation }: Props) {
                         </View>
                       )}
                     </Pressable>
-                  </CardShell>
-
-                  {/* Копия зажатого облака — по центру, между реакциями и списком. */}
-                  <View
-                    pointerEvents="none"
-                    style={{
-                      alignSelf: 'stretch',
-                      flexShrink: 1,
-                      minHeight: 0,
-                      overflow: 'hidden',
-                      marginVertical: msgActionsBlockGap,
-                    }}
-                  >
-                    {renderMessageRow({ item: selectedMessage, centered: true })}
                   </View>
-
-                  {/* Действия */}
+                );
+                const actionsList = (
                   <View
                     style={{
                       ...surface,
@@ -3965,7 +3968,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                   >
                     <View pointerEvents="none" style={StyleSheet.absoluteFill}>
                       {isDark ? (
-                        <StageGradient style={{ flex: 1, opacity: 0.90 }} />
+                        <WelcomeStageBackground />
                       ) : (
                         <View style={{ flex: 1, backgroundColor: 'rgba(21,31,51,0.90)' }} />
                       )}
@@ -3994,7 +3997,9 @@ export default function ChatScreen({ route, navigation }: Props) {
                       </>
                     ) : null}
                     <ScrollView
-                      style={{ flexShrink: 1 }}
+                      // flexGrow 0: по умолчанию ScrollView растёт, и в landscape-колонке
+                      // список тянулся на всю высоту с пустотой под пунктами.
+                      style={{ flexGrow: 0, flexShrink: 1 }}
                       contentContainerStyle={{ flexGrow: 0, paddingVertical: 4 }}
                       showsVerticalScrollIndicator={false}
                       bounces={false}
@@ -4034,6 +4039,90 @@ export default function ChatScreen({ route, navigation }: Props) {
                       ))}
                     </ScrollView>
                   </View>
+                );
+                const previewRow = renderMessageRow({ item: selectedMessage, centered: true });
+
+                if (msgActionsLandscape) {
+                  // Landscape: одна компактная группа, как стопка в portrait — реакции по центру
+                  // над облаком, список вплотную справа. Облако не влезает — уменьшается целиком.
+                  const sidePadL = Math.max(insets.left, chatChromeSideInset);
+                  const sidePadR = Math.max(insets.right, chatChromeSideInset);
+                  const columnGap = msgActionsBlockGap * 2;
+                  const maxBubbleColumnW = Math.max(
+                    msgActionsCardWidth,
+                    modalLayout.width - sidePadL - sidePadR - columnGap - msgActionsListWidth,
+                  );
+                  // Колонка по ширине зажатого облака — без пустоты между облаком и списком.
+                  const pressedBubbleW = messageActionsLayoutRef.current?.width ?? 0;
+                  const bubbleW = Math.min(
+                    pressedBubbleW > 0 ? Math.ceil(pressedBubbleW) : msgActionsCardWidth,
+                    maxBubbleColumnW,
+                  );
+                  const bubbleColumnW = Math.max(msgActionsCardWidth, bubbleW);
+                  // Строка облака: отступы 16+16, maxWidth 92%, само облако maxWidth 80% —
+                  // рендерим копию на ширине, где облако ложится тем же переносом, что в чате.
+                  const previewRenderW = Math.ceil(Math.max(bubbleW / 0.8 + 32, bubbleW / (0.8 * 0.92))) + 2;
+                  // Фото/альбом фиксированной ширины не переносится — ужимаем по ширине колонки.
+                  const previewWidthScale =
+                    isImageMsg && pressedBubbleW > bubbleColumnW ? bubbleColumnW / pressedBubbleW : 1;
+                  return (
+                    <View
+                      pointerEvents="box-none"
+                      style={{
+                        flex: 1,
+                        justifyContent: 'flex-end',
+                        alignItems: 'center',
+                        paddingLeft: sidePadL,
+                        paddingRight: sidePadR,
+                      }}
+                    >
+                      <View pointerEvents="box-none" style={{ flexDirection: 'row', alignItems: 'center' }}>
+                        <View pointerEvents="box-none" style={{ width: bubbleColumnW, alignItems: 'center' }}>
+                          {reactionsPill}
+                          <View style={{ height: msgActionsBlockGap }} />
+                          <ChatMessagePreviewFit
+                            key={msgId}
+                            maxHeight={msgActionsStackH - pillH - msgActionsBlockGap}
+                            contentWidth={previewRenderW}
+                            widthScale={previewWidthScale}
+                          >
+                            {previewRow}
+                          </ChatMessagePreviewFit>
+                        </View>
+                        <View style={{ width: columnGap }} />
+                        {actionsList}
+                      </View>
+                    </View>
+                  );
+                }
+
+                return (
+                <View
+                  pointerEvents="box-none"
+                  style={{
+                    flex: 1,
+                    // Стопка прижата к низу — над полем ввода; реакции и список по центру.
+                    justifyContent: 'flex-end',
+                    alignItems: 'center',
+                  }}
+                >
+                  {reactionsPill}
+
+                  {/* Копия зажатого облака — по центру, между реакциями и списком. */}
+                  <View
+                    pointerEvents="none"
+                    style={{
+                      alignSelf: 'stretch',
+                      flexShrink: 1,
+                      minHeight: 0,
+                      overflow: 'hidden',
+                      marginVertical: msgActionsBlockGap,
+                    }}
+                  >
+                    {previewRow}
+                  </View>
+
+                  {actionsList}
                 </View>
                 );
               })()}

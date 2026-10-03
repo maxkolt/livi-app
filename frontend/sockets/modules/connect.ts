@@ -3,6 +3,7 @@ import NetInfo from "@react-native-community/netinfo";
 import { AppState, type AppStateStatus, NativeModules, Platform } from "react-native";
 import { getInstallId } from "../../utils/installId";
 import { logger } from "../../utils/logger";
+import { prewarmApiConnections } from "../../utils/warmConnections";
 import {
   startActiveCallNotification,
   stopActiveCallNotification,
@@ -283,6 +284,7 @@ export async function applyAuthAndConnect() {
 
       if (!socket.connected) {
         logger.debug("Connecting socket...");
+        prewarmApiConnections("socket_connect", 1);
         socket.connect();
 
         // IMPORTANT (VPN): do NOT abort on the first connect_error.

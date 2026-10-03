@@ -5921,7 +5921,8 @@ const handleClearNick = useCallback(async () => {
           <View style={styles.overlayModal} pointerEvents="box-none">
             <WelcomeOverlayDim strong />
             <WelcomeOverlayBack onPress={() => setShareVisible(false)} />
-            <WelcomeOverlayCard opaque>
+            <WelcomeOverlayCard opaque style={{ backgroundColor: 'transparent', overflow: 'hidden' }}>
+              <WelcomeStageBackground />
               <Text style={welcomeOverlayText.title}>
                 {t('inviteFriendTitle', lang)}
               </Text>
@@ -5998,7 +5999,8 @@ const handleClearNick = useCallback(async () => {
         {inviteRequestVisible && inviteRequestData && (
           <View style={styles.overlayModal} pointerEvents="box-none">
             <WelcomeOverlayDim strong />
-            <WelcomeOverlayCard opaque>
+            <WelcomeOverlayCard opaque style={{ backgroundColor: 'transparent', overflow: 'hidden' }}>
+              <WelcomeStageBackground />
               <Text style={[welcomeOverlayText.title, { marginBottom: 20 }]}>
                 {t('friendInviteTitle', lang)}
               </Text>

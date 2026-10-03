@@ -35,7 +35,6 @@ import { WELCOME_NAV_ACTIVE_ACCENT, WELCOME_NAV_ACTIVE_ICON, WELCOME_STAGE_BG } 
 import { IncomingAnswerConnectingCover } from "./components/VideoChat/shared/IncomingAnswerConnectingCover";
 import { peekCallAvatar, peekCallNick, primeCallNick } from "./utils/callAvatarPrime";
 import IncomingSharePickerModal from "./components/IncomingSharePickerModal";
-import SystemBarsScrim from "./components/SystemBarsScrim";
 import { PiPProvider, usePiP } from "./src/pip/PiPContext";
 import PiPOverlay from "./src/pip/PiPOverlay";
 import SystemPiPLogoLayer from "./src/pip/SystemPiPLogoLayer";
@@ -152,6 +151,7 @@ import {
   prewarmDirectCallAudioCapture,
 } from './utils/directCallConnectPrewarm';
 import { bootstrapEarlyDirectCallSession } from './utils/earlyDirectCallSession';
+import { startApiConnectionKeeper } from './utils/warmConnections';
 import {
   restoreCallMediaAfterSystemPiPReturn,
   prepareDirectCallVideoExpandFromInAppPiP,
@@ -589,6 +589,8 @@ function AppContent() {
     installExternalHoldSocketRelay();
     installExternalCallHoldHandlers();
   }, []);
+  // VPN с выходом за рубежом: держим наготове соединения к API для сокета и звонков.
+  React.useEffect(() => startApiConnectionKeeper(), []);
   /** Пока true — не скрываем оверлей. После обработки initial URL (в т.ч. answer-call) ставим true, чтобы не мелькала Home у принимающего. */
   const [initialUrlProcessed, setInitialUrlProcessed] = React.useState(false);
   /**
@@ -782,7 +784,7 @@ function AppContent() {
     incomingAnswerCoverDisarmTimersRef.current = [];
     setIncomingAnswerCoverMeta(meta);
     setIncomingAnswerCover(true);
-    // Android: native welcome_stage_bg поверх RN до VideoCall.onLayout.
+    // Android: нативный фон сцены поверх RN до VideoCall.onLayout.
     // Раньше clear/disarm здесь снимал native до paint → вспышка Home/чатов.
     if (Platform.OS === 'android') {
       try { showIncomingAnswerNativeCover(); } catch {}
@@ -2242,7 +2244,7 @@ function AppContent() {
   const wave1 = React.useRef(new Animated.Value(0)).current;
   const wave2 = React.useRef(new Animated.Value(0)).current;
   
-  // Android: scrim под навбаром всегда тёмный → кнопки всегда светлые (читаемы на light/dark теме).
+  // Android: бары прозрачные, под ними тёмная сцена в обеих темах → кнопки навбара светлые.
   React.useEffect(() => {
     if (Platform.OS === 'android') {
       NavigationBar.setButtonStyleAsync('light').catch(() => {});
@@ -3455,6 +3457,22 @@ function AppContent() {
       logger.debug('[call:incoming] Ignoring incoming from current partner (active VideoCall)', { callId: d.callId, from: d.from });
       return;
     }
+    // Этот звонок уже идёт / принимается: после сна сокет переподключается, и сервер повторяет
+    // call:incoming по тому же callId (ретрай без ACK), пока FCM-копии ещё в пути.
+    try {
+      const g = global as any;
+      const sessCallId = String(g.__webrtcSessionRef?.current?.getCallId?.() || '').trim();
+      const pendingAcceptCallId = String(g.__pendingCallAcceptedRef?.current?.callId || '').trim();
+      if (callId && (sessCallId === callId || pendingAcceptCallId === callId)) {
+        logger.info('[call:incoming] skip already handled (active call)', {
+          callId,
+          activeSession: sessCallId === callId,
+          pendingAccept: pendingAcceptCallId === callId,
+          lateMs: Number(d.ts) > 0 ? now - Number(d.ts) : null,
+        });
+        return;
+      }
+    } catch {}
     if (isIncomingCallExpired({ expiresAt: d.expiresAt, ts: d.ts })) {
       logger.info('[call:incoming] Ignoring stale incoming call', {
         callId: d.callId,
@@ -3508,6 +3526,8 @@ function AppContent() {
         fromNick: d.fromNick ?? '',
         hasVideo,
         source: 'app:socket_incoming',
+        // Отклонённый/завершённый звонок не поднимать повторно (повтор call:incoming после сна).
+        checkEnded: true,
       });
     } else if (isCallKeepAvailable()) {
       displayIncomingCall(d.callId, d.from, d.fromNick ?? '', hasVideo, d.callKitId);
@@ -5494,7 +5514,6 @@ export default function App() {
                 <AppContent />
               </AppErrorBoundary>
             </PiPProvider>
-            <SystemBarsScrim />
           </ThemeProvider>
         </KeyboardProvider>
       </SafeAreaProvider>

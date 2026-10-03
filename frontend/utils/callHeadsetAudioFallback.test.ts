@@ -28,6 +28,7 @@ function baseState(overrides: Partial<HeadsetRouteState> = {}): HeadsetRouteStat
     pipInAppRtcFromAudioOnly: false,
     isAudioOnlyCallUi: false,
     storedBuiltinRoute: null,
+    builtinChoice: null,
     ...overrides,
   };
 }
@@ -155,6 +156,14 @@ describe('resolveCallRouteAfterHeadsetDisconnectFromState (главная точ
         baseState({ currentRouteName: 'VideoCall', prefersVideoMedia: true, storedBuiltinRoute: 'EARPIECE' })
       )
     ).toBe('SPEAKER_PHONE');
+  });
+
+  it('video: после снятия BT возвращается выбранный на звонке режим, а не громкая', () => {
+    expect(
+      resolveCallRouteAfterHeadsetDisconnectFromState(
+        baseState({ currentRouteName: 'VideoCall', prefersVideoMedia: true, builtinChoice: 'EARPIECE' })
+      )
+    ).toBe('EARPIECE');
   });
 
   it('приоритет 3: сохранённый маршрут до подключения гарнитуры, если контекст нейтрален', () => {

@@ -1,5 +1,6 @@
 import { getInstallId, getInstallSecret } from "../../utils/installId";
 import { logger } from "../../utils/logger";
+import { prewarmApiConnections } from "../../utils/warmConnections";
 import { API_BASE, CALL_SIGNALING_CONNECT_MS, isOid } from "./constants";
 import { emitAck, ensureSocketConnected, warmCallSignaling } from "./emit";
 import { shared } from "./shared";
@@ -13,6 +14,9 @@ import {
 export type DirectCallMedia = "audio" | "video";
 
 export function startCall(toUserId: string, options?: { media?: DirectCallMedia; callerNick?: string }) {
+  // Пока у собеседника звонит, открываем соединения: после «Принять» сигналинг LiveKit
+  // пойдёт по готовому, без нового рукопожатия через VPN.
+  prewarmApiConnections("call_out", 3);
   const raw = String(toUserId || "").trim();
   if (!isOid(raw)) return Promise.reject(new Error("invalid ObjectId"));
   const to = /^[a-f\d]{24}$/i.test(raw) ? raw.toLowerCase() : raw;
@@ -422,6 +426,7 @@ export function requestCallAcceptedWithRetry(
 export function onCallIncoming(cb: (d: { callId: string; callKitId?: string; from: string; fromNick?: string; ts?: number | string; expiresAt?: number | string }) => void): () => void {
   const h = (d: any) => {
     logger.debug("Socket received call:incoming", { callId: d.callId, from: d.from, fromNick: d.fromNick });
+    prewarmApiConnections("call_in", 3);
     cb(d);
   };
   socket.on("call:incoming", h);

@@ -28,7 +28,7 @@ import {
   setPersistedCallAudioRoute,
 } from './callAudioRoutePersist';
 import { armCallAudioRouteUiLock, clearCallAudioRouteUiLock } from './callAudioRouteTransitionGuards';
-import { rememberBuiltinCallRouteBeforeHeadset, rememberDirectCallAudioRouteBeforeVideo } from './callHeadsetAudioFallback';
+import { rememberBuiltinCallRouteBeforeHeadset, rememberCallBuiltinRouteChoice } from './callHeadsetAudioFallback';
 import { notifyInAppPiPAudioRouteUi } from './callInAppPiPAudioRouteUi';
 import { applyInCallManagerBuiltInRoute } from './voiceCallAudioRoute';
 import { logger } from './logger';
@@ -74,11 +74,8 @@ function persistInAppPiPAudioRoute(route: InCallAudioRoute): void {
   const fromAudioPiP = (global as any).__pipInAppRtcFromAudioOnlyRef?.current === true;
   if (route === 'EARPIECE' || route === 'SPEAKER_PHONE') {
     rememberBuiltinCallRouteBeforeHeadset(route, fromAudioPiP);
-    // Только audio PiP cycle обновляет beforeVideo. Video PiP + product SPEAKER не должен
-    // затирать earpiece, с которым уходили на видео.
-    if (fromAudioPiP) {
-      rememberDirectCallAudioRouteBeforeVideo(route);
-    }
+    // Тап по плашке — выбор режима звонка, и с audio, и с video PiP.
+    rememberCallBuiltinRouteChoice(route);
   }
   setUserSelectedCallAudioRoute(route);
   setPersistedCallAudioRoute(route);

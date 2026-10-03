@@ -303,7 +303,7 @@ class OutgoingCallActivity : AppCompatActivity() {
     }
 
     /**
-     * Accept → скрыть chrome Outgoing, оставить welcome_stage_bg как на audio VideoCall.
+     * Accept → скрыть chrome Outgoing, оставить фон сцены (StageBackgroundView) как на audio VideoCall.
      * Cancel (X) не вызывает — там возврат на Home.
      */
     private fun paintAcceptedHandoffCover() {
@@ -312,7 +312,7 @@ class OutgoingCallActivity : AppCompatActivity() {
             val root = findViewById<ViewGroup>(R.id.outgoing_call_root) ?: return
             root.setBackgroundColor(stage)
             findViewById<View>(R.id.outgoing_call_content)?.visibility = View.INVISIBLE
-            // ImageView welcome_stage_bg остаётся видимым.
+            // StageBackgroundView остаётся видимым.
             window?.decorView?.setBackgroundColor(stage)
         } catch (_: Exception) {}
     }

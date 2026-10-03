@@ -11,6 +11,7 @@ import {
   WELCOME_STAGE_BG,
   isWelcomeTabletLayout,
 } from './constants';
+import { WelcomeFloatShadow } from './WelcomeFloatShadow';
 
 /** Активная вкладка — чуть мягче акцента рамок Search. */
 const ACTIVE_NAV_ACCENT = 'rgba(0, 181, 255, 0.32)';
@@ -46,6 +47,17 @@ type HomeWelcomeTabBarProps = {
 const PROFILE_ACTIVE_DOT = 28;
 
 const INACTIVE = '#7A8494';
+
+/** Android: тень вокруг навбара расходится на 8 dp, как у блоков. */
+const TAB_BAR_SHADOW_SPREAD = 8;
+/**
+ * Снизу тень плотнее (свет сверху): ещё одна тень, сдвинутая на 3 dp вниз, плотностью
+ * 1.1 от основной. Под навбаром до системной навигации ~10 dp — она ложится туда.
+ */
+const TAB_BAR_SHADOW_DROP = 3;
+const TAB_BAR_SHADOW_DROP_OPACITY = 1.1;
+/** По бокам — свой акцент, чуть слабее нижнего. */
+const TAB_BAR_SHADOW_SIDE_OPACITY = 0.8;
 
 function HomeWelcomeTabBarInner({
   activeTab,
@@ -140,11 +152,13 @@ function HomeWelcomeTabBarInner({
       pointerEvents="box-none"
     >
       {Platform.OS === 'android' ? (
-        <>
-          <View pointerEvents="none" style={styles.androidShadowFar} />
-          <View pointerEvents="none" style={styles.androidShadowMid} />
-          <View pointerEvents="none" style={styles.androidShadowNear} />
-        </>
+        <WelcomeFloatShadow
+          radius={WELCOME_CHROME_EDGE_RADIUS}
+          spread={TAB_BAR_SHADOW_SPREAD}
+          dropOffset={TAB_BAR_SHADOW_DROP}
+          dropOpacity={TAB_BAR_SHADOW_DROP_OPACITY}
+          sideOpacity={TAB_BAR_SHADOW_SIDE_OPACITY}
+        />
       ) : (
         <View pointerEvents="none" style={styles.iosShadow} />
       )}
@@ -280,33 +294,6 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 0 },
     shadowOpacity: 0.14,
     shadowRadius: 14,
-  },
-  androidShadowFar: {
-    position: 'absolute',
-    left: -12,
-    right: -12,
-    top: -12,
-    bottom: -12,
-    borderRadius: WELCOME_CHROME_EDGE_RADIUS + 12,
-    backgroundColor: 'rgba(2, 8, 13, 0.018)',
-  },
-  androidShadowMid: {
-    position: 'absolute',
-    left: -7,
-    right: -7,
-    top: -7,
-    bottom: -7,
-    borderRadius: WELCOME_CHROME_EDGE_RADIUS + 7,
-    backgroundColor: 'rgba(2, 8, 13, 0.028)',
-  },
-  androidShadowNear: {
-    position: 'absolute',
-    left: -3,
-    right: -3,
-    top: -3,
-    bottom: -3,
-    borderRadius: WELCOME_CHROME_EDGE_RADIUS + 3,
-    backgroundColor: 'rgba(2, 8, 13, 0.04)',
   },
   row: {
     flexDirection: 'row',

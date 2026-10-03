@@ -54,6 +54,7 @@ import socket, {
 import { applyCallEndedGlobalRefsOnce } from '../../../utils/globalEvents';
 import { reportEndCallToCallKeep } from '../../../utils/callKeep';
 import { logger } from '../../../utils/logger';
+import { prewarmApiConnections } from '../../../utils/warmConnections';
 import { ensureCallMediaPermissions } from '../../../utils/mediaPermissions';
 import { markCallPerf, callPerfSpan, endCallPerfTrace } from '../../../utils/callPerfTrace';
 import { sendClientMetrics } from '../../utils/capacityClientMetrics';
@@ -6952,11 +6953,16 @@ export class VideoCallSession extends SimpleEventEmitter {
     try {
       room.removeAllListeners();
     } catch {}
-    if (room.state === 'disconnected') return;
-    await Promise.race([
-      room.disconnect().catch(() => {}),
-      new Promise<void>((resolve) => setTimeout(resolve, FAILED_ROOM_DISCONNECT_WAIT_MS)),
-    ]);
+    if (room.state !== 'disconnected') {
+      await Promise.race([
+        room.disconnect().catch(() => {}),
+        new Promise<void>((resolve) => setTimeout(resolve, FAILED_ROOM_DISCONNECT_WAIT_MS)),
+      ]);
+    }
+    // disconnect() зависшего на signaling SDK не закрывает его WebSocket: соединение,
+    // пробившееся через VPN позже, входило в комнату тем же участником, и сервер выбивал
+    // уже следующую попытку как дубликат. Закрываем engine и сокет явно.
+    this.forceDisposeRoom(room, 'abort_failed_connect');
   }
 
   /**
@@ -7024,8 +7030,10 @@ export class VideoCallSession extends SimpleEventEmitter {
       targetRoomName,
       proxyHost: new URL(proxyUrl).hostname,
       connectReason: options?.reason || null,
+      proxyRetried: !!options?.proxyRetried,
       error: errorMessage,
     });
+    prewarmApiConnections('livekit_proxy_retry', 2);
     await this.abortFailedConnectRoom(room);
     if (this.room === room) {
       this.room = null;
@@ -7041,9 +7049,10 @@ export class VideoCallSession extends SimpleEventEmitter {
       {
         forceRelayOnly: options?.forceRelayOnly,
         signalProxyTried: true,
-        directSignalUrl: options?.directSignalUrl || directUrl,
+        directSignalUrl: options?.directSignalUrl || directUrl || undefined,
         directSignalTried: options?.directSignalTried,
-        reason: 'signal_proxy_retry',
+        proxyRetried: options?.proxyRetried,
+        reason: options?.proxyRetried ? 'signal_proxy_again' : 'signal_proxy_retry',
       },
       true,
     );
@@ -7081,6 +7090,7 @@ export class VideoCallSession extends SimpleEventEmitter {
         signalProxyTried: true,
         directSignalUrl: directUrl,
         directSignalTried: true,
+        proxyRetried: options.proxyRetried,
         reason: 'direct_signal_retry',
       },
       true,
@@ -7181,6 +7191,25 @@ export class VideoCallSession extends SimpleEventEmitter {
       });
     } else {
       const isSignalError = isLikelyLiveKitSignalError(errorMessage);
+      // Через VPN новое соединение к API порой открывается дольше сторожа, а прямой
+      // LiveKit оттуда почти недоступен. Поэтому proxy повторяем ещё раз (уже по
+      // прогретому соединению), и только потом пробуем прямой адрес.
+      if (
+        isSignalError &&
+        isLiveKitSignalProxyUrl(url, API_BASE) &&
+        !options?.proxyRetried &&
+        this.connectRequestId === connectRequestId
+      ) {
+        return this.retryConnectWithSignalProxy(
+          room,
+          options?.directSignalUrl || '',
+          token,
+          connectRequestId,
+          targetRoomName,
+          { ...options, proxyRetried: true },
+          errorMessage,
+        );
+      }
       if (
         isSignalError &&
         isLiveKitSignalProxyUrl(url, API_BASE) &&
@@ -7840,6 +7869,8 @@ export class VideoCallSession extends SimpleEventEmitter {
     options?: LiveKitConnectOptions,
     rtcConfig?: RTCConfiguration,
   ): Promise<void> {
+    // Освежить запас соединений к API: им воспользуются ретраи сигналинга.
+    prewarmApiConnections('livekit_connect', 2);
     // КРИТИЧНО: свой ICE/TURN передаём именно здесь. В опциях конструктора Room
     // livekit-client его игнорирует — см. ./videoCall/iceConnectOptions.
     const connectOptions = buildLiveKitConnectOptions({

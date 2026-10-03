@@ -6,13 +6,10 @@
     android:layout_height="match_parent"
     android:background="#0A0C14">
 
-    <ImageView
+    <!-- Основной фон, пиксель-в-пиксель с blue-noise дизерингом (StageBackground.kt). -->
+    <com.kolt12max.livi.StageBackgroundView
         android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:contentDescription="@null"
-        android:importantForAccessibility="no"
-        android:scaleType="fitXY"
-        android:src="@drawable/welcome_stage_bg" />
+        android:layout_height="match_parent" />
 
     <LinearLayout
         android:id="@+id/incoming_call_content"

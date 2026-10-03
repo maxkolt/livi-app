@@ -307,6 +307,8 @@ type DustSim = {
   aXf: SkRSXform[];
   // Состояние цикла.
   live: boolean;
+  /** Палец задел хотя бы одну частицу — с этого кадра идёт подмена аватара. */
+  engaged: boolean;
   frames: number;
   settle: number;
   lastT: number;
@@ -578,6 +580,7 @@ export function AvatarDustOverlay({ dust, source, avatarRef }: AvatarDustOverlay
       aSpr: [],
       aXf: [],
       live: false,
+      engaged: false,
       frames: 0,
       settle: 0,
       lastT: 0,
@@ -677,6 +680,7 @@ export function AvatarDustOverlay({ dust, source, avatarRef }: AvatarDustOverlay
     }
     S.bounds = Skia.XYWHRect(0, 0, o.width, o.height);
     S.live = true;
+    S.engaged = false;
     S.frames = 0;
     S.settle = 0;
     S.lastT = ts;
@@ -758,6 +762,18 @@ export function AvatarDustOverlay({ dust, source, avatarRef }: AvatarDustOverlay
           markCell(S, i, 0);
         }
       }
+    }
+
+    // Касание мимо аватара (жест — на всё поле радара) не трогает его: пока палец не
+    // задел ни одной частицы, копию не рисуем и настоящий аватар не прячем. Иначе
+    // каждый тап по фону дважды подменял аватар копией — он мерцал.
+    if (!S.engaged) {
+      if (S.actN === 0) {
+        if (down) return true;
+        S.live = false;
+        return false;
+      }
+      S.engaged = true;
     }
 
     const push = PUSH * u;

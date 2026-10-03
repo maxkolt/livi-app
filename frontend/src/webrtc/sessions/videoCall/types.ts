@@ -35,6 +35,8 @@ export type LiveKitConnectOptions = {
   directSignalUrl?: string;
   /** Уже пробовали обратный fallback с proxy на прямой LiveKit URL. */
   directSignalTried?: boolean;
+  /** Proxy уже повторяли: второй раз он идёт по прогретому соединению (VPN). */
+  proxyRetried?: boolean;
   reason?: string;
 };
 

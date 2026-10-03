@@ -3,7 +3,7 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { EmojiKeyboard, en, ru, type EmojiType } from 'rn-emoji-keyboard';
 import { BUILT_IN_STICKER_PACKS, StickerView, type BuiltInSticker } from './chatStickers';
-import { StageGradient } from '../screens/home/WelcomeStageBackground';
+import { WelcomeStageBackground } from '../screens/home/WelcomeStageBackground';
 import { t, type Lang } from '../utils/i18n';
 
 export const CHAT_EMOJI_PANEL_HEIGHT = 280;
@@ -40,9 +40,8 @@ export default function ChatEmojiKeyboard({
   const [packId, setPackId] = React.useState(BUILT_IN_STICKER_PACKS[0]?.id || '');
   const translation = lang === 'ru' ? ru : en;
   const activePack = BUILT_IN_STICKER_PACKS.find((pack) => pack.id === packId) || BUILT_IN_STICKER_PACKS[0];
-  // Тёмная тема: тот же StageGradient, что у модалки long-press (прозрачный fill поверх bitmap).
+  // Тёмная тема: новый общий фон приложения, как у панелей реакций.
   const panelFill = isDark ? 'transparent' : surfaceBg;
-  const Shell = isDark ? StageGradient : View;
   const panelHeight = compact
     ? CHAT_EMOJI_PANEL_LANDSCAPE_HEIGHT
     : CHAT_EMOJI_PANEL_HEIGHT;
@@ -107,7 +106,8 @@ export default function ChatEmojiKeyboard({
   );
 
   return (
-    <Shell style={StyleSheet.flatten([styles.wrap, { height: panelHeight }, !isDark ? { backgroundColor: surfaceBg } : null])}>
+    <View style={StyleSheet.flatten([styles.wrap, { height: panelHeight }, !isDark ? { backgroundColor: surfaceBg } : null])}>
+      {isDark ? <WelcomeStageBackground /> : null}
       <View style={[styles.content, { height: panelHeight - switchHeight }]}>
         {tab === 'emoji' ? (
           <EmojiKeyboard
@@ -261,7 +261,7 @@ export default function ChatEmojiKeyboard({
           </Pressable>
         ) : null}
       </View>
-    </Shell>
+    </View>
   );
 }
 

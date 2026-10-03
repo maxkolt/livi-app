@@ -11,11 +11,12 @@ import {
   StyleSheet,
   Linking,
   Dimensions,
+  type ViewStyle,
 } from "react-native";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { Image as ExpoImage } from "expo-image";
 import * as FileSystem from "expo-file-system";
-import Svg, { Circle as SvgCircle, Defs, LinearGradient, Stop, G } from "react-native-svg";
+import Svg, { Circle as SvgCircle, Defs, LinearGradient, Stop, G, Path } from "react-native-svg";
 import { useResolvedImageUri } from "../../hooks/useResolvedImageUri";
 import { logger } from "../../utils/logger";
 import { t, type Lang } from "../../utils/i18n";
@@ -35,6 +36,102 @@ const SELECT_CHECK = WELCOME_BRAND_VI_FILL_GRADIENT[2];
 const SELECT_CHECK_BG = "rgba(74, 122, 140, 0.22)";
 import { ChatAlbumGrid } from "./ChatAlbumGrid";
 import { ChatReplyQuoteAccent } from "./ChatReplyQuoteAccent";
+
+/** Вытянутый нижний хвост облака: справа у исходящего, слева у входящего. */
+function ChatBubbleTail({ isOwn, color }: { isOwn: boolean; color: string }) {
+  return (
+    <Svg
+      pointerEvents="none"
+      width={11}
+      height={10}
+      viewBox="0 0 11 10"
+      style={{
+        position: "absolute",
+        bottom: 0,
+        ...(isOwn ? { right: 0 } : { left: 0 }),
+      }}
+    >
+      <Path
+        d={
+          isOwn
+            ? "M0 0C1.4 3.7 4.2 6.3 8.8 7.5C10.2 7.8 11 8.2 11 8.6C11 9.1 10.1 9.5 8.9 9.6C5.8 9.9 2.7 9.3 0 9Z"
+            : "M11 0C9.6 3.7 6.8 6.3 2.2 7.5C0.8 7.8 0 8.2 0 8.6C0 9.1 0.9 9.5 2.1 9.6C5.2 9.9 8.3 9.3 11 9Z"
+        }
+        fill={color}
+      />
+    </Svg>
+  );
+}
+
+function splitBubbleColor(color: string): { solidColor: string; opacity: number } {
+  const rgba = color.match(
+    /^rgba\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*\)$/i,
+  );
+  if (!rgba) return { solidColor: color, opacity: 1 };
+  return {
+    solidColor: `rgb(${rgba[1]}, ${rgba[2]}, ${rgba[3]})`,
+    opacity: Math.max(0, Math.min(1, Number(rgba[4]))),
+  };
+}
+
+/**
+ * Тело и хвост сначала рисуются одним сплошным силуэтом, затем прозрачность
+ * применяется ко всему слою. Поэтому в месте их пересечения нет полосы склейки.
+ */
+function ChatBubbleBackground({
+  isOwn,
+  color,
+  corners,
+  showTail,
+}: {
+  isOwn: boolean;
+  color: string;
+  corners: ViewStyle;
+  showTail: boolean;
+}) {
+  const { solidColor, opacity } = splitBubbleColor(color);
+
+  if (!showTail) {
+    return (
+      <View
+        pointerEvents="none"
+        style={[StyleSheet.absoluteFill, corners, { backgroundColor: solidColor, opacity }]}
+      />
+    );
+  }
+
+  // Хвост шириной 11 px заходит под тело на 2 px; наружу выступают только 9 px.
+  const extension = 9;
+  return (
+    <View
+      pointerEvents="none"
+      collapsable={false}
+      needsOffscreenAlphaCompositing={opacity < 1}
+      renderToHardwareTextureAndroid={opacity < 1}
+      style={{
+        position: "absolute",
+        top: 0,
+        bottom: -1,
+        opacity,
+        ...(isOwn ? { left: 0, right: -extension } : { left: -extension, right: 0 }),
+      }}
+    >
+      <View
+        style={[
+          {
+            position: "absolute",
+            top: 0,
+            bottom: 1,
+            backgroundColor: solidColor,
+          },
+          isOwn ? { left: 0, right: extension } : { left: extension, right: 0 },
+          corners,
+        ]}
+      />
+      <ChatBubbleTail isOwn={isOwn} color={solidColor} />
+    </View>
+  );
+}
 
 /** Разбивает текст на сегменты «текст» и «ссылка» для отображения кликабельных URL в сообщениях. */
 function parseTextWithUrls(text: string): { type: "text" | "url"; value: string }[] {
@@ -833,11 +930,13 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
   const ANDROID_RING_PX = 1;
   /**
    * Углы как в Telegram: скругление 17, со стороны отправителя внутри серии — 6,
-   * у последнего в серии внизу «хвостик» — 4. Копия в меню — одиночное облако.
+   * у последнего в серии внизу — более острый угол с вытянутым хвостиком.
+   * Копия в меню — одиночное облако.
    */
   const BUBBLE_RADIUS = 17;
   const BUBBLE_RADIUS_GROUPED = 6;
-  const BUBBLE_RADIUS_TAIL = 4;
+  // Хвост продолжает прямую грань без отдельного закруглённого «крючка».
+  const BUBBLE_RADIUS_TAIL = 0;
   const joinedAbove = !centered && !!item.groupedWithPrev;
   const joinedBelow = !centered && !!item.groupedWithNext;
   const bubbleCorners = (extra = 0) => {
@@ -963,10 +1062,15 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
               paddingHorizontal: 12,
               paddingVertical: 9,
               ...bubbleCorners(),
-              backgroundColor: bubbleBg,
               minWidth: 148,
             }}
           >
+            <ChatBubbleBackground
+              isOwn={isMyMessage}
+              color={bubbleBg}
+              corners={bubbleCorners()}
+              showTail={!joinedBelow}
+            />
             <MaterialCommunityIcons name={iconName as any} size={18} color={iconColor} />
             <View style={{ flexShrink: 1, minWidth: 0 }}>
               <Text
@@ -1412,7 +1516,6 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
               style={({ pressed }) => [
                 {
                   ...bubblePadStyle,
-                  backgroundColor: bubbleFill,
                   ...bubbleCorners(),
                   borderWidth: isQuotedTargetHighlighted ? 1 : 0,
                   borderColor: highlightAccentColor,
@@ -1422,6 +1525,12 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
                 pressed && !selectionMode && !isAlbumImage ? { opacity: 0.94 } : null,
               ]}
             >
+              <ChatBubbleBackground
+                isOwn={isMyMessage}
+                color={bubbleFill}
+                corners={bubbleCorners()}
+                showTail={!joinedBelow}
+              />
               {bubbleWithReply}
             </Pressable>
           );

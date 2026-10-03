@@ -1,4 +1,7 @@
-/** Hold-to-record voice: gesture, recorder lifecycle, cancel-to-trash UI. */
+/**
+ * Voice recording: tap — records hands-free until send / mic / trash; hold — records
+ * while held, release sends, swipe left cancels. Recorder lifecycle, cancel-to-trash UI.
+ */
 
 import React from "react";
 import { Animated, PanResponder, View } from "react-native";
@@ -11,6 +14,7 @@ import {
   VOICE_CANCEL_ARM_DX,
   VOICE_CANCEL_DISARM_DX,
   VOICE_MAX_MS,
+  VOICE_TAP_MAX_MS,
   isPointInTrashZone,
   type TrashZone,
 } from "./chatVoiceRecord";
@@ -61,6 +65,15 @@ export function useChatVoiceRecord({
   const voiceCancelTriggeredRef = React.useRef(false);
   /** True in onPanResponderGrant — trash swipe works before setState(voiceIsRecording). */
   const voiceDragEnabledRef = React.useRef(false);
+  /** Это нажатие запустило запись (а не останавливает уже идущую). */
+  const pressStartedRecordingRef = React.useRef(false);
+  /** Запись по тапу: идёт без пальца, свайп-отмены нет. */
+  const voiceLockedRef = React.useRef(false);
+  const [voiceLocked, setVoiceLockedState] = React.useState(false);
+  const setVoiceLocked = React.useCallback((locked: boolean) => {
+    voiceLockedRef.current = locked;
+    setVoiceLockedState(locked);
+  }, []);
   const [voiceIsRecording, setVoiceIsRecording] = React.useState(false);
   const [voiceRecordMs, setVoiceRecordMs] = React.useState(0);
 
@@ -157,6 +170,7 @@ export function useChatVoiceRecord({
       voiceStopInProgressRef.current = true;
       voiceRecordingRef.current = null;
       setVoiceIsRecording(false);
+      setVoiceLocked(false);
       try {
         stopLocalRecordingSignal();
       } catch {}
@@ -216,13 +230,14 @@ export function useChatVoiceRecord({
         restoreAudioMode();
       }
     },
-    [voiceRecordMs, resetVoiceGesture, restoreAudioMode, stopLocalRecordingSignal],
+    [voiceRecordMs, resetVoiceGesture, restoreAudioMode, stopLocalRecordingSignal, setVoiceLocked],
   );
   stopVoiceRecordingRef.current = stopVoiceRecording;
 
   const startVoiceRecording = React.useCallback(async () => {
     if (voiceStartingRef.current || voiceRecordingRef.current) return;
     if (!currentUserId || !peerId || selectionMode) {
+      setVoiceLocked(false);
       resetVoiceGesture();
       return;
     }
@@ -232,6 +247,7 @@ export function useChatVoiceRecord({
 
     const abandonStart = () => {
       setVoiceIsRecording(false);
+      setVoiceLocked(false);
       try {
         stopLocalRecordingSignal();
       } catch {}
@@ -259,6 +275,7 @@ export function useChatVoiceRecord({
         try {
           stopLocalRecordingSignal();
         } catch {}
+        setVoiceLocked(false);
         resetVoiceGesture();
         const asked = perm.canAskAgain ? await Audio.requestPermissionsAsync() : perm;
         if (!asked.granted) showNotice("error", t("errorTitle", lang), t("needMicPermission", lang));
@@ -338,6 +355,8 @@ export function useChatVoiceRecord({
       abandonStart();
     } finally {
       voiceStartingRef.current = false;
+      // Тап, пока спрашивали разрешение: записи нет — режим «без пальца» не оставляем.
+      if (!voiceRecordingRef.current) setVoiceLocked(false);
     }
   }, [
     currentUserId,
@@ -348,6 +367,7 @@ export function useChatVoiceRecord({
     showNotice,
     lang,
     stopLocalRecordingSignal,
+    setVoiceLocked,
   ]);
 
   const cancelVoiceRecordingWithAnimation = React.useCallback(async () => {
@@ -372,7 +392,12 @@ export function useChatVoiceRecord({
       onPanResponderTerminationRequest: () => false,
       onPanResponderGrant: () => {
         voicePressAtRef.current = Date.now();
-        logger.info("[voice] press", { starting: voiceStartingRef.current, recording: !!voiceRecordingRef.current });
+        pressStartedRecordingRef.current = !voiceStartingRef.current && !voiceRecordingRef.current;
+        logger.info("[voice] press", {
+          starting: voiceStartingRef.current,
+          recording: !!voiceRecordingRef.current,
+          locked: voiceLockedRef.current,
+        });
         voiceDragEnabledRef.current = true;
         try {
           Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -391,7 +416,7 @@ export function useChatVoiceRecord({
         void startVoiceRecording();
       },
       onPanResponderMove: (_evt, gestureState) => {
-        if (!voiceDragEnabledRef.current) return;
+        if (!voiceDragEnabledRef.current || voiceLockedRef.current) return;
         const dx = Math.min(0, Math.max(-120, gestureState.dx));
         voiceDragX.setValue(dx);
         const inZone = isInTrashZone(
@@ -410,11 +435,27 @@ export function useChatVoiceRecord({
       },
       onPanResponderRelease: async (_evt, gestureState) => {
         Animated.timing(micScale, { toValue: 1, duration: 44, useNativeDriver: true }).start();
+        const heldMs = sincePress();
         logger.info("[voice] release", {
-          sincePressMs: sincePress(),
+          sincePressMs: heldMs,
           starting: voiceStartingRef.current,
           recording: !!voiceRecordingRef.current,
+          locked: voiceLockedRef.current,
         });
+        const startedNow = pressStartedRecordingRef.current;
+        pressStartedRecordingRef.current = false;
+        if (
+          startedNow &&
+          heldMs >= 0 &&
+          heldMs < VOICE_TAP_MAX_MS &&
+          !cancelArmedRef.current &&
+          (voiceStartingRef.current || !!voiceRecordingRef.current)
+        ) {
+          // Тап: запись идёт дальше без пальца — до «Отправить», микрофона или корзины.
+          setVoiceLocked(true);
+          resetVoiceGesture();
+          return;
+        }
         if (!voiceRecordingRef.current) {
           // Запуск ещё идёт — пусть он сам выбросит запись, как только поднимется.
           if (voiceStartingRef.current) voiceReleasedDuringStartRef.current = true;
@@ -426,7 +467,8 @@ export function useChatVoiceRecord({
           Number(gestureState.moveX || 0),
           Number(gestureState.moveY || 0),
         );
-        if (inZone || dx <= VOICE_CANCEL_ARM_DX || cancelArmedRef.current) {
+        // Запись по тапу отменяют только корзиной: нажатие на микрофон её отправляет.
+        if (!voiceLockedRef.current && (inZone || dx <= VOICE_CANCEL_ARM_DX || cancelArmedRef.current)) {
           await cancelVoiceRecordingWithAnimation();
           return;
         }
@@ -462,6 +504,7 @@ export function useChatVoiceRecord({
     peerId,
     selectionMode,
     startLocalRecordingSignal,
+    setVoiceLocked,
   ]);
 
   React.useEffect(() => {
@@ -505,6 +548,7 @@ export function useChatVoiceRecord({
 
   return {
     voiceIsRecording,
+    voiceLocked,
     voiceRecordMs,
     setVoiceRecordMs,
     voiceDragX,

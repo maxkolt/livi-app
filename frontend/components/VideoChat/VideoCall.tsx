@@ -124,9 +124,9 @@ import {
   goBackFromCallScreenOrHome,
 } from '../../utils/appNavigationGuard';
 import type { RootStackParamList } from '../../navigation/types';
-import { getPersistedCallAudioRoute, persistVideoInAppPiPAudioRoute, readPreferredCallAudioRouteForTransition, setPersistedCallAudioRoute, scheduleReapplyPersistedCallAudioRoute, scheduleVideoCallReturnFromPiPAudioReapply, isCallAudioPiPTransitionWindow, shouldPreserveCallAudioRouteInInAppPiP, shouldDeferPreserveDuringCallBootstrap, hasRealInAppPiPOrSystemReturnContext, prepareDirectCallVideoExpandFromInAppPiP, resolveFullVideoCallScreenAudioRoute, readExplicitVideoCallBuiltInRoute, armCallAudioRouteUiLock, readCallAudioRouteUiLock, applyCallAudioOutputRouteNow, clearScheduledCallAudioRouteReapplies, clearCallAudioRouteUiLock, isDirectCallVideoExpandAudioPreparedRecently, markDirectCallVideoExpandAudioPrepared, clearDirectCallVideoExpandAudioPrepared, cancelScheduledCallAudioRouteReappliesMatching, resolveStayOnAudioUiRouteWhenPartnerEntersVideo, markCallAudioReturnToUiSyncApplied, shouldSkipScheduledReturnToAudioUiReapply, clearStaleVideoSpeakerUiLockForAudioOnlyUi, cancelDeferredVideoMediaAudioReappliesForLocalAudioUi, armLocalAudioOnlyUiAudioRoutingQuiet } from '../../utils/callAudioRoutePersist';
-import { readBuiltinCallRouteBeforeHeadset, rememberBuiltinCallRouteBeforeHeadset, rememberDirectCallAudioRouteBeforeVideo, readDirectCallAudioRouteBeforeVideo } from '../../utils/callHeadsetAudioFallback';
-import { isExternalHeadsetRoute, mapRouteForEnterVideoUi, type InCallAudioRoute, normalizeInCallRoute } from './hooks/audioRouteTypes';
+import { getPersistedCallAudioRoute, persistVideoInAppPiPAudioRoute, readPreferredCallAudioRouteForTransition, setPersistedCallAudioRoute, scheduleReapplyPersistedCallAudioRoute, scheduleVideoCallReturnFromPiPAudioReapply, isCallAudioPiPTransitionWindow, shouldPreserveCallAudioRouteInInAppPiP, shouldDeferPreserveDuringCallBootstrap, hasRealInAppPiPOrSystemReturnContext, prepareDirectCallVideoExpandFromInAppPiP, resolveFullVideoCallScreenAudioRoute, mapRouteForVideoUiKeepingChoice, armCallAudioRouteUiLock, readCallAudioRouteUiLock, applyCallAudioOutputRouteNow, clearScheduledCallAudioRouteReapplies, clearCallAudioRouteUiLock, isDirectCallVideoExpandAudioPreparedRecently, markDirectCallVideoExpandAudioPrepared, clearDirectCallVideoExpandAudioPrepared, cancelScheduledCallAudioRouteReappliesMatching, resolveStayOnAudioUiRouteWhenPartnerEntersVideo, markCallAudioReturnToUiSyncApplied, shouldSkipScheduledReturnToAudioUiReapply, clearStaleVideoSpeakerUiLockForAudioOnlyUi, cancelDeferredVideoMediaAudioReappliesForLocalAudioUi, armLocalAudioOnlyUiAudioRoutingQuiet } from '../../utils/callAudioRoutePersist';
+import { readBuiltinCallRouteBeforeHeadset, rememberBuiltinCallRouteBeforeHeadset, rememberCallBuiltinRouteChoice, readCallBuiltinRouteChoice } from '../../utils/callHeadsetAudioFallback';
+import { isExternalHeadsetRoute, type InCallAudioRoute, normalizeInCallRoute } from './hooks/audioRouteTypes';
 import { useAudioRouting } from './hooks/useAudioRouting';
 import { usePiP as usePiPHook } from './hooks/usePiP';
 import { useDraggableLocalPip } from './hooks/useDraggableLocalPip';
@@ -377,7 +377,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
   const toggleCamGenerationRef = useRef(0);
   const remoteCamOnRef = useRef(false);
 
-  /** Обе камеры off → audio shell + beforeVideo (ухо), иначе громкая с video pin остаётся. */
+  /** Обе камеры off → audio shell с тем же режимом звонка. */
   const maybeReturnToAudioWhenBothCamsOff = useCallback((session?: VideoCallSession | null) => {
     if (!route?.params?.directCall) return;
     // Во время своего toggleCam enableRemoteVideoConsumption шлёт remoteCam=false —
@@ -408,7 +408,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
 
   /**
    * Своя камера off, peer ещё с видео → остаёмся на video UI как зритель,
-   * маршрут = beforeVideo (обычно EARPIECE), не product SPEAKER.
+   * маршрут = режим звонка (или текущий ухо/громкая, если режим не выбран).
    */
   const restoreViewerAudioRouteAfterLocalCamOff = useCallback((session?: VideoCallSession | null) => {
     if (!route?.params?.directCall) return;
@@ -429,14 +429,11 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     if (s.getRemoteCamEnabled?.() !== true) return;
 
     const extNow = readActiveExternalCallAudioRoute(userRouteRef.current);
-    const beforeVideo = readDirectCallAudioRouteBeforeVideo();
+    const liveBuiltin = normalizeInCallRoute(userRouteRef.current);
     const preservedRoute: InCallAudioRoute =
       (extNow && isExternalHeadsetRoute(extNow) ? extNow : null) ||
-      (beforeVideo === 'EARPIECE' ||
-      beforeVideo === 'SPEAKER_PHONE' ||
-      (beforeVideo && isExternalHeadsetRoute(beforeVideo))
-        ? beforeVideo
-        : null) ||
+      readCallBuiltinRouteChoice() ||
+      (liveBuiltin === 'EARPIECE' || liveBuiltin === 'SPEAKER_PHONE' ? liveBuiltin : null) ||
       'EARPIECE';
 
     cancelScheduledCallAudioRouteReappliesMatching(['direct_call_video_ui_route']);
@@ -452,6 +449,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       setUserSelectedCallAudioRoute(preservedRoute);
       markUserSelectedExternalCallAudioRoute(preservedRoute);
     } else if (preservedRoute === 'EARPIECE' || preservedRoute === 'SPEAKER_PHONE') {
+      rememberCallBuiltinRouteChoice(preservedRoute);
       armCallAudioRouteUiLock(preservedRoute);
       setUserSelectedCallAudioRoute(preservedRoute);
       if (preservedRoute === 'SPEAKER_PHONE') {
@@ -1386,13 +1384,19 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
   };
 
   const rememberAudioPageRouteBeforeVideoUi = useCallback(() => {
-    // Уже на video UI — не затирать earpiece/BT-память текущим SPEAKER.
+    // Уже на video UI — режим звонка там пишет только кнопка, не этот снимок.
     if (!inAudioOnlyUiRef.current && stayOnVideoCallUiRef.current) {
       return;
     }
     const external = readActiveExternalCallAudioRoute(userRouteRef.current);
-    if (external) return;
-    // live = актуальный выбор на audio (в т.ч. после cycle SPEAKER). Не «EARPIECE wins».
+    if (external) {
+      // На гарнитуре: режим звонка — встроенный маршрут под ней (вернётся после снятия на video).
+      if (!readCallBuiltinRouteChoice()) {
+        rememberCallBuiltinRouteChoice(readBuiltinCallRouteBeforeHeadset());
+      }
+      return;
+    }
+    // Режим звонка = что сейчас играет на audio (в т.ч. после cycle SPEAKER) — видео его не меняет.
     const live = normalizeInCallRoute(userRouteRef.current);
     const uiLock = readCallAudioRouteUiLock();
     const snap: InCallAudioRoute | null =
@@ -1402,13 +1406,13 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
           ? uiLock
           : null;
     if (snap === 'EARPIECE' || snap === 'SPEAKER_PHONE') {
-      rememberDirectCallAudioRouteBeforeVideo(snap);
+      rememberCallBuiltinRouteChoice(snap);
       rememberBuiltinCallRouteBeforeHeadset(snap, true);
       return;
     }
     const persisted = getPersistedCallAudioRoute();
     if (persisted === 'EARPIECE' || persisted === 'SPEAKER_PHONE') {
-      rememberDirectCallAudioRouteBeforeVideo(persisted);
+      rememberCallBuiltinRouteChoice(persisted);
       rememberBuiltinCallRouteBeforeHeadset(persisted, true);
     }
   }, []);
@@ -1438,9 +1442,9 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       if (pipIntent && isExternalHeadsetRoute(pipIntent)) return pipIntent;
     }
 
-    // Прямой выход с полного video UI → audio: как было до video.
-    const beforeVideo = readDirectCallAudioRouteBeforeVideo();
-    if (beforeVideo) return beforeVideo;
+    // Прямой выход с полного video UI → audio: режим звонка (видео его не меняло).
+    const builtinChoice = readCallBuiltinRouteChoice();
+    if (builtinChoice) return builtinChoice;
 
     const uiLockBuiltin = readCallAudioRouteUiLock();
     if (uiLockBuiltin === 'EARPIECE' || uiLockBuiltin === 'SPEAKER_PHONE') {
@@ -1485,12 +1489,14 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
         inAudioOnly: !!(inAudioOnlyUiRef.current || isInAudioOnlyCallUi()),
       });
     } catch {}
+    // Сначала мгновенно обновить UI и запустить native route; проверка BT-разрешения
+    // не должна стоять перед переключением ухо ↔ громкая.
+    void cycleUserRoute();
     // «Устройства рядом» — только если Bluetooth-гарнитура реально подключена (гарнитура
-    // могла подключиться уже во время звонка): системный диалог сразу, без своего окна.
+    // могла подключиться уже во время звонка): системный диалог без своего окна.
     try {
       void (global as any).__promptBluetoothPermissionRef?.current?.({ ifHeadsetPresent: true });
     } catch {}
-    void cycleUserRoute();
   }, [cycleUserRoute, selectedRoute]);
   const callAudioRouteUiPending = isCallAudioBootstrapPending();
   const uiLockRoute = readCallAudioRouteUiLock();
@@ -2622,7 +2628,8 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     } catch {}
   }, []);
 
-  const pinVideoUiSpeakerAndSyncAudio = useCallback(() => {
+  /** Вход в video UI: маршрут не меняется — режим звонка или гарнитура; без режима — громкая. */
+  const pinVideoUiAudioRouteAndSync = useCallback(() => {
     try {
       if ((global as any).__pipVisibleRef?.current === true) return;
     } catch {}
@@ -2633,28 +2640,21 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     ) {
       return;
     }
-    // Уже запинили на этом expand — не гонять native speaker повторно (toggleCam + sync).
+    // Уже запинили на этом expand — не гонять native route повторно (toggleCam + sync).
     if (isDirectCallVideoExpandAudioPreparedRecently()) {
       return;
     }
-    try {
-      markCallPerf('pin_video_ui_speaker', {
-        stayOnVideo: !!stayOnVideoCallUiRef.current,
-      });
-    } catch {}
     markDirectCallVideoMediaActive();
     const mapped = resolveFullVideoCallScreenAudioRoute();
-    const explicitSpeakerFromPiP = readExplicitVideoCallBuiltInRoute() === 'SPEAKER_PHONE';
-    if (!explicitSpeakerFromPiP) {
-      releaseInAppPiPBuiltinAudioLockForFullVideoUi();
-      clearCallAudioRouteUiLock();
-    }
-    if (isExternalHeadsetRoute(mapped)) {
-      setUserSelectedCallAudioRoute(mapped);
-    } else {
-      // Продуктовый speaker на video UI — не писать в userSelected / rememberManual.
-      // Иначе return-to-audio считает громкую «выбором пользователя» и не возвращает
-      // earpiece/BT, с которым уходили на видео.
+    try {
+      markCallPerf('pin_video_ui_route', {
+        stayOnVideo: !!stayOnVideoCallUiRef.current,
+        route: mapped,
+      });
+    } catch {}
+    setUserSelectedCallAudioRoute(mapped);
+    if (!isExternalHeadsetRoute(mapped)) {
+      rememberCallBuiltinRouteChoice(mapped);
     }
     userRouteRef.current = mapped;
     speakerOnRef.current = mapped === 'SPEAKER_PHONE';
@@ -2669,9 +2669,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       markDirectCallVideoExpandAudioPrepared();
       return;
     }
-    if (!explicitSpeakerFromPiP) {
-      armCallAudioRouteUiLock('SPEAKER_PHONE');
-    }
+    armCallAudioRouteUiLock(mapped);
     repinVideoUiAudioRoute();
   }, [repinVideoUiAudioRoute]);
 
@@ -2715,7 +2713,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
         ? liveBuiltin
         : null) ||
       (extNow && isExternalHeadsetRoute(extNow) ? extNow : null) ||
-      readDirectCallAudioRouteBeforeVideo() ||
+      readCallBuiltinRouteChoice() ||
       'EARPIECE';
 
     stayOnVideoCallUiRef.current = true;
@@ -3235,7 +3233,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
             return;
           }
           setRemoteCamOn(enabled);
-          // Peer cam off → если своя тоже off, audio UI + beforeVideo (ухо).
+          // Peer cam off → если своя тоже off, audio UI с тем же режимом звонка.
           // Не требовать remoteCamOnRef edge: false-positive notify мог уже сбросить ref.
           if (!enabled) {
             remoteCamOnRef.current = false;
@@ -3939,7 +3937,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
           return;
         }
         setRemoteCamOn(enabled);
-        // Peer cam off → если своя тоже off, audio UI + beforeVideo (ухо).
+        // Peer cam off → если своя тоже off, audio UI с тем же режимом звонка.
         if (!enabled) {
           remoteCamOnRef.current = false;
           maybeReturnToAudioWhenBothCamsOff(sessionRef.current);
@@ -5125,7 +5123,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       } catch {}
 
       const runHeavyAfterPaint = () => {
-        // returnToAudio / новый toggle отменил этот проход — не pin SPEAKER.
+        // returnToAudio / новый toggle отменил этот проход — не pin маршрут video UI.
         if (toggleGen !== toggleCamGenerationRef.current || returnToAudioInProgressRef.current) {
           toggleCamInProgressRef.current = false;
           toggleSpan.end({ ok: false, error: 'cancelled' });
@@ -5136,8 +5134,8 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
             try {
               session.enableRemoteVideoConsumption?.({ leaveAudioOnlyConsumer: true });
             } catch {}
-            // Один pin speaker после paint video shell.
-            pinVideoUiSpeakerAndSyncAudio();
+            // Один pin маршрута после paint video shell (тот же режим, что на audio).
+            pinVideoUiAudioRouteAndSync();
             try {
               session.notifyPeerDirectCallVideoUi?.(true);
             } catch {}
@@ -5183,8 +5181,8 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
                 try {
                   session.notifyPeerDirectCallVideoUi?.(true);
                 } catch {}
-                // Своя камера на уже открытом video UI (peer video раньше) → product SPEAKER.
-                // Pin после toggleCam: resolveFullVideo смотрит getIsCamOn().
+                // Своя камера на уже открытом video UI (peer video раньше): режим звонка
+                // не меняется. Pin после toggleCam: resolveFullVideo смотрит getIsCamOn().
                 if (enablingCam) {
                   try {
                     clearDirectCallVideoExpandAudioPrepared();
@@ -5193,13 +5191,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
                     const params = (global as any).__currentCallPiPParamsRef?.current;
                     if (params && typeof params === 'object') params.localCamOn = true;
                   } catch {}
-                  // Peer-path писал EARPIECE в userSelected — иначе honorUserRoute откатывает громкую.
-                  try {
-                    if (readUserSelectedCallAudioRoute() === 'EARPIECE') {
-                      setUserSelectedCallAudioRoute(null);
-                    }
-                  } catch {}
-                  pinVideoUiSpeakerAndSyncAudio();
+                  pinVideoUiAudioRouteAndSync();
                 }
               }
             }
@@ -5219,8 +5211,8 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
                 setCamOn(actual);
                 if (pip.visible) pip.updatePiPState({ localCamOn: actual });
               }
-              // Cam off: peer ещё с видео → зритель + beforeVideo (ухо);
-              // обе off → полный returnToAudio (ухо), в т.ч. у «второго» кто выключает.
+              // Cam off: peer ещё с видео → зритель, режим звонка не меняется;
+              // обе off → полный returnToAudio (тот же режим), в т.ч. у «второго» кто выключает.
               if (actual === false && enablingCam === false) {
                 const peerCamStillOn = session.getRemoteCamEnabled?.() === true;
                 if (peerCamStillOn) {
@@ -5257,7 +5249,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       logger.warn('[VideoCall] Session не найдена для toggleCam');
       toggleCamInProgressRef.current = false;
     }
-  }, [pip, syncDirectCallVideoUiSession, pinVideoUiSpeakerAndSyncAudio, rememberAudioPageRouteBeforeVideoUi, maybeReturnToAudioWhenBothCamsOff, restoreViewerAudioRouteAfterLocalCamOff, route?.params?.directCall, camOn]);
+  }, [pip, syncDirectCallVideoUiSession, pinVideoUiAudioRouteAndSync, rememberAudioPageRouteBeforeVideoUi, maybeReturnToAudioWhenBothCamsOff, restoreViewerAudioRouteAfterLocalCamOff, route?.params?.directCall, camOn]);
 
   const preserveAudioRouteFromInAppPiP = useCallback(() => {
     try {
@@ -5318,7 +5310,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
           g.__expandToVideoCallUiFromPiPRef?.current === true ||
           route?.params?.preferVideoCallUi === true);
       if (onFullVideoUi && !isExternalHeadsetRoute(audioRoute)) {
-        audioRoute = mapRouteForEnterVideoUi(audioRoute);
+        audioRoute = mapRouteForVideoUiKeepingChoice(audioRoute);
       }
       userRouteRef.current = audioRoute;
       speakerOnRef.current = audioRoute === 'SPEAKER_PHONE';
@@ -5587,81 +5579,82 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
           return null;
         })()
       : null;
-    // С video→audio: снять product SPEAKER lock. С PiP SPEAKER — не сбрасывать до apply.
+    const pinInitialEarpiece = !!opts?.pinInitialEarpiece;
+    const bootstrapAcceptRoute = acceptBootstrap || pinInitialEarpiece;
+    // video→audio переносит режим звонка как есть. Режим ещё не выбран (звонок начался с
+    // видео) — значит, режим то, что играет сейчас на video UI, а не «ухо по умолчанию».
+    if (!fromPiP && !bootstrapAcceptRoute && !readCallBuiltinRouteChoice()) {
+      const liveBuiltin = normalizeInCallRoute(audioRouteForUiRef.current || userRouteRef.current);
+      if (liveBuiltin === 'EARPIECE' || liveBuiltin === 'SPEAKER_PHONE') {
+        rememberCallBuiltinRouteChoice(liveBuiltin);
+      }
+    }
+    const builtinChoice = readCallBuiltinRouteChoice();
+    // С video→audio: снять SPEAKER lock, если громкую не выбирали. С PiP SPEAKER — не сбрасывать до apply.
     if (!fromPiP || pipReturnRoute !== 'SPEAKER_PHONE') {
       clearStaleVideoSpeakerUiLockForAudioOnlyUi();
     }
     if (userExplicitReturn && !fromPiP) {
-      // Жёсткий сброс video-SPEAKER residue до выбора beforeVideo.
+      // Сброс остатков до выбора маршрута; итоговый lock ставится ниже по режиму звонка.
       clearCallAudioRouteUiLock();
-      try {
-        const g = global as any;
-        if (g.__explicitBuiltInCallAudioRouteRef) {
-          g.__explicitBuiltInCallAudioRouteRef.current = false;
-        }
-        const manual = g.__manualBuiltinCallAudioRouteRef?.current;
-        if (manual?.route === 'SPEAKER_PHONE') {
-          g.__manualBuiltinCallAudioRouteRef = { current: null };
-        }
-        // Persist SPEAKER с video pin не должен побеждать beforeVideo earpiece.
-        const beforeVideoEarly = readDirectCallAudioRouteBeforeVideo();
-        if (
-          beforeVideoEarly === 'EARPIECE' ||
-          beforeVideoEarly == null
-        ) {
-          const persistedNow = getPersistedCallAudioRoute();
-          if (persistedNow === 'SPEAKER_PHONE') {
+      if (builtinChoice === 'EARPIECE') {
+        try {
+          const g = global as any;
+          if (g.__explicitBuiltInCallAudioRouteRef) {
+            g.__explicitBuiltInCallAudioRouteRef.current = false;
+          }
+          const manual = g.__manualBuiltinCallAudioRouteRef?.current;
+          if (manual?.route === 'SPEAKER_PHONE') {
+            g.__manualBuiltinCallAudioRouteRef = { current: null };
+          }
+          // Persist SPEAKER не должен побеждать выбранное ухо.
+          if (getPersistedCallAudioRoute() === 'SPEAKER_PHONE') {
             setPersistedCallAudioRoute('EARPIECE');
           }
           if (readLastAppliedCallAudioRoute() === 'SPEAKER_PHONE') {
             g.__lastAppliedCallAudioRouteRef = { current: 'EARPIECE' };
           }
-        }
-      } catch {}
+        } catch {}
+      }
       cancelScheduledCallAudioRouteReappliesMatching([
         'direct_call_video_ui_route',
         'video_call_return_from_pip',
         'in_app_pip_from_video',
         'pinVideoUiSpeaker',
-        // Accept/bootstrap reapply не должен перебить beforeVideo после cam-off.
+        // Accept/bootstrap reapply не должен перебить режим звонка после cam-off.
         'direct_call_accept_audio_route',
         'peer_video_preserve_route',
       ]);
     }
     armLocalAudioOnlyUiAudioRoutingQuiet(userExplicitReturn ? 1800 : 1000);
-    const pinInitialEarpiece = !!opts?.pinInitialEarpiece;
-    const bootstrapAcceptRoute = acceptBootstrap || pinInitialEarpiece;
     const externalNow =
       readNativeProbedExternalRoute() ||
       readConnectedExternalCallAudioRoute(userRouteRef.current) ||
       readActiveExternalCallAudioRoute(userRouteRef.current);
-    const beforeVideo = readDirectCallAudioRouteBeforeVideo();
     const userBuiltinLocked = readUserLockedBuiltinCallAudioRoute();
-    // Product SPEAKER lock/manual с video pin не должен побеждать beforeVideo earpiece.
+    // Остаток SPEAKER lock/manual не должен побеждать выбранное ухо.
     const lockedForReturn =
-      (beforeVideo === 'EARPIECE' || (userExplicitReturn && !beforeVideo)) &&
-      userBuiltinLocked === 'SPEAKER_PHONE'
+      builtinChoice === 'EARPIECE' && userBuiltinLocked === 'SPEAKER_PHONE'
         ? null
         : userBuiltinLocked;
     // Ручной EAR/SPEAKER (cycle) важнее paired BT при возврате с peer-video.
-    const preferBeforeVideoBuiltin =
+    const preferBuiltinChoice =
       !fromPiP &&
       !bootstrapAcceptRoute &&
-      (beforeVideo === 'EARPIECE' || beforeVideo === 'SPEAKER_PHONE') &&
+      !!builtinChoice &&
       (userExplicitlyPinnedBuiltinCallAudio() ||
-        userBuiltinLocked === beforeVideo ||
-        readCallAudioRouteUiLock() === beforeVideo);
-    // fromPiP: BT → маршрут плашки. Иначе: beforeVideo (явный) → BT → lock → resolve.
-    // Явный return без beforeVideo: EARPIECE (не residue SPEAKER с video).
-    const audioRoute: InCallAudioRoute = preferBeforeVideoBuiltin
-      ? beforeVideo!
+        userBuiltinLocked === builtinChoice ||
+        readCallAudioRouteUiLock() === builtinChoice);
+    // fromPiP: BT → маршрут плашки. Иначе: режим звонка (явный) → BT → режим → lock → resolve.
+    const audioRoute: InCallAudioRoute = preferBuiltinChoice
+      ? builtinChoice!
       : externalNow && isExternalHeadsetRoute(externalNow)
         ? externalNow
         : fromPiP && pipReturnRoute
           ? pipReturnRoute
-          : !bootstrapAcceptRoute && !fromPiP && beforeVideo
-            ? beforeVideo
-            : userExplicitReturn && !fromPiP && !beforeVideo
+          : !bootstrapAcceptRoute && !fromPiP && builtinChoice
+            ? builtinChoice
+            : userExplicitReturn && !fromPiP && !builtinChoice
               ? ('EARPIECE' as InCallAudioRoute)
               : lockedForReturn ||
                 (bootstrapAcceptRoute && !fromPiP
@@ -5670,7 +5663,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     const finalAudioRoute = audioRoute;
     if (
       !fromPiP &&
-      beforeVideo === 'EARPIECE' &&
+      builtinChoice === 'EARPIECE' &&
       finalAudioRoute === 'EARPIECE'
     ) {
       try {
@@ -5728,13 +5721,13 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     try {
       (global as any).__inAudioOnlyUiRef.current = true;
     } catch {}
-    // После флага audio UI: beforeVideo = восстановленный маршрут (следующий expand снимет свежий).
+    // После флага audio UI: режим звонка = восстановленный маршрут.
     if (
       !fromPiP &&
       !bootstrapAcceptRoute &&
       (finalAudioRoute === 'EARPIECE' || finalAudioRoute === 'SPEAKER_PHONE')
     ) {
-      rememberDirectCallAudioRouteBeforeVideo(finalAudioRoute);
+      rememberCallBuiltinRouteChoice(finalAudioRoute);
     }
     setPipAudioOnlyPlaceholderSticky(true);
     setInAudioOnlyUi(true);
@@ -5828,7 +5821,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
           'direct_call_video_ui_route',
           'in_app_pip_from_video',
         ]);
-        // Зафиксировать restored beforeVideo, чтобы late manualSync/SPEAKER residue не перебил.
+        // Зафиксировать восстановленный режим, чтобы late manualSync/SPEAKER residue не перебил.
         if (
           finalAudioRoute === 'EARPIECE' ||
           finalAudioRoute === 'SPEAKER_PHONE' ||
@@ -5913,8 +5906,8 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       speakerOnRef.current = false;
       setPersistedCallAudioRoute(headsetBeforeVideo);
     }
-    pinVideoUiSpeakerAndSyncAudio();
-  }, [syncDirectCallVideoUiSession, pinVideoUiSpeakerAndSyncAudio, rememberAudioPageRouteBeforeVideoUi, route?.params]);
+    pinVideoUiAudioRouteAndSync();
+  }, [syncDirectCallVideoUiSession, pinVideoUiAudioRouteAndSync, rememberAudioPageRouteBeforeVideoUi, route?.params]);
 
   const enableLocalCameraForVideoUi = useCallback(
     async (session: VideoCallSession | null) => {
@@ -6050,7 +6043,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       if (!session || session.isEnded?.()) return;
       applyVideoCallUiFromPiPExpand(session);
       await enableLocalCameraForVideoUi(session);
-      pinVideoUiSpeakerAndSyncAudio();
+      pinVideoUiAudioRouteAndSync();
       try {
         mergeActiveVideoCallParams({
           preferVideoCallUi: undefined,
@@ -6068,7 +6061,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
   }, [
     applyVideoCallUiFromPiPExpand,
     enableLocalCameraForVideoUi,
-    pinVideoUiSpeakerAndSyncAudio,
+    pinVideoUiAudioRouteAndSync,
     route?.params?.callId,
     route?.params?.callMedia,
     route?.params?.startWithCamOff,
