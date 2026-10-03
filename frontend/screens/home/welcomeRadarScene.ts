@@ -14,6 +14,7 @@ import {
   type SkPicture,
   type SkRect,
 } from '@shopify/react-native-skia';
+import { SEARCH_RADAR_HUD, SEARCH_RADAR_HUD_LIGHT } from './constants';
 
 /**
  * HUD-радар Поиска. Рисунок делится на три части:
@@ -25,13 +26,9 @@ import {
  * градиентом, линии и несколько размытых точек — это дёшево даже на 120 Гц.
  */
 
-/**
- * Весь радар в тоне активной вкладки навбара: там #00b5ff под 32% поверх
- * панели, на экране это #0c4a67. HUD чуть светлее — линии полупрозрачные.
- */
-const HUD = '#0e5577';
-/** Подсветка того же тона: кромка луча, засветка шкалы, ядро цели. */
-const ICE = '#4d93b5';
+/** Весь радар в одном тоне — см. SEARCH_RADAR_HUD. */
+const HUD = SEARCH_RADAR_HUD;
+const ICE = SEARCH_RADAR_HUD_LIGHT;
 
 const TAU = Math.PI * 2;
 const D2R = Math.PI / 180;
@@ -83,10 +80,20 @@ export type RadarGeometry = {
   rOuter: number;
 };
 
+/** Край стекла — доля половины размера радара. */
+const DISC_RATIO = 0.79;
+/** Самое внешнее, что рисуем: метки «|||» за HUD-ободом — rOuter + 3u (+ полштриха). */
+const OUTER_MARKS_END_U = 16 + 3 + 0.5;
+/**
+ * До какой доли половины размера доходит рисунок. Остальное — пустое поле контейнера:
+ * раскладка вписывает радар по рисунку, а не по контейнеру.
+ */
+export const RADAR_DRAWN_EXTENT = DISC_RATIO + (OUTER_MARKS_END_U * 2) / 328;
+
 export function radarGeometry(size: number, avatarSize: number): RadarGeometry {
   const half = size / 2;
   const u = size / 328;
-  const rDisc = half * 0.79;
+  const rDisc = half * DISC_RATIO;
   // На очень маленьком радаре аватар может не влезть — оставляем полоску под луч.
   const a = Math.min(avatarSize / 2, rDisc - 16 * u);
   return {
@@ -268,7 +275,9 @@ function drawStatic(canvas: SkCanvas, g: RadarGeometry): void {
   canvas.drawPath(grid, strokePaint(0.6 * u, color(HUD, 0.16)));
 
   const rangePaint = strokePaint(0.7 * u, color(HUD, 0.34));
-  for (const k of [1, 2]) canvas.drawCircle(cx, cy, rIn + ((rDisc - rIn) * k) / 3, rangePaint);
+  // Без аватара круг весь свободен — колец дальности на одно больше.
+  const ranges = a > 0 ? 3 : 4;
+  for (let k = 1; k < ranges; k++) canvas.drawCircle(cx, cy, rIn + ((rDisc - rIn) * k) / ranges, rangePaint);
 
   const cross = strokePaint(0.7 * u, color(HUD, 0.4));
   for (let k = 0; k < 4; k++) {

@@ -5,8 +5,13 @@ export const WELCOME_STAGE_BG = '#0A0C14';
 /** Accent gradient (aura) — вместо фиолетового на макете. */
 export const AURA_GRADIENT = ['#14b8a6', '#3b82f6', '#00b5ff'] as const;
 export const AURA_GLOW = '#3b82f6';
-/** Голубой акцент связанных элементов страницы поиска. */
-export const WELCOME_SEARCH_CTA_BORDER = 'rgba(0, 181, 255, 0.36)';
+/**
+ * Тон радара «Поиска» — как активная вкладка навбара (там #00b5ff под 32%
+ * поверх панели, на экране #0c4a67). Им же обведена кнопка «Найти собеседника».
+ */
+export const SEARCH_RADAR_HUD = '#0e5577';
+/** Подсветка того же тона: кромка луча, засветка шкалы, ядро цели. */
+export const SEARCH_RADAR_HUD_LIGHT = '#4d93b5';
 /** Unread / missed count badge on welcome chats and friend action buttons. */
 export const WELCOME_UNREAD_BADGE = '#2158c0';
 export const CROWN_GOLD = '#E4C065';
@@ -20,6 +25,8 @@ export const WELCOME_CHROME_BTN_BG = '#1C2129';
 /** Полупрозрачная «стеклянная» подложка (онлайн-баннер, tab bar). */
 export const WELCOME_GLASS_SURFACE = 'rgba(22, 27, 34, 0.52)';
 export const WELCOME_GLASS_BORDER = 'rgba(255,255,255,0.06)';
+/** Фон пустых аватаров в верхнем блоке «Онлайн». */
+export const WELCOME_ONLINE_PLACEHOLDER_BG = 'rgba(0, 181, 255, 0.12)';
 
 export const LIVI = {
   bg: '#151F33',

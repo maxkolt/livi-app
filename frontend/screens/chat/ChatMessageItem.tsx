@@ -125,14 +125,15 @@ export type ChatMessageItemProps = {
   formatDurationDot: (ms: number) => string;
   BUBBLE_BG_OUT: string;
   BUBBLE_BG_IN: string;
-  BORDER_COLOR: string;
   LIVI: ChatMessageItemLivi;
   isDark: boolean;
   lang: Lang;
+  /** Копия облака в меню сообщения: по центру, а не у своего края. */
+  centered?: boolean;
 };
 
 
-export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, uploadStatus, onPressImage, onPressAudio, playingAudioId, playingAudioState, onLongPressMessage, isLayoutBlockedByChrome, onLongPressAlbumTile, albumFocusIndex = null, onMessagePress, onReactionPress, selectionMode, isSelected, onToggleSelect, selectedAlbumIndices = [], onToggleAlbumTileSelect, retryUiForId, onToggleRetryUi, onRetryFailed, resolveMediaUri, peerDisplayName, highlightedMessageId, onPressReplyQuote, animateMessagePress, getMessageAnimation, formatDurationDot, BUBBLE_BG_OUT, BUBBLE_BG_IN, BORDER_COLOR, LIVI, isDark, lang }: ChatMessageItemProps) => {
+export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, uploadStatus, onPressImage, onPressAudio, playingAudioId, playingAudioState, onLongPressMessage, isLayoutBlockedByChrome, onLongPressAlbumTile, albumFocusIndex = null, onMessagePress, onReactionPress, selectionMode, isSelected, onToggleSelect, selectedAlbumIndices = [], onToggleAlbumTileSelect, retryUiForId, onToggleRetryUi, onRetryFailed, resolveMediaUri, peerDisplayName, highlightedMessageId, onPressReplyQuote, animateMessagePress, getMessageAnimation, formatDurationDot, BUBBLE_BG_OUT, BUBBLE_BG_IN, LIVI, isDark, lang, centered = false }: ChatMessageItemProps) => {
   const bubbleRef = React.useRef<View>(null);
   const [imageLoadError, setImageLoadError] = React.useState(false);
   const [localImageUri, setLocalImageUri] = React.useState<string | null>(null);
@@ -173,6 +174,7 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
     // оставляем только предупреждение, без лишних деталей
     console.warn('Message without sender field: using fallback');
   }
+  const rowAlignSelf = centered ? 'center' : isMyMessage ? 'flex-end' : 'flex-start';
 
   const effectiveReadStatus: ChatReadStatus | undefined =
     readStatus ||
@@ -829,7 +831,36 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
   /** Android: borderWidth+radius даёт тонкие углы — делаем ровное «кольцо» через padding */
   const androidHighlightRing = isQuotedTargetHighlighted && Platform.OS === 'android';
   const ANDROID_RING_PX = 1;
-  const BUBBLE_RADIUS = 16;
+  /**
+   * Углы как в Telegram: скругление 17, со стороны отправителя внутри серии — 6,
+   * у последнего в серии внизу «хвостик» — 4. Копия в меню — одиночное облако.
+   */
+  const BUBBLE_RADIUS = 17;
+  const BUBBLE_RADIUS_GROUPED = 6;
+  const BUBBLE_RADIUS_TAIL = 4;
+  const joinedAbove = !centered && !!item.groupedWithPrev;
+  const joinedBelow = !centered && !!item.groupedWithNext;
+  const bubbleCorners = (extra = 0) => {
+    const big = BUBBLE_RADIUS + extra;
+    const senderTop = (joinedAbove ? BUBBLE_RADIUS_GROUPED : BUBBLE_RADIUS) + extra;
+    const senderBottom = (joinedBelow ? BUBBLE_RADIUS_GROUPED : BUBBLE_RADIUS_TAIL) + extra;
+    return isMyMessage
+      ? {
+          borderTopLeftRadius: big,
+          borderBottomLeftRadius: big,
+          borderTopRightRadius: senderTop,
+          borderBottomRightRadius: senderBottom,
+        }
+      : {
+          borderTopRightRadius: big,
+          borderBottomRightRadius: big,
+          borderTopLeftRadius: senderTop,
+          borderBottomLeftRadius: senderBottom,
+        };
+  };
+  /** Внутри серии облака почти вплотную, между сериями — обычный зазор. */
+  const rowMarginTop = joinedAbove ? 1 : 4;
+  const rowMarginBottom = joinedBelow ? 1 : 4;
   // Короткий текст ответа («Ппи») иначе сжимает цитату — держим ширину пузыря.
   const replyBubbleMinWidth = Math.round(Math.min(Dimensions.get('window').width * 0.58, 260));
 
@@ -900,8 +931,9 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
         style={{
           transform: [{ scale: messageAnimation }],
           marginHorizontal: 16,
-          marginVertical: 4,
-          alignSelf: isMyMessage ? 'flex-end' : 'flex-start',
+          marginTop: rowMarginTop,
+          marginBottom: rowMarginBottom,
+          alignSelf: rowAlignSelf,
           flexDirection: 'row',
           alignItems: 'center',
           maxWidth: '88%',
@@ -930,10 +962,8 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
               gap: 8,
               paddingHorizontal: 12,
               paddingVertical: 9,
-              borderRadius: 16,
+              ...bubbleCorners(),
               backgroundColor: bubbleBg,
-              borderWidth: StyleSheet.hairlineWidth,
-              borderColor: BORDER_COLOR,
               minWidth: 148,
             }}
           >
@@ -1003,8 +1033,9 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
         style={{
           transform: [{ scale: messageAnimation }],
           marginHorizontal: 16,
-          marginVertical: 4,
-          alignSelf: isMyMessage ? 'flex-end' : 'flex-start',
+          marginTop: rowMarginTop,
+          marginBottom: rowMarginBottom,
+          alignSelf: rowAlignSelf,
           flexDirection: 'row',
           alignItems: 'center',
           maxWidth: '92%',
@@ -1121,8 +1152,9 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
       style={{
         transform: [{ scale: messageAnimation }],
         marginHorizontal: 16,
-        marginVertical: 4,
-        alignSelf: isMyMessage ? 'flex-end' : 'flex-start',
+        marginTop: rowMarginTop,
+        marginBottom: rowMarginBottom,
+        alignSelf: rowAlignSelf,
         // row, чтобы чекбокс был рядом с облаком и по центру по высоте
         flexDirection: 'row',
         alignItems: 'center',
@@ -1329,7 +1361,7 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
             return (
               <View
                 style={{
-                  borderRadius: BUBBLE_RADIUS + ANDROID_RING_PX,
+                  ...bubbleCorners(ANDROID_RING_PX),
                   padding: ANDROID_RING_PX,
                   backgroundColor: highlightAccentColor,
                   maxWidth: '100%',
@@ -1342,7 +1374,7 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
                 */}
                 <View
                   style={{
-                    borderRadius: BUBBLE_RADIUS,
+                    ...bubbleCorners(),
                     backgroundColor: bubbleUnderlay,
                     overflow: 'hidden',
                     maxWidth: '100%',
@@ -1381,9 +1413,9 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
                 {
                   ...bubblePadStyle,
                   backgroundColor: bubbleFill,
-                  borderRadius: BUBBLE_RADIUS,
-                  borderWidth: 1,
-                  borderColor: isQuotedTargetHighlighted ? highlightAccentColor : BORDER_COLOR,
+                  ...bubbleCorners(),
+                  borderWidth: isQuotedTargetHighlighted ? 1 : 0,
+                  borderColor: highlightAccentColor,
                   maxWidth: '100%',
                   ...(item.replyTo ? { minWidth: replyBubbleMinWidth } : null),
                 },

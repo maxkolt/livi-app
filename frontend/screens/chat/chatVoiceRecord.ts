@@ -1,5 +1,7 @@
 /** Hold-to-record voice constants / trash-zone helpers. */
 
+import * as FileSystem from "expo-file-system";
+
 export const VOICE_MAX_MS = 60_000;
 /** Swipe-left cancel: sensitive arm threshold. */
 export const VOICE_CANCEL_ARM_DX = -12;
@@ -21,4 +23,20 @@ export function isPointInTrashZone(
     moveY >= zone.y - pad &&
     moveY <= zone.y + zone.h + pad
   );
+}
+
+/** Записи, которые ещё не ушли на сервер: в documentDirectory их не тронет очистка кэша. */
+const VOICE_OUTBOX_DIR = FileSystem.documentDirectory ? `${FileSystem.documentDirectory}voice-outbox/` : null;
+
+/** Перенести запись из кэша в постоянную папку. Не вышло — оставляем как есть. */
+export async function keepVoiceRecording(uri: string, id: string): Promise<string> {
+  if (!VOICE_OUTBOX_DIR || !uri) return uri;
+  try {
+    await FileSystem.makeDirectoryAsync(VOICE_OUTBOX_DIR, { intermediates: true });
+    const dest = `${VOICE_OUTBOX_DIR}${id}.m4a`;
+    await FileSystem.moveAsync({ from: uri, to: dest });
+    return dest;
+  } catch {
+    return uri;
+  }
 }

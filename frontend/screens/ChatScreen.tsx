@@ -172,8 +172,7 @@ import { markChatCallBubbleEligible } from './chat/chatCallEvents';
 import {
   ReactionBarModal,
   ReactionsRowWithSwipe,
-  SHEET_REACTIONS_ROW_1,
-  SHEET_REACTIONS_ROW_2,
+  SHEET_REACTIONS_ALL,
 } from './chat/chatReactions';
 
 import { API_BASE, getMyProfile } from '../sockets/socket';
@@ -239,6 +238,11 @@ type RouteParams = {
 };
 type Props = { route: { params?: RouteParams }; navigation: any };
 
+/** Сколько реакций видно в свёрнутой строке меню сообщения (остальные — по стрелке). */
+const MSG_REACTIONS_COLLAPSED = 5;
+/** Как галочки «прочитано» в облаке сообщения. */
+const CHAT_READ_TICK_COLOR = 'hsl(108, 53.10%, 35.10%)';
+
 export default function ChatScreen({ route, navigation }: Props) {
   const insets = useSafeAreaInsets();
   const keyboardAnimation = useKeyboardContext().animated;
@@ -257,15 +261,20 @@ export default function ChatScreen({ route, navigation }: Props) {
   // Меню по долгому нажатию всегда идёт стопкой: реакции сверху, действия ниже.
   // В landscape оба блока компактнее, чтобы сохранить ту же структуру по высоте.
   const msgActionsLandscape = modalLayout.isLandscape;
-  const msgActionsReactionsWidth = msgActionsLandscape ? 224 : 256;
-  const msgActionsListWidth = msgActionsLandscape ? 196 : 225;
-  const msgActionsCardWidth = msgActionsLandscape ? 224 : 280;
-  const msgActionsBlockGap = msgActionsLandscape ? 3 : 4;
-  // В стопке над списком ещё лежат реакции (~54) и зазор (12), в портрете — плюс отступ снизу.
-  const msgActionsListMaxH = Math.max(
-    msgActionsLandscape ? 140 : 160,
-    modalLayout.maxCardHeight - (msgActionsLandscape ? 58 : 166),
-  );
+  /** Строка реакций: MSG_REACTIONS_COLLAPSED эмодзи и стрелка; ячейка — от ширины экрана. */
+  const msgReactionCell = msgActionsLandscape
+    ? 36
+    : Math.max(
+        34,
+        Math.min(
+          44,
+          Math.floor((modalLayout.width - insets.left - insets.right - 34) / (MSG_REACTIONS_COLLAPSED + 1)),
+        ),
+      );
+  // +10: внутренние отступы и волосяная рамка, чтобы строка не переносилась.
+  const msgActionsCardWidth = msgReactionCell * (MSG_REACTIONS_COLLAPSED + 1) + 10;
+  const msgActionsListWidth = msgActionsLandscape ? 184 : 210;
+  const msgActionsBlockGap = msgActionsLandscape ? 6 : 10;
   // Android: одинаковый нижний отступ для bottom sheet на всех девайсах.
   // На кнопочной навигации insets.bottom часто = 0, поэтому фиксируем минимальный паддинг.
   // Важно: на жестовой навигации insets.bottom может быть большим, и лист визуально "висит" слишком высоко.
@@ -347,9 +356,10 @@ export default function ChatScreen({ route, navigation }: Props) {
   const EMOJI_SURFACE_BG = isDark ? WELCOME_STAGE_BG : INPUT_BAR_BG;
 
   const BORDER_COLOR = theme.colors.outline as string;
-  // Тёмная тема — как есть. Светлая: исходящие серо-голубые; входящие — чуть затемнённый жемчужный белый.
-  const BUBBLE_BG_OUT = isDark ? 'rgba(14, 20, 32, 0.99)' : 'hsla(220, 6%, 80%, 0.97)';
-  const BUBBLE_BG_IN  = isDark ? 'rgba(26, 32, 42, 0.98)' : 'hsla(40, 8%, 89%, 0.97)';
+  // Входящие — как активный фильтр «Онлайн / Все непрочитанные».
+  const BUBBLE_BG_IN = 'rgba(42, 88, 104, 0.42)';
+  // Исходящие — как активные кнопки нижней навигации.
+  const BUBBLE_BG_OUT = 'rgba(0, 181, 255, 0.12)';
   const BORDER_WIDTH = 1;
 
   const peerId = String(route?.params?.peerId || "");
@@ -782,14 +792,14 @@ export default function ChatScreen({ route, navigation }: Props) {
     closeAlbumScopeBase();
     setAlbumFocusIndex(null);
   }, [closeAlbumScopeBase]);
-  const reactionsScrollRef = useRef<ScrollView>(null);
+  const [msgReactionsExpanded, setMsgReactionsExpanded] = useState(false);
   // Message actions sheet — useChatMessageActions
   const clearAlbumFocusOnActionsHidden = React.useCallback(() => {
     setAlbumFocusIndex(null);
+    setMsgReactionsExpanded(false);
   }, []);
   const {
     showMessageActions,
-    selectedMessageLayout,
     messageActionsLayoutRef,
     messageActionsOpacity,
     messageActionsTranslateY,
@@ -799,58 +809,39 @@ export default function ChatScreen({ route, navigation }: Props) {
     clearAndroidLayoutIfNeeded,
   } = useChatMessageActions({ onHidden: clearAlbumFocusOnActionsHidden });
   /**
-   * Меню держим у зажатого облака, как в Telegram: под ним, если хватает места,
-   * иначе над ним, иначе прижимаем к краю экрана. Координаты облака приходят из
-   * measureInWindow — та же система, что у isLayoutBlockedByChrome.
+   * Меню сообщения стоит всегда в одном месте: низ чуть выше поля ввода,
+   * выше — копия зажатого облака и строка реакций. Верх поля ввода считаем от
+   * верха самой модалки: оба замера в одной системе (measureInWindow), так что
+   * неважно, заходит модалка под статус-бар или нет.
    */
   const MSG_ACTIONS_EDGE_PAD = 12;
-  const MSG_ACTIONS_BUBBLE_GAP = 8;
-  const MSG_ACTIONS_GROUP_H_FALLBACK = 360;
-  const [msgActionsGroupH, setMsgActionsGroupH] = useState(0);
-  const msgActionsAnchor = React.useMemo(() => {
-    // Рендер ограничен maxCardHeight, поэтому и в расчёте берём не больше него —
-    // иначе устаревший замер уводит якорь мимо реальной высоты меню.
-    const groupH = Math.min(
-      modalLayout.maxCardHeight,
-      msgActionsGroupH > 0 ? msgActionsGroupH : MSG_ACTIONS_GROUP_H_FALLBACK,
-    );
-    const minTop = insets.top + MSG_ACTIONS_EDGE_PAD;
-    const maxBottom = modalLayout.height - insets.bottom - MSG_ACTIONS_EDGE_PAD;
-    const maxTop = Math.max(minTop, maxBottom - groupH);
-    const minLeft = insets.left + MSG_ACTIONS_EDGE_PAD;
-    const maxLeft = Math.max(
-      minLeft,
-      modalLayout.width - insets.right - MSG_ACTIONS_EDGE_PAD - msgActionsCardWidth,
-    );
-    const clamp = (v: number, lo: number, hi: number) =>
-      Math.round(Math.min(Math.max(v, lo), hi));
-
-    const layout = selectedMessageLayout;
-    if (!layout || !(layout.height > 0)) {
-      return {
-        top: maxTop,
-        left: clamp((modalLayout.width - msgActionsCardWidth) / 2, minLeft, maxLeft),
-      };
-    }
-    const below = layout.y + layout.height + MSG_ACTIONS_BUBBLE_GAP;
-    const above = layout.y - MSG_ACTIONS_BUBBLE_GAP - groupH;
-    const preferred = below + groupH <= maxBottom ? below : above >= minTop ? above : maxTop;
-    return {
-      top: clamp(preferred, minTop, maxTop),
-      left: clamp(layout.x + layout.width / 2 - msgActionsCardWidth / 2, minLeft, maxLeft),
-    };
-  }, [
-    selectedMessageLayout,
-    msgActionsGroupH,
-    msgActionsCardWidth,
-    insets.top,
-    insets.bottom,
-    insets.left,
-    insets.right,
-    modalLayout.height,
-    modalLayout.width,
-    modalLayout.maxCardHeight,
-  ]);
+  const MSG_ACTIONS_COMPOSER_GAP = 16;
+  /** Меньше этого копия облака не сжимается — список уступает место ей. */
+  const MSG_ACTIONS_PREVIEW_MIN_H = 56;
+  const chatComposerDockRef = useRef<View>(null);
+  const msgActionsRootRef = useRef<View>(null);
+  const [msgActionsModalH, setMsgActionsModalH] = useState(0);
+  const [msgActionsComposerTop, setMsgActionsComposerTop] = useState<number | null>(null);
+  useEffect(() => {
+    if (!showMessageActions) setMsgActionsComposerTop(null);
+  }, [showMessageActions]);
+  /** Верх поля ввода в координатах модалки — по её первому layout. */
+  const measureMsgActionsComposer = React.useCallback(() => {
+    const root = msgActionsRootRef.current;
+    const dock = chatComposerDockRef.current;
+    if (!root || !dock) return;
+    root.measureInWindow((_rx, rootY) => {
+      dock.measureInWindow((_x, y, _w, h) => {
+        if (h > 0) setMsgActionsComposerTop(Math.round(y - rootY));
+      });
+    });
+  }, []);
+  /** Низ стопки меню в координатах модалки. */
+  const msgActionsStackBottom =
+    (msgActionsComposerTop ??
+      (msgActionsModalH > 0 ? msgActionsModalH : modalLayout.height - insets.top - insets.bottom) -
+        inputHeight) - MSG_ACTIONS_COMPOSER_GAP;
+  const msgActionsStackH = Math.max(0, msgActionsStackBottom - MSG_ACTIONS_EDGE_PAD);
   const closeActionsOnEnterSelection = React.useCallback(() => {
     try {
       hideMessageActionsRef.current();
@@ -1655,6 +1646,7 @@ export default function ChatScreen({ route, navigation }: Props) {
   } = useChatMediaOutbox({
     peerId,
     currentUserId,
+    historyReady,
     messages,
     setMessages,
     uploadStatus,
@@ -2512,7 +2504,7 @@ export default function ChatScreen({ route, navigation }: Props) {
   ]);
 
   const renderMessageRow = React.useCallback(
-    ({ item }: { item: ChatListRow }) => {
+    ({ item, centered }: { item: ChatListRow; centered?: boolean }) => {
       if (item.type === 'date') {
         return (
           <View style={{ paddingTop: 10, paddingBottom: 6, alignItems: 'center' }}>
@@ -2588,10 +2580,10 @@ export default function ChatScreen({ route, navigation }: Props) {
           formatDurationDot={formatDurationDot}
           BUBBLE_BG_OUT={BUBBLE_BG_OUT}
           BUBBLE_BG_IN={BUBBLE_BG_IN}
-          BORDER_COLOR={BORDER_COLOR}
           LIVI={LIVI}
           isDark={isDark}
           lang={lang}
+          centered={centered}
         />
       );
     },
@@ -2628,7 +2620,6 @@ export default function ChatScreen({ route, navigation }: Props) {
       formatDurationDot,
       BUBBLE_BG_OUT,
       BUBBLE_BG_IN,
-      BORDER_COLOR,
       LIVI,
       isDark,
       lang,
@@ -3183,6 +3174,7 @@ export default function ChatScreen({ route, navigation }: Props) {
             ) : null}
 
             <Animated.View
+              ref={chatComposerDockRef}
               collapsable={false}
               style={[
                 {
@@ -3717,7 +3709,7 @@ export default function ChatScreen({ route, navigation }: Props) {
         />
       )}
 
-      {/* Android: одна карточка — сверху реакции, ниже выбранное сообщение, ниже список */}
+      {/* Android: как в Telegram — сверху строка реакций, ниже список действий у края облака */}
       {Platform.OS === 'android' && showMessageActions && selectedMessage && (
         <Modal
           transparent
@@ -3726,123 +3718,248 @@ export default function ChatScreen({ route, navigation }: Props) {
           onRequestClose={hideMessageActions}
         >
           <Pressable
+            ref={msgActionsRootRef}
             onPress={hideMessageActions}
+            onLayout={(e) => {
+              const h = Math.round(e.nativeEvent.layout.height);
+              if (h > 0 && h !== msgActionsModalH) setMsgActionsModalH(h);
+              measureMsgActionsComposer();
+            }}
             style={{
               flex: 1,
-              // Telegram-like message actions: keep the chat fully visible behind
-              // the reaction/action cards instead of dimming the whole screen.
-              backgroundColor: 'transparent',
-              // Позицию задаёт якорь у облака, поэтому без выравнивания и паддингов.
-              justifyContent: 'flex-start',
-              alignItems: 'flex-start',
+              // Чат приглушён — видно, какое облако выбрано (его копия над меню).
+              backgroundColor: 'rgba(0,0,0,0.5)',
             }}
           >
-            <Pressable
-              onPress={() => {}}
+            <View
+              pointerEvents="box-none"
               style={{
-                width: msgActionsCardWidth,
-                marginTop: msgActionsAnchor.top,
-                marginLeft: msgActionsAnchor.left,
-                shadowColor: '#000',
-                shadowOffset: { width: 0, height: 4 },
-                shadowOpacity: 0.25,
-                shadowRadius: 12,
-                elevation: 12,
+                position: 'absolute',
+                left: 0,
+                right: 0,
+                top: MSG_ACTIONS_EDGE_PAD,
+                height: msgActionsStackH,
               }}
             >
               {(() => {
-                const borderColor = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)';
-                const reactionsAll = [...SHEET_REACTIONS_ROW_1, ...SHEET_REACTIONS_ROW_2];
-                const row1 = reactionsAll.slice(0, 5);
-                const row2 = reactionsAll.slice(5, 10);
+                const msgId = selectedMessage?.id != null ? String(selectedMessage.id) : '';
+                const isOwnMsg = selectedMessage?.from === currentUserId || selectedMessage?.sender === 'me';
+                const isImageMsg = String(selectedMessage?.type || '') === 'image';
+                const hasText = !!String(selectedMessage?.text || '').trim();
+                const hasSticker = !!String(selectedMessage?.stickerId || '').trim();
+                const hasContent = hasText || hasSticker || isImageMsg || !!String(selectedMessage?.uri || '').trim();
+                const isRead =
+                  isOwnMsg && (readStatuses[msgId] === 'read' || (!readStatuses[msgId] && !!selectedMessage?.read));
+                const myEmojis = new Set(
+                  withPendingReactions(selectedMessage?.reactions, msgId, currentUserId)
+                    .filter((r) => String(r.userId) === String(currentUserId))
+                    .map((r) => r.emoji),
+                );
+                const emojis = msgReactionsExpanded
+                  ? SHEET_REACTIONS_ALL
+                  : SHEET_REACTIONS_ALL.slice(0, MSG_REACTIONS_COLLAPSED);
+                const emojiFontSize = msgActionsLandscape ? 22 : 26;
+                const rowHeight = msgActionsLandscape ? 40 : 48;
+                const rowPadH = msgActionsLandscape ? 12 : 16;
+                const iconGap = msgActionsLandscape ? 12 : 16;
+                const actionFontSize = msgActionsLandscape ? 14 : 16;
+                const actionIconSize = msgActionsLandscape ? 19 : 22;
                 const CardShell = isDark ? StageGradient : View;
-                const emojiFontSize = msgActionsLandscape ? 19 : 22;
-                const emojiPadding = msgActionsLandscape ? 4 : 6;
-                const reactionControlSize = msgActionsLandscape ? 30 : 36;
-                const actionPaddingV = msgActionsLandscape ? 8 : 12;
-                const actionPaddingH = msgActionsLandscape ? 12 : 14;
-                const actionFontSize = msgActionsLandscape ? 14 : 15;
-                const actionIconSize = msgActionsLandscape ? 18 : 20;
-                const cardShellStyle = {
+                const surface = {
                   overflow: 'hidden' as const,
                   backgroundColor: isDark ? undefined : LIVI.bg,
                   borderWidth: 1,
-                  borderColor,
+                  borderColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)',
                 };
                 const emojiPress = (emoji: string) => {
                   hideMessageActions();
-                  const msgId = selectedMessage?.id != null ? String(selectedMessage.id) : null;
                   if (msgId) toggleMyReaction(msgId, emoji);
                 };
+
+                type MenuRow = {
+                  key: string;
+                  label: string;
+                  icon: React.ComponentProps<typeof Ionicons>['name'];
+                  onPress: () => void;
+                  danger?: boolean;
+                };
+                const rows: MenuRow[] = [];
+                if (hasContent) {
+                  rows.push({
+                    key: 'reply',
+                    label: t('chatActionReply', lang),
+                    icon: 'arrow-undo-outline',
+                    onPress: () => {
+                      setEditingMessageId(null);
+                      messageTextRef.current = '';
+                      setMessageText('');
+                      setReplyingToMessage({
+                        id: msgId,
+                        text: getChatReplyPreviewText(selectedMessage, lang),
+                        from: selectedMessage?.from,
+                        isOwn: isOwnMsg,
+                      });
+                    },
+                  });
+                  if (!isImageMsg && (hasText || hasSticker)) {
+                    rows.push({
+                      key: 'copy',
+                      label: t('chatActionCopy', lang),
+                      icon: 'copy-outline',
+                      onPress: () => void copySelectedMessage(selectedMessage),
+                    });
+                  }
+                  if (isImageMsg) {
+                    rows.push({
+                      key: 'save',
+                      label: t('save', lang),
+                      icon: 'download-outline',
+                      onPress: () => requestImageAction('save', selectedMessage, albumFocusIndex),
+                    });
+                  }
+                  rows.push({
+                    key: 'forward',
+                    label: t('chatActionForward', lang),
+                    icon: 'arrow-redo-outline',
+                    onPress: () =>
+                      isImageMsg
+                        ? requestImageAction('forward', selectedMessage, albumFocusIndex)
+                        : void openForwardPicker(),
+                  });
+                  if (isOwnMsg && String(selectedMessage?.type || '') === 'text') {
+                    rows.push({
+                      key: 'edit',
+                      label: t('chatActionEdit', lang),
+                      icon: 'pencil-outline',
+                      onPress: () => {
+                        const text = String(selectedMessage?.text ?? '');
+                        messageTextRef.current = text;
+                        setMessageText(text);
+                        setEditingMessageId(selectedMessage?.id ?? null);
+                        setReplyingToMessage(null);
+                      },
+                    });
+                  }
+                  rows.push({
+                    key: 'select',
+                    label: t('chatActionSelect', lang),
+                    icon: 'checkmark-circle-outline',
+                    onPress: () => enterSelectionModeFromMessage(selectedMessage, albumFocusIndex),
+                  });
+                }
+                rows.push({
+                  key: 'delete',
+                  label: t('delete', lang),
+                  icon: 'trash-outline',
+                  danger: true,
+                  onPress: () => {
+                    if (isImageMsg) requestImageAction('delete', selectedMessage, albumFocusIndex);
+                    else confirmDeleteSelectedMessage(selectedMessage);
+                  },
+                });
+
+                // Высоту стопки делят так: реакции и список целиком, копия облака —
+                // сколько останется (длинное сообщение обрезается, а не меню).
+                const pillRows = msgReactionsExpanded
+                  ? Math.ceil((SHEET_REACTIONS_ALL.length + 1) / (MSG_REACTIONS_COLLAPSED + 1))
+                  : 1;
+                const pillH = pillRows * msgReactionCell + 10;
+                const listMaxH = Math.max(
+                  msgActionsLandscape ? 120 : 160,
+                  msgActionsStackH - pillH - msgActionsBlockGap * 2 - MSG_ACTIONS_PREVIEW_MIN_H,
+                );
+
                 return (
                 <View
-                  onLayout={(e) => {
-                    const h = Math.round(e.nativeEvent.layout.height);
-                    if (h > 0 && h !== msgActionsGroupH) setMsgActionsGroupH(h);
-                  }}
+                  pointerEvents="box-none"
                   style={{
-                    width: msgActionsCardWidth,
-                    // Жёсткий потолок: якорь считается по замеру, а тот отстаёт на кадр
-                    // и на поворот экрана — без этого нижние пункты уезжают за край.
-                    maxHeight: modalLayout.maxCardHeight,
+                    flex: 1,
+                    // Стопка прижата к низу — над полем ввода; реакции и список по центру.
+                    justifyContent: 'flex-end',
                     alignItems: 'center',
-                    flexDirection: 'column',
-                    justifyContent: 'flex-start',
                   }}
                 >
-                  {/* Блок 1: реакции (лежит на фоне модалки) */}
-                  <CardShell style={{ width: msgActionsReactionsWidth, borderRadius: msgActionsLandscape ? 24 : 28, ...cardShellStyle }}>
-                      <ScrollView
-                        ref={reactionsScrollRef}
-                        horizontal
-                        pagingEnabled
-                        showsHorizontalScrollIndicator={false}
-                        decelerationRate="fast"
-                        snapToInterval={msgActionsReactionsWidth}
-                        snapToAlignment="start"
-                        contentContainerStyle={{ paddingVertical: msgActionsLandscape ? 3 : 4 }}
-                        style={{ width: msgActionsReactionsWidth }}
+                  {/* Реакции: строка эмодзи и стрелка, которая раскрывает все. */}
+                  <CardShell
+                    style={{
+                      ...surface,
+                      width: msgActionsCardWidth,
+                      borderRadius: msgReactionsExpanded ? 22 : (msgReactionCell + 8) / 2,
+                      padding: 4,
+                      flexDirection: 'row',
+                      flexWrap: 'wrap',
+                      alignItems: 'center',
+                    }}
+                  >
+                    {emojis.map((emoji) => (
+                      <Pressable
+                        key={emoji}
+                        onPress={() => emojiPress(emoji)}
+                        hitSlop={2}
+                        style={({ pressed }) => ({
+                          width: msgReactionCell,
+                          height: msgReactionCell,
+                          borderRadius: msgReactionCell / 2,
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          backgroundColor: pressed
+                            ? 'rgba(255,255,255,0.08)'
+                            : myEmojis.has(emoji)
+                              ? 'rgba(255,255,255,0.12)'
+                              : 'transparent',
+                        })}
                       >
-                        <View style={{ width: msgActionsReactionsWidth, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: msgActionsLandscape ? 6 : 8 }}>
-                          {row1.map((emoji) => (
-                            <Pressable key={emoji} onPress={() => emojiPress(emoji)} style={({ pressed }) => ({ padding: emojiPadding, borderRadius: 10, backgroundColor: pressed ? (isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)') : 'transparent' })} hitSlop={4}>
-                              <Text style={{ fontSize: emojiFontSize }}>{emoji}</Text>
-                            </Pressable>
-                          ))}
-                          <Pressable
-                            onPress={() => reactionsScrollRef.current?.scrollTo({ x: msgActionsReactionsWidth, animated: true })}
-                            style={({ pressed }) => ({
-                              width: reactionControlSize,
-                              height: reactionControlSize,
-                              borderRadius: reactionControlSize / 2,
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              backgroundColor: pressed ? (isDark ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.12)') : (isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)'),
-                            })}
-                            hitSlop={4}
-                          >
-                            <Ionicons name="chevron-back" size={actionIconSize} color={isDark ? 'rgba(255,255,255,0.8)' : 'rgba(0,0,0,0.7)'} />
-                          </Pressable>
+                        <Text style={{ fontSize: emojiFontSize }}>{emoji}</Text>
+                      </Pressable>
+                    ))}
+                    <Pressable
+                      onPress={() => setMsgReactionsExpanded((v) => !v)}
+                      hitSlop={4}
+                      accessibilityRole="button"
+                      style={{ width: msgReactionCell, height: msgReactionCell, alignItems: 'center', justifyContent: 'center' }}
+                    >
+                      {({ pressed }) => (
+                        <View
+                          style={{
+                            width: msgReactionCell - 8,
+                            height: msgReactionCell - 8,
+                            borderRadius: (msgReactionCell - 8) / 2,
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            backgroundColor: pressed ? 'rgba(255,255,255,0.14)' : 'rgba(255,255,255,0.08)',
+                          }}
+                        >
+                          <Ionicons
+                            name={msgReactionsExpanded ? 'chevron-up' : 'chevron-down'}
+                            size={actionIconSize - 2}
+                            color="rgba(255,255,255,0.8)"
+                          />
                         </View>
-                        <View style={{ width: msgActionsReactionsWidth, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-around', paddingHorizontal: msgActionsLandscape ? 6 : 8 }}>
-                          {row2.map((emoji) => (
-                            <Pressable key={emoji} onPress={() => emojiPress(emoji)} style={({ pressed }) => ({ padding: emojiPadding, borderRadius: 10, backgroundColor: pressed ? (isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)') : 'transparent' })} hitSlop={4}>
-                              <Text style={{ fontSize: emojiFontSize }}>{emoji}</Text>
-                            </Pressable>
-                          ))}
-                        </View>
-                      </ScrollView>
+                      )}
+                    </Pressable>
                   </CardShell>
-                  {/* Отступ 12px — виден фон модалки (на нём лежат оба блока) */}
-                  {/* Блок 2: список действий */}
+
+                  {/* Копия зажатого облака — по центру, между реакциями и списком. */}
+                  <View
+                    pointerEvents="none"
+                    style={{
+                      alignSelf: 'stretch',
+                      flexShrink: 1,
+                      minHeight: 0,
+                      overflow: 'hidden',
+                      marginVertical: msgActionsBlockGap,
+                    }}
+                  >
+                    {renderMessageRow({ item: selectedMessage, centered: true })}
+                  </View>
+
+                  {/* Действия */}
                   <View
                     style={{
-                      marginTop: msgActionsBlockGap,
+                      ...surface,
                       width: msgActionsListWidth,
-                      maxHeight: msgActionsListMaxH,
-                      flexShrink: 1,
+                      maxHeight: listMaxH,
                       borderRadius: 12,
-                      ...cardShellStyle,
                       backgroundColor: 'transparent',
                     }}
                   >
@@ -3853,151 +3970,74 @@ export default function ChatScreen({ route, navigation }: Props) {
                         <View style={{ flex: 1, backgroundColor: 'rgba(21,31,51,0.90)' }} />
                       )}
                     </View>
-                    {(() => {
-                      const isImageMsg = String(selectedMessage?.type || '') === 'image';
-                      const row = (
-                        label: string,
-                        icon: React.ComponentProps<typeof Ionicons>['name'],
-                        onPress: () => void,
-                        danger?: boolean,
-                      ) => (
-                          <Pressable
-                            key={label + String(icon)}
-                            onPress={onPress}
-                            style={({ pressed }) => ({
-                              flexDirection: 'row',
-                              alignItems: 'center',
-                              justifyContent: 'flex-start',
-                              paddingVertical: actionPaddingV,
-                              paddingHorizontal: actionPaddingH,
-                              backgroundColor: pressed
-                                ? danger
-                                  ? 'rgba(255,90,103,0.08)'
-                                  : (isDark ? LIVI.accent.vivid12 : LIVI.accent.vivid10)
-                                : 'transparent',
-                            })}
-                          >
-                            <Ionicons
-                              name={icon}
-                              size={actionIconSize}
-                              color={danger ? '#FF5A67' : LIVI.titan}
-                              style={{ marginRight: 12 }}
-                            />
-                            <Text style={{ color: danger ? '#FF5A67' : LIVI.white, fontSize: actionFontSize, fontWeight: '400' }}>
-                              {label}
-                            </Text>
-                          </Pressable>
-                      );
-                      return (
-                        <>
-                        <ScrollView
-                          style={{ flexShrink: 1 }}
-                          contentContainerStyle={{ flexGrow: 0 }}
-                          showsVerticalScrollIndicator={false}
-                          bounces={false}
-                        >
-                    {(String(selectedMessage?.text || '').trim() || String(selectedMessage?.uri || '').trim() || String(selectedMessage?.stickerId || '').trim() || isImageMsg) && (
+                    {isRead ? (
                       <>
-                        {!isImageMsg && (String(selectedMessage?.text || '').trim() || String(selectedMessage?.stickerId || '').trim()) ? (
-                          row(t('chatActionCopy', lang), 'copy-outline', () => {
-                            hideMessageActions();
-                            void copySelectedMessage(selectedMessage);
-                          })
-                        ) : null}
-                        {isImageMsg ? (
-                          <>
-                            {row(t('save', lang), 'download-outline', () => {
-                              hideMessageActions();
-                              requestImageAction('save', selectedMessage, albumFocusIndex);
-                            })}
-                            {row(t('chatActionForward', lang), 'paper-plane-outline', () => {
-                              hideMessageActions();
-                              requestImageAction('forward', selectedMessage, albumFocusIndex);
-                            })}
-                          </>
-                        ) : (
-                          row(t('chatActionForward', lang), 'paper-plane-outline', () => {
-                            hideMessageActions();
-                            void openForwardPicker();
-                          })
-                        )}
-                        {row(t('chatActionSelect', lang), 'checkbox-outline', () => {
-                          hideMessageActions();
-                          enterSelectionModeFromMessage(selectedMessage, albumFocusIndex);
-                        })}
-                        {row(t('chatActionReply', lang), 'arrow-undo-outline', () => {
-                            hideMessageActions();
-                            setEditingMessageId(null);
-                            messageTextRef.current = '';
-                            setMessageText('');
-                            setReplyingToMessage({
-                              id: String(selectedMessage?.id ?? ''),
-                              text: getChatReplyPreviewText(selectedMessage, lang),
-                              from: selectedMessage?.from,
-                              isOwn: selectedMessage?.from === currentUserId || selectedMessage?.sender === 'me',
-                            });
-                          })}
-                        {(selectedMessage?.from === currentUserId || selectedMessage?.sender === 'me') && String(selectedMessage?.type || '') === 'text' && (
-                          row(t('chatActionEdit', lang), 'pencil-outline', () => {
-                                hideMessageActions();
-                                const text = String(selectedMessage?.text ?? '');
-                                messageTextRef.current = text;
-                                setMessageText(text);
-                                setEditingMessageId(selectedMessage?.id ?? null);
-                                setReplyingToMessage(null);
-                              })
-                        )}
-                      </>
-                    )}
-                    <Pressable
-                      onPress={() => {
-                        hideMessageActions();
-                        if (isImageMsg) {
-                          requestImageAction('delete', selectedMessage, albumFocusIndex);
-                        } else {
-                          confirmDeleteSelectedMessage(selectedMessage);
-                        }
-                      }}
-                      style={({ pressed }) => ({
-                        flexDirection: 'row',
-                        alignItems: 'center',
-                        justifyContent: 'flex-start',
-                        paddingVertical: actionPaddingV,
-                        paddingHorizontal: actionPaddingH,
-                        backgroundColor: pressed ? 'rgba(255,90,103,0.08)' : 'transparent',
-                      })}
-                    >
-                      <Ionicons
-                        name="trash-outline"
-                        size={actionIconSize}
-                        color="#FF5A67"
-                        style={{ marginRight: 12 }}
-                      />
-                      <Text style={{ color: '#FF5A67', fontSize: actionFontSize, fontWeight: '400' }}>
-                        {t('delete', lang)}
-                      </Text>
-                    </Pressable>
-                        </ScrollView>
-                        <Pressable
-                          onPress={hideMessageActions}
-                          style={({ pressed }) => ({
+                        <View
+                          style={{
+                            flexDirection: 'row',
                             alignItems: 'center',
-                            justifyContent: 'center',
-                            paddingVertical: actionPaddingV,
-                            paddingHorizontal: actionPaddingH,
-                            backgroundColor: pressed ? (isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)') : 'transparent',
+                            height: rowHeight - 4,
+                            paddingHorizontal: rowPadH,
+                          }}
+                        >
+                          <Ionicons
+                            name="checkmark-done"
+                            size={actionIconSize - 2}
+                            color={CHAT_READ_TICK_COLOR}
+                            style={{ marginRight: iconGap - 4 }}
+                          />
+                          <Text style={{ color: WELCOME_MUTED_TEXT, fontSize: actionFontSize - 1 }} numberOfLines={1}>
+                            {t('chatMessageReadStatus', lang)}
+                          </Text>
+                        </View>
+                        <View style={{ height: msgActionsLandscape ? 4 : 6, backgroundColor: 'rgba(0,0,0,0.28)' }} />
+                      </>
+                    ) : null}
+                    <ScrollView
+                      style={{ flexShrink: 1 }}
+                      contentContainerStyle={{ flexGrow: 0, paddingVertical: 4 }}
+                      showsVerticalScrollIndicator={false}
+                      bounces={false}
+                    >
+                      {rows.map((row) => (
+                        <Pressable
+                          key={row.key}
+                          onPress={() => {
+                            hideMessageActions();
+                            row.onPress();
+                          }}
+                          style={({ pressed }) => ({
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            height: rowHeight,
+                            paddingHorizontal: rowPadH,
+                            backgroundColor: pressed
+                              ? row.danger
+                                ? 'rgba(255,90,103,0.08)'
+                                : (isDark ? LIVI.accent.vivid12 : LIVI.accent.vivid10)
+                              : 'transparent',
                           })}
                         >
-                          <Text style={{ color: LIVI.titan, fontSize: actionFontSize, fontWeight: '400' }}>{t('cancelAction', lang)}</Text>
+                          <Ionicons
+                            name={row.icon}
+                            size={actionIconSize}
+                            color={row.danger ? '#FF5A67' : LIVI.titan}
+                            style={{ marginRight: iconGap }}
+                          />
+                          <Text
+                            style={{ color: row.danger ? '#FF5A67' : LIVI.white, fontSize: actionFontSize, fontWeight: '400', flexShrink: 1 }}
+                            numberOfLines={1}
+                          >
+                            {row.label}
+                          </Text>
                         </Pressable>
-                        </>
-                      );
-                    })()}
+                      ))}
+                    </ScrollView>
                   </View>
                 </View>
                 );
               })()}
-            </Pressable>
+            </View>
           </Pressable>
         </Modal>
       )}

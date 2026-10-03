@@ -74,17 +74,7 @@ export function filterVisibleServerMessages(
 }
 
 export function sortMessagesByTimestamp(messages: any[]): any[] {
-  return [...messages].sort((a: any, b: any) => {
-    const ta =
-      a?.timestamp instanceof Date
-        ? a.timestamp.getTime()
-        : +new Date(a?.timestamp || 0);
-    const tb =
-      b?.timestamp instanceof Date
-        ? b.timestamp.getTime()
-        : +new Date(b?.timestamp || 0);
-    return ta - tb;
-  });
+  return [...messages].sort((a: any, b: any) => timestampMs(a?.timestamp) - timestampMs(b?.timestamp));
 }
 
 function dropOptimisticDupesAgainstServer(
@@ -105,12 +95,28 @@ function dropOptimisticDupesAgainstServer(
   return dropLocalIds;
 }
 
-function preserveLocalReplyTo(formatted: any[], prev: any[]): any[] {
+function timestampMs(t: unknown): number {
+  const ms = t instanceof Date ? t.getTime() : +new Date((t as any) || 0);
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+/**
+ * Серверная копия заменяет локальную, но кое-что берём из своей: цитату ответа и,
+ * у своих сообщений, время, когда их написали. Сервер ставит время доставки — и
+ * сообщение, отправленное из очереди после возврата сети, обгоняло ещё не ушедшие
+ * (голосовое уезжало ниже текста, написанного после него).
+ */
+function preserveLocalFields(formatted: any[], prev: any[]): any[] {
   const prevById = new Map(prev.map((m: any) => [String(m?.id || ""), m]));
   return formatted.map((f: any) => {
     const local = prevById.get(String(f?.id || ""));
-    if (local?.replyTo && !f.replyTo) return { ...f, replyTo: local.replyTo };
-    return f;
+    if (!local) return f;
+    let next = f;
+    if (local.replyTo && !f.replyTo) next = { ...next, replyTo: local.replyTo };
+    if (String(f?.sender || "") === "me" && timestampMs(local.timestamp) > 0) {
+      next = { ...next, timestamp: local.timestamp instanceof Date ? local.timestamp : new Date(local.timestamp) };
+    }
+    return next;
   });
 }
 
@@ -152,7 +158,7 @@ export function mergeQuietSyncMessages(
   const dropLocalIds = dropOptimisticDupesAgainstServer(localKeep, serverMine);
 
   let merged = [
-    ...preserveLocalReplyTo(formatted, prev),
+    ...preserveLocalFields(formatted, prev),
     ...localKeep,
   ];
   if (dropLocalIds.size > 0) {
@@ -186,7 +192,7 @@ export function mergeInitialHistoryMessages(
     ? dropOptimisticDupesAgainstServer(localKeep, serverMine)
     : new Set<string>();
   const merged = [
-    ...preserveLocalReplyTo(formatted, prev),
+    ...preserveLocalFields(formatted, prev),
     ...localKeep.filter((m: any) => !dropLocalIds.has(String(m?.id || ""))),
   ];
   return sortMessagesByTimestamp(merged);

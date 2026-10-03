@@ -379,7 +379,8 @@ export function useChatRealtime({
           const id = String(msg?.id || '');
           if (!olds.has(id)) return msg;
           changed = true;
-          return { ...msg, id: serverMessageId, from: currentUserId, to: peerId };
+          // Голосовое загрузила очередь: локальный файл она удалит, играем с сервера.
+          return { ...msg, id: serverMessageId, from: currentUserId, to: peerId, ...(ev.uri ? { uri: ev.uri } : {}) };
         });
         if (!changed) return prev;
         const seen = new Set<string>();
@@ -405,7 +406,7 @@ export function useChatRealtime({
         return next;
       });
       setUploadStatus((prev) => {
-        if (![serverMessageId, ...olds].some((id) => prev[id] === 'failed')) return prev;
+        if (![serverMessageId, ...olds].some((id) => prev[id] === 'failed' || prev[id] === 'sending')) return prev;
         const next = { ...prev };
         for (const id of olds) delete next[id];
         next[serverMessageId] = 'sent';

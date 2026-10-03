@@ -6,6 +6,7 @@ import { Audio } from "expo-av";
 import * as FileSystem from "expo-file-system";
 import * as Haptics from "expo-haptics";
 import { t, type Lang } from "../../utils/i18n";
+import { logger } from "../../utils/logger";
 import {
   VOICE_CANCEL_ARM_DX,
   VOICE_CANCEL_DISARM_DX,
@@ -44,6 +45,19 @@ export function useChatVoiceRecord({
   const voiceRecordingRef = React.useRef<Audio.Recording | null>(null);
   const voiceRecordTimerRef = React.useRef<ReturnType<typeof setInterval> | null>(null);
   const voiceStopInProgressRef = React.useRef(false);
+  /**
+   * Запуск записи идёт (разрешение, подготовка рекордера). Флаг синхронный: второе
+   * нажатие, пока первое не стартовало, создавало второй рекордер — expo-av его
+   * отвергал, ссылка на первый терялась, и микрофон писал вечно, а запись голосовых
+   * ломалась до перезапуска приложения.
+   */
+  const voiceStartingRef = React.useRef(false);
+  /** Кнопку отпустили, пока запуск ещё шёл: такую запись выбрасываем. */
+  const voiceReleasedDuringStartRef = React.useRef(false);
+  const mountedRef = React.useRef(true);
+  /** Время нажатия на микрофон — для логов: сколько шёл запуск и держали кнопку. */
+  const voicePressAtRef = React.useRef(0);
+  const sincePress = () => (voicePressAtRef.current ? Date.now() - voicePressAtRef.current : -1);
   const voiceCancelTriggeredRef = React.useRef(false);
   /** True in onPanResponderGrant — trash swipe works before setState(voiceIsRecording). */
   const voiceDragEnabledRef = React.useRef(false);
@@ -122,6 +136,18 @@ export function useChatVoiceRecord({
     } catch {}
   }, [trashLid]);
 
+  const restoreAudioMode = React.useCallback(() => {
+    try {
+      void Audio.setAudioModeAsync({
+        playsInSilentModeIOS: true,
+        allowsRecordingIOS: false,
+        staysActiveInBackground: false,
+        shouldDuckAndroid: false,
+        playThroughEarpieceAndroid: false,
+      }).catch(() => {});
+    } catch {}
+  }, []);
+
   const stopVoiceRecording = React.useCallback(
     async (cancelled?: boolean, autoStopped?: boolean) => {
       if (voiceStopInProgressRef.current) return;
@@ -145,6 +171,13 @@ export function useChatVoiceRecord({
         const uri = rec.getURI() || "";
         const st: any = await rec.getStatusAsync().catch(() => null);
         const durationMs = Number(st?.durationMillis || voiceRecordMs || 0);
+        logger.info("[voice] stopped", {
+          durationMs,
+          cancelled: !!cancelled || voiceCancelTriggeredRef.current,
+          autoStopped: !!autoStopped,
+          hasUri: !!uri,
+          sincePressMs: sincePress(),
+        });
 
         if (!uri || durationMs < 600) {
           if (uri) {
@@ -175,46 +208,60 @@ export function useChatVoiceRecord({
         }
 
         void Promise.resolve(onRecordedRef.current(uri, durationMs)).catch(() => {});
-      } catch {
-        // ignore
+      } catch (e) {
+        logger.warn("[voice] stop failed", { error: String((e as Error)?.message ?? e) });
       } finally {
         voiceStopInProgressRef.current = false;
         resetVoiceGesture();
-        try {
-          void Audio.setAudioModeAsync({
-            playsInSilentModeIOS: true,
-            allowsRecordingIOS: false,
-            staysActiveInBackground: false,
-            shouldDuckAndroid: false,
-            playThroughEarpieceAndroid: false,
-          });
-        } catch {}
+        restoreAudioMode();
       }
     },
-    [voiceRecordMs, resetVoiceGesture, stopLocalRecordingSignal],
+    [voiceRecordMs, resetVoiceGesture, restoreAudioMode, stopLocalRecordingSignal],
   );
   stopVoiceRecordingRef.current = stopVoiceRecording;
 
   const startVoiceRecording = React.useCallback(async () => {
-    try {
-      if (voiceIsRecording) return;
-      if (!currentUserId || !peerId) {
-        resetVoiceGesture();
-        return;
-      }
-      if (selectionMode) {
-        resetVoiceGesture();
-        return;
-      }
-      resetVoiceGesture({ keepVoiceDrag: true });
+    if (voiceStartingRef.current || voiceRecordingRef.current) return;
+    if (!currentUserId || !peerId || selectionMode) {
+      resetVoiceGesture();
+      return;
+    }
+    voiceStartingRef.current = true;
+    voiceReleasedDuringStartRef.current = false;
+    resetVoiceGesture({ keepVoiceDrag: true });
 
-      const perm = await Audio.requestPermissionsAsync();
+    const abandonStart = () => {
+      setVoiceIsRecording(false);
+      try {
+        stopLocalRecordingSignal();
+      } catch {}
+      resetVoiceGesture();
+      restoreAudioMode();
+    };
+    const startAbandoned = () => {
+      const abandoned = voiceReleasedDuringStartRef.current || !mountedRef.current;
+      if (abandoned) {
+        logger.info("[voice] start abandoned", {
+          released: voiceReleasedDuringStartRef.current,
+          mounted: mountedRef.current,
+          sincePressMs: sincePress(),
+        });
+      }
+      return abandoned;
+    };
+
+    let recording: Audio.Recording | null = null;
+    try {
+      const perm = await Audio.getPermissionsAsync();
       if (!perm.granted) {
+        // Системное окно забирает палец — запись с ним уже не начнётся. Только
+        // спрашиваем, а записывать пользователь нажмёт ещё раз (как в Telegram).
         try {
           stopLocalRecordingSignal();
         } catch {}
         resetVoiceGesture();
-        showNotice("error", t("errorTitle", lang), t("needMicPermission", lang));
+        const asked = perm.canAskAgain ? await Audio.requestPermissionsAsync() : perm;
+        if (!asked.granted) showNotice("error", t("errorTitle", lang), t("needMicPermission", lang));
         return;
       }
 
@@ -225,13 +272,14 @@ export function useChatVoiceRecord({
         playThroughEarpieceAndroid: true,
         staysActiveInBackground: false,
       });
+      if (startAbandoned()) {
+        abandonStart();
+        return;
+      }
 
-      const recording = new Audio.Recording();
-      voiceRecordingRef.current = recording;
-      voiceStopInProgressRef.current = false;
       setVoiceRecordMs(0);
       setVoiceIsRecording(true);
-
+      recording = new Audio.Recording();
       await recording.prepareToRecordAsync({
         android: {
           extension: ".m4a",
@@ -254,9 +302,20 @@ export function useChatVoiceRecord({
         web: undefined as any,
         isMeteringEnabled: false,
       } as any);
-
       await recording.startAsync();
 
+      if (startAbandoned()) {
+        // Отпустили, пока рекордер готовился: записи ещё нет — выбрасываем.
+        const uri = recording.getURI();
+        await recording.stopAndUnloadAsync().catch(() => {});
+        if (uri) void FileSystem.deleteAsync(uri, { idempotent: true }).catch(() => {});
+        abandonStart();
+        return;
+      }
+
+      voiceRecordingRef.current = recording;
+      voiceStopInProgressRef.current = false;
+      logger.info("[voice] recording", { sincePressMs: sincePress() });
       if (voiceRecordTimerRef.current) clearInterval(voiceRecordTimerRef.current);
       voiceRecordTimerRef.current = setInterval(async () => {
         try {
@@ -270,20 +329,22 @@ export function useChatVoiceRecord({
           }
         } catch {}
       }, 100);
-    } catch {
-      setVoiceIsRecording(false);
-      voiceRecordingRef.current = null;
-      try {
-        stopLocalRecordingSignal();
-      } catch {}
-      resetVoiceGesture();
+    } catch (e) {
+      logger.warn("[voice] start failed", { error: String((e as Error)?.message ?? e) });
+      // Выгружаем именно свой рекордер: иначе он остаётся «сиротой» и держит микрофон.
+      if (recording && voiceRecordingRef.current !== recording) {
+        await recording.stopAndUnloadAsync().catch(() => {});
+      }
+      abandonStart();
+    } finally {
+      voiceStartingRef.current = false;
     }
   }, [
-    voiceIsRecording,
     currentUserId,
     peerId,
     selectionMode,
     resetVoiceGesture,
+    restoreAudioMode,
     showNotice,
     lang,
     stopLocalRecordingSignal,
@@ -310,6 +371,8 @@ export function useChatVoiceRecord({
       onMoveShouldSetPanResponderCapture: (_evt, g) => Math.abs(g.dx) > 2 || Math.abs(g.dy) > 2,
       onPanResponderTerminationRequest: () => false,
       onPanResponderGrant: () => {
+        voicePressAtRef.current = Date.now();
+        logger.info("[voice] press", { starting: voiceStartingRef.current, recording: !!voiceRecordingRef.current });
         voiceDragEnabledRef.current = true;
         try {
           Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -347,7 +410,14 @@ export function useChatVoiceRecord({
       },
       onPanResponderRelease: async (_evt, gestureState) => {
         Animated.timing(micScale, { toValue: 1, duration: 44, useNativeDriver: true }).start();
+        logger.info("[voice] release", {
+          sincePressMs: sincePress(),
+          starting: voiceStartingRef.current,
+          recording: !!voiceRecordingRef.current,
+        });
         if (!voiceRecordingRef.current) {
+          // Запуск ещё идёт — пусть он сам выбросит запись, как только поднимется.
+          if (voiceStartingRef.current) voiceReleasedDuringStartRef.current = true;
           resetVoiceGesture();
           return;
         }
@@ -363,7 +433,13 @@ export function useChatVoiceRecord({
         await stopVoiceRecording(false, false);
       },
       onPanResponderTerminate: async () => {
+        logger.info("[voice] gesture terminated", {
+          sincePressMs: sincePress(),
+          starting: voiceStartingRef.current,
+          recording: !!voiceRecordingRef.current,
+        });
         Animated.timing(micScale, { toValue: 1, duration: 44, useNativeDriver: true }).start();
+        if (voiceStartingRef.current) voiceReleasedDuringStartRef.current = true;
         if (voiceRecordingRef.current) {
           await stopVoiceRecording(true, false);
         }
@@ -412,10 +488,13 @@ export function useChatVoiceRecord({
   }, [voiceIsRecording, recordViz]);
 
   React.useEffect(() => {
+    mountedRef.current = true;
     return () => {
+      mountedRef.current = false;
       try {
         if (voiceRecordingRef.current) {
           voiceRecordingRef.current.stopAndUnloadAsync().catch(() => {});
+          voiceRecordingRef.current = null;
         }
       } catch {}
       try {

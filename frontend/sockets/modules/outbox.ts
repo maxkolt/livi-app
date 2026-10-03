@@ -18,8 +18,11 @@ const E2E_RETRY_AFTER_SEC = 5;
 /** Ack одной попытки по сокету. Дольше не ждём: зависший под VPN сокет обходим по HTTP. */
 const SEND_ACK_TIMEOUT_MS = 8000;
 const SEND_HTTP_TIMEOUT_MS = 12000;
-/** Пауза перед повтором, пока сеть не отвечает: растёт, чтобы без связи не жечь батарею. */
-const NETWORK_RETRY_DELAYS_SEC = [2, 4, 8, 15, 30];
+/**
+ * Пауза перед повтором, пока сеть не отвечает: растёт, чтобы без связи не жечь батарею.
+ * Потолок небольшой — если возврат сети не заметили, сообщение всё равно уйдёт скоро.
+ */
+const NETWORK_RETRY_DELAYS_SEC = [2, 4, 8, 15];
 /** Временные отказы сервера подряд, после которых сообщение помечаем «не отправлено». */
 const MAX_SERVER_REJECTS = 8;
 /** Отказы, которые повтор не исправит. */
@@ -258,6 +261,25 @@ export function scheduleMessageOutboxDrain(delaySec: number): void {
 }
 
 let networkRetryStep = 0;
+/** Отмена идущей загрузки файла из очереди (голосовое). */
+let cancelQueuedUpload: (() => void) | null = null;
+
+/**
+ * Связь вернулась или сменилась (Wi-Fi ↔ мобильная). Пауза, накопленная без сети,
+ * больше не нужна — повторяем сразу. С restartUpload загрузку, начатую на старой сети,
+ * обрываем: она висела бы до таймаута, а очередь — вместе с ней.
+ */
+export function noteNetworkBack(opts?: { restartUpload?: boolean }): void {
+  networkRetryStep = 0;
+  if (opts?.restartUpload && cancelQueuedUpload) {
+    const cancel = cancelQueuedUpload;
+    cancelQueuedUpload = null;
+    try {
+      cancel();
+    } catch {}
+    scheduleMessageOutboxDrain(1);
+  }
+}
 
 function scheduleNetworkRetry(): void {
   const sec = NETWORK_RETRY_DELAYS_SEC[Math.min(networkRetryStep, NETWORK_RETRY_DELAYS_SEC.length - 1)];
@@ -350,7 +372,11 @@ export async function removeQueuedMessagesMatching(rawIds: readonly string[]): P
     return hit;
   });
   for (const id of ids) markMessagePendingInOutbox(id, false);
-  for (const r of removed) settleOutboxOutcome(r.id, { kind: 'cancelled' });
+  for (const r of removed) {
+    // Неотправленное голосовое удалили — его запись на устройстве больше не нужна.
+    deleteLocalMedia(r.payload?.localUri);
+    settleOutboxOutcome(r.id, { kind: 'cancelled' });
+  }
 }
 
 /* ========= Очередь правок ========= */
@@ -525,6 +551,106 @@ function persistOutgoingStatus(
   });
 }
 
+/* ========= Медиа, которое очередь загружает сама (голосовое, записанное без сети) ========= */
+
+/** Ключ как getChatMessagesKey в screens/chat/chatStorageKeys.ts. */
+function chatMessagesKey(userId: string, peerId: string): string {
+  const [a, b] = [userId, peerId].sort();
+  return `chat_messages_${a}_${b}`;
+}
+
+/** Относительный адрес загрузки → полный, как resolveMediaUri в ChatScreen. */
+function absoluteMediaUrl(url: string): string {
+  if (!url.startsWith('/uploads/')) return url;
+  // Лениво: constants читает настройки сборки при загрузке модуля.
+  const { API_BASE } = require('./constants') as typeof import('./constants');
+  return `${API_BASE}${url}`;
+}
+
+/** В сеть уходит без пути к файлу на устройстве. */
+function wirePayload(payload: MessageOutboxItem['payload']): MessageOutboxItem['payload'] {
+  if (!payload.localUri) return payload;
+  const { localUri: _local, ...rest } = payload;
+  return rest;
+}
+
+function deleteLocalMedia(localUri: string | undefined): void {
+  if (!localUri) return;
+  try {
+    // Лениво: модуль нативный, а очередь грузится и в тестах.
+    const FileSystem = require('expo-file-system') as typeof import('expo-file-system');
+    void FileSystem.deleteAsync(localUri, { idempotent: true }).catch(() => {});
+  } catch {}
+}
+
+type QueuedUpload =
+  | { kind: 'ok'; row: MessageOutboxItem }
+  | { kind: 'network' }
+  | { kind: 'server'; error: string }
+  | { kind: 'file'; error: string };
+
+async function uploadQueuedMedia(row: MessageOutboxItem): Promise<QueuedUpload> {
+  const { localUri, type, to } = row.payload;
+  if (!localUri || (type !== 'audio' && type !== 'image')) return { kind: 'ok', row };
+  // Лениво: mediaUpload тянет sockets/socket, а тот — эту очередь.
+  const { uploadMediaToServer } = require('../../utils/mediaUpload') as typeof import('../../utils/mediaUpload');
+  let cancelThis: (() => void) | null = null;
+  const res = await uploadMediaToServer(localUri, type, undefined, shared.currentUserId || undefined, to, {
+    registerCancel: (cancel) => {
+      cancelThis = cancel;
+      cancelQueuedUpload = cancel;
+    },
+  }).finally(() => {
+    if (cancelQueuedUpload === cancelThis) cancelQueuedUpload = null;
+  });
+  if (!res.success || !res.url) {
+    if (res.kind === 'file') return { kind: 'file', error: 'upload_file_missing' };
+    if (res.kind === 'server') return { kind: 'server', error: 'upload_rejected' };
+    return { kind: 'network' };
+  }
+  const uri = absoluteMediaUrl(res.url);
+  // Адрес сохраняем сразу: оборвётся отправка — при повторе файл заново не грузим.
+  const uploaded: MessageOutboxItem = { ...row, payload: { ...row.payload, uri } };
+  await withMessageOutboxLock(async () => {
+    const items = await loadMessageOutbox();
+    const idx = items.findIndex((x) => x.id === row.id);
+    if (idx < 0) return;
+    items[idx] = { ...items[idx], payload: { ...items[idx].payload, uri } };
+    await saveMessageOutbox(items);
+  });
+  return { kind: 'ok', row: uploaded };
+}
+
+/**
+ * Доставлено: в сохранённой истории чата локальный файл меняем на адрес с сервера
+ * (чат мог быть закрыт), затем файл удаляем. Открытый чат меняет адрес сам — по событию.
+ */
+async function finishQueuedMedia(row: MessageOutboxItem, ids: readonly string[]): Promise<void> {
+  const { localUri, uri, to } = row.payload;
+  if (!localUri || !uri) return;
+  const me = String(shared.currentUserId || '').trim();
+  const peer = String(to || '').trim();
+  if (me && peer) {
+    const idSet = new Set(ids);
+    try {
+      const key = chatMessagesKey(me, peer);
+      const raw = await AsyncStorage.getItem(key);
+      const list = raw ? JSON.parse(raw) : null;
+      if (Array.isArray(list)) {
+        let changed = false;
+        const next = list.map((m: any) => {
+          if (!idSet.has(String(m?.id || '')) || m?.uri !== localUri) return m;
+          changed = true;
+          return { ...m, uri };
+        });
+        if (changed) await AsyncStorage.setItem(key, JSON.stringify(next));
+      }
+      shared.messageCache.delete(`${me}-${peer}`);
+    } catch {}
+  }
+  deleteLocalMedia(localUri);
+}
+
 /* ========= Отправка: сокет, при его молчании — HTTP ========= */
 
 type SendAttempt = { kind: 'resp'; resp: any; useSocket: boolean } | { kind: 'network'; useSocket: boolean };
@@ -575,13 +701,16 @@ async function onRowDelivered(row: MessageOutboxItem, resp: any): Promise<void> 
   await removeMessageOutboxRow(row.id);
   await remapEditOutboxMessageIds(oldIds, serverMessageId);
   void persistOutgoingStatus(to, serverMessageId, delivered ? 'delivered' : 'sent', oldIds);
+  const uploadedUri = row.payload.localUri ? row.payload.uri : undefined;
   dispatchOutboxMessageDelivered({
     to,
     outboxId: row.id,
     optimisticUiId: row.optimisticUiId,
     serverMessageId,
     delivered,
+    ...(uploadedUri ? { uri: uploadedUri } : {}),
   });
+  if (uploadedUri) void finishQueuedMedia(row, [serverMessageId, ...oldIds]);
   settleOutboxOutcome(row.id, {
     kind: 'delivered',
     messageId: serverMessageId,
@@ -642,16 +771,37 @@ async function drainMessageOutboxPass(): Promise<'done' | 'partial' | 'stopped'>
     if (blockedPeers.has(peer)) continue;
     if (isFingerprintCancelledSync(item.optimisticUiId, item.id)) {
       await removeMessageOutboxRow(item.id);
+      deleteLocalMedia(item.payload?.localUri);
       settleOutboxOutcome(item.id, { kind: 'cancelled' });
       continue;
     }
     // Свежая строка: пока шли предыдущие, сообщение могли удалить или отредактировать.
-    const row = (await withMessageOutboxLock(() => loadMessageOutbox())).find((x) => x.id === item.id);
+    let row = (await withMessageOutboxLock(() => loadMessageOutbox())).find((x) => x.id === item.id);
     if (!row) continue;
+
+    // Голосовое без сети: сначала файл на сервер, потом само сообщение.
+    if (row.payload.localUri && !row.payload.uri) {
+      const up = await uploadQueuedMedia(row);
+      if (up.kind === 'network') {
+        scheduleNetworkRetry();
+        return 'stopped';
+      }
+      if (up.kind === 'file') {
+        await onRowFailed(row, up.error);
+        continue;
+      }
+      if (up.kind === 'server') {
+        if ((await noteServerReject(row, up.error)) === 'gave_up') continue;
+        blockedPeers.add(peer);
+        retryLater = true;
+        continue;
+      }
+      row = up.row;
+    }
 
     let wire: Record<string, unknown>;
     try {
-      wire = await toWireMessagePayload(row.payload);
+      wire = await toWireMessagePayload(wirePayload(row.payload));
     } catch (e) {
       if (!(e instanceof E2eUnavailableError)) throw e;
       // Открытым текстом не шлём. locked ждёт восстановления ключа (оно само запустит drain).

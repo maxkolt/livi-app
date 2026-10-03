@@ -192,6 +192,8 @@ export function sendMessage(payload: {
   type: "text" | "image" | "audio" | "video" | "document" | "sticker";
   uri?: string;
   uris?: string[];
+  /** Файл ещё не загружен: очередь загрузит его сама, когда будет сеть (вместо uri). */
+  localUri?: string;
   name?: string;
   size?: number;
   duration?: number;
@@ -235,6 +237,9 @@ export function sendMessage(payload: {
   };
   if (messageType === "image" && albumUris.length > 1) {
     socketPayload.uris = albumUris;
+  }
+  if (payload.localUri && !primaryUri) {
+    socketPayload.localUri = payload.localUri;
   }
   if (payload.replyTo?.id) {
     socketPayload.replyTo = { id: payload.replyTo.id, text: payload.replyTo.text, from: payload.replyTo.from };
@@ -346,7 +351,9 @@ export function sendChatTyping(payload: { to: string; typing?: boolean; recordin
         }
       } catch {}
     }
-    socket.emit("chat:typing", {
+    // volatile: без связи сигнал не копится в буфере сокета. Иначе после возврата сети
+    // собеседник получал пачку старых «записывает…», хотя запись давно закончилась.
+    socket.volatile.emit("chat:typing", {
       to: payload.to,
       typing: !!payload.typing,
       recording: payload.recording === undefined ? undefined : !!payload.recording,

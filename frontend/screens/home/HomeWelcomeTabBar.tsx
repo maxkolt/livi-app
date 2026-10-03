@@ -8,8 +8,6 @@ import { shouldSkipHomeUiSettle } from '../../utils/globalEvents';
 import FitText from '../../components/FitText';
 import {
   WELCOME_CHROME_EDGE_RADIUS,
-  WELCOME_GLASS_BORDER,
-  WELCOME_GLASS_SURFACE,
   WELCOME_STAGE_BG,
   isWelcomeTabletLayout,
 } from './constants';
@@ -204,22 +202,35 @@ function HomeWelcomeTabBarInner({
                   compactLandscape && styles.tabInnerLandscape,
                 ]}
               >
-                <View style={[styles.iconWrap, tabletLayout && styles.iconWrapTablet]}>
-                  {tab.renderIcon(active, iconColor)}
-                  {showDot ? <View style={styles.badge} pointerEvents="none" /> : null}
-                </View>
-                <FitText
+                <View
                   style={[
-                    styles.label,
-                    tabletLayout && styles.labelTablet,
-                    compactLandscape && styles.labelLandscape,
-                    active && styles.labelActive,
-                    { color: labelColor },
+                    styles.tabContent,
+                    tabletLayout && styles.tabContentTablet,
+                    compactLandscape && styles.tabContentLandscape,
                   ]}
-                  minimumFontScale={0.7}
                 >
-                  {tab.label}
-                </FitText>
+                  <View
+                    style={[
+                      styles.iconWrap,
+                      tabletLayout && styles.iconWrapTablet,
+                    ]}
+                  >
+                    {tab.renderIcon(active, iconColor)}
+                    {showDot ? <View style={styles.badge} pointerEvents="none" /> : null}
+                  </View>
+                  <FitText
+                    style={[
+                      styles.label,
+                      tabletLayout && styles.labelTablet,
+                      compactLandscape && styles.labelLandscape,
+                      active && styles.labelActive,
+                      { color: labelColor },
+                    ]}
+                    minimumFontScale={0.7}
+                  >
+                    {tab.label}
+                  </FitText>
+                </View>
               </View>
             </Pressable>
           );
@@ -241,10 +252,8 @@ const styles = StyleSheet.create({
   shell: {
     borderTopLeftRadius: WELCOME_CHROME_EDGE_RADIUS,
     borderTopRightRadius: WELCOME_CHROME_EDGE_RADIUS,
-    backgroundColor: WELCOME_GLASS_SURFACE,
+    backgroundColor: 'rgba(14, 85, 119, 0.1)',
     overflow: 'hidden',
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: WELCOME_GLASS_BORDER,
   },
   row: {
     flexDirection: 'row',
@@ -272,18 +281,26 @@ const styles = StyleSheet.create({
   tabInner: {
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 3,
     paddingVertical: 6,
     paddingHorizontal: 2,
     width: '100%',
     minWidth: 0,
   },
-  tabInnerLandscape: {
+  tabContent: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 3,
+  },
+  tabContentLandscape: {
     gap: 1,
+  },
+  tabContentTablet: {
+    gap: 4,
+  },
+  tabInnerLandscape: {
     paddingVertical: 3,
   },
   tabInnerTablet: {
-    gap: 4,
     paddingVertical: 8,
   },
   iconWrap: {

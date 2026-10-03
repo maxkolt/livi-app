@@ -20,6 +20,23 @@ export function formatChatDateSeparator(ts: Date): string {
   return `${day}.${month}.${ts.getFullYear()}`;
 }
 
+/** Подряд от одного человека не дольше этого — одна серия облаков, как в Telegram. */
+const BUBBLE_GROUP_GAP_MS = 5 * 60 * 1000;
+
+function timeMs(raw: unknown): number {
+  const ms = raw instanceof Date ? raw.getTime() : new Date((raw as any) || 0).getTime();
+  return Number.isFinite(ms) ? ms : NaN;
+}
+
+/** Два соседних сообщения — одна серия: один отправитель, не звонки, рядом по времени. */
+function sameBubbleGroup(a: any, b: any): boolean {
+  if (String(a?.type || "") === "call" || String(b?.type || "") === "call") return false;
+  if ((a?.sender === "me") !== (b?.sender === "me")) return false;
+  const ta = timeMs(a?.timestamp);
+  const tb = timeMs(b?.timestamp);
+  return Number.isFinite(ta) && Number.isFinite(tb) && Math.abs(tb - ta) <= BUBBLE_GROUP_GAP_MS;
+}
+
 export function buildChatListRows(messages: any[]): ChatListRow[] {
   const rows: ChatListRow[] = [];
   let lastDayKey: string | null = null;
@@ -36,6 +53,17 @@ export function buildChatListRows(messages: any[]): ChatListRow[] {
       lastDayKey = dk;
     }
     rows.push({ type: "message", ...m });
+  }
+  // Место в серии: облако рисует углы как в Telegram (хвостик — у последнего).
+  // В строке сообщения type — тип самого сообщения (его поля разложены поверх), поэтому
+  // отличаем по разделителю дня.
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    if (row.type === "date") continue;
+    const prev = rows[i - 1];
+    const next = rows[i + 1];
+    row.groupedWithPrev = !!prev && prev.type !== "date" && sameBubbleGroup(prev, row);
+    row.groupedWithNext = !!next && next.type !== "date" && sameBubbleGroup(row, next);
   }
   return rows;
 }

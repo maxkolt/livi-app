@@ -1,4 +1,4 @@
-import React, { memo, useMemo } from 'react';
+import React, { memo, useMemo, type ReactNode } from 'react';
 import { StyleSheet, View } from 'react-native';
 import AdaptiveText from '../../components/AdaptiveText';
 import type { Lang } from '../../utils/i18n';
@@ -6,8 +6,10 @@ import AvatarImage from '../../components/AvatarImage';
 import {
   LIVI,
   WELCOME_GLASS_SURFACE,
+  WELCOME_GLASS_BORDER,
   WELCOME_HEADER_TITLE,
   WELCOME_MUTED_TEXT,
+  WELCOME_ONLINE_PLACEHOLDER_BG,
 } from './constants';
 import { formatWelcomeUsersOnlineLine } from './utils/welcomeOnlineLabel';
 
@@ -33,6 +35,8 @@ type WelcomeOnlineBannerProps = {
   marginTop?: number;
   /** Боковые поля pill: 0, когда баннер уже лежит в колонке нужной ширины. */
   sideMargin?: number;
+  /** Дополнительное действие внутри панели (на Поиске — кнопка короны). */
+  trailingAction?: ReactNode;
 };
 
 const STACK_SIZE = 30;
@@ -50,6 +54,7 @@ function WelcomeOnlineBannerInner({
   dense = false,
   marginTop,
   sideMargin,
+  trailingAction,
 }: WelcomeOnlineBannerProps) {
   const countLine = formatWelcomeUsersOnlineLine(onlineCount, lang);
   const stackSize = dense ? STACK_SIZE_DENSE : STACK_SIZE;
@@ -70,8 +75,11 @@ function WelcomeOnlineBannerInner({
     <View
       style={[
         styles.pill,
+        trailingAction ? styles.pillWithAction : null,
         compact && styles.pillCompact,
+        compact && trailingAction ? styles.pillCompactWithAction : null,
         dense && styles.pillDense,
+        dense && trailingAction ? styles.pillDenseWithAction : null,
         marginTop != null ? { marginTop } : null,
         sideMargin != null ? { marginHorizontal: sideMargin } : null,
       ]}
@@ -133,6 +141,12 @@ function WelcomeOnlineBannerInner({
           );
         })}
       </View>
+      {trailingAction ? (
+        <>
+          <View style={[styles.actionDivider, dense && styles.actionDividerDense]} />
+          <View style={styles.actionSlot}>{trailingAction}</View>
+        </>
+      ) : null}
     </View>
   );
 }
@@ -157,12 +171,34 @@ const styles = StyleSheet.create({
     borderRadius: 22,
     marginHorizontal: 16,
   },
+  pillWithAction: {
+    minHeight: 78,
+    marginHorizontal: 12,
+    paddingLeft: 20,
+    paddingRight: 10,
+    backgroundColor: 'rgba(14, 85, 119, 0.04)',
+    borderWidth: StyleSheet.hairlineWidth,
+    // Тон радара, приглушённый: рамка темнее, чем у кнопки поиска.
+    borderColor: 'rgba(14, 85, 119, 0.38)',
+  },
+  pillCompactWithAction: {
+    minHeight: 66,
+    marginHorizontal: 12,
+    paddingLeft: 16,
+    paddingRight: 8,
+  },
   pillDense: {
     paddingVertical: 7,
     paddingHorizontal: 14,
     borderRadius: 18,
     marginHorizontal: 14,
     gap: 10,
+  },
+  pillDenseWithAction: {
+    minHeight: 44,
+    marginHorizontal: 10,
+    paddingLeft: 12,
+    paddingRight: 5,
   },
   textCol: {
     flex: 1,
@@ -221,6 +257,21 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     flexShrink: 0,
   },
+  actionDivider: {
+    width: StyleSheet.hairlineWidth,
+    height: 34,
+    flexShrink: 0,
+    backgroundColor: WELCOME_GLASS_BORDER,
+  },
+  actionDividerDense: {
+    height: 26,
+  },
+  actionSlot: {
+    flexShrink: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: -6,
+  },
   stackItem: {
     overflow: 'visible',
   },
@@ -229,7 +280,7 @@ const styles = StyleSheet.create({
   },
   stackPlaceholder: {
     /** Тот же акцент, что волны радара / CTA. */
-    backgroundColor: 'rgba(0, 181, 255, 0.12)',
+    backgroundColor: WELCOME_ONLINE_PLACEHOLDER_BG,
   },
   stackFallback: {
     fontSize: 11,

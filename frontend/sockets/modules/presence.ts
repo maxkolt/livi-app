@@ -4,6 +4,7 @@ import { shared } from "./shared";
 import { socket } from "./socketCore";
 import { applyMissedFromReauth } from "./missedCalls";
 import { drainAllOutboxes } from "./outboxTriggers";
+import { noteNetworkBack } from "./outbox";
 import { refreshE2eState } from "./e2e";
 
 /** Дедуп повторных presence:update с одним и тем же status/roomId (useEffect в VideoCall/PiP и т.д.). Сброс при connect. */
@@ -178,6 +179,8 @@ socket.on("connect", () => {
   shared.hasConnectedEver = true;
   shared.lastPresenceUpdateKey = null;
   shared.lastSocketConnectAt = Date.now();
+  // Сервер снова доступен: очередь шлёт сразу, без паузы, накопленной без сети.
+  noteNetworkBack();
   void refreshE2eState()
     .catch(() => undefined)
     .then(() => drainAllOutboxes());

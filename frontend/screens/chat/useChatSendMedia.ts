@@ -1,11 +1,11 @@
 /** Send voice / single image / album from local assets. */
 
 import React from "react";
-import * as FileSystem from "expo-file-system";
 import { sendMessage as sendSocketMessage } from "../../sockets/socket";
 import { uploadMediaToServer } from "../../utils/mediaUpload";
 import { CHAT_ALBUM_MAX } from "./chatAlbum";
 import { outgoingStatusFromSendResult } from "./chatMessageIds";
+import { keepVoiceRecording } from "./chatVoiceRecord";
 
 type ReadStatusMap = Record<string, "sending" | "delivered" | "read" | "failed" | "sent">;
 
@@ -32,106 +32,78 @@ export function useChatSendMedia({
   dequeueMediaOutboxId,
   setVoiceRecordMs,
 }: Options) {
+  /**
+   * Голосовое идёт через общую очередь сообщений: она на диске, сама загрузит файл и
+   * отправит, когда будет сеть (даже если чат уже закрыт), и повторит после обрыва.
+   * Без сети пузырь стоит с часами, а не мигает «ошибкой».
+   */
   const sendVoiceMessageFromLocal = React.useCallback(async (localUri: string, durationMs: number, size?: number) => {
     if (!currentUserId || !peerId) return;
 
     const messageId = Date.now().toString();
     const durationSec = Math.max(1, Math.round(durationMs / 1000));
-    const name = `voice_${Date.now()}.m4a`;
-    const localFileForCleanup = String(localUri || '');
+    const name = `voice_${messageId}.m4a`;
+    // Кэш система может почистить раньше, чем вернётся сеть, — переносим запись к себе.
+    const fileUri = await keepVoiceRecording(localUri, messageId);
 
-    const newMessage = {
-      id: messageId,
-      type: 'audio',
-      uri: localUri,
-      name,
-      size: size || 0,
-      duration: durationSec,
-      sender: 'me',
-      from: currentUserId,
-      to: peerId,
-      timestamp: new Date(),
-    };
-
-    setMessages((prev) => [...prev, newMessage]);
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: messageId,
+        type: 'audio',
+        uri: fileUri,
+        name,
+        size: size || 0,
+        duration: durationSec,
+        sender: 'me',
+        from: currentUserId,
+        to: peerId,
+        timestamp: new Date(),
+      },
+    ]);
     updateReadStatuses((prev) => ({ ...prev, [messageId]: 'sending' }));
+    setUploadStatus((prev) => ({ ...prev, [messageId]: 'sending' }));
+    setVoiceRecordMs(0);
+
+    const clearUploadStatus = () =>
+      setUploadStatus((prev) => {
+        if (!(messageId in prev)) return prev;
+        const next = { ...prev };
+        delete next[messageId];
+        return next;
+      });
 
     try {
-      setUploadStatus((prev) => ({ ...prev, [messageId]: 'sending' }));
-      const uploadResult = await uploadMediaToServer(localUri, 'audio', undefined, currentUserId, peerId);
-      if (!uploadResult.success || !uploadResult.url) {
-        updateReadStatuses((prev) => ({ ...prev, [messageId]: 'failed' }));
-        setUploadStatus((prev) => ({ ...prev, [messageId]: 'failed' }));
-        void enqueueMediaOutboxId(messageId);
-        return;
-      }
-
-      const socketResult: any = await sendSocketMessage({
+      const result = await sendSocketMessage({
         to: peerId,
         type: 'audio',
-        uri: uploadResult.url,
+        localUri: fileUri,
         name,
         size,
         duration: durationSec,
         clientUiMessageId: messageId,
       });
-
-      if (socketResult?.localCancelled) {
+      if (result?.localCancelled) {
         updateReadStatuses((prev) => {
-          const n = { ...prev };
-          delete (n as any)[messageId];
-          return n as any;
+          const next = { ...prev };
+          delete next[messageId];
+          return next;
         });
-        setUploadStatus((prev) => {
-          const n = { ...prev };
-          delete (n as any)[messageId];
-          return n;
-        });
-        try { await FileSystem.deleteAsync(localFileForCleanup, { idempotent: true }); } catch {}
-        void dequeueMediaOutboxId(messageId);
+        clearUploadStatus();
         return;
       }
-
-      if (socketResult?.ok && socketResult?.messageId) {
-        setMessages((prev) => {
-          const updated = prev.map((msg: any) =>
-            msg.id === messageId
-              ? { ...msg, id: socketResult.messageId!, uri: resolveMediaUri(uploadResult.url), from: currentUserId, to: peerId }
-              : msg
-          );
-          return updated;
-        });
-
-        setUploadStatus((prev) => {
-          const next = { ...prev };
-          next[socketResult.messageId!] = 'sent';
-          delete next[messageId];
-          return next;
-        });
-
-        updateReadStatuses((prev) => {
-          const next = { ...prev };
-          const delivery = outgoingStatusFromSendResult(socketResult);
-          next[socketResult.messageId!] = delivery;
-          delete next[messageId];
-          return next;
-        });
-
-        // cleanup recorded file only after successful send
-        try { await FileSystem.deleteAsync(localFileForCleanup, { idempotent: true }); } catch {}
-      } else {
+      if (!result?.ok) {
         updateReadStatuses((prev) => ({ ...prev, [messageId]: 'failed' }));
         setUploadStatus((prev) => ({ ...prev, [messageId]: 'failed' }));
-        void enqueueMediaOutboxId(messageId);
+        return;
       }
+      // Доставлено или ждёт сети в очереди: адрес и галочки придут событием доставки,
+      // а пока — только часы, без крутилки загрузки.
+      clearUploadStatus();
     } catch {
-      updateReadStatuses((prev) => ({ ...prev, [messageId]: 'failed' }));
-      setUploadStatus((prev) => ({ ...prev, [messageId]: 'failed' }));
-      void enqueueMediaOutboxId(messageId);
-    } finally {
-      setVoiceRecordMs(0);
+      clearUploadStatus();
     }
-  }, [currentUserId, peerId, resolveMediaUri, updateReadStatuses, enqueueMediaOutboxId]);
+  }, [currentUserId, peerId, setMessages, setUploadStatus, updateReadStatuses, setVoiceRecordMs]);
 
   const sendPickedImage = React.useCallback(async (asset: any): Promise<boolean> => {
     if (!currentUserId || !peerId) return false;

@@ -43,6 +43,7 @@ import {
 } from './constants';
 import { WELCOME_SEGMENT_ACTIVE } from './FriendsListCore';
 import { displayAvatarLetter, displayName } from './friendHelpers';
+import { hasProfilePhoto } from './HomeCenterProfile';
 import {
   WelcomeProfileRow,
   WelcomeProfileSection,
@@ -72,8 +73,10 @@ const PATREON_URL = process.env.EXPO_PUBLIC_PATREON_URL || 'https://www.patreon.
  */
 const AVATAR_RING_WIDTH = 3;
 const CAMERA_BTN_SIZE = 32;
-/** Кнопка камеры чуть внутрь от угла аватара — ближе к самому кругу, а не в пустом углу. */
+/** Урна на аватаре чуть внутрь от угла — ближе к самому кругу, а не в пустом углу. */
 const CAMERA_BTN_INSET = 7;
+/** Красный «удалить» строки «Удалить профиль». */
+const WELCOME_DELETE_ICON = '#A63A48';
 /** Строк в hub-профиле: 4 секции по 2 строки. */
 const PROFILE_HUB_ROW_COUNT = 8;
 
@@ -335,6 +338,8 @@ export type HomeWelcomeProfileViewProps = {
   myFullAvatarUri?: string;
   myAvatarVer?: number;
   openAvatarSheet?: () => void;
+  /** Урна на аватаре: спросить и удалить фото. */
+  onDeleteAvatar?: () => void;
   handleSaveProfile: () => void;
   saving?: boolean;
   savedToast?: boolean;
@@ -367,6 +372,7 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
     myFullAvatarUri,
     myAvatarVer = 0,
     openAvatarSheet,
+    onDeleteAvatar,
     handleSaveProfile,
     saving,
     savedToast,
@@ -600,6 +606,8 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
   const avatarContainerSize = avatarFrameSize;
   const cameraBtnSize = hubMetrics.cameraBtnSize;
   const hasLocalAvatarPreview = avatarUri && /^(file|content|ph|assets-library):\/\//i.test(avatarUri);
+  /** Урну показываем, только когда есть что удалять. */
+  const hasAvatarPhoto = !!hasLocalAvatarPreview || hasProfilePhoto(avatarUri, myAvatarVer);
 
   const avatarInner = (
     <View
@@ -710,7 +718,7 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
           <Ionicons
             name="trash-outline"
             size={isTablet ? 22 : compactLandscape ? 18 : 20}
-            color="#A63A48"
+            color={WELCOME_DELETE_ICON}
           />
           <AdaptiveText
             style={[
@@ -743,22 +751,24 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
         >
           {avatarInner}
         </Pressable>
-        <Pressable
-          style={[
-            styles.cameraBtn,
-            {
-              width: cameraBtnSize,
-              height: cameraBtnSize,
-              borderRadius: cameraBtnSize / 2,
-            },
-          ]}
-          onPress={() => openAvatarSheet?.()}
-          disabled={busy}
-          accessibilityRole="button"
-          accessibilityLabel={t('takePhoto', lang)}
-        >
-          <Ionicons name="camera-outline" size={Math.round(cameraBtnSize / 2)} color={WELCOME_PROFILE_ROW_ICON} />
-        </Pressable>
+        {hasAvatarPhoto && onDeleteAvatar ? (
+          <Pressable
+            style={[
+              styles.cameraBtn,
+              {
+                width: cameraBtnSize,
+                height: cameraBtnSize,
+                borderRadius: cameraBtnSize / 2,
+              },
+            ]}
+            onPress={onDeleteAvatar}
+            disabled={busy}
+            accessibilityRole="button"
+            accessibilityLabel={t('deleteAvatarTitle', lang)}
+          >
+            <Ionicons name="trash-outline" size={Math.round(cameraBtnSize / 2)} color={WELCOME_PROFILE_ROW_ICON} />
+          </Pressable>
+        ) : null}
       </View>
   );
 
@@ -1424,8 +1434,6 @@ const styles = StyleSheet.create({
     height: CAMERA_BTN_SIZE,
     borderRadius: CAMERA_BTN_SIZE / 2,
     backgroundColor: '#12161c',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(255,255,255,0.14)',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1654,7 +1662,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.04)',
   },
   logOutBtnText: {
-    color: '#A63A48',
+    color: WELCOME_DELETE_ICON,
     fontSize: 14,
     fontWeight: '400',
     flexShrink: 1,

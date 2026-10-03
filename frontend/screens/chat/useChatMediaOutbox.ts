@@ -1,8 +1,9 @@
 /** Media outbox enqueue/retry/drain for failed image/audio sends. */
 
 import React from "react";
-import * as FileSystem from "expo-file-system";
+import { AppState } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import NetInfo from "@react-native-community/netinfo";
 import socket, { sendMessage as sendSocketMessage } from "../../sockets/socket";
 import { uploadMediaToServer } from "../../utils/mediaUpload";
 import { getChatMediaOutboxKey } from "./chatStorageKeys";
@@ -14,6 +15,8 @@ type ReadStatusMap = Record<string, "sending" | "delivered" | "read" | "failed" 
 type Options = {
   peerId: string;
   currentUserId: string | null;
+  /** История чата загружена: раньше «нет такого сообщения» не значит, что его нет. */
+  historyReady: boolean;
   messages: any[];
   setMessages: React.Dispatch<React.SetStateAction<any[]>>;
   uploadStatus: Record<string, "sending" | "sent" | "failed">;
@@ -26,6 +29,7 @@ type Options = {
 export function useChatMediaOutbox({
   peerId,
   currentUserId,
+  historyReady,
   messages,
   setMessages,
   uploadStatus,
@@ -35,7 +39,15 @@ export function useChatMediaOutbox({
   resolveMediaUri,
 }: Options) {
   const [retryUiForId, setRetryUiForId] = React.useState<string | null>(null);
-  const mediaOutboxRetryInFlightRef = React.useRef<Set<string>>(new Set());
+  // Drain читает свежие значения из ref: он не должен пересоздаваться на каждое
+  // изменение ленты, иначе без сети повтор шёл по кругу (часы ↔ ошибка без конца).
+  const messagesRef = React.useRef(messages);
+  messagesRef.current = messages;
+  const uploadStatusRef = React.useRef(uploadStatus);
+  uploadStatusRef.current = uploadStatus;
+  const readStatusesRef = React.useRef(readStatuses);
+  readStatusesRef.current = readStatuses;
+  const drainInFlightRef = React.useRef(false);
 
   const enqueueMediaOutboxId = React.useCallback(
     async (id: string) => {
@@ -105,70 +117,31 @@ export function useChatMediaOutbox({
         updateReadStatuses((prev) => ({ ...prev, [mid]: "sending" }));
 
         if (type === "audio") {
-          const localUri = String(m?.uri || "").trim();
-          const name = String(m?.name || `voice_${Date.now()}.m4a`);
-          const size = Number(m?.size || 0) || 0;
-          const durationSec = Number(m?.duration || 0) || 0;
-
-          let remoteUrl = localUri;
-          const looksRemote = /^https?:\/\//i.test(remoteUrl);
-          if (!looksRemote) {
-            const upload = await uploadMediaToServer(localUri, "audio", undefined, currentUserId, peerId);
-            if (!upload.success || !upload.url) {
-              updateReadStatuses((prev) => ({ ...prev, [mid]: "failed" }));
-              setUploadStatus((prev) => ({ ...prev, [mid]: "failed" }));
-              return false;
-            }
-            remoteUrl = upload.url;
-          }
-
-          const socketResult: any = await sendSocketMessage({
+          // Голосовое — в общую очередь: она загрузит файл и дошлёт, когда будет сеть.
+          const uri = String(m?.uri || "").trim();
+          const socketResult = await sendSocketMessage({
             to: peerId,
             type: "audio",
-            uri: remoteUrl,
-            name,
-            size,
-            duration: durationSec,
+            ...(/^https?:\/\//i.test(uri) ? { uri } : { localUri: uri }),
+            name: String(m?.name || `voice_${mid}.m4a`),
+            size: Number(m?.size || 0) || 0,
+            duration: Number(m?.duration || 0) || 0,
             clientUiMessageId: mid,
           });
-
           if (socketResult?.localCancelled) {
             await dequeueMediaOutboxId(mid);
             return true;
           }
-
-          if (socketResult?.ok && socketResult?.messageId) {
-            const newId = String(socketResult.messageId);
-            setMessages((prev) => {
-              const updated = prev.map((msg: any) =>
-                String(msg?.id) === mid
-                  ? { ...msg, id: newId, uri: resolveMediaUri(remoteUrl), from: currentUserId, to: peerId }
-                  : msg,
-              );
-              return updated;
-            });
-
+          if (socketResult?.ok) {
+            // Доставлено или ждёт сети: статус и адрес файла придут событием доставки.
             setUploadStatus((prev) => {
+              if (!(mid in prev)) return prev;
               const next = { ...prev };
-              next[newId] = "sent";
               delete next[mid];
               return next;
             });
-
-            updateReadStatuses((prev) => {
-              const next = { ...prev };
-              const delivery = outgoingStatusFromSendResult(socketResult);
-              next[newId] = delivery;
-              delete next[mid];
-              return next;
-            });
-
-            try {
-              if (!looksRemote) await FileSystem.deleteAsync(localUri, { idempotent: true });
-            } catch {}
             return true;
           }
-
           updateReadStatuses((prev) => ({ ...prev, [mid]: "failed" }));
           setUploadStatus((prev) => ({ ...prev, [mid]: "failed" }));
           return false;
@@ -289,49 +262,53 @@ export function useChatMediaOutbox({
   );
 
   const drainMediaOutbox = React.useCallback(async () => {
-    const ids = await loadMediaOutboxIds();
-    if (!ids.length) return;
-    for (const id of ids) {
-      if (mediaOutboxRetryInFlightRef.current.has(id)) continue;
-      const msg = messages.find((x: any) => String(x?.id) === String(id));
-      if (!msg) {
-        await dequeueMediaOutboxId(id);
-        continue;
-      }
-      const uri = String(msg?.uri || "").trim();
-      const type = String(msg?.type || "").trim();
-      const isMedia = type === "image" || type === "audio";
-      const canRetry =
-        !!uri &&
-        (!/^https?:\/\//i.test(uri) || uploadStatus[id] === "failed" || readStatuses[id] === "failed");
-      if (!isMedia || !canRetry) continue;
-      mediaOutboxRetryInFlightRef.current.add(id);
-      try {
+    // До загрузки истории сообщения ещё нет в ленте — иначе удалили бы его из очереди.
+    if (!historyReady || drainInFlightRef.current) return;
+    drainInFlightRef.current = true;
+    try {
+      const ids = await loadMediaOutboxIds();
+      for (const id of ids) {
+        const msg = messagesRef.current.find((x: any) => String(x?.id) === String(id));
+        if (!msg) {
+          await dequeueMediaOutboxId(id);
+          continue;
+        }
+        const uri = String(msg?.uri || "").trim();
+        const type = String(msg?.type || "").trim();
+        const isMedia = type === "image" || type === "audio";
+        const canRetry =
+          !!uri &&
+          (!/^https?:\/\//i.test(uri) ||
+            uploadStatusRef.current[id] === "failed" ||
+            readStatusesRef.current[id] === "failed");
+        if (!isMedia || !canRetry) continue;
         const ok = await retryFailedOutgoingMessage(msg);
         if (ok) await dequeueMediaOutboxId(id);
-      } finally {
-        mediaOutboxRetryInFlightRef.current.delete(id);
       }
+    } finally {
+      drainInFlightRef.current = false;
     }
-  }, [
-    dequeueMediaOutboxId,
-    loadMediaOutboxIds,
-    messages,
-    readStatuses,
-    retryFailedOutgoingMessage,
-    uploadStatus,
-  ]);
+  }, [dequeueMediaOutboxId, historyReady, loadMediaOutboxIds, retryFailedOutgoingMessage]);
 
+  // Повторяем, когда есть шанс: сокет подключился, вернулась сеть, приложение открыли.
   React.useEffect(() => {
     const run = () => {
       void drainMediaOutbox();
     };
     socket.on("connect", run);
     socket.on("reconnect", run);
+    const offNet = NetInfo.addEventListener((state) => {
+      if (state.isConnected === true && state.isInternetReachable !== false) run();
+    });
+    const appSub = AppState.addEventListener("change", (state) => {
+      if (state === "active") run();
+    });
     run();
     return () => {
       socket.off("connect", run);
       socket.off("reconnect", run);
+      offNet();
+      appSub.remove();
     };
   }, [drainMediaOutbox]);
 

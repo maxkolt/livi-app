@@ -48,3 +48,26 @@ describe('deleting one of two equal messages', () => {
     expect(ids(filterRemoveMessageAndOutgoingDupes([first, second], first.id))).toEqual([second.id]);
   });
 });
+
+describe('history merge keeps the order messages were written in', () => {
+  it('does not move a voice message sent from the queue below the text written after it', () => {
+    // Без сети: голосовое (0 с), потом текст (20 с). Сеть вернулась — голосовое уже на
+    // сервере с временем доставки (40 с), текст ещё в очереди.
+    const voiceLocal = { id: '1790964810542', type: 'audio', sender: 'me', uri: 'file:///v.m4a', timestamp: at(0) };
+    const textQueued = mine('1790964830568-y7w5hmz', 'offline_text_1', 20);
+    const voiceOnServer = { ...voiceLocal, uri: 'https://cdn/v.m4a', timestamp: at(40) };
+    const queuedStatuses = { uploadStatus: {}, readStatuses: { [textQueued.id]: 'sending' as const } };
+
+    const merged = mergeQuietSyncMessages([voiceLocal, textQueued], [voiceOnServer], queuedStatuses);
+
+    expect(ids(merged)).toEqual([voiceLocal.id, textQueued.id]);
+    expect(merged[0].uri).toBe('https://cdn/v.m4a');
+    expect(merged[0].timestamp).toEqual(at(0));
+  });
+
+  it("takes the server time for the other person's messages", () => {
+    const theirs = { id: 'srv-1', text: 'hi', type: 'text', sender: 'peer', timestamp: at(5) };
+    const fromServer = { ...theirs, timestamp: at(7) };
+    expect(mergeInitialHistoryMessages([theirs], [fromServer], statuses)[0].timestamp).toEqual(at(7));
+  });
+});

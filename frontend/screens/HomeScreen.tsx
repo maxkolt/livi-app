@@ -4703,6 +4703,7 @@ const handleClearNick = useCallback(async () => {
 
     } catch (e: any) {
       console.error('[handleDeleteAvatar] Error:', e);
+      Alert.alert(t('errorTitle', lang), t('avatarDeleteFailed', lang));
     }
   }, [nick, lang, installId]);
 
@@ -5383,6 +5384,15 @@ const handleClearNick = useCallback(async () => {
   const handleProfileSupportClick = useCallback(() => {
     void incrCounter('support_help_clicks');
   }, [incrCounter]);
+  const handleProfileDeleteAvatar = useCallback(() => {
+    void askConfirm({
+      title: t('deleteAvatarTitle', lang),
+      confirmText: t('delete', lang),
+      cancelText: t('cancelAction', lang),
+    }).then((ok) => {
+      if (ok) void handleDeleteAvatar();
+    });
+  }, [askConfirm, handleDeleteAvatar, lang]);
   const handleProfileLogOut = useCallback(() => {
     void askConfirm({
       title: t('wipeTitle', lang),
@@ -5687,6 +5697,7 @@ const handleClearNick = useCallback(async () => {
             myFullAvatarUri={myFullAvatarUri}
             myAvatarVer={myAvatarVer}
             openAvatarSheet={openAvatarSheet}
+            onDeleteAvatar={handleProfileDeleteAvatar}
             handleSaveProfile={handleSaveProfile}
             saving={saving}
             savedToast={savedToast}

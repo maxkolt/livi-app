@@ -10,22 +10,24 @@ import {
 import { useHomeLayout } from './HomeLayoutContext';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import {
-  AURA_GRADIENT,
   SEARCH_CTA_MAX_WIDTH,
   SEARCH_CTA_TABLET_MAX_WIDTH,
   isWelcomeTabletLayout,
   searchPhoneScale,
   WELCOME_HEADER_TITLE,
+  SEARCH_RADAR_HUD,
   WELCOME_MUTED_TEXT,
 } from './constants';
 import FitText from '../../components/FitText';
 import { logger } from '../../utils/logger';
 
-const BORDER_W = 0;
-/** Цвет волн/точек радара — приглушённо. */
-const CTA_WAVE = AURA_GRADIENT[2];
-/** Фон в тон волны, лёгкий. */
-const CTA_FILL = 'rgba(0, 181, 255, 0.06)';
+const BORDER_W = 1;
+/** Рамка, фон и свечение — в тон радара: край стекла, само стекло, ореол. */
+const CTA_WAVE = SEARCH_RADAR_HUD;
+const CTA_BORDER = 'rgba(14, 85, 119, 0.55)';
+const CTA_FILL = 'rgba(14, 85, 119, 0.12)';
+/** Мягкое кольцо вокруг рамки. */
+const CTA_BORDER_SOFT = 'rgba(14, 85, 119, 0.25)';
 
 /**
  * Высота CTA. Вынесена отдельно, чтобы раскладка Search могла заранее
@@ -208,6 +210,17 @@ export function WelcomeSearchCta({
             overflow: 'visible',
           }}
         >
+          {/* Мягкое свечение рамки (размытый край). */}
+          <View
+            pointerEvents="none"
+            style={[
+              styles.borderGlow,
+              {
+                borderRadius,
+                shadowColor: CTA_WAVE,
+              },
+            ]}
+          />
           <View
             style={[
               styles.borderShell,
@@ -216,6 +229,7 @@ export function WelcomeSearchCta({
                 width: buttonWidth,
                 height: buttonHeight,
                 borderWidth: BORDER_W,
+                borderColor: CTA_BORDER,
                 backgroundColor: CTA_FILL,
               },
             ]}
@@ -292,6 +306,16 @@ const styles = StyleSheet.create({
     shadowRadius: 10,
     elevation: 3,
     overflow: 'visible',
+  },
+  borderGlow: {
+    ...StyleSheet.absoluteFillObject,
+    borderWidth: 2,
+    borderColor: CTA_BORDER_SOFT,
+    // лёгкий bloom по периметру
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.32,
+    shadowRadius: 5,
+    elevation: 0,
   },
   borderShell: {
     overflow: 'hidden',

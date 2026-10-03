@@ -13,6 +13,29 @@ const LEGACY_BASE64_MAX_MB = 10;
 let multipartSupported: boolean | null = null;
 
 /**
+ * Почему загрузка не удалась: network — нет связи или таймаут (повторить, когда сеть
+ * вернётся), server — сервер отказал, file — файла нет или он слишком большой
+ * (повтор не поможет).
+ */
+export type MediaUploadErrorKind = 'network' | 'server' | 'file';
+
+export type MediaUploadResult = {
+  success: boolean;
+  url?: string;
+  error?: string;
+  kind?: MediaUploadErrorKind;
+  abortController?: AbortController;
+};
+
+/** Multipart без ответа дольше этого — считаем, что сети нет. */
+const MULTIPART_TIMEOUT_MS = { audio: 45_000, image: 180_000 } as const;
+
+export type MediaUploadOptions = {
+  /** Отдаёт функцию отмены загрузки: очередь обрывает её, когда сеть сменилась. */
+  registerCancel?: (cancel: () => void) => void;
+};
+
+/**
  * Конвертирует локальный файл в dataUri
  */
 export const fileToDataUri = async (uri: string): Promise<string | null> => {
@@ -79,6 +102,67 @@ export const fileToDataUri = async (uri: string): Promise<string | null> => {
   }
 };
 
+/** Ошибки старого соединения из пула после смены сети: повтор сразу берёт новое. */
+const STALE_CONNECTION_RE = /connection closed|stream was reset|connection abort|unexpected end of stream|broken pipe|connection reset/i;
+
+type MultipartAttempt =
+  | { kind: 'ok'; url: string }
+  | { kind: 'network'; error: string; stale: boolean }
+  | { kind: 'server' | 'file'; error: string }
+  | { kind: 'notFound' };
+
+async function uploadMultipartOnce(
+  fileUri: string,
+  type: 'image' | 'audio',
+  installId: string,
+  options: MediaUploadOptions | undefined,
+  onCancelledByCaller: () => void,
+): Promise<MultipartAttempt> {
+  const task = FileSystem.createUploadTask(`${API_BASE_URL}/api/upload/media/multipart`, fileUri, {
+    httpMethod: 'POST',
+    uploadType: FileSystem.FileSystemUploadType.MULTIPART,
+    fieldName: 'file',
+    headers: {
+      ...(installId ? { 'x-install-id': String(installId) } : {}),
+    },
+  });
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    void task.cancelAsync().catch(() => {});
+  }, MULTIPART_TIMEOUT_MS[type]);
+  options?.registerCancel?.(() => {
+    onCancelledByCaller();
+    void task.cancelAsync().catch(() => {});
+  });
+  let res: Awaited<ReturnType<typeof task.uploadAsync>>;
+  try {
+    res = await task.uploadAsync();
+  } catch (e) {
+    const error = String((e as Error)?.message ?? e);
+    logger.warn('Multipart upload network error', { error, timedOut });
+    return { kind: 'network', error: timedOut ? 'Upload timeout' : error, stale: !timedOut && STALE_CONNECTION_RE.test(error) };
+  } finally {
+    clearTimeout(timer);
+  }
+  // null — загрузку отменили (таймаут или очередь: сеть сменилась).
+  if (!res || timedOut) return { kind: 'network', error: timedOut ? 'Upload timeout' : 'Upload cancelled', stale: false };
+
+  if (res.status === 404) {
+    // Endpoint not available on this server — disable multipart for the session.
+    multipartSupported = false;
+    return { kind: 'notFound' };
+  }
+  multipartSupported = true;
+  if (res.status >= 200 && res.status < 300) {
+    let json: any = null;
+    try { json = JSON.parse(res.body || '{}'); } catch {}
+    if (json?.ok && (json.url || json.secure_url)) return { kind: 'ok', url: json.url || json.secure_url };
+  }
+  logger.warn('Multipart upload rejected', { status: res.status });
+  return { kind: res.status === 413 ? 'file' : 'server', error: `Server error ${res.status}` };
+}
+
 /**
  * Загружает медиа файл на сервер и возвращает публичный URL
  */
@@ -87,11 +171,20 @@ export const uploadMediaToServer = async (
   type: 'image' | 'audio',
   onProgress?: (progress: number) => void,
   from?: string,
-  to?: string
-): Promise<{ success: boolean; url?: string; error?: string; abortController?: AbortController }> => {
+  to?: string,
+  options?: MediaUploadOptions,
+): Promise<MediaUploadResult> => {
   try {
     logger.debug('Starting upload to:', API_BASE_URL);
     logger.debug('Local file:', localUri);
+
+    try {
+      const src = localUri.startsWith('file://') ? localUri : `file://${localUri}`;
+      const info = await FileSystem.getInfoAsync(src);
+      if (!info.exists) return { success: false, kind: 'file', error: 'File not found' };
+    } catch {
+      // Проверить не удалось — пусть решит сама загрузка.
+    }
 
     const installId = await getInstallId().catch(() => '');
     
@@ -125,54 +218,44 @@ export const uploadMediaToServer = async (
     // Prefer multipart upload (faster & more stable on bad networks / VPN).
     // Keep legacy base64 JSON upload as fallback for release-safety.
     const normalizedUri = workingUri.startsWith('file://') ? workingUri : `file://${workingUri}`;
-    try {
-      if (multipartSupported !== false) {
-        if (onProgress) onProgress(15);
-        const mpUrl = `${API_BASE_URL}/api/upload/media/multipart`;
-        const mpRes = await FileSystem.uploadAsync(mpUrl, normalizedUri, {
-          httpMethod: 'POST',
-          uploadType: FileSystem.FileSystemUploadType.MULTIPART,
-          fieldName: 'file',
-          headers: {
-            ...(installId ? { 'x-install-id': String(installId) } : {}),
-          },
+    let cancelledByCaller = false;
+    if (multipartSupported !== false) {
+      if (onProgress) onProgress(15);
+      let mp = await uploadMultipartOnce(normalizedUri, type, installId, options, () => {
+        cancelledByCaller = true;
+      });
+      // После смены сети первая попытка падает на старом соединении из пула —
+      // вторая сразу берёт новое.
+      if (mp.kind === 'network' && mp.stale && !cancelledByCaller) {
+        mp = await uploadMultipartOnce(normalizedUri, type, installId, options, () => {
+          cancelledByCaller = true;
         });
-
-        if (mpRes.status === 404) {
-          // Endpoint not available on this server — disable multipart for the session.
-          multipartSupported = false;
-        } else {
-          multipartSupported = true;
-        }
-
-        if (mpRes.status >= 200 && mpRes.status < 300) {
-          let json: any = null;
-          try { json = JSON.parse(mpRes.body || '{}'); } catch {}
-          if (json?.ok && (json.url || json.secure_url)) {
-            if (onProgress) onProgress(100);
-            const url = json.url || json.secure_url;
-            return { success: true, url };
-          }
-        }
-
-        // Fall through to legacy upload (avoid warning spam on known-missing endpoint)
-        if (mpRes.status !== 404) {
-          logger.warn('Multipart upload failed, falling back to base64', { status: mpRes.status });
-        }
       }
-    } catch (e) {
-      // If multipart is flaky, fallback to base64. Keep warning only if we believe endpoint exists.
-      if (multipartSupported !== false) {
-        logger.warn('Multipart upload error, falling back to base64', e as any);
+      if (mp.kind === 'ok') {
+        if (onProgress) onProgress(100);
+        return { success: true, url: mp.url };
+      }
+      if (mp.kind === 'server' || mp.kind === 'file') {
+        return { success: false, kind: mp.kind, error: mp.error };
+      }
+      if (mp.kind === 'network') {
+        // Отменила очередь (сеть сменилась) или это фото — сразу «нет сети», повторит очередь.
+        // Голосовое маленькое: пробуем ещё обычным запросом — у fetch свой HTTP-клиент,
+        // и под VPN / после смены сети он проходит, когда этот не может.
+        if (cancelledByCaller || type !== 'audio') {
+          return { success: false, kind: 'network', error: mp.error };
+        }
       }
     }
+    // Ниже — старая загрузка base64 в JSON: сервер без multipart (404) или голосовое,
+    // которое не прошло через multipart по сети.
 
     // Legacy base64-in-JSON upload (small-file fallback only).
     try {
       const info = await FileSystem.getInfoAsync(normalizedUri);
       const size = Number((info as any)?.size || 0);
       if (size > LEGACY_BASE64_MAX_MB * 1024 * 1024) {
-        return { success: false, error: `Multipart upload failed and legacy fallback is limited to ${LEGACY_BASE64_MAX_MB}MB` };
+        return { success: false, kind: 'file', error: `Multipart upload failed and legacy fallback is limited to ${LEGACY_BASE64_MAX_MB}MB` };
       }
     } catch {
       // If size lookup is unavailable, keep existing fallback behavior.
@@ -181,14 +264,14 @@ export const uploadMediaToServer = async (
     const dataUri = await fileToDataUri(normalizedUri);
     if (!dataUri) {
       logger.error('Failed to convert file to dataUri');
-      return { success: false, error: 'Failed to convert file to dataUri' };
+      return { success: false, kind: 'file', error: 'Failed to convert file to dataUri' };
     }
     
     const fileSizeMB = Math.round(dataUri.length / 1024 / 1024);
     const maxSizeMB = LEGACY_BASE64_MAX_MB;
     if (fileSizeMB > maxSizeMB) {
       logger.error(`File too large: ${fileSizeMB}MB (max: ${maxSizeMB}MB)`);
-      return { success: false, error: `File too large: ${fileSizeMB}MB (maximum allowed: ${maxSizeMB}MB)` };
+      return { success: false, kind: 'file', error: `File too large: ${fileSizeMB}MB (maximum allowed: ${maxSizeMB}MB)` };
     }
 
     // Показываем прогресс для всех файлов
@@ -211,10 +294,11 @@ export const uploadMediaToServer = async (
     
     // Создаем AbortController для таймаута
     const controller = new AbortController();
-    const timeoutMs = type === 'audio' ? 120000 : 300000; // audio: 2 мин, images: 5 мин
+    const timeoutMs = type === 'audio' ? 30000 : 300000; // audio: 30 с, images: 5 мин
     const timeoutId = setTimeout(() => {
       controller.abort();
     }, timeoutMs);
+    options?.registerCancel?.(() => controller.abort());
     
     let result;
     try {
@@ -242,7 +326,7 @@ export const uploadMediaToServer = async (
       if (!response.ok) {
         const errorText = await response.text();
         logger.error('Server error response:', errorText);
-        return { success: false, error: `Server error ${response.status}: ${errorText}` };
+        return { success: false, kind: 'server', error: `Server error ${response.status}: ${errorText}` };
       }
       
       result = await response.json();
@@ -252,9 +336,9 @@ export const uploadMediaToServer = async (
         clearInterval(progressInterval);
       }
       if (error instanceof Error && error.name === 'AbortError') {
-        return { success: false, error: `Upload timeout after ${timeoutMs/1000} seconds` };
+        return { success: false, kind: 'network', error: `Upload timeout after ${timeoutMs/1000} seconds` };
       }
-      throw error;
+      return { success: false, kind: 'network', error: error instanceof Error ? error.message : 'Network error' };
     }
     
     // Показываем прогресс для всех файлов
@@ -273,13 +357,14 @@ export const uploadMediaToServer = async (
       return { success: true, url, abortController: controller };
     } else {
       console.error('📤 Upload failed:', result.error);
-      return { success: false, error: result.error || 'Upload failed' };
+      return { success: false, kind: 'server', error: result.error || 'Upload failed' };
     }
   } catch (error) {
     console.error('📤 Upload error:', error);
-    return { 
-      success: false, 
-      error: error instanceof Error ? error.message : 'Unknown error' 
+    return {
+      success: false,
+      kind: 'network',
+      error: error instanceof Error ? error.message : 'Unknown error',
     };
   }
 };

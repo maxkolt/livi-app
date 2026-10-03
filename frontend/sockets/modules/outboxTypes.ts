@@ -11,6 +11,11 @@ export type MessageOutboxItem = {
     text?: string;
     type: "text" | "image" | "audio" | "sticker";
     uri?: string;
+    /**
+     * Файл на устройстве, ещё не загруженный на сервер (голосовое, записанное без сети).
+     * Очередь сначала загружает его и кладёт адрес в uri, потом отправляет сообщение.
+     */
+    localUri?: string;
     name?: string;
     size?: number;
     duration?: number;
@@ -40,6 +45,8 @@ export type OutboxMessageDeliveredPayload = {
   serverMessageId: string;
   /** Получатель был онлайн — сразу две галочки. */
   delivered?: boolean;
+  /** Адрес медиа, которое очередь загрузила сама (вместо локального файла). */
+  uri?: string;
 };
 
 /** Сервер окончательно отказал (не друзья, слишком длинный текст…) — повтор не поможет. */

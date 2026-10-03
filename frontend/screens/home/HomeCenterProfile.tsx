@@ -20,6 +20,18 @@ import type { HomeStyles } from './styles';
 import { useUserActiveFrame } from '../../utils/cosmetics';
 
 
+function isDirectAvatarUri(uri: string): boolean {
+  return !!uri && (/^data:image\//i.test(uri) || /^https?:\/\//i.test(uri));
+}
+
+/**
+ * У пользователя есть фото: версия на сервере или готовая ссылка. Локальный
+ * файл только что выбранного фото сюда не входит — он ещё загружается.
+ */
+export function hasProfilePhoto(avatarUri: string, myAvatarVer: number): boolean {
+  return (!!getCurrentUserId() && myAvatarVer > 0) || isDirectAvatarUri(avatarUri);
+}
+
 export type HomeCenterProfileProps = {
   styles: HomeStyles;
   isDark: boolean;
@@ -98,12 +110,10 @@ function HomeCenterProfileInner({
     !radarStage &&
     !!avatarUri &&
     /^(file|content|ph|assets-library):\/\//i.test(avatarUri);
-  const hasDirectAvatarUri =
-    !!avatarUri && (/^data:image\//i.test(avatarUri) || /^https?:\/\//i.test(avatarUri));
+  const hasDirectAvatarUri = isDirectAvatarUri(avatarUri);
   const myUserId = getCurrentUserId();
   const activeFrameId = useUserActiveFrame(myUserId);
-  const hasCachedAvatar = !!(myUserId && myAvatarVer > 0);
-  const noAvatar = !isLocalPreview && !hasCachedAvatar && !hasDirectAvatarUri;
+  const noAvatar = !isLocalPreview && !hasProfilePhoto(avatarUri, myAvatarVer);
   const noNick = !(savedNick && String(savedNick).trim());
 
   // Размер радара Поиска стабилен уже в HomeWelcomeView (лок на геометрию окна).

@@ -2,9 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Animated,
   Easing,
-  Image,
   Platform,
-  Pressable,
   StyleSheet,
   View,
   type LayoutChangeEvent,
@@ -13,10 +11,7 @@ import { useHomeLayout, useHomeLayoutActivity } from './HomeLayoutContext';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { GestureDetector } from 'react-native-gesture-handler';
 import { useAnimatedRef } from 'react-native-reanimated';
-import * as Haptics from 'expo-haptics';
 import {
-  WELCOME_TOP_BAR_SIDE_PAD,
-  WELCOME_TOP_BAR_SIDE_PAD_TIGHT,
   isWelcomeTabletLayout,
   searchPhoneRadarPreferred,
   welcomePhoneAvatarMetrics,
@@ -28,11 +23,11 @@ import {
   useAvatarDustGesture,
   type AvatarDustSource,
 } from './AvatarDust';
-import { HomeBrandConfetti, type BrandConfettiOrigin } from './HomeBrandConfetti';
-import { HomeCenterProfile } from './HomeCenterProfile';
+import { HomeCenterProfile, hasProfilePhoto } from './HomeCenterProfile';
 import { WelcomeCrownButton } from './WelcomeCrownButton';
 import { WelcomeOnlineBanner, type WelcomeBannerPeer } from './WelcomeOnlineBanner';
 import { WelcomeRadar } from './WelcomeRadar';
+import { RADAR_DRAWN_EXTENT } from './welcomeRadarScene';
 import { WelcomeSearchCta, welcomeSearchCtaHeight, welcomeSearchCtaWidth } from './WelcomeSearchCta';
 import type { Lang } from '../../utils/i18n';
 import { logger } from '../../utils/logger';
@@ -98,9 +93,6 @@ function resolveIsSplitStage(width: number, height: number) {
 
 let welcomeRevealPlayedThisSession = false;
 
-/** Камера с заставки (splash-icon без полей) — логотип в шапке «Поиска». */
-const BRAND_LOGO = require('../../assets/brand-camera-logo.png');
-const BRAND_LOGO_ASPECT = 360 / 244;
 /**
  * Размер аватара Поиска для текущей геометрии окна — переживает remount после
  * splash (иначе снова onLoad и мигание), но пересчитывается при повороте,
@@ -124,13 +116,10 @@ function HomeWelcomeViewInner({
   splashGone = true,
   active = true,
 }: HomeWelcomeViewProps) {
-  const welcomeRootRef = useRef<View>(null);
   // Animated ref: слой частиц меряет по нему аватар прямо на UI-потоке.
   const avatarAnchorRef = useAnimatedRef<View>();
   const avatarDust = useAvatarDustController();
   const [avatarDustSource, setAvatarDustSource] = useState<AvatarDustSource | null>(null);
-  const burstActiveRef = useRef(false);
-  const [burst, setBurst] = useState<{ id: number; origin: BrandConfettiOrigin } | null>(null);
   const reveal = useRef(new Animated.Value(welcomeRevealPlayedThisSession ? 1 : 0)).current;
   const frame = useHomeLayout();
   const notifyLayoutActivity = useHomeLayoutActivity();
@@ -203,10 +192,6 @@ function HomeWelcomeViewInner({
    */
   const splitTight = splitStage && !isTabletLayout;
 
-  /** Верхний блок ужимается вместе с экраном: иначе он съедает треть высоты в landscape. */
-  const topBarHeight = tightStage ? 42 : splitStage ? 52 : compactLayout ? 48 : 54;
-  const topBarPadTop = tightStage ? 4 : splitStage ? 6 : Platform.OS === 'ios' ? 8 : 12;
-  const brandLogoHeight = tightStage ? 24 : isTabletLayout ? 38 : splitStage ? 28 : 34;
   const bannerCompact = splitTight || compactLayout || shortPhone;
 
   /**
@@ -220,27 +205,35 @@ function HomeWelcomeViewInner({
   const expectedPaneH = Math.max(160, stageHeight - insets.top - estimatedTabBar);
   const viewHeight = fitsExpected(measured.h, expectedPaneH, 1.3) ? measured.h : expectedPaneH;
 
+  /** Одинаковый воздух сверху панели и снизу CTA до навбара. */
+  const verticalEdgeGap = tightStage
+    ? 24
+    : isTabletLayout
+      ? splitStage
+        ? 32
+        : 44
+      : splitStage
+        ? 26
+        : compactLayout
+          ? 24
+          : shortPhone
+            ? 26
+            : 36;
+
   /** Баннер сверху, CTA снизу; радар центрируется в оставшемся зазоре. */
   const space = {
-    bannerMarginTop: tightStage ? 12 : bannerCompact ? 14 : 16,
+    bannerMarginTop: verticalEdgeGap,
     radarPaddingTop: 0,
     stageCopyMarginTop: 0,
     stageCopyPaddingBottom: 0,
     ctaMinGap: splitTight ? 6 : compactLayout || shortPhone ? 12 : 16,
-    /** Больше = кнопка выше над навигацией. */
-    ctaBottomPad: tightStage
-      ? 24
-      : isTabletLayout
-        ? splitStage
-          ? 32
-          : 44
-        : splitStage
-          ? 26
-          : compactLayout
-            ? 24
-            : shortPhone
-              ? 26
-              : 36,
+    /**
+     * В вертикали кнопка поднята над навбаром сильнее верхнего отступа. В строке
+     * (landscape) — ровно как сверху: низ кнопки выровнен по низу радара.
+     */
+    ctaBottomPad: splitStage
+      ? verticalEdgeGap
+      : verticalEdgeGap + (compactLayout || shortPhone ? 8 : 14),
   };
 
   /**
@@ -248,9 +241,9 @@ function HomeWelcomeViewInner({
    * шапка»: шапка меняется от языка, переносов и плотности, и любая оценка рано или
    * поздно расходится с реальностью. Оценка нужна только на первый кадр.
    */
-  const estimatedChrome =
-    topBarHeight +
-    (splitStage ? 0 : (bannerCompact ? 62 : 70) + space.bannerMarginTop);
+  const estimatedChrome = splitStage
+    ? 0
+    : (bannerCompact ? 68 : 80) + space.bannerMarginTop;
   /**
    * Замер сцены принимаем только если он правдоподобен. При засыпании и повороте
    * onLayout отдаёт промежуточные значения (ловил кадр 726×95 при реальных 239),
@@ -290,15 +283,21 @@ function HomeWelcomeViewInner({
     : space.ctaMinGap + space.ctaBottomPad + ctaHeight;
 
   /**
-   * Жёсткий потолок по высоте: больше этого радар не влезет ни при каких условиях.
-   * В стеке под ним ещё CTA, в строке кнопка сбоку — нужен только зазор.
+   * Рисунок радара занимает RADAR_DRAWN_EXTENT контейнера (дальше — пустое поле),
+   * поэтому вписываем по рисунку: контейнер = нужный размер рисунка / extent.
    */
-  // У рисунка есть внутреннее свободное поле за внешней орбитой, поэтому в
-  // landscape контейнер может быть немного больше колонки без обрезки колец.
-  const radarHeightLimit = splitStage ? stageH * 1.1 : stageH - stageCopyReserve;
+  const radarForDrawn = (drawnDiameter: number) => drawnDiameter / RADAR_DRAWN_EXTENT;
+  /**
+   * Жёсткий потолок по высоте: больше этого радар не влезет ни при каких условиях.
+   * В стеке под ним ещё CTA. В строке рисунок идёт ровно от верха баннера до низа
+   * кнопки соседней колонки — те же отступы verticalEdgeGap сверху и снизу.
+   */
+  const radarHeightLimit = splitStage
+    ? radarForDrawn(stageH - verticalEdgeGap * 2)
+    : stageH - stageCopyReserve;
   /** Желаемый размер по ширине — им управляет дизайн, а не теснота экрана. */
   const radarPreferred = splitStage
-    ? Math.min(radarSlotWidth * 1.1, isTabletLayout ? 480 : 360)
+    ? Math.min(radarForDrawn(radarSlotWidth), isTabletLayout ? 480 : 360)
     : isTabletLayout
       ? Math.min(stageW * 0.62, 560)
       : searchPhoneRadarPreferred(stageW, compactLayout);
@@ -343,62 +342,6 @@ function HomeWelcomeViewInner({
   const welcomeFramedAvatarSize = avatarLock ? avatarLock.base : welcomeAvatarBase;
   const welcomeFrameOutset = welcomeAvatarGeometry.frameOutset;
 
-  const cancelBurst = useCallback(() => {
-    if (!burstActiveRef.current) return;
-    burstActiveRef.current = false;
-    setBurst(null);
-  }, []);
-
-  const finishBurst = useCallback((burstId: number) => {
-    if (!burstActiveRef.current) return;
-    setBurst((current) => (current?.id === burstId ? null : current));
-    burstActiveRef.current = false;
-  }, []);
-
-  const fireBurst = useCallback((origin: BrandConfettiOrigin) => {
-    burstActiveRef.current = true;
-    setBurst({ id: Date.now(), origin });
-    try {
-      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    } catch {
-      /* optional */
-    }
-  }, []);
-
-  const onBrandPress = useCallback(() => {
-    if (burstActiveRef.current) return;
-    burstActiveRef.current = true;
-    const fallbackSize = splitStage ? 56 : compactLayout ? 76 : 118;
-    const fallback = () => {
-      if (!burstActiveRef.current) return;
-      fireBurst({
-        x: viewWidth / 2,
-        y: Math.max(110, viewHeight * 0.26),
-        size: fallbackSize,
-      });
-    };
-    const root = welcomeRootRef.current;
-    const avatar = avatarAnchorRef.current;
-    if (!root || !avatar) {
-      fallback();
-      return;
-    }
-    root.measureInWindow((rx, ry) => {
-      avatar.measureInWindow((ax, ay, aw, ah) => {
-        if (!burstActiveRef.current) return;
-        if (!(aw > 8 && ah > 8)) {
-          fallback();
-          return;
-        }
-        fireBurst({
-          x: ax - rx + aw / 2,
-          y: ay - ry + ah / 2,
-          size: Math.max(aw, ah),
-        });
-      });
-    });
-  }, [compactLayout, fireBurst, splitStage, viewHeight, viewWidth]);
-
   const handleStartSearchPress = useCallback(() => {
     const now = Date.now();
     try {
@@ -409,25 +352,34 @@ function HomeWelcomeViewInner({
       g.__searchNavSteps = steps;
       logger.info('[search-nav] welcome.handleStartSearchPress', {
         elapsedMs: now - t0,
-        hadBurst: !!burstActiveRef.current,
       });
     } catch {}
-    cancelBurst();
     onStartSearch();
-  }, [cancelBurst, onStartSearch]);
+  }, [onStartSearch]);
 
   const handleOpenAvatarModal = useCallback(
-    (uri: string) => {
-      cancelBurst();
-      centerProfile.onOpenAvatarModal(uri);
-    },
-    [cancelBurst, centerProfile],
+    (uri: string) => centerProfile.onOpenAvatarModal(uri),
+    [centerProfile],
   );
+
+  /**
+   * Без фото в центре только радар: ни кружка, ни буквы. Пока версия аватара
+   * не проверена, место держим — иначе кольца прыгнут, когда фото придёт.
+   */
+  const showRadarAvatar =
+    !centerProfile.avatarVerChecked ||
+    hasProfilePhoto(centerProfile.avatarUri, centerProfile.myAvatarVer);
+  useEffect(() => {
+    // Профиль снят с радара и свой источник уже не сбросит.
+    if (!showRadarAvatar) setAvatarDustSource(null);
+  }, [showRadarAvatar]);
 
   // Жест радара пересоздаётся только при смене геометрии, а не на каждый рендер.
   const openAvatarRef = useRef(() => {});
-  openAvatarRef.current = () =>
+  openAvatarRef.current = () => {
+    if (!showRadarAvatar) return;
     handleOpenAvatarModal(centerProfile.myFullAvatarUri || centerProfile.avatarUri || '');
+  };
   const handleAvatarTap = useCallback(() => openAvatarRef.current(), []);
   const radarGesture = useAvatarDustGesture(
     avatarDust,
@@ -449,35 +401,7 @@ function HomeWelcomeViewInner({
   };
 
   return (
-    <View ref={welcomeRootRef} style={welcomeStyles.root} onLayout={onRootLayout} collapsable={false}>
-      <View
-        style={[
-          welcomeStyles.topBar,
-          {
-            minHeight: topBarHeight,
-            paddingTop: topBarPadTop,
-            paddingBottom: tightStage ? 2 : 6,
-            // Search header: bring the brand and crown slightly inward as a pair.
-            paddingHorizontal: tightStage ? WELCOME_TOP_BAR_SIDE_PAD_TIGHT : WELCOME_TOP_BAR_SIDE_PAD,
-          },
-        ]}
-      >
-        <Pressable
-          onPress={burst ? undefined : onBrandPress}
-          hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
-          accessibilityRole="header"
-          accessibilityLabel="LiVi"
-        >
-          <Image
-            source={BRAND_LOGO}
-            style={{ width: Math.round(brandLogoHeight * BRAND_LOGO_ASPECT), height: brandLogoHeight }}
-            resizeMode="contain"
-            fadeDuration={0}
-          />
-        </Pressable>
-        <WelcomeCrownButton large={isTabletLayout} small={tightStage} />
-      </View>
-
+    <View style={welcomeStyles.root} onLayout={onRootLayout} collapsable={false}>
       {splitStage ? null : (
         <Animated.View style={revealStyle}>
           <WelcomeOnlineBanner
@@ -488,6 +412,8 @@ function HomeWelcomeViewInner({
             compact={bannerCompact}
             dense={tightStage}
             marginTop={space.bannerMarginTop}
+            sideMargin={isTabletLayout ? 20 : 12}
+            trailingAction={<WelcomeCrownButton large={isTabletLayout} small={tightStage} onlinePanel />}
           />
         </Animated.View>
       )}
@@ -507,15 +433,16 @@ function HomeWelcomeViewInner({
               : welcomeStyles.radarCenter
           }
         >
-          <View style={splitStage ? welcomeStyles.radarShift : null}>
+          <View>
             <GestureDetector gesture={radarGesture}>
             {/* collapsable: иначе Android выкидывает «пустой» view и жесту не к чему крепиться. */}
             <View collapsable={false}>
             <WelcomeRadar
               size={radarSize}
-              avatarSize={welcomeAvatarSize}
+              avatarSize={showRadarAvatar ? welcomeAvatarSize : 0}
               active={active}
             >
+              {showRadarAvatar ? (
               <HomeCenterProfile
                 styles={styles}
                 isDark={isDark}
@@ -533,6 +460,7 @@ function HomeWelcomeViewInner({
                 avatarDust={avatarDust}
                 onAvatarDustSource={setAvatarDustSource}
               />
+              ) : null}
             </WelcomeRadar>
             </View>
             </GestureDetector>
@@ -559,8 +487,9 @@ function HomeWelcomeViewInner({
               peers={bannerPeers}
               compact={bannerCompact}
               dense={tightStage}
-              marginTop={0}
+              marginTop={space.bannerMarginTop}
               sideMargin={0}
+              trailingAction={<WelcomeCrownButton large={isTabletLayout} small={tightStage} onlinePanel />}
             />
           ) : null}
 
@@ -590,15 +519,6 @@ function HomeWelcomeViewInner({
       {/* Поверх всего экрана: рассыпавшийся аватар не обрезается о радар и блоки. */}
       <AvatarDustOverlay dust={avatarDust} source={avatarDustSource} avatarRef={avatarAnchorRef} />
 
-      {burst ? (
-        <HomeBrandConfetti
-          key={burst.id}
-          burstId={burst.id}
-          origin={burst.origin}
-          isDark={isDark}
-          onComplete={finishBurst}
-        />
-      ) : null}
     </View>
   );
 }
@@ -608,11 +528,6 @@ const welcomeStyles = StyleSheet.create({
     flex: 1,
     minHeight: 0,
     overflow: 'hidden',
-  },
-  topBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
   },
   radarFlex: {
     flex: 1,
@@ -664,10 +579,6 @@ const welcomeStyles = StyleSheet.create({
     minWidth: 0,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  /** Увеличенный радар слегка поднимаем относительно центра landscape-колонки. */
-  radarShift: {
-    marginTop: -8,
   },
   ctaWrap: {
     alignSelf: 'stretch',
