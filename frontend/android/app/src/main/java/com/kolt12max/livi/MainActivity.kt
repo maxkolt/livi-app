@@ -183,8 +183,8 @@ class MainActivity : ReactActivity() {
         }
         val stage = android.widget.ImageView(this).apply {
           setImageResource(R.drawable.welcome_stage_bg)
-          scaleType = android.widget.ImageView.ScaleType.CENTER_CROP
-          alpha = 0.88f
+          // Растягиваем, как JS WelcomeStageBackground: градиент на всю высоту в любой ориентации.
+          scaleType = android.widget.ImageView.ScaleType.FIT_XY
           importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }
         frame.addView(

@@ -40,6 +40,7 @@ import {
   WELCOME_GLASS_BORDER,
   WELCOME_HEADER_TITLE,
   WELCOME_MUTED_TEXT,
+  WELCOME_SEARCH_CTA_BORDER,
 } from './constants';
 import { WELCOME_SEGMENT_ACTIVE } from './FriendsListCore';
 import { displayAvatarLetter, displayName } from './friendHelpers';
@@ -270,7 +271,8 @@ function resolveHubMetrics(
 function estimateTabBarHeight(bottomInset: number, isTablet: boolean, isLandscape: boolean) {
   // Совпадает с minHeight строки таб-бара в HomeWelcomeTabBar.
   const base = isTablet ? 60 : isLandscape ? 40 : 52;
-  return base + Math.max(bottomInset, Platform.OS === 'android' ? 6 : 2);
+  const floatGap = isLandscape && !isTablet ? 6 : isTablet ? 12 : 10;
+  return base + Math.max(bottomInset, Platform.OS === 'android' ? 6 : 2) + floatGap;
 }
 
 /** Небольшая шапка без короны — контент не прилипает к верху. */
@@ -1486,7 +1488,7 @@ const styles = StyleSheet.create({
     paddingVertical: 7,
     alignItems: 'center',
     borderRadius: 999,
-    backgroundColor: 'rgba(42, 88, 104, 0.55)',
+    backgroundColor: WELCOME_SEARCH_CTA_BORDER,
   },
   accountSaveDone: { backgroundColor: 'rgba(51, 139, 73, 0.25)' },
   accountSaveText: { color: LIVI.white, fontSize: 13, fontWeight: '600' },

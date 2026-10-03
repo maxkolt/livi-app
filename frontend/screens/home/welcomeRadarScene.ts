@@ -4,7 +4,6 @@ import {
   MipmapMode,
   PaintStyle,
   Skia,
-  StrokeCap,
   TileMode,
   type SkCanvas,
   type SkColor,
@@ -14,31 +13,31 @@ import {
   type SkPicture,
   type SkRect,
 } from '@shopify/react-native-skia';
-import { SEARCH_RADAR_HUD, SEARCH_RADAR_HUD_LIGHT } from './constants';
 
 /**
  * HUD-радар Поиска. Рисунок делится на три части:
  * - статика (стекло, изолинии, сетка, кольца дальности, шкала) — растр, один
  *   раз на геометрию, на JS-потоке;
- * - HUD-обод (скобки и пунктир) — две векторные картинки, крутятся навстречу;
+ * - пунктирный HUD-обод — векторная картинка, которая медленно вращается;
  * - луч, подсветка шкалы и цели — пишутся заново каждый кадр на UI-потоке.
  * В кадре нет clip и blur по большим фигурам: только сектор с коническим
  * градиентом, линии и несколько размытых точек — это дёшево даже на 120 Гц.
  */
 
-/** Весь радар в одном тоне — см. SEARCH_RADAR_HUD. */
-const HUD = SEARCH_RADAR_HUD;
-const ICE = SEARCH_RADAR_HUD_LIGHT;
+/** Слегка приглушённые локальные тона радара, без потери фирменной бирюзы. */
+const HUD = '#134963';
+const ICE = '#4d8199';
+/** Лёгкое общее приглушение без изменения баланса отдельных элементов. */
+const RADAR_ALPHA = 0.7;
 
 const TAU = Math.PI * 2;
 const D2R = Math.PI / 180;
 
 /** Один оборот луча, с. */
-const SWEEP_PERIOD_S = 11;
+const SWEEP_PERIOD_S = 15;
 /** Длина следа за лучом, градусы. */
 const TAIL_DEG = 78;
-/** Обороты HUD-обода и пунктира (в разные стороны), с. */
-const FRAME_PERIOD_S = 80;
+/** Оборот пунктирного HUD-обода, с. */
 const DASH_PERIOD_S = 120;
 /** Шкала — риска каждые 2°. */
 const TICK_STEP_DEG = 2;
@@ -76,19 +75,17 @@ export type RadarGeometry = {
   /** Край «стекла» со шкалой. */
   rDisc: number;
   rDash: number;
-  rSeg: number;
-  rOuter: number;
 };
 
 /** Край стекла — доля половины размера радара. */
 const DISC_RATIO = 0.79;
-/** Самое внешнее, что рисуем: метки «|||» за HUD-ободом — rOuter + 3u (+ полштриха). */
-const OUTER_MARKS_END_U = 16 + 3 + 0.5;
+/** Сохраняем прежнее внешнее поле, чтобы удаление полос не меняло масштаб радара. */
+const DRAWN_EXTENT_U = 16 + 3 + 0.5;
 /**
  * До какой доли половины размера доходит рисунок. Остальное — пустое поле контейнера:
  * раскладка вписывает радар по рисунку, а не по контейнеру.
  */
-export const RADAR_DRAWN_EXTENT = DISC_RATIO + (OUTER_MARKS_END_U * 2) / 328;
+export const RADAR_DRAWN_EXTENT = DISC_RATIO + (DRAWN_EXTENT_U * 2) / 328;
 
 export function radarGeometry(size: number, avatarSize: number): RadarGeometry {
   const half = size / 2;
@@ -105,15 +102,15 @@ export function radarGeometry(size: number, avatarSize: number): RadarGeometry {
     rIn: a + 5 * u,
     rDisc,
     rDash: rDisc + 5 * u,
-    rSeg: rDisc + 10.5 * u,
-    rOuter: rDisc + 16 * u,
   };
 }
 
 function color(hex: string, alpha: number): SkColor {
   'worklet';
   const n = parseInt(hex.slice(1), 16);
-  return Skia.Color(`rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`);
+  return Skia.Color(
+    `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha * RADAR_ALPHA})`,
+  );
 }
 
 function strokePaint(width: number, c: SkColor): SkPaint {
@@ -251,7 +248,7 @@ function drawStatic(canvas: SkCanvas, g: RadarGeometry): void {
     Skia.Shader.MakeRadialGradient(
       center,
       rDisc,
-      [color(HUD, 0), color(HUD, 0.3), color(HUD, 0.14), color(HUD, 0.07), color(HUD, 0.18)],
+      [color(HUD, 0), color(HUD, 0.27), color(HUD, 0.125), color(HUD, 0.06), color(HUD, 0.16)],
       [0, a / rDisc, (a + (rDisc - a) * 0.45) / rDisc, 0.9, 1],
       TileMode.Clamp,
     ),
@@ -321,54 +318,6 @@ function drawStatic(canvas: SkCanvas, g: RadarGeometry): void {
   canvas.drawCircle(cx, cy, rDisc, strokePaint(1.3 * u, color(HUD, 1)));
 }
 
-function arc(cx: number, cy: number, r: number, startDeg: number, sweepDeg: number): SkPath {
-  const p = Skia.Path.Make();
-  p.addArc(Skia.XYWHRect(cx - r, cy - r, r * 2, r * 2), startDeg, sweepDeg);
-  return p;
-}
-
-/** Внешний HUD-обод: четыре скобки с хвостами, штриховка «////» и метки «|||». */
-function recordFrameRing(g: RadarGeometry): SkPicture {
-  const { cx, cy, u, rSeg, rOuter, size } = g;
-  const rec = Skia.PictureRecorder();
-  const canvas = rec.beginRecording(Skia.XYWHRect(0, 0, size, size));
-  const heavy = strokePaint(3.4 * u, color(HUD, 1));
-  heavy.setStrokeCap(StrokeCap.Butt);
-  const thin = strokePaint(1.1 * u, color(HUD, 0.85));
-  for (let k = 0; k < 4; k++) {
-    const start = -71 + k * 90;
-    canvas.drawPath(arc(cx, cy, rSeg, start, 34), heavy);
-    canvas.drawPath(arc(cx, cy, rSeg + 1.15 * u, start + 34.5, 16), thin);
-    canvas.drawPath(arc(cx, cy, rSeg + 3.6 * u, start - 7, 5), heavy);
-  }
-  const hatch = strokePaint(1 * u, color(HUD, 0.9));
-  for (const centerDeg of [112, 292]) {
-    for (let k = 0; k < 5; k++) {
-      const ang = (centerDeg + (k - 2) * 2.4) * D2R;
-      const skew = 1.4 * D2R;
-      const r0 = rSeg - 1.6 * u;
-      const r1 = rSeg + 2.4 * u;
-      canvas.drawLine(
-        cx + Math.cos(ang) * r0,
-        cy + Math.sin(ang) * r0,
-        cx + Math.cos(ang + skew) * r1,
-        cy + Math.sin(ang + skew) * r1,
-        hatch,
-      );
-    }
-  }
-  const marks = strokePaint(0.8 * u, color(HUD, 0.8));
-  for (const centerDeg of [8, 188]) {
-    for (let k = 0; k < 4; k++) {
-      const ang = (centerDeg + k * 2.2) * D2R;
-      const r0 = rOuter - u;
-      const r1 = rOuter + 3 * u;
-      canvas.drawLine(cx + Math.cos(ang) * r0, cy + Math.sin(ang) * r0, cx + Math.cos(ang) * r1, cy + Math.sin(ang) * r1, marks);
-    }
-  }
-  return rec.finishRecordingAsPicture();
-}
-
 function recordDashRing(g: RadarGeometry): SkPicture {
   const { cx, cy, u, rDash, size } = g;
   const rec = Skia.PictureRecorder();
@@ -388,7 +337,6 @@ function recordDashRing(g: RadarGeometry): SkPicture {
 export type RadarPayload = {
   g: RadarGeometry;
   image: SkImage;
-  frameRing: SkPicture;
   dashRing: SkPicture;
 };
 
@@ -404,7 +352,6 @@ export function prepareRadarPayload(g: RadarGeometry, pd: number): RadarPayload 
   return {
     g,
     image: surface.makeImageSnapshot().makeNonTextureImage(),
-    frameRing: recordFrameRing(g),
     dashRing: recordDashRing(g),
   };
 }
@@ -523,10 +470,6 @@ export function drawRadarFrame(S: RadarScene): SkPicture {
   const canvas = rec.beginRecording(S.bounds);
   canvas.drawImageRectOptions(S.image, S.src, S.bounds, FilterMode.Linear, MipmapMode.None, null);
 
-  canvas.save();
-  canvas.rotate(((t / FRAME_PERIOD_S) % 1) * 360, cx, cy);
-  canvas.drawPicture(S.frameRing);
-  canvas.restore();
   canvas.save();
   canvas.rotate(-((t / DASH_PERIOD_S) % 1) * 360, cx, cy);
   canvas.drawPicture(S.dashRing);

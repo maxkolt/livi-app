@@ -7,7 +7,7 @@ import {
   WELCOME_FRIENDS_LIST_INSET,
   WELCOME_FRIENDS_SEGMENT_SHELL_RADIUS,
   WELCOME_GLASS_BORDER,
-  WELCOME_GLASS_SURFACE,
+  WELCOME_LIST_SURFACE,
   WELCOME_HEADER_TITLE,
   WELCOME_BRAND_VI_FILL_GRADIENT,
   WELCOME_UNREAD_BADGE,
@@ -319,7 +319,7 @@ const styles = StyleSheet.create({
   /** Glass-карточка секции (как раньше на hub профиля). */
   sectionBody: {
     borderRadius: WELCOME_FRIENDS_SEGMENT_SHELL_RADIUS,
-    backgroundColor: WELCOME_GLASS_SURFACE,
+    backgroundColor: WELCOME_LIST_SURFACE,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: WELCOME_GLASS_BORDER,
     overflow: 'hidden',

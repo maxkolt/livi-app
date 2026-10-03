@@ -19,8 +19,9 @@ import {
   WELCOME_BRAND_VI_FILL_GRADIENT,
   WELCOME_CHROME_BTN_BG,
   WELCOME_GLASS_BORDER,
-  WELCOME_GLASS_SURFACE,
+  WELCOME_LIST_SURFACE,
   WELCOME_MUTED_TEXT,
+  WELCOME_SEARCH_CTA_BORDER,
   WELCOME_FRIENDS_INVITE_GAP,
   WELCOME_FRIENDS_LIST_INSET,
   WELCOME_FRIENDS_SEGMENT_GAP,
@@ -31,6 +32,7 @@ import {
   WELCOME_TOP_BAR_SIDE_PAD,
   isWelcomeTabletLayout,
 } from './constants';
+import { WELCOME_FLOAT_SHADOW_IOS, WelcomeFloatShadow } from './WelcomeFloatShadow';
 import { FriendsListCore, WELCOME_SEGMENT_ACTIVE, type FriendsListCoreProps } from './FriendsListCore';
 import { friendMatchesNameSearch } from './friendHelpers';
 import { WelcomeCrownButton } from './WelcomeCrownButton';
@@ -205,6 +207,7 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
           styles.inviteCard,
           tabletLayout && styles.inviteCardTablet,
           compactLandscape && styles.inviteCardLandscape,
+          WELCOME_FLOAT_SHADOW_IOS,
           pressed && styles.inviteCardPressed,
         ]}
         onPress={() => {
@@ -212,6 +215,9 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
         }}
         accessibilityRole="button"
       >
+        <WelcomeFloatShadow
+          radius={tabletLayout ? 18 : WELCOME_FRIENDS_SEGMENT_SHELL_RADIUS}
+        />
         <View
           style={[
             styles.inviteIconWrap,
@@ -309,6 +315,7 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
             tabletLayout && styles.iconBtnTablet,
             compactLandscape && styles.iconBtnLandscape,
             searchOpen && styles.iconBtnActive,
+            WELCOME_FLOAT_SHADOW_IOS,
             pressed && styles.iconBtnPressed,
           ]}
           accessibilityRole="button"
@@ -316,6 +323,7 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
           accessibilityState={{ selected: searchOpen }}
           onPress={toggleSearch}
         >
+          <WelcomeFloatShadow radius={tabletLayout ? 22 : compactLandscape ? 16 : 20} />
           <Ionicons
             name={searchOpen ? 'search' : 'search-outline'}
             size={tabletLayout ? 24 : compactLandscape ? 19 : 22}
@@ -365,9 +373,11 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
           styles.segmentShell,
           tabletLayout && styles.segmentShellTablet,
           compactLandscape && styles.segmentShellLandscape,
+          WELCOME_FLOAT_SHADOW_IOS,
         ]}
         onStartShouldSetResponder={() => true}
       >
+        <WelcomeFloatShadow radius={WELCOME_FRIENDS_SEGMENT_SHELL_RADIUS} />
         <Pressable
           style={[
             styles.segmentBtn,
@@ -544,7 +554,7 @@ const styles = StyleSheet.create({
     borderRadius: 22,
   },
   iconBtnActive: {
-    backgroundColor: 'rgba(42, 88, 104, 0.45)',
+    backgroundColor: WELCOME_SEARCH_CTA_BORDER,
   },
   iconBtnPressed: {
     opacity: 0.85,
@@ -561,7 +571,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: Platform.OS === 'ios' ? 10 : 6,
     borderRadius: 14,
-    backgroundColor: WELCOME_GLASS_SURFACE,
+    backgroundColor: WELCOME_LIST_SURFACE,
     gap: 8,
   },
   searchShellLandscape: {
@@ -596,11 +606,10 @@ const styles = StyleSheet.create({
     padding: 7,
     minHeight: WELCOME_FRIENDS_SEGMENT_HEIGHT.phone,
     borderRadius: WELCOME_FRIENDS_SEGMENT_SHELL_RADIUS,
-    backgroundColor: 'rgba(22, 27, 34, 0.58)',
+    backgroundColor: WELCOME_LIST_SURFACE,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: WELCOME_GLASS_BORDER,
     gap: 5,
-    overflow: 'hidden',
     marginBottom: WELCOME_FRIENDS_SEGMENT_GAP.phone,
   },
   segmentShellLandscape: {
@@ -633,7 +642,7 @@ const styles = StyleSheet.create({
     paddingVertical: 11,
   },
   segmentBtnActive: {
-    backgroundColor: 'rgba(42, 88, 104, 0.62)',
+    backgroundColor: WELCOME_SEARCH_CTA_BORDER,
   },
   segmentLabel: {
     color: WELCOME_MUTED_TEXT,
@@ -668,7 +677,7 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     paddingHorizontal: 14,
     borderRadius: WELCOME_FRIENDS_SEGMENT_SHELL_RADIUS,
-    backgroundColor: WELCOME_GLASS_SURFACE,
+    backgroundColor: WELCOME_LIST_SURFACE,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: WELCOME_GLASS_BORDER,
     gap: 12,
@@ -697,7 +706,7 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(255,255,255,0.04)',
+    backgroundColor: WELCOME_CHROME_BTN_BG,
   },
   inviteIconWrapLandscape: {
     width: 38,

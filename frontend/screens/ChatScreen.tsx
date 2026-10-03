@@ -357,9 +357,9 @@ export default function ChatScreen({ route, navigation }: Props) {
 
   const BORDER_COLOR = theme.colors.outline as string;
   // Входящие — как активный фильтр «Онлайн / Все непрочитанные».
-  const BUBBLE_BG_IN = 'rgba(42, 88, 104, 0.42)';
+  const BUBBLE_BG_IN = 'rgba(42, 88, 104, 0.25)';
   // Исходящие — как активные кнопки нижней навигации.
-  const BUBBLE_BG_OUT = 'rgba(0, 181, 255, 0.12)';
+  const BUBBLE_BG_OUT = 'rgba(0, 181, 255, 0.08)';
   const BORDER_WIDTH = 1;
 
   const peerId = String(route?.params?.peerId || "");

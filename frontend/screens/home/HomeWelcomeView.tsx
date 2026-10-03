@@ -229,10 +229,11 @@ function HomeWelcomeViewInner({
     ctaMinGap: splitTight ? 6 : compactLayout || shortPhone ? 12 : 16,
     /**
      * В вертикали кнопка поднята над навбаром сильнее верхнего отступа. В строке
-     * (landscape) — ровно как сверху: низ кнопки выровнен по низу радара.
+     * (landscape) тоже чуть приподнята: вровень с низом радара она прилипала к
+     * таб-бару.
      */
     ctaBottomPad: splitStage
-      ? verticalEdgeGap
+      ? verticalEdgeGap + (tightStage ? 12 : 16)
       : verticalEdgeGap + (compactLayout || shortPhone ? 8 : 14),
   };
 

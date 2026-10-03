@@ -4969,7 +4969,7 @@ function AppContent() {
             ...DefaultTheme,
             colors: {
               ...DefaultTheme.colors,
-              background: (theme.colors.background as string) || '#151F33',
+              background: WELCOME_STAGE_BG,
             },
           }}
           onReady={() => {
@@ -5044,7 +5044,7 @@ function AppContent() {
             // Непрозрачный фон: Home остаётся под верхним экраном (detachInactiveScreens: false),
             // а transparent contentStyle даёт мелькание Home/вкладок при сворачивании и app-switcher.
             contentStyle: {
-              backgroundColor: (theme.colors.background as string) || '#151F33',
+              backgroundColor: WELCOME_STAGE_BG,
             },
             animation: 'fade',
             animationDuration: 120,

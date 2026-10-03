@@ -10,6 +10,8 @@ export const AURA_GLOW = '#3b82f6';
  * поверх панели, на экране #0c4a67). Им же обведена кнопка «Найти собеседника».
  */
 export const SEARCH_RADAR_HUD = '#0e5577';
+/** Рамка CTA «Начать поиск» и заливка активных сегментных кнопок. */
+export const WELCOME_SEARCH_CTA_BORDER = 'rgba(10, 68, 96, 0.52)';
 /** Подсветка того же тона: кромка луча, засветка шкалы, ядро цели. */
 export const SEARCH_RADAR_HUD_LIGHT = '#4d93b5';
 /** Unread / missed count badge on welcome chats and friend action buttons. */
@@ -21,10 +23,16 @@ export const WELCOME_CHROME_EDGE_RADIUS = 24;
 export const WELCOME_MUTED_TEXT = '#8B949E';
 /** Заголовки welcome (например «Друзья») — мягче чистого white. */
 export const WELCOME_HEADER_TITLE = 'rgba(244, 245, 247, 0.86)';
-export const WELCOME_CHROME_BTN_BG = '#1C2129';
-/** Полупрозрачная «стеклянная» подложка (онлайн-баннер, tab bar). */
-export const WELCOME_GLASS_SURFACE = 'rgba(22, 27, 34, 0.52)';
-export const WELCOME_GLASS_BORDER = 'rgba(255,255,255,0.06)';
+/** Круглые кнопки шапок (поиск, корона) — бирюзовое стекло чуть плотнее карточек. */
+export const WELCOME_CHROME_BTN_BG = 'rgba(14, 85, 119, 0.16)';
+/**
+ * Полупрозрачная «стеклянная» подложка карточек, списков и сегментов — тон радара
+ * (SEARCH_RADAR_HUD) под 10%, как у tab bar: фон-градиент просвечивает.
+ */
+export const WELCOME_GLASS_SURFACE = 'rgba(14, 85, 119, 0.1)';
+/** Карточки списков и блоки с кнопками во вкладках (друзья, звонки, чаты, профиль) — прозрачнее модалок. */
+export const WELCOME_LIST_SURFACE = 'rgba(14, 85, 119, 0.06)';
+export const WELCOME_GLASS_BORDER = 'rgba(14, 85, 119, 0.24)';
 /** Фон пустых аватаров в верхнем блоке «Онлайн». */
 export const WELCOME_ONLINE_PLACEHOLDER_BG = 'rgba(0, 181, 255, 0.12)';
 
@@ -114,14 +122,14 @@ export const WELCOME_FRIEND_ACTION_ICON_PRESSED = '#7eb8cc';
 
 /** Welcome: та же заливка, что у menu, без рамки. */
 export const WELCOME_FRIEND_ACTION_BTN_SURFACE = {
-  backgroundColor: 'rgba(255,255,255,0.06)',
+  backgroundColor: 'rgba(14, 85, 119, 0.22)',
   borderWidth: 0,
   justifyContent: 'center' as const,
   alignItems: 'center' as const,
 };
 
 export const WELCOME_FRIEND_ACTION_BTN_PRESSED_SURFACE = {
-  backgroundColor: 'rgba(255,255,255,0.28)',
+  backgroundColor: 'rgba(77, 147, 181, 0.32)',
   borderWidth: 0,
   transform: [{ scale: 0.92 }],
 } as const;

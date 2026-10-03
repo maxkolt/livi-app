@@ -27,7 +27,9 @@ import {
   SEARCH_CTA_TABLET_MIN_WIDTH,
   WELCOME_HEADER_TITLE,
   WELCOME_MUTED_TEXT,
+  WELCOME_STAGE_BG,
 } from '../../screens/home/constants';
+import { WelcomeStageBackground } from '../../screens/home/WelcomeStageBackground';
 import {
   WelcomeOverlayCard,
   WelcomeOverlayDim,
@@ -66,7 +68,6 @@ type PurchaseNotice = {
 };
 
 const PEARL_BORDER = 'rgba(238,229,244,0.9)';
-const LEGENDARY_BACKGROUND = ['#0E1D24', '#0C171F', '#0A111B', '#0B1821'] as const;
 const CHAT_BUBBLE_IN = 'rgba(26, 32, 42, 0.98)';
 const CHAT_BUBBLE_OUT = 'rgba(14, 20, 32, 0.99)';
 const CHAT_BUBBLE_BORDER = 'rgba(255,255,255,0.12)';
@@ -488,15 +489,7 @@ function FramesStoreContent({
 
   return (
       <View style={styles.root}>
-        <LinearGradient
-          key={`legendary-background-${landscape ? 'landscape' : 'portrait'}-${Math.round(windowWidth)}x${Math.round(windowHeight)}`}
-          colors={[...LEGENDARY_BACKGROUND]}
-          locations={[0, 0.16, 0.38, 1]}
-          start={{ x: 0.5, y: 0 }}
-          end={{ x: 0.5, y: 1 }}
-          style={StyleSheet.absoluteFillObject}
-          pointerEvents="none"
-        />
+        <WelcomeStageBackground />
         <View
           style={[
             styles.page,
@@ -767,7 +760,7 @@ function FramesStoreContent({
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: '#0C1720' },
+  root: { flex: 1, backgroundColor: WELCOME_STAGE_BG },
   page: { flex: 1 },
   header: {
     flexDirection: 'row',

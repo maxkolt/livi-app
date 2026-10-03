@@ -34,15 +34,17 @@ import {
   WELCOME_FRIENDS_LIST_INSET,
   WELCOME_FRIENDS_SEGMENT_SHELL_RADIUS,
   WELCOME_GLASS_BORDER,
-  WELCOME_GLASS_SURFACE,
+  WELCOME_LIST_SURFACE,
   WELCOME_HEADER_TITLE,
   WELCOME_MUTED_TEXT,
+  WELCOME_SEARCH_CTA_BORDER,
   WELCOME_UNREAD_BADGE,
   WELCOME_BRAND_VI_FILL_GRADIENT,
   WELCOME_BRAND_GLYPH_INSET,
   WELCOME_TOP_BAR_SIDE_PAD,
   isWelcomeTabletLayout,
 } from './constants';
+import { WELCOME_FLOAT_SHADOW_IOS, WelcomeFloatShadow } from './WelcomeFloatShadow';
 import { WELCOME_SEGMENT_ACTIVE } from './FriendsListCore';
 import { friendMatchesNameSearch, getFriendDisplay } from './friendHelpers';
 import { useChatPreviews } from './hooks/useChatPreviews';
@@ -576,6 +578,7 @@ function HomeWelcomeChatsViewInner({
                   tabletLayout && styles.iconBtnTablet,
                   compactLandscape && styles.iconBtnLandscape,
                   searchOpen && styles.iconBtnActive,
+                  WELCOME_FLOAT_SHADOW_IOS,
                   pressed && styles.iconBtnPressed,
                 ]}
                 accessibilityRole="button"
@@ -583,6 +586,7 @@ function HomeWelcomeChatsViewInner({
                 accessibilityState={{ selected: searchOpen }}
                 onPress={toggleSearch}
               >
+                <WelcomeFloatShadow radius={tabletLayout ? 22 : compactLandscape ? 16 : 20} />
                 <Ionicons
                   name={searchOpen ? 'search' : 'search-outline'}
                   size={tabletLayout ? 24 : compactLandscape ? 19 : 22}
@@ -632,9 +636,11 @@ function HomeWelcomeChatsViewInner({
               styles.segmentShell,
               tabletLayout && styles.segmentShellTablet,
               compactLandscape && styles.segmentShellLandscape,
+              WELCOME_FLOAT_SHADOW_IOS,
             ]}
             onStartShouldSetResponder={() => true}
           >
+            <WelcomeFloatShadow radius={WELCOME_FRIENDS_SEGMENT_SHELL_RADIUS} />
             <Pressable
               style={[
                 styles.segmentBtn,
@@ -830,7 +836,7 @@ const styles = StyleSheet.create({
     borderRadius: 22,
   },
   iconBtnActive: {
-    backgroundColor: 'rgba(42, 88, 104, 0.45)',
+    backgroundColor: WELCOME_SEARCH_CTA_BORDER,
   },
   iconBtnPressed: {
     opacity: 0.85,
@@ -847,7 +853,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: Platform.OS === 'ios' ? 10 : 6,
     borderRadius: 14,
-    backgroundColor: WELCOME_GLASS_SURFACE,
+    backgroundColor: WELCOME_LIST_SURFACE,
     gap: 8,
   },
   searchShellLandscape: {
@@ -882,11 +888,10 @@ const styles = StyleSheet.create({
     padding: 7,
     minHeight: 72,
     borderRadius: WELCOME_FRIENDS_SEGMENT_SHELL_RADIUS,
-    backgroundColor: 'rgba(22, 27, 34, 0.58)',
+    backgroundColor: WELCOME_LIST_SURFACE,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: WELCOME_GLASS_BORDER,
     gap: 5,
-    overflow: 'hidden',
     marginBottom: 12,
   },
   segmentShellLandscape: {
@@ -919,7 +924,7 @@ const styles = StyleSheet.create({
     paddingVertical: 11,
   },
   segmentBtnActive: {
-    backgroundColor: 'rgba(42, 88, 104, 0.62)',
+    backgroundColor: WELCOME_SEARCH_CTA_BORDER,
   },
   segmentLabel: {
     color: WELCOME_MUTED_TEXT,
@@ -975,7 +980,7 @@ const styles = StyleSheet.create({
   },
   glassCard: {
     height: WELCOME_FRIEND_CARD_ROW_HEIGHT,
-    backgroundColor: WELCOME_GLASS_SURFACE,
+    backgroundColor: WELCOME_LIST_SURFACE,
     borderRadius: 16,
     overflow: 'hidden',
   },

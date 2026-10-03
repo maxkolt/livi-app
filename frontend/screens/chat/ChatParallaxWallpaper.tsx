@@ -26,9 +26,7 @@ const SMOOTH = 0.16;
 
 /** Match jpeg plate so letterbox/parallax edges never show a seam. */
 const PLATE_LIGHT = "#AACABB";
-/** Дефолт без покупки: один синий тон welcome, без картинки и градиента. */
-const DEFAULT_CHAT_BLUE = "#0C1720";
-const PLATE_DARK = DEFAULT_CHAT_BLUE;
+const PLATE_DARK = "#0C1720";
 
 /** Тёмный stage-tint поверх обоев — картинка читается, тон как у welcome. */
 const WALLPAPER_STAGE_TINT = [
@@ -180,7 +178,8 @@ export function ChatParallaxWallpaper({ isDark }: { isDark: boolean }) {
     <View
       style={[
         styles.root,
-        { backgroundColor: hasPurchasedWallpaper ? (isDark ? PLATE_DARK : PLATE_LIGHT) : DEFAULT_CHAT_BLUE },
+        // Без купленных обоев — прозрачно: под чатом основной фон (WelcomeStageBackground).
+        { backgroundColor: hasPurchasedWallpaper ? (isDark ? PLATE_DARK : PLATE_LIGHT) : "transparent" },
       ]}
       pointerEvents="none"
       onLayout={onRootLayout}

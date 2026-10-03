@@ -11,7 +11,7 @@ import { APP_TEXT_MAX_FONT_SIZE_MULTIPLIER } from '../../utils/accessibilityTypo
 import {
   LIVI,
   WELCOME_BRAND_VI_FILL_GRADIENT,
-  WELCOME_GLASS_SURFACE,
+  WELCOME_LIST_SURFACE,
   WELCOME_MUTED_TEXT,
   WELCOME_FRIENDS_LIST_INSET,
   WELCOME_FRIEND_ROW_TRAILING_PAD,
@@ -566,7 +566,7 @@ const welcomeListStyles = StyleSheet.create({
   },
   glassCard: {
     height: WELCOME_FRIEND_CARD_ROW_HEIGHT,
-    backgroundColor: WELCOME_GLASS_SURFACE,
+    backgroundColor: WELCOME_LIST_SURFACE,
     borderRadius: 16,
     overflow: 'hidden',
   },

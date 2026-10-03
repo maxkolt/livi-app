@@ -9,6 +9,7 @@ import {
 import { FramesStoreModal } from '../../components/frames/FramesStoreModal';
 import { t } from '../../utils/i18n';
 import { useLang } from '../../store/lang';
+import { WELCOME_FLOAT_SHADOW_IOS, WelcomeFloatShadow } from './WelcomeFloatShadow';
 
 type WelcomeCrownButtonProps = {
   /** Чуть меньше круг (экран «Друзья»). */
@@ -36,9 +37,15 @@ function WelcomeCrownButtonInner({ compact, large, small, onlinePanel, myUserId,
     styles.btn,
     { width: btnSize, height: btnSize, borderRadius: btnSize / 2 },
     onlinePanel ? styles.btnOnlinePanel : null,
+    WELCOME_FLOAT_SHADOW_IOS,
   ];
 
-  const icon = <MaterialCommunityIcons name="crown" size={iconSize} color={CROWN_GOLD} />;
+  const icon = (
+    <>
+      <WelcomeFloatShadow radius={btnSize / 2} />
+      <MaterialCommunityIcons name="crown" size={iconSize} color={CROWN_GOLD} />
+    </>
+  );
 
   if (!__DEV__) {
     return (

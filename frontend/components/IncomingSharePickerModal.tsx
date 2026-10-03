@@ -21,6 +21,8 @@ import { fetchFriends } from '../sockets/socket';
 import { t } from '../utils/i18n';
 import { useLang } from '../store/lang';
 import type { IncomingShareItem } from '../utils/incomingShare';
+import { WelcomeStageBackground } from '../screens/home/WelcomeStageBackground';
+import { WELCOME_STAGE_BG } from '../screens/home/constants';
 import { sendIncomingShareToFriend } from '../utils/sendIncomingShare';
 
 type FriendRow = {
@@ -41,7 +43,6 @@ export default function IncomingSharePickerModal({ visible, items, onClose }: Pr
   const lang = useLang((s) => s.lang);
   const { theme, isDark } = useAppTheme();
   const accent = useMemo(() => uiAccent(isDark), [isDark]);
-  const screenBg = theme.colors.background as string;
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
   const [friends, setFriends] = useState<FriendRow[]>([]);
@@ -135,7 +136,8 @@ export default function IncomingSharePickerModal({ visible, items, onClose }: Pr
 
   return (
     <Modal visible animationType="fade" onRequestClose={onClose}>
-      <View style={{ flex: 1, backgroundColor: screenBg }}>
+      <View style={{ flex: 1, backgroundColor: WELCOME_STAGE_BG }}>
+        <WelcomeStageBackground />
         <ChatStyleBackButton
           onPress={onClose}
           iconColor={subColor}
@@ -159,7 +161,6 @@ export default function IncomingSharePickerModal({ visible, items, onClose }: Pr
         />
         <View
           style={{
-            backgroundColor: screenBg,
             flex: 1,
             paddingTop: backBtnTop + backBtnHeight + titleGapBelowBack,
             paddingHorizontal: 16,

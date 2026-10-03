@@ -16,6 +16,7 @@ import {
   searchPhoneScale,
   WELCOME_HEADER_TITLE,
   SEARCH_RADAR_HUD,
+  WELCOME_SEARCH_CTA_BORDER,
   WELCOME_MUTED_TEXT,
 } from './constants';
 import FitText from '../../components/FitText';
@@ -24,7 +25,6 @@ import { logger } from '../../utils/logger';
 const BORDER_W = 1;
 /** Рамка, фон и свечение — в тон радара: край стекла, само стекло, ореол. */
 const CTA_WAVE = SEARCH_RADAR_HUD;
-const CTA_BORDER = 'rgba(14, 85, 119, 0.55)';
 const CTA_FILL = 'rgba(14, 85, 119, 0.12)';
 /** Мягкое кольцо вокруг рамки. */
 const CTA_BORDER_SOFT = 'rgba(14, 85, 119, 0.25)';
@@ -45,9 +45,9 @@ export function welcomeSearchCtaWidth(windowWidth: number, tabletLayout: boolean
 }
 
 export function welcomeSearchCtaHeight(tabletLayout: boolean, compact: boolean): number {
-  if (tabletLayout) return 54;
-  if (compact) return Platform.OS === 'ios' ? 46 : 42;
-  return Platform.OS === 'ios' ? 50 : 46;
+  if (tabletLayout) return 50;
+  if (compact) return Platform.OS === 'ios' ? 43 : 40;
+  return Platform.OS === 'ios' ? 47 : 43;
 }
 
 type WelcomeSearchCtaProps = {
@@ -74,7 +74,7 @@ export function WelcomeSearchCta({
   // обновляется при повороте, в отличие от Dimensions.
   const { width: windowWidth, height: windowHeight } = useHomeLayout();
   const tabletLayout = isWelcomeTabletLayout(windowWidth, windowHeight);
-  const buttonWidth = Math.min(
+  const buttonMaxWidth = Math.min(
     welcomeSearchCtaWidth(windowWidth, tabletLayout, windowHeight),
     maxWidth && maxWidth > 0 ? maxWidth : Number.POSITIVE_INFINITY,
   );
@@ -187,7 +187,8 @@ export function WelcomeSearchCta({
     <Animated.View
       style={[
         {
-          width: buttonWidth,
+          maxWidth: buttonMaxWidth,
+          alignSelf: 'center',
           transform: [{ translateX: blockedShake }, { scale: pressScale }],
         },
         style,
@@ -204,7 +205,7 @@ export function WelcomeSearchCta({
       >
         <View
           style={{
-            width: buttonWidth,
+            maxWidth: buttonMaxWidth,
             height: buttonHeight,
             borderRadius,
             overflow: 'visible',
@@ -226,10 +227,10 @@ export function WelcomeSearchCta({
               styles.borderShell,
               {
                 borderRadius,
-                width: buttonWidth,
+                maxWidth: buttonMaxWidth,
                 height: buttonHeight,
                 borderWidth: BORDER_W,
-                borderColor: CTA_BORDER,
+                borderColor: WELCOME_SEARCH_CTA_BORDER,
                 backgroundColor: CTA_FILL,
               },
             ]}
@@ -326,7 +327,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    paddingHorizontal: 20,
+    paddingHorizontal: 16,
     overflow: 'hidden',
     minWidth: 0,
   },
@@ -338,7 +339,7 @@ const styles = StyleSheet.create({
   },
   label: {
     color: WELCOME_HEADER_TITLE,
-    fontSize: 17,
+    fontSize: 16,
     fontWeight: '400',
     letterSpacing: 0.2,
     flexShrink: 1,
@@ -346,9 +347,9 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   labelCompact: {
-    fontSize: 15,
+    fontSize: 14,
   },
   labelTablet: {
-    fontSize: 17,
+    fontSize: 16,
   },
 });

@@ -62,7 +62,8 @@ function HomeWelcomeTabBarInner({
   const tabletLayout = isWelcomeTabletLayout(width, height);
   const compactLandscape =
     !tabletLayout && width > 0 && height > 0 && width / height > 1.05;
-  const bottomPad = Math.max(insets.bottom, Platform.OS === 'android' ? 6 : 2);
+  const floatGap = compactLandscape ? 6 : tabletLayout ? 12 : 10;
+  const bottomGap = Math.max(insets.bottom, Platform.OS === 'android' ? 6 : 2) + floatGap;
   const iconSize = tabletLayout ? 29 : compactLandscape ? 24 : 26;
   const callIconSize = tabletLayout ? 28 : compactLandscape ? 23 : 25;
   const profileDiscSize = tabletLayout ? 32 : compactLandscape ? 26 : PROFILE_ACTIVE_DOT;
@@ -134,18 +135,28 @@ function HomeWelcomeTabBarInner({
         // под системную навигацию справа и не выравнивается с контентом сверху.
         compactLandscape ? styles.shellLandscape : null,
         tabletLayout ? styles.shellTablet : null,
-        { paddingBottom: bottomPad },
+        { marginBottom: bottomGap },
       ]}
       pointerEvents="box-none"
     >
-      <View
-        style={[
-          styles.row,
-          tabletLayout && styles.rowTablet,
-          compactLandscape && styles.rowLandscape,
-        ]}
-      >
-        {tabs.map((tab) => {
+      {Platform.OS === 'android' ? (
+        <>
+          <View pointerEvents="none" style={styles.androidShadowFar} />
+          <View pointerEvents="none" style={styles.androidShadowMid} />
+          <View pointerEvents="none" style={styles.androidShadowNear} />
+        </>
+      ) : (
+        <View pointerEvents="none" style={styles.iosShadow} />
+      )}
+      <View style={styles.surface}>
+        <View
+          style={[
+            styles.row,
+            tabletLayout && styles.rowTablet,
+            compactLandscape && styles.rowLandscape,
+          ]}
+        >
+          {tabs.map((tab) => {
           const active = tab.id === activeTab;
           const iconColor = active ? ACTIVE_ICON : INACTIVE;
           const labelColor = active ? ACTIVE_LABEL : INACTIVE;
@@ -233,8 +244,9 @@ function HomeWelcomeTabBarInner({
                 </View>
               </View>
             </Pressable>
-          );
-        })}
+            );
+          })}
+        </View>
       </View>
     </View>
   );
@@ -242,18 +254,59 @@ function HomeWelcomeTabBarInner({
 
 const styles = StyleSheet.create({
   shellLandscape: {
-    marginHorizontal: 14,
-    borderBottomLeftRadius: WELCOME_CHROME_EDGE_RADIUS,
-    borderBottomRightRadius: WELCOME_CHROME_EDGE_RADIUS,
+    marginHorizontal: 16,
   },
   shellTablet: {
     marginHorizontal: 20,
   },
   shell: {
-    borderTopLeftRadius: WELCOME_CHROME_EDGE_RADIUS,
-    borderTopRightRadius: WELCOME_CHROME_EDGE_RADIUS,
+    marginHorizontal: 12,
+    borderRadius: WELCOME_CHROME_EDGE_RADIUS,
+    backgroundColor: 'transparent',
+    overflow: 'visible',
+  },
+  surface: {
+    borderRadius: WELCOME_CHROME_EDGE_RADIUS,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(14, 85, 119, 0.24)',
     backgroundColor: 'rgba(14, 85, 119, 0.1)',
     overflow: 'hidden',
+  },
+  iosShadow: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: WELCOME_CHROME_EDGE_RADIUS,
+    backgroundColor: 'rgba(14, 85, 119, 0.04)',
+    shadowColor: '#082b3d',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.14,
+    shadowRadius: 14,
+  },
+  androidShadowFar: {
+    position: 'absolute',
+    left: -12,
+    right: -12,
+    top: -12,
+    bottom: -12,
+    borderRadius: WELCOME_CHROME_EDGE_RADIUS + 12,
+    backgroundColor: 'rgba(2, 8, 13, 0.018)',
+  },
+  androidShadowMid: {
+    position: 'absolute',
+    left: -7,
+    right: -7,
+    top: -7,
+    bottom: -7,
+    borderRadius: WELCOME_CHROME_EDGE_RADIUS + 7,
+    backgroundColor: 'rgba(2, 8, 13, 0.028)',
+  },
+  androidShadowNear: {
+    position: 'absolute',
+    left: -3,
+    right: -3,
+    top: -3,
+    bottom: -3,
+    borderRadius: WELCOME_CHROME_EDGE_RADIUS + 3,
+    backgroundColor: 'rgba(2, 8, 13, 0.04)',
   },
   row: {
     flexDirection: 'row',

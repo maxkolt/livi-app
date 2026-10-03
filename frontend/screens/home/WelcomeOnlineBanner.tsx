@@ -12,6 +12,7 @@ import {
   WELCOME_ONLINE_PLACEHOLDER_BG,
 } from './constants';
 import { formatWelcomeUsersOnlineLine } from './utils/welcomeOnlineLabel';
+import { WELCOME_FLOAT_SHADOW_IOS, WelcomeFloatShadow } from './WelcomeFloatShadow';
 
 export type WelcomeBannerPeer = {
   id: string;
@@ -59,6 +60,7 @@ function WelcomeOnlineBannerInner({
   const countLine = formatWelcomeUsersOnlineLine(onlineCount, lang);
   const stackSize = dense ? STACK_SIZE_DENSE : STACK_SIZE;
   const stackOverlap = dense ? STACK_OVERLAP_DENSE : STACK_OVERLAP;
+  const pillRadius = dense ? 18 : compact ? 22 : 26;
   const stackItemStyle = { borderRadius: stackSize / 2 };
   const stackAvatarStyle = { width: stackSize, height: stackSize, borderRadius: stackSize / 2 };
 
@@ -74,16 +76,29 @@ function WelcomeOnlineBannerInner({
   return (
     <View
       style={[
-        styles.pill,
-        trailingAction ? styles.pillWithAction : null,
-        compact && styles.pillCompact,
-        compact && trailingAction ? styles.pillCompactWithAction : null,
-        dense && styles.pillDense,
-        dense && trailingAction ? styles.pillDenseWithAction : null,
+        styles.floatWrap,
+        WELCOME_FLOAT_SHADOW_IOS,
+        trailingAction ? styles.floatWrapWithAction : null,
+        compact && styles.floatWrapCompact,
+        compact && trailingAction ? styles.floatWrapCompactWithAction : null,
+        dense && styles.floatWrapDense,
+        dense && trailingAction ? styles.floatWrapDenseWithAction : null,
+        { borderRadius: pillRadius },
         marginTop != null ? { marginTop } : null,
         sideMargin != null ? { marginHorizontal: sideMargin } : null,
       ]}
     >
+      <WelcomeFloatShadow radius={pillRadius} />
+      <View
+        style={[
+          styles.pill,
+          trailingAction ? styles.pillWithAction : null,
+          compact && styles.pillCompact,
+          compact && trailingAction ? styles.pillCompactWithAction : null,
+          dense && styles.pillDense,
+          dense && trailingAction ? styles.pillDenseWithAction : null,
+        ]}
+      >
       <View style={[styles.textCol, dense && styles.textColDense]}>
         <View style={[styles.onlineRow, dense && styles.onlineRowDense]}>
           <View style={[styles.onlineDot, dense && styles.onlineDotDense]} />
@@ -147,17 +162,37 @@ function WelcomeOnlineBannerInner({
           <View style={styles.actionSlot}>{trailingAction}</View>
         </>
       ) : null}
+      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
+  floatWrap: {
+    alignSelf: 'stretch',
+    marginHorizontal: 20,
+    marginTop: 8,
+    overflow: 'visible',
+  },
+  floatWrapCompact: {
+    marginHorizontal: 16,
+  },
+  floatWrapWithAction: {
+    marginHorizontal: 12,
+  },
+  floatWrapCompactWithAction: {
+    marginHorizontal: 12,
+  },
+  floatWrapDense: {
+    marginHorizontal: 14,
+  },
+  floatWrapDenseWithAction: {
+    marginHorizontal: 10,
+  },
   pill: {
     flexDirection: 'row',
     alignItems: 'center',
     alignSelf: 'stretch',
-    marginHorizontal: 20,
-    marginTop: 8,
     paddingVertical: 14,
     paddingHorizontal: 20,
     borderRadius: 26,
@@ -169,11 +204,9 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     paddingHorizontal: 16,
     borderRadius: 22,
-    marginHorizontal: 16,
   },
   pillWithAction: {
     minHeight: 78,
-    marginHorizontal: 12,
     paddingLeft: 20,
     paddingRight: 10,
     backgroundColor: 'rgba(14, 85, 119, 0.04)',
@@ -183,7 +216,6 @@ const styles = StyleSheet.create({
   },
   pillCompactWithAction: {
     minHeight: 66,
-    marginHorizontal: 12,
     paddingLeft: 16,
     paddingRight: 8,
   },
@@ -191,12 +223,10 @@ const styles = StyleSheet.create({
     paddingVertical: 7,
     paddingHorizontal: 14,
     borderRadius: 18,
-    marginHorizontal: 14,
     gap: 10,
   },
   pillDenseWithAction: {
     minHeight: 44,
-    marginHorizontal: 10,
     paddingLeft: 12,
     paddingRight: 5,
   },
