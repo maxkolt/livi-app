@@ -31,7 +31,9 @@ import kotlin.math.sqrt
  *
  * Акценты лежат только снаружи блока, поэтому его стекло не темнеет:
  * - нижний (drop) — вторая тень, сдвинутая вниз; нарастает от середины блока к низу;
- * - боковой (side) — у вертикальных сторон, на скруглениях сходит на нет по углу.
+ * - боковой (side) — у вертикальных сторон, на скруглениях сходит на нет по углу;
+ * - кольцевой (ring) — как нижний, но со всех сторон: вторая тень вокруг блока, раздвинутая
+ *   на ringOffset, а снизу ещё на ringDrop (сверху — на ringRise).
  */
 object FloatShadow {
   private const val TAG = "FloatShadow"
@@ -58,7 +60,13 @@ object FloatShadow {
   /**
    * Геометрия тени в px. View — это блок со скруглением radius, расширенный на spread со
    * всех сторон и ещё на dropOffset снизу. dropOpacity и sideOpacity — плотность нижнего
-   * и бокового акцентов относительно основной тени (0 — без них).
+   * и бокового акцентов относительно основной тени (0 — без них). baseOpacity — плотность
+   * самой основной тени (1 — прежняя): под стеклом блока и вокруг него со всех сторон.
+   * soft — основная тень и оба акцента (боковой, нижний) гаснут сразу от края блока, без
+   * плотной полосы у кромки ([softFalloff]). ringOffset, ringDrop, ringRise
+   * и ringOpacity — кольцевой акцент; View тогда шире блока на spread + ringOffset со всех
+   * сторон, ещё на ringDrop снизу и на ringRise сверху. ringSoft — кольцо размытое: гаснет
+   * сразу от края ([softFalloff]) и плавно заходит под стекло, без тёмного обода по кромке.
    */
   data class Spec(
     val radius: Float,
@@ -66,6 +74,13 @@ object FloatShadow {
     val dropOffset: Float,
     val dropOpacity: Float,
     val sideOpacity: Float,
+    val baseOpacity: Float = 1f,
+    val soft: Boolean = false,
+    val ringOffset: Float = 0f,
+    val ringOpacity: Float = 0f,
+    val ringDrop: Float = 0f,
+    val ringRise: Float = 0f,
+    val ringSoft: Boolean = false,
   )
 
   /**
@@ -114,17 +129,29 @@ object FloatShadow {
     val drop = spec.dropOffset.coerceAtLeast(0f)
     val dropAlpha = INNER * spec.dropOpacity.coerceAtLeast(0f)
     val sideAlpha = INNER * spec.sideOpacity.coerceAtLeast(0f)
+    val baseAlpha = INNER * spec.baseOpacity.coerceAtLeast(0f)
+    private val soft = spec.soft
+    private val ring = spec.ringOffset.coerceAtLeast(0f)
+    private val ringAlpha = INNER * spec.ringOpacity.coerceAtLeast(0f)
+    private val ringDrop = spec.ringDrop.coerceAtLeast(0f)
+    private val ringRise = spec.ringRise.coerceAtLeast(0f)
+    private val ringSoft = spec.ringSoft
+    /** На сколько размытое кольцо заходит под блок. */
+    private val ringInner = spread * 0.35f
+    /** На столько View шире блока с каждой стороны (снизу — ещё drop). */
+    private val pad = spread + ring
     val cx = width / 2f
-    val cy = (height - drop) / 2f
-    private val halfH = cy - spread
+    val cy = (height - drop - ringDrop + ringRise) / 2f
+    private val halfH = cy - pad - ringRise
     /** Скругление и полуразмеры прямого участка блока. */
-    val r = min(spec.radius, min(cx - spread, halfH)).coerceAtLeast(0f)
-    val hx = max(cx - spread - r, 0f)
+    val r = min(spec.radius, min(cx - pad, halfH)).coerceAtLeast(0f)
+    val hx = max(cx - pad - r, 0f)
     private val hy = max(halfH - r, 0f)
 
     // Текущая строка.
     private var qy = 0f
     private var qyDrop = 0f
+    private var qyRing = 0f
     private var dropWeight = 0f
 
     /** Готовит строку y; false — в ней нет тени. */
@@ -132,14 +159,23 @@ object FloatShadow {
       val py = y + 0.5f
       qy = abs(py - cy) - hy
       qyDrop = abs(py - cy - drop) - hy
+      // Кольцо: тот же блок, только снизу длиннее на ringDrop, а сверху на ringRise.
+      qyRing = abs(py - cy - (ringDrop - ringRise) / 2f) - hy - (ringDrop + ringRise) / 2f
       // Нижний акцент нарастает от середины блока к его нижнему краю.
       dropWeight = if (dropAlpha > 0f && halfH > 0f) 1f - falloff((py - cy) / halfH, 1f) else 0f
-      return qy - r < spread || (dropWeight > 0f && qyDrop - r < spread)
+      return qy - r < pad ||
+        (dropWeight > 0f && qyDrop - r < spread) ||
+        (ringAlpha > 0f && qyRing - r < pad)
     }
 
     /** Альфа на прямом участке строки: бокового акцента там нет. */
     fun straightTarget(): Float =
-      combine(if (qy > 0f) qy - r else -r, if (qyDrop > 0f) qyDrop - r else -r, side = 0f)
+      combine(
+        if (qy > 0f) qy - r else -r,
+        if (qyDrop > 0f) qyDrop - r else -r,
+        side = 0f,
+        dRing = if (qyRing > 0f) qyRing - r else -r,
+      )
 
     fun target(x: Int): Float {
       val qx = abs(x + 0.5f - cx) - hx
@@ -149,7 +185,16 @@ object FloatShadow {
       val dDrop = if (dropWeight > 0f) distance(qx, qyDrop) else spread
       // Доля «сбоку»: 1 у вертикальных сторон, 0 над и под блоком, на скруглениях — по углу.
       val side = if (ox > 0f) ox * ox / (ox * ox + oy * oy) else 0f
-      return combine(d, dDrop, side)
+      val dRing = if (ringAlpha > 0f) distance(qx, qyRing) else d
+      return combine(d, dDrop, side, dRing)
+    }
+
+    /** 1 снаружи блока; внутри спадает до 0 за ringInner. */
+    private fun innerRamp(d: Float): Float {
+      if (d >= 0f) return 1f
+      if (ringInner <= 0f) return 0f
+      val s = 1f - (-d / ringInner).coerceIn(0f, 1f)
+      return s * s
     }
 
     private fun distance(qx: Float, qy: Float): Float {
@@ -158,16 +203,40 @@ object FloatShadow {
       return sqrt(ox * ox + oy * oy) + min(max(qx, qy), 0f) - r
     }
 
-    /** d — до блока (< 0 внутри), dDrop — до блока, сдвинутого вниз на drop. */
-    private fun combine(d: Float, dDrop: Float, side: Float): Float {
-      val near = falloff(d, spread)
-      val base = INNER * near
-      if (dropWeight <= 0f && (side <= 0f || sideAlpha <= 0f)) return base * 255f
+    /**
+     * d — до блока (< 0 внутри), dDrop — до блока, сдвинутого вниз на drop, dRing — до
+     * блока, удлинённого вниз на ringDrop и вверх на ringRise.
+     */
+    private fun combine(d: Float, dDrop: Float, side: Float, dRing: Float): Float {
+      val near = if (soft) softFalloff(d, spread) else falloff(d, spread)
+      val base = baseAlpha * near
+      if (dropWeight <= 0f && (side <= 0f || sideAlpha <= 0f) && ringAlpha <= 0f) return base * 255f
       val outside = (d / EDGE_SOFT + 0.5f).coerceIn(0f, 1f)
-      val dropPart = dropAlpha * falloff(dDrop, spread) * dropWeight * outside
+      val dropNear = if (soft) softFalloff(dDrop, spread) else falloff(dDrop, spread)
+      val dropPart = dropAlpha * dropNear * dropWeight * outside
       val sidePart = sideAlpha * near * side * outside
-      return (1f - (1f - base) * (1f - dropPart) * (1f - sidePart)) * 255f
+      val ringPart =
+        when {
+          ringAlpha <= 0f -> 0f
+          // Пик на кромке, наружу — мягкий хвост, внутрь — короткий спад под стеклом:
+          // ни скачка плотности на краю, ни ровной полосы вдоль него.
+          ringSoft -> ringAlpha * softFalloff(dRing - ring, spread) * innerRamp(d)
+          else -> ringAlpha * falloff(dRing - ring, spread) * outside
+        }
+      return (1f - (1f - base) * (1f - dropPart) * (1f - sidePart) * (1f - ringPart)) * 255f
     }
+  }
+
+  /**
+   * Как [falloff], но без плато у кромки: smoothstep держит ~85% плотности на первой четверти
+   * ширины, и тень читается ровной полосой. (1 − s)² убывает сразу от края и плавно, без
+   * излома, сходит на нет у внешней границы — тень выглядит размытой.
+   */
+  private fun softFalloff(d: Float, spread: Float): Float {
+    if (d <= 0f) return 1f
+    if (d >= spread) return 0f
+    val s = 1f - d / spread
+    return s * s
   }
 
   /** 1 при d ≤ 0, 0 при d ≥ spread; спад smoothstep — без излома у края и на границе. */
@@ -192,6 +261,13 @@ class FloatShadowView(context: Context) : View(context) {
   private var dropOffset = 0f
   private var dropOpacity = 0f
   private var sideOpacity = 0f
+  private var baseOpacity = 1f
+  private var soft = false
+  private var ringOffset = 0f
+  private var ringOpacity = 0f
+  private var ringDrop = 0f
+  private var ringRise = 0f
+  private var ringSoft = false
   private var bitmap: Bitmap? = null
   private var generation = 0
 
@@ -224,6 +300,41 @@ class FloatShadowView(context: Context) : View(context) {
     refresh()
   }
 
+  fun setBaseOpacity(value: Float) {
+    baseOpacity = value
+    refresh()
+  }
+
+  fun setSoft(value: Boolean) {
+    soft = value
+    refresh()
+  }
+
+  fun setRingOffsetDp(value: Float) {
+    ringOffset = PixelUtil.toPixelFromDIP(value)
+    refresh()
+  }
+
+  fun setRingOpacity(value: Float) {
+    ringOpacity = value
+    refresh()
+  }
+
+  fun setRingDropDp(value: Float) {
+    ringDrop = PixelUtil.toPixelFromDIP(value)
+    refresh()
+  }
+
+  fun setRingRiseDp(value: Float) {
+    ringRise = PixelUtil.toPixelFromDIP(value)
+    refresh()
+  }
+
+  fun setRingSoft(value: Boolean) {
+    ringSoft = value
+    refresh()
+  }
+
   override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
     super.onSizeChanged(w, h, oldw, oldh)
     refresh()
@@ -231,7 +342,11 @@ class FloatShadowView(context: Context) : View(context) {
 
   private fun refresh() {
     val current = ++generation
-    val spec = FloatShadow.Spec(radius, spread, dropOffset, dropOpacity, sideOpacity)
+    val spec =
+      FloatShadow.Spec(
+        radius, spread, dropOffset, dropOpacity, sideOpacity, baseOpacity, soft, ringOffset, ringOpacity, ringDrop,
+        ringRise, ringSoft,
+      )
     bitmap =
       FloatShadow.bitmap(context, width, height, spec) { ready ->
         if (current == generation) {
@@ -267,4 +382,25 @@ class FloatShadowViewManager : SimpleViewManager<FloatShadowView>() {
 
   @ReactProp(name = "sideOpacity", defaultFloat = 0f)
   fun setSideOpacity(view: FloatShadowView, value: Float) = view.setSideOpacity(value)
+
+  @ReactProp(name = "baseOpacity", defaultFloat = 1f)
+  fun setBaseOpacity(view: FloatShadowView, value: Float) = view.setBaseOpacity(value)
+
+  @ReactProp(name = "soft", defaultBoolean = false)
+  fun setSoft(view: FloatShadowView, value: Boolean) = view.setSoft(value)
+
+  @ReactProp(name = "ringOffset", defaultFloat = 0f)
+  fun setRingOffset(view: FloatShadowView, value: Float) = view.setRingOffsetDp(value)
+
+  @ReactProp(name = "ringOpacity", defaultFloat = 0f)
+  fun setRingOpacity(view: FloatShadowView, value: Float) = view.setRingOpacity(value)
+
+  @ReactProp(name = "ringDrop", defaultFloat = 0f)
+  fun setRingDrop(view: FloatShadowView, value: Float) = view.setRingDropDp(value)
+
+  @ReactProp(name = "ringRise", defaultFloat = 0f)
+  fun setRingRise(view: FloatShadowView, value: Float) = view.setRingRiseDp(value)
+
+  @ReactProp(name = "ringSoft", defaultBoolean = false)
+  fun setRingSoft(view: FloatShadowView, value: Boolean) = view.setRingSoft(value)
 }

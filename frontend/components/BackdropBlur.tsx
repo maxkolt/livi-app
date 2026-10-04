@@ -1,5 +1,5 @@
 import React from 'react';
-import { Platform, StyleSheet, UIManager, type ColorValue, type ViewProps } from 'react-native';
+import { Platform, StyleSheet, UIManager, View, type ColorValue, type ViewProps } from 'react-native';
 import { requireNativeComponentOnce } from '../utils/requireNativeComponentOnce';
 
 /**
@@ -14,6 +14,12 @@ type BlurSourceProps = ViewProps & {
   /** Растворение краёв (dp): сверху — от прозрачного к видимому, снизу — наоборот. */
   fadeTop?: number;
   fadeBottom?: number;
+  /** Строки темнеют к верхнему краю на высоте shadeTop (dp): уходят в тень блока над списком. */
+  shadeTop?: number;
+  /** То же у нижнего края (dp): строки уходят в тень навбара под списком. */
+  shadeBottom?: number;
+  /** Затемнение строк у самого края, 0–1. */
+  shadeOpacity?: number;
 };
 
 type BlurBackdropProps = ViewProps & {
@@ -49,6 +55,34 @@ export type BackdropSources = {
   background: readonly string[];
   blur: readonly string[];
 };
+
+/**
+ * Список между блоками с тенью: строки, уезжая под блок сверху (top) или под навбар снизу
+ * (bottom), темнеют к его краю — как в тени. Темнеет только содержимое (фон между строками
+ * нет), и только когда за краем ещё есть что прокручивать. Без натива — просто обёртка.
+ */
+export function ListEdgeShade({
+  top = 0,
+  bottom = 0,
+  opacity,
+  style,
+  children,
+}: {
+  /** Высота полосы у верхнего края, dp; 0 — без неё. */
+  top?: number;
+  /** Высота полосы у нижнего края, dp; 0 — без неё. */
+  bottom?: number;
+  opacity: number;
+  style?: ViewProps['style'];
+  children: React.ReactNode;
+}) {
+  if (!NativeBlurSource) return <View style={style}>{children}</View>;
+  return (
+    <NativeBlurSource style={style} shadeTop={top} shadeBottom={bottom} shadeOpacity={opacity}>
+      {children}
+    </NativeBlurSource>
+  );
+}
 
 /** Фоновый источник на весь экран; без нативного стекла — просто дети. */
 export function BlurSourceFill({ sourceId, children }: { sourceId: string; children: React.ReactNode }) {

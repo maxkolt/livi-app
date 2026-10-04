@@ -112,6 +112,42 @@ export const WELCOME_FRIENDS_SEGMENT_SHELL_RADIUS = 14;
 export const WELCOME_FRIENDS_SEGMENT_HEIGHT = { phone: 72, landscape: 44, tablet: 72 } as const;
 /** Отступ под блоком «Все / Онлайн» — от него считается и надпись пустого списка. */
 export const WELCOME_FRIENDS_SEGMENT_GAP = { phone: 12, landscape: 6, tablet: 14 } as const;
+/**
+ * Android: тень блока «Все / …» плотнее обычной, у кромки одного тона со всех сторон.
+ * Чуть темнее сам блок (baseOpacity), вокруг — размытый ореол (soft) и кольцевой акцент:
+ * вторая тень, раздвинутая на 1 dp, а снизу ещё на 3 dp — там она чуть длиннее и ложится
+ * на строки, которые уходят под блок. Сверху и по бокам ~8 dp, снизу ~11 dp.
+ */
+/**
+ * Android 10+: строки списка темнеют к нижнему краю блока «Все / …» и к верхнему краю
+ * навбара — уходят в их тень (ListEdgeShade). height — в dp, opacity — затемнение у края.
+ */
+export const WELCOME_LIST_EDGE_SHADE = { height: 12, opacity: 0.5 } as const;
+
+export const WELCOME_FRIENDS_SEGMENT_SHADOW = {
+  spread: 7,
+  soft: true,
+  baseOpacity: 1.3,
+  ringOffset: 1,
+  ringDrop: 3,
+  ringOpacity: 1.2,
+} as const;
+
+/**
+ * Android: тень навбара со всех сторон прижата к панели (~10 dp): вытянутая вверх тень
+ * далеко уходила от верха навигации. Светлее, чем у блока «Все / …». Кольцо размытое
+ * (ringSoft): без тёмного обода по кромке, тень гаснет от края мягко.
+ */
+export const WELCOME_TAB_BAR_SHADOW = {
+  spread: 10,
+  soft: true,
+  ringOpacity: 0.8,
+  ringSoft: true,
+  // Снизу и по бокам чуть плотнее, чем сверху.
+  sideOpacity: 0.5,
+  dropOffset: 2,
+  dropOpacity: 0.6,
+} as const;
 /** Отступ над карточкой «Пригласить друзей» (футер списка друзей). */
 export const WELCOME_FRIENDS_INVITE_GAP = { phone: 8, landscape: 4, tablet: 8 } as const;
 /** Кнопки звонка/чата в welcome-строке — скругление (круг при 42×42). */

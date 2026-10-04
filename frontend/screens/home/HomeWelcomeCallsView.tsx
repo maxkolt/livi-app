@@ -32,6 +32,9 @@ import {
   WELCOME_FRIEND_CARD_ROW_HEIGHT_TABLET,
   WELCOME_FRIENDS_LIST_INSET,
   WELCOME_FRIENDS_SEGMENT_SHELL_RADIUS,
+  WELCOME_FRIENDS_SEGMENT_SHADOW,
+  WELCOME_LIST_EDGE_SHADE,
+  WELCOME_FRIENDS_SEGMENT_GAP,
   WELCOME_GLASS_BORDER,
   WELCOME_LIST_SURFACE,
   WELCOME_HEADER_TITLE,
@@ -44,6 +47,7 @@ import {
   isWelcomeTabletLayout,
 } from './constants';
 import { WELCOME_FLOAT_SHADOW_IOS, WelcomeFloatShadow } from './WelcomeFloatShadow';
+import { ListEdgeShade } from '../../components/BackdropBlur';
 import { WELCOME_SEGMENT_ACTIVE } from './FriendsListCore';
 import { friendMatchesNameSearch, getFriendDisplay, displayAvatarLetter } from './friendHelpers';
 import { formatWelcomeChatTime } from './chatPreview';
@@ -795,7 +799,7 @@ function HomeWelcomeCallsViewInner({
               ]}
               onStartShouldSetResponder={() => true}
             >
-              <WelcomeFloatShadow radius={WELCOME_FRIENDS_SEGMENT_SHELL_RADIUS} />
+              <WelcomeFloatShadow radius={WELCOME_FRIENDS_SEGMENT_SHELL_RADIUS} {...WELCOME_FRIENDS_SEGMENT_SHADOW} />
               <Pressable
                 style={[
                   styles.segmentBtn,
@@ -857,53 +861,70 @@ function HomeWelcomeCallsViewInner({
             </View>
           ) : null}
 
-          <FlatList
-            key={tabletLayout ? 'calls-tablet' : compactLandscape ? 'calls-landscape' : 'calls-portrait'}
+          <ListEdgeShade
             style={styles.list}
-            contentContainerStyle={[
-              styles.listContent,
-              tabletLayout && styles.listContentTablet,
-              compactLandscape && styles.listContentLandscape,
-            ]}
-            data={rows}
-            keyExtractor={(item) => item.id}
-            extraData={listExtraData}
-            renderItem={renderItem}
-            refreshing={pickMode || selectMode ? false : refreshing}
-            onRefresh={pickMode || selectMode ? undefined : onRefresh}
-            nestedScrollEnabled
-            keyboardShouldPersistTaps={searchOpen ? 'never' : 'always'}
-            onScrollBeginDrag={searchOpen ? closeSearch : undefined}
-            showsVerticalScrollIndicator={false}
-            overScrollMode="never"
-            initialNumToRender={12}
-            maxToRenderPerBatch={10}
-            windowSize={7}
-            getItemLayout={(_, index) => ({
-              length: tabletLayout
-                ? WELCOME_FRIEND_CARD_ROW_HEIGHT_TABLET + WELCOME_FRIEND_CARD_GAP_TABLET
-                : compactLandscape
-                  ? WELCOME_FRIEND_CARD_ROW_HEIGHT_LANDSCAPE + WELCOME_FRIEND_CARD_GAP_LANDSCAPE
-                  : WELCOME_FRIEND_CARD_ROW_HEIGHT + WELCOME_FRIEND_CARD_GAP,
-              offset:
-                (tabletLayout
+            top={pickMode ? 0 : WELCOME_LIST_EDGE_SHADE.height}
+            bottom={WELCOME_LIST_EDGE_SHADE.height}
+            opacity={WELCOME_LIST_EDGE_SHADE.opacity}
+          >
+            <FlatList
+              key={tabletLayout ? 'calls-tablet' : compactLandscape ? 'calls-landscape' : 'calls-portrait'}
+              style={styles.list}
+              contentContainerStyle={[
+                styles.listContent,
+                tabletLayout && styles.listContentTablet,
+                compactLandscape && styles.listContentLandscape,
+                // Без блока фильтров (выбор собеседника) — без зазора под ним.
+                pickMode && {
+                  paddingTop: LIST_PAD_TOP[tabletLayout ? 'tablet' : compactLandscape ? 'landscape' : 'phone'],
+                },
+              ]}
+              data={rows}
+              keyExtractor={(item) => item.id}
+              extraData={listExtraData}
+              renderItem={renderItem}
+              refreshing={pickMode || selectMode ? false : refreshing}
+              onRefresh={pickMode || selectMode ? undefined : onRefresh}
+              nestedScrollEnabled
+              keyboardShouldPersistTaps={searchOpen ? 'never' : 'always'}
+              onScrollBeginDrag={searchOpen ? closeSearch : undefined}
+              showsVerticalScrollIndicator={false}
+              overScrollMode="never"
+              initialNumToRender={12}
+              maxToRenderPerBatch={10}
+              windowSize={7}
+              getItemLayout={(_, index) => ({
+                length: tabletLayout
                   ? WELCOME_FRIEND_CARD_ROW_HEIGHT_TABLET + WELCOME_FRIEND_CARD_GAP_TABLET
                   : compactLandscape
                     ? WELCOME_FRIEND_CARD_ROW_HEIGHT_LANDSCAPE + WELCOME_FRIEND_CARD_GAP_LANDSCAPE
-                    : WELCOME_FRIEND_CARD_ROW_HEIGHT + WELCOME_FRIEND_CARD_GAP) * index,
-              index,
-            })}
-            ListEmptyComponent={
-              <View style={styles.emptyWrap}>
-                <AdaptiveText style={styles.emptyText}>{emptyLabel}</AdaptiveText>
-              </View>
-            }
-          />
+                    : WELCOME_FRIEND_CARD_ROW_HEIGHT + WELCOME_FRIEND_CARD_GAP,
+                offset:
+                  (tabletLayout
+                    ? WELCOME_FRIEND_CARD_ROW_HEIGHT_TABLET + WELCOME_FRIEND_CARD_GAP_TABLET
+                    : compactLandscape
+                      ? WELCOME_FRIEND_CARD_ROW_HEIGHT_LANDSCAPE + WELCOME_FRIEND_CARD_GAP_LANDSCAPE
+                      : WELCOME_FRIEND_CARD_ROW_HEIGHT + WELCOME_FRIEND_CARD_GAP) * index,
+                index,
+              })}
+              ListEmptyComponent={
+                <View style={styles.emptyWrap}>
+                  <AdaptiveText style={styles.emptyText}>{emptyLabel}</AdaptiveText>
+                </View>
+              }
+            />
+          </ListEdgeShade>
         </View>
       </View>
     </TouchableWithoutFeedback>
   );
 }
+
+/**
+ * Отступ первой строки от верха списка. Под блоком «Все / …» к нему добавляется
+ * WELCOME_FRIENDS_SEGMENT_GAP: список начинается прямо от нижнего края блока.
+ */
+const LIST_PAD_TOP = { phone: 4, landscape: 2, tablet: 6 } as const;
 
 const styles = StyleSheet.create({
   root: {
@@ -1052,12 +1073,13 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: WELCOME_GLASS_BORDER,
     gap: 5,
-    marginBottom: 12,
+    // Над списком, как таб-бар снизу: строки уходят под блок прямо по его нижнему
+    // краю, а тень ложится поверх них. Зазор до первой строки — внутри списка.
+    zIndex: 2,
   },
   segmentShellLandscape: {
     minHeight: 44,
     padding: 4,
-    marginBottom: 6,
   },
   segmentShellTablet: {
     width: '92%',
@@ -1066,7 +1088,6 @@ const styles = StyleSheet.create({
     minHeight: 72,
     padding: 8,
     marginHorizontal: 0,
-    marginBottom: 14,
   },
   segmentBtn: {
     flex: 1,
@@ -1112,12 +1133,12 @@ const styles = StyleSheet.create({
   listContent: {
     backgroundColor: 'transparent',
     paddingHorizontal: WELCOME_FRIENDS_LIST_INSET,
-    paddingTop: 4,
+    paddingTop: LIST_PAD_TOP.phone + WELCOME_FRIENDS_SEGMENT_GAP.phone,
     paddingBottom: 12,
     flexGrow: 1,
   },
   listContentLandscape: {
-    paddingTop: 2,
+    paddingTop: LIST_PAD_TOP.landscape + WELCOME_FRIENDS_SEGMENT_GAP.landscape,
     paddingBottom: 6,
   },
   listContentTablet: {
@@ -1125,7 +1146,7 @@ const styles = StyleSheet.create({
     maxWidth: 960,
     alignSelf: 'center',
     paddingHorizontal: 28,
-    paddingTop: 6,
+    paddingTop: LIST_PAD_TOP.tablet + WELCOME_FRIENDS_SEGMENT_GAP.tablet,
     paddingBottom: 16,
   },
   cardWrap: {

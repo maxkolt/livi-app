@@ -42,6 +42,13 @@ type NativeFloatShadowProps = ViewProps & {
   dropOffset: number;
   dropOpacity: number;
   sideOpacity: number;
+  baseOpacity: number;
+  soft: boolean;
+  ringOffset: number;
+  ringOpacity: number;
+  ringDrop: number;
+  ringRise: number;
+  ringSoft: boolean;
 };
 
 type WelcomeFloatShadowProps = {
@@ -54,6 +61,20 @@ type WelcomeFloatShadowProps = {
   dropOpacity?: number;
   /** Плотность акцента у боковых сторон относительно основной тени (только натив). */
   sideOpacity?: number;
+  /** Плотность самой основной тени: под стеклом блока и вокруг него (только натив, 1 — обычная). */
+  baseOpacity?: number;
+  /** Тень гаснет сразу от края — размытая, без ровной полосы у кромки (только натив). */
+  soft?: boolean;
+  /** Кольцевой акцент: как нижний, но со всех сторон, раздвинут на ringOffset dp (только натив). */
+  ringOffset?: number;
+  /** Плотность кольцевого акцента относительно основной тени; 0 — без него. */
+  ringOpacity?: number;
+  /** Насколько кольцо снизу шире, чем сверху и по бокам, dp (только натив). */
+  ringDrop?: number;
+  /** Насколько кольцо сверху шире, чем снизу и по бокам, dp (только натив). */
+  ringRise?: number;
+  /** Кольцо размытое: без тёмного обода по кромке блока (только натив). */
+  ringSoft?: boolean;
 };
 
 export function WelcomeFloatShadow({
@@ -62,13 +83,29 @@ export function WelcomeFloatShadow({
   dropOffset = 0,
   dropOpacity = 0,
   sideOpacity = 0,
+  baseOpacity = 1,
+  soft = false,
+  ringOffset = 0,
+  ringOpacity = 0,
+  ringDrop = 0,
+  ringRise = 0,
+  ringSoft = false,
 }: WelcomeFloatShadowProps) {
   if (Platform.OS !== 'android') return null;
   if (NativeFloatShadow) {
+    const pad = spread + Math.max(0, ringOffset);
     return (
       <View
         pointerEvents="none"
-        style={[styles.layer, { left: -spread, right: -spread, top: -spread, bottom: -spread - dropOffset }]}
+        style={[
+          styles.layer,
+          {
+            left: -pad,
+            right: -pad,
+            top: -pad - Math.max(0, ringRise),
+            bottom: -pad - dropOffset - Math.max(0, ringDrop),
+          },
+        ]}
       >
         <NativeFloatShadow
           radius={radius}
@@ -76,6 +113,13 @@ export function WelcomeFloatShadow({
           dropOffset={dropOffset}
           dropOpacity={dropOpacity}
           sideOpacity={sideOpacity}
+          baseOpacity={baseOpacity}
+          soft={soft}
+          ringOffset={ringOffset}
+          ringOpacity={ringOpacity}
+          ringDrop={ringDrop}
+          ringRise={ringRise}
+          ringSoft={ringSoft}
           style={StyleSheet.absoluteFill}
         />
       </View>

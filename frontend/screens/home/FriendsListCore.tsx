@@ -29,8 +29,10 @@ import {
   WELCOME_FRIEND_AVATAR_SIZE_TABLET,
   WELCOME_FRIENDS_INVITE_GAP,
   WELCOME_FRIENDS_SEGMENT_GAP,
+  WELCOME_LIST_EDGE_SHADE,
 } from './constants';
 import { FriendMarkReadMenuStrip } from './FriendMarkReadMenuStrip';
+import { ListEdgeShade } from '../../components/BackdropBlur';
 import { FriendRowChatButton, FriendRowInviteButton } from './FriendRowActionButtons';
 import { getFriendDisplay, isDirectCallSessionLive } from './friendHelpers';
 import type { Friend, MarkReadMenu } from './types';
@@ -219,8 +221,15 @@ function FriendsListCoreInner(props: FriendsListCoreProps) {
       styles.friendsListContent,
       welcomeListStyles.content,
       tabletLayout && welcomeListStyles.contentTablet,
+      // Блок «Все / Онлайн» стоит над списком вплотную: строки уходят под него
+      // по его нижнему краю, а зазор до первой строки — здесь.
+      {
+        paddingTop:
+          (tabletLayout ? LIST_PAD_TOP_TABLET : LIST_PAD_TOP) +
+          WELCOME_FRIENDS_SEGMENT_GAP[tabletLayout ? 'tablet' : compactLandscape ? 'landscape' : 'phone'],
+      },
     ],
-    [styles.friendsListContent, tabletLayout],
+    [styles.friendsListContent, tabletLayout, compactLandscape],
   );
 
   const renderStatusLine = (item: Friend) => {
@@ -333,188 +342,196 @@ function FriendsListCoreInner(props: FriendsListCoreProps) {
   );
 
   return (
-    <FlatList
-      key={tabletLayout ? 'friends-tablet' : compactLandscape ? 'friends-landscape' : 'friends-portrait'}
-      style={listStyle}
-      keyboardShouldPersistTaps={keyboardShouldPersistTaps}
-      nestedScrollEnabled
-      showsVerticalScrollIndicator={false}
-      overScrollMode="never"
-      removeClippedSubviews={false}
-      initialNumToRender={12}
-      maxToRenderPerBatch={10}
-      windowSize={7}
-      updateCellsBatchingPeriod={50}
-      getItemLayout={(_, index) => ({
-        length: rowHeight,
-        offset: rowHeight * index,
-        index,
-      })}
-      data={friends}
-      keyExtractor={(item) => item.id}
-      extraData={{ ...friendsListExtraData, selectMode, selectedIds, compactLandscape, tabletLayout }}
-      refreshing={refreshing}
-      onRefresh={onRefresh}
-      onScrollBeginDrag={() => {
-        setMarkReadMenu(null);
-        onScrollBeginDragExtra?.();
-      }}
-      ListFooterComponent={ListFooterComponent}
-      renderItem={({ item }) => {
-        const { displayName, avatarLetter } = getFriendDisplay(item);
-        const rowHidden = markReadMenu?.friendId === item.id;
-        const deleteBlocked = friendRowBlocksDelete(item);
-        const isSelected = !!selectedIds?.has(item.id);
+    <ListEdgeShade
+      style={welcomeListStyles.shadeWrap}
+      top={WELCOME_LIST_EDGE_SHADE.height}
+      bottom={WELCOME_LIST_EDGE_SHADE.height}
+      opacity={WELCOME_LIST_EDGE_SHADE.opacity}
+    >
+      <FlatList
+        key={tabletLayout ? 'friends-tablet' : compactLandscape ? 'friends-landscape' : 'friends-portrait'}
+        style={listStyle}
+        keyboardShouldPersistTaps={keyboardShouldPersistTaps}
+        nestedScrollEnabled
+        showsVerticalScrollIndicator={false}
+        overScrollMode="never"
+        removeClippedSubviews={false}
+        initialNumToRender={12}
+        maxToRenderPerBatch={10}
+        windowSize={7}
+        updateCellsBatchingPeriod={50}
+        getItemLayout={(_, index) => ({
+          length: rowHeight,
+          offset: rowHeight * index,
+          index,
+        })}
+        data={friends}
+        keyExtractor={(item) => item.id}
+        extraData={{ ...friendsListExtraData, selectMode, selectedIds, compactLandscape, tabletLayout }}
+        refreshing={refreshing}
+        onRefresh={onRefresh}
+        onScrollBeginDrag={() => {
+          setMarkReadMenu(null);
+          onScrollBeginDragExtra?.();
+        }}
+        ListFooterComponent={ListFooterComponent}
+        renderItem={({ item }) => {
+          const { displayName, avatarLetter } = getFriendDisplay(item);
+          const rowHidden = markReadMenu?.friendId === item.id;
+          const deleteBlocked = friendRowBlocksDelete(item);
+          const isSelected = !!selectedIds?.has(item.id);
 
-        const innerRow = (
-          <View
-            style={[
-              welcomeListStyles.welcomeRow,
-              tabletLayout && welcomeListStyles.welcomeRowTablet,
-              compactLandscape && welcomeListStyles.welcomeRowLandscape,
-              selectMode && welcomeListStyles.welcomeRowSelecting,
-            ]}
-          >
-            {renderNameRow(item, displayName, avatarLetter)}
-          </View>
-        );
-
-        return (
-          <View
-            style={[
-              welcomeListStyles.cardWrap,
-              tabletLayout && welcomeListStyles.cardWrapTablet,
-              compactLandscape && welcomeListStyles.cardWrapLandscape,
-            ]}
-            collapsable={false}
-          >
+          const innerRow = (
             <View
               style={[
-                welcomeListStyles.glassCard,
-                tabletLayout && welcomeListStyles.glassCardTablet,
-                compactLandscape && welcomeListStyles.glassCardLandscape,
-                isSelected && welcomeListStyles.glassCardSelected,
+                welcomeListStyles.welcomeRow,
+                tabletLayout && welcomeListStyles.welcomeRowTablet,
+                compactLandscape && welcomeListStyles.welcomeRowLandscape,
+                selectMode && welcomeListStyles.welcomeRowSelecting,
               ]}
+            >
+              {renderNameRow(item, displayName, avatarLetter)}
+            </View>
+          );
+
+          return (
+            <View
+              style={[
+                welcomeListStyles.cardWrap,
+                tabletLayout && welcomeListStyles.cardWrapTablet,
+                compactLandscape && welcomeListStyles.cardWrapLandscape,
+              ]}
+              collapsable={false}
             >
               <View
                 style={[
-                  welcomeListStyles.glassRow,
-                  tabletLayout && welcomeListStyles.glassRowTablet,
-                  compactLandscape && welcomeListStyles.glassRowLandscape,
+                  welcomeListStyles.glassCard,
+                  tabletLayout && welcomeListStyles.glassCardTablet,
+                  compactLandscape && welcomeListStyles.glassCardLandscape,
+                  isSelected && welcomeListStyles.glassCardSelected,
                 ]}
               >
-                <Pressable
+                <View
                   style={[
-                    styles.friendRowSwipeColumn,
-                    welcomeListStyles.swipeColumnWelcome,
-                    tabletLayout && welcomeListStyles.swipeColumnWelcomeTablet,
-                    compactLandscape && welcomeListStyles.swipeColumnWelcomeLandscape,
+                    welcomeListStyles.glassRow,
+                    tabletLayout && welcomeListStyles.glassRowTablet,
+                    compactLandscape && welcomeListStyles.glassRowLandscape,
                   ]}
-                  onPress={() => {
-                    if (selectMode) onToggleSelect?.(item.id);
-                  }}
-                  onLongPress={() => {
-                    if (deleteBlocked) return;
-                    if (selectMode) onToggleSelect?.(item.id);
-                    else onEnterSelect?.(item.id);
-                  }}
-                  delayLongPress={380}
-                  disabled={rowHidden}
                 >
-                  <View
+                  <Pressable
                     style={[
-                      styles.friendRowSwipeContainer,
-                      welcomeListStyles.swipeContainer,
-                      tabletLayout && welcomeListStyles.swipeContainerTablet,
-                      compactLandscape && welcomeListStyles.swipeContainerLandscape,
-                      welcomeListStyles.welcomeSelectRow,
+                      styles.friendRowSwipeColumn,
+                      welcomeListStyles.swipeColumnWelcome,
+                      tabletLayout && welcomeListStyles.swipeColumnWelcomeTablet,
+                      compactLandscape && welcomeListStyles.swipeColumnWelcomeLandscape,
                     ]}
+                    onPress={() => {
+                      if (selectMode) onToggleSelect?.(item.id);
+                    }}
+                    onLongPress={() => {
+                      if (deleteBlocked) return;
+                      if (selectMode) onToggleSelect?.(item.id);
+                      else onEnterSelect?.(item.id);
+                    }}
+                    delayLongPress={380}
+                    disabled={rowHidden}
                   >
-                    {selectMode ? (
-                      <View style={welcomeListStyles.selectMark}>
-                        {isSelected ? (
-                          <Ionicons
-                            name="checkmark-circle"
-                            size={22}
-                            color={WELCOME_BRAND_VI_FILL_GRADIENT[2]}
-                          />
-                        ) : (
-                          <View style={welcomeListStyles.selectEmpty} />
-                        )}
-                      </View>
-                    ) : null}
-                    {innerRow}
-                  </View>
-                </Pressable>
-                {!rowHidden && !selectMode ? renderActions(item) : null}
+                    <View
+                      style={[
+                        styles.friendRowSwipeContainer,
+                        welcomeListStyles.swipeContainer,
+                        tabletLayout && welcomeListStyles.swipeContainerTablet,
+                        compactLandscape && welcomeListStyles.swipeContainerLandscape,
+                        welcomeListStyles.welcomeSelectRow,
+                      ]}
+                    >
+                      {selectMode ? (
+                        <View style={welcomeListStyles.selectMark}>
+                          {isSelected ? (
+                            <Ionicons
+                              name="checkmark-circle"
+                              size={22}
+                              color={WELCOME_BRAND_VI_FILL_GRADIENT[2]}
+                            />
+                          ) : (
+                            <View style={welcomeListStyles.selectEmpty} />
+                          )}
+                        </View>
+                      ) : null}
+                      {innerRow}
+                    </View>
+                  </Pressable>
+                  {!rowHidden && !selectMode ? renderActions(item) : null}
+                </View>
               </View>
-            </View>
-            {markReadMenu && markReadMenu.friendId === item.id && (
-              <View
-                style={[
-                  styles.markReadMenuOverlay,
-                  {
-                    left: 12 + welcomeAvatarSize + 10,
-                    height: welcomeCardHeight,
-                    top: 0,
-                  },
-                ]}
-                pointerEvents="box-none"
-                collapsable={false}
-              >
-                <FriendMarkReadMenuStrip
-                  key={`${markReadMenu.friendId}-${markReadMenu.type}`}
-                  label={
-                    markReadMenu.type === 'video'
-                      ? `${t('markAsViewed', lang)}...`
-                      : `${t('markAsRead', lang)}...`
-                  }
-                  onConfirm={() => {
-                    const { friendId, type } = markReadMenu;
-                    setMarkReadMenu(null);
-                    if (type === 'video') {
-                      clearMissedCallsForFriend(friendId);
-                    } else {
-                      markMessagesAsRead(friendId)
-                        .then((r) => {
-                          setUnreadByUser((prev) => ({ ...prev, [friendId]: 0 }));
-                          if (r?.ok) {
-                            dismissMessageNotificationForUser(friendId).catch(() => {});
-                            syncAppBadgeFromMissedCount().catch(() => {});
-                          }
-                        })
-                        .catch(() => {});
+              {markReadMenu && markReadMenu.friendId === item.id && (
+                <View
+                  style={[
+                    styles.markReadMenuOverlay,
+                    {
+                      left: 12 + welcomeAvatarSize + 10,
+                      height: welcomeCardHeight,
+                      top: 0,
+                    },
+                  ]}
+                  pointerEvents="box-none"
+                  collapsable={false}
+                >
+                  <FriendMarkReadMenuStrip
+                    key={`${markReadMenu.friendId}-${markReadMenu.type}`}
+                    label={
+                      markReadMenu.type === 'video'
+                        ? `${t('markAsViewed', lang)}...`
+                        : `${t('markAsRead', lang)}...`
                     }
-                  }}
-                  onCancel={() => setMarkReadMenu(null)}
-                />
-              </View>
-            )}
-          </View>
-        );
-      }}
-      contentContainerStyle={contentContainerStyle}
-      ListEmptyComponent={
-        initialized ? (
-          <View
-            style={[
-              welcomeListStyles.emptyWrap,
-              emptyWrapPadding(
-                tabletLayout ? 'tablet' : compactLandscape ? 'landscape' : 'phone',
-                ListFooterComponent != null,
-              ),
-            ]}
-          >
-            <AdaptiveText style={welcomeListStyles.emptyText}>{L('friendsEmpty')}</AdaptiveText>
-          </View>
-        ) : null
-      }
-    />
+                    onConfirm={() => {
+                      const { friendId, type } = markReadMenu;
+                      setMarkReadMenu(null);
+                      if (type === 'video') {
+                        clearMissedCallsForFriend(friendId);
+                      } else {
+                        markMessagesAsRead(friendId)
+                          .then((r) => {
+                            setUnreadByUser((prev) => ({ ...prev, [friendId]: 0 }));
+                            if (r?.ok) {
+                              dismissMessageNotificationForUser(friendId).catch(() => {});
+                              syncAppBadgeFromMissedCount().catch(() => {});
+                            }
+                          })
+                          .catch(() => {});
+                      }
+                    }}
+                    onCancel={() => setMarkReadMenu(null)}
+                  />
+                </View>
+              )}
+            </View>
+          );
+        }}
+        contentContainerStyle={contentContainerStyle}
+        ListEmptyComponent={
+          initialized ? (
+            <View
+              style={[
+                welcomeListStyles.emptyWrap,
+                emptyWrapPadding(
+                  tabletLayout ? 'tablet' : compactLandscape ? 'landscape' : 'phone',
+                  ListFooterComponent != null,
+                ),
+              ]}
+            >
+              <AdaptiveText style={welcomeListStyles.emptyText}>{L('friendsEmpty')}</AdaptiveText>
+            </View>
+          ) : null
+        }
+      />
+    </ListEdgeShade>
   );
 }
 
-/** Верхний отступ содержимого списка. */
+/** Верхний отступ содержимого списка (без зазора под блоком «Все / Онлайн»). */
 const LIST_PAD_TOP = 4;
+const LIST_PAD_TOP_TABLET = 6;
 /** Прежний отступ надписи пустого списка — от него зависит, где стоит «Пригласить друзей». */
 const EMPTY_TEXT_OFFSET = 36;
 
@@ -533,13 +550,16 @@ function emptyWrapPadding(layout: 'phone' | 'landscape' | 'tablet', hasFooter: b
 }
 
 const welcomeListStyles = StyleSheet.create({
+  shadeWrap: {
+    flex: 1,
+    minHeight: 0,
+  },
   list: {
     backgroundColor: 'transparent',
   },
   content: {
     backgroundColor: 'transparent',
     paddingHorizontal: WELCOME_FRIENDS_LIST_INSET,
-    paddingTop: LIST_PAD_TOP,
     paddingBottom: 12,
   },
   contentTablet: {
@@ -547,7 +567,6 @@ const welcomeListStyles = StyleSheet.create({
     maxWidth: 960,
     alignSelf: 'center',
     paddingHorizontal: 28,
-    paddingTop: 6,
     paddingBottom: 16,
   },
   cardWrap: {

@@ -24,9 +24,9 @@ import {
   WELCOME_SEARCH_CTA_BORDER,
   WELCOME_FRIENDS_INVITE_GAP,
   WELCOME_FRIENDS_LIST_INSET,
-  WELCOME_FRIENDS_SEGMENT_GAP,
   WELCOME_FRIENDS_SEGMENT_HEIGHT,
   WELCOME_FRIENDS_SEGMENT_SHELL_RADIUS,
+  WELCOME_FRIENDS_SEGMENT_SHADOW,
   WELCOME_HEADER_TITLE,
   WELCOME_BRAND_GLYPH_INSET,
   WELCOME_TOP_BAR_SIDE_PAD,
@@ -377,7 +377,7 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
         ]}
         onStartShouldSetResponder={() => true}
       >
-        <WelcomeFloatShadow radius={WELCOME_FRIENDS_SEGMENT_SHELL_RADIUS} />
+        <WelcomeFloatShadow radius={WELCOME_FRIENDS_SEGMENT_SHELL_RADIUS} {...WELCOME_FRIENDS_SEGMENT_SHADOW} />
         <Pressable
           style={[
             styles.segmentBtn,
@@ -610,12 +610,14 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: WELCOME_GLASS_BORDER,
     gap: 5,
-    marginBottom: WELCOME_FRIENDS_SEGMENT_GAP.phone,
+    // Над списком, как таб-бар снизу: строки уходят под блок прямо по его нижнему
+    // краю, а тень ложится поверх них. Зазор до первой строки —
+    // в FriendsListCore.
+    zIndex: 2,
   },
   segmentShellLandscape: {
     minHeight: WELCOME_FRIENDS_SEGMENT_HEIGHT.landscape,
     padding: 4,
-    marginBottom: WELCOME_FRIENDS_SEGMENT_GAP.landscape,
   },
   segmentShellTablet: {
     width: '92%',
@@ -624,7 +626,6 @@ const styles = StyleSheet.create({
     minHeight: WELCOME_FRIENDS_SEGMENT_HEIGHT.tablet,
     padding: 8,
     marginHorizontal: 0,
-    marginBottom: WELCOME_FRIENDS_SEGMENT_GAP.tablet,
   },
   segmentBtn: {
     flex: 1,

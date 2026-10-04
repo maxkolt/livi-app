@@ -12,6 +12,7 @@ import android.graphics.RenderNode
 import android.graphics.Shader
 import android.os.Build
 import android.view.View
+import android.view.ViewGroup
 import android.view.ViewTreeObserver
 import android.widget.ScrollView
 import androidx.annotation.RequiresApi
@@ -23,6 +24,7 @@ import com.facebook.react.uimanager.annotations.ReactProp
 import com.facebook.react.views.view.ReactViewGroup
 import com.facebook.react.views.view.ReactViewManager
 import java.lang.ref.WeakReference
+import kotlin.math.max
 
 /**
  * Стекло шапки и композера чата без программной перерисовки окна.
@@ -68,11 +70,32 @@ object BackdropBlur {
  *
  * Растворение раньше делал MaskedView: HW-слой на всю ленту, а в захвате Dimezis — программный
  * кэш во весь экран (~30 мс на кадр). Здесь offscreen-слой только у полос fadeTop/fadeBottom.
+ *
+ * shadeTop/shadeBottom/shadeOpacity — строки темнеют к краю, уходя в тень блока над списком
+ * (сверху) или навбара под ним (снизу). Темнеет только содержимое (SRC_ATOP): фон между
+ * строками остаётся как есть. Как fading edge у ScrollView: у начала (конца) списка
+ * затемнения нет, оно набирается за первые shadeTop (последние shadeBottom) прокрутки —
+ * иначе в покое была бы притемнена первая (последняя) строка.
  */
 class BlurSourceView(context: Context) : ReactViewGroup(context) {
   private var sourceId: String? = null
   private var fadeTop = 0f
   private var fadeBottom = 0f
+  private var shadeTop = 0f
+  private var shadeBottom = 0f
+  private var shadeOpacity = 0f
+  private val shadeTopPaint = shadePaint()
+  private val shadeBottomPaint = shadePaint()
+  private var shadeTopKey = -1f
+  private var shadeBottomKey = -1f
+  /** 0…1: прокручено от начала / осталось до конца списка — в пределах своей полосы. */
+  private var shadeTopStrength = 0f
+  private var shadeBottomStrength = 0f
+  private var shadeScroller: WeakReference<ScrollView>? = null
+  private val shadeScrollListener = View.OnScrollChangeListener { _, _, _, _, _ -> refreshShadeStrength() }
+  /** Строки подгрузились — сдвигается конец списка, а с ним нижняя полоса. */
+  private val shadeLayoutListener =
+    View.OnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> refreshShadeStrength() }
   private val topPaint = fadePaint()
   private val bottomPaint = fadePaint()
   private var shaderH = -1f
@@ -84,6 +107,7 @@ class BlurSourceView(context: Context) : ReactViewGroup(context) {
   private class Nodes {
     val content = RenderNode("LiviBlurSource")
     val faded = RenderNode("LiviBlurSourceFaded")
+    val shaded = RenderNode("LiviBlurSourceShaded")
     var output: RenderNode? = null
   }
 
@@ -106,6 +130,23 @@ class BlurSourceView(context: Context) : ReactViewGroup(context) {
 
   fun setFadeBottomDp(value: Float) {
     fadeBottom = PixelUtil.toPixelFromDIP(value)
+    invalidate()
+  }
+
+  fun setShadeTopDp(value: Float) {
+    shadeTop = PixelUtil.toPixelFromDIP(value)
+    refreshShadeStrength()
+    invalidate()
+  }
+
+  fun setShadeBottomDp(value: Float) {
+    shadeBottom = PixelUtil.toPixelFromDIP(value)
+    refreshShadeStrength()
+    invalidate()
+  }
+
+  fun setShadeOpacity(value: Float) {
+    shadeOpacity = value.coerceIn(0f, 1f)
     invalidate()
   }
 
@@ -151,6 +192,7 @@ class BlurSourceView(context: Context) : ReactViewGroup(context) {
 
   @RequiresApi(Build.VERSION_CODES.Q)
   private fun drawRecorded(canvas: Canvas) {
+    bindShadeScroller()
     val w = width
     val h = height
     val n = (nodes as? Nodes) ?: Nodes().also { nodes = it }
@@ -188,6 +230,28 @@ class BlurSourceView(context: Context) : ReactViewGroup(context) {
       }
       n.output = n.faded
     }
+
+    val shadeT = shadeTopBand(h)
+    val shadeB = shadeBottomBand(h)
+    if (shadeT > 0f || shadeB > 0f) {
+      updateShadeShaders(h.toFloat(), shadeT, shadeB)
+      val base = n.output!!
+      val fw = w.toFloat()
+      val fh = h.toFloat()
+      n.shaded.setPosition(0, 0, w, h)
+      val sc = n.shaded.beginRecording(w, h)
+      try {
+        val s = sc.save()
+        sc.clipRect(0f, shadeT, fw, fh - shadeB)
+        sc.drawRenderNode(base)
+        sc.restoreToCount(s)
+        if (shadeT > 0f) drawBand(sc, base, 0f, shadeT, fw, shadeTopPaint)
+        if (shadeB > 0f) drawBand(sc, base, fh - shadeB, fh, fw, shadeBottomPaint)
+      } finally {
+        n.shaded.endRecording()
+      }
+      n.output = n.shaded
+    }
     canvas.drawRenderNode(n.output!!)
 
     // Стекло сверяет источники перед кадром; первую запись (и смену узла) оно увидит
@@ -208,26 +272,101 @@ class BlurSourceView(context: Context) : ReactViewGroup(context) {
 
   /** Программный canvas: снимки экрана и захват Dimezis на Android 10–11. */
   private fun drawDirect(canvas: Canvas) {
+    bindShadeScroller()
     val h = height
     val top = bandTop(h)
     val bottom = bandBottom(h)
-    if (top <= 0f && bottom <= 0f) {
+    val shadeT = shadeTopBand(h)
+    val shadeB = shadeBottomBand(h)
+    if (top <= 0f && bottom <= 0f && shadeT <= 0f && shadeB <= 0f) {
       super.dispatchDraw(canvas)
       return
     }
     updateShaders(h.toFloat(), top, bottom)
+    updateShadeShaders(h.toFloat(), shadeT, shadeB)
     // Слой в пределах клипа canvas: в захвате Dimezis это только полоса под стеклом.
     val s = canvas.saveLayer(null, null)
     super.dispatchDraw(canvas)
     val w = width.toFloat()
     if (top > 0f) canvas.drawRect(0f, 0f, w, top, topPaint)
     if (bottom > 0f) canvas.drawRect(0f, h - bottom, w, h.toFloat(), bottomPaint)
+    if (shadeT > 0f) canvas.drawRect(0f, 0f, w, shadeT, shadeTopPaint)
+    if (shadeB > 0f) canvas.drawRect(0f, h - shadeB, w, h.toFloat(), shadeBottomPaint)
     canvas.restoreToCount(s)
   }
 
   private fun bandTop(h: Int): Float = fadeTop.coerceIn(0f, h.toFloat())
 
   private fun bandBottom(h: Int): Float = fadeBottom.coerceIn(0f, h - bandTop(h))
+
+  private fun shadeTopBand(h: Int): Float =
+    if (shadeOpacity * shadeTopStrength > 0f) shadeTop.coerceIn(0f, h / 2f) else 0f
+
+  private fun shadeBottomBand(h: Int): Float =
+    if (shadeOpacity * shadeBottomStrength > 0f) shadeBottom.coerceIn(0f, h / 2f) else 0f
+
+  /** Сила полос по положению прокрутки; изменилась — перерисовываемся. */
+  private fun refreshShadeStrength() {
+    val scroller = shadeScroller?.get() ?: return
+    val content = scroller.getChildAt(0)
+    val viewport = scroller.height - scroller.paddingTop - scroller.paddingBottom
+    val range = if (content != null) max(0, content.height - viewport) else 0
+    val y = scroller.scrollY
+    val top = if (shadeTop > 0f) (y / shadeTop).coerceIn(0f, 1f) else 0f
+    val bottom = if (shadeBottom > 0f) ((range - y) / shadeBottom).coerceIn(0f, 1f) else 0f
+    if (top == shadeTopStrength && bottom == shadeBottomStrength) return
+    shadeTopStrength = top
+    shadeBottomStrength = bottom
+    invalidate()
+  }
+
+  /**
+   * Прокрутку берём у ScrollView списка: он прямой ребёнок или внутри SwipeRefreshLayout
+   * (FlatList с onRefresh). RN добавляет детей позже первого кадра — ищем при каждой записи,
+   * пока не найдём.
+   */
+  private fun bindShadeScroller() {
+    if (shadeOpacity <= 0f || (shadeTop <= 0f && shadeBottom <= 0f)) return
+    if (shadeScroller?.get()?.parent != null) return
+    var found: ScrollView? = null
+    for (i in 0 until childCount) {
+      val child = getChildAt(i)
+      if (child is ScrollView) found = child
+      else if (child is ViewGroup) {
+        for (j in 0 until child.childCount) (child.getChildAt(j) as? ScrollView)?.let { found = it }
+      }
+      if (found != null) break
+    }
+    val scroller = found ?: return
+    val content = scroller.getChildAt(0) ?: return
+    scroller.setOnScrollChangeListener(shadeScrollListener)
+    scroller.addOnLayoutChangeListener(shadeLayoutListener)
+    content.addOnLayoutChangeListener(shadeLayoutListener)
+    shadeScroller = WeakReference(scroller)
+    refreshShadeStrength()
+  }
+
+  /** Чёрный у края (shadeOpacity × сила полосы) → прозрачный на внутренней границе полосы. */
+  private fun updateShadeShaders(h: Float, top: Float, bottom: Float) {
+    if (top > 0f) {
+      val opacity = shadeOpacity * shadeTopStrength
+      val key = top * 1000f + opacity
+      if (key != shadeTopKey) {
+        shadeTopKey = key
+        shadeTopPaint.shader =
+          LinearGradient(0f, 0f, 0f, top, black(opacity), Color.TRANSPARENT, Shader.TileMode.CLAMP)
+      }
+    }
+    if (bottom > 0f) {
+      val opacity = shadeOpacity * shadeBottomStrength
+      val key = (h * 1000f + bottom) * 1000f + opacity
+      if (key != shadeBottomKey) {
+        shadeBottomKey = key
+        shadeBottomPaint.shader =
+          LinearGradient(0f, h - bottom, 0f, h, Color.TRANSPARENT, black(opacity), Shader.TileMode.CLAMP)
+      }
+    }
+  }
 
   private fun updateShaders(h: Float, top: Float, bottom: Float) {
     if (h == shaderH && top == shaderTop && bottom == shaderBottom) return
@@ -244,6 +383,10 @@ class BlurSourceView(context: Context) : ReactViewGroup(context) {
 
   private companion object {
     fun fadePaint() = Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN) }
+
+    fun shadePaint() = Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC_ATOP) }
+
+    fun black(opacity: Float) = Color.argb((opacity * 255f).toInt(), 0, 0, 0)
   }
 }
 
@@ -435,6 +578,15 @@ class BlurSourceViewManager : ReactViewManager() {
 
   @ReactProp(name = "fadeTop", defaultFloat = 0f)
   fun setFadeTop(view: ReactViewGroup, value: Float) = (view as BlurSourceView).setFadeTopDp(value)
+
+  @ReactProp(name = "shadeTop", defaultFloat = 0f)
+  fun setShadeTop(view: ReactViewGroup, value: Float) = (view as BlurSourceView).setShadeTopDp(value)
+
+  @ReactProp(name = "shadeBottom", defaultFloat = 0f)
+  fun setShadeBottom(view: ReactViewGroup, value: Float) = (view as BlurSourceView).setShadeBottomDp(value)
+
+  @ReactProp(name = "shadeOpacity", defaultFloat = 0f)
+  fun setShadeOpacity(view: ReactViewGroup, value: Float) = (view as BlurSourceView).setShadeOpacity(value)
 
   @ReactProp(name = "fadeBottom", defaultFloat = 0f)
   fun setFadeBottom(view: ReactViewGroup, value: Float) = (view as BlurSourceView).setFadeBottomDp(value)

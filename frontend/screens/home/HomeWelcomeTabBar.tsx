@@ -9,6 +9,7 @@ import FitText from '../../components/FitText';
 import {
   WELCOME_CHROME_EDGE_RADIUS,
   WELCOME_STAGE_BG,
+  WELCOME_TAB_BAR_SHADOW,
   isWelcomeTabletLayout,
 } from './constants';
 import { WelcomeFloatShadow } from './WelcomeFloatShadow';
@@ -49,17 +50,6 @@ const PROFILE_ACTIVE_DOT = 28;
 const INACTIVE = '#7A8494';
 /** Неактивные иконки — тон надписи «Онлайн» (WELCOME_HEADER_TITLE), чуть приглушённее. */
 const INACTIVE_ICON = 'rgba(244, 245, 247, 0.72)';
-
-/** Android: тень вокруг навбара расходится на 8 dp, как у блоков. */
-const TAB_BAR_SHADOW_SPREAD = 8;
-/**
- * Снизу тень плотнее (свет сверху): ещё одна тень, сдвинутая на 3 dp вниз, плотностью
- * 1.1 от основной. Под навбаром до системной навигации ~10 dp — она ложится туда.
- */
-const TAB_BAR_SHADOW_DROP = 3;
-const TAB_BAR_SHADOW_DROP_OPACITY = 1.1;
-/** По бокам — свой акцент, чуть слабее нижнего. */
-const TAB_BAR_SHADOW_SIDE_OPACITY = 0.8;
 
 function HomeWelcomeTabBarInner({
   activeTab,
@@ -154,13 +144,7 @@ function HomeWelcomeTabBarInner({
       pointerEvents="box-none"
     >
       {Platform.OS === 'android' ? (
-        <WelcomeFloatShadow
-          radius={WELCOME_CHROME_EDGE_RADIUS}
-          spread={TAB_BAR_SHADOW_SPREAD}
-          dropOffset={TAB_BAR_SHADOW_DROP}
-          dropOpacity={TAB_BAR_SHADOW_DROP_OPACITY}
-          sideOpacity={TAB_BAR_SHADOW_SIDE_OPACITY}
-        />
+        <WelcomeFloatShadow radius={WELCOME_CHROME_EDGE_RADIUS} {...WELCOME_TAB_BAR_SHADOW} />
       ) : (
         <View pointerEvents="none" style={styles.iosShadow} />
       )}
