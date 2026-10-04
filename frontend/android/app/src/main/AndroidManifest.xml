@@ -109,7 +109,7 @@
         <data android:scheme="exp+livi-video-chat"/>
       </intent-filter>
       <!-- Только ссылки-приглашения: без host LiVi предлагался для открытия любой https-ссылки. -->
-      <intent-filter data-generated="true">
+      <intent-filter android:autoVerify="true" data-generated="true">
         <action android:name="android.intent.action.VIEW"/>
         <data android:scheme="https" android:host="api.liviapp.com" android:pathPrefix="/invite/"/>
         <category android:name="android.intent.category.BROWSABLE"/>
