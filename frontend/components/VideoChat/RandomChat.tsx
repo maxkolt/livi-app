@@ -19,8 +19,8 @@ import {
   BackHandler,
   Easing,
   ActivityIndicator,
-  StatusBar,
-} from 'react-native';
+  } from 'react-native';
+import { SystemBars } from 'react-native-edge-to-edge';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { CommonActions } from '@react-navigation/native';
 import { SafeAreaView, useSafeAreaFrame, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -1662,11 +1662,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   return (
     <>
       {Platform.OS === 'android' && (
-        <StatusBar
-          translucent
-          backgroundColor="transparent"
-          barStyle="light-content"
-        />
+        <SystemBars style="light" />
       )}
       <View style={[styles.container, { backgroundColor: WELCOME_STAGE_BG }]}>
       <WelcomeStageBackground />

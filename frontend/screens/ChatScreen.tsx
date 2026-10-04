@@ -24,8 +24,8 @@ import {
   Image,
   StyleSheet,
   Share,
-  StatusBar,
 } from "react-native";
+import { SystemBars } from 'react-native-edge-to-edge';
  
 import { useSafeAreaInsets, SafeAreaView } from "react-native-safe-area-context";
 import {
@@ -331,18 +331,10 @@ export default function ChatScreen({ route, navigation }: Props) {
     accent: uiAccent(isDark),
   } as const), [theme, isDark]);
 
-  // Android: тёмный scrim status bar → всегда светлые иконки. iOS: по теме / шапке.
+  // Android: под барами тёмная сцена → всегда светлые иконки. iOS: по теме / шапке.
   useFocusEffect(
     React.useCallback(() => {
-      const style =
-        Platform.OS === 'android' || isDark ? 'light-content' : 'dark-content';
-      StatusBar.setBarStyle(style, true);
-      if (Platform.OS === 'android') {
-        try {
-          StatusBar.setTranslucent(true);
-          StatusBar.setBackgroundColor('transparent', true);
-        } catch {}
-      }
+      SystemBars.setStyle(Platform.OS === 'android' || isDark ? 'light' : 'dark');
       return () => {};
     }, [isDark]),
   );
@@ -2641,9 +2633,8 @@ export default function ChatScreen({ route, navigation }: Props) {
 
   const ChatChrome = isDark ? StageGradient : View;
   const chatChromeBottomExtra = isDark ? ({ translucent: true, mirror: true } as const) : {};
-  // Продолжаем chrome под системные панели отдельными неподвижными участками.
-  // У translucent StageGradient край у системной панели непрозрачный, поэтому
-  // тот же цвет стыкуется с шапкой/композером без полосы и не двигает их контент.
+  // Системные зоны продолжают плотный край chrome тем же цветом и альфой:
+  // затемнение блоков сохраняется, а на границе нет смены тона.
   const systemTopChromeBg = isDark ? 'rgb(11, 20, 31)' : CHAT_HEADER_BG;
   const systemBottomChromeBg = isDark ? 'rgb(11, 20, 31)' : INPUT_BAR_BG;
   const systemBottomChromeH = Platform.OS === 'android'
@@ -2687,11 +2678,7 @@ export default function ChatScreen({ route, navigation }: Props) {
       // иначе получаем лишний зазор между инпутом и клавиатурой на разных прошивках.
       edges={Platform.OS === 'android' ? ['top', 'left', 'right'] : ['top', 'bottom', 'left', 'right']}
     >
-      <StatusBar
-        barStyle={Platform.OS === 'android' || isDark ? 'light-content' : 'dark-content'}
-        translucent={Platform.OS === 'android'}
-        backgroundColor={Platform.OS === 'android' ? 'transparent' : undefined}
-      />
+      <SystemBars style={Platform.OS === 'android' || isDark ? 'light' : 'dark'} />
       <View
         style={{ flex: 1, backgroundColor: 'transparent' }}
         // Не блокируем весь экран pointerEvents='none': на Android это иногда "съедало" первый тап.

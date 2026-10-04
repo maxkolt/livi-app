@@ -4,6 +4,7 @@ import React from "react";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { Provider as PaperProvider } from "react-native-paper";
 import { Platform } from "react-native";
+import { SystemBars } from 'react-native-edge-to-edge';
 import { SafeAreaProvider, initialWindowMetrics, useSafeAreaInsets } from "react-native-safe-area-context";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import * as NavigationBar from "expo-navigation-bar";
@@ -11,7 +12,7 @@ import { NavigationContainer, createNavigationContainerRef, CommonActions, Defau
 import { ThemeProvider, useAppTheme } from "./theme/ThemeProvider";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { Audio } from "expo-av";
-import { View, Text, Animated, TouchableOpacity, StyleSheet, Easing, AppState, StatusBar, Linking, LogBox, Keyboard, InteractionManager, NativeModules, NativeEventEmitter, BackHandler, Modal } from "react-native";
+import { View, Text, Animated, TouchableOpacity, StyleSheet, Easing, AppState, Linking, LogBox, Keyboard, InteractionManager, NativeModules, NativeEventEmitter, BackHandler, Modal } from "react-native";
 import { BlurView } from "expo-blur";
 import { MaterialIcons } from "@expo/vector-icons";
 import { PanGestureHandler } from "react-native-gesture-handler";
@@ -4976,11 +4977,10 @@ function AppContent() {
   // Как в WhatsApp/Telegram: в системном PiP остаёмся на экране VideoCall (компактный вид), навигатор не размонтируем — возврат из PiP без перехода.
   return (
     <>
-      <StatusBar 
-        barStyle={Platform.OS === 'android' || isDark ? 'light-content' : 'dark-content'} 
-        translucent={Platform.OS === 'android'}
-        backgroundColor={Platform.OS === 'android' ? 'transparent' : undefined}
-      />
+      {/* SystemBars, не StatusBar: setHidden(false) из RN StatusBar на Android 11+ включает
+          decorFitsSystemWindows, и в landscape окно отступает от боковой навигации
+          (там остаётся тёмная системная подложка). */}
+      <SystemBars style={Platform.OS === 'android' || isDark ? 'light' : 'dark'} />
       <PaperProvider theme={theme}>
         <>
         <NavigationContainer

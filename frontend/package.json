@@ -81,6 +81,7 @@
     "react": "19.0.0",
     "react-native": "0.79.6",
     "react-native-callkeep": "^4.3.16",
+    "react-native-edge-to-edge": "1.6.0",
     "react-native-gesture-handler": "~2.24.0",
     "react-native-get-random-values": "^1.11.0",
     "react-native-incall-manager": "^4.2.1",

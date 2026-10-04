@@ -1,0 +1,26 @@
+--- a/android/src/main/java/com/reactnativekeyboardcontroller/views/EdgeToEdgeReactViewGroup.kt	2026-10-04 09:16:47
++++ b/android/src/main/java/com/reactnativekeyboardcontroller/views/EdgeToEdgeReactViewGroup.kt	2026-10-04 09:16:47
+@@ -112,17 +112,21 @@
+ 
+         val shouldApplyZeroPaddingTop = !active || this.isStatusBarTranslucent
+         val shouldApplyZeroPaddingBottom = !active || this.isNavigationBarTranslucent
++        // LiVi: translucent navigation bar — no side margins either. Otherwise in landscape with
++        // 3-button navigation the content stops at the side nav bar, and the system draws its
++        // dark scrim there. The app pads left/right itself via safe-area-context.
++        val shouldApplyZeroPaddingSides = this.isNavigationBarTranslucent
+         val navBarInsets = insets.getInsets(WindowInsetsCompat.Type.navigationBars())
+         val systemBarInsets = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+ 
+         params.setMargins(
+-          navBarInsets.left,
++          if (shouldApplyZeroPaddingSides) 0 else navBarInsets.left,
+           if (shouldApplyZeroPaddingTop) {
+             0
+           } else {
+             systemBarInsets.top
+           },
+-          navBarInsets.right,
++          if (shouldApplyZeroPaddingSides) 0 else navBarInsets.right,
+           if (shouldApplyZeroPaddingBottom) {
+             0
+           } else {

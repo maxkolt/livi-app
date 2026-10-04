@@ -2,7 +2,6 @@
 import React, { useEffect, useState, useCallback, useMemo, useRef, startTransition } from 'react';
 import { Alert,
   BackHandler,
-  StatusBar,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -24,6 +23,7 @@ import { Alert,
   Share,
   Vibration,
 } from 'react-native';
+import { SystemBars } from 'react-native-edge-to-edge';
 import * as Haptics from 'expo-haptics';
 
 import { syncMyStreamProfile } from '../chat/cometchat';
@@ -5589,11 +5589,7 @@ const handleClearNick = useCallback(async () => {
         ]}
         edges={['top', 'left', 'right']}
       >
-      <StatusBar
-        barStyle={Platform.OS === 'android' || isDark ? 'light-content' : 'dark-content'}
-        translucent={Platform.OS === 'android'}
-        backgroundColor={Platform.OS === 'android' ? 'transparent' : undefined}
-      />
+      <SystemBars style={Platform.OS === 'android' || isDark ? 'light' : 'dark'} />
 
 
       <View style={{ flex: 1, minHeight: 0 }}>

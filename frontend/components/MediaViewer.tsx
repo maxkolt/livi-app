@@ -5,11 +5,11 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  StatusBar,
   Animated,
   Platform,
   Image,
 } from 'react-native';
+import { SystemBars } from 'react-native-edge-to-edge';
 import { SafeAreaView, useSafeAreaFrame } from 'react-native-safe-area-context';
 import { GestureHandlerRootView, PinchGestureHandler, PanGestureHandler, TapGestureHandler, State, FlatList } from 'react-native-gesture-handler';
 import * as FileSystem from 'expo-file-system';
@@ -893,7 +893,7 @@ export default function MediaViewer({
         Do NOT hide the StatusBar here. On Android this can change window metrics/insets,
         which causes ChatScreen to re-layout (input + list spacer "jump"/flicker) when closing.
       */}
-      <StatusBar barStyle="light-content" translucent backgroundColor="transparent" />
+      <SystemBars style="light" />
       {/* Important: GestureHandlerRootView is needed for pinch in Android modals */}
       <GestureHandlerRootView style={styles.root}>
         <View style={styles.container}>
