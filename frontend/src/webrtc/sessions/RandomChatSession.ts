@@ -29,7 +29,7 @@ import socket, {
 import { logger } from '../../../utils/logger';
 import { prewarmApiConnections } from '../../../utils/warmConnections';
 import { sendClientMetrics } from '../../utils/capacityClientMetrics';
-import { getIceConfiguration, enableForcedRelayFallback } from '../../../utils/iceConfig';
+import { getIceConfiguration, enableForcedRelayFallback, prefetchIceConfiguration } from '../../../utils/iceConfig';
 import { buildLiveKitConnectOptions } from './videoCall/iceConnectOptions';
 import { buildLiveKitSignalProxyUrl } from './videoCall/signalProxy';
 import { LIVEKIT_APPLY_CLIENT_ICE } from './videoCall/constants';
@@ -618,6 +618,8 @@ export class RandomChatSession extends SimpleEventEmitter {
     this.config.setStarted?.(true);
     this.notifyLoadingChange(true);
     this.emit('searching');
+    // Пара находится за ~1 с, а запрос TURN-кредов под VPN может висеть секунды — начинаем его сразу.
+    prefetchIceConfiguration();
     await this.ensureLocalTracks();
     this.startSearchConnectLoop();
     this.autoNext('initial_start');

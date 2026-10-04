@@ -617,6 +617,16 @@ let incomingChain: Promise<void> = Promise.resolve();
 socket.on("message:received", (raw: any, ack?: (res: { ok: boolean }) => void) => {
   incomingChain = incomingChain.then(async () => {
     const message = await decryptForApp(raw);
+    // Задержка доставки (часы телефонов идут по NTP) — главный показатель переписки под VPN.
+    // id начинается со времени нажатия «отправить» у отправителя, timestamp ставит сервер.
+    const now = Date.now();
+    const tappedAtMs = Number(String(message?.id || "").split("-")[0]);
+    const serverAtMs = Date.parse(String(message?.timestamp || ""));
+    logger.info("[messages] received", {
+      id: message?.id,
+      sinceSendMs: tappedAtMs > 1e12 ? now - tappedAtMs : null,
+      fromServerMs: Number.isFinite(serverAtMs) ? now - serverAtMs : null,
+    });
     for (const cb of [...receivedSubs]) {
       try {
         cb(message);

@@ -42,9 +42,29 @@ export const getSocket = (): Socket => {
       // Keep short so tryAllTransports can fail over WS→polling inside one user-facing wait.
       timeout: SOCKET_ENGINE_TIMEOUT_MS,
     });
+    guardDuplicateConnectPacket(socketInstance);
   }
   return socketInstance;
 };
+
+/**
+ * connect() в окне «транспорт открыт, ответ сервера на CONNECT ещё не пришёл» шлёт второй
+ * CONNECT-пакет, а сервер socket.io на него отвечает «invalid state» и закрывает всё
+ * соединение (без DISCONNECT; WebSocket — кодом 1005, на Android это «transport error»).
+ * Под VPN ответ идёт сотни мс, и любой emitAck/waitForConnect на старте попадал в это окно:
+ * первый сокет рвался, а reauth и unread_count ждали полный таймаут.
+ * В этом состоянии CONNECT уже отправлен — повторный connect() просто пропускаем.
+ */
+function guardDuplicateConnectPacket(s: Socket): void {
+  const rawConnect = s.connect.bind(s);
+  const guarded = (): Socket => {
+    const mgr = (s as any).io;
+    if (!s.connected && s.active && mgr?._readyState === "open") return s;
+    return rawConnect();
+  };
+  s.connect = guarded;
+  s.open = guarded;
+}
 
 /** Access underlying instance (may be null before first getSocket). Prefer `socket`. */
 export function getSocketInstance(): Socket | null {

@@ -48,6 +48,12 @@ export function useChatVoiceRecord({
 }: Options) {
   const voiceRecordingRef = React.useRef<Audio.Recording | null>(null);
   const voiceRecordTimerRef = React.useRef<ReturnType<typeof setInterval> | null>(null);
+  /**
+   * Some Android recorders report durationMillis as 0 until recording stops.
+   * Keep a monotonic-enough wall-clock fallback so the visible timer and the
+   * one-minute auto-stop keep moving while the recorder is active.
+   */
+  const voiceRecordStartedAtRef = React.useRef(0);
   const voiceStopInProgressRef = React.useRef(false);
   /**
    * Запуск записи идёт (разрешение, подготовка рекордера). Флаг синхронный: второе
@@ -167,6 +173,11 @@ export function useChatVoiceRecord({
       const rec = voiceRecordingRef.current;
       if (!rec) return;
 
+      const wallClockDurationMs = voiceRecordStartedAtRef.current
+        ? Math.max(0, Date.now() - voiceRecordStartedAtRef.current)
+        : 0;
+      voiceRecordStartedAtRef.current = 0;
+
       voiceStopInProgressRef.current = true;
       voiceRecordingRef.current = null;
       setVoiceIsRecording(false);
@@ -184,7 +195,14 @@ export function useChatVoiceRecord({
         await rec.stopAndUnloadAsync();
         const uri = rec.getURI() || "";
         const st: any = await rec.getStatusAsync().catch(() => null);
-        const durationMs = Number(st?.durationMillis || voiceRecordMs || 0);
+        const durationMs = Math.min(
+          VOICE_MAX_MS,
+          Math.max(
+            Number(st?.durationMillis || 0),
+            Number(voiceRecordMs || 0),
+            wallClockDurationMs,
+          ),
+        );
         logger.info("[voice] stopped", {
           durationMs,
           cancelled: !!cancelled || voiceCancelTriggeredRef.current,
@@ -243,9 +261,11 @@ export function useChatVoiceRecord({
     }
     voiceStartingRef.current = true;
     voiceReleasedDuringStartRef.current = false;
+    voiceRecordStartedAtRef.current = 0;
     resetVoiceGesture({ keepVoiceDrag: true });
 
     const abandonStart = () => {
+      voiceRecordStartedAtRef.current = 0;
       setVoiceIsRecording(false);
       setVoiceLocked(false);
       try {
@@ -330,21 +350,29 @@ export function useChatVoiceRecord({
         return;
       }
 
+      voiceRecordStartedAtRef.current = Date.now();
       voiceRecordingRef.current = recording;
       voiceStopInProgressRef.current = false;
       logger.info("[voice] recording", { sincePressMs: sincePress() });
       if (voiceRecordTimerRef.current) clearInterval(voiceRecordTimerRef.current);
       voiceRecordTimerRef.current = setInterval(async () => {
+        const rec = voiceRecordingRef.current;
+        if (!rec) return;
+
+        const wallClockMs = voiceRecordStartedAtRef.current
+          ? Math.max(0, Date.now() - voiceRecordStartedAtRef.current)
+          : 0;
+        let recorderMs = 0;
         try {
-          const rec = voiceRecordingRef.current;
-          if (!rec) return;
           const st: any = await rec.getStatusAsync();
-          const ms = Number(st?.durationMillis || 0);
-          setVoiceRecordMs(ms);
-          if (ms >= VOICE_MAX_MS) {
-            void stopVoiceRecordingRef.current(false, true);
-          }
+          recorderMs = Number(st?.durationMillis || 0);
         } catch {}
+
+        const ms = Math.min(VOICE_MAX_MS, Math.max(wallClockMs, recorderMs));
+        setVoiceRecordMs(ms);
+        if (ms >= VOICE_MAX_MS) {
+          void stopVoiceRecordingRef.current(false, true);
+        }
       }, 100);
     } catch (e) {
       logger.warn("[voice] start failed", { error: String((e as Error)?.message ?? e) });
@@ -534,6 +562,7 @@ export function useChatVoiceRecord({
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      voiceRecordStartedAtRef.current = 0;
       try {
         if (voiceRecordingRef.current) {
           voiceRecordingRef.current.stopAndUnloadAsync().catch(() => {});

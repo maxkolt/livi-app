@@ -9,6 +9,8 @@ import { t, type Lang } from "../../utils/i18n";
 import { APP_TEXT_MAX_FONT_SIZE_MULTIPLIER } from "../../utils/accessibilityTypography";
 import { WELCOME_CHROME_EDGE_RADIUS, WELCOME_NAV_ACTIVE_ACCENT } from "../home/constants";
 import { StageGradient } from "../home/WelcomeStageBackground";
+import type { BackdropSources } from "../../components/BackdropBlur";
+import { CHAT_ROUND_BUTTON_SIZE, ChatRoundButton, chatRoundButtonColors } from "./ChatRoundButton";
 
 type LiviColors = {
   readonly bg: string;
@@ -22,11 +24,11 @@ type Options = {
   lang: Lang;
   headerH: number;
   headerTopPadding: number;
+  systemTopInset: number;
   LIVI: LiviColors;
   headerBg: string;
   navigation: any;
   isDark: boolean;
-  outlineColor: string;
   peerNameState: string;
   peerOnline: boolean;
   peerId: string;
@@ -44,10 +46,12 @@ type Options = {
   selectAllLoaded: () => void;
   startForwardSelected: () => void;
   confirmDeleteSelected: () => void;
+  /** Источники стекла шапки (Android 12+). */
+  backdrop?: BackdropSources;
 };
 
-/** Круглые action (звонок/меню) — как send в композере. */
-const ACTION_BTN = 36;
+/** Круглые action (звонок/меню) — того же размера, что кнопки композера. */
+const ACTION_BTN = CHAT_ROUND_BUTTON_SIZE;
 /** Hit-area «назад» / диаметр аватара. */
 const BACK_BTN = 40;
 
@@ -55,11 +59,11 @@ export function useChatHeader({
   lang,
   headerH,
   headerTopPadding,
+  systemTopInset,
   LIVI,
   headerBg,
   navigation,
   isDark,
-  outlineColor,
   peerNameState,
   peerOnline,
   peerId,
@@ -76,33 +80,31 @@ export function useChatHeader({
   selectAllLoaded,
   startForwardSelected,
   confirmDeleteSelected,
+  backdrop,
 }: Options): { headerEl: React.ReactElement } {
   // КРИТИЧНО: Header нельзя объявлять как "компонент-функцию" (const Header = () => ...)
   // и потом рендерить как <Header />, иначе при изменении зависимостей React будет считать,
   // что "тип компонента" поменялся → размонтирует/смонтирует заново (и аватар начнёт мерцать).
   const headerEl = React.useMemo(() => {
-    // Как mic/send в нижнем композере: rgba(255,255,255,0.2) + outline.
-    const chromeBtnBg = isDark ? "rgba(255,255,255,0.2)" : "rgba(0,0,0,0.06)";
-    const chromeBtnBorder = outlineColor;
+    // Те же круги, что у кнопок композера: сплошная заливка без обводки.
+    const chromeBtnColors = chatRoundButtonColors(isDark);
     const Shell = isDark ? StageGradient : View;
 
     const chromeBtnStyle = {
       width: ACTION_BTN,
       height: ACTION_BTN,
       borderRadius: ACTION_BTN / 2,
-      backgroundColor: chromeBtnBg,
-      borderWidth: 1,
-      borderColor: chromeBtnBorder,
+      backgroundColor: chromeBtnColors.idle,
       alignItems: "center" as const,
       justifyContent: "center" as const,
     };
 
     return (
       <Shell
-        {...(isDark ? { translucent: true } : null)}
+        {...(isDark ? { translucent: true, matteOpacity: 0.38, backdrop } : null)}
         style={{
-          paddingTop: headerTopPadding,
-          height: headerH + headerTopPadding,
+          paddingTop: headerTopPadding + systemTopInset,
+          height: headerH + headerTopPadding + systemTopInset,
           backgroundColor: isDark ? undefined : headerBg,
           flexDirection: "row",
           alignItems: "center",
@@ -115,6 +117,20 @@ export function useChatHeader({
           borderBottomRightRadius: WELCOME_CHROME_EDGE_RADIUS,
         }}
       >
+        <View
+          collapsable={false}
+          renderToHardwareTextureAndroid
+          style={{
+            flex: 1,
+            flexDirection: "row",
+            alignItems: "center",
+            zIndex: 2,
+            elevation: 2,
+            // Верхний зазор остаётся компактным (2 dp), снизу под 40-dp
+            // аватаром получается 6 dp — как над инпутом в нижнем chrome.
+            transform: [{ translateY: -2 }],
+          }}
+        >
         <ChatStyleBackButton
           icon={selectionMode ? "close" : "chevron-back"}
           iconColor={LIVI.titan}
@@ -146,7 +162,7 @@ export function useChatHeader({
                 {t("chatSelectedCount", lang).replace("{count}", String(selectedCount))}
               </Text>
             </View>
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
               <TouchableOpacity
                 onPress={selectAllLoaded}
                 activeOpacity={0.85}
@@ -154,9 +170,7 @@ export function useChatHeader({
                   height: ACTION_BTN,
                   paddingHorizontal: 12,
                   borderRadius: ACTION_BTN / 2,
-                  backgroundColor: chromeBtnBg,
-                  borderColor: chromeBtnBorder,
-                  borderWidth: 1,
+                  backgroundColor: chromeBtnColors.idle,
                   alignItems: "center",
                   justifyContent: "center",
                 }}
@@ -187,6 +201,7 @@ export function useChatHeader({
                 style={{
                   ...chromeBtnStyle,
                   backgroundColor: isDark ? "rgba(255,90,103,0.14)" : "rgba(255,90,103,0.12)",
+                  borderWidth: 1,
                   borderColor: "rgba(255,90,103,0.35)",
                   opacity: selectedCount === 0 ? 0.45 : 1,
                 }}
@@ -259,33 +274,33 @@ export function useChatHeader({
               </Text>
             </View>
 
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
-              <TouchableOpacity
-                onPress={onPressCall}
-                activeOpacity={0.85}
-                style={chromeBtnStyle}
-                accessibilityRole="button"
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 16 }}>
+              <ChatRoundButton
+                onPress={() => onPressCall?.()}
+                backgroundColor={chromeBtnColors.idle}
+                pressedBackgroundColor={chromeBtnColors.pressed}
                 accessibilityLabel={t("tabCalls", lang)}
               >
                 <MaterialCommunityIcons name="phone-in-talk-outline" size={23} color={LIVI.titan} />
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={onPressMore}
-                activeOpacity={0.85}
-                style={chromeBtnStyle}
-                accessibilityRole="button"
+              </ChatRoundButton>
+              <ChatRoundButton
+                onPress={() => onPressMore?.()}
+                backgroundColor={chromeBtnColors.idle}
+                pressedBackgroundColor={chromeBtnColors.pressed}
                 accessibilityLabel={t("menuTitle", lang)}
               >
                 <Ionicons name="ellipsis-vertical" size={20} color={LIVI.titan} />
-              </TouchableOpacity>
+              </ChatRoundButton>
             </View>
           </>
         )}
+        </View>
       </Shell>
     );
   }, [
     headerH,
     headerTopPadding,
+    systemTopInset,
     LIVI.white,
     LIVI.titan,
     LIVI.presenceGreen,
@@ -293,7 +308,6 @@ export function useChatHeader({
     headerBg,
     navigation,
     isDark,
-    outlineColor,
     peerNameState,
     peerOnline,
     peerId,
@@ -311,6 +325,7 @@ export function useChatHeader({
     startForwardSelected,
     confirmDeleteSelected,
     lang,
+    backdrop,
   ]);
 
   return { headerEl };

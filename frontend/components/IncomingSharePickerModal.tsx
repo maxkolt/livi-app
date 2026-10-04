@@ -1,28 +1,35 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
-  Modal,
   Platform,
   Pressable,
+  StyleSheet,
   Text,
   ToastAndroid,
-  TouchableOpacity,
   View,
 } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useSafeAreaFrame, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { NativeViewGestureHandler, FlatList as GHFlatList } from 'react-native-gesture-handler';
 import AvatarImage from './AvatarImage';
-import ChatStyleBackButton from './ChatStyleBackButton';
-import { useAppTheme } from '../theme/ThemeProvider';
-import { uiAccent } from '../theme/uiAccent';
-import { FRIEND_ACTION_BUTTON, FRIEND_ACTION_ICON_SIZE } from '../constants/uiTokens';
+import { FullScreenPortal } from './FullScreenPortal';
 import { fetchFriends } from '../sockets/socket';
 import { t } from '../utils/i18n';
 import { useLang } from '../store/lang';
 import type { IncomingShareItem } from '../utils/incomingShare';
 import { WelcomeStageBackground } from '../screens/home/WelcomeStageBackground';
-import { WELCOME_STAGE_BG } from '../screens/home/constants';
+import { WELCOME_FLOAT_SHADOW_IOS, WelcomeFloatShadow } from '../screens/home/WelcomeFloatShadow';
+import {
+  LIVI,
+  WELCOME_BRAND_VI_FILL_GRADIENT,
+  WELCOME_CHROME_BTN_BG,
+  WELCOME_FRIEND_ACTION_ICON,
+  WELCOME_FRIENDS_LIST_INSET,
+  WELCOME_HEADER_TITLE,
+  WELCOME_LIST_SURFACE,
+  WELCOME_MUTED_TEXT,
+  WELCOME_SEARCH_CTA_BORDER,
+} from '../screens/home/constants';
 import { sendIncomingShareToFriend } from '../utils/sendIncomingShare';
 
 type FriendRow = {
@@ -38,11 +45,30 @@ type Props = {
   onClose: () => void;
 };
 
+/** Выбранная карточка — как в режиме выбора списка «Друзья». */
+const CARD_SELECTED_BG = 'rgba(42, 88, 104, 0.28)';
+const CARD_PRESSED_BG = 'rgba(14, 85, 119, 0.14)';
+const SELECTED_MARK = WELCOME_BRAND_VI_FILL_GRADIENT[2];
+/** «Отправить»: неактивная — стекло CTA «Найти собеседника», активная — тон выбранной карточки. */
+const SEND_IDLE_BG = 'rgba(14, 85, 119, 0.12)';
+const SEND_ACTIVE_BG = 'rgba(74, 122, 140, 0.34)';
+const SEND_ACTIVE_PRESSED_BG = 'rgba(74, 122, 140, 0.46)';
+const SEND_ACTIVE_BORDER = 'rgba(106, 163, 181, 0.45)';
+
+/** Выбор друзей для контента, отправленного в LiVi из другого приложения («Поделиться»). */
 export default function IncomingSharePickerModal({ visible, items, onClose }: Props) {
+  return (
+    <FullScreenPortal visible={visible} onRequestClose={onClose}>
+      <SharePickerContent visible={visible} items={items} onClose={onClose} />
+    </FullScreenPortal>
+  );
+}
+
+function SharePickerContent({ visible, items, onClose }: Props) {
   const insets = useSafeAreaInsets();
+  const { width, height } = useSafeAreaFrame();
   const lang = useLang((s) => s.lang);
-  const { theme, isDark } = useAppTheme();
-  const accent = useMemo(() => uiAccent(isDark), [isDark]);
+  const landscape = width > height;
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
   const [friends, setFriends] = useState<FriendRow[]>([]);
@@ -120,165 +146,252 @@ export default function IncomingSharePickerModal({ visible, items, onClose }: Pr
     } finally {
       setSending(false);
       setSelectedFriendIds(new Set());
+      // После отправки экран закрывается сам.
       onClose();
     }
   };
 
   const selectedCount = selectedFriendIds.size;
-
-  if (!visible) return null;
-
-  const textColor = isDark ? '#F4F5F7' : theme.colors.onSurface;
-  const subColor = theme.colors.onSurfaceVariant as string;
-  const backBtnTop = insets.top + (Platform.OS === 'android' ? 12 : 8);
-  const backBtnHeight = 40;
-  const titleGapBelowBack = 36;
+  const canSend = selectedCount > 0 && !loading && !sending;
+  const sideInset = landscape ? 16 : WELCOME_FRIENDS_LIST_INSET;
+  const rowHeight = landscape ? 46 : 62;
+  const avatarSize = landscape ? 34 : 44;
+  const closeSize = landscape ? 36 : 40;
 
   return (
-    <Modal visible animationType="fade" onRequestClose={onClose}>
-      <View style={{ flex: 1, backgroundColor: WELCOME_STAGE_BG }}>
-        <WelcomeStageBackground />
-        <ChatStyleBackButton
-          onPress={onClose}
-          iconColor={subColor}
-          iconSize={FRIEND_ACTION_ICON_SIZE - 2}
-          style={{
-            position: 'absolute',
-            zIndex: 10,
-            top: backBtnTop,
-            left: Platform.OS === 'ios' ? 15 : 17,
-            width: 40,
-            height: 40,
-            borderRadius: FRIEND_ACTION_BUTTON.borderRadius - 1,
-            ...(isDark
-              ? null
-              : {
-                  backgroundColor: 'rgba(0,0,0,0.06)',
-                  borderWidth: 1,
-                  borderColor: (theme.colors?.outline as string) || 'rgba(0,0,0,0.12)',
-                }),
-          }}
-        />
-        <View
-          style={{
-            flex: 1,
-            paddingTop: backBtnTop + backBtnHeight + titleGapBelowBack,
-            paddingHorizontal: 16,
-            paddingBottom: Math.max(insets.bottom, 16),
-            minHeight: 280,
-          }}
-        >
-          <Text style={{ textAlign: 'center', fontSize: 16, fontWeight: '700', color: subColor, marginBottom: 12 }}>
-            {t('shareToFriendTitle', lang)}
-          </Text>
-          <View style={{ flex: 1, minHeight: 180 }}>
+    <View style={styles.root}>
+      <WelcomeStageBackground />
+      <View
+        style={[
+          styles.page,
+          {
+            paddingTop: insets.top + (landscape ? 6 : 12),
+            paddingBottom: insets.bottom + (landscape ? 8 : 14),
+            paddingLeft: insets.left + sideInset,
+            paddingRight: insets.right + sideInset,
+          },
+        ]}
+      >
+        <View style={[styles.column, landscape && styles.columnLandscape]}>
+          <View style={[styles.header, { minHeight: closeSize }]}>
+            <Text
+              style={[styles.title, landscape && styles.titleLandscape]}
+              numberOfLines={1}
+            >
+              {t('shareToFriendTitle', lang)}
+            </Text>
+            <Pressable
+              onPress={onClose}
+              hitSlop={10}
+              accessibilityRole="button"
+              accessibilityLabel={t('storeClose', lang)}
+              style={({ pressed }) => [
+                styles.closeBtn,
+                { width: closeSize, height: closeSize, borderRadius: closeSize / 2 },
+                WELCOME_FLOAT_SHADOW_IOS,
+                pressed && styles.closeBtnPressed,
+              ]}
+            >
+              <WelcomeFloatShadow radius={closeSize / 2} />
+              <Ionicons name="close" size={landscape ? 20 : 22} color={WELCOME_HEADER_TITLE} />
+            </Pressable>
+          </View>
+
+          <View style={[styles.listWrap, landscape && styles.listWrapLandscape]}>
             <NativeViewGestureHandler disallowInterruption>
               {loading ? (
-                <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-                  <ActivityIndicator />
+                <View style={styles.center}>
+                  <ActivityIndicator color={WELCOME_MUTED_TEXT} />
                 </View>
               ) : (
                 <GHFlatList
                   data={friends}
                   keyExtractor={(it) => String(it._id)}
                   keyboardShouldPersistTaps="handled"
+                  showsVerticalScrollIndicator={false}
+                  contentContainerStyle={styles.listContent}
                   renderItem={({ item }) => {
                     const isSelected = selectedFriendIds.has(item._id);
                     return (
-                    <Pressable
-                      onPress={() => onPickFriend(item)}
-                      style={({ pressed }) => ({
-                        opacity: sending ? 0.7 : 1,
-                        flexDirection: 'row',
-                        alignItems: 'center',
-                        paddingVertical: 7,
-                        paddingHorizontal: 8,
-                        marginVertical: 4,
-                        borderRadius: 28,
-                        borderWidth: 1,
-                        borderColor: isSelected
-                          ? isDark
-                            ? accent.solid34
-                            : '#8B7BC8'
-                          : 'transparent',
-                        backgroundColor: isSelected
-                          ? isDark
-                            ? accent.vivid16
-                            : accent.forwardSendBg
-                          : pressed
-                          ? isDark
-                            ? 'rgba(255,255,255,0.08)'
-                            : 'rgba(0,0,0,0.05)'
-                          : 'transparent',
-                      })}
-                    >
-                      <AvatarImage
-                        userId={item._id}
-                        avatarVer={Number(item.avatarVer || 0)}
-                        uri={item.avatarThumbB64 || undefined}
-                        size={44}
-                        fallbackText={String((item.nick || '--').trim()?.[0] || '--').toUpperCase()}
-                      />
-                      <Text style={{ marginLeft: 12, flex: 1, fontSize: 16, fontWeight: '600', color: textColor }}>
-                        {(item.nick && String(item.nick).trim()) || '—'}
-                      </Text>
-                      <Ionicons
-                        name={isSelected ? 'checkmark-circle' : 'ellipse-outline'}
-                        size={22}
-                        color={isSelected ? accent.bright : subColor}
-                      />
-                    </Pressable>
+                      <Pressable
+                        onPress={() => onPickFriend(item)}
+                        accessibilityRole="checkbox"
+                        accessibilityState={{ checked: isSelected }}
+                        style={({ pressed }) => [
+                          styles.card,
+                          {
+                            height: rowHeight,
+                            borderRadius: landscape ? 14 : 16,
+                            marginBottom: landscape ? 3 : 6,
+                            paddingLeft: landscape ? 10 : 12,
+                            backgroundColor: isSelected
+                              ? CARD_SELECTED_BG
+                              : pressed
+                                ? CARD_PRESSED_BG
+                                : WELCOME_LIST_SURFACE,
+                            opacity: sending ? 0.7 : 1,
+                          },
+                        ]}
+                      >
+                        <AvatarImage
+                          userId={item._id}
+                          avatarVer={Number(item.avatarVer || 0)}
+                          uri={item.avatarThumbB64 || undefined}
+                          size={avatarSize}
+                          fallbackText={String((item.nick || '--').trim()?.[0] || '--').toUpperCase()}
+                        />
+                        <Text
+                          style={[styles.nick, landscape && styles.nickLandscape]}
+                          numberOfLines={1}
+                        >
+                          {(item.nick && String(item.nick).trim()) || '—'}
+                        </Text>
+                        <View style={styles.mark}>
+                          {isSelected ? (
+                            <Ionicons name="checkmark-circle" size={24} color={SELECTED_MARK} />
+                          ) : (
+                            <View style={styles.markEmpty} />
+                          )}
+                        </View>
+                      </Pressable>
                     );
                   }}
                   ListEmptyComponent={() => (
-                    <View style={{ paddingVertical: 24, alignItems: 'center' }}>
-                      <Text style={{ color: subColor, textAlign: 'center' }}>{t('chatForwardNoFriends', lang)}</Text>
+                    <View style={styles.empty}>
+                      <Text style={styles.emptyText}>{t('chatForwardNoFriends', lang)}</Text>
                     </View>
                   )}
                 />
               )}
             </NativeViewGestureHandler>
           </View>
-          <View style={{ flexDirection: 'row', gap: 10, marginTop: 10 }}>
-            <TouchableOpacity
-              onPress={onClose}
-              disabled={sending}
-              style={{
-                flex: 1,
-                paddingVertical: 12,
-                borderRadius: 12,
-                alignItems: 'center',
-                borderWidth: 1,
-                borderColor: isDark ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.1)',
-                opacity: sending ? 0.6 : 1,
-              }}
-            >
-              <Text style={{ color: accent.bright, fontWeight: '600' }}>{t('cancelAction', lang)}</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              onPress={onSend}
-              disabled={selectedCount === 0 || loading || sending}
-              style={{
-                flex: 1,
-                paddingVertical: 12,
-                borderRadius: 12,
-                alignItems: 'center',
-                justifyContent: 'center',
-                backgroundColor: accent.bright,
-                opacity: selectedCount === 0 || loading || sending ? 0.45 : 1,
-              }}
-            >
-              {sending ? (
-                <ActivityIndicator color="#0D0E10" />
-              ) : (
-                <Text style={{ color: '#0D0E10', fontWeight: '700' }}>
-                  {selectedCount > 0 ? `${t('send', lang)} (${selectedCount})` : t('send', lang)}
+
+          <Pressable
+            onPress={onSend}
+            disabled={!canSend}
+            accessibilityRole="button"
+            accessibilityState={{ disabled: !canSend }}
+            style={({ pressed }) => [
+              styles.send,
+              landscape && styles.sendLandscape,
+              canSend
+                ? {
+                    backgroundColor: pressed ? SEND_ACTIVE_PRESSED_BG : SEND_ACTIVE_BG,
+                    borderColor: SEND_ACTIVE_BORDER,
+                    transform: [{ scale: pressed ? 0.98 : 1 }],
+                  }
+                : {
+                    backgroundColor: SEND_IDLE_BG,
+                    borderColor: WELCOME_SEARCH_CTA_BORDER,
+                    opacity: sending ? 1 : 0.6,
+                  },
+            ]}
+          >
+            {sending ? (
+              <ActivityIndicator color={WELCOME_HEADER_TITLE} />
+            ) : (
+              <>
+                <Ionicons
+                  name="send"
+                  size={landscape ? 16 : 18}
+                  color={canSend ? WELCOME_FRIEND_ACTION_ICON : WELCOME_MUTED_TEXT}
+                />
+                <Text
+                  style={[
+                    styles.sendText,
+                    landscape && styles.sendTextLandscape,
+                    { color: canSend ? WELCOME_HEADER_TITLE : WELCOME_MUTED_TEXT },
+                  ]}
+                  numberOfLines={1}
+                >
+                  {selectedCount > 0 ? `${t('send', lang)} · ${selectedCount}` : t('send', lang)}
                 </Text>
-              )}
-            </TouchableOpacity>
-          </View>
+              </>
+            )}
+          </Pressable>
         </View>
       </View>
-    </Modal>
+    </View>
   );
 }
+
+const styles = StyleSheet.create({
+  root: { flex: 1 },
+  page: { flex: 1 },
+  column: {
+    flex: 1,
+    width: '100%',
+    maxWidth: 640,
+    alignSelf: 'center',
+  },
+  columnLandscape: { maxWidth: 560 },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  title: {
+    flex: 1,
+    minWidth: 0,
+    color: WELCOME_HEADER_TITLE,
+    fontSize: 20,
+    fontWeight: '600',
+    letterSpacing: 0.2,
+  },
+  titleLandscape: { fontSize: 17 },
+  closeBtn: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: WELCOME_CHROME_BTN_BG,
+  },
+  closeBtnPressed: { opacity: 0.75, transform: [{ scale: 0.96 }] },
+  listWrap: { flex: 1, marginTop: 16 },
+  listWrapLandscape: { marginTop: 8 },
+  listContent: { paddingBottom: 8 },
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  card: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingRight: 14,
+    overflow: 'hidden',
+  },
+  nick: {
+    flex: 1,
+    minWidth: 0,
+    marginLeft: 12,
+    color: LIVI.white,
+    fontSize: 16,
+    lineHeight: 20,
+    fontWeight: '700',
+  },
+  nickLandscape: { fontSize: 14, lineHeight: 17, marginLeft: 10 },
+  mark: {
+    width: 24,
+    height: 24,
+    marginLeft: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  markEmpty: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderColor: WELCOME_MUTED_TEXT,
+  },
+  empty: { paddingVertical: 32, alignItems: 'center' },
+  emptyText: { color: WELCOME_MUTED_TEXT, fontSize: 15, textAlign: 'center' },
+  send: {
+    marginTop: 10,
+    height: 50,
+    borderRadius: 16,
+    borderWidth: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+  },
+  sendLandscape: { marginTop: 6, height: 42, borderRadius: 14 },
+  sendText: { fontSize: 16, fontWeight: '600', letterSpacing: 0.2 },
+  sendTextLandscape: { fontSize: 15 },
+});

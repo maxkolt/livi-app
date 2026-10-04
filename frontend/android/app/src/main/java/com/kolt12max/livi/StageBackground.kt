@@ -27,7 +27,7 @@ import kotlin.math.cos
 import kotlin.math.roundToInt
 
 /**
- * Основной фон LiVi: бирюза у верхнего и нижнего края растворяется к середине в #0A111B.
+ * Основной фон LiVi: бирюза у верхнего и нижнего края растворяется к середине в #0C1521.
  * Тот же профиль, что у JS WelcomeStageBackground (HOME_STAGE_EDGE_RGB, HOME_STAGE_MID).
  *
  * Тёмному градиенту не хватает 8 бит на канал: без дизеринга он идёт полосами. Градиент
@@ -46,11 +46,11 @@ import kotlin.math.roundToInt
 object StageBackground {
   private const val TAG = "StageBackground"
 
-  /** #0A111B — середина экрана. */
-  private val MID = floatArrayOf(10f, 17f, 27f)
+  /** #0C1521 — середина экрана. Было #0A111B: весь синий мягко поднят ×1.22, оттенок тот же. */
+  private val MID = floatArrayOf(12f, 21f, 33f)
   /** Тон у верхнего и нижнего края (HOME_STAGE_EDGE_RGB). */
-  private val EDGE = floatArrayOf(12f, 25f, 37f)
-  private const val MID_COLOR = 0xFF0A111B.toInt()
+  private val EDGE = floatArrayOf(15f, 30f, 45f)
+  private const val MID_COLOR = 0xFF0C1521.toInt()
 
   /** res/raw/stage_blue_noise.bin — scripts/generate-stage-blue-noise.js. */
   internal const val NOISE_SIZE = 64

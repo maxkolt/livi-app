@@ -159,6 +159,65 @@ export function getEnvFallbackConfiguration(options?: { forceRelayOnly?: boolean
   } as any;
 }
 
+/**
+ * Через VPN новое соединение к API иногда виснет 8–30 с, а соседнее открывается сразу.
+ * Если ответа нет ICE_FETCH_HEDGE_DELAY_MS, шлём второй такой же запрос и берём первый ответ.
+ */
+const ICE_FETCH_HEDGE_DELAY_MS = 1500;
+
+function fetchWithHedge(url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
+  return new Promise<Response>((resolve, reject) => {
+    const controllers: AbortController[] = [];
+    let settled = false;
+    let failed = 0;
+    let lastError: unknown = null;
+    const finish = () => {
+      settled = true;
+      clearTimeout(hedgeTimer);
+      clearTimeout(deadline);
+    };
+    const launch = () => {
+      const controller = new AbortController();
+      controllers.push(controller);
+      fetch(url, { ...init, signal: controller.signal }).then(
+        (response) => {
+          if (settled) return;
+          finish();
+          // Проигравший запрос отменяем; у победителя тело ещё читается — его не трогаем.
+          controllers.forEach((c) => c !== controller && c.abort());
+          resolve(response);
+        },
+        (error) => {
+          if (settled) return;
+          failed += 1;
+          lastError = error;
+          if (controllers.length < 2) {
+            clearTimeout(hedgeTimer);
+            launch();
+          } else if (failed >= controllers.length) {
+            finish();
+            reject(lastError);
+          }
+        },
+      );
+    };
+    const hedgeTimer = setTimeout(() => {
+      if (!settled && controllers.length < 2) launch();
+    }, ICE_FETCH_HEDGE_DELAY_MS);
+    const deadline = setTimeout(() => {
+      if (settled) return;
+      finish();
+      controllers.forEach((c) => c.abort());
+      const error = new Error('aborted');
+      error.name = 'AbortError';
+      reject(error);
+    }, timeoutMs);
+    launch();
+  });
+}
+
+let iceFetchInFlight: Promise<RTCConfiguration> | null = null;
+
 export async function getIceConfiguration(forceRefresh = false, options?: { forceRelayOnly?: boolean }): Promise<RTCConfiguration> {
   const forceRelayOnly = !!options?.forceRelayOnly;
   const relayActive = forceRelayOnly || (forcedRelayUntil > Date.now());
@@ -167,7 +226,31 @@ export async function getIceConfiguration(forceRefresh = false, options?: { forc
   if (!forceRefresh && cachedConfig && now < cacheUntil) {
     return relayActive ? withRelayOnlyPolicy(cachedConfig) : cachedConfig;
   }
+  // Предзагрузка и подключение часто совпадают по времени — второй ждёт тот же запрос.
+  if (!forceRefresh && iceFetchInFlight) {
+    const cfg = await iceFetchInFlight;
+    return relayActive ? withRelayOnlyPolicy(cfg) : cfg;
+  }
+  const request = fetchIceConfiguration(forceRelayOnly, relayActive, now);
+  if (!forceRefresh) {
+    iceFetchInFlight = request;
+    request.finally(() => {
+      if (iceFetchInFlight === request) iceFetchInFlight = null;
+    }).catch(() => {});
+  }
+  return request;
+}
 
+/** Начать загрузку ICE заранее (экран рандом-чата, входящий звонок): к подключению она уже в кэше. */
+export function prefetchIceConfiguration(): void {
+  void getIceConfiguration(false).catch(() => {});
+}
+
+async function fetchIceConfiguration(
+  forceRelayOnly: boolean,
+  relayActive: boolean,
+  now: number,
+): Promise<RTCConfiguration> {
   // Таймауты: первая попытка 8s (VPN / медленный DNS), вторая 15s для надёжности
   const maxRetries = 2;
   const timeoutPerAttempt = [8000, 15000];
@@ -176,24 +259,22 @@ export async function getIceConfiguration(forceRefresh = false, options?: { forc
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     const timeoutMs = timeoutPerAttempt[attempt - 1] ?? 5000;
     try {
-      // Используем AbortController для таймаута
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
       const installId = await getInstallId().catch(() => '');
       const headers: Record<string, string> = {
         'Accept': 'application/json',
       };
       if (installId) headers['x-install-id'] = String(installId);
 
-      const r = await fetch(`${API_BASE}/api/turn-credentials`, { 
-        method: 'GET',
-        signal: controller.signal,
-        headers,
-        // Дополнительные опции для VPN
-        cache: 'no-cache',
-      } as any);
-
-      clearTimeout(timeoutId);
+      const r = await fetchWithHedge(
+        `${API_BASE}/api/turn-credentials`,
+        {
+          method: 'GET',
+          headers,
+          // Дополнительные опции для VPN
+          cache: 'no-cache',
+        } as any,
+        timeoutMs,
+      );
 
       if (r.ok) {
         const j = await r.json();

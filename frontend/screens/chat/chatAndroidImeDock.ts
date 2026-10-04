@@ -31,6 +31,18 @@ export type AndroidImeDockSample = {
 const SCALE_MIN = 0.85;
 const SCALE_MAX = 1.5;
 
+/**
+ * SafeAreaProvider may briefly publish bottom=0 while Android recreates its
+ * window after sleep. Keep the last real navigation inset so the composer
+ * cannot fall below the system buttons for that transient frame.
+ */
+export function resolveStableAndroidNavInset(previousRaw: number, nextRaw: number): number {
+  const previous = Math.max(0, Math.round(Number(previousRaw) || 0));
+  const next = Math.max(0, Math.round(Number(nextRaw) || 0));
+  if (previous > 1 && next <= 1) return previous;
+  return next;
+}
+
 export function clampAndroidImeHeightScale(scaleRaw: number): number {
   const scale = Number(scaleRaw);
   if (!Number.isFinite(scale) || scale <= 0) return 1;

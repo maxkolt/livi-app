@@ -3,11 +3,17 @@
 import React from "react";
 import { Animated, Text, View } from "react-native";
 import { t, type Lang } from "../../utils/i18n";
+import { CHAT_ROW_SERIES_GAP } from "./ChatMessageItem";
 import { ChatPeerActivityLabel } from "./ChatPeerActivityLabel";
 import type { PeerActivity } from "./useChatTyping";
 
-/** Visible gap height between last message and input top. */
-export const CHAT_TYPING_GAP_H = -20;
+/** Feed padding reserved above the composer for the status strip. */
+export const CHAT_STATUS_GAP_H = 28;
+/**
+ * Visible gap from the last bubble's bottom edge to the composer top: the feed
+ * padding plus that bubble's own bottom margin. Statuses are centered in it.
+ */
+export const CHAT_STATUS_SLOT_H = CHAT_STATUS_GAP_H + CHAT_ROW_SERIES_GAP;
 
 export function shouldShowChatGapCenter(
   peerActivity: PeerActivity,

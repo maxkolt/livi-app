@@ -2,6 +2,7 @@ import React from 'react';
 import { StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
 import MaskedView from '@react-native-masked-view/masked-view';
 import { LinearGradient } from 'expo-linear-gradient';
+import { NativeBlurSource } from '../../components/BackdropBlur';
 
 type ChatMessageEdgeFadeProps = {
   children: React.ReactNode;
@@ -10,18 +11,37 @@ type ChatMessageEdgeFadeProps = {
   top?: number;
   /** Высота зоны над композером. */
   bottom?: number;
+  /** Android: id ленты для стекла шапки и композера (размытие на GPU). */
+  sourceId?: string;
 };
 
 /**
  * Растворяет облака/текст под шапкой и композером через маску ленты.
  * Без BlurView/tint — фон chrome остаётся как был (просвечивание glass без затемнения).
+ *
+ * Android 10+: нативный источник со слоем только у полос растворения. MaskedView держал
+ * слой на всю ленту, и прокрутка на 120 Гц не укладывалась в кадр.
  */
 export function ChatMessageEdgeFade({
   children,
   style,
   top = 0,
   bottom = 0,
+  sourceId,
 }: ChatMessageEdgeFadeProps) {
+  if (NativeBlurSource) {
+    return (
+      <NativeBlurSource
+        style={[styles.root, style]}
+        sourceId={sourceId}
+        fadeTop={Math.max(0, top)}
+        fadeBottom={Math.max(0, bottom)}
+      >
+        {children}
+      </NativeBlurSource>
+    );
+  }
+
   if (top <= 0 && bottom <= 0) {
     return <View style={[styles.root, style]}>{children}</View>;
   }

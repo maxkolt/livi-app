@@ -229,6 +229,9 @@ function isExpectedSocketConnectError(error: unknown): boolean {
   );
 }
 
+/** Начало текущей попытки подключения — для лога «сколько ждали сокет» (под VPN это главное ожидание входа). */
+let connectAttemptStartedAt = 0;
+
 export async function applyAuthAndConnect() {
   if (shared.connectAttemptPromise) return shared.connectAttemptPromise;
 
@@ -285,6 +288,7 @@ export async function applyAuthAndConnect() {
       if (!socket.connected) {
         logger.debug("Connecting socket...");
         prewarmApiConnections("socket_connect", 1);
+        if (!connectAttemptStartedAt) connectAttemptStartedAt = Date.now();
         socket.connect();
 
         // IMPORTANT (VPN): do NOT abort on the first connect_error.
@@ -631,7 +635,12 @@ socket.on("connect", async () => {
       mgr.opts.reconnectionDelayMax = SOCKET_RECONNECT_DELAY_MAX_MS;
     }
   } catch {}
-  logger.debug(`[socket] connected ${socket.id} (API: ${API_BASE})`);
+  logger.info("[socket] connected", {
+    connectMs: connectAttemptStartedAt ? Date.now() - connectAttemptStartedAt : null,
+    transport: (socket as any)?.io?.engine?.transport?.name ?? null,
+    socketId: socket.id ?? null,
+  });
+  connectAttemptStartedAt = 0;
   // If we connected with installId in auth, handshake is considered valid.
   try {
     // @ts-ignore
@@ -643,9 +652,10 @@ socket.on("connect", async () => {
   if (shared.currentUserId && !(socket as any).data?.userId) {
     logger.debug("[socket] post-connect reauth (no userId in socket data yet)", { userId: shared.currentUserId });
     try {
+      const reauthStartedAt = Date.now();
       const reauthResponse = await emitReauthDeduped(shared.currentUserId);
       if (reauthResponse?.ok) {
-        logger.debug("[socket] Reauth successful after connect");
+        logger.info("[socket] reauth after connect ok", { reauthMs: Date.now() - reauthStartedAt });
       } else {
         logger.warn("[socket] Reauth failed after connect:", reauthResponse?.error);
         if (reauthResponse?.error === "user_not_found" || reauthResponse?.error === "not_found") {
@@ -674,12 +684,14 @@ socket.on("connect", async () => {
   } catch {}
 });
 
-socket.on("reconnect_attempt", () => {
+// В socket.io-client v4 reconnect_attempt шлёт Manager, а не Socket.
+socket.io.on("reconnect_attempt", () => {
   shared.reconnecting = true;
+  if (!connectAttemptStartedAt) connectAttemptStartedAt = Date.now();
 });
 // Manager `reconnect` не дублируем: после успешного переподключения снова срабатывает `connect` → один reauth через emitReauthDeduped.
 
-socket.on("disconnect", (r) => {
+socket.on("disconnect", (r, details?: any) => {
   // Временные отвалы: по ним считаем, что сокет в состоянии переподключения (для логов и isReconnecting()).
   // io server disconnect: корректное закрытие при деплое/restart (см. server:restarting на бэкенде)
   const transient = ["transport close", "ping timeout", "transport error", "io server disconnect"];
@@ -694,7 +706,11 @@ socket.on("disconnect", (r) => {
     const note = shared.realtimePaused ? "app in background / screen locked" : "user-initiated disconnect";
     logger.info(`[socket] temporary disconnect (${note}) reason=${reason || "unknown"}`);
   } else if (transient.includes(reason)) {
-    logger.debug(`[socket] disconnected (${reason}) reconnecting=${shared.reconnecting} (transient; reauth after reconnect if needed)`);
+    // info, не debug: под VPN обрывы — главная причина долгого входа, их надо видеть в логах.
+    logger.info(`[socket] disconnected (${reason}) reconnecting=${shared.reconnecting} (transient; reauth after reconnect if needed)`, {
+      detail: String(details?.description?.message ?? details?.message ?? details?.description ?? ""),
+      context: details?.context ? String(details.context?.message ?? details.context) : undefined,
+    });
   } else {
     logger.warn(`[socket] disconnected (${reason || "unknown"}) reconnecting=${shared.reconnecting}`);
   }

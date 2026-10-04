@@ -4,7 +4,19 @@ import {
   resolveAndroidImeDockTranslateY,
   resolveAndroidImeGapDp,
   resolveAndroidImeHeightScale,
+  resolveStableAndroidNavInset,
 } from './chatAndroidImeDock';
+
+describe('resolveStableAndroidNavInset', () => {
+  it('keeps the last real inset across a transient zero on resume', () => {
+    expect(resolveStableAndroidNavInset(24, 0)).toBe(24);
+  });
+
+  it('accepts the first and subsequent real inset values', () => {
+    expect(resolveStableAndroidNavInset(0, 24)).toBe(24);
+    expect(resolveStableAndroidNavInset(24, 18)).toBe(18);
+  });
+});
 
 describe('resolveAndroidImeHeightScale', () => {
   it('is 1 when kc is missing', () => {

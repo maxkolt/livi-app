@@ -980,22 +980,13 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
       </View>
   );
 
-  const hubScrollBody = accountOpen ? (
-    <View>
-      {hubAvatarSection}
-      {hubAccountPanel}
-      {hubListStack}
-      {hubLogoutButton}
-    </View>
-  ) : needsHubScroll ? (
-    <View>
-      {hubAvatarSection}
-      {hubListStack}
-      {hubLogoutButton}
-    </View>
-  ) : (
-    <View style={[styles.hubMainBalance, isTablet && styles.hubMainBalanceTablet]}>
-      <View style={styles.hubMainTop}>{hubAvatarSection}</View>
+  // Одна структура при любом состоянии: открытие ника меняло обёртки (View → ScrollView),
+  // аватар монтировался заново и мигал, пока картинка не загрузится снова.
+  const hubBalanced = !needsHubScroll;
+  const hubScrollBody = (
+    <View style={hubBalanced ? [styles.hubMainBalance, isTablet && styles.hubMainBalanceTablet] : null}>
+      <View style={hubBalanced ? styles.hubMainTop : null}>{hubAvatarSection}</View>
+      {accountOpen ? hubAccountPanel : null}
       {hubListStack}
       {hubLogoutButton}
     </View>
@@ -1218,11 +1209,12 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
                 {hubListStack}
                 {hubLogoutButton}
               </ScrollView>
-            ) : needsHubScroll ? (
+            ) : !isLandscape ? (
+              // Без скролла flexGrow контейнера растягивает hubMainBalance на всю высоту.
               <ScrollView
                 style={styles.hubMainDock}
                 contentContainerStyle={styles.hubMainDockScroll}
-                scrollEnabled
+                scrollEnabled={needsHubScroll}
                 nestedScrollEnabled
                 keyboardShouldPersistTaps="handled"
                 showsVerticalScrollIndicator={false}
@@ -1232,14 +1224,7 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
                 {hubScrollBody}
               </ScrollView>
             ) : (
-              <View
-                style={[
-                  styles.hubMainDock,
-                  isLandscape ? null : styles.hubMainDockClip,
-                ]}
-              >
-                {hubScrollBody}
-              </View>
+              <View style={styles.hubMainDock}>{hubScrollBody}</View>
             )}
           </View>
         ) : (
@@ -1373,9 +1358,6 @@ const styles = StyleSheet.create({
   hubMainDock: {
     flex: 1,
     minHeight: 0,
-  },
-  hubMainDockClip: {
-    overflow: 'hidden',
   },
   hubMainBalance: {
     flex: 1,

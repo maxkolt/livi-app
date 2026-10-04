@@ -25,7 +25,7 @@ type Props = {
   compact?: boolean;
 };
 
-export default function ChatEmojiKeyboard({
+function ChatEmojiKeyboard({
   isDark,
   surfaceBg,
   textColor,
@@ -382,3 +382,7 @@ const styles = StyleSheet.create({
     borderRadius: 13,
   },
 });
+
+// Панель держится собранной и в закрытом виде — без memo она перерисовывалась бы
+// вместе с ChatScreen на каждую набранную букву.
+export default React.memo(ChatEmojiKeyboard);

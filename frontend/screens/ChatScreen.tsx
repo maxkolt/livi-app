@@ -24,6 +24,7 @@ import {
   Image,
   StyleSheet,
   Share,
+  InteractionManager,
 } from "react-native";
 import { SystemBars } from 'react-native-edge-to-edge';
  
@@ -138,7 +139,11 @@ import {
   subscribeAndroidImeLiftCache,
   preloadAndroidImeLiftCache,
 } from './chat/androidImeLiftCache';
+import { ChatAttachSheet, type ChatAttachSheetHandle } from './chat/ChatAttachSheet';
+import { ChatRoundButton, chatRoundButtonColors } from './chat/ChatRoundButton';
 import {
+  CHAT_STATUS_GAP_H,
+  CHAT_STATUS_SLOT_H,
   ChatDeleteToastInline,
   ChatGapCenterIndicator,
   shouldShowChatDeleteToast,
@@ -151,8 +156,10 @@ import {
   formatAndroidImeDockLog,
   resolveAndroidImeGapDp,
   resolveAndroidImeHeightScale,
+  resolveStableAndroidNavInset,
 } from './chat/chatAndroidImeDock';
 import { WelcomeStageBackground, StageGradient } from './home/WelcomeStageBackground';
+import { BlurSourceFill, type BackdropSources } from '../components/BackdropBlur';
 import {
   WELCOME_CARD_BG,
   WELCOME_CHROME_EDGE_RADIUS,
@@ -243,6 +250,15 @@ type Props = { route: { params?: RouteParams }; navigation: any };
 const MSG_REACTIONS_COLLAPSED = 5;
 /** Как галочки «прочитано» в облаке сообщения. */
 const CHAT_READ_TICK_COLOR = 'hsl(108, 53.10%, 35.10%)';
+/** Компактная шапка чата: контент ближе к системной строке, как в Telegram. */
+const CHAT_HEADER_H = 48;
+const CHAT_HEADER_TOP_PADDING = 0;
+/** Last non-zero Android navigation inset survives ChatScreen remounts/resume. */
+let lastStableAndroidNavInset = 0;
+/** Текст и плейсхолдер «Сообщение» начинаются с одного отступа от кнопки эмодзи. */
+const COMPOSER_TEXT_INSET_LEFT = 6;
+/** Закрытая, но уже собранная панель эмодзи: в потоке, нулевой высоты и невидима. */
+const EMOJI_PANEL_PARKED_STYLE = { height: 0, overflow: 'hidden', opacity: 0 } as const;
 
 export default function ChatScreen({ route, navigation }: Props) {
   const insets = useSafeAreaInsets();
@@ -350,6 +366,11 @@ export default function ChatScreen({ route, navigation }: Props) {
     if (parts.length !== 4) return bg;
     return `rgba(${parts[0]}, ${parts[1]}, ${parts[2]}, 1)`;
   }, [LIVI.bg, isDark]);
+  // Круги mic/send не должны просвечивать поверх динамического glass-фона.
+  const { idle: COMPOSER_IDLE_BUTTON_BG, pressed: COMPOSER_PRESSED_BUTTON_BG } =
+    chatRoundButtonColors(isDark);
+  // Чуть более плотная стеклянная подложка поля ввода.
+  const COMPOSER_INPUT_BG = 'rgba(255,255,255,0.05)';
   const EMOJI_SURFACE_BG = isDark ? WELCOME_STAGE_BG : INPUT_BAR_BG;
 
   const BORDER_COLOR = theme.colors.outline as string;
@@ -486,6 +507,25 @@ export default function ChatScreen({ route, navigation }: Props) {
   const [keyboardInset, setKeyboardInset] = useState(0);
   const [androidImeInset, setAndroidImeInset] = useState(0);
   const [emojiPanelOpen, setEmojiPanelOpen] = useState(false);
+  // Панель эмодзи собираем заранее и держим собранной: её монтирование — сотни мс JS,
+  // и кнопка эмодзи открывала панель с заметной задержкой.
+  const [emojiPanelWarm, setEmojiPanelWarm] = useState(false);
+  useEffect(() => {
+    if (emojiPanelWarm) return;
+    if (emojiPanelOpen) {
+      setEmojiPanelWarm(true);
+      return;
+    }
+    if (loading || err) return;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const task = InteractionManager.runAfterInteractions(() => {
+      timer = setTimeout(() => setEmojiPanelWarm(true), 800);
+    });
+    return () => {
+      task.cancel();
+      if (timer) clearTimeout(timer);
+    };
+  }, [emojiPanelOpen, emojiPanelWarm, loading, err]);
   const androidNativeImeAvailableRef = useRef(false);
   const androidFallbackImeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const androidKeyboardProgressRef = useRef(0);
@@ -504,11 +544,16 @@ export default function ChatScreen({ route, navigation }: Props) {
   const androidImeDockLogAtRef = useRef(0);
   const safeAreaBottomRef = useRef(insets.bottom);
   safeAreaBottomRef.current = insets.bottom;
-  const androidPinnedNavInsetRef = useRef(Math.max(0, insets.bottom));
-  const [androidPinnedNavInset, setAndroidPinnedNavInset] = useState(Math.max(0, insets.bottom));
+  const initialAndroidNavInset = resolveStableAndroidNavInset(
+    lastStableAndroidNavInset,
+    insets.bottom,
+  );
+  const androidPinnedNavInsetRef = useRef(initialAndroidNavInset);
+  const [androidPinnedNavInset, setAndroidPinnedNavInset] = useState(initialAndroidNavInset);
 
   const syncAndroidPinnedNavInset = React.useCallback((nextRaw: number) => {
-    const next = Math.max(0, Math.round(Number(nextRaw) || 0));
+    const next = resolveStableAndroidNavInset(androidPinnedNavInsetRef.current, nextRaw);
+    if (next > 1) lastStableAndroidNavInset = next;
     if (Math.abs(androidPinnedNavInsetRef.current - next) <= 1) return;
     androidPinnedNavInsetRef.current = next;
     setAndroidPinnedNavInset(next);
@@ -720,7 +765,7 @@ export default function ChatScreen({ route, navigation }: Props) {
   const composerPlaceholder = t('chatMessagePlaceholder', lang);
   // Android: до первого onLayout — оценка нижней панели (после более низкого инпута).
   // Не завышать: иначе ListHeader spacer держит лишний зазор до последнего сообщения.
-  const estimatedInputHeight = 100;
+  const estimatedInputHeight = 72;
   const [inputHeight, setInputHeight] = useState(estimatedInputHeight);
   const [messageText, setMessageText] = useState("");
   const messageTextRef = useRef("");
@@ -916,9 +961,8 @@ export default function ChatScreen({ route, navigation }: Props) {
     setComposeViewerVisible,
     composeAsset,
     setComposeAsset,
-    showAttachSheet,
-    setShowAttachSheet,
   } = useChatMediaViewers();
+  const attachSheetRef = useRef<ChatAttachSheetHandle>(null);
 
   // Обертка для setReadStatuses с автосохранением. Стабильная: она в deps подписок useChatRealtime,
   // и новая функция на каждый рендер переподписывала их — а событие очереди, пришедшее во время
@@ -1173,7 +1217,7 @@ export default function ChatScreen({ route, navigation }: Props) {
     (layout: { x: number; y: number; width: number; height: number }) => {
       if (!(layout.height > 0)) return false;
       const winH = Dimensions.get('window').height;
-      const headerBottom = Math.max(0, insets.top) + 56 + 14;
+      const headerBottom = Math.max(0, insets.top) + CHAT_HEADER_H + CHAT_HEADER_TOP_PADDING;
       const bottomReserve =
         Platform.OS === 'android'
           ? androidKeyboardPad
@@ -1533,8 +1577,8 @@ export default function ChatScreen({ route, navigation }: Props) {
     };
   }, []);
 
-  const headerH = 56;
-  const headerTopPadding = 14;
+  const headerH = CHAT_HEADER_H;
+  const headerTopPadding = CHAT_HEADER_TOP_PADDING;
   const headerTotalH = headerH + headerTopPadding;
 
   const resolveAvatar = React.useCallback((s?: string) => {
@@ -2104,15 +2148,24 @@ export default function ChatScreen({ route, navigation }: Props) {
     });
   }, [peerId, peerNameState, peerAvatarVerState, fullAvatarUri, peerAvatarThumbB64Param, peerOnline]);
 
+  // Стекло шапки и композера (Android 12+): фон и обои как есть, лента — размытой.
+  const chatBlurKey = React.useId();
+  const chatBlurStageId = `${chatBlurKey}-stage`;
+  const chatBlurFeedId = `${chatBlurKey}-feed`;
+  const chatBackdrop = React.useMemo<BackdropSources>(
+    () => ({ background: [chatBlurStageId], blur: [chatBlurFeedId] }),
+    [chatBlurStageId, chatBlurFeedId],
+  );
+
   const headerApi = useChatHeader({
     lang,
     headerH,
     headerTopPadding,
+    systemTopInset: Math.max(0, insets.top),
     LIVI,
     headerBg: CHAT_HEADER_BG,
     navigation,
     isDark,
-    outlineColor: (theme.colors?.outline as string) || 'rgba(0,0,0,0.12)',
     peerNameState,
     peerOnline,
     peerId,
@@ -2129,6 +2182,7 @@ export default function ChatScreen({ route, navigation }: Props) {
     selectAllLoaded,
     startForwardSelected,
     confirmDeleteSelected,
+    backdrop: chatBackdrop,
   });
   const headerEl = headerApi.headerEl;
 
@@ -2306,7 +2360,7 @@ export default function ChatScreen({ route, navigation }: Props) {
         }
       );
     } else {
-      setShowAttachSheet(true);
+      attachSheetRef.current?.open();
     }
   };
 
@@ -2420,8 +2474,18 @@ export default function ChatScreen({ route, navigation }: Props) {
     setRetryUiForId((prev) => (prev === id ? null : id));
   }, []);
 
+  // Фон композера продолжается до физического края экрана одним слоем.
+  // В emoji-панели Android нижний inset уже находится внутри самой панели.
+  const composerSystemBottomInset = Platform.OS === 'android'
+    ? emojiPanelOpen
+      ? 0
+      : Math.max(0, androidPinnedNavInset, insets.bottom)
+    : Math.max(0, insets.bottom);
+
   const handleInputBarLayout = React.useCallback((e: any) => {
-    const h = Math.max(0, Math.round(Number(e?.nativeEvent?.layout?.height || 0)));
+    const measuredH = Math.max(0, Math.round(Number(e?.nativeEvent?.layout?.height || 0)));
+    // Продолжение под системную навигацию — фон, а не высота композера для ленты.
+    const h = Math.max(0, measuredH - composerSystemBottomInset);
     if (!h || Math.abs(inputHeight - h) <= 1) return;
     // Во время IME-анимации на Android не переписываем высоту — иначе paddingTop
     // списка меняется поверх native translate и даёт прыжок в конце.
@@ -2433,14 +2497,14 @@ export default function ChatScreen({ route, navigation }: Props) {
       return;
     }
     setInputHeight(h);
-  }, [inputHeight]);
+  }, [composerSystemBottomInset, inputHeight]);
 
   // Список на весь экран под chrome: облака уезжают под шапку/композер и растворяются у края.
   // Инсеты — через padding контента; под IME оставляем только keyboard pad.
   const resolvedInputBarH = inputHeight > 0 ? inputHeight : estimatedInputHeight;
-  // One persistent status slot on every Android device. Typing/recording and
-  // transient delivery/deletion labels use it without moving chat bubbles.
-  const androidInlineStatusGapH = 24;
+  // One persistent status slot on every device. Typing/recording/deletion
+  // labels are centered here without moving the last bubble.
+  const InlineGapIndicator = DeleteToastInline || (!isEmpty ? GapCenterIndicator : null);
   const androidEmojiBottomReserve = emojiPanelOpen
     ? chatEmojiPanelHeight + Math.max(0, insets.bottom)
     : 0;
@@ -2448,7 +2512,7 @@ export default function ChatScreen({ route, navigation }: Props) {
   useEffect(() => {
     if (Platform.OS !== 'android') return;
     scheduleScrollToBottom(0);
-  }, [androidInlineStatusGapH]);
+  }, []);
   // Empty: центр в зоне над композером (+IME / emoji).
   const androidEmptyBottomPad = Math.max(
     72,
@@ -2632,44 +2696,18 @@ export default function ChatScreen({ route, navigation }: Props) {
   );
 
   const ChatChrome = isDark ? StageGradient : View;
-  const chatChromeBottomExtra = isDark ? ({ translucent: true, mirror: true } as const) : {};
-  // Системные зоны продолжают плотный край chrome тем же цветом и альфой:
-  // затемнение блоков сохраняется, а на границе нет смены тона.
-  const systemTopChromeBg = isDark ? 'rgb(11, 20, 31)' : CHAT_HEADER_BG;
-  const systemBottomChromeBg = isDark ? 'rgb(11, 20, 31)' : INPUT_BAR_BG;
-  const systemBottomChromeH = Platform.OS === 'android'
-    ? Math.max(0, androidPinnedNavInset, insets.bottom)
-    : Math.max(0, insets.bottom);
+  const chatChromeBottomExtra = isDark
+    ? ({ translucent: true, mirror: true, backdrop: chatBackdrop } as const)
+    : {};
 
   return (
     <View style={{ flex: 1, backgroundColor: WELCOME_STAGE_BG }}>
+    {/* Под стеклом фон и обои — без размытия (размывается только лента). */}
+    <BlurSourceFill sourceId={chatBlurStageId}>
     <WelcomeStageBackground />
     {/* Обоина на весь экран: от верхнего края до нижнего, под glass-шапкой и композером. */}
     {!loading && !err ? <ChatParallaxWallpaper isDark={isDark} /> : null}
-    <View
-      pointerEvents="none"
-      style={{
-        position: 'absolute',
-        top: 0,
-        left: chatChromeSideInset,
-        right: chatChromeSideInset,
-        height: Math.max(0, insets.top),
-        zIndex: 1,
-        backgroundColor: systemTopChromeBg,
-      }}
-    />
-    <View
-      pointerEvents="none"
-      style={{
-        position: 'absolute',
-        left: chatChromeSideInset,
-        right: chatChromeSideInset,
-        bottom: 0,
-        height: systemBottomChromeH,
-        zIndex: 1,
-        backgroundColor: systemBottomChromeBg,
-      }}
-    />
+    </BlurSourceFill>
     <SafeAreaView 
       // IMPORTANT: color the top safe-area (status bar area) to match the header.
       // Otherwise on Android (with translucent StatusBar) you'll see a white strip above the header.
@@ -2684,7 +2722,7 @@ export default function ChatScreen({ route, navigation }: Props) {
         // Не блокируем весь экран pointerEvents='none': на Android это иногда "съедало" первый тап.
         pointerEvents="auto"
       >
-        <View style={{ flex: 1, overflow: 'hidden', backgroundColor: 'transparent' }}>
+        <View style={{ flex: 1, overflow: 'visible', backgroundColor: 'transparent' }}>
         {loading ? (
           <Loading />
         ) : err ? (
@@ -2709,11 +2747,11 @@ export default function ChatScreen({ route, navigation }: Props) {
         ) : Platform.OS === 'ios' ? (
           // iOS: padding из фактического frame обновляется и при смене высоты уже открытой клавиатуры.
           (<View style={{ flex: 1, paddingBottom: emojiPanelOpen ? 0 : keyboardInset }}>
-            <View style={{ flex: 1, overflow: 'hidden' }}>
+            <View style={{ flex: 1, overflow: 'visible' }}>
             <ChatMessageEdgeFade
               style={{ flex: 1 }}
               top={headerTotalH}
-              bottom={resolvedInputBarH + 14}
+              bottom={resolvedInputBarH + CHAT_STATUS_GAP_H}
             >
             <FlatList
               ref={flatListRef}
@@ -2728,7 +2766,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 flexGrow: 1,
                 justifyContent: showEmpty ? 'center' : 'flex-end',
                 paddingTop: headerTotalH + 10,
-                paddingBottom: resolvedInputBarH + 14,
+                paddingBottom: resolvedInputBarH + CHAT_STATUS_GAP_H,
                 paddingHorizontal: chatListSideInset,
               }}
               ListFooterComponent={null}
@@ -2763,34 +2801,21 @@ export default function ChatScreen({ route, navigation }: Props) {
             />
             </ChatMessageEdgeFade>
             {chatEmptyFeedPlaceholder}
-            {DeleteToastInline ? (
+            {InlineGapIndicator ? (
               <View
                 pointerEvents="none"
                 style={{
                   position: 'absolute',
                   left: 0,
                   right: 0,
-                  bottom: resolvedInputBarH + 8,
+                  bottom: resolvedInputBarH,
+                  height: CHAT_STATUS_SLOT_H,
                   alignItems: 'center',
+                  justifyContent: 'center',
                   zIndex: 8,
                 }}
               >
-                {DeleteToastInline}
-              </View>
-            ) : null}
-            {!isEmpty && GapCenterIndicator ? (
-              <View
-                pointerEvents="none"
-                style={{
-                  position: 'absolute',
-                  left: 0,
-                  right: 0,
-                  bottom: Math.max(resolvedInputBarH, 72) + 4,
-                  alignItems: 'center',
-                  zIndex: 8,
-                }}
-              >
-                {GapCenterIndicator}
+                {InlineGapIndicator}
               </View>
             ) : null}
             {/* Поле ввода для iOS — поверх ленты, облака уезжают под него */}
@@ -2800,53 +2825,26 @@ export default function ChatScreen({ route, navigation }: Props) {
                 position: 'absolute',
                 left: chatChromeSideInset,
                 right: chatChromeSideInset,
-                bottom: 0,
+                bottom: -composerSystemBottomInset,
                 zIndex: 20,
                 backgroundColor: isDark ? undefined : INPUT_BAR_BG,
-                paddingHorizontal: 16,
-                paddingTop: voiceIsRecording ? 8 : 18,
-                // Важно: симметричные отступы сверху/снизу вокруг инпута
-                // SafeAreaView уже обрабатывает safe area, поэтому не добавляем insets.bottom
-                paddingBottom: 18,
+                paddingHorizontal: 6,
+                // Без зависимости от записи: иначе высота композера меняется
+                // и лента над ним сдвигается при старте/отмене голосового.
+                paddingTop: 6,
+                // Контент остаётся в safe-area, а этот же фон без стыка идёт
+                // дальше под системную навигацию до физического края экрана.
+                paddingBottom: 2 + composerSystemBottomInset,
                 overflow: 'hidden',
                 borderTopLeftRadius: WELCOME_CHROME_EDGE_RADIUS,
                 borderTopRightRadius: WELCOME_CHROME_EDGE_RADIUS,
               }}
               onLayout={handleInputBarLayout}
             >
-              {voiceIsRecording && (
-                <View style={{ alignItems: 'center', marginBottom: 8 }}>
-                  <View
-                    style={{
-                      flexDirection: 'row',
-                      alignItems: 'center',
-                      paddingHorizontal: 12,
-                      paddingVertical: 6,
-                      borderRadius: 14,
-                      backgroundColor: isDark ? 'rgba(255,90,103,0.14)' : 'rgba(255,90,103,0.12)',
-                      borderWidth: 1,
-                      borderColor: 'rgba(255,90,103,0.28)',
-                    }}
-                  >
-                    <Animated.View
-                      style={{
-                        width: 8,
-                        height: 8,
-                        borderRadius: 4,
-                        backgroundColor: '#FF5A67',
-                        marginRight: 8,
-                        opacity: trashFlash.interpolate({ inputRange: [0, 1], outputRange: [1, 0.5] }),
-                      }}
-                    />
-                    <Text style={{ color: LIVI.white, fontSize: 12, fontWeight: '700' }}>
-                      {t('chatRecordingTimed', lang).replace('{duration}', formatDuration(Math.min(voiceRecordMs, VOICE_MAX_MS)))}
-                    </Text>
-                    <Text style={{ color: LIVI.titan, fontSize: 12, fontWeight: '600', marginLeft: 6 }}>
-                      / 1:00
-                    </Text>
-                  </View>
-                </View>
-              )}
+              <View
+                collapsable={false}
+                style={{ zIndex: 2, elevation: 2 }}
+              >
               <E2eChatBanner
                 lang={lang}
                 peerId={peerId}
@@ -2891,7 +2889,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 style={{
                   flexDirection: "row",
                   alignItems: "center",
-                  backgroundColor: "rgba(255,255,255,0.06)",
+                  backgroundColor: COMPOSER_INPUT_BG,
                   borderRadius: 24,
                   paddingHorizontal: 14,
                   paddingVertical: Platform.OS === 'ios' ? 5 : 2,
@@ -2913,7 +2911,11 @@ export default function ChatScreen({ route, navigation }: Props) {
                       ref={(r) => { trashMeasureRef.current = r as any; }}
                       onLayout={() => updateTrashZone()}
                       style={{
-                        padding: 2,
+                        // Тот же круг 36×36, что у кнопки картинки, — высота строки не меняется.
+                        width: 36,
+                        height: 36,
+                        alignItems: 'center',
+                        justifyContent: 'center',
                         transform: [
                           { scale: trashFlash.interpolate({ inputRange: [0, 1], outputRange: [1, 1.08] }) },
                           { rotate: trashLid.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '-14deg'] }) },
@@ -2925,31 +2927,33 @@ export default function ChatScreen({ route, navigation }: Props) {
                     </Animated.View>
                   </Pressable>
                 ) : (
-                  <TouchableOpacity
+                  <ChatRoundButton
                     onPress={handleAttachments}
                     hitSlop={COMPOSER_HIT_ATTACH}
-                    style={{
-                      padding: 2,
-                      marginRight: 12,
-                    }}
+                    accessibilityLabel={t('chooseFromGallery', lang)}
+                    backgroundColor={COMPOSER_IDLE_BUTTON_BG}
+                    pressedBackgroundColor={COMPOSER_PRESSED_BUTTON_BG}
+                    marginRight={12}
                   >
                     <Ionicons name="image" size={28} color={LIVI.titan} />
-                  </TouchableOpacity>
+                  </ChatRoundButton>
                 )}
 
                 {!voiceIsRecording ? (
-                  <TouchableOpacity
+                  <ChatRoundButton
                     onPress={toggleEmojiPanel}
                     hitSlop={{ top: 10, bottom: 10, left: 6, right: 6 }}
-                    style={{ padding: 2, marginRight: 8 }}
                     accessibilityLabel="Emoji"
+                    backgroundColor={COMPOSER_IDLE_BUTTON_BG}
+                    pressedBackgroundColor={COMPOSER_PRESSED_BUTTON_BG}
+                    marginRight={8}
                   >
                     <Ionicons
                       name={emojiPanelOpen ? 'keypad-outline' : 'happy-outline'}
                       size={26}
                       color={emojiPanelOpen ? WELCOME_NAV_ACTIVE_ACCENT.softText : LIVI.titan}
                     />
-                  </TouchableOpacity>
+                  </ChatRoundButton>
                 ) : null}
 
                 {/* minWidth:0 — иначе Android multiline TextInput раздувает hit-box и перекрывает микрофон/отправку */}
@@ -2962,6 +2966,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                       lineHeight: composerLineHeight,
                       paddingTop: 2,
                       paddingBottom: 2,
+                      paddingLeft: COMPOSER_TEXT_INSET_LEFT,
                       maxHeight: composerTextInputMaxHeight,
                     }}
                     placeholder=""
@@ -2983,12 +2988,41 @@ export default function ChatScreen({ route, navigation }: Props) {
                     autoCorrect={true}
                     spellCheck={true}
                   />
+                  {voiceIsRecording ? (
+                    <View
+                      pointerEvents="none"
+                      style={{
+                        ...StyleSheet.absoluteFillObject,
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                      }}
+                    >
+                      <Animated.View
+                        style={{
+                          width: 8,
+                          height: 8,
+                          borderRadius: 4,
+                          backgroundColor: '#FF5A67',
+                          marginRight: 8,
+                          opacity: trashFlash.interpolate({ inputRange: [0, 1], outputRange: [1, 0.5] }),
+                        }}
+                      />
+                      <Text style={{ color: LIVI.white, fontSize: 14, fontWeight: '700' }}>
+                        {formatDuration(Math.min(voiceRecordMs, VOICE_MAX_MS))}
+                      </Text>
+                      <Text style={{ color: LIVI.titan, fontSize: 12, fontWeight: '600', marginLeft: 6 }}>
+                        / 1:00
+                      </Text>
+                    </View>
+                  ) : null}
                   {!messageText && !voiceIsRecording ? (
                     <View
                       pointerEvents="none"
                       style={{
                         ...StyleSheet.absoluteFillObject,
                         justifyContent: 'center',
+                        paddingLeft: COMPOSER_TEXT_INSET_LEFT,
                       }}
                     >
                       <Text
@@ -3047,9 +3081,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                     alignItems: 'center',
                     justifyContent: 'center',
                     transform: [{ scale: micScale }],
-                    backgroundColor: voiceIsRecording ? LIVI.titan : 'rgba(255,255,255,0.2)',
-                    borderWidth: 1,
-                    borderColor: BORDER_COLOR,
+                    backgroundColor: voiceIsRecording ? LIVI.titan : COMPOSER_IDLE_BUTTON_BG,
                   }}
                 >
                   <View pointerEvents="none" style={{ alignItems: 'center', justifyContent: 'center' }}>
@@ -3061,12 +3093,12 @@ export default function ChatScreen({ route, navigation }: Props) {
                   </View>
                 </Animated.View>
 
-                <TouchableOpacity
+                <Pressable
                   onPress={onPressSendButton}
                   hitSlop={COMPOSER_HIT_SEND}
+                  accessibilityRole="button"
                   accessibilityState={{ disabled: !messageText.trim() && !voiceIsRecording }}
-                  activeOpacity={messageText.trim() || voiceIsRecording ? 0.88 : 1}
-                  style={{
+                  style={({ pressed }) => ({
                     width: 36,
                     height: 36,
                     borderRadius: 18,
@@ -3075,20 +3107,25 @@ export default function ChatScreen({ route, navigation }: Props) {
                     backgroundColor:
                       messageText.trim() || voiceIsRecording
                         ? LIVI.titan
-                        : 'rgba(255,255,255,0.2)',
+                        : pressed
+                          ? COMPOSER_PRESSED_BUTTON_BG
+                          : COMPOSER_IDLE_BUTTON_BG,
                     marginLeft: 12,
-                    borderWidth: 1,
-                    borderColor: BORDER_COLOR,
-                  }}
+                  })}
                 >
                   <Ionicons
                     name="send"
                     size={20}
                     color={messageText.trim() || voiceIsRecording ? LIVI.white : LIVI.titan}
                   />
-                </TouchableOpacity>
+                </Pressable>
               </View>
-              {emojiPanelOpen ? (
+              {emojiPanelOpen || emojiPanelWarm ? (
+                <View
+                  pointerEvents={emojiPanelOpen ? 'auto' : 'none'}
+                  accessibilityElementsHidden={!emojiPanelOpen}
+                  style={emojiPanelOpen ? null : EMOJI_PANEL_PARKED_STYLE}
+                >
                 <ChatEmojiKeyboard
                   compact={modalLayout.isLandscape}
                   isDark={isDark}
@@ -3099,13 +3136,15 @@ export default function ChatScreen({ route, navigation }: Props) {
                   onEmojiBackspace={handleComposerEmojiBackspace}
                   onStickerSelected={handleComposerStickerSelected}
                 />
+                </View>
               ) : null}
+              </View>
             </ChatChrome>
             </View>
           </View>)
         ) : (
           // Android: ADJUST_NOTHING + KeyboardStickyView — dock клеится к верху IME.
-          (<View style={{ flex: 1, overflow: 'hidden' }}>
+          (<View style={{ flex: 1, overflow: 'visible' }}>
             <Animated.View
               style={{
                 position: 'absolute',
@@ -3120,7 +3159,8 @@ export default function ChatScreen({ route, navigation }: Props) {
             <ChatMessageEdgeFade
               style={{ flex: 1 }}
               top={headerTotalH}
-              bottom={resolvedInputBarH + androidInlineStatusGapH}
+              bottom={resolvedInputBarH + CHAT_STATUS_GAP_H}
+              sourceId={chatBlurFeedId}
             >
             <FlatList
               ref={flatListRef}
@@ -3135,7 +3175,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                   ? { flexGrow: 1, justifyContent: 'center' as const }
                   : null),
                 // inverted: paddingTop = низ (под композер), paddingBottom = верх (под шапку)
-                paddingTop: showEmpty ? 0 : resolvedInputBarH + androidInlineStatusGapH,
+                paddingTop: showEmpty ? 0 : resolvedInputBarH + CHAT_STATUS_GAP_H,
                 paddingBottom: showEmpty ? 0 : headerTotalH + 8,
                 paddingHorizontal: chatListSideInset,
               }}
@@ -3172,39 +3212,23 @@ export default function ChatScreen({ route, navigation }: Props) {
             </Animated.View>
 
             {chatEmptyFeedPlaceholder}
-            {DeleteToastInline ? (
+            {InlineGapIndicator ? (
               <Animated.View
                 pointerEvents="none"
                 style={{
                   position: 'absolute',
                   left: 0,
                   right: 0,
-                  bottom: resolvedInputBarH + androidEmojiBottomReserve + 8,
+                  bottom: resolvedInputBarH + androidEmojiBottomReserve,
+                  height: CHAT_STATUS_SLOT_H,
                   alignItems: 'center',
+                  justifyContent: 'center',
                   zIndex: 8,
                   elevation: 8,
                   transform: [{ translateY: androidListKeyboardTranslateY }],
                 }}
               >
-                {DeleteToastInline}
-              </Animated.View>
-            ) : null}
-
-            {!isEmpty && GapCenterIndicator ? (
-              <Animated.View
-                pointerEvents="none"
-                style={{
-                  position: 'absolute',
-                  left: 0,
-                  right: 0,
-                  bottom: resolvedInputBarH + androidEmojiBottomReserve + 4,
-                  alignItems: 'center',
-                  zIndex: 8,
-                  elevation: 8,
-                  transform: [{ translateY: androidListKeyboardTranslateY }],
-                }}
-              >
-                {GapCenterIndicator}
+                {InlineGapIndicator}
               </Animated.View>
             ) : null}
 
@@ -3216,7 +3240,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                   position: 'absolute',
                   left: chatChromeSideInset,
                   right: chatChromeSideInset,
-                  bottom: 0,
+                  bottom: -composerSystemBottomInset,
                   zIndex: 20,
                   elevation: 20,
                   transform: [
@@ -3229,48 +3253,21 @@ export default function ChatScreen({ route, navigation }: Props) {
               {...chatChromeBottomExtra}
               style={{
                 backgroundColor: isDark ? undefined : INPUT_BAR_BG,
-                paddingHorizontal: 16,
-                paddingTop: voiceIsRecording ? 8 : 18,
-                paddingBottom: 18,
+                paddingHorizontal: 6,
+                // Без зависимости от записи: иначе высота композера меняется
+                // и лента над ним сдвигается при старте/отмене голосового.
+                paddingTop: 6,
+                paddingBottom: 2 + composerSystemBottomInset,
                 overflow: 'hidden',
                 borderTopLeftRadius: WELCOME_CHROME_EDGE_RADIUS,
                 borderTopRightRadius: WELCOME_CHROME_EDGE_RADIUS,
               }}
               onLayout={handleInputBarLayout}
             >
-              {voiceIsRecording && (
-                <View style={{ alignItems: 'center', marginBottom: 8 }}>
-                  <View
-                    style={{
-                      flexDirection: 'row',
-                      alignItems: 'center',
-                      paddingHorizontal: 12,
-                      paddingVertical: 6,
-                      borderRadius: 14,
-                      backgroundColor: isDark ? 'rgba(255,90,103,0.14)' : 'rgba(255,90,103,0.12)',
-                      borderWidth: 1,
-                      borderColor: 'rgba(255,90,103,0.28)',
-                    }}
-                  >
-                    <Animated.View
-                      style={{
-                        width: 8,
-                        height: 8,
-                        borderRadius: 4,
-                        backgroundColor: '#FF5A67',
-                        marginRight: 8,
-                        opacity: trashFlash.interpolate({ inputRange: [0, 1], outputRange: [1, 0.5] }),
-                      }}
-                    />
-                    <Text style={{ color: LIVI.white, fontSize: 12, fontWeight: '700' }}>
-                      {t('chatRecordingTimed', lang).replace('{duration}', formatDuration(Math.min(voiceRecordMs, VOICE_MAX_MS)))}
-                    </Text>
-                    <Text style={{ color: LIVI.titan, fontSize: 12, fontWeight: '600', marginLeft: 6 }}>
-                      / 1:00
-                    </Text>
-                  </View>
-                </View>
-              )}
+              <View
+                collapsable={false}
+                style={{ zIndex: 2, elevation: 2 }}
+              >
               <E2eChatBanner
                 lang={lang}
                 peerId={peerId}
@@ -3315,7 +3312,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 style={{
                   flexDirection: 'row',
                   alignItems: 'center',
-                  backgroundColor: 'rgba(255,255,255,0.06)',
+                  backgroundColor: COMPOSER_INPUT_BG,
                   borderRadius: 24,
                   paddingHorizontal: 12,
                   paddingVertical: 2,
@@ -3336,7 +3333,11 @@ export default function ChatScreen({ route, navigation }: Props) {
                       ref={(r) => { trashMeasureRef.current = r as any; }}
                       onLayout={() => updateTrashZone()}
                       style={{
-                        padding: 2,
+                        // Тот же круг 36×36, что у кнопки картинки, — высота строки не меняется.
+                        width: 36,
+                        height: 36,
+                        alignItems: 'center',
+                        justifyContent: 'center',
                         transform: [
                           { scale: trashFlash.interpolate({ inputRange: [0, 1], outputRange: [1, 1.08] }) },
                           { rotate: trashLid.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '-14deg'] }) },
@@ -3348,31 +3349,33 @@ export default function ChatScreen({ route, navigation }: Props) {
                     </Animated.View>
                   </Pressable>
                 ) : (
-                  <TouchableOpacity
+                  <ChatRoundButton
                     onPress={handleAttachments}
                     hitSlop={COMPOSER_HIT_ATTACH}
-                    style={{
-                      padding: 2,
-                      marginRight: 12,
-                    }}
+                    accessibilityLabel={t('chooseFromGallery', lang)}
+                    backgroundColor={COMPOSER_IDLE_BUTTON_BG}
+                    pressedBackgroundColor={COMPOSER_PRESSED_BUTTON_BG}
+                    marginRight={12}
                   >
                     <Ionicons name="image" size={28} color={LIVI.titan} />
-                  </TouchableOpacity>
+                  </ChatRoundButton>
                 )}
 
                 {!voiceIsRecording ? (
-                  <TouchableOpacity
+                  <ChatRoundButton
                     onPress={toggleEmojiPanel}
                     hitSlop={{ top: 10, bottom: 10, left: 6, right: 6 }}
-                    style={{ padding: 2, marginRight: 8 }}
                     accessibilityLabel="Emoji"
+                    backgroundColor={COMPOSER_IDLE_BUTTON_BG}
+                    pressedBackgroundColor={COMPOSER_PRESSED_BUTTON_BG}
+                    marginRight={8}
                   >
                     <Ionicons
                       name={emojiPanelOpen ? 'keypad-outline' : 'happy-outline'}
                       size={26}
                       color={emojiPanelOpen ? WELCOME_NAV_ACTIVE_ACCENT.softText : LIVI.titan}
                     />
-                  </TouchableOpacity>
+                  </ChatRoundButton>
                 ) : null}
 
                 <View style={{ flex: 1, minWidth: 0, justifyContent: 'center' }}>
@@ -3384,6 +3387,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                       lineHeight: composerLineHeight,
                       paddingTop: 0,
                       paddingBottom: 0,
+                      paddingLeft: COMPOSER_TEXT_INSET_LEFT,
                       maxHeight: composerTextInputMaxHeight,
                       includeFontPadding: false,
                     }}
@@ -3406,12 +3410,41 @@ export default function ChatScreen({ route, navigation }: Props) {
                     autoCorrect={true}
                     spellCheck={true}
                   />
+                  {voiceIsRecording ? (
+                    <View
+                      pointerEvents="none"
+                      style={{
+                        ...StyleSheet.absoluteFillObject,
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                      }}
+                    >
+                      <Animated.View
+                        style={{
+                          width: 8,
+                          height: 8,
+                          borderRadius: 4,
+                          backgroundColor: '#FF5A67',
+                          marginRight: 8,
+                          opacity: trashFlash.interpolate({ inputRange: [0, 1], outputRange: [1, 0.5] }),
+                        }}
+                      />
+                      <Text style={{ color: LIVI.white, fontSize: 14, fontWeight: '700' }}>
+                        {formatDuration(Math.min(voiceRecordMs, VOICE_MAX_MS))}
+                      </Text>
+                      <Text style={{ color: LIVI.titan, fontSize: 12, fontWeight: '600', marginLeft: 6 }}>
+                        / 1:00
+                      </Text>
+                    </View>
+                  ) : null}
                   {!messageText && !voiceIsRecording ? (
                     <View
                       pointerEvents="none"
                       style={{
                         ...StyleSheet.absoluteFillObject,
                         justifyContent: 'center',
+                        paddingLeft: COMPOSER_TEXT_INSET_LEFT,
                       }}
                     >
                       <Text
@@ -3471,9 +3504,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                     alignItems: 'center',
                     justifyContent: 'center',
                     transform: [{ scale: micScale }],
-                    backgroundColor: voiceIsRecording ? LIVI.titan : 'rgba(255,255,255,0.2)',
-                    borderWidth: 1,
-                    borderColor: BORDER_COLOR,
+                    backgroundColor: voiceIsRecording ? LIVI.titan : COMPOSER_IDLE_BUTTON_BG,
                   }}
                 >
                   <View pointerEvents="none" style={{ alignItems: 'center', justifyContent: 'center' }}>
@@ -3485,34 +3516,42 @@ export default function ChatScreen({ route, navigation }: Props) {
                   </View>
                 </Animated.View>
 
-                <TouchableOpacity
+                <Pressable
                   onPress={onPressSendButton}
                   hitSlop={COMPOSER_HIT_SEND}
+                  accessibilityRole="button"
                   accessibilityState={{ disabled: !messageText.trim() && !voiceIsRecording }}
-                  activeOpacity={messageText.trim() || voiceIsRecording ? 0.88 : 1}
-                  style={{
+                  style={({ pressed }) => ({
                     width: 36,
                     height: 36,
                     borderRadius: 18,
                     alignItems: 'center',
                     justifyContent: 'center',
                     backgroundColor:
-                      messageText.trim() || voiceIsRecording ? LIVI.titan : 'rgba(255,255,255,0.2)',
+                      messageText.trim() || voiceIsRecording
+                        ? LIVI.titan
+                        : pressed
+                          ? COMPOSER_PRESSED_BUTTON_BG
+                          : COMPOSER_IDLE_BUTTON_BG,
                     marginLeft: 12,
-                    borderWidth: 1,
-                    borderColor: BORDER_COLOR,
                     overflow: 'hidden',
-                  }}
+                  })}
                 >
                   <Ionicons
                     name="send"
                     size={20}
                     color={messageText.trim() || voiceIsRecording ? LIVI.white : LIVI.titan}
                   />
-                </TouchableOpacity>
+                </Pressable>
+              </View>
               </View>
             </ChatChrome>
-            {emojiPanelOpen ? (
+            {emojiPanelOpen || emojiPanelWarm ? (
+              <View
+                pointerEvents={emojiPanelOpen ? 'auto' : 'none'}
+                importantForAccessibility={emojiPanelOpen ? 'auto' : 'no-hide-descendants'}
+                style={emojiPanelOpen ? null : EMOJI_PANEL_PARKED_STYLE}
+              >
               <ChatChrome
                 {...chatChromeBottomExtra}
                 style={{
@@ -3520,6 +3559,10 @@ export default function ChatScreen({ route, navigation }: Props) {
                   paddingBottom: Math.max(0, insets.bottom),
                 }}
               >
+                <View
+                  collapsable={false}
+                  style={{ zIndex: 2, elevation: 2 }}
+                >
                 <ChatEmojiKeyboard
                   compact={modalLayout.isLandscape}
                   isDark={isDark}
@@ -3530,7 +3573,9 @@ export default function ChatScreen({ route, navigation }: Props) {
                   onEmojiBackspace={handleComposerEmojiBackspace}
                   onStickerSelected={handleComposerStickerSelected}
                 />
+                </View>
               </ChatChrome>
+              </View>
             ) : null}
             </Animated.View>
           </View>)
@@ -3541,7 +3586,8 @@ export default function ChatScreen({ route, navigation }: Props) {
           pointerEvents="box-none"
           style={{
             position: 'absolute',
-            top: 0,
+            // Шапка сама включает status-bar inset: один градиент без второго слоя и шва.
+            top: -Math.max(0, insets.top),
             left: chatChromeSideInset,
             right: chatChromeSideInset,
             zIndex: 40,
@@ -4151,128 +4197,18 @@ export default function ChatScreen({ route, navigation }: Props) {
       )}
 
       {/* Android: bottom sheet для выбора вложений (камера/галерея) */}
-      {Platform.OS === 'android' && showAttachSheet && (
-        <Modal
-          transparent
-          visible={showAttachSheet}
-          animationType="none"
-          onRequestClose={() => setShowAttachSheet(false)}
-        >
-          <Pressable
-            onPress={() => setShowAttachSheet(false)}
-            style={{
-              flex: 1,
-              backgroundColor: isDark ? 'rgba(0,0,0,0.50)' : 'rgba(0,0,0,0.40)',
-              justifyContent: 'flex-end',
-            }}
-          >
-            <Animated.View style={{ opacity: 1, transform: [{ translateY: 0 }] }}>
-              <Pressable
-                onPress={() => {}}
-                style={{
-                  backgroundColor: isDark ? WELCOME_STAGE_BG : LIVI.bg,
-                  overflow: 'hidden',
-                  borderTopLeftRadius: 20,
-                  borderTopRightRadius: 20,
-                  paddingTop: 8,
-                  paddingBottom: ANDROID_SHEET_BOTTOM_PAD,
-                  paddingHorizontal: 14,
-                  shadowColor: '#000',
-                  shadowOffset: { width: 0, height: -6 },
-                  shadowOpacity: 0.20,
-                  shadowRadius: 12,
-                  elevation: 12,
-                }}
-              >
-                {isDark ? (
-                  <WelcomeStageBackground />
-                ) : null}
-                <View style={{ alignItems: 'center', paddingTop: 4, paddingBottom: 8 }}>
-                  <View
-                    style={{
-                      width: 42,
-                      height: 4,
-                      borderRadius: 2,
-                      backgroundColor: isDark ? 'rgba(255,255,255,0.16)' : 'rgba(0,0,0,0.18)',
-                    }}
-                  />
-                </View>
-
-                <Pressable
-                  onPress={() => {
-                    setShowAttachSheet(false);
-                    void handleCamera();
-                  }}
-                  style={({ pressed }) => ({
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    paddingVertical: 14,
-                    paddingHorizontal: 12,
-                    borderRadius: 14,
-                    overflow: 'hidden',
-                    backgroundColor: pressed
-                      ? (isDark ? LIVI.accent.vivid12 : LIVI.accent.vivid10)
-                      : 'transparent',
-                  })}
-                >
-                  <Ionicons name="camera-outline" size={20} color={LIVI.titan} />
-                  <Text style={{ color: LIVI.white, fontSize: 16, fontWeight: '600', marginLeft: 12 }}>
-                    {t('takePhoto', lang)}
-                  </Text>
-                </Pressable>
-
-                <Pressable
-                  onPress={() => {
-                    setShowAttachSheet(false);
-                    void handleImagePicker();
-                  }}
-                  style={({ pressed }) => ({
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    paddingVertical: 14,
-                    paddingHorizontal: 12,
-                    borderRadius: 14,
-                    overflow: 'hidden',
-                    marginTop: 2,
-                    backgroundColor: pressed
-                      ? (isDark ? LIVI.accent.vivid12 : LIVI.accent.vivid10)
-                      : 'transparent',
-                  })}
-                >
-                  <Ionicons name="images-outline" size={20} color={LIVI.titan} />
-                  <Text style={{ color: LIVI.white, fontSize: 16, fontWeight: '600', marginLeft: 12 }}>
-                    {t('chooseFromGallery', lang)}
-                  </Text>
-                </Pressable>
-
-                <View style={{ height: 10 }} />
-
-                <Pressable
-                  onPress={() => setShowAttachSheet(false)}
-                  style={({ pressed }) => ({
-                    paddingVertical: 14,
-                    borderRadius: 14,
-                    overflow: 'hidden',
-                    backgroundColor: pressed
-                      ? (isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)')
-                      : (isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)'),
-                    ...(isDark
-                      ? null
-                      : {
-                          borderWidth: 1,
-                          borderColor: (theme.colors?.outline as string) || 'rgba(0,0,0,0.12)',
-                        }),
-                  })}
-                >
-                  <Text style={{ color: LIVI.titan, fontSize: 16, fontWeight: '600', textAlign: 'center' }}>
-                    {t('cancel', lang)}
-                  </Text>
-                </Pressable>
-              </Pressable>
-            </Animated.View>
-          </Pressable>
-        </Modal>
-      )}
+      {Platform.OS === 'android' ? (
+        <ChatAttachSheet
+          ref={attachSheetRef}
+          isDark={isDark}
+          lang={lang}
+          LIVI={LIVI}
+          outlineColor={theme.colors?.outline as string | undefined}
+          bottomPad={ANDROID_SHEET_BOTTOM_PAD}
+          onCamera={() => void handleCamera()}
+          onGallery={() => void handleImagePicker()}
+        />
+      ) : null}
 
       {/* Переслать: выбор друга */}
       {showForwardPicker && (selectedMessage || selectionMode) && (

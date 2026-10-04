@@ -1,4 +1,4 @@
-/** Media viewer + compose preview + attach sheet visibility. */
+/** Media viewer + compose preview visibility. */
 
 import React from "react";
 
@@ -15,7 +15,6 @@ export function useChatMediaViewers() {
   const [selectedMedia, setSelectedMedia] = React.useState<ChatSelectedMedia | null>(null);
   const [composeViewerVisible, setComposeViewerVisible] = React.useState(false);
   const [composeAsset, setComposeAsset] = React.useState<any>(null);
-  const [showAttachSheet, setShowAttachSheet] = React.useState(false);
 
   const openMediaViewer = React.useCallback((media: ChatSelectedMedia) => {
     setSelectedMedia(media);
@@ -50,7 +49,5 @@ export function useChatMediaViewers() {
     setComposeAsset,
     openComposeViewer,
     closeComposeViewer,
-    showAttachSheet,
-    setShowAttachSheet,
   };
 }

@@ -37,6 +37,9 @@ const SELECT_CHECK_BG = "rgba(74, 122, 140, 0.22)";
 import { ChatAlbumGrid } from "./ChatAlbumGrid";
 import { ChatReplyQuoteAccent } from "./ChatReplyQuoteAccent";
 
+/** Зазор над/под облаком на границе серии (последнее облако ленты — всегда так). */
+export const CHAT_ROW_SERIES_GAP = 4;
+
 /** Вытянутый нижний хвост облака: справа у исходящего, слева у входящего. */
 function ChatBubbleTail({ isOwn, color }: { isOwn: boolean; color: string }) {
   return (
@@ -958,8 +961,8 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
         };
   };
   /** Внутри серии облака почти вплотную, между сериями — обычный зазор. */
-  const rowMarginTop = joinedAbove ? 1 : 4;
-  const rowMarginBottom = joinedBelow ? 1 : 4;
+  const rowMarginTop = joinedAbove ? 1 : CHAT_ROW_SERIES_GAP;
+  const rowMarginBottom = joinedBelow ? 1 : CHAT_ROW_SERIES_GAP;
   // Короткий текст ответа («Ппи») иначе сжимает цитату — держим ширину пузыря.
   const replyBubbleMinWidth = Math.round(Math.min(Dimensions.get('window').width * 0.58, 260));
 

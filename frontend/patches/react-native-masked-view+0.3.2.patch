@@ -1,0 +1,52 @@
+diff --git a/android/src/main/java/org/reactnative/maskedview/RNCMaskedView.java b/android/src/main/java/org/reactnative/maskedview/RNCMaskedView.java
+--- a/android/src/main/java/org/reactnative/maskedview/RNCMaskedView.java
++++ b/android/src/main/java/org/reactnative/maskedview/RNCMaskedView.java
+@@ -28,6 +28,13 @@
+ 
+   @Override
+   protected void dispatchDraw(Canvas canvas) {
++    // Software canvas outside our own SW cache (BlurView capture every frame,
++    // view snapshots): the HW layer would be demoted to a full-size software
++    // drawing cache. Mask inside a layer bounded by the canvas clip instead.
++    boolean ownLayer = !canvas.isHardwareAccelerated()
++        && mRenderingMode != View.LAYER_TYPE_SOFTWARE;
++    int saveCount = ownLayer ? canvas.saveLayer(null, null) : -1;
++
+     super.dispatchDraw(canvas);
+ 
+     if (mBitmapMaskInvalidated) {
+@@ -39,14 +46,33 @@
+ 
+     // draw the mask
+     if (mBitmapMask != null) {
+-      setLayerType(mRenderingMode, mPaint);
++      if (canvas.isHardwareAccelerated()) {
++        setLayerType(mRenderingMode, mPaint);
++      }
+       mPaint.setXfermode(mPorterDuffXferMode);
+       canvas.drawBitmap(mBitmapMask, 0, 0, mPaint);
+       mPaint.setXfermode(null);
+     }
++
++    if (saveCount >= 0) {
++      canvas.restoreToCount(saveCount);
++    }
+   }
+ 
+   @Override
++  public void buildDrawingCache(boolean autoScale) {
++    // HW layer drawn into a software canvas: dispatchDraw masks directly.
++    if (getLayerType() == View.LAYER_TYPE_SOFTWARE) {
++      super.buildDrawingCache(autoScale);
++    }
++  }
++
++  @Override
++  public Bitmap getDrawingCache(boolean autoScale) {
++    return getLayerType() == View.LAYER_TYPE_SOFTWARE ? super.getDrawingCache(autoScale) : null;
++  }
++
++  @Override
+   public void onDescendantInvalidated(View child, View target) {
+     super.onDescendantInvalidated(child, target);
+ 

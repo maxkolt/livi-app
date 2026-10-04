@@ -14,7 +14,6 @@ import {
   SEARCH_CTA_TABLET_MAX_WIDTH,
   isWelcomeTabletLayout,
   searchPhoneScale,
-  WELCOME_HEADER_TITLE,
   SEARCH_RADAR_HUD,
   WELCOME_SEARCH_CTA_BORDER,
   WELCOME_MUTED_TEXT,
@@ -338,7 +337,8 @@ const styles = StyleSheet.create({
     height: '45%',
   },
   label: {
-    color: WELCOME_HEADER_TITLE,
+    // В цвет молнии рядом.
+    color: WELCOME_MUTED_TEXT,
     fontSize: 16,
     fontWeight: '400',
     letterSpacing: 0.2,

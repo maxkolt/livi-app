@@ -15,7 +15,9 @@ import {
 import { requireNativeComponentOnce } from '../../utils/requireNativeComponentOnce';
 import { useSafeAreaFrame } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
+import { BlurView } from 'expo-blur';
 import { SEARCH_CTA_TABLET_MIN_WIDTH, WELCOME_STAGE_BG } from './constants';
+import { NativeBlurBackdrop, type BackdropSources } from '../../components/BackdropBlur';
 
 const STAGE_BG = require('../../assets/welcome-stage-bg.png');
 
@@ -33,8 +35,9 @@ const STAGE_GRADIENT_LOCATIONS = [0, 0.16, 0.38, 1] as const;
  * в 1–2 единицы, округлённые stops давали ступеньки. Альфа даёт шаг в ~0.04
  * единицы тона — переход сплошной.
  */
-const HOME_STAGE_EDGE_RGB = '12,25,37';
-const HOME_STAGE_MID = '#0A111B';
+// Вместе с MID/EDGE в StageBackground.kt (Android рисует фон нативно).
+const HOME_STAGE_EDGE_RGB = '15,30,45';
+const HOME_STAGE_MID = '#0C1521';
 const HOME_STAGE_FADE_STEPS = 16;
 
 function buildHomeStageGradient() {
@@ -146,10 +149,28 @@ type StageGradientProps = {
   translucent?: boolean;
   /** Зеркально по вертикали (нижний chrome чата). */
   mirror?: boolean;
+  /** Плотность матовой подложки под полупрозрачным градиентом. */
+  matteOpacity?: number;
+  /** Android 12+: стекло из этих источников на GPU вместо expo-blur (Dimezis). */
+  backdrop?: BackdropSources | null;
 };
 
+const GLASS_BLUR_INTENSITY = Platform.OS === 'android' ? 12 : 20;
+const GLASS_BLUR_REDUCTION = 4;
+/** Тон tint="dark" у expo-blur на Android при той же intensity. */
+const GLASS_DARK_TINT = `rgba(25, 25, 25, ${Math.trunc(255 * (GLASS_BLUR_INTENSITY / 100) * 0.69) / 255})`;
+const GLASS_FADE_LOCATIONS = [0, 0.14, 0.38, 1] as const;
+
 /** Chrome header/composer: bitmap для непрозрачного stage, градиент только для стекла. */
-export function StageGradient({ style, children, onLayout, translucent, mirror }: StageGradientProps) {
+export function StageGradient({
+  style,
+  children,
+  onLayout,
+  translucent,
+  mirror,
+  matteOpacity = 0.08,
+  backdrop,
+}: StageGradientProps) {
   const frame = useSafeAreaFrame();
   const resumeEpoch = useResumeEpoch();
   // Ориентацию считаем от окна, но подтверждаем собственным layout — иначе при
@@ -197,24 +218,56 @@ export function StageGradient({ style, children, onLayout, translucent, mirror }
   // Рассеивание на весь блок: у края экрана плотнее, к ленте — всё меньше.
   // Бирюза разбавлена синим — в тон краёв основного фона (HOME_STAGE_EDGE_RGB).
   const colors = [
-    'rgba(11, 20, 31, 1)',
-    'rgba(9, 15, 24, 0.92)',
-    'rgba(8, 12, 19, 0.62)',
-    'rgba(8, 11, 17, 0.16)',
+    'rgba(11, 20, 31, 0.88)',
+    'rgba(9, 15, 24, 0.76)',
+    'rgba(8, 12, 19, 0.48)',
+    'rgba(8, 11, 17, 0.10)',
   ] as const;
   const vStart = mirror ? { x: 0.5, y: 1 } : { x: 0.5, y: 0 };
   const vEnd = mirror ? { x: 0.5, y: 0 } : { x: 0.5, y: 1 };
+  const matte = `rgba(8, 13, 22, ${matteOpacity})`;
 
   return (
     <View style={style} onLayout={onLayout}>
+      {NativeBlurBackdrop && backdrop ? (
+        <NativeBlurBackdrop
+          pointerEvents="none"
+          backgroundSources={backdrop.background}
+          blurSources={backdrop.blur}
+          blurRadius={GLASS_BLUR_INTENSITY / GLASS_BLUR_REDUCTION}
+          overlayColor={GLASS_DARK_TINT}
+          matteColor={matte}
+          fadeColors={colors}
+          fadeLocations={GLASS_FADE_LOCATIONS}
+          mirror={!!mirror}
+          style={[StyleSheet.absoluteFill, { zIndex: 0 }]}
+        />
+      ) : (
+        <BlurView
+          pointerEvents="none"
+          intensity={GLASS_BLUR_INTENSITY}
+          tint="dark"
+          experimentalBlurMethod={Platform.OS === 'android' ? 'dimezisBlurView' : undefined}
+          blurReductionFactor={GLASS_BLUR_REDUCTION}
+          style={[StyleSheet.absoluteFill, { zIndex: 0 }]}
+        />
+      )}
+      {/* Матовый tint лежит только в backdrop; интерактивный контент рисуется выше. */}
+      <View
+        pointerEvents="none"
+        style={[
+          StyleSheet.absoluteFill,
+          { zIndex: 1, backgroundColor: matte },
+        ]}
+      />
       <LinearGradient
         colors={[...colors]}
         // Плотный край остаётся у status/navigation bar, а к контенту
         // затемнение растворяется раньше и не утяжеляет шапку/композер.
-        locations={[0, 0.14, 0.38, 1]}
+        locations={[...GLASS_FADE_LOCATIONS]}
         start={vStart}
         end={vEnd}
-        style={StyleSheet.absoluteFill}
+        style={[StyleSheet.absoluteFill, { zIndex: 1 }]}
         pointerEvents="none"
       />
       {children}

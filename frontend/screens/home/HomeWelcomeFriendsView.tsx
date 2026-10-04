@@ -227,7 +227,7 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
         >
           <MaterialCommunityIcons
             name="gift-outline"
-            size={compactLandscape ? 24 : tabletLayout ? 34 : 32}
+            size={compactLandscape ? 28 : tabletLayout ? 40 : 38}
             color={WELCOME_BRAND_VI_FILL_GRADIENT[2]}
           />
         </View>
@@ -674,7 +674,8 @@ const styles = StyleSheet.create({
     height: WELCOME_FRIENDS_SEGMENT_HEIGHT.phone,
     marginTop: WELCOME_FRIENDS_INVITE_GAP.phone,
     marginBottom: 8,
-    paddingVertical: 10,
+    // 72 − 2×8 = 56: подложка подарка занимает всю высоту содержимого.
+    paddingVertical: 8,
     paddingHorizontal: 14,
     borderRadius: WELCOME_FRIENDS_SEGMENT_SHELL_RADIUS,
     backgroundColor: WELCOME_LIST_SURFACE,
@@ -701,21 +702,21 @@ const styles = StyleSheet.create({
     opacity: 0.92,
   },
   inviteIconWrap: {
-    width: 48,
-    height: 48,
-    borderRadius: 14,
+    width: 56,
+    height: 56,
+    borderRadius: 16,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: WELCOME_CHROME_BTN_BG,
   },
   inviteIconWrapLandscape: {
-    width: 38,
-    height: 38,
+    width: 40,
+    height: 40,
     borderRadius: 12,
   },
   inviteIconWrapTablet: {
-    width: 52,
-    height: 52,
+    width: 56,
+    height: 56,
     borderRadius: 16,
   },
   inviteTextCol: {

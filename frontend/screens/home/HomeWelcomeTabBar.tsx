@@ -47,6 +47,8 @@ type HomeWelcomeTabBarProps = {
 const PROFILE_ACTIVE_DOT = 28;
 
 const INACTIVE = '#7A8494';
+/** Неактивные иконки — тон надписи «Онлайн» (WELCOME_HEADER_TITLE), чуть приглушённее. */
+const INACTIVE_ICON = 'rgba(244, 245, 247, 0.72)';
 
 /** Android: тень вокруг навбара расходится на 8 dp, как у блоков. */
 const TAB_BAR_SHADOW_SPREAD = 8;
@@ -172,7 +174,7 @@ function HomeWelcomeTabBarInner({
         >
           {tabs.map((tab) => {
           const active = tab.id === activeTab;
-          const iconColor = active ? ACTIVE_ICON : INACTIVE;
+          const iconColor = active ? ACTIVE_ICON : INACTIVE_ICON;
           const labelColor = active ? ACTIVE_LABEL : INACTIVE;
           const showDot =
             (tab.id === 'chat' && !!showChatDot) ||

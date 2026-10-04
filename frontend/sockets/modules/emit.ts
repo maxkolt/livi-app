@@ -100,26 +100,41 @@ export async function emitAck<T = any>(
   const tryOnce = () =>
     new Promise<T>((resolve, reject) => {
       let done = false;
+      const finish = () => {
+        done = true;
+        clearTimeout(t);
+        socket.off("disconnect", onDisconnect);
+      };
       const t = setTimeout(() => {
         if (!done) {
-          done = true;
+          finish();
           reject(new Error(`Ack timeout for "${event}"`));
         }
       }, timeoutMs);
+      // Транспорт оборвался после отправки: пакет ушёл вместе с ним, ack уже не придёт.
+      // Не ждём весь timeout (под VPN на входе это 6–12 с) — ретрай сразу после reconnect.
+      const onDisconnect = () => {
+        if (!done) {
+          finish();
+          reject(new Error(`Disconnected before ack for "${event}"`));
+        }
+      };
 
       const ack = (resp: T) => {
         if (done) return;
-        done = true;
-        clearTimeout(t);
+        finish();
         resolve(resp);
       };
 
       // socket.emit с ack
       try {
+        // Пока сокет отключён, socket.io буферизует пакет и отправит его после reconnect —
+        // тогда ack придёт, обрыв ждать незачем.
+        if (socket.connected) socket.on("disconnect", onDisconnect);
         if (payload !== undefined) socket.emit(event, payload, ack);
         else socket.emit(event, null, ack);
       } catch (e) {
-        clearTimeout(t);
+        finish();
         reject(e);
       }
     });

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { AppState, Linking, Modal, Platform, Pressable, StyleSheet, View } from 'react-native';
-import { SafeAreaProvider, useSafeAreaFrame, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { AppState, Linking, Platform, Pressable, StyleSheet, View } from 'react-native';
+import { useSafeAreaFrame, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Image as ExpoImage } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
@@ -10,6 +10,7 @@ import AdaptiveText from '../AdaptiveText';
 import { t } from '../../utils/i18n';
 import { useLang } from '../../store/lang';
 import FitText from '../FitText';
+import { FullScreenPortal } from '../FullScreenPortal';
 import {
   checkCosmeticPayment,
   createCosmeticPayment,
@@ -37,6 +38,10 @@ import {
 } from '../../screens/home/WelcomeOverlayChrome';
 
 const SHOWCASE_AVATAR = require('../../assets/frames/showcase-avatar.jpg');
+/** Под фото в рамке: пока кадр не декодирован, градиент рамки не виден сплошным кругом. */
+const SHOWCASE_AVATAR_BG = '#0B1219';
+/** Дольше не ждём картинок: витрина появляется, даже если кадр не пришёл. */
+const STORE_READY_TIMEOUT_MS = 600;
 
 type Props = {
   visible: boolean;
@@ -147,7 +152,17 @@ const FRAME_CATALOG: FrameItem[] = [
   },
 ];
 
-function ChatBackgroundCard({ item, width, height }: { item: ChatBackgroundItem; width: number; height: number }) {
+function ChatBackgroundCard({
+  item,
+  width,
+  height,
+  onLoad,
+}: {
+  item: ChatBackgroundItem;
+  width: number;
+  height: number;
+  onLoad?: () => void;
+}) {
   return (
     <View style={styles.cardShadow}>
       <View style={[styles.backgroundCard, { width, height, borderRadius: Math.round(height * 0.16) }]}>
@@ -156,6 +171,7 @@ function ChatBackgroundCard({ item, width, height }: { item: ChatBackgroundItem;
           style={StyleSheet.absoluteFillObject}
           contentFit="cover"
           cachePolicy="memory-disk"
+          onLoad={onLoad}
         />
         <LinearGradient
           colors={['rgba(0,0,0,0.02)', 'rgba(0,0,0,0.24)']}
@@ -168,7 +184,7 @@ function ChatBackgroundCard({ item, width, height }: { item: ChatBackgroundItem;
   );
 }
 
-function FrameCoverCard({ item, size }: { item: FrameItem; size: number }) {
+function FrameCoverCard({ item, size, onLoad }: { item: FrameItem; size: number; onLoad?: () => void }) {
   const ringWidth = Math.max(2, Math.round(size * 0.025));
   const avatarSize = size - ringWidth * 2;
 
@@ -190,9 +206,15 @@ function FrameCoverCard({ item, size }: { item: FrameItem; size: number }) {
       >
         <ExpoImage
           source={SHOWCASE_AVATAR}
-          style={{ width: avatarSize, height: avatarSize, borderRadius: avatarSize / 2 }}
+          style={{
+            width: avatarSize,
+            height: avatarSize,
+            borderRadius: avatarSize / 2,
+            backgroundColor: SHOWCASE_AVATAR_BG,
+          }}
           contentFit="cover"
           cachePolicy="memory-disk"
+          onLoad={onLoad}
         />
       </LinearGradient>
     </View>
@@ -263,27 +285,29 @@ function PurchaseButton({
   );
 }
 
-/**
- * У RN-модалки своё окно (Dialog), и в landscape оно заходит под боковую панель навигации,
- * а insets главного окна там нулевые — контент уезжал вправо под системные кнопки. Поэтому
- * окно модалки рисуется под обе системные панели, а отступы считает свой SafeAreaProvider
- * внутри неё: он меряет именно это окно (шторка, вырез камеры, панель навигации сбоку).
- */
+/** Витрина — полноэкранный слой в основном окне (см. FullScreenPortal), не RN-модалка. */
 export function FramesStoreModal(props: Props) {
   const requestCloseRef = useRef(props.onClose);
-  if (!props.visible) return null;
+  // Карусели рисуют карточки не в первом кадре, а фото в рамках приходят ещё позже —
+  // при открытии рамки «дорисовывались» на глазах. Показываем витрину готовой.
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    if (!props.visible) {
+      setReady(false);
+      return;
+    }
+    const timer = setTimeout(() => setReady(true), STORE_READY_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [props.visible]);
+  const markReady = useCallback(() => setReady(true), []);
   return (
-    <Modal
-      visible
-      animationType="fade"
+    <FullScreenPortal
+      visible={props.visible}
+      ready={ready}
       onRequestClose={() => requestCloseRef.current()}
-      statusBarTranslucent
-      navigationBarTranslucent
     >
-      <SafeAreaProvider>
-        <FramesStoreContent {...props} requestCloseRef={requestCloseRef} />
-      </SafeAreaProvider>
-    </Modal>
+      <FramesStoreContent {...props} requestCloseRef={requestCloseRef} onContentReady={markReady} />
+    </FullScreenPortal>
   );
 }
 
@@ -292,7 +316,12 @@ function FramesStoreContent({
   onClose,
   onUnlock,
   requestCloseRef,
-}: Props & { requestCloseRef: React.MutableRefObject<() => void> }) {
+  onContentReady,
+}: Props & {
+  requestCloseRef: React.MutableRefObject<() => void>;
+  /** Фон и рамка уже с картинками — можно показывать. */
+  onContentReady?: () => void;
+}) {
   const lang = useLang((state) => state.lang);
   const L = useCallback((key: string) => t(key, lang), [lang]);
   const insets = useSafeAreaInsets();
@@ -326,6 +355,10 @@ function FramesStoreContent({
   const buttonWidth = Math.min(Math.max(180, sectionWidth - (compact ? 28 : 44)), maxCtaWidth);
   const buttonHeight = compact ? 40 : Platform.OS === 'ios' ? 46 : 44;
   const contentTopOffset = landscape ? 0 : compact ? 16 : 28;
+  const pageTopGap = compact ? 2 : Platform.OS === 'ios' ? 7 : 10;
+  // Весь контент чуть ближе к статус-бару: сверху зазор меньше, снизу на столько же
+  // больше — иначе секции (space-evenly) поднялись бы только на половину сдвига.
+  const contentLift = Math.min(pageTopGap, 8);
 
   const [activeBackgroundIndex, setActiveBackgroundIndex] = useState(0);
   const [activeFrameIndex, setActiveFrameIndex] = useState(0);
@@ -340,6 +373,24 @@ function FramesStoreContent({
     if (!visible) return;
     void loadCosmetics(true).catch(() => {});
   }, [visible]);
+
+  const loadedRef = useRef({ background: false, frame: false, sent: false });
+  useEffect(() => {
+    if (!visible) loadedRef.current = { background: false, frame: false, sent: false };
+  }, [visible]);
+  const handleCardLoad = useCallback(
+    (kind: 'background' | 'frame') => {
+      const loaded = loadedRef.current;
+      loaded[kind] = true;
+      if (loaded.sent || !loaded.background || !loaded.frame) return;
+      loaded.sent = true;
+      // Соседние карточки берут тот же кадр из кэша — им нужен ещё кадр-другой.
+      requestAnimationFrame(() => requestAnimationFrame(() => onContentReady?.()));
+    },
+    [onContentReady],
+  );
+  const handleBackgroundLoad = useCallback(() => handleCardLoad('background'), [handleCardLoad]);
+  const handleFrameLoad = useCallback(() => handleCardLoad('frame'), [handleCardLoad]);
 
   const refreshPendingPayment = useCallback(async () => {
     if (!pendingPaymentId) return;
@@ -484,7 +535,7 @@ function FramesStoreContent({
     if (purchaseNotice) closePurchaseNotice();
     else onClose();
   };
-  // Системное «Назад» ловит Modal снаружи — отдаём ему актуальный обработчик.
+  // Системное «Назад» ловит обёртка снаружи — отдаём ей актуальный обработчик.
   requestCloseRef.current = handleRequestClose;
 
   return (
@@ -494,11 +545,11 @@ function FramesStoreContent({
           style={[
             styles.page,
             {
-              paddingTop: insets.top + (compact ? 2 : Platform.OS === 'ios' ? 7 : 10),
+              paddingTop: insets.top + pageTopGap - contentLift,
               // Именно insets.bottom + зазор, а не max(): max() прижимал кнопку
               // вплотную к системной навигации, и на трёхкнопочной она визуально
               // сливалась с панелью. Зазор нужен поверх инсета, а не вместо него.
-              paddingBottom: insets.bottom + (compact ? 10 : 16),
+              paddingBottom: insets.bottom + (compact ? 10 : 16) + contentLift,
               paddingLeft: insets.left + pageHorizontalPadding,
               paddingRight: insets.right + pageHorizontalPadding,
             },
@@ -564,7 +615,12 @@ function FramesStoreContent({
                   onSnapToItem={setActiveBackgroundIndex}
                   renderItem={({ item }) => (
                     <View style={[styles.carouselItem, { width: backgroundPageWidth, height: backgroundPageHeight }]}>
-                      <ChatBackgroundCard item={item} width={backgroundCardWidth} height={backgroundCardHeight} />
+                      <ChatBackgroundCard
+                        item={item}
+                        width={backgroundCardWidth}
+                        height={backgroundCardHeight}
+                        onLoad={handleBackgroundLoad}
+                      />
                       <FitText
                         style={[styles.carouselLabel, item.key === activeBackground.key && styles.carouselLabelActive]}
                         minimumFontScale={0.65}
@@ -643,7 +699,7 @@ function FramesStoreContent({
                   onSnapToItem={setActiveFrameIndex}
                   renderItem={({ item }) => (
                     <View style={[styles.carouselItem, { width: framePageWidth, height: framePageHeight }]}>
-                      <FrameCoverCard item={item} size={frameSize} />
+                      <FrameCoverCard item={item} size={frameSize} onLoad={handleFrameLoad} />
                       <FitText
                         style={[styles.carouselLabel, item.key === activeFrame.key && styles.carouselLabelActive]}
                         minimumFontScale={0.65}
@@ -907,14 +963,17 @@ const styles = StyleSheet.create({
   selectionCopyCompact: { marginTop: 6, minHeight: 34, paddingHorizontal: 14 },
   itemTitle: { color: WELCOME_HEADER_TITLE, fontSize: 18, fontWeight: '800', textAlign: 'center' },
   itemTitleCompact: { fontSize: 15 },
+  // Высота под все строки (numberOfLines) заранее: однострочное описание не
+  // поднимает кнопку под ним, меняются только сами строки.
   subtitle: {
     marginTop: 3,
+    minHeight: 32,
     color: WELCOME_MUTED_TEXT,
     fontSize: 12,
     lineHeight: 16,
     textAlign: 'center',
   },
-  subtitleCompact: { marginTop: 1, fontSize: 10, lineHeight: 13 },
+  subtitleCompact: { marginTop: 1, minHeight: 13, fontSize: 10, lineHeight: 13 },
   ctaWrap: { overflow: 'visible', flexShrink: 0, marginTop: 16 },
   ctaWrapCompact: { marginTop: 8 },
   ctaDisabled: { opacity: 0.62 },
