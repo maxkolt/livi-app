@@ -54,7 +54,7 @@ import socket, {
 import { applyCallEndedGlobalRefsOnce } from '../../../utils/globalEvents';
 import { reportEndCallToCallKeep } from '../../../utils/callKeep';
 import { logger } from '../../../utils/logger';
-import { prewarmApiConnections } from '../../../utils/warmConnections';
+import { cancelPendingLiveKitSignalConnects, prewarmApiConnections } from '../../../utils/warmConnections';
 import { ensureCallMediaPermissions } from '../../../utils/mediaPermissions';
 import { markCallPerf, callPerfSpan, endCallPerfTrace } from '../../../utils/callPerfTrace';
 import { sendClientMetrics } from '../../utils/capacityClientMetrics';
@@ -7921,6 +7921,9 @@ export class VideoCallSession extends SimpleEventEmitter {
               connectReason: options?.reason || null,
             });
             // Зависший SDK-шный connect иначе мог бы подключиться позже — призрак в SFU.
+            // Его TLS-рукопожатие отменяем и на уровне сети: брошенный Room не мешает
+            // запросу дойти до сервера и выбить следующую попытку (DUPLICATE_IDENTITY).
+            cancelPendingLiveKitSignalConnects('signal_watchdog');
             void this.abortFailedConnectRoom(room);
           },
         });

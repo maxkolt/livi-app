@@ -1,5 +1,6 @@
 import React from 'react';
-import { Platform, StyleSheet, UIManager, View, requireNativeComponent, type ViewProps } from 'react-native';
+import { Platform, StyleSheet, UIManager, View, type ViewProps } from 'react-native';
+import { requireNativeComponentOnce } from '../../utils/requireNativeComponentOnce';
 
 /**
  * Мягкая тень «парящего» блока (онлайн-баннер, верхние сегменты вкладок, «Пригласить
@@ -32,7 +33,7 @@ const DEFAULT_SPREAD = LAYERS[0].inset;
  */
 const NativeFloatShadow =
   Platform.OS === 'android' && UIManager.hasViewManagerConfig('LiviFloatShadow')
-    ? requireNativeComponent<NativeFloatShadowProps>('LiviFloatShadow')
+    ? requireNativeComponentOnce<NativeFloatShadowProps>('LiviFloatShadow')
     : null;
 
 type NativeFloatShadowProps = ViewProps & {

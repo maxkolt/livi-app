@@ -6,13 +6,13 @@ import {
   StyleSheet,
   UIManager,
   View,
-  requireNativeComponent,
   useWindowDimensions,
   type LayoutChangeEvent,
   type StyleProp,
   type ViewProps,
   type ViewStyle,
 } from 'react-native';
+import { requireNativeComponentOnce } from '../../utils/requireNativeComponentOnce';
 import { useSafeAreaFrame } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SEARCH_CTA_TABLET_MIN_WIDTH, WELCOME_STAGE_BG } from './constants';
@@ -67,7 +67,7 @@ const {
  */
 const NativeStageBackground =
   Platform.OS === 'android' && UIManager.hasViewManagerConfig('LiviStageBackground')
-    ? requireNativeComponent<ViewProps>('LiviStageBackground')
+    ? requireNativeComponentOnce<ViewProps>('LiviStageBackground')
     : null;
 
 /**
@@ -198,9 +198,9 @@ export function StageGradient({ style, children, onLayout, translucent, mirror }
   // Бирюза разбавлена синим — в тон краёв основного фона (HOME_STAGE_EDGE_RGB).
   const colors = [
     'rgba(11, 20, 31, 1)',
-    'rgba(9, 15, 24, 0.97)',
-    'rgba(8, 12, 19, 0.88)',
-    'rgba(8, 11, 17, 0.50)',
+    'rgba(9, 15, 24, 0.92)',
+    'rgba(8, 12, 19, 0.62)',
+    'rgba(8, 11, 17, 0.16)',
   ] as const;
   const vStart = mirror ? { x: 0.5, y: 1 } : { x: 0.5, y: 0 };
   const vEnd = mirror ? { x: 0.5, y: 0 } : { x: 0.5, y: 1 };
@@ -209,7 +209,9 @@ export function StageGradient({ style, children, onLayout, translucent, mirror }
     <View style={style} onLayout={onLayout}>
       <LinearGradient
         colors={[...colors]}
-        locations={[0, 0.34, 0.68, 1]}
+        // Плотный край остаётся у status/navigation bar, а к контенту
+        // затемнение растворяется раньше и не утяжеляет шапку/композер.
+        locations={[0, 0.14, 0.38, 1]}
         start={vStart}
         end={vEnd}
         style={StyleSheet.absoluteFill}

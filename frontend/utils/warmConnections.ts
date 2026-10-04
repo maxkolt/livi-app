@@ -12,13 +12,28 @@ import { AppState, NativeModules, Platform } from 'react-native';
 
 const KEEPALIVE_MS = 30_000;
 
-type LiviWarmModule = { prewarmApiConnections?: (reason: string, count: number) => void };
+type LiviWarmModule = {
+  prewarmApiConnections?: (reason: string, count: number) => void;
+  cancelPendingLiveKitSignal?: (reason: string) => void;
+};
 
 /** Открыть/освежить count соединений к API заранее — до звонка, сокета, сигналинга. */
 export function prewarmApiConnections(reason: string, count = 2): void {
   if (Platform.OS !== 'android') return;
   try {
     (NativeModules.LiviAppModule as LiviWarmModule | undefined)?.prewarmApiConnections?.(reason, count);
+  } catch {}
+}
+
+/**
+ * Брошенная сторожем попытка сигналинга LiveKit: отменить её зависшее TLS-рукопожатие.
+ * Иначе оно позже доходит до SFU с тем же identity и выбивает следующую, уже рабочую
+ * попытку (DUPLICATE_IDENTITY по кругу через VPN).
+ */
+export function cancelPendingLiveKitSignalConnects(reason: string): void {
+  if (Platform.OS !== 'android') return;
+  try {
+    (NativeModules.LiviAppModule as LiviWarmModule | undefined)?.cancelPendingLiveKitSignal?.(reason);
   } catch {}
 }
 

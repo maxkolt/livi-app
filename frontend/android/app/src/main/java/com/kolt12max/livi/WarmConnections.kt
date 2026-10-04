@@ -10,6 +10,7 @@ import com.facebook.react.modules.websocket.WebSocketModule
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.ConnectionPool
+import okhttp3.EventListener
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
@@ -17,6 +18,7 @@ import okhttp3.Request
 import okhttp3.Response
 import java.io.IOException
 import java.security.KeyStore
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import javax.net.ssl.SSLContext
@@ -75,15 +77,65 @@ object WarmConnections {
   @Volatile private var installed = false
   @Volatile private var defaultNetwork: Network? = null
 
+  /**
+   * Подключения сигналинга LiveKit (`…/rtc`), которые ещё не отправили upgrade-запрос
+   * (значение — время старта). Через VPN TLS-рукопожатие иногда висит 15–30 с: сторож
+   * сигналинга (8 с) бросает попытку и начинает новую, а зависшая потом всё же доходит до
+   * SFU с тем же identity и выбивает уже рабочую (DUPLICATE_IDENTITY) — и так по кругу,
+   * пока звонок не оборвётся. Отменённое до отправки запроса подключение до сервера не доходит.
+   */
+  private val pendingSignalCalls = ConcurrentHashMap<Call, Long>()
+
+  private val signalCallTracker = object : EventListener() {
+    override fun callStart(call: Call) {
+      val path = call.request().url.encodedPath
+      if (path.endsWith("/rtc") || path.contains("/rtc/")) {
+        pendingSignalCalls[call] = SystemClock.elapsedRealtime()
+      }
+    }
+
+    override fun requestHeadersStart(call: Call) {
+      pendingSignalCalls.remove(call)
+    }
+
+    override fun callFailed(call: Call, ioe: IOException) {
+      pendingSignalCalls.remove(call)
+    }
+
+    override fun callEnd(call: Call) {
+      pendingSignalCalls.remove(call)
+    }
+  }
+
   /** Подключить общий пул к WebSocket'ам RN. Вызывать до первого WebSocket'а. */
   fun install() {
     if (installed) return
     installed = true
     WebSocketModule.setCustomClientBuilder(
       CustomClientBuilder { builder ->
-        builder.connectionPool(pool).sslSocketFactory(sslSocketFactory, trustManager)
+        builder
+          .connectionPool(pool)
+          .sslSocketFactory(sslSocketFactory, trustManager)
+          .eventListenerFactory { signalCallTracker }
       },
     )
+  }
+
+  /**
+   * Отменить зависшие сигнальные подключения LiveKit, ещё не дошедшие до сервера.
+   * Только старше [minAgeMs]: новая попытка, начатая сразу после сторожа, не трогается.
+   */
+  fun cancelPendingLiveKitSignal(reason: String, minAgeMs: Long = 2_000L): Int {
+    val now = SystemClock.elapsedRealtime()
+    var canceled = 0
+    for ((call, startedAt) in pendingSignalCalls) {
+      if (now - startedAt < minAgeMs) continue
+      pendingSignalCalls.remove(call)
+      runCatching { call.cancel() }
+      canceled += 1
+    }
+    Log.i(TAG, "cancel pending livekit signal reason=$reason canceled=$canceled left=${pendingSignalCalls.size}")
+    return canceled
   }
 
   /**

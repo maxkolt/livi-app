@@ -2641,12 +2641,44 @@ export default function ChatScreen({ route, navigation }: Props) {
 
   const ChatChrome = isDark ? StageGradient : View;
   const chatChromeBottomExtra = isDark ? ({ translucent: true, mirror: true } as const) : {};
+  // Продолжаем chrome под системные панели отдельными неподвижными участками.
+  // У translucent StageGradient край у системной панели непрозрачный, поэтому
+  // тот же цвет стыкуется с шапкой/композером без полосы и не двигает их контент.
+  const systemTopChromeBg = isDark ? 'rgb(11, 20, 31)' : CHAT_HEADER_BG;
+  const systemBottomChromeBg = isDark ? 'rgb(11, 20, 31)' : INPUT_BAR_BG;
+  const systemBottomChromeH = Platform.OS === 'android'
+    ? Math.max(0, androidPinnedNavInset, insets.bottom)
+    : Math.max(0, insets.bottom);
 
   return (
     <View style={{ flex: 1, backgroundColor: WELCOME_STAGE_BG }}>
     <WelcomeStageBackground />
     {/* Обоина на весь экран: от верхнего края до нижнего, под glass-шапкой и композером. */}
     {!loading && !err ? <ChatParallaxWallpaper isDark={isDark} /> : null}
+    <View
+      pointerEvents="none"
+      style={{
+        position: 'absolute',
+        top: 0,
+        left: chatChromeSideInset,
+        right: chatChromeSideInset,
+        height: Math.max(0, insets.top),
+        zIndex: 1,
+        backgroundColor: systemTopChromeBg,
+      }}
+    />
+    <View
+      pointerEvents="none"
+      style={{
+        position: 'absolute',
+        left: chatChromeSideInset,
+        right: chatChromeSideInset,
+        bottom: 0,
+        height: systemBottomChromeH,
+        zIndex: 1,
+        backgroundColor: systemBottomChromeBg,
+      }}
+    />
     <SafeAreaView 
       // IMPORTANT: color the top safe-area (status bar area) to match the header.
       // Otherwise on Android (with translucent StatusBar) you'll see a white strip above the header.

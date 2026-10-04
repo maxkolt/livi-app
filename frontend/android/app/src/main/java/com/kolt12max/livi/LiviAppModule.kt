@@ -95,6 +95,12 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     MainActivity.markIncomingCallOverLock()
   }
 
+  /** Сторож сигналинга бросил попытку: отменить её зависшее подключение (см. WarmConnections). */
+  @ReactMethod
+  fun cancelPendingLiveKitSignal(reason: String?) {
+    WarmConnections.cancelPendingLiveKitSignal(reason ?: "js")
+  }
+
   /** Держать наготове count соединений к API для WebSocket'ов (см. WarmConnections). */
   @ReactMethod
   fun prewarmApiConnections(reason: String?, count: Double) {
