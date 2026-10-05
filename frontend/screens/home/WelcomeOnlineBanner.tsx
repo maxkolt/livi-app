@@ -5,11 +5,11 @@ import type { Lang } from '../../utils/i18n';
 import AvatarImage from '../../components/AvatarImage';
 import {
   LIVI,
-  WELCOME_GLASS_SURFACE,
   WELCOME_GLASS_BORDER,
   WELCOME_HEADER_TITLE,
   WELCOME_MUTED_TEXT,
   WELCOME_ONLINE_PLACEHOLDER_BG,
+  WELCOME_SEARCH_CHROME_SURFACE,
 } from './constants';
 import { formatWelcomeUsersOnlineLine } from './utils/welcomeOnlineLabel';
 import { WELCOME_FLOAT_SHADOW_IOS, WelcomeFloatShadow } from './WelcomeFloatShadow';
@@ -196,7 +196,7 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     paddingHorizontal: 20,
     borderRadius: 26,
-    backgroundColor: WELCOME_GLASS_SURFACE,
+    backgroundColor: WELCOME_SEARCH_CHROME_SURFACE,
     borderWidth: 0,
     gap: 14,
   },
@@ -209,7 +209,8 @@ const styles = StyleSheet.create({
     minHeight: 78,
     paddingLeft: 20,
     paddingRight: 10,
-    backgroundColor: 'rgba(14, 85, 119, 0.04)',
+    // То же полупрозрачное стекло, что у таб-бара на «Поиске».
+    backgroundColor: WELCOME_SEARCH_CHROME_SURFACE,
     borderWidth: StyleSheet.hairlineWidth,
     // Тон радара, приглушённый: рамка темнее, чем у кнопки поиска.
     borderColor: 'rgba(14, 85, 119, 0.38)',

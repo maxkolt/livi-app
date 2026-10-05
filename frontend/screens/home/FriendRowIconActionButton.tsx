@@ -7,6 +7,8 @@ import {
   FRIEND_ACTION_PRESS_RETENTION,
 } from '../../constants/uiTokens';
 import {
+  HOME_NAV_ACTIVE_PRESSED,
+  HOME_NAV_ACTIVE,
   ANDROID_VIDEO_CALL_DISABLED_BG,
   ANDROID_VIDEO_CALL_DISABLED_ICON,
   FRIEND_ACTION_BTN_PRESSED_SURFACE,
@@ -16,8 +18,6 @@ import {
   WELCOME_FRIEND_ACTION_BTN_RADIUS,
   WELCOME_FRIEND_ACTION_BTN_PRESSED_SURFACE,
   WELCOME_FRIEND_ACTION_BTN_SURFACE,
-  WELCOME_FRIEND_ACTION_ICON,
-  WELCOME_FRIEND_ACTION_ICON_PRESSED,
 } from './constants';
 
 /** Выше — скролл; ниже — микродрожание пальца при реальном тапе. */
@@ -128,8 +128,8 @@ export function FriendRowIconActionButton({
 
   const isWelcomeVariant = variant === 'welcome';
   const btnRadius = isWelcomeVariant ? WELCOME_FRIEND_ACTION_BTN_RADIUS : FRIEND_ACTION_BUTTON.borderRadius;
-  const iconColorDefault = isWelcomeVariant ? WELCOME_FRIEND_ACTION_ICON : LIVI.titan;
-  const iconColorPressed = isWelcomeVariant ? WELCOME_FRIEND_ACTION_ICON_PRESSED : FRIEND_ACTION_ICON_PRESSED;
+  const iconColorDefault = isWelcomeVariant ? HOME_NAV_ACTIVE : LIVI.titan;
+  const iconColorPressed = isWelcomeVariant ? HOME_NAV_ACTIVE_PRESSED : FRIEND_ACTION_ICON_PRESSED;
   const btnSurface = isWelcomeVariant ? WELCOME_FRIEND_ACTION_BTN_SURFACE : FRIEND_ACTION_BTN_SURFACE;
   const btnPressedSurface = isWelcomeVariant
     ? WELCOME_FRIEND_ACTION_BTN_PRESSED_SURFACE

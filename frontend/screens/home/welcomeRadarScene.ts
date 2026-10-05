@@ -24,11 +24,17 @@ import {
  * градиентом, линии и несколько размытых точек — это дёшево даже на 120 Гц.
  */
 
-/** Слегка приглушённые локальные тона радара, без потери фирменной бирюзы. */
-const HUD = '#134963';
-const ICE = '#4d8199';
+/**
+ * Тона радара — бирюза: линии светлее подложки RADAR_INNER_BG, чтобы
+ * читаться на непрозрачном диске.
+ */
+const HUD = '#3F8E96';
+const ICE = '#8CCAD0';
 /** Лёгкое общее приглушение без изменения баланса отдельных элементов. */
-const RADAR_ALPHA = 0.7;
+const RADAR_ALPHA = 0.85;
+/** Затемнённая бирюза под рисунком радара — полупрозрачнее фона панелей. */
+const RADAR_INNER_BG = '#0E2E33';
+const RADAR_INNER_ALPHA = 0.52;
 
 const TAU = Math.PI * 2;
 const D2R = Math.PI / 180;
@@ -240,6 +246,13 @@ function tickLength(deg: number, u: number): number {
 function drawStatic(canvas: SkCanvas, g: RadarGeometry): void {
   const { cx, cy, u, a, rIn, rDisc } = g;
   const center = Skia.Point(cx, cy);
+
+  // Всё внутри вращающегося пунктирного обода — прозрачное затемнённое стекло.
+  const base = Skia.Paint();
+  base.setAntiAlias(true);
+  base.setColor(Skia.Color(RADAR_INNER_BG));
+  base.setAlphaf(RADAR_INNER_ALPHA);
+  canvas.drawCircle(cx, cy, g.rDash, base);
 
   // Стекло: свечение от аватара, темнее к краю, у самого края — отблеск.
   const glass = Skia.Paint();

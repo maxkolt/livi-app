@@ -7,7 +7,10 @@ import { logger } from '../../utils/logger';
 import { shouldSkipHomeUiSettle } from '../../utils/globalEvents';
 import FitText from '../../components/FitText';
 import {
+  HOME_NAV_ACTIVE,
+  HOME_NAV_SURFACE,
   WELCOME_CHROME_EDGE_RADIUS,
+  WELCOME_SEARCH_CHROME_SURFACE,
   WELCOME_STAGE_BG,
   WELCOME_TAB_BAR_SHADOW,
   isWelcomeTabletLayout,
@@ -15,7 +18,7 @@ import {
 import { WelcomeFloatShadow } from './WelcomeFloatShadow';
 
 /** Активная вкладка — чуть мягче акцента рамок Search. */
-const ACTIVE_NAV_ACCENT = 'rgba(0, 181, 255, 0.32)';
+const ACTIVE_NAV_ACCENT = HOME_NAV_ACTIVE;
 const ACTIVE_ICON = ACTIVE_NAV_ACCENT;
 const ACTIVE_LABEL = ACTIVE_NAV_ACCENT;
 
@@ -66,7 +69,7 @@ function HomeWelcomeTabBarInner({
   const tabletLayout = isWelcomeTabletLayout(width, height);
   const compactLandscape =
     !tabletLayout && width > 0 && height > 0 && width / height > 1.05;
-  const floatGap = compactLandscape ? 6 : tabletLayout ? 12 : 10;
+  const floatGap = compactLandscape ? 6 : tabletLayout ? 12 : 16;
   const bottomGap = Math.max(insets.bottom, Platform.OS === 'android' ? 6 : 2) + floatGap;
   const iconSize = tabletLayout ? 29 : compactLandscape ? 24 : 26;
   const callIconSize = tabletLayout ? 28 : compactLandscape ? 23 : 25;
@@ -148,7 +151,12 @@ function HomeWelcomeTabBarInner({
       ) : (
         <View pointerEvents="none" style={styles.iosShadow} />
       )}
-      <View style={styles.surface}>
+      <View
+        style={[
+          styles.surface,
+          activeTab === 'search' ? styles.searchSurface : null,
+        ]}
+      >
         <View
           style={[
             styles.row,
@@ -269,8 +277,11 @@ const styles = StyleSheet.create({
     borderRadius: WELCOME_CHROME_EDGE_RADIUS,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: 'rgba(14, 85, 119, 0.24)',
-    backgroundColor: 'rgba(14, 85, 119, 0.1)',
+    backgroundColor: HOME_NAV_SURFACE,
     overflow: 'hidden',
+  },
+  searchSurface: {
+    backgroundColor: WELCOME_SEARCH_CHROME_SURFACE,
   },
   iosShadow: {
     ...StyleSheet.absoluteFillObject,

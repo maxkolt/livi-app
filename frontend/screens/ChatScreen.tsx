@@ -252,7 +252,7 @@ const MSG_REACTIONS_COLLAPSED = 5;
 const CHAT_READ_TICK_COLOR = 'hsl(108, 53.10%, 35.10%)';
 /** Компактная шапка чата: контент ближе к системной строке, как в Telegram. */
 const CHAT_HEADER_H = 48;
-const CHAT_HEADER_TOP_PADDING = 0;
+const CHAT_HEADER_TOP_PADDING = 6;
 /** Last non-zero Android navigation inset survives ChatScreen remounts/resume. */
 let lastStableAndroidNavInset = 0;
 /** Текст и плейсхолдер «Сообщение» начинаются с одного отступа от кнопки эмодзи. */
@@ -507,6 +507,7 @@ export default function ChatScreen({ route, navigation }: Props) {
   const [keyboardInset, setKeyboardInset] = useState(0);
   const [androidImeInset, setAndroidImeInset] = useState(0);
   const [emojiPanelOpen, setEmojiPanelOpen] = useState(false);
+  const composerInputRef = useRef<TextInput>(null);
   // Панель эмодзи собираем заранее и держим собранной: её монтирование — сотни мс JS,
   // и кнопка эмодзи открывала панель с заметной задержкой.
   const [emojiPanelWarm, setEmojiPanelWarm] = useState(false);
@@ -2336,6 +2337,18 @@ export default function ChatScreen({ route, navigation }: Props) {
     rememberOutboxLocalToServerId,
   });
 
+  // На открытой панели кнопка показывает клавиатуру — по нажатию переключаемся на неё,
+  // а не просто прячем панель.
+  const handleEmojiButtonPress = React.useCallback(() => {
+    const input = composerInputRef.current;
+    if (emojiPanelOpen && input) {
+      input.focus();
+      setEmojiPanelOpen(false);
+      return;
+    }
+    toggleEmojiPanel();
+  }, [emojiPanelOpen, toggleEmojiPanel]);
+
   const handleAttachments = () => {
     if (Platform.OS === 'ios') {
       ActionSheetIOS.showActionSheetWithOptions(
@@ -2941,7 +2954,7 @@ export default function ChatScreen({ route, navigation }: Props) {
 
                 {!voiceIsRecording ? (
                   <ChatRoundButton
-                    onPress={toggleEmojiPanel}
+                    onPress={handleEmojiButtonPress}
                     hitSlop={{ top: 10, bottom: 10, left: 6, right: 6 }}
                     accessibilityLabel="Emoji"
                     backgroundColor={COMPOSER_IDLE_BUTTON_BG}
@@ -2959,6 +2972,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 {/* minWidth:0 — иначе Android multiline TextInput раздувает hit-box и перекрывает микрофон/отправку */}
                 <View style={{ flex: 1, minWidth: 0, justifyContent: 'center' }}>
                   <TextInput
+                    ref={composerInputRef}
                     style={{
                       flex: 1,
                       color: voiceIsRecording ? 'transparent' : LIVI.white,
@@ -3363,7 +3377,7 @@ export default function ChatScreen({ route, navigation }: Props) {
 
                 {!voiceIsRecording ? (
                   <ChatRoundButton
-                    onPress={toggleEmojiPanel}
+                    onPress={handleEmojiButtonPress}
                     hitSlop={{ top: 10, bottom: 10, left: 6, right: 6 }}
                     accessibilityLabel="Emoji"
                     backgroundColor={COMPOSER_IDLE_BUTTON_BG}
@@ -3380,6 +3394,7 @@ export default function ChatScreen({ route, navigation }: Props) {
 
                 <View style={{ flex: 1, minWidth: 0, justifyContent: 'center' }}>
                   <TextInput
+                    ref={composerInputRef}
                     style={{
                       flex: 1,
                       color: voiceIsRecording ? 'transparent' : LIVI.white,
@@ -3557,6 +3572,8 @@ export default function ChatScreen({ route, navigation }: Props) {
                 style={{
                   backgroundColor: isDark ? undefined : INPUT_BAR_BG,
                   paddingBottom: Math.max(0, insets.bottom),
+                  // Стекло рисует фон окна целиком: без клипа оно закрывает ленту и композер.
+                  overflow: 'hidden',
                 }}
               >
                 <View

@@ -91,7 +91,7 @@ import { HomeWelcomeTabBar, type WelcomeTabId } from './home/HomeWelcomeTabBar';
 import { WelcomeKeepAlivePane } from './home/WelcomeKeepAlivePane';
 import { WelcomeStageBackground } from './home/WelcomeStageBackground';
 import { HomeLayoutProvider } from './home/HomeLayoutContext';
-import { WELCOME_HEADER_TITLE, WELCOME_STAGE_BG } from './home/constants';
+import { HOME_NAV_BG, WELCOME_HEADER_TITLE, WELCOME_STAGE_BG } from './home/constants';
 import { recordCallLog, recordCancelledCall, recordNoAnswerCall, requestCallLogSoftUi, cancelPendingCallLogNotify, flushCallLogUi, forceCallLogUiNow, loadCallLog } from './home/callLog';
 import { prefetchChatPreviews } from './home/hooks/useChatPreviews';
 import {
@@ -943,7 +943,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     hasPendingRequest?: boolean;
   } | null>(null);
   const BOOSTY_URL = process.env.EXPO_PUBLIC_BOOSTY_URL || "https://boosty.to/liviapp/donate";
-  const PATREON_URL = process.env.EXPO_PUBLIC_PATREON_URL || "https://www.patreon.com/c/LiViApp";
+  const PATREON_URL = process.env.EXPO_PUBLIC_PATREON_URL || "https://patreon.com/LiViApp?utm_medium=unknown&utm_source=join_link&utm_campaign=creatorshare_creator&utm_content=copyLink";
   const appendUtm = React.useCallback((url: string, params: Record<string, string>) => {
     try {
       const u = new URL(url);
@@ -5571,14 +5571,11 @@ const handleClearNick = useCallback(async () => {
 
   return (
     <View
-      style={{ flex: 1, backgroundColor: WELCOME_STAGE_BG }}
+      // Сплошной фон один на все ориентации и при повороте не гаснет — меняется только контент.
+      style={{ flex: 1, backgroundColor: HOME_NAV_BG }}
       onLayout={onHomeRootLayout}
     >
       <HomeLayoutProvider size={homeLayoutSize} onLayoutActivity={notifyLayoutActivity}>
-      {/* Фон один на все ориентации и при повороте не гаснет — меняется только
-          контент. Раньше фон гас вместе с контентом, и на его месте ~0.7с стояла
-          плоская заливка: читалось как смена фона. */}
-      <WelcomeStageBackground />
       <Animated.View style={{ flex: 1, minHeight: 0, opacity: contentOpacity }}>
     <SafeAreaView
         style={[

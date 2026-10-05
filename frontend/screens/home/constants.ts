@@ -2,6 +2,35 @@ import { Platform, StyleSheet } from 'react-native';
 
 /** Фон welcome-экрана (макет). */
 export const WELCOME_STAGE_BG = '#0A0C14';
+/**
+ * Фон страниц с таб-баром (Поиск, Друзья, Звонки, Чат, Профиль): сплошной серо-синий.
+ * Почти чёрный градиент на солнце сливался в одно пятно. Нативные экраны — прежний фон.
+ */
+export const HOME_NAV_BG = '#1E293B';
+/**
+ * Непрозрачная заливка блоков поверх HOME_NAV_BG: таб-бар, «Онлайн», фильтры списков,
+ * подложка радара. Бирюзово-серый, светлее фона — блоки лежат поверх и не просвечивают.
+ */
+export const HOME_NAV_SURFACE = '#26484D';
+/** Кнопка «Найти собеседника» — на ступень светлее блоков. */
+export const HOME_NAV_CTA_SURFACE = 'rgba(43, 84, 89, 0.58)';
+/**
+ * Стекло верхней и нижней панели именно на «Поиске»: фон сцены заметно
+ * просвечивает, но иконки и подписи остаются читаемыми.
+ */
+export const WELCOME_SEARCH_CHROME_SURFACE = 'rgba(38, 72, 77, 0.52)';
+/** Выбранный пункт в фильтрах списков («Все» / «Пропущенные»…) — светлее подложки блока. */
+export const HOME_NAV_SEGMENT_ACTIVE = '#36666C';
+/**
+ * Цвет активной вкладки — тот же, что был поверх прежнего тёмного таб-бара
+ * (rgba(0, 181, 255, 0.32) на ~#0F2334). Непрозрачный: на бирюзово-серой панели
+ * полупрозрачный акцент смешивался светлее.
+ */
+export const HOME_NAV_ACTIVE = '#0A5275';
+/** Та же иконка в нажатом состоянии — на светлой подложке HOME_NAV_SEGMENT_ACTIVE. */
+export const HOME_NAV_ACTIVE_PRESSED = '#3FA3C6';
+/** Квадрат под иконкой в карточке — темнее карточки, чтобы иконка HOME_NAV_ACTIVE читалась. */
+export const HOME_NAV_ICON_WELL = '#1F3D42';
 /** Accent gradient (aura) — вместо фиолетового на макете. */
 export const AURA_GRADIENT = ['#14b8a6', '#3b82f6', '#00b5ff'] as const;
 export const AURA_GLOW = '#3b82f6';
@@ -158,14 +187,14 @@ export const WELCOME_FRIEND_ACTION_ICON_PRESSED = '#7eb8cc';
 
 /** Welcome: та же заливка, что у menu, без рамки. */
 export const WELCOME_FRIEND_ACTION_BTN_SURFACE = {
-  backgroundColor: 'rgba(14, 85, 119, 0.22)',
+  backgroundColor: HOME_NAV_SURFACE,
   borderWidth: 0,
   justifyContent: 'center' as const,
   alignItems: 'center' as const,
 };
 
 export const WELCOME_FRIEND_ACTION_BTN_PRESSED_SURFACE = {
-  backgroundColor: 'rgba(77, 147, 181, 0.32)',
+  backgroundColor: HOME_NAV_SEGMENT_ACTIVE,
   borderWidth: 0,
   transform: [{ scale: 0.92 }],
 } as const;

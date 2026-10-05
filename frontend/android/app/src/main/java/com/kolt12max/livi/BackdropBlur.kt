@@ -482,6 +482,9 @@ class BlurBackdropView(context: Context) : View(context) {
     val w = width
     val h = height
     if (w <= 0 || h <= 0) return
+    // RN-родитель не клипает детей (clipChildren=false): фон окна и drawColor
+    // иначе закрашивают всё за пределами стекла.
+    canvas.clipRect(0, 0, w, h)
     getLocationInWindow(selfLoc)
     // Фон окна — на случай, если фонового источника нет.
     rootView.background?.let { bg ->

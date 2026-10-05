@@ -10,6 +10,7 @@ import {
 import { useHomeLayout } from './HomeLayoutContext';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import {
+  HOME_NAV_CTA_SURFACE,
   SEARCH_CTA_MAX_WIDTH,
   SEARCH_CTA_TABLET_MAX_WIDTH,
   isWelcomeTabletLayout,
@@ -22,9 +23,9 @@ import FitText from '../../components/FitText';
 import { logger } from '../../utils/logger';
 
 const BORDER_W = 1;
-/** Рамка, фон и свечение — в тон радара: край стекла, само стекло, ореол. */
+/** Рамка и фон — в тон радара; тень намеренно нейтрально-тёмная. */
 const CTA_WAVE = SEARCH_RADAR_HUD;
-const CTA_FILL = 'rgba(14, 85, 119, 0.12)';
+const CTA_FILL = HOME_NAV_CTA_SURFACE;
 /** Мягкое кольцо вокруг рамки. */
 const CTA_BORDER_SOFT = 'rgba(14, 85, 119, 0.25)';
 
@@ -300,11 +301,11 @@ export function WelcomeSearchCta({
 
 const styles = StyleSheet.create({
   shadow: {
-    shadowColor: CTA_WAVE,
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.08,
-    shadowRadius: 10,
-    elevation: 3,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.42,
+    shadowRadius: 14,
+    elevation: 10,
     overflow: 'visible',
   },
   borderGlow: {

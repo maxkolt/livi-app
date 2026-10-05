@@ -2,8 +2,8 @@ import React, { memo, useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import {
+  HOME_NAV_SURFACE,
   CROWN_GOLD,
-  WELCOME_CHROME_BTN_BG,
   WELCOME_ONLINE_PLACEHOLDER_BG,
 } from './constants';
 import { FramesStoreModal } from '../../components/frames/FramesStoreModal';
@@ -88,7 +88,7 @@ const styles = StyleSheet.create({
     flexShrink: 0,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: WELCOME_CHROME_BTN_BG,
+    backgroundColor: HOME_NAV_SURFACE,
   },
   btnOnlinePanel: {
     backgroundColor: WELCOME_ONLINE_PLACEHOLDER_BG,

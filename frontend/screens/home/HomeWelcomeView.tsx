@@ -27,7 +27,7 @@ import { HomeCenterProfile, hasProfilePhoto } from './HomeCenterProfile';
 import { WelcomeCrownButton } from './WelcomeCrownButton';
 import { WelcomeOnlineBanner, type WelcomeBannerPeer } from './WelcomeOnlineBanner';
 import { WelcomeRadar } from './WelcomeRadar';
-import { RADAR_DRAWN_EXTENT } from './welcomeRadarScene';
+import { RADAR_DRAWN_EXTENT, radarGeometry } from './welcomeRadarScene';
 import { WelcomeSearchCta, welcomeSearchCtaHeight, welcomeSearchCtaWidth } from './WelcomeSearchCta';
 import type { Lang } from '../../utils/i18n';
 import { logger } from '../../utils/logger';
@@ -310,6 +310,19 @@ function HomeWelcomeViewInner({
   const radarSize = Math.round(Math.max(96, Math.min(radarPreferred, Math.max(96, radarHeightLimit))));
 
   /**
+   * Портрет: кнопка посередине между низом рисунка радара и таб-баром (низ сцены).
+   * Раскладка та же — радар не двигается, сдвигаем только кнопку.
+   */
+  const ctaShiftY = (() => {
+    if (splitStage) return 0;
+    const radarAreaH = stageH - stageCopyReserve;
+    // Видимый край — пунктирное кольцо; RADAR_DRAWN_EXTENT шире (с прежним пустым полем).
+    const drawnBottom = radarAreaH / 2 + radarGeometry(radarSize, 0).rDash;
+    const ctaTop = drawnBottom + (stageH - drawnBottom - ctaHeight) / 2;
+    return Math.round(ctaTop - (radarAreaH + space.ctaMinGap));
+  })();
+
+  /**
    * Телефон: аватар в любой ориентации — как на Поиске в вертикали (тот же
    * эталон берёт Профиль). Радар в landscape меньше, и под аватар подстраиваются
    * только кольца, а не наоборот.
@@ -500,6 +513,7 @@ function HomeWelcomeViewInner({
               {
                 paddingTop: space.ctaMinGap,
                 paddingBottom: space.ctaBottomPad,
+                transform: [{ translateY: ctaShiftY }],
               },
             ]}
           >

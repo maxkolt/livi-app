@@ -57,7 +57,7 @@ import { APP_INPUT_MAX_FONT_SIZE_MULTIPLIER } from '../../utils/accessibilityTyp
 const SUPPORT_EMAIL = '12345kolt@gmail.com';
 const SUPPORT_EMAIL_2 = 'kolt12max@mail.ru';
 const BOOSTY_URL = process.env.EXPO_PUBLIC_BOOSTY_URL || 'https://boosty.to/liviapp/donate';
-const PATREON_URL = process.env.EXPO_PUBLIC_PATREON_URL || 'https://www.patreon.com/c/LiViApp';
+const PATREON_URL = process.env.EXPO_PUBLIC_PATREON_URL || 'https://patreon.com/LiViApp?utm_medium=unknown&utm_source=join_link&utm_campaign=creatorshare_creator&utm_content=copyLink';
 /**
  * Толщина рамки берётся из общего источника: раньше здесь была своя константа
  * 2.5, а «Поиск» считал ~4.5 — одна и та же купленная рамка отличалась на глаз.
@@ -271,7 +271,7 @@ function resolveHubMetrics(
 function estimateTabBarHeight(bottomInset: number, isTablet: boolean, isLandscape: boolean) {
   // Совпадает с minHeight строки таб-бара в HomeWelcomeTabBar.
   const base = isTablet ? 60 : isLandscape ? 40 : 52;
-  const floatGap = isLandscape && !isTablet ? 6 : isTablet ? 12 : 10;
+  const floatGap = isLandscape && !isTablet ? 6 : isTablet ? 12 : 16;
   return base + Math.max(bottomInset, Platform.OS === 'android' ? 6 : 2) + floatGap;
 }
 

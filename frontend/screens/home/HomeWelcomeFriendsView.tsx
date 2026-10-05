@@ -15,11 +15,12 @@ import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { t, type Lang } from '../../utils/i18n';
 import { APP_INPUT_MAX_FONT_SIZE_MULTIPLIER } from '../../utils/accessibilityTypography';
 import {
+  HOME_NAV_ICON_WELL,
+  HOME_NAV_ACTIVE,
   LIVI,
-  WELCOME_BRAND_VI_FILL_GRADIENT,
-  WELCOME_CHROME_BTN_BG,
   WELCOME_GLASS_BORDER,
   WELCOME_LIST_SURFACE,
+  HOME_NAV_SURFACE,
   WELCOME_MUTED_TEXT,
   WELCOME_SEARCH_CTA_BORDER,
   WELCOME_FRIENDS_INVITE_GAP,
@@ -228,7 +229,7 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
           <MaterialCommunityIcons
             name="gift-outline"
             size={compactLandscape ? 28 : tabletLayout ? 40 : 38}
-            color={WELCOME_BRAND_VI_FILL_GRADIENT[2]}
+            color={HOME_NAV_ACTIVE}
           />
         </View>
         <View style={styles.inviteTextCol}>
@@ -327,7 +328,7 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
           <Ionicons
             name={searchOpen ? 'search' : 'search-outline'}
             size={tabletLayout ? 24 : compactLandscape ? 19 : 22}
-            color={searchOpen ? WELCOME_SEGMENT_ACTIVE : LIVI.white}
+            color={searchOpen ? WELCOME_SEGMENT_ACTIVE : HOME_NAV_ACTIVE}
           />
         </Pressable>
         <WelcomeCrownButton small={compactLandscape} large={tabletLayout} />
@@ -541,7 +542,7 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: WELCOME_CHROME_BTN_BG,
+    backgroundColor: HOME_NAV_SURFACE,
   },
   iconBtnLandscape: {
     width: 32,
@@ -606,7 +607,8 @@ const styles = StyleSheet.create({
     padding: 7,
     minHeight: WELCOME_FRIENDS_SEGMENT_HEIGHT.phone,
     borderRadius: WELCOME_FRIENDS_SEGMENT_SHELL_RADIUS,
-    backgroundColor: WELCOME_LIST_SURFACE,
+    // Фон как у таб-бара.
+    backgroundColor: HOME_NAV_SURFACE,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: WELCOME_GLASS_BORDER,
     gap: 5,
@@ -643,7 +645,8 @@ const styles = StyleSheet.create({
     paddingVertical: 11,
   },
   segmentBtnActive: {
-    backgroundColor: WELCOME_SEARCH_CTA_BORDER,
+    // Выбранный фильтр — цвет активной вкладки.
+    backgroundColor: HOME_NAV_ACTIVE,
   },
   segmentLabel: {
     color: WELCOME_MUTED_TEXT,
@@ -679,7 +682,8 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     paddingHorizontal: 14,
     borderRadius: WELCOME_FRIENDS_SEGMENT_SHELL_RADIUS,
-    backgroundColor: WELCOME_LIST_SURFACE,
+    // Как фильтры и кнопки: бирюзово-серая непрозрачная карточка.
+    backgroundColor: HOME_NAV_SURFACE,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: WELCOME_GLASS_BORDER,
     gap: 12,
@@ -708,7 +712,7 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: WELCOME_CHROME_BTN_BG,
+    backgroundColor: HOME_NAV_ICON_WELL,
   },
   inviteIconWrapLandscape: {
     width: 40,

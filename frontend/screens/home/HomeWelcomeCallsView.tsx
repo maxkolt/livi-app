@@ -19,8 +19,8 @@ import AvatarImage from '../../components/AvatarImage';
 import { t, type Lang } from '../../utils/i18n';
 import { APP_INPUT_MAX_FONT_SIZE_MULTIPLIER } from '../../utils/accessibilityTypography';
 import {
+  HOME_NAV_ACTIVE,
   LIVI,
-  WELCOME_CHROME_BTN_BG,
   WELCOME_FRIEND_AVATAR_SIZE,
   WELCOME_FRIEND_AVATAR_SIZE_LANDSCAPE,
   WELCOME_FRIEND_CARD_GAP,
@@ -37,6 +37,7 @@ import {
   WELCOME_FRIENDS_SEGMENT_GAP,
   WELCOME_GLASS_BORDER,
   WELCOME_LIST_SURFACE,
+  HOME_NAV_SURFACE,
   WELCOME_HEADER_TITLE,
   WELCOME_MUTED_TEXT,
   WELCOME_SEARCH_CTA_BORDER,
@@ -748,7 +749,7 @@ function HomeWelcomeCallsViewInner({
                 <Ionicons
                   name={searchOpen ? 'search' : 'search-outline'}
                   size={tabletLayout ? 24 : compactLandscape ? 19 : 22}
-                  color={searchOpen ? WELCOME_SEGMENT_ACTIVE : LIVI.white}
+                  color={searchOpen ? WELCOME_SEGMENT_ACTIVE : HOME_NAV_ACTIVE}
                 />
               </Pressable>
               <WelcomeCrownButton small={compactLandscape} large={tabletLayout} />
@@ -1004,7 +1005,7 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: WELCOME_CHROME_BTN_BG,
+    backgroundColor: HOME_NAV_SURFACE,
   },
   iconBtnLandscape: {
     width: 32,
@@ -1069,7 +1070,8 @@ const styles = StyleSheet.create({
     padding: 7,
     minHeight: 72,
     borderRadius: WELCOME_FRIENDS_SEGMENT_SHELL_RADIUS,
-    backgroundColor: WELCOME_LIST_SURFACE,
+    // Фон как у таб-бара.
+    backgroundColor: HOME_NAV_SURFACE,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: WELCOME_GLASS_BORDER,
     gap: 5,
@@ -1111,7 +1113,8 @@ const styles = StyleSheet.create({
     maxWidth: '100%',
   },
   segmentBtnActive: {
-    backgroundColor: WELCOME_SEARCH_CTA_BORDER,
+    // Выбранный фильтр — цвет активной вкладки.
+    backgroundColor: HOME_NAV_ACTIVE,
   },
   segmentLabel: {
     color: WELCOME_MUTED_TEXT,
