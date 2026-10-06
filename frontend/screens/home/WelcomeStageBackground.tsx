@@ -16,7 +16,7 @@ import { requireNativeComponentOnce } from '../../utils/requireNativeComponentOn
 import { useSafeAreaFrame } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { BlurView } from 'expo-blur';
-import { SEARCH_CTA_TABLET_MIN_WIDTH, WELCOME_STAGE_BG } from './constants';
+import { HOME_NAV_BG, SEARCH_CTA_TABLET_MIN_WIDTH, WELCOME_GLASS_RIM, WELCOME_STAGE_BG } from './constants';
 import { NativeBlurBackdrop, type BackdropSources } from '../../components/BackdropBlur';
 
 const STAGE_BG = require('../../assets/welcome-stage-bg.png');
@@ -40,16 +40,29 @@ const HOME_STAGE_EDGE_RGB = '15,30,45';
 const HOME_STAGE_MID = '#0C1521';
 const HOME_STAGE_FADE_STEPS = 16;
 
-function buildHomeStageGradient() {
+/**
+ * Новая сцена (StagePalette.TEAL в StageBackground.kt): тон блоков (UI_SURFACE) у краёв →
+ * серый «Поиска» (HOME_NAV_BG) в середине. Сплэш, экраны звонка, витрина Legendary.
+ * Имя «teal» осталось с бирюзовой версии.
+ */
+const TEAL_STAGE_EDGE_RGB = '46,53,64';
+/** Витрина Legendary: края приглушены почти до середины (StagePalette.TEAL_DEEP). */
+const TEAL_DEEP_STAGE_EDGE_RGB = '40,46,56';
+
+export type StagePaletteName = 'classic' | 'teal' | 'tealDeep';
+
+/** reach — доля пути от края до середины, занятая переходом (как StagePalette.reach). */
+function buildHomeStageGradient(edgeRgb: string, reach = 1) {
   const colors: string[] = [];
   const locations: number[] = [];
   const total = HOME_STAGE_FADE_STEPS * 2;
   for (let i = 0; i <= total; i += 1) {
     const pos = i / total;
-    // 1 у края экрана, 0 в середине.
-    const edge = Math.abs(pos - 0.5) * 2;
+    // 1 у края экрана, 0 к доле reach пути до середины.
+    const fromEdge = Math.abs(pos - 0.5) * 2;
+    const edge = Math.min(1, Math.max(0, (fromEdge - (1 - reach)) / reach));
     const k = (1 - Math.cos(Math.PI * edge)) / 2;
-    colors.push(`rgba(${HOME_STAGE_EDGE_RGB},${k.toFixed(4)})`);
+    colors.push(`rgba(${edgeRgb},${k.toFixed(4)})`);
     locations.push(pos);
   }
   return {
@@ -58,10 +71,11 @@ function buildHomeStageGradient() {
   };
 }
 
-const {
-  colors: HOME_STAGE_GRADIENT_COLORS,
-  locations: HOME_STAGE_GRADIENT_LOCATIONS,
-} = buildHomeStageGradient();
+const STAGE_PALETTES = {
+  classic: { mid: HOME_STAGE_MID, base: WELCOME_STAGE_BG, ...buildHomeStageGradient(HOME_STAGE_EDGE_RGB) },
+  teal: { mid: HOME_NAV_BG, base: HOME_NAV_BG, ...buildHomeStageGradient(TEAL_STAGE_EDGE_RGB) },
+  tealDeep: { mid: HOME_NAV_BG, base: HOME_NAV_BG, ...buildHomeStageGradient(TEAL_DEEP_STAGE_EDGE_RGB, 0.7) },
+} as const;
 
 /**
  * Android: тот же профиль рисует натив (StageBackground.kt) — bitmap ровно в пиксели
@@ -70,7 +84,7 @@ const {
  */
 const NativeStageBackground =
   Platform.OS === 'android' && UIManager.hasViewManagerConfig('LiviStageBackground')
-    ? requireNativeComponentOnce<ViewProps>('LiviStageBackground')
+    ? requireNativeComponentOnce<ViewProps & { palette?: StagePaletteName }>('LiviStageBackground')
     : null;
 
 /**
@@ -108,32 +122,33 @@ function resolveIsWide(width: number, height: number): boolean {
  * ориентации. Базовый цвет под ним совпадает с нативным фоном окна, поэтому при
  * повороте или пробуждении не возникает светлого шва.
  */
-export function WelcomeStageBackground() {
+export function WelcomeStageBackground({ palette = 'classic' }: { palette?: StagePaletteName } = {}) {
   if (NativeStageBackground) {
     // Тот же bitmap, что у фона окна, — при повороте и пробуждении шва нет.
     return (
       <View style={StyleSheet.absoluteFill} pointerEvents="none">
-        <NativeStageBackground style={StyleSheet.absoluteFill} />
+        <NativeStageBackground style={StyleSheet.absoluteFill} palette={palette} />
       </View>
     );
   }
-  return <GradientStageBackground />;
+  return <GradientStageBackground palette={palette} />;
 }
 
-function GradientStageBackground() {
+function GradientStageBackground({ palette }: { palette: StagePaletteName }) {
+  const stage = STAGE_PALETTES[palette];
   const resumeEpoch = useResumeEpoch();
   // Как и после сна, после поворота нативный слой может остаться со старой геометрией.
   const { width, height } = useWindowDimensions();
   return (
     <View
-      style={[StyleSheet.absoluteFill, { backgroundColor: WELCOME_STAGE_BG }]}
+      style={[StyleSheet.absoluteFill, { backgroundColor: stage.base }]}
       pointerEvents="none"
     >
-      <View style={[StyleSheet.absoluteFill, { backgroundColor: HOME_STAGE_MID }]} />
+      <View style={[StyleSheet.absoluteFill, { backgroundColor: stage.mid }]} />
       <LinearGradient
         key={`stage-gradient-${resumeEpoch}-${Math.round(width)}x${Math.round(height)}`}
-        colors={HOME_STAGE_GRADIENT_COLORS}
-        locations={HOME_STAGE_GRADIENT_LOCATIONS}
+        colors={stage.colors}
+        locations={stage.locations}
         style={StyleSheet.absoluteFill}
         pointerEvents="none"
       />
@@ -153,6 +168,12 @@ type StageGradientProps = {
   matteOpacity?: number;
   /** Android 12+: стекло из этих источников на GPU вместо expo-blur (Dimezis). */
   backdrop?: BackdropSources | null;
+  /** Блок продолжает chrome над собой (панель эмодзи под композером): без кромки сверху. */
+  joinTop?: boolean;
+  /** Плотнее к краю экрана; false — край у другого блока (под композером открыта панель). */
+  edgeFade?: boolean;
+  /** Кромка со всех сторон: блок не у края экрана (плавающий навбар). */
+  fullRim?: boolean;
 };
 
 const GLASS_BLUR_INTENSITY = Platform.OS === 'android' ? 12 : 20;
@@ -160,6 +181,26 @@ const GLASS_BLUR_REDUCTION = 4;
 /** Тон tint="dark" у expo-blur на Android при той же intensity. */
 const GLASS_DARK_TINT = `rgba(25, 25, 25, ${Math.trunc(255 * (GLASS_BLUR_INTENSITY / 100) * 0.69) / 255})`;
 const GLASS_FADE_LOCATIONS = [0, 0.14, 0.38, 1] as const;
+/**
+ * Стекло шапки и композера чата в тонах вкладок главной: серо-синяя глазурь, на
+ * размытом фоне HOME_NAV_BG выходит тоном блоков (UI_SURFACE). У края экрана — чуть
+ * плотнее и темнее, к ленте ровная глазурь, сквозь которую видны размытые облака.
+ */
+const GLASS_TINT_RGB = '62, 72, 86';
+const GLASS_EDGE_COLORS = [
+  'rgba(26, 31, 39, 0.5)',
+  'rgba(26, 31, 39, 0.32)',
+  'rgba(26, 31, 39, 0.1)',
+  'rgba(26, 31, 39, 0)',
+] as const;
+const NO_EDGE_FADE: readonly string[] = [];
+const RADIUS_KEYS = [
+  'borderRadius',
+  'borderTopLeftRadius',
+  'borderTopRightRadius',
+  'borderBottomLeftRadius',
+  'borderBottomRightRadius',
+] as const;
 
 /** Chrome header/composer: bitmap для непрозрачного stage, градиент только для стекла. */
 export function StageGradient({
@@ -168,8 +209,11 @@ export function StageGradient({
   onLayout,
   translucent,
   mirror,
-  matteOpacity = 0.08,
+  matteOpacity = 0.38,
   backdrop,
+  joinTop,
+  edgeFade = true,
+  fullRim,
 }: StageGradientProps) {
   const frame = useSafeAreaFrame();
   const resumeEpoch = useResumeEpoch();
@@ -215,21 +259,25 @@ export function StageGradient({
     );
   }
 
-  // Рассеивание на весь блок: у края экрана плотнее, к ленте — всё меньше.
-  // Бирюза разбавлена синим — в тон краёв основного фона (HOME_STAGE_EDGE_RGB).
-  const colors = [
-    'rgba(11, 20, 31, 0.88)',
-    'rgba(9, 15, 24, 0.76)',
-    'rgba(8, 12, 19, 0.48)',
-    'rgba(8, 11, 17, 0.10)',
-  ] as const;
   const vStart = mirror ? { x: 0.5, y: 1 } : { x: 0.5, y: 0 };
   const vEnd = mirror ? { x: 0.5, y: 0 } : { x: 0.5, y: 1 };
-  const matte = `rgba(8, 13, 22, ${matteOpacity})`;
+  const matte = `rgba(${GLASS_TINT_RGB}, ${matteOpacity})`;
+  // Кромка — по скруглениям самого блока; у края экрана (над шапкой, под композером) её нет.
+  const flat = StyleSheet.flatten(style) || {};
+  const rimStyle: ViewStyle = {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: WELCOME_GLASS_RIM,
+    ...(fullRim ? null : mirror ? { borderBottomWidth: 0 } : { borderTopWidth: 0 }),
+    ...(joinTop ? { borderTopWidth: 0 } : null),
+  };
+  for (const key of RADIUS_KEYS) {
+    if (flat[key] != null) rimStyle[key] = flat[key] as number;
+  }
 
   return (
     <View style={style} onLayout={onLayout}>
       {NativeBlurBackdrop && backdrop ? (
+        // Натив сам кладёт matte, градиент края и tint поверх размытой ленты.
         <NativeBlurBackdrop
           pointerEvents="none"
           backgroundSources={backdrop.background}
@@ -237,41 +285,76 @@ export function StageGradient({
           blurRadius={GLASS_BLUR_INTENSITY / GLASS_BLUR_REDUCTION}
           overlayColor={GLASS_DARK_TINT}
           matteColor={matte}
-          fadeColors={colors}
+          fadeColors={edgeFade ? GLASS_EDGE_COLORS : NO_EDGE_FADE}
           fadeLocations={GLASS_FADE_LOCATIONS}
           mirror={!!mirror}
           style={[StyleSheet.absoluteFill, { zIndex: 0 }]}
         />
       ) : (
-        <BlurView
-          pointerEvents="none"
-          intensity={GLASS_BLUR_INTENSITY}
-          tint="dark"
-          experimentalBlurMethod={Platform.OS === 'android' ? 'dimezisBlurView' : undefined}
-          blurReductionFactor={GLASS_BLUR_REDUCTION}
-          style={[StyleSheet.absoluteFill, { zIndex: 0 }]}
-        />
+        <>
+          <BlurView
+            pointerEvents="none"
+            intensity={GLASS_BLUR_INTENSITY}
+            tint="dark"
+            experimentalBlurMethod={Platform.OS === 'android' ? 'dimezisBlurView' : undefined}
+            blurReductionFactor={GLASS_BLUR_REDUCTION}
+            style={[StyleSheet.absoluteFill, { zIndex: 0 }]}
+          />
+          {/* Матовый tint лежит только в backdrop; интерактивный контент рисуется выше. */}
+          <View
+            pointerEvents="none"
+            style={[
+              StyleSheet.absoluteFill,
+              { zIndex: 1, backgroundColor: matte },
+            ]}
+          />
+          {edgeFade ? (
+          <LinearGradient
+            colors={[...GLASS_EDGE_COLORS]}
+            // Плотный край остаётся у status/navigation bar, а к контенту
+            // затемнение растворяется раньше и не утяжеляет шапку/композер.
+            locations={[...GLASS_FADE_LOCATIONS]}
+            start={vStart}
+            end={vEnd}
+            style={[StyleSheet.absoluteFill, { zIndex: 1 }]}
+            pointerEvents="none"
+          />
+          ) : null}
+        </>
       )}
-      {/* Матовый tint лежит только в backdrop; интерактивный контент рисуется выше. */}
-      <View
-        pointerEvents="none"
-        style={[
-          StyleSheet.absoluteFill,
-          { zIndex: 1, backgroundColor: matte },
-        ]}
-      />
-      <LinearGradient
-        colors={[...colors]}
-        // Плотный край остаётся у status/navigation bar, а к контенту
-        // затемнение растворяется раньше и не утяжеляет шапку/композер.
-        locations={[...GLASS_FADE_LOCATIONS]}
-        start={vStart}
-        end={vEnd}
-        style={[StyleSheet.absoluteFill, { zIndex: 1 }]}
-        pointerEvents="none"
-      />
+      <View pointerEvents="none" style={[StyleSheet.absoluteFill, { zIndex: 1 }, rimStyle]} />
       {children}
     </View>
+  );
+}
+
+/** Стекло доступно: Android 12+ (нативное, без перерисовки окна на CPU) и iOS. */
+export const GLASS_AVAILABLE = Platform.OS === 'ios' || !!NativeBlurBackdrop;
+
+/**
+ * Стеклянная подложка блока (меню сообщения, реакции, листы, капсула звонка): absoluteFill
+ * первым ребёнком блока, скругление — через style. Сам блок при этом прозрачный и без рамки:
+ * кромку рисует стекло. Где стекла нет — null, блок остаётся со своей непрозрачной заливкой.
+ */
+export function GlassFill({
+  backdrop,
+  style,
+  matteOpacity = 0.5,
+}: {
+  backdrop: BackdropSources | null;
+  style?: StyleProp<ViewStyle>;
+  matteOpacity?: number;
+}) {
+  if (!GLASS_AVAILABLE) return null;
+  return (
+    <StageGradient
+      translucent
+      matteOpacity={matteOpacity}
+      backdrop={backdrop}
+      edgeFade={false}
+      fullRim
+      style={[StyleSheet.absoluteFill, { overflow: 'hidden' }, style]}
+    />
   );
 }
 

@@ -7,15 +7,16 @@
 
 import { Dimensions, Platform, StyleSheet } from 'react-native';
 import {
+  HOME_NAV_BG,
   WELCOME_HEADER_TITLE,
   WELCOME_NAV_ACTIVE_ACCENT,
   WELCOME_NAV_ACTIVE_ICON,
-  WELCOME_STAGE_BG,
+  UI_SURFACE_RAISED,
 } from '../../../screens/home/constants';
 
 /** Общая основа «карточек» поверх видео: тёмная подложка со скруглением. */
 export const CARD_BASE = {
-  backgroundColor: 'rgba(13,14,16,0.85)',
+  backgroundColor: 'rgba(26, 31, 39, 0.92)',
   borderRadius: 10,
   justifyContent: 'center' as const,
   alignItems: 'center' as const,
@@ -34,7 +35,7 @@ export const styles = StyleSheet.create({
     backgroundColor: '#000',
   },
   systemPiPAudioMatch: {
-    backgroundColor: WELCOME_STAGE_BG,
+    backgroundColor: HOME_NAV_BG,
   },
   systemPiPVideoFill: {
     flex: 1,
@@ -54,6 +55,12 @@ export const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: 'rgba(255,255,255,0.18)',
     zIndex: 4,
+  },
+  /** Свой кадр в TextureView (PIP_ROUNDED): скруглён, без рамки. */
+  systemPiPLocalInsetRounded: {
+    borderRadius: 8,
+    borderWidth: 0,
+    backgroundColor: 'transparent',
   },
   unifiedCallStage: {
     flex: 1,
@@ -84,6 +91,21 @@ export const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     backgroundColor: '#000',
   },
+  /**
+   * Видео в TextureView (Android 12+) / iOS: скруглённые углы без рамки. Подложка прозрачная:
+   * сглаженный край чёрного фона по дуге скругления выглядел тонкой тёмной рамкой.
+   */
+  unifiedLocalPipRounded: {
+    borderRadius: 16,
+    borderWidth: 0,
+    overflow: 'hidden',
+    backgroundColor: 'transparent',
+  },
+  unifiedLocalPipInnerRounded: {
+    borderRadius: 16,
+    overflow: 'hidden',
+    backgroundColor: 'transparent',
+  },
   unifiedFlipBtn: {
     position: 'absolute',
     right: 8,
@@ -103,7 +125,7 @@ export const styles = StyleSheet.create({
     zIndex: 28,
   },
   audioCallContainer: {
-    backgroundColor: WELCOME_STAGE_BG,
+    backgroundColor: HOME_NAV_BG,
   },
   audioCallContent: {
     flex: 1,
@@ -322,7 +344,7 @@ export const styles = StyleSheet.create({
   },
   modalCard: {
     width: '86%',
-    backgroundColor: '#1f2937',
+    backgroundColor: UI_SURFACE_RAISED,
     padding: 16,
     borderRadius: 12,
   },

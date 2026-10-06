@@ -6,67 +6,142 @@ export const WELCOME_STAGE_BG = '#0A0C14';
  * Фон страниц с таб-баром (Поиск, Друзья, Звонки, Чат, Профиль): сплошной серо-синий.
  * Почти чёрный градиент на солнце сливался в одно пятно. Нативные экраны — прежний фон.
  */
-export const HOME_NAV_BG = '#1E293B';
+export const HOME_NAV_BG = '#252B34';
+
 /**
- * Непрозрачная заливка блоков поверх HOME_NAV_BG: таб-бар, «Онлайн», фильтры списков,
- * подложка радара. Бирюзово-серый, светлее фона — блоки лежат поверх и не просвечивают.
+ * Палитра всего приложения (с 2026-10-05, от экрана «Поиск»). Блоки — того же
+ * серо-синего тона, что фон HOME_NAV_BG, только на ступень светлее: без бирюзы,
+ * которая спорила с фоном. Цвет даёт один акцент — приглушённый ледяной голубой.
+ * Старые имена ниже (HOME_NAV_*, WELCOME_*) ссылаются на эти значения.
  */
-export const HOME_NAV_SURFACE = '#26484D';
-/** Кнопка «Найти собеседника» — на ступень светлее блоков. */
-export const HOME_NAV_CTA_SURFACE = 'rgba(43, 84, 89, 0.58)';
+/** Блоки, карточки, строки списков, навбар, шапки. */
+export const UI_SURFACE = '#2E3540';
+/** Элемент поверх блока или над затемнением: попапы, меню, кнопки в строках. */
+export const UI_SURFACE_RAISED = '#36404C';
+/** Утопленная подложка внутри блока (квадрат под иконкой) — темнее блока. */
+export const UI_SURFACE_SUNKEN = '#262D37';
+/** Кромка блоков: едва заметный светлый край отделяет блок от фона. */
+export const UI_RIM = 'rgba(255, 255, 255, 0.07)';
 /**
- * Стекло верхней и нижней панели именно на «Поиске»: фон сцены заметно
- * просвечивает, но иконки и подписи остаются читаемыми.
+ * Единственный акцент: иконки активного, галочки, выбранный текст, ссылки.
+ * Контраст 5,1:1 на UI_SURFACE — читается сразу.
  */
-export const WELCOME_SEARCH_CHROME_SURFACE = 'rgba(38, 72, 77, 0.52)';
-/** Выбранный пункт в фильтрах списков («Все» / «Пропущенные»…) — светлее подложки блока. */
-export const HOME_NAV_SEGMENT_ACTIVE = '#36666C';
+export const UI_ACCENT = '#62B0D8';
+/** Нажатый акцент — светлее. */
+export const UI_ACCENT_PRESSED = '#8CC6E6';
+/** Светлая подсветка акцента: кромка луча радара, мелкий текст на тёмном акценте. */
+export const UI_ACCENT_LIGHT = '#B2DCF0';
+/** Плотная заливка кнопки с белым текстом (5,5:1). */
+export const UI_ACCENT_DEEP = '#3D6E8C';
+/** Подложка активного: «таблетка» вкладки, выбранный сегмент, заливка CTA. */
+export const UI_ACCENT_SOFT = 'rgba(98, 176, 216, 0.14)';
+/** То же, но непрозрачное поверх UI_SURFACE: выбранная строка, нажатая кнопка. */
+export const UI_ACCENT_SELECTED = '#364959';
+/** Неактивные иконки и подписи — тусклее акцента, но 4:1 на блоке. */
+export const UI_INACTIVE = '#8B95A3';
+/** Строки списков (чаты, друзья, звонки) — тише блоков: между фоном и UI_SURFACE. */
+export const UI_ROW_SURFACE = '#2A313B';
 /**
- * Цвет активной вкладки — тот же, что был поверх прежнего тёмного таб-бара
- * (rgba(0, 181, 255, 0.32) на ~#0F2334). Непрозрачный: на бирюзово-серой панели
- * полупрозрачный акцент смешивался светлее.
+ * Кнопки, поле поиска и блок фильтров на стекле шапки вкладок — непрозрачные, на ступень
+ * светлее стекла: строки под ними не просвечивают.
  */
-export const HOME_NAV_ACTIVE = '#0A5275';
-/** Та же иконка в нажатом состоянии — на светлой подложке HOME_NAV_SEGMENT_ACTIVE. */
-export const HOME_NAV_ACTIVE_PRESSED = '#3FA3C6';
-/** Квадрат под иконкой в карточке — темнее карточки, чтобы иконка HOME_NAV_ACTIVE читалась. */
-export const HOME_NAV_ICON_WELL = '#1F3D42';
+export const UI_GLASS_CONTROL = UI_SURFACE_RAISED;
+/**
+ * Источники стекла главной (BackdropBlur, Android 12+): сплошной фон — под стеклом как есть,
+ * списки вкладок — размытыми. Шапка вкладки и навбар берут список видимой вкладки.
+ */
+export const HOME_BLUR_BG_SOURCE = 'home-bg';
+export const HOME_BLUR_LIST_SOURCE = {
+  friends: 'home-list-friends',
+  calls: 'home-list-calls',
+  chat: 'home-list-chat',
+  profile: 'home-list-profile',
+} as const;
+/**
+ * Источники стекла экрана звонка: фон экрана и главное видео. Видео — TextureView (патч
+ * @livekit/react-native-webrtc, проп textureView): SurfaceView стекло не видит.
+ */
+export const CALL_BLUR_BG_SOURCE = 'call-bg';
+export const CALL_BLUR_VIDEO_SOURCE = 'call-video';
+
+/** Непрозрачная заливка блоков поверх HOME_NAV_BG: таб-бар, «Онлайн», фильтры списков. */
+export const HOME_NAV_SURFACE = UI_SURFACE;
+/** Кнопка «Найти собеседника»: лёгкий тон акцента. */
+export const HOME_NAV_CTA_SURFACE = 'rgba(98, 176, 216, 0.16)';
+/** Верхняя и нижняя панель «Поиска». */
+export const WELCOME_SEARCH_CHROME_SURFACE = UI_SURFACE;
+/**
+ * Блоки и круглые кнопки на «Друзьях», «Чатах» и «Звонках»: фильтры,
+ * «Пригласить друзей», поиск, корона; кнопки «Начать» / «Далее» в рандомном чате.
+ */
+export const WELCOME_TAB_BLOCK_SURFACE = UI_SURFACE;
+/** Кромка всплывающих карточек и стекла чата — блик на грани. */
+export const WELCOME_GLASS_RIM = 'rgba(255, 255, 255, 0.08)';
+/**
+ * Непрозрачная карточка поверх затемнения (меню сообщения, реакции, листы):
+ * на ступень светлее блоков — карточка приподнята над чатом.
+ */
+export const WELCOME_POPUP_SURFACE = UI_SURFACE_RAISED;
+/** Нажатый пункт в такой карточке. */
+export const WELCOME_POPUP_PRESSED = 'rgba(98, 176, 216, 0.12)';
+/** Акцент на такой карточке (выбрано, кнопка подтверждения). Шестизначный hex: к нему дописывают альфу. */
+export const WELCOME_POPUP_ACCENT = UI_ACCENT;
+/** Лист снизу (переслать, вложения): та же карточка, кромка по скруглённому верху. */
+export const WELCOME_POPUP_SHEET_CHROME = {
+  backgroundColor: WELCOME_POPUP_SURFACE,
+  borderWidth: StyleSheet.hairlineWidth,
+  borderBottomWidth: 0,
+  borderColor: WELCOME_GLASS_RIM,
+} as const;
+/** Выбранный пункт / нажатая кнопка на блоке — непрозрачный тон акцента. */
+export const HOME_NAV_SEGMENT_ACTIVE = UI_ACCENT_SELECTED;
+export const HOME_NAV_ACTIVE = UI_ACCENT;
+/** Активная вкладка нижнего навбара и акцентные иконки блоков. */
+export const HOME_NAV_TAB_ACTIVE = UI_ACCENT;
+/** Подложка выбранной кнопки внутри фильтров вкладок («Все» / «Онлайн»), вкладки эмодзи. */
+export const WELCOME_FILTER_ACTIVE = 'rgba(98, 176, 216, 0.30)';
+export const HOME_NAV_ACTIVE_PRESSED = UI_ACCENT_PRESSED;
+/** Квадрат под иконкой в карточке — темнее карточки, чтобы иконка читалась. */
+export const HOME_NAV_ICON_WELL = UI_SURFACE_SUNKEN;
 /** Accent gradient (aura) — вместо фиолетового на макете. */
 export const AURA_GRADIENT = ['#14b8a6', '#3b82f6', '#00b5ff'] as const;
 export const AURA_GLOW = '#3b82f6';
 /**
- * Тон радара «Поиска» — как активная вкладка навбара (там #00b5ff под 32%
- * поверх панели, на экране #0c4a67). Им же обведена кнопка «Найти собеседника».
+ * Тон радара «Поиска» — общий акцент. Насыщенно горят только луч и цели, кольца
+ * и шкала идут им же, но приглушённо (альфы в welcomeRadarScene).
  */
-export const SEARCH_RADAR_HUD = '#0e5577';
-/** Рамка CTA «Начать поиск» и заливка активных сегментных кнопок. */
-export const WELCOME_SEARCH_CTA_BORDER = 'rgba(10, 68, 96, 0.52)';
+export const SEARCH_RADAR_HUD = UI_ACCENT;
+/** Заливка кнопки «Сохранить» в профиле и активных сегментных кнопок — тон акцента. */
+export const WELCOME_SEARCH_CTA_BORDER = 'rgba(98, 176, 216, 0.24)';
 /** Подсветка того же тона: кромка луча, засветка шкалы, ядро цели. */
-export const SEARCH_RADAR_HUD_LIGHT = '#4d93b5';
+export const SEARCH_RADAR_HUD_LIGHT = UI_ACCENT_LIGHT;
 /** Unread / missed count badge on welcome chats and friend action buttons. */
 export const WELCOME_UNREAD_BADGE = '#2158c0';
+/** Значок «есть обновление»: краповый, как точка на вкладке «Профиль» в навбаре. */
+export const WELCOME_UPDATE_BADGE = '#A63A48';
 export const CROWN_GOLD = '#E4C065';
-export const WELCOME_CARD_BG = '#161B22';
+/** Диалоги поверх затемнения (подтверждения в чате) — приподнятая поверхность. */
+export const WELCOME_CARD_BG = UI_SURFACE_RAISED;
 /** Скругление «полки» tab bar / шапки и композера чата по краям к контенту. */
 export const WELCOME_CHROME_EDGE_RADIUS = 24;
 export const WELCOME_MUTED_TEXT = '#8B949E';
+/** Подписи кнопок в блоках-фильтрах вкладок («Все / Онлайн»…): чуть ярче приглушённого текста. */
+export const WELCOME_SEGMENT_LABEL = '#A3AAB2';
 /** Заголовки welcome (например «Друзья») — мягче чистого white. */
 export const WELCOME_HEADER_TITLE = 'rgba(244, 245, 247, 0.86)';
-/** Круглые кнопки шапок (поиск, корона) — бирюзовое стекло чуть плотнее карточек. */
-export const WELCOME_CHROME_BTN_BG = 'rgba(14, 85, 119, 0.16)';
-/**
- * Полупрозрачная «стеклянная» подложка карточек, списков и сегментов — тон радара
- * (SEARCH_RADAR_HUD) под 10%, как у tab bar: фон-градиент просвечивает.
- */
-export const WELCOME_GLASS_SURFACE = 'rgba(14, 85, 119, 0.1)';
-/** Карточки списков и блоки с кнопками во вкладках (друзья, звонки, чаты, профиль) — прозрачнее модалок. */
-export const WELCOME_LIST_SURFACE = 'rgba(14, 85, 119, 0.06)';
-export const WELCOME_GLASS_BORDER = 'rgba(14, 85, 119, 0.24)';
+/** Круглые кнопки шапок экрана звонка — лёгкий тон акцента поверх видео/сцены. */
+export const WELCOME_CHROME_BTN_BG = 'rgba(98, 176, 216, 0.16)';
+/** Подложка карточек (покупки в профиле, карточки модалок). */
+export const WELCOME_GLASS_SURFACE = UI_SURFACE;
+/** Карточки списков и блоки с кнопками во вкладках (друзья, звонки, чаты, профиль). */
+export const WELCOME_LIST_SURFACE = UI_SURFACE;
+/** Кромка карточек и разделители внутри них. */
+export const WELCOME_GLASS_BORDER = UI_RIM;
 /** Фон пустых аватаров в верхнем блоке «Онлайн». */
-export const WELCOME_ONLINE_PLACEHOLDER_BG = 'rgba(0, 181, 255, 0.12)';
+export const WELCOME_ONLINE_PLACEHOLDER_BG = UI_ACCENT_SOFT;
 
 export const LIVI = {
-  bg: '#151F33',
+  bg: HOME_NAV_BG,
   surface: '#0D0E10',
   glass: 'rgba(255,255,255,0.06)',
   border: 'rgba(255,255,255,0.12)',
@@ -87,13 +162,13 @@ export const WELCOME_BRAND_VI_FILL_GRADIENT = [
   '#4a7a8c',
 ] as const;
 
-/** Активная иконка навбара / подсветка speaker & peer-video на audio UI и in-app PiP. */
-export const WELCOME_NAV_ACTIVE_ICON = WELCOME_BRAND_VI_FILL_GRADIENT[2];
+/** Активная иконка / подсветка speaker & peer-video на audio UI и in-app PiP — общий акцент. */
+export const WELCOME_NAV_ACTIVE_ICON = UI_ACCENT;
 export const WELCOME_NAV_ACTIVE_ACCENT = {
   solid: WELCOME_NAV_ACTIVE_ICON,
   softText: WELCOME_NAV_ACTIVE_ICON,
-  solid15: 'rgba(74, 122, 140, 0.15)',
-  solid30: 'rgba(74, 122, 140, 0.30)',
+  solid15: 'rgba(98, 176, 216, 0.15)',
+  solid30: 'rgba(98, 176, 216, 0.30)',
 } as const;
 
 /** Активный Bluetooth на кнопке маршрута звонка — приглушённый фиолет (чуть ярче fill/рамка). */
@@ -115,14 +190,14 @@ export const WELCOME_BRAND_VI_STROKE_GRADIENT = [
 export const WELCOME_FRIENDS_LIST_INSET = 22;
 /** Отступ справа у кнопок звонка/чата в welcome-карточке. */
 export const WELCOME_FRIEND_ROW_TRAILING_PAD = 12;
-/** Высота welcome-карточки (контент). */
-export const WELCOME_FRIEND_CARD_ROW_HEIGHT = 62;
+/** Высота welcome-карточки (контент) — компактная, в масштаб сжатой стеклянной шапки. */
+export const WELCOME_FRIEND_CARD_ROW_HEIGHT = 54;
 /** Зазор между welcome-карточками. */
-export const WELCOME_FRIEND_CARD_GAP = 6;
+export const WELCOME_FRIEND_CARD_GAP = 5;
 /** Шаг для getItemLayout (высота + зазор). */
 export const WELCOME_FRIEND_ROW_STRIDE = WELCOME_FRIEND_CARD_ROW_HEIGHT + WELCOME_FRIEND_CARD_GAP;
 /** Диаметр аватара в welcome-карточке. */
-export const WELCOME_FRIEND_AVATAR_SIZE = 44;
+export const WELCOME_FRIEND_AVATAR_SIZE = 38;
 /** Компактные размеры списков только для горизонтальной ориентации. */
 export const WELCOME_FRIEND_CARD_ROW_HEIGHT_LANDSCAPE = 46;
 export const WELCOME_FRIEND_CARD_GAP_LANDSCAPE = 3;
@@ -130,15 +205,18 @@ export const WELCOME_FRIEND_ROW_STRIDE_LANDSCAPE =
   WELCOME_FRIEND_CARD_ROW_HEIGHT_LANDSCAPE + WELCOME_FRIEND_CARD_GAP_LANDSCAPE;
 export const WELCOME_FRIEND_AVATAR_SIZE_LANDSCAPE = 34;
 /** Слегка увеличенные размеры списков на планшетах в обеих ориентациях. */
-export const WELCOME_FRIEND_CARD_ROW_HEIGHT_TABLET = 68;
-export const WELCOME_FRIEND_CARD_GAP_TABLET = 8;
+export const WELCOME_FRIEND_CARD_ROW_HEIGHT_TABLET = 60;
+export const WELCOME_FRIEND_CARD_GAP_TABLET = 7;
 export const WELCOME_FRIEND_ROW_STRIDE_TABLET =
   WELCOME_FRIEND_CARD_ROW_HEIGHT_TABLET + WELCOME_FRIEND_CARD_GAP_TABLET;
-export const WELCOME_FRIEND_AVATAR_SIZE_TABLET = 48;
+export const WELCOME_FRIEND_AVATAR_SIZE_TABLET = 42;
 /** Скругление внешней оболочки сегментов «Все / Онлайн» (не pill). */
 export const WELCOME_FRIENDS_SEGMENT_SHELL_RADIUS = 14;
-/** Высота блока верхних переключателей и карточки «Пригласить друзей». */
-export const WELCOME_FRIENDS_SEGMENT_HEIGHT = { phone: 72, landscape: 44, tablet: 72 } as const;
+/**
+ * Высота карточки «Пригласить друзей» (и блока фильтров в горизонтали) — как блок фильтров
+ * в шапке (GLASS_SEGMENT_HEIGHT), чтобы карточка не выбивалась среди компактных строк.
+ */
+export const WELCOME_FRIENDS_SEGMENT_HEIGHT = { phone: 60, landscape: 44, tablet: 64 } as const;
 /** Отступ под блоком «Все / Онлайн» — от него считается и надпись пустого списка. */
 export const WELCOME_FRIENDS_SEGMENT_GAP = { phone: 12, landscape: 6, tablet: 14 } as const;
 /**
@@ -147,12 +225,6 @@ export const WELCOME_FRIENDS_SEGMENT_GAP = { phone: 12, landscape: 6, tablet: 14
  * вторая тень, раздвинутая на 1 dp, а снизу ещё на 3 dp — там она чуть длиннее и ложится
  * на строки, которые уходят под блок. Сверху и по бокам ~8 dp, снизу ~11 dp.
  */
-/**
- * Android 10+: строки списка темнеют к нижнему краю блока «Все / …» и к верхнему краю
- * навбара — уходят в их тень (ListEdgeShade). height — в dp, opacity — затемнение у края.
- */
-export const WELCOME_LIST_EDGE_SHADE = { height: 12, opacity: 0.5 } as const;
-
 export const WELCOME_FRIENDS_SEGMENT_SHADOW = {
   spread: 7,
   soft: true,
@@ -162,40 +234,27 @@ export const WELCOME_FRIENDS_SEGMENT_SHADOW = {
   ringOpacity: 1.2,
 } as const;
 
-/**
- * Android: тень навбара со всех сторон прижата к панели (~10 dp): вытянутая вверх тень
- * далеко уходила от верха навигации. Светлее, чем у блока «Все / …». Кольцо размытое
- * (ringSoft): без тёмного обода по кромке, тень гаснет от края мягко.
- */
-export const WELCOME_TAB_BAR_SHADOW = {
-  spread: 10,
-  soft: true,
-  ringOpacity: 0.8,
-  ringSoft: true,
-  // Снизу и по бокам чуть плотнее, чем сверху.
-  sideOpacity: 0.5,
-  dropOffset: 2,
-  dropOpacity: 0.6,
-} as const;
 /** Отступ над карточкой «Пригласить друзей» (футер списка друзей). */
 export const WELCOME_FRIENDS_INVITE_GAP = { phone: 8, landscape: 4, tablet: 8 } as const;
 /** Кнопки звонка/чата в welcome-строке — скругление (круг при 42×42). */
 export const WELCOME_FRIEND_ACTION_BTN_RADIUS = 21;
-/** Иконки звонка/чата welcome — чуть светлее активных иконок tab bar (Vi). */
-export const WELCOME_FRIEND_ACTION_ICON = '#6aa3b5';
-export const WELCOME_FRIEND_ACTION_ICON_PRESSED = '#7eb8cc';
+/** Иконки звонка/чата welcome — общий акцент. */
+export const WELCOME_FRIEND_ACTION_ICON = UI_ACCENT;
+export const WELCOME_FRIEND_ACTION_ICON_PRESSED = UI_ACCENT_PRESSED;
 
-/** Welcome: та же заливка, что у menu, без рамки. */
+/** Кнопки звонка/чата в строке: заметно светлее строки (UI_ROW_SURFACE), чтобы читались кнопками. */
 export const WELCOME_FRIEND_ACTION_BTN_SURFACE = {
-  backgroundColor: HOME_NAV_SURFACE,
-  borderWidth: 0,
+  backgroundColor: '#3D4857',
+  borderWidth: StyleSheet.hairlineWidth,
+  borderColor: UI_RIM,
   justifyContent: 'center' as const,
   alignItems: 'center' as const,
 };
 
 export const WELCOME_FRIEND_ACTION_BTN_PRESSED_SURFACE = {
   backgroundColor: HOME_NAV_SEGMENT_ACTIVE,
-  borderWidth: 0,
+  borderWidth: StyleSheet.hairlineWidth,
+  borderColor: UI_RIM,
   transform: [{ scale: 0.92 }],
 } as const;
 

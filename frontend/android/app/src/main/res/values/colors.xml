@@ -1,10 +1,16 @@
 <resources>
-  <!-- Системный сплэш Android 12+ (только сплошной цвет) — середина градиента сцены. -->
-  <color name="splashscreen_background">#0C1521</color>
+  <!-- Системный сплэш Android 12+ (только сплошной цвет) — середина новой сцены (HOME_NAV_BG). -->
+  <color name="splashscreen_background">#252B34</color>
   <!-- WELCOME_STAGE_BG из JS: фон окна при повороте не должен отличаться от фона экрана. -->
   <color name="window_background">#0A0C14</color>
   <color name="system_pip_backdrop">#0A0A0C</color>
-  <color name="iconBackground">#102C53</color>
+  <!-- HOME_NAV_BG: серый «Поиска», середина новой сцены (StagePalette.TEAL). Под сценой
+       экранов звонка и после «Принять» — фон аудиозвонка, без шва при передаче в RN. -->
+  <color name="home_nav_background">#252B34</color>
+  <!-- Тонировка поверх сцены экранов входящего/исходящего звонка: затемняет, но не сильно. -->
+  <color name="call_screen_tint">#38000000</color>
+  <!-- Фон адаптивной иконки: тоном приподнятых блоков (UI_SURFACE_RAISED). Рисунок — scripts/render-app-icon.swift. -->
+  <color name="iconBackground">#414C59</color>
   <color name="colorPrimary">#023c69</color>
   <color name="colorPrimaryDark">#0B0B0C</color>
   <!-- Reference tint for RN SystemBarsScrim / expo-navigation-bar (edge-to-edge draws via JS). -->
@@ -17,11 +23,11 @@
   <color name="notification_card_background">#2D2D2D</color>
   <color name="notification_phone_badge">#1E88E5</color>
   <!-- Круглые кнопки Incoming/Outgoing: прозрачная заливка + обводка -->
-  <!-- Принять — рамка как у активных иконок welcome-навбара (#4a7a8c) -->
-  <color name="incoming_btn_accept_bg">#CC1A3640</color>
-  <color name="incoming_btn_accept_border">#4A7A8C</color>
-  <color name="incoming_btn_accept_bg_pressed">#F02A5868</color>
-  <color name="incoming_btn_accept_border_pressed">#6AA3B5</color>
+  <!-- Принять — в общем акценте приложения (UI_ACCENT #62B0D8): тёмный тон внутри, рамка акцентом -->
+  <color name="incoming_btn_accept_bg">#CC2B4152</color>
+  <color name="incoming_btn_accept_border">#62B0D8</color>
+  <color name="incoming_btn_accept_bg_pressed">#F0365468</color>
+  <color name="incoming_btn_accept_border_pressed">#8CC6E6</color>
   <!-- Отклонить / отменить — краповый с прозрачностью внутри -->
   <color name="incoming_btn_decline_bg">#CC4A1E2A</color>
   <color name="incoming_btn_decline_border">#A33B4F</color>

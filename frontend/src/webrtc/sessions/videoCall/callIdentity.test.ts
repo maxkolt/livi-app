@@ -128,6 +128,10 @@ describe('isCurrentCallEvent', () => {
     expect(isCurrentCallEvent({ callId: 'c1', roomId: 'r1' }, { callId: 'c2', roomId: 'r2' })).toBe(false);
   });
 
+  it('прошлый звонок той же пары (та же комната, другой callId) не считается текущим', () => {
+    expect(isCurrentCallEvent({ callId: 'c2', roomId: 'r1' }, { callId: 'c1', roomId: 'r1' })).toBe(false);
+  });
+
   it('сессия без идентификаторов не присваивает чужие события', () => {
     expect(isCurrentCallEvent({ callId: null, roomId: null }, { callId: 'c2' })).toBe(false);
   });

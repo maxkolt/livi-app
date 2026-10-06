@@ -167,7 +167,7 @@ class MainActivity : ReactActivity() {
   /** Нативная заглушка LiVi поверх RN — единый кадр system PiP на всех устройствах. */
   private var systemPiPBackdrop: View? = null
   /**
-   * Крышка accept: тот же фон сцены (StageBackgroundView), что у audio VideoCall / Incoming.
+   * Крышка accept: тот же фон, что у audio VideoCall и Incoming после «Принять» (HOME_NAV_BG).
    * Нужна при подъёме Main раньше JS ConnectingCover.
    */
   private var incomingAnswerCoverView: View? = null
@@ -178,18 +178,9 @@ class MainActivity : ReactActivity() {
       val decor = window?.decorView as? ViewGroup ?: return
       val cover = incomingAnswerCoverView ?: run {
         val frame = android.widget.FrameLayout(this).apply {
-          setBackgroundColor(Color.parseColor("#0A0C14"))
+          setBackgroundColor(getColor(R.color.home_nav_background))
           importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }
-        // Тот же фон, что у JS WelcomeStageBackground: на всю высоту в любой ориентации.
-        val stage = StageBackgroundView(this)
-        frame.addView(
-          stage,
-          android.widget.FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.MATCH_PARENT,
-          ),
-        )
         decor.addView(
           frame,
           ViewGroup.LayoutParams(
@@ -282,7 +273,7 @@ class MainActivity : ReactActivity() {
     try {
       // Та же сцена, что в JS: без фона окна при повороте в полосах, которые RN
       // ещё не перерисовал, был бы чёрный.
-      window.setBackgroundDrawable(StageBackgroundDrawable(this))
+      window.setBackgroundDrawable(StageBackgroundDrawable(this, StagePalette.TEAL_DEEP))
     } catch (_: Exception) {
       try {
         window.decorView.setBackgroundColor(android.graphics.Color.TRANSPARENT)
@@ -1133,8 +1124,8 @@ class MainActivity : ReactActivity() {
     }
     super.onCreate(null)
     if (!isDeclineCallIntent(intent)) {
-      // windowBackground из темы — растянутая PNG; рисуем ту же сцену, что JS, пиксель-в-пиксель.
-      window.setBackgroundDrawable(StageBackgroundDrawable(this))
+      // Новая сцена, как у JS-сплэша, пиксель-в-пиксель: старт без смены тона.
+      window.setBackgroundDrawable(StageBackgroundDrawable(this, StagePalette.TEAL_DEEP))
     }
     liveInstance = this
     applyShowOverLock(shouldShowOverLock())

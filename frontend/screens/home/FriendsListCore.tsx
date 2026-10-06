@@ -10,7 +10,6 @@ import { t, type Lang } from '../../utils/i18n';
 import { APP_TEXT_MAX_FONT_SIZE_MULTIPLIER } from '../../utils/accessibilityTypography';
 import {
   LIVI,
-  WELCOME_BRAND_VI_FILL_GRADIENT,
   WELCOME_LIST_SURFACE,
   WELCOME_MUTED_TEXT,
   WELCOME_FRIENDS_LIST_INSET,
@@ -29,10 +28,13 @@ import {
   WELCOME_FRIEND_AVATAR_SIZE_TABLET,
   WELCOME_FRIENDS_INVITE_GAP,
   WELCOME_FRIENDS_SEGMENT_GAP,
-  WELCOME_LIST_EDGE_SHADE,
+  UI_ACCENT,
+  UI_ACCENT_SELECTED,
+  UI_ROW_SURFACE,
 } from './constants';
 import { FriendMarkReadMenuStrip } from './FriendMarkReadMenuStrip';
-import { ListEdgeShade } from '../../components/BackdropBlur';
+import { BlurListSource } from '../../components/BackdropBlur';
+import { GLASS_LIST_GAP } from './WelcomeGlassHeader';
 import { FriendRowChatButton, FriendRowInviteButton } from './FriendRowActionButtons';
 import { getFriendDisplay, isDirectCallSessionLive } from './friendHelpers';
 import type { Friend, MarkReadMenu } from './types';
@@ -42,7 +44,7 @@ import type { HomeStyles } from './styles';
 export type FriendsListPresentation = 'menu' | 'welcome';
 
 /** Бирюза для статуса «Занято». */
-const BUSY_STATUS_COLOR = '#2EC4B6';
+const BUSY_STATUS_COLOR = UI_ACCENT;
 
 /** Друг занят: серверный busy (рандом/звонок) или локальный активный звонок с ним. */
 export function friendRowIsBusy(
@@ -140,6 +142,12 @@ export type FriendsListCoreProps = {
   compactLandscape?: boolean;
   /** Увеличенные строки в обеих ориентациях планшета. */
   tabletLayout?: boolean;
+  /** Источник стекла (HOME_BLUR_LIST_SOURCE): строки размываются под шапкой и навбаром. */
+  blurSourceId?: string;
+  /** Список под стеклянной шапкой: первая строка — под её нижним краем. */
+  topInset?: number;
+  /** Список уходит под навбар: последняя строка поднимается над ним. */
+  bottomInset?: number;
 };
 
 function FriendsListCoreInner(props: FriendsListCoreProps) {
@@ -184,6 +192,9 @@ function FriendsListCoreInner(props: FriendsListCoreProps) {
     onToggleSelect,
     compactLandscape = false,
     tabletLayout = false,
+    blurSourceId,
+    topInset,
+    bottomInset = 0,
   } = props;
 
   // presentation kept for call-site compatibility; list is welcome-only.
@@ -221,15 +232,18 @@ function FriendsListCoreInner(props: FriendsListCoreProps) {
       styles.friendsListContent,
       welcomeListStyles.content,
       tabletLayout && welcomeListStyles.contentTablet,
-      // Блок «Все / Онлайн» стоит над списком вплотную: строки уходят под него
-      // по его нижнему краю, а зазор до первой строки — здесь.
+      // Под стеклянной шапкой — от её нижнего края; без неё блок «Все / Онлайн» стоит над
+      // списком вплотную, и зазор до первой строки — здесь.
       {
         paddingTop:
-          (tabletLayout ? LIST_PAD_TOP_TABLET : LIST_PAD_TOP) +
-          WELCOME_FRIENDS_SEGMENT_GAP[tabletLayout ? 'tablet' : compactLandscape ? 'landscape' : 'phone'],
+          topInset != null
+            ? topInset + GLASS_LIST_GAP[tabletLayout ? 'tablet' : compactLandscape ? 'landscape' : 'phone']
+            : (tabletLayout ? LIST_PAD_TOP_TABLET : LIST_PAD_TOP) +
+              WELCOME_FRIENDS_SEGMENT_GAP[tabletLayout ? 'tablet' : compactLandscape ? 'landscape' : 'phone'],
+        paddingBottom: bottomInset + (tabletLayout ? 16 : 12),
       },
     ],
-    [styles.friendsListContent, tabletLayout, compactLandscape],
+    [styles.friendsListContent, tabletLayout, compactLandscape, topInset, bottomInset],
   );
 
   const renderStatusLine = (item: Friend) => {
@@ -342,12 +356,7 @@ function FriendsListCoreInner(props: FriendsListCoreProps) {
   );
 
   return (
-    <ListEdgeShade
-      style={welcomeListStyles.shadeWrap}
-      top={WELCOME_LIST_EDGE_SHADE.height}
-      bottom={WELCOME_LIST_EDGE_SHADE.height}
-      opacity={WELCOME_LIST_EDGE_SHADE.opacity}
-    >
+    <BlurListSource sourceId={blurSourceId ?? ''} style={welcomeListStyles.shadeWrap}>
       <FlatList
         key={tabletLayout ? 'friends-tablet' : compactLandscape ? 'friends-landscape' : 'friends-portrait'}
         style={listStyle}
@@ -370,6 +379,8 @@ function FriendsListCoreInner(props: FriendsListCoreProps) {
         extraData={{ ...friendsListExtraData, selectMode, selectedIds, compactLandscape, tabletLayout }}
         refreshing={refreshing}
         onRefresh={onRefresh}
+        // Индикатор обновления — под стеклянной шапкой, а не за ней.
+        progressViewOffset={topInset}
         onScrollBeginDrag={() => {
           setMarkReadMenu(null);
           onScrollBeginDragExtra?.();
@@ -451,7 +462,7 @@ function FriendsListCoreInner(props: FriendsListCoreProps) {
                             <Ionicons
                               name="checkmark-circle"
                               size={22}
-                              color={WELCOME_BRAND_VI_FILL_GRADIENT[2]}
+                              color={UI_ACCENT}
                             />
                           ) : (
                             <View style={welcomeListStyles.selectEmpty} />
@@ -525,7 +536,7 @@ function FriendsListCoreInner(props: FriendsListCoreProps) {
           ) : null
         }
       />
-    </ListEdgeShade>
+    </BlurListSource>
   );
 }
 
@@ -585,7 +596,7 @@ const welcomeListStyles = StyleSheet.create({
   },
   glassCard: {
     height: WELCOME_FRIEND_CARD_ROW_HEIGHT,
-    backgroundColor: WELCOME_LIST_SURFACE,
+    backgroundColor: UI_ROW_SURFACE,
     borderRadius: 16,
     overflow: 'hidden',
   },
@@ -598,7 +609,7 @@ const welcomeListStyles = StyleSheet.create({
     borderRadius: 18,
   },
   glassCardSelected: {
-    backgroundColor: 'rgba(42, 88, 104, 0.28)',
+    backgroundColor: UI_ACCENT_SELECTED,
   },
   welcomeSelectRow: {
     flexDirection: 'row',
@@ -739,4 +750,4 @@ const welcomeListStyles = StyleSheet.create({
 
 export const FriendsListCore = React.memo(FriendsListCoreInner);
 
-export const WELCOME_SEGMENT_ACTIVE = WELCOME_BRAND_VI_FILL_GRADIENT[1];
+export const WELCOME_SEGMENT_ACTIVE = UI_ACCENT;

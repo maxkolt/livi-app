@@ -14,7 +14,7 @@ import {
   Image,
   Platform,
 } from 'react-native';
-import { MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
+import { MaterialIcons } from '@expo/vector-icons';
 import { RTCView } from '@livekit/react-native-webrtc';
 import { PiPContext } from './PiPContext';
 import { logger } from '../../utils/logger';
@@ -23,6 +23,7 @@ import { useResolvedImageUri } from '../../hooks/useResolvedImageUri';
 import { useAppTheme } from '../../theme/ThemeProvider';
 import { WELCOME_HEADER_TITLE } from '../../screens/home/constants';
 import AwayPlaceholder from '../../components/AwayPlaceholder';
+import { PIP_ROUNDED, PIP_TEXTURE_VIEW } from '../../components/VideoChat/shared/pipTextureView';
 import {
   prepareDirectCallAudioReturnFromPiP,
   pipInAppBarEnteredFromAudioOnly,
@@ -506,14 +507,19 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
                 <AwayPlaceholder logoSize={44} />
               )}
               {showPeerLiveVideo && showLocalLiveVideo ? (
-                <View style={styles.pipLocalInset} pointerEvents="none" collapsable={false}>
+                <View
+                  style={[styles.pipLocalInset, PIP_ROUNDED && styles.pipLocalInsetRounded]}
+                  pointerEvents="none"
+                  collapsable={false}
+                >
                   <RTCView
                     key={`pip-local-inset-${remoteStreamVersion}`}
                     streamURL={localStreamUrl}
-                    style={styles.pipLocalInsetRtc}
+                    style={[styles.pipLocalInsetRtc, PIP_TEXTURE_VIEW && styles.pipLocalInsetRtcTransparent]}
                     objectFit="cover"
                     mirror={true}
                     zOrder={1}
+                    textureView={PIP_TEXTURE_VIEW}
                   />
                 </View>
               ) : null}
@@ -582,19 +588,13 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
                 }
                 chrome={chrome}
               >
-                {pipReturnUsesPhoneIcon ? (
-                  <MaterialCommunityIcons
-                    name="phone-in-talk"
-                    size={PIP_ICON_SIZE}
-                    color={chrome.icon}
-                  />
-                ) : (
-                  <MaterialIcons
-                    name="videocam"
-                    size={PIP_ICON_SIZE}
-                    color={chrome.icon}
-                  />
-                )}
+                {/* «Развернуть» — общепринятый знак возврата из мини-окна на весь экран; камера
+                    и трубка путались с кнопками камеры/звонка. Одинаково для аудио и видео. */}
+                <MaterialIcons
+                  name="open-in-full"
+                  size={PIP_ICON_SIZE - 2}
+                  color={chrome.icon}
+                />
               </PiPActionButton>
               <PiPActionButton
                 onPress={toggleMic}
@@ -794,6 +794,15 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: 'rgba(255,255,255,0.22)',
     zIndex: 2,
+  },
+  /** Свой кадр в TextureView (PIP_ROUNDED): скругление обрезает его целиком, рамка не нужна. */
+  pipLocalInsetRounded: {
+    borderWidth: 0,
+    backgroundColor: 'transparent',
+  },
+  /** Без чёрной подложки под кадром TextureView — иначе тёмная кайма по дуге скругления. */
+  pipLocalInsetRtcTransparent: {
+    backgroundColor: 'transparent',
   },
   pipLocalInsetRtc: {
     ...StyleSheet.absoluteFillObject,

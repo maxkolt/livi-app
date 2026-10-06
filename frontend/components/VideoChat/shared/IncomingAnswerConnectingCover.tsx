@@ -8,8 +8,7 @@
  */
 import React, { useLayoutEffect, useRef } from 'react';
 import { View, StyleSheet } from 'react-native';
-import { WelcomeStageBackground } from '../../../screens/home/WelcomeStageBackground';
-import { WELCOME_STAGE_BG } from '../../../screens/home/constants';
+import { HOME_NAV_BG } from '../../../screens/home/constants';
 import { CallScreenChrome } from './CallScreenChrome';
 
 export type IncomingAnswerConnectingCoverProps = {
@@ -52,7 +51,6 @@ export function IncomingAnswerConnectingCover({
 
   return (
     <View style={styles.root} pointerEvents="auto">
-      <WelcomeStageBackground />
       <CallScreenChrome
         partnerName={partnerName || '—'}
         partnerAvatarUri={partnerAvatarUri}
@@ -84,7 +82,8 @@ export function IncomingAnswerConnectingCover({
 const styles = StyleSheet.create({
   root: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: WELCOME_STAGE_BG,
+    // Как аудио-экран VideoCall: принятый звонок открывается в аудио.
+    backgroundColor: HOME_NAV_BG,
     zIndex: 9999,
     elevation: 9999,
   },

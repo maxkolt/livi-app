@@ -1006,7 +1006,9 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
         val targets: List<TextureView> =
           when (role) {
             "local" -> {
-              if (sorted.size >= 2) listOf(sorted.last()) else sorted
+              // Единственный TextureView — главное видео собеседника под стеклом кнопок (свой PiP
+              // на SurfaceView, Android до 12 или окна поменяны местами): его не размываем.
+              if (sorted.size >= 2) listOf(sorted.last()) else emptyList()
             }
             else -> listOf(sorted.first())
           }
@@ -4074,6 +4076,16 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     @JvmStatic
     fun emitEndCallFromPiP() {
       runOnReactUiQueueIfAlive { it.emitDeviceEvent("EndCallFromPiP", null) }
+    }
+
+    /** NetPath сменил маршрут до API (напрямую ↔ реле): JS переподключает зависший сокет. */
+    @JvmStatic
+    fun emitNetRouteChanged(route: String) {
+      runOnReactUiQueueIfAlive { ctx ->
+        val params = Arguments.createMap()
+        params.putString("route", route)
+        ctx.emitDeviceEvent("LiviNetRouteChanged", params)
+      }
     }
 
     /** FCM endedFromActive while peer is in system PiP — local teardown without waiting for socket call:ended. */

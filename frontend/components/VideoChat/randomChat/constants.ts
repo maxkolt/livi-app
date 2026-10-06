@@ -1,5 +1,6 @@
 export const CARD_BASE = {
-  backgroundColor: 'rgba(13,14,16,0.85)',
+  // Глубокий серо-синий в тон фона (HOME_NAV_BG), темнее блоков — место под видео.
+  backgroundColor: 'rgba(26, 31, 39, 0.92)',
   borderRadius: 10,
   justifyContent: 'center' as const,
   alignItems: 'center' as const,

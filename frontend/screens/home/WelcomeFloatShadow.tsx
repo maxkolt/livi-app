@@ -18,6 +18,27 @@ export const WELCOME_FLOAT_SHADOW_IOS = Platform.select({
   default: null,
 });
 
+/**
+ * Маленькая тень круглых кнопок шапки (поиск, корона): ближе к кнопке, чем у блоков, и чуть
+ * плотнее снизу — кнопка приподнята над стеклом, но тень не расползается.
+ */
+export const WELCOME_CHROME_BTN_SHADOW = {
+  spread: 5,
+  soft: true,
+  baseOpacity: 1.4,
+  dropOffset: 1.5,
+  dropOpacity: 0.8,
+} as const;
+export const WELCOME_CHROME_BTN_SHADOW_IOS = Platform.select({
+  ios: {
+    shadowColor: '#02080d',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.28,
+    shadowRadius: 6,
+  },
+  default: null,
+});
+
 const LAYERS = [
   { inset: 8, color: 'rgba(2, 8, 13, 0.018)' },
   { inset: 5, color: 'rgba(2, 8, 13, 0.028)' },

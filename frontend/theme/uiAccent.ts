@@ -1,5 +1,6 @@
 /**
- * UI accent (тёмная тема): бирюзовый.
+ * UI accent (тёмная тема): приглушённый ледяной голубой — общий акцент приложения
+ * (UI_ACCENT в screens/home/constants.ts).
  * Светлая палитра удалена — `isDark` игнорируется (совместимость вызовов).
  */
 export type UiAccent = {
@@ -25,24 +26,24 @@ export type UiAccent = {
 };
 
 const DARK: UiAccent = {
-  solid: '#2EC4B6',
-  bright: '#5EEAD4',
-  softText: '#9EE5DC',
-  vivid8: 'rgba(46,196,182,0.08)',
-  vivid10: 'rgba(46,196,182,0.10)',
-  vivid12: 'rgba(46,196,182,0.12)',
-  vivid16: 'rgba(46,196,182,0.16)',
-  vivid22: 'rgba(46,196,182,0.22)',
-  vivid45: 'rgba(46,196,182,0.45)',
-  solid10: 'rgba(46,196,182,0.1)',
-  solid15: 'rgba(46,196,182,0.15)',
-  solid22: 'rgba(46,196,182,0.22)',
-  solid28: 'rgba(46,196,182,0.28)',
-  solid34: 'rgba(46,196,182,0.34)',
-  forwardSendBg: 'rgba(46,196,182,0.1)',
-  forwardSendBorder: '#2EC4B6',
-  forwardSendText: '#9EE5DC',
-  noteTintBg: '#0F2428',
+  solid: '#62B0D8',
+  bright: '#8CC6E6',
+  softText: '#B2DCF0',
+  vivid8: 'rgba(98,176,216,0.08)',
+  vivid10: 'rgba(98,176,216,0.10)',
+  vivid12: 'rgba(98,176,216,0.12)',
+  vivid16: 'rgba(98,176,216,0.16)',
+  vivid22: 'rgba(98,176,216,0.22)',
+  vivid45: 'rgba(98,176,216,0.45)',
+  solid10: 'rgba(98,176,216,0.1)',
+  solid15: 'rgba(98,176,216,0.15)',
+  solid22: 'rgba(98,176,216,0.22)',
+  solid28: 'rgba(98,176,216,0.28)',
+  solid34: 'rgba(98,176,216,0.34)',
+  forwardSendBg: 'rgba(98,176,216,0.1)',
+  forwardSendBorder: '#62B0D8',
+  forwardSendText: '#B2DCF0',
+  noteTintBg: '#2B3442',
 };
 
 export function uiAccent(_isDark?: boolean): UiAccent {

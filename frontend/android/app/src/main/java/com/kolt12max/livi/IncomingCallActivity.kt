@@ -19,7 +19,6 @@ import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
 import android.os.VibrationAttributes
-import android.graphics.Color
 import android.graphics.PixelFormat
 import android.view.WindowManager
 import android.view.MotionEvent
@@ -29,7 +28,6 @@ import android.widget.ImageButton
 import android.widget.TextView
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
-import java.net.URL
 
 /**
  * Полноэкранный экран входящего звонка (full-screen intent, как WhatsApp/Telegram).
@@ -392,29 +390,22 @@ class IncomingCallActivity : AppCompatActivity() {
             Thread {
                 var httpOk = false
                 try {
-                    val url = URL("$serverUrl/api/calls/decline")
-                    val conn = url.openConnection() as java.net.HttpURLConnection
-                    conn.requestMethod = "POST"
-                    conn.setRequestProperty("Content-Type", "application/json")
-                    conn.setRequestProperty("x-install-id", installId)
-                    if (installSecret != null) {
-                        conn.setRequestProperty("x-install-secret", installSecret)
+                    // Через тёплый пул и маршрут NetPath (за VPN — реле): новое соединение к РФ висит 20–70 с.
+                    val headers = buildMap {
+                        put("x-install-id", installId)
+                        if (installSecret != null) put("x-install-secret", installSecret)
+                        if (userIdHeader != null) put("x-user-id", userIdHeader)
                     }
-                    if (userIdHeader != null) {
-                        conn.setRequestProperty("x-user-id", userIdHeader)
-                    }
-                    conn.doOutput = true
-                    conn.connectTimeout = 8000
-                    conn.readTimeout = 8000
-                    conn.outputStream.use { os ->
-                        os.write("{\"callId\":\"${callId.replace("\"", "\\\"")}\"}".toByteArray(Charsets.UTF_8))
-                    }
-                    val code = conn.responseCode
+                    val code = NetPath.postJsonBlocking(
+                        "$serverUrl/api/calls/decline",
+                        "{\"callId\":\"${callId.replace("\"", "\\\"")}\"}",
+                        headers,
+                        20_000L,
+                    )
                     httpOk = code in 200..299
                     if (!httpOk) {
                         android.util.Log.w(TAG, "decline HTTP failed code=$code callId=$callId (will try deep link fallback)")
                     }
-                    conn.disconnect()
                 } catch (e: Exception) {
                     android.util.Log.w(TAG, "decline HTTP exception callId=$callId (will try deep link fallback)", e)
                 }
@@ -456,21 +447,12 @@ class IncomingCallActivity : AppCompatActivity() {
                 )
                 for (endpoint in endpoints) {
                     try {
-                        val url = URL(endpoint)
-                        val conn = url.openConnection() as java.net.HttpURLConnection
-                        conn.requestMethod = "POST"
-                        conn.setRequestProperty("Content-Type", "application/json")
-                        conn.setRequestProperty("x-install-id", installId)
-                        if (installSecret != null) conn.setRequestProperty("x-install-secret", installSecret)
-                        if (userIdHeader != null) conn.setRequestProperty("x-user-id", userIdHeader)
-                        conn.doOutput = true
-                        conn.connectTimeout = 5000
-                        conn.readTimeout = 5000
-                        conn.outputStream.use { os ->
-                            os.write(payload.toByteArray(Charsets.UTF_8))
+                        val headers = buildMap {
+                            put("x-install-id", installId)
+                            if (installSecret != null) put("x-install-secret", installSecret)
+                            if (userIdHeader != null) put("x-user-id", userIdHeader)
                         }
-                        val code = conn.responseCode
-                        conn.disconnect()
+                        val code = NetPath.postJsonBlocking(endpoint, payload, headers, 10_000L)
                         if (code in 200..299) {
                             ok = true
                             break
@@ -499,16 +481,16 @@ class IncomingCallActivity : AppCompatActivity() {
     }
 
     /**
-     * Accept → скрыть кнопки/аватар, оставить фон сцены (StageBackgroundView) как на audio VideoCall.
-     * Не затирать ImageView сплошным цветом — иначе серый/плоский кадр вместо сцены.
+     * Accept → скрыть кнопки/аватар, сцену и тонировку, фон — как у audio VideoCall (HOME_NAV_BG).
      */
     private fun paintAnswerHandoffCover() {
         try {
-            val stage = Color.parseColor("#0A0C14")
+            val stage = getColor(R.color.home_nav_background)
             val root = findViewById<ViewGroup>(R.id.incoming_call_root)
             root?.setBackgroundColor(stage)
             findViewById<View>(R.id.incoming_call_content)?.visibility = View.INVISIBLE
-            // StageBackgroundView остаётся видимым — тот же фон, что у аудиозвонка.
+            findViewById<View>(R.id.incoming_call_stage)?.visibility = View.INVISIBLE
+            findViewById<View>(R.id.incoming_call_tint)?.visibility = View.INVISIBLE
             window?.decorView?.setBackgroundColor(stage)
         } catch (_: Exception) {}
     }

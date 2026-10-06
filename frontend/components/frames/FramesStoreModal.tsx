@@ -8,6 +8,7 @@ import Carousel from 'react-native-reanimated-carousel';
 import { Extrapolation, interpolate } from 'react-native-reanimated';
 import AdaptiveText from '../AdaptiveText';
 import { t } from '../../utils/i18n';
+import { useFisheyeAvatarAsset } from '../../utils/avatarFisheye';
 import { useLang } from '../../store/lang';
 import FitText from '../FitText';
 import { FullScreenPortal } from '../FullScreenPortal';
@@ -27,8 +28,8 @@ import {
   SEARCH_CTA_TABLET_MAX_WIDTH,
   SEARCH_CTA_TABLET_MIN_WIDTH,
   WELCOME_HEADER_TITLE,
+  HOME_NAV_BG,
   WELCOME_MUTED_TEXT,
-  WELCOME_STAGE_BG,
 } from '../../screens/home/constants';
 import { WelcomeStageBackground } from '../../screens/home/WelcomeStageBackground';
 import {
@@ -73,8 +74,8 @@ type PurchaseNotice = {
 };
 
 const PEARL_BORDER = 'rgba(238,229,244,0.9)';
-const CHAT_BUBBLE_IN = 'rgba(26, 32, 42, 0.98)';
-const CHAT_BUBBLE_OUT = 'rgba(14, 20, 32, 0.99)';
+const CHAT_BUBBLE_IN = 'rgba(51, 59, 71, 0.98)';
+const CHAT_BUBBLE_OUT = 'rgba(49, 70, 85, 0.99)';
 const CHAT_BUBBLE_BORDER = 'rgba(255,255,255,0.12)';
 
 function withAlpha(hex: string, alpha: number): string {
@@ -187,6 +188,8 @@ function ChatBackgroundCard({
 function FrameCoverCard({ item, size, onLoad }: { item: FrameItem; size: number; onLoad?: () => void }) {
   const ringWidth = Math.max(2, Math.round(size * 0.025));
   const avatarSize = size - ringWidth * 2;
+  // Витринное фото — под той же линзой «рыбий глаз», что и все аватары.
+  const showcase = useFisheyeAvatarAsset(SHOWCASE_AVATAR);
 
 
   return (
@@ -204,18 +207,29 @@ function FrameCoverCard({ item, size, onLoad }: { item: FrameItem; size: number;
           justifyContent: 'center',
         }}
       >
-        <ExpoImage
-          source={SHOWCASE_AVATAR}
-          style={{
-            width: avatarSize,
-            height: avatarSize,
-            borderRadius: avatarSize / 2,
-            backgroundColor: SHOWCASE_AVATAR_BG,
-          }}
-          contentFit="cover"
-          cachePolicy="memory-disk"
-          onLoad={onLoad}
-        />
+        {showcase ? (
+          <ExpoImage
+            source={showcase}
+            style={{
+              width: avatarSize,
+              height: avatarSize,
+              borderRadius: avatarSize / 2,
+              backgroundColor: SHOWCASE_AVATAR_BG,
+            }}
+            contentFit="cover"
+            cachePolicy="memory-disk"
+            onLoad={onLoad}
+          />
+        ) : (
+          <View
+            style={{
+              width: avatarSize,
+              height: avatarSize,
+              borderRadius: avatarSize / 2,
+              backgroundColor: SHOWCASE_AVATAR_BG,
+            }}
+          />
+        )}
       </LinearGradient>
     </View>
   );
@@ -540,7 +554,8 @@ function FramesStoreContent({
 
   return (
       <View style={styles.root}>
-        <WelcomeStageBackground />
+        {/* Края темнее, чем у сплэша и экранов звонка. */}
+        <WelcomeStageBackground palette="tealDeep" />
         <View
           style={[
             styles.page,
@@ -762,7 +777,7 @@ function FramesStoreContent({
               <View style={styles.purchaseNoticeHeader}>
                 <LinearGradient
                   colors={purchaseNotice.kind === 'success'
-                    ? ['rgba(218,178,92,0.30)', 'rgba(46,196,182,0.12)']
+                    ? ['rgba(218,178,92,0.30)', 'rgba(98,176,216,0.12)']
                     : purchaseNotice.kind === 'error'
                       ? ['rgba(255,90,103,0.26)', 'rgba(255,90,103,0.08)']
                       : ['rgba(188,196,208,0.18)', 'rgba(188,196,208,0.06)']}
@@ -816,7 +831,8 @@ function FramesStoreContent({
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: WELCOME_STAGE_BG },
+  // Новая сцена: бирюза карточек у краёв → серый «Поиска» в середине.
+  root: { flex: 1, backgroundColor: HOME_NAV_BG },
   page: { flex: 1 },
   header: {
     flexDirection: 'row',

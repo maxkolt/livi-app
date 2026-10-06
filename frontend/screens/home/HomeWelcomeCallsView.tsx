@@ -19,7 +19,6 @@ import AvatarImage from '../../components/AvatarImage';
 import { t, type Lang } from '../../utils/i18n';
 import { APP_INPUT_MAX_FONT_SIZE_MULTIPLIER } from '../../utils/accessibilityTypography';
 import {
-  HOME_NAV_ACTIVE,
   LIVI,
   WELCOME_FRIEND_AVATAR_SIZE,
   WELCOME_FRIEND_AVATAR_SIZE_LANDSCAPE,
@@ -32,24 +31,32 @@ import {
   WELCOME_FRIEND_CARD_ROW_HEIGHT_TABLET,
   WELCOME_FRIENDS_LIST_INSET,
   WELCOME_FRIENDS_SEGMENT_SHELL_RADIUS,
-  WELCOME_FRIENDS_SEGMENT_SHADOW,
-  WELCOME_LIST_EDGE_SHADE,
   WELCOME_FRIENDS_SEGMENT_GAP,
-  WELCOME_GLASS_BORDER,
-  WELCOME_LIST_SURFACE,
-  HOME_NAV_SURFACE,
+  WELCOME_FILTER_ACTIVE,
   WELCOME_HEADER_TITLE,
   WELCOME_MUTED_TEXT,
-  WELCOME_SEARCH_CTA_BORDER,
+  WELCOME_SEGMENT_LABEL,
   WELCOME_UNREAD_BADGE,
-  WELCOME_BRAND_VI_FILL_GRADIENT,
   WELCOME_BRAND_GLYPH_INSET,
   WELCOME_TOP_BAR_SIDE_PAD,
   isWelcomeTabletLayout,
+  UI_ACCENT,
+  UI_ACCENT_SELECTED,
+  UI_ROW_SURFACE,
+  HOME_BLUR_LIST_SOURCE,
+  UI_GLASS_CONTROL,
 } from './constants';
-import { WELCOME_FLOAT_SHADOW_IOS, WelcomeFloatShadow } from './WelcomeFloatShadow';
-import { ListEdgeShade } from '../../components/BackdropBlur';
-import { WELCOME_SEGMENT_ACTIVE } from './FriendsListCore';
+import { WELCOME_CHROME_BTN_SHADOW, WELCOME_CHROME_BTN_SHADOW_IOS, WelcomeFloatShadow } from './WelcomeFloatShadow';
+import { BlurListSource } from '../../components/BackdropBlur';
+import {
+  GLASS_HEADER_BTN,
+  GLASS_LIST_GAP,
+  GLASS_SEARCH_FIELD,
+  GLASS_SEGMENT_HEIGHT,
+  GLASS_SEGMENT_PAD,
+  WelcomeGlassHeader,
+  useGlassHeaderHeight,
+} from './WelcomeGlassHeader';
 import { friendMatchesNameSearch, getFriendDisplay, displayAvatarLetter } from './friendHelpers';
 import { formatWelcomeChatTime } from './chatPreview';
 import { useCallLog } from './hooks/useCallLog';
@@ -57,6 +64,8 @@ import { deleteCallLogIds, recordCallLog } from './callLog';
 import { consumePendingWelcomeCallsFilter, onPendingWelcomeCallsFilter, setWelcomeCallsMissedFilterActive, setWelcomeCallsTabSelected, setWelcomeViewingMissedCalls, shouldSkipHomeUiSettle } from '../../utils/globalEvents';
 import { markMissedNotificationsSeen } from '../../utils/pushNotifications';
 import { WelcomeCrownButton } from './WelcomeCrownButton';
+import { WelcomeTabTitle } from './WelcomeTabTitle';
+import { useDigitalMediumFont } from './brandFont';
 import { WelcomeSelectModeHeader } from './WelcomeSelectModeHeader';
 import { welcomeSelectHaptic } from './welcomeSelectHaptic';
 import type { CallLogDirection, CallLogEntry } from './callLog';
@@ -76,6 +85,8 @@ export type HomeWelcomeCallsViewProps = {
   L: (key: string) => string;
   /** Вкладка «Звонки» сейчас видима (pane keep-alive не remount'ит экран). */
   active: boolean;
+  /** Высота навбара поверх списка: последняя строка поднимается над ним. */
+  bottomInset?: number;
   allFriends: Friend[];
   missedByUser: Record<string, number>;
   prepareFriendRowActionTap: () => void;
@@ -123,6 +134,7 @@ function MissedCountBadge({ count }: { count: number }) {
 function HomeWelcomeCallsViewInner({
   lang,
   L,
+  bottomInset = 0,
   active,
   allFriends,
   missedByUser,
@@ -134,6 +146,8 @@ function HomeWelcomeCallsViewInner({
   askConfirm,
   callActionsLocked = false,
 }: HomeWelcomeCallsViewProps) {
+  // Подписи фильтров — «цифровой» Exo 2, как навбар и заголовок; размеры прежние.
+  const segmentFont = useDigitalMediumFont();
   // Размер берём из safe-area frame: он приходит от нативного провайдера и
   // обновляется при повороте, в отличие от Dimensions.
   const { width: windowWidth, height: windowHeight } = useHomeLayout();
@@ -142,6 +156,7 @@ function HomeWelcomeCallsViewInner({
     !tabletLayout && windowWidth > 0 && windowHeight > 0 && windowWidth / windowHeight > 1.05;
   const [filter, setFilter] = useState<CallsFilter>('all');
   const [searchOpen, setSearchOpen] = useState(false);
+  const [glassHeaderH, setGlassHeaderH] = useGlassHeaderHeight(tabletLayout, compactLandscape, searchOpen);
   const [searchQuery, setSearchQuery] = useState('');
   const [pickMode, setPickMode] = useState(false);
   const [selectMode, setSelectMode] = useState(false);
@@ -564,7 +579,7 @@ function HomeWelcomeCallsViewInner({
               {selectMode ? (
                 <View style={styles.selectMark}>
                   {isSelected ? (
-                    <Ionicons name="checkmark-circle" size={22} color={WELCOME_BRAND_VI_FILL_GRADIENT[2]} />
+                    <Ionicons name="checkmark-circle" size={22} color={UI_ACCENT} />
                   ) : (
                     <View style={styles.selectEmpty} />
                   )}
@@ -705,6 +720,61 @@ function HomeWelcomeCallsViewInner({
   return (
     <TouchableWithoutFeedback onPress={searchOpen ? dismissSearchFromEmptyTap : undefined} accessible={false}>
       <View style={styles.root}>
+        <BlurListSource
+          sourceId={HOME_BLUR_LIST_SOURCE.calls}
+          style={styles.list}
+        >
+            <FlatList
+              key={tabletLayout ? 'calls-tablet' : compactLandscape ? 'calls-landscape' : 'calls-portrait'}
+              style={styles.list}
+              contentContainerStyle={[
+                styles.listContent,
+                tabletLayout && styles.listContentTablet,
+                compactLandscape && styles.listContentLandscape,
+                // Строки уходят под стеклянную шапку и навбар; в покое — под ними.
+                {
+                  paddingTop:
+                    glassHeaderH + GLASS_LIST_GAP[tabletLayout ? 'tablet' : compactLandscape ? 'landscape' : 'phone'],
+                  paddingBottom: bottomInset + (tabletLayout ? 16 : compactLandscape ? 6 : 12),
+                },
+              ]}
+              data={rows}
+              keyExtractor={(item) => item.id}
+              extraData={listExtraData}
+              renderItem={renderItem}
+              refreshing={pickMode || selectMode ? false : refreshing}
+              onRefresh={pickMode || selectMode ? undefined : onRefresh}
+              progressViewOffset={glassHeaderH}
+              nestedScrollEnabled
+              keyboardShouldPersistTaps={searchOpen ? 'never' : 'always'}
+              onScrollBeginDrag={searchOpen ? closeSearch : undefined}
+              showsVerticalScrollIndicator={false}
+              overScrollMode="never"
+              initialNumToRender={12}
+              maxToRenderPerBatch={10}
+              windowSize={7}
+              getItemLayout={(_, index) => ({
+                length: tabletLayout
+                  ? WELCOME_FRIEND_CARD_ROW_HEIGHT_TABLET + WELCOME_FRIEND_CARD_GAP_TABLET
+                  : compactLandscape
+                    ? WELCOME_FRIEND_CARD_ROW_HEIGHT_LANDSCAPE + WELCOME_FRIEND_CARD_GAP_LANDSCAPE
+                    : WELCOME_FRIEND_CARD_ROW_HEIGHT + WELCOME_FRIEND_CARD_GAP,
+                offset:
+                  (tabletLayout
+                    ? WELCOME_FRIEND_CARD_ROW_HEIGHT_TABLET + WELCOME_FRIEND_CARD_GAP_TABLET
+                    : compactLandscape
+                      ? WELCOME_FRIEND_CARD_ROW_HEIGHT_LANDSCAPE + WELCOME_FRIEND_CARD_GAP_LANDSCAPE
+                      : WELCOME_FRIEND_CARD_ROW_HEIGHT + WELCOME_FRIEND_CARD_GAP) * index,
+                index,
+              })}
+              ListEmptyComponent={
+                <View style={styles.emptyWrap}>
+                  <AdaptiveText style={styles.emptyText}>{emptyLabel}</AdaptiveText>
+                </View>
+              }
+            />
+          </BlurListSource>
+        <WelcomeGlassHeader listSourceId={HOME_BLUR_LIST_SOURCE.calls} onHeight={setGlassHeaderH}>
         <View
           style={[
             styles.header,
@@ -731,13 +801,13 @@ function HomeWelcomeCallsViewInner({
             />
           ) : (
             <>
+              <WelcomeTabTitle label={t('tabCalls', lang)} tablet={tabletLayout} compact={compactLandscape} />
               <Pressable
                 style={({ pressed }) => [
                   styles.iconBtn,
                   tabletLayout && styles.iconBtnTablet,
                   compactLandscape && styles.iconBtnLandscape,
-                  searchOpen && styles.iconBtnActive,
-                  WELCOME_FLOAT_SHADOW_IOS,
+                  WELCOME_CHROME_BTN_SHADOW_IOS,
                   pressed && styles.iconBtnPressed,
                 ]}
                 accessibilityRole="button"
@@ -745,14 +815,23 @@ function HomeWelcomeCallsViewInner({
                 accessibilityState={{ selected: searchOpen }}
                 onPress={toggleSearch}
               >
-                <WelcomeFloatShadow radius={tabletLayout ? 22 : compactLandscape ? 16 : 20} />
+                <WelcomeFloatShadow
+                  radius={tabletLayout ? 22 : compactLandscape ? 16 : GLASS_HEADER_BTN / 2}
+                  {...WELCOME_CHROME_BTN_SHADOW}
+                />
                 <Ionicons
                   name={searchOpen ? 'search' : 'search-outline'}
-                  size={tabletLayout ? 24 : compactLandscape ? 19 : 22}
-                  color={searchOpen ? WELCOME_SEGMENT_ACTIVE : HOME_NAV_ACTIVE}
+                  size={tabletLayout ? 24 : compactLandscape ? 19 : 20}
+                  // Активный поиск — меняется только иконка, в цвет выбранной кнопки фильтра.
+                  color={searchOpen ? UI_ACCENT : WELCOME_HEADER_TITLE}
                 />
               </Pressable>
-              <WelcomeCrownButton small={compactLandscape} large={tabletLayout} />
+              <WelcomeCrownButton
+                small={compactLandscape}
+                compact={!tabletLayout && !compactLandscape}
+                large={tabletLayout}
+                surface={UI_GLASS_CONTROL}
+              />
             </>
           )}
         </View>
@@ -796,11 +875,9 @@ function HomeWelcomeCallsViewInner({
                 styles.segmentShell,
                 tabletLayout && styles.segmentShellTablet,
                 compactLandscape && styles.segmentShellLandscape,
-                WELCOME_FLOAT_SHADOW_IOS,
               ]}
               onStartShouldSetResponder={() => true}
             >
-              <WelcomeFloatShadow radius={WELCOME_FRIENDS_SEGMENT_SHELL_RADIUS} {...WELCOME_FRIENDS_SEGMENT_SHADOW} />
               <Pressable
                 style={[
                   styles.segmentBtn,
@@ -820,6 +897,8 @@ function HomeWelcomeCallsViewInner({
                     styles.segmentLabel,
                     tabletLayout && styles.segmentLabelTablet,
                     compactLandscape && styles.segmentLabelLandscape,
+                    filter === 'all' && styles.segmentLabelActive,
+                    segmentFont,
                   ]}
                   numberOfLines={1}
                   adjustsFontSizeToFit
@@ -848,6 +927,8 @@ function HomeWelcomeCallsViewInner({
                       styles.segmentLabel,
                       tabletLayout && styles.segmentLabelTablet,
                       compactLandscape && styles.segmentLabelLandscape,
+                      filter === 'missed' && styles.segmentLabelActive,
+                      segmentFont,
                     ]}
                     numberOfLines={1}
                     adjustsFontSizeToFit
@@ -861,61 +942,8 @@ function HomeWelcomeCallsViewInner({
               </Pressable>
             </View>
           ) : null}
-
-          <ListEdgeShade
-            style={styles.list}
-            top={pickMode ? 0 : WELCOME_LIST_EDGE_SHADE.height}
-            bottom={WELCOME_LIST_EDGE_SHADE.height}
-            opacity={WELCOME_LIST_EDGE_SHADE.opacity}
-          >
-            <FlatList
-              key={tabletLayout ? 'calls-tablet' : compactLandscape ? 'calls-landscape' : 'calls-portrait'}
-              style={styles.list}
-              contentContainerStyle={[
-                styles.listContent,
-                tabletLayout && styles.listContentTablet,
-                compactLandscape && styles.listContentLandscape,
-                // Без блока фильтров (выбор собеседника) — без зазора под ним.
-                pickMode && {
-                  paddingTop: LIST_PAD_TOP[tabletLayout ? 'tablet' : compactLandscape ? 'landscape' : 'phone'],
-                },
-              ]}
-              data={rows}
-              keyExtractor={(item) => item.id}
-              extraData={listExtraData}
-              renderItem={renderItem}
-              refreshing={pickMode || selectMode ? false : refreshing}
-              onRefresh={pickMode || selectMode ? undefined : onRefresh}
-              nestedScrollEnabled
-              keyboardShouldPersistTaps={searchOpen ? 'never' : 'always'}
-              onScrollBeginDrag={searchOpen ? closeSearch : undefined}
-              showsVerticalScrollIndicator={false}
-              overScrollMode="never"
-              initialNumToRender={12}
-              maxToRenderPerBatch={10}
-              windowSize={7}
-              getItemLayout={(_, index) => ({
-                length: tabletLayout
-                  ? WELCOME_FRIEND_CARD_ROW_HEIGHT_TABLET + WELCOME_FRIEND_CARD_GAP_TABLET
-                  : compactLandscape
-                    ? WELCOME_FRIEND_CARD_ROW_HEIGHT_LANDSCAPE + WELCOME_FRIEND_CARD_GAP_LANDSCAPE
-                    : WELCOME_FRIEND_CARD_ROW_HEIGHT + WELCOME_FRIEND_CARD_GAP,
-                offset:
-                  (tabletLayout
-                    ? WELCOME_FRIEND_CARD_ROW_HEIGHT_TABLET + WELCOME_FRIEND_CARD_GAP_TABLET
-                    : compactLandscape
-                      ? WELCOME_FRIEND_CARD_ROW_HEIGHT_LANDSCAPE + WELCOME_FRIEND_CARD_GAP_LANDSCAPE
-                      : WELCOME_FRIEND_CARD_ROW_HEIGHT + WELCOME_FRIEND_CARD_GAP) * index,
-                index,
-              })}
-              ListEmptyComponent={
-                <View style={styles.emptyWrap}>
-                  <AdaptiveText style={styles.emptyText}>{emptyLabel}</AdaptiveText>
-                </View>
-              }
-            />
-          </ListEdgeShade>
         </View>
+        </WelcomeGlassHeader>
       </View>
     </TouchableWithoutFeedback>
   );
@@ -936,11 +964,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingTop: Platform.OS === 'ios' ? 8 : 12,
+    // Ближе к системной строке: шапка лежит на стекле и не должна быть высокой.
+    paddingTop: 2,
     // Вертикаль: кнопка поиска — вровень с «LiVi», корона — как на «Поиске».
     paddingLeft: WELCOME_TOP_BAR_SIDE_PAD + WELCOME_BRAND_GLYPH_INSET,
     paddingRight: WELCOME_TOP_BAR_SIDE_PAD,
-    paddingBottom: 8,
+    paddingBottom: 4,
   },
   // Горизонталь — прежние отступы.
   headerLandscape: {
@@ -950,23 +979,25 @@ const styles = StyleSheet.create({
     paddingBottom: 2,
   },
   headerTablet: {
-    paddingTop: 14,
+    paddingTop: 8,
     paddingBottom: 10,
   },
   headerTabletLandscape: {
     paddingLeft: 28,
     paddingRight: 28,
   },
+  /** Поиск и блок фильтров внутри стеклянной шапки; снизу — поле стекла под блоком. */
   body: {
-    flex: 1,
-    minHeight: 0,
-    marginTop: 10,
+    marginTop: 6,
+    paddingBottom: GLASS_SEGMENT_PAD.phone,
   },
   bodyLandscape: {
     marginTop: 2,
+    paddingBottom: GLASS_SEGMENT_PAD.landscape,
   },
   bodyTablet: {
     marginTop: 12,
+    paddingBottom: GLASS_SEGMENT_PAD.tablet,
   },
   titleHit: {
     flex: 1,
@@ -1000,12 +1031,13 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   iconBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: GLASS_HEADER_BTN,
+    height: GLASS_HEADER_BTN,
+    borderRadius: GLASS_HEADER_BTN / 2,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: HOME_NAV_SURFACE,
+    backgroundColor: UI_GLASS_CONTROL,
+    borderWidth: 0,
   },
   iconBtnLandscape: {
     width: 32,
@@ -1016,9 +1048,6 @@ const styles = StyleSheet.create({
     width: 44,
     height: 44,
     borderRadius: 22,
-  },
-  iconBtnActive: {
-    backgroundColor: WELCOME_SEARCH_CTA_BORDER,
   },
   iconBtnPressed: {
     opacity: 0.85,
@@ -1031,24 +1060,25 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     marginHorizontal: WELCOME_FRIENDS_LIST_INSET,
-    marginBottom: 10,
+    // Высота фиксированная: на неё список сдвигается в том же кадре, что поле появляется.
+    height: GLASS_SEARCH_FIELD.phone.height,
+    marginBottom: GLASS_SEARCH_FIELD.phone.gap,
     paddingHorizontal: 12,
-    paddingVertical: Platform.OS === 'ios' ? 10 : 6,
-    borderRadius: 14,
-    backgroundColor: WELCOME_LIST_SURFACE,
+    borderRadius: 12,
+    backgroundColor: UI_GLASS_CONTROL,
     gap: 8,
   },
   searchShellLandscape: {
-    marginBottom: 6,
-    paddingVertical: 2,
+    height: GLASS_SEARCH_FIELD.landscape.height,
+    marginBottom: GLASS_SEARCH_FIELD.landscape.gap,
   },
   searchShellTablet: {
     width: '92%',
     maxWidth: 900,
     alignSelf: 'center',
     marginHorizontal: 0,
-    marginBottom: 12,
-    paddingVertical: 10,
+    height: GLASS_SEARCH_FIELD.tablet.height,
+    marginBottom: GLASS_SEARCH_FIELD.tablet.gap,
   },
   searchIcon: {
     flexShrink: 0,
@@ -1057,8 +1087,8 @@ const styles = StyleSheet.create({
     flex: 1,
     minWidth: 0,
     color: LIVI.white,
-    fontSize: 16,
-    paddingVertical: Platform.OS === 'android' ? 4 : 0,
+    fontSize: 15,
+    paddingVertical: 0,
   },
   searchInputTablet: {
     fontSize: 17,
@@ -1067,34 +1097,33 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     marginHorizontal: WELCOME_FRIENDS_LIST_INSET,
-    padding: 7,
-    minHeight: 72,
+    padding: 5,
+    minHeight: GLASS_SEGMENT_HEIGHT.phone,
     borderRadius: WELCOME_FRIENDS_SEGMENT_SHELL_RADIUS,
-    // Фон как у таб-бара.
-    backgroundColor: HOME_NAV_SURFACE,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: WELCOME_GLASS_BORDER,
+    // Как блок «Все / Онлайн» на странице «Друзья».
+    backgroundColor: UI_GLASS_CONTROL,
+    borderWidth: 0,
     gap: 5,
     // Над списком, как таб-бар снизу: строки уходят под блок прямо по его нижнему
     // краю, а тень ложится поверх них. Зазор до первой строки — внутри списка.
     zIndex: 2,
   },
   segmentShellLandscape: {
-    minHeight: 44,
+    minHeight: GLASS_SEGMENT_HEIGHT.landscape,
     padding: 4,
   },
   segmentShellTablet: {
     width: '92%',
     maxWidth: 900,
     alignSelf: 'center',
-    minHeight: 72,
+    minHeight: GLASS_SEGMENT_HEIGHT.tablet,
     padding: 8,
     marginHorizontal: 0,
   },
   segmentBtn: {
     flex: 1,
     minWidth: 0,
-    paddingVertical: 9,
+    paddingVertical: 7,
     paddingHorizontal: 8,
     borderRadius: 999,
     alignItems: 'center',
@@ -1113,15 +1142,18 @@ const styles = StyleSheet.create({
     maxWidth: '100%',
   },
   segmentBtnActive: {
-    // Выбранный фильтр — цвет активной вкладки.
-    backgroundColor: HOME_NAV_ACTIVE,
+    backgroundColor: WELCOME_FILTER_ACTIVE,
   },
   segmentLabel: {
-    color: WELCOME_MUTED_TEXT,
+    color: WELCOME_SEGMENT_LABEL,
     fontSize: 14,
     fontWeight: '500',
     textAlign: 'center',
     flexShrink: 1,
+  },
+  /** Выбранный сегмент — светлая подпись на акцентной подложке. */
+  segmentLabelActive: {
+    color: WELCOME_HEADER_TITLE,
   },
   segmentLabelLandscape: {
     fontSize: 13,
@@ -1173,7 +1205,7 @@ const styles = StyleSheet.create({
   },
   glassCard: {
     height: WELCOME_FRIEND_CARD_ROW_HEIGHT,
-    backgroundColor: WELCOME_LIST_SURFACE,
+    backgroundColor: UI_ROW_SURFACE,
     borderRadius: 16,
     overflow: 'hidden',
   },
@@ -1186,7 +1218,7 @@ const styles = StyleSheet.create({
     borderRadius: 18,
   },
   glassCardSelected: {
-    backgroundColor: 'rgba(33, 88, 192, 0.18)',
+    backgroundColor: UI_ACCENT_SELECTED,
   },
   selectMark: {
     width: 22,
@@ -1268,7 +1300,7 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     backgroundColor: LIVI.green,
     borderWidth: 2,
-    borderColor: '#12171E',
+    borderColor: UI_ROW_SURFACE,
   },
   bodyCol: {
     flex: 1,

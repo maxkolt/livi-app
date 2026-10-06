@@ -4,11 +4,13 @@ import type { InCallAudioRoute } from '../components/VideoChat/hooks/audioRouteT
 import { isExternalHeadsetRoute } from '../components/VideoChat/hooks/audioRouteTypes';
 import { logger } from './logger';
 import {
+  isOngoingCallSession,
   readActiveExternalCallAudioRoute,
   readConnectedExternalCallAudioRoute,
   readUserSelectedCallAudioRoute,
   readUserSelectedExternalCallAudioRoute,
 } from './activeCallSession';
+import { readCallBuiltinRouteChoice, rememberCallBuiltinRouteChoice } from './callHeadsetAudioFallback';
 import { readNativeProbedExternalRoute } from './nativeCallAudioProbe';
 
 type LiviAudioMod = {
@@ -53,6 +55,21 @@ export function applyInCallManagerBuiltInRoute(wantSpeaker: boolean): void {
   } catch {}
 }
 
+/**
+ * Режим звонка выбирается один раз: стартовый маршрут или тап. Пока пользователь не выбрал,
+ * первый реально применённый built-in звонка (ухо у аудиозвонка, громкая у видео) и есть выбор.
+ * Без этого переходы PiP/разворот брали «громкую по умолчанию для видео» и уводили ухо в динамик.
+ * Выбор сбрасывается на каждый новый callId (markActiveCallAudioRouteCallId).
+ */
+function rememberFirstCallBuiltinRoute(route: InCallAudioRoute): void {
+  try {
+    if (route !== 'EARPIECE' && route !== 'SPEAKER_PHONE') return;
+    if (readCallBuiltinRouteChoice()) return;
+    if (!isOngoingCallSession()) return;
+    rememberCallBuiltinRouteChoice(route);
+  } catch {}
+}
+
 /** Android: BT / wired / earpiece / speaker через AudioManager.setCommunicationDevice. */
 export async function applyNativeVoiceCallRoute(route: InCallAudioRoute): Promise<boolean> {
   if (Platform.OS !== 'android') return false;
@@ -76,6 +93,7 @@ export async function applyNativeVoiceCallRoute(route: InCallAudioRoute): Promis
     if (typeof mod?.setVoiceCallAudioRoute !== 'function') return false;
     const ok = await mod.setVoiceCallAudioRoute(route);
     logger.info('[voiceCallAudioRoute] native route', { route, ok });
+    if (ok) rememberFirstCallBuiltinRoute(route);
     return !!ok;
   } catch (e) {
     logger.warn('[voiceCallAudioRoute] native route failed', { route, error: String(e) });

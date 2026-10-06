@@ -9,10 +9,11 @@ import {
   albumGridLayout,
   getMessageImageUris,
 } from "./chatAlbum";
-import { WELCOME_BRAND_VI_FILL_GRADIENT } from "../home/constants";
+import { UI_ACCENT } from "../home/constants";
+import { MESSAGE_LONG_PRESS_MS } from "../../constants/uiTokens";
 
 /** Активный чекбокс альбома — как иконки активной вкладки в navbar. */
-const SELECT_CHECK = WELCOME_BRAND_VI_FILL_GRADIENT[2];
+const SELECT_CHECK = UI_ACCENT;
 
 type Props = {
   item: any;
@@ -102,7 +103,7 @@ function AlbumTile({
                 runScale(true, onLongPress);
               }
         }
-        delayLongPress={280}
+        delayLongPress={MESSAGE_LONG_PRESS_MS}
         style={({ pressed }) => ({
           width: "100%",
           height: "100%",

@@ -4,7 +4,6 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -303,16 +302,17 @@ class OutgoingCallActivity : AppCompatActivity() {
     }
 
     /**
-     * Accept → скрыть chrome Outgoing, оставить фон сцены (StageBackgroundView) как на audio VideoCall.
+     * Accept → скрыть chrome Outgoing, сцену и тонировку, фон — как у audio VideoCall (HOME_NAV_BG).
      * Cancel (X) не вызывает — там возврат на Home.
      */
     private fun paintAcceptedHandoffCover() {
         try {
-            val stage = Color.parseColor("#0A0C14")
+            val stage = getColor(R.color.home_nav_background)
             val root = findViewById<ViewGroup>(R.id.outgoing_call_root) ?: return
             root.setBackgroundColor(stage)
             findViewById<View>(R.id.outgoing_call_content)?.visibility = View.INVISIBLE
-            // StageBackgroundView остаётся видимым.
+            findViewById<View>(R.id.outgoing_call_stage)?.visibility = View.INVISIBLE
+            findViewById<View>(R.id.outgoing_call_tint)?.visibility = View.INVISIBLE
             window?.decorView?.setBackgroundColor(stage)
         } catch (_: Exception) {}
     }

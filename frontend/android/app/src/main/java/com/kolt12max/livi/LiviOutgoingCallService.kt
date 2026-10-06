@@ -21,7 +21,6 @@ import android.os.Looper
 import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
-import java.net.URL
 import java.lang.ref.WeakReference
 
 /**
@@ -626,22 +625,17 @@ class LiviOutgoingCallService : Service() {
             if (installId == null || serverUrl == null) return
             Thread {
                 try {
-                    val url = URL("$serverUrl/api/calls/cancel")
-                    val conn = url.openConnection() as java.net.HttpURLConnection
-                    conn.requestMethod = "POST"
-                    conn.setRequestProperty("Content-Type", "application/json")
-                    conn.setRequestProperty("x-install-id", installId)
-                    if (installSecret != null) {
-                        conn.setRequestProperty("x-install-secret", installSecret)
+                    // Через тёплый пул и маршрут NetPath (за VPN — реле).
+                    val headers = buildMap {
+                        put("x-install-id", installId)
+                        if (installSecret != null) put("x-install-secret", installSecret)
                     }
-                    conn.doOutput = true
-                    conn.connectTimeout = 8000
-                    conn.readTimeout = 8000
-                    conn.outputStream.use { os ->
-                        os.write("{\"callId\":\"${callId.replace("\"", "\\\"")}\"}".toByteArray(Charsets.UTF_8))
-                    }
-                    conn.responseCode
-                    conn.disconnect()
+                    NetPath.postJsonBlocking(
+                        "$serverUrl/api/calls/cancel",
+                        "{\"callId\":\"${callId.replace("\"", "\\\"")}\"}",
+                        headers,
+                        20_000L,
+                    )
                 } catch (e: Exception) {
                     android.util.Log.w(TAG, "cancelCallOnServer failed", e)
                 }

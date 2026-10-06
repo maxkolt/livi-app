@@ -57,28 +57,24 @@ export type BackdropSources = {
 };
 
 /**
- * Список между блоками с тенью: строки, уезжая под блок сверху (top) или под навбар снизу
- * (bottom), темнеют к его краю — как в тени. Темнеет только содержимое (фон между строками
- * нет), и только когда за краем ещё есть что прокручивать. Без натива — просто обёртка.
+ * Список под стеклом (шапка вкладки, навбар): строки пишутся в RenderNode, стекло размывает
+ * их на GPU. Без нативного стекла — обычная обёртка.
  */
-export function ListEdgeShade({
-  top = 0,
-  bottom = 0,
-  opacity,
+export function BlurListSource({
+  sourceId,
   style,
+  fadeBottom,
   children,
 }: {
-  /** Высота полосы у верхнего края, dp; 0 — без неё. */
-  top?: number;
-  /** Высота полосы у нижнего края, dp; 0 — без неё. */
-  bottom?: number;
-  opacity: number;
+  sourceId: string;
   style?: ViewProps['style'];
+  /** Растворение нижнего края, dp. */
+  fadeBottom?: number;
   children: React.ReactNode;
 }) {
-  if (!NativeBlurSource) return <View style={style}>{children}</View>;
+  if (!NativeBlurBackdrop || !NativeBlurSource) return <View style={style}>{children}</View>;
   return (
-    <NativeBlurSource style={style} shadeTop={top} shadeBottom={bottom} shadeOpacity={opacity}>
+    <NativeBlurSource sourceId={sourceId} style={style} fadeBottom={fadeBottom}>
       {children}
     </NativeBlurSource>
   );

@@ -7,14 +7,14 @@ import {
   FRIEND_ACTION_PRESS_RETENTION,
 } from '../../constants/uiTokens';
 import {
-  HOME_NAV_ACTIVE_PRESSED,
-  HOME_NAV_ACTIVE,
   ANDROID_VIDEO_CALL_DISABLED_BG,
   ANDROID_VIDEO_CALL_DISABLED_ICON,
   FRIEND_ACTION_BTN_PRESSED_SURFACE,
   FRIEND_ACTION_BTN_SURFACE,
   FRIEND_ACTION_ICON_PRESSED,
   LIVI,
+  UI_ACCENT,
+  UI_ACCENT_LIGHT,
   WELCOME_FRIEND_ACTION_BTN_RADIUS,
   WELCOME_FRIEND_ACTION_BTN_PRESSED_SURFACE,
   WELCOME_FRIEND_ACTION_BTN_SURFACE,
@@ -128,15 +128,18 @@ export function FriendRowIconActionButton({
 
   const isWelcomeVariant = variant === 'welcome';
   const btnRadius = isWelcomeVariant ? WELCOME_FRIEND_ACTION_BTN_RADIUS : FRIEND_ACTION_BUTTON.borderRadius;
-  const iconColorDefault = isWelcomeVariant ? HOME_NAV_ACTIVE : LIVI.titan;
-  const iconColorPressed = isWelcomeVariant ? HOME_NAV_ACTIVE_PRESSED : FRIEND_ACTION_ICON_PRESSED;
+  // Welcome: иконка звонка/чата — общим акцентом, при нажатии светлее.
+  const iconColorDefault = isWelcomeVariant ? UI_ACCENT : LIVI.titan;
+  const iconColorPressed = isWelcomeVariant
+    ? UI_ACCENT_LIGHT
+    : FRIEND_ACTION_ICON_PRESSED;
   const btnSurface = isWelcomeVariant ? WELCOME_FRIEND_ACTION_BTN_SURFACE : FRIEND_ACTION_BTN_SURFACE;
   const btnPressedSurface = isWelcomeVariant
     ? WELCOME_FRIEND_ACTION_BTN_PRESSED_SURFACE
     : FRIEND_ACTION_BTN_PRESSED_SURFACE;
   // В welcome-списке портретные размеры совпадают с кнопками поиска/короны
-  // в шапке. Landscape оставляем компактным, планшет — 44×44 как chrome.
-  const welcomeButtonSize = large ? 44 : compact ? 34 : 40;
+  // в шапке (36). Landscape оставляем компактным, планшет — 44×44 как chrome.
+  const welcomeButtonSize = large ? 44 : compact ? 34 : 36;
   const sizeDelta = large ? 4 : compact ? -8 : 0;
   const buttonWidth = isWelcomeVariant
     ? welcomeButtonSize
@@ -156,7 +159,7 @@ export function FriendRowIconActionButton({
       ? 24
       : compact
         ? 19
-        : 22
+        : 20
     : FRIEND_ACTION_ICON_SIZE + (large ? 2 : compact ? -4 : 0);
 
   return (

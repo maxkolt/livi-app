@@ -10,24 +10,27 @@ import {
 import { useHomeLayout } from './HomeLayoutContext';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import {
-  HOME_NAV_CTA_SURFACE,
+  UI_ACCENT,
   SEARCH_CTA_MAX_WIDTH,
   SEARCH_CTA_TABLET_MAX_WIDTH,
   isWelcomeTabletLayout,
   searchPhoneScale,
-  SEARCH_RADAR_HUD,
-  WELCOME_SEARCH_CTA_BORDER,
-  WELCOME_MUTED_TEXT,
+  WELCOME_HEADER_TITLE,
 } from './constants';
 import FitText from '../../components/FitText';
+import { useDigitalRegularFont } from './brandFont';
 import { logger } from '../../utils/logger';
 
 const BORDER_W = 1;
-/** Рамка и фон — в тон радара; тень намеренно нейтрально-тёмная. */
-const CTA_WAVE = SEARCH_RADAR_HUD;
-const CTA_FILL = HOME_NAV_CTA_SURFACE;
+/**
+ * Главная кнопка экрана — в акценте радара, но без сплошной заливки: лёгкий
+ * голубой тон, чёткая рамка, иконка акцентом. Тень намеренно нейтрально-тёмная.
+ */
+const CTA_WAVE = UI_ACCENT;
+const CTA_FILL = 'rgba(98, 176, 216, 0.16)';
+const CTA_BORDER = 'rgba(98, 176, 216, 0.58)';
 /** Мягкое кольцо вокруг рамки. */
-const CTA_BORDER_SOFT = 'rgba(14, 85, 119, 0.25)';
+const CTA_BORDER_SOFT = 'rgba(98, 176, 216, 0.14)';
 
 /**
  * Высота CTA. Вынесена отдельно, чтобы раскладка Search могла заранее
@@ -70,6 +73,8 @@ export function WelcomeSearchCta({
   maxWidth,
   style,
 }: WelcomeSearchCtaProps) {
+  // «Цифровой» Exo 2, как ник и подписи навбара; размер прежний.
+  const labelFont = useDigitalRegularFont();
   // Размер берём из safe-area frame: он приходит от нативного провайдера и
   // обновляется при повороте, в отличие от Dimensions.
   const { width: windowWidth, height: windowHeight } = useHomeLayout();
@@ -230,7 +235,7 @@ export function WelcomeSearchCta({
                 maxWidth: buttonMaxWidth,
                 height: buttonHeight,
                 borderWidth: BORDER_W,
-                borderColor: WELCOME_SEARCH_CTA_BORDER,
+                borderColor: CTA_BORDER,
                 backgroundColor: CTA_FILL,
               },
             ]}
@@ -247,13 +252,14 @@ export function WelcomeSearchCta({
               <MaterialCommunityIcons
                 name="lightning-bolt"
                 size={tabletLayout ? 24 : compact ? 20 : 22}
-                color={WELCOME_MUTED_TEXT}
+                color={UI_ACCENT}
               />
               <FitText
                 style={[
                   styles.label,
                   tabletLayout && styles.labelTablet,
                   compact && styles.labelCompact,
+                  labelFont,
                 ]}
                 minimumFontScale={0.7}
               >
@@ -338,8 +344,8 @@ const styles = StyleSheet.create({
     height: '45%',
   },
   label: {
-    // В цвет молнии рядом.
-    color: WELCOME_MUTED_TEXT,
+    // Тот же цвет, что у надписи «Онлайн» в верхней панели.
+    color: WELCOME_HEADER_TITLE,
     fontSize: 16,
     fontWeight: '400',
     letterSpacing: 0.2,

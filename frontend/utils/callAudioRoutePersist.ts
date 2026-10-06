@@ -449,8 +449,12 @@ export function prepareDirectCallVideoExpandFromInAppPiP(): void {
       void applyCallAudioOutputRouteNow(ext, { media: 'video', forceBuiltIn: false });
       return;
     }
-    // Раскрытие плашки в video не меняет режим звонка; громкая — если режим не выбран.
-    const videoRoute = readCallBuiltinRouteChoice() || 'SPEAKER_PHONE';
+    // Раскрытие плашки в video не меняет режим звонка: явный выбор, иначе то, что звучит сейчас
+    // (ухо аудиозвонка по умолчанию не записано как выбор — раньше тут сразу брали громкую и
+    // через ~0.7 с repin возвращал ухо). Громкая — только если маршрут вообще неизвестен.
+    const currentBuiltin =
+      plaqueNow === 'EARPIECE' || plaqueNow === 'SPEAKER_PHONE' ? plaqueNow : null;
+    const videoRoute = readCallBuiltinRouteChoice() || currentBuiltin || 'SPEAKER_PHONE';
     persistVideoInAppPiPAudioRoute(videoRoute);
     setUserSelectedCallAudioRoute(null);
     armCallAudioRouteUiLock(videoRoute);
@@ -1489,6 +1493,24 @@ async function applyNativeOutputRoute(
   });
 }
 
+/**
+ * InCallManager.start(media) при первом старте сам включает громкую для 'video' и выключает для
+ * 'audio'. Стартуем с той media, что совпадает с выбором пользователя, — иначе старт на возврате
+ * из PiP на ~0.8 с уводил «ухо» в динамик (и этот кадр успевал записаться как выбор плашки).
+ */
+function inCallStartMediaForUserRoute(media: 'audio' | 'video'): 'audio' | 'video' {
+  try {
+    if (isExternalHeadsetRoute(readPersistedOrUserExternalRoute())) return 'audio';
+    const choice =
+      readCallBuiltinRouteChoice() ||
+      readUserSelectedCallAudioRoute() ||
+      readLastAppliedCallAudioRoute();
+    if (choice === 'EARPIECE') return 'audio';
+    if (choice === 'SPEAKER_PHONE') return 'video';
+  } catch {}
+  return media;
+}
+
 async function runInCallRestartIfNeeded(
   media: 'audio' | 'video',
   skipInCallRestart: boolean,
@@ -1501,7 +1523,7 @@ async function runInCallRestartIfNeeded(
   if (skip) return false;
   try {
     if (Platform.OS === 'android') beginBackgroundMediaSuppression();
-    InCallManager.start({ media, ringback: '' });
+    InCallManager.start({ media: inCallStartMediaForUserRoute(media), ringback: '' });
     markInCallAudioSessionStarted(true);
     try {
       (InCallManager as any).requestAudioFocus?.();

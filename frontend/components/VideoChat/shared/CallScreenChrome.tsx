@@ -14,15 +14,21 @@ import {
   Platform,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
+import { NativeBlurBackdrop, type BackdropSources } from '../../BackdropBlur';
+import { StageGradient } from '../../../screens/home/WelcomeStageBackground';
 import { useResolvedImageUri } from '../../../hooks/useResolvedImageUri';
+import { useFisheyeAvatarUri } from '../../../utils/avatarFisheye';
 import { displayAvatarLetter } from '../../../screens/home/friendHelpers';
 import {
+  HOME_NAV_TAB_ACTIVE,
   WELCOME_GLASS_BORDER,
   WELCOME_GLASS_SURFACE,
   WELCOME_HEADER_TITLE,
-  WELCOME_MUTED_TEXT,
   WELCOME_NAV_ACTIVE_ACCENT,
   WELCOME_CHROME_BTN_BG,
+  HOME_NAV_BG,
+  CALL_BLUR_BG_SOURCE,
+  CALL_BLUR_VIDEO_SOURCE,
 } from '../../../screens/home/constants';
 import { WELCOME_PROFILE_ROW_ICON } from '../../../screens/home/WelcomeProfileListUi';
 
@@ -42,6 +48,30 @@ export type CallMoreMenuItem = {
 };
 
 /** Три палочки (низ → выше → ещё выше) + краповое перечёркивание. */
+/**
+ * Стекло капсулы с кнопками и кнопки «свернуть», как блоки вкладок: видео под ним размыто,
+ * кнопки — нет (они поверх стекла). Android 12+ — нативное стекло по TextureView главного видео;
+ * iOS — системное размытие. Android до 12 — прежняя непрозрачная подложка.
+ */
+const CALL_GLASS = Platform.OS === 'ios' || !!NativeBlurBackdrop;
+const CALL_GLASS_BACKDROP: BackdropSources = {
+  background: [CALL_BLUR_BG_SOURCE],
+  blur: [CALL_BLUR_VIDEO_SOURCE],
+};
+
+function CallGlass({ radius, matteOpacity = 0.5 }: { radius: number; matteOpacity?: number }) {
+  return (
+    <StageGradient
+      translucent
+      matteOpacity={matteOpacity}
+      backdrop={CALL_GLASS_BACKDROP}
+      edgeFade={false}
+      fullRim
+      style={[StyleSheet.absoluteFill, { borderRadius: radius, overflow: 'hidden' }]}
+    />
+  );
+}
+
 function WeakSignalGlyph() {
   return (
     <View style={styles.weakSignalGlyph} accessibilityElementsHidden>
@@ -128,6 +158,7 @@ export function CallScreenChrome({
 }: Props) {
   const [moreOpen, setMoreOpen] = useState(false);
   const [resolvedUri, ready] = useResolvedImageUri(partnerAvatarUri ?? '');
+  const partnerPhoto = useFisheyeAvatarUri(ready ? resolvedUri : '');
   const letter = displayAvatarLetter(partnerName);
   const locked = controlsLocked;
   const holdText = typeof holdLine === 'string' ? holdLine.trim() : '';
@@ -136,7 +167,12 @@ export function CallScreenChrome({
   const routeShieldTone = routeAccent === WELCOME_NAV_ACTIVE_ACCENT;
   const routeIconName =
     speakerIcon || (speakerOn ? 'volume-up' : 'volume-mute');
-  const routeIconColor = speakerOn ? routeAccent.softText : WELCOME_HEADER_TITLE;
+  // Включённая громкая — иконка в цвет активной вкладки навбара; Bluetooth — свой акцент.
+  const routeIconColor = speakerOn
+    ? routeShieldTone
+      ? HOME_NAV_TAB_ACTIVE
+      : routeAccent.softText
+    : WELCOME_HEADER_TITLE;
 
   return (
     <>
@@ -150,18 +186,28 @@ export function CallScreenChrome({
         >
           <Pressable
             onPress={onMinimize}
-            style={({ pressed }) => [styles.roundChromeBtn, pressed && styles.pressed]}
+            style={({ pressed }) => [
+              styles.roundChromeBtn,
+              CALL_GLASS && styles.glassShell,
+              pressed && styles.pressed,
+            ]}
             hitSlop={8}
             accessibilityRole="button"
             accessibilityLabel="minimize"
           >
+            {CALL_GLASS ? <CallGlass radius={19} /> : null}
             <MaterialIcons name="keyboard-arrow-down" size={26} color={WELCOME_HEADER_TITLE} />
           </Pressable>
 
           <View style={styles.partnerChip} pointerEvents="none">
             <View style={styles.avatarWrap}>
               {ready && resolvedUri ? (
-                <Image source={{ uri: resolvedUri }} style={styles.avatar} />
+                partnerPhoto ? (
+                  <Image source={{ uri: partnerPhoto }} style={styles.avatar} />
+                ) : (
+                  // Фото под линзой ещё готовится — пустой круг, без мелькания буквы.
+                  <View style={styles.avatar} />
+                )
               ) : (
                 <View style={[styles.avatar, styles.avatarFallback]}>
                   <Text style={styles.avatarLetter}>{letter || '—'}</Text>
@@ -198,10 +244,12 @@ export function CallScreenChrome({
           <View style={styles.shieldSlot} pointerEvents="none">
             {encrypted ? (
               <View
-                style={styles.shieldBtnEncrypted}
+                style={[styles.shieldBtnEncrypted, CALL_GLASS && styles.shieldBtnGlass]}
                 accessible
                 accessibilityLabel="end-to-end encrypted"
               >
+                {CALL_GLASS ? <CallGlass radius={19} matteOpacity={SHIELD_GLASS_MATTE} /> : null}
+                {CALL_GLASS ? <View style={styles.shieldRim} /> : null}
                 <MaterialIcons
                   name="verified-user"
                   size={20}
@@ -222,7 +270,8 @@ export function CallScreenChrome({
             {peerVideoHint}
           </Text>
         ) : null}
-        <View style={[styles.capsule, locked && styles.capsuleLocked]}>
+        <View style={[styles.capsule, CALL_GLASS && styles.glassShell]}>
+          {CALL_GLASS ? <CallGlass radius={28} /> : null}
           {onToggleSpeaker ? (
             <CapsuleAction
               label={speakerLabel}
@@ -232,7 +281,7 @@ export function CallScreenChrome({
               }}
               disabled={locked}
               active={!!speakerOn}
-              activeBg={routeShieldTone ? ENCRYPTION_SHIELD_BG : routeAccent.solid15}
+              activeBg={routeShieldTone ? ROUTE_ACTIVE_TINT : routeAccent.solid15}
               activeBorder={routeAccent.solid30}
               guardRapidPress
             >
@@ -412,35 +461,60 @@ function CapsuleAction({
       }
       delayLongPress={guardRapidPress ? 360 : undefined}
       disabled={disabled}
-      style={({ pressed }) => [styles.capsuleItem, pressed && !disabled && styles.pressed]}
+      style={styles.capsuleItem}
       accessibilityRole="button"
       accessibilityLabel={label}
     >
-      <View
-        style={[
-          styles.capsuleBtn,
-          danger && styles.capsuleBtnDanger,
-          end && styles.capsuleBtnEnd,
-          active && {
-            backgroundColor: activeBg || WELCOME_NAV_ACTIVE_ACCENT.solid15,
-            borderColor: activeBorder || WELCOME_NAV_ACTIVE_ACCENT.solid30,
-            borderWidth: 1,
-          },
-          disabled && styles.capsuleBtnDisabled,
-        ]}
-      >
-        {children}
-      </View>
-      <Text style={styles.capsuleLabel} numberOfLines={1}>
-        {label}
-      </Text>
+      {({ pressed }) => {
+        const red = danger || end;
+        const down = pressed && !disabled;
+        return (
+          <>
+            <View
+              style={[
+                styles.capsuleBtn,
+                red && styles.capsuleBtnDanger,
+                down && (red ? styles.capsuleBtnDangerPressed : styles.capsuleBtnPressed),
+                active && {
+                  borderColor: activeBorder || WELCOME_NAV_ACTIVE_ACCENT.solid30,
+                  borderWidth: 1,
+                },
+                disabled && styles.capsuleBtnDisabled,
+              ]}
+            >
+              {/* Оттенок активной кнопки поверх непрозрачной базы — кнопка не просвечивает. */}
+              {active ? (
+                <View
+                  style={[
+                    styles.capsuleBtnTint,
+                    { backgroundColor: activeBg || WELCOME_NAV_ACTIVE_ACCENT.solid15 },
+                  ]}
+                />
+              ) : null}
+              <View style={disabled ? styles.capsuleContentDisabled : null}>{children}</View>
+            </View>
+            <Text style={[styles.capsuleLabel, disabled && styles.capsuleContentDisabled]} numberOfLines={1}>
+              {label}
+            </Text>
+          </>
+        );
+      }}
     </Pressable>
   );
 }
 
-/** Заливка кнопки щита шифрования; в неё же красится включённая громкая. */
-const ENCRYPTION_SHIELD_BG =
-  Platform.OS === 'android' ? 'rgba(33, 58, 68, 0.28)' : 'rgba(74, 122, 140, 0.10)';
+/** Оттенок включённой громкой поверх непрозрачной кнопки (тон акцента, как у щита). */
+const ROUTE_ACTIVE_TINT =
+  Platform.OS === 'android' ? 'rgba(98, 176, 216, 0.12)' : 'rgba(98, 176, 216, 0.10)';
+/** Стекло щита плотнее, чем у «свернуть»: на светлом видео щит читается серым кругом. */
+const SHIELD_GLASS_MATTE = 0.72;
+/** Кнопки капсулы непрозрачные — стеклом остаётся только сама капсула. Тон мягче и светлее
+ * #3A4B5E: тот читался как кнопка под пеленой. */
+const CAPSULE_BTN_BG = '#455568';
+const CAPSULE_BTN_PRESSED_BG = '#51627A';
+const CAPSULE_BTN_DISABLED_BG = '#364353';
+const CAPSULE_BTN_DANGER_BG = '#633E4D';
+const CAPSULE_BTN_DANGER_PRESSED_BG = '#74485A';
 
 const styles = StyleSheet.create({
   headerWrap: {
@@ -473,9 +547,26 @@ const styles = StyleSheet.create({
     borderRadius: 19,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: ENCRYPTION_SHIELD_BG,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: WELCOME_NAV_ACTIVE_ACCENT.solid30,
+    // Без стекла (Android до 12) — непрозрачный серый круг, как «свернуть».
+    backgroundColor: Platform.OS === 'android' ? 'rgba(22, 27, 34, 0.94)' : WELCOME_GLASS_SURFACE,
+    borderWidth: 1,
+    borderColor: 'rgba(98, 176, 216, 0.55)',
+  },
+  /** Под стеклом рамку рисует shieldRim поверх CallGlass (своя рамка ушла бы под стекло). */
+  shieldBtnGlass: {
+    backgroundColor: 'transparent',
+    borderWidth: 0,
+  },
+  shieldRim: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: 19,
+    borderWidth: 1,
+    borderColor: 'rgba(98, 176, 216, 0.55)',
+  },
+  /** Под стеклом своей заливки и рамки нет — их рисует CallGlass. */
+  glassShell: {
+    backgroundColor: 'transparent',
+    borderWidth: 0,
   },
   roundChromeBtn: {
     width: 38,
@@ -530,7 +621,7 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     backgroundColor: '#22c55e',
     borderWidth: 2,
-    borderColor: '#0A0C14',
+    borderColor: HOME_NAV_BG,
   },
   partnerTextCol: {
     maxWidth: '56%',
@@ -652,9 +743,6 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: WELCOME_GLASS_BORDER,
   },
-  capsuleLocked: {
-    opacity: 0.55,
-  },
   capsuleItem: {
     flex: 1,
     alignItems: 'center',
@@ -665,27 +753,38 @@ const styles = StyleSheet.create({
     width: 52,
     height: 52,
     borderRadius: 26,
-    backgroundColor: Platform.OS === 'android' ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.08)',
+    backgroundColor: CAPSULE_BTN_BG,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255, 255, 255, 0.07)',
     alignItems: 'center',
     justifyContent: 'center',
   },
+  capsuleBtnPressed: {
+    backgroundColor: CAPSULE_BTN_PRESSED_BG,
+  },
+  /** «Завершить» и выключенный микрофон — краповый фон + рамка, как decline на native Incoming/Outgoing. */
   capsuleBtnDanger: {
-    // Краповый как «Завершить» — выключенный микрофон.
-    backgroundColor: 'rgba(163, 59, 79, 0.42)',
+    backgroundColor: CAPSULE_BTN_DANGER_BG,
     borderWidth: 1,
     borderColor: '#A33B4F',
   },
-  capsuleBtnEnd: {
-    // Как decline на native Incoming/Outgoing — краповый фон + рамка.
-    backgroundColor: 'rgba(163, 59, 79, 0.42)',
-    borderWidth: 1,
-    borderColor: '#A33B4F',
+  capsuleBtnDangerPressed: {
+    backgroundColor: CAPSULE_BTN_DANGER_PRESSED_BG,
+  },
+  capsuleBtnTint: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: 26,
   },
   capsuleBtnDisabled: {
+    backgroundColor: CAPSULE_BTN_DISABLED_BG,
+  },
+  /** Недоступная кнопка гасит только значок и подпись, сама кнопка не просвечивает. */
+  capsuleContentDisabled: {
     opacity: 0.45,
   },
   capsuleLabel: {
-    color: WELCOME_MUTED_TEXT,
+    // Как имя собеседника в шапке.
+    color: WELCOME_HEADER_TITLE,
     fontSize: 11,
     fontWeight: '500',
   },

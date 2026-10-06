@@ -88,6 +88,8 @@ export function useChatHeader({
   const headerEl = React.useMemo(() => {
     // Те же круги, что у кнопок композера: сплошная заливка без обводки.
     const chromeBtnColors = chatRoundButtonColors(isDark);
+    // Иконки в кругах — цвет имени собеседника.
+    const chromeIconColor = isDark ? LIVI.white : LIVI.titan;
     const Shell = isDark ? StageGradient : View;
 
     const chromeBtnStyle = {
@@ -281,7 +283,7 @@ export function useChatHeader({
                 pressedBackgroundColor={chromeBtnColors.pressed}
                 accessibilityLabel={t("tabCalls", lang)}
               >
-                <MaterialCommunityIcons name="phone-in-talk-outline" size={23} color={LIVI.titan} />
+                <MaterialCommunityIcons name="phone-in-talk-outline" size={23} color={chromeIconColor} />
               </ChatRoundButton>
               <ChatRoundButton
                 onPress={() => onPressMore?.()}
@@ -289,7 +291,7 @@ export function useChatHeader({
                 pressedBackgroundColor={chromeBtnColors.pressed}
                 accessibilityLabel={t("menuTitle", lang)}
               >
-                <Ionicons name="ellipsis-vertical" size={20} color={LIVI.titan} />
+                <Ionicons name="ellipsis-vertical" size={20} color={chromeIconColor} />
               </ChatRoundButton>
             </View>
           </>

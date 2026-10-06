@@ -1,9 +1,6 @@
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+  <!-- Середина новой сцены: дальше MainActivity и JS-сплэш рисуют её же с бирюзой у краёв. -->
   <item android:drawable="@color/splashscreen_background"/>
-  <!-- Тот же фон сцены, что у окна и JS-сплэша: переход к SplashLoader без смены тона. -->
-  <item>
-    <bitmap android:gravity="fill" android:filter="true" android:src="@drawable/welcome_stage_bg"/>
-  </item>
   <item>
     <bitmap android:gravity="center" android:src="@drawable/splashscreen_logo"/>
   </item>

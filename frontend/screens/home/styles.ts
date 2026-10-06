@@ -15,10 +15,11 @@ import {
   WELCOME_FRIENDS_SEGMENT_SHELL_RADIUS,
   WELCOME_TOP_BAR_CONTROL_SIZE,
   WELCOME_GLASS_BORDER,
-  WELCOME_GLASS_SURFACE,
   WELCOME_HEADER_TITLE,
   WELCOME_MUTED_TEXT,
   WELCOME_UNREAD_BADGE,
+  UI_SURFACE_RAISED,
+  HOME_NAV_BG,
 } from './constants';
 
 export const styles = StyleSheet.create({
@@ -177,8 +178,8 @@ export const styles = StyleSheet.create({
   sheetFull: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: Platform.OS === "android"
-      ? "#0D0E10"
-      : "rgba(13,14,16,0.88)",
+      ? HOME_NAV_BG
+      : "rgba(37,43,52,0.94)",
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: LIVI.border,
   },
@@ -368,7 +369,7 @@ export const styles = StyleSheet.create({
     width: '92%',
     maxWidth: 400,
     minWidth: 280,
-    backgroundColor: WELCOME_GLASS_SURFACE,
+    backgroundColor: UI_SURFACE_RAISED,
     borderRadius: WELCOME_FRIENDS_SEGMENT_SHELL_RADIUS,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: WELCOME_GLASS_BORDER,

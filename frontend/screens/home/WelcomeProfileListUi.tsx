@@ -9,8 +9,8 @@ import {
   WELCOME_GLASS_BORDER,
   WELCOME_LIST_SURFACE,
   WELCOME_HEADER_TITLE,
-  WELCOME_BRAND_VI_FILL_GRADIENT,
-  WELCOME_UNREAD_BADGE,
+  WELCOME_UPDATE_BADGE,
+  UI_ACCENT,
 } from './constants';
 
 /** Иконки и chevron в строках профиля — приглушённый серый. */
@@ -272,7 +272,7 @@ export function WelcomeProfileLanguageRow({
             <Ionicons
               name="checkmark"
               size={ROW_CHEVRON_SIZE}
-              color={WELCOME_BRAND_VI_FILL_GRADIENT[1]}
+              color={UI_ACCENT}
             />
           ) : null}
         </View>
@@ -408,7 +408,8 @@ const styles = StyleSheet.create({
     borderRadius: 9,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: WELCOME_UNREAD_BADGE,
+    // Счётчик в профиле — только об обновлении: краповый, как точка на вкладке «Профиль».
+    backgroundColor: WELCOME_UPDATE_BADGE,
     flexShrink: 0,
   },
   countBadgeText: {

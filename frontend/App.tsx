@@ -32,7 +32,7 @@ import {
 import InCallManager from 'react-native-incall-manager';
 import { startIncomingCallAlert, stopIncomingCallAlert } from './utils/incomingCallAlert';
 import HomeScreen, { markHomeScreenBootedForSession } from "./screens/HomeScreen";
-import { WELCOME_NAV_ACTIVE_ACCENT, WELCOME_NAV_ACTIVE_ICON, WELCOME_STAGE_BG } from "./screens/home/constants";
+import { UI_SURFACE_RAISED, WELCOME_NAV_ACTIVE_ACCENT, WELCOME_NAV_ACTIVE_ICON, WELCOME_STAGE_BG } from "./screens/home/constants";
 import { IncomingAnswerConnectingCover } from "./components/VideoChat/shared/IncomingAnswerConnectingCover";
 import { peekCallAvatar, peekCallNick, primeCallNick } from "./utils/callAvatarPrime";
 import IncomingSharePickerModal from "./components/IncomingSharePickerModal";
@@ -446,7 +446,7 @@ const getOverlayPermissionModalStyles = (theme: any, isDark: boolean) => {
     maxWidth: 360,
     borderRadius: 24,
     padding: 22,
-    backgroundColor: isDark ? '#0D0E10' : '#F0F2F5',
+    backgroundColor: isDark ? UI_SURFACE_RAISED : '#F0F2F5',
     borderWidth: 1,
     borderColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(113,91,168,0.16)',
     shadowColor: '#000',
@@ -491,7 +491,7 @@ const getOverlayPermissionModalStyles = (theme: any, isDark: boolean) => {
     paddingVertical: 12,
     paddingHorizontal: 14,
     marginBottom: 18,
-    backgroundColor: isDark ? 'rgba(74, 122, 140, 0.12)' : '#F2EEF9',
+    backgroundColor: isDark ? 'rgba(98, 176, 216, 0.12)' : '#F2EEF9',
     borderWidth: 1,
     borderColor: isDark ? nav.solid15 : 'rgba(113,91,168,0.22)',
   },
@@ -3308,7 +3308,11 @@ function AppContent() {
       if (Platform.OS === 'android') {
         try {
           (InCallManager as any).setKeepScreenOn?.(false);
-          InCallManager.stop();
+          // Видео → in-app PiP: маршрут уже Home, а плашка ещё не видна — shouldKeepOn на миг false.
+          // stop() посреди звонка выключал громкую (setSpeakerphoneOn(false) + restoreOriginalAudioSetup).
+          if (!isOngoingCallSession()) {
+            InCallManager.stop();
+          }
         } catch {}
       }
       return;
@@ -3643,6 +3647,31 @@ function AppContent() {
       const eventRoomId = String(
         data?.roomId || g.__currentCallPiPParamsRef?.current?.roomId || g.__pipLastContextRef?.current?.roomId || ''
       ).trim();
+      // Запоздалый call:ended прошлого звонка не должен рвать текущий: комната у пары одна и та же,
+      // поэтому сверяем только callId. Раньше он закрывал экран нового исходящего вызова.
+      try {
+        const endedCallId = String(data?.callId || '').trim();
+        if (endedCallId) {
+          const session = g.__webrtcSessionRef?.current;
+          const sessionCallId =
+            session &&
+            typeof session.getCallId === 'function' &&
+            !(typeof session.isEnded === 'function' && session.isEnded())
+              ? session.getCallId()
+              : null;
+          const liveCallIds = [g.__outgoingCallIdRef?.current, incomingCallIdRef.current, sessionCallId]
+            .map((id) => String(id || '').trim())
+            .filter(Boolean);
+          if (liveCallIds.length > 0 && !liveCallIds.includes(endedCallId)) {
+            logger.info('[App] call:ended for a previous call — current call kept', { endedCallId, liveCallIds });
+            addEndedCallIdFromSocket(endedCallId);
+            try {
+              forceCallLogUiNow('call_ended');
+            } catch (_) {}
+            return;
+          }
+        }
+      } catch (_) {}
       const inactiveNavSnapPre = (() => {
         try {
           const wasInSys =

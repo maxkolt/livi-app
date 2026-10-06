@@ -5,14 +5,14 @@ import type { Lang } from '../../utils/i18n';
 import AvatarImage from '../../components/AvatarImage';
 import {
   LIVI,
-  WELCOME_GLASS_BORDER,
+  UI_ACCENT_SOFT,
+  UI_RIM,
+  UI_GLASS_CONTROL,
   WELCOME_HEADER_TITLE,
-  WELCOME_MUTED_TEXT,
-  WELCOME_ONLINE_PLACEHOLDER_BG,
-  WELCOME_SEARCH_CHROME_SURFACE,
+  WELCOME_SEGMENT_LABEL,
 } from './constants';
 import { formatWelcomeUsersOnlineLine } from './utils/welcomeOnlineLabel';
-import { WELCOME_FLOAT_SHADOW_IOS, WelcomeFloatShadow } from './WelcomeFloatShadow';
+import { useDigitalRegularFont } from './brandFont';
 
 export type WelcomeBannerPeer = {
   id: string;
@@ -64,6 +64,8 @@ function WelcomeOnlineBannerInner({
   const stackItemStyle = { borderRadius: stackSize / 2 };
   const stackAvatarStyle = { width: stackSize, height: stackSize, borderRadius: stackSize / 2 };
 
+  // «Онлайн» — «цифровой» Exo 2, как ник и подписи навбара; размер прежний.
+  const onlineFont = useDigitalRegularFont();
   const stackPeers = useMemo(() => {
     const live = peers.slice(0, STACK_VISIBLE);
     const out: WelcomeBannerPeer[] = [];
@@ -77,7 +79,6 @@ function WelcomeOnlineBannerInner({
     <View
       style={[
         styles.floatWrap,
-        WELCOME_FLOAT_SHADOW_IOS,
         trailingAction ? styles.floatWrapWithAction : null,
         compact && styles.floatWrapCompact,
         compact && trailingAction ? styles.floatWrapCompactWithAction : null,
@@ -88,7 +89,6 @@ function WelcomeOnlineBannerInner({
         sideMargin != null ? { marginHorizontal: sideMargin } : null,
       ]}
     >
-      <WelcomeFloatShadow radius={pillRadius} />
       <View
         style={[
           styles.pill,
@@ -103,7 +103,7 @@ function WelcomeOnlineBannerInner({
         <View style={[styles.onlineRow, dense && styles.onlineRowDense]}>
           <View style={[styles.onlineDot, dense && styles.onlineDotDense]} />
           <AdaptiveText
-            style={[styles.onlineWord, compact && styles.onlineWordCompact, dense && styles.onlineWordDense]}
+            style={[styles.onlineWord, compact && styles.onlineWordCompact, dense && styles.onlineWordDense, onlineFont]}
             numberOfLines={1}
           >
             {onlineLabel}
@@ -196,7 +196,7 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     paddingHorizontal: 20,
     borderRadius: 26,
-    backgroundColor: WELCOME_SEARCH_CHROME_SURFACE,
+    backgroundColor: UI_GLASS_CONTROL,
     borderWidth: 0,
     gap: 14,
   },
@@ -209,11 +209,11 @@ const styles = StyleSheet.create({
     minHeight: 78,
     paddingLeft: 20,
     paddingRight: 10,
-    // То же полупрозрачное стекло, что у таб-бара на «Поиске».
-    backgroundColor: WELCOME_SEARCH_CHROME_SURFACE,
+    // Непрозрачный блок на верхнем стекле, как блок фильтров на «Друзьях».
+    backgroundColor: UI_GLASS_CONTROL,
     borderWidth: StyleSheet.hairlineWidth,
-    // Тон радара, приглушённый: рамка темнее, чем у кнопки поиска.
-    borderColor: 'rgba(14, 85, 119, 0.38)',
+    // Едва заметная светлая кромка — блок отделён от фона без цветной рамки.
+    borderColor: UI_RIM,
   },
   pillCompactWithAction: {
     minHeight: 66,
@@ -271,7 +271,8 @@ const styles = StyleSheet.create({
     fontSize: 13,
   },
   countText: {
-    color: WELCOME_MUTED_TEXT,
+    // Мелкий текст — светлее приглушённого, иначе на блоке читается с трудом.
+    color: WELCOME_SEGMENT_LABEL,
     fontSize: 11,
     fontWeight: '400',
     lineHeight: 14,
@@ -292,7 +293,7 @@ const styles = StyleSheet.create({
     width: StyleSheet.hairlineWidth,
     height: 34,
     flexShrink: 0,
-    backgroundColor: WELCOME_GLASS_BORDER,
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
   },
   actionDividerDense: {
     height: 26,
@@ -310,8 +311,8 @@ const styles = StyleSheet.create({
     overflow: 'visible',
   },
   stackPlaceholder: {
-    /** Тот же акцент, что волны радара / CTA. */
-    backgroundColor: WELCOME_ONLINE_PLACEHOLDER_BG,
+    /** Тот же акцент, что радар / CTA. */
+    backgroundColor: UI_ACCENT_SOFT,
   },
   stackFallback: {
     fontSize: 11,

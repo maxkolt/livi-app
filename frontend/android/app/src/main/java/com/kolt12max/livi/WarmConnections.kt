@@ -6,6 +6,8 @@ import android.net.Network
 import android.os.SystemClock
 import android.util.Log
 import com.facebook.react.modules.network.CustomClientBuilder
+import com.facebook.react.modules.network.OkHttpClientFactory
+import com.facebook.react.modules.network.OkHttpClientProvider
 import com.facebook.react.modules.websocket.WebSocketModule
 import okhttp3.Call
 import okhttp3.Callback
@@ -19,6 +21,7 @@ import okhttp3.Response
 import java.io.IOException
 import java.security.KeyStore
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import javax.net.ssl.SSLContext
@@ -66,6 +69,7 @@ object WarmConnections {
     OkHttpClient.Builder()
       .connectionPool(pool)
       .sslSocketFactory(sslSocketFactory, trustManager)
+      .dns(NetPath.dns)
       .protocols(listOf(Protocol.HTTP_1_1))
       // Зависшее соединение всё равно нужно: досидит повторы TCP и ляжет в пул.
       .connectTimeout(45, TimeUnit.SECONDS)
@@ -107,18 +111,62 @@ object WarmConnections {
     }
   }
 
-  /** Подключить общий пул к WebSocket'ам RN. Вызывать до первого WebSocket'а. */
-  fun install() {
+  /**
+   * Подключить общий пул к WebSocket'ам RN и маршрут NetPath (напрямую/реле) ко всем сетевым
+   * клиентам RN: fetch/XHR, картинки (OkHttpClientProvider), WebSocket. Вызывать до первого
+   * сетевого клиента.
+   */
+  fun install(context: Context) {
     if (installed) return
     installed = true
+    NetPath.init(context)
     WebSocketModule.setCustomClientBuilder(
       CustomClientBuilder { builder ->
         builder
           .connectionPool(pool)
           .sslSocketFactory(sslSocketFactory, trustManager)
+          .dns(NetPath.dns)
           .eventListenerFactory { signalCallTracker }
       },
     )
+    val app = context.applicationContext
+    OkHttpClientProvider.setOkHttpClientFactory(
+      OkHttpClientFactory { rnClient(app) },
+    )
+  }
+
+  /**
+   * Клиент RN для fetch/картинок: как по умолчанию (кэш 10 МБ, cookies, без таймаутов), плюс
+   * маршрут NetPath. Один на процесс — второй Cache на тот же каталог OkHttp не допускает
+   * (его же берёт expo-file-system через getOkHttpClient()).
+   */
+  @Volatile private var rnClientInstance: OkHttpClient? = null
+
+  @Synchronized
+  private fun rnClient(app: Context): OkHttpClient =
+    rnClientInstance ?: OkHttpClientProvider.createClientBuilder(app)
+      .dns(NetPath.dns)
+      .build()
+      .also { rnClientInstance = it }
+
+  /** Клиент с тёплым пулом и маршрутом NetPath — для нативных запросов (экраны звонка). */
+  fun sharedClient(): OkHttpClient = client
+
+  /**
+   * Закрытие TLS-сокета пишет close_notify в сеть, а NetPath решает маршрут и с главного
+   * потока (фора прямому пути) — там это NetworkOnMainThreadException и падение приложения.
+   */
+  private val io = Executors.newSingleThreadExecutor { r ->
+    Thread(r, "WarmConnections").apply { isDaemon = true }
+  }
+
+  /** NetPath сменил маршрут: свободные соединения старого пути не нужны, греем новый. */
+  fun onRouteChanged(context: Context) {
+    val app = context.applicationContext
+    io.execute {
+      pool.evictAll()
+      warm(app, "route_change")
+    }
   }
 
   /**
@@ -153,6 +201,7 @@ object WarmConnections {
             defaultNetwork = network
             if (previous == null || previous == network) return
             pool.evictAll()
+            NetPath.probe("network_change", force = true)
             warm(app, "network_change")
           }
         },
@@ -168,6 +217,8 @@ object WarmConnections {
    */
   fun warm(context: Context, reason: String, count: Int = DEFAULT_IDLE) {
     if (!installed) return
+    // Заодно пересмотреть маршрут (не чаще раза в минуту; при пуше звонка — сразу).
+    NetPath.probe(reason, force = reason.startsWith("fcm_") || reason == "app_start")
     val base = LiviAppModule.resolveServerBaseUrl(context.applicationContext) ?: return
     val url = "${base.trimEnd('/')}/health".toHttpUrlOrNull() ?: return
     if (!url.isHttps) return

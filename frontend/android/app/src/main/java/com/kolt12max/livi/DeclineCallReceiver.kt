@@ -8,7 +8,6 @@ import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
-import java.net.URL
 
 /**
  * Обработка нажатия «Отклонить» в уведомлении о звонке (heads-up).
@@ -38,27 +37,20 @@ class DeclineCallReceiver : BroadcastReceiver() {
             Thread {
                 var httpOk = false
                 try {
-                    val url = URL("$serverUrl/api/calls/decline")
-                    val conn = url.openConnection() as java.net.HttpURLConnection
-                    conn.requestMethod = "POST"
-                    conn.setRequestProperty("Content-Type", "application/json")
-                    conn.setRequestProperty("x-install-id", installId)
-                    if (installSecret != null) {
-                        conn.setRequestProperty("x-install-secret", installSecret)
+                    // Через тёплый пул и маршрут NetPath (за VPN — реле).
+                    val headers = buildMap {
+                        put("x-install-id", installId)
+                        if (installSecret != null) put("x-install-secret", installSecret)
+                        if (userIdHeader != null) put("x-user-id", userIdHeader)
                     }
-                    if (userIdHeader != null) {
-                        conn.setRequestProperty("x-user-id", userIdHeader)
-                    }
-                    conn.doOutput = true
-                    conn.connectTimeout = 8000
-                    conn.readTimeout = 8000
-                    conn.outputStream.use { os ->
-                        os.write("{\"callId\":\"${callId.replace("\"", "\\\"")}\"}".toByteArray(Charsets.UTF_8))
-                    }
-                    val code = conn.responseCode
+                    val code = NetPath.postJsonBlocking(
+                        "$serverUrl/api/calls/decline",
+                        "{\"callId\":\"${callId.replace("\"", "\\\"")}\"}",
+                        headers,
+                        20_000L,
+                    )
                     httpOk = code in 200..299
                     if (!httpOk) Log.e(TAG, "decline HTTP code=$code callId=$callId (fallback deep link)")
-                    conn.disconnect()
                 } catch (e: Exception) {
                     Log.e(TAG, "decline HTTP failed callId=$callId (fallback deep link)", e)
                 }

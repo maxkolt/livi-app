@@ -2,7 +2,7 @@ import React, { memo } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import AdaptiveText from '../../components/AdaptiveText';
 import { Ionicons } from '@expo/vector-icons';
-import { HOME_NAV_SURFACE, LIVI, WELCOME_HEADER_TITLE } from './constants';
+import { LIVI, UI_ACCENT_SELECTED, UI_GLASS_CONTROL, WELCOME_HEADER_TITLE } from './constants';
 import { WELCOME_SEGMENT_ACTIVE } from './FriendsListCore';
 
 type WelcomeSelectModeHeaderProps = {
@@ -117,7 +117,7 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: HOME_NAV_SURFACE,
+    backgroundColor: UI_GLASS_CONTROL,
   },
   iconBtnPressed: {
     opacity: 0.85,
@@ -134,10 +134,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 6,
-    backgroundColor: HOME_NAV_SURFACE,
+    backgroundColor: UI_GLASS_CONTROL,
   },
   selectAllPillActive: {
-    backgroundColor: 'rgba(42, 88, 104, 0.45)',
+    backgroundColor: UI_ACCENT_SELECTED,
   },
   selectAllLabel: {
     color: LIVI.white,

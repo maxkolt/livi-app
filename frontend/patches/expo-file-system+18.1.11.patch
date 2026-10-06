@@ -1,0 +1,17 @@
+--- a/android/src/main/java/expo/modules/filesystem/FileSystemModule.kt	2026-10-06 21:30:36
++++ b/android/src/main/java/expo/modules/filesystem/FileSystemModule.kt	2026-10-06 21:31:02
+@@ -998,6 +998,14 @@
+           .connectTimeout(60, TimeUnit.SECONDS)
+           .readTimeout(60, TimeUnit.SECONDS)
+           .writeTimeout(60, TimeUnit.SECONDS)
++        // LiVi: маршрут приложения до API (напрямую/реле за VPN) — DNS общего клиента RN.
++        // Через рефлексию: у модуля нет compile-зависимости от react-android.
++        try {
++          val provider = Class.forName("com.facebook.react.modules.network.OkHttpClientProvider")
++          val rnClient = provider.getMethod("getOkHttpClient").invoke(null) as? OkHttpClient
++          if (rnClient != null) builder.dns(rnClient.dns)
++        } catch (_: Throwable) {
++        }
+ 
+         client = builder.build()
+       }

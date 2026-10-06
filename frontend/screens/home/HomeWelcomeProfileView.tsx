@@ -13,7 +13,7 @@ import {
 } from 'react-native';
 import { useHomeLayout, useHomeLayoutActivity } from './HomeLayoutContext';
 import AdaptiveText from '../../components/AdaptiveText';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useStableSafeAreaInsets } from './useStableSafeAreaInsets';
 import { Ionicons } from '@expo/vector-icons';
 import { Image as ExpoImage } from 'expo-image';
 import * as Clipboard from 'expo-clipboard';
@@ -35,12 +35,13 @@ import {
   isWelcomeTabletLayout,
   searchPhoneScale,
   welcomePhoneAvatarMetrics,
-  WELCOME_BRAND_VI_FILL_GRADIENT,
   WELCOME_FRIENDS_LIST_INSET,
   WELCOME_GLASS_BORDER,
   WELCOME_HEADER_TITLE,
   WELCOME_MUTED_TEXT,
   WELCOME_SEARCH_CTA_BORDER,
+  UI_ACCENT,
+  UI_ACCENT_SOFT,
 } from './constants';
 import { WELCOME_SEGMENT_ACTIVE } from './FriendsListCore';
 import { displayAvatarLetter, displayName } from './friendHelpers';
@@ -53,6 +54,7 @@ import {
 } from './WelcomeProfileListUi';
 import type { HomeStyles } from './styles';
 import { APP_INPUT_MAX_FONT_SIZE_MULTIPLIER } from '../../utils/accessibilityTypography';
+import { useFisheyeAvatarUri } from '../../utils/avatarFisheye';
 
 const SUPPORT_EMAIL = '12345kolt@gmail.com';
 const SUPPORT_EMAIL_2 = 'kolt12max@mail.ru';
@@ -94,8 +96,6 @@ type HubMetrics = {
   gapTop: number;
   /** Аватар → первая карточка. */
   gapUnderAvatar: number;
-  /** Последняя карточка → «Удалить профиль». */
-  gapAboveDelete: number;
   /** «Удалить профиль» → таб-бар. */
   gapBottom: number;
   rowHeight: number;
@@ -109,7 +109,6 @@ type HubMetricsPreset = {
   cameraBtnSize: number;
   gapTop: number;
   gapUnderAvatar: number;
-  gapAboveDelete: number;
   gapBottom: number;
   rowMax: number;
   rowMin: number;
@@ -122,7 +121,6 @@ const HUB_PRESET_PHONE: HubMetricsPreset = {
   cameraBtnSize: CAMERA_BTN_SIZE,
   gapTop: 24,
   gapUnderAvatar: 14,
-  gapAboveDelete: 10,
   gapBottom: 14,
   rowMax: 48,
   rowMin: 40,
@@ -140,7 +138,6 @@ const HUB_PRESET_PHONE_LANDSCAPE: HubMetricsPreset = {
   // «Удалить профиль» не влезал на 5–10 dp — список уходил в скролл. Строки ужимаются
   // ровно настолько, насколько нужно, скролл — только для совсем низких экранов.
   gapUnderAvatar: 8,
-  gapAboveDelete: 4,
   gapBottom: 6,
   rowMax: 42,
   rowMin: 26,
@@ -153,7 +150,6 @@ const HUB_PRESET_TABLET: HubMetricsPreset = {
   cameraBtnSize: 34,
   gapTop: 26,
   gapUnderAvatar: 20,
-  gapAboveDelete: 12,
   gapBottom: 18,
   rowMax: 56,
   rowMin: 48,
@@ -166,7 +162,6 @@ const HUB_PRESET_TABLET_LANDSCAPE: HubMetricsPreset = {
   cameraBtnSize: CAMERA_BTN_SIZE,
   gapTop: 14,
   gapUnderAvatar: 14,
-  gapAboveDelete: 8,
   gapBottom: 14,
   rowMax: 54,
   rowMin: 44,
@@ -213,7 +208,6 @@ function scaleHubPreset(preset: HubMetricsPreset, k: number): HubMetricsPreset {
     ...preset,
     gapTop: r(preset.gapTop),
     gapUnderAvatar: r(preset.gapUnderAvatar),
-    gapAboveDelete: r(preset.gapAboveDelete),
     gapBottom: r(preset.gapBottom),
     rowMax: r(preset.rowMax),
     gapMax: r(preset.gapMax),
@@ -242,12 +236,12 @@ function resolveHubMetrics(
     preset.avatarSize +
     AVATAR_RING_WIDTH * 2 +
     preset.gapUnderAvatar +
-    preset.gapAboveDelete +
     preset.gapBottom;
   // «Удалить профиль» — такая же строка высотой rowHeight. Раньше на неё закладывали
   // фиксированные 20–40 dp при реальных 40–48, и в landscape она уезжала под таб-бар.
   const rows = hubRowsPerColumn(twoColumns) + 1;
-  const gaps = Math.max(0, hubSectionRows(twoColumns) - 1);
+  // Промежутки между рядами секций плюс такой же промежуток перед «Удалить профиль».
+  const gaps = hubSectionRows(twoColumns);
   const listBudget = Math.max(0, paneHeight - fixed);
   const maxTotal = rows * preset.rowMax + gaps * preset.gapMax;
   const minTotal = rows * preset.rowMin + gaps * preset.gapMin;
@@ -389,7 +383,7 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
     active = true,
   } = props;
 
-  const insets = useSafeAreaInsets();
+  const insets = useStableSafeAreaInsets();
   // Размер берём из safe-area frame: он приходит от нативного провайдера и
   // обновляется при повороте, в отличие от Dimensions.
   const { width: windowWidth, height: windowHeight } = useHomeLayout();
@@ -610,6 +604,10 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
   const hasLocalAvatarPreview = avatarUri && /^(file|content|ph|assets-library):\/\//i.test(avatarUri);
   /** Урну показываем, только когда есть что удалять. */
   const hasAvatarPhoto = !!hasLocalAvatarPreview || hasProfilePhoto(avatarUri, myAvatarVer);
+  // Только что выбранное фото идёт мимо AvatarImage — линзу ему даём здесь.
+  const localPreviewPhoto = useFisheyeAvatarUri(
+    !(myUserId && hasActiveFrame) && hasLocalAvatarPreview ? avatarUri : '',
+  );
 
   const avatarInner = (
     <View
@@ -637,7 +635,9 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
           fallbackTextStyle={{ fontSize: avatarSize > 110 ? 34 : 28, fontWeight: '800' }}
         />
       ) : hasLocalAvatarPreview ? (
-        <ExpoImage source={{ uri: avatarUri }} style={homeStyles.centerAvatarImg} cachePolicy="memory-disk" />
+        localPreviewPhoto ? (
+          <ExpoImage source={{ uri: localPreviewPhoto }} style={homeStyles.centerAvatarImg} cachePolicy="memory-disk" />
+        ) : null
       ) : myUserId && myAvatarVer > 0 ? (
         <AvatarImage
           key="avatar-plain"
@@ -811,7 +811,7 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
         twoColumnList
           ? { rowGap: hubMetrics.listGap }
           : { gap: hubMetrics.listGap },
-        { marginBottom: hubMetrics.gapAboveDelete },
+        { marginBottom: hubMetrics.listGap },
         accountOpen && styles.hubListStackNickOpen,
       ]}
     >
@@ -984,7 +984,7 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
   // аватар монтировался заново и мигал, пока картинка не загрузится снова.
   const hubBalanced = !needsHubScroll;
   const hubScrollBody = (
-    <View style={hubBalanced ? [styles.hubMainBalance, isTablet && styles.hubMainBalanceTablet] : null}>
+    <View style={hubBalanced ? styles.hubMainBalance : null}>
       <View style={hubBalanced ? styles.hubMainTop : null}>{hubAvatarSection}</View>
       {accountOpen ? hubAccountPanel : null}
       {hubListStack}
@@ -1078,7 +1078,7 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
           <Ionicons
             name="heart-outline"
             size={compactLandscape ? 26 : 34}
-            color={WELCOME_BRAND_VI_FILL_GRADIENT[1]}
+            color={UI_ACCENT}
           />
         </View>
         <AdaptiveText style={styles.supportHeroText}>{t('supportProjectSubtitle', lang)}</AdaptiveText>
@@ -1362,15 +1362,7 @@ const styles = StyleSheet.create({
   hubMainBalance: {
     flex: 1,
     minHeight: 0,
-    justifyContent: 'space-between',
-  },
-  /**
-   * Планшет: высоты с запасом, и space-between раздвигал аватар, список и
-   * «Удалить» дырами по 150–200 dp. Держим блок вместе по центру.
-   */
-  hubMainBalanceTablet: {
-    justifyContent: 'center',
-    gap: 24,
+    justifyContent: 'flex-start',
   },
   hubMainTop: {
     flexShrink: 0,
@@ -1417,7 +1409,7 @@ const styles = StyleSheet.create({
     width: CAMERA_BTN_SIZE,
     height: CAMERA_BTN_SIZE,
     borderRadius: CAMERA_BTN_SIZE / 2,
-    backgroundColor: '#12161c',
+    backgroundColor: 'rgba(0, 0, 0, 0.52)',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1556,9 +1548,9 @@ const styles = StyleSheet.create({
     borderRadius: 34,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(59, 130, 246, 0.1)',
+    backgroundColor: UI_ACCENT_SOFT,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(59, 130, 246, 0.2)',
+    borderColor: 'rgba(98, 176, 216, 0.24)',
     marginBottom: 14,
   },
   supportHeroText: {

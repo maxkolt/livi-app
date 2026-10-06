@@ -12,13 +12,16 @@ import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   LIVI,
-  WELCOME_BRAND_VI_FILL_GRADIENT,
-  WELCOME_CARD_BG,
   WELCOME_FRIENDS_SEGMENT_SHELL_RADIUS,
   WELCOME_GLASS_BORDER,
-  WELCOME_GLASS_SURFACE,
+  WELCOME_GLASS_RIM,
   WELCOME_HEADER_TITLE,
   WELCOME_MUTED_TEXT,
+  WELCOME_POPUP_ACCENT,
+  WELCOME_POPUP_SURFACE,
+  WELCOME_TAB_BLOCK_SURFACE,
+  UI_ACCENT_DEEP,
+  UI_SURFACE_RAISED,
 } from './constants';
 
 /** Спокойное затемнение без тяжёлого Blur (стабильнее на Android). */
@@ -26,7 +29,7 @@ export const WELCOME_OVERLAY_DIM = 'rgba(0, 0, 0, 0.62)';
 /** Плотнее — для confirm delete и похожих модалок. */
 export const WELCOME_OVERLAY_DIM_STRONG = 'rgba(0, 0, 0, 0.90)';
 
-export const WELCOME_OVERLAY_ACCENT = WELCOME_BRAND_VI_FILL_GRADIENT[1];
+export const WELCOME_OVERLAY_ACCENT = UI_ACCENT_DEEP;
 
 export function WelcomeOverlayDim({ strong }: { strong?: boolean } = {}) {
   return <View style={[styles.dim, strong && styles.dimStrong]} pointerEvents="none" />;
@@ -109,6 +112,7 @@ export function WelcomeOverlayPill({
       <AdaptiveText
         style={[
           styles.pillLabel,
+          variant === 'primary' && styles.pillLabelPrimary,
           variant === 'secondary' && styles.pillLabelSecondary,
         ]}
       >
@@ -141,15 +145,16 @@ const styles = StyleSheet.create({
     width: '92%',
     maxWidth: 400,
     minWidth: 280,
-    backgroundColor: WELCOME_GLASS_SURFACE,
+    backgroundColor: UI_SURFACE_RAISED,
     borderRadius: WELCOME_FRIENDS_SEGMENT_SHELL_RADIUS,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: WELCOME_GLASS_BORDER,
     padding: 18,
   },
+  /** Непрозрачная карточка в тонах вкладок — как меню и листы чата. */
   cardOpaque: {
-    backgroundColor: WELCOME_CARD_BG,
-    borderColor: 'rgba(255,255,255,0.10)',
+    backgroundColor: WELCOME_POPUP_SURFACE,
+    borderColor: WELCOME_GLASS_RIM,
   },
   pill: {
     minHeight: 40,
@@ -161,13 +166,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 9,
   },
+  /** Главное действие — светлая бирюза, как «Переслать» в чате. */
   pillPrimary: {
-    backgroundColor: WELCOME_OVERLAY_ACCENT,
+    backgroundColor: `${WELCOME_POPUP_ACCENT}24`,
+    borderWidth: 1,
+    borderColor: `${WELCOME_POPUP_ACCENT}73`,
   },
   pillSecondary: {
     backgroundColor: 'rgba(255,255,255,0.06)',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: WELCOME_GLASS_BORDER,
   },
   /** Как «Удалить профиль» в welcome profile. */
   pillDanger: {
@@ -186,6 +192,9 @@ const styles = StyleSheet.create({
     color: WELCOME_HEADER_TITLE,
     fontSize: 15,
     fontWeight: '600',
+  },
+  pillLabelPrimary: {
+    color: WELCOME_POPUP_ACCENT,
   },
   pillLabelSecondary: {
     color: WELCOME_HEADER_TITLE,
@@ -226,10 +235,11 @@ export const welcomeOverlayText = StyleSheet.create({
     fontWeight: '600',
     textAlign: 'center',
   },
+  /** Поле ссылки утоплено в карточку: темнее неё, со светлой кромкой. */
   linkField: {
-    backgroundColor: 'rgba(255,255,255,0.04)',
+    backgroundColor: 'rgba(0, 0, 0, 0.18)',
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: WELCOME_GLASS_BORDER,
+    borderColor: WELCOME_GLASS_RIM,
     borderRadius: 12,
     paddingVertical: 8,
     paddingHorizontal: 10,
@@ -246,7 +256,7 @@ export const welcomeOverlayText = StyleSheet.create({
   copyBtn: {
     padding: 6,
     borderRadius: 8,
-    backgroundColor: 'rgba(42, 88, 104, 0.45)',
+    backgroundColor: WELCOME_TAB_BLOCK_SURFACE,
   },
   hint: {
     color: WELCOME_MUTED_TEXT,

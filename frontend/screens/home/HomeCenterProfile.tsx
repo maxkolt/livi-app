@@ -18,6 +18,7 @@ import {
 import { displayAvatarLetter, displayName } from './friendHelpers';
 import type { HomeStyles } from './styles';
 import { useUserActiveFrame } from '../../utils/cosmetics';
+import { useFisheyeAvatarUri } from '../../utils/avatarFisheye';
 
 
 function isDirectAvatarUri(uri: string): boolean {
@@ -223,6 +224,19 @@ function HomeCenterProfileInner({
   }, [dustSourceKey, onAvatarDustSource]);
   const reportAvatarDisplay = avatarDust && radarStage ? handleAvatarDisplay : undefined;
 
+  // Фото без AvatarImage (только что выбранное или прямая ссылка) — тоже под линзой.
+  const plainPhotoUri =
+    myUserId && activeFrameId
+      ? ''
+      : isLocalPreview
+        ? resolvedAvatarUri || avatarUri
+        : myUserId && myAvatarVer > 0
+          ? ''
+          : hasDirectAvatarUri && resolvedAvatarReady
+            ? resolvedAvatarUri
+            : '';
+  const plainPhoto = useFisheyeAvatarUri(plainPhotoUri);
+
   const avatarInner = (
     <View
       ref={avatarAnchorRef}
@@ -253,12 +267,14 @@ function HomeCenterProfileInner({
           onDisplayChange={reportAvatarDisplay}
         />
       ) : isLocalPreview ? (
-        <ExpoImage
-          source={{ uri: resolvedAvatarUri || avatarUri }}
-          style={styles.centerAvatarImg}
-          cachePolicy="none"
-          onLoad={radarStage ? onSearchAvatarDecoded : undefined}
-        />
+        plainPhoto ? (
+          <ExpoImage
+            source={{ uri: plainPhoto }}
+            style={styles.centerAvatarImg}
+            cachePolicy="none"
+            onLoad={radarStage ? onSearchAvatarDecoded : undefined}
+          />
+        ) : null
       ) : myUserId && myAvatarVer > 0 ? (
         <AvatarImage
           key={`avatar-center-${myUserId}`}
@@ -274,12 +290,14 @@ function HomeCenterProfileInner({
           onDisplayChange={reportAvatarDisplay}
         />
       ) : hasDirectAvatarUri && resolvedAvatarReady ? (
-        <ExpoImage
-          source={{ uri: resolvedAvatarUri }}
-          style={styles.centerAvatarImg}
-          cachePolicy={/^https?:\/\//i.test(avatarUri) ? 'memory-disk' : 'none'}
-          onLoad={radarStage ? onSearchAvatarDecoded : undefined}
-        />
+        plainPhoto ? (
+          <ExpoImage
+            source={{ uri: plainPhoto }}
+            style={styles.centerAvatarImg}
+            cachePolicy={/^https?:\/\//i.test(avatarUri) ? 'memory-disk' : 'none'}
+            onLoad={radarStage ? onSearchAvatarDecoded : undefined}
+          />
+        ) : null
       ) : hasDirectAvatarUri ? (
         avatarVerChecked ? (
           <View style={[styles.centerAvatarImg, { alignItems: 'center', justifyContent: 'center' }]}>

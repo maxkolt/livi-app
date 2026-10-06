@@ -15,12 +15,13 @@ import { useSafeAreaFrame, useSafeAreaInsets } from 'react-native-safe-area-cont
 import { type Lang, defaultLang } from '../utils/i18n';
 import {
   LIVI,
-  WELCOME_BRAND_VI_FILL_GRADIENT,
   WELCOME_FRIENDS_SEGMENT_SHELL_RADIUS,
   WELCOME_GLASS_BORDER,
-  WELCOME_GLASS_SURFACE,
   WELCOME_HEADER_TITLE,
   WELCOME_MUTED_TEXT,
+  UI_ACCENT,
+  UI_ACCENT_LIGHT,
+  UI_SURFACE_RAISED,
 } from '../screens/home/constants';
 
 const OVERLAY_DIM = 'rgba(0, 0, 0, 0.62)';
@@ -57,7 +58,7 @@ const LIST_CONTENT_PAD_V = 4;
 const VISIBLE_LANGUAGE_ROWS = 7;
 /** paddingVertical×2 + lineHeights (native + name) */
 const LANGUAGE_ROW_HEIGHT = 12 * 2 + 18 + 1 + 14;
-const ACCENT = WELCOME_BRAND_VI_FILL_GRADIENT[1];
+const ACCENT = UI_ACCENT;
 
 const LanguagePicker: React.FC<Props> = ({
   visible,
@@ -182,7 +183,7 @@ const styles = StyleSheet.create({
   },
   card: {
     width: '92%',
-    backgroundColor: WELCOME_GLASS_SURFACE,
+    backgroundColor: UI_SURFACE_RAISED,
     borderRadius: WELCOME_FRIENDS_SEGMENT_SHELL_RADIUS,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: WELCOME_GLASS_BORDER,
@@ -221,7 +222,7 @@ const styles = StyleSheet.create({
     lineHeight: 14,
   },
   rowNameSelected: {
-    color: WELCOME_BRAND_VI_FILL_GRADIENT[2],
+    color: UI_ACCENT_LIGHT,
   },
   radioOff: {
     width: 16,

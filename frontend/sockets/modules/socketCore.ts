@@ -1,5 +1,6 @@
 // frontend/sockets/modules/socketCore.ts
 import { io, Socket } from "socket.io-client";
+import { DeviceEventEmitter, Platform } from "react-native";
 import {
   API_BASE,
   SOCKET_ENGINE_TIMEOUT_MS,
@@ -43,9 +44,26 @@ export const getSocket = (): Socket => {
       timeout: SOCKET_ENGINE_TIMEOUT_MS,
     });
     guardDuplicateConnectPacket(socketInstance);
+    dropStalledAttemptOnRouteChange();
   }
   return socketInstance;
 };
+
+/**
+ * Android NetPath сменил маршрут до API (напрямую ↔ реле, за VPN новое прямое соединение к
+ * серверу в РФ висит 20–70 с). Зависшую попытку подключения закрываем — менеджер socket.io
+ * сразу переподключится уже новым путём, а не ждёт таймаут старой.
+ */
+function dropStalledAttemptOnRouteChange(): void {
+  if (Platform.OS !== "android") return;
+  DeviceEventEmitter.addListener("LiviNetRouteChanged", () => {
+    const s = socketInstance;
+    if (!s || s.connected) return;
+    try {
+      (s as any).io?.engine?.close();
+    } catch {}
+  });
+}
 
 /**
  * connect() в окне «транспорт открыт, ответ сервера на CONNECT ещё не пришёл» шлёт второй

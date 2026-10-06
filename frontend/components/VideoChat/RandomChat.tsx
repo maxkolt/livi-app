@@ -39,13 +39,13 @@ import socket, {
   onConnected,
 } from '../../sockets/socket';
 import { MaterialIcons } from '@expo/vector-icons';
+import { useDigitalRegularFont } from '../../screens/home/brandFont';
 import { activateKeepAwakeAsync, deactivateKeepAwakeAsync } from '../../utils/keepAwake';
 import * as Device from 'expo-device';
 import { useAudioRouting } from './hooks/useAudioRouting';
 import { useModeration } from './hooks/useModeration';
 import { shouldDeferRandomChatStopOnAppBackground } from '../../utils/activeCallSession';
-import { WELCOME_HEADER_TITLE, WELCOME_NAV_ACTIVE_ICON, WELCOME_STAGE_BG } from '../../screens/home/constants';
-import { WelcomeStageBackground } from '../../screens/home/WelcomeStageBackground';
+import { HOME_NAV_BG, WELCOME_HEADER_TITLE, WELCOME_NAV_ACTIVE_ICON } from '../../screens/home/constants';
 import { ANDROID_SCREEN_PADDING, NETWORK_OVERLAY_DELAY_MS } from './randomChat/constants';
 import { styles } from './randomChat/styles';
 import { useRandomChatToast } from './randomChat/useRandomChatToast';
@@ -107,10 +107,11 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   const leavingRef = useRef(false);
   const [isNexting, setIsNexting] = useState(false);
   const isNextingRef = useRef(false); // КРИТИЧНО: Ref для синхронной проверки состояния
-  const [nextTapHighlight, setNextTapHighlight] = useState(false);
-  const nextTapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [startStopTapHighlight, setStartStopTapHighlight] = useState(false);
-  const startStopTapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Отклик нажатия «Начать»/«Далее»: 0 → 1 за один нативный прогон (см. playTapPulse).
+  const nextTapPulse = useRef(new Animated.Value(1)).current;
+  const startStopTapPulse = useRef(new Animated.Value(1)).current;
+  // Подписи «Начать»/«Далее» — «цифровой» Exo 2, как надпись «Онлайн» на «Поиске».
+  const bigBtnFont = useDigitalRegularFont();
   const [partnerId, setPartnerId] = useState<string | null>(null);
   const [partnerUserId, setPartnerUserId] = useState<string | null>(null);
   const partnerUserIdRef = useRef<string | null>(null);
@@ -1634,38 +1635,42 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   const nextDisabled = !started || isNexting || isInactiveState || loading || isModerationBanned;
   const startStopLocked = isInactiveState || isModerationBanned;
 
-  const flashNextTap = useCallback(() => {
-    setNextTapHighlight(true);
-    if (nextTapTimerRef.current) clearTimeout(nextTapTimerRef.current);
-    nextTapTimerRef.current = setTimeout(() => {
-      nextTapTimerRef.current = null;
-      setNextTapHighlight(false);
-    }, 280);
+  /**
+   * Нажатие — одна нативная анимация: сжатие и возврат идут из одного значения через
+   * interpolate, без JS-таймеров и состояния pressed. Раньше кнопка держала уменьшенный
+   * размер, пока JS был занят запуском/остановкой поиска (камера, сокет) и не успевал
+   * снять подсветку.
+   */
+  const playTapPulse = useCallback((pulse: Animated.Value) => {
+    pulse.stopAnimation();
+    pulse.setValue(0);
+    Animated.timing(pulse, {
+      toValue: 1,
+      duration: 300,
+      easing: Easing.out(Easing.quad),
+      useNativeDriver: true,
+    }).start();
   }, []);
-
-  const flashStartStopTap = useCallback(() => {
-    setStartStopTapHighlight(true);
-    if (startStopTapTimerRef.current) clearTimeout(startStopTapTimerRef.current);
-    startStopTapTimerRef.current = setTimeout(() => {
-      startStopTapTimerRef.current = null;
-      setStartStopTapHighlight(false);
-    }, 280);
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      if (nextTapTimerRef.current) clearTimeout(nextTapTimerRef.current);
-      if (startStopTapTimerRef.current) clearTimeout(startStopTapTimerRef.current);
-    };
-  }, []);
+  const flashNextTap = useCallback(() => playTapPulse(nextTapPulse), [nextTapPulse, playTapPulse]);
+  const flashStartStopTap = useCallback(
+    () => playTapPulse(startStopTapPulse),
+    [playTapPulse, startStopTapPulse],
+  );
+  const [startStopTapScale, startStopTapShade, nextTapScale, nextTapShade] = useMemo(() => {
+    const scale = (pulse: Animated.Value) =>
+      pulse.interpolate({ inputRange: [0, 0.25, 1], outputRange: [1, 0.96, 1] });
+    const shade = (pulse: Animated.Value) =>
+      pulse.interpolate({ inputRange: [0, 0.2, 1], outputRange: [0, 1, 0] });
+    return [scale(startStopTapPulse), shade(startStopTapPulse), scale(nextTapPulse), shade(nextTapPulse)];
+  }, [nextTapPulse, startStopTapPulse]);
 
   return (
     <>
       {Platform.OS === 'android' && (
         <SystemBars style="light" />
       )}
-      <View style={[styles.container, { backgroundColor: WELCOME_STAGE_BG }]}>
-      <WelcomeStageBackground />
+      {/* Сплошной фон, как на вкладках главной. */}
+      <View style={[styles.container, { backgroundColor: HOME_NAV_BG }]}>
       <SafeAreaView 
         style={[styles.container, { backgroundColor: 'transparent' }]}
         // Android: safe-area отступы считаем сами через insets, чтобы ничего не перезатиралось стилями
@@ -2049,6 +2054,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
         </View>
         {/* Кнопки снизу: Начать/Стоп и Далее */}
         <View style={[styles.bottomRow, isLandscape && styles.bottomRowLandscape]}>
+          <Animated.View style={[styles.bigBtnWrap, { transform: [{ scale: startStopTapScale }] }]}>
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={started ? L('stop') : L('start')}
@@ -2061,19 +2067,27 @@ const RandomChat: React.FC<Props> = ({ route }) => {
               if (startStopLocked) return;
               onStartStop();
             }}
-            style={({ pressed }) => [
+            style={[
               styles.bigBtn,
               isLandscape && styles.bigBtnLandscape,
-              started ? styles.btnDanger : styles.btnTitan,
-              (pressed || startStopTapHighlight) &&
-                (started ? styles.bigBtnPressedDanger : styles.bigBtnPressed),
+              started ? styles.btnDanger : styles.btnPrimary,
             ]}
           >
-            <Text style={styles.bigBtnText}>
+            <Animated.View
+              pointerEvents="none"
+              style={[
+                styles.bigBtnShade,
+                started && styles.bigBtnShadeDanger,
+                { opacity: startStopTapShade },
+              ]}
+            />
+            <Text style={[styles.bigBtnText, bigBtnFont]}>
               {started ? L('stop') : L('start')}
             </Text>
           </Pressable>
+          </Animated.View>
           
+          <Animated.View style={[styles.bigBtnWrap, { transform: [{ scale: nextTapScale }] }]}>
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={L('next')}
@@ -2087,15 +2101,15 @@ const RandomChat: React.FC<Props> = ({ route }) => {
               if (nextDisabled) return;
               onNext();
             }}
-            style={({ pressed }) => [
-              styles.bigBtn,
-              isLandscape && styles.bigBtnLandscape,
-              styles.btnTitan,
-              (pressed || nextTapHighlight) && styles.bigBtnPressed,
-            ]}
+            style={[styles.bigBtn, isLandscape && styles.bigBtnLandscape, styles.btnPrimary]}
           >
-            <Text style={styles.bigBtnText}>{L('next')}</Text>
+            <Animated.View
+              pointerEvents="none"
+              style={[styles.bigBtnShade, { opacity: nextTapShade }]}
+            />
+            <Text style={[styles.bigBtnText, bigBtnFont]}>{L('next')}</Text>
           </Pressable>
+          </Animated.View>
         </View>
         </View>
       

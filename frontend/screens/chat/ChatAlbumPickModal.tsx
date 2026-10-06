@@ -13,7 +13,7 @@ import { Image as ExpoImage } from "expo-image";
 import { Ionicons } from "@expo/vector-icons";
 import { CHAT_ALBUM_GAP, albumGridColumns } from "./chatAlbum";
 import { useModalLayout } from "../../utils/modalLayout";
-import { WelcomeStageBackground } from "../home/WelcomeStageBackground";
+import { WELCOME_GLASS_RIM } from "../home/constants";
 
 export type AlbumPickKind = "save" | "forward" | "delete";
 
@@ -138,7 +138,7 @@ export function ChatAlbumPickModal({
             backgroundColor: bg,
             overflow: "hidden",
             borderWidth: StyleSheet.hairlineWidth,
-            borderColor: isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.08)",
+            borderColor: isDark ? WELCOME_GLASS_RIM : "rgba(0,0,0,0.08)",
             ...Platform.select({
               ios: {
                 shadowColor: "#000",
@@ -150,9 +150,6 @@ export function ChatAlbumPickModal({
             }),
           }}
         >
-          {isDark ? (
-            <WelcomeStageBackground />
-          ) : null}
           <View
             style={{
               paddingHorizontal: 20,
@@ -260,7 +257,7 @@ export function ChatAlbumPickModal({
                       style={{
                         ...StyleSheet.absoluteFillObject,
                         backgroundColor: on
-                          ? (isDark ? "rgba(46,196,182,0.22)" : "rgba(113,91,168,0.18)")
+                          ? (isDark ? "rgba(98,176,216,0.22)" : "rgba(113,91,168,0.18)")
                           : "rgba(0,0,0,0.12)",
                       }}
                     />

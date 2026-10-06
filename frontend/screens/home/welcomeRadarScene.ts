@@ -1,5 +1,6 @@
 import {
   BlurStyle,
+  ClipOp,
   FilterMode,
   MipmapMode,
   PaintStyle,
@@ -12,29 +13,47 @@ import {
   type SkPath,
   type SkPicture,
   type SkRect,
+  type SkRRect,
+  type SkRuntimeEffect,
+  type SkShader,
 } from '@shopify/react-native-skia';
+import { SEARCH_RADAR_HUD, SEARCH_RADAR_HUD_LIGHT } from './constants';
+import { FISHEYE_SKSL, fisheyeScreen, fisheyeSource } from '../../utils/fisheyeLens';
 
 /**
- * HUD-радар Поиска. Рисунок делится на три части:
- * - статика (стекло, изолинии, сетка, кольца дальности, шкала) — растр, один
- *   раз на геометрию, на JS-потоке;
- * - пунктирный HUD-обод — векторная картинка, которая медленно вращается;
- * - луч, подсветка шкалы и цели — пишутся заново каждый кадр на UI-потоке.
- * В кадре нет clip и blur по большим фигурам: только сектор с коническим
- * градиентом, линии и несколько размытых точек — это дёшево даже на 120 Гц.
+ * HUD-радар Поиска. Рисунок делится на части:
+ * - «местность» (изолинии и сетка) — растр, один раз на геометрию, на JS-потоке.
+ *   Лежит под выпуклым стеклом («рыбий глаз», fisheyeLens): к центру крупнее,
+ *   к краю сжимается. При наклоне телефона местность смещается под линзой
+ *   (параллакс) и течёт по куполу;
+ * - стекло с ободом (кольца дальности, перекрестие, шкала, кромка) — второй растр,
+ *   стоит на месте. Кольца дальности идут по куполу: ровным шагом под линзой,
+ *   поэтому на экране сгущаются к краю;
+ * - пунктирный HUD-обод — векторная картинка, медленно вращается и при наклоне
+ *   чуть сдвигается навстречу местности — «парит» над стеклом;
+ * - луч, подсветка шкалы и цели — пишутся заново каждый кадр на UI-потоке. Цели
+ *   стоят на местности и сдвигаются вместе с ней.
+ * В кадре нет blur по большим фигурам: сектор с коническим градиентом, линии,
+ * несколько размытых точек и один круглый (аналитический) clip под местность.
  */
 
 /**
- * Тона радара — бирюза: линии светлее подложки RADAR_INNER_BG, чтобы
- * читаться на непрозрачном диске.
+ * Тона радара — акцент «Поиска» (приглушённый ледяной голубой). Кольца и шкала —
+ * им же, но под низкой альфой; ярко горят только кромка луча и цели.
  */
-const HUD = '#3F8E96';
-const ICE = '#8CCAD0';
+const HUD = SEARCH_RADAR_HUD;
+const ICE = SEARCH_RADAR_HUD_LIGHT;
 /** Лёгкое общее приглушение без изменения баланса отдельных элементов. */
 const RADAR_ALPHA = 0.85;
-/** Затемнённая бирюза под рисунком радара — полупрозрачнее фона панелей. */
-const RADAR_INNER_BG = '#0E2E33';
-const RADAR_INNER_ALPHA = 0.52;
+/** Подложка диска — тот же серо-синий, что фон, только глубже: «колодец» под стеклом. */
+const RADAR_INNER_BG = '#161B22';
+const RADAR_INNER_ALPHA = 0.45;
+/** Наибольший сдвиг местности при наклоне, dp радара 328. */
+const TERRAIN_TILT = 4;
+/** Пунктирный обод сдвигается навстречу, слабее — он ближе к стеклу. */
+const DASH_TILT = -1.5;
+/** Линза над местностью, радиус — край стекла: в центре ×1.43, у края сжатие ×1.6. */
+const LENS_K = 0.3;
 
 const TAU = Math.PI * 2;
 const D2R = Math.PI / 180;
@@ -168,14 +187,21 @@ function terrain(x: number, y: number): number {
   );
 }
 
-/** Marching squares по шуму, отрезки обрезаны кругом стекла. */
+/** Радиус местности: с запасом на сдвиг, чтобы у края не открывался пустой серп. */
+function terrainRadius(g: RadarGeometry): number {
+  return g.rDisc + (Math.abs(TERRAIN_TILT) + 1) * g.u;
+}
+
+/** Marching squares по шуму, отрезки обрезаны кругом местности. */
 function buildContourPath(g: RadarGeometry): SkPath {
-  const { cx, cy, rDisc } = g;
+  const { cx, cy } = g;
   const N = 72;
   const levels = [0.34, 0.42, 0.5, 0.58, 0.66];
-  const rMax = rDisc - 1.5 * g.u;
-  const rMin = g.a - 2;
-  const step = (rDisc * 2) / N;
+  const R = terrainRadius(g);
+  const rMax = R;
+  // Сразу за аватаром линза показывает местность ближе к центру — её не выкидываем.
+  const rMin = g.rDisc * fisheyeSource(g.a / g.rDisc, LENS_K) - 2 - Math.abs(TERRAIN_TILT) * g.u;
+  const step = (R * 2) / N;
   const vals = new Float32Array((N + 1) * (N + 1));
   for (let j = 0; j <= N; j++) {
     for (let i = 0; i <= N; i++) vals[j * (N + 1) + i] = terrain(i / N, j / N);
@@ -213,8 +239,8 @@ function buildContourPath(g: RadarGeometry): SkPath {
         const v1 = vals[j * (N + 1) + i + 1];
         const v2 = vals[(j + 1) * (N + 1) + i + 1];
         const v3 = vals[(j + 1) * (N + 1) + i];
-        const x = cx - rDisc + i * step;
-        const y = cy - rDisc + j * step;
+        const x = cx - R + i * step;
+        const y = cy - R + j * step;
         pts.length = 0;
         const edge = (va: number, vb: number, xa: number, ya: number, xb: number, yb: number) => {
           if (va < lv !== vb < lv) {
@@ -243,60 +269,50 @@ function tickLength(deg: number, u: number): number {
   return 2.6 * u;
 }
 
-function drawStatic(canvas: SkCanvas, g: RadarGeometry): void {
-  const { cx, cy, u, a, rIn, rDisc } = g;
-  const center = Skia.Point(cx, cy);
+/** Местность под стеклом: изолинии и сетка. В кадре обрезается кругом стекла. */
+function drawTerrain(canvas: SkCanvas, g: RadarGeometry): void {
+  const { cx, cy, u, rIn, rDisc } = g;
+  const R = terrainRadius(g);
 
-  // Всё внутри вращающегося пунктирного обода — прозрачное затемнённое стекло.
-  const base = Skia.Paint();
-  base.setAntiAlias(true);
-  base.setColor(Skia.Color(RADAR_INNER_BG));
-  base.setAlphaf(RADAR_INNER_ALPHA);
-  canvas.drawCircle(cx, cy, g.rDash, base);
+  canvas.drawPath(buildContourPath(g), strokePaint(0.7 * u, color(HUD, 0.14)));
 
-  // Стекло: свечение от аватара, темнее к краю, у самого края — отблеск.
-  const glass = Skia.Paint();
-  glass.setAntiAlias(true);
-  glass.setShader(
-    Skia.Shader.MakeRadialGradient(
-      center,
-      rDisc,
-      [color(HUD, 0), color(HUD, 0.27), color(HUD, 0.125), color(HUD, 0.06), color(HUD, 0.16)],
-      [0, a / rDisc, (a + (rDisc - a) * 0.45) / rDisc, 0.9, 1],
-      TileMode.Clamp,
-    ),
-  );
-  canvas.drawCircle(cx, cy, rDisc, glass);
-
-  canvas.drawPath(buildContourPath(g), strokePaint(0.7 * u, color(HUD, 0.24)));
-
-  // Квадратная сетка в пределах стекла.
+  // Квадратная сетка в пределах местности.
   const grid = Skia.Path.Make();
   const cell = (rDisc - rIn) / 2.5;
   for (let k = -6; k <= 6; k++) {
     const off = k * cell;
-    if (Math.abs(off) >= rDisc - 1) continue;
-    const h = Math.sqrt(rDisc * rDisc - off * off) - 1.5 * u;
+    if (Math.abs(off) >= R - 1) continue;
+    const h = Math.sqrt(R * R - off * off);
     grid.moveTo(cx + off, cy - h);
     grid.lineTo(cx + off, cy + h);
     grid.moveTo(cx - h, cy + off);
     grid.lineTo(cx + h, cy + off);
   }
-  canvas.drawPath(grid, strokePaint(0.6 * u, color(HUD, 0.16)));
+  canvas.drawPath(grid, strokePaint(0.6 * u, color(HUD, 0.09)));
+}
 
-  const rangePaint = strokePaint(0.7 * u, color(HUD, 0.34));
+/** Стекло с ободом: кольца дальности, перекрестие, шкала, кромка. Не двигается. */
+function drawBezel(canvas: SkCanvas, g: RadarGeometry): void {
+  const { cx, cy, u, a, rIn, rDisc } = g;
+  const center = Skia.Point(cx, cy);
+
+  const rangePaint = strokePaint(0.7 * u, color(HUD, 0.22));
   // Без аватара круг весь свободен — колец дальности на одно больше.
   const ranges = a > 0 ? 3 : 4;
-  for (let k = 1; k < ranges; k++) canvas.drawCircle(cx, cy, rIn + ((rDisc - rIn) * k) / ranges, rangePaint);
+  const s0 = fisheyeSource(rIn / rDisc, LENS_K);
+  for (let k = 1; k < ranges; k++) {
+    const r = rDisc * fisheyeScreen(s0 + ((1 - s0) * k) / ranges, LENS_K);
+    canvas.drawCircle(cx, cy, r, rangePaint);
+  }
 
-  const cross = strokePaint(0.7 * u, color(HUD, 0.4));
+  const cross = strokePaint(0.7 * u, color(HUD, 0.26));
   for (let k = 0; k < 4; k++) {
     const cs = Math.cos((k * Math.PI) / 2);
     const sn = Math.sin((k * Math.PI) / 2);
     canvas.drawLine(cx + cs * rIn, cy + sn * rIn, cx + cs * rDisc, cy + sn * rDisc, cross);
   }
 
-  canvas.drawCircle(cx, cy, rIn, strokePaint(0.9 * u, color(HUD, 0.8)));
+  canvas.drawCircle(cx, cy, rIn, strokePaint(0.9 * u, color(HUD, 0.55)));
 
   // Шкала по внутреннему краю стекла.
   const minor = Skia.Path.Make();
@@ -310,9 +326,9 @@ function drawStatic(canvas: SkCanvas, g: RadarGeometry): void {
     target.moveTo(cx + Math.cos(ang) * r0, cy + Math.sin(ang) * r0);
     target.lineTo(cx + Math.cos(ang) * r1, cy + Math.sin(ang) * r1);
   }
-  canvas.drawPath(minor, strokePaint(0.55 * u, color(HUD, 0.6)));
-  canvas.drawPath(mid, strokePaint(0.75 * u, color(HUD, 0.8)));
-  canvas.drawPath(major, strokePaint(1 * u, color(HUD, 0.95)));
+  canvas.drawPath(minor, strokePaint(0.55 * u, color(HUD, 0.32)));
+  canvas.drawPath(mid, strokePaint(0.75 * u, color(HUD, 0.48)));
+  canvas.drawPath(major, strokePaint(1 * u, color(HUD, 0.62)));
 
   // Край стекла: мягкий ореол и чёткая линия.
   const haloR = rDisc + 6 * u;
@@ -322,13 +338,13 @@ function drawStatic(canvas: SkCanvas, g: RadarGeometry): void {
     Skia.Shader.MakeRadialGradient(
       center,
       haloR,
-      [color(HUD, 0), color(HUD, 0), color(HUD, 0.4), color(HUD, 0)],
+      [color(HUD, 0), color(HUD, 0), color(HUD, 0.22), color(HUD, 0)],
       [0, (rDisc - 6 * u) / haloR, rDisc / haloR, 1],
       TileMode.Clamp,
     ),
   );
   canvas.drawCircle(cx, cy, haloR, halo);
-  canvas.drawCircle(cx, cy, rDisc, strokePaint(1.3 * u, color(HUD, 1)));
+  canvas.drawCircle(cx, cy, rDisc, strokePaint(1.3 * u, color(HUD, 0.62)));
 }
 
 function recordDashRing(g: RadarGeometry): SkPicture {
@@ -341,7 +357,7 @@ function recordDashRing(g: RadarGeometry): SkPicture {
   const circ = TAU * rDash;
   const unit = circ / Math.max(12, Math.round(circ / (9 * u)));
   ring.dash(unit * 0.62, unit * 0.38, 0);
-  canvas.drawPath(ring, strokePaint(0.9 * u, color(HUD, 0.85)));
+  canvas.drawPath(ring, strokePaint(0.9 * u, color(HUD, 0.5)));
   return rec.finishRecordingAsPicture();
 }
 
@@ -349,6 +365,9 @@ function recordDashRing(g: RadarGeometry): SkPicture {
 
 export type RadarPayload = {
   g: RadarGeometry;
+  /** Местность под стеклом — сдвигается при наклоне. */
+  terrain: SkImage;
+  /** Стекло с ободом поверх местности — стоит на месте. */
   image: SkImage;
   dashRing: SkPicture;
 };
@@ -360,11 +379,16 @@ export function prepareRadarPayload(g: RadarGeometry, pd: number): RadarPayload 
   if (!surface) return null;
   const canvas = surface.getCanvas();
   canvas.scale(px / g.size, px / g.size);
-  drawStatic(canvas, g);
-  surface.flush();
+  const snapshot = (draw: (c: SkCanvas, geo: RadarGeometry) => void) => {
+    canvas.clear(Skia.Color('transparent'));
+    draw(canvas, g);
+    surface.flush();
+    return surface.makeImageSnapshot().makeNonTextureImage();
+  };
   return {
     g,
-    image: surface.makeImageSnapshot().makeNonTextureImage(),
+    terrain: snapshot(drawTerrain),
+    image: snapshot(drawBezel),
     dashRing: recordDashRing(g),
   };
 }
@@ -374,9 +398,23 @@ export type RadarScene = RadarPayload & {
   t: number;
   /** Сколько времени прошло с последней перерисовки, мс. */
   sinceDrawMs: number;
+  /** Наклон телефона, [-1, 1]; задаёт кадру сдвиг местности и обода. */
+  tiltX: number;
+  tiltY: number;
   bounds: SkRect;
   src: SkRect;
   discOval: SkRect;
+  /** Круг, по которому обрезается сдвинутая местность, — внутренний край стекла. */
+  terrainClip: SkRRect;
+  rClip: number;
+  /** Линза над местностью; null — не собралась, местность рисуется плоской. */
+  lens: SkRuntimeEffect | null;
+  /** Сила линзы в кадре: LENS_K или 0 без неё. */
+  lensK: number;
+  terrainShader: SkShader;
+  terrainPaint: SkPaint;
+  basePaint: SkPaint;
+  glassPaint: SkPaint;
   sector: SkPath;
   beamPaint: SkPaint;
   edgeGlowPaint: SkPaint;
@@ -393,7 +431,7 @@ export type RadarScene = RadarPayload & {
 /** UI-поток: кисти и формы, которые кадр переиспользует. */
 export function buildRadarScene(p: RadarPayload, t: number): RadarScene {
   'worklet';
-  const { cx, cy, u, rIn, rDisc, size } = p.g;
+  const { cx, cy, u, a, rIn, rDisc, size } = p.g;
   const r0 = rIn + 0.5 * u;
   const r1 = rDisc - 0.7 * u;
   const tail = TAIL_DEG / 360;
@@ -411,7 +449,7 @@ export function buildRadarScene(p: RadarPayload, t: number): RadarScene {
     Skia.Shader.MakeSweepGradient(
       cx,
       cy,
-      [color(HUD, 0), color(HUD, 0), color(HUD, 0.14), color(HUD, 0.36), color(HUD, 0.56), color(ICE, 0.5)],
+      [color(HUD, 0), color(HUD, 0), color(HUD, 0.07), color(HUD, 0.18), color(HUD, 0.32), color(ICE, 0.38)],
       [0, 1 - tail, 1 - tail * 0.55, 1 - tail * 0.16, 1 - 0.014, 1],
       TileMode.Clamp,
     ),
@@ -420,13 +458,13 @@ export function buildRadarScene(p: RadarPayload, t: number): RadarScene {
   const edgeShader = Skia.Shader.MakeLinearGradient(
     Skia.Point(cx + r0, cy),
     Skia.Point(cx + r1, cy),
-    [color(HUD, 0.35), color(ICE, 1)],
+    [color(HUD, 0.25), color(ICE, 0.85)],
     [0, 1],
     TileMode.Clamp,
   );
   const edgeGlowPaint = strokePaint(3.2 * u, color(ICE, 1));
   edgeGlowPaint.setShader(edgeShader);
-  edgeGlowPaint.setAlphaf(0.28);
+  edgeGlowPaint.setAlphaf(0.22);
   const edgePaint = strokePaint(1.3 * u, color(ICE, 1));
   edgePaint.setShader(edgeShader);
 
@@ -435,7 +473,7 @@ export function buildRadarScene(p: RadarPayload, t: number): RadarScene {
     Skia.Shader.MakeSweepGradient(
       cx,
       cy,
-      [color(ICE, 0), color(ICE, 0), color(ICE, 0.8)],
+      [color(ICE, 0), color(ICE, 0), color(ICE, 0.6)],
       [0, 1 - tail * 0.6, 1],
       TileMode.Clamp,
     ),
@@ -447,13 +485,58 @@ export function buildRadarScene(p: RadarPayload, t: number): RadarScene {
   const corePaint = Skia.Paint();
   corePaint.setAntiAlias(true);
 
+  // Всё внутри вращающегося пунктирного обода — прозрачное затемнённое стекло.
+  const basePaint = Skia.Paint();
+  basePaint.setAntiAlias(true);
+  basePaint.setColor(Skia.Color(RADAR_INNER_BG));
+  basePaint.setAlphaf(RADAR_INNER_ALPHA);
+
+  // Стекло: свечение от аватара, темнее к краю, у самого края — отблеск.
+  const glassPaint = Skia.Paint();
+  glassPaint.setAntiAlias(true);
+  glassPaint.setShader(
+    Skia.Shader.MakeRadialGradient(
+      Skia.Point(cx, cy),
+      rDisc,
+      [color(HUD, 0), color(HUD, 0.16), color(HUD, 0.07), color(HUD, 0.03), color(HUD, 0.1)],
+      [0, a / rDisc, (a + (rDisc - a) * 0.45) / rDisc, 0.9, 1],
+      TileMode.Clamp,
+    ),
+  );
+
+  const rClip = rDisc - 1.5 * u;
+
+  // Местность как шейдер: линза берёт её по своим координатам. Растр в px, кадр в dp.
+  const lens = Skia.RuntimeEffect.Make(FISHEYE_SKSL);
+  const toDp = Skia.Matrix();
+  toDp.scale(size / p.terrain.width(), size / p.terrain.height());
+  const terrainShader = p.terrain.makeShaderOptions(
+    TileMode.Decal,
+    TileMode.Decal,
+    FilterMode.Linear,
+    MipmapMode.None,
+    toDp,
+  );
+  const terrainPaint = Skia.Paint();
+  terrainPaint.setAntiAlias(true);
+
   return {
     ...p,
     t,
     sinceDrawMs: 0,
+    tiltX: 0,
+    tiltY: 0,
     bounds: Skia.XYWHRect(0, 0, size, size),
     src: Skia.XYWHRect(0, 0, p.image.width(), p.image.height()),
     discOval: Skia.XYWHRect(cx - rDisc, cy - rDisc, rDisc * 2, rDisc * 2),
+    terrainClip: Skia.RRectXY(Skia.XYWHRect(cx - rClip, cy - rClip, rClip * 2, rClip * 2), rClip, rClip),
+    rClip,
+    lens,
+    lensK: lens ? LENS_K : 0,
+    terrainShader,
+    terrainPaint,
+    basePaint,
+    glassPaint,
     sector,
     beamPaint,
     edgeGlowPaint,
@@ -462,7 +545,7 @@ export function buildRadarScene(p: RadarPayload, t: number): RadarScene {
     tickPaint: strokePaint(0.8 * u, color(ICE, 1)),
     glowPaint,
     corePaint,
-    pingPaint: strokePaint(0.9 * u, color(HUD, 1)),
+    pingPaint: strokePaint(0.9 * u, color(HUD, 0.8)),
     hud: color(HUD, 1),
     ice: color(ICE, 1),
   };
@@ -479,11 +562,36 @@ export function drawRadarFrame(S: RadarScene): SkPicture {
   const r0 = rIn + 0.5 * u;
   const r1 = rDisc - 0.7 * u;
 
+  // Параллакс: местность и цели уходят «вглубь», обод чуть навстречу.
+  const tx = S.tiltX * u;
+  const ty = S.tiltY * u;
+
   const rec = Skia.PictureRecorder();
   const canvas = rec.beginRecording(S.bounds);
+  canvas.drawCircle(cx, cy, S.g.rDash, S.basePaint);
+  canvas.drawCircle(cx, cy, rDisc, S.glassPaint);
+
+  if (S.lens) {
+    // Местность сдвигается под неподвижной линзой — течёт по куполу.
+    S.terrainPaint.setShader(
+      S.lens.makeShaderWithChildren(
+        [cx, cy, rDisc, S.lensK, tx * TERRAIN_TILT, ty * TERRAIN_TILT],
+        [S.terrainShader],
+      ),
+    );
+    canvas.drawCircle(cx, cy, S.rClip, S.terrainPaint);
+  } else {
+    canvas.save();
+    canvas.clipRRect(S.terrainClip, ClipOp.Intersect, true);
+    canvas.translate(tx * TERRAIN_TILT, ty * TERRAIN_TILT);
+    canvas.drawImageRectOptions(S.terrain, S.src, S.bounds, FilterMode.Linear, MipmapMode.None, null);
+    canvas.restore();
+  }
+
   canvas.drawImageRectOptions(S.image, S.src, S.bounds, FilterMode.Linear, MipmapMode.None, null);
 
   canvas.save();
+  canvas.translate(tx * DASH_TILT, ty * DASH_TILT);
   canvas.rotate(-((t / DASH_PERIOD_S) % 1) * 360, cx, cy);
   canvas.drawPicture(S.dashRing);
   canvas.restore();
@@ -506,7 +614,7 @@ export function drawRadarFrame(S: RadarScene): SkPicture {
     if (lit < 0.04) continue;
     const tr0 = tr1 - tickLength(deg, u);
     S.tickPaint.setColor(S.ice);
-    S.tickPaint.setAlphaf(0.75 * lit);
+    S.tickPaint.setAlphaf(0.6 * lit);
     S.tickPaint.setStrokeWidth((deg % 30 === 0 ? 1.1 : 0.8) * u);
     const cs = Math.cos(ang);
     const sn = Math.sin(ang);
@@ -526,8 +634,13 @@ export function drawRadarFrame(S: RadarScene): SkPicture {
     const tDet = (TAU * n + ct.a0) / (omega - ct.w);
     const aDet = ct.a0 + ct.w * tDet - Math.PI / 2;
     const rr = rIn + 9 * u + span * hash(i + 17, n);
-    const x = cx + Math.cos(aDet) * rr;
-    const y = cy + Math.sin(aDet) * rr;
+    // Цель лежит на местности: сдвиг вместе с ней, затем через линзу на экран.
+    const bx = Math.cos(aDet) * rr + tx * TERRAIN_TILT;
+    const by = Math.sin(aDet) * rr + ty * TERRAIN_TILT;
+    const br = Math.sqrt(bx * bx + by * by);
+    const lensed = br > 0 ? (rDisc * fisheyeScreen(br / rDisc, S.lensK)) / br : 1;
+    const x = cx + bx * lensed;
+    const y = cy + by * lensed;
     const b = Math.exp(-age * 2.6) * (1 - age);
     if (b < 0.01) continue;
     S.glowPaint.setColor(S.hud);

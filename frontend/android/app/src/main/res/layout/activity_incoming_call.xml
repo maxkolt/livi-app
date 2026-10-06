@@ -4,12 +4,20 @@
     android:id="@+id/incoming_call_root"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#0A0C14">
+    android:background="@color/home_nav_background">
 
-    <!-- Основной фон, пиксель-в-пиксель с blue-noise дизерингом (StageBackground.kt). -->
-    <com.kolt12max.livi.StageBackgroundView
+    <!-- Новая сцена: бирюза у краёв → серый «Поиска» в середине, blue-noise дизеринг (StageBackground.kt). -->
+    <com.kolt12max.livi.TealStageBackgroundView
+        android:id="@+id/incoming_call_stage"
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
+
+    <!-- Тонировка поверх сцены: не сильно тёмная, но затемняет. -->
+    <View
+        android:id="@+id/incoming_call_tint"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@color/call_screen_tint" />
 
     <LinearLayout
         android:id="@+id/incoming_call_content"

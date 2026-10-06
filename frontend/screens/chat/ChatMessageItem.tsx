@@ -29,12 +29,13 @@ import {
   type ChatReadStatus,
 } from "./chatMessageIds";
 import { getMessageImageUris, CHAT_ALBUM_INSET, albumGridLayout } from "./chatAlbum";
-import { WELCOME_BRAND_VI_FILL_GRADIENT } from "../home/constants";
+import { UI_ACCENT, UI_ACCENT_PRESSED } from "../home/constants";
 
 /** Активный чекбокс выбора — как иконки активной вкладки в navbar. */
-const SELECT_CHECK = WELCOME_BRAND_VI_FILL_GRADIENT[2];
-const SELECT_CHECK_BG = "rgba(74, 122, 140, 0.22)";
+const SELECT_CHECK = UI_ACCENT;
+const SELECT_CHECK_BG = "rgba(98, 176, 216, 0.22)";
 import { ChatAlbumGrid } from "./ChatAlbumGrid";
+import { MESSAGE_LONG_PRESS_MS } from "../../constants/uiTokens";
 import { ChatReplyQuoteAccent } from "./ChatReplyQuoteAccent";
 
 /** Зазор над/под облаком на границе серии (последнее облако ленты — всегда так). */
@@ -457,7 +458,7 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
                   onPressImage('image', imageUri, item.name, { uris: [imageUri], index: 0, message: item });
                 });
               }}
-              delayLongPress={280}
+              delayLongPress={MESSAGE_LONG_PRESS_MS}
               onLongPress={() => {
                 animateMessagePress(item.id, fireLongPressWithLayout, { immediate: true });
               }}
@@ -486,7 +487,7 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
                 onPressImage('image', imageUri, item.name, { uris: [imageUri], index: 0, message: item });
               });
             }}
-            delayLongPress={280}
+            delayLongPress={MESSAGE_LONG_PRESS_MS}
             onLongPress={() => {
               animateMessagePress(item.id, fireLongPressWithLayout, { immediate: true });
             }}
@@ -711,9 +712,9 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
               >
                 <Defs>
                   <LinearGradient id={voiceGradId} x1="0%" y1="0%" x2="100%" y2="100%">
-                    <Stop offset="0%" stopColor={isDark ? '#C8FFF4' : '#EDE4FF'} stopOpacity={1} />
-                    <Stop offset={isDark ? '45%' : '40%'} stopColor={isDark ? '#5ED4C8' : '#A894D8'} stopOpacity={1} />
-                    <Stop offset="100%" stopColor={isDark ? '#A8E8E0' : '#D4C4F0'} stopOpacity={1} />
+                    <Stop offset="0%" stopColor={isDark ? '#E0F3FC' : '#EDE4FF'} stopOpacity={1} />
+                    <Stop offset={isDark ? '45%' : '40%'} stopColor={isDark ? '#62B0D8' : '#A894D8'} stopOpacity={1} />
+                    <Stop offset="100%" stopColor={isDark ? '#B2DCF0' : '#D4C4F0'} stopOpacity={1} />
                   </LinearGradient>
                 </Defs>
                 <SvgCircle
@@ -751,7 +752,7 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
                   try { onPressAudio?.(item); } catch {}
                 }}
                 onLongPress={openMessageActionsFromBubble}
-                delayLongPress={280}
+                delayLongPress={MESSAGE_LONG_PRESS_MS}
                 style={[
                   StyleSheet.absoluteFillObject,
                   {
@@ -810,7 +811,7 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
                   try { onRetryFailed?.(item); } catch {}
                 }}
                 onLongPress={openMessageActionsFromBubble}
-                delayLongPress={280}
+                delayLongPress={MESSAGE_LONG_PRESS_MS}
                 style={{
                   flexDirection: 'row',
                   alignItems: 'center',
@@ -832,7 +833,7 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
                 try { onToggleRetryUi?.(String(item?.id || '')); } catch {}
               }}
               onLongPress={openMessageActionsFromBubble}
-              delayLongPress={280}
+              delayLongPress={MESSAGE_LONG_PRESS_MS}
               hitSlop={8}
               style={{ flexDirection: 'row', alignItems: 'center' }}
             >
@@ -1054,7 +1055,7 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
               onLongPressMessage(item, { x, y, width: w, height: h });
             });
           }}
-          delayLongPress={380}
+          delayLongPress={MESSAGE_LONG_PRESS_MS}
         >
           <View
             ref={bubbleRef}
@@ -1161,7 +1162,7 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
               disabled={!!selectionMode}
               onPress={() => onPressReplyQuote?.(String(item.replyTo.id))}
               onLongPress={openMessageActionsFromBubble}
-              delayLongPress={280}
+              delayLongPress={MESSAGE_LONG_PRESS_MS}
               style={({ pressed }) => ({
                 alignSelf: 'stretch',
                 marginBottom: 4,
@@ -1194,7 +1195,7 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
             ref={bubbleRef}
             onPress={handleBubblePress}
             onLongPress={openMessageActionsFromBubble}
-            delayLongPress={280}
+            delayLongPress={MESSAGE_LONG_PRESS_MS}
             style={({ pressed }) => ({
               width: stickerSize,
               minHeight: stickerSize,
@@ -1230,7 +1231,7 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
                   key={emoji}
                   onPress={() => onReactionPress?.(item.id, emoji)}
                   onLongPress={openMessageActionsFromBubble}
-                  delayLongPress={280}
+                  delayLongPress={MESSAGE_LONG_PRESS_MS}
                   style={({ pressed }) => ({
                     flexDirection: 'row',
                     alignItems: 'center',
@@ -1332,7 +1333,7 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
           };
           const linkStyle = {
             ...baseStyle,
-            color: '#7eb8ff',
+            color: UI_ACCENT_PRESSED,
             textDecorationLine: 'underline' as const,
           };
           const segments = parseTextWithUrls(String(item.text ?? ''));
@@ -1382,7 +1383,7 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
                       key={emoji}
                       onPress={() => onReactionPress?.(item.id, emoji)}
                       onLongPress={openMessageActionsFromBubble}
-                      delayLongPress={280}
+                      delayLongPress={MESSAGE_LONG_PRESS_MS}
                       style={({ pressed }) => [
                         {
                           flexDirection: 'row',
@@ -1430,7 +1431,7 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
                   disabled={!!selectionMode}
                   onPress={() => onPressReplyQuote?.(String(item.replyTo.id))}
                   onLongPress={openMessageActionsFromBubble}
-                  delayLongPress={280}
+                  delayLongPress={MESSAGE_LONG_PRESS_MS}
                   style={({ pressed }) => ({
                     alignSelf: 'stretch',
                     marginBottom: 8,
@@ -1491,7 +1492,7 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
                     ref={bubbleRef}
                     onPress={handleBubblePress}
                     onLongPress={openMessageActionsFromBubble}
-                    delayLongPress={280}
+                    delayLongPress={MESSAGE_LONG_PRESS_MS}
                     style={({ pressed }) => [
                       {
                         ...bubblePadStyle,
@@ -1515,7 +1516,7 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
               ref={bubbleRef}
               onPress={handleBubblePress}
               onLongPress={openMessageActionsFromBubble}
-              delayLongPress={280}
+              delayLongPress={MESSAGE_LONG_PRESS_MS}
               style={({ pressed }) => [
                 {
                   ...bubblePadStyle,

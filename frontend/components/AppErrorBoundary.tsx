@@ -3,7 +3,13 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useLang } from '../store/lang';
 import { t } from '../utils/i18n';
 import { trackReleaseError } from '../utils/telemetry';
-import { WELCOME_HEADER_TITLE, WELCOME_MUTED_TEXT, WELCOME_STAGE_BG } from '../screens/home/constants';
+import {
+  HOME_NAV_BG,
+  WELCOME_HEADER_TITLE,
+  WELCOME_MUTED_TEXT,
+  WELCOME_POPUP_ACCENT,
+} from '../screens/home/constants';
+import { WelcomeStageBackground } from '../screens/home/WelcomeStageBackground';
 
 type Props = { children: React.ReactNode };
 type State = { failed: boolean; attempt: number };
@@ -36,6 +42,8 @@ export class AppErrorBoundary extends React.Component<Props, State> {
     const lang = useLang.getState().lang;
     return (
       <View style={styles.root}>
+        {/* Новая сцена: бирюза у краёв → серый «Поиска», как у сплэша. */}
+        <WelcomeStageBackground palette="teal" />
         <Text style={styles.title}>{t('errorBoundaryTitle', lang)}</Text>
         <Text style={styles.text}>{t('errorBoundaryText', lang)}</Text>
         <Pressable
@@ -53,7 +61,7 @@ export class AppErrorBoundary extends React.Component<Props, State> {
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: WELCOME_STAGE_BG,
+    backgroundColor: HOME_NAV_BG,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 32,
@@ -79,15 +87,16 @@ const styles = StyleSheet.create({
     borderRadius: 24,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(0, 181, 255, 0.12)',
+    // Светлая бирюза, как главные кнопки модалок и «Переслать» в чате.
+    backgroundColor: `${WELCOME_POPUP_ACCENT}24`,
     borderWidth: 1,
-    borderColor: 'rgba(0, 181, 255, 0.36)',
+    borderColor: `${WELCOME_POPUP_ACCENT}73`,
   },
   buttonPressed: {
-    backgroundColor: 'rgba(0, 181, 255, 0.24)',
+    backgroundColor: `${WELCOME_POPUP_ACCENT}38`,
   },
   buttonText: {
-    color: '#ffffff',
+    color: WELCOME_POPUP_ACCENT,
     fontSize: 16,
     fontWeight: '600',
   },

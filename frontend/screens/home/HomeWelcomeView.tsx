@@ -8,12 +8,16 @@ import {
   type LayoutChangeEvent,
 } from 'react-native';
 import { useHomeLayout, useHomeLayoutActivity } from './HomeLayoutContext';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import AdaptiveText from '../../components/AdaptiveText';
+import { useNickDigitalFont } from './brandFont';
+import { useStableSafeAreaInsets } from './useStableSafeAreaInsets';
 import { GestureDetector } from 'react-native-gesture-handler';
 import { useAnimatedRef } from 'react-native-reanimated';
 import {
   isWelcomeTabletLayout,
   searchPhoneRadarPreferred,
+  WELCOME_HEADER_TITLE,
+  WELCOME_ONLINE_PLACEHOLDER_BG,
   welcomePhoneAvatarMetrics,
   welcomeRadarFirstRingWidth,
 } from './constants';
@@ -62,6 +66,11 @@ export type HomeWelcomeViewProps = {
   splashGone?: boolean;
   /** Вкладка «Поиск» на экране — иначе радар не анимируется. */
   active?: boolean;
+  /**
+   * Нижний край блока «Онлайн» от верха вкладки — до него HomeScreen рисует верхнее стекло.
+   * null — блок не наверху (две колонки в горизонтали), стекла нет.
+   */
+  onTopBlockBottom?: (bottom: number | null) => void;
 };
 
 function resolveIsLandscape(width: number, height: number) {
@@ -115,6 +124,7 @@ function HomeWelcomeViewInner({
   onStartSearch,
   splashGone = true,
   active = true,
+  onTopBlockBottom,
 }: HomeWelcomeViewProps) {
   // Animated ref: слой частиц меряет по нему аватар прямо на UI-потоке.
   const avatarAnchorRef = useAnimatedRef<View>();
@@ -123,7 +133,7 @@ function HomeWelcomeViewInner({
   const reveal = useRef(new Animated.Value(welcomeRevealPlayedThisSession ? 1 : 0)).current;
   const frame = useHomeLayout();
   const notifyLayoutActivity = useHomeLayoutActivity();
-  const insets = useSafeAreaInsets();
+  const insets = useStableSafeAreaInsets();
   const [measured, setMeasured] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
   /** Фактическая область под радар/текст/CTA — всё, что осталось от панели под шапкой. */
   const [stageBox, setStageBox] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
@@ -181,6 +191,10 @@ function HomeWelcomeViewInner({
   const isPhone = resolveIsPhone(stageWidth, stageHeight);
   const isLandscape = resolveIsLandscape(stageWidth, stageHeight);
   const splitStage = resolveIsSplitStage(stageWidth, stageHeight);
+  // В две колонки блок «Онлайн» не наверху — верхнего стекла нет.
+  useEffect(() => {
+    if (splitStage) onTopBlockBottom?.(null);
+  }, [onTopBlockBottom, splitStage]);
   const shortPhone = isPhone && !isLandscape && stageHeight > 0 && stageHeight < 700;
   /** Только экстремально низкая высота (ландшафт телефона / SE crouch) — размеры контролов не трогаем. */
   const compactLayout = isPhone && !isLandscape && stageHeight < 520;
@@ -222,7 +236,8 @@ function HomeWelcomeViewInner({
 
   /** Баннер сверху, CTA снизу; радар центрируется в оставшемся зазоре. */
   const space = {
-    bannerMarginTop: verticalEdgeGap,
+    // Наверху блок лежит на стекле от системной строки — к ней ближе, как шапка «Друзей».
+    bannerMarginTop: splitStage ? verticalEdgeGap : isTabletLayout ? 14 : 10,
     radarPaddingTop: 0,
     stageCopyMarginTop: 0,
     stageCopyPaddingBottom: 0,
@@ -278,10 +293,22 @@ function HomeWelcomeViewInner({
   );
   /** Остаток строки под радар (минус боковые отступы и зазор между колонками). */
   const radarSlotWidth = Math.max(120, stageW - ctaWidth - 18 - 32);
-  /** Резерв только под CTA — радар центрируется между online и кнопкой. */
+  /**
+   * Ник под радаром крупным «цифровым» шрифтом — только в вертикали. Его строка входит
+   * в резерв под кнопкой: радар центрируется выше на половину её высоты и не наезжает.
+   */
+  const nickFont = useNickDigitalFont();
+  const nickText = String(centerProfile.savedNick || '').trim();
+  const nickFontSize = isTabletLayout ? 42 : compactLayout || shortPhone ? 28 : 34;
+  const nickLineH = Math.round(nickFontSize * 1.25);
+  const nickGap = isTabletLayout ? 16 : 10;
+  const showNick = !!nickText && !splitStage && !tightStage;
+  const nickBlockH = showNick ? nickGap + nickLineH : 0;
+  const ctaPadTop = space.ctaMinGap + nickBlockH;
+  /** Резерв под ник и CTA — радар центрируется между online и ними. */
   const stageCopyReserve = splitStage
     ? 0
-    : space.ctaMinGap + space.ctaBottomPad + ctaHeight;
+    : ctaPadTop + space.ctaBottomPad + ctaHeight;
 
   /**
    * Рисунок радара занимает RADAR_DRAWN_EXTENT контейнера (дальше — пустое поле),
@@ -310,16 +337,17 @@ function HomeWelcomeViewInner({
   const radarSize = Math.round(Math.max(96, Math.min(radarPreferred, Math.max(96, radarHeightLimit))));
 
   /**
-   * Портрет: кнопка посередине между низом рисунка радара и таб-баром (низ сцены).
-   * Раскладка та же — радар не двигается, сдвигаем только кнопку.
+   * Портрет: кнопка ниже середины между низом ника (или рисунка радара) и таб-баром
+   * (низ сцены) — 62% свободного места сверху. Радар не двигается, сдвигаем только кнопку.
    */
+  const radarDashR = radarGeometry(radarSize, 0).rDash;
   const ctaShiftY = (() => {
     if (splitStage) return 0;
     const radarAreaH = stageH - stageCopyReserve;
     // Видимый край — пунктирное кольцо; RADAR_DRAWN_EXTENT шире (с прежним пустым полем).
-    const drawnBottom = radarAreaH / 2 + radarGeometry(radarSize, 0).rDash;
-    const ctaTop = drawnBottom + (stageH - drawnBottom - ctaHeight) / 2;
-    return Math.round(ctaTop - (radarAreaH + space.ctaMinGap));
+    const contentBottom = radarAreaH / 2 + radarDashR + nickBlockH;
+    const ctaTop = contentBottom + (stageH - contentBottom - ctaHeight) * 0.62;
+    return Math.round(ctaTop - (radarAreaH + ctaPadTop));
   })();
 
   /**
@@ -417,7 +445,13 @@ function HomeWelcomeViewInner({
   return (
     <View style={welcomeStyles.root} onLayout={onRootLayout} collapsable={false}>
       {splitStage ? null : (
-        <Animated.View style={revealStyle}>
+        <Animated.View
+          style={revealStyle}
+          onLayout={(e) => {
+            const { y, height } = e.nativeEvent.layout;
+            if (height > 0) onTopBlockBottom?.(y + height);
+          }}
+        >
           <WelcomeOnlineBanner
             lang={lang}
             onlineLabel={L('online')}
@@ -427,7 +461,13 @@ function HomeWelcomeViewInner({
             dense={tightStage}
             marginTop={space.bannerMarginTop}
             sideMargin={isTabletLayout ? 20 : 12}
-            trailingAction={<WelcomeCrownButton large={isTabletLayout} small={tightStage} onlinePanel />}
+            trailingAction={
+              <WelcomeCrownButton
+                large={isTabletLayout}
+                small={tightStage}
+                surface={WELCOME_ONLINE_PLACEHOLDER_BG}
+              />
+            }
           />
         </Animated.View>
       )}
@@ -478,6 +518,31 @@ function HomeWelcomeViewInner({
             </WelcomeRadar>
             </View>
             </GestureDetector>
+            {showNick ? (
+              <View
+                pointerEvents="none"
+                style={[
+                  welcomeStyles.nickWrap,
+                  { top: radarSize / 2 + radarDashR + nickGap },
+                ]}
+              >
+                <AdaptiveText
+                  style={[
+                    welcomeStyles.nick,
+                    {
+                      fontFamily: nickFont.fontFamily,
+                      fontWeight: nickFont.fontWeight,
+                      fontSize: nickFontSize,
+                      lineHeight: nickLineH,
+                    },
+                  ]}
+                  numberOfLines={1}
+                  minimumFontScale={0.5}
+                >
+                  {nickText}
+                </AdaptiveText>
+              </View>
+            ) : null}
           </View>
         </View>
 
@@ -503,7 +568,13 @@ function HomeWelcomeViewInner({
               dense={tightStage}
               marginTop={space.bannerMarginTop}
               sideMargin={0}
-              trailingAction={<WelcomeCrownButton large={isTabletLayout} small={tightStage} onlinePanel />}
+              trailingAction={
+                <WelcomeCrownButton
+                  large={isTabletLayout}
+                  small={tightStage}
+                  surface={WELCOME_ONLINE_PLACEHOLDER_BG}
+                />
+              }
             />
           ) : null}
 
@@ -511,7 +582,7 @@ function HomeWelcomeViewInner({
             style={[
               welcomeStyles.ctaWrap,
               {
-                paddingTop: space.ctaMinGap,
+                paddingTop: ctaPadTop,
                 paddingBottom: space.ctaBottomPad,
                 transform: [{ translateY: ctaShiftY }],
               },
@@ -594,6 +665,18 @@ const welcomeStyles = StyleSheet.create({
     minWidth: 0,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  /** Ник под пунктирным кольцом радара: по центру, не шире радара. */
+  nickWrap: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+  },
+  nick: {
+    color: WELCOME_HEADER_TITLE,
+    letterSpacing: 1.2,
+    textAlign: 'center',
   },
   ctaWrap: {
     alignSelf: 'stretch',

@@ -9,7 +9,7 @@ import {
 } from 'react-native';
 import { useSafeAreaFrame } from 'react-native-safe-area-context';
 import { WelcomeStageBackground } from '../screens/home/WelcomeStageBackground';
-import { WELCOME_STAGE_BG } from '../screens/home/constants';
+import { HOME_NAV_BG } from '../screens/home/constants';
 
 const MIN_SPLASH_DURATION_MS = 3000;
 const SPLASH_FADE_DURATION_MS = 620;
@@ -153,8 +153,9 @@ export default function SplashLoader({
 
   // Фон сплэша — welcome stage gradient; логотип камеры на полупрозрачном стекле.
   return (
-    <View style={[styles.container, { backgroundColor: WELCOME_STAGE_BG }]}>
-      <WelcomeStageBackground />
+    <View style={[styles.container, { backgroundColor: HOME_NAV_BG }]}>
+      {/* Сцена Legendary: приглушённая бирюза у краёв → серый, как у окна MainActivity. */}
+      <WelcomeStageBackground palette="tealDeep" />
       <View style={styles.middle}>
         <View style={styles.logoContainer}>
           <Animated.View

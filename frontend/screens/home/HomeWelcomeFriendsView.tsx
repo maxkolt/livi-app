@@ -16,27 +16,43 @@ import { t, type Lang } from '../../utils/i18n';
 import { APP_INPUT_MAX_FONT_SIZE_MULTIPLIER } from '../../utils/accessibilityTypography';
 import {
   HOME_NAV_ICON_WELL,
-  HOME_NAV_ACTIVE,
+  HOME_NAV_TAB_ACTIVE,
   LIVI,
-  WELCOME_GLASS_BORDER,
-  WELCOME_LIST_SURFACE,
-  HOME_NAV_SURFACE,
+  WELCOME_FILTER_ACTIVE,
+  WELCOME_TAB_BLOCK_SURFACE,
   WELCOME_MUTED_TEXT,
-  WELCOME_SEARCH_CTA_BORDER,
+  WELCOME_SEGMENT_LABEL,
   WELCOME_FRIENDS_INVITE_GAP,
   WELCOME_FRIENDS_LIST_INSET,
   WELCOME_FRIENDS_SEGMENT_HEIGHT,
   WELCOME_FRIENDS_SEGMENT_SHELL_RADIUS,
-  WELCOME_FRIENDS_SEGMENT_SHADOW,
   WELCOME_HEADER_TITLE,
   WELCOME_BRAND_GLYPH_INSET,
   WELCOME_TOP_BAR_SIDE_PAD,
   isWelcomeTabletLayout,
+  UI_ACCENT,
+  HOME_BLUR_LIST_SOURCE,
+  UI_GLASS_CONTROL,
 } from './constants';
-import { WELCOME_FLOAT_SHADOW_IOS, WelcomeFloatShadow } from './WelcomeFloatShadow';
-import { FriendsListCore, WELCOME_SEGMENT_ACTIVE, type FriendsListCoreProps } from './FriendsListCore';
+import {
+  WELCOME_CHROME_BTN_SHADOW,
+  WELCOME_CHROME_BTN_SHADOW_IOS,
+  WELCOME_FLOAT_SHADOW_IOS,
+  WelcomeFloatShadow,
+} from './WelcomeFloatShadow';
+import { FriendsListCore, type FriendsListCoreProps } from './FriendsListCore';
+import {
+  GLASS_HEADER_BTN,
+  GLASS_SEARCH_FIELD,
+  GLASS_SEGMENT_HEIGHT,
+  GLASS_SEGMENT_PAD,
+  WelcomeGlassHeader,
+  useGlassHeaderHeight,
+} from './WelcomeGlassHeader';
 import { friendMatchesNameSearch } from './friendHelpers';
 import { WelcomeCrownButton } from './WelcomeCrownButton';
+import { WelcomeTabTitle } from './WelcomeTabTitle';
+import { useDigitalMediumFont, useDigitalRegularFont } from './brandFont';
 import { WelcomeSelectModeHeader } from './WelcomeSelectModeHeader';
 import { welcomeSelectHaptic } from './welcomeSelectHaptic';
 import type { Friend } from './types';
@@ -59,6 +75,9 @@ export type HomeWelcomeFriendsViewProps = Omit<FriendsListCoreProps, 'presentati
 };
 
 function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
+  // Подписи фильтров — «цифровой» Exo 2, как навбар и заголовок; размеры прежние.
+  const segmentFont = useDigitalMediumFont();
+  const inviteFont = useDigitalRegularFont();
   const {
     lang,
     allFriends,
@@ -79,6 +98,7 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
     !tabletLayout && windowWidth > 0 && windowHeight > 0 && windowWidth / windowHeight > 1.05;
   const [filter, setFilter] = useState<FriendsFilter>('all');
   const [searchOpen, setSearchOpen] = useState(false);
+  const [glassHeaderH, setGlassHeaderH] = useGlassHeaderHeight(tabletLayout, compactLandscape, searchOpen);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
@@ -226,11 +246,7 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
             compactLandscape && styles.inviteIconWrapLandscape,
           ]}
         >
-          <MaterialCommunityIcons
-            name="gift-outline"
-            size={compactLandscape ? 28 : tabletLayout ? 40 : 38}
-            color={HOME_NAV_ACTIVE}
-          />
+          <InviteGreetingIcon size={compactLandscape ? 28 : tabletLayout ? 36 : 30} />
         </View>
         <View style={styles.inviteTextCol}>
           <AdaptiveText
@@ -238,6 +254,7 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
               styles.inviteTitle,
               tabletLayout && styles.inviteTitleTablet,
               compactLandscape && styles.inviteTitleLandscape,
+              inviteFont,
             ]}
           >
             {t('inviteFriendsTitle', lang)}
@@ -247,6 +264,7 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
               styles.inviteSubtitle,
               tabletLayout && styles.inviteSubtitleTablet,
               compactLandscape && styles.inviteSubtitleLandscape,
+              inviteFont,
             ]}
           >
             {t('inviteFriendsSubtitle', lang)}
@@ -255,7 +273,7 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
         <Ionicons name="chevron-forward" size={20} color={WELCOME_MUTED_TEXT} />
       </Pressable>
     );
-  }, [compactLandscape, filter, lang, onInviteFriends, selectMode, tabletLayout, trimmedQuery]);
+  }, [compactLandscape, filter, inviteFont, lang, onInviteFriends, selectMode, tabletLayout, trimmedQuery]);
 
   const deleteSelected = useCallback(async () => {
     if (deleting) return;
@@ -284,6 +302,29 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
   return (
     <TouchableWithoutFeedback onPress={searchOpen ? dismissSearchFromEmptyTap : undefined} accessible={false}>
       <View style={styles.root}>
+      <FriendsListCore
+        {...listProps}
+        lang={lang}
+        unreadByUser={unreadByUser}
+        missedByUser={missedByUser}
+        L={listEmptyOverride ? (key: string) => (key === 'friendsEmpty' ? listEmptyOverride : L(key)) : L}
+        friends={filteredFriends}
+        presentation="welcome"
+        ListFooterComponent={inviteFooter}
+        keyboardShouldPersistTaps={searchOpen ? 'never' : 'always'}
+        onScrollBeginDragExtra={searchOpen ? closeSearch : undefined}
+        selectMode={selectMode}
+        selectedIds={selectedIds}
+        onEnterSelect={enterSelect}
+        onToggleSelect={toggleSelect}
+        compactLandscape={compactLandscape}
+        tabletLayout={tabletLayout}
+        refreshing={selectMode ? false : listProps.refreshing}
+        onRefresh={selectMode ? (async () => {}) : listProps.onRefresh}
+        blurSourceId={HOME_BLUR_LIST_SOURCE.friends}
+        topInset={glassHeaderH}
+      />
+      <WelcomeGlassHeader listSourceId={HOME_BLUR_LIST_SOURCE.friends} onHeight={setGlassHeaderH}>
       <View
         style={[
           styles.header,
@@ -310,13 +351,13 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
           />
         ) : (
           <>
+        <WelcomeTabTitle label={t('tabFriends', lang)} tablet={tabletLayout} compact={compactLandscape} />
         <Pressable
           style={({ pressed }) => [
             styles.iconBtn,
             tabletLayout && styles.iconBtnTablet,
             compactLandscape && styles.iconBtnLandscape,
-            searchOpen && styles.iconBtnActive,
-            WELCOME_FLOAT_SHADOW_IOS,
+            WELCOME_CHROME_BTN_SHADOW_IOS,
             pressed && styles.iconBtnPressed,
           ]}
           accessibilityRole="button"
@@ -324,14 +365,23 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
           accessibilityState={{ selected: searchOpen }}
           onPress={toggleSearch}
         >
-          <WelcomeFloatShadow radius={tabletLayout ? 22 : compactLandscape ? 16 : 20} />
+          <WelcomeFloatShadow
+            radius={tabletLayout ? 22 : compactLandscape ? 16 : GLASS_HEADER_BTN / 2}
+            {...WELCOME_CHROME_BTN_SHADOW}
+          />
           <Ionicons
             name={searchOpen ? 'search' : 'search-outline'}
-            size={tabletLayout ? 24 : compactLandscape ? 19 : 22}
-            color={searchOpen ? WELCOME_SEGMENT_ACTIVE : HOME_NAV_ACTIVE}
+            size={tabletLayout ? 24 : compactLandscape ? 19 : 20}
+            // Активный поиск — меняется только иконка, в цвет выбранной кнопки фильтра.
+            color={searchOpen ? UI_ACCENT : WELCOME_HEADER_TITLE}
           />
         </Pressable>
-        <WelcomeCrownButton small={compactLandscape} large={tabletLayout} />
+        <WelcomeCrownButton
+                small={compactLandscape}
+                compact={!tabletLayout && !compactLandscape}
+                large={tabletLayout}
+                surface={UI_GLASS_CONTROL}
+              />
           </>
         )}
       </View>
@@ -374,11 +424,9 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
           styles.segmentShell,
           tabletLayout && styles.segmentShellTablet,
           compactLandscape && styles.segmentShellLandscape,
-          WELCOME_FLOAT_SHADOW_IOS,
         ]}
         onStartShouldSetResponder={() => true}
       >
-        <WelcomeFloatShadow radius={WELCOME_FRIENDS_SEGMENT_SHELL_RADIUS} {...WELCOME_FRIENDS_SEGMENT_SHADOW} />
         <Pressable
           style={[
             styles.segmentBtn,
@@ -398,6 +446,8 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
               styles.segmentLabel,
               tabletLayout && styles.segmentLabelTablet,
               compactLandscape && styles.segmentLabelLandscape,
+              filter === 'all' && styles.segmentLabelActive,
+              segmentFont,
             ]}
             numberOfLines={1}
             adjustsFontSizeToFit
@@ -427,6 +477,8 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
                 styles.segmentLabel,
                 tabletLayout && styles.segmentLabelTablet,
                 compactLandscape && styles.segmentLabelLandscape,
+                filter === 'online' && styles.segmentLabelActive,
+                segmentFont,
               ]}
               numberOfLines={1}
               adjustsFontSizeToFit
@@ -437,34 +489,45 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
           </View>
         </Pressable>
       </View>
-
-      <FriendsListCore
-        {...listProps}
-        lang={lang}
-        unreadByUser={unreadByUser}
-        missedByUser={missedByUser}
-        L={listEmptyOverride ? (key: string) => (key === 'friendsEmpty' ? listEmptyOverride : L(key)) : L}
-        friends={filteredFriends}
-        presentation="welcome"
-        ListFooterComponent={inviteFooter}
-        keyboardShouldPersistTaps={searchOpen ? 'never' : 'always'}
-        onScrollBeginDragExtra={searchOpen ? closeSearch : undefined}
-        selectMode={selectMode}
-        selectedIds={selectedIds}
-        onEnterSelect={enterSelect}
-        onToggleSelect={toggleSelect}
-        compactLandscape={compactLandscape}
-        tabletLayout={tabletLayout}
-        refreshing={selectMode ? false : listProps.refreshing}
-        onRefresh={selectMode ? (async () => {}) : listProps.onRefresh}
-      />
       </View>
+      </WelcomeGlassHeader>
       </View>
     </TouchableWithoutFeedback>
   );
 }
 
+/**
+ * Двое здороваются: два человечка, поднятые руки встречаются посередине; в цвет активной
+ * вкладки навбара. Вместе занимают ту же площадь, что прежняя одиночная иконка.
+ */
+function InviteGreetingIcon({ size }: { size: number }) {
+  const glyph = Math.round(size * 0.78);
+  return (
+    <View style={styles.inviteGreeting}>
+      <MaterialCommunityIcons
+        name="human-greeting"
+        size={glyph}
+        color={HOME_NAV_TAB_ACTIVE}
+        style={styles.inviteGreetingMirror}
+      />
+      <MaterialCommunityIcons
+        name="human-greeting"
+        size={glyph}
+        color={HOME_NAV_TAB_ACTIVE}
+        style={{ marginLeft: -Math.round(size * 0.24) }}
+      />
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
+  inviteGreeting: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+  },
+  inviteGreetingMirror: {
+    transform: [{ scaleX: -1 }],
+  },
   root: {
     flex: 1,
     minHeight: 0,
@@ -473,11 +536,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingTop: Platform.OS === 'ios' ? 8 : 12,
+    // Ближе к системной строке: шапка лежит на стекле и не должна быть высокой.
+    paddingTop: 2,
     // Вертикаль: кнопка поиска — вровень с «LiVi», корона — как на «Поиске».
     paddingLeft: WELCOME_TOP_BAR_SIDE_PAD + WELCOME_BRAND_GLYPH_INSET,
     paddingRight: WELCOME_TOP_BAR_SIDE_PAD,
-    paddingBottom: 8,
+    paddingBottom: 4,
   },
   // Горизонталь — прежние отступы.
   headerLandscape: {
@@ -487,23 +551,25 @@ const styles = StyleSheet.create({
     paddingBottom: 2,
   },
   headerTablet: {
-    paddingTop: 14,
+    paddingTop: 8,
     paddingBottom: 10,
   },
   headerTabletLandscape: {
     paddingLeft: 28,
     paddingRight: 28,
   },
+  /** Поиск и блок фильтров внутри стеклянной шапки; снизу — поле стекла под блоком. */
   body: {
-    flex: 1,
-    minHeight: 0,
-    marginTop: 10,
+    marginTop: 6,
+    paddingBottom: GLASS_SEGMENT_PAD.phone,
   },
   bodyLandscape: {
     marginTop: 2,
+    paddingBottom: GLASS_SEGMENT_PAD.landscape,
   },
   bodyTablet: {
     marginTop: 12,
+    paddingBottom: GLASS_SEGMENT_PAD.tablet,
   },
   titleHit: {
     flex: 1,
@@ -537,12 +603,13 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   iconBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: GLASS_HEADER_BTN,
+    height: GLASS_HEADER_BTN,
+    borderRadius: GLASS_HEADER_BTN / 2,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: HOME_NAV_SURFACE,
+    backgroundColor: UI_GLASS_CONTROL,
+    borderWidth: 0,
   },
   iconBtnLandscape: {
     width: 32,
@@ -553,9 +620,6 @@ const styles = StyleSheet.create({
     width: 44,
     height: 44,
     borderRadius: 22,
-  },
-  iconBtnActive: {
-    backgroundColor: WELCOME_SEARCH_CTA_BORDER,
   },
   iconBtnPressed: {
     opacity: 0.85,
@@ -568,24 +632,25 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     marginHorizontal: WELCOME_FRIENDS_LIST_INSET,
-    marginBottom: 10,
+    // Высота фиксированная: на неё список сдвигается в том же кадре, что поле появляется.
+    height: GLASS_SEARCH_FIELD.phone.height,
+    marginBottom: GLASS_SEARCH_FIELD.phone.gap,
     paddingHorizontal: 12,
-    paddingVertical: Platform.OS === 'ios' ? 10 : 6,
-    borderRadius: 14,
-    backgroundColor: WELCOME_LIST_SURFACE,
+    borderRadius: 12,
+    backgroundColor: UI_GLASS_CONTROL,
     gap: 8,
   },
   searchShellLandscape: {
-    marginBottom: 6,
-    paddingVertical: 2,
+    height: GLASS_SEARCH_FIELD.landscape.height,
+    marginBottom: GLASS_SEARCH_FIELD.landscape.gap,
   },
   searchShellTablet: {
     width: '92%',
     maxWidth: 900,
     alignSelf: 'center',
     marginHorizontal: 0,
-    marginBottom: 12,
-    paddingVertical: 10,
+    height: GLASS_SEARCH_FIELD.tablet.height,
+    marginBottom: GLASS_SEARCH_FIELD.tablet.gap,
   },
   searchIcon: {
     flexShrink: 0,
@@ -594,8 +659,8 @@ const styles = StyleSheet.create({
     flex: 1,
     minWidth: 0,
     color: LIVI.white,
-    fontSize: 16,
-    paddingVertical: Platform.OS === 'android' ? 4 : 0,
+    fontSize: 15,
+    paddingVertical: 0,
   },
   searchInputTablet: {
     fontSize: 17,
@@ -604,13 +669,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     marginHorizontal: WELCOME_FRIENDS_LIST_INSET,
-    padding: 7,
-    minHeight: WELCOME_FRIENDS_SEGMENT_HEIGHT.phone,
+    padding: 5,
+    minHeight: GLASS_SEGMENT_HEIGHT.phone,
     borderRadius: WELCOME_FRIENDS_SEGMENT_SHELL_RADIUS,
-    // Фон как у таб-бара.
-    backgroundColor: HOME_NAV_SURFACE,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: WELCOME_GLASS_BORDER,
+    // Прозрачное стекло, как у кнопок и остальных блоков вкладки.
+    backgroundColor: UI_GLASS_CONTROL,
+    borderWidth: 0,
     gap: 5,
     // Над списком, как таб-бар снизу: строки уходят под блок прямо по его нижнему
     // краю, а тень ложится поверх них. Зазор до первой строки —
@@ -618,21 +682,21 @@ const styles = StyleSheet.create({
     zIndex: 2,
   },
   segmentShellLandscape: {
-    minHeight: WELCOME_FRIENDS_SEGMENT_HEIGHT.landscape,
+    minHeight: GLASS_SEGMENT_HEIGHT.landscape,
     padding: 4,
   },
   segmentShellTablet: {
     width: '92%',
     maxWidth: 900,
     alignSelf: 'center',
-    minHeight: WELCOME_FRIENDS_SEGMENT_HEIGHT.tablet,
+    minHeight: GLASS_SEGMENT_HEIGHT.tablet,
     padding: 8,
     marginHorizontal: 0,
   },
   segmentBtn: {
     flex: 1,
     minWidth: 0,
-    paddingVertical: 9,
+    paddingVertical: 7,
     paddingHorizontal: 10,
     borderRadius: 999,
     alignItems: 'center',
@@ -645,14 +709,18 @@ const styles = StyleSheet.create({
     paddingVertical: 11,
   },
   segmentBtnActive: {
-    // Выбранный фильтр — цвет активной вкладки.
-    backgroundColor: HOME_NAV_ACTIVE,
+    // Более тёмная версия акцента активной вкладки.
+    backgroundColor: WELCOME_FILTER_ACTIVE,
   },
   segmentLabel: {
-    color: WELCOME_MUTED_TEXT,
+    color: WELCOME_SEGMENT_LABEL,
     fontSize: 14,
     fontWeight: '500',
     textAlign: 'center',
+  },
+  /** Выбранный сегмент — светлая подпись на акцентной подложке. */
+  segmentLabelActive: {
+    color: WELCOME_HEADER_TITLE,
   },
   segmentLabelLandscape: {
     fontSize: 13,
@@ -678,14 +746,13 @@ const styles = StyleSheet.create({
     height: WELCOME_FRIENDS_SEGMENT_HEIGHT.phone,
     marginTop: WELCOME_FRIENDS_INVITE_GAP.phone,
     marginBottom: 8,
-    // 72 − 2×8 = 56: подложка подарка занимает всю высоту содержимого.
+    // 60 − 2×8 = 44: подложка значка занимает всю высоту содержимого.
     paddingVertical: 8,
     paddingHorizontal: 14,
     borderRadius: WELCOME_FRIENDS_SEGMENT_SHELL_RADIUS,
-    // Как фильтры и кнопки: бирюзово-серая непрозрачная карточка.
-    backgroundColor: HOME_NAV_SURFACE,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: WELCOME_GLASS_BORDER,
+    // В одном прозрачном тоне с блоком «Все / Онлайн», без рамки.
+    backgroundColor: WELCOME_TAB_BLOCK_SURFACE,
+    borderWidth: 0,
     gap: 12,
   },
   inviteCardLandscape: {
@@ -707,9 +774,9 @@ const styles = StyleSheet.create({
     opacity: 0.92,
   },
   inviteIconWrap: {
-    width: 56,
-    height: 56,
-    borderRadius: 16,
+    width: 44,
+    height: 44,
+    borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: HOME_NAV_ICON_WELL,
@@ -720,25 +787,29 @@ const styles = StyleSheet.create({
     borderRadius: 12,
   },
   inviteIconWrapTablet: {
-    width: 56,
-    height: 56,
-    borderRadius: 16,
+    width: 48,
+    height: 48,
+    borderRadius: 14,
   },
+  // Заголовок и подпись ближе друг к другу: у Exo 2 высокая строка по умолчанию.
   inviteTextCol: {
     flex: 1,
     minWidth: 0,
-    gap: 4,
+    gap: 1,
   },
   inviteTitle: {
     color: WELCOME_HEADER_TITLE,
     fontSize: 16,
+    lineHeight: 20,
     fontWeight: '400',
   },
   inviteTitleLandscape: {
     fontSize: 14,
+    lineHeight: 18,
   },
   inviteTitleTablet: {
     fontSize: 17,
+    lineHeight: 21,
   },
   inviteSubtitle: {
     color: WELCOME_MUTED_TEXT,

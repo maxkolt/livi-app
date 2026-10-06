@@ -13,7 +13,7 @@ import {
 import { BlurView } from 'expo-blur';
 import { LIVI, t, type Lang } from '../../utils/i18n';
 import { APP_INPUT_MAX_FONT_SIZE_MULTIPLIER } from '../../utils/accessibilityTypography';
-import { WELCOME_NAV_ACTIVE_ACCENT } from '../home/constants';
+import { UI_ACCENT_DEEP, UI_SURFACE_RAISED, UI_SURFACE_SUNKEN, WELCOME_NAV_ACTIVE_ACCENT } from '../home/constants';
 import {
   changeE2eBackupPassword,
   disableE2e,
@@ -427,7 +427,7 @@ const styles = StyleSheet.create({
     maxWidth: 400,
     borderRadius: 18,
     padding: 20,
-    backgroundColor: LIVI.bg,
+    backgroundColor: UI_SURFACE_RAISED,
   },
   title: { color: LIVI.white, fontSize: 18, fontWeight: '700', marginBottom: 8 },
   text: { color: LIVI.text, fontSize: 14, lineHeight: 19, marginBottom: 14 },
@@ -437,13 +437,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
     borderRadius: 10,
-    backgroundColor: LIVI.surface,
+    backgroundColor: UI_SURFACE_SUNKEN,
     marginBottom: 10,
   },
   error: { color: LIVI.red, fontSize: 13, marginBottom: 8 },
   row: { flexDirection: 'row', gap: 12, marginTop: 6 },
   btn: { flex: 1, borderRadius: 12, paddingVertical: 12, alignItems: 'center', justifyContent: 'center' },
-  btnPrimary: { backgroundColor: WELCOME_NAV_ACTIVE_ACCENT.solid },
+  // Плотный акцент: на светлом UI_ACCENT белый текст не читался бы.
+  btnPrimary: { backgroundColor: UI_ACCENT_DEEP },
   btnSecondary: { backgroundColor: 'rgba(138, 143, 153, 0.25)' },
   btnDanger: { backgroundColor: 'rgba(255, 90, 103, 0.35)' },
   btnText: { color: LIVI.white, fontSize: 15, fontWeight: '600' },

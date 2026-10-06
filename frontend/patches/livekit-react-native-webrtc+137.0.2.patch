@@ -1,0 +1,396 @@
+--- a/android/src/main/java/com/oney/WebRTCModule/RTCVideoViewManager.java
++++ b/android/src/main/java/com/oney/WebRTCModule/RTCVideoViewManager.java
+@@ -71,6 +71,12 @@
+      * to be set.
+      * @param zOrder The z-order to set on the specified {@code WebRTCView}.
+      */
++    /** LiVi: render into a TextureView so app glass can blur the video (see TextureViewRenderer). */
++    @ReactProp(name = "textureView")
++    public void setTextureView(WebRTCView view, boolean textureView) {
++        view.setTextureView(textureView);
++    }
++
+     @ReactProp(name = "zOrder")
+     public void setZOrder(WebRTCView view, int zOrder) {
+         view.setZOrder(zOrder);
+--- a/android/src/main/java/com/oney/WebRTCModule/WebRTCView.java
++++ b/android/src/main/java/com/oney/WebRTCModule/WebRTCView.java
+@@ -24,6 +24,7 @@
+ import org.webrtc.RendererCommon.RendererEvents;
+ import org.webrtc.RendererCommon.ScalingType;
+ import org.webrtc.SurfaceViewRenderer;
++import org.webrtc.VideoSink;
+ import org.webrtc.VideoTrack;
+ 
+ import java.lang.reflect.InvocationTargetException;
+@@ -145,6 +146,13 @@
+     private final SurfaceViewRenderer surfaceViewRenderer;
+ 
+     /**
++     * LiVi: opt-in TextureView renderer ({@code textureView} prop). Unlike the SurfaceView it is
++     * part of the window's display list, so app glass can blur the video under it.
++     */
++    private TextureViewRenderer textureViewRenderer;
++    private boolean useTextureView;
++
++    /**
+      * The {@code VideoTrack}, if any, rendered by this {@code WebRTCView}.
+      */
+     private VideoTrack videoTrack;
+@@ -169,8 +177,52 @@
+      * opaque black and the surface part to transparent.
+      */
+     private void cleanSurfaceViewRenderer() {
++        if (useTextureView) {
++            // TextureView cannot have a background; clearImage leaves it transparent.
++            textureViewRenderer.clearImage();
++            return;
++        }
+         surfaceViewRenderer.setBackgroundColor(Color.BLACK);
+         surfaceViewRenderer.clearImage();
++    }
++
++    private View rendererView() {
++        return useTextureView ? textureViewRenderer : surfaceViewRenderer;
++    }
++
++    private VideoSink rendererSink() {
++        return useTextureView ? textureViewRenderer : surfaceViewRenderer;
++    }
++
++    /**
++     * LiVi: switch between the SurfaceView and the TextureView renderer. Normally applied with
++     * the initial props, before the view is attached; if it is already rendering, the track is
++     * moved to the new renderer.
++     */
++    public void setTextureView(boolean enabled) {
++        if (enabled == useTextureView) return;
++        Log.d(TAG, "LiVi textureView=" + enabled + " attached=" + ViewCompat.isAttachedToWindow(this));
++        boolean wasAttached = rendererAttached;
++        if (wasAttached) removeRendererFromVideoTrack();
++        removeView(rendererView());
++        useTextureView = enabled;
++        if (enabled && textureViewRenderer == null) {
++            textureViewRenderer = new TextureViewRenderer(getContext());
++        }
++        addView(rendererView());
++        ScalingType currentScaling;
++        synchronized (layoutSyncRoot) {
++            currentScaling = scalingType;
++        }
++        if (enabled) {
++            textureViewRenderer.setMirror(mirror);
++            if (currentScaling != null) textureViewRenderer.setScalingType(currentScaling);
++        } else {
++            surfaceViewRenderer.setMirror(mirror);
++            if (currentScaling != null) surfaceViewRenderer.setScalingType(currentScaling);
++        }
++        tryAddRendererToVideoTrack();
++        requestSurfaceViewRendererLayout();
+     }
+ 
+     private VideoTrack getVideoTrackForStreamURL(String streamURL) {
+@@ -234,7 +286,7 @@
+     private void onFirstFrameRendered() {
+         post(() -> {
+             Log.d(TAG, "First frame rendered.");
+-            surfaceViewRenderer.setBackgroundColor(Color.TRANSPARENT);
++            if (!useTextureView) surfaceViewRenderer.setBackgroundColor(Color.TRANSPARENT);
+         });
+     }
+ 
+@@ -341,7 +393,7 @@
+                     break;
+             }
+         }
+-        surfaceViewRenderer.layout(l, t, r, b);
++        rendererView().layout(l, t, r, b);
+     }
+ 
+     /**
+@@ -350,10 +402,11 @@
+      */
+     private void removeRendererFromVideoTrack() {
+         if (rendererAttached) {
++            final VideoSink sink = rendererSink();
+             if (videoTrack != null) {
+                 ThreadUtils.runOnExecutor(() -> {
+                     try {
+-                        videoTrack.removeSink(surfaceViewRenderer);
++                        videoTrack.removeSink(sink);
+                     } catch (Throwable tr) {
+                         // XXX If WebRTCModule#mediaStreamTrackRelease has already been
+                         // invoked on videoTrack, then it is no longer safe to call removeSink
+@@ -362,7 +415,11 @@
+                 });
+             }
+ 
+-            surfaceViewRenderer.release();
++            if (useTextureView) {
++                textureViewRenderer.release();
++            } else {
++                surfaceViewRenderer.release();
++            }
+             surfaceViewRendererInstances--;
+             rendererAttached = false;
+ 
+@@ -386,7 +443,7 @@
+     private void requestSurfaceViewRendererLayout() {
+         // Google/WebRTC just call requestLayout() on surfaceViewRenderer when
+         // they change the value of its mirror or surfaceType property.
+-        surfaceViewRenderer.requestLayout();
++        rendererView().requestLayout();
+         // The above is not enough though when the video frame's dimensions or
+         // rotation change. The following will suffice.
+         if (!ViewCompat.isInLayout(this)) {
+@@ -406,7 +463,11 @@
+     public void setMirror(boolean mirror) {
+         if (this.mirror != mirror) {
+             this.mirror = mirror;
+-            surfaceViewRenderer.setMirror(mirror);
++            if (useTextureView) {
++                textureViewRenderer.setMirror(mirror);
++            } else {
++                surfaceViewRenderer.setMirror(mirror);
++            }
+             // SurfaceViewRenderer takes the value of its mirror property into
+             // account upon its layout.
+             requestSurfaceViewRendererLayout();
+@@ -436,7 +497,11 @@
+                 return;
+             }
+             this.scalingType = scalingType;
+-            surfaceViewRenderer.setScalingType(scalingType);
++            if (useTextureView) {
++                textureViewRenderer.setScalingType(scalingType);
++            } else {
++                surfaceViewRenderer.setScalingType(scalingType);
++            }
+         }
+         // Both this instance ant its SurfaceViewRenderer take the value of
+         // their scalingType properties into account upon their layouts.
+@@ -519,6 +584,7 @@
+      * @param zOrder The z-order to set on this {@code WebRTCView}.
+      */
+     public void setZOrder(int zOrder) {
++        // TextureView is drawn in view order like any other view; zOrder only applies to SurfaceView.
+         switch (zOrder) {
+             case 0:
+                 surfaceViewRenderer.setZOrderMediaOverlay(false);
+@@ -548,7 +614,11 @@
+             }
+ 
+             try {
+-                surfaceViewRenderer.init(sharedContext, rendererEvents);
++                if (useTextureView) {
++                    textureViewRenderer.init(sharedContext, rendererEvents);
++                } else {
++                    surfaceViewRenderer.init(sharedContext, rendererEvents);
++                }
+                 surfaceViewRendererInstances++;
+             } catch (Exception e) {
+                 Logging.e(
+@@ -556,9 +626,11 @@
+                 return;
+             }
+ 
++            final VideoSink sink = rendererSink();
++            final VideoTrack track = videoTrack;
+             ThreadUtils.runOnExecutor(() -> {
+                 try {
+-                    videoTrack.addSink(surfaceViewRenderer);
++                    track.addSink(sink);
+                 } catch (Throwable tr) {
+                     // XXX If WebRTCModule#mediaStreamTrackRelease has already been
+                     // invoked on videoTrack, then it is no longer safe to call addSink
+--- a/lib/typescript/RTCView.d.ts
++++ b/lib/typescript/RTCView.d.ts
+@@ -58,6 +58,11 @@
+      */
+     zOrder?: number;
+     /**
++     * Android only (LiVi patch): render into a TextureView instead of a SurfaceView, so the video
++     * is part of the window's display list and app glass can blur it. Costs some extra GPU.
++     */
++    textureView?: boolean;
++    /**
+      * Picture in picture options for this view. Disabled if not supplied.
+      *
+      * Note: this should only be generally only used with remote video tracks,
+--- a/src/RTCView.ts
++++ b/src/RTCView.ts
+@@ -61,7 +61,13 @@
+    */
+   zOrder?: number;
+ 
++  /**
++   * Android only (LiVi patch): render into a TextureView instead of a SurfaceView, so the video
++   * is part of the window's display list and app glass can blur it. Costs some extra GPU.
++   */
++  textureView?: boolean;
+ 
++
+   /**
+    * Picture in picture options for this view. Disabled if not supplied.
+    *
+--- /dev/null
++++ b/android/src/main/java/com/oney/WebRTCModule/TextureViewRenderer.java
+@@ -0,0 +1,158 @@
++package com.oney.WebRTCModule;
++
++import android.content.Context;
++import android.graphics.Point;
++import android.graphics.SurfaceTexture;
++import android.view.TextureView;
++
++import org.webrtc.EglBase;
++import org.webrtc.EglRenderer;
++import org.webrtc.GlRectDrawer;
++import org.webrtc.RendererCommon;
++import org.webrtc.ThreadUtils;
++import org.webrtc.VideoFrame;
++import org.webrtc.VideoSink;
++
++import java.util.concurrent.CountDownLatch;
++
++/**
++ * Same contract as {@link org.webrtc.SurfaceViewRenderer}, but draws into a TextureView.
++ *
++ * LiVi: a SurfaceView is composited by the system outside the window's display list, so app
++ * glass (RenderNode + RenderEffect blur, BackdropBlur.kt) cannot see the video under it. A
++ * TextureView is part of the display list: the call screen's controls can blur the remote video.
++ * Opt-in per RTCView ({@code textureView}); everything else keeps SurfaceView.
++ */
++public class TextureViewRenderer extends TextureView implements TextureView.SurfaceTextureListener, VideoSink {
++    private final RendererCommon.VideoLayoutMeasure videoLayoutMeasure = new RendererCommon.VideoLayoutMeasure();
++    private final Renderer eglRenderer;
++    private RendererCommon.RendererEvents rendererEvents;
++    private final Object layoutLock = new Object();
++    private int rotatedFrameWidth;
++    private int rotatedFrameHeight;
++    private int frameRotation;
++    private boolean isFirstFrameRendered;
++
++    public TextureViewRenderer(Context context) {
++        super(context);
++        eglRenderer = new Renderer("LiviTextureViewRenderer");
++        setSurfaceTextureListener(this);
++        // Пока кадра нет, TextureView прозрачен — под ним фон экрана, как у SurfaceView.
++        setOpaque(false);
++    }
++
++    public void init(EglBase.Context sharedContext, RendererCommon.RendererEvents rendererEvents) {
++        ThreadUtils.checkIsOnMainThread();
++        this.rendererEvents = rendererEvents;
++        synchronized (layoutLock) {
++            rotatedFrameWidth = 0;
++            rotatedFrameHeight = 0;
++            frameRotation = 0;
++            isFirstFrameRendered = false;
++        }
++        eglRenderer.init(sharedContext, EglBase.CONFIG_RGBA, new GlRectDrawer());
++        SurfaceTexture st = getSurfaceTexture();
++        if (st != null) eglRenderer.createEglSurface(st);
++    }
++
++    public void release() {
++        eglRenderer.release();
++    }
++
++    public void setMirror(boolean mirror) {
++        eglRenderer.setMirror(mirror);
++    }
++
++    public void setScalingType(RendererCommon.ScalingType scalingType) {
++        ThreadUtils.checkIsOnMainThread();
++        videoLayoutMeasure.setScalingType(scalingType);
++        requestLayout();
++    }
++
++    public void clearImage() {
++        eglRenderer.clearImage();
++    }
++
++    @Override
++    public void onFrame(VideoFrame frame) {
++        eglRenderer.onFrame(frame);
++    }
++
++    @Override
++    protected void onMeasure(int widthSpec, int heightSpec) {
++        ThreadUtils.checkIsOnMainThread();
++        Point size;
++        synchronized (layoutLock) {
++            size = videoLayoutMeasure.measure(widthSpec, heightSpec, rotatedFrameWidth, rotatedFrameHeight);
++        }
++        setMeasuredDimension(size.x, size.y);
++    }
++
++    @Override
++    protected void onLayout(boolean changed, int left, int top, int right, int bottom) {
++        super.onLayout(changed, left, top, right, bottom);
++        int h = bottom - top;
++        if (h > 0) eglRenderer.setLayoutAspectRatio((right - left) / (float) h);
++    }
++
++    @Override
++    public void onSurfaceTextureAvailable(SurfaceTexture surface, int width, int height) {
++        ThreadUtils.checkIsOnMainThread();
++        eglRenderer.createEglSurface(surface);
++    }
++
++    @Override
++    public void onSurfaceTextureSizeChanged(SurfaceTexture surface, int width, int height) {}
++
++    @Override
++    public boolean onSurfaceTextureDestroyed(SurfaceTexture surface) {
++        ThreadUtils.checkIsOnMainThread();
++        CountDownLatch done = new CountDownLatch(1);
++        eglRenderer.releaseEglSurface(done::countDown);
++        ThreadUtils.awaitUninterruptibly(done);
++        return true;
++    }
++
++    @Override
++    public void onSurfaceTextureUpdated(SurfaceTexture surface) {}
++
++    /** EglRenderer + first-frame / resolution events, as org.webrtc.SurfaceEglRenderer. */
++    private final class Renderer extends EglRenderer {
++        Renderer(String name) {
++            super(name);
++        }
++
++        @Override
++        public void onFrame(VideoFrame frame) {
++            reportEvents(frame);
++            super.onFrame(frame);
++        }
++
++        private void reportEvents(VideoFrame frame) {
++            RendererCommon.RendererEvents events = rendererEvents;
++            boolean first = false;
++            boolean resized = false;
++            synchronized (layoutLock) {
++                if (!isFirstFrameRendered) {
++                    isFirstFrameRendered = true;
++                    first = true;
++                }
++                if (rotatedFrameWidth != frame.getRotatedWidth()
++                        || rotatedFrameHeight != frame.getRotatedHeight()
++                        || frameRotation != frame.getRotation()) {
++                    rotatedFrameWidth = frame.getRotatedWidth();
++                    rotatedFrameHeight = frame.getRotatedHeight();
++                    frameRotation = frame.getRotation();
++                    resized = true;
++                }
++            }
++            if (events == null) return;
++            if (first) events.onFirstFrameRendered();
++            if (resized) {
++                events.onFrameResolutionChanged(
++                        frame.getBuffer().getWidth(), frame.getBuffer().getHeight(), frame.getRotation());
++                post(TextureViewRenderer.this::requestLayout);
++            }
++        }
++    }
++}

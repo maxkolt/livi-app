@@ -23,6 +23,10 @@ const patches = [
   { dir: 'node_modules/react-native-safe-area-context', file: 'react-native-safe-area-context+5.4.0.patch' },
   { dir: 'node_modules/react-native-safe-area-context', file: 'react-native-safe-area-context+5.4.0-insets-null.patch' },
   { dir: 'node_modules/@livekit/react-native', file: 'livekit-react-native+2.9.3.patch' },
+  // TextureView-рендер видео (проп textureView): стекло кнопок звонка размывает видео под ними.
+  { dir: 'node_modules/@livekit/react-native-webrtc', file: 'livekit-react-native-webrtc+137.0.2.patch' },
+  // Загрузка/скачивание медиа через маршрут приложения (за VPN — реле NetPath): DNS общего клиента RN.
+  { dir: 'node_modules/expo-file-system', file: 'expo-file-system+18.1.11.patch' },
   { dir: 'node_modules/@cometchat/chat-uikit-react-native', file: 'cometchat-chat-uikit-react-native+5.2.5.patch' },
   { dir: 'node_modules/@baronha/react-native-photo-editor', file: 'baronha-react-native-photo-editor+1.1.6.patch' },
   { dir: 'node_modules/@react-native-masked-view/masked-view', file: 'react-native-masked-view+0.3.2.patch' },

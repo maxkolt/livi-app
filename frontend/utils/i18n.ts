@@ -104,7 +104,7 @@ const dict: Partial<Record<Lang, Record<string, string>>> = {
     tabFriends: 'Друзья',
     tabSearch: 'Поиск',
     tabCalls: 'Звонки',
-    tabChat: 'Чат',
+    tabChat: 'Чаты',
     tabSettings: 'Профиль',
     tabMore: 'Ещё',
     menuTitle: 'Меню',
@@ -8392,8 +8392,8 @@ const runtimeI18nOverrides: Record<Lang, Record<string, string>> = {
 
 // 6) Цветовая схема LIVI
 export const LIVI = {
-  rgb: "rgba(21, 31, 51, 0.5)",
-  bg: "#151F33",
+  rgb: "rgba(37, 43, 52, 0.5)",
+  bg: "#252B34",
   surface: "#0D0E10",
   titan: "#8A8F99",
   text: "#B7C0CF",

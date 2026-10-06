@@ -37,6 +37,7 @@ import { Portal } from 'react-native-paper';
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { Image as ExpoImage } from 'expo-image';
 import { getAvatarImageProps, forceImageRefresh } from '../utils/imageOptimization';
+import { useFisheyeAvatarUri } from '../utils/avatarFisheye';
 import { useResolvedImageUri } from '../hooks/useResolvedImageUri';
 import SplashLoader from '../components/SplashLoader';
 import AvatarImage from '../components/AvatarImage';
@@ -89,9 +90,19 @@ import {
 } from './home';
 import { HomeWelcomeTabBar, type WelcomeTabId } from './home/HomeWelcomeTabBar';
 import { WelcomeKeepAlivePane } from './home/WelcomeKeepAlivePane';
-import { WelcomeStageBackground } from './home/WelcomeStageBackground';
 import { HomeLayoutProvider } from './home/HomeLayoutContext';
-import { HOME_NAV_BG, WELCOME_HEADER_TITLE, WELCOME_STAGE_BG } from './home/constants';
+import {
+  HOME_BLUR_BG_SOURCE,
+  HOME_BLUR_LIST_SOURCE,
+  HOME_NAV_BG,
+  UI_ACCENT_SELECTED,
+  WELCOME_HEADER_TITLE,
+  WELCOME_POPUP_ACCENT,
+  WELCOME_STAGE_BG,
+} from './home/constants';
+import { useStableSafeAreaInsets } from './home/useStableSafeAreaInsets';
+import { BlurListSource, BlurSourceFill } from '../components/BackdropBlur';
+import { GLASS_DOCK_TOP_PAD, GLASS_SEGMENT_PAD, WelcomeGlassDock, WelcomeGlassTop } from './home/WelcomeGlassHeader';
 import { recordCallLog, recordCancelledCall, recordNoAnswerCall, requestCallLogSoftUi, cancelPendingCallLogNotify, flushCallLogUi, forceCallLogUiNow, loadCallLog } from './home/callLog';
 import { prefetchChatPreviews } from './home/hooks/useChatPreviews';
 import {
@@ -481,6 +492,29 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const [installId, setInstallId] = useState<string>('');
 
   const [wallpaperPickerTheme, setWallpaperPickerTheme] = useState<'light' | 'dark' | null>(null);
+  /**
+   * Вкладки занимают весь экран: списки уезжают под стеклянную шапку до системной строки и
+   * под навбар, который лежит поверх. «Поиск» и «Профиль» отступают на те же места, что
+   * раньше давали SafeAreaView сверху и навбар в потоке снизу.
+   */
+  const homeInsets = useStableSafeAreaInsets();
+  const [tabBarH, setTabBarH] = useState(
+    () => 52 + 8 + Math.max(homeInsets.bottom, Platform.OS === 'android' ? 6 : 2),
+  );
+  const onTabBarLayout = useCallback((e: LayoutChangeEvent) => {
+    const h = e.nativeEvent.layout.height;
+    if (h > 0) setTabBarH((prev) => (Math.abs(prev - h) < 0.5 ? prev : h));
+  }, []);
+  const [searchTopBlockBottom, setSearchTopBlockBottom] = useState<number | null>(null);
+  const onSearchTopBlockBottom = useCallback((bottom: number | null) => {
+    setSearchTopBlockBottom((prev) =>
+      prev === bottom || (prev != null && bottom != null && Math.abs(prev - bottom) < 0.5) ? prev : bottom,
+    );
+  }, []);
+  const homePanePad = useMemo(
+    () => ({ paddingTop: homeInsets.top, paddingBottom: tabBarH }),
+    [homeInsets.top, tabBarH],
+  );
   const [welcomeActiveTab, setWelcomeActiveTab] = useState<WelcomeTabId>('search');
   const welcomeActiveTabRef = useRef<WelcomeTabId>('search');
   welcomeActiveTabRef.current = welcomeActiveTab;
@@ -824,6 +858,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   // На Android в модалке data: URI нужно показывать через разрешённый file: (иначе Glide/ExpoImage не покажут)
   const [modalAvatarResolvedUri] = useResolvedImageUri(avatarModalVisible ? modalAvatarUri : '');
   const modalAvatarDisplayUri = (Platform.OS === 'android' && /^data:/i.test(modalAvatarUri)) ? modalAvatarResolvedUri : modalAvatarUri;
+  // Полноэкранный аватар — под той же линзой «рыбий глаз», что и все остальные.
+  const modalAvatarLensed = useFisheyeAvatarUri(avatarModalVisible ? modalAvatarDisplayUri : '');
 
   useEffect(() => {
     if (Platform.OS !== 'android') return;
@@ -5569,12 +5605,28 @@ const handleClearNick = useCallback(async () => {
     myFullAvatarUri,
   ]);
 
+  /** Содержимое видимой вкладки под нижним стеклом; на «Поиске» под ним только фон. */
+  const tabBarListSource =
+    welcomeActiveTab === 'friends'
+      ? HOME_BLUR_LIST_SOURCE.friends
+      : welcomeActiveTab === 'calls'
+        ? HOME_BLUR_LIST_SOURCE.calls
+        : welcomeActiveTab === 'chat'
+          ? HOME_BLUR_LIST_SOURCE.chat
+          : welcomeActiveTab === 'profile'
+            ? HOME_BLUR_LIST_SOURCE.profile
+            : null;
+
   return (
     <View
       // Сплошной фон один на все ориентации и при повороте не гаснет — меняется только контент.
       style={{ flex: 1, backgroundColor: HOME_NAV_BG }}
       onLayout={onHomeRootLayout}
     >
+      {/* Под стеклом шапок вкладок и навбара — сплошной фон как есть (размываются только списки). */}
+      <BlurSourceFill sourceId={HOME_BLUR_BG_SOURCE}>
+        <View style={[StyleSheet.absoluteFill, { backgroundColor: HOME_NAV_BG }]} />
+      </BlurSourceFill>
       <HomeLayoutProvider size={homeLayoutSize} onLayoutActivity={notifyLayoutActivity}>
       <Animated.View style={{ flex: 1, minHeight: 0, opacity: contentOpacity }}>
     <SafeAreaView
@@ -5584,14 +5636,19 @@ const handleClearNick = useCallback(async () => {
             backgroundColor: 'transparent',
           },
         ]}
-        edges={['top', 'left', 'right']}
+        // Сверху без отступа: списки вкладок уходят под системную строку (см. homePanePad).
+        edges={['left', 'right']}
       >
       <SystemBars style={Platform.OS === 'android' || isDark ? 'light' : 'dark'} />
 
 
+      {/* Верхнее стекло «Поиска»: под блоком «Онлайн», от верхнего края экрана. */}
+      {showSearchWelcome && searchTopBlockBottom != null ? (
+        <WelcomeGlassTop height={homeInsets.top + searchTopBlockBottom + GLASS_SEGMENT_PAD.phone} />
+      ) : null}
       <View style={{ flex: 1, minHeight: 0 }}>
         {/* Search always mounted. List panes lazy-mount on first visit, then stay (no remount flicker). */}
-        <WelcomeKeepAlivePane visible={showSearchWelcome} mode="block">
+        <WelcomeKeepAlivePane visible={showSearchWelcome} mode="block" style={homePanePad}>
           <HomeWelcomeView
             styles={styles}
             isDark={isDark}
@@ -5608,6 +5665,7 @@ const handleClearNick = useCallback(async () => {
             onStartSearch={handleStartSearch}
             splashGone={!showSplashOverlay}
             active={showSearchWelcome}
+            onTopBlockBottom={onSearchTopBlockBottom}
           />
         </WelcomeKeepAlivePane>
         {showFriendsTab && !mountedWelcomeTabs.has('friends') ? (
@@ -5617,6 +5675,7 @@ const handleClearNick = useCallback(async () => {
         <WelcomeKeepAlivePane visible={showFriendsTab} mode="list">
           <HomeWelcomeFriendsView
             {...friendsListShellProps}
+            bottomInset={tabBarH + GLASS_DOCK_TOP_PAD}
             allFriends={friends}
             onInviteFriends={generateInviteLink}
             askConfirm={askConfirm}
@@ -5629,6 +5688,7 @@ const handleClearNick = useCallback(async () => {
         {mountedWelcomeTabs.has('chat') ? (
         <WelcomeKeepAlivePane visible={showChatTab} mode="list">
           <HomeWelcomeChatsView
+            bottomInset={tabBarH + GLASS_DOCK_TOP_PAD}
             lang={lang}
             L={L}
             active={showChatTab}
@@ -5650,6 +5710,7 @@ const handleClearNick = useCallback(async () => {
         {mountedWelcomeTabs.has('calls') ? (
         <WelcomeKeepAlivePane visible={showCallsTab} mode="list">
           <HomeWelcomeCallsView
+            bottomInset={tabBarH + GLASS_DOCK_TOP_PAD}
             lang={lang}
             L={L}
             active={showCallsTab}
@@ -5671,7 +5732,9 @@ const handleClearNick = useCallback(async () => {
         {/* keep-alive по opacity, а не display:none: иначе вся панель профиля
             раскладывается в момент тапа и первый переход роняет кадры. */}
         {mountedWelcomeTabs.has('profile') ? (
-        <WelcomeKeepAlivePane visible={showProfileTab} mode="list">
+        <WelcomeKeepAlivePane visible={showProfileTab} mode="list" style={homePanePad}>
+          {/* Источник нижнего стекла: что подъезжает к навбару, видно под стеклом размытым. */}
+          <BlurListSource sourceId={HOME_BLUR_LIST_SOURCE.profile} style={{ flex: 1, minHeight: 0 }}>
           <HomeWelcomeProfileView
             lang={lang}
             isDark={isDark}
@@ -5708,10 +5771,19 @@ const handleClearNick = useCallback(async () => {
             onBackFromHub={goWelcomeSearchFromBack}
             active={showProfileTab}
           />
+          </BlurListSource>
         </WelcomeKeepAlivePane>
         ) : null}
       </View>
 
+      {/* Стекло от верха навбара до низа экрана; содержимое вкладки размыто под ним. */}
+      <WelcomeGlassDock listSourceId={tabBarListSource} height={tabBarH} />
+      {/* Навбар поверх вкладок — непрозрачный блок на стекле. */}
+      <View
+        pointerEvents="box-none"
+        style={{ position: 'absolute', left: insets.left, right: insets.right, bottom: 0 }}
+        onLayout={onTabBarLayout}
+      >
       <HomeWelcomeTabBar
           activeTab={welcomeActiveTab}
           labels={{
@@ -5732,6 +5804,7 @@ const handleClearNick = useCallback(async () => {
           }
           showProfileDot={!!updateAvailable}
         />
+      </View>
 
       {/* Модалка аватара: полный экран, блюр/затемнение, круг 3×, pinch-to-zoom, тап вне — закрыть. Без вложенности touch/gesture (Nesting touch handlers with native animated driver). */}
       {avatarModalVisible && (
@@ -5762,10 +5835,12 @@ const handleClearNick = useCallback(async () => {
               >
                 {modalAvatarUri ? (
                   modalAvatarDisplayUri ? (
-                    <ExpoImage
-                      {...getAvatarImageProps(modalAvatarDisplayUri, `avatar_modal_${resolvedUserId}_${myAvatarVer}`)}
-                      style={{ width: avatarModalSize, height: avatarModalSize }}
-                    />
+                    modalAvatarLensed ? (
+                      <ExpoImage
+                        {...getAvatarImageProps(modalAvatarLensed, `avatar_modal_${resolvedUserId}_${myAvatarVer}`)}
+                        style={{ width: avatarModalSize, height: avatarModalSize }}
+                      />
+                    ) : null
                   ) : (
                   <View style={{ width: avatarModalSize, height: avatarModalSize, borderRadius: avatarModalSize / 2, backgroundColor: 'rgba(255,255,255,0.06)', alignItems: 'center', justifyContent: 'center' }}>
                     <Text style={{ color: LIVI.titan, fontSize: avatarModalSize * 0.35, fontWeight: '500' }}>{displayAvatarLetter(savedNick)}</Text>
@@ -5839,7 +5914,7 @@ const handleClearNick = useCallback(async () => {
                   style={{
                     backgroundColor:
                       pressedButton === 'boosty'
-                        ? 'rgba(42, 88, 104, 0.72)'
+                        ? UI_ACCENT_SELECTED
                         : 'rgba(255,255,255,0.04)',
                     borderColor: WELCOME_OVERLAY_ACCENT,
                     borderWidth: StyleSheet.hairlineWidth,
@@ -5881,7 +5956,7 @@ const handleClearNick = useCallback(async () => {
                   style={{
                     backgroundColor:
                       pressedButton === 'patreon'
-                        ? 'rgba(42, 88, 104, 0.72)'
+                        ? UI_ACCENT_SELECTED
                         : 'rgba(255,255,255,0.04)',
                     borderColor: WELCOME_OVERLAY_ACCENT,
                     borderWidth: StyleSheet.hairlineWidth,
@@ -5914,8 +5989,7 @@ const handleClearNick = useCallback(async () => {
           <View style={styles.overlayModal} pointerEvents="box-none">
             <WelcomeOverlayDim strong />
             <WelcomeOverlayBack onPress={() => setShareVisible(false)} />
-            <WelcomeOverlayCard opaque style={{ backgroundColor: 'transparent', overflow: 'hidden' }}>
-              <WelcomeStageBackground />
+            <WelcomeOverlayCard opaque>
               <Text style={welcomeOverlayText.title}>
                 {t('inviteFriendTitle', lang)}
               </Text>
@@ -5947,7 +6021,7 @@ const handleClearNick = useCallback(async () => {
                     activeOpacity={0.7}
                     style={welcomeOverlayText.copyBtn}
                   >
-                    <Ionicons name="copy-outline" size={18} color={WELCOME_OVERLAY_ACCENT} />
+                    <Ionicons name="copy-outline" size={18} color={WELCOME_POPUP_ACCENT} />
                   </TouchableOpacity>
                 </View>
                 <Text style={welcomeOverlayText.hint}>
@@ -5982,7 +6056,7 @@ const handleClearNick = useCallback(async () => {
                     } catch {}
                   }
                 }}
-                leading={<Ionicons name="share-outline" size={18} color={WELCOME_HEADER_TITLE} />}
+                leading={<Ionicons name="share-outline" size={18} color={WELCOME_POPUP_ACCENT} />}
               />
             </WelcomeOverlayCard>
           </View>
@@ -5992,8 +6066,7 @@ const handleClearNick = useCallback(async () => {
         {inviteRequestVisible && inviteRequestData && (
           <View style={styles.overlayModal} pointerEvents="box-none">
             <WelcomeOverlayDim strong />
-            <WelcomeOverlayCard opaque style={{ backgroundColor: 'transparent', overflow: 'hidden' }}>
-              <WelcomeStageBackground />
+            <WelcomeOverlayCard opaque>
               <Text style={[welcomeOverlayText.title, { marginBottom: 20 }]}>
                 {t('friendInviteTitle', lang)}
               </Text>

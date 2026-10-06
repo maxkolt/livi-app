@@ -39,12 +39,13 @@ type PieceSpec = {
   opacity: number;
 };
 
+// Семья общего акцента (UI_ACCENT) + золото короны и светлые искры.
 const COLORS_DARK = [
-  '#14b8a6',
-  '#2dd4bf',
-  '#3b82f6',
-  '#00b5ff',
-  '#7dd3fc',
+  '#62B0D8',
+  '#8CC6E6',
+  '#B2DCF0',
+  '#3D6E8C',
+  '#E4C065',
   '#FFF8F0',
   '#E8EEF7',
   '#AEB6C6',
@@ -165,7 +166,7 @@ function buildPieces(seed: number, avatarSize: number, isDark: boolean): PieceSp
         kind,
         w: s,
         h: s,
-        color: pick(rand, isDark ? ['#FFF8F0', '#7dd3fc', '#2dd4bf'] : ['#FFF8F0', '#8f7ad8', '#14b8a6']),
+        color: pick(rand, isDark ? ['#FFF8F0', '#B2DCF0', '#62B0D8'] : ['#FFF8F0', '#8f7ad8', '#14b8a6']),
         ox,
         oy,
         vx: vx * 1.15,
@@ -309,8 +310,8 @@ function BurstFlash({ originX, originY, avatarSize, isDark }: FlashProps) {
     transform: [{ scale: interpolate(ringB.value, [0, 1], [0.85, 2.2]) }],
   }));
 
-  const ringColorA = isDark ? 'rgba(0,181,255,0.85)' : 'rgba(143,122,216,0.8)';
-  const ringColorB = isDark ? 'rgba(20,184,166,0.7)' : 'rgba(255,248,240,0.75)';
+  const ringColorA = isDark ? 'rgba(98,176,216,0.85)' : 'rgba(143,122,216,0.8)';
+  const ringColorB = isDark ? 'rgba(178,220,240,0.7)' : 'rgba(255,248,240,0.75)';
 
   return (
     <>

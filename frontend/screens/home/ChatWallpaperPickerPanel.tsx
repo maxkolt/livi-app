@@ -20,9 +20,10 @@ import {
 import {
   FRIENDS_LIST_PAD_H,
   LIVI,
-  WELCOME_BRAND_VI_FILL_GRADIENT,
   WELCOME_FRIENDS_LIST_INSET,
   WELCOME_HEADER_TITLE,
+  UI_ACCENT_DEEP,
+  UI_SURFACE,
 } from './constants';
 
 export type ChatWallpaperPickerPanelProps = {
@@ -406,7 +407,7 @@ const styles = StyleSheet.create({
   applyBtnWelcome: {
     paddingVertical: 11,
     borderRadius: 999,
-    backgroundColor: WELCOME_BRAND_VI_FILL_GRADIENT[1],
+    backgroundColor: UI_ACCENT_DEEP,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -443,7 +444,7 @@ const styles = StyleSheet.create({
   applyInner: {
     borderRadius: 24 - StyleSheet.hairlineWidth,
     overflow: 'hidden',
-    backgroundColor: '#0D0E10',
+    backgroundColor: UI_SURFACE,
   },
   applyBtn: {
     paddingVertical: 8,

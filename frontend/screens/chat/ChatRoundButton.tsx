@@ -2,14 +2,18 @@
 
 import React from "react";
 import { Animated, Pressable, StyleSheet, type Insets } from "react-native";
+import { HOME_NAV_BG } from "../home/constants";
 
 export const CHAT_ROUND_BUTTON_SIZE = 36;
 
-/** Сплошная заливка кругов: не просвечивает поверх динамического glass-фона. */
+/**
+ * Сплошная заливка кругов: не просвечивает поверх динамического glass-фона.
+ * Тёмная тема — основной фон (HOME_NAV_BG), круги утоплены в бирюзовое стекло.
+ */
 export function chatRoundButtonColors(isDark: boolean) {
   return {
-    idle: isDark ? "#4A515B" : "#D9DDE3",
-    pressed: isDark ? "#59636F" : "#C9CED6",
+    idle: isDark ? HOME_NAV_BG : "#D9DDE3",
+    pressed: isDark ? "#323A46" : "#C9CED6",
   };
 }
 

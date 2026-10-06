@@ -1,6 +1,8 @@
 package com.kolt12max.livi
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapShader
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.LinearGradient
@@ -9,8 +11,10 @@ import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
 import android.graphics.RenderEffect
 import android.graphics.RenderNode
+import android.graphics.RuntimeShader
 import android.graphics.Shader
 import android.os.Build
+import android.view.SurfaceView
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewTreeObserver
@@ -111,10 +115,17 @@ class BlurSourceView(context: Context) : ReactViewGroup(context) {
     var output: RenderNode? = null
   }
 
-  /** То, что источник показывает на экране; null до первой аппаратной записи. */
+  /**
+   * В поддереве есть SurfaceView (видео звонка до TextureView, своё видео главным): стеклу такой
+   * источник не отдаём. SurfaceView в записи несёт «дыру» в окно; повторённая стеклом, она
+   * стирала весь интерфейс звонка, нарисованный до кнопок. Обновляется при каждой записи.
+   */
+  private var hasSurfaceView = false
+
+  /** То, что источник показывает на экране; null до первой аппаратной записи или с SurfaceView. */
   internal val output: RenderNode?
     @RequiresApi(Build.VERSION_CODES.Q)
-    get() = (nodes as? Nodes)?.output?.takeIf { it.hasDisplayList() }
+    get() = if (hasSurfaceView) null else (nodes as? Nodes)?.output?.takeIf { it.hasDisplayList() }
 
   fun setSourceId(id: String?) {
     if (id == sourceId) return
@@ -193,6 +204,7 @@ class BlurSourceView(context: Context) : ReactViewGroup(context) {
   @RequiresApi(Build.VERSION_CODES.Q)
   private fun drawRecorded(canvas: Canvas) {
     bindShadeScroller()
+    hasSurfaceView = containsSurfaceView(this)
     val w = width
     val h = height
     val n = (nodes as? Nodes) ?: Nodes().also { nodes = it }
@@ -257,6 +269,15 @@ class BlurSourceView(context: Context) : ReactViewGroup(context) {
     // Стекло сверяет источники перед кадром; первую запись (и смену узла) оно увидит
     // только в следующем кадре — запрашиваем его.
     if (previous !== n.output) postInvalidateOnAnimation()
+  }
+
+  private fun containsSurfaceView(group: ViewGroup): Boolean {
+    for (i in 0 until group.childCount) {
+      val child = group.getChildAt(i)
+      if (child is SurfaceView) return true
+      if (child is ViewGroup && containsSurfaceView(child)) return true
+    }
+    return false
   }
 
   @RequiresApi(Build.VERSION_CODES.Q)
@@ -407,9 +428,13 @@ class BlurBackdropView(context: Context) : View(context) {
   private val fadePaint = Paint()
   private var fadeShaderH = -1
   private var fadeDirty = true
+  /** [DitheredFade] на Android 13+; создаётся при первом затемнении. */
+  private var ditheredFade: Any? = null
   private var node: Any? = null
   private var nodeRadius = -1f
   private val selfLoc = IntArray(2)
+  /** Положение на экране: источники могут быть в другом окне (меню сообщения в Modal над чатом). */
+  private val selfScreen = IntArray(2)
   private val srcLoc = IntArray(2)
   private var drawnState = 0L
 
@@ -486,6 +511,7 @@ class BlurBackdropView(context: Context) : View(context) {
     // иначе закрашивают всё за пределами стекла.
     canvas.clipRect(0, 0, w, h)
     getLocationInWindow(selfLoc)
+    getLocationOnScreen(selfScreen)
     // Фон окна — на случай, если фонового источника нет.
     rootView.background?.let { bg ->
       val s = canvas.save()
@@ -527,9 +553,11 @@ class BlurBackdropView(context: Context) : View(context) {
     for (id in ids) {
       val src = BackdropBlur.find(id) ?: continue
       val out = src.output ?: continue
-      src.getLocationInWindow(srcLoc)
+      // Экранные координаты: в одном окне — то же, что координаты окна; из Modal над чатом
+      // источник чата лежит в другом окне, и совпадают только экранные.
+      src.getLocationOnScreen(srcLoc)
       val s = canvas.save()
-      canvas.translate((srcLoc[0] - selfLoc[0]).toFloat(), (srcLoc[1] - selfLoc[1]).toFloat())
+      canvas.translate((srcLoc[0] - selfScreen[0]).toFloat(), (srcLoc[1] - selfScreen[1]).toFloat())
       canvas.drawRenderNode(out)
       canvas.restoreToCount(s)
     }
@@ -540,26 +568,35 @@ class BlurBackdropView(context: Context) : View(context) {
     if (colors == null || colors.size < 2) return false
     if (fadeDirty || fadeShaderH != h) {
       val stops = fadeStops?.takeIf { it.size == colors.size }
-      val y0 = if (mirror) h.toFloat() else 0f
-      val y1 = if (mirror) 0f else h.toFloat()
-      fadePaint.shader = LinearGradient(0f, y0, 0f, y1, colors, stops, Shader.TileMode.CLAMP)
+      fadePaint.shader = ditheredFadeShader(colors, stops, h) ?: run {
+        val y0 = if (mirror) h.toFloat() else 0f
+        val y1 = if (mirror) 0f else h.toFloat()
+        LinearGradient(0f, y0, 0f, y1, colors, stops, Shader.TileMode.CLAMP)
+      }
       fadeShaderH = h
       fadeDirty = false
     }
     return true
   }
 
+  /** Android 13+: затемнение края с blue-noise дизерингом; null — обычный градиент. */
+  private fun ditheredFadeShader(colors: IntArray, stops: FloatArray?, h: Int): Shader? {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return null
+    val fade = (ditheredFade as? DitheredFade) ?: DitheredFade(context).also { ditheredFade = it }
+    return fade.update(colors, stops, h, mirror)
+  }
+
   /** Положение стекла и источников + их узлы: изменилось — перезаписываем стекло. */
   private fun sourceState(): Long {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return 0L
-    getLocationInWindow(selfLoc)
-    var state = selfLoc[0].toLong() * 31 + selfLoc[1]
+    getLocationOnScreen(selfScreen)
+    var state = selfScreen[0].toLong() * 31 + selfScreen[1]
     for (ids in arrayOf(backgroundSources, blurSources)) {
       for (id in ids) {
         val src = BackdropBlur.find(id)
         state = state * 31 + System.identityHashCode(src?.output)
         if (src != null) {
-          src.getLocationInWindow(srcLoc)
+          src.getLocationOnScreen(srcLoc)
           state = (state * 31 + srcLoc[0]) * 31 + srcLoc[1]
         }
       }
@@ -569,6 +606,84 @@ class BlurBackdropView(context: Context) : View(context) {
 
   private fun ReadableArray?.toStringList(): List<String> =
     if (this == null) emptyList() else (0 until size()).mapNotNull { getString(it) }
+}
+
+/**
+ * Затемнение края стекла (шапка и композер чата, шапки вкладок) без ступенек.
+ *
+ * Обычный LinearGradient: на ~480 px высоты стекла цвет меняется всего на 9–12 уровней из
+ * 256, ступенька — каждые 8–15 px, и R, G, B переключаются в разных строках. На OLED это
+ * горизонтальные полосы с оттенком, особенно в насыщенном цветовом режиме. Дизеринг HWUI
+ * (Paint.isDither) — регулярная шахматка, она рябила на 26 Ultra (см. StageBackground).
+ *
+ * Здесь к цвету градиента ещё до смешивания с фоном прибавляется дробный шум ±0.5 уровня
+ * из того же blue noise 64×64, что у фона: GPU смешивает в повышенной точности и при
+ * округлении до 8 бит каждый пиксель попадает на соседний уровень с нужной вероятностью.
+ * Вместо ступенек — ровный переход без узора. До 4 опорных точек; больше — обычный градиент.
+ */
+@RequiresApi(Build.VERSION_CODES.TIRAMISU)
+private class DitheredFade(context: Context) {
+  private val shader = RuntimeShader(AGSL).apply { setInputShader("noise", noiseShader(context)) }
+
+  fun update(colors: IntArray, stops: FloatArray?, h: Int, mirror: Boolean): Shader? {
+    val n = colors.size
+    if (n !in 2..MAX_STOPS || h <= 0) return null
+    for (i in 0 until MAX_STOPS) {
+      val c = colors[minOf(i, n - 1)]
+      shader.setFloatUniform("c$i", Color.red(c) / 255f, Color.green(c) / 255f, Color.blue(c) / 255f, Color.alpha(c) / 255f)
+    }
+    // Недостающие точки — в конце: за последней настоящей цвет не меняется.
+    val at = FloatArray(MAX_STOPS) { i -> if (i < n) stops?.get(i) ?: (i / (n - 1f)) else 1f }
+    shader.setFloatUniform("stops", at[0], at[1], at[2], at[3])
+    shader.setFloatUniform("height", h.toFloat())
+    shader.setFloatUniform("mirror", if (mirror) 1f else 0f)
+    return shader
+  }
+
+  private companion object {
+    const val MAX_STOPS = 4
+
+    const val AGSL = """
+      uniform shader noise;
+      uniform float height;
+      uniform float mirror;
+      uniform float4 stops;
+      uniform float4 c0;
+      uniform float4 c1;
+      uniform float4 c2;
+      uniform float4 c3;
+
+      float4 seg(float t, float a, float b, float4 ca, float4 cb) {
+        float k = b > a ? clamp((t - a) / (b - a), 0.0, 1.0) : 1.0;
+        return mix(ca, cb, k);
+      }
+
+      half4 main(float2 p) {
+        float t = clamp(p.y / height, 0.0, 1.0);
+        if (mirror > 0.5) t = 1.0 - t;
+        float4 c;
+        if (t <= stops.x) c = c0;
+        else if (t <= stops.y) c = seg(t, stops.x, stops.y, c0, c1);
+        else if (t <= stops.z) c = seg(t, stops.y, stops.z, c1, c2);
+        else if (t <= stops.w) c = seg(t, stops.z, stops.w, c2, c3);
+        else c = c3;
+        // Дробный шум ±0.5 уровня до смешивания: округление до 8 бит становится случайным.
+        float n = (float(noise.eval(p).r) - 0.5) / 255.0;
+        return half4(float4(c.rgb * c.a + n, c.a));
+      }
+    """
+
+    /** Пороги blue noise фона (StageBackground) — серой текстурой с повтором, без фильтрации. */
+    fun noiseShader(context: Context): BitmapShader {
+      val size = StageBackground.NOISE_SIZE
+      val t = StageBackground.noise(context)
+      val px = IntArray(t.size) { val v = (t[it] * 256f).toInt().coerceIn(0, 255); Color.rgb(v, v, v) }
+      val bitmap = Bitmap.createBitmap(px, size, size, Bitmap.Config.ARGB_8888)
+      return BitmapShader(bitmap, Shader.TileMode.REPEAT, Shader.TileMode.REPEAT).apply {
+        filterMode = BitmapShader.FILTER_MODE_NEAREST
+      }
+    }
+  }
 }
 
 class BlurSourceViewManager : ReactViewManager() {

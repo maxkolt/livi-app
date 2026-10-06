@@ -115,7 +115,9 @@ export function isCurrentCallEvent(
 
   const currentCallId = String(current.callId || '').trim();
   const currentRoomId = String(current.roomId || '').trim();
-  if (incomingCallId && currentCallId && incomingCallId === currentCallId) return true;
+  // Комната у пары одна и та же для всех звонков: если оба callId известны, решает только он.
+  // Иначе запоздалый call:ended прошлого звонка (та же комната) завершал новый.
+  if (incomingCallId && currentCallId) return incomingCallId === currentCallId;
   if (incomingRoomId && currentRoomId && incomingRoomId === currentRoomId) return true;
   return false;
 }

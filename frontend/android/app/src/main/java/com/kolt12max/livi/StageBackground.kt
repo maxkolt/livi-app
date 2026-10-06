@@ -19,6 +19,7 @@ import android.util.Log
 import android.view.View
 import com.facebook.react.uimanager.SimpleViewManager
 import com.facebook.react.uimanager.ThemedReactContext
+import com.facebook.react.uimanager.annotations.ReactProp
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import kotlin.math.PI
@@ -27,8 +28,45 @@ import kotlin.math.cos
 import kotlin.math.roundToInt
 
 /**
- * Основной фон LiVi: бирюза у верхнего и нижнего края растворяется к середине в #0C1521.
- * Тот же профиль, что у JS WelcomeStageBackground (HOME_STAGE_EDGE_RGB, HOME_STAGE_MID).
+ * Палитры сцены: тон у верхнего и нижнего края растворяется к середине.
+ * CLASSIC — прежняя тёмная сцена (HOME_STAGE_EDGE_RGB → HOME_STAGE_MID в JS).
+ * TEAL — новая: тон блоков (UI_SURFACE) → серый «Поиска» (HOME_NAV_BG); имя осталось
+ * с бирюзовой версии. Сплэш, экраны звонка, витрина Legendary. Вместе с TEAL_STAGE_* в
+ * JS WelcomeStageBackground.
+ */
+/**
+ * reach — какая доля пути от края до середины занята переходом (1 — до самой середины,
+ * меньше — переход короче, середина шире чистая).
+ */
+enum class StagePalette(
+  internal val mid: FloatArray,
+  internal val edge: FloatArray,
+  internal val reach: Float = 1f,
+) {
+  /** #0C1521 в середине. Было #0A111B: весь синий мягко поднят ×1.22, оттенок тот же. */
+  CLASSIC(floatArrayOf(12f, 21f, 33f), floatArrayOf(15f, 30f, 45f)),
+  /** #252B34 в середине, #2E3540 у краёв — тон блоков (UI_SURFACE): тот же серо-синий, светлее. */
+  TEAL(floatArrayOf(37f, 43f, 52f), floatArrayOf(46f, 53f, 64f)),
+  /**
+   * Витрина Legendary, сплэш и экраны звонка: края приглушены почти до середины (#282E38),
+   * и переход короче (70% пути): середина экрана чисто серая.
+   */
+  TEAL_DEEP(floatArrayOf(37f, 43f, 52f), floatArrayOf(40f, 46f, 56f), reach = 0.7f);
+
+  internal val midColor: Int = Color.rgb(mid[0].toInt(), mid[1].toInt(), mid[2].toInt())
+
+  companion object {
+    fun from(name: String?): StagePalette =
+      when (name) {
+        "teal" -> TEAL
+        "tealDeep" -> TEAL_DEEP
+        else -> CLASSIC
+      }
+  }
+}
+
+/**
+ * Основной фон LiVi: тон у верхнего и нижнего края растворяется к середине (StagePalette).
  *
  * Тёмному градиенту не хватает 8 бит на канал: без дизеринга он идёт полосами. Градиент
  * HWUI дизерит матрицей Байера, то есть шахматкой с периодом 2 px. Старая PNG была
@@ -46,35 +84,36 @@ import kotlin.math.roundToInt
 object StageBackground {
   private const val TAG = "StageBackground"
 
-  /** #0C1521 — середина экрана. Было #0A111B: весь синий мягко поднят ×1.22, оттенок тот же. */
-  private val MID = floatArrayOf(12f, 21f, 33f)
-  /** Тон у верхнего и нижнего края (HOME_STAGE_EDGE_RGB). */
-  private val EDGE = floatArrayOf(15f, 30f, 45f)
-  private const val MID_COLOR = 0xFF0C1521.toInt()
-
   /** res/raw/stage_blue_noise.bin — scripts/generate-stage-blue-noise.js. */
   internal const val NOISE_SIZE = 64
   @Volatile private var thresholds: FloatArray? = null
 
-  /** Портрет, ландшафт и окно модалки; всё остальное — редкость. */
-  private val cache = RenderCache(TAG, capacity = 3)
+  /** Портрет и ландшафт обеих палитр плюс окно модалки; всё остальное — редкость. */
+  private val cache = RenderCache(TAG, capacity = 5)
 
   /** Опорные точки запасного градиента: по 16 на половину экрана, как HOME_STAGE_FADE_STEPS. */
   private val fallbackPositions = FloatArray(33) { it / 32f }
-  private val fallbackColors =
+
+  private fun fallbackColors(palette: StagePalette): IntArray =
     IntArray(fallbackPositions.size) {
-      val alpha = (fade(fallbackPositions[it]) * 255f).roundToInt()
-      Color.argb(alpha, EDGE[0].toInt(), EDGE[1].toInt(), EDGE[2].toInt())
+      val alpha = (fade(fallbackPositions[it], palette.reach) * 255f).roundToInt()
+      Color.argb(alpha, palette.edge[0].toInt(), palette.edge[1].toInt(), palette.edge[2].toInt())
     }
 
   /**
    * Bitmap фона ровно width×height px, если уже посчитан. Иначе — null; рендер уходит
    * в фоновый поток, onReady придёт на главном.
    */
-  fun bitmap(context: Context, width: Int, height: Int, onReady: (Bitmap) -> Unit): Bitmap? {
+  fun bitmap(
+    context: Context,
+    width: Int,
+    height: Int,
+    palette: StagePalette,
+    onReady: (Bitmap) -> Unit,
+  ): Bitmap? {
     if (width <= 0 || height <= 0) return null
     val appContext = context.applicationContext
-    return cache.get("${width}x$height", { render(appContext, width, height) }, onReady)
+    return cache.get("${palette.name}:${width}x$height", { render(appContext, width, height, palette) }, onReady)
   }
 
   /** Bitmap 1:1 без фильтрации; пока его нет или canvas программный — fallback. */
@@ -91,11 +130,29 @@ object StageBackground {
    * сплошная, края — один тон с плавной альфой: rgb stop'ов округлились бы до 8 бит
    * ступеньками.
    */
-  class Fallback {
-    private val midPaint = Paint().apply { color = MID_COLOR }
+  class Fallback(palette: StagePalette = StagePalette.CLASSIC) {
+    private val midPaint = Paint()
     private val edgePaint = Paint()
+    private var colors = IntArray(0)
     private var top = 0
     private var bottom = 0
+
+    var palette: StagePalette = palette
+      set(value) {
+        if (field == value) return
+        field = value
+        apply(value)
+      }
+
+    init {
+      apply(palette)
+    }
+
+    private fun apply(value: StagePalette) {
+      midPaint.color = value.midColor
+      colors = fallbackColors(value)
+      edgePaint.shader = null
+    }
 
     fun draw(canvas: Canvas, bounds: Rect) {
       if (edgePaint.shader == null || bounds.top != top || bounds.bottom != bottom) {
@@ -104,7 +161,7 @@ object StageBackground {
         edgePaint.shader =
           LinearGradient(
             0f, top.toFloat(), 0f, bottom.toFloat(),
-            fallbackColors, fallbackPositions, Shader.TileMode.CLAMP,
+            colors, fallbackPositions, Shader.TileMode.CLAMP,
           )
       }
       canvas.drawRect(bounds, midPaint)
@@ -128,23 +185,29 @@ object StageBackground {
     return soft
   }
 
-  /** 1 у края экрана, 0 в середине; спад по косинусу — без излома ни у края, ни в середине. */
-  private fun fade(position: Float): Float {
-    val edge = abs(position - 0.5f) * 2f
+  /**
+   * 1 у края экрана, 0 к доле reach пути до середины (дальше — 0); спад по косинусу —
+   * без излома ни у края, ни там, где переход кончается.
+   */
+  private fun fade(position: Float, reach: Float): Float {
+    val fromEdge = abs(position - 0.5f) * 2f
+    val edge = ((fromEdge - (1f - reach)) / reach).coerceIn(0f, 1f)
     return (1f - cos(PI.toFloat() * edge)) / 2f
   }
 
-  private fun render(context: Context, width: Int, height: Int): Bitmap {
+  private fun render(context: Context, width: Int, height: Int, palette: StagePalette): Bitmap {
+    val mid = palette.mid
+    val edge = palette.edge
     val noise = noise(context)
     val soft = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
     val row = IntArray(width)
     // Тон строки постоянен, шум периодичен по x с шагом тайла: считаем один тайл и копируем.
     val period = minOf(NOISE_SIZE, width)
     for (y in 0 until height) {
-      val k = fade((y + 0.5f) / height)
-      val r = MID[0] + (EDGE[0] - MID[0]) * k
-      val g = MID[1] + (EDGE[1] - MID[1]) * k
-      val b = MID[2] + (EDGE[2] - MID[2]) * k
+      val k = fade((y + 0.5f) / height, palette.reach)
+      val r = mid[0] + (edge[0] - mid[0]) * k
+      val g = mid[1] + (edge[1] - mid[1]) * k
+      val b = mid[2] + (edge[2] - mid[2]) * k
       val noiseRow = (y % NOISE_SIZE) * NOISE_SIZE
       for (x in 0 until period) {
         // floor(c + t) при t ∈ (0, 1): в среднем ровно c, без ступенек.
@@ -218,16 +281,19 @@ internal class RenderCache(private val tag: String, private val capacity: Int) {
 }
 
 /** Фон окна MainActivity: при повороте непокрытые RN полосы совпадают с экраном. */
-class StageBackgroundDrawable(context: Context) : Drawable() {
+class StageBackgroundDrawable(
+  context: Context,
+  private val palette: StagePalette = StagePalette.CLASSIC,
+) : Drawable() {
   private val appContext = context.applicationContext
-  private val fallback = StageBackground.Fallback()
+  private val fallback = StageBackground.Fallback(palette)
   private var bitmap: Bitmap? = null
   private var generation = 0
 
   override fun onBoundsChange(bounds: Rect) {
     val current = ++generation
     bitmap =
-      StageBackground.bitmap(appContext, bounds.width(), bounds.height()) { ready ->
+      StageBackground.bitmap(appContext, bounds.width(), bounds.height(), palette) { ready ->
         if (current == generation) {
           bitmap = ready
           invalidateSelf()
@@ -245,15 +311,25 @@ class StageBackgroundDrawable(context: Context) : Drawable() {
   override fun getOpacity(): Int = PixelFormat.OPAQUE
 }
 
-/** Фон экранов звонка и крышки accept; через LiviStageBackground — фон JS-экранов. */
-class StageBackgroundView @JvmOverloads constructor(
+/** Фон JS-экранов через LiviStageBackground (палитра — prop `palette`). */
+open class StageBackgroundView @JvmOverloads constructor(
   context: Context,
   attrs: AttributeSet? = null,
+  palette: StagePalette = StagePalette.CLASSIC,
 ) : View(context, attrs) {
-  private val fallback = StageBackground.Fallback()
+  private val fallback = StageBackground.Fallback(palette)
   private var bitmap: Bitmap? = null
   private var generation = 0
   private val bounds = Rect()
+
+  var palette: StagePalette = palette
+    set(value) {
+      if (field == value) return
+      field = value
+      fallback.palette = value
+      requestBitmap()
+      invalidate()
+    }
 
   init {
     importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
@@ -262,9 +338,13 @@ class StageBackgroundView @JvmOverloads constructor(
   override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
     super.onSizeChanged(w, h, oldw, oldh)
     bounds.set(0, 0, w, h)
+    requestBitmap()
+  }
+
+  private fun requestBitmap() {
     val current = ++generation
     bitmap =
-      StageBackground.bitmap(context, w, h) { ready ->
+      StageBackground.bitmap(context, bounds.width(), bounds.height(), palette) { ready ->
         if (current == generation) {
           bitmap = ready
           invalidate()
@@ -275,9 +355,20 @@ class StageBackgroundView @JvmOverloads constructor(
   override fun onDraw(canvas: Canvas) = StageBackground.draw(canvas, bitmap, bounds, fallback)
 }
 
+/** Экраны входящего и исходящего звонка: сцена витрины Legendary (TEAL_DEEP), поверх — тонировка в layout. */
+class TealStageBackgroundView @JvmOverloads constructor(
+  context: Context,
+  attrs: AttributeSet? = null,
+) : StageBackgroundView(context, attrs, StagePalette.TEAL_DEEP)
+
 class StageBackgroundViewManager : SimpleViewManager<StageBackgroundView>() {
   override fun getName(): String = "LiviStageBackground"
 
   override fun createViewInstance(context: ThemedReactContext): StageBackgroundView =
     StageBackgroundView(context)
+
+  @ReactProp(name = "palette")
+  fun setPalette(view: StageBackgroundView, value: String?) {
+    view.palette = StagePalette.from(value)
+  }
 }

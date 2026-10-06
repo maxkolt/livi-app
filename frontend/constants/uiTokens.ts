@@ -28,6 +28,9 @@ export const FRIEND_ROW_ACTION_GAP = 18;
 /** Отступ от правого края кнопки сообщения до правого края строки. */
 export const FRIEND_ROW_TRAILING_PAD = 1;
 
+/** Зажатие облака в чате → меню сообщения: быстрее системных 500 мс (было 280 / 380). */
+export const MESSAGE_LONG_PRESS_MS = 200;
+
 /** Лёгкое касание: не срывать onPress при микродвижении пальца. */
 export const FRIEND_ACTION_PRESS_RETENTION = {
   top: 22,

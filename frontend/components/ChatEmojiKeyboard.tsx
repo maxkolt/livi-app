@@ -3,7 +3,7 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { EmojiKeyboard, en, ru, type EmojiType } from 'rn-emoji-keyboard';
 import { BUILT_IN_STICKER_PACKS, StickerView, type BuiltInSticker } from './chatStickers';
-import { WelcomeStageBackground } from '../screens/home/WelcomeStageBackground';
+import { WELCOME_FILTER_ACTIVE } from '../screens/home/constants';
 import { t, type Lang } from '../utils/i18n';
 
 export const CHAT_EMOJI_PANEL_HEIGHT = 280;
@@ -40,7 +40,7 @@ function ChatEmojiKeyboard({
   const [packId, setPackId] = React.useState(BUILT_IN_STICKER_PACKS[0]?.id || '');
   const translation = lang === 'ru' ? ru : en;
   const activePack = BUILT_IN_STICKER_PACKS.find((pack) => pack.id === packId) || BUILT_IN_STICKER_PACKS[0];
-  // Тёмная тема: новый общий фон приложения, как у панелей реакций.
+  // Тёмная тема: панель прозрачная — под ней стекло композера, одним листом с ним.
   const panelFill = isDark ? 'transparent' : surfaceBg;
   const panelHeight = compact
     ? CHAT_EMOJI_PANEL_LANDSCAPE_HEIGHT
@@ -107,7 +107,6 @@ function ChatEmojiKeyboard({
 
   return (
     <View style={StyleSheet.flatten([styles.wrap, { height: panelHeight }, !isDark ? { backgroundColor: surfaceBg } : null])}>
-      {isDark ? <WelcomeStageBackground /> : null}
       <View style={[styles.content, { height: panelHeight - switchHeight }]}>
         {tab === 'emoji' ? (
           <EmojiKeyboard
@@ -223,8 +222,9 @@ function ChatEmojiKeyboard({
                 styles.switchButton,
                 compact && styles.switchButtonCompact,
                 {
+                  // Выбранная вкладка — как активная кнопка в фильтрах вкладок главной.
                   backgroundColor: active
-                    ? (isDark ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.08)')
+                    ? (isDark ? WELCOME_FILTER_ACTIVE : 'rgba(0,0,0,0.08)')
                     : 'transparent',
                   opacity: pressed ? 0.75 : 1,
                 },

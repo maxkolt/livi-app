@@ -9,6 +9,7 @@ import {
   useSharedValue,
 } from 'react-native-reanimated';
 import { logger } from '../../utils/logger';
+import { useDeviceTilt } from './useDeviceTilt';
 import {
   buildRadarScene,
   drawRadarFrame,
@@ -55,6 +56,13 @@ export function WelcomeRadar({ size, avatarSize, active = true, children }: Welc
   const scene = useSharedValue<RadarScene | null>(null);
   const picture = useSharedValue<SkPicture>(getEmptyRadarPicture());
 
+  const isFocused = useIsFocused();
+  const appActive = useAppActive();
+  const reduceMotion = useReducedMotion();
+  const running = active && isFocused && appActive && !reduceMotion;
+  // Параллакс только у радара и только пока он анимируется: датчик не работает зря.
+  const tilt = useDeviceTilt(running);
+
   useEffect(() => {
     let payload: RadarPayload | null = null;
     try {
@@ -94,13 +102,11 @@ export function WelcomeRadar({ size, avatarSize, active = true, children }: Welc
     S.sinceDrawMs += ms;
     if (S.sinceDrawMs < MIN_REDRAW_MS) return;
     S.sinceDrawMs = 0;
+    S.tiltX = tilt.x.value;
+    S.tiltY = tilt.y.value;
     picture.value = drawRadarFrame(S);
   }, false);
 
-  const isFocused = useIsFocused();
-  const appActive = useAppActive();
-  const reduceMotion = useReducedMotion();
-  const running = active && isFocused && appActive && !reduceMotion;
   useEffect(() => {
     frame.setActive(running);
   }, [frame, running]);

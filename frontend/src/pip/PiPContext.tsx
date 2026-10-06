@@ -992,8 +992,9 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       const passedRoute = normalizeInCallRoute(p.audioOutputRoute || '');
       let videoRouteNorm: InCallAudioRoute;
       if (passedRoute === 'SPEAKER_PHONE' || passedRoute === 'EARPIECE') {
-        // ↓ / Back с video UI: не залипать на stale BT mark поверх громкой с экрана.
-        videoRouteNorm = passedRoute === 'EARPIECE' ? 'SPEAKER_PHONE' : passedRoute;
+        // ↓ / Back с video UI: не залипать на stale BT mark поверх выбора с экрана. Ухо остаётся
+        // ухом — раньше здесь было EARPIECE → SPEAKER (старое «видео ⇒ громкая»).
+        videoRouteNorm = passedRoute;
       } else if (isExternalHeadsetRoute(passedRoute)) {
         videoRouteNorm = passedRoute;
       } else {
@@ -1413,7 +1414,16 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       // pending=true for one render after ModeChanged(false) and must not re-arm PiP.
       const nativeInSystemPiP = g.__pipInSystemModeRef?.current === true;
       const nativePendingEnter = g.__pendingSystemPiPSyncRef?.current === true;
-      if (!nativeInSystemPiP && !nativePendingEnter) return;
+      if (!nativeInSystemPiP && !nativePendingEnter) {
+        // Вход не состоялся, а pending/capture остались (пропущенный сброс) — снять, иначе
+        // CaptureHost и раскладка system PiP оживают при включении камеры собеседника.
+        if (!inSystemPiPMode && (pendingSystemPiP || systemPiPCaptureActive)) {
+          setPendingSystemPiP(false);
+          setSystemPiPCaptureActive(false);
+          setSystemPiPCaptureRequestId(0);
+        }
+        return;
+      }
       if (
         !nativeInSystemPiP &&
         (now < Number(g.__returningFromSystemPiPUntilRef?.current || 0) ||
@@ -2224,7 +2234,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         NativeModules.LiviAppModule?.getDecorViewSize?.()?.then?.(apply)?.catch?.(() => apply(null));
         if (!NativeModules.LiviAppModule?.getDecorViewSize) apply(null);
       }
-      setTimeout(() => {
+      const clearIfNotEntered = () => {
         try {
           const inPiP = g.__pipInSystemModeRef?.current === true;
           const until = g.__systemPiPEntryInProgressUntilRef?.current;
@@ -2232,6 +2242,9 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
             return;
           }
           if (typeof until === 'number' && until > Date.now()) {
+            // Окно входа ещё открыто (его ставят и на 6 с) — перепроверить, когда закроется.
+            // Раньше здесь был просто return: флаги PiP оставались навсегда.
+            setTimeout(clearIfNotEntered, until - Date.now() + 50);
             return;
           }
           setPendingSystemPiP(false);
@@ -2246,7 +2259,8 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
             g.__systemPiPEntryInProgressUntilRef.current = 0;
           }
         } catch (_) {}
-      }, 4500);
+      };
+      setTimeout(clearIfNotEntered, 4500);
 
     });
     return () => sub.remove();

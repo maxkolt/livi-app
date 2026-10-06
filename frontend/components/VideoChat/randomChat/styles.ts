@@ -1,5 +1,9 @@
 import { Platform, Dimensions, StyleSheet } from 'react-native';
-import { WELCOME_HEADER_TITLE } from '../../../screens/home/constants';
+import {
+  UI_ACCENT_SELECTED,
+  UI_SURFACE_RAISED,
+  WELCOME_HEADER_TITLE,
+} from '../../../screens/home/constants';
 import { CARD_BASE } from './constants';
 
 /** Горизонталь: отступ от краёв и зазор между карточками. */
@@ -157,28 +161,35 @@ export const styles = StyleSheet.create({
     marginTop: Platform.OS === "android" ? 5 : 10,
     marginBottom: Platform.OS === "android" ? 4 : 32,
   },
-  bigBtn: {
+  /** Обёртка кнопки: делит строку пополам и несёт масштаб нажатия. */
+  bigBtnWrap: {
     flex: 1,
+  },
+  bigBtn: {
     height: Platform.OS === "android" ? 50 : 60,
     borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
+    overflow: 'hidden',
   },
-  bigBtnPressed: {
-    backgroundColor: 'rgba(26, 54, 64, 0.98)',
-    transform: [{ scale: 0.96 }],
+  /** Подсветка нажатия поверх заливки; прозрачность ведёт нативная анимация. */
+  bigBtnShade: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: UI_ACCENT_SELECTED,
   },
-  bigBtnPressedDanger: {
+  bigBtnShadeDanger: {
     backgroundColor: '#5C1A28',
-    transform: [{ scale: 0.96 }],
   },
+  // Как надпись «Онлайн» на «Поиске»: тот же цвет, размер и насыщенность (шрифт — в RandomChat).
   bigBtnText: {
     color: WELCOME_HEADER_TITLE,
     fontSize: 16,
-    fontWeight: '600',
+    fontWeight: '400',
+    letterSpacing: 0.1,
   },
-  btnTitan: {
-    backgroundColor: 'rgba(42, 88, 104, 0.62)',
+  /** «Начать» и «Далее»: лёгкий тон акцента, без рамки. */
+  btnPrimary: {
+    backgroundColor: 'rgba(98, 176, 216, 0.16)',
   },
   btnDanger: {
     backgroundColor: '#7A2436',
@@ -204,7 +215,7 @@ export const styles = StyleSheet.create({
   },
   modalCard: {
     width: '86%',
-    backgroundColor: '#1f2937',
+    backgroundColor: UI_SURFACE_RAISED,
     padding: 16,
     borderRadius: 12,
   },
@@ -244,7 +255,7 @@ export const styles = StyleSheet.create({
     bottom: 86,
     left: '7%',
     right: '7%',
-    backgroundColor: 'rgba(13,14,16,0.92)',
+    backgroundColor: 'rgba(54, 64, 76, 0.96)',
     borderRadius: 12,
     paddingVertical: 10,
     paddingHorizontal: 14,

@@ -1,16 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
   Фон окна из темы — только до MainActivity.onCreate: там его сменяет
-  StageBackgroundDrawable (та же сцена, что в JS, пиксель-в-пиксель). Эта PNG
-  растягивается, и её ordered dither на экране рябит — долго её не показываем.
+  StageBackgroundDrawable (новая сцена, пиксель-в-пиксель с JS). Сплошная середина
+  сцены: растянутая PNG с ordered dither на экране рябила.
 -->
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
-  <item android:drawable="@color/window_background" />
-  <item>
-    <bitmap
-      android:src="@drawable/welcome_stage_bg"
-      android:gravity="fill"
-      android:filter="true"
-      android:dither="true" />
-  </item>
+  <item android:drawable="@color/home_nav_background" />
 </layer-list>

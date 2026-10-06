@@ -234,6 +234,18 @@ const MIN_HARD_ROUTE_MS = 500;
 const MIN_NATIVE_ROUTE_MS = 600;
 
 
+/**
+ * Режим звонка выбирается один раз: стартовый маршрут (ухо у аудиозвонка, громкая у видео) или
+ * тап пользователя. Пока пользователь не выбрал, стартовый built-in и есть выбор — иначе переходы
+ * PiP/разворот брали «громкую по умолчанию для видео» и уводили ухо в динамик. Повторный bootstrap
+ * (возврат из PiP) выбор не перезаписывает.
+ */
+function rememberStartBuiltinRouteAsChoice(route: InCallAudioRoute | null | undefined): void {
+  if (route !== 'EARPIECE' && route !== 'SPEAKER_PHONE') return;
+  if (readCallBuiltinRouteChoice()) return;
+  rememberCallBuiltinRouteChoice(route);
+}
+
 export const useAudioRouting = (
   enabled: boolean,
   remoteStream: any,
@@ -3119,6 +3131,7 @@ export const useAudioRouting = (
           ) {
             doneRoute = resolveExternalRouteForUiSync(av, uiLockAfterBootstrap, getUserRoute());
           }
+          rememberStartBuiltinRouteAsChoice(doneRoute);
           if (
             doneRoute !== normalizeInCallRoute(lastAppliedRouteRef.current) ||
             isExternalHeadsetRoute(doneRoute)
@@ -3228,6 +3241,7 @@ export const useAudioRouting = (
               (userAtDone === 'SPEAKER_PHONE' || userAtDone === 'EARPIECE')
                 ? userAtDone
                 : 'EARPIECE');
+            rememberStartBuiltinRouteAsChoice(doneRoute);
             if (shouldSkipAutomaticBuiltInRoute('bootstrap_done', doneRoute)) {
               publishRouteState(av.length ? av : ['EARPIECE', 'SPEAKER_PHONE'], doneRoute);
               repinEarpieceNativeAfterUiSkip(doneRoute, 'bootstrap_done');

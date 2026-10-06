@@ -12,8 +12,8 @@ export const LightPalette = {
 };
 
 export const DarkPalette = {
-  primary: '#2EC4B6',
-  background: '#151F33',
+  primary: '#62B0D8',
+  background: '#252B34',
   surface: '#0D0E10',
   outline: 'rgba(255,255,255,0.12)',
   onSurfaceVariant: '#B7C0CF',

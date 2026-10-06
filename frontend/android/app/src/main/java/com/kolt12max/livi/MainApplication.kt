@@ -73,7 +73,7 @@ class MainApplication : Application(), ReactApplication {
     }
     LiveKitReactNative.setup(this)
     // До первого WebSocket'а: общий пул с тёплыми соединениями к API (VPN, сервер в РФ).
-    WarmConnections.install()
+    WarmConnections.install(this)
     WarmConnections.warm(this, "app_start")
     WarmConnections.watchNetwork(this)
     // Screen capture / getDisplayMedia не используем; без этого @livekit/react-native-webrtc может поднять mediaProjection FGS.

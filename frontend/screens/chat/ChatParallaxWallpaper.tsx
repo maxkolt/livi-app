@@ -28,12 +28,12 @@ const SMOOTH = 0.16;
 const PLATE_LIGHT = "#AACABB";
 const PLATE_DARK = "#0C1720";
 
-/** Тёмный stage-tint поверх обоев — картинка читается, тон как у welcome. */
+/** Тёмный tint поверх обоев — картинка читается, тон серо-синего фона приложения. */
 const WALLPAPER_STAGE_TINT = [
-  "rgba(16, 24, 34, 0.52)",
-  "rgba(10, 12, 20, 0.45)",
-  "rgba(11, 17, 24, 0.48)",
-  "rgba(17, 24, 34, 0.56)",
+  "rgba(26, 31, 39, 0.52)",
+  "rgba(20, 24, 30, 0.45)",
+  "rgba(22, 26, 33, 0.48)",
+  "rgba(26, 31, 39, 0.56)",
 ] as const;
 
 function clamp(n: number, min: number, max: number) {

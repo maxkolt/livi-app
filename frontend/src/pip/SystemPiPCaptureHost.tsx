@@ -4,6 +4,7 @@ import { NativeModules, Platform, StyleSheet, View } from 'react-native';
 import { RTCView } from '@livekit/react-native-webrtc';
 import { usePiP } from './PiPContext';
 import { mediaStreamHasLiveVideo } from './pipPlaceholderOnly';
+import { PIP_ROUNDED, PIP_TEXTURE_VIEW } from '../../components/VideoChat/shared/pipTextureView';
 
 /**
  * Product:
@@ -33,7 +34,13 @@ export default function SystemPiPCaptureHost() {
       pendingSystemPiP === true ||
       g.__pipInSystemModeRef?.current === true;
     // Вне system PiP — никогда. Block только вне PiP (после expand), иначе mid-PiP peer video гасится.
-    if (!inSys) {
+    // Натив — источник правды: не в PiP и вход не идёт → подложки нет, даже если React-флаги
+    // остались от прерванного входа (AppState мигнул background при закрытии экрана «Звонок..»).
+    // Иначе полноэкранный RTCView (SurfaceView) ложится поверх экрана звонка, и его «дырка»
+    // в окне стирает все кнопки, подписи и аватар.
+    const nativeInSys = g.__pipInSystemModeRef?.current === true;
+    const nativePendingEnter = g.__pendingSystemPiPSyncRef?.current === true;
+    if (!inSys || (!nativeInSys && !nativePendingEnter)) {
       captureBlocked = true;
     } else if (
       g.__pipInSystemModeRef?.current !== true &&
@@ -194,17 +201,18 @@ export default function SystemPiPCaptureHost() {
         />
       ) : null}
       {showLocalInset ? (
-        <View style={styles.localInset} collapsable={false}>
+        <View style={[styles.localInset, PIP_ROUNDED && styles.localInsetRounded]} collapsable={false}>
           <RTCView
             key={`sys-pip-local-inset-${(effectiveLocalStream as any)?.id || 'l'}`}
             {...({
               stream: effectiveLocalStream,
               streamURL: localStreamUrl,
               useTextureView: true,
+              textureView: PIP_TEXTURE_VIEW,
               renderToHardwareTextureAndroid: true,
               zOrderMediaOverlay: true,
             } as any)}
-            style={styles.localInsetVideo}
+            style={[styles.localInsetVideo, PIP_TEXTURE_VIEW && styles.localInsetVideoTransparent]}
             objectFit="cover"
             mirror={true}
             zOrder={1}
@@ -246,6 +254,15 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: 'rgba(255,255,255,0.2)',
     zIndex: 2,
+  },
+  /** Свой кадр в TextureView (PIP_ROUNDED): скруглён, без рамки. */
+  localInsetRounded: {
+    borderRadius: 8,
+    borderWidth: 0,
+    backgroundColor: 'transparent',
+  },
+  localInsetVideoTransparent: {
+    backgroundColor: 'transparent',
   },
   localInsetVideo: {
     ...StyleSheet.absoluteFillObject,

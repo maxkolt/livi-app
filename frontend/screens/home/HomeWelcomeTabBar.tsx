@@ -1,26 +1,31 @@
 import React, { memo, useRef } from 'react';
 import { AppState, Platform, Pressable, StyleSheet, View } from 'react-native';
 import { useHomeLayout } from './HomeLayoutContext';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useStableSafeAreaInsets } from './useStableSafeAreaInsets';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { logger } from '../../utils/logger';
 import { shouldSkipHomeUiSettle } from '../../utils/globalEvents';
 import FitText from '../../components/FitText';
 import {
-  HOME_NAV_ACTIVE,
-  HOME_NAV_SURFACE,
+  UI_ACCENT,
+  UI_ACCENT_SOFT,
+  UI_RIM,
+  UI_INACTIVE,
   WELCOME_CHROME_EDGE_RADIUS,
-  WELCOME_SEARCH_CHROME_SURFACE,
+  WELCOME_HEADER_TITLE,
   WELCOME_STAGE_BG,
-  WELCOME_TAB_BAR_SHADOW,
+  WELCOME_UPDATE_BADGE,
   isWelcomeTabletLayout,
+  UI_GLASS_CONTROL,
 } from './constants';
-import { WelcomeFloatShadow } from './WelcomeFloatShadow';
+import { useTabLabelFonts } from './brandFont';
 
-/** Активная вкладка — чуть мягче акцента рамок Search. */
-const ACTIVE_NAV_ACCENT = HOME_NAV_ACTIVE;
-const ACTIVE_ICON = ACTIVE_NAV_ACCENT;
-const ACTIVE_LABEL = ACTIVE_NAV_ACCENT;
+/**
+ * Активная вкладка сразу выделяется: иконка акцентом на «таблетке», подпись светлая.
+ * Неактивные заметно тусклее — раньше их белые иконки были ярче активной.
+ */
+const ACTIVE_ICON = UI_ACCENT;
+const ACTIVE_LABEL = WELCOME_HEADER_TITLE;
 
 export type WelcomeTabId = 'search' | 'friends' | 'calls' | 'chat' | 'profile';
 
@@ -50,9 +55,8 @@ type HomeWelcomeTabBarProps = {
 
 const PROFILE_ACTIVE_DOT = 28;
 
-const INACTIVE = '#7A8494';
-/** Неактивные иконки — тон надписи «Онлайн» (WELCOME_HEADER_TITLE), чуть приглушённее. */
-const INACTIVE_ICON = 'rgba(244, 245, 247, 0.72)';
+const INACTIVE = UI_INACTIVE;
+const INACTIVE_ICON = UI_INACTIVE;
 
 function HomeWelcomeTabBarInner({
   activeTab,
@@ -62,16 +66,17 @@ function HomeWelcomeTabBarInner({
   showCallsDot,
   showProfileDot,
 }: HomeWelcomeTabBarProps) {
-  const insets = useSafeAreaInsets();
+  const insets = useStableSafeAreaInsets();
   // Размер берём из safe-area frame: он приходит от нативного провайдера и
   // обновляется при повороте, в отличие от Dimensions.
   const { width, height } = useHomeLayout();
   const tabletLayout = isWelcomeTabletLayout(width, height);
   const compactLandscape =
     !tabletLayout && width > 0 && height > 0 && width / height > 1.05;
-  const floatGap = compactLandscape ? 6 : tabletLayout ? 12 : 16;
-  const bottomGap = Math.max(insets.bottom, Platform.OS === 'android' ? 6 : 2) + floatGap;
+  const bottomGap = welcomeTabBarBottomGap(insets.bottom, tabletLayout, compactLandscape);
   const iconSize = tabletLayout ? 29 : compactLandscape ? 24 : 26;
+  // Подписи — «цифровой» Exo 2, как названия вкладок в шапке и ник на «Поиске».
+  const labelFonts = useTabLabelFonts();
   const callIconSize = tabletLayout ? 28 : compactLandscape ? 23 : 25;
   const profileDiscSize = tabletLayout ? 32 : compactLandscape ? 26 : PROFILE_ACTIVE_DOT;
   /** После cancel onPress часто опаздывает на 1.5–3с — переключаем на pressIn и держим длинное окно. */
@@ -146,17 +151,8 @@ function HomeWelcomeTabBarInner({
       ]}
       pointerEvents="box-none"
     >
-      {Platform.OS === 'android' ? (
-        <WelcomeFloatShadow radius={WELCOME_CHROME_EDGE_RADIUS} {...WELCOME_TAB_BAR_SHADOW} />
-      ) : (
-        <View pointerEvents="none" style={styles.iosShadow} />
-      )}
-      <View
-        style={[
-          styles.surface,
-          activeTab === 'search' ? styles.searchSurface : null,
-        ]}
-      >
+      {/* Блок лежит на нижнем стекле (WelcomeGlassDock в HomeScreen) — без тени. */}
+      <View style={styles.surface}>
         <View
           style={[
             styles.row,
@@ -234,6 +230,12 @@ function HomeWelcomeTabBarInner({
                       tabletLayout && styles.iconWrapTablet,
                     ]}
                   >
+                    {active ? (
+                      <View
+                        pointerEvents="none"
+                        style={[styles.activePill, tabletLayout && styles.activePillTablet]}
+                      />
+                    ) : null}
                     {tab.renderIcon(active, iconColor)}
                     {showDot ? <View style={styles.badge} pointerEvents="none" /> : null}
                   </View>
@@ -243,6 +245,7 @@ function HomeWelcomeTabBarInner({
                       tabletLayout && styles.labelTablet,
                       compactLandscape && styles.labelLandscape,
                       active && styles.labelActive,
+                      labelFonts ? (active ? labelFonts.active : labelFonts.regular) : null,
                       { color: labelColor },
                     ]}
                     minimumFontScale={0.7}
@@ -260,6 +263,13 @@ function HomeWelcomeTabBarInner({
   );
 }
 
+/** Зазор от нижнего края навбара до края экрана (над системными кнопками). */
+export function welcomeTabBarBottomGap(insetBottom: number, tabletLayout: boolean, compactLandscape: boolean) {
+  // Навбар с нижним стеклом прижат ближе к системным кнопкам.
+  const floatGap = compactLandscape ? 4 : tabletLayout ? 8 : 8;
+  return Math.max(insetBottom, Platform.OS === 'android' ? 6 : 2) + floatGap;
+}
+
 const styles = StyleSheet.create({
   shellLandscape: {
     marginHorizontal: 16,
@@ -273,24 +283,13 @@ const styles = StyleSheet.create({
     backgroundColor: 'transparent',
     overflow: 'visible',
   },
+  /** Блок на нижнем стекле: непрозрачный, тоном кнопок и фильтров шапки. */
   surface: {
     borderRadius: WELCOME_CHROME_EDGE_RADIUS,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(14, 85, 119, 0.24)',
-    backgroundColor: HOME_NAV_SURFACE,
+    borderColor: UI_RIM,
+    backgroundColor: UI_GLASS_CONTROL,
     overflow: 'hidden',
-  },
-  searchSurface: {
-    backgroundColor: WELCOME_SEARCH_CHROME_SURFACE,
-  },
-  iosShadow: {
-    ...StyleSheet.absoluteFillObject,
-    borderRadius: WELCOME_CHROME_EDGE_RADIUS,
-    backgroundColor: 'rgba(14, 85, 119, 0.04)',
-    shadowColor: '#082b3d',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.14,
-    shadowRadius: 14,
   },
   row: {
     flexDirection: 'row',
@@ -351,6 +350,19 @@ const styles = StyleSheet.create({
     width: 36,
     height: 34,
   },
+  /** Подложка активной иконки — шире самой иконки, на всю её высоту. */
+  activePill: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    left: -12,
+    right: -12,
+    borderRadius: 15,
+    backgroundColor: UI_ACCENT_SOFT,
+  },
+  activePillTablet: {
+    borderRadius: 17,
+  },
   badge: {
     position: 'absolute',
     top: -1,
@@ -358,7 +370,7 @@ const styles = StyleSheet.create({
     width: 9,
     height: 9,
     borderRadius: 5,
-    backgroundColor: '#A63A48',
+    backgroundColor: WELCOME_UPDATE_BADGE,
     borderWidth: 1.5,
     borderColor: 'rgba(10,12,20,0.95)',
   },

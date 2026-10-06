@@ -17,6 +17,11 @@ interface LocalVideoProps {
   localExternalHold?: boolean;
   /** Локальный PiP поверх remote: выше z-order, чтобы Surface/Texture remote не глушил превью. */
   asPipOverlay?: boolean;
+  /**
+   * Android: рисовать в TextureView (патч react-native-webrtc). Его обрезает скругление
+   * родителя — у SurfaceView углы всегда прямые, он композится системой мимо окна.
+   */
+  textureView?: boolean;
   onStreamReady?: (stream: MediaStream) => void;
 }
 
@@ -32,6 +37,7 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
   lang,
   localExternalHold = false,
   asPipOverlay = false,
+  textureView = false,
   onStreamReady,
 }) => {
   const L = (key: string) => t(key, lang);
@@ -227,6 +233,7 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
           zOrderMediaOverlay: asPipOverlay,
           // prop может отсутствовать в типах, но поддерживается нативно в webrtc-view на Android.
           useTextureView: useTextureViewOnAndroid,
+          textureView,
         } // Android: пробрасываем оба
       : { streamURL: localStreamURL! }; // iOS: используем streamURL (уже проверили выше)
 
@@ -234,7 +241,8 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
       <RTCView
         key={rtcViewKey}
         {...(rtcViewProps as any)}
-        style={styles.rtc}
+        // Скруглённое окно (TextureView): без чёрной подложки — её сглаженный край давал рамку.
+        style={[styles.rtc, textureView && styles.rtcTransparent]}
         objectFit="cover"
         mirror={isFrontCamera}
         // Локальный PiP выше remote (0), иначе после появления peer video превью чернеет.
@@ -275,10 +283,14 @@ const styles = StyleSheet.create({
     bottom: 0,
     backgroundColor: 'black',
   },
+  rtcTransparent: {
+    backgroundColor: 'transparent',
+  },
   placeholderContainer: {
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: 'rgba(13,14,16,0.85)',
+    // Глубокий серо-синий в тон фона — как карточки рандомного чата.
+    backgroundColor: 'rgba(26, 31, 39, 0.92)',
   },
   holdPlaceholderRoot: {
     justifyContent: 'flex-start',

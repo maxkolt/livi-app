@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { View, Text, StyleSheet, ActivityIndicator, Platform } from 'react-native';
+import { NativeBlurBackdrop } from '../../BackdropBlur';
 import { RTCView, MediaStream } from '@livekit/react-native-webrtc';
 import { MaterialIcons } from '@expo/vector-icons';
 import AwayPlaceholder from '../../../components/AwayPlaceholder';
@@ -32,6 +33,16 @@ interface RemoteVideoProps {
   /** Партнёр на hold из-за стороннего звонка (GSM / мессенджер). */
   partnerExternalHold?: boolean;
   forceTextureView?: boolean; // Принудительно использовать TextureView (например, для системного PiP)
+  /**
+   * Главное видео экрана звонка под стеклянными кнопками: на Android 12+ рисуется в TextureView
+   * (патч webrtc, проп textureView), чтобы стекло размывало его. Остальные видео — SurfaceView.
+   */
+  glassTextureView?: boolean;
+  /**
+   * Маленькое скруглённое окно: без чёрной подложки под кадром — её сглаженный край по дуге
+   * скругления давал тонкую тёмную рамку.
+   */
+  transparentBackground?: boolean;
   /** 'contain' — собеседник целиком в кадре (системный PiP); 'cover' — заполнение с обрезкой (по умолчанию). */
   objectFit?: 'contain' | 'cover';
 }
@@ -58,6 +69,8 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
   partnerInPiP = false,
   partnerExternalHold = false,
   forceTextureView = false,
+  glassTextureView = false,
+  transparentBackground = false,
   objectFit: objectFitProp = 'cover',
 }) => {
   const L = (key: string) => t(key, lang);
@@ -79,6 +92,7 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
   const useTextureViewOnAndroid =
     Platform.OS === 'android' &&
     (isLegacyAndroidSurface || forceTextureView || partnerExternalHold);
+  const textureForGlass = Platform.OS === 'android' && glassTextureView && !!NativeBlurBackdrop;
   const logRenderState = useCallback(
     (reason: string, extra?: Record<string, unknown>) => {
       // Noisy render-state logs should be DEBUG-level (hidden by default LOG_LEVEL=info).
@@ -160,10 +174,11 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
         <RTCView
           key={rtcViewKey}
           {...(rtcViewProps as any)}
-          style={styles.rtc}
+          style={[styles.rtc, transparentBackground && styles.rtcTransparent]}
           objectFit={objectFitProp}
           mirror={remoteCamSide === 'front'}
           zOrder={0}
+          textureView={textureForGlass}
         />
       );
     },
@@ -172,6 +187,8 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
       logRenderState,
       useTextureViewOnAndroid,
       objectFitProp,
+      textureForGlass,
+      transparentBackground,
     ]
   );
 
@@ -439,10 +456,11 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
             <RTCView
               key={rtcViewKey}
               {...(rtcViewProps as any)}
-              style={styles.rtc}
+              style={[styles.rtc, transparentBackground && styles.rtcTransparent]}
               objectFit={objectFitProp}
               mirror={remoteCamSide === 'front'}
               zOrder={0}
+              textureView={textureForGlass}
             />
           )}
           <View style={styles.holdOverlay} pointerEvents="none">
@@ -752,11 +770,12 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
         <RTCView
           key={rtcViewKey}
           {...(rtcViewProps as any)}
-          style={styles.rtc}
+          style={[styles.rtc, transparentBackground && styles.rtcTransparent]}
           objectFit={objectFitProp}
           mirror={remoteCamSide === 'front'}
           // Удаленное видео - базовый слой
           zOrder={0}
+          textureView={textureForGlass}
         />
         {showFriendBadge && (
           <View style={styles.friendBadge}>
@@ -1021,6 +1040,9 @@ const styles = StyleSheet.create({
     width: '100%',
     height: '100%',
     backgroundColor: 'black',
+  },
+  rtcTransparent: {
+    backgroundColor: 'transparent',
   },
   holdOverlay: {
     ...StyleSheet.absoluteFillObject,

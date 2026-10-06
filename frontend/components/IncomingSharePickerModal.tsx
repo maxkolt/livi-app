@@ -17,18 +17,17 @@ import { fetchFriends } from '../sockets/socket';
 import { t } from '../utils/i18n';
 import { useLang } from '../store/lang';
 import type { IncomingShareItem } from '../utils/incomingShare';
-import { WelcomeStageBackground } from '../screens/home/WelcomeStageBackground';
 import { WELCOME_FLOAT_SHADOW_IOS, WelcomeFloatShadow } from '../screens/home/WelcomeFloatShadow';
 import {
+  HOME_NAV_BG,
   LIVI,
-  WELCOME_BRAND_VI_FILL_GRADIENT,
-  WELCOME_CHROME_BTN_BG,
-  WELCOME_FRIEND_ACTION_ICON,
   WELCOME_FRIENDS_LIST_INSET,
   WELCOME_HEADER_TITLE,
   WELCOME_LIST_SURFACE,
   WELCOME_MUTED_TEXT,
-  WELCOME_SEARCH_CTA_BORDER,
+  WELCOME_POPUP_ACCENT,
+  WELCOME_TAB_BLOCK_SURFACE,
+  UI_ACCENT_SELECTED,
 } from '../screens/home/constants';
 import { sendIncomingShareToFriend } from '../utils/sendIncomingShare';
 
@@ -46,14 +45,15 @@ type Props = {
 };
 
 /** Выбранная карточка — как в режиме выбора списка «Друзья». */
-const CARD_SELECTED_BG = 'rgba(42, 88, 104, 0.28)';
-const CARD_PRESSED_BG = 'rgba(14, 85, 119, 0.14)';
-const SELECTED_MARK = WELCOME_BRAND_VI_FILL_GRADIENT[2];
-/** «Отправить»: неактивная — стекло CTA «Найти собеседника», активная — тон выбранной карточки. */
-const SEND_IDLE_BG = 'rgba(14, 85, 119, 0.12)';
-const SEND_ACTIVE_BG = 'rgba(74, 122, 140, 0.34)';
-const SEND_ACTIVE_PRESSED_BG = 'rgba(74, 122, 140, 0.46)';
-const SEND_ACTIVE_BORDER = 'rgba(106, 163, 181, 0.45)';
+const CARD_SELECTED_BG = UI_ACCENT_SELECTED;
+const CARD_PRESSED_BG = 'rgba(98, 176, 216, 0.12)';
+/** Выбор и «Отправить» — как «Переслать» в чате: светлая бирюза. */
+const SELECTED_MARK = WELCOME_POPUP_ACCENT;
+/** «Отправить»: неактивная — стекло блоков вкладок, активная — бирюзовый акцент. */
+const SEND_IDLE_BG = WELCOME_TAB_BLOCK_SURFACE;
+const SEND_ACTIVE_BG = `${WELCOME_POPUP_ACCENT}24`;
+const SEND_ACTIVE_PRESSED_BG = `${WELCOME_POPUP_ACCENT}38`;
+const SEND_ACTIVE_BORDER = `${WELCOME_POPUP_ACCENT}73`;
 
 /** Выбор друзей для контента, отправленного в LiVi из другого приложения («Поделиться»). */
 export default function IncomingSharePickerModal({ visible, items, onClose }: Props) {
@@ -160,7 +160,6 @@ function SharePickerContent({ visible, items, onClose }: Props) {
 
   return (
     <View style={styles.root}>
-      <WelcomeStageBackground />
       <View
         style={[
           styles.page,
@@ -282,7 +281,7 @@ function SharePickerContent({ visible, items, onClose }: Props) {
                   }
                 : {
                     backgroundColor: SEND_IDLE_BG,
-                    borderColor: WELCOME_SEARCH_CTA_BORDER,
+                    borderColor: 'transparent',
                     opacity: sending ? 1 : 0.6,
                   },
             ]}
@@ -294,13 +293,13 @@ function SharePickerContent({ visible, items, onClose }: Props) {
                 <Ionicons
                   name="send"
                   size={landscape ? 16 : 18}
-                  color={canSend ? WELCOME_FRIEND_ACTION_ICON : WELCOME_MUTED_TEXT}
+                  color={canSend ? WELCOME_POPUP_ACCENT : WELCOME_MUTED_TEXT}
                 />
                 <Text
                   style={[
                     styles.sendText,
                     landscape && styles.sendTextLandscape,
-                    { color: canSend ? WELCOME_HEADER_TITLE : WELCOME_MUTED_TEXT },
+                    { color: canSend ? WELCOME_POPUP_ACCENT : WELCOME_MUTED_TEXT },
                   ]}
                   numberOfLines={1}
                 >
@@ -316,7 +315,8 @@ function SharePickerContent({ visible, items, onClose }: Props) {
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1 },
+  // Сплошной фон, как на вкладках главной.
+  root: { flex: 1, backgroundColor: HOME_NAV_BG },
   page: { flex: 1 },
   column: {
     flex: 1,
@@ -342,7 +342,7 @@ const styles = StyleSheet.create({
   closeBtn: {
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: WELCOME_CHROME_BTN_BG,
+    backgroundColor: WELCOME_TAB_BLOCK_SURFACE,
   },
   closeBtnPressed: { opacity: 0.75, transform: [{ scale: 0.96 }] },
   listWrap: { flex: 1, marginTop: 16 },

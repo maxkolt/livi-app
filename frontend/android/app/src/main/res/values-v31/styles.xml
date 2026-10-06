@@ -1,0 +1,12 @@
+<resources>
+  <!--
+    Android 12+: системный сплэш рисует свою иконку в круге 192 dp — без кольца радара,
+    тот же контурный логотип, что у JS-сплэша (scripts/render-app-icon.swift, режим splashicon).
+    Остальное — как Theme.App.SplashScreen в values/styles.xml.
+  -->
+  <style name="Theme.App.SplashScreen" parent="AppTheme">
+    <item name="android:windowBackground">@drawable/ic_launcher_background</item>
+    <item name="android:windowSplashScreenBackground">@color/splashscreen_background</item>
+    <item name="android:windowSplashScreenAnimatedIcon">@drawable/splashscreen_icon</item>
+  </style>
+</resources>

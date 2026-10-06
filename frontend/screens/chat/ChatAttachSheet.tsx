@@ -4,8 +4,9 @@ import React from "react";
 import { Animated, Modal, Pressable, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { t, type Lang } from "../../utils/i18n";
-import { WELCOME_STAGE_BG } from "../home/constants";
-import { WelcomeStageBackground } from "../home/WelcomeStageBackground";
+import { WELCOME_POPUP_PRESSED, WELCOME_POPUP_SHEET_CHROME } from "../home/constants";
+import { GLASS_AVAILABLE, GlassFill } from "../home/WelcomeStageBackground";
+import type { BackdropSources } from "../../components/BackdropBlur";
 
 export type ChatAttachSheetHandle = { open: () => void };
 
@@ -20,6 +21,8 @@ type Props = {
   };
   outlineColor?: string;
   bottomPad: number;
+  /** Источники стекла чата: лист — стекло, сквозь него размыт чат. */
+  backdrop?: BackdropSources | null;
   onCamera: () => void;
   onGallery: () => void;
 };
@@ -30,9 +33,10 @@ type Props = {
  */
 export const ChatAttachSheet = React.forwardRef<ChatAttachSheetHandle, Props>(
   function ChatAttachSheet(
-    { isDark, lang, LIVI, outlineColor, bottomPad, onCamera, onGallery },
+    { isDark, lang, LIVI, outlineColor, bottomPad, onCamera, onGallery, backdrop = null },
     ref,
   ) {
+    const glass = isDark && GLASS_AVAILABLE;
     const [visible, setVisible] = React.useState(false);
     React.useImperativeHandle(ref, () => ({ open: () => setVisible(true) }), []);
     if (!visible) return null;
@@ -57,7 +61,11 @@ export const ChatAttachSheet = React.forwardRef<ChatAttachSheetHandle, Props>(
             <Pressable
               onPress={() => {}}
               style={{
-                backgroundColor: isDark ? WELCOME_STAGE_BG : LIVI.bg,
+                ...(glass
+                  ? { backgroundColor: 'transparent' }
+                  : isDark
+                    ? WELCOME_POPUP_SHEET_CHROME
+                    : { backgroundColor: LIVI.bg }),
                 overflow: 'hidden',
                 borderTopLeftRadius: 20,
                 borderTopRightRadius: 20,
@@ -68,11 +76,12 @@ export const ChatAttachSheet = React.forwardRef<ChatAttachSheetHandle, Props>(
                 shadowOffset: { width: 0, height: -6 },
                 shadowOpacity: 0.20,
                 shadowRadius: 12,
-                elevation: 12,
+                // Под полупрозрачным стеклом elevation рисует на Android белые прямоугольники.
+                elevation: glass ? 0 : 12,
               }}
             >
-              {isDark ? (
-                <WelcomeStageBackground />
+              {glass ? (
+                <GlassFill backdrop={backdrop} style={{ borderTopLeftRadius: 20, borderTopRightRadius: 20 }} />
               ) : null}
               <View style={{ alignItems: 'center', paddingTop: 4, paddingBottom: 8 }}>
                 <View
@@ -98,7 +107,7 @@ export const ChatAttachSheet = React.forwardRef<ChatAttachSheetHandle, Props>(
                   borderRadius: 14,
                   overflow: 'hidden',
                   backgroundColor: pressed
-                    ? (isDark ? LIVI.accent.vivid12 : LIVI.accent.vivid10)
+                    ? (isDark ? WELCOME_POPUP_PRESSED : LIVI.accent.vivid10)
                     : 'transparent',
                 })}
               >
@@ -122,7 +131,7 @@ export const ChatAttachSheet = React.forwardRef<ChatAttachSheetHandle, Props>(
                   overflow: 'hidden',
                   marginTop: 2,
                   backgroundColor: pressed
-                    ? (isDark ? LIVI.accent.vivid12 : LIVI.accent.vivid10)
+                    ? (isDark ? WELCOME_POPUP_PRESSED : LIVI.accent.vivid10)
                     : 'transparent',
                 })}
               >

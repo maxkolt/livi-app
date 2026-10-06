@@ -7,11 +7,14 @@ import {
   Pressable,
   ScrollView,
   Animated,
+  StyleSheet,
   useWindowDimensions,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { WelcomeStageBackground } from "../home/WelcomeStageBackground";
+import { WELCOME_GLASS_RIM, WELCOME_POPUP_SURFACE } from "../home/constants";
+import { GLASS_AVAILABLE, GlassFill } from "../home/WelcomeStageBackground";
+import type { BackdropSources } from "../../components/BackdropBlur";
 
 export const REACTION_EMOJIS_PAGE_1 = ["👍", "😊", "❤️", "😮", "😢", "👎"];
 export const REACTION_EMOJIS_PAGE_2 = ["😉", "😂", "😍", "😭", "🙏", "🔥"];
@@ -40,13 +43,17 @@ export function ReactionBarModal({
   onPickEmoji,
   isDark,
   anchor,
+  backdrop = null,
 }: {
   visible: boolean;
   onClose: () => void;
   onPickEmoji: (emoji: string) => void;
   isDark: boolean;
   anchor?: ReactionBarAnchor | null;
+  /** Источники стекла чата: полоса — стекло, сквозь него размыт чат (из Modal — по экрану). */
+  backdrop?: BackdropSources | null;
 }) {
+  const glass = isDark && GLASS_AVAILABLE;
   const scrollRef = React.useRef<ScrollView>(null);
   const hintBounce = React.useRef(new Animated.Value(0)).current;
   const { width: winW, height: winH } = useWindowDimensions();
@@ -98,12 +105,12 @@ export function ReactionBarModal({
     height: BAR_HEIGHT_FALLBACK,
     flexDirection: "row" as const,
     alignItems: "center" as const,
-    backgroundColor: isDark ? undefined : "#2d3238",
+    backgroundColor: glass ? "transparent" : isDark ? WELCOME_POPUP_SURFACE : "#2d3238",
     borderRadius: 24,
     paddingHorizontal: 10,
     paddingVertical: 10,
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.1)" as const,
+    borderWidth: glass ? 0 : isDark ? StyleSheet.hairlineWidth : 1,
+    borderColor: isDark ? WELCOME_GLASS_RIM : "rgba(255,255,255,0.1)",
     overflow: "hidden" as const,
   };
 
@@ -161,7 +168,7 @@ export function ReactionBarModal({
             style={{ borderRadius: 24, overflow: "hidden" }}
           >
             <View style={barStyle}>
-              {isDark ? <WelcomeStageBackground /> : null}
+              {glass ? <GlassFill backdrop={backdrop} style={{ borderRadius: 24 }} /> : null}
               <Animated.View
                 style={{
                   marginRight: 6,
@@ -177,7 +184,7 @@ export function ReactionBarModal({
               {renderEmojiRow(REACTION_EMOJIS_PAGE_1)}
             </View>
             <View style={barStyle}>
-              {isDark ? <WelcomeStageBackground /> : null}
+              {glass ? <GlassFill backdrop={backdrop} style={{ borderRadius: 24 }} /> : null}
               {renderEmojiRow(REACTION_EMOJIS_PAGE_2)}
             </View>
           </ScrollView>

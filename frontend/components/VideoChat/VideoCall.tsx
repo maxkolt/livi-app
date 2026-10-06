@@ -5,6 +5,7 @@
  */
 
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { BlurListSource, BlurSourceFill } from '../BackdropBlur';
 import {
   View,
   Text,
@@ -37,12 +38,14 @@ import { partnerRemoteRtcLikelyVisible, streamHasLiveRemoteAudio } from './share
 import { t, loadLang, defaultLang } from '../../utils/i18n';
 import type { Lang } from '../../utils/i18n';
 import { useAppTheme } from '../../theme/ThemeProvider';
-import { WelcomeStageBackground } from '../../screens/home/WelcomeStageBackground';
 import {
   CALL_BLUETOOTH_ACCENT,
+  HOME_NAV_BG,
   WELCOME_HEADER_TITLE,
   WELCOME_NAV_ACTIVE_ACCENT,
-  WELCOME_STAGE_BG,
+  UI_ACCENT,
+  CALL_BLUR_BG_SOURCE,
+  CALL_BLUR_VIDEO_SOURCE,
 } from '../../screens/home/constants';
 import { isValidStream } from '../../utils/streamUtils';
 import { logger } from '../../utils/logger';
@@ -163,6 +166,7 @@ import { resolveCallAudioRouteUiWhileBootstrapPending } from './callScreen/callA
 import { clearVideoCallHomeScreenLocks } from './callScreen/videoCallHomeLocks';
 import { readSystemPiPReturnGuard, readSystemPiPReturnState } from './callScreen/systemPiPReturnGuard';
 import { styles } from './callScreen/videoCallStyles';
+import { PIP_ROUNDED, PIP_TEXTURE_VIEW } from './shared/pipTextureView';
 
 type Props = { 
   route?: { 
@@ -7738,7 +7742,10 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
             />
           ) : null}
           {showSystemPiPLocal && showSystemPiPRemote ? (
-            <View style={styles.systemPiPLocalInset} collapsable={false}>
+            <View
+              style={[styles.systemPiPLocalInset, PIP_ROUNDED && styles.systemPiPLocalInsetRounded]}
+              collapsable={false}
+            >
               <LocalVideo
                 localStream={localStream}
                 camOn={camOn}
@@ -7747,6 +7754,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
                 lang={lang}
                 localExternalHold={localExternalHoldUi}
                 asPipOverlay
+                textureView={PIP_TEXTURE_VIEW}
               />
             </View>
           ) : null}
@@ -7772,11 +7780,15 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     <View
       style={[
         styles.container,
-        { backgroundColor: WELCOME_STAGE_BG },
+        // Сплошной фон, как на «Поиске», — и в аудио, и с камерой.
+        { backgroundColor: HOME_NAV_BG },
       ]}
       {...(panResponder?.panHandlers || {})}
     >
-      <WelcomeStageBackground />
+      {/* Фон под стеклом кнопок — как есть; главное видео (ниже) — размытым. */}
+      <BlurSourceFill sourceId={CALL_BLUR_BG_SOURCE}>
+        <View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: HOME_NAV_BG }]} />
+      </BlurSourceFill>
       <SafeAreaView
         style={[styles.container, { backgroundColor: 'transparent' }]}
         edges={Platform.OS === 'android' ? [] : undefined}
@@ -7812,6 +7824,8 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
         >
           {showRemoteFeed || mainIsLocal ? (
             <View style={styles.unifiedRemoteFill} pointerEvents="none">
+              {/* Источник стекла кнопок: видео под капсулой и «свернуть» видно размытым. */}
+              <BlurListSource sourceId={CALL_BLUR_VIDEO_SOURCE} style={StyleSheet.absoluteFill}>
               {mainIsLocal ? (
                 <LocalVideo
                   localStream={localStream}
@@ -7839,9 +7853,11 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
                   partnerInPiP={partnerInPiP}
                   partnerExternalHold={partnerExternalHoldUi}
                   forceTextureView={Platform.OS === 'android'}
+                  glassTextureView
                   objectFit="cover"
                 />
               )}
+              </BlurListSource>
             </View>
           ) : null}
 
@@ -7859,7 +7875,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
                   <Animated.View style={buildIncomingWaveStyle(incomingWaveA, 'left')} />
                   <Animated.View style={buildIncomingWaveStyle(incomingWaveB, 'right')} />
                   <Animated.View style={incomingCallIconStyle}>
-                    <MaterialIcons name="call" size={48} color="#4FC3F7" />
+                    <MaterialIcons name="call" size={48} color={UI_ACCENT} />
                   </Animated.View>
                 </View>
                 <Text style={styles.incomingOverlayTitle}>{t('incomingCallTitle', lang)}</Text>
@@ -7888,12 +7904,16 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
               {...localPipPanHandlers}
             >
               <Pressable
-                style={styles.unifiedLocalPip}
+                style={[styles.unifiedLocalPip, PIP_ROUNDED && styles.unifiedLocalPipRounded]}
                 onPress={canSwapVideoFeeds ? toggleLocalMainSwap : undefined}
                 disabled={!canSwapVideoFeeds}
                 collapsable={false}
               >
-                <View style={styles.unifiedLocalPipInner} pointerEvents="none" collapsable={false}>
+                <View
+                  style={[styles.unifiedLocalPipInner, PIP_ROUNDED && styles.unifiedLocalPipInnerRounded]}
+                  pointerEvents="none"
+                  collapsable={false}
+                >
                   {mainIsLocal ? (
                     <RemoteVideo
                       remoteStream={currentRemoteStream}
@@ -7912,6 +7932,8 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
                       partnerInPiP={partnerInPiP}
                       partnerExternalHold={partnerExternalHoldUi}
                       forceTextureView={Platform.OS === 'android'}
+                      glassTextureView={PIP_TEXTURE_VIEW}
+                      transparentBackground={PIP_TEXTURE_VIEW}
                       objectFit="cover"
                     />
                   ) : (
@@ -7923,6 +7945,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
                       lang={lang}
                       localExternalHold={localExternalHoldUi}
                       asPipOverlay
+                      textureView={PIP_TEXTURE_VIEW}
                     />
                   )}
                 </View>
