@@ -1,7 +1,7 @@
-/** Message actions sheet (long-press menu) animation/state for ChatScreen. */
+/** Message actions sheet (tap / long-press menu) animation/state for ChatScreen. */
 
 import React from "react";
-import { Animated, Platform } from "react-native";
+import { Animated, Easing, Platform, unstable_batchedUpdates } from "react-native";
 
 export type MessageActionsLayout = {
   x: number;
@@ -15,38 +15,44 @@ type Options = {
   onHidden?: () => void;
 };
 
+/** Меню появляется и уходит коротко — без системного fade модалки. */
+const MESSAGE_ACTIONS_IN_MS = 120;
+const MESSAGE_ACTIONS_OUT_MS = 90;
+
 export function useChatMessageActions({ onHidden }: Options = {}) {
   const [showMessageActions, setShowMessageActions] = React.useState(false);
   const [selectedMessageLayout, setSelectedMessageLayout] =
     React.useState<MessageActionsLayout | null>(null);
   const messageActionsLayoutRef = React.useRef<MessageActionsLayout | null>(null);
-  const messageActionsOpacity = React.useRef(new Animated.Value(0)).current;
-  const messageActionsTranslateY = React.useRef(new Animated.Value(30)).current;
+  /** 0 — меню скрыто, 1 — показано: прозрачность стопки и затемнения. */
+  const messageActionsProgress = React.useRef(new Animated.Value(0)).current;
+  /** Скрытие уже началось — запоздалое проявление его не отменяет. */
+  const closingRef = React.useRef(false);
   const hideMessageActionsRef = React.useRef<() => void>(() => {});
   const onHiddenRef = React.useRef(onHidden);
   onHiddenRef.current = onHidden;
 
   const hideMessageActions = React.useCallback(() => {
-    Animated.parallel([
-      Animated.timing(messageActionsOpacity, {
-        toValue: 0,
-        duration: 160,
-        useNativeDriver: true,
-      }),
-      Animated.timing(messageActionsTranslateY, {
-        toValue: 30,
-        duration: 160,
-        useNativeDriver: true,
-      }),
-    ]).start(() => {
-      setShowMessageActions(false);
-      setSelectedMessageLayout(null);
+    closingRef.current = true;
+    Animated.timing(messageActionsProgress, {
+      toValue: 0,
+      duration: MESSAGE_ACTIONS_OUT_MS,
+      easing: Easing.in(Easing.quad),
+      useNativeDriver: true,
+    }).start(({ finished }) => {
+      // Повторный тап по фону запускает скрытие заново — убираем один раз, по последнему.
+      if (!finished) return;
       messageActionsLayoutRef.current = null;
-      try {
-        onHiddenRef.current?.();
-      } catch {}
+      // Колбэк анимации — вне событий касания: без batch каждый setState перерисовывал чат.
+      unstable_batchedUpdates(() => {
+        setShowMessageActions(false);
+        setSelectedMessageLayout(null);
+        try {
+          onHiddenRef.current?.();
+        } catch {}
+      });
     });
-  }, [messageActionsOpacity, messageActionsTranslateY]);
+  }, [messageActionsProgress]);
 
   React.useEffect(() => {
     hideMessageActionsRef.current = hideMessageActions;
@@ -58,31 +64,40 @@ export function useChatMessageActions({ onHidden }: Options = {}) {
         messageActionsLayoutRef.current = layout;
         setSelectedMessageLayout(layout);
       }
-      const open = () => {
-        setShowMessageActions(true);
-        messageActionsOpacity.setValue(0);
-        messageActionsTranslateY.setValue(30);
-        Animated.parallel([
-          Animated.timing(messageActionsOpacity, {
-            toValue: 1,
-            duration: 120,
-            useNativeDriver: true,
-          }),
-          Animated.timing(messageActionsTranslateY, {
-            toValue: 0,
-            duration: 120,
-            useNativeDriver: true,
-          }),
-        ]).start();
-      };
-      if (Platform.OS === "android" && layout) {
-        requestAnimationFrame(open);
-      } else {
-        open();
-      }
+      // Проявляется через revealMessageActions, когда стопка уже разложена.
+      closingRef.current = false;
+      messageActionsProgress.stopAnimation();
+      messageActionsProgress.setValue(0);
+      setShowMessageActions(true);
     },
-    [messageActionsOpacity, messageActionsTranslateY],
+    [messageActionsProgress],
   );
+
+  /** Убрать сразу, без анимации: меню ещё не проявлялось (двойной тап вместо одиночного). */
+  const dismissMessageActionsNow = React.useCallback(() => {
+    closingRef.current = true;
+    messageActionsProgress.stopAnimation();
+    messageActionsProgress.setValue(0);
+    messageActionsLayoutRef.current = null;
+    unstable_batchedUpdates(() => {
+      setShowMessageActions(false);
+      setSelectedMessageLayout(null);
+      try {
+        onHiddenRef.current?.();
+      } catch {}
+    });
+  }, [messageActionsProgress]);
+
+  /** Стопка меню разложена (замерено поле ввода) — проявить. */
+  const revealMessageActions = React.useCallback(() => {
+    if (closingRef.current) return;
+    Animated.timing(messageActionsProgress, {
+      toValue: 1,
+      duration: MESSAGE_ACTIONS_IN_MS,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+  }, [messageActionsProgress]);
 
   const clearAndroidLayoutIfNeeded = React.useCallback((layout?: MessageActionsLayout) => {
     if (!layout && Platform.OS === "android") {
@@ -96,11 +111,12 @@ export function useChatMessageActions({ onHidden }: Options = {}) {
     selectedMessageLayout,
     setSelectedMessageLayout,
     messageActionsLayoutRef,
-    messageActionsOpacity,
-    messageActionsTranslateY,
+    messageActionsProgress,
     hideMessageActionsRef,
     hideMessageActions,
+    dismissMessageActionsNow,
     showMessageActionsSheet,
+    revealMessageActions,
     clearAndroidLayoutIfNeeded,
   };
 }

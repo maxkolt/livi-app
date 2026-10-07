@@ -202,7 +202,16 @@ export type ChatMessageItemProps = {
   ) => void;
   /** Highlight album tile while actions sheet is open. */
   albumFocusIndex?: number | null;
-  onMessagePress?: (item: any, layout?: { x: number; y: number; width: number; height: number }) => void;
+  /**
+   * Тап по облаку: одиночный — меню, двойной — быстрые реакции. Вызывается сразу,
+   * позицию облака чат замеряет сам через measureBubble, когда она нужна.
+   */
+  onMessagePress?: (
+    item: any,
+    measureBubble: (done: (layout?: { x: number; y: number; width: number; height: number }) => void) => void,
+  ) => void;
+  /** Тап по облаку звонка — перезвонить. */
+  onPressCallBubble?: (item: any) => void;
   onReactionPress?: (messageId: string, emoji: string) => void;
   selectionMode: boolean;
   isSelected: boolean;
@@ -234,7 +243,7 @@ export type ChatMessageItemProps = {
 };
 
 
-export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, uploadStatus, onPressImage, onPressAudio, playingAudioId, playingAudioState, onLongPressMessage, isLayoutBlockedByChrome, onLongPressAlbumTile, albumFocusIndex = null, onMessagePress, onReactionPress, selectionMode, isSelected, onToggleSelect, selectedAlbumIndices = [], onToggleAlbumTileSelect, retryUiForId, onToggleRetryUi, onRetryFailed, resolveMediaUri, peerDisplayName, highlightedMessageId, onPressReplyQuote, animateMessagePress, getMessageAnimation, formatDurationDot, BUBBLE_BG_OUT, BUBBLE_BG_IN, LIVI, isDark, lang, centered = false }: ChatMessageItemProps) => {
+export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, uploadStatus, onPressImage, onPressAudio, playingAudioId, playingAudioState, onLongPressMessage, isLayoutBlockedByChrome, onLongPressAlbumTile, albumFocusIndex = null, onMessagePress, onPressCallBubble, onReactionPress, selectionMode, isSelected, onToggleSelect, selectedAlbumIndices = [], onToggleAlbumTileSelect, retryUiForId, onToggleRetryUi, onRetryFailed, resolveMediaUri, peerDisplayName, highlightedMessageId, onPressReplyQuote, animateMessagePress, getMessageAnimation, formatDurationDot, BUBBLE_BG_OUT, BUBBLE_BG_IN, LIVI, isDark, lang, centered = false }: ChatMessageItemProps) => {
   const bubbleRef = React.useRef<View>(null);
   const [imageLoadError, setImageLoadError] = React.useState(false);
   const [localImageUri, setLocalImageUri] = React.useState<string | null>(null);
@@ -904,25 +913,25 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
     ? albumGridLayout(Dimensions.get('window').width, albumUrisForLayout.length)
     : null;
   const showSideCheckbox = !!selectionMode;
+  // Позиция облака нужна и меню, и полосе реакций по двойному тапу — она к нему привязана.
+  const measureBubble = React.useCallback(
+    (done: (layout?: { x: number; y: number; width: number; height: number }) => void) => {
+      const node = bubbleRef.current;
+      if (!node) {
+        done(undefined);
+        return;
+      }
+      node.measureInWindow((x, y, w, h) => done({ x, y, width: w, height: h }));
+    },
+    [],
+  );
   const handleBubblePress = React.useCallback(() => {
     if (canToggle) {
       onToggleSelect?.(String(item.id));
       return;
     }
-    // Позиция облака нужна полосе реакций по двойному тапу — она к нему привязана.
-    const node = bubbleRef.current;
-    if (!node) {
-      onMessagePress?.(item);
-      return;
-    }
-    const measure = () => {
-      node.measureInWindow((x, y, w, h) => {
-        onMessagePress?.(item, { x, y, width: w, height: h });
-      });
-    };
-    if (Platform.OS === 'android') requestAnimationFrame(measure);
-    else measure();
-  }, [canToggle, item, onToggleSelect, onMessagePress]);
+    onMessagePress?.(item, measureBubble);
+  }, [canToggle, item, onToggleSelect, onMessagePress, measureBubble]);
   const isQuotedTargetHighlighted =
     highlightedMessageId != null && String(highlightedMessageId) === String(item.id);
 
@@ -1044,16 +1053,20 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
       >
         {!isMyMessage && checkbox}
         <Pressable
-          onPress={handleBubblePress}
+          // Звонок: тап — перезвонить (с подтверждением), зажатие — меню действий.
+          onPress={() => {
+            if (selectionMode) {
+              onToggleSelect?.(String(item.id));
+              return;
+            }
+            animateMessagePress(item.id, () => onPressCallBubble?.(item), { immediate: true });
+          }}
           onLongPress={() => {
             if (selectionMode) {
               onToggleSelect?.(String(item.id));
               return;
             }
-            bubbleRef.current?.measureInWindow((x, y, w, h) => {
-              if (isLayoutBlockedByChrome?.({ x, y, width: w, height: h })) return;
-              onLongPressMessage(item, { x, y, width: w, height: h });
-            });
+            openMessageActionsFromBubble();
           }}
           delayLongPress={MESSAGE_LONG_PRESS_MS}
         >

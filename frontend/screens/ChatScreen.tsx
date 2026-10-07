@@ -25,6 +25,7 @@ import {
   StyleSheet,
   Share,
   InteractionManager,
+  unstable_batchedUpdates,
 } from "react-native";
 import { SystemBars } from 'react-native-edge-to-edge';
  
@@ -184,7 +185,7 @@ import { styles as homeStyles } from './home/styles';
 import { emitRequestDirectCall } from '../utils/globalEvents';
 import { markChatCallBubbleEligible } from './chat/chatCallEvents';
 import {
-  ReactionBarModal,
+  ReactionBarOverlay,
   ReactionsRowWithSwipe,
   SHEET_REACTIONS_ALL,
 } from './chat/chatReactions';
@@ -853,19 +854,29 @@ export default function ChatScreen({ route, navigation }: Props) {
     setAlbumFocusIndex(null);
   }, [closeAlbumScopeBase]);
   const [msgReactionsExpanded, setMsgReactionsExpanded] = useState(false);
+  /** Верх поля ввода в координатах экрана чата: по нему стопка меню встаёт над ним. */
+  const [msgActionsComposerTop, setMsgActionsComposerTop] = useState<number | null>(null);
+  /**
+   * Меню по тапу уже отрисовано, но ждёт, не будет ли второго тапа: невидимо и
+   * пропускает касания к чату (второй тап должен попасть в облако).
+   */
+  const [msgActionsHeld, setMsgActionsHeld] = useState(false);
   // Message actions sheet — useChatMessageActions
   const clearAlbumFocusOnActionsHidden = React.useCallback(() => {
     setAlbumFocusIndex(null);
     setMsgReactionsExpanded(false);
+    setMsgActionsComposerTop(null);
+    setMsgActionsHeld(false);
   }, []);
   const {
     showMessageActions,
     messageActionsLayoutRef,
-    messageActionsOpacity,
-    messageActionsTranslateY,
+    messageActionsProgress,
     hideMessageActionsRef,
     hideMessageActions,
+    dismissMessageActionsNow,
     showMessageActionsSheet,
+    revealMessageActions,
     clearAndroidLayoutIfNeeded,
   } = useChatMessageActions({ onHidden: clearAlbumFocusOnActionsHidden });
   /**
@@ -873,18 +884,59 @@ export default function ChatScreen({ route, navigation }: Props) {
    * выше — копия зажатого облака и строка реакций. Верх поля ввода считаем от
    * верха самой модалки: оба замера в одной системе (measureInWindow), так что
    * неважно, заходит модалка под статус-бар или нет.
+   * Слой меню — на весь экран (фон и под системными кнопками), сверху отступ от статус-бара.
    */
   const MSG_ACTIONS_EDGE_PAD = 12;
+  const msgActionsTopPad = insets.top + MSG_ACTIONS_EDGE_PAD;
   const MSG_ACTIONS_COMPOSER_GAP = 16;
   /** Меньше этого копия облака не сжимается — список уступает место ей. */
   const MSG_ACTIONS_PREVIEW_MIN_H = 56;
   const chatComposerDockRef = useRef<View>(null);
   const msgActionsRootRef = useRef<View>(null);
-  const [msgActionsComposerTop, setMsgActionsComposerTop] = useState<number | null>(null);
+  /** Корень экрана чата: слой меню лежит на нём целиком, начало координат общее. */
+  const chatScreenRootRef = useRef<View>(null);
+  // Стопка встала над полем ввода — проявляем её (до замера она прозрачна).
   useEffect(() => {
-    if (!showMessageActions) setMsgActionsComposerTop(null);
-  }, [showMessageActions]);
-  /** Верх поля ввода в координатах модалки — по её первому layout. */
+    if (showMessageActions && msgActionsComposerTop != null && !msgActionsHeld) revealMessageActions();
+  }, [showMessageActions, msgActionsComposerTop, msgActionsHeld, revealMessageActions]);
+  /**
+   * Верх поля ввода — заранее, до открытия меню: тогда меню встаёт на место в
+   * том же рендере, что и появляется. Нет ответа замера — открываем без него
+   * (слой меню сам замерит поле ввода по своему layout).
+   */
+  const measureMsgActionsComposerTop = React.useCallback((done: (top: number | null) => void) => {
+    const root = chatScreenRootRef.current;
+    const dock = chatComposerDockRef.current;
+    if (Platform.OS !== 'android' || !root || !dock) {
+      done(null);
+      return;
+    }
+    let rootY: number | null = null;
+    let dockTop: number | null = null;
+    let answered = 0;
+    let finished = false;
+    const finish = (top: number | null) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(fallback);
+      done(top);
+    };
+    const fallback = setTimeout(() => finish(null), 120);
+    const collect = () => {
+      answered += 1;
+      if (answered < 2) return;
+      finish(rootY != null && dockTop != null ? Math.round(dockTop - rootY) : null);
+    };
+    root.measureInWindow((_x, y) => {
+      rootY = y;
+      collect();
+    });
+    dock.measureInWindow((_x, y, _w, h) => {
+      dockTop = h > 0 ? y : null;
+      collect();
+    });
+  }, []);
+  /** Запасной замер — по первому layout слоя меню, если заранее не вышло. */
   const measureMsgActionsComposer = React.useCallback(() => {
     const root = msgActionsRootRef.current;
     const dock = chatComposerDockRef.current;
@@ -901,8 +953,8 @@ export default function ChatScreen({ route, navigation }: Props) {
   }, []);
   /** Низ стопки меню в координатах модалки. */
   const msgActionsStackBottom =
-    (msgActionsComposerTop ?? MSG_ACTIONS_EDGE_PAD) - MSG_ACTIONS_COMPOSER_GAP;
-  const msgActionsStackH = Math.max(0, msgActionsStackBottom - MSG_ACTIONS_EDGE_PAD);
+    (msgActionsComposerTop ?? msgActionsTopPad) - MSG_ACTIONS_COMPOSER_GAP;
+  const msgActionsStackH = Math.max(0, msgActionsStackBottom - msgActionsTopPad);
   const closeActionsOnEnterSelection = React.useCallback(() => {
     try {
       hideMessageActionsRef.current();
@@ -957,6 +1009,10 @@ export default function ChatScreen({ route, navigation }: Props) {
   const [reactionBarAnchor, setReactionBarAnchor] = useState<
     { x: number; y: number; width: number; height: number; isOwn: boolean } | null
   >(null);
+  const closeReactionBar = React.useCallback(() => {
+    setReactionBarForMessageId(null);
+    setReactionBarAnchor(null);
+  }, []);
   /** ID сообщения, которое пользователь редактирует (текст в поле ввода). */
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   /** Сообщение, на которое отвечаем (показываем превью над полем ввода). */
@@ -2029,6 +2085,14 @@ export default function ChatScreen({ route, navigation }: Props) {
   useEffect(() => {
     if (Platform.OS !== 'android') return;
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (showMessageActions) {
+        hideMessageActions();
+        return true;
+      }
+      if (reactionBarForMessageId !== null) {
+        closeReactionBar();
+        return true;
+      }
       if (selectionMode) {
         exitSelectionMode();
         return true;
@@ -2044,7 +2108,7 @@ export default function ChatScreen({ route, navigation }: Props) {
       return false;
     });
     return () => sub.remove();
-  }, [selectionMode, exitSelectionMode, navigation, emojiPanelOpen]);
+  }, [showMessageActions, hideMessageActions, reactionBarForMessageId, closeReactionBar, selectionMode, exitSelectionMode, navigation, emojiPanelOpen]);
 
   useEffect(() => {
     const selectedId = String(selectedMessage?.id || '').trim();
@@ -2164,6 +2228,17 @@ export default function ChatScreen({ route, navigation }: Props) {
     });
   }, [peerId, peerNameState, peerAvatarVerState, fullAvatarUri, peerAvatarThumbB64Param, peerOnline]);
 
+  /** Тап по облаку звонка — перезвонить; облако легко задеть случайно, поэтому сначала спросить. */
+  const handleCallBubblePress = React.useCallback(() => {
+    openConfirm({
+      title: t('chatCallBackTitle', lang).replace('{name}', peerNameState || peerNameParam || ''),
+      message: t('audioCallStatus', lang),
+      okText: t('chatCallBackOk', lang),
+      cancelText: t('cancelAction', lang),
+      onConfirm: handleHeaderCall,
+    });
+  }, [openConfirm, handleHeaderCall, lang, peerNameState, peerNameParam]);
+
   // Стекло шапки и композера (Android 12+): фон и обои как есть, лента — размытой.
   const chatBlurKey = React.useId();
   const chatBlurStageId = `${chatBlurKey}-stage`;
@@ -2220,7 +2295,7 @@ export default function ChatScreen({ route, navigation }: Props) {
     showNotice,
   });
 
-  const { handleLongPressMessage, handleLongPressAlbumTile } = useChatLongPressMessage({
+  const { handleLongPressMessage } = useChatLongPressMessage({
     currentUserId,
     lang,
     messageTextRef,
@@ -2236,6 +2311,53 @@ export default function ChatScreen({ route, navigation }: Props) {
     requestImageAction,
     isLayoutBlockedByChrome,
   });
+
+  type BubbleLayout = { x: number; y: number; width: number; height: number };
+  /**
+   * Открыть меню сообщения одним рендером. Старая архитектура RN не объединяет
+   * setState вне обработчиков касания (таймер, колбэк замера) — без batch каждый
+   * из них заново перерисовывал весь чат, и меню появлялось через секунду.
+   */
+  const openMessageActions = React.useCallback(
+    (
+      m: any,
+      layout?: BubbleLayout,
+      focusIndex: number | null = null,
+      composerTop: number | null = null,
+      held = false,
+    ): boolean => {
+      if (layout && isLayoutBlockedByChrome(layout)) return false;
+      unstable_batchedUpdates(() => {
+        if (composerTop != null) setMsgActionsComposerTop(composerTop);
+        setMsgActionsHeld(held);
+        handleLongPressMessage(m, layout, focusIndex);
+      });
+      return true;
+    },
+    [isLayoutBlockedByChrome, handleLongPressMessage],
+  );
+  /** Второго тапа не было — проявить заранее отрисованное меню. */
+  const releaseHeldMessageActions = React.useCallback(
+    (laidOut: boolean) => {
+      // Анимация — сразу, на нативном драйвере; рендер, делающий меню нажимаемым, — следом.
+      if (laidOut) revealMessageActions();
+      setMsgActionsHeld(false);
+    },
+    [revealMessageActions],
+  );
+  /** Зажатие облака / плитки альбома: сперва верх поля ввода, потом меню. */
+  const openMessageActionsFromLongPress = React.useCallback(
+    (m: any, layout: BubbleLayout) => {
+      measureMsgActionsComposerTop((top) => openMessageActions(m, layout, null, top));
+    },
+    [measureMsgActionsComposerTop, openMessageActions],
+  );
+  const openAlbumTileActionsFromLongPress = React.useCallback(
+    (m: any, index: number, layout: BubbleLayout) => {
+      measureMsgActionsComposerTop((top) => openMessageActions(m, layout, index, top));
+    },
+    [measureMsgActionsComposerTop, openMessageActions],
+  );
 
   // Функция для получения анимации сообщения (стабильная ссылка, чтобы не ломать мемоизацию)
   const getMessageAnimation = React.useCallback((messageId: string) => {
@@ -2288,24 +2410,95 @@ export default function ChatScreen({ route, navigation }: Props) {
     [getMessageAnimation]
   );
 
-  // Двойной тап по облачку сообщения — показать полосу реакций
-  const lastTapForReactionRef = useRef({ time: 0, id: '' });
+  /**
+   * Тап по облаку: двойной — полоса быстрых реакций, одиночный — меню сообщения.
+   * Одиночный ждёт второго тапа совсем недолго. Чтобы ожидание не складывалось с
+   * рендером, меню рисуется сразу — невидимым и прозрачным для касаний, — а по
+   * истечении ожидания только проявляется. Облако сжимается сразу.
+   */
+  const MESSAGE_DOUBLE_TAP_MS = 250;
+  type PendingMessageTap = {
+    id: string;
+    timer: ReturnType<typeof setTimeout> | null;
+    layout?: BubbleLayout;
+    composerTop: number | null;
+    /** Сколько замеров (облако, поле ввода) ещё не вернулось. */
+    measuring: number;
+    /** Меню уже отрисовано (невидимым или нет). */
+    opened: boolean;
+    /** Ожидание второго тапа кончилось. */
+    released: boolean;
+  };
+  const pendingMessageTapRef = useRef<PendingMessageTap | null>(null);
+  useEffect(() => () => {
+    const pending = pendingMessageTapRef.current;
+    if (pending?.timer) clearTimeout(pending.timer);
+  }, []);
   const handleMessagePress = React.useCallback((
     item: any,
-    layout?: { x: number; y: number; width: number; height: number },
+    measureBubble: (done: (layout?: BubbleLayout) => void) => void,
   ) => {
-    const now = Date.now();
-    const prev = lastTapForReactionRef.current;
-    if (prev.id === item.id && now - prev.time < 400) {
-      const isOwn = item?.from === currentUserId || item?.sender === 'me';
-      setReactionBarAnchor(layout ? { ...layout, isOwn } : null);
-      setReactionBarForMessageId(item.id);
-      lastTapForReactionRef.current = { time: 0, id: '' };
-      return;
+    const id = String(item?.id ?? '');
+    const pending = pendingMessageTapRef.current;
+    if (pending) {
+      if (pending.timer) clearTimeout(pending.timer);
+      pendingMessageTapRef.current = null;
+      if (pending.id === id) {
+        // Двойной тап: невидимое меню убрать, у облака — полоса реакций.
+        const isOwn = item?.from === currentUserId || item?.sender === 'me';
+        const showBar = (layout?: BubbleLayout) => {
+          unstable_batchedUpdates(() => {
+            if (pending.opened) dismissMessageActionsNow();
+            setReactionBarAnchor(layout ? { ...layout, isOwn } : null);
+            setReactionBarForMessageId(id);
+          });
+        };
+        if (pending.layout) showBar(pending.layout);
+        else measureBubble(showBar);
+        return;
+      }
+      if (pending.opened) dismissMessageActionsNow();
     }
-    lastTapForReactionRef.current = { time: now, id: item.id };
-    animateMessagePress(item.id);
-  }, [animateMessagePress, currentUserId]);
+    animateMessagePress(item.id, undefined, { immediate: true });
+    const tap: PendingMessageTap = {
+      id,
+      timer: null,
+      composerTop: null,
+      measuring: 2,
+      opened: false,
+      released: false,
+    };
+    pendingMessageTapRef.current = tap;
+    const measured = () => {
+      tap.measuring -= 1;
+      if (tap.measuring > 0 || tap.released || pendingMessageTapRef.current !== tap) return;
+      // iOS: меню — системный ActionSheet, заранее его не нарисовать.
+      if (Platform.OS === 'android') {
+        tap.opened = openMessageActions(item, tap.layout, null, tap.composerTop, true);
+      }
+    };
+    measureBubble((layout) => {
+      tap.layout = layout;
+      measured();
+    });
+    measureMsgActionsComposerTop((top) => {
+      tap.composerTop = top;
+      measured();
+    });
+    tap.timer = setTimeout(() => {
+      tap.released = true;
+      if (pendingMessageTapRef.current === tap) pendingMessageTapRef.current = null;
+      if (tap.opened) releaseHeldMessageActions(tap.composerTop != null);
+      else tap.opened = openMessageActions(item, tap.layout, null, tap.composerTop);
+    }, MESSAGE_DOUBLE_TAP_MS);
+  }, [
+    animateMessagePress,
+    currentUserId,
+    openMessageActions,
+    releaseHeldMessageActions,
+    dismissMessageActionsNow,
+    measureMsgActionsComposerTop,
+  ]);
 
   /**
    * Своя реакция — переключатель: стоит (в т.ч. ещё не отправленная) — снять, нет — поставить.
@@ -2609,6 +2802,17 @@ export default function ChatScreen({ route, navigation }: Props) {
     resolvedInputBarH,
   ]);
 
+  /**
+   * Подсветка плитки альбома под меню. Для обычных сообщений — null, так что
+   * открытие меню не меняет renderMessageRow и лента не перерисовывается.
+   */
+  const albumFocusMessageId =
+    showMessageActions && albumFocusIndex != null ? String(selectedMessage?.id || '') : '';
+  const albumFocus = React.useMemo(
+    () => (albumFocusMessageId ? { id: albumFocusMessageId, index: albumFocusIndex as number } : null),
+    [albumFocusMessageId, albumFocusIndex],
+  );
+
   const renderMessageRow = React.useCallback(
     ({ item, centered }: { item: ChatListRow; centered?: boolean }) => {
       if (item.type === 'date') {
@@ -2651,17 +2855,14 @@ export default function ChatScreen({ route, navigation }: Props) {
           retryUiForId={retryUiForId}
           onToggleRetryUi={handleToggleRetryUi}
           onRetryFailed={retryFailedOutgoingMessage}
-          onLongPressMessage={handleLongPressMessage}
+          onLongPressMessage={openMessageActionsFromLongPress}
           isLayoutBlockedByChrome={isLayoutBlockedByChrome}
-          onLongPressAlbumTile={handleLongPressAlbumTile}
+          onLongPressAlbumTile={openAlbumTileActionsFromLongPress}
           albumFocusIndex={
-            showMessageActions &&
-            selectedMessage &&
-            String(selectedMessage?.id || '') === String(msg?.id || '')
-              ? albumFocusIndex
-              : null
+            albumFocus && albumFocus.id === String(msg?.id || '') ? albumFocus.index : null
           }
           onMessagePress={handleMessagePress}
+          onPressCallBubble={handleCallBubblePress}
           onReactionPress={handleReactionPress}
           selectionMode={selectionMode}
           isSelected={
@@ -2705,13 +2906,12 @@ export default function ChatScreen({ route, navigation }: Props) {
       retryUiForId,
       handleToggleRetryUi,
       retryFailedOutgoingMessage,
-      handleLongPressMessage,
+      openMessageActionsFromLongPress,
       isLayoutBlockedByChrome,
-      handleLongPressAlbumTile,
-      showMessageActions,
-      selectedMessage,
-      albumFocusIndex,
+      openAlbumTileActionsFromLongPress,
+      albumFocus,
       handleMessagePress,
+      handleCallBubblePress,
       handleReactionPress,
       selectionMode,
       selectedMessageIds,
@@ -2740,7 +2940,7 @@ export default function ChatScreen({ route, navigation }: Props) {
     : {};
 
   return (
-    <View style={{ flex: 1, backgroundColor: HOME_NAV_BG }}>
+    <View ref={chatScreenRootRef} style={{ flex: 1, backgroundColor: HOME_NAV_BG }}>
     {/* Под стеклом фон и обои — без размытия (размывается только лента). */}
     <BlurSourceFill sourceId={chatBlurStageId}>
     {/* Сплошной фон, как на вкладках главной. */}
@@ -3825,427 +4025,6 @@ export default function ChatScreen({ route, navigation }: Props) {
         </View>
       )}
 
-      {/* Полоса реакций: двойной тап по сообщению; свайп вправо — ещё 6 эмодзи */}
-      {reactionBarForMessageId !== null && (
-        <ReactionBarModal
-          visible={true}
-          backdrop={chatBackdrop}
-          anchor={reactionBarAnchor}
-          onClose={() => {
-            setReactionBarForMessageId(null);
-            setReactionBarAnchor(null);
-          }}
-          onPickEmoji={(emoji) => {
-            toggleMyReaction(reactionBarForMessageId, emoji);
-            setReactionBarForMessageId(null);
-            setReactionBarAnchor(null);
-          }}
-          isDark={isDark}
-        />
-      )}
-
-      {/* Android: как в Telegram — сверху строка реакций, ниже список действий у края облака */}
-      {Platform.OS === 'android' && showMessageActions && selectedMessage && (
-        <Modal
-          transparent
-          visible={showMessageActions}
-          animationType="fade"
-          onRequestClose={hideMessageActions}
-          onShow={measureMsgActionsComposer}
-        >
-          <Pressable
-            ref={msgActionsRootRef}
-            onPress={hideMessageActions}
-            onLayout={measureMsgActionsComposer}
-            style={{
-              flex: 1,
-              // Чат приглушён — видно, какое облако выбрано (его копия над меню).
-              backgroundColor: 'rgba(0,0,0,0.58)',
-            }}
-          >
-            <View
-              pointerEvents={msgActionsComposerTop == null ? 'none' : 'box-none'}
-              style={{
-                position: 'absolute',
-                left: 0,
-                right: 0,
-                top: MSG_ACTIONS_EDGE_PAD,
-                height: msgActionsStackH,
-                overflow: 'hidden',
-                opacity: msgActionsComposerTop == null ? 0 : 1,
-              }}
-            >
-              {(() => {
-                const msgId = selectedMessage?.id != null ? String(selectedMessage.id) : '';
-                const isOwnMsg = selectedMessage?.from === currentUserId || selectedMessage?.sender === 'me';
-                const isImageMsg = String(selectedMessage?.type || '') === 'image';
-                const hasText = !!String(selectedMessage?.text || '').trim();
-                const hasSticker = !!String(selectedMessage?.stickerId || '').trim();
-                const hasContent = hasText || hasSticker || isImageMsg || !!String(selectedMessage?.uri || '').trim();
-                const isRead =
-                  isOwnMsg && (readStatuses[msgId] === 'read' || (!readStatuses[msgId] && !!selectedMessage?.read));
-                const myEmojis = new Set(
-                  withPendingReactions(selectedMessage?.reactions, msgId, currentUserId)
-                    .filter((r) => String(r.userId) === String(currentUserId))
-                    .map((r) => r.emoji),
-                );
-                const emojis = msgReactionsExpanded
-                  ? SHEET_REACTIONS_ALL
-                  : SHEET_REACTIONS_ALL.slice(0, MSG_REACTIONS_COLLAPSED);
-                const emojiFontSize = msgActionsLandscape ? 22 : 26;
-                // Стекло: сквозь блоки меню размыт чат (Modal — другое окно, стекло ищет чат по экрану).
-                const menuGlass = isDark && GLASS_AVAILABLE;
-                const surface = {
-                  overflow: 'hidden' as const,
-                  backgroundColor: menuGlass ? 'transparent' : isDark ? WELCOME_POPUP_SURFACE : LIVI.bg,
-                  borderWidth: menuGlass ? 0 : isDark ? StyleSheet.hairlineWidth : 1,
-                  borderColor: isDark ? WELCOME_GLASS_RIM : 'rgba(0,0,0,0.06)',
-                };
-                const emojiPress = (emoji: string) => {
-                  hideMessageActions();
-                  if (msgId) toggleMyReaction(msgId, emoji);
-                };
-
-                type MenuRow = {
-                  key: string;
-                  label: string;
-                  icon: React.ComponentProps<typeof Ionicons>['name'];
-                  onPress: () => void;
-                  danger?: boolean;
-                };
-                const rows: MenuRow[] = [];
-                if (hasContent) {
-                  rows.push({
-                    key: 'reply',
-                    label: t('chatActionReply', lang),
-                    icon: 'arrow-undo-outline',
-                    onPress: () => {
-                      setEditingMessageId(null);
-                      messageTextRef.current = '';
-                      setMessageText('');
-                      setReplyingToMessage({
-                        id: msgId,
-                        text: getChatReplyPreviewText(selectedMessage, lang),
-                        from: selectedMessage?.from,
-                        isOwn: isOwnMsg,
-                      });
-                    },
-                  });
-                  if (!isImageMsg && (hasText || hasSticker)) {
-                    rows.push({
-                      key: 'copy',
-                      label: t('chatActionCopy', lang),
-                      icon: 'copy-outline',
-                      onPress: () => void copySelectedMessage(selectedMessage),
-                    });
-                  }
-                  if (isImageMsg) {
-                    rows.push({
-                      key: 'save',
-                      label: t('save', lang),
-                      icon: 'download-outline',
-                      onPress: () => requestImageAction('save', selectedMessage, albumFocusIndex),
-                    });
-                  }
-                  rows.push({
-                    key: 'forward',
-                    label: t('chatActionForward', lang),
-                    icon: 'arrow-redo-outline',
-                    onPress: () =>
-                      isImageMsg
-                        ? requestImageAction('forward', selectedMessage, albumFocusIndex)
-                        : void openForwardPicker(),
-                  });
-                  if (isOwnMsg && String(selectedMessage?.type || '') === 'text') {
-                    rows.push({
-                      key: 'edit',
-                      label: t('chatActionEdit', lang),
-                      icon: 'pencil-outline',
-                      onPress: () => {
-                        const text = String(selectedMessage?.text ?? '');
-                        messageTextRef.current = text;
-                        setMessageText(text);
-                        setEditingMessageId(selectedMessage?.id ?? null);
-                        setReplyingToMessage(null);
-                      },
-                    });
-                  }
-                  rows.push({
-                    key: 'select',
-                    label: t('chatActionSelect', lang),
-                    icon: 'checkmark-circle-outline',
-                    onPress: () => enterSelectionModeFromMessage(selectedMessage, albumFocusIndex),
-                  });
-                }
-                rows.push({
-                  key: 'delete',
-                  label: t('delete', lang),
-                  icon: 'trash-outline',
-                  danger: true,
-                  onPress: () => {
-                    if (isImageMsg) requestImageAction('delete', selectedMessage, albumFocusIndex);
-                    else confirmDeleteSelectedMessage(selectedMessage);
-                  },
-                });
-
-                // Landscape: список — своя колонка во всю высоту; не влезает — строки
-                // чуть мельче (не меньше 80%), дальше прокрутка.
-                const baseRowHeight = msgActionsLandscape ? 40 : 48;
-                const listNaturalH = rows.length * baseRowHeight + 8 + (isRead ? baseRowHeight : 0);
-                const listFit = msgActionsLandscape
-                  ? Math.min(1, Math.max(0.8, msgActionsStackH / listNaturalH))
-                  : 1;
-                const rowHeight = Math.round(baseRowHeight * listFit);
-                const rowPadH = msgActionsLandscape ? 12 : 16;
-                const iconGap = Math.round((msgActionsLandscape ? 12 : 16) * listFit);
-                const actionFontSize = Math.round((msgActionsLandscape ? 14 : 16) * listFit);
-                const actionIconSize = Math.round((msgActionsLandscape ? 19 : 22) * listFit);
-
-                // Portrait: реакции и список целиком, копия облака — сколько останется
-                // (длинное сообщение обрезается, а не меню).
-                const pillRows = msgReactionsExpanded
-                  ? Math.ceil((SHEET_REACTIONS_ALL.length + 1) / (MSG_REACTIONS_COLLAPSED + 1))
-                  : 1;
-                const pillH = pillRows * msgReactionCell + 10;
-                const listMaxH = msgActionsLandscape
-                  ? msgActionsStackH
-                  : Math.max(
-                      160,
-                      msgActionsStackH - pillH - msgActionsBlockGap * 2 - MSG_ACTIONS_PREVIEW_MIN_H,
-                    );
-
-                // Реакции: строка эмодзи и стрелка, которая раскрывает все.
-                const reactionsRadius = msgReactionsExpanded ? 22 : (msgReactionCell + 8) / 2;
-                const reactionsPill = (
-                  <View
-                    style={{
-                      ...surface,
-                      width: msgActionsCardWidth,
-                      borderRadius: reactionsRadius,
-                      padding: 4,
-                      flexDirection: 'row',
-                      flexWrap: 'wrap',
-                      alignItems: 'center',
-                    }}
-                  >
-                    {menuGlass ? <GlassFill backdrop={chatBackdrop} style={{ borderRadius: reactionsRadius }} /> : null}
-                    {emojis.map((emoji) => (
-                      <Pressable
-                        key={emoji}
-                        onPress={() => emojiPress(emoji)}
-                        hitSlop={2}
-                        style={({ pressed }) => ({
-                          width: msgReactionCell,
-                          height: msgReactionCell,
-                          borderRadius: msgReactionCell / 2,
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          backgroundColor: pressed
-                            ? 'rgba(255,255,255,0.08)'
-                            : myEmojis.has(emoji)
-                              ? 'rgba(255,255,255,0.12)'
-                              : 'transparent',
-                        })}
-                      >
-                        <Text style={{ fontSize: emojiFontSize }}>{emoji}</Text>
-                      </Pressable>
-                    ))}
-                    <Pressable
-                      onPress={() => setMsgReactionsExpanded((v) => !v)}
-                      hitSlop={4}
-                      accessibilityRole="button"
-                      style={{ width: msgReactionCell, height: msgReactionCell, alignItems: 'center', justifyContent: 'center' }}
-                    >
-                      {({ pressed }) => (
-                        <View
-                          style={{
-                            width: msgReactionCell - 8,
-                            height: msgReactionCell - 8,
-                            borderRadius: (msgReactionCell - 8) / 2,
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            backgroundColor: pressed ? 'rgba(255,255,255,0.14)' : 'rgba(255,255,255,0.08)',
-                          }}
-                        >
-                          <Ionicons
-                            name={msgReactionsExpanded ? 'chevron-up' : 'chevron-down'}
-                            size={actionIconSize - 2}
-                            color="rgba(255,255,255,0.8)"
-                          />
-                        </View>
-                      )}
-                    </Pressable>
-                  </View>
-                );
-                const actionsList = (
-                  <View
-                    style={{
-                      ...surface,
-                      width: msgActionsListWidth,
-                      maxHeight: listMaxH,
-                      borderRadius: 12,
-                      ...(isDark ? null : { backgroundColor: 'rgba(21,31,51,0.90)' }),
-                    }}
-                  >
-                    {menuGlass ? <GlassFill backdrop={chatBackdrop} style={{ borderRadius: 12 }} /> : null}
-                    {isRead ? (
-                      <>
-                        <View
-                          style={{
-                            flexDirection: 'row',
-                            alignItems: 'center',
-                            height: rowHeight - 4,
-                            paddingHorizontal: rowPadH,
-                          }}
-                        >
-                          <Ionicons
-                            name="checkmark-done"
-                            size={actionIconSize - 2}
-                            color={CHAT_READ_TICK_COLOR}
-                            style={{ marginRight: iconGap - 4 }}
-                          />
-                          <Text style={{ color: WELCOME_MUTED_TEXT, fontSize: actionFontSize - 1 }} numberOfLines={1}>
-                            {t('chatMessageReadStatus', lang)}
-                          </Text>
-                        </View>
-                        <View style={{ height: msgActionsLandscape ? 4 : 6, backgroundColor: 'rgba(0,0,0,0.28)' }} />
-                      </>
-                    ) : null}
-                    <ScrollView
-                      // flexGrow 0: по умолчанию ScrollView растёт, и в landscape-колонке
-                      // список тянулся на всю высоту с пустотой под пунктами.
-                      style={{ flexGrow: 0, flexShrink: 1 }}
-                      contentContainerStyle={{ flexGrow: 0, paddingVertical: 4 }}
-                      showsVerticalScrollIndicator={false}
-                      bounces={false}
-                    >
-                      {rows.map((row) => (
-                        <Pressable
-                          key={row.key}
-                          onPress={() => {
-                            hideMessageActions();
-                            row.onPress();
-                          }}
-                          style={({ pressed }) => ({
-                            flexDirection: 'row',
-                            alignItems: 'center',
-                            height: rowHeight,
-                            paddingHorizontal: rowPadH,
-                            backgroundColor: pressed
-                              ? row.danger
-                                ? 'rgba(255,90,103,0.08)'
-                                : (isDark ? WELCOME_POPUP_PRESSED : LIVI.accent.vivid10)
-                              : 'transparent',
-                          })}
-                        >
-                          <Ionicons
-                            name={row.icon}
-                            size={actionIconSize}
-                            color={row.danger ? '#FF5A67' : LIVI.titan}
-                            style={{ marginRight: iconGap }}
-                          />
-                          <Text
-                            style={{ color: row.danger ? '#FF5A67' : LIVI.white, fontSize: actionFontSize, fontWeight: '400', flexShrink: 1 }}
-                            numberOfLines={1}
-                          >
-                            {row.label}
-                          </Text>
-                        </Pressable>
-                      ))}
-                    </ScrollView>
-                  </View>
-                );
-                const previewRow = renderMessageRow({ item: selectedMessage, centered: true });
-
-                if (msgActionsLandscape) {
-                  // Landscape: одна компактная группа, как стопка в portrait — реакции по центру
-                  // над облаком, список вплотную справа. Облако не влезает — уменьшается целиком.
-                  const sidePadL = Math.max(insets.left, chatChromeSideInset);
-                  const sidePadR = Math.max(insets.right, chatChromeSideInset);
-                  const columnGap = msgActionsBlockGap * 2;
-                  const maxBubbleColumnW = Math.max(
-                    msgActionsCardWidth,
-                    modalLayout.width - sidePadL - sidePadR - columnGap - msgActionsListWidth,
-                  );
-                  // Колонка по ширине зажатого облака — без пустоты между облаком и списком.
-                  const pressedBubbleW = messageActionsLayoutRef.current?.width ?? 0;
-                  const bubbleW = Math.min(
-                    pressedBubbleW > 0 ? Math.ceil(pressedBubbleW) : msgActionsCardWidth,
-                    maxBubbleColumnW,
-                  );
-                  const bubbleColumnW = Math.max(msgActionsCardWidth, bubbleW);
-                  // Строка облака: отступы 16+16, maxWidth 92%, само облако maxWidth 80% —
-                  // рендерим копию на ширине, где облако ложится тем же переносом, что в чате.
-                  const previewRenderW = Math.ceil(Math.max(bubbleW / 0.8 + 32, bubbleW / (0.8 * 0.92))) + 2;
-                  // Фото/альбом фиксированной ширины не переносится — ужимаем по ширине колонки.
-                  const previewWidthScale =
-                    isImageMsg && pressedBubbleW > bubbleColumnW ? bubbleColumnW / pressedBubbleW : 1;
-                  return (
-                    <View
-                      pointerEvents="box-none"
-                      style={{
-                        flex: 1,
-                        justifyContent: 'flex-end',
-                        alignItems: 'center',
-                        paddingLeft: sidePadL,
-                        paddingRight: sidePadR,
-                      }}
-                    >
-                      <View pointerEvents="box-none" style={{ flexDirection: 'row', alignItems: 'center' }}>
-                        <View pointerEvents="box-none" style={{ width: bubbleColumnW, alignItems: 'center' }}>
-                          {reactionsPill}
-                          <View style={{ height: msgActionsBlockGap }} />
-                          <ChatMessagePreviewFit
-                            key={msgId}
-                            maxHeight={msgActionsStackH - pillH - msgActionsBlockGap}
-                            contentWidth={previewRenderW}
-                            widthScale={previewWidthScale}
-                          >
-                            {previewRow}
-                          </ChatMessagePreviewFit>
-                        </View>
-                        <View style={{ width: columnGap }} />
-                        {actionsList}
-                      </View>
-                    </View>
-                  );
-                }
-
-                return (
-                <View
-                  pointerEvents="box-none"
-                  style={{
-                    flex: 1,
-                    // Стопка прижата к низу — над полем ввода; реакции и список по центру.
-                    justifyContent: 'flex-end',
-                    alignItems: 'center',
-                  }}
-                >
-                  {reactionsPill}
-
-                  {/* Копия зажатого облака — по центру, между реакциями и списком. */}
-                  <View
-                    pointerEvents="none"
-                    style={{
-                      alignSelf: 'stretch',
-                      flexShrink: 1,
-                      minHeight: 0,
-                      overflow: 'hidden',
-                      marginVertical: msgActionsBlockGap,
-                    }}
-                  >
-                    {previewRow}
-                  </View>
-
-                  {actionsList}
-                </View>
-                );
-              })()}
-            </View>
-          </Pressable>
-        </Modal>
-      )}
-
       {/* Android: bottom sheet для выбора вложений (камера/галерея) */}
       {Platform.OS === 'android' ? (
         <ChatAttachSheet
@@ -4927,6 +4706,422 @@ export default function ChatScreen({ route, navigation }: Props) {
         </Pressable>
       </Modal>
     </SafeAreaView>
+    {/*
+      Android: как в Telegram — сверху строка реакций, ниже список действий у края облака.
+      Слой в окне чата, а не Modal: затемнение ложится и под системные кнопки (у окна
+      диалога там своя тёмная подложка), и меню открывается без создания нового окна.
+    */}
+    {Platform.OS === 'android' && showMessageActions && selectedMessage && (
+      <Pressable
+        ref={msgActionsRootRef}
+        onPress={hideMessageActions}
+        onLayout={msgActionsComposerTop == null ? measureMsgActionsComposer : undefined}
+        pointerEvents={msgActionsHeld ? 'none' : 'auto'}
+        style={[StyleSheet.absoluteFill, { zIndex: 1000 }]}
+      >
+        {/* Чат приглушён (слегка) — видно, какое облако выбрано (его копия над меню). */}
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            StyleSheet.absoluteFill,
+            { backgroundColor: 'rgba(0,0,0,0.36)', opacity: messageActionsProgress },
+          ]}
+        />
+        <Animated.View
+          pointerEvents={msgActionsComposerTop == null ? 'none' : 'box-none'}
+          style={{
+            position: 'absolute',
+            left: 0,
+            right: 0,
+            top: msgActionsTopPad,
+            height: msgActionsStackH,
+            overflow: 'hidden',
+            opacity: messageActionsProgress,
+          }}
+        >
+          {(() => {
+            const msgId = selectedMessage?.id != null ? String(selectedMessage.id) : '';
+            const isOwnMsg = selectedMessage?.from === currentUserId || selectedMessage?.sender === 'me';
+            const isImageMsg = String(selectedMessage?.type || '') === 'image';
+            const hasText = !!String(selectedMessage?.text || '').trim();
+            const hasSticker = !!String(selectedMessage?.stickerId || '').trim();
+            const hasContent = hasText || hasSticker || isImageMsg || !!String(selectedMessage?.uri || '').trim();
+            const isRead =
+              isOwnMsg && (readStatuses[msgId] === 'read' || (!readStatuses[msgId] && !!selectedMessage?.read));
+            const myEmojis = new Set(
+              withPendingReactions(selectedMessage?.reactions, msgId, currentUserId)
+                .filter((r) => String(r.userId) === String(currentUserId))
+                .map((r) => r.emoji),
+            );
+            const emojis = msgReactionsExpanded
+              ? SHEET_REACTIONS_ALL
+              : SHEET_REACTIONS_ALL.slice(0, MSG_REACTIONS_COLLAPSED);
+            const emojiFontSize = msgActionsLandscape ? 22 : 26;
+            // Стекло: сквозь блоки меню размыт чат (Modal — другое окно, стекло ищет чат по экрану).
+            const menuGlass = isDark && GLASS_AVAILABLE;
+            const surface = {
+              overflow: 'hidden' as const,
+              backgroundColor: menuGlass ? 'transparent' : isDark ? WELCOME_POPUP_SURFACE : LIVI.bg,
+              borderWidth: menuGlass ? 0 : isDark ? StyleSheet.hairlineWidth : 1,
+              borderColor: isDark ? WELCOME_GLASS_RIM : 'rgba(0,0,0,0.06)',
+            };
+            const emojiPress = (emoji: string) => {
+              hideMessageActions();
+              if (msgId) toggleMyReaction(msgId, emoji);
+            };
+
+            type MenuRow = {
+              key: string;
+              label: string;
+              icon: React.ComponentProps<typeof Ionicons>['name'];
+              onPress: () => void;
+              danger?: boolean;
+            };
+            const rows: MenuRow[] = [];
+            if (hasContent) {
+              rows.push({
+                key: 'reply',
+                label: t('chatActionReply', lang),
+                icon: 'arrow-undo-outline',
+                onPress: () => {
+                  setEditingMessageId(null);
+                  messageTextRef.current = '';
+                  setMessageText('');
+                  setReplyingToMessage({
+                    id: msgId,
+                    text: getChatReplyPreviewText(selectedMessage, lang),
+                    from: selectedMessage?.from,
+                    isOwn: isOwnMsg,
+                  });
+                },
+              });
+              if (!isImageMsg && (hasText || hasSticker)) {
+                rows.push({
+                  key: 'copy',
+                  label: t('chatActionCopy', lang),
+                  icon: 'copy-outline',
+                  onPress: () => void copySelectedMessage(selectedMessage),
+                });
+              }
+              if (isImageMsg) {
+                rows.push({
+                  key: 'save',
+                  label: t('save', lang),
+                  icon: 'download-outline',
+                  onPress: () => requestImageAction('save', selectedMessage, albumFocusIndex),
+                });
+              }
+              rows.push({
+                key: 'forward',
+                label: t('chatActionForward', lang),
+                icon: 'arrow-redo-outline',
+                onPress: () =>
+                  isImageMsg
+                    ? requestImageAction('forward', selectedMessage, albumFocusIndex)
+                    : void openForwardPicker(),
+              });
+              if (isOwnMsg && String(selectedMessage?.type || '') === 'text') {
+                rows.push({
+                  key: 'edit',
+                  label: t('chatActionEdit', lang),
+                  icon: 'pencil-outline',
+                  onPress: () => {
+                    const text = String(selectedMessage?.text ?? '');
+                    messageTextRef.current = text;
+                    setMessageText(text);
+                    setEditingMessageId(selectedMessage?.id ?? null);
+                    setReplyingToMessage(null);
+                  },
+                });
+              }
+              rows.push({
+                key: 'select',
+                label: t('chatActionSelect', lang),
+                icon: 'checkmark-circle-outline',
+                onPress: () => enterSelectionModeFromMessage(selectedMessage, albumFocusIndex),
+              });
+            }
+            rows.push({
+              key: 'delete',
+              label: t('delete', lang),
+              icon: 'trash-outline',
+              danger: true,
+              onPress: () => {
+                if (isImageMsg) requestImageAction('delete', selectedMessage, albumFocusIndex);
+                else confirmDeleteSelectedMessage(selectedMessage);
+              },
+            });
+
+            // Landscape: список — своя колонка во всю высоту; не влезает — строки
+            // чуть мельче (не меньше 80%), дальше прокрутка.
+            const baseRowHeight = msgActionsLandscape ? 40 : 48;
+            const listNaturalH = rows.length * baseRowHeight + 8 + (isRead ? baseRowHeight : 0);
+            const listFit = msgActionsLandscape
+              ? Math.min(1, Math.max(0.8, msgActionsStackH / listNaturalH))
+              : 1;
+            const rowHeight = Math.round(baseRowHeight * listFit);
+            const rowPadH = msgActionsLandscape ? 12 : 16;
+            const iconGap = Math.round((msgActionsLandscape ? 12 : 16) * listFit);
+            const actionFontSize = Math.round((msgActionsLandscape ? 14 : 16) * listFit);
+            const actionIconSize = Math.round((msgActionsLandscape ? 19 : 22) * listFit);
+
+            // Portrait: реакции и список целиком, копия облака — сколько останется
+            // (длинное сообщение обрезается, а не меню).
+            const pillRows = msgReactionsExpanded
+              ? Math.ceil((SHEET_REACTIONS_ALL.length + 1) / (MSG_REACTIONS_COLLAPSED + 1))
+              : 1;
+            const pillH = pillRows * msgReactionCell + 10;
+            const listMaxH = msgActionsLandscape
+              ? msgActionsStackH
+              : Math.max(
+                  160,
+                  msgActionsStackH - pillH - msgActionsBlockGap * 2 - MSG_ACTIONS_PREVIEW_MIN_H,
+                );
+
+            // Реакции: строка эмодзи и стрелка, которая раскрывает все.
+            const reactionsRadius = msgReactionsExpanded ? 22 : (msgReactionCell + 8) / 2;
+            const reactionsPill = (
+              <View
+                style={{
+                  ...surface,
+                  width: msgActionsCardWidth,
+                  borderRadius: reactionsRadius,
+                  padding: 4,
+                  flexDirection: 'row',
+                  flexWrap: 'wrap',
+                  alignItems: 'center',
+                }}
+              >
+                {menuGlass ? <GlassFill backdrop={chatBackdrop} style={{ borderRadius: reactionsRadius }} /> : null}
+                {emojis.map((emoji) => (
+                  <Pressable
+                    key={emoji}
+                    onPress={() => emojiPress(emoji)}
+                    hitSlop={2}
+                    style={({ pressed }) => ({
+                      width: msgReactionCell,
+                      height: msgReactionCell,
+                      borderRadius: msgReactionCell / 2,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      backgroundColor: pressed
+                        ? 'rgba(255,255,255,0.08)'
+                        : myEmojis.has(emoji)
+                          ? 'rgba(255,255,255,0.12)'
+                          : 'transparent',
+                    })}
+                  >
+                    <Text style={{ fontSize: emojiFontSize }}>{emoji}</Text>
+                  </Pressable>
+                ))}
+                <Pressable
+                  onPress={() => setMsgReactionsExpanded((v) => !v)}
+                  hitSlop={4}
+                  accessibilityRole="button"
+                  style={{ width: msgReactionCell, height: msgReactionCell, alignItems: 'center', justifyContent: 'center' }}
+                >
+                  {({ pressed }) => (
+                    <View
+                      style={{
+                        width: msgReactionCell - 8,
+                        height: msgReactionCell - 8,
+                        borderRadius: (msgReactionCell - 8) / 2,
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        backgroundColor: pressed ? 'rgba(255,255,255,0.14)' : 'rgba(255,255,255,0.08)',
+                      }}
+                    >
+                      <Ionicons
+                        name={msgReactionsExpanded ? 'chevron-up' : 'chevron-down'}
+                        size={actionIconSize - 2}
+                        color="rgba(255,255,255,0.8)"
+                      />
+                    </View>
+                  )}
+                </Pressable>
+              </View>
+            );
+            const actionsList = (
+              <View
+                style={{
+                  ...surface,
+                  width: msgActionsListWidth,
+                  maxHeight: listMaxH,
+                  borderRadius: 12,
+                  ...(isDark ? null : { backgroundColor: 'rgba(21,31,51,0.90)' }),
+                }}
+              >
+                {menuGlass ? <GlassFill backdrop={chatBackdrop} style={{ borderRadius: 12 }} /> : null}
+                {isRead ? (
+                  <>
+                    <View
+                      style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        height: rowHeight - 4,
+                        paddingHorizontal: rowPadH,
+                      }}
+                    >
+                      <Ionicons
+                        name="checkmark-done"
+                        size={actionIconSize - 2}
+                        color={CHAT_READ_TICK_COLOR}
+                        style={{ marginRight: iconGap - 4 }}
+                      />
+                      <Text style={{ color: WELCOME_MUTED_TEXT, fontSize: actionFontSize - 1 }} numberOfLines={1}>
+                        {t('chatMessageReadStatus', lang)}
+                      </Text>
+                    </View>
+                    <View style={{ height: msgActionsLandscape ? 4 : 6, backgroundColor: 'rgba(0,0,0,0.28)' }} />
+                  </>
+                ) : null}
+                <ScrollView
+                  // flexGrow 0: по умолчанию ScrollView растёт, и в landscape-колонке
+                  // список тянулся на всю высоту с пустотой под пунктами.
+                  style={{ flexGrow: 0, flexShrink: 1 }}
+                  contentContainerStyle={{ flexGrow: 0, paddingVertical: 4 }}
+                  showsVerticalScrollIndicator={false}
+                  bounces={false}
+                >
+                  {rows.map((row) => (
+                    <Pressable
+                      key={row.key}
+                      onPress={() => {
+                        hideMessageActions();
+                        row.onPress();
+                      }}
+                      style={({ pressed }) => ({
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        height: rowHeight,
+                        paddingHorizontal: rowPadH,
+                        backgroundColor: pressed
+                          ? row.danger
+                            ? 'rgba(255,90,103,0.08)'
+                            : (isDark ? WELCOME_POPUP_PRESSED : LIVI.accent.vivid10)
+                          : 'transparent',
+                      })}
+                    >
+                      <Ionicons
+                        name={row.icon}
+                        size={actionIconSize}
+                        color={row.danger ? '#FF5A67' : LIVI.titan}
+                        style={{ marginRight: iconGap }}
+                      />
+                      <Text
+                        style={{ color: row.danger ? '#FF5A67' : LIVI.white, fontSize: actionFontSize, fontWeight: '400', flexShrink: 1 }}
+                        numberOfLines={1}
+                      >
+                        {row.label}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </ScrollView>
+              </View>
+            );
+            const previewRow = renderMessageRow({ item: selectedMessage, centered: true });
+
+            if (msgActionsLandscape) {
+              // Landscape: одна компактная группа, как стопка в portrait — реакции по центру
+              // над облаком, список вплотную справа. Облако не влезает — уменьшается целиком.
+              const sidePadL = Math.max(insets.left, chatChromeSideInset);
+              const sidePadR = Math.max(insets.right, chatChromeSideInset);
+              const columnGap = msgActionsBlockGap * 2;
+              const maxBubbleColumnW = Math.max(
+                msgActionsCardWidth,
+                modalLayout.width - sidePadL - sidePadR - columnGap - msgActionsListWidth,
+              );
+              // Колонка по ширине зажатого облака — без пустоты между облаком и списком.
+              const pressedBubbleW = messageActionsLayoutRef.current?.width ?? 0;
+              const bubbleW = Math.min(
+                pressedBubbleW > 0 ? Math.ceil(pressedBubbleW) : msgActionsCardWidth,
+                maxBubbleColumnW,
+              );
+              const bubbleColumnW = Math.max(msgActionsCardWidth, bubbleW);
+              // Строка облака: отступы 16+16, maxWidth 92%, само облако maxWidth 80% —
+              // рендерим копию на ширине, где облако ложится тем же переносом, что в чате.
+              const previewRenderW = Math.ceil(Math.max(bubbleW / 0.8 + 32, bubbleW / (0.8 * 0.92))) + 2;
+              // Фото/альбом фиксированной ширины не переносится — ужимаем по ширине колонки.
+              const previewWidthScale =
+                isImageMsg && pressedBubbleW > bubbleColumnW ? bubbleColumnW / pressedBubbleW : 1;
+              return (
+                <View
+                  pointerEvents="box-none"
+                  style={{
+                    flex: 1,
+                    justifyContent: 'flex-end',
+                    alignItems: 'center',
+                    paddingLeft: sidePadL,
+                    paddingRight: sidePadR,
+                  }}
+                >
+                  <View pointerEvents="box-none" style={{ flexDirection: 'row', alignItems: 'center' }}>
+                    <View pointerEvents="box-none" style={{ width: bubbleColumnW, alignItems: 'center' }}>
+                      {reactionsPill}
+                      <View style={{ height: msgActionsBlockGap }} />
+                      <ChatMessagePreviewFit
+                        key={msgId}
+                        maxHeight={msgActionsStackH - pillH - msgActionsBlockGap}
+                        contentWidth={previewRenderW}
+                        widthScale={previewWidthScale}
+                      >
+                        {previewRow}
+                      </ChatMessagePreviewFit>
+                    </View>
+                    <View style={{ width: columnGap }} />
+                    {actionsList}
+                  </View>
+                </View>
+              );
+            }
+
+            return (
+            <View
+              pointerEvents="box-none"
+              style={{
+                flex: 1,
+                // Стопка прижата к низу — над полем ввода; реакции и список по центру.
+                justifyContent: 'flex-end',
+                alignItems: 'center',
+              }}
+            >
+              {reactionsPill}
+
+              {/* Копия выбранного облака — по центру, между реакциями и списком. */}
+              <View
+                pointerEvents="none"
+                style={{
+                  alignSelf: 'stretch',
+                  flexShrink: 1,
+                  minHeight: 0,
+                  overflow: 'hidden',
+                  marginVertical: msgActionsBlockGap,
+                }}
+              >
+                {previewRow}
+              </View>
+
+              {actionsList}
+            </View>
+            );
+          })()}
+        </Animated.View>
+      </Pressable>
+    )}
+    {/* Полоса реакций: двойной тап по сообщению; свайп вправо — ещё 6 эмодзи */}
+    {reactionBarForMessageId !== null && (
+      <ReactionBarOverlay
+        visible
+        backdrop={chatBackdrop}
+        anchor={reactionBarAnchor}
+        onClose={closeReactionBar}
+        onPickEmoji={(emoji) => {
+          toggleMyReaction(reactionBarForMessageId, emoji);
+          closeReactionBar();
+        }}
+        isDark={isDark}
+      />
+    )}
     </View>
   );
 }

@@ -735,58 +735,72 @@ app.get('/api/exists/:userId', async (req, res) => {
 });
 
 /* ========= Mongo ========= */
-mongoose
-  .connect(MONGO_URI, {
-    maxPoolSize: 50,
-    minPoolSize: 5,
-    serverSelectionTimeoutMS: 10000,
-    connectTimeoutMS: 10000,
-  })
-  .then(async () => {
-    const dbName = mongoose.connection.db?.databaseName;
-    logger.info('MongoDB connected successfully', {
-      uri: MONGO_URI.replace(/\/\/[^:]+:[^@]+@/, '//***:***@'), // Скрываем пароль
-      dbName: dbName,
-      readyState: mongoose.connection.readyState,
-      host: mongoose.connection.host,
-      port: mongoose.connection.port
+// Потолок паузы между повторами первого подключения к MongoDB.
+const MONGO_CONNECT_RETRY_MAX_MS = 30_000;
+
+// Mongoose сам переподключается только после успешного первого connect. Если первый не прошёл
+// (сеть хостинга теряла пакеты сразу после перезагрузки), без повтора сервер так и жил без БД
+// до ручного рестарта, а клиенты получали database_unavailable на каждый reauth.
+function connectMongo(attempt = 1): void {
+  mongoose
+    .connect(MONGO_URI, {
+      maxPoolSize: 50,
+      minPoolSize: 5,
+      serverSelectionTimeoutMS: 10000,
+      connectTimeoutMS: 10000,
+    })
+    .then(onMongoConnected)
+    .catch((err) => {
+      // КРИТИЧНО: Не завершаем процесс при ошибке MongoDB
+      // Сервер должен работать даже без MongoDB для WebRTC/LiveKit функций
+      const retryMs = Math.min(MONGO_CONNECT_RETRY_MAX_MS, 1000 * 2 ** attempt);
+      logger.error('MongoDB connection failed (server keeps running, will retry):', {
+        error: err?.message || String(err),
+        uri: MONGO_URI.replace(/\/\/[^:]+:[^@]+@/, '//***:***@'),
+        attempt,
+        retryMs,
+      });
+      setTimeout(() => connectMongo(attempt + 1), retryMs);
     });
+}
 
-    // Проверяем количество пользователей при старте
-    try {
-      const User = (await import('./models/User')).default;
-      const { ensureFriendshipMessageItemIndexes } = await import('./models/FriendshipMessageItem');
-      await ensureFriendshipMessageItemIndexes();
-      const userCount = await User.countDocuments();
-      logger.info(`[MongoDB] Current users count in database "${dbName}": ${userCount}`);
-
-      // Также проверяем коллекцию напрямую, если соединение с БД существует
-      let directCount = 0;
-      if (mongoose.connection?.db) {
-        directCount = await mongoose.connection.db.collection('users').countDocuments();
-        logger.info(`[MongoDB] Direct collection count (users): ${directCount}`);
-      } else {
-        logger.warn('[MongoDB] Не удалось получить прямое подключение к коллекции users (mongoose.connection.db undefined)');
-      }
-
-      if (userCount === 0 && directCount === 0) {
-        logger.warn('[MongoDB] ⚠️  База данных пуста - пользователей нет!');
-        logger.warn('[MongoDB] Убедитесь, что используется правильная БД', { dbName });
-      }
-    } catch (e) {
-      logger.warn('[MongoDB] Could not check user count', { error: (e as any)?.message || String(e) });
-    }
-  })
-  .catch((err) => {
-    // КРИТИЧНО: Не завершаем процесс при ошибке MongoDB
-    // Сервер должен работать даже без MongoDB для WebRTC/LiveKit функций
-    logger.error('MongoDB connection failed (server will continue without DB):', {
-      error: err?.message || String(err),
-      uri: MONGO_URI.replace(/\/\/[^:]+:[^@]+@/, '//***:***@')
-    });
-    logger.warn('[MongoDB] Server will continue running, but database features will be unavailable');
-    // УБРАНО: process.exit(1) - сервер должен работать даже без MongoDB
+async function onMongoConnected(): Promise<void> {
+  const dbName = mongoose.connection.db?.databaseName;
+  logger.info('MongoDB connected successfully', {
+    uri: MONGO_URI.replace(/\/\/[^:]+:[^@]+@/, '//***:***@'), // Скрываем пароль
+    dbName: dbName,
+    readyState: mongoose.connection.readyState,
+    host: mongoose.connection.host,
+    port: mongoose.connection.port
   });
+
+  // Проверяем количество пользователей при старте
+  try {
+    const User = (await import('./models/User')).default;
+    const { ensureFriendshipMessageItemIndexes } = await import('./models/FriendshipMessageItem');
+    await ensureFriendshipMessageItemIndexes();
+    const userCount = await User.countDocuments();
+    logger.info(`[MongoDB] Current users count in database "${dbName}": ${userCount}`);
+
+    // Также проверяем коллекцию напрямую, если соединение с БД существует
+    let directCount = 0;
+    if (mongoose.connection?.db) {
+      directCount = await mongoose.connection.db.collection('users').countDocuments();
+      logger.info(`[MongoDB] Direct collection count (users): ${directCount}`);
+    } else {
+      logger.warn('[MongoDB] Не удалось получить прямое подключение к коллекции users (mongoose.connection.db undefined)');
+    }
+
+    if (userCount === 0 && directCount === 0) {
+      logger.warn('[MongoDB] ⚠️  База данных пуста - пользователей нет!');
+      logger.warn('[MongoDB] Убедитесь, что используется правильная БД', { dbName });
+    }
+  } catch (e) {
+    logger.warn('[MongoDB] Could not check user count', { error: (e as any)?.message || String(e) });
+  }
+}
+
+connectMongo();
 
 /* ========= Presence helpers ========= */
 function getOnlineListFromIo(io: Server): string[] {

@@ -3,12 +3,11 @@ import React from "react";
 import {
   View,
   Text,
-  Modal,
   Pressable,
   ScrollView,
   Animated,
+  Easing,
   StyleSheet,
-  useWindowDimensions,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -36,8 +35,16 @@ export type ReactionBarAnchor = {
 const BAR_BUBBLE_GAP = 8;
 const BAR_EDGE_PAD = 12;
 const BAR_HEIGHT_FALLBACK = 64;
+const BAR_APPEAR_MS = 110;
 
-export function ReactionBarModal({
+type OverlayFrame = { x: number; y: number; width: number; height: number };
+
+/**
+ * Полоса быстрых реакций по двойному тапу. Слой поверх экрана чата (не Modal):
+ * у окна диалога снизу своя тёмная подложка под системными кнопками, и окно
+ * создаётся дольше. Ставить последним ребёнком корня экрана — на весь экран.
+ */
+export function ReactionBarOverlay({
   visible,
   onClose,
   onPickEmoji,
@@ -50,14 +57,32 @@ export function ReactionBarModal({
   onPickEmoji: (emoji: string) => void;
   isDark: boolean;
   anchor?: ReactionBarAnchor | null;
-  /** Источники стекла чата: полоса — стекло, сквозь него размыт чат (из Modal — по экрану). */
+  /** Источники стекла чата: полоса — стекло, сквозь него размыт чат. */
   backdrop?: BackdropSources | null;
 }) {
   const glass = isDark && GLASS_AVAILABLE;
   const scrollRef = React.useRef<ScrollView>(null);
   const hintBounce = React.useRef(new Animated.Value(0)).current;
-  const { width: winW, height: winH } = useWindowDimensions();
   const insets = useSafeAreaInsets();
+  // Облако замерено measureInWindow — переводим в координаты слоя по его же замеру.
+  const rootRef = React.useRef<View>(null);
+  const [frame, setFrame] = React.useState<OverlayFrame | null>(null);
+  const appear = React.useRef(new Animated.Value(0)).current;
+  const measureRoot = React.useCallback(() => {
+    rootRef.current?.measureInWindow((x, y, width, height) => {
+      if (width > 0 && height > 0) setFrame({ x, y, width, height });
+    });
+  }, []);
+  const measured = frame != null;
+  React.useEffect(() => {
+    if (!measured) return;
+    Animated.timing(appear, {
+      toValue: 1,
+      duration: BAR_APPEAR_MS,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+  }, [measured, appear]);
 
   React.useEffect(() => {
     if (visible) {
@@ -78,9 +103,13 @@ export function ReactionBarModal({
     return () => loop.stop();
   }, [visible, hintBounce]);
 
+  const winW = frame?.width ?? 0;
+  const winH = frame?.height ?? 0;
   const barWidth = Math.min(320, winW * 0.88);
   const position = React.useMemo(() => {
     const height = BAR_HEIGHT_FALLBACK;
+    const ax = (anchor?.x ?? 0) - (frame?.x ?? 0);
+    const ay = (anchor?.y ?? 0) - (frame?.y ?? 0);
     const minTop = insets.top + BAR_EDGE_PAD;
     const maxTop = Math.max(minTop, winH - insets.bottom - BAR_EDGE_PAD - height);
     const minLeft = insets.left + BAR_EDGE_PAD;
@@ -92,13 +121,13 @@ export function ReactionBarModal({
       return { top: clamp((winH - height) / 2, minTop, maxTop), left: clamp((winW - barWidth) / 2, minLeft, maxLeft) };
     }
     const preferred = anchor.isOwn
-      ? anchor.y + anchor.height + BAR_BUBBLE_GAP
-      : anchor.y - BAR_BUBBLE_GAP - height;
+      ? ay + anchor.height + BAR_BUBBLE_GAP
+      : ay - BAR_BUBBLE_GAP - height;
     return {
       top: clamp(preferred, minTop, maxTop),
-      left: clamp(anchor.x + anchor.width / 2 - barWidth / 2, minLeft, maxLeft),
+      left: clamp(ax + anchor.width / 2 - barWidth / 2, minLeft, maxLeft),
     };
-  }, [anchor, barWidth, winW, winH, insets.top, insets.bottom, insets.left, insets.right]);
+  }, [anchor, frame, barWidth, winW, winH, insets.top, insets.bottom, insets.left, insets.right]);
 
   const barStyle = {
     width: barWidth,
@@ -136,61 +165,68 @@ export function ReactionBarModal({
     </View>
   );
 
+  if (!visible) return null;
   return (
-    <Modal transparent visible={visible} animationType="fade" onRequestClose={onClose}>
-      <Pressable
-        style={{
-          flex: 1,
-          justifyContent: "flex-start",
-          alignItems: "flex-start",
-        }}
-        onPress={onClose}
-      >
-        <Pressable
-          onPress={() => {}}
+    <Pressable
+      ref={rootRef}
+      onLayout={measureRoot}
+      style={[StyleSheet.absoluteFill, { zIndex: 1000, alignItems: "flex-start" }]}
+      onPress={onClose}
+    >
+      {measured ? (
+        <Animated.View
           style={{
             width: barWidth,
             marginTop: position.top,
             marginLeft: position.left,
-            overflow: "hidden",
-            borderRadius: 24,
+            opacity: appear,
+            transform: [{ scale: appear.interpolate({ inputRange: [0, 1], outputRange: [0.94, 1] }) }],
           }}
         >
-          <ScrollView
-            ref={scrollRef}
-            horizontal
-            pagingEnabled
-            showsHorizontalScrollIndicator={false}
-            decelerationRate="fast"
-            snapToInterval={barWidth}
-            snapToAlignment="start"
-            contentContainerStyle={{ flexGrow: 1 }}
-            style={{ borderRadius: 24, overflow: "hidden" }}
+          <Pressable
+            onPress={() => {}}
+            style={{
+              width: barWidth,
+              overflow: "hidden",
+              borderRadius: 24,
+            }}
           >
-            <View style={barStyle}>
-              {glass ? <GlassFill backdrop={backdrop} style={{ borderRadius: 24 }} /> : null}
-              <Animated.View
-                style={{
-                  marginRight: 6,
-                  paddingRight: 8,
-                  borderRightWidth: 1,
-                  borderRightColor: "rgba(255,255,255,0.15)",
-                  transform: [{ translateX: hintBounce }],
-                  justifyContent: "center",
-                }}
-              >
-                <Ionicons name="chevron-back" size={18} color="rgba(255,255,255,0.8)" />
-              </Animated.View>
-              {renderEmojiRow(REACTION_EMOJIS_PAGE_1)}
-            </View>
-            <View style={barStyle}>
-              {glass ? <GlassFill backdrop={backdrop} style={{ borderRadius: 24 }} /> : null}
-              {renderEmojiRow(REACTION_EMOJIS_PAGE_2)}
-            </View>
-          </ScrollView>
-        </Pressable>
-      </Pressable>
-    </Modal>
+            <ScrollView
+              ref={scrollRef}
+              horizontal
+              pagingEnabled
+              showsHorizontalScrollIndicator={false}
+              decelerationRate="fast"
+              snapToInterval={barWidth}
+              snapToAlignment="start"
+              contentContainerStyle={{ flexGrow: 1 }}
+              style={{ borderRadius: 24, overflow: "hidden" }}
+            >
+              <View style={barStyle}>
+                {glass ? <GlassFill backdrop={backdrop} style={{ borderRadius: 24 }} /> : null}
+                <Animated.View
+                  style={{
+                    marginRight: 6,
+                    paddingRight: 8,
+                    borderRightWidth: 1,
+                    borderRightColor: "rgba(255,255,255,0.15)",
+                    transform: [{ translateX: hintBounce }],
+                    justifyContent: "center",
+                  }}
+                >
+                  <Ionicons name="chevron-back" size={18} color="rgba(255,255,255,0.8)" />
+                </Animated.View>
+                {renderEmojiRow(REACTION_EMOJIS_PAGE_1)}
+              </View>
+              <View style={barStyle}>
+                {glass ? <GlassFill backdrop={backdrop} style={{ borderRadius: 24 }} /> : null}
+                {renderEmojiRow(REACTION_EMOJIS_PAGE_2)}
+              </View>
+            </ScrollView>
+          </Pressable>
+        </Animated.View>
+      ) : null}
+    </Pressable>
   );
 }
 
