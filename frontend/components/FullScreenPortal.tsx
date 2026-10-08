@@ -15,6 +15,8 @@ export function FullScreenPortal({
   visible,
   ready = true,
   keepMounted = false,
+  instant = false,
+  onShown,
   onRequestClose,
   children,
 }: {
@@ -29,12 +31,18 @@ export function FullScreenPortal({
    * и без чтения экранным диктором), а открытие только показывает готовое.
    */
   keepMounted?: boolean;
+  /** Появиться сразу, без затухания (закрытие всё равно плавное). */
+  instant?: boolean;
+  /** Слой полностью показан и нарисован. */
+  onShown?: () => void;
   /** Системное «Назад» — как onRequestClose у модалки. */
   onRequestClose: () => void;
   children: React.ReactNode;
 }) {
   const requestCloseRef = useRef(onRequestClose);
   requestCloseRef.current = onRequestClose;
+  const shownRef = useRef(onShown);
+  shownRef.current = onShown;
   const [mounted, setMounted] = useState(visible);
   const opacity = useRef(new Animated.Value(0)).current;
 
@@ -43,7 +51,19 @@ export function FullScreenPortal({
     if (visible) {
       setMounted(true);
       if (!ready) return;
-      Animated.timing(opacity, { toValue: 1, duration: 200, useNativeDriver: true }).start();
+      if (instant) {
+        opacity.setValue(1);
+        // Два кадра: слой успевает нарисоваться, прежде чем о нём узнают.
+        let raf = requestAnimationFrame(() => {
+          raf = requestAnimationFrame(() => shownRef.current?.());
+        });
+        return () => cancelAnimationFrame(raf);
+      }
+      Animated.timing(opacity, { toValue: 1, duration: 200, useNativeDriver: true }).start(
+        ({ finished }) => {
+          if (finished) shownRef.current?.();
+        },
+      );
       return;
     }
     Animated.timing(opacity, { toValue: 0, duration: 160, useNativeDriver: true }).start(
@@ -51,7 +71,7 @@ export function FullScreenPortal({
         if (finished) setMounted(false);
       },
     );
-  }, [visible, ready, opacity]);
+  }, [visible, ready, instant, opacity]);
 
   // «Назад» — сначала закрыть этот слой (и модалки над ним), потом навигация.
   useOverlayBackHandler(visible, () => requestCloseRef.current());
@@ -60,7 +80,8 @@ export function FullScreenPortal({
   return (
     <Portal>
       <Animated.View
-        style={[StyleSheet.absoluteFill, { opacity }]}
+        // instant: непрозрачен с первого кадра, не дожидаясь эффекта.
+        style={[StyleSheet.absoluteFill, { opacity: instant && visible ? 1 : opacity }]}
         pointerEvents={visible ? 'auto' : 'none'}
         accessibilityViewIsModal={visible}
         accessibilityElementsHidden={!visible}

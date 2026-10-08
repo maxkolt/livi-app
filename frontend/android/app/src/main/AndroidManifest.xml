@@ -139,6 +139,18 @@
         <category android:name="android.intent.category.BROWSABLE"/>
         <data android:scheme="livi" android:host="cancel-outgoing"/>
       </intent-filter>
+    </activity>
+    <!-- «Поделиться» из других приложений — отдельное окно, а не главное LiVi:
+         своя пустая задача, нет в «Недавних», после отправки — назад в исходное приложение. -->
+    <activity
+      android:name=".ShareActivity"
+      android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|uiMode|smallestScreenSize"
+      android:exported="true"
+      android:taskAffinity=""
+      android:excludeFromRecents="true"
+      android:launchMode="singleTask"
+      android:theme="@style/Theme.App.Translucent"
+      android:windowSoftInputMode="adjustResize">
       <!-- Системное «Поделиться»: фото, текст/ссылки, файлы (без video/*). -->
       <intent-filter>
         <action android:name="android.intent.action.SEND"/>

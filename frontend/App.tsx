@@ -35,7 +35,7 @@ import HomeScreen, { markHomeScreenBootedForSession } from "./screens/HomeScreen
 import { WELCOME_NAV_ACTIVE_ICON, WELCOME_STAGE_BG } from "./screens/home/constants";
 import { IncomingAnswerConnectingCover } from "./components/VideoChat/shared/IncomingAnswerConnectingCover";
 import { peekCallAvatar, peekCallNick, primeCallNick } from "./utils/callAvatarPrime";
-import IncomingSharePickerModal from "./components/IncomingSharePickerModal";
+import IncomingShareHost from "./components/IncomingShareHost";
 import { AppDialogModal } from "./components/AppDialog";
 import { AppAlertHost } from "./components/AppAlert";
 import { APP_BLUR_SOURCE, BlurListSource } from "./components/BackdropBlur";
@@ -51,7 +51,7 @@ import { addNotificationListeners, ensureInitialNotificationPermissions, openInc
 import { flushCallLogUi, forceCallLogUiNow, recordCallLog, recordCancelledCall, recordNoAnswerCall } from './screens/home/callLog';
 import { markChatCallBubbleEligible } from './screens/chat/chatCallEvents';
 import { getInstallId, getInstallSecret } from './utils/installId';
-import { notifyIncomingShare, pullPendingShareFromNative, subscribeIncomingShare, type IncomingShareItem } from './utils/incomingShare';
+import { notifyIncomingShare, parseNativeShareItems, pullPendingShareFromNative } from './utils/incomingShare';
 import { ensureInitialMediaPermissions, ensureCallMediaPermissions, needsNearbyDevicesPermission, requestNearbyDevicesPermissionAndroid } from './utils/mediaPermissions';
 import { probeNativeCallAudioRoutes } from './utils/nativeCallAudioProbe';
 import {
@@ -750,29 +750,6 @@ function AppContent() {
   const hideCallAccessModal = React.useCallback(() => setCallAccessModalVisible(false), []);
   /** Пояснение про «Устройства рядом» после отказа: 'ask' — спросить ещё раз, 'settings' — только в настройках. */
   const [bluetoothExplainMode, setBluetoothExplainMode] = React.useState<null | 'ask' | 'settings'>(null);
-  const [incomingShareVisible, setIncomingShareVisible] = React.useState(false);
-  const [incomingShareItems, setIncomingShareItems] = React.useState<IncomingShareItem[]>([]);
-  const closeIncomingShareFlow = React.useCallback(() => {
-    setIncomingShareVisible(false);
-    setIncomingShareItems([]);
-    if (Platform.OS === 'android') {
-      setTimeout(() => {
-        try {
-          NativeModules.LiviAppModule?.moveTaskToBack?.(true);
-        } catch {
-          // Best effort: the share action itself is already finished.
-        }
-      }, 120);
-    }
-  }, []);
-  React.useEffect(() => {
-    return subscribeIncomingShare((items) => {
-      if (!items?.length) return;
-      setIncomingShareItems(items);
-      setIncomingShareVisible(true);
-    });
-  }, []);
-
   /** Пока false — не показываем «Доступ к звонкам» (ждём уведомления и CallKeep). */
   const androidInitialPermissionsDoneRef = React.useRef(false);
   /** Runtime-разрешения старта завершены (Android + iOS) — после этого можно показать invite modal. */
@@ -1523,8 +1500,12 @@ function AppContent() {
         })
         .catch(() => {});
     };
-    const subShare = emitter.addListener('LiviPendingShare', () => {
-      deliverPendingShare();
+    const subShare = emitter.addListener('LiviPendingShare', (payload?: unknown) => {
+      // Натив отдаёт данные прямо в событии (onNewIntent, раньше AppState active) —
+      // показываем сразу, без ещё одного похода в натив за очередью перерисовок.
+      const items = parseNativeShareItems(payload);
+      if (items.length) notifyIncomingShare(items);
+      else deliverPendingShare();
     });
     if (Platform.OS === 'android') {
       deliverPendingShare();
@@ -5077,11 +5058,7 @@ function AppContent() {
               ]}
             />
           )}
-          <IncomingSharePickerModal
-            visible={incomingShareVisible}
-            items={incomingShareItems}
-            onClose={closeIncomingShareFlow}
-          />
+          <IncomingShareHost />
           <AppAlertHost />
           </>
       </PaperProvider>

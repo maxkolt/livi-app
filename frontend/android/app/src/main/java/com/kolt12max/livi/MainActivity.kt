@@ -25,6 +25,7 @@ import androidx.activity.OnBackPressedCallback
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.Lifecycle
+import com.facebook.react.uimanager.util.ReactFindViewUtil
 
 import com.facebook.react.ReactActivity
 import com.facebook.react.ReactActivityDelegate
@@ -226,6 +227,89 @@ class MainActivity : ReactActivity() {
       incomingAnswerCoverView?.visibility = View.GONE
     } catch (e: Exception) {
       android.util.Log.w("MainActivity", "hideIncomingAnswerCover failed", e)
+    }
+  }
+
+  /**
+   * Крышка «Поделиться»: экран отправки появляется только после onResume → JS, а до него
+   * в окне виден прошлый экран приложения. Закрываем его фоном (HOME_NAV_BG), пока JS не
+   * покажет экран отправки (hideShareCover), но не дольше SHARE_COVER_MAX_MS.
+   */
+  private var shareCoverView: View? = null
+  private val shareCoverHandler = Handler(Looper.getMainLooper())
+  private val hideShareCoverRunnable = Runnable { hideShareCover() }
+
+  /**
+   * Снимаем крышку, как только экран отправки (nativeID в IncomingSharePickerModal) создан и
+   * отрисован, — не дожидаясь JS: после возврата из фона он ещё секунды занят перерисовками.
+   */
+  private val shareRootListener = object : ReactFindViewUtil.OnViewFoundListener {
+    override fun getNativeId(): String = SHARE_ROOT_NATIVE_ID
+    override fun onViewFound(view: View) {
+      hideShareCoverWhenDrawn(view, 0, 0)
+    }
+  }
+
+  private fun hideShareCoverWhenDrawn(view: View, readyFrames: Int, waited: Int) {
+    if (shareCoverView?.visibility != View.VISIBLE) return
+    android.view.Choreographer.getInstance().postFrameCallback {
+      val ready = view.isAttachedToWindow && view.isShown && view.width > 0 && view.height > 0
+      val nextReady = if (ready) readyFrames + 1 else 0
+      // Два кадра подряд на экране: экран отправки уже нарисован под крышкой.
+      if (nextReady >= 2) {
+        hideShareCover()
+      } else if (waited < 150) {
+        hideShareCoverWhenDrawn(view, nextReady, waited + 1)
+      }
+    }
+  }
+
+  private fun showShareCover() {
+    try {
+      val decor = window?.decorView as? ViewGroup ?: return
+      val cover = shareCoverView ?: run {
+        val frame = android.widget.FrameLayout(this).apply {
+          setBackgroundColor(getColor(R.color.home_nav_background))
+          importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+          // Касания под крышкой не должны доходить до прошлого экрана.
+          isClickable = true
+        }
+        decor.addView(
+          frame,
+          ViewGroup.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT,
+          ),
+        )
+        frame.elevation = 20000f
+        frame.translationZ = 20000f
+        shareCoverView = frame
+        frame
+      }
+      cover.visibility = View.VISIBLE
+      cover.bringToFront()
+      shareCoverHandler.removeCallbacks(hideShareCoverRunnable)
+      shareCoverHandler.postDelayed(hideShareCoverRunnable, SHARE_COVER_MAX_MS)
+      ReactFindViewUtil.removeViewListener(shareRootListener)
+      // Экран отправки уже открыт (повторный «Поделиться») — нового nativeID не будет.
+      val existing = ReactFindViewUtil.findView(decor, SHARE_ROOT_NATIVE_ID)
+      if (existing != null) {
+        hideShareCoverWhenDrawn(existing, 0, 0)
+      } else {
+        ReactFindViewUtil.addViewListener(shareRootListener)
+      }
+    } catch (e: Exception) {
+      android.util.Log.w("MainActivity", "showShareCover failed", e)
+    }
+  }
+
+  fun hideShareCover() {
+    try {
+      shareCoverHandler.removeCallbacks(hideShareCoverRunnable)
+      ReactFindViewUtil.removeViewListener(shareRootListener)
+      shareCoverView?.visibility = View.GONE
+    } catch (e: Exception) {
+      android.util.Log.w("MainActivity", "hideShareCover failed", e)
     }
   }
 
@@ -766,6 +850,11 @@ class MainActivity : ReactActivity() {
     }
     if (tryStashShareFromIntent(intent)) {
       pendingShareFromIntent = true
+      // Приложение уже открыто: до экрана отправки виден не прошлый экран, а фон.
+      showShareCover()
+      // Отдать JS сейчас, до onResume: иначе первым придёт AppState active, и экран
+      // отправки встанет в очередь за перерисовками возврата из фона.
+      if (LiviAppModule.emitPendingShareNow()) pendingShareFromIntent = false
     }
     maybeShowIncomingAnswerCoverFromIntent(intent)
     handleLauncherTapDuringActiveCall(intent)
@@ -1539,6 +1628,19 @@ class MainActivity : ReactActivity() {
       val act = lastResumedInstance
       if (act != null && !act.isFinishing && !act.isDestroyed) {
         act.runOnUiThread { act.showIncomingAnswerCover() }
+      }
+    }
+
+    /** Крышка «Поделиться» держится, пока JS не покажет экран отправки, но не дольше. */
+    private const val SHARE_COVER_MAX_MS = 2500L
+    /** nativeID корня экрана отправки (IncomingSharePickerModal). */
+    private const val SHARE_ROOT_NATIVE_ID = "incoming-share-root"
+
+    @JvmStatic
+    fun hideShareCoverOnMainIfPossible() {
+      val act = lastResumedInstance
+      if (act != null && !act.isFinishing && !act.isDestroyed) {
+        act.runOnUiThread { act.hideShareCover() }
       }
     }
 

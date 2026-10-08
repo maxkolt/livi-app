@@ -9,6 +9,7 @@ import { getInstallId } from '../../../utils/installId';
 import { logger } from '../../../utils/logger';
 import { putThumb, warmAvatar } from '../../../utils/avatarCache';
 import { primeCallAvatarsFromFriends } from '../../../utils/callAvatarPrime';
+import { setFriendsSnapshot } from '../../../utils/friendsSnapshot';
 import {
   FRIENDS_CACHE_KEY_LEGACY,
   FRIENDS_MAX_PAGES_PER_LOAD,
@@ -49,6 +50,17 @@ export function useHomeFriends({
       .catch(() => {});
   }, [appIsActive, welcomeActiveTab]);
   const [friends, setFriends] = useState<Friend[]>([]);
+  // Снимок в памяти для экрана «Поделиться»: он показывает список сразу, без async.
+  useEffect(() => {
+    setFriendsSnapshot(
+      friends.map((f) => ({
+        id: String(f.id),
+        name: String(f.name || ''),
+        avatarVer: typeof f.avatarVer === 'number' ? f.avatarVer : 0,
+        avatarThumbB64: String(f.avatarThumbB64 || ''),
+      })),
+    );
+  }, [friends]);
   const [initialized, setInitialized] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const friendsRef = useRef<Friend[]>([]);

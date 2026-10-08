@@ -55,6 +55,7 @@ import { installAppFont } from './utils/appFont';
 installAppFont();
 import { registerRootComponent } from 'expo';
 import App from './App';
+import ShareRoot from './components/share/ShareRoot';
 import { isEndedCallId, setupCallKeep, presentIncomingCall, stopIncomingCallForegroundService } from './utils/callKeep';
 import * as Notifications from 'expo-notifications';
 import { isIncomingCallExpired } from './utils/callExpiry';
@@ -247,3 +248,5 @@ if (typeof global !== 'undefined' && bootstrapGlobal.HermesInternal) {
 }
 
 registerRootComponent(App);
+// «Поделиться» из другого приложения — отдельное окно (ShareActivity), без App.
+AppRegistry.registerComponent('LiviShare', () => ShareRoot);

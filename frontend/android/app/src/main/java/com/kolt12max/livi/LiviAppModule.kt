@@ -525,6 +525,27 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     LiviAppModule.bringMainToFrontImmediate(reactApplicationContext, withAnswerCover = true)
   }
 
+  /** «Поделиться»: отправили или закрыли — закрыть ShareActivity, назад в исходное приложение. */
+  @ReactMethod
+  fun finishShareActivity() {
+    val act = ShareActivity.liveInstance ?: return
+    act.runOnUiThread {
+      try {
+        act.finish()
+      } catch (e: Exception) {
+        Log.w(NAME, "finishShareActivity failed", e)
+      }
+    }
+  }
+
+  /** Экран отправки «Поделиться» показан (JS) — снять крышку, закрывавшую прошлый экран. */
+  @ReactMethod
+  fun hideIncomingShareCover() {
+    Handler(Looper.getMainLooper()).post {
+      MainActivity.hideShareCoverOnMainIfPossible()
+    }
+  }
+
   /** Снять нативную крышку accept после VideoCall.onLayout (JS). */
   @ReactMethod
   fun clearIncomingAnswerNativeCover() {
@@ -5256,6 +5277,35 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     @JvmStatic
     fun emitPendingShareEvent() {
       runOnReactUiQueueIfAlive { it.emitDeviceEvent("LiviPendingShare", null) }
+    }
+
+    /** JS уже запущен (есть живой React) — ShareActivity может показать свой корень. */
+    @JvmStatic
+    fun hasActiveReactInstance(): Boolean = reactContextRef?.hasActiveReactInstance() == true
+
+    /** Новый «Поделиться», пока ShareActivity открыта: её JS-корень заберёт данные. */
+    @JvmStatic
+    fun emitShareActivityItems() {
+      runOnReactUiQueueIfAlive { it.emitDeviceEvent("LiviShareActivityItems", null) }
+    }
+
+    /**
+     * Синхронно (UI-поток, onNewIntent) отдать JS «Поделиться» вместе с данными — раньше
+     * AppState active из onResume. false — React ещё не готов, сработает обычный путь.
+     */
+    @JvmStatic
+    fun emitPendingShareNow(): Boolean {
+      val ctx = reactContextRef ?: return false
+      if (!ctx.hasActiveReactInstance()) return false
+      val items = pendingShareItems ?: return false
+      return try {
+        pendingShareItems = null
+        ctx.emitDeviceEvent("LiviPendingShare", items)
+        true
+      } catch (e: Exception) {
+        Log.w("LiviAppModule", "emitPendingShareNow failed", e)
+        false
+      }
     }
 
     /** Входящий для CallKeep (FCM при разблокированном экране): сохранить в pending; JS вызовет getAndClearPendingIncomingCallForCallKeep → displayIncomingCall. */

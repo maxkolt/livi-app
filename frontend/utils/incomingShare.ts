@@ -30,7 +30,8 @@ export function notifyIncomingShare(items: IncomingShareItem[]): void {
   }
 }
 
-function parseNativeShareItems(raw: unknown): IncomingShareItem[] {
+/** Элементы «Поделиться» из натива (getAndClearPendingShareItems или данные события). */
+export function parseNativeShareItems(raw: unknown): IncomingShareItem[] {
   if (!Array.isArray(raw)) return [];
   const out: IncomingShareItem[] = [];
   for (const row of raw) {
@@ -61,5 +62,15 @@ export async function pullPendingShareFromNative(): Promise<IncomingShareItem[]>
     return parseNativeShareItems(raw);
   } catch {
     return [];
+  }
+}
+
+/** Экран отправки показан — снять нативную крышку, закрывавшую прошлый экран (Android). */
+export function hideIncomingShareCover(): void {
+  if (Platform.OS !== 'android') return;
+  try {
+    NativeModules.LiviAppModule?.hideIncomingShareCover?.();
+  } catch {
+    // Крышка всё равно снимется сама по таймауту.
   }
 }
