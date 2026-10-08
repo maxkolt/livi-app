@@ -49,6 +49,11 @@ type Props = {
   nick?: string;
   /** Единая оплата для фонов чата и рамок аватара. */
   onUnlock?: () => void;
+  /**
+   * Собрать витрину заранее и держать скрытой: открытие только показывает готовое.
+   * Первый монтаж (карусели, жесты, ворклеты) занимал JS ~350 мс после тапа (dev).
+   */
+  keepWarm?: boolean;
 };
 
 /** Название и описание — в i18n по ключу предмета (cosmeticNameKey / cosmeticBlurbKey). */
@@ -301,19 +306,26 @@ export function FramesStoreModal(props: Props) {
   // Карусели рисуют карточки не в первом кадре, а фото в рамках приходят ещё позже —
   // при открытии рамки «дорисовывались» на глазах. Показываем витрину готовой.
   const [ready, setReady] = useState(false);
+  /** Картинки уже загружались (витрина собрана заранее) — показываем без ожидания. */
+  const loadedOnceRef = useRef(false);
   useEffect(() => {
     if (!props.visible) {
       setReady(false);
       return;
     }
+    if (loadedOnceRef.current) return;
     const timer = setTimeout(() => setReady(true), STORE_READY_TIMEOUT_MS);
     return () => clearTimeout(timer);
   }, [props.visible]);
-  const markReady = useCallback(() => setReady(true), []);
+  const markReady = useCallback(() => {
+    loadedOnceRef.current = true;
+    setReady(true);
+  }, []);
   return (
     <FullScreenPortal
       visible={props.visible}
-      ready={ready}
+      ready={ready || loadedOnceRef.current}
+      keepMounted={props.keepWarm}
       onRequestClose={() => requestCloseRef.current()}
     >
       <FramesStoreContent {...props} requestCloseRef={requestCloseRef} onContentReady={markReady} />
@@ -323,6 +335,7 @@ export function FramesStoreModal(props: Props) {
 
 function FramesStoreContent({
   visible,
+  keepWarm,
   onClose,
   onUnlock,
   requestCloseRef,
@@ -505,7 +518,7 @@ function FramesStoreContent({
     [framePageWidth],
   );
 
-  if (!visible) return null;
+  if (!visible && !keepWarm) return null;
 
   const openSharedCheckout = async (kind: CosmeticKind) => {
     if (paymentBusy) return;

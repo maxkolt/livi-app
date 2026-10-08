@@ -1,8 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
-  getCurrentAppVersion,
   isUpdateAvailable,
   isUpdateReminderCooldownActive,
   shouldShowUpdateBadge,
@@ -13,25 +11,8 @@ import { presentAppUpdateShadeNotificationIfNeeded } from '../../../utils/produc
 
 const UPDATE_CHECK_RESUME_DEBOUNCE_MS = 60 * 1000;
 
-/**
- * Последнее решение «показывать точку обновления» для этой версии приложения.
- * Читается с диска до ухода заставки: иначе точка на «Профиле» появлялась через
- * долю секунды после показа экрана, когда отвечал сервер.
- */
-const PROMO_CACHE_KEY = 'update_promo_last_v1';
-let promoMem: boolean | null = null;
-
-function promoCacheValue(show: boolean): string {
-  return `${getCurrentAppVersion()}|${show ? 1 : 0}`;
-}
-
 export function useHomeUpdatePromo() {
-  const [updateAvailable, setUpdateAvailable] = useState(() => promoMem === true);
-  /** Решение известно (с диска или с сервера) — экран можно показывать. */
-  const [updatePromoHydrated, setUpdatePromoHydrated] = useState(promoMem !== null);
-  const serverAnsweredRef = useRef(false);
-  /** Ответ сервера пришёл: бейдж «О приложении» решаем по нему, а не по кэшу точки. */
-  const [serverCheckSeq, setServerCheckSeq] = useState(0);
+  const [updateAvailable, setUpdateAvailable] = useState(false);
   const [showUpdateBadge, setShowUpdateBadgeState] = useState(false);
   const updateBadgeShownRef = useRef(false);
   const suppressUpdateBadgeUntilRef = useRef(0);
@@ -48,25 +29,6 @@ export function useHomeUpdatePromo() {
     setShowUpdateBadgeState(false);
   }, []);
 
-  useEffect(() => {
-    if (promoMem !== null) return;
-    let cancelled = false;
-    AsyncStorage.getItem(PROMO_CACHE_KEY)
-      .then((raw) => {
-        if (cancelled || serverAnsweredRef.current) return;
-        const [ver, flag] = String(raw || '').split('|');
-        // Другая версия (обновились) — старое решение не годится, ждём сервер без точки.
-        if (ver === getCurrentAppVersion()) setUpdateAvailable(flag === '1');
-      })
-      .catch(() => {})
-      .finally(() => {
-        if (!cancelled) setUpdatePromoHydrated(true);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
   // Проверка доступности обновления (при старте и при возврате в приложение)
   useEffect(() => {
     let cancelled = false;
@@ -79,12 +41,7 @@ export function useHomeUpdatePromo() {
         const cooldown = await isUpdateReminderCooldownActive();
         if (!cancelled) {
           const showPromotion = __DEV__ ? true : !!(serverSaysUpdate && !cooldown);
-          serverAnsweredRef.current = true;
-          promoMem = showPromotion;
           setUpdateAvailable(showPromotion);
-          setUpdatePromoHydrated(true);
-          setServerCheckSeq((n) => n + 1);
-          AsyncStorage.setItem(PROMO_CACHE_KEY, promoCacheValue(showPromotion)).catch(() => {});
           if (!__DEV__ && !serverSaysUpdate) {
             setShowUpdateBadgeState(false);
             await clearUpdatePromotionWhenUpToDate();
@@ -112,7 +69,7 @@ export function useHomeUpdatePromo() {
   }, []);
 
   useEffect(() => {
-    if (!updateAvailable || !serverCheckSeq) return;
+    if (!updateAvailable) return;
     let cancelled = false;
     (async () => {
       try {
@@ -124,11 +81,10 @@ export function useHomeUpdatePromo() {
       } catch {}
     })();
     return () => { cancelled = true; };
-  }, [updateAvailable, serverCheckSeq]);
+  }, [updateAvailable]);
 
   return {
     updateAvailable,
-    updatePromoHydrated,
     setUpdateAvailable,
     showUpdateBadge,
     setShowUpdateBadgeState,

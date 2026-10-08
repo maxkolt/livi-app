@@ -24,6 +24,7 @@ import android.widget.FrameLayout
 import androidx.activity.OnBackPressedCallback
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.lifecycle.Lifecycle
 
 import com.facebook.react.ReactActivity
 import com.facebook.react.ReactActivityDelegate
@@ -129,6 +130,21 @@ class MainActivity : ReactActivity() {
   private var wasInPip = false
   private var expandedEmittedForPipExit = false
   private val pipExitDecideMs = 2500L
+
+  /**
+   * Окно PiP закрыли (X / смахнули): система сразу останавливает активити, onResume не будет.
+   * Завершаем звонок сразу, не дожидаясь pipExitDecideMs, — иначе у собеседника звонок
+   * висит ещё ~2.5 с. Таймер остаётся запасным путём для OEM, где onStop не приходит.
+   */
+  private fun emitEndCallFromPiPDismissed(source: String) {
+    if (!exitedPipPending || expandedEmittedForPipExit) return
+    exitedPipPending = false
+    wasInPip = false
+    exitPipTimeoutRunnable?.let { pipHandler.removeCallbacks(it) }
+    exitPipTimeoutRunnable = null
+    android.util.Log.i("MainActivity", "PiP exit: dismissed ($source) -> emitting EndCallFromPiP")
+    LiviAppModule.emitEndCallFromPiP()
+  }
 
   /** Закрыть системный PiP при пуше call_ended (endedFromActive): собеседник в PiP не получает call:ended по сокету — пуш доходит, закрываем окно сразу. */
   private var closePipCallEndedReceiver: BroadcastReceiver? = null
@@ -860,6 +876,10 @@ class MainActivity : ReactActivity() {
     val leftRecentsOverview = inRecentsOverview
     super.onStop()
     if (isChangingConfigurations) return
+    // Остановка сразу после выхода из PiP без onResume — окно закрыли, а не развернули.
+    if (exitedPipPending && !isInPictureInPictureMode) {
+      emitEndCallFromPiPDismissed("onStop")
+    }
     if (isFinishing) {
       clearRecentsOverviewFlag("onStop_finishing")
       cancelPendingPiPEnterAttempts()
@@ -1105,6 +1125,10 @@ class MainActivity : ReactActivity() {
           }
         }
         pipHandler.postDelayed(exitPipTimeoutRunnable!!, pipExitDecideMs)
+        // onStop мог прийти раньше этого колбэка (так на One UI): активити уже остановлена.
+        if (!lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+          emitEndCallFromPiPDismissed("modeChanged(false)+stopped")
+        }
         val hasFocus = window?.decorView?.hasWindowFocus() == true
         if (isInForeground && hasFocus && !isPiPEnterAttemptRunning) {
           emitSystemPiPExpandedOnce("modeChanged(false)+foreground")

@@ -1179,21 +1179,22 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
   },
+  // Размер — как у строки статуса во «Звонках» («Исходящий звонок»).
   preview: {
     flex: 1,
     minWidth: 0,
     color: WELCOME_MUTED_TEXT,
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '400',
-    lineHeight: 19,
+    lineHeight: 18,
   },
   previewLandscape: {
-    fontSize: 13,
-    lineHeight: 16,
+    fontSize: 12,
+    lineHeight: 15,
   },
   previewTablet: {
-    fontSize: 15,
-    lineHeight: 20,
+    fontSize: 14,
+    lineHeight: 19,
   },
   previewUnread: {
     color: 'rgba(244, 245, 247, 0.82)',

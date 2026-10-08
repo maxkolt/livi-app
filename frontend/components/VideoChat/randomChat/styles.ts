@@ -93,6 +93,10 @@ export const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     backgroundColor: '#000',
   },
+  /** Камера «Вы» выключена: заглушка камеры на фоне самой карточки. */
+  localCamOff: {
+    ...StyleSheet.absoluteFillObject,
+  },
   overlayFill: {
     ...StyleSheet.absoluteFillObject,
     justifyContent: 'center',
@@ -201,11 +205,15 @@ export const styles = StyleSheet.create({
     position: 'absolute',
     top: 10,
     right: 10,
+    zIndex: 40,
+    ...(Platform.OS === 'android' ? { elevation: 40 } : {}),
   },
   bottomRight: {
     position: 'absolute',
     bottom: 10,
     right: 10,
+    zIndex: 40,
+    ...(Platform.OS === 'android' ? { elevation: 40 } : {}),
   },
   modalOverlay: {
     flex: 1,
@@ -280,8 +288,9 @@ export const styles = StyleSheet.create({
     padding: 8,
     justifyContent: 'center',
     alignItems: 'center',
-    // Android: чтобы кнопки были выше видеовью (TextureView/обычные View)
-    ...(Platform.OS === 'android' ? { elevation: 40 } : {}),
+    // Без elevation: на полупрозрачном фоне её тень видна пятном под кнопкой.
+    // Над видео кнопки поднимают контейнеры (topLeft, topRight, bottomRight,
+    // bottomOverlay) — у них нет фона, и тени они не отбрасывают.
   },
   iconBtnDisabled: {
     opacity: 0.4,

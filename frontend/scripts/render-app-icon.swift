@@ -112,9 +112,12 @@ let lensPath = roundedPolygon(
     CGPoint(x: lensR, y: cy + lensOuterHalf),
     CGPoint(x: lensL, y: cy + lensInnerHalf),
   ], radius: lensRadius)
-let glassShapes: [(path: CGPath, top: CGFloat, bottom: CGFloat)] = [
-  (bodyPath, body.minY, body.maxY),
-  (lensPath, cy - lensOuterHalf, cy + lensOuterHalf),
+/// Блик под верхней кромкой (яркость, доля высоты). На сплэше у корпуса слабее и короче —
+/// меньше светлой заливки под рамкой (2026-10-08); иконка и объектив — как были.
+let bodyHighlight: (alpha: CGFloat, span: CGFloat) = ringless ? (0.08, 0.42) : (0.16, 0.55)
+let glassShapes: [(path: CGPath, top: CGFloat, bottom: CGFloat, highlight: (alpha: CGFloat, span: CGFloat))] = [
+  (bodyPath, body.minY, body.maxY, bodyHighlight),
+  (lensPath, cy - lensOuterHalf, cy + lensOuterHalf, (0.16, 0.55)),
 ]
 
 // --- Scene behind the glass: background and radar rings. ---
@@ -179,8 +182,6 @@ let rimGradient = CGGradient(
   // Светлая сверху и снизу (снизу чуть мягче), темнее посередине — стекло видно по всему контуру.
   colors: [rgb(0xFFFFFF, 0.78), rgb(ACCENT_LIGHT, 0.38), rgb(0xFFFFFF, 0.62)] as CFArray,
   locations: [0, 0.5, 1])!
-let highlight = CGGradient(
-  colorsSpace: space, colors: [rgb(0xFFFFFF, 0.16), rgb(0xFFFFFF, 0)] as CFArray, locations: [0, 1])!
 
 for shape in glassShapes {
   // Матовое стекло: размытая сцена + светлая дымка + блик в верхней части.
@@ -190,9 +191,12 @@ for shape in glassShapes {
   drawDeviceImage(ctx, frosted)
   ctx.setFillColor(rgb(0xFFFFFF, 0.08))
   ctx.fill(CGRect(x: 0, y: 0, width: 1024, height: 1024))
+  let highlight = CGGradient(
+    colorsSpace: space, colors: [rgb(0xFFFFFF, shape.highlight.alpha), rgb(0xFFFFFF, 0)] as CFArray,
+    locations: [0, 1])!
   ctx.drawLinearGradient(
     highlight, start: CGPoint(x: 0, y: shape.top),
-    end: CGPoint(x: 0, y: shape.top + (shape.bottom - shape.top) * 0.55), options: [])
+    end: CGPoint(x: 0, y: shape.top + (shape.bottom - shape.top) * shape.highlight.span), options: [])
   ctx.restoreGState()
   // Кромка: светлая сверху и снизу.
   ctx.saveGState()

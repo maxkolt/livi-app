@@ -14,6 +14,7 @@ import { useOverlayBackHandler } from './AppOverlay';
 export function FullScreenPortal({
   visible,
   ready = true,
+  keepMounted = false,
   onRequestClose,
   children,
 }: {
@@ -23,6 +24,11 @@ export function FullScreenPortal({
    * загрузить картинки, и появление начинается с готового кадра, без «дорисовки».
    */
   ready?: boolean;
+  /**
+   * Слой собран заранее и не разбирается после закрытия: скрыт (прозрачен, без касаний
+   * и без чтения экранным диктором), а открытие только показывает готовое.
+   */
+  keepMounted?: boolean;
   /** Системное «Назад» — как onRequestClose у модалки. */
   onRequestClose: () => void;
   children: React.ReactNode;
@@ -50,13 +56,15 @@ export function FullScreenPortal({
   // «Назад» — сначала закрыть этот слой (и модалки над ним), потом навигация.
   useOverlayBackHandler(visible, () => requestCloseRef.current());
 
-  if (!visible && !mounted) return null;
+  if (!visible && !mounted && !keepMounted) return null;
   return (
     <Portal>
       <Animated.View
         style={[StyleSheet.absoluteFill, { opacity }]}
         pointerEvents={visible ? 'auto' : 'none'}
-        accessibilityViewIsModal
+        accessibilityViewIsModal={visible}
+        accessibilityElementsHidden={!visible}
+        importantForAccessibility={visible ? 'auto' : 'no-hide-descendants'}
       >
         {children}
       </Animated.View>

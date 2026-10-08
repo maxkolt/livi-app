@@ -38,6 +38,7 @@ import { peekCallAvatar, peekCallNick, primeCallNick } from "./utils/callAvatarP
 import IncomingSharePickerModal from "./components/IncomingSharePickerModal";
 import { AppDialogModal } from "./components/AppDialog";
 import { AppAlertHost } from "./components/AppAlert";
+import { APP_BLUR_SOURCE, BlurListSource } from "./components/BackdropBlur";
 import { useFonts } from "expo-font";
 import { APP_FONT_FILES } from "./utils/appFont";
 import { PiPProvider, usePiP } from "./src/pip/PiPContext";
@@ -4868,6 +4869,8 @@ function AppContent() {
       <SystemBars style={Platform.OS === 'android' || isDark ? 'light' : 'dark'} />
       <PaperProvider theme={theme}>
         <>
+        {/* Источник стекла модалок: они в порталах Paper поверх, размывают этот слой. */}
+        <BlurListSource sourceId={APP_BLUR_SOURCE} style={{ flex: 1 }}>
         <NavigationContainer
           ref={navRef}
           theme={{
@@ -5002,6 +5005,7 @@ function AppContent() {
               />
             </Stack.Navigator>
           </NavigationContainer>
+        </BlurListSource>
 
           {/* Accept → VideoCall: chrome «Соединение» вместо пустой шторки; native solid до paint. */}
           {incomingAnswerCover ? (

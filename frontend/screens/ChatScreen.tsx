@@ -2561,7 +2561,6 @@ export default function ChatScreen({ route, navigation }: Props) {
     sendMessage,
     onPressSendButton,
     toggleEmojiPanel,
-    dismissComposerKeyboard,
     handleComposerEmojiSelected,
     handleComposerEmojiBackspace,
     handleComposerStickerSelected,
@@ -2782,7 +2781,6 @@ export default function ChatScreen({ route, navigation }: Props) {
   const androidEmojiBottomReserve = emojiPanelOpen
     ? chatEmojiPanelHeight + Math.max(0, insets.bottom)
     : 0;
-  const androidListBottomReserve = androidEmojiBottomReserve;
   useEffect(() => {
     if (Platform.OS !== 'android') return;
     scheduleScrollToBottom(0);
@@ -3053,8 +3051,8 @@ export default function ChatScreen({ route, navigation }: Props) {
               }}
               ListFooterComponent={null}
               keyboardShouldPersistTaps="handled"
-              keyboardDismissMode="on-drag"
-              onScrollBeginDrag={dismissComposerKeyboard}
+              // Прокрутка ленты не прячет открытую клавиатуру.
+              keyboardDismissMode="none"
               showsVerticalScrollIndicator={false}
               inverted={false}
               onScrollToIndexFailed={handleScrollToIndexFailed}
@@ -3423,7 +3421,9 @@ export default function ChatScreen({ route, navigation }: Props) {
                 top: 0,
                 left: 0,
                 right: 0,
-                bottom: androidListBottomReserve,
+                // Лента и под панелью эмодзи: та стеклянная, как меню, и при прокрутке
+                // облака уходят под неё размытыми. Место под панель — отступом контента.
+                bottom: 0,
                 overflow: 'hidden',
                 transform: [{ translateY: androidListKeyboardTranslateY }],
               }}
@@ -3431,7 +3431,7 @@ export default function ChatScreen({ route, navigation }: Props) {
             <ChatMessageEdgeFade
               style={{ flex: 1 }}
               top={headerTotalH}
-              bottom={resolvedInputBarH + CHAT_STATUS_GAP_H}
+              bottom={resolvedInputBarH + CHAT_STATUS_GAP_H + androidEmojiBottomReserve}
               sourceId={chatBlurFeedId}
             >
             <FlatList
@@ -3447,14 +3447,16 @@ export default function ChatScreen({ route, navigation }: Props) {
                   ? { flexGrow: 1, justifyContent: 'center' as const }
                   : null),
                 // inverted: paddingTop = низ (под композер), paddingBottom = верх (под шапку)
-                paddingTop: showEmpty ? 0 : resolvedInputBarH + CHAT_STATUS_GAP_H,
+                paddingTop: showEmpty
+                  ? 0
+                  : resolvedInputBarH + CHAT_STATUS_GAP_H + androidEmojiBottomReserve,
                 paddingBottom: showEmpty ? 0 : headerTotalH + 8,
                 paddingHorizontal: chatListSideInset,
               }}
               showsVerticalScrollIndicator={false}
               keyboardShouldPersistTaps="handled"
-              keyboardDismissMode="on-drag"
-              onScrollBeginDrag={dismissComposerKeyboard}
+              // Прокрутка ленты не прячет открытую клавиатуру.
+              keyboardDismissMode="none"
               removeClippedSubviews={false}
               inverted={!showEmpty}
               onScrollToIndexFailed={handleScrollToIndexFailed}

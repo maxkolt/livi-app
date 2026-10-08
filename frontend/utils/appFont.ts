@@ -106,12 +106,19 @@ type ForwardRefComponent = {
 function patchRender(component: ForwardRefComponent, nestable: boolean) {
   const render = component.render;
   if (typeof render !== 'function' || render.appFont) return;
-  const withAppFont = function AppFontText(props: any, ref: any) {
-    // nestable постоянен для компонента — порядок хуков не меняется.
-    const nested = nestable ? React.useContext(TextAncestorContext) : false;
+  const withFont = (props: any, nested: boolean) => {
     const font = appFontFor(props.style, nested);
-    return render(font ? { ...props, style: [props.style, font] } : props, ref);
+    return font ? { ...props, style: [props.style, font] } : props;
   };
+  // Две обёртки, а не хук под условием: у Text контекст вложенности читается
+  // всегда, TextInput вложенным не бывает.
+  const withAppFont: NonNullable<ForwardRefComponent['render']> = nestable
+    ? function AppFontText(props: any, ref: any) {
+        return render(withFont(props, React.useContext(TextAncestorContext)), ref);
+      }
+    : function AppFontTextInput(props: any, ref: any) {
+        return render(withFont(props, false), ref);
+      };
   withAppFont.appFont = true;
   component.render = withAppFont;
 }

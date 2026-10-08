@@ -358,6 +358,40 @@ export function GlassFill({
   );
 }
 
+const NO_SOURCES: readonly string[] = [];
+
+/**
+ * Фон под модалкой: экран под ней размыт тем же стеклом, что листы чата, и притемнён `dim`.
+ * Android 12+ — нативное стекло по источникам; iOS — системное размытие; без стекла
+ * (или источник недоступен, например видео в звонке) — только затемнение, как раньше.
+ */
+export function BlurredDim({ blurSources, dim }: { blurSources: readonly string[]; dim: string }) {
+  if (NativeBlurBackdrop) {
+    return (
+      <NativeBlurBackdrop
+        pointerEvents="none"
+        backgroundSources={NO_SOURCES}
+        blurSources={blurSources}
+        blurRadius={GLASS_BLUR_INTENSITY / GLASS_BLUR_REDUCTION}
+        overlayColor={dim}
+        matteColor="transparent"
+        fadeColors={NO_EDGE_FADE}
+        fadeLocations={GLASS_FADE_LOCATIONS}
+        style={StyleSheet.absoluteFill}
+      />
+    );
+  }
+  if (Platform.OS === 'ios') {
+    return (
+      <>
+        <BlurView pointerEvents="none" intensity={GLASS_BLUR_INTENSITY} tint="dark" style={StyleSheet.absoluteFill} />
+        <View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: dim }]} />
+      </>
+    );
+  }
+  return <View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: dim }]} />;
+}
+
 const styles = StyleSheet.create({
   mirror: {
     transform: [{ scaleY: -1 }],

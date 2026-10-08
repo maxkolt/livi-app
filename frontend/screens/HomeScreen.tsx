@@ -89,6 +89,7 @@ import {
   useHomeFriends,
 } from './home';
 import { HomeWelcomeTabBar, type WelcomeTabId } from './home/HomeWelcomeTabBar';
+import { FramesStoreHost } from './home/WelcomeCrownButton';
 import { WelcomeKeepAlivePane } from './home/WelcomeKeepAlivePane';
 import { HomeLayoutProvider } from './home/HomeLayoutContext';
 import {
@@ -582,7 +583,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       .then((m) => m.dismissAppUpdateShadeNotifications())
       .catch(() => {});
   }, [welcomeActiveTab]);
-  const { updateAvailable, updatePromoHydrated } = useHomeUpdatePromo();
+  const { updateAvailable } = useHomeUpdatePromo();
 
   const {
     friends,
@@ -661,12 +662,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   // Синхронная загрузка профиля при инициализации. При повторном монтировании (возврат из звонка/PiP) не показываем сплэш — оба true, профиль подставится в отдельном effect.
   const [profileLoaded, setProfileLoaded] = useState(homeScreenAlreadyBooted);
   const [dataLoaded, setDataLoaded] = useState(homeScreenAlreadyBooted);
-  /**
-   * Ник/аватар уже подняты с диска. Заставке этого хватает: ответ сервера с тем же
-   * аватаром даёт ту же строку URI и ничего не перерисовывает, а ждать его — секунды
-   * на медленной сети/VPN.
-   */
-  const [profileHydrated, setProfileHydrated] = useState(homeScreenAlreadyBooted);
   // Сплеш поверх уже отрисованного Home: при уходе сплеша видна страница приветствия с актуальными данными
   const [splashDismissed, setSplashDismissed] = useState(homeScreenAlreadyBooted);
   const [nick, setNick] = useState('');
@@ -3293,7 +3288,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
             logger.debug('[HomeScreen] Loaded avatar from cache');
           }
         }
-        if (cachedNick || cachedAvatar) setProfileHydrated(true);
       } catch (e) {
         logger.warn('[HomeScreen] Failed to load from cache', { e });
       }
@@ -5681,6 +5675,7 @@ const handleClearNick = useCallback(async () => {
             centerProfile={centerProfile}
             hasActiveCallForSearch={hasActiveCallForSearch}
             onStartSearch={handleStartSearch}
+            splashGone={!showSplashOverlay}
             active={showSearchWelcome}
             onTopBlockBottom={onSearchTopBlockBottom}
           />
@@ -5896,6 +5891,7 @@ const handleClearNick = useCallback(async () => {
       />
 
       {ConfirmView}
+      <FramesStoreHost warmEnabled={splashDismissed} />
 
       {/* Поддержать проект */}
       <AppDialogModal
@@ -6117,8 +6113,10 @@ const handleClearNick = useCallback(async () => {
     {showSplashOverlay && (
       <View style={[StyleSheet.absoluteFillObject, { zIndex: 9998 }]} pointerEvents="box-none">
         <SplashLoader
-          dataLoaded={(dataLoaded || profileHydrated) && updatePromoHydrated}
+          dataLoaded={dataLoaded}
           hasAvatarReady={avatarReadyForFirstPaint}
+          hasNick={!!(currentNick && currentNick.trim())}
+          hasAvatar={!!(currentAvatar && currentAvatar.trim())}
           onComplete={() => {
             logger.info('[search-avatar] splash-dismiss', {
               ready: avatarReadyForFirstPaint,

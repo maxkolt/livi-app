@@ -1,5 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  Animated,
+  Easing,
   Platform,
   StyleSheet,
   View,
@@ -61,6 +63,7 @@ export type HomeWelcomeViewProps = {
   >;
   hasActiveCallForSearch: boolean;
   onStartSearch: () => void;
+  splashGone?: boolean;
   /** Вкладка «Поиск» на экране — иначе радар не анимируется. */
   active?: boolean;
   /**
@@ -97,6 +100,8 @@ function resolveIsSplitStage(width: number, height: number) {
   return isWelcomeTabletLayout(width, height);
 }
 
+let welcomeRevealPlayedThisSession = false;
+
 /**
  * Размер аватара Поиска для текущей геометрии окна — переживает remount после
  * splash (иначе снова onLoad и мигание), но пересчитывается при повороте,
@@ -117,6 +122,7 @@ function HomeWelcomeViewInner({
   centerProfile,
   hasActiveCallForSearch,
   onStartSearch,
+  splashGone = true,
   active = true,
   onTopBlockBottom,
 }: HomeWelcomeViewProps) {
@@ -124,12 +130,29 @@ function HomeWelcomeViewInner({
   const avatarAnchorRef = useAnimatedRef<View>();
   const avatarDust = useAvatarDustController();
   const [avatarDustSource, setAvatarDustSource] = useState<AvatarDustSource | null>(null);
+  const reveal = useRef(new Animated.Value(welcomeRevealPlayedThisSession ? 1 : 0)).current;
   const frame = useHomeLayout();
   const notifyLayoutActivity = useHomeLayoutActivity();
   const insets = useStableSafeAreaInsets();
   const [measured, setMeasured] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
   /** Фактическая область под радар/текст/CTA — всё, что осталось от панели под шапкой. */
   const [stageBox, setStageBox] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
+
+  useEffect(() => {
+    if (!splashGone) return;
+    if (welcomeRevealPlayedThisSession) {
+      reveal.setValue(1);
+      return;
+    }
+    Animated.timing(reveal, {
+      toValue: 1,
+      duration: 560,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start(() => {
+      welcomeRevealPlayedThisSession = true;
+    });
+  }, [reveal, splashGone]);
 
   const onStageLayout = useCallback((e: LayoutChangeEvent) => {
     const { width, height } = e.nativeEvent.layout;
@@ -407,10 +430,23 @@ function HomeWelcomeViewInner({
     handleAvatarTap,
   );
 
+  const revealStyle = {
+    opacity: reveal,
+    transform: [
+      {
+        translateY: reveal.interpolate({
+          inputRange: [0, 1],
+          outputRange: [12, 0],
+        }),
+      },
+    ],
+  };
+
   return (
     <View style={welcomeStyles.root} onLayout={onRootLayout} collapsable={false}>
       {splitStage ? null : (
-        <View
+        <Animated.View
+          style={revealStyle}
           onLayout={(e) => {
             const { y, height } = e.nativeEvent.layout;
             if (height > 0) onTopBlockBottom?.(y + height);
@@ -433,13 +469,16 @@ function HomeWelcomeViewInner({
               />
             }
           />
-        </View>
+        </Animated.View>
       )}
 
-      <View
+      <Animated.View
         collapsable={false}
         onLayout={onStageLayout}
-        style={splitStage ? welcomeStyles.stageRow : welcomeStyles.radarFlex}
+        style={[
+          splitStage ? welcomeStyles.stageRow : welcomeStyles.radarFlex,
+          revealStyle,
+        ]}
       >
         <View
           style={
@@ -507,7 +546,7 @@ function HomeWelcomeViewInner({
           </View>
         </View>
 
-        <View
+        <Animated.View
           style={[
             welcomeStyles.stageCopy,
             splitStage && welcomeStyles.stageCopyRow,
@@ -516,6 +555,7 @@ function HomeWelcomeViewInner({
               marginTop: space.stageCopyMarginTop,
               paddingBottom: space.stageCopyPaddingBottom,
             },
+            revealStyle,
           ]}
         >
           {splitStage ? (
@@ -559,8 +599,8 @@ function HomeWelcomeViewInner({
               }}
             />
           </View>
-        </View>
-      </View>
+        </Animated.View>
+      </Animated.View>
 
       {/* Поверх всего экрана: рассыпавшийся аватар не обрезается о радар и блоки. */}
       <AvatarDustOverlay dust={avatarDust} source={avatarDustSource} avatarRef={avatarAnchorRef} />

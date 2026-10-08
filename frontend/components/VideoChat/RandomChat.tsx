@@ -1977,14 +1977,18 @@ const RandomChat: React.FC<Props> = ({ route }) => {
                 return <Text style={styles.placeholder}>{L("you")}</Text>;
               }
             } else {
-              // КРИТИЧНО: При выключении камеры показываем заглушку "Вы"
-              // Камера полностью остановлена через unpublishTrack()
-              logger.debug('[RandomChat] Camera off, showing placeholder "Вы"', {
+              // Камера выключена (unpublishTrack() её полностью остановил) — та же
+              // заглушка камеры, что у собеседника.
+              logger.debug('[RandomChat] Camera off, showing camera placeholder', {
                 camOn,
                 isInactiveState,
                 shouldShowLocalVideo,
               });
-              return <Text style={styles.placeholder}>{L("you")}</Text>;
+              return (
+                <View style={styles.localCamOff} pointerEvents="none">
+                  <AwayPlaceholder />
+                </View>
+              );
             }
           })()}
           

@@ -1,5 +1,5 @@
-import React, { memo, useState } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import React, { memo, useEffect, useState } from 'react';
+import { InteractionManager, Pressable, StyleSheet, View } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import {
   WELCOME_TAB_BLOCK_SURFACE,
@@ -23,16 +23,48 @@ type WelcomeCrownButtonProps = {
   small?: boolean;
   /** Заливка круга; по умолчанию — стекло блоков вкладок. */
   surface?: string;
-  /** Для «примерки» рамки на своём аватаре в витрине (опционально). */
-  myUserId?: string;
-  myAvatarVer?: number;
-  avatarUri?: string;
-  nick?: string;
 };
 
+/** Одна витрина на все короны (у каждой вкладки своя кнопка) — см. FramesStoreHost. */
+const storeOpenListeners = new Set<(open: boolean) => void>();
+function setFramesStoreOpen(open: boolean) {
+  storeOpenListeners.forEach((listener) => listener(open));
+}
+
+/** После ухода заставки: витрина собирается в тишине, пока ей никто не пользуется. */
+const STORE_WARM_DELAY_MS = 1500;
+
+/**
+ * Витрина Legendary (только __DEV__), одна на приложение. Собирается заранее и держится
+ * скрытой: корона только показывает готовое. Раньше первый монтаж каруселей, жестов и
+ * ворклетов занимал JS ~350 мс после тапа, и витрина «долго срабатывала».
+ */
+export function FramesStoreHost({ warmEnabled }: { warmEnabled: boolean }) {
+  const [open, setOpen] = useState(false);
+  const [warm, setWarm] = useState(false);
+  useEffect(() => {
+    storeOpenListeners.add(setOpen);
+    return () => {
+      storeOpenListeners.delete(setOpen);
+    };
+  }, []);
+  useEffect(() => {
+    if (!__DEV__ || !warmEnabled || warm) return;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const task = InteractionManager.runAfterInteractions(() => {
+      timer = setTimeout(() => setWarm(true), STORE_WARM_DELAY_MS);
+    });
+    return () => {
+      task.cancel();
+      if (timer) clearTimeout(timer);
+    };
+  }, [warm, warmEnabled]);
+  if (!__DEV__) return null;
+  return <FramesStoreModal visible={open} keepWarm={warm} onClose={() => setOpen(false)} />;
+}
+
 /** Корона в welcome chrome. Витрина Legendary — только в __DEV__; в релизе некликабельный декор. */
-function WelcomeCrownButtonInner({ compact, large, small, surface, myUserId, myAvatarVer, avatarUri, nick }: WelcomeCrownButtonProps) {
-  const [storeOpen, setStoreOpen] = useState(false);
+function WelcomeCrownButtonInner({ compact, large, small, surface }: WelcomeCrownButtonProps) {
   const lang = useLang((state) => state.lang);
   const btnSize = small ? 32 : compact ? 36 : large ? 44 : 40;
   const iconSize = small ? 18 : compact ? 20 : large ? 24 : 22;
@@ -64,25 +96,15 @@ function WelcomeCrownButtonInner({ compact, large, small, surface, myUserId, myA
   }
 
   return (
-    <>
-      <Pressable
-        onPress={() => setStoreOpen(true)}
-        hitSlop={8}
-        accessibilityRole="button"
-        accessibilityLabel={t('storeShowcaseA11y', lang)}
-        style={({ pressed }) => [...btnStyle, pressed && styles.pressed]}
-      >
-        {icon}
-      </Pressable>
-      <FramesStoreModal
-        visible={storeOpen}
-        onClose={() => setStoreOpen(false)}
-        myUserId={myUserId}
-        myAvatarVer={myAvatarVer}
-        avatarUri={avatarUri}
-        nick={nick}
-      />
-    </>
+    <Pressable
+      onPress={() => setFramesStoreOpen(true)}
+      hitSlop={8}
+      accessibilityRole="button"
+      accessibilityLabel={t('storeShowcaseA11y', lang)}
+      style={({ pressed }) => [...btnStyle, pressed && styles.pressed]}
+    >
+      {icon}
+    </Pressable>
   );
 }
 

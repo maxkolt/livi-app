@@ -27,7 +27,6 @@ import {
   LIVI,
   UI_ACCENT,
   UI_ACCENT_LIGHT,
-  UI_GLASS_CONTROL,
   UI_ROW_SURFACE,
   WELCOME_FRIEND_ACTION_BTN_PRESSED_SURFACE,
   WELCOME_FRIEND_ACTION_BTN_SURFACE,
@@ -47,7 +46,6 @@ import {
 } from './constants';
 import { FRIEND_ROW_ACTION_GAP } from '../../constants/uiTokens';
 import { GLASS_HEADER_BTN } from './WelcomeGlassHeader';
-import { WELCOME_CHROME_BTN_SHADOW, WELCOME_CHROME_BTN_SHADOW_IOS, WelcomeFloatShadow } from './WelcomeFloatShadow';
 import { WelcomeTabTitle } from './WelcomeTabTitle';
 import { styles as homeStyles } from './styles';
 
@@ -217,12 +215,10 @@ function FriendRequestsContent({ visible, onClose, lang, friendIds, onAccepted }
               accessibilityLabel={t('storeClose', lang)}
               style={({ pressed }) => [
                 styles.backBtn,
-                { width: btnSize, height: btnSize, borderRadius: btnSize / 2 },
-                WELCOME_CHROME_BTN_SHADOW_IOS,
+                { width: btnSize, height: btnSize },
                 pressed && styles.backBtnPressed,
               ]}
             >
-              <WelcomeFloatShadow radius={btnSize / 2} {...WELCOME_CHROME_BTN_SHADOW} />
               <Ionicons name="chevron-back" size={tablet ? 24 : landscape ? 19 : 20} color={WELCOME_HEADER_TITLE} />
             </Pressable>
           </View>
@@ -323,12 +319,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
   },
+  // Просто стрелка, без круглой подложки; область нажатия прежняя.
   backBtn: {
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: UI_GLASS_CONTROL,
   },
-  backBtnPressed: { opacity: 0.85, transform: [{ scale: 0.96 }] },
+  backBtnPressed: { opacity: 0.6 },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   listContent: {},
   listEmpty: { flexGrow: 1 },

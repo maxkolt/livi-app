@@ -57,6 +57,13 @@ export type BackdropSources = {
 };
 
 /**
+ * Всё приложение под модалками: обёртка навигатора в App.tsx. Модалки (порталы Paper)
+ * лежат вне неё, поэтому их стекло размывает экран под собой, а не само себя.
+ */
+export const APP_BLUR_SOURCE = 'app-root';
+export const APP_BACKDROP: BackdropSources = { background: [], blur: [APP_BLUR_SOURCE] };
+
+/**
  * Список под стеклом (шапка вкладки, навбар): строки пишутся в RenderNode, стекло размывает
  * их на GPU. Без нативного стекла — обычная обёртка.
  */

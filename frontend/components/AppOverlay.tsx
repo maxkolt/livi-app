@@ -23,6 +23,8 @@ import { Portal } from 'react-native-paper';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useModalLayout } from '../utils/modalLayout';
+import { BlurredDim } from '../screens/home/WelcomeStageBackground';
+import { APP_BLUR_SOURCE } from './BackdropBlur';
 
 /**
  * «Назад» при открытой модалке закрывает сначала её — и только потом работает
@@ -79,8 +81,12 @@ export function useOverlayBackHandler(active: boolean, onBack: (() => void) | un
   }, [active]);
 }
 
-/** Один фон под всеми модалками: полупрозрачный, не тёмный и не светлый. */
-export const APP_OVERLAY_DIM = 'rgba(0, 0, 0, 0.5)';
+/**
+ * Один фон под всеми модалками: экран под ними размыт стеклом и притемнён — чуть
+ * светлее прежних 0.5 без размытия (размытие и так гасит контраст).
+ */
+export const APP_OVERLAY_DIM = 'rgba(0, 0, 0, 0.45)';
+const OVERLAY_BLUR_SOURCES = [APP_BLUR_SOURCE] as const;
 
 const APPEAR_MS = 160;
 const DISAPPEAR_MS = 120;
@@ -188,7 +194,9 @@ export function AppOverlay({
           onPress={dismissOnBackdrop ? () => requestCloseRef.current?.() : undefined}
           accessible={false}
         >
-          <Animated.View style={[StyleSheet.absoluteFill, styles.dim, { opacity: progress }]} />
+          <Animated.View style={[StyleSheet.absoluteFill, { opacity: progress }]} pointerEvents="none">
+            <BlurredDim blurSources={OVERLAY_BLUR_SOURCES} dim={APP_OVERLAY_DIM} />
+          </Animated.View>
         </Pressable>
         {avoidKeyboard ? (
           <KeyboardAvoidingView behavior="padding" style={StyleSheet.absoluteFill} pointerEvents="box-none">
@@ -203,9 +211,6 @@ export function AppOverlay({
 }
 
 const styles = StyleSheet.create({
-  dim: {
-    backgroundColor: APP_OVERLAY_DIM,
-  },
   center: {
     flex: 1,
     alignItems: 'center',

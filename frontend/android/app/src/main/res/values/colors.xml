@@ -3,7 +3,8 @@
   <color name="splashscreen_background">#252B34</color>
   <!-- WELCOME_STAGE_BG из JS: фон окна при повороте не должен отличаться от фона экрана. -->
   <color name="window_background">#0A0C14</color>
-  <color name="system_pip_backdrop">#0A0A0C</color>
+  <!-- Фон заглушки системного PiP: HOME_NAV_BG, как у экрана аудиозвонка. -->
+  <color name="system_pip_backdrop">#252B34</color>
   <!-- HOME_NAV_BG: серый «Поиска», середина новой сцены (StagePalette.TEAL). Под сценой
        экранов звонка и после «Принять» — фон аудиозвонка, без шва при передаче в RN. -->
   <color name="home_nav_background">#252B34</color>

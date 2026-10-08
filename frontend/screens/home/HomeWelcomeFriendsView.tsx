@@ -12,11 +12,10 @@ import {
 import { useHomeLayout } from './HomeLayoutContext';
 import AdaptiveText from '../../components/AdaptiveText';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { Image as ExpoImage } from 'expo-image';
 import { t, type Lang } from '../../utils/i18n';
 import { APP_INPUT_MAX_FONT_SIZE_MULTIPLIER } from '../../utils/accessibilityTypography';
 import {
-  HOME_NAV_ICON_WELL,
-  HOME_NAV_TAB_ACTIVE,
   LIVI,
   WELCOME_FILTER_ACTIVE,
   WELCOME_TAB_BLOCK_SURFACE,
@@ -245,15 +244,17 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
         <WelcomeFloatShadow
           radius={tabletLayout ? 18 : WELCOME_FRIENDS_SEGMENT_SHELL_RADIUS}
         />
-        <View
+        <ExpoImage
+          source={INVITE_BADGE}
           style={[
-            styles.inviteIconWrap,
-            tabletLayout && styles.inviteIconWrapTablet,
-            compactLandscape && styles.inviteIconWrapLandscape,
+            styles.inviteBadge,
+            tabletLayout && styles.inviteBadgeTablet,
+            compactLandscape && styles.inviteBadgeLandscape,
           ]}
-        >
-          <InviteGreetingIcon size={compactLandscape ? 28 : tabletLayout ? 36 : 30} />
-        </View>
+          contentFit="cover"
+          cachePolicy="memory-disk"
+          accessible={false}
+        />
         <View style={styles.inviteTextCol}>
           <AdaptiveText
             style={[
@@ -405,9 +406,10 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
               radius={tabletLayout ? 22 : compactLandscape ? 16 : GLASS_HEADER_BTN / 2}
               {...WELCOME_CHROME_BTN_SHADOW}
             />
-            <Ionicons
-              name="person-add-outline"
-              size={tabletLayout ? 22 : compactLandscape ? 17 : 18}
+            {/* Бюст с поднятой рукой — «привет»: тут ждут те, кто хочет дружить. */}
+            <MaterialCommunityIcons
+              name="human-greeting-variant"
+              size={tabletLayout ? 25 : compactLandscape ? 19 : 21}
               color={WELCOME_HEADER_TITLE}
             />
             {friendRequestsCount > 0 ? (
@@ -539,34 +541,10 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
  * Двое здороваются: два человечка, поднятые руки встречаются посередине; в цвет активной
  * вкладки навбара. Вместе занимают ту же площадь, что прежняя одиночная иконка.
  */
-function InviteGreetingIcon({ size }: { size: number }) {
-  const glyph = Math.round(size * 0.78);
-  return (
-    <View style={styles.inviteGreeting}>
-      <MaterialCommunityIcons
-        name="human-greeting"
-        size={glyph}
-        color={HOME_NAV_TAB_ACTIVE}
-        style={styles.inviteGreetingMirror}
-      />
-      <MaterialCommunityIcons
-        name="human-greeting"
-        size={glyph}
-        color={HOME_NAV_TAB_ACTIVE}
-        style={{ marginLeft: -Math.round(size * 0.24) }}
-      />
-    </View>
-  );
-}
+/** Рукопожатие в круге: вырезано по краю синего кольца, прозрачный фон, 192 px. */
+const INVITE_BADGE = require('../../assets/invite-handshake.png');
 
 const styles = StyleSheet.create({
-  inviteGreeting: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-  },
-  inviteGreetingMirror: {
-    transform: [{ scaleX: -1 }],
-  },
   root: {
     flex: 1,
     minHeight: 0,
@@ -816,7 +794,7 @@ const styles = StyleSheet.create({
     height: WELCOME_FRIENDS_SEGMENT_HEIGHT.phone,
     marginTop: WELCOME_FRIENDS_INVITE_GAP.phone,
     marginBottom: 8,
-    // 60 − 2×8 = 44: подложка значка занимает всю высоту содержимого.
+    // 60 − 2×8 = 44: значок занимает всю высоту содержимого.
     paddingVertical: 8,
     paddingHorizontal: 14,
     borderRadius: WELCOME_FRIENDS_SEGMENT_SHELL_RADIUS,
@@ -843,23 +821,21 @@ const styles = StyleSheet.create({
   inviteCardPressed: {
     opacity: 0.92,
   },
-  inviteIconWrap: {
+  // Значок во всю высоту содержимого карточки, без подложки.
+  inviteBadge: {
     width: 44,
     height: 44,
-    borderRadius: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: HOME_NAV_ICON_WELL,
+    borderRadius: 22,
   },
-  inviteIconWrapLandscape: {
+  inviteBadgeLandscape: {
     width: 40,
     height: 40,
-    borderRadius: 12,
+    borderRadius: 20,
   },
-  inviteIconWrapTablet: {
+  inviteBadgeTablet: {
     width: 48,
     height: 48,
-    borderRadius: 14,
+    borderRadius: 24,
   },
   // Заголовок и подпись ближе друг к другу: у Exo 2 высокая строка по умолчанию.
   inviteTextCol: {

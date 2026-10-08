@@ -251,14 +251,6 @@ export function useChatComposer({
     });
   }, []);
 
-  /** Тап по пустой области списка / скролл — закрыть клавиатуру и панель эмодзи. */
-  const dismissComposerKeyboard = React.useCallback(() => {
-    try {
-      Keyboard.dismiss();
-    } catch {}
-    setEmojiPanelOpen(false);
-  }, []);
-
   const handleComposerEmojiSelected = React.useCallback(
     (emoji: EmojiType) => {
       const ch = String(emoji?.emoji || '');
@@ -375,7 +367,6 @@ export function useChatComposer({
     sendMessage,
     onPressSendButton,
     toggleEmojiPanel,
-    dismissComposerKeyboard,
     handleComposerEmojiSelected,
     handleComposerEmojiBackspace,
     handleComposerStickerSelected,

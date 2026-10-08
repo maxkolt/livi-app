@@ -1,67 +1,224 @@
 // components/SplashLoader.tsx
-/**
- * Покрышка холодного старта: тот же фон сцены, что у окна MainActivity, поэтому
- * переход с системной заставки на неё не виден. Под ней «Поиск» рисуется целиком
- * (ник, аватар под линзой уже декодирован), и покрышка один раз гаснет.
- *
- * Без логотипа и без минимальной длительности: раньше логотип появлялся после
- * системной иконки, держался обязательные 3 с и исчезал рывком — два лишних
- * мигания и ~2 с ожидания.
- */
-import React, { useEffect, useRef } from 'react';
-import { Animated, Easing, StyleSheet } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import {
+  View,
+  StyleSheet,
+  Animated,
+  Easing,
+  Image,
+} from 'react-native';
+import { useSafeAreaFrame } from 'react-native-safe-area-context';
 import { WelcomeStageBackground } from '../screens/home/WelcomeStageBackground';
 import { HOME_NAV_BG } from '../screens/home/constants';
 
-const FADE_MS = 220;
-/** Что-то зависло (диск, декодер) — показываем экран как есть, не держим пустой фон. */
-const HARD_STOP_MS = 4500;
+const MIN_SPLASH_DURATION_MS = 3000;
+const SPLASH_FADE_DURATION_MS = 620;
+/** Даём аватару resolve+prefetch; раньше 5с hard-stop часто обгонял готовность. */
+const MAX_SPLASH_DURATION_MS = 9000;
 
 interface SplashLoaderProps {
-  /** Ник/аватар уже известны (с диска или с сервера). */
   dataLoaded: boolean;
-  /** Аватар Поиска декодирован — после ухода покрышки не появится с задержкой. */
-  hasAvatarReady?: boolean;
   onComplete?: () => void;
+  hasNick?: boolean;
+  hasAvatar?: boolean;
+  hasAvatarReady?: boolean;
+  overlayMode?: boolean;
 }
 
-export default function SplashLoader({ dataLoaded, hasAvatarReady = true, onComplete }: SplashLoaderProps) {
-  const opacity = useRef(new Animated.Value(1)).current;
-  const finishingRef = useRef(false);
-  const onCompleteRef = useRef(onComplete);
-  onCompleteRef.current = onComplete;
+export default function SplashLoader({
+  dataLoaded,
+  hasAvatarReady = true,
+  onComplete,
+  overlayMode,
+}: SplashLoaderProps) {
+  const [showSplash, setShowSplash] = useState(true);
+  const { height: windowHeight, width: windowWidth } = useSafeAreaFrame();
+  const logoSize = Math.min(168, Math.max(112, Math.round(Math.min(windowHeight * 0.22, windowWidth * 0.40))));
+  const startedAtRef = useRef(Date.now());
+  const finishScheduledRef = useRef(false);
 
-  const finish = React.useCallback(() => {
-    if (finishingRef.current) return;
-    finishingRef.current = true;
-    Animated.timing(opacity, {
+  const logoScale = useRef(new Animated.Value(1)).current;
+  const logoOpacity = useRef(new Animated.Value(1)).current;
+  const logoTranslateY = useRef(new Animated.Value(0)).current;
+  const logoRotate = useRef(new Animated.Value(0)).current;
+
+  const finishSplash = React.useCallback((durationMs: number) => {
+    if (finishScheduledRef.current) return;
+    finishScheduledRef.current = true;
+    const duration = Math.max(0, durationMs);
+    if (duration === 0) {
+      logoOpacity.setValue(0);
+      setShowSplash(false);
+      onComplete?.();
+      return;
+    }
+    Animated.timing(logoOpacity, {
       toValue: 0,
-      duration: FADE_MS,
-      easing: Easing.out(Easing.quad),
+      duration,
+      easing: Easing.out(Easing.cubic),
       useNativeDriver: true,
-    }).start(() => onCompleteRef.current?.());
-  }, [opacity]);
+    }).start(() => {
+      setShowSplash(false);
+      onComplete?.();
+    });
+  }, [logoOpacity, onComplete]);
 
   useEffect(() => {
-    if (dataLoaded && hasAvatarReady) finish();
-  }, [dataLoaded, finish, hasAvatarReady]);
+    if (overlayMode) {
+      finishSplash(SPLASH_FADE_DURATION_MS);
+      return;
+    }
+
+    const now = Date.now();
+    const elapsedMs = now - startedAtRef.current;
+    const remainingTotalMs = Math.max(0, MIN_SPLASH_DURATION_MS - elapsedMs);
+
+    if (dataLoaded && hasAvatarReady) {
+      if (remainingTotalMs > SPLASH_FADE_DURATION_MS) {
+        const fadeTimer = setTimeout(() => {
+          finishSplash(SPLASH_FADE_DURATION_MS);
+        }, remainingTotalMs - SPLASH_FADE_DURATION_MS);
+        return () => clearTimeout(fadeTimer);
+      }
+
+      finishSplash(remainingTotalMs);
+      return;
+    }
+
+    // Не держим экран бесконечно при ошибке диска/кэша, но даём аватару
+    // закончить data: → file: преобразование до ухода заставки.
+    const remainingHardStopMs = Math.max(
+      0,
+      MAX_SPLASH_DURATION_MS - elapsedMs,
+    );
+    const hardStopTimer = setTimeout(() => {
+      finishSplash(0);
+    }, remainingHardStopMs);
+    return () => clearTimeout(hardStopTimer);
+  }, [dataLoaded, finishSplash, hasAvatarReady, overlayMode]);
 
   useEffect(() => {
-    const t = setTimeout(finish, HARD_STOP_MS);
-    return () => clearTimeout(t);
-  }, [finish]);
+    // «Дыхание»: камера чуть поднимается, объектив (справа) приподнимается вверх под углом.
+    const logoFloat3D = Animated.loop(
+      Animated.sequence([
+        Animated.parallel([
+          Animated.timing(logoTranslateY, {
+            toValue: -12,
+            duration: 2000,
+            easing: Easing.inOut(Easing.cubic),
+            useNativeDriver: true,
+          }),
+          Animated.timing(logoScale, {
+            toValue: 1.06,
+            duration: 2000,
+            easing: Easing.inOut(Easing.cubic),
+            useNativeDriver: true,
+          }),
+          Animated.timing(logoRotate, {
+            toValue: 1,
+            duration: 2000,
+            easing: Easing.inOut(Easing.cubic),
+            useNativeDriver: true,
+          }),
+        ]),
+        Animated.parallel([
+          Animated.timing(logoTranslateY, {
+            toValue: 0,
+            duration: 2000,
+            easing: Easing.inOut(Easing.cubic),
+            useNativeDriver: true,
+          }),
+          Animated.timing(logoScale, {
+            toValue: 1,
+            duration: 2000,
+            easing: Easing.inOut(Easing.cubic),
+            useNativeDriver: true,
+          }),
+          Animated.timing(logoRotate, {
+            toValue: 0,
+            duration: 2000,
+            easing: Easing.inOut(Easing.cubic),
+            useNativeDriver: true,
+          }),
+        ]),
+      ]),
+    );
+    logoFloat3D.start();
+    return () => logoFloat3D.stop();
+  }, [logoRotate, logoScale, logoTranslateY]);
 
+  if (!showSplash) {
+    return null;
+  }
+
+  // Фон сплэша — welcome stage gradient; логотип камеры на полупрозрачном стекле.
   return (
-    // Тапы не проходят: под покрышкой уже живой «Поиск» (кнопка поиска собеседника).
-    <Animated.View style={[styles.container, { backgroundColor: HOME_NAV_BG, opacity }]}>
+    <View style={[styles.container, { backgroundColor: HOME_NAV_BG }]}>
+      {/* Сцена Legendary: приглушённая бирюза у краёв → серый, как у окна MainActivity. */}
       <WelcomeStageBackground palette="tealDeep" />
-    </Animated.View>
+      <View style={styles.middle}>
+        <View style={styles.logoContainer}>
+          <Animated.View
+            style={[
+              styles.logoWrapper,
+              {
+                transform: [
+                  { scale: logoScale },
+                  { translateY: logoTranslateY },
+                  {
+                    // Отрицательный угол: правый край (объектив) поднимается вверх
+                    rotate: logoRotate.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: ['0deg', '-9deg'],
+                    }),
+                  },
+                ],
+                opacity: logoOpacity,
+              },
+            ]}
+          >
+            <Image
+              source={require('../assets/splash-icon.png')}
+              style={[styles.logo, { width: logoSize, height: logoSize }]}
+              resizeMode="contain"
+            />
+          </Animated.View>
+        </View>
+      </View>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
-    ...StyleSheet.absoluteFillObject,
+    flex: 1,
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
     zIndex: 9999,
+  },
+  middle: {
+    flex: 1,
+    flexShrink: 1,
+    minHeight: 0,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  logoContainer: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    flexShrink: 1,
+  },
+  logoWrapper: {
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  logo: {
+    width: 150,
+    height: 150,
+    borderRadius: 12,
+    backgroundColor: 'transparent',
   },
 });
