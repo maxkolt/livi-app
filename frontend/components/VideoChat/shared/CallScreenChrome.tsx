@@ -10,11 +10,11 @@ import {
   Image,
   StyleSheet,
   Pressable,
-  Modal,
   Platform,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { NativeBlurBackdrop, type BackdropSources } from '../../BackdropBlur';
+import { AppOverlay } from '../../AppOverlay';
 import { StageGradient } from '../../../screens/home/WelcomeStageBackground';
 import { useResolvedImageUri } from '../../../hooks/useResolvedImageUri';
 import { useFisheyeAvatarUri } from '../../../utils/avatarFisheye';
@@ -333,61 +333,59 @@ export function CallScreenChrome({
         </View>
       </View>
 
-      <Modal
+      <AppOverlay
         visible={moreOpen}
-        transparent
-        animationType="fade"
+        placement="bottom"
         onRequestClose={() => setMoreOpen(false)}
+        contentStyle={styles.moreLayer}
       >
-        <Pressable style={styles.moreBackdrop} onPress={() => setMoreOpen(false)}>
-          <View style={[styles.moreSheet, { marginBottom: Math.max(102, bottomInset + 92) }]}>
-            {moreItems.map((item) => (
-              <Pressable
-                key={item.key}
-                style={({ pressed }) => [
-                  styles.moreRow,
-                  item.active && styles.moreRowActive,
-                  pressed && styles.pressed,
+        <View style={[styles.moreSheet, { marginBottom: Math.max(102, bottomInset + 92) }]}>
+          {moreItems.map((item) => (
+            <Pressable
+              key={item.key}
+              style={({ pressed }) => [
+                styles.moreRow,
+                item.active && styles.moreRowActive,
+                pressed && styles.pressed,
+              ]}
+              onPress={() => {
+                setMoreOpen(false);
+                item.onPress();
+              }}
+            >
+              <MaterialIcons
+                name={item.icon}
+                size={22}
+                color={
+                  item.danger
+                    ? '#C45A6E'
+                    : item.active
+                      ? WELCOME_NAV_ACTIVE_ACCENT.softText
+                      : WELCOME_PROFILE_ROW_ICON
+                }
+              />
+              <Text
+                style={[
+                  styles.moreLabel,
+                  item.danger && { color: '#C45A6E' },
+                  item.active && { color: WELCOME_NAV_ACTIVE_ACCENT.softText, fontWeight: '600' },
                 ]}
-                onPress={() => {
-                  setMoreOpen(false);
-                  item.onPress();
-                }}
+                numberOfLines={1}
               >
+                {item.label}
+              </Text>
+              {item.active ? (
                 <MaterialIcons
-                  name={item.icon}
-                  size={22}
-                  color={
-                    item.danger
-                      ? '#C45A6E'
-                      : item.active
-                        ? WELCOME_NAV_ACTIVE_ACCENT.softText
-                        : WELCOME_PROFILE_ROW_ICON
-                  }
+                  name="check"
+                  size={20}
+                  color={WELCOME_NAV_ACTIVE_ACCENT.solid}
+                  style={styles.moreCheck}
                 />
-                <Text
-                  style={[
-                    styles.moreLabel,
-                    item.danger && { color: '#C45A6E' },
-                    item.active && { color: WELCOME_NAV_ACTIVE_ACCENT.softText, fontWeight: '600' },
-                  ]}
-                  numberOfLines={1}
-                >
-                  {item.label}
-                </Text>
-                {item.active ? (
-                  <MaterialIcons
-                    name="check"
-                    size={20}
-                    color={WELCOME_NAV_ACTIVE_ACCENT.solid}
-                    style={styles.moreCheck}
-                  />
-                ) : null}
-              </Pressable>
-            ))}
-          </View>
-        </Pressable>
-      </Modal>
+              ) : null}
+            </Pressable>
+          ))}
+        </View>
+      </AppOverlay>
     </>
   );
 }
@@ -791,11 +789,13 @@ const styles = StyleSheet.create({
   pressed: {
     opacity: 0.82,
   },
-  moreBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.45)',
-    justifyContent: 'flex-end',
+  /** Меню над капсулой кнопок: во всю ширину с полями, в landscape — не шире 480. */
+  moreLayer: {
+    alignItems: 'stretch',
     paddingHorizontal: 18,
+    width: '100%',
+    maxWidth: 516,
+    alignSelf: 'center',
   },
   moreSheet: {
     borderRadius: 18,

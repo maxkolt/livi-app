@@ -303,6 +303,19 @@ describe('migration from password-protected backups', () => {
     await expect(toWireMessagePayload(textPayload({ to: ALICE }))).rejects.toMatchObject({ reason: 'locked' });
   });
 
+  it('disabled earlier and no key here: waits for the old password instead of a new key', async () => {
+    // Отключали прежней кнопкой: ключ снят с публикации, копия под паролем осталась.
+    server.keys.set(BOB, '');
+    server.disabled.add(BOB);
+    expect(await refreshE2eState()).toBe('needs_restore');
+    expect(server.keys.get(BOB)).toBe('');
+    expect(await restoreE2e('bob-password')).toEqual({ ok: true });
+    // Ключ вернулся — следующая сверка включает шифрование тем же ключом.
+    expect(await refreshE2eState()).toBe('ready');
+    expect(server.backups.get(BOB)?.pk).toBe(server.keys.get(BOB));
+    expect(((await decryptIncomingMessage(delivered(oldWire), placeholder)) as any).text).toBe('секретный текст');
+  });
+
   it('rejects a wrong password and keeps the published key', async () => {
     const before = server.keys.get(BOB);
     await refreshE2eState();
@@ -409,17 +422,23 @@ describe('turning encryption off and on again', () => {
     expect(server.keys.get(ALICE)).toBe(before);
   });
 
-  it('after reinstalling while disabled, loads the same key without a password', async () => {
+  it('turns itself back on with the same key on the next check', async () => {
+    const before = server.keys.get(ALICE);
+    await disableE2e();
+    expect(getE2eStatus()).toBe('disabled');
+    // Отключали прежней кнопкой — шифрование теперь всегда включено.
+    expect(await refreshE2eState()).toBe('ready');
+    expect(server.keys.get(ALICE)).toBe(before);
+  });
+
+  it('after reinstalling while disabled, turns back on with the same key without a password', async () => {
     const before = server.keys.get(ALICE);
     await disableE2e();
     secure.clear();
     as('');
     as(ALICE);
-    expect(await refreshE2eState()).toBe('disabled');
+    expect(await refreshE2eState()).toBe('ready');
     expect(hasLocalE2eKey()).toBe(true);
-    expect(await toWireMessagePayload(textPayload())).toEqual(textPayload());
-    expect(await enableE2eAgain()).toEqual({ ok: true });
-    expect(getE2eStatus()).toBe('ready');
     expect(server.keys.get(ALICE)).toBe(before);
   });
 });

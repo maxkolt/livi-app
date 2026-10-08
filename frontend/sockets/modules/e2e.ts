@@ -225,8 +225,16 @@ export function refreshE2eState(): Promise<E2eStatus> {
     // Отключил сам. Сервер до автошифрования флага не шлёт: там признак — ключ снят, копия есть.
     const disabled =
       resp.disabled === true || (!state.serverPublicKey && !!state.backupKdf && !!state.backupPk);
-    if (disabled) setStatus("disabled");
-    else if (own && state.serverPublicKey === toBase64(own.publicKey)) {
+    if (disabled) {
+      // Шифрование всегда включено (кнопки «Отключить» больше нет). Кто отключал его
+      // раньше — включаем обратно тем же ключом: с устройства или из хранилища. Ключа
+      // нет, а есть копия под паролем прежней схемы — сперва вернуть её паролем, иначе
+      // новый ключ сделает старую переписку нечитаемой.
+      if (own) await autoEnable(me, own);
+      else if (vaultReadFailed) setStatus("needs_setup");
+      else if (state.backupKdf && state.backupPk) setStatus("needs_restore");
+      else await autoEnable(me, null);
+    } else if (own && state.serverPublicKey === toBase64(own.publicKey)) {
       setStatus("ready");
       ensureVaultCopy(me, own);
     }
@@ -505,6 +513,13 @@ async function notePeerKey(peerId: string, pk: string): Promise<void> {
 }
 
 /** Ключ собеседника или null, если он ещё не включил шифрование. Бросает при сбое сети. */
+/** Ключ собеседника, если он уже известен в этой сессии (для первого кадра экрана); иначе undefined. */
+export function peekPeerPublicKey(peerId: string): string | null | undefined {
+  const cached = peerKeys.get(peerId);
+  if (!cached) return undefined;
+  return cached.pk || null;
+}
+
 export async function getPeerPublicKey(peerId: string, opts?: { force?: boolean }): Promise<string | null> {
   syncUser();
   const cached = peerKeys.get(peerId);

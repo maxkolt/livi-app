@@ -32,11 +32,7 @@ import {
   WELCOME_MUTED_TEXT,
 } from '../../screens/home/constants';
 import { WelcomeStageBackground } from '../../screens/home/WelcomeStageBackground';
-import {
-  WelcomeOverlayCard,
-  WelcomeOverlayDim,
-  WelcomeOverlayPill,
-} from '../../screens/home/WelcomeOverlayChrome';
+import { AppDialogModal } from '../AppDialog';
 
 const SHOWCASE_AVATAR = require('../../assets/frames/showcase-avatar.jpg');
 /** Под фото в рамке: пока кадр не декодирован, градиент рамки не виден сплошным кругом. */
@@ -379,6 +375,10 @@ function FramesStoreContent({
   const [paymentBusy, setPaymentBusy] = useState<CosmeticKind | null>(null);
   const [pendingPaymentId, setPendingPaymentId] = useState('');
   const [purchaseNotice, setPurchaseNotice] = useState<PurchaseNotice | null>(null);
+  // Закрытое окно ещё исчезает — держим в нём прежний текст.
+  const lastPurchaseNoticeRef = useRef<PurchaseNotice | null>(null);
+  if (purchaseNotice) lastPurchaseNoticeRef.current = purchaseNotice;
+  const shownNotice = purchaseNotice ?? lastPurchaseNoticeRef.current;
   const entitlements = useCosmetics();
   const activeBackground = CHAT_BACKGROUND_CATALOG[activeBackgroundIndex] ?? CHAT_BACKGROUND_CATALOG[0];
   const activeFrame = FRAME_CATALOG[activeFrameIndex] ?? FRAME_CATALOG[0];
@@ -764,68 +764,42 @@ function FramesStoreContent({
           </View>
         </View>
 
-        {purchaseNotice ? (
-          <View style={styles.purchaseNoticeLayer} accessibilityViewIsModal>
-            <WelcomeOverlayDim strong={purchaseNotice.kind === 'error'} />
-            <Pressable
-              style={StyleSheet.absoluteFillObject}
-              onPress={closePurchaseNotice}
-              accessibilityRole="button"
-              accessibilityLabel={L('storeClose')}
-            />
-            <WelcomeOverlayCard style={styles.purchaseNoticeCard} opaque>
-              <View style={styles.purchaseNoticeHeader}>
-                <LinearGradient
-                  colors={purchaseNotice.kind === 'success'
-                    ? ['rgba(218,178,92,0.30)', 'rgba(98,176,216,0.12)']
-                    : purchaseNotice.kind === 'error'
-                      ? ['rgba(255,90,103,0.26)', 'rgba(255,90,103,0.08)']
-                      : ['rgba(188,196,208,0.18)', 'rgba(188,196,208,0.06)']}
-                  style={[
-                    styles.purchaseNoticeIcon,
-                    purchaseNotice.kind === 'success'
-                      ? styles.purchaseNoticeIconSuccess
-                      : purchaseNotice.kind === 'error'
-                        ? styles.purchaseNoticeIconError
-                        : styles.purchaseNoticeIconCanceled,
-                  ]}
-                >
-                  <MaterialCommunityIcons
-                    name={purchaseNotice.kind === 'success'
-                      ? 'check-circle-outline'
-                      : purchaseNotice.kind === 'error'
-                        ? 'alert-circle-outline'
-                        : 'close-circle-outline'}
-                    size={27}
-                    color={purchaseNotice.kind === 'success'
-                      ? CROWN_GOLD
-                      : purchaseNotice.kind === 'error'
-                        ? '#FF5A67'
-                        : WELCOME_MUTED_TEXT}
-                  />
-                </LinearGradient>
-                <FitText style={styles.purchaseNoticeTitle} minimumFontScale={0.78} numberOfLines={2}>
-                  {L(purchaseNotice.title)}
-                </FitText>
-              </View>
-
-              <AdaptiveText style={styles.purchaseNoticeMessage}>
-                {L(purchaseNotice.message)}
-              </AdaptiveText>
-
-              <View style={styles.purchaseNoticeDivider} />
-              <WelcomeOverlayPill
-                label={purchaseNotice.kind === 'error' ? L('storeClose') : L('storeOk')}
-                onPress={closePurchaseNotice}
-                variant={purchaseNotice.kind === 'error'
-                  ? 'danger'
-                  : purchaseNotice.kind === 'canceled'
-                    ? 'secondary'
-                    : 'primary'}
+        <AppDialogModal
+          visible={!!purchaseNotice}
+          onRequestClose={closePurchaseNotice}
+          icon={
+            shownNotice ? (
+              <MaterialCommunityIcons
+                name={shownNotice.kind === 'success'
+                  ? 'check-circle-outline'
+                  : shownNotice.kind === 'error'
+                    ? 'alert-circle-outline'
+                    : 'close-circle-outline'}
+                size={22}
+                color={shownNotice.kind === 'success'
+                  ? CROWN_GOLD
+                  : shownNotice.kind === 'error'
+                    ? '#FF5A67'
+                    : WELCOME_MUTED_TEXT}
               />
-            </WelcomeOverlayCard>
-          </View>
-        ) : null}
+            ) : null
+          }
+          title={shownNotice ? L(shownNotice.title) : undefined}
+          message={shownNotice ? L(shownNotice.message) : undefined}
+          actions={
+            shownNotice
+              ? [{
+                  label: shownNotice.kind === 'error' ? L('storeClose') : L('storeOk'),
+                  onPress: closePurchaseNotice,
+                  variant: shownNotice.kind === 'error'
+                    ? 'danger'
+                    : shownNotice.kind === 'canceled'
+                      ? 'cancel'
+                      : 'primary',
+                }]
+              : []
+          }
+        />
       </View>
   );
 }
@@ -855,56 +829,6 @@ const styles = StyleSheet.create({
   closeBtn: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center' },
   closeBtnPressed: { opacity: 0.72 },
   lowerContent: { flex: 1, minHeight: 0 },
-  purchaseNoticeLayer: {
-    ...StyleSheet.absoluteFillObject,
-    zIndex: 100,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 22,
-  },
-  purchaseNoticeCard: {
-    zIndex: 1,
-    width: '100%',
-    maxWidth: 380,
-    padding: 20,
-    borderColor: 'rgba(238,229,244,0.16)',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 14 },
-    shadowOpacity: 0.5,
-    shadowRadius: 24,
-    elevation: 18,
-  },
-  purchaseNoticeHeader: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  purchaseNoticeIcon: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-  },
-  purchaseNoticeIconSuccess: { borderColor: 'rgba(218,178,92,0.50)' },
-  purchaseNoticeIconError: { borderColor: 'rgba(255,90,103,0.56)' },
-  purchaseNoticeIconCanceled: { borderColor: 'rgba(188,196,208,0.28)' },
-  purchaseNoticeTitle: {
-    flex: 1,
-    minWidth: 0,
-    color: WELCOME_HEADER_TITLE,
-    fontSize: 19,
-    lineHeight: 24,
-    fontWeight: '800',
-  },
-  purchaseNoticeMessage: {
-    marginTop: 14,
-    color: WELCOME_MUTED_TEXT,
-    fontSize: 14,
-    lineHeight: 20,
-  },
-  purchaseNoticeDivider: {
-    height: StyleSheet.hairlineWidth,
-    marginVertical: 16,
-    backgroundColor: 'rgba(255,255,255,0.10)',
-  },
   sections: { flex: 1, minHeight: 0 },
   sectionsLandscape: { flexDirection: 'row', alignItems: 'stretch' },
   storeSection: {

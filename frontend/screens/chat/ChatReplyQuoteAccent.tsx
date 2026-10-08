@@ -22,12 +22,6 @@ function parseRgb(color: string): { r: number; g: number; b: number } | null {
   return { r: Number(m[1]), g: Number(m[2]), b: Number(m[3]) };
 }
 
-function withAlpha(color: string, alpha: number): string {
-  const rgb = parseRgb(color);
-  if (!rgb) return color;
-  return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${alpha})`;
-}
-
 /**
  * Скобка цитаты: один continuous path.
  * Горизонтали почти до края; после ~16% ширины плавно гаснут (mask),
@@ -42,7 +36,8 @@ export function ChatReplyQuoteAccent({
   const uid = React.useId().replace(/:/g, '');
   const lineW = width ?? (Platform.OS === 'ios' ? 1.15 : 1.3);
   const strokeOpacity = 0.42;
-  const wash = withAlpha(color, 0.07);
+  /** Подложка цитаты у левого края; к правому гаснет вместе с линиями — края не видно. */
+  const washOpacity = 0.08;
   const rgb = parseRgb(color) || { r: 160, g: 160, b: 180 };
   const solid = `rgb(${rgb.r}, ${rgb.g}, ${rgb.b})`;
 
@@ -83,6 +78,7 @@ export function ChatReplyQuoteAccent({
   // Mask: до ~16% полностью видимо, дальше плавное затемнение/исчезновение
   const maskId = `replyMask_${uid}`;
   const gradId = `replyFade_${uid}`;
+  const washGradId = `replyWash_${uid}`;
 
   const washLeft = hx + half;
   const washTop = topY + half;
@@ -93,23 +89,15 @@ export function ChatReplyQuoteAccent({
     <View onLayout={onLayout} style={[styles.wrap, style]}>
       {ready ? (
         <View pointerEvents="none" style={StyleSheet.absoluteFill}>
-          <View
-            style={{
-              position: 'absolute',
-              left: washLeft,
-              top: washTop,
-              right: inset - 2,
-              bottom: size.h - washBottom,
-              backgroundColor: wash,
-              borderTopLeftRadius: washRadius,
-              borderBottomLeftRadius: washRadius,
-              borderTopRightRadius: 8,
-              borderBottomRightRadius: 8,
-            }}
-          />
-
           <Svg width={size.w} height={size.h} style={styles.svg}>
             <Defs>
+              <LinearGradient id={washGradId} x1="0" y1="0" x2="1" y2="0">
+                <Stop offset="0" stopColor={solid} stopOpacity={washOpacity} />
+                <Stop offset="0.16" stopColor={solid} stopOpacity={washOpacity} />
+                <Stop offset="0.45" stopColor={solid} stopOpacity={washOpacity * 0.48} />
+                <Stop offset="0.72" stopColor={solid} stopOpacity={washOpacity * 0.14} />
+                <Stop offset="1" stopColor={solid} stopOpacity={0} />
+              </LinearGradient>
               <LinearGradient id={gradId} x1="0" y1="0" x2="1" y2="0">
                 <Stop offset="0" stopColor="#ffffff" stopOpacity={1} />
                 <Stop offset="0.16" stopColor="#ffffff" stopOpacity={1} />
@@ -134,6 +122,16 @@ export function ChatReplyQuoteAccent({
                 />
               </Mask>
             </Defs>
+
+            <Rect
+              x={washLeft}
+              y={washTop}
+              width={Math.max(0, size.w - washLeft)}
+              height={Math.max(0, washBottom - washTop)}
+              rx={washRadius}
+              ry={washRadius}
+              fill={`url(#${washGradId})`}
+            />
 
             <Path
               d={bracketPath}

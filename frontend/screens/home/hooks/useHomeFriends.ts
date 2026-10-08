@@ -18,6 +18,7 @@ import {
   friendsCacheKeyForIdentity,
   mapToFriend,
   mergeFriendBusyFromFetch,
+  reuseUnchangedFriends,
 } from '../friendHelpers';
 import { shouldSkipHomeUiSettle } from '../../../utils/globalEvents';
 import type { Friend } from '../types';
@@ -170,12 +171,11 @@ export function useHomeFriends({
               const prevAvatarVer = prevOne?.avatarVer || 0;
               const avatarVerChanged = newAvatarVer !== prevAvatarVer;
 
-              let finalAvatarThumbB64: string;
-              if (avatarVerChanged || 'avatarThumbB64' in f) {
-                finalAvatarThumbB64 = typeof f.avatarThumbB64 === 'string' ? f.avatarThumbB64 : '';
-              } else {
-                finalAvatarThumbB64 = prevOne?.avatarThumbB64 || '';
-              }
+              // Список без миниатюр (обновление по открытию вкладки) — пустое поле не
+              // значит «аватар удалён»: при той же версии оставляем прежнюю миниатюру.
+              const finalAvatarThumbB64 = avatarVerChanged
+                ? String(f.avatarThumbB64 || '')
+                : String(f.avatarThumbB64 || prevOne?.avatarThumbB64 || '');
 
               let mergedOnlineCorr: boolean;
               if (f.online) {
@@ -205,12 +205,11 @@ export function useHomeFriends({
             const prevAvatarVer = prevOne?.avatarVer || 0;
             const avatarVerChanged = newAvatarVer !== prevAvatarVer;
 
-            let finalAvatarThumbB64: string;
-            if (avatarVerChanged || 'avatarThumbB64' in f) {
-              finalAvatarThumbB64 = typeof f.avatarThumbB64 === 'string' ? f.avatarThumbB64 : '';
-            } else {
-              finalAvatarThumbB64 = prevOne?.avatarThumbB64 || '';
-            }
+            // Список без миниатюр (обновление по открытию вкладки) — пустое поле не
+            // значит «аватар удалён»: при той же версии оставляем прежнюю миниатюру.
+            const finalAvatarThumbB64 = avatarVerChanged
+              ? String(f.avatarThumbB64 || '')
+              : String(f.avatarThumbB64 || prevOne?.avatarThumbB64 || '');
 
             let mergedOnlineMain: boolean;
             if (f.online) {
@@ -265,7 +264,7 @@ export function useHomeFriends({
             AsyncStorage.removeItem(FRIENDS_CACHE_KEY_LEGACY).catch(() => {});
           } catch {}
 
-          return merged;
+          return reuseUnchangedFriends(merged, prev);
         });
       } catch (e) {
         logger.warn('Friends load error', e);

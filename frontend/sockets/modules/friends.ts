@@ -221,6 +221,75 @@ export function fetchFriends(
   })();
 }
 
+/** Входящая заявка в друзья — строка страницы «Заявки». */
+export type FriendRequestListItem = {
+  _id: string;
+  nick?: string;
+  avatar?: string;
+  avatarVer?: number;
+  avatarThumbB64?: string;
+  online?: boolean;
+};
+
+/**
+ * Входящие заявки (случайный чат и открытые ссылки-приглашения), новые сверху.
+ * Старый сервер без этого запроса ответит ошибкой — тогда { ok: false }.
+ */
+export function fetchFriendRequests(options: { includeAvatarThumbs?: boolean } = {}) {
+  const includeAvatarThumbs = options.includeAvatarThumbs !== false;
+  type Result = { ok: boolean; list?: FriendRequestListItem[]; error?: string };
+  const viaSocket = async () => {
+    if (socket.connected && shared.currentUserId) {
+      const ok = await ensureReauthBeforePrivilegedSocketOp();
+      if (!ok) throw new Error("reauth_before_friend_requests_failed");
+    }
+    // Коротко и без повторов: не ответил (старый сервер, плохая сеть) — сразу REST.
+    return emitAck<Result>("friends:requests", { includeAvatarThumbs }, 5000, 0);
+  };
+
+  const viaHttp = async (): Promise<Result> => {
+    const installId = await getInstallId().catch(() => "");
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (installId) headers["x-install-id"] = String(installId);
+    if (shared.currentUserId) headers["x-user-id"] = String(shared.currentUserId);
+    const url = `${API_BASE}/api/friends/requests?includeAvatarThumbs=${includeAvatarThumbs ? "1" : "0"}`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 12000);
+    try {
+      const res = await fetch(url, { method: "GET", headers, signal: controller.signal });
+      if (!res.ok) return { ok: false, error: `http_${res.status}` };
+      return await res.json();
+    } catch (e: any) {
+      return { ok: false, error: e?.message || "network_error" };
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  };
+
+  // Сокет и REST — сразу оба, побеждает первый ответ со списком. REST быстро говорит
+  // «такого запроса нет» (404, сервер старее) — тогда сокет не ждём, иначе страница
+  // висела на индикаторе до таймаута сокета.
+  return new Promise<Result>((resolve) => {
+    let settled = false;
+    let pending = 2;
+    let lastFail: Result = { ok: false, error: "unavailable" };
+    const finish = (r: Result) => {
+      if (settled) return;
+      settled = true;
+      resolve(r);
+    };
+    const onResult = (r: Result | null | undefined) => {
+      if (r?.ok && Array.isArray(r.list)) return finish(r);
+      if (r) lastFail = r;
+      if (r?.error === "http_404") return finish(r);
+      pending -= 1;
+      if (pending === 0) finish(lastFail);
+    };
+    viaSocket().then(onResult, () => onResult(null));
+    viaHttp().then(onResult, () => onResult(null));
+  });
+}
+
 export function onFriendAdded(
   cb: (d: { userId: string; userNick?: string }) => void,
 ): () => void {
@@ -314,8 +383,12 @@ export function removeFriend(peerId: string) {
   })();
 }
 
-// Проверка реферальной ссылки
-export async function checkInviteLink(code: string): Promise<{
+/**
+ * Проверка реферальной ссылки. markPending — это открытие самой ссылки: сервер
+ * запомнит пригласившего во входящих заявках (страница «Заявки»), даже если окно
+ * закроют, не ответив. Остальные вызовы (подгрузить ник) — без следов.
+ */
+export async function checkInviteLink(code: string, options: { markPending?: boolean } = {}): Promise<{
   ok: boolean;
   inviter?: {
     id: string;
@@ -346,7 +419,7 @@ export async function checkInviteLink(code: string): Promise<{
       headers["x-user-id"] = userId;
     }
 
-    const url = `${API_BASE}/api/invite/${code}`;
+    const url = `${API_BASE}/api/invite/${code}${options.markPending ? "?pending=1" : ""}`;
     logger.debug("Checking invite link:", { url, code, userId });
 
     const response = await fetch(url, {

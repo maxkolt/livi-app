@@ -12,7 +12,7 @@ import { NavigationContainer, createNavigationContainerRef, CommonActions, Defau
 import { ThemeProvider, useAppTheme } from "./theme/ThemeProvider";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { Audio } from "expo-av";
-import { View, Text, Animated, TouchableOpacity, StyleSheet, Easing, AppState, Linking, LogBox, Keyboard, InteractionManager, NativeModules, NativeEventEmitter, BackHandler, Modal } from "react-native";
+import { Animated, Easing, AppState, Linking, LogBox, Keyboard, InteractionManager, NativeModules, NativeEventEmitter, BackHandler } from "react-native";
 import { BlurView } from "expo-blur";
 import { MaterialIcons } from "@expo/vector-icons";
 import { PanGestureHandler } from "react-native-gesture-handler";
@@ -32,10 +32,14 @@ import {
 import InCallManager from 'react-native-incall-manager';
 import { startIncomingCallAlert, stopIncomingCallAlert } from './utils/incomingCallAlert';
 import HomeScreen, { markHomeScreenBootedForSession } from "./screens/HomeScreen";
-import { UI_SURFACE_RAISED, WELCOME_NAV_ACTIVE_ACCENT, WELCOME_NAV_ACTIVE_ICON, WELCOME_STAGE_BG } from "./screens/home/constants";
+import { WELCOME_NAV_ACTIVE_ICON, WELCOME_STAGE_BG } from "./screens/home/constants";
 import { IncomingAnswerConnectingCover } from "./components/VideoChat/shared/IncomingAnswerConnectingCover";
 import { peekCallAvatar, peekCallNick, primeCallNick } from "./utils/callAvatarPrime";
 import IncomingSharePickerModal from "./components/IncomingSharePickerModal";
+import { AppDialogModal } from "./components/AppDialog";
+import { AppAlertHost } from "./components/AppAlert";
+import { useFonts } from "expo-font";
+import { APP_FONT_FILES } from "./utils/appFont";
 import { PiPProvider, usePiP } from "./src/pip/PiPContext";
 import PiPOverlay from "./src/pip/PiPOverlay";
 import SystemPiPLogoLayer from "./src/pip/SystemPiPLogoLayer";
@@ -430,156 +434,8 @@ const isVideoSessionRoute = (routeName?: string | null) =>
 
 (global as any).__cycleAudioRouteRef = { current: null as (() => void) | null };
 
-const getOverlayPermissionModalStyles = (theme: any, isDark: boolean) => {
-  const nav = WELCOME_NAV_ACTIVE_ACCENT;
-  return StyleSheet.create({
-  overlayPermissionBackdrop: {
-    flex: 1,
-    backgroundColor: isDark ? 'rgba(5, 8, 14, 0.82)' : 'rgba(26, 35, 52, 0.40)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 24,
-  },
-  overlayPermissionCard: {
-    width: '100%',
-    maxWidth: 360,
-    borderRadius: 24,
-    padding: 22,
-    backgroundColor: isDark ? UI_SURFACE_RAISED : '#F0F2F5',
-    borderWidth: 1,
-    borderColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(113,91,168,0.16)',
-    shadowColor: '#000',
-    shadowOpacity: isDark ? 0.32 : 0.12,
-    shadowRadius: 18,
-    shadowOffset: { width: 0, height: 10 },
-    elevation: 10,
-  },
-  overlayPermissionHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 14,
-  },
-  overlayPermissionIconWrap: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 12,
-    backgroundColor: isDark ? 'rgba(4, 4, 4, 0.8)' : 'rgba(113,91,168,0.12)',
-    borderWidth: 1,
-    borderColor: isDark ? nav.solid : theme.colors.primary,
-  },
-  overlayPermissionTitleWrap: {
-    flex: 1,
-    minWidth: 0,
-  },
-  overlayPermissionTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: isDark ? WELCOME_NAV_ACTIVE_ICON : '#8B7BC8',
-  },
-  overlayPermissionText: {
-    fontSize: 13,
-    color: isDark ? '#AEB6C6' : '#444444',
-    lineHeight: 19,
-    marginBottom: 16,
-  },
-  overlayPermissionNote: {
-    borderRadius: 16,
-    paddingVertical: 12,
-    paddingHorizontal: 14,
-    marginBottom: 18,
-    backgroundColor: isDark ? 'rgba(98, 176, 216, 0.12)' : '#F2EEF9',
-    borderWidth: 1,
-    borderColor: isDark ? nav.solid15 : 'rgba(113,91,168,0.22)',
-  },
-  overlayPermissionNoteText: {
-    fontSize: 14,
-    lineHeight: 20,
-    color: isDark ? '#AEB6C6' : '#444444',
-    fontWeight: '600',
-  },
-  overlayPermissionButtons: {
-    flexDirection: 'row',
-    gap: 10,
-    justifyContent: 'space-between',
-    alignItems: 'stretch',
-  },
-  overlayPermissionButtonSecondary: {
-    flex: 0.82,
-    minHeight: 52,
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    borderRadius: 14,
-    backgroundColor: isDark ? 'rgba(138, 143, 153, 0.28)' : 'rgba(59, 68, 83, 0.2)',
-    borderWidth: 0.2,
-    borderColor: isDark ? 'rgba(138, 143, 153, 0.45)' : 'rgba(59, 68, 83, 0.35)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  overlayPermissionButtonSecondaryText: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: isDark ? '#AEB6C6' : '#444444',
-  },
-  overlayPermissionButtonPrimary: {
-    flex: 1.28,
-    minHeight: 52,
-    borderRadius: 14,
-    overflow: 'hidden',
-  },
-  overlayPermissionButtonPrimaryLightOuter: {
-    backgroundColor: theme.colors.primary,
-    paddingTop: 1,
-    paddingLeft: 1,
-    paddingRight: 1,
-    paddingBottom: 1.5,
-  },
-  overlayPermissionButtonPrimaryDarkOuter: {
-    backgroundColor: nav.solid,
-    padding: 1,
-  },
-  overlayPermissionButtonPrimaryLightInner: {
-    flex: 1,
-    borderTopLeftRadius: 13,
-    borderTopRightRadius: 13,
-    borderBottomLeftRadius: 12.5,
-    borderBottomRightRadius: 12.5,
-    backgroundColor: '#9E8FD6',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 18,
-  },
-  overlayPermissionButtonPrimaryDark: {
-    flex: 1,
-    borderRadius: 13,
-    backgroundColor: 'rgba(4, 4, 4, 0.8)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 18,
-  },
-  overlayPermissionButtonPrimaryText: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: isDark ? '#AEB6C6' : '#444444',
-    textAlign: 'center',
-  },
-  overlayPermissionLinkButton: {
-    alignSelf: 'flex-start',
-    marginTop: 8,
-    paddingVertical: 6,
-  },
-});
-};
-
 function AppContent() {
   const { theme, isDark } = useAppTheme();
-  const overlayPermissionModalStyles = React.useMemo(
-    () => getOverlayPermissionModalStyles(theme, isDark),
-    [theme, isDark]
-  );
   const pip = usePiP();
   const lang = useLang((s) => s.lang);
   const hydrateLang = useLang((s) => s.hydrate);
@@ -5175,113 +5031,54 @@ function AppContent() {
 
           {/* Android 14+: «Доступ к звонкам» — показ входящих на весь экран, если Play его не выдал */}
           {Platform.OS === 'android' && (
-            <Modal
+            <AppDialogModal
               visible={callAccessModalVisible}
-              transparent
-              animationType="fade"
               onRequestClose={hideCallAccessModal}
-            >
-              <TouchableOpacity
-                activeOpacity={1}
-                style={overlayPermissionModalStyles.overlayPermissionBackdrop}
-                onPress={hideCallAccessModal}
-              >
-                <TouchableOpacity activeOpacity={1} onPress={(e) => e.stopPropagation()} style={overlayPermissionModalStyles.overlayPermissionCard}>
-                  <View style={overlayPermissionModalStyles.overlayPermissionHeader}>
-                    <View style={overlayPermissionModalStyles.overlayPermissionIconWrap}>
-                      <MaterialIcons name="phone-in-talk" size={20} color={isDark ? WELCOME_NAV_ACTIVE_ICON : theme.colors.primary} />
-                    </View>
-                    <View style={overlayPermissionModalStyles.overlayPermissionTitleWrap}>
-                      <Text style={overlayPermissionModalStyles.overlayPermissionTitle}>{t('callPermissionTitle', lang)}</Text>
-                    </View>
-                  </View>
-                  <Text style={overlayPermissionModalStyles.overlayPermissionText}>
-                    {t('callPermissionMessage', lang)}
-                  </Text>
-                  <View style={overlayPermissionModalStyles.overlayPermissionButtons}>
-                    <TouchableOpacity style={overlayPermissionModalStyles.overlayPermissionButtonSecondary} onPress={hideCallAccessModal}>
-                      <Text style={overlayPermissionModalStyles.overlayPermissionButtonSecondaryText}>{t('notNow', lang)}</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={[
-                        overlayPermissionModalStyles.overlayPermissionButtonPrimary,
-                        isDark
-                          ? overlayPermissionModalStyles.overlayPermissionButtonPrimaryDarkOuter
-                          : overlayPermissionModalStyles.overlayPermissionButtonPrimaryLightOuter,
-                      ]}
-                      onPress={() => void openIncomingCallDisplaySettings()}
-                    >
-                      <View style={isDark ? overlayPermissionModalStyles.overlayPermissionButtonPrimaryDark : overlayPermissionModalStyles.overlayPermissionButtonPrimaryLightInner}>
-                        <Text style={overlayPermissionModalStyles.overlayPermissionButtonPrimaryText}>{t('allowAction', lang)}</Text>
-                      </View>
-                    </TouchableOpacity>
-                  </View>
-                </TouchableOpacity>
-              </TouchableOpacity>
-            </Modal>
+              icon={<MaterialIcons name="phone-in-talk" size={20} color={WELCOME_NAV_ACTIVE_ICON} />}
+              title={t('callPermissionTitle', lang)}
+              message={t('callPermissionMessage', lang)}
+              actions={[
+                { label: t('notNow', lang), onPress: hideCallAccessModal },
+                {
+                  label: t('allowAction', lang),
+                  onPress: () => void openIncomingCallDisplaySettings(),
+                  variant: 'primary',
+                },
+              ]}
+            />
           )}
 
           {/* Android 12+: пояснение про «Устройства рядом» — только если системный диалог отклонили */}
           {Platform.OS === 'android' && (
-            <Modal
+            <AppDialogModal
               visible={bluetoothExplainMode != null}
-              transparent
-              animationType="fade"
               onRequestClose={() => setBluetoothExplainMode(null)}
-            >
-              <TouchableOpacity
-                activeOpacity={1}
-                style={overlayPermissionModalStyles.overlayPermissionBackdrop}
-                onPress={() => setBluetoothExplainMode(null)}
-              >
-                <TouchableOpacity activeOpacity={1} onPress={(e) => e.stopPropagation()} style={overlayPermissionModalStyles.overlayPermissionCard}>
-                  <View style={overlayPermissionModalStyles.overlayPermissionHeader}>
-                    <View style={overlayPermissionModalStyles.overlayPermissionIconWrap}>
-                      <MaterialIcons name="bluetooth-audio" size={20} color={isDark ? WELCOME_NAV_ACTIVE_ICON : theme.colors.primary} />
-                    </View>
-                    <View style={overlayPermissionModalStyles.overlayPermissionTitleWrap}>
-                      <Text style={overlayPermissionModalStyles.overlayPermissionTitle}>{t('bluetoothPermissionTitle', lang)}</Text>
-                    </View>
-                  </View>
-                  <Text style={overlayPermissionModalStyles.overlayPermissionText}>
-                    {t('bluetoothPermissionMessage', lang)}
-                  </Text>
-                  <View style={overlayPermissionModalStyles.overlayPermissionButtons}>
-                    <TouchableOpacity style={overlayPermissionModalStyles.overlayPermissionButtonSecondary} onPress={() => setBluetoothExplainMode(null)}>
-                      <Text style={overlayPermissionModalStyles.overlayPermissionButtonSecondaryText}>{t('notNow', lang)}</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={[
-                        overlayPermissionModalStyles.overlayPermissionButtonPrimary,
-                        isDark
-                          ? overlayPermissionModalStyles.overlayPermissionButtonPrimaryDarkOuter
-                          : overlayPermissionModalStyles.overlayPermissionButtonPrimaryLightOuter,
-                      ]}
-                      onPress={() => {
-                        const mode = bluetoothExplainMode;
-                        setBluetoothExplainMode(null);
-                        // Android даёт спросить ещё раз после первого отказа; после второго —
-                        // только переключатель в настройках приложения.
-                        if (mode === 'settings') void Linking.openSettings();
-                        else void requestNearbyDevicesPermissionAndroid();
-                      }}
-                    >
-                      <View style={isDark ? overlayPermissionModalStyles.overlayPermissionButtonPrimaryDark : overlayPermissionModalStyles.overlayPermissionButtonPrimaryLightInner}>
-                        <Text style={overlayPermissionModalStyles.overlayPermissionButtonPrimaryText}>
-                          {t(bluetoothExplainMode === 'settings' ? 'openSettings' : 'allowAction', lang)}
-                        </Text>
-                      </View>
-                    </TouchableOpacity>
-                  </View>
-                </TouchableOpacity>
-              </TouchableOpacity>
-            </Modal>
+              icon={<MaterialIcons name="bluetooth-audio" size={20} color={WELCOME_NAV_ACTIVE_ICON} />}
+              title={t('bluetoothPermissionTitle', lang)}
+              message={t('bluetoothPermissionMessage', lang)}
+              actions={[
+                { label: t('notNow', lang), onPress: () => setBluetoothExplainMode(null) },
+                {
+                  label: t(bluetoothExplainMode === 'settings' ? 'openSettings' : 'allowAction', lang),
+                  variant: 'primary',
+                  onPress: () => {
+                    const mode = bluetoothExplainMode;
+                    setBluetoothExplainMode(null);
+                    // Android даёт спросить ещё раз после первого отказа; после второго —
+                    // только переключатель в настройках приложения.
+                    if (mode === 'settings') void Linking.openSettings();
+                    else void requestNearbyDevicesPermissionAndroid();
+                  },
+                },
+              ]}
+            />
           )}
           <IncomingSharePickerModal
             visible={incomingShareVisible}
             items={incomingShareItems}
             onClose={closeIncomingShareFlow}
           />
+          <AppAlertHost />
           </>
       </PaperProvider>
     </>
@@ -5289,6 +5086,9 @@ function AppContent() {
 }
 
 export default function App() {
+  // Весь текст — Exo 2: приложение рисуется, когда файлы шрифта уже загружены,
+  // чтобы первый экран не мелькнул системным шрифтом.
+  const [appFontsLoaded, appFontsError] = useFonts(APP_FONT_FILES);
   // Навигация в «вернуться к звонку»:
   const navigateToCall = (callId: string | null, roomId: string | null) => {
     console.log('[App] navigateToCall called with:', { callId, roomId });
@@ -5540,7 +5340,7 @@ export default function App() {
           <ThemeProvider>
             <PiPProvider onReturnToCall={navigateToCall} onEndCall={endCallImpl}>
               <AppErrorBoundary>
-                <AppContent />
+                {appFontsLoaded || appFontsError ? <AppContent /> : null}
               </AppErrorBoundary>
             </PiPProvider>
           </ThemeProvider>

@@ -12,6 +12,7 @@ type Options = {
   /** Controlled warm flag lives in parent when history reload must reset it. */
   chatImagesWarm: boolean;
   setChatImagesWarm: React.Dispatch<React.SetStateAction<boolean>>;
+  navigation?: { addListener?: (event: any, cb: (e: any) => void) => () => void };
 };
 
 export function useChatImageWarm({
@@ -20,7 +21,27 @@ export function useChatImageWarm({
   resolveMediaUri,
   chatImagesWarm,
   setChatImagesWarm,
+  navigation,
 }: Options) {
+  // Лента без картинок ждёт только конца анимации входа: смонтированная до неё,
+  // она задерживала сам переход (сотни мс), а таймер ниже держал спиннер лишние 450 мс.
+  const transitionDoneRef = React.useRef(false);
+  const warmAfterTransitionRef = React.useRef(false);
+  React.useEffect(() => {
+    const unsub = navigation?.addListener?.("transitionEnd", (e: any) => {
+      if (e?.data?.closing) return;
+      transitionDoneRef.current = true;
+      if (!warmAfterTransitionRef.current) return;
+      warmAfterTransitionRef.current = false;
+      setChatImagesWarm(true);
+    });
+    return () => {
+      try {
+        unsub?.();
+      } catch {}
+    };
+  }, [navigation, setChatImagesWarm]);
+
   // Safety timeout so feed isn't blocked forever if prefetch hangs.
   React.useEffect(() => {
     if (!historyReady || chatImagesWarm) return;
@@ -51,7 +72,14 @@ export function useChatImageWarm({
       if (urls.length > 0) void prefetchImages(urls).catch(() => {});
       return;
     }
-    if (urls.length === 0) return; // wait for messages or safety timeout
+    if (urls.length === 0) {
+      // Картинок нет — греть нечего. Пустой кэш (сообщений ещё нет) — ждём сервер или таймер.
+      if (messages.length > 0) {
+        if (transitionDoneRef.current) setChatImagesWarm(true);
+        else warmAfterTransitionRef.current = true;
+      }
+      return;
+    }
     (async () => {
       try {
         await Promise.race([

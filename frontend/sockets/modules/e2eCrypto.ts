@@ -213,11 +213,39 @@ function padJson(json: string): Uint8Array {
   return out;
 }
 
+/**
+ * Общий ключ box на пару «свой ключ — ключ собеседника», считается один раз.
+ * nacl.box/box.open считали его (X25519 на чистом JS) заново на каждое сообщение:
+ * десятки мс на штуку, и расшифровка истории подвешивала JS на полсекунды и
+ * дольше при каждом открытии переписки.
+ */
+const SHARED_KEY_CACHE_LIMIT = 64;
+/** По объекту своей пары: сменился ключ — кэш уходит вместе со старой парой. */
+const sharedKeysByOwn = new WeakMap<E2eKeyPair, Map<string, Uint8Array>>();
+
+function sharedKey(own: E2eKeyPair, peerPublicKey: Uint8Array): Uint8Array {
+  let byPeer = sharedKeysByOwn.get(own);
+  if (!byPeer) {
+    byPeer = new Map();
+    sharedKeysByOwn.set(own, byPeer);
+  }
+  const peer = toBase64(peerPublicKey);
+  const hit = byPeer.get(peer);
+  if (hit) return hit;
+  const k = nacl.box.before(peerPublicKey, own.secretKey);
+  if (byPeer.size >= SHARED_KEY_CACHE_LIMIT) {
+    const oldest = byPeer.keys().next().value;
+    if (oldest !== undefined) byPeer.delete(oldest);
+  }
+  byPeer.set(peer, k);
+  return k;
+}
+
 export function sealMessage(body: E2eMessageBody, own: E2eKeyPair, recipientPublicKey: Uint8Array): E2eEnvelope {
   const plain: Record<string, string> = { id: body.id, from: body.from, to: body.to, text: body.text };
   if (body.replyText != null) plain.replyText = body.replyText;
   const nonce = nacl.randomBytes(nacl.box.nonceLength);
-  const c = nacl.box(padJson(JSON.stringify(plain)), nonce, recipientPublicKey, own.secretKey);
+  const c = nacl.box.after(padJson(JSON.stringify(plain)), nonce, sharedKey(own, recipientPublicKey));
   return {
     v: E2E_ENVELOPE_VERSION,
     n: toBase64(nonce),
@@ -257,7 +285,7 @@ export function openMessage(
   else if (bytesEqual(rpk, own.publicKey)) peer = spk;
   else return { ok: false, reason: "not_my_key" };
 
-  const plain = nacl.box.open(c, nonce, peer, own.secretKey);
+  const plain = nacl.box.open.after(c, nonce, sharedKey(own, peer));
   if (!plain) return { ok: false, reason: "forged" };
   const json = utf8Decode(plain);
   if (json == null) return { ok: false, reason: "forged" };

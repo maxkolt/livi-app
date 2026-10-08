@@ -14,7 +14,6 @@ import {
   FlatList,
   ScrollView,
   Keyboard,
-  Modal,
   Pressable,
   Animated,
   NativeModules,
@@ -39,7 +38,6 @@ import {
   PanGestureHandler,
   PinchGestureHandler,
   State,
-  GestureHandlerRootView,
   NativeViewGestureHandler,
   FlatList as GHFlatList,
 } from "react-native-gesture-handler";
@@ -65,13 +63,16 @@ import {
 import * as Haptics from 'expo-haptics';
 import * as Clipboard from 'expo-clipboard';
 import { Audio } from 'expo-av';
-import { getFull, putFull, putThumb } from '../utils/avatarCache';
+import { getFull, peekFull, putFull, putThumb } from '../utils/avatarCache';
 import { BlurView } from 'expo-blur';
 import { getAvatarImageProps } from '../utils/imageOptimization';
 import { useFisheyeAvatarUri } from '../utils/avatarFisheye';
 import { useResolvedImageUri } from '../hooks/useResolvedImageUri';
 import { resolveDataUriForAndroid } from '../utils/dataUriToFileUri';
 import { ChatMessageItem } from './chat/ChatMessageItem';
+import { ChatComposerContextBar } from './chat/ChatComposerContextBar';
+import { AppOverlay, useOverlayBackHandler } from '../components/AppOverlay';
+import { AppDialogButton, AppDialogModal, appDialogStyles } from '../components/AppDialog';
 import {
   isOfflineQueuedOrOptimisticOutgoingId,
   type ChatReadStatus,
@@ -164,24 +165,16 @@ import { GLASS_AVAILABLE, GlassFill, StageGradient } from './home/WelcomeStageBa
 import { BlurSourceFill, type BackdropSources } from '../components/BackdropBlur';
 import {
   HOME_NAV_BG,
-  WELCOME_CARD_BG,
   WELCOME_GLASS_RIM,
   WELCOME_POPUP_ACCENT,
   WELCOME_POPUP_PRESSED,
   WELCOME_POPUP_SHEET_CHROME,
   WELCOME_POPUP_SURFACE,
   WELCOME_CHROME_EDGE_RADIUS,
-  WELCOME_HEADER_TITLE,
   WELCOME_NAV_ACTIVE_ACCENT,
   WELCOME_MUTED_TEXT,
   WELCOME_NAV_ACTIVE_ICON,
 } from './home/constants';
-import {
-  WelcomeOverlayCard,
-  WelcomeOverlayDim,
-  WelcomeOverlayPill,
-} from './home/WelcomeOverlayChrome';
-import { styles as homeStyles } from './home/styles';
 import { emitRequestDirectCall } from '../utils/globalEvents';
 import { markChatCallBubbleEligible } from './chat/chatCallEvents';
 import {
@@ -229,12 +222,9 @@ import {
 import { MAX_MESSAGE_TEXT_LENGTH } from "../sockets/modules/constants";
 import {
   E2eChatBanner,
-  e2eMenuActions,
   usePeerChatEncrypted,
   useE2eStatus,
-  type E2eModalMode,
 } from "./chat/E2eChatBanner";
-import { hasLocalE2eKey, hasPasswordBackup } from "../sockets/modules/e2e";
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useLang } from "../store/lang";
 import { t, type Lang } from "../utils/i18n";
@@ -272,6 +262,33 @@ const ANDROID_COMPOSER_NAV_GAP = 6;
 /** Закрытая, но уже собранная панель эмодзи: в потоке, нулевой высоты и невидима. */
 const EMOJI_PANEL_PARKED_STYLE = { height: 0, overflow: 'hidden', opacity: 0 } as const;
 
+/** Общий пустой список выбранных фото альбома — одна ссылка для memo облаков. */
+const NO_ALBUM_INDICES: number[] = [];
+const EMOJI_GLASS_RADIUS = { borderTopLeftRadius: 20, borderTopRightRadius: 20 } as const;
+/** Без нативного стекла (Android < 12) — как меню действий: плотная подложка и кромка. */
+const EMOJI_GLASS_BLOCK_STYLE = GLASS_AVAILABLE
+  ? EMOJI_GLASS_RADIUS
+  : {
+      ...EMOJI_GLASS_RADIUS,
+      backgroundColor: WELCOME_POPUP_SURFACE,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderBottomWidth: 0,
+      borderColor: WELCOME_GLASS_RIM,
+    };
+
+/** Последняя измеренная высота композера (без системного отступа) — для следующего открытия. */
+let lastChatComposerHeight = 0;
+
+/** Подпись раздела в меню чата: мелко, разрядка, приглушённо — не заголовок. */
+const chatMenuSectionLabel = {
+  color: WELCOME_MUTED_TEXT,
+  fontSize: 13,
+  fontWeight: '600' as const,
+  letterSpacing: 0.8,
+  textTransform: 'uppercase' as const,
+  marginLeft: 6,
+};
+
 export default function ChatScreen({ route, navigation }: Props) {
   const insets = useSafeAreaInsets();
   const keyboardAnimation = useKeyboardContext().animated;
@@ -308,13 +325,9 @@ export default function ChatScreen({ route, navigation }: Props) {
   const msgActionsCardWidth = msgReactionCell * (MSG_REACTIONS_COLLAPSED + 1) + 10;
   const msgActionsListWidth = msgActionsLandscape ? 184 : 210;
   const msgActionsBlockGap = msgActionsLandscape ? 6 : 10;
-  // Android: одинаковый нижний отступ для bottom sheet на всех девайсах.
-  // На кнопочной навигации insets.bottom часто = 0, поэтому фиксируем минимальный паддинг.
-  // Важно: на жестовой навигации insets.bottom может быть большим, и лист визуально "висит" слишком высоко.
-  // Поэтому делаем clamp: не меньше 24px и не больше 32px.
-  const ANDROID_SHEET_BOTTOM_PAD = Platform.OS === 'android'
-    ? Math.max(18, Math.min(26, 10 + Math.max(0, insets.bottom)))
-    : 12 + Math.max(0, insets.bottom);
+  // Нижний отступ листов (вложения, «Переслать»). Листы — слой в окне приложения и
+  // доходят до низа экрана: фон уходит под кнопки навигации, содержимое — над ними.
+  const ANDROID_SHEET_BOTTOM_PAD = 12 + Math.max(0, insets.bottom);
 
 
   // Загружаем профиль при инициализации
@@ -353,9 +366,10 @@ export default function ChatScreen({ route, navigation }: Props) {
     red: '#FF5A67',
     presenceGreen: isDark ? '#2ECC71' : '#28A85E',
     presenceRed: isDark ? '#FF5A67' : '#E64E59',
-    replyQuoteAccent: isDark ? 'rgba(178, 220, 240, 0.88)' : 'rgba(112, 98, 148, 0.88)',
-    replyQuotePressBg: isDark ? 'rgba(178, 220, 240, 0.10)' : 'rgba(112, 98, 148, 0.10)',
-    replyHighlightAccent: isDark ? 'rgba(178, 220, 240, 0.75)' : 'rgba(112, 98, 148, 0.78)',
+    // Цитата ответа и её «полурамка» — голубой акцент палитры (#62B0D8), как активные элементы.
+    replyQuoteAccent: isDark ? 'rgba(98, 176, 216, 0.95)' : 'rgba(112, 98, 148, 0.88)',
+    replyQuotePressBg: isDark ? 'rgba(98, 176, 216, 0.12)' : 'rgba(112, 98, 148, 0.10)',
+    replyHighlightAccent: isDark ? 'rgba(98, 176, 216, 0.80)' : 'rgba(112, 98, 148, 0.78)',
     accent: uiAccent(isDark),
   } as const), [theme, isDark]);
 
@@ -406,7 +420,10 @@ export default function ChatScreen({ route, navigation }: Props) {
   const peerAvatarThumbB64Param = route?.params?.peerAvatarThumbB64 || '';
   const [peerAvatarVerState, setPeerAvatarVerState] = useState<number>(peerAvatarVer);
   const [peerOnline, setPeerOnline] = useState<boolean>(!!route?.params?.peerOnline);
-  const [fullAvatarUri, setFullAvatarUri] = useState<string>(peerAvatarThumbB64Param); // Используем миниатюру как начальное значение
+  // Полный аватар, если уже в памяти (чат открывали), иначе миниатюра — без смены кадра при открытии.
+  const [fullAvatarUri, setFullAvatarUri] = useState<string>(
+    () => peekFull(String(route?.params?.peerId || ''), peerAvatarVer) || peerAvatarThumbB64Param,
+  );
   const setAvatarUriIfChanged = useCallback((next: string) => {
     setFullAvatarUri((prev) => (prev === next ? prev : next));
   }, []);
@@ -476,7 +493,14 @@ export default function ChatScreen({ route, navigation }: Props) {
     return () => clearInterval(id);
   }, [peerId, isChatScreenFocused]);
 
-  const [loading, setLoading] = useState(true);
+  // Пользователь уже известен сокету — чат рисуется сразу, без кадра «загрузка».
+  const [loading, setLoading] = useState(() => {
+    try {
+      return !getCurrentSocketUserId();
+    } catch {
+      return true;
+    }
+  });
   const [err, setErr] = useState<string | null>(null);
   const [messages, setMessages] = useState<any[]>([]);
   /** Always points at latest `messages` for background/unmount persistence (avoid stale closures). */
@@ -780,7 +804,9 @@ export default function ChatScreen({ route, navigation }: Props) {
   const composerPlaceholder = t('chatMessagePlaceholder', lang);
   // Android: до первого onLayout — оценка нижней панели (после более низкого инпута).
   // Не завышать: иначе ListHeader spacer держит лишний зазор до последнего сообщения.
-  const estimatedInputHeight = 72;
+  // Высота с прошлого открытия чата: иначе первый onLayout перерисовывал весь чат и
+  // двигал ленту (оценка 72 против реальных ~50).
+  const estimatedInputHeight = lastChatComposerHeight > 0 ? lastChatComposerHeight : 72;
   const [inputHeight, setInputHeight] = useState(estimatedInputHeight);
   const [messageText, setMessageText] = useState("");
   const messageTextRef = useRef("");
@@ -828,13 +854,10 @@ export default function ChatScreen({ route, navigation }: Props) {
   const uploadStatusRef = useRef(uploadStatus);
   uploadStatusRef.current = uploadStatus;
   const [showClearMenu, setShowClearMenu] = useState(false);
-  // Сквозное шифрование включается само; в меню справа вверху — отключить / включить снова
-  // и пароль для тех, кто включал шифрование по паролю раньше.
+  // Сквозное шифрование включается само у всех и не отключается: переписка шифруется,
+  // как только ключи есть у обоих. Настроек в меню нет.
   const e2eStatus = useE2eStatus();
-  const e2eMenu = e2eMenuActions(e2eStatus, hasLocalE2eKey(), hasPasswordBackup());
   const chatEncrypted = usePeerChatEncrypted(peerId, e2eStatus);
-  const [e2eRequestedMode, setE2eRequestedMode] = useState<E2eModalMode | null>(null);
-  const clearE2eRequest = useCallback(() => setE2eRequestedMode(null), []);
   const [selectedMessage, setSelectedMessage] = useState<any>(null);
   /** Index of album tile under long-press (null = whole message). */
   const [albumFocusIndex, setAlbumFocusIndex] = useState<number | null>(null);
@@ -1015,6 +1038,24 @@ export default function ChatScreen({ route, navigation }: Props) {
   }, []);
   /** ID сообщения, которое пользователь редактирует (текст в поле ввода). */
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  /** Текст сообщения, которое редактируем, — в плашке над полем ввода. */
+  const editingOriginalText = React.useMemo(() => {
+    if (!editingMessageId) return '';
+    const m = messages.find((x) => String(x?.id) === String(editingMessageId));
+    return String(m?.text ?? '');
+  }, [editingMessageId, messages]);
+  /** Крестик в плашке: выйти из редактирования, поле — пустое, как до него. */
+  const cancelEditing = useCallback(() => {
+    setEditingMessageId(null);
+    messageTextRef.current = '';
+    setMessageText('');
+  }, []);
+  // «Изменить» — сразу поле ввода с клавиатурой, как в Telegram.
+  useEffect(() => {
+    if (!editingMessageId) return;
+    const id = setTimeout(() => composerInputRef.current?.focus(), 150);
+    return () => clearTimeout(id);
+  }, [editingMessageId]);
   /** Сообщение, на которое отвечаем (показываем превью над полем ввода). */
   const [replyingToMessage, setReplyingToMessage] = useState<{ id: string; text: string; from?: string; isOwn?: boolean } | null>(null);
 
@@ -1045,7 +1086,14 @@ export default function ChatScreen({ route, navigation }: Props) {
       return updated;
     });
   }, []);
-  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  // Обычно уже известен сокету — сразу, без лишнего рендера при открытии чата.
+  const [currentUserId, setCurrentUserId] = useState<string | null>(() => {
+    try {
+      return getCurrentSocketUserId() || null;
+    } catch {
+      return null;
+    }
+  });
   const currentUserIdForPersistRef = useRef<string | null>(null);
   currentUserIdForPersistRef.current = currentUserId;
   const {
@@ -1281,7 +1329,12 @@ export default function ChatScreen({ route, navigation }: Props) {
     ? 0
     : Animated.multiply(androidDockKeyboardTranslateY, 0.5);
 
-  const resolvedInputBarHForChrome = inputHeight > 0 ? inputHeight : estimatedInputHeight;
+  // Отступ композера над кнопками навигации; с панелью эмодзи его нет (навигация внутри панели).
+  const androidComposerNavGap = Platform.OS === 'android' && !emojiPanelOpen ? ANDROID_COMPOSER_NAV_GAP : 0;
+  // Высота композера = измеренная без этого отступа + отступ сейчас. Отступ меняется вместе с
+  // панелью в одном кадре — иначе лента ждала onLayout и прыгала на 6 dp при открытии/закрытии.
+  const resolvedInputBarHForChrome =
+    (inputHeight > 0 ? inputHeight : estimatedInputHeight) + androidComposerNavGap;
   /** Середина облака под шапкой/композером → long-press нельзя. */
   const isLayoutBlockedByChrome = React.useCallback(
     (layout: { x: number; y: number; width: number; height: number }) => {
@@ -1437,15 +1490,7 @@ export default function ChatScreen({ route, navigation }: Props) {
   // Полноэкранный аватар — под той же линзой «рыбий глаз», что и все остальные.
   const modalAvatarLensed = useFisheyeAvatarUri(avatarModalVisible ? modalAvatarInstantUri : '');
 
-  useEffect(() => {
-    if (Platform.OS !== 'android') return;
-    if (!avatarModalVisible) return;
-    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
-      setAvatarModalVisible(false);
-      return true;
-    });
-    return () => sub.remove();
-  }, [avatarModalVisible]);
+  useOverlayBackHandler(avatarModalVisible, () => setAvatarModalVisible(false));
 
   const avatarModalSize = (() => {
     const { width: sw, height: sh } = Dimensions.get('window');
@@ -1986,6 +2031,7 @@ export default function ChatScreen({ route, navigation }: Props) {
     resolveMediaUri,
     chatImagesWarm,
     setChatImagesWarm,
+    navigation,
   });
 
   const { openClearMenu, clearChatForMe, clearChatForAll } = useChatClear({
@@ -2085,14 +2131,6 @@ export default function ChatScreen({ route, navigation }: Props) {
   useEffect(() => {
     if (Platform.OS !== 'android') return;
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
-      if (showMessageActions) {
-        hideMessageActions();
-        return true;
-      }
-      if (reactionBarForMessageId !== null) {
-        closeReactionBar();
-        return true;
-      }
       if (selectionMode) {
         exitSelectionMode();
         return true;
@@ -2108,7 +2146,10 @@ export default function ChatScreen({ route, navigation }: Props) {
       return false;
     });
     return () => sub.remove();
-  }, [showMessageActions, hideMessageActions, reactionBarForMessageId, closeReactionBar, selectionMode, exitSelectionMode, navigation, emojiPanelOpen]);
+  }, [selectionMode, exitSelectionMode, navigation, emojiPanelOpen]);
+  // Меню сообщения и полоса реакций — слои над чатом: «Назад» сперва закрывает их.
+  useOverlayBackHandler(showMessageActions, hideMessageActions);
+  useOverlayBackHandler(reactionBarForMessageId !== null, closeReactionBar);
 
   useEffect(() => {
     const selectedId = String(selectedMessage?.id || '').trim();
@@ -2712,12 +2753,12 @@ export default function ChatScreen({ route, navigation }: Props) {
       ? 0
       : Math.max(0, androidPinnedNavInset, insets.bottom)
     : Math.max(0, insets.bottom);
-  const androidComposerNavGap = Platform.OS === 'android' && !emojiPanelOpen ? ANDROID_COMPOSER_NAV_GAP : 0;
 
   const handleInputBarLayout = React.useCallback((e: any) => {
     const measuredH = Math.max(0, Math.round(Number(e?.nativeEvent?.layout?.height || 0)));
-    // Продолжение под системную навигацию — фон, а не высота композера для ленты.
-    const h = Math.max(0, measuredH - composerSystemBottomInset);
+    // Продолжение под системную навигацию — фон, а не высота композера для ленты;
+    // отступ над навигацией тоже не меряем (см. resolvedInputBarHForChrome).
+    const h = Math.max(0, measuredH - composerSystemBottomInset - androidComposerNavGap);
     if (!h || Math.abs(inputHeight - h) <= 1) return;
     // Во время IME-анимации на Android не переписываем высоту — иначе paddingTop
     // списка меняется поверх native translate и даёт прыжок в конце.
@@ -2728,12 +2769,13 @@ export default function ChatScreen({ route, navigation }: Props) {
     ) {
       return;
     }
+    lastChatComposerHeight = h;
     setInputHeight(h);
-  }, [composerSystemBottomInset, inputHeight]);
+  }, [composerSystemBottomInset, androidComposerNavGap, inputHeight]);
 
   // Список на весь экран под chrome: облака уезжают под шапку/композер и растворяются у края.
   // Инсеты — через padding контента; под IME оставляем только keyboard pad.
-  const resolvedInputBarH = inputHeight > 0 ? inputHeight : estimatedInputHeight;
+  const resolvedInputBarH = resolvedInputBarHForChrome;
   // One persistent status slot on every device. Typing/recording/deletion
   // labels are centered here without moving the last bubble.
   const InlineGapIndicator = DeleteToastInline || (!isEmpty ? GapCenterIndicator : null);
@@ -2872,12 +2914,12 @@ export default function ChatScreen({ route, navigation }: Props) {
               : selectedMessageIds.has(String(msg.id))
           }
           onToggleSelect={toggleSelectMessage}
+          // Ни одного нового объекта/функции на строку: облака — React.memo, и обновление
+          // статусов или подгрузка с сервера перерисовывают только изменившиеся облака.
           selectedAlbumIndices={
-            isImageAlbumMessage(msg) ? selectedAlbumIndices(msg, selectedMessageIds) : []
+            isImageAlbumMessage(msg) ? selectedAlbumIndices(msg, selectedMessageIds) : NO_ALBUM_INDICES
           }
-          onToggleAlbumTileSelect={(index) => {
-            toggleSelectAlbumTile(String(msg.id), index);
-          }}
+          onToggleAlbumTileSelect={toggleSelectAlbumTile}
           resolveMediaUri={resolveMediaUri}
           peerDisplayName={peerNameState}
           highlightedMessageId={highlightedMessageId}
@@ -3090,41 +3132,30 @@ export default function ChatScreen({ route, navigation }: Props) {
                 peerId={peerId}
                 encrypted={chatEncrypted}
                 emptyChat={serverHistoryEmpty && showEmpty}
-                requestedMode={e2eRequestedMode}
-                onRequestedModeHandled={clearE2eRequest}
               />
-              {replyingToMessage && (
-                <View
-                  style={{
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    marginBottom: 10,
-                    paddingVertical: 10,
-                    paddingHorizontal: 12,
-                    borderRadius: 14,
-                    backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)',
-                    borderWidth: 1,
-                    borderColor: BORDER_COLOR,
-                  }}
-                >
-                  <Ionicons name="arrow-undo-outline" size={20} color={LIVI.replyQuoteAccent} style={{ marginRight: 10 }} />
-                  <View style={{ flex: 1, marginRight: 8 }}>
-                    <Text style={{ color: LIVI.replyQuoteAccent, fontSize: 13, fontWeight: '600', marginBottom: 2 }}>
-                      {t('chatReplyingTo', lang).replace('{name}', replyingToMessage.isOwn ? t('you', lang) : peerNameState)}
-                    </Text>
-                    <Text style={{ color: LIVI.white, fontSize: 14, opacity: 0.9 }} numberOfLines={1} ellipsizeMode="tail">
-                      {replyingToMessage.text || '—'}
-                    </Text>
-                  </View>
-                  <TouchableOpacity
-                    onPress={() => setReplyingToMessage(null)}
-                    hitSlop={8}
-                    style={{ padding: 4 }}
-                  >
-                    <Ionicons name="close-circle" size={24} color={LIVI.titan} />
-                  </TouchableOpacity>
-                </View>
-              )}
+              {editingMessageId ? (
+                <ChatComposerContextBar
+                  mode="edit"
+                  title={t('chatEditingTitle', lang)}
+                  text={editingOriginalText}
+                  accent={LIVI.replyQuoteAccent}
+                  textColor={LIVI.white}
+                  closeColor={LIVI.titan}
+                  closeA11y={t('cancelAction', lang)}
+                  onClose={cancelEditing}
+                />
+              ) : replyingToMessage ? (
+                <ChatComposerContextBar
+                  mode="reply"
+                  title={t('chatReplyingTo', lang).replace('{name}', replyingToMessage.isOwn ? t('you', lang) : peerNameState)}
+                  text={replyingToMessage.text}
+                  accent={LIVI.replyQuoteAccent}
+                  textColor={LIVI.white}
+                  closeColor={LIVI.titan}
+                  closeA11y={t('cancelAction', lang)}
+                  onClose={() => setReplyingToMessage(null)}
+                />
+              ) : null}
               <View
                 style={{
                   flexDirection: "row",
@@ -3355,7 +3386,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                   })}
                 >
                   <Ionicons
-                    name="send"
+                    name={editingMessageId ? 'checkmark' : 'send'}
                     size={20}
                     color={messageText.trim() || voiceIsRecording ? LIVI.white : COMPOSER_BUTTON_ICON}
                   />
@@ -3515,41 +3546,30 @@ export default function ChatScreen({ route, navigation }: Props) {
                 peerId={peerId}
                 encrypted={chatEncrypted}
                 emptyChat={serverHistoryEmpty && showEmpty}
-                requestedMode={e2eRequestedMode}
-                onRequestedModeHandled={clearE2eRequest}
               />
-              {replyingToMessage && (
-                <View
-                  style={{
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    marginBottom: 10,
-                    paddingVertical: 10,
-                    paddingHorizontal: 12,
-                    borderRadius: 14,
-                    backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)',
-                    borderWidth: 1,
-                    borderColor: BORDER_COLOR,
-                  }}
-                >
-                  <Ionicons name="arrow-undo-outline" size={20} color={LIVI.replyQuoteAccent} style={{ marginRight: 10 }} />
-                  <View style={{ flex: 1, marginRight: 8 }}>
-                    <Text style={{ color: LIVI.replyQuoteAccent, fontSize: 13, fontWeight: '600', marginBottom: 2 }}>
-                      {t('chatReplyingTo', lang).replace('{name}', replyingToMessage.isOwn ? t('you', lang) : peerNameState)}
-                    </Text>
-                    <Text style={{ color: LIVI.white, fontSize: 14, opacity: 0.9 }} numberOfLines={1} ellipsizeMode="tail">
-                      {replyingToMessage.text || '—'}
-                    </Text>
-                  </View>
-                  <TouchableOpacity
-                    onPress={() => setReplyingToMessage(null)}
-                    hitSlop={8}
-                    style={{ padding: 4 }}
-                  >
-                    <Ionicons name="close-circle" size={24} color={LIVI.titan} />
-                  </TouchableOpacity>
-                </View>
-              )}
+              {editingMessageId ? (
+                <ChatComposerContextBar
+                  mode="edit"
+                  title={t('chatEditingTitle', lang)}
+                  text={editingOriginalText}
+                  accent={LIVI.replyQuoteAccent}
+                  textColor={LIVI.white}
+                  closeColor={LIVI.titan}
+                  closeA11y={t('cancelAction', lang)}
+                  onClose={cancelEditing}
+                />
+              ) : replyingToMessage ? (
+                <ChatComposerContextBar
+                  mode="reply"
+                  title={t('chatReplyingTo', lang).replace('{name}', replyingToMessage.isOwn ? t('you', lang) : peerNameState)}
+                  text={replyingToMessage.text}
+                  accent={LIVI.replyQuoteAccent}
+                  textColor={LIVI.white}
+                  closeColor={LIVI.titan}
+                  closeA11y={t('cancelAction', lang)}
+                  onClose={() => setReplyingToMessage(null)}
+                />
+              ) : null}
               <View
                 style={{
                   flexDirection: 'row',
@@ -3781,7 +3801,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                   })}
                 >
                   <Ionicons
-                    name="send"
+                    name={editingMessageId ? 'checkmark' : 'send'}
                     size={20}
                     color={messageText.trim() || voiceIsRecording ? LIVI.white : COMPOSER_BUTTON_ICON}
                   />
@@ -3795,17 +3815,18 @@ export default function ChatScreen({ route, navigation }: Props) {
                 importantForAccessibility={emojiPanelOpen ? 'auto' : 'no-hide-descendants'}
                 style={emojiPanelOpen ? null : EMOJI_PANEL_PARKED_STYLE}
               >
-              <ChatChrome
-                {...chatChromeBottomExtra}
-                // Одним листом с композером над панелью: без кромки на стыке.
-                {...(isDark ? { joinTop: true } : null)}
-                style={{
-                  backgroundColor: isDark ? undefined : INPUT_BAR_BG,
-                  paddingBottom: Math.max(0, insets.bottom),
-                  // Стекло рисует фон окна целиком: без клипа оно закрывает ленту и композер.
-                  overflow: 'hidden',
-                }}
+              {/* Отдельный блок из того же стекла, что меню действий над сообщением. */}
+              <View
+                style={[
+                  {
+                    paddingBottom: Math.max(0, insets.bottom),
+                    // Стекло рисует фон окна целиком: без клипа оно закрывает ленту и композер.
+                    overflow: 'hidden',
+                  },
+                  isDark ? EMOJI_GLASS_BLOCK_STYLE : { backgroundColor: INPUT_BAR_BG },
+                ]}
               >
+                {isDark ? <GlassFill backdrop={chatBackdrop} style={EMOJI_GLASS_RADIUS} /> : null}
                 <View
                   collapsable={false}
                   style={{ zIndex: 2, elevation: 2 }}
@@ -3821,7 +3842,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                   onStickerSelected={handleComposerStickerSelected}
                 />
                 </View>
-              </ChatChrome>
+              </View>
               </View>
             ) : null}
             </Animated.View>
@@ -3947,83 +3968,36 @@ export default function ChatScreen({ route, navigation }: Props) {
         }}
       />
 
-      {/* Меню очистки чата — тот же chrome, что confirm удаления друзей */}
-      {showClearMenu && (
-        <View style={homeStyles.overlayModal}>
-          <WelcomeOverlayDim strong />
-          <WelcomeOverlayCard opaque>
-            {e2eMenu.length > 0 ? (
-              <>
-                <Text
-                  style={[
-                    homeStyles.confirmTitle,
-                    { fontSize: 13, letterSpacing: 0.8, textTransform: 'uppercase', color: WELCOME_MUTED_TEXT, marginBottom: 0 },
-                  ]}
-                >
-                  {t('e2eMenuSectionTitle', lang)}
-                </Text>
-                <View style={{ gap: 10, marginTop: 12, marginBottom: 18 }}>
-                  {e2eMenu.map((item) => (
-                    <WelcomeOverlayPill
-                      key={item.mode}
-                      label={t(item.labelKey, lang)}
-                      onPress={() => {
-                        setShowClearMenu(false);
-                        setE2eRequestedMode(item.mode);
-                      }}
-                      // Подпись — цвет надписи «Онлайн» (как у остальных кнопок меню); акцент даёт только заливка.
-                      variant="secondary"
-                      style={
-                        item.tone === 'accent'
-                          ? {
-                              // Акцент: полупрозрачная заливка и рамка того же цвета.
-                              backgroundColor: WELCOME_NAV_ACTIVE_ACCENT.solid30,
-                              borderWidth: 1,
-                              borderColor: WELCOME_NAV_ACTIVE_ACCENT.solid,
-                            }
-                          : undefined
-                      }
-                    />
-                  ))}
-                </View>
-              </>
-            ) : null}
-            <Text
-              style={[
-                homeStyles.confirmTitle,
-                // Подпись раздела, а не крупный заголовок: мельче, разрядка, приглушённый цвет.
-                { fontSize: 13, letterSpacing: 0.8, textTransform: 'uppercase', color: WELCOME_MUTED_TEXT, marginBottom: 0 },
-              ]}
-            >
-              {t('chatClearMenuTitle', lang)}
-            </Text>
-            <View style={{ gap: 10, marginTop: 12 }}>
-              <WelcomeOverlayPill
-                label={t('chatClearForAllOption', lang)}
-                onPress={() => {
-                  setShowClearMenu(false);
-                  clearChatForAll();
-                }}
-                variant="danger"
-              />
-              <WelcomeOverlayPill
-                label={t('chatClearForSelfOption', lang)}
-                onPress={() => {
-                  setShowClearMenu(false);
-                  clearChatForMe();
-                }}
-                variant="danger"
-              />
-              <WelcomeOverlayPill
-                label={t('cancelAction', lang)}
-                onPress={() => setShowClearMenu(false)}
-                variant="secondary"
-                style={{ marginTop: 18 }}
-              />
-            </View>
-          </WelcomeOverlayCard>
+      {/* Меню чата: очистка переписки (шифрование включено всегда — настроек нет) */}
+      <AppDialogModal
+        visible={showClearMenu}
+        onRequestClose={() => setShowClearMenu(false)}
+        actions={[{ label: t('cancelAction', lang), onPress: () => setShowClearMenu(false) }]}
+      >
+        <View style={[appDialogStyles.section, { gap: 10 }]}>
+          <Text style={chatMenuSectionLabel}>
+            {t('chatClearMenuTitle', lang)}
+          </Text>
+          <AppDialogButton
+            label={t('chatClearForAllOption', lang)}
+            variant="danger"
+            stretch={false}
+            onPress={() => {
+              setShowClearMenu(false);
+              clearChatForAll();
+            }}
+          />
+          <AppDialogButton
+            label={t('chatClearForSelfOption', lang)}
+            variant="danger"
+            stretch={false}
+            onPress={() => {
+              setShowClearMenu(false);
+              clearChatForMe();
+            }}
+          />
         </View>
-      )}
+      </AppDialogModal>
 
       {/* Android: bottom sheet для выбора вложений (камера/галерея) */}
       {Platform.OS === 'android' ? (
@@ -4042,291 +4016,274 @@ export default function ChatScreen({ route, navigation }: Props) {
 
       {/* Переслать: выбор друга */}
       {showForwardPicker && (selectedMessage || selectionMode) && (
-        <Modal
-          transparent
-          visible={showForwardPicker}
-          animationType="fade"
-          onRequestClose={() => setShowForwardPicker(false)}
-        >
-          <GestureHandlerRootView style={{ flex: 1 }}>
-          <Pressable
-            onPress={() => setShowForwardPicker(false)}
+        // В landscape лист во всю ширину слишком растянут — AppOverlay ставит его по центру.
+        <AppOverlay visible placement="bottom" onRequestClose={() => setShowForwardPicker(false)}>
+          <Animated.View
             style={{
-              flex: 1,
-              backgroundColor: isDark ? 'rgba(0,0,0,0.50)' : 'rgba(0,0,0,0.40)',
-              justifyContent: 'flex-end',
-              // В landscape лист во всю ширину слишком растянут — центрируем.
-              alignItems: 'center',
+              transform: [{ translateY: forwardSheetTranslateY }],
+              maxHeight: forwardPickerSheetMaxH,
+              width: modalLayout.sheetWidth,
             }}
           >
-            <Animated.View
-              style={{
-                transform: [{ translateY: forwardSheetTranslateY }],
-                maxHeight: forwardPickerSheetMaxH,
-                width: modalLayout.sheetWidth,
-              }}
-            >
-            <Pressable
-              onPress={() => {}}
-              style={{
-                ...(isDark && GLASS_AVAILABLE
-                  ? { backgroundColor: 'transparent' }
-                  : isDark
-                    ? WELCOME_POPUP_SHEET_CHROME
-                    : { backgroundColor: 'rgba(182, 203, 216, 1)' }),
-                overflow: 'hidden',
-                borderTopLeftRadius: 20,
-                borderTopRightRadius: 20,
-                paddingTop: 8,
-                paddingHorizontal: 14,
-                paddingBottom: ANDROID_SHEET_BOTTOM_PAD,
-                height: forwardPickerLayout.sheetHeight,
-                maxHeight: forwardPickerSheetMaxH,
-                width: '100%',
-                flexDirection: 'column',
-              }}
-            >
-              {isDark && GLASS_AVAILABLE ? (
-                <GlassFill backdrop={chatBackdrop} style={{ borderTopLeftRadius: 20, borderTopRightRadius: 20 }} />
-              ) : null}
-              <View style={{ paddingBottom: 2 }}>
-                <PanGestureHandler
-                  activeOffsetY={10}
-                  onGestureEvent={onForwardSheetGestureEvent}
-                  onHandlerStateChange={onForwardSheetHandlerStateChange}
-                >
-                <View style={{ width: '100%', alignItems: 'center', paddingTop: 2, paddingBottom: 4, minHeight: 28 }}>
-                  <View
-                    style={{
-                      width: 42,
-                      height: 4,
-                      borderRadius: 2,
-                      backgroundColor: isDark ? 'rgba(255,255,255,0.16)' : 'rgba(0,0,0,0.18)',
-                    }}
-                  />
-                </View>
-                </PanGestureHandler>
+          <Pressable
+            onPress={() => {}}
+            style={{
+              ...(isDark && GLASS_AVAILABLE
+                ? { backgroundColor: 'transparent' }
+                : isDark
+                  ? WELCOME_POPUP_SHEET_CHROME
+                  : { backgroundColor: 'rgba(182, 203, 216, 1)' }),
+              overflow: 'hidden',
+              borderTopLeftRadius: 20,
+              borderTopRightRadius: 20,
+              paddingTop: 8,
+              paddingHorizontal: 14,
+              paddingBottom: ANDROID_SHEET_BOTTOM_PAD,
+              height: forwardPickerLayout.sheetHeight,
+              maxHeight: forwardPickerSheetMaxH,
+              width: '100%',
+              flexDirection: 'column',
+            }}
+          >
+            {isDark && GLASS_AVAILABLE ? (
+              <GlassFill backdrop={chatBackdrop} style={{ borderTopLeftRadius: 20, borderTopRightRadius: 20 }} />
+            ) : null}
+            <View style={{ paddingBottom: 2 }}>
+              <PanGestureHandler
+                activeOffsetY={10}
+                onGestureEvent={onForwardSheetGestureEvent}
+                onHandlerStateChange={onForwardSheetHandlerStateChange}
+              >
+              <View style={{ width: '100%', alignItems: 'center', paddingTop: 2, paddingBottom: 4, minHeight: 28 }}>
                 <View
                   style={{
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    minHeight: 36,
-                    marginTop: -8,
-                    paddingHorizontal: 4,
+                    width: 42,
+                    height: 4,
+                    borderRadius: 2,
+                    backgroundColor: isDark ? 'rgba(255,255,255,0.16)' : 'rgba(0,0,0,0.18)',
                   }}
-                >
-                  {/* Симметрия с правой кнопкой — заголовок по центру экрана и по вертикали с кнопкой */}
-                  <View style={{ width: 36, marginLeft: -2 }} />
-                  <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }} pointerEvents="none">
-                    <Text style={{ color: theme.colors.titan as string, fontSize: 16, fontWeight: '700' }}>
-                      {`${t('chatActionForward', lang)}…`}
-                    </Text>
-                  </View>
-                  <View style={{ width: 36, marginRight: -2, alignItems: 'center', justifyContent: 'center' }}>
-                    <Pressable
-                      onPress={() => void shareForwardToSystem()}
-                      style={({ pressed }) => ({
-                        width: 36,
-                        height: 36,
-                        borderRadius: 10,
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        borderWidth: 1,
-                        borderColor: isDark ? 'rgba(255,255,255,0.22)' : 'rgba(0,0,0,0.14)',
-                        backgroundColor: pressed
-                          ? isDark
-                            ? 'rgba(255,255,255,0.12)'
-                            : 'rgba(0,0,0,0.08)'
-                          : isDark
-                            ? 'rgba(255,255,255,0.06)'
-                            : 'rgba(0,0,0,0.06)',
-                      })}
-                      hitSlop={10}
-                    >
-                      <Ionicons name="share-social-outline" size={19} color={LIVI.titan} />
-                    </Pressable>
-                  </View>
+                />
+              </View>
+              </PanGestureHandler>
+              <View
+                style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  minHeight: 36,
+                  marginTop: -8,
+                  paddingHorizontal: 4,
+                }}
+              >
+                {/* Симметрия с правой кнопкой — заголовок по центру экрана и по вертикали с кнопкой */}
+                <View style={{ width: 36, marginLeft: -2 }} />
+                <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }} pointerEvents="none">
+                  <Text style={{ color: theme.colors.titan as string, fontSize: 16, fontWeight: '700' }}>
+                    {`${t('chatActionForward', lang)}…`}
+                  </Text>
+                </View>
+                <View style={{ width: 36, marginRight: -2, alignItems: 'center', justifyContent: 'center' }}>
+                  <Pressable
+                    onPress={() => void shareForwardToSystem()}
+                    style={({ pressed }) => ({
+                      width: 36,
+                      height: 36,
+                      borderRadius: 10,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      borderWidth: 1,
+                      borderColor: isDark ? 'rgba(255,255,255,0.22)' : 'rgba(0,0,0,0.14)',
+                      backgroundColor: pressed
+                        ? isDark
+                          ? 'rgba(255,255,255,0.12)'
+                          : 'rgba(0,0,0,0.08)'
+                        : isDark
+                          ? 'rgba(255,255,255,0.06)'
+                          : 'rgba(0,0,0,0.06)',
+                    })}
+                    hitSlop={10}
+                  >
+                    <Ionicons name="share-social-outline" size={19} color={LIVI.titan} />
+                  </Pressable>
                 </View>
               </View>
-              {/* Линия на всю ширину шита: компенсируем paddingHorizontal родителя (14). */}
-              <View
-                style={{
-                  height: StyleSheet.hairlineWidth,
-                  backgroundColor: isDark ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.1)',
-                  marginHorizontal: -14,
-                  marginTop: 12,
-                  marginBottom: 8,
-                }}
-              />
+            </View>
+            {/* Линия на всю ширину шита: компенсируем paddingHorizontal родителя (14). */}
+            <View
+              style={{
+                height: StyleSheet.hairlineWidth,
+                backgroundColor: isDark ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.1)',
+                marginHorizontal: -14,
+                marginTop: 12,
+                marginBottom: 8,
+              }}
+            />
 
-              <View style={{ flex: 1, minHeight: 0 }}>
-                <NativeViewGestureHandler disallowInterruption>
-                {forwardLoading ? (
-                  <View style={{ flex: 1, minHeight: 0, paddingVertical: 18, alignItems: 'center', justifyContent: 'center' }}>
-                    <ActivityIndicator />
-                  </View>
-                ) : (
-                  <GHFlatList
-                    data={forwardFriends}
-                    keyExtractor={(it: any, index: number) => String(it?._id || `fwd-friend-${index}`)}
-                    style={{ flex: 1, minHeight: 0 }}
-                    nestedScrollEnabled
-                    scrollEnabled={forwardFriends.length > 0}
-                    contentContainerStyle={
-                      forwardFriends.length === 0
-                        ? { flexGrow: 1, paddingVertical: 8 }
-                        : { paddingTop: 4, paddingBottom: 8 }
-                    }
-                    keyboardShouldPersistTaps="handled"
-                    showsVerticalScrollIndicator
-                    scrollEventThrottle={16}
-                    windowSize={10}
-                    initialNumToRender={12}
-                    maxToRenderPerBatch={10}
-                    updateCellsBatchingPeriod={50}
-                    renderItem={({ item }) => {
-                      const friendId = String(item?._id || '');
-                      const isSelected = forwardSelectedFriendIds.has(friendId);
-                      return (
-                        <Pressable
-                          onPress={() => {
-                            setForwardSelectedFriendIds((prev) => {
-                              const next = new Set(prev);
-                              if (next.has(friendId)) next.delete(friendId);
-                              else next.add(friendId);
-                              return next;
-                            });
-                          }}
-                          style={({ pressed }) => ({
-                            flexDirection: 'row',
-                            alignItems: 'center',
-                            paddingVertical: 10,
-                            paddingHorizontal: 8,
-                            borderRadius: 14,
+            <View style={{ flex: 1, minHeight: 0 }}>
+              <NativeViewGestureHandler disallowInterruption>
+              {forwardLoading ? (
+                <View style={{ flex: 1, minHeight: 0, paddingVertical: 18, alignItems: 'center', justifyContent: 'center' }}>
+                  <ActivityIndicator />
+                </View>
+              ) : (
+                <GHFlatList
+                  data={forwardFriends}
+                  keyExtractor={(it: any, index: number) => String(it?._id || `fwd-friend-${index}`)}
+                  style={{ flex: 1, minHeight: 0 }}
+                  nestedScrollEnabled
+                  scrollEnabled={forwardFriends.length > 0}
+                  contentContainerStyle={
+                    forwardFriends.length === 0
+                      ? { flexGrow: 1, paddingVertical: 8 }
+                      : { paddingTop: 4, paddingBottom: 8 }
+                  }
+                  keyboardShouldPersistTaps="handled"
+                  showsVerticalScrollIndicator
+                  scrollEventThrottle={16}
+                  windowSize={10}
+                  initialNumToRender={12}
+                  maxToRenderPerBatch={10}
+                  updateCellsBatchingPeriod={50}
+                  renderItem={({ item }) => {
+                    const friendId = String(item?._id || '');
+                    const isSelected = forwardSelectedFriendIds.has(friendId);
+                    return (
+                      <Pressable
+                        onPress={() => {
+                          setForwardSelectedFriendIds((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(friendId)) next.delete(friendId);
+                            else next.add(friendId);
+                            return next;
+                          });
+                        }}
+                        style={({ pressed }) => ({
+                          flexDirection: 'row',
+                          alignItems: 'center',
+                          paddingVertical: 10,
+                          paddingHorizontal: 8,
+                          borderRadius: 14,
+                          overflow: 'hidden',
+                          // Выбор только на чекбоксе — строка без заливки по selected.
+                          backgroundColor: pressed
+                            ? isDark
+                              ? 'rgba(255,255,255,0.08)'
+                              : 'rgba(0,0,0,0.05)'
+                            : 'transparent',
+                        })}
+                      >
+                        <AvatarImage
+                          userId={friendId}
+                          avatarVer={Number(item.avatarVer || 0)}
+                          uri={item.avatarThumbB64 || undefined}
+                          size={44}
+                          fallbackText={displayAvatarLetter(item.nick || item.name)}
+                          containerStyle={{
+                            borderWidth: 1,
+                            borderColor: isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.12)',
                             overflow: 'hidden',
-                            // Выбор только на чекбоксе — строка без заливки по selected.
-                            backgroundColor: pressed
-                              ? isDark
-                                ? 'rgba(255,255,255,0.08)'
-                                : 'rgba(0,0,0,0.05)'
-                              : 'transparent',
-                          })}
-                        >
-                          <AvatarImage
-                            userId={friendId}
-                            avatarVer={Number(item.avatarVer || 0)}
-                            uri={item.avatarThumbB64 || undefined}
-                            size={44}
-                            fallbackText={displayAvatarLetter(item.nick || item.name)}
-                            containerStyle={{
-                              borderWidth: 1,
-                              borderColor: isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.12)',
-                              overflow: 'hidden',
-                              ...(isDark ? {} : { backgroundColor: 'rgba(0,0,0,0.08)' }),
-                            }}
-                            fallbackTextStyle={isDark ? { color: LIVI.white, fontSize: 18 } : { color: 'rgba(0,0,0,0.45)', fontSize: 18 }}
-                          />
-                          <View style={{ marginLeft: 12, flex: 1, justifyContent: 'center' }}>
-                            <Text style={{ color: isDark ? LIVI.white : LIVI.text, fontSize: 16, fontWeight: '600' }} numberOfLines={1}>
-                              {(item.nick && String(item.nick).trim()) || '—'}
-                            </Text>
-                          </View>
-                          <Ionicons
-                            name={isSelected ? 'checkmark-circle' : 'ellipse-outline'}
-                            size={24}
-                            color={isSelected ? (isDark ? WELCOME_POPUP_ACCENT : WELCOME_NAV_ACTIVE_ICON) : (theme.colors.titan as string)}
-                          />
-                        </Pressable>
-                      );
-                    }}
-                    ItemSeparatorComponent={() => {
-                      const sepColor = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)';
-                      return (
-                        <View
-                          style={{
-                            height: 1,
-                            marginHorizontal: 12,
-                            backgroundColor: sepColor,
+                            ...(isDark ? {} : { backgroundColor: 'rgba(0,0,0,0.08)' }),
                           }}
+                          fallbackTextStyle={isDark ? { color: LIVI.white, fontSize: 18 } : { color: 'rgba(0,0,0,0.45)', fontSize: 18 }}
                         />
-                      );
-                    }}
-                    ListEmptyComponent={() => (
-                      <View style={{ paddingVertical: 18, alignItems: 'center' }}>
-                        <Text style={{ color: LIVI.titan, textAlign: 'center' }}>{t('chatForwardNoFriends', lang)}</Text>
-                      </View>
-                    )}
-                  />
-                )}
-                </NativeViewGestureHandler>
-              </View>
-
-              <View
-                style={{
-                  paddingTop: 8,
-                  // row-reverse: «Отмена» слева, «Переслать» справа — как в остальных диалогах.
-                  flexDirection: modalLayout.isLandscape ? 'row-reverse' : 'column',
-                  gap: modalLayout.isLandscape ? 10 : 0,
-                }}
-              >
-              <TouchableOpacity
-                onPress={() => void forwardToSelectedFriends()}
-                disabled={forwardSelectedFriendIds.size === 0}
-                style={{
-                  flex: modalLayout.isLandscape ? 1 : undefined,
-                  paddingVertical: modalLayout.isLandscape ? 11 : 14,
-                  backgroundColor:
-                    forwardSelectedFriendIds.size > 0
-                      ? (isDark ? `${WELCOME_POPUP_ACCENT}24` : WELCOME_NAV_ACTIVE_ACCENT.solid15)
-                      : 'transparent',
-                  borderWidth: 1,
-                  borderColor:
-                    forwardSelectedFriendIds.size > 0
-                      ? (isDark ? `${WELCOME_POPUP_ACCENT}73` : WELCOME_NAV_ACTIVE_ICON)
-                      : isDark
-                        ? 'rgba(255,255,255,0.2)'
-                        : 'rgba(0,0,0,0.15)',
-                  borderRadius: 12,
-                  marginBottom: modalLayout.isLandscape ? 0 : 8,
-                }}
-                activeOpacity={0.85}
-              >
-                <Text
-                  style={{
-                    color:
-                      forwardSelectedFriendIds.size > 0
-                        ? (isDark ? WELCOME_POPUP_ACCENT : WELCOME_NAV_ACTIVE_ACCENT.softText)
-                        : LIVI.titan,
-                    fontSize: 16,
-                    fontWeight: '600',
-                    textAlign: 'center',
+                        <View style={{ marginLeft: 12, flex: 1, justifyContent: 'center' }}>
+                          <Text style={{ color: isDark ? LIVI.white : LIVI.text, fontSize: 16, fontWeight: '600' }} numberOfLines={1}>
+                            {(item.nick && String(item.nick).trim()) || '—'}
+                          </Text>
+                        </View>
+                        <Ionicons
+                          name={isSelected ? 'checkmark-circle' : 'ellipse-outline'}
+                          size={24}
+                          color={isSelected ? (isDark ? WELCOME_POPUP_ACCENT : WELCOME_NAV_ACTIVE_ICON) : (theme.colors.titan as string)}
+                        />
+                      </Pressable>
+                    );
                   }}
-                >
-                  {forwardSelectedFriendIds.size > 0
-                    ? `${t('chatActionForward', lang)} (${forwardSelectedFriendIds.size})`
-                    : t('chatActionForward', lang)}
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={() => setShowForwardPicker(false)}
+                  ItemSeparatorComponent={() => {
+                    const sepColor = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)';
+                    return (
+                      <View
+                        style={{
+                          height: 1,
+                          marginHorizontal: 12,
+                          backgroundColor: sepColor,
+                        }}
+                      />
+                    );
+                  }}
+                  ListEmptyComponent={() => (
+                    <View style={{ paddingVertical: 18, alignItems: 'center' }}>
+                      <Text style={{ color: LIVI.titan, textAlign: 'center' }}>{t('chatForwardNoFriends', lang)}</Text>
+                    </View>
+                  )}
+                />
+              )}
+              </NativeViewGestureHandler>
+            </View>
+
+            <View
+              style={{
+                paddingTop: 8,
+                // row-reverse: «Отмена» слева, «Переслать» справа — как в остальных диалогах.
+                flexDirection: modalLayout.isLandscape ? 'row-reverse' : 'column',
+                gap: modalLayout.isLandscape ? 10 : 0,
+              }}
+            >
+            <TouchableOpacity
+              onPress={() => void forwardToSelectedFriends()}
+              disabled={forwardSelectedFriendIds.size === 0}
+              style={{
+                flex: modalLayout.isLandscape ? 1 : undefined,
+                paddingVertical: modalLayout.isLandscape ? 11 : 14,
+                backgroundColor:
+                  forwardSelectedFriendIds.size > 0
+                    ? (isDark ? `${WELCOME_POPUP_ACCENT}24` : WELCOME_NAV_ACTIVE_ACCENT.solid15)
+                    : 'transparent',
+                borderWidth: 1,
+                borderColor:
+                  forwardSelectedFriendIds.size > 0
+                    ? (isDark ? `${WELCOME_POPUP_ACCENT}73` : WELCOME_NAV_ACTIVE_ICON)
+                    : isDark
+                      ? 'rgba(255,255,255,0.2)'
+                      : 'rgba(0,0,0,0.15)',
+                borderRadius: 12,
+                marginBottom: modalLayout.isLandscape ? 0 : 8,
+              }}
+              activeOpacity={0.85}
+            >
+              <Text
                 style={{
-                  flex: modalLayout.isLandscape ? 1 : undefined,
-                  paddingVertical: modalLayout.isLandscape ? 11 : 14,
-                  backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)',
-                  borderRadius: 12,
+                  color:
+                    forwardSelectedFriendIds.size > 0
+                      ? (isDark ? WELCOME_POPUP_ACCENT : WELCOME_NAV_ACTIVE_ACCENT.softText)
+                      : LIVI.titan,
+                  fontSize: 16,
+                  fontWeight: '600',
+                  textAlign: 'center',
                 }}
-                activeOpacity={0.85}
               >
-                <Text style={{ color: LIVI.titan, fontSize: 16, fontWeight: '600', textAlign: 'center' }}>
-                  {t('cancelAction', lang)}
-                </Text>
-              </TouchableOpacity>
-              </View>
-            </Pressable>
-            </Animated.View>
+                {forwardSelectedFriendIds.size > 0
+                  ? `${t('chatActionForward', lang)} (${forwardSelectedFriendIds.size})`
+                  : t('chatActionForward', lang)}
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => setShowForwardPicker(false)}
+              style={{
+                flex: modalLayout.isLandscape ? 1 : undefined,
+                paddingVertical: modalLayout.isLandscape ? 11 : 14,
+                backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)',
+                borderRadius: 12,
+              }}
+              activeOpacity={0.85}
+            >
+              <Text style={{ color: LIVI.titan, fontSize: 16, fontWeight: '600', textAlign: 'center' }}>
+                {t('cancelAction', lang)}
+              </Text>
+            </TouchableOpacity>
+            </View>
           </Pressable>
-          </GestureHandlerRootView>
-        </Modal>
+          </Animated.View>
+        </AppOverlay>
       )}
 
       {/* "Отправлено" теперь показывается в том же gap, что и "Печатает..." */}
@@ -4339,9 +4296,6 @@ export default function ChatScreen({ route, navigation }: Props) {
         initialSelected={albumPickInitial}
         resolveMediaUri={resolveMediaUri}
         isDark={isDark}
-        bg={isDark ? WELCOME_POPUP_SURFACE : 'rgba(255,255,255,0.98)'}
-        text={isDark ? LIVI.white : 'rgba(0,0,0,0.88)'}
-        muted={isDark ? 'rgba(255,255,255,0.48)' : 'rgba(0,0,0,0.48)'}
         accent={isDark ? WELCOME_POPUP_ACCENT : LIVI.accent.solid}
         title={
           albumScopeKind === 'save'
@@ -4367,344 +4321,101 @@ export default function ChatScreen({ route, navigation }: Props) {
         }}
       />
 
-      {/* Универсальное подтверждение (используется для массового удаления/очистки и т.п.) */}
-      <Modal
+      {/* Универсальное подтверждение (массовое удаление, очистка, перезвонить и т.п.) */}
+      <AppDialogModal
         visible={confirmVisible}
-        transparent
-        animationType="fade"
         onRequestClose={closeConfirm}
-      >
-        <Pressable
-          onPress={closeConfirm}
-          style={{
-            flex: 1,
-            backgroundColor: isDark ? 'rgba(0,0,0,0.90)' : 'rgba(0,0,0,0.58)',
-            alignItems: 'center',
-            justifyContent: 'center',
-            paddingHorizontal: modalLayout.padH,
-            paddingVertical: modalLayout.padV,
-          }}
-        >
-          <Pressable
-            onPress={() => {}}
-            style={{
-              width: '100%',
-              maxWidth: modalLayout.dialogMaxWidth,
-              maxHeight: modalLayout.maxCardHeight,
-              borderRadius: 18,
-              backgroundColor: isDark ? WELCOME_CARD_BG : 'rgba(255,255,255,0.98)',
-              borderWidth: StyleSheet.hairlineWidth,
-              borderColor: isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.10)',
-              overflow: 'hidden',
-            }}
-          >
-            <ScrollView
-              style={{ flexShrink: 1 }}
-              contentContainerStyle={{ flexGrow: 0 }}
-              showsVerticalScrollIndicator={false}
-              bounces={false}
-            >
-              <View style={{ paddingHorizontal: 18, paddingTop: 18, paddingBottom: 14 }}>
-                <Text style={{ color: isDark ? LIVI.white : 'rgba(0,0,0,0.92)', fontSize: 18, fontWeight: '700' }}>
-                  {confirmTitle || t('confirmActionTitle', lang)}
-                </Text>
-                <Text style={{ marginTop: 8, color: isDark ? 'rgba(255,255,255,0.55)' : 'rgba(0,0,0,0.55)', fontSize: 14, lineHeight: 18 }}>
-                  {confirmMessage || ''}
-                </Text>
-              </View>
-            </ScrollView>
+        title={confirmTitle || t('confirmActionTitle', lang)}
+        message={confirmMessage || undefined}
+        actions={[
+          { label: confirmCancelText || t('cancelAction', lang), onPress: closeConfirm },
+          {
+            label: confirmOkText || t('ok', lang),
+            onPress: runConfirm,
+            variant: confirmDestructive ? 'danger' : 'primary',
+          },
+        ]}
+      />
 
-            <View
-              style={{
-                height: StyleSheet.hairlineWidth,
-                backgroundColor: isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.10)',
-              }}
-            />
-
-            <View style={{ flexDirection: 'row', padding: 12, gap: 10 }}>
-              <Pressable
-                onPress={closeConfirm}
-                style={({ pressed }) => ({
-                  flex: 1,
-                  paddingVertical: 9,
-                  minHeight: 40,
-                  borderRadius: 999,
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  backgroundColor: pressed
-                    ? (isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.06)')
-                    : (isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)'),
-                })}
-              >
-                <Text style={{ color: LIVI.titan, fontSize: 15, fontWeight: '600' }}>
-                  {confirmCancelText || t('cancelAction', lang)}
-                </Text>
-              </Pressable>
-
-              <Pressable
-                onPress={runConfirm}
-                style={({ pressed }) => ({
-                  flex: 1,
-                  paddingVertical: 9,
-                  minHeight: 40,
-                  borderRadius: 999,
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  opacity: pressed ? 0.88 : 1,
-                  transform: [{ scale: pressed ? 0.99 : 1 }],
-                  backgroundColor: confirmDestructive
-                    ? 'rgba(255, 90, 103, 0.16)'
-                    : (pressed ? LIVI.accent.vivid22 : LIVI.accent.vivid16),
-                  borderWidth: confirmDestructive ? 1 : StyleSheet.hairlineWidth,
-                  borderColor: confirmDestructive ? 'rgba(255, 90, 103, 0.72)' : LIVI.accent.vivid45,
-                })}
-              >
-                <Text
-                  style={{
-                    color: confirmDestructive ? WELCOME_HEADER_TITLE : LIVI.titan,
-                    fontSize: 15,
-                    fontWeight: '600',
-                  }}
-                >
-                  {confirmOkText || t('ok', lang)}
-                </Text>
-              </Pressable>
-            </View>
-          </Pressable>
-        </Pressable>
-      </Modal>
-
-      {/* Кастомное подтверждение удаления сообщения (вместо Alert) */}
-      <Modal
+      {/* Подтверждение удаления сообщения (вместо Alert) — образец для всех диалогов */}
+      <AppDialogModal
         visible={deleteConfirmVisible}
-        transparent
-        animationType="fade"
         onRequestClose={closeDeleteConfirm}
+        title={deleteConfirmKind === 'multi' ? t('chatDeleteMessagesTitle', lang) : t('chatDeleteMessageTitle', lang)}
+        message={
+          deleteConfirmKind === 'multi'
+            ? (selectedCount === 1
+              ? t('chatDeleteSelectedOne', lang)
+              : t('chatDeleteSelectedMany', lang).replace('{count}', String(selectedCount)))
+            : t('chatActionCannotUndo', lang)
+        }
+        actions={[
+          { label: t('cancelAction', lang), onPress: closeDeleteConfirm },
+          { label: t('delete', lang), onPress: confirmDeleteNow, variant: 'danger' },
+        ]}
       >
         <Pressable
-          onPress={closeDeleteConfirm}
-          style={{
-            flex: 1,
-            backgroundColor: isDark ? 'rgba(0,0,0,0.90)' : 'rgba(0,0,0,0.58)',
+          onPress={() => setDeleteForBoth((v) => !v)}
+          style={({ pressed }) => ({
+            marginHorizontal: 12,
+            marginTop: 12,
+            paddingHorizontal: 12,
+            paddingVertical: 12,
+            borderRadius: 14,
+            flexDirection: 'row',
             alignItems: 'center',
-            justifyContent: 'center',
-            paddingHorizontal: modalLayout.padH,
-            paddingVertical: modalLayout.padV,
-          }}
+            backgroundColor: pressed ? 'rgba(255,255,255,0.10)' : 'rgba(255,255,255,0.05)',
+            borderWidth: StyleSheet.hairlineWidth,
+            borderColor: deleteForBoth ? 'rgba(255,90,103,0.45)' : 'rgba(255,255,255,0.12)',
+          })}
         >
-          <Pressable
-            onPress={() => {}}
+          <View
             style={{
-              width: '100%',
-              maxWidth: modalLayout.dialogMaxWidth,
-              maxHeight: modalLayout.maxCardHeight,
-              borderRadius: 18,
-              backgroundColor: isDark ? WELCOME_CARD_BG : 'rgba(255,255,255,0.98)',
-              borderWidth: StyleSheet.hairlineWidth,
-              borderColor: isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.10)',
-              overflow: 'hidden',
+              width: 22,
+              height: 22,
+              borderRadius: 6,
+              alignItems: 'center',
+              justifyContent: 'center',
+              marginRight: 10,
+              backgroundColor: deleteForBoth ? 'rgba(255,90,103,0.18)' : 'transparent',
+              borderWidth: 1,
+              borderColor: deleteForBoth ? '#FF5A67' : 'rgba(255,255,255,0.45)',
             }}
           >
-            <ScrollView
-              style={{ flexShrink: 1 }}
-              contentContainerStyle={{ flexGrow: 0 }}
-              showsVerticalScrollIndicator={false}
-              bounces={false}
-            >
-              <View style={{ paddingHorizontal: 18, paddingTop: 18, paddingBottom: 14 }}>
-                <Text style={{ color: isDark ? LIVI.white : 'rgba(0,0,0,0.92)', fontSize: 18, fontWeight: '700' }}>
-                  {deleteConfirmKind === 'multi' ? t('chatDeleteMessagesTitle', lang) : t('chatDeleteMessageTitle', lang)}
-                </Text>
-                <Text style={{ marginTop: 8, color: isDark ? 'rgba(255,255,255,0.55)' : 'rgba(0,0,0,0.55)', fontSize: 14, lineHeight: 18 }}>
-                  {deleteConfirmKind === 'multi'
-                    ? (selectedCount === 1
-                      ? t('chatDeleteSelectedOne', lang)
-                      : t('chatDeleteSelectedMany', lang).replace('{count}', String(selectedCount)))
-                    : t('chatActionCannotUndo', lang)}
-                </Text>
-              </View>
-
-              <View
-                style={{
-                  height: StyleSheet.hairlineWidth,
-                  backgroundColor: isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.10)',
-                }}
-              />
-
-              <Pressable
-                onPress={() => setDeleteForBoth((v) => !v)}
-                style={({ pressed }) => ({
-                  marginHorizontal: 12,
-                  marginTop: 12,
-                  paddingHorizontal: 12,
-                  paddingVertical: 12,
-                  borderRadius: 14,
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  backgroundColor: pressed
-                    ? (isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.06)')
-                    : (isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.035)'),
-                  borderWidth: StyleSheet.hairlineWidth,
-                  borderColor: deleteForBoth ? 'rgba(255,90,103,0.45)' : (isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.12)'),
-                })}
-              >
-                <View
-                  style={{
-                    width: 22,
-                    height: 22,
-                    borderRadius: 6,
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    marginRight: 10,
-                    backgroundColor: deleteForBoth ? 'rgba(255,90,103,0.18)' : 'transparent',
-                    borderWidth: 1,
-                    borderColor: deleteForBoth ? '#FF5A67' : (isDark ? 'rgba(255,255,255,0.45)' : 'rgba(0,0,0,0.35)'),
-                  }}
-                >
-                  {deleteForBoth ? <Ionicons name="checkmark" size={16} color="#FF5A67" /> : null}
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={{ color: isDark ? LIVI.white : 'rgba(0,0,0,0.88)', fontSize: 15, fontWeight: '700' }}>
-                    {t('chatDeleteForEveryoneTitle', lang)}
-                  </Text>
-                  <Text style={{ marginTop: 3, color: isDark ? 'rgba(255,255,255,0.50)' : 'rgba(0,0,0,0.50)', fontSize: 13, lineHeight: 17 }}>
-                    {deleteForBoth
-                      ? (deleteConfirmKind === 'multi'
-                        ? t('chatDeleteForEveryoneBothMulti', lang)
-                        : t('chatDeleteForEveryoneBothSingle', lang))
-                      : (deleteConfirmKind === 'multi'
-                        ? t('chatDeleteForEveryoneMeMulti', lang)
-                        : t('chatDeleteForEveryoneMeSingle', lang))}
-                  </Text>
-                </View>
-              </Pressable>
-            </ScrollView>
-
-            <View style={{ flexDirection: 'row', padding: 12, gap: 10 }}>
-              <Pressable
-                onPress={closeDeleteConfirm}
-                style={({ pressed }) => ({
-                  flex: 1,
-                  paddingVertical: 9,
-                  minHeight: 40,
-                  borderRadius: 999,
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  backgroundColor: pressed
-                    ? (isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.06)')
-                    : (isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)'),
-                })}
-              >
-                <Text style={{ color: LIVI.titan, fontSize: 15, fontWeight: '600' }}>{t('cancelAction', lang)}</Text>
-              </Pressable>
-
-              <Pressable
-                onPress={confirmDeleteNow}
-                style={({ pressed }) => ({
-                  flex: 1,
-                  paddingVertical: 9,
-                  minHeight: 40,
-                  borderRadius: 999,
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  opacity: pressed ? 0.88 : 1,
-                  transform: [{ scale: pressed ? 0.99 : 1 }],
-                  backgroundColor: 'rgba(255, 90, 103, 0.16)',
-                  borderWidth: 1,
-                  borderColor: 'rgba(255, 90, 103, 0.72)',
-                })}
-              >
-                <Text style={{ color: WELCOME_HEADER_TITLE, fontSize: 15, fontWeight: '600' }}>{t('delete', lang)}</Text>
-              </Pressable>
-            </View>
-          </Pressable>
+            {deleteForBoth ? <Ionicons name="checkmark" size={16} color="#FF5A67" /> : null}
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={{ color: LIVI.white, fontSize: 15, fontWeight: '700' }}>
+              {t('chatDeleteForEveryoneTitle', lang)}
+            </Text>
+            <Text style={{ marginTop: 3, color: 'rgba(255,255,255,0.50)', fontSize: 13, lineHeight: 17 }}>
+              {deleteForBoth
+                ? (deleteConfirmKind === 'multi'
+                  ? t('chatDeleteForEveryoneBothMulti', lang)
+                  : t('chatDeleteForEveryoneBothSingle', lang))
+                : (deleteConfirmKind === 'multi'
+                  ? t('chatDeleteForEveryoneMeMulti', lang)
+                  : t('chatDeleteForEveryoneMeSingle', lang))}
+            </Text>
+          </View>
         </Pressable>
-      </Modal>
+      </AppDialogModal>
 
-      {/* Кастомный алерт/ошибка (в тех же цветах LiVi) */}
-      <Modal
+      {/* Уведомление/ошибка в виде диалогов приложения */}
+      <AppDialogModal
         visible={noticeVisible}
-        transparent
-        animationType="fade"
         onRequestClose={closeNotice}
-      >
-        <Pressable
-          onPress={closeNotice}
-          style={{
-            flex: 1,
-            backgroundColor: isDark ? 'rgba(0,0,0,0.62)' : 'rgba(0,0,0,0.38)',
-            alignItems: 'center',
-            justifyContent: 'center',
-            paddingHorizontal: modalLayout.padH,
-            paddingVertical: modalLayout.padV,
-          }}
-        >
-          <Pressable
-            onPress={() => {}}
-            style={{
-              width: '100%',
-              maxWidth: modalLayout.dialogMaxWidth,
-              maxHeight: modalLayout.maxCardHeight,
-              borderRadius: 18,
-              backgroundColor: isDark ? WELCOME_CARD_BG : 'rgba(255,255,255,0.98)',
-              borderWidth: StyleSheet.hairlineWidth,
-              borderColor: isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.10)',
-              overflow: 'hidden',
-            }}
-          >
-            <ScrollView
-              style={{ flexShrink: 1 }}
-              contentContainerStyle={{ flexGrow: 0 }}
-              showsVerticalScrollIndicator={false}
-              bounces={false}
-            >
-              <View style={{ paddingHorizontal: 18, paddingTop: 18, paddingBottom: 14 }}>
-                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                  <Ionicons
-                    name={noticeKind === 'error' ? 'alert-circle-outline' : 'information-circle-outline'}
-                    size={18}
-                    color={noticeKind === 'error' ? '#FF5A67' : LIVI.titan}
-                    style={{ marginRight: 10 }}
-                  />
-                  <Text style={{ color: isDark ? LIVI.white : 'rgba(0,0,0,0.92)', fontSize: 18, fontWeight: '700', flex: 1 }}>
-                    {noticeTitle || (noticeKind === 'error' ? t('errorTitle', lang) : '')}
-                  </Text>
-                </View>
-                {!!noticeMessage && (
-                  <Text style={{ marginTop: 10, color: isDark ? 'rgba(255,255,255,0.55)' : 'rgba(0,0,0,0.55)', fontSize: 14, lineHeight: 18 }}>
-                    {noticeMessage}
-                  </Text>
-                )}
-              </View>
-            </ScrollView>
-
-            <View
-              style={{
-                height: StyleSheet.hairlineWidth,
-                backgroundColor: isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.10)',
-              }}
-            />
-
-            <View style={{ padding: 12 }}>
-              <Pressable
-                onPress={closeNotice}
-                style={({ pressed }) => ({
-                  paddingVertical: 12,
-                  borderRadius: 14,
-                  alignItems: 'center',
-                  backgroundColor: pressed
-                    ? (isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.06)')
-                    : (isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)'),
-                })}
-              >
-                <Text style={{ color: noticeKind === 'error' ? '#FF5A67' : LIVI.titan, fontSize: 15, fontWeight: '700' }}>
-                  {t('ok', lang)}
-                </Text>
-              </Pressable>
-            </View>
-          </Pressable>
-        </Pressable>
-      </Modal>
+        icon={
+          <Ionicons
+            name={noticeKind === 'error' ? 'alert-circle-outline' : 'information-circle-outline'}
+            size={18}
+            color={noticeKind === 'error' ? '#FF5A67' : LIVI.titan}
+          />
+        }
+        title={noticeTitle || (noticeKind === 'error' ? t('errorTitle', lang) : '')}
+        message={noticeMessage || undefined}
+        actions={[{ label: t('ok', lang), onPress: closeNotice }]}
+      />
     </SafeAreaView>
     {/*
       Android: как в Telegram — сверху строка реакций, ниже список действий у края облака.
@@ -4757,7 +4468,7 @@ export default function ChatScreen({ route, navigation }: Props) {
               ? SHEET_REACTIONS_ALL
               : SHEET_REACTIONS_ALL.slice(0, MSG_REACTIONS_COLLAPSED);
             const emojiFontSize = msgActionsLandscape ? 22 : 26;
-            // Стекло: сквозь блоки меню размыт чат (Modal — другое окно, стекло ищет чат по экрану).
+            // Стекло: сквозь блоки меню размыт чат (стекло ищет чат по экрану).
             const menuGlass = isDark && GLASS_AVAILABLE;
             const surface = {
               overflow: 'hidden' as const,

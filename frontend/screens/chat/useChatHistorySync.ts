@@ -1,7 +1,7 @@
 /** History load + quiet sync + reconnect merge for ChatScreen. */
 
 import React from "react";
-import { AppState } from "react-native";
+import { AppState, unstable_batchedUpdates } from "react-native";
 import NetInfo from "@react-native-community/netinfo";
 import socket, {
   fetchMessages,
@@ -203,7 +203,8 @@ export function useChatHistorySync({
     const prevPeer = prevPeerIdForHistoryRef.current;
     if (prevPeer !== peerId) {
       prevPeerIdForHistoryRef.current = peerId;
-      setMessages([]);
+      // Пустой и так (первое открытие) — не новый [] и не лишняя перерисовка.
+      setMessages((prev) => (prev.length ? [] : prev));
     }
 
     historySyncGenerationRef.current += 1;
@@ -227,18 +228,21 @@ export function useChatHistorySync({
         ]);
         if (historySyncGenerationRef.current !== syncGen) return;
         hiddenForMeMessageIdsRef.current = hiddenIds;
-        setReadStatuses(savedStatuses || {});
         const visibleLocalMessages = Array.isArray(localMessages)
           ? localMessages.filter((msg: any) => !hiddenIds.has(String(msg?.id || "").trim()))
           : [];
-        if (visibleLocalMessages.length > 0) {
-          setMessages(visibleLocalMessages);
-          localPreloaded = true;
-        }
-      } catch {}
-
+        localPreloaded = visibleLocalMessages.length > 0;
+        // Статусы, кэш и «история готова» — одним рендером: каждый отдельный setState
+        // после await перерисовывал весь чат, пока шёл переход на экран переписки.
+        unstable_batchedUpdates(() => {
+          setReadStatuses(savedStatuses || {});
+          if (localPreloaded) setMessages(visibleLocalMessages);
+          setHistoryReady(true);
+        });
+      } catch {
+        if (historySyncGenerationRef.current === syncGen) setHistoryReady(true);
+      }
       if (historySyncGenerationRef.current !== syncGen) return;
-      setHistoryReady(true);
 
       void (async () => {
         try {
@@ -247,7 +251,7 @@ export function useChatHistorySync({
 
           if (serverMessages?.ok && serverMessages.messages) {
             // По серверу, а не по ленте: пустой локальный кэш ещё не значит, что переписки не было.
-            setServerHistoryEmpty(serverMessages.messages.length === 0);
+            const serverEmpty = serverMessages.messages.length === 0;
             const hiddenForMeIds = hiddenForMeMessageIdsRef.current;
             const visible = filterVisibleServerMessages(serverMessages.messages, {
               hiddenForMeIds,
@@ -278,12 +282,15 @@ export function useChatHistorySync({
               return formatServerChatMessage(msg, uid);
             });
 
-            setMessages((prev) =>
-              mergeInitialHistoryMessages(prev, formattedMessages, {
-                uploadStatus: uploadStatusRef.current as any,
-                readStatuses: readStatusesRef.current as any,
-              }),
-            );
+            unstable_batchedUpdates(() => {
+              setServerHistoryEmpty(serverEmpty);
+              setMessages((prev) =>
+                mergeInitialHistoryMessages(prev, formattedMessages, {
+                  uploadStatus: uploadStatusRef.current as any,
+                  readStatuses: readStatusesRef.current as any,
+                }),
+              );
+            });
 
             await markMessagesAsRead(pid);
             try {

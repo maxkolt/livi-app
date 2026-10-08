@@ -66,6 +66,7 @@ export {
   addFriend,
   checkFriendship,
   checkInviteLink,
+  fetchFriendRequests,
   fetchFriends,
   inviteFriend,
   onFriendAccepted,

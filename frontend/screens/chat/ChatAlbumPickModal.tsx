@@ -1,19 +1,18 @@
 // screens/chat/ChatAlbumPickModal.tsx
 import React from "react";
 import {
-  Modal,
   View,
   Text,
   Pressable,
   StyleSheet,
   ScrollView,
-  Platform,
 } from "react-native";
 import { Image as ExpoImage } from "expo-image";
 import { Ionicons } from "@expo/vector-icons";
 import { CHAT_ALBUM_GAP, albumGridColumns } from "./chatAlbum";
 import { useModalLayout } from "../../utils/modalLayout";
-import { WELCOME_GLASS_RIM } from "../home/constants";
+import { AppOverlay } from "../../components/AppOverlay";
+import { AppDialog, APP_DIALOG_MESSAGE_COLOR } from "../../components/AppDialog";
 
 export type AlbumPickKind = "save" | "forward" | "delete";
 
@@ -25,11 +24,7 @@ type Props = {
   initialSelected: number[];
   resolveMediaUri: (uri?: string) => string;
   isDark: boolean;
-  bg: string;
-  text: string;
-  muted: string;
   accent: string;
-  danger?: string;
   title: string;
   subtitle: string;
   selectAllLabel: string;
@@ -50,11 +45,7 @@ export function ChatAlbumPickModal({
   initialSelected,
   resolveMediaUri,
   isDark,
-  bg,
-  text,
-  muted,
   accent,
-  danger = "#FF5A67",
   title,
   subtitle,
   selectAllLabel,
@@ -91,7 +82,6 @@ export function ChatAlbumPickModal({
   const allSelected = uris.length > 0 && selected.size === uris.length;
   const count = selected.size;
   const canConfirm = count > 0;
-  const actionColor = kind === "delete" ? danger : accent;
 
   const toggle = (index: number) => {
     setSelected((prev) => {
@@ -116,238 +106,133 @@ export function ChatAlbumPickModal({
   };
 
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <Pressable
-        onPress={onClose}
-        style={{
-          flex: 1,
-          backgroundColor: isDark ? "rgba(0,0,0,0.58)" : "rgba(0,0,0,0.36)",
-          alignItems: "center",
-          justifyContent: "center",
-          paddingHorizontal: layout.padH,
-          paddingVertical: layout.padV,
-        }}
+    <AppOverlay visible={visible} onRequestClose={onClose}>
+      <AppDialog
+        title={title}
+        message={subtitle.replace("{count}", String(count))}
+        maxWidth={cardMaxWidth}
+        scrollable={false}
+        actions={[
+          { label: cancelLabel, onPress: onClose },
+          {
+            label: confirmLabel,
+            variant: kind === "delete" ? "danger" : "primary",
+            disabled: !canConfirm,
+            onPress: () => {
+              if (!canConfirm) return;
+              onConfirm(Array.from(selected).sort((a, b) => a - b));
+            },
+          },
+        ]}
       >
-        <Pressable
-          onPress={() => {}}
+        <View
           style={{
-            width: "100%",
-            maxWidth: cardMaxWidth,
-            maxHeight: layout.maxCardHeight,
-            borderRadius: 22,
-            backgroundColor: bg,
-            overflow: "hidden",
-            borderWidth: StyleSheet.hairlineWidth,
-            borderColor: isDark ? WELCOME_GLASS_RIM : "rgba(0,0,0,0.08)",
-            ...Platform.select({
-              ios: {
-                shadowColor: "#000",
-                shadowOpacity: 0.22,
-                shadowRadius: 28,
-                shadowOffset: { width: 0, height: 14 },
-              },
-              android: { elevation: 10 },
-            }),
+            flexDirection: "row",
+            paddingHorizontal: 16,
+            paddingTop: 12,
+            paddingBottom: 10,
+            gap: 8,
           }}
         >
-          <View
-            style={{
-              paddingHorizontal: 20,
-              paddingTop: layout.isLandscape ? 14 : 20,
-              paddingBottom: layout.isLandscape ? 8 : 10,
-            }}
+          <Pressable
+            onPress={allSelected ? selectNoneKeepOne : selectAll}
+            style={({ pressed }) => ({
+              paddingHorizontal: 12,
+              paddingVertical: 7,
+              borderRadius: 999,
+              backgroundColor: pressed ? "rgba(255,255,255,0.10)" : "rgba(255,255,255,0.05)",
+              borderWidth: StyleSheet.hairlineWidth,
+              borderColor: "rgba(255,255,255,0.12)",
+            })}
           >
-            <Text
-              style={{
-                color: text,
-                fontSize: 17,
-                fontWeight: "400",
-                letterSpacing: 0.2,
-              }}
-            >
-              {title}
+            <Text style={{ color: APP_DIALOG_MESSAGE_COLOR, fontSize: 12, fontWeight: "400", letterSpacing: 0.2 }}>
+              {allSelected ? clearLabel : selectAllLabel}
             </Text>
-            <Text
-              style={{
-                marginTop: 6,
-                color: muted,
-                fontSize: 13,
-                fontWeight: "300",
-                letterSpacing: 0.15,
-                lineHeight: 18,
-              }}
-            >
-              {subtitle.replace("{count}", String(count))}
-            </Text>
-          </View>
+          </Pressable>
+        </View>
 
+        <ScrollView
+          // В портрете потолок прежний; в landscape сетка ужимается под высоту карточки.
+          style={{ flexShrink: 1, maxHeight: layout.isLandscape ? undefined : 320 }}
+          contentContainerStyle={{ paddingHorizontal: 14, paddingBottom: 8 }}
+          showsVerticalScrollIndicator={false}
+        >
           <View
+            onLayout={(e) => {
+              const w = Math.round(e.nativeEvent.layout.width);
+              if (w > 0 && w !== innerW) setInnerW(w);
+            }}
             style={{
+              width: "100%",
               flexDirection: "row",
-              paddingHorizontal: 16,
-              paddingBottom: 10,
-              gap: 8,
+              flexWrap: "wrap",
+              gap: CHAT_ALBUM_GAP,
             }}
           >
-            <Pressable
-              onPress={allSelected ? selectNoneKeepOne : selectAll}
-              style={({ pressed }) => ({
-                paddingHorizontal: 12,
-                paddingVertical: 7,
-                borderRadius: 999,
-                backgroundColor: pressed
-                  ? (isDark ? "rgba(255,255,255,0.10)" : "rgba(0,0,0,0.06)")
-                  : (isDark ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.04)"),
-                borderWidth: StyleSheet.hairlineWidth,
-                borderColor: isDark ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.10)",
-              })}
-            >
-              <Text style={{ color: muted, fontSize: 12, fontWeight: "400", letterSpacing: 0.2 }}>
-                {allSelected ? clearLabel : selectAllLabel}
-              </Text>
-            </Pressable>
-          </View>
-
-          <ScrollView
-            // В портрете потолок прежний; в landscape сетка ужимается под высоту карточки.
-            style={{ flexShrink: 1, maxHeight: layout.isLandscape ? undefined : 320 }}
-            contentContainerStyle={{ paddingHorizontal: 14, paddingBottom: 8 }}
-            showsVerticalScrollIndicator={false}
-          >
-            <View
-              onLayout={(e) => {
-                const w = Math.round(e.nativeEvent.layout.width);
-                if (w > 0 && w !== innerW) setInnerW(w);
-              }}
-              style={{
-                width: "100%",
-                flexDirection: "row",
-                flexWrap: "wrap",
-                gap: CHAT_ALBUM_GAP,
-              }}
-            >
-              {uris.map((raw, index) => {
-                const uri = resolveMediaUri(raw) || raw;
-                const on = selected.has(index);
-                return (
-                  <Pressable
-                    key={`pick-${index}-${raw.slice(-20)}`}
-                    onPress={() => toggle(index)}
+            {uris.map((raw, index) => {
+              const uri = resolveMediaUri(raw) || raw;
+              const on = selected.has(index);
+              return (
+                <Pressable
+                  key={`pick-${index}-${raw.slice(-20)}`}
+                  onPress={() => toggle(index)}
+                  style={{
+                    width: tile || undefined,
+                    aspectRatio: 1,
+                    flexGrow: tile ? 0 : 1,
+                    flexBasis: tile ? undefined : `${Math.floor(100 / cols) - 1}%`,
+                    borderRadius: 12,
+                    overflow: "hidden",
+                    backgroundColor: isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.04)",
+                  }}
+                >
+                  {tile > 0 ? (
+                    <ExpoImage
+                      source={{ uri }}
+                      style={{ width: "100%", height: "100%" }}
+                      contentFit="cover"
+                      cachePolicy="memory-disk"
+                      transition={0}
+                    />
+                  ) : null}
+                  <View
+                    pointerEvents="none"
                     style={{
-                      width: tile || undefined,
-                      aspectRatio: 1,
-                      flexGrow: tile ? 0 : 1,
-                      flexBasis: tile ? undefined : `${Math.floor(100 / cols) - 1}%`,
-                      borderRadius: 12,
-                      overflow: "hidden",
-                      backgroundColor: isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.04)",
+                      ...StyleSheet.absoluteFillObject,
+                      backgroundColor: on
+                        ? (isDark ? "rgba(98,176,216,0.22)" : "rgba(113,91,168,0.18)")
+                        : "rgba(0,0,0,0.12)",
+                    }}
+                  />
+                  <View
+                    style={{
+                      position: "absolute",
+                      top: 7,
+                      right: 7,
+                      width: 22,
+                      height: 22,
+                      borderRadius: 11,
+                      alignItems: "center",
+                      justifyContent: "center",
+                      backgroundColor: on ? accent : "rgba(0,0,0,0.35)",
+                      borderWidth: StyleSheet.hairlineWidth,
+                      borderColor: on ? accent : "rgba(255,255,255,0.45)",
                     }}
                   >
-                    {tile > 0 ? (
-                      <ExpoImage
-                        source={{ uri }}
-                        style={{ width: "100%", height: "100%" }}
-                        contentFit="cover"
-                        cachePolicy="memory-disk"
-                        transition={0}
+                    {on ? (
+                      <Ionicons
+                        name="checkmark"
+                        size={14}
+                        color={isDark ? "#0B0B0C" : "#FFFFFF"}
                       />
                     ) : null}
-                    <View
-                      pointerEvents="none"
-                      style={{
-                        ...StyleSheet.absoluteFillObject,
-                        backgroundColor: on
-                          ? (isDark ? "rgba(98,176,216,0.22)" : "rgba(113,91,168,0.18)")
-                          : "rgba(0,0,0,0.12)",
-                      }}
-                    />
-                    <View
-                      style={{
-                        position: "absolute",
-                        top: 7,
-                        right: 7,
-                        width: 22,
-                        height: 22,
-                        borderRadius: 11,
-                        alignItems: "center",
-                        justifyContent: "center",
-                        backgroundColor: on ? accent : "rgba(0,0,0,0.35)",
-                        borderWidth: StyleSheet.hairlineWidth,
-                        borderColor: on ? accent : "rgba(255,255,255,0.45)",
-                      }}
-                    >
-                      {on ? (
-                        <Ionicons
-                          name="checkmark"
-                          size={14}
-                          color={isDark ? "#0B0B0C" : "#FFFFFF"}
-                        />
-                      ) : null}
-                    </View>
-                  </Pressable>
-                );
-              })}
-            </View>
-          </ScrollView>
-
-          <View
-            style={{
-              flexDirection: "row",
-              gap: 10,
-              paddingHorizontal: 16,
-              paddingTop: layout.isLandscape ? 8 : 12,
-              paddingBottom: layout.isLandscape ? 10 : 16,
-            }}
-          >
-            <Pressable
-              onPress={onClose}
-              style={({ pressed }) => ({
-                flex: 1,
-                paddingVertical: layout.isLandscape ? 10 : 13,
-                borderRadius: 14,
-                alignItems: "center",
-                backgroundColor: pressed
-                  ? (isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)")
-                  : (isDark ? "rgba(255,255,255,0.04)" : "rgba(0,0,0,0.03)"),
-              })}
-            >
-              <Text style={{ color: muted, fontSize: 15, fontWeight: "400", letterSpacing: 0.2 }}>
-                {cancelLabel}
-              </Text>
-            </Pressable>
-            <Pressable
-              disabled={!canConfirm}
-              onPress={() => {
-                if (!canConfirm) return;
-                onConfirm(Array.from(selected).sort((a, b) => a - b));
-              }}
-              style={({ pressed }) => ({
-                flex: 1.35,
-                paddingVertical: layout.isLandscape ? 10 : 13,
-                borderRadius: 14,
-                alignItems: "center",
-                opacity: canConfirm ? 1 : 0.45,
-                backgroundColor: pressed
-                  ? (kind === "delete" ? "rgba(255,90,103,0.28)" : `${accent}33`)
-                  : (kind === "delete" ? "rgba(255,90,103,0.16)" : `${accent}22`),
-                borderWidth: StyleSheet.hairlineWidth,
-                borderColor: kind === "delete" ? "rgba(255,90,103,0.45)" : `${accent}66`,
-              })}
-            >
-              <Text
-                style={{
-                  color: actionColor,
-                  fontSize: 15,
-                  fontWeight: "500",
-                  letterSpacing: 0.25,
-                }}
-              >
-                {confirmLabel}
-              </Text>
-            </Pressable>
+                  </View>
+                </Pressable>
+              );
+            })}
           </View>
-        </Pressable>
-      </Pressable>
-    </Modal>
+        </ScrollView>
+      </AppDialog>
+    </AppOverlay>
   );
 }

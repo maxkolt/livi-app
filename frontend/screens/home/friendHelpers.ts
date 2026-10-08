@@ -79,6 +79,34 @@ export function mergeFriendBusyFromFetch(serverBusy: boolean, _prevBusy = false)
   return !!serverBusy;
 }
 
+function sameFriendFields(a: Friend, b: Friend): boolean {
+  const ra = a as Record<string, unknown>;
+  const rb = b as Record<string, unknown>;
+  const keys = new Set([...Object.keys(ra), ...Object.keys(rb)]);
+  for (const k of keys) {
+    if (ra[k] !== rb[k]) return false;
+  }
+  return true;
+}
+
+/**
+ * Ответ сервера по друзьям — каждый раз новые объекты, даже без изменений. Прежний
+ * объект оставляем, если поля те же, а если не изменилось ничего — прежний массив:
+ * иначе каждое открытие «Друзей» перерисовывало все строки «Звонков» и «Чатов».
+ */
+export function reuseUnchangedFriends(next: Friend[], prev: Friend[]): Friend[] {
+  if (!prev.length) return next;
+  const prevById = new Map(prev.map((f) => [String(f.id), f]));
+  let allSame = next.length === prev.length;
+  const out = next.map((f, i) => {
+    const p = prevById.get(String(f.id));
+    const kept = p && sameFriendFields(p, f) ? p : f;
+    if (allSame && kept !== prev[i]) allSame = false;
+    return kept;
+  });
+  return allSame ? prev : out;
+}
+
 export function cleanPositiveBadgeMap(map: Record<string, number> | null | undefined): Record<string, number> {
   const cleaned: Record<string, number> = {};
   if (!map || typeof map !== 'object') return cleaned;

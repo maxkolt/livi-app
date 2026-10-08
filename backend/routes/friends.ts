@@ -11,6 +11,7 @@ import { getIoInstance } from '../utils/ioInstance';
 import { getEffectiveBusy } from '../utils/effectiveBusy';
 import { isFriendGloballyVisibleOnline } from '../utils/friendOnlinePresence';
 import { emitToUser } from '../utils/emitToUser';
+import { listIncomingFriendRequests, markInviteFriendRequest } from '../utils/friendRequests';
 
 const router = Router();
 
@@ -64,6 +65,24 @@ router.get('/friends', async (req, res) => {
         hasMore: result.hasMore
       }
     });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+/**
+ * GET /api/friends/requests
+ * Mirrors socket "friends:requests": incoming friend requests, newest first.
+ */
+router.get('/friends/requests', async (req, res) => {
+  try {
+    const me = String((req as any)?.userId || '').trim();
+    if (!isOid(me)) return res.status(401).json({ ok: false, error: 'unauthorized' });
+    const includeAvatarThumbs = String(req.query.includeAvatarThumbs ?? '1') !== '0'
+      && String(req.query.includeAvatarThumbs ?? 'true') !== 'false';
+    const { isOnline } = getOnlineAndBusyFromSockets();
+    const list = await listIncomingFriendRequests(me, { includeAvatarThumbs, isOnline });
+    res.json({ ok: true, list });
   } catch (e: any) {
     res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
@@ -300,6 +319,14 @@ router.get('/invite/:code', async (req, res) => {
           hasPendingRequest = (meUser as any).friendRequests.some((id: any) => String(id) === code);
         }
       }
+    }
+
+    // Приложение открыло ссылку (?pending=1): пригласивший ждёт ответа в «Заявках»,
+    // даже если окно закрыли или приложение вышло. Статус выше — до этой записи.
+    if (me && me !== code && !areFriends && String(req.query.pending ?? '') === '1') {
+      await markInviteFriendRequest(me, code).catch((e: any) =>
+        console.warn('[friends] mark invite request failed', e?.message || e),
+      );
     }
 
     const response = {

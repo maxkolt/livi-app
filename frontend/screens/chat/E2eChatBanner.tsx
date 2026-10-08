@@ -1,26 +1,20 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  ActivityIndicator,
-  Keyboard,
-  Modal,
-  Platform,
   StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
-import { BlurView } from 'expo-blur';
 import { LIVI, t, type Lang } from '../../utils/i18n';
 import { APP_INPUT_MAX_FONT_SIZE_MULTIPLIER } from '../../utils/accessibilityTypography';
-import { UI_ACCENT_DEEP, UI_SURFACE_RAISED, UI_SURFACE_SUNKEN, WELCOME_NAV_ACTIVE_ACCENT } from '../home/constants';
+import { WELCOME_NAV_ACTIVE_ACCENT } from '../home/constants';
+import { AppDialogModal, appDialogStyles } from '../../components/AppDialog';
 import {
-  changeE2eBackupPassword,
-  disableE2e,
-  enableE2eAgain,
   getE2eStatus,
   getPeerPublicKey,
   markE2eChatNoticeSeen,
+  peekPeerPublicKey,
   onPeerE2eUpdated,
   onE2eStatus,
   onPeerKeyChanged,
@@ -29,47 +23,21 @@ import {
   wasE2eChatNoticeSeen,
   type E2eStatus,
 } from '../../sockets/modules/e2e';
-import { isAcceptableBackupPassword } from '../../sockets/modules/e2eCrypto';
-
-export type E2eModalMode = 'restore' | 'reset' | 'change' | 'disable' | 'enable';
-type Mode = E2eModalMode;
-/** Пароль остался только у тех, кто включал шифрование по паролю (прежняя схема). */
-type PasswordMode = 'restore' | 'change';
-type ConfirmMode = 'disable' | 'enable' | 'reset';
-
-export type E2eMenuAction = { mode: E2eModalMode; labelKey: string; tone: 'accent' | 'plain' };
 
 /**
- * Пункты меню чата для текущего состояния шифрования (пусто — пока состояние неизвестно).
- * Включать шифрование не нужно: оно включается само, без пароля.
+ * Шифрование включается само у всех и не отключается — ни пароля, ни кнопок в меню.
+ * Окна остались только для прежней схемы с паролем: вернуть ключ паролем (restore) или,
+ * если пароль забыт, начать заново (reset).
  */
-export function e2eMenuActions(
-  status: E2eStatus,
-  hasLocalKey: boolean,
-  hasPasswordBackup: boolean,
-): E2eMenuAction[] {
-  if (status === 'needs_restore') return [{ mode: 'restore', labelKey: 'e2eMenuRestore', tone: 'accent' }];
-  if (status === 'ready') {
-    const actions: E2eMenuAction[] = [];
-    if (hasPasswordBackup) actions.push({ mode: 'change', labelKey: 'e2eMenuChangePassword', tone: 'accent' });
-    actions.push({ mode: 'disable', labelKey: 'e2eMenuDisable', tone: 'accent' });
-    return actions;
-  }
-  if (status === 'disabled') {
-    // Ключа здесь нет, а копия под паролем есть — сначала вернуть переписку паролем.
-    return !hasLocalKey && hasPasswordBackup
-      ? [{ mode: 'restore', labelKey: 'e2eMenuRestore', tone: 'accent' }]
-      : [{ mode: 'enable', labelKey: 'e2eMenuEnableAgain', tone: 'accent' }];
-  }
-  return [];
-}
+type Mode = 'restore' | 'reset';
 
 /**
  * Переписка с этим собеседником шифруется: у меня шифрование включено и у него
  * опубликован ключ. Обновляется, когда кто-то из двоих включает или отключает его.
  */
 export function usePeerChatEncrypted(peerId: string, status: E2eStatus): boolean {
-  const [peerHasKey, setPeerHasKey] = useState(false);
+  // Ключ уже известен в этой сессии — сразу верный значок, без перерисовки при открытии чата.
+  const [peerHasKey, setPeerHasKey] = useState(() => !!peekPeerPublicKey(peerId));
   const [refreshTick, setRefreshTick] = useState(0);
   useEffect(
     () =>
@@ -107,15 +75,13 @@ export function useE2eStatus(): E2eStatus {
  * Над полем ввода чата. Шифрование включается само, предлагать его не нужно. Остаются:
  * требование восстановить ключ, включённый по паролю (прежняя схема), — пока он не
  * восстановлен, отправка заблокирована; уведомление о смене ключа собеседника; и один раз
- * на собеседника — что пустой чат защищён и где это отключить.
+ * на собеседника — что пустой чат защищён.
  */
 export function E2eChatBanner({
   lang,
   peerId,
   encrypted = false,
   emptyChat = false,
-  requestedMode,
-  onRequestedModeHandled,
 }: {
   lang: Lang;
   peerId: string;
@@ -123,20 +89,11 @@ export function E2eChatBanner({
   encrypted?: boolean;
   /** Сервер подтвердил, что сообщений ещё не было. */
   emptyChat?: boolean;
-  /** Открыть окно из меню чата. */
-  requestedMode?: E2eModalMode | null;
-  onRequestedModeHandled?: () => void;
 }) {
   const status = useE2eStatus();
   const [peerKeyChanged, setPeerKeyChanged] = useState(false);
   const [showChatNotice, setShowChatNotice] = useState(false);
   const [mode, setMode] = useState<Mode | null>(null);
-
-  useEffect(() => {
-    if (!requestedMode) return;
-    setMode(requestedMode);
-    onRequestedModeHandled?.();
-  }, [requestedMode, onRequestedModeHandled]);
 
   // Первый вход в пустой зашифрованный чат с этим собеседником: показываем и запоминаем.
   // Висит до крестика или выхода из чата, даже если переписка уже началась.
@@ -191,21 +148,19 @@ export function E2eChatBanner({
   return (
     <>
       {banner}
-      {mode === 'disable' || mode === 'enable' || mode === 'reset' ? (
-        <E2eConfirmModal lang={lang} mode={mode} onClose={() => setMode(null)} />
-      ) : mode ? (
-        <E2ePasswordModal lang={lang} mode={mode} onModeChange={setMode} onClose={() => setMode(null)} />
+      {mode === 'reset' ? (
+        <E2eResetModal lang={lang} onClose={() => setMode(null)} />
+      ) : mode === 'restore' ? (
+        <E2eRestoreModal lang={lang} onModeChange={setMode} onClose={() => setMode(null)} />
       ) : null}
     </>
   );
 }
 
-/** Отключить / включить снова — без пароля, только подтверждение. */
 /**
- * Отключить / включить снова / начать заново без пароля — только подтверждение.
- * reset — «Не помню пароль» прежней схемы: новый ключ, старая переписка здесь не читается.
+ * «Не помню пароль» прежней схемы: новый ключ, старая переписка здесь не читается.
  */
-function E2eConfirmModal({ lang, mode, onClose }: { lang: Lang; mode: ConfirmMode; onClose: () => void }) {
+function E2eResetModal({ lang, onClose }: { lang: Lang; onClose: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const confirm = useCallback(async () => {
@@ -213,8 +168,7 @@ function E2eConfirmModal({ lang, mode, onClose }: { lang: Lang; mode: ConfirmMod
     setBusy(true);
     setError(null);
     try {
-      const r =
-        mode === 'disable' ? await disableE2e() : mode === 'reset' ? await resetE2e() : await enableE2eAgain();
+      const r = await resetE2e();
       if (r.ok) onClose();
       else setError(t('e2eNetworkError', lang));
     } catch {
@@ -222,98 +176,55 @@ function E2eConfirmModal({ lang, mode, onClose }: { lang: Lang; mode: ConfirmMod
     } finally {
       setBusy(false);
     }
-  }, [busy, mode, lang, onClose]);
-  const disabling = mode === 'disable';
-  const title = { disable: 'e2eDisableTitle', enable: 'e2eEnableAgainTitle', reset: 'e2eSetupTitle' }[mode];
-  // У «включить снова» текст про прежний пароль — без пароля он неверен, хватает заголовка.
-  const text = { disable: 'e2eDisableText', enable: null, reset: 'e2eResetText' }[mode];
+  }, [busy, lang, onClose]);
   return (
-    <Modal visible transparent animationType="fade" onRequestClose={busy ? () => {} : onClose}>
-      <View style={styles.overlay}>
-        <BlurView intensity={60} tint="dark" style={StyleSheet.absoluteFill} />
-        <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.5)' }]} />
-        <View style={styles.card}>
-          <Text style={styles.title}>{t(title, lang)}</Text>
-          {text ? <Text style={styles.text}>{t(text, lang)}</Text> : null}
-          {error ? <Text style={styles.error}>{error}</Text> : null}
-          <View style={styles.row}>
-            <TouchableOpacity style={[styles.btn, styles.btnSecondary]} onPress={onClose} disabled={busy}>
-              <Text style={styles.btnText}>{t('e2eLater', lang)}</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.btn, disabling ? styles.btnDanger : styles.btnPrimary]}
-              onPress={confirm}
-              disabled={busy}
-            >
-              {busy ? (
-                <ActivityIndicator color={LIVI.white} size="small" />
-              ) : (
-                <Text style={styles.btnText}>{t(disabling ? 'e2eDisableConfirm' : 'e2eEnable', lang)}</Text>
-              )}
-            </TouchableOpacity>
-          </View>
+    <AppDialogModal
+      visible
+      // Пока идёт запрос, окно не закрывается ни фоном, ни «Назад».
+      onRequestClose={busy ? undefined : onClose}
+      dismissOnBackdrop={!busy}
+      title={t('e2eSetupTitle', lang)}
+      message={t('e2eResetText', lang)}
+      actions={[
+        { label: t('e2eLater', lang), onPress: onClose, disabled: busy },
+        { label: t('e2eEnable', lang), onPress: () => void confirm(), variant: 'primary', busy },
+      ]}
+    >
+      {error ? (
+        <View style={appDialogStyles.section}>
+          <Text style={appDialogStyles.error}>{error}</Text>
         </View>
-      </View>
-    </Modal>
+      ) : null}
+    </AppDialogModal>
   );
 }
 
-function E2ePasswordModal({
+/** Прежняя схема: вернуть ключ паролем после переустановки — переписка снова читается. */
+function E2eRestoreModal({
   lang,
-  mode,
   onModeChange,
   onClose,
 }: {
   lang: Lang;
-  mode: PasswordMode;
   onModeChange: (m: Mode) => void;
   onClose: () => void;
 }) {
   const [password, setPassword] = useState('');
-  const [repeat, setRepeat] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const needsRepeat = mode !== 'restore';
   const passwordRef = useRef<TextInput>(null);
-  const repeatRef = useRef<TextInput>(null);
-  // Окно поднимаем над клавиатурой: иначе второе поле и кнопки уходят под неё,
-  // а «Назад», чтобы её убрать, закрывает окно вместе с введённым паролем.
-  const [keyboardHeight, setKeyboardHeight] = useState(0);
-  useEffect(() => {
-    const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
-    const hideEvt = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
-    const show = Keyboard.addListener(showEvt, (e) => setKeyboardHeight(e.endCoordinates?.height ?? 0));
-    const hide = Keyboard.addListener(hideEvt, () => setKeyboardHeight(0));
-    return () => {
-      show.remove();
-      hide.remove();
-    };
-  }, []);
-  // autoFocus в Android-модалке не открывает клавиатуру — фокусируем после появления окна.
+  // Над клавиатурой окно поднимает AppOverlay; фокус — после появления окна, когда оно на месте.
   useEffect(() => {
     const id = setTimeout(() => passwordRef.current?.focus(), 250);
     return () => clearTimeout(id);
-  }, [mode]);
-
-  useEffect(() => {
-    setPassword('');
-    setRepeat('');
-    setError(null);
-  }, [mode]);
+  }, []);
 
   const submit = useCallback(async () => {
-    if (busy) return;
-    if (needsRepeat) {
-      if (!isAcceptableBackupPassword(password)) return setError(t('e2ePasswordTooShort', lang));
-      if (password !== repeat) return setError(t('e2ePasswordMismatch', lang));
-    } else if (!password) {
-      return;
-    }
+    if (busy || !password) return;
     setBusy(true);
     setError(null);
     try {
-      const action = mode === 'restore' ? restoreE2e : changeE2eBackupPassword;
-      const r = await action(password);
+      const r = await restoreE2e(password);
       if (r.ok) {
         onClose();
         return;
@@ -330,79 +241,43 @@ function E2ePasswordModal({
     } finally {
       setBusy(false);
     }
-  }, [busy, needsRepeat, password, repeat, mode, lang, onClose]);
-
-  const title = { restore: 'e2eRestoreTitle', change: 'e2eChangeTitle' }[mode];
-  const text = { restore: 'e2eRestoreText', change: 'e2eChangeText' }[mode];
-  const action = { restore: 'e2eRestore', change: 'e2eSave' }[mode];
+  }, [busy, password, lang, onClose]);
 
   return (
-    <Modal visible transparent animationType="fade" onRequestClose={busy ? () => {} : onClose}>
-      <View style={[styles.overlay, { paddingBottom: 20 + keyboardHeight }]}>
-        <BlurView intensity={60} tint="dark" style={StyleSheet.absoluteFill} />
-        <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.5)' }]} />
-        <View style={styles.card}>
-          <Text style={styles.title}>{t(title, lang)}</Text>
-          <Text style={styles.text}>{t(text, lang)}</Text>
-          <TextInput
-            ref={passwordRef}
-            style={styles.input}
-            value={password}
-            onChangeText={setPassword}
-            placeholder={t('e2ePasswordPlaceholder', lang)}
-            placeholderTextColor={LIVI.titan}
-            secureTextEntry
-            autoCapitalize="none"
-            autoCorrect={false}
-            maxFontSizeMultiplier={APP_INPUT_MAX_FONT_SIZE_MULTIPLIER}
-            textContentType={needsRepeat ? 'newPassword' : 'password'}
-            editable={!busy}
-            returnKeyType={needsRepeat ? 'next' : 'done'}
-            blurOnSubmit={!needsRepeat}
-            onSubmitEditing={() => (needsRepeat ? repeatRef.current?.focus() : void submit())}
-          />
-          {needsRepeat ? (
-            <TextInput
-              ref={repeatRef}
-              style={styles.input}
-              value={repeat}
-              onChangeText={setRepeat}
-              returnKeyType="done"
-              onSubmitEditing={() => void submit()}
-              placeholder={t('e2ePasswordRepeat', lang)}
-              placeholderTextColor={LIVI.titan}
-              secureTextEntry
-              autoCapitalize="none"
-              autoCorrect={false}
-              maxFontSizeMultiplier={APP_INPUT_MAX_FONT_SIZE_MULTIPLIER}
-              textContentType="newPassword"
-              editable={!busy}
-            />
-          ) : null}
-          {error ? <Text style={styles.error}>{error}</Text> : null}
-          <View style={styles.row}>
-            <TouchableOpacity style={[styles.btn, styles.btnSecondary]} onPress={onClose} disabled={busy}>
-              <Text style={styles.btnText}>{t('e2eLater', lang)}</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={[styles.btn, styles.btnPrimary]} onPress={submit} disabled={busy}>
-              {busy ? (
-                <View style={styles.busyRow}>
-                  <ActivityIndicator color={LIVI.white} size="small" />
-                  <Text style={[styles.btnText, { marginLeft: 6 }]}>{t('e2eWorking', lang)}</Text>
-                </View>
-              ) : (
-                <Text style={styles.btnText}>{t(action, lang)}</Text>
-              )}
-            </TouchableOpacity>
-          </View>
-          {mode === 'restore' ? (
-            <TouchableOpacity onPress={() => onModeChange('reset')} disabled={busy} style={styles.link}>
-              <Text style={styles.linkText}>{t('e2eForgotPassword', lang)}</Text>
-            </TouchableOpacity>
-          ) : null}
-        </View>
+    <AppDialogModal
+      visible
+      onRequestClose={busy ? undefined : onClose}
+      dismissOnBackdrop={!busy}
+      title={t('e2eRestoreTitle', lang)}
+      message={t('e2eRestoreText', lang)}
+      actions={[
+        { label: t('e2eLater', lang), onPress: onClose, disabled: busy },
+        { label: t('e2eRestore', lang), onPress: () => void submit(), variant: 'primary', busy },
+      ]}
+    >
+      <View style={[appDialogStyles.section, { gap: 10 }]}>
+        <TextInput
+          ref={passwordRef}
+          style={appDialogStyles.input}
+          value={password}
+          onChangeText={setPassword}
+          placeholder={t('e2ePasswordPlaceholder', lang)}
+          placeholderTextColor={LIVI.titan}
+          secureTextEntry
+          autoCapitalize="none"
+          autoCorrect={false}
+          maxFontSizeMultiplier={APP_INPUT_MAX_FONT_SIZE_MULTIPLIER}
+          textContentType="password"
+          editable={!busy}
+          returnKeyType="done"
+          onSubmitEditing={() => void submit()}
+        />
+        {error ? <Text style={appDialogStyles.error}>{error}</Text> : null}
+        <TouchableOpacity onPress={() => onModeChange('reset')} disabled={busy} style={styles.link}>
+          <Text style={styles.linkText}>{t('e2eForgotPassword', lang)}</Text>
+        </TouchableOpacity>
       </View>
-    </Modal>
+    </AppDialogModal>
   );
 }
 
@@ -421,34 +296,6 @@ const styles = StyleSheet.create({
   },
   bannerText: { color: LIVI.text, fontSize: 13, lineHeight: 17 },
   close: { color: LIVI.titan, fontSize: 20, lineHeight: 20, marginLeft: 10 },
-  overlay: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 20 },
-  card: {
-    width: '100%',
-    maxWidth: 400,
-    borderRadius: 18,
-    padding: 20,
-    backgroundColor: UI_SURFACE_RAISED,
-  },
-  title: { color: LIVI.white, fontSize: 18, fontWeight: '700', marginBottom: 8 },
-  text: { color: LIVI.text, fontSize: 14, lineHeight: 19, marginBottom: 14 },
-  input: {
-    color: LIVI.white,
-    fontSize: 16,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderRadius: 10,
-    backgroundColor: UI_SURFACE_SUNKEN,
-    marginBottom: 10,
-  },
-  error: { color: LIVI.red, fontSize: 13, marginBottom: 8 },
-  row: { flexDirection: 'row', gap: 12, marginTop: 6 },
-  btn: { flex: 1, borderRadius: 12, paddingVertical: 12, alignItems: 'center', justifyContent: 'center' },
-  // Плотный акцент: на светлом UI_ACCENT белый текст не читался бы.
-  btnPrimary: { backgroundColor: UI_ACCENT_DEEP },
-  btnSecondary: { backgroundColor: 'rgba(138, 143, 153, 0.25)' },
-  btnDanger: { backgroundColor: 'rgba(255, 90, 103, 0.35)' },
-  btnText: { color: LIVI.white, fontSize: 15, fontWeight: '600' },
-  busyRow: { flexDirection: 'row', alignItems: 'center' },
-  link: { alignSelf: 'center', marginTop: 14, padding: 4 },
+  link: { alignSelf: 'center', marginTop: 2, padding: 4 },
   linkText: { color: LIVI.titan, fontSize: 13, textDecorationLine: 'underline' },
 });

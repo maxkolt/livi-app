@@ -1,19 +1,8 @@
 import React from 'react';
-import {
-  ActivityIndicator,
-  Modal,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
-  type TextStyle,
-  type ViewStyle,
-} from 'react-native';
-import { BlurView } from 'expo-blur';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { WELCOME_HEADER_TITLE } from '../../../screens/home/constants';
+import { AppDialogModal, appDialogStyles } from '../../AppDialog';
 
 /** Совпадает с backend/models/UserReport USER_REPORT_REASONS. */
 export type ReportReason = 'nudity' | 'minor' | 'harassment' | 'spam' | 'other';
@@ -32,100 +21,50 @@ const REASONS: ReadonlyArray<{
 
 type Props = {
   visible: boolean;
-  isDark: boolean;
   busy: boolean;
   L: (key: string) => string;
   onSelect: (reason: ReportReason) => void;
   onRequestClose: () => void;
-  styles: {
-    modalOverlay: ViewStyle;
-    modalCard: ViewStyle;
-    modalTitle: TextStyle;
-    modalText: TextStyle;
-    btnGlassBase: ViewStyle;
-    btnGlassTitan: ViewStyle;
-    modalBtnText: TextStyle;
-  };
 };
 
-export function ReportPartnerModal({ visible, isDark, busy, L, onSelect, onRequestClose, styles }: Props) {
+export function ReportPartnerModal({ visible, busy, L, onSelect, onRequestClose }: Props) {
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onRequestClose}>
-      <View style={styles.modalOverlay}>
-        <BlurView intensity={60} tint={isDark ? 'dark' : 'light'} style={StyleSheet.absoluteFill} />
-        <Pressable
-          style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.5)' }]}
-          onPress={busy ? undefined : onRequestClose}
-        />
-        <View style={[styles.modalCard, local.card]}>
-          <ScrollView bounces={false} showsVerticalScrollIndicator={false}>
-            <Text style={styles.modalTitle}>{L('reportPartnerTitle')}</Text>
-            <Text style={styles.modalText}>{L('reportPartnerText')}</Text>
-            <View style={local.list}>
-              {REASONS.map((reason) => (
-                <Pressable
-                  key={reason.id}
-                  disabled={busy}
-                  onPress={() => onSelect(reason.id)}
-                  accessibilityRole="button"
-                  style={({ pressed }) => [local.row, pressed && local.rowPressed, busy && local.rowBusy]}
-                >
-                  <MaterialIcons name={reason.icon} size={20} color={WELCOME_HEADER_TITLE} />
-                  <Text style={local.rowText}>{L(reason.labelKey)}</Text>
-                </Pressable>
-              ))}
-            </View>
-            <TouchableOpacity
-              style={[styles.btnGlassBase, styles.btnGlassTitan, local.cancel]}
-              onPress={onRequestClose}
-              disabled={busy}
-            >
-              {busy ? (
-                <ActivityIndicator color="#ffffff" />
-              ) : (
-                <Text style={styles.modalBtnText}>{L('reportCancel')}</Text>
-              )}
-            </TouchableOpacity>
-          </ScrollView>
-        </View>
+    <AppDialogModal
+      visible={visible}
+      // Жалоба уходит — окно держим, пока не придёт ответ.
+      onRequestClose={busy ? undefined : onRequestClose}
+      dismissOnBackdrop={!busy}
+      title={L('reportPartnerTitle')}
+      message={L('reportPartnerText')}
+      actions={[{ label: L('reportCancel'), onPress: onRequestClose, busy }]}
+    >
+      <View style={[appDialogStyles.section, local.list]}>
+        {REASONS.map((reason) => (
+          <Pressable
+            key={reason.id}
+            disabled={busy}
+            onPress={() => onSelect(reason.id)}
+            accessibilityRole="button"
+            style={({ pressed }) => [
+              appDialogStyles.option,
+              pressed && appDialogStyles.optionPressed,
+              busy && local.rowBusy,
+            ]}
+          >
+            <MaterialIcons name={reason.icon} size={20} color={WELCOME_HEADER_TITLE} />
+            <Text style={appDialogStyles.optionText}>{L(reason.labelKey)}</Text>
+          </Pressable>
+        ))}
       </View>
-    </Modal>
+    </AppDialogModal>
   );
 }
 
 const local = StyleSheet.create({
-  /** В landscape карточка иначе растягивается на всю ширину и не влезает по высоте. */
-  card: {
-    maxWidth: 420,
-    maxHeight: '90%',
-  },
   list: {
-    marginTop: 14,
     gap: 8,
-  },
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    minHeight: 48,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 12,
-    backgroundColor: 'rgba(255,255,255,0.06)',
-  },
-  rowPressed: {
-    backgroundColor: 'rgba(255,255,255,0.14)',
   },
   rowBusy: {
     opacity: 0.5,
-  },
-  rowText: {
-    flex: 1,
-    color: '#ffffff',
-    fontSize: 15,
-  },
-  cancel: {
-    flex: 0,
-    marginTop: 14,
   },
 });

@@ -13,6 +13,7 @@ import { logger } from '../utils/logger';
 import { getEffectiveBusy } from '../utils/effectiveBusy';
 import { isFriendGloballyVisibleOnline } from '../utils/friendOnlinePresence';
 import { emitToUser } from '../utils/emitToUser';
+import { listIncomingFriendRequests } from '../utils/friendRequests';
 
 const isOid = (s?: string) => !!s && mongoose.Types.ObjectId.isValid(String(s));
 
@@ -72,6 +73,22 @@ export default function registerFriendSockets(io: Server) {
         });
       } catch (e: any) {
         logger.error('Friends fetch error:', e);
+        return ack?.({ ok: false, error: 'server_error' });
+      }
+    });
+
+    /** ===== Входящие заявки (страница «Заявки» в приложении) ===== */
+    sock.on('friends:requests', async (params: any = {}, ack?: Function) => {
+      try {
+        const me = meId();
+        if (!isOid(me)) return ack?.({ ok: false, error: 'unauthorized' });
+        const list = await listIncomingFriendRequests(me, {
+          includeAvatarThumbs: params?.includeAvatarThumbs !== false,
+          isOnline,
+        });
+        return ack?.({ ok: true, list });
+      } catch (e: any) {
+        logger.error('Friend requests fetch error:', e);
         return ack?.({ ok: false, error: 'server_error' });
       }
     });

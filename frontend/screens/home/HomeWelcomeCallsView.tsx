@@ -131,6 +131,238 @@ function MissedCountBadge({ count }: { count: number }) {
   );
 }
 
+type CallLogRowProps = {
+  rowId: string;
+  peerId: string;
+  direction: CallRow['direction'];
+  at: number;
+  friend: Friend | undefined;
+  lang: Lang;
+  L: (key: string) => string;
+  selectMode: boolean;
+  isSelected: boolean;
+  callActionsLocked: boolean;
+  tabletLayout: boolean;
+  compactLandscape: boolean;
+  onPressRow: (rowId: string, peerId: string, friend: Friend | undefined, displayName: string) => void;
+  onLongPressRow: (rowId: string) => void;
+};
+
+/**
+ * Строка журнала. memo на примитивах: показ/уход с вкладки, бейджи и выбор
+ * перерисовывали все строки разом (100–150 мс на каждом переключении табов).
+ */
+const CallLogRow = memo(function CallLogRow({
+  rowId,
+  peerId,
+  direction,
+  at,
+  friend,
+  lang,
+  L,
+  selectMode,
+  isSelected,
+  callActionsLocked,
+  tabletLayout,
+  compactLandscape,
+  onPressRow,
+  onLongPressRow,
+}: CallLogRowProps) {
+  const { displayName, avatarLetter } = friend
+    ? getFriendDisplay(friend)
+    : { displayName: t('user', lang), avatarLetter: '—' };
+  const avatarFallback =
+    avatarLetter ||
+    (friend?.name ? displayAvatarLetter(friend.name) : '') ||
+    '—';
+  const timeLabel = at ? formatWelcomeChatTime(at) : '';
+  const missed = direction === 'missed';
+  const cancelled = direction === 'cancelled';
+  const noAnswer = direction === 'no_answer';
+  const statusLabel =
+    direction === 'outgoing'
+      ? L('callsOutgoing')
+      : direction === 'incoming'
+        ? L('callsIncoming')
+        : direction === 'missed'
+          ? L('callsMissed')
+          : direction === 'cancelled'
+            ? L('callsCancelled')
+            : direction === 'no_answer'
+              ? L('noAnswer')
+            : '';
+  const statusIcon =
+    direction === 'outgoing'
+      ? 'arrow-top-right'
+      : direction === 'incoming'
+        ? 'arrow-bottom-left'
+        : direction === 'missed'
+          ? 'phone-missed'
+          : direction === 'cancelled'
+            ? 'phone-hangup'
+            : direction === 'no_answer'
+              ? 'phone-missed'
+            : 'phone-outline';
+  const statusTone = missed;
+  const statusColor = missed || cancelled || noAnswer ? LIVI.red : LIVI.green;
+
+  return (
+    <Pressable
+      style={({ pressed }) => [
+        styles.cardWrap,
+        tabletLayout && styles.cardWrapTablet,
+        compactLandscape && styles.cardWrapLandscape,
+        pressed && !callActionsLocked && styles.cardPressed,
+        callActionsLocked && styles.cardLocked,
+      ]}
+      onPress={() => onPressRow(rowId, peerId, friend, displayName)}
+      onLongPress={() => onLongPressRow(rowId)}
+      delayLongPress={380}
+      accessibilityRole="button"
+      accessibilityLabel={displayName}
+      accessibilityState={{ selected: isSelected, disabled: callActionsLocked && !selectMode }}
+    >
+      <View
+        style={[
+          styles.glassCard,
+          tabletLayout && styles.glassCardTablet,
+          compactLandscape && styles.glassCardLandscape,
+          isSelected && styles.glassCardSelected,
+        ]}
+      >
+        <View
+          style={[
+            styles.cardRow,
+            tabletLayout && styles.cardRowTablet,
+            compactLandscape && styles.cardRowLandscape,
+          ]}
+        >
+          {selectMode ? (
+            <View style={styles.selectMark}>
+              {isSelected ? (
+                <Ionicons name="checkmark-circle" size={22} color={UI_ACCENT} />
+              ) : (
+                <View style={styles.selectEmpty} />
+              )}
+            </View>
+          ) : null}
+          <View
+            style={[
+              styles.avatarWrap,
+              tabletLayout && styles.avatarWrapTablet,
+              compactLandscape && styles.avatarWrapLandscape,
+            ]}
+          >
+            <View
+              style={[
+                styles.avatarBox,
+                tabletLayout && styles.avatarBoxTablet,
+                compactLandscape && styles.avatarBoxLandscape,
+              ]}
+            >
+              {friend ? (
+                <AvatarImage
+                  userId={friend.id}
+                  avatarVer={friend.avatarVer || 0}
+                  uri={friend.avatarThumbB64 || undefined}
+                  size={
+                    tabletLayout
+                      ? WELCOME_FRIEND_AVATAR_SIZE_TABLET
+                      : compactLandscape
+                      ? WELCOME_FRIEND_AVATAR_SIZE_LANDSCAPE
+                      : WELCOME_FRIEND_AVATAR_SIZE
+                  }
+                  fallbackText={avatarFallback}
+                  containerStyle={{ overflow: 'hidden' }}
+                  fallbackTextStyle={
+                    avatarFallback && avatarFallback !== '—'
+                      ? { fontWeight: '800', color: LIVI.white }
+                      : { fontWeight: '400', color: LIVI.text2 }
+                  }
+                />
+              ) : (
+                <AdaptiveText
+                  style={[styles.avatarFallback, compactLandscape && styles.avatarFallbackLandscape]}
+                >
+                  {avatarFallback}
+                </AdaptiveText>
+              )}
+            </View>
+            {!selectMode && friend?.online ? <View style={styles.onlineDot} /> : null}
+          </View>
+
+          <View
+            style={[
+              styles.bodyCol,
+              tabletLayout && styles.bodyColTablet,
+              compactLandscape && styles.bodyColLandscape,
+            ]}
+          >
+            <View style={styles.nameRow}>
+              <AdaptiveText
+                style={[
+                  styles.name,
+                  tabletLayout && styles.nameTablet,
+                  compactLandscape && styles.nameLandscape,
+                  statusTone && styles.nameMissed,
+                ]}
+                numberOfLines={1}
+              >
+                {displayName}
+              </AdaptiveText>
+              {timeLabel ? (
+                <AdaptiveText
+                  style={[
+                    styles.time,
+                    tabletLayout && styles.timeTablet,
+                    compactLandscape && styles.timeLandscape,
+                  ]}
+                  numberOfLines={1}
+                >
+                  {timeLabel}
+                </AdaptiveText>
+              ) : null}
+            </View>
+            {statusLabel ? (
+              <View style={styles.statusRow}>
+                <MaterialCommunityIcons
+                  name={statusIcon as keyof typeof MaterialCommunityIcons.glyphMap}
+                  size={compactLandscape ? 13 : tabletLayout ? 15 : 14}
+                  color={statusColor}
+                />
+                <AdaptiveText
+                  style={[
+                    styles.status,
+                    tabletLayout && styles.statusTablet,
+                    compactLandscape && styles.statusLandscape,
+                    statusTone && styles.statusMissed,
+                  ]}
+                  numberOfLines={1}
+                >
+                  {statusLabel}
+                </AdaptiveText>
+              </View>
+            ) : (
+              <View style={styles.statusRow}>
+                <AdaptiveText
+                  style={[
+                    styles.status,
+                    tabletLayout && styles.statusTablet,
+                    compactLandscape && styles.statusLandscape,
+                  ]}
+                  numberOfLines={1}
+                >
+                  {friend?.online ? L('online') : L('offline')}
+                </AdaptiveText>
+              </View>
+            )}
+          </View>
+        </View>
+      </View>
+    </Pressable>
+  );
+});
+
 function HomeWelcomeCallsViewInner({
   lang,
   L,
@@ -480,239 +712,68 @@ function HomeWelcomeCallsViewInner({
     [callActionsLocked, filter, friendsById, logEntries, missedByUser, pickMode, selectMode, selectedIds],
   );
 
-  const renderItem = useCallback(
-    ({ item }: { item: CallRow }) => {
-      const friend = friendsById.get(item.peerId);
-      const { displayName, avatarLetter } = friend
-        ? getFriendDisplay(friend)
-        : { displayName: t('user', lang), avatarLetter: '—' };
-      const avatarFallback =
-        avatarLetter ||
-        (friend?.name ? displayAvatarLetter(friend.name) : '') ||
-        '—';
-      const timeLabel = item.at ? formatWelcomeChatTime(item.at) : '';
-      const missed = item.direction === 'missed';
-      const cancelled = item.direction === 'cancelled';
-      const noAnswer = item.direction === 'no_answer';
-      const statusLabel =
-        item.direction === 'outgoing'
-          ? L('callsOutgoing')
-          : item.direction === 'incoming'
-            ? L('callsIncoming')
-            : item.direction === 'missed'
-              ? L('callsMissed')
-              : item.direction === 'cancelled'
-                ? L('callsCancelled')
-                : item.direction === 'no_answer'
-                  ? L('noAnswer')
-                : '';
-      const statusIcon =
-        item.direction === 'outgoing'
-          ? 'arrow-top-right'
-          : item.direction === 'incoming'
-            ? 'arrow-bottom-left'
-            : item.direction === 'missed'
-              ? 'phone-missed'
-              : item.direction === 'cancelled'
-                ? 'phone-hangup'
-                : item.direction === 'no_answer'
-                  ? 'phone-missed'
-                : 'phone-outline';
-      const statusTone = missed;
-      const statusColor = missed || cancelled || noAnswer ? LIVI.red : LIVI.green;
-
-      const isSelected = selectedIds.has(item.id);
-
-      return (
-        <Pressable
-          style={({ pressed }) => [
-            styles.cardWrap,
-            tabletLayout && styles.cardWrapTablet,
-            compactLandscape && styles.cardWrapLandscape,
-            pressed && !callActionsLocked && styles.cardPressed,
-            callActionsLocked && styles.cardLocked,
-          ]}
-          onPress={() => {
-            if (selectMode) {
-              toggleSelect(item.id);
-              return;
-            }
-            const peerId = String(item.peerId || '').trim();
-            if (!peerId) return;
-            const target =
-              friend ||
-              ({
-                id: peerId,
-                name: displayName,
-                online: false,
-              } as Friend);
-            startCall(target);
-          }}
-          onLongPress={() => {
-            if (pickMode) return;
-            if (selectMode) {
-              toggleSelect(item.id);
-              return;
-            }
-            enterSelect(item.id);
-          }}
-          delayLongPress={380}
-          accessibilityRole="button"
-          accessibilityLabel={displayName}
-          accessibilityState={{ selected: isSelected, disabled: callActionsLocked && !selectMode }}
-        >
-          <View
-            style={[
-              styles.glassCard,
-              tabletLayout && styles.glassCardTablet,
-              compactLandscape && styles.glassCardLandscape,
-              isSelected && styles.glassCardSelected,
-            ]}
-          >
-            <View
-              style={[
-                styles.cardRow,
-                tabletLayout && styles.cardRowTablet,
-                compactLandscape && styles.cardRowLandscape,
-              ]}
-            >
-              {selectMode ? (
-                <View style={styles.selectMark}>
-                  {isSelected ? (
-                    <Ionicons name="checkmark-circle" size={22} color={UI_ACCENT} />
-                  ) : (
-                    <View style={styles.selectEmpty} />
-                  )}
-                </View>
-              ) : null}
-              <View
-                style={[
-                  styles.avatarWrap,
-                  tabletLayout && styles.avatarWrapTablet,
-                  compactLandscape && styles.avatarWrapLandscape,
-                ]}
-              >
-                <View
-                  style={[
-                    styles.avatarBox,
-                    tabletLayout && styles.avatarBoxTablet,
-                    compactLandscape && styles.avatarBoxLandscape,
-                  ]}
-                >
-                  {friend ? (
-                    <AvatarImage
-                      userId={friend.id}
-                      avatarVer={friend.avatarVer || 0}
-                      uri={friend.avatarThumbB64 || undefined}
-                      size={
-                        tabletLayout
-                          ? WELCOME_FRIEND_AVATAR_SIZE_TABLET
-                          : compactLandscape
-                          ? WELCOME_FRIEND_AVATAR_SIZE_LANDSCAPE
-                          : WELCOME_FRIEND_AVATAR_SIZE
-                      }
-                      fallbackText={avatarFallback}
-                      containerStyle={{ overflow: 'hidden' }}
-                      fallbackTextStyle={
-                        avatarFallback && avatarFallback !== '—'
-                          ? { fontWeight: '800', color: LIVI.white }
-                          : { fontWeight: '400', color: LIVI.text2 }
-                      }
-                    />
-                  ) : (
-                    <AdaptiveText
-                      style={[styles.avatarFallback, compactLandscape && styles.avatarFallbackLandscape]}
-                    >
-                      {avatarFallback}
-                    </AdaptiveText>
-                  )}
-                </View>
-                {!selectMode && friend?.online ? <View style={styles.onlineDot} /> : null}
-              </View>
-
-              <View
-                style={[
-                  styles.bodyCol,
-                  tabletLayout && styles.bodyColTablet,
-                  compactLandscape && styles.bodyColLandscape,
-                ]}
-              >
-                <View style={styles.nameRow}>
-                  <AdaptiveText
-                    style={[
-                      styles.name,
-                      tabletLayout && styles.nameTablet,
-                      compactLandscape && styles.nameLandscape,
-                      statusTone && styles.nameMissed,
-                    ]}
-                    numberOfLines={1}
-                  >
-                    {displayName}
-                  </AdaptiveText>
-                  {timeLabel ? (
-                    <AdaptiveText
-                      style={[
-                        styles.time,
-                        tabletLayout && styles.timeTablet,
-                        compactLandscape && styles.timeLandscape,
-                      ]}
-                      numberOfLines={1}
-                    >
-                      {timeLabel}
-                    </AdaptiveText>
-                  ) : null}
-                </View>
-                {statusLabel ? (
-                  <View style={styles.statusRow}>
-                    <MaterialCommunityIcons
-                      name={statusIcon as keyof typeof MaterialCommunityIcons.glyphMap}
-                      size={compactLandscape ? 13 : tabletLayout ? 15 : 14}
-                      color={statusColor}
-                    />
-                    <AdaptiveText
-                      style={[
-                        styles.status,
-                        tabletLayout && styles.statusTablet,
-                        compactLandscape && styles.statusLandscape,
-                        statusTone && styles.statusMissed,
-                      ]}
-                      numberOfLines={1}
-                    >
-                      {statusLabel}
-                    </AdaptiveText>
-                  </View>
-                ) : (
-                  <View style={styles.statusRow}>
-                    <AdaptiveText
-                      style={[
-                        styles.status,
-                        tabletLayout && styles.statusTablet,
-                        compactLandscape && styles.statusLandscape,
-                      ]}
-                      numberOfLines={1}
-                    >
-                      {friend?.online ? L('online') : L('offline')}
-                    </AdaptiveText>
-                  </View>
-                )}
-              </View>
-            </View>
-          </View>
-        </Pressable>
-      );
+  // Обработчики строк стабильны (через ref): иначе memo строки слетал на каждом рендере.
+  const rowActionsRef = useRef({ selectMode, pickMode, toggleSelect, enterSelect, startCall });
+  rowActionsRef.current = { selectMode, pickMode, toggleSelect, enterSelect, startCall };
+  const onPressRow = useCallback(
+    (rowId: string, peerIdRaw: string, friend: Friend | undefined, displayName: string) => {
+      const a = rowActionsRef.current;
+      if (a.selectMode) {
+        a.toggleSelect(rowId);
+        return;
+      }
+      const peerId = String(peerIdRaw || '').trim();
+      if (!peerId) return;
+      const target =
+        friend ||
+        ({
+          id: peerId,
+          name: displayName,
+          online: false,
+        } as Friend);
+      a.startCall(target);
     },
+    [],
+  );
+  const onLongPressRow = useCallback((rowId: string) => {
+    const a = rowActionsRef.current;
+    if (a.pickMode) return;
+    if (a.selectMode) {
+      a.toggleSelect(rowId);
+      return;
+    }
+    a.enterSelect(rowId);
+  }, []);
+
+  const renderItem = useCallback(
+    ({ item }: { item: CallRow }) => (
+      <CallLogRow
+        rowId={item.id}
+        peerId={item.peerId}
+        direction={item.direction}
+        at={item.at}
+        friend={friendsById.get(item.peerId)}
+        lang={lang}
+        L={L}
+        selectMode={selectMode}
+        isSelected={selectedIds.has(item.id)}
+        callActionsLocked={callActionsLocked}
+        tabletLayout={tabletLayout}
+        compactLandscape={compactLandscape}
+        onPressRow={onPressRow}
+        onLongPressRow={onLongPressRow}
+      />
+    ),
     [
       L,
       callActionsLocked,
       compactLandscape,
-      enterSelect,
       friendsById,
       lang,
-      pickMode,
+      onLongPressRow,
+      onPressRow,
       selectMode,
       selectedIds,
-      startCall,
-      toggleSelect,
       tabletLayout,
     ],
   );

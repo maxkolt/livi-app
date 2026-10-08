@@ -33,6 +33,7 @@ import {
   UI_ACCENT,
   HOME_BLUR_LIST_SOURCE,
   UI_GLASS_CONTROL,
+  WELCOME_UPDATE_BADGE,
 } from './constants';
 import {
   WELCOME_CHROME_BTN_SHADOW,
@@ -66,6 +67,9 @@ export type HomeWelcomeFriendsViewProps = Omit<FriendsListCoreProps, 'presentati
   missedByUser: Record<string, number>;
   handleRemoveFriend: (peerId: string, opts?: { quiet?: boolean }) => Promise<void | boolean>;
   onInviteFriends: () => void | Promise<void>;
+  /** Заявки, ждущие ответа: на кнопке у короны — красная точка. */
+  friendRequestsCount: number;
+  onOpenFriendRequests: () => void;
   askConfirm: (opts: {
     title: string;
     message?: string;
@@ -84,6 +88,8 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
     unreadByUser,
     missedByUser,
     onInviteFriends,
+    friendRequestsCount,
+    onOpenFriendRequests,
     askConfirm,
     L,
     handleRemoveFriend,
@@ -351,7 +357,13 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
           />
         ) : (
           <>
-        <WelcomeTabTitle label={t('tabFriends', lang)} tablet={tabletLayout} compact={compactLandscape} />
+        <WelcomeTabTitle
+          label={t('tabFriends', lang)}
+          tablet={tabletLayout}
+          compact={compactLandscape}
+          // Справа две кнопки (заявки и корона) — текст держим дальше от края.
+          sideInset={tabletLayout ? 136 : compactLandscape ? 118 : 126}
+        />
         <Pressable
           style={({ pressed }) => [
             styles.iconBtn,
@@ -376,12 +388,39 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
             color={searchOpen ? UI_ACCENT : WELCOME_HEADER_TITLE}
           />
         </Pressable>
-        <WelcomeCrownButton
-                small={compactLandscape}
-                compact={!tabletLayout && !compactLandscape}
-                large={tabletLayout}
-                surface={UI_GLASS_CONTROL}
-              />
+        <View style={[styles.headerRight, tabletLayout && styles.headerRightTablet, compactLandscape && styles.headerRightLandscape]}>
+          <Pressable
+            style={({ pressed }) => [
+              styles.iconBtn,
+              tabletLayout && styles.iconBtnTablet,
+              compactLandscape && styles.iconBtnLandscape,
+              WELCOME_CHROME_BTN_SHADOW_IOS,
+              pressed && styles.iconBtnPressed,
+            ]}
+            accessibilityRole="button"
+            accessibilityLabel={t('friendRequestsTitle', lang)}
+            onPress={onOpenFriendRequests}
+          >
+            <WelcomeFloatShadow
+              radius={tabletLayout ? 22 : compactLandscape ? 16 : GLASS_HEADER_BTN / 2}
+              {...WELCOME_CHROME_BTN_SHADOW}
+            />
+            <Ionicons
+              name="person-add-outline"
+              size={tabletLayout ? 22 : compactLandscape ? 17 : 18}
+              color={WELCOME_HEADER_TITLE}
+            />
+            {friendRequestsCount > 0 ? (
+              <View style={[styles.requestsDot, tabletLayout && styles.requestsDotTablet]} pointerEvents="none" />
+            ) : null}
+          </Pressable>
+          <WelcomeCrownButton
+            small={compactLandscape}
+            compact={!tabletLayout && !compactLandscape}
+            large={tabletLayout}
+            surface={UI_GLASS_CONTROL}
+          />
+        </View>
           </>
         )}
       </View>
@@ -624,6 +663,37 @@ const styles = StyleSheet.create({
   iconBtnPressed: {
     opacity: 0.85,
     transform: [{ scale: 0.96 }],
+  },
+  /** Заявки и корона справа в шапке. */
+  // Зазор как между кнопками звонка и чата в строке друга — заявки не липнут к короне.
+  headerRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 18,
+  },
+  headerRightLandscape: {
+    gap: 14,
+  },
+  headerRightTablet: {
+    gap: 20,
+  },
+  /** Есть заявки — как точка обновления у «Профиля» в навбаре. */
+  requestsDot: {
+    position: 'absolute',
+    top: 1,
+    right: 1,
+    width: 9,
+    height: 9,
+    borderRadius: 5,
+    backgroundColor: WELCOME_UPDATE_BADGE,
+    borderWidth: 1.5,
+    borderColor: 'rgba(10,12,20,0.95)',
+  },
+  requestsDotTablet: {
+    top: 2,
+    right: 2,
+    width: 10,
+    height: 10,
   },
   iconBtnDisabled: {
     opacity: 0.4,

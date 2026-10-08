@@ -1,8 +1,9 @@
 /** Полноэкранный слой поверх приложения — в основном окне, а не RN-модалкой. */
 
 import React, { useEffect, useRef, useState } from 'react';
-import { Animated, BackHandler, StyleSheet } from 'react-native';
+import { Animated, StyleSheet } from 'react-native';
 import { Portal } from 'react-native-paper';
+import { useOverlayBackHandler } from './AppOverlay';
 
 /**
  * У RN-модалки своё окно (Dialog), и системные панели в нём не прозрачные: статус-бар
@@ -46,14 +47,8 @@ export function FullScreenPortal({
     );
   }, [visible, ready, opacity]);
 
-  useEffect(() => {
-    if (!visible) return;
-    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
-      requestCloseRef.current();
-      return true;
-    });
-    return () => sub.remove();
-  }, [visible]);
+  // «Назад» — сначала закрыть этот слой (и модалки над ним), потом навигация.
+  useOverlayBackHandler(visible, () => requestCloseRef.current());
 
   if (!visible && !mounted) return null;
   return (

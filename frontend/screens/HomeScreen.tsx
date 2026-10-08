@@ -1,6 +1,6 @@
 // screens/HomeScreen.tsx
 import React, { useEffect, useState, useCallback, useMemo, useRef, startTransition } from 'react';
-import { Alert,
+import {
   BackHandler,
   StyleSheet,
   Text,
@@ -23,6 +23,7 @@ import { Alert,
   Share,
   Vibration,
 } from 'react-native';
+import { showAppAlert } from '../components/AppAlert';
 import { SystemBars } from 'react-native-edge-to-edge';
 import * as Haptics from 'expo-haptics';
 
@@ -33,7 +34,6 @@ import { BlurView } from 'expo-blur';
 import * as ImagePicker from 'expo-image-picker';
 import * as Clipboard from 'expo-clipboard';
 import { PinchGestureHandler, State } from 'react-native-gesture-handler';
-import { Portal } from 'react-native-paper';
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { Image as ExpoImage } from 'expo-image';
 import { getAvatarImageProps, forceImageRefresh } from '../utils/imageOptimization';
@@ -112,13 +112,20 @@ import {
 import { clearEndingCallInProgress } from '../utils/activeCallSession';
 import { clearDirectCallAudioRouteCarryoverAfterCallEnd } from '../utils/callAudioRoutePersist';
 import {
-  WelcomeOverlayBack,
-  WelcomeOverlayCard,
-  WelcomeOverlayDim,
-  WelcomeOverlayPill,
   WELCOME_OVERLAY_ACCENT,
   welcomeOverlayText,
 } from './home/WelcomeOverlayChrome';
+import { AppDialogModal, appDialogStyles } from '../components/AppDialog';
+import { FriendRequestsPage } from './home/FriendRequestsPage';
+import {
+  declineFriendRequest,
+  installFriendRequestEvents,
+  refreshFriendRequests,
+  removeFriendRequest,
+  upsertFriendRequest,
+  useFriendRequests,
+} from '../store/friendRequests';
+import { useOverlayBackHandler } from '../components/AppOverlay';
 import { useWelcomeOnlineCount } from './home/hooks/useWelcomeOnlineCount';
 import type { Friend, HomeRouteParams } from './home/types';
 import {
@@ -575,7 +582,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       .then((m) => m.dismissAppUpdateShadeNotifications())
       .catch(() => {});
   }, [welcomeActiveTab]);
-  const { updateAvailable } = useHomeUpdatePromo();
+  const { updateAvailable, updatePromoHydrated } = useHomeUpdatePromo();
 
   const {
     friends,
@@ -654,6 +661,12 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   // Синхронная загрузка профиля при инициализации. При повторном монтировании (возврат из звонка/PiP) не показываем сплэш — оба true, профиль подставится в отдельном effect.
   const [profileLoaded, setProfileLoaded] = useState(homeScreenAlreadyBooted);
   const [dataLoaded, setDataLoaded] = useState(homeScreenAlreadyBooted);
+  /**
+   * Ник/аватар уже подняты с диска. Заставке этого хватает: ответ сервера с тем же
+   * аватаром даёт ту же строку URI и ничего не перерисовывает, а ждать его — секунды
+   * на медленной сети/VPN.
+   */
+  const [profileHydrated, setProfileHydrated] = useState(homeScreenAlreadyBooted);
   // Сплеш поверх уже отрисованного Home: при уходе сплеша видна страница приветствия с актуальными данными
   const [splashDismissed, setSplashDismissed] = useState(homeScreenAlreadyBooted);
   const [nick, setNick] = useState('');
@@ -861,15 +874,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   // Полноэкранный аватар — под той же линзой «рыбий глаз», что и все остальные.
   const modalAvatarLensed = useFisheyeAvatarUri(avatarModalVisible ? modalAvatarDisplayUri : '');
 
-  useEffect(() => {
-    if (Platform.OS !== 'android') return;
-    if (!avatarModalVisible) return;
-    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
-      setAvatarModalVisible(false);
-      return true;
-    });
-    return () => sub.remove();
-  }, [avatarModalVisible]);
+  // Полноэкранный аватар — слой над главной: «Назад» сперва закрывает его.
+  useOverlayBackHandler(avatarModalVisible, () => setAvatarModalVisible(false));
 
   const avatarModalSize = (() => {
     const { width: sw, height: sh } = Dimensions.get('window');
@@ -938,6 +944,29 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const [langPickerVisible, setLangPickerVisible] = useState(false);
   const L = useCallback((key: string) => t(key, lang), [lang]);
 
+  // ===== Заявки в друзья: страница из вкладки «Друзья», красная точка на её кнопке =====
+  const [friendRequestsOpen, setFriendRequestsOpen] = useState(false);
+  const openFriendRequests = useCallback(() => setFriendRequestsOpen(true), []);
+  const closeFriendRequests = useCallback(() => setFriendRequestsOpen(false), []);
+  const friendRequestItems = useFriendRequests((s) => s.items);
+  const friendIdSet = useMemo(() => new Set(friends.map((f) => String(f.id))), [friends]);
+  const friendRequestsCount = useMemo(
+    () => friendRequestItems.filter((it) => !friendIdSet.has(it.id)).length,
+    [friendRequestItems, friendIdSet],
+  );
+  useEffect(() => {
+    installFriendRequestEvents();
+  }, []);
+  // С сервера — при входе и возврате в приложение; пока открыта вкладка «Друзья» — раз в две минуты.
+  const friendsTabActive = welcomeActiveTab === 'friends';
+  useEffect(() => {
+    if (!appIsActive || !resolvedUserId) return;
+    void refreshFriendRequests();
+    if (!friendsTabActive) return;
+    const tmr = setInterval(() => void refreshFriendRequests(), 2 * 60_000);
+    return () => clearInterval(tmr);
+  }, [appIsActive, resolvedUserId, friendsTabActive]);
+
   // ===== Donate modal =====
   const [donateVisible, setDonateVisible] = useState(false);
   const [pressedButton, setPressedButton] = useState<'boosty' | 'patreon' | null>(null);
@@ -945,23 +974,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   // ===== Share/Invite modal =====
   const [shareVisible, setShareVisible] = useState(false);
 
-  // На Android: при открытых модалках "Support the project" и "Invite a friend" кнопка "Назад" закрывает модалку
-  useEffect(() => {
-    if (Platform.OS !== 'android') return;
-    if (!donateVisible && !shareVisible) return;
-    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
-      if (donateVisible) {
-        setDonateVisible(false);
-        return true;
-      }
-      if (shareVisible) {
-        setShareVisible(false);
-        return true;
-      }
-      return false;
-    });
-    return () => sub.remove();
-  }, [donateVisible, shareVisible]);
+  // «Назад» при открытых «Поддержать проект» / «Пригласить друга» закрывает их сам AppOverlay.
   const [inviteLink, setInviteLink] = useState<string>('');
   
   // ===== Invite request modal =====
@@ -1072,7 +1085,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       processedInviteRef.current = inviteCode;
 
       try {
-        const result = await checkInviteLink(inviteCode);
+        // Открытие ссылки: сервер запоминает пригласившего во входящих заявках.
+        const result = await checkInviteLink(inviteCode, { markPending: true });
         
         if (!result.ok) {
           await clearPendingInviteCode();
@@ -1088,14 +1102,15 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           return;
         }
 
-        if (result.hasPendingRequest) {
-          await clearPendingInviteCode();
-          clearInviteRouteParams();
-          processedInviteRef.current = null;
-          return;
-        }
-
-        if (result.canAdd && result.inviter) {
+        const inviterIsMe = String(result.inviter?.id || '') === String(getCurrentUserId() || '');
+        // Уже ждёт в «Заявках» (ссылку открывали раньше) — окно всё равно показываем.
+        if (result.inviter && !inviterIsMe && (result.canAdd || result.hasPendingRequest)) {
+          void upsertFriendRequest({
+            id: result.inviter.id,
+            nick: result.inviter.nick,
+            avatarVer: result.inviter.avatarVer,
+            avatarThumbB64: result.inviter.avatarThumbB64,
+          });
           setInviteRequestData({
             code: inviteCode,
             inviter: {
@@ -1154,8 +1169,9 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     try {
       const result = await acceptInvite(inviteRequestData.inviter.id);
       
-      if (result?.ok && result.status !== 'already') {
-        loadFriendsFnRef.current();
+      if (result?.ok) {
+        void removeFriendRequest(inviteRequestData.inviter.id);
+        if (result.status !== 'already') loadFriendsFnRef.current();
       }
       
       setInviteRequestVisible(false);
@@ -1173,7 +1189,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     }
   }, [inviteRequestData, clearInviteRouteParams]);
 
-  const handleDeclineInvite = useCallback(async () => {
+  /** Закрыть окно приглашения, не отвечая: заявка остаётся ждать в «Заявках». */
+  const closeInviteRequest = useCallback(async () => {
     setInviteRequestVisible(false);
     setInviteRequestData(null);
     processedInviteRef.current = null;
@@ -1181,15 +1198,12 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     clearInviteRouteParams();
   }, [clearInviteRouteParams]);
 
-  // Android back: закрытие invite-модалки = decline (не теряем pending без явной отмены)
-  useEffect(() => {
-    if (Platform.OS !== 'android' || !inviteRequestVisible) return;
-    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
-      void handleDeclineInvite();
-      return true;
-    });
-    return () => sub.remove();
-  }, [inviteRequestVisible, handleDeclineInvite]);
+  /** «Отклонить» — заявки больше нет ни здесь, ни в «Заявках». */
+  const handleDeclineInvite = useCallback(async () => {
+    const inviterId = inviteRequestData?.inviter?.id;
+    if (inviterId) void declineFriendRequest(inviterId);
+    await closeInviteRequest();
+  }, [inviteRequestData?.inviter?.id, closeInviteRequest]);
 
   /* ===== Call (outgoing modal) ===== */
   const [calling, setCalling] = useState<{ visible: boolean; friend?: Friend | null; callId?: string | null }>({ visible: false });
@@ -3279,6 +3293,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
             logger.debug('[HomeScreen] Loaded avatar from cache');
           }
         }
+        if (cachedNick || cachedAvatar) setProfileHydrated(true);
       } catch (e) {
         logger.warn('[HomeScreen] Failed to load from cache', { e });
       }
@@ -4561,7 +4576,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           logger.warn('[handleSaveProfile] Avatar upload failed', { error: e?.message });
           await ensureMinSpinner();
           setSaving(false);
-          Alert.alert(t('errorTitle', lang), t('avatarUploadFailed', lang));
+          showAppAlert(t('errorTitle', lang), t('avatarUploadFailed', lang));
           return;
         }
       } else {
@@ -4739,7 +4754,7 @@ const handleClearNick = useCallback(async () => {
 
     } catch (e: any) {
       console.error('[handleDeleteAvatar] Error:', e);
-      Alert.alert(t('errorTitle', lang), t('avatarDeleteFailed', lang));
+      showAppAlert(t('errorTitle', lang), t('avatarDeleteFailed', lang));
     }
   }, [nick, lang, installId]);
 
@@ -4894,7 +4909,7 @@ const handleClearNick = useCallback(async () => {
         // происходило и он не получал никакого объяснения. Удаление требует сервера — говорим прямо.
         setWiping(false);
         setInitialized(true);
-        Alert.alert(t('errorTitle', lang), t('wipeFailed', lang));
+        showAppAlert(t('errorTitle', lang), t('wipeFailed', lang));
         return;
       }
 
@@ -4952,7 +4967,7 @@ const handleClearNick = useCallback(async () => {
       // а данные при этом могут быть уже удалены на сервере или ещё нет — пользователь должен знать.
       const reason = String(e?.message || '').trim();
       logger.warn('[handleWipeAccount] failed', { reason });
-      Alert.alert(
+      showAppAlert(
         t('errorTitle', lang),
         reason ? t('wipeFailedWithReason', lang).replace('{reason}', reason) : t('wipeFailed', lang),
       );
@@ -5186,6 +5201,7 @@ const handleClearNick = useCallback(async () => {
     const openWelcomeChat = (route as any)?.params?.openWelcomeChat;
     const openWelcomeChatUnread = (route as any)?.params?.openWelcomeChatUnread;
     const openWelcomeProfile = (route as any)?.params?.openWelcomeProfile;
+    const openFriendRequestsParam = !!(route as any)?.params?.openFriendRequests;
     const pushMessageFrom = String((route as any)?.params?.pushMessageFrom || '').trim();
 
     // Legacy openFriendsMenu → welcome Calls (старое меню больше не показываем).
@@ -5228,6 +5244,8 @@ const handleClearNick = useCallback(async () => {
     } else if (wantFriends) {
       setWelcomeActiveTab('friends');
       ensureWelcomeTabMounted('friends');
+      // Тап по уведомлению о заявке — сразу страница «Заявки».
+      if (openFriendRequestsParam) setFriendRequestsOpen(true);
     } else if (wantProfile) {
       setWelcomeActiveTab('profile');
       ensureWelcomeTabMounted('profile');
@@ -5663,7 +5681,6 @@ const handleClearNick = useCallback(async () => {
             centerProfile={centerProfile}
             hasActiveCallForSearch={hasActiveCallForSearch}
             onStartSearch={handleStartSearch}
-            splashGone={!showSplashOverlay}
             active={showSearchWelcome}
             onTopBlockBottom={onSearchTopBlockBottom}
           />
@@ -5678,6 +5695,8 @@ const handleClearNick = useCallback(async () => {
             bottomInset={tabBarH + GLASS_DOCK_TOP_PAD}
             allFriends={friends}
             onInviteFriends={generateInviteLink}
+            friendRequestsCount={friendRequestsCount}
+            onOpenFriendRequests={openFriendRequests}
             askConfirm={askConfirm}
           />
         </WelcomeKeepAlivePane>
@@ -5858,287 +5877,248 @@ const handleClearNick = useCallback(async () => {
       )}
 
       {/* ───── Комната занята (caller info) ───── */}
-      {roomFull.visible && (
-        <View style={styles.overlayModal} pointerEvents="box-none">
-          <WelcomeOverlayDim />
-          <WelcomeOverlayCard style={{ maxWidth: 320, minWidth: 240 }}>
-            <Text style={welcomeOverlayText.title}>{t('roomBusyTitle', lang)}</Text>
-            {!!roomFull.name && (
-              <Text style={[welcomeOverlayText.body, { marginBottom: 4 }]}>{roomFull.name}</Text>
-            )}
-            <WelcomeOverlayPill
-              label={t('ok', lang)}
-              onPress={() => setRoomFull({ visible: false })}
-              variant="secondary"
-              style={{ marginTop: 14, alignSelf: 'stretch' }}
-            />
-          </WelcomeOverlayCard>
-        </View>
-      )}
+      <AppDialogModal
+        visible={roomFull.visible}
+        onRequestClose={() => setRoomFull({ visible: false })}
+        title={t('roomBusyTitle', lang)}
+        message={roomFull.name || undefined}
+        actions={[{ label: t('ok', lang), onPress: () => setRoomFull({ visible: false }) }]}
+      />
 
       <LanguagePicker visible={langPickerVisible} onClose={closeLangPicker} onSelect={(code) => { void handleSelectLang(code); }} current={lang} />
 
-      <Portal>
-        {ConfirmView}
-      </Portal>
+      <FriendRequestsPage
+        visible={friendRequestsOpen}
+        onClose={closeFriendRequests}
+        lang={lang}
+        friendIds={friendIdSet}
+        onAccepted={() => loadFriendsFnRef.current()}
+      />
 
-      <Portal>
-        {donateVisible && (
-          <View style={styles.overlayModal} pointerEvents="box-none">
-            <WelcomeOverlayDim />
-            <WelcomeOverlayBack onPress={() => setDonateVisible(false)} />
-            <WelcomeOverlayCard>
-              <Text style={welcomeOverlayText.title}>
-                {t('supportProjectTitle', lang)}
-              </Text>
-              <Text style={welcomeOverlayText.subtitle}>
-                {t('supportProjectSubtitle', lang)}
-              </Text>
-              <View style={{ marginBottom: 4, gap: 10 }}>
-                <TouchableOpacity
-                  onPress={async () => {
-                    const clicks = await incrCounter('support_boosty_clicks');
-                    const url = appendUtm(BOOSTY_URL, {
-                      utm_source: 'livi_app',
-                      utm_medium: 'support',
-                      utm_campaign: 'donate',
-                      utm_content: 'boosty',
-                      utm_count: String(clicks),
-                    });
-                    logger.info('[support] Open Boosty', { url });
-                    Linking.openURL(url);
-                  }}
-                  onPressIn={() => setPressedButton('boosty')}
-                  onPressOut={() => setPressedButton(null)}
-                  activeOpacity={1}
-                  style={{
-                    backgroundColor:
-                      pressedButton === 'boosty'
-                        ? UI_ACCENT_SELECTED
-                        : 'rgba(255,255,255,0.04)',
-                    borderColor: WELCOME_OVERLAY_ACCENT,
-                    borderWidth: StyleSheet.hairlineWidth,
-                    paddingVertical: 11,
-                    paddingHorizontal: 16,
-                    borderRadius: 999,
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: 8,
-                  }}
-                >
-                  <ExpoImage
-                    source={require('../assets/boosty-sign-logo.png')}
-                    style={{ width: 22, height: 22 }}
-                    contentFit="contain"
-                    cachePolicy="memory-disk"
-                  />
-                  <Text style={{ color: WELCOME_HEADER_TITLE, fontWeight: '600', fontSize: 15 }}>
-                    Boosty.to
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  onPress={async () => {
-                    const clicks = await incrCounter('support_patreon_clicks');
-                    const url = appendUtm(PATREON_URL, {
-                      utm_source: 'livi_app',
-                      utm_medium: 'support',
-                      utm_campaign: 'donate',
-                      utm_content: 'patreon',
-                      utm_count: String(clicks),
-                    });
-                    logger.info('[support] Open Patreon', { url });
-                    Linking.openURL(url);
-                  }}
-                  onPressIn={() => setPressedButton('patreon')}
-                  onPressOut={() => setPressedButton(null)}
-                  activeOpacity={1}
-                  style={{
-                    backgroundColor:
-                      pressedButton === 'patreon'
-                        ? UI_ACCENT_SELECTED
-                        : 'rgba(255,255,255,0.04)',
-                    borderColor: WELCOME_OVERLAY_ACCENT,
-                    borderWidth: StyleSheet.hairlineWidth,
-                    paddingVertical: 11,
-                    paddingHorizontal: 16,
-                    borderRadius: 999,
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: 8,
-                  }}
-                >
-                  <ExpoImage
-                    source={require('../assets/patreon-sign-logo.png')}
-                    style={{ width: 22, height: 22 }}
-                    contentFit="contain"
-                    cachePolicy="memory-disk"
-                  />
-                  <Text style={{ color: WELCOME_HEADER_TITLE, fontWeight: '600', fontSize: 15 }}>
-                    Patreon
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            </WelcomeOverlayCard>
-          </View>
-        )}
+      {ConfirmView}
 
-        {/* Share/Invite Modal */}
-        {shareVisible && (
-          <View style={styles.overlayModal} pointerEvents="box-none">
-            <WelcomeOverlayDim strong />
-            <WelcomeOverlayBack onPress={() => setShareVisible(false)} />
-            <WelcomeOverlayCard opaque>
-              <Text style={welcomeOverlayText.title}>
-                {t('inviteFriendTitle', lang)}
-              </Text>
-              <Text style={welcomeOverlayText.subtitle}>
-                {t('inviteFriendsSubtitle', lang)}
-              </Text>
+      {/* Поддержать проект */}
+      <AppDialogModal
+        visible={donateVisible}
+        onRequestClose={() => setDonateVisible(false)}
+        title={t('supportProjectTitle', lang)}
+        message={t('supportProjectSubtitle', lang)}
+        actions={[{ label: t('storeClose', lang), onPress: () => setDonateVisible(false) }]}
+      >
+        <View style={[appDialogStyles.section, { gap: 10 }]}>
+          <TouchableOpacity
+            onPress={async () => {
+              const clicks = await incrCounter('support_boosty_clicks');
+              const url = appendUtm(BOOSTY_URL, {
+                utm_source: 'livi_app',
+                utm_medium: 'support',
+                utm_campaign: 'donate',
+                utm_content: 'boosty',
+                utm_count: String(clicks),
+              });
+              logger.info('[support] Open Boosty', { url });
+              Linking.openURL(url);
+            }}
+            onPressIn={() => setPressedButton('boosty')}
+            onPressOut={() => setPressedButton(null)}
+            activeOpacity={1}
+            style={{
+              backgroundColor:
+                pressedButton === 'boosty'
+                  ? UI_ACCENT_SELECTED
+                  : 'rgba(255,255,255,0.04)',
+              borderColor: WELCOME_OVERLAY_ACCENT,
+              borderWidth: StyleSheet.hairlineWidth,
+              paddingVertical: 11,
+              paddingHorizontal: 16,
+              borderRadius: 999,
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 8,
+            }}
+          >
+            <ExpoImage
+              source={require('../assets/boosty-sign-logo.png')}
+              style={{ width: 22, height: 22 }}
+              contentFit="contain"
+              cachePolicy="memory-disk"
+            />
+            <Text style={{ color: WELCOME_HEADER_TITLE, fontWeight: '600', fontSize: 15 }}>
+              Boosty.to
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={async () => {
+              const clicks = await incrCounter('support_patreon_clicks');
+              const url = appendUtm(PATREON_URL, {
+                utm_source: 'livi_app',
+                utm_medium: 'support',
+                utm_campaign: 'donate',
+                utm_content: 'patreon',
+                utm_count: String(clicks),
+              });
+              logger.info('[support] Open Patreon', { url });
+              Linking.openURL(url);
+            }}
+            onPressIn={() => setPressedButton('patreon')}
+            onPressOut={() => setPressedButton(null)}
+            activeOpacity={1}
+            style={{
+              backgroundColor:
+                pressedButton === 'patreon'
+                  ? UI_ACCENT_SELECTED
+                  : 'rgba(255,255,255,0.04)',
+              borderColor: WELCOME_OVERLAY_ACCENT,
+              borderWidth: StyleSheet.hairlineWidth,
+              paddingVertical: 11,
+              paddingHorizontal: 16,
+              borderRadius: 999,
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 8,
+            }}
+          >
+            <ExpoImage
+              source={require('../assets/patreon-sign-logo.png')}
+              style={{ width: 22, height: 22 }}
+              contentFit="contain"
+              cachePolicy="memory-disk"
+            />
+            <Text style={{ color: WELCOME_HEADER_TITLE, fontWeight: '600', fontSize: 15 }}>
+              Patreon
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </AppDialogModal>
 
-              <View style={{ marginBottom: 20 }}>
-                <Text style={welcomeOverlayText.label}>
-                  {t('inviteLinkLabel', lang)}
-                </Text>
-                <View style={welcomeOverlayText.linkField}>
-                  <Text
-                    style={welcomeOverlayText.linkText}
-                    numberOfLines={1}
-                    ellipsizeMode="middle"
-                  >
-                    {inviteLink}
-                  </Text>
-                  <TouchableOpacity
-                    onPress={async () => {
-                      try {
-                        await Clipboard.setStringAsync(inviteLink);
-                        await incrCounter('invite_link_copied');
-                      } catch (e) {
-                        logger.error('Failed to copy link:', e);
-                      }
-                    }}
-                    activeOpacity={0.7}
-                    style={welcomeOverlayText.copyBtn}
-                  >
-                    <Ionicons name="copy-outline" size={18} color={WELCOME_POPUP_ACCENT} />
-                  </TouchableOpacity>
-                </View>
-                <Text style={welcomeOverlayText.hint}>
-                  {t('inviteShareHint', lang)}
-                </Text>
-              </View>
-
-              <WelcomeOverlayPill
-                label={t('share', lang)}
-                onPress={async () => {
-                  try {
-                    const shareMessage = t('inviteShareMessage', lang).replace('{link}', inviteLink);
-
-                    const result = await Share.share({
-                      message: shareMessage,
-                      url: inviteLink,
-                      title: t('inviteShareTitle', lang),
-                    });
-
-                    if (result.action === Share.sharedAction) {
-                      await incrCounter('invite_link_shared');
-                      if (result.activityType) {
-                        logger.debug('Shared via:', result.activityType);
-                      }
-                    } else if (result.action === Share.dismissedAction) {
-                      logger.debug('Share dismissed');
-                    }
-                  } catch (e) {
-                    logger.error('Failed to share link:', e);
-                    try {
-                      await Clipboard.setStringAsync(inviteLink);
-                    } catch {}
+      {/* Пригласить друга: ссылка и «Поделиться» */}
+      <AppDialogModal
+        visible={shareVisible}
+        onRequestClose={() => setShareVisible(false)}
+        title={t('inviteFriendTitle', lang)}
+        message={t('inviteFriendsSubtitle', lang)}
+        actions={[
+          { label: t('storeClose', lang), onPress: () => setShareVisible(false) },
+          {
+            label: t('share', lang),
+            variant: 'primary',
+            onPress: async () => {
+              try {
+                const shareMessage = t('inviteShareMessage', lang).replace('{link}', inviteLink);
+                const result = await Share.share({
+                  message: shareMessage,
+                  url: inviteLink,
+                  title: t('inviteShareTitle', lang),
+                });
+                if (result.action === Share.sharedAction) {
+                  await incrCounter('invite_link_shared');
+                  if (result.activityType) {
+                    logger.debug('Shared via:', result.activityType);
                   }
-                }}
-                leading={<Ionicons name="share-outline" size={18} color={WELCOME_POPUP_ACCENT} />}
+                } else if (result.action === Share.dismissedAction) {
+                  logger.debug('Share dismissed');
+                }
+              } catch (e) {
+                logger.error('Failed to share link:', e);
+                try {
+                  await Clipboard.setStringAsync(inviteLink);
+                } catch {}
+              }
+            },
+          },
+        ]}
+      >
+        <View style={appDialogStyles.section}>
+          <Text style={welcomeOverlayText.label}>
+            {t('inviteLinkLabel', lang)}
+          </Text>
+          <View style={welcomeOverlayText.linkField}>
+            <Text
+              style={welcomeOverlayText.linkText}
+              numberOfLines={1}
+              ellipsizeMode="middle"
+            >
+              {inviteLink}
+            </Text>
+            <TouchableOpacity
+              onPress={async () => {
+                try {
+                  await Clipboard.setStringAsync(inviteLink);
+                  await incrCounter('invite_link_copied');
+                } catch (e) {
+                  logger.error('Failed to copy link:', e);
+                }
+              }}
+              activeOpacity={0.7}
+              style={welcomeOverlayText.copyBtn}
+            >
+              <Ionicons name="copy-outline" size={18} color={WELCOME_POPUP_ACCENT} />
+            </TouchableOpacity>
+          </View>
+          <Text style={[welcomeOverlayText.hint, { textAlign: 'left' }]}>
+            {t('inviteShareHint', lang)}
+          </Text>
+        </View>
+      </AppDialogModal>
+
+      {/* Заявка в друзья по ссылке-приглашению; «Назад» и фон закрывают окно — заявка ждёт в «Заявках» */}
+      <AppDialogModal
+        visible={inviteRequestVisible && !!inviteRequestData}
+        onRequestClose={() => void closeInviteRequest()}
+        title={t('friendInviteTitle', lang)}
+        message={
+          inviteRequestData?.areFriends
+            ? t('alreadyFriendsWithUser', lang).replace(
+                '{user}',
+                trimNick(inviteRequestData.inviter.nick) || t('thisUser', lang),
+              )
+            : undefined
+        }
+        actions={
+          inviteRequestData?.areFriends
+            ? [{ label: t('ok', lang), onPress: () => void closeInviteRequest() }]
+            : [
+                { label: t('decline', lang), onPress: handleDeclineInvite },
+                { label: t('accept', lang), onPress: handleAcceptInvite, variant: 'primary' },
+              ]
+        }
+      >
+        {inviteRequestData && !inviteRequestData.areFriends ? (
+          <View style={[appDialogStyles.section, { alignItems: 'center', paddingBottom: 4 }]}>
+            {inviteRequestData.inviter.avatarThumbB64 ? (
+              <AvatarImage
+                userId={inviteRequestData.inviter.id}
+                avatarVer={inviteRequestData.inviter.avatarVer}
+                uri={inviteRequestData.inviter.avatarThumbB64}
+                size={64}
+                fallbackText={trimNick(inviteRequestData.inviter.nick)?.[0]?.toUpperCase() || '?'}
+                containerStyle={{ marginBottom: 12 }}
               />
-            </WelcomeOverlayCard>
+            ) : (
+              <View style={welcomeOverlayText.avatarFallback}>
+                <Text style={{ color: WELCOME_HEADER_TITLE, fontSize: 24, fontWeight: '700' }}>
+                  {trimNick(inviteRequestData.inviter.nick)?.[0]?.toUpperCase() || '?'}
+                </Text>
+              </View>
+            )}
+            <Text style={[welcomeOverlayText.strong, { marginBottom: 8 }]}>
+              {trimNick(inviteRequestData.inviter.nick) || t('user', lang)}
+            </Text>
+            <Text style={welcomeOverlayText.body}>
+              {t('wantsToAddYouAsFriend', lang)}
+            </Text>
           </View>
-        )}
-
-        {/* Invite Request Modal */}
-        {inviteRequestVisible && inviteRequestData && (
-          <View style={styles.overlayModal} pointerEvents="box-none">
-            <WelcomeOverlayDim strong />
-            <WelcomeOverlayCard opaque>
-              <Text style={[welcomeOverlayText.title, { marginBottom: 20 }]}>
-                {t('friendInviteTitle', lang)}
-              </Text>
-
-              {inviteRequestData.areFriends ? (
-                <View style={{ marginBottom: 4 }}>
-                  <Text style={[welcomeOverlayText.body, { marginBottom: 16 }]}>
-                    {t('alreadyFriendsWithUser', lang).replace(
-                      '{user}',
-                      trimNick(inviteRequestData.inviter.nick) || t('thisUser', lang),
-                    )}
-                  </Text>
-                  <WelcomeOverlayPill
-                    label={t('ok', lang)}
-                    onPress={handleDeclineInvite}
-                  />
-                </View>
-              ) : (
-                <>
-                  <View style={{ marginBottom: 20, alignItems: 'center' }}>
-                    {inviteRequestData.inviter.avatarThumbB64 ? (
-                      <AvatarImage
-                        userId={inviteRequestData.inviter.id}
-                        avatarVer={inviteRequestData.inviter.avatarVer}
-                        uri={inviteRequestData.inviter.avatarThumbB64}
-                        size={64}
-                        fallbackText={trimNick(inviteRequestData.inviter.nick)?.[0]?.toUpperCase() || '?'}
-                        containerStyle={{ marginBottom: 12 }}
-                      />
-                    ) : (
-                      <View style={welcomeOverlayText.avatarFallback}>
-                        <Text style={{ color: WELCOME_HEADER_TITLE, fontSize: 24, fontWeight: '700' }}>
-                          {trimNick(inviteRequestData.inviter.nick)?.[0]?.toUpperCase() || '?'}
-                        </Text>
-                      </View>
-                    )}
-                    <Text style={[welcomeOverlayText.strong, { marginBottom: 8 }]}>
-                      {trimNick(inviteRequestData.inviter.nick) || t('user', lang)}
-                    </Text>
-                    <Text style={welcomeOverlayText.body}>
-                      {t('wantsToAddYouAsFriend', lang)}
-                    </Text>
-                  </View>
-
-                  <View style={welcomeOverlayText.actionRow}>
-                    <WelcomeOverlayPill
-                      label={t('decline', lang)}
-                      onPress={handleDeclineInvite}
-                      variant="secondary"
-                      style={{ flex: 1 }}
-                    />
-                    <WelcomeOverlayPill
-                      label={t('accept', lang)}
-                      onPress={handleAcceptInvite}
-                      style={{ flex: 1 }}
-                    />
-                  </View>
-                </>
-              )}
-            </WelcomeOverlayCard>
-          </View>
-        )}
-      </Portal>
+        ) : null}
+      </AppDialogModal>
     </SafeAreaView>
 
     {showSplashOverlay && (
       <View style={[StyleSheet.absoluteFillObject, { zIndex: 9998 }]} pointerEvents="box-none">
         <SplashLoader
-          dataLoaded={dataLoaded}
+          dataLoaded={(dataLoaded || profileHydrated) && updatePromoHydrated}
           hasAvatarReady={avatarReadyForFirstPaint}
-          hasNick={!!(currentNick && currentNick.trim())}
-          hasAvatar={!!(currentAvatar && currentAvatar.trim())}
           onComplete={() => {
             logger.info('[search-avatar] splash-dismiss', {
               ready: avatarReadyForFirstPaint,

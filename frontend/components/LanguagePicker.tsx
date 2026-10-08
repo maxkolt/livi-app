@@ -1,30 +1,17 @@
 // components/LanguagePicker.tsx
 import React from 'react';
-import {
-  Modal,
-  View,
-  Text,
-  TouchableOpacity,
-  StyleSheet,
-  ScrollView,
-  Platform,
-  Pressable,
-} from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, ScrollView } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useSafeAreaFrame, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { type Lang, defaultLang } from '../utils/i18n';
+import { type Lang, defaultLang, t } from '../utils/i18n';
+import { useLang } from '../store/lang';
+import { AppDialogModal } from './AppDialog';
 import {
-  LIVI,
-  WELCOME_FRIENDS_SEGMENT_SHELL_RADIUS,
   WELCOME_GLASS_BORDER,
   WELCOME_HEADER_TITLE,
   WELCOME_MUTED_TEXT,
   UI_ACCENT,
   UI_ACCENT_LIGHT,
-  UI_SURFACE_RAISED,
 } from '../screens/home/constants';
-
-const OVERLAY_DIM = 'rgba(0, 0, 0, 0.62)';
 
 type Props = {
   visible: boolean;
@@ -53,105 +40,74 @@ const LANGUAGES: Array<{ code: Lang; name: string; native: string }> = [
   { code: 'id',    name: 'Indonesian',            native: 'Bahasa Indonesia' },
 ];
 
-const CARD_PADDING = 16;
 const LIST_CONTENT_PAD_V = 4;
-const VISIBLE_LANGUAGE_ROWS = 7;
 /** paddingVertical×2 + lineHeights (native + name) */
 const LANGUAGE_ROW_HEIGHT = 12 * 2 + 18 + 1 + 14;
+/** Видно семь с половиной строк — половинка подсказывает, что список прокручивается. */
+const LIST_MAX_HEIGHT = LIST_CONTENT_PAD_V * 2 + LANGUAGE_ROW_HEIGHT * 7.5;
 const ACCENT = UI_ACCENT;
 
+/** Выбор языка — диалог в общем виде модалок приложения. */
 const LanguagePicker: React.FC<Props> = ({
   visible,
   onClose,
   onSelect,
   current = defaultLang,
 }) => {
-  const insets = useSafeAreaInsets();
-  const { height: winH } = useSafeAreaFrame();
-
-  if (!visible) return null;
-
+  const lang = useLang((st) => st.lang);
   const isRtlLang = (code: Lang) => code === 'ar';
 
-  const V_PAD = Platform.OS === 'android' ? 12 : 16;
-  const availableH = Math.max(0, winH - (V_PAD + insets.top) - (V_PAD + insets.bottom));
-  const listViewportH =
-    LIST_CONTENT_PAD_V * 2 + VISIBLE_LANGUAGE_ROWS * LANGUAGE_ROW_HEIGHT;
-  const cardH = Math.min(availableH, CARD_PADDING * 2 + listViewportH);
-
   return (
-    <Modal
+    <AppDialogModal
       visible={visible}
-      transparent
-      animationType="fade"
       onRequestClose={onClose}
-      statusBarTranslucent
+      title={t('chooseLanguage', lang)}
+      scrollable={false}
+      actions={[{ label: t('cancelAction', lang), onPress: onClose }]}
     >
-      <View style={styles.overlay} pointerEvents="box-none">
-        <View style={[StyleSheet.absoluteFill, { backgroundColor: OVERLAY_DIM }]} />
-
-        <Pressable
-          onPress={onClose}
-          accessibilityRole="button"
-          hitSlop={10}
-          style={({ pressed }) => [
-            styles.backBtn,
-            {
-              top: insets.top + (Platform.OS === 'android' ? 12 : 8),
-              left: 12,
-            },
-            pressed && styles.backBtnPressed,
-          ]}
-        >
-          <Ionicons name="chevron-back" size={22} color={LIVI.white} />
-        </Pressable>
-
-        <View style={[styles.card, { height: cardH, marginTop: 20 }]}>
-          <ScrollView
-            style={styles.list}
-            contentContainerStyle={{ paddingVertical: 4 }}
-            showsVerticalScrollIndicator={false}
-          >
-            {LANGUAGES.map((lng, idx) => {
-              const selected = normalize(current) === normalize(lng.code);
-              const rtl = isRtlLang(lng.code);
-              const isLast = idx === LANGUAGES.length - 1;
-              return (
-                <TouchableOpacity
-                  key={lng.code}
-                  activeOpacity={0.85}
-                  onPress={() => onSelect(lng.code)}
-                  style={[styles.row, isLast ? styles.rowLast : null]}
+      <ScrollView
+        style={styles.list}
+        contentContainerStyle={styles.listContent}
+        showsVerticalScrollIndicator={false}
+      >
+        {LANGUAGES.map((lng, idx) => {
+          const selected = normalize(current) === normalize(lng.code);
+          const rtl = isRtlLang(lng.code);
+          const isLast = idx === LANGUAGES.length - 1;
+          return (
+            <TouchableOpacity
+              key={lng.code}
+              activeOpacity={0.85}
+              onPress={() => onSelect(lng.code)}
+              style={[styles.row, isLast ? styles.rowLast : null]}
+            >
+              <View style={{ flex: 1 }}>
+                <Text
+                  style={[
+                    styles.rowNative,
+                    selected && styles.rowNativeSelected,
+                    rtl && {
+                      writingDirection: 'rtl',
+                      textAlign: 'left',
+                    },
+                  ]}
                 >
-                  <View style={{ flex: 1 }}>
-                    <Text
-                      style={[
-                        styles.rowNative,
-                        selected && styles.rowNativeSelected,
-                        rtl && {
-                          writingDirection: 'rtl',
-                          textAlign: 'left',
-                        },
-                      ]}
-                    >
-                      {lng.native}
-                    </Text>
-                    <Text style={[styles.rowName, selected && styles.rowNameSelected]}>
-                      {lng.name}
-                    </Text>
-                  </View>
-                  {selected ? (
-                    <Ionicons name="checkmark" size={20} color={ACCENT} />
-                  ) : (
-                    <View style={styles.radioOff} />
-                  )}
-                </TouchableOpacity>
-              );
-            })}
-          </ScrollView>
-        </View>
-      </View>
-    </Modal>
+                  {lng.native}
+                </Text>
+                <Text style={[styles.rowName, selected && styles.rowNameSelected]}>
+                  {lng.name}
+                </Text>
+              </View>
+              {selected ? (
+                <Ionicons name="checkmark" size={20} color={ACCENT} />
+              ) : (
+                <View style={styles.radioOff} />
+              )}
+            </TouchableOpacity>
+          );
+        })}
+      </ScrollView>
+    </AppDialogModal>
   );
 };
 
@@ -164,33 +120,13 @@ function normalize(code?: string): string {
 }
 
 const styles = StyleSheet.create({
-  overlay: {
-    flex: 1,
-    paddingHorizontal: 18,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  backBtn: {
-    position: 'absolute',
-    zIndex: 10,
-    width: 40,
-    height: 40,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  backBtnPressed: {
-    opacity: 0.72,
-  },
-  card: {
-    width: '92%',
-    backgroundColor: UI_SURFACE_RAISED,
-    borderRadius: WELCOME_FRIENDS_SEGMENT_SHELL_RADIUS,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: WELCOME_GLASS_BORDER,
-    padding: CARD_PADDING,
-  },
   list: {
-    flex: 1,
+    flexShrink: 1,
+    maxHeight: LIST_MAX_HEIGHT,
+  },
+  listContent: {
+    paddingVertical: LIST_CONTENT_PAD_V,
+    paddingHorizontal: 18,
   },
   row: {
     flexDirection: 'row',

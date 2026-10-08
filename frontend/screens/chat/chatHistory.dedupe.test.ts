@@ -7,7 +7,7 @@
 jest.mock('../../components/chatStickers', () => ({ getStickerFallbackText: () => '' }));
 jest.mock('../../utils/i18n', () => ({ t: (k: string) => k }));
 
-import { mergeInitialHistoryMessages, mergeQuietSyncMessages } from './chatHistory';
+import { mergeInitialHistoryMessages, mergeQuietSyncMessages, reuseUnchangedMessages } from './chatHistory';
 import { filterRemoveMessageAndOutgoingDupes } from './chatMessageOps';
 
 const t0 = new Date('2026-10-01T12:00:00Z');
@@ -69,5 +69,29 @@ describe('history merge keeps the order messages were written in', () => {
     const theirs = { id: 'srv-1', text: 'hi', type: 'text', sender: 'peer', timestamp: at(5) };
     const fromServer = { ...theirs, timestamp: at(7) };
     expect(mergeInitialHistoryMessages([theirs], [fromServer], statuses)[0].timestamp).toEqual(at(7));
+  });
+});
+
+describe('reuseUnchangedMessages', () => {
+  const a = { id: 'srv-a', text: 'один', type: 'text', sender: 'peer', reactions: [{ emoji: '👍', userId: 'u' }] };
+  const b = { id: 'srv-b', text: 'два', type: 'text', sender: 'me' };
+
+  it('returns the previous array when nothing changed (no re-render)', () => {
+    const prev = [a, b];
+    expect(reuseUnchangedMessages([{ ...a, reactions: [...a.reactions] }, { ...b }], prev)).toBe(prev);
+  });
+
+  it('treats an undefined field as a missing one', () => {
+    const prev = [a, b];
+    expect(reuseUnchangedMessages([{ ...a, replyTo: undefined }, { ...b }], prev)).toBe(prev);
+  });
+
+  it('keeps unchanged messages as the same objects and takes changed ones', () => {
+    const prev = [a, b];
+    const editedB = { ...b, text: 'два (изм.)' };
+    const next = reuseUnchangedMessages([{ ...a }, editedB], prev);
+    expect(next).not.toBe(prev);
+    expect(next[0]).toBe(a);
+    expect(next[1]).toBe(editedB);
   });
 });

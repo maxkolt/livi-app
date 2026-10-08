@@ -1,3 +1,4 @@
+import nacl from 'tweetnacl';
 import {
   createKeyBackup,
   deriveCallFrameKey,
@@ -7,6 +8,7 @@ import {
   fromBase64,
   generateKeyPair,
   isAcceptableBackupPassword,
+  keyPairFromSecretKey,
   openKeyBackup,
   openMessage,
   sealMessage,
@@ -106,6 +108,28 @@ describe('message envelopes', () => {
     const again = sealMessage(body({ replyText: 'цитата' }), alice, bob.publicKey);
     expect(again.n).not.toBe(sealed.n);
     expect(again.c).not.toBe(sealed.c);
+  });
+
+  it('computes the shared key once per pair, not once per message', () => {
+    const before = jest.spyOn(nacl.box, 'before');
+    try {
+      const carol = generateKeyPair();
+      const dave = generateKeyPair();
+      const sent = Array.from({ length: 5 }, (_, i) => sealMessage(body({ id: `cm_${i}` }), carol, dave.publicKey));
+      for (let i = 0; i < sent.length; i++) {
+        const r = openMessage(sent[i], dave, { id: `cm_${i}`, from: A, to: B, me: B });
+        expect(r.ok && r.body.text).toBe(body().text);
+      }
+      // carol→dave при отправке и dave→carol при чтении — по одному разу.
+      expect(before).toHaveBeenCalledTimes(2);
+      // Пара заново прочитана из хранилища (другой объект) — ключ пересчитан, читается так же.
+      const daveAgain = keyPairFromSecretKey(dave.secretKey);
+      const r = openMessage(sent[0], daveAgain, { id: 'cm_0', from: A, to: B, me: B });
+      expect(r.ok && r.body.text).toBe(body().text);
+      expect(before).toHaveBeenCalledTimes(3);
+    } finally {
+      before.mockRestore();
+    }
   });
 
   it('rejects malformed envelopes', () => {

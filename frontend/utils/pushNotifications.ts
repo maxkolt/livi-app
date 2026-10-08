@@ -1595,7 +1595,8 @@ async function handleNotificationResponse(data: any, actionIdentifier: string, r
         nav.dispatch(
           CommonActions.reset({
             index: 0,
-            routes: [{ name: 'Home' as never, params: { openFriendsTab: true } }],
+            // Сразу страница «Заявки в друзья»: заявка ждёт там, даже если окно уже закрыли.
+            routes: [{ name: 'Home' as never, params: { openFriendsTab: true, openFriendRequests: true } }],
           })
         );
       });

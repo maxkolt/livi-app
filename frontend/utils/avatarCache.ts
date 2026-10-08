@@ -5,9 +5,26 @@ const FULL = (id: string, v: number) => `avatar:${id}:ver:${v}`;
 const THUMB = (id: string, v: number) => `avatarThumb:${id}:ver:${v}`;
 
 /**
+ * Полные аватары, уже прочитанные в этой сессии: экран (шапка чата) берёт их сразу,
+ * без асинхронного чтения и лишней перерисовки при открытии. Небольшой — последние N.
+ */
+const FULL_MEM_LIMIT = 24;
+const fullMem = new Map<string, string>();
+
+function rememberFull(key: string, dataUri: string) {
+  fullMem.delete(key);
+  fullMem.set(key, dataUri);
+  if (fullMem.size > FULL_MEM_LIMIT) {
+    const oldest = fullMem.keys().next().value;
+    if (oldest != null) fullMem.delete(oldest);
+  }
+}
+
+/**
  * Сохранить полный аватар (data URI)
  */
 export async function putFull(id: string, v: number, dataUri: string) {
+  rememberFull(FULL(id, v), dataUri);
   await AsyncStorage.setItem(FULL(id, v), dataUri);
 }
 
@@ -15,7 +32,18 @@ export async function putFull(id: string, v: number, dataUri: string) {
  * Получить полный аватар (data URI)
  */
 export async function getFull(id: string, v: number) {
-  return AsyncStorage.getItem(FULL(id, v));
+  const key = FULL(id, v);
+  const mem = fullMem.get(key);
+  if (mem) return mem;
+  const stored = await AsyncStorage.getItem(key);
+  if (stored) rememberFull(key, stored);
+  return stored;
+}
+
+/** Полный аватар, если он уже в памяти этой сессии, — синхронно; иначе null. */
+export function peekFull(id: string, v: number): string | null {
+  if (!id || !v) return null;
+  return fullMem.get(FULL(id, v)) ?? null;
 }
 
 /**

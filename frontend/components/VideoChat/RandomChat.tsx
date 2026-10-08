@@ -13,13 +13,13 @@ import {
   Pressable,
   Platform,
   Animated,
-  Alert,
   PermissionsAndroid,
   AppState,
   BackHandler,
   Easing,
   ActivityIndicator,
   } from 'react-native';
+import { showAppAlert } from '../AppAlert';
 import { SystemBars } from 'react-native-edge-to-edge';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { CommonActions } from '@react-navigation/native';
@@ -178,7 +178,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     if (Platform.OS !== 'ios') return;
     if (Device.isDevice) return;
     shownSimulatorCameraHintRef.current = true;
-    Alert.alert(
+    showAppAlert(
       t('iosSimulatorCameraTitle', lang),
       t('iosSimulatorCameraMsg', lang)
     );
@@ -842,7 +842,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       
       const ok = await requestPermissions();
       if (!ok) {
-        Alert.alert(t('permissionsTitle', lang), t('noCameraMicAccess', lang));
+        showAppAlert(t('permissionsTitle', lang), t('noCameraMicAccess', lang));
         return;
       }
       
@@ -858,7 +858,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
         setStarted(false);
         setLoading(false);
         setCamOn(false);
-        Alert.alert(t('errorTitle', lang), t('startCameraMicFailed', lang));
+        showAppAlert(t('errorTitle', lang), t('startCameraMicFailed', lang));
       } finally {
         loadingRef.current = false;
       }
@@ -978,7 +978,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       // Критические ошибки (например, краши) не должны показывать Alert
       try {
         if (!errorMsg.includes('crash') && !errorMsg.includes('fatal')) {
-          Alert.alert(t('errorTitle', lang), t('nextFailed', lang));
+          showAppAlert(t('errorTitle', lang), t('nextFailed', lang));
         }
       } catch (alertError) {
         // Игнорируем ошибки показа Alert - это не критично
@@ -2116,7 +2116,6 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       {/* Модалка заявки в друзья */}
       <FriendRequestModal
         visible={friendModalVisible}
-        isDark={isDark}
         lang={lang}
         friendRequestDisplayName={friendRequestDisplayName}
         L={L}
@@ -2126,18 +2125,15 @@ const RandomChat: React.FC<Props> = ({ route }) => {
         }}
         onDecline={declineFriend}
         onAccept={acceptFriend}
-        styles={styles}
       />
       
       {/* Жалоба на собеседника */}
       <ReportPartnerModal
         visible={reportVisible}
-        isDark={isDark}
         busy={reportBusy}
         L={L}
         onSelect={onReportSelect}
         onRequestClose={closeReport}
-        styles={styles}
       />
 
       {/* Toast уведомления */}

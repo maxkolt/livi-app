@@ -164,7 +164,7 @@ export function mergeQuietSyncMessages(
   if (dropLocalIds.size > 0) {
     merged = merged.filter((m: any) => !dropLocalIds.has(String(m?.id || "")));
   }
-  return sortMessagesByTimestamp(merged);
+  return reuseUnchangedMessages(sortMessagesByTimestamp(merged), prev);
 }
 
 /** Initial / reconnect history merge. Set dropOptimisticDupes for first load. */
@@ -195,7 +195,48 @@ export function mergeInitialHistoryMessages(
     ...preserveLocalFields(formatted, prev),
     ...localKeep.filter((m: any) => !dropLocalIds.has(String(m?.id || ""))),
   ];
-  return sortMessagesByTimestamp(merged);
+  return reuseUnchangedMessages(sortMessagesByTimestamp(merged), prev);
+}
+
+/** Одно и то же сообщение по содержимому (вложенные — реакции, цитата, фото альбома — небольшие). */
+function sameMessage(a: any, b: any): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  // Поле со значением undefined и отсутствующее поле — одно и то же (сервер и кэш различаются).
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+  for (const k of keys) {
+    const va = a[k];
+    const vb = b[k];
+    if (va === vb) continue;
+    if (va && vb && typeof va === "object" && typeof vb === "object") {
+      if (JSON.stringify(va) !== JSON.stringify(vb)) return false;
+      continue;
+    }
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Сообщения, которые не изменились, — прежними объектами, а если не изменилось ничего —
+ * прежним массивом. Облака ленты — React.memo: сверка с сервером при открытии чата
+ * иначе перерисовывала все облака, хотя по содержимому всё то же.
+ */
+export function reuseUnchangedMessages(next: any[], prev: any[]): any[] {
+  if (!prev.length) return next;
+  const prevById = new Map<string, any>();
+  for (const m of prev) {
+    const id = String(m?.id || "");
+    if (id) prevById.set(id, m);
+  }
+  let allSame = next.length === prev.length;
+  const out = next.map((m, i) => {
+    const p = prevById.get(String(m?.id || ""));
+    const kept = p && sameMessage(p, m) ? p : m;
+    if (allSame && kept !== prev[i]) allSame = false;
+    return kept;
+  });
+  return allSame ? prev : out;
 }
 
 /** Collect image URLs from recent messages for anti-flicker prefetch. */

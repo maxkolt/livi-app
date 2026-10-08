@@ -1,14 +1,9 @@
 import React, { useCallback, useState } from 'react';
-import { Text, View } from 'react-native';
 import { t } from '../../../utils/i18n';
 import { useLang } from '../../../store/lang';
-import { styles } from '../styles';
-import {
-  WelcomeOverlayCard,
-  WelcomeOverlayDim,
-  WelcomeOverlayPill,
-} from '../WelcomeOverlayChrome';
+import { AppDialogModal } from '../../../components/AppDialog';
 
+/** Подтверждение удаления на главной — в общем виде диалогов приложения. */
 export function useLiviConfirm() {
   const [state, setState] = useState<{
     visible: boolean;
@@ -34,29 +29,19 @@ export function useLiviConfirm() {
   const onCancel = useCallback(() => { state.resolve?.(false); setState((s) => ({ ...s, visible: false })); }, [state]);
   const onOk = useCallback(() => { state.resolve?.(true); setState((s) => ({ ...s, visible: false })); }, [state]);
 
-  const view = state.visible ? (
-    <View style={styles.overlayModal}>
-      <WelcomeOverlayDim strong />
-      <WelcomeOverlayCard opaque>
-        <Text style={styles.confirmTitle}>{state.title}</Text>
-        {!!state.message && <Text style={styles.confirmMsg}>{state.message}</Text>}
-        <View style={styles.confirmBtns}>
-          <WelcomeOverlayPill
-            label={state.cancelText || t('cancel', lang)}
-            onPress={onCancel}
-            variant="secondary"
-            style={{ flex: 1 }}
-          />
-          <WelcomeOverlayPill
-            label={state.confirmText || t('ok', lang)}
-            onPress={onOk}
-            variant="danger"
-            style={{ flex: 1 }}
-          />
-        </View>
-      </WelcomeOverlayCard>
-    </View>
-  ) : null;
+  // Всегда в дереве: закрытие доигрывает исчезновение с тем же текстом.
+  const view = (
+    <AppDialogModal
+      visible={state.visible}
+      onRequestClose={onCancel}
+      title={state.title}
+      message={state.message}
+      actions={[
+        { label: state.cancelText || t('cancel', lang), onPress: onCancel },
+        { label: state.confirmText || t('ok', lang), onPress: onOk, variant: 'danger' },
+      ]}
+    />
+  );
 
   return { askConfirm: ask, ConfirmView: view };
 }

@@ -218,7 +218,8 @@ export type ChatMessageItemProps = {
   onToggleSelect?: (id: string) => void;
   /** Album multi-select: which photo indices are checked. */
   selectedAlbumIndices?: number[];
-  onToggleAlbumTileSelect?: (index: number) => void;
+  /** Стабильная функция (не новая на каждый рендер списка) — иначе memo облака не работает. */
+  onToggleAlbumTileSelect?: (messageId: string, index: number) => void;
   retryUiForId: string | null;
   onToggleRetryUi?: (id: string) => void;
   onRetryFailed?: (item: any) => void;
@@ -372,7 +373,11 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
                   selectionMode={selectionMode}
                   focusedIndex={albumFocusIndex}
                   selectedIndices={selectedAlbumIndices}
-                  onToggleTileSelect={onToggleAlbumTileSelect}
+                  onToggleTileSelect={
+                    onToggleAlbumTileSelect
+                      ? (index: number) => onToggleAlbumTileSelect(String(item.id), index)
+                      : undefined
+                  }
                   onPressTile={(uri, index) => {
                     onPressImage('image', uri, item.name, {
                       uris: albumUris.map((u) => resolveMediaUri(u) || u),
