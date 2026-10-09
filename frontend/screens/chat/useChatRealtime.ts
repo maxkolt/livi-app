@@ -25,7 +25,7 @@ import {
   syncAppBadgeFromMissedCount,
 } from "../../utils/pushNotifications";
 import { CHAT_ALBUM_MAX, getMessageImageUris } from "./chatAlbum";
-import { stickerFieldsFromMessage } from "./chatMessageMeta";
+import { stickerFieldsFromMessage, videoNoteFieldsFromMessage } from "./chatMessageMeta";
 import { removeMessagesForDeletedIds } from "./chatMessageOps";
 import { onChatCallStatusMessage } from "../../utils/globalEvents";
 
@@ -98,6 +98,7 @@ export function useChatRealtime({
           size: (message as any).size,
           duration: (message as any).duration,
           ...stickerFieldsFromMessage(message),
+          ...videoNoteFieldsFromMessage(message),
           sender: isFromMe ? "me" : "peer",
           from: message.from,
           to: message.to,
@@ -380,7 +381,14 @@ export function useChatRealtime({
           if (!olds.has(id)) return msg;
           changed = true;
           // Голосовое загрузила очередь: локальный файл она удалит, играем с сервера.
-          return { ...msg, id: serverMessageId, from: currentUserId, to: peerId, ...(ev.uri ? { uri: ev.uri } : {}) };
+          return {
+            ...msg,
+            id: serverMessageId,
+            from: currentUserId,
+            to: peerId,
+            ...(ev.uri ? { uri: ev.uri } : {}),
+            ...(ev.thumbUri ? { thumbUri: ev.thumbUri } : {}),
+          };
         });
         if (!changed) return prev;
         const seen = new Set<string>();

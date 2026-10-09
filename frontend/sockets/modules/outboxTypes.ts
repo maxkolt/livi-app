@@ -9,8 +9,12 @@ export type MessageOutboxItem = {
   payload: {
     to: string;
     text?: string;
-    type: "text" | "image" | "audio" | "sticker";
+    type: "text" | "image" | "audio" | "sticker" | "video_note";
     uri?: string;
+    /** Видеокружок: кадр-превью на сервере. */
+    thumbUri?: string;
+    /** Видеокружок: кадр-превью на устройстве, ещё не загруженный (как localUri). */
+    localThumbUri?: string;
     /**
      * Файл на устройстве, ещё не загруженный на сервер (голосовое, записанное без сети).
      * Очередь сначала загружает его и кладёт адрес в uri, потом отправляет сообщение.
@@ -47,6 +51,8 @@ export type OutboxMessageDeliveredPayload = {
   delivered?: boolean;
   /** Адрес медиа, которое очередь загрузила сама (вместо локального файла). */
   uri?: string;
+  /** То же для кадра-превью видеокружка. */
+  thumbUri?: string;
 };
 
 /** Сервер окончательно отказал (не друзья, слишком длинный текст…) — повтор не поможет. */

@@ -26,6 +26,8 @@ export type RemoteTrackChangeInput = {
   incomingMediaTrack?: unknown;
   /** Аудио-дорожки, которые уже лежат в текущем remoteStream. */
   existingAudioMediaTracks?: readonly unknown[];
+  /** Видео-дорожки, которые уже лежат в текущем remoteStream. */
+  existingVideoMediaTracks?: readonly unknown[];
 };
 
 export type RemoteTrackChange = {
@@ -37,10 +39,15 @@ export type RemoteTrackChange = {
   wasAudioTrackChanged: boolean;
   /** В стриме лежит чужая аудио-дорожка — она уже мертва и глушит звук. */
   staleAudioInStream: boolean;
+  /**
+   * Тот же sid видео, но другой MediaStreamTrack: мы перезашли в комнату (новый
+   * PeerConnection), а партнёр свою публикацию не менял.
+   */
+  videoResubscribed: boolean;
   /** Нужен новый MediaStream (иначе UI не переподхватит дорожку). */
   needsFreshStream: boolean;
   /** Причина пересборки для логов. */
-  freshStreamReason: 'audio_replace' | 'video_replace';
+  freshStreamReason: 'audio_replace' | 'video_replace' | 'video_resubscribe';
 };
 
 export function describeRemoteTrackChange(input: RemoteTrackChangeInput): RemoteTrackChange {
@@ -54,6 +61,15 @@ export function describeRemoteTrackChange(input: RemoteTrackChangeInput): Remote
     isAudioTrack &&
     !!incoming &&
     (input.existingAudioMediaTracks ?? []).some((t) => !!t && t !== incoming);
+  // После смены сети (VPN off) sid у партнёра прежний, а дорожка новая. Дописать её в
+  // старый stream мало: экран держит этот stream с момента возврата из PiP и не
+  // перерисовывается — собеседник остаётся чёрным.
+  const videoResubscribed =
+    isVideoTrack &&
+    !!previousVideoSid &&
+    previousVideoSid === newTrackSid &&
+    !!incoming &&
+    !(input.existingVideoMediaTracks ?? []).includes(incoming);
 
   return {
     isVideoTrack,
@@ -63,7 +79,13 @@ export function describeRemoteTrackChange(input: RemoteTrackChangeInput): Remote
     wasVideoTrackChanged,
     wasAudioTrackChanged,
     staleAudioInStream,
-    needsFreshStream: (isVideoTrack && wasVideoTrackChanged) || wasAudioTrackChanged || staleAudioInStream,
-    freshStreamReason: wasAudioTrackChanged || staleAudioInStream ? 'audio_replace' : 'video_replace',
+    videoResubscribed,
+    needsFreshStream:
+      (isVideoTrack && (wasVideoTrackChanged || videoResubscribed)) || wasAudioTrackChanged || staleAudioInStream,
+    freshStreamReason: wasAudioTrackChanged || staleAudioInStream
+      ? 'audio_replace'
+      : videoResubscribed
+        ? 'video_resubscribe'
+        : 'video_replace',
   };
 }

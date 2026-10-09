@@ -17,6 +17,7 @@ import {
   UI_SURFACE_RAISED,
   WELCOME_HEADER_TITLE,
   WELCOME_MUTED_TEXT,
+  APP_TOP_CONTENT_GAP,
 } from '../home/constants';
 import { WelcomeTabTitle } from '../home/WelcomeTabTitle';
 import { GLASS_HEADER_BTN } from '../home/WelcomeGlassHeader';
@@ -26,6 +27,7 @@ import { useFliqSound } from './fliqSound';
 import { fliqEmbedUrl, fliqSourceLabel, resolveFliqLink, type FliqLink } from './fliqLinks';
 import { fliqT } from './fliqI18n';
 import { FliqShareSheet } from './FliqShareSheet';
+import { FLIQ_PROGRESS_ROW_H, FliqProgressBar, useFliqProgress } from './FliqProgressBar';
 
 type FliqViewerState = {
   link: FliqLink | null;
@@ -94,18 +96,19 @@ function FliqViewer({ link, onClose }: { link: FliqLink; onClose: () => void }) 
 
   const headerH = 48;
   const panelH = 64;
-  const availH = height - insets.top - insets.bottom - headerH - panelH - 24;
+  const availH = height - insets.top - APP_TOP_CONTENT_GAP - insets.bottom - headerH - panelH - FLIQ_PROGRESS_ROW_H - 24;
   const cardW = Math.max(0, Math.min(width - 28, Math.floor((availH * 9) / 16)));
   const cardH = Math.floor((cardW * 16) / 9);
   const sourceName = fliqSourceLabel(link.source);
   const playing = appActive && !shareUrl;
   const mode: FliqPlayMode = !playing ? 'pause' : held ? 'hold' : 'play';
+  const { progress, onTick, reset: resetProgress } = useFliqProgress(mode === 'play');
 
   return (
     <View
       style={[
         styles.root,
-        { paddingTop: insets.top, paddingBottom: insets.bottom + 8, paddingLeft: insets.left, paddingRight: insets.right },
+        { paddingTop: insets.top + APP_TOP_CONTENT_GAP, paddingBottom: insets.bottom + 8, paddingLeft: insets.left, paddingRight: insets.right },
       ]}
     >
       <View style={[styles.header, { height: headerH }]}>
@@ -140,12 +143,16 @@ function FliqViewer({ link, onClose }: { link: FliqLink; onClose: () => void }) 
               onMuteChange={setMuted}
               onUserPause={() => setHeld(true)}
               onUserPlay={() => setHeld(false)}
+              onProgress={onTick}
+              onLoop={resetProgress}
               style={StyleSheet.absoluteFill}
             />
           ) : playing ? (
             <FliqEmbedPlayer uri={fliqEmbedUrl(resolved)} style={StyleSheet.absoluteFill} />
           ) : null}
         </View>
+        {/* Своя полоса — только у YouTube: у TikTok и Instagram свои элементы плеера. */}
+        {resolved && resolved.source === 'youtube' ? <FliqProgressBar progress={progress} width={cardW} /> : null}
       </View>
 
       <View style={[styles.panel, { height: panelH }]}>

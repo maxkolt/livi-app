@@ -30,6 +30,7 @@ import {
   WELCOME_HEADER_TITLE,
   HOME_NAV_BG,
   WELCOME_MUTED_TEXT,
+  APP_TOP_CONTENT_GAP,
 } from '../../screens/home/constants';
 import { WelcomeStageBackground } from '../../screens/home/WelcomeStageBackground';
 import { AppDialogModal } from '../AppDialog';
@@ -573,7 +574,7 @@ function FramesStoreContent({
           style={[
             styles.page,
             {
-              paddingTop: insets.top + pageTopGap - contentLift,
+              paddingTop: insets.top + APP_TOP_CONTENT_GAP + pageTopGap - contentLift,
               // Именно insets.bottom + зазор, а не max(): max() прижимал кнопку
               // вплотную к системной навигации, и на трёхкнопочной она визуально
               // сливалась с панелью. Зазор нужен поверх инсета, а не вместо него.

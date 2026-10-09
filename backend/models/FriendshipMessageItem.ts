@@ -19,7 +19,7 @@ export interface IFriendshipMessageItem extends Document {
   id: string; // messageId (msg_...)
   from: mongoose.Types.ObjectId;
   to: mongoose.Types.ObjectId;
-  type: 'text' | 'image' | 'audio' | 'sticker';
+  type: 'text' | 'image' | 'audio' | 'sticker' | 'video_note';
   text?: string;
   /** Зашифрованный текст (сквозное шифрование). При enc поле text пустое. */
   enc?: E2eEnvelope;
@@ -33,6 +33,8 @@ export interface IFriendshipMessageItem extends Document {
   stickerPackId?: string;
   stickerEmoji?: string;
   stickerLabel?: string;
+  /** Видеокружок: кадр-превью (jpeg на сервере). */
+  thumbUri?: string;
   timestamp: Date;
   read: boolean;
   reactions?: IReaction[];
@@ -50,7 +52,7 @@ const FriendshipMessageItemSchema = new Schema<IFriendshipMessageItem>(
     id: { type: String, required: true },
     from: { type: Schema.Types.ObjectId, ref: 'User', required: true },
     to: { type: Schema.Types.ObjectId, ref: 'User', required: true },
-    type: { type: String, enum: ['text', 'image', 'audio', 'sticker'], required: true },
+    type: { type: String, enum: ['text', 'image', 'audio', 'sticker', 'video_note'], required: true },
     text: String,
     enc: { type: E2eEnvelopeSchema, default: undefined },
     uri: String,
@@ -62,6 +64,7 @@ const FriendshipMessageItemSchema = new Schema<IFriendshipMessageItem>(
     stickerPackId: String,
     stickerEmoji: String,
     stickerLabel: String,
+    thumbUri: String,
     timestamp: { type: Date, default: Date.now },
     read: { type: Boolean, default: false },
     // Omit empty array on insert — only store when someone reacts.

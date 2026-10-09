@@ -20,10 +20,13 @@ import {
   fetchFriendshipMessagesPage,
   findLegacyMessageFriendshipId,
   findLegacyMessageForUser,
+  isKnownMessageType,
   markMessagesReadForUser,
+  type MessageType,
   normalizeIncomingImageUris,
   normalizeMessageIdBatch,
   removeLegacyFriendshipMessages,
+  videoNoteThumbUri,
 } from '../sockets/messagesReliable';
 import { markAllReadFrom, removeUnreadOne } from '../utils/unreadStore';
 import { emitToUser } from '../utils/emitToUser';
@@ -66,6 +69,7 @@ function toFriendshipMessageSnapshot(message: any): any {
     stickerPackId: message.stickerPackId,
     stickerEmoji: message.stickerEmoji,
     stickerLabel: message.stickerLabel,
+    thumbUri: message.thumbUri,
     timestamp: message.timestamp instanceof Date ? message.timestamp : new Date(message.timestamp || Date.now()),
     read: !!message.read,
   };
@@ -157,7 +161,7 @@ async function deleteMessageForBothUsers(me: string, messageId: string): Promise
 
 /**
  * POST /api/messages/send
- * Body: { to, type: 'text'|'image'|'audio'|'sticker', text?, uri?, name?, size?, duration?, stickerId? }
+ * Body: { to, type: 'text'|'image'|'audio'|'sticker'|'video_note', text?, uri?, thumbUri?, name?, size?, duration?, stickerId? }
  */
 router.post('/messages/send', async (req, res) => {
   try {
@@ -165,7 +169,7 @@ router.post('/messages/send', async (req, res) => {
     if (!isOid(me)) return res.status(401).json({ ok: false, error: 'unauthorized' });
 
     const to = String(req.body?.to || '').trim();
-    const type = String(req.body?.type || '').trim() as 'text' | 'image' | 'audio' | 'sticker';
+    const type = String(req.body?.type || '').trim() as MessageType;
     let text = typeof req.body?.text === 'string' ? String(req.body.text) : undefined;
     const uri = typeof req.body?.uri === 'string' ? String(req.body.uri) : undefined;
     const rawUris = Array.isArray(req.body?.uris) ? req.body.uris : undefined;
@@ -182,7 +186,8 @@ router.post('/messages/send', async (req, res) => {
       : undefined;
 
     if (!isOid(to)) return res.status(400).json({ ok: false, error: 'invalid_to' });
-    if (type !== 'text' && type !== 'image' && type !== 'audio' && type !== 'sticker') return res.status(400).json({ ok: false, error: 'invalid_type' });
+    if (!isKnownMessageType(type)) return res.status(400).json({ ok: false, error: 'invalid_type' });
+    const thumbUri = videoNoteThumbUri(type, req.body?.thumbUri);
     if (isMessageTextTooLong(text)) return res.status(400).json({ ok: false, error: 'text_too_long' });
 
     const isFriend = await areFriendsCached(me, to);
@@ -260,6 +265,7 @@ router.post('/messages/send', async (req, res) => {
       stickerPackId,
       stickerEmoji,
       stickerLabel,
+      thumbUri,
       timestamp,
       read: false,
     };
@@ -282,6 +288,7 @@ router.post('/messages/send', async (req, res) => {
       stickerPackId,
       stickerEmoji,
       stickerLabel,
+      thumbUri,
       timestamp,
       read: false,
     };
@@ -330,6 +337,7 @@ router.post('/messages/send', async (req, res) => {
         stickerPackId,
         stickerEmoji,
         stickerLabel,
+        thumbUri,
         timestamp: timestamp.toISOString(),
         read: false,
       };
@@ -366,6 +374,7 @@ router.post('/messages/send', async (req, res) => {
         stickerPackId,
         stickerEmoji,
         stickerLabel,
+        thumbUri,
         timestamp: timestamp.toISOString(),
         read: false,
       };

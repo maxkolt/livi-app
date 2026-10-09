@@ -125,6 +125,11 @@ export const CROWN_GOLD = '#E4C065';
 export const WELCOME_CARD_BG = UI_SURFACE_RAISED;
 /** Скругление «полки» tab bar / шапки и композера чата по краям к контенту. */
 export const WELCOME_CHROME_EDGE_RADIUS = 24;
+/**
+ * Зазор между системной строкой и шапкой страницы (поверх insets.top): контент не прилипает
+ * к часам и значкам. Все страницы, кроме «Поиска» и «Профиля» — у них свои отступы.
+ */
+export const APP_TOP_CONTENT_GAP = 8;
 export const WELCOME_MUTED_TEXT = '#8B949E';
 /** Подписи кнопок в блоках-фильтрах вкладок («Все / Онлайн»…): чуть ярче приглушённого текста. */
 export const WELCOME_SEGMENT_LABEL = '#A3AAB2';

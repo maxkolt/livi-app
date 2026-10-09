@@ -154,6 +154,8 @@ import {
 } from './chat/ChatGapStatus';
 import { ChatParallaxWallpaper } from './chat/ChatParallaxWallpaper';
 import { ChatMessageEdgeFade } from './chat/ChatMessageEdgeFade';
+import { VideoNoteRecorder } from './chat/VideoNoteRecorder';
+import { RecordLockHint } from './chat/RecordLockHint';
 import { resolveKeyboardAvoidance } from './chat/chatKeyboardGeometry';
 import {
   formatAndroidImeDockLog,
@@ -174,6 +176,7 @@ import {
   WELCOME_NAV_ACTIVE_ACCENT,
   WELCOME_MUTED_TEXT,
   WELCOME_NAV_ACTIVE_ICON,
+  APP_TOP_CONTENT_GAP,
 } from './home/constants';
 import { emitRequestDirectCall } from '../utils/globalEvents';
 import { markChatCallBubbleEligible } from './chat/chatCallEvents';
@@ -249,7 +252,7 @@ const MSG_REACTIONS_COLLAPSED = 5;
 const CHAT_READ_TICK_COLOR = 'hsl(108, 53.10%, 35.10%)';
 /** Компактная шапка чата: контент ближе к системной строке, как в Telegram. */
 const CHAT_HEADER_H = 48;
-const CHAT_HEADER_TOP_PADDING = 6;
+const CHAT_HEADER_TOP_PADDING = 6 + APP_TOP_CONTENT_GAP;
 /** Last non-zero Android navigation inset survives ChatScreen remounts/resume. */
 let lastStableAndroidNavInset = 0;
 /** Текст и плейсхолдер «Сообщение» начинаются с одного отступа от кнопки эмодзи. */
@@ -1110,10 +1113,23 @@ export default function ChatScreen({ route, navigation }: Props) {
   const onVoiceRecorded = React.useCallback((localUri: string, durationMs: number) => {
     return sendVoiceFromLocalRef.current(localUri, durationMs);
   }, []);
+  const sendVideoNoteFromLocalRef = useRef<
+    (localUri: string, durationMs: number) => void | Promise<void>
+  >(async () => {});
+  const onVideoNoteRecorded = React.useCallback((localUri: string, durationMs: number) => {
+    return sendVideoNoteFromLocalRef.current(localUri, durationMs);
+  }, []);
   const onVoiceCancelToast = React.useCallback(() => {
     showForwardToastBadge(false, t('chatDeleted', lang));
   }, [showForwardToastBadge, lang]);
   const {
+    recordingKind,
+    videoPanResponder,
+    lockDrag,
+    videoRecorderRef,
+    shouldStartVideo,
+    onVideoStarted,
+    onVideoFinished,
     voiceIsRecording,
     voiceLocked,
     voiceRecordMs,
@@ -1137,6 +1153,10 @@ export default function ChatScreen({ route, navigation }: Props) {
     startLocalRecordingSignal,
     stopLocalRecordingSignal,
     onRecorded: onVoiceRecorded,
+    onVideoRecorded: onVideoNoteRecorded,
+    // Кнопку записи коснулись, а не держали — подсказка, что её держат.
+    onHoldHint: (mode) =>
+      showForwardToastBadge(true, t(mode === 'video' ? 'chatHoldToRecordVideo' : 'chatHoldToRecordVoice', lang)),
     onCancelToast: onVoiceCancelToast,
   });
 
@@ -1822,6 +1842,7 @@ export default function ChatScreen({ route, navigation }: Props) {
 
   const {
     sendVoiceMessageFromLocal,
+    sendVideoNoteFromLocal,
     sendPickedImage,
     sendPickedAlbum,
   } = useChatSendMedia({
@@ -1837,6 +1858,7 @@ export default function ChatScreen({ route, navigation }: Props) {
   });
 
   sendVoiceFromLocalRef.current = sendVoiceMessageFromLocal;
+  sendVideoNoteFromLocalRef.current = sendVideoNoteFromLocal;
 
   const formatDuration = formatVoiceDuration;
   const formatDurationDot = formatVoiceDurationDot;
@@ -2781,6 +2803,8 @@ export default function ChatScreen({ route, navigation }: Props) {
   const androidEmojiBottomReserve = emojiPanelOpen
     ? chatEmojiPanelHeight + Math.max(0, insets.bottom)
     : 0;
+  /** На сколько лента (Android) продлена вниз под кнопки навигации — см. её bottom. */
+  const androidFeedNavExtend = Platform.OS === 'android' && !emojiPanelOpen ? Math.max(0, androidPinnedNavInset) : 0;
   useEffect(() => {
     if (Platform.OS !== 'android') return;
     scheduleScrollToBottom(0);
@@ -3030,10 +3054,12 @@ export default function ChatScreen({ route, navigation }: Props) {
           // iOS: padding из фактического frame обновляется и при смене высоты уже открытой клавиатуры.
           (<View style={{ flex: 1, paddingBottom: emojiPanelOpen ? 0 : keyboardInset }}>
             <View style={{ flex: 1, overflow: 'visible' }}>
+            {/* Снизу без растворения: облака уходят под стекло композера и кнопки навигации
+                до самого края экрана и видны там размытыми. */}
             <ChatMessageEdgeFade
               style={{ flex: 1 }}
               top={headerTotalH}
-              bottom={resolvedInputBarH + CHAT_STATUS_GAP_H}
+              bottom={0}
             >
             <FlatList
               ref={flatListRef}
@@ -3100,6 +3126,25 @@ export default function ChatScreen({ route, navigation }: Props) {
                 {InlineGapIndicator}
               </View>
             ) : null}
+            {/* Видеокружок: круг с камерой над перепиской (под композером); замок над кнопкой записи. */}
+            <VideoNoteRecorder
+              active={voiceIsRecording && recordingKind === 'video'}
+              recordMs={voiceRecordMs}
+              handleRef={videoRecorderRef}
+              shouldStart={shouldStartVideo}
+              onStarted={onVideoStarted}
+              onFinished={onVideoFinished}
+              bottomReserve={resolvedInputBarH + composerSystemBottomInset}
+              topReserve={headerTotalH}
+            />
+            <RecordLockHint
+              visible={voiceIsRecording && !voiceLocked}
+              lockDrag={lockDrag}
+              // Над той кнопкой, которую держат: микрофон или камера (на 40 левее).
+              right={chatChromeSideInset + 63 + (recordingKind === 'video' ? 40 : 0)}
+              bottom={resolvedInputBarH + composerSystemBottomInset + 10}
+            />
+
             {/* Поле ввода для iOS — поверх ленты, облака уезжают под него */}
             <ChatChrome
               {...chatChromeBottomExtra}
@@ -3162,7 +3207,9 @@ export default function ChatScreen({ route, navigation }: Props) {
                   alignItems: "center",
                   backgroundColor: COMPOSER_INPUT_BG,
                   borderRadius: 24,
-                  paddingHorizontal: 14,
+                  // По бокам отступ = вертикальному: крайние круги (картинка, отправка)
+                  // вписаны в скругление строки, полю ввода остаётся больше места.
+                  paddingHorizontal: Platform.OS === 'ios' ? 5 : 2,
                   paddingVertical: Platform.OS === 'ios' ? 5 : 2,
                   borderWidth: 1,
                   borderColor: BORDER_COLOR,
@@ -3341,11 +3388,38 @@ export default function ChatScreen({ route, navigation }: Props) {
                   ) : null}
                 </View>
 
+                {/* Видеокружок — отдельная кнопка слева от микрофона: держишь — пишет камера. */}
+                <View
+                  {...videoPanResponder.panHandlers}
+                  collapsable={false}
+                  accessibilityRole="button"
+                  accessibilityLabel={t('chatVideoMessage', lang)}
+                  style={{
+                    marginLeft: 4,
+                    width: 36,
+                    height: 36,
+                    borderRadius: 18,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    backgroundColor: recordingKind === 'video' ? LIVI.titan : COMPOSER_IDLE_BUTTON_BG,
+                    opacity: voiceIsRecording && recordingKind !== 'video' ? 0.4 : 1,
+                  }}
+                >
+                  <View pointerEvents="none" style={{ alignItems: 'center', justifyContent: 'center' }}>
+                    <Ionicons
+                      name={recordingKind === 'video' ? 'videocam' : 'videocam-outline'}
+                      size={20}
+                      color={recordingKind === 'video' ? '#FF5A67' : COMPOSER_BUTTON_ICON}
+                    />
+                  </View>
+                </View>
+
                 <Animated.View
                   {...micPanResponder.panHandlers}
                   collapsable={false}
                   style={{
-                    marginLeft: 4,
+                    // Между камерой и микрофоном — как между микрофоном и «Отправить».
+                    marginLeft: 12,
                     marginRight: 0,
                     width: 36,
                     height: 36,
@@ -3353,14 +3427,15 @@ export default function ChatScreen({ route, navigation }: Props) {
                     alignItems: 'center',
                     justifyContent: 'center',
                     transform: [{ scale: micScale }],
-                    backgroundColor: voiceIsRecording ? LIVI.titan : COMPOSER_IDLE_BUTTON_BG,
+                    backgroundColor: recordingKind === 'voice' ? LIVI.titan : COMPOSER_IDLE_BUTTON_BG,
+                    opacity: voiceIsRecording && recordingKind === 'video' ? 0.4 : 1,
                   }}
                 >
                   <View pointerEvents="none" style={{ alignItems: 'center', justifyContent: 'center' }}>
                     <Ionicons
-                      name={voiceIsRecording ? 'mic' : 'mic-outline'}
+                      name={recordingKind === 'voice' ? 'mic' : 'mic-outline'}
                       size={20}
-                      color={voiceIsRecording ? '#FF5A67' : COMPOSER_BUTTON_ICON}
+                      color={recordingKind === 'voice' ? '#FF5A67' : COMPOSER_BUTTON_ICON}
                     />
                   </View>
                 </Animated.View>
@@ -3425,15 +3500,20 @@ export default function ChatScreen({ route, navigation }: Props) {
                 right: 0,
                 // Лента и под панелью эмодзи: та стеклянная, как меню, и при прокрутке
                 // облака уходят под неё размытыми. Место под панель — отступом контента.
-                bottom: 0,
+                // Без клавиатуры лента сдвинута вверх на высоту кнопок навигации (как dock) —
+                // продлеваем её на столько же вниз, иначе под кнопками стеклу нечего размывать
+                // и там серая полоса вместо облаков.
+                bottom: -androidFeedNavExtend,
                 overflow: 'hidden',
                 transform: [{ translateY: androidListKeyboardTranslateY }],
               }}
             >
+            {/* Снизу без растворения: облака уходят под стекло композера (и панели эмодзи) и под
+                кнопки навигации до самого края экрана и видны там размытыми. */}
             <ChatMessageEdgeFade
               style={{ flex: 1 }}
               top={headerTotalH}
-              bottom={resolvedInputBarH + CHAT_STATUS_GAP_H + androidEmojiBottomReserve}
+              bottom={0}
               sourceId={chatBlurFeedId}
             >
             <FlatList
@@ -3451,7 +3531,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 // inverted: paddingTop = низ (под композер), paddingBottom = верх (под шапку)
                 paddingTop: showEmpty
                   ? 0
-                  : resolvedInputBarH + CHAT_STATUS_GAP_H + androidEmojiBottomReserve,
+                  : resolvedInputBarH + CHAT_STATUS_GAP_H + androidEmojiBottomReserve + androidFeedNavExtend,
                 paddingBottom: showEmpty ? 0 : headerTotalH + 8,
                 paddingHorizontal: chatListSideInset,
               }}
@@ -3507,6 +3587,25 @@ export default function ChatScreen({ route, navigation }: Props) {
                 {InlineGapIndicator}
               </Animated.View>
             ) : null}
+
+            {/* Видеокружок: круг с камерой над перепиской (под композером); замок над кнопкой записи. */}
+            <VideoNoteRecorder
+              active={voiceIsRecording && recordingKind === 'video'}
+              recordMs={voiceRecordMs}
+              handleRef={videoRecorderRef}
+              shouldStart={shouldStartVideo}
+              onStarted={onVideoStarted}
+              onFinished={onVideoFinished}
+              bottomReserve={resolvedInputBarH + composerSystemBottomInset}
+              topReserve={headerTotalH}
+            />
+            <RecordLockHint
+              visible={voiceIsRecording && !voiceLocked}
+              lockDrag={lockDrag}
+              // Над той кнопкой, которую держат: микрофон или камера (на 40 левее).
+              right={chatChromeSideInset + 63 + (recordingKind === 'video' ? 40 : 0)}
+              bottom={resolvedInputBarH + composerSystemBottomInset + 10}
+            />
 
             <Animated.View
               ref={chatComposerDockRef}
@@ -3579,7 +3678,8 @@ export default function ChatScreen({ route, navigation }: Props) {
                   alignItems: 'center',
                   backgroundColor: COMPOSER_INPUT_BG,
                   borderRadius: 24,
-                  paddingHorizontal: 12,
+                  // По бокам отступ = вертикальному: крайние круги вписаны в скругление строки.
+                  paddingHorizontal: 2,
                   paddingVertical: 2,
                   borderWidth: 1,
                   borderColor: BORDER_COLOR,
@@ -3758,11 +3858,38 @@ export default function ChatScreen({ route, navigation }: Props) {
                   ) : null}
                 </View>
 
+                {/* Видеокружок — отдельная кнопка слева от микрофона: держишь — пишет камера. */}
+                <View
+                  {...videoPanResponder.panHandlers}
+                  collapsable={false}
+                  accessibilityRole="button"
+                  accessibilityLabel={t('chatVideoMessage', lang)}
+                  style={{
+                    marginLeft: 4,
+                    width: 36,
+                    height: 36,
+                    borderRadius: 18,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    backgroundColor: recordingKind === 'video' ? LIVI.titan : COMPOSER_IDLE_BUTTON_BG,
+                    opacity: voiceIsRecording && recordingKind !== 'video' ? 0.4 : 1,
+                  }}
+                >
+                  <View pointerEvents="none" style={{ alignItems: 'center', justifyContent: 'center' }}>
+                    <Ionicons
+                      name={recordingKind === 'video' ? 'videocam' : 'videocam-outline'}
+                      size={20}
+                      color={recordingKind === 'video' ? '#FF5A67' : COMPOSER_BUTTON_ICON}
+                    />
+                  </View>
+                </View>
+
                 <Animated.View
                   {...micPanResponder.panHandlers}
                   collapsable={false}
                   style={{
-                    marginLeft: 4,
+                    // Между камерой и микрофоном — как между микрофоном и «Отправить».
+                    marginLeft: 12,
                     marginRight: 0,
                     width: 36,
                     height: 36,
@@ -3770,14 +3897,15 @@ export default function ChatScreen({ route, navigation }: Props) {
                     alignItems: 'center',
                     justifyContent: 'center',
                     transform: [{ scale: micScale }],
-                    backgroundColor: voiceIsRecording ? LIVI.titan : COMPOSER_IDLE_BUTTON_BG,
+                    backgroundColor: recordingKind === 'voice' ? LIVI.titan : COMPOSER_IDLE_BUTTON_BG,
+                    opacity: voiceIsRecording && recordingKind === 'video' ? 0.4 : 1,
                   }}
                 >
                   <View pointerEvents="none" style={{ alignItems: 'center', justifyContent: 'center' }}>
                     <Ionicons
-                      name={voiceIsRecording ? 'mic' : 'mic-outline'}
+                      name={recordingKind === 'voice' ? 'mic' : 'mic-outline'}
                       size={20}
-                      color={voiceIsRecording ? '#FF5A67' : COMPOSER_BUTTON_ICON}
+                      color={recordingKind === 'voice' ? '#FF5A67' : COMPOSER_BUTTON_ICON}
                     />
                   </View>
                 </Animated.View>

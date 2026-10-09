@@ -62,6 +62,7 @@ import { fliqT } from './fliqI18n';
 import { FliqShareSheet } from './FliqShareSheet';
 import { FliqTopicsDialog } from './FliqTopicsDialog';
 import { FliqAmbient } from './FliqAmbient';
+import { FLIQ_PROGRESS_ROW_H, FliqProgressBar, useFliqProgress } from './FliqProgressBar';
 
 /** Подождать первый кадр, прежде чем показать «Видео не загружается». */
 const STALL_MS = 10_000;
@@ -305,6 +306,7 @@ export function FliqFeedView({ active, lang, bottomInset, topInset }: FliqFeedVi
   );
   const onUserPause = useCallback(
     (id: string, index: number) => {
+      logger.info('[fliq] user pause', { id, onScreen: isOnScreen(index) });
       if (isOnScreen(index)) setHeldId(id);
     },
     [isOnScreen],
@@ -358,9 +360,9 @@ export function FliqFeedView({ active, lang, bottomInset, topInset }: FliqFeedVi
   const cardH = Math.floor((cardW * 16) / 9);
   const btnSize = tablet ? 44 : compact ? 32 : GLASS_HEADER_BTN;
   const headerH = tablet ? 56 : compact ? 40 : 48;
-  // Карточка ролика в покое — там, откуда идёт свет (страница: карточка, зазор 8, панель — по центру).
+  // Карточка ролика в покое — там, откуда идёт свет (страница: карточка, полоса прогресса, панель — по центру).
   const ambientX = (rootSize.width - cardW) / 2;
-  const ambientY = topInset + headerH + Math.max(0, (pageH - cardH - 8 - panelH) / 2);
+  const ambientY = topInset + headerH + Math.max(0, (pageH - cardH - FLIQ_PROGRESS_ROW_H - panelH) / 2);
   const ambientCard = useMemo(
     () => ({ x: ambientX, y: ambientY, width: cardW, height: cardH }),
     [ambientX, ambientY, cardW, cardH],
@@ -605,8 +607,21 @@ const FliqSlide = memo(function FliqSlide({
     onStarted(item.id);
     Animated.timing(coverOpacity, { toValue: 0, duration: 160, useNativeDriver: true }).start();
   }, [coverOpacity, item.id, onStarted]);
-  const handleProgress = useCallback((c: number, d: number) => onProgress(item.id, c, d), [item.id, onProgress]);
-  const handleLoop = useCallback(() => onLoop(item.id), [item.id, onLoop]);
+  const { progress, onTick, reset: resetProgress } = useFliqProgress(playing);
+  const handleProgress = useCallback(
+    (c: number, d: number) => {
+      onProgress(item.id, c, d);
+      onTick(c, d);
+    },
+    [item.id, onProgress, onTick],
+  );
+  const handleLoop = useCallback(() => {
+    resetProgress();
+    onLoop(item.id);
+  }, [item.id, onLoop, resetProgress]);
+  useEffect(() => {
+    if (!mountPlayer) resetProgress();
+  }, [mountPlayer, resetProgress]);
   const handleMuteChange = useCallback((m: boolean) => onMuteChange(index, m), [index, onMuteChange]);
   const handleUserPause = useCallback(() => onUserPause(item.id, index), [item.id, index, onUserPause]);
   const handleUserPlay = useCallback(() => onUserPlay(item.id), [item.id, onUserPlay]);
@@ -685,6 +700,8 @@ const FliqSlide = memo(function FliqSlide({
           </View>
         ) : null}
       </View>
+
+      <FliqProgressBar progress={progress} width={cardW} />
 
       <View style={[styles.panel, { width: cardW, height: panelH }]}>
         <View style={styles.meta}>
@@ -798,7 +815,6 @@ const styles = StyleSheet.create({
   slide: {
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 8,
   },
   card: {
     borderRadius: CARD_RADIUS,

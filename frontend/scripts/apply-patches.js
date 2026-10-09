@@ -27,6 +27,8 @@ const patches = [
   { dir: 'node_modules/@livekit/react-native-webrtc', file: 'livekit-react-native-webrtc+137.0.2.patch' },
   // Загрузка/скачивание медиа через маршрут приложения (за VPN — реле NetPath): DNS общего клиента RN.
   { dir: 'node_modules/expo-file-system', file: 'expo-file-system+18.1.11.patch' },
+  // Превью камеры через TextureView: видеокружок в чате режется в круг (SurfaceView скругление игнорирует).
+  { dir: 'node_modules/expo-camera', file: 'expo-camera+16.1.11.patch' },
   { dir: 'node_modules/@cometchat/chat-uikit-react-native', file: 'cometchat-chat-uikit-react-native+5.2.5.patch' },
   { dir: 'node_modules/@baronha/react-native-photo-editor', file: 'baronha-react-native-photo-editor+1.1.6.patch' },
   { dir: 'node_modules/@react-native-masked-view/masked-view', file: 'react-native-masked-view+0.3.2.patch' },

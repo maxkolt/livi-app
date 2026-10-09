@@ -60,6 +60,11 @@ import { isEndedCallId, setupCallKeep, presentIncomingCall, stopIncomingCallFore
 import * as Notifications from 'expo-notifications';
 import { isIncomingCallExpired } from './utils/callExpiry';
 
+// Пока идёт звонок, натив (CallJsTimersKeepAlive) держит эту задачу активной: иначе RN усыпляет
+// JS-таймеры в системном PiP/фоне, и LiveKit не может переподключиться после смены сети.
+// Promise не резолвится — задачу завершает натив, когда звонок закончился.
+AppRegistry.registerHeadlessTask('LiviCallJsTimersKeepAlive', () => () => new Promise<void>(() => {}));
+
 // Headless: один путь presentIncomingCall (Activity/system UI), без CallKeep.displayIncomingCall.
 AppRegistry.registerHeadlessTask('RNCallKeepBackgroundMessage', () => async (data: { type?: string; callId?: string; from?: string; fromNick?: string; ts?: number | string; expiresAt?: number | string } | null) => {
   if (Platform.OS !== 'android') return;

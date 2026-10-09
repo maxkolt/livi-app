@@ -6,6 +6,7 @@ import { uploadMediaToServer } from "../../utils/mediaUpload";
 import { CHAT_ALBUM_MAX } from "./chatAlbum";
 import { outgoingStatusFromSendResult } from "./chatMessageIds";
 import { keepVoiceRecording } from "./chatVoiceRecord";
+import { keepVideoNoteRecording, makeVideoNoteThumb } from "./videoNoteFiles";
 
 type ReadStatusMap = Record<string, "sending" | "delivered" | "read" | "failed" | "sent">;
 
@@ -104,6 +105,63 @@ export function useChatSendMedia({
       clearUploadStatus();
     }
   }, [currentUserId, peerId, setMessages, setUploadStatus, updateReadStatuses, setVoiceRecordMs]);
+
+  /**
+   * Видеокружок — тем же путём, что голосовое: пузырь сразу, файл и кадр-превью загрузит
+   * очередь (и без сети — когда она появится).
+   */
+  const sendVideoNoteFromLocal = React.useCallback(async (localUri: string, durationMs: number) => {
+    if (!currentUserId || !peerId) return;
+
+    const messageId = Date.now().toString();
+    const durationSec = Math.max(1, Math.round(durationMs / 1000));
+    const fileUri = await keepVideoNoteRecording(localUri, messageId);
+
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: messageId,
+        type: 'video_note',
+        uri: fileUri,
+        duration: durationSec,
+        sender: 'me',
+        from: currentUserId,
+        to: peerId,
+        timestamp: new Date(),
+      },
+    ]);
+    updateReadStatuses((prev) => ({ ...prev, [messageId]: 'sending' }));
+    setVoiceRecordMs(0);
+
+    // Кадр-превью — уже после пузыря: кружок в ленте появляется без задержки.
+    const thumbUri = await makeVideoNoteThumb(fileUri, messageId);
+    if (thumbUri) {
+      setMessages((prev) => prev.map((m) => (String(m?.id) === messageId ? { ...m, thumbUri } : m)));
+    }
+
+    try {
+      const result = await sendSocketMessage({
+        to: peerId,
+        type: 'video_note',
+        localUri: fileUri,
+        ...(thumbUri ? { localThumbUri: thumbUri } : {}),
+        name: `video_note_${messageId}.mp4`,
+        duration: durationSec,
+        clientUiMessageId: messageId,
+      });
+      if (result?.localCancelled) {
+        updateReadStatuses((prev) => {
+          const next = { ...prev };
+          delete next[messageId];
+          return next;
+        });
+        return;
+      }
+      if (!result?.ok) {
+        updateReadStatuses((prev) => ({ ...prev, [messageId]: 'failed' }));
+      }
+    } catch {}
+  }, [currentUserId, peerId, setMessages, updateReadStatuses, setVoiceRecordMs]);
 
   const sendPickedImage = React.useCallback(async (asset: any): Promise<boolean> => {
     if (!currentUserId || !peerId) return false;
@@ -334,6 +392,7 @@ export function useChatSendMedia({
 
   return {
     sendVoiceMessageFromLocal,
+    sendVideoNoteFromLocal,
     sendPickedImage,
     sendPickedAlbum,
   };

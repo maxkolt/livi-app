@@ -24,6 +24,11 @@ export const REMOTE_MEDIA_SUBSCRIBE_RETRY_MS = 5_000;
  * while the peer (or restored socket) can still heartbeat.
  */
 export const MEDIA_RECONNECT_GRACE_MS = 45_000;
+/**
+ * Смена сети при живой комнате (VPN on/off, Wi‑Fi↔LTE): LiveKit сам делает resume с
+ * ICE restart и теми же треками. Свой полный re-join — только если он не справился за это время.
+ */
+export const LIVEKIT_SELF_RECOVERY_WAIT_MS = 12_000;
 /** Короткие socket flap не мигают «Восстановление…». */
 export const PEER_RECONNECTING_UI_DEBOUNCE_MS = 250;
 /** Survivor: remote audio track ended/missing after call was live → arm peer UI without SFU wait. */

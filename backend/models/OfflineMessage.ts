@@ -12,7 +12,7 @@ export interface IOfflineMessage extends Document {
     id: string;
     from: string;
     to: string;
-    type: 'text' | 'image' | 'audio' | 'sticker';
+    type: 'text' | 'image' | 'audio' | 'sticker' | 'video_note';
     text?: string;
     enc?: E2eEnvelope;
     uri?: string;
@@ -24,6 +24,7 @@ export interface IOfflineMessage extends Document {
     stickerPackId?: string;
     stickerEmoji?: string;
     stickerLabel?: string;
+    thumbUri?: string;
     timestamp: Date;
     read: boolean;
     replyTo?: { id: string; text?: string; from: string };
@@ -57,7 +58,7 @@ const OfflineMessageSchema = new Schema<IOfflineMessage>({
     id: { type: String, required: true },
     from: { type: String, required: true },
     to: { type: String, required: true },
-    type: { type: String, enum: ['text', 'image', 'audio', 'sticker'], required: true },
+    type: { type: String, enum: ['text', 'image', 'audio', 'sticker', 'video_note'], required: true },
     text: { type: String },
     enc: { type: E2eEnvelopeSchema, default: undefined },
     uri: { type: String },
@@ -69,6 +70,7 @@ const OfflineMessageSchema = new Schema<IOfflineMessage>({
     stickerPackId: { type: String },
     stickerEmoji: { type: String },
     stickerLabel: { type: String },
+    thumbUri: { type: String },
     timestamp: { type: Date, required: true },
     read: { type: Boolean, default: false },
     replyTo: {

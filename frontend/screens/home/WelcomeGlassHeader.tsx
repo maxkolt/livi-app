@@ -4,6 +4,7 @@ import { NativeBlurBackdrop, type BackdropSources } from '../../components/Backd
 import { StageGradient } from './WelcomeStageBackground';
 import { useStableSafeAreaInsets } from './useStableSafeAreaInsets';
 import {
+  APP_TOP_CONTENT_GAP,
   HOME_BLUR_BG_SOURCE,
   UI_RIM,
   UI_SURFACE,
@@ -48,7 +49,7 @@ export function useGlassHeaderHeight(tabletLayout: boolean, compactLandscape: bo
     const next = h - extraRef.current;
     setBase((prev) => (prev != null && Math.abs(prev - next) < 1 ? prev : next));
   }, []);
-  const estimate = insets.top + (tabletLayout ? 152 : compactLandscape ? 90 : 118);
+  const estimate = insets.top + APP_TOP_CONTENT_GAP + (tabletLayout ? 152 : compactLandscape ? 90 : 118);
   return [(base ?? estimate) + extra, onHeight] as const;
 }
 
@@ -78,7 +79,7 @@ export function WelcomeGlassHeader({ listSourceId, onHeight, children }: Props) 
     const h = Math.round(e.nativeEvent.layout.height);
     if (h > 0) onHeight(h);
   };
-  const shellStyle = [styles.shell, { paddingTop: insets.top }];
+  const shellStyle = [styles.shell, { paddingTop: insets.top + APP_TOP_CONTENT_GAP }];
   // Контент поверх слоёв стекла (у них zIndex 0–1).
   const content = <View style={styles.content}>{children}</View>;
 

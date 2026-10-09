@@ -42,6 +42,7 @@ import {
   WELCOME_HEADER_TITLE,
   WELCOME_MUTED_TEXT,
   isWelcomeTabletLayout,
+  APP_TOP_CONTENT_GAP,
 } from '../screens/home/constants';
 import { useDigitalRegularFont } from '../screens/home/brandFont';
 import { GLASS_HEADER_BTN } from '../screens/home/WelcomeGlassHeader';
@@ -236,7 +237,7 @@ export function SharePickerContent({ visible, items, onClose }: Props) {
         style={[
           styles.page,
           {
-            paddingTop: insets.top,
+            paddingTop: insets.top + APP_TOP_CONTENT_GAP,
             paddingBottom: insets.bottom + (landscape ? 8 : 12),
             paddingLeft: insets.left,
             paddingRight: insets.right,

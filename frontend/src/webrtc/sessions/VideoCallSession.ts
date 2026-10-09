@@ -88,6 +88,7 @@ import {
   REMOTE_MEDIA_WATCHDOG_MS,
   REMOTE_MEDIA_SUBSCRIBE_RETRY_MS,
   MEDIA_RECONNECT_GRACE_MS,
+  LIVEKIT_SELF_RECOVERY_WAIT_MS,
   PEER_RECONNECTING_UI_DEBOUNCE_MS,
   REMOTE_AUDIO_SILENCE_UI_MS,
   REMOTE_MEDIA_PACKET_STALL_MS,
@@ -308,6 +309,13 @@ export class VideoCallSession extends SimpleEventEmitter {
   });
   private networkLinkDown = false;
   private mediaRejoinInFlight = false;
+  /** Сеть вернулась, а LiveKit сам делает resume: свой re-join только если он не успеет. */
+  private liveKitSelfRecoveryTimer: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * С последнего connected был RoomEvent.Reconnecting — LiveKit пересобирал PeerConnection.
+   * После простого resume (SignalReconnecting) senders живые, принудительно перевыпускать мик нельзя.
+   */
+  private liveKitPcRebuiltSinceConnected = false;
   /** Survivor side: partner left LiveKit (e.g. airplane) — wait for rejoin within grace, don't hangup. */
   private waitingForRemotePeerRejoin = false;
   private pendingRemoteDisconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1118,7 +1126,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     const prev = this.isMicOn;
     this.isMicOn = !this.isMicOn;
     if (this.room) {
-      this.room.localParticipant.setMicrophoneEnabled(this.isMicOn).catch((e) => {
+      this.setRoomMicrophoneEnabled(this.room, this.isMicOn, 'toggleMic').catch((e) => {
         logger.warn('[VideoCallSession] Failed to toggle microphone', e);
       });
     } else if (this.localAudioTrack) {
@@ -1542,7 +1550,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     if (!room || room.state !== 'connected' || !room.localParticipant) return;
 
     try {
-      await room.localParticipant.setMicrophoneEnabled(true);
+      await this.setRoomMicrophoneEnabled(room, true, 'restoreMicrophoneAfterAppBackground');
     } catch (e) {
       logger.debug('[VideoCallSession] restoreMicrophone setMicrophoneEnabled', e);
     }
@@ -5184,6 +5192,10 @@ export class VideoCallSession extends SimpleEventEmitter {
       waitingForRemotePeerRejoin: this.waitingForRemotePeerRejoin,
     });
     this.waitingForRemotePeerRejoin = false;
+    // Свой re-join / resume ещё идёт — успех объявит connect или RoomEvent.Reconnected.
+    // Раньше восстановление треков стартовало на подключающейся комнате и гонялось
+    // с её публикацией (дубли публикаций, второй микрофон).
+    if (this.mediaRejoinInFlight || this.room?.state !== 'connected') return;
     this.onMediaReconnectSucceeded();
   }
 
@@ -5249,7 +5261,41 @@ export class VideoCallSession extends SimpleEventEmitter {
       this.onMediaReconnectSucceeded();
       return;
     }
+    // Смена сети (VPN on/off, Wi‑Fi↔LTE): LiveKit уже сам делает resume + ICE restart с теми же
+    // треками. Рвать комнату поверх него = 6–7 с без связи, новая комната, гонки публикаций
+    // и второй микрофон у LiveKit — собеседник не слышит. Ждём его RoomEvent.Reconnected.
+    const roomState = String(this.room?.state || '');
+    if (roomState === 'signalReconnecting' || roomState === 'reconnecting') {
+      this.waitForLiveKitSelfRecovery(roomState);
+      return;
+    }
     void this.kickMediaRejoinFromNetworkRestore();
+  }
+
+  private waitForLiveKitSelfRecovery(roomState: string): void {
+    this.clearLiveKitSelfRecoveryTimer();
+    logger.info('[VideoCallSession] Network back — LiveKit resumes by itself, no re-join', {
+      callId: this.callId,
+      roomState,
+      waitMs: LIVEKIT_SELF_RECOVERY_WAIT_MS,
+    });
+    this.liveKitSelfRecoveryTimer = setTimeout(() => {
+      this.liveKitSelfRecoveryTimer = null;
+      if (this.ended || this.endCallInProgress || !this.mediaReconnectInProgress) return;
+      if (this.room?.state === 'connected') return;
+      logger.warn('[VideoCallSession] LiveKit did not resume in time — forcing re-join', {
+        callId: this.callId,
+        roomState: this.room?.state || null,
+      });
+      void this.kickMediaRejoinFromNetworkRestore();
+    }, LIVEKIT_SELF_RECOVERY_WAIT_MS);
+  }
+
+  private clearLiveKitSelfRecoveryTimer(): void {
+    if (this.liveKitSelfRecoveryTimer) {
+      clearTimeout(this.liveKitSelfRecoveryTimer);
+      this.liveKitSelfRecoveryTimer = null;
+    }
   }
 
   private async kickMediaRejoinFromNetworkRestore(): Promise<void> {
@@ -5369,7 +5415,10 @@ export class VideoCallSession extends SimpleEventEmitter {
         }
         if (this.room && this.room.state !== 'disconnected') {
           try {
-            await this.room.disconnect();
+            // false: свои мик и камера переезжают в новую комнату. disconnect() по умолчанию
+            // их останавливает — и после смены сети (VPN off) собеседник получал мёртвые
+            // треки: тишину и пустое видео.
+            await this.room.disconnect(false);
           } catch {}
         }
         this.room = null;
@@ -5419,6 +5468,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       clearTimeout(this.mediaReconnectGraceTimer);
       this.mediaReconnectGraceTimer = null;
     }
+    this.clearLiveKitSelfRecoveryTimer();
     this.mediaReconnectInProgress = false;
     this.mediaReconnectAttemptedRelay = false;
     this.waitingForRemotePeerRejoin = false;
@@ -5445,8 +5495,13 @@ export class VideoCallSession extends SimpleEventEmitter {
     // Stale MediaStream / missed TrackPublished during disconnect left peer video blank.
     this.resubscribeRemoteMediaAfterReconnect('media_reconnect_succeeded');
     // Also force-republish local mic — grace path used to only fix inbound (remote) media.
+    // Затем — отложенный restore камеры после PiP: как в onRoomReconnected. Без этого
+    // возврат из PiP во время перезахода (ушёл выключать VPN) оставлял видео неопубликованным.
     if (this.room) {
-      void this.recoverLocalTracksAfterReconnect(this.room, 'media_reconnect_succeeded');
+      void this.recoverLocalTracksAfterReconnect(this.room, 'media_reconnect_succeeded').then(
+        () => this.tryRestoreCameraAfterReconnect(),
+        () => this.tryRestoreCameraAfterReconnect(),
+      );
     }
   }
 
@@ -6503,6 +6558,36 @@ export class VideoCallSession extends SimpleEventEmitter {
    */
   private isAudioTrackPublished(track: LocalAudioTrack | null): boolean {
     return isAudioTrackPublishedIn(this.room, track);
+  }
+
+  /**
+   * setMicrophoneEnabled(true), пока в комнате нет нашей публикации мика, заставляет LiveKit
+   * завести ВТОРОЙ микрофон: собеседник подписывается на него, мы потом снимаем «лишний» —
+   * и тишина. Свой трек есть — только снимаем mute и публикуем его же.
+   */
+  private async setRoomMicrophoneEnabled(room: Room, enabled: boolean, caller: string): Promise<void> {
+    const lp = room.localParticipant;
+    const own = this.localAudioTrack;
+    if (!enabled || !own || lp.getTrackPublication(Track.Source.Microphone)) {
+      await lp.setMicrophoneEnabled(enabled);
+      return;
+    }
+    logger.warn('[VideoCallSession] Mic on before own audio is published — no LiveKit mic', {
+      caller,
+      roomState: room.state,
+      trackId: own.mediaStreamTrack?.id,
+    });
+    try {
+      await own.unmute();
+    } catch {}
+    if (room.state === 'connected' && this.room === room && !this.isAudioTrackPublished(own)) {
+      await lp.publishTrack(own).catch((e) => {
+        const errorMsg = e?.message || String(e || '');
+        if (!isIgnorablePublishError(errorMsg)) {
+          logger.warn('[VideoCallSession] Publish own audio on mic enable failed', e);
+        }
+      });
+    }
   }
 
   /**
@@ -7624,7 +7709,7 @@ export class VideoCallSession extends SimpleEventEmitter {
 
     // Пользователь мог выключить мик во время connecting — publish не меняет желаемое состояние в комнате.
     if (room.state === 'connected' && room.localParticipant) {
-      await room.localParticipant.setMicrophoneEnabled(this.isMicOn).catch((e) => {
+      await this.setRoomMicrophoneEnabled(room, this.isMicOn, 'publishLocalTracksAfterConnect').catch((e) => {
         logger.warn('[VideoCallSession] setMicrophoneEnabled after publish failed', e);
       });
       // Только выкл: видео публикуем вручную через publishTrack; при isCamOn=true не дёргаем setCameraEnabled(true),
@@ -8273,7 +8358,9 @@ export class VideoCallSession extends SimpleEventEmitter {
   }
 
   private registerRoomEvents(room: Room): void {
+    this.liveKitPcRebuiltSinceConnected = false;
     room
+      .on(RoomEvent.SignalReconnecting, () => this.onRoomSignalReconnecting(room))
       .on(RoomEvent.Reconnecting, () => this.onRoomReconnecting(room))
       .on(RoomEvent.Reconnected, () => this.onRoomReconnected(room))
       .on(RoomEvent.ParticipantConnected, (participant) => this.onRemoteParticipantConnected(room, participant))
@@ -8286,9 +8373,19 @@ export class VideoCallSession extends SimpleEventEmitter {
       .once(RoomEvent.Disconnected, (reason) => this.onRoomDisconnected(reason));
   }
 
+  /** SDK переподнимает только сигнал + ICE restart (смена сети); треки и PeerConnection прежние. */
+  private onRoomSignalReconnecting(room: Room): void {
+    this.lastLiveKitReconnectingAt = Date.now();
+    logger.info('[VideoCallSession] LiveKit resuming signal (network change)', {
+      roomName: room.name,
+      callId: this.callId,
+    });
+  }
+
   /** Транзиентный реконнект SDK: стримы и UI НЕ трогаем — LiveKit восстановится сам. */
   private onRoomReconnecting(room: Room): void {
     this.liveKitReconnecting = true;
+    this.liveKitPcRebuiltSinceConnected = true;
     this.lastLiveKitReconnectingAt = Date.now();
     void sendClientMetrics(API_BASE, { roomReconnecting: true }).catch(() => {});
     // Do NOT reset streams/UI here. LiveKit will recover by itself.
@@ -8369,7 +8466,11 @@ export class VideoCallSession extends SimpleEventEmitter {
     }
     // Сначала даём LiveKit стабилизировать/перепубликовать существующие tracks,
     // затем продолжаем PiP camera restore — без двух параллельных recreate.
-    void this.recoverLocalTracksAfterReconnect(room, 'RoomEvent.Reconnected').then(
+    // Принудительный перевыпуск мика — только после пересборки PC: после resume он менял sid,
+    // и подписка собеседника на новый мик не доходила — тишина до конца звонка.
+    const pcRebuilt = this.liveKitPcRebuiltSinceConnected;
+    this.liveKitPcRebuiltSinceConnected = false;
+    void this.recoverLocalTracksAfterReconnect(room, pcRebuilt ? 'RoomEvent.Reconnected' : 'RoomEvent.Resumed').then(
       () => this.tryRestoreCameraAfterReconnect(),
       () => this.tryRestoreCameraAfterReconnect(),
     );
@@ -9066,6 +9167,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       previousAudioSid: oldAudioTrackSid ?? this.lastUnsubscribedRemoteAudioTrackSid,
       incomingMediaTrack: mediaTrack,
       existingAudioMediaTracks: this.remoteStream?.getAudioTracks?.() ?? [],
+      existingVideoMediaTracks: this.remoteStream?.getVideoTracks?.() ?? [],
     });
 
     this.attachRemoteTrackToStream(track, publication, mediaTrack, change, oldVideoTrackSid);
@@ -9248,7 +9350,7 @@ export class VideoCallSession extends SimpleEventEmitter {
 
     const isFirstVideoTrack = !oldVideoTrackSid;
     let shouldRemountRemoteView = false;
-    if (isFirstVideoTrack || change.wasVideoTrackChanged || wasMutedStateChanged) {
+    if (isFirstVideoTrack || change.wasVideoTrackChanged || change.videoResubscribed || wasMutedStateChanged) {
       logger.debug('[VideoCallSession] Video track muted state changed', {
         wasMuted: prevVideoTrack?.isMuted,
         isMuted: track.isMuted,
@@ -9329,6 +9431,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       wasVideoTrackChanged: change.wasVideoTrackChanged,
       wasAudioTrackChanged: change.wasAudioTrackChanged,
       staleAudioInStream: change.staleAudioInStream,
+      videoResubscribed: change.videoResubscribed,
     });
   }
 

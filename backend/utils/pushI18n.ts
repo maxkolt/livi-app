@@ -31,7 +31,8 @@ type PushTextKey =
   | 'callEndedBody'
   | 'photo'
   | 'sticker'
-  | 'voice';
+  | 'voice'
+  | 'video';
 
 const DICT: Record<PushLang, Record<PushTextKey, string>> = {
   ru: {
@@ -46,6 +47,7 @@ const DICT: Record<PushLang, Record<PushTextKey, string>> = {
     photo: 'Фото',
     sticker: 'Стикер',
     voice: 'Голосовое',
+    video: 'Видеосообщение',
   },
   en: {
     newMessage: 'New message',
@@ -59,6 +61,7 @@ const DICT: Record<PushLang, Record<PushTextKey, string>> = {
     photo: 'Photo',
     sticker: 'Sticker',
     voice: 'Voice message',
+    video: 'Video message',
   },
   es: {
     newMessage: 'Nuevo mensaje',
@@ -72,6 +75,7 @@ const DICT: Record<PushLang, Record<PushTextKey, string>> = {
     photo: 'Foto',
     sticker: 'Sticker',
     voice: 'Mensaje de voz',
+    video: 'Mensaje de video',
   },
   de: {
     newMessage: 'Neue Nachricht',
@@ -85,6 +89,7 @@ const DICT: Record<PushLang, Record<PushTextKey, string>> = {
     photo: 'Foto',
     sticker: 'Sticker',
     voice: 'Sprachnachricht',
+    video: 'Videonachricht',
   },
   fr: {
     newMessage: 'Nouveau message',
@@ -98,6 +103,7 @@ const DICT: Record<PushLang, Record<PushTextKey, string>> = {
     photo: 'Photo',
     sticker: 'Autocollant',
     voice: 'Message vocal',
+    video: 'Message vidéo',
   },
   it: {
     newMessage: 'Nuovo messaggio',
@@ -111,6 +117,7 @@ const DICT: Record<PushLang, Record<PushTextKey, string>> = {
     photo: 'Foto',
     sticker: 'Sticker',
     voice: 'Messaggio vocale',
+    video: 'Videomessaggio',
   },
   pt: {
     newMessage: 'Nova mensagem',
@@ -124,6 +131,7 @@ const DICT: Record<PushLang, Record<PushTextKey, string>> = {
     photo: 'Foto',
     sticker: 'Figurinha',
     voice: 'Mensagem de voz',
+    video: 'Mensagem de vídeo',
   },
   tr: {
     newMessage: 'Yeni mesaj',
@@ -137,6 +145,7 @@ const DICT: Record<PushLang, Record<PushTextKey, string>> = {
     photo: 'Fotoğraf',
     sticker: 'Çıkartma',
     voice: 'Sesli mesaj',
+    video: 'Görüntülü mesaj',
   },
   ar: {
     newMessage: 'رسالة جديدة',
@@ -150,6 +159,7 @@ const DICT: Record<PushLang, Record<PushTextKey, string>> = {
     photo: 'صورة',
     sticker: 'ملصق',
     voice: 'رسالة صوتية',
+    video: 'رسالة فيديو',
   },
   ja: {
     newMessage: '新着メッセージ',
@@ -163,6 +173,7 @@ const DICT: Record<PushLang, Record<PushTextKey, string>> = {
     photo: '写真',
     sticker: 'スタンプ',
     voice: 'ボイスメッセージ',
+    video: 'ビデオメッセージ',
   },
   ko: {
     newMessage: '새 메시지',
@@ -176,6 +187,7 @@ const DICT: Record<PushLang, Record<PushTextKey, string>> = {
     photo: '사진',
     sticker: '스티커',
     voice: '음성 메시지',
+    video: '영상 메시지',
   },
   zh: {
     newMessage: '新消息',
@@ -189,6 +201,7 @@ const DICT: Record<PushLang, Record<PushTextKey, string>> = {
     photo: '图片',
     sticker: '贴纸',
     voice: '语音消息',
+    video: '视频消息',
   },
   'zh-TW': {
     newMessage: '新訊息',
@@ -202,6 +215,7 @@ const DICT: Record<PushLang, Record<PushTextKey, string>> = {
     photo: '圖片',
     sticker: '貼圖',
     voice: '語音訊息',
+    video: '影片訊息',
   },
   hi: {
     newMessage: 'नया संदेश',
@@ -215,6 +229,7 @@ const DICT: Record<PushLang, Record<PushTextKey, string>> = {
     photo: 'फ़ोटो',
     sticker: 'स्टिकर',
     voice: 'वॉइस संदेश',
+    video: 'वीडियो संदेश',
   },
   vi: {
     newMessage: 'Tin nhắn mới',
@@ -228,6 +243,7 @@ const DICT: Record<PushLang, Record<PushTextKey, string>> = {
     photo: 'Ảnh',
     sticker: 'Nhãn dán',
     voice: 'Tin nhắn thoại',
+    video: 'Tin nhắn video',
   },
   th: {
     newMessage: 'ข้อความใหม่',
@@ -241,6 +257,7 @@ const DICT: Record<PushLang, Record<PushTextKey, string>> = {
     photo: 'รูปภาพ',
     sticker: 'สติกเกอร์',
     voice: 'ข้อความเสียง',
+    video: 'ข้อความวิดีโอ',
   },
   id: {
     newMessage: 'Pesan baru',
@@ -254,6 +271,7 @@ const DICT: Record<PushLang, Record<PushTextKey, string>> = {
     photo: 'Foto',
     sticker: 'Stiker',
     voice: 'Pesan suara',
+    video: 'Pesan video',
   },
 };
 
@@ -263,7 +281,7 @@ export function pushText(lang: unknown, key: PushTextKey, vars?: { nick?: string
   return vars?.nick != null ? text.replace('{nick}', vars.nick) : text;
 }
 
-export type MediaPreviewKind = 'photo' | 'sticker' | 'voice';
+export type MediaPreviewKind = 'photo' | 'sticker' | 'voice' | 'video';
 
 /** «[Фото]», «[Фото ×3]», «[Стикер]», «[Голосовое]» на языке получателя. */
 export function mediaPreviewText(lang: unknown, kind: MediaPreviewKind, albumCount = 0): string {

@@ -43,6 +43,7 @@ import {
   WELCOME_HEADER_TITLE,
   WELCOME_MUTED_TEXT,
   isWelcomeTabletLayout,
+  APP_TOP_CONTENT_GAP,
 } from './constants';
 import { FRIEND_ROW_ACTION_GAP } from '../../constants/uiTokens';
 import { GLASS_HEADER_BTN } from './WelcomeGlassHeader';
@@ -189,7 +190,7 @@ function FriendRequestsContent({ visible, onClose, lang, friendIds, onAccepted }
         style={[
           styles.page,
           {
-            paddingTop: insets.top,
+            paddingTop: insets.top + APP_TOP_CONTENT_GAP,
             paddingLeft: insets.left,
             paddingRight: insets.right,
           },

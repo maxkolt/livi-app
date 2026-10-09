@@ -11,7 +11,7 @@ import { stickerFieldsFromMessage } from "./chatMessageMeta";
 
 export type ForwardMediaResolver = (uri: string) => string;
 
-export type ForwardPayloadType = "text" | "image" | "audio" | "sticker" | "video" | "document";
+export type ForwardPayloadType = "text" | "image" | "audio" | "sticker" | "video" | "document" | "video_note";
 
 export type ForwardPayload = {
   type: ForwardPayloadType;
@@ -25,7 +25,19 @@ export type ForwardPayload = {
   stickerPackId?: string;
   stickerEmoji?: string;
   stickerLabel?: string;
+  /** Видеокружок: кадр-превью. */
+  thumbUri?: string;
 };
+
+/** Видеокружок для пересылки: только уже загруженный (локальный файл не перешлёшь). */
+function videoNoteForwardPayload(m: any, resolveMediaUri: ForwardMediaResolver): ForwardPayload | null {
+  const rawUri = String(m?.uri || "").trim();
+  const uri = rawUri ? normalizeForwardMediaUri(rawUri, resolveMediaUri) : "";
+  if (!uri) return null;
+  const rawThumb = String(m?.thumbUri || "").trim();
+  const thumbUri = rawThumb ? normalizeForwardMediaUri(rawThumb, resolveMediaUri) : "";
+  return { type: "video_note", uri, duration: m?.duration, ...(thumbUri ? { thumbUri } : {}) };
+}
 
 /** Drop local file:// URIs — forward only remote media. */
 export function normalizeForwardMediaUri(
@@ -89,6 +101,9 @@ export function collectForwardPayloadsFromSelection(
           duration: m?.duration,
         });
       }
+    } else if (type === "video_note") {
+      const vn = videoNoteForwardPayload(m, resolveMediaUri);
+      if (vn) forwardables.push(vn);
     } else if (type === "sticker") {
       const stickerId = String(m?.stickerId || "").trim();
       if (stickerId) {
@@ -158,6 +173,10 @@ export function collectForwardPayloadsFromSelectedMessage(
       },
     ];
   }
+  if (type === "video_note") {
+    const vn = videoNoteForwardPayload(selectedMessage, resolveMediaUri);
+    return vn ? [vn] : [];
+  }
   if (type === "sticker") {
     const stickerId = String(selectedMessage?.stickerId || "").trim();
     if (!stickerId) return [];
@@ -199,6 +218,9 @@ export function selectionHasForwardableContent(
     if (type === "audio" && normalizeForwardMediaUri(String(m?.uri || ""), resolveMediaUri)) {
       return true;
     }
+    if (type === "video_note" && normalizeForwardMediaUri(String(m?.uri || ""), resolveMediaUri)) {
+      return true;
+    }
     if (type === "sticker" && String(m?.stickerId || "").trim()) return true;
   }
   return false;
@@ -215,7 +237,7 @@ export function selectedMessageIsForwardable(
   if (type === "image") {
     return !!normalizeForwardMediaUri(String(selectedMessage?.uri ?? ""), resolveMediaUri);
   }
-  if (type === "audio") {
+  if (type === "audio" || type === "video_note") {
     return !!normalizeForwardMediaUri(String(selectedMessage?.uri ?? ""), resolveMediaUri);
   }
   if (type === "sticker") return !!String(selectedMessage?.stickerId ?? "").trim();
@@ -261,6 +283,7 @@ export function buildOptimisticForwardRow(
     if (partial.name != null) row.name = partial.name;
     if (partial.size != null) row.size = partial.size;
     if (partial.duration != null) row.duration = partial.duration;
+    if (partial.thumbUri) row.thumbUri = opts.resolveMediaUri(String(partial.thumbUri)) || partial.thumbUri;
   }
   return row;
 }
@@ -299,6 +322,7 @@ export function buildSystemShareContent(opts: {
       if (type === "text") parts.push(String(m?.text ?? "").trim());
       else if (type === "image") parts.push(t("mediaPhotoLabel", lang));
       else if (type === "audio") parts.push(`🎤 ${t("chatVoiceMessage", lang)}`);
+      else if (type === "video_note") parts.push(`📹 ${t("chatVideoMessage", lang)}`);
       else if (type === "sticker") parts.push(getStickerFallbackText(m, lang));
     }
     shareText = parts.filter(Boolean).join("\n");
@@ -329,6 +353,10 @@ export function buildSystemShareContent(opts: {
       if (raw) shareUrl = normalizeForwardMediaUri(raw, resolveMediaUri) || undefined;
     } else if (type === "audio") {
       shareText = `🎤 ${t("chatVoiceMessage", lang)}`;
+      const raw = String(selectedMessage?.uri ?? "").trim();
+      if (raw) shareUrl = normalizeForwardMediaUri(raw, resolveMediaUri) || undefined;
+    } else if (type === "video_note") {
+      shareText = `📹 ${t("chatVideoMessage", lang)}`;
       const raw = String(selectedMessage?.uri ?? "").trim();
       if (raw) shareUrl = normalizeForwardMediaUri(raw, resolveMediaUri) || undefined;
     } else if (type === "sticker") {

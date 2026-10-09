@@ -39,9 +39,12 @@ import { MESSAGE_LONG_PRESS_MS } from "../../constants/uiTokens";
 import { ChatReplyQuoteAccent } from "./ChatReplyQuoteAccent";
 import { findFliqLink, isOnlyFliqLink } from "../fliq/fliqLinks";
 import { FliqLinkCard } from "../fliq/FliqLinkCard";
+import { CHAT_VIDEO_NOTE_SIZE, ChatVideoNote } from "./ChatVideoNote";
 
 /** Зазор над/под облаком на границе серии (последнее облако ленты — всегда так). */
 export const CHAT_ROW_SERIES_GAP = 4;
+/** Текст в облаке (тёмная тема) — как надпись «Исходящий звонок» в облаке звонка. */
+const CHAT_BUBBLE_TEXT_DARK = 'rgba(244,245,247,0.92)';
 
 /** Вытянутый нижний хвост облака: справа у исходящего, слева у входящего. */
 function ChatBubbleTail({ isOwn, color }: { isOwn: boolean; color: string }) {
@@ -1025,7 +1028,7 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
       ? new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
       : '';
     const bubbleBg = isMyMessage ? BUBBLE_BG_OUT : BUBBLE_BG_IN;
-    const textColor = isDark ? 'rgba(244,245,247,0.92)' : 'rgba(28,36,48,0.92)';
+    const textColor = isDark ? CHAT_BUBBLE_TEXT_DARK : 'rgba(28,36,48,0.92)';
     const timeColor = isDark ? 'rgba(255,255,255,0.55)' : 'rgba(28,36,48,0.55)';
 
     const checkbox = showSideCheckbox ? (
@@ -1126,8 +1129,10 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
     );
   }
 
-  if (String(item?.type || '') === 'sticker') {
-    const sticker = getBuiltInSticker(item.stickerId);
+  // Стикер и видеокружок — без облака: картинка, поверх капсула со временем.
+  const isVideoNote = String(item?.type || '') === 'video_note';
+  if (String(item?.type || '') === 'sticker' || isVideoNote) {
+    const sticker = isVideoNote ? undefined : getBuiltInSticker(item.stickerId);
     const reactions = Array.isArray(item.reactions) ? item.reactions : [];
     const byEmoji: Record<string, number> = {};
     reactions.forEach((r: { emoji: string }) => {
@@ -1136,7 +1141,7 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
     const reactionList = Object.entries(byEmoji).map(([emoji, count]) => ({ emoji, count }));
     const timeColor = isDark ? 'rgba(255,255,255,0.86)' : 'rgba(28, 36, 48, 0.92)';
     const metaBg = isDark ? 'rgba(18, 22, 30, 0.88)' : 'rgba(255,255,255,0.88)';
-    const stickerSize = 132;
+    const stickerSize = isVideoNote ? CHAT_VIDEO_NOTE_SIZE : 132;
 
     const checkbox = (
       <Pressable
@@ -1178,7 +1183,7 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
         <View
           style={{
             alignSelf: isMyMessage ? 'flex-end' : 'flex-start',
-            maxWidth: item.replyTo ? replyBubbleMinWidth : 190,
+            maxWidth: item.replyTo ? Math.max(replyBubbleMinWidth, stickerSize) : isVideoNote ? stickerSize : 190,
             ...(item.replyTo ? { minWidth: replyBubbleMinWidth } : null),
           }}
         >
@@ -1229,7 +1234,20 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
               opacity: pressed && !selectionMode ? 0.92 : 1,
             })}
           >
-            <StickerView stickerId={item.stickerId} sticker={sticker} size={stickerSize} animated isDark={isDark} />
+            {isVideoNote ? (
+              <ChatVideoNote
+                id={String(item.id)}
+                uri={resolveMediaUri(item.uri) || String(item.uri || '')}
+                thumbUri={item.thumbUri ? resolveMediaUri(item.thumbUri) || String(item.thumbUri) : undefined}
+                durationSec={Number(item.duration || 0)}
+                size={stickerSize}
+                disabled={!!selectionMode}
+                onLongPress={openMessageActionsFromBubble}
+              />
+            ) : (
+              <StickerView stickerId={item.stickerId} sticker={sticker} size={stickerSize} animated isDark={isDark} />
+            )}
+            {/* Реакции и время — одной капсулой у края картинки, как на медиа в Telegram. */}
             <View
               style={{
                 position: 'absolute',
@@ -1243,37 +1261,43 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
                 alignItems: 'center',
               }}
             >
-              <Text style={{ color: timeColor, fontSize: 11, marginRight: isMyMessage ? 4 : 0, fontWeight: '600' }}>
-                {new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-              </Text>
-              {renderStatusIcons()}
-            </View>
-          </Pressable>
-          {reactionList.length > 0 ? (
-            <View style={{ flexDirection: 'row', alignItems: 'center', alignSelf: isMyMessage ? 'flex-end' : 'flex-start', marginTop: 2 }}>
               {reactionList.map(({ emoji, count }) => (
                 <Pressable
                   key={emoji}
                   onPress={() => onReactionPress?.(item.id, emoji)}
                   onLongPress={openMessageActionsFromBubble}
                   delayLongPress={MESSAGE_LONG_PRESS_MS}
+                  hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
                   style={({ pressed }) => ({
                     flexDirection: 'row',
                     alignItems: 'center',
-                    borderRadius: 12,
-                    paddingHorizontal: 8,
-                    paddingVertical: 4,
-                    backgroundColor: metaBg,
-                    opacity: pressed ? 0.85 : 1,
-                    marginLeft: 4,
+                    marginRight: 5,
+                    opacity: pressed ? 0.7 : 1,
+                    transform: [{ scale: pressed ? 0.92 : 1 }],
                   })}
                 >
-                  <Text style={{ fontSize: 14 }}>{emoji}</Text>
-                  {count > 1 ? <Text style={{ fontSize: 11, color: timeColor, marginLeft: 2 }}>{count}</Text> : null}
+                  <Text style={{ fontSize: 13, lineHeight: 16 }}>{emoji}</Text>
+                  {count > 1 ? (
+                    <Text style={{ fontSize: 11, color: timeColor, marginLeft: 2, fontWeight: '600' }}>{count}</Text>
+                  ) : null}
                 </Pressable>
               ))}
+              {reactionList.length > 0 ? (
+                <View
+                  style={{
+                    width: StyleSheet.hairlineWidth,
+                    height: 11,
+                    marginRight: 6,
+                    backgroundColor: isDark ? 'rgba(255,255,255,0.28)' : 'rgba(0,0,0,0.2)',
+                  }}
+                />
+              ) : null}
+              <Text style={{ color: timeColor, fontSize: 11, marginRight: isMyMessage ? 4 : 0, fontWeight: '600' }}>
+                {new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+              </Text>
+              {renderStatusIcons()}
             </View>
-          ) : null}
+          </Pressable>
         </View>
         {selectionMode && isMyMessage ? checkbox : null}
       </Animated.View>
@@ -1350,7 +1374,7 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
           {/* Текст сообщения (если есть), ссылки кликабельны */}
           {item.type === 'text' && (() => {
           const baseStyle = {
-            color: isDark ? 'rgba(196, 202, 212, 0.92)' : LIVI.white,
+            color: isDark ? CHAT_BUBBLE_TEXT_DARK : LIVI.white,
             fontSize: 15,
             marginBottom: 3,
             lineHeight: 21,

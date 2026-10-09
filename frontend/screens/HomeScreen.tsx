@@ -102,6 +102,7 @@ import {
   WELCOME_HEADER_TITLE,
   WELCOME_POPUP_ACCENT,
   WELCOME_STAGE_BG,
+  APP_TOP_CONTENT_GAP,
 } from './home/constants';
 import { useStableSafeAreaInsets } from './home/useStableSafeAreaInsets';
 import { BlurListSource, BlurSourceFill } from '../components/BackdropBlur';
@@ -5741,7 +5742,7 @@ const handleClearNick = useCallback(async () => {
             active={showFliqTab && appIsActive && !hasActiveCallForSearch}
             lang={lang}
             bottomInset={tabBarH + GLASS_DOCK_TOP_PAD}
-            topInset={homeInsets.top}
+            topInset={homeInsets.top + APP_TOP_CONTENT_GAP}
           />
         </WelcomeKeepAlivePane>
         ) : null}

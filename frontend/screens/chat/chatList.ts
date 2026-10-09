@@ -28,9 +28,14 @@ function timeMs(raw: unknown): number {
   return Number.isFinite(ms) ? ms : NaN;
 }
 
-/** Два соседних сообщения — одна серия: один отправитель, не звонки, рядом по времени. */
+/**
+ * Два соседних сообщения — одна серия: один отправитель, не звонки, рядом по времени.
+ * Видеокружок в серию не входит: в серии облака стоят почти вплотную (их скругления
+ * сходятся), а круг так «прилипает» к соседу — вокруг него обычный промежуток ленты.
+ */
 function sameBubbleGroup(a: any, b: any): boolean {
   if (String(a?.type || "") === "call" || String(b?.type || "") === "call") return false;
+  if (String(a?.type || "") === "video_note" || String(b?.type || "") === "video_note") return false;
   if ((a?.sender === "me") !== (b?.sender === "me")) return false;
   const ta = timeMs(a?.timestamp);
   const tb = timeMs(b?.timestamp);

@@ -20,7 +20,7 @@ export interface IMessageItem {
   id: string; // Уникальный ID сообщения
   from: mongoose.Types.ObjectId;
   to: mongoose.Types.ObjectId;
-  type: 'text' | 'image' | 'audio' | 'sticker';
+  type: 'text' | 'image' | 'audio' | 'sticker' | 'video_note';
   text?: string; // Текст сообщения
   enc?: E2eEnvelope; // Зашифрованный текст (сквозное шифрование), text при этом пустой
   uri?: string; // URL изображения (или первое фото альбома)
@@ -67,7 +67,7 @@ const MessageItemSchema = new Schema<IMessageItem>({
   },
   type: {
     type: String,
-    enum: ['text', 'image', 'audio', 'sticker'],
+    enum: ['text', 'image', 'audio', 'sticker', 'video_note'],
     required: true
   },
   text: {

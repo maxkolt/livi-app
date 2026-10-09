@@ -375,6 +375,7 @@ export async function removeQueuedMessagesMatching(rawIds: readonly string[]): P
   for (const r of removed) {
     // Неотправленное голосовое удалили — его запись на устройстве больше не нужна.
     deleteLocalMedia(r.payload?.localUri);
+    deleteLocalMedia(r.payload?.localThumbUri);
     settleOutboxOutcome(r.id, { kind: 'cancelled' });
   }
 }
@@ -567,11 +568,16 @@ function absoluteMediaUrl(url: string): string {
   return `${API_BASE}${url}`;
 }
 
-/** В сеть уходит без пути к файлу на устройстве. */
+/** В сеть уходит без путей к файлам на устройстве. */
 function wirePayload(payload: MessageOutboxItem['payload']): MessageOutboxItem['payload'] {
-  if (!payload.localUri) return payload;
-  const { localUri: _local, ...rest } = payload;
+  if (!payload.localUri && !payload.localThumbUri) return payload;
+  const { localUri: _local, localThumbUri: _localThumb, ...rest } = payload;
   return rest;
+}
+
+/** В строке очереди есть файлы, которые ещё не на сервере. */
+function hasPendingUpload(payload: MessageOutboxItem['payload']): boolean {
+  return (!!payload.localUri && !payload.uri) || (!!payload.localThumbUri && !payload.thumbUri);
 }
 
 function deleteLocalMedia(localUri: string | undefined): void {
@@ -589,9 +595,11 @@ type QueuedUpload =
   | { kind: 'server'; error: string }
   | { kind: 'file'; error: string };
 
-async function uploadQueuedMedia(row: MessageOutboxItem): Promise<QueuedUpload> {
-  const { localUri, type, to } = row.payload;
-  if (!localUri || (type !== 'audio' && type !== 'image')) return { kind: 'ok', row };
+async function uploadQueuedFile(
+  localUri: string,
+  type: 'image' | 'audio' | 'video',
+  to: string | undefined,
+): Promise<{ kind: 'ok'; uri: string } | { kind: 'network' } | { kind: 'server' } | { kind: 'file' }> {
   // Лениво: mediaUpload тянет sockets/socket, а тот — эту очередь.
   const { uploadMediaToServer } = require('../../utils/mediaUpload') as typeof import('../../utils/mediaUpload');
   let cancelThis: (() => void) | null = null;
@@ -604,21 +612,49 @@ async function uploadQueuedMedia(row: MessageOutboxItem): Promise<QueuedUpload> 
     if (cancelQueuedUpload === cancelThis) cancelQueuedUpload = null;
   });
   if (!res.success || !res.url) {
-    if (res.kind === 'file') return { kind: 'file', error: 'upload_file_missing' };
-    if (res.kind === 'server') return { kind: 'server', error: 'upload_rejected' };
+    if (res.kind === 'file') return { kind: 'file' };
+    if (res.kind === 'server') return { kind: 'server' };
     return { kind: 'network' };
   }
-  const uri = absoluteMediaUrl(res.url);
-  // Адрес сохраняем сразу: оборвётся отправка — при повторе файл заново не грузим.
-  const uploaded: MessageOutboxItem = { ...row, payload: { ...row.payload, uri } };
+  return { kind: 'ok', uri: absoluteMediaUrl(res.url) };
+}
+
+/** Адреса загруженных файлов — в строку очереди сразу: оборвётся отправка — при повторе заново не грузим. */
+async function saveUploadedUris(rowId: string, patch: { uri?: string; thumbUri?: string }): Promise<void> {
   await withMessageOutboxLock(async () => {
     const items = await loadMessageOutbox();
-    const idx = items.findIndex((x) => x.id === row.id);
+    const idx = items.findIndex((x) => x.id === rowId);
     if (idx < 0) return;
-    items[idx] = { ...items[idx], payload: { ...items[idx].payload, uri } };
+    items[idx] = { ...items[idx], payload: { ...items[idx].payload, ...patch } };
     await saveMessageOutbox(items);
   });
-  return { kind: 'ok', row: uploaded };
+}
+
+async function uploadQueuedMedia(row: MessageOutboxItem): Promise<QueuedUpload> {
+  const { localUri, localThumbUri, type, to } = row.payload;
+  let payload = row.payload;
+  if (localUri && !payload.uri && (type === 'audio' || type === 'image' || type === 'video_note')) {
+    const up = await uploadQueuedFile(localUri, type === 'video_note' ? 'video' : type, to);
+    if (up.kind === 'network') return { kind: 'network' };
+    if (up.kind === 'file') return { kind: 'file', error: 'upload_file_missing' };
+    if (up.kind === 'server') return { kind: 'server', error: 'upload_rejected' };
+    payload = { ...payload, uri: up.uri };
+    await saveUploadedUris(row.id, { uri: up.uri });
+  }
+  // Кадр-превью видеокружка: без него кружок всё равно уйдёт — первый кадр покажет сам плеер.
+  if (type === 'video_note' && localThumbUri && !payload.thumbUri) {
+    const up = await uploadQueuedFile(localThumbUri, 'image', to);
+    if (up.kind === 'network') return { kind: 'network' };
+    if (up.kind === 'ok') {
+      payload = { ...payload, thumbUri: up.uri };
+      await saveUploadedUris(row.id, { thumbUri: up.uri });
+    } else {
+      const { localThumbUri: _drop, ...rest } = payload;
+      deleteLocalMedia(localThumbUri);
+      payload = rest;
+    }
+  }
+  return { kind: 'ok', row: { ...row, payload } };
 }
 
 /**
@@ -626,7 +662,7 @@ async function uploadQueuedMedia(row: MessageOutboxItem): Promise<QueuedUpload> 
  * (чат мог быть закрыт), затем файл удаляем. Открытый чат меняет адрес сам — по событию.
  */
 async function finishQueuedMedia(row: MessageOutboxItem, ids: readonly string[]): Promise<void> {
-  const { localUri, uri, to } = row.payload;
+  const { localUri, uri, to, localThumbUri, thumbUri } = row.payload;
   if (!localUri || !uri) return;
   const me = String(shared.currentUserId || '').trim();
   const peer = String(to || '').trim();
@@ -641,7 +677,7 @@ async function finishQueuedMedia(row: MessageOutboxItem, ids: readonly string[])
         const next = list.map((m: any) => {
           if (!idSet.has(String(m?.id || '')) || m?.uri !== localUri) return m;
           changed = true;
-          return { ...m, uri };
+          return { ...m, uri, ...(thumbUri && m?.thumbUri === localThumbUri ? { thumbUri } : {}) };
         });
         if (changed) await AsyncStorage.setItem(key, JSON.stringify(next));
       }
@@ -649,6 +685,7 @@ async function finishQueuedMedia(row: MessageOutboxItem, ids: readonly string[])
     } catch {}
   }
   deleteLocalMedia(localUri);
+  if (thumbUri) deleteLocalMedia(localThumbUri);
 }
 
 /* ========= Отправка: сокет, при его молчании — HTTP ========= */
@@ -702,6 +739,7 @@ async function onRowDelivered(row: MessageOutboxItem, resp: any): Promise<void> 
   await remapEditOutboxMessageIds(oldIds, serverMessageId);
   void persistOutgoingStatus(to, serverMessageId, delivered ? 'delivered' : 'sent', oldIds);
   const uploadedUri = row.payload.localUri ? row.payload.uri : undefined;
+  const uploadedThumb = row.payload.localThumbUri ? row.payload.thumbUri : undefined;
   dispatchOutboxMessageDelivered({
     to,
     outboxId: row.id,
@@ -709,6 +747,7 @@ async function onRowDelivered(row: MessageOutboxItem, resp: any): Promise<void> 
     serverMessageId,
     delivered,
     ...(uploadedUri ? { uri: uploadedUri } : {}),
+    ...(uploadedThumb ? { thumbUri: uploadedThumb } : {}),
   });
   if (uploadedUri) void finishQueuedMedia(row, [serverMessageId, ...oldIds]);
   settleOutboxOutcome(row.id, {
@@ -772,6 +811,7 @@ async function drainMessageOutboxPass(): Promise<'done' | 'partial' | 'stopped'>
     if (isFingerprintCancelledSync(item.optimisticUiId, item.id)) {
       await removeMessageOutboxRow(item.id);
       deleteLocalMedia(item.payload?.localUri);
+      deleteLocalMedia(item.payload?.localThumbUri);
       settleOutboxOutcome(item.id, { kind: 'cancelled' });
       continue;
     }
@@ -780,7 +820,7 @@ async function drainMessageOutboxPass(): Promise<'done' | 'partial' | 'stopped'>
     if (!row) continue;
 
     // Голосовое без сети: сначала файл на сервер, потом само сообщение.
-    if (row.payload.localUri && !row.payload.uri) {
+    if (hasPendingUpload(row.payload)) {
       const up = await uploadQueuedMedia(row);
       if (up.kind === 'network') {
         scheduleNetworkRetry();

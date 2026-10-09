@@ -34,4 +34,14 @@ describe('buildChatListRows bubble groups', () => {
     ]);
     expect(groups(rows)).toEqual(['a:--', 'b:--', 'call:--', 'c:--', 'd:--']);
   });
+
+  it('keeps a video note out of the series: normal gap around the circle', () => {
+    const rows = buildChatListRows([
+      msg('a', 'me', 0),
+      msg('vn', 'me', 1, 'video_note'),
+      msg('b', 'me', 2),
+      msg('c', 'me', 3),
+    ]);
+    expect(groups(rows)).toEqual(['a:--', 'vn:--', 'b:-v', 'c:^-']);
+  });
 });

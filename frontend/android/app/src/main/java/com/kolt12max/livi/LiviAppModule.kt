@@ -3985,6 +3985,12 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     @JvmStatic
     internal fun setActiveCallForegroundRunningStatic(running: Boolean) {
       activeCallForegroundRunning = running
+      // Сервис живёт ровно столько, сколько звонок: на это время JS-таймеры не засыпают в PiP/фоне.
+      if (running) {
+        CallJsTimersKeepAlive.start(reactContextRef)
+      } else {
+        CallJsTimersKeepAlive.stop()
+      }
     }
 
     /** JS выставляет true, когда SystemPiPCaptureHost отрисовал remote video — можно enterPictureInPictureMode. */

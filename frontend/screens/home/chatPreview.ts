@@ -42,6 +42,7 @@ export function previewTextFromMessage(msg: any, lang: Lang): string {
     return t('tabCalls', lang);
   }
   if (type === 'audio') return t('chatVoiceMessage', lang);
+  if (type === 'video_note') return t('chatVideoMessage', lang);
   const text = getChatReplyPreviewText(msg, lang).trim();
   return text;
 }

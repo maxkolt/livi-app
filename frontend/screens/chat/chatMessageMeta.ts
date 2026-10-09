@@ -13,6 +13,12 @@ export function stickerFieldsFromMessage(msg: any) {
   };
 }
 
+/** Видеокружок: кадр-превью. */
+export function videoNoteFieldsFromMessage(msg: any): { thumbUri?: string } {
+  const thumbUri = String(msg?.thumbUri || "").trim();
+  return thumbUri ? { thumbUri } : {};
+}
+
 export function albumUrisFieldFromMessage(msg: any): { uris?: string[] } {
   const uris = Array.isArray(msg?.uris)
     ? msg.uris.map((u: any) => String(u || "").trim()).filter(Boolean).slice(0, CHAT_ALBUM_MAX)
@@ -41,6 +47,7 @@ export function getChatReplyPreviewText(message: any, langCode: string): string 
       langCode,
     );
   }
+  if (String(message?.type || "") === "video_note") return t("chatVideoMessage", langCode as Lang);
   if (String(message?.type || "") === "image") {
     const n = getMessageImageUris(message).length;
     if (n > 1) return t("chatAlbumPhotos", langCode as Lang).replace("{count}", String(n));

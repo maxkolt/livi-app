@@ -1,11 +1,16 @@
 /**
- * Voice recording: tap — records hands-free until send / mic / trash; hold — records
- * while held, release sends, swipe left cancels. Recorder lifecycle, cancel-to-trash UI.
+ * Две кнопки записи в композере: камера (видеокружок) и микрофон (голосовое). Жест как в
+ * Telegram: удержание — запись, отпустил — отправил; влево — отмена; вверх — замок (пишет
+ * без пальца, отправка — «Отправить» или нажатием на кнопку записи, отмена — корзиной).
+ * Короткое касание ничего не пишет — только подсказка «удерживайте…».
+ * Здесь же жизнь рекордера голосовых и запуск/остановка кружка (камерой управляет
+ * VideoNoteRecorder, этот хук только говорит ему «начинай / хватит»).
  */
 
 import React from "react";
-import { Animated, PanResponder, View } from "react-native";
+import { Animated, Keyboard, PanResponder, View } from "react-native";
 import { Audio } from "expo-av";
+import { Camera } from "expo-camera";
 import * as FileSystem from "expo-file-system";
 import * as Haptics from "expo-haptics";
 import { t, type Lang } from "../../utils/i18n";
@@ -14,10 +19,17 @@ import {
   VOICE_CANCEL_ARM_DX,
   VOICE_CANCEL_DISARM_DX,
   VOICE_MAX_MS,
-  VOICE_TAP_MAX_MS,
   isPointInTrashZone,
   type TrashZone,
 } from "./chatVoiceRecord";
+import { VIDEO_NOTE_MAX_MS, VIDEO_NOTE_MIN_MS } from "./videoNoteFiles";
+import type { VideoNoteRecorderHandle } from "./VideoNoteRecorder";
+
+export type RecordMode = "voice" | "video";
+/** Дольше — удержание (запись), короче — касание (подсказка «удерживайте…»). */
+const HOLD_START_MS = 170;
+/** Столько вверх от кнопки — замок: запись идёт без пальца. */
+export const RECORD_LOCK_DY = -70;
 
 type NoticeFn = (kind: "error" | "info", title: string, message: string) => void;
 
@@ -31,6 +43,10 @@ type Options = {
   stopLocalRecordingSignal: () => void;
   /** Called after a successful (non-cancelled) recording. */
   onRecorded: (localUri: string, durationMs: number) => void | Promise<void>;
+  /** Записан видеокружок (не отменён, не короче секунды). */
+  onVideoRecorded?: (localUri: string, durationMs: number) => void | Promise<void>;
+  /** Кнопку записи коснулись, но не держали — подсказка «удерживайте, чтобы…». */
+  onHoldHint?: (mode: RecordMode) => void;
   /** Toast after swipe-cancel. */
   onCancelToast?: () => void;
 };
@@ -44,6 +60,8 @@ export function useChatVoiceRecord({
   startLocalRecordingSignal,
   stopLocalRecordingSignal,
   onRecorded,
+  onVideoRecorded,
+  onHoldHint,
   onCancelToast,
 }: Options) {
   const voiceRecordingRef = React.useRef<Audio.Recording | null>(null);
@@ -83,6 +101,29 @@ export function useChatVoiceRecord({
   const [voiceIsRecording, setVoiceIsRecording] = React.useState(false);
   const [voiceRecordMs, setVoiceRecordMs] = React.useState(0);
 
+  /** Что пишем сейчас: голосовое, кружок или ничего. */
+  const [recordingKind, setRecordingKindState] = React.useState<RecordMode | null>(null);
+  const recordingKindRef = React.useRef<RecordMode | null>(null);
+  const setRecordingKind = React.useCallback((kind: RecordMode | null) => {
+    recordingKindRef.current = kind;
+    setRecordingKindState(kind);
+  }, []);
+
+  /** Кружок: камерой управляет VideoNoteRecorder — ему отдаём этот ref. */
+  const videoRecorderRef = React.useRef<VideoNoteRecorderHandle | null>(null);
+  const videoStartingRef = React.useRef(false);
+  const videoRecordingRef = React.useRef(false);
+  const videoCancelledRef = React.useRef(false);
+  const videoAutoStoppedRef = React.useRef(false);
+  const videoStartedAtRef = React.useRef(0);
+  const videoStopAtRef = React.useRef(0);
+  const videoTimerRef = React.useRef<ReturnType<typeof setInterval> | null>(null);
+  /** Нажали — ждём HOLD_START_MS: отпустили раньше — это тап (смена режима). */
+  const holdTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const holdPendingRef = React.useRef(false);
+  /** 0..1 — насколько палец дотянул до замка (для подсказки над кнопкой). */
+  const lockDrag = React.useRef(new Animated.Value(0)).current;
+
   const voiceDragX = React.useRef(new Animated.Value(0)).current;
   const micScale = React.useRef(new Animated.Value(1)).current;
   const trashLid = React.useRef(new Animated.Value(0)).current;
@@ -92,8 +133,6 @@ export function useChatVoiceRecord({
   const recordVizLoopRef = React.useRef<Animated.CompositeAnimation | null>(null);
   const trashZoneRef = React.useRef<TrashZone | null>(null);
   const trashMeasureRef = React.useRef<View | null>(null);
-  const voiceStartXRef = React.useRef(0);
-  const voiceStartYRef = React.useRef(0);
 
   const stopVoiceRecordingRef = React.useRef<
     (cancelled?: boolean, autoStopped?: boolean) => Promise<void>
@@ -102,6 +141,10 @@ export function useChatVoiceRecord({
   onRecordedRef.current = onRecorded;
   const onCancelToastRef = React.useRef(onCancelToast);
   onCancelToastRef.current = onCancelToast;
+  const onVideoRecordedRef = React.useRef(onVideoRecorded);
+  onVideoRecordedRef.current = onVideoRecorded;
+  const onHoldHintRef = React.useRef(onHoldHint);
+  onHoldHintRef.current = onHoldHint;
 
   const updateTrashZone = React.useCallback(() => {
     try {
@@ -131,9 +174,12 @@ export function useChatVoiceRecord({
       try {
         trashFlash.setValue(0);
       } catch {}
+      try {
+        lockDrag.setValue(0);
+      } catch {}
       Animated.timing(micScale, { toValue: 1, duration: 44, useNativeDriver: true }).start();
     },
-    [voiceDragX, trashLid, trashFlash, micScale],
+    [voiceDragX, trashLid, trashFlash, micScale, lockDrag],
   );
 
   const armCancelUI = React.useCallback(() => {
@@ -167,7 +213,7 @@ export function useChatVoiceRecord({
     } catch {}
   }, []);
 
-  const stopVoiceRecording = React.useCallback(
+  const stopVoiceOnly = React.useCallback(
     async (cancelled?: boolean, autoStopped?: boolean) => {
       if (voiceStopInProgressRef.current) return;
       const rec = voiceRecordingRef.current;
@@ -181,6 +227,7 @@ export function useChatVoiceRecord({
       voiceStopInProgressRef.current = true;
       voiceRecordingRef.current = null;
       setVoiceIsRecording(false);
+      setRecordingKind(null);
       setVoiceLocked(false);
       try {
         stopLocalRecordingSignal();
@@ -248,7 +295,174 @@ export function useChatVoiceRecord({
         restoreAudioMode();
       }
     },
-    [voiceRecordMs, resetVoiceGesture, restoreAudioMode, stopLocalRecordingSignal, setVoiceLocked],
+    [voiceRecordMs, resetVoiceGesture, restoreAudioMode, stopLocalRecordingSignal, setVoiceLocked, setRecordingKind],
+  );
+
+  /* ---------- Видеокружок ---------- */
+
+  const clearVideoTimer = React.useCallback(() => {
+    try {
+      if (videoTimerRef.current) clearInterval(videoTimerRef.current);
+    } catch {}
+    videoTimerRef.current = null;
+  }, []);
+
+  /** Сбросить состояние кружка после записи (или несостоявшегося старта). */
+  const resetVideoState = React.useCallback(() => {
+    clearVideoTimer();
+    videoStartingRef.current = false;
+    videoRecordingRef.current = false;
+    videoStartedAtRef.current = 0;
+    setVoiceIsRecording(false);
+    setRecordingKind(null);
+    setVoiceLocked(false);
+    try {
+      stopLocalRecordingSignal();
+    } catch {}
+    resetVoiceGesture();
+  }, [clearVideoTimer, setRecordingKind, setVoiceLocked, stopLocalRecordingSignal, resetVoiceGesture]);
+
+  const stopVideoRecording = React.useCallback(
+    async (cancelled?: boolean, autoStopped?: boolean) => {
+      if (!videoStartingRef.current && !videoRecordingRef.current) return;
+      videoCancelledRef.current = !!cancelled;
+      videoAutoStoppedRef.current = !!autoStopped;
+      videoStopAtRef.current = Date.now();
+      if (!videoRecordingRef.current) {
+        // Камера ещё не дала записать — запись не начнём.
+        voiceReleasedDuringStartRef.current = true;
+        if (videoRecorderRef.current) videoRecorderRef.current.stop();
+        else resetVideoState();
+        return;
+      }
+      clearVideoTimer();
+      videoRecorderRef.current?.stop();
+    },
+    [clearVideoTimer, resetVideoState],
+  );
+
+  const startVideoRecording = React.useCallback(async () => {
+    if (
+      videoStartingRef.current ||
+      videoRecordingRef.current ||
+      voiceStartingRef.current ||
+      voiceRecordingRef.current
+    ) {
+      return;
+    }
+    if (!currentUserId || !peerId || selectionMode) {
+      setVoiceLocked(false);
+      resetVoiceGesture();
+      return;
+    }
+    videoStartingRef.current = true;
+    videoCancelledRef.current = false;
+    videoAutoStoppedRef.current = false;
+    voiceReleasedDuringStartRef.current = false;
+    resetVoiceGesture({ keepVoiceDrag: true });
+    try {
+      const [cam, mic] = await Promise.all([
+        Camera.getCameraPermissionsAsync(),
+        Camera.getMicrophonePermissionsAsync(),
+      ]);
+      if (!cam.granted || !mic.granted) {
+        // Как с голосовым: системное окно забирает палец — только спрашиваем.
+        videoStartingRef.current = false;
+        try {
+          stopLocalRecordingSignal();
+        } catch {}
+        setVoiceLocked(false);
+        resetVoiceGesture();
+        const camNow = cam.granted ? cam : cam.canAskAgain ? await Camera.requestCameraPermissionsAsync() : cam;
+        const micNow = mic.granted ? mic : mic.canAskAgain ? await Camera.requestMicrophonePermissionsAsync() : mic;
+        if (!camNow.granted || !micNow.granted) {
+          showNotice("error", t("errorTitle", lang), t("chatNeedCameraForVideoNote", lang));
+        }
+        return;
+      }
+      if (voiceReleasedDuringStartRef.current || !mountedRef.current) {
+        resetVideoState();
+        return;
+      }
+      Keyboard.dismiss();
+      setVoiceRecordMs(0);
+      setRecordingKind("video");
+      // Слой VideoNoteRecorder появится, дождётся камеры и спросит shouldStartVideo.
+      setVoiceIsRecording(true);
+      logger.info("[video-note] starting", { sincePressMs: sincePress() });
+    } catch (e) {
+      logger.warn("[video-note] start failed", { error: String((e as Error)?.message ?? e) });
+      resetVideoState();
+    }
+  }, [
+    currentUserId,
+    peerId,
+    selectionMode,
+    lang,
+    showNotice,
+    resetVoiceGesture,
+    resetVideoState,
+    setRecordingKind,
+    setVoiceLocked,
+    stopLocalRecordingSignal,
+  ]);
+
+  /** Камера готова — писать, только если кнопку ещё держат (или замок). */
+  const shouldStartVideo = React.useCallback(() => {
+    return videoStartingRef.current && !voiceReleasedDuringStartRef.current && mountedRef.current;
+  }, []);
+
+  const onVideoStarted = React.useCallback(() => {
+    videoStartingRef.current = false;
+    videoRecordingRef.current = true;
+    videoStartedAtRef.current = Date.now();
+    logger.info("[video-note] recording", { sincePressMs: sincePress() });
+    clearVideoTimer();
+    videoTimerRef.current = setInterval(() => {
+      const ms = Math.min(VIDEO_NOTE_MAX_MS, Date.now() - videoStartedAtRef.current);
+      setVoiceRecordMs(ms);
+      if (ms >= VIDEO_NOTE_MAX_MS) void stopVideoRecordingRef.current(false, true);
+    }, 100);
+  }, [clearVideoTimer]);
+
+  const onVideoFinished = React.useCallback(
+    (uri: string | null) => {
+      const startedAt = videoStartedAtRef.current;
+      const stopAt = videoStopAtRef.current || Date.now();
+      const durationMs = startedAt ? Math.min(VIDEO_NOTE_MAX_MS, Math.max(0, stopAt - startedAt)) : 0;
+      const cancelled = videoCancelledRef.current;
+      const autoStopped = videoAutoStoppedRef.current;
+      resetVideoState();
+      setVoiceRecordMs(0);
+      logger.info("[video-note] stopped", { durationMs, cancelled, autoStopped, hasUri: !!uri });
+      if (!uri) return;
+      if (cancelled || durationMs < VIDEO_NOTE_MIN_MS) {
+        void FileSystem.deleteAsync(uri, { idempotent: true }).catch(() => {});
+        return;
+      }
+      try {
+        void Haptics.notificationAsync(
+          autoStopped ? Haptics.NotificationFeedbackType.Warning : Haptics.NotificationFeedbackType.Success,
+        );
+      } catch {}
+      void Promise.resolve(onVideoRecordedRef.current?.(uri, durationMs)).catch(() => {});
+    },
+    [resetVideoState],
+  );
+
+  const stopVideoRecordingRef = React.useRef(stopVideoRecording);
+  stopVideoRecordingRef.current = stopVideoRecording;
+
+  /** Остановить то, что пишется сейчас: кнопка «Отправить», корзина, лимит минуты. */
+  const stopVoiceRecording = React.useCallback(
+    async (cancelled?: boolean, autoStopped?: boolean) => {
+      if (recordingKindRef.current === "video" || videoStartingRef.current || videoRecordingRef.current) {
+        await stopVideoRecording(cancelled, autoStopped);
+        return;
+      }
+      await stopVoiceOnly(cancelled, autoStopped);
+    },
+    [stopVideoRecording, stopVoiceOnly],
   );
   stopVoiceRecordingRef.current = stopVoiceRecording;
 
@@ -267,6 +481,7 @@ export function useChatVoiceRecord({
     const abandonStart = () => {
       voiceRecordStartedAtRef.current = 0;
       setVoiceIsRecording(false);
+      setRecordingKind(null);
       setVoiceLocked(false);
       try {
         stopLocalRecordingSignal();
@@ -315,6 +530,7 @@ export function useChatVoiceRecord({
       }
 
       setVoiceRecordMs(0);
+      setRecordingKind("voice");
       setVoiceIsRecording(true);
       recording = new Audio.Recording();
       await recording.prepareToRecordAsync({
@@ -396,6 +612,7 @@ export function useChatVoiceRecord({
     lang,
     stopLocalRecordingSignal,
     setVoiceLocked,
+    setRecordingKind,
   ]);
 
   const cancelVoiceRecordingWithAnimation = React.useCallback(async () => {
@@ -411,8 +628,59 @@ export function useChatVoiceRecord({
     } catch {}
   }, [stopVoiceRecording]);
 
-  const micPanResponder = React.useMemo(() => {
-    return PanResponder.create({
+  const lockRecording = React.useCallback(() => {
+    if (voiceLockedRef.current) return;
+    setVoiceLocked(true);
+    cancelArmedRef.current = false;
+    try {
+      voiceDragX.setValue(0);
+      trashLid.setValue(0);
+      lockDrag.setValue(0);
+    } catch {}
+    try {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    } catch {}
+    logger.info("[record] locked", { kind: recordingKindRef.current, sincePressMs: sincePress() });
+  }, [setVoiceLocked, voiceDragX, trashLid, lockDrag]);
+
+  const isBusy = () =>
+    voiceStartingRef.current || !!voiceRecordingRef.current || videoStartingRef.current || videoRecordingRef.current;
+  const isRecordingNow = () => !!voiceRecordingRef.current || videoRecordingRef.current;
+  const isStartingNow = () => voiceStartingRef.current || videoStartingRef.current;
+
+  const clearHoldTimer = () => {
+    if (holdTimerRef.current) clearTimeout(holdTimerRef.current);
+    holdTimerRef.current = null;
+    holdPendingRef.current = false;
+  };
+
+  /**
+   * Свежие функции и данные для жеста. Сам PanResponder создаётся один раз: пересозданный
+   * посреди жеста начинает отсчёт dx/dy с нуля экрана — замок вверх и отмена влево ломались
+   * (а пересоздавался он каждые 100 мс вместе с таймером записи).
+   */
+  const latestRef = React.useRef<any>(null);
+  latestRef.current = {
+    startVoiceRecording,
+    startVideoRecording,
+    stopVideoRecording,
+    stopVoiceRecording,
+    cancelVoiceRecordingWithAnimation,
+    armCancelUI,
+    disarmCancelUI,
+    resetVoiceGesture,
+    isInTrashZone,
+    updateTrashZone,
+    startLocalRecordingSignal,
+    lockRecording,
+    currentUserId,
+    peerId,
+    selectionMode,
+  };
+  const L = () => latestRef.current;
+
+  const makeRecordResponder = (mode: RecordMode) =>
+    PanResponder.create({
       onStartShouldSetPanResponder: () => true,
       onStartShouldSetPanResponderCapture: () => false,
       onMoveShouldSetPanResponder: (_evt, g) => Math.abs(g.dx) > 2 || Math.abs(g.dy) > 2,
@@ -420,10 +688,11 @@ export function useChatVoiceRecord({
       onPanResponderTerminationRequest: () => false,
       onPanResponderGrant: () => {
         voicePressAtRef.current = Date.now();
-        pressStartedRecordingRef.current = !voiceStartingRef.current && !voiceRecordingRef.current;
+        const busy = isBusy();
+        pressStartedRecordingRef.current = !busy;
         logger.info("[voice] press", {
-          starting: voiceStartingRef.current,
-          recording: !!voiceRecordingRef.current,
+          busy,
+          mode,
           locked: voiceLockedRef.current,
         });
         voiceDragEnabledRef.current = true;
@@ -431,34 +700,50 @@ export function useChatVoiceRecord({
           Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
         } catch {}
         Animated.timing(micScale, { toValue: 0.9, duration: 40, useNativeDriver: true }).start();
-        try {
-          voiceStartXRef.current = 0;
-          voiceStartYRef.current = 0;
-        } catch {}
-        requestAnimationFrame(() => updateTrashZone());
-        try {
-          if (!voiceIsRecording && currentUserId && peerId && !selectionMode) {
-            startLocalRecordingSignal();
-          }
-        } catch {}
-        void startVoiceRecording();
+        requestAnimationFrame(() => L().updateTrashZone());
+        if (busy) return;
+        // Запись — только если держат; короткое касание — подсказка.
+        clearHoldTimer();
+        holdPendingRef.current = true;
+        holdTimerRef.current = setTimeout(() => {
+          holdTimerRef.current = null;
+          holdPendingRef.current = false;
+          if (!L().currentUserId || !L().peerId || L().selectionMode) return;
+          try {
+            L().startLocalRecordingSignal();
+          } catch {}
+          if (mode === "video") void L().startVideoRecording();
+          else void L().startVoiceRecording();
+        }, HOLD_START_MS);
       },
       onPanResponderMove: (_evt, gestureState) => {
+        if (holdPendingRef.current) return;
         if (!voiceDragEnabledRef.current || voiceLockedRef.current) return;
+        if (!isRecordingNow() && !isStartingNow()) return;
+        // Вверх — замок: дальше пишет без пальца.
+        const dy = Math.min(0, gestureState.dy);
+        const dxAbs = Math.abs(gestureState.dx);
+        try {
+          lockDrag.setValue(Math.min(1, dy / RECORD_LOCK_DY));
+        } catch {}
+        if (dy <= RECORD_LOCK_DY && dxAbs < 56 && !cancelArmedRef.current) {
+          L().lockRecording();
+          return;
+        }
         const dx = Math.min(0, Math.max(-120, gestureState.dx));
         voiceDragX.setValue(dx);
-        const inZone = isInTrashZone(
+        const inZone = L().isInTrashZone(
           Number(gestureState.moveX || 0),
           Number(gestureState.moveY || 0),
         );
         if (inZone) {
-          armCancelUI();
+          L().armCancelUI();
           return;
         }
         if (!cancelArmedRef.current) {
-          if (dx <= VOICE_CANCEL_ARM_DX) armCancelUI();
+          if (dx <= VOICE_CANCEL_ARM_DX) L().armCancelUI();
         } else {
-          if (dx >= VOICE_CANCEL_DISARM_DX) disarmCancelUI();
+          if (dx >= VOICE_CANCEL_DISARM_DX) L().disarmCancelUI();
         }
       },
       onPanResponderRelease: async (_evt, gestureState) => {
@@ -466,74 +751,79 @@ export function useChatVoiceRecord({
         const heldMs = sincePress();
         logger.info("[voice] release", {
           sincePressMs: heldMs,
-          starting: voiceStartingRef.current,
-          recording: !!voiceRecordingRef.current,
+          holdPending: holdPendingRef.current,
+          starting: isStartingNow(),
+          recording: isRecordingNow(),
           locked: voiceLockedRef.current,
         });
-        const startedNow = pressStartedRecordingRef.current;
-        pressStartedRecordingRef.current = false;
-        if (
-          startedNow &&
-          heldMs >= 0 &&
-          heldMs < VOICE_TAP_MAX_MS &&
-          !cancelArmedRef.current &&
-          (voiceStartingRef.current || !!voiceRecordingRef.current)
-        ) {
-          // Тап: запись идёт дальше без пальца — до «Отправить», микрофона или корзины.
-          setVoiceLocked(true);
-          resetVoiceGesture();
+        if (holdPendingRef.current) {
+          // Коснулись и отпустили: запись не начинали — подскажем, что кнопку держат.
+          clearHoldTimer();
+          L().resetVoiceGesture();
+          try {
+            Haptics.selectionAsync();
+          } catch {}
+          onHoldHintRef.current?.(mode);
           return;
         }
-        if (!voiceRecordingRef.current) {
+        const startedNow = pressStartedRecordingRef.current;
+        pressStartedRecordingRef.current = false;
+        // Этим же жестом закрепили (вверх) — запись идёт дальше без пальца.
+        if (startedNow && voiceLockedRef.current) {
+          L().resetVoiceGesture({ keepVoiceDrag: false });
+          return;
+        }
+        if (!isRecordingNow()) {
           // Запуск ещё идёт — пусть он сам выбросит запись, как только поднимется.
-          if (voiceStartingRef.current) voiceReleasedDuringStartRef.current = true;
-          resetVoiceGesture();
+          if (isStartingNow()) {
+            voiceReleasedDuringStartRef.current = true;
+            if (videoStartingRef.current) void L().stopVideoRecording(true, false);
+          }
+          L().resetVoiceGesture();
           return;
         }
         const dx = Math.min(0, Math.max(-120, gestureState.dx));
-        const inZone = isInTrashZone(
+        const inZone = L().isInTrashZone(
           Number(gestureState.moveX || 0),
           Number(gestureState.moveY || 0),
         );
-        // Запись по тапу отменяют только корзиной: нажатие на микрофон её отправляет.
+        // Закреплённую запись отменяют только корзиной: нажатие на кнопку записи её отправляет.
         if (!voiceLockedRef.current && (inZone || dx <= VOICE_CANCEL_ARM_DX || cancelArmedRef.current)) {
-          await cancelVoiceRecordingWithAnimation();
+          await L().cancelVoiceRecordingWithAnimation();
           return;
         }
-        await stopVoiceRecording(false, false);
+        await L().stopVoiceRecording(false, false);
       },
       onPanResponderTerminate: async () => {
         logger.info("[voice] gesture terminated", {
           sincePressMs: sincePress(),
-          starting: voiceStartingRef.current,
-          recording: !!voiceRecordingRef.current,
+          starting: isStartingNow(),
+          recording: isRecordingNow(),
         });
         Animated.timing(micScale, { toValue: 1, duration: 44, useNativeDriver: true }).start();
-        if (voiceStartingRef.current) voiceReleasedDuringStartRef.current = true;
-        if (voiceRecordingRef.current) {
-          await stopVoiceRecording(true, false);
+        if (holdPendingRef.current) {
+          clearHoldTimer();
+          L().resetVoiceGesture();
+          return;
         }
-        resetVoiceGesture();
+        if (voiceLockedRef.current) {
+          L().resetVoiceGesture();
+          return;
+        }
+        if (isStartingNow()) voiceReleasedDuringStartRef.current = true;
+        if (isRecordingNow() || videoStartingRef.current) {
+          await L().stopVoiceRecording(true, false);
+        }
+        L().resetVoiceGesture();
       },
     });
-  }, [
-    micScale,
-    startVoiceRecording,
-    voiceIsRecording,
-    voiceDragX,
-    armCancelUI,
-    disarmCancelUI,
-    resetVoiceGesture,
-    stopVoiceRecording,
-    cancelVoiceRecordingWithAnimation,
-    isInTrashZone,
-    updateTrashZone,
-    currentUserId,
-    peerId,
-    selectionMode,
-    startLocalRecordingSignal,
-    setVoiceLocked,
-  ]);
+
+  const [micPanResponder, videoPanResponder] = React.useMemo(
+    () => [makeRecordResponder("voice"), makeRecordResponder("video")],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+
 
   React.useEffect(() => {
     try {
@@ -572,10 +862,21 @@ export function useChatVoiceRecord({
       try {
         if (voiceRecordTimerRef.current) clearInterval(voiceRecordTimerRef.current);
       } catch {}
+      try {
+        if (videoTimerRef.current) clearInterval(videoTimerRef.current);
+        if (holdTimerRef.current) clearTimeout(holdTimerRef.current);
+      } catch {}
     };
   }, []);
 
   return {
+    recordingKind,
+    videoPanResponder,
+    lockDrag,
+    videoRecorderRef,
+    shouldStartVideo,
+    onVideoStarted,
+    onVideoFinished,
     voiceIsRecording,
     voiceLocked,
     voiceRecordMs,

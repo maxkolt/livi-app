@@ -1,0 +1,12 @@
+--- a/android/src/main/java/expo/modules/camera/ExpoCameraView.kt	2026-10-09 11:41:14
++++ b/android/src/main/java/expo/modules/camera/ExpoCameraView.kt	2026-10-09 11:41:14
+@@ -133,6 +133,9 @@
+ 
+   private var previewView = PreviewView(context).apply {
+     elevation = 0f
++    // LiVi: превью через TextureView — его режет скругление RN (видеокружок в чате).
++    // SurfaceView (режим по умолчанию) скругление игнорирует, кружок был бы квадратом.
++    implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+   }
+   private val scope = CoroutineScope(Dispatchers.Main)
+   private var shouldCreateCamera = false

@@ -32,6 +32,37 @@ describe('видео', () => {
     expect(c.wasVideoTrackChanged).toBe(true);
   });
 
+  it('тот же sid, но новая дорожка (перезашли в комнату после смены сети) — новый MediaStream', () => {
+    const c = video({
+      newTrackSid: 'v1',
+      previousVideoSid: 'v1',
+      incomingMediaTrack: { id: 'fresh' },
+      existingVideoMediaTracks: [],
+    });
+    expect(c.wasVideoTrackChanged).toBe(false);
+    expect(c.videoResubscribed).toBe(true);
+    expect(c.needsFreshStream).toBe(true);
+    expect(c.freshStreamReason).toBe('video_resubscribe');
+  });
+
+  it('тот же sid и дорожка уже в стриме — не пересобираем', () => {
+    const mine = { id: 'mine' };
+    const c = video({
+      newTrackSid: 'v1',
+      previousVideoSid: 'v1',
+      incomingMediaTrack: mine,
+      existingVideoMediaTracks: [mine],
+    });
+    expect(c.videoResubscribed).toBe(false);
+    expect(c.needsFreshStream).toBe(false);
+  });
+
+  it('первое видео с дорожкой — не повторная подписка', () => {
+    const c = video({ newTrackSid: 'v1', previousVideoSid: null, incomingMediaTrack: { id: 'v' } });
+    expect(c.videoResubscribed).toBe(false);
+    expect(c.needsFreshStream).toBe(false);
+  });
+
   it('аудио-флаги не выставляются для видео', () => {
     const c = video({ newTrackSid: 'v2', previousVideoSid: 'v1', previousAudioSid: 'a1' });
     expect(c.wasAudioTrackChanged).toBe(false);

@@ -28,7 +28,7 @@ export type MediaUploadResult = {
 };
 
 /** Multipart без ответа дольше этого — считаем, что сети нет. */
-const MULTIPART_TIMEOUT_MS = { audio: 45_000, image: 180_000 } as const;
+const MULTIPART_TIMEOUT_MS = { audio: 45_000, image: 180_000, video: 300_000 } as const;
 
 export type MediaUploadOptions = {
   /** Отдаёт функцию отмены загрузки: очередь обрывает её, когда сеть сменилась. */
@@ -113,7 +113,7 @@ type MultipartAttempt =
 
 async function uploadMultipartOnce(
   fileUri: string,
-  type: 'image' | 'audio',
+  type: 'image' | 'audio' | 'video',
   installId: string,
   options: MediaUploadOptions | undefined,
   onCancelledByCaller: () => void,
@@ -168,7 +168,7 @@ async function uploadMultipartOnce(
  */
 export const uploadMediaToServer = async (
   localUri: string, 
-  type: 'image' | 'audio',
+  type: 'image' | 'audio' | 'video',
   onProgress?: (progress: number) => void,
   from?: string,
   to?: string,

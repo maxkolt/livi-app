@@ -3,11 +3,6 @@
 import * as FileSystem from "expo-file-system";
 
 export const VOICE_MAX_MS = 60_000;
-/**
- * Отпустили микрофон раньше — это тап: запись продолжается без пальца, до «Отправить»,
- * повторного нажатия на микрофон или корзины. Дольше — удержание: отпустил и отправил.
- */
-export const VOICE_TAP_MAX_MS = 450;
 /** Swipe-left cancel: sensitive arm threshold. */
 export const VOICE_CANCEL_ARM_DX = -12;
 export const VOICE_CANCEL_DISARM_DX = -4;

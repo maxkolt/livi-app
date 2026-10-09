@@ -81,11 +81,13 @@ export function ChatGapCenterIndicator({
             backgroundColor: "rgba(12, 14, 18, 0.82)",
             borderWidth: 1,
             borderColor: "rgba(255,255,255,0.10)",
-            maxWidth: "72%",
+            maxWidth: "86%",
           }}
         >
           <Text
             numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.85}
             style={{
               fontSize: 13,
               fontWeight: "600",

@@ -9,7 +9,7 @@ import {
   approxSameOutgoingTextMessage,
   isServerMessageId,
 } from "./chatMessageOps";
-import { albumUrisFieldFromMessage, stickerFieldsFromMessage } from "./chatMessageMeta";
+import { albumUrisFieldFromMessage, stickerFieldsFromMessage, videoNoteFieldsFromMessage } from "./chatMessageMeta";
 import { getMessageImageUris } from "./chatAlbum";
 
 export type FormattedChatMessage = Record<string, any>;
@@ -30,6 +30,7 @@ export function formatServerChatMessage(
     size: (msg as any).size,
     duration: (msg as any).duration,
     ...stickerFieldsFromMessage(msg),
+    ...videoNoteFieldsFromMessage(msg),
     sender: msg.from === uid ? "me" : "peer",
     from: msg.from,
     to: msg.to,

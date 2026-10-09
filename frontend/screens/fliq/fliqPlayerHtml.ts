@@ -23,6 +23,9 @@ export type FliqPlayMode = 'play' | 'pause' | 'hold';
  *   пока идёт подгрузка, состояния плеера наружу не уходят (это ещё не «первый кадр»);
  * - звук общий для ленты: muted задаёт RN, а если человек нажал звук в самом плеере YouTube,
  *   страница замечает это (isMuted) и сообщает — тогда звук меняется у всех роликов.
+ *
+ * Плеер на 2 px заходит за каждый край окна: YouTube округляет размер видео до целых px,
+ * и при дробной ширине карточки справа и снизу оставалась чёрная полоса фона страницы.
  */
 export function youtubePlayerHtml(
   videoId: string,
@@ -30,7 +33,7 @@ export function youtubePlayerHtml(
 ): string {
   return `<!DOCTYPE html><html><head>
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<style>html,body{margin:0;padding:0;width:100%;height:100%;background:#000;overflow:hidden}#p{position:absolute;top:0;left:0;width:100%;height:100%}</style>
+<style>html,body{margin:0;padding:0;width:100%;height:100%;background:#000;overflow:hidden}#p{position:absolute;top:-2px;left:-2px;width:calc(100% + 4px);height:calc(100% + 4px)}</style>
 </head><body><div id="p"></div><script>
 (function(){
   var player=null, ready=false, want='${init.mode}', muted=${init.muted}, prebuffer=${init.prebuffer};
@@ -71,7 +74,7 @@ export function youtubePlayerHtml(
   window.__fliqPrebuffer=function(p){ prebuffer=!!p; apply(); };
   window.onYouTubeIframeAPIReady=function(){
     player=new YT.Player('p',{width:'100%',height:'100%',videoId:'${videoId}',
-      playerVars:{playsinline:1,controls:1,rel:0,fs:0,iv_load_policy:3,disablekb:1,enablejsapi:1,mute:muted?1:0,start:${Math.max(0, Math.floor(init.startSec))},origin:'${PLAYER_ORIGIN}'},
+      playerVars:{playsinline:1,controls:0,cc_load_policy:0,rel:0,fs:0,iv_load_policy:3,disablekb:1,enablejsapi:1,mute:muted?1:0,start:${Math.max(0, Math.floor(init.startSec))},origin:'${PLAYER_ORIGIN}'},
       events:{
         onReady:function(){ready=true;send({t:'ready'});applyMute();apply();setInterval(pollMute,500);},
         onStateChange:function(e){
@@ -91,6 +94,8 @@ export function youtubePlayerHtml(
           send({t:'state',s:e.data});
           if(e.data===0&&want==='play'){ send({t:'loop'}); try{player.seekTo(0,true);player.playVideo();}catch(_){} }
           if(e.data===1){
+            // Автосубтитры YouTube включает сам (cc_load_policy их не гасит) — модуль выгружаем.
+            try{ player.unloadModule('captions'); player.unloadModule('cc'); }catch(_){}
             if(!tick) tick=setInterval(function(){try{send({t:'tick',c:player.getCurrentTime(),d:player.getDuration()});}catch(_){}},1000);
           } else if(tick){ clearInterval(tick); tick=null; }
         },

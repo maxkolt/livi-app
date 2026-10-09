@@ -121,6 +121,7 @@ function toFriendshipMessageSnapshot(message: any): any {
     stickerPackId: message.stickerPackId,
     stickerEmoji: message.stickerEmoji,
     stickerLabel: message.stickerLabel,
+    thumbUri: message.thumbUri,
     timestamp: message.timestamp instanceof Date ? message.timestamp : new Date(message.timestamp || Date.now()),
     read: !!message.read,
   };
@@ -154,6 +155,19 @@ export function normalizeIncomingImageUris(payload: { uri?: unknown; uris?: unkn
   }
   if (out.length === 0) push(payload?.uri);
   return out;
+}
+
+/** Типы сообщений, которые сервер принимает. video_note — видеокружок (mp4 + кадр-превью). */
+export const MESSAGE_TYPES = ['text', 'image', 'audio', 'sticker', 'video_note'] as const;
+export type MessageType = (typeof MESSAGE_TYPES)[number];
+export function isKnownMessageType(type: unknown): type is MessageType {
+  return (MESSAGE_TYPES as readonly string[]).includes(String(type));
+}
+/** Кадр-превью есть только у видеокружка: строка с адресом, без мусора. */
+export function videoNoteThumbUri(type: unknown, raw: unknown): string | undefined {
+  if (type !== 'video_note' || typeof raw !== 'string') return undefined;
+  const v = raw.trim();
+  return v && v.length <= 1000 ? v : undefined;
 }
 
 const LEGACY_MESSAGE_ARRAYS: Array<{ field: string; type: 'text' | 'image' | 'audio' | 'sticker' }> = [
@@ -207,7 +221,7 @@ function legacyMessageToItem(friendshipId: mongoose.Types.ObjectId, message: any
   const from = asObjectId(message.from);
   const to = asObjectId(message.to);
   if (!from || !to) return null;
-  const type = ['text', 'image', 'audio', 'sticker'].includes(String(message.type))
+  const type = ['text', 'image', 'audio', 'sticker', 'video_note'].includes(String(message.type))
     ? String(message.type)
     : fallbackType;
 
@@ -229,6 +243,7 @@ function legacyMessageToItem(friendshipId: mongoose.Types.ObjectId, message: any
     stickerPackId: message.stickerPackId,
     stickerEmoji: message.stickerEmoji,
     stickerLabel: message.stickerLabel,
+    thumbUri: message.thumbUri,
     timestamp: asValidDate(message.timestamp),
     read: !!message.read,
     reactions:
@@ -369,6 +384,7 @@ function formatMessageForClient(msg: any) {
     stickerPackId: msg.stickerPackId,
     stickerEmoji: msg.stickerEmoji,
     stickerLabel: msg.stickerLabel,
+    thumbUri: msg.thumbUri,
     timestamp: msg.timestamp?.toISOString?.() || String(msg.timestamp),
     read: !!msg.read,
     reactions: Array.isArray(msg.reactions) ? msg.reactions.map((r: any) => ({ emoji: r.emoji, userId: String(r.userId) })) : [],
@@ -548,6 +564,7 @@ async function addMessageToFriendship(friendship: IFriendshipMessages, message: 
       stickerPackId: message.stickerPackId,
       stickerEmoji: message.stickerEmoji,
       stickerLabel: message.stickerLabel,
+      thumbUri: message.thumbUri,
       timestamp: message.timestamp,
       read: message.read
     };
@@ -579,6 +596,7 @@ async function addMessageToFriendship(friendship: IFriendshipMessages, message: 
       stickerPackId: message.stickerPackId,
       stickerEmoji: message.stickerEmoji,
       stickerLabel: message.stickerLabel,
+      thumbUri: message.thumbUri,
       timestamp: message.timestamp instanceof Date ? message.timestamp : new Date(message.timestamp),
       read: !!message.read,
     };
@@ -1166,9 +1184,11 @@ function registerMessageHandlers(io: Server, sock: Socket) {
   sock.on('message:send', async (payload: {
     to: string;
     text?: string;
-    type: 'text' | 'image' | 'audio' | 'sticker';
+    type: 'text' | 'image' | 'audio' | 'sticker' | 'video_note';
     uri?: string;
     uris?: string[];
+    /** Видеокружок: кадр-превью. */
+    thumbUri?: string;
     name?: string;
     size?: number;
     duration?: number;
@@ -1190,7 +1210,7 @@ function registerMessageHandlers(io: Server, sock: Socket) {
       if (!isOid(payload.to)) {
         return ack?.({ ok: false, error: 'invalid_to' });
       }
-      if (payload.type !== 'text' && payload.type !== 'image' && payload.type !== 'audio' && payload.type !== 'sticker') {
+      if (!isKnownMessageType(payload.type)) {
         return ack?.({ ok: false, error: 'invalid_type' });
       }
       if (isMessageTextTooLong(payload.text)) {
@@ -1203,6 +1223,10 @@ function registerMessageHandlers(io: Server, sock: Socket) {
         return ack?.({ ok: false, error: 'invalid_uri' });
       }
       const primaryUri = payload.type === 'image' ? imageUris[0] : payload.uri;
+      if (payload.type === 'video_note' && !primaryUri) {
+        return ack?.({ ok: false, error: 'invalid_uri' });
+      }
+      const thumbUri = videoNoteThumbUri(payload.type, payload.thumbUri);
 
       // Проверяем дружбу
       const isFriend = await areFriendsCached(me, payload.to);
@@ -1267,6 +1291,7 @@ function registerMessageHandlers(io: Server, sock: Socket) {
         stickerPackId: payload.stickerPackId,
         stickerEmoji: payload.stickerEmoji,
         stickerLabel: payload.stickerLabel,
+        thumbUri,
         timestamp: new Date(),
         read: false
       };
@@ -1296,6 +1321,7 @@ function registerMessageHandlers(io: Server, sock: Socket) {
         stickerPackId: payload.stickerPackId,
         stickerEmoji: payload.stickerEmoji,
         stickerLabel: payload.stickerLabel,
+        thumbUri,
         timestamp: message.timestamp.toISOString(),
         read: false
       };
@@ -1335,13 +1361,13 @@ function registerMessageHandlers(io: Server, sock: Socket) {
           } catch {}
 
           const unreadCount = await countUnreadTotal(payload.to);
-          const msgType = payload.type === 'image' ? 'image' : payload.type === 'audio' ? 'audio' : payload.type === 'sticker' ? 'sticker' : 'text';
+          const msgType = payload.type === 'image' ? 'image' : payload.type === 'audio' ? 'audio' : payload.type === 'sticker' ? 'sticker' : payload.type === 'video_note' ? 'video_note' : 'text';
           const albumCount = payload.type === 'image' ? imageUris.length : 0;
           const messagePreview =
             msgType === 'text' && typeof plainText === 'string' ? String(plainText).trim().slice(0, 80) : '';
           // Медиа: «[Фото]» и т.п. собираются в push.ts на языке каждого устройства.
           const previewKind =
-            msgType === 'image' ? 'photo' : msgType === 'sticker' ? 'sticker' : msgType === 'audio' ? 'voice' : undefined;
+            msgType === 'image' ? 'photo' : msgType === 'sticker' ? 'sticker' : msgType === 'audio' ? 'voice' : msgType === 'video_note' ? 'video' : undefined;
 
           await sendMessagePushToUser(String(payload.to), {
             type: 'message',

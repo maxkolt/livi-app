@@ -111,6 +111,7 @@ export const globalMessageStorage = {
             stickerPackId: message.stickerPackId,
             stickerEmoji: message.stickerEmoji,
             stickerLabel: message.stickerLabel,
+            ...(message.thumbUri ? { thumbUri: message.thumbUri } : {}),
             sender: isOwn ? "me" : "peer",
             from,
             to,
@@ -189,11 +190,14 @@ export type SendMessageResult = {
 export function sendMessage(payload: {
   to: string;
   text?: string;
-  type: "text" | "image" | "audio" | "video" | "document" | "sticker";
+  type: "text" | "image" | "audio" | "video" | "document" | "sticker" | "video_note";
   uri?: string;
   uris?: string[];
   /** Файл ещё не загружен: очередь загрузит его сама, когда будет сеть (вместо uri). */
   localUri?: string;
+  /** Видеокружок: кадр-превью — адрес на сервере или файл, который очередь загрузит сама. */
+  thumbUri?: string;
+  localThumbUri?: string;
   name?: string;
   size?: number;
   duration?: number;
@@ -240,6 +244,10 @@ export function sendMessage(payload: {
   }
   if (payload.localUri && !primaryUri) {
     socketPayload.localUri = payload.localUri;
+  }
+  if (messageType === "video_note") {
+    if (payload.thumbUri) socketPayload.thumbUri = payload.thumbUri;
+    else if (payload.localThumbUri) socketPayload.localThumbUri = payload.localThumbUri;
   }
   if (payload.replyTo?.id) {
     socketPayload.replyTo = { id: payload.replyTo.id, text: payload.replyTo.text, from: payload.replyTo.from };
@@ -403,13 +411,14 @@ export function fetchMessages(payload: {
         id: string;
         from: string;
         to: string;
-        type: "text" | "image" | "audio" | "sticker";
+        type: "text" | "image" | "audio" | "sticker" | "video_note";
         text?: string;
         uri?: string;
         stickerId?: string;
         stickerPackId?: string;
         stickerEmoji?: string;
         stickerLabel?: string;
+        thumbUri?: string;
         timestamp: string;
         read: boolean;
       }>;
@@ -503,7 +512,7 @@ export function fetchChatPreviews(withIds: string[]) {
     id: string;
     from: string;
     to: string;
-    type: "text" | "image" | "audio" | "sticker";
+    type: "text" | "image" | "audio" | "sticker" | "video_note";
     text?: string;
     uri?: string;
     uris?: string[];
@@ -511,6 +520,7 @@ export function fetchChatPreviews(withIds: string[]) {
     stickerPackId?: string;
     stickerEmoji?: string;
     stickerLabel?: string;
+    thumbUri?: string;
     timestamp: string;
     read?: boolean;
   };
@@ -587,13 +597,14 @@ type IncomingMessage = {
   id: string;
   from: string;
   to: string;
-  type: "text" | "image" | "audio" | "sticker";
+  type: "text" | "image" | "audio" | "sticker" | "video_note";
   text?: string;
   uri?: string;
   stickerId?: string;
   stickerPackId?: string;
   stickerEmoji?: string;
   stickerLabel?: string;
+  thumbUri?: string;
   timestamp: string;
   read: boolean;
 };
