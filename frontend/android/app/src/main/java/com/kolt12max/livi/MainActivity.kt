@@ -192,6 +192,7 @@ class MainActivity : ReactActivity() {
   fun showIncomingAnswerCover() {
     try {
       armIncomingAnswerCover = true
+      ReactFindViewUtil.removeViewListener(answerContentListener)
       val decor = window?.decorView as? ViewGroup ?: return
       val cover = incomingAnswerCoverView ?: run {
         val frame = android.widget.FrameLayout(this).apply {
@@ -224,9 +225,51 @@ class MainActivity : ReactActivity() {
   fun hideIncomingAnswerCover() {
     try {
       armIncomingAnswerCover = false
+      ReactFindViewUtil.removeViewListener(answerContentListener)
       incomingAnswerCoverView?.visibility = View.GONE
     } catch (e: Exception) {
       android.util.Log.w("MainActivity", "hideIncomingAnswerCover failed", e)
+    }
+  }
+
+  /**
+   * Звонящий: крышку снимаем, как только «Соединение…» (nativeID в IncomingAnswerConnectingCover)
+   * реально нарисовано, — не дожидаясь JS: он ещё ~3 с занят подключением, а по commit из JS
+   * рано — UI-поток ещё создаёт VideoCall, и под снятой крышкой мелькал прошлый экран.
+   */
+  private val answerContentListener = object : ReactFindViewUtil.OnViewFoundListener {
+    override fun getNativeId(): String = ANSWER_CONTENT_NATIVE_ID
+    override fun onViewFound(view: View) {
+      hideIncomingAnswerCoverWhenDrawn(view, 0, 0)
+    }
+  }
+
+  private fun hideIncomingAnswerCoverWhenDrawn(view: View, readyFrames: Int, waited: Int) {
+    if (incomingAnswerCoverView?.visibility != View.VISIBLE) return
+    android.view.Choreographer.getInstance().postFrameCallback {
+      val ready = view.isAttachedToWindow && view.isShown && view.width > 0 && view.height > 0
+      val nextReady = if (ready) readyFrames + 1 else 0
+      // Два кадра подряд на экране: «Соединение…» уже нарисовано под крышкой.
+      if (nextReady >= 2) {
+        hideIncomingAnswerCover()
+      } else if (waited < 180) {
+        hideIncomingAnswerCoverWhenDrawn(view, nextReady, waited + 1)
+      }
+    }
+  }
+
+  fun hideIncomingAnswerCoverWhenContentDrawn() {
+    try {
+      val decor = window?.decorView as? ViewGroup ?: return
+      ReactFindViewUtil.removeViewListener(answerContentListener)
+      val existing = ReactFindViewUtil.findView(decor, ANSWER_CONTENT_NATIVE_ID)
+      if (existing != null) {
+        hideIncomingAnswerCoverWhenDrawn(existing, 0, 0)
+      } else {
+        ReactFindViewUtil.addViewListener(answerContentListener)
+      }
+    } catch (e: Exception) {
+      android.util.Log.w("MainActivity", "hideIncomingAnswerCoverWhenContentDrawn failed", e)
     }
   }
 
@@ -1641,6 +1684,17 @@ class MainActivity : ReactActivity() {
       val act = lastResumedInstance
       if (act != null && !act.isFinishing && !act.isDestroyed) {
         act.runOnUiThread { act.hideShareCover() }
+      }
+    }
+
+    /** nativeID корня «Соединение…» (IncomingAnswerConnectingCover). */
+    private const val ANSWER_CONTENT_NATIVE_ID = "incoming-answer-connecting-cover"
+
+    @JvmStatic
+    fun hideIncomingAnswerCoverWhenContentDrawnOnMainIfPossible() {
+      val act = lastResumedInstance
+      if (act != null && !act.isFinishing && !act.isDestroyed) {
+        act.runOnUiThread { act.hideIncomingAnswerCoverWhenContentDrawn() }
       }
     }
 

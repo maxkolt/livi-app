@@ -362,11 +362,27 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
         if (typeNorm == "call_accepted" && callId != null) {
             vLog("FCM call_accepted: closing outgoing, MainActivity callId=$callId")
             WarmConnections.warm(this, "fcm_call_accepted", 3)
-            // 1) Broadcast — если OutgoingCallActivity на экране, закроется по нему
             val closeOutgoing = Intent(OutgoingCallActivity.ACTION_CLOSE_OUTGOING_CALL).apply {
                 setPackage(packageName)
                 putExtra(OutgoingCallActivity.EXTRA_CALL_ID, callId)
             }
+            // Outgoing-оверлей поверх живого Main: JS сам закроет его под шторкой «Соединение…».
+            // FCM приходит на ~0.35 с раньше сокета — закрыть здесь значит на ~1 с открыть
+            // экран, с которого звонили. Только глушим гудки; JS не закрыл за 4 с — закрываем сами.
+            if (OutgoingCallOverlay.isVisible && isAppProcessForeground()) {
+                LiviAppModule.setPendingCallAcceptedCallId(callId)
+                LiviOutgoingCallService.silencePlayerOnly()
+                val appContext = applicationContext
+                Handler(Looper.getMainLooper()).postDelayed({
+                    if (!OutgoingCallOverlay.isVisible) return@postDelayed
+                    Log.w(TAG, "FCM call_accepted: JS did not close outgoing in 4s, closing natively callId=$callId")
+                    appContext.sendBroadcast(closeOutgoing)
+                    LiviOutgoingCallService.stop(appContext, callId)
+                }, OUTGOING_CLOSE_FALLBACK_MS)
+                Log.d(TAG, "FCM call_accepted: outgoing overlay left to JS, ringback silenced callId=$callId")
+                return
+            }
+            // 1) Broadcast — если OutgoingCallActivity на экране, закроется по нему
             sendBroadcast(closeOutgoing)
             LiviOutgoingCallService.stop(this, callId)
             LiviAppModule.setPendingCallAcceptedCallId(callId)
@@ -715,6 +731,8 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
 
     companion object {
         private const val TAG = "LiviFCM"
+        /** call_accepted при живом Main: столько ждём, что JS сам закроет outgoing-оверлей. */
+        private const val OUTGOING_CLOSE_FALLBACK_MS = 4_000L
         /** ID канала: HIGH чтобы full-screen intent срабатывал (нативный экран поверх домашнего). */
         const val CHANNEL_ID_CALLS = "livi_incoming_call_v4"
         /** Канал входящего без звука/вибрации уведомления: звук и вибрация запускаются из кода (системная мелодия звонка). */

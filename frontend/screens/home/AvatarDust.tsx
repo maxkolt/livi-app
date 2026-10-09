@@ -32,7 +32,6 @@ import {
   type SkRSXform,
 } from '@shopify/react-native-skia';
 import { logger } from '../../utils/logger';
-import { drawFisheyePhoto } from '../../utils/fisheyeLens';
 
 /**
  * «Пыль» аватара на радаре Поиска: палец проводит по аватару, тот рассыпается
@@ -347,8 +346,7 @@ export async function loadEncodedImage(uri: string): Promise<SkImage | null> {
 
 /**
  * Повторяет раскладку AvatarImage/HomeCenterProfile: подложка во весь круг,
- * фото «cover» в круге внутри рамки — под той же линзой «рыбий глаз», что и
- * у AvatarImage (utils/avatarFisheye), волосяной ободок и градиентное кольцо.
+ * фото «cover» в круге внутри рамки, волосяной ободок и градиентное кольцо.
  */
 function renderPhotoTexture(
   photo: SkImage,
@@ -389,7 +387,6 @@ function renderPhotoTexture(
     null,
   );
   canvas.restore();
-  drawFisheyePhoto(canvas, photo, inset, inset, p, pd);
 
   const colors = source.frameColors;
   if (inset > 0 && colors && colors.length > 0) {

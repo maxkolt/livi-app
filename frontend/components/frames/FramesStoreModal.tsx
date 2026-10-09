@@ -8,7 +8,6 @@ import Carousel from 'react-native-reanimated-carousel';
 import { Extrapolation, interpolate } from 'react-native-reanimated';
 import AdaptiveText from '../AdaptiveText';
 import { t } from '../../utils/i18n';
-import { useFisheyeAvatarAsset } from '../../utils/avatarFisheye';
 import { useLang } from '../../store/lang';
 import FitText from '../FitText';
 import { FullScreenPortal } from '../FullScreenPortal';
@@ -190,8 +189,6 @@ function ChatBackgroundCard({
 function FrameCoverCard({ item, size, onLoad }: { item: FrameItem; size: number; onLoad?: () => void }) {
   const ringWidth = Math.max(2, Math.round(size * 0.025));
   const avatarSize = size - ringWidth * 2;
-  // Витринное фото — под той же линзой «рыбий глаз», что и все аватары.
-  const showcase = useFisheyeAvatarAsset(SHOWCASE_AVATAR);
 
 
   return (
@@ -209,29 +206,18 @@ function FrameCoverCard({ item, size, onLoad }: { item: FrameItem; size: number;
           justifyContent: 'center',
         }}
       >
-        {showcase ? (
-          <ExpoImage
-            source={showcase}
-            style={{
-              width: avatarSize,
-              height: avatarSize,
-              borderRadius: avatarSize / 2,
-              backgroundColor: SHOWCASE_AVATAR_BG,
-            }}
-            contentFit="cover"
-            cachePolicy="memory-disk"
-            onLoad={onLoad}
-          />
-        ) : (
-          <View
-            style={{
-              width: avatarSize,
-              height: avatarSize,
-              borderRadius: avatarSize / 2,
-              backgroundColor: SHOWCASE_AVATAR_BG,
-            }}
-          />
-        )}
+        <ExpoImage
+          source={SHOWCASE_AVATAR}
+          style={{
+            width: avatarSize,
+            height: avatarSize,
+            borderRadius: avatarSize / 2,
+            backgroundColor: SHOWCASE_AVATAR_BG,
+          }}
+          contentFit="cover"
+          cachePolicy="memory-disk"
+          onLoad={onLoad}
+        />
       </LinearGradient>
     </View>
   );

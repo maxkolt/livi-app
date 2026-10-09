@@ -4,7 +4,6 @@ import { StyleSheet, View, Text, StyleProp, ViewStyle, TextStyle, ImageStyle } f
 import { Image as ExpoImage } from 'expo-image';
 import Svg, { Circle, Defs, LinearGradient as SvgLinearGradient, Stop } from 'react-native-svg';
 import { useResolvedImageUri } from '../hooks/useResolvedImageUri';
-import { useFisheyeAvatarUri } from '../utils/avatarFisheye';
 import { getAvatarImageProps } from '../utils/imageOptimization';
 import { getAvatarUri } from '../utils/avatarCache';
 import { useUserActiveFrame } from '../utils/cosmetics';
@@ -245,9 +244,6 @@ const AvatarImage = memo<AvatarImageProps>(({
         ? 'empty-wait'
         : 'empty';
 
-  // Показываем копию под линзой «рыбий глаз»; наружу (рассыпание Поиска) — исходник.
-  const shownUri = useFisheyeAvatarUri(displayUri);
-
   useEffect(() => {
     if (!onDisplayChange) return;
     onDisplayChange(
@@ -399,10 +395,10 @@ const AvatarImage = memo<AvatarImageProps>(({
           zIndex: 2,
         }}
       >
-        {shownUri ? (
+        {displayUri ? (
           <ExpoImage
             key={key}
-            {...getAvatarImageProps(shownUri, key)}
+            {...getAvatarImageProps(displayUri, key)}
             onLoad={() => {
               try {
                 onDisplayLoad?.();

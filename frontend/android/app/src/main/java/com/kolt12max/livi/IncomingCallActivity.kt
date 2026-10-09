@@ -67,7 +67,6 @@ class IncomingCallActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         ScreenOrientationHelper.applyPhonePortraitTabletAny(this)
         super.onCreate(savedInstanceState)
-        EdgeToEdgeHelper.apply(this)
         returnMainOnDismiss = intent.getBooleanExtra(EXTRA_RETURN_MAIN_ON_DISMISS, false)
         val callIdFromIntent = intent.getStringExtra(EXTRA_CALL_ID) ?: ""
         // FCM call_canceled может запустить активность с флагом «только закрыть» (приложение в фоне/убито — broadcast не дошёл)
@@ -118,6 +117,11 @@ class IncomingCallActivity : AppCompatActivity() {
         }
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD or WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED)
         window.setFormat(PixelFormat.RGBA_8888)
+        // Keyguard flags can make SystemUI restore its contrast scrim under the
+        // 3-button navigation bar. Apply edge-to-edge only after the window is
+        // fully configured so the call scene stays visible behind the buttons,
+        // exactly like on OutgoingCallActivity.
+        EdgeToEdgeHelper.apply(this)
         setContentView(R.layout.activity_incoming_call)
         findViewById<View>(R.id.incoming_call_content)?.let { EdgeToEdgeHelper.applySystemBarInsets(it) }
         // Пауза + transient media focus на время входящего/звонка (рингтон остаётся на STREAM_RING).
@@ -244,6 +248,9 @@ class IncomingCallActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        // Some OEMs re-apply the keyguard navigation-bar scrim while resuming a
+        // full-screen intent. Reassert the transparent, non-contrast system bars.
+        EdgeToEdgeHelper.apply(this)
         if (currentCallId.isNotEmpty() && LiviOngoingCallHelper.shouldSuppressStaleIncoming(this, currentCallId)) {
             closeIncomingScreen(currentCallId)
             return

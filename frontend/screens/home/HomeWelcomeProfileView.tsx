@@ -54,7 +54,6 @@ import {
 } from './WelcomeProfileListUi';
 import type { HomeStyles } from './styles';
 import { APP_INPUT_MAX_FONT_SIZE_MULTIPLIER } from '../../utils/accessibilityTypography';
-import { useFisheyeAvatarUri } from '../../utils/avatarFisheye';
 
 const SUPPORT_EMAIL = '12345kolt@gmail.com';
 const SUPPORT_EMAIL_2 = 'kolt12max@mail.ru';
@@ -604,10 +603,8 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
   const hasLocalAvatarPreview = avatarUri && /^(file|content|ph|assets-library):\/\//i.test(avatarUri);
   /** Урну показываем, только когда есть что удалять. */
   const hasAvatarPhoto = !!hasLocalAvatarPreview || hasProfilePhoto(avatarUri, myAvatarVer);
-  // Только что выбранное фото идёт мимо AvatarImage — линзу ему даём здесь.
-  const localPreviewPhoto = useFisheyeAvatarUri(
-    !(myUserId && hasActiveFrame) && hasLocalAvatarPreview ? avatarUri : '',
-  );
+  // Только что выбранное фото идёт мимо AvatarImage.
+  const localPreviewPhoto = !(myUserId && hasActiveFrame) && hasLocalAvatarPreview ? avatarUri : '';
 
   const avatarInner = (
     <View

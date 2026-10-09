@@ -6,7 +6,6 @@ import AdaptiveText from '../../components/AdaptiveText';
 import { cosmeticNameKey, setActiveCosmetic, useCosmetics, type CosmeticKind } from '../../utils/cosmetics';
 import { t, type Lang } from '../../utils/i18n';
 import { useLang } from '../../store/lang';
-import { useFisheyeAvatarAsset } from '../../utils/avatarFisheye';
 import { LIVI, WELCOME_GLASS_BORDER, WELCOME_GLASS_SURFACE, WELCOME_MUTED_TEXT } from './constants';
 
 const SHOWCASE_AVATAR = require('../../assets/frames/showcase-avatar.jpg');
@@ -38,7 +37,6 @@ function cosmeticName(itemId: string, lang: Lang): string {
 }
 
 function FramePreview({ itemId }: { itemId: string }) {
-  const showcase = useFisheyeAvatarAsset(SHOWCASE_AVATAR);
   const colors = FRAME_COLORS[itemId];
   if (!colors) return <View style={styles.emptyFrame} />;
   return (
@@ -48,11 +46,7 @@ function FramePreview({ itemId }: { itemId: string }) {
       end={{ x: 1, y: 1 }}
       style={styles.frameSwatch}
     >
-      {showcase ? (
-        <ExpoImage source={showcase} style={styles.frameAvatar} contentFit="cover" cachePolicy="memory-disk" />
-      ) : (
-        <View style={styles.frameAvatar} />
-      )}
+      <ExpoImage source={SHOWCASE_AVATAR} style={styles.frameAvatar} contentFit="cover" cachePolicy="memory-disk" />
     </LinearGradient>
   );
 }

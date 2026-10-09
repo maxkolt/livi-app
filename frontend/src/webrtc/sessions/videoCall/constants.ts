@@ -40,6 +40,19 @@ export const REMOTE_AUDIO_SILENCE_UI_MS = 1_800;
  */
 export const REMOTE_MEDIA_PACKET_STALL_MS = 6_000;
 export const REMOTE_AUDIO_PACKET_POLL_MS = 700;
+/**
+ * Видео партнёра стоит, хотя мы его ждём, а комната «connected»: после смены сети (VPN off)
+ * приём оставался на мёртвом пути ~20 с, пока SFU сам не присылал leave-reconnect. Столько
+ * ждём и просим LiveKit resume (ICE restart) сами.
+ */
+export const REMOTE_VIDEO_STALL_RESUME_MS = 4_000;
+/** Такой resume — не чаще и не больше нескольких за звонок: у партнёра может быть своя беда. */
+export const REMOTE_VIDEO_STALL_RESUME_COOLDOWN_MS = 20_000;
+export const REMOTE_VIDEO_STALL_RESUME_MAX = 3;
+/** Партнёр сам сообщил о потере сети — наш resume ему не поможет. */
+export const PEER_NETWORK_DOWN_RESUME_SKIP_MS = 15_000;
+/** livekit.ReconnectReason.RR_SUBSCRIBER_FAILED — сам enum livekit-client не экспортирует. */
+export const LIVEKIT_RR_SUBSCRIBER_FAILED = 3;
 
 /** `1|true|yes|on` → true, пустая строка → fallback. Любое другое значение → false. */
 export function parsePublicFlag(value: string | undefined, fallback: boolean): boolean {

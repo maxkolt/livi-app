@@ -554,6 +554,14 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     }
   }
 
+  /** Снять нативную крышку accept, когда «Соединение…» нарисовано (без ожидания JS). */
+  @ReactMethod
+  fun clearIncomingAnswerNativeCoverWhenContentDrawn() {
+    Handler(Looper.getMainLooper()).post {
+      MainActivity.hideIncomingAnswerCoverWhenContentDrawnOnMainIfPossible()
+    }
+  }
+
   /** Показать нативную крышку accept (#0A0C14) без подъёма Main (in-app / уже foreground). */
   @ReactMethod
   fun showIncomingAnswerNativeCover() {

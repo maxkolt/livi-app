@@ -17,7 +17,6 @@ import { NativeBlurBackdrop, type BackdropSources } from '../../BackdropBlur';
 import { AppOverlay } from '../../AppOverlay';
 import { StageGradient } from '../../../screens/home/WelcomeStageBackground';
 import { useResolvedImageUri } from '../../../hooks/useResolvedImageUri';
-import { useFisheyeAvatarUri } from '../../../utils/avatarFisheye';
 import { displayAvatarLetter } from '../../../screens/home/friendHelpers';
 import {
   HOME_NAV_TAB_ACTIVE,
@@ -158,7 +157,6 @@ export function CallScreenChrome({
 }: Props) {
   const [moreOpen, setMoreOpen] = useState(false);
   const [resolvedUri, ready] = useResolvedImageUri(partnerAvatarUri ?? '');
-  const partnerPhoto = useFisheyeAvatarUri(ready ? resolvedUri : '');
   const letter = displayAvatarLetter(partnerName);
   const locked = controlsLocked;
   const holdText = typeof holdLine === 'string' ? holdLine.trim() : '';
@@ -202,12 +200,7 @@ export function CallScreenChrome({
           <View style={styles.partnerChip} pointerEvents="none">
             <View style={styles.avatarWrap}>
               {ready && resolvedUri ? (
-                partnerPhoto ? (
-                  <Image source={{ uri: partnerPhoto }} style={styles.avatar} />
-                ) : (
-                  // Фото под линзой ещё готовится — пустой круг, без мелькания буквы.
-                  <View style={styles.avatar} />
-                )
+                <Image source={{ uri: resolvedUri }} style={styles.avatar} />
               ) : (
                 <View style={[styles.avatar, styles.avatarFallback]}>
                   <Text style={styles.avatarLetter}>{letter || '—'}</Text>

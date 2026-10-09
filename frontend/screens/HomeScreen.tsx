@@ -37,7 +37,6 @@ import { PinchGestureHandler, State } from 'react-native-gesture-handler';
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { Image as ExpoImage } from 'expo-image';
 import { getAvatarImageProps, forceImageRefresh } from '../utils/imageOptimization';
-import { useFisheyeAvatarUri } from '../utils/avatarFisheye';
 import { useResolvedImageUri } from '../hooks/useResolvedImageUri';
 import SplashLoader from '../components/SplashLoader';
 import AvatarImage from '../components/AvatarImage';
@@ -869,8 +868,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   // На Android в модалке data: URI нужно показывать через разрешённый file: (иначе Glide/ExpoImage не покажут)
   const [modalAvatarResolvedUri] = useResolvedImageUri(avatarModalVisible ? modalAvatarUri : '');
   const modalAvatarDisplayUri = (Platform.OS === 'android' && /^data:/i.test(modalAvatarUri)) ? modalAvatarResolvedUri : modalAvatarUri;
-  // Полноэкранный аватар — под той же линзой «рыбий глаз», что и все остальные.
-  const modalAvatarLensed = useFisheyeAvatarUri(avatarModalVisible ? modalAvatarDisplayUri : '');
 
   // Полноэкранный аватар — слой над главной: «Назад» сперва закрывает его.
   useOverlayBackHandler(avatarModalVisible, () => setAvatarModalVisible(false));
@@ -5878,12 +5875,10 @@ const handleClearNick = useCallback(async () => {
               >
                 {modalAvatarUri ? (
                   modalAvatarDisplayUri ? (
-                    modalAvatarLensed ? (
-                      <ExpoImage
-                        {...getAvatarImageProps(modalAvatarLensed, `avatar_modal_${resolvedUserId}_${myAvatarVer}`)}
-                        style={{ width: avatarModalSize, height: avatarModalSize }}
-                      />
-                    ) : null
+                    <ExpoImage
+                      {...getAvatarImageProps(modalAvatarDisplayUri, `avatar_modal_${resolvedUserId}_${myAvatarVer}`)}
+                      style={{ width: avatarModalSize, height: avatarModalSize }}
+                    />
                   ) : (
                   <View style={{ width: avatarModalSize, height: avatarModalSize, borderRadius: avatarModalSize / 2, backgroundColor: 'rgba(255,255,255,0.06)', alignItems: 'center', justifyContent: 'center' }}>
                     <Text style={{ color: LIVI.titan, fontSize: avatarModalSize * 0.35, fontWeight: '500' }}>{displayAvatarLetter(savedNick)}</Text>

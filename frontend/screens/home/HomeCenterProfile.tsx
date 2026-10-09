@@ -18,7 +18,6 @@ import {
 import { displayAvatarLetter, displayName } from './friendHelpers';
 import type { HomeStyles } from './styles';
 import { useUserActiveFrame } from '../../utils/cosmetics';
-import { useFisheyeAvatarUri } from '../../utils/avatarFisheye';
 
 
 function isDirectAvatarUri(uri: string): boolean {
@@ -235,7 +234,6 @@ function HomeCenterProfileInner({
           : hasDirectAvatarUri && resolvedAvatarReady
             ? resolvedAvatarUri
             : '';
-  const plainPhoto = useFisheyeAvatarUri(plainPhotoUri);
 
   const avatarInner = (
     <View
@@ -267,9 +265,9 @@ function HomeCenterProfileInner({
           onDisplayChange={reportAvatarDisplay}
         />
       ) : isLocalPreview ? (
-        plainPhoto ? (
+        plainPhotoUri ? (
           <ExpoImage
-            source={{ uri: plainPhoto }}
+            source={{ uri: plainPhotoUri }}
             style={styles.centerAvatarImg}
             cachePolicy="none"
             onLoad={radarStage ? onSearchAvatarDecoded : undefined}
@@ -290,9 +288,9 @@ function HomeCenterProfileInner({
           onDisplayChange={reportAvatarDisplay}
         />
       ) : hasDirectAvatarUri && resolvedAvatarReady ? (
-        plainPhoto ? (
+        plainPhotoUri ? (
           <ExpoImage
-            source={{ uri: plainPhoto }}
+            source={{ uri: plainPhotoUri }}
             style={styles.centerAvatarImg}
             cachePolicy={/^https?:\/\//i.test(avatarUri) ? 'memory-disk' : 'none'}
             onLoad={radarStage ? onSearchAvatarDecoded : undefined}

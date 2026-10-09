@@ -66,7 +66,6 @@ import { Audio } from 'expo-av';
 import { getFull, peekFull, putFull, putThumb } from '../utils/avatarCache';
 import { BlurView } from 'expo-blur';
 import { getAvatarImageProps } from '../utils/imageOptimization';
-import { useFisheyeAvatarUri } from '../utils/avatarFisheye';
 import { useResolvedImageUri } from '../hooks/useResolvedImageUri';
 import { resolveDataUriForAndroid } from '../utils/dataUriToFileUri';
 import { ChatMessageItem } from './chat/ChatMessageItem';
@@ -1507,8 +1506,6 @@ export default function ChatScreen({ route, navigation }: Props) {
       : fullAvatarUri) ||
     '';
   const modalAvatarExpected = !!modalAvatarUri || !!fullAvatarUri || peerAvatarVerState > 0;
-  // Полноэкранный аватар — под той же линзой «рыбий глаз», что и все остальные.
-  const modalAvatarLensed = useFisheyeAvatarUri(avatarModalVisible ? modalAvatarInstantUri : '');
 
   useOverlayBackHandler(avatarModalVisible, () => setAvatarModalVisible(false));
 
@@ -4047,12 +4044,10 @@ export default function ChatScreen({ route, navigation }: Props) {
               >
                 {modalAvatarUri ? (
                   modalAvatarInstantUri ? (
-                    modalAvatarLensed ? (
-                      <ExpoImage
-                        {...getAvatarImageProps(modalAvatarLensed, `avatar_modal_peer_${peerId}_${peerAvatarVerState}`)}
-                        style={{ width: avatarModalSize, height: avatarModalSize }}
-                      />
-                    ) : null
+                    <ExpoImage
+                      {...getAvatarImageProps(modalAvatarInstantUri, `avatar_modal_peer_${peerId}_${peerAvatarVerState}`)}
+                      style={{ width: avatarModalSize, height: avatarModalSize }}
+                    />
                   ) : (
                     <View style={{ width: avatarModalSize, height: avatarModalSize, borderRadius: avatarModalSize / 2, backgroundColor: 'rgba(255,255,255,0.06)', alignItems: 'center', justifyContent: 'center' }}>
                       <Text style={{ color: LIVI.titan, fontSize: avatarModalSize * 0.35, fontWeight: '500' }}>{headerInitial}</Text>
@@ -4062,12 +4057,10 @@ export default function ChatScreen({ route, navigation }: Props) {
                   modalAvatarExpected ? (
                     <View style={{ width: avatarModalSize, height: avatarModalSize, borderRadius: avatarModalSize / 2, backgroundColor: 'rgba(255,255,255,0.06)', alignItems: 'center', justifyContent: 'center' }}>
                       {modalAvatarInstantUri ? (
-                        modalAvatarLensed ? (
-                          <ExpoImage
-                            {...getAvatarImageProps(modalAvatarLensed, `avatar_modal_peer_${peerId}_${peerAvatarVerState}`)}
-                            style={{ width: avatarModalSize, height: avatarModalSize }}
-                          />
-                        ) : null
+                        <ExpoImage
+                          {...getAvatarImageProps(modalAvatarInstantUri, `avatar_modal_peer_${peerId}_${peerAvatarVerState}`)}
+                          style={{ width: avatarModalSize, height: avatarModalSize }}
+                        />
                       ) : (
                         <Text style={{ color: LIVI.titan, fontSize: avatarModalSize * 0.35, fontWeight: '500' }}>{headerInitial}</Text>
                       )}

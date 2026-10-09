@@ -377,6 +377,17 @@ export function clearIncomingAnswerNativeCover(): void {
   } catch {}
 }
 
+/**
+ * Снять нативную крышку accept, как только «Соединение…» нарисовано. Старая нативная
+ * сборка метода не знает — тогда крышка просто живёт до VideoCall.onLayout, как раньше.
+ */
+export function clearIncomingAnswerNativeCoverWhenContentDrawn(): void {
+  if (Platform.OS !== 'android') return;
+  try {
+    NativeModules.LiviAppModule?.clearIncomingAnswerNativeCoverWhenContentDrawn?.();
+  } catch {}
+}
+
 /** Показать нативную крышку accept без подъёма Main. */
 export function showIncomingAnswerNativeCover(): void {
   if (Platform.OS !== 'android') return;

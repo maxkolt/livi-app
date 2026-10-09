@@ -79,6 +79,7 @@ import {
   bringMainActivityToFront,
   bringMainActivityToFrontForIncomingAnswer,
   clearIncomingAnswerNativeCover,
+  clearIncomingAnswerNativeCoverWhenContentDrawn,
   showIncomingAnswerNativeCover,
   requestExitSystemPiPSoft,
   dismissSystemPiPAfterCallEnded,
@@ -472,6 +473,8 @@ function AppContent() {
   const incomingAnswerCoverCallIdRef = React.useRef<string | null>(null);
   const incomingAnswerCoverFlushScheduledRef = React.useRef(false);
   const incomingAnswerNativeClearedForContentRef = React.useRef(false);
+  /** Звонящий: Main уже на экране — native solid снимаем, как только нарисовано «Соединение…». */
+  const incomingAnswerCoverRevealEarlyRef = React.useRef(false);
   const incomingAnswerCoverGenRef = React.useRef(0);
   const incomingAnswerTransitionTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const returnFromNotifRetryTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -520,6 +523,7 @@ function AppContent() {
     incomingAnswerCoverBringMainDoneRef.current = true;
     incomingAnswerCoverCallIdRef.current = null;
     incomingAnswerCoverFlushScheduledRef.current = false;
+    incomingAnswerCoverRevealEarlyRef.current = false;
     // Идемпотентно: второй clear (remount onLayout) не должен снова бить native/perf.
     if (!incomingAnswerCoverShownRef.current) {
       setIncomingAnswerCover(false);
@@ -559,6 +563,21 @@ function AppContent() {
     }
   }, []);
   /**
+   * Звонящий: Main уже на переднем плане (Outgoing был поверх него) — снимаем native solid,
+   * как только «Соединение…» нарисовано. Иначе до VideoCall.onLayout (2–3 с) был пустой фон.
+   * Снимает сам native по nativeID: JS эти секунды занят подключением, а по JS-commit рано —
+   * UI-поток ещё создаёт VideoCall, и под снятой крышкой мелькал список звонков.
+   * Callee не трогаем: там Main поднимается из-под Incoming, и ранний clear давал вспышку Home.
+   */
+  const tryRevealIncomingAnswerConnectingCover = React.useCallback(() => {
+    if (!incomingAnswerCoverShownRef.current || !incomingAnswerCoverRevealEarlyRef.current) return;
+    if (!incomingAnswerCoverBringMainDoneRef.current || AppState.currentState !== 'active') return;
+    if (incomingAnswerNativeClearedForContentRef.current) return;
+    incomingAnswerNativeClearedForContentRef.current = true;
+    try { clearIncomingAnswerNativeCoverWhenContentDrawn(); } catch {}
+    try { markCallPerf('answer_cover_native_clear_when_drawn'); } catch {}
+  }, []);
+  /**
    * Крышка живёт в MainActivity. Снимать только когда:
    * 1) VideoCall SafeArea onLayout (source=videocall_layout),
    * 2) AppState active,
@@ -595,17 +614,20 @@ function AppContent() {
   const markIncomingAnswerCoverBringMainDone = React.useCallback(() => {
     incomingAnswerCoverBringMainDoneRef.current = true;
     try { markCallPerf('answer_cover_bring_main_done'); } catch {}
+    tryRevealIncomingAnswerConnectingCover();
     tryFlushIncomingAnswerCover();
-  }, [tryFlushIncomingAnswerCover]);
+  }, [tryFlushIncomingAnswerCover, tryRevealIncomingAnswerConnectingCover]);
   // Main на переднем плане: только flush JS-крышки при готовности VideoCall.
   // Native stage-cover НЕ снимаем здесь — иначе первый кадр Main = Home.
   React.useEffect(() => {
     if (!incomingAnswerCover) return;
     const onAppState = (state: string) => {
       if (state !== 'active') return;
+      tryRevealIncomingAnswerConnectingCover();
       tryFlushIncomingAnswerCover();
     };
     if (AppState.currentState === 'active') {
+      tryRevealIncomingAnswerConnectingCover();
       tryFlushIncomingAnswerCover();
     }
     const sub = AppState.addEventListener('change', onAppState);
@@ -614,13 +636,15 @@ function AppContent() {
         sub.remove();
       } catch {}
     };
-  }, [incomingAnswerCover, tryFlushIncomingAnswerCover]);
+  }, [incomingAnswerCover, tryFlushIncomingAnswerCover, tryRevealIncomingAnswerConnectingCover]);
   const showIncomingAnswerCover = React.useCallback((opts?: {
     partnerName?: string;
     peerUserId?: string;
     callId?: string;
     /** Android incoming: не снимать крышку до bringMain. */
     awaitBringMain?: boolean;
+    /** Звонящий: показать «Соединение…» сразу после отрисовки, не ждать VideoCall.onLayout. */
+    revealConnectingEarly?: boolean;
   }) => {
     const meta = resolveIncomingAnswerCoverMeta(opts);
     if (opts?.peerUserId) {
@@ -637,6 +661,7 @@ function AppContent() {
     incomingAnswerCoverCallIdRef.current = String(opts?.callId || '').trim() || null;
     incomingAnswerCoverBringMainDoneRef.current = opts?.awaitBringMain === true ? false : true;
     incomingAnswerNativeClearedForContentRef.current = false;
+    incomingAnswerCoverRevealEarlyRef.current = opts?.revealConnectingEarly === true;
     for (const t of incomingAnswerCoverDisarmTimersRef.current) {
       try { clearTimeout(t); } catch {}
     }
@@ -670,6 +695,7 @@ function AppContent() {
       incomingAnswerCoverCallIdRef.current = null;
       incomingAnswerCoverFlushScheduledRef.current = false;
       incomingAnswerNativeClearedForContentRef.current = false;
+      incomingAnswerCoverRevealEarlyRef.current = false;
       setIncomingAnswerCover(false);
       setIncomingAnswerCoverMeta(null);
       try { clearIncomingAnswerNativeCover(); } catch {}
@@ -4500,6 +4526,14 @@ function AppContent() {
             // Как у callee: immediate Main + cover, без 500ms debounce bringMainActivityToFront
             // (иначе Outgoing→audio у инициатора дольше, чем Incoming→audio у принявшего).
             if (Platform.OS === 'android') {
+              // Outgoing был оверлеем поверх уже открытого Main — поднимать нечего, а bringMain
+              // с крышкой (onNewIntent) снова накрывал «Соединение…» сплошным фоном до
+              // VideoCall.onLayout (~3 с). Отдельная OutgoingCallActivity (фон/lock) — Main не active.
+              if (AppState.currentState === 'active') {
+                logger.info('[App] caller Main already in front — skip bringMain with cover', { callId });
+                markIncomingAnswerCoverBringMainDone();
+                return;
+              }
               try {
                 logger.info('[App] 📱 bringMainActivityToFrontForIncomingAnswer (call:accepted, caller)');
                 bringMainActivityToFrontForIncomingAnswer();
@@ -4640,6 +4674,7 @@ function AppContent() {
                   callId: callId || undefined,
                   // Caller: Main под Outgoing — не снимать крышку до bringMain (как у callee).
                   awaitBringMain: isCaller && Platform.OS === 'android',
+                  revealConnectingEarly: isCaller,
                 });
                 // Caller Android: закрыть Outgoing сразу после cover — Main с крышкой на экране,
                 // иначе onLayout VideoCall ждёт, пока Outgoing сверху (~1–2с).

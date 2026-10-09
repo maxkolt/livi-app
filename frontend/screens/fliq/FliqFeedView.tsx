@@ -47,7 +47,7 @@ import { useDigitalMediumFont } from '../home/brandFont';
 import { BlurListSource } from '../../components/BackdropBlur';
 import { useOverlayBackHandler } from '../../components/AppOverlay';
 import { logger } from '../../utils/logger';
-import { FliqYoutubePlayer, type FliqPlayMode } from './FliqPlayer';
+import { FliqYoutubePlayer, type FliqPlayMode, type FliqYoutubePlayerHandle } from './FliqPlayer';
 import {
   fetchFliqFeed,
   flushFliqEvents,
@@ -123,6 +123,8 @@ export function FliqFeedView({ active, lang, bottomInset, topInset }: FliqFeedVi
   const [heldId, setHeldId] = useState<string | null>(null);
   /** Ролик на экране уже показал первый кадр — можно подгружать следующий, не отнимая у него сеть. */
   const [startedId, setStartedId] = useState<string | null>(null);
+  const startedIdRef = useRef(startedId);
+  startedIdRef.current = startedId;
   /** Готовые скрытые ролики: второй следующий запускаем только после ближайшего, без конкуренции за сеть. */
   const [bufferedIds, setBufferedIds] = useState<ReadonlySet<string>>(() => new Set());
   /**
@@ -145,6 +147,14 @@ export function FliqFeedView({ active, lang, bottomInset, topInset }: FliqFeedVi
   }, [hydrateTopics, hydrateSound, hydrateSaved]);
 
   useOverlayBackHandler(active && savedOpen, () => setSavedOpen(false));
+
+  // Ушли на другую вкладку посреди ролика — по возвращении он стоит на паузе там же,
+  // как после своей паузы: дальше по нажатию. Ещё не заигравший ролик просто запустится.
+  useEffect(() => {
+    if (active) return;
+    const id = itemsRef.current[activeIndexRef.current]?.id;
+    if (id && id === startedIdRef.current) setHeldId(id);
+  }, [active]);
 
   useEffect(() => {
     if (active) {
@@ -371,11 +381,13 @@ export function FliqFeedView({ active, lang, bottomInset, topInset }: FliqFeedVi
   const pageH = Math.max(0, viewportH - bottomInset);
   const sideInset = tablet ? 24 : 14;
   const panelH = tablet ? 72 : 64;
-  const cardMaxH = Math.max(0, pageH - panelH - 16);
+  const cardMaxH = Math.max(0, pageH - panelH - FLIQ_PROGRESS_ROW_H - 8);
   const cardW = Math.max(0, Math.min(width - sideInset * 2, Math.floor((cardMaxH * 9) / 16)));
   const cardH = Math.floor((cardW * 16) / 9);
   const btnSize = tablet ? 44 : compact ? 32 : GLASS_HEADER_BTN;
   const headerH = tablet ? 56 : compact ? 40 : 48;
+  // Кнопки шапки чуть ближе к центру, чем края карточки.
+  const headerInset = sideInset + (tablet ? 14 : 10);
   // Карточка ролика в покое — там, откуда идёт свет (страница: карточка, полоса прогресса, панель — по центру).
   const ambientX = (rootSize.width - cardW) / 2;
   const ambientY = topInset + headerH + Math.max(0, (pageH - cardH - FLIQ_PROGRESS_ROW_H - panelH) / 2);
@@ -467,12 +479,12 @@ export function FliqFeedView({ active, lang, bottomInset, topInset }: FliqFeedVi
         <FliqAmbient url={ambientUrl} card={ambientCard} width={rootSize.width} height={rootSize.height} />
       </View>
       <View style={{ height: topInset }} />
-      <View style={[styles.header, { height: headerH, paddingHorizontal: sideInset }]}>
+      <View style={[styles.header, { height: headerH, paddingHorizontal: headerInset }]}>
         <WelcomeTabTitle
           label={savedOpen ? fliqT('savedTitle', lang) : 'Fliq'}
           tablet={tablet}
           compact={compact}
-          sideInset={sideInset + (savedOpen ? btnSize : btnSize * 2 + 8)}
+          sideInset={headerInset + btnSize}
         />
         {savedOpen ? (
           <Pressable
@@ -490,40 +502,39 @@ export function FliqFeedView({ active, lang, bottomInset, topInset }: FliqFeedVi
           </Pressable>
         ) : (
           <>
+            {/* «Сохранённые» — у левого края, на месте кнопки «назад» из списка сохранённых. */}
+            <Pressable
+              onPress={() => setSavedOpen(true)}
+              hitSlop={8}
+              accessibilityRole="button"
+              accessibilityLabel={fliqT('savedA11y', lang)}
+              style={({ pressed }) => [
+                styles.headerBtn,
+                { width: btnSize, height: btnSize, borderRadius: btnSize / 2 },
+                pressed && styles.headerBtnPressed,
+              ]}
+            >
+              <Ionicons name="bookmark-outline" size={tablet ? 21 : 19} color={WELCOME_HEADER_TITLE} />
+              {savedHydrated && savedItems.length > 0 ? (
+                <View style={styles.savedBadge}>
+                  <Text style={styles.savedBadgeText}>{savedItems.length > 99 ? '99+' : savedItems.length}</Text>
+                </View>
+              ) : null}
+            </Pressable>
             <View style={styles.headerSpacer} />
-            <View style={styles.headerActions}>
-              <Pressable
-                onPress={() => setSavedOpen(true)}
-                hitSlop={8}
-                accessibilityRole="button"
-                accessibilityLabel={fliqT('savedA11y', lang)}
-                style={({ pressed }) => [
-                  styles.headerBtn,
-                  { width: btnSize, height: btnSize, borderRadius: btnSize / 2 },
-                  pressed && styles.headerBtnPressed,
-                ]}
-              >
-                <Ionicons name="bookmark-outline" size={tablet ? 21 : 19} color={WELCOME_HEADER_TITLE} />
-                {savedHydrated && savedItems.length > 0 ? (
-                  <View style={styles.savedBadge}>
-                    <Text style={styles.savedBadgeText}>{savedItems.length > 99 ? '99+' : savedItems.length}</Text>
-                  </View>
-                ) : null}
-              </Pressable>
-              <Pressable
-                onPress={() => setTopicsOpen(true)}
-                hitSlop={8}
-                accessibilityRole="button"
-                accessibilityLabel={fliqT('topicsA11y', lang)}
-                style={({ pressed }) => [
-                  styles.headerBtn,
-                  { width: btnSize, height: btnSize, borderRadius: btnSize / 2 },
-                  pressed && styles.headerBtnPressed,
-                ]}
-              >
-                <Ionicons name="options-outline" size={tablet ? 22 : 19} color={WELCOME_HEADER_TITLE} />
-              </Pressable>
-            </View>
+            <Pressable
+              onPress={() => setTopicsOpen(true)}
+              hitSlop={8}
+              accessibilityRole="button"
+              accessibilityLabel={fliqT('topicsA11y', lang)}
+              style={({ pressed }) => [
+                styles.headerBtn,
+                { width: btnSize, height: btnSize, borderRadius: btnSize / 2 },
+                pressed && styles.headerBtnPressed,
+              ]}
+            >
+              <Ionicons name="options-outline" size={tablet ? 22 : 19} color={WELCOME_HEADER_TITLE} />
+            </Pressable>
           </>
         )}
       </View>
@@ -688,7 +699,9 @@ const FliqSlide = memo(function FliqSlide({
     onStarted(item.id);
     Animated.timing(coverOpacity, { toValue: 0, duration: 100, useNativeDriver: true }).start();
   }, [coverOpacity, item.id, onStarted]);
-  const { progress, onTick, reset: resetProgress } = useFliqProgress(playing);
+  const playerRef = useRef<FliqYoutubePlayerHandle>(null);
+  const { progress, onTick, reset: resetProgress, scrubber } = useFliqProgress(playing);
+  const seek = useCallback((sec: number, final: boolean) => playerRef.current?.seek(sec, final), []);
   const handleProgress = useCallback(
     (c: number, d: number) => {
       onProgress(item.id, c, d);
@@ -742,6 +755,7 @@ const FliqSlide = memo(function FliqSlide({
         {mountPlayer ? (
           <FliqYoutubePlayer
             key={retryKey}
+            ref={playerRef}
             videoId={item.id}
             mode={mode}
             startSec={startSec}
@@ -789,7 +803,13 @@ const FliqSlide = memo(function FliqSlide({
         ) : null}
       </View>
 
-      <FliqProgressBar progress={progress} width={cardW} />
+      <FliqProgressBar
+        progress={progress}
+        width={cardW}
+        scrubber={scrubber}
+        onSeek={mountPlayer ? seek : undefined}
+        style={styles.progressLow}
+      />
 
       <View style={[styles.panel, { width: cardW, height: panelH, gap: actionGap }]}>
         <Pressable
@@ -921,7 +941,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   headerSpacer: { flex: 1 },
-  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   headerBackBtn: { alignItems: 'center', justifyContent: 'center' },
   headerBtn: {
     alignItems: 'center',
@@ -947,6 +966,8 @@ const styles = StyleSheet.create({
   },
   savedBadgeText: { color: '#17232B', fontSize: 9, lineHeight: 11, fontWeight: '800' },
   pager: { flex: 1, minHeight: 0 },
+  // Полоса ближе к кнопкам, чем к ролику: видно, что она отдельно от видео.
+  progressLow: { transform: [{ translateY: 4 }] },
   center: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center' },
   slide: {
     alignItems: 'center',

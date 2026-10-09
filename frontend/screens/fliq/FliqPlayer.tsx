@@ -2,7 +2,7 @@
 // YouTube: официальный IFrame Player API (плеер не меняем и ничем не перекрываем — правила
 // YouTube API), из RN только «играть/пауза», звук и события: готов, первый кадр, прогресс, ошибка.
 // TikTok / Instagram: их встраиваемые страницы как есть.
-import React, { memo, useCallback, useEffect, useMemo, useRef } from 'react';
+import React, { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef } from 'react';
 import { Linking, Pressable, StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
 import { WebView, type WebViewMessageEvent } from 'react-native-webview';
 import type { ShouldStartLoadRequest } from 'react-native-webview/lib/WebViewTypes';
@@ -64,7 +64,12 @@ export type FliqYoutubePlayerProps = {
   style?: StyleProp<ViewStyle>;
 };
 
-export const FliqYoutubePlayer = memo(function FliqYoutubePlayer({
+export type FliqYoutubePlayerHandle = {
+  /** Перемотка полосой: final=false — пока палец едет, true — отпустил. */
+  seek: (sec: number, final: boolean) => void;
+};
+
+export const FliqYoutubePlayer = memo(forwardRef<FliqYoutubePlayerHandle, FliqYoutubePlayerProps>(function FliqYoutubePlayer({
   videoId,
   mode,
   startSec = 0,
@@ -80,7 +85,7 @@ export const FliqYoutubePlayer = memo(function FliqYoutubePlayer({
   onUserPlay,
   onError,
   style,
-}: FliqYoutubePlayerProps) {
+}, handleRef) {
   const ref = useRef<WebView>(null);
   // html собирается один раз: смена props — команды в страницу, а не перезагрузка.
   const initRef = useRef({ mode, muted, prebuffer, startSec });
@@ -109,6 +114,16 @@ export const FliqYoutubePlayer = memo(function FliqYoutubePlayer({
   const toggleByUserTap = useCallback(() => {
     inject('window.__fliqUserToggle&&window.__fliqUserToggle()');
   }, [inject]);
+  useImperativeHandle(
+    handleRef,
+    () => ({
+      seek: (sec, final) => {
+        if (!Number.isFinite(sec)) return;
+        inject(`window.__fliqSeek&&window.__fliqSeek(${sec.toFixed(2)},${final})`);
+      },
+    }),
+    [inject],
+  );
 
   useEffect(() => {
     inject(`window.__fliq&&window.__fliq('${mode}')`);
@@ -180,7 +195,7 @@ export const FliqYoutubePlayer = memo(function FliqYoutubePlayer({
       <Pressable onPress={toggleByUserTap} style={StyleSheet.absoluteFill} />
     </View>
   );
-});
+}));
 
 export type FliqEmbedPlayerProps = {
   uri: string;

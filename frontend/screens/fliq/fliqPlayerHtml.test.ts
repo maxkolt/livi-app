@@ -22,8 +22,12 @@ function start(init: { mode: FliqPlayMode; muted?: boolean; prebuffer?: boolean;
     mute: () => calls.push('mute'),
     unMute: () => calls.push('unmute'),
     isMuted: () => player.muted,
-    seekTo: (_sec: number, allowSeekAhead: boolean) => calls.push(`seek:${allowSeekAhead}`),
-    getCurrentTime: () => 0,
+    seekTo: (sec: number, allowSeekAhead: boolean) => {
+      player.time = sec;
+      calls.push(`seek:${allowSeekAhead}`);
+    },
+    time: 0,
+    getCurrentTime: () => player.time,
     getDuration: () => 30,
   };
   const YT = {
@@ -101,6 +105,44 @@ describe('youtube player page', () => {
     p.win.__fliq('play');
     p.state(1);
     expect(types(p.sent)).toEqual(['ready', 'buffered', 'state:1']);
+  });
+
+  it('a prebuffered video is allowed to download the rest once it really plays', () => {
+    const p = start({ mode: 'pause', prebuffer: true });
+    p.ready();
+    p.state(1);
+    p.flushTimeouts();
+    expect(p.calls.slice(-1)).toEqual(['unmute']);
+    p.player.state = 2;
+    p.calls.length = 0;
+    p.win.__fliq('play');
+    // Без seek:true плеер стоял бы на конце подгруженного запаса.
+    expect(p.calls).toEqual(['mute', 'seek:true', 'play']);
+    expect(p.player.time).toBe(0);
+    // Второй запуск того же ролика больше ничего не перематывает.
+    p.player.state = 2;
+    p.calls.length = 0;
+    p.win.__fliq('play');
+    expect(p.calls).toEqual(['mute', 'play']);
+  });
+
+  it('seeks from the progress bar: preview without download, release with download', () => {
+    const p = start({ mode: 'play' });
+    p.ready();
+    p.state(1);
+    p.calls.length = 0;
+    p.win.__fliqSeek(7.5, false);
+    p.win.__fliqSeek(12, true);
+    expect(p.calls).toEqual(['seek:false', 'seek:true']);
+    expect(p.player.time).toBe(12);
+  });
+
+  it('ignores seeks while prebuffering', () => {
+    const p = start({ mode: 'pause', prebuffer: true });
+    p.ready();
+    p.state(1);
+    p.win.__fliqSeek(5, true);
+    expect(p.calls).not.toContain('seek:true');
   });
 
   it('play during prebuffer turns it into normal playback with sound', () => {

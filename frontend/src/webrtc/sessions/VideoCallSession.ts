@@ -93,6 +93,11 @@ import {
   REMOTE_AUDIO_SILENCE_UI_MS,
   REMOTE_MEDIA_PACKET_STALL_MS,
   REMOTE_AUDIO_PACKET_POLL_MS,
+  REMOTE_VIDEO_STALL_RESUME_MS,
+  REMOTE_VIDEO_STALL_RESUME_COOLDOWN_MS,
+  REMOTE_VIDEO_STALL_RESUME_MAX,
+  PEER_NETWORK_DOWN_RESUME_SKIP_MS,
+  LIVEKIT_RR_SUBSCRIBER_FAILED,
   LIVEKIT_ADAPTIVE_STREAM_ENABLED,
   LIVEKIT_DYNACAST_ENABLED,
   LIVEKIT_APPLY_CLIENT_ICE,
@@ -294,6 +299,13 @@ export class VideoCallSession extends SimpleEventEmitter {
   private lastRemoteAudioPacketsReceived: number | null = null;
   private lastRemoteVideoPacketsReceived: number | null = null;
   private remoteAudioPacketsStalledSince: number | null = null;
+  /** Видео партнёра стоит при живой комнате — см. checkRemoteVideoStall. */
+  private remoteVideoStallSince: number | null = null;
+  private remoteVideoStallPackets: number | null = null;
+  private lastRemoteVideoStallResumeAt = 0;
+  private remoteVideoStallResumes = 0;
+  /** Последний call:peerReconnecting — партнёр сам потерял сеть. */
+  private lastPeerNetworkDownAt = 0;
   private callLeaseHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private lastLiveKitReconnectingAt = 0;
   /** Unexpected Room Disconnected: try restore within grace; then stop heartbeat (server lease ends busy). */
@@ -1106,6 +1118,9 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.lastSentPiPState = null;
     this.lastSentPiPRoomId = null;
     this.partnerInPiP = false;
+    this.lastRemoteVideoStallResumeAt = 0;
+    this.remoteVideoStallResumes = 0;
+    this.lastPeerNetworkDownAt = 0;
     this.partnerPeerDirectCallVideoUi = null;
     this.partnerId = null;
     this.partnerUserId = null;
@@ -2851,6 +2866,14 @@ export class VideoCallSession extends SimpleEventEmitter {
     }
   }
 
+  private remoteStreamVideoTrackId(): string | null {
+    try {
+      return (this.remoteStream as any)?.getVideoTracks?.()?.[0]?.id ?? null;
+    } catch {
+      return null;
+    }
+  }
+
   /** Повторно подтянуть remote video в MediaStream (audio-only → PiP, или после defer/unsub). */
   private resubscribeRemoteVideoIfNeeded(context: string): void {
     if (this.remoteStreamHasLiveVideoTrack()) return;
@@ -3249,6 +3272,8 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.lastRemoteAudioPacketsReceived = null;
     this.lastRemoteVideoPacketsReceived = null;
     this.remoteAudioPacketsStalledSince = null;
+    this.remoteVideoStallSince = null;
+    this.remoteVideoStallPackets = null;
   }
 
   private ensureRemoteAudioPacketWatch(): void {
@@ -3321,6 +3346,8 @@ export class VideoCallSession extends SimpleEventEmitter {
       return;
     }
     if (!this.hadLiveRemoteAudioInCall || this.room?.state !== 'connected') return;
+
+    if (await this.checkRemoteVideoStall()) return;
 
     if (this.isRemoteAudioStallWatchSuppressed()) {
       // Fresh baseline after PiP so a freeze during transition does not arm / stick.
@@ -3396,6 +3423,83 @@ export class VideoCallSession extends SimpleEventEmitter {
     }
     if (now - this.remoteAudioPacketsStalledSince < REMOTE_MEDIA_PACKET_STALL_MS) return;
     this.armPeerReconnectingUi('remote_audio_packet_stall');
+  }
+
+  /**
+   * Видео партнёра стоит, хотя комната «connected» и звук может идти. После выключения VPN
+   * приём уезжал на временный LTE, который Android поднимает на пару секунд, и оставался на
+   * мёртвом пути ~20 с, пока SFU не присылал leave-reconnect. Ждём кадры (камера партнёра on,
+   * видео-экран, не PiP/hold, партнёр не сообщал о потере сети) — сами просим LiveKit resume.
+   * true — resume запрошен.
+   */
+  private async checkRemoteVideoStall(): Promise<boolean> {
+    const now = Date.now();
+    const watch =
+      AppState.currentState === 'active' &&
+      this.expectsInboundRemoteVideoRtp() &&
+      !this.partnerInPiP &&
+      !this.localExternalHoldActive &&
+      !this.partnerExternalHoldActive &&
+      !this.liveKitReconnecting &&
+      !this.mediaReconnectInProgress &&
+      !this.isRemoteAudioStallWatchSuppressed() &&
+      !isInAudioOnlyCallUi() &&
+      !this.isLocalDirectCallAudioOnlyUi() &&
+      now - this.lastPeerNetworkDownAt > PEER_NETWORK_DOWN_RESUME_SKIP_MS;
+    const packets = watch ? await this.readInboundRemotePackets('video') : null;
+    if (packets == null) {
+      this.remoteVideoStallSince = null;
+      this.remoteVideoStallPackets = null;
+      return false;
+    }
+    const prev = this.remoteVideoStallPackets;
+    this.remoteVideoStallPackets = packets;
+    if (prev == null || packets > prev) {
+      this.remoteVideoStallSince = null;
+      return false;
+    }
+    if (this.remoteVideoStallSince == null) {
+      this.remoteVideoStallSince = now;
+      return false;
+    }
+    const stalledMs = now - this.remoteVideoStallSince;
+    if (stalledMs < REMOTE_VIDEO_STALL_RESUME_MS) return false;
+    if (now - this.lastRemoteVideoStallResumeAt < REMOTE_VIDEO_STALL_RESUME_COOLDOWN_MS) return false;
+    if (this.remoteVideoStallResumes >= REMOTE_VIDEO_STALL_RESUME_MAX) return false;
+    return this.requestLiveKitResume('remote_video_stall', stalledMs);
+  }
+
+  /**
+   * Тот же путь, что LiveKit проходит сам при сбое PeerConnection или leave-reconnect от SFU:
+   * signal reconnect + ICE restart с теми же треками, без re-join и без разрыва у партнёра.
+   */
+  private requestLiveKitResume(reason: string, stalledMs: number): boolean {
+    const engine = (this.room as any)?.engine;
+    if (!engine || typeof engine.handleDisconnect !== 'function') return false;
+    this.lastRemoteVideoStallResumeAt = Date.now();
+    this.remoteVideoStallResumes += 1;
+    this.remoteVideoStallSince = null;
+    this.remoteVideoStallPackets = null;
+    logger.warn('[VideoCallSession] Remote video stalled on a live room — asking LiveKit to resume', {
+      reason,
+      stalledMs,
+      attempt: this.remoteVideoStallResumes,
+      callId: this.callId,
+    });
+    trackReleaseEvent('signal_reconnect', {
+      phase: 'remote_video_stall_resume',
+      callId: this.callId,
+      roomId: this.roomId || this.currentRoomName || null,
+      userId: this.config.myUserId,
+      partnerUserId: this.partnerUserId,
+    });
+    try {
+      engine.handleDisconnect(`livi ${reason}`, LIVEKIT_RR_SUBSCRIBER_FAILED);
+      return true;
+    } catch (e) {
+      logger.warn('[VideoCallSession] LiveKit resume request failed', { reason, error: (e as Error)?.message });
+      return false;
+    }
   }
 
   /** After we once heard the peer: silence / ended track → restoring UI without waiting ICE ~20s. */
@@ -3944,6 +4048,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     const peerReconnectingHandler = (data?: { callId?: string; roomId?: string; from?: string }) => {
       // Партнёр потерял сеть (быстрый серверный сигнал) — UI после короткого debounce.
       if (!this.matchesPeerCallSignal(data)) return;
+      this.lastPeerNetworkDownAt = Date.now();
       if (this.peerReconnecting) return;
       this.armPeerReconnectingUi('call:peerReconnecting');
     };
@@ -5509,6 +5614,8 @@ export class VideoCallSession extends SimpleEventEmitter {
   private resubscribeRemoteMediaAfterReconnect(context: string): void {
     const room = this.room;
     if (!room || room.state !== 'connected' || this.ended || this.endCallInProgress) return;
+    const liveVideoBefore = this.remoteStreamHasLiveVideoTrack();
+    const videoTrackIdBefore = this.remoteStreamVideoTrackId();
     try {
       room.remoteParticipants.forEach((participant) => {
         if (participant.isLocal) return;
@@ -5549,11 +5656,17 @@ export class VideoCallSession extends SimpleEventEmitter {
       this.resubscribeRemoteVideoIfNeeded(context);
     }
 
+    // Тот же живой видеотрек пережил resume — RTCView не пересоздаём: remount на каждом
+    // переподключении давал чёрную вспышку при каждой смене сети (VPN on/off).
+    const sameLiveVideo =
+      liveVideoBefore &&
+      this.remoteStreamHasLiveVideoTrack() &&
+      this.remoteStreamVideoTrackId() === videoTrackIdBefore;
     try {
       if (this.remoteStream) {
-        this.remoteViewKey = Date.now();
+        if (!sameLiveVideo) this.remoteViewKey = Date.now();
         this.emit('remoteStream', this.remoteStream);
-        this.emit('remoteViewKeyChanged', this.remoteViewKey);
+        if (!sameLiveVideo) this.emit('remoteViewKeyChanged', this.remoteViewKey);
       }
     } catch {}
     logger.info('[VideoCallSession] resubscribeRemoteMediaAfterReconnect', {
@@ -5563,6 +5676,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       deferred: this.deferRemoteVideoSubscription,
       remoteParticipants: room.remoteParticipants.size,
       hasRemoteStream: !!this.remoteStream,
+      remountRemoteView: !sameLiveVideo,
       remoteViewKey: this.remoteViewKey,
     });
   }

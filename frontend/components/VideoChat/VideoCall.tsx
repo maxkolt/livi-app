@@ -168,7 +168,10 @@ import { readSystemPiPReturnGuard, readSystemPiPReturnState } from './callScreen
 import { styles } from './callScreen/videoCallStyles';
 import { PIP_ROUNDED, PIP_TEXTURE_VIEW } from './shared/pipTextureView';
 
-type Props = { 
+/** Столько длится переподключение, прежде чем вместо времени звонка показать «Слабая сеть». */
+const RECONNECTING_STATUS_DELAY_MS = 1500;
+
+type Props = {
   route?: { 
     params?: { 
       myUserId?: string;
@@ -6866,18 +6869,31 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     return () => clearInterval(id);
   }, [wasFriendCallEnded, isEndingCall, sessionTick]);
 
+  // Переподключение короче RECONNECTING_STATUS_DELAY_MS статус не меняет: при смене сети
+  // (VPN on/off) «Слабая сеть» мигала на доли секунды, хотя звонок шёл.
+  const reconnectingRaw = liveKitReconnectingUi || peerReconnectingUi;
+  const [reconnectingStatusUi, setReconnectingStatusUi] = useState(false);
+  useEffect(() => {
+    if (!reconnectingRaw) {
+      setReconnectingStatusUi(false);
+      return;
+    }
+    const timer = setTimeout(() => setReconnectingStatusUi(true), RECONNECTING_STATUS_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [reconnectingRaw]);
+
   const showAudioConnectingStatus =
     showAudioPresentation &&
     !wasFriendCallEnded &&
     !isEndingCall &&
     !localExternalHoldUi &&
     !partnerExternalHoldUi &&
-    (!showCallDuration || liveKitReconnectingUi || peerReconnectingUi || remoteAudioGapUi);
+    (!showCallDuration || reconnectingStatusUi || remoteAudioGapUi);
 
   const connectionDegradedUi =
     !localExternalHoldUi &&
     !partnerExternalHoldUi &&
-    (liveKitReconnectingUi || peerReconnectingUi || remoteAudioGapUi);
+    (reconnectingStatusUi || remoteAudioGapUi);
 
   const callChromeHoldLine = useMemo(() => {
     if (localExternalHoldUi) return t('externalCallHoldLocal', lang);

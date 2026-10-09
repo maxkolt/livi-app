@@ -50,7 +50,8 @@ export function IncomingAnswerConnectingCover({
   }, [onContentReady]);
 
   return (
-    <View style={styles.root} pointerEvents="auto">
+    // nativeID: по нему native снимает solid-крышку, когда этот экран реально нарисован.
+    <View style={styles.root} pointerEvents="auto" nativeID="incoming-answer-connecting-cover">
       <CallScreenChrome
         partnerName={partnerName || '—'}
         partnerAvatarUri={partnerAvatarUri}

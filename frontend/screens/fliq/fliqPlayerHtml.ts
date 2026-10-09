@@ -38,6 +38,14 @@ export function youtubePlayerHtml(
 (function(){
   var player=null, ready=false, want='${init.mode}', muted=${init.muted}, prebuffer=${init.prebuffer};
   var buffering=false, buffered=false, prebufferTimer=null, starting=false, tick=null, lastMuted=null, quietUntil=0;
+  // seekTo(…, false) после подгрузки запрещает плееру докачивать дальше — и запрет живёт,
+  // пока не будет seekTo(…, true): без снятия ролик вставал навсегда на конце запаса (~20 с).
+  var fetchLocked=false;
+  function unlockFetch(){
+    if(!fetchLocked) return;
+    fetchLocked=false;
+    try{ player.seekTo(player.getCurrentTime(),true); }catch(_){}
+  }
   function send(m){try{window.ReactNativeWebView.postMessage(JSON.stringify(m));}catch(e){}}
   function applyMute(){
     if(!ready||buffering) return;
@@ -53,7 +61,7 @@ export function youtubePlayerHtml(
     clearPrebufferTimer(); buffering=false; buffered=true;
     // false запрещает seekTo скачивать новый участок: возвращаемся в начало внутри уже
     // загруженного диапазона и сохраняем настоящий запас кадров, а не один первый кадр.
-    try{ player.pauseVideo(); player.seekTo(0,false); }catch(_){}
+    try{ player.pauseVideo(); player.seekTo(0,false); fetchLocked=true; }catch(_){}
     applyMute(); send({t:'buffered'});
   }
   function apply(){
@@ -71,7 +79,7 @@ export function youtubePlayerHtml(
         if(s!==1&&s!==3){
           // Стартуем без звука и возвращаем его только в PLAYING: аудио не должно
           // убегать вперёд, пока WebView ещё не показал первый кадр.
-          starting=true; quietUntil=Date.now()+1500; player.mute(); player.playVideo();
+          starting=true; quietUntil=Date.now()+1500; player.mute(); unlockFetch(); player.playVideo();
         }
       } else if(buffering){
         return;
@@ -102,11 +110,20 @@ export function youtubePlayerHtml(
     }catch(e){}
   };
   window.__fliqMute=function(m){ muted=!!m; applyMute(); };
+  // Перемотка полосой: пока палец едет — без докачки (final=false, как советует YouTube),
+  // отпустил — с докачкой. Пауза человека при перемотке остаётся паузой.
+  window.__fliqSeek=function(sec,final){
+    if(!ready||buffering) return;
+    try{ player.seekTo(Math.max(0,+sec||0),!!final); fetchLocked=!final; }catch(e){}
+  };
   // Уже начатую подгрузку не обрываем из-за короткой смены ролей ячеек при свайпе:
   // она сама закончится по таймеру. false лишь запрещает начинать новую.
   window.__fliqPrebuffer=function(p){ prebuffer=!!p; apply(); };
   window.onYouTubeIframeAPIReady=function(){
-    player=new YT.Player('p',{width:'100%',height:'100%',videoId:'${videoId}',
+    // youtube-nocookie (официальный режим без cookies): на части телефонов обычный хост отдаёт
+    // Shorts-плеер со своими лайками, звуком, меню и красной полосой поверх ролика, которые
+    // controls=0 не убирает; без cookies у всех чистый плеер.
+    player=new YT.Player('p',{width:'100%',height:'100%',videoId:'${videoId}',host:'https://www.youtube-nocookie.com',
       playerVars:{playsinline:1,controls:0,cc_load_policy:0,rel:0,fs:0,iv_load_policy:3,disablekb:1,enablejsapi:1,mute:muted?1:0,start:${Math.max(0, Math.floor(init.startSec))},origin:'${PLAYER_ORIGIN}'},
       events:{
         onReady:function(){ready=true;send({t:'ready'});applyMute();apply();setInterval(pollMute,500);},
