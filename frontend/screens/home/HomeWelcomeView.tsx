@@ -472,13 +472,15 @@ function HomeWelcomeViewInner({
         </Animated.View>
       )}
 
-      <Animated.View
+      {/*
+        Сцена радара без reveal-fade: радар — Skia TextureView, и Android не показывает её,
+        пока у предка анимируется opacity. Аватар проявлялся, а радар возникал только в
+        конце fade (~0.5 с). Радар и аватар здесь появляются сразу, вместе, в момент ухода сплеша.
+      */}
+      <View
         collapsable={false}
         onLayout={onStageLayout}
-        style={[
-          splitStage ? welcomeStyles.stageRow : welcomeStyles.radarFlex,
-          revealStyle,
-        ]}
+        style={splitStage ? welcomeStyles.stageRow : welcomeStyles.radarFlex}
       >
         <View
           style={
@@ -600,7 +602,7 @@ function HomeWelcomeViewInner({
             />
           </View>
         </Animated.View>
-      </Animated.View>
+      </View>
 
       {/* Поверх всего экрана: рассыпавшийся аватар не обрезается о радар и блоки. */}
       <AvatarDustOverlay dust={avatarDust} source={avatarDustSource} avatarRef={avatarAnchorRef} />

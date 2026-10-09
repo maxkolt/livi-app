@@ -143,7 +143,7 @@ import {
   preloadAndroidImeLiftCache,
 } from './chat/androidImeLiftCache';
 import { ChatAttachSheet, type ChatAttachSheetHandle } from './chat/ChatAttachSheet';
-import { ChatRoundButton, chatRoundButtonColors } from './chat/ChatRoundButton';
+import { CHAT_ROUND_BUTTON_SIZE, ChatRoundButton, chatRoundButtonColors } from './chat/ChatRoundButton';
 import {
   CHAT_STATUS_GAP_H,
   CHAT_STATUS_SLOT_H,
@@ -406,13 +406,13 @@ export default function ChatScreen({ route, navigation }: Props) {
 
   const BORDER_COLOR = theme.colors.outline as string;
   // Входящие — нейтральный серо-синий блоков, на ступень светлее фона.
-  const BUBBLE_BG_IN = 'rgba(70, 82, 98, 0.42)';
+  const BUBBLE_BG_IN = 'rgba(78, 91, 108, 0.5)';
   // Исходящие — лёгкий тон общего акцента: свои сразу отличаются от чужих.
-  const BUBBLE_BG_OUT = 'rgba(98, 176, 216, 0.2)';
+  const BUBBLE_BG_OUT = 'rgba(98, 176, 216, 0.26)';
   // В long-press меню копия сообщения должна оставаться плотной поверх scrim.
   // Цвета соответствуют обычным полупрозрачным облакам, сведённым с их подложкой.
-  const MESSAGE_ACTIONS_BUBBLE_BG_IN = isDark ? '#333B47' : '#B4BDC0';
-  const MESSAGE_ACTIONS_BUBBLE_BG_OUT = isDark ? '#314655' : '#B4C0D7';
+  const MESSAGE_ACTIONS_BUBBLE_BG_IN = isDark ? '#3A4350' : '#B4BDC0';
+  const MESSAGE_ACTIONS_BUBBLE_BG_OUT = isDark ? '#354E5F' : '#B4C0D7';
   const BORDER_WIDTH = 1;
 
   const peerId = String(route?.params?.peerId || "");
@@ -3223,25 +3223,36 @@ export default function ChatScreen({ route, navigation }: Props) {
                     onPress={() => {
                       void cancelVoiceRecordingWithAnimation();
                     }}
-                    style={{ marginRight: 12 }}
+                    // Круг правее кнопки картинки; слот 8+36+4 = её 36+12, строка не сдвигается.
+                    style={{ marginLeft: 8, marginRight: 4 }}
                   >
+                    {/* Круг как у кнопки картинки: тот же размер и заливка. */}
                     <Animated.View
                       ref={(r) => { trashMeasureRef.current = r as any; }}
                       onLayout={() => updateTrashZone()}
                       style={{
-                        // Тот же круг 36×36, что у кнопки картинки, — высота строки не меняется.
-                        width: 36,
-                        height: 36,
+                        width: CHAT_ROUND_BUTTON_SIZE,
+                        height: CHAT_ROUND_BUTTON_SIZE,
+                        borderRadius: CHAT_ROUND_BUTTON_SIZE / 2,
+                        backgroundColor: COMPOSER_IDLE_BUTTON_BG,
                         alignItems: 'center',
                         justifyContent: 'center',
                         transform: [
                           { scale: trashFlash.interpolate({ inputRange: [0, 1], outputRange: [1, 1.08] }) },
-                          { rotate: trashLid.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '-14deg'] }) },
                         ],
-                        opacity: trashFlash.interpolate({ inputRange: [0, 1], outputRange: [0.85, 1] }),
                       }}
                     >
-                      <Ionicons name="trash-outline" size={28} color="#FF5A67" />
+                      {/* Крышка качается и мигает только у значка — круг остаётся плотным. */}
+                      <Animated.View
+                        style={{
+                          transform: [
+                            { rotate: trashLid.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '-14deg'] }) },
+                          ],
+                          opacity: trashFlash.interpolate({ inputRange: [0, 1], outputRange: [0.85, 1] }),
+                        }}
+                      >
+                        <Ionicons name="trash-outline" size={24} color="#FF5A67" />
+                      </Animated.View>
                     </Animated.View>
                   </Pressable>
                 ) : (
@@ -3692,25 +3703,36 @@ export default function ChatScreen({ route, navigation }: Props) {
                     onPress={() => {
                       void cancelVoiceRecordingWithAnimation();
                     }}
-                    style={{ marginRight: 12 }}
+                    // Круг правее кнопки картинки; слот 8+36+4 = её 36+12, строка не сдвигается.
+                    style={{ marginLeft: 8, marginRight: 4 }}
                   >
+                    {/* Круг как у кнопки картинки: тот же размер и заливка. */}
                     <Animated.View
                       ref={(r) => { trashMeasureRef.current = r as any; }}
                       onLayout={() => updateTrashZone()}
                       style={{
-                        // Тот же круг 36×36, что у кнопки картинки, — высота строки не меняется.
-                        width: 36,
-                        height: 36,
+                        width: CHAT_ROUND_BUTTON_SIZE,
+                        height: CHAT_ROUND_BUTTON_SIZE,
+                        borderRadius: CHAT_ROUND_BUTTON_SIZE / 2,
+                        backgroundColor: COMPOSER_IDLE_BUTTON_BG,
                         alignItems: 'center',
                         justifyContent: 'center',
                         transform: [
                           { scale: trashFlash.interpolate({ inputRange: [0, 1], outputRange: [1, 1.08] }) },
-                          { rotate: trashLid.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '-14deg'] }) },
                         ],
-                        opacity: trashFlash.interpolate({ inputRange: [0, 1], outputRange: [0.85, 1] }),
                       }}
                     >
-                      <Ionicons name="trash-outline" size={28} color="#FF5A67" />
+                      {/* Крышка качается и мигает только у значка — круг остаётся плотным. */}
+                      <Animated.View
+                        style={{
+                          transform: [
+                            { rotate: trashLid.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '-14deg'] }) },
+                          ],
+                          opacity: trashFlash.interpolate({ inputRange: [0, 1], outputRange: [0.85, 1] }),
+                        }}
+                      >
+                        <Ionicons name="trash-outline" size={24} color="#FF5A67" />
+                      </Animated.View>
                     </Animated.View>
                   </Pressable>
                 ) : (

@@ -57,7 +57,8 @@ type HomeWelcomeTabBarProps = {
 const PROFILE_ACTIVE_DOT = 28;
 
 const INACTIVE = UI_INACTIVE;
-const INACTIVE_ICON = UI_INACTIVE;
+// Иконки неактивных вкладок — оттенок подписи сегмента («Все» на «Чатах»), чуть приглушённый; подписи серые.
+const INACTIVE_ICON = 'rgba(244, 245, 247, 0.76)';
 
 function HomeWelcomeTabBarInner({
   activeTab,
