@@ -27,7 +27,7 @@ import { useTabLabelFonts } from './brandFont';
 const ACTIVE_ICON = UI_ACCENT;
 const ACTIVE_LABEL = WELCOME_HEADER_TITLE;
 
-export type WelcomeTabId = 'search' | 'friends' | 'calls' | 'chat' | 'profile';
+export type WelcomeTabId = 'search' | 'friends' | 'fliq' | 'calls' | 'chat' | 'profile';
 
 type TabDef = {
   id: WelcomeTabId;
@@ -40,6 +40,7 @@ type HomeWelcomeTabBarProps = {
   labels: {
     search: string;
     friends: string;
+    fliq: string;
     calls: string;
     chat: string;
     profile: string;
@@ -79,6 +80,7 @@ function HomeWelcomeTabBarInner({
   const labelFonts = useTabLabelFonts();
   const callIconSize = tabletLayout ? 28 : compactLandscape ? 23 : 25;
   const profileDiscSize = tabletLayout ? 32 : compactLandscape ? 26 : PROFILE_ACTIVE_DOT;
+  const fliqIconSize = tabletLayout ? 27 : compactLandscape ? 22 : 24;
   /** После cancel onPress часто опаздывает на 1.5–3с — переключаем на pressIn и держим длинное окно. */
   const pressInHandledRef = useRef<{ id: WelcomeTabId; at: number } | null>(null);
 
@@ -95,6 +97,17 @@ function HomeWelcomeTabBarInner({
       label: labels.friends,
       renderIcon: (active, color) => (
         <Ionicons name={active ? 'people' : 'people-outline'} size={iconSize} color={color} />
+      ),
+    },
+    {
+      id: 'fliq',
+      label: labels.fliq,
+      renderIcon: (active, color) => (
+        <MaterialCommunityIcons
+          name={active ? 'play-box-multiple' : 'play-box-multiple-outline'}
+          size={fliqIconSize}
+          color={color}
+        />
       ),
     },
     {
@@ -162,7 +175,9 @@ function HomeWelcomeTabBarInner({
         >
           {tabs.map((tab) => {
           const active = tab.id === activeTab;
-          const iconColor = active ? ACTIVE_ICON : INACTIVE_ICON;
+          const isFliq = tab.id === 'fliq';
+          // Fliq выделен всегда: иконка акцентом на своей «таблетке», даже когда вкладка не открыта.
+          const iconColor = active || isFliq ? ACTIVE_ICON : INACTIVE_ICON;
           const labelColor = active ? ACTIVE_LABEL : INACTIVE;
           const showDot =
             (tab.id === 'chat' && !!showChatDot) ||
@@ -230,7 +245,16 @@ function HomeWelcomeTabBarInner({
                       tabletLayout && styles.iconWrapTablet,
                     ]}
                   >
-                    {active ? (
+                    {isFliq ? (
+                      <View
+                        pointerEvents="none"
+                        style={[
+                          styles.fliqPill,
+                          tabletLayout && styles.activePillTablet,
+                          active && styles.fliqPillActive,
+                        ]}
+                      />
+                    ) : active ? (
                       <View
                         pointerEvents="none"
                         style={[styles.activePill, tabletLayout && styles.activePillTablet]}
@@ -362,6 +386,24 @@ const styles = StyleSheet.create({
   },
   activePillTablet: {
     borderRadius: 17,
+  },
+  /**
+   * Fliq — постоянная «таблетка» шире обычной: мягкая заливка акцентом и чёткая рамка,
+   * как у кнопки «Найти собеседника». Открытая вкладка — заливка плотнее, без яркого цвета.
+   */
+  fliqPill: {
+    position: 'absolute',
+    top: -1,
+    bottom: -1,
+    left: -12,
+    right: -12,
+    borderRadius: 16,
+    backgroundColor: 'rgba(98, 176, 216, 0.16)',
+    borderWidth: 1,
+    borderColor: 'rgba(98, 176, 216, 0.58)',
+  },
+  fliqPillActive: {
+    backgroundColor: 'rgba(98, 176, 216, 0.30)',
   },
   badge: {
     position: 'absolute',

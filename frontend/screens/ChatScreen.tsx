@@ -2975,8 +2975,10 @@ export default function ChatScreen({ route, navigation }: Props) {
   );
 
   const ChatChrome = isDark ? StageGradient : View;
+  // Композер — ровное стекло до физического края экрана: без плотного тёмного края, иначе
+  // под системными кнопками навигации выходила отдельная тёмная плашка вместо стекла.
   const chatChromeBottomExtra = isDark
-    ? ({ translucent: true, mirror: true, backdrop: chatBackdrop } as const)
+    ? ({ translucent: true, mirror: true, backdrop: chatBackdrop, edgeFade: false } as const)
     : {};
 
   return (
@@ -3525,7 +3527,6 @@ export default function ChatScreen({ route, navigation }: Props) {
             >
             <ChatChrome
               {...chatChromeBottomExtra}
-              {...(isDark && emojiPanelOpen ? { edgeFade: false } : null)}
               style={{
                 backgroundColor: isDark ? undefined : INPUT_BAR_BG,
                 paddingHorizontal: 6,

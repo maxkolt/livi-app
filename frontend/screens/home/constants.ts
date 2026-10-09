@@ -56,6 +56,7 @@ export const HOME_BLUR_LIST_SOURCE = {
   calls: 'home-list-calls',
   chat: 'home-list-chat',
   profile: 'home-list-profile',
+  fliq: 'home-list-fliq',
 } as const;
 /**
  * Источники стекла экрана звонка: фон экрана и главное видео. Видео — TextureView (патч

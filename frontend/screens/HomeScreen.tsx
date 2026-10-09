@@ -91,6 +91,8 @@ import {
 import { HomeWelcomeTabBar, type WelcomeTabId } from './home/HomeWelcomeTabBar';
 import { FramesStoreHost } from './home/WelcomeCrownButton';
 import { WelcomeKeepAlivePane } from './home/WelcomeKeepAlivePane';
+import { FliqFeedView } from './fliq/FliqFeedView';
+import { warmFliqFeed } from './fliq/fliqApi';
 import { HomeLayoutProvider } from './home/HomeLayoutContext';
 import {
   HOME_BLUR_BG_SOURCE,
@@ -936,6 +938,13 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   /* language */
   const lang = useLang((s) => s.lang);
   const setLang = useLang((s) => s.setLang);
+  // Fliq: первая страница ленты заранее, когда главный экран уже показан, — вкладка
+  // открывается сразу с роликами. Это пара килобайт JSON и три превью, видео не грузим.
+  useEffect(() => {
+    if (!splashDismissed) return;
+    const timer = setTimeout(() => void warmFliqFeed(lang).catch(() => {}), 5000);
+    return () => clearTimeout(timer);
+  }, [splashDismissed, lang]);
   const [langPickerVisible, setLangPickerVisible] = useState(false);
   const L = useCallback((key: string) => t(key, lang), [lang]);
 
@@ -5561,7 +5570,8 @@ const handleClearNick = useCallback(async () => {
   const showChatTab = welcomeActiveTab === 'chat';
   const showCallsTab = welcomeActiveTab === 'calls';
   const showProfileTab = welcomeActiveTab === 'profile';
-  const showSearchWelcome = !showFriendsTab && !showChatTab && !showCallsTab && !showProfileTab;
+  const showFliqTab = welcomeActiveTab === 'fliq';
+  const showSearchWelcome = !showFriendsTab && !showChatTab && !showCallsTab && !showProfileTab && !showFliqTab;
   const showSplashOverlay = !splashDismissed;
   // Splash = «Поиск готов к первому кадру»: версия проверена, URI есть (если аватар
   // ожидается), data:→file готов, ExpoImage уже prefetch'нул байты.
@@ -5627,7 +5637,9 @@ const handleClearNick = useCallback(async () => {
           ? HOME_BLUR_LIST_SOURCE.chat
           : welcomeActiveTab === 'profile'
             ? HOME_BLUR_LIST_SOURCE.profile
-            : null;
+            : welcomeActiveTab === 'fliq'
+              ? HOME_BLUR_LIST_SOURCE.fliq
+              : null;
 
   return (
     <View
@@ -5718,6 +5730,21 @@ const handleClearNick = useCallback(async () => {
           />
         </WelcomeKeepAlivePane>
         ) : null}
+        {/* Fliq: монтируется при первом открытии (WebView-плееры не греем заранее). */}
+        {showFliqTab && !mountedWelcomeTabs.has('fliq') ? (
+          <WelcomeKeepAlivePane visible mode="list" />
+        ) : null}
+        {mountedWelcomeTabs.has('fliq') ? (
+        <WelcomeKeepAlivePane visible={showFliqTab} mode="list">
+          {/* От края до края экрана: свет от ролика под системной строкой, лента — под нижним стеклом. */}
+          <FliqFeedView
+            active={showFliqTab && appIsActive && !hasActiveCallForSearch}
+            lang={lang}
+            bottomInset={tabBarH + GLASS_DOCK_TOP_PAD}
+            topInset={homeInsets.top}
+          />
+        </WelcomeKeepAlivePane>
+        ) : null}
         {showCallsTab && !mountedWelcomeTabs.has('calls') ? (
           <WelcomeKeepAlivePane visible mode="list" />
         ) : null}
@@ -5803,6 +5830,7 @@ const handleClearNick = useCallback(async () => {
           labels={{
             search: L('tabSearch'),
             friends: L('tabFriends'),
+            fliq: 'Fliq',
             calls: L('tabCalls'),
             chat: L('tabChat'),
             profile: L('tabSettings'),

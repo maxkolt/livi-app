@@ -24,6 +24,8 @@ import avatarRouter from './routes/avatar';
 import messagesRouter from './routes/messages';
 import moderationRouter from './routes/moderation';
 import cosmeticsRouter from './routes/cosmetics';
+import fliqRouter from './routes/fliq';
+import { startFliqCollector } from './utils/fliqCollector';
 import registerFriendSockets from './sockets/friends';
 import registerIdentitySockets, { bindUser as bindUserIdentity } from './sockets/identity';
 import registerMessageSockets from './sockets/messagesReliable';
@@ -488,6 +490,7 @@ app.use('/api', moderationRouter);
 // Роутам нужен io, чтобы разослать друзьям смену косметики без перезапуска приложения.
 app.set('io', io);
 app.use('/api', cosmeticsRouter);
+app.use('/api', fliqRouter);
 
 // Stream utility убран - больше не используется
 
@@ -801,6 +804,8 @@ async function onMongoConnected(): Promise<void> {
 }
 
 connectMongo();
+// Лента Fliq: сборщик Shorts сам ждёт подключения к MongoDB.
+startFliqCollector();
 
 /* ========= Presence helpers ========= */
 function getOnlineListFromIo(io: Server): string[] {

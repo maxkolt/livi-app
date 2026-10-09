@@ -37,6 +37,8 @@ const SELECT_CHECK_BG = "rgba(98, 176, 216, 0.22)";
 import { ChatAlbumGrid } from "./ChatAlbumGrid";
 import { MESSAGE_LONG_PRESS_MS } from "../../constants/uiTokens";
 import { ChatReplyQuoteAccent } from "./ChatReplyQuoteAccent";
+import { findFliqLink, isOnlyFliqLink } from "../fliq/fliqLinks";
+import { FliqLinkCard } from "../fliq/FliqLinkCard";
 
 /** Зазор над/под облаком на границе серии (последнее облако ленты — всегда так). */
 export const CHAT_ROW_SERIES_GAP = 4;
@@ -278,6 +280,11 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
     if (Platform.OS === 'android') requestAnimationFrame(measureThenMaybeOpen);
     else measureThenMaybeOpen();
   }, [item, animateMessagePress, onLongPressMessage, isLayoutBlockedByChrome]);
+  /** Ссылка на ролик (YouTube / TikTok / Instagram) — показываем карточкой с плеером. */
+  const fliqLink = React.useMemo(
+    () => (item.type === 'text' ? findFliqLink(String(item.text ?? '')) : null),
+    [item.type, item.text],
+  );
   // Fallback логика для определения отправителя если поле sender отсутствует
   let isMyMessage = item.sender === 'me';
   if (item.sender === undefined || item.sender === null) {
@@ -1355,7 +1362,14 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
             textDecorationLine: 'underline' as const,
           };
           const segments = parseTextWithUrls(String(item.text ?? ''));
+          const card = fliqLink ? (
+            <FliqLinkCard link={fliqLink} onLongPress={openMessageActionsFromBubble} />
+          ) : null;
+          // Переслали только ссылку — хватит карточки, адрес под ней не нужен.
+          if (card && isOnlyFliqLink(String(item.text ?? ''), fliqLink!)) return card;
           return (
+            <>
+            {card}
             <Text style={baseStyle}>
               {segments.map((seg, idx) =>
                 seg.type === 'url' ? (
@@ -1372,6 +1386,7 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
                 )
               )}
             </Text>
+            </>
           );
         })()}
         

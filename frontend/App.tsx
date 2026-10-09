@@ -36,6 +36,7 @@ import { WELCOME_NAV_ACTIVE_ICON, WELCOME_STAGE_BG } from "./screens/home/consta
 import { IncomingAnswerConnectingCover } from "./components/VideoChat/shared/IncomingAnswerConnectingCover";
 import { peekCallAvatar, peekCallNick, primeCallNick } from "./utils/callAvatarPrime";
 import IncomingShareHost from "./components/IncomingShareHost";
+import FliqViewerHost from "./screens/fliq/FliqViewerHost";
 import { AppDialogModal } from "./components/AppDialog";
 import { AppAlertHost } from "./components/AppAlert";
 import { APP_BLUR_SOURCE, BlurListSource } from "./components/BackdropBlur";
@@ -5059,6 +5060,7 @@ function AppContent() {
             />
           )}
           <IncomingShareHost />
+          <FliqViewerHost />
           <AppAlertHost />
           </>
       </PaperProvider>
