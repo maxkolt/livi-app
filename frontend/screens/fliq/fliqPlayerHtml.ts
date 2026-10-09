@@ -18,8 +18,8 @@ export type FliqPlayMode = 'play' | 'pause' | 'hold';
 
 /**
  * Страница плеера. Кроме «играть/пауза»:
- * - подгрузка заранее (prebuffer): следующий ролик ленты тихо запускается без звука и сразу
- *   встаёт на паузу в начале — первые секунды уже скачаны, после свайпа старт почти мгновенный;
+ * - подгрузка заранее (prebuffer): следующий ролик ленты тихо играет несколько секунд, затем
+ *   возвращается в начало по уже загруженному диапазону — после свайпа старт почти мгновенный;
  *   пока идёт подгрузка, состояния плеера наружу не уходят (это ещё не «первый кадр»);
  * - звук общий для ленты: muted задаёт RN, а если человек нажал звук в самом плеере YouTube,
  *   страница замечает это (isMuted) и сообщает — тогда звук меняется у всех роликов.
@@ -37,7 +37,7 @@ export function youtubePlayerHtml(
 </head><body><div id="p"></div><script>
 (function(){
   var player=null, ready=false, want='${init.mode}', muted=${init.muted}, prebuffer=${init.prebuffer};
-  var buffering=false, buffered=false, tick=null, lastMuted=null, quietUntil=0;
+  var buffering=false, buffered=false, prebufferTimer=null, starting=false, tick=null, lastMuted=null, quietUntil=0;
   function send(m){try{window.ReactNativeWebView.postMessage(JSON.stringify(m));}catch(e){}}
   function applyMute(){
     if(!ready||buffering) return;
@@ -45,13 +45,34 @@ export function youtubePlayerHtml(
     quietUntil=Date.now()+1500; lastMuted=null;
     try{ if(muted) player.mute(); else player.unMute(); }catch(e){}
   }
+  function clearPrebufferTimer(){
+    if(prebufferTimer!==null){ clearTimeout(prebufferTimer); prebufferTimer=null; }
+  }
+  function finishPrebuffer(){
+    if(!buffering) return;
+    clearPrebufferTimer(); buffering=false; buffered=true;
+    // false запрещает seekTo скачивать новый участок: возвращаемся в начало внутри уже
+    // загруженного диапазона и сохраняем настоящий запас кадров, а не один первый кадр.
+    try{ player.pauseVideo(); player.seekTo(0,false); }catch(_){}
+    applyMute(); send({t:'buffered'});
+  }
   function apply(){
     if(!ready) return;
     try{
       var s=player.getPlayerState();
       if(want==='play'){
-        if(buffering){ buffering=false; applyMute(); if(s===1) send({t:'state',s:1}); }
-        if(s!==1&&s!==3) player.playVideo();
+        if(buffering){
+          clearPrebufferTimer(); buffering=false;
+          // Если поток ещё только буферизуется, оставляем его без звука до PLAYING —
+          // иначе звук снова может обогнать первый показанный кадр.
+          if(s===3){ starting=true; }
+          else { applyMute(); if(s===1) send({t:'state',s:1}); }
+        }
+        if(s!==1&&s!==3){
+          // Стартуем без звука и возвращаем его только в PLAYING: аудио не должно
+          // убегать вперёд, пока WebView ещё не показал первый кадр.
+          starting=true; quietUntil=Date.now()+1500; player.mute(); player.playVideo();
+        }
       } else if(buffering){
         return;
       } else if(s===1||s===3){
@@ -70,7 +91,19 @@ export function youtubePlayerHtml(
     }catch(e){}
   }
   window.__fliq=function(c){ want=c; apply(); };
+  // Касания принимает RN-слой над WebView: вертикальный жест остаётся свайпом ленты,
+  // а короткий тап приходит сюда. Сам iframe касаний не получает и не рисует по центру
+  // системную кнопку паузы YouTube при каждом перелистывании.
+  window.__fliqUserToggle=function(){
+    if(!ready||buffering||want==='pause') return;
+    try{
+      if(want==='play'){ want='hold'; send({t:'userpause'}); player.pauseVideo(); }
+      else if(want==='hold'){ want='play'; send({t:'userplay'}); player.playVideo(); }
+    }catch(e){}
+  };
   window.__fliqMute=function(m){ muted=!!m; applyMute(); };
+  // Уже начатую подгрузку не обрываем из-за короткой смены ролей ячеек при свайпе:
+  // она сама закончится по таймеру. false лишь запрещает начинать новую.
   window.__fliqPrebuffer=function(p){ prebuffer=!!p; apply(); };
   window.onYouTubeIframeAPIReady=function(){
     player=new YT.Player('p',{width:'100%',height:'100%',videoId:'${videoId}',
@@ -80,9 +113,12 @@ export function youtubePlayerHtml(
         onStateChange:function(e){
           if(buffering){
             if(e.data===1){
-              buffering=false; buffered=true;
-              try{ player.pauseVideo(); player.seekTo(0,true); }catch(_){}
-              applyMute(); send({t:'buffered'});
+              // Первый кадр — ещё не буфер. Даём скрытому ролику скачать реальный запас,
+              // но только одному за раз (очередью управляет RN), чтобы не делить канал.
+              if(prebufferTimer===null) prebufferTimer=setTimeout(function(){
+                prebufferTimer=null;
+                if(buffering&&want==='pause') finishPrebuffer();
+              },2400);
             }
             return;
           }
@@ -90,7 +126,8 @@ export function youtubePlayerHtml(
           // запуск кнопкой в плеере — тоже его решение, сообщаем и играем.
           if(e.data===1&&want==='pause'){ try{player.pauseVideo();}catch(_){} return; }
           if(e.data===1&&want==='hold'){ want='play'; send({t:'userplay'}); }
-          if(e.data===2&&want==='play'){ want='hold'; send({t:'userpause'}); }
+          if(e.data===1&&starting){ starting=false; applyMute(); }
+          if(e.data===2&&want==='play'){ try{player.playVideo();}catch(_){} return; }
           send({t:'state',s:e.data});
           if(e.data===0&&want==='play'){ send({t:'loop'}); try{player.seekTo(0,true);player.playVideo();}catch(_){} }
           if(e.data===1){

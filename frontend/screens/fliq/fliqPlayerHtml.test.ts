@@ -10,6 +10,7 @@ function start(init: { mode: FliqPlayMode; muted?: boolean; prebuffer?: boolean;
   const sent: Msg[] = [];
   const calls: string[] = [];
   const intervals: Array<() => void> = [];
+  const timeouts: Array<() => void> = [];
   let now = 1_000_000;
   let opts: any = null;
   const player: any = {
@@ -21,7 +22,7 @@ function start(init: { mode: FliqPlayMode; muted?: boolean; prebuffer?: boolean;
     mute: () => calls.push('mute'),
     unMute: () => calls.push('unmute'),
     isMuted: () => player.muted,
-    seekTo: () => calls.push('seek'),
+    seekTo: (_sec: number, allowSeekAhead: boolean) => calls.push(`seek:${allowSeekAhead}`),
     getCurrentTime: () => 0,
     getDuration: () => 30,
   };
@@ -41,10 +42,15 @@ function start(init: { mode: FliqPlayMode; muted?: boolean; prebuffer?: boolean;
   const win: any = { ReactNativeWebView: { postMessage: (s: string) => sent.push(JSON.parse(s)) } };
   const doc = { createElement: () => ({}), head: { appendChild: () => {} } };
   // eslint-disable-next-line no-new-func
-  new Function('window', 'document', 'setInterval', 'clearInterval', 'Date', 'YT', script)(
+  new Function('window', 'document', 'setInterval', 'clearInterval', 'setTimeout', 'clearTimeout', 'Date', 'YT', script)(
     win,
     doc,
     (fn: () => void) => intervals.push(fn),
+    () => {},
+    (fn: () => void) => {
+      timeouts.push(fn);
+      return timeouts.length;
+    },
     () => {},
     { now: () => now },
     YT,
@@ -62,6 +68,7 @@ function start(init: { mode: FliqPlayMode; muted?: boolean; prebuffer?: boolean;
       opts.events.onStateChange({ data: s });
     },
     poll: () => intervals.forEach((fn) => fn()),
+    flushTimeouts: () => timeouts.splice(0).forEach((fn) => fn()),
     advance: (ms: number) => {
       now += ms;
     },
@@ -83,8 +90,13 @@ describe('youtube player page', () => {
     expect(p.calls).toEqual(['unmute', 'mute', 'play']);
     p.state(3);
     p.state(1);
+    // Первый кадр сам по себе ещё не считается готовым буфером.
+    expect(types(p.sent)).toEqual(['ready']);
+    expect(p.calls).not.toContain('pause');
+    p.flushTimeouts();
     expect(types(p.sent)).toEqual(['ready', 'buffered']);
     expect(p.calls).toContain('pause');
+    expect(p.calls).toContain('seek:false');
     p.player.state = 2;
     p.win.__fliq('play');
     p.state(1);
@@ -99,6 +111,40 @@ describe('youtube player page', () => {
     p.state(1);
     expect(types(p.sent)).toEqual(['ready', 'state:1']);
     expect(p.calls.filter((c) => c === 'unmute').length).toBe(2);
+  });
+
+  it('a swipe during the deep-buffer window reuses the running stream', () => {
+    const p = start({ mode: 'pause', prebuffer: true });
+    p.ready();
+    p.state(1);
+    p.win.__fliq('play');
+    p.flushTimeouts();
+
+    expect(types(p.sent)).toEqual(['ready', 'state:1']);
+    expect(p.calls).not.toContain('pause');
+    expect(p.calls).not.toContain('seek:false');
+  });
+
+  it('finishes an in-flight buffer when list cells change roles', () => {
+    const p = start({ mode: 'pause', prebuffer: true });
+    p.ready();
+    p.state(1);
+    p.win.__fliqPrebuffer(false);
+    p.flushTimeouts();
+
+    expect(types(p.sent)).toEqual(['ready', 'buffered']);
+    expect(p.calls).toContain('pause');
+    expect(p.calls).toContain('seek:false');
+  });
+
+  it('restores sound only when the first playing frame is reported', () => {
+    const p = start({ mode: 'play', muted: false });
+    p.ready();
+    expect(p.calls.slice(-2)).toEqual(['mute', 'play']);
+
+    p.state(1);
+    expect(p.calls[p.calls.length - 1]).toBe('unmute');
+    expect(types(p.sent)).toEqual(['ready', 'state:1']);
   });
 
   it('a pause from the app is not a user pause, and blocks playback', () => {
@@ -116,12 +162,24 @@ describe('youtube player page', () => {
     const p = start({ mode: 'play' });
     p.ready();
     p.state(1);
+    p.win.__fliqUserToggle();
     p.state(2);
     expect(types(p.sent)).toEqual(['ready', 'state:1', 'userpause', 'state:2']);
     p.win.__fliq('hold');
     expect(p.calls.filter((c) => c === 'play').length).toBe(1);
+    p.win.__fliqUserToggle();
     p.state(1);
     expect(types(p.sent).slice(-2)).toEqual(['userplay', 'state:1']);
+  });
+
+  it('does not turn an automatic player pause into a user hold', () => {
+    const p = start({ mode: 'play' });
+    p.ready();
+    p.state(1);
+    p.state(2);
+
+    expect(types(p.sent)).toEqual(['ready', 'state:1']);
+    expect(p.calls[p.calls.length - 1]).toBe('play');
   });
 
   it('own mute commands are not reported as user taps, real taps are', () => {

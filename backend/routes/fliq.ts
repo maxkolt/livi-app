@@ -59,11 +59,16 @@ export function pickFliqItems(
   const maxScore = Math.max(...candidates.map((c) => c.score || 0), 1);
   const selectedSet = new Set(selected);
   const keyed = candidates.map((c) => {
+    const matchingTopics = c.topics.filter((t) => !selectedSet.size || selectedSet.has(t));
     const topicW = Math.max(
-      ...c.topics.filter((t) => !selectedSet.size || selectedSet.has(t)).map((t) => Number(weights[t] ?? 1)),
-      0.5
+      ...matchingTopics.map((t) => Number(weights[t] ?? 1)),
+      selectedSet.size ? 0.1 : 0.5
     );
-    const w = Math.max(0.05, topicW * (0.4 + (c.score || 0) / maxScore));
+    // Если выбранной темы пока мало и пул пришлось дополнить общими роликами, количество
+    // общих кандидатов не должно вытеснить явный выбор человека. Внутри выбранных тем
+    // по-прежнему работают обученные веса досмотров и популярность ролика.
+    const selectedBoost = selectedSet.size && matchingTopics.length ? 2 : 1;
+    const w = Math.max(0.05, selectedBoost * topicW * (0.4 + (c.score || 0) / maxScore));
     return { c, key: Math.pow(Math.random(), 1 / w) };
   });
   keyed.sort((a, b) => b.key - a.key);

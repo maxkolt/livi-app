@@ -8,6 +8,14 @@ const ru: Table = {
   soundOn: 'Включить звук',
   soundOff: 'Выключить звук',
   share: 'Переслать',
+  save: 'Сохранить в LiVi',
+  removeSaved: 'Удалить из сохранённых',
+  savedTitle: 'Сохранённые',
+  savedA11y: 'Сохранённые ролики',
+  savedEmpty: 'Здесь появятся сохранённые ролики',
+  savedEmptyHint: 'Нажми на закладку под видео, чтобы оставить его в LiVi.',
+  playSaved: 'Смотреть сохранённый ролик',
+  backToFeed: 'Вернуться в ленту Fliq',
   openIn: 'Открыть в {app}',
   topicsTitle: 'Что тебе интересно?',
   topicsHint: 'Выбери темы — лента подстроится под них. Поменять можно в любой момент.',
@@ -32,12 +40,30 @@ const ru: Table = {
   topic_travel: 'Путешествия',
   topic_cars: 'Авто',
   topic_art: 'Творчество',
+  topic_technology: 'Технологии',
+  topic_politics: 'Политика',
+  topic_history: 'История',
+  topic_fishing: 'Рыбалка',
+  topic_hunting: 'Охота',
+  topic_fitness: 'Фитнес',
+  topic_fashion: 'Мода',
+  topic_movies: 'Кино',
+  topic_business: 'Бизнес',
+  topic_nature: 'Природа',
 };
 
 const en: Table = {
   soundOn: 'Sound on',
   soundOff: 'Sound off',
   share: 'Send',
+  save: 'Save in LiVi',
+  removeSaved: 'Remove from saved',
+  savedTitle: 'Saved',
+  savedA11y: 'Saved videos',
+  savedEmpty: 'Your saved videos will appear here',
+  savedEmptyHint: 'Tap the bookmark under a video to keep it in LiVi.',
+  playSaved: 'Play saved video',
+  backToFeed: 'Back to the Fliq feed',
   openIn: 'Open in {app}',
   topicsTitle: 'What are you into?',
   topicsHint: 'Pick topics and the feed will follow them. You can change them any time.',
@@ -62,6 +88,16 @@ const en: Table = {
   topic_travel: 'Travel',
   topic_cars: 'Cars',
   topic_art: 'Creative',
+  topic_technology: 'Technology',
+  topic_politics: 'Politics',
+  topic_history: 'History',
+  topic_fishing: 'Fishing',
+  topic_hunting: 'Hunting',
+  topic_fitness: 'Fitness',
+  topic_fashion: 'Fashion',
+  topic_movies: 'Movies',
+  topic_business: 'Business',
+  topic_nature: 'Nature',
 };
 
 const es: Table = {
@@ -92,6 +128,16 @@ const es: Table = {
   topic_travel: 'Viajes',
   topic_cars: 'Coches',
   topic_art: 'Creatividad',
+  topic_technology: 'Tecnología',
+  topic_politics: 'Política',
+  topic_history: 'Historia',
+  topic_fishing: 'Pesca',
+  topic_hunting: 'Caza',
+  topic_fitness: 'Fitness',
+  topic_fashion: 'Moda',
+  topic_movies: 'Cine',
+  topic_business: 'Negocios',
+  topic_nature: 'Naturaleza',
 };
 
 const de: Table = {
@@ -122,6 +168,16 @@ const de: Table = {
   topic_travel: 'Reisen',
   topic_cars: 'Autos',
   topic_art: 'Kreatives',
+  topic_technology: 'Technik',
+  topic_politics: 'Politik',
+  topic_history: 'Geschichte',
+  topic_fishing: 'Angeln',
+  topic_hunting: 'Jagd',
+  topic_fitness: 'Fitness',
+  topic_fashion: 'Mode',
+  topic_movies: 'Filme',
+  topic_business: 'Wirtschaft',
+  topic_nature: 'Natur',
 };
 
 const fr: Table = {
@@ -152,6 +208,16 @@ const fr: Table = {
   topic_travel: 'Voyages',
   topic_cars: 'Autos',
   topic_art: 'Créatif',
+  topic_technology: 'Technologie',
+  topic_politics: 'Politique',
+  topic_history: 'Histoire',
+  topic_fishing: 'Pêche',
+  topic_hunting: 'Chasse',
+  topic_fitness: 'Fitness',
+  topic_fashion: 'Mode',
+  topic_movies: 'Cinéma',
+  topic_business: 'Business',
+  topic_nature: 'Nature',
 };
 
 const it: Table = {
@@ -182,6 +248,16 @@ const it: Table = {
   topic_travel: 'Viaggi',
   topic_cars: 'Auto',
   topic_art: 'Creatività',
+  topic_technology: 'Tecnologia',
+  topic_politics: 'Politica',
+  topic_history: 'Storia',
+  topic_fishing: 'Pesca',
+  topic_hunting: 'Caccia',
+  topic_fitness: 'Fitness',
+  topic_fashion: 'Moda',
+  topic_movies: 'Cinema',
+  topic_business: 'Business',
+  topic_nature: 'Natura',
 };
 
 const pt: Table = {
@@ -212,6 +288,16 @@ const pt: Table = {
   topic_travel: 'Viagens',
   topic_cars: 'Carros',
   topic_art: 'Criatividade',
+  topic_technology: 'Tecnologia',
+  topic_politics: 'Política',
+  topic_history: 'História',
+  topic_fishing: 'Pesca',
+  topic_hunting: 'Caça',
+  topic_fitness: 'Fitness',
+  topic_fashion: 'Moda',
+  topic_movies: 'Cinema',
+  topic_business: 'Negócios',
+  topic_nature: 'Natureza',
 };
 
 const tr: Table = {
@@ -242,6 +328,16 @@ const tr: Table = {
   topic_travel: 'Seyahat',
   topic_cars: 'Arabalar',
   topic_art: 'Yaratıcılık',
+  topic_technology: 'Teknoloji',
+  topic_politics: 'Politika',
+  topic_history: 'Tarih',
+  topic_fishing: 'Balıkçılık',
+  topic_hunting: 'Avcılık',
+  topic_fitness: 'Fitness',
+  topic_fashion: 'Moda',
+  topic_movies: 'Sinema',
+  topic_business: 'İş dünyası',
+  topic_nature: 'Doğa',
 };
 
 const ar: Table = {
@@ -272,6 +368,16 @@ const ar: Table = {
   topic_travel: 'سفر',
   topic_cars: 'سيارات',
   topic_art: 'إبداع',
+  topic_technology: 'تكنولوجيا',
+  topic_politics: 'سياسة',
+  topic_history: 'تاريخ',
+  topic_fishing: 'صيد السمك',
+  topic_hunting: 'صيد',
+  topic_fitness: 'لياقة',
+  topic_fashion: 'موضة',
+  topic_movies: 'أفلام',
+  topic_business: 'أعمال',
+  topic_nature: 'طبيعة',
 };
 
 const ja: Table = {
@@ -302,6 +408,16 @@ const ja: Table = {
   topic_travel: '旅行',
   topic_cars: '車',
   topic_art: 'クリエイティブ',
+  topic_technology: 'テクノロジー',
+  topic_politics: '政治',
+  topic_history: '歴史',
+  topic_fishing: '釣り',
+  topic_hunting: '狩猟',
+  topic_fitness: 'フィットネス',
+  topic_fashion: 'ファッション',
+  topic_movies: '映画',
+  topic_business: 'ビジネス',
+  topic_nature: '自然',
 };
 
 const ko: Table = {
@@ -332,6 +448,16 @@ const ko: Table = {
   topic_travel: '여행',
   topic_cars: '자동차',
   topic_art: '크리에이티브',
+  topic_technology: '기술',
+  topic_politics: '정치',
+  topic_history: '역사',
+  topic_fishing: '낚시',
+  topic_hunting: '사냥',
+  topic_fitness: '피트니스',
+  topic_fashion: '패션',
+  topic_movies: '영화',
+  topic_business: '비즈니스',
+  topic_nature: '자연',
 };
 
 const zh: Table = {
@@ -362,6 +488,16 @@ const zh: Table = {
   topic_travel: '旅行',
   topic_cars: '汽车',
   topic_art: '创意',
+  topic_technology: '科技',
+  topic_politics: '政治',
+  topic_history: '历史',
+  topic_fishing: '钓鱼',
+  topic_hunting: '狩猎',
+  topic_fitness: '健身',
+  topic_fashion: '时尚',
+  topic_movies: '电影',
+  topic_business: '商业',
+  topic_nature: '自然',
 };
 
 const zhTW: Table = {
@@ -392,6 +528,16 @@ const zhTW: Table = {
   topic_travel: '旅行',
   topic_cars: '汽車',
   topic_art: '創意',
+  topic_technology: '科技',
+  topic_politics: '政治',
+  topic_history: '歷史',
+  topic_fishing: '釣魚',
+  topic_hunting: '狩獵',
+  topic_fitness: '健身',
+  topic_fashion: '時尚',
+  topic_movies: '電影',
+  topic_business: '商業',
+  topic_nature: '自然',
 };
 
 const hi: Table = {
@@ -422,6 +568,16 @@ const hi: Table = {
   topic_travel: 'यात्रा',
   topic_cars: 'कारें',
   topic_art: 'क्रिएटिव',
+  topic_technology: 'तकनीक',
+  topic_politics: 'राजनीति',
+  topic_history: 'इतिहास',
+  topic_fishing: 'मछली पकड़ना',
+  topic_hunting: 'शिकार',
+  topic_fitness: 'फ़िटनेस',
+  topic_fashion: 'फ़ैशन',
+  topic_movies: 'फ़िल्में',
+  topic_business: 'व्यवसाय',
+  topic_nature: 'प्रकृति',
 };
 
 const vi: Table = {
@@ -452,6 +608,16 @@ const vi: Table = {
   topic_travel: 'Du lịch',
   topic_cars: 'Xe hơi',
   topic_art: 'Sáng tạo',
+  topic_technology: 'Công nghệ',
+  topic_politics: 'Chính trị',
+  topic_history: 'Lịch sử',
+  topic_fishing: 'Câu cá',
+  topic_hunting: 'Săn bắn',
+  topic_fitness: 'Thể hình',
+  topic_fashion: 'Thời trang',
+  topic_movies: 'Điện ảnh',
+  topic_business: 'Kinh doanh',
+  topic_nature: 'Thiên nhiên',
 };
 
 const th: Table = {
@@ -482,6 +648,16 @@ const th: Table = {
   topic_travel: 'ท่องเที่ยว',
   topic_cars: 'รถยนต์',
   topic_art: 'งานสร้างสรรค์',
+  topic_technology: 'เทคโนโลยี',
+  topic_politics: 'การเมือง',
+  topic_history: 'ประวัติศาสตร์',
+  topic_fishing: 'ตกปลา',
+  topic_hunting: 'ล่าสัตว์',
+  topic_fitness: 'ฟิตเนส',
+  topic_fashion: 'แฟชั่น',
+  topic_movies: 'ภาพยนตร์',
+  topic_business: 'ธุรกิจ',
+  topic_nature: 'ธรรมชาติ',
 };
 
 const id: Table = {
@@ -512,6 +688,16 @@ const id: Table = {
   topic_travel: 'Traveling',
   topic_cars: 'Mobil',
   topic_art: 'Kreatif',
+  topic_technology: 'Teknologi',
+  topic_politics: 'Politik',
+  topic_history: 'Sejarah',
+  topic_fishing: 'Memancing',
+  topic_hunting: 'Berburu',
+  topic_fitness: 'Kebugaran',
+  topic_fashion: 'Mode',
+  topic_movies: 'Film',
+  topic_business: 'Bisnis',
+  topic_nature: 'Alam',
 };
 
 const TABLES: Record<Lang, Table> = {

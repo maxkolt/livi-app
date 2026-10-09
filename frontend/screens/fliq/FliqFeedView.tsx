@@ -1,12 +1,12 @@
 // Вкладка Fliq: вертикальная лента коротких роликов (YouTube Shorts) — свайп вверх/вниз.
 //
 // Скорость: плееры есть у текущего ролика, предыдущего и двух следующих; ближайший следующий
-// заранее подгружается (тихий старт и пауза на первом кадре), поэтому после свайпа играет
-// почти сразу. Первая страница ленты грузится ещё до открытия вкладки (warmFliqFeed).
+// заранее скачивает несколько секунд, затем готовится второй — последовательно, без деления
+// канала. Первая страница ленты грузится ещё до открытия вкладки (warmFliqFeed).
 // Пока плеер не дал первый кадр, поверх виден кадр-превью.
 //
 // Лента идёт под нижнее стекло навбара, как списки других вкладок: следующий ролик виден
-// под ним размытым. Кнопки LiVi («Переслать», звук, «Открыть в YouTube») — под роликом,
+// под ним размытым. Кнопки LiVi (звук, YouTube, сохранить, переслать) — ровным рядом под роликом,
 // не поверх плеера: правила YouTube API запрещают перекрывать встроенный плеер.
 //
 // Пауза: ушли с вкладки — ролик встаёт и продолжает при возврате; если паузу поставил сам
@@ -45,6 +45,7 @@ import { GLASS_HEADER_BTN } from '../home/WelcomeGlassHeader';
 import { useHomeLayout } from '../home/HomeLayoutContext';
 import { useDigitalMediumFont } from '../home/brandFont';
 import { BlurListSource } from '../../components/BackdropBlur';
+import { useOverlayBackHandler } from '../../components/AppOverlay';
 import { logger } from '../../utils/logger';
 import { FliqYoutubePlayer, type FliqPlayMode } from './FliqPlayer';
 import {
@@ -63,6 +64,8 @@ import { FliqShareSheet } from './FliqShareSheet';
 import { FliqTopicsDialog } from './FliqTopicsDialog';
 import { FliqAmbient } from './FliqAmbient';
 import { FLIQ_PROGRESS_ROW_H, FliqProgressBar, useFliqProgress } from './FliqProgressBar';
+import { FliqSavedView } from './FliqSavedView';
+import { useFliqSaved } from './fliqSaved';
 
 /** Подождать первый кадр, прежде чем показать «Видео не загружается». */
 const STALL_MS = 10_000;
@@ -74,14 +77,6 @@ const KEEP_HELD_PLAYERS_MS = 10 * 60_000;
 const SKIP_ERROR_CODES = new Set([2, 5, 100, 101, 150]);
 const PAGE_SIZE = 10;
 const CARD_RADIUS = 22;
-
-/** «Смешное видео #shorts #funny» → «Смешное видео». */
-function cleanTitle(title: string): string {
-  return String(title || '')
-    .replace(/#[^\s#]+/g, '')
-    .replace(/\s{2,}/g, ' ')
-    .trim();
-}
 
 type WatchStat = { maxSec: number; durSec: number; loops: number };
 
@@ -108,6 +103,10 @@ export function FliqFeedView({ active, lang, bottomInset, topInset }: FliqFeedVi
   const muted = useFliqSound((s) => s.muted);
   const setMuted = useFliqSound((s) => s.setMuted);
   const hydrateSound = useFliqSound((s) => s.hydrate);
+  const savedItems = useFliqSaved((s) => s.items);
+  const savedHydrated = useFliqSaved((s) => s.hydrated);
+  const hydrateSaved = useFliqSaved((s) => s.hydrate);
+  const toggleSaved = useFliqSaved((s) => s.toggle);
 
   const [items, setItems] = useState<FliqItem[]>([]);
   const itemsRef = useRef<FliqItem[]>([]);
@@ -117,15 +116,18 @@ export function FliqFeedView({ active, lang, bottomInset, topInset }: FliqFeedVi
   const activeIndexRef = useRef(0);
   const [viewportH, setViewportH] = useState(0);
   const [topicsOpen, setTopicsOpen] = useState(false);
+  const [savedOpen, setSavedOpen] = useState(false);
   const [shareUrl, setShareUrl] = useState<string | null>(null);
   const [keepPlayers, setKeepPlayers] = useState(active);
   /** Ролик, который человек сам поставил на паузу (сбрасывается при свайпе). */
   const [heldId, setHeldId] = useState<string | null>(null);
   /** Ролик на экране уже показал первый кадр — можно подгружать следующий, не отнимая у него сеть. */
   const [startedId, setStartedId] = useState<string | null>(null);
+  /** Готовые скрытые ролики: второй следующий запускаем только после ближайшего, без конкуренции за сеть. */
+  const [bufferedIds, setBufferedIds] = useState<ReadonlySet<string>>(() => new Set());
   /**
-   * Соседние плееры создаём, когда первый ролик ленты уже заиграл (или через 4 с): при открытии
-   * вкладки сеть и поток UI достаются ему одному.
+   * Ближайший следующий создаётся сразу, остальные соседи — когда текущий уже заиграл
+   * (или через 4 с, чтобы не зависнуть при плохом ответе первого ролика).
    */
   const [neighborsOn, setNeighborsOn] = useState(false);
   const listRef = useRef<FlatList<FliqItem>>(null);
@@ -139,7 +141,10 @@ export function FliqFeedView({ active, lang, bottomInset, topInset }: FliqFeedVi
   useEffect(() => {
     void hydrateTopics();
     void hydrateSound();
-  }, [hydrateTopics, hydrateSound]);
+    void hydrateSaved();
+  }, [hydrateTopics, hydrateSound, hydrateSaved]);
+
+  useOverlayBackHandler(active && savedOpen, () => setSavedOpen(false));
 
   useEffect(() => {
     if (active) {
@@ -158,6 +163,7 @@ export function FliqFeedView({ active, lang, bottomInset, topInset }: FliqFeedVi
     setActiveIndex(0);
     setHeldId(null);
     setStartedId(null);
+    setBufferedIds(new Set());
     setNeighborsOn(false);
     setItems(first);
     listRef.current?.scrollToOffset({ offset: 0, animated: false });
@@ -289,7 +295,7 @@ export function FliqFeedView({ active, lang, bottomInset, topInset }: FliqFeedVi
     [goNext],
   );
 
-  const playbackOn = active && !topicsOpen && !shareUrl;
+  const playbackOn = active && !savedOpen && !topicsOpen && !shareUrl;
   const playbackOnRef = useRef(playbackOn);
   playbackOnRef.current = playbackOn;
 
@@ -318,6 +324,14 @@ export function FliqFeedView({ active, lang, bottomInset, topInset }: FliqFeedVi
     setStartedId(id);
     setNeighborsOn(true);
   }, []);
+  const onBuffered = useCallback((id: string) => {
+    setBufferedIds((current) => {
+      if (current.has(id)) return current;
+      const next = new Set(current);
+      next.add(id);
+      return next;
+    });
+  }, []);
   useEffect(() => {
     if (neighborsOn || status !== 'ready' || !active) return;
     const timer = setTimeout(() => setNeighborsOn(true), 4000);
@@ -329,6 +343,8 @@ export function FliqFeedView({ active, lang, bottomInset, topInset }: FliqFeedVi
     queueFliqEvent({ id: item.id, watchedMs: 0, durationMs: item.durationSec * 1000, shared: true });
     setShareUrl(youtubeShareUrl(item.id));
   }, []);
+
+  const savedIds = useMemo(() => new Set(savedItems.map((item) => item.id)), [savedItems]);
 
   const onTopicsDone = useCallback(
     (next: FliqTopic[]) => {
@@ -367,7 +383,7 @@ export function FliqFeedView({ active, lang, bottomInset, topInset }: FliqFeedVi
     () => ({ x: ambientX, y: ambientY, width: cardW, height: cardH }),
     [ambientX, ambientY, cardW, cardH],
   );
-  const ambientUrl = status === 'ready' && items[activeIndex] ? youtubeThumbUrl(items[activeIndex].id) : null;
+  const ambientUrl = !savedOpen && status === 'ready' && items[activeIndex] ? youtubeThumbUrl(items[activeIndex].id) : null;
 
   const renderItem = useCallback(
     ({ item, index }: { item: FliqItem; index: number }) => {
@@ -375,6 +391,8 @@ export function FliqFeedView({ active, lang, bottomInset, topInset }: FliqFeedVi
       const mode: FliqPlayMode =
         !playbackOn || offset !== 0 ? 'pause' : heldId === item.id ? 'hold' : 'play';
       const activeId = items[activeIndex]?.id;
+      const nextId = items[activeIndex + 1]?.id;
+      const mayPrebuffer = playbackOn && !!activeId && startedId === activeId;
       return (
         <FliqSlide
           item={item}
@@ -384,9 +402,13 @@ export function FliqFeedView({ active, lang, bottomInset, topInset }: FliqFeedVi
           cardW={cardW}
           cardH={cardH}
           panelH={panelH}
-          mountPlayer={keepPlayers && (offset === 0 || (neighborsOn && offset >= -1 && offset <= 2))}
+          // Ближайший WebView/API поднимается сразу; медиапоток пойдёт лишь после первого
+          // кадра текущего. Предыдущий и второй следующий подключаются следом.
+          mountPlayer={
+            keepPlayers && (offset === 0 || offset === 1 || (neighborsOn && offset >= -1 && offset <= 2))
+          }
           mode={mode}
-          prebuffer={playbackOn && offset === 1 && !!activeId && startedId === activeId}
+          prebuffer={mayPrebuffer && (offset === 1 || (offset === 2 && !!nextId && bufferedIds.has(nextId)))}
           muted={muted}
           // Важно только при создании плеера: ролик на экране продолжает с места, где стоял.
           startSec={offset === 0 ? positionRef.current.get(item.id) || 0 : 0}
@@ -395,19 +417,24 @@ export function FliqFeedView({ active, lang, bottomInset, topInset }: FliqFeedVi
           onPlayError={onPlayError}
           onSkip={goNext}
           onShare={onShare}
+          saved={savedIds.has(item.id)}
+          onToggleSaved={toggleSaved}
           onMuteChange={onMuteChange}
           onToggleMute={setMuted}
           onUserPause={onUserPause}
           onUserPlay={onUserPlay}
           onStarted={onStarted}
+          onBuffered={onBuffered}
         />
       );
     },
     [
       items,
+      bufferedIds,
       neighborsOn,
       startedId,
       onStarted,
+      onBuffered,
       lang,
       pageH,
       cardW,
@@ -423,6 +450,8 @@ export function FliqFeedView({ active, lang, bottomInset, topInset }: FliqFeedVi
       onPlayError,
       goNext,
       onShare,
+      savedIds,
+      toggleSaved,
       onMuteChange,
       setMuted,
       onUserPause,
@@ -439,25 +468,70 @@ export function FliqFeedView({ active, lang, bottomInset, topInset }: FliqFeedVi
       </View>
       <View style={{ height: topInset }} />
       <View style={[styles.header, { height: headerH, paddingHorizontal: sideInset }]}>
-        <WelcomeTabTitle label="Fliq" tablet={tablet} compact={compact} />
-        <View style={styles.headerSpacer} />
-        <Pressable
-          onPress={() => setTopicsOpen(true)}
-          hitSlop={8}
-          accessibilityRole="button"
-          accessibilityLabel={fliqT('topicsA11y', lang)}
-          style={({ pressed }) => [
-            styles.headerBtn,
-            { width: btnSize, height: btnSize, borderRadius: btnSize / 2 },
-            pressed && styles.headerBtnPressed,
-          ]}
-        >
-          <Ionicons name="options-outline" size={tablet ? 22 : 19} color={WELCOME_HEADER_TITLE} />
-        </Pressable>
+        <WelcomeTabTitle
+          label={savedOpen ? fliqT('savedTitle', lang) : 'Fliq'}
+          tablet={tablet}
+          compact={compact}
+          sideInset={sideInset + (savedOpen ? btnSize : btnSize * 2 + 8)}
+        />
+        {savedOpen ? (
+          <Pressable
+            onPress={() => setSavedOpen(false)}
+            hitSlop={8}
+            accessibilityRole="button"
+            accessibilityLabel={fliqT('backToFeed', lang)}
+            style={({ pressed }) => [
+              styles.headerBackBtn,
+              { width: btnSize, height: btnSize, borderRadius: btnSize / 2 },
+              pressed && styles.headerBtnPressed,
+            ]}
+          >
+            <Ionicons name="chevron-back" size={tablet ? 24 : 21} color={WELCOME_HEADER_TITLE} />
+          </Pressable>
+        ) : (
+          <>
+            <View style={styles.headerSpacer} />
+            <View style={styles.headerActions}>
+              <Pressable
+                onPress={() => setSavedOpen(true)}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel={fliqT('savedA11y', lang)}
+                style={({ pressed }) => [
+                  styles.headerBtn,
+                  { width: btnSize, height: btnSize, borderRadius: btnSize / 2 },
+                  pressed && styles.headerBtnPressed,
+                ]}
+              >
+                <Ionicons name="bookmark-outline" size={tablet ? 21 : 19} color={WELCOME_HEADER_TITLE} />
+                {savedHydrated && savedItems.length > 0 ? (
+                  <View style={styles.savedBadge}>
+                    <Text style={styles.savedBadgeText}>{savedItems.length > 99 ? '99+' : savedItems.length}</Text>
+                  </View>
+                ) : null}
+              </Pressable>
+              <Pressable
+                onPress={() => setTopicsOpen(true)}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel={fliqT('topicsA11y', lang)}
+                style={({ pressed }) => [
+                  styles.headerBtn,
+                  { width: btnSize, height: btnSize, borderRadius: btnSize / 2 },
+                  pressed && styles.headerBtnPressed,
+                ]}
+              >
+                <Ionicons name="options-outline" size={tablet ? 22 : 19} color={WELCOME_HEADER_TITLE} />
+              </Pressable>
+            </View>
+          </>
+        )}
       </View>
 
       <View style={styles.pager} onLayout={onListLayout}>
-        {status === 'ready' && pageH > 0 ? (
+        {savedOpen ? (
+          <FliqSavedView lang={lang} width={width} bottomInset={bottomInset} tablet={tablet} />
+        ) : status === 'ready' && pageH > 0 ? (
             <FlatList
               ref={listRef}
               data={items}
@@ -525,11 +599,14 @@ type FliqSlideProps = {
   onPlayError: (id: string, index: number, code: number) => void;
   onSkip: (index: number) => void;
   onShare: (item: FliqItem) => void;
+  saved: boolean;
+  onToggleSaved: (item: FliqItem) => void;
   onMuteChange: (index: number, muted: boolean) => void;
   onToggleMute: (muted: boolean) => void;
   onUserPause: (id: string, index: number) => void;
   onUserPlay: (id: string) => void;
   onStarted: (id: string) => void;
+  onBuffered: (id: string) => void;
 };
 
 const FliqSlide = memo(function FliqSlide({
@@ -550,11 +627,14 @@ const FliqSlide = memo(function FliqSlide({
   onPlayError,
   onSkip,
   onShare,
+  saved,
+  onToggleSaved,
   onMuteChange,
   onToggleMute,
   onUserPause,
   onUserPlay,
   onStarted,
+  onBuffered,
 }: FliqSlideProps) {
   const [firstFrame, setFirstFrame] = useState(false);
   const [stalled, setStalled] = useState(false);
@@ -591,7 +671,8 @@ const FliqSlide = memo(function FliqSlide({
   }, []);
   const handleBuffered = useCallback(() => {
     timingRef.current.bufferedMs = Date.now() - timingRef.current.mountAt;
-  }, []);
+    onBuffered(item.id);
+  }, [item.id, onBuffered]);
   const handleFirstFrame = useCallback(() => {
     const t = timingRef.current;
     logger.info('[fliq] first frame', {
@@ -605,7 +686,7 @@ const FliqSlide = memo(function FliqSlide({
     setFirstFrame(true);
     setStalled(false);
     onStarted(item.id);
-    Animated.timing(coverOpacity, { toValue: 0, duration: 160, useNativeDriver: true }).start();
+    Animated.timing(coverOpacity, { toValue: 0, duration: 100, useNativeDriver: true }).start();
   }, [coverOpacity, item.id, onStarted]);
   const { progress, onTick, reset: resetProgress } = useFliqProgress(playing);
   const handleProgress = useCallback(
@@ -640,7 +721,14 @@ const FliqSlide = memo(function FliqSlide({
     setRetryKey((k) => k + 1);
   }, [coverOpacity]);
 
-  const title = cleanTitle(item.title);
+  const actionGap = cardW < 220 ? 4 : 8;
+  // «Переслать» остаётся широкой кнопкой, три круглых действия занимают место слева.
+  // На низком landscape все размеры сжимаются и ряд не выходит за ширину видео.
+  const shareWidth = Math.min(116, Math.max(1, Math.floor(cardW * (cardW < 180 ? 0.46 : 0.4))));
+  const actionSize = Math.min(40, Math.max(1, Math.floor((cardW - shareWidth - actionGap * 3) / 3)));
+  const actionIconSize = Math.max(1, Math.min(19, actionSize - 6));
+  const shareHeight = Math.min(40, actionSize);
+  const shareCompact = shareWidth < 82;
   return (
     <View style={[styles.slide, { height: pageH }]}>
       <View style={[styles.card, { width: cardW, height: cardH }]}>
@@ -680,7 +768,7 @@ const FliqSlide = memo(function FliqSlide({
             cachePolicy="memory-disk"
             recyclingKey={`cover-${item.id}`}
           />
-          {playing && !stalled ? (
+          {playing && !firstFrame && !stalled ? (
             <View style={styles.center}>
               <ActivityIndicator color="rgba(255,255,255,0.85)" />
             </View>
@@ -703,29 +791,21 @@ const FliqSlide = memo(function FliqSlide({
 
       <FliqProgressBar progress={progress} width={cardW} />
 
-      <View style={[styles.panel, { width: cardW, height: panelH }]}>
-        <View style={styles.meta}>
-          {item.author ? (
-            <Text style={[styles.author, titleFont]} numberOfLines={1}>
-              {item.author}
-            </Text>
-          ) : null}
-          {title ? (
-            <Text style={styles.title} numberOfLines={item.author ? 1 : 2}>
-              {title}
-            </Text>
-          ) : null}
-        </View>
+      <View style={[styles.panel, { width: cardW, height: panelH, gap: actionGap }]}>
         <Pressable
           onPress={() => onToggleMute(!muted)}
           hitSlop={6}
           accessibilityRole="button"
           accessibilityLabel={fliqT(muted ? 'soundOn' : 'soundOff', lang)}
-          style={({ pressed }) => [styles.roundBtn, pressed && styles.roundBtnPressed]}
+          style={({ pressed }) => [
+            styles.roundBtn,
+            { width: actionSize, height: actionSize, borderRadius: actionSize / 2 },
+            pressed && styles.roundBtnPressed,
+          ]}
         >
           <Ionicons
             name={muted ? 'volume-mute-outline' : 'volume-high-outline'}
-            size={19}
+            size={actionIconSize}
             color={muted ? UI_ACCENT : UI_INACTIVE}
           />
         </Pressable>
@@ -734,18 +814,57 @@ const FliqSlide = memo(function FliqSlide({
           hitSlop={6}
           accessibilityRole="button"
           accessibilityLabel={fliqT('openIn', lang, { app: 'YouTube' })}
-          style={({ pressed }) => [styles.roundBtn, pressed && styles.roundBtnPressed]}
+          style={({ pressed }) => [
+            styles.roundBtn,
+            { width: actionSize, height: actionSize, borderRadius: actionSize / 2 },
+            pressed && styles.roundBtnPressed,
+          ]}
         >
-          <Ionicons name="logo-youtube" size={19} color={UI_INACTIVE} />
+          <Ionicons name="logo-youtube" size={actionIconSize} color={UI_INACTIVE} />
+        </Pressable>
+        <Pressable
+          onPress={() => onToggleSaved(item)}
+          hitSlop={6}
+          accessibilityRole="button"
+          accessibilityState={{ selected: saved }}
+          accessibilityLabel={fliqT(saved ? 'removeSaved' : 'save', lang)}
+          style={({ pressed }) => [
+            styles.roundBtn,
+            saved && styles.savedBtn,
+            { width: actionSize, height: actionSize, borderRadius: actionSize / 2 },
+            pressed && styles.roundBtnPressed,
+          ]}
+        >
+          <Ionicons
+            name={saved ? 'bookmark' : 'bookmark-outline'}
+            size={actionIconSize}
+            color={saved ? UI_ACCENT : UI_INACTIVE}
+          />
         </Pressable>
         <Pressable
           onPress={() => onShare(item)}
+          hitSlop={6}
           accessibilityRole="button"
           accessibilityLabel={fliqT('share', lang)}
-          style={({ pressed }) => [styles.shareBtn, pressed && styles.shareBtnPressed]}
+          style={({ pressed }) => [
+            styles.shareBtn,
+            {
+              width: shareWidth,
+              height: shareHeight,
+              borderRadius: shareHeight / 2,
+              paddingHorizontal: shareCompact ? 4 : 14,
+              gap: shareCompact ? 3 : 7,
+            },
+            pressed && styles.shareBtnPressed,
+          ]}
         >
-          <Ionicons name="paper-plane-outline" size={17} color={UI_ACCENT} />
-          <Text style={[styles.shareLabel, titleFont]} numberOfLines={1}>
+          <Ionicons name="paper-plane-outline" size={Math.max(1, Math.min(17, shareHeight - 7))} color={UI_ACCENT} />
+          <Text
+            style={[styles.shareLabel, titleFont, shareCompact && styles.shareLabelCompact]}
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.5}
+          >
             {fliqT('share', lang)}
           </Text>
         </Pressable>
@@ -802,6 +921,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   headerSpacer: { flex: 1 },
+  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  headerBackBtn: { alignItems: 'center', justifyContent: 'center' },
   headerBtn: {
     alignItems: 'center',
     justifyContent: 'center',
@@ -810,6 +931,21 @@ const styles = StyleSheet.create({
     borderColor: UI_RIM,
   },
   headerBtnPressed: { opacity: 0.7 },
+  savedBadge: {
+    position: 'absolute',
+    top: -3,
+    right: -3,
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    paddingHorizontal: 4,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: UI_ACCENT,
+    borderWidth: 1.5,
+    borderColor: UI_SURFACE,
+  },
+  savedBadgeText: { color: '#17232B', fontSize: 9, lineHeight: 11, fontWeight: '800' },
   pager: { flex: 1, minHeight: 0 },
   center: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center' },
   slide: {
@@ -832,16 +968,9 @@ const styles = StyleSheet.create({
   panel: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 4,
+    justifyContent: 'space-between',
   },
-  meta: { flex: 1, minWidth: 0, justifyContent: 'center' },
-  author: { color: WELCOME_HEADER_TITLE, fontSize: 14, lineHeight: 18 },
-  title: { color: WELCOME_MUTED_TEXT, fontSize: 13, lineHeight: 17, marginTop: 2 },
   roundBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: UI_SURFACE_RAISED,
@@ -849,19 +978,18 @@ const styles = StyleSheet.create({
     borderColor: UI_RIM,
   },
   roundBtnPressed: { opacity: 0.7 },
+  savedBtn: { backgroundColor: 'rgba(98, 176, 216, 0.14)', borderColor: 'rgba(98, 176, 216, 0.52)' },
   shareBtn: {
-    height: 40,
-    borderRadius: 20,
-    paddingHorizontal: 14,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 7,
+    justifyContent: 'center',
     backgroundColor: SHARE_FILL,
     borderWidth: 1,
     borderColor: SHARE_BORDER,
   },
   shareBtnPressed: { backgroundColor: SHARE_PRESSED_FILL, transform: [{ scale: 0.97 }] },
-  shareLabel: { color: WELCOME_HEADER_TITLE, fontSize: 14 },
+  shareLabel: { flexShrink: 1, minWidth: 0, color: WELCOME_HEADER_TITLE, fontSize: 14 },
+  shareLabelCompact: { fontSize: 11 },
   message: { alignItems: 'center', paddingHorizontal: 28, gap: 8 },
   messageTitle: { color: WELCOME_HEADER_TITLE, fontSize: 16, textAlign: 'center', marginTop: 4 },
   messageHint: { color: WELCOME_MUTED_TEXT, fontSize: 13, textAlign: 'center' },

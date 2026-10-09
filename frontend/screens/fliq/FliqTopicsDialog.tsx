@@ -19,6 +19,16 @@ const TOPIC_ICON: Record<FliqTopic, React.ComponentProps<typeof MaterialCommunit
   travel: 'airplane',
   cars: 'car-sports',
   art: 'palette-outline',
+  technology: 'laptop',
+  politics: 'bank-outline',
+  history: 'castle',
+  fishing: 'fish',
+  hunting: 'bow-arrow',
+  fitness: 'dumbbell',
+  fashion: 'hanger',
+  movies: 'movie-open-outline',
+  business: 'chart-line',
+  nature: 'pine-tree',
 };
 
 /** Выбранная тема — как кнопка «Найти собеседника»: мягкая заливка акцентом и чёткая рамка. */

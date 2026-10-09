@@ -95,6 +95,17 @@ describe('pickFliqItems', () => {
     for (let i = 1; i < out.length; i++) expect(out[i].channelId).not.toBe(out[i - 1].channelId);
   });
 
+  it('keeps explicitly selected topics ahead of fallback videos', () => {
+    const random = jest.spyOn(Math, 'random').mockReturnValue(0.5);
+    try {
+      const out = pickFliqItems(items, 10, {}, ['humor']);
+      expect(out).toHaveLength(10);
+      expect(out.every((item) => item.topics.includes('humor'))).toBe(true);
+    } finally {
+      random.mockRestore();
+    }
+  });
+
   it('handles an empty pool', () => {
     expect(pickFliqItems([], 10, {}, [])).toEqual([]);
   });

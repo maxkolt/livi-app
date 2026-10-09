@@ -13,6 +13,16 @@ export const FLIQ_TOPICS = [
   'travel',
   'cars',
   'art',
+  'technology',
+  'politics',
+  'history',
+  'fishing',
+  'hunting',
+  'fitness',
+  'fashion',
+  'movies',
+  'business',
+  'nature',
 ] as const;
 export type FliqTopic = (typeof FLIQ_TOPICS)[number];
 

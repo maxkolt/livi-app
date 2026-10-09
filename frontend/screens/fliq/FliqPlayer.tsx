@@ -3,7 +3,7 @@
 // YouTube API), из RN только «играть/пауза», звук и события: готов, первый кадр, прогресс, ошибка.
 // TikTok / Instagram: их встраиваемые страницы как есть.
 import React, { memo, useCallback, useEffect, useMemo, useRef } from 'react';
-import { Linking, StyleSheet, type StyleProp, type ViewStyle } from 'react-native';
+import { Linking, Pressable, StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
 import { WebView, type WebViewMessageEvent } from 'react-native-webview';
 import type { ShouldStartLoadRequest } from 'react-native-webview/lib/WebViewTypes';
 import { logger } from '../../utils/logger';
@@ -42,11 +42,11 @@ export type FliqYoutubePlayerProps = {
   startSec?: number;
   /** Общий для ленты «без звука». */
   muted?: boolean;
-  /** Подгрузить заранее (следующий ролик): тихий старт и пауза на первом кадре. */
+  /** Подгрузить заранее: тихо скачать первые секунды и вернуться в начало. */
   prebuffer?: boolean;
   /** Плеер YouTube загрузился и готов к командам. */
   onReady?: () => void;
-  /** Подгрузка заранее закончилась: ролик стоит на паузе в начале. */
+  /** Подгрузка первых секунд закончилась: ролик стоит на паузе в начале. */
   onBuffered?: () => void;
   onFirstFrame?: () => void;
   /** Раз в секунду, пока играет. */
@@ -106,6 +106,9 @@ export const FliqYoutubePlayer = memo(function FliqYoutubePlayer({
         `window.__fliq&&window.__fliq('${st.mode}')`,
     );
   }, [inject]);
+  const toggleByUserTap = useCallback(() => {
+    inject('window.__fliqUserToggle&&window.__fliqUserToggle()');
+  }, [inject]);
 
   useEffect(() => {
     inject(`window.__fliq&&window.__fliq('${mode}')`);
@@ -162,16 +165,20 @@ export const FliqYoutubePlayer = memo(function FliqYoutubePlayer({
   }, []);
 
   return (
-    <WebView
-      ref={ref}
-      {...WEBVIEW_COMMON}
-      source={source}
-      onMessage={onMessage}
-      onShouldStartLoadWithRequest={onShouldStart}
-      onRenderProcessGone={() => cbRef.current.onError?.(-2)}
-      style={styles.web}
-      containerStyle={style}
-    />
+    <View style={[styles.youtubeHost, style]}>
+      <WebView
+        ref={ref}
+        {...WEBVIEW_COMMON}
+        pointerEvents="none"
+        source={source}
+        onMessage={onMessage}
+        onShouldStartLoadWithRequest={onShouldStart}
+        onRenderProcessGone={() => cbRef.current.onError?.(-2)}
+        style={styles.web}
+        containerStyle={StyleSheet.absoluteFill}
+      />
+      <Pressable onPress={toggleByUserTap} style={StyleSheet.absoluteFill} />
+    </View>
   );
 });
 
@@ -211,5 +218,6 @@ export const FliqEmbedPlayer = memo(function FliqEmbedPlayer({ uri, onLoaded, on
 });
 
 const styles = StyleSheet.create({
+  youtubeHost: { flex: 1 },
   web: { flex: 1, backgroundColor: '#000' },
 });
