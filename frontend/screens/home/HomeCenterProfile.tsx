@@ -2,8 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Platform, Pressable, StyleProp, Text, View, ViewStyle } from 'react-native';
 import { Image as ExpoImage } from 'expo-image';
 import AvatarImage, {
-  activeFrameRingWidth,
-  avatarFrameColors,
+  activeFrameOutset,
   type AvatarDisplay,
 } from '../../components/AvatarImage';
 import { getCurrentUserId } from '../../sockets/socket';
@@ -43,10 +42,6 @@ export type HomeCenterProfileProps = {
   radarStage?: boolean;
   /** Явный диаметр аватара на radar (иначе layoutWidth → 112/124). */
   radarAvatarSize?: number;
-  /** Диаметр фотографии при купленной рамке: рамка занимает край 1-й орбиты. */
-  radarFramedAvatarSize?: number;
-  /** Насколько рамка выходит наружу от фотографии в радаре. */
-  radarFrameOutset?: number;
   savedNick: string;
   avatarUri: string;
   myFullAvatarUri: string;
@@ -75,8 +70,6 @@ function HomeCenterProfileInner({
   dense = false,
   radarStage = false,
   radarAvatarSize,
-  radarFramedAvatarSize,
-  radarFrameOutset,
   savedNick,
   avatarUri,
   myFullAvatarUri,
@@ -118,11 +111,7 @@ function HomeCenterProfileInner({
 
   // Размер радара Поиска стабилен уже в HomeWelcomeView (лок на геометрию окна).
   const centerAvatarSize = radarStage
-    ? Math.round(
-        activeFrameId && radarFramedAvatarSize
-          ? radarFramedAvatarSize
-          : radarAvatarSize ?? (layoutWidth < 400 ? 112 : 124),
-      )
+    ? Math.round(radarAvatarSize ?? (layoutWidth < 400 ? 112 : 124))
     : dense
       ? 56
       : compact
@@ -131,12 +120,11 @@ function HomeCenterProfileInner({
           ? 136
           : 120;
   const centerAvatarRadius = centerAvatarSize / 2;
-  // Толщина рамки одна на все экраны — см. ACTIVE_FRAME_RING_WIDTH.
-  // radarFrameOutset больше не участвует: из-за него «Поиск» рисовал 4.5 dp,
-  // а «Профиль» — 2.5, и одна и та же рамка выглядела по-разному.
-  const frameOutset = activeFrameRingWidth(centerAvatarSize);
+  // Фото всегда одного диаметра — наличие рамки не меняет layout и орбиты.
+  // Рамка рисуется снаружи через overflow: visible.
+  const frameOutset = activeFrameOutset(centerAvatarSize, activeFrameId);
   const centerAvatarFrameSize = Math.round(centerAvatarSize) + frameOutset * 2;
-  const centerAvatarContainerSize = activeFrameId ? centerAvatarFrameSize : centerAvatarSize;
+  const centerAvatarContainerSize = centerAvatarSize;
   const letterFontSize = dense ? 22 : radarStage ? 36 : 48;
   // Предпочитаем file: — иначе после splash props прыгают file→data и ExpoImage
   // перезагружается (логи: uriKind data при displayKind file, size 120→114).
@@ -169,42 +157,36 @@ function HomeCenterProfileInner({
   // Ветки те же, что в разметке ниже: текстура должна совпасть с тем, что видно.
   const dustSource = useMemo((): AvatarDustSource | null => {
     if (!avatarDust || !radarStage || isLocalPreview) return null;
-    const size = centerAvatarContainerSize;
+    const size = centerAvatarSize;
     const snapshot: AvatarDustSource = {
       kind: 'snapshot',
       size,
-      key: `${letter}|${activeFrameId || ''}|${menuChromeBg}`,
+      key: `${letter}|${menuChromeBg}`,
     };
-    const photo = (uri: string, framed: boolean): AvatarDustSource | null => {
-      const frameColors = framed ? avatarFrameColors(activeFrameId) : null;
-      // Рамка без известных цветов: AvatarImage рисует её без кольца, повторить нечем.
-      if (framed && !frameColors) return null;
+    const photo = (uri: string): AvatarDustSource => {
       return {
         kind: 'photo',
         uri,
         size,
-        photoSize: Math.round(centerAvatarSize),
-        ringWidth: framed ? frameOutset : 0,
-        frameColors,
         backdrop: menuChromeBg,
       };
     };
     const usesAvatarImage = !!myUserId && (!!activeFrameId || myAvatarVer > 0);
     if (usesAvatarImage) {
-      if (avatarDisplay.kind === 'image') return photo(avatarDisplay.uri, !!activeFrameId);
-      if (avatarDisplay.kind === 'letter') return snapshot;
+      if (avatarDisplay.kind === 'image') return photo(avatarDisplay.uri);
+      // Снимок родителя включил бы рамку в пиксели. Для редкого fallback с
+      // рамкой жест не запускаем, пока не появится настоящая фотография.
+      if (avatarDisplay.kind === 'letter') return activeFrameId ? null : snapshot;
       return null;
     }
-    if (hasDirectAvatarUri && resolvedAvatarReady) return photo(resolvedAvatarUri, false);
+    if (hasDirectAvatarUri && resolvedAvatarReady) return photo(resolvedAvatarUri);
     return avatarVerChecked ? snapshot : null;
   }, [
     activeFrameId,
     avatarDisplay,
     avatarDust,
     avatarVerChecked,
-    centerAvatarContainerSize,
     centerAvatarSize,
-    frameOutset,
     hasDirectAvatarUri,
     isLocalPreview,
     letter,
@@ -222,6 +204,8 @@ function HomeCenterProfileInner({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dustSourceKey, onAvatarDustSource]);
   const reportAvatarDisplay = avatarDust && radarStage ? handleAvatarDisplay : undefined;
+  const avatarImageHandlesDustVisibility =
+    !!myUserId && (!!activeFrameId || myAvatarVer > 0);
 
   // Фото без AvatarImage (только что выбранное или прямая ссылка) — тоже под линзой.
   const plainPhotoUri =
@@ -246,6 +230,7 @@ function HomeCenterProfileInner({
           height: centerAvatarContainerSize,
           borderRadius: centerAvatarContainerSize / 2,
           backgroundColor: menuChromeBg,
+          overflow: activeFrameId ? 'visible' : 'hidden',
         },
       ]}
     >
@@ -263,6 +248,7 @@ function HomeCenterProfileInner({
           fallbackTextStyle={{ fontSize: letterFontSize, fontWeight: '800' }}
           onDisplayLoad={radarStage ? onSearchAvatarDecoded : undefined}
           onDisplayChange={reportAvatarDisplay}
+          displayHidden={avatarDust?.realHidden}
         />
       ) : isLocalPreview ? (
         plainPhotoUri ? (
@@ -286,6 +272,7 @@ function HomeCenterProfileInner({
           fallbackTextStyle={{ fontSize: letterFontSize, fontWeight: '800' }}
           onDisplayLoad={radarStage ? onSearchAvatarDecoded : undefined}
           onDisplayChange={reportAvatarDisplay}
+          displayHidden={avatarDust?.realHidden}
         />
       ) : hasDirectAvatarUri && resolvedAvatarReady ? (
         plainPhotoUri ? (
@@ -318,7 +305,11 @@ function HomeCenterProfileInner({
     <View style={wrapperStyle}>
       {avatarDust && radarStage ? (
         <View style={{ alignSelf: 'center' }}>
-          <AvatarDustHide dust={avatarDust}>{avatarInner}</AvatarDustHide>
+          {avatarImageHandlesDustVisibility ? (
+            avatarInner
+          ) : (
+            <AvatarDustHide dust={avatarDust}>{avatarInner}</AvatarDustHide>
+          )}
         </View>
       ) : (
       <Pressable

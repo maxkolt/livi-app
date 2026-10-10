@@ -6,11 +6,18 @@ import { youtubePlayerHtml, type FliqPlayMode } from './fliqPlayerHtml';
  */
 type Msg = { t: string; [k: string]: unknown };
 
-function start(init: { mode: FliqPlayMode; muted?: boolean; prebuffer?: boolean; startSec?: number }) {
+function start(init: {
+  mode: FliqPlayMode;
+  muted?: boolean;
+  prebuffer?: boolean;
+  prebufferMs?: number;
+  startSec?: number;
+}) {
   const sent: Msg[] = [];
   const calls: string[] = [];
   const intervals: Array<() => void> = [];
   const timeouts: Array<() => void> = [];
+  const timeoutDelays: number[] = [];
   let now = 1_000_000;
   let opts: any = null;
   const player: any = {
@@ -40,6 +47,7 @@ function start(init: { mode: FliqPlayMode; muted?: boolean; prebuffer?: boolean;
     mode: init.mode,
     muted: !!init.muted,
     prebuffer: !!init.prebuffer,
+    prebufferMs: init.prebufferMs,
     startSec: init.startSec ?? 0,
   });
   const script = /<script>\n([\s\S]*?)<\/script>/.exec(html)![1];
@@ -51,8 +59,9 @@ function start(init: { mode: FliqPlayMode; muted?: boolean; prebuffer?: boolean;
     doc,
     (fn: () => void) => intervals.push(fn),
     () => {},
-    (fn: () => void) => {
+    (fn: () => void, delay: number) => {
       timeouts.push(fn);
+      timeoutDelays.push(delay);
       return timeouts.length;
     },
     () => {},
@@ -73,6 +82,7 @@ function start(init: { mode: FliqPlayMode; muted?: boolean; prebuffer?: boolean;
     },
     poll: () => intervals.forEach((fn) => fn()),
     flushTimeouts: () => timeouts.splice(0).forEach((fn) => fn()),
+    timeoutDelays,
     advance: (ms: number) => {
       now += ms;
     },
@@ -105,6 +115,13 @@ describe('youtube player page', () => {
     p.win.__fliq('play');
     p.state(1);
     expect(types(p.sent)).toEqual(['ready', 'buffered', 'state:1']);
+  });
+
+  it('uses the requested shorter cold-start buffer window', () => {
+    const p = start({ mode: 'pause', prebuffer: true, prebufferMs: 1200 });
+    p.ready();
+    p.state(1);
+    expect(p.timeoutDelays).toContain(1200);
   });
 
   it('a prebuffered video is allowed to download the rest once it really plays', () => {

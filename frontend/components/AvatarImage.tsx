@@ -1,5 +1,5 @@
 // components/AvatarImage.tsx
-import React, { memo, useEffect, useRef, useState } from 'react';
+import React, { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { StyleSheet, View, Text, StyleProp, ViewStyle, TextStyle, ImageStyle } from 'react-native';
 import { Image as ExpoImage } from 'expo-image';
 import Svg, { Circle, Defs, LinearGradient as SvgLinearGradient, Stop } from 'react-native-svg';
@@ -8,6 +8,8 @@ import { getAvatarImageProps } from '../utils/imageOptimization';
 import { getAvatarUri } from '../utils/avatarCache';
 import { useUserActiveFrame } from '../utils/cosmetics';
 import { logger } from '../utils/logger';
+import { FireAvatarFrame, fireFrameOutset } from './frames/FireAvatarFrame';
+import Reanimated, { useAnimatedStyle, type SharedValue } from 'react-native-reanimated';
 
 /**
  * Лок file URI для крупного аватара Поиска: после splash родитель снова кидает
@@ -76,6 +78,11 @@ export function activeFrameRingWidth(avatarSize: number): number {
   const raw = Math.round(avatarSize) * ACTIVE_FRAME_RING_RATIO;
   return Math.round(Math.min(ACTIVE_FRAME_RING_MAX, Math.max(ACTIVE_FRAME_RING_MIN, raw)));
 }
+
+/** Пространство снаружи фото: у огня оно шире обычного металлического кольца. */
+export function activeFrameOutset(avatarSize: number, frameId?: string | null): number {
+  return frameId === 'fire' ? fireFrameOutset(avatarSize) : activeFrameRingWidth(avatarSize);
+}
 const FRAME_COLORS: Record<string, readonly [string, string, ...string[]]> = {
   fire: ['#FFC062', '#FF8A34', '#FF4D1C'],
   diamond: ['#E8F6FF', '#9ED0FF', '#6AA9FF'],
@@ -123,6 +130,8 @@ export interface AvatarImageProps {
   onDisplayLoad?: () => void;
   /** Радар Поиска: из этого строится текстура для рассыпания аватара. */
   onDisplayChange?: (display: AvatarDisplay) => void;
+  /** Радар Поиска: скрывает только фото; купленная рамка остаётся живой поверх частиц. */
+  displayHidden?: SharedValue<number>;
 }
 
 /**
@@ -142,6 +151,7 @@ const AvatarImage = memo<AvatarImageProps>(({
   containerStyle,
   onDisplayLoad,
   onDisplayChange,
+  displayHidden,
 }) => {
   const fileLockKey = searchAvatarFileKey(userId, avatarVer);
   const initialUri = pickSearchAvatarUri(fileLockKey, propsUri || '', '');
@@ -152,6 +162,14 @@ const AvatarImage = memo<AvatarImageProps>(({
   const hookFrameId = useUserActiveFrame(userId);
   // undefined = проп не передан, решает хук. Пустая строка/null = «рамки нет».
   const activeFrameId = frameId !== undefined ? frameId || '' : hookFrameId;
+  /** Радар ждёт и фото, и первый кадр пламени — иначе огонь появлялся позже аватара. */
+  const [loadedDisplayUri, setLoadedDisplayUri] = useState('');
+  const [fireFramePainted, setFireFramePainted] = useState(false);
+  const handleFireFramePainted = useCallback(() => setFireFramePainted(true), []);
+  const displayVisibilityStyle = useAnimatedStyle(
+    () => ({ opacity: displayHidden?.value === 1 ? 0 : 1 }),
+    [displayHidden],
+  );
 
   // Загрузка аватара через систему кеширования
   useEffect(() => {
@@ -255,17 +273,28 @@ const AvatarImage = memo<AvatarImageProps>(({
 
   const frameColors = FRAME_COLORS[activeFrameId];
   const hasActiveFrame = !!frameColors;
+  const isFireFrame = activeFrameId === 'fire';
   /**
    * Вся геометрия в целых dp. Дробные размеры (приходило 120.99882…) SVG и
    * раскладка округляют по-разному, и кольцо переставало совпадать с краем
    * фотографии на доли пикселя, которые складывались в заметное смещение.
    */
   const photoSize = Math.round(size);
-  const ringWidth = activeFrameRingWidth(photoSize);
-  const outerSize = hasActiveFrame ? photoSize + ringWidth * 2 : photoSize;
-  const outerRadius = outerSize / 2;
+  const preferredOutset = activeFrameOutset(photoSize, activeFrameId);
+  const calculatedOuterSize = hasActiveFrame ? photoSize + preferredOutset * 2 : photoSize;
+  const outerSize = hasActiveFrame && frameSize
+    ? Math.max(photoSize, Math.round(frameSize))
+    : calculatedOuterSize;
+  const frameOutset = hasActiveFrame ? (outerSize - photoSize) / 2 : 0;
   const avatarRadius = photoSize / 2;
-  const avatarOffset = hasActiveFrame ? ringWidth : 0;
+
+  useEffect(() => {
+    if (!onDisplayLoad || !displayUri || loadedDisplayUri !== displayUri) return;
+    if (isFireFrame && !fireFramePainted) return;
+    try {
+      onDisplayLoad();
+    } catch {}
+  }, [displayUri, fireFramePainted, isFireFrame, loadedDisplayUri, onDisplayLoad]);
 
   // Центр Поиска: логируем только радар (onDisplayLoad), иначе prewarm Профиля
   // даёт ложный size 114 / второй image-onLoad в тех же тегах.
@@ -322,24 +351,21 @@ const AvatarImage = memo<AvatarImageProps>(({
    * (outerSize − ringWidth)/2 занимает полосу ровно от photoSize/2 до
    * outerSize/2 — её внутренний край ложится точно на край фотографии.
    */
-  const ringRadius = Math.max(1, (outerSize - ringWidth) / 2);
-  /**
-   * Врезка фотографии задаётся долей от контейнера, а не числом в dp.
-   *
-   * На устройстве с изменённым «Размером экрана» плотность раскладки (450)
-   * и плотность растеризации (480) расходятся, и одно и то же значение в dp
-   * превращается в разное число пикселей. Процент считается от реального
-   * размера контейнера, поэтому внутренний край кольца и край фотографии
-   * совпадают при любой плотности.
-   */
-  const ringInsetPct: `${number}%` = `${(ringWidth / outerSize) * 100}%`;
+  const ringRadius = Math.max(1, (outerSize - frameOutset) / 2);
   const frameGradientId = `avatar-frame-${activeFrameId || 'none'}-${Math.round(outerSize)}`;
 
-  const frameBase = frameColors ? (
+  const frameBase = frameColors && !isFireFrame ? (
     <Svg
       pointerEvents="none"
       viewBox={`0 0 ${outerSize} ${outerSize}`}
-      style={[StyleSheet.absoluteFillObject, { zIndex: 3 }]}
+      style={{
+        position: 'absolute',
+        left: -frameOutset,
+        top: -frameOutset,
+        width: outerSize,
+        height: outerSize,
+        zIndex: 3,
+      }}
     >
       <Defs>
         <SvgLinearGradient id={frameGradientId} x1="0" y1="0" x2="1" y2="1">
@@ -358,87 +384,125 @@ const AvatarImage = memo<AvatarImageProps>(({
         r={ringRadius}
         fill="none"
         stroke={`url(#${frameGradientId})`}
-        strokeWidth={ringWidth}
+        strokeWidth={frameOutset}
       />
     </Svg>
   ) : null;
 
+  const avatarContent = displayUri ? (
+    <ExpoImage
+      key={key}
+      {...getAvatarImageProps(displayUri, key)}
+      onLoad={() => {
+        if (onDisplayLoad) setLoadedDisplayUri(displayUri);
+        if (!onDisplayLoad || photoSize < 90) return;
+        logger.info('[search-avatar] image-onLoad', {
+          size: photoSize,
+          displayKind: /^file:/i.test(displayUri) ? 'file' : 'other',
+          displayLen: displayUri.length,
+        });
+      }}
+      onError={(e) => {
+        if (!onDisplayLoad || photoSize < 90) return;
+        logger.warn('[search-avatar] image-onError', {
+          size: photoSize,
+          displayKind: /^file:/i.test(displayUri) ? 'file' : 'other',
+          error: String((e as any)?.error ?? e ?? ''),
+        });
+      }}
+      style={[
+        StyleSheet.absoluteFillObject,
+        { borderRadius: avatarRadius },
+        style,
+      ]}
+    />
+  ) : showFallbackLetter ? (
+    <Text
+      style={[
+        {
+          color: '#E6E8EB',
+          fontWeight: '700',
+          fontSize: size * 0.4,
+        },
+        fallbackTextStyle,
+      ]}
+    >
+      {fallbackText}
+    </Text>
+  ) : null;
+
+  if (isFireFrame) {
+    return (
+      <View
+        style={[
+          containerStyle,
+          {
+            width: photoSize,
+            height: photoSize,
+            borderRadius: avatarRadius,
+            overflow: 'visible',
+            backgroundColor: 'transparent',
+          },
+        ]}
+      >
+        <FireAvatarFrame
+          size={outerSize}
+          photoSize={photoSize}
+          onReady={onDisplayLoad ? handleFireFramePainted : undefined}
+          style={{
+            position: 'absolute',
+            left: -frameOutset,
+            top: -frameOutset,
+          }}
+        >
+          <Reanimated.View
+            style={[
+              StyleSheet.absoluteFillObject,
+              displayVisibilityStyle,
+              {
+                backgroundColor: placeholderBg,
+                alignItems: 'center',
+                justifyContent: 'center',
+              },
+            ]}
+          >
+            {avatarContent}
+          </Reanimated.View>
+        </FireAvatarFrame>
+      </View>
+    );
+  }
+
   return (
     <View
       style={[
-        { backgroundColor: placeholderBg },
         containerStyle,
-        { width: outerSize, height: outerSize, borderRadius: outerRadius },
-        hasActiveFrame
-          ? {
-              borderWidth: 0,
-              borderColor: 'transparent',
-              backgroundColor: 'transparent',
-              overflow: 'hidden',
-            }
-          : null,
+        {
+          width: photoSize,
+          height: photoSize,
+          borderRadius: avatarRadius,
+          backgroundColor: 'transparent',
+          overflow: 'visible',
+        },
       ]}
     >
       {frameBase}
-      <View
-        style={{
-          position: 'absolute',
-          left: hasActiveFrame ? ringInsetPct : 0,
-          top: hasActiveFrame ? ringInsetPct : 0,
-          right: hasActiveFrame ? ringInsetPct : 0,
-          bottom: hasActiveFrame ? ringInsetPct : 0,
-          borderRadius: outerRadius,
-          backgroundColor: placeholderBg,
-          alignItems: 'center',
-          justifyContent: 'center',
-          overflow: 'hidden',
-          zIndex: 2,
-        }}
+      <Reanimated.View
+        style={[
+          {
+            ...StyleSheet.absoluteFillObject,
+            borderRadius: avatarRadius,
+            backgroundColor: placeholderBg,
+            alignItems: 'center',
+            justifyContent: 'center',
+            overflow: 'hidden',
+            zIndex: 2,
+          },
+          displayVisibilityStyle,
+        ]}
       >
-        {displayUri ? (
-          <ExpoImage
-            key={key}
-            {...getAvatarImageProps(displayUri, key)}
-            onLoad={() => {
-              try {
-                onDisplayLoad?.();
-              } catch {}
-              if (!onDisplayLoad || photoSize < 90) return;
-              logger.info('[search-avatar] image-onLoad', {
-                size: photoSize,
-                displayKind: /^file:/i.test(displayUri) ? 'file' : 'other',
-                displayLen: displayUri.length,
-              });
-            }}
-            onError={(e) => {
-              if (!onDisplayLoad || photoSize < 90) return;
-              logger.warn('[search-avatar] image-onError', {
-                size: photoSize,
-                displayKind: /^file:/i.test(displayUri) ? 'file' : 'other',
-                error: String((e as any)?.error ?? e ?? ''),
-              });
-            }}
-            style={[
-              StyleSheet.absoluteFillObject,
-              { borderRadius: outerRadius },
-              style,
-            ]}
-          />
-        ) : showFallbackLetter ? (
-          <Text
-            style={[
-              {
-                color: '#E6E8EB',
-                fontWeight: '700',
-                fontSize: size * 0.4,
-              },
-              fallbackTextStyle,
-            ]}
-          >
-            {fallbackText}
-          </Text>
-        ) : null}
-      </View>
+        {avatarContent}
+      </Reanimated.View>
       {hasActiveFrame ? (
         /*
          * Волосяной ободок по краю фотографии.
@@ -451,12 +515,8 @@ const AvatarImage = memo<AvatarImageProps>(({
         <View
           pointerEvents="none"
           style={{
-            position: 'absolute',
-            left: hasActiveFrame ? ringInsetPct : 0,
-            top: hasActiveFrame ? ringInsetPct : 0,
-            right: hasActiveFrame ? ringInsetPct : 0,
-            bottom: hasActiveFrame ? ringInsetPct : 0,
-            borderRadius: outerRadius,
+            ...StyleSheet.absoluteFillObject,
+            borderRadius: avatarRadius,
             borderWidth: 1,
             borderColor: 'rgba(255,255,255,0.38)',
             zIndex: 2,

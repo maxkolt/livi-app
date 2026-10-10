@@ -15,6 +15,9 @@ import {
 
 /** Иконки и chevron в строках профиля — приглушённый серый. */
 export const WELCOME_PROFILE_ROW_ICON = '#828A96';
+export const WELCOME_PROFILE_ROW_LABEL_FONT_SIZE = 14;
+export const WELCOME_PROFILE_ROW_LABEL_FONT_SIZE_COMPACT = 13;
+export const WELCOME_PROFILE_ROW_LABEL_FONT_SIZE_TABLET = 15;
 
 const ROW_ICON_SIZE = 22;
 const ROW_ICON_SIZE_COMPACT = 20;
@@ -367,7 +370,7 @@ const styles = StyleSheet.create({
     gap: 0,
   },
   rowLabel: {
-    fontSize: 14,
+    fontSize: WELCOME_PROFILE_ROW_LABEL_FONT_SIZE,
     fontWeight: '400',
     flexShrink: 1,
   },
@@ -376,10 +379,10 @@ const styles = StyleSheet.create({
     textAlign: 'left',
   },
   rowLabelCompact: {
-    fontSize: 13,
+    fontSize: WELCOME_PROFILE_ROW_LABEL_FONT_SIZE_COMPACT,
   },
   rowLabelTablet: {
-    fontSize: 15,
+    fontSize: WELCOME_PROFILE_ROW_LABEL_FONT_SIZE_TABLET,
   },
   rowRight: {
     flexDirection: 'row',

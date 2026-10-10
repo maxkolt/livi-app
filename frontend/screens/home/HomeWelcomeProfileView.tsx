@@ -17,7 +17,7 @@ import { useStableSafeAreaInsets } from './useStableSafeAreaInsets';
 import { Ionicons } from '@expo/vector-icons';
 import { Image as ExpoImage } from 'expo-image';
 import * as Clipboard from 'expo-clipboard';
-import AvatarImage, { activeFrameRingWidth } from '../../components/AvatarImage';
+import AvatarImage, { activeFrameOutset } from '../../components/AvatarImage';
 import { TextInput as PaperInput } from 'react-native-paper';
 import { getCurrentUserId } from '../../sockets/socket';
 import { t, languages, type Lang } from '../../utils/i18n';
@@ -51,29 +51,18 @@ import {
   WelcomeProfileSection,
   WelcomeProfileLanguageRow,
   WELCOME_PROFILE_ROW_ICON,
+  WELCOME_PROFILE_ROW_LABEL_FONT_SIZE,
+  WELCOME_PROFILE_ROW_LABEL_FONT_SIZE_COMPACT,
+  WELCOME_PROFILE_ROW_LABEL_FONT_SIZE_TABLET,
 } from './WelcomeProfileListUi';
 import type { HomeStyles } from './styles';
+import { GLASS_DOCK_TOP_PAD } from './WelcomeGlassHeader';
 import { APP_INPUT_MAX_FONT_SIZE_MULTIPLIER } from '../../utils/accessibilityTypography';
 
 const SUPPORT_EMAIL = '12345kolt@gmail.com';
 const SUPPORT_EMAIL_2 = 'kolt12max@mail.ru';
 const BOOSTY_URL = process.env.EXPO_PUBLIC_BOOSTY_URL || 'https://boosty.to/liviapp/donate';
 const PATREON_URL = process.env.EXPO_PUBLIC_PATREON_URL || 'https://patreon.com/LiViApp?utm_medium=unknown&utm_source=join_link&utm_campaign=creatorshare_creator&utm_content=copyLink';
-/**
- * Толщина рамки берётся из общего источника: раньше здесь была своя константа
- * 2.5, а «Поиск» считал ~4.5 — одна и та же купленная рамка отличалась на глаз.
- */
-/**
- * Резерв места под купленную рамку вокруг фото. Без рамки фото занимает этот резерв
- * целиком (серого кольца-заглушки больше нет), так что внешний размер одинаковый.
- *
- * Сама рамка считается отдельно — activeFrameRingWidth() от размера аватара.
- * Здесь нужна константа: phoneAvatarSize() вычитает кольцо ещё до того,
- * как размер аватара известен, и брать адаптивное значение было бы циклично.
- * Значение совпадает с адаптивным на характерных для этого экрана размерах
- * (112–132 dp → 3 dp), поэтому резерв всегда достаточен.
- */
-const AVATAR_RING_WIDTH = 3;
 const CAMERA_BTN_SIZE = 32;
 /** Урна на аватаре чуть внутрь от угла — ближе к самому кругу, а не в пустом углу. */
 const CAMERA_BTN_INSET = 7;
@@ -95,8 +84,6 @@ type HubMetrics = {
   gapTop: number;
   /** Аватар → первая карточка. */
   gapUnderAvatar: number;
-  /** «Удалить профиль» → таб-бар. */
-  gapBottom: number;
   rowHeight: number;
   listGap: number;
   /** Даже на минимумах не помещается — отдаём скролл. */
@@ -108,7 +95,6 @@ type HubMetricsPreset = {
   cameraBtnSize: number;
   gapTop: number;
   gapUnderAvatar: number;
-  gapBottom: number;
   rowMax: number;
   rowMin: number;
   gapMax: number;
@@ -120,7 +106,6 @@ const HUB_PRESET_PHONE: HubMetricsPreset = {
   cameraBtnSize: CAMERA_BTN_SIZE,
   gapTop: 24,
   gapUnderAvatar: 14,
-  gapBottom: 14,
   rowMax: 48,
   rowMin: 40,
   gapMax: 12,
@@ -137,7 +122,6 @@ const HUB_PRESET_PHONE_LANDSCAPE: HubMetricsPreset = {
   // «Удалить профиль» не влезал на 5–10 dp — список уходил в скролл. Строки ужимаются
   // ровно настолько, насколько нужно, скролл — только для совсем низких экранов.
   gapUnderAvatar: 8,
-  gapBottom: 6,
   rowMax: 42,
   rowMin: 26,
   gapMax: 8,
@@ -149,7 +133,6 @@ const HUB_PRESET_TABLET: HubMetricsPreset = {
   cameraBtnSize: 34,
   gapTop: 26,
   gapUnderAvatar: 20,
-  gapBottom: 18,
   rowMax: 56,
   rowMin: 48,
   gapMax: 16,
@@ -161,7 +144,6 @@ const HUB_PRESET_TABLET_LANDSCAPE: HubMetricsPreset = {
   cameraBtnSize: CAMERA_BTN_SIZE,
   gapTop: 14,
   gapUnderAvatar: 14,
-  gapBottom: 14,
   rowMax: 54,
   rowMin: 44,
   gapMax: 14,
@@ -186,11 +168,11 @@ function resolveHubPreset(isTablet: boolean, isLandscape: boolean): HubMetricsPr
 
 /**
  * Аватар профиля на телефоне в обеих ориентациях совпадает с аватаром Поиска в
- * вертикали по внешнему диаметру. Там рамка нарисована внутри размера, здесь
- * кольцо добавляется снаружи (+AVATAR_RING_WIDTH×2), поэтому вычитаем его.
+ * вертикали по диаметру самого фото. Купленная рамка рисуется снаружи и не
+ * меняет ни этот размер, ни раскладку экрана.
  */
 function phoneAvatarSize(shortSide: number): number {
-  return welcomePhoneAvatarMetrics(shortSide).outer - AVATAR_RING_WIDTH * 2;
+  return welcomePhoneAvatarMetrics(shortSide).outer;
 }
 
 /** Предел масштаба строк: дальше экран уже не телефон, а «лопата». */
@@ -207,7 +189,6 @@ function scaleHubPreset(preset: HubMetricsPreset, k: number): HubMetricsPreset {
     ...preset,
     gapTop: r(preset.gapTop),
     gapUnderAvatar: r(preset.gapUnderAvatar),
-    gapBottom: r(preset.gapBottom),
     rowMax: r(preset.rowMax),
     gapMax: r(preset.gapMax),
   };
@@ -220,6 +201,7 @@ function resolveHubMetrics(
   isTablet: boolean,
   isLandscape: boolean,
   twoColumns: boolean,
+  frameId: string,
 ): HubMetrics {
   const basePreset = resolveHubPreset(isTablet, isLandscape);
   const preset = isTablet
@@ -230,17 +212,20 @@ function resolveHubMetrics(
           { ...basePreset, avatarSize: phoneAvatarSize(shortSide) },
           Math.min(PHONE_HUB_MAX_SCALE, searchPhoneScale(shortSide)),
         );
+  // Кольцо купленной рамки входит в высоту блока аватара (avatarRing = фото + вынос × 2).
+  const frameOutset = frameId ? activeFrameOutset(preset.avatarSize, frameId) : 0;
   const fixed =
     preset.gapTop +
     preset.avatarSize +
-    AVATAR_RING_WIDTH * 2 +
+    frameOutset * 2 +
     preset.gapUnderAvatar +
-    preset.gapBottom;
+    // Стекло навбара выше панели на GLASS_DOCK_TOP_PAD — иначе оно съедает нижний зазор.
+    GLASS_DOCK_TOP_PAD;
   // «Удалить профиль» — такая же строка высотой rowHeight. Раньше на неё закладывали
   // фиксированные 20–40 dp при реальных 40–48, и в landscape она уезжала под таб-бар.
   const rows = hubRowsPerColumn(twoColumns) + 1;
-  // Промежутки между рядами секций плюс такой же промежуток перед «Удалить профиль».
-  const gaps = hubSectionRows(twoColumns);
+  // Промежутки между рядами секций, перед «Удалить профиль» и такой же — до навбара.
+  const gaps = hubSectionRows(twoColumns) + 1;
   const listBudget = Math.max(0, paneHeight - fixed);
   const maxTotal = rows * preset.rowMax + gaps * preset.gapMax;
   const minTotal = rows * preset.rowMin + gaps * preset.gapMin;
@@ -252,13 +237,15 @@ function resolveHubMetrics(
     return { ...preset, rowHeight: preset.rowMin, listGap: preset.gapMin, scroll: true };
   }
   const t = (listBudget - minTotal) / (maxTotal - minTotal);
-  return {
-    ...preset,
-    // Вниз, а не к ближайшему: округление вверх снова съело бы отступы.
-    rowHeight: Math.floor(preset.rowMin + (preset.rowMax - preset.rowMin) * t),
-    listGap: Math.floor(preset.gapMin + (preset.gapMax - preset.gapMin) * t),
-    scroll: false,
-  };
+  // Вниз, а не к ближайшему: округление вверх снова съело бы отступы.
+  const rowHeight = Math.floor(preset.rowMin + (preset.rowMax - preset.rowMin) * t);
+  // Остаток от округления строк — в промежутки, иначе он копился под «Удалить профиль»
+  // и зазор до навбара выходил больше, чем между карточками.
+  const listGap = Math.min(
+    preset.gapMax,
+    Math.max(preset.gapMin, Math.floor(((listBudget - rows * rowHeight) / gaps) * 10) / 10),
+  );
+  return { ...preset, rowHeight, listGap, scroll: false };
 }
 
 function estimateTabBarHeight(bottomInset: number, isTablet: boolean, isLandscape: boolean) {
@@ -414,6 +401,9 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
   const hubPaneHeight =
     hubViewportHeight > expectedHubPaneHeight * 0.6 ? hubViewportHeight : expectedHubPaneHeight;
 
+  const myUserId = getCurrentUserId();
+  const activeFrameId = useUserActiveFrame(myUserId);
+
   const hubMetrics = useMemo(
     () =>
       resolveHubMetrics(
@@ -422,8 +412,9 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
         isTablet,
         isLandscape,
         twoColumnList,
+        activeFrameId,
       ),
-    [hubPaneHeight, windowWidth, windowHeight, isTablet, isLandscape, twoColumnList],
+    [hubPaneHeight, windowWidth, windowHeight, isTablet, isLandscape, twoColumnList, activeFrameId],
   );
 
   /** Скролл при редактировании ника или когда даже минимальные строки не влезают. */
@@ -445,8 +436,6 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
     );
   }, [notifyLayoutActivity]);
 
-  const myUserId = getCurrentUserId();
-  const activeFrameId = useUserActiveFrame(myUserId);
   const hasActiveFrame = !!activeFrameId;
   const displayNick = displayName(savedNick || nick);
   const letter = displayAvatarLetter(savedNick || nick);
@@ -595,10 +584,10 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
   ]);
 
   const avatarSize = hubMetrics.avatarSize;
-  const avatarFrameSize = Math.round(avatarSize) + activeFrameRingWidth(avatarSize) * 2;
-  // Без купленной рамки серого кольца-заглушки нет: фото занимает весь круг, и внешний
-  // размер тот же, что с рамкой и что на Поиске.
-  const avatarContainerSize = avatarFrameSize;
+  const avatarFrameOutset = activeFrameId ? activeFrameOutset(avatarSize, activeFrameId) : 0;
+  const avatarFrameSize = Math.round(avatarSize) + avatarFrameOutset * 2;
+  // Layout всегда равен диаметру фото. Огонь/металл выступают наружу визуально.
+  const avatarContainerSize = avatarSize;
   const cameraBtnSize = hubMetrics.cameraBtnSize;
   const hasLocalAvatarPreview = avatarUri && /^(file|content|ph|assets-library):\/\//i.test(avatarUri);
   /** Урну показываем, только когда есть что удалять. */
@@ -615,6 +604,7 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
           height: avatarContainerSize,
           borderRadius: avatarContainerSize / 2,
           backgroundColor: menuChromeBg,
+          overflow: activeFrameId ? 'visible' : 'hidden',
         },
       ]}
     >
@@ -689,7 +679,7 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
     <View
       style={[
         styles.hubActions,
-        { paddingBottom: hubMetrics.gapBottom },
+        { paddingBottom: hubMetrics.listGap + GLASS_DOCK_TOP_PAD },
       ]}
     >
       <WelcomeProfileSection
@@ -1397,7 +1387,7 @@ const styles = StyleSheet.create({
   avatarRing: {
     alignItems: 'center',
     justifyContent: 'center',
-    overflow: 'hidden',
+    overflow: 'visible',
   },
   cameraBtn: {
     position: 'absolute',
@@ -1636,15 +1626,15 @@ const styles = StyleSheet.create({
   },
   logOutBtnText: {
     color: WELCOME_DELETE_ICON,
-    fontSize: 14,
+    fontSize: WELCOME_PROFILE_ROW_LABEL_FONT_SIZE,
     fontWeight: '400',
     flexShrink: 1,
   },
   logOutBtnTextLandscape: {
-    fontSize: 13,
+    fontSize: WELCOME_PROFILE_ROW_LABEL_FONT_SIZE_COMPACT,
   },
   logOutBtnTextTablet: {
-    fontSize: 15,
+    fontSize: WELCOME_PROFILE_ROW_LABEL_FONT_SIZE_TABLET,
   },
 });
 

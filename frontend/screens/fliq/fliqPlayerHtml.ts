@@ -29,8 +29,16 @@ export type FliqPlayMode = 'play' | 'pause' | 'hold';
  */
 export function youtubePlayerHtml(
   videoId: string,
-  init: { mode: FliqPlayMode; muted: boolean; prebuffer: boolean; startSec: number },
+  init: {
+    mode: FliqPlayMode;
+    muted: boolean;
+    prebuffer: boolean;
+    startSec: number;
+    /** Сколько медиапоток тихо играет перед возвратом в начало. */
+    prebufferMs?: number;
+  },
 ): string {
+  const prebufferMs = Math.max(250, Math.min(5000, Math.round(init.prebufferMs ?? 2400)));
   return `<!DOCTYPE html><html><head>
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <style>html,body{margin:0;padding:0;width:100%;height:100%;background:#000;overflow:hidden}#p{position:absolute;top:-2px;left:-2px;width:calc(100% + 4px);height:calc(100% + 4px)}</style>
@@ -135,7 +143,7 @@ export function youtubePlayerHtml(
               if(prebufferTimer===null) prebufferTimer=setTimeout(function(){
                 prebufferTimer=null;
                 if(buffering&&want==='pause') finishPrebuffer();
-              },2400);
+              },${prebufferMs});
             }
             return;
           }

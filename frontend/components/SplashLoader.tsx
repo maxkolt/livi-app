@@ -11,23 +11,20 @@ import { useSafeAreaFrame } from 'react-native-safe-area-context';
 import { WelcomeStageBackground } from '../screens/home/WelcomeStageBackground';
 import { HOME_NAV_BG } from '../screens/home/constants';
 
-const MIN_SPLASH_DURATION_MS = 3000;
 const SPLASH_FADE_DURATION_MS = 620;
-/** Даём аватару resolve+prefetch; раньше 5с hard-stop часто обгонял готовность. */
+/** Аварийный предел только на случай ошибки: готовый Search закрывает splash немедленно. */
 const MAX_SPLASH_DURATION_MS = 9000;
 
 interface SplashLoaderProps {
-  dataLoaded: boolean;
   onComplete?: () => void;
   hasNick?: boolean;
   hasAvatar?: boolean;
-  hasAvatarReady?: boolean;
+  hasContentReady?: boolean;
   overlayMode?: boolean;
 }
 
 export default function SplashLoader({
-  dataLoaded,
-  hasAvatarReady = true,
+  hasContentReady = true,
   onComplete,
   overlayMode,
 }: SplashLoaderProps) {
@@ -71,22 +68,13 @@ export default function SplashLoader({
 
     const now = Date.now();
     const elapsedMs = now - startedAtRef.current;
-    const remainingTotalMs = Math.max(0, MIN_SPLASH_DURATION_MS - elapsedMs);
-
-    if (dataLoaded && hasAvatarReady) {
-      if (remainingTotalMs > SPLASH_FADE_DURATION_MS) {
-        const fadeTimer = setTimeout(() => {
-          finishSplash(SPLASH_FADE_DURATION_MS);
-        }, remainingTotalMs - SPLASH_FADE_DURATION_MS);
-        return () => clearTimeout(fadeTimer);
-      }
-
-      finishSplash(remainingTotalMs);
+    if (hasContentReady) {
+      finishSplash(0);
       return;
     }
 
-    // Не держим экран бесконечно при ошибке диска/кэша, но даём аватару
-    // закончить data: → file: преобразование до ухода заставки.
+    // Не держим экран бесконечно при ошибке диска/сети. Fliq здесь намеренно
+    // не учитывается: он прогревается в фоне и не задерживает видимый Search.
     const remainingHardStopMs = Math.max(
       0,
       MAX_SPLASH_DURATION_MS - elapsedMs,
@@ -95,7 +83,7 @@ export default function SplashLoader({
       finishSplash(0);
     }, remainingHardStopMs);
     return () => clearTimeout(hardStopTimer);
-  }, [dataLoaded, finishSplash, hasAvatarReady, overlayMode]);
+  }, [finishSplash, hasContentReady, overlayMode]);
 
   useEffect(() => {
     // «Дыхание»: камера чуть поднимается, объектив (справа) приподнимается вверх под углом.

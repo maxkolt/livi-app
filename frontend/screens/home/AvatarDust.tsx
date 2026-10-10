@@ -20,10 +20,8 @@ import {
   ColorType,
   FilterMode,
   MipmapMode,
-  PaintStyle,
   Picture,
   Skia,
-  TileMode,
   makeImageFromView,
   type SkImage,
   type SkPaint,
@@ -63,12 +61,8 @@ export type AvatarDustSource =
   | {
       kind: 'photo';
       uri: string;
-      /** Внешний диаметр аватара вместе с рамкой, dp. */
+      /** Диаметр только фотографии; рамка не входит в эффект, dp. */
       size: number;
-      photoSize: number;
-      /** 0 — рамки нет. */
-      ringWidth: number;
-      frameColors: readonly string[] | null;
       backdrop: string;
     }
   | {
@@ -88,9 +82,6 @@ export function avatarDustSourceKey(source: AvatarDustSource | null): string {
     'p',
     source.uri,
     source.size,
-    source.photoSize,
-    source.ringWidth,
-    (source.frameColors ?? []).join(','),
     source.backdrop,
   ].join('|');
 }
@@ -345,8 +336,8 @@ export async function loadEncodedImage(uri: string): Promise<SkImage | null> {
 }
 
 /**
- * Повторяет раскладку AvatarImage/HomeCenterProfile: подложка во весь круг,
- * фото «cover» в круге внутри рамки, волосяной ободок и градиентное кольцо.
+ * Текстура содержит только фотографию. Купленная рамка остаётся отдельным
+ * живым слоем и продолжает гореть, пока фото рассыпается и собирается.
  */
 function renderPhotoTexture(
   photo: SkImage,
@@ -358,6 +349,7 @@ function renderPhotoTexture(
   const surface = Skia.Surface.Make(texPx, texPx);
   if (!surface) return null;
   const canvas = surface.getCanvas();
+  canvas.clear(Skia.Color('transparent'));
   const k = texPx / size;
   canvas.scale(k, k);
   const mid = size / 2;
@@ -367,52 +359,24 @@ function renderPhotoTexture(
   paint.setColor(Skia.Color(source.backdrop));
   canvas.drawCircle(mid, mid, mid, paint);
 
-  const inset = source.ringWidth;
-  const p = Math.max(1, size - inset * 2);
   const iw = photo.width();
   const ih = photo.height();
-  const scale = Math.max(p / iw, p / ih);
-  const sw = p / scale;
-  const sh = p / scale;
+  const scale = Math.max(size / iw, size / ih);
+  const sw = size / scale;
+  const sh = size / scale;
   canvas.save();
   const clip = Skia.Path.Make();
-  clip.addCircle(mid, mid, p / 2);
+  clip.addCircle(mid, mid, mid);
   canvas.clipPath(clip, ClipOp.Intersect, true);
   canvas.drawImageRectOptions(
     photo,
     Skia.XYWHRect((iw - sw) / 2, (ih - sh) / 2, sw, sh),
-    Skia.XYWHRect(inset, inset, p, p),
+    Skia.XYWHRect(0, 0, size, size),
     FilterMode.Linear,
     MipmapMode.Linear,
     null,
   );
   canvas.restore();
-
-  const colors = source.frameColors;
-  if (inset > 0 && colors && colors.length > 0) {
-    const hairline = Skia.Paint();
-    hairline.setAntiAlias(true);
-    hairline.setStyle(PaintStyle.Stroke);
-    hairline.setStrokeWidth(1);
-    hairline.setColor(Skia.Color('rgba(255,255,255,0.38)'));
-    canvas.drawCircle(mid, mid, p / 2 - 0.5, hairline);
-
-    const ring = Skia.Paint();
-    ring.setAntiAlias(true);
-    ring.setStyle(PaintStyle.Stroke);
-    ring.setStrokeWidth(inset);
-    const stops = colors.length > 1 ? colors : [colors[0], colors[0]];
-    ring.setShader(
-      Skia.Shader.MakeLinearGradient(
-        Skia.Point(inset / 2, inset / 2),
-        Skia.Point(size - inset / 2, size - inset / 2),
-        stops.map((c) => Skia.Color(c)),
-        stops.map((_, i) => i / (stops.length - 1)),
-        TileMode.Clamp,
-      ),
-    );
-    canvas.drawCircle(mid, mid, (size - inset) / 2, ring);
-  }
 
   surface.flush();
   return surface.makeImageSnapshot().makeNonTextureImage();

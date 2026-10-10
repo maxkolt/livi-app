@@ -52,8 +52,8 @@ const RADAR_INNER_ALPHA = 0.45;
 const TERRAIN_TILT = 4;
 /** Пунктирный обод сдвигается навстречу, слабее — он ближе к стеклу. */
 const DASH_TILT = -1.5;
-/** Линза над местностью, радиус — край стекла: в центре ×1.43, у края сжатие ×1.6. */
-const LENS_K = 0.3;
+/** Линза над местностью, радиус — край стекла: в центре ×1.82, у края сжатие ×1.9. */
+const LENS_K = 0.45;
 
 const TAU = Math.PI * 2;
 const D2R = Math.PI / 180;
@@ -128,6 +128,19 @@ export function radarGeometry(size: number, avatarSize: number): RadarGeometry {
     rDisc,
     rDash: rDisc + 5 * u,
   };
+}
+
+/** Толщина тонкого круга вокруг аватара, в единицах u. */
+const INNER_RING_STROKE = 0.9;
+
+/**
+ * Диаметр фото, край которого совпадает с внутренним краем тонкого круга:
+ * без рамки круг идёт по краю аватара, рамка от края фото ложится поверх него.
+ * avatarSize — тот же, что передан радару: геометрия радара от этого не меняется.
+ */
+export function radarFittedAvatarSize(size: number, avatarSize: number): number {
+  const g = radarGeometry(size, avatarSize);
+  return Math.round(2 * g.rIn - INNER_RING_STROKE * g.u);
 }
 
 function color(hex: string, alpha: number): SkColor {
@@ -312,7 +325,7 @@ function drawBezel(canvas: SkCanvas, g: RadarGeometry): void {
     canvas.drawLine(cx + cs * rIn, cy + sn * rIn, cx + cs * rDisc, cy + sn * rDisc, cross);
   }
 
-  canvas.drawCircle(cx, cy, rIn, strokePaint(0.9 * u, color(HUD, 0.55)));
+  canvas.drawCircle(cx, cy, rIn, strokePaint(INNER_RING_STROKE * u, color(HUD, 0.55)));
 
   // Шкала по внутреннему краю стекла.
   const minor = Skia.Path.Make();

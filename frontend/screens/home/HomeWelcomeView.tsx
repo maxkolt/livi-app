@@ -31,7 +31,7 @@ import { HomeCenterProfile, hasProfilePhoto } from './HomeCenterProfile';
 import { WelcomeCrownButton } from './WelcomeCrownButton';
 import { WelcomeOnlineBanner, type WelcomeBannerPeer } from './WelcomeOnlineBanner';
 import { WelcomeRadar } from './WelcomeRadar';
-import { RADAR_DRAWN_EXTENT, radarGeometry } from './welcomeRadarScene';
+import { RADAR_DRAWN_EXTENT, radarFittedAvatarSize, radarGeometry } from './welcomeRadarScene';
 import { WelcomeSearchCta, welcomeSearchCtaHeight, welcomeSearchCtaWidth } from './WelcomeSearchCta';
 import type { Lang } from '../../utils/i18n';
 import { logger } from '../../utils/logger';
@@ -64,6 +64,8 @@ export type HomeWelcomeViewProps = {
   hasActiveCallForSearch: boolean;
   onStartSearch: () => void;
   splashGone?: boolean;
+  /** Первый непустой кадр радара готов — cold splash может открывать Search. */
+  onRadarReady?: () => void;
   /** Вкладка «Поиск» на экране — иначе радар не анимируется. */
   active?: boolean;
   /**
@@ -123,6 +125,7 @@ function HomeWelcomeViewInner({
   hasActiveCallForSearch,
   onStartSearch,
   splashGone = true,
+  onRadarReady,
   active = true,
   onTopBlockBottom,
 }: HomeWelcomeViewProps) {
@@ -380,9 +383,8 @@ function HomeWelcomeViewInner({
   const avatarLock =
     geometryFresh && lockedWelcomeSearchAvatar?.key === avatarLockKey ? lockedWelcomeSearchAvatar : null;
   const welcomeAvatarSize = avatarLock ? avatarLock.size : welcomeAvatarSizeRaw;
-  /** Аватар с рамкой (radarFramedAvatarSize) держим так же, иначе у него мигание осталось бы. */
-  const welcomeFramedAvatarSize = avatarLock ? avatarLock.base : welcomeAvatarBase;
-  const welcomeFrameOutset = welcomeAvatarGeometry.frameOutset;
+  /** Фото на радаре — ровно по тонкому внутреннему кругу; радар считается от welcomeAvatarSize. */
+  const radarPhotoSize = radarFittedAvatarSize(radarSize, welcomeAvatarSize);
 
   const handleStartSearchPress = useCallback(() => {
     const now = Date.now();
@@ -426,7 +428,7 @@ function HomeWelcomeViewInner({
   const radarGesture = useAvatarDustGesture(
     avatarDust,
     radarSize,
-    avatarDustSource?.size ?? welcomeAvatarSize,
+    avatarDustSource?.size ?? radarPhotoSize,
     handleAvatarTap,
   );
 
@@ -497,6 +499,7 @@ function HomeWelcomeViewInner({
               size={radarSize}
               avatarSize={showRadarAvatar ? welcomeAvatarSize : 0}
               active={active}
+              onReady={onRadarReady}
             >
               {showRadarAvatar ? (
               <HomeCenterProfile
@@ -506,9 +509,7 @@ function HomeWelcomeViewInner({
                 compact={compactLayout}
                 dense={splitStage}
                 radarStage
-                radarAvatarSize={welcomeAvatarSize}
-                radarFramedAvatarSize={welcomeFramedAvatarSize}
-                radarFrameOutset={welcomeFrameOutset}
+                radarAvatarSize={radarPhotoSize}
                 menuChromeBg={menuChromeBg}
                 {...centerProfile}
                 avatarAnchorRef={avatarAnchorRef}

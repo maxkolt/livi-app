@@ -44,6 +44,8 @@ export type FliqYoutubePlayerProps = {
   muted?: boolean;
   /** Подгрузить заранее: тихо скачать первые секунды и вернуться в начало. */
   prebuffer?: boolean;
+  /** Глубина тихой подгрузки; cold start использует короткий запас для быстрого входа. */
+  prebufferMs?: number;
   /** Плеер YouTube загрузился и готов к командам. */
   onReady?: () => void;
   /** Подгрузка первых секунд закончилась: ролик стоит на паузе в начале. */
@@ -75,6 +77,7 @@ export const FliqYoutubePlayer = memo(forwardRef<FliqYoutubePlayerHandle, FliqYo
   startSec = 0,
   muted = false,
   prebuffer = false,
+  prebufferMs,
   onReady,
   onBuffered,
   onFirstFrame,
@@ -88,7 +91,7 @@ export const FliqYoutubePlayer = memo(forwardRef<FliqYoutubePlayerHandle, FliqYo
 }, handleRef) {
   const ref = useRef<WebView>(null);
   // html собирается один раз: смена props — команды в страницу, а не перезагрузка.
-  const initRef = useRef({ mode, muted, prebuffer, startSec });
+  const initRef = useRef({ mode, muted, prebuffer, prebufferMs, startSec });
   const source = useMemo(
     () => ({ html: youtubePlayerHtml(videoId, initRef.current), baseUrl: PLAYER_ORIGIN }),
     [videoId],

@@ -3,6 +3,7 @@ import { AppState, Linking, Platform, Pressable, StyleSheet, View } from 'react-
 import { useSafeAreaFrame, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Image as ExpoImage } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
+import { FireAvatarFrame, fireFrameOutset } from './FireAvatarFrame';
 import { MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
 import Carousel from 'react-native-reanimated-carousel';
 import { Extrapolation, interpolate } from 'react-native-reanimated';
@@ -186,10 +187,37 @@ function ChatBackgroundCard({
   );
 }
 
-function FrameCoverCard({ item, size, onLoad }: { item: FrameItem; size: number; onLoad?: () => void }) {
+function FrameCoverCard({
+  item,
+  size,
+  active,
+  onLoad,
+}: {
+  item: FrameItem;
+  size: number;
+  active: boolean;
+  onLoad?: () => void;
+}) {
   const ringWidth = Math.max(2, Math.round(size * 0.025));
   const avatarSize = size - ringWidth * 2;
 
+  if (item.key === 'fire') {
+    const fireOutset = fireFrameOutset(size);
+    const fireAvatarSize = size - fireOutset * 2;
+    return (
+      <View style={styles.cardShadow}>
+        <FireAvatarFrame size={size} photoSize={fireAvatarSize} active={active}>
+          <ExpoImage
+            source={SHOWCASE_AVATAR}
+            style={StyleSheet.absoluteFillObject}
+            contentFit="cover"
+            cachePolicy="memory-disk"
+            onLoad={onLoad}
+          />
+        </FireAvatarFrame>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.cardShadow}>
@@ -714,7 +742,7 @@ function FramesStoreContent({
                   onSnapToItem={setActiveFrameIndex}
                   renderItem={({ item }) => (
                     <View style={[styles.carouselItem, { width: framePageWidth, height: framePageHeight }]}>
-                      <FrameCoverCard item={item} size={frameSize} onLoad={handleFrameLoad} />
+                      <FrameCoverCard item={item} size={frameSize} active={visible} onLoad={handleFrameLoad} />
                       <FitText
                         style={[styles.carouselLabel, item.key === activeFrame.key && styles.carouselLabelActive]}
                         minimumFontScale={0.65}

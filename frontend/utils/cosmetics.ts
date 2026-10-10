@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 // Импортируем из листовых модулей, а не из бареля sockets/socket: барель
 // реэкспортирует presence.ts, который сам подписывается на cosmetics:frame и
 // зовёт этот файл. Через барель получался цикл, и при инициализации значения
@@ -59,6 +60,99 @@ const listeners = new Set<(value: CosmeticEntitlements) => void>();
 const userFrameCache = new Map<string, { frameId: string; loadedAt: number }>();
 const userFrameListeners = new Map<string, Set<(frameId: string) => void>>();
 
+/**
+ * Рамки с прошлого запуска. Без них до ответа сервера аватары рисовались без
+ * рамки, а через секунду-две перестраивались — рамка «догоняла» фото.
+ */
+const STORAGE_KEY = 'livi_cosmetics_v1';
+let hydrated = false;
+let hydratePromise: Promise<void> | null = null;
+const hydrateListeners = new Set<() => void>();
+let persistedOwnId = '';
+let persistTimer: ReturnType<typeof setTimeout> | null = null;
+
+function schedulePersist() {
+  if (persistTimer) return;
+  persistTimer = setTimeout(() => {
+    persistTimer = null;
+    const frames: Record<string, string> = {};
+    userFrameCache.forEach((value, userId) => {
+      frames[userId] = value.frameId;
+    });
+    const payload = {
+      ownId: String(getCurrentUserId() || '') || persistedOwnId,
+      own: cached,
+      frames,
+    };
+    void AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(payload)).catch(() => {});
+  }, 400);
+}
+
+function notifyUserFrame(userId: string, frameId: string) {
+  userFrameListeners.get(userId)?.forEach((listener) => listener(frameId));
+}
+
+/** Свои рамки: до первого ответа сервера — значение с диска из userFrameCache. */
+function ownFrameId(userId: string): string {
+  return cached !== EMPTY ? cached.activeFrameId : userFrameCache.get(userId)?.frameId || '';
+}
+
+export function hydrateCosmetics(): Promise<void> {
+  if (hydratePromise) return hydratePromise;
+  hydratePromise = AsyncStorage.getItem(STORAGE_KEY)
+    .then((raw) => {
+      if (!raw) return;
+      const saved = JSON.parse(raw) as {
+        ownId?: string;
+        own?: Partial<CosmeticEntitlements>;
+        frames?: Record<string, string>;
+      };
+      const ownId = String(saved?.ownId || '');
+      persistedOwnId = ownId;
+      const currentId = String(getCurrentUserId() || '');
+      const sameAccount = !!ownId && (!currentId || currentId === ownId);
+      // Свежие данные из сети, пришедшие раньше диска, не перетираем (loadedAt 0 → сеть всё равно обновит).
+      Object.entries(saved?.frames || {}).forEach(([userId, frameId]) => {
+        if (!userId || userFrameCache.has(userId)) return;
+        if (userId === ownId && !sameAccount) return;
+        const value = String(frameId || '');
+        userFrameCache.set(userId, { frameId: value, loadedAt: 0 });
+        notifyUserFrame(userId, value);
+      });
+      if (sameAccount && cached === EMPTY && saved?.own) {
+        cached = normalize(saved.own);
+        listeners.forEach((listener) => listener(cached));
+        notifyUserFrame(ownId, cached.activeFrameId);
+      }
+    })
+    .catch(() => {})
+    .finally(() => {
+      hydrated = true;
+      hydrateListeners.forEach((listener) => listener());
+      hydrateListeners.clear();
+    });
+  return hydratePromise;
+}
+
+void hydrateCosmetics();
+
+/** true, когда рамки с прошлого запуска уже подняты с диска (или их нет). */
+export function useCosmeticsHydrated(): boolean {
+  const [value, setValue] = useState(hydrated);
+  useEffect(() => {
+    if (hydrated) {
+      setValue(true);
+      return;
+    }
+    const listener = () => setValue(true);
+    hydrateListeners.add(listener);
+    return () => {
+      hydrateListeners.delete(listener);
+    };
+  }, []);
+  return value;
+}
+
 function normalize(value: Partial<CosmeticEntitlements> | null | undefined): CosmeticEntitlements {
   return {
     purchasedFrameIds: Array.isArray(value?.purchasedFrameIds) ? value!.purchasedFrameIds!.map(String) : [],
@@ -83,6 +177,7 @@ function publish(value: Partial<CosmeticEntitlements> | null | undefined) {
     userFrameListeners.get(ownId)?.forEach((listener) => listener(cached.activeFrameId));
   }
   listeners.forEach((listener) => listener(cached));
+  schedulePersist();
   void syncWallpaper(cached);
   return cached;
 }
@@ -187,6 +282,7 @@ export function applyRemoteFrameChange(userId: string, frameId: string): void {
     cached = { ...cached, activeFrameId: next };
     listeners.forEach((listener) => listener(cached));
   }
+  schedulePersist();
   if (current?.frameId === next) return;
   userFrameListeners.get(id)?.forEach((listener) => listener(next));
 }
@@ -198,6 +294,7 @@ async function loadUserActiveFrame(userId: string): Promise<string> {
   const frameId = String(json.activeFrameId || '');
   userFrameCache.set(userId, { frameId, loadedAt: Date.now() });
   userFrameListeners.get(userId)?.forEach((listener) => listener(frameId));
+  schedulePersist();
   return frameId;
 }
 
@@ -205,7 +302,7 @@ async function loadUserActiveFrame(userId: string): Promise<string> {
 export function useUserActiveFrame(userId?: string): string {
   const id = String(userId || '');
   const ownId = String(getCurrentUserId() || '');
-  const initial = id && id === ownId ? cached.activeFrameId : userFrameCache.get(id)?.frameId || '';
+  const initial = id && id === ownId ? ownFrameId(id) : userFrameCache.get(id)?.frameId || '';
   const [frameId, setFrameId] = useState(initial);
 
   useEffect(() => {
@@ -220,9 +317,11 @@ export function useUserActiveFrame(userId?: string): string {
     }
     group.add(setFrameId);
     if (id === String(getCurrentUserId() || '')) {
-      setFrameId(cached.activeFrameId);
+      setFrameId(ownFrameId(id));
       void loadCosmetics().catch(() => {});
     } else {
+      const known = userFrameCache.get(id);
+      if (known) setFrameId(known.frameId);
       void loadUserActiveFrame(id).then(setFrameId).catch(() => {});
     }
     return () => {

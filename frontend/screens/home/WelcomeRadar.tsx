@@ -1,14 +1,16 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { AppState, PixelRatio, StyleSheet, View } from 'react-native';
 import { useIsFocused } from '@react-navigation/native';
 import { Canvas, Picture, type SkPicture } from '@shopify/react-native-skia';
 import {
   runOnUI,
+  runOnJS,
   useFrameCallback,
   useReducedMotion,
   useSharedValue,
 } from 'react-native-reanimated';
 import { logger } from '../../utils/logger';
+import { useSkiaFirstPaint } from '../../utils/skiaFirstPaint';
 import { useDeviceTilt } from './useDeviceTilt';
 import {
   buildRadarScene,
@@ -26,6 +28,8 @@ type WelcomeRadarProps = {
   avatarSize?: number;
   /** false — вкладка «Поиск» скрыта: луч стоит, кадры не считаются. */
   active?: boolean;
+  /** Первый непустой Skia-кадр собран на UI-потоке. */
+  onReady?: () => void;
   children: React.ReactNode;
 };
 
@@ -41,7 +45,7 @@ function useAppActive(): boolean {
   return appActive;
 }
 
-export function WelcomeRadar({ size, avatarSize, active = true, children }: WelcomeRadarProps) {
+export function WelcomeRadar({ size, avatarSize, active = true, onReady, children }: WelcomeRadarProps) {
   /**
    * Размер целиком задаёт родитель. Своего onLayout здесь нет намеренно.
    *
@@ -55,6 +59,10 @@ export function WelcomeRadar({ size, avatarSize, active = true, children }: Welc
 
   const scene = useSharedValue<RadarScene | null>(null);
   const picture = useSharedValue<SkPicture>(getEmptyRadarPicture());
+  const { canvasRef, paintViewRef, requestPaintSignal } = useSkiaFirstPaint(onReady);
+  const reportReady = useCallback(() => {
+    if (onReady) requestPaintSignal();
+  }, [onReady, requestPaintSignal]);
 
   const isFocused = useIsFocused();
   const appActive = useAppActive();
@@ -77,8 +85,10 @@ export function WelcomeRadar({ size, avatarSize, active = true, children }: Welc
       const S = buildRadarScene(p, scene.value?.t ?? 0);
       scene.value = S;
       picture.value = drawRadarFrame(S);
+      // После замены пустой Picture ждём, пока Skia реально отрисует кадр на экране.
+      runOnJS(reportReady)();
     })(payload);
-  }, [geometry, picture, scene]);
+  }, [geometry, picture, reportReady, scene]);
 
   useEffect(
     () => () => {
@@ -113,9 +123,11 @@ export function WelcomeRadar({ size, avatarSize, active = true, children }: Welc
 
   return (
     <View style={[styles.wrap, { width: s, height: s }]}>
-      <Canvas style={StyleSheet.absoluteFill} colorSpace="srgb" pointerEvents="none">
-        <Picture picture={picture} />
-      </Canvas>
+      <View ref={paintViewRef} collapsable={false} style={StyleSheet.absoluteFill} pointerEvents="none">
+        <Canvas ref={canvasRef} style={StyleSheet.absoluteFill} colorSpace="srgb" pointerEvents="none">
+          <Picture picture={picture} />
+        </Canvas>
+      </View>
       <View style={styles.center}>{children}</View>
     </View>
   );

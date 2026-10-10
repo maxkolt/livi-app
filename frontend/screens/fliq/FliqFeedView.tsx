@@ -83,6 +83,10 @@ type WatchStat = { maxSec: number; durSec: number; loops: number };
 type FliqFeedViewProps = {
   /** Вкладка видна, приложение на экране и нет звонка — только тогда ролик играет. */
   active: boolean;
+  /** До первого открытия тихо подготовить WebView и медиабуфер первого ролика. */
+  prewarm?: boolean;
+  /** Прогрев завершён или неприменим (нет onboarding/роликов/сети). */
+  onPrewarmSettled?: () => void;
   lang: Lang;
   /** Высота нижнего стекла с навбаром: лента уходит под него, ролик стоит над ним. */
   bottomInset: number;
@@ -90,7 +94,14 @@ type FliqFeedViewProps = {
   topInset: number;
 };
 
-export function FliqFeedView({ active, lang, bottomInset, topInset }: FliqFeedViewProps) {
+export function FliqFeedView({
+  active,
+  prewarm = false,
+  onPrewarmSettled,
+  lang,
+  bottomInset,
+  topInset,
+}: FliqFeedViewProps) {
   const { width, height } = useHomeLayout();
   const tablet = isWelcomeTabletLayout(width, height);
   const compact = !tablet && width > 0 && height > 0 && width / height > 1.05;
@@ -118,7 +129,19 @@ export function FliqFeedView({ active, lang, bottomInset, topInset }: FliqFeedVi
   const [topicsOpen, setTopicsOpen] = useState(false);
   const [savedOpen, setSavedOpen] = useState(false);
   const [shareUrl, setShareUrl] = useState<string | null>(null);
-  const [keepPlayers, setKeepPlayers] = useState(active);
+  // prewarming одноразовый: после первого реального входа обычные правила паузы/выгрузки
+  // снова действуют и скрытая вкладка не держит WebView бесконечно.
+  const [prewarming, setPrewarming] = useState(prewarm && !active);
+  const prewarmingRef = useRef(prewarming);
+  prewarmingRef.current = prewarming;
+  const prewarmSettledRef = useRef(false);
+  const settlePrewarm = useCallback((reason: string) => {
+    if (prewarmSettledRef.current) return;
+    prewarmSettledRef.current = true;
+    logger.info('[fliq] cold prewarm settled', { reason });
+    onPrewarmSettled?.();
+  }, [onPrewarmSettled]);
+  const [keepPlayers, setKeepPlayers] = useState(active || prewarming);
   /** Ролик, который человек сам поставил на паузу (сбрасывается при свайпе). */
   const [heldId, setHeldId] = useState<string | null>(null);
   /** Ролик на экране уже показал первый кадр — можно подгружать следующий, не отнимая у него сеть. */
@@ -148,6 +171,27 @@ export function FliqFeedView({ active, lang, bottomInset, topInset }: FliqFeedVi
 
   useOverlayBackHandler(active && savedOpen, () => setSavedOpen(false));
 
+  useEffect(() => {
+    if (active && prewarming) setPrewarming(false);
+  }, [active, prewarming]);
+
+  useEffect(() => {
+    if (!prewarming) return;
+    // Сеть/YouTube не должны навсегда удержать cold splash.
+    const timer = setTimeout(() => settlePrewarm('deadline'), 13_500);
+    return () => clearTimeout(timer);
+  }, [prewarming, settlePrewarm]);
+
+  useEffect(() => {
+    if (!prewarming || !topicsHydrated) return;
+    if (!onboarded) settlePrewarm('topics_required');
+  }, [onboarded, prewarming, settlePrewarm, topicsHydrated]);
+
+  useEffect(() => {
+    if (!prewarming) return;
+    if (status === 'error' || status === 'empty') settlePrewarm(status);
+  }, [prewarming, settlePrewarm, status]);
+
   // Ушли на другую вкладку посреди ролика — по возвращении он стоит на паузе там же,
   // как после своей паузы: дальше по нажатию. Ещё не заигравший ролик просто запустится.
   useEffect(() => {
@@ -157,14 +201,14 @@ export function FliqFeedView({ active, lang, bottomInset, topInset }: FliqFeedVi
   }, [active]);
 
   useEffect(() => {
-    if (active) {
+    if (active || prewarming) {
       setKeepPlayers(true);
       return;
     }
     void flushFliqEvents();
     const timer = setTimeout(() => setKeepPlayers(false), heldId ? KEEP_HELD_PLAYERS_MS : KEEP_PLAYERS_MS);
     return () => clearTimeout(timer);
-  }, [active, heldId]);
+  }, [active, heldId, prewarming]);
 
   const applyFirstPage = useCallback((first: FliqItem[]) => {
     watchRef.current.clear();
@@ -221,10 +265,10 @@ export function FliqFeedView({ active, lang, bottomInset, topInset }: FliqFeedVi
   );
 
   // Ленту не грузим, пока вкладку ни разу не открыли.
-  const [opened, setOpened] = useState(active);
+  const [opened, setOpened] = useState(active || prewarming);
   useEffect(() => {
-    if (active) setOpened(true);
-  }, [active]);
+    if (active || prewarming) setOpened(true);
+  }, [active, prewarming]);
 
   // Первое открытие: сперва темы, потом лента. Смена тем или языка — лента заново.
   useEffect(() => {
@@ -341,7 +385,10 @@ export function FliqFeedView({ active, lang, bottomInset, topInset }: FliqFeedVi
       next.add(id);
       return next;
     });
-  }, []);
+    if (prewarmingRef.current && itemsRef.current[0]?.id === id) {
+      settlePrewarm('buffered');
+    }
+  }, [settlePrewarm]);
   useEffect(() => {
     if (neighborsOn || status !== 'ready' || !active) return;
     const timer = setTimeout(() => setNeighborsOn(true), 4000);
@@ -405,6 +452,7 @@ export function FliqFeedView({ active, lang, bottomInset, topInset }: FliqFeedVi
       const activeId = items[activeIndex]?.id;
       const nextId = items[activeIndex + 1]?.id;
       const mayPrebuffer = playbackOn && !!activeId && startedId === activeId;
+      const prewarmCurrent = prewarming && offset === 0 && startedId == null;
       return (
         <FliqSlide
           item={item}
@@ -417,10 +465,19 @@ export function FliqFeedView({ active, lang, bottomInset, topInset }: FliqFeedVi
           // Ближайший WebView/API поднимается сразу; медиапоток пойдёт лишь после первого
           // кадра текущего. Предыдущий и второй следующий подключаются следом.
           mountPlayer={
-            keepPlayers && (offset === 0 || offset === 1 || (neighborsOn && offset >= -1 && offset <= 2))
+            keepPlayers &&
+            (prewarming
+              ? offset === 0
+              : offset === 0 || offset === 1 || (neighborsOn && offset >= -1 && offset <= 2))
           }
           mode={mode}
-          prebuffer={mayPrebuffer && (offset === 1 || (offset === 2 && !!nextId && bufferedIds.has(nextId)))}
+          prebuffer={
+            prewarmCurrent ||
+            (mayPrebuffer && (offset === 1 || (offset === 2 && !!nextId && bufferedIds.has(nextId))))
+          }
+          // Для первого входа достаточно секунды реального потока: WebView/API — основная
+          // задержка, а короткий медиазапас уже убирает ожидание кадра после тапа.
+          prebufferMs={prewarmCurrent ? 1200 : undefined}
           muted={muted}
           // Важно только при создании плеера: ролик на экране продолжает с места, где стоял.
           startSec={offset === 0 ? positionRef.current.get(item.id) || 0 : 0}
@@ -444,6 +501,7 @@ export function FliqFeedView({ active, lang, bottomInset, topInset }: FliqFeedVi
       items,
       bufferedIds,
       neighborsOn,
+      prewarming,
       startedId,
       onStarted,
       onBuffered,
@@ -603,6 +661,7 @@ type FliqSlideProps = {
   mountPlayer: boolean;
   mode: FliqPlayMode;
   prebuffer: boolean;
+  prebufferMs?: number;
   muted: boolean;
   startSec: number;
   onProgress: (id: string, cur: number, dur: number) => void;
@@ -631,6 +690,7 @@ const FliqSlide = memo(function FliqSlide({
   mountPlayer,
   mode,
   prebuffer,
+  prebufferMs,
   muted,
   startSec,
   onProgress,
@@ -679,9 +739,15 @@ const FliqSlide = memo(function FliqSlide({
 
   const handleReady = useCallback(() => {
     timingRef.current.readyMs = Date.now() - timingRef.current.mountAt;
-  }, []);
+    logger.info('[fliq] player ready', { id: item.id, readyMs: timingRef.current.readyMs });
+  }, [item.id]);
   const handleBuffered = useCallback(() => {
     timingRef.current.bufferedMs = Date.now() - timingRef.current.mountAt;
+    logger.info('[fliq] player buffered', {
+      id: item.id,
+      readyMs: timingRef.current.readyMs,
+      bufferedMs: timingRef.current.bufferedMs,
+    });
     onBuffered(item.id);
   }, [item.id, onBuffered]);
   const handleFirstFrame = useCallback(() => {
@@ -761,6 +827,7 @@ const FliqSlide = memo(function FliqSlide({
             startSec={startSec}
             muted={muted}
             prebuffer={prebuffer}
+            prebufferMs={prebufferMs}
             onReady={handleReady}
             onBuffered={handleBuffered}
             onFirstFrame={handleFirstFrame}

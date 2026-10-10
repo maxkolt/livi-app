@@ -51,6 +51,7 @@ import {
 
 import LanguagePicker from '../components/LanguagePicker';
 import { clearPendingInviteCode } from '../utils/inviteLink';
+import { useCosmeticsHydrated } from '../utils/cosmetics';
 import { ensureCallMediaPermissions } from '../utils/mediaPermissions';
 import { useAppTheme } from '../theme/ThemeProvider';
 import { t } from '../utils/i18n';
@@ -736,6 +737,11 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const searchAvatarPrefetchKeyRef = useRef('');
   /** true после onLoad аватара на Поиске — prefetch ≠ кадр в радаре (логи: dismiss до image paint). */
   const [searchAvatarDecoded, setSearchAvatarDecoded] = useState(false);
+  /** Радар — отдельный Skia Canvas: аватар готов раньше, поэтому ждём его первый Picture отдельно. */
+  const [searchRadarReady, setSearchRadarReady] = useState(false);
+  /** Первый ролик Fliq прогревается в фоне и никогда не задерживает splash/Search. */
+  const [fliqPrewarmReady, setFliqPrewarmReady] = useState(false);
+  const cosmeticsHydrated = useCosmeticsHydrated();
   const searchAvatarDecodeKeyRef = useRef('');
   const [profileKey, setProfileKey] = useState(0);
 
@@ -834,6 +840,12 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     searchAvatarDecodeKeyRef.current = key;
     setSearchAvatarDecoded(true);
   }, [searchAvatarDisplayUri]);
+  const handleSearchRadarReady = useCallback(() => {
+    setSearchRadarReady(true);
+  }, []);
+  const handleFliqPrewarmSettled = useCallback(() => {
+    setFliqPrewarmReady(true);
+  }, []);
 
   // Всегда синхронизируем ref со state (на случай, если nick меняется НЕ через onChangeText профиля),
   // например после загрузки профиля с сервера).
@@ -936,13 +948,20 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   /* language */
   const lang = useLang((s) => s.lang);
   const setLang = useLang((s) => s.setLang);
-  // Fliq: первая страница ленты заранее, когда главный экран уже показан, — вкладка
-  // открывается сразу с роликами. Это пара килобайт JSON и три превью, видео не грузим.
+  // Cold Fliq начинаем сразу за splash: иначе самый ранний тап всегда обгоняет WebView.
+  // Splash уйдёт после onPrewarmSettled (или ограниченного deadline внутри Fliq).
   useEffect(() => {
-    if (!splashDismissed) return;
-    const timer = setTimeout(() => void warmFliqFeed(lang).catch(() => {}), 5000);
-    return () => clearTimeout(timer);
-  }, [splashDismissed, lang]);
+    let cancelled = false;
+    void warmFliqFeed(lang)
+      .catch(() => {})
+      .finally(() => {
+        if (cancelled) return;
+        startTransition(() => ensureWelcomeTabMounted('fliq'));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [ensureWelcomeTabMounted, lang]);
   const [langPickerVisible, setLangPickerVisible] = useState(false);
   const L = useCallback((key: string) => t(key, lang), [lang]);
 
@@ -5586,6 +5605,10 @@ const handleClearNick = useCallback(async () => {
     !waitingForKnownAvatar &&
     avatarUriResolvedForPaint &&
     (!hasAvatarSourceForFirstPaint || (searchAvatarPrefetched && searchAvatarDecoded));
+  // Splash относится только к видимой стартовой странице. Fliq продолжает
+  // скрытый прогрев параллельно, но медленная сеть/YouTube не блокирует Search.
+  // Рамка с диска должна быть известна до первого кадра — иначе она «догоняет» аватар.
+  const searchHomeReady = avatarReadyForFirstPaint && searchRadarReady && cosmeticsHydrated;
 
   useEffect(() => {
     logger.info('[search-avatar] splash-gate', {
@@ -5599,6 +5622,10 @@ const handleClearNick = useCallback(async () => {
       prefetched: searchAvatarPrefetched,
       decoded: searchAvatarDecoded,
       ready: avatarReadyForFirstPaint,
+      radarReady: searchRadarReady,
+      fliqReady: fliqPrewarmReady,
+      cosmeticsHydrated,
+      searchHomeReady,
       displayUriKind: !searchAvatarDisplayUri
         ? 'none'
         : /^file:/i.test(searchAvatarDisplayUri)
@@ -5620,6 +5647,10 @@ const handleClearNick = useCallback(async () => {
     searchAvatarPrefetched,
     searchAvatarDecoded,
     avatarReadyForFirstPaint,
+    searchRadarReady,
+    fliqPrewarmReady,
+    cosmeticsHydrated,
+    searchHomeReady,
     searchAvatarDisplayUri,
     avatarUri,
     myFullAvatarUri,
@@ -5686,6 +5717,7 @@ const handleClearNick = useCallback(async () => {
             hasActiveCallForSearch={hasActiveCallForSearch}
             onStartSearch={handleStartSearch}
             splashGone={!showSplashOverlay}
+            onRadarReady={handleSearchRadarReady}
             active={showSearchWelcome}
             onTopBlockBottom={onSearchTopBlockBottom}
           />
@@ -5728,7 +5760,7 @@ const handleClearNick = useCallback(async () => {
           />
         </WelcomeKeepAlivePane>
         ) : null}
-        {/* Fliq: монтируется при первом открытии (WebView-плееры не греем заранее). */}
+        {/* Fliq после warmFliqFeed монтируется скрытым: первый WebView и медиабуфер готовы до тапа. */}
         {showFliqTab && !mountedWelcomeTabs.has('fliq') ? (
           <WelcomeKeepAlivePane visible mode="list" />
         ) : null}
@@ -5737,6 +5769,8 @@ const handleClearNick = useCallback(async () => {
           {/* От края до края экрана: свет от ролика под системной строкой, лента — под нижним стеклом. */}
           <FliqFeedView
             active={showFliqTab && appIsActive && !hasActiveCallForSearch}
+            prewarm
+            onPrewarmSettled={handleFliqPrewarmSettled}
             lang={lang}
             bottomInset={tabBarH + GLASS_DOCK_TOP_PAD}
             topInset={homeInsets.top + APP_TOP_CONTENT_GAP}
@@ -6137,13 +6171,14 @@ const handleClearNick = useCallback(async () => {
     {showSplashOverlay && (
       <View style={[StyleSheet.absoluteFillObject, { zIndex: 9998 }]} pointerEvents="box-none">
         <SplashLoader
-          dataLoaded={dataLoaded}
-          hasAvatarReady={avatarReadyForFirstPaint}
+          hasContentReady={searchHomeReady}
           hasNick={!!(currentNick && currentNick.trim())}
           hasAvatar={!!(currentAvatar && currentAvatar.trim())}
           onComplete={() => {
             logger.info('[search-avatar] splash-dismiss', {
               ready: avatarReadyForFirstPaint,
+              radarReady: searchRadarReady,
+              fliqReady: fliqPrewarmReady,
               prefetched: searchAvatarPrefetched,
               decoded: searchAvatarDecoded,
               displayUriKind: !searchAvatarDisplayUri
