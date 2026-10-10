@@ -5701,7 +5701,7 @@ const handleClearNick = useCallback(async () => {
       ) : null}
       <View style={{ flex: 1, minHeight: 0 }}>
         {/* Search always mounted. List panes lazy-mount on first visit, then stay (no remount flicker). */}
-        <WelcomeKeepAlivePane visible={showSearchWelcome} mode="block" style={homePanePad}>
+        <WelcomeKeepAlivePane visible={showSearchWelcome} mode="offscreen" style={homePanePad}>
           <HomeWelcomeView
             styles={styles}
             isDark={isDark}
@@ -5726,7 +5726,7 @@ const handleClearNick = useCallback(async () => {
           <WelcomeKeepAlivePane visible mode="list" />
         ) : null}
         {mountedWelcomeTabs.has('friends') ? (
-        <WelcomeKeepAlivePane visible={showFriendsTab} mode="list">
+        <WelcomeKeepAlivePane visible={showFriendsTab} mode="offscreen">
           <HomeWelcomeFriendsView
             {...friendsListShellProps}
             bottomInset={tabBarH + GLASS_DOCK_TOP_PAD}
@@ -5742,7 +5742,7 @@ const handleClearNick = useCallback(async () => {
           <WelcomeKeepAlivePane visible mode="list" />
         ) : null}
         {mountedWelcomeTabs.has('chat') ? (
-        <WelcomeKeepAlivePane visible={showChatTab} mode="list">
+        <WelcomeKeepAlivePane visible={showChatTab} mode="offscreen">
           <HomeWelcomeChatsView
             bottomInset={tabBarH + GLASS_DOCK_TOP_PAD}
             lang={lang}
@@ -5781,7 +5781,7 @@ const handleClearNick = useCallback(async () => {
           <WelcomeKeepAlivePane visible mode="list" />
         ) : null}
         {mountedWelcomeTabs.has('calls') ? (
-        <WelcomeKeepAlivePane visible={showCallsTab} mode="list">
+        <WelcomeKeepAlivePane visible={showCallsTab} mode="offscreen">
           <HomeWelcomeCallsView
             bottomInset={tabBarH + GLASS_DOCK_TOP_PAD}
             lang={lang}
@@ -5802,10 +5802,10 @@ const handleClearNick = useCallback(async () => {
         {showProfileTab && !mountedWelcomeTabs.has('profile') ? (
           <WelcomeKeepAlivePane visible mode="list" />
         ) : null}
-        {/* keep-alive по opacity, а не display:none: иначе вся панель профиля
+        {/* keep-alive за экраном, а не display:none: иначе вся панель профиля
             раскладывается в момент тапа и первый переход роняет кадры. */}
         {mountedWelcomeTabs.has('profile') ? (
-        <WelcomeKeepAlivePane visible={showProfileTab} mode="list" style={homePanePad}>
+        <WelcomeKeepAlivePane visible={showProfileTab} mode="offscreen" style={homePanePad}>
           {/* Источник нижнего стекла: что подъезжает к навбару, видно под стеклом размытым. */}
           <BlurListSource sourceId={HOME_BLUR_LIST_SOURCE.profile} style={{ flex: 1, minHeight: 0 }}>
           <HomeWelcomeProfileView

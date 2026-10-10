@@ -123,9 +123,11 @@ export async function prefetchChatPreviews(friendIds: string[], lang: Lang): Pro
 }
 
 export function useChatPreviews(friendIds: string[], lang: Lang, enabled: boolean) {
-  const [previews, setPreviews] = useState<Record<string, ChatPreview>>(() =>
-    enabled ? { ...getChatPreviewSnapshot() } : {},
-  );
+  // Скрытая вкладка (prewarm) тоже берёт snapshot один раз: строки и их рамки
+  // монтируются заранее, а не в момент тапа. Перезагрузки — только когда enabled.
+  const [previews, setPreviews] = useState<Record<string, ChatPreview>>(() => ({
+    ...getChatPreviewSnapshot(),
+  }));
   const idsKey = friendIds.join('|');
   const idsRef = useRef(friendIds);
   const langRef = useRef(lang);

@@ -36,8 +36,10 @@ function shouldDeferCallLogUi(): boolean {
 }
 
 export function useCallLog(enabled: boolean) {
+  // Скрытая вкладка (prewarm) тоже берёт snapshot один раз: строки и их рамки
+  // монтируются заранее, а не в момент тапа. Подписки — только когда enabled.
   const [entries, setEntries] = useState<CallLogEntry[]>(() =>
-    enabled ? getCallLogSnapshot() : [],
+    enabled || !shouldDeferCallLogUi() ? getCallLogSnapshot() : [],
   );
   const uid = String(getCurrentUserId() || '').trim();
 
