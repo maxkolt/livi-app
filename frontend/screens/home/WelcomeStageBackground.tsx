@@ -340,21 +340,32 @@ export function GlassFill({
   backdrop,
   style,
   matteOpacity = 0.5,
+  plate,
 }: {
   backdrop: BackdropSources | null;
   style?: StyleProp<ViewStyle>;
   matteOpacity?: number;
+  /** Сплошная серая подложка под стеклом (купленные обои), как у шапки и инпута. */
+  plate?: string;
 }) {
   if (!GLASS_AVAILABLE) return null;
   return (
-    <StageGradient
-      translucent
-      matteOpacity={matteOpacity}
-      backdrop={backdrop}
-      edgeFade={false}
-      fullRim
-      style={[StyleSheet.absoluteFill, { overflow: 'hidden' }, style]}
-    />
+    <>
+      {plate ? (
+        <View
+          pointerEvents="none"
+          style={[StyleSheet.absoluteFill, { overflow: 'hidden', backgroundColor: plate }, style]}
+        />
+      ) : null}
+      <StageGradient
+        translucent
+        matteOpacity={matteOpacity}
+        backdrop={backdrop}
+        edgeFade={false}
+        fullRim
+        style={[StyleSheet.absoluteFill, { overflow: 'hidden' }, style]}
+      />
+    </>
   );
 }
 

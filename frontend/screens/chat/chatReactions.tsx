@@ -51,6 +51,7 @@ export function ReactionBarOverlay({
   isDark,
   anchor,
   backdrop = null,
+  plate,
 }: {
   visible: boolean;
   onClose: () => void;
@@ -59,6 +60,8 @@ export function ReactionBarOverlay({
   anchor?: ReactionBarAnchor | null;
   /** Источники стекла чата: полоса — стекло, сквозь него размыт чат. */
   backdrop?: BackdropSources | null;
+  /** Сплошная серая подложка под стеклом, когда включены купленные обои. */
+  plate?: string;
 }) {
   const glass = isDark && GLASS_AVAILABLE;
   const scrollRef = React.useRef<ScrollView>(null);
@@ -203,7 +206,7 @@ export function ReactionBarOverlay({
               style={{ borderRadius: 24, overflow: "hidden" }}
             >
               <View style={barStyle}>
-                {glass ? <GlassFill backdrop={backdrop} style={{ borderRadius: 24 }} /> : null}
+                {glass ? <GlassFill backdrop={backdrop} plate={plate} style={{ borderRadius: 24 }} /> : null}
                 <Animated.View
                   style={{
                     marginRight: 6,
@@ -219,7 +222,7 @@ export function ReactionBarOverlay({
                 {renderEmojiRow(REACTION_EMOJIS_PAGE_1)}
               </View>
               <View style={barStyle}>
-                {glass ? <GlassFill backdrop={backdrop} style={{ borderRadius: 24 }} /> : null}
+                {glass ? <GlassFill backdrop={backdrop} plate={plate} style={{ borderRadius: 24 }} /> : null}
                 {renderEmojiRow(REACTION_EMOJIS_PAGE_2)}
               </View>
             </ScrollView>

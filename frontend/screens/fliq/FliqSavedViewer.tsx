@@ -226,11 +226,14 @@ const SavedViewerSlide = memo(function SavedViewerSlide({
   onBuffered: (id: string) => void;
 }) {
   const [firstFrame, setFirstFrame] = useState(false);
+  /** Скрытый ролик уже скачал начало: на экране показываем его кадр, без спиннера. */
+  const [primed, setPrimed] = useState(false);
   const coverOpacity = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
     if (mountPlayer) return;
     setFirstFrame(false);
+    setPrimed(false);
     coverOpacity.setValue(1);
   }, [coverOpacity, mountPlayer]);
 
@@ -241,7 +244,16 @@ const SavedViewerSlide = memo(function SavedViewerSlide({
     Animated.timing(coverOpacity, { toValue: 0, duration: 100, useNativeDriver: true }).start();
   }, [coverOpacity, firstFrame, item.id, onStarted]);
 
-  const handleBuffered = useCallback(() => onBuffered(item.id), [item.id, onBuffered]);
+  const handleBuffered = useCallback(() => {
+    onBuffered(item.id);
+    setPrimed(true);
+  }, [item.id, onBuffered]);
+  const warmOnScreen = mode === 'play' && primed;
+  useEffect(() => {
+    if (!warmOnScreen) return;
+    coverOpacity.setValue(0);
+    onStarted(item.id);
+  }, [coverOpacity, item.id, onStarted, warmOnScreen]);
   const playerRef = useRef<FliqYoutubePlayerHandle>(null);
   const { progress, onTick, reset: resetProgress, scrubber } = useFliqProgress(mode === 'play');
   const seek = useCallback((sec: number, final: boolean) => playerRef.current?.seek(sec, final), []);
@@ -280,7 +292,10 @@ const SavedViewerSlide = memo(function SavedViewerSlide({
             style={StyleSheet.absoluteFill}
           />
         ) : null}
-        <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, { opacity: coverOpacity }]}>
+        <Animated.View
+          pointerEvents="none"
+          style={[StyleSheet.absoluteFill, { opacity: warmOnScreen ? 0 : coverOpacity }]}
+        >
           <ExpoImage
             source={{ uri: youtubeThumbUrl(item.id) }}
             style={StyleSheet.absoluteFill}
@@ -288,7 +303,7 @@ const SavedViewerSlide = memo(function SavedViewerSlide({
             cachePolicy="memory-disk"
             recyclingKey={`saved-viewer-cover-${item.id}`}
           />
-          {mode === 'play' && !firstFrame ? (
+          {mode === 'play' && !firstFrame && !primed ? (
             <View style={styles.loading}>
               <ActivityIndicator color="rgba(255,255,255,0.86)" />
             </View>

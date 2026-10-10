@@ -46,8 +46,15 @@ export type FliqYoutubePlayerProps = {
   prebuffer?: boolean;
   /** Глубина тихой подгрузки; cold start использует короткий запас для быстрого входа. */
   prebufferMs?: number;
+  /**
+   * Ширина карточки в dp на момент создания: узкую страница масштабирует, чтобы YouTube
+   * не включал свой оверлей. Смена размера — новый плеер (key), не перестройка на ходу.
+   */
+  widthDp?: number;
   /** Плеер YouTube загрузился и готов к командам. */
   onReady?: () => void;
+  /** Тихая подгрузка дошла до воспроизведения: поток пошёл, запас ещё набирается. */
+  onPrimed?: () => void;
   /** Подгрузка первых секунд закончилась: ролик стоит на паузе в начале. */
   onBuffered?: () => void;
   onFirstFrame?: () => void;
@@ -78,7 +85,9 @@ export const FliqYoutubePlayer = memo(forwardRef<FliqYoutubePlayerHandle, FliqYo
   muted = false,
   prebuffer = false,
   prebufferMs,
+  widthDp,
   onReady,
+  onPrimed,
   onBuffered,
   onFirstFrame,
   onProgress,
@@ -91,14 +100,14 @@ export const FliqYoutubePlayer = memo(forwardRef<FliqYoutubePlayerHandle, FliqYo
 }, handleRef) {
   const ref = useRef<WebView>(null);
   // html собирается один раз: смена props — команды в страницу, а не перезагрузка.
-  const initRef = useRef({ mode, muted, prebuffer, prebufferMs, startSec });
+  const initRef = useRef({ mode, muted, prebuffer, prebufferMs, startSec, widthDp });
   const source = useMemo(
     () => ({ html: youtubePlayerHtml(videoId, initRef.current), baseUrl: PLAYER_ORIGIN }),
     [videoId],
   );
   const firstFrameRef = useRef(false);
-  const cbRef = useRef({ onReady, onBuffered, onFirstFrame, onProgress, onLoop, onMuteChange, onUserPause, onUserPlay, onError });
-  cbRef.current = { onReady, onBuffered, onFirstFrame, onProgress, onLoop, onMuteChange, onUserPause, onUserPlay, onError };
+  const cbRef = useRef({ onReady, onPrimed, onBuffered, onFirstFrame, onProgress, onLoop, onMuteChange, onUserPause, onUserPlay, onError });
+  cbRef.current = { onReady, onPrimed, onBuffered, onFirstFrame, onProgress, onLoop, onMuteChange, onUserPause, onUserPlay, onError };
   const stateRef = useRef({ mode, muted, prebuffer });
   stateRef.current = { mode, muted, prebuffer };
 
@@ -150,6 +159,8 @@ export const FliqYoutubePlayer = memo(forwardRef<FliqYoutubePlayerHandle, FliqYo
       if (msg?.t === 'ready') {
         syncAll();
         cb.onReady?.();
+      } else if (msg?.t === 'primed') {
+        cb.onPrimed?.();
       } else if (msg?.t === 'buffered') {
         cb.onBuffered?.();
       } else if (msg?.t === 'state' && msg.s === YT_PLAYING && !firstFrameRef.current) {

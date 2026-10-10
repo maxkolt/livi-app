@@ -1,6 +1,8 @@
-import React, { memo } from 'react';
+import React, { memo, useEffect } from 'react';
 import { View, type StyleProp, type ViewStyle } from 'react-native';
+import { useSharedValue } from 'react-native-reanimated';
 import { PaneVisibleContext } from '../../utils/paneVisibility';
+import { DeferredHomeLayout } from './HomeLayoutContext';
 
 /**
  * Скрытый pane уезжает за экран вместо opacity: 0. Android не рисует view с
@@ -63,6 +65,10 @@ function paneStyle(visible: boolean, mode: NonNullable<Props['mode']>): ViewStyl
 export const WelcomeKeepAlivePane = memo(
   function WelcomeKeepAlivePane({ visible, mode = 'list', children, style }: Props) {
     const base = paneStyle(visible, mode);
+    const visibleValue = useSharedValue(visible);
+    useEffect(() => {
+      visibleValue.value = visible;
+    }, [visible, visibleValue]);
     return (
       <View
         style={style ? [base, style] : base}
@@ -70,7 +76,9 @@ export const WelcomeKeepAlivePane = memo(
         accessibilityElementsHidden={!visible}
         importantForAccessibility={visible ? 'auto' : 'no-hide-descendants'}
       >
-        <PaneVisibleContext.Provider value={visible}>{children}</PaneVisibleContext.Provider>
+        <PaneVisibleContext.Provider value={visibleValue}>
+          <DeferredHomeLayout live={visible}>{children}</DeferredHomeLayout>
+        </PaneVisibleContext.Provider>
       </View>
     );
   },

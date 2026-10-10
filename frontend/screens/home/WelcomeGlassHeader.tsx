@@ -40,16 +40,27 @@ export const GLASS_SEARCH_FIELD = {
  */
 export function useGlassHeaderHeight(tabletLayout: boolean, compactLandscape: boolean, searchOpen = false) {
   const insets = useStableSafeAreaInsets();
-  const field = GLASS_SEARCH_FIELD[tabletLayout ? 'tablet' : compactLandscape ? 'landscape' : 'phone'];
+  const layoutKey = tabletLayout ? 'tablet' : compactLandscape ? 'landscape' : 'phone';
+  const field = GLASS_SEARCH_FIELD[layoutKey];
   const extra = searchOpen ? field.height + field.gap : 0;
   const extraRef = useRef(extra);
   extraRef.current = extra;
-  const [base, setBase] = useState<number | null>(null);
-  const onHeight = useCallback((h: number) => {
-    const next = h - extraRef.current;
-    setBase((prev) => (prev != null && Math.abs(prev - next) < 1 ? prev : next));
-  }, []);
+  // Высоту шапки кэшируем по раскладке: иначе при повороте список ещё кадр
+  // отступает на портретную шапку и «съезжает», когда приходит landscape onLayout.
+  const [baseByKey, setBaseByKey] = useState<Partial<Record<'phone' | 'landscape' | 'tablet', number>>>({});
+  const onHeight = useCallback(
+    (h: number) => {
+      const next = h - extraRef.current;
+      setBaseByKey((prev) => {
+        const cur = prev[layoutKey];
+        if (cur != null && Math.abs(cur - next) < 1) return prev;
+        return { ...prev, [layoutKey]: next };
+      });
+    },
+    [layoutKey],
+  );
   const estimate = insets.top + APP_TOP_CONTENT_GAP + (tabletLayout ? 152 : compactLandscape ? 90 : 118);
+  const base = baseByKey[layoutKey];
   return [(base ?? estimate) + extra, onHeight] as const;
 }
 
@@ -109,7 +120,12 @@ export function WelcomeGlassDock({ listSourceId, height }: { listSourceId?: stri
     () => ({ background: [HOME_BLUR_BG_SOURCE], blur: listSourceId ? [listSourceId] : [] }),
     [listSourceId],
   );
-  const dockStyle = [styles.dock, { height: height + GLASS_DOCK_TOP_PAD }];
+  const insets = useStableSafeAreaInsets();
+  // По ширине как шапка вкладок: она внутри SafeAreaView (left/right), а док — в корне экрана.
+  const dockStyle = [
+    styles.dock,
+    { height: height + GLASS_DOCK_TOP_PAD, left: insets.left, right: insets.right },
+  ];
   if (Platform.OS === 'android' && !NativeBlurBackdrop) {
     return <View style={[dockStyle, styles.dockOpaque]} />;
   }

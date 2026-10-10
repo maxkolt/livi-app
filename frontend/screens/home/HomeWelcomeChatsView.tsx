@@ -571,7 +571,7 @@ function HomeWelcomeChatsViewInner({
           style={styles.list}
         >
             <FlatList
-              key={tabletLayout ? 'chats-tablet' : compactLandscape ? 'chats-landscape' : 'chats-portrait'}
+              key={tabletLayout ? 'chats-tablet' : 'chats-phone'}
               style={styles.list}
               contentContainerStyle={[
                 styles.listContent,

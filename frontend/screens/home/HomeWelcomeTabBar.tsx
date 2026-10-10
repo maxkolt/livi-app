@@ -1,5 +1,6 @@
 import React, { memo, useRef } from 'react';
 import { AppState, Platform, Pressable, StyleSheet, View } from 'react-native';
+import type { EdgeInsets } from 'react-native-safe-area-context';
 import { useHomeLayout } from './HomeLayoutContext';
 import { useStableSafeAreaInsets } from './useStableSafeAreaInsets';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
@@ -12,6 +13,7 @@ import {
   UI_RIM,
   UI_INACTIVE,
   WELCOME_CHROME_EDGE_RADIUS,
+  WELCOME_FRIENDS_LIST_INSET,
   WELCOME_HEADER_TITLE,
   WELCOME_STAGE_BG,
   WELCOME_UPDATE_BADGE,
@@ -36,6 +38,7 @@ type TabDef = {
 };
 
 type HomeWelcomeTabBarProps = {
+  safeAreaInsets?: EdgeInsets;
   activeTab: WelcomeTabId;
   labels: {
     search: string;
@@ -67,8 +70,10 @@ function HomeWelcomeTabBarInner({
   showChatDot,
   showCallsDot,
   showProfileDot,
+  safeAreaInsets,
 }: HomeWelcomeTabBarProps) {
-  const insets = useStableSafeAreaInsets();
+  const liveInsets = useStableSafeAreaInsets();
+  const insets = safeAreaInsets ?? liveInsets;
   // Размер берём из safe-area frame: он приходит от нативного провайдера и
   // обновляется при повороте, в отличие от Dimensions.
   const { width, height } = useHomeLayout();
@@ -157,8 +162,6 @@ function HomeWelcomeTabBarInner({
     <View
       style={[
         styles.shell,
-        // В landscape боковой отступ как у баннера «Онлайн»: иначе бар уходит
-        // под системную навигацию справа и не выравнивается с контентом сверху.
         compactLandscape ? styles.shellLandscape : null,
         tabletLayout ? styles.shellTablet : null,
         { marginBottom: bottomGap },
@@ -297,7 +300,7 @@ export function welcomeTabBarBottomGap(insetBottom: number, tabletLayout: boolea
 
 const styles = StyleSheet.create({
   shellLandscape: {
-    marginHorizontal: 16,
+    marginHorizontal: WELCOME_FRIENDS_LIST_INSET,
   },
   shellTablet: {
     marginHorizontal: 20,

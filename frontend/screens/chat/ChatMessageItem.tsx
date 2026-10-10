@@ -87,24 +87,24 @@ function splitBubbleColor(color: string): { solidColor: string; opacity: number 
  * Тело и хвост сначала рисуются одним сплошным силуэтом, затем прозрачность
  * применяется ко всему слою. Поэтому в месте их пересечения нет полосы склейки.
  */
-function ChatBubbleBackground({
+function ChatBubbleSilhouette({
   isOwn,
   color,
+  opacity,
   corners,
   showTail,
 }: {
   isOwn: boolean;
   color: string;
+  opacity: number;
   corners: ViewStyle;
   showTail: boolean;
 }) {
-  const { solidColor, opacity } = splitBubbleColor(color);
-
   if (!showTail) {
     return (
       <View
         pointerEvents="none"
-        style={[StyleSheet.absoluteFill, corners, { backgroundColor: solidColor, opacity }]}
+        style={[StyleSheet.absoluteFill, corners, { backgroundColor: color, opacity }]}
       />
     );
   }
@@ -131,14 +131,54 @@ function ChatBubbleBackground({
             position: "absolute",
             top: 0,
             bottom: 1,
-            backgroundColor: solidColor,
+            backgroundColor: color,
           },
           isOwn ? { left: 0, right: extension } : { left: extension, right: 0 },
           corners,
         ]}
       />
-      <ChatBubbleTail isOwn={isOwn} color={solidColor} />
+      <ChatBubbleTail isOwn={isOwn} color={color} />
     </View>
+  );
+}
+
+/**
+ * Полупрозрачная заливка. `underlay` — тот же силуэт сплошным базовым фоном чата,
+ * чтобы обои не меняли оттенок. Подложка не больше облака и снаружи не видна.
+ */
+function ChatBubbleBackground({
+  isOwn,
+  color,
+  corners,
+  showTail,
+  underlay,
+}: {
+  isOwn: boolean;
+  color: string;
+  corners: ViewStyle;
+  showTail: boolean;
+  underlay?: string;
+}) {
+  const { solidColor, opacity } = splitBubbleColor(color);
+  return (
+    <>
+      {underlay ? (
+        <ChatBubbleSilhouette
+          isOwn={isOwn}
+          color={underlay}
+          opacity={1}
+          corners={corners}
+          showTail={showTail}
+        />
+      ) : null}
+      <ChatBubbleSilhouette
+        isOwn={isOwn}
+        color={solidColor}
+        opacity={opacity}
+        corners={corners}
+        showTail={showTail}
+      />
+    </>
   );
 }
 
@@ -246,10 +286,17 @@ export type ChatMessageItemProps = {
   lang: Lang;
   /** Копия облака в меню сообщения: по центру, а не у своего края. */
   centered?: boolean;
+  /**
+   * Сплошной базовый фон чата под полупрозрачной заливкой, когда включены обои.
+   * Тот же силуэт, что у облака: отдельно его не видно.
+   */
+  bubblePlate?: string;
+  /** Ширина корня чата — альбом и minWidth ответа без Dimensions/safe-area рассинхрона. */
+  layoutWidth?: number;
 };
 
 
-export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, uploadStatus, onPressImage, onPressAudio, playingAudioId, playingAudioState, onLongPressMessage, isLayoutBlockedByChrome, onLongPressAlbumTile, albumFocusIndex = null, onMessagePress, onPressCallBubble, onReactionPress, selectionMode, isSelected, onToggleSelect, selectedAlbumIndices = [], onToggleAlbumTileSelect, retryUiForId, onToggleRetryUi, onRetryFailed, resolveMediaUri, peerDisplayName, highlightedMessageId, onPressReplyQuote, animateMessagePress, getMessageAnimation, formatDurationDot, BUBBLE_BG_OUT, BUBBLE_BG_IN, LIVI, isDark, lang, centered = false }: ChatMessageItemProps) => {
+export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, uploadStatus, onPressImage, onPressAudio, playingAudioId, playingAudioState, onLongPressMessage, isLayoutBlockedByChrome, onLongPressAlbumTile, albumFocusIndex = null, onMessagePress, onPressCallBubble, onReactionPress, selectionMode, isSelected, onToggleSelect, selectedAlbumIndices = [], onToggleAlbumTileSelect, retryUiForId, onToggleRetryUi, onRetryFailed, resolveMediaUri, peerDisplayName, highlightedMessageId, onPressReplyQuote, animateMessagePress, getMessageAnimation, formatDurationDot, BUBBLE_BG_OUT, BUBBLE_BG_IN, LIVI, isDark, lang, centered = false, bubblePlate, layoutWidth }: ChatMessageItemProps) => {
   const bubbleRef = React.useRef<View>(null);
   const [imageLoadError, setImageLoadError] = React.useState(false);
   const [localImageUri, setLocalImageUri] = React.useState<string | null>(null);
@@ -379,6 +426,7 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
               <View>
                 <ChatAlbumGrid
                   item={item}
+                  layoutWidth={chatLayoutWidth}
                   resolveMediaUri={resolveMediaUri}
                   selectionMode={selectionMode}
                   focusedIndex={albumFocusIndex}
@@ -924,8 +972,9 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
   const canToggle = !!selectionMode;
   const albumUrisForLayout = item?.type === 'image' ? getMessageImageUris(item) : [];
   const isAlbumImageMsg = albumUrisForLayout.length > 1;
+  const chatLayoutWidth = layoutWidth && layoutWidth > 0 ? layoutWidth : Dimensions.get('window').width;
   const albumLayout = isAlbumImageMsg
-    ? albumGridLayout(Dimensions.get('window').width, albumUrisForLayout.length)
+    ? albumGridLayout(chatLayoutWidth, albumUrisForLayout.length)
     : null;
   const showSideCheckbox = !!selectionMode;
   // Позиция облака нужна и меню, и полосе реакций по двойному тапу — она к нему привязана.
@@ -989,7 +1038,7 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
   const rowMarginTop = joinedAbove ? 1 : CHAT_ROW_SERIES_GAP;
   const rowMarginBottom = joinedBelow ? 1 : CHAT_ROW_SERIES_GAP;
   // Короткий текст ответа («Ппи») иначе сжимает цитату — держим ширину пузыря.
-  const replyBubbleMinWidth = Math.round(Math.min(Dimensions.get('window').width * 0.58, 260));
+  const replyBubbleMinWidth = Math.round(Math.min(chatLayoutWidth * 0.58, 260));
 
   const replyAuthorLabel = item.replyTo
     ? (item.replyTo.isOwn ? t('you', lang) : (peerDisplayName || '—'))
@@ -1102,6 +1151,7 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
               color={bubbleBg}
               corners={bubbleCorners()}
               showTail={!joinedBelow}
+              underlay={bubblePlate}
             />
             <MaterialCommunityIcons name={iconName as any} size={18} color={iconColor} />
             <View style={{ flexShrink: 1, minWidth: 0 }}>
@@ -1353,9 +1403,11 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
       >
           {(() => {
             const bubbleFill = isMyMessage ? BUBBLE_BG_OUT : BUBBLE_BG_IN;
-            const bubbleUnderlay = isMyMessage
-              ? (isDark ? '#0E1420' : '#C4CAD4')
-              : (isDark ? '#181E28' : '#E2DED8');
+            const bubbleUnderlay = bubblePlate
+              ? bubblePlate
+              : isMyMessage
+                ? (isDark ? '#0E1420' : '#C4CAD4')
+                : (isDark ? '#181E28' : '#E2DED8');
             const isImageMsg = String(item?.type || '') === 'image';
             const isAlbumImage = isAlbumImageMsg;
             // Одинаковые отступы от краёв облака для 1 и для N фото
@@ -1591,6 +1643,7 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
                 color={bubbleFill}
                 corners={bubbleCorners()}
                 showTail={!joinedBelow}
+                underlay={bubblePlate}
               />
               {bubbleWithReply}
             </Pressable>

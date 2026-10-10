@@ -358,7 +358,7 @@ function FriendsListCoreInner(props: FriendsListCoreProps) {
   return (
     <BlurListSource sourceId={blurSourceId ?? ''} style={welcomeListStyles.shadeWrap}>
       <FlatList
-        key={tabletLayout ? 'friends-tablet' : compactLandscape ? 'friends-landscape' : 'friends-portrait'}
+        key={tabletLayout ? 'friends-tablet' : 'friends-phone'}
         style={listStyle}
         keyboardShouldPersistTaps={keyboardShouldPersistTaps}
         nestedScrollEnabled

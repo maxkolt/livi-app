@@ -12,6 +12,8 @@ import { t } from '../../utils/i18n';
 import { useLang } from '../../store/lang';
 import FitText from '../FitText';
 import { FullScreenPortal } from '../FullScreenPortal';
+import { useOrientationLayoutGuard } from '../../hooks/useOrientationLayoutGuard';
+import { OrientationCoverModal } from '../OrientationCoverModal';
 import {
   checkCosmeticPayment,
   createCosmeticPayment,
@@ -362,9 +364,35 @@ function FramesStoreContent({
 }) {
   const lang = useLang((state) => state.lang);
   const L = useCallback((key: string) => t(key, lang), [lang]);
-  const insets = useSafeAreaInsets();
-  const { width: windowWidth, height: windowHeight } = useSafeAreaFrame();
+  const liveInsets = useSafeAreaInsets();
+  const frame = useSafeAreaFrame();
+  const {
+    size: rootSize,
+    covering: orientationCovering,
+    onLayout: onRootLayout,
+  } = useOrientationLayoutGuard(frame, {
+    // Карусели: ранний onLayout снимал шторку — держим фиксированно.
+    fixedCoverMs: 1600,
+    fallbackMs: 2400,
+  });
+  // keepWarm держит карусели смонтированными: при повороте закрытой витрины
+  // смена размеров/insets роняла reanimated-carousel (forEach of null).
+  // Пока закрыто — геометрия и insets заморожены.
+  const frozenRef = useRef({
+    width: frame.width,
+    height: frame.height,
+    insets: liveInsets,
+  });
+  const liveW = rootSize.width > 0 ? rootSize.width : frame.width;
+  const liveH = rootSize.height > 0 ? rootSize.height : frame.height;
+  if (visible && liveW > 0 && liveH > 0) {
+    frozenRef.current = { width: liveW, height: liveH, insets: liveInsets };
+  }
+  const windowWidth = visible ? liveW : frozenRef.current.width;
+  const windowHeight = visible ? liveH : frozenRef.current.height;
+  const insets = visible ? liveInsets : frozenRef.current.insets;
   const landscape = windowWidth > windowHeight;
+  const orientKey = landscape ? 'l' : 'p';
   const compact = windowHeight < (landscape ? 430 : 720);
   const pageHorizontalPadding = landscape ? 12 : 0;
   const sectionsGap = landscape ? 12 : 0;
@@ -581,10 +609,11 @@ function FramesStoreContent({
   requestCloseRef.current = handleRequestClose;
 
   return (
-      <View style={styles.root}>
+      <View style={styles.root} onLayout={onRootLayout}>
         {/* Края темнее, чем у сплэша и экранов звонка. */}
         <WelcomeStageBackground palette="tealDeep" />
         <View
+          key={`legendary-${orientKey}`}
           style={[
             styles.page,
             {
@@ -597,6 +626,7 @@ function FramesStoreContent({
               paddingRight: insets.right + pageHorizontalPadding,
             },
           ]}
+          pointerEvents={orientationCovering ? 'none' : 'auto'}
         >
           <View style={[styles.header, compact && styles.headerCompact]}>
             <View style={styles.titleRow}>
@@ -647,6 +677,7 @@ function FramesStoreContent({
                 ]}
               >
                 <Carousel
+                  key={`bg-${landscape ? 'l' : 'p'}-${Math.round(backgroundPageWidth)}`}
                   width={backgroundPageWidth}
                   height={backgroundPageHeight}
                   data={CHAT_BACKGROUND_CATALOG}
@@ -731,6 +762,7 @@ function FramesStoreContent({
                 ]}
               >
                 <Carousel
+                  key={`frame-${landscape ? 'l' : 'p'}-${Math.round(framePageWidth)}`}
                   width={framePageWidth}
                   height={framePageHeight}
                   data={FRAME_CATALOG}
@@ -828,6 +860,7 @@ function FramesStoreContent({
               : []
           }
         />
+        {visible ? <OrientationCoverModal covering={orientationCovering} /> : null}
       </View>
   );
 }

@@ -124,6 +124,9 @@ export function useChatHeader({
           renderToHardwareTextureAndroid
           style={{
             flex: 1,
+            // На всю высоту шапки: слой renderToHardwareTexture режет всё за своими границами,
+            // а при высоте по содержимому (40) срезалась рамка аватара сверху и снизу.
+            alignSelf: "stretch",
             flexDirection: "row",
             alignItems: "center",
             zIndex: 2,

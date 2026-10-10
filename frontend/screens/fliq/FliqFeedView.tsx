@@ -36,6 +36,7 @@ import {
   UI_RIM,
   UI_SURFACE,
   UI_SURFACE_RAISED,
+  WELCOME_FRIENDS_LIST_INSET,
   WELCOME_HEADER_TITLE,
   WELCOME_MUTED_TEXT,
   isWelcomeTabletLayout,
@@ -77,6 +78,9 @@ const KEEP_HELD_PLAYERS_MS = 10 * 60_000;
 const SKIP_ERROR_CODES = new Set([2, 5, 100, 101, 150]);
 const PAGE_SIZE = 10;
 const CARD_RADIUS = 22;
+/** Низкий landscape: круглые кнопки в ряду под карточкой и высота этого ряда. */
+const WIDE_BTN = 36;
+const WIDE_PANEL_H = 48;
 
 type WatchStat = { maxSec: number; durSec: number; loops: number };
 
@@ -378,17 +382,21 @@ export function FliqFeedView({
     setStartedId(id);
     setNeighborsOn(true);
   }, []);
-  const onBuffered = useCallback((id: string) => {
+  /** Ближайший уже тянет поток — следующий за ним можно будить, не дожидаясь полного запаса. */
+  const markChainReady = useCallback((id: string) => {
     setBufferedIds((current) => {
       if (current.has(id)) return current;
       const next = new Set(current);
       next.add(id);
       return next;
     });
+  }, []);
+  const onBuffered = useCallback((id: string) => {
+    markChainReady(id);
     if (prewarmingRef.current && itemsRef.current[0]?.id === id) {
       settlePrewarm('buffered');
     }
-  }, [settlePrewarm]);
+  }, [markChainReady, settlePrewarm]);
   useEffect(() => {
     if (neighborsOn || status !== 'ready' || !active) return;
     const timer = setTimeout(() => setNeighborsOn(true), 4000);
@@ -418,29 +426,62 @@ export function FliqFeedView({
     const h = Math.round(e.nativeEvent.layout.height);
     if (h > 0) setViewportH((prev) => (Math.abs(prev - h) < 1 ? prev : h));
   }, []);
-  const [rootSize, setRootSize] = useState({ width: 0, height: 0 });
+  const [measuredRoot, setRootSize] = useState({ width: 0, height: 0 });
   const onRootLayout = useCallback((e: LayoutChangeEvent) => {
     const { width: w, height: h } = e.nativeEvent.layout;
     setRootSize((prev) => (Math.abs(prev.width - w) < 1 && Math.abs(prev.height - h) < 1 ? prev : { width: w, height: h }));
   }, []);
+  // Скрытая вкладка при повороте не пересобирает ленту и плееры (WebView, декодер) —
+  // это держало JS секундами. Новые размеры применяются, когда вкладку открывают.
+  const layoutRef = useRef({ rootSize: measuredRoot, viewportH, bottomInset, topInset });
+  if (active || prewarming || !(layoutRef.current.rootSize.width > 0 && layoutRef.current.viewportH > 0)) {
+    const l = layoutRef.current;
+    if (
+      l.rootSize !== measuredRoot ||
+      l.viewportH !== viewportH ||
+      l.bottomInset !== bottomInset ||
+      l.topInset !== topInset
+    ) {
+      layoutRef.current = { rootSize: measuredRoot, viewportH, bottomInset, topInset };
+    }
+  }
+  const { rootSize, viewportH: shownViewportH, bottomInset: shownBottomInset, topInset: shownTopInset } =
+    layoutRef.current;
 
+  // Низкий landscape: шапки нет, карточка на всю ширину и высоту (ролик по центру, по бокам —
+  // размытый кадр), под ней полоса времени и ряд кнопок; «сохранённые / темы» — слева в том же ряду.
+  // Из замера самой вкладки, а не окна: при повороте окно меняется раньше, чем приходит
+  // onLayout, и раскладка собиралась из размеров двух разных ориентаций.
+  const wide =
+    rootSize.width > 0 && rootSize.height > 0 ? !tablet && rootSize.width / rootSize.height > 1.05 : compact;
+  const showHeader = !wide || savedOpen;
   // Страница — видимая часть над стеклом навбара; под стеклом виден верх следующей.
-  const pageH = Math.max(0, viewportH - bottomInset);
+  const pageH = Math.max(0, shownViewportH - shownBottomInset);
   const sideInset = tablet ? 24 : 14;
-  const panelH = tablet ? 72 : 64;
-  const cardMaxH = Math.max(0, pageH - panelH - FLIQ_PROGRESS_ROW_H - 8);
-  const cardW = Math.max(0, Math.min(width - sideInset * 2, Math.floor((cardMaxH * 9) / 16)));
-  const cardH = Math.floor((cardW * 16) / 9);
+  // Поворот меняет высоту страницы, а смещение ленты остаётся старым — ролик съезжал
+  // между страницами. Возвращаем ленту ровно на текущий ролик.
+  useEffect(() => {
+    if (pageH > 0) listRef.current?.scrollToOffset({ offset: activeIndexRef.current * pageH, animated: false });
+  }, [pageH]);
+  const panelH = wide ? WIDE_PANEL_H : tablet ? 72 : 64;
+  const cardMaxH = Math.max(0, pageH - panelH - FLIQ_PROGRESS_ROW_H - (wide ? 4 : 8));
+  // Ширина самой вкладки: окно в landscape шире на системную панель навигации.
+  const paneW = rootSize.width > 0 ? rootSize.width : width;
+  const cardW = Math.max(0, Math.min(paneW - sideInset * 2, Math.floor((cardMaxH * 9) / 16)));
+  const cardH = wide ? Math.floor(cardMaxH) : Math.floor((cardW * 16) / 9);
+  // Края карточки — вровень с навбаром снизу.
+  const boxW = wide ? Math.max(cardW, Math.floor(paneW - WELCOME_FRIENDS_LIST_INSET * 2)) : cardW;
   const btnSize = tablet ? 44 : compact ? 32 : GLASS_HEADER_BTN;
-  const headerH = tablet ? 56 : compact ? 40 : 48;
+  const headerH = showHeader ? (tablet ? 56 : compact ? 40 : 48) : 0;
   // Кнопки шапки чуть ближе к центру, чем края карточки.
   const headerInset = sideInset + (tablet ? 14 : 10);
   // Карточка ролика в покое — там, откуда идёт свет (страница: карточка, полоса прогресса, панель — по центру).
-  const ambientX = (rootSize.width - cardW) / 2;
-  const ambientY = topInset + headerH + Math.max(0, (pageH - cardH - FLIQ_PROGRESS_ROW_H - panelH) / 2);
+  const ambientX = (rootSize.width - boxW) / 2;
+  const ambientY = shownTopInset + headerH + Math.max(0, (pageH - cardH - FLIQ_PROGRESS_ROW_H - panelH) / 2);
+  const wideRowTop = ambientY + cardH + FLIQ_PROGRESS_ROW_H + (panelH - WIDE_BTN) / 2;
   const ambientCard = useMemo(
-    () => ({ x: ambientX, y: ambientY, width: cardW, height: cardH }),
-    [ambientX, ambientY, cardW, cardH],
+    () => ({ x: ambientX, y: ambientY, width: boxW, height: cardH }),
+    [ambientX, ambientY, boxW, cardH],
   );
   const ambientUrl = !savedOpen && status === 'ready' && items[activeIndex] ? youtubeThumbUrl(items[activeIndex].id) : null;
 
@@ -462,6 +503,8 @@ export function FliqFeedView({
           cardW={cardW}
           cardH={cardH}
           panelH={panelH}
+          wide={wide}
+          boxW={boxW}
           // Ближайший WebView/API поднимается сразу; медиапоток пойдёт лишь после первого
           // кадра текущего. Предыдущий и второй следующий подключаются следом.
           mountPlayer={
@@ -493,12 +536,14 @@ export function FliqFeedView({
           onUserPause={onUserPause}
           onUserPlay={onUserPlay}
           onStarted={onStarted}
+          onPrimed={markChainReady}
           onBuffered={onBuffered}
         />
       );
     },
     [
       items,
+      markChainReady,
       bufferedIds,
       neighborsOn,
       prewarming,
@@ -510,6 +555,8 @@ export function FliqFeedView({
       cardW,
       cardH,
       panelH,
+      wide,
+      boxW,
       keepPlayers,
       activeIndex,
       playbackOn,
@@ -529,6 +576,42 @@ export function FliqFeedView({
     ],
   );
 
+  const savedButton = (size: number) => (
+    <Pressable
+      onPress={() => setSavedOpen(true)}
+      hitSlop={8}
+      accessibilityRole="button"
+      accessibilityLabel={fliqT('savedA11y', lang)}
+      style={({ pressed }) => [
+        styles.headerBtn,
+        { width: size, height: size, borderRadius: size / 2 },
+        pressed && styles.headerBtnPressed,
+      ]}
+    >
+      <Ionicons name="bookmark-outline" size={tablet ? 21 : 19} color={WELCOME_HEADER_TITLE} />
+      {savedHydrated && savedItems.length > 0 ? (
+        <View style={styles.savedBadge}>
+          <Text style={styles.savedBadgeText}>{savedItems.length > 99 ? '99+' : savedItems.length}</Text>
+        </View>
+      ) : null}
+    </Pressable>
+  );
+  const topicsButton = (size: number) => (
+    <Pressable
+      onPress={() => setTopicsOpen(true)}
+      hitSlop={8}
+      accessibilityRole="button"
+      accessibilityLabel={fliqT('topicsA11y', lang)}
+      style={({ pressed }) => [
+        styles.headerBtn,
+        { width: size, height: size, borderRadius: size / 2 },
+        pressed && styles.headerBtnPressed,
+      ]}
+    >
+      <Ionicons name="options-outline" size={tablet ? 22 : 19} color={WELCOME_HEADER_TITLE} />
+    </Pressable>
+  );
+
   return (
     // Вся вкладка — источник нижнего стекла: свет от ролика и уходящая под навбар карточка
     // видны под ним размытыми.
@@ -537,65 +620,38 @@ export function FliqFeedView({
         <FliqAmbient url={ambientUrl} card={ambientCard} width={rootSize.width} height={rootSize.height} />
       </View>
       <View style={{ height: topInset }} />
-      <View style={[styles.header, { height: headerH, paddingHorizontal: headerInset }]}>
-        <WelcomeTabTitle
-          label={savedOpen ? fliqT('savedTitle', lang) : 'Fliq'}
-          tablet={tablet}
-          compact={compact}
-          sideInset={headerInset + btnSize}
-        />
-        {savedOpen ? (
-          <Pressable
-            onPress={() => setSavedOpen(false)}
-            hitSlop={8}
-            accessibilityRole="button"
-            accessibilityLabel={fliqT('backToFeed', lang)}
-            style={({ pressed }) => [
-              styles.headerBackBtn,
-              { width: btnSize, height: btnSize, borderRadius: btnSize / 2 },
-              pressed && styles.headerBtnPressed,
-            ]}
-          >
-            <Ionicons name="chevron-back" size={tablet ? 24 : 21} color={WELCOME_HEADER_TITLE} />
-          </Pressable>
-        ) : (
-          <>
-            {/* «Сохранённые» — у левого края, на месте кнопки «назад» из списка сохранённых. */}
+      {showHeader ? (
+        <View style={[styles.header, { height: headerH, paddingHorizontal: headerInset }]}>
+          <WelcomeTabTitle
+            label={savedOpen ? fliqT('savedTitle', lang) : 'Fliq'}
+            tablet={tablet}
+            compact={compact}
+            sideInset={headerInset + btnSize}
+          />
+          {savedOpen ? (
             <Pressable
-              onPress={() => setSavedOpen(true)}
+              onPress={() => setSavedOpen(false)}
               hitSlop={8}
               accessibilityRole="button"
-              accessibilityLabel={fliqT('savedA11y', lang)}
+              accessibilityLabel={fliqT('backToFeed', lang)}
               style={({ pressed }) => [
-                styles.headerBtn,
+                styles.headerBackBtn,
                 { width: btnSize, height: btnSize, borderRadius: btnSize / 2 },
                 pressed && styles.headerBtnPressed,
               ]}
             >
-              <Ionicons name="bookmark-outline" size={tablet ? 21 : 19} color={WELCOME_HEADER_TITLE} />
-              {savedHydrated && savedItems.length > 0 ? (
-                <View style={styles.savedBadge}>
-                  <Text style={styles.savedBadgeText}>{savedItems.length > 99 ? '99+' : savedItems.length}</Text>
-                </View>
-              ) : null}
+              <Ionicons name="chevron-back" size={tablet ? 24 : 21} color={WELCOME_HEADER_TITLE} />
             </Pressable>
-            <View style={styles.headerSpacer} />
-            <Pressable
-              onPress={() => setTopicsOpen(true)}
-              hitSlop={8}
-              accessibilityRole="button"
-              accessibilityLabel={fliqT('topicsA11y', lang)}
-              style={({ pressed }) => [
-                styles.headerBtn,
-                { width: btnSize, height: btnSize, borderRadius: btnSize / 2 },
-                pressed && styles.headerBtnPressed,
-              ]}
-            >
-              <Ionicons name="options-outline" size={tablet ? 22 : 19} color={WELCOME_HEADER_TITLE} />
-            </Pressable>
-          </>
-        )}
-      </View>
+          ) : (
+            <>
+              {/* «Сохранённые» — у левого края, на месте кнопки «назад» из списка сохранённых. */}
+              {savedButton(btnSize)}
+              <View style={styles.headerSpacer} />
+              {topicsButton(btnSize)}
+            </>
+          )}
+        </View>
+      ) : null}
 
       <View style={styles.pager} onLayout={onListLayout}>
         {savedOpen ? (
@@ -644,6 +700,13 @@ export function FliqFeedView({
         )}
       </View>
 
+      {wide && !savedOpen && status === 'ready' && cardW > 0 ? (
+        <View style={[styles.wideRow, { left: ambientX, top: wideRowTop }]}>
+          {savedButton(WIDE_BTN)}
+          {topicsButton(WIDE_BTN)}
+        </View>
+      ) : null}
+
       <FliqTopicsDialog visible={topicsOpen} lang={lang} initial={topics} onDone={onTopicsDone} />
       <FliqShareSheet url={shareUrl} onClose={() => setShareUrl(null)} />
     </BlurListSource>
@@ -658,6 +721,10 @@ type FliqSlideProps = {
   cardW: number;
   cardH: number;
   panelH: number;
+  /** Низкий landscape: карточка шире ролика, по бокам размытый кадр. */
+  wide: boolean;
+  /** Ширина карточки (в portrait равна cardW — ширине самого ролика). */
+  boxW: number;
   mountPlayer: boolean;
   mode: FliqPlayMode;
   prebuffer: boolean;
@@ -676,6 +743,7 @@ type FliqSlideProps = {
   onUserPause: (id: string, index: number) => void;
   onUserPlay: (id: string) => void;
   onStarted: (id: string) => void;
+  onPrimed: (id: string) => void;
   onBuffered: (id: string) => void;
 };
 
@@ -687,6 +755,8 @@ const FliqSlide = memo(function FliqSlide({
   cardW,
   cardH,
   panelH,
+  wide,
+  boxW,
   mountPlayer,
   mode,
   prebuffer,
@@ -705,10 +775,13 @@ const FliqSlide = memo(function FliqSlide({
   onUserPause,
   onUserPlay,
   onStarted,
+  onPrimed,
   onBuffered,
 }: FliqSlideProps) {
   const [firstFrame, setFirstFrame] = useState(false);
   const [stalled, setStalled] = useState(false);
+  /** Скрытый ролик уже скачал начало: на экране показываем его кадр, без спиннера. */
+  const [primed, setPrimed] = useState(false);
   const [retryKey, setRetryKey] = useState(0);
   const coverOpacity = useRef(new Animated.Value(1)).current;
   const titleFont = useDigitalMediumFont();
@@ -723,9 +796,20 @@ const FliqSlide = memo(function FliqSlide({
     }
     // Плеер выгрузили — при следующем показе снова ждём первый кадр под превью.
     setFirstFrame(false);
+    setPrimed(false);
     setStalled(false);
     coverOpacity.setValue(1);
   }, [mountPlayer, retryKey, coverOpacity]);
+
+  // Плеер пересоздаётся при повороте — до его первого кадра снова видно превью.
+  const wideRef = useRef(wide);
+  useEffect(() => {
+    if (wideRef.current === wide) return;
+    wideRef.current = wide;
+    setFirstFrame(false);
+    setPrimed(false);
+    coverOpacity.setValue(1);
+  }, [wide, coverOpacity]);
 
   useEffect(() => {
     if (playing && !timingRef.current.playAt) timingRef.current.playAt = Date.now();
@@ -749,7 +833,9 @@ const FliqSlide = memo(function FliqSlide({
       bufferedMs: timingRef.current.bufferedMs,
     });
     onBuffered(item.id);
+    setPrimed(true);
   }, [item.id, onBuffered]);
+  const handlePrimed = useCallback(() => onPrimed(item.id), [item.id, onPrimed]);
   const handleFirstFrame = useCallback(() => {
     const t = timingRef.current;
     logger.info('[fliq] first frame', {
@@ -796,21 +882,45 @@ const FliqSlide = memo(function FliqSlide({
   const retry = useCallback(() => {
     setStalled(false);
     setFirstFrame(false);
+    setPrimed(false);
     coverOpacity.setValue(1);
     setRetryKey((k) => k + 1);
   }, [coverOpacity]);
 
-  const actionGap = cardW < 220 ? 4 : 8;
+  // Подгруженный ролик уже стоит на первом кадре: при свайпе его сразу видно.
+  // firstFrame не ставим сами — если воспроизведение не пойдёт, останется «не загружается».
+  const warmOnScreen = playing && primed;
+  useEffect(() => {
+    if (!warmOnScreen) return;
+    coverOpacity.setValue(0);
+    onStarted(item.id);
+  }, [coverOpacity, item.id, onStarted, warmOnScreen]);
+
+  const actionGap = wide ? 10 : cardW < 220 ? 4 : 8;
   // «Переслать» остаётся широкой кнопкой, три круглых действия занимают место слева.
-  // На низком landscape все размеры сжимаются и ряд не выходит за ширину видео.
-  const shareWidth = Math.min(116, Math.max(1, Math.floor(cardW * (cardW < 180 ? 0.46 : 0.4))));
-  const actionSize = Math.min(40, Math.max(1, Math.floor((cardW - shareWidth - actionGap * 3) / 3)));
+  // В landscape ряд шире ролика — размеры фиксированные, ряд прижат вправо.
+  const shareWidth = wide ? 116 : Math.min(116, Math.max(1, Math.floor(cardW * (cardW < 180 ? 0.46 : 0.4))));
+  const actionSize = wide ? WIDE_BTN : Math.min(40, Math.max(1, Math.floor((cardW - shareWidth - actionGap * 3) / 3)));
   const actionIconSize = Math.max(1, Math.min(19, actionSize - 6));
   const shareHeight = Math.min(40, actionSize);
   const shareCompact = shareWidth < 82;
   return (
     <View style={[styles.slide, { height: pageH }]}>
-      <View style={[styles.card, { width: cardW, height: cardH }]}>
+      <View style={[styles.card, { width: boxW, height: cardH }, wide && styles.cardWide]}>
+        {wide ? (
+          <>
+            <ExpoImage
+              source={{ uri: youtubeThumbUrl(item.id) }}
+              style={StyleSheet.absoluteFill}
+              contentFit="cover"
+              cachePolicy="memory-disk"
+              blurRadius={28}
+              recyclingKey={`bg-${item.id}`}
+            />
+            <View style={styles.wideDim} />
+          </>
+        ) : null}
+      <View style={wide ? { width: cardW, height: cardH } : StyleSheet.absoluteFill}>
         <ExpoImage
           source={{ uri: youtubeThumbUrl(item.id) }}
           style={StyleSheet.absoluteFill}
@@ -820,7 +930,9 @@ const FliqSlide = memo(function FliqSlide({
         />
         {mountPlayer ? (
           <FliqYoutubePlayer
-            key={retryKey}
+            // Поворот — новый плеер под новый размер: WebView, растянутый на ходу,
+            // замораживал картинку (звук и полоса шли дальше). Продолжит с той же секунды.
+            key={`${retryKey}-${wide ? 'w' : 'p'}`}
             ref={playerRef}
             videoId={item.id}
             mode={mode}
@@ -828,7 +940,9 @@ const FliqSlide = memo(function FliqSlide({
             muted={muted}
             prebuffer={prebuffer}
             prebufferMs={prebufferMs}
+            widthDp={cardW}
             onReady={handleReady}
+            onPrimed={handlePrimed}
             onBuffered={handleBuffered}
             onFirstFrame={handleFirstFrame}
             onProgress={handleProgress}
@@ -840,8 +954,11 @@ const FliqSlide = memo(function FliqSlide({
             style={StyleSheet.absoluteFill}
           />
         ) : null}
-        {/* Превью поверх плеера только до первого кадра; касания проходят в плеер. */}
-        <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, { opacity: coverOpacity }]}>
+        {/* Превью поверх плеера только до первого кадра; у уже подгруженного ролика его нет. */}
+        <Animated.View
+          pointerEvents="none"
+          style={[StyleSheet.absoluteFill, { opacity: warmOnScreen ? 0 : coverOpacity }]}
+        >
           <ExpoImage
             source={{ uri: youtubeThumbUrl(item.id) }}
             style={StyleSheet.absoluteFill}
@@ -849,7 +966,7 @@ const FliqSlide = memo(function FliqSlide({
             cachePolicy="memory-disk"
             recyclingKey={`cover-${item.id}`}
           />
-          {playing && !firstFrame && !stalled ? (
+          {playing && !firstFrame && !primed && !stalled ? (
             <View style={styles.center}>
               <ActivityIndicator color="rgba(255,255,255,0.85)" />
             </View>
@@ -869,16 +986,23 @@ const FliqSlide = memo(function FliqSlide({
           </View>
         ) : null}
       </View>
+      </View>
 
       <FliqProgressBar
         progress={progress}
-        width={cardW}
+        width={boxW}
         scrubber={scrubber}
         onSeek={mountPlayer ? seek : undefined}
         style={styles.progressLow}
       />
 
-      <View style={[styles.panel, { width: cardW, height: panelH, gap: actionGap }]}>
+      <View
+        style={[
+          styles.panel,
+          { width: boxW, height: panelH, gap: actionGap },
+          wide && styles.panelWide,
+        ]}
+      >
         <Pressable
           onPress={() => onToggleMute(!muted)}
           hitSlop={6}
@@ -1008,6 +1132,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   headerSpacer: { flex: 1 },
+  wideRow: { position: 'absolute', flexDirection: 'row', gap: 10 },
   headerBackBtn: { alignItems: 'center', justifyContent: 'center' },
   headerBtn: {
     alignItems: 'center',
@@ -1040,6 +1165,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  cardWide: { alignItems: 'center' },
+  wideDim: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(12, 15, 20, 0.35)' },
+  panelWide: { justifyContent: 'flex-end' },
   card: {
     borderRadius: CARD_RADIUS,
     overflow: 'hidden',

@@ -1,6 +1,6 @@
 /** Chat wallpaper with tilt parallax via accelerometer (no Motion/Fitness permission). */
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef } from "react";
 import {
   Animated,
   AppState,
@@ -8,7 +8,6 @@ import {
   Image,
   StyleSheet,
   View,
-  type LayoutChangeEvent,
 } from "react-native";
 import { Accelerometer } from "expo-sensors";
 import { LinearGradient } from "expo-linear-gradient";
@@ -36,14 +35,28 @@ const WALLPAPER_STAGE_TINT = [
   "rgba(26, 31, 39, 0.56)",
 ] as const;
 
+/**
+ * Портретная картинка по длинной стороне экрана, ряд по центру, соседние — зеркально.
+ * Высота плитки не зависит от ориентации: при повороте кроп меняется, масштаб нет.
+ */
+const TILE_MIRROR = [false, true, false, true, false];
+
+/** Длинная сторона переживает кадр, где width/height ещё 0 после поворота. */
+let lastWallpaperLongSide = 0;
+
 function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
 }
 
-export function ChatParallaxWallpaper({ isDark }: { isDark: boolean }) {
-  // Use the actual container size. Starting with window metrics and then
-  // replacing them onLayout remounted the Image and looked like a wallpaper zoom.
-  const [box, setBox] = useState<{ w: number; h: number } | null>(null);
+export function ChatParallaxWallpaper({
+  isDark,
+  layoutWidth,
+  layoutHeight,
+}: {
+  isDark: boolean;
+  layoutWidth: number;
+  layoutHeight: number;
+}) {
   const cosmetics = useCosmetics();
   const hasPurchasedWallpaper = !!cosmetics.activeBackgroundId;
   const source = hasPurchasedWallpaper
@@ -57,25 +70,6 @@ export function ChatParallaxWallpaper({ isDark }: { isDark: boolean }) {
   const targetRef = useRef({ x: 0, y: 0 });
   const listeningRef = useRef(false);
   const rafRef = useRef<number | null>(null);
-
-  const onRootLayout = (e: LayoutChangeEvent) => {
-    const { width, height } = e.nativeEvent.layout;
-    if (!(width > 0 && height > 0)) return;
-    setBox((prev) =>
-      !prev || Math.abs(prev.w - width) > 1 || Math.abs(prev.h - height) > 1
-        ? { w: width, h: height }
-        : prev
-    );
-  };
-
-  // После смены размера сбрасываем сдвиг параллакса.
-  useEffect(() => {
-    originRef.current = null;
-    currentRef.current = { x: 0, y: 0 };
-    targetRef.current = { x: 0, y: 0 };
-    tx.setValue(0);
-    ty.setValue(0);
-  }, [box?.w, box?.h, tx, ty]);
 
   useEffect(() => {
     let sub: { remove: () => void } | null = null;
@@ -169,43 +163,44 @@ export function ChatParallaxWallpaper({ isDark }: { isDark: boolean }) {
     };
   }, [tx, ty]);
 
-  const imgW = Math.round(box?.w || 0) + MAX_SHIFT * 2;
-  const imgH = Math.round(box?.h || 0) + MAX_SHIFT * 2;
+  const asset = source ? Image.resolveAssetSource(source) : null;
+  const aspect = asset && asset.width > 0 && asset.height > 0 ? asset.width / asset.height : 576 / 1024;
   const lightWash = "rgba(182, 203, 216, 0.55)";
   const lightShade = "rgba(140, 158, 180, 0.28)";
+  const longSide = Math.max(layoutWidth, layoutHeight, lastWallpaperLongSide);
+  if (longSide > 0) lastWallpaperLongSide = longSide;
+  const tileH = longSide;
 
   return (
     <View
       style={[
         styles.root,
-        // Без купленных обоев — прозрачно: под чатом основной фон (WelcomeStageBackground).
         { backgroundColor: hasPurchasedWallpaper ? (isDark ? PLATE_DARK : PLATE_LIGHT) : "transparent" },
       ]}
       pointerEvents="none"
-      onLayout={onRootLayout}
     >
-      {/*
-        JPEG портретный (576×1024). На Android без явных width/height Image
-        остаётся в intrinsic aspect → справа/снизу plate после поворота.
-        Двигаем обёртку (parallax), саму картинку — обычный Image на весь box.
-      */}
-      {box && source ? (
+      {tileH > 0 && source ? (
         <Animated.View
           style={{
             position: "absolute",
-            width: imgW,
-            height: imgH,
             left: -MAX_SHIFT,
-            top: -MAX_SHIFT,
+            right: -MAX_SHIFT,
+            height: tileH,
+            top: layoutHeight > 0 ? (layoutHeight - tileH) / 2 : 0,
             transform: [{ translateX: tx }, { translateY: ty }],
           }}
         >
-          <Image
-            source={source}
-            style={{ width: imgW, height: imgH }}
-            resizeMode="cover"
-            fadeDuration={0}
-          />
+          <View style={styles.tileRow}>
+            {TILE_MIRROR.map((mirror, i) => (
+              <Image
+                key={i}
+                source={source}
+                style={[styles.tile, { height: tileH, aspectRatio: aspect }, mirror ? styles.mirrorX : null]}
+                resizeMode="cover"
+                fadeDuration={0}
+              />
+            ))}
+          </View>
         </Animated.View>
       ) : null}
       {!hasPurchasedWallpaper ? null : isDark ? (
@@ -234,4 +229,7 @@ const styles = StyleSheet.create({
     overflow: "hidden",
     zIndex: 0,
   },
+  tileRow: { flex: 1, flexDirection: "row", justifyContent: "center", overflow: "hidden" },
+  tile: { flexShrink: 0 },
+  mirrorX: { transform: [{ scaleX: -1 }] },
 });

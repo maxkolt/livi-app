@@ -95,6 +95,12 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     MainActivity.markIncomingCallOverLock()
   }
 
+  /** JS закончил перекладку после поворота — снимаем нативную шторку. */
+  @ReactMethod
+  fun orientationLayoutReady() {
+    MainActivity.hideOrientationScrimFromJs()
+  }
+
   /** Сторож сигналинга бросил попытку: отменить её зависшее подключение (см. WarmConnections). */
   @ReactMethod
   fun cancelPendingLiveKitSignal(reason: String?) {

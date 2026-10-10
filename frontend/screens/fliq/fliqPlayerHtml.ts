@@ -16,11 +16,17 @@ export const YT_PLAYING = 1;
  */
 export type FliqPlayMode = 'play' | 'pause' | 'hold';
 
+/** Ниже этой ширины YouTube включает «маленький» плеер со своим оверлеем поверх ролика. */
+const MIN_PLAYER_CSS_W = 360;
+
 /**
  * Страница плеера. Кроме «играть/пауза»:
  * - подгрузка заранее (prebuffer): следующий ролик ленты тихо играет несколько секунд, затем
- *   возвращается в начало по уже загруженному диапазону — после свайпа старт почти мгновенный;
- *   пока идёт подгрузка, состояния плеера наружу не уходят (это ещё не «первый кадр»);
+ *   возвращается в начало по уже загруженному диапазону — после свайпа старт с этого запаса,
+ *   без новой буферизации. Разрешение качать дальше включается уже после старта картинки,
+ *   иначе seek с докачкой в момент свайпа сбрасывает запас и ролик снова «грузится»;
+ *   пока идёт подгрузка, состояния плеера наружу не уходят (это ещё не «первый кадр»),
+ *   кроме primed — поток пошёл, можно будить следующий в очереди;
  * - звук общий для ленты: muted задаёт RN, а если человек нажал звук в самом плеере YouTube,
  *   страница замечает это (isMuted) и сообщает — тогда звук меняется у всех роликов.
  *
@@ -36,11 +42,25 @@ export function youtubePlayerHtml(
     startSec: number;
     /** Сколько медиапоток тихо играет перед возвратом в начало. */
     prebufferMs?: number;
+    /** Ширина карточки в dp, если уже известна (узкая — страница масштабируется). */
+    widthDp?: number;
   },
 ): string {
   const prebufferMs = Math.max(250, Math.min(5000, Math.round(init.prebufferMs ?? 2400)));
   return `<!DOCTYPE html><html><head>
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta id="vp" name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<script>
+// Плеер у́же ${MIN_PLAYER_CSS_W} CSS px YouTube рисует со своим оверлеем (название, пауза, Shorts) поверх
+// ролика. Узкой карточке (landscape) даём страницу шире — WebView ужимает её целиком.
+// Ширину карточки в dp сообщает RN (onLayout): из самой страницы её не узнать, она зависит от viewport.
+window.__fliqFit=function(dp){
+  var narrow=dp>0&&dp<${MIN_PLAYER_CSS_W};
+  document.getElementById('vp').setAttribute('content',narrow
+    ?'width=${MIN_PLAYER_CSS_W},user-scalable=no'
+    :'width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no');
+};
+${init.widthDp ? `window.__fliqFit(${Math.round(init.widthDp)});` : ''}
+</script>
 <style>html,body{margin:0;padding:0;width:100%;height:100%;background:#000;overflow:hidden}#p{position:absolute;top:-2px;left:-2px;width:calc(100% + 4px);height:calc(100% + 4px)}</style>
 </head><body><div id="p"></div><script>
 (function(){
@@ -48,11 +68,21 @@ export function youtubePlayerHtml(
   var buffering=false, buffered=false, prebufferTimer=null, starting=false, tick=null, lastMuted=null, quietUntil=0;
   // seekTo(…, false) после подгрузки запрещает плееру докачивать дальше — и запрет живёт,
   // пока не будет seekTo(…, true): без снятия ролик вставал навсегда на конце запаса (~20 с).
-  var fetchLocked=false;
+  var fetchLocked=false, unlockTimer=null, primedSent=false;
   function unlockFetch(){
     if(!fetchLocked) return;
     fetchLocked=false;
+    if(unlockTimer!==null){ clearTimeout(unlockTimer); unlockTimer=null; }
     try{ player.seekTo(player.getCurrentTime(),true); }catch(_){}
+  }
+  // Снимаем запрет докачки чуть позже первого кадра: в момент play seek(true)
+  // заставляет YouTube забыть уже скачанное и снова показать буферизацию.
+  function scheduleUnlock(){
+    if(!fetchLocked||unlockTimer!==null) return;
+    unlockTimer=setTimeout(function(){
+      unlockTimer=null;
+      if(fetchLocked&&want==='play') unlockFetch();
+    },400);
   }
   function send(m){try{window.ReactNativeWebView.postMessage(JSON.stringify(m));}catch(e){}}
   function applyMute(){
@@ -84,10 +114,12 @@ export function youtubePlayerHtml(
           if(s===3){ starting=true; }
           else { applyMute(); if(s===1) send({t:'state',s:1}); }
         }
-        if(s!==1&&s!==3){
+        if(s!==1){
           // Стартуем без звука и возвращаем его только в PLAYING: аудио не должно
           // убегать вперёд, пока WebView ещё не показал первый кадр.
-          starting=true; quietUntil=Date.now()+1500; player.mute(); unlockFetch(); player.playVideo();
+          // Докачку не открываем здесь — тёплый запас после подгрузки должен
+          // пойти сразу, а не через новый запрос.
+          starting=true; quietUntil=Date.now()+1500; player.mute(); player.playVideo();
         }
       } else if(buffering){
         return;
@@ -138,6 +170,7 @@ export function youtubePlayerHtml(
         onStateChange:function(e){
           if(buffering){
             if(e.data===1){
+              if(!primedSent){ primedSent=true; send({t:'primed'}); }
               // Первый кадр — ещё не буфер. Даём скрытому ролику скачать реальный запас,
               // но только одному за раз (очередью управляет RN), чтобы не делить канал.
               if(prebufferTimer===null) prebufferTimer=setTimeout(function(){
@@ -151,7 +184,11 @@ export function youtubePlayerHtml(
           // запуск кнопкой в плеере — тоже его решение, сообщаем и играем.
           if(e.data===1&&want==='pause'){ try{player.pauseVideo();}catch(_){} return; }
           if(e.data===1&&want==='hold'){ want='play'; send({t:'userplay'}); }
-          if(e.data===1&&starting){ starting=false; applyMute(); }
+          if(e.data===1&&starting){
+            starting=false; applyMute();
+            // Запас уже играет — теперь можно докачивать хвост, не сбрасывая старт.
+            if(fetchLocked) scheduleUnlock();
+          }
           if(e.data===2&&want==='play'){ try{player.playVideo();}catch(_){} return; }
           send({t:'state',s:e.data});
           if(e.data===0&&want==='play'){ send({t:'loop'}); try{player.seekTo(0,true);player.playVideo();}catch(_){} }

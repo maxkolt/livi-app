@@ -11,7 +11,7 @@ import {
   BackHandler,
   type LayoutChangeEvent,
 } from 'react-native';
-import { useHomeLayout, useHomeLayoutActivity } from './HomeLayoutContext';
+import { useHomeLayout } from './HomeLayoutContext';
 import AdaptiveText from '../../components/AdaptiveText';
 import { useStableSafeAreaInsets } from './useStableSafeAreaInsets';
 import { Ionicons } from '@expo/vector-icons';
@@ -102,7 +102,7 @@ type HubMetricsPreset = {
 };
 
 const HUB_PRESET_PHONE: HubMetricsPreset = {
-  avatarSize: 120,
+  avatarSize: 108,
   cameraBtnSize: CAMERA_BTN_SIZE,
   gapTop: 24,
   gapUnderAvatar: 14,
@@ -114,7 +114,7 @@ const HUB_PRESET_PHONE: HubMetricsPreset = {
 
 const HUB_PRESET_PHONE_LANDSCAPE: HubMetricsPreset = {
   // Аватар и кнопка камеры — как в вертикали (avatarSize заменяет phoneAvatarSize()).
-  avatarSize: 120,
+  avatarSize: 108,
   cameraBtnSize: CAMERA_BTN_SIZE,
   // Не отрицательный: шапки в landscape нет, и аватар уходил под строку состояния.
   gapTop: 2,
@@ -129,7 +129,7 @@ const HUB_PRESET_PHONE_LANDSCAPE: HubMetricsPreset = {
 };
 
 const HUB_PRESET_TABLET: HubMetricsPreset = {
-  avatarSize: 136,
+  avatarSize: 124,
   cameraBtnSize: 34,
   gapTop: 26,
   gapUnderAvatar: 20,
@@ -140,7 +140,7 @@ const HUB_PRESET_TABLET: HubMetricsPreset = {
 };
 
 const HUB_PRESET_TABLET_LANDSCAPE: HubMetricsPreset = {
-  avatarSize: 112,
+  avatarSize: 104,
   cameraBtnSize: CAMERA_BTN_SIZE,
   gapTop: 14,
   gapUnderAvatar: 14,
@@ -151,6 +151,9 @@ const HUB_PRESET_TABLET_LANDSCAPE: HubMetricsPreset = {
 };
 
 const PROFILE_HUB_SECTION_COUNT = 4;
+
+/** Ниже этого отступ «шапка → аватар» не ужимаем, даже если строкам тесно. */
+const HUB_GAP_TOP_MIN = 6;
 
 /** Сколько рядов секций по вертикали: в две колонки их вдвое меньше. */
 function hubSectionRows(twoColumns: boolean): number {
@@ -167,12 +170,11 @@ function resolveHubPreset(isTablet: boolean, isLandscape: boolean): HubMetricsPr
 }
 
 /**
- * Аватар профиля на телефоне в обеих ориентациях совпадает с аватаром Поиска в
- * вертикали по диаметру самого фото. Купленная рамка рисуется снаружи и не
- * меняет ни этот размер, ни раскладку экрана.
+ * Аватар профиля чуть меньше радара на Поиске — в обеих ориентациях один диаметр
+ * фото. Купленная рамка рисуется снаружи и не меняет раскладку экрана.
  */
 function phoneAvatarSize(shortSide: number): number {
-  return welcomePhoneAvatarMetrics(shortSide).outer;
+  return Math.round(welcomePhoneAvatarMetrics(shortSide).outer * 0.9);
 }
 
 /** Предел масштаба строк: дальше экран уже не телефон, а «лопата». */
@@ -214,8 +216,7 @@ function resolveHubMetrics(
         );
   // Кольцо купленной рамки входит в высоту блока аватара (avatarRing = фото + вынос × 2).
   const frameOutset = frameId ? activeFrameOutset(preset.avatarSize, frameId) : 0;
-  const fixed =
-    preset.gapTop +
+  const fixedNoTop =
     preset.avatarSize +
     frameOutset * 2 +
     preset.gapUnderAvatar +
@@ -226,15 +227,23 @@ function resolveHubMetrics(
   const rows = hubRowsPerColumn(twoColumns) + 1;
   // Промежутки между рядами секций, перед «Удалить профиль» и такой же — до навбара.
   const gaps = hubSectionRows(twoColumns) + 1;
-  const listBudget = Math.max(0, paneHeight - fixed);
   const maxTotal = rows * preset.rowMax + gaps * preset.gapMax;
   const minTotal = rows * preset.rowMin + gaps * preset.gapMin;
-
-  if (!(paneHeight > 0) || listBudget >= maxTotal) {
+  if (!(paneHeight > 0)) {
     return { ...preset, rowHeight: preset.rowMax, listGap: preset.gapMax, scroll: false };
   }
+  // Не хватает места — сперва поднимаем контент (ужимаем отступ над аватаром),
+  // и только потом сжимаем строки: зазор до навбара должен оставаться как между блоками.
+  const gapTopFloor = Math.min(preset.gapTop, HUB_GAP_TOP_MIN);
+  const shortage = Math.max(0, fixedNoTop + preset.gapTop + maxTotal - paneHeight);
+  const gapTop = Math.max(gapTopFloor, preset.gapTop - shortage);
+  const listBudget = Math.max(0, paneHeight - fixedNoTop - gapTop);
+
+  if (listBudget >= maxTotal) {
+    return { ...preset, gapTop, rowHeight: preset.rowMax, listGap: preset.gapMax, scroll: false };
+  }
   if (listBudget <= minTotal) {
-    return { ...preset, rowHeight: preset.rowMin, listGap: preset.gapMin, scroll: true };
+    return { ...preset, gapTop, rowHeight: preset.rowMin, listGap: preset.gapMin, scroll: true };
   }
   const t = (listBudget - minTotal) / (maxTotal - minTotal);
   // Вниз, а не к ближайшему: округление вверх снова съело бы отступы.
@@ -245,7 +254,7 @@ function resolveHubMetrics(
     preset.gapMax,
     Math.max(preset.gapMin, Math.floor(((listBudget - rows * rowHeight) / gaps) * 10) / 10),
   );
-  return { ...preset, rowHeight, listGap, scroll: false };
+  return { ...preset, gapTop, rowHeight, listGap, scroll: false };
 }
 
 function estimateTabBarHeight(bottomInset: number, isTablet: boolean, isLandscape: boolean) {
@@ -373,7 +382,6 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
   // Размер берём из safe-area frame: он приходит от нативного провайдера и
   // обновляется при повороте, в отличие от Dimensions.
   const { width: windowWidth, height: windowHeight } = useHomeLayout();
-  const notifyLayoutActivity = useHomeLayoutActivity();
   const isLandscape =
     windowWidth > 0 && windowHeight > 0 && windowWidth / windowHeight > 1.05;
   const isTablet = isWelcomeTabletLayout(windowWidth, windowHeight);
@@ -381,7 +389,14 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
   const [screen, setScreen] = useState<ProfileScreen>('hub');
   const [accountOpen, setAccountOpen] = useState(false);
   const [copiedEmail, setCopiedEmail] = useState<string | null>(null);
-  const [hubViewportHeight, setHubViewportHeight] = useState(0);
+  const hubOrientationKey = isLandscape ? 'landscape' : 'portrait';
+  // Замер панели — отдельно на портрет/landscape: иначе после поворота ещё
+  // кадр живёт высота прошлой ориентации, блоки прыгают, а огненная рамка
+  // пересоздаётся и появляется позже аватара.
+  const [hubViewportByOrientation, setHubViewportByOrientation] = useState<{
+    portrait?: number;
+    landscape?: number;
+  }>({});
 
   /** В landscape одна колонка секций не помещается по высоте — раскладываем в две. */
   const twoColumnList = isLandscape;
@@ -397,9 +412,12 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
     isTablet,
     isLandscape,
   );
+  const measuredHubPaneHeight = hubViewportByOrientation[hubOrientationKey] ?? 0;
   /** Промежуточный замер при повороте/пробуждении отбрасываем — иначе он застревает. */
   const hubPaneHeight =
-    hubViewportHeight > expectedHubPaneHeight * 0.6 ? hubViewportHeight : expectedHubPaneHeight;
+    measuredHubPaneHeight > expectedHubPaneHeight * 0.6
+      ? measuredHubPaneHeight
+      : expectedHubPaneHeight;
 
   const myUserId = getCurrentUserId();
   const activeFrameId = useUserActiveFrame(myUserId);
@@ -427,14 +445,18 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
    */
   const stickyAvatarOnScroll = isLandscape && !accountOpen;
 
-  const handleHubPaneLayout = useCallback((event: LayoutChangeEvent) => {
-    const nextHeight = event.nativeEvent.layout.height;
-    if (!(nextHeight > 0)) return;
-    notifyLayoutActivity();
-    setHubViewportHeight((current) =>
-      Math.abs(current - nextHeight) < 1 ? current : nextHeight,
-    );
-  }, [notifyLayoutActivity]);
+  const handleHubPaneLayout = useCallback(
+    (event: LayoutChangeEvent) => {
+      const nextHeight = event.nativeEvent.layout.height;
+      if (!(nextHeight > 0)) return;
+      setHubViewportByOrientation((prev) => {
+        const current = prev[hubOrientationKey];
+        if (current != null && Math.abs(current - nextHeight) < 1) return prev;
+        return { ...prev, [hubOrientationKey]: nextHeight };
+      });
+    },
+    [hubOrientationKey],
+  );
 
   const hasActiveFrame = !!activeFrameId;
   const displayNick = displayName(savedNick || nick);
@@ -716,6 +738,7 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
               compactLandscape && styles.logOutBtnTextLandscape,
             ]}
             numberOfLines={1}
+            fit={false}
           >
             {t('welcomeDeleteProfile', lang)}
           </AdaptiveText>
@@ -973,6 +996,7 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
   const hubScrollBody = (
     <View style={hubBalanced ? styles.hubMainBalance : null}>
       <View style={hubBalanced ? styles.hubMainTop : null}>{hubAvatarSection}</View>
+      {hubBalanced ? <View style={styles.hubMainSpacer} /> : null}
       {accountOpen ? hubAccountPanel : null}
       {hubListStack}
       {hubLogoutButton}
@@ -1349,11 +1373,18 @@ const styles = StyleSheet.create({
   hubMainBalance: {
     flex: 1,
     minHeight: 0,
-    justifyContent: 'flex-start',
+    // Низ прижат: зазор «Удалить профиль» → навбар всегда равен listGap,
+    // излишек высоты уходит в hubMainSpacer под аватаром.
+    justifyContent: 'flex-end',
   },
   hubMainTop: {
     flexShrink: 0,
     width: '100%',
+  },
+  hubMainSpacer: {
+    flexGrow: 1,
+    flexShrink: 1,
+    minHeight: 0,
   },
   hubMainDockScroll: {
     flexGrow: 1,

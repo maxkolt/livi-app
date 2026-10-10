@@ -7,7 +7,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.res.Configuration
-import android.graphics.Color
 import android.graphics.Rect
 import android.net.Uri
 import android.os.Build
@@ -16,7 +15,6 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.util.Rational
-import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
@@ -36,10 +34,6 @@ import expo.modules.ReactActivityDelegateWrapper
 
 class MainActivity : ReactActivity() {
   private var lastReportedImeInset = -1
-  /** Затемнение боковой панели навигации в landscape (см. reportNavBarSideInsets). */
-  private var sideNavScrim: View? = null
-  private var sideNavScrimSpec: Pair<Int, Int>? = null
-
   /**
    * Exposes the platform's actual IME inset to JS. This avoids screen-coordinate
    * calculations, which differ between edge-to-edge OEM implementations.
@@ -47,7 +41,6 @@ class MainActivity : ReactActivity() {
   private fun observeImeInsets() {
     val root = window?.decorView ?: return
     fun reportImeInsets(insets: WindowInsetsCompat) {
-      reportNavBarSideInsets(insets)
       val imeVisible = insets.isVisible(WindowInsetsCompat.Type.ime())
       val imeInsetPx = if (imeVisible) {
         insets.getInsets(WindowInsetsCompat.Type.ime()).bottom
@@ -75,51 +68,98 @@ class MainActivity : ReactActivity() {
     ViewCompat.requestApplyInsets(root)
   }
 
-  /**
-   * В landscape панель с кнопками стоит сбоку, и RN-контент под неё не заходит — там
-   * виден фон окна (та же сцена, что и в JS). Кладём поверх панели полосу с тем же
-   * затемнением, что SystemBarsScrim рисует под строкой состояния.
-   * Сам фон окна не перекрашиваем: при повороте RN ещё ~полсекунды рисует старую
-   * раскладку, и всё остальное окно становилось почти чёрным — экран делился на два тона.
-   */
-  private fun reportNavBarSideInsets(insets: WindowInsetsCompat) {
-    val decor = window?.decorView as? ViewGroup ?: return
-    val nav = insets.getInsets(WindowInsetsCompat.Type.navigationBars())
-    val width = if (nav.right > 0) nav.right else nav.left
-    val gravity = if (nav.right > 0) Gravity.END else Gravity.START
-    // Зовётся на каждый global layout — трогаем view только при реальной смене.
-    val spec = width to gravity
-    if (spec == sideNavScrimSpec) return
-    sideNavScrimSpec = spec
-    val scrim = sideNavScrim ?: View(this).apply {
-      setBackgroundColor(SIDE_NAV_SCRIM_COLOR)
-      importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-    }.also {
-      decor.addView(it, FrameLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT))
-      sideNavScrim = it
+  private var lastKnownOrientation = Configuration.ORIENTATION_UNDEFINED
+  private var orientationScrim: View? = null
+  private var orientationScrimShownAt = 0L
+  private val orientationScrimHandler = Handler(Looper.getMainLooper())
+  private val hideOrientationScrimRunnable = Runnable { hideOrientationScrim() }
+  /** React/Portal/SurfaceView после поворота снова лезут выше decor-child — держим scrim спереди. */
+  private val keepOrientationScrimFrontRunnable = object : Runnable {
+    override fun run() {
+      val scrim = orientationScrim
+      if (scrim == null || scrim.visibility != View.VISIBLE) return
+      scrim.bringToFront()
+      orientationScrimHandler.postDelayed(this, 32L)
     }
-    if (width <= 0) {
-      scrim.visibility = View.GONE
-      return
-    }
-    scrim.layoutParams = FrameLayout.LayoutParams(width, ViewGroup.LayoutParams.MATCH_PARENT, gravity)
-    scrim.visibility = View.VISIBLE
   }
 
-  private var lastKnownOrientation = Configuration.ORIENTATION_UNDEFINED
+  /**
+   * До super.onConfigurationChanged: закрываем React-дерево сплошным фоном, чтобы
+   * пользователь не видел старую сцену, втиснутую в новые границы окна.
+   */
+  private fun showOrientationScrim() {
+    val decor = window?.decorView as? ViewGroup ?: return
+    val scrim = orientationScrim ?: View(this).apply {
+      setBackgroundColor(resources.getColor(R.color.home_nav_background, theme))
+      importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+      isClickable = false
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+        elevation = 100_000f
+      }
+    }.also { created ->
+      decor.addView(
+        created,
+        FrameLayout.LayoutParams(
+          ViewGroup.LayoutParams.MATCH_PARENT,
+          ViewGroup.LayoutParams.MATCH_PARENT,
+        ),
+      )
+      orientationScrim = created
+    }
+    scrim.visibility = View.VISIBLE
+    scrim.bringToFront()
+    orientationScrimShownAt = SystemClock.uptimeMillis()
+    orientationScrimHandler.removeCallbacks(hideOrientationScrimRunnable)
+    orientationScrimHandler.removeCallbacks(keepOrientationScrimFrontRunnable)
+    orientationScrimHandler.post(keepOrientationScrimFrontRunnable)
+    // JS сам снимает шторку через orientationLayoutReady; hard cap — запас, если
+    // событие не дошло (Legendary/рандом-чат дорисовываются дольше списков).
+    orientationScrimHandler.postDelayed(hideOrientationScrimRunnable, ORIENTATION_SCRIM_HARD_CAP_MS)
+  }
+
+  private fun hideOrientationScrim() {
+    orientationScrimHandler.removeCallbacks(hideOrientationScrimRunnable)
+    orientationScrimHandler.removeCallbacks(keepOrientationScrimFrontRunnable)
+    orientationScrim?.visibility = View.GONE
+  }
+
+  /**
+   * Home/Chat часто зовут ready раньше Legendary/RandomChat (~900 мс). Не снимаем
+   * нативную шторку раньше min-hold — иначе под Portal/RTCView виден морф.
+   */
+  private fun hideOrientationScrimFromJsCoalesced() {
+    val scrim = orientationScrim
+    if (scrim == null || scrim.visibility != View.VISIBLE || orientationScrimShownAt == 0L) {
+      return
+    }
+    val elapsed = SystemClock.uptimeMillis() - orientationScrimShownAt
+    val remain = ORIENTATION_SCRIM_MIN_HOLD_MS - elapsed
+    orientationScrimHandler.removeCallbacks(hideOrientationScrimRunnable)
+    if (remain > 0L) {
+      orientationScrimHandler.postDelayed(hideOrientationScrimRunnable, remain)
+    } else {
+      hideOrientationScrim()
+    }
+  }
 
   override fun onConfigurationChanged(newConfig: Configuration) {
-    // До super: сообщаем JS о повороте раньше, чем RN начнёт пересобирать раскладку.
     if (newConfig.orientation != lastKnownOrientation) {
       lastKnownOrientation = newConfig.orientation
       LiviAppModule.emitOrientationWillChange(
         newConfig.orientation == Configuration.ORIENTATION_LANDSCAPE,
       )
+      showOrientationScrim()
     }
     super.onConfigurationChanged(newConfig)
-    // Samsung и некоторые другие OEM после смены ориентации заново применяют
-    // системные insets и могут вернуть непрозрачную боковую navigation bar.
+    // Samsung после поворота снова включает contrast-скрим навбара и перекладывает
+    // insets — гасим сразу и ещё раз на следующих кадрах, иначе мигает тёмная полоса.
     EdgeToEdgeHelper.apply(this)
+    orientationScrimHandler.post {
+      EdgeToEdgeHelper.apply(this)
+      orientationScrim?.takeIf { it.visibility == View.VISIBLE }?.bringToFront()
+    }
+    orientationScrimHandler.postDelayed({ EdgeToEdgeHelper.apply(this) }, 48L)
+    orientationScrimHandler.postDelayed({ EdgeToEdgeHelper.apply(this) }, 160L)
   }
 
   // Выход из системного PiP: «развернуть» (стрелки) даёт onResume, «закрыть X» — нет. Ставим таймер (pipExitDecideMs):
@@ -1617,8 +1657,16 @@ class MainActivity : ReactActivity() {
     @JvmField
     var lastResumedInstance: MainActivity? = null
 
-    /** Как SystemBarsScrim в JS: 70% чёрного поверх фона сцены. */
-    private val SIDE_NAV_SCRIM_COLOR = Color.argb(0xB3, 0, 0, 0)
+    @JvmStatic
+    fun hideOrientationScrimFromJs() {
+      val act = lastResumedInstance ?: return
+      if (act.isFinishing || act.isDestroyed) return
+      act.runOnUiThread { act.hideOrientationScrimFromJsCoalesced() }
+    }
+
+    /** Пока Home уже ready, Legendary/RandomChat ещё кладут карусели/RTCView. */
+    private const val ORIENTATION_SCRIM_MIN_HOLD_MS = 1600L
+    private const val ORIENTATION_SCRIM_HARD_CAP_MS = 2400L
 
     /** Текущий экземпляр (singleTask): пока Activity под IncomingCallActivity, lastResumedInstance ещё пуст. */
     @Volatile

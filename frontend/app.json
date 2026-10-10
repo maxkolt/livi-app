@@ -116,7 +116,7 @@
         "expo-navigation-bar",
         {
           "barStyle": "light-content",
-          "backgroundColor": "rgba(0,0,0,0.7)"
+          "backgroundColor": "#00000000"
         }
       ]
     ],

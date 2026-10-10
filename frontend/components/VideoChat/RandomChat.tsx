@@ -18,7 +18,10 @@ import {
   BackHandler,
   Easing,
   ActivityIndicator,
+  StyleSheet,
   } from 'react-native';
+import { useOrientationLayoutGuard } from '../../hooks/useOrientationLayoutGuard';
+import { OrientationCoverModal } from '../OrientationCoverModal';
 import { showAppAlert } from '../AppAlert';
 import { SystemBars } from 'react-native-edge-to-edge';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
@@ -82,7 +85,18 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   }
   const insets = useSafeAreaInsets();
   const frame = useSafeAreaFrame();
-  const isLandscape = frame.width > 0 && frame.height > 0 && frame.width / frame.height > 1.05;
+  const {
+    size: rootSize,
+    covering: orientationCovering,
+    onLayout: onRootLayout,
+  } = useOrientationLayoutGuard(frame, {
+    // TextureView + Portal-шторка; native min-hold ловит остаточный морф.
+    fixedCoverMs: 1600,
+    fallbackMs: 2400,
+  });
+  const layoutW = rootSize.width > 0 ? rootSize.width : frame.width;
+  const layoutH = rootSize.height > 0 ? rootSize.height : frame.height;
+  const isLandscape = layoutW > 0 && layoutH > 0 && layoutW / layoutH > 1.05;
   const ctrlIconSize = isLandscape ? 20 : 26;
 
   const { theme, isDark } = useAppTheme();
@@ -1670,7 +1684,11 @@ const RandomChat: React.FC<Props> = ({ route }) => {
         <SystemBars style="light" />
       )}
       {/* Сплошной фон, как на вкладках главной. */}
-      <View style={[styles.container, { backgroundColor: HOME_NAV_BG }]}>
+      <View
+        style={[styles.container, { backgroundColor: HOME_NAV_BG }]}
+        onLayout={onRootLayout}
+        pointerEvents={orientationCovering ? 'none' : 'auto'}
+      >
       <SafeAreaView 
         style={[styles.container, { backgroundColor: 'transparent' }]}
         // Android: safe-area отступы считаем сами через insets, чтобы ничего не перезатиралось стилями
@@ -1744,6 +1762,8 @@ const RandomChat: React.FC<Props> = ({ route }) => {
                   stream: streamToRender,
                   streamURL,
                   renderToHardwareTextureAndroid: true,
+                  // SurfaceView рисуется поверх Portal-шторки при повороте.
+                  useTextureView: true,
                 }
               : { streamURL };
 
@@ -2149,6 +2169,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
         styles={styles}
       />
       </SafeAreaView>
+      <OrientationCoverModal covering={orientationCovering} />
       </View>
     </>
   );

@@ -7,15 +7,16 @@ import {
   View,
   type LayoutChangeEvent,
 } from 'react-native';
-import { useHomeLayout, useHomeLayoutActivity } from './HomeLayoutContext';
+import { useHomeLayout } from './HomeLayoutContext';
 import AdaptiveText from '../../components/AdaptiveText';
 import { useNickDigitalFont } from './brandFont';
-import { useStableSafeAreaInsets } from './useStableSafeAreaInsets';
+import type { EdgeInsets } from 'react-native-safe-area-context';
 import { GestureDetector } from 'react-native-gesture-handler';
 import { useAnimatedRef } from 'react-native-reanimated';
 import {
   isWelcomeTabletLayout,
   searchPhoneRadarPreferred,
+  WELCOME_FRIENDS_LIST_INSET,
   WELCOME_HEADER_TITLE,
   WELCOME_ONLINE_PLACEHOLDER_BG,
   welcomePhoneAvatarMetrics,
@@ -73,6 +74,8 @@ export type HomeWelcomeViewProps = {
    * null — блок не наверху (две колонки в горизонтали), стекла нет.
    */
   onTopBlockBottom?: (bottom: number | null) => void;
+  /** Insets одного кадра с layoutWidth/layoutHeight, без смеси ориентаций. */
+  safeAreaInsets: EdgeInsets;
 };
 
 function resolveIsLandscape(width: number, height: number) {
@@ -104,12 +107,8 @@ function resolveIsSplitStage(width: number, height: number) {
 
 let welcomeRevealPlayedThisSession = false;
 
-/**
- * Размер аватара Поиска для текущей геометрии окна — переживает remount после
- * splash (иначе снова onLoad и мигание), но пересчитывается при повороте,
- * раскрытии Fold, split-screen и смене масштаба экрана.
- */
-let lockedWelcomeSearchAvatar: { key: string; size: number; base: number } | null = null;
+/** Телефон в landscape: диаметр аватара (с кольцом рамки) — доля размера радара. */
+const PHONE_SPLIT_AVATAR_RATIO = 0.36;
 
 function HomeWelcomeViewInner({
   styles,
@@ -128,6 +127,7 @@ function HomeWelcomeViewInner({
   onRadarReady,
   active = true,
   onTopBlockBottom,
+  safeAreaInsets,
 }: HomeWelcomeViewProps) {
   // Animated ref: слой частиц меряет по нему аватар прямо на UI-потоке.
   const avatarAnchorRef = useAnimatedRef<View>();
@@ -135,11 +135,20 @@ function HomeWelcomeViewInner({
   const [avatarDustSource, setAvatarDustSource] = useState<AvatarDustSource | null>(null);
   const reveal = useRef(new Animated.Value(welcomeRevealPlayedThisSession ? 1 : 0)).current;
   const frame = useHomeLayout();
-  const notifyLayoutActivity = useHomeLayoutActivity();
-  const insets = useStableSafeAreaInsets();
+  const insets = safeAreaInsets;
   const [measured, setMeasured] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
   /** Фактическая область под радар/текст/CTA — всё, что осталось от панели под шапкой. */
   const [stageBox, setStageBox] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
+  const stageOrientationKey =
+    frame.width > 0 && frame.height > 0 && frame.width / frame.height > 1.05
+      ? 'landscape'
+      : 'portrait';
+  // После поворота старые onLayout замеры (особенно со скрытого offscreen pane)
+  // не должны держать split/радар в геометрии прошлой ориентации.
+  useEffect(() => {
+    setMeasured({ w: 0, h: 0 });
+    setStageBox({ w: 0, h: 0 });
+  }, [stageOrientationKey]);
 
   useEffect(() => {
     if (!splashGone) return;
@@ -160,11 +169,10 @@ function HomeWelcomeViewInner({
   const onStageLayout = useCallback((e: LayoutChangeEvent) => {
     const { width, height } = e.nativeEvent.layout;
     if (!(width > 0 && height > 0)) return;
-    notifyLayoutActivity();
     setStageBox((prev) =>
       Math.abs(prev.w - width) < 1 && Math.abs(prev.h - height) < 1 ? prev : { w: width, h: height },
     );
-  }, [notifyLayoutActivity]);
+  }, []);
 
   const onRootLayout = (e: LayoutChangeEvent) => {
     const { width, height } = e.nativeEvent.layout;
@@ -189,11 +197,15 @@ function HomeWelcomeViewInner({
    */
   const fitsExpected = (value: number, expected: number, max: number) =>
     value > expected * 0.6 && value <= expected * max;
-  const viewWidth = fitsExpected(measured.w, stageWidth, 1.05) ? measured.w : stageWidth;
   const isTabletLayout = isWelcomeTabletLayout(stageWidth, stageHeight);
   const isPhone = resolveIsPhone(stageWidth, stageHeight);
   const isLandscape = resolveIsLandscape(stageWidth, stageHeight);
   const splitStage = resolveIsSplitStage(stageWidth, stageHeight);
+  const expectedPaneW = Math.max(1, stageWidth - insets.left - insets.right);
+  const viewWidth =
+    measured.w > 0 && Math.abs(measured.w - expectedPaneW) < 2
+      ? measured.w
+      : expectedPaneW;
   // В две колонки блок «Онлайн» не наверху — верхнего стекла нет.
   useEffect(() => {
     if (splitStage) onTopBlockBottom?.(null);
@@ -216,11 +228,16 @@ function HomeWelcomeViewInner({
    * inset и таб-бар. Без этого первый рендер считал, что места целое окно, и на
    * следующем кадре контент заметно ужимался.
    */
+  const tabBarBottomGap =
+    Math.max(insets.bottom, Platform.OS === 'android' ? 6 : 2) +
+    (splitStage ? 4 : 8);
   const estimatedTabBar =
-    (isTabletLayout ? 60 : splitStage ? 46 : 52) +
-    Math.max(insets.bottom, Platform.OS === 'android' ? 6 : 2);
+    (isTabletLayout ? 76 : splitStage ? 50.5 : 66.5) + tabBarBottomGap;
   const expectedPaneH = Math.max(160, stageHeight - insets.top - estimatedTabBar);
-  const viewHeight = fitsExpected(measured.h, expectedPaneH, 1.3) ? measured.h : expectedPaneH;
+  const viewHeight =
+    measured.h > 0 && Math.abs(measured.h - expectedPaneH) < 2
+      ? measured.h
+      : expectedPaneH;
 
   /** Одинаковый воздух сверху панели и снизу CTA до навбара. */
   const verticalEdgeGap = tightStage
@@ -270,13 +287,17 @@ function HomeWelcomeViewInner({
    */
   const expectedStageH = Math.max(150, viewHeight - estimatedChrome);
   const stageW = fitsExpected(stageBox.w, viewWidth, 1.05) ? stageBox.w : viewWidth;
-  const stageH = fitsExpected(stageBox.h, expectedStageH, 1.5) ? stageBox.h : expectedStageH;
-  /** Все замеры либо ещё не пришли (первый кадр по оценке), либо уже от текущего окна. */
-  const geometryFresh =
-    (!(measured.w > 0) || viewWidth === measured.w) &&
-    (!(measured.h > 0) || viewHeight === measured.h) &&
-    (!(stageBox.w > 0) || stageW === stageBox.w) &&
-    (!(stageBox.h > 0) || stageH === stageBox.h);
+  // В split-сцене stage занимает всю высоту pane. Старый допуск 0.6–1.5 принимал
+  // промежуточные 137 dp за финальные 294 dp, и радар схлопывался 297→125→297.
+  const splitStageHeightFresh =
+    stageBox.h > 0 && Math.abs(stageBox.h - viewHeight) < 2;
+  const stageH = splitStage
+    ? splitStageHeightFresh
+      ? stageBox.h
+      : viewHeight
+    : fitsExpected(stageBox.h, expectedStageH, 1.5)
+      ? stageBox.h
+      : expectedStageH;
 
   /**
    * Сцена настолько низкая (split-screen, совсем маленькие экраны), что радар с
@@ -295,7 +316,7 @@ function HomeWelcomeViewInner({
     Math.max(240, stageW * 0.5),
   );
   /** Остаток строки под радар (минус боковые отступы и зазор между колонками). */
-  const radarSlotWidth = Math.max(120, stageW - ctaWidth - 18 - 32);
+  const radarSlotWidth = Math.max(120, stageW - ctaWidth - 18 - WELCOME_FRIENDS_LIST_INSET * 2);
   /**
    * Ник под радаром крупным «цифровым» шрифтом — только в вертикали. Его строка входит
    * в резерв под кнопкой: радар центрируется выше на половину её высоты и не наезжает.
@@ -324,7 +345,8 @@ function HomeWelcomeViewInner({
    * кнопки соседней колонки — те же отступы verticalEdgeGap сверху и снизу.
    */
   const radarHeightLimit = splitStage
-    ? radarForDrawn(stageH - verticalEdgeGap * 2)
+    ? // Телефон: рисунок почти во всю высоту — пустое поле контейнера и так даёт воздух.
+      radarForDrawn(stageH - verticalEdgeGap * (isTabletLayout ? 2 : 1))
     : stageH - stageCopyReserve;
   /** Желаемый размер по ширине — им управляет дизайн, а не теснота экрана. */
   const radarPreferred = splitStage
@@ -362,7 +384,14 @@ function HomeWelcomeViewInner({
   const welcomeAvatarGeometry = (() => {
     if (!isTabletLayout) {
       const phone = welcomePhoneAvatarMetrics(Math.min(stageWidth, stageHeight));
-      return { base: phone.base, avatarSize: phone.outer, frameOutset: phone.frameOutset };
+      // Landscape: радар ниже, и аватар вертикали занимал почти весь диск — кольцам
+      // не оставалось места. Здесь аватар — доля радара, как пропорция в вертикали.
+      const k = splitStage ? (radarSize * PHONE_SPLIT_AVATAR_RATIO) / phone.outer : 1;
+      return {
+        base: Math.round(phone.base * k),
+        avatarSize: Math.round(phone.outer * k),
+        frameOutset: phone.frameOutset * k,
+      };
     }
     const base = Math.round(Math.min(136 * Math.max(1, radarSize / 380), radarSize * 0.42));
     const firstRingWidth = welcomeRadarFirstRingWidth(radarSize, base);
@@ -372,17 +401,8 @@ function HomeWelcomeViewInner({
       frameOutset: 2 + firstRingWidth * 0.22,
     };
   })();
-  const welcomeAvatarBase = welcomeAvatarGeometry.base;
-  const welcomeAvatarSizeRaw = welcomeAvatarGeometry.avatarSize;
-  // Module-level: ref сбрасывался при remount после splash → снова 114 и onLoad.
-  const avatarLockKey = `${Math.round(stageWidth)}x${Math.round(stageHeight)}`;
-  // Промежуточный кадр поворота не закрепляем — иначе неверный размер держится до перезапуска.
-  if (welcomeAvatarSizeRaw > 0 && geometryFresh && lockedWelcomeSearchAvatar?.key !== avatarLockKey) {
-    lockedWelcomeSearchAvatar = { key: avatarLockKey, size: welcomeAvatarSizeRaw, base: welcomeAvatarBase };
-  }
-  const avatarLock =
-    geometryFresh && lockedWelcomeSearchAvatar?.key === avatarLockKey ? lockedWelcomeSearchAvatar : null;
-  const welcomeAvatarSize = avatarLock ? avatarLock.size : welcomeAvatarSizeRaw;
+  // Аватар и рамка всегда из того же radarSize — без lock прошлого промежуточного кадра.
+  const welcomeAvatarSize = welcomeAvatarGeometry.avatarSize;
   /** Фото на радаре — ровно по тонкому внутреннему кругу; радар считается от welcomeAvatarSize. */
   const radarPhotoSize = radarFittedAvatarSize(radarSize, welcomeAvatarSize);
 
@@ -445,7 +465,11 @@ function HomeWelcomeViewInner({
   };
 
   return (
-    <View style={welcomeStyles.root} onLayout={onRootLayout} collapsable={false}>
+    <View
+      style={[welcomeStyles.root, { width: viewWidth, height: viewHeight }]}
+      onLayout={onRootLayout}
+      collapsable={false}
+    >
       {splitStage ? null : (
         <Animated.View
           style={revealStyle}
@@ -614,7 +638,7 @@ function HomeWelcomeViewInner({
 
 const welcomeStyles = StyleSheet.create({
   root: {
-    flex: 1,
+    alignSelf: 'center',
     minHeight: 0,
     overflow: 'hidden',
   },
@@ -639,7 +663,7 @@ const welcomeStyles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'stretch',
     justifyContent: 'center',
-    paddingHorizontal: 16,
+    paddingHorizontal: WELCOME_FRIENDS_LIST_INSET,
     gap: 18,
     overflow: 'hidden',
   },

@@ -7,7 +7,7 @@ import {
   useReducedMotion,
   useSharedValue,
 } from 'react-native-reanimated';
-import { usePaneVisible } from '../../utils/paneVisibility';
+import { usePaneVisibleValue } from '../../utils/paneVisibility';
 import { useSkiaFirstPaint } from '../../utils/skiaFirstPaint';
 
 /**
@@ -193,8 +193,8 @@ function FireAvatarFrameInner({
   const reduceMotion = useReducedMotion();
   const [appActive, setAppActive] = useState(AppState.currentState === 'active');
   const elapsed = useSharedValue(0);
-  const paneVisible = usePaneVisible();
-  const running = active && appActive && paneVisible && !reduceMotion;
+  const paneVisible = usePaneVisibleValue();
+  const running = active && appActive && !reduceMotion;
   const { canvasRef, paintViewRef, requestPaintSignal } = useSkiaFirstPaint(onReady);
   const wantsReady = !!onReady;
 
@@ -213,6 +213,7 @@ function FireAvatarFrameInner({
 
   const frame = useFrameCallback((info) => {
     'worklet';
+    if (paneVisible && !paneVisible.value) return;
     const dt = info.timeSincePreviousFrame ?? 0;
     elapsed.value += Math.min(80, Math.max(0, dt)) / 1000;
   }, false);

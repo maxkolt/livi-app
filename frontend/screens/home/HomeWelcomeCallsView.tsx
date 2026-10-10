@@ -786,7 +786,7 @@ function HomeWelcomeCallsViewInner({
           style={styles.list}
         >
             <FlatList
-              key={tabletLayout ? 'calls-tablet' : compactLandscape ? 'calls-landscape' : 'calls-portrait'}
+              key={tabletLayout ? 'calls-tablet' : 'calls-phone'}
               style={styles.list}
               contentContainerStyle={[
                 styles.listContent,

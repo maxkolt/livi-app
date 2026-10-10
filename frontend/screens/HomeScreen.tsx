@@ -8,7 +8,6 @@ import {
   Pressable,
   View,
   Dimensions,
-  DeviceEventEmitter,
   Platform,
   type LayoutChangeEvent,
   ActionSheetIOS,
@@ -38,6 +37,7 @@ import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { Image as ExpoImage } from 'expo-image';
 import { getAvatarImageProps, forceImageRefresh } from '../utils/imageOptimization';
 import { useResolvedImageUri } from '../hooks/useResolvedImageUri';
+import { useOrientationLayoutGuard } from '../hooks/useOrientationLayoutGuard';
 import SplashLoader from '../components/SplashLoader';
 import AvatarImage from '../components/AvatarImage';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -88,7 +88,11 @@ import {
   useHomeBadges,
   useHomeFriends,
 } from './home';
-import { HomeWelcomeTabBar, type WelcomeTabId } from './home/HomeWelcomeTabBar';
+import {
+  HomeWelcomeTabBar,
+  welcomeTabBarBottomGap,
+  type WelcomeTabId,
+} from './home/HomeWelcomeTabBar';
 import { FramesStoreHost } from './home/WelcomeCrownButton';
 import { WelcomeKeepAlivePane } from './home/WelcomeKeepAlivePane';
 import { FliqFeedView } from './fliq/FliqFeedView';
@@ -103,6 +107,7 @@ import {
   WELCOME_POPUP_ACCENT,
   WELCOME_STAGE_BG,
   APP_TOP_CONTENT_GAP,
+  isWelcomeTabletLayout,
 } from './home/constants';
 import { useStableSafeAreaInsets } from './home/useStableSafeAreaInsets';
 import { BlurListSource, BlurSourceFill } from '../components/BackdropBlur';
@@ -336,6 +341,10 @@ type Props = { navigation: any };
 
 /** При возврате на Home (например из VideoCall по Back → PiP) экран монтируется заново и state сбрасывается — без этого флага снова показывался бы SplashLoader. Запоминаем, что контент уже показывали в этой сессии. */
 let homeScreenAlreadyBooted = false;
+/** Прогрев вкладок под splash не ждёт журнал/превью дольше этого. */
+const COLD_WARM_DATA_MAX_MS = 1500;
+/** Кадров после mount панелей до снятия splash: коммит + создание поверхностей Skia. */
+const COLD_WARM_SETTLE_FRAMES = 4;
 
 /** Стабильная пустая map — скрытые keep-alive pane не ререндерятся от badge updates. */
 const EMPTY_BADGE_MAP: Record<string, number> = Object.freeze({});
@@ -348,149 +357,35 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   // Корень Home меряем сами и раздаём через HomeLayoutProvider: тогда
   // ориентация и размеры у всех потребителей меняются в одном кадре.
   const frame = useSafeAreaFrame();
-  const [rootSize, setRootSize] = useState<{ width: number; height: number }>({
-    width: 0,
-    height: 0,
-  });
-  /**
-   * Пересбор раскладки при повороте виден пользователем: система проигрывает
-   * анимацию поворота ~300мс, а RN за это время успевает отрисовать несколько
-   * промежуточных кадров — кнопки и подписи «съезжают» вниз-вправо.
-   *
-   * На время ресайза гасим контент. Фон сцены лежит отдельным слоем и остаётся
-   * на экране, поэтому это читается как переход, а не как мигание. Возврат —
-   * когда размеры перестали меняться (debounce), коротким fade.
-   */
-  const contentOpacity = useRef(new Animated.Value(1)).current;
-  const lastRootSizeRef = useRef<{ width: number; height: number }>({ width: 0, height: 0 });
-  const revealTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  /**
-   * После нативного события не разрешаем ранний reveal по одному лишь таймеру:
-   * на тяжёлых вкладках новый root layout приходит почти через секунду.
-   */
-  const orientationLayoutPendingRef = useRef(false);
-  const expectedLandscapeRef = useRef<boolean | null>(null);
-  /**
-   * Размеры при повороте сходятся не за один проход: окно → safe-area → шапка →
-   * сцена, с паузами до ~220мс между проходами (замерено). Показываем контент
-   * только когда сигналы о перекладке прекратились, но не дольше максимума —
-   * иначе при непрерывной анимации внутри экрана он остался бы скрытым.
-   */
-  const revealDeadlineRef = useRef(0);
-  const RESIZE_SETTLE_MS = 240;
-  const RESIZE_MAX_HIDE_MS = 1400;
-  const revealContent = useCallback(() => {
-    Animated.timing(contentOpacity, {
-      toValue: 1,
-      duration: 140,
-      useNativeDriver: true,
-    }).start();
-  }, [contentOpacity]);
-  const scheduleContentReveal = useCallback(() => {
-    if (revealTimerRef.current) clearTimeout(revealTimerRef.current);
-    const now = Date.now();
-    const capLeft = Math.max(0, revealDeadlineRef.current - now);
-    const wait = Math.min(RESIZE_SETTLE_MS, capLeft);
-    revealTimerRef.current = setTimeout(() => {
-      revealTimerRef.current = null;
-      revealContent();
-    }, wait);
-  }, [revealContent]);
-  const hideContentForResize = useCallback(() => {
-    contentOpacity.stopAnimation();
-    contentOpacity.setValue(0);
-    revealDeadlineRef.current = Date.now() + RESIZE_MAX_HIDE_MS;
-    scheduleContentReveal();
-  }, [contentOpacity, scheduleContentReveal]);
-  const hideContentUntilOrientationLayout = useCallback(
-    (isLandscape: boolean) => {
-      contentOpacity.stopAnimation();
-      contentOpacity.setValue(0);
-      orientationLayoutPendingRef.current = true;
-      expectedLandscapeRef.current = isLandscape;
-      revealDeadlineRef.current = Date.now() + RESIZE_MAX_HIDE_MS;
-      if (revealTimerRef.current) clearTimeout(revealTimerRef.current);
-      // Страховка: даже если layout-событие потерялось, экран не останется пустым.
-      revealTimerRef.current = setTimeout(() => {
-        revealTimerRef.current = null;
-        orientationLayoutPendingRef.current = false;
-        expectedLandscapeRef.current = null;
-        revealContent();
-      }, RESIZE_MAX_HIDE_MS);
-    },
-    [contentOpacity, revealContent],
-  );
-  /** Вложенный onLayout во время ресайза — откладываем показ. */
-  const notifyLayoutActivity = useCallback(() => {
-    if (orientationLayoutPendingRef.current) return;
-    if (revealDeadlineRef.current <= Date.now()) return;
-    scheduleContentReveal();
-  }, [scheduleContentReveal]);
-  useEffect(
-    () => () => {
-      if (revealTimerRef.current) clearTimeout(revealTimerRef.current);
-    },
-    [],
-  );
-  useEffect(() => {
-    if (Platform.OS !== 'android') return;
-    // Нативное событие из onConfigurationChanged приходит до пересборки раскладки.
-    // onLayout для этого поздно: он срабатывает, когда кадр уже отрисован.
-    const sub = DeviceEventEmitter.addListener('LiviOrientationWillChange', (land) => {
-      hideContentUntilOrientationLayout(!!land);
-    });
-    return () => sub.remove();
-  }, [hideContentUntilOrientationLayout]);
-  const onHomeRootLayout = useCallback(
-    (e: LayoutChangeEvent) => {
-      const { width, height } = e.nativeEvent.layout;
-      if (!(width > 0 && height > 0)) return;
-      const prev = lastRootSizeRef.current;
-      // Только смена ширины: высота меняется и от клавиатуры (adjustResize),
-      // а гасить контент при вводе ника нельзя.
-      // Ширина или заметная смена высоты. Клавиатура окно не ресайзит: при
-      // edge-to-edge IME приходит инсетами (observeImeInsets в MainActivity),
-      // поэтому высота — валидный признак поворота и пробуждения.
-      const rotated =
-        prev.width > 0 &&
-        (Math.abs(prev.width - width) > 1 || Math.abs(prev.height - height) > 24);
-      lastRootSizeRef.current = { width, height };
-      const expectedLandscape = expectedLandscapeRef.current;
-      const confirmsNativeOrientation =
-        orientationLayoutPendingRef.current &&
-        expectedLandscape != null &&
-        (width > height) === expectedLandscape;
-      if (confirmsNativeOrientation) {
-        orientationLayoutPendingRef.current = false;
-        expectedLandscapeRef.current = null;
-        // Новый root уже в ожидаемой ориентации. Теперь ждём короткую тишину
-        // layout-событий и только после неё плавно возвращаем весь Home.
-        hideContentForResize();
-      } else if (rotated && !orientationLayoutPendingRef.current) {
-        // Страховка для iOS и для случаев, когда нативное событие не пришло.
-        hideContentForResize();
-      } else if (!orientationLayoutPendingRef.current) {
-        notifyLayoutActivity();
-      }
-      setRootSize((prevSize) =>
-        Math.abs(prevSize.width - width) < 1 && Math.abs(prevSize.height - height) < 1
-          ? prevSize
-          : { width, height },
-      );
-    },
-    [hideContentForResize, notifyLayoutActivity],
-  );
-  /**
-   * Замер корня сверяем с safe-area frame. При засыпании и пробуждении onLayout
-   * успевает отдать промежуточный размер, и раньше он застревал в состоянии:
-   * фон оставался разделённым, радар — сжатым даже после возврата в вертикаль.
-   */
-  const plausibleSize = (measured: number, reference: number) =>
-    measured > 0 && (reference <= 0 || Math.abs(measured - reference) <= reference * 0.25);
-  const layoutWidth = plausibleSize(rootSize.width, frame.width) ? rootSize.width : frame.width;
-  const layoutHeight = plausibleSize(rootSize.height, frame.height)
-    ? rootSize.height
-    : frame.height;
+  const {
+    size: rootSize,
+    covering: orientationCovering,
+    onLayout: onHomeRootLayout,
+  } = useOrientationLayoutGuard(frame);
+  // Safe-area frame — fallback только до первого onLayout. Дальше не смешиваем два
+  // источника размеров: при повороте они обновляются в разных кадрах.
+  let layoutWidth = rootSize.width > 0 ? rootSize.width : frame.width;
+  let layoutHeight = rootSize.height > 0 ? rootSize.height : frame.height;
+  // Если корень ещё «залип» в прошлой ориентации, а окно уже другое — меняем местами
+  // рёбра, иначе Search/Profile остаются в split/2-col после возврата в портрет.
+  const windowDims = Dimensions.get('window');
+  if (
+    layoutWidth > 0 &&
+    layoutHeight > 0 &&
+    windowDims.width > 0 &&
+    windowDims.height > 0 &&
+    layoutWidth > layoutHeight !== windowDims.width > windowDims.height
+  ) {
+    const long = Math.max(layoutWidth, layoutHeight);
+    const short = Math.min(layoutWidth, layoutHeight);
+    if (windowDims.width > windowDims.height) {
+      layoutWidth = long;
+      layoutHeight = short;
+    } else {
+      layoutWidth = short;
+      layoutHeight = long;
+    }
+  }
   const homeLayoutSize = useMemo(
     () => ({ width: layoutWidth, height: layoutHeight }),
     [layoutWidth, layoutHeight],
@@ -508,14 +403,48 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
    * под навбар, который лежит поверх. «Поиск» и «Профиль» отступают на те же места, что
    * раньше давали SafeAreaView сверху и навбар в потоке снизу.
    */
-  const homeInsets = useStableSafeAreaInsets();
-  const [tabBarH, setTabBarH] = useState(
-    () => 52 + 8 + Math.max(homeInsets.bottom, Platform.OS === 'android' ? 6 : 2),
-  );
+  const rawHomeInsets = useStableSafeAreaInsets();
+  const tabBarLandscape =
+    layoutWidth > 0 && layoutHeight > 0 && layoutWidth / layoutHeight > 1.05;
+  const tabBarOrientationKey = tabBarLandscape ? 'landscape' : 'portrait';
+  const frameOrientationKey = frame.width > frame.height ? 'landscape' : 'portrait';
+  const homeInsetsByOrientationRef = useRef<{
+    portrait?: typeof rawHomeInsets;
+    landscape?: typeof rawHomeInsets;
+  }>({});
+  homeInsetsByOrientationRef.current[frameOrientationKey] = rawHomeInsets;
+  // Safe-area иногда переключается на кадр раньше root layout. Держим комплект
+  // inset именно той ориентации, которую сейчас раздаёт HomeLayoutProvider.
+  const homeInsets =
+    homeInsetsByOrientationRef.current[tabBarOrientationKey] ?? rawHomeInsets;
+  const tabBarTablet = isWelcomeTabletLayout(layoutWidth, layoutHeight);
+  const tabBarCompactLandscape = tabBarLandscape && !tabBarTablet;
+  /**
+   * Высота содержимого известна заранее из HomeWelcomeTabBar. Нельзя переносить
+   * измерение предыдущей ориентации: Android сначала присылал 120.5 dp для уже
+   * горизонтального окна, затем 60.4 dp — из-за этого вся сцена меняла высоту.
+   */
+  const estimatedTabBarH =
+    (tabBarTablet ? 76 : tabBarCompactLandscape ? 50.5 : 66.5) +
+    welcomeTabBarBottomGap(
+      homeInsets.bottom,
+      tabBarTablet,
+      tabBarCompactLandscape,
+    );
+  const [tabBarHeights, setTabBarHeights] = useState<{
+    portrait?: number;
+    landscape?: number;
+  }>({});
+  const tabBarH = tabBarHeights[tabBarOrientationKey] ?? estimatedTabBarH;
   const onTabBarLayout = useCallback((e: LayoutChangeEvent) => {
     const h = e.nativeEvent.layout.height;
-    if (h > 0) setTabBarH((prev) => (Math.abs(prev - h) < 0.5 ? prev : h));
-  }, []);
+    if (!(h > 0) || Math.abs(h - estimatedTabBarH) > 16) return;
+    setTabBarHeights((prev) => {
+      const current = prev[tabBarOrientationKey];
+      if (current != null && Math.abs(current - h) < 0.5) return prev;
+      return { ...prev, [tabBarOrientationKey]: h };
+    });
+  }, [estimatedTabBarH, tabBarOrientationKey]);
   const [searchTopBlockBottom, setSearchTopBlockBottom] = useState<number | null>(null);
   const onSearchTopBlockBottom = useCallback((bottom: number | null) => {
     setSearchTopBlockBottom((prev) =>
@@ -1294,11 +1223,10 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       } catch {}
     };
   }, [splashDismissed, warmWelcomeListShells]);
-  // Как можно раньше после splash — call log в memory до тапа Calls.
+  // Как можно раньше — call log в memory до прогрева вкладок под splash.
   useEffect(() => {
-    if (!splashDismissed) return;
     void loadCallLog().catch(() => {});
-  }, [splashDismissed]);
+  }, []);
   // Prefetch превью чатов, когда друзья уже в memory (cold start → Chat сразу полный).
   const chatPrefetchKeyRef = useRef('');
   useEffect(() => {
@@ -5610,6 +5538,44 @@ const handleClearNick = useCallback(async () => {
   // Рамка с диска должна быть известна до первого кадра — иначе она «догоняет» аватар.
   const searchHomeReady = avatarReadyForFirstPaint && searchRadarReady && cosmeticsHydrated;
 
+  /**
+   * Холодный старт: вкладки монтируются за экраном ещё под splash, с журналом
+   * звонков и превью чатов в памяти. Иначе тап сразу после splash успевал раньше
+   * idle-прогрева: вкладка открывалась медленно, а рамки появлялись после аватаров.
+   */
+  const [coldShellsWarm, setColdShellsWarm] = useState(homeScreenAlreadyBooted);
+  const coldWarmStartedRef = useRef(false);
+  const coldWarmAliveRef = useRef(true);
+  useEffect(
+    () => () => {
+      coldWarmAliveRef.current = false;
+    },
+    [],
+  );
+  useEffect(() => {
+    if (!searchHomeReady || splashDismissed || coldWarmStartedRef.current) return;
+    coldWarmStartedRef.current = true;
+    const ids = friendsRef.current.map((f) => String(f.id));
+    const data = Promise.all([
+      loadCallLog().catch(() => {}),
+      ids.length ? prefetchChatPreviews(ids, lang).catch(() => {}) : Promise.resolve(),
+    ]);
+    const cap = new Promise((resolve) => setTimeout(resolve, COLD_WARM_DATA_MAX_MS));
+    void Promise.race([data, cap]).then(() => {
+      if (!coldWarmAliveRef.current) return;
+      warmWelcomeListShells('cold-under-splash');
+      // Несколько кадров: панели закоммичены, Android создал поверхности рамок.
+      let frames = COLD_WARM_SETTLE_FRAMES;
+      const tick = () => {
+        if (!coldWarmAliveRef.current) return;
+        if (--frames <= 0) setColdShellsWarm(true);
+        else requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchHomeReady, splashDismissed]);
+
   useEffect(() => {
     logger.info('[search-avatar] splash-gate', {
       splashDismissed,
@@ -5680,8 +5646,11 @@ const handleClearNick = useCallback(async () => {
       <BlurSourceFill sourceId={HOME_BLUR_BG_SOURCE}>
         <View style={[StyleSheet.absoluteFill, { backgroundColor: HOME_NAV_BG }]} />
       </BlurSourceFill>
-      <HomeLayoutProvider size={homeLayoutSize} onLayoutActivity={notifyLayoutActivity}>
-      <Animated.View style={{ flex: 1, minHeight: 0, opacity: contentOpacity }}>
+      <HomeLayoutProvider size={homeLayoutSize}>
+      <View
+        style={{ flex: 1, minHeight: 0 }}
+        pointerEvents={orientationCovering ? 'none' : 'auto'}
+      >
     <SafeAreaView
         style={[
           styles.container,
@@ -5720,6 +5689,7 @@ const handleClearNick = useCallback(async () => {
             onRadarReady={handleSearchRadarReady}
             active={showSearchWelcome}
             onTopBlockBottom={onSearchTopBlockBottom}
+            safeAreaInsets={homeInsets}
           />
         </WelcomeKeepAlivePane>
         {showFriendsTab && !mountedWelcomeTabs.has('friends') ? (
@@ -5858,6 +5828,7 @@ const handleClearNick = useCallback(async () => {
         onLayout={onTabBarLayout}
       >
       <HomeWelcomeTabBar
+          safeAreaInsets={homeInsets}
           activeTab={welcomeActiveTab}
           labels={{
             search: L('tabSearch'),
@@ -6171,7 +6142,7 @@ const handleClearNick = useCallback(async () => {
     {showSplashOverlay && (
       <View style={[StyleSheet.absoluteFillObject, { zIndex: 9998 }]} pointerEvents="box-none">
         <SplashLoader
-          hasContentReady={searchHomeReady}
+          hasContentReady={searchHomeReady && coldShellsWarm}
           hasNick={!!(currentNick && currentNick.trim())}
           hasAvatar={!!(currentAvatar && currentAvatar.trim())}
           onComplete={() => {
@@ -6192,7 +6163,16 @@ const handleClearNick = useCallback(async () => {
         />
       </View>
     )}
-      </Animated.View>
+    {orientationCovering ? (
+      <View
+        style={[
+          StyleSheet.absoluteFillObject,
+          { zIndex: 10000, elevation: 100, backgroundColor: HOME_NAV_BG },
+        ]}
+        pointerEvents="none"
+      />
+    ) : null}
+      </View>
       </HomeLayoutProvider>
     </View>
   );

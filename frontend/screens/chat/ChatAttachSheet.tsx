@@ -25,6 +25,8 @@ type Props = {
   bottomPad: number;
   /** Источники стекла чата: лист — стекло, сквозь него размыт чат. */
   backdrop?: BackdropSources | null;
+  /** Сплошная серая подложка под стеклом, когда включены купленные обои. */
+  plate?: string;
   onCamera: () => void;
   onGallery: () => void;
 };
@@ -35,7 +37,7 @@ type Props = {
  */
 export const ChatAttachSheet = React.forwardRef<ChatAttachSheetHandle, Props>(
   function ChatAttachSheet(
-    { isDark, lang, LIVI, outlineColor, bottomPad, onCamera, onGallery, backdrop = null },
+    { isDark, lang, LIVI, outlineColor, bottomPad, onCamera, onGallery, backdrop = null, plate },
     ref,
   ) {
     const glass = isDark && GLASS_AVAILABLE;
@@ -71,7 +73,7 @@ export const ChatAttachSheet = React.forwardRef<ChatAttachSheetHandle, Props>(
           }}
         >
           {glass ? (
-            <GlassFill backdrop={backdrop} style={{ borderTopLeftRadius: 20, borderTopRightRadius: 20 }} />
+            <GlassFill backdrop={backdrop} plate={plate} style={{ borderTopLeftRadius: 20, borderTopRightRadius: 20 }} />
           ) : null}
           <View style={{ alignItems: 'center', paddingTop: 4, paddingBottom: 8 }}>
             <View

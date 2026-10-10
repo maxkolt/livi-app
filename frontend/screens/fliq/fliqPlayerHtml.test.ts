@@ -50,7 +50,8 @@ function start(init: {
     prebufferMs: init.prebufferMs,
     startSec: init.startSec ?? 0,
   });
-  const script = /<script>\n([\s\S]*?)<\/script>/.exec(html)![1];
+  const scripts = [...html.matchAll(/<script>\n([\s\S]*?)<\/script>/g)].map((m) => m[1]);
+  const script = scripts.find((s) => s.includes('onYouTubeIframeAPIReady'))!;
   const win: any = { ReactNativeWebView: { postMessage: (s: string) => sent.push(JSON.parse(s)) } };
   const doc = { createElement: () => ({}), head: { appendChild: () => {} } };
   // eslint-disable-next-line no-new-func
@@ -104,17 +105,17 @@ describe('youtube player page', () => {
     expect(p.calls).toEqual(['unmute', 'mute', 'play']);
     p.state(3);
     p.state(1);
-    // Первый кадр сам по себе ещё не считается готовым буфером.
-    expect(types(p.sent)).toEqual(['ready']);
+    // Первый кадр сам по себе ещё не считается готовым буфером — только «поток пошёл».
+    expect(types(p.sent)).toEqual(['ready', 'primed']);
     expect(p.calls).not.toContain('pause');
     p.flushTimeouts();
-    expect(types(p.sent)).toEqual(['ready', 'buffered']);
+    expect(types(p.sent)).toEqual(['ready', 'primed', 'buffered']);
     expect(p.calls).toContain('pause');
     expect(p.calls).toContain('seek:false');
     p.player.state = 2;
     p.win.__fliq('play');
     p.state(1);
-    expect(types(p.sent)).toEqual(['ready', 'buffered', 'state:1']);
+    expect(types(p.sent)).toEqual(['ready', 'primed', 'buffered', 'state:1']);
   });
 
   it('uses the requested shorter cold-start buffer window', () => {
@@ -124,7 +125,7 @@ describe('youtube player page', () => {
     expect(p.timeoutDelays).toContain(1200);
   });
 
-  it('a prebuffered video is allowed to download the rest once it really plays', () => {
+  it('a prebuffered video starts from the warm buffer, then may download the rest', () => {
     const p = start({ mode: 'pause', prebuffer: true });
     p.ready();
     p.state(1);
@@ -133,9 +134,13 @@ describe('youtube player page', () => {
     p.player.state = 2;
     p.calls.length = 0;
     p.win.__fliq('play');
-    // Без seek:true плеер стоял бы на конце подгруженного запаса.
-    expect(p.calls).toEqual(['mute', 'seek:true', 'play']);
+    // seek:true в момент старта сбрасывает уже скачанный запас — свайп снова «грузит».
+    expect(p.calls).toEqual(['mute', 'play']);
     expect(p.player.time).toBe(0);
+    p.player.time = 0.4;
+    p.state(1);
+    p.flushTimeouts();
+    expect(p.calls).toContain('seek:true');
     // Второй запуск того же ролика больше ничего не перематывает.
     p.player.state = 2;
     p.calls.length = 0;
@@ -179,7 +184,7 @@ describe('youtube player page', () => {
     p.win.__fliq('play');
     p.flushTimeouts();
 
-    expect(types(p.sent)).toEqual(['ready', 'state:1']);
+    expect(types(p.sent)).toEqual(['ready', 'primed', 'state:1']);
     expect(p.calls).not.toContain('pause');
     expect(p.calls).not.toContain('seek:false');
   });
@@ -191,7 +196,7 @@ describe('youtube player page', () => {
     p.win.__fliqPrebuffer(false);
     p.flushTimeouts();
 
-    expect(types(p.sent)).toEqual(['ready', 'buffered']);
+    expect(types(p.sent)).toEqual(['ready', 'primed', 'buffered']);
     expect(p.calls).toContain('pause');
     expect(p.calls).toContain('seek:false');
   });

@@ -1,7 +1,6 @@
 // screens/chat/ChatAlbumGrid.tsx
 import React from "react";
-import { View, Pressable, Animated } from "react-native";
-import { useSafeAreaFrame } from 'react-native-safe-area-context';
+import { Dimensions, View, Pressable, Animated } from "react-native";
 import { Image as ExpoImage } from "expo-image";
 import { Ionicons } from "@expo/vector-icons";
 import {
@@ -17,6 +16,8 @@ const SELECT_CHECK = UI_ACCENT;
 
 type Props = {
   item: any;
+  /** Ширина корня чата — тот же источник, что у облака. */
+  layoutWidth?: number;
   resolveMediaUri: (uri?: string) => string;
   onPressTile: (uri: string, index: number) => void;
   onLongPressTile: (uri: string, index: number) => void;
@@ -159,6 +160,7 @@ function AlbumTile({
  */
 export function ChatAlbumGrid({
   item,
+  layoutWidth,
   resolveMediaUri,
   onPressTile,
   onLongPressTile,
@@ -167,7 +169,7 @@ export function ChatAlbumGrid({
   onToggleTileSelect,
 }: Props) {
   const uris = React.useMemo(() => getMessageImageUris(item), [item]);
-  const { width: windowWidth } = useSafeAreaFrame();
+  const windowWidth = layoutWidth && layoutWidth > 0 ? layoutWidth : Dimensions.get("window").width;
   const layout = albumGridLayout(windowWidth, uris.length);
   const selectedSet = React.useMemo(() => new Set(selectedIndices), [selectedIndices]);
   const messageId = String(item?.id || "img");

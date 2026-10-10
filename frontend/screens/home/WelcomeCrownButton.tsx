@@ -1,5 +1,5 @@
 import React, { memo, useEffect, useState } from 'react';
-import { InteractionManager, Pressable, StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import {
   WELCOME_TAB_BLOCK_SURFACE,
@@ -31,36 +31,22 @@ function setFramesStoreOpen(open: boolean) {
   storeOpenListeners.forEach((listener) => listener(open));
 }
 
-/** После ухода заставки: витрина собирается в тишине, пока ей никто не пользуется. */
-const STORE_WARM_DELAY_MS = 1500;
-
 /**
- * Витрина Legendary (только __DEV__), одна на приложение. Собирается заранее и держится
- * скрытой: корона только показывает готовое. Раньше первый монтаж каруселей, жестов и
- * ворклетов занимал JS ~350 мс после тапа, и витрина «долго срабатывала».
+ * Витрина Legendary (только __DEV__).
+ * keepWarm отключён: закрытые карусели при повороте роняли Home
+ * (TypeError forEach of null) и оставляли пустой экран после шторки.
  */
-export function FramesStoreHost({ warmEnabled }: { warmEnabled: boolean }) {
+export function FramesStoreHost({ warmEnabled: _warmEnabled }: { warmEnabled: boolean }) {
   const [open, setOpen] = useState(false);
-  const [warm, setWarm] = useState(false);
   useEffect(() => {
     storeOpenListeners.add(setOpen);
     return () => {
       storeOpenListeners.delete(setOpen);
     };
   }, []);
-  useEffect(() => {
-    if (!__DEV__ || !warmEnabled || warm) return;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    const task = InteractionManager.runAfterInteractions(() => {
-      timer = setTimeout(() => setWarm(true), STORE_WARM_DELAY_MS);
-    });
-    return () => {
-      task.cancel();
-      if (timer) clearTimeout(timer);
-    };
-  }, [warm, warmEnabled]);
   if (!__DEV__) return null;
-  return <FramesStoreModal visible={open} keepWarm={warm} onClose={() => setOpen(false)} />;
+  if (!open) return null;
+  return <FramesStoreModal visible={open} keepWarm={false} onClose={() => setOpen(false)} />;
 }
 
 /** Корона в welcome chrome. Витрина Legendary — только в __DEV__; в релизе некликабельный декор. */
@@ -101,21 +87,23 @@ function WelcomeCrownButtonInner({ compact, large, small, surface }: WelcomeCrow
       hitSlop={8}
       accessibilityRole="button"
       accessibilityLabel={t('storeShowcaseA11y', lang)}
-      style={({ pressed }) => [...btnStyle, pressed && styles.pressed]}
+      style={({ pressed }) => [btnStyle, pressed && styles.btnPressed]}
     >
       {icon}
     </Pressable>
   );
 }
 
+export const WelcomeCrownButton = memo(WelcomeCrownButtonInner);
+
 const styles = StyleSheet.create({
   btn: {
-    flexShrink: 0,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: WELCOME_TAB_BLOCK_SURFACE,
+    overflow: 'visible',
   },
-  pressed: { opacity: 0.75, transform: [{ scale: 0.96 }] },
+  btnPressed: {
+    opacity: 0.88,
+  },
 });
-
-export const WelcomeCrownButton = memo(WelcomeCrownButtonInner);

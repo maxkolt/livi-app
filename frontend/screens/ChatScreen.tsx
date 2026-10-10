@@ -20,6 +20,7 @@ import {
   DeviceEventEmitter,
   PixelRatio,
   Dimensions,
+  useWindowDimensions,
   Image,
   StyleSheet,
   Share,
@@ -67,6 +68,7 @@ import { getFull, peekFull, putFull, putThumb } from '../utils/avatarCache';
 import { BlurView } from 'expo-blur';
 import { getAvatarImageProps } from '../utils/imageOptimization';
 import { useResolvedImageUri } from '../hooks/useResolvedImageUri';
+import { useOrientationLayoutGuard } from '../hooks/useOrientationLayoutGuard';
 import { resolveDataUriForAndroid } from '../utils/dataUriToFileUri';
 import { ChatMessageItem } from './chat/ChatMessageItem';
 import { ChatComposerContextBar } from './chat/ChatComposerContextBar';
@@ -178,6 +180,7 @@ import {
   APP_TOP_CONTENT_GAP,
 } from './home/constants';
 import { emitRequestDirectCall } from '../utils/globalEvents';
+import { useCosmetics } from '../utils/cosmetics';
 import { markChatCallBubbleEligible } from './chat/chatCallEvents';
 import {
   ReactionBarOverlay,
@@ -293,26 +296,36 @@ const chatMenuSectionLabel = {
 
 export default function ChatScreen({ route, navigation }: Props) {
   const insets = useSafeAreaInsets();
+  const windowDims = useWindowDimensions();
+  const {
+    size: chatRootSize,
+    covering: orientationCovering,
+    onLayout: onChatRootLayout,
+  } = useOrientationLayoutGuard(windowDims);
+  const chatLayoutW = chatRootSize.width > 0 ? chatRootSize.width : windowDims.width;
+  const chatLayoutH = chatRootSize.height > 0 ? chatRootSize.height : windowDims.height;
+  const chatIsLandscape = chatLayoutW > 0 && chatLayoutH > 0 && chatLayoutW / chatLayoutH > 1.05;
   const keyboardAnimation = useKeyboardContext().animated;
   const { theme, isDark } = useAppTheme();
   const lang = useLang((s) => s.lang);
   // Геометрия всех модалок чата: реагирует на поворот экрана.
   const modalLayout = useModalLayout();
-  const chatChromeSideInset = modalLayout.isLandscape
+  const chatChromeSideInset = chatIsLandscape
     ? modalLayout.isTablet
       ? 20
       : 14
     : 0;
   // Landscape: облака переписки чуть ближе к центру; шапка и поле ввода — на всю ширину.
-  const chatListSideInset = modalLayout.isLandscape
-    ? Math.round(Math.min(96, modalLayout.width * 0.07))
+  // Ширина и inset из одного замера корня — иначе облака едут в два прохода.
+  const chatListSideInset = chatIsLandscape
+    ? Math.round(Math.min(96, chatLayoutW * 0.07))
     : 0;
-  const chatEmojiPanelHeight = modalLayout.isLandscape
+  const chatEmojiPanelHeight = chatIsLandscape
     ? CHAT_EMOJI_PANEL_LANDSCAPE_HEIGHT
     : CHAT_EMOJI_PANEL_HEIGHT;
   // Меню по долгому нажатию: в portrait стопкой (реакции, облако, действия), в landscape
   // компактной группой: реакции над облаком, действия вплотную справа — по высоте места мало.
-  const msgActionsLandscape = modalLayout.isLandscape;
+  const msgActionsLandscape = chatIsLandscape;
   /** Строка реакций: MSG_REACTIONS_COLLAPSED эмодзи и стрелка; ячейка — от ширины экрана. */
   const msgReactionCell = msgActionsLandscape
     ? 36
@@ -413,6 +426,11 @@ export default function ChatScreen({ route, navigation }: Props) {
   const MESSAGE_ACTIONS_BUBBLE_BG_IN = isDark ? '#3A4350' : '#B4BDC0';
   const MESSAGE_ACTIONS_BUBBLE_BG_OUT = isDark ? '#354E5F' : '#B4C0D7';
   const BORDER_WIDTH = 1;
+  // Купленные обои не должны менять оттенок стекла и облаков: под ними тот же базовый фон.
+  const chatWallpaperOn = !!useCosmetics().activeBackgroundId;
+  const bubblePlate = chatWallpaperOn ? HOME_NAV_BG : undefined;
+  /** iOS: полная высота композера (с продолжением под home indicator) — для подложки под стеклом. */
+  const [iosComposerBoxH, setIosComposerBoxH] = useState(0);
 
   const peerId = String(route?.params?.peerId || "");
   const peerIdForPersistRef = useRef(peerId);
@@ -2307,6 +2325,16 @@ export default function ChatScreen({ route, navigation }: Props) {
     () => ({ background: [chatBlurStageId], blur: [chatBlurFeedId] }),
     [chatBlurStageId, chatBlurFeedId],
   );
+  // Шапка, композер и панель эмодзи с обоями: под стеклом базовый фон без картинки —
+  // стекло само обрезает его по своим скруглениям, тон как в чате без обоев.
+  const chatBlurBaseId = `${chatBlurKey}-base`;
+  const chatChromeBackdrop = React.useMemo<BackdropSources>(
+    () =>
+      chatWallpaperOn
+        ? { background: [chatBlurBaseId], blur: [chatBlurFeedId] }
+        : chatBackdrop,
+    [chatWallpaperOn, chatBlurBaseId, chatBlurFeedId, chatBackdrop],
+  );
 
   const headerApi = useChatHeader({
     lang,
@@ -2333,7 +2361,7 @@ export default function ChatScreen({ route, navigation }: Props) {
     selectAllLoaded,
     startForwardSelected,
     confirmDeleteSelected,
-    backdrop: chatBackdrop,
+    backdrop: chatChromeBackdrop,
   });
   const headerEl = headerApi.headerEl;
 
@@ -2774,6 +2802,7 @@ export default function ChatScreen({ route, navigation }: Props) {
 
   const handleInputBarLayout = React.useCallback((e: any) => {
     const measuredH = Math.max(0, Math.round(Number(e?.nativeEvent?.layout?.height || 0)));
+    if (Platform.OS === 'ios') setIosComposerBoxH((prev) => (Math.abs(prev - measuredH) <= 1 ? prev : measuredH));
     // Продолжение под системную навигацию — фон, а не высота композера для ленты;
     // отступ над навигацией тоже не меряем (см. resolvedInputBarHForChrome).
     const h = Math.max(0, measuredH - composerSystemBottomInset - androidComposerNavGap);
@@ -2948,10 +2977,12 @@ export default function ChatScreen({ route, navigation }: Props) {
           formatDurationDot={formatDurationDot}
           BUBBLE_BG_OUT={centered ? MESSAGE_ACTIONS_BUBBLE_BG_OUT : BUBBLE_BG_OUT}
           BUBBLE_BG_IN={centered ? MESSAGE_ACTIONS_BUBBLE_BG_IN : BUBBLE_BG_IN}
+          bubblePlate={centered ? undefined : bubblePlate}
           LIVI={LIVI}
           isDark={isDark}
           lang={lang}
           centered={centered}
+          layoutWidth={chatLayoutW}
         />
       );
     },
@@ -2987,11 +3018,13 @@ export default function ChatScreen({ route, navigation }: Props) {
       formatDurationDot,
       BUBBLE_BG_OUT,
       BUBBLE_BG_IN,
+      bubblePlate,
       MESSAGE_ACTIONS_BUBBLE_BG_OUT,
       MESSAGE_ACTIONS_BUBBLE_BG_IN,
       LIVI,
       isDark,
       lang,
+      chatLayoutW,
     ],
   );
 
@@ -2999,21 +3032,70 @@ export default function ChatScreen({ route, navigation }: Props) {
   // Композер — ровное стекло до физического края экрана: без плотного тёмного края, иначе
   // под системными кнопками навигации выходила отдельная тёмная плашка вместо стекла.
   const chatChromeBottomExtra = isDark
-    ? ({ translucent: true, mirror: true, backdrop: chatBackdrop, edgeFade: false } as const)
+    ? ({ translucent: true, mirror: true, backdrop: chatChromeBackdrop, edgeFade: false } as const)
     : {};
 
   return (
-    <View ref={chatScreenRootRef} style={{ flex: 1, backgroundColor: HOME_NAV_BG }}>
+    <View
+      ref={chatScreenRootRef}
+      onLayout={onChatRootLayout}
+      style={{ flex: 1, backgroundColor: HOME_NAV_BG }}
+    >
+    {/* Только базовый фон: его видит стекло шапки и композера, когда включены обои. */}
+    {chatWallpaperOn ? (
+      <BlurSourceFill sourceId={chatBlurBaseId}>
+        <View style={[StyleSheet.absoluteFill, { backgroundColor: HOME_NAV_BG }]} />
+      </BlurSourceFill>
+    ) : null}
     {/* Под стеклом фон и обои — без размытия (размывается только лента). */}
     <BlurSourceFill sourceId={chatBlurStageId}>
     {/* Сплошной фон, как на вкладках главной. */}
     <View style={[StyleSheet.absoluteFill, { backgroundColor: HOME_NAV_BG }]} />
-    {/* Обоина на весь экран: от верхнего края до нижнего, под glass-шапкой и композером. */}
-    {!loading && !err ? <ChatParallaxWallpaper isDark={isDark} /> : null}
+    {!loading && !err ? (
+      <ChatParallaxWallpaper
+        isDark={isDark}
+        layoutWidth={chatLayoutW}
+        layoutHeight={chatLayoutH}
+      />
+    ) : null}
+    {/* iOS: стекло размывает то, что под ним, — кладём базовый фон точно по форме шапки и композера. */}
+    {Platform.OS === 'ios' && chatWallpaperOn && !loading && !err ? (
+      <>
+        <View
+          pointerEvents="none"
+          style={{
+            position: 'absolute',
+            top: 0,
+            left: Math.max(0, insets.left) + chatChromeSideInset,
+            right: Math.max(0, insets.right) + chatChromeSideInset,
+            height: Math.max(0, insets.top) + headerTotalH,
+            backgroundColor: HOME_NAV_BG,
+            borderBottomLeftRadius: WELCOME_CHROME_EDGE_RADIUS,
+            borderBottomRightRadius: WELCOME_CHROME_EDGE_RADIUS,
+          }}
+        />
+        {iosComposerBoxH > 0 ? (
+          <View
+            pointerEvents="none"
+            style={{
+              position: 'absolute',
+              bottom: emojiPanelOpen ? 0 : Math.max(0, keyboardInset),
+              left: Math.max(0, insets.left) + chatChromeSideInset,
+              right: Math.max(0, insets.right) + chatChromeSideInset,
+              height: iosComposerBoxH,
+              backgroundColor: HOME_NAV_BG,
+              borderTopLeftRadius: WELCOME_CHROME_EDGE_RADIUS,
+              borderTopRightRadius: WELCOME_CHROME_EDGE_RADIUS,
+            }}
+          />
+        ) : null}
+      </>
+    ) : null}
     </BlurSourceFill>
     <SafeAreaView 
       // IMPORTANT: color the top safe-area (status bar area) to match the header.
       // Otherwise on Android (with translucent StatusBar) you'll see a white strip above the header.
+      pointerEvents={orientationCovering ? 'none' : 'auto'}
       style={{ flex: 1, backgroundColor: 'transparent' }}
       // Android: bottom inset добавляем вручную только когда клавиатура скрыта,
       // иначе получаем лишний зазор между инпутом и клавиатурой на разных прошивках.
@@ -3061,6 +3143,7 @@ export default function ChatScreen({ route, navigation }: Props) {
             <FlatList
               ref={flatListRef}
               data={iosChatListData}
+              extraData={chatLayoutW}
               keyExtractor={(item) => item.id}
               renderItem={renderMessageRow}
               style={{
@@ -3482,7 +3565,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                   style={emojiPanelOpen ? null : EMOJI_PANEL_PARKED_STYLE}
                 >
                 <ChatEmojiKeyboard
-                  compact={modalLayout.isLandscape}
+                  compact={chatIsLandscape}
                   isDark={isDark}
                   surfaceBg={EMOJI_SURFACE_BG}
                   textColor={LIVI.text}
@@ -3527,6 +3610,7 @@ export default function ChatScreen({ route, navigation }: Props) {
             <FlatList
               ref={flatListRef}
               data={androidChatListData}
+              extraData={chatLayoutW}
               keyExtractor={(item) => item.id}
               renderItem={renderMessageRow}
               style={{ flex: 1, backgroundColor: 'transparent' }}
@@ -3976,13 +4060,13 @@ export default function ChatScreen({ route, navigation }: Props) {
                   isDark ? EMOJI_GLASS_BLOCK_STYLE : { backgroundColor: INPUT_BAR_BG },
                 ]}
               >
-                {isDark ? <GlassFill backdrop={chatBackdrop} style={EMOJI_GLASS_RADIUS} /> : null}
+                {isDark ? <GlassFill backdrop={chatChromeBackdrop} plate={bubblePlate} style={EMOJI_GLASS_RADIUS} /> : null}
                 <View
                   collapsable={false}
                   style={{ zIndex: 2, elevation: 2 }}
                 >
                 <ChatEmojiKeyboard
-                  compact={modalLayout.isLandscape}
+                  compact={chatIsLandscape}
                   isDark={isDark}
                   surfaceBg={EMOJI_SURFACE_BG}
                   textColor={LIVI.text}
@@ -4149,7 +4233,8 @@ export default function ChatScreen({ route, navigation }: Props) {
       {Platform.OS === 'android' ? (
         <ChatAttachSheet
           ref={attachSheetRef}
-          backdrop={chatBackdrop}
+          backdrop={chatChromeBackdrop}
+          plate={bubblePlate}
           isDark={isDark}
           lang={lang}
           LIVI={LIVI}
@@ -4192,7 +4277,7 @@ export default function ChatScreen({ route, navigation }: Props) {
             }}
           >
             {isDark && GLASS_AVAILABLE ? (
-              <GlassFill backdrop={chatBackdrop} style={{ borderTopLeftRadius: 20, borderTopRightRadius: 20 }} />
+              <GlassFill backdrop={chatChromeBackdrop} plate={bubblePlate} style={{ borderTopLeftRadius: 20, borderTopRightRadius: 20 }} />
             ) : null}
             <View style={{ paddingBottom: 2 }}>
               <PanGestureHandler
@@ -4749,7 +4834,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                   alignItems: 'center',
                 }}
               >
-                {menuGlass ? <GlassFill backdrop={chatBackdrop} style={{ borderRadius: reactionsRadius }} /> : null}
+                {menuGlass ? <GlassFill backdrop={chatChromeBackdrop} plate={bubblePlate} style={{ borderRadius: reactionsRadius }} /> : null}
                 {emojis.map((emoji) => (
                   <Pressable
                     key={emoji}
@@ -4808,7 +4893,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                   ...(isDark ? null : { backgroundColor: 'rgba(21,31,51,0.90)' }),
                 }}
               >
-                {menuGlass ? <GlassFill backdrop={chatBackdrop} style={{ borderRadius: 12 }} /> : null}
+                {menuGlass ? <GlassFill backdrop={chatChromeBackdrop} plate={bubblePlate} style={{ borderRadius: 12 }} /> : null}
                 {isRead ? (
                   <>
                     <View
@@ -4969,7 +5054,8 @@ export default function ChatScreen({ route, navigation }: Props) {
     {reactionBarForMessageId !== null && (
       <ReactionBarOverlay
         visible
-        backdrop={chatBackdrop}
+        backdrop={chatChromeBackdrop}
+        plate={bubblePlate}
         anchor={reactionBarAnchor}
         onClose={closeReactionBar}
         onPickEmoji={(emoji) => {
@@ -4979,6 +5065,15 @@ export default function ChatScreen({ route, navigation }: Props) {
         isDark={isDark}
       />
     )}
+    {orientationCovering ? (
+      <View
+        style={[
+          StyleSheet.absoluteFillObject,
+          { zIndex: 10000, elevation: 100, backgroundColor: HOME_NAV_BG },
+        ]}
+        pointerEvents="none"
+      />
+    ) : null}
     </View>
   );
 }
