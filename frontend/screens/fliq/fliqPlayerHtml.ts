@@ -16,8 +16,11 @@ export const YT_PLAYING = 1;
  */
 export type FliqPlayMode = 'play' | 'pause' | 'hold';
 
-/** Ниже этой ширины YouTube включает «маленький» плеер со своим оверлеем поверх ролика. */
-const MIN_PLAYER_CSS_W = 360;
+/**
+ * Ниже этой ширины YouTube включает «маленький» / Shorts-оверлей (лайк, звук, меню,
+ * красная полоса). Держим viewport не уже этого — WebView сам ужмёт страницу в карточку.
+ */
+const MIN_PLAYER_CSS_W = 390;
 
 /**
  * Страница плеера. Кроме «играть/пауза»:
@@ -50,9 +53,9 @@ export function youtubePlayerHtml(
   return `<!DOCTYPE html><html><head>
 <meta id="vp" name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <script>
-// Плеер у́же ${MIN_PLAYER_CSS_W} CSS px YouTube рисует со своим оверлеем (название, пауза, Shorts) поверх
-// ролика. Узкой карточке (landscape) даём страницу шире — WebView ужимает её целиком.
-// Ширину карточки в dp сообщает RN (onLayout): из самой страницы её не узнать, она зависит от viewport.
+// Плеер у́же ${MIN_PLAYER_CSS_W} CSS px YouTube часто рисует Shorts-оверлей поверх ролика.
+// Узкой карточке даём страницу шире — WebView ужимает её целиком.
+// Ширину карточки в dp сообщает RN (onLayout): из самой страницы её не узнать.
 window.__fliqFit=function(dp){
   var narrow=dp>0&&dp<${MIN_PLAYER_CSS_W};
   document.getElementById('vp').setAttribute('content',narrow
@@ -160,13 +163,17 @@ ${init.widthDp ? `window.__fliqFit(${Math.round(init.widthDp)});` : ''}
   // она сама закончится по таймеру. false лишь запрещает начинать новую.
   window.__fliqPrebuffer=function(p){ prebuffer=!!p; apply(); };
   window.onYouTubeIframeAPIReady=function(){
-    // youtube-nocookie (официальный режим без cookies): на части телефонов обычный хост отдаёт
-    // Shorts-плеер со своими лайками, звуком, меню и красной полосой поверх ролика, которые
-    // controls=0 не убирает; без cookies у всех чистый плеер.
+    // youtube-nocookie: на части телефонов обычный хост отдаёт Shorts-плеер с лайками,
+    // звуком, меню и красной полосой — controls=0 их не убирает. Без cookies — чистый кадр
+    // (часто остаётся только надпись Shorts). Полосу дополнительно режет CSS-обрезка #p.
     player=new YT.Player('p',{width:'100%',height:'100%',videoId:'${videoId}',host:'https://www.youtube-nocookie.com',
-      playerVars:{playsinline:1,controls:0,cc_load_policy:0,rel:0,fs:0,iv_load_policy:3,disablekb:1,enablejsapi:1,mute:muted?1:0,start:${Math.max(0, Math.floor(init.startSec))},origin:'${PLAYER_ORIGIN}'},
+      playerVars:{playsinline:1,controls:0,modestbranding:1,cc_load_policy:0,rel:0,fs:0,iv_load_policy:3,disablekb:1,enablejsapi:1,mute:muted?1:0,start:${Math.max(0, Math.floor(init.startSec))},origin:'${PLAYER_ORIGIN}'},
       events:{
-        onReady:function(){ready=true;send({t:'ready'});applyMute();apply();setInterval(pollMute,500);},
+        onReady:function(){
+          ready=true;
+          try{ if(window.__fliqFit) window.__fliqFit(${Math.round(init.widthDp || 0)}); }catch(_){}
+          send({t:'ready'});applyMute();apply();setInterval(pollMute,500);
+        },
         onStateChange:function(e){
           if(buffering){
             if(e.data===1){

@@ -140,6 +140,7 @@ function FliqViewer({ link, onClose }: { link: FliqLink; onClose: () => void }) 
               videoId={resolved.id}
               mode={mode}
               muted={muted}
+              widthDp={cardW}
               onMuteChange={setMuted}
               onUserPause={() => setHeld(true)}
               onUserPlay={() => setHeld(false)}

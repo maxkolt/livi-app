@@ -290,6 +290,7 @@ const AvatarImage = memo<AvatarImageProps>(({
 
   useEffect(() => {
     if (!onDisplayLoad || !displayUri || loadedDisplayUri !== displayUri) return;
+    // Рамка (огонь) — тот же Skia: без неё после splash аватар появляется раньше радара/обода.
     if (isFireFrame && !fireFramePainted) return;
     try {
       onDisplayLoad();

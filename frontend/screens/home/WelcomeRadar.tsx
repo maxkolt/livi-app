@@ -59,10 +59,13 @@ export function WelcomeRadar({ size, avatarSize, active = true, onReady, childre
 
   const scene = useSharedValue<RadarScene | null>(null);
   const picture = useSharedValue<SkPicture>(getEmptyRadarPicture());
+  // Splash снимаем только когда TextureView реально нарисовал кадр — иначе после
+  // сплеша сначала виден аватар, а радар «догоняет». Опрос makeImageFromView
+  // останавливается в finish(); панели вкладок больше не монтируем в этот момент.
   const { canvasRef, paintViewRef, requestPaintSignal } = useSkiaFirstPaint(onReady);
   const reportReady = useCallback(() => {
-    if (onReady) requestPaintSignal();
-  }, [onReady, requestPaintSignal]);
+    requestPaintSignal();
+  }, [requestPaintSignal]);
 
   const isFocused = useIsFocused();
   const appActive = useAppActive();

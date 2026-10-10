@@ -32,6 +32,7 @@ import type { Lang } from '../../utils/i18n';
 import {
   HOME_BLUR_LIST_SOURCE,
   UI_ACCENT,
+  UI_GLASS_CONTROL,
   UI_INACTIVE,
   UI_RIM,
   UI_SURFACE,
@@ -43,6 +44,11 @@ import {
 } from '../home/constants';
 import { WelcomeTabTitle } from '../home/WelcomeTabTitle';
 import { GLASS_HEADER_BTN } from '../home/WelcomeGlassHeader';
+import {
+  WELCOME_CHROME_BTN_SHADOW,
+  WELCOME_CHROME_BTN_SHADOW_IOS,
+  WelcomeFloatShadow,
+} from '../home/WelcomeFloatShadow';
 import { useHomeLayout } from '../home/HomeLayoutContext';
 import { useDigitalMediumFont } from '../home/brandFont';
 import { BlurListSource } from '../../components/BackdropBlur';
@@ -471,7 +477,9 @@ export function FliqFeedView({
   const cardH = wide ? Math.floor(cardMaxH) : Math.floor((cardW * 16) / 9);
   // Края карточки — вровень с навбаром снизу.
   const boxW = wide ? Math.max(cardW, Math.floor(paneW - WELCOME_FRIENDS_LIST_INSET * 2)) : cardW;
+  // Как кнопка поиска на «Друзья»: 36 / 32 landscape / 44 tablet.
   const btnSize = tablet ? 44 : compact ? 32 : GLASS_HEADER_BTN;
+  const btnIconSize = tablet ? 24 : compact ? 19 : 20;
   const headerH = showHeader ? (tablet ? 56 : compact ? 40 : 48) : 0;
   // Кнопки шапки чуть ближе к центру, чем края карточки.
   const headerInset = sideInset + (tablet ? 14 : 10);
@@ -585,10 +593,12 @@ export function FliqFeedView({
       style={({ pressed }) => [
         styles.headerBtn,
         { width: size, height: size, borderRadius: size / 2 },
+        WELCOME_CHROME_BTN_SHADOW_IOS,
         pressed && styles.headerBtnPressed,
       ]}
     >
-      <Ionicons name="bookmark-outline" size={tablet ? 21 : 19} color={WELCOME_HEADER_TITLE} />
+      <WelcomeFloatShadow radius={size / 2} {...WELCOME_CHROME_BTN_SHADOW} />
+      <Ionicons name="bookmark-outline" size={btnIconSize} color={WELCOME_HEADER_TITLE} />
       {savedHydrated && savedItems.length > 0 ? (
         <View style={styles.savedBadge}>
           <Text style={styles.savedBadgeText}>{savedItems.length > 99 ? '99+' : savedItems.length}</Text>
@@ -605,10 +615,12 @@ export function FliqFeedView({
       style={({ pressed }) => [
         styles.headerBtn,
         { width: size, height: size, borderRadius: size / 2 },
+        WELCOME_CHROME_BTN_SHADOW_IOS,
         pressed && styles.headerBtnPressed,
       ]}
     >
-      <Ionicons name="options-outline" size={tablet ? 22 : 19} color={WELCOME_HEADER_TITLE} />
+      <WelcomeFloatShadow radius={size / 2} {...WELCOME_CHROME_BTN_SHADOW} />
+      <Ionicons name="options-outline" size={btnIconSize} color={WELCOME_HEADER_TITLE} />
     </Pressable>
   );
 
@@ -635,12 +647,14 @@ export function FliqFeedView({
               accessibilityRole="button"
               accessibilityLabel={fliqT('backToFeed', lang)}
               style={({ pressed }) => [
-                styles.headerBackBtn,
+                styles.headerBtn,
                 { width: btnSize, height: btnSize, borderRadius: btnSize / 2 },
+                WELCOME_CHROME_BTN_SHADOW_IOS,
                 pressed && styles.headerBtnPressed,
               ]}
             >
-              <Ionicons name="chevron-back" size={tablet ? 24 : 21} color={WELCOME_HEADER_TITLE} />
+              <WelcomeFloatShadow radius={btnSize / 2} {...WELCOME_CHROME_BTN_SHADOW} />
+              <Ionicons name="chevron-back" size={btnIconSize} color={WELCOME_HEADER_TITLE} />
             </Pressable>
           ) : (
             <>
@@ -1133,15 +1147,16 @@ const styles = StyleSheet.create({
   },
   headerSpacer: { flex: 1 },
   wideRow: { position: 'absolute', flexDirection: 'row', gap: 10 },
-  headerBackBtn: { alignItems: 'center', justifyContent: 'center' },
   headerBtn: {
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: UI_SURFACE_RAISED,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: UI_RIM,
+    backgroundColor: UI_GLASS_CONTROL,
+    borderWidth: 0,
   },
-  headerBtnPressed: { opacity: 0.7 },
+  headerBtnPressed: {
+    opacity: 0.85,
+    transform: [{ scale: 0.96 }],
+  },
   savedBadge: {
     position: 'absolute',
     top: -3,

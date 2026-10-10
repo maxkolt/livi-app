@@ -129,10 +129,11 @@ const HUB_PRESET_PHONE_LANDSCAPE: HubMetricsPreset = {
 };
 
 const HUB_PRESET_TABLET: HubMetricsPreset = {
-  avatarSize: 124,
+  avatarSize: 132,
   cameraBtnSize: 34,
-  gapTop: 26,
-  gapUnderAvatar: 20,
+  // Прирост аватара (+8) съеден из отступов — карточки на месте.
+  gapTop: 22,
+  gapUnderAvatar: 16,
   rowMax: 56,
   rowMin: 48,
   gapMax: 16,
@@ -140,10 +141,10 @@ const HUB_PRESET_TABLET: HubMetricsPreset = {
 };
 
 const HUB_PRESET_TABLET_LANDSCAPE: HubMetricsPreset = {
-  avatarSize: 104,
+  avatarSize: 110,
   cameraBtnSize: CAMERA_BTN_SIZE,
-  gapTop: 14,
-  gapUnderAvatar: 14,
+  gapTop: 11,
+  gapUnderAvatar: 11,
   rowMax: 54,
   rowMin: 44,
   gapMax: 14,
@@ -172,9 +173,20 @@ function resolveHubPreset(isTablet: boolean, isLandscape: boolean): HubMetricsPr
 /**
  * Аватар профиля чуть меньше радара на Поиске — в обеих ориентациях один диаметр
  * фото. Купленная рамка рисуется снаружи и не меняет раскладку экрана.
+ * Визуально чуть крупнее прежних 0.9; прирост компенсируется отступами (см. ниже).
  */
+const PROFILE_AVATAR_SCALE = 0.96;
+/** Прежний эталон слота — от него считаем, сколько px отнять у gapTop / gapUnderAvatar. */
+const PROFILE_AVATAR_SLOT_SCALE = 0.9;
+/** Сдвиг аватара вниз: +gapTop / −gapUnderAvatar — карточки не двигаются. */
+const PROFILE_AVATAR_NUDGE_DOWN = 6;
+
 function phoneAvatarSize(shortSide: number): number {
-  return Math.round(welcomePhoneAvatarMetrics(shortSide).outer * 0.9);
+  return Math.round(welcomePhoneAvatarMetrics(shortSide).outer * PROFILE_AVATAR_SCALE);
+}
+
+function phoneAvatarSlotSize(shortSide: number): number {
+  return Math.round(welcomePhoneAvatarMetrics(shortSide).outer * PROFILE_AVATAR_SLOT_SCALE);
 }
 
 /** Предел масштаба строк: дальше экран уже не телефон, а «лопата». */
@@ -206,14 +218,27 @@ function resolveHubMetrics(
   frameId: string,
 ): HubMetrics {
   const basePreset = resolveHubPreset(isTablet, isLandscape);
-  const preset = isTablet
-    ? basePreset
-    : isLandscape
-      ? { ...basePreset, avatarSize: phoneAvatarSize(shortSide) }
-      : scaleHubPreset(
-          { ...basePreset, avatarSize: phoneAvatarSize(shortSide) },
-          Math.min(PHONE_HUB_MAX_SCALE, searchPhoneScale(shortSide)),
-        );
+  const preset = (() => {
+    const nudgeDown = (p: HubMetricsPreset): HubMetricsPreset => {
+      // Берём только то, что реально есть снизу — иначе сумма отступов вырастет и сдвинет список.
+      const take = Math.min(PROFILE_AVATAR_NUDGE_DOWN, Math.max(0, p.gapUnderAvatar - 4));
+      return { ...p, gapTop: p.gapTop + take, gapUnderAvatar: p.gapUnderAvatar - take };
+    };
+    if (isTablet) return nudgeDown(basePreset);
+    const visual = phoneAvatarSize(shortSide);
+    const grow = Math.max(0, visual - phoneAvatarSlotSize(shortSide));
+    // Крупнее аватар без сдвига карточек: прирост диаметра уходит в отступы вокруг него.
+    // Пол gapTop — не выше текущего (в landscape он уже 2 < HUB_GAP_TOP_MIN).
+    const gapTopFloor = Math.min(basePreset.gapTop, HUB_GAP_TOP_MIN);
+    const phoneBase: HubMetricsPreset = nudgeDown({
+      ...basePreset,
+      avatarSize: visual,
+      gapTop: Math.max(gapTopFloor, basePreset.gapTop - Math.ceil(grow / 2)),
+      gapUnderAvatar: Math.max(4, basePreset.gapUnderAvatar - Math.floor(grow / 2)),
+    });
+    if (isLandscape) return phoneBase;
+    return scaleHubPreset(phoneBase, Math.min(PHONE_HUB_MAX_SCALE, searchPhoneScale(shortSide)));
+  })();
   // Кольцо купленной рамки входит в высоту блока аватара (avatarRing = фото + вынос × 2).
   const frameOutset = frameId ? activeFrameOutset(preset.avatarSize, frameId) : 0;
   const fixedNoTop =

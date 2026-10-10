@@ -341,10 +341,56 @@ type Props = { navigation: any };
 
 /** При возврате на Home (например из VideoCall по Back → PiP) экран монтируется заново и state сбрасывается — без этого флага снова показывался бы SplashLoader. Запоминаем, что контент уже показывали в этой сессии. */
 let homeScreenAlreadyBooted = false;
-/** Прогрев вкладок под splash не ждёт журнал/превью дольше этого. */
-const COLD_WARM_DATA_MAX_MS = 1500;
-/** Кадров после mount панелей до снятия splash: коммит + создание поверхностей Skia. */
-const COLD_WARM_SETTLE_FRAMES = 4;
+
+/** Замер cold splash: t0 → снятие, плюс когда каждый gate стал true. */
+type SplashGateKey =
+  | 'avatarVerChecked'
+  | 'hasAvatarSource'
+  | 'uriResolved'
+  | 'prefetched'
+  | 'decoded'
+  | 'radarReady'
+  | 'cosmeticsHydrated'
+  | 'avatarReady'
+  | 'searchHomeReady';
+type SplashTiming = {
+  t0: number;
+  at: Partial<Record<SplashGateKey, number>>;
+  prefetchStartedAt?: number;
+  prefetchDoneAt?: number;
+  reported?: boolean;
+};
+function markSplashGate(timing: SplashTiming, key: SplashGateKey, ok: boolean) {
+  if (!ok || timing.at[key] != null) return;
+  timing.at[key] = Date.now() - timing.t0;
+}
+/** Сброс ложных early-mark (пока аватара ещё не было — prefetched/decoded «как будто готовы»). */
+function clearSplashGate(timing: SplashTiming, key: SplashGateKey) {
+  delete timing.at[key];
+}
+function splashLastBlocker(timing: SplashTiming): SplashGateKey | 'none' {
+  const order: SplashGateKey[] = [
+    'avatarVerChecked',
+    'hasAvatarSource',
+    'uriResolved',
+    'prefetched',
+    'decoded',
+    'radarReady',
+    'cosmeticsHydrated',
+    'avatarReady',
+    'searchHomeReady',
+  ];
+  let last: SplashGateKey | 'none' = 'none';
+  let max = -1;
+  for (const key of order) {
+    const ms = timing.at[key];
+    if (ms != null && ms >= max) {
+      max = ms;
+      last = key;
+    }
+  }
+  return last;
+}
 
 /** Стабильная пустая map — скрытые keep-alive pane не ререндерятся от badge updates. */
 const EMPTY_BADGE_MAP: Record<string, number> = Object.freeze({});
@@ -596,6 +642,10 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const [dataLoaded, setDataLoaded] = useState(homeScreenAlreadyBooted);
   // Сплеш поверх уже отрисованного Home: при уходе сплеша видна страница приветствия с актуальными данными
   const [splashDismissed, setSplashDismissed] = useState(homeScreenAlreadyBooted);
+  const splashTimingRef = useRef<SplashTiming>({ t0: Date.now(), at: {} });
+  if (homeScreenAlreadyBooted && !splashTimingRef.current.reported) {
+    splashTimingRef.current.reported = true;
+  }
   const [nick, setNick] = useState('');
   // На медленных девайсах (Android 8.1/старые модели) setState может "догонять" ввод,
   // и при нажатии "Сохранить" в тот же момент на сервер может уйти только первая буква.
@@ -749,13 +799,23 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     }
     let cancelled = false;
     setSearchAvatarPrefetched(false);
+    const timing = splashTimingRef.current;
+    if (timing.prefetchStartedAt == null) timing.prefetchStartedAt = Date.now() - timing.t0;
     (async () => {
+      const tPrefetch0 = Date.now();
       try {
         await ExpoImage.prefetch(uri);
       } catch {
         // Prefetch fail: hard-stop splash всё ещё отпустит экран.
       }
       if (cancelled) return;
+      timing.prefetchDoneAt = Date.now() - timing.t0;
+      logger.info('[splash-timing] avatar-prefetch', {
+        elapsedMs: timing.prefetchDoneAt,
+        prefetchMs: Date.now() - tPrefetch0,
+        uriKind: /^file:/i.test(uri) ? 'file' : /^data:/i.test(uri) ? 'data' : 'other',
+        uriLen: uri.length,
+      });
       searchAvatarPrefetchKeyRef.current = uri;
       setSearchAvatarPrefetched(true);
     })();
@@ -767,9 +827,19 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const handleSearchAvatarDecoded = useCallback(() => {
     const key = searchAvatarDisplayUri || searchAvatarDecodeKeyRef.current || 'ok';
     searchAvatarDecodeKeyRef.current = key;
+    const timing = splashTimingRef.current;
+    if (timing.at.decoded == null) {
+      timing.at.decoded = Date.now() - timing.t0;
+      logger.info('[splash-timing] avatar-decoded', { elapsedMs: timing.at.decoded });
+    }
     setSearchAvatarDecoded(true);
   }, [searchAvatarDisplayUri]);
   const handleSearchRadarReady = useCallback(() => {
+    const timing = splashTimingRef.current;
+    if (timing.at.radarReady == null) {
+      timing.at.radarReady = Date.now() - timing.t0;
+      logger.info('[splash-timing] radar-ready', { elapsedMs: timing.at.radarReady });
+    }
     setSearchRadarReady(true);
   }, []);
   const handleFliqPrewarmSettled = useCallback(() => {
@@ -1227,10 +1297,9 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   useEffect(() => {
     void loadCallLog().catch(() => {});
   }, []);
-  // Prefetch превью чатов, когда друзья уже в memory (cold start → Chat сразу полный).
+  // Prefetch превью чатов, как только друзья в memory — не ждём конца splash.
   const chatPrefetchKeyRef = useRef('');
   useEffect(() => {
-    if (!splashDismissed) return;
     if (!friends.length) return;
     const key = `${lang}|${friends.map((f) => String(f.id)).join('|')}`;
     if (chatPrefetchKeyRef.current === key) return;
@@ -1249,7 +1318,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         handle.cancel?.();
       } catch {}
     };
-  }, [splashDismissed, friends, lang]);
+  }, [friends, lang]);
   /**
    * Dial: overlay закрывает табы — догреть shells, если idle не успел (или redial).
    */
@@ -5529,6 +5598,8 @@ const handleClearNick = useCallback(async () => {
     !hasAvatarSourceForFirstPaint ||
     ((!avatarUri || resolvedAvatarReady) &&
       (!myFullAvatarUri || myFullAvatarResolvedReady));
+  // Prefetch + реальный decode (и Skia-рамка, если есть): иначе после splash
+  // сначала фото, потом радар/обод.
   const avatarReadyForFirstPaint =
     !waitingForKnownAvatar &&
     avatarUriResolvedForPaint &&
@@ -5539,59 +5610,55 @@ const handleClearNick = useCallback(async () => {
   const searchHomeReady = avatarReadyForFirstPaint && searchRadarReady && cosmeticsHydrated;
 
   /**
-   * Холодный старт: вкладки монтируются за экраном ещё под splash, с журналом
-   * звонков и превью чатов в памяти. Иначе тап сразу после splash успевал раньше
-   * idle-прогрева: вкладка открывалась медленно, а рамки появлялись после аватаров.
+   * Холодный старт: только prefetch превью, пока Search уже на экране.
+   * Синхронный mount Friends/Chat/Calls/Profile здесь убивал луч радара в первые
+   * секунды — панели поднимает idle-after-splash со сдвигом по кадрам.
    */
-  const [coldShellsWarm, setColdShellsWarm] = useState(homeScreenAlreadyBooted);
-  const coldWarmStartedRef = useRef(false);
-  const coldWarmAliveRef = useRef(true);
-  useEffect(
-    () => () => {
-      coldWarmAliveRef.current = false;
-    },
-    [],
-  );
+  const coldPrefetchStartedRef = useRef(homeScreenAlreadyBooted);
   useEffect(() => {
-    if (!searchHomeReady || splashDismissed || coldWarmStartedRef.current) return;
-    coldWarmStartedRef.current = true;
+    if (!searchHomeReady || coldPrefetchStartedRef.current) return;
+    coldPrefetchStartedRef.current = true;
     const ids = friendsRef.current.map((f) => String(f.id));
-    const data = Promise.all([
-      loadCallLog().catch(() => {}),
-      ids.length ? prefetchChatPreviews(ids, lang).catch(() => {}) : Promise.resolve(),
-    ]);
-    const cap = new Promise((resolve) => setTimeout(resolve, COLD_WARM_DATA_MAX_MS));
-    void Promise.race([data, cap]).then(() => {
-      if (!coldWarmAliveRef.current) return;
-      warmWelcomeListShells('cold-under-splash');
-      // Несколько кадров: панели закоммичены, Android создал поверхности рамок.
-      let frames = COLD_WARM_SETTLE_FRAMES;
-      const tick = () => {
-        if (!coldWarmAliveRef.current) return;
-        if (--frames <= 0) setColdShellsWarm(true);
-        else requestAnimationFrame(tick);
-      };
-      requestAnimationFrame(tick);
-    });
+    if (ids.length) void prefetchChatPreviews(ids, lang).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchHomeReady, splashDismissed]);
+  }, [searchHomeReady]);
 
   useEffect(() => {
-    logger.info('[search-avatar] splash-gate', {
-      splashDismissed,
-      showSplash: !splashDismissed,
-      avatarVerChecked,
+    if (splashDismissed) return;
+    const timing = splashTimingRef.current;
+    markSplashGate(timing, 'avatarVerChecked', avatarVerChecked);
+    markSplashGate(timing, 'cosmeticsHydrated', cosmeticsHydrated);
+    if (hasAvatarSourceForFirstPaint) {
+      markSplashGate(timing, 'hasAvatarSource', true);
+      markSplashGate(timing, 'uriResolved', avatarUriResolvedForPaint && !waitingForKnownAvatar);
+      if (searchAvatarPrefetched) markSplashGate(timing, 'prefetched', true);
+      else clearSplashGate(timing, 'prefetched');
+      if (searchAvatarDecoded) markSplashGate(timing, 'decoded', true);
+      else clearSplashGate(timing, 'decoded');
+    } else if (avatarVerChecked && myAvatarVer <= 0) {
+      markSplashGate(timing, 'hasAvatarSource', true);
+      markSplashGate(timing, 'uriResolved', true);
+      markSplashGate(timing, 'prefetched', true);
+      markSplashGate(timing, 'decoded', true);
+    }
+    markSplashGate(timing, 'radarReady', searchRadarReady);
+    markSplashGate(timing, 'avatarReady', avatarReadyForFirstPaint);
+    markSplashGate(timing, 'searchHomeReady', searchHomeReady);
+
+    const pending: string[] = [];
+    if (!avatarVerChecked) pending.push('avatarVerChecked');
+    else if (waitingForKnownAvatar) pending.push('hasAvatarSource');
+    else if (!avatarUriResolvedForPaint) pending.push('uriResolved');
+    else if (hasAvatarSourceForFirstPaint && !searchAvatarPrefetched) pending.push('prefetched');
+    else if (hasAvatarSourceForFirstPaint && !searchAvatarDecoded) pending.push('decoded');
+    if (!searchRadarReady) pending.push('radarReady');
+    if (!cosmeticsHydrated) pending.push('cosmeticsHydrated');
+
+    logger.info('[splash-timing] gate', {
+      elapsedMs: Date.now() - timing.t0,
+      pending,
+      at: { ...timing.at },
       myAvatarVer,
-      hasSource: hasAvatarSourceForFirstPaint,
-      waitingKnown: waitingForKnownAvatar,
-      uriResolved: avatarUriResolvedForPaint,
-      prefetched: searchAvatarPrefetched,
-      decoded: searchAvatarDecoded,
-      ready: avatarReadyForFirstPaint,
-      radarReady: searchRadarReady,
-      fliqReady: fliqPrewarmReady,
-      cosmeticsHydrated,
-      searchHomeReady,
       displayUriKind: !searchAvatarDisplayUri
         ? 'none'
         : /^file:/i.test(searchAvatarDisplayUri)
@@ -5599,9 +5666,6 @@ const handleClearNick = useCallback(async () => {
           : /^data:/i.test(searchAvatarDisplayUri)
             ? 'data'
             : 'other',
-      displayUriLen: searchAvatarDisplayUri.length,
-      avatarUriLen: String(avatarUri || '').length,
-      fullUriLen: String(myFullAvatarUri || '').length,
     });
   }, [
     splashDismissed,
@@ -5614,12 +5678,9 @@ const handleClearNick = useCallback(async () => {
     searchAvatarDecoded,
     avatarReadyForFirstPaint,
     searchRadarReady,
-    fliqPrewarmReady,
     cosmeticsHydrated,
     searchHomeReady,
     searchAvatarDisplayUri,
-    avatarUri,
-    myFullAvatarUri,
   ]);
 
   /** Содержимое видимой вкладки под нижним стеклом; на «Поиске» под ним только фон. */
@@ -6142,22 +6203,27 @@ const handleClearNick = useCallback(async () => {
     {showSplashOverlay && (
       <View style={[StyleSheet.absoluteFillObject, { zIndex: 9998 }]} pointerEvents="box-none">
         <SplashLoader
-          hasContentReady={searchHomeReady && coldShellsWarm}
+          hasContentReady={searchHomeReady}
           hasNick={!!(currentNick && currentNick.trim())}
           hasAvatar={!!(currentAvatar && currentAvatar.trim())}
           onComplete={() => {
-            logger.info('[search-avatar] splash-dismiss', {
-              ready: avatarReadyForFirstPaint,
-              radarReady: searchRadarReady,
-              fliqReady: fliqPrewarmReady,
-              prefetched: searchAvatarPrefetched,
-              decoded: searchAvatarDecoded,
-              displayUriKind: !searchAvatarDisplayUri
-                ? 'none'
-                : /^file:/i.test(searchAvatarDisplayUri)
-                  ? 'file'
-                  : 'other',
-            });
+            const timing = splashTimingRef.current;
+            const totalMs = Date.now() - timing.t0;
+            if (!timing.reported) {
+              timing.reported = true;
+              const lastBlocker = splashLastBlocker(timing);
+              logger.info('[splash-timing] SUMMARY', {
+                totalMs,
+                lastBlocker,
+                at: { ...timing.at },
+                prefetchStartedAt: timing.prefetchStartedAt ?? null,
+                prefetchDoneAt: timing.prefetchDoneAt ?? null,
+                prefetchSpanMs:
+                  timing.prefetchStartedAt != null && timing.prefetchDoneAt != null
+                    ? timing.prefetchDoneAt - timing.prefetchStartedAt
+                    : null,
+              });
+            }
             setSplashDismissed(true);
           }}
         />

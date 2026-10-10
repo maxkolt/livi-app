@@ -99,6 +99,14 @@ describe('youtube player page', () => {
     expect(p.opts().playerVars.mute).toBe(1);
   });
 
+  it('uses a clean embed: no YT controls, nocookie host, modest branding', () => {
+    const p = start({ mode: 'play' });
+    expect(p.opts().host).toBe('https://www.youtube-nocookie.com');
+    expect(p.opts().playerVars.controls).toBe(0);
+    expect(p.opts().playerVars.modestbranding).toBe(1);
+    expect(p.opts().playerVars.fs).toBe(0);
+  });
+
   it('prebuffers silently: no first frame until told to play', () => {
     const p = start({ mode: 'pause', prebuffer: true });
     p.ready();

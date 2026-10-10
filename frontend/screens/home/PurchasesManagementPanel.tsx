@@ -41,7 +41,7 @@ function FramePreview({ itemId }: { itemId: string }) {
   const colors = FRAME_COLORS[itemId];
   if (!colors) return <View style={styles.emptyFrame} />;
   if (itemId === 'fire') {
-    const size = 43;
+    const size = 48;
     const outset = fireFrameOutset(size);
     return (
       <FireAvatarFrame size={size} photoSize={size - outset * 2}>
@@ -158,9 +158,9 @@ const styles = StyleSheet.create({
   },
   emptyRow: { minHeight: 76, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, gap: 12 },
   emptyFrame: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+    width: 50,
+    height: 50,
+    borderRadius: 25,
     borderWidth: 2,
     borderColor: 'rgba(180,186,196,0.42)',
     backgroundColor: 'rgba(180,186,196,0.08)',
@@ -176,17 +176,17 @@ const styles = StyleSheet.create({
   copy: { flex: 1, minWidth: 0 },
   emptyTitle: { color: LIVI.text, fontSize: 14, fontWeight: '600' },
   emptyHint: { marginTop: 2, color: WELCOME_MUTED_TEXT, fontSize: 12 },
-  itemRow: { minHeight: 62, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, gap: 12 },
-  framePreviewBox: { width: 42, height: 42, alignItems: 'center', justifyContent: 'center' },
+  itemRow: { minHeight: 66, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, gap: 12 },
+  framePreviewBox: { width: 48, height: 48, alignItems: 'center', justifyContent: 'center' },
   frameSwatch: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    padding: 2.5,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    padding: 3,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  frameAvatar: { width: 37, height: 37, borderRadius: 18.5 },
+  frameAvatar: { width: 42, height: 42, borderRadius: 21 },
   backgroundSwatch: {
     width: 54,
     height: 38,

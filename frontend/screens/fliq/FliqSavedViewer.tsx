@@ -282,6 +282,7 @@ const SavedViewerSlide = memo(function SavedViewerSlide({
             mode={mode}
             muted={muted}
             prebuffer={prebuffer}
+            widthDp={cardW}
             onBuffered={handleBuffered}
             onFirstFrame={revealPlayer}
             onProgress={onTick}

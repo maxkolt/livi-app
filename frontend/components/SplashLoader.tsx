@@ -1,19 +1,25 @@
 // components/SplashLoader.tsx
 import React, { useEffect, useRef, useState } from 'react';
-import {
-  View,
-  StyleSheet,
-  Animated,
-  Easing,
-  Image,
-} from 'react-native';
+import { View, StyleSheet } from 'react-native';
+import { Image as ExpoImage } from 'expo-image';
 import { useSafeAreaFrame } from 'react-native-safe-area-context';
+import Animated, {
+  Easing,
+  cancelAnimation,
+  runOnJS,
+  useAnimatedStyle,
+  useSharedValue,
+  withRepeat,
+  withTiming,
+} from 'react-native-reanimated';
 import { WelcomeStageBackground } from '../screens/home/WelcomeStageBackground';
 import { HOME_NAV_BG } from '../screens/home/constants';
 
 const SPLASH_FADE_DURATION_MS = 620;
 /** Аварийный предел только на случай ошибки: готовый Search закрывает splash немедленно. */
 const MAX_SPLASH_DURATION_MS = 9000;
+const BREATH_MS = 2000;
+const SPLASH_ICON = require('../assets/splash-icon.png');
 
 interface SplashLoaderProps {
   onComplete?: () => void;
@@ -30,35 +36,35 @@ export default function SplashLoader({
 }: SplashLoaderProps) {
   const [showSplash, setShowSplash] = useState(true);
   const { height: windowHeight, width: windowWidth } = useSafeAreaFrame();
-  const logoSize = Math.min(168, Math.max(112, Math.round(Math.min(windowHeight * 0.22, windowWidth * 0.40))));
+  const logoSize = Math.min(168, Math.max(112, Math.round(Math.min(windowHeight * 0.22, windowWidth * 0.4))));
   const startedAtRef = useRef(Date.now());
   const finishScheduledRef = useRef(false);
 
-  const logoScale = useRef(new Animated.Value(1)).current;
-  const logoOpacity = useRef(new Animated.Value(1)).current;
-  const logoTranslateY = useRef(new Animated.Value(0)).current;
-  const logoRotate = useRef(new Animated.Value(0)).current;
+  // 0 → 1 → 0 на UI-потоке (withRepeat reverse): без стыков sequence, как у RN Animated.loop.
+  const breath = useSharedValue(0);
+  const logoOpacity = useSharedValue(1);
 
-  const finishSplash = React.useCallback((durationMs: number) => {
-    if (finishScheduledRef.current) return;
-    finishScheduledRef.current = true;
-    const duration = Math.max(0, durationMs);
-    if (duration === 0) {
-      logoOpacity.setValue(0);
-      setShowSplash(false);
-      onComplete?.();
-      return;
-    }
-    Animated.timing(logoOpacity, {
-      toValue: 0,
-      duration,
-      easing: Easing.out(Easing.cubic),
-      useNativeDriver: true,
-    }).start(() => {
-      setShowSplash(false);
-      onComplete?.();
-    });
-  }, [logoOpacity, onComplete]);
+  const finishSplash = React.useCallback(
+    (durationMs: number) => {
+      if (finishScheduledRef.current) return;
+      finishScheduledRef.current = true;
+      cancelAnimation(breath);
+      const duration = Math.max(0, durationMs);
+      const done = () => {
+        setShowSplash(false);
+        onComplete?.();
+      };
+      if (duration === 0) {
+        logoOpacity.value = 0;
+        done();
+        return;
+      }
+      logoOpacity.value = withTiming(0, { duration, easing: Easing.out(Easing.cubic) }, (finished) => {
+        if (finished) runOnJS(done)();
+      });
+    },
+    [breath, logoOpacity, onComplete],
+  );
 
   useEffect(() => {
     if (overlayMode) {
@@ -75,10 +81,7 @@ export default function SplashLoader({
 
     // Не держим экран бесконечно при ошибке диска/сети. Fliq здесь намеренно
     // не учитывается: он прогревается в фоне и не задерживает видимый Search.
-    const remainingHardStopMs = Math.max(
-      0,
-      MAX_SPLASH_DURATION_MS - elapsedMs,
-    );
+    const remainingHardStopMs = Math.max(0, MAX_SPLASH_DURATION_MS - elapsedMs);
     const hardStopTimer = setTimeout(() => {
       finishSplash(0);
     }, remainingHardStopMs);
@@ -86,54 +89,26 @@ export default function SplashLoader({
   }, [finishSplash, hasContentReady, overlayMode]);
 
   useEffect(() => {
-    // «Дыхание»: камера чуть поднимается, объектив (справа) приподнимается вверх под углом.
-    const logoFloat3D = Animated.loop(
-      Animated.sequence([
-        Animated.parallel([
-          Animated.timing(logoTranslateY, {
-            toValue: -12,
-            duration: 2000,
-            easing: Easing.inOut(Easing.cubic),
-            useNativeDriver: true,
-          }),
-          Animated.timing(logoScale, {
-            toValue: 1.06,
-            duration: 2000,
-            easing: Easing.inOut(Easing.cubic),
-            useNativeDriver: true,
-          }),
-          Animated.timing(logoRotate, {
-            toValue: 1,
-            duration: 2000,
-            easing: Easing.inOut(Easing.cubic),
-            useNativeDriver: true,
-          }),
-        ]),
-        Animated.parallel([
-          Animated.timing(logoTranslateY, {
-            toValue: 0,
-            duration: 2000,
-            easing: Easing.inOut(Easing.cubic),
-            useNativeDriver: true,
-          }),
-          Animated.timing(logoScale, {
-            toValue: 1,
-            duration: 2000,
-            easing: Easing.inOut(Easing.cubic),
-            useNativeDriver: true,
-          }),
-          Animated.timing(logoRotate, {
-            toValue: 0,
-            duration: 2000,
-            easing: Easing.inOut(Easing.cubic),
-            useNativeDriver: true,
-          }),
-        ]),
-      ]),
+    breath.value = withRepeat(
+      withTiming(1, { duration: BREATH_MS, easing: Easing.inOut(Easing.sin) }),
+      -1,
+      true,
     );
-    logoFloat3D.start();
-    return () => logoFloat3D.stop();
-  }, [logoRotate, logoScale, logoTranslateY]);
+    return () => cancelAnimation(breath);
+  }, [breath]);
+
+  const logoStyle = useAnimatedStyle(() => {
+    const t = breath.value;
+    return {
+      opacity: logoOpacity.value,
+      transform: [
+        { scale: 1 + 0.06 * t },
+        { translateY: -12 * t },
+        // Отрицательный угол: правый край (объектив) поднимается вверх.
+        { rotate: `${-9 * t}deg` },
+      ],
+    };
+  });
 
   if (!showSplash) {
     return null;
@@ -146,29 +121,14 @@ export default function SplashLoader({
       <WelcomeStageBackground palette="tealDeep" />
       <View style={styles.middle}>
         <View style={styles.logoContainer}>
-          <Animated.View
-            style={[
-              styles.logoWrapper,
-              {
-                transform: [
-                  { scale: logoScale },
-                  { translateY: logoTranslateY },
-                  {
-                    // Отрицательный угол: правый край (объектив) поднимается вверх
-                    rotate: logoRotate.interpolate({
-                      inputRange: [0, 1],
-                      outputRange: ['0deg', '-9deg'],
-                    }),
-                  },
-                ],
-                opacity: logoOpacity,
-              },
-            ]}
-          >
-            <Image
-              source={require('../assets/splash-icon.png')}
+          <Animated.View style={[styles.logoWrapper, logoStyle]}>
+            <ExpoImage
+              source={SPLASH_ICON}
               style={[styles.logo, { width: logoSize, height: logoSize }]}
-              resizeMode="contain"
+              contentFit="contain"
+              cachePolicy="memory-disk"
+              priority="high"
+              recyclingKey="splash-camera"
             />
           </Animated.View>
         </View>

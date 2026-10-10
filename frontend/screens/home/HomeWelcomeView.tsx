@@ -109,6 +109,8 @@ let welcomeRevealPlayedThisSession = false;
 
 /** Телефон в landscape: диаметр аватара (с кольцом рамки) — доля размера радара. */
 const PHONE_SPLIT_AVATAR_RATIO = 0.36;
+/** Центр радара (фото + рамка + тонкий круг) чуть меньше доли диска. */
+const SEARCH_CENTER_AVATAR_SCALE = 0.9;
 
 function HomeWelcomeViewInner({
   styles,
@@ -386,14 +388,18 @@ function HomeWelcomeViewInner({
       const phone = welcomePhoneAvatarMetrics(Math.min(stageWidth, stageHeight));
       // Landscape: радар ниже, и аватар вертикали занимал почти весь диск — кольцам
       // не оставалось места. Здесь аватар — доля радара, как пропорция в вертикали.
-      const k = splitStage ? (radarSize * PHONE_SPLIT_AVATAR_RATIO) / phone.outer : 1;
+      const k =
+        (splitStage ? (radarSize * PHONE_SPLIT_AVATAR_RATIO) / phone.outer : 1) *
+        SEARCH_CENTER_AVATAR_SCALE;
       return {
         base: Math.round(phone.base * k),
         avatarSize: Math.round(phone.outer * k),
         frameOutset: phone.frameOutset * k,
       };
     }
-    const base = Math.round(Math.min(136 * Math.max(1, radarSize / 380), radarSize * 0.42));
+    const base = Math.round(
+      Math.min(136 * Math.max(1, radarSize / 380), radarSize * 0.42) * SEARCH_CENTER_AVATAR_SCALE,
+    );
     const firstRingWidth = welcomeRadarFirstRingWidth(radarSize, base);
     return {
       base,
