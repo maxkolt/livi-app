@@ -39,9 +39,9 @@ import {
   WELCOME_GLASS_BORDER,
   WELCOME_HEADER_TITLE,
   WELCOME_MUTED_TEXT,
-  WELCOME_SEARCH_CTA_BORDER,
   UI_ACCENT,
   UI_ACCENT_SOFT,
+  UI_SURFACE,
 } from './constants';
 import { WELCOME_SEGMENT_ACTIVE } from './FriendsListCore';
 import { displayAvatarLetter, displayName } from './friendHelpers';
@@ -1491,11 +1491,13 @@ const styles = StyleSheet.create({
     lineHeight: 18,
   },
   accountActions: { flexDirection: 'row', gap: 8 },
+  // Панель ника лежит прямо на сцене: без сплошной подложки кнопки терялись на картинке.
   accountSecondary: {
     flex: 1,
     paddingVertical: 7,
     alignItems: 'center',
     borderRadius: 999,
+    backgroundColor: UI_SURFACE,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: 'rgba(255,255,255,0.1)',
   },
@@ -1505,7 +1507,8 @@ const styles = StyleSheet.create({
     paddingVertical: 7,
     alignItems: 'center',
     borderRadius: 999,
-    backgroundColor: WELCOME_SEARCH_CTA_BORDER,
+    // Приглушённый тон акцента на слейте — чуть темнее прежних 24% акцента поверх сцены.
+    backgroundColor: '#344A5A',
   },
   accountSaveDone: { backgroundColor: 'rgba(51, 139, 73, 0.25)' },
   accountSaveText: { color: LIVI.white, fontSize: 13, fontWeight: '600' },

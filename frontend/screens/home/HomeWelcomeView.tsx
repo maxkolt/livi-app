@@ -18,7 +18,7 @@ import {
   searchPhoneRadarPreferred,
   WELCOME_FRIENDS_LIST_INSET,
   WELCOME_HEADER_TITLE,
-  WELCOME_ONLINE_PLACEHOLDER_BG,
+  WELCOME_CROWN_SURFACE,
   welcomePhoneAvatarMetrics,
   welcomeRadarFirstRingWidth,
 } from './constants';
@@ -501,7 +501,7 @@ function HomeWelcomeViewInner({
               <WelcomeCrownButton
                 large={isTabletLayout}
                 small={tightStage}
-                surface={WELCOME_ONLINE_PLACEHOLDER_BG}
+                surface={WELCOME_CROWN_SURFACE}
               />
             }
           />
@@ -610,7 +610,7 @@ function HomeWelcomeViewInner({
                 <WelcomeCrownButton
                   large={isTabletLayout}
                   small={tightStage}
-                  surface={WELCOME_ONLINE_PLACEHOLDER_BG}
+                  surface={WELCOME_CROWN_SURFACE}
                 />
               }
             />

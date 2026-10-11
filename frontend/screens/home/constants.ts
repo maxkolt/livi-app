@@ -150,8 +150,11 @@ export const WELCOME_GLASS_SURFACE = UI_SURFACE;
 export const WELCOME_LIST_SURFACE = UI_SURFACE;
 /** Кромка карточек и разделители внутри них. */
 export const WELCOME_GLASS_BORDER = UI_RIM;
-/** Фон пустых аватаров в верхнем блоке «Онлайн». */
-export const WELCOME_ONLINE_PLACEHOLDER_BG = UI_ACCENT_SOFT;
+/**
+ * Круг короны в блоке «Онлайн» на «Поиске»: сине-серый, ближе к серому (не тон акцента).
+ * Полупрозрачный холодный серый — на баннере ~#464F5A, на шаг светлее блока.
+ */
+export const WELCOME_CROWN_SURFACE = 'rgba(200, 210, 222, 0.1)';
 
 export const LIVI = {
   bg: HOME_NAV_BG,
