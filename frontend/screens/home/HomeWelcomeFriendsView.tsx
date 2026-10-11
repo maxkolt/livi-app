@@ -33,7 +33,9 @@ import {
   HOME_BLUR_LIST_SOURCE,
   UI_GLASS_CONTROL,
   WELCOME_UPDATE_BADGE,
+  UI_GLASS_BLOCK_TINT,
 } from './constants';
+import { SPATIAL_GLASS_AVAILABLE, SpatialGlass } from './SpatialDepth';
 import {
   WELCOME_CHROME_BTN_SHADOW,
   WELCOME_CHROME_BTN_SHADOW_IOS,
@@ -234,6 +236,7 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
           tabletLayout && styles.inviteCardTablet,
           compactLandscape && styles.inviteCardLandscape,
           WELCOME_FLOAT_SHADOW_IOS,
+          SPATIAL_GLASS_AVAILABLE && styles.inviteCardClear,
           pressed && styles.inviteCardPressed,
         ]}
         onPress={() => {
@@ -243,6 +246,11 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
       >
         <WelcomeFloatShadow
           radius={tabletLayout ? 18 : WELCOME_FRIENDS_SEGMENT_SHELL_RADIUS}
+        />
+        <SpatialGlass
+          radius={tabletLayout ? 18 : compactLandscape ? 14 : WELCOME_FRIENDS_SEGMENT_SHELL_RADIUS}
+          tint={UI_GLASS_BLOCK_TINT}
+          fallbackColor={WELCOME_TAB_BLOCK_SURFACE}
         />
         <ExpoImage
           source={INVITE_BADGE}
@@ -820,6 +828,10 @@ const styles = StyleSheet.create({
   },
   inviteCardPressed: {
     opacity: 0.92,
+  },
+  /** Стекло над сценой (SpatialGlass): заливку рисует оно. */
+  inviteCardClear: {
+    backgroundColor: 'transparent',
   },
   // Значок во всю высоту содержимого карточки, без подложки.
   inviteBadge: {

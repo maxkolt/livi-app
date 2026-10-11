@@ -1,6 +1,7 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { Platform, StyleSheet, View, type LayoutChangeEvent } from 'react-native';
 import { NativeBlurBackdrop, type BackdropSources } from '../../components/BackdropBlur';
+import { SPATIAL_DEPTH, SpatialLayer } from './SpatialDepth';
 import { StageGradient } from './WelcomeStageBackground';
 import { useStableSafeAreaInsets } from './useStableSafeAreaInsets';
 import {
@@ -82,10 +83,7 @@ type Props = {
  */
 export function WelcomeGlassHeader({ listSourceId, onHeight, children }: Props) {
   const insets = useStableSafeAreaInsets();
-  const backdrop = useMemo<BackdropSources>(
-    () => ({ background: [HOME_BLUR_BG_SOURCE], blur: [listSourceId] }),
-    [listSourceId],
-  );
+  const backdrop = useMemo(() => homeBackdrop(listSourceId), [listSourceId]);
   const handleLayout = (e: LayoutChangeEvent) => {
     const h = Math.round(e.nativeEvent.layout.height);
     if (h > 0) onHeight(h);
@@ -94,18 +92,30 @@ export function WelcomeGlassHeader({ listSourceId, onHeight, children }: Props) 
   // Контент поверх слоёв стекла (у них zIndex 0–1).
   const content = <View style={styles.content}>{children}</View>;
 
-  if (Platform.OS === 'android' && !NativeBlurBackdrop) {
-    return (
-      <View style={[shellStyle, styles.opaque]} onLayout={handleLayout}>
-        {content}
-      </View>
-    );
-  }
+  // Стекло — плоскость экрана: шапка не парит вместе со списком (SpatialDepth), иначе
+  // при наклоне у края экрана открывалась бы щель. Слой гасит сдвиг вкладки в том же кадре.
   return (
-    <StageGradient translucent matteOpacity={0.38} backdrop={backdrop} style={shellStyle} onLayout={handleLayout}>
-      {content}
-    </StageGradient>
+    <SpatialLayer depth={-SPATIAL_DEPTH.content} pointerEvents="box-none" style={styles.screenPlane}>
+      {Platform.OS === 'android' && !NativeBlurBackdrop ? (
+        <View style={[shellStyle, styles.opaque]} onLayout={handleLayout}>
+          {content}
+        </View>
+      ) : (
+        <StageGradient translucent matteOpacity={0.38} backdrop={backdrop} style={shellStyle} onLayout={handleLayout}>
+          {content}
+        </StageGradient>
+      )}
+    </SpatialLayer>
   );
+}
+
+/**
+ * Под стеклом главного экрана: сцена как есть, размыто только содержимое вкладки. Сцена
+ * (SpatialDepth) и так мягкая и под стеклом тёмная, а размывать её заново на каждом кадре
+ * наклона — +2.3 мс RenderThread на A35 (кадр 120 Гц переставал укладываться).
+ */
+function homeBackdrop(listSourceId?: string | null): BackdropSources {
+  return { background: [HOME_BLUR_BG_SOURCE], blur: listSourceId ? [listSourceId] : [] };
 }
 
 /**
@@ -116,10 +126,7 @@ export function WelcomeGlassHeader({ listSourceId, onHeight, children }: Props) 
  * height — высота навбара вместе с отступом до края экрана.
  */
 export function WelcomeGlassDock({ listSourceId, height }: { listSourceId?: string | null; height: number }) {
-  const backdrop = useMemo<BackdropSources>(
-    () => ({ background: [HOME_BLUR_BG_SOURCE], blur: listSourceId ? [listSourceId] : [] }),
-    [listSourceId],
-  );
+  const backdrop = useMemo(() => homeBackdrop(listSourceId), [listSourceId]);
   const insets = useStableSafeAreaInsets();
   // По ширине как шапка вкладок: она внутри SafeAreaView (left/right), а док — в корне экрана.
   const dockStyle = [
@@ -144,9 +151,11 @@ export function WelcomeGlassTop({ height }: { height: number }) {
   return <StageGradient translucent matteOpacity={0.38} backdrop={BG_ONLY_BACKDROP} style={style} />;
 }
 
-const BG_ONLY_BACKDROP: BackdropSources = { background: [HOME_BLUR_BG_SOURCE], blur: [] };
+const BG_ONLY_BACKDROP: BackdropSources = homeBackdrop(null);
 
 const styles = StyleSheet.create({
+  /** Слой-«плоскость экрана» поверх вкладки: шапка над списком, касания — сквозь. */
+  screenPlane: { ...StyleSheet.absoluteFillObject, zIndex: 2 },
   shell: {
     position: 'absolute',
     top: 0,

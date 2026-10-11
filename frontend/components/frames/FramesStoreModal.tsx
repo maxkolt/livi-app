@@ -4,6 +4,8 @@ import { useSafeAreaFrame, useSafeAreaInsets } from 'react-native-safe-area-cont
 import { Image as ExpoImage } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { FireAvatarFrame, fireFrameOutset } from './FireAvatarFrame';
+import { IceAvatarFrame } from './IceAvatarFrame';
+import { DiamondAvatarFrame } from './DiamondAvatarFrame';
 import { MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
 import Carousel from 'react-native-reanimated-carousel';
 import { Extrapolation, interpolate } from 'react-native-reanimated';
@@ -203,12 +205,17 @@ function FrameCoverCard({
   const ringWidth = Math.max(2, Math.round(size * 0.025));
   const avatarSize = size - ringWidth * 2;
 
-  if (item.key === 'fire') {
-    const fireOutset = fireFrameOutset(size);
-    const fireAvatarSize = size - fireOutset * 2;
+  if (item.key === 'fire' || item.key === 'frost' || item.key === 'diamond') {
+    const liveOutset = fireFrameOutset(size);
+    const liveAvatarSize = size - liveOutset * 2;
+    const LiveFrame = item.key === 'fire'
+      ? FireAvatarFrame
+      : item.key === 'frost'
+        ? IceAvatarFrame
+        : DiamondAvatarFrame;
     return (
       <View style={styles.cardShadow}>
-        <FireAvatarFrame size={size} photoSize={fireAvatarSize} active={active}>
+        <LiveFrame size={size} photoSize={liveAvatarSize} active={active}>
           <ExpoImage
             source={SHOWCASE_AVATAR}
             style={StyleSheet.absoluteFillObject}
@@ -216,7 +223,7 @@ function FrameCoverCard({
             cachePolicy="memory-disk"
             onLoad={onLoad}
           />
-        </FireAvatarFrame>
+        </LiveFrame>
       </View>
     );
   }
@@ -261,9 +268,6 @@ function PurchaseButton({
   borderColor,
   surfaceColor,
   contentColor,
-  compact,
-  topMargin,
-  verticalOffset = 0,
   disabled,
   onPress,
 }: {
@@ -274,9 +278,6 @@ function PurchaseButton({
   borderColor: string;
   surfaceColor: string;
   contentColor: string;
-  compact?: boolean;
-  topMargin?: number;
-  verticalOffset?: number;
   disabled?: boolean;
   onPress: () => void;
 }) {
@@ -289,11 +290,10 @@ function PurchaseButton({
       accessibilityLabel={label}
       style={({ pressed }) => [
         styles.ctaWrap,
-        compact && styles.ctaWrapCompact,
-        { width, ...(topMargin !== undefined ? { marginTop: topMargin } : null) },
+        { width },
         disabled && styles.ctaDisabled,
         pressed && !disabled && styles.ctaPressed,
-        { transform: [{ translateY: verticalOffset }, ...(pressed && !disabled ? [{ scale: 0.985 }] : [])] },
+        pressed && !disabled && { transform: [{ scale: 0.985 }] },
       ]}
     >
       <View
@@ -314,6 +314,134 @@ function PurchaseButton({
         </FitText>
       </View>
     </Pressable>
+  );
+}
+
+/** Зазор кнопки рамки над системной панелью — как между блоками профиля. */
+const STORE_BOTTOM_GAP_PHONE = 12;
+const STORE_BOTTOM_GAP_TABLET = 16;
+/** Строка заголовка секции («Фоны для чата», «Рамки для аватара»). */
+const SECTION_HEADING_HEIGHT = 22;
+
+type GapSpec = { grow: number; min: number; max?: number };
+
+type StoreLayout = {
+  /** Мелкие шрифты и однострочное описание. */
+  compact: boolean;
+  backgroundCardWidth: number;
+  backgroundPageWidth: number;
+  backgroundLabelSpace: number;
+  frameSize: number;
+  framePageWidth: number;
+  frameLabelSpace: number;
+  buttonHeight: number;
+  /** Название + описание под каруселью — оценка для выбора ступени. */
+  copyHeight: number;
+  gaps: {
+    top: GapSpec;
+    heading: GapSpec;
+    copy: GapSpec;
+    button: GapSpec;
+    section: GapSpec;
+  };
+};
+
+function storeGaps(scale: number): StoreLayout['gaps'] {
+  return {
+    // Зазоры внутри секции ограничены — подписи и кнопки не отрываются от своих
+    // каруселей. Весь остаток высоты делят верх и промежуток между секциями.
+    top: { grow: 0.6, min: 4 },
+    heading: { grow: 0.45, min: 6, max: Math.round(18 * scale) },
+    copy: { grow: 0.4, min: 6, max: Math.round(16 * scale) },
+    button: { grow: 0.5, min: 8, max: Math.round(22 * scale) },
+    section: { grow: 1.2, min: 12 },
+  };
+}
+
+function sectionNeed(layout: StoreLayout, kind: 'background' | 'frame'): number {
+  const carousel = kind === 'background'
+    ? Math.round(layout.backgroundCardWidth * 0.61) + layout.backgroundLabelSpace
+    : layout.frameSize + layout.frameLabelSpace;
+  const { heading, copy, button } = layout.gaps;
+  return SECTION_HEADING_HEIGHT + carousel + layout.copyHeight + layout.buttonHeight
+    + heading.min + copy.min + button.min;
+}
+
+function layoutNeed(layout: StoreLayout, landscape: boolean): number {
+  const background = sectionNeed(layout, 'background');
+  const frame = sectionNeed(layout, 'frame');
+  return layout.gaps.top.min + (landscape
+    ? Math.max(background, frame)
+    : background + layout.gaps.section.min + frame);
+}
+
+/**
+ * Ступень размеров витрины по высоте, которая реально остаётся между шапкой и
+ * кнопкой: крупная → компактная → мини. На высоких экранах и планшетах крупная
+ * ступень ещё и растёт, чтобы витрина не тонула в пустых зазорах.
+ */
+function pickStoreLayout(available: number, landscape: boolean, tablet: boolean): StoreLayout {
+  const regular: StoreLayout = {
+    compact: false,
+    backgroundCardWidth: landscape ? 144 : 158,
+    backgroundPageWidth: 88,
+    backgroundLabelSpace: 30,
+    frameSize: landscape ? 96 : 106,
+    framePageWidth: 62,
+    frameLabelSpace: 34,
+    buttonHeight: Platform.OS === 'ios' ? 46 : 44,
+    copyHeight: 60,
+    gaps: storeGaps(1),
+  };
+  const regularNeed = layoutNeed(regular, landscape);
+  if (available >= regularNeed) {
+    // Рост начинается, когда запас больше ~120 dp; телефоны — до +15%, планшеты — до +50%.
+    const scale = Math.min(tablet ? 1.5 : 1.15, Math.max(1, available / (regularNeed + 120)));
+    if (scale <= 1.01) return regular;
+    const grown: StoreLayout = {
+      ...regular,
+      backgroundCardWidth: Math.round(regular.backgroundCardWidth * scale),
+      backgroundPageWidth: Math.round(regular.backgroundPageWidth * scale),
+      frameSize: Math.round(regular.frameSize * scale),
+      framePageWidth: Math.round(regular.framePageWidth * scale),
+      buttonHeight: tablet ? 48 : regular.buttonHeight,
+      // На планшете и зазоры внутри секций свободнее — иначе всё сбивается в кучу.
+      gaps: storeGaps(scale * (tablet ? 1.6 : 1)),
+    };
+    return grown;
+  }
+  const compact: StoreLayout = {
+    compact: true,
+    backgroundCardWidth: 128,
+    backgroundPageWidth: 76,
+    backgroundLabelSpace: 24,
+    frameSize: 84,
+    framePageWidth: 54,
+    frameLabelSpace: 26,
+    buttonHeight: 40,
+    copyHeight: 36,
+    gaps: storeGaps(1),
+  };
+  if (available >= layoutNeed(compact, landscape)) return compact;
+  return {
+    ...compact,
+    backgroundCardWidth: 108,
+    backgroundPageWidth: 66,
+    backgroundLabelSpace: 22,
+    frameSize: 70,
+    framePageWidth: 46,
+    frameLabelSpace: 24,
+    buttonHeight: 38,
+  };
+}
+
+/** Гибкий зазор: делит свободную высоту по весу в пределах [min, max]. */
+function FlexGap({ grow, min, max }: GapSpec) {
+  return (
+    <View
+      pointerEvents="none"
+      style={{ flexGrow: grow, flexShrink: 0, flexBasis: 0, minHeight: min, maxHeight: max }}
+    />
   );
 }
 
@@ -393,7 +521,8 @@ function FramesStoreContent({
   const insets = visible ? liveInsets : frozenRef.current.insets;
   const landscape = windowWidth > windowHeight;
   const orientKey = landscape ? 'l' : 'p';
-  const compact = windowHeight < (landscape ? 430 : 720);
+  const tablet = Math.min(windowWidth, windowHeight) >= 600;
+  const headerCompact = windowHeight < (landscape ? 430 : 720);
   const pageHorizontalPadding = landscape ? 12 : 0;
   const sectionsGap = landscape ? 12 : 0;
   const safeContentWidth = Math.max(0, windowWidth - insets.left - insets.right - pageHorizontalPadding * 2);
@@ -402,29 +531,38 @@ function FramesStoreContent({
     ? Math.max(0, (safeContentWidth - sectionsGap) / 2)
     : portraitContentWidth;
 
-  const backgroundCardWidth = compact ? 128 : landscape ? 144 : 158;
+  const pageTopGap = headerCompact ? 2 : Platform.OS === 'ios' ? 7 : 10;
+  // Шапка чуть ближе к статус-бару, чем даёт pageTopGap.
+  const contentLift = Math.min(pageTopGap, 8);
+  const pagePaddingTop = insets.top + APP_TOP_CONTENT_GAP + pageTopGap - contentLift;
+  // Кнопка рамки стоит над системной панелью с тем же зазором, что между
+  // блоками профиля, — на любом устройстве. Остальное раскладывается выше неё.
+  const bottomGap = tablet ? STORE_BOTTOM_GAP_TABLET : STORE_BOTTOM_GAP_PHONE;
+  const pagePaddingBottom = insets.bottom + bottomGap;
+  const contentHeight = Math.max(
+    0,
+    windowHeight - pagePaddingTop - (headerCompact ? 34 : 42) - pagePaddingBottom,
+  );
+  const layout = pickStoreLayout(contentHeight, landscape, tablet);
+  const compact = layout.compact;
+  const gaps = layout.gaps;
+
+  const backgroundCardWidth = layout.backgroundCardWidth;
   const backgroundCardHeight = Math.round(backgroundCardWidth * 0.61);
-  const backgroundPageWidth = compact ? 76 : 88;
-  const backgroundPageHeight = backgroundCardHeight + (compact ? 24 : 30);
-  const frameSize = compact ? 84 : landscape ? 96 : 106;
-  const framePageWidth = compact ? 54 : 62;
-  const framePageHeight = frameSize + (compact ? 26 : 34);
-  const backgroundHeadingOffset = landscape ? 0 : compact ? -16 : -25;
-  const backgroundContentOffset = landscape ? 0 : compact ? -5 : -8;
-  const backgroundCarouselOffset = backgroundContentOffset + (landscape ? 0 : compact ? -8 : -11);
-  const frameHeadingTopOffset = landscape ? 0 : compact ? 6 : 12;
-  const frameCarouselTopOffset = landscape ? 0 : compact ? 12 : 21;
-  const frameDescriptionTopOffset = landscape ? 0 : compact ? 30 : 47;
+  const backgroundPageWidth = layout.backgroundPageWidth;
+  const backgroundPageHeight = backgroundCardHeight + layout.backgroundLabelSpace;
+  const frameSize = layout.frameSize;
+  const framePageWidth = layout.framePageWidth;
+  const framePageHeight = frameSize + layout.frameLabelSpace;
+  // В альбомной колонки стоят рядом — одинаковая высота каруселей выравнивает
+  // заголовки и описания по одной линии.
+  const backgroundCarouselBox = landscape ? Math.max(backgroundPageHeight, framePageHeight) : backgroundPageHeight;
+  const frameCarouselBox = landscape ? Math.max(backgroundPageHeight, framePageHeight) : framePageHeight;
 
   const maxCtaWidth =
     sectionWidth >= SEARCH_CTA_TABLET_MIN_WIDTH ? SEARCH_CTA_TABLET_MAX_WIDTH : SEARCH_CTA_MAX_WIDTH;
   const buttonWidth = Math.min(Math.max(180, sectionWidth - (compact ? 28 : 44)), maxCtaWidth);
-  const buttonHeight = compact ? 40 : Platform.OS === 'ios' ? 46 : 44;
-  const contentTopOffset = landscape ? 0 : compact ? 16 : 28;
-  const pageTopGap = compact ? 2 : Platform.OS === 'ios' ? 7 : 10;
-  // Весь контент чуть ближе к статус-бару: сверху зазор меньше, снизу на столько же
-  // больше — иначе секции (space-evenly) поднялись бы только на половину сдвига.
-  const contentLift = Math.min(pageTopGap, 8);
+  const buttonHeight = layout.buttonHeight;
 
   const [activeBackgroundIndex, setActiveBackgroundIndex] = useState(0);
   const [activeFrameIndex, setActiveFrameIndex] = useState(0);
@@ -608,6 +746,143 @@ function FramesStoreContent({
   // Системное «Назад» ловит обёртка снаружи — отдаём ей актуальный обработчик.
   requestCloseRef.current = handleRequestClose;
 
+  // Секция — столбец «заголовок → карусель → описание → кнопка» с гибкими
+  // зазорами между ними. Нижний край секции рамок — кнопка у системной панели.
+  const backgroundSection = (
+    <>
+      <View style={styles.sectionHeadingRow}>
+        <MaterialCommunityIcons name="message-image-outline" size={compact ? 17 : 19} color={CROWN_GOLD} />
+        <FitText style={[styles.sectionHeading, compact && styles.sectionHeadingCompact]} minimumFontScale={0.75}>
+          {L('storeChatBackgrounds')}
+        </FitText>
+      </View>
+      <FlexGap {...gaps.heading} />
+      <View style={[styles.carouselWrap, { height: backgroundCarouselBox }]}>
+        <Carousel
+          key={`bg-${orientKey}-${backgroundPageWidth}-${backgroundCardWidth}`}
+          width={backgroundPageWidth}
+          height={backgroundPageHeight}
+          data={CHAT_BACKGROUND_CATALOG}
+          // Смена ступени размеров или поворот пересоздают карусель — без этого
+          // она вставала на первый фон, а описание оставалось от выбранного.
+          defaultIndex={activeBackgroundIndex}
+          loop
+          style={{ width: sectionWidth, justifyContent: 'center', overflow: 'visible' }}
+          containerStyle={{ overflow: 'visible' }}
+          customAnimation={backgroundCoverflowAnimation}
+          scrollAnimationDuration={420}
+          onSnapToItem={setActiveBackgroundIndex}
+          renderItem={({ item }) => (
+            <View style={[styles.carouselItem, { width: backgroundPageWidth, height: backgroundPageHeight }]}>
+              <ChatBackgroundCard
+                item={item}
+                width={backgroundCardWidth}
+                height={backgroundCardHeight}
+                onLoad={handleBackgroundLoad}
+              />
+              <FitText
+                style={[styles.carouselLabel, item.key === activeBackground.key && styles.carouselLabelActive]}
+                minimumFontScale={0.65}
+                numberOfLines={1}
+              >
+                {L(cosmeticNameKey(item.key))}
+              </FitText>
+            </View>
+          )}
+        />
+      </View>
+      <FlexGap {...gaps.copy} />
+      <View style={[styles.selectionCopy, compact && styles.selectionCopyCompact]}>
+        <FitText style={[styles.itemTitle, compact && styles.itemTitleCompact]} minimumFontScale={0.75}>
+          {L(cosmeticNameKey(activeBackground.key))}
+        </FitText>
+        <AdaptiveText style={[styles.subtitle, compact && styles.subtitleCompact]} numberOfLines={compact ? 1 : 2}>
+          {L(cosmeticBlurbKey(activeBackground.key))}
+        </AdaptiveText>
+      </View>
+      <FlexGap {...gaps.button} />
+      <PurchaseButton
+        label={paymentBusy === 'background'
+          ? L('storeOpeningPayment')
+          : backgroundOwned
+            ? backgroundActive ? L('storeRemoveBackground') : L('storeApplyBackground')
+            : L('storeBuyBackground').replace('{price}', '99 ₽')}
+        icon="image-outline"
+        width={buttonWidth}
+        height={buttonHeight}
+        borderColor={PEARL_BORDER}
+        surfaceColor="rgba(244,240,232,0.12)"
+        contentColor="#F6F0E5"
+        disabled={paymentBusy !== null}
+        onPress={() => void openSharedCheckout('background')}
+      />
+    </>
+  );
+
+  const frameSection = (
+    <>
+      <View style={styles.sectionHeadingRow}>
+        <MaterialCommunityIcons name="account-star-outline" size={compact ? 17 : 19} color={CROWN_GOLD} />
+        <FitText style={[styles.sectionHeading, compact && styles.sectionHeadingCompact]} minimumFontScale={0.75}>
+          {L('storeAvatarFrames')}
+        </FitText>
+      </View>
+      <FlexGap {...gaps.heading} />
+      <View style={[styles.carouselWrap, { height: frameCarouselBox }]}>
+        <Carousel
+          key={`frame-${orientKey}-${framePageWidth}-${frameSize}`}
+          width={framePageWidth}
+          height={framePageHeight}
+          data={FRAME_CATALOG}
+          defaultIndex={activeFrameIndex}
+          loop
+          style={{ width: sectionWidth, justifyContent: 'center', overflow: 'visible' }}
+          containerStyle={{ overflow: 'visible' }}
+          customAnimation={frameCoverflowAnimation}
+          scrollAnimationDuration={420}
+          onSnapToItem={setActiveFrameIndex}
+          renderItem={({ item }) => (
+            <View style={[styles.carouselItem, { width: framePageWidth, height: framePageHeight }]}>
+              <FrameCoverCard item={item} size={frameSize} active={visible} onLoad={handleFrameLoad} />
+              <FitText
+                style={[styles.carouselLabel, item.key === activeFrame.key && styles.carouselLabelActive]}
+                minimumFontScale={0.65}
+                numberOfLines={1}
+              >
+                {L(cosmeticNameKey(item.key))}
+              </FitText>
+            </View>
+          )}
+        />
+      </View>
+      <FlexGap {...gaps.copy} />
+      <View style={[styles.selectionCopy, compact && styles.selectionCopyCompact]}>
+        <FitText style={[styles.itemTitle, compact && styles.itemTitleCompact]} minimumFontScale={0.75}>
+          {L(cosmeticNameKey(activeFrame.key))}
+        </FitText>
+        <AdaptiveText style={[styles.subtitle, compact && styles.subtitleCompact]} numberOfLines={compact ? 1 : 2}>
+          {L(cosmeticBlurbKey(activeFrame.key))}
+        </AdaptiveText>
+      </View>
+      <FlexGap {...gaps.button} />
+      <PurchaseButton
+        label={paymentBusy === 'frame'
+          ? L('storeOpeningPayment')
+          : frameOwned
+            ? frameActive ? L('storeRemoveFrame') : L('storeApplyFrame')
+            : L('storeBuyFrame').replace('{price}', '199 ₽')}
+        icon="account-circle-outline"
+        width={buttonWidth}
+        height={buttonHeight}
+        borderColor={activeFrame.colors[1]}
+        surfaceColor={withAlpha(activeFrame.colors[0], 0.12)}
+        contentColor={activeFrame.colors[0]}
+        disabled={paymentBusy !== null}
+        onPress={() => void openSharedCheckout('frame')}
+      />
+    </>
+  );
+
   return (
       <View style={styles.root} onLayout={onRootLayout}>
         {/* Края темнее, чем у сплэша и экранов звонка. */}
@@ -617,21 +892,21 @@ function FramesStoreContent({
           style={[
             styles.page,
             {
-              paddingTop: insets.top + APP_TOP_CONTENT_GAP + pageTopGap - contentLift,
+              paddingTop: pagePaddingTop,
               // Именно insets.bottom + зазор, а не max(): max() прижимал кнопку
               // вплотную к системной навигации, и на трёхкнопочной она визуально
               // сливалась с панелью. Зазор нужен поверх инсета, а не вместо него.
-              paddingBottom: insets.bottom + (compact ? 10 : 16) + contentLift,
+              paddingBottom: pagePaddingBottom,
               paddingLeft: insets.left + pageHorizontalPadding,
               paddingRight: insets.right + pageHorizontalPadding,
             },
           ]}
           pointerEvents={orientationCovering ? 'none' : 'auto'}
         >
-          <View style={[styles.header, compact && styles.headerCompact]}>
+          <View style={[styles.header, headerCompact && styles.headerCompact]}>
             <View style={styles.titleRow}>
-              <MaterialCommunityIcons name="crown" size={compact ? 22 : 26} color={CROWN_GOLD} />
-              <FitText style={[styles.title, compact && styles.titleCompact]} minimumFontScale={0.8}>
+              <MaterialCommunityIcons name="crown" size={headerCompact ? 22 : 26} color={CROWN_GOLD} />
+              <FitText style={[styles.title, headerCompact && styles.titleCompact]} minimumFontScale={0.8}>
                 LEGENDARY
               </FitText>
             </View>
@@ -650,177 +925,30 @@ function FramesStoreContent({
             style={[
               styles.lowerContent,
               {
-                paddingTop: contentTopOffset,
                 width: landscape ? '100%' : portraitContentWidth,
                 alignSelf: 'center',
               },
             ]}
           >
-            <View style={[styles.sections, landscape && styles.sectionsLandscape, { gap: sectionsGap }]}>
-              <View style={[styles.storeSection, landscape && styles.storeSectionLandscape]}>
-              <View
-                style={[
-                  styles.sectionHeadingRow,
-                  { transform: [{ translateY: backgroundHeadingOffset }] },
-                ]}
-              >
-                <MaterialCommunityIcons name="message-image-outline" size={compact ? 17 : 19} color={CROWN_GOLD} />
-                <FitText style={[styles.sectionHeading, compact && styles.sectionHeadingCompact]} minimumFontScale={0.75}>
-                  {L('storeChatBackgrounds')}
-                </FitText>
+            {landscape ? (
+              <View style={[styles.sectionsLandscape, { gap: sectionsGap }]}>
+                <View style={[styles.storeColumn, styles.storeColumnLandscape]}>
+                  <FlexGap {...gaps.top} />
+                  {backgroundSection}
+                </View>
+                <View style={[styles.storeColumn, styles.storeColumnLandscape]}>
+                  <FlexGap {...gaps.top} />
+                  {frameSection}
+                </View>
               </View>
-
-              <View
-                style={[
-                  styles.carouselWrap,
-                  { height: backgroundPageHeight, transform: [{ translateY: backgroundCarouselOffset }] },
-                ]}
-              >
-                <Carousel
-                  key={`bg-${landscape ? 'l' : 'p'}-${Math.round(backgroundPageWidth)}`}
-                  width={backgroundPageWidth}
-                  height={backgroundPageHeight}
-                  data={CHAT_BACKGROUND_CATALOG}
-                  loop
-                  style={{ width: sectionWidth, justifyContent: 'center', overflow: 'visible' }}
-                  containerStyle={{ overflow: 'visible' }}
-                  customAnimation={backgroundCoverflowAnimation}
-                  scrollAnimationDuration={420}
-                  onSnapToItem={setActiveBackgroundIndex}
-                  renderItem={({ item }) => (
-                    <View style={[styles.carouselItem, { width: backgroundPageWidth, height: backgroundPageHeight }]}>
-                      <ChatBackgroundCard
-                        item={item}
-                        width={backgroundCardWidth}
-                        height={backgroundCardHeight}
-                        onLoad={handleBackgroundLoad}
-                      />
-                      <FitText
-                        style={[styles.carouselLabel, item.key === activeBackground.key && styles.carouselLabelActive]}
-                        minimumFontScale={0.65}
-                        numberOfLines={1}
-                      >
-                        {L(cosmeticNameKey(item.key))}
-                      </FitText>
-                    </View>
-                  )}
-                />
+            ) : (
+              <View style={styles.storeColumn}>
+                <FlexGap {...gaps.top} />
+                {backgroundSection}
+                <FlexGap {...gaps.section} />
+                {frameSection}
               </View>
-
-              <View
-                style={[
-                  styles.selectionCopy,
-                  compact && styles.selectionCopyCompact,
-                  { transform: [{ translateY: backgroundContentOffset }] },
-                ]}
-              >
-                <FitText style={[styles.itemTitle, compact && styles.itemTitleCompact]} minimumFontScale={0.75}>
-                  {L(cosmeticNameKey(activeBackground.key))}
-                </FitText>
-                <AdaptiveText style={[styles.subtitle, compact && styles.subtitleCompact]} numberOfLines={compact ? 1 : 2}>
-                  {L(cosmeticBlurbKey(activeBackground.key))}
-                </AdaptiveText>
-              </View>
-
-              <PurchaseButton
-                label={paymentBusy === 'background'
-                  ? L('storeOpeningPayment')
-                  : backgroundOwned
-                    ? backgroundActive ? L('storeRemoveBackground') : L('storeApplyBackground')
-                    : L('storeBuyBackground').replace('{price}', '99 ₽')}
-                icon="image-outline"
-                width={buttonWidth}
-                height={buttonHeight}
-                borderColor={PEARL_BORDER}
-                surfaceColor="rgba(244,240,232,0.12)"
-                contentColor="#F6F0E5"
-                compact={compact}
-                topMargin={compact ? 2 : 5}
-                verticalOffset={backgroundContentOffset}
-                disabled={paymentBusy !== null}
-                onPress={() => void openSharedCheckout('background')}
-              />
-              </View>
-
-              <View style={[styles.storeSection, landscape && styles.storeSectionLandscape]}>
-              <View
-                style={[
-                  styles.sectionHeadingRow,
-                  { transform: [{ translateY: frameHeadingTopOffset }] },
-                ]}
-              >
-                <MaterialCommunityIcons name="account-star-outline" size={compact ? 17 : 19} color={CROWN_GOLD} />
-                <FitText style={[styles.sectionHeading, compact && styles.sectionHeadingCompact]} minimumFontScale={0.75}>
-                  {L('storeAvatarFrames')}
-                </FitText>
-              </View>
-
-              <View
-                style={[
-                  styles.carouselWrap,
-                  { height: framePageHeight, transform: [{ translateY: frameCarouselTopOffset }] },
-                ]}
-              >
-                <Carousel
-                  key={`frame-${landscape ? 'l' : 'p'}-${Math.round(framePageWidth)}`}
-                  width={framePageWidth}
-                  height={framePageHeight}
-                  data={FRAME_CATALOG}
-                  loop
-                  style={{ width: sectionWidth, justifyContent: 'center', overflow: 'visible' }}
-                  containerStyle={{ overflow: 'visible' }}
-                  customAnimation={frameCoverflowAnimation}
-                  scrollAnimationDuration={420}
-                  onSnapToItem={setActiveFrameIndex}
-                  renderItem={({ item }) => (
-                    <View style={[styles.carouselItem, { width: framePageWidth, height: framePageHeight }]}>
-                      <FrameCoverCard item={item} size={frameSize} active={visible} onLoad={handleFrameLoad} />
-                      <FitText
-                        style={[styles.carouselLabel, item.key === activeFrame.key && styles.carouselLabelActive]}
-                        minimumFontScale={0.65}
-                        numberOfLines={1}
-                      >
-                        {L(cosmeticNameKey(item.key))}
-                      </FitText>
-                    </View>
-                  )}
-                />
-              </View>
-
-              <View
-                style={[
-                  styles.selectionCopy,
-                  compact && styles.selectionCopyCompact,
-                  { transform: [{ translateY: frameDescriptionTopOffset }] },
-                ]}
-              >
-                <FitText style={[styles.itemTitle, compact && styles.itemTitleCompact]} minimumFontScale={0.75}>
-                  {L(cosmeticNameKey(activeFrame.key))}
-                </FitText>
-                <AdaptiveText style={[styles.subtitle, compact && styles.subtitleCompact]} numberOfLines={compact ? 1 : 2}>
-                  {L(cosmeticBlurbKey(activeFrame.key))}
-                </AdaptiveText>
-              </View>
-
-              <PurchaseButton
-                label={paymentBusy === 'frame'
-                  ? L('storeOpeningPayment')
-                  : frameOwned
-                    ? frameActive ? L('storeRemoveFrame') : L('storeApplyFrame')
-                    : L('storeBuyFrame').replace('{price}', '199 ₽')}
-                icon="account-circle-outline"
-                width={buttonWidth}
-                height={buttonHeight}
-                borderColor={activeFrame.colors[1]}
-                surfaceColor={withAlpha(activeFrame.colors[0], 0.12)}
-                contentColor={activeFrame.colors[0]}
-                compact={compact}
-                topMargin={landscape ? (compact ? 8 : 16) : compact ? 35 : 61}
-                disabled={paymentBusy !== null}
-                onPress={() => void openSharedCheckout('frame')}
-              />
-              </View>
-            </View>
+            )}
           </View>
         </View>
 
@@ -890,16 +1018,17 @@ const styles = StyleSheet.create({
   closeBtn: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center' },
   closeBtnPressed: { opacity: 0.72 },
   lowerContent: { flex: 1, minHeight: 0 },
-  sections: { flex: 1, minHeight: 0 },
-  sectionsLandscape: { flexDirection: 'row', alignItems: 'stretch' },
-  storeSection: {
+  sectionsLandscape: { flex: 1, minHeight: 0, flexDirection: 'row', alignItems: 'stretch' },
+  // flex-end: если высоты всё же не хватит, контент уходит под шапку, а кнопка
+  // покупки остаётся над системной панелью.
+  storeColumn: {
     flex: 1,
     minHeight: 0,
     alignItems: 'center',
-    justifyContent: 'space-evenly',
+    justifyContent: 'flex-end',
     overflow: 'visible',
   },
-  storeSectionLandscape: { paddingHorizontal: 4 },
+  storeColumnLandscape: { paddingHorizontal: 4 },
   sectionHeadingRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -954,14 +1083,13 @@ const styles = StyleSheet.create({
   },
   carouselLabelActive: { color: WELCOME_HEADER_TITLE },
   selectionCopy: {
-    marginTop: 12,
     minHeight: 48,
     width: '100%',
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 22,
   },
-  selectionCopyCompact: { marginTop: 6, minHeight: 34, paddingHorizontal: 14 },
+  selectionCopyCompact: { minHeight: 34, paddingHorizontal: 14 },
   itemTitle: { color: WELCOME_HEADER_TITLE, fontSize: 18, fontWeight: '800', textAlign: 'center' },
   itemTitleCompact: { fontSize: 15 },
   // Высота под все строки (numberOfLines) заранее: однострочное описание не
@@ -975,8 +1103,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   subtitleCompact: { marginTop: 1, minHeight: 13, fontSize: 10, lineHeight: 13 },
-  ctaWrap: { overflow: 'visible', flexShrink: 0, marginTop: 16 },
-  ctaWrapCompact: { marginTop: 8 },
+  ctaWrap: { overflow: 'visible', flexShrink: 0 },
   ctaDisabled: { opacity: 0.62 },
   ctaPressed: { opacity: 0.88 },
   ctaInner: {

@@ -2,6 +2,7 @@ package com.kolt12max.livi
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BitmapShader
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.ColorFilter
@@ -17,6 +18,7 @@ import android.os.Looper
 import android.util.AttributeSet
 import android.util.Log
 import android.view.View
+import androidx.annotation.RequiresApi
 import com.facebook.react.uimanager.SimpleViewManager
 import com.facebook.react.uimanager.ThemedReactContext
 import com.facebook.react.uimanager.annotations.ReactProp
@@ -226,6 +228,17 @@ object StageBackground {
   }
 
   private fun channel(value: Float): Int = value.toInt().coerceIn(0, 255)
+
+  /** Пороги blue noise — серой текстурой с повтором, без фильтрации (дизеринг в AGSL). */
+  @RequiresApi(Build.VERSION_CODES.TIRAMISU)
+  internal fun noiseShader(context: Context): BitmapShader {
+    val t = noise(context)
+    val px = IntArray(t.size) { val v = (t[it] * 256f).toInt().coerceIn(0, 255); Color.rgb(v, v, v) }
+    val bitmap = Bitmap.createBitmap(px, NOISE_SIZE, NOISE_SIZE, Bitmap.Config.ARGB_8888)
+    return BitmapShader(bitmap, Shader.TileMode.REPEAT, Shader.TileMode.REPEAT).apply {
+      filterMode = BitmapShader.FILTER_MODE_NEAREST
+    }
+  }
 
   /** Пороги blue noise NOISE_SIZE×NOISE_SIZE в (0, 1). */
   internal fun noise(context: Context): FloatArray {

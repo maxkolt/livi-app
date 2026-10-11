@@ -17,6 +17,9 @@ class LiviAppPackage : ReactPackage {
       FloatShadowViewManager(),
       BlurSourceViewManager(),
       BlurBackdropViewManager(),
+      SpatialBackgroundViewManager(),
+      SpatialLayerViewManager(),
+      SpatialGlassViewManager(),
     )
   }
 }

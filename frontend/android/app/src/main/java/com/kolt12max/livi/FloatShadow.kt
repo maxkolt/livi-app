@@ -255,7 +255,7 @@ object FloatShadow {
   }
 }
 
-class FloatShadowView(context: Context) : View(context) {
+class FloatShadowView(context: Context) : View(context), SpatialTilt.Listener {
   private var radius = 0f
   private var spread = 0f
   private var dropOffset = 0f
@@ -340,6 +340,27 @@ class FloatShadowView(context: Context) : View(context) {
     refresh()
   }
 
+  override fun onAttachedToWindow() {
+    super.onAttachedToWindow()
+    SpatialTilt.addListener(this)
+  }
+
+  override fun onDetachedFromWindow() {
+    SpatialTilt.removeListener(this)
+    super.onDetachedFromWindow()
+  }
+
+  /**
+   * Пространственный экран (SpatialDepth): блок парит над сценой, свет неподвижен — тень
+   * отстаёт от блока вслед за сценой. Вне главного экрана наклон всегда 0.
+   */
+  override fun onSpatialTilt(x: Float, y: Float) {
+    translationX = x * shadowLag
+    translationY = y * shadowLag
+  }
+
+  private val shadowLag = PixelUtil.toPixelFromDIP(SHADOW_LAG_DP)
+
   private fun refresh() {
     val current = ++generation
     val spec =
@@ -360,6 +381,10 @@ class FloatShadowView(context: Context) : View(context) {
   override fun onDraw(canvas: Canvas) {
     val b = bitmap ?: return
     if (StageBackground.canDraw(canvas, b)) canvas.drawBitmap(b, 0f, 0f, null)
+  }
+
+  private companion object {
+    const val SHADOW_LAG_DP = 3f
   }
 }
 

@@ -32,6 +32,7 @@ import { HomeCenterProfile, hasProfilePhoto } from './HomeCenterProfile';
 import { WelcomeCrownButton } from './WelcomeCrownButton';
 import { WelcomeOnlineBanner, type WelcomeBannerPeer } from './WelcomeOnlineBanner';
 import { WelcomeRadar } from './WelcomeRadar';
+import { SPATIAL_DEPTH, SpatialLayer } from './SpatialDepth';
 import { RADAR_DRAWN_EXTENT, radarFittedAvatarSize, radarGeometry } from './welcomeRadarScene';
 import { WelcomeSearchCta, welcomeSearchCtaHeight, welcomeSearchCtaWidth } from './WelcomeSearchCta';
 import type { Lang } from '../../utils/i18n';
@@ -477,6 +478,9 @@ function HomeWelcomeViewInner({
       collapsable={false}
     >
       {splitStage ? null : (
+        // Блок «Онлайн» лежит на неподвижном верхнем стекле, как фильтры в шапках вкладок:
+        // стекло — плоскость экрана, над ним парят только радар и кнопка (SpatialDepth).
+        <SpatialLayer depth={-SPATIAL_DEPTH.content}>
         <Animated.View
           style={revealStyle}
           onLayout={(e) => {
@@ -502,6 +506,7 @@ function HomeWelcomeViewInner({
             }
           />
         </Animated.View>
+        </SpatialLayer>
       )}
 
       {/*

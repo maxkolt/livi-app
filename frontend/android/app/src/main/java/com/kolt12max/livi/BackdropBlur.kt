@@ -28,6 +28,7 @@ import com.facebook.react.uimanager.annotations.ReactProp
 import com.facebook.react.views.view.ReactViewGroup
 import com.facebook.react.views.view.ReactViewManager
 import java.lang.ref.WeakReference
+import kotlin.math.abs
 import kotlin.math.max
 
 /**
@@ -437,6 +438,14 @@ class BlurBackdropView(context: Context) : View(context) {
   private val selfScreen = IntArray(2)
   private val srcLoc = IntArray(2)
   private var drawnState = 0L
+  /**
+   * Смещение размываемых источников относительно стекла, «залипающее» на сдвигах меньше
+   * BLUR_STICKY_PX. Под размытием в ~22 px сдвиг на 1–2 px не виден, а перезапись стекла —
+   * это заново всё размытие: пространственный экран (SpatialDepth) двигает ленту под
+   * неподвижной шапкой на каждом кадре наклона, и шапка с доком размывали её 120 раз
+   * в секунду (+1.8 мс RenderThread на A35, 10% кадров мимо 120 Гц).
+   */
+  private val blurOffsets = HashMap<String, IntArray>()
 
   private val preDraw =
     ViewTreeObserver.OnPreDrawListener {
@@ -541,7 +550,7 @@ class BlurBackdropView(context: Context) : View(context) {
     }
     val rc = n.beginRecording(w, h)
     try {
-      drawSources(rc, blurSources)
+      drawSources(rc, blurSources, sticky = true)
     } finally {
       n.endRecording()
     }
@@ -549,18 +558,29 @@ class BlurBackdropView(context: Context) : View(context) {
   }
 
   @RequiresApi(Build.VERSION_CODES.Q)
-  private fun drawSources(canvas: Canvas, ids: List<String>) {
+  private fun drawSources(canvas: Canvas, ids: List<String>, sticky: Boolean = false) {
     for (id in ids) {
       val src = BackdropBlur.find(id) ?: continue
       val out = src.output ?: continue
       // Экранные координаты: в одном окне — то же, что координаты окна; из Modal над чатом
       // источник чата лежит в другом окне, и совпадают только экранные.
-      src.getLocationOnScreen(srcLoc)
+      val offset = sourceOffset(id, src, sticky)
       val s = canvas.save()
-      canvas.translate((srcLoc[0] - selfScreen[0]).toFloat(), (srcLoc[1] - selfScreen[1]).toFloat())
+      canvas.translate(offset[0].toFloat(), offset[1].toFloat())
       canvas.drawRenderNode(out)
       canvas.restoreToCount(s)
     }
+  }
+
+  /** Источник относительно стекла (selfScreen уже обновлён); у размываемых — с залипанием. */
+  private fun sourceOffset(id: String, src: BlurSourceView, sticky: Boolean): IntArray {
+    src.getLocationOnScreen(srcLoc)
+    val dx = srcLoc[0] - selfScreen[0]
+    val dy = srcLoc[1] - selfScreen[1]
+    if (!sticky) return intArrayOf(dx, dy)
+    val prev = blurOffsets[id]
+    if (prev != null && abs(prev[0] - dx) < BLUR_STICKY_PX && abs(prev[1] - dy) < BLUR_STICKY_PX) return prev
+    return intArrayOf(dx, dy).also { blurOffsets[id] = it }
   }
 
   private fun updateFade(h: Int): Boolean {
@@ -591,13 +611,13 @@ class BlurBackdropView(context: Context) : View(context) {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return 0L
     getLocationOnScreen(selfScreen)
     var state = selfScreen[0].toLong() * 31 + selfScreen[1]
-    for (ids in arrayOf(backgroundSources, blurSources)) {
+    for ((ids, sticky) in arrayOf(backgroundSources to false, blurSources to true)) {
       for (id in ids) {
         val src = BackdropBlur.find(id)
         state = state * 31 + System.identityHashCode(src?.output)
         if (src != null) {
-          src.getLocationOnScreen(srcLoc)
-          state = (state * 31 + srcLoc[0]) * 31 + srcLoc[1]
+          val offset = sourceOffset(id, src, sticky)
+          state = (state * 31 + offset[0]) * 31 + offset[1]
         }
       }
     }
@@ -606,6 +626,10 @@ class BlurBackdropView(context: Context) : View(context) {
 
   private fun ReadableArray?.toStringList(): List<String> =
     if (this == null) emptyList() else (0 until size()).mapNotNull { getString(it) }
+
+  private companion object {
+    const val BLUR_STICKY_PX = 3
+  }
 }
 
 /**
@@ -623,7 +647,7 @@ class BlurBackdropView(context: Context) : View(context) {
  */
 @RequiresApi(Build.VERSION_CODES.TIRAMISU)
 private class DitheredFade(context: Context) {
-  private val shader = RuntimeShader(AGSL).apply { setInputShader("noise", noiseShader(context)) }
+  private val shader = RuntimeShader(AGSL).apply { setInputShader("noise", StageBackground.noiseShader(context)) }
 
   fun update(colors: IntArray, stops: FloatArray?, h: Int, mirror: Boolean): Shader? {
     val n = colors.size
@@ -673,16 +697,6 @@ private class DitheredFade(context: Context) {
       }
     """
 
-    /** Пороги blue noise фона (StageBackground) — серой текстурой с повтором, без фильтрации. */
-    fun noiseShader(context: Context): BitmapShader {
-      val size = StageBackground.NOISE_SIZE
-      val t = StageBackground.noise(context)
-      val px = IntArray(t.size) { val v = (t[it] * 256f).toInt().coerceIn(0, 255); Color.rgb(v, v, v) }
-      val bitmap = Bitmap.createBitmap(px, size, size, Bitmap.Config.ARGB_8888)
-      return BitmapShader(bitmap, Shader.TileMode.REPEAT, Shader.TileMode.REPEAT).apply {
-        filterMode = BitmapShader.FILTER_MODE_NEAREST
-      }
-    }
   }
 }
 

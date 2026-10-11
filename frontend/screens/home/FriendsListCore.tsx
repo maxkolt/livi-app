@@ -31,7 +31,10 @@ import {
   UI_ACCENT,
   UI_ACCENT_SELECTED,
   UI_ROW_SURFACE,
+  UI_GLASS_ROW_TINT,
+  UI_GLASS_SELECTED_TINT,
 } from './constants';
+import { SPATIAL_GLASS_AVAILABLE, SpatialGlass } from './SpatialDepth';
 import { FriendMarkReadMenuStrip } from './FriendMarkReadMenuStrip';
 import { BlurListSource } from '../../components/BackdropBlur';
 import { GLASS_LIST_GAP } from './WelcomeGlassHeader';
@@ -420,8 +423,14 @@ function FriendsListCoreInner(props: FriendsListCoreProps) {
                   tabletLayout && welcomeListStyles.glassCardTablet,
                   compactLandscape && welcomeListStyles.glassCardLandscape,
                   isSelected && welcomeListStyles.glassCardSelected,
+                  SPATIAL_GLASS_AVAILABLE && welcomeListStyles.glassCardClear,
                 ]}
               >
+                <SpatialGlass
+                  radius={tabletLayout ? 18 : compactLandscape ? 14 : 16}
+                  tint={isSelected ? UI_GLASS_SELECTED_TINT : UI_GLASS_ROW_TINT}
+                  fallbackColor={isSelected ? UI_ACCENT_SELECTED : UI_ROW_SURFACE}
+                />
                 <View
                   style={[
                     welcomeListStyles.glassRow,
@@ -610,6 +619,10 @@ const welcomeListStyles = StyleSheet.create({
   },
   glassCardSelected: {
     backgroundColor: UI_ACCENT_SELECTED,
+  },
+  /** Стекло над сценой (SpatialGlass): заливку рисует оно. */
+  glassCardClear: {
+    backgroundColor: 'transparent',
   },
   welcomeSelectRow: {
     flexDirection: 'row',

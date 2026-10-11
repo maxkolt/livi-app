@@ -43,9 +43,12 @@ import {
   UI_ACCENT,
   UI_ACCENT_SELECTED,
   UI_ROW_SURFACE,
+  UI_GLASS_ROW_TINT,
+  UI_GLASS_SELECTED_TINT,
   HOME_BLUR_LIST_SOURCE,
   UI_GLASS_CONTROL,
 } from './constants';
+import { SPATIAL_GLASS_AVAILABLE, SpatialGlass } from './SpatialDepth';
 import { WELCOME_CHROME_BTN_SHADOW, WELCOME_CHROME_BTN_SHADOW_IOS, WelcomeFloatShadow } from './WelcomeFloatShadow';
 import { BlurListSource } from '../../components/BackdropBlur';
 import {
@@ -228,8 +231,14 @@ const CallLogRow = memo(function CallLogRow({
           tabletLayout && styles.glassCardTablet,
           compactLandscape && styles.glassCardLandscape,
           isSelected && styles.glassCardSelected,
+          SPATIAL_GLASS_AVAILABLE && styles.glassCardClear,
         ]}
       >
+        <SpatialGlass
+          radius={tabletLayout ? 18 : compactLandscape ? 14 : 16}
+          tint={isSelected ? UI_GLASS_SELECTED_TINT : UI_GLASS_ROW_TINT}
+          fallbackColor={isSelected ? UI_ACCENT_SELECTED : UI_ROW_SURFACE}
+        />
         <View
           style={[
             styles.cardRow,
@@ -1280,6 +1289,10 @@ const styles = StyleSheet.create({
   },
   glassCardSelected: {
     backgroundColor: UI_ACCENT_SELECTED,
+  },
+  /** Стекло над сценой (SpatialGlass): заливку рисует оно. */
+  glassCardClear: {
+    backgroundColor: 'transparent',
   },
   selectMark: {
     width: 22,

@@ -9,6 +9,8 @@ import { getAvatarUri } from '../utils/avatarCache';
 import { useUserActiveFrame } from '../utils/cosmetics';
 import { logger } from '../utils/logger';
 import { FireAvatarFrame, fireFrameOutset } from './frames/FireAvatarFrame';
+import { IceAvatarFrame } from './frames/IceAvatarFrame';
+import { DiamondAvatarFrame } from './frames/DiamondAvatarFrame';
 import Reanimated, { useAnimatedStyle, type SharedValue } from 'react-native-reanimated';
 
 /**
@@ -79,9 +81,11 @@ export function activeFrameRingWidth(avatarSize: number): number {
   return Math.round(Math.min(ACTIVE_FRAME_RING_MAX, Math.max(ACTIVE_FRAME_RING_MIN, raw)));
 }
 
-/** Пространство снаружи фото: у огня оно шире обычного металлического кольца. */
+/** Пространство снаружи фото: у живых рамок оно шире обычного металлического кольца. */
 export function activeFrameOutset(avatarSize: number, frameId?: string | null): number {
-  return frameId === 'fire' ? fireFrameOutset(avatarSize) : activeFrameRingWidth(avatarSize);
+  return frameId === 'fire' || frameId === 'frost' || frameId === 'diamond'
+    ? fireFrameOutset(avatarSize)
+    : activeFrameRingWidth(avatarSize);
 }
 const FRAME_COLORS: Record<string, readonly [string, string, ...string[]]> = {
   fire: ['#FFC062', '#FF8A34', '#FF4D1C'],
@@ -162,10 +166,10 @@ const AvatarImage = memo<AvatarImageProps>(({
   const hookFrameId = useUserActiveFrame(userId);
   // undefined = проп не передан, решает хук. Пустая строка/null = «рамки нет».
   const activeFrameId = frameId !== undefined ? frameId || '' : hookFrameId;
-  /** Радар ждёт и фото, и первый кадр пламени — иначе огонь появлялся позже аватара. */
+  /** Радар ждёт и фото, и первый кадр живой рамки — иначе эффект появлялся позже аватара. */
   const [loadedDisplayUri, setLoadedDisplayUri] = useState('');
-  const [fireFramePainted, setFireFramePainted] = useState(false);
-  const handleFireFramePainted = useCallback(() => setFireFramePainted(true), []);
+  const [liveFramePainted, setLiveFramePainted] = useState(false);
+  const handleLiveFramePainted = useCallback(() => setLiveFramePainted(true), []);
   const displayVisibilityStyle = useAnimatedStyle(
     () => ({ opacity: displayHidden?.value === 1 ? 0 : 1 }),
     [displayHidden],
@@ -274,6 +278,9 @@ const AvatarImage = memo<AvatarImageProps>(({
   const frameColors = FRAME_COLORS[activeFrameId];
   const hasActiveFrame = !!frameColors;
   const isFireFrame = activeFrameId === 'fire';
+  const isIceFrame = activeFrameId === 'frost';
+  const isDiamondFrame = activeFrameId === 'diamond';
+  const isLiveFrame = isFireFrame || isIceFrame || isDiamondFrame;
   /**
    * Вся геометрия в целых dp. Дробные размеры (приходило 120.99882…) SVG и
    * раскладка округляют по-разному, и кольцо переставало совпадать с краем
@@ -290,12 +297,12 @@ const AvatarImage = memo<AvatarImageProps>(({
 
   useEffect(() => {
     if (!onDisplayLoad || !displayUri || loadedDisplayUri !== displayUri) return;
-    // Рамка (огонь) — тот же Skia: без неё после splash аватар появляется раньше радара/обода.
-    if (isFireFrame && !fireFramePainted) return;
+    // Живая рамка — тот же Skia: без неё после splash аватар появляется раньше радара/обода.
+    if (isLiveFrame && !liveFramePainted) return;
     try {
       onDisplayLoad();
     } catch {}
-  }, [displayUri, fireFramePainted, isFireFrame, loadedDisplayUri, onDisplayLoad]);
+  }, [displayUri, isLiveFrame, liveFramePainted, loadedDisplayUri, onDisplayLoad]);
 
   // Центр Поиска: логируем только радар (onDisplayLoad), иначе prewarm Профиля
   // даёт ложный size 114 / второй image-onLoad в тех же тегах.
@@ -355,7 +362,7 @@ const AvatarImage = memo<AvatarImageProps>(({
   const ringRadius = Math.max(1, (outerSize - frameOutset) / 2);
   const frameGradientId = `avatar-frame-${activeFrameId || 'none'}-${Math.round(outerSize)}`;
 
-  const frameBase = frameColors && !isFireFrame ? (
+  const frameBase = frameColors && !isLiveFrame ? (
     <Svg
       pointerEvents="none"
       viewBox={`0 0 ${outerSize} ${outerSize}`}
@@ -432,7 +439,12 @@ const AvatarImage = memo<AvatarImageProps>(({
     </Text>
   ) : null;
 
-  if (isFireFrame) {
+  if (isLiveFrame) {
+    const LiveFrame = isFireFrame
+      ? FireAvatarFrame
+      : isIceFrame
+        ? IceAvatarFrame
+        : DiamondAvatarFrame;
     return (
       <View
         style={[
@@ -446,10 +458,10 @@ const AvatarImage = memo<AvatarImageProps>(({
           },
         ]}
       >
-        <FireAvatarFrame
+        <LiveFrame
           size={outerSize}
           photoSize={photoSize}
-          onReady={onDisplayLoad ? handleFireFramePainted : undefined}
+          onReady={onDisplayLoad ? handleLiveFramePainted : undefined}
           style={{
             position: 'absolute',
             left: -frameOutset,
@@ -469,7 +481,7 @@ const AvatarImage = memo<AvatarImageProps>(({
           >
             {avatarContent}
           </Reanimated.View>
-        </FireAvatarFrame>
+        </LiveFrame>
       </View>
     );
   }

@@ -11,7 +11,9 @@ import {
   WELCOME_HEADER_TITLE,
   WELCOME_UPDATE_BADGE,
   UI_ACCENT,
+  UI_GLASS_BLOCK_TINT,
 } from './constants';
+import { SPATIAL_GLASS_AVAILABLE, SpatialGlass } from './SpatialDepth';
 
 /** Иконки и chevron в строках профиля — приглушённый серый. */
 export const WELCOME_PROFILE_ROW_ICON = '#828A96';
@@ -70,7 +72,14 @@ export function WelcomeProfileSection({
       ]}
     >
       {title ? <AdaptiveText style={styles.sectionTitle}>{title}</AdaptiveText> : null}
-      <View style={styles.sectionBody}>{children}</View>
+      <View style={[styles.sectionBody, SPATIAL_GLASS_AVAILABLE && styles.sectionBodyGlass]}>
+        <SpatialGlass
+          radius={WELCOME_FRIENDS_SEGMENT_SHELL_RADIUS}
+          tint={UI_GLASS_BLOCK_TINT}
+          fallbackColor={WELCOME_LIST_SURFACE}
+        />
+        {children}
+      </View>
     </View>
   );
 }
@@ -326,6 +335,11 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: WELCOME_GLASS_BORDER,
     overflow: 'hidden',
+  },
+  /** Стекло над сценой (SpatialGlass): заливку и кромку рисует оно. */
+  sectionBodyGlass: {
+    backgroundColor: 'transparent',
+    borderWidth: 0,
   },
   row: {
     flexDirection: 'row',

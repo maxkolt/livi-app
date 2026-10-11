@@ -95,6 +95,7 @@ import {
 } from './home/HomeWelcomeTabBar';
 import { FramesStoreHost } from './home/WelcomeCrownButton';
 import { WelcomeKeepAlivePane } from './home/WelcomeKeepAlivePane';
+import { SPATIAL_DEPTH, SpatialLayer, SpatialStageBackground } from './home/SpatialDepth';
 import { FliqFeedView } from './fliq/FliqFeedView';
 import { warmFliqFeed } from './fliq/fliqApi';
 import { HomeLayoutProvider } from './home/HomeLayoutContext';
@@ -5703,9 +5704,9 @@ const handleClearNick = useCallback(async () => {
       style={{ flex: 1, backgroundColor: HOME_NAV_BG }}
       onLayout={onHomeRootLayout}
     >
-      {/* Под стеклом шапок вкладок и навбара — сплошной фон как есть (размываются только списки). */}
+      {/* Сцена за стеклом (SpatialDepth): под стеклом шапок и навбара она же, размытая. */}
       <BlurSourceFill sourceId={HOME_BLUR_BG_SOURCE}>
-        <View style={[StyleSheet.absoluteFill, { backgroundColor: HOME_NAV_BG }]} />
+        <SpatialStageBackground enabled={!showFliqTab} />
       </BlurSourceFill>
       <HomeLayoutProvider size={homeLayoutSize}>
       <View
@@ -5729,7 +5730,8 @@ const handleClearNick = useCallback(async () => {
       {showSearchWelcome && searchTopBlockBottom != null ? (
         <WelcomeGlassTop height={homeInsets.top + searchTopBlockBottom + GLASS_SEGMENT_PAD.phone} />
       ) : null}
-      <View style={{ flex: 1, minHeight: 0 }}>
+      {/* Вкладки парят над сценой; у Fliq ролик во весь экран — слой стоит на месте. */}
+      <SpatialLayer depth={SPATIAL_DEPTH.content} enabled={!showFliqTab} style={{ flex: 1, minHeight: 0 }}>
         {/* Search always mounted. List panes lazy-mount on first visit, then stay (no remount flicker). */}
         <WelcomeKeepAlivePane visible={showSearchWelcome} mode="offscreen" style={homePanePad}>
           <HomeWelcomeView
@@ -5878,12 +5880,14 @@ const handleClearNick = useCallback(async () => {
           </BlurListSource>
         </WelcomeKeepAlivePane>
         ) : null}
-      </View>
+      </SpatialLayer>
 
       {/* Стекло от верха навбара до низа экрана; содержимое вкладки размыто под ним. */}
       <WelcomeGlassDock listSourceId={tabBarListSource} height={tabBarH} />
-      {/* Навбар поверх вкладок — непрозрачный блок на стекле. */}
-      <View
+      {/* Навбар поверх вкладок — непрозрачный блок на стекле, парит чуть ниже вкладок. */}
+      <SpatialLayer
+        depth={SPATIAL_DEPTH.tabBar}
+        enabled={!showFliqTab}
         pointerEvents="box-none"
         style={{ position: 'absolute', left: insets.left, right: insets.right, bottom: 0 }}
         onLayout={onTabBarLayout}
@@ -5910,7 +5914,7 @@ const handleClearNick = useCallback(async () => {
           }
           showProfileDot={!!updateAvailable}
         />
-      </View>
+      </SpatialLayer>
 
       {/* Модалка аватара: полный экран, блюр/затемнение, круг 3×, pinch-to-zoom, тап вне — закрыть. Без вложенности touch/gesture (Nesting touch handlers with native animated driver). */}
       {avatarModalVisible && (

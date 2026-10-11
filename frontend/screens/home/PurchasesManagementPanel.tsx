@@ -8,6 +8,8 @@ import { t, type Lang } from '../../utils/i18n';
 import { useLang } from '../../store/lang';
 import { LIVI, WELCOME_GLASS_BORDER, WELCOME_GLASS_SURFACE, WELCOME_MUTED_TEXT } from './constants';
 import { FireAvatarFrame, fireFrameOutset } from '../../components/frames/FireAvatarFrame';
+import { IceAvatarFrame } from '../../components/frames/IceAvatarFrame';
+import { DiamondAvatarFrame } from '../../components/frames/DiamondAvatarFrame';
 
 const SHOWCASE_AVATAR = require('../../assets/frames/showcase-avatar.jpg');
 
@@ -40,13 +42,18 @@ function cosmeticName(itemId: string, lang: Lang): string {
 function FramePreview({ itemId }: { itemId: string }) {
   const colors = FRAME_COLORS[itemId];
   if (!colors) return <View style={styles.emptyFrame} />;
-  if (itemId === 'fire') {
+  if (itemId === 'fire' || itemId === 'frost' || itemId === 'diamond') {
     const size = 48;
     const outset = fireFrameOutset(size);
+    const LiveFrame = itemId === 'fire'
+      ? FireAvatarFrame
+      : itemId === 'frost'
+        ? IceAvatarFrame
+        : DiamondAvatarFrame;
     return (
-      <FireAvatarFrame size={size} photoSize={size - outset * 2}>
+      <LiveFrame size={size} photoSize={size - outset * 2}>
         <ExpoImage source={SHOWCASE_AVATAR} style={StyleSheet.absoluteFillObject} contentFit="cover" cachePolicy="memory-disk" />
-      </FireAvatarFrame>
+      </LiveFrame>
     );
   }
   return (
