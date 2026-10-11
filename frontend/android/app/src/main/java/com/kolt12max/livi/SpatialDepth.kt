@@ -503,8 +503,10 @@ class SpatialBackgroundView(context: Context) : View(context), SpatialTilt.Liste
     const val FAR_SHIFT_DP = 14f
     const val MIN_REDRAW_NS = 15_000_000L
     const val NEAR_SHIFT_DP = 5f
-    /** Сцена темнее исходника: блоки интерфейса (#2E3540) должны быть светлее неё. */
-    const val DIM = 0.66f
+    /** Сцена чуть темнее картинки: блоки интерфейса (#2E3540) должны быть светлее неё. */
+    const val DIM = 0.8f
+    /** Яркость краёв в виньетке сцены (mix(VIGNETTE_MIN, 1, …) в шейдере). */
+    const val VIGNETTE_MIN = 0.8f
 
     const val AGSL = """
       uniform shader scene;
@@ -548,18 +550,30 @@ class SpatialBackgroundView(context: Context) : View(context), SpatialTilt.Liste
         // Виньетка: края темнее — сцена уходит вглубь.
         float2 v = p / size - 0.5;
         float vignette = 1.0 - smoothstep(0.32, 0.95, length(v * float2(1.15, 0.95)));
-        c *= mix(0.62, 1.0, vignette);
+        c *= mix(0.8, 1.0, vignette);
+        // Свет — только на самих элементах (без светлого пятна по фону: оно читалось туманом).
         float3 glow = float3(glowColor.rgb);
-        c += glow * (spot * 0.045 + catchLight * spot * 0.22 + rim * (0.10 + spot * 0.30));
+        c += glow * (catchLight * spot * 0.22 + rim * (0.08 + spot * 0.26));
 
-        // Голографический перелив: при наклоне по ярким элементам сцены бегут узкие
-        // полосы света со спектром в семье акцента LiVi. Привязан к наклону, а не ко
+        // Перелив: мягкий отлив по самим элементам, а не полосы по экрану. Два плавных поля
+        // под разными углами, по несколько периодов на ширину экрана — оттенок меняется в
+        // пределах иконки, соседние иконки переливаются по-разному, и общей бегущей полосы
+        // нет. Ближние элементы смещаются по фазе сильнее дальних. Только от наклона, не от
         // времени: в покое сцену не нужно перерисовывать.
-        float band = dot(q / size.x, float2(0.52, 0.86)) * 2.6 + dot(tilt, float2(1.9, 1.4));
-        float sheen = pow(0.5 + 0.5 * sin(band * 6.2831853), 8.0);
-        float3 spectrum = 0.5 + 0.5 * cos(6.2831853 * (band * 0.5 + float3(0.0, 0.2, 0.4)));
-        float3 iridescent = mix(glow, spectrum * float3(0.8, 0.95, 1.0), 0.5);
-        c += iridescent * sheen * smoothstep(0.18, 0.5, lum) * 0.32;
+        float2 uq = q / size.x;
+        float phase = 0.9 + 0.6 * d;
+        float f1 = sin(6.2831853 * (dot(uq, float2(0.83, 0.56)) * 3.1 + dot(tilt, float2(0.55, 0.3)) * phase));
+        float f2 = sin(6.2831853 * (dot(uq, float2(-0.47, 0.88)) * 2.3 + dot(tilt, float2(-0.25, 0.5)) * phase));
+        float field = 0.5 + 0.25 * f1 + 0.25 * f2;
+        // Только голубая гамма LiVi (без сирени — она читалась фиолетовым): голубой акцент →
+        // ледяной → светло-голубой.
+        float3 accent = float3(glowColor.rgb);
+        float3 ice = float3(0.58, 0.80, 1.0);
+        float3 frost = float3(0.80, 0.93, 1.0);
+        float3 hue = field < 0.5 ? mix(accent, ice, field * 2.0) : mix(ice, frost, field * 2.0 - 1.0);
+        float shine = 0.6 + 0.4 * (0.5 + 0.5 * f1 * f2);
+        float element = smoothstep(0.16, 0.45, lum);
+        c += hue * element * shine * 0.13;
 
         // Blue noise ±0.5 уровня до округления: тёмные переходы без полос.
         c += (float(noise.eval(p).r) - 0.5) / 255.0;
@@ -772,14 +786,16 @@ class SpatialGlassView(context: Context) : View(context), SpatialTilt.Listener {
     /** Виньетка фона: смещение от центра, умноженное на (1.15, 0.95), smoothstep 0.32…0.95 → 1…0.62. */
     const val VIGNETTE_X = 1.15f
     const val VIGNETTE_Y = 0.95f
-    private fun level(v: Float): Int {
-      val c = (v * 0.66f * 255f).toInt().coerceIn(0, 255)
+    /** Яркость виньетки сцены с её затемнением: f — доля «центра» (1 — центр, 0 — край). */
+    private fun level(f: Float): Int {
+      val v = SpatialBackgroundView.VIGNETTE_MIN + (1f - SpatialBackgroundView.VIGNETTE_MIN) * f
+      val c = (v * SpatialBackgroundView.DIM * 255f).toInt().coerceIn(0, 255)
       return Color.rgb(c, c, c)
     }
     // Градиент в единицах «полуэкрана»: r = 2 · length(v · k) из шейдера, спад до r = 1.9.
     const val VIGNETTE_R = 1.9f
     val VIGNETTE_STOPS = floatArrayOf(0f, 0.64f, 0.9f, 1.2f, 1.5f, 1.75f, 1.9f).map { it / VIGNETTE_R }.toFloatArray()
-    val VIGNETTE_COLORS = intArrayOf(level(1f), level(1f), level(0.95f), level(0.84f), level(0.72f), level(0.64f), level(0.62f))
+    val VIGNETTE_COLORS = intArrayOf(level(1f), level(1f), level(0.87f), level(0.58f), level(0.26f), level(0.05f), level(0f))
   }
 }
 
