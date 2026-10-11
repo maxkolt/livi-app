@@ -572,7 +572,10 @@ class SpatialBackgroundView(context: Context) : View(context), SpatialTilt.Liste
         float3 frost = float3(0.80, 0.93, 1.0);
         float3 hue = field < 0.5 ? mix(accent, ice, field * 2.0) : mix(ice, frost, field * 2.0 - 1.0);
         float shine = 0.6 + 0.4 * (0.5 + 0.5 * f1 * f2);
-        float element = smoothstep(0.16, 0.45, lum);
+        // Фон картинки после осветления — lum 0.215…0.235: старая маска давала ему ~15%
+        // перелива, и f1·f2 шахматкой пятен ползло по всему экрану при наклоне. Отсечка
+        // чуть выше фона гасит его; элементам ярче 0.29 перелив остаётся прежним.
+        float element = smoothstep(0.16, 0.45, lum) * smoothstep(0.235, 0.29, lum);
         c += hue * element * shine * 0.13;
 
         // Blue noise ±0.5 уровня до округления: тёмные переходы без полос.
