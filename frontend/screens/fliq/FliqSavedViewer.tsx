@@ -293,23 +293,23 @@ const SavedViewerSlide = memo(function SavedViewerSlide({
             style={StyleSheet.absoluteFill}
           />
         ) : null}
-        <Animated.View
-          pointerEvents="none"
-          style={[StyleSheet.absoluteFill, { opacity: warmOnScreen ? 0 : coverOpacity }]}
-        >
-          <ExpoImage
-            source={{ uri: youtubeThumbUrl(item.id) }}
-            style={StyleSheet.absoluteFill}
-            contentFit="cover"
-            cachePolicy="memory-disk"
-            recyclingKey={`saved-viewer-cover-${item.id}`}
-          />
-          {mode === 'play' && !firstFrame && !primed ? (
-            <View style={styles.loading}>
-              <ActivityIndicator color="rgba(255,255,255,0.86)" />
-            </View>
-          ) : null}
-        </Animated.View>
+        {/* Число и Animated-значение — на разных View: см. превью в FliqFeedView. */}
+        <View pointerEvents="none" style={[StyleSheet.absoluteFill, { opacity: warmOnScreen ? 0 : 1 }]}>
+          <Animated.View style={[StyleSheet.absoluteFill, { opacity: coverOpacity }]}>
+            <ExpoImage
+              source={{ uri: youtubeThumbUrl(item.id) }}
+              style={StyleSheet.absoluteFill}
+              contentFit="cover"
+              cachePolicy="memory-disk"
+              recyclingKey={`saved-viewer-cover-${item.id}`}
+            />
+            {mode === 'play' && !firstFrame && !primed ? (
+              <View style={styles.loading}>
+                <ActivityIndicator color="rgba(255,255,255,0.86)" />
+              </View>
+            ) : null}
+          </Animated.View>
+        </View>
       </View>
       <View style={[styles.controlsRow, { top: controlsTop }]}>
         <View style={[styles.controls, { width: cardW }]}>

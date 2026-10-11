@@ -968,24 +968,27 @@ const FliqSlide = memo(function FliqSlide({
             style={StyleSheet.absoluteFill}
           />
         ) : null}
-        {/* Превью поверх плеера только до первого кадра; у уже подгруженного ролика его нет. */}
-        <Animated.View
-          pointerEvents="none"
-          style={[StyleSheet.absoluteFill, { opacity: warmOnScreen ? 0 : coverOpacity }]}
-        >
-          <ExpoImage
-            source={{ uri: youtubeThumbUrl(item.id) }}
-            style={StyleSheet.absoluteFill}
-            contentFit="cover"
-            cachePolicy="memory-disk"
-            recyclingKey={`cover-${item.id}`}
-          />
-          {playing && !firstFrame && !primed && !stalled ? (
-            <View style={styles.center}>
-              <ActivityIndicator color="rgba(255,255,255,0.85)" />
-            </View>
-          ) : null}
-        </Animated.View>
+        {/* Превью поверх плеера только до первого кадра; у уже подгруженного ролика его нет.
+            Число и Animated-значение — на разных View: если у одного View сменить значение
+            нативного драйвера на число, RN сбрасывает opacity в 1 (restoreDefaultValues),
+            а React разницы 0 → 0 не видит — после «пауза → плей» превью вставало поверх
+            идущего ролика. */}
+        <View pointerEvents="none" style={[StyleSheet.absoluteFill, { opacity: warmOnScreen ? 0 : 1 }]}>
+          <Animated.View style={[StyleSheet.absoluteFill, { opacity: coverOpacity }]}>
+            <ExpoImage
+              source={{ uri: youtubeThumbUrl(item.id) }}
+              style={StyleSheet.absoluteFill}
+              contentFit="cover"
+              cachePolicy="memory-disk"
+              recyclingKey={`cover-${item.id}`}
+            />
+            {playing && !firstFrame && !primed && !stalled ? (
+              <View style={styles.center}>
+                <ActivityIndicator color="rgba(255,255,255,0.85)" />
+              </View>
+            ) : null}
+          </Animated.View>
+        </View>
         {stalled && !firstFrame ? (
           <View style={styles.stalledShade}>
             <FliqMessage
