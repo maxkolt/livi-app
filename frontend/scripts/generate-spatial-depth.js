@@ -28,8 +28,8 @@ const OUT_DEPTH = path.join(RES, 'spatial_stage_depth.png');
 const OUT_BLUR = path.join(RES, 'spatial_stage_blur.jpg');
 /** Размытая копия — в 1/4 ширины сцены: она гладкая, GPU растянет её без потерь. */
 const BLUR_WIDTH = 360;
-/** Сигма в пикселях копии: ×4 ≈ 20 px на сцене 1440 — матовое стекло. */
-const BLUR_SIGMA = 5;
+/** Сигма в пикселях копии: ×4 ≈ 10 px на сцене 1440 — прозрачное стекло, фон угадывается. */
+const BLUR_SIGMA = 2.5;
 
 function gaussianBlur(src, w, h, sigma) {
   const radius = Math.ceil(sigma * 3);

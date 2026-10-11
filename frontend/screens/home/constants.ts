@@ -45,9 +45,9 @@ export const UI_ROW_SURFACE = '#2A313B';
  * Стекло блоков над сценой главного экрана (SpatialGlass): тон строки / блока / выбранной
  * строки поверх размытой сцены. Без сцены блоки остаются сплошными UI_ROW_SURFACE и т. д.
  */
-export const UI_GLASS_ROW_TINT = 'rgba(42, 49, 59, 0.6)';
-export const UI_GLASS_BLOCK_TINT = 'rgba(46, 53, 64, 0.6)';
-export const UI_GLASS_SELECTED_TINT = 'rgba(54, 73, 89, 0.8)';
+export const UI_GLASS_ROW_TINT = 'rgba(42, 49, 59, 0.12)';
+export const UI_GLASS_BLOCK_TINT = 'rgba(46, 53, 64, 0.14)';
+export const UI_GLASS_SELECTED_TINT = 'rgba(54, 73, 89, 0.5)';
 /**
  * Кнопки, поле поиска и блок фильтров на стекле шапки вкладок — непрозрачные, на ступень
  * светлее стекла: строки под ними не просвечивают.
