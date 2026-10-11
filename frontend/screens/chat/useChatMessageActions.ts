@@ -3,7 +3,7 @@
 import React from "react";
 import { Animated, Easing, Platform, unstable_batchedUpdates } from "react-native";
 
-export type MessageActionsLayout = {
+type MessageActionsLayout = {
   x: number;
   y: number;
   width: number;

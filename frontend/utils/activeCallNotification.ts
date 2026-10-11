@@ -403,7 +403,7 @@ export function isAndroidActiveCallEligibleForLeaveHint(): boolean {
 }
 
 /** System PiP on Home while an active call is in progress (controls bar capture, not full video UI). */
-export function shouldAllowAndroidSystemPiPOnLeaveHint(): boolean {
+function shouldAllowAndroidSystemPiPOnLeaveHint(): boolean {
   return isAndroidActiveCallEligibleForLeaveHint();
 }
 

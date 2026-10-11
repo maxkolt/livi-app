@@ -6,7 +6,6 @@ import { logger } from '../../utils/logger';
 // Получаем BASE_URL из переменных окружения
 // Приоритет: платформо-специфичная переменная > общая переменная > fallback
 // КРИТИЧНО: В production используйте домены с HTTPS, не IP адреса!
-const DEFAULT_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'https://api.liviapp.com';
 const IOS_URL = process.env.EXPO_PUBLIC_SERVER_URL_IOS || process.env.EXPO_PUBLIC_SERVER_URL || 'https://api.liviapp.com';
 const ANDROID_URL = process.env.EXPO_PUBLIC_SERVER_URL_ANDROID || process.env.EXPO_PUBLIC_SERVER_URL || 'https://api.liviapp.com';
 

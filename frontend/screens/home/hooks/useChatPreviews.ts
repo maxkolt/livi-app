@@ -25,7 +25,7 @@ export type { ChatPreview };
 
 let previewMemory: Record<string, ChatPreview> = {};
 
-export function getChatPreviewSnapshot(): Record<string, ChatPreview> {
+function getChatPreviewSnapshot(): Record<string, ChatPreview> {
   return previewMemory;
 }
 

@@ -36,13 +36,11 @@ import {
   scheduleReapplyPersistedCallAudioRoute,
   shouldPreserveCallAudioRouteInInAppPiP,
   getPersistedCallAudioRoute,
-  restoreCallAudioForInAppPiPPlaque,
   isCallAudioPiPTransitionWindow,
   isCallAudioNativeTransitionLocked,
   clearPersistedCallAudioRoute,
   resolveOngoingVideoCallAudioRoute,
   applyCallAudioOutputRouteLatest,
-  clearScheduledCallAudioRouteReapplies,
   cancelScheduledCallAudioRouteReappliesMatching,
   armCallAudioPreservePriority,
   readCallAudioRouteUiLock,
@@ -126,7 +124,6 @@ import {
   isManualRouteReason,
   readExplicitBuiltInFromGlobal,
   readExplicitUserSelectedBuiltInRoute,
-  readUserSelectedBuiltInRoute,
   readUserSelectedExternalRoute,
   setExplicitBuiltInGlobal,
   userLockedBuiltinAudioOutput,
@@ -822,8 +819,6 @@ export const useAudioRouting = (
 
   /** После отключения BT/провода — сохранённый разговорный или громкий. */
   const reconcileRouteAfterHeadsetDisconnect = (available: string[]): InCallAudioRoute | null => {
-    const earpieceMode = !!routingOptionsRef.current?.defaultToEarpiece;
-
     if (available.includes('WIRED_HEADSET')) {
       const user = getUserRoute();
       if (

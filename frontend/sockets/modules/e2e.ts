@@ -356,12 +356,6 @@ async function publish(me: string, pair: E2eKeyPair, password: string): Promise<
   return { ok: true };
 }
 
-/** Есть копия под паролем для текущего ключа (включали по паролю) — можно сменить пароль. */
-export function hasPasswordBackup(): boolean {
-  syncUser();
-  return !!state.backupKdf && !!state.backupPk && state.backupPk === state.serverPublicKey;
-}
-
 /** Сменить пароль копии для того же ключа. */
 export async function changeE2eBackupPassword(password: string): Promise<ActionResult> {
   const me = syncUser();
@@ -551,7 +545,7 @@ socket.on("e2e:key_changed", (data: { userId?: string }) => {
  * собеседника шифрование не включено). Бросает E2eUnavailableError, когда
  * шифрование включено, но сейчас невозможно — такое сообщение ждёт в очереди.
  */
-export async function sealOutgoingText(args: {
+async function sealOutgoingText(args: {
   id: string;
   to: string;
   text: string;
@@ -597,13 +591,13 @@ export async function invalidateKeysAfterMismatch(peerId: string): Promise<void>
   await refreshE2eState().catch(() => {});
 }
 
-export type DecryptedFields = { text: string; replyText?: string } | { undecryptable: true };
+type DecryptedFields = { text: string; replyText?: string } | { undecryptable: true };
 
 /**
  * Расшифровать конверт сообщения (сверяет id/from/to). Ключ собеседника отсюда не
  * запоминаем: старые сообщения законно зашифрованы его прежним ключом.
  */
-export async function openIncomingEnvelope(msg: {
+async function openIncomingEnvelope(msg: {
   id?: unknown;
   from?: unknown;
   to?: unknown;

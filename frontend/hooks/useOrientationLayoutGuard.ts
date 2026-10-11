@@ -45,7 +45,7 @@ function windowIsLandscape(): boolean | null {
   return isLandscapeSize(win.width, win.height);
 }
 
-export type OrientationLayoutGuardOptions = {
+type OrientationLayoutGuardOptions = {
   /** Минимум сплошного фона с момента первого события поворота (мс). */
   minCoverMs?: number;
   /** Пауза после matching onLayout поверх minCover (мс). */

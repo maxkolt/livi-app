@@ -15,15 +15,6 @@ const closeOutgoingCallListeners = new Set<Listener<{}>>();
 const callCancelledOnHomeListeners = new Set<Listener<{ fromUserId?: string }>>();
 const callEndedOnHomeListeners = new Set<Listener<{}>>();
 const closeHomeModalsListeners = new Set<Listener<{}>>();
-type CometChatStatusKind = 'info' | 'success' | 'error';
-type CometChatStatusPayload = {
-  kind: CometChatStatusKind;
-  title: string;
-  message: string;
-  userId?: string;
-  source?: string;
-};
-const cometchatStatusListeners = new Set<Listener<CometChatStatusPayload>>();
 
 export function onMissedIncrement(cb: Listener<{ userId: string; count?: number }>): () => void {
   missedListeners.add(cb);
@@ -439,7 +430,7 @@ export function emitCloseHomeModals() {
   }
 }
 
-export type RequestDirectCallPayload = {
+type RequestDirectCallPayload = {
   peerId: string;
   peerName?: string;
   peerAvatarVer?: number;
@@ -486,20 +477,7 @@ export function emitRequestDirectCall(payload: RequestDirectCallPayload) {
   }
 }
 
-export function onCometChatStatus(cb: Listener<CometChatStatusPayload>): () => void {
-  cometchatStatusListeners.add(cb);
-  return () => {
-    cometchatStatusListeners.delete(cb);
-  };
-}
-
-export function emitCometChatStatus(payload: CometChatStatusPayload) {
-  for (const l of cometchatStatusListeners) {
-    try { l(payload); } catch {}
-  }
-}
-
-export type ChatCallStatusMessagePayload = {
+type ChatCallStatusMessagePayload = {
   peerId: string;
   message: any;
 };

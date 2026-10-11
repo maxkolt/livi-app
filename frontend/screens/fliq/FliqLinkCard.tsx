@@ -9,7 +9,7 @@ import { UI_INACTIVE, WELCOME_HEADER_TITLE } from '../home/constants';
 import { fetchFliqMeta, fliqSourceLabel, peekFliqMeta, type FliqLink, type FliqMeta } from './fliqLinks';
 import { openFliqViewer } from './FliqViewerHost';
 
-export const FLIQ_CARD_WIDTH = 210;
+const FLIQ_CARD_WIDTH = 210;
 const THUMB_H = 262;
 
 const SOURCE_ICON = {

@@ -6,8 +6,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, PanResponder } from 'react-native';
 
-export const LOCAL_PIP_W = 112;
-export const LOCAL_PIP_H = 168;
+const LOCAL_PIP_W = 112;
+const LOCAL_PIP_H = 168;
 
 const MARGIN = 14;
 /** Высота headerRowWithHold в CallScreenChrome (имя + статус + hold). */

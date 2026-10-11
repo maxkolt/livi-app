@@ -8,7 +8,7 @@ import { startIncomingCallAlert, stopIncomingCallAlert } from '../../../utils/in
 import { syncAppBadgeFromMissedCount } from '../../../utils/pushNotifications';
 import { emitMissedClear } from '../../../utils/globalEvents';
 import { readRootNavigationState } from '../../../utils/safeRootNavigation';
-import { flushCallLogUi, forceCallLogUiNow, recordCancelledCall } from '../../../screens/home/callLog';
+import { forceCallLogUiNow, recordCancelledCall } from '../../../screens/home/callLog';
 
 interface UseIncomingCallProps {
   myUserId?: string;
@@ -44,22 +44,6 @@ export const useIncomingCall = ({
   const [incomingOverlay, setIncomingOverlay] = useState<boolean>(false);
   const hadIncomingCallRef = useRef(false);
   const declinedBlockRef = useRef<{ userId: string; until: number } | null>(null);
-
-  // Функция увеличения счетчика пропущенных звонков
-  const incMissed = useCallback(async (userId?: string | null) => {
-    try {
-      const key = 'missed_calls_by_user_v1';
-      const raw = await AsyncStorage.getItem(key);
-      const map = raw ? JSON.parse(raw) : {};
-      const uid = String(userId || incomingFriendCall?.from || '');
-      if (uid) {
-        map[uid] = (map[uid] || 0) + 1;
-        await AsyncStorage.setItem(key, JSON.stringify(map));
-      }
-    } catch (e) {
-      logger.warn('[useIncomingCall] Error incrementing missed calls:', e);
-    }
-  }, [incomingFriendCall]);
 
   // Функции для управления блокировкой отклоненных звонков
   const setDeclinedBlock = useCallback((userId: string, duration: number) => {

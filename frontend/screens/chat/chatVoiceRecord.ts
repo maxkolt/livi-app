@@ -6,7 +6,7 @@ export const VOICE_MAX_MS = 60_000;
 /** Swipe-left cancel: sensitive arm threshold. */
 export const VOICE_CANCEL_ARM_DX = -12;
 export const VOICE_CANCEL_DISARM_DX = -4;
-export const VOICE_TRASH_PAD = 34;
+const VOICE_TRASH_PAD = 34;
 
 export type TrashZone = { x: number; y: number; w: number; h: number };
 

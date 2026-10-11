@@ -85,13 +85,13 @@ export function useOverlayBackHandler(active: boolean, onBack: (() => void) | un
  * Один фон под всеми модалками: экран под ними размыт стеклом и притемнён — чуть
  * светлее прежних 0.5 без размытия (размытие и так гасит контраст).
  */
-export const APP_OVERLAY_DIM = 'rgba(0, 0, 0, 0.45)';
+const APP_OVERLAY_DIM = 'rgba(0, 0, 0, 0.45)';
 const OVERLAY_BLUR_SOURCES = [APP_BLUR_SOURCE] as const;
 
 const APPEAR_MS = 160;
 const DISAPPEAR_MS = 120;
 
-export type AppOverlayPlacement = 'center' | 'bottom';
+type AppOverlayPlacement = 'center' | 'bottom';
 
 export function AppOverlay({
   visible,

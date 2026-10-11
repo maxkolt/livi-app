@@ -15,15 +15,14 @@ import { WELCOME_GLASS_RIM, WELCOME_POPUP_SURFACE } from "../home/constants";
 import { GLASS_AVAILABLE, GlassFill } from "../home/WelcomeStageBackground";
 import type { BackdropSources } from "../../components/BackdropBlur";
 
-export const REACTION_EMOJIS_PAGE_1 = ["👍", "😊", "❤️", "😮", "😢", "👎"];
-export const REACTION_EMOJIS_PAGE_2 = ["😉", "😂", "😍", "😭", "🙏", "🔥"];
+const REACTION_EMOJIS_PAGE_1 = ["👍", "😊", "❤️", "😮", "😢", "👎"];
+const REACTION_EMOJIS_PAGE_2 = ["😉", "😂", "😍", "😭", "🙏", "🔥"];
 /** Порядок в bottom sheet по зажиму: первый ряд — 👍 ❤️ 🙏 🔥 😉 😂, второй — остальные */
-export const SHEET_REACTIONS_ROW_1 = ["👍", "❤️", "🙏", "🔥", "😉", "😂"];
-export const SHEET_REACTIONS_ROW_2 = ["😊", "😮", "😢", "👎", "😍", "😭"];
+const SHEET_REACTIONS_ROW_1 = ["👍", "❤️", "🙏", "🔥", "😉", "😂"];
+const SHEET_REACTIONS_ROW_2 = ["😊", "😮", "😢", "👎", "😍", "😭"];
 export const SHEET_REACTIONS_ALL = [...SHEET_REACTIONS_ROW_1, ...SHEET_REACTIONS_ROW_2];
-export const REACTIONS_PAGE_SIZE = 4;
 
-export type ReactionBarAnchor = {
+type ReactionBarAnchor = {
   x: number;
   y: number;
   width: number;
@@ -233,102 +232,3 @@ export function ReactionBarOverlay({
   );
 }
 
-/** Один ряд реакций: по 4 эмодзи на страницу, на первой — стрелка «свайп вправо» */
-export function ReactionsRowWithSwipe({
-  selectedMessage,
-  hideMessageActions,
-  sendMessageReaction,
-  peerId,
-  isDark,
-}: {
-  selectedMessage: any;
-  hideMessageActions: () => void;
-  sendMessageReaction: (msgId: string, emoji: string, peerId: string) => Promise<unknown>;
-  peerId: string;
-  isDark: boolean;
-}) {
-  const scrollRef = React.useRef<ScrollView>(null);
-  const rowW = 220 - 24;
-  const arrowBounce = React.useRef(new Animated.Value(0)).current;
-  React.useEffect(() => {
-    const loop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(arrowBounce, { toValue: 4, duration: 600, useNativeDriver: true }),
-        Animated.timing(arrowBounce, { toValue: 0, duration: 600, useNativeDriver: true }),
-      ]),
-      { iterations: -1 },
-    );
-    loop.start();
-    return () => loop.stop();
-  }, [arrowBounce]);
-  const emojiPress = (emoji: string) => {
-    hideMessageActions();
-    const msgId = selectedMessage?.id != null ? String(selectedMessage.id) : null;
-    if (msgId) sendMessageReaction(msgId, emoji, peerId).catch(() => {});
-  };
-  const emojiStyle = (pressed: boolean) => ({
-    padding: 4,
-    minWidth: 30,
-    alignItems: "center" as const,
-    justifyContent: "center" as const,
-    borderRadius: 10,
-    backgroundColor: pressed
-      ? isDark
-        ? "rgba(255,255,255,0.08)"
-        : "rgba(0,0,0,0.06)"
-      : "transparent",
-  });
-  const pages: string[][] = [];
-  for (let i = 0; i < SHEET_REACTIONS_ALL.length; i += REACTIONS_PAGE_SIZE) {
-    pages.push(SHEET_REACTIONS_ALL.slice(i, i + REACTIONS_PAGE_SIZE));
-  }
-  return (
-    <View style={{ borderRadius: 20, overflow: "hidden", paddingVertical: 4, paddingHorizontal: 4 }}>
-      <ScrollView
-        ref={scrollRef}
-        horizontal
-        pagingEnabled
-        showsHorizontalScrollIndicator={false}
-        decelerationRate="fast"
-        snapToInterval={rowW}
-        snapToAlignment="start"
-        contentContainerStyle={{ paddingHorizontal: 4 }}
-        style={{ marginHorizontal: -4 }}
-      >
-        {pages.map((emojis, pageIndex) => (
-          <View
-            key={pageIndex}
-            style={{
-              width: rowW,
-              flexDirection: "row",
-              alignItems: "center",
-              justifyContent: pageIndex === 0 ? "space-between" : "space-around",
-              paddingVertical: 2,
-              paddingRight: pageIndex === 0 ? 8 : 0,
-            }}
-          >
-            {emojis.map((emoji) => (
-              <Pressable
-                key={emoji}
-                onPress={() => emojiPress(emoji)}
-                style={({ pressed }) => emojiStyle(pressed)}
-                hitSlop={4}
-              >
-                <Text style={{ fontSize: 20 }}>{emoji}</Text>
-              </Pressable>
-            ))}
-            {pageIndex === 0 && (
-              <Animated.View style={{ marginLeft: 4, transform: [{ translateX: arrowBounce }] }}>
-                <Ionicons
-                  name="chevron-forward"
-                  size={18}
-                  color={isDark ? "rgba(255,255,255,0.6)" : "rgba(0,0,0,0.5)"}
-                />
-              </Animated.View>
-            )}
-          </View>
-        ))}
-      </ScrollView>
-    </View>
-  );
-}

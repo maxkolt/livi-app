@@ -2,7 +2,7 @@
 
 import React from "react";
 
-export type ChatSelectedMedia = {
+type ChatSelectedMedia = {
   type: "image";
   uri: string;
   name?: string;

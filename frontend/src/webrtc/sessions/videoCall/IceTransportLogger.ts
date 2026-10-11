@@ -15,7 +15,7 @@ import { buildIceTransportSignature } from './mediaStats';
 /** Снимки берём дважды: сразу после установления и после стабилизации ICE. */
 const ICE_TRANSPORT_LOG_DELAYS_MS = [1500, 5000];
 
-export type IceTransportLoggerHost = {
+type IceTransportLoggerHost = {
   /** false → комнату уже сменили/закрыли, лог не нужен. */
   isCurrentRoom: (room: Room) => boolean;
   /** Подписи участников для читаемости лога. */

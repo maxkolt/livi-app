@@ -3,7 +3,7 @@
  * (UI_ACCENT в screens/home/constants.ts).
  * Светлая палитра удалена — `isDark` игнорируется (совместимость вызовов).
  */
-export type UiAccent = {
+type UiAccent = {
   solid: string;
   bright: string;
   softText: string;

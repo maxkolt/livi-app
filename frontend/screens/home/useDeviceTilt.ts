@@ -9,7 +9,7 @@ import { useEffect } from 'react';
 import { useSharedValue, withSpring, type SharedValue } from 'react-native-reanimated';
 import { Accelerometer } from 'expo-sensors';
 
-export type DeviceTilt = { x: SharedValue<number>; y: SharedValue<number> };
+type DeviceTilt = { x: SharedValue<number>; y: SharedValue<number> };
 
 /** Наклон (в g), при котором слой доходит до полного сдвига. */
 const TILT_RANGE = 0.6;

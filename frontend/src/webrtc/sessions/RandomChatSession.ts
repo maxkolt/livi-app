@@ -788,7 +788,6 @@ export class RandomChatSession extends SimpleEventEmitter {
     // КРИТИЧНО: НЕ сбрасываем remoteStream сразу - это вызывает черный экран
     // Вместо этого сбрасываем только после отключения комнаты
     // Сохраняем текущий remoteStream для предотвращения мерцания
-    const prevRemoteStream = this.remoteStream;
     
     // Сбрасываем только внутреннее состояние, но не эмитим null сразу
     this.remoteStream = null;
@@ -1984,11 +1983,6 @@ export class RandomChatSession extends SimpleEventEmitter {
     }
   }
 
-  private handlePeerLeft(): void {
-    // peer:left приходит при "next" партнёра; backend сам возвращает нас в очередь — autoNext не вызываем.
-    this.handlePartnerGone('peer_left');
-  }
-
   private async ensureLocalTracks(force = false): Promise<void> {
     // КРИТИЧНО: Проверяем что треки не только существуют, но и активны
     const videoActive = this.localVideoTrack && this.localVideoTrack.mediaStreamTrack?.readyState !== 'ended';
@@ -2984,47 +2978,6 @@ export class RandomChatSession extends SimpleEventEmitter {
     return false;
   }
 
-  private async unpublishVideoTrackKeepAlive(): Promise<void> {
-    if (this.isCamOn) return; // не трогаем если камера включена
-    if (!this.room) return;
-    try {
-      const publications = this.room.localParticipant.videoTrackPublications;
-      if (publications && typeof publications.values === 'function') {
-        for (const pub of publications.values()) {
-          if (pub.track) {
-            await this.room.localParticipant.unpublishTrack(pub.track, false);
-          }
-        }
-      } else if (Array.isArray(publications)) {
-        for (const pub of publications) {
-          if (pub.track) {
-            await this.room.localParticipant.unpublishTrack(pub.track, false);
-          }
-        }
-      }
-      logger.info('[RandomChatSession] Video track unpublished (cam off, keep alive)');
-    } catch (e) {
-      logger.warn('[RandomChatSession] Failed to unpublish video track', e);
-    }
-
-    // Удаляем видео трек из localStream, чтобы он не перепубликовался автоматически
-    if (this.localVideoTrack?.mediaStreamTrack) {
-      try {
-        this.localVideoTrack.mediaStreamTrack.enabled = false;
-      } catch {}
-    }
-    if (this.localStream) {
-      try {
-        this.localStream.getVideoTracks().forEach((t) => {
-          try {
-            this.localStream?.removeTrack(t as any);
-          } catch {}
-        });
-      } catch {}
-    }
-    // Не стопаем трек здесь, чтобы не ломать быстрый ре-паблиш
-  }
-
   private async connectToLiveKit(
     url: string,
     token: string,
@@ -3189,7 +3142,6 @@ export class RandomChatSession extends SimpleEventEmitter {
     // КРИТИЧНО: Убеждаемся что локальные треки существуют и активны
     // Если треки были остановлены (чего не должно быть при next()), пересоздаем их
     // КРИТИЧНО: Сохраняем текущий localStream ПЕРЕД пересозданием треков, чтобы не было черного экрана
-    const prevLocalStream = this.localStream;
 
     const refreshedEndedVideoBeforeReconnect = await this.refreshEndedLocalVideoTrackBeforeReconnect();
     

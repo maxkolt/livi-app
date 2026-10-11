@@ -1,6 +1,6 @@
 import { logger } from './logger';
 
-export type NickAuditSource =
+type NickAuditSource =
   | 'socket.profile:update'
   | 'socket.identity:attach'
   | 'http.PATCH /api/me'

@@ -22,7 +22,7 @@ import { stopIncomingCallAlert } from './incomingCallAlert';
 import { sendCallAnsweredBroadcast, addEndedCallId, isEndedCallId, isOutgoingDeclineHandled, markOutgoingDeclineHandled, setCallMediaHint, getCallMediaHint, videoCallNavExtras, type DirectCallMediaHint } from './callKeep';
 import { emitCloseHomeModals, emitMissedClear, emitMissedIncrement, isWelcomeCallsMissedFilterActive, isWelcomeViewingChats, isWelcomeViewingMissedCalls, setPendingWelcomeCallsFilter, setPendingWelcomeChatsFilter, shouldSkipHomeUiSettle } from './globalEvents';
 import { terminateCall } from './terminateCall';
-import { recordCallLog, recordCancelledCall, flushCallLogUi, forceCallLogUiNow } from '../screens/home/callLog';
+import { recordCallLog, recordCancelledCall, forceCallLogUiNow } from '../screens/home/callLog';
 import { UNREAD_BY_USER_KEY } from '../screens/home/constants';
 import { navigateToVideoCallScreen, type VideoCallNavLike } from './appNavigationGuard';
 import { beginCallPerfTrace, markCallPerf, callPerfSpan } from './callPerfTrace';
@@ -48,7 +48,7 @@ const MISSED_CALL_APPLIED_ID_PREFIX = 'missed_call_applied_v1:';
 const PUSH_TOKEN_SNAPSHOT_KEY = 'push_token_snapshot_v1';
 
 /** ID категории уведомления входящего звонка с кнопками «Поднять» / «Положить» */
-export const INCOMING_CALL_CATEGORY_ID = 'incoming_call';
+const INCOMING_CALL_CATEGORY_ID = 'incoming_call';
 const PUSH_TOKEN_REGISTER_COOLDOWN_MS = 60_000;
 
 let syncBadgeDebounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -290,58 +290,6 @@ function ensureInAppPiPBeforeOpeningFriendsFromMessageNotification(): void {
   } catch (e) {
     logger.warn('[push] ensureInAppPiPBeforeOpeningFriendsFromMessageNotification failed', e as any);
   }
-}
-
-/** Отметить, что пользователь «увидел» пропущенные (зашёл во вкладку Друзья) — бейдж и шторка будут скрыты. */
-export async function setMissedBadgeCleared(): Promise<void> {
-  try {
-    await AsyncStorage.setItem(MISSED_BADGE_CLEARED_KEY, 'true');
-  } catch {}
-}
-
-let applyMissedViewInFlight: Promise<void> | null = null;
-
-/**
- * Пользователь открыл «Друзья» / тап по пропущенному: один атомарный проход — флаг «увидел»,
- * снять карточки в шторке, обнулить нативный счётчик пропущенных, синхронизировать бейдж (unread без missed).
- */
-export async function applyMissedCallsViewedByUser(reason?: string): Promise<void> {
-  if (applyMissedViewInFlight) return applyMissedViewInFlight;
-  applyMissedViewInFlight = (async () => {
-    logger.info('[push] applyMissedCallsViewedByUser', { reason: reason || 'friends' });
-    if (syncBadgeDebounceTimer) {
-      clearTimeout(syncBadgeDebounceTimer);
-      syncBadgeDebounceTimer = null;
-    }
-    lastAppliedBadge = null;
-    await setMissedBadgeCleared();
-    await dismissMissedCallNotificationsOnly();
-    try {
-      const raw = await AsyncStorage.getItem(MISSED_CALLS_KEY);
-      const map: Record<string, number> = raw ? JSON.parse(raw) : {};
-      for (const uid of Object.keys(map || {})) {
-        if (uid && typeof map[uid] === 'number' && map[uid] > 0) {
-          try { emitMissedClear(String(uid)); } catch (_) {}
-        }
-      }
-      await AsyncStorage.setItem(MISSED_CALLS_KEY, JSON.stringify({}));
-    } catch (_) {}
-    if (Platform.OS === 'android' && NativeModules.LiviAppModule?.clearAllMissedCountsAndSetBadgeZero) {
-      try {
-        NativeModules.LiviAppModule.clearAllMissedCountsAndSetBadgeZero();
-      } catch (_) {}
-      try {
-        await (NativeModules.LiviAppModule.getAndClearPendingMissedCalls?.() ?? Promise.resolve([]));
-      } catch (_) {}
-      await new Promise((r) => setTimeout(r, 64));
-    }
-    await syncAppBadgeFromMissedCountNow();
-    const waiters = syncBadgeWaiters.splice(0);
-    waiters.forEach((w) => w());
-  })().finally(() => {
-    applyMissedViewInFlight = null;
-  });
-  return applyMissedViewInFlight;
 }
 
 async function fetchLocalUnreadTotalFallback(): Promise<number> {
@@ -745,23 +693,6 @@ export async function getMissedCountByUserFromNative(): Promise<Record<string, n
   }
 }
 
-/** Формат времени для уведомления о сообщении: «14:35», «вчера 14:35» или «12.03 14:35». Используем getFullYear (не getYear), чтобы не было багов с годом. */
-function formatMessageNotificationTime(d: Date, lang?: import('./i18n').Lang): string {
-  const now = new Date();
-  const today = now.getDate() === d.getDate() && now.getMonth() === d.getMonth() && now.getFullYear() === d.getFullYear();
-  const yesterday = new Date(now);
-  yesterday.setDate(yesterday.getDate() - 1);
-  const wasYesterday = yesterday.getDate() === d.getDate() && yesterday.getMonth() === d.getMonth() && yesterday.getFullYear() === d.getFullYear();
-  const h = d.getHours().toString().padStart(2, '0');
-  const min = d.getMinutes().toString().padStart(2, '0');
-  const time = `${h}:${min}`;
-  if (today) return time;
-  if (wasYesterday) return `${t('yesterday', lang)} ${time}`;
-  const day = d.getDate().toString().padStart(2, '0');
-  const month = (d.getMonth() + 1).toString().padStart(2, '0');
-  return `${day}.${month} ${time}`;
-}
-
 /** Снять уведомление о сообщениях от одного пользователя (при заходе в чат с ним). */
 export async function dismissMessageNotificationForUser(peerId: string): Promise<void> {
   try {
@@ -807,7 +738,7 @@ export async function dismissMessageNotificationsOnly(): Promise<void> {
 }
 
 /** Снять только уведомления «пропущенный вызов» в шторке (без обнуления счётчиков). Вызывать при заходе в Друзья. Android: нативный список; iOS: Expo getPresentedNotificationsAsync + dismiss по type === 'missed_call'. */
-export async function dismissMissedCallNotificationsOnly(): Promise<void> {
+async function dismissMissedCallNotificationsOnly(): Promise<void> {
   try {
     logger.info('[push] dismissMissedCallNotificationsOnly');
     if (Platform.OS === 'android') {
@@ -1019,7 +950,7 @@ export async function clearCallRelatedNotificationsAndSyncBadge(): Promise<void>
   await syncAppBadgeFromMissedCount();
 }
 
-export async function clearNotificationIndicators() {
+async function clearNotificationIndicators() {
   await dismissMessageNotificationsOnly();
   await dismissMissedCallNotificationsOnly();
   await syncAppBadgeFromMissedCount();
@@ -1039,7 +970,7 @@ export function setCurrentChatPeerId(peerId: string | null): void {
 // КРИТИЧНО: Захватываем «последний ответ на уведомление» сразу при загрузке модуля,
 // чтобы не потерять его к моменту вызова addNotificationListeners (когда приложение открыто из пуша о звонке).
 const lastNotificationResponsePromise = Notifications.getLastNotificationResponseAsync();
-export function getColdStartNotificationResponse(): Promise<Notifications.NotificationResponse | null> {
+function getColdStartNotificationResponse(): Promise<Notifications.NotificationResponse | null> {
   return lastNotificationResponsePromise;
 }
 
@@ -1698,12 +1629,7 @@ async function handleNotificationResponse(data: any, actionIdentifier: string, r
   }
 }
 
-/** Устаревший путь: только навигация по data (тап по уведомлению без кнопок). */
-async function navigateFromPushData(data: any) {
-  await handleNotificationResponse(data, Notifications.DEFAULT_ACTION_IDENTIFIER);
-}
-
-export async function ensureAndroidNotificationChannels() {
+async function ensureAndroidNotificationChannels() {
   if (Platform.OS !== 'android') return;
   const lang = await loadLang();
 
@@ -2022,12 +1948,6 @@ export function addNotificationListeners() {
   // Не сбрасываем все уведомления при переходе приложения в активное состояние:
   // иначе уведомление о входящем звонке исчезает, как только пользователь открыл приложение.
   // Очистка происходит при открытии чата (ChatScreen) или при ответе на пуш.
-  let appStateRef = AppState.currentState;
-  const appStateSub = AppState.addEventListener('change', (next) => {
-    try {
-      appStateRef = next;
-    } catch {}
-  });
 
   // Заявка в друзья (socket) → системное уведомление, если приложение свёрнуто.
   let offFriendRequest: (() => void) | null = null;
@@ -2174,9 +2094,6 @@ export function addNotificationListeners() {
   return () => {
     sub1.remove();
     sub2.remove();
-    try {
-      appStateSub.remove();
-    } catch {}
     try {
       offFriendRequest?.();
     } catch {}

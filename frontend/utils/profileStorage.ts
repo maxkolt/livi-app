@@ -2,7 +2,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { logger } from './logger';
 
-export type StoredProfile = { nick?: string; avatar?: string };
+type StoredProfile = { nick?: string; avatar?: string };
 
 const KEY = 'livi.profile.v1';
 
@@ -59,18 +59,6 @@ export async function saveProfileToStorage(patch: StoredProfile): Promise<void> 
   } catch (e) {}
 }
 
-export async function clearNickInStorage(): Promise<void> {
-  try {
-    await saveProfileToStorage({ nick: '' });
-  } catch {}
-}
-
-export async function clearAvatarInStorage(): Promise<void> {
-  try {
-    await saveProfileToStorage({ avatar: '' });
-  } catch {}
-}
-
 export async function clearProfileStorage(): Promise<void> {
   try {
     await AsyncStorage.removeItem(KEY);
@@ -105,34 +93,3 @@ export async function clearAllAvatarCaches(): Promise<void> {
   }
 }
 
-/**
- * Принудительная очистка всех кэшей с детальным логированием
- * Используйте эту функцию для отладки проблем с кэшированием
- */
-export async function forceClearAllCaches(): Promise<void> {
-  
-  try {
-    // 1. Проверяем текущее состояние
-    const currentProfile = await loadProfileFromStorage();
-    
-    // 2. Очищаем AsyncStorage
-    await clearProfileStorage();
-    
-    // 3. Проверяем, что очистилось
-    const afterClear = await loadProfileFromStorage();
-    
-    // 4. Очищаем Expo Image кэши
-    try {
-      if (typeof (global as any).expo !== 'undefined' && (global as any).expo.Image) {
-        await (global as any).expo.Image.clearMemoryCache();
-        
-        await (global as any).expo.Image.clearDiskCache();
-      } else {
-      }
-    } catch (e) {}
-    
-  } catch (e) {
-    logger.error('Force clear failed:', e);
-    throw e;
-  }
-}

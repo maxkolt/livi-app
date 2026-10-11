@@ -3,7 +3,7 @@ import { findNodeHandle, NativeModules, Platform, type View } from 'react-native
 const MIN_API_FOR_RENDER_EFFECT = 31;
 
 /** Android 12+: Gaussian blur on TextureView (GSM / external call hold). */
-export function supportsCallVideoHoldBlur(): boolean {
+function supportsCallVideoHoldBlur(): boolean {
   return Platform.OS === 'android' && Number(Platform.Version) >= MIN_API_FOR_RENDER_EFFECT;
 }
 

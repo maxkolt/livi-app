@@ -56,7 +56,7 @@ export async function putThumb(id: string, v: number, dataUri: string) {
 /**
  * Получить миниатюру аватара (data URI)
  */
-export async function getThumb(id: string, v: number) {
+async function getThumb(id: string, v: number) {
   return AsyncStorage.getItem(THUMB(id, v));
 }
 

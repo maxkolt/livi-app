@@ -426,16 +426,6 @@ function recordOutgoingFinalCall(
   }
 }
 
-/** Отложенный/немедленный notify подписчикам (после settle / при открытии Calls). */
-export function scheduleCallLogNotify(ms = 0): void {
-  if (ms <= 0) {
-    cancelPendingCallLogNotify();
-    notify();
-    return;
-  }
-  notifyDeferred(ms);
-}
-
 /** Синхронный снимок memory — для мгновенного UI при открытии вкладки Calls. */
 export function getCallLogSnapshot(): CallLogEntry[] {
   const uid = currentUid();

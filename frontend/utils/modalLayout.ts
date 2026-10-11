@@ -14,7 +14,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 const LANDSCAPE_RATIO = 1.05;
 const TABLET_MIN_SHORT_SIDE = 600;
 
-export type ModalLayout = {
+type ModalLayout = {
   width: number;
   height: number;
   isLandscape: boolean;

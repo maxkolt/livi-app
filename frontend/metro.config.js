@@ -51,17 +51,6 @@ config.resolver.resolveRequest = (context, moduleName, platform) => {
       platform,
     );
   }
-  // CometChat probes its optional calling SDK at runtime. LiVi calls use
-  // LiveKit, so resolve both probes to an explicitly unavailable module.
-  if (
-    moduleName === "@cometchat/calls-sdk-react-native" ||
-    moduleName === "@cometchat/calls-sdk-react-native/package.json"
-  ) {
-    return {
-      type: "sourceFile",
-      filePath: require("path").resolve(__dirname, "polyfills/optionalModuleStub.js"),
-    };
-  }
   if (previousResolveRequest) {
     return previousResolveRequest(context, moduleName, platform);
   }

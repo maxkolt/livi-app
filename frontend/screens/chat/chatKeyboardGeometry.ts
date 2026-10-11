@@ -1,4 +1,4 @@
-export type KeyboardFrameLike = {
+type KeyboardFrameLike = {
   screenY?: number;
   height?: number;
 };

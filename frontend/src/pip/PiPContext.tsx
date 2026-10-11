@@ -2,7 +2,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { PropsWithChildren } from 'react';
 import { AppState, DeviceEventEmitter, NativeModules, NativeEventEmitter, Platform } from 'react-native';
-import InCallManager from 'react-native-incall-manager';
 import { CommonActions } from '@react-navigation/native';
 import socket, { onConnected, emitPresenceUpdateIfChanged } from '../../sockets/socket';
 import { applyCallEndedGlobalRefsOnce } from '../../utils/globalEvents';
@@ -12,7 +11,7 @@ import {
   setPipReturnToCallInFlight,
   setPipReturnToCallJustPressed,
 } from '../../utils/callRuntime';
-import { clearEndingCallInProgress, captureSystemPiPReturnMediaSnapshot, resolvePiPLocalMutedState, markDirectCallVideoMediaActive, ongoingCallPrefersVideoMedia, resolveActiveCallInCallMedia, readInAppPiPAudioOutputRoute, readAuthoritativeCallAudioRouteAfterPiP, readLastAppliedCallAudioRoute, readActiveExternalCallAudioRoute, readConnectedExternalCallAudioRoute, setUserSelectedCallAudioRoute, readUserSelectedCallAudioRoute, readUserSelectedExternalCallAudioRoute, rememberManualBuiltinCallAudioRoute, readUserLockedBuiltinCallAudioRoute, clearBuiltinPinForExternalHeadsetConnect, markUserSelectedExternalCallAudioRoute, isIncomingAnswerTransitionActive } from '../../utils/activeCallSession';
+import { clearEndingCallInProgress, captureSystemPiPReturnMediaSnapshot, resolvePiPLocalMutedState, markDirectCallVideoMediaActive, ongoingCallPrefersVideoMedia, resolveActiveCallInCallMedia, readInAppPiPAudioOutputRoute, readAuthoritativeCallAudioRouteAfterPiP, readLastAppliedCallAudioRoute, readActiveExternalCallAudioRoute, readConnectedExternalCallAudioRoute, setUserSelectedCallAudioRoute, readUserSelectedCallAudioRoute, readUserSelectedExternalCallAudioRoute, rememberManualBuiltinCallAudioRoute, clearBuiltinPinForExternalHeadsetConnect, markUserSelectedExternalCallAudioRoute, isIncomingAnswerTransitionActive } from '../../utils/activeCallSession';
 import { buildCallEndSocketPayload } from '../../utils/callEndPayload';
 import { logger } from '../../utils/logger';
 import { readRootCurrentRouteName } from '../../utils/safeRootNavigation';
@@ -47,7 +46,6 @@ import {
   restoreCallMediaAfterSystemPiPReturn,
   scheduleReapplyPersistedCallAudioRoute,
   setPersistedCallAudioRoute,
-  resolveVideoInAppPiPAudioRoute,
   resolveVideoInAppPiPPreserveRoute,
   getPersistedCallAudioRoute,
   restoreCallAudioForInAppPiPPlaque,
@@ -164,27 +162,11 @@ function clearInAppPiPSystemSuspendFlags(): void {
   } catch (_) {}
 }
 
-function markSystemPiPNeedsInAppRestore(): void {
-  try {
-    const g = global as any;
-    g.__systemPiPNeedsInAppRestoreRef = g.__systemPiPNeedsInAppRestoreRef || { current: false };
-    g.__systemPiPNeedsInAppRestoreRef.current = true;
-  } catch (_) {}
-}
-
 function clearSystemPiPNeedsInAppRestore(): void {
   try {
     const g = global as any;
     if (g.__systemPiPNeedsInAppRestoreRef) g.__systemPiPNeedsInAppRestoreRef.current = false;
   } catch (_) {}
-}
-
-function isSystemPiPNeedsInAppRestore(): boolean {
-  try {
-    return (global as any).__systemPiPNeedsInAppRestoreRef?.current === true;
-  } catch {
-    return false;
-  }
 }
 
 /**

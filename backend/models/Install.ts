@@ -1,7 +1,7 @@
 // models/Install.ts
 import { Schema, model, models, type Types } from 'mongoose';
 
-export interface IInstall {
+interface IInstall {
   _id: Types.ObjectId;
   installId: string;
   user: Types.ObjectId;

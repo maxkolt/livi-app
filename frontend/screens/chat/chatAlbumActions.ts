@@ -16,7 +16,7 @@ export function urisWithoutIndices(
 }
 
 /** Patch fields after partial album URI update (local or server response). */
-export function albumMessageFieldsAfterUrisUpdate(
+function albumMessageFieldsAfterUrisUpdate(
   nextUris: string[],
   serverUri?: string | null,
 ): { uri: string; uris?: string[] } {

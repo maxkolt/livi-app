@@ -105,11 +105,6 @@ export function getWebrtcSession(): any {
   return H.webrtcSession.box.current;
 }
 
-export function setWebrtcSession(session: any): void {
-  ensureInstalled();
-  H.webrtcSession.box.current = session;
-}
-
 // —— Ending / active ——
 
 export function isEndingCallInProgress(): boolean {
@@ -195,11 +190,6 @@ export function isPipSuspendedForSystem(): boolean {
   return H.pipSuspendedForSystemPiP.box.current === true;
 }
 
-export function setPipSuspendedForSystem(value: boolean): void {
-  ensureInstalled();
-  H.pipSuspendedForSystemPiP.box.current = !!value;
-}
-
 export function isPipForceHidden(): boolean {
   ensureInstalled();
   return H.pipForceHidden.box.current === true;
@@ -279,11 +269,6 @@ export function getOutgoingCallId(): string {
   return String(H.outgoingCallId.box.current || '').trim();
 }
 
-export function setOutgoingCallId(callId: string): void {
-  ensureInstalled();
-  H.outgoingCallId.box.current = String(callId || '');
-}
-
 /** CallId свежего audio-accept: блокирует auto video-expand / preserve churn. */
 export function getFreshDirectCallAudioAcceptCallId(): string {
   ensureInstalled();
@@ -295,20 +280,3 @@ export function setFreshDirectCallAudioAcceptCallId(callId: string | null): void
   H.freshDirectCallAudioAcceptCallId.box.current = callId ? String(callId) : null;
 }
 
-/**
- * Сброс lifecycle-флагов после hangup (не трогает session cleanup —
- * вызывающий код по-прежнему делает endCall / hidePiP).
- */
-export function resetCallRuntimeSurfacesAfterHangup(): void {
-  ensureInstalled();
-  setEndingCallInProgress(true);
-  setCallEndedFromPiPNoOpen(false);
-  setEndingFromPiPButton(false);
-  setPipVisible(false);
-  setPipInSystemMode(false);
-  setPipSuspendedForSystem(false);
-  setPipReturnToCallInFlight(false);
-  setPipReturnToCallJustPressed(false);
-  setPreferAudioOnlyUiOnNextVideoCall(false);
-  setFreshDirectCallAudioAcceptCallId(null);
-}

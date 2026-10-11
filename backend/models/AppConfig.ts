@@ -2,7 +2,7 @@
 // Key-value конфиг для сервера (например latestAppVersion для уведомления об обновлении).
 import { Schema, model, models, type Types } from 'mongoose';
 
-export interface IAppConfig {
+interface IAppConfig {
   _id?: Types.ObjectId;
   key: string;
   value: string;

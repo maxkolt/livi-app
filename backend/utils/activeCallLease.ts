@@ -16,13 +16,13 @@ export type ActiveCallLease = {
 };
 
 /** Max silence before server force-ends (active phase). */
-export const CALL_LEASE_TTL_MS = 45_000;
+const CALL_LEASE_TTL_MS = 45_000;
 /**
  * Longer TTL while client reports phase=reconnecting (airplane / media restore).
  * Avoids racing MEDIA_RECONNECT_GRACE_MS (~45s) when heartbeats are sparse.
  */
 export const CALL_LEASE_RECONNECTING_TTL_MS = 75_000;
-export const CALL_LEASE_SWEEP_MS = 5_000;
+const CALL_LEASE_SWEEP_MS = 5_000;
 
 const leasesByCallId = new Map<string, ActiveCallLease>();
 let sweepTimer: ReturnType<typeof setInterval> | null = null;
@@ -98,7 +98,7 @@ export function hasActiveCallLease(callId: string | null | undefined): boolean {
   return !!getActiveCallLease(callId);
 }
 
-export function listExpiredActiveCallLeases(
+function listExpiredActiveCallLeases(
   now = Date.now(),
   ttlMs = CALL_LEASE_TTL_MS,
 ): ActiveCallLease[] {
@@ -134,10 +134,3 @@ export function startActiveCallLeaseSweeper(
   } catch {}
 }
 
-export function stopActiveCallLeaseSweeper(): void {
-  if (!sweepTimer) return;
-  try {
-    clearInterval(sweepTimer);
-  } catch {}
-  sweepTimer = null;
-}

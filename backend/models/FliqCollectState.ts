@@ -3,7 +3,7 @@
 // Запись budget:<день по Тихоокеанскому времени> — счётчик поисков за сутки квоты (в поле variant), переживает перезапуски.
 import { Schema, model, models } from 'mongoose';
 
-export interface IFliqCollectState {
+interface IFliqCollectState {
   key: string;
   lastRunAt: Date;
   variant: number;

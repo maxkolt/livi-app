@@ -107,7 +107,7 @@ export function reuseUnchangedFriends(next: Friend[], prev: Friend[]): Friend[] 
   return allSame ? prev : out;
 }
 
-export function cleanPositiveBadgeMap(map: Record<string, number> | null | undefined): Record<string, number> {
+function cleanPositiveBadgeMap(map: Record<string, number> | null | undefined): Record<string, number> {
   const cleaned: Record<string, number> = {};
   if (!map || typeof map !== 'object') return cleaned;
   Object.keys(map).forEach((key) => {
@@ -265,7 +265,7 @@ export function buildFriendAvatarUri(partner: any): string | undefined {
 }
 
 /** Нормализация для поиска по нику (любой язык, без учёта регистра). */
-export function normalizeFriendSearchText(value: string): string {
+function normalizeFriendSearchText(value: string): string {
   return String(value ?? '')
     .normalize('NFKC')
     .trim()

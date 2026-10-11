@@ -9,7 +9,6 @@ import {
   markUserSelectedExternalCallAudioRoute,
   readUserSelectedCallAudioRoute,
   readUserSelectedExternalCallAudioRoute,
-  readUserLockedBuiltinCallAudioRoute,
   userExplicitlyPinnedBuiltinCallAudio,
   resolveActiveCallInCallMedia,
   setUserSelectedCallAudioRoute,

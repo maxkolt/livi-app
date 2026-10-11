@@ -15,7 +15,7 @@ function syncNativeLang(lang: Lang) {
   } catch {}
 }
 
-export interface LangState {
+interface LangState {
   lang: Lang;
   hydrated: boolean;
   hydrate: () => Promise<void>;

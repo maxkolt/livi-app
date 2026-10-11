@@ -14,7 +14,7 @@ import { useModalLayout } from "../../utils/modalLayout";
 import { AppOverlay } from "../../components/AppOverlay";
 import { AppDialog, APP_DIALOG_MESSAGE_COLOR } from "../../components/AppDialog";
 
-export type AlbumPickKind = "save" | "forward" | "delete";
+type AlbumPickKind = "save" | "forward" | "delete";
 
 type Props = {
   visible: boolean;

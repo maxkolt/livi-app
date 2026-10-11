@@ -1,6 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import NetInfo from "@react-native-community/netinfo";
-import { AppState, type AppStateStatus, NativeModules, Platform } from "react-native";
+import { AppState, NativeModules, Platform } from "react-native";
 import { getInstallId } from "../../utils/installId";
 import { logger } from "../../utils/logger";
 import { prewarmApiConnections } from "../../utils/warmConnections";
@@ -210,7 +210,7 @@ function syncAppVisibilityToServerFromAppState(): void {
   }
 }
 
-export function shouldAttemptRealtimeConnection(): boolean {
+function shouldAttemptRealtimeConnection(): boolean {
   if (SOCKET_KEEP_ALIVE_IN_BACKGROUND) return true;
   const inSystemPiP =
     typeof (global as any).__pipInSystemModeRef?.current === "boolean" &&

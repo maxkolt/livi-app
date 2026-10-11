@@ -13,8 +13,8 @@
  */
 
 export const E2E_ENVELOPE_VERSION = 1;
-export const E2E_PUBLIC_KEY_BYTES = 32;
-export const E2E_NONCE_BYTES = 24;
+const E2E_PUBLIC_KEY_BYTES = 32;
+const E2E_NONCE_BYTES = 24;
 const BOX_OVERHEAD_BYTES = 16;
 /** Текст до 10 000 UTF-16 единиц → ≤ 30 000 байт UTF-8, плюс цитата и JSON-обвязка. */
 export const E2E_MAX_CIPHERTEXT_BYTES = 48 * 1024;
@@ -47,7 +47,7 @@ export function parseE2eEnvelope(raw: unknown): E2eEnvelope | null {
   return { v: E2E_ENVELOPE_VERSION, n: r.n as string, c: r.c as string, spk: r.spk as string, rpk: r.rpk as string };
 }
 
-export type IncomingEnvelopeResult =
+type IncomingEnvelopeResult =
   | { ok: true; enc: E2eEnvelope | null }
   | { ok: false; error: 'invalid_enc' | 'e2e_key_mismatch' };
 

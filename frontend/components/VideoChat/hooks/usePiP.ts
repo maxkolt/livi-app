@@ -184,7 +184,6 @@ export const usePiP = ({
       } else if (partner?.avatar && typeof partner.avatar === 'string' && partner.avatar.trim() !== '') {
         // Fallback: используем URL аватара если нет base64
         // КРИТИЧНО: В production используйте домен с HTTPS, не IP адреса!
-        const DEFAULT_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'https://api.liviapp.com';
         const IOS_URL = process.env.EXPO_PUBLIC_SERVER_URL_IOS || process.env.EXPO_PUBLIC_SERVER_URL || 'https://api.liviapp.com';
         const ANDROID_URL = process.env.EXPO_PUBLIC_SERVER_URL_ANDROID || process.env.EXPO_PUBLIC_SERVER_URL || 'https://api.liviapp.com';
         const serverUrl = (Platform.OS === 'android' ? ANDROID_URL : IOS_URL).replace(/\/+$/, '');

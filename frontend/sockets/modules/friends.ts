@@ -6,7 +6,7 @@ import { ensureReauthBeforePrivilegedSocketOp } from "./reauth";
 import { shared } from "./shared";
 import { socket } from "./socketCore";
 
-export type FriendListItem = {
+type FriendListItem = {
   _id: string;
   nick?: string;
   avatar?: string;
@@ -18,7 +18,7 @@ export type FriendListItem = {
   inCall?: boolean;
 };
 
-export function addFriend(toUserId: string) {
+function addFriend(toUserId: string) {
   if (!isOid(toUserId)) return Promise.reject(new Error("invalid ObjectId"));
   const viaSocket = async () => {
     if (socket.connected && shared.currentUserId) {
@@ -63,7 +63,6 @@ export function addFriend(toUserId: string) {
   })();
 }
 
-export const inviteFriend = addFriend;
 export const requestFriend = addFriend;
 
 export function respondFriend(fromUserId: string, accept: boolean, requestId?: string) {
@@ -462,47 +461,3 @@ export async function checkInviteLink(code: string, options: { markPending?: boo
   }
 }
 
-export function checkFriendship(userId: string) {
-  if (!isOid(userId)) return Promise.reject(new Error("invalid ObjectId"));
-  const viaSocket = () =>
-    emitAck<{ ok: boolean; areFriends: boolean; error?: string }>("friends:check", { userId });
-
-  const viaHttp = async () => {
-    const installId = await getInstallId().catch(() => "");
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (installId) headers["x-install-id"] = String(installId);
-    if (shared.currentUserId) headers["x-user-id"] = String(shared.currentUserId);
-
-    const timeouts = [5000, 12000];
-    let lastErr: any = null;
-    const url = `${API_BASE}/api/friends/check/${encodeURIComponent(String(userId))}`;
-
-    for (const ms of timeouts) {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), ms);
-      try {
-        const res = await fetch(url, { method: "GET", headers, signal: controller.signal });
-        if (!res.ok) {
-          const txt = await res.text().catch(() => "");
-          return { ok: false, areFriends: false, error: `http_${res.status}${txt ? `:${txt}` : ""}` };
-        }
-        return await res.json();
-      } catch (e: any) {
-        lastErr = e;
-        await new Promise((r) => setTimeout(r, 150));
-      } finally {
-        clearTimeout(timeoutId);
-      }
-    }
-
-    return { ok: false, areFriends: false, error: lastErr?.message || String(lastErr || "network_error") };
-  };
-
-  return (async () => {
-    try {
-      return await viaSocket();
-    } catch (e) {
-      return await viaHttp();
-    }
-  })();
-}

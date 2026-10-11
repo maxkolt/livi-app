@@ -19,7 +19,7 @@ function iceConfigHasTurn(cfg: RTCConfiguration | null | undefined): boolean {
 }
 
 /** Clone cfg and force iceTransportPolicy=relay when TURN is present. */
-export function withRelayOnlyPolicy(cfg: RTCConfiguration): RTCConfiguration {
+function withRelayOnlyPolicy(cfg: RTCConfiguration): RTCConfiguration {
   if (!iceConfigHasTurn(cfg)) return cfg;
   return {
     ...(cfg as any),
@@ -39,11 +39,7 @@ export function enableForcedRelayFallback(reason?: string): void {
   );
 }
 
-export function isForcedRelayActive(): boolean {
-  return forcedRelayUntil > Date.now();
-}
-
-export function getEnvFallbackConfiguration(options?: { forceRelayOnly?: boolean }): RTCConfiguration {
+function getEnvFallbackConfiguration(options?: { forceRelayOnly?: boolean }): RTCConfiguration {
   const forceRelayOnly = !!options?.forceRelayOnly;
   const googleStun = { urls: 'stun:stun.l.google.com:19302' } as any;
   const cloudflareStun = { urls: 'stun:stun.cloudflare.com:3478' } as any;

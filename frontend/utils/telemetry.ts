@@ -27,7 +27,7 @@ function toJsonSafe(payload: Record<string, unknown>): string {
   }
 }
 
-export function logRelease(tag: string, message: string, payload: TelemetryPayload = {}): void {
+function logRelease(tag: string, message: string, payload: TelemetryPayload = {}): void {
   const normalized = normalizeCorrelation(payload);
   logger.info(`${LOG_PREFIX}[${tag}] ${message}`, normalized);
 }

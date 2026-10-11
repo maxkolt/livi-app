@@ -266,7 +266,7 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
    *  Camera toggle forwarding
    *  ========================= */
   socket.on("cam-toggle", (data: { enabled: boolean; from: string; to?: string; roomId?: string; camSide?: 'front' | 'back'; sideOnly?: boolean }) => {
-    const { enabled, from, to, roomId, camSide, sideOnly } = data;
+    const { enabled, from, roomId, camSide, sideOnly } = data;
     const relayPayload = {
       enabled,
       from,
@@ -360,7 +360,7 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
   });
 
   socket.on("pip:state", (data: { inPiP: boolean; roomId: string; from: string }) => {
-    const { inPiP, roomId, from } = data;
+    const { inPiP, roomId } = data;
     
     // Пересылаем событие партнеру в комнате
     let forwardedViaRoom = false;

@@ -16,7 +16,7 @@ import { logger } from '../../../../utils/logger';
 /** Перепроверка трека, который не успел загрузиться к моменту подписки. */
 const TRACK_LOAD_RECHECK_MS = 100;
 
-export type DelayedPass = 'First' | 'Second';
+type DelayedPass = 'First' | 'Second';
 
 export type RemoteTrackSubscriberHost = {
   /** false → комната сменилась, применять трек уже некуда. */

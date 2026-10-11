@@ -13,13 +13,13 @@ import { socketSupportsOfflineAck } from './offlineMessageDelivery';
 
 export const LIVE_DELIVERY_ACK_TIMEOUT_MS = 8_000;
 
-export type LiveDeliveryResult = 'offline' | 'legacy' | 'awaiting_ack';
+type LiveDeliveryResult = 'offline' | 'legacy' | 'awaiting_ack';
 
 type HandshakeSocket = { handshake?: { query?: Record<string, unknown> } };
 type AckBroadcast = {
   emit: (event: string, payload: unknown, cb: (err: unknown, responses: unknown[]) => void) => unknown;
 };
-export type LiveDeliveryIo = {
+type LiveDeliveryIo = {
   in: (room: string) => { fetchSockets: () => Promise<HandshakeSocket[]> };
   to: (room: string) => {
     emit: (event: string, payload: unknown) => unknown;

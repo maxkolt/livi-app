@@ -2,7 +2,7 @@ import mongoose from 'mongoose';
 
 /** Причины жалобы из карточки «Собеседник» в случайном чате. */
 export const USER_REPORT_REASONS = ['nudity', 'minor', 'harassment', 'spam', 'other'] as const;
-export type UserReportReason = (typeof USER_REPORT_REASONS)[number];
+type UserReportReason = (typeof USER_REPORT_REASONS)[number];
 
 export function isUserReportReason(value: unknown): value is UserReportReason {
   return typeof value === 'string' && (USER_REPORT_REASONS as readonly string[]).includes(value);

@@ -9,7 +9,7 @@ import { logger } from './logger';
 import { markCallPerf } from './callPerfTrace';
 import { getCallMediaHint } from './directCallMediaHint';
 
-export type EarlyDirectCallBootstrapOpts = {
+type EarlyDirectCallBootstrapOpts = {
   callId: string;
   peerUserId?: string | null;
   isCaller: boolean;

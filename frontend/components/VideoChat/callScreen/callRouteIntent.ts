@@ -21,18 +21,6 @@ import {
 } from '../../../src/pip/pipPlaceholderOnly';
 import { mergeActiveVideoCallParams } from '../../../utils/appNavigationGuard';
 
-/** Параметры маршрута, влияющие на выбор UI звонка. */
-export type DirectCallRouteParams = {
-  fromPiP?: boolean;
-  resume?: boolean;
-  preferVideoCallUi?: boolean;
-  audioOnlyPiPReturn?: boolean;
-  callId?: string | null;
-  isIncoming?: boolean;
-  directInitiator?: boolean;
-  peerUserId?: string;
-};
-
 export function logDirectCallUiGate(
   gate: string,
   details: Record<string, unknown>,

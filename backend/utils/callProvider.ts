@@ -1,6 +1,6 @@
 import { logger } from './logger';
 
-export type CallProviderMode = 'none' | 'custom';
+type CallProviderMode = 'none' | 'custom';
 
 type WebhookLikeRequest = {
   body?: unknown;

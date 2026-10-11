@@ -12,6 +12,7 @@ import {
   type LayoutChangeEvent,
 } from 'react-native';
 import { useHomeLayout } from './HomeLayoutContext';
+import { usePaneReveal } from '../../utils/paneVisibility';
 import AdaptiveText from '../../components/AdaptiveText';
 import { useStableSafeAreaInsets } from './useStableSafeAreaInsets';
 import { Ionicons } from '@expo/vector-icons';
@@ -341,7 +342,7 @@ function appendSupportUtm(url: string, params: Record<string, string>): string {
 
 type ProfileScreen = 'hub' | 'about' | 'language' | 'help' | 'support' | 'purchases';
 
-export type HomeWelcomeProfileViewProps = {
+type HomeWelcomeProfileViewProps = {
   lang: Lang;
   isDark: boolean;
   styles: HomeStyles;
@@ -377,7 +378,6 @@ export type HomeWelcomeProfileViewProps = {
 function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
   const {
     lang,
-    isDark,
     styles: homeStyles,
     menuChromeBg,
     savedNick,
@@ -404,6 +404,8 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
   } = props;
 
   const insets = useStableSafeAreaInsets();
+  // Скрытая вкладка строит хаб по частям: аватар, список, выход (см. usePaneReveal).
+  const hubStage = usePaneReveal(3);
   // Размер берём из safe-area frame: он приходит от нативного провайдера и
   // обновляется при повороте, в отличие от Dimensions.
   const { width: windowWidth, height: windowHeight } = useHomeLayout();
@@ -722,7 +724,7 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
     </View>
   );
 
-  const hubLogoutButton = (
+  const hubLogoutButton = hubStage < 3 ? null : (
     <View
       style={[
         styles.hubActions,
@@ -809,7 +811,7 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
       </View>
   );
 
-  const hubAvatarSection = (
+  const hubAvatarSection = hubStage < 1 ? null : (
     <View
       style={[
         styles.avatarBlock,
@@ -826,7 +828,7 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
   // Липкая шапка не переносит отрицательный верхний отступ: RN складывает из него
   // немонотонный inputRange (-1, 0, gapTop, gapTop+1) и роняет экран. Поэтому у
   // sticky-варианта отступ нулевой, а сдвиг переезжает на сам ScrollView.
-  const hubAvatarSectionSticky = (
+  const hubAvatarSectionSticky = hubStage < 1 ? null : (
     <View
       style={[
         styles.avatarBlock,
@@ -837,7 +839,7 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
     </View>
   );
 
-  const hubListStack = (
+  const hubListStack = hubStage < 2 ? null : (
     <View
       style={[
         styles.hubListStack,

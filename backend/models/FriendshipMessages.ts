@@ -3,7 +3,7 @@ import { E2eEnvelopeSchema } from './e2eEnvelopeSchema';
 import type { E2eEnvelope } from '../utils/e2eEnvelope';
 
 // Реакция на сообщение (эмодзи + кто поставил)
-export interface IMessageReaction {
+interface IMessageReaction {
   emoji: string;
   userId: string;
 }

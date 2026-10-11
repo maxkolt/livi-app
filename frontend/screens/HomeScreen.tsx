@@ -12,12 +12,9 @@ import {
   type LayoutChangeEvent,
   ActionSheetIOS,
   Animated,
-  StyleProp,
-  ViewStyle,
   AppState,
   InteractionManager,
   NativeModules,
-  ActivityIndicator,
   Linking,
   Share,
   Vibration,
@@ -26,14 +23,13 @@ import { showAppAlert } from '../components/AppAlert';
 import { SystemBars } from 'react-native-edge-to-edge';
 import * as Haptics from 'expo-haptics';
 
-import { syncMyStreamProfile } from '../chat/cometchat';
 import { SafeAreaView, useSafeAreaFrame, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { BlurView } from 'expo-blur';
 import * as ImagePicker from 'expo-image-picker';
 import * as Clipboard from 'expo-clipboard';
 import { PinchGestureHandler, State } from 'react-native-gesture-handler';
-import { Ionicons, MaterialIcons } from '@expo/vector-icons';
+import { Ionicons } from '@expo/vector-icons';
 import { Image as ExpoImage } from 'expo-image';
 import { getAvatarImageProps, forceImageRefresh } from '../utils/imageOptimization';
 import { useResolvedImageUri } from '../hooks/useResolvedImageUri';
@@ -65,8 +61,8 @@ import { trimNick } from '../utils/userDisplayName';
 import { primeCallNick } from '../utils/callAvatarPrime';
 import { usePiP } from '../src/pip/PiPContext';
 import { onCallTimeout as onCallTimeoutEvent, onCallIncoming as onCallIncomingEvent, onCallDeclined as onCallDeclinedEvent } from '../sockets/socket';
-import { onRequestCloseIncoming, emitCloseIncoming, onCloseOutgoingCall, onCallCancelledOnHome, onCallEndedOnHome, onCloseHomeModals, onRequestDirectCall, shouldSkipHomeUiSettle, armHomeUiSettleSkip, clearHomeUiSettleSkip, setPendingWelcomeCallsFilter, setPendingWelcomeChatsFilter } from '../utils/globalEvents';
-import { displayOutgoingCallImmediate, notifyOutgoingCallId, reportEndCallToCallKeep, bringMainActivityToFront, OUTGOING_CALL_TIMEOUT_MS, clearOutgoingDeclineHandled, isOutgoingDeclineHandled, setupCallKeep, isCallKeepAvailable, setCallMediaHint } from '../utils/callKeep';
+import { onRequestCloseIncoming, onCloseOutgoingCall, onCallCancelledOnHome, onCallEndedOnHome, onCloseHomeModals, onRequestDirectCall, shouldSkipHomeUiSettle, armHomeUiSettleSkip, clearHomeUiSettleSkip, setPendingWelcomeCallsFilter, setPendingWelcomeChatsFilter } from '../utils/globalEvents';
+import { displayOutgoingCallImmediate, notifyOutgoingCallId, reportEndCallToCallKeep, OUTGOING_CALL_TIMEOUT_MS, clearOutgoingDeclineHandled, isOutgoingDeclineHandled, setupCallKeep, isCallKeepAvailable, setCallMediaHint } from '../utils/callKeep';
 import { terminateCall } from '../utils/terminateCall';
 import { syncAppBadgeFromMissedCount, dismissMessageNotificationsOnly, getMissedCountByUserFromNative } from '../utils/pushNotifications';
 import {
@@ -77,7 +73,6 @@ import {
   HomeWelcomeChatsView,
   HomeWelcomeCallsView,
   HomeWelcomeProfileView,
-  displayName,
   displayAvatarLetter,
   badgeMapsEqual,
   mergeMissedFromSources,
@@ -98,6 +93,7 @@ import { WelcomeKeepAlivePane } from './home/WelcomeKeepAlivePane';
 import { SPATIAL_DEPTH, SpatialLayer, SpatialStageBackground } from './home/SpatialDepth';
 import { FliqFeedView } from './fliq/FliqFeedView';
 import { warmFliqFeed } from './fliq/fliqApi';
+import { FliqWebViewWarmup } from './fliq/FliqWebViewWarmup';
 import { HomeLayoutProvider } from './home/HomeLayoutContext';
 import {
   HOME_BLUR_BG_SOURCE,
@@ -162,7 +158,6 @@ import socket, {
   onFriendAccepted,
   onFriendRequest,
   onPresenceUpdate,
-  inviteFriend,
   onConnected,
   onCurrentUserId,
   onFriendRemoved,
@@ -170,13 +165,11 @@ import socket, {
   updateProfile,
   onFriendProfile,
   PRESENCE_OFFLINE_DEBOUNCE_MS,
-  emitAck,
   attachIdentity,
   getCurrentUserId,
   setCurrentUserId,
   clearCurrentUserId,
   checkUserExists,
-  clearAllUserData,
   createUser,
   isCreateUserInProgress,
   getMyUserId,
@@ -193,12 +186,9 @@ import socket, {
   onCallCanceled,
   onCallTimeout,
   onCallRoomFull,
-  onDisconnected,
-  isReconnecting,
   waitForCreateUserCompletion,
   refreshUserIdFromInstall,
   checkInviteLink,
-  requestFriend,
   acceptInvite,
   setOutgoingCallScreenVisible,
   onIncomingCallScreenChange,
@@ -439,7 +429,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   );
   const insets = useSafeAreaInsets();
   const pip = usePiP();
-  const { theme, isDark } = useAppTheme();
+  const { isDark } = useAppTheme();
   const [appIsActive, setAppIsActive] = useState(AppState.currentState === 'active');
   const [resolvedUserId, setResolvedUserId] = useState<string>('');
   const [installId, setInstallId] = useState<string>('');
@@ -640,7 +630,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
 
   // Синхронная загрузка профиля при инициализации. При повторном монтировании (возврат из звонка/PiP) не показываем сплэш — оба true, профиль подставится в отдельном effect.
   const [profileLoaded, setProfileLoaded] = useState(homeScreenAlreadyBooted);
-  const [dataLoaded, setDataLoaded] = useState(homeScreenAlreadyBooted);
+  const [, setDataLoaded] = useState(homeScreenAlreadyBooted);
   // Сплеш поверх уже отрисованного Home: при уходе сплеша видна страница приветствия с актуальными данными
   const [splashDismissed, setSplashDismissed] = useState(homeScreenAlreadyBooted);
   const splashTimingRef = useRef<SplashTiming>({ t0: Date.now(), at: {} });
@@ -720,7 +710,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   /** Радар — отдельный Skia Canvas: аватар готов раньше, поэтому ждём его первый Picture отдельно. */
   const [searchRadarReady, setSearchRadarReady] = useState(false);
   /** Первый ролик Fliq прогревается в фоне и никогда не задерживает splash/Search. */
-  const [fliqPrewarmReady, setFliqPrewarmReady] = useState(false);
+  const [, setFliqPrewarmReady] = useState(false);
   const cosmeticsHydrated = useCosmeticsHydrated();
   const searchAvatarDecodeKeyRef = useRef('');
   const [profileKey, setProfileKey] = useState(0);
@@ -2926,7 +2916,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
 
           // Сохраняем userId если получили его от сервера
           if (result.ok && result.userId) {
-            const wasNewUser = !hasUser; // Это новый пользователь
             setCurrentUserId(result.userId);
 
             // Примечание: Отправка профиля для новых пользователей обрабатывается в ensureIdentity
@@ -3241,7 +3230,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
 
       // Если получили userId для НОВОГО пользователя И есть текущие введённые данные
       if (attachResult?.ok && attachResult?.userId && !existingUserId) {
-        const wasNewUser = true;
 
         // Проверяем есть ли данные введённые пользователем СЕЙЧАС (не из черновика)
         const currentNick = String(nickLiveRef.current || '').trim();
@@ -4029,8 +4017,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         if (Object.keys(patch).length) {
           await updateProfile(patch);
         }
-        // В CometChat тоже лучше отправлять только URL (data: может быть не поддержан).
-        await syncMyStreamProfile(currentNick, /^https?:\/\//i.test(currentAvatar) ? currentAvatar : undefined);
       } catch (e) {
         logger.warn('[HomeScreen] Failed to update profile after friend accepted:', e);
       }
@@ -4637,7 +4623,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           if (result?.ok) {
             pendingAttachRef.current = patch;
             attachIdentitySafe({ installId, profile: patch }).catch(() => {});
-            syncMyStreamProfile(finalNick, finalAvatarUrl);
           } else {
             console.warn('[handleSaveProfile] Profile update failed:', result?.error);
             // Не прерываем выполнение, так как локальное сохранение уже прошло
@@ -5346,7 +5331,6 @@ const handleClearNick = useCallback(async () => {
   // но нет ника и аватара (hasRealData = false), то показываем экран создания профиля
   const currentNick = savedNick || nick || '';
   const currentAvatar = avatarUri || savedAvatarUrl || '';
-  const hasRealData = (currentNick && currentNick.trim()) || (currentAvatar && currentAvatar.trim());
   const hasActiveCallForSearch =
     pip.visible ||
     pip.inSystemPiPMode ||
@@ -5475,20 +5459,6 @@ const handleClearNick = useCallback(async () => {
       if (ok) void handleWipeAccount();
     });
   }, [askConfirm, handleWipeAccount, lang]);
-  const handleClearLocalMessages = useCallback(() => {
-    void askConfirm({
-      title: t('welcomeClearMessages', lang),
-      message: t('welcomeClearMessagesConfirm', lang),
-      confirmText: t('delete', lang),
-      cancelText: t('cancelAction', lang),
-    }).then((ok) => {
-      if (!ok) return;
-      try {
-        const { clearAllMessageCache } = require('../sockets/socket') as typeof import('../sockets/socket');
-        clearAllMessageCache();
-      } catch {}
-    });
-  }, [askConfirm, lang]);
   const searchNavLockUntilRef = useRef(0);
   const handleStartSearch = useCallback(() => {
     const now = Date.now();
@@ -6206,6 +6176,7 @@ const handleClearNick = useCallback(async () => {
 
     {showSplashOverlay && (
       <View style={[StyleSheet.absoluteFillObject, { zIndex: 9998 }]} pointerEvents="box-none">
+        <FliqWebViewWarmup />
         <SplashLoader
           hasContentReady={searchHomeReady}
           hasNick={!!(currentNick && currentNick.trim())}

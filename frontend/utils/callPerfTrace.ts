@@ -7,7 +7,7 @@ import { logger } from './logger';
 
 const TAG = '[call-perf]';
 
-export type CallPerfRole = 'caller' | 'callee' | 'unknown';
+type CallPerfRole = 'caller' | 'callee' | 'unknown';
 
 type TraceState = {
   callId: string;

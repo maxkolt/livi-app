@@ -4,7 +4,7 @@ import { AppState } from "react-native";
 import type { OutboxMessageDeliveredPayload } from "./outboxTypes";
 import type { SocketReauthResponse } from "./types";
 
-export type PendingRtcSignal = {
+type PendingRtcSignal = {
   event: "offer" | "answer" | "ice-candidate";
   to: string;
   payload: any;

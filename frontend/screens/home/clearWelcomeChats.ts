@@ -9,7 +9,7 @@ import {
 import { dismissMessageNotificationForUser } from '../../utils/pushNotifications';
 import { markChatsClearedForMe } from './chatClearedForMe';
 
-export async function clearWelcomeChatForMe(peerId: string): Promise<boolean> {
+async function clearWelcomeChatForMe(peerId: string): Promise<boolean> {
   const id = String(peerId || '').trim();
   const currentUser = String(getCurrentUserId() || '').trim();
   if (!id || !currentUser) return false;

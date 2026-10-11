@@ -1,5 +1,5 @@
 import React from 'react';
-import { Animated, Easing, StyleSheet, Text, View } from 'react-native';
+import { Animated, StyleSheet, Text, View } from 'react-native';
 import { t, type Lang } from '../utils/i18n';
 
 export type BuiltInStickerAnimation = 'none' | 'bounce' | 'pulse' | 'wiggle';

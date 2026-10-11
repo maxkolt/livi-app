@@ -1,7 +1,5 @@
 import mongoose from 'mongoose';
 
-export type PushPlatform = 'android' | 'ios';
-
 const PushTokenSchema = new mongoose.Schema(
   {
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },

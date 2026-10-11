@@ -31,7 +31,7 @@ export function hasProfilePhoto(avatarUri: string, myAvatarVer: number): boolean
   return (!!getCurrentUserId() && myAvatarVer > 0) || isDirectAvatarUri(avatarUri);
 }
 
-export type HomeCenterProfileProps = {
+type HomeCenterProfileProps = {
   styles: HomeStyles;
   isDark: boolean;
   layoutWidth: number;

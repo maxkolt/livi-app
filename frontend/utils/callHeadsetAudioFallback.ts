@@ -45,12 +45,6 @@ export function readCallBuiltinRouteChoice(): BuiltinCallAudioRoute | null {
   }
 }
 
-export function clearCallBuiltinRouteChoice(): void {
-  try {
-    builtinChoiceRef().current = null;
-  } catch {}
-}
-
 export function readBuiltinCallRouteBeforeHeadset(): BuiltinCallAudioRoute | null {
   try {
     return normalizeInCallRoute(builtinRef().current || '') as BuiltinCallAudioRoute | null;
@@ -80,15 +74,6 @@ export function rememberBuiltinCallRouteBeforeHeadset(
   if (!readBuiltinCallRouteBeforeHeadset()) {
     builtinRef().current = productDefaultEarpiece ? 'EARPIECE' : 'SPEAKER_PHONE';
   }
-}
-
-/** После снятия наушников / отключения BT — вернуть сохранённый встроенный маршрут. */
-export function resolveBuiltinCallRouteAfterHeadsetDisconnect(
-  productDefaultEarpiece: boolean,
-): BuiltinCallAudioRoute {
-  const stored = readBuiltinCallRouteBeforeHeadset();
-  if (stored) return stored;
-  return productDefaultEarpiece ? 'EARPIECE' : 'SPEAKER_PHONE';
 }
 
 export function isInSystemPiPMode(): boolean {
@@ -140,7 +125,7 @@ export type HeadsetRouteState = {
 };
 
 /** Единственное место, где эта логика трогает global/модульный стейт (импуре-граница). */
-export function gatherHeadsetRouteState(): HeadsetRouteState {
+function gatherHeadsetRouteState(): HeadsetRouteState {
   const g = global as any;
   let currentRouteName: string | null = null;
   try {
@@ -172,11 +157,6 @@ export function isOnFullScreenVideoCallUiFromState(state: HeadsetRouteState): bo
   return state.currentRouteName === 'VideoCall' && state.prefersVideoMedia;
 }
 
-/** Полноэкранный video UI на VideoCall (не audio-only). */
-export function isOnFullScreenVideoCallUi(): boolean {
-  return isOnFullScreenVideoCallUiFromState(gatherHeadsetRouteState());
-}
-
 /** После снятия BT на video UI / system PiP: громкий + lock для последующих экранов. */
 export function rememberVideoUiSpeakerAfterHeadsetDisconnect(): void {
   rememberBuiltinCallRouteBeforeHeadset('SPEAKER_PHONE', false);
@@ -205,11 +185,6 @@ export function isInAppPiPVideoPathContext(): boolean {
 /** System PiP во время audio-звонка (не video-медиа). Чистая версия. */
 export function isInSystemPiPAudioOnlyContextFromState(state: HeadsetRouteState): boolean {
   return state.pipInSystemMode && !state.prefersVideoMedia;
-}
-
-/** System PiP во время audio-звонка (не video-медиа). */
-export function isInSystemPiPAudioOnlyContext(): boolean {
-  return isInSystemPiPAudioOnlyContextFromState(gatherHeadsetRouteState());
 }
 
 /** Громкий после снятия BT: полноэкранное video, system/in-app PiP с video-медиа. Чистая версия. */
@@ -271,9 +246,3 @@ export function resolveCallRouteAfterHeadsetDisconnect(): BuiltinCallAudioRoute 
   return resolveCallRouteAfterHeadsetDisconnectFromState(gatherHeadsetRouteState());
 }
 
-export function clearBuiltinCallRouteBeforeHeadset(): void {
-  try {
-    builtinRef().current = null;
-    clearCallBuiltinRouteChoice();
-  } catch {}
-}

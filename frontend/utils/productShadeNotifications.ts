@@ -14,8 +14,8 @@ import {
   isUpdateReminderCooldownActive,
 } from './updateCheck';
 
-export const FRIEND_REQUEST_CHANNEL_ID = 'friend_requests';
-export const APP_UPDATE_CHANNEL_ID = 'app_updates';
+const FRIEND_REQUEST_CHANNEL_ID = 'friend_requests';
+const APP_UPDATE_CHANNEL_ID = 'app_updates';
 
 const APP_UPDATE_SHADE_FOR_LATEST_KEY = 'livi.app_update_shade_for_latest_v1';
 const FRIEND_REQUEST_NOTIF_ID_PREFIX = 'friend_req_';

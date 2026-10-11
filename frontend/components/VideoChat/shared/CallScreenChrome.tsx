@@ -36,7 +36,7 @@ const STATUS_WEAK_SLASH = '#A33B4F';
 /** Hint над капсулой — тёмный титан (не статусные надписи). */
 const PEER_VIDEO_HINT_TITAN = '#5C616A';
 
-export type CallMoreMenuItem = {
+type CallMoreMenuItem = {
   key: string;
   label: string;
   icon: React.ComponentProps<typeof MaterialIcons>['name'];

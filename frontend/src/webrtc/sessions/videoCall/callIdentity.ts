@@ -20,7 +20,7 @@ export type CallParticipantsIdentity = {
   partnerUserId?: string | null;
 };
 
-export type PeerCallSignal = {
+type PeerCallSignal = {
   callId?: string;
   roomId?: string;
   from?: string;

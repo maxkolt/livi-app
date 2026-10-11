@@ -14,7 +14,7 @@ import { logger } from "../../utils/logger";
 const USER_EXISTS_CACHE_TTL_TRUE = 30000;
 const USER_EXISTS_CACHE_TTL_FALSE = 1500;
 
-export function identityAttach(payload: {
+function identityAttach(payload: {
   installId?: string;
   installSecret?: string | null;
   profile?: { nick?: string; avatarUrl?: string };
@@ -26,28 +26,6 @@ export function identityAttach(payload: {
 }
 
 export const attachIdentity = identityAttach;
-
-/* ========= Service ========= */
-export function getSocketId() {
-  return socket.id;
-}
-
-export async function attachUserId(userId: string) {
-  if (!isOid(userId)) return;
-  console.log("[attachUserId] Attaching userId:", userId);
-  shared.currentUserId = userId;
-  __notifyCurrentUserId();
-  try {
-    await AsyncStorage.setItem("userId", shared.currentUserId);
-  } catch {}
-  if (socket.connected) {
-    console.log("[socket] reauth — skip full disconnect");
-    socket.emit("reauth", { userId });
-    return;
-  }
-  const connect = await import("./connect");
-  await connect.applyAuthAndConnect();
-}
 
 // Функция для проверки существования пользователя с retry и кэшированием
 export async function checkUserExists(userId: string): Promise<boolean | null> {
@@ -459,7 +437,7 @@ export function onFriendProfile(
 }
 
 /* ========= User Validation ========= */
-export function checkUserExistsSocket(userId: string) {
+function checkUserExistsSocket(userId: string) {
   return emitAck<{ ok: boolean; exists: boolean; error?: string }>(
     "user:exists",
     { userId },

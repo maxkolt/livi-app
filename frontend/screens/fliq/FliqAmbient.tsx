@@ -59,7 +59,7 @@ async function loadImage(url: string): Promise<SkImage | null> {
   }
 }
 
-export type FliqAmbientRect = { x: number; y: number; width: number; height: number };
+type FliqAmbientRect = { x: number; y: number; width: number; height: number };
 
 type Props = {
   /** Превью ролика на экране; null — света нет. */

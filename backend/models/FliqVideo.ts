@@ -4,7 +4,7 @@
 // сборщик освежает fetchedAt, когда находит ролик снова.
 import { Schema, model, models } from 'mongoose';
 
-export interface IFliqVideo {
+interface IFliqVideo {
   videoId: string;
   source: 'youtube';
   title: string;

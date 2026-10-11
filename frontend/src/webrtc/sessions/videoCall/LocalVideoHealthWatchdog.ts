@@ -50,7 +50,7 @@ export function isLocalVideoStuck(before: VideoProgress, after: VideoProgress): 
   return framesDelta <= 0 && bytesDelta <= STUCK_BYTES_DELTA && packetsDelta <= 0;
 }
 
-export function currentDeviceWatchdogEnv(): DeviceWatchdogEnv {
+function currentDeviceWatchdogEnv(): DeviceWatchdogEnv {
   return {
     os: Platform.OS,
     version: Number(Platform.Version),

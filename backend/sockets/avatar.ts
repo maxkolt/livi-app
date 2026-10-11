@@ -131,7 +131,6 @@ export function bindAvatarSockets(io: Server, socket: Socket) {
 
   // Получить полный аватар друга (на экране профиля/клика)
   socket.on('user.getAvatar', async ({ userId: otherId }: { userId: string }, cb?: Function) => {
-    const requesterId = (socket as any).data?.userId as string | undefined;
     
     try {
       if (!otherId) {

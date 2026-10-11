@@ -18,8 +18,6 @@ export const HOME_NAV_BG = '#252B34';
 export const UI_SURFACE = '#2E3540';
 /** Элемент поверх блока или над затемнением: попапы, меню, кнопки в строках. */
 export const UI_SURFACE_RAISED = '#36404C';
-/** Утопленная подложка внутри блока (квадрат под иконкой) — темнее блока. */
-export const UI_SURFACE_SUNKEN = '#262D37';
 /** Кромка блоков: едва заметный светлый край отделяет блок от фона. */
 export const UI_RIM = 'rgba(255, 255, 255, 0.07)';
 /**
@@ -72,12 +70,6 @@ export const HOME_BLUR_LIST_SOURCE = {
 export const CALL_BLUR_BG_SOURCE = 'call-bg';
 export const CALL_BLUR_VIDEO_SOURCE = 'call-video';
 
-/** Непрозрачная заливка блоков поверх HOME_NAV_BG: таб-бар, «Онлайн», фильтры списков. */
-export const HOME_NAV_SURFACE = UI_SURFACE;
-/** Кнопка «Найти собеседника»: лёгкий тон акцента. */
-export const HOME_NAV_CTA_SURFACE = 'rgba(98, 176, 216, 0.16)';
-/** Верхняя и нижняя панель «Поиска». */
-export const WELCOME_SEARCH_CHROME_SURFACE = UI_SURFACE;
 /**
  * Блоки и круглые кнопки на «Друзьях», «Чатах» и «Звонках»: фильтры,
  * «Пригласить друзей», поиск, корона; кнопки «Начать» / «Далее» в рандомном чате.
@@ -102,25 +94,16 @@ export const WELCOME_POPUP_SHEET_CHROME = {
   borderColor: WELCOME_GLASS_RIM,
 } as const;
 /** Выбранный пункт / нажатая кнопка на блоке — непрозрачный тон акцента. */
-export const HOME_NAV_SEGMENT_ACTIVE = UI_ACCENT_SELECTED;
-export const HOME_NAV_ACTIVE = UI_ACCENT;
+const HOME_NAV_SEGMENT_ACTIVE = UI_ACCENT_SELECTED;
 /** Активная вкладка нижнего навбара и акцентные иконки блоков. */
 export const HOME_NAV_TAB_ACTIVE = UI_ACCENT;
 /** Подложка выбранной кнопки внутри фильтров вкладок («Все» / «Онлайн»), вкладки эмодзи. */
 export const WELCOME_FILTER_ACTIVE = 'rgba(98, 176, 216, 0.30)';
-export const HOME_NAV_ACTIVE_PRESSED = UI_ACCENT_PRESSED;
-/** Квадрат под иконкой в карточке — темнее карточки, чтобы иконка читалась. */
-export const HOME_NAV_ICON_WELL = UI_SURFACE_SUNKEN;
-/** Accent gradient (aura) — вместо фиолетового на макете. */
-export const AURA_GRADIENT = ['#14b8a6', '#3b82f6', '#00b5ff'] as const;
-export const AURA_GLOW = '#3b82f6';
 /**
  * Тон радара «Поиска» — общий акцент. Насыщенно горят только луч и цели, кольца
  * и шкала идут им же, но приглушённо (альфы в welcomeRadarScene).
  */
 export const SEARCH_RADAR_HUD = UI_ACCENT;
-/** Заливка кнопки «Сохранить» в профиле и активных сегментных кнопок — тон акцента. */
-export const WELCOME_SEARCH_CTA_BORDER = 'rgba(98, 176, 216, 0.24)';
 /** Подсветка того же тона: кромка луча, засветка шкалы, ядро цели. */
 export const SEARCH_RADAR_HUD_LIGHT = UI_ACCENT_LIGHT;
 /** Unread / missed count badge on welcome chats and friend action buttons. */
@@ -128,8 +111,6 @@ export const WELCOME_UNREAD_BADGE = '#2158c0';
 /** Значок «есть обновление»: краповый, как точка на вкладке «Профиль» в навбаре. */
 export const WELCOME_UPDATE_BADGE = '#A63A48';
 export const CROWN_GOLD = '#E4C065';
-/** Диалоги поверх затемнения (подтверждения в чате) — приподнятая поверхность. */
-export const WELCOME_CARD_BG = UI_SURFACE_RAISED;
 /** Скругление «полки» tab bar / шапки и композера чата по краям к контенту. */
 export const WELCOME_CHROME_EDGE_RADIUS = 24;
 /**
@@ -171,13 +152,6 @@ export const LIVI = {
   textThemeWhite: '#444444',
 };
 
-/** Заливка «Vi» — тёмный chrome с бирюзово-синими оттенками (aura). */
-export const WELCOME_BRAND_VI_FILL_GRADIENT = [
-  '#1a3640',
-  '#2a5868',
-  '#4a7a8c',
-] as const;
-
 /** Активная иконка / подсветка speaker & peer-video на audio UI и in-app PiP — общий акцент. */
 export const WELCOME_NAV_ACTIVE_ICON = UI_ACCENT;
 export const WELCOME_NAV_ACTIVE_ACCENT = {
@@ -194,13 +168,6 @@ export const CALL_BLUETOOTH_ACCENT = {
   solid15: 'rgba(155, 130, 196, 0.24)',
   solid30: 'rgba(155, 130, 196, 0.48)',
 } as const;
-
-/** Обводка «Vi» — teal → blue. */
-export const WELCOME_BRAND_VI_STROKE_GRADIENT = [
-  '#134e4a',
-  '#2a6f7a',
-  '#3b82f6',
-] as const;
 
 /** Горизонтальный inset списка друзей на welcome (карточки уже экрана). */
 export const WELCOME_FRIENDS_LIST_INSET = 22;
@@ -235,28 +202,11 @@ export const WELCOME_FRIENDS_SEGMENT_SHELL_RADIUS = 14;
 export const WELCOME_FRIENDS_SEGMENT_HEIGHT = { phone: 60, landscape: 44, tablet: 64 } as const;
 /** Отступ под блоком «Все / Онлайн» — от него считается и надпись пустого списка. */
 export const WELCOME_FRIENDS_SEGMENT_GAP = { phone: 12, landscape: 6, tablet: 14 } as const;
-/**
- * Android: тень блока «Все / …» плотнее обычной, у кромки одного тона со всех сторон.
- * Чуть темнее сам блок (baseOpacity), вокруг — размытый ореол (soft) и кольцевой акцент:
- * вторая тень, раздвинутая на 1 dp, а снизу ещё на 3 dp — там она чуть длиннее и ложится
- * на строки, которые уходят под блок. Сверху и по бокам ~8 dp, снизу ~11 dp.
- */
-export const WELCOME_FRIENDS_SEGMENT_SHADOW = {
-  spread: 7,
-  soft: true,
-  baseOpacity: 1.3,
-  ringOffset: 1,
-  ringDrop: 3,
-  ringOpacity: 1.2,
-} as const;
 
 /** Отступ над карточкой «Пригласить друзей» (футер списка друзей). */
 export const WELCOME_FRIENDS_INVITE_GAP = { phone: 8, landscape: 4, tablet: 8 } as const;
 /** Кнопки звонка/чата в welcome-строке — скругление (круг при 42×42). */
 export const WELCOME_FRIEND_ACTION_BTN_RADIUS = 21;
-/** Иконки звонка/чата welcome — общий акцент. */
-export const WELCOME_FRIEND_ACTION_ICON = UI_ACCENT;
-export const WELCOME_FRIEND_ACTION_ICON_PRESSED = UI_ACCENT_PRESSED;
 
 /** Кнопки звонка/чата в строке: заметно светлее строки (UI_ROW_SURFACE), чтобы читались кнопками. */
 export const WELCOME_FRIEND_ACTION_BTN_SURFACE = {
@@ -304,21 +254,9 @@ export const WELCOME_TOP_BAR_CONTROL_SIZE = 42;
  * на «Друзьях», «Звонках» и «Чате» кнопка поиска и корона стоят на тех же местах.
  */
 export const WELCOME_TOP_BAR_SIDE_PAD = 26;
-/** Телефон в landscape: верхней панели почти не остаётся высоты. */
-export const WELCOME_TOP_BAR_SIDE_PAD_TIGHT = 18;
 /** «L» логотипа видна правее края его SVG (обводка + поле буквы) — кнопку поиска ставим вровень с ней. */
 export const WELCOME_BRAND_GLYPH_INSET = 4;
-export const BRAND_OUTLINE_STROKE = 1.35;
 export const BRAND_FONT_FAMILY = Platform.OS === 'ios' ? 'System' : 'sans-serif-medium';
-export const BRAND_3D_LAYERS = 5;
-export const BRAND_3D_STEP_X = 0.55;
-export const BRAND_3D_STEP_Y = 0.62;
-export const BRAND_LETTER_GLOW_LAYERS = 3;
-export const BRAND_LETTER_GLOW_SPREAD = 1.2;
-export const BRAND_LETTER_GLOW_INSET = BRAND_LETTER_GLOW_LAYERS * BRAND_LETTER_GLOW_SPREAD;
-export const BRAND_LETTER_GLOW_INTENSITY = 0.58;
-/** Доля inset для перекрытия ореолов между буквами. */
-export const BRAND_LETTER_GLOW_OVERLAP = 1.2;
 export const CHROME_PERIMETER_GLOW_LAYERS = 5;
 export const CHROME_PERIMETER_GLOW_SPREAD = 2.8;
 /** Компенсация ширины ореола справа у chrome-контролов. */
@@ -344,17 +282,11 @@ export const FRIEND_ACTION_BTN_PRESSED_SURFACE = {
   transform: [{ scale: 0.92 }],
 } as const;
 
-export const FRIEND_ROW_HEIGHT = FRIEND_ROW_LAYOUT_HEIGHT;
-export const SHEET_CONTENT_PAD_H = 12;
-/** Совпадает с sheetTopBar paddingHorizontal + marginLeft у ChatStyleBackButton (5). */
-export const FRIENDS_LIST_PAD_H = SHEET_CONTENT_PAD_H + 5;
-
 export const DRAFT_KEY = 'profile_draft_v1';
 export const MISSED_CALLS_KEY = 'missed_calls_by_user_v1';
 export const UNREAD_BY_USER_KEY = 'unread_by_user_v1';
 /** Пиры, у которых чат очищен «для себя» — не поднимать строку из server lastMessage. */
 export const CHAT_CLEARED_FOR_ME_KEY = 'chat_cleared_for_me_v1';
-export const CHAT_FAVORITES_KEY = 'welcome_chat_favorites_v1';
 export const CALL_LOG_KEY = 'welcome_call_log_v1';
 export const PROFILE_KEY = 'livi.profile.v1';
 export const INSTALL_ID_KEY = 'livi.installId';
@@ -374,7 +306,7 @@ export const SEARCH_CTA_TABLET_MIN_WIDTH = 600;
  * 88% ширины, не больше 328. На более широких телефонах (Pixel, Pro Max, уменьшенный
  * «Масштаб экрана») растёт вместе с шириной, иначе вокруг остаётся пустота.
  */
-export const SEARCH_RADAR_PHONE_BASE = 328;
+const SEARCH_RADAR_PHONE_BASE = 328;
 const SEARCH_RADAR_PHONE_BASE_WIDTH = 384;
 const SEARCH_RADAR_PHONE_MAX = 440;
 

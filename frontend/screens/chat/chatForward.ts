@@ -9,7 +9,7 @@ import {
 } from "./chatAlbum";
 import { stickerFieldsFromMessage } from "./chatMessageMeta";
 
-export type ForwardMediaResolver = (uri: string) => string;
+type ForwardMediaResolver = (uri: string) => string;
 
 export type ForwardPayloadType = "text" | "image" | "audio" | "sticker" | "video" | "document" | "video_note";
 
@@ -40,7 +40,7 @@ function videoNoteForwardPayload(m: any, resolveMediaUri: ForwardMediaResolver):
 }
 
 /** Drop local file:// URIs — forward only remote media. */
-export function normalizeForwardMediaUri(
+function normalizeForwardMediaUri(
   u: string,
   resolveMediaUri: ForwardMediaResolver,
 ): string {
@@ -288,7 +288,7 @@ export function buildOptimisticForwardRow(
   return row;
 }
 
-export type SystemShareContent = {
+type SystemShareContent = {
   shareText: string;
   shareUrl: string | undefined;
 };

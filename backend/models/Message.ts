@@ -1,6 +1,6 @@
 import mongoose, { Schema, Document } from 'mongoose';
 
-export interface IMessage extends Document {
+interface IMessage extends Document {
   _id: mongoose.Types.ObjectId;
   clientId?: string; // Кастомный ID с фронтенда (msg_...)
   from: mongoose.Types.ObjectId;

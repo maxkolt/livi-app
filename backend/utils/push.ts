@@ -243,7 +243,6 @@ async function sendVoipPushToRecipient(
 const CALL_PUSH_MAX_ATTEMPTS = 3;
 const CALL_PUSH_RETRY_BASE_DELAY_MS = 700;
 const CALL_PUSH_ESCALATION_TTL_SECONDS = 15;
-const CALL_PUSH_NOTIFICATION_TTL_SECONDS = 15;
 const PUSH_TOKEN_STALE_TTL_MS = Math.max(24 * 60 * 60 * 1000, Number(process.env.PUSH_TOKEN_STALE_TTL_MS || 45 * 24 * 60 * 60 * 1000));
 const MAX_PUSH_TOKENS_PER_USER_PLATFORM = Math.max(2, Number(process.env.MAX_PUSH_TOKENS_PER_USER_PLATFORM || 4));
 
@@ -761,7 +760,7 @@ export async function sendPushToUser(
 }
 
 /** Данные входящего звонка для пуша */
-export type CallPushData = {
+type CallPushData = {
   callId: string;
   from: string;
   fromNick: string;

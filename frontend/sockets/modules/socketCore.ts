@@ -14,7 +14,7 @@ let socketInstance: Socket | null = null;
 
 export const isReconnecting = () => shared.reconnecting;
 
-export const getSocket = (): Socket => {
+const getSocket = (): Socket => {
   if (!socketInstance) {
     socketInstance = io(API_BASE, {
       path: "/socket.io",

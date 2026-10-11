@@ -8,8 +8,8 @@ import { getFriendIdsForUsers } from './friendshipUtils';
  *   либо все сокеты в фоне, но не дольше IN_APP_OFFLINE_DEBOUNCE_MS (гистерезис, без мерцания).
  * - Офлайн: нет сокетов (см. disconnect grace в index) или устойчивый фон дольше гистерезиса без звонка.
  */
-export const IN_APP_OFFLINE_DEBOUNCE_MS = 2_000;
-export const APP_FOREGROUND_HEARTBEAT_STALE_MS = 90_000;
+const IN_APP_OFFLINE_DEBOUNCE_MS = 2_000;
+const APP_FOREGROUND_HEARTBEAT_STALE_MS = 90_000;
 
 const userAllBackgroundSince = new Map<string, number>();
 
@@ -104,7 +104,7 @@ function socketForegroundTriState(s: { data?: Record<string, unknown> }): FgTri 
  * Обновляет момент «все сокеты ушли в фон».
  * Не удаляем отсчёт при каждом кратком appForeground:true — это делает scheduleDebouncedClearBackgroundOnForeground.
  */
-export function syncInAppTrackingForAllConnectedUsers(io: Server): void {
+function syncInAppTrackingForAllConnectedUsers(io: Server): void {
   const active = new Set<string>();
   for (const s of io.sockets.sockets.values()) {
     const u = normalizeUid(String((s as any)?.data?.userId || ''));
@@ -201,7 +201,7 @@ function cancelForegroundStalePresenceEmit(userId: string): void {
 }
 
 /** Если foreground:true перестал подтверждаться, переслать друзьям актуальный список без разрыва сокета. */
-export function armForegroundStalePresenceEmit(io: Server, userId: string): void {
+function armForegroundStalePresenceEmit(io: Server, userId: string): void {
   const key = normalizeUid(userId);
   if (!key) return;
   cancelForegroundStalePresenceEmit(key);
@@ -271,7 +271,7 @@ function isUserOnlineInApplicationAfterSync(io: Server, uid: string): boolean {
   return Date.now() - since < IN_APP_OFFLINE_DEBOUNCE_MS;
 }
 
-export function isUserOnlineInApplication(io: Server, uid: string): boolean {
+function isUserOnlineInApplication(io: Server, uid: string): boolean {
   const key = normalizeUid(uid);
   if (!key) return false;
   syncInAppTrackingForAllConnectedUsers(io);
@@ -302,7 +302,7 @@ async function loadFriendIdsForUsers(userIds: string[]): Promise<Map<string, str
   return getFriendIdsForUsers(uniqueIds);
 }
 
-export async function emitFriendPresenceForUsers(io: Server, changedUserIds: string | string[]): Promise<void> {
+async function emitFriendPresenceForUsers(io: Server, changedUserIds: string | string[]): Promise<void> {
   const changed = [...new Set((Array.isArray(changedUserIds) ? changedUserIds : [changedUserIds])
     .map(normalizeUid)
     .filter(isOid))];

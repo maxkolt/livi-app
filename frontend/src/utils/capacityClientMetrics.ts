@@ -3,7 +3,7 @@
  * POST /api/capacity/client-metrics
  * Отключено: ранее отправлялось только на staging; staging убран из проекта.
  */
-export type ClientMetricsPayload = {
+type ClientMetricsPayload = {
   joinTimeMs?: number;
   remoteMediaFirstSeenMs?: number;
   /** Ответ сервера на call:accept до продолжения ( callee ). */

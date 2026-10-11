@@ -27,22 +27,9 @@ export function isSystemPiPActiveOrEnteringSync(): boolean {
   }
 }
 
-export function isInAppPiPSuspendedForSystemSync(): boolean {
+function isInAppPiPSuspendedForSystemSync(): boolean {
   try {
     return isPipSuspendedForSystem();
-  } catch {
-    return false;
-  }
-}
-
-/** Плашка in-app «жива» для UI (не system, не suspend). */
-export function isInAppPiPOverlayActiveSync(): boolean {
-  try {
-    if (isPipForceHidden()) return false;
-    if (!isPipVisible()) return false;
-    if (isInAppPiPSuspendedForSystemSync()) return false;
-    if (isSystemPiPActiveOrEnteringSync()) return false;
-    return true;
   } catch {
     return false;
   }

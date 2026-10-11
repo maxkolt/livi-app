@@ -7,7 +7,7 @@ import {
 import { isInAudioOnlyCallUi, setPipAudioOnlyPlaceholderSticky } from './callAudioOnlyUiContext';
 import { readConnectedExternalCallAudioRoute } from './callConnectedExternalAudioRoute';
 import { readCallAudioRouteUiLock, clearCallAudioRouteUiLock } from './callAudioRouteTransitionGuards';
-import { readNativeProbedExternalRoute, isBluetoothHeadsetActiveForCall } from './nativeCallAudioProbe';
+import { isBluetoothHeadsetActiveForCall } from './nativeCallAudioProbe';
 import { readRootCurrentRouteName } from './safeRootNavigation';
 import { getCallMediaHint } from './directCallMediaHint';
 import {
@@ -87,7 +87,7 @@ export function armDirectAudioEarpieceStabilizeWindow(ms = DIRECT_AUDIO_EARPIECE
   } catch {}
 }
 
-export function clearDirectAudioEarpieceStabilizeWindow(): void {
+function clearDirectAudioEarpieceStabilizeWindow(): void {
   try {
     const g = global as any;
     if (g.__directAudioEarpieceStabilizeUntilRef) {
@@ -430,7 +430,7 @@ export type CallAudioRouteReapplyState = {
   callAudioPreservePriorityUntil: number;
 };
 
-export function gatherCallAudioRouteReapplyState(
+function gatherCallAudioRouteReapplyState(
   media: OngoingCallMediaState = gatherOngoingCallMediaState(),
 ): CallAudioRouteReapplyState {
   const g = global as any;
@@ -1043,7 +1043,7 @@ export type PiPAudioOutputRouteState = {
   externalForHint: InCallAudioRoute | null;
 };
 
-export function gatherPiPAudioOutputRouteState(): PiPAudioOutputRouteState {
+function gatherPiPAudioOutputRouteState(): PiPAudioOutputRouteState {
   const g = global as any;
   function read<T>(fn: () => T, fallback: T): T {
     try {

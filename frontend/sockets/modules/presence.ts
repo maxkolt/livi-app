@@ -90,19 +90,6 @@ function __dispatchPresenceUpdate(raw: unknown): void {
   }
 }
 
-/**
- * Был ли хотя бы один полный presence-массив с сервера (не путать с «ещё не приходил»).
- * Для шапки чата: при фокусе подставляем тот же статус, что и у списка друзей.
- */
-export function hasVisibleOnlinePresenceSnapshot(): boolean {
-  return shared.visibleOnlinePresenceListKnown;
-}
-
-export function isPeerInVisibleOnlinePresence(peerId: string): boolean {
-  if (!peerId) return false;
-  return shared.lastVisibleOnlineUserIds.has(String(peerId));
-}
-
 export function onPresenceUpdate(
   cb: (data: Array<{ _id: string; online: boolean }> | string[] | { userId: string; busy: boolean }) => void,
 ): () => void {
@@ -115,47 +102,7 @@ export function onPresenceUpdate(
   };
 }
 
-export function onUserPresence(
-  cb: (userId: string, online: boolean) => void,
-): () => void {
-  // Сохраняем предыдущий список онлайн пользователей для сравнения
-  let previousOnlineUsers = new Set<string>();
-
-  return onPresenceUpdate((data) => {
-    // Логи presence убраны - показывают только рабочее состояние
-
-    if (Array.isArray(data)) {
-      const currentOnlineUsers = new Set<string>();
-
-      // Обрабатываем массив (обычно это массив строк - ID онлайн пользователей)
-      data.forEach((item) => {
-        const userId = typeof item === "string" ? item : item._id;
-        if (userId) {
-          currentOnlineUsers.add(userId);
-        }
-      });
-
-      // Определяем, кто стал онлайн
-      currentOnlineUsers.forEach((userId) => {
-        if (!previousOnlineUsers.has(userId)) {
-          cb(userId, true); // Пользователь стал онлайн
-        }
-      });
-
-      // Определяем, кто стал офлайн
-      previousOnlineUsers.forEach((userId) => {
-        if (!currentOnlineUsers.has(userId)) {
-          cb(userId, false); // Пользователь стал офлайн
-        }
-      });
-
-      // Обновляем предыдущий список
-      previousOnlineUsers = currentOnlineUsers;
-    }
-  });
-}
-
-export type WelcomePresencePayload = {
+type WelcomePresencePayload = {
   ok?: boolean;
   list?: Array<string | { id?: string; nick?: string; name?: string; avatarVer?: number }>;
 };

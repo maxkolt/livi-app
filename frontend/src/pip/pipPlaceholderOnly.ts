@@ -8,10 +8,7 @@ import {
 import { finishDirectCallVideoExpandInFlight, isDirectCallVideoUiActive, clearDirectCallUserRequestedVideoExpand } from '../../utils/directCallVideoExpandGuard';
 
 export {
-  touchDirectCallVideoExpandGuard,
   isDirectCallVideoExpandGuardActive,
-  tryBeginDirectCallVideoExpand,
-  finishDirectCallVideoExpandInFlight,
   runDirectCallVideoExpandOnce,
   prepareDirectCallVideoReturnFromPiP,
   markDirectCallUserRequestedVideoExpand,
@@ -21,7 +18,6 @@ export {
   clearStaleDirectCallVideoExpandGlobalHints,
   isStaleDirectCallVideoExpandGlobalHint,
   shouldBlockAutomatedDirectCallVideoExpand,
-  isDirectCallVideoUiActive,
   shouldSuppressDirectCallAudioOnlyUiTransition,
   markFreshDirectCallAudioAcceptCall,
   isFreshDirectCallAudioAcceptCallActive,
@@ -141,7 +137,7 @@ export function mediaStreamHasLiveVideo(stream: unknown): boolean {
   }
 }
 
-export function getPipPlaceholderOnlyDebug(opts?: {
+function getPipPlaceholderOnlyDebug(opts?: {
   localCamOn?: boolean;
   remoteCamOn?: boolean;
   remoteStream?: unknown;
@@ -223,7 +219,7 @@ export function pipInAppBarEnteredFromAudioOnly(): boolean {
 }
 
 /** In-app PiP: RTC в превью-слоте при выходе с video UI; с audio — аватар, пока peer не включил live video. */
-export function shouldAllowRtcVideoInInAppPiPBar(opts?: {
+function shouldAllowRtcVideoInInAppPiPBar(opts?: {
   fromAudioOnlyUi?: boolean;
   remoteCamOn?: boolean;
   remoteStream?: unknown;
@@ -315,7 +311,7 @@ export function resolvePreferAudioOnlyUiOnActiveCallReturn(_opts?: {
  * Куда развернуть звонок из PiP по центральному тапу: audio UI, если пользователь ушёл с аудио-экрана.
  * Логика согласована с invokeReturnToVideoCallFromNotification в App.tsx.
  */
-export function resolvePreferAudioOnlyUiOnPiPReturn(opts?: {
+function resolvePreferAudioOnlyUiOnPiPReturn(opts?: {
   localCamOn?: boolean;
   remoteCamOn?: boolean;
   remoteStream?: unknown;
@@ -359,7 +355,7 @@ export function resolvePreferAudioOnlyUiOnPiPReturn(opts?: {
   }
 }
 
-export type SystemPiPLeaveContext = {
+type SystemPiPLeaveContext = {
   preferAudioOnly: boolean;
   /** Уход с аудио UI / audio-origin in-app — system PiP только лого, даже если peer потом включит камеру. */
   audioOrigin: boolean;

@@ -66,6 +66,7 @@ import { useChatPreviews } from './hooks/useChatPreviews';
 import { formatWelcomeChatTime } from './chatPreview';
 import { consumePendingWelcomeChatsFilter, onPendingWelcomeChatsFilter, setWelcomeViewingChats, shouldSkipHomeUiSettle } from '../../utils/globalEvents';
 import { markUnreadNotificationsSeen } from '../../utils/pushNotifications';
+import { usePaneList } from '../../utils/paneVisibility';
 import { clearWelcomeChatsForMe } from './clearWelcomeChats';
 import { WelcomeCrownButton } from './WelcomeCrownButton';
 import { WelcomeTabTitle } from './WelcomeTabTitle';
@@ -76,7 +77,7 @@ import type { Friend } from './types';
 
 type ChatsFilter = 'all' | 'unread';
 
-export type HomeWelcomeChatsViewProps = {
+type HomeWelcomeChatsViewProps = {
   lang: Lang;
   L: (key: string) => string;
   /** Видима ли вкладка — иначе не грузим AsyncStorage превью (keep-alive без лагов). */
@@ -295,6 +296,7 @@ function HomeWelcomeChatsViewInner({
       return aName.localeCompare(bName);
     });
   }, [allFriends, filter, trimmedQuery, unreadByUser, previews]);
+  const paneList = usePaneList(filteredChats);
 
   const visibleSelectIds = useMemo(
     () => filteredChats.map((f) => String(f.id)),
@@ -593,7 +595,7 @@ function HomeWelcomeChatsViewInner({
                   paddingBottom: bottomInset + (tabletLayout ? 16 : compactLandscape ? 6 : 12),
                 },
               ]}
-              data={filteredChats}
+              data={paneList.data}
               keyExtractor={(item) => item.id}
               extraData={listExtraData}
               renderItem={renderItem}
@@ -605,9 +607,7 @@ function HomeWelcomeChatsViewInner({
               onScrollBeginDrag={searchOpen ? closeSearch : undefined}
               showsVerticalScrollIndicator={false}
               overScrollMode="never"
-              initialNumToRender={12}
-              maxToRenderPerBatch={10}
-              windowSize={7}
+              {...paneList.windowProps}
               getItemLayout={(_, index) => ({
                 length: tabletLayout
                   ? WELCOME_FRIEND_CARD_ROW_HEIGHT_TABLET + WELCOME_FRIEND_CARD_GAP_TABLET

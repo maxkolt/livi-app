@@ -10,18 +10,12 @@ export { HomeWelcomeProfileView } from './HomeWelcomeProfileView';
 export { HomeCenterProfile } from './HomeCenterProfile';
 export {
   ChromePerimeterGlow,
-  AnimatedGradientBorder,
-  BrandTitleWithOutline,
-  AnimatedBorderButton,
-  CHROME_BORDER_GRADIENT_DARK,
-  CHROME_BORDER_GRADIENT_LIGHT,
 } from './chrome';
 export {
   displayName,
   displayAvatarLetter,
   mapToFriend,
   mergeFriendBusyFromFetch,
-  cleanPositiveBadgeMap,
   badgeMapsEqual,
   mergeMissedFromSources,
   buildFriendBadgesSignature,

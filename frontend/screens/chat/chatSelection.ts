@@ -131,7 +131,7 @@ export function selectionHasAnyForwardable(
   return false;
 }
 
-export type AlbumDeletePlan = {
+type AlbumDeletePlan = {
   fullDeleteIds: Set<string>;
   albumPartials: Array<{ messageId: string; message: any; removeIndices: number[] }>;
 };

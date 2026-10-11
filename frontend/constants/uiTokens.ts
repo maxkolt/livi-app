@@ -20,7 +20,7 @@ export const CHAT_BACK_BUTTON_SURFACE = {
 
 /** У соседних кнопок: большой hitSlop снаружи, маленький к соседу — меньше перехвата тапов. */
 export const TOUCH_HIT_OUTER = 26;
-export const TOUCH_HIT_INNER = 6;
+const TOUCH_HIT_INNER = 6;
 
 /** Горизонтальный зазор между кнопками в строке друга (звонок ↔ чат ↔ удаление). */
 export const FRIEND_ROW_ACTION_GAP = 18;
@@ -39,13 +39,6 @@ export const FRIEND_ACTION_PRESS_RETENTION = {
   right: 22,
 } as const;
 
-/** Список друзей: видео слева, чат справа (между ними ~14px). */
-export const FRIEND_ROW_HIT_VIDEO = {
-  top: TOUCH_HIT_OUTER,
-  bottom: TOUCH_HIT_OUTER,
-  left: TOUCH_HIT_OUTER,
-  right: TOUCH_HIT_INNER,
-} as const;
 /** Между аудио и видео — узкий зазор hitSlop. */
 export const FRIEND_ROW_HIT_AUDIO = {
   top: TOUCH_HIT_OUTER,

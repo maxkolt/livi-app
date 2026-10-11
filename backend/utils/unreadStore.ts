@@ -43,4 +43,3 @@ export const setViewingChatState = (userId: string, withPeerId: string | null) =
   store.setViewing(userId, withPeerId);
 export const isViewingChatWithUser = (recipientUserId: string, senderUserId: string) =>
   store.isViewingWith(recipientUserId, senderUserId);
-export const closeUnreadStore = () => store.close();

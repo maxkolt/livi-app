@@ -9,15 +9,6 @@ import { logger } from './logger';
 
 const isHttp = (s?: string) => !!s && /^https?:\/\//i.test(String(s).trim());
 
-function guessMime(filename: string, fallback = 'application/octet-stream') {
-  const lower = filename.toLowerCase();
-  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
-  if (lower.endsWith('.png')) return 'image/png';
-  if (lower.endsWith('.webp')) return 'image/webp';
-  if (lower.endsWith('.heic') || lower.endsWith('.heif')) return 'image/heic';
-  return fallback;
-}
-
 async function ensureMediaPermissions(): Promise<boolean> {
   if (Platform.OS !== 'ios') return true;
   try {
@@ -107,61 +98,6 @@ async function fetchWithTimeout(url: string, opts: RequestInit = {}, ms = 30000)
   }
 }
 
-/** Загрузка через FormData */
-async function uploadViaFormData(fileUri: string, cloudUrl: string, preset: string): Promise<string> {
-  const base = fileUri.split('/').pop() || 'avatar.jpg';
-  const name = base.includes('.') ? base : `${base}.jpg`;
-  const type = guessMime(name, 'image/jpeg') || 'image/jpeg';
-
-
-  const form = new FormData();
-  form.append('file', { uri: fileUri, name, type } as any);
-  form.append('upload_preset', preset);
-
-  const res = await fetchWithTimeout(cloudUrl, { method: 'POST', body: form as any }, 30000);
-  const txt = await res.clone().text();
-  let json: any = {};
-  try { json = JSON.parse(txt); } catch {}
-
-  if (!res.ok || !json?.secure_url) {
-    const reason = json?.error?.message || json?.error || `status ${res.status}`;
-    throw new Error(reason);
-  }
-  return String(json.secure_url);
-}
-
-/** Загрузка через Base64 */
-async function uploadViaBase64(fileUri: string, cloudUrl: string, preset: string): Promise<string> {
-
-  let working = fileUri;
-  try {
-    const manip = await ImageManipulator.manipulateAsync(
-      fileUri,
-      [{ resize: { width: 1024 } }],
-      { compress: 0.9, format: ImageManipulator.SaveFormat.JPEG }
-    );
-    if (manip?.uri) working = manip.uri;
-  } catch {}
-
-  const base64 = await FileSystem.readAsStringAsync(working, { encoding: FileSystem.EncodingType.Base64 });
-  const dataUrl = `data:image/jpeg;base64,${base64}`;
-
-  const form = new FormData();
-  form.append('file', dataUrl as any);
-  form.append('upload_preset', preset);
-
-  const res = await fetchWithTimeout(cloudUrl, { method: 'POST', body: form as any }, 30000);
-  const txt = await res.clone().text();
-  let json: any = {};
-  try { json = JSON.parse(txt); } catch {}
-
-  if (!res.ok || !json?.secure_url) {
-    const reason = json?.error?.message || json?.error || `status ${res.status}`;
-    throw new Error(reason);
-  }
-  return String(json.secure_url);
-}
-
 /** Серверный фолбэк */
 async function uploadViaServerFallback(fileUri: string, userId?: string, installId?: string): Promise<{ avatar: string; avatarVer: number }> {
 
@@ -210,7 +146,7 @@ async function uploadViaServerFallback(fileUri: string, userId?: string, install
 }
 
 /** Основная функция: загрузка аватара на сервер */
-export async function uploadAvatarToCloudinary(localUri: string, assetId?: string | null): Promise<{ avatar: string; avatarVer: number }> {
+async function uploadAvatarToCloudinary(localUri: string, assetId?: string | null): Promise<{ avatar: string; avatarVer: number }> {
   // Загружаем напрямую на сервер
   try {
     const fileUri = await normalizeLocalImageUri(localUri, assetId);

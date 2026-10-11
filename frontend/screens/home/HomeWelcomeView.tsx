@@ -39,7 +39,7 @@ import type { Lang } from '../../utils/i18n';
 import { logger } from '../../utils/logger';
 import type { HomeStyles } from './styles';
 
-export type HomeWelcomeViewProps = {
+type HomeWelcomeViewProps = {
   styles: HomeStyles;
   isDark: boolean;
   themeBackground: string;

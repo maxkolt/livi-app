@@ -118,7 +118,7 @@ export async function bindUser(io: Server, sock: any, userId: string) {
 }
 
 /** Сообщаем друзьям, что профиль userId поменялся */
-export async function broadcastProfileToFriends(io: Server, userId: string) {
+async function broadcastProfileToFriends(io: Server, userId: string) {
   // КРИТИЧНО: Проверяем готовность MongoDB перед операциями
   if (mongoose.connection.readyState !== 1) {
     return; // Если БД недоступна, просто выходим
@@ -347,8 +347,6 @@ export default function registerIdentitySockets(io: Server) {
         // ВАЖНО: создаём ПУСТОГО пользователя, игнорируем входящий profile
         // Это предотвращает "воскрешение" удалённых данных из черновика
         const newUserId = new Types.ObjectId();
-        const incomingProfile = payload?.profile || {};
-        const hasIncomingData = !!(incomingProfile.nick || incomingProfile.avatar);
 
         console.log(`[identity] Creating new user for installId: ${installId}, newUserId: ${newUserId}`);
 

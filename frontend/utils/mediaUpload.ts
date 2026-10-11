@@ -17,9 +17,9 @@ let multipartSupported: boolean | null = null;
  * вернётся), server — сервер отказал, file — файла нет или он слишком большой
  * (повтор не поможет).
  */
-export type MediaUploadErrorKind = 'network' | 'server' | 'file';
+type MediaUploadErrorKind = 'network' | 'server' | 'file';
 
-export type MediaUploadResult = {
+type MediaUploadResult = {
   success: boolean;
   url?: string;
   error?: string;
@@ -30,7 +30,7 @@ export type MediaUploadResult = {
 /** Multipart без ответа дольше этого — считаем, что сети нет. */
 const MULTIPART_TIMEOUT_MS = { audio: 45_000, image: 180_000, video: 300_000 } as const;
 
-export type MediaUploadOptions = {
+type MediaUploadOptions = {
   /** Отдаёт функцию отмены загрузки: очередь обрывает её, когда сеть сменилась. */
   registerCancel?: (cancel: () => void) => void;
 };
@@ -38,7 +38,7 @@ export type MediaUploadOptions = {
 /**
  * Конвертирует локальный файл в dataUri
  */
-export const fileToDataUri = async (uri: string): Promise<string | null> => {
+const fileToDataUri = async (uri: string): Promise<string | null> => {
   try {
     // Нормализуем URI для разных платформ
     const normalizedUri = uri.startsWith('file://') ? uri : `file://${uri}`;
@@ -369,9 +369,3 @@ export const uploadMediaToServer = async (
   }
 };
 
-/**
- * Определяет тип медиа файла по URI
- */
-export const getMediaType = (uri: string): 'image' => {
-  return 'image';
-};

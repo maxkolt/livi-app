@@ -43,7 +43,7 @@ export const FLIQ_TOPICS = [
 export type FliqTopic = (typeof FLIQ_TOPICS)[number];
 
 /** Языковые корзины ленты. Остальные языки приложения смотрят английскую. */
-export const FLIQ_LANGS: string[] = String(process.env.FLIQ_LANGS || 'ru,en')
+const FLIQ_LANGS: string[] = String(process.env.FLIQ_LANGS || 'ru,en')
   .split(',')
   .map((s) => s.trim().toLowerCase())
   .filter(Boolean);
@@ -345,7 +345,3 @@ export function startFliqCollector(): void {
   timer.unref?.();
 }
 
-export function stopFliqCollector(): void {
-  if (timer) clearInterval(timer);
-  timer = null;
-}

@@ -18,12 +18,6 @@
     "paths": {
       "*": [
         "./*"
-      ],
-      "@cometchat/chat-uikit-react-native": [
-        "./src/types/cometchat-stub"
-      ],
-      "@cometchat/chat-uikit-react-native/*": [
-        "./src/types/cometchat-stub"
       ]
     }
   },

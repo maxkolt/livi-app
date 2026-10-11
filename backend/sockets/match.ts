@@ -33,7 +33,7 @@ async function emitModerationBannedToSocket(s: AuthedSocket, userId: string) {
 }
 
 /** Первое предупреждение нарушителю (показывается у него в приложении) */
-export const MODERATION_FIRST_WARNING_TEXT =
+const MODERATION_FIRST_WARNING_TEXT =
   'Уважаемый пользователь, вы нарушаете правила приложения, при продолжении данных действий вы будете забанены на один час.';
 
 // === Очередь ожидания ========================================================
@@ -104,9 +104,6 @@ function scheduleDelayedRetry(io: Server, sid: string, delayMs: number, reason: 
 }
 async function removeFromQueue(sid: string) {
   await queueStore.removeFromQueue(sid);
-}
-async function inQueue(sid: string) {
-  return await queueStore.isInQueue(sid);
 }
 async function pushToQueue(sid: string) {
   await queueStore.addToQueue(sid);

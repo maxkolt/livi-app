@@ -4,7 +4,7 @@
  */
 const MAX_ENTRIES = 100;
 
-export type PushLogEntry = {
+type PushLogEntry = {
   ts: string;
   event: string;
   payload?: Record<string, unknown>;

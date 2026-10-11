@@ -7,7 +7,7 @@ import { logger } from './logger';
 const SIGNAL_PROXY_PREFIX = '/livekit';
 const UPSTREAM_CONNECT_TIMEOUT_MS = 10_000;
 
-export type LiveKitSignalUpstream = {
+type LiveKitSignalUpstream = {
   secure: boolean;
   hostname: string;
   port: number;

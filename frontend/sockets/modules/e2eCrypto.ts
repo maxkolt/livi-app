@@ -20,16 +20,16 @@ import { sha256 } from "@noble/hashes/sha2";
 
 export const E2E_ENVELOPE_VERSION = 1;
 export const E2E_BACKUP_VERSION = 1;
-export const E2E_MIN_PASSWORD_LENGTH = 8;
+const E2E_MIN_PASSWORD_LENGTH = 8;
 /** Запасной KDF без нативного модуля: 32 МБ памяти, не ниже серверного минимума (2^15). */
-export const E2E_BACKUP_KDF = { alg: "scrypt" as const, N: 2 ** 15, r: 8, p: 1 };
+const E2E_BACKUP_KDF = { alg: "scrypt" as const, N: 2 ** 15, r: 8, p: 1 };
 /** Основной KDF — нативный PBKDF2-HMAC-SHA256 (OWASP: 600 000 итераций). */
-export const E2E_BACKUP_PBKDF2_ITERATIONS = 600_000;
+const E2E_BACKUP_PBKDF2_ITERATIONS = 600_000;
 const PAD_BLOCK = 32;
 
 export type E2eEnvelope = { v: number; n: string; c: string; spk: string; rpk: string };
 export type E2eKeyPair = { publicKey: Uint8Array; secretKey: Uint8Array };
-export type E2eMessageBody = { id: string; from: string; to: string; text: string; replyText?: string };
+type E2eMessageBody = { id: string; from: string; to: string; text: string; replyText?: string };
 export type E2eBackupKdf =
   | { alg: "scrypt"; N: number; r: number; p: number; salt: string }
   | { alg: "pbkdf2-sha256"; iterations: number; salt: string };
@@ -44,10 +44,6 @@ let nativePbkdf2: Pbkdf2Impl | null = null;
 
 export function setNativePbkdf2(impl: Pbkdf2Impl | null): void {
   nativePbkdf2 = impl;
-}
-
-export function hasNativePbkdf2(): boolean {
-  return nativePbkdf2 != null;
 }
 
 const jsPbkdf2: Pbkdf2Impl = (password, salt, iterations, dkLen) =>
@@ -69,7 +65,7 @@ export async function nativePbkdf2MatchesJs(impl: Pbkdf2Impl): Promise<boolean> 
   return true;
 }
 export type E2eBackup = { v: number; kdf: E2eBackupKdf; n: string; c: string; pk: string };
-export type E2eBackupUpload = E2eBackup & { authKey: string };
+type E2eBackupUpload = E2eBackup & { authKey: string };
 
 nacl.setPRNG((out: Uint8Array, n: number) => {
   const cryptoObj = (globalThis as any).crypto;
@@ -255,7 +251,7 @@ export function sealMessage(body: E2eMessageBody, own: E2eKeyPair, recipientPubl
   };
 }
 
-export type OpenResult =
+type OpenResult =
   | { ok: true; body: E2eMessageBody; peerPublicKey: string }
   | { ok: false; reason: "not_my_key" | "malformed" | "forged" };
 

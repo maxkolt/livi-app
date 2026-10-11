@@ -310,7 +310,7 @@ const OUTGOING_CLOSE_DEBOUNCE_MS = 2000;
 const lastOutgoingCloseAtByKey: Record<string, number> = {};
 
 /** Сбросить дебаунс при открытии нового исходящего (чтобы следующий decline мог закрыть). */
-export function resetOutgoingCloseDebounce(): void {
+function resetOutgoingCloseDebounce(): void {
   for (const key of Object.keys(lastOutgoingCloseAtByKey)) delete lastOutgoingCloseAtByKey[key];
 }
 
@@ -429,7 +429,7 @@ const DISPLAY_DEBOUNCE_MS = 3000;
 /**
  * Если checkEnded === true, перед показом проверяет isEndedCallId (для запоздалого Expo-пуша «call»).
  */
-export async function launchIncomingCallActivityScreen(
+async function launchIncomingCallActivityScreen(
   callId: string,
   from: string,
   fromNick?: string,
@@ -737,26 +737,6 @@ export function notifyOutgoingCallId(callId: string): void {
 }
 
 /**
- * Показать исходящий звонок в нативном UI (полный экран / уведомление).
- * Вызывать после startCall, когда получен callId с сервера.
- * Уведомление в шторке одно — от LiviOutgoingCallService (звук, тап в экран, 20с таймаут).
- * CallKeep.startCall не вызываем, чтобы не дублировать уведомление.
- */
-export function displayOutgoingCall(callId: string, toUserId: string, toNick?: string, _hasVideo = true): void {
-  if (Platform.OS !== 'android') return;
-  if (!isSetup || !isAndroidCallKeepReady) return;
-  try {
-    const LiviAppModule = NativeModules.LiviAppModule;
-    if (LiviAppModule?.launchOutgoingCallActivity) {
-      LiviAppModule.launchOutgoingCallActivity(callId, toUserId, toNick ?? toUserId);
-    }
-    logger.info('[callKeep] displayOutgoingCall', { callId, to: toUserId });
-  } catch (e) {
-    logger.warn('[callKeep] displayOutgoingCall failed', e as Error);
-  }
-}
-
-/**
  * Показать входящий звонок в нативном UI (полный экран / уведомление).
  * Вызывать при получении входящего (сокет или пуш). Повторные вызовы для того же callId игнорируются.
  *
@@ -819,7 +799,7 @@ export function displayIncomingCall(callId: string, fromUserId: string, fromNick
   }
 }
 
-export type PresentIncomingCallOptions = {
+type PresentIncomingCallOptions = {
   callId: string;
   from: string;
   fromNick?: string;
@@ -834,7 +814,7 @@ export type PresentIncomingCallOptions = {
   source?: string;
 };
 
-export type PresentIncomingCallResult = 'shown' | 'skipped' | 'ended';
+type PresentIncomingCallResult = 'shown' | 'skipped' | 'ended';
 
 /**
  * Пункт 2: один путь показа входящего.
@@ -910,7 +890,7 @@ export function getPendingCallInfo(callId: string): { from: string; fromNick?: s
   return pendingCallById[resolveRawCallId(callId)];
 }
 
-export function clearPendingCall(callId: string): void {
+function clearPendingCall(callId: string): void {
   const rawCallId = resolveRawCallId(callId);
   const callKitId = callKitUuidByCallId[rawCallId];
   delete pendingCallById[rawCallId];
@@ -1055,7 +1035,6 @@ export function reportRejectCall(callId: string): void {
     return;
   }
   try {
-    const RNCallKeep = require('react-native-callkeep');
     const uuid = resolveCallKeepUuid(endCheck.callId);
     runWithCallKeepConnectionRetry('rejectCall', uuid, (RN) => {
       RN.default.rejectCall(uuid);
@@ -1133,7 +1112,7 @@ export function setCallKeepAvailable(available: boolean): void {
   }
 }
 
-export type CallKeepEventCallbacks = {
+type CallKeepEventCallbacks = {
   onAnswer: (callId: string) => void;
   onEnd: (callId: string) => void;
 };

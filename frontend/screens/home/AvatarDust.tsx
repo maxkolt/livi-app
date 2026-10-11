@@ -323,7 +323,7 @@ function getEmptyPicture(): SkPicture {
   return emptyPicture;
 }
 
-export async function loadEncodedImage(uri: string): Promise<SkImage | null> {
+async function loadEncodedImage(uri: string): Promise<SkImage | null> {
   let data;
   if (/^data:/i.test(uri)) {
     const comma = uri.indexOf(',');

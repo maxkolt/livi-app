@@ -13,7 +13,7 @@ function isSysPiPHomeTraceEnabled(): boolean {
   }
 }
 
-export type HomePiPTracePhase =
+type HomePiPTracePhase =
   | 'native_on_user_leave_hint'
   | 'native_skip'
   | 'native_enter_attempt'
@@ -167,7 +167,7 @@ function finalizeHomePiPOutcome(traceId: string, reason: string): void {
 }
 
 /** Завершить трассу раньше (native_skip, явный отказ). */
-export function finishHomePiPTraceEarly(traceId: string | null | undefined, reason: string): void {
+function finishHomePiPTraceEarly(traceId: string | null | undefined, reason: string): void {
   if (!traceId) return;
   finalizeHomePiPOutcome(traceId, reason);
 }

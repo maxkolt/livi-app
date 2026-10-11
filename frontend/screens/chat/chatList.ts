@@ -14,7 +14,7 @@ function localDayKey(ts: Date): string {
 }
 
 /** Подпись дня в ленте: DD.MM.YYYY */
-export function formatChatDateSeparator(ts: Date): string {
+function formatChatDateSeparator(ts: Date): string {
   const day = ts.getDate().toString().padStart(2, "0");
   const month = (ts.getMonth() + 1).toString().padStart(2, "0");
   return `${day}.${month}.${ts.getFullYear()}`;

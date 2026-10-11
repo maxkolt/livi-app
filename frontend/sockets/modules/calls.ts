@@ -11,7 +11,7 @@ import {
   getOrCreateIncomingCallE2eeDeclaration,
 } from "./callE2ee";
 
-export type DirectCallMedia = "audio" | "video";
+type DirectCallMedia = "audio" | "video";
 
 export function startCall(toUserId: string, options?: { media?: DirectCallMedia; callerNick?: string }) {
   // Пока у собеседника звонит, открываем соединения: после «Принять» сигналинг LiveKit
@@ -357,11 +357,6 @@ export function acceptCall(callId: string) {
 
 export function declineCall(callId: string) {
   socket.emit("call:decline", { callId });
-}
-
-/** Запросить payload call:accepted у сервера (после FCM call_accepted, когда приложение вывели на передний план). */
-export function requestCallAccepted(callId: string) {
-  socket.emit("call:getAccepted", { callId });
 }
 
 /**

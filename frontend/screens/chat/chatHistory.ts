@@ -10,9 +10,8 @@ import {
   isServerMessageId,
 } from "./chatMessageOps";
 import { albumUrisFieldFromMessage, stickerFieldsFromMessage, videoNoteFieldsFromMessage } from "./chatMessageMeta";
-import { getMessageImageUris } from "./chatAlbum";
 
-export type FormattedChatMessage = Record<string, any>;
+type FormattedChatMessage = Record<string, any>;
 
 /** Map a server message row into ChatScreen bubble shape. */
 export function formatServerChatMessage(
@@ -74,7 +73,7 @@ export function filterVisibleServerMessages(
   });
 }
 
-export function sortMessagesByTimestamp(messages: any[]): any[] {
+function sortMessagesByTimestamp(messages: any[]): any[] {
   return [...messages].sort((a: any, b: any) => timestampMs(a?.timestamp) - timestampMs(b?.timestamp));
 }
 
@@ -238,33 +237,6 @@ export function reuseUnchangedMessages(next: any[], prev: any[]): any[] {
     return kept;
   });
   return allSame ? prev : out;
-}
-
-/** Collect image URLs from recent messages for anti-flicker prefetch. */
-export function collectChatImageWarmUrls(
-  messages: any[],
-  resolveMediaUri: (u: string) => string,
-  opts?: { platform?: string; maxMessages?: number; maxUrls?: number },
-): string[] {
-  const maxMessages = opts?.maxMessages ?? 40;
-  const maxUrls = opts?.maxUrls ?? 56;
-  const platform = opts?.platform;
-  const urls: string[] = [];
-  const seen = new Set<string>();
-  const tail = messages.length > maxMessages ? messages.slice(-maxMessages) : messages;
-  for (const m of tail) {
-    if (String(m?.type || "") !== "image") continue;
-    for (const u of getMessageImageUris(m)) {
-      const r = resolveMediaUri(u);
-      if (!r || seen.has(r)) continue;
-      if (platform === "android" && /^data:/i.test(r)) continue;
-      if (!/^(https?:|file:)/i.test(r)) continue;
-      seen.add(r);
-      urls.push(r);
-      if (urls.length >= maxUrls) return urls;
-    }
-  }
-  return urls;
 }
 
 export function buildOutgoingReadStatusesFromHistory(

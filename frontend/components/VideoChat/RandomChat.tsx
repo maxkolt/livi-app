@@ -18,20 +18,18 @@ import {
   BackHandler,
   Easing,
   ActivityIndicator,
-  StyleSheet,
   } from 'react-native';
 import { useOrientationLayoutGuard } from '../../hooks/useOrientationLayoutGuard';
 import { OrientationCoverModal } from '../OrientationCoverModal';
 import { showAppAlert } from '../AppAlert';
 import { SystemBars } from 'react-native-edge-to-edge';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
-import { CommonActions } from '@react-navigation/native';
 import { SafeAreaView, useSafeAreaFrame, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { MediaStream, mediaDevices, RTCView } from '@livekit/react-native-webrtc';
+import { MediaStream, RTCView } from '@livekit/react-native-webrtc';
 import { RandomChatSession } from '../../src/webrtc/sessions/RandomChatSession';
 import type { CamSide, WebRTCSessionConfig } from '../../src/webrtc/types';
 import AwayPlaceholder from '../AwayPlaceholder';
-import { t, defaultLang } from '../../utils/i18n';
+import { t } from '../../utils/i18n';
 import { useLang } from '../../store/lang';
 import { useAppTheme } from '../../theme/ThemeProvider';
 import { isValidStream } from '../../utils/streamUtils';
@@ -99,7 +97,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   const isLandscape = layoutW > 0 && layoutH > 0 && layoutW / layoutH > 1.05;
   const ctrlIconSize = isLandscape ? 20 : 26;
 
-  const { theme, isDark } = useAppTheme();
+  useAppTheme();
   const lang = useLang((s) => s.lang);
   const androidContentInsets = useMemo(() => {
     if (Platform.OS !== 'android') return null;
@@ -1120,7 +1118,6 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   }, [camOn, localRenderKey]);
   
   // Вычисляемые значения
-  const hasActiveCall = !!partnerId || !!roomId;
   const shouldShowLocalVideo = camOn && !isInactiveState;
   
   // КРИТИЧНО: Обновляем localRenderKey только при реальном изменении localStream (streamId) или camOn

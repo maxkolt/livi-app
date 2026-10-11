@@ -10,9 +10,6 @@
  * Вынесено из VideoCall.tsx: это чтение глобалов от переданного токена, хуков нет.
  */
 
-/** Незавершённый restore не должен «залипнуть» навсегда — ограничиваем по возрасту токена. */
-const SYSTEM_PIP_RETURN_RESTORE_MAX_MS = 8000;
-
 /** Состояние текущего возврата, либо null, если токен не совпал или возврата нет. */
 export function readSystemPiPReturnState(token: number): any {
   if (!token) return null;

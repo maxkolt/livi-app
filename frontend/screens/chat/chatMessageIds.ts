@@ -1,7 +1,7 @@
 /** Shared chat message id helpers (optimistic / outbox). */
 
 /** Локальный статус звонка в переписке (не на сервере). */
-export function isLocalCallEventMessageId(messageId: string): boolean {
+function isLocalCallEventMessageId(messageId: string): boolean {
   return String(messageId || '').trim().startsWith('local_call_');
 }
 

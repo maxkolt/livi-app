@@ -66,6 +66,7 @@ import { useCallLog } from './hooks/useCallLog';
 import { deleteCallLogIds, recordCallLog } from './callLog';
 import { consumePendingWelcomeCallsFilter, onPendingWelcomeCallsFilter, setWelcomeCallsMissedFilterActive, setWelcomeCallsTabSelected, setWelcomeViewingMissedCalls, shouldSkipHomeUiSettle } from '../../utils/globalEvents';
 import { markMissedNotificationsSeen } from '../../utils/pushNotifications';
+import { usePaneList } from '../../utils/paneVisibility';
 import { WelcomeCrownButton } from './WelcomeCrownButton';
 import { WelcomeTabTitle } from './WelcomeTabTitle';
 import { useDigitalMediumFont } from './brandFont';
@@ -83,7 +84,7 @@ type CallRow = {
   at: number;
 };
 
-export type HomeWelcomeCallsViewProps = {
+type HomeWelcomeCallsViewProps = {
   lang: Lang;
   L: (key: string) => string;
   /** Вкладка «Звонки» сейчас видима (pane keep-alive не remount'ит экран). */
@@ -628,6 +629,7 @@ function HomeWelcomeCallsViewInner({
     }
     return list;
   }, [allFriends, filter, friendsById, logEntries, missedByUser, pickMode, trimmedQuery]);
+  const paneList = usePaneList(rows);
 
   const visibleSelectIds = useMemo(
     () => (pickMode ? [] : rows.map((row) => row.id)),
@@ -808,7 +810,7 @@ function HomeWelcomeCallsViewInner({
                   paddingBottom: bottomInset + (tabletLayout ? 16 : compactLandscape ? 6 : 12),
                 },
               ]}
-              data={rows}
+              data={paneList.data}
               keyExtractor={(item) => item.id}
               extraData={listExtraData}
               renderItem={renderItem}
@@ -820,9 +822,7 @@ function HomeWelcomeCallsViewInner({
               onScrollBeginDrag={searchOpen ? closeSearch : undefined}
               showsVerticalScrollIndicator={false}
               overScrollMode="never"
-              initialNumToRender={12}
-              maxToRenderPerBatch={10}
-              windowSize={7}
+              {...paneList.windowProps}
               getItemLayout={(_, index) => ({
                 length: tabletLayout
                   ? WELCOME_FRIEND_CARD_ROW_HEIGHT_TABLET + WELCOME_FRIEND_CARD_GAP_TABLET

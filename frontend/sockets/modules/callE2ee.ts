@@ -16,7 +16,7 @@ import {
   type E2eKeyPair,
 } from "./e2eCrypto";
 
-export type CallE2eeDeclaration = { pk: string };
+type CallE2eeDeclaration = { pk: string };
 
 const SECRET_KEY_PREFIX = "livi_call_e2ee_secret_v1:";
 const PENDING_TTL_MS = 2 * 60_000;
@@ -184,7 +184,7 @@ export function setCallE2eeUiActive(active: boolean, callIdRaw?: string | null):
   notifyCallE2eeUi();
 }
 
-export function clearCallE2eeUi(callIdRaw?: string | null): void {
+function clearCallE2eeUi(callIdRaw?: string | null): void {
   setCallE2eeUiActive(false, callIdRaw);
 }
 

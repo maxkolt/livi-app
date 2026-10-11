@@ -44,8 +44,6 @@ import type {
 } from "./outboxTypes";
 
 export type {
-  EditOutboxItem,
-  MessageOutboxItem,
   OutboxMessageDeliveredPayload,
   OutboxMessageFailedPayload,
 } from "./outboxTypes";
@@ -213,7 +211,7 @@ export function onOutboxPendingChange(cb: () => void): () => void {
 
 /* ========= Исход отправки — для того, кто ждёт конкретное сообщение ========= */
 
-export type OutboxOutcome =
+type OutboxOutcome =
   | { kind: 'delivered'; messageId: string; delivered: boolean; timestamp?: unknown }
   | { kind: 'failed'; error: string }
   | { kind: 'cancelled' };

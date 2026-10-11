@@ -35,13 +35,6 @@ import {
 
 const isOid = (s?: string) => !!s && mongoose.Types.ObjectId.isValid(String(s));
 const CLIENT_MESSAGE_ID_RE = /^[A-Za-z0-9:_-]{1,120}$/;
-const OID_HEX_24 = /^[a-f\d]{24}$/i;
-
-/** Socket rooms use lowercase Mongo ids (see identity.ts bindUser). */
-export function socketUserRoomId(userId: string): string {
-  const raw = String(userId || '').trim();
-  return OID_HEX_24.test(raw) ? raw.toLowerCase() : raw;
-}
 
 export function emitMessageDeletedToParticipants(
   io: Server,
@@ -72,7 +65,7 @@ export function emitMessagesDeletedToParticipants(
   }
 }
 export const MAX_MESSAGE_BATCH_SIZE = 100;
-export const READ_RECEIPT_CHUNK_SIZE = 500;
+const READ_RECEIPT_CHUNK_SIZE = 500;
 
 function normalizeClientMessageId(payload: any): string {
   const raw = String(payload?.clientMessageId || payload?.clientId || '').trim();
@@ -197,7 +190,7 @@ export async function removeLegacyFriendshipMessages(
   );
 }
 
-export async function clearLegacyFriendshipMessages(friendshipId: mongoose.Types.ObjectId | null): Promise<void> {
+async function clearLegacyFriendshipMessages(friendshipId: mongoose.Types.ObjectId | null): Promise<void> {
   if (!friendshipId) return;
 
   const set: Record<string, any[]> = {};
@@ -650,7 +643,7 @@ async function saveOfflineMessage(recipientId: string, message: any): Promise<bo
 /**
  * Получить и удалить офлайн сообщения для пользователя
  */
-export async function getAndClearOfflineMessages(userId: string): Promise<any[]> {
+async function getAndClearOfflineMessages(userId: string): Promise<any[]> {
   try {
     const recipientId = new mongoose.Types.ObjectId(userId);
     const drainStartedAt = new Date();
@@ -727,20 +720,6 @@ async function isUserOnline(io: Server, userId: string): Promise<boolean> {
   }
 }
 
-/**
- * Отправить сообщение пользователю если он онлайн
- */
-async function sendMessageToUser(io: Server, userId: string, message: any): Promise<boolean> {
-  try {
-    const online = await isUserOnline(io, userId);
-    if (online) io.to(`u:${String(userId)}`).emit('message:received', message);
-    return online;
-  } catch (error) {
-    console.error('Error sending message to user:', error);
-    return false;
-  }
-}
-
 export async function markMessagesReadForUser(
   me: string,
   from: string,
@@ -788,7 +767,7 @@ export async function markMessagesReadForUser(
   return total;
 }
 
-export async function markSingleMessageReadForUser(me: string, from: string, messageId: string): Promise<boolean> {
+async function markSingleMessageReadForUser(me: string, from: string, messageId: string): Promise<boolean> {
   const friendship = await getOrCreateFriendship(me, from);
   if (!friendship) throw new Error('friendship_not_found');
 

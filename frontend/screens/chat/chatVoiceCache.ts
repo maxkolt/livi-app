@@ -3,7 +3,7 @@
 import * as FileSystem from "expo-file-system";
 
 /** Stable cache file name for a remote voice URL. */
-export function voiceCacheFileNameForRemoteUrl(remoteUri: string): string {
+function voiceCacheFileNameForRemoteUrl(remoteUri: string): string {
   let h = 0;
   for (let i = 0; i < remoteUri.length; i++) {
     h = (Math.imul(31, h) + remoteUri.charCodeAt(i)) | 0;

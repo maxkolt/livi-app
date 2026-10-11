@@ -11,7 +11,7 @@ import { View, StyleSheet } from 'react-native';
 import { HOME_NAV_BG } from '../../../screens/home/constants';
 import { CallScreenChrome } from './CallScreenChrome';
 
-export type IncomingAnswerConnectingCoverProps = {
+type IncomingAnswerConnectingCoverProps = {
   partnerName: string;
   partnerAvatarUri?: string;
   statusLine: string;

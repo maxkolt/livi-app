@@ -57,7 +57,6 @@ import { registerRootComponent } from 'expo';
 import App from './App';
 import ShareRoot from './components/share/ShareRoot';
 import { isEndedCallId, setupCallKeep, presentIncomingCall, stopIncomingCallForegroundService } from './utils/callKeep';
-import * as Notifications from 'expo-notifications';
 import { isIncomingCallExpired } from './utils/callExpiry';
 
 // Пока идёт звонок, натив (CallJsTimersKeepAlive) держит эту задачу активной: иначе RN усыпляет

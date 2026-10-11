@@ -6,20 +6,7 @@ import { emitMissedFetchedFromServer } from '../../utils/globalEvents';
 import { shared } from './shared';
 
 const MISSED_CALLS_KEY = 'missed_calls_by_user_v1';
-const APPLIED_FROM_REAUTH_EXPIRY_MS = 30_000;
 const APPLIED_FROM_PENDING_EXPIRY_MS = 30_000;
-
-/** Проверить, что uid недавно учтён в applyMissedFromReauth — чтобы при применении pending не инкрементировать повторно. */
-export function wasAppliedFromReauth(uid: string): boolean {
-  if (!uid) return false;
-  const ts = shared.appliedFromReauthByUid.get(uid);
-  if (ts == null) return false;
-  if (Date.now() - ts > APPLIED_FROM_REAUTH_EXPIRY_MS) {
-    shared.appliedFromReauthByUid.delete(uid);
-    return false;
-  }
-  return true;
-}
 
 /** Записать, что uid только что учтён при применении pending (getAndClearPendingMissedCalls). */
 export function recordAppliedFromPending(uid: string): void {

@@ -50,7 +50,6 @@ import {
   isDirectCallVideoExpandGuardActive,
   prepareDirectCallVideoReturnFromPiP,
   clearStaleDirectCallVideoExpandGlobalHints,
-  finishDirectCallVideoExpandInFlight,
   markDirectCallUserRequestedVideoExpand,
 } from './directCallVideoExpandGuard';
 import { isInAppPiPExplicitBuiltinRouteChoiceActive, isInAppPiPManualRouteLockActive } from './inAppPiPExplicitBuiltinRoute';
@@ -67,7 +66,6 @@ import {
   probeNativeCallAudioRoutes,
   isCallAudioBootstrapPending,
   isBluetoothHeadsetActiveForCall,
-  isBluetoothPreferredForAutoRoute,
   isBluetoothAvailableForAutoRoute,
   isBluetoothPairedAvailable,
 } from './nativeCallAudioProbe';
@@ -540,7 +538,6 @@ function schedulePreserveCallAudioRoute(reason: string, media?: 'audio' | 'video
     }
   } catch {}
   try {
-    const g = global as any;
     const freshAcceptId = getFreshDirectCallAudioAcceptCallId();
     const bootstrappedId = String(
       (global as any).__directCallAudioAcceptBootstrappedCallIdRef?.current || '',
@@ -721,7 +718,6 @@ export function clearPersistedCallAudioRoute(): void {
     if (g.__explicitBuiltInCallAudioRouteRef) g.__explicitBuiltInCallAudioRouteRef.current = false;
   } catch {}
   lastNativeInCallSignature = '';
-  lastReapplySignature = '';
 }
 
 /** Home / фон с экрана «Аудиозвонок»: громкая связь (кроме Bluetooth / провода). */
@@ -855,7 +851,7 @@ export function mapRouteForVideoUiKeepingChoice(route: InCallAudioRoute): InCall
 }
 
 /** Video PiP / полный video UI: ear-hearing → громкий; BT/провод и явный выбор пользователя — без авто-BT. */
-export function resolveVideoInAppPiPAudioRoute(
+function resolveVideoInAppPiPAudioRoute(
   preferred?: InCallAudioRoute | string | null,
   opts?: { mapForEnterVideoUi?: boolean },
 ): InCallAudioRoute {
@@ -1069,7 +1065,6 @@ async function applyVideoContextNativeRoute(
   } catch {}
   const signature = `${route}|${media}|${reason}`;
   const now = Date.now();
-  lastReapplySignature = signature;
   lastReapplyAt = now;
   await runInCallRestartIfNeeded(media, skipInCallRestart, reason);
   await applyNativeOutputRoute(route, media, {
@@ -1118,7 +1113,6 @@ export function persistVideoInAppPiPAudioRoute(
 let reapplyChain = Promise.resolve();
 type ScheduledReapplyTimer = { timer: ReturnType<typeof setTimeout>; reason: string };
 let scheduledReapplyTimers: ScheduledReapplyTimer[] = [];
-let lastReapplySignature = '';
 let lastReapplyAt = 0;
 let lastReapplyRouteMediaKey = '';
 let lastReapplyReasonKey = '';
@@ -1150,8 +1144,6 @@ function shouldSkipDuplicateReapply(
 }
 
 function rememberReapplyDedup(route: InCallAudioRoute, media: 'audio' | 'video', reason: string): void {
-  const honorTag = 'honor';
-  lastReapplySignature = `${route}|${media}|${honorTag}`;
   lastReapplyRouteMediaKey = `${route}|${media}`;
   lastReapplyReasonKey = `${lastReapplyRouteMediaKey}|${reason}`;
   lastReapplyAt = Date.now();
@@ -2362,7 +2354,6 @@ export async function reapplyPersistedCallAudioRoute(
             : resolveActiveCallInCallMedia());
         const signature = `${route}|${media}|pip_toggle`;
         const now = Date.now();
-        lastReapplySignature = signature;
         lastReapplyAt = now;
         const toggleSkipInCallRestart =
           reason === 'in_app_pip_audio_route_toggle' || reason === 'audio_ui_route_cycle'
@@ -2824,7 +2815,6 @@ export async function reapplyPersistedCallAudioRoute(
         const media = opts?.media ?? 'video';
         const signature = `${videoRoute}|${media}|video_ui`;
         const now = Date.now();
-        lastReapplySignature = signature;
         lastReapplyAt = now;
         await applyNativeOutputRoute(videoRoute, media, {
           forceBuiltIn: !isExternalHeadsetRoute(videoRoute),
@@ -3129,7 +3119,6 @@ export async function reapplyPersistedCallAudioRoute(
         logger.debug('[callAudioRoutePersist] reapply skipped (duplicate)', { reason, route, media });
         return;
       }
-      lastReapplySignature = signature;
       rememberReapplyDedup(route, media, reason);
 
       const forceBuiltIn =

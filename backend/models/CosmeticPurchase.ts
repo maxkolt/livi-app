@@ -2,7 +2,7 @@ import { Schema, model, models, Types, Model } from 'mongoose';
 
 export type CosmeticKind = 'frame' | 'background';
 
-export interface ICosmeticPurchase {
+interface ICosmeticPurchase {
   _id: Types.ObjectId;
   user: Types.ObjectId;
   kind: CosmeticKind;

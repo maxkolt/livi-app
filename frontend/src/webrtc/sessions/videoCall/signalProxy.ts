@@ -42,7 +42,7 @@ export function isLiveKitSignalProxyUrl(url: string, apiBase: string): boolean {
   return String(url || '').replace(/\/+$/, '') === proxyUrl;
 }
 
-export type InitialLiveKitSignalRoute = {
+type InitialLiveKitSignalRoute = {
   url: string;
   directSignalUrl?: string;
   signalProxyTried: boolean;

@@ -2,7 +2,7 @@
 // Пропущенные видеозвонки: сохраняются при таймауте/отмене, чтобы получатель мог увидеть их после восстановления сети.
 import { Schema, model, models, type Types } from 'mongoose';
 
-export interface IMissedCall {
+interface IMissedCall {
   _id: Types.ObjectId;
   calleeId: Types.ObjectId;
   callerId: Types.ObjectId;

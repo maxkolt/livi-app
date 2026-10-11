@@ -5,7 +5,7 @@ import { clearStaleInAppPiPAudioContextForFreshCallNav } from './callAudioRouteP
 import { getCallMediaHint } from './directCallMediaHint';
 import { readSafeRootNavigation } from './safeRootNavigation';
 
-export { readRootCurrentRouteName, readRootCurrentRoute, readRootNavigationState } from './safeRootNavigation';
+export { readRootCurrentRouteName, readRootNavigationState } from './safeRootNavigation';
 
 let appState: AppStateStatus = AppState.currentState;
 let guardInstalled = false;
@@ -18,7 +18,7 @@ export type RootNavLike = {
   canGoBack?: () => boolean;
 };
 
-export function isAppForegroundForUi(): boolean {
+function isAppForegroundForUi(): boolean {
   return appState === 'active';
 }
 
@@ -33,13 +33,6 @@ export function installAppNavigationGuard(): void {
   AppState.addEventListener('change', (next) => {
     appState = next;
   });
-}
-
-/** Не сбрасывать стек на Home, пока приложение не на экране (пользователь вернётся через recents). */
-export function shouldSkipDestructiveNavWhileBackground(reason: string): boolean {
-  if (!isAppBackgroundOrInactive()) return false;
-  logger.debug('[navGuard] defer destructive nav (background)', { reason });
-  return true;
 }
 
 /**
@@ -180,7 +173,7 @@ const FRESH_VIDEO_CALL_NAV_REASONS = new Set([
 ]);
 
 /** Не тащить fromPiP/resume с прошлого VideoCall при новом входящем / call:accepted. */
-export function stripStalePiPReturnNavParams(
+function stripStalePiPReturnNavParams(
   params: Record<string, unknown>,
   reason?: string,
 ): Record<string, unknown> {
@@ -346,7 +339,7 @@ export function navigateToVideoCallScreen(
   }
 }
 
-export function readAppRootNavigation(): RootNavLike | null {
+function readAppRootNavigation(): RootNavLike | null {
   return readSafeRootNavigation() as RootNavLike | null;
 }
 
@@ -498,7 +491,7 @@ export function clearHomeTransientRouteParams(): boolean {
   return false;
 }
 
-export type LeaveVideoCallScreenOpts = {
+type LeaveVideoCallScreenOpts = {
   returnTo?: { name: string; params?: object };
   callEnded?: boolean;
 };

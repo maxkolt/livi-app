@@ -199,7 +199,7 @@ function openMessageUrl(raw: string): void {
   Linking.openURL(url).catch(() => {});
 }
 
-export type ChatMessageItemLivi = {
+type ChatMessageItemLivi = {
   white: string;
   titan: string;
   red: string;
@@ -210,7 +210,7 @@ export type ChatMessageItemLivi = {
   replyHighlightAccent: string;
 };
 
-export type ChatMessageItemProps = {
+type ChatMessageItemProps = {
   item: any;
   currentUserId: string | null;
   readStatus?: ChatReadStatus;

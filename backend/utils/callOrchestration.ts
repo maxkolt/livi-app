@@ -122,7 +122,7 @@ function appendEvent(snapshot: OrchestratedCall, event: TimelineEvent): void {
   persistAppendEvent(snapshot.callId, event);
 }
 
-export function isCallInRollout(callerId: string, calleeId: string): boolean {
+function isCallInRollout(callerId: string, calleeId: string): boolean {
   if (callFeatureFlags.rolloutPercent >= 100) return true;
   if (callFeatureFlags.rolloutPercent <= 0) return false;
   const bucket = hashToPercent(`${callerId}:${calleeId}`);

@@ -25,11 +25,11 @@ import {
 import { VIDEO_NOTE_MAX_MS, VIDEO_NOTE_MIN_MS } from "./videoNoteFiles";
 import type { VideoNoteRecorderHandle } from "./VideoNoteRecorder";
 
-export type RecordMode = "voice" | "video";
+type RecordMode = "voice" | "video";
 /** Дольше — удержание (запись), короче — касание (подсказка «удерживайте…»). */
 const HOLD_START_MS = 170;
 /** Столько вверх от кнопки — замок: запись идёт без пальца. */
-export const RECORD_LOCK_DY = -70;
+const RECORD_LOCK_DY = -70;
 
 type NoticeFn = (kind: "error" | "info", title: string, message: string) => void;
 

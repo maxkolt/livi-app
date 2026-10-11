@@ -30,13 +30,13 @@ export const BACKUP_FETCH_LIMITS = [
   { key: 'e2e_backup_fetch_d', max: 20, windowMs: 24 * 60 * 60_000 },
 ];
 
-export type BackupKdf =
+type BackupKdf =
   | { alg: 'scrypt'; N: number; r: number; p: number; salt: string }
   | { alg: 'pbkdf2-sha256'; iterations: number; salt: string };
 
 /** Нижняя граница PBKDF2 (OWASP 2023: 600 000; 310 000 — прежняя рекомендация). */
-export const PBKDF2_MIN_ITERATIONS = 310_000;
-export type BackupUpload = { v: number; kdf: BackupKdf; n: string; c: string; pk: string; authKey: string };
+const PBKDF2_MIN_ITERATIONS = 310_000;
+type BackupUpload = { v: number; kdf: BackupKdf; n: string; c: string; pk: string; authKey: string };
 
 function isPowerOfTwo(n: number): boolean {
   return Number.isInteger(n) && n > 0 && (n & (n - 1)) === 0;

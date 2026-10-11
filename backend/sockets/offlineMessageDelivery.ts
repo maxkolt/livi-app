@@ -12,7 +12,7 @@
  * «забрал и удалил» — иначе им бы досылалась вся очередь на каждый reconnect.
  */
 
-export const OFFLINE_ACK_CAPABILITY = 'offline_ack';
+const OFFLINE_ACK_CAPABILITY = 'offline_ack';
 export const OFFLINE_ACK_TIMEOUT_MS = 20_000;
 /** Аренда длиннее таймаута ack, чтобы параллельный bind не выдал ту же запись повторно. */
 export const OFFLINE_CLAIM_LEASE_MS = 45_000;

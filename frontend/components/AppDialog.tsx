@@ -21,11 +21,11 @@ import { AppOverlay } from './AppOverlay';
 import { useModalLayout } from '../utils/modalLayout';
 import { DarkPalette } from '../theme/ThemeProvider';
 import { useNickDigitalFont } from '../screens/home/brandFont';
-import { UI_ACCENT, UI_SURFACE_RAISED, WELCOME_HEADER_TITLE } from '../screens/home/constants';
+import { UI_SURFACE_RAISED, WELCOME_HEADER_TITLE } from '../screens/home/constants';
 
-export type AppDialogActionVariant = 'cancel' | 'primary' | 'danger';
+type AppDialogActionVariant = 'cancel' | 'primary' | 'danger';
 
-export type AppDialogAction = {
+type AppDialogAction = {
   label: string;
   onPress: () => void;
   /** cancel — нейтральная; primary — главное действие (голубая); danger — удаление. */
@@ -35,7 +35,7 @@ export type AppDialogAction = {
   busy?: boolean;
 };
 
-export type AppDialogProps = {
+type AppDialogProps = {
   title?: string;
   message?: string;
   /** Значок слева от заголовка. */
@@ -235,9 +235,7 @@ export const appDialogStyles = StyleSheet.create({
   },
 });
 
-export const APP_DIALOG_TITLE_COLOR = TITLE_COLOR;
 export const APP_DIALOG_MESSAGE_COLOR = MESSAGE_COLOR;
-export const APP_DIALOG_ACCENT = UI_ACCENT;
 
 const styles = StyleSheet.create({
   card: {

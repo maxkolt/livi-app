@@ -49,7 +49,7 @@ const TEAL_STAGE_EDGE_RGB = '46,53,64';
 /** Витрина Legendary: края приглушены почти до середины (StagePalette.TEAL_DEEP). */
 const TEAL_DEEP_STAGE_EDGE_RGB = '40,46,56';
 
-export type StagePaletteName = 'classic' | 'teal' | 'tealDeep';
+type StagePaletteName = 'classic' | 'teal' | 'tealDeep';
 
 /** reach — доля пути от края до середины, занятая переходом (как StagePalette.reach). */
 function buildHomeStageGradient(edgeRgb: string, reach = 1) {

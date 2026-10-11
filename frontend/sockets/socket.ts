@@ -8,9 +8,6 @@ import "./modules/calls";
 export { API_BASE, CALL_SIGNALING_CONNECT_MS, SOCKET_CONNECT_WAIT_MS } from "./modules/constants";
 export type { SocketReauthResponse } from "./modules/types";
 export type { OutboxMessageDeliveredPayload, OutboxMessageFailedPayload } from "./modules/outboxTypes";
-export type { FriendListItem } from "./modules/friends";
-export type { DeleteMessagesBatchResult, SendMessageResult } from "./modules/messages";
-export type { DirectCallMedia } from "./modules/calls";
 
 export {
   clearCancelledOutboxFingerprints,
@@ -29,7 +26,7 @@ export {
 } from "./modules/reactionOutbox";
 export type { MessageReaction } from "./modules/reactionOutbox";
 
-export { recordAppliedFromPending, wasAppliedFromReauth } from "./modules/missedCalls";
+export { recordAppliedFromPending } from "./modules/missedCalls";
 
 export {
   emitAck,
@@ -42,33 +39,16 @@ export {
 export {
   PRESENCE_OFFLINE_DEBOUNCE_MS,
   emitPresenceUpdateIfChanged,
-  hasVisibleOnlinePresenceSnapshot,
-  isPeerInVisibleOnlinePresence,
   onPresenceUpdate,
-  onUserPresence,
   onWelcomePresence,
 } from "./modules/presence";
-export type { WelcomePresencePayload } from "./modules/presence";
 
-export {
-  onRtcAnswer,
-  onRtcCandidate,
-  onRtcOffer,
-  sendAnswer,
-  sendCandidate,
-  sendOffer,
-  socketBufferIceCandidate,
-  socketFlushBufferedIceCandidates,
-} from "./modules/rtc";
 
 export {
   acceptInvite,
-  addFriend,
-  checkFriendship,
   checkInviteLink,
   fetchFriendRequests,
   fetchFriends,
-  inviteFriend,
   onFriendAccepted,
   onFriendAdded,
   onFriendDeclined,
@@ -83,16 +63,12 @@ export { getAvatar, getMyProfile, updateProfile } from "./modules/profile";
 
 export {
   attachIdentity,
-  attachUserId,
   checkUserExists,
-  checkUserExistsSocket,
   clearAllUserData,
   clearCurrentUserId,
   createUser,
   getCurrentUserId,
   getMyUserId,
-  getSocketId,
-  identityAttach,
   isCreateUserInProgress,
   onFriendProfile,
   refreshUserIdFromInstall,
@@ -111,16 +87,12 @@ export {
   editMessage,
   ensureGloballyDeletedMessageIdsLoaded,
   fetchMessages,
-  filterOutGloballyDeletedMessages,
-  getChatHistory,
   getChatMessages,
   getChatMessagesLocal,
   getUnreadCount,
   getUnreadCounts,
-  getUnreadMessageCount,
   globalMessageStorage,
   isGloballyDeletedMessageId,
-  loadMessagesFromServer,
   markMessagesAsRead,
   onChatCleared,
   onChatTyping,
@@ -131,7 +103,6 @@ export {
   onMessageReceived,
   onMessageUrisUpdated,
   onMessagesDeleted,
-  rememberGloballyDeletedMessageIds,
   sendChatTyping,
   sendChatViewing,
   sendMessage,
@@ -168,11 +139,10 @@ export {
   onFriendsRoomState,
   onRandomBusy,
   reportIncomingCallShown,
-  requestCallAccepted,
   requestCallAcceptedWithRetry,
   startCall,
 } from "./modules/calls";
 
-export { getSocket, isReconnecting, socket } from "./modules/socketCore";
+export { isReconnecting, socket } from "./modules/socketCore";
 export { socket as default } from "./modules/socketCore";
-export { applyAuthAndConnect, boot, hardRecycleSocketConnection, shouldAttemptRealtimeConnection } from "./modules/connect";
+export { applyAuthAndConnect, boot, hardRecycleSocketConnection } from "./modules/connect";

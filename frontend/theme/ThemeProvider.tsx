@@ -44,7 +44,7 @@ function buildDarkTheme(): AppTheme {
 }
 
 /** @deprecated Always `'dark'` — light/auto removed. */
-export type ThemePreference = 'dark';
+type ThemePreference = 'dark';
 
 type ThemeContextValue = {
   /** @deprecated Always `'dark'`. */
@@ -56,7 +56,7 @@ type ThemeContextValue = {
   isDark: true;
 };
 
-export const ThemeContext = React.createContext<ThemeContextValue | undefined>(undefined);
+const ThemeContext = React.createContext<ThemeContextValue | undefined>(undefined);
 
 const DARK_THEME = buildDarkTheme();
 

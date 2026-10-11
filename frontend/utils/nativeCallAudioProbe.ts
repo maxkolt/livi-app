@@ -2,11 +2,10 @@ import { NativeModules, Platform } from 'react-native';
 import { logger } from './logger';
 import {
   type InCallAudioRoute,
-  isExternalHeadsetRoute,
   normalizeInCallRoute,
 } from '../components/VideoChat/hooks/audioRouteTypes';
 
-export type NativeCallAudioProbe = {
+type NativeCallAudioProbe = {
   available: InCallAudioRoute[];
   preferred: InCallAudioRoute | null;
   /** Native: SCO/audio actually on — не idle paired в кейсе. */
@@ -36,7 +35,7 @@ export function setCallBluetoothHeadsetConnectedCache(connected: boolean): void 
   } catch {}
 }
 
-export function readCallBluetoothHeadsetConnectedCache(): boolean | null {
+function readCallBluetoothHeadsetConnectedCache(): boolean | null {
   try {
     const v = (global as any).__callBtHeadsetConnectedRef?.current;
     return typeof v === 'boolean' ? v : null;

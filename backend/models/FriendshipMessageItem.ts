@@ -2,7 +2,7 @@ import mongoose, { Schema, Document } from 'mongoose';
 import { E2eEnvelopeSchema } from './e2eEnvelopeSchema';
 import type { E2eEnvelope } from '../utils/e2eEnvelope';
 
-export interface IReaction {
+interface IReaction {
   emoji: string;
   userId: string;
 }
@@ -13,7 +13,7 @@ export interface IReplyTo {
   from: string;
 }
 
-export interface IFriendshipMessageItem extends Document {
+interface IFriendshipMessageItem extends Document {
   _id: mongoose.Types.ObjectId;
   friendshipId: mongoose.Types.ObjectId;
   id: string; // messageId (msg_...)

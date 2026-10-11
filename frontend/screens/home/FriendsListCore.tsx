@@ -10,7 +10,6 @@ import { t, type Lang } from '../../utils/i18n';
 import { APP_TEXT_MAX_FONT_SIZE_MULTIPLIER } from '../../utils/accessibilityTypography';
 import {
   LIVI,
-  WELCOME_LIST_SURFACE,
   WELCOME_MUTED_TEXT,
   WELCOME_FRIENDS_LIST_INSET,
   WELCOME_FRIEND_ROW_TRAILING_PAD,
@@ -40,6 +39,7 @@ import { BlurListSource } from '../../components/BackdropBlur';
 import { GLASS_LIST_GAP } from './WelcomeGlassHeader';
 import { FriendRowChatButton, FriendRowInviteButton } from './FriendRowActionButtons';
 import { getFriendDisplay, isDirectCallSessionLive } from './friendHelpers';
+import { usePaneList } from '../../utils/paneVisibility';
 import type { Friend, MarkReadMenu } from './types';
 import type { HomeStyles } from './styles';
 
@@ -50,7 +50,7 @@ export type FriendsListPresentation = 'menu' | 'welcome';
 const BUSY_STATUS_COLOR = UI_ACCENT;
 
 /** Друг занят: серверный busy (рандом/звонок) или локальный активный звонок с ним. */
-export function friendRowIsBusy(
+function friendRowIsBusy(
   friend: Friend,
   isRecentlyEndedCallFriend: (userId: string | null | undefined) => boolean,
 ): boolean {
@@ -199,6 +199,7 @@ function FriendsListCoreInner(props: FriendsListCoreProps) {
     topInset,
     bottomInset = 0,
   } = props;
+  const paneList = usePaneList(friends);
 
   // presentation kept for call-site compatibility; list is welcome-only.
   void presentation;
@@ -368,16 +369,14 @@ function FriendsListCoreInner(props: FriendsListCoreProps) {
         showsVerticalScrollIndicator={false}
         overScrollMode="never"
         removeClippedSubviews={false}
-        initialNumToRender={12}
-        maxToRenderPerBatch={10}
-        windowSize={7}
+        {...paneList.windowProps}
         updateCellsBatchingPeriod={50}
         getItemLayout={(_, index) => ({
           length: rowHeight,
           offset: rowHeight * index,
           index,
         })}
-        data={friends}
+        data={paneList.data}
         keyExtractor={(item) => item.id}
         extraData={{ ...friendsListExtraData, selectMode, selectedIds, compactLandscape, tabletLayout }}
         refreshing={refreshing}

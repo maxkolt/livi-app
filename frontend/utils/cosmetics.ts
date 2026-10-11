@@ -11,7 +11,7 @@ import { DEFAULT_DARK_WALLPAPER_ID, setChatWallpaperId } from './chatWallpaper';
 
 export type CosmeticKind = 'frame' | 'background';
 
-export type CosmeticEntitlements = {
+type CosmeticEntitlements = {
   purchasedFrameIds: string[];
   purchasedBackgroundIds: string[];
   activeFrameId: string;
@@ -97,7 +97,7 @@ function ownFrameId(userId: string): string {
   return cached !== EMPTY ? cached.activeFrameId : userFrameCache.get(userId)?.frameId || '';
 }
 
-export function hydrateCosmetics(): Promise<void> {
+function hydrateCosmetics(): Promise<void> {
   if (hydratePromise) return hydratePromise;
   hydratePromise = AsyncStorage.getItem(STORAGE_KEY)
     .then((raw) => {
@@ -201,10 +201,6 @@ async function request(path: string, init?: RequestInit) {
   const json = await response.json().catch(() => ({}));
   if (!response.ok || !json?.ok) throw new Error(String(json?.error || `http_${response.status}`));
   return json;
-}
-
-export function getCachedCosmetics(): CosmeticEntitlements {
-  return cached;
 }
 
 export async function loadCosmetics(force = false): Promise<CosmeticEntitlements> {

@@ -35,7 +35,7 @@ type FliqViewerState = {
   close: () => void;
 };
 
-export const useFliqViewer = create<FliqViewerState>((set) => ({
+const useFliqViewer = create<FliqViewerState>((set) => ({
   link: null,
   open: (link) => set({ link }),
   close: () => set({ link: null }),

@@ -14,7 +14,7 @@ import { setupNativeEvents } from '@livekit/react-native/src/events/EventEmitter
 import { ReadableStream, WritableStream } from 'web-streams-polyfill';
 import { ensureCoreJsPolyfills } from '../polyfills/ensureCoreJsPolyfills';
 
-export interface SafeRegisterGlobalsOptions {
+interface SafeRegisterGlobalsOptions {
   autoConfigureAudioSession?: boolean;
 }
 

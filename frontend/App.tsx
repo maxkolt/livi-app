@@ -12,11 +12,9 @@ import { NavigationContainer, createNavigationContainerRef, CommonActions, Defau
 import { ThemeProvider, useAppTheme } from "./theme/ThemeProvider";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { Audio } from "expo-av";
-import { Animated, Easing, AppState, Linking, LogBox, Keyboard, InteractionManager, NativeModules, NativeEventEmitter, BackHandler } from "react-native";
-import { BlurView } from "expo-blur";
+import { Animated, AppState, Linking, LogBox, Keyboard, InteractionManager, NativeModules, NativeEventEmitter, BackHandler } from "react-native";
 import { MaterialIcons } from "@expo/vector-icons";
-import { PanGestureHandler } from "react-native-gesture-handler";
-import socket, { onCallIncoming, onCallTimeout, onCallDeclined, onCallCanceled, onCallAccepted, declineCall, cancelCall, requestCallAccepted, requestCallAcceptedWithRetry, ensureSocketConnected, warmCallSignaling, SOCKET_CONNECT_WAIT_MS, checkInviteLink, getCurrentUserId, onCurrentUserId, API_BASE, setOutgoingCallScreenVisible, setIncomingCallScreenVisible, setActiveVideoCall, reportIncomingCallShown, emitPresenceUpdateIfChanged, beginEarlyIncomingCallAccept, getIncomingCallScreenState } from "./sockets/socket";
+import socket, { onCallIncoming, onCallTimeout, onCallDeclined, onCallCanceled, onCallAccepted, declineCall, cancelCall, requestCallAcceptedWithRetry, ensureSocketConnected, warmCallSignaling, checkInviteLink, getCurrentUserId, onCurrentUserId, API_BASE, setOutgoingCallScreenVisible, setIncomingCallScreenVisible, setActiveVideoCall, reportIncomingCallShown, emitPresenceUpdateIfChanged, beginEarlyIncomingCallAccept, getIncomingCallScreenState } from "./sockets/socket";
 import { emitCloseIncoming, emitRequestCloseIncoming, emitCloseOutgoingCall, emitCallCancelledOnHome, emitCallEndedOnHome, emitCloseHomeModals, onRequestCloseIncoming, onCloseIncoming, applyCallEndedGlobalRefsOnce, armHomeUiSettleSkip, clearHomeUiSettleSkip, shouldSkipHomeUiSettle, setPendingWelcomeCallsFilter, setPendingWelcomeChatsFilter } from './utils/globalEvents';
 import { buildCallEndSocketPayload } from './utils/callEndPayload';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -46,10 +44,9 @@ import { PiPProvider, usePiP } from "./src/pip/PiPContext";
 import PiPOverlay from "./src/pip/PiPOverlay";
 import SystemPiPLogoLayer from "./src/pip/SystemPiPLogoLayer";
 import SystemPiPCaptureHost from "./src/pip/SystemPiPCaptureHost";
-import { ensureCometChatReady } from "./chat/cometchat";
 import type { RootStackParamList } from "./navigation/types";
-import { addNotificationListeners, ensureInitialNotificationPermissions, openIncomingCallScreen, openAnswerCallScreen, handleDeclineCallFromDeepLink, registerAndSendPushToken, clearCallRelatedNotificationsAndSyncBadge, syncAppBadgeFromMissedCount, clearMissedBadgeCleared, recordMissedCallForUser, applyPendingMissedCallsFromNative, getMissedCountByUserFromNative } from './utils/pushNotifications';
-import { flushCallLogUi, forceCallLogUiNow, recordCallLog, recordCancelledCall, recordNoAnswerCall } from './screens/home/callLog';
+import { addNotificationListeners, ensureInitialNotificationPermissions, openIncomingCallScreen, openAnswerCallScreen, handleDeclineCallFromDeepLink, registerAndSendPushToken, clearCallRelatedNotificationsAndSyncBadge, syncAppBadgeFromMissedCount, recordMissedCallForUser, applyPendingMissedCallsFromNative, getMissedCountByUserFromNative } from './utils/pushNotifications';
+import { forceCallLogUiNow, recordCallLog, recordCancelledCall, recordNoAnswerCall } from './screens/home/callLog';
 import { markChatCallBubbleEligible } from './screens/chat/chatCallEvents';
 import { getInstallId, getInstallSecret } from './utils/installId';
 import { notifyIncomingShare, parseNativeShareItems, pullPendingShareFromNative } from './utils/incomingShare';
@@ -73,7 +70,6 @@ import {
   registerIncomingCallKeepSession,
   reportRejectCall,
   reportEndCallToCallKeep,
-  setCallKeepAvailable,
   getPendingCallInfo,
   closeOutgoingCallActivity,
   bringMainActivityToFront,
@@ -91,7 +87,6 @@ import {
   stopIncomingCallForegroundService,
   stopIncomingCallRingtoneAndVibration,
   pauseBackgroundMediaAfterCall,
-  canDrawOverlays,
   canShowIncomingCallScreen,
   canUseFullScreenIntent,
   openFullScreenIntentSettings,
@@ -121,13 +116,11 @@ import { addVoipTokenListener } from './utils/voipPush';
 import { useLang } from './store/lang';
 import { AppErrorBoundary } from './components/AppErrorBoundary';
 import { t } from './utils/i18n';
-import { connectStreamIfNeeded } from './chat/cometchat';
 import {
   isAndroidActiveCallEligibleForLeaveHint,
   reenableAndroidSystemPiPLeaveHintAfterReturn,
   setAndroidSystemPiPLeaveHintEnabled,
   shouldBlockAndroidLeaveHintDisarm,
-  shouldAllowAndroidSystemPiPOnLeaveHint,
   armAndroidLeaveHintForVideoCallHome,
   syncAndroidLeaveHintForOngoingCall,
   primeAndroidCallContextForLeaveHint,
@@ -452,7 +445,7 @@ function AppContent() {
   // VPN с выходом за рубежом: держим наготове соединения к API для сокета и звонков.
   React.useEffect(() => startApiConnectionKeeper(), []);
   /** Пока true — не скрываем оверлей. После обработки initial URL (в т.ч. answer-call) ставим true, чтобы не мелькала Home у принимающего. */
-  const [initialUrlProcessed, setInitialUrlProcessed] = React.useState(false);
+  const [, setInitialUrlProcessed] = React.useState(false);
   /**
    * Полноэкранная крышка на время accept → VideoCall.
    * Иначе при bringMainActivityToFront / navigate мелькает предыдущий экран (Home/Chat).
@@ -547,20 +540,6 @@ function AppContent() {
       if (g.__incomingAnswerPeerUserIdRef) g.__incomingAnswerPeerUserIdRef.current = null;
       syncAndroidLeaveHintForOngoingCall();
     } catch {}
-  }, []);
-  /**
-   * Снять native solid. force=true — всегда hide (даже если уже «cleared»),
-   * иначе race show→clear→show на Handler оставлял solid до VideoCall.onLayout.
-   */
-  const clearIncomingAnswerNativeCoverAfterContent = React.useCallback((opts?: { force?: boolean }) => {
-    if (!incomingAnswerCoverShownRef.current) return;
-    const already = incomingAnswerNativeClearedForContentRef.current;
-    if (already && !opts?.force) return;
-    incomingAnswerNativeClearedForContentRef.current = true;
-    try { clearIncomingAnswerNativeCover(); } catch {}
-    if (!already) {
-      try { markCallPerf('answer_cover_native_cleared_for_content'); } catch {}
-    }
   }, []);
   /**
    * Звонящий: Main уже на переднем плане (Outgoing был поверх него) — снимаем native solid,
@@ -748,22 +727,6 @@ function AppContent() {
       if (g.__notifyIncomingAnswerUiReady) delete g.__notifyIncomingAnswerUiReady;
     };
   }, [tryFlushIncomingAnswerCover]);
-  const waitNextPaint = React.useCallback((): Promise<void> => {
-    // В background/inactive rAF часто не тикает, пока MainActivity не на экране —
-    // await здесь блокировал navigate и держал крышку по несколько секунд.
-    if (AppState.currentState !== 'active') {
-      return Promise.resolve();
-    }
-    return new Promise((resolve) => {
-      if (typeof requestAnimationFrame === 'function') {
-        requestAnimationFrame(() => {
-          requestAnimationFrame(() => resolve());
-        });
-      } else {
-        setTimeout(resolve, 32);
-      }
-    });
-  }, []);
   /**
    * Android: «Доступ к звонкам» — показ входящих на весь экран / поверх окон, пока ни один
    * путь не выдан. Приложениям для звонков Google Play выдаёт полноэкранные уведомления
@@ -2175,28 +2138,6 @@ function AppContent() {
   const incomingCallHandlerRef = React.useRef<((d: { callId: string; callKitId?: string; from: string; fromNick?: string; media?: string; ts?: number | string; expiresAt?: number | string }) => void) | null>(null);
 
 
-  const startAnim = React.useCallback(() => {
-    Animated.loop(
-      Animated.sequence([
-        Animated.timing(bounce, { toValue: 1, duration: 120, easing: Easing.out(Easing.quad), useNativeDriver: true }),
-        Animated.timing(bounce, { toValue: -1, duration: 120, easing: Easing.out(Easing.quad), useNativeDriver: true }),
-        Animated.timing(bounce, { toValue: 0, duration: 120, easing: Easing.out(Easing.quad), useNativeDriver: true }),
-        Animated.delay(300),
-      ])
-    ).start();
-
-    const loop = (v: Animated.Value, delay: number) => {
-      Animated.loop(
-        Animated.sequence([
-          Animated.delay(delay),
-          Animated.timing(v, { toValue: 1, duration: 1400, useNativeDriver: true }),
-          Animated.timing(v, { toValue: 0, duration: 0, useNativeDriver: true }),
-        ])
-      ).start();
-    };
-    loop(wave1, 0); loop(wave2, 400);
-  }, [bounce, wave1, wave2]);
-
   const stopAnim = React.useCallback(() => {
     bounce.stopAnimation(); wave1.stopAnimation(); wave2.stopAnimation();
   }, [bounce, wave1, wave2]);
@@ -2218,13 +2159,6 @@ function AppContent() {
           });
         } catch (e) {
           logger.warn("Audio setAudioModeAsync failed:", e);
-        }
-
-        try {
-          // ✅ Инициализация CometChat (один раз на старте)
-          await ensureCometChatReady();
-        } catch (e) {
-          logger.error("CometChat init failed:", e);
         }
 
       // 🔔 Запрашиваем разрешение на уведомления сразу при старте (Android 13+ / iOS),
@@ -2646,7 +2580,6 @@ function AppContent() {
       const userId = getCurrentUserId();
       if (userId) {
         try { setCallPerfDeviceTag(userId); } catch {}
-        void connectStreamIfNeeded(userId).catch(() => {});
       }
     });
     return () => {
@@ -2886,8 +2819,6 @@ function AppContent() {
     const pipVisible = !pipForceHidden && (!!(pip as any)?.visible || !!(global as any).__pipVisibleRef?.current);
     const shouldKeepOn = isVideoSessionRoute(currentRoute) || !!incoming || pipVisible;
 
-    const onVideoSessionRoute = isVideoSessionRoute(currentRoute);
-
     // Android: системный PiP разрешаем ТОЛЬКО при реально активном звонке/входящем/видимом PiP,
     // а не просто потому что текущий экран = VideoCall (иначе при call:ended может произойти автозаход в PiP).
     if (Platform.OS === 'android') {
@@ -2904,8 +2835,6 @@ function AppContent() {
           (!!sessionForGuard &&
             typeof sessionForGuard.getRoomId === 'function' &&
             !!String(sessionForGuard.getRoomId() || '').trim());
-        const activeCallOnAnyScreen =
-          sessionNotEndedForGuard && videoCallStillActiveByRef && hasCallIdsForGuard;
         // При активном звонке (экран VideoCall или in-app PiP) guard не должен гасить leaveHint —
         // иначе по нажатию Home системный PiP не покажется.
         const allowWhileGuardActive =
@@ -2939,13 +2868,6 @@ function AppContent() {
           !!session && (typeof session.isEnded === 'function' ? !session.isEnded() : true);
         const sessionNotEnded = !callTeardownInProgress && rawSessionNotEnded;
         const params = g.__currentCallPiPParamsRef?.current;
-        const hasAnyIds =
-          !!params?.callId ||
-          !!params?.roomId ||
-          (!!session && typeof session.getRoomId === 'function' && !!session.getRoomId()) ||
-          (!!session && typeof session.getCallId === 'function' && !!session.getCallId());
-        const hasActiveCallForPiP =
-          !videoCallInactiveByRef && sessionNotEnded && hasAnyIds;
         const onVideoCallWithActiveSession =
           !videoCallInactiveByRef && isVideoSessionRoute(currentRoute) && sessionNotEnded;
         const allowSystemPiP =
@@ -3674,7 +3596,6 @@ function AppContent() {
           g.__pipCallEndedWasInSystemRef.current = false;
         }
       } catch (_) {}
-      const pipVisible = g.__pipVisibleRef?.current === true;
       const hidePiP = g.__pipHidePiPRef?.current;
       const noOpenFlag = g.__callEndedFromPiPNoOpenRef?.current === true;
 
@@ -4129,7 +4050,6 @@ function AppContent() {
         alreadyDidNav = false;
       }
       const routeName = readRootCurrentRouteName();
-      const willDispatch = !homeResetByVideoCall && !alreadyDidNav && navRef.isReady();
       // Callee уже на Home: страница приветствия не должна ре-рендериться — не вызываем setIncoming и эмиты с подписчиками-setState
       const calleeAlreadyOnHome = isCallee && routeName === 'Home';
       const runCloseUI = () => {

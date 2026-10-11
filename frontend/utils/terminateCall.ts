@@ -38,7 +38,7 @@ function clearCallNotificationsAsync(): void {
     .catch(() => {});
 }
 
-export type TerminateCallReason =
+type TerminateCallReason =
   /** Исходящий: peer отклонил (push) — с emitCloseOutgoing. */
   | 'outgoing_declined'
   /** Исходящий: peer отклонил (socket App) — без emitCloseOutgoing (анти-мерцание Home). */
@@ -212,7 +212,7 @@ const DEDUP_MS = 700;
 let lastKey = '';
 let lastAt = 0;
 
-export type TerminateCallOptions = {
+type TerminateCallOptions = {
   reason: TerminateCallReason;
   callId?: string | null;
   roomId?: string | null;

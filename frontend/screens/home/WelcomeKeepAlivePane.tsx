@@ -1,7 +1,7 @@
 import React, { memo, useEffect } from 'react';
 import { View, type StyleProp, type ViewStyle } from 'react-native';
 import { useSharedValue } from 'react-native-reanimated';
-import { PaneVisibleContext } from '../../utils/paneVisibility';
+import { PaneLiveContext, PaneVisibleContext } from '../../utils/paneVisibility';
 import { DeferredHomeLayout } from './HomeLayoutContext';
 
 /**
@@ -23,7 +23,7 @@ const HIDDEN_OFFSCREEN: ViewStyle = {
 };
 
 /** FlatList: не display:none — иначе layout «догоняет» после тапа. */
-export function welcomeListPaneStyle(visible: boolean): ViewStyle {
+function welcomeListPaneStyle(visible: boolean): ViewStyle {
   return visible
     ? { flex: 1, minHeight: 0 }
     : {
@@ -37,7 +37,7 @@ export function welcomeListPaneStyle(visible: boolean): ViewStyle {
       };
 }
 
-export function welcomeBlockPaneStyle(visible: boolean): ViewStyle {
+function welcomeBlockPaneStyle(visible: boolean): ViewStyle {
   return visible ? { flex: 1, minHeight: 0 } : { display: 'none' };
 }
 
@@ -77,7 +77,9 @@ export const WelcomeKeepAlivePane = memo(
         importantForAccessibility={visible ? 'auto' : 'no-hide-descendants'}
       >
         <PaneVisibleContext.Provider value={visibleValue}>
-          <DeferredHomeLayout live={visible}>{children}</DeferredHomeLayout>
+          <PaneLiveContext.Provider value={visible}>
+            <DeferredHomeLayout live={visible}>{children}</DeferredHomeLayout>
+          </PaneLiveContext.Provider>
         </PaneVisibleContext.Provider>
       </View>
     );

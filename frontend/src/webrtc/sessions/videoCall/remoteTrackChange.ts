@@ -10,7 +10,7 @@
  * Логика чистая: на вход — sid'ы и ссылки на MediaStreamTrack, на выход — флаги.
  */
 
-export type RemoteTrackChangeInput = {
+type RemoteTrackChangeInput = {
   isVideoTrack: boolean;
   isAudioTrack: boolean;
   /** sid приехавшего трека. */

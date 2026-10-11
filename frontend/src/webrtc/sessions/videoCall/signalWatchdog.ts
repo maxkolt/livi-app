@@ -14,7 +14,7 @@
 /** Совпадает с isLikelyLiveKitSignalError — recoverFromLiveKitConnectError уводит его в proxy. */
 export const SIGNAL_WATCHDOG_ERROR = 'room connection has timed out (signal): client watchdog';
 
-export type SignalWatchdogOptions = {
+type SignalWatchdogOptions = {
   connect: () => Promise<void>;
   /** Подписка на SignalConnected; возвращает отписку. */
   onSignalConnected: (listener: () => void) => () => void;

@@ -175,7 +175,7 @@ const SEND_RESULT_WAIT_MS = 12000;
 /** Сокета нет — HTTP либо ответит быстро, либо сети нет: долго не держим вызывающего. */
 const SEND_RESULT_WAIT_OFFLINE_MS = 1500;
 
-export type SendMessageResult = {
+type SendMessageResult = {
   ok: boolean;
   messageId?: string;
   delivered?: boolean;
@@ -736,20 +736,8 @@ export function onMessageReaction(
   };
 }
 
-export function getUnreadMessageCount(fromUserId: string) {
-  return emitAck<{ ok: boolean; count?: number; error?: string }>(
-    "message:unread_count",
-    { from: fromUserId },
-  );
-}
-
-export function loadMessagesFromServer(fromUserId: string, limit?: number) {
+function loadMessagesFromServer(fromUserId: string, limit?: number) {
   return fetchMessages({ with: fromUserId, limit });
-}
-
-// Server history REMOVED - using local storage only
-export async function getChatHistory(peerId: string): Promise<any[]> {
-  return [];
 }
 
 export async function ensureGloballyDeletedMessageIdsLoaded(): Promise<Set<string>> {
@@ -781,13 +769,13 @@ export function isGloballyDeletedMessageId(messageId: string): boolean {
   return shared.globallyDeletedMessageIdsMem?.has(id) ?? false;
 }
 
-export function filterOutGloballyDeletedMessages<T extends { id?: unknown }>(messages: T[]): T[] {
+function filterOutGloballyDeletedMessages<T extends { id?: unknown }>(messages: T[]): T[] {
   const tombstones = shared.globallyDeletedMessageIdsMem;
   if (!tombstones || tombstones.size === 0) return messages;
   return messages.filter((msg) => !tombstones.has(trimMessageId(msg?.id)));
 }
 
-export async function rememberGloballyDeletedMessageIds(rawIds: readonly string[]): Promise<void> {
+async function rememberGloballyDeletedMessageIds(rawIds: readonly string[]): Promise<void> {
   const incoming = rawIds.map(trimMessageId).filter(Boolean);
   if (incoming.length === 0) return;
   const set = await ensureGloballyDeletedMessageIdsLoaded();
@@ -1060,7 +1048,7 @@ export async function deleteMessage(messageId: string): Promise<boolean> {
   }
 }
 
-export type DeleteMessagesBatchResult = {
+type DeleteMessagesBatchResult = {
   deletedIds: string[];
   failedIds: string[];
   error?: string;

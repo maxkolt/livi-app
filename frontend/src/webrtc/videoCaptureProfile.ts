@@ -1,11 +1,11 @@
 import { Platform } from 'react-native';
 import * as Device from 'expo-device';
 
-export type FacingMode = 'user' | 'environment';
+type FacingMode = 'user' | 'environment';
 
-export type VideoCapturePresetName = 'high' | 'low';
+type VideoCapturePresetName = 'high' | 'low';
 
-export type VideoCapturePreset = {
+type VideoCapturePreset = {
   name: VideoCapturePresetName;
   width: number;
   height: number;
@@ -52,7 +52,7 @@ function isLowMemoryDevice(): boolean {
   return Number.isFinite(mem) && mem > 0 && mem < 3_000_000_000;
 }
 
-export type PreferredVideoCapture = {
+type PreferredVideoCapture = {
   primary: { facingMode: FacingMode; resolution: { width: number; height: number }; frameRate: number };
   fallback: { facingMode: FacingMode; resolution: { width: number; height: number }; frameRate: number } | null;
   meta: {

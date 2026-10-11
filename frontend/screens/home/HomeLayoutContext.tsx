@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { useSafeAreaFrame } from 'react-native-safe-area-context';
 
-export type HomeLayoutSize = { width: number; height: number };
+type HomeLayoutSize = { width: number; height: number };
 
 const HomeLayoutContext = createContext<HomeLayoutSize | null>(null);
 

@@ -9,7 +9,7 @@ import { globalMessageStorage } from '../../sockets/modules/messages';
 import { shared } from '../../sockets/modules/shared';
 import { emitChatCallStatusMessage } from '../../utils/globalEvents';
 
-export type ChatCallBubbleDirection = 'outgoing' | 'incoming' | 'missed' | 'cancelled' | 'no_answer';
+type ChatCallBubbleDirection = 'outgoing' | 'incoming' | 'missed' | 'cancelled' | 'no_answer';
 
 const ELIGIBLE_TTL_MS = 120_000;
 const APPEND_DEDUPE_MS = 4_000;
@@ -40,7 +40,7 @@ function pruneEligible(now = Date.now()) {
 }
 
 /** Открыт ли сейчас чат с peer (фокус ChatScreen). */
-export function isViewingChatWithPeer(peerIdRaw: string): boolean {
+function isViewingChatWithPeer(peerIdRaw: string): boolean {
   const peerId = String(peerIdRaw || '').trim();
   if (!peerId) return false;
   return String((global as any).__currentChatPeerId || '').trim() === peerId;
@@ -73,7 +73,7 @@ export function markChatCallBubbleEligibleIfViewing(
   markChatCallBubbleEligible(peerIdRaw, role, callIdRaw);
 }
 
-export function consumeChatCallBubbleEligible(peerIdRaw: string): EligibleEntry | null {
+function consumeChatCallBubbleEligible(peerIdRaw: string): EligibleEntry | null {
   const peerId = String(peerIdRaw || '').trim();
   if (!peerId) return null;
   const map = gEligible();
@@ -82,13 +82,6 @@ export function consumeChatCallBubbleEligible(peerIdRaw: string): EligibleEntry 
   if (!entry) return null;
   map.delete(peerId);
   return entry;
-}
-
-export function peekChatCallBubbleEligible(peerIdRaw: string): EligibleEntry | null {
-  const peerId = String(peerIdRaw || '').trim();
-  if (!peerId) return null;
-  pruneEligible();
-  return gEligible().get(peerId) || null;
 }
 
 function directionIsMine(direction: ChatCallBubbleDirection): boolean {

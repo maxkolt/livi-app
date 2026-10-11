@@ -13,7 +13,7 @@ const HIGH_CAPTURE_MAX_BITRATE = 2_500_000;
 const LOW_CAPTURE_MAX_BITRATE = 1_200_000;
 const MAX_FRAMERATE = 30;
 
-export type LiveKitRoomOptionsInput = {
+type LiveKitRoomOptionsInput = {
   /** Устройство тянет 720p-захват. */
   isHighCapture: boolean;
   adaptiveStream: boolean;

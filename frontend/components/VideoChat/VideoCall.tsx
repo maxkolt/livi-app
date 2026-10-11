@@ -9,19 +9,17 @@ import { BlurListSource, BlurSourceFill } from '../BackdropBlur';
 import {
   View,
   Text,
-  Image,
   StyleSheet,
   Dimensions,
   TouchableOpacity,
   Pressable,
   Platform,
   Animated,
-  BackHandler,
   Easing,
   NativeModules,
   AppState,
 } from 'react-native';
-import { CommonActions, useFocusEffect, useIsFocused } from '@react-navigation/native';
+import { useFocusEffect, useIsFocused } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MediaStream } from '@livekit/react-native-webrtc';
@@ -29,7 +27,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { VideoCallSession } from '../../src/webrtc/sessions/VideoCallSession';
 import type { CamSide, WebRTCSessionConfig } from '../../src/webrtc/types';
 import { BlurView } from 'expo-blur';
-import { CallScreenChrome, type CallMoreMenuItem } from './shared/CallScreenChrome';
+import { CallScreenChrome } from './shared/CallScreenChrome';
 import { LocalVideo } from './shared/LocalVideo';
 import { RemoteVideo } from './shared/RemoteVideo';
 import { HiddenRemoteAudioSink } from './shared/HiddenRemoteAudioSink';
@@ -47,7 +45,6 @@ import {
   CALL_BLUR_BG_SOURCE,
   CALL_BLUR_VIDEO_SOURCE,
 } from '../../screens/home/constants';
-import { isValidStream } from '../../utils/streamUtils';
 import { logger } from '../../utils/logger';
 import { markCallPerf, callPerfSpan, beginCallPerfTrace } from '../../utils/callPerfTrace';
 import { isExternalCallHoldActive } from '../../utils/externalCallHold';
@@ -65,7 +62,6 @@ import { usePiP, isPipOverlayVisibleSync } from '../../src/pip/PiPContext';
 import {
   isDirectCallVideoExpandGuardActive,
   setPipAudioOnlyPlaceholderSticky,
-  shouldUsePipPlaceholderOnly,
   shouldUseSystemPiPPlaceholderOnly,
   isInAudioOnlyCallUi,
   pipInAppBarEnteredFromAudioOnly,
@@ -85,12 +81,11 @@ import {
   shouldSuppressDirectCallAudioOnlyUiTransition,
   markFreshDirectCallAudioAcceptCall,
   isFreshDirectCallAudioAcceptCallActive,
-  clearFreshDirectCallAudioAcceptCall,
   shouldBlockFreshDirectCallAudioAutomatedVideoExpand,
   markDirectCallAudioAcceptBootstrapped,
   isDirectCallAudioAcceptBootstrapped,
 } from '../../src/pip/pipPlaceholderOnly';
-import socket, {
+import {
   fetchFriends,
   getCurrentUserId,
   setActiveVideoCall,
@@ -112,7 +107,6 @@ import {
   syncAndroidSystemPiPNativeFlags,
 } from '../../utils/activeCallNotification';
 import { clearEndingCallInProgress, isOngoingCallSession, resolvePiPLocalMutedState, readOngoingCallMicOn, restoreOngoingCallMicrophoneIfEnabled, resolvePersistedCallAudioRouteForActiveUi, resolveActiveCallInCallMedia, ongoingCallPrefersVideoMedia, markDirectCallVideoMediaActive, readInAppPiPAudioOutputRoute, readAuthoritativeCallAudioRouteAfterPiP, readLastAppliedCallAudioRoute, readActiveExternalCallAudioRoute, readConnectedExternalCallAudioRoute, markInCallAudioSessionStarted, setUserSelectedCallAudioRoute, readUserSelectedCallAudioRoute, readUserSelectedExternalCallAudioRoute, readUserLockedBuiltinCallAudioRoute, userExplicitlyPinnedBuiltinCallAudio, armDirectAudioEarpieceStabilizeWindow, isDirectAudioEarpieceStabilizeWindow, markActiveCallAudioRouteCallId, rememberManualBuiltinCallAudioRoute, isPiPBuiltinCallAudioRouteLockActive, releaseInAppPiPBuiltinAudioLockForFullVideoUi, markUserSelectedExternalCallAudioRoute } from '../../utils/activeCallSession';
-import { setVideoCallActive } from '../../utils/callRuntime';
 import {
   isBluetoothAvailableForAutoRoute,
   isCallAudioBootstrapPending,
@@ -152,10 +146,9 @@ import {
   persistCallTimerToGlobal,
   syncCallTimerFromGlobal,
 } from './callScreen/callTimerStore';
-import { boostMicLevel, formatCallDuration } from './callScreen/callFormatting';
+import { formatCallDuration } from './callScreen/callFormatting';
 import {
   hasAuthenticDirectCallVideoPiPReturnIntent,
-  isAcceptedVideoCallNavCallId,
   isExplicitDirectCallVideoPiPReturnRoute,
   isFreshDirectCallAudioAcceptRoute,
   logDirectCallUiGate,
@@ -209,7 +202,7 @@ type Props = {
 const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
   const isFocused = useIsFocused();
   const insets = useSafeAreaInsets();
-  const { theme, isDark } = useAppTheme();
+  const { isDark } = useAppTheme();
   
   const [lang, setLang] = useState<Lang>(defaultLang);
   const androidScreenPadding = 4;
@@ -638,7 +631,6 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     getCallE2eeUiSnapshot,
   );
   const [remoteAudioGapUi, setRemoteAudioGapUi] = useState(false);
-  const [buttonsOpacity] = useState(new Animated.Value(1));
   const incomingCallBounce = useRef(new Animated.Value(0)).current;
   const incomingWaveA = useRef(new Animated.Value(0)).current;
   const incomingWaveB = useRef(new Animated.Value(0)).current;
@@ -1655,7 +1647,6 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
   // Дополнительные refs для видеозвонка
   const pipReturnUpdateRef = useRef(false);
   const lastRouteParamsRef = useRef<any>(null);
-  const callOriginRef = useRef<{ name: string; params?: any } | null>(null);
   const friendsRef = useRef(friends);
   const [appState, setAppState] = useState(AppState.currentState);
   
@@ -2205,19 +2196,9 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
   }, [roomId, callId, partnerId, isInactiveState, friendCallAccepted, remoteStream, started, wasFriendCallEnded]);
   
   // Используем функции из хука входящих звонков
-  const { getDeclinedBlock, clearDeclinedBlock, setDeclinedBlock } = incomingCallHook;
+  const { getDeclinedBlock, clearDeclinedBlock } = incomingCallHook;
   
-  // Функция отправки состояния камеры
-  const sendCameraState = useCallback(() => {
-    const session = sessionRef.current;
-    if (session && roomId) {
-      const videoTrack = localStream?.getVideoTracks()?.[0];
-      const enabled = videoTrack?.enabled ?? true;
-      session.sendCameraState?.(undefined, enabled);
-    }
-  }, [localStream, roomId]);
   
-  const L = useCallback((key: string) => t(key, lang), [lang]);
   
   const clearSessionRefs = useCallback(() => {
     sessionRef.current = null;
@@ -4944,7 +4925,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       const pipVisible =
         (global as any).__pipVisibleRef?.current === true ||
         (global as any).__pipInSystemModeRef?.current === true;
-      const { now, returningUntil, disableUntil, active: systemPiPReturnGuardActive } = getSystemPiPReturnGuard();
+      const { now, returningUntil, active: systemPiPReturnGuardActive } = getSystemPiPReturnGuard();
       const returningFromSystemPiP = now < returningUntil;
       // Если звонок уже корректно завершили через handleCallEnded/onAbortCall — не дёргаем cleanup повторно.
       // Иначе для "второго участника" (который не нажимал end) получается двойное завершение.
@@ -6553,8 +6534,6 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
   
   // Вычисляемые значения
   const hasActiveCall = !!partnerId || !!roomId || !!callId;
-  const shouldShowLocalVideo = camOn && !isInactiveState;
-  const shouldShowRemoteVideo = remoteCamOn && !isInactiveState;
   const showControls = hasActiveCall && !isInactiveState;
   // Never disable hangup for system-PiP returnRestoreInFlight — that flag can stick if
   // owner/restoredAt never settle, leaving X greyed out on an otherwise live call.
@@ -6923,29 +6902,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     lang,
   ]);
 
-  const isPartnerFriend = useMemo(() => {
-    if (!partnerUserId) return false;
-    if (isDirectCall) return true; // Прямой звонок = партнёр всегда друг (вызов из списка друзей / входящий от друга)
-    return friends.some(f => String(f._id) === String(partnerUserId));
-  }, [partnerUserId, friends, isDirectCall]);
   
-  // Показывать ли бейдж "Друг"
-  // КРИТИЧНО: Показываем бейдж если партнер - друг и звонок активен. Убираем только по факту завершения звонка (wasFriendCallEnded),
-  // не при isInactiveState/PiP/рассинхроне — иначе при возврате из PiP (started: false) бейдж пропадал.
-  const showFriendBadge = useMemo(() => {
-    const hasPartnerUserId = !!partnerUserId;
-    const hasStarted = !!started;
-    const callEnded = !!wasFriendCallEnded;
-    const hasActiveCall = !!partnerId || !!roomId || !!callId;
-    // При завершении звонка не показываем бейдж и не логируем, чтобы не было мерцания и лишних ререндеров
-    if (isEndingCallRef.current || isEndingCall) return false;
-
-    // Показываем бейдж если: есть partnerUserId, звонок идёт (started или hasActiveCall), звонок не завершён, партнёр друг.
-    // Не используем isInactiveState — при PiP/возврате он может быть true, бейдж должен оставаться до конца звонка.
-    const shouldShow = hasPartnerUserId && (hasStarted || hasActiveCall) && !callEnded && isPartnerFriend;
-
-    return shouldShow;
-  }, [partnerUserId, friends, started, wasFriendCallEnded, partnerId, roomId, callId, isPartnerFriend, isEndingCall]);
 
   // Обработка ухода со страницы - показываем PiP для видеозвонков
   useFocusEffect(
@@ -7470,7 +7427,6 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
         // Для видеозвонков другу показываем PiP при уходе со страницы
         // КРИТИЧНО: Не показываем PiP если звонок завершен
         // КРИТИЧНО: Не показываем PiP сразу после принятия звонка - даем время камере включиться
-        const hasActiveCall = (!!roomId || !!callId || !!partnerId) && !isInactiveState && !wasFriendCallEnded;
         const currentPip = pipRef.current;
         
         // Закрываем PiP если звонок завершен
@@ -7486,8 +7442,6 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
         // PiP должен показываться ТОЛЬКО при явном уходе со страницы пользователем (через BackHandler)
         // НЕ показываем PiP автоматически в useFocusEffect cleanup - это вызывает проблемы с камерой
         // Если звонок только что принят, НИКОГДА не показываем PiP автоматически
-        const timeSinceAccept = Date.now() - (acceptCallTimeRef.current || 0);
-        const shouldDelayPiP = timeSinceAccept < 30000; // 30 секунд - полностью запрещаем автоматический PiP при принятии звонка
         
         // ЗАКОММЕНТИРОВАНО: НЕ показываем PiP автоматически в cleanup useFocusEffect
         // Это вызывает проблемы: камера выключается, видео не отображается

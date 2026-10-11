@@ -10,7 +10,6 @@ import {
   onFriendDeclined,
   updateProfile,
 } from '../../../sockets/socket';
-import { syncMyStreamProfile } from '../../../chat/cometchat';
 import { loadProfileFromStorage } from '../../../utils/profileStorage';
 import { trimNick } from '../../../utils/userDisplayName';
 import { t } from '../../../utils/i18n';
@@ -106,7 +105,7 @@ export function useRandomChatFriends({
       if (String(userId) === String(partnerUserId)) {
         showToast(L('friend_added'));
       }
-      // Обновляем профиль на сервере и синхронизируем с CometChat
+      // Обновляем профиль на сервере
       try {
         const cached = await loadProfileFromStorage();
         const nick = cached?.nick || '';
@@ -118,7 +117,6 @@ export function useRandomChatFriends({
         if (Object.keys(patch).length) {
           await updateProfile(patch);
         }
-        await syncMyStreamProfile(nick, avatarUrl || undefined);
       } catch (e) {
         logger.warn('[RandomChat] Failed to update profile:', e);
       }
@@ -148,7 +146,7 @@ export function useRandomChatFriends({
       const res: any = await requestFriend(partnerUserId);
       if (res?.status === 'pending' || res?.ok) {
         showToast(L('friend_request_sent'));
-        // Обновляем профиль на сервере и синхронизируем с CometChat
+        // Обновляем профиль на сервере
         try {
           const cached = await loadProfileFromStorage();
           const nick = cached?.nick || '';
@@ -160,7 +158,6 @@ export function useRandomChatFriends({
           if (Object.keys(patch).length) {
             await updateProfile(patch);
           }
-          await syncMyStreamProfile(nick, avatarUrl || undefined);
         } catch (e) {
           logger.warn('[RandomChat] Failed to update profile:', e);
         }
@@ -188,7 +185,7 @@ export function useRandomChatFriends({
       setIncomingFriendFrom(null);
       setIncomingFriendNick(undefined);
       fetchFriends?.().then((r: any) => setFriends(r?.list || [])).catch(() => {});
-      // Обновляем профиль на сервере и синхронизируем с CometChat
+      // Обновляем профиль на сервере
       try {
         const cached = await loadProfileFromStorage();
         const nick = cached?.nick || '';
@@ -200,7 +197,6 @@ export function useRandomChatFriends({
         if (Object.keys(patch).length) {
           await updateProfile(patch);
         }
-        await syncMyStreamProfile(nick, avatarUrl || undefined);
       } catch (e) {
         logger.warn('[RandomChat] Failed to update profile:', e);
       }

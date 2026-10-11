@@ -2,7 +2,7 @@
 // Что пользователь уже видел в Fliq и какие темы досматривает — по этому строится выдача.
 import { Schema, model, models, type Types } from 'mongoose';
 
-export interface IFliqUserState {
+interface IFliqUserState {
   user: Types.ObjectId;
   /** Последние просмотренные ролики (videoId), самые новые в конце. */
   seen: string[];

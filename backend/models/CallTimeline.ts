@@ -22,14 +22,14 @@ export type CallTimelineEventName =
   | 'timeout'
   | 'end_reason';
 
-export interface ICallTimelineEvent {
+interface ICallTimelineEvent {
   name: CallTimelineEventName;
   atMs: number;
   source?: string;
   meta?: Record<string, unknown>;
 }
 
-export interface ICallTimeline {
+interface ICallTimeline {
   _id: Types.ObjectId;
   callId: string;
   callerId: string;

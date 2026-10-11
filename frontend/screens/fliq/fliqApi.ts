@@ -16,7 +16,7 @@ export type FliqItem = {
   topics: string[];
 };
 
-export type FliqEvent = {
+type FliqEvent = {
   id: string;
   watchedMs: number;
   durationMs: number;

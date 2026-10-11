@@ -7,8 +7,8 @@ import * as Clipboard from 'expo-clipboard';
 import { NativeModules, Platform } from 'react-native';
 import { logger } from './logger';
 
-export const INVITE_LINK_STORAGE_KEY = 'pending_invite_code';
-export const INVITE_CLIPBOARD_PREFIX = 'livi-invite:';
+const INVITE_LINK_STORAGE_KEY = 'pending_invite_code';
+const INVITE_CLIPBOARD_PREFIX = 'livi-invite:';
 
 const OID_RE = /^[a-f\d]{24}$/i;
 
@@ -22,7 +22,7 @@ export function onInviteFlowSettled(cb: SettledListener): () => void {
   };
 }
 
-export function emitInviteFlowSettled() {
+function emitInviteFlowSettled() {
   for (const l of settledListeners) {
     try {
       l();
@@ -30,11 +30,11 @@ export function emitInviteFlowSettled() {
   }
 }
 
-export function isInviteOid(code: string | null | undefined): code is string {
+function isInviteOid(code: string | null | undefined): code is string {
   return !!code && OID_RE.test(String(code).trim());
 }
 
-export function parseInviteCodeFromStorageValue(saved: string | null): string | null {
+function parseInviteCodeFromStorageValue(saved: string | null): string | null {
   if (!saved) return null;
   try {
     const parsed = JSON.parse(saved);
@@ -124,7 +124,3 @@ export async function captureDeferredInviteCode(): Promise<string | null> {
   return null;
 }
 
-export function buildPlayStoreInviteUrl(code: string): string {
-  const referrer = encodeURIComponent(`invite=${code}`);
-  return `https://play.google.com/store/apps/details?id=com.kolt12max.livi&hl=ru&referrer=${referrer}`;
-}

@@ -17,7 +17,7 @@
  * и оставляем LiveKit его собственные серверы: это ровно то поведение, что работает сейчас.
  */
 
-export type IceServerLike = {
+type IceServerLike = {
   urls?: string | string[];
   username?: string;
   credential?: string;
@@ -53,7 +53,7 @@ export function resolveConnectRtcConfig(
   return hasUsableTurnServer(config) ? config : undefined;
 }
 
-export type LiveKitConnectOptionsInput = {
+type LiveKitConnectOptionsInput = {
   peerConnectionTimeoutMs: number;
   websocketTimeoutMs?: number;
   rtcConfig?: RTCConfiguration;
@@ -61,7 +61,7 @@ export type LiveKitConnectOptionsInput = {
   applyClientIce?: boolean;
 };
 
-export type LiveKitConnectRoomOptions = {
+type LiveKitConnectRoomOptions = {
   autoSubscribe: true;
   peerConnectionTimeout: number;
   websocketTimeout?: number;

@@ -9,7 +9,7 @@ export type Me = {
   avatarUrl?: string | '';   // ← deprecated, для обратной совместимости
 };
 
-export interface MeState {
+interface MeState {
   me: Me | null;
   replaceMe: (u: Me) => void;
   setMe: (patch: Partial<Me>) => void;

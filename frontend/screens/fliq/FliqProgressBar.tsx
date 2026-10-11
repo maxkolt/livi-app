@@ -13,7 +13,7 @@ const LIVE_SEEK_MS = 180;
 /** Кружок на конце заполнения, пока тянут. */
 const THUMB = 12;
 
-export type FliqScrubber = {
+type FliqScrubber = {
   /** Длительность из тиков плеера; 0 — ещё не знаем, перематывать нечего. */
   duration: () => number;
   begin: () => void;

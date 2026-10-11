@@ -2,7 +2,7 @@
 
 import React from "react";
 
-export type DeleteConfirmKind = "single" | "multi";
+type DeleteConfirmKind = "single" | "multi";
 
 export function useChatDeleteConfirm() {
   const [deleteConfirmVisible, setDeleteConfirmVisible] = React.useState(false);

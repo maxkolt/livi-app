@@ -68,7 +68,7 @@ import {
 import { getFastStartVideoCaptureOptions, getPreferredVideoCaptureOptions } from '../videoCaptureProfile';
 import { buildCallEndSocketPayload } from '../../../utils/callEndPayload';
 import { getInstallId } from '../../../utils/installId';
-import { requestExitSystemPiPSoft, dismissSystemPiPAfterCallEnded } from '../../../utils/callKeep';
+import { dismissSystemPiPAfterCallEnded } from '../../../utils/callKeep';
 import {
   forceAndroidSystemPiPPeerVideoVisible,
   setAndroidSystemPiPLeaveHintEnabled,
@@ -311,7 +311,6 @@ export class VideoCallSession extends SimpleEventEmitter {
   /** Unexpected Room Disconnected: try restore within grace; then stop heartbeat (server lease ends busy). */
   private mediaReconnectInProgress = false;
   private mediaReconnectGraceTimer: ReturnType<typeof setTimeout> | null = null;
-  private mediaReconnectAttemptedRelay = false;
   /** OS reachability (airplane / Wi‑Fi): drive reconnect UI + immediate re-join on restore. */
   private readonly networkMonitor = new NetworkReachabilityMonitor({
     isCallActive: () => !this.ended && !this.endCallInProgress,
@@ -1138,7 +1137,6 @@ export class VideoCallSession extends SimpleEventEmitter {
   }
 
   toggleMic(): void {
-    const prev = this.isMicOn;
     this.isMicOn = !this.isMicOn;
     if (this.room) {
       this.setRoomMicrophoneEnabled(this.room, this.isMicOn, 'toggleMic').catch((e) => {
@@ -5149,9 +5147,6 @@ export class VideoCallSession extends SimpleEventEmitter {
 
     // КРИТИЧНО: Сохраняем состояние ПЕРЕД очисткой для логирования
     const savedCallId = this.callId;
-    const savedRoomId = this.roomId;
-    const savedPartnerId = this.partnerId;
-    const savedPartnerUserId = this.partnerUserId;
 
     // Remote / server final: закрыть CallKeep Connection (иначе "no connection found" на следующем звонке).
     try {
@@ -5185,11 +5180,6 @@ export class VideoCallSession extends SimpleEventEmitter {
     // Компоненты должны обработать завершение звонка независимо от состояния сессии
     this.emit('callEnded');
     this.clearGlobalSessionRefIfCurrent('callEnded');
-  }
-
-  private handleDisconnected(): void {
-    void this.disconnectRoom('server');
-    this.resetRemoteState();
   }
 
   private clearPendingRemoteDisconnectTimer(): void {
@@ -5240,7 +5230,6 @@ export class VideoCallSession extends SimpleEventEmitter {
       this.mediaReconnectGraceTimer = null;
     }
     this.mediaReconnectInProgress = false;
-    this.mediaReconnectAttemptedRelay = false;
     this.waitingForRemotePeerRejoin = false;
   }
 
@@ -5412,7 +5401,6 @@ export class VideoCallSession extends SimpleEventEmitter {
 
     this.markMediaLinkRecovering('netinfo_restored');
     this.armOrExtendMediaReconnectGrace();
-    this.mediaReconnectAttemptedRelay = false;
 
     const roomName = this.currentRoomName || this.roomId || undefined;
     logger.warn('[VideoCallSession] Network reachable — forcing LiveKit re-join', {
@@ -5463,7 +5451,6 @@ export class VideoCallSession extends SimpleEventEmitter {
       return;
     }
 
-    this.mediaReconnectAttemptedRelay = false;
     this.markMediaLinkRecovering('livekit_disconnected');
     this.armOrExtendMediaReconnectGrace();
 
@@ -5553,7 +5540,6 @@ export class VideoCallSession extends SimpleEventEmitter {
     }
     if (this.ended || !this.mediaReconnectInProgress) return;
 
-    this.mediaReconnectAttemptedRelay = true;
     enableForcedRelayFallback('video_call_unexpected_disconnect');
     void sendClientMetrics(API_BASE, { relayFallback: true }).catch(() => {});
     const okRelay = await tryOnce(true);
@@ -5575,7 +5561,6 @@ export class VideoCallSession extends SimpleEventEmitter {
     }
     this.clearLiveKitSelfRecoveryTimer();
     this.mediaReconnectInProgress = false;
-    this.mediaReconnectAttemptedRelay = false;
     this.waitingForRemotePeerRejoin = false;
     this.networkLinkDown = false;
     this.liveKitReconnecting = false;
@@ -5708,7 +5693,6 @@ export class VideoCallSession extends SimpleEventEmitter {
         this.mediaReconnectGraceTimer = null;
       }
       this.mediaReconnectInProgress = false;
-      this.mediaReconnectAttemptedRelay = false;
       this.stopCallLeaseHeartbeat();
       trackReleaseEvent('signal_reconnect', {
         phase: 'remote_peer_rejoin_grace_failed',
@@ -5732,7 +5716,6 @@ export class VideoCallSession extends SimpleEventEmitter {
       this.mediaReconnectGraceTimer = null;
     }
     this.mediaReconnectInProgress = false;
-    this.mediaReconnectAttemptedRelay = false;
     // UI остаётся «Восстановление связи…» до call:ended с сервера (lease) or NetInfo restore.
     this.liveKitReconnecting = true;
     this.stopCallLeaseHeartbeat();
@@ -6029,63 +6012,6 @@ export class VideoCallSession extends SimpleEventEmitter {
     return true;
   }
 
-  private maybeScheduleFastStartVideoUpgrade(reason: string): void {
-    if (!this.fastStartVideoProfileActive) return;
-    if (this.fastStartVideoUpgradeTimer) return;
-    if (this.ended || !this.isCamOn || this.cameraSwitchInProgress) return;
-    if (!this.room || this.room.state !== 'connected' || !this.localVideoTrack) return;
-
-    this.fastStartVideoUpgradeTimer = setTimeout(() => {
-      this.fastStartVideoUpgradeTimer = null;
-      if (!this.fastStartVideoProfileActive) return;
-      if (this.ended || !this.isCamOn || this.cameraSwitchInProgress) return;
-      if (!this.room || this.room.state !== 'connected' || !this.localVideoTrack) return;
-
-      this.upgradeFastStartVideoProfileInPlace()
-        .then(() => {
-          this.fastStartVideoProfileActive = false;
-          logger.info('[VideoCallSession] Fast-start video upgraded to preferred profile', { reason });
-        })
-        .catch((e) => {
-          logger.warn('[VideoCallSession] Fast-start video upgrade failed', {
-            reason,
-            error: (e as any)?.message || String(e || ''),
-          });
-        });
-    }, 2500);
-  }
-
-  private async upgradeFastStartVideoProfileInPlace(): Promise<void> {
-    if (!this.localVideoTrack) return;
-    const facingMode = this.camSide === 'front' ? 'user' : 'environment';
-    const preferred = getPreferredVideoCaptureOptions(facingMode);
-    logger.info('[VideoCallSession] Upgrading fast-start video profile in place', {
-      camSide: this.camSide,
-      preferred: preferred.meta,
-    });
-
-    try {
-      await this.localVideoTrack.restartTrack(preferred.primary as any);
-    } catch (e1) {
-      if (!preferred.fallback) throw e1;
-      logger.warn('[VideoCallSession] In-place fast-start upgrade failed on preferred preset; retrying with fallback', {
-        error: (e1 as any)?.message || String(e1 || ''),
-        preferred: preferred.meta,
-      });
-      await this.localVideoTrack.restartTrack(preferred.fallback as any);
-    }
-
-    try {
-      if (this.localVideoTrack.mediaStreamTrack) {
-        this.localVideoTrack.mediaStreamTrack.enabled = this.isCamOn;
-        if (this.isCamOn) await this.localVideoTrack.unmute().catch(() => {});
-        else await this.localVideoTrack.mute().catch(() => {});
-      }
-    } catch {}
-
-    this.emitLocalMediaStream({ forceNewStream: false });
-  }
-
   /** Собрать local MediaStream. Сохраняем instance при том же capture lifecycle,
    * а явный flip/restart может запросить новый для корректного rebind RTCView. */
   private emitLocalMediaStream(opts?: { forceNewStream?: boolean }): void {
@@ -6146,8 +6072,6 @@ export class VideoCallSession extends SimpleEventEmitter {
     // Не копируем isCamOn/isMicOn в локальные переменные до await: пока идёт createLocalTracks,
     // пользователь может выключить камеру/мик — восстановление из старого снимка затирает UI
     // (чёрный блок «Вы» без подписи после коннекта).
-    const camStateBeforeAwait = this.isCamOn;
-    const micStateBeforeAwait = this.isMicOn;
 
     if (force) {
       this.clearFastStartVideoUpgradeTimer();
@@ -6542,7 +6466,6 @@ export class VideoCallSession extends SimpleEventEmitter {
       }
     }
 
-    const oldVideoMedia = oldVideoTrack?.mediaStreamTrack;
 
     // Best-effort: unpublish the old camera track before stopping it.
     // This helps some Android devices release Camera2 resources faster and reduces "too many open camera devices".
@@ -8456,18 +8379,6 @@ export class VideoCallSession extends SimpleEventEmitter {
         await this.unpublishOtherLocalTracks('audio', this.localAudioTrack);
         await this.room.localParticipant.publishTrack(this.localAudioTrack).catch(() => {});
       }
-    }
-  }
-
-  private async safeDisconnect(room: Room): Promise<void> {
-    if (!room) return;
-    if (room.state === 'disconnected') {
-      return;
-    }
-    try {
-      await room.disconnect();
-    } catch (e) {
-      logger.warn('[VideoCallSession] Error disconnecting stale room', e);
     }
   }
 

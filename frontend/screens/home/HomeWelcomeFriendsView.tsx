@@ -61,7 +61,7 @@ import type { Friend } from './types';
 
 type FriendsFilter = 'all' | 'online';
 
-export type HomeWelcomeFriendsViewProps = Omit<FriendsListCoreProps, 'presentation' | 'friends' | 'ListFooterComponent'> & {
+type HomeWelcomeFriendsViewProps = Omit<FriendsListCoreProps, 'presentation' | 'friends' | 'ListFooterComponent'> & {
   lang: Lang;
   allFriends: Friend[];
   unreadByUser: Record<string, number>;

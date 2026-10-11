@@ -27,7 +27,7 @@ function warmAndroidResolve(uri: string): void {
 }
 
 /** Прямая запись userId → готовый avatar URI. */
-export function primeCallAvatar(userId: unknown, uri: unknown): void {
+function primeCallAvatar(userId: unknown, uri: unknown): void {
   try {
     const id = String(userId ?? '').trim();
     const value = typeof uri === 'string' ? uri.trim() : '';
@@ -48,7 +48,7 @@ export function primeCallNick(userId: unknown, nick: unknown): void {
 }
 
 /** Прайм из «сырого» объекта друга (fetchFriends) или Friend. */
-export function primeCallAvatarFromFriend(partner: any): void {
+function primeCallAvatarFromFriend(partner: any): void {
   try {
     if (!partner) return;
     const id = String(partner._id ?? partner.id ?? '').trim();

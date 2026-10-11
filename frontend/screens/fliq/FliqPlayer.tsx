@@ -35,7 +35,7 @@ const WEBVIEW_COMMON = {
   onOpenWindow: (e: { nativeEvent: { targetUrl: string } }) => openExternally(e.nativeEvent.targetUrl),
 };
 
-export type FliqYoutubePlayerProps = {
+type FliqYoutubePlayerProps = {
   videoId: string;
   mode: FliqPlayMode;
   /** С какой секунды начать (ролик выгрузили, а человек вернулся). */
@@ -211,7 +211,7 @@ export const FliqYoutubePlayer = memo(forwardRef<FliqYoutubePlayerHandle, FliqYo
   );
 }));
 
-export type FliqEmbedPlayerProps = {
+type FliqEmbedPlayerProps = {
   uri: string;
   onLoaded?: () => void;
   onError?: () => void;

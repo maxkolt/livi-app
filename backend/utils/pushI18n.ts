@@ -6,12 +6,12 @@
  * приложения язык не передают — для них остаётся русский, как было раньше.
  */
 
-export const PUSH_LANGS = [
+const PUSH_LANGS = [
   'ru', 'en', 'es', 'de', 'fr', 'it', 'pt', 'tr', 'ar',
   'ja', 'ko', 'zh', 'zh-TW', 'hi', 'vi', 'th', 'id',
 ] as const;
 
-export type PushLang = (typeof PUSH_LANGS)[number];
+type PushLang = (typeof PUSH_LANGS)[number];
 
 const LEGACY_LANG: PushLang = 'ru';
 

@@ -141,7 +141,7 @@ router.post('/upload/media', requireUploadAuth('upload_media', 25), express.json
   try {
     const authedUserId = String((req as any).uploadUserId || '');
 
-    const { dataUri, type, from, to } = req.body;
+    const { dataUri, from } = req.body;
 
     if (!dataUri || typeof dataUri !== 'string') {
       return res.status(400).json({ ok: false, error: 'Missing dataUri' });

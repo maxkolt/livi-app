@@ -14,7 +14,7 @@ import { areFriendsCached } from './friendshipUtils';
 
 const isOid = (s?: string) => !!s && mongoose.Types.ObjectId.isValid(String(s));
 
-export type IncomingFriendRequest = {
+type IncomingFriendRequest = {
   _id: string;
   nick: string;
   avatar: string;

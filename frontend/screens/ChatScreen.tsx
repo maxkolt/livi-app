@@ -9,21 +9,17 @@ import {
   TextInput,
   AppState,
   Platform,
-  Alert,
   ActionSheetIOS,
   FlatList,
   ScrollView,
   Keyboard,
   Pressable,
   Animated,
-  NativeModules,
   DeviceEventEmitter,
   PixelRatio,
   Dimensions,
   useWindowDimensions,
-  Image,
   StyleSheet,
-  Share,
   InteractionManager,
   unstable_batchedUpdates,
 } from "react-native";
@@ -75,14 +71,9 @@ import { ChatComposerContextBar } from './chat/ChatComposerContextBar';
 import { AppOverlay, useOverlayBackHandler } from '../components/AppOverlay';
 import { AppDialogButton, AppDialogModal, appDialogStyles } from '../components/AppDialog';
 import {
-  isOfflineQueuedOrOptimisticOutgoingId,
-  type ChatReadStatus,
-} from './chat/chatMessageIds';
-import {
   CHAT_ALBUM_MAX,
   getMessageImageUris,
   isImageAlbumMessage,
-  albumSelectionKey,
   selectedAlbumIndices,
   buildChatPhotoTimeline,
   findChatPhotoTimelineIndex,
@@ -184,7 +175,6 @@ import { useCosmetics } from '../utils/cosmetics';
 import { markChatCallBubbleEligible } from './chat/chatCallEvents';
 import {
   ReactionBarOverlay,
-  ReactionsRowWithSwipe,
   SHEET_REACTIONS_ALL,
 } from './chat/chatReactions';
 
@@ -194,32 +184,23 @@ import {
   APP_COMPOSER_MAX_FONT_SIZE_MULTIPLIER,
 } from '../utils/accessibilityTypography';
 import { useModalLayout } from '../utils/modalLayout';
-import { toAvatarThumb } from '../utils/uploadAvatar';
 import {
   onFriendProfile,
   onPresenceUpdate,
   PRESENCE_OFFLINE_DEBOUNCE_MS,
-  isReconnecting,
   onCurrentUserId,
   getCurrentUserId as getCurrentSocketUserId,
 } from '../sockets/socket';
-import { uploadMediaToServer } from '../utils/mediaUpload';
 import MediaViewer from '../components/MediaViewer';
 import * as ImagePicker from 'expo-image-picker';
 import { 
   getMyUserId,
-  sendMessage as sendSocketMessage,
   sendMessageReaction,
   isMessagePendingInOutbox,
   onOutboxPendingChange,
   onReactionOutboxChange,
   hasPendingReactions,
   withPendingReactions,
-  markMessagesAsRead,
-  onUserPresence,
-  hasVisibleOnlinePresenceSnapshot,
-  isPeerInVisibleOnlinePresence,
-  clearMessageCache,
   getAvatar,
   sendChatViewing,
   ensureGloballyDeletedMessageIdsLoaded,
@@ -232,7 +213,7 @@ import {
 } from "./chat/E2eChatBanner";
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useLang } from "../store/lang";
-import { t, type Lang } from "../utils/i18n";
+import { t } from "../utils/i18n";
 import { setCurrentChatPeerId, dismissMessageNotificationForUser, syncAppBadgeFromMissedCount } from "../utils/pushNotifications";
 import { useFocusEffect, useIsFocused } from "@react-navigation/native";
 import type { IncomingShareItem } from '../utils/incomingShare';
@@ -425,7 +406,6 @@ export default function ChatScreen({ route, navigation }: Props) {
   // Цвета соответствуют обычным полупрозрачным облакам, сведённым с их подложкой.
   const MESSAGE_ACTIONS_BUBBLE_BG_IN = isDark ? '#3A4350' : '#B4BDC0';
   const MESSAGE_ACTIONS_BUBBLE_BG_OUT = isDark ? '#354E5F' : '#B4C0D7';
-  const BORDER_WIDTH = 1;
   // Купленные обои не должны менять оттенок стекла и облаков: под ними тот же базовый фон.
   const chatWallpaperOn = !!useCosmetics().activeBackgroundId;
   const bubblePlate = chatWallpaperOn ? HOME_NAV_BG : undefined;
@@ -887,7 +867,6 @@ export default function ChatScreen({ route, navigation }: Props) {
     albumScopeKind,
     albumPickUris,
     albumPickInitial,
-    albumScopeMessageRef,
     closeAlbumScope: closeAlbumScopeBase,
     openAlbumScope,
     consumeAlbumScope,
@@ -1151,7 +1130,6 @@ export default function ChatScreen({ route, navigation }: Props) {
     voiceLocked,
     voiceRecordMs,
     setVoiceRecordMs,
-    voiceDragX,
     micScale,
     trashLid,
     trashFlash,
@@ -1179,7 +1157,6 @@ export default function ChatScreen({ route, navigation }: Props) {
 
   // Refs для автоскролла
   const flatListRef = useRef<FlatList>(null);
-  const keyboardAwareListRef = useRef<any>(null);
   const iosChatListDataRef = useRef<ChatListRow[]>([]);
   const androidChatListDataRef = useRef<ChatListRow[]>([]);
 
@@ -1733,14 +1710,6 @@ export default function ChatScreen({ route, navigation }: Props) {
   const headerTopPadding = CHAT_HEADER_TOP_PADDING;
   const headerTotalH = headerH + headerTopPadding;
 
-  const resolveAvatar = React.useCallback((s?: string) => {
-    if (!s) return '';
-    const raw = String(s).trim();
-    if (/^https?:\/\//i.test(raw)) return toAvatarThumb(raw, 72, 72);
-    if (raw.startsWith('/uploads/')) return `${API_BASE}${raw}`;
-    return '';
-  }, []);
-
   const resolveMediaUri = React.useCallback((s?: string) => {
     if (!s) {
       logger.warn('[ChatScreen] resolveMediaUri: empty URI');
@@ -1908,7 +1877,6 @@ export default function ChatScreen({ route, navigation }: Props) {
   // КРИТИЧНО: headerInitial — только глиф для аватара (буква/emoji), не полный текст ника
   const [peerNameState, setPeerNameState] = useState<string>(peerNameParam);
   const headerInitial = peerNameState ? displayAvatarLetter(peerNameState) : '--';
-  const headerPlaceholder = '--'; // Всегда показываем -- если нет аватара
 
   // Header будет объявлен ниже (после всех helper-функций), чтобы не было "используется до объявления".
 
@@ -2081,7 +2049,7 @@ export default function ChatScreen({ route, navigation }: Props) {
     showNotice,
   });
 
-  const { deleteSingleMessage, batchDeleteSelected } = useChatDeleteOps({
+  const { deleteSingleMessage } = useChatDeleteOps({
     peerId,
     currentUserId,
     lang,
@@ -2132,10 +2100,8 @@ export default function ChatScreen({ route, navigation }: Props) {
   }, [resolveMediaUri, lang]);
 
   const {
-    forwardToRecipient,
     forwardToSelectedFriends,
     shareForwardToSystem,
-    forwardSelectedMessageTo,
     startForwardSelected,
   } = useChatForwardSend({
     peerId,

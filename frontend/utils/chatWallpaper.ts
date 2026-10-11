@@ -2,7 +2,6 @@
  * Локальный выбор обоев чата (тёмная тема).
  * lightId в storage оставлен для совместимости со старыми prefs.
  */
-import { useEffect, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { ImageSourcePropType } from 'react-native';
 
@@ -10,17 +9,17 @@ const STORAGE_KEY = 'livi.chatWallpaper.v1';
 
 export type ChatWallpaperTheme = 'light' | 'dark';
 
-export type ChatWallpaperItem = {
+type ChatWallpaperItem = {
   id: string;
   source: ImageSourcePropType;
 };
 
 /** Текущие штатные обои — остаются дефолтом. */
-export const DEFAULT_LIGHT_WALLPAPER_ID = 'light-default';
+const DEFAULT_LIGHT_WALLPAPER_ID = 'light-default';
 export const DEFAULT_DARK_WALLPAPER_ID = 'dark-default';
 
 /** Светлая тема: класть новые JPEG в `assets/chat-wallpapers/light/`. */
-export const CHAT_WALLPAPERS_LIGHT: ChatWallpaperItem[] = [
+const CHAT_WALLPAPERS_LIGHT: ChatWallpaperItem[] = [
   {
     id: DEFAULT_LIGHT_WALLPAPER_ID,
     source: require('../assets/chat-wallpapers/light/default.jpeg'),
@@ -76,7 +75,7 @@ export const CHAT_WALLPAPERS_LIGHT: ChatWallpaperItem[] = [
 ];
 
 /** Тёмная тема: класть новые JPEG в `assets/chat-wallpapers/dark/`. */
-export const CHAT_WALLPAPERS_DARK: ChatWallpaperItem[] = [
+const CHAT_WALLPAPERS_DARK: ChatWallpaperItem[] = [
   {
     id: DEFAULT_DARK_WALLPAPER_ID,
     source: require('../assets/chat-wallpapers/dark/default.jpeg'),
@@ -132,19 +131,18 @@ const ALL_WALLPAPERS: ChatWallpaperItem[] = [
   ...CHAT_WALLPAPERS_DARK,
 ];
 
-export type ChatWallpaperPrefs = {
+type ChatWallpaperPrefs = {
   lightId: string;
   darkId: string;
 };
 
-export const DEFAULT_CHAT_WALLPAPER_PREFS: ChatWallpaperPrefs = {
+const DEFAULT_CHAT_WALLPAPER_PREFS: ChatWallpaperPrefs = {
   lightId: DEFAULT_LIGHT_WALLPAPER_ID,
   darkId: DEFAULT_DARK_WALLPAPER_ID,
 };
 
 const listeners = new Set<(prefs: ChatWallpaperPrefs) => void>();
 let cachedPrefs: ChatWallpaperPrefs = { ...DEFAULT_CHAT_WALLPAPER_PREFS };
-let loadPromise: Promise<ChatWallpaperPrefs> | null = null;
 
 function isKnownId(id: string, theme?: ChatWallpaperTheme): boolean {
   const list =
@@ -179,7 +177,7 @@ function notify(prefs: ChatWallpaperPrefs) {
   });
 }
 
-export function getChatWallpaperCatalog(theme: ChatWallpaperTheme): ChatWallpaperItem[] {
+function getChatWallpaperCatalog(theme: ChatWallpaperTheme): ChatWallpaperItem[] {
   return theme === 'dark' ? CHAT_WALLPAPERS_DARK : CHAT_WALLPAPERS_LIGHT;
 }
 
@@ -191,41 +189,6 @@ export function getChatWallpaperById(
   const found = list.find((item) => item.id === id) ?? ALL_WALLPAPERS.find((item) => item.id === id);
   if (found) return found;
   return theme === 'dark' ? CHAT_WALLPAPERS_DARK[0]! : CHAT_WALLPAPERS_LIGHT[0]!;
-}
-
-export function getChatWallpaperSource(
-  _isDark?: boolean,
-  prefs: ChatWallpaperPrefs = cachedPrefs,
-): ImageSourcePropType {
-  return getChatWallpaperById(prefs.darkId, 'dark').source;
-}
-
-export function getCachedChatWallpaperPrefs(): ChatWallpaperPrefs {
-  return cachedPrefs;
-}
-
-export async function loadChatWallpaperPrefs(): Promise<ChatWallpaperPrefs> {
-  if (loadPromise) return loadPromise;
-  loadPromise = (async () => {
-    try {
-      const raw = await AsyncStorage.getItem(STORAGE_KEY);
-      if (!raw) {
-        notify(DEFAULT_CHAT_WALLPAPER_PREFS);
-        return cachedPrefs;
-      }
-      const parsed = JSON.parse(raw) as Partial<ChatWallpaperPrefs>;
-      notify(normalizePrefs(parsed));
-      return cachedPrefs;
-    } catch {
-      notify(DEFAULT_CHAT_WALLPAPER_PREFS);
-      return cachedPrefs;
-    }
-  })();
-  try {
-    return await loadPromise;
-  } finally {
-    loadPromise = null;
-  }
 }
 
 export async function setChatWallpaperId(
@@ -245,32 +208,3 @@ export async function setChatWallpaperId(
   return next;
 }
 
-export function subscribeChatWallpaperPrefs(
-  listener: (prefs: ChatWallpaperPrefs) => void,
-): () => void {
-  listeners.add(listener);
-  return () => {
-    listeners.delete(listener);
-  };
-}
-
-/** Реактивные prefs для чата / пикера. */
-export function useChatWallpaperPrefs(): ChatWallpaperPrefs {
-  const [prefs, setPrefs] = useState<ChatWallpaperPrefs>(cachedPrefs);
-
-  useEffect(() => {
-    let mounted = true;
-    void loadChatWallpaperPrefs().then((p) => {
-      if (mounted) setPrefs(p);
-    });
-    const unsub = subscribeChatWallpaperPrefs((p) => {
-      if (mounted) setPrefs(p);
-    });
-    return () => {
-      mounted = false;
-      unsub();
-    };
-  }, []);
-
-  return prefs;
-}

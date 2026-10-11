@@ -3,7 +3,7 @@ import mongoose from 'mongoose';
 import User from '../models/User';
 import { getFriendVisibleOnlineUserIds } from './friendOnlinePresence';
 
-export type WelcomePresenceItem = {
+type WelcomePresenceItem = {
   id: string;
   nick: string;
   avatarVer: number;
@@ -68,7 +68,7 @@ export async function buildWelcomeOnlinePresenceList(io: Server): Promise<Welcom
   });
 }
 
-export async function emitWelcomeOnlinePresence(io: Server): Promise<void> {
+async function emitWelcomeOnlinePresence(io: Server): Promise<void> {
   try {
     const list = await buildWelcomeOnlinePresenceList(io);
     io.emit('presence:welcome', { ok: true, list });

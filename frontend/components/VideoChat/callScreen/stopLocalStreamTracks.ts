@@ -17,9 +17,6 @@
 import type { MediaStream } from '@livekit/react-native-webrtc';
 import { logger } from '../../../utils/logger';
 
-/** Задержка перед контрольной повторной остановкой. */
-const RESTOP_DELAY_MS = 100;
-
 export const stopStreamTracks = (stream: MediaStream | null | undefined, context: string) => {
   if (!stream) {
     return;

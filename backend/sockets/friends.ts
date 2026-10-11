@@ -17,12 +17,6 @@ import { listIncomingFriendRequests } from '../utils/friendRequests';
 
 const isOid = (s?: string) => !!s && mongoose.Types.ObjectId.isValid(String(s));
 
-/** Наружу отдаем только https/https URL (защита от старых file://, content:// и т.п.) */
-const normalizeAvatar = (s?: string) => {
-  const url = String(s || '').trim();
-  return /^https?:\/\//i.test(url) ? url : '';
-};
-
 export default function registerFriendSockets(io: Server) {
   /** Онлайн для списка друзей — та же семантика, что у глобального presence_update. */
   const isOnline = (uid: string) => isFriendGloballyVisibleOnline(io, uid);

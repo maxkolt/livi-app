@@ -25,7 +25,7 @@ export function truncateReplyQuote(text: string | undefined): string | undefined
   return text.length > MAX_REPLY_QUOTE_LENGTH ? text.slice(0, MAX_REPLY_QUOTE_LENGTH) : text;
 }
 
-export type SendRateLimitResult = { ok: true } | { ok: false; retryAfterSec: number };
+type SendRateLimitResult = { ok: true } | { ok: false; retryAfterSec: number };
 
 type RateLimitCheck = typeof checkRateLimit;
 

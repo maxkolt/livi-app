@@ -6,7 +6,7 @@ export const CHAT_ALBUM_GAP = 2;
 export const CHAT_ALBUM_INSET = 4;
 
 /** Selection-mode key for one photo inside an album: `${messageId}::album::${index}`. */
-export const ALBUM_SEL_MARK = '::album::';
+const ALBUM_SEL_MARK = '::album::';
 
 export function albumSelectionKey(messageId: string, index: number): string {
   return `${String(messageId || '').trim()}${ALBUM_SEL_MARK}${index | 0}`;
@@ -22,10 +22,6 @@ export function parseAlbumSelectionKey(
   const index = Number(s.slice(at + ALBUM_SEL_MARK.length));
   if (!messageId || !Number.isFinite(index) || index < 0) return null;
   return { messageId, index: index | 0 };
-}
-
-export function isAlbumSelectionKey(key: string): boolean {
-  return parseAlbumSelectionKey(key) != null;
 }
 
 /** Normalize message image URIs: prefers `uris[]`, falls back to single `uri`. */
@@ -90,7 +86,7 @@ export function selectedAlbumIndices(
   return out;
 }
 
-export type ChatPhotoEntry = {
+type ChatPhotoEntry = {
   uri: string;
   messageId: string;
   /** Index of this photo within its own message's album (0 for single-image messages). */
@@ -147,14 +143,14 @@ export function albumGridColumns(count: number): number {
  * Matches ChatMessageItem: row maxWidth 92% + margin 16, bubble maxWidth 80%.
  * Slightly conservative so tiles never wrap on the first Yoga pass.
  */
-export function albumInnerWidth(windowWidth: number): number {
+function albumInnerWidth(windowWidth: number): number {
   const listW = Math.max(1, Math.round(windowWidth));
   const rowW = Math.min(Math.floor(listW * 0.92), listW - 32);
   const bubbleW = Math.floor(rowW * 0.8);
   return Math.max(120, bubbleW - CHAT_ALBUM_INSET * 2 - 2);
 }
 
-export type AlbumGridLayout = {
+type AlbumGridLayout = {
   cols: number;
   tile: number;
   rowH: number;

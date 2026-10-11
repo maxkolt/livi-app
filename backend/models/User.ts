@@ -6,7 +6,7 @@ const debugLog = (...args: any[]) => {
   if (isDebug) {}
 };
 
-export interface IUser {
+interface IUser {
   _id: Types.ObjectId;
   nick?: string;
   avatar?: string; // Старое поле (для совместимости, больше не используется)
@@ -29,7 +29,7 @@ export interface IUser {
   e2eDisabled?: boolean;
 }
 
-export interface IE2eKeyBackup {
+interface IE2eKeyBackup {
   v: number;
   /** Параметры KDF: из пароля выводятся ключ шифрования копии и authKey. */
   kdf: { alg: string; N?: number; r?: number; p?: number; iterations?: number; salt: string };
@@ -41,9 +41,6 @@ export interface IE2eKeyBackup {
   authHash: string;
   updatedAt: Date;
 }
-
-const isHttp = (s?: string) =>
-  !!s && /^https?:\/\//i.test(String(s).trim());
 
 const UserSchema = new Schema<IUser>(
   {

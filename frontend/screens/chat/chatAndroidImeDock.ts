@@ -13,7 +13,7 @@
  * and for diagnostics (gap = ime − kc when kc>0).
  */
 
-export type AndroidImeDockSample = {
+type AndroidImeDockSample = {
   /** Absolute KC animated height (dp, system density). */
   kcAbsDp: number;
   /** Full IME inset from WindowInsets / MainActivity (dp, activity density). */
@@ -91,7 +91,7 @@ export function resolveAndroidImeDockTranslateY(sample: AndroidImeDockSample): n
   return height * scale + (1 - progress) * -nav;
 }
 
-export type AndroidImeDockLog = {
+type AndroidImeDockLog = {
   progress: number;
   kcAbsDp: number;
   imeDp: number;

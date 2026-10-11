@@ -41,7 +41,6 @@ import createChatRouter from './routes/chat';
 import { buildAvatarDataUris } from './utils/avatars';
 import { createToken, getLiveKitUrl, isAllowedParticipant } from './routes/livekit';
 import {
-  sendPushToUser,
   sendCallPushToRecipient,
   sendCallEscalationPushToRecipient,
   sendCallCanceledToRecipient,
@@ -191,10 +190,6 @@ const isOid = (s?: string) => !!s && /^[a-f\d]{24}$/i.test(String(s));
 const normalizeMongoObjectId = (s: string) => {
   const t = String(s || '').trim();
   return isOid(t) ? t.toLowerCase() : t;
-};
-const normalizeAvatar = (s?: string) => {
-  const url = String(s || '').trim();
-  return /^https?:\/\//i.test(url) ? url : '';
 };
 // КРИТИЧНО: Проверка готовности MongoDB перед операциями
 // readyState: 0 = disconnected, 1 = connected, 2 = connecting, 3 = disconnecting
@@ -811,13 +806,6 @@ startFliqCollector();
 function getOnlineListFromIo(io: Server): string[] {
   return getFriendVisibleOnlineUserIds(io);
 }
-function bindUser(sock: AuthedSocket, userId: string) {
-  const uid = normalizeMongoObjectId(String(userId));
-  (sock as any).data.userId = uid;
-  try {
-    sock.join(`u:${uid}`);
-  } catch {}
-}
 function unbindUser(sock: AuthedSocket) {
   const uid = (sock as any)?.data?.userId;
   (sock as any).data.userId = undefined;
@@ -1086,10 +1074,6 @@ function emitCallCancelToCallee(callId: string, callerId: string, calleeId: stri
 
 /* ========= Matching (ГЛОБАЛЬНО) ========= */
 // Используем распределенное хранилище через queueStore
-const partnerOf = async (id: string) => await queueStore.getPartner(id);
-const pair = async (a: string, b: string) => {
-  await queueStore.setPair(a, b);
-};
 const unpair = async (id: string) => {
   return await queueStore.removePair(id);
 };
@@ -1101,7 +1085,6 @@ const removeFromWaitingQueue = async (sid: string) => {
 const enqueueWaiting = async (sid: string) => {
   await queueStore.addToQueue(sid);
 };
-const isConnected = (sid: string) => io.sockets.sockets.has(sid);
 const getUserIdBySid = (sid: string): string | undefined => {
   const s = io.sockets.sockets.get(sid) as any;
   const userId = s?.data?.userId ? String(s.data.userId) : undefined;
@@ -1115,9 +1098,6 @@ const setRandomBusy = async (uid?: string | null, busy?: boolean) => {
   await emitPresenceUpdateToFriends(io, uid, !!busy);
 };
 
-// Отслеживание дружеских комнат (roomId -> participants[])
-const friendRooms = new Map<string, string[]>();
-
 function emitFriendRoomState(roomId: string, participants: string[]) {
   const payload = { roomId, participants };
   try {
@@ -1129,16 +1109,6 @@ function emitFriendRoomState(roomId: string, participants: string[]) {
     } catch {}
   }
 }
-
-const setFriendRoomState = (roomId: string, participants: string[]) => {
-  if (participants.length === 0) {
-    friendRooms.delete(roomId);
-  } else {
-    friendRooms.set(roomId, [...participants]);
-  }
-
-  emitFriendRoomState(roomId, participants);
-};
 
 // Функция для обновления состояния дружеской комнаты
 const updateFriendRoomState = async (io: Server, roomId: string) => {
@@ -1525,10 +1495,6 @@ function clearAcceptedCallStateForUser(userId: string, reason: string): string |
 
 function getCallAcceptedDeliveryKey(callId: string, userId: string): string {
   return `${String(callId)}:${String(userId)}`;
-}
-
-function getCallAcceptedDeliveryState(callId: string, userId: string): CallAcceptedDeliveryState | undefined {
-  return callAcceptedDeliveryByKey.get(getCallAcceptedDeliveryKey(callId, userId));
 }
 
 function rememberCallAcceptedDelivery(

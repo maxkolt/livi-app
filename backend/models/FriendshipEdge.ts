@@ -1,6 +1,6 @@
 import mongoose, { Schema, Document, Model } from 'mongoose';
 
-export interface IFriendshipEdge extends Document {
+interface IFriendshipEdge extends Document {
   _id: mongoose.Types.ObjectId;
   userId: mongoose.Types.ObjectId;
   friendId: mongoose.Types.ObjectId;

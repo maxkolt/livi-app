@@ -201,7 +201,7 @@ export function WelcomeProfileRow({
   );
 }
 
-export function WelcomeProfileRowDivider({
+function WelcomeProfileRowDivider({
   compact,
   tablet,
   textOnly,

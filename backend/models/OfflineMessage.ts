@@ -3,7 +3,7 @@ import { E2eEnvelopeSchema } from './e2eEnvelopeSchema';
 import type { E2eEnvelope } from '../utils/e2eEnvelope';
 
 // Интерфейс для офлайн сообщения
-export interface IOfflineMessage extends Document {
+interface IOfflineMessage extends Document {
   _id: mongoose.Types.ObjectId;
   recipientId: mongoose.Types.ObjectId; // ID получателя
   senderId: mongoose.Types.ObjectId; // ID отправителя

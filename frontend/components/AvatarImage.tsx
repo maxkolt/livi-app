@@ -76,7 +76,7 @@ const ACTIVE_FRAME_RING_MAX = 5;
  * толщина (те же 1.8) вернула бы дробный размер контейнера — ровно то, с чего
  * начиналось расхождение кольца с краем фотографии.
  */
-export function activeFrameRingWidth(avatarSize: number): number {
+function activeFrameRingWidth(avatarSize: number): number {
   const raw = Math.round(avatarSize) * ACTIVE_FRAME_RING_RATIO;
   return Math.round(Math.min(ACTIVE_FRAME_RING_MAX, Math.max(ACTIVE_FRAME_RING_MIN, raw)));
 }
@@ -98,18 +98,13 @@ const FRAME_COLORS: Record<string, readonly [string, string, ...string[]]> = {
   obsidian: ['#6B7280', '#374151', '#111827'],
 };
 
-/** Цвета градиента купленной рамки; null — такой рамки нет, кольцо не рисуется. */
-export function avatarFrameColors(frameId?: string | null): readonly string[] | null {
-  return (frameId && FRAME_COLORS[frameId]) || null;
-}
-
 /** Что аватар показывает прямо сейчас. */
 export type AvatarDisplay =
   | { kind: 'image'; uri: string }
   | { kind: 'letter' }
   | { kind: 'empty' };
 
-export interface AvatarImageProps {
+interface AvatarImageProps {
   userId?: string;
   avatarVer?: number;
   uri?: string; // для обратной совместимости или локальных файлов

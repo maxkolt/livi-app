@@ -17,7 +17,7 @@ const DIRECT_CALL_VIDEO_EXPAND_GUARD_MS = 3500;
 const DIRECT_CALL_VIDEO_EXPAND_DEDUP_MS = 900;
 
 /** Продлевает окно, в котором audio-only / PiP-return не должны откатывать переход на video UI. */
-export function touchDirectCallVideoExpandGuard(): void {
+function touchDirectCallVideoExpandGuard(): void {
   try {
     const g = global as any;
     g.__directCallVideoExpandUntilRef = g.__directCallVideoExpandUntilRef || { current: 0 };
@@ -36,7 +36,7 @@ export function isDirectCallVideoExpandGuardActive(): boolean {
 }
 
 /** Один активный expand на коротком интервале (PiP overlay + mount effects). */
-export function tryBeginDirectCallVideoExpand(): boolean {
+function tryBeginDirectCallVideoExpand(): boolean {
   try {
     const g = global as any;
     const now = Date.now();

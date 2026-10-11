@@ -86,7 +86,7 @@ function ensureDeliveredHook(): void {
   });
 }
 
-export function hydrateReactionOutbox(): Promise<void> {
+function hydrateReactionOutbox(): Promise<void> {
   if (!hydratePromise) {
     hydratePromise = (async () => {
       try {

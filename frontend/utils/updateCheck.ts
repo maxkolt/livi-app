@@ -31,7 +31,7 @@ function versionToParts(raw: string): number[] {
 }
 
 /** Канонический ключ для сравнения с сохранённым «мы на последней» (одинаково для 1.01.0 и 1.1.0). */
-export function normalizeVersionKey(v: string): string {
+function normalizeVersionKey(v: string): string {
   return versionToParts(v).join('.');
 }
 
@@ -113,17 +113,6 @@ export async function fetchLatestAppVersion(): Promise<string | null> {
     }
   }
   return null;
-}
-
-/** Быстрая проверка без сети: ранее мы уже считали, что приложение на последней версии? Тогда не показывать обновление. */
-export async function isLikelyOnLatestVersion(): Promise<boolean> {
-  try {
-    const current = normalizeVersionKey(getCurrentAppVersion());
-    const lastKnown = await AsyncStorage.getItem(LAST_KNOWN_ON_LATEST_VERSION_KEY);
-    return lastKnown != null && normalizeVersionKey(lastKnown) === current;
-  } catch {
-    return false;
-  }
 }
 
 /** Есть ли доступное обновление (текущая версия меньше той, что на сервере). Не зависит от VPN: при ошибке сети считаем «на последней», если ранее уже определяли current >= latest. */
@@ -225,17 +214,6 @@ export async function markUpdateBadgeShown(): Promise<void> {
     await AsyncStorage.setItem(LAST_UPDATE_BADGE_SHOWN_KEY, String(Date.now()));
     const latest = await fetchLatestAppVersion();
     if (latest) await AsyncStorage.setItem(LAST_UPDATE_BADGE_FOR_LATEST_KEY, latest.trim());
-  } catch {
-    // ignore
-  }
-}
-
-/** Сбросить кулдаун показа бейджа (для тестов; в __DEV__ можно вызвать из консоли). */
-export async function clearUpdateCooldownForTesting(): Promise<void> {
-  try {
-    await AsyncStorage.removeItem(LAST_UPDATE_BADGE_SHOWN_KEY);
-    await AsyncStorage.removeItem(LAST_UPDATE_BADGE_FOR_LATEST_KEY);
-    if (__DEV__) console.log('[UpdateCheck] Cooldown cleared for testing');
   } catch {
     // ignore
   }
