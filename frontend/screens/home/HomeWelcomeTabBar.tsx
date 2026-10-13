@@ -1,5 +1,6 @@
-import React, { memo, useRef } from 'react';
-import { AppState, Platform, Pressable, StyleSheet, View } from 'react-native';
+import React, { memo, useCallback, useRef, useState } from 'react';
+import { AppState, Platform, Pressable, StyleSheet, View, type LayoutChangeEvent } from 'react-native';
+import Svg, { ClipPath, Defs, Ellipse, LinearGradient, Path, RadialGradient, Rect, Stop } from 'react-native-svg';
 import type { EdgeInsets } from 'react-native-safe-area-context';
 import { useHomeLayout } from './HomeLayoutContext';
 import { useStableSafeAreaInsets } from './useStableSafeAreaInsets';
@@ -9,6 +10,7 @@ import { shouldSkipHomeUiSettle } from '../../utils/globalEvents';
 import FitText from '../../components/FitText';
 import {
   UI_ACCENT,
+  UI_ACCENT_LIGHT,
   UI_ACCENT_SOFT,
   UI_RIM,
   UI_INACTIVE,
@@ -59,6 +61,130 @@ type HomeWelcomeTabBarProps = {
 
 const PROFILE_ACTIVE_DOT = 28;
 
+/**
+ * Fliq — главная кнопка навбара: поднята над остальными, а верх блока над ней мягко выгнут —
+ * кнопка лежит в том же блоке, не отдельным пузырём. Выгиб невысокий и уже соседних иконок:
+ * плоская вершина над кнопкой, плавные плечи. Над блоком 8 dp стекла (GLASS_DOCK_TOP_PAD) —
+ * выгиб в нём и остаётся, с зазором до края стекла (при 6 dp почти касался его).
+ */
+const FLIQ_LIFT = 8;
+const FLIQ_HUMP = 5;
+const FLIQ_HUMP_HALF = 31;
+const FLIQ_HUMP_SHOULDER = 16;
+const FLIQ_INDEX = 2;
+const TAB_COUNT = 6;
+/** Отступ ряда вкладок от края блока (styles.row). */
+const ROW_PAD_X = 2;
+
+type DockSize = { width: number; height: number };
+
+/** Контур блока с выгибом над Fliq; y = 0 — вершина выгиба, верх блока — на hump ниже. */
+function dockPath(w: number, h: number, cx: number, hump: number, inset: number) {
+  const a = FLIQ_HUMP_HALF;
+  const s = FLIQ_HUMP_SHOULDER;
+  const left = inset;
+  const right = w - inset;
+  const top = hump + inset;
+  const bottom = hump + h - inset;
+  const r = Math.min(WELCOME_CHROME_EDGE_RADIUS, h / 2) - inset;
+  const x0 = cx - a - s;
+  const x1 = cx - a;
+  const x2 = cx + a;
+  const x3 = cx + a + s;
+  return [
+    `M ${left + r} ${top}`,
+    `L ${x0} ${top}`,
+    `C ${x0 + s / 2} ${top} ${x1 - s / 2} ${inset} ${x1} ${inset}`,
+    `L ${x2} ${inset}`,
+    `C ${x2 + s / 2} ${inset} ${x3 - s / 2} ${top} ${x3} ${top}`,
+    `L ${right - r} ${top}`,
+    `A ${r} ${r} 0 0 1 ${right} ${top + r}`,
+    `L ${right} ${bottom - r}`,
+    `A ${r} ${r} 0 0 1 ${right - r} ${bottom}`,
+    `L ${left + r} ${bottom}`,
+    `A ${r} ${r} 0 0 1 ${left} ${bottom - r}`,
+    `L ${left} ${top + r}`,
+    `A ${r} ${r} 0 0 1 ${left + r} ${top}`,
+    'Z',
+  ].join(' ');
+}
+
+/**
+ * Блок навбара: тон кнопок шапки, тонкая кромка; на выгибе кромка светится акцентом, под
+ * кнопкой Fliq — мягкое свечение, обрезанное по блоку.
+ */
+const DockShape = memo(function DockShape({ width, height, hump, glowY }: DockSize & { hump: number; glowY: number }) {
+  const cx = ROW_PAD_X + ((width - ROW_PAD_X * 2) * (FLIQ_INDEX + 0.5)) / TAB_COUNT;
+  const rim = StyleSheet.hairlineWidth;
+  const outline = dockPath(width, height, cx, hump, rim / 2);
+  const x0 = cx - FLIQ_HUMP_HALF - FLIQ_HUMP_SHOULDER;
+  const x3 = cx + FLIQ_HUMP_HALF + FLIQ_HUMP_SHOULDER;
+  const ridge = [
+    `M ${x0 - 14} ${hump}`,
+    `L ${x0} ${hump}`,
+    `C ${x0 + FLIQ_HUMP_SHOULDER / 2} ${hump} ${cx - FLIQ_HUMP_HALF - FLIQ_HUMP_SHOULDER / 2} 0.5 ${cx - FLIQ_HUMP_HALF} 0.5`,
+    `L ${cx + FLIQ_HUMP_HALF} 0.5`,
+    `C ${cx + FLIQ_HUMP_HALF + FLIQ_HUMP_SHOULDER / 2} 0.5 ${x3 - FLIQ_HUMP_SHOULDER / 2} ${hump} ${x3} ${hump}`,
+    `L ${x3 + 14} ${hump}`,
+  ].join(' ');
+  return (
+    <Svg
+      pointerEvents="none"
+      width={width}
+      height={height + hump}
+      style={[styles.dockShape, { top: -hump }]}
+    >
+      <Defs>
+        <ClipPath id="dockClip">
+          <Path d={outline} />
+        </ClipPath>
+        <RadialGradient id="fliqGlow" cx={cx} cy={glowY + hump} rx={46} ry={30} gradientUnits="userSpaceOnUse">
+          <Stop offset="0" stopColor={UI_ACCENT} stopOpacity={0.2} />
+          <Stop offset="1" stopColor={UI_ACCENT} stopOpacity={0} />
+        </RadialGradient>
+        <LinearGradient id="ridge" x1={x0 - 14} y1={0} x2={x3 + 14} y2={0} gradientUnits="userSpaceOnUse">
+          <Stop offset="0" stopColor={UI_ACCENT} stopOpacity={0} />
+          <Stop offset="0.3" stopColor={UI_ACCENT} stopOpacity={0.4} />
+          <Stop offset="0.5" stopColor={UI_ACCENT_LIGHT} stopOpacity={0.55} />
+          <Stop offset="0.7" stopColor={UI_ACCENT} stopOpacity={0.4} />
+          <Stop offset="1" stopColor={UI_ACCENT} stopOpacity={0} />
+        </LinearGradient>
+      </Defs>
+      <Path d={outline} fill={UI_GLASS_CONTROL} stroke={UI_RIM} strokeWidth={rim} />
+      <Ellipse cx={cx} cy={glowY + hump} rx={46} ry={30} fill="url(#fliqGlow)" clipPath="url(#dockClip)" />
+      <Path d={ridge} fill="none" stroke="url(#ridge)" strokeWidth={0.8} strokeLinecap="round" />
+    </Svg>
+  );
+});
+
+/**
+ * Кнопка Fliq: капсула как у «Найти собеседника» — мягкая заливка акцентом сверху вниз, кромка
+ * от ледяного к акценту, тонкий блик по верху. Открытая вкладка — заливка плотнее.
+ */
+const FliqFace = memo(function FliqFace({ active, width, height }: { active: boolean; width: number; height: number }) {
+  const r = height / 2;
+  return (
+    <Svg pointerEvents="none" width={width} height={height} style={styles.fliqFace}>
+      <Defs>
+        <LinearGradient id="fliqFill" x1="0" y1="0" x2="0" y2="1">
+          <Stop offset="0" stopColor={UI_ACCENT} stopOpacity={active ? 0.44 : 0.3} />
+          <Stop offset="1" stopColor={UI_ACCENT} stopOpacity={active ? 0.24 : 0.12} />
+        </LinearGradient>
+        <LinearGradient id="fliqEdge" x1="0" y1="0" x2="0" y2="1">
+          <Stop offset="0" stopColor={UI_ACCENT_LIGHT} stopOpacity={0.9} />
+          <Stop offset="1" stopColor={UI_ACCENT} stopOpacity={0.4} />
+        </LinearGradient>
+        <LinearGradient id="fliqShine" x1="0" y1="0" x2="0" y2="1">
+          <Stop offset="0" stopColor="#FFFFFF" stopOpacity={0.18} />
+          <Stop offset="0.45" stopColor="#FFFFFF" stopOpacity={0} />
+        </LinearGradient>
+      </Defs>
+      <Rect x={0.5} y={0.5} width={width - 1} height={height - 1} rx={r - 0.5} fill="url(#fliqFill)" stroke="url(#fliqEdge)" strokeWidth={1} />
+      <Rect x={2} y={2} width={width - 4} height={height - 4} rx={r - 2} fill="none" stroke="url(#fliqShine)" strokeWidth={0.8} />
+    </Svg>
+  );
+});
+
 const INACTIVE = UI_INACTIVE;
 // Иконки неактивных вкладок — оттенок подписи сегмента («Все» на «Чатах»), чуть приглушённый; подписи серые.
 const INACTIVE_ICON = 'rgba(244, 245, 247, 0.76)';
@@ -89,6 +215,19 @@ function HomeWelcomeTabBarInner({
   const fliqIconSize = tabletLayout ? 27 : compactLandscape ? 22 : 24;
   /** После cancel onPress часто опаздывает на 1.5–3с — переключаем на pressIn и держим длинное окно. */
   const pressInHandledRef = useRef<{ id: WelcomeTabId; at: number } | null>(null);
+  const fliqLift = compactLandscape ? 5 : FLIQ_LIFT;
+  const fliqHump = compactLandscape ? 4 : FLIQ_HUMP;
+  // Капсула Fliq — на iconWrap шире на 24 dp и выше на 10 (styles.fliqFace).
+  const fliqFace = tabletLayout ? { width: 60, height: 44 } : { width: 56, height: 40 };
+  // Центр иконок от верха блока: отступ ряда, отступ вкладки, половина iconWrap.
+  const iconCenterY =
+    (tabletLayout ? 8 + 8 + 17 : compactLandscape ? 1 + 3 + 15 : 6 + 6 + 15) - fliqLift;
+  // Форма блока рисуется по его размеру; до первого замера — прежний прямоугольник.
+  const [dock, setDock] = useState<DockSize | null>(null);
+  const onSurfaceLayout = useCallback((e: LayoutChangeEvent) => {
+    const { width: w, height: h } = e.nativeEvent.layout;
+    setDock((prev) => (prev && Math.abs(prev.width - w) < 0.5 && Math.abs(prev.height - h) < 0.5 ? prev : { width: w, height: h }));
+  }, []);
 
   const tabs: TabDef[] = [
     {
@@ -169,7 +308,8 @@ function HomeWelcomeTabBarInner({
       pointerEvents="box-none"
     >
       {/* Блок лежит на нижнем стекле (WelcomeGlassDock в HomeScreen) — без тени. */}
-      <View style={styles.surface}>
+      {dock ? <DockShape width={dock.width} height={dock.height} hump={fliqHump} glowY={iconCenterY} /> : null}
+      <View style={[styles.surface, dock && styles.surfaceShaped]} onLayout={onSurfaceLayout}>
         <View
           style={[
             styles.row,
@@ -180,8 +320,9 @@ function HomeWelcomeTabBarInner({
           {tabs.map((tab) => {
           const active = tab.id === activeTab;
           const isFliq = tab.id === 'fliq';
-          // Fliq выделен всегда: иконка акцентом на своей «таблетке», даже когда вкладка не открыта.
-          const iconColor = active || isFliq ? ACTIVE_ICON : INACTIVE_ICON;
+          // Fliq выделен всегда: иконка акцентом на своей капсуле, даже когда вкладка не открыта;
+          // открытая — светлее.
+          const iconColor = isFliq ? (active ? UI_ACCENT_LIGHT : ACTIVE_ICON) : active ? ACTIVE_ICON : INACTIVE_ICON;
           const labelColor = active ? ACTIVE_LABEL : INACTIVE;
           const showDot =
             (tab.id === 'chat' && !!showChatDot) ||
@@ -250,21 +391,22 @@ function HomeWelcomeTabBarInner({
                     ]}
                   >
                     {isFliq ? (
-                      <View
-                        pointerEvents="none"
-                        style={[
-                          styles.fliqPill,
-                          tabletLayout && styles.activePillTablet,
-                          active && styles.fliqPillActive,
-                        ]}
-                      />
-                    ) : active ? (
-                      <View
-                        pointerEvents="none"
-                        style={[styles.activePill, tabletLayout && styles.activePillTablet]}
-                      />
-                    ) : null}
-                    {tab.renderIcon(active, iconColor)}
+                      // Поднята целиком, подпись остаётся на одной линии с остальными.
+                      <View pointerEvents="none" style={[styles.fliqLift, { transform: [{ translateY: -fliqLift }] }]}>
+                        <FliqFace active={active} width={fliqFace.width} height={fliqFace.height} />
+                        {tab.renderIcon(active, iconColor)}
+                      </View>
+                    ) : (
+                      <>
+                        {active ? (
+                          <View
+                            pointerEvents="none"
+                            style={[styles.activePill, tabletLayout && styles.activePillTablet]}
+                          />
+                        ) : null}
+                        {tab.renderIcon(active, iconColor)}
+                      </>
+                    )}
                     {showDot ? <View style={styles.badge} pointerEvents="none" /> : null}
                   </View>
                   <FitText
@@ -318,6 +460,16 @@ const styles = StyleSheet.create({
     borderColor: UI_RIM,
     backgroundColor: UI_GLASS_CONTROL,
     overflow: 'hidden',
+  },
+  /** Фон и кромку рисует DockShape; поднятая кнопка Fliq выходит за верх блока. */
+  surfaceShaped: {
+    borderColor: 'transparent',
+    backgroundColor: 'transparent',
+    overflow: 'visible',
+  },
+  dockShape: {
+    position: 'absolute',
+    left: 0,
   },
   row: {
     flexDirection: 'row',
@@ -391,23 +543,16 @@ const styles = StyleSheet.create({
   activePillTablet: {
     borderRadius: 17,
   },
-  /**
-   * Fliq — постоянная «таблетка» шире обычной: мягкая заливка акцентом и чёткая рамка,
-   * как у кнопки «Найти собеседника». Открытая вкладка — заливка плотнее, без яркого цвета.
-   */
-  fliqPill: {
-    position: 'absolute',
-    top: -1,
-    bottom: -1,
-    left: -12,
-    right: -12,
-    borderRadius: 16,
-    backgroundColor: 'rgba(98, 176, 216, 0.16)',
-    borderWidth: 1,
-    borderColor: 'rgba(98, 176, 216, 0.58)',
+  fliqLift: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  fliqPillActive: {
-    backgroundColor: 'rgba(98, 176, 216, 0.30)',
+  /** Капсула Fliq — по центру иконки: на 12 dp шире с каждой стороны и на 5 dp выше и ниже. */
+  fliqFace: {
+    position: 'absolute',
+    left: -12,
+    top: -5,
   },
   badge: {
     position: 'absolute',

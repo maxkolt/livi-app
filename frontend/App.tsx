@@ -4904,7 +4904,9 @@ function AppContent() {
                 options={{
                   presentation: 'card',
                   gestureEnabled: true,
-                  // Как VideoCall: без fade — мгновенный вход, без «залипания» поверх Home.
+                  // Смена экрана мгновенная: фон чата — та же сцена, что у главной, а мягко
+                  // проявляются только его карточки и кнопки (RandomChat, appear). Прозрачный слой
+                  // поверх главной давал просвечивающие кнопки навбара и темнел при уходе.
                   animation: 'none',
                   animationDuration: 0,
                   contentStyle: {

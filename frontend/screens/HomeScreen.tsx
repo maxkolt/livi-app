@@ -90,7 +90,7 @@ import {
 } from './home/HomeWelcomeTabBar';
 import { FramesStoreHost } from './home/WelcomeCrownButton';
 import { WelcomeKeepAlivePane } from './home/WelcomeKeepAlivePane';
-import { SPATIAL_DEPTH, SpatialLayer, SpatialStageBackground } from './home/SpatialDepth';
+import { SpatialStageBackground } from './home/SpatialDepth';
 import { FliqFeedView } from './fliq/FliqFeedView';
 import { warmFliqFeed } from './fliq/fliqApi';
 import { FliqWebViewWarmup } from './fliq/FliqWebViewWarmup';
@@ -461,13 +461,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
    * измерение предыдущей ориентации: Android сначала присылал 120.5 dp для уже
    * горизонтального окна, затем 60.4 dp — из-за этого вся сцена меняла высоту.
    */
-  const estimatedTabBarH =
-    (tabBarTablet ? 76 : tabBarCompactLandscape ? 50.5 : 66.5) +
-    welcomeTabBarBottomGap(
-      homeInsets.bottom,
-      tabBarTablet,
-      tabBarCompactLandscape,
-    );
+  const tabBarBottomGap = welcomeTabBarBottomGap(homeInsets.bottom, tabBarTablet, tabBarCompactLandscape);
+  const estimatedTabBarH = (tabBarTablet ? 76 : tabBarCompactLandscape ? 50.5 : 66.5) + tabBarBottomGap;
   const [tabBarHeights, setTabBarHeights] = useState<{
     portrait?: number;
     landscape?: number;
@@ -495,9 +490,22 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const [welcomeActiveTab, setWelcomeActiveTab] = useState<WelcomeTabId>('search');
   const welcomeActiveTabRef = useRef<WelcomeTabId>('search');
   welcomeActiveTabRef.current = welcomeActiveTab;
-  /** Lazy-mount list panes on first visit — keep them thereafter (no remount flicker). */
+  // Effects/data refreshes are non-visual work. Start them only after the selected pane
+  // has had time to paint; tying them directly to welcomeActiveTab made the tap commit heavy.
+  const [welcomeSettledTab, setWelcomeSettledTab] = useState<WelcomeTabId>('search');
+  useEffect(() => {
+    if (welcomeSettledTab === welcomeActiveTab) return;
+    const timer = setTimeout(() => setWelcomeSettledTab(welcomeActiveTab), 80);
+    return () => clearTimeout(timer);
+  }, [welcomeActiveTab, welcomeSettledTab]);
+  /**
+   * Friends/Chat are primary destinations and must already have a native view tree when
+   * the tab gesture arrives. Mounting either list in the same commit as the tab switch
+   * made the first opening depend on avatar/list work and could leave a blank pane for
+   * hundreds of milliseconds. The less frequent panes remain lazy.
+   */
   const [mountedWelcomeTabs, setMountedWelcomeTabs] = useState<ReadonlySet<WelcomeTabId>>(
-    () => new Set<WelcomeTabId>(['search']),
+    () => new Set<WelcomeTabId>(['search', 'friends', 'chat']),
   );
   const ensureWelcomeTabMounted = useCallback((tabId: WelcomeTabId) => {
     setMountedWelcomeTabs((prev) => {
@@ -507,16 +515,15 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       return next;
     });
   }, []);
-  /** One-shot: idle + dial. Скрытые pane (active=false) без call log / chat previews UI. */
+  /** One-shot: idle + dial. Only the less frequent Calls/Profile panes still need warming. */
   const welcomeShellsWarmedRef = useRef(false);
   const warmTimersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
   const warmWelcomeListShells = useCallback(
     (reason: string) => {
-      const toWarm: WelcomeTabId[] = ['friends', 'chat', 'calls', 'profile'];
+      const toWarm: WelcomeTabId[] = ['calls', 'profile'];
       welcomeShellsWarmedRef.current = true;
-      // Dial-path монтирует синхронно: там вкладка нужна мгновенно.
-      // Idle-path разносит по кадрам — четыре панели разом роняли кадры поверх
-      // анимации появления welcome (замеряли: 20 медленных кадров, худший 81ms).
+      // Dial-path mounts synchronously. Idle-path spreads the two remaining heavy panes
+      // across frames so their first render does not create one long JS task.
       if (reason.startsWith('idle')) {
         toWarm.forEach((id, index) => {
           const timer = setTimeout(() => {
@@ -4982,12 +4989,15 @@ const handleClearNick = useCallback(async () => {
 
   /* ================= UI ================= */
 
-  const onRefreshFriends = async () => {
+  const onRefreshFriends = useCallback(async () => {
     try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch { Vibration.vibrate(10); }
     setRefreshing(true);
-    await loadFriends();
-    setRefreshing(false);
-  };
+    try {
+      await loadFriends();
+    } finally {
+      setRefreshing(false);
+    }
+  }, [loadFriends]);
 
   const friendRowBlocksDelete = useCallback(
     (friend: Friend) => {
@@ -5557,6 +5567,16 @@ const handleClearNick = useCallback(async () => {
   const showProfileTab = welcomeActiveTab === 'profile';
   const showFliqTab = welcomeActiveTab === 'fliq';
   const showSearchWelcome = !showFriendsTab && !showChatTab && !showCallsTab && !showProfileTab && !showFliqTab;
+  // Hidden keep-alive panes otherwise ignore children updates. These narrow tokens let the
+  // two primary tabs prepare current rows offscreen, without waking them for unrelated Home state.
+  const friendsPaneRevision = useMemo(
+    () => ({ friends, unreadByUser, missedByUser, friendRequestsCount, initialized, refreshing, lang }),
+    [friends, unreadByUser, missedByUser, friendRequestsCount, initialized, refreshing, lang],
+  );
+  const chatsPaneRevision = useMemo(
+    () => ({ friends, unreadByUser, refreshing, lang }),
+    [friends, unreadByUser, refreshing, lang],
+  );
   const showSplashOverlay = !splashDismissed;
   // Splash = «Поиск готов к первому кадру»: версия проверена, URI есть (если аватар
   // ожидается), data:→file готов, ExpoImage уже prefetch'нул байты.
@@ -5700,8 +5720,8 @@ const handleClearNick = useCallback(async () => {
       {showSearchWelcome && searchTopBlockBottom != null ? (
         <WelcomeGlassTop height={homeInsets.top + searchTopBlockBottom + GLASS_SEGMENT_PAD.phone} />
       ) : null}
-      {/* Вкладки парят над сценой; у Fliq ролик во весь экран — слой стоит на месте. */}
-      <SpatialLayer depth={SPATIAL_DEPTH.content} enabled={!showFliqTab} style={{ flex: 1, minHeight: 0 }}>
+      {/* Интерфейс — плоскость экрана: при наклоне за стеклом движется только сцена (SpatialDepth). */}
+      <View style={{ flex: 1, minHeight: 0 }}>
         {/* Search always mounted. List panes lazy-mount on first visit, then stay (no remount flicker). */}
         <WelcomeKeepAlivePane visible={showSearchWelcome} mode="offscreen" style={homePanePad}>
           <HomeWelcomeView
@@ -5720,7 +5740,6 @@ const handleClearNick = useCallback(async () => {
             onStartSearch={handleStartSearch}
             splashGone={!showSplashOverlay}
             onRadarReady={handleSearchRadarReady}
-            active={showSearchWelcome}
             onTopBlockBottom={onSearchTopBlockBottom}
             safeAreaInsets={homeInsets}
           />
@@ -5729,7 +5748,11 @@ const handleClearNick = useCallback(async () => {
           <WelcomeKeepAlivePane visible mode="list" />
         ) : null}
         {mountedWelcomeTabs.has('friends') ? (
-        <WelcomeKeepAlivePane visible={showFriendsTab} mode="offscreen">
+        <WelcomeKeepAlivePane
+          visible={showFriendsTab}
+          mode="offscreen"
+          hiddenRevision={friendsPaneRevision}
+        >
           <HomeWelcomeFriendsView
             {...friendsListShellProps}
             bottomInset={tabBarH + GLASS_DOCK_TOP_PAD}
@@ -5745,14 +5768,18 @@ const handleClearNick = useCallback(async () => {
           <WelcomeKeepAlivePane visible mode="list" />
         ) : null}
         {mountedWelcomeTabs.has('chat') ? (
-        <WelcomeKeepAlivePane visible={showChatTab} mode="offscreen">
+        <WelcomeKeepAlivePane
+          visible={showChatTab}
+          mode="offscreen"
+          hiddenRevision={chatsPaneRevision}
+        >
           <HomeWelcomeChatsView
             bottomInset={tabBarH + GLASS_DOCK_TOP_PAD}
             lang={lang}
             L={L}
-            active={showChatTab}
+            active={welcomeSettledTab === 'chat'}
             allFriends={friends}
-            unreadByUser={showChatTab ? unreadByUser : EMPTY_BADGE_MAP}
+            unreadByUser={unreadByUser}
             navigation={navigation}
             lastChatOpenRef={lastChatOpenRef}
             prepareFriendRowActionTap={prepareFriendRowActionTap}
@@ -5776,6 +5803,7 @@ const handleClearNick = useCallback(async () => {
             onPrewarmSettled={handleFliqPrewarmSettled}
             lang={lang}
             bottomInset={tabBarH + GLASS_DOCK_TOP_PAD}
+            navMidFromBottom={(tabBarH + tabBarBottomGap) / 2}
             topInset={homeInsets.top + APP_TOP_CONTENT_GAP}
           />
         </WelcomeKeepAlivePane>
@@ -5850,14 +5878,12 @@ const handleClearNick = useCallback(async () => {
           </BlurListSource>
         </WelcomeKeepAlivePane>
         ) : null}
-      </SpatialLayer>
+      </View>
 
       {/* Стекло от верха навбара до низа экрана; содержимое вкладки размыто под ним. */}
       <WelcomeGlassDock listSourceId={tabBarListSource} height={tabBarH} />
-      {/* Навбар поверх вкладок — непрозрачный блок на стекле, парит чуть ниже вкладок. */}
-      <SpatialLayer
-        depth={SPATIAL_DEPTH.tabBar}
-        enabled={!showFliqTab}
+      {/* Навбар поверх вкладок — непрозрачный блок на стекле. */}
+      <View
         pointerEvents="box-none"
         style={{ position: 'absolute', left: insets.left, right: insets.right, bottom: 0 }}
         onLayout={onTabBarLayout}
@@ -5884,7 +5910,7 @@ const handleClearNick = useCallback(async () => {
           }
           showProfileDot={!!updateAvailable}
         />
-      </SpatialLayer>
+      </View>
 
       {/* Модалка аватара: полный экран, блюр/затемнение, круг 3×, pinch-to-zoom, тап вне — закрыть. Без вложенности touch/gesture (Nesting touch handlers with native animated driver). */}
       {avatarModalVisible && (

@@ -4,12 +4,15 @@
  * Здесь все, кто ждёт ответа: заявки из случайного чата и открытые ссылки-
  * приглашения — в том числе если окно закрыли, связь оборвалась или приложение
  * вышло. Принять — друг в списке; удалить — заявки больше нет.
- * Вид — как вкладка «Друзья»: шапка с заголовком посередине, те же карточки.
+ * Вид — шапка с заголовком посередине на фоне как у верхнего блока «Друзей» (UI_SURFACE),
+ * строки — как стеклянные строки «Звонков»: тот же тон, блик сверху и светлая кромка (сцены под
+ * страницей нет — вид стекла нарисован напрямую).
  */
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, FlatList, Pressable, StyleSheet, View } from 'react-native';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaFrame, useSafeAreaInsets } from 'react-native-safe-area-context';
 import AdaptiveText from '../../components/AdaptiveText';
 import AvatarImage from '../../components/AvatarImage';
@@ -23,11 +26,10 @@ import {
   type FriendRequestItem,
 } from '../../store/friendRequests';
 import {
-  HOME_NAV_BG,
   LIVI,
   UI_ACCENT,
   UI_ACCENT_LIGHT,
-  UI_ROW_SURFACE,
+  UI_SURFACE,
   WELCOME_FRIEND_ACTION_BTN_PRESSED_SURFACE,
   WELCOME_FRIEND_ACTION_BTN_SURFACE,
   WELCOME_FRIEND_AVATAR_SIZE,
@@ -49,6 +51,11 @@ import { FRIEND_ROW_ACTION_GAP } from '../../constants/uiTokens';
 import { GLASS_HEADER_BTN } from './WelcomeGlassHeader';
 import { WelcomeTabTitle } from './WelcomeTabTitle';
 import { styles as homeStyles } from './styles';
+
+/** Вид стеклянной строки «Звонков» (замерен на экране): тон, блик сверху, кромка. */
+const ROW_GLASS_FILL = '#292F36';
+const ROW_GLASS_SHEEN = ['rgba(255, 255, 255, 0.05)', 'rgba(255, 255, 255, 0)'] as const;
+const ROW_GLASS_RIM = 'rgba(255, 255, 255, 0.12)';
 
 const DECLINE_RED = '#FF5A67';
 const DECLINE_RED_PRESSED = '#FF8A93';
@@ -119,6 +126,7 @@ function FriendRequestsContent({ visible, onClose, lang, friendIds, onAccepted }
     const rowBusy = busy[item.id];
     const name = item.nick || t('user', lang);
     const letter = (item.nick || '').trim()[0]?.toUpperCase() || '';
+    const cardRadius = tablet ? 18 : landscape ? 14 : 16;
     return (
       <View
         style={[
@@ -126,11 +134,17 @@ function FriendRequestsContent({ visible, onClose, lang, friendIds, onAccepted }
           {
             height: rowHeight,
             marginBottom: rowGap,
-            borderRadius: tablet ? 18 : landscape ? 14 : 16,
+            borderRadius: cardRadius,
             paddingLeft: tablet ? 14 : landscape ? 10 : 12,
           },
         ]}
       >
+        <LinearGradient
+          pointerEvents="none"
+          colors={ROW_GLASS_SHEEN}
+          locations={[0, 0.55]}
+          style={StyleSheet.absoluteFill}
+        />
         <View
           style={[
             styles.avatarBox,
@@ -306,8 +320,8 @@ function RequestActionButton({
 }
 
 const styles = StyleSheet.create({
-  // Сплошной фон, как на вкладках главной.
-  root: { flex: 1, backgroundColor: HOME_NAV_BG },
+  // Как фон верхнего блока «Друзей» (шапка с кнопками).
+  root: { flex: 1, backgroundColor: UI_SURFACE },
   page: { flex: 1 },
   column: {
     flex: 1,
@@ -333,7 +347,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     paddingRight: 12,
-    backgroundColor: UI_ROW_SURFACE,
+    backgroundColor: ROW_GLASS_FILL,
+    borderWidth: 0.8,
+    borderColor: ROW_GLASS_RIM,
     overflow: 'hidden',
   },
   avatarBox: {

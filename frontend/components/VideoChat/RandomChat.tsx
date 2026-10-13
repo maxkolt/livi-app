@@ -47,6 +47,8 @@ import { useAudioRouting } from './hooks/useAudioRouting';
 import { useModeration } from './hooks/useModeration';
 import { shouldDeferRandomChatStopOnAppBackground } from '../../utils/activeCallSession';
 import { HOME_NAV_BG, WELCOME_HEADER_TITLE, WELCOME_NAV_ACTIVE_ICON } from '../../screens/home/constants';
+import { SpatialGlass, SpatialStageBackground } from '../../screens/home/SpatialDepth';
+import { CARD_BASE } from './randomChat/constants';
 import { ANDROID_SCREEN_PADDING, NETWORK_OVERLAY_DELAY_MS } from './randomChat/constants';
 import { styles } from './randomChat/styles';
 import { useRandomChatToast } from './randomChat/useRandomChatToast';
@@ -65,6 +67,22 @@ type Props = {
 };
 
 /** Fallback moderation copy comes from i18n (`moderationWarningFallback`). */
+
+/**
+ * Карточки и кнопки — тёмное размытое зеркало над сценой (SpatialGlass): под ними видно фон,
+ * размытым. Сцена здесь неподвижная, стекло рисуется один раз. Без стекла — прежние заливки.
+ * У карточек нет блика сверху: на высоком блоке он делил его на светлый верх и тёмный низ.
+ */
+const CARD_GLASS_TINT = 'rgba(14, 18, 24, 0.8)';
+/** «Начать» / «Далее» — тот же лёгкий тон акцента, что был заливкой. */
+const PRIMARY_GLASS_TINT = 'rgba(98, 176, 216, 0.18)';
+/** «Стоп» — плотный красный: кнопка должна читаться как стоп. */
+const DANGER_GLASS_TINT = 'rgba(122, 36, 54, 0.82)';
+/** Прежний вид кнопок на сплошном фоне — когда стекла нет. */
+const BTN_PRIMARY_SOLID = '#2F404E';
+const BTN_DANGER_SOLID = '#7A2436';
+/** Скругление styles.bigBtn. */
+const BIG_BTN_RADIUS = 10;
 
 const RandomChat: React.FC<Props> = ({ route }) => {
   const navigation = useNavigation();
@@ -1680,12 +1698,14 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       {Platform.OS === 'android' && (
         <SystemBars style="light" />
       )}
-      {/* Сплошной фон, как на вкладках главной. */}
+      {/* Фон — сцена вкладок главной, но неподвижная: без датчика наклона она рисуется один раз
+          и дальше только лежит готовым слоем — разговору ни GPU, ни CPU не стоит. */}
       <View
         style={[styles.container, { backgroundColor: HOME_NAV_BG }]}
         onLayout={onRootLayout}
         pointerEvents={orientationCovering ? 'none' : 'auto'}
       >
+      <SpatialStageBackground enabled={false} />
       <SafeAreaView 
         style={[styles.container, { backgroundColor: 'transparent' }]}
         // Android: safe-area отступы считаем сами через insets, чтобы ничего не перезатиралось стилями
@@ -1701,6 +1721,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
           ref={remoteModerationTargetRef}
           collapsable={false}
         >
+          <SpatialGlass sheen={false} radius={CARD_BASE.borderRadius} tint={CARD_GLASS_TINT} fallbackColor={CARD_BASE.backgroundColor} />
           {(() => {
             // КРИТИЧНО: Если поиск остановлен (started=false), всегда показываем текст "Собеседник"
             if (!started) {
@@ -1908,6 +1929,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
           style={isLandscape ? styles.cardLandscape : styles.card}
           collapsable={false}
         >
+          <SpatialGlass sheen={false} radius={CARD_BASE.borderRadius} tint={CARD_GLASS_TINT} fallbackColor={CARD_BASE.backgroundColor} />
           {(() => {
             // КРИТИЧНО: Если поиск не начат, всегда показываем "Вы"
             if (!started) {
@@ -2094,6 +2116,11 @@ const RandomChat: React.FC<Props> = ({ route }) => {
               started ? styles.btnDanger : styles.btnPrimary,
             ]}
           >
+            <SpatialGlass
+              radius={BIG_BTN_RADIUS}
+              tint={started ? DANGER_GLASS_TINT : PRIMARY_GLASS_TINT}
+              fallbackColor={started ? BTN_DANGER_SOLID : BTN_PRIMARY_SOLID}
+            />
             <Animated.View
               pointerEvents="none"
               style={[
@@ -2122,8 +2149,13 @@ const RandomChat: React.FC<Props> = ({ route }) => {
               if (nextDisabled) return;
               onNext();
             }}
-            style={[styles.bigBtn, isLandscape && styles.bigBtnLandscape, styles.btnPrimary]}
+            style={[
+              styles.bigBtn,
+              isLandscape && styles.bigBtnLandscape,
+              styles.btnPrimary,
+            ]}
           >
+            <SpatialGlass radius={BIG_BTN_RADIUS} tint={PRIMARY_GLASS_TINT} fallbackColor={BTN_PRIMARY_SOLID} />
             <Animated.View
               pointerEvents="none"
               style={[styles.bigBtnShade, { opacity: nextTapShade }]}

@@ -12,6 +12,17 @@ const SIDE_PAD = 6;
 const LIVE_SEEK_MS = 180;
 /** Кружок на конце заполнения, пока тянут. */
 const THUMB = 12;
+/**
+ * Полоса никогда не отпрыгивает назад на доли секунды — это выглядело как «сброс». Ушла вперёд
+ * ролика (на старте он первую секунду проигрывает лишь ~0.45 с, на докачке подвисает) больше
+ * AHEAD_HOLD_SEC — стоит и ждёт его; отстала больше BEHIND_JUMP_SEC — догоняет вперёд.
+ * Назад — только при разрыве больше JUMP_BACK_SEC: перемотка, новый круг ролика.
+ */
+const AHEAD_HOLD_SEC = 0.15;
+const BEHIND_JUMP_SEC = 0.3;
+const JUMP_BACK_SEC = 1.5;
+/** Поправка на путь сообщения из WebView — не больше этого (с): старое сообщение не уводит вперёд. */
+const MAX_LAG_SEC = 0.5;
 
 type FliqScrubber = {
   /** Длительность из тиков плеера; 0 — ещё не знаем, перематывать нечего. */
@@ -22,51 +33,108 @@ type FliqScrubber = {
 };
 
 /**
- * Прогресс из тиков плеера (раз в секунду): между тиками полоса едет линейно до следующего,
- * на паузе встаёт, на новом круге ролика — в начало. Пока палец на полосе, тики её не двигают.
+ * Прогресс из времени плеера (тики 4 раза в секунду; старт, пауза и буферизация — сразу). Пока
+ * ролик идёт, полоса — одна ровная анимация до конца ролика с его скоростью; тики её не дёргают,
+ * пока она идёт вровень, а расхождения правят без шагов назад (AHEAD_HOLD_SEC и соседи). Новый
+ * круг ролика — в начало. Пока палец на полосе, тики её не двигают.
  */
 export function useFliqProgress(playing: boolean) {
   const progress = useRef(new Animated.Value(0)).current;
   const durationRef = useRef(0);
   const scrubbingRef = useRef(false);
-  const onTick = useCallback(
-    (cur: number, dur: number) => {
-      if (!(dur > 0)) return;
-      durationRef.current = dur;
-      if (scrubbingRef.current) return;
+  /**
+   * Что показывает полоса: секунда ролика sec на момент at (Date.now()) и едет ли она.
+   * Значение анимации с нативным драйвером из JS не прочитать — считаем сами.
+   */
+  const shownRef = useRef({ sec: 0, at: 0, running: false });
+  const shownSec = useCallback(() => {
+    const s = shownRef.current;
+    return s.running ? s.sec + (Date.now() - s.at) / 1000 : s.sec;
+  }, []);
+  const hold = useCallback(
+    (sec: number) => {
+      shownRef.current = { sec, at: Date.now(), running: false };
       progress.stopAnimation();
-      progress.setValue(Math.min(1, cur / dur));
+      const dur = durationRef.current;
+      progress.setValue(dur > 0 ? Math.min(1, sec / dur) : 0);
+    },
+    [progress],
+  );
+  /** Полоса едет от секунды from до конца ролика с его скоростью. */
+  const run = useCallback(
+    (from: number, dur: number) => {
+      shownRef.current = { sec: from, at: Date.now(), running: true };
+      progress.stopAnimation();
+      progress.setValue(from / dur);
       Animated.timing(progress, {
-        toValue: Math.min(1, (cur + 1) / dur),
-        duration: 1000,
+        toValue: 1,
+        duration: Math.max(0, (dur - from) * 1000),
         easing: Easing.linear,
         useNativeDriver: true,
       }).start();
     },
     [progress],
   );
-  const reset = useCallback(() => {
-    progress.stopAnimation();
-    progress.setValue(0);
-  }, [progress]);
+  const stop = useCallback(() => {
+    if (shownRef.current.running) hold(shownSec());
+  }, [hold, shownSec]);
+  const onTick = useCallback(
+    (cur: number, dur: number, running = true, sentAt = 0) => {
+      if (!(dur > 0)) return;
+      durationRef.current = dur;
+      if (scrubbingRef.current) return;
+      const now = Date.now();
+      const lag = sentAt > 0 ? Math.min(MAX_LAG_SEC, Math.max(0, (now - sentAt) / 1000)) : 0;
+      const sec = Math.min(dur, Math.max(0, cur + (running ? lag : 0)));
+      const shown = Math.min(dur, shownSec());
+      const ahead = shown - sec;
+      if (ahead >= JUMP_BACK_SEC) {
+        // Перемотка назад или новый круг — встаём на время ролика.
+        if (running) run(sec, dur);
+        else hold(sec);
+        return;
+      }
+      if (!running) {
+        hold(ahead > 0 ? shown : sec);
+        return;
+      }
+      if (ahead > AHEAD_HOLD_SEC) {
+        // Ролик отстал (разгон, докачка) — полоса ждёт его на месте, а не прыгает назад.
+        if (shownRef.current.running) hold(shown);
+        return;
+      }
+      if (shownRef.current.running && ahead > -BEHIND_JUMP_SEC) return;
+      run(Math.max(sec, shown), dur);
+    },
+    [hold, run, shownSec],
+  );
+  const reset = useCallback(() => hold(0), [hold]);
+  /** Поставить полосу на секунду sec, не трогая её с места (ролик ещё не пошёл). */
+  const preset = useCallback(
+    (sec: number, dur: number) => {
+      if (dur > 0) durationRef.current = dur;
+      hold(sec);
+    },
+    [hold],
+  );
   useEffect(() => {
-    if (!playing) progress.stopAnimation();
-  }, [playing, progress]);
+    if (!playing) stop();
+  }, [playing, stop]);
   const scrubber = useMemo<FliqScrubber>(
     () => ({
       duration: () => durationRef.current,
       begin: () => {
         scrubbingRef.current = true;
-        progress.stopAnimation();
+        stop();
       },
-      move: (fraction) => progress.setValue(fraction),
+      move: (fraction) => hold(fraction * durationRef.current),
       end: () => {
         scrubbingRef.current = false;
       },
     }),
-    [progress],
+    [hold, stop],
   );
-  return { progress, onTick, reset, scrubber };
+  return { progress, onTick, reset, preset, scrubber };
 }
 
 type Props = {

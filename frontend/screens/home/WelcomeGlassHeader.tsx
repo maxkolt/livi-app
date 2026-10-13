@@ -1,7 +1,6 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { Platform, StyleSheet, View, type LayoutChangeEvent } from 'react-native';
 import { NativeBlurBackdrop, type BackdropSources } from '../../components/BackdropBlur';
-import { SPATIAL_DEPTH, SpatialLayer } from './SpatialDepth';
 import { StageGradient } from './WelcomeStageBackground';
 import { useStableSafeAreaInsets } from './useStableSafeAreaInsets';
 import {
@@ -92,20 +91,17 @@ export function WelcomeGlassHeader({ listSourceId, onHeight, children }: Props) 
   // Контент поверх слоёв стекла (у них zIndex 0–1).
   const content = <View style={styles.content}>{children}</View>;
 
-  // Стекло — плоскость экрана: шапка не парит вместе со списком (SpatialDepth), иначе
-  // при наклоне у края экрана открывалась бы щель. Слой гасит сдвиг вкладки в том же кадре.
+  if (Platform.OS === 'android' && !NativeBlurBackdrop) {
+    return (
+      <View style={[shellStyle, styles.opaque]} onLayout={handleLayout}>
+        {content}
+      </View>
+    );
+  }
   return (
-    <SpatialLayer depth={-SPATIAL_DEPTH.content} pointerEvents="box-none" style={styles.screenPlane}>
-      {Platform.OS === 'android' && !NativeBlurBackdrop ? (
-        <View style={[shellStyle, styles.opaque]} onLayout={handleLayout}>
-          {content}
-        </View>
-      ) : (
-        <StageGradient translucent matteOpacity={0.38} backdrop={backdrop} style={shellStyle} onLayout={handleLayout}>
-          {content}
-        </StageGradient>
-      )}
-    </SpatialLayer>
+    <StageGradient translucent matteOpacity={0.38} backdrop={backdrop} style={shellStyle} onLayout={handleLayout}>
+      {content}
+    </StageGradient>
   );
 }
 
@@ -155,7 +151,6 @@ const BG_ONLY_BACKDROP: BackdropSources = homeBackdrop(null);
 
 const styles = StyleSheet.create({
   /** Слой-«плоскость экрана» поверх вкладки: шапка над списком, касания — сквозь. */
-  screenPlane: { ...StyleSheet.absoluteFillObject, zIndex: 2 },
   shell: {
     position: 'absolute',
     top: 0,

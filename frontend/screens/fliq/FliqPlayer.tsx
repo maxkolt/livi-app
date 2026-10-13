@@ -58,10 +58,17 @@ type FliqYoutubePlayerProps = {
   /** Подгрузка первых секунд закончилась: ролик стоит на паузе в начале. */
   onBuffered?: () => void;
   onFirstFrame?: () => void;
-  /** Раз в секунду, пока играет. */
-  onProgress?: (currentSec: number, durationSec: number) => void;
+  /**
+   * Время ролика: сразу при старте, паузе и буферизации, пока играет — раз в секунду.
+   * running — идёт ли ролик; sentAt — когда страница отправила (Date.now()).
+   */
+  onProgress?: (currentSec: number, durationSec: number, running: boolean, sentAt: number) => void;
   /** Ролик доиграл до конца и пошёл заново. */
   onLoop?: () => void;
+  /** Доиграл, а loop выключен: ролик стоит на конце — дальше решает лента. */
+  onEnded?: () => void;
+  /** Доиграл — заново (по умолчанию); false — только onEnded. */
+  loop?: boolean;
   /** Звук включили или выключили кнопкой в самом плеере YouTube. */
   onMuteChange?: (muted: boolean) => void;
   /** Человек поставил паузу в плеере (mode был play). */
@@ -86,12 +93,14 @@ export const FliqYoutubePlayer = memo(forwardRef<FliqYoutubePlayerHandle, FliqYo
   prebuffer = false,
   prebufferMs,
   widthDp,
+  loop = true,
   onReady,
   onPrimed,
   onBuffered,
   onFirstFrame,
   onProgress,
   onLoop,
+  onEnded,
   onMuteChange,
   onUserPause,
   onUserPlay,
@@ -100,14 +109,14 @@ export const FliqYoutubePlayer = memo(forwardRef<FliqYoutubePlayerHandle, FliqYo
 }, handleRef) {
   const ref = useRef<WebView>(null);
   // html собирается один раз: смена props — команды в страницу, а не перезагрузка.
-  const initRef = useRef({ mode, muted, prebuffer, prebufferMs, startSec, widthDp });
+  const initRef = useRef({ mode, muted, prebuffer, prebufferMs, startSec, widthDp, loop });
   const source = useMemo(
     () => ({ html: youtubePlayerHtml(videoId, initRef.current), baseUrl: PLAYER_ORIGIN }),
     [videoId],
   );
   const firstFrameRef = useRef(false);
-  const cbRef = useRef({ onReady, onPrimed, onBuffered, onFirstFrame, onProgress, onLoop, onMuteChange, onUserPause, onUserPlay, onError });
-  cbRef.current = { onReady, onPrimed, onBuffered, onFirstFrame, onProgress, onLoop, onMuteChange, onUserPause, onUserPlay, onError };
+  const cbRef = useRef({ onReady, onPrimed, onBuffered, onFirstFrame, onProgress, onLoop, onEnded, onMuteChange, onUserPause, onUserPlay, onError });
+  cbRef.current = { onReady, onPrimed, onBuffered, onFirstFrame, onProgress, onLoop, onEnded, onMuteChange, onUserPause, onUserPlay, onError };
   const stateRef = useRef({ mode, muted, prebuffer });
   stateRef.current = { mode, muted, prebuffer };
 
@@ -146,6 +155,9 @@ export const FliqYoutubePlayer = memo(forwardRef<FliqYoutubePlayerHandle, FliqYo
   useEffect(() => {
     inject(`window.__fliqPrebuffer&&window.__fliqPrebuffer(${prebuffer})`);
   }, [prebuffer, inject]);
+  useEffect(() => {
+    inject(`window.__fliqLoop&&window.__fliqLoop(${loop})`);
+  }, [loop, inject]);
 
   const onMessage = useCallback(
     (e: WebViewMessageEvent) => {
@@ -167,9 +179,11 @@ export const FliqYoutubePlayer = memo(forwardRef<FliqYoutubePlayerHandle, FliqYo
         firstFrameRef.current = true;
         cb.onFirstFrame?.();
       } else if (msg?.t === 'tick') {
-        cb.onProgress?.(Number(msg.c) || 0, Number(msg.d) || 0);
+        cb.onProgress?.(Number(msg.c) || 0, Number(msg.d) || 0, msg.p !== 0, Number(msg.at) || 0);
       } else if (msg?.t === 'loop') {
         cb.onLoop?.();
+      } else if (msg?.t === 'ended') {
+        cb.onEnded?.();
       } else if (msg?.t === 'mute') {
         cb.onMuteChange?.(!!msg.m);
       } else if (msg?.t === 'userpause') {

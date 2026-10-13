@@ -11,7 +11,7 @@ import {
 } from 'react-native-reanimated';
 import { logger } from '../../utils/logger';
 import { useSkiaFirstPaint } from '../../utils/skiaFirstPaint';
-import { useDeviceTilt } from './useDeviceTilt';
+import { usePaneVisibleValue } from '../../utils/paneVisibility';
 import {
   buildRadarScene,
   drawRadarFrame,
@@ -70,9 +70,8 @@ export function WelcomeRadar({ size, avatarSize, active = true, onReady, childre
   const isFocused = useIsFocused();
   const appActive = useAppActive();
   const reduceMotion = useReducedMotion();
+  const paneVisible = usePaneVisibleValue();
   const running = active && isFocused && appActive && !reduceMotion;
-  // Параллакс только у радара и только пока он анимируется: датчик не работает зря.
-  const tilt = useDeviceTilt(running);
 
   useEffect(() => {
     let payload: RadarPayload | null = null;
@@ -105,6 +104,9 @@ export function WelcomeRadar({ size, avatarSize, active = true, onReady, childre
 
   const frame = useFrameCallback((info) => {
     'worklet';
+    // Tab visibility is a SharedValue: stopping the beam must not rerender the whole
+    // Search tree in the urgent tab-switch commit.
+    if (paneVisible && !paneVisible.value) return;
     const S = scene.value;
     if (!S) return;
     const dt = info.timeSincePreviousFrame;
@@ -115,8 +117,6 @@ export function WelcomeRadar({ size, avatarSize, active = true, onReady, childre
     S.sinceDrawMs += ms;
     if (S.sinceDrawMs < MIN_REDRAW_MS) return;
     S.sinceDrawMs = 0;
-    S.tiltX = tilt.x.value;
-    S.tiltY = tilt.y.value;
     picture.value = drawRadarFrame(S);
   }, false);
 

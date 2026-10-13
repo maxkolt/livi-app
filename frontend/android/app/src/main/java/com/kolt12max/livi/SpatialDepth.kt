@@ -1,6 +1,5 @@
 package com.kolt12max.livi
 
-import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -29,19 +28,19 @@ import android.provider.Settings
 import android.view.Choreographer
 import android.view.View
 import android.view.ViewTreeObserver
-import android.view.animation.DecelerateInterpolator
 import androidx.annotation.RequiresApi
 import com.facebook.react.uimanager.PixelUtil
 import com.facebook.react.uimanager.SimpleViewManager
 import com.facebook.react.uimanager.ThemedReactContext
 import com.facebook.react.uimanager.annotations.ReactProp
-import com.facebook.react.views.view.ReactViewGroup
-import com.facebook.react.views.view.ReactViewManager
+import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.exp
+import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.round
+import kotlin.math.sin
 import kotlin.math.sqrt
 import kotlin.math.tanh
 
@@ -49,18 +48,18 @@ import kotlin.math.tanh
  * Пространственная глубина главного экрана — как Spatial Photo и параллакс обоев iPhone.
  *
  * Экран — окно. Сцена (картинка) лежит за стеклом: её дальний план смещается вслед за
- * глазом сильнее, ближние иконки сцены — слабее. Интерфейс парит перед стеклом и
- * смещается в обратную сторону. Тени блоков отстают от них — свет неподвижен.
+ * глазом сильнее, ближние иконки сцены — слабее. Интерфейс — плоскость стекла и стоит на
+ * месте: при входе в приложение с наклоном было видно, как радар и кнопки сами доезжают.
+ * Тени блоков чуть отстают от них — свет неподвижен.
  *
  * Положение глаза относительно телефона: game rotation vector (гироскоп + акселерометр,
  * без компаса — не дрейфует от магнитов), без гироскопа — только гравитация. Глаз считается
- * неподвижным в мире и медленно подстраивается под позу: держишь телефон под любым углом —
- * сцена возвращается в центр, а откликается на сами движения.
+ * неподвижным в мире и подстраивается под позу, пока телефон поворачивают: держишь его под
+ * любым углом — сцена со временем в центре, но сама, без движения, не едет.
  *
- * Один источник на всё: фон, слои интерфейса и тени получают одно и то же значение в одном
- * кадре Choreographer — рассинхрона между слоями нет. Слои сдвигаются translation'ом
- * RenderNode: без layout и без перерисовки содержимого. Датчик работает, только пока на
- * экране есть активный фон; телефон неподвижен — кадры не запрашиваются вовсе.
+ * Один источник на всё: сцена, стекло и тени получают одно и то же значение в одном кадре
+ * Choreographer — рассинхрона нет. Датчик работает, только пока на экране есть активный фон;
+ * телефон неподвижен — кадры не запрашиваются вовсе.
  */
 object SpatialTilt : SensorEventListener, Choreographer.FrameCallback {
   fun interface Listener {
@@ -70,8 +69,16 @@ object SpatialTilt : SensorEventListener, Choreographer.FrameCallback {
 
   /** Отклонение глаза, при котором слои доходят до полного сдвига: sin 15°. */
   private const val RANGE = 0.26f
-  /** Ноль подстраивается под позу за ~2.5 с. */
-  private const val RECENTER_TAU_S = 2.5f
+  /**
+   * Ноль подстраивается под позу вместе с движением телефона: за каждые RECENTER_ANGLE рад
+   * поворота — на 63%. Пока телефон неподвижен, слои стоят: прежний возврат за 2.5 с сам
+   * уводил радар с аватаром к центру — заметно сразу после входа в приложение с наклоном.
+   */
+  private const val RECENTER_ANGLE = 0.6f
+  /** Поворот медленнее ~6°/с — дрожь руки и шум датчика: ноль от него не сдвигается. */
+  private const val RECENTER_MIN_SPEED = 0.1f
+  /** Совсем медленно ноль догоняет позу и без движения — лежащий телефон не держит сдвиг вечно. */
+  private const val RECENTER_TAU_S = 60f
   /** Сглаживание дрожи руки; меньше — резче, больше — вязко. */
   private const val SMOOTH_TAU_S = 0.07f
   private const val EPS = 0.0005f
@@ -98,12 +105,6 @@ object SpatialTilt : SensorEventListener, Choreographer.FrameCallback {
     private set
   var y = 0f
     private set
-  /**
-   * Сдвиг дошёл до цели и замер: слои интерфейса встают на целые пиксели — текст и картинки
-   * без билинейного подмыливания от дробного сдвига.
-   */
-  var settled = true
-    private set
   private var targetX = 0f
   private var targetY = 0f
   private val eye = FloatArray(3)
@@ -117,6 +118,9 @@ object SpatialTilt : SensorEventListener, Choreographer.FrameCallback {
   private var resumeFromPhoneEye = false
   private var firstSensorNs = 0L
   private var lastSensorNs = 0L
+  /** Прошлое направление нормали экрана (без гироскопа — «вверх» мира): мера поворота. */
+  private val lastNormal = FloatArray(3)
+  private var hasLastNormal = false
   private var lastFrameNs = 0L
 
   fun addListener(listener: Listener) {
@@ -156,6 +160,7 @@ object SpatialTilt : SensorEventListener, Choreographer.FrameCallback {
     gravityMode = game == null
     firstSensorNs = 0L
     lastSensorNs = 0L
+    hasLastNormal = false
     registered = sm.registerListener(this, sensor, SensorManager.SENSOR_DELAY_GAME)
   }
 
@@ -182,13 +187,13 @@ object SpatialTilt : SensorEventListener, Choreographer.FrameCallback {
   override fun onSensorChanged(event: SensorEvent) {
     val dt = if (lastSensorNs == 0L) 0f else ((event.timestamp - lastSensorNs) / 1e9f).coerceIn(0f, 0.2f)
     lastSensorNs = event.timestamp
-    val recenter = 1f - exp(-dt / RECENTER_TAU_S)
     if (firstSensorNs == 0L) firstSensorNs = event.timestamp
     val warming = event.timestamp - firstSensorNs < WARMUP_NS
     val ex: Float
     val ey: Float
     if (!gravityMode) {
       SensorManager.getRotationMatrixFromVector(rot, event.values)
+      val recenter = recenterStep(rot[2], rot[5], rot[8], dt)
       if (warming) {
         // Пока поза уточняется — глаз там же относительно телефона: по нормали экрана при
         // первом включении, где был — после паузы.
@@ -212,6 +217,7 @@ object SpatialTilt : SensorEventListener, Choreographer.FrameCallback {
       val ux = v[0] / len
       val uy = v[1] / len
       val uz = v[2] / len
+      val recenter = recenterStep(ux, uy, uz, dt)
       if (warming) {
         val p = if (resumeFromPhoneEye) phoneEye else ZERO
         eye[0] = ux - p[0]
@@ -233,6 +239,24 @@ object SpatialTilt : SensorEventListener, Choreographer.FrameCallback {
     targetX = tx
     targetY = ty
     postFrame()
+  }
+
+  /** Доля, на которую ноль догоняет позу на этом отсчёте: по повороту и (медленно) по времени. */
+  private fun recenterStep(vx: Float, vy: Float, vz: Float, dt: Float): Float {
+    val turned =
+      if (hasLastNormal) {
+        val dx = vx - lastNormal[0]
+        val dy = vy - lastNormal[1]
+        val dz = vz - lastNormal[2]
+        max(0f, sqrt(dx * dx + dy * dy + dz * dz) - RECENTER_MIN_SPEED * dt)
+      } else {
+        0f
+      }
+    lastNormal[0] = vx
+    lastNormal[1] = vy
+    lastNormal[2] = vz
+    hasLastNormal = true
+    return 1f - exp(-turned / RECENTER_ANGLE - dt / RECENTER_TAU_S)
   }
 
   private val NORMAL = floatArrayOf(0f, 0f, 1f)
@@ -267,10 +291,9 @@ object SpatialTilt : SensorEventListener, Choreographer.FrameCallback {
       nx = targetX
       ny = targetY
     }
-    if (nx != x || ny != y || done != settled) {
+    if (nx != x || ny != y) {
       x = nx
       y = ny
-      settled = done
       for (i in listeners.indices.reversed()) listeners.getOrNull(i)?.onSpatialTilt(x, y)
     }
     if (done) {
@@ -284,7 +307,8 @@ object SpatialTilt : SensorEventListener, Choreographer.FrameCallback {
 
 /** Сцена и её слои по глубине (scripts/generate-spatial-depth.js) — один раз на процесс. */
 private object SpatialScene {
-  private val cache = RenderCache("SpatialScene", capacity = 6)
+  /** Шесть исходных картинок и пересчитанные под экран фон и элементы (портрет и альбом). */
+  private val cache = RenderCache("SpatialScene", capacity = 10)
 
   /** Картинка целиком — Android 12 и ниже сдвигает её одним планом. */
   fun image(context: Context, onReady: (Bitmap) -> Unit): Bitmap? =
@@ -310,14 +334,214 @@ private object SpatialScene {
   fun blurred(context: Context, onReady: (Bitmap) -> Unit): Bitmap? =
     cache.get("blurred", { decode(context, R.drawable.spatial_stage_blur) }, onReady)
 
+  /**
+   * Элементы, один раз пересчитанные под экран (SharpGeometry). Сжатие картинки в шейдере
+   * билинейное: мелкие цифры и точки карты резкие только там, где пиксель экрана попадает в
+   * пиксель картинки, — через ~15 px полосами мылятся, а при дробном сдвиге «дышат». Здесь —
+   * Ланцош один раз, а шейдер берёт пиксель в пиксель и сдвигает на целые. Фону без элементов
+   * это не нужно: он гладкий.
+   */
+  fun sharpLayers(context: Context, geo: SharpGeometry, onReady: (Bitmap) -> Unit): Bitmap? =
+    cache.get("layers@${geo.key}", { resample(context, R.drawable.spatial_stage_layers, geo) }, onReady)
+
+  private fun options() =
+    BitmapFactory.Options().apply {
+      inScaled = false
+      inPreferredConfig = Bitmap.Config.ARGB_8888
+    }
+
   private fun decode(context: Context, res: Int): Bitmap {
-    val options =
-      BitmapFactory.Options().apply {
-        inScaled = false
-        inPreferredConfig = Bitmap.Config.ARGB_8888
-      }
-    val bitmap = BitmapFactory.decodeResource(context.applicationContext.resources, res, options)
+    val bitmap = BitmapFactory.decodeResource(context.applicationContext.resources, res, options())
     return StageBackground.toGpu(bitmap)
+  }
+
+  /**
+   * Два прохода Ланцоша-3 (строки, затем столбцы) в целых числах. Между проходами — 10 бит на
+   * канал, в конце — округление через blue noise: ровный тёмный фон без ступенек. Элементы
+   * занимают ~17% картинки, остальное — ноль разности: считаются только блоки по 32 px, где
+   * элементы есть, — в 3–5 раз быстрее.
+   */
+  private fun resample(context: Context, res: Int, geo: SharpGeometry): Bitmap {
+    val src = BitmapFactory.decodeResource(context.applicationContext.resources, res, options())
+    val sw = src.width
+    val sh = src.height
+    val px = IntArray(sw * sh)
+    src.getPixels(px, 0, sw, 0, 0, sw, sh)
+    src.recycle()
+    val w = geo.width
+    val h = geo.height
+    val xs = LanczosTaps(w, sw, geo.scale, geo.left - geo.tx)
+    val ys = LanczosTaps(h, sh, geo.scale, geo.top - geo.ty)
+    // Блоки — не больше 64 на строку: маска строки в одном Long.
+    val sBlock = max(BLOCK, (sw + 63) / 64)
+    val oBlock = max(BLOCK, (w + 63) / 64)
+    // Каким блокам источника касаются отсчёты точки x результата.
+    val reach = LongArray(w) { x ->
+      val t = x * xs.count
+      var m = 0L
+      for (b in xs.index[t] / sBlock..xs.index[t + xs.count - 1] / sBlock) m = m or (1L shl b)
+      m
+    }
+
+    val mid = IntArray(w * sh)
+    val midMask = LongArray(sh)
+    for (y in 0 until sh) {
+      val row = y * sw
+      var present = 0L
+      for (x in 0 until sw) if (px[row + x] != EMPTY) present = present or (1L shl (x / sBlock))
+      val outRow = y * w
+      if (present == 0L) {
+        mid.fill(EMPTY10, outRow, outRow + w)
+        continue
+      }
+      var mask = 0L
+      for (x in 0 until w) {
+        if ((present and reach[x]) == 0L) {
+          mid[outRow + x] = EMPTY10
+          continue
+        }
+        // r и b — в одном Long (по 32 бита на канал), g отдельно: два умножения на отсчёт.
+        var rb = 0L
+        var g = 0
+        var t = x * xs.count
+        for (k in 0 until xs.count) {
+          val wt = xs.weight[t]
+          val c = px[row + xs.index[t]]
+          rb += wt.toLong() * ((((c shr 16) and 0xFF).toLong() shl 32) or (c and 0xFF).toLong())
+          g += wt * ((c shr 8) and 0xFF)
+          t++
+        }
+        // Нижняя половина может уйти в минус (отрицательные лепестки) и занять бит у верхней.
+        val b = rb.toInt()
+        val r = ((rb - b.toLong()) shr 32).toInt()
+        mid[outRow + x] = (to10(r) shl 20) or (to10(g) shl 10) or to10(b)
+        mask = mask or (1L shl (x / oBlock))
+      }
+      midMask[y] = mask
+    }
+
+    val noise = StageBackground.noise(context)
+    val n = StageBackground.NOISE_SIZE
+    val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+    val line = IntArray(w)
+    val ar = IntArray(w)
+    val ag = IntArray(w)
+    val ab = IntArray(w)
+    for (y in 0 until h) {
+      val t0y = y * ys.count
+      var mask = 0L
+      for (k in 0 until ys.count) mask = mask or midMask[ys.index[t0y + k]]
+      line.fill(EMPTY)
+      val noiseRow = (y % n) * n
+      var b = 0
+      while (mask != 0L) {
+        if ((mask and 1L) != 0L) {
+          val x0 = b * oBlock
+          val x1 = minOf(w, x0 + oBlock)
+          ar.fill(0, x0, x1)
+          ag.fill(0, x0, x1)
+          ab.fill(0, x0, x1)
+          for (k in 0 until ys.count) {
+            val wt = ys.weight[t0y + k]
+            if (wt == 0) continue
+            val row = ys.index[t0y + k] * w
+            for (x in x0 until x1) {
+              val c = mid[row + x]
+              ar[x] += wt * ((c shr 20) and 0x3FF)
+              ag[x] += wt * ((c shr 10) and 0x3FF)
+              ab[x] += wt * (c and 0x3FF)
+            }
+          }
+          for (x in x0 until x1) {
+            // Сумма — уровень × 4 × 2^14; порог blue noise до отбрасывания дробной части.
+            val d = (noise[noiseRow + x % n] * 65536f).toInt()
+            line[x] = (0xFF shl 24) or (to8(ar[x], d) shl 16) or (to8(ag[x], d) shl 8) or to8(ab[x], d)
+          }
+        }
+        mask = mask ushr 1
+        b++
+      }
+      bitmap.setPixels(line, 0, w, 0, y, w, 1)
+    }
+    return StageBackground.toGpu(bitmap)
+  }
+
+  /** Сумма весов 2^14 × уровень 0…255 → 10 бит (уровень × 4). */
+  private fun to10(v: Int): Int = ((v + (1 shl 11)) shr 12).coerceIn(0, 1023)
+
+  private fun to8(v: Int, dither: Int): Int = ((v + dither) shr 16).coerceIn(0, 255)
+
+  /** Ноль разности в слое элементов — LAYER_OFFSET 64 (generate-spatial-depth.js). */
+  private const val EMPTY = (0xFF shl 24) or (64 shl 16) or (64 shl 8) or 64
+  private const val EMPTY10 = (256 shl 20) or (256 shl 10) or 256
+  private const val BLOCK = 32
+}
+
+/**
+ * Кусок сцены, пересчитанный под экран: пиксель (i, j) — точка (left + i, top + j) View, а
+ * исходная картинка ложится как cover: scale и сдвиг (tx, ty). Запас по краям — на сдвиг планов.
+ */
+internal class SharpGeometry(
+  val scale: Float,
+  val tx: Float,
+  val ty: Float,
+  val left: Int,
+  val top: Int,
+  val width: Int,
+  val height: Int,
+) {
+  val key = "$scale:$tx:$ty:$left:$top:${width}x$height"
+}
+
+/**
+ * Веса Ланцоша-3 по одной оси: точка i результата берёт картинку около (i + 0.5 + shift) / scale − 0.5.
+ * При сжатии ядро растягивается на 1/scale — без алиасинга. Веса в 1/2^14, сумма ровно 2^14:
+ * ровный фон остаётся ровным.
+ */
+private class LanczosTaps(outN: Int, srcN: Int, scale: Float, shift: Float) {
+  val count: Int
+  val index: IntArray
+  val weight: IntArray
+
+  init {
+    val stretch = max(1f, 1f / scale)
+    val support = LANCZOS_A * stretch
+    count = ceil(support * 2f).toInt() + 1
+    index = IntArray(outN * count)
+    weight = IntArray(outN * count)
+    val f = FloatArray(count)
+    for (i in 0 until outN) {
+      val u = (i + 0.5f + shift) / scale - 0.5f
+      val first = floor(u - support).toInt() + 1
+      var sum = 0f
+      for (k in 0 until count) {
+        f[k] = lanczos((first + k - u) / stretch)
+        sum += f[k]
+      }
+      val base = i * count
+      var total = 0
+      var peak = 0
+      for (k in 0 until count) {
+        val wt = round(f[k] / sum * ONE).toInt()
+        index[base + k] = (first + k).coerceIn(0, srcN - 1)
+        weight[base + k] = wt
+        total += wt
+        if (wt > weight[base + peak]) peak = k
+      }
+      weight[base + peak] += ONE - total
+    }
+  }
+
+  private fun lanczos(x: Float): Float {
+    if (x == 0f) return 1f
+    if (abs(x) >= LANCZOS_A) return 0f
+    val px = PI.toFloat() * x
+    return LANCZOS_A * sin(px) * sin(px / LANCZOS_A) / (px * px)
+  }
+
+  private companion object {
+    const val LANCZOS_A = 3f
+    const val ONE = 1 shl 14
   }
 }
 
@@ -328,7 +552,13 @@ private object SpatialScene {
  * (scripts/generate-spatial-depth.js). AGSL-шейдер сдвигает каждый план целиком — пиксели не
  * растягиваются, края не плывут, а за сдвинувшимся элементом открывается восстановленный фон;
  * в покое фон + элементы = исходная картинка. Свет скользит по сцене вслед за наклоном, по
- * ярким элементам бегут переливы. Ниже 13 — картинка сдвигается целиком.
+ * ярким элементам бегут переливы, а элементы — голограмма: кромка граней к свету, блик по
+ * краю и строки развёртки на иконках, всё пиксель в пиксель. Ниже 13 — картинка сдвигается
+ * целиком.
+ *
+ * Элементы один раз пересчитываются под экран (SpatialScene.sharpLayers), и их планы сдвигаются на
+ * целые пиксели: шейдер берёт их пиксель в пиксель — резко и в покое, и в движении.
+ * Пока пересчёт не готов (доли секунды после старта или поворота) — прежняя выборка по матрице.
  *
  * Результат лежит в слое RenderNode и пересчитывается только при наклоне: кадр радара
  * «Поиска» лишь композитит готовую текстуру. Без слоя полноэкранный шейдер на каждом
@@ -352,6 +582,11 @@ class SpatialBackgroundView(context: Context) : View(context), SpatialTilt.Liste
   private val fallbackPaint = Paint().apply { color = Color.rgb(37, 43, 52) }
   private var scene: Any? = null
   private var blurPx = -1f
+  /** Пересчитанные под текущий экран фон и элементы; null — ещё считаются. */
+  private var sharp: SharpGeometry? = null
+  private var sharpLayers: Bitmap? = null
+  /** Размер устоялся — тогда и считаем: промежуточные размеры при старте не тратят CPU. */
+  private val requestSharp = Runnable { loadSharp() }
 
   /** Дальний план сцены сдвигается на столько при полном наклоне. */
   private val farShift = PixelUtil.toPixelFromDIP(FAR_SHIFT_DP)
@@ -376,19 +611,26 @@ class SpatialBackgroundView(context: Context) : View(context), SpatialTilt.Liste
     updateDriver()
   }
 
+  /** Наклон, с которым сцена нарисована: по нему стекло над ней берёт свой кусок. */
+  internal val drawnTiltX: Float
+    get() = tiltX
+  internal val drawnTiltY: Float
+    get() = tiltY
+
   override fun onAttachedToWindow() {
     super.onAttachedToWindow()
     SpatialTilt.addListener(this)
     shown = windowVisibility == VISIBLE
     updateDriver()
-    activeScene = java.lang.ref.WeakReference(this)
+    attachedScenes.add(this)
   }
 
   override fun onDetachedFromWindow() {
+    removeCallbacks(requestSharp)
     shown = false
     updateDriver()
     SpatialTilt.removeListener(this)
-    if (activeScene?.get() === this) activeScene = null
+    attachedScenes.remove(this)
     super.onDetachedFromWindow()
   }
 
@@ -427,8 +669,8 @@ class SpatialBackgroundView(context: Context) : View(context), SpatialTilt.Liste
     if (x == tiltX && y == tiltY) return
     tiltX = x
     tiltY = y
-    // Сцену при движении — не чаще ~60 раз в секунду: дальний план медленный и мягкий,
-    // а слой интерфейса над ней по-прежнему сдвигается на каждом кадре 90–120 Гц.
+    // Сцену при движении — не чаще ~60 раз в секунду: она сдвигается на целые пиксели,
+    // а между перерисовками экран лишь композитит готовый слой.
     val sinceDraw = System.nanoTime() - lastDrawNs
     if (sinceDraw >= MIN_REDRAW_NS) {
       invalidate()
@@ -463,12 +705,33 @@ class SpatialBackgroundView(context: Context) : View(context), SpatialTilt.Liste
     val ty = (height - img.height * scale) / 2f
     imageMatrix.setScale(scale, scale)
     imageMatrix.postTranslate(tx, ty)
+    sharp = null
+    sharpLayers = null
+    removeCallbacks(requestSharp)
+    if (layered) postDelayed(requestSharp, SHARP_DELAY_MS)
     // Растянутая сильнее ~2.6 раза (альбомная, крупный планшет) картинка мылится
     // и показывает JPEG — слегка размываем её как глубокий фон.
     blurPx = ((scale - 2.6f) * PixelUtil.toPixelFromDIP(2.5f)).coerceIn(0f, PixelUtil.toPixelFromDIP(8f))
     if (Build.VERSION.SDK_INT in Build.VERSION_CODES.S until Build.VERSION_CODES.TIRAMISU) {
       setRenderEffect(if (blurPx > 0.5f) RenderEffect.createBlurEffect(blurPx, blurPx, Shader.TileMode.CLAMP) else null)
     }
+  }
+
+  /** Кусок сцены под экраном с запасом на полный сдвиг дальнего плана. */
+  private fun loadSharp() {
+    if (geometryKey.isEmpty() || width <= 0 || height <= 0) return
+    val m = FloatArray(9)
+    imageMatrix.getValues(m)
+    val pad = ceil(farShift).toInt() + 2
+    val geo = SharpGeometry(m[Matrix.MSCALE_X], m[Matrix.MTRANS_X], m[Matrix.MTRANS_Y], -pad, -pad, width + pad * 2, height + pad * 2)
+    sharp = geo
+    sharpLayers = SpatialScene.sharpLayers(context, geo) {
+      if (sharp === geo) {
+        sharpLayers = it
+        invalidate()
+      }
+    }
+    if (sharpLayers != null) invalidate()
   }
 
   override fun onDraw(canvas: Canvas) {
@@ -488,7 +751,10 @@ class SpatialBackgroundView(context: Context) : View(context), SpatialTilt.Liste
         return
       }
       val s = (scene as? DepthScene) ?: DepthScene(context).also { scene = it }
-      s.draw(canvas, img, lay, pl, tl, imageMatrix, width, height, tiltX, tiltY, farShift, planeShift, blurPx)
+      val geo = sharp
+      val sl = sharpLayers
+      val crisp = if (geo != null && sl != null) geo to sl else null
+      s.draw(canvas, img, lay, pl, tl, crisp, imageMatrix, width, height, tiltX, tiltY, farShift, planeShift, blurPx)
       return
     }
     // Без AGSL: сцена сдвигается целиком, как средний план.
@@ -509,6 +775,8 @@ class SpatialBackgroundView(context: Context) : View(context), SpatialTilt.Liste
     private val shaders = arrayOfNulls<BitmapShader>(4)
     private val localMatrix = Matrix()
     private val m = FloatArray(9)
+    private val offX = FloatArray(5)
+    private val offY = FloatArray(5)
 
     init {
       shader.setInputShader("noise", StageBackground.noiseShader(context))
@@ -535,6 +803,7 @@ class SpatialBackgroundView(context: Context) : View(context), SpatialTilt.Liste
       layers: Bitmap,
       planes: Bitmap,
       tiles: Bitmap,
+      crisp: Pair<SharpGeometry, Bitmap>?,
       imageMatrix: Matrix,
       w: Int,
       h: Int,
@@ -545,7 +814,14 @@ class SpatialBackgroundView(context: Context) : View(context), SpatialTilt.Liste
       blurPx: Float,
     ) {
       bind(0, "plate", plate, true, imageMatrix)
-      bind(1, "layers", layers, true, imageMatrix)
+      if (crisp != null) {
+        // Пиксель в пиксель: сдвиги планов ниже — целые, выборка попадает точно в центры.
+        val (geo, sharpLayers) = crisp
+        localMatrix.setTranslate(geo.left.toFloat(), geo.top.toFloat())
+        bind(1, "layers", sharpLayers, true, localMatrix)
+      } else {
+        bind(1, "layers", layers, true, imageMatrix)
+      }
       localMatrix.set(imageMatrix)
       val k = plate.width / planes.width.toFloat()
       localMatrix.preScale(k, k)
@@ -559,6 +835,14 @@ class SpatialBackgroundView(context: Context) : View(context), SpatialTilt.Liste
       shader.setFloatUniform("tilt", tiltX, tiltY)
       shader.setFloatUniform("farShift", farShift)
       shader.setFloatUniform("planeShift", planeShift)
+      val snap = crisp != null
+      shader.setFloatUniform("plateOffset", tiltX * farShift, tiltY * farShift)
+      for (k in planeShift.indices) {
+        offX[k] = offset(tiltX * planeShift[k], snap)
+        offY[k] = offset(tiltY * planeShift[k], snap)
+      }
+      shader.setFloatUniform("planeOffX", offX)
+      shader.setFloatUniform("planeOffY", offY)
       shader.setFloatUniform("dim", DIM)
 
       val lw = ceil(w / RES_DIVISOR).toInt().coerceAtLeast(1)
@@ -582,22 +866,45 @@ class SpatialBackgroundView(context: Context) : View(context), SpatialTilt.Liste
       canvas.drawRenderNode(node)
       canvas.restoreToCount(save)
     }
+
+    private fun offset(v: Float, snap: Boolean): Float = if (snap) round(v) else v
   }
 
   internal companion object {
-    /** Фон главного экрана, под которым лежат стеклянные блоки. */
-    internal var activeScene: java.lang.ref.WeakReference<SpatialBackgroundView>? = null
+    /**
+     * Сцены на экранах (главная, рандом-чат): одна общая ссылка не годилась — сцена второго
+     * экрана забирала её, а закрываясь, обнуляла, и стекло главной становилось сплошным.
+     */
+    private val attachedScenes = ArrayList<SpatialBackgroundView>()
+
+    /** Сцена под стеклянным блоком: та, что лежит на его экране (её родитель — его предок). */
+    internal fun sceneUnder(view: View): SpatialBackgroundView? {
+      for (i in attachedScenes.indices.reversed()) {
+        val scene = attachedScenes[i]
+        val root = scene.parent as? View ?: continue
+        var p: android.view.ViewParent? = view.parent
+        while (p != null) {
+          if (p === root) return scene
+          p = p.parent
+        }
+      }
+      return attachedScenes.lastOrNull()
+    }
 
     /** Сцена — Real-ESRGAN 1440 px (scripts/generate-spatial-depth.js): полное разрешение. */
     const val RES_DIVISOR = 1f
     /** Фон без элементов — дальше всех. */
-    const val FAR_SHIFT_DP = 14f
+    const val FAR_SHIFT_DP = 18f
     /**
      * Планы 1…5 (spatial_stage_planes.png) при полном наклоне: панели данных и соты, карта,
      * мелкие частицы, иконки и кубы, облако и крупное боке. Чем ближе к стеклу, тем меньше
-     * сдвиг: между фоном и облаком ~35 px на A35 — объём читается, а слой не «плывёт».
+     * сдвиг: между фоном и облаком ~42 px на A35. Интерфейс стоит на стекле, и объём держит
+     * только сцена — разнос планов больше прежнего (14…2.5 dp), а кадр почти тот же: запас
+     * cover вырос на 4 dp.
      */
-    val PLANE_SHIFT_DP = floatArrayOf(12f, 10f, 7.5f, 5f, 2.5f)
+    val PLANE_SHIFT_DP = floatArrayOf(15f, 12.5f, 9f, 5f, 2f)
+    /** Пересчёт под экран — когда размер не менялся столько, мс. */
+    const val SHARP_DELAY_MS = 250L
     /** Плитка spatial_stage_tiles.png, px картинки (TILE в generate-spatial-depth.js). */
     const val TILE_PX = 32f
     const val MIN_REDRAW_NS = 15_000_000L
@@ -620,22 +927,29 @@ class SpatialBackgroundView(context: Context) : View(context), SpatialTilt.Liste
       uniform float2 tilt;
       uniform float farShift;
       uniform float planeShift[5];
+      uniform float2 plateOffset;
+      uniform float planeOffX[5];
+      uniform float planeOffY[5];
       uniform float4 imageRect;
       uniform float dim;
       layout(color) uniform half4 glowColor;
 
       half4 main(float2 p) {
         // Дальний план — фон без элементов.
-        float3 c = float3(plate.eval(p - tilt * farShift).rgb);
+        float3 c = float3(plate.eval(p - plateOffset).rgb);
         // Элементы: каждый план сдвигается целиком, без растяжения. Проверяются только планы,
         // что есть рядом (биты плитки); точка слоя — его, если номер плана совпал.
         float bits = floor(float(tiles.eval(p).r) * 255.0 / 8.0 + 0.5);
         float strongest = 0.0;
         float sheenShift = farShift;
+        // Самый яркий элемент в точке: где он лежит в слое, его вклад и план (для голограммы).
+        float2 qd = p;
+        float3 dd = float3(0.0);
+        float plane = 0.0;
         for (int k = 0; k < 5; k++) {
           if (mod(floor(bits / exp2(float(k))), 2.0) < 0.5) continue;
           float s = planeShift[k];
-          float2 q = p - tilt * s;
+          float2 q = p - float2(planeOffX[k], planeOffY[k]);
           if (abs(float(planes.eval(q).r) * 255.0 / 40.0 - float(k + 1)) > 0.5) continue;
           float3 d = float3(layers.eval(q).rgb) - 64.0 / 255.0;
           c += d;
@@ -643,6 +957,9 @@ class SpatialBackgroundView(context: Context) : View(context), SpatialTilt.Liste
           if (amount > strongest) {
             strongest = amount;
             sheenShift = s;
+            qd = q;
+            dd = d;
+            plane = float(k + 1);
           }
         }
         c = clamp(c, 0.0, 1.0);
@@ -695,70 +1012,61 @@ class SpatialBackgroundView(context: Context) : View(context), SpatialTilt.Liste
         float element = smoothstep(0.16, 0.45, lum) * smoothstep(0.235, 0.29, lum);
         c += hue * element * shine * 0.13;
 
+        // Голограмма — только на элементах, пиксель в пиксель, без размытия. Рельеф элемента —
+        // его же яркость в слое: соседи через 1 px на его плане дают наклон грани. Свет стоит
+        // в мире и при наклоне телефона обходит контуры: грани к свету — тонкая ледяная кромка,
+        // от света — чуть темнее и глубже в синий; где грань ровно отражает свет в глаз —
+        // узкий блик, он бежит по краю. Строк развёртки нет: даже слабые читались полосами.
+        // Только от наклона: в покое сцена не перерисовывается.
+        if (strongest > 0.03) {
+          const float3 W = float3(0.2126, 0.7152, 0.0722);
+          float h0 = dot(dd, W);
+          // Собель 3×3: соседи через 1 px — кромка в пиксель толщиной, а зерно картинки
+          // (±1 уровень) вдоль края усредняется.
+          float a00 = dot(float3(layers.eval(qd + float2(-1.0, -1.0)).rgb), W);
+          float a10 = dot(float3(layers.eval(qd + float2(0.0, -1.0)).rgb), W);
+          float a20 = dot(float3(layers.eval(qd + float2(1.0, -1.0)).rgb), W);
+          float a01 = dot(float3(layers.eval(qd + float2(-1.0, 0.0)).rgb), W);
+          float a21 = dot(float3(layers.eval(qd + float2(1.0, 0.0)).rgb), W);
+          float a02 = dot(float3(layers.eval(qd + float2(-1.0, 1.0)).rgb), W);
+          float a12 = dot(float3(layers.eval(qd + float2(0.0, 1.0)).rgb), W);
+          float a22 = dot(float3(layers.eval(qd + float2(1.0, 1.0)).rgb), W);
+          // Наклон грани — относительно яркости самого элемента: тусклая иконка с мягким краем
+          // и яркая линия карты получают кромку одной толщины.
+          float2 g = float2(a20 + 2.0 * a21 + a22 - a00 - 2.0 * a01 - a02, a02 + 2.0 * a12 + a22 - a00 - 2.0 * a10 - a20) / (8.0 * max(h0, 0.04));
+          float slope = length(g);
+          // Сила — от яркости самого элемента: слабые ореолы и дымка голограммы не получают.
+          float body = smoothstep(0.012, 0.06, h0);
+          // Порог — выше зерна картинки: кромка только по настоящим краям, без сыпи искр по
+          // телу иконки.
+          float edge = smoothstep(0.1, 0.32, slope) * body;
+          float3 N = normalize(float3(-g * 2.5, 1.0));
+          float3 L = normalize(float3(-0.45 - tilt.x * 0.9, -0.65 - tilt.y * 0.9, 0.62));
+          float lit = dot(N, L) - L.z;
+          float3 H = normalize(L + float3(0.0, 0.0, 1.0));
+          float glint = max(0.0, pow(max(dot(N, H), 0.0), 48.0) - pow(H.z, 48.0));
+          // Иконки, кубы, облако (планы 4–5) — голограмма целиком; карта, цифры, частицы —
+          // только кромка слабее и блик: тень с дальней стороны тонкую линию гасила бы.
+          float icon = plane > 3.5 ? 1.0 : 0.0;
+          // Оттенок кромки — дифракция в голубой гамме: меняется вдоль контура, по экрану и с
+          // наклоном, без сирени.
+          float2 hq = qd / size.x;
+          float2 nxy = N.xy / max(length(N.xy), 1e-4);
+          float t = 0.5 + 0.5 * sin(6.2831853 * (dot(hq, float2(0.62, 0.78)) * 1.6 + dot(tilt, float2(0.7, 0.45)) * 0.8) + 1.6 * dot(nxy, float2(0.8, -0.6)));
+          float3 cobalt = float3(0.30, 0.50, 1.0);
+          float3 iceRim = float3(0.62, 0.90, 1.0);
+          float3 rim = mix(float3(glowColor.rgb), iceRim, t);
+          // Контур светится и сам по себе, ровно по кругу, — как у проекции; к свету — ярче.
+          c += rim * (edge * (max(0.0, lit) * mix(0.09, 0.18, icon) + 0.045 * icon));
+          c = mix(c, c * cobalt, edge * min(1.0, max(0.0, -lit)) * 0.3 * icon);
+          c += float3(0.86, 0.96, 1.0) * (glint * edge * 0.4);
+        }
+
         // Blue noise ±0.5 уровня до округления: тёмные переходы без полос.
         c += (float(noise.eval(p).r) - 0.5) / 255.0;
         return half4(half3(c), 1.0);
       }
     """
-  }
-}
-
-/**
- * Слой интерфейса над сценой: смещается против глаза на depth dp при полном наклоне.
- * enabled=false — плавно возвращается в покой (вкладка с видео во весь экран).
- */
-class SpatialLayerView(context: Context) : ReactViewGroup(context), SpatialTilt.Listener {
-  private var depthPx = 0f
-  private var weight = 1f
-  private var layerEnabled = true
-  private var weightAnimator: ValueAnimator? = null
-
-  fun setDepthDp(value: Float) {
-    depthPx = PixelUtil.toPixelFromDIP(value)
-    applyShift()
-  }
-
-  fun setLayerEnabled(value: Boolean) {
-    if (value == layerEnabled) return
-    layerEnabled = value
-    weightAnimator?.cancel()
-    weightAnimator =
-      ValueAnimator.ofFloat(weight, if (value) 1f else 0f).apply {
-        duration = 280
-        interpolator = DecelerateInterpolator()
-        addUpdateListener {
-          weight = it.animatedValue as Float
-          applyShift()
-        }
-        start()
-      }
-  }
-
-  override fun onAttachedToWindow() {
-    super.onAttachedToWindow()
-    SpatialTilt.addListener(this)
-  }
-
-  override fun onDetachedFromWindow() {
-    SpatialTilt.removeListener(this)
-    weightAnimator?.cancel()
-    super.onDetachedFromWindow()
-  }
-
-  override fun onSpatialTilt(x: Float, y: Float) = applyShift()
-
-  private fun applyShift() {
-    val k = -depthPx * weight
-    var tx = SpatialTilt.x * k
-    var ty = SpatialTilt.y * k
-    // В покое — на целый пиксель: дробный сдвиг слегка размывает текст, аватары и иконки.
-    // Скачок меньше полпикселя при остановке не виден.
-    if (SpatialTilt.settled && (weight == 0f || weight == 1f)) {
-      tx = round(tx)
-      ty = round(ty)
-    }
-    translationX = tx
-    translationY = ty
   }
 }
 
@@ -780,6 +1088,8 @@ class SpatialGlassView(context: Context) : View(context), SpatialTilt.Listener {
   private var fallback = Color.TRANSPARENT
   private var blurred: Bitmap? = null
   private var blurredShader: BitmapShader? = null
+  /** Блик сверху; без него блок одного тона сверху донизу (высокие карточки рандом-чата). */
+  private var sheen = true
   private val sceneMatrix = Matrix()
   private val vignetteMatrix = Matrix()
   private val scenePaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
@@ -829,6 +1139,11 @@ class SpatialGlassView(context: Context) : View(context), SpatialTilt.Listener {
     invalidate()
   }
 
+  fun setSheen(value: Boolean) {
+    sheen = value
+    invalidate()
+  }
+
   override fun onAttachedToWindow() {
     super.onAttachedToWindow()
     SpatialTilt.addListener(this)
@@ -850,11 +1165,11 @@ class SpatialGlassView(context: Context) : View(context), SpatialTilt.Listener {
   }
 
   private fun checkOffset() {
-    val scene = SpatialBackgroundView.activeScene?.get() ?: return
+    val scene = SpatialBackgroundView.sceneUnder(this) ?: return
     sceneOffset(scene)
     val shift = scene.glassShift
-    val ox = sceneLoc[0] - selfLoc[0] + SpatialTilt.x * shift
-    val oy = sceneLoc[1] - selfLoc[1] + SpatialTilt.y * shift
+    val ox = sceneLoc[0] - selfLoc[0] + scene.drawnTiltX * shift
+    val oy = sceneLoc[1] - selfLoc[1] + scene.drawnTiltY * shift
     if (drawnX.isNaN() || abs(ox - drawnX) >= STICKY_PX || abs(oy - drawnY) >= STICKY_PX) invalidate()
   }
 
@@ -863,7 +1178,7 @@ class SpatialGlassView(context: Context) : View(context), SpatialTilt.Listener {
     val h = height.toFloat()
     if (w <= 0f || h <= 0f) return
     rect.set(0f, 0f, w, h)
-    val scene = SpatialBackgroundView.activeScene?.get()?.takeIf { it.isAttachedToWindow }
+    val scene = SpatialBackgroundView.sceneUnder(this)?.takeIf { it.isAttachedToWindow }
     val bmp = blurred
     if (scene == null || bmp == null || !StageBackground.canDraw(canvas, bmp) || !scene.sceneMatrix(bmp.width, sceneMatrix)) {
       if (Color.alpha(fallback) != 0) {
@@ -875,8 +1190,8 @@ class SpatialGlassView(context: Context) : View(context), SpatialTilt.Listener {
     }
     sceneOffset(scene)
     val shift = scene.glassShift
-    val ox = sceneLoc[0] - selfLoc[0] + SpatialTilt.x * shift
-    val oy = sceneLoc[1] - selfLoc[1] + SpatialTilt.y * shift
+    val ox = sceneLoc[0] - selfLoc[0] + scene.drawnTiltX * shift
+    val oy = sceneLoc[1] - selfLoc[1] + scene.drawnTiltY * shift
     drawnX = ox
     drawnY = oy
 
@@ -898,12 +1213,14 @@ class SpatialGlassView(context: Context) : View(context), SpatialTilt.Listener {
     fillPaint.color = tint
     canvas.drawRoundRect(rect, radius, radius, fillPaint)
     // Блик сверху и светлая кромка — блок читается стеклом, а не дыркой в фоне.
-    if (sheenHeight != h) {
-      sheenHeight = h
-      sheenPaint.shader =
-        LinearGradient(0f, 0f, 0f, h * 0.55f, Color.argb(16, 255, 255, 255), Color.TRANSPARENT, Shader.TileMode.CLAMP)
+    if (sheen) {
+      if (sheenHeight != h) {
+        sheenHeight = h
+        sheenPaint.shader =
+          LinearGradient(0f, 0f, 0f, h * 0.55f, Color.argb(16, 255, 255, 255), Color.TRANSPARENT, Shader.TileMode.CLAMP)
+      }
+      canvas.drawRoundRect(rect, radius, radius, sheenPaint)
     }
-    canvas.drawRoundRect(rect, radius, radius, sheenPaint)
     val inset = rimPaint.strokeWidth / 2f
     rect.inset(inset, inset)
     canvas.drawRoundRect(rect, radius - inset, radius - inset, rimPaint)
@@ -936,18 +1253,6 @@ class SpatialBackgroundViewManager : SimpleViewManager<SpatialBackgroundView>() 
   fun setActive(view: SpatialBackgroundView, value: Boolean) = view.setActive(value)
 }
 
-class SpatialLayerViewManager : ReactViewManager() {
-  override fun getName(): String = "LiviSpatialLayer"
-
-  override fun createViewInstance(context: ThemedReactContext): ReactViewGroup = SpatialLayerView(context)
-
-  @ReactProp(name = "depth", defaultFloat = 0f)
-  fun setDepth(view: ReactViewGroup, value: Float) = (view as SpatialLayerView).setDepthDp(value)
-
-  @ReactProp(name = "layerEnabled", defaultBoolean = true)
-  fun setLayerEnabled(view: ReactViewGroup, value: Boolean) = (view as SpatialLayerView).setLayerEnabled(value)
-}
-
 class SpatialGlassViewManager : SimpleViewManager<SpatialGlassView>() {
   override fun getName(): String = "LiviSpatialGlass"
 
@@ -961,4 +1266,7 @@ class SpatialGlassViewManager : SimpleViewManager<SpatialGlassView>() {
 
   @ReactProp(name = "fallbackColor", customType = "Color", defaultInt = Color.TRANSPARENT)
   fun setFallbackColor(view: SpatialGlassView, value: Int) = view.setFallback(value)
+
+  @ReactProp(name = "sheen", defaultBoolean = true)
+  fun setSheen(view: SpatialGlassView, value: Boolean) = view.setSheen(value)
 }

@@ -32,7 +32,6 @@ import { HomeCenterProfile, hasProfilePhoto } from './HomeCenterProfile';
 import { WelcomeCrownButton } from './WelcomeCrownButton';
 import { WelcomeOnlineBanner, type WelcomeBannerPeer } from './WelcomeOnlineBanner';
 import { WelcomeRadar } from './WelcomeRadar';
-import { SPATIAL_DEPTH, SpatialLayer } from './SpatialDepth';
 import { RADAR_DRAWN_EXTENT, radarFittedAvatarSize, radarGeometry } from './welcomeRadarScene';
 import { WelcomeSearchCta, welcomeSearchCtaHeight, welcomeSearchCtaWidth } from './WelcomeSearchCta';
 import type { Lang } from '../../utils/i18n';
@@ -68,8 +67,6 @@ type HomeWelcomeViewProps = {
   splashGone?: boolean;
   /** Первый непустой кадр радара готов — cold splash может открывать Search. */
   onRadarReady?: () => void;
-  /** Вкладка «Поиск» на экране — иначе радар не анимируется. */
-  active?: boolean;
   /**
    * Нижний край блока «Онлайн» от верха вкладки — до него HomeScreen рисует верхнее стекло.
    * null — блок не наверху (две колонки в горизонтали), стекла нет.
@@ -128,7 +125,6 @@ function HomeWelcomeViewInner({
   onStartSearch,
   splashGone = true,
   onRadarReady,
-  active = true,
   onTopBlockBottom,
   safeAreaInsets,
 }: HomeWelcomeViewProps) {
@@ -478,9 +474,6 @@ function HomeWelcomeViewInner({
       collapsable={false}
     >
       {splitStage ? null : (
-        // Блок «Онлайн» лежит на неподвижном верхнем стекле, как фильтры в шапках вкладок:
-        // стекло — плоскость экрана, над ним парят только радар и кнопка (SpatialDepth).
-        <SpatialLayer depth={-SPATIAL_DEPTH.content}>
         <Animated.View
           style={revealStyle}
           onLayout={(e) => {
@@ -506,7 +499,6 @@ function HomeWelcomeViewInner({
             }
           />
         </Animated.View>
-        </SpatialLayer>
       )}
 
       {/*
@@ -533,7 +525,6 @@ function HomeWelcomeViewInner({
             <WelcomeRadar
               size={radarSize}
               avatarSize={showRadarAvatar ? welcomeAvatarSize : 0}
-              active={active}
               onReady={onRadarReady}
             >
               {showRadarAvatar ? (

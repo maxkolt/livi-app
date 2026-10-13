@@ -63,10 +63,13 @@ const PLANE = { deep: 1, map: 2, mid: 3, icons: 4, near: 5 };
  * на фоне и при наклоне двоился.
  */
 const SEEDS = [
-  { name: 'bubble', at: [420, 400], plane: PLANE.near, pad: 36 },
-  { name: 'cube-top', at: [918, 466], plane: PLANE.icons },
-  { name: 'mic', at: [1256, 680], plane: PLANE.icons },
-  { name: 'camera', at: [230, 1296], plane: PLANE.icons },
+  // Облако крупнее половины окна медианы фона: ядро — кольцо по краю, середина — дыра,
+  // которую shapeElements заливает. Точка — у левого края тела.
+  { name: 'bubble', at: [560, 430], plane: PLANE.near, pad: 36 },
+  { name: 'cube-top', at: [988, 277], plane: PLANE.icons },
+  { name: 'mic', at: [1256, 740], plane: PLANE.icons },
+  // Камера — ниже и наклонена к кубу (build-spatial-stage-hq.js): точка внутри её корпуса.
+  { name: 'camera', at: [235, 1399], plane: PLANE.icons },
   { name: 'neural-cube', at: [1208, 1872], plane: PLANE.icons },
 ];
 

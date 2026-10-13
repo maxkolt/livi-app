@@ -11,10 +11,12 @@
  * на континентах; на карте мира поверх него (lighten, мягкая маска) — animevideov3.
  * Правки элементов (MOVES): элемент вычитается из фона как свечение над восстановленным
  * фоном и прибавляется на новом месте (или не прибавляется — убран). На месте микрофона —
- * новый куб с ветвями нейросети (NEURAL_CUBE), нарисованный canvaskit. Затем цвет: бирюза → голубой (фон к
+ * новый куб с ветвями нейросети (NEURAL_CUBE), нарисованный canvaskit; россыпь частиц у него
+ * и под панелью навигации прорежена (thinParticles). Затем цвет: бирюза → голубой (фон к
  * ~216°, светлые элементы к голубому LiVi ~203°, чуть приглушённо) и лёгкий холодный тон.
  * В конце убирается туман — светлая дымка пятнами по фону (removeHaze) — и дым: слабое
- * свечение вокруг элементов и в пустых местах (suppressSmoke); основной фон становится
+ * свечение вокруг элементов и в пустых местах (suppressSmoke); разводы фона выравниваются
+ * (evenBackground); основной фон становится
  * серым в тон приложению (grayBackground), элементы остаются голубыми.
  * Затем чёткость (sharpen). Итог — 1440 px по ширине, JPEG 95.
  *
@@ -64,8 +66,9 @@ function hslToRgb(h, s, l) {
 const MAP_SHIFT_Y = -110;
 
 const MOVES = [
-  // Верхнее левое облако — чуть выше.
-  { rect: [104, 144, 234, 252], dx: 0, dy: -28 },
+  // Верхнее левое облако с широкой тенью — убрано: новое, чёткое, поменьше и с маленькой
+  // тенью — правее, за левым краем аватара «Профиля» (CHAT_BUBBLE).
+  { rect: [100, 140, 240, 258], remove: true },
   // Два больших облака снизу слева — убраны.
   { rect: [56, 698, 201, 820], remove: true },
   // Микрофон снизу справа — убран (сначала стоял на месте облаков, теперь там соты; на
@@ -73,10 +76,16 @@ const MOVES = [
   { rect: [436, 684, 526, 812], remove: true },
   // Камера справа на уровне верха радара — убрана…
   { rect: [427, 249, 541, 326], remove: true },
-  // …и на её место — микрофон с левого края (он уходил под край экрана).
-  { rect: [31, 470, 96, 562], dx: 436, dy: -228 },
+  // Серый кружок под ним — убран до переезда микрофона: тот теперь встаёт ниже, почти на него.
+  { rect: [484, 345, 506, 367], remove: true, feather: 3 },
+  // …и на её место — микрофон с левого края (он уходил под край экрана), чуть ниже верха
+  // радара.
+  { rect: [31, 470, 96, 562], dx: 436, dy: -204 },
   // Камера у левого края радара — убрана: камера слева одна, на месте микрофона.
   { rect: [106, 338, 188, 394], remove: true },
+  // Размытый серый квадрат правее места микрофона — убран до переезда сюда камеры: она
+  // встаёт вплотную под него, а рамка карты задевает его верх.
+  { rect: [93, 452, 128, 494], remove: true, feather: 4 },
   // Камера из-под ника на «Поиске» — на место этого микрофона слева посередине, правее
   // него: на A35 видимая ширина начинается с ~58 из 572, и камера целиком на экране.
   // gain — приглушена: была ярче соседних иконок.
@@ -87,8 +96,9 @@ const MOVES = [
   { rect: [236, 252, 338, 330], remove: true, feather: 6 },
   // Столбики цифр слева над радаром — выше: освобождают место карте.
   { rect: [90, 270, 186, 350], dx: 0, dy: -38, feather: 6 },
-  // Маленький кубик справа от верхнего облака — светлее (и не гасится как дым: SMOKE_KEEP).
-  { rect: [342, 160, 390, 212], gain: 1.6, feather: 4 },
+  // Маленький кубик справа от верхнего облака — светлее (и не гасится как дым: SMOKE_KEEP) и
+  // по диагонали вверх-вправо: под блоком «Онлайн» у последнего кружка аватаров, чуть выше.
+  { rect: [342, 160, 390, 212], dx: 28, dy: -75, gain: 1.6, feather: 4 },
   // Карта мира — выше, чуть выше центра радара «Поиска»: материки выглядывают из-за него
   // по бокам и сверху, а не только снизу. Маска обходит камеру слева (её колонка x < 150
   // ниже Северной Америки) и график под Азией справа.
@@ -98,6 +108,30 @@ const MOVES = [
     dy: MAP_SHIFT_Y,
     feather: 7,
   },
+  // Камера слева посередине — ниже и наклонена по диагонали вниз: объективом смотрит на
+  // куб с нейросетью справа внизу (NEURAL_CUBE, ~29° от горизонтали). Отдельной правкой после
+  // карты: до её переноса рядом с камерой стоит Южная Америка, и повёрнутый объектив попал бы
+  // в маску карты — его кусок уехал бы с ней. Рамка тесная: сверху боке, справа точки карты.
+  { rect: [66, 492, 136, 539], dy: 45, rotate: 29, feather: 5 },
+  // Серое размытое пятно с «кометой» прямо под кнопкой «Найти собеседника» — убрано: россыпь
+  // под кнопкой прорежена (THIN_ZONES), а это пятно грязнее остальных. Рамка тесная: выше и
+  // правее — мелкие точки.
+  { rect: [294, 808, 337, 836], remove: true, feather: 4 },
+];
+
+/**
+ * Мелкие пятна, убранные уже после прореживания россыпи (thinParticles): если убрать их
+ * раньше, прореживание пересчитывается — освобождается промежуток у оставленной частицы, и
+ * рядом проступает соседнее пятно, убранное до этого.
+ */
+const CLEANUP = [
+  // Между ником и кнопкой слева — сдвоенный «треугольник» (два клина один под другим) с
+  // точкой у края и крошечный треугольник выше-левее, у конца графика — убраны. Рамки
+  // тесные: выше точка, левее график.
+  { rect: [150, 668, 196, 707], remove: true, feather: 4 },
+  { rect: [127, 632, 138, 643], remove: true, feather: 2 },
+  // Светлый овал над Fliq, чуть выше панели навигации, — убран.
+  { rect: [222, 825, 253, 851], remove: true, feather: 4 },
 ];
 
 /**
@@ -151,7 +185,13 @@ function gaussianBlur(src, w, h, sigma) {
  * (дымка тут гладкая), а сам элемент — это превышение над этим фоном (иконки светятся
  * на тёмном), и оно прибавляется на новом месте.
  */
-function moveElement(data, w, h, scale, { rect, rects, dx = 0, dy = 0, remove = false, gain = 1, feather: featherSrc = 10 }) {
+function moveElement(
+  data,
+  w,
+  h,
+  scale,
+  { rect, rects, dx = 0, dy = 0, remove = false, gain = 1, feather: featherSrc = 10, rotate = 0 },
+) {
   const feather = featherSrc * scale;
   // Элемент — один прямоугольник или объединение нескольких (карта без соседнего графика).
   const boxes = (rects || [rect]).map((r) => r.map((v) => v * scale));
@@ -242,6 +282,10 @@ function moveElement(data, w, h, scale, { rect, rects, dx = 0, dy = 0, remove = 
     }
   }
   if (remove) return;
+  if (rotate) {
+    pasteRotated(data, w, glow, { cx0, cy0, cw, ch }, (rx0 + rx1) / 2, (ry0 + ry1) / 2, sx, sy, rotate, gain);
+    return;
+  }
   for (let y = cy0; y < cy1; y++) {
     for (let x = cx0; x < cx1; x++) {
       const ox = Math.round(x - sx);
@@ -255,13 +299,43 @@ function moveElement(data, w, h, scale, { rect, rects, dx = 0, dy = 0, remove = 
 }
 
 /**
+ * Свечение элемента на новом месте с поворотом вокруг его центра (ecx, ecy): rotate — градусы
+ * по часовой на экране. Каждая точка берёт свечение по обратному повороту, билинейно — без
+ * лесенки на наклонных краях.
+ */
+function pasteRotated(data, w, glow, { cx0, cy0, cw, ch }, ecx, ecy, sx, sy, rotate, gain) {
+  const rad = (rotate * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  const at = (gx, gy, c) => (gx < 0 || gy < 0 || gx >= cw || gy >= ch ? 0 : glow[(gy * cw + gx) * 3 + c]);
+  for (let y = cy0; y < cy0 + ch; y++) {
+    for (let x = cx0; x < cx0 + cw; x++) {
+      const ux = x - (ecx + sx);
+      const uy = y - (ecy + sy);
+      const fx = ecx + ux * cos + uy * sin - cx0;
+      const fy = ecy - ux * sin + uy * cos - cy0;
+      const x0 = Math.floor(fx);
+      const y0 = Math.floor(fy);
+      if (x0 < -1 || y0 < -1 || x0 >= cw || y0 >= ch) continue;
+      const tx = fx - x0;
+      const ty = fy - y0;
+      const k = (y * w + x) * 4;
+      for (let c = 0; c < 3; c++) {
+        const v =
+          at(x0, y0, c) * (1 - tx) * (1 - ty) + at(x0 + 1, y0, c) * tx * (1 - ty) +
+          at(x0, y0 + 1, c) * (1 - tx) * ty + at(x0 + 1, y0 + 1, c) * tx * ty;
+        if (v > 0) data[k + c] = Math.min(255, data[k + c] + v * gain);
+      }
+    }
+  }
+}
+
+/**
  * Новые элементы картинки (куб с нейросетью, соты) одним слоем canvaskit в координатах
  * исходника; возвращает премультиплицированные RGBA пиксели размера w×h.
  */
 async function drawOverlays(w, h, scale) {
-  const ck = await require(path.join(__dirname, '..', 'node_modules', 'canvaskit-wasm', 'bin', 'full', 'canvaskit.js'))({
-    locateFile: (f) => path.join(__dirname, '..', 'node_modules', 'canvaskit-wasm', 'bin', 'full', f),
-  });
+  const ck = await canvasKit();
   const surface = ck.MakeSurface(w, h);
   const c = surface.getCanvas();
   c.clear(ck.TRANSPARENT);
@@ -274,6 +348,13 @@ async function drawOverlays(w, h, scale) {
   });
   surface.delete();
   return px;
+}
+
+let canvasKitReady = null;
+function canvasKit() {
+  const dir = path.join(__dirname, '..', 'node_modules', 'canvaskit-wasm', 'bin', 'full');
+  canvasKitReady ??= require(path.join(dir, 'canvaskit.js'))({ locateFile: (f) => path.join(dir, f) });
+  return canvasKitReady;
 }
 
 function overlayPaint(ck, scale, rgb, alpha, { stroke, blur } = {}) {
@@ -434,9 +515,7 @@ const CUBE_FACES = {
 };
 
 async function drawCubeBody(w, h, scale, { cx, cy, r }) {
-  const ck = await require(path.join(__dirname, '..', 'node_modules', 'canvaskit-wasm', 'bin', 'full', 'canvaskit.js'))({
-    locateFile: (f) => path.join(__dirname, '..', 'node_modules', 'canvaskit-wasm', 'bin', 'full', f),
-  });
+  const ck = await canvasKit();
   const surface = ck.MakeSurface(w, h);
   const c = surface.getCanvas();
   c.clear(ck.TRANSPARENT);
@@ -465,6 +544,80 @@ async function drawCubeBody(w, h, scale, { cx, cy, r }) {
   hex.close();
   c.drawPath(hex, edge);
   for (const i of [1, 3, 5]) c.drawLine(cx, cy, pts[i][0], pts[i][1], edge);
+  const px = c.readPixels(0, 0, {
+    width: w, height: h, colorType: ck.ColorType.RGBA_8888, alphaType: ck.AlphaType.Premul,
+    colorSpace: ck.ColorSpace.SRGB,
+  });
+  surface.delete();
+  return px;
+}
+
+/**
+ * Облако сообщения сверху — нарисовано заново, чётко: у исходного апскейл не вытянул
+ * края и строки, а вокруг лежал широкий тёмный ореол. Та же форма (хвост снизу слева, две
+ * строки), чуть меньше прежнего, цвета замерены на готовой картинке; тень — маленькая и мягкая.
+ * Тело — ровным цветом: градиент на ~9 уровней в 8 битах ложился ступеньками — полосами.
+ * Стоит за аватаром «Профиля» ближе к его левому краю (на A35 аватар — центр ~ (540, 360) px
+ * экрана, радиус ~167): левый край облака — у левого края кольца. Координаты исходника: центр и
+ * размер тела, радиус углов.
+ */
+const CHAT_BUBBLE = {
+  cx: 257,
+  cy: 164,
+  w: 78,
+  h: 52,
+  radius: 8,
+  body: [62, 76, 96],
+  lines: [50, 58, 71],
+  rim: [98, 120, 148],
+  shadow: [20, 25, 33],
+};
+
+async function drawChatBubble(w, h, scale, b) {
+  const ck = await canvasKit();
+  const surface = ck.MakeSurface(w, h);
+  const c = surface.getCanvas();
+  c.clear(ck.TRANSPARENT);
+  c.scale(scale, scale);
+  const left = b.cx - b.w / 2;
+  const top = b.cy - b.h / 2;
+  const bottom = top + b.h;
+  const body = new ck.Path();
+  body.addRRect(ck.RRectXY(ck.LTRBRect(left, top, left + b.w, bottom), b.radius, b.radius));
+  // Хвост — как у прежнего: левый край почти отвесно вниз, правый — наискось к острию.
+  const tail = new ck.Path();
+  tail.moveTo(left + b.w * 0.08, bottom - 1);
+  tail.lineTo(left + b.w * 0.16, bottom + b.h * 0.26);
+  tail.lineTo(left + b.w * 0.39, bottom - 1);
+  tail.close();
+  const shape = ck.Path.MakeFromOp(body, tail, ck.PathOp.Union);
+
+  const shadow = overlayPaint(ck, scale, b.shadow, 0.35, { blur: 2.2 });
+  c.save();
+  c.translate(0.8, 1.6);
+  c.drawPath(shape, shadow);
+  c.restore();
+
+  c.drawPath(shape, overlayPaint(ck, scale, b.body, 1));
+  // Кромка: светлая по верху, к середине гаснет; по всему контуру — едва заметная.
+  const rim = new ck.Paint();
+  rim.setAntiAlias(true);
+  rim.setStyle(ck.PaintStyle.Stroke);
+  rim.setStrokeWidth(0.7);
+  rim.setShader(
+    ck.Shader.MakeLinearGradient(
+      [0, top],
+      [0, bottom],
+      [ck.Color(...b.rim, 0.75), ck.Color(...b.rim, 0.2), ck.Color(...b.rim, 0.12)],
+      [0, 0.5, 1],
+      ck.TileMode.Clamp,
+    ),
+  );
+  c.drawPath(shape, rim);
+  // Строки сообщения — как у прежнего: длинная и короче, с круглыми концами.
+  const line = overlayPaint(ck, scale, b.lines, 1, { stroke: b.h * 0.075 });
+  c.drawLine(left + b.w * 0.2, top + b.h * 0.36, left + b.w * 0.8, top + b.h * 0.36, line);
+  c.drawLine(left + b.w * 0.2, top + b.h * 0.6, left + b.w * 0.58, top + b.h * 0.6, line);
   const px = c.readPixels(0, 0, {
     width: w, height: h, colorType: ck.ColorType.RGBA_8888, alphaType: ck.AlphaType.Premul,
     colorSpace: ck.ColorSpace.SRGB,
@@ -593,12 +746,15 @@ const SMOKE_TOP_BOOST = 1.6;
 /** На карте мира тонкие линии слабее — там пороги ниже, чтобы сеть не тускнела. */
 const SMOKE_MAP_FACTOR = 0.45;
 /** Элементы, которые не гасятся как дым (координаты исходника): маленький кубик сверху. */
-const SMOKE_KEEP = [[340, 158, 392, 214]];
+const SMOKE_KEEP = [[368, 83, 420, 139]];
 
-function suppressSmoke(data, w, h, scale, overlay) {
+/**
+ * Локальный фон без элементов — то же открытие, что для тумана, по каждому каналу, в сетке
+ * исходника; sample(f, x, y) — билинейно в пикселях апскейла.
+ */
+function localBackground(data, w, h, scale) {
   const sw = Math.round(w / scale);
   const sh = Math.round(h / scale);
-  // Локальный фон — то же открытие, что для тумана, по каждому каналу.
   const bgs = [0, 1, 2].map((c) => {
     const small = new Float32Array(sw * sh);
     for (let y = 0; y < sh; y++) {
@@ -624,6 +780,11 @@ function suppressSmoke(data, w, h, scale, overlay) {
       f[(y0 + 1) * sw + x0] * (1 - tx) * ty + f[(y0 + 1) * sw + x0 + 1] * tx * ty
     );
   };
+  return { bgs, sample };
+}
+
+function suppressSmoke(data, w, h, scale, overlay) {
+  const { bgs, sample } = localBackground(data, w, h, scale);
   // Порог по яркости слегка размытой картинки: тонкие линии карты держатся за счёт
   // соседства, а пиксельный шум не решает, что гасить.
   const lumSmall = new Float32Array(w * h);
@@ -656,6 +817,311 @@ function suppressSmoke(data, w, h, scale, overlay) {
         const v = data[k + c];
         if (v > bg[c]) data[k + c] = Math.round(bg[c] + (v - bg[c]) * keep);
       }
+    }
+  }
+}
+
+/**
+ * Россыпь частиц у куба с нейросетью и под панелью навигации — реже (просьба пользователя
+ * «прорядить»). Частица — связное пятно над локальным фоном (выше THIN_RISE уровней, в пике
+ * не слабее THIN_MIN_PEAK — иначе это шум фона) не крупнее maxArea её зоны (кв. пикселей
+ * исходника). От самых заметных к слабым: частица остаётся, если ближе gap её зоны к ней
+ * нет уже оставленной; у веток куба (ближе THIN_NET_CLEAR к ним) частиц нет вовсе — сеть
+ * читается чисто. Остальные вычитаются до фона вместе с ореолом.
+ * Идёт до наложения куба и сот: в картинке их ещё нет, overlay только показывает, где ветки.
+ */
+// Координаты исходника; зона частицы — по её центру.
+const THIN_ZONES = [
+  // От середины кнопки «Найти собеседника» вправо до края, от верхних веток куба до кнопки.
+  { rect: [170, 630, 572, 790], gap: 36, maxArea: 260 },
+  // Под кнопкой до низа экрана, под панелью навигации тоже, с x 150 (левее только соты и
+  // кубик — их не трогаем): пятен ещё реже. Пятна здесь крупнее, с ореолом.
+  { rect: [150, 790, 572, 1024], gap: 60, maxArea: 600 },
+];
+const THIN_RISE = 4;
+const THIN_MIN_PEAK = 10;
+const THIN_NET_CLEAR = 8;
+const THIN_HALO = 3;
+
+function thinParticles(data, w, h, scale, overlay) {
+  const { bgs, sample } = localBackground(data, w, h, scale);
+  const x0 = Math.round(Math.min(...THIN_ZONES.map((z) => z.rect[0])) * scale);
+  const y0 = Math.round(Math.min(...THIN_ZONES.map((z) => z.rect[1])) * scale);
+  const x1 = Math.min(w, Math.round(Math.max(...THIN_ZONES.map((z) => z.rect[2])) * scale));
+  const y1 = Math.min(h, Math.round(Math.max(...THIN_ZONES.map((z) => z.rect[3])) * scale));
+  const cw = x1 - x0;
+  const ch = y1 - y0;
+  const bg = [0, 1, 2].map(() => new Float32Array(cw * ch));
+  const rise = new Float32Array(cw * ch);
+  for (let y = 0; y < ch; y++) {
+    for (let x = 0; x < cw; x++) {
+      const i = y * cw + x;
+      const k = ((y + y0) * w + x + x0) * 4;
+      for (let c = 0; c < 3; c++) bg[c][i] = sample(bgs[c], x + x0, y + y0);
+      const lum = 0.2126 * data[k] + 0.7152 * data[k + 1] + 0.0722 * data[k + 2];
+      rise[i] = lum - (0.2126 * bg[0][i] + 0.7152 * bg[1][i] + 0.0722 * bg[2][i]);
+    }
+  }
+  // Пятна — связные области над порогом (8 соседей).
+  const label = new Int32Array(cw * ch).fill(-1);
+  const blobs = [];
+  const stack = [];
+  for (let start = 0; start < cw * ch; start++) {
+    if (label[start] >= 0 || rise[start] <= THIN_RISE) continue;
+    const id = blobs.length;
+    const blob = { pixels: [], mass: 0, peak: 0, mx: 0, my: 0 };
+    label[start] = id;
+    stack.push(start);
+    while (stack.length) {
+      const i = stack.pop();
+      const x = i % cw;
+      const y = (i - x) / cw;
+      blob.pixels.push(i);
+      blob.mass += rise[i];
+      blob.peak = Math.max(blob.peak, rise[i]);
+      blob.mx += rise[i] * x;
+      blob.my += rise[i] * y;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const nx = x + dx;
+          const ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= cw || ny >= ch) continue;
+          const j = ny * cw + nx;
+          if (label[j] < 0 && rise[j] > THIN_RISE) {
+            label[j] = id;
+            stack.push(j);
+          }
+        }
+      }
+    }
+    blob.cx = (blob.mx / blob.mass + x0) / scale;
+    blob.cy = (blob.my / blob.mass + y0) / scale;
+    blob.zone = THIN_ZONES.find(({ rect: [zx0, zy0, zx1, zy1] }) => blob.cx >= zx0 && blob.cx < zx1 && blob.cy >= zy0 && blob.cy < zy1);
+    blobs.push(blob);
+  }
+  const particles = blobs.filter(
+    (b) => b.zone && b.peak >= THIN_MIN_PEAK && b.pixels.length / (scale * scale) <= b.zone.maxArea,
+  );
+  // Ветки куба — пиксели overlay в сетке исходника.
+  const sw = Math.round(w / scale);
+  const sh = Math.round(h / scale);
+  const net = new Uint8Array(sw * sh);
+  for (let y = 0; y < sh; y++) {
+    for (let x = 0; x < sw; x++) {
+      const k = (Math.min(h - 1, Math.round((y + 0.5) * scale)) * w + Math.min(w - 1, Math.round((x + 0.5) * scale))) * 4;
+      net[y * sw + x] = overlay[k + 3] > 25 ? 1 : 0;
+    }
+  }
+  const nearNet = ({ cx, cy }) => {
+    const r = THIN_NET_CLEAR;
+    for (let y = Math.max(0, Math.floor(cy - r)); y <= Math.min(sh - 1, Math.ceil(cy + r)); y++) {
+      for (let x = Math.max(0, Math.floor(cx - r)); x <= Math.min(sw - 1, Math.ceil(cx + r)); x++) {
+        if (net[y * sw + x] && Math.hypot(x + 0.5 - cx, y + 0.5 - cy) <= r) return true;
+      }
+    }
+    return false;
+  };
+  const kept = [];
+  const removed = [];
+  for (const p of particles.sort((a, b) => b.mass - a.mass)) {
+    const crowded = kept.some((q) => Math.hypot(q.cx - p.cx, q.cy - p.cy) < p.zone.gap);
+    (crowded || nearNet(p) ? removed : kept).push(p);
+  }
+  // Маска удаления с ореолом: размытие расширяет пятно на ~THIN_HALO пикселей исходника,
+  // оставленные частицы не задеваются.
+  const hole = new Float32Array(cw * ch);
+  for (const p of removed) for (const i of p.pixels) hole[i] = 1;
+  const grown = gaussianBlur(hole, cw, ch, (THIN_HALO * scale) / 2);
+  const keep = new Uint8Array(cw * ch);
+  for (const p of kept) for (const i of p.pixels) keep[i] = 1;
+  for (let i = 0; i < cw * ch; i++) {
+    const m = keep[i] ? 0 : Math.max(hole[i], Math.min(1, grown[i] * 3));
+    if (m <= 0) continue;
+    const x = i % cw;
+    const y = (i - x) / cw;
+    const k = ((y + y0) * w + x + x0) * 4;
+    for (let c = 0; c < 3; c++) {
+      const v = data[k + c];
+      if (v > bg[c][i]) data[k + c] = Math.round(bg[c][i] + (v - bg[c][i]) * (1 - m));
+    }
+  }
+  return { kept: kept.length, removed: removed.length };
+}
+
+/**
+ * Ровный фон: на свободных местах по всей картинке видны разводы в 1–3 уровня — тёмные мазки
+ * и волоски исходника и светлые пятна-прямоугольники от квадратного открытия в suppressSmoke
+ * (фон там становится этим открытием). Картинка раскладывается на фон и элементы, фон
+ * заменяется очень гладким (EVEN_SMOOTH), элементы со свечением переезжают на него как были.
+ * Свой фон точки — её окрестность без элементов (EVEN_FINE, в полупикселях апскейла); под
+ * элементом — то же открытие, что дало прямоугольники: они уходят и под элементами, без шва.
+ * Элемент — ярче этого фона на EVEN_ELEMENT (на карте порог ниже, как для дыма: тонкие линии)
+ * или overlay; маска закрыта (EVEN_CLOSE) — тёмные детали внутри остаются с элементом.
+ * Гладкий фон в 8 битах лёг бы ступеньками по уровню — по всей картинке зерно EVEN_DITHER
+ * (треугольный шум, одно на все каналы — без цветного шума).
+ */
+const EVEN_FINE = 0.6;
+const EVEN_SMOOTH = 120;
+const EVEN_ELEMENT = 5;
+const EVEN_CLOSE = 3;
+const EVEN_PAD = 2;
+const EVEN_DITHER = 1;
+const EVEN_SEED = 0x5eed11;
+
+function evenBackground(data, w, h, scale, overlay) {
+  const sw = Math.round(w / scale);
+  const sh = Math.round(h / scale);
+  const n = sw * sh;
+  // Сетка исходника: среднее по блоку апскейла, у overlay — максимум альфы.
+  const S = [0, 1, 2].map(() => new Float32Array(n));
+  const ov = new Float32Array(n);
+  for (let y = 0; y < sh; y++) {
+    const yy0 = Math.round(y * scale);
+    const yy1 = Math.min(h, Math.round((y + 1) * scale));
+    for (let x = 0; x < sw; x++) {
+      const xx0 = Math.round(x * scale);
+      const xx1 = Math.min(w, Math.round((x + 1) * scale));
+      const acc = [0, 0, 0];
+      let count = 0;
+      let a = 0;
+      for (let yy = yy0; yy < yy1; yy++) {
+        for (let xx = xx0; xx < xx1; xx++) {
+          const k = (yy * w + xx) * 4;
+          for (let c = 0; c < 3; c++) acc[c] += data[k + c];
+          a = Math.max(a, overlay[k + 3]);
+          count++;
+        }
+      }
+      const i = y * sw + x;
+      for (let c = 0; c < 3; c++) S[c][i] = acc[c] / count;
+      ov[i] = a;
+    }
+  }
+  // Открытие — фон под элементами.
+  const { bgs, sample } = localBackground(data, w, h, scale);
+  const opened = [0, 1, 2].map(() => new Float32Array(n));
+  let element = new Float32Array(n);
+  for (let y = 0; y < sh; y++) {
+    for (let x = 0; x < sw; x++) {
+      const i = y * sw + x;
+      const px = (x + 0.5) * scale;
+      const py = (y + 0.5) * scale;
+      for (let c = 0; c < 3; c++) opened[c][i] = sample(bgs[c], px, py);
+      const bgLum = 0.2126 * opened[0][i] + 0.7152 * opened[1][i] + 0.0722 * opened[2][i];
+      const lum = 0.2126 * S[0][i] + 0.7152 * S[1][i] + 0.0722 * S[2][i];
+      const threshold = EVEN_ELEMENT * (1 + (SMOKE_MAP_FACTOR - 1) * mapMask(x, y - MAP_SHIFT_Y));
+      element[i] = lum - bgLum > threshold || ov[i] > 2 ? 1 : 0;
+    }
+  }
+  element = rankFilter(rankFilter(element, sw, sh, EVEN_CLOSE, Math.max), sw, sh, EVEN_CLOSE, Math.min);
+  element = rankFilter(element, sw, sh, EVEN_PAD, Math.max);
+  const valid = gaussianBlur(element, sw, sh, 1);
+  for (let i = 0; i < n; i++) valid[i] = 1 - Math.min(1, valid[i] * 1.5);
+  // Гладкий фон — в сетке вчетверо реже: размытие на 120 пикселей исходника так дёшево.
+  const q = 4;
+  const qw = Math.ceil(sw / q);
+  const qh = Math.ceil(sh / q);
+  const coarseOf = (src) => {
+    const small = new Float32Array(qw * qh);
+    for (let y = 0; y < sh; y++) for (let x = 0; x < sw; x++) small[Math.floor(y / q) * qw + Math.floor(x / q)] += src[y * sw + x];
+    const blurred = gaussianBlur(small, qw, qh, EVEN_SMOOTH / q);
+    const out = new Float32Array(n);
+    for (let y = 0; y < sh; y++) {
+      const fy = Math.min(qh - 1.001, Math.max(0, (y + 0.5) / q - 0.5));
+      const iy = Math.floor(fy);
+      const ty = fy - iy;
+      for (let x = 0; x < sw; x++) {
+        const fx = Math.min(qw - 1.001, Math.max(0, (x + 0.5) / q - 0.5));
+        const ix = Math.floor(fx);
+        const tx = fx - ix;
+        out[y * sw + x] =
+          blurred[iy * qw + ix] * (1 - tx) * (1 - ty) + blurred[iy * qw + ix + 1] * tx * (1 - ty) +
+          blurred[(iy + 1) * qw + ix] * (1 - tx) * ty + blurred[(iy + 1) * qw + ix + 1] * tx * ty;
+      }
+    }
+    return out;
+  };
+  const vSmooth = coarseOf(valid);
+  // Сетка исходника: гладкий фон (far) и фон под элементом (under) — открытие.
+  const fields = S.map((ch, c) => {
+    const masked = new Float32Array(n);
+    for (let i = 0; i < n; i++) masked[i] = ch[i] * valid[i];
+    const smooth = coarseOf(masked);
+    const far = new Float32Array(n);
+    for (let i = 0; i < n; i++) far[i] = vSmooth[i] > 1e-3 ? smooth[i] / vSmooth[i] : ch[i];
+    // Среднее занижено тёмными мазками — гладкий фон поднимается до типичного (медиана
+    // отклонения пикселей фона), яркость сцены прежняя.
+    const deviations = [];
+    for (let i = 0; i < n; i++) if (valid[i] > 0.9) deviations.push(ch[i] - far[i]);
+    deviations.sort((a, b) => a - b);
+    const lift = deviations[deviations.length >> 1];
+    for (let i = 0; i < n; i++) far[i] += lift;
+    return { far, under: opened[c] };
+  });
+  // Свой фон точки — в полуразрешении апскейла: в сетке исходника тонкие волоски мазков не
+  // помещались и оставались контурами.
+  const r = 2;
+  const hw = Math.ceil(w / r);
+  const hh = Math.ceil(h / r);
+  const coarseAt = (f, X, Y) => {
+    const fx = Math.min(sw - 1.001, Math.max(0, ((X + 0.5) * r) / scale - 0.5));
+    const fy = Math.min(sh - 1.001, Math.max(0, ((Y + 0.5) * r) / scale - 0.5));
+    const ix = Math.floor(fx);
+    const iy = Math.floor(fy);
+    const tx = fx - ix;
+    const ty = fy - iy;
+    return (
+      f[iy * sw + ix] * (1 - tx) * (1 - ty) + f[iy * sw + ix + 1] * tx * (1 - ty) +
+      f[(iy + 1) * sw + ix] * (1 - tx) * ty + f[(iy + 1) * sw + ix + 1] * tx * ty
+    );
+  };
+  const validH = new Float32Array(hw * hh);
+  for (let Y = 0; Y < hh; Y++) for (let X = 0; X < hw; X++) validH[Y * hw + X] = coarseAt(valid, X, Y);
+  const vFine = gaussianBlur(validH, hw, hh, EVEN_FINE);
+  const shift = [0, 1, 2].map((c) => {
+    const masked = new Float32Array(hw * hh);
+    for (let Y = 0; Y < hh; Y++) {
+      for (let X = 0; X < hw; X++) {
+        let acc = 0;
+        let count = 0;
+        for (let yy = Y * r; yy < Math.min(h, Y * r + r); yy++) {
+          for (let xx = X * r; xx < Math.min(w, X * r + r); xx++) {
+            acc += data[(yy * w + xx) * 4 + c];
+            count++;
+          }
+        }
+        masked[Y * hw + X] = (acc / count) * validH[Y * hw + X];
+      }
+    }
+    const fine = gaussianBlur(masked, hw, hh, EVEN_FINE);
+    const out = new Float32Array(hw * hh);
+    for (let Y = 0; Y < hh; Y++) {
+      for (let X = 0; X < hw; X++) {
+        const i = Y * hw + X;
+        const far = coarseAt(fields[c].far, X, Y);
+        const under = coarseAt(fields[c].under, X, Y);
+        const near = vFine[i] > 1e-4 ? under + (fine[i] / vFine[i] - under) * Math.min(1, vFine[i] / 0.5) : under;
+        out[i] = near - far;
+      }
+    }
+    return out;
+  });
+  let state = EVEN_SEED >>> 0;
+  const rnd = () => (state = (Math.imul(state, 1664525) + 1013904223) >>> 0) / 4294967296;
+  for (let y = 0; y < h; y++) {
+    const fy = Math.min(hh - 1.001, Math.max(0, (y + 0.5) / r - 0.5));
+    const iy = Math.floor(fy);
+    const ty = fy - iy;
+    for (let x = 0; x < w; x++) {
+      const fx = Math.min(hw - 1.001, Math.max(0, (x + 0.5) / r - 0.5));
+      const ix = Math.floor(fx);
+      const tx = fx - ix;
+      const k = (y * w + x) * 4;
+      const at = (f) =>
+        f[iy * hw + ix] * (1 - tx) * (1 - ty) + f[iy * hw + ix + 1] * tx * (1 - ty) +
+        f[(iy + 1) * hw + ix] * (1 - tx) * ty + f[(iy + 1) * hw + ix + 1] * tx * ty;
+      const grain = (rnd() + rnd() - 1) * EVEN_DITHER;
+      for (let c = 0; c < 3; c++) data[k + c] = Math.min(255, Math.max(0, Math.round(data[k + c] - at(shift[c]) + grain)));
     }
   }
 }
@@ -717,8 +1183,12 @@ async function main() {
     }
   }
   for (const move of MOVES) moveElement(A, w, h, scale, move);
-  // Куб с нейросетью и соты — светом поверх фона.
   const overlay = await drawOverlays(w, h, scale);
+  // Россыпь частиц у куба и под панелью навигации — реже.
+  const thin = thinParticles(A, w, h, scale, overlay);
+  console.log(`частицы: оставлено ${thin.kept}, убрано ${thin.removed}`);
+  for (const move of CLEANUP) moveElement(A, w, h, scale, move);
+  // Куб с нейросетью и соты — светом поверх фона.
   for (let i = 0; i < w * h * 4; i += 4) {
     if (overlay[i + 3] === 0) continue;
     for (let ch = 0; ch < 3; ch++) A[i + ch] = Math.min(255, A[i + ch] + overlay[i + ch]);
@@ -746,14 +1216,16 @@ async function main() {
   }
   removeHaze(A, w, h, scale);
   suppressSmoke(A, w, h, scale, overlay);
+  evenBackground(A, w, h, scale, overlay);
   sharpen(A, w, h);
   grayBackground(A, w, h);
-  // Тело куба с нейросетью — поверх, в цветах маленького кубика.
-  const body = await drawCubeBody(w, h, scale, NEURAL_CUBE);
-  for (let i = 0; i < w * h * 4; i += 4) {
-    const a = body[i + 3] / 255;
-    if (a === 0) continue;
-    for (let ch = 0; ch < 3; ch++) A[i + ch] = Math.round(body[i + ch] + A[i + ch] * (1 - a));
+  // Тело куба с нейросетью — в цветах маленького кубика, и облако сообщения — поверх.
+  for (const layer of [await drawCubeBody(w, h, scale, NEURAL_CUBE), await drawChatBubble(w, h, scale, CHAT_BUBBLE)]) {
+    for (let i = 0; i < w * h * 4; i += 4) {
+      const a = layer[i + 3] / 255;
+      if (a === 0) continue;
+      for (let ch = 0; ch < 3; ch++) A[i + ch] = Math.round(layer[i + ch] + A[i + ch] * (1 - a));
+    }
   }
   await base.resize(1440, Jimp.AUTO, Jimp.RESIZE_BICUBIC).quality(95).writeAsync(OUT);
   console.log(`${path.relative(process.cwd(), OUT)}  1440 px`);

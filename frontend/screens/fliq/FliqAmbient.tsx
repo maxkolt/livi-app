@@ -35,28 +35,44 @@ function saturate(s: number, k: number): number[] {
 const HALO_MATRIX = saturate(1.45, 0.92);
 const WASH_MATRIX = saturate(1.3, 0.8);
 
-const FADE_MS = 520;
+/** Перетекание света к новому ролику — быстрое: свет меняется вместе с роликом, а не после. */
+const FADE_MS = 300;
 
 /** Декодированные превью: один и тот же ролик листают туда-обратно. */
 const imageCache = new Map<string, SkImage>();
 const IMAGE_CACHE_MAX = 12;
+/** Загрузки в пути: подгрузка соседей и показ одного превью не качают его дважды. */
+const pending = new Map<string, Promise<SkImage | null>>();
 
-async function loadImage(url: string): Promise<SkImage | null> {
+function loadImage(url: string): Promise<SkImage | null> {
   const hit = imageCache.get(url);
-  if (hit) return hit;
-  try {
-    const data = await Skia.Data.fromURI(url);
-    const img = Skia.Image.MakeImageFromEncoded(data);
-    if (!img) return null;
-    imageCache.set(url, img);
-    if (imageCache.size > IMAGE_CACHE_MAX) {
-      const oldest = imageCache.keys().next().value;
-      if (oldest) imageCache.delete(oldest);
+  if (hit) return Promise.resolve(hit);
+  const inFlight = pending.get(url);
+  if (inFlight) return inFlight;
+  const load = (async () => {
+    try {
+      const data = await Skia.Data.fromURI(url);
+      const img = Skia.Image.MakeImageFromEncoded(data);
+      if (!img) return null;
+      imageCache.set(url, img);
+      if (imageCache.size > IMAGE_CACHE_MAX) {
+        const oldest = imageCache.keys().next().value;
+        if (oldest) imageCache.delete(oldest);
+      }
+      return img;
+    } catch {
+      return null;
+    } finally {
+      pending.delete(url);
     }
-    return img;
-  } catch {
-    return null;
-  }
+  })();
+  pending.set(url, load);
+  return load;
+}
+
+/** Превью соседних роликов — заранее: при перелистывании свет появляется сразу. */
+export function prefetchFliqAmbient(urls: string[]) {
+  for (const url of urls) void loadImage(url);
 }
 
 type FliqAmbientRect = { x: number; y: number; width: number; height: number };

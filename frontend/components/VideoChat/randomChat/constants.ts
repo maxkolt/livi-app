@@ -1,6 +1,8 @@
 export const CARD_BASE = {
-  // Глубокий серо-синий в тон фона (HOME_NAV_BG), темнее блоков — место под видео.
-  backgroundColor: 'rgba(26, 31, 39, 0.92)',
+  // Глубокий серо-синий в тон фона, темнее блоков — место под видео. Непрозрачный: за
+  // карточками теперь сцена главной, и при 0.92 сквозь пустую карточку проступали её линии.
+  // Цвет — прежний вид поверх HOME_NAV_BG.
+  backgroundColor: '#1B2028',
   borderRadius: 10,
   justifyContent: 'center' as const,
   alignItems: 'center' as const,

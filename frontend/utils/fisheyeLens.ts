@@ -12,13 +12,12 @@ uniform shader image;
 uniform float2 center;
 uniform float radius;
 uniform float k;
-uniform float2 shift;
 
 half4 main(float2 p) {
   float2 d = (p - center) / radius;
   float x2 = dot(d, d);
   float m = x2 < 1.0 ? 1.0 - k + k * x2 : 1.0;
-  return image.eval(center + d * m * radius - shift);
+  return image.eval(center + d * m * radius);
 }
 `;
 

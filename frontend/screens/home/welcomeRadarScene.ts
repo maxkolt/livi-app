@@ -15,7 +15,6 @@ import {
   type SkRect,
   type SkRRect,
   type SkRuntimeEffect,
-  type SkShader,
 } from '@shopify/react-native-skia';
 import { SEARCH_RADAR_HUD, SEARCH_RADAR_HUD_LIGHT } from './constants';
 import { FISHEYE_SKSL, fisheyeScreen, fisheyeSource } from '../../utils/fisheyeLens';
@@ -24,15 +23,14 @@ import { FISHEYE_SKSL, fisheyeScreen, fisheyeSource } from '../../utils/fisheyeL
  * HUD-радар Поиска. Рисунок делится на части:
  * - «местность» (изолинии и сетка) — растр, один раз на геометрию, на JS-потоке.
  *   Лежит под выпуклым стеклом («рыбий глаз», fisheyeLens): к центру крупнее,
- *   к краю сжимается. При наклоне телефона местность смещается под линзой
- *   (параллакс) и течёт по куполу;
+ *   к краю сжимается. Своего наклона у радара нет: при наклоне телефона он ездит
+ *   целиком вместе со слоем вкладки (SpatialDepth), как кнопка под ним;
  * - стекло с ободом (кольца дальности, перекрестие, шкала, кромка) — второй растр,
  *   стоит на месте. Кольца дальности идут по куполу: ровным шагом под линзой,
  *   поэтому на экране сгущаются к краю;
- * - пунктирный HUD-обод — векторная картинка, медленно вращается и при наклоне
- *   чуть сдвигается навстречу местности — «парит» над стеклом;
+ * - пунктирный HUD-обод — векторная картинка, медленно вращается;
  * - луч, подсветка шкалы и цели — пишутся заново каждый кадр на UI-потоке. Цели
- *   стоят на местности и сдвигаются вместе с ней.
+ *   стоят на местности и видны через ту же линзу.
  * В кадре нет blur по большим фигурам: сектор с коническим градиентом, линии,
  * несколько размытых точек и один круглый (аналитический) clip под местность.
  */
@@ -48,10 +46,6 @@ const RADAR_ALPHA = 0.85;
 /** Подложка диска — тот же серо-синий, что фон, только глубже: «колодец» под стеклом. */
 const RADAR_INNER_BG = '#161B22';
 const RADAR_INNER_ALPHA = 0.45;
-/** Наибольший сдвиг местности при наклоне, dp радара 328. */
-const TERRAIN_TILT = 4;
-/** Пунктирный обод сдвигается навстречу, слабее — он ближе к стеклу. */
-const DASH_TILT = -1.5;
 /** Линза над местностью, радиус — край стекла: в центре ×1.82, у края сжатие ×1.9. */
 const LENS_K = 0.45;
 
@@ -200,9 +194,9 @@ function terrain(x: number, y: number): number {
   );
 }
 
-/** Радиус местности: с запасом на сдвиг, чтобы у края не открывался пустой серп. */
+/** Радиус местности: чуть за краем стекла, чтобы у обода не открывался пустой серп. */
 function terrainRadius(g: RadarGeometry): number {
-  return g.rDisc + (Math.abs(TERRAIN_TILT) + 1) * g.u;
+  return g.rDisc + g.u;
 }
 
 /** Marching squares по шуму, отрезки обрезаны кругом местности. */
@@ -213,7 +207,7 @@ function buildContourPath(g: RadarGeometry): SkPath {
   const R = terrainRadius(g);
   const rMax = R;
   // Сразу за аватаром линза показывает местность ближе к центру — её не выкидываем.
-  const rMin = g.rDisc * fisheyeSource(g.a / g.rDisc, LENS_K) - 2 - Math.abs(TERRAIN_TILT) * g.u;
+  const rMin = g.rDisc * fisheyeSource(g.a / g.rDisc, LENS_K) - 2;
   const step = (R * 2) / N;
   const vals = new Float32Array((N + 1) * (N + 1));
   for (let j = 0; j <= N; j++) {
@@ -378,7 +372,7 @@ function recordDashRing(g: RadarGeometry): SkPicture {
 
 export type RadarPayload = {
   g: RadarGeometry;
-  /** Местность под стеклом — сдвигается при наклоне. */
+  /** Местность под стеклом. */
   terrain: SkImage;
   /** Стекло с ободом поверх местности — стоит на месте. */
   image: SkImage;
@@ -411,20 +405,17 @@ export type RadarScene = RadarPayload & {
   t: number;
   /** Сколько времени прошло с последней перерисовки, мс. */
   sinceDrawMs: number;
-  /** Наклон телефона, [-1, 1]; задаёт кадру сдвиг местности и обода. */
-  tiltX: number;
-  tiltY: number;
   bounds: SkRect;
   src: SkRect;
   discOval: SkRect;
-  /** Круг, по которому обрезается сдвинутая местность, — внутренний край стекла. */
+  /** Круг, по которому обрезается местность без линзы, — внутренний край стекла. */
   terrainClip: SkRRect;
   rClip: number;
   /** Линза над местностью; null — не собралась, местность рисуется плоской. */
   lens: SkRuntimeEffect | null;
   /** Сила линзы в кадре: LENS_K или 0 без неё. */
   lensK: number;
-  terrainShader: SkShader;
+  /** Местность под линзой — шейдер собран один раз, кадр только рисует круг. */
   terrainPaint: SkPaint;
   basePaint: SkPaint;
   glassPaint: SkPaint;
@@ -532,13 +523,12 @@ export function buildRadarScene(p: RadarPayload, t: number): RadarScene {
   );
   const terrainPaint = Skia.Paint();
   terrainPaint.setAntiAlias(true);
+  if (lens) terrainPaint.setShader(lens.makeShaderWithChildren([cx, cy, rDisc, LENS_K], [terrainShader]));
 
   return {
     ...p,
     t,
     sinceDrawMs: 0,
-    tiltX: 0,
-    tiltY: 0,
     bounds: Skia.XYWHRect(0, 0, size, size),
     src: Skia.XYWHRect(0, 0, p.image.width(), p.image.height()),
     discOval: Skia.XYWHRect(cx - rDisc, cy - rDisc, rDisc * 2, rDisc * 2),
@@ -546,7 +536,6 @@ export function buildRadarScene(p: RadarPayload, t: number): RadarScene {
     rClip,
     lens,
     lensK: lens ? LENS_K : 0,
-    terrainShader,
     terrainPaint,
     basePaint,
     glassPaint,
@@ -575,28 +564,16 @@ export function drawRadarFrame(S: RadarScene): SkPicture {
   const r0 = rIn + 0.5 * u;
   const r1 = rDisc - 0.7 * u;
 
-  // Параллакс: местность и цели уходят «вглубь», обод чуть навстречу.
-  const tx = S.tiltX * u;
-  const ty = S.tiltY * u;
-
   const rec = Skia.PictureRecorder();
   const canvas = rec.beginRecording(S.bounds);
   canvas.drawCircle(cx, cy, S.g.rDash, S.basePaint);
   canvas.drawCircle(cx, cy, rDisc, S.glassPaint);
 
   if (S.lens) {
-    // Местность сдвигается под неподвижной линзой — течёт по куполу.
-    S.terrainPaint.setShader(
-      S.lens.makeShaderWithChildren(
-        [cx, cy, rDisc, S.lensK, tx * TERRAIN_TILT, ty * TERRAIN_TILT],
-        [S.terrainShader],
-      ),
-    );
     canvas.drawCircle(cx, cy, S.rClip, S.terrainPaint);
   } else {
     canvas.save();
     canvas.clipRRect(S.terrainClip, ClipOp.Intersect, true);
-    canvas.translate(tx * TERRAIN_TILT, ty * TERRAIN_TILT);
     canvas.drawImageRectOptions(S.terrain, S.src, S.bounds, FilterMode.Linear, MipmapMode.None, null);
     canvas.restore();
   }
@@ -604,7 +581,6 @@ export function drawRadarFrame(S: RadarScene): SkPicture {
   canvas.drawImageRectOptions(S.image, S.src, S.bounds, FilterMode.Linear, MipmapMode.None, null);
 
   canvas.save();
-  canvas.translate(tx * DASH_TILT, ty * DASH_TILT);
   canvas.rotate(-((t / DASH_PERIOD_S) % 1) * 360, cx, cy);
   canvas.drawPicture(S.dashRing);
   canvas.restore();
@@ -647,13 +623,10 @@ export function drawRadarFrame(S: RadarScene): SkPicture {
     const tDet = (TAU * n + ct.a0) / (omega - ct.w);
     const aDet = ct.a0 + ct.w * tDet - Math.PI / 2;
     const rr = rIn + 9 * u + span * hash(i + 17, n);
-    // Цель лежит на местности: сдвиг вместе с ней, затем через линзу на экран.
-    const bx = Math.cos(aDet) * rr + tx * TERRAIN_TILT;
-    const by = Math.sin(aDet) * rr + ty * TERRAIN_TILT;
-    const br = Math.sqrt(bx * bx + by * by);
-    const lensed = br > 0 ? (rDisc * fisheyeScreen(br / rDisc, S.lensK)) / br : 1;
-    const x = cx + bx * lensed;
-    const y = cy + by * lensed;
+    // Цель лежит на местности и видна через ту же линзу.
+    const lensed = rDisc * fisheyeScreen(rr / rDisc, S.lensK);
+    const x = cx + Math.cos(aDet) * lensed;
+    const y = cy + Math.sin(aDet) * lensed;
     const b = Math.exp(-age * 2.6) * (1 - age);
     if (b < 0.01) continue;
     S.glowPaint.setColor(S.hud);

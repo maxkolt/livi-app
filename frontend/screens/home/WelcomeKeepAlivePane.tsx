@@ -1,4 +1,4 @@
-import React, { memo, useEffect } from 'react';
+import React, { memo, useEffect, useState } from 'react';
 import { View, type StyleProp, type ViewStyle } from 'react-native';
 import { useSharedValue } from 'react-native-reanimated';
 import { PaneLiveContext, PaneVisibleContext } from '../../utils/paneVisibility';
@@ -50,7 +50,16 @@ type Props = {
   mode?: 'list' | 'block' | 'offscreen';
   children?: React.ReactNode;
   style?: StyleProp<ViewStyle>;
+  /**
+   * Token of data that should be reconciled while the pane is hidden. Without a token,
+   * hidden children stay frozen. Friends/Chat use it to prepare their first visible rows
+   * before a tab press without rerendering on unrelated Home state.
+   */
+  hiddenRevision?: unknown;
 };
+
+/** Let the visibility commit paint before a list expands its render window. */
+const LIVE_AFTER_SHOW_MS = 80;
 
 function paneStyle(visible: boolean, mode: NonNullable<Props['mode']>): ViewStyle {
   if (mode === 'block') return welcomeBlockPaneStyle(visible);
@@ -66,9 +75,17 @@ export const WelcomeKeepAlivePane = memo(
   function WelcomeKeepAlivePane({ visible, mode = 'list', children, style }: Props) {
     const base = paneStyle(visible, mode);
     const visibleValue = useSharedValue(visible);
+    // Once a pane has expanded its list window, keep it warm. Flipping this context back
+    // to false while hiding used to rerender the old list in the very same tab-switch commit.
+    const [live, setLive] = useState(visible);
     useEffect(() => {
       visibleValue.value = visible;
     }, [visible, visibleValue]);
+    useEffect(() => {
+      if (!visible || live) return;
+      const timer = setTimeout(() => setLive(true), LIVE_AFTER_SHOW_MS);
+      return () => clearTimeout(timer);
+    }, [live, visible]);
     return (
       <View
         style={style ? [base, style] : base}
@@ -77,8 +94,8 @@ export const WelcomeKeepAlivePane = memo(
         importantForAccessibility={visible ? 'auto' : 'no-hide-descendants'}
       >
         <PaneVisibleContext.Provider value={visibleValue}>
-          <PaneLiveContext.Provider value={visible}>
-            <DeferredHomeLayout live={visible}>{children}</DeferredHomeLayout>
+          <PaneLiveContext.Provider value={live}>
+            <DeferredHomeLayout live={live}>{children}</DeferredHomeLayout>
           </PaneLiveContext.Provider>
         </PaneVisibleContext.Provider>
       </View>
@@ -87,7 +104,7 @@ export const WelcomeKeepAlivePane = memo(
   (prev, next) => {
     if (prev.visible !== next.visible) return false;
     if (prev.mode !== next.mode) return false;
-    if (!next.visible) return true;
+    if (!next.visible) return Object.is(prev.hiddenRevision, next.hiddenRevision);
     return false;
   },
 );
