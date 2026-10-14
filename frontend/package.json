@@ -113,5 +113,14 @@
   "private": true,
   "overrides": {
     "@react-native/virtualized-lists": "0.79.5"
+  },
+  "expo": {
+    "autolinking": {
+      "android": {
+        "buildFromSource": [
+          "expo-av"
+        ]
+      }
+    }
   }
 }

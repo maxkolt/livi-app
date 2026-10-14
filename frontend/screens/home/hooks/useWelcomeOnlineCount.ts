@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { AppState } from 'react-native';
 import { API_BASE, onConnected, onWelcomePresence } from '../../../sockets/socket';
 import { shouldSkipHomeUiSettle } from '../../../utils/globalEvents';
@@ -56,18 +56,26 @@ function normalizePresencePeers(list: PresenceListItem[], excludeUserId?: string
   return out;
 }
 
+function samePeers(a: WelcomeBannerPeer[], b: WelcomeBannerPeer[]): boolean {
+  if (a.length !== b.length) return false;
+  return a.every(
+    (p, i) => p.id === b[i].id && p.name === b[i].name && p.avatarVer === b[i].avatarVer,
+  );
+}
+
 function applyPresenceList(
   list: PresenceListItem[],
   excludeUserId: string | null | undefined,
   setCount: (n: number) => void,
-  setPeers: (p: WelcomeBannerPeer[]) => void,
+  setPeers: Dispatch<SetStateAction<WelcomeBannerPeer[]>>,
   lastGoodRef: { current: number | null },
 ) {
   const peers = normalizePresencePeers(list, excludeUserId);
   const n = peers.length;
   lastGoodRef.current = n;
   setCount(n);
-  setPeers(peers);
+  // Тот же снимок (HTTP + socket после connect) не должен перерисовывать Home.
+  setPeers((prev) => (samePeers(prev, peers) ? prev : peers));
 }
 
 export function useWelcomeOnlineCount(enabled = true, excludeUserId?: string | null) {

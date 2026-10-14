@@ -437,7 +437,9 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       EndedCallIds.add(ctx, id)
       return
     }
-    LiviOutgoingCallService.start(ctx, id, toUserId, toNick)
+    // Вид вызова знает оверлей исходящего; без него — как видео (экран у уха не гасим).
+    val hasVideo = if (OutgoingCallOverlay.isVisible) OutgoingCallOverlay.currentHasVideo() else true
+    LiviOutgoingCallService.start(ctx, id, toUserId, toNick, hasVideo)
     Log.d(NAME, "notifyOutgoingCallId: LiviOutgoingCallService.start done")
   }
 

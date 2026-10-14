@@ -34,6 +34,7 @@ import { useLang } from '../../store/lang';
 import { useAppTheme } from '../../theme/ThemeProvider';
 import { isValidStream } from '../../utils/streamUtils';
 import { logger } from '../../utils/logger';
+import { logNavigationPerf, navigationPerfNow, nextNavigationPerfId } from '../../utils/navigationPerf';
 import socket, {
   getCurrentUserId,
   emitPresenceUpdateIfChanged,
@@ -1615,6 +1616,12 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       }
       try {
         if (navigation?.canGoBack?.()) {
+          const exitTrace = {
+            id: nextNavigationPerfId('random-exit'),
+            startedAt: navigationPerfNow(),
+          };
+          (global as any).__randomExitPerfTrace = exitTrace;
+          logNavigationPerf('random.exitPress', { id: exitTrace.id, source: 'hardwareBack' });
           navigation.goBack();
           return true;
         }
@@ -1644,6 +1651,31 @@ const RandomChat: React.FC<Props> = ({ route }) => {
             steps,
           });
         }
+        const trace = g.__searchPerfTrace;
+        if (trace && !trace.focusLogged) {
+          trace.focusLogged = true;
+          const focusAt = navigationPerfNow();
+          logNavigationPerf('random.focus', {
+            id: trace.id,
+            elapsedMs: Math.round((focusAt - trace.startedAt) * 10) / 10,
+          });
+          requestAnimationFrame(() => {
+            const frameAt = navigationPerfNow();
+            logNavigationPerf('random.frame1', {
+              id: trace.id,
+              elapsedMs: Math.round((frameAt - trace.startedAt) * 10) / 10,
+              focused: navigation?.isFocused?.() !== false,
+            });
+            requestAnimationFrame(() => {
+              const stableFrameAt = navigationPerfNow();
+              logNavigationPerf('random.frame2', {
+                id: trace.id,
+                elapsedMs: Math.round((stableFrameAt - trace.startedAt) * 10) / 10,
+                focused: navigation?.isFocused?.() !== false,
+              });
+            });
+          });
+        }
       } catch {}
       
       return () => {
@@ -1653,6 +1685,23 @@ const RandomChat: React.FC<Props> = ({ route }) => {
         }
         
         leavingRef.current = true;
+        try {
+          const exitTrace = (global as any).__randomExitPerfTrace;
+          if (exitTrace && !exitTrace.blurLogged) {
+            exitTrace.blurLogged = true;
+            logNavigationPerf('random.blur', {
+              id: exitTrace.id,
+              elapsedMs: Math.round((navigationPerfNow() - exitTrace.startedAt) * 10) / 10,
+            });
+            requestAnimationFrame(() => {
+              logNavigationPerf('random.exitFrame1', {
+                id: exitTrace.id,
+                elapsedMs:
+                  Math.round((navigationPerfNow() - exitTrace.startedAt) * 10) / 10,
+              });
+            });
+          }
+        } catch {}
         
         if (startedRef.current || loadingRef.current) {
           forceStopRandomChat();

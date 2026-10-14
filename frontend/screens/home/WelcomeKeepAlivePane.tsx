@@ -58,9 +58,6 @@ type Props = {
   hiddenRevision?: unknown;
 };
 
-/** Let the visibility commit paint before a list expands its render window. */
-const LIVE_AFTER_SHOW_MS = 80;
-
 function paneStyle(visible: boolean, mode: NonNullable<Props['mode']>): ViewStyle {
   if (mode === 'block') return welcomeBlockPaneStyle(visible);
   if (mode === 'offscreen') return visible ? { flex: 1, minHeight: 0 } : HIDDEN_OFFSCREEN;
@@ -78,13 +75,16 @@ export const WelcomeKeepAlivePane = memo(
     // Once a pane has expanded its list window, keep it warm. Flipping this context back
     // to false while hiding used to rerender the old list in the very same tab-switch commit.
     const [live, setLive] = useState(visible);
+    // A pane that has just become visible must receive the complete first list window in
+    // this render. Delaying `live` used to show an empty/partially revealed list for 80 ms,
+    // which looked like a content flash even though the pane itself was already mounted.
+    const effectiveLive = visible || live;
     useEffect(() => {
       visibleValue.value = visible;
     }, [visible, visibleValue]);
     useEffect(() => {
       if (!visible || live) return;
-      const timer = setTimeout(() => setLive(true), LIVE_AFTER_SHOW_MS);
-      return () => clearTimeout(timer);
+      setLive(true);
     }, [live, visible]);
     return (
       <View
@@ -94,8 +94,8 @@ export const WelcomeKeepAlivePane = memo(
         importantForAccessibility={visible ? 'auto' : 'no-hide-descendants'}
       >
         <PaneVisibleContext.Provider value={visibleValue}>
-          <PaneLiveContext.Provider value={live}>
-            <DeferredHomeLayout live={live}>{children}</DeferredHomeLayout>
+          <PaneLiveContext.Provider value={effectiveLive}>
+            <DeferredHomeLayout live={effectiveLive}>{children}</DeferredHomeLayout>
           </PaneLiveContext.Provider>
         </PaneVisibleContext.Provider>
       </View>

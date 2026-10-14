@@ -258,6 +258,15 @@ function getRandomChatScreen() {
   return Comp;
 }
 
+/** Stable lazy resolvers: native-stack can retain the resolved screen between App renders. */
+function getVideoCallScreen() {
+  return require('./screens/VideoCallScreen').default;
+}
+
+function getChatScreen() {
+  return require('./screens/ChatScreen').default;
+}
+
 // Звонки, для которых уже пришло call:ended по сокету. Не переходить на VideoCall по call:accepted для такого callId (избегаем мелькания и «произвольных» переходов).
 const endedCallIdsFromSocket = new Set<string>();
 const ENDED_CALL_IDS_TTL_MS = 120000;
@@ -2910,10 +2919,11 @@ function AppContent() {
     const activateAndroidKeepScreenOn = () => {
       if (Platform.OS === 'android') {
         try {
-          // Не перезапускать InCallManager во время звонка — start(media) сбрасыает BT/маршрут.
-          if (!isOngoingCallSession()) {
-            InCallManager.start({ media: 'video', ringback: '' });
-          }
+          // Keep-awake не должен поднимать аудиосессию. В частности, простой вход на
+          // RandomChat раньше вызывал InCallManager.start(), который на Samsung синхронно
+          // ждал Bluetooth profile около двух секунд и блокировал главный UI-поток.
+          // Аудиосессию запускает useAudioRouting только после фактического начала звонка;
+          // здесь достаточно window flag + expo-keep-awake.
           (InCallManager as any).setKeepScreenOn?.(true);
           // Также активируем expo-keep-awake для Android (дополнительная защита)
           if (activateKeepAwakeAsync) {
@@ -4916,7 +4926,7 @@ function AppContent() {
               />
               <Stack.Screen
                 name="VideoCall"
-                getComponent={() => require('./screens/VideoCallScreen').default}
+                getComponent={getVideoCallScreen}
                 getId={({ params }) => {
                   const cid = params?.callId != null ? String(params.callId).trim() : '';
                   return cid ? `videocall-${cid}` : undefined;
@@ -4932,7 +4942,7 @@ function AppContent() {
               />
               <Stack.Screen
                 name="Chat"
-                getComponent={() => require('./screens/ChatScreen').default}
+                getComponent={getChatScreen}
                 options={{
                   animation: 'fade',
                   animationDuration: 120,

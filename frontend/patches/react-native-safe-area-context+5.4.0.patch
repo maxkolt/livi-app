@@ -1,8 +1,14 @@
 diff --git a/android/src/main/java/com/th3rdwave/safeareacontext/SafeAreaView.kt b/android/src/main/java/com/th3rdwave/safeareacontext/SafeAreaView.kt
-index 0000000..1111111 100644
 --- a/android/src/main/java/com/th3rdwave/safeareacontext/SafeAreaView.kt
 +++ b/android/src/main/java/com/th3rdwave/safeareacontext/SafeAreaView.kt
-@@ -11,7 +11,7 @@ import com.facebook.react.views.view.ReactViewGroup
+@@ -5,13 +5,14 @@
+ import android.view.View
+ import android.view.ViewTreeObserver
+ import com.facebook.react.bridge.Arguments
++import com.facebook.react.uimanager.SafeAreaViewHierarchyLock
+ import com.facebook.react.uimanager.StateWrapper
+ import com.facebook.react.uimanager.UIManagerModule
+ import com.facebook.react.views.view.ReactViewGroup
  import java.util.concurrent.locks.ReentrantLock
  import kotlin.concurrent.withLock
  
@@ -11,3 +17,66 @@ index 0000000..1111111 100644
  
  class SafeAreaView(context: Context?) :
      ReactViewGroup(context), ViewTreeObserver.OnPreDrawListener {
+@@ -58,7 +59,11 @@
+           reactContext.runOnNativeModulesQueueThread {
+             uiManager.uiImplementation.dispatchViewUpdates(-1)
+           }
+-          waitForReactLayout()
++          // Inside a UI operation this thread holds the view hierarchy monitor, which the native
++          // modules thread needs for onBatchComplete: the wait would only end at the timeout.
++          if (!SafeAreaViewHierarchyLock.isHeldByCurrentThread(uiManager)) {
++            waitForReactLayout()
++          }
+         }
+       }
+     }
+@@ -136,9 +141,20 @@
+     super.onAttachedToWindow()
+     mProviderView = findProvider()
+     mProviderView?.viewTreeObserver?.addOnPreDrawListener(this)
+-    maybeUpdateInsets()
++    // react-native-screens attaches a pushed screen from inside a UI operation. Applying the
++    // insets there cannot wait for layout (see updateInsets), so let onPreDraw apply them: it runs
++    // outside the operation, waits safely and skips the frame with the stale layout.
++    if (!holdsViewHierarchyLock()) {
++      maybeUpdateInsets()
++    }
+   }
+ 
++  private fun holdsViewHierarchyLock(): Boolean {
++    if (mStateWrapper != null) return false
++    val uiManager = getReactContext(this).getNativeModule(UIManagerModule::class.java) ?: return false
++    return SafeAreaViewHierarchyLock.isHeldByCurrentThread(uiManager)
++  }
++
+   override fun onDetachedFromWindow() {
+     super.onDetachedFromWindow()
+     mProviderView?.viewTreeObserver?.removeOnPreDrawListener(this)
+diff --git a/android/src/main/java/com/facebook/react/uimanager/SafeAreaViewHierarchyLock.java b/android/src/main/java/com/facebook/react/uimanager/SafeAreaViewHierarchyLock.java
+new file mode 100644
+--- /dev/null
++++ b/android/src/main/java/com/facebook/react/uimanager/SafeAreaViewHierarchyLock.java
+@@ -0,0 +1,23 @@
++package com.facebook.react.uimanager;
++
++/**
++ * Lives in React Native's package to reach the package-private view hierarchy manager (the same
++ * trick as Reanimated's ReanimatedUIManager).
++ *
++ * <p>Paper runs every UI operation (createView, manageChildren, updateProperties) while holding the
++ * NativeViewHierarchyManager monitor, and UIManagerModule.onBatchComplete on the native modules
++ * thread takes the same monitor. SafeAreaView must not block the UI thread waiting for that thread
++ * while the monitor is held, or both threads wait for each other until the timeout.
++ */
++public final class SafeAreaViewHierarchyLock {
++  private SafeAreaViewHierarchyLock() {}
++
++  public static boolean isHeldByCurrentThread(UIManagerModule uiManager) {
++    try {
++      return Thread.holdsLock(
++          uiManager.getUIImplementation().getUIViewOperationQueue().getNativeViewHierarchyManager());
++    } catch (Throwable ignored) {
++      return false;
++    }
++  }
++}

@@ -1,5 +1,5 @@
 // screens/HomeScreen.tsx
-import React, { useEffect, useState, useCallback, useMemo, useRef, startTransition } from 'react';
+import React, { useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef, startTransition } from 'react';
 import {
   BackHandler,
   StyleSheet,
@@ -9,7 +9,6 @@ import {
   View,
   Dimensions,
   Platform,
-  type LayoutChangeEvent,
   ActionSheetIOS,
   Animated,
   AppState,
@@ -86,6 +85,8 @@ import {
 import {
   HomeWelcomeTabBar,
   welcomeTabBarBottomGap,
+  welcomeTabBarContentHeight,
+  type WelcomeTabPressMeta,
   type WelcomeTabId,
 } from './home/HomeWelcomeTabBar';
 import { FramesStoreHost } from './home/WelcomeCrownButton';
@@ -107,6 +108,7 @@ import {
   isWelcomeTabletLayout,
 } from './home/constants';
 import { useStableSafeAreaInsets } from './home/useStableSafeAreaInsets';
+import { logNavigationPerf, navigationPerfNow, nextNavigationPerfId } from '../utils/navigationPerf';
 import { BlurListSource, BlurSourceFill } from '../components/BackdropBlur';
 import { GLASS_DOCK_TOP_PAD, GLASS_SEGMENT_PAD, WelcomeGlassDock, WelcomeGlassTop } from './home/WelcomeGlassHeader';
 import { recordCallLog, recordCancelledCall, recordNoAnswerCall, requestCallLogSoftUi, cancelPendingCallLogNotify, flushCallLogUi, forceCallLogUiNow, loadCallLog } from './home/callLog';
@@ -456,27 +458,10 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     homeInsetsByOrientationRef.current[tabBarOrientationKey] ?? rawHomeInsets;
   const tabBarTablet = isWelcomeTabletLayout(layoutWidth, layoutHeight);
   const tabBarCompactLandscape = tabBarLandscape && !tabBarTablet;
-  /**
-   * Высота содержимого известна заранее из HomeWelcomeTabBar. Нельзя переносить
-   * измерение предыдущей ориентации: Android сначала присылал 120.5 dp для уже
-   * горизонтального окна, затем 60.4 dp — из-за этого вся сцена меняла высоту.
-   */
+  /** Exact shared geometry: no estimate -> onLayout correction -> content jump. */
   const tabBarBottomGap = welcomeTabBarBottomGap(homeInsets.bottom, tabBarTablet, tabBarCompactLandscape);
-  const estimatedTabBarH = (tabBarTablet ? 76 : tabBarCompactLandscape ? 50.5 : 66.5) + tabBarBottomGap;
-  const [tabBarHeights, setTabBarHeights] = useState<{
-    portrait?: number;
-    landscape?: number;
-  }>({});
-  const tabBarH = tabBarHeights[tabBarOrientationKey] ?? estimatedTabBarH;
-  const onTabBarLayout = useCallback((e: LayoutChangeEvent) => {
-    const h = e.nativeEvent.layout.height;
-    if (!(h > 0) || Math.abs(h - estimatedTabBarH) > 16) return;
-    setTabBarHeights((prev) => {
-      const current = prev[tabBarOrientationKey];
-      if (current != null && Math.abs(current - h) < 0.5) return prev;
-      return { ...prev, [tabBarOrientationKey]: h };
-    });
-  }, [estimatedTabBarH, tabBarOrientationKey]);
+  const tabBarH =
+    welcomeTabBarContentHeight(tabBarTablet, tabBarCompactLandscape) + tabBarBottomGap;
   const [searchTopBlockBottom, setSearchTopBlockBottom] = useState<number | null>(null);
   const onSearchTopBlockBottom = useCallback((bottom: number | null) => {
     setSearchTopBlockBottom((prev) =>
@@ -490,6 +475,59 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const [welcomeActiveTab, setWelcomeActiveTab] = useState<WelcomeTabId>('search');
   const welcomeActiveTabRef = useRef<WelcomeTabId>('search');
   welcomeActiveTabRef.current = welcomeActiveTab;
+  useLayoutEffect(() => {
+    const g = global as any;
+    const trace = g.__welcomeTabPerfTrace as
+      | {
+          id: string;
+          target: WelcomeTabId;
+          from: WelcomeTabId;
+          startedAt: number;
+          mountedBefore: boolean;
+          commitLogged?: boolean;
+        }
+      | undefined;
+    if (!trace || trace.target !== welcomeActiveTab || trace.commitLogged) return;
+    trace.commitLogged = true;
+    const commitAt = navigationPerfNow();
+    logNavigationPerf('tab.commit', {
+      id: trace.id,
+      from: trace.from,
+      target: trace.target,
+      elapsedMs: Math.round((commitAt - trace.startedAt) * 10) / 10,
+      mountedBefore: trace.mountedBefore,
+    });
+    requestAnimationFrame(() => {
+      const frameAt = navigationPerfNow();
+      logNavigationPerf('tab.frame1', {
+        id: trace.id,
+        target: trace.target,
+        active: welcomeActiveTabRef.current,
+        elapsedMs: Math.round((frameAt - trace.startedAt) * 10) / 10,
+        superseded: welcomeActiveTabRef.current !== trace.target,
+      });
+      requestAnimationFrame(() => {
+        const stableFrameAt = navigationPerfNow();
+        logNavigationPerf('tab.frame2', {
+          id: trace.id,
+          target: trace.target,
+          active: welcomeActiveTabRef.current,
+          elapsedMs: Math.round((stableFrameAt - trace.startedAt) * 10) / 10,
+          superseded: welcomeActiveTabRef.current !== trace.target,
+        });
+      });
+    });
+    InteractionManager.runAfterInteractions(() => {
+      const settledAt = navigationPerfNow();
+      logNavigationPerf('tab.interactionsSettled', {
+        id: trace.id,
+        target: trace.target,
+        active: welcomeActiveTabRef.current,
+        elapsedMs: Math.round((settledAt - trace.startedAt) * 10) / 10,
+        superseded: welcomeActiveTabRef.current !== trace.target,
+      });
+    });
+  }, [welcomeActiveTab]);
   // Effects/data refreshes are non-visual work. Start them only after the selected pane
   // has had time to paint; tying them directly to welcomeActiveTab made the tap commit heavy.
   const [welcomeSettledTab, setWelcomeSettledTab] = useState<WelcomeTabId>('search');
@@ -4043,9 +4081,12 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
             return String(it?._id ?? it);
           }).filter((id: string | null): id is string => id !== null));
           
+          // Тот же массив, если online ни у кого не поменялся: presence приходит пачками
+          // после connect, и каждый новый массив перерисовывал весь Home и строки списков.
           setFriends((prev) => {
             const now = Date.now();
-            return prev.map((f) => {
+            let changed = false;
+            const next = prev.map((f) => {
               const id = String(f.id);
               const inSet = onlineSet.has(id);
               if (inSet) {
@@ -4055,6 +4096,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
                   pendingPresenceOfflineTimersRef.current.delete(id);
                 }
                 friendLastOnlineTrueAtRef.current.set(id, now);
+                if (f.online) return f;
+                changed = true;
                 return { ...f, online: true };
               }
               if (!f.online) {
@@ -4072,8 +4115,9 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
                 }, PRESENCE_OFFLINE_DEBOUNCE_MS);
                 pendingPresenceOfflineTimersRef.current.set(id, t);
               }
-              return { ...f, online: true };
+              return f;
             });
+            return changed ? next : prev;
           });
         } catch (e) {
           console.warn('[onPresenceUpdate] Error processing array data:', e, { dataType: typeof data, isArray: Array.isArray(data) });
@@ -4084,13 +4128,15 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         const busy = data.busy !== undefined ? !!data.busy : undefined;
         if (busy !== undefined) {
           setFriends((prev) => {
+            let changed = false;
             const updated = prev.map((f) => {
-              if (String(f.id) === userId) {
+              if (String(f.id) === userId && f.isBusy !== busy) {
+                changed = true;
                 return { ...f, isBusy: busy };
               }
               return f;
             });
-            return updated;
+            return changed ? updated : prev;
           });
         }
       }
@@ -5358,13 +5404,42 @@ const handleClearNick = useCallback(async () => {
     incomingCallScreen.visible ||
     isDirectCallSessionLive(global as any);
   const handleWelcomeTabPress = useCallback(
-    (tabId: WelcomeTabId) => {
+    (tabId: WelcomeTabId, pressMeta?: WelcomeTabPressMeta) => {
       const g = global as any;
       const cancelAt = Number(g.__lastOutgoingCancelAtRef?.current || 0);
       const t0 = Date.now();
+      const perfStartedAt = navigationPerfNow();
       const alreadyMounted = mountedWelcomeTabs.has(tabId);
+      const trace = {
+        id: nextNavigationPerfId('tab'),
+        target: tabId,
+        from: welcomeActiveTab,
+        startedAt: perfStartedAt,
+        mountedBefore: alreadyMounted,
+      };
+      g.__welcomeTabPerfTrace = trace;
+      const nativeTimestamp = Number(pressMeta?.nativeTimestamp);
+      const nativeToJsMs = Number.isFinite(nativeTimestamp)
+        ? perfStartedAt - nativeTimestamp
+        : null;
+      logNavigationPerf('tab.press', {
+        id: trace.id,
+        from: trace.from,
+        target: tabId,
+        source: pressMeta?.source ?? 'unknown',
+        mountedBefore: alreadyMounted,
+        nativeToJsMs:
+          nativeToJsMs != null && Math.abs(nativeToJsMs) < 60_000
+            ? Math.round(nativeToJsMs * 10) / 10
+            : null,
+      });
       // Тот же таб — не setState (лишний commit во время settle после cancel).
       if (welcomeActiveTab === tabId && alreadyMounted) {
+        logNavigationPerf('tab.noop', {
+          id: trace.id,
+          target: tabId,
+          elapsedMs: Math.round((navigationPerfNow() - perfStartedAt) * 10) / 10,
+        });
         logger.info('[welcome-tab] handlePress noop same tab', {
           tabId,
           sinceCancelMs: cancelAt > 0 ? t0 - cancelAt : null,
@@ -5383,24 +5458,12 @@ const handleClearNick = useCallback(async () => {
         callingVisible: callingVisibleRef.current,
         outgoingInFlight: !!(g.__outgoingStartInFlightRef?.current),
       });
-      // Сначала только active tab (дешёвый commit / подсветка навбара).
-      // Тяжёлый mount pane — следующим кадром после cancel, иначе first-mount глотает paint.
-      setWelcomeActiveTab(tabId);
+      // Mount and visibility are committed together. An urgent active-tab commit followed
+      // by a transition used to expose the empty placeholder for one or more frames.
       if (!alreadyMounted) {
-        const recentCancel = cancelAt > 0 && t0 - cancelAt < 8000;
-        const deferMount =
-          tabId !== 'search' && (recentCancel || shouldSkipHomeUiSettle());
-        if (deferMount) {
-          // Urgent: подсветка таба. Heavy mount — transition (не блокирует paint).
-          startTransition(() => {
-            ensureWelcomeTabMounted(tabId);
-          });
-          // Fallback если transition долго ждёт после cancel.
-          setTimeout(() => ensureWelcomeTabMounted(tabId), 48);
-        } else {
-          ensureWelcomeTabMounted(tabId);
-        }
+        ensureWelcomeTabMounted(tabId);
       }
+      setWelcomeActiveTab(tabId);
       // Flush stale calling — не на жесте: setState конкурирует с paint вкладки.
       const sinceCancel = cancelAt > 0 ? t0 - cancelAt : 99999;
       if (sinceCancel > 5000) {
@@ -5470,6 +5533,20 @@ const handleClearNick = useCallback(async () => {
     });
   }, [askConfirm, handleWipeAccount, lang]);
   const searchNavLockUntilRef = useRef(0);
+  const handlePrepareStartSearch = useCallback(() => {
+    const startedAt = Date.now();
+    try {
+      // Native Stack reuses this preloaded route on navigate. Its React/native tree is
+      // built under the 500 ms CTA effect instead of after the effect has disappeared.
+      navigation.preload('RandomChat', { returnTo: { name: 'Home' } });
+      logger.info('[search-nav] home.preloadRandomChat', { dispatchMs: Date.now() - startedAt });
+    } catch (error) {
+      // Navigation still works through handleStartSearch if preload is unavailable.
+      logger.warn('[search-nav] home.preloadRandomChat failed', {
+        error: String((error as Error)?.message ?? error),
+      });
+    }
+  }, [navigation]);
   const handleStartSearch = useCallback(() => {
     const now = Date.now();
     try {
@@ -5737,6 +5814,7 @@ const handleClearNick = useCallback(async () => {
             bannerPeers={welcomeBannerPeers}
             centerProfile={centerProfile}
             hasActiveCallForSearch={hasActiveCallForSearch}
+            onPrepareStartSearch={handlePrepareStartSearch}
             onStartSearch={handleStartSearch}
             splashGone={!showSplashOverlay}
             onRadarReady={handleSearchRadarReady}
@@ -5886,7 +5964,6 @@ const handleClearNick = useCallback(async () => {
       <View
         pointerEvents="box-none"
         style={{ position: 'absolute', left: insets.left, right: insets.right, bottom: 0 }}
-        onLayout={onTabBarLayout}
       >
       <HomeWelcomeTabBar
           safeAreaInsets={homeInsets}

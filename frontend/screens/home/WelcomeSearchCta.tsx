@@ -34,6 +34,7 @@ import {
 import FitText from '../../components/FitText';
 import { useDigitalRegularFont } from './brandFont';
 import { logger } from '../../utils/logger';
+import { logNavigationPerf, navigationPerfNow, nextNavigationPerfId } from '../../utils/navigationPerf';
 
 const BORDER_W = 1;
 /**
@@ -187,6 +188,8 @@ export function welcomeSearchCtaHeight(tabletLayout: boolean, compact: boolean):
 
 type WelcomeSearchCtaProps = {
   label: string;
+  /** Starts mounting the destination while the UI-thread tap effect is still running. */
+  onPressPrepare?: () => void;
   onPress: () => void;
   disabled?: boolean;
   onDisabledPress?: () => void;
@@ -198,6 +201,7 @@ type WelcomeSearchCtaProps = {
 
 export function WelcomeSearchCta({
   label,
+  onPressPrepare,
   onPress,
   disabled = false,
   onDisabledPress,
@@ -268,6 +272,13 @@ export function WelcomeSearchCta({
       // Только первый focus/onStateChange после CTA — иначе поздние remount/focus шумят (200–1100ms).
       g.__searchNavFocusLogged = false;
       g.__searchNavStateChangeLogged = false;
+      const trace = g.__searchPerfTrace;
+      if (trace) {
+        logNavigationPerf('random.navigateRequested', {
+          id: trace.id,
+          touchElapsedMs: Math.round((navigationPerfNow() - trace.startedAt) * 10) / 10,
+        });
+      }
     } catch {}
     logger.info('[search-nav] cta.firePress', { t0 });
     onPress();
@@ -280,10 +291,30 @@ export function WelcomeSearchCta({
 
   // Переход — с UI-потока по ходу эффекта; задержку от касания пишем в лог.
   const touchAtRef = useRef(0);
-  const markTouch = useCallback(() => {
+  const prepareFromEffect = useCallback(() => {
     touchAtRef.current = Date.now();
-  }, []);
+    try {
+      const g = global as any;
+      const trace = {
+        id: nextNavigationPerfId('random'),
+        startedAt: navigationPerfNow(),
+        wallStartedAt: touchAtRef.current,
+      };
+      g.__searchPerfTrace = trace;
+      logNavigationPerf('random.touch', { id: trace.id });
+    } catch {}
+    onPressPrepare?.();
+  }, [onPressPrepare]);
   const navigateFromEffect = useCallback(() => {
+    try {
+      const trace = (global as any).__searchPerfTrace;
+      if (trace) {
+        logNavigationPerf('random.effectComplete', {
+          id: trace.id,
+          elapsedMs: Math.round((navigationPerfNow() - trace.startedAt) * 10) / 10,
+        });
+      }
+    } catch {}
     logger.info('[search-nav] cta.effectNavigate', { sinceTouchMs: Date.now() - touchAtRef.current });
     pressArmed.current = false;
     firePress();
@@ -305,7 +336,9 @@ export function WelcomeSearchCta({
           // Эффект или его navigate уже идут — второй тап не открывает чат дважды.
           if (effectInFlight.value) return;
           effectInFlight.value = true;
-          runOnJS(markTouch)();
+          // Mount RandomChat behind the current screen during the 500 ms impulse.
+          // The final navigate then promotes an already prepared native screen.
+          runOnJS(prepareFromEffect)();
           cancelAnimation(head);
           cancelAnimation(glow);
           head.value = 0;
@@ -324,7 +357,7 @@ export function WelcomeSearchCta({
             withTiming(0, { duration: CURRENT_FADE_MS, easing: Easing.out(Easing.quad) }),
           );
         }),
-    [disabled, effectInFlight, glow, head, markTouch, navigateFromEffect, triggerBlocked],
+    [disabled, effectInFlight, glow, head, navigateFromEffect, prepareFromEffect, triggerBlocked],
   );
 
   // TalkBack: двойной тап по кнопке — то же нажатие.

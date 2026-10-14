@@ -34,6 +34,8 @@ class OutgoingCallActivity : AppCompatActivity() {
     private var callId: String = ""
     private var toUserId: String = ""
     private var toNick: String = ""
+    /** Видео или аудио текущий вызов — сервис дозвона гасит экран у уха только для аудио. */
+    private var callHasVideo: Boolean = true
     /** Отмена с кнопки X: Main уже запланирован без debounce — не дублировать в finish(). */
     private var mainReturnScheduledForUserCancel = false
     /** Внутренний переход обратно в MainActivity не должен трактоваться как Home/Recents. */
@@ -94,16 +96,17 @@ class OutgoingCallActivity : AppCompatActivity() {
         findViewById<TextView>(R.id.callee_name).text = if (toNick.isNotEmpty()) toNick else AppLocale.str(applicationContext, R.string.outgoing_call_title)
         val subtitleView = findViewById<TextView>(R.id.call_subtitle)
         val hasVideo = intent.getBooleanExtra(EXTRA_HAS_VIDEO, true)
+        callHasVideo = hasVideo
         startDotsAnimation(subtitleView, hasVideo)
 
         if (callId.isNotEmpty()) {
-            LiviOutgoingCallService.start(this, callId, toUserId, toNick)
+            LiviOutgoingCallService.start(this, callId, toUserId, toNick, callHasVideo)
         } else {
             // Сразу ringback, не ждать call:initiate — иначе cancel→redial «думает» до notifyOutgoingCallId.
             val provisionalId = "pending_${System.currentTimeMillis()}"
             callId = provisionalId
             LiviOngoingCallHelper.setOutgoingCall(this, provisionalId, toUserId, toNick)
-            LiviOutgoingCallService.start(this, provisionalId, toUserId, toNick)
+            LiviOutgoingCallService.start(this, provisionalId, toUserId, toNick, callHasVideo)
             callIdReadyReceiver = object : BroadcastReceiver() {
                 override fun onReceive(context: Context?, intent: Intent?) {
                     val id = intent?.getStringExtra(EXTRA_CALL_ID) ?: return
@@ -119,7 +122,7 @@ class OutgoingCallActivity : AppCompatActivity() {
                             if (prev.startsWith("pending_")) {
                                 LiviOutgoingCallService.stop(this@OutgoingCallActivity, prev)
                             }
-                            LiviOutgoingCallService.start(this@OutgoingCallActivity, id, toUserId, toNick)
+                            LiviOutgoingCallService.start(this@OutgoingCallActivity, id, toUserId, toNick, callHasVideo)
                         }
                         callIdReadyReceiver?.let { try { unregisterReceiver(it) } catch (_: Exception) {} }
                         callIdReadyReceiver = null
@@ -231,6 +234,7 @@ class OutgoingCallActivity : AppCompatActivity() {
         val newToUserId = intent.getStringExtra(EXTRA_TO_USER_ID) ?: ""
         var newToNick = intent.getStringExtra(EXTRA_TO_NICK) ?: ""
         val newHasVideo = intent.getBooleanExtra(EXTRA_HAS_VIDEO, true)
+        callHasVideo = newHasVideo
         // Не затирать уже показанный ник пустым extra (часто при возврате из уведомления).
         if (newToNick.isEmpty()) {
             newToNick = toNick
@@ -252,7 +256,7 @@ class OutgoingCallActivity : AppCompatActivity() {
             callIdEmptyTimeoutRunnable = null
             callIdReadyReceiver?.let { try { unregisterReceiver(it) } catch (_: Exception) {} }
             callIdReadyReceiver = null
-            LiviOutgoingCallService.start(this, newCallId, toUserId, toNick)
+            LiviOutgoingCallService.start(this, newCallId, toUserId, toNick, callHasVideo)
         } else {
             // Replace/redial: сразу provisional ringback, как в onCreate.
             callIdEmptyTimeoutRunnable?.let { timeoutHandler.removeCallbacks(it) }
@@ -262,7 +266,7 @@ class OutgoingCallActivity : AppCompatActivity() {
             val provisionalId = "pending_${System.currentTimeMillis()}"
             callId = provisionalId
             LiviOngoingCallHelper.setOutgoingCall(this, provisionalId, toUserId, toNick)
-            LiviOutgoingCallService.start(this, provisionalId, toUserId, toNick)
+            LiviOutgoingCallService.start(this, provisionalId, toUserId, toNick, callHasVideo)
             callIdReadyReceiver = object : BroadcastReceiver() {
                 override fun onReceive(context: Context?, rcvIntent: Intent?) {
                     val id = rcvIntent?.getStringExtra(EXTRA_CALL_ID) ?: return
@@ -276,7 +280,7 @@ class OutgoingCallActivity : AppCompatActivity() {
                             if (prev.startsWith("pending_")) {
                                 LiviOutgoingCallService.stop(this@OutgoingCallActivity, prev)
                             }
-                            LiviOutgoingCallService.start(this@OutgoingCallActivity, id, toUserId, toNick)
+                            LiviOutgoingCallService.start(this@OutgoingCallActivity, id, toUserId, toNick, callHasVideo)
                         }
                         callIdReadyReceiver?.let { try { unregisterReceiver(it) } catch (_: Exception) {} }
                         callIdReadyReceiver = null

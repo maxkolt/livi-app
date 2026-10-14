@@ -210,7 +210,11 @@ class MainActivity : ReactActivity() {
   private var leaveHintPiPEnterRunnable: Runnable? = null
   /** Анти-реэнтри: сразу после выхода из system PiP игнорируем ложный onUserLeaveHint этого же transition. */
   private var suppressPiPReenterUntilMs = 0L
-  /** Системный PiP по leaveHint, но не пока открыты «Недавние». */
+  /** Снятие паузы после разворота из PiP: по фокусу окна или запасным таймером. */
+  private var pipReenterGuardEndRunnable: Runnable? = null
+  /** Разворот из PiP ещё ждёт фокуса окна, чтобы досрочно закончить паузу. */
+  private var pipReenterGuardAwaitingFocus = false
+  /** Без звонка: открытые «Недавние» глушат system PiP (со звонком PiP входит сразу, см. recentapps). */
   private var suppressSystemPiPOnLeaveHintUntilMs = 0L
   /** Пользователь в overview Recents — PiP только после ухода в другое приложение / на Home (onStop). */
   private var inRecentsOverview = false
@@ -747,6 +751,32 @@ class MainActivity : ReactActivity() {
     suppressPiPReenterUntilMs = 0L
   }
 
+  /** (Пере)назначить конец паузы после разворота из PiP; предыдущий срок отменяется. */
+  private fun schedulePiPReenterGuardEnd(delayMs: Long, source: String) {
+    pipReenterGuardEndRunnable?.let { pipHandler.removeCallbacks(it) }
+    val end = Runnable { endPiPReenterGuard(source) }
+    pipReenterGuardEndRunnable = end
+    pipHandler.postDelayed(end, delayMs)
+  }
+
+  /** Конец паузы: снова разрешить вход в PiP по Home / «Недавним», если звонок ещё идёт. */
+  private fun endPiPReenterGuard(source: String) {
+    pipReenterGuardEndRunnable?.let { pipHandler.removeCallbacks(it) }
+    pipReenterGuardEndRunnable = null
+    pipReenterGuardAwaitingFocus = false
+    suppressPiPReenterUntilMs = 0L
+    try {
+      if (isInPictureInPictureMode || LiviAppModule.getEndingCallInProgress()) return
+      if (LiviAppModule.isActiveCallForegroundRunning()) {
+        LiviAppModule.setPiPOnLeaveHintEnabled(true)
+        // Не форсируем logo: иначе следующий Home/Back входит в лого до AboutToEnter,
+        // даже когда peer/local cam уже on. JS sync держит placeholder truth.
+        syncSystemPiPAutoEnterParams(true)
+      }
+      android.util.Log.i("MainActivity", "PiP re-enter guard ended ($source)")
+    } catch (_: Exception) {}
+  }
+
   /** LiviAppModule при setEndingCallInProgress(true) — отменить отложенный вход в PiP после goBack. */
   internal fun cancelPendingPiPEnterAttemptsForCallTeardown() {
     cancelPendingPiPEnterAttempts()
@@ -1020,6 +1050,11 @@ class MainActivity : ReactActivity() {
       // restoreNavigationBarVisibility() показывает системные кнопки, после чего
       // ещё раз возвращаем прозрачные бары и layout под ними.
       EdgeToEdgeHelper.apply(this)
+      // Окно развёрнуто из PiP и в фокусе: ложный hint уже позади — сократить паузу с 3 с.
+      if (pipReenterGuardAwaitingFocus && !isInPictureInPictureMode) {
+        pipReenterGuardAwaitingFocus = false
+        schedulePiPReenterGuardEnd(PIP_REENTER_GUARD_AFTER_FOCUS_MS, "window_focus")
+      }
     }
   }
 
@@ -1254,25 +1289,18 @@ class MainActivity : ReactActivity() {
       if (!isInPictureInPictureMode) {
         hideSystemPiPBackdropForCapture()
         // На части устройств сразу после разворота из PiP прилетает ложный onUserLeaveHint и
-        // может повторно увести экран в PiP. Держим короткое окно anti re-enter.
-        suppressPiPReenterUntilMs = System.currentTimeMillis() + 3000L
+        // может повторно увести экран в PiP. Держим окно anti re-enter до конца перехода.
+        suppressPiPReenterUntilMs = System.currentTimeMillis() + PIP_REENTER_GUARD_MAX_MS
         // Сразу отключаем вход в PiP по onUserLeaveHint — на части устройств onUserLeaveHint
         // приходит во время перехода PiP→fullscreen до onResume; иначе приложение снова уходит в PiP.
         LiviAppModule.setPiPOnLeaveHintEnabled(false)
         try {
           syncSystemPiPAutoEnterParams(false)
         } catch (_: Exception) {}
-        pipHandler.postDelayed({
-          try {
-            if (isInPictureInPictureMode || LiviAppModule.getEndingCallInProgress()) return@postDelayed
-            if (LiviAppModule.isActiveCallForegroundRunning()) {
-              LiviAppModule.setPiPOnLeaveHintEnabled(true)
-              // Не форсируем logo: иначе следующий Home/Back входит в лого до AboutToEnter,
-              // даже когда peer/local cam уже on. JS sync держит placeholder truth.
-              syncSystemPiPAutoEnterParams(true)
-            }
-          } catch (_: Exception) {}
-        }, 3200L)
+        // Пауза заканчивается вскоре после фокуса окна (onWindowFocusChanged), а не через 3 с:
+        // фокус приходит после onResume, ложный hint — до него. Таймер — предел для OEM без фокуса.
+        pipReenterGuardAwaitingFocus = true
+        schedulePiPReenterGuardEnd(PIP_REENTER_REARM_FALLBACK_MS, "fallback_timer")
         // Различие «развернуть» (стрелки) и «закрыть» (X): при развороте приходит onResume, при закрытии — нет.
         // Ставим флаг и таймаут: если до таймаута придёт onResume — шлём SystemPiPExpanded, иначе EndCallFromPiP.
         // expandedEmittedForPipExit предотвращает EndCallFromPiP, если мы уже отправили expand (на части устройств onResume приходит после onPictureInPictureModeChanged).
@@ -1426,7 +1454,18 @@ class MainActivity : ReactActivity() {
             }
           }
           "recentapps" -> {
-            markRecentsOverviewActive("recentapps")
+            // «Недавние» во время звонка → system PiP, как по Home. Samsung (One UI 8) при
+            // «Недавних» не вызывает onUserLeaveHint, а onStop приходит ещё внутри overview,
+            // когда входить уже поздно. Активити остаётся resumed ~0.7 с анимации — входим сейчас.
+            if (shouldArmSystemPiPEnter()) {
+              clearRecentsOverviewFlag("recentapps_call")
+              currentHomePiPTraceId = "hp_${System.currentTimeMillis()}"
+              homePiPEnterAttemptSeq = 0
+              homePiPTrace("native_recents_call") {}
+              beginSystemPiPEnterSequence("recentapps")
+            } else {
+              markRecentsOverviewActive("recentapps")
+            }
           }
         }
       }
@@ -1461,6 +1500,9 @@ class MainActivity : ReactActivity() {
     cancelPendingPiPEnterAttempts()
     clearRecentsSuppressRunnable?.let { pipHandler.removeCallbacks(it) }
     clearRecentsSuppressRunnable = null
+    pipReenterGuardEndRunnable?.let { pipHandler.removeCallbacks(it) }
+    pipReenterGuardEndRunnable = null
+    pipReenterGuardAwaitingFocus = false
     inRecentsOverview = false
     suppressSystemPiPOnLeaveHintUntilMs = 0L
     homeKeyForPiPReceiver?.let {
@@ -1641,6 +1683,16 @@ class MainActivity : ReactActivity() {
     /** Ждём recentapps после leaveHint (Samsung/Pixel: broadcast часто после hint). */
     private const val RECENTS_DETECT_DELAY_MS = 400L
     private const val PIP_ENTER_DEDUP_MS = 2500L
+    /**
+     * Защита от ложного onUserLeaveHint при развороте из PiP: он приходит до onResume, фокус
+     * окна — сразу после onResume (~0.1 с от начала разворота, A35). Анимация разворота идёт
+     * ~0.65 с, поэтому пауза держится ещё столько после фокуса и покрывает переход целиком.
+     */
+    private const val PIP_REENTER_GUARD_AFTER_FOCUS_MS = 600L
+    /** Верхний предел паузы, если фокус после разворота не пришёл (OEM без onWindowFocusChanged). */
+    private const val PIP_REENTER_GUARD_MAX_MS = 3000L
+    /** Повторное включение входа в PiP по таймеру — чуть позже предела паузы. */
+    private const val PIP_REENTER_REARM_FALLBACK_MS = 3200L
     private val PIP_ENTER_RETRY_DELAYS_MS =
       longArrayOf(16L, 48L, 96L, 160L, 280L, 450L, 700L, 1100L, 1600L)
     /** После последнего ретрая — если вход так и не удался, снять isPiPEnterAttemptRunning.

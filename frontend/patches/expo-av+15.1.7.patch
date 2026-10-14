@@ -2,7 +2,7 @@ diff --git a/android/src/main/java/expo/modules/av/AVManager.java b/android/src/
 index 0000000..1111111 100644
 --- a/android/src/main/java/expo/modules/av/AVManager.java
 +++ b/android/src/main/java/expo/modules/av/AVManager.java
-@@ -192,7 +192,7 @@ public class AVManager implements LifecycleEventListener, AudioManager.OnAudioFo
+@@ -192,7 +192,7 @@
    private void installBindings() {
      final JavaScriptContextProvider jsContextProvider = mModuleRegistry.getModule(JavaScriptContextProvider.class);
      final long jsContextRef = jsContextProvider.getJavaScriptContextRef();
@@ -11,3 +11,17 @@ index 0000000..1111111 100644
        Log.e("AVManager", "Cannot install JSI bindings for AV module because JS context is not available");
        return;
      }
+@@ -391,6 +391,13 @@
+ 
+   private void updatePlaySoundThroughEarpiece(boolean playThroughEarpiece) {
+     mAudioManager.setMode(playThroughEarpiece ? AudioManager.MODE_IN_COMMUNICATION : AudioManager.MODE_NORMAL);
++    if (!playThroughEarpiece && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
++      // Android 12+: setSpeakerphoneOn(true) is a lasting communication-device request that the
++      // system re-applies whenever the app enters MODE_IN_COMMUNICATION, so calls and the
++      // outgoing ringback started on the loudspeaker. Normal-mode playback needs no request.
++      mAudioManager.clearCommunicationDevice();
++      return;
++    }
+     mAudioManager.setSpeakerphoneOn(!playThroughEarpiece);
+   }
+ 

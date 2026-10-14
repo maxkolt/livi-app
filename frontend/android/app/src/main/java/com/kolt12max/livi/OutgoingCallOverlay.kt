@@ -31,6 +31,10 @@ object OutgoingCallOverlay {
   private var toUserId: String = ""
   private var toNick: String = ""
   private var hasVideo: Boolean = true
+
+  /** Видео или аудио текущий исходящий вызов — для старта ringback из LiviAppModule. */
+  @JvmStatic
+  fun currentHasVideo(): Boolean = hasVideo
   private var closeReceiver: BroadcastReceiver? = null
   private var callIdReadyReceiver: BroadcastReceiver? = null
   private val handler = Handler(Looper.getMainLooper())
@@ -83,7 +87,7 @@ object OutgoingCallOverlay {
     callId = provisionalId
     try {
       LiviOngoingCallHelper.setOutgoingCall(act, provisionalId, toUserId, toNick)
-      LiviOutgoingCallService.start(act, provisionalId, toUserId, toNick)
+      LiviOutgoingCallService.start(act, provisionalId, toUserId, toNick, hasVideo)
     } catch (e: Exception) {
       Log.w(TAG, "tryShow: provisional ringback start failed", e)
     }
@@ -119,7 +123,7 @@ object OutgoingCallOverlay {
         if (prev.startsWith("pending_")) {
           LiviOutgoingCallService.stop(ctx, prev)
         }
-        LiviOutgoingCallService.start(ctx, id, toUserId, toNick)
+        LiviOutgoingCallService.start(ctx, id, toUserId, toNick, hasVideo)
       }
     }
   }
@@ -266,7 +270,7 @@ object OutgoingCallOverlay {
     pendingProvisionalId = provisionalId
     callId = provisionalId
     LiviOngoingCallHelper.setOutgoingCall(activity, provisionalId, toUserId, toNick)
-    LiviOutgoingCallService.start(activity, provisionalId, toUserId, toNick)
+    LiviOutgoingCallService.start(activity, provisionalId, toUserId, toNick, hasVideo)
     attachCallIdReceiver(activity)
     scheduleEmptyCallIdTimeout()
   }

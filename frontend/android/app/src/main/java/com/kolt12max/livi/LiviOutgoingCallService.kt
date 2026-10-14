@@ -11,6 +11,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.media.AudioAttributes
+import android.media.AudioDeviceInfo
 import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.media.MediaPlayer
@@ -18,6 +19,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.PowerManager
 import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
@@ -36,6 +38,10 @@ class LiviOutgoingCallService : Service() {
     private var savedAudioMode: Int = AudioManager.MODE_NORMAL
     private var savedSpeakerphone: Boolean = false
     private var ringbackAudioFocusRequest: AudioFocusRequest? = null
+    /** Видеовызов: экран у уха не гасим (как WhatsApp), датчик приближения только для аудио. */
+    private var ringbackHasVideo: Boolean = true
+    /** Экран гаснет у уха, пока мелодия дозвона идёт в разговорный динамик. */
+    private var proximityWakeLock: PowerManager.WakeLock? = null
     private var callId: String = ""
     private var toUserId: String = ""
     private var toNick: String = ""
@@ -162,6 +168,7 @@ class LiviOutgoingCallService : Service() {
         } else if (provisionalCallId.isEmpty()) {
             provisionalCallId = ""
         }
+        ringbackHasVideo = intent?.getBooleanExtra(OutgoingCallActivity.EXTRA_HAS_VIDEO, true) ?: true
         markRinging(callId)
         startSound()
         scheduleTimeout()
@@ -300,7 +307,8 @@ class LiviOutgoingCallService : Service() {
             // дозвона на redial не слышна в earpiece.
             acquireRingbackAudioFocus(am)
             am.mode = AudioManager.MODE_IN_COMMUNICATION
-            am.isSpeakerphoneOn = false
+            val toEarpiece = applyRingbackRoute(am)
+            updateRingbackProximity(toEarpiece)
 
             val mp = MediaPlayer().apply {
                 setAudioAttributes(
@@ -322,7 +330,7 @@ class LiviOutgoingCallService : Service() {
             mp.setOnPreparedListener { player ->
                 try {
                     am.mode = AudioManager.MODE_IN_COMMUNICATION
-                    am.isSpeakerphoneOn = false
+                    applyRingbackRoute(am)
                 } catch (_: Exception) {}
                 player.start()
             }
@@ -331,6 +339,80 @@ class LiviOutgoingCallService : Service() {
         } catch (e: Exception) {
             android.util.Log.w(TAG, "startSound failed", e)
         }
+    }
+
+    /**
+     * Маршрут мелодии дозвона: гарнитура (BT / провод), иначе разговорный динамик.
+     *
+     * Android 12+: setSpeakerphoneOn(false) снимает заявку только этого AudioManager. Заявка
+     * «громкая связь», оставшаяся у другого клиента процесса после прошлого звонка, при
+     * setMode(IN_COMMUNICATION) переприменялась системой (setNewModeOwner): мелодия шла в громкую
+     * связь, а у уха Samsung глушил верхний динамик — звук «уходил» в нижний. Явный
+     * setCommunicationDevice делает заявку сервиса самой свежей для uid, и система берёт её.
+     *
+     * @return true, если мелодия идёт в разговорный динамик.
+     */
+    private fun applyRingbackRoute(am: AudioManager): Boolean {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            try {
+                val device = pickRingbackDevice(am)
+                if (device != null && am.setCommunicationDevice(device)) {
+                    android.util.Log.d(TAG, "ringback route: type=${device.type}")
+                    return device.type == AudioDeviceInfo.TYPE_BUILTIN_EARPIECE
+                }
+            } catch (e: Exception) {
+                android.util.Log.w(TAG, "ringback route: setCommunicationDevice failed", e)
+            }
+        }
+        @Suppress("DEPRECATION")
+        am.isSpeakerphoneOn = false
+        @Suppress("DEPRECATION")
+        return !am.isWiredHeadsetOn && !am.isBluetoothScoOn
+    }
+
+    private fun pickRingbackDevice(am: AudioManager): AudioDeviceInfo? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return null
+        val available = am.availableCommunicationDevices
+        for (type in RINGBACK_DEVICE_PRIORITY) {
+            available.firstOrNull { it.type == type }?.let { return it }
+        }
+        return null
+    }
+
+    /** Аудиовызов в разговорный динамик: экран гаснет у уха, как в обычном звонке. */
+    private fun updateRingbackProximity(toEarpiece: Boolean) {
+        if (toEarpiece && !ringbackHasVideo) {
+            acquireProximityWakeLock()
+        } else {
+            releaseProximityWakeLock()
+        }
+    }
+
+    private fun acquireProximityWakeLock() {
+        if (proximityWakeLock?.isHeld == true) return
+        try {
+            val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+            if (!pm.isWakeLockLevelSupported(PowerManager.PROXIMITY_SCREEN_OFF_WAKE_LOCK)) return
+            val lock = proximityWakeLock
+                ?: pm.newWakeLock(PowerManager.PROXIMITY_SCREEN_OFF_WAKE_LOCK, PROXIMITY_WAKE_LOCK_TAG)
+                    .apply { setReferenceCounted(false) }
+            lock.acquire(PROXIMITY_WAKE_LOCK_MAX_MS)
+            proximityWakeLock = lock
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "proximity wake lock acquire failed", e)
+        }
+    }
+
+    /**
+     * WAIT_FOR_NO_PROXIMITY: если дозвон закончился у уха (ответили / сбросили), экран включится,
+     * только когда телефон уберут от лица, — без случайных касаний щекой.
+     */
+    private fun releaseProximityWakeLock() {
+        val lock = proximityWakeLock ?: return
+        proximityWakeLock = null
+        try {
+            if (lock.isHeld) lock.release(PowerManager.RELEASE_FLAG_WAIT_FOR_NO_PROXIMITY)
+        } catch (_: Exception) {}
     }
 
     private fun scheduleTimeout() {
@@ -392,6 +474,7 @@ class LiviOutgoingCallService : Service() {
         timeoutRunnable = null
         silencePlayerNow()
         releasePlayerAsync()
+        releaseProximityWakeLock()
         // AudioManager restore НЕ на main: на части OEM mode/focus блокирует тачи на секунды.
         val savedMode = savedAudioMode
         val savedSpeaker = savedSpeakerphone
@@ -400,7 +483,13 @@ class LiviOutgoingCallService : Service() {
                 val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
                 releaseRingbackAudioFocus(am)
                 am.mode = savedMode
-                am.isSpeakerphoneOn = savedSpeaker
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    // Снять заявку ringback, а не «вернуть» громкую связь: на 12+ isSpeakerphoneOn()
+                    // отражает заявку клиента, и восстановление true оставило бы её висеть.
+                    am.clearCommunicationDevice()
+                } else {
+                    am.isSpeakerphoneOn = savedSpeaker
+                }
             } catch (_: Exception) {}
             android.util.Log.d(
                 TAG,
@@ -534,7 +623,8 @@ class LiviOutgoingCallService : Service() {
             return ringingCallId == want
         }
 
-        fun start(context: Context, callId: String, toUserId: String, toNick: String) {
+        /** @param hasVideo видеовызов: от него зависит, гасить ли экран у уха во время дозвона. */
+        fun start(context: Context, callId: String, toUserId: String, toNick: String, hasVideo: Boolean) {
             if (callId.isBlank()) {
                 android.util.Log.w(TAG, "start skipped: empty callId")
                 return
@@ -543,6 +633,7 @@ class LiviOutgoingCallService : Service() {
                 putExtra(OutgoingCallActivity.EXTRA_CALL_ID, callId)
                 putExtra(OutgoingCallActivity.EXTRA_TO_USER_ID, toUserId)
                 putExtra(OutgoingCallActivity.EXTRA_TO_NICK, toNick)
+                putExtra(OutgoingCallActivity.EXTRA_HAS_VIDEO, hasVideo)
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 context.startForegroundService(intent)
@@ -593,6 +684,19 @@ class LiviOutgoingCallService : Service() {
         }
 
         private const val EXTRA_ADOPT_ONLY = "adopt_only"
+
+        /** Гарнитура важнее разговорного динамика — как у системной звонилки. */
+        private val RINGBACK_DEVICE_PRIORITY = intArrayOf(
+            AudioDeviceInfo.TYPE_BLE_HEADSET,
+            AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
+            AudioDeviceInfo.TYPE_WIRED_HEADSET,
+            AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
+            AudioDeviceInfo.TYPE_USB_HEADSET,
+            AudioDeviceInfo.TYPE_BUILTIN_EARPIECE,
+        )
+        private const val PROXIMITY_WAKE_LOCK_TAG = "livi:ringback_proximity"
+        /** Страховка от утечки: дозвон сам заканчивается раньше (таймаут ~45 с). */
+        private const val PROXIMITY_WAKE_LOCK_MAX_MS = 10 * 60 * 1000L
 
         /**
          * Закрытие через broadcast — сервис сам stopSelf после startForeground.

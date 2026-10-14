@@ -63,6 +63,7 @@ type HomeWelcomeViewProps = {
     | 'onAvatarDustSource'
   >;
   hasActiveCallForSearch: boolean;
+  onPrepareStartSearch?: () => void;
   onStartSearch: () => void;
   splashGone?: boolean;
   /** Первый непустой кадр радара готов — cold splash может открывать Search. */
@@ -122,6 +123,7 @@ function HomeWelcomeViewInner({
   bannerPeers,
   centerProfile,
   hasActiveCallForSearch,
+  onPrepareStartSearch,
   onStartSearch,
   splashGone = true,
   onRadarReady,
@@ -619,6 +621,7 @@ function HomeWelcomeViewInner({
           >
             <WelcomeSearchCta
               label={L('welcomeFindPartnerBtn')}
+              onPressPrepare={onPrepareStartSearch}
               onPress={handleStartSearchPress}
               disabled={hasActiveCallForSearch}
               compact={splitTight}

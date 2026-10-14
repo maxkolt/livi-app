@@ -24,6 +24,8 @@ import {
 export type { ChatPreview };
 
 let previewMemory: Record<string, ChatPreview> = {};
+/** Хуки вкладки, которым нужен результат prefetch (в т.ч. скрытая keep-alive вкладка). */
+const prefetchListeners = new Set<() => void>();
 
 function getChatPreviewSnapshot(): Record<string, ChatPreview> {
   return previewMemory;
@@ -118,20 +120,38 @@ export async function prefetchChatPreviews(friendIds: string[], lang: Lang): Pro
       }
     }),
   );
+  // Локальные превью — сразу: за VPN ответ сервера для недостающих идёт секундами,
+  // а вкладка всё это время оставалась бы пустой.
+  previewMemory = mergeLiveMemory(ids, next);
+  prefetchListeners.forEach((listener) => listener());
   const hydrated = await hydrateMissingPreviewsFromServer(ids, next, lang);
   previewMemory = mergeLiveMemory(ids, hydrated);
+  prefetchListeners.forEach((listener) => listener());
 }
 
 export function useChatPreviews(friendIds: string[], lang: Lang, enabled: boolean) {
-  // Скрытая вкладка (prewarm) тоже берёт snapshot один раз: строки и их рамки
-  // монтируются заранее, а не в момент тапа. Перезагрузки — только когда enabled.
+  // Скрытая вкладка (prewarm) держит превью в синхроне с memory: строки, рамки и
+  // аватары монтируются заранее, а не в момент тапа. Перезагрузки — только когда enabled.
   const [previews, setPreviews] = useState<Record<string, ChatPreview>>(() => ({
     ...getChatPreviewSnapshot(),
   }));
+
+  // Холодный старт: вкладка монтируется после splash, prefetch мог ещё не закончиться.
+  // Без этого скрытая вкладка оставалась пустой и при тапе мигала «Пока нет чатов».
+  useEffect(() => {
+    const applySnapshot = () => {
+      const snap = getChatPreviewSnapshot();
+      setPreviews((prev) => (previewMapsEqual(prev, snap) ? prev : { ...snap }));
+    };
+    prefetchListeners.add(applySnapshot);
+    applySnapshot();
+    return () => {
+      prefetchListeners.delete(applySnapshot);
+    };
+  }, []);
   const idsKey = friendIds.join('|');
   const idsRef = useRef(friendIds);
   const langRef = useRef(lang);
-  const enabledRef = useRef(enabled);
   const reloadPromiseRef = useRef<Promise<void> | null>(null);
   const lastReloadCompletedAtRef = useRef(0);
 
@@ -142,10 +162,6 @@ export function useChatPreviews(friendIds: string[], lang: Lang, enabled: boolea
   useEffect(() => {
     langRef.current = lang;
   }, [lang]);
-
-  useEffect(() => {
-    enabledRef.current = enabled;
-  }, [enabled]);
 
   const reload = useCallback((): Promise<void> => {
     if (reloadPromiseRef.current) return reloadPromiseRef.current;
@@ -203,6 +219,8 @@ export function useChatPreviews(friendIds: string[], lang: Lang, enabled: boolea
 
   // Слушаем всегда: иначе при выключенной вкладке Чаты memory/превью не обновляются,
   // а unread растёт → после открытия вкладки reload показывает своё последнее исходящее.
+  // Состояние обновляем и у скрытой вкладки: иначе первый кадр после тапа показывал
+  // старый список, а новая строка вставлялась следующим коммитом.
   useEffect(() => {
     const offReceived = onMessageReceived((message) => {
       const me = String(getCurrentUserId() || '');
@@ -215,7 +233,6 @@ export function useChatPreviews(friendIds: string[], lang: Lang, enabled: boolea
       const at = messageTimestampMs(message) || Date.now();
       const text = previewTextFromMessage(message, langRef.current);
       previewMemory = { ...previewMemory, [peerId]: { text, at } };
-      if (!enabledRef.current) return;
       setPreviews((prev) => ({ ...prev, [peerId]: { text, at } }));
     });
     const offCleared = onChatCleared((data) => {
@@ -233,7 +250,6 @@ export function useChatPreviews(friendIds: string[], lang: Lang, enabled: boolea
         delete mem[peerId];
         previewMemory = mem;
       }
-      if (!enabledRef.current) return;
       setPreviews((prev) => {
         if (!prev[peerId]) return prev;
         const next = { ...prev };
@@ -248,7 +264,6 @@ export function useChatPreviews(friendIds: string[], lang: Lang, enabled: boolea
       const at = messageTimestampMs(message) || Date.now();
       const text = previewTextFromMessage(message, langRef.current);
       previewMemory = { ...previewMemory, [id]: { text, at } };
-      if (!enabledRef.current) return;
       setPreviews((prev) => ({ ...prev, [id]: { text, at } }));
     });
     return () => {
