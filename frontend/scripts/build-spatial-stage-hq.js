@@ -1132,6 +1132,94 @@ function evenBackground(data, w, h, scale, overlay) {
  * SLATE_LIFT — после затемнения сцены в шейдере (DIM) фон на экране серый, а не почти
  * чёрный. Светлые элементы (иконки, карта, куб) остаются голубыми, ореолы — плавный переход.
  */
+/**
+ * Тон отдельных элементов на уже ровном фоне — после evenBackground, до резкости и серого фона
+ * (grayBackground сильнее гасит тёмные края). Подъём элемента над фоном — фон это медиана кольца
+ * вокруг рамки — масштабируется:
+ *  - gain: весь элемент тусклее или ярче;
+ *  - even: затемнённые части подтягиваются к типичной яркости элемента (только светлее).
+ */
+const ELEMENT_TONE = [
+  // Голубая точка с кольцом слева над радаром — тусклее: выделялась сильнее соседей.
+  { rect: [146, 240, 162, 258], gain: 0.6 },
+  // Камера слева: левые углы корпуса были на 10–30 % темнее середины — ровнее.
+  { rect: [58, 518, 148, 596], even: true },
+];
+/** Ширина кольца для оценки фона, px исходника. */
+const TONE_RING = 6;
+/** Принадлежность элементу по подъёму над фоном, уровни: от «нет» до «да». */
+const TONE_RISE = [3, 7];
+/** Сглаживание яркости элемента для even, px исходника. */
+const TONE_EVEN_SIGMA = 4;
+/** Типичная яркость элемента — этот перцентиль сглаженного подъёма. */
+const TONE_EVEN_PERCENTILE = 0.65;
+/** Не поднимать больше чем во столько раз (тень, а не дыра). */
+const TONE_EVEN_MAX = 1.8;
+
+function toneElements(data, w, h, scale) {
+  const lum = (r, g, b) => 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  const median = (a) => a.sort((p, q) => p - q)[a.length >> 1];
+  for (const { rect, gain = 1, even = false } of ELEMENT_TONE) {
+    const [x0, y0, x1, y1] = rect.map((v) => Math.round(v * scale));
+    const ring = Math.round(TONE_RING * scale);
+    const rs = [];
+    const gs = [];
+    const bs = [];
+    for (let y = Math.max(0, y0 - ring); y < Math.min(h, y1 + ring); y++) {
+      for (let x = Math.max(0, x0 - ring); x < Math.min(w, x1 + ring); x++) {
+        if (x >= x0 && x < x1 && y >= y0 && y < y1) continue;
+        const k = (y * w + x) * 4;
+        rs.push(data[k]);
+        gs.push(data[k + 1]);
+        bs.push(data[k + 2]);
+      }
+    }
+    const bg = [median(rs), median(gs), median(bs)];
+    const bgLum = lum(...bg);
+    const cw = x1 - x0;
+    const ch = y1 - y0;
+    const rise = new Float32Array(cw * ch);
+    const member = new Float32Array(cw * ch);
+    for (let y = 0; y < ch; y++) {
+      for (let x = 0; x < cw; x++) {
+        const k = ((y0 + y) * w + x0 + x) * 4;
+        const i = y * cw + x;
+        rise[i] = lum(data[k], data[k + 1], data[k + 2]) - bgLum;
+        member[i] = smoothstep(TONE_RISE[0], TONE_RISE[1], rise[i]);
+      }
+    }
+    const factor = new Float32Array(cw * ch).fill(1);
+    if (even) {
+      // Яркость элемента вокруг каждой точки — нормированное размытие по самому элементу:
+      // у краёв это уровень соседней заливки, а не сглаживание с фоном.
+      const sigma = TONE_EVEN_SIGMA * scale;
+      const num = gaussianBlur(rise.map((v, i) => v * member[i]), cw, ch, sigma);
+      const den = gaussianBlur(member, cw, ch, sigma);
+      const levels = [];
+      for (let i = 0; i < cw * ch; i++) if (member[i] > 0.9 && den[i] > 1e-3) levels.push(num[i] / den[i]);
+      levels.sort((p, q) => p - q);
+      const target = levels[Math.floor(levels.length * TONE_EVEN_PERCENTILE)];
+      for (let i = 0; i < cw * ch; i++) {
+        if (member[i] === 0 || den[i] <= 1e-3) continue;
+        const lift = Math.min(TONE_EVEN_MAX, Math.max(1, target / Math.max(1e-3, num[i] / den[i])));
+        factor[i] = 1 + (lift - 1) * member[i];
+      }
+    } else {
+      for (let i = 0; i < cw * ch; i++) factor[i] = 1 + (gain - 1) * member[i];
+    }
+    for (let y = 0; y < ch; y++) {
+      for (let x = 0; x < cw; x++) {
+        const f = factor[y * cw + x];
+        if (f === 1) continue;
+        const k = ((y0 + y) * w + x0 + x) * 4;
+        for (let c = 0; c < 3; c++) {
+          data[k + c] = Math.max(0, Math.min(255, Math.round(bg[c] + (data[k + c] - bg[c]) * f)));
+        }
+      }
+    }
+  }
+}
+
 const SLATE_HUE = 215;
 const SLATE_SAT = 0.16;
 const SLATE_LIFT = 0.08;
@@ -1217,6 +1305,7 @@ async function main() {
   removeHaze(A, w, h, scale);
   suppressSmoke(A, w, h, scale, overlay);
   evenBackground(A, w, h, scale, overlay);
+  toneElements(A, w, h, scale);
   sharpen(A, w, h);
   grayBackground(A, w, h);
   // Тело куба с нейросетью — в цветах маленького кубика, и облако сообщения — поверх.

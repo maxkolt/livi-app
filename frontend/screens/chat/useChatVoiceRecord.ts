@@ -126,6 +126,8 @@ export function useChatVoiceRecord({
 
   const voiceDragX = React.useRef(new Animated.Value(0)).current;
   const micScale = React.useRef(new Animated.Value(1)).current;
+  /** Своё «нажатие» у кнопки кружка: общий micScale сжимал микрофон при нажатии видео. */
+  const videoScale = React.useRef(new Animated.Value(1)).current;
   const trashLid = React.useRef(new Animated.Value(0)).current;
   const trashFlash = React.useRef(new Animated.Value(0)).current;
   const cancelArmedRef = React.useRef(false);
@@ -178,8 +180,9 @@ export function useChatVoiceRecord({
         lockDrag.setValue(0);
       } catch {}
       Animated.timing(micScale, { toValue: 1, duration: 44, useNativeDriver: true }).start();
+      Animated.timing(videoScale, { toValue: 1, duration: 44, useNativeDriver: true }).start();
     },
-    [voiceDragX, trashLid, trashFlash, micScale, lockDrag],
+    [voiceDragX, trashLid, trashFlash, micScale, videoScale, lockDrag],
   );
 
   const armCancelUI = React.useCallback(() => {
@@ -187,9 +190,6 @@ export function useChatVoiceRecord({
     cancelArmedRef.current = true;
     try {
       trashLid.setValue(1);
-    } catch {}
-    try {
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     } catch {}
   }, [trashLid]);
 
@@ -417,6 +417,9 @@ export function useChatVoiceRecord({
     videoRecordingRef.current = true;
     videoStartedAtRef.current = Date.now();
     logger.info("[video-note] recording", { sincePressMs: sincePress() });
+    try {
+      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    } catch {}
     clearVideoTimer();
     videoTimerRef.current = setInterval(() => {
       const ms = Math.min(VIDEO_NOTE_MAX_MS, Date.now() - videoStartedAtRef.current);
@@ -570,6 +573,9 @@ export function useChatVoiceRecord({
       voiceRecordingRef.current = recording;
       voiceStopInProgressRef.current = false;
       logger.info("[voice] recording", { sincePressMs: sincePress() });
+      try {
+        void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      } catch {}
       if (voiceRecordTimerRef.current) clearInterval(voiceRecordTimerRef.current);
       voiceRecordTimerRef.current = setInterval(async () => {
         const rec = voiceRecordingRef.current;
@@ -679,8 +685,9 @@ export function useChatVoiceRecord({
   };
   const L = () => latestRef.current;
 
-  const makeRecordResponder = (mode: RecordMode) =>
-    PanResponder.create({
+  const makeRecordResponder = (mode: RecordMode) => {
+    const pressScale = mode === "video" ? videoScale : micScale;
+    return PanResponder.create({
       onStartShouldSetPanResponder: () => true,
       onStartShouldSetPanResponderCapture: () => false,
       onMoveShouldSetPanResponder: (_evt, g) => Math.abs(g.dx) > 2 || Math.abs(g.dy) > 2,
@@ -696,10 +703,8 @@ export function useChatVoiceRecord({
           locked: voiceLockedRef.current,
         });
         voiceDragEnabledRef.current = true;
-        try {
-          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-        } catch {}
-        Animated.timing(micScale, { toValue: 0.9, duration: 40, useNativeDriver: true }).start();
+        // Вибрация — только на действиях (запись пошла, замок, отправлено), не на касании.
+        Animated.timing(pressScale, { toValue: 0.9, duration: 40, useNativeDriver: true }).start();
         requestAnimationFrame(() => L().updateTrashZone());
         if (busy) return;
         // Запись — только если держат; короткое касание — подсказка.
@@ -747,7 +752,7 @@ export function useChatVoiceRecord({
         }
       },
       onPanResponderRelease: async (_evt, gestureState) => {
-        Animated.timing(micScale, { toValue: 1, duration: 44, useNativeDriver: true }).start();
+        Animated.timing(pressScale, { toValue: 1, duration: 44, useNativeDriver: true }).start();
         const heldMs = sincePress();
         logger.info("[voice] release", {
           sincePressMs: heldMs,
@@ -760,9 +765,6 @@ export function useChatVoiceRecord({
           // Коснулись и отпустили: запись не начинали — подскажем, что кнопку держат.
           clearHoldTimer();
           L().resetVoiceGesture();
-          try {
-            Haptics.selectionAsync();
-          } catch {}
           onHoldHintRef.current?.(mode);
           return;
         }
@@ -800,7 +802,7 @@ export function useChatVoiceRecord({
           starting: isStartingNow(),
           recording: isRecordingNow(),
         });
-        Animated.timing(micScale, { toValue: 1, duration: 44, useNativeDriver: true }).start();
+        Animated.timing(pressScale, { toValue: 1, duration: 44, useNativeDriver: true }).start();
         if (holdPendingRef.current) {
           clearHoldTimer();
           L().resetVoiceGesture();
@@ -817,6 +819,7 @@ export function useChatVoiceRecord({
         L().resetVoiceGesture();
       },
     });
+  };
 
   const [micPanResponder, videoPanResponder] = React.useMemo(
     () => [makeRecordResponder("voice"), makeRecordResponder("video")],
@@ -883,6 +886,7 @@ export function useChatVoiceRecord({
     setVoiceRecordMs,
     voiceDragX,
     micScale,
+    videoScale,
     trashLid,
     trashFlash,
     recordViz,

@@ -1,11 +1,12 @@
 /**
  * Видеокружок в переписке (как в Telegram): круг с кадром-превью и длительностью; тап —
- * играет со звуком, вокруг бежит кольцо прогресса; ещё тап — пауза. Играет один кружок
+ * играет со звуком, вокруг бежит кольцо прогресса; тап в любой момент — пауза / дальше.
+ * Кольцо можно вести пальцем по кругу — перемотка. Играет один кружок
  * на весь чат: запуск другого останавливает этот. Плеер создаётся только на время просмотра,
  * поэтому кружков в ленте может быть сколько угодно.
  */
-import React, { memo, useCallback, useEffect, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import React, { memo, useCallback, useEffect, useRef, useState } from 'react';
+import { PanResponder, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Image as ExpoImage } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { useEvent } from 'expo';
@@ -17,6 +18,20 @@ import { UI_ACCENT } from '../home/constants';
 
 export const CHAT_VIDEO_NOTE_SIZE = 216;
 const RING_W = 3;
+/** Касание не дальше этого от кольца внутрь — перемотка; в середине — тап и прокрутка ленты. */
+const SCRUB_BAND = 36;
+/** Сдвиг пальца, после которого касание у кольца — перемотка, а не тап. */
+const SCRUB_SLOP = 6;
+/** Как часто показывать кадр под пальцем при перемотке. */
+const SCRUB_SEEK_MS = 80;
+/** Не ждать кадр с новой позиции дольше этого — кольцо вернётся к времени плеера. */
+const SEEK_SETTLE_MS = 800;
+
+/** Точка относительно центра → доля круга от 12 часов по часовой стрелке. */
+function angleProgress(dx: number, dy: number): number {
+  const a = Math.atan2(dx, -dy);
+  return (a < 0 ? a + 2 * Math.PI : a) / (2 * Math.PI);
+}
 
 /** Какой кружок сейчас играет (id сообщения) — во всём приложении один. */
 const useActiveVideoNote = create<{ activeId: string | null; setActive: (id: string | null) => void }>((set) => ({
@@ -72,6 +87,7 @@ export const ChatVideoNote = memo(function ChatVideoNote({
     setPaused((p) => !p);
   }, [active, id, setActive]);
   const onEnded = useCallback(() => setActive(null), [setActive]);
+  const onTogglePause = useCallback(() => setPaused((p) => !p), []);
 
   return (
     <Pressable
@@ -87,7 +103,15 @@ export const ChatVideoNote = memo(function ChatVideoNote({
         <ExpoImage source={{ uri: thumbUri }} style={StyleSheet.absoluteFill} contentFit="cover" cachePolicy="memory-disk" />
       ) : null}
       {active && uri ? (
-        <ActiveVideoNote uri={uri} size={size} paused={paused} durationSec={durationSec} onEnded={onEnded} />
+        <ActiveVideoNote
+          uri={uri}
+          size={size}
+          paused={paused}
+          durationSec={durationSec}
+          onEnded={onEnded}
+          onTogglePause={onTogglePause}
+          onLongPress={onLongPress}
+        />
       ) : (
         <>
           <View style={styles.center} pointerEvents="none">
@@ -110,12 +134,16 @@ function ActiveVideoNote({
   paused,
   durationSec,
   onEnded,
+  onTogglePause,
+  onLongPress,
 }: {
   uri: string;
   size: number;
   paused: boolean;
   durationSec: number;
   onEnded: () => void;
+  onTogglePause: () => void;
+  onLongPress?: () => void;
 }) {
   const player = useVideoPlayer(uri, (p) => {
     p.loop = false;
@@ -136,10 +164,106 @@ function ActiveVideoNote({
   }, [player, onEnded]);
 
   const total = player.duration > 0 ? player.duration : durationSec;
-  const progress = total > 0 ? Math.min(1, Math.max(0, (time?.currentTime || 0) / total)) : 0;
+  const timeProgress = total > 0 ? Math.min(1, Math.max(0, (time?.currentTime || 0) / total)) : 0;
   const r = size / 2 - RING_W;
   const circ = 2 * Math.PI * r;
   const loading = status?.status === 'loading';
+
+  // Перемотка: пока палец ведёт по кольцу — его позиция; после отпускания — цель перемотки,
+  // пока плеер не догонит её (иначе кольцо на миг прыгало назад к старому времени).
+  const [scrub, setScrub] = useState<number | null>(null);
+  const [seekHold, setSeekHold] = useState<number | null>(null);
+  useEffect(() => {
+    if (seekHold == null) return;
+    if (Math.abs(timeProgress - seekHold) < 0.03) {
+      setSeekHold(null);
+      return;
+    }
+    const t = setTimeout(() => setSeekHold(null), SEEK_SETTLE_MS);
+    return () => clearTimeout(t);
+  }, [seekHold, timeProgress]);
+  const progress = scrub ?? seekHold ?? timeProgress;
+
+  // PanResponder создаётся один раз и читает свежие значения через ref (как кнопки записи:
+  // пересозданный посреди жеста считал бы сдвиг от нуля экрана).
+  const live = useRef({ player, total, paused, size, r, onTogglePause, onLongPress });
+  live.current = { player, total, paused, size, r, onTogglePause, onLongPress };
+  const gesture = useRef({
+    x0: 0,
+    y0: 0,
+    moved: false,
+    longFired: false,
+    wasPlaying: false,
+    last: 0,
+    lastSeekAt: 0,
+    longTimer: null as ReturnType<typeof setTimeout> | null,
+  });
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: (e) => {
+        const { size: s, r: ring } = live.current;
+        const d = Math.hypot(e.nativeEvent.locationX - s / 2, e.nativeEvent.locationY - s / 2);
+        return d >= ring - SCRUB_BAND && d <= s / 2;
+      },
+      onPanResponderGrant: (e) => {
+        const g = gesture.current;
+        g.x0 = e.nativeEvent.locationX;
+        g.y0 = e.nativeEvent.locationY;
+        g.moved = false;
+        g.longFired = false;
+        g.longTimer = setTimeout(() => {
+          g.longTimer = null;
+          if (g.moved) return;
+          g.longFired = true;
+          live.current.onLongPress?.();
+        }, MESSAGE_LONG_PRESS_MS);
+      },
+      onPanResponderMove: (_e, s) => {
+        const g = gesture.current;
+        const { player: p, total: dur, paused: isPaused, size: sz } = live.current;
+        if (g.longFired) return;
+        if (!g.moved) {
+          if (Math.hypot(s.dx, s.dy) < SCRUB_SLOP) return;
+          g.moved = true;
+          if (g.longTimer) clearTimeout(g.longTimer);
+          g.longTimer = null;
+          g.wasPlaying = !isPaused;
+          if (g.wasPlaying) p.pause();
+          g.last = angleProgress(g.x0 - sz / 2, g.y0 - sz / 2);
+        }
+        let next = angleProgress(g.x0 + s.dx - sz / 2, g.y0 + s.dy - sz / 2);
+        // Через 12 часов не перескакивать с конца на начало и обратно — упереться в край.
+        if (Math.abs(next - g.last) > 0.5) next = g.last > 0.5 ? 1 : 0;
+        g.last = next;
+        setScrub(next);
+        const now = Date.now();
+        if (dur > 0 && now - g.lastSeekAt >= SCRUB_SEEK_MS) {
+          g.lastSeekAt = now;
+          p.currentTime = next * dur;
+        }
+      },
+      onPanResponderRelease: () => finishGesture(true),
+      onPanResponderTerminate: () => finishGesture(false),
+      onPanResponderTerminationRequest: () => false,
+    }),
+  ).current;
+  function finishGesture(released: boolean) {
+    const g = gesture.current;
+    if (g.longTimer) clearTimeout(g.longTimer);
+    g.longTimer = null;
+    if (g.longFired) return;
+    const { player: p, total: dur } = live.current;
+    if (!g.moved) {
+      if (released) live.current.onTogglePause();
+      return;
+    }
+    // До самого конца не мотаем: конец ролика — это «досмотрел», кружок закрылся бы.
+    const target = Math.min(g.last, 0.995);
+    if (dur > 0) p.currentTime = target * dur;
+    setSeekHold(target);
+    setScrub(null);
+    if (g.wasPlaying) p.play();
+  }
 
   return (
     <>
@@ -167,7 +291,7 @@ function ActiveVideoNote({
           transform={`rotate(-90 ${size / 2} ${size / 2})`}
         />
       </Svg>
-      {paused || loading ? (
+      {(paused || loading) && scrub == null ? (
         <View style={styles.center} pointerEvents="none">
           <View style={styles.playBadge}>
             <Ionicons name={loading ? 'hourglass-outline' : 'play'} size={22} color="#fff" style={loading ? null : styles.playIcon} />
@@ -175,8 +299,11 @@ function ActiveVideoNote({
         </View>
       ) : null}
       <View style={styles.durationPill} pointerEvents="none">
-        <Text style={styles.durationText}>{formatSec(Math.max(0, total - (time?.currentTime || 0)))}</Text>
+        <Text style={styles.durationText}>{formatSec(Math.max(0, total * (1 - progress)))}</Text>
       </View>
+      {/* Касание у кольца — перемотка (и тап/долгое нажатие там же); в середине касание
+          уходит кружку: тап — пауза, ведение — прокрутка ленты. */}
+      <View style={StyleSheet.absoluteFill} {...panResponder.panHandlers} />
     </>
   );
 }

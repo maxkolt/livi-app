@@ -1192,11 +1192,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
   },
-  // Размер — как у строки статуса во «Звонках» («Исходящий звонок»).
+  // Размер — как у строки статуса во «Звонках» («Исходящий звонок»). Цвет — чуть светлее
+  // общего приглушённого (WELCOME_MUTED_TEXT #8B949E): текст сообщения читается легче.
   preview: {
     flex: 1,
     minWidth: 0,
-    color: WELCOME_MUTED_TEXT,
+    color: '#A0A9B4',
     fontSize: 13,
     fontWeight: '400',
     lineHeight: 18,

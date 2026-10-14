@@ -230,10 +230,13 @@ export function useChatComposer({
 
   const onPressSendButton = React.useCallback(() => {
     if (!messageTextRef.current.trim() && !voiceIsRecording) return;
-    try {
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    } catch {
-      Vibration.vibrate(10);
+    // Запись (замок → «Отправить») вибрирует сама, когда уходит: здесь второй раз не нужно.
+    if (!voiceIsRecording) {
+      try {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      } catch {
+        Vibration.vibrate(10);
+      }
     }
     setEmojiPanelOpen(false);
     void sendMessage();

@@ -1131,6 +1131,7 @@ export default function ChatScreen({ route, navigation }: Props) {
     voiceRecordMs,
     setVoiceRecordMs,
     micScale,
+    videoScale,
     trashLid,
     trashFlash,
     recordViz,
@@ -3446,7 +3447,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 </View>
 
                 {/* Видеокружок — отдельная кнопка слева от микрофона: держишь — пишет камера. */}
-                <View
+                <Animated.View
                   {...videoPanResponder.panHandlers}
                   collapsable={false}
                   accessibilityRole="button"
@@ -3460,6 +3461,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                     justifyContent: 'center',
                     backgroundColor: recordingKind === 'video' ? LIVI.titan : COMPOSER_IDLE_BUTTON_BG,
                     opacity: voiceIsRecording && recordingKind !== 'video' ? 0.4 : 1,
+                    transform: [{ scale: videoScale }],
                   }}
                 >
                   <View pointerEvents="none" style={{ alignItems: 'center', justifyContent: 'center' }}>
@@ -3469,7 +3471,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                       color={recordingKind === 'video' ? '#FF5A67' : COMPOSER_BUTTON_ICON}
                     />
                   </View>
-                </View>
+                </Animated.View>
 
                 <Animated.View
                   {...micPanResponder.panHandlers}
@@ -3928,7 +3930,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 </View>
 
                 {/* Видеокружок — отдельная кнопка слева от микрофона: держишь — пишет камера. */}
-                <View
+                <Animated.View
                   {...videoPanResponder.panHandlers}
                   collapsable={false}
                   accessibilityRole="button"
@@ -3942,6 +3944,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                     justifyContent: 'center',
                     backgroundColor: recordingKind === 'video' ? LIVI.titan : COMPOSER_IDLE_BUTTON_BG,
                     opacity: voiceIsRecording && recordingKind !== 'video' ? 0.4 : 1,
+                    transform: [{ scale: videoScale }],
                   }}
                 >
                   <View pointerEvents="none" style={{ alignItems: 'center', justifyContent: 'center' }}>
@@ -3951,7 +3954,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                       color={recordingKind === 'video' ? '#FF5A67' : COMPOSER_BUTTON_ICON}
                     />
                   </View>
-                </View>
+                </Animated.View>
 
                 <Animated.View
                   {...micPanResponder.panHandlers}
