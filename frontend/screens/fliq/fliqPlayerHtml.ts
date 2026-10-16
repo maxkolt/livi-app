@@ -24,10 +24,9 @@ const MIN_PLAYER_CSS_W = 390;
 
 /**
  * Страница плеера. Кроме «играть/пауза»:
- * - подгрузка заранее (prebuffer): следующий ролик ленты тихо играет несколько секунд, затем
- *   возвращается в начало по уже загруженному диапазону — после свайпа старт с этого запаса,
- *   без новой буферизации. Разрешение качать дальше включается уже после старта картинки,
- *   иначе seek с докачкой в момент свайпа сбрасывает запас и ролик снова «грузится»;
+ * - подгрузка заранее (prebuffer): следующий ролик ленты тихо играет несколько секунд, затем,
+ *   пока он скрыт, перематывается в начало по уже загруженному диапазону — после свайпа старт
+ *   с этого запаса, без новой буферизации и без перемоток на экране;
  *   пока идёт подгрузка, состояния плеера наружу не уходят (это ещё не «первый кадр»),
  *   кроме primed — поток пошёл, можно будить следующий в очереди;
  * - звук общий для ленты: muted задаёт RN, а если человек нажал звук в самом плеере YouTube,
@@ -77,47 +76,17 @@ ${init.widthDp ? `window.__fliqFit(${Math.round(init.widthDp)});` : ''}
   var END_SLACK_S=${endSlackS};
   var player=null, ready=false, want='${init.mode}', muted=${init.muted}, prebuffer=${init.prebuffer}, loop=${init.loop !== false};
   var buffering=false, buffered=false, prebufferTimer=null, starting=false, tick=null, lastMuted=null, quietUntil=0;
-  // seekTo(…, false) после подгрузки запрещает плееру докачивать дальше — и запрет живёт,
-  // пока не будет seekTo(…, true): без снятия ролик вставал навсегда на конце запаса (~20 с).
-  var fetchLocked=false, unlockTimer=null, primedSent=false;
+  var primedSent=false;
   // Конец ролика. Shorts-плеер YouTube сам крутит ролик по кругу (у конца — буферизация и снова
   // PLAYING), а состояние 0 «закончился» не присылает. Поэтому конец ловим по времени: таймер
   // на момент окончания и, на крайний случай, скачок времени с конца в начало.
   var ended=false, endTimer=null, lastC=0, seekedAt=0;
-  // Где и когда ролик последний раз тронулся: getCurrentTime() у IFrame API отстаёт на доли
-  // секунды, и снятие запрета докачки по нему откатывало ролик (и полосу) назад к началу.
-  var playC=0, playAt=0;
-  // Снятие запрета докачки — перемотка на то же место по скачанному: YouTube на миг сообщает
-  // «буферизация», хотя картинка идёт. Эту «паузу» полосе не передаём — иначе она вставала.
-  var unlockQuietUntil=0;
-  function liveC(){
-    if(playAt) return playC+(Date.now()-playAt)/1000;
-    try{ return player.getCurrentTime(); }catch(_){ return 0; }
-  }
-  function unlockFetch(){
-    if(!fetchLocked) return;
-    fetchLocked=false;
-    if(unlockTimer!==null){ clearTimeout(unlockTimer); unlockTimer=null; }
-    unlockQuietUntil=Date.now()+1500;
-    try{ player.seekTo(liveC(),true); }catch(_){}
-  }
-  // Снимаем запрет докачки чуть позже первого кадра: в момент play seek(true)
-  // заставляет YouTube забыть уже скачанное и снова показать буферизацию.
-  function scheduleUnlock(){
-    if(!fetchLocked||unlockTimer!==null) return;
-    unlockTimer=setTimeout(function(){
-      unlockTimer=null;
-      if(fetchLocked&&want==='play') unlockFetch();
-    },400);
-  }
   function send(m){try{window.ReactNativeWebView.postMessage(JSON.stringify(m));}catch(e){}}
   // Время ролика для полосы: сразу при старте, паузе и буферизации, пока играет — 4 раза в секунду.
   // p — идёт ли ролик, at — когда отправлено (RN поправит на время в пути).
-  // at0 — время уже известно (только что вернули в начало): getCurrentTime() после seekTo
-  // ещё отдаёт старое значение, и полоса на миг прыгала вперёд.
-  function sendTick(p,at0){
+  function sendTick(p){
     var c=0, d=0;
-    try{ c=at0!=null?at0:player.getCurrentTime(); d=player.getDuration(); }catch(_){ return; }
+    try{ c=player.getCurrentTime(); d=player.getDuration(); }catch(_){ return; }
     // Время отскочило к началу без нашей перемотки — плеер сам начал круг заново. Длительность
     // тут не опора: у части Shorts getDuration() больше настоящей (6 с у ролика на 3.5 с).
     if(p&&lastC>1.5&&c<1&&c<lastC-1&&Date.now()-seekedAt>1500){ lastC=c; reachedEnd(); if(ended) return; }
@@ -125,10 +94,8 @@ ${init.widthDp ? `window.__fliqFit(${Math.round(init.widthDp)});` : ''}
     send({t:'tick',c:c,d:d,p:p?1:0,at:Date.now()});
     if(p&&!loop&&d>0) scheduleEnd(d-c); else clearEndTimer();
   }
-  function startTicks(at0){
-    try{ playC=at0!=null?at0:player.getCurrentTime(); }catch(_){ playC=0; }
-    playAt=Date.now();
-    sendTick(true,at0);
+  function startTicks(){
+    sendTick(true);
     // 4 раза в секунду: полоса, ушедшая вперёд ролика, ждёт его недолго.
     if(!tick) tick=setInterval(function(){ sendTick(true); },250);
   }
@@ -166,9 +133,11 @@ ${init.widthDp ? `window.__fliqFit(${Math.round(init.widthDp)});` : ''}
   function finishPrebuffer(){
     if(!buffering) return;
     clearPrebufferTimer(); buffering=false; buffered=true;
-    // false запрещает seekTo скачивать новый участок: возвращаемся в начало внутри уже
-    // загруженного диапазона и сохраняем настоящий запас кадров, а не один первый кадр.
-    try{ player.pauseVideo(); player.seekTo(0,false); fetchLocked=true; }catch(_){}
+    // В начало — настоящей перемоткой (true), пока ролик скрыт: по скачанному она занимает
+    // ~0.1 с, запас остаётся. seekTo(…, false) у YouTube — лишь предпросмотр для полосы:
+    // <video> стоит, где был, а API уже отдаёт новое время. С ним ролик после свайпа шёл
+    // с конца подгрузки и через полсекунды прыгал в начало.
+    try{ player.pauseVideo(); player.seekTo(0,true); }catch(_){}
     applyMute(); send({t:'buffered'});
   }
   function apply(){
@@ -181,22 +150,15 @@ ${init.widthDp ? `window.__fliqFit(${Math.round(init.widthDp)});` : ''}
         if(buffering){
           clearPrebufferTimer(); buffering=false;
           // Тихая подгрузка уже прокрутила ролик на несколько секунд: на экране он начинается
-          // с начала — по скачанному (false), без новой загрузки; докачку откроем после старта.
+          // с начала. Стоп и настоящая перемотка по скачанному, дальше обычный запуск: первый
+          // кадр уходит в RN с PLAYING уже после перемотки, а не кадром из середины подгрузки.
           seekedAt=Date.now(); lastC=0;
-          try{ player.seekTo(0,false); fetchLocked=true; }catch(_){}
-          // Если поток ещё только буферизуется, оставляем его без звука до PLAYING —
-          // иначе звук снова может обогнать первый показанный кадр.
-          if(s===3){ starting=true; }
-          else {
-            applyMute();
-            if(s===1){ send({t:'state',s:1}); startTicks(0); scheduleUnlock(); }
-          }
+          try{ player.pauseVideo(); player.seekTo(0,true); }catch(_){}
+          s=2;
         }
         if(s!==1){
           // Стартуем без звука и возвращаем его только в PLAYING: аудио не должно
           // убегать вперёд, пока WebView ещё не показал первый кадр.
-          // Докачку не открываем здесь — тёплый запас после подгрузки должен
-          // пойти сразу, а не через новый запрос.
           starting=true; quietUntil=Date.now()+1500; player.mute(); player.playVideo();
         }
       } else if(buffering){
@@ -229,11 +191,11 @@ ${init.widthDp ? `window.__fliqFit(${Math.round(init.widthDp)});` : ''}
   };
   window.__fliqMute=function(m){ muted=!!m; applyMute(); };
   window.__fliqLoop=function(l){ loop=!!l; };
-  // Перемотка полосой: пока палец едет — без докачки (final=false, как советует YouTube),
-  // отпустил — с докачкой. Пауза человека при перемотке остаётся паузой.
+  // Перемотка полосой: пока палец едет — final=false (YouTube только запоминает место, кадр
+  // стоит), отпустил — true: ролик идёт с этого места. Пауза человека при перемотке остаётся паузой.
   window.__fliqSeek=function(sec,final){
     if(!ready||buffering) return;
-    try{ seekedAt=Date.now(); ended=false; player.seekTo(Math.max(0,+sec||0),!!final); fetchLocked=!final; }catch(e){}
+    try{ seekedAt=Date.now(); ended=false; player.seekTo(Math.max(0,+sec||0),!!final); }catch(e){}
   };
   // Уже начатую подгрузку не обрываем из-за короткой смены ролей ячеек при свайпе:
   // она сама закончится по таймеру. false лишь запрещает начинать новую.
@@ -267,11 +229,7 @@ ${init.widthDp ? `window.__fliqFit(${Math.round(init.widthDp)});` : ''}
           // запуск кнопкой в плеере — тоже его решение, сообщаем и играем.
           if(e.data===1&&want==='pause'){ try{player.pauseVideo();}catch(_){} return; }
           if(e.data===1&&want==='hold'){ want='play'; send({t:'userplay'}); }
-          if(e.data===1&&starting){
-            starting=false; applyMute();
-            // Запас уже играет — теперь можно докачивать хвост, не сбрасывая старт.
-            if(fetchLocked) scheduleUnlock();
-          }
+          if(e.data===1&&starting){ starting=false; applyMute(); }
           if(e.data===2&&want==='play'&&!ended){ try{player.playVideo();}catch(_){} return; }
           send({t:'state',s:e.data});
           if(e.data===1){
@@ -280,8 +238,7 @@ ${init.widthDp ? `window.__fliqFit(${Math.round(init.widthDp)});` : ''}
             startTicks();
           } else {
             if(tick){ clearInterval(tick); tick=null; }
-            playAt=0;
-            if(!(e.data===3&&Date.now()<unlockQuietUntil)) sendTick(false);
+            sendTick(false);
           }
           // Обычный (не Shorts) плеер всё-таки присылает «закончился».
           if(e.data===0&&want==='play'){

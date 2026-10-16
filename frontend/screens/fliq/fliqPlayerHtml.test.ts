@@ -34,9 +34,13 @@ function start(init: {
     isMuted: () => player.muted,
     seekTo: (sec: number, allowSeekAhead: boolean) => {
       player.time = sec;
+      // false у YouTube — только предпросмотр для полосы: сам <video> остаётся на месте.
+      if (allowSeekAhead) player.real = sec;
       calls.push(`seek:${allowSeekAhead}`);
     },
     time: 0,
+    /** Где на самом деле стоит <video> (getCurrentTime отдаёт time). */
+    real: 0,
     getCurrentTime: () => player.time,
     getDuration: () => 30,
   };
@@ -135,7 +139,7 @@ describe('youtube player page', () => {
     p.flushTimeouts();
     expect(types(p.sent)).toEqual(['ready', 'primed', 'buffered']);
     expect(p.calls).toContain('pause');
-    expect(p.calls).toContain('seek:false');
+    expect(p.calls).toContain('seek:true');
     // Тихая подгрузка — не просмотр: полосе времени ничего не уходит.
     expect(ticks(p.sent)).toEqual([]);
     p.player.state = 2;
@@ -152,27 +156,28 @@ describe('youtube player page', () => {
     expect(p.timeoutDelays).toContain(1200);
   });
 
-  it('a prebuffered video starts from the warm buffer, then may download the rest', () => {
+  it('a prebuffered video waits at the real start, and a swipe plays it without any seek', () => {
     const p = start({ mode: 'pause', prebuffer: true });
     p.ready();
     p.state(1);
+    // Тихая подгрузка прокрутила ролик на пару секунд.
+    p.player.time = 2.4;
+    p.player.real = 2.4;
     p.flushTimeouts();
-    expect(p.calls.slice(-1)).toEqual(['unmute']);
+    // Возврат в начало — настоящей перемоткой, пока ролик скрыт (а не предпросмотром seek:false:
+    // тогда ролик после свайпа шёл с 2.4 с и через полсекунды прыгал в начало).
+    expect(p.player.real).toBe(0);
+    expect(p.calls).not.toContain('seek:false');
     p.player.state = 2;
     p.calls.length = 0;
     p.win.__fliq('play');
-    // seek:true в момент старта сбрасывает уже скачанный запас — свайп снова «грузит».
     expect(p.calls).toEqual(['mute', 'play']);
-    expect(p.player.time).toBe(0);
-    p.player.time = 0.4;
     p.state(1);
+    p.advance(600);
     p.flushTimeouts();
-    expect(p.calls).toContain('seek:true');
-    // Второй запуск того же ролика больше ничего не перематывает.
-    p.player.state = 2;
-    p.calls.length = 0;
-    p.win.__fliq('play');
-    expect(p.calls).toEqual(['mute', 'play']);
+    // На экране больше ничего не перематывается: ни «снятия запрета докачки», ни других seek.
+    expect(p.calls.filter((c) => c.startsWith('seek'))).toEqual([]);
+    expect(ticks(p.sent)).toEqual([{ c: 0, d: 30, p: 1 }]);
   });
 
   it('seeks from the progress bar: preview without download, release with download', () => {
@@ -204,47 +209,29 @@ describe('youtube player page', () => {
     expect(p.calls.filter((c) => c === 'unmute').length).toBe(2);
   });
 
-  it('opens download from where the video really is, not from a lagging getCurrentTime', () => {
-    const p = start({ mode: 'pause', prebuffer: true });
-    p.ready();
-    p.state(1);
-    p.flushTimeouts();
-    p.player.state = 2;
-    p.win.__fliq('play');
-    p.state(1);
-    // Ролик идёт уже 0.4 с, а IFrame API ещё отдаёт 0: перемотка на 0 откатила бы его в начало.
-    p.advance(400);
-    p.player.time = 0;
-    p.flushTimeouts();
-    expect(p.calls[p.calls.length - 1]).toBe('seek:true');
-    expect(p.player.time).toBeCloseTo(0.4, 5);
-    // Формальная «буферизация» этой перемотки полосу не останавливает.
-    const before = ticks(p.sent).length;
-    p.state(3);
-    expect(ticks(p.sent).length).toBe(before);
-    p.state(1);
-    expect(ticks(p.sent).slice(-1)[0].p).toBe(1);
-    // Настоящая буферизация позже — останавливает.
-    p.advance(2000);
-    p.state(3);
-    expect(ticks(p.sent).slice(-1)[0].p).toBe(0);
-  });
-
   it('a swipe during the deep-buffer window reuses the stream but starts from the beginning', () => {
     const p = start({ mode: 'pause', prebuffer: true });
     p.ready();
     p.state(1);
     // Тихая подгрузка успела прокрутить ролик.
     p.player.time = 5.9;
+    p.player.real = 5.9;
+    p.calls.length = 0;
     p.win.__fliq('play');
-    // Назад в начало по скачанному, без паузы и без новой загрузки; время — сразу.
-    expect(p.calls).toContain('seek:false');
-    expect(p.calls).not.toContain('pause');
-    expect(ticks(p.sent)).toEqual([{ c: 0, d: 30, p: 1 }]);
+    // Стоп, настоящая перемотка в начало по скачанному и обычный запуск без звука.
+    expect(p.calls).toEqual(['pause', 'seek:true', 'mute', 'play']);
+    expect(p.player.real).toBe(0);
+    // Первый кадр — только с PLAYING после перемотки, не кадром из середины подгрузки.
+    expect(types(p.sent)).toEqual(['ready', 'primed']);
+    p.state(3);
+    p.state(1);
+    expect(types(p.sent)).toEqual(['ready', 'primed', 'state:3', 'state:1']);
+    expect(ticks(p.sent).slice(-1)).toEqual([{ c: 0, d: 30, p: 1 }]);
+    expect(p.calls[p.calls.length - 1]).toBe('unmute');
+    // Дальше на экране ничего не перематывается.
+    p.advance(600);
     p.flushTimeouts();
-    expect(types(p.sent)).toEqual(['ready', 'primed', 'state:1']);
-    // Докачка открывается после старта — ролик не встанет на конце запаса.
-    expect(p.calls[p.calls.length - 1]).toBe('seek:true');
+    expect(p.calls.filter((c) => c.startsWith('seek'))).toEqual(['seek:true']);
   });
 
   it('finishes an in-flight buffer when list cells change roles', () => {
@@ -256,7 +243,7 @@ describe('youtube player page', () => {
 
     expect(types(p.sent)).toEqual(['ready', 'primed', 'buffered']);
     expect(p.calls).toContain('pause');
-    expect(p.calls).toContain('seek:false');
+    expect(p.calls).toContain('seek:true');
   });
 
   it('restores sound only when the first playing frame is reported', () => {
