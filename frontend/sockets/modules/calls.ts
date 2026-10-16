@@ -1,3 +1,4 @@
+import { markCallPerf } from "../../utils/callPerfTrace";
 import { getInstallId, getInstallSecret } from "../../utils/installId";
 import { logger } from "../../utils/logger";
 import { prewarmApiConnections } from "../../utils/warmConnections";
@@ -9,6 +10,8 @@ import {
   bindOutgoingCallE2ee,
   createOutgoingCallE2eeDeclaration,
   getOrCreateIncomingCallE2eeDeclaration,
+  peekIncomingCallE2eeDeclaration,
+  prepareIncomingCallE2ee,
 } from "./callE2ee";
 
 type DirectCallMedia = "audio" | "video";
@@ -214,10 +217,13 @@ export async function emitCallAcceptAck(
   });
 
   warmCallSignaling();
+  markCallPerf("call_accept_begin", { connected: socket.connected, reconnecting: shared.reconnecting });
   if (!socket.connected) {
     await ensureSocketConnected(CALL_SIGNALING_CONNECT_MS);
   }
-  const uid = await waitForCurrentUserId(8000);
+  // Без await, если userId уже есть: любой await на «Принять» ставит emit в очередь
+  // за монтированием экрана звонка (~0.5 с под нагрузкой JS).
+  const uid = String(shared.currentUserId || "").trim() || (await waitForCurrentUserId(8000));
   if (!uid) {
     logger.warn("[socket] call:accept deferred — no currentUserId yet", { callId: id });
   }
@@ -242,13 +248,19 @@ export async function emitCallAcceptAck(
   };
 
   const tryEmit = async () => {
-    const e2ee = await getOrCreateIncomingCallE2eeDeclaration(id);
-    return emitAck<{ ok?: boolean; error?: string; duplicate?: boolean }>(
+    // Ключ обычно подготовлен ещё во время звонка (prepareIncomingCallE2ee) — тогда
+    // call:accept уходит синхронно, в том же обработчике нажатия.
+    const e2ee = peekIncomingCallE2eeDeclaration(id) ?? (await getOrCreateIncomingCallE2eeDeclaration(id));
+    const emittedAt = Date.now();
+    markCallPerf("call_accept_emit", { connected: socket.connected, reconnecting: shared.reconnecting });
+    const resp = await emitAck<{ ok?: boolean; error?: string; duplicate?: boolean }>(
       "call:accept",
       { callId: id, e2ee },
       7000,
       1,
     );
+    markCallPerf("call_accept_ack", { ackMs: Date.now() - emittedAt, ok: !!resp?.ok });
+    return resp;
   };
 
   // Fast path: сокет + uid уже есть — emit сразу, reauth параллельно.
@@ -422,6 +434,7 @@ export function onCallIncoming(cb: (d: { callId: string; callKitId?: string; fro
   const h = (d: any) => {
     logger.debug("Socket received call:incoming", { callId: d.callId, from: d.from, fromNick: d.fromNick });
     prewarmApiConnections("call_in", 3);
+    prepareIncomingCallE2ee(d?.callId);
     cb(d);
   };
   socket.on("call:incoming", h);

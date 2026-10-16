@@ -17,6 +17,8 @@ import {
   createOutgoingCallE2eeDeclaration,
   deriveCallKey,
   getOrCreateIncomingCallE2eeDeclaration,
+  peekIncomingCallE2eeDeclaration,
+  prepareIncomingCallE2ee,
 } from './callE2ee';
 import { deriveCallFrameKey, fromBase64, generateKeyPair, toBase64 } from './e2eCrypto';
 
@@ -45,5 +47,19 @@ describe('automatic per-call E2EE', () => {
     expect([...secure.values()]).toHaveLength(1);
     await clearCallE2ee('call-incoming-1');
     expect(secure.size).toBe(0);
+  });
+
+  it('prepares the incoming key while ringing so accept can emit without awaiting', async () => {
+    const callId = 'call-incoming-prepared';
+    expect(peekIncomingCallE2eeDeclaration(callId)).toBeNull();
+
+    prepareIncomingCallE2ee(callId);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const peeked = peekIncomingCallE2eeDeclaration(callId);
+    expect(peeked).not.toBeNull();
+    expect(await getOrCreateIncomingCallE2eeDeclaration(callId)).toEqual(peeked);
+    await clearCallE2ee(callId);
+    expect(peekIncomingCallE2eeDeclaration(callId)).toBeNull();
   });
 });

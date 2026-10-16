@@ -392,6 +392,14 @@ export function markHomeScreenBootedForSession() {
   homeScreenAlreadyBooted = true;
 }
 
+/**
+ * call:initiate не дошёл до сервера по сети (таймаут HTTP — AbortController даёт «Aborted»,
+ * обрыв сокета, 5xx прокси). Отказы сервера (busy, не друзья, E2EE) сюда не попадают.
+ */
+function isCallStartNetworkError(errCode: string): boolean {
+  return /abort|network|timeout|timed out|offline|failed to fetch|disconnected|http_5\d\d/i.test(errCode);
+}
+
 export default function HomeScreen({ navigation, route }: Props & { route?: { params?: HomeRouteParams } }) {
   // Корень Home меряем сами и раздаём через HomeLayoutProvider: тогда
   // ориентация и размеры у всех потребителей меняются в одном кадре.
@@ -1277,6 +1285,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const [friendActionsGestureResetSeq, setFriendActionsGestureResetSeq] = useState(0);
   const lastIncomingFromRef = useRef<string | null>(null);
   const [roomFull, setRoomFull] = useState<{ visible: boolean; name?: string }>({ visible: false });
+  /** Звонок не ушёл на сервер (нет сети / VPN не пропускает) — говорим об этом, а не молча закрываем. */
+  const [callNoConnectionVisible, setCallNoConnectionVisible] = useState(false);
 
   const pendingCancelRef = useRef(false);
   /** Инкремент при реальной отмене исходящего — attempt видит только cancel, случившийся после своего старта. */
@@ -2843,6 +2853,11 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           recordCancelledCall(String(friend.id));
           forceCallLogUiNow('start_failed');
         } catch {}
+        // Ни сокет, ни HTTP не довезли call:initiate (мёртвая сеть, VPN «подключён», но не
+        // пропускает трафик). Раньше экран исходящего просто исчезал после 12 с гудков.
+        if (isCallStartNetworkError(errCode)) {
+          setCallNoConnectionVisible(true);
+        }
       }
       if (canceledByNative) {
         try {
@@ -6045,6 +6060,14 @@ const handleClearNick = useCallback(async () => {
         title={t('roomBusyTitle', lang)}
         message={roomFull.name || undefined}
         actions={[{ label: t('ok', lang), onPress: () => setRoomFull({ visible: false }) }]}
+      />
+
+      <AppDialogModal
+        visible={callNoConnectionVisible}
+        onRequestClose={() => setCallNoConnectionVisible(false)}
+        title={t('callNoConnectionTitle', lang)}
+        message={t('callNoConnectionMessage', lang)}
+        actions={[{ label: t('ok', lang), onPress: () => setCallNoConnectionVisible(false) }]}
       />
 
       <LanguagePicker visible={langPickerVisible} onClose={closeLangPicker} onSelect={(code) => { void handleSelectLang(code); }} current={lang} />

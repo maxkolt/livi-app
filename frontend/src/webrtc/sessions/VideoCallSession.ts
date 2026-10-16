@@ -306,6 +306,8 @@ export class VideoCallSession extends SimpleEventEmitter {
   private remoteVideoStallResumes = 0;
   /** Последний call:peerReconnecting — партнёр сам потерял сеть. */
   private lastPeerNetworkDownAt = 0;
+  /** Публикация микрофона, начатая на SignalConnected — см. startEarlyAudioPublish. */
+  private earlyAudioPublish: { room: Room; promise: Promise<void> } | null = null;
   private callLeaseHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private lastLiveKitReconnectingAt = 0;
   /** Unexpected Room Disconnected: try restore within grace; then stop heartbeat (server lease ends busy). */
@@ -7693,6 +7695,39 @@ export class VideoCallSession extends SimpleEventEmitter {
    * Комната могла отвалиться, пока мы ждали треки, — тогда просто синхронизируем UI:
    * само подключение всё равно состоялось.
    */
+  /**
+   * Микрофон публикуем сразу после SignalConnected, не дожидаясь ICE/DTLS приёмного
+   * соединения (room.connect() резолвится только после него). Иначе согласование
+   * отправляющего соединения шло вторым кругом после первого, и под VPN собеседник
+   * слышал нас на ~1 с позже. LiveKit сам держит publish до готовности сигнала.
+   */
+  private startEarlyAudioPublish(room: Room, tracksReadyPromise: Promise<void>): void {
+    if (!this.isMicOn) return;
+    const promise = (async () => {
+      await tracksReadyPromise;
+      const track = this.localAudioTrack;
+      if (this.ended || this.room !== room || !track || !room.localParticipant) return;
+      if (this.isAudioTrackPublished(track)) return;
+      try {
+        markCallPerf('livekit_audio_publish_early_start', { roomState: room.state });
+      } catch {}
+      await room.localParticipant.publishTrack(track).catch((e) => {
+        const errorMsg = e?.message || String(e || '');
+        if (isIgnorablePublishError(errorMsg)) return;
+        logger.warn('[VideoCallSession] Early audio publish failed — will publish after connect', {
+          error: errorMsg,
+        });
+      });
+      try {
+        markCallPerf('livekit_audio_publish_early_done', {
+          published: this.isAudioTrackPublished(track),
+          roomState: room.state,
+        });
+      } catch {}
+    })();
+    this.earlyAudioPublish = { room, promise };
+  }
+
   private async publishLocalTracksAfterConnect(room: Room, tracksReadyPromise: Promise<void>): Promise<void> {
     // Даём движку LiveKit время поднять транспорт перед публикацией (снижает "publication timed out" и "connection state mismatch").
     const postConnectPublishDelayMs = this.isCamOn ? 350 : 0;
@@ -7737,6 +7772,12 @@ export class VideoCallSession extends SimpleEventEmitter {
         trackId: this.localVideoTrack?.sid || this.localVideoTrack?.mediaStreamTrack?.id,
       });
     }
+    const earlyAudio = this.earlyAudioPublish;
+    if (earlyAudio?.room === room) {
+      this.earlyAudioPublish = null;
+      await earlyAudio.promise;
+    }
+    // Ранняя публикация не прошла (или мик был выключен) — обычный путь.
     await this.publishLocalTrackOnConnect(room, this.localAudioTrack, 'audio');
     this.metrics.markPublishCompleted();
     const publishLatencyMs = this.metrics.getPublishLatencyMs();
@@ -7860,11 +7901,22 @@ export class VideoCallSession extends SimpleEventEmitter {
     
     // КРИТИЧНО: Создаем промис подключения для защиты от множественных вызовов
     const connectionPromise = (async (): Promise<boolean> => {
+      const iceLoadStartedAt = Date.now();
       const rtcConfig = await this.loadIceConfiguration(options);
       const room = this.createLiveKitRoomForConnect();
+      room.once(RoomEvent.SignalConnected, () => {
+        this.startEarlyAudioPublish(room, tracksReadyPromise);
+      });
 
       try {
+        const e2eeStartedAt = Date.now();
         await this.enableCallE2eeOnRoom(room);
+        try {
+          markCallPerf('livekit_pre_connect_ready', {
+            iceLoadMs: e2eeStartedAt - iceLoadStartedAt,
+            e2eeEnableMs: Date.now() - e2eeStartedAt,
+          });
+        } catch {}
         // КРИТИЧНО: Новая комната всегда в состоянии 'disconnected' до connect()
         // Проверяем состояние только после попытки подключения
         logger.info('[VideoCallSession] Attempting to connect to LiveKit', {

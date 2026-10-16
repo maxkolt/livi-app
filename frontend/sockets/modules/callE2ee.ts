@@ -126,9 +126,27 @@ export async function getOrCreateIncomingCallE2eeDeclaration(callIdRaw: string):
     pair = generateKeyPair();
     keysByCallId.set(callId, pair);
     pruneMemory();
-    await persistCallPair(callId, pair);
+    // Не ждём SecureStore: каждый await на «Принять» уходит в очередь за монтированием
+    // экрана звонка, и call:accept улетал на полсекунды позже. Ключ уже в памяти.
+    void persistCallPair(callId, pair);
   }
   return { pk: toBase64(pair.publicKey) };
+}
+
+/**
+ * Пока звонит: X25519 на чистом JS (десятки мс) и чтение SecureStore — заранее,
+ * чтобы по «Принять» call:accept ушёл синхронно (см. peekIncomingCallE2eeDeclaration).
+ */
+export function prepareIncomingCallE2ee(callIdRaw: string): void {
+  const callId = String(callIdRaw || "").trim();
+  if (!callId || keysByCallId.has(callId)) return;
+  void getOrCreateIncomingCallE2eeDeclaration(callId).catch(() => {});
+}
+
+/** Ключ входящего уже в памяти — объявление без единого await. */
+export function peekIncomingCallE2eeDeclaration(callIdRaw: string): CallE2eeDeclaration | null {
+  const pair = keysByCallId.get(String(callIdRaw || "").trim());
+  return pair ? { pk: toBase64(pair.publicKey) } : null;
 }
 
 /** Общий 32-байтный ключ кадров. Приватный ключ никогда не покидает устройство. */

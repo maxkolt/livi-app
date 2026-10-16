@@ -2850,8 +2850,9 @@ app.post('/api/calls/decline', async (req, res) => {
     logger.info('[api/calls/decline] callee declined via HTTP', { callId, caller: link.a, callee: link.b });
     clearDirectCallSessionForUser(io, link.a);
     clearDirectCallSessionForUser(io, link.b);
-    await emitPresenceUpdateCallToFriends(io, link.a, link.b, false);
+    // Инициатору — до presence друзьям (Mongo), см. socket call:decline.
     try { io.to(`u:${link.a}`).emit('call:declined', { callId, from: link.b }); } catch {}
+    void emitPresenceUpdateCallToFriends(io, link.a, link.b, false).catch(() => {});
     logger.info('[api/calls/decline] sending call_declined push to caller', { callId, caller: link.a, callee: link.b });
     try { await sendCallDeclinedToCaller(link.a, callId); } catch (e: any) { logger.warn('[api/calls/decline] sendCallDeclinedToCaller failed', { error: e?.message }); }
     // Отклонение получателем — не пропущенный вызов; call_ended получателю не шлём
@@ -4863,14 +4864,16 @@ io.on('connection', async (sock: AuthedSocket) => {
     // Снимаем busy статус с обоих участников при отклонении
     clearDirectCallSessionForUser(io, link.a);
     clearDirectCallSessionForUser(io, link.b);
-    await emitPresenceUpdateCallToFriends(io, link.a, link.b, false);
 
     try {
       const sortedU = [link.a, link.b].sort();
       dissolveSocketIoRoom(io, `room_${sortedU[0]}_${sortedU[1]}`);
     } catch {}
 
+    // Сначала инициатору: presence друзьям ходит в Mongo, и под нагрузкой гудки
+    // у звонящего шли лишние 1–2 с после «Отклонить» (как call:cancel — в фоне).
     try { io.to(`u:${link.a}`).emit('call:declined', { callId: id, from: link.b }); } catch {}
+    void emitPresenceUpdateCallToFriends(io, link.a, link.b, false).catch(() => {});
     logger.info('[call:decline] sending call_declined push to caller', { callId: id, caller: link.a, callee: link.b });
     try { await sendCallDeclinedToCaller(link.a, id); } catch (e: any) { logger.warn('[call:decline] sendCallDeclinedToCaller failed', { error: e?.message }); }
     // Отклонение получателем — не пропущенный вызов; call_ended получателю не шлём

@@ -176,6 +176,7 @@ import {
   navigateToVideoCallScreen,
 } from './utils/appNavigationGuard';
 import { readRootCurrentRouteName } from './utils/safeRootNavigation';
+import { prepareIncomingCallE2ee } from './sockets/modules/callE2ee';
 
 // Импорт expo-keep-awake с безопасной загрузкой
 let activateKeepAwakeAsync: (() => Promise<void>) | null = null;
@@ -3219,6 +3220,7 @@ function AppContent() {
     lastProcessedIncomingRef.current = callId ? { callId, at: now } : null;
     logger.debug('[call:incoming] received', { callId: d.callId, from: d.from, fromNick: d.fromNick });
     warmCallSignaling();
+    prepareIncomingCallE2ee(callId);
 
     // КРИТИЧНО: Используем актуальное значение навигации напрямую, а не routeName (который обновляется асинхронно)
     // Fallback: если навигация не готова, разрешаем показать модалку (лучше показать, чем пропустить)
