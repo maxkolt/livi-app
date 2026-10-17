@@ -41,4 +41,11 @@
     <item quantity="many">%d mensajes sin leer</item>
     <item quantity="other">%d mensajes sin leer</item>
   </plurals>
+  <!-- «Надёжные звонки» (CallKeepAliveService) -->
+  <string name="call_keepalive_channel">Llamadas fiables</string>
+  <string name="call_keepalive_title">LiVi está conectado</string>
+  <string name="call_keepalive_text_connected">Las llamadas entrantes te llegarán incluso con VPN o mala conexión</string>
+  <string name="call_keepalive_text_connecting">Conectando con LiVi…</string>
+  <string name="call_keepalive_text_waiting">Sin red: nos reconectaremos en cuanto vuelva</string>
+  <string name="call_keepalive_action_disable">Desactivar</string>
 </resources>

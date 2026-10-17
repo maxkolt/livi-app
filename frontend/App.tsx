@@ -177,6 +177,7 @@ import {
 } from './utils/appNavigationGuard';
 import { readRootCurrentRouteName } from './utils/safeRootNavigation';
 import { prepareIncomingCallE2ee } from './sockets/modules/callE2ee';
+import { ensureCallKeepAliveRunning } from './utils/callKeepAlive';
 
 // Импорт expo-keep-awake с безопасной загрузкой
 let activateKeepAwakeAsync: (() => Promise<void>) | null = null;
@@ -2446,6 +2447,15 @@ function AppContent() {
     });
     return () => sub.remove();
   }, [ensureInAppPiPBeforeOpenFriends]);
+
+  // «Надёжные звонки»: из фона Android мог не дать поднять сервис — проверяем на старте и при возврате.
+  React.useEffect(() => {
+    ensureCallKeepAliveRunning();
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') ensureCallKeepAliveRunning();
+    });
+    return () => sub.remove();
+  }, []);
 
   // При возврате в приложение перерегистрируем push-токен (в т.ч. fcmToken на Android), чтобы не терять FCM после пуша сообщения.
   React.useEffect(() => {

@@ -37,4 +37,11 @@
   <plurals name="summary_unread_count">
     <item quantity="other">읽지 않은 메시지 %d개</item>
   </plurals>
+  <!-- «Надёжные звонки» (CallKeepAliveService) -->
+  <string name="call_keepalive_channel">안정적인 통화</string>
+  <string name="call_keepalive_title">LiVi 연결 유지 중</string>
+  <string name="call_keepalive_text_connected">VPN이나 약한 네트워크에서도 전화가 수신됩니다</string>
+  <string name="call_keepalive_text_connecting">LiVi에 연결 중…</string>
+  <string name="call_keepalive_text_waiting">네트워크 없음 — 연결되면 바로 다시 연결합니다</string>
+  <string name="call_keepalive_action_disable">끄기</string>
 </resources>

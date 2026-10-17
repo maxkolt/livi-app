@@ -39,4 +39,11 @@
     <item quantity="one">%d अपठित संदेश</item>
     <item quantity="other">%d अपठित संदेश</item>
   </plurals>
+  <!-- «Надёжные звонки» (CallKeepAliveService) -->
+  <string name="call_keepalive_channel">भरोसेमंद कॉल</string>
+  <string name="call_keepalive_title">LiVi जुड़ा हुआ है</string>
+  <string name="call_keepalive_text_connected">VPN या कमज़ोर नेटवर्क में भी आने वाली कॉल आप तक पहुँचेंगी</string>
+  <string name="call_keepalive_text_connecting">LiVi से जुड़ रहा है…</string>
+  <string name="call_keepalive_text_waiting">नेटवर्क नहीं है — वापस आते ही फिर से जुड़ेंगे</string>
+  <string name="call_keepalive_action_disable">बंद करें</string>
 </resources>

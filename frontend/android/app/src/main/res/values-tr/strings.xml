@@ -39,4 +39,11 @@
     <item quantity="one">%d okunmamış mesaj</item>
     <item quantity="other">%d okunmamış mesaj</item>
   </plurals>
+  <!-- «Надёжные звонки» (CallKeepAliveService) -->
+  <string name="call_keepalive_channel">Güvenilir aramalar</string>
+  <string name="call_keepalive_title">LiVi bağlı</string>
+  <string name="call_keepalive_text_connected">Gelen aramalar VPN veya zayıf ağda bile size ulaşır</string>
+  <string name="call_keepalive_text_connecting">LiVi\'ye bağlanılıyor…</string>
+  <string name="call_keepalive_text_waiting">Ağ yok — geri gelince yeniden bağlanacağız</string>
+  <string name="call_keepalive_action_disable">Kapat</string>
 </resources>

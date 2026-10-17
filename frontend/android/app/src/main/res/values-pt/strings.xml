@@ -41,4 +41,11 @@
     <item quantity="many">%d mensagens não lidas</item>
     <item quantity="other">%d mensagens não lidas</item>
   </plurals>
+  <!-- «Надёжные звонки» (CallKeepAliveService) -->
+  <string name="call_keepalive_channel">Chamadas confiáveis</string>
+  <string name="call_keepalive_title">LiVi está conectado</string>
+  <string name="call_keepalive_text_connected">As chamadas recebidas chegarão mesmo com VPN ou rede fraca</string>
+  <string name="call_keepalive_text_connecting">Conectando ao LiVi…</string>
+  <string name="call_keepalive_text_waiting">Sem rede — reconectaremos assim que voltar</string>
+  <string name="call_keepalive_action_disable">Desativar</string>
 </resources>

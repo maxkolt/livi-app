@@ -39,4 +39,11 @@
     <item quantity="one">%d ungelesene Nachricht</item>
     <item quantity="other">%d ungelesene Nachrichten</item>
   </plurals>
+  <!-- «Надёжные звонки» (CallKeepAliveService) -->
+  <string name="call_keepalive_channel">Zuverlässige Anrufe</string>
+  <string name="call_keepalive_title">LiVi bleibt verbunden</string>
+  <string name="call_keepalive_text_connected">Eingehende Anrufe erreichen dich auch mit VPN oder schwachem Netz</string>
+  <string name="call_keepalive_text_connecting">Verbindung zu LiVi…</string>
+  <string name="call_keepalive_text_waiting">Kein Netz – wir verbinden uns, sobald es zurück ist</string>
+  <string name="call_keepalive_action_disable">Ausschalten</string>
 </resources>

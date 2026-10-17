@@ -37,4 +37,11 @@
   <plurals name="summary_unread_count">
     <item quantity="other">%d pesan belum dibaca</item>
   </plurals>
+  <!-- «Надёжные звонки» (CallKeepAliveService) -->
+  <string name="call_keepalive_channel">Panggilan andal</string>
+  <string name="call_keepalive_title">LiVi tetap terhubung</string>
+  <string name="call_keepalive_text_connected">Panggilan masuk tetap sampai meski memakai VPN atau jaringan lemah</string>
+  <string name="call_keepalive_text_connecting">Menghubungkan ke LiVi…</string>
+  <string name="call_keepalive_text_waiting">Tidak ada jaringan — akan tersambung lagi begitu kembali</string>
+  <string name="call_keepalive_action_disable">Matikan</string>
 </resources>

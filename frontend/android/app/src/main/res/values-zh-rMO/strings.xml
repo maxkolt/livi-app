@@ -37,4 +37,11 @@
   <plurals name="summary_unread_count">
     <item quantity="other">%d 則未讀訊息</item>
   </plurals>
+  <!-- «Надёжные звонки» (CallKeepAliveService) -->
+  <string name="call_keepalive_channel">可靠通話</string>
+  <string name="call_keepalive_title">LiVi 保持連線</string>
+  <string name="call_keepalive_text_connected">即使使用 VPN 或網路不佳，也能接到來電</string>
+  <string name="call_keepalive_text_connecting">正在連線至 LiVi…</string>
+  <string name="call_keepalive_text_waiting">沒有網路——恢復後會立即重新連線</string>
+  <string name="call_keepalive_action_disable">關閉</string>
 </resources>

@@ -1,5 +1,6 @@
 import React, { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  Animated,
   Keyboard,
   KeyboardAvoidingView,
   Linking,
@@ -59,11 +60,14 @@ import {
 import type { HomeStyles } from './styles';
 import { GLASS_DOCK_TOP_PAD } from './WelcomeGlassHeader';
 import { APP_INPUT_MAX_FONT_SIZE_MULTIPLIER } from '../../utils/accessibilityTypography';
+import {
+  isCallKeepAliveSupported,
+  useCallKeepAliveState,
+  type CallKeepAliveStatus,
+} from '../../utils/callKeepAlive';
 
 const SUPPORT_EMAIL = '12345kolt@gmail.com';
 const SUPPORT_EMAIL_2 = 'kolt12max@mail.ru';
-const BOOSTY_URL = process.env.EXPO_PUBLIC_BOOSTY_URL || 'https://boosty.to/liviapp/donate';
-const PATREON_URL = process.env.EXPO_PUBLIC_PATREON_URL || 'https://patreon.com/LiViApp?utm_medium=unknown&utm_source=join_link&utm_campaign=creatorshare_creator&utm_content=copyLink';
 const CAMERA_BTN_SIZE = 32;
 /** Урна на аватаре чуть внутрь от угла — ближе к самому кругу, а не в пустом углу. */
 const CAMERA_BTN_INSET = 7;
@@ -326,21 +330,59 @@ function normalizeLangCode(code?: string): string {
   return c;
 }
 
-function appendSupportUtm(url: string, params: Record<string, string>): string {
-  try {
-    const u = new URL(url);
-    Object.entries(params).forEach(([k, v]) => u.searchParams.set(k, v));
-    return u.toString();
-  } catch {
-    const hasQ = url.includes('?');
-    const qs = Object.entries(params)
-      .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
-      .join('&');
-    return url + (hasQ ? '&' : '?') + qs;
-  }
+
+const RELIABILITY_STATUS_KEY: Record<CallKeepAliveStatus, string> = {
+  off: 'callReliabilityStatusOff',
+  connecting: 'callReliabilityStatusConnecting',
+  connected: 'callReliabilityStatusConnected',
+  waiting_network: 'callReliabilityStatusWaitingNetwork',
+  no_account: 'callReliabilityStatusNoAccount',
+};
+
+/** Точка состояния: акцент — соединение есть, приглушённый янтарь — ждём, серый — выключено. */
+const RELIABILITY_STATUS_COLOR: Record<CallKeepAliveStatus, string> = {
+  off: WELCOME_PROFILE_ROW_ICON,
+  connecting: '#B99A5E',
+  connected: UI_ACCENT,
+  waiting_network: '#B99A5E',
+  no_account: WELCOME_PROFILE_ROW_ICON,
+};
+
+const RELIABILITY_HOW_ITEMS: Array<{ key: string; icon: keyof typeof Ionicons.glyphMap }> = [
+  { key: 'callReliabilityHowPrimary', icon: 'notifications-outline' },
+  { key: 'callReliabilityHowReconnect', icon: 'swap-horizontal-outline' },
+  { key: 'callReliabilityHowNoDuplicates', icon: 'checkmark-done-outline' },
+];
+
+const SWITCH_WIDTH = 46;
+const SWITCH_HEIGHT = 28;
+const SWITCH_THUMB = 22;
+const SWITCH_TRAVEL = SWITCH_WIDTH - SWITCH_THUMB - 6;
+
+/** Переключатель в палитре приложения: мягкий акцент вместо яркой заливки. */
+function ReliabilitySwitch({ value }: { value: boolean }) {
+  const progress = React.useRef(new Animated.Value(value ? 1 : 0)).current;
+  useEffect(() => {
+    Animated.timing(progress, {
+      toValue: value ? 1 : 0,
+      duration: 160,
+      useNativeDriver: true,
+    }).start();
+  }, [progress, value]);
+  return (
+    <View style={[styles.switchTrack, value && styles.switchTrackOn]}>
+      <Animated.View
+        style={[
+          styles.switchThumb,
+          value && styles.switchThumbOn,
+          { transform: [{ translateX: progress.interpolate({ inputRange: [0, 1], outputRange: [0, SWITCH_TRAVEL] }) }] },
+        ]}
+      />
+    </View>
+  );
 }
 
-type ProfileScreen = 'hub' | 'about' | 'language' | 'help' | 'support' | 'purchases';
+type ProfileScreen = 'hub' | 'about' | 'language' | 'help' | 'callReliability' | 'purchases';
 
 type HomeWelcomeProfileViewProps = {
   lang: Lang;
@@ -362,8 +404,6 @@ type HomeWelcomeProfileViewProps = {
   savedToast?: boolean;
   setSavedToast?: (show: boolean) => void;
   onSelectLang: (code: Lang) => void;
-  incrCounter: (key: string) => Promise<number>;
-  onSupportClick: () => void;
   onLogOutAccount?: () => void;
   wiping?: boolean;
   updateAvailable: boolean;
@@ -394,8 +434,6 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
     savedToast,
     setSavedToast,
     onSelectLang,
-    incrCounter,
-    onSupportClick,
     onLogOutAccount,
     wiping,
     updateAvailable,
@@ -414,6 +452,7 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
   const isTablet = isWelcomeTabletLayout(windowWidth, windowHeight);
   const compactLandscape = isLandscape && !isTablet;
   const [screen, setScreen] = useState<ProfileScreen>('hub');
+  const callKeepAlive = useCallKeepAliveState(active);
   const [accountOpen, setAccountOpen] = useState(false);
   const [copiedEmail, setCopiedEmail] = useState<string | null>(null);
   const hubOrientationKey = isLandscape ? 'landscape' : 'portrait';
@@ -532,7 +571,7 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
   const subScreenTitle = useMemo(() => {
     if (screen === 'about') return t('welcomeAboutApp', lang);
     if (screen === 'help') return t('profileHelp', lang);
-    if (screen === 'support') return t('supportProjectTitle', lang);
+    if (screen === 'callReliability') return t('callReliabilityTitle', lang);
     if (screen === 'purchases') return t('purchasesManagement', lang);
     return t('chooseLanguage', lang);
   }, [screen, lang]);
@@ -554,35 +593,17 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
     setScreen('purchases');
   }, []);
 
-  const openSupport = useCallback(() => {
+  const openCallReliability = useCallback(() => {
     setAccountOpen(false);
-    onSupportClick();
-    setScreen('support');
-  }, [onSupportClick]);
+    setScreen('callReliability');
+  }, []);
 
-  const openBoosty = useCallback(async () => {
-    const clicks = await incrCounter('support_boosty_clicks');
-    const url = appendSupportUtm(BOOSTY_URL, {
-      utm_source: 'livi_app',
-      utm_medium: 'support',
-      utm_campaign: 'donate',
-      utm_content: 'boosty',
-      utm_count: String(clicks),
-    });
-    Linking.openURL(url).catch(() => {});
-  }, [incrCounter]);
-
-  const openPatreon = useCallback(async () => {
-    const clicks = await incrCounter('support_patreon_clicks');
-    const url = appendSupportUtm(PATREON_URL, {
-      utm_source: 'livi_app',
-      utm_medium: 'support',
-      utm_campaign: 'donate',
-      utm_content: 'patreon',
-      utm_count: String(clicks),
-    });
-    Linking.openURL(url).catch(() => {});
-  }, [incrCounter]);
+  const reliabilityState = callKeepAlive.state;
+  const reliabilityEnabled = !!reliabilityState?.enabled;
+  const setReliabilityEnabled = callKeepAlive.setEnabled;
+  const toggleReliability = useCallback(() => {
+    void setReliabilityEnabled(!reliabilityEnabled);
+  }, [setReliabilityEnabled, reliabilityEnabled]);
 
   const copyEmail = useCallback(async (email: string) => {
     try {
@@ -961,9 +982,14 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
           rowHeight={hubMetrics.rowHeight}
           compact={compactLandscape}
           tablet={isTablet}
-          icon="heart-outline"
-          label={t('supportProjectTitle', lang)}
-          onPress={openSupport}
+          icon="shield-checkmark-outline"
+          label={t('callReliabilityTitle', lang)}
+          value={
+            isCallKeepAliveSupported && reliabilityState
+              ? t(reliabilityEnabled ? 'callReliabilityOn' : 'callReliabilityOff', lang)
+              : undefined
+          }
+          onPress={openCallReliability}
         />
       </WelcomeProfileSection>
     </View>
@@ -1106,75 +1132,110 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
     </View>
   );
 
-  const supportBody = (
-    <View style={compactLandscape ? styles.supportWrapLandscape : styles.subScreenBlockOffset}>
+  const reliabilityStatus: CallKeepAliveStatus = reliabilityState?.status ?? 'off';
+  const reliabilityStatusText = t(RELIABILITY_STATUS_KEY[reliabilityStatus], lang);
+  const reliabilityStatusColor = RELIABILITY_STATUS_COLOR[reliabilityStatus];
+
+  const callReliabilityBody = (
+    <View style={[styles.subScreenBlockOffset, compactLandscape && styles.reliabilityWrapLandscape]}>
       <WelcomeProfileSection compact={compactLandscape} tablet={isTablet}>
-      {/* Горизонталь: описание слева, ссылки справа — по высоте столбиком не влезает. */}
-      <View style={compactLandscape ? styles.supportContentLandscape : null}>
-      <View style={[styles.supportHero, compactLandscape && styles.supportHeroLandscape]}>
-        <View style={[styles.supportHeroIcon, compactLandscape && styles.supportHeroIconLandscape]}>
-          <Ionicons
-            name="heart-outline"
-            size={compactLandscape ? 26 : 34}
-            color={UI_ACCENT}
-          />
+        <View style={[styles.featureHero, compactLandscape && styles.featureHeroLandscape]}>
+          <View style={[styles.featureHeroIcon, compactLandscape && styles.featureHeroIconLandscape]}>
+            <Ionicons name="shield-checkmark-outline" size={compactLandscape ? 24 : 30} color={UI_ACCENT} />
+          </View>
+          <AdaptiveText style={styles.featureHeroText}>{t('callReliabilityIntro', lang)}</AdaptiveText>
         </View>
-        <AdaptiveText style={styles.supportHeroText}>{t('supportProjectSubtitle', lang)}</AdaptiveText>
-      </View>
-      <View style={[styles.supportTiles, compactLandscape && styles.supportTilesLandscape]}>
-        <Pressable
-          onPress={() => {
-            void openBoosty();
-          }}
-          style={({ pressed }) => [
-            styles.supportTile,
-            compactLandscape && styles.supportTileLandscape,
-            pressed && styles.supportTilePressed,
-          ]}
-          accessibilityRole="button"
-        >
-          <View style={styles.supportTileLogoWrap}>
-            <ExpoImage
-              source={require('../../assets/boosty-sign-logo.png')}
-              style={styles.supportTileLogo}
-              contentFit="contain"
-              cachePolicy="memory-disk"
-            />
+      </WelcomeProfileSection>
+
+      {isCallKeepAliveSupported ? (
+        <WelcomeProfileSection compact={compactLandscape} tablet={isTablet}>
+          <Pressable
+            onPress={toggleReliability}
+            disabled={!reliabilityState}
+            style={({ pressed }) => [styles.toggleRow, pressed && styles.toggleRowPressed]}
+            accessibilityRole="switch"
+            accessibilityState={{ checked: reliabilityEnabled, disabled: !reliabilityState }}
+            accessibilityLabel={t('callReliabilityToggle', lang)}
+          >
+            <View style={styles.toggleText}>
+              <AdaptiveText style={styles.toggleLabel}>{t('callReliabilityToggle', lang)}</AdaptiveText>
+              <AdaptiveText style={styles.toggleHint}>{t('callReliabilityToggleHint', lang)}</AdaptiveText>
+            </View>
+            <ReliabilitySwitch value={reliabilityEnabled} />
+          </Pressable>
+          <View style={styles.cardDivider} />
+          <View style={styles.statusRow}>
+            <AdaptiveText style={styles.statusLabel} numberOfLines={1}>
+              {t('callReliabilityStatus', lang)}
+            </AdaptiveText>
+            <View style={styles.statusValueWrap}>
+              <View style={[styles.statusDot, { backgroundColor: reliabilityStatusColor }]} />
+              <AdaptiveText style={styles.statusValue} numberOfLines={1}>
+                {reliabilityStatusText}
+              </AdaptiveText>
+            </View>
           </View>
-          <View style={styles.supportTileText}>
-            <AdaptiveText style={styles.supportTileTitle}>Boosty</AdaptiveText>
-            <AdaptiveText style={styles.supportTileHint}>boosty.to</AdaptiveText>
+          {reliabilityEnabled && reliabilityState && !reliabilityState.notificationsEnabled ? (
+            <>
+              <View style={styles.cardDivider} />
+              <Pressable
+                onPress={openNotificationsSettings}
+                style={({ pressed }) => [styles.statusRow, pressed && styles.toggleRowPressed]}
+                accessibilityRole="button"
+              >
+                <AdaptiveText style={styles.statusWarn} numberOfLines={2}>
+                  {t('callReliabilityNotificationsOff', lang)}
+                </AdaptiveText>
+                <View style={styles.statusValueWrap}>
+                  <AdaptiveText style={styles.statusLink} numberOfLines={1}>
+                    {t('callReliabilityOpenSettings', lang)}
+                  </AdaptiveText>
+                  <Ionicons name="chevron-forward" size={18} color={WELCOME_PROFILE_ROW_ICON} />
+                </View>
+              </Pressable>
+            </>
+          ) : null}
+        </WelcomeProfileSection>
+      ) : null}
+
+      <WelcomeProfileSection title={t('callReliabilityHowTitle', lang)} compact={compactLandscape} tablet={isTablet}>
+        <View style={styles.noteList}>
+          {RELIABILITY_HOW_ITEMS.map((item) => (
+            <View key={item.key} style={styles.noteRow}>
+              <Ionicons name={item.icon} size={18} color={UI_ACCENT} style={styles.noteIcon} />
+              <AdaptiveText style={styles.noteText}>{t(item.key, lang)}</AdaptiveText>
+            </View>
+          ))}
+        </View>
+      </WelcomeProfileSection>
+
+      {isCallKeepAliveSupported ? (
+        <WelcomeProfileSection title={t('callReliabilityCostTitle', lang)} compact={compactLandscape} tablet={isTablet}>
+          <View style={styles.noteList}>
+            <View style={styles.noteRow}>
+              <Ionicons name="battery-half-outline" size={18} color={WELCOME_PROFILE_ROW_ICON} style={styles.noteIcon} />
+              <AdaptiveText style={styles.noteText}>{t('callReliabilityCost', lang)}</AdaptiveText>
+            </View>
           </View>
-          <Ionicons name="chevron-forward" size={20} color={WELCOME_PROFILE_ROW_ICON} />
-        </Pressable>
-        <Pressable
-          onPress={() => {
-            void openPatreon();
-          }}
-          style={({ pressed }) => [
-            styles.supportTile,
-            compactLandscape && styles.supportTileLandscape,
-            pressed && styles.supportTilePressed,
-          ]}
-          accessibilityRole="button"
-        >
-          <View style={styles.supportTileLogoWrap}>
-            <ExpoImage
-              source={require('../../assets/patreon-sign-logo.png')}
-              style={styles.supportTileLogo}
-              contentFit="contain"
-              cachePolicy="memory-disk"
-            />
+        </WelcomeProfileSection>
+      ) : null}
+
+      <WelcomeProfileSection title={t('callReliabilityVpnTipTitle', lang)} compact={compactLandscape} tablet={isTablet}>
+        <View style={styles.noteList}>
+          <View style={styles.noteRow}>
+            <Ionicons name="key-outline" size={18} color={WELCOME_PROFILE_ROW_ICON} style={styles.noteIcon} />
+            <View style={styles.noteBody}>
+              <AdaptiveText style={styles.noteText}>{t('callReliabilityVpnTip', lang)}</AdaptiveText>
+              {reliabilityState?.vpnActive ? (
+                <View style={styles.vpnNowRow}>
+                  <View style={[styles.statusDot, { backgroundColor: UI_ACCENT }]} />
+                  <AdaptiveText style={styles.vpnNowText}>{t('callReliabilityVpnNow', lang)}</AdaptiveText>
+                </View>
+              ) : null}
+            </View>
           </View>
-          <View style={styles.supportTileText}>
-            <AdaptiveText style={styles.supportTileTitle}>Patreon</AdaptiveText>
-            <AdaptiveText style={styles.supportTileHint}>patreon.com</AdaptiveText>
-          </View>
-          <Ionicons name="chevron-forward" size={20} color={WELCOME_PROFILE_ROW_ICON} />
-        </Pressable>
-      </View>
-      </View>
-    </WelcomeProfileSection>
+        </View>
+      </WelcomeProfileSection>
     </View>
   );
 
@@ -1183,8 +1244,8 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
       ? aboutBody
       : screen === 'help'
         ? helpBody
-        : screen === 'support'
-          ? supportBody
+        : screen === 'callReliability'
+          ? callReliabilityBody
           : screen === 'purchases'
             ? <PurchasesManagementPanel />
             : languageBody;
@@ -1271,16 +1332,9 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
               style={styles.subScreenScroll}
               contentContainerStyle={[
                 styles.scrollContent,
-                // «Поддержать» в горизонтали — короткий блок, выравниваем его
-                // по центру между шапкой и навигацией, а не прижимаем к верху.
-                compactLandscape && screen === 'support' && styles.subScreenScrollCentered,
                 {
                   paddingBottom:
-                    screen === 'language'
-                      ? 14
-                      : compactLandscape && screen === 'support'
-                        ? 4
-                        : 24 + insets.bottom,
+                    screen === 'language' ? 14 : 24 + insets.bottom,
                 },
               ]}
               keyboardShouldPersistTaps="handled"
@@ -1544,116 +1598,177 @@ const styles = StyleSheet.create({
   subScreenBlockOffset: {
     marginTop: 12,
   },
-  /** Блок «Поддержать» в горизонтали не тянется на всю ширину, а стоит по центру. */
-  supportWrapLandscape: {
+  /** «Надёжные звонки» в горизонтали не тянутся на всю ширину, а стоят по центру. */
+  reliabilityWrapLandscape: {
     width: '100%',
-    maxWidth: 620,
+    maxWidth: 680,
     alignSelf: 'center',
   },
-  subScreenScrollCentered: {
-    flexGrow: 1,
-    justifyContent: 'center',
-    // Верхний паддинг смещает центр вниз на половину своей величины.
-    paddingTop: 44,
-  },
-  supportHero: {
+  featureHero: {
     alignItems: 'center',
-    paddingTop: 22,
-    paddingBottom: 4,
-    paddingHorizontal: 20,
+    paddingTop: 20,
+    paddingBottom: 18,
+    paddingHorizontal: 18,
   },
-  supportContentLandscape: {
+  featureHeroLandscape: {
     flexDirection: 'row',
     alignItems: 'center',
-  },
-  supportHeroLandscape: {
-    flex: 1,
-    minWidth: 0,
-    paddingTop: 10,
-    paddingBottom: 10,
+    paddingTop: 12,
+    paddingBottom: 12,
     paddingHorizontal: 14,
+    gap: 14,
   },
-  supportHeroIconLandscape: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    marginBottom: 8,
-  },
-  supportTilesLandscape: {
-    flex: 1,
-    minWidth: 0,
-    paddingTop: 10,
-    paddingBottom: 10,
-    paddingRight: 12,
-    gap: 8,
-  },
-  supportTileLandscape: {
-    paddingVertical: 8,
-  },
-  supportHeroIcon: {
-    width: 68,
-    height: 68,
-    borderRadius: 34,
+  featureHeroIcon: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: UI_ACCENT_SOFT,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: 'rgba(98, 176, 216, 0.24)',
-    marginBottom: 14,
+    marginBottom: 12,
   },
-  supportHeroText: {
+  featureHeroIconLandscape: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    marginBottom: 0,
+  },
+  featureHeroText: {
+    flexShrink: 1,
     textAlign: 'center',
     color: WELCOME_MUTED_TEXT,
     fontSize: 14,
     lineHeight: 21,
     fontWeight: '400',
   },
-  supportTiles: {
-    paddingHorizontal: 12,
-    paddingTop: 12,
-    paddingBottom: 16,
-    gap: 10,
-  },
-  supportTile: {
+  toggleRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 12,
-    paddingHorizontal: 12,
-    borderRadius: 14,
-    backgroundColor: 'rgba(255,255,255,0.035)',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: WELCOME_GLASS_BORDER,
+    paddingVertical: 14,
+    paddingHorizontal: 14,
     gap: 12,
   },
-  supportTilePressed: {
-    backgroundColor: 'rgba(255,255,255,0.06)',
+  toggleRowPressed: {
+    backgroundColor: 'rgba(255,255,255,0.04)',
   },
-  supportTileLogoWrap: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    backgroundColor: 'rgba(255,255,255,0.06)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  supportTileLogo: {
-    width: 24,
-    height: 24,
-  },
-  supportTileText: {
+  toggleText: {
     flex: 1,
     minWidth: 0,
   },
-  supportTileTitle: {
+  toggleLabel: {
     color: WELCOME_HEADER_TITLE,
-    fontSize: 15,
+    fontSize: WELCOME_PROFILE_ROW_LABEL_FONT_SIZE,
     fontWeight: '500',
   },
-  supportTileHint: {
-    marginTop: 2,
+  toggleHint: {
+    marginTop: 3,
     color: WELCOME_PROFILE_ROW_ICON,
     fontSize: 12,
+    lineHeight: 16,
+  },
+  switchTrack: {
+    width: SWITCH_WIDTH,
+    height: SWITCH_HEIGHT,
+    borderRadius: SWITCH_HEIGHT / 2,
+    padding: 3,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.14)',
+    justifyContent: 'center',
+  },
+  switchTrackOn: {
+    backgroundColor: 'rgba(98, 176, 216, 0.32)',
+    borderColor: 'rgba(98, 176, 216, 0.45)',
+  },
+  switchThumb: {
+    width: SWITCH_THUMB,
+    height: SWITCH_THUMB,
+    borderRadius: SWITCH_THUMB / 2,
+    backgroundColor: '#AEB5BF',
+  },
+  switchThumbOn: {
+    backgroundColor: UI_ACCENT,
+  },
+  cardDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: WELCOME_GLASS_BORDER,
+    marginHorizontal: 14,
+  },
+  statusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 13,
+    paddingHorizontal: 14,
+    gap: 12,
+  },
+  statusLabel: {
+    color: WELCOME_HEADER_TITLE,
+    fontSize: WELCOME_PROFILE_ROW_LABEL_FONT_SIZE,
     fontWeight: '400',
+    flexShrink: 1,
+  },
+  statusValueWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    flexShrink: 0,
+    maxWidth: '62%',
+  },
+  statusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  statusValue: {
+    color: WELCOME_PROFILE_ROW_ICON,
+    fontSize: 13,
+    flexShrink: 1,
+  },
+  statusWarn: {
+    flex: 1,
+    color: WELCOME_HEADER_TITLE,
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  statusLink: {
+    color: UI_ACCENT,
+    fontSize: 13,
+  },
+  noteList: {
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    gap: 12,
+  },
+  noteRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 11,
+  },
+  noteIcon: {
+    marginTop: 1,
+  },
+  noteBody: {
+    flex: 1,
+    minWidth: 0,
+  },
+  noteText: {
+    flex: 1,
+    color: WELCOME_MUTED_TEXT,
+    fontSize: 13,
+    lineHeight: 19,
+  },
+  vpnNowRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    marginTop: 8,
+  },
+  vpnNowText: {
+    color: WELCOME_HEADER_TITLE,
+    fontSize: 12,
   },
   hubActions: {
     marginHorizontal: 0,

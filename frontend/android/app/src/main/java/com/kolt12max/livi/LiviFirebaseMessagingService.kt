@@ -729,8 +729,35 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
         }
     }
 
+    /** Экземпляр вне системы (канал «Надёжные звонки»): контекст подставляем сами. */
+    private fun attachKeepAliveBase(base: Context) {
+        attachBaseContext(base)
+    }
+
     companion object {
         private const val TAG = "LiviFCM"
+
+        /** Типы событий звонка, которые дублируются собственным каналом (backend utils/callKeepAlive.ts). */
+        private val KEEPALIVE_CALL_TYPES = setOf("call", "call_canceled", "call_accepted", "call_declined", "call_ended")
+        @Volatile private var keepAliveHandler: LiviFirebaseMessagingService? = null
+
+        /**
+         * Событие звонка из CallKeepAliveService — ровно тот же путь, что FCM data: проверки
+         * устаревания, уже принятого/завершённого звонка и дедуп по callId отсекают копию,
+         * пришедшую обоими путями.
+         */
+        @JvmStatic
+        fun handleKeepAlivePush(context: Context, data: Map<String, String>) {
+            val type = data["type"]?.trim()?.lowercase() ?: return
+            if (type !in KEEPALIVE_CALL_TYPES) return
+            val handler = keepAliveHandler ?: synchronized(this) {
+                keepAliveHandler ?: LiviFirebaseMessagingService().also {
+                    it.attachKeepAliveBase(context.applicationContext)
+                    keepAliveHandler = it
+                }
+            }
+            handler.onMessageReceived(RemoteMessage.Builder("keepalive@livi").setData(data).build())
+        }
         /** call_accepted при живом Main: столько ждём, что JS сам закроет outgoing-оверлей. */
         private const val OUTGOING_CLOSE_FALLBACK_MS = 4_000L
         /** ID канала: HIGH чтобы full-screen intent срабатывал (нативный экран поверх домашнего). */

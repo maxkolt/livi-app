@@ -28,6 +28,8 @@
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"/>
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL"/>
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
+  <!-- «Надёжные звонки» после перезагрузки (только если пользователь включил режим). -->
+  <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
   <!-- Remove permissions merged from dependencies to satisfy Play policy. -->
   <!-- expo-sensors declares this for Pedometer; LiVi only uses Accelerometer (wallpaper) — strip for Play health policy. -->
   <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" tools:node="remove"/>
@@ -197,6 +199,17 @@
     </service>
     <!-- Активный видеозвонок: держим процесс в foreground, чтобы сокет не засыпал в фоне/PiP -->
     <service android:name=".ActiveCallForegroundService" android:exported="false" android:foregroundServiceType="phoneCall|microphone"/>
+    <!-- «Надёжные звонки» (включает пользователь в профиле): своё соединение с сервером LiVi
+         параллельно FCM, когда VPN или сеть мешают уведомлениям Google. -->
+    <service android:name=".CallKeepAliveService" android:exported="false" android:foregroundServiceType="specialUse">
+      <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="User-enabled persistent connection to the LiVi server so incoming calls arrive when Google push delivery is blocked by a VPN or a poor network"/>
+    </service>
+    <receiver android:name=".CallKeepAliveBootReceiver" android:exported="false">
+      <intent-filter>
+        <action android:name="android.intent.action.BOOT_COMPLETED"/>
+        <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
+      </intent-filter>
+    </receiver>
     <!-- WebRTC screen-share FGS (mediaProjection): не используем в LiVi; убираем из merge — иначе Play ругается на BOOT_COMPLETED + Android 15. -->
     <service
       android:name="com.oney.WebRTCModule.MediaProjectionService"

@@ -6,6 +6,7 @@ import type { ExpoPushTicket } from 'expo-server-sdk';
 import PushTokenModel from '../models/PushToken';
 import { logger } from './logger';
 import { pushLog } from './pushLogBuffer';
+import { deliverCallKeepAlive } from './callKeepAlive';
 import { mediaPreviewText, missedCallBody, normalizePushLang, pushText, type MediaPreviewKind } from './pushI18n';
 
 const expo = new Expo();
@@ -774,16 +775,6 @@ type CallPushData = {
  * остальным — через Expo (без title/body). Так нативный экран звонка показывается при убитом/фоновом приложении.
  */
 export async function sendCallPushToRecipient(userId: string, data: CallPushData): Promise<void> {
-  const userIdObj = new mongoose.Types.ObjectId(userId);
-  const recs = await PushTokenModel.find({ userId: userIdObj })
-    .read('primary')
-    .select('_id token platform fcmToken voipToken lang')
-    .lean();
-  if (!recs?.length) {
-    logger.warn('[push] sendCallPushToRecipient: no tokens for user', { userId });
-    return;
-  }
-
   const callTs = Number(data.createdAtMs) > 0 ? Number(data.createdAtMs) : Date.now();
   const callExpiresAtMs = Number(data.expiresAtMs) > 0 ? Number(data.expiresAtMs) : callTs + 45_000;
   const callKitId = getCallKitUuid(data.callId);
@@ -809,6 +800,18 @@ export async function sendCallPushToRecipient(userId: string, data: CallPushData
     ts: String(callTs),
     expiresAt: String(callExpiresAtMs),
   };
+  // «Надёжные звонки»: собственный канал не ждёт ни Mongo, ни FCM.
+  deliverCallKeepAlive(userId, fcmDataPayload);
+
+  const userIdObj = new mongoose.Types.ObjectId(userId);
+  const recs = await PushTokenModel.find({ userId: userIdObj })
+    .read('primary')
+    .select('_id token platform fcmToken voipToken lang')
+    .lean();
+  if (!recs?.length) {
+    logger.warn('[push] sendCallPushToRecipient: no tokens for user', { userId });
+    return;
+  }
 
   const messaging = getFirebaseMessaging();
   type Rec = { _id?: unknown; token: string; platform: string; fcmToken?: string; voipToken?: string; lang?: string };
@@ -976,6 +979,20 @@ export async function sendCallEscalationPushToRecipient(
   userId: string,
   data: CallPushData
 ): Promise<{ androidTargets: number; fcmSent: number; expoSent: number; voipSent: number }> {
+  {
+    const ts = Number(data.createdAtMs) > 0 ? Number(data.createdAtMs) : Date.now();
+    deliverCallKeepAlive(userId, {
+      type: 'call',
+      callId: data.callId,
+      callKitId: getCallKitUuid(data.callId),
+      fromUserId: data.from,
+      fromNick: data.fromNick || '',
+      media: data.media === 'audio' ? 'audio' : 'video',
+      ts: String(ts),
+      expiresAt: String(Number(data.expiresAtMs) > 0 ? Number(data.expiresAtMs) : ts + 45_000),
+      escalation: '1',
+    });
+  }
   const userIdObj = new mongoose.Types.ObjectId(userId);
   const recs = await PushTokenModel.find({ userId: userIdObj })
     .read('primary')
@@ -1091,6 +1108,7 @@ export async function sendCallEscalationPushToRecipient(
  */
 export async function sendCallDeclinedToCaller(callerUserId: string, callId: string): Promise<void> {
   logger.info('[push] sendCallDeclinedToCaller start', { callerUserId, callId });
+  deliverCallKeepAlive(callerUserId, { type: 'call_declined', callId: String(callId) });
   const messaging = getFirebaseMessaging();
   if (messaging) {
     const recs = await PushTokenModel.find({ userId: callerUserId })
@@ -1138,6 +1156,7 @@ export async function sendCallDeclinedToCaller(callerUserId: string, callId: str
  * Дублируем прямым FCM на случай, если у инициатора только fcmToken без Expo token.
  */
 export async function sendCallAcceptedToCaller(callerUserId: string, callId: string): Promise<void> {
+  deliverCallKeepAlive(callerUserId, { type: 'call_accepted', callId: String(callId) });
   try {
     await sendPushToUser(callerUserId, {
       kind: 'call',
@@ -1186,6 +1205,13 @@ export async function sendCallCanceledToRecipient(
   fromNick?: string
 ): Promise<void> {
   logger.info('[push] sendCallCanceledToRecipient start', { calleeUserId, callId, fromUserId });
+  deliverCallKeepAlive(calleeUserId, {
+    type: 'call_canceled',
+    callId: String(callId),
+    callKitId: getCallKitUuid(callId),
+    fromUserId: String(fromUserId),
+    fromNick: String(fromNick ?? ''),
+  });
   const messaging = getFirebaseMessaging();
   const recs = await PushTokenModel.find({ userId: calleeUserId })
     .select('token platform fcmToken voipToken lang')
@@ -1293,6 +1319,13 @@ export async function sendCallMissedToRecipient(
   fromNick?: string
 ): Promise<void> {
   logger.info('[push] sendCallMissedToRecipient start', { calleeUserId, callId, fromUserId });
+  deliverCallKeepAlive(calleeUserId, {
+    type: 'call_ended',
+    callId: String(callId),
+    callKitId: getCallKitUuid(callId),
+    fromUserId: String(fromUserId),
+    fromNick: String(fromNick ?? ''),
+  });
   const messaging = getFirebaseMessaging();
   const recs = await PushTokenModel.find({ userId: calleeUserId })
     .select('token platform fcmToken voipToken lang')
@@ -1393,6 +1426,14 @@ export async function sendCallEndedToPeer(
   fromNick?: string
 ): Promise<void> {
   logger.info('[push] sendCallEndedToPeer start', { peerUserId, callId, fromUserId });
+  deliverCallKeepAlive(peerUserId, {
+    type: 'call_ended',
+    callId: String(callId),
+    callKitId: getCallKitUuid(callId),
+    fromUserId: String(fromUserId),
+    fromNick: String(fromNick ?? ''),
+    endedFromActive: 'true',
+  });
   const messaging = getFirebaseMessaging();
   const recs = await PushTokenModel.find({ userId: peerUserId })
     .select('token platform fcmToken voipToken lang')

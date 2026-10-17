@@ -37,4 +37,11 @@
   <plurals name="summary_unread_count">
     <item quantity="other">%d tin nhắn chưa đọc</item>
   </plurals>
+  <!-- «Надёжные звонки» (CallKeepAliveService) -->
+  <string name="call_keepalive_channel">Cuộc gọi ổn định</string>
+  <string name="call_keepalive_title">LiVi luôn kết nối</string>
+  <string name="call_keepalive_text_connected">Cuộc gọi đến vẫn tới được ngay cả khi dùng VPN hoặc mạng yếu</string>
+  <string name="call_keepalive_text_connecting">Đang kết nối với LiVi…</string>
+  <string name="call_keepalive_text_waiting">Không có mạng — sẽ kết nối lại ngay khi có mạng</string>
+  <string name="call_keepalive_action_disable">Tắt</string>
 </resources>

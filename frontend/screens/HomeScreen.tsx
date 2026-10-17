@@ -5525,9 +5525,6 @@ const handleClearNick = useCallback(async () => {
     }, [incomingCallScreen.visible]),
   );
 
-  const handleProfileSupportClick = useCallback(() => {
-    void incrCounter('support_help_clicks');
-  }, [incrCounter]);
   const handleProfileDeleteAvatar = useCallback(() => {
     void askConfirm({
       title: t('deleteAvatarTitle', lang),
@@ -5958,8 +5955,6 @@ const handleClearNick = useCallback(async () => {
             onSelectLang={(code) => {
               void handleSelectLang(code);
             }}
-            incrCounter={incrCounter}
-            onSupportClick={handleProfileSupportClick}
             onLogOutAccount={handleProfileLogOut}
             wiping={wiping}
             updateAvailable={updateAvailable}

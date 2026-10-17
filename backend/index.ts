@@ -36,6 +36,7 @@ import { setGetEffectiveBusy } from './utils/effectiveBusy';
 import User from './models/User';
 import Install from './models/Install';
 import { verifyInstallSecret } from './utils/installSecret';
+import { attachCallKeepAlive, deliverCallKeepAlive, getCallKeepAliveStats, type CallKeepAliveAuth } from './utils/callKeepAlive';
 import MissedCall from './models/MissedCall';
 import createChatRouter from './routes/chat';
 import { buildAvatarDataUris } from './utils/avatars';
@@ -318,6 +319,11 @@ let closeSocketIoRedisAdapter: (() => Promise<void>) | null = null;
 // Сохраняем глобально для использования в роутах
 setIoInstance(io);
 
+// «Надёжные звонки» (Android): WebSocket параллельно FCM — после io, чтобы видеть адаптер.
+attachCallKeepAlive(server, authenticateCallKeepAlive, (auth) => {
+  void replayIncomingToCallKeepAlive(auth.userId);
+});
+
 // Запускаем периодическую очистку устаревших сокетов из очереди матчинга
 startQueueCleanup(io);
 
@@ -357,6 +363,7 @@ app.get('/health', (_req, res) =>
     mongo: mongoose.connection.readyState,
     socketIoRedisAdapter: isSocketIoRedisAdapterActive(),
     rateLimit: rateLimitStore.getRateLimitHealth(),
+    callKeepAlive: getCallKeepAliveStats(),
   })
 );
 
@@ -1326,52 +1333,70 @@ async function getUserCallEntryFromAnyStore(userId: string): Promise<{ with: str
   return { ...hydrated, expiresAtMs: shared.expiresAtMs };
 }
 
+type RingingIncoming = {
+  uid: string;
+  callId: string;
+  link: CallLink;
+  fromNick?: string;
+  media: 'audio' | 'video';
+};
+
+/**
+ * Входящий, который сейчас звонит этому пользователю и ещё не показан, — чтобы дослать его
+ * на только что подключившийся транспорт. Просроченный звонок здесь же и закрывается.
+ */
+async function resolveRingingIncomingForCallee(userId: string): Promise<RingingIncoming | null> {
+  const uid = normalizeMongoObjectId(String(userId || ''));
+  if (!isOid(uid)) return null;
+  if (activeRoomByUserId.has(uid)) return null;
+  const entry = await getUserCallEntryFromAnyStore(uid);
+  if (!entry) return null;
+  const link = await getCallLinkFromAnyStore(entry.callId);
+  if (!link || link.b !== uid) return null;
+  if (isDirectCallAcceptedOrActive(entry.callId, link)) {
+    await purgeStaleRingingDirectCallArtifacts(entry.callId, link, 'incoming_replay_active');
+    return null;
+  }
+  if (link.expiresAtMs <= Date.now()) {
+    logger.info('[call:incoming_replay] skipped expired ringing call', {
+      callId: entry.callId,
+      callee: uid,
+      expiresAtMs: link.expiresAtMs,
+    });
+    // Expired ringing call should be finalized once and removed from memory/shared stores,
+    // otherwise reauth/user-bind can keep producing the same skip log in a loop.
+    cleanupCall(entry.callId, 'timeout');
+    return null;
+  }
+  const telemetry = callDeliveryById.get(entry.callId);
+  if (telemetry?.incomingShownAtMs != null) return null;
+  const fromNick =
+    telemetry?.callerNick != null && String(telemetry.callerNick).trim() !== ''
+      ? String(telemetry.callerNick).trim()
+      : undefined;
+  return { uid, callId: entry.callId, link, fromNick, media: link.media === 'video' ? 'video' : 'audio' };
+}
+
 /** Если звонок уже инициирован, а сокет callee появился позже (reconnect / гонка с bind) — повторить call:incoming по прямому emit. */
 async function replayIncomingToCalleeIfRinging(sock: AuthedSocket, userId: string) {
   try {
-    const uid = normalizeMongoObjectId(String(userId || ''));
-    if (!isOid(uid)) return;
-    if (activeRoomByUserId.has(uid)) return;
-    const entry = await getUserCallEntryFromAnyStore(uid);
-    if (!entry) return;
-    const link = await getCallLinkFromAnyStore(entry.callId);
-    if (!link || link.b !== uid) return;
-    if (isDirectCallAcceptedOrActive(entry.callId, link)) {
-      await purgeStaleRingingDirectCallArtifacts(entry.callId, link, 'incoming_replay_active');
-      return;
-    }
-    if (link.expiresAtMs <= Date.now()) {
-      logger.info('[call:incoming_replay] skipped expired ringing call', {
-        callId: entry.callId,
-        callee: uid,
-        expiresAtMs: link.expiresAtMs,
-      });
-      // Expired ringing call should be finalized once and removed from memory/shared stores,
-      // otherwise reauth/user-bind can keep producing the same skip log in a loop.
-      cleanupCall(entry.callId, 'timeout');
-      return;
-    }
-    const telemetry = callDeliveryById.get(entry.callId);
-    if (telemetry?.incomingShownAtMs != null) return;
-    const fromNick =
-      telemetry?.callerNick != null && String(telemetry.callerNick).trim() !== ''
-        ? String(telemetry.callerNick).trim()
-        : undefined;
+    const ringing = await resolveRingingIncomingForCallee(userId);
+    if (!ringing) return;
+    const { callId, link, fromNick } = ringing;
     try {
-      const replayMedia = link.media === 'video' ? 'video' : 'audio';
       sock.emit('call:incoming', {
-        callId: entry.callId,
-        callKitId: getCallKitUuid(entry.callId),
+        callId,
+        callKitId: getCallKitUuid(callId),
         from: link.a,
         fromNick,
-        media: replayMedia,
+        media: ringing.media,
         ts: link.createdAtMs,
         expiresAt: link.expiresAtMs,
       });
-      sock.emit('friend:call:incoming', { callId: entry.callId, from: link.a, nick: fromNick });
+      sock.emit('friend:call:incoming', { callId, from: link.a, nick: fromNick });
       logger.info('[call:incoming_replay] delivered on user bind', {
-        callId: entry.callId,
-        callee: uid,
+        callId,
+        callee: ringing.uid,
         socketId: sock.id,
       });
     } catch (e: any) {
@@ -1380,6 +1405,49 @@ async function replayIncomingToCalleeIfRinging(sock: AuthedSocket, userId: strin
   } catch (e: any) {
     logger.warn('[call:incoming_replay] error', { error: e?.message });
   }
+}
+
+/** «Надёжные звонки»: канал переподключился посреди звонка (сменилась сеть / VPN) — дослать входящий. */
+async function replayIncomingToCallKeepAlive(userId: string) {
+  try {
+    const ringing = await resolveRingingIncomingForCallee(userId);
+    if (!ringing) return;
+    const { callId, link } = ringing;
+    deliverCallKeepAlive(ringing.uid, {
+      type: 'call',
+      callId,
+      callKitId: getCallKitUuid(callId),
+      fromUserId: link.a,
+      fromNick: ringing.fromNick || '',
+      media: ringing.media,
+      ts: String(link.createdAtMs),
+      expiresAt: String(link.expiresAtMs),
+    });
+    logger.info('[call:incoming_replay] delivered on keep-alive connect', { callId, callee: ringing.uid });
+  } catch (e: any) {
+    logger.warn('[call:incoming_replay] keep-alive error', { error: e?.message });
+  }
+}
+
+/** Auth канала «Надёжные звонки» — как у нативных HTTP-запросов экранов звонка (installId + секрет). */
+async function authenticateCallKeepAlive(req: http.IncomingMessage): Promise<CallKeepAliveAuth | null> {
+  const header = (name: string): string => {
+    const value = req.headers[name];
+    return String(Array.isArray(value) ? value[0] : value || '').trim();
+  };
+  const installId = header('x-install-id');
+  if (!installId) return null;
+  if (mongoose.connection.readyState !== 1) throw new Error('database_unavailable');
+  const inst = (await Install.findOne({ installId }).select('user installSecretHash').lean()) as
+    | { user?: unknown; installSecretHash?: string }
+    | null;
+  const userId = inst?.user ? normalizeMongoObjectId(String(inst.user)) : '';
+  if (!userId || !isOid(userId)) return null;
+  // Без секрета — только установки, ещё не мигрировавшие на installSecret (как в HTTP-роутах).
+  if (inst?.installSecretHash && !verifyInstallSecret(header('x-install-secret'), inst.installSecretHash)) {
+    return null;
+  }
+  return { userId, installId };
 }
 setOnCallSocketDetached((sid) => {
   try {

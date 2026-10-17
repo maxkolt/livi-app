@@ -37,4 +37,11 @@
   <plurals name="summary_unread_count">
     <item quantity="other">未読メッセージ %d件</item>
   </plurals>
+  <!-- «Надёжные звонки» (CallKeepAliveService) -->
+  <string name="call_keepalive_channel">確実な着信</string>
+  <string name="call_keepalive_title">LiVi に接続中</string>
+  <string name="call_keepalive_text_connected">VPN や電波の弱い環境でも着信が届きます</string>
+  <string name="call_keepalive_text_connecting">LiVi に接続しています…</string>
+  <string name="call_keepalive_text_waiting">ネットワークがありません。復帰したらすぐに再接続します</string>
+  <string name="call_keepalive_action_disable">オフにする</string>
 </resources>

@@ -44,4 +44,11 @@
     <item quantity="one">%d unread message</item>
     <item quantity="other">%d unread messages</item>
   </plurals>
+  <!-- «Надёжные звонки» (CallKeepAliveService) -->
+  <string name="call_keepalive_channel">Reliable calls</string>
+  <string name="call_keepalive_title">LiVi stays connected</string>
+  <string name="call_keepalive_text_connected">Incoming calls will reach you even with a VPN or a weak network</string>
+  <string name="call_keepalive_text_connecting">Connecting to LiVi…</string>
+  <string name="call_keepalive_text_waiting">No network — will reconnect as soon as it\'s back</string>
+  <string name="call_keepalive_action_disable">Turn off</string>
 </resources>

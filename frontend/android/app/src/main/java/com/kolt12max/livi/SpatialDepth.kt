@@ -67,8 +67,12 @@ object SpatialTilt : SensorEventListener, Choreographer.FrameCallback {
     fun onSpatialTilt(x: Float, y: Float)
   }
 
-  /** Отклонение глаза, при котором слои доходят до полного сдвига: sin 15°. */
-  private const val RANGE = 0.26f
+  /**
+   * Характерный наклон для пространственного отклика: примерно sin 17.5°. Более широкий
+   * диапазон оставляет обычные движения руки спокойными, а выраженный наклон всё ещё
+   * раскрывает глубину сцены (tanh мягко ограничивает крайние положения).
+   */
+  private const val RANGE = 0.30f
   /**
    * Ноль подстраивается под позу вместе с движением телефона: за каждые RECENTER_ANGLE рад
    * поворота — на 63%. Пока телефон неподвижен, слои стоят: прежний возврат за 2.5 с сам
@@ -79,9 +83,22 @@ object SpatialTilt : SensorEventListener, Choreographer.FrameCallback {
   private const val RECENTER_MIN_SPEED = 0.1f
   /** Совсем медленно ноль догоняет позу и без движения — лежащий телефон не держит сдвиг вечно. */
   private const val RECENTER_TAU_S = 60f
-  /** Сглаживание дрожи руки; меньше — резче, больше — вязко. */
-  private const val SMOOTH_TAU_S = 0.07f
+  /**
+   * Мягкий вход: до ~2.3° (sin KNEE) отклик кубический — дрожь руки и привычное покачивание
+   * почти не сдвигают сцену (1° → 0.14 dp дальнего плана вместо 0.9), дальше кривая выходит на
+   * прежний tanh. Глаз сначала замечает разницу скоростей планов — объём, — а не то, что
+   * картинка поехала вслед за рукой.
+   */
+  private const val KNEE = 0.04f
+  /**
+   * Сцена догоняет цель критически демпфированной пружиной: старт с нулевой скоростью, без
+   * рывка, на который глаз реагирует раньше, чем на глубину; ~95% пути за 0.3 с. Первый порядок
+   * (прежние 70 мс) срывался сразу с максимальной скоростью — сдвиг фона читался как анимация.
+   */
+  private const val SPRING_OMEGA = 15f
   private const val EPS = 0.0005f
+  /** Скорость (доли полного сдвига в секунду), ниже которой сцена считается остановившейся. */
+  private const val REST_SPEED = 0.01f
   /**
    * Шум датчика лежащего телефона (±0.005, замер на A35) и медленное возвращение нуля
    * меняют цель на тысячные: 0.01 — это 0.14 dp сдвига сцены, глазу не видно, а сцена
@@ -107,6 +124,9 @@ object SpatialTilt : SensorEventListener, Choreographer.FrameCallback {
     private set
   private var targetX = 0f
   private var targetY = 0f
+  /** Скорость сцены (доли полного сдвига в секунду) — состояние пружины в doFrame. */
+  private var velX = 0f
+  private var velY = 0f
   private val eye = FloatArray(3)
   private val rot = FloatArray(9)
   /**
@@ -233,12 +253,20 @@ object SpatialTilt : SensorEventListener, Choreographer.FrameCallback {
       phoneEye[2] = uz - eye[2]
     }
     // Экран: x вправо, y вниз; у датчика y — к верхнему краю.
-    val tx = tanh(ex / RANGE)
-    val ty = tanh(-ey / RANGE)
+    val tx = response(ex)
+    val ty = response(-ey)
     if (abs(tx - targetX) < DEADBAND && abs(ty - targetY) < DEADBAND) return
     targetX = tx
     targetY = ty
     postFrame()
+  }
+
+  /** Отклонение глаза → доля полного сдвига: мягкий вход у нуля (KNEE), насыщение tanh (RANGE). */
+  private fun response(e: Float): Float {
+    val a = abs(e)
+    val shaped = a * a * a / (a * a + KNEE * KNEE)
+    val r = tanh(shaped / RANGE)
+    return if (e < 0f) -r else r
   }
 
   /** Доля, на которую ноль догоняет позу на этом отсчёте: по повороту и (медленно) по времени. */
@@ -283,13 +311,24 @@ object SpatialTilt : SensorEventListener, Choreographer.FrameCallback {
   override fun doFrame(frameTimeNanos: Long) {
     framePosted = false
     val dt = if (lastFrameNs == 0L) 1f / 60f else ((frameTimeNanos - lastFrameNs) / 1e9f).coerceIn(0.001f, 0.05f)
-    val k = 1f - exp(-dt / SMOOTH_TAU_S)
-    var nx = x + (targetX - x) * k
-    var ny = y + (targetY - y) * k
-    val done = abs(targetX - nx) < EPS && abs(targetY - ny) < EPS
+    // Точное решение критически демпфированной пружины на шаг dt — устойчиво при любом dt.
+    val decay = exp(-SPRING_OMEGA * dt)
+    val dx = x - targetX
+    val bx = velX + SPRING_OMEGA * dx
+    var nx = targetX + (dx + bx * dt) * decay
+    velX = (velX - SPRING_OMEGA * bx * dt) * decay
+    val dy = y - targetY
+    val by = velY + SPRING_OMEGA * dy
+    var ny = targetY + (dy + by * dt) * decay
+    velY = (velY - SPRING_OMEGA * by * dt) * decay
+    val done =
+      abs(targetX - nx) < EPS && abs(targetY - ny) < EPS &&
+        abs(velX) < REST_SPEED && abs(velY) < REST_SPEED
     if (done) {
       nx = targetX
       ny = targetY
+      velX = 0f
+      velY = 0f
     }
     if (nx != x || ny != y) {
       x = nx
@@ -893,16 +932,16 @@ class SpatialBackgroundView(context: Context) : View(context), SpatialTilt.Liste
 
     /** Сцена — Real-ESRGAN 1440 px (scripts/generate-spatial-depth.js): полное разрешение. */
     const val RES_DIVISOR = 1f
-    /** Фон без элементов — дальше всех. */
-    const val FAR_SHIFT_DP = 18f
+    /** Фон без элементов — дальше всех; движется заметно, но не уводит всю сцену за рукой. */
+    const val FAR_SHIFT_DP = 15.5f
     /**
      * Планы 1…5 (spatial_stage_planes.png) при полном наклоне: панели данных и соты, карта,
      * мелкие частицы, иконки и кубы, облако и крупное боке. Чем ближе к стеклу, тем меньше
-     * сдвиг: между фоном и облаком ~42 px на A35. Интерфейс стоит на стекле, и объём держит
-     * только сцена — разнос планов больше прежнего (14…2.5 dp), а кадр почти тот же: запас
-     * cover вырос на 4 dp.
+     * сдвиг: между фоном и ближайшим планом ~38 px на A35. Интерфейс стоит на стекле, а
+     * ближайшие элементы почти привязаны к нему — объём читается по разнице скоростей,
+     * без ощущения, что вся картинка ездит за телефоном.
      */
-    val PLANE_SHIFT_DP = floatArrayOf(15f, 12.5f, 9f, 5f, 2f)
+    val PLANE_SHIFT_DP = floatArrayOf(12.5f, 9.5f, 6.5f, 3.5f, 1f)
     /** Пересчёт под экран — когда размер не менялся столько, мс. */
     const val SHARP_DELAY_MS = 250L
     /** Плитка spatial_stage_tiles.png, px картинки (TILE в generate-spatial-depth.js). */

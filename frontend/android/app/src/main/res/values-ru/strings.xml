@@ -43,4 +43,11 @@
     <item quantity="many">%d непрочитанных сообщений</item>
     <item quantity="other">%d непрочитанного сообщения</item>
   </plurals>
+  <!-- «Надёжные звонки» (CallKeepAliveService) -->
+  <string name="call_keepalive_channel">Надёжные звонки</string>
+  <string name="call_keepalive_title">LiVi на связи</string>
+  <string name="call_keepalive_text_connected">Входящие звонки дойдут даже при VPN и слабой сети</string>
+  <string name="call_keepalive_text_connecting">Подключение к LiVi…</string>
+  <string name="call_keepalive_text_waiting">Нет сети — подключимся, как только она появится</string>
+  <string name="call_keepalive_action_disable">Выключить</string>
 </resources>

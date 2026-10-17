@@ -76,6 +76,8 @@ class MainApplication : Application(), ReactApplication {
     WarmConnections.install(this)
     WarmConnections.warm(this, "app_start")
     WarmConnections.watchNetwork(this)
+    // «Надёжные звонки»: процесс поднялся (запуск, FCM, рестарт системой) — вернуть свой канал.
+    CallKeepAliveService.startIfEnabled(this, "process_start")
     // Screen capture / getDisplayMedia не используем; без этого @livekit/react-native-webrtc может поднять mediaProjection FGS.
     WebRTCModuleOptions.getInstance().enableMediaProjectionService = false
     SoLoader.init(this, OpenSourceMergedSoMapping)

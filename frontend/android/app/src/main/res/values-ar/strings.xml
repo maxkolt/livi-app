@@ -47,4 +47,11 @@
     <item quantity="many">%d رسالة غير مقروءة</item>
     <item quantity="other">%d رسالة غير مقروءة</item>
   </plurals>
+  <!-- «Надёжные звонки» (CallKeepAliveService) -->
+  <string name="call_keepalive_channel">مكالمات موثوقة</string>
+  <string name="call_keepalive_title">LiVi متصل</string>
+  <string name="call_keepalive_text_connected">ستصلك المكالمات الواردة حتى مع VPN أو شبكة ضعيفة</string>
+  <string name="call_keepalive_text_connecting">جارٍ الاتصال بـ LiVi…</string>
+  <string name="call_keepalive_text_waiting">لا توجد شبكة — سنعيد الاتصال فور عودتها</string>
+  <string name="call_keepalive_action_disable">إيقاف</string>
 </resources>

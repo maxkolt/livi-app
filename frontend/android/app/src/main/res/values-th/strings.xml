@@ -37,4 +37,11 @@
   <plurals name="summary_unread_count">
     <item quantity="other">ข้อความที่ยังไม่ได้อ่าน %d ข้อความ</item>
   </plurals>
+  <!-- «Надёжные звонки» (CallKeepAliveService) -->
+  <string name="call_keepalive_channel">การโทรที่เชื่อถือได้</string>
+  <string name="call_keepalive_title">LiVi เชื่อมต่ออยู่</string>
+  <string name="call_keepalive_text_connected">สายเรียกเข้าจะมาถึงแม้ใช้ VPN หรือเครือข่ายอ่อน</string>
+  <string name="call_keepalive_text_connecting">กำลังเชื่อมต่อกับ LiVi…</string>
+  <string name="call_keepalive_text_waiting">ไม่มีเครือข่าย — จะเชื่อมต่อใหม่ทันทีเมื่อกลับมา</string>
+  <string name="call_keepalive_action_disable">ปิด</string>
 </resources>
