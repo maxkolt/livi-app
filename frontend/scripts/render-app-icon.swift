@@ -1,17 +1,20 @@
 // Renders the LiVi app icon (slate + ice-blue glass, 2026-10-06) as crisp art at any size.
 // Usage: swiftc -O scripts/render-app-icon.swift -o /tmp/render-app-icon
-//        /tmp/render-app-icon <full|foreground|logo|splashicon> <size> <out.png>
-// full — opaque tile on ICON_BG (iOS AppIcon, assets/icon.png, Play 512, legacy mipmaps);
-// foreground — transparent Android adaptive foreground (safe zone), background = @color/iconBackground.
-// logo — transparent camera only, no radar rings, filling the canvas (splash: assets/splash-icon.png,
+//        /tmp/render-app-icon <full|foreground|background|logo|splashicon> <size> <out.png>
+// full — opaque tile on the glass (iOS AppIcon, assets/icon.png, Play 512, legacy mipmaps);
+// foreground — transparent Android adaptive foreground (safe zone), camera only.
+// background — translucent Android adaptive background (wallpaper shows through), scaled like the foreground
+//        (assets/adaptive-icon-background.png 1024, mipmap-*/ic_launcher_background 108/162/216/324/432).
+// logo — transparent camera only, filling the canvas (splash: assets/splash-icon.png,
 //        drawable-*/splashscreen_logo 288/432/576/864/1152, iOS SplashScreenLogo 1024).
 // splashicon — same logo inside the Android 12+ splash circle
 //        (drawable-*/splashscreen_icon 288/432/576/864/1152, values-v31 windowSplashScreenAnimatedIcon).
 // Sizes: ic_launcher / ic_launcher_round 48/72/96/144/192, ic_launcher_foreground 108/162/216/324/432.
 //
-// Style — как стекло в приложении: камера — матовое стекло (размытый фон под ним, светлая
-// дымка, блик сверху, светлая кромка, мягкая тень снизу). Эквалайзер на стекле яркий —
-// значок читается и на 48 px, и на сплэше. Цветных шаров за стеклом нет (убраны по просьбе).
+// Style — матовое стекло корпуса/объектива: заливка в тонах бывшего эквалайзера
+// (белый → #A3D4EE / ACCENT_LIGHT), светлая кромка, мягкая тень.
+// Фон плитки — объёмное стекло + рыбий глаз, без пузырьков и серых полос.
+// Кромок по краю плитки нет — маски лаунчеров разные.
 import CoreGraphics
 import CoreImage
 import Foundation
@@ -26,9 +29,13 @@ func rgb(_ hex: UInt32, _ a: CGFloat = 1) -> CGColor {
     alpha: a)
 }
 
-/// Фон иконки — заметно светлее фона приложения, тоном приподнятых блоков (UI_SURFACE_RAISED);
-/// = @color/iconBackground.
+/// Что видно сквозь матовое стекло камеры на иконке — бывший сплошной фон иконки (тон приподнятых
+/// блоков, светлее фона приложения). Остался, чтобы камера не изменилась на тёмном стекле.
 let ICON_BG: UInt32 = 0x414C59
+/// Фон иконки: чуть светлее прежнего #4C5766.
+let GLASS_TOP: UInt32 = 0x586372
+let GLASS_MID: UInt32 = 0x586372
+let GLASS_BOTTOM: UInt32 = 0x586372
 /// Фон сплэша (HOME_NAV_BG): под стеклом логотипа на сплэше виден он.
 let SPLASH_BG: UInt32 = 0x252B34
 let ACCENT: UInt32 = 0x62B0D8        // UI_ACCENT
@@ -43,22 +50,27 @@ let space = CGColorSpace(name: CGColorSpace.sRGB)!
 let S = CGFloat(size)
 
 // Group scale: full icon uses the whole tile; adaptive foreground must stay inside the
-// 66/108 safe circle (radius ≈ 313 of 1024), so the ring (r 432) is scaled to ~300.
-// logo: no rings, camera fills most of the width. splashicon must fit the 192/288 dp circle.
+// 66/108 safe circle (radius ≈ 313 of 1024); the adaptive background follows it, so the glow
+// sits behind the camera (its 72/108 visible part ≈ the tile).
+// logo: camera fills most of the width. splashicon must fit the 192/288 dp circle.
 let k: CGFloat = mode == "full" ? 1.0 : mode == "logo" ? 1.30 : mode == "splashicon" ? 0.85 : 0.70
 let ringless = mode == "logo" || mode == "splashicon"
 /// Что лежит под стеклом: фон плитки иконки или фон сплэша.
 let sceneBG = ringless ? SPLASH_BG : ICON_BG
 /// Design units → device pixels (CTM does not scale shadow blur or CoreImage radii).
 let px = S / 1024 * k
+/// Верх видимой части плитки в единицах дизайна: у адаптивного фона видно 72 из 108 dp.
+let visibleEdge: CGFloat = mode == "background" ? 512 - 512 * (72.0 / 108) / k : 0
 /// Rim width in design units: icons are shown at 48–192 px, so their rim is thicker.
 let rimWidth: CGFloat = ringless ? 9 : mode == "foreground" ? 13 : 11
 
-func makeContext(opaque: Bool) -> CGContext {
+/// deep — 16 бит на канал: тёмные градиенты стекла считаются без ступенек, в 8 бит — с шумом.
+func makeContext(opaque: Bool, deep: Bool = false) -> CGContext {
   let c = CGContext(
-    data: nil, width: size, height: size, bitsPerComponent: 8, bytesPerRow: 0, space: space,
+    data: nil, width: size, height: size, bitsPerComponent: deep ? 16 : 8, bytesPerRow: 0, space: space,
     // Полная плитка — без альфа-канала (App Store его не принимает); остальные — с прозрачностью.
-    bitmapInfo: (opaque ? CGImageAlphaInfo.noneSkipLast : CGImageAlphaInfo.premultipliedLast).rawValue)!
+    bitmapInfo: (opaque ? CGImageAlphaInfo.noneSkipLast : CGImageAlphaInfo.premultipliedLast).rawValue
+      | (deep ? CGBitmapInfo.byteOrder16Little.rawValue : 0))!
   c.setShouldAntialias(true)
   c.setAllowsAntialiasing(true)
   c.interpolationQuality = .high
@@ -82,13 +94,16 @@ func drawDeviceImage(_ c: CGContext, _ img: CGImage) {
 let center = CGPoint(x: 512, y: 512)
 
 // --- Camera geometry (design units). ---
-let body = CGRect(x: 196, y: 306, width: 462, height: 412)
-let bodyRadius: CGFloat = 116
+// Чуть крупнее узкого корпуса (320 → 352), центр на 512.
+let body = CGRect(x: 188, y: 336, width: 478, height: 352)
+let bodyRadius: CGFloat = 106
 let cy = body.midY
 // Lens: trapezoid, short edge at the body, tall edge outside; rounded corners.
-let lensL: CGFloat = 690, lensR: CGFloat = 830
-let lensInnerHalf: CGFloat = 74, lensOuterHalf: CGFloat = 170
-let lensRadius: CGFloat = 34
+let lensL: CGFloat = 698, lensR: CGFloat = 842
+let lensInnerHalf: CGFloat = 68, lensOuterHalf: CGFloat = 154
+let lensRadius: CGFloat = 32
+/// Заливка корпуса/объектива: ровный голубой (полосы посередине нет — градиент на всём фоне плитки).
+let EQ_FILL: UInt32 = 0xB8DDF0     // прежний тон + белый
 
 func roundedPolygon(_ pts: [CGPoint], radius: CGFloat) -> CGPath {
   let p = CGMutablePath()
@@ -112,93 +127,186 @@ let lensPath = roundedPolygon(
     CGPoint(x: lensR, y: cy + lensOuterHalf),
     CGPoint(x: lensL, y: cy + lensInnerHalf),
   ], radius: lensRadius)
-/// Блик под верхней кромкой (яркость, доля высоты). На сплэше у корпуса слабее и короче —
-/// меньше светлой заливки под рамкой (2026-10-08); иконка и объектив — как были.
-let bodyHighlight: (alpha: CGFloat, span: CGFloat) = ringless ? (0.08, 0.42) : (0.16, 0.55)
+/// Блик сверху: у корпуса почти нет — верх как низ; у объектива лёгкий.
+let bodyHighlight: (alpha: CGFloat, span: CGFloat) = (0.02, 0.35)
 let glassShapes: [(path: CGPath, top: CGFloat, bottom: CGFloat, highlight: (alpha: CGFloat, span: CGFloat))] = [
   (bodyPath, body.minY, body.maxY, bodyHighlight),
-  (lensPath, cy - lensOuterHalf, cy + lensOuterHalf, (0.16, 0.55)),
+  (lensPath, cy - lensOuterHalf, cy + lensOuterHalf, (0.06, 0.40)),
 ]
 
-// --- Scene behind the glass: background and radar rings. ---
+// --- Scene behind the camera glass (solid fill only; radar rings removed 2026-10-18). ---
 func drawScene(_ c: CGContext, background: Bool) {
   if background {
     c.setFillColor(rgb(sceneBG))
     c.fill(CGRect(x: -4096, y: -4096, width: 9216, height: 9216))
   }
-  if !ringless {
-    // Радар «Поиска»: тонкое кольцо и пунктирный обод в тоне акцента.
-    c.saveGState()
-    c.setStrokeColor(rgb(ACCENT, 0.12))
-    c.setLineWidth(5)
-    c.addEllipse(in: CGRect(x: center.x - 398, y: center.y - 398, width: 796, height: 796))
-    c.strokePath()
-    c.setStrokeColor(rgb(ACCENT, 0.42))
-    c.setLineWidth(7)
-    c.setLineCap(.round)
-    let period = 2 * CGFloat.pi * 432 / 56
-    c.setLineDash(phase: 0, lengths: [period * 0.46, period * 0.54])
-    c.addEllipse(in: CGRect(x: center.x - 432, y: center.y - 432, width: 864, height: 864))
-    c.strokePath()
-    c.restoreGState()
-  }
 }
 
-func blurred(_ img: CGImage, radius: CGFloat) -> CGImage {
+let ciCtx = CIContext(options: [
+  .useSoftwareRenderer: true,
+  .workingColorSpace: space,
+  .outputColorSpace: space,
+])
+
+/// deep — результат в 16 бит на канал (для стекла фона, которое потом дизерится).
+func blurred(_ img: CGImage, radius: CGFloat, deep: Bool = false) -> CGImage {
   let input = CIImage(cgImage: img)
   guard let f = CIFilter(name: "CIGaussianBlur") else { return img }
   f.setValue(input.clampedToExtent(), forKey: kCIInputImageKey)
   f.setValue(radius, forKey: kCIInputRadiusKey)
   guard let output = f.outputImage else { return img }
-  let ci = CIContext(options: [
-    .useSoftwareRenderer: true,
-    .workingColorSpace: space,
-    .outputColorSpace: space,
-  ])
-  return ci.createCGImage(output.cropped(to: input.extent), from: input.extent) ?? img
+  let cropped = output.cropped(to: input.extent)
+  if deep {
+    return ciCtx.createCGImage(cropped, from: input.extent, format: .RGBA16, colorSpace: space) ?? img
+  }
+  return ciCtx.createCGImage(cropped, from: input.extent) ?? img
 }
 
-// Под стеклом всегда фон сцены: у иконки — ICON_BG (= фон адаптивной иконки), на сплэше — SPLASH_BG.
-let sceneCtx = makeContext(opaque: false)
-drawScene(sceneCtx, background: true)
-let frosted = blurred(sceneCtx.makeImage()!, radius: 26 * px)
+/// Мягкий рыбий глаз: выпуклая линза (CIBumpDistortion).
+/// Свой CIContext + createCGImage (render→bitmap давал чёрный кадр из‑за ориентации).
+/// radiusFactor > 1 — кромки у края плитки тоже гнутся (иначе warp ≈ 0 у y≈18).
+func fisheye(_ img: CGImage, scale: CGFloat = 0.68, radiusFactor: CGFloat = 1.25) -> CGImage {
+  let rgba = CGContext(
+    data: nil, width: size, height: size, bitsPerComponent: 8, bytesPerRow: 0, space: space,
+    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+  rgba.draw(img, in: CGRect(x: 0, y: 0, width: S, height: S))
+  guard let rgbaImg = rgba.makeImage() else { return img }
+  let input = CIImage(cgImage: rgbaImg)
+  guard let f = CIFilter(name: "CIBumpDistortion") else { return img }
+  let extent = input.extent
+  let r = min(extent.width, extent.height) * 0.5 * radiusFactor
+  f.setValue(input.clampedToExtent(), forKey: kCIInputImageKey)
+  f.setValue(CIVector(x: extent.midX, y: extent.midY), forKey: kCIInputCenterKey)
+  f.setValue(r, forKey: kCIInputRadiusKey)
+  f.setValue(scale, forKey: kCIInputScaleKey)
+  guard let warped = f.outputImage?.cropped(to: extent) else { return img }
+  let bumpCI = CIContext()
+  guard let warpedImg =
+    bumpCI.createCGImage(warped, from: extent)
+    ?? bumpCI.createCGImage(warped, from: extent, format: .RGBA8, colorSpace: space)
+  else { return img }
+  // Непрозрачная плитка для App Store / Play.
+  let opaque = CGContext(
+    data: nil, width: size, height: size, bitsPerComponent: 8, bytesPerRow: 0, space: space,
+    bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
+  opaque.setFillColor(rgb(GLASS_MID))
+  opaque.fill(CGRect(x: 0, y: 0, width: S, height: S))
+  opaque.draw(warpedImg, in: CGRect(x: 0, y: 0, width: S, height: S))
+  return opaque.makeImage() ?? img
+}
+
+// --- Dark glass behind the camera (icon tile and Android adaptive background). ---
+
+/// Эллиптическое радиальное пятно: свечение, блик, затемнение краёв.
+func drawGlow(_ c: CGContext, at p: CGPoint, rx: CGFloat, ry: CGFloat, _ colors: [CGColor], _ locations: [CGFloat]) {
+  let g = CGGradient(colorsSpace: space, colors: colors as CFArray, locations: locations)!
+  c.saveGState()
+  c.translateBy(x: p.x, y: p.y)
+  c.scaleBy(x: rx / ry, y: 1)
+  c.drawRadialGradient(
+    g, startCenter: .zero, startRadius: 0, endCenter: .zero, endRadius: ry, options: [.drawsAfterEndLocation])
+  c.restoreGState()
+}
+
+/// 16 бит → 8 бит с треугольным шумом в ±1 уровень (зерно постоянное — PNG от запуска к запуску
+/// не меняются): градиент стекла без полос.
+func dithered(_ deep: CGContext) -> CGImage {
+  let out = makeContext(opaque: true)
+  let src = deep.data!.assumingMemoryBound(to: UInt16.self)
+  let dst = out.data!.assumingMemoryBound(to: UInt8.self)
+  let srcRow = deep.bytesPerRow / 2
+  let dstRow = out.bytesPerRow
+  var seed: UInt32 = 0x9E37_79B9
+  func noise() -> Float {
+    seed ^= seed << 13
+    seed ^= seed >> 17
+    seed ^= seed << 5
+    return Float(seed) / Float(UInt32.max)
+  }
+  for y in 0..<size {
+    for x in 0..<size {
+      for ch in 0..<3 {
+        let v = Float(src[y * srcRow + x * 4 + ch]) / 257 + noise() - noise()
+        dst[y * dstRow + x * 4 + ch] = UInt8(max(0, min(255, v.rounded())))
+      }
+      dst[y * dstRow + x * 4 + 3] = 255
+    }
+  }
+  return out.makeImage()!
+}
+
+/// Ровный основной фон плитки — без разделений сверху/снизу и без полос.
+/// Плитка непрозрачная: iOS и Play альфу не принимают.
+func glass() -> CGImage {
+  let c = makeContext(opaque: true, deep: true)
+  c.setFillColor(rgb(GLASS_MID))
+  c.fill(CGRect(x: -4096, y: -4096, width: 9216, height: 9216))
+  return dithered(c)
+}
+
+// Внутри камеры — ровный голубой фон (без полосы посередине).
+let eqCtx = makeContext(opaque: false)
+eqCtx.setFillColor(rgb(EQ_FILL))
+eqCtx.fill(CGRect(x: -4096, y: -4096, width: 9216, height: 9216))
+eqCtx.setFillColor(rgb(0xFFFFFF, 0.12))
+eqCtx.fill(CGRect(x: -4096, y: -4096, width: 9216, height: 9216))
+let frosted = blurred(eqCtx.makeImage()!, radius: 8 * px)
+
+func write(_ image: CGImage) {
+  let url = URL(fileURLWithPath: out) as CFURL
+  let dest = CGImageDestinationCreateWithURL(url, UTType.png.identifier as CFString, 1, nil)!
+  CGImageDestinationAddImage(dest, image, nil)
+  CGImageDestinationFinalize(dest)
+  print("wrote \(out) \(size)px \(mode)")
+}
 
 // --- Main canvas. ---
-let ctx = makeContext(opaque: mode == "full")
-drawScene(ctx, background: mode == "full")
+let ctx = makeContext(opaque: mode == "full" || mode == "background")
+// Фон — объёмное стекло; на переднем слое — только камера.
+if mode == "full" || mode == "background" {
+  drawDeviceImage(ctx, glass())
+}
+if mode == "background" {
+  write(ctx.makeImage()!)
+  exit(0)
+}
 
-// Мягкая тень стекла на фон.
+// Лёгкая нейтральная тень (без голубого оттенка вокруг камеры).
 for shape in glassShapes {
   ctx.saveGState()
-  ctx.setShadow(offset: CGSize(width: 0, height: -14 * px), blur: 38 * px, color: rgb(0x000000, 0.42))
+  ctx.setShadow(offset: CGSize(width: 0, height: -10 * px), blur: 22 * px, color: rgb(0x000000, 0.28))
   ctx.addPath(shape.path)
-  ctx.setFillColor(rgb(sceneBG))
+  ctx.setFillColor(rgb(GLASS_MID))
   ctx.fillPath()
   ctx.restoreGState()
 }
 
+// Кромка ровная по высоте — верх не светлее низа.
 let rimGradient = CGGradient(
   colorsSpace: space,
-  // Светлая сверху и снизу (снизу чуть мягче), темнее посередине — стекло видно по всему контуру.
-  colors: [rgb(0xFFFFFF, 0.78), rgb(ACCENT_LIGHT, 0.38), rgb(0xFFFFFF, 0.62)] as CFArray,
+  colors: [rgb(0xFFFFFF, 0.72), rgb(ACCENT_LIGHT, 0.50), rgb(0xFFFFFF, 0.72)] as CFArray,
   locations: [0, 0.5, 1])!
 
 for shape in glassShapes {
-  // Матовое стекло: размытая сцена + светлая дымка + блик в верхней части.
+  // Заливка в тонах эквалайзера; блик сверху минимальный (оттенок как снизу).
   ctx.saveGState()
   ctx.addPath(shape.path)
   ctx.clip()
   drawDeviceImage(ctx, frosted)
-  ctx.setFillColor(rgb(0xFFFFFF, 0.08))
+  // Ровная лёгкая белая вуаль (фон, не пятна).
+  ctx.setFillColor(rgb(0xFFFFFF, 0.06))
   ctx.fill(CGRect(x: 0, y: 0, width: 1024, height: 1024))
-  let highlight = CGGradient(
-    colorsSpace: space, colors: [rgb(0xFFFFFF, shape.highlight.alpha), rgb(0xFFFFFF, 0)] as CFArray,
-    locations: [0, 1])!
-  ctx.drawLinearGradient(
-    highlight, start: CGPoint(x: 0, y: shape.top),
-    end: CGPoint(x: 0, y: shape.top + (shape.bottom - shape.top) * shape.highlight.span), options: [])
+  if shape.highlight.alpha > 0.01 {
+    let highlight = CGGradient(
+      colorsSpace: space,
+      colors: [rgb(0xFFFFFF, shape.highlight.alpha), rgb(0xFFFFFF, 0)] as CFArray,
+      locations: [0, 1])!
+    ctx.drawLinearGradient(
+      highlight, start: CGPoint(x: 0, y: shape.top),
+      end: CGPoint(x: 0, y: shape.top + (shape.bottom - shape.top) * shape.highlight.span), options: [])
+  }
   ctx.restoreGState()
-  // Кромка: светлая сверху и снизу.
+  // Кромка.
   ctx.saveGState()
   ctx.addPath(shape.path)
   ctx.setLineWidth(rimWidth)
@@ -210,37 +318,4 @@ for shape in glassShapes {
   ctx.restoreGState()
 }
 
-// --- Waveform bars on the glass. ---
-let heights: [CGFloat] = [64, 128, 206, 286, 206, 128, 64]
-let barW: CGFloat = 30
-let gap: CGFloat = 26
-let total = CGFloat(heights.count) * barW + CGFloat(heights.count - 1) * gap
-var x = body.midX - total / 2
-let barFill = CGGradient(
-  colorsSpace: space, colors: [rgb(0xFFFFFF), rgb(0xA3D4EE)] as CFArray, locations: [0, 1])!
-for h in heights {
-  let r = CGRect(x: x, y: cy - h / 2, width: barW, height: h)
-  let bar = CGPath(roundedRect: r, cornerWidth: barW / 2, cornerHeight: barW / 2, transform: nil)
-  ctx.saveGState()
-  // Мягкая голубая дымка вокруг полосок.
-  ctx.setShadow(offset: .zero, blur: 22 * px, color: rgb(ACCENT, 0.8))
-  ctx.addPath(bar)
-  ctx.setFillColor(rgb(ACCENT_LIGHT))
-  ctx.fillPath()
-  ctx.restoreGState()
-  ctx.saveGState()
-  ctx.addPath(bar)
-  ctx.clip()
-  ctx.drawLinearGradient(
-    barFill, start: CGPoint(x: 0, y: cy - 150), end: CGPoint(x: 0, y: cy + 150),
-    options: [.drawsBeforeStartLocation, .drawsAfterEndLocation])
-  ctx.restoreGState()
-  x += barW + gap
-}
-
-let image = ctx.makeImage()!
-let url = URL(fileURLWithPath: out) as CFURL
-let dest = CGImageDestinationCreateWithURL(url, UTType.png.identifier as CFString, 1, nil)!
-CGImageDestinationAddImage(dest, image, nil)
-CGImageDestinationFinalize(dest)
-print("wrote \(out) \(size)px \(mode)")
+write(ctx.makeImage()!)

@@ -10,8 +10,6 @@
   <color name="home_nav_background">#252B34</color>
   <!-- Тонировка поверх сцены экранов входящего/исходящего звонка: затемняет, но не сильно. -->
   <color name="call_screen_tint">#38000000</color>
-  <!-- Фон адаптивной иконки: тоном приподнятых блоков (UI_SURFACE_RAISED). Рисунок — scripts/render-app-icon.swift. -->
-  <color name="iconBackground">#414C59</color>
   <color name="colorPrimary">#023c69</color>
   <color name="colorPrimaryDark">#0B0B0C</color>
   <!-- Reference tint for RN SystemBarsScrim / expo-navigation-bar (edge-to-edge draws via JS). -->
