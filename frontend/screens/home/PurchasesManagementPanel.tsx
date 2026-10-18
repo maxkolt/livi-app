@@ -6,7 +6,13 @@ import AdaptiveText from '../../components/AdaptiveText';
 import { cosmeticNameKey, setActiveCosmetic, useCosmetics, type CosmeticKind } from '../../utils/cosmetics';
 import { t, type Lang } from '../../utils/i18n';
 import { useLang } from '../../store/lang';
-import { LIVI, WELCOME_GLASS_BORDER, WELCOME_GLASS_SURFACE, WELCOME_MUTED_TEXT } from './constants';
+import {
+  LIVI,
+  WELCOME_GLASS_BORDER,
+  WELCOME_GLASS_SURFACE,
+  WELCOME_HEADER_TITLE,
+  WELCOME_MUTED_TEXT,
+} from './constants';
 import { FireAvatarFrame, fireFrameOutset } from '../../components/frames/FireAvatarFrame';
 import { IceAvatarFrame } from '../../components/frames/IceAvatarFrame';
 import { DiamondAvatarFrame } from '../../components/frames/DiamondAvatarFrame';
@@ -155,7 +161,7 @@ export function PurchasesManagementPanel() {
 const styles = StyleSheet.create({
   root: { paddingHorizontal: 18, paddingTop: 10, paddingBottom: 24, gap: 18 },
   section: { gap: 8 },
-  sectionTitle: { color: WELCOME_MUTED_TEXT, fontSize: 11, fontWeight: '700', letterSpacing: 0.8, marginLeft: 4 },
+  sectionTitle: { color: WELCOME_HEADER_TITLE, fontSize: 11, fontWeight: '700', letterSpacing: 0.8, marginLeft: 4 },
   card: {
     borderRadius: 16,
     backgroundColor: WELCOME_GLASS_SURFACE,

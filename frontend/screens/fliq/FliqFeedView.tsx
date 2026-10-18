@@ -32,6 +32,7 @@ import {
 } from 'react-native';
 import { Image as ExpoImage } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
+import Svg, { Defs, Path, RadialGradient, Rect, Stop } from 'react-native-svg';
 import type { Lang } from '../../utils/i18n';
 import {
   HOME_BLUR_LIST_SOURCE,
@@ -99,8 +100,25 @@ const attachNativeEvent = (
 /** Низкий landscape: круглые кнопки в ряду под карточкой и высота этого ряда. */
 const WIDE_BTN = 36;
 const WIDE_PANEL_H = 48;
-
 type WatchStat = { maxSec: number; durSec: number; loops: number };
+
+/** Фирменный YouTube с мягким линзовым объёмом. */
+const FliqYoutubeIcon = memo(function FliqYoutubeIcon({ size }: { size: number }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" accessibilityElementsHidden>
+      <Defs>
+        <RadialGradient id="youtubeLens" cx="38%" cy="30%" rx="78%" ry="90%">
+          <Stop offset="0" stopColor="#E06476" />
+          <Stop offset="0.38" stopColor="#C83D55" />
+          <Stop offset="0.78" stopColor="#A92F43" />
+          <Stop offset="1" stopColor="#772331" />
+        </RadialGradient>
+      </Defs>
+      <Rect x="1" y="4" width="22" height="16" rx="5" fill="url(#youtubeLens)" />
+      <Path d="M9.7 8.55 16.1 12l-6.4 3.45Z" fill="#FFFFFF" />
+    </Svg>
+  );
+});
 
 type FliqFeedViewProps = {
   /** Вкладка видна, приложение на экране и нет звонка — только тогда ролик играет. */
@@ -1277,6 +1295,7 @@ const FliqActionPanel = memo(function FliqActionPanel({
   const shareWidth = wide ? 116 : Math.min(116, Math.max(1, Math.floor(cardW * (cardW < 180 ? 0.46 : 0.4))));
   const actionSize = wide ? WIDE_BTN : Math.min(40, Math.max(1, Math.floor((cardW - shareWidth - actionGap * 3) / 3)));
   const actionIconSize = Math.max(1, Math.min(19, actionSize - 6));
+  const youtubeIconSize = Math.max(1, Math.min(actionSize - 4, Math.round(actionIconSize * 1.15)));
   const shareHeight = Math.min(40, actionSize);
   const shareCompact = shareWidth < 82;
   return (
@@ -1309,7 +1328,7 @@ const FliqActionPanel = memo(function FliqActionPanel({
           pressed && styles.roundBtnPressed,
         ]}
       >
-        <Ionicons name="logo-youtube" size={actionIconSize} color={UI_INACTIVE} />
+        <FliqYoutubeIcon size={youtubeIconSize} />
       </Pressable>
       <Pressable
         onPress={() => onToggleSaved(item)}

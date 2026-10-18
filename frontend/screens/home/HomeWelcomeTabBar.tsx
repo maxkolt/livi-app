@@ -22,7 +22,6 @@ import {
   isWelcomeTabletLayout,
   UI_GLASS_CONTROL,
 } from './constants';
-import { useTabLabelFonts } from './brandFont';
 
 /**
  * Активная вкладка сразу выделяется: иконка акцентом на «таблетке», подпись светлая.
@@ -240,8 +239,6 @@ function HomeWelcomeTabBarInner({
     !tabletLayout && width > 0 && height > 0 && width / height > 1.05;
   const bottomGap = welcomeTabBarBottomGap(insets.bottom, tabletLayout, compactLandscape);
   const iconSize = tabletLayout ? 29 : compactLandscape ? 24 : 26;
-  // Подписи — «цифровой» Exo 2, как названия вкладок в шапке и ник на «Поиске».
-  const labelFonts = useTabLabelFonts();
   const callIconSize = tabletLayout ? 28 : compactLandscape ? 23 : 25;
   const profileDiscSize = tabletLayout ? 32 : compactLandscape ? 26 : PROFILE_ACTIVE_DOT;
   const fliqIconSize = tabletLayout ? 27 : compactLandscape ? 22 : 24;
@@ -484,7 +481,6 @@ function HomeWelcomeTabBarInner({
                       tabletLayout && styles.labelTablet,
                       compactLandscape && styles.labelLandscape,
                       active && styles.labelActive,
-                      labelFonts ? (active ? labelFonts.active : labelFonts.regular) : null,
                       { color: labelColor },
                     ]}
                     minimumFontScale={0.7}
@@ -641,7 +637,7 @@ const styles = StyleSheet.create({
   },
   label: {
     fontSize: 10,
-    fontWeight: '500',
+    fontWeight: '400',
     letterSpacing: 0.05,
     textAlign: 'center',
     maxWidth: '100%',

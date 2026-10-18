@@ -954,9 +954,14 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
           rowHeight={hubMetrics.rowHeight}
           compact={compactLandscape}
           tablet={isTablet}
-          icon="help-circle-outline"
-          label={t('profileHelp', lang)}
-          onPress={openHelp}
+          icon="shield-checkmark-outline"
+          label={t('callReliabilityTitle', lang)}
+          value={
+            isCallKeepAliveSupported && reliabilityState
+              ? t(reliabilityEnabled ? 'callReliabilityOn' : 'callReliabilityOff', lang)
+              : undefined
+          }
+          onPress={openCallReliability}
         />
       </WelcomeProfileSection>
 
@@ -982,14 +987,9 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
           rowHeight={hubMetrics.rowHeight}
           compact={compactLandscape}
           tablet={isTablet}
-          icon="shield-checkmark-outline"
-          label={t('callReliabilityTitle', lang)}
-          value={
-            isCallKeepAliveSupported && reliabilityState
-              ? t(reliabilityEnabled ? 'callReliabilityOn' : 'callReliabilityOff', lang)
-              : undefined
-          }
-          onPress={openCallReliability}
+          icon="help-circle-outline"
+          label={t('profileHelp', lang)}
+          onPress={openHelp}
         />
       </WelcomeProfileSection>
     </View>

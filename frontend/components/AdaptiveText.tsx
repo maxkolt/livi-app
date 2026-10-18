@@ -1,12 +1,10 @@
-import React, { memo, useMemo } from 'react';
+import React, { memo } from 'react';
 import {
-  StyleSheet,
   Text,
   type StyleProp,
   type TextProps,
   type TextStyle,
 } from 'react-native';
-import { scaleFont, useAdaptiveTypeScale } from '../utils/adaptiveType';
 import { APP_TEXT_MAX_FONT_SIZE_MULTIPLIER } from '../utils/accessibilityTypography';
 
 type AdaptiveTextProps = TextProps & {
@@ -20,29 +18,10 @@ type AdaptiveTextProps = TextProps & {
   minimumFontScale?: number;
 };
 
-function scaleTextStyle(style: StyleProp<TextStyle>, scale: number): TextStyle | null {
-  const flat = StyleSheet.flatten(style);
-  if (!flat) return null;
-  const next: TextStyle = {};
-  let changed = false;
-  if (typeof flat.fontSize === 'number') {
-    next.fontSize = scaleFont(flat.fontSize, scale);
-    changed = true;
-  }
-  if (typeof flat.lineHeight === 'number') {
-    next.lineHeight = scaleFont(flat.lineHeight, scale);
-    changed = true;
-  }
-  if (typeof flat.letterSpacing === 'number' && scale !== 1) {
-    next.letterSpacing = Math.round(flat.letterSpacing * scale * 100) / 100;
-    changed = true;
-  }
-  return changed ? next : null;
-}
-
 /**
  * Текст с адаптивным базовым размером под телефон/планшет.
- * Поверх него React Native применяет системный accessibility font scale.
+ * Базовый масштаб централизован в appFont и применяется ко всему тексту приложения;
+ * поверх него React Native применяет системный accessibility font scale.
  */
 function AdaptiveTextInner({
   style,
@@ -54,8 +33,6 @@ function AdaptiveTextInner({
   children,
   ...rest
 }: AdaptiveTextProps) {
-  const scale = useAdaptiveTypeScale();
-  const scaled = useMemo(() => scaleTextStyle(style, scale), [style, scale]);
   // fit={false} — одна строка без сжатия шрифта (обрезка ellipsis).
   const autoFit = fit ?? numberOfLines === 1;
   const clampOneLine = autoFit || numberOfLines === 1;
@@ -69,7 +46,7 @@ function AdaptiveTextInner({
       adjustsFontSizeToFit={autoFit ? true : rest.adjustsFontSizeToFit}
       {...(autoFit ? { minimumFontScale } : null)}
       ellipsizeMode={clampOneLine ? rest.ellipsizeMode ?? 'tail' : rest.ellipsizeMode}
-      style={scaled ? [style, scaled] : style}
+      style={style}
     >
       {children}
     </Text>

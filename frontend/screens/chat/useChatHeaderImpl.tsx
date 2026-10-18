@@ -253,14 +253,25 @@ export function useChatHeader({
                   {peerNameState}
                 </Text>
                 {encrypted ? (
-                  <MaterialIcons
-                    name="verified-user"
-                    size={12}
-                    color={WELCOME_NAV_ACTIVE_ACCENT.softText}
-                    style={{ marginLeft: 5 }}
+                  <View
+                    style={{
+                      width: 12,
+                      height: 21,
+                      marginLeft: 5,
+                      alignItems: "center",
+                      justifyContent: "center",
+                      transform: [{ translateY: 2 }],
+                    }}
                     accessible
                     accessibilityLabel={t("e2eEncryptedBadge", lang)}
-                  />
+                  >
+                    <MaterialIcons
+                      name="verified-user"
+                      size={12}
+                      color={WELCOME_NAV_ACTIVE_ACCENT.softText}
+                      style={{ lineHeight: 12, includeFontPadding: false }}
+                    />
+                  </View>
                 ) : null}
               </View>
               <Text

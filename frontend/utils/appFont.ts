@@ -13,12 +13,13 @@
  */
 
 import React from 'react';
-import { StyleSheet, Text, TextInput, type TextStyle } from 'react-native';
+import { Dimensions, PixelRatio, StyleSheet, Text, TextInput, type TextStyle } from 'react-native';
 import { Exo2_300Light } from '@expo-google-fonts/exo-2/300Light';
 import { Exo2_400Regular } from '@expo-google-fonts/exo-2/400Regular';
 import { Exo2_500Medium } from '@expo-google-fonts/exo-2/500Medium';
 import { Exo2_600SemiBold } from '@expo-google-fonts/exo-2/600SemiBold';
 import { Exo2_700Bold } from '@expo-google-fonts/exo-2/700Bold';
+import { adaptiveTypeStyleScaleForSize, scaleFont } from './adaptiveType';
 
 /** «Этот Text вложен в другой Text» — тот же контекст, по которому RN рисует вложенный текст спаном. */
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -99,6 +100,35 @@ function appFontFor(style: unknown, nested: boolean): TextStyle | null {
   return FONT_BY_WEIGHT[toWeight(weight, 400)];
 }
 
+/**
+ * Масштабируем только обычный текст приложения. Иконочные и сторонние шрифты не трогаем:
+ * иначе вместе с надписями начнут расти Ionicons/MaterialIcons.
+ */
+function adaptiveTextStyle(style: unknown, scale: number): TextStyle | null {
+  if (scale === 1) return null;
+  const flat = StyleSheet.flatten(style as TextStyle) as TextStyle | undefined;
+  if (!flat) return null;
+  const family = flat.fontFamily;
+  const usesAppFont = !family || SYSTEM_FAMILIES[family] != null || family.startsWith('Exo2_');
+  if (!usesAppFont) return null;
+
+  const next: TextStyle = {};
+  let changed = false;
+  if (typeof flat.fontSize === 'number') {
+    next.fontSize = scaleFont(flat.fontSize, scale);
+    changed = true;
+  }
+  if (typeof flat.lineHeight === 'number') {
+    next.lineHeight = scaleFont(flat.lineHeight, scale);
+    changed = true;
+  }
+  if (typeof flat.letterSpacing === 'number') {
+    next.letterSpacing = Math.round(flat.letterSpacing * scale * 100) / 100;
+    changed = true;
+  }
+  return changed ? next : null;
+}
+
 type ForwardRefComponent = {
   render?: ((props: any, ref: any) => React.ReactNode) & { appFont?: boolean };
 };
@@ -108,7 +138,12 @@ function patchRender(component: ForwardRefComponent, nestable: boolean) {
   if (typeof render !== 'function' || render.appFont) return;
   const withFont = (props: any, nested: boolean) => {
     const font = appFontFor(props.style, nested);
-    return font ? { ...props, style: [props.style, font] } : props;
+    const { width, height } = Dimensions.get('window');
+    const adaptive = adaptiveTextStyle(
+      props.style,
+      adaptiveTypeStyleScaleForSize(width, height, PixelRatio.getFontScale() || 1),
+    );
+    return font || adaptive ? { ...props, style: [props.style, adaptive, font] } : props;
   };
   // Две обёртки, а не хук под условием: у Text контекст вложенности читается
   // всегда, TextInput вложенным не бывает.

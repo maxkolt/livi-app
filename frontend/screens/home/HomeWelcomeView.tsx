@@ -110,6 +110,8 @@ let welcomeRevealPlayedThisSession = false;
 const PHONE_SPLIT_AVATAR_RATIO = 0.36;
 /** Центр радара (фото + рамка + тонкий круг) чуть меньше доли диска. */
 const SEARCH_CENTER_AVATAR_SCALE = 0.9;
+/** Лёгкий оптический подъём CTA над нижней навигацией в портрете. */
+const SEARCH_CTA_PORTRAIT_LIFT = 8;
 
 function HomeWelcomeViewInner({
   styles,
@@ -364,7 +366,8 @@ function HomeWelcomeViewInner({
 
   /**
    * Портрет: кнопка ниже середины между низом ника (или рисунка радара) и таб-баром
-   * (низ сцены) — 62% свободного места сверху. Радар не двигается, сдвигаем только кнопку.
+   * (низ сцены) — 62% свободного места сверху, затем оптический подъём на 8 dp.
+   * Радар не двигается, сдвигаем только кнопку.
    */
   const radarDashR = radarGeometry(radarSize, 0).rDash;
   const ctaShiftY = (() => {
@@ -373,7 +376,7 @@ function HomeWelcomeViewInner({
     // Видимый край — пунктирное кольцо; RADAR_DRAWN_EXTENT шире (с прежним пустым полем).
     const contentBottom = radarAreaH / 2 + radarDashR + nickBlockH;
     const ctaTop = contentBottom + (stageH - contentBottom - ctaHeight) * 0.62;
-    return Math.round(ctaTop - (radarAreaH + ctaPadTop));
+    return Math.round(ctaTop - (radarAreaH + ctaPadTop)) - SEARCH_CTA_PORTRAIT_LIFT;
   })();
 
   /**
