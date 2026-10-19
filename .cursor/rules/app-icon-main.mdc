@@ -1,0 +1,29 @@
+---
+description: Canonical LiVi app icon (camera outline) — do not regress
+alwaysApply: true
+---
+
+# LiVi app icon — основной логотип (2026-10-19)
+
+This is the **canonical app icon**. Do not replace with older glass/EQ/silver variants unless the user explicitly asks.
+
+## Look (locked)
+
+- Background: solid slate `#3E4E62` / RGB `(62, 78, 98)`
+- Motif: outline video camera (rounded body + lens trapezoid), **no equalizer bars**
+- Stroke: light blue / cyan ≈ RGB `(95, 195, 245)`, slightly thickened inward on the body
+- Body height slightly shorter than a perfect square (~10% vertical squash); **lens height unchanged**
+- Centered, horizontal, circle-safe scale (~56% width)
+
+## Source / outputs
+
+- Master: `frontend/assets/icon.png` (1024)
+- Play Console 512: `frontend/assets/google-play-icon-512.png` (also `icon-512.png`)
+- Also synced: `favicon.png`, `adaptive-icon.png`, `adaptive-icon-background.png`, Android `mipmap-*/ic_launcher*`, iOS `App-Icon-1024x1024@1x.png`
+- Raster source motif: `frontend/assets/away-logo.png` (pipeline strips EQ, recolors rim)
+
+## When editing
+
+- Prefer regenerating from the away-logo pipeline over redrawing
+- Keep interior = background (no EQ, no fill art)
+- Sync all launcher/adaptive/iOS assets together
