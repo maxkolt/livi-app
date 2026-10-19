@@ -226,27 +226,32 @@ object LiviOngoingCallHelper {
     }
 
     /**
-     * Если есть активный экран звонка (исходящий/входящий), запускает его и возвращает true.
+     * Если есть активный экран звонка (исходящий/входящий), запускает его и возвращает его тип
+     * ("outgoing" / "incoming"), иначе null.
      * Нужно при открытии приложения из лаунчера (кнопка Домой → иконка LiVi): показываем экран звонка, а не главный.
      */
     @JvmStatic
-    fun launchOngoingCallActivityIfNeeded(context: Context): Boolean {
+    fun launchOngoingCallActivityIfNeeded(context: Context): String? {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val type = prefs.getString(KEY_TYPE, null) ?: return false
-        val callId = prefs.getString(KEY_CALL_ID, null) ?: return false
-        if (type == "incoming" && shouldSuppressIncomingRestore(context, callId)) {
+        val type = prefs.getString(KEY_TYPE, null) ?: return null
+        val callId = prefs.getString(KEY_CALL_ID, null) ?: return null
+        // Уже принятый входящий не показываем снова — ответ идёт в Main.
+        if (type == "incoming" &&
+            (shouldSuppressIncomingRestore(context, callId) ||
+                LiviFirebaseMessagingService.isIncomingCallAnswered(callId))
+        ) {
             clearOngoingCallIfMatches(context, callId)
-            return false
+            return null
         }
         if (type == "outgoing") {
             // Пустой callId / мёртвые prefs после kill не должны снова поднимать нативный исходящий.
             if (callId.isBlank() || shouldSuppressStaleOutgoingRestore(context, callId)) {
                 dismissStaleOutgoingRestore(context, callId)
-                return false
+                return null
             }
             if (EndedCallIds.isEnded(context, callId)) {
                 clearOngoingCall(context)
-                return false
+                return null
             }
             // Холодный старт / уже завершённый дозвон: сервис не играет — не восстанавливаем экран.
             if (!LiviOutgoingCallService.isRingingActive(callId)) {
@@ -255,7 +260,7 @@ object LiviOngoingCallHelper {
                     "launchOngoingCallActivityIfNeeded: skip stale outgoing (service not ringing) callId=${callId.take(24)}",
                 )
                 dismissStaleOutgoingRestore(context, callId)
-                return false
+                return null
             }
         }
         val intent = when (type) {
@@ -279,10 +284,10 @@ object LiviOngoingCallHelper {
                     putExtra(IncomingCallActivity.EXTRA_FROM_NICK, fromNick)
                 }
             }
-            else -> return false
+            else -> return null
         }
         context.startActivity(intent)
-        return true
+        return type
     }
 
     /**

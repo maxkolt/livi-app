@@ -909,6 +909,13 @@ class MainActivity : ReactActivity() {
 
   private fun handleLauncherTapDuringActiveCall(intent: Intent?) {
     if (!isLaunchedFromLauncher(intent)) return
+    // Один тап — одна обработка. Intent лаунчера остаётся у Activity навсегда: onResume после
+    // Недавних / сна / PiP снова гнал редирект, а onNewIntent + onResume одного тапа — дважды.
+    if (intent?.getBooleanExtra(EXTRA_LAUNCHER_TAP_HANDLED, false) == true) return
+    intent?.putExtra(EXTRA_LAUNCHER_TAP_HANDLED, true)
+    // Человек только что нажал «Принять»: Main должен показать звонок. Иначе экран входящего
+    // поднимался заново поверх, Main уходил в фон, и ответ на холодном старте висел пустым.
+    if (LiviAppModule.hasPendingAnswerCall()) return
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && isInPictureInPictureMode) {
       emitSystemPiPExpandedOnce("launcher-tap-in-pip")
       return
@@ -918,7 +925,12 @@ class MainActivity : ReactActivity() {
       LiviAppModule.setPendingReturnToActiveCall(this)
       return
     }
-    if (LiviOngoingCallHelper.launchOngoingCallActivityIfNeeded(this)) {
+    // Исходящий нарисован оверлеем прямо на Main — его и показываем.
+    if (OutgoingCallOverlay.isVisible) return
+    // IncomingCallActivity — singleInstance, своя задача: Main уводим под неё. OutgoingCallActivity
+    // живёт в задаче Main — moveTaskToBack увёл бы и её: тап по иконке во время дозвона
+    // возвращал на лаунчер, и приложение будто закрывалось.
+    if (LiviOngoingCallHelper.launchOngoingCallActivityIfNeeded(this) == "incoming") {
       hideMainActivityForOngoingNativeCall()
     }
   }
@@ -990,6 +1002,8 @@ class MainActivity : ReactActivity() {
     lastResumedInstance = this
     applyShowOverLock(shouldShowOverLock())
     isInForeground = true
+    // Звонок стартовал, пока LiVi был в фоне, — FGS без microphone; теперь можно добрать.
+    ActiveCallForegroundService.promoteMicrophoneIfNeeded()
     // Вернулись в приложение из Недавних — снова обычный режим (без sticky suppress).
     clearRecentsOverviewFlag("onResume")
     if (!isInPictureInPictureMode) {
@@ -1396,6 +1410,9 @@ class MainActivity : ReactActivity() {
       pendingShareFromIntent = true
     }
     maybeShowIncomingAnswerCoverFromIntent(intent)
+    // Пересоздание после смерти процесса: система отдаёт сохранённый intent задачи — это
+    // старый тап по иконке, а не новый.
+    if (savedInstanceState != null) intent?.putExtra(EXTRA_LAUNCHER_TAP_HANDLED, true)
     handleLauncherTapDuringActiveCall(intent)
     // Пуш call_ended (endedFromActive): закрыть PiP + JS teardown (сокет в фоне часто без call:ended).
     // Не softExit (разворот в fullscreen) — иначе у peer звонок «висит» в UI.
@@ -1415,7 +1432,7 @@ class MainActivity : ReactActivity() {
               self.exitPipTimeoutRunnable = null
               self.exitedPipPending = false
               self.expandedEmittedForPipExit = true
-              LiviAppModule.hardExitFromSystemPiPNoDebounce(self)
+              LiviAppModule.dismissSystemPiPToBackground(self)
             } catch (e: Exception) {
               android.util.Log.w("MainActivity", "hardExitFromSystemPiPNoDebounce failed, fallback requestFinish", e)
               self.requestFinish("close-pip-from-call-ended-push")
@@ -1670,6 +1687,8 @@ class MainActivity : ReactActivity() {
     const val EXTRA_OPEN_WELCOME_CHAT = "open_welcome_chat"
     /** Тап по ongoing-уведомлению активного видеозвонка — вернуться на экран звонка. */
     const val EXTRA_RETURN_TO_ACTIVE_CALL = "return_to_active_call"
+    /** Тап по иконке уже разобран handleLauncherTapDuringActiveCall. */
+    private const val EXTRA_LAUNCHER_TAP_HANDLED = "livi_launcher_tap_handled"
     /** С какого UI ушли в фон (аудио / видео) — для возврата по тапу на ongoing-уведомление. */
     const val EXTRA_RETURN_TO_ACTIVE_CALL_AUDIO_ONLY = "return_to_active_call_audio_only"
 

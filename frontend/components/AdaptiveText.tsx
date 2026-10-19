@@ -1,6 +1,7 @@
 import React, { memo } from 'react';
 import {
   Text,
+  useWindowDimensions,
   type StyleProp,
   type TextProps,
   type TextStyle,
@@ -36,9 +37,15 @@ function AdaptiveTextInner({
   // fit={false} — одна строка без сжатия шрифта (обрезка ellipsis).
   const autoFit = fit ?? numberOfLines === 1;
   const clampOneLine = autoFit || numberOfLines === 1;
+  // RN Android: adjustsFontSizeToFit ужимает шрифт в закэшированном тексте и при расширении
+  // назад не растит. После системного PiP (окно в разы уже) подписи навбара и CTA оставались
+  // мелкими, а «1 пользователь онлайн» — «...». Другое окно — новый узел текста, мерится заново.
+  const { width: windowWidth, fontScale } = useWindowDimensions();
+  const fitKey = autoFit ? `${Math.round(windowWidth)}:${fontScale}` : undefined;
 
   return (
     <Text
+      key={fitKey}
       {...rest}
       numberOfLines={clampOneLine ? 1 : numberOfLines}
       allowFontScaling={allowFontScaling}

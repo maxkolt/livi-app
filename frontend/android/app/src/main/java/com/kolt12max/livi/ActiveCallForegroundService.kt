@@ -28,19 +28,24 @@ class ActiveCallForegroundService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        partnerNick = intent?.getStringExtra(EXTRA_PARTNER_NICK)?.trim()?.takeIf { it.isNotEmpty() }
-        audioOnly = intent?.getBooleanExtra(EXTRA_AUDIO_ONLY, false) == true
-        // phoneCall + microphone: микрофон и приём голоса в фоне (навигатор / другое приложение поверх).
-        val fgsType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            var type = ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL
-            if (Build.VERSION.SDK_INT >= 34) {
-                type = type or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-            }
-            type
-        } else {
-            0
+        if (intent == null) {
+            // Перезапуск системой после гибели процесса: звонка (JS + WebRTC) уже нет,
+            // осталось бы только «вечное» уведомление «Звонок от кого-то».
+            stopSelf(startId)
+            return START_NOT_STICKY
         }
-        ServiceCompat.startForeground(this, NOTIFICATION_ID, buildNotification(), fgsType)
+        partnerNick = intent.getStringExtra(EXTRA_PARTNER_NICK)?.trim()?.takeIf { it.isNotEmpty() }
+        audioOnly = intent.getBooleanExtra(EXTRA_AUDIO_ONLY, false)
+        if (instance === this) {
+            // Уже foreground: повторный start только меняет текст (аудио ↔ видео). Повторный
+            // startForeground из фона перепроверил бы тип microphone и снял бы его.
+            refreshNotification()
+            if (MainActivity.isInForeground) promoteMicrophone(false)
+        } else if (!enterForeground()) {
+            stopSelf(startId)
+            return START_NOT_STICKY
+        }
+        instance = this
         LiviAppModule.setActiveCallForegroundRunningStatic(true)
         LiviAppModule.beginActiveCallVoiceAudioHoldStatic(applicationContext)
         scheduleAudioMaintainLoop()
@@ -53,10 +58,86 @@ class ActiveCallForegroundService : Service() {
                 LiviAppModule.trackAppEventStatic(applicationContext, "fgs_start_background", p)
             }
         } catch (_: Exception) {}
-        return START_STICKY
+        return START_NOT_STICKY
+    }
+
+    /**
+     * phoneCall + microphone: микрофон и приём голоса в фоне (навигатор / другое приложение поверх).
+     * Тип microphone Android 14+ выдаёт только «видимому» приложению. Ответ на исходящий,
+     * пока LiVi в фоне, или старт посреди перехода Recents/лаунчер бросал SecurityException
+     * прямо здесь — процесс и звонок падали. Тогда стартуем с одним phoneCall, а microphone
+     * добираем на ближайшем onResume (promoteMicrophoneIfNeeded).
+     */
+    private fun enterForeground(): Boolean {
+        val notification = buildNotification()
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            startForeground(NOTIFICATION_ID, notification)
+            microphoneTypeGranted = true
+            return true
+        }
+        val phoneCall = ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL
+        if (Build.VERSION.SDK_INT >= 34) {
+            try {
+                ServiceCompat.startForeground(
+                    this,
+                    NOTIFICATION_ID,
+                    notification,
+                    phoneCall or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE,
+                )
+                microphoneTypeGranted = true
+                return true
+            } catch (e: RuntimeException) {
+                android.util.Log.w(TAG, "startForeground phoneCall|microphone refused, fallback to phoneCall", e)
+            }
+        }
+        return try {
+            ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, phoneCall)
+            microphoneTypeGranted = Build.VERSION.SDK_INT < 34
+            if (!microphoneTypeGranted) {
+                LiviAppModule.trackAppEventStatic(
+                    applicationContext,
+                    "fgs_mic_deferred",
+                    org.json.JSONObject().put("appForeground", MainActivity.isInForeground).toString(),
+                )
+            }
+            true
+        } catch (e: RuntimeException) {
+            android.util.Log.e(TAG, "startForeground phoneCall refused", e)
+            false
+        }
+    }
+
+    private fun refreshNotification() {
+        try {
+            (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
+                .notify(NOTIFICATION_ID, buildNotification())
+        } catch (e: RuntimeException) {
+            android.util.Log.w(TAG, "refreshNotification failed", e)
+        }
+    }
+
+    private fun promoteMicrophone(retryIfRefused: Boolean) {
+        if (microphoneTypeGranted || instance !== this) return
+        try {
+            ServiceCompat.startForeground(
+                this,
+                NOTIFICATION_ID,
+                buildNotification(),
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE,
+            )
+            microphoneTypeGranted = true
+            android.util.Log.d(TAG, "microphone FGS type granted after resume")
+        } catch (e: RuntimeException) {
+            android.util.Log.w(TAG, "microphone FGS type still refused (retry=$retryIfRefused)", e)
+            // onResume приходит чуть раньше, чем система считает uid видимым.
+            if (retryIfRefused) {
+                audioMaintainHandler.postDelayed({ promoteMicrophone(false) }, PROMOTE_RETRY_MS)
+            }
+        }
     }
 
     override fun onDestroy() {
+        if (instance === this) instance = null
         cancelAudioMaintainLoop()
         LiviAppModule.setActiveCallForegroundRunningStatic(false)
         LiviAppModule.endActiveCallVoiceAudioHoldStatic(applicationContext)
@@ -70,6 +151,7 @@ class ActiveCallForegroundService : Service() {
                 try {
                     LiviAppModule.maintainActiveCallVoiceAudioStatic(applicationContext)
                 } catch (_: Exception) {}
+                CallRouteGuard.requestCheck("maintain")
                 audioMaintainHandler.postDelayed(this, AUDIO_MAINTAIN_INTERVAL_MS)
             }
         }
@@ -84,6 +166,8 @@ class ActiveCallForegroundService : Service() {
 
     private var partnerNick: String? = null
     private var audioOnly: Boolean = false
+    /** FGS уже с типом microphone (или он не нужен до Android 14). */
+    @Volatile private var microphoneTypeGranted = false
 
     private fun buildNotification(): Notification {
         val channelId = if (audioOnly) CHANNEL_ID_AUDIO else CHANNEL_ID
@@ -152,9 +236,18 @@ class ActiveCallForegroundService : Service() {
         private const val EXTRA_PARTNER_NICK = "partnerNick"
         private const val EXTRA_AUDIO_ONLY = "audioOnly"
         private const val START_DEDUP_MS = 900L
+        private const val PROMOTE_RETRY_MS = 600L
 
         @Volatile private var lastStartSignature: String? = null
         @Volatile private var lastStartAtMs: Long = 0L
+        @Volatile private var instance: ActiveCallForegroundService? = null
+
+        /** MainActivity.onResume: LiVi снова на экране — добрать тип microphone, если старт был из фона. */
+        fun promoteMicrophoneIfNeeded() {
+            val svc = instance ?: return
+            if (svc.microphoneTypeGranted) return
+            svc.audioMaintainHandler.post { svc.promoteMicrophone(true) }
+        }
 
         fun start(context: Context, partnerNick: String?, audioOnly: Boolean = false) {
             val nick = partnerNick?.takeIf { it.isNotBlank() } ?: ""

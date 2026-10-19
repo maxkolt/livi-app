@@ -32,10 +32,10 @@ func rgb(_ hex: UInt32, _ a: CGFloat = 1) -> CGColor {
 /// Что видно сквозь матовое стекло камеры на иконке — бывший сплошной фон иконки (тон приподнятых
 /// блоков, светлее фона приложения). Остался, чтобы камера не изменилась на тёмном стекле.
 let ICON_BG: UInt32 = 0x414C59
-/// Фон иконки: чуть светлее прежнего #4C5766.
-let GLASS_TOP: UInt32 = 0x586372
-let GLASS_MID: UInt32 = 0x586372
-let GLASS_BOTTOM: UInt32 = 0x586372
+/// Ровный серо-синий фон иконки.
+let GLASS_TOP: UInt32 = 0x545F6C
+let GLASS_MID: UInt32 = 0x545F6C
+let GLASS_BOTTOM: UInt32 = 0x545F6C
 /// Фон сплэша (HOME_NAV_BG): под стеклом логотипа на сплэше виден он.
 let SPLASH_BG: UInt32 = 0x252B34
 let ACCENT: UInt32 = 0x62B0D8        // UI_ACCENT
@@ -52,8 +52,10 @@ let S = CGFloat(size)
 // Group scale: full icon uses the whole tile; adaptive foreground must stay inside the
 // 66/108 safe circle (radius ≈ 313 of 1024); the adaptive background follows it, so the glow
 // sits behind the camera (its 72/108 visible part ≈ the tile).
+// The launcher mark keeps a calm inset from both square and circular masks. Android's
+// foreground is slightly smaller because launchers crop it through the 72/108 visible area.
 // logo: camera fills most of the width. splashicon must fit the 192/288 dp circle.
-let k: CGFloat = mode == "full" ? 1.0 : mode == "logo" ? 1.30 : mode == "splashicon" ? 0.85 : 0.70
+let k: CGFloat = mode == "full" ? 0.98 : mode == "logo" ? 1.30 : mode == "splashicon" ? 0.85 : 0.71
 let ringless = mode == "logo" || mode == "splashicon"
 /// Что лежит под стеклом: фон плитки иконки или фон сплэша.
 let sceneBG = ringless ? SPLASH_BG : ICON_BG
@@ -94,16 +96,16 @@ func drawDeviceImage(_ c: CGContext, _ img: CGImage) {
 let center = CGPoint(x: 512, y: 512)
 
 // --- Camera geometry (design units). ---
-// Чуть крупнее узкого корпуса (320 → 352), центр на 512.
-let body = CGRect(x: 188, y: 336, width: 478, height: 352)
+// Камера оптически центрирована целиком; объектив расположен близко к корпусу.
+let body = CGRect(x: 189, y: 336, width: 478, height: 352)
 let bodyRadius: CGFloat = 106
 let cy = body.midY
 // Lens: trapezoid, short edge at the body, tall edge outside; rounded corners.
-let lensL: CGFloat = 698, lensR: CGFloat = 842
+let lensL: CGFloat = 691, lensR: CGFloat = 835
 let lensInnerHalf: CGFloat = 68, lensOuterHalf: CGFloat = 154
 let lensRadius: CGFloat = 32
-/// Заливка корпуса/объектива: ровный голубой (полосы посередине нет — градиент на всём фоне плитки).
-let EQ_FILL: UInt32 = 0xB8DDF0     // прежний тон + белый
+/// Светлая заливка корпуса и объектива, как в исходной версии знака.
+let EQ_FILL: UInt32 = 0xF0EEEB
 
 func roundedPolygon(_ pts: [CGPoint], radius: CGFloat) -> CGPath {
   let p = CGMutablePath()
@@ -248,7 +250,7 @@ func glass() -> CGImage {
 let eqCtx = makeContext(opaque: false)
 eqCtx.setFillColor(rgb(EQ_FILL))
 eqCtx.fill(CGRect(x: -4096, y: -4096, width: 9216, height: 9216))
-eqCtx.setFillColor(rgb(0xFFFFFF, 0.12))
+eqCtx.setFillColor(rgb(0xFFFFFF, 0.10))
 eqCtx.fill(CGRect(x: -4096, y: -4096, width: 9216, height: 9216))
 let frosted = blurred(eqCtx.makeImage()!, radius: 8 * px)
 
@@ -271,20 +273,20 @@ if mode == "background" {
   exit(0)
 }
 
-// Лёгкая нейтральная тень (без голубого оттенка вокруг камеры).
+// Лёгкая нейтральная тень — рамка остаётся чистой и хорошо читаемой.
 for shape in glassShapes {
   ctx.saveGState()
-  ctx.setShadow(offset: CGSize(width: 0, height: -10 * px), blur: 22 * px, color: rgb(0x000000, 0.28))
+  ctx.setShadow(offset: CGSize(width: 0, height: -5 * px), blur: 14 * px, color: rgb(0x000000, 0.16))
   ctx.addPath(shape.path)
   ctx.setFillColor(rgb(GLASS_MID))
   ctx.fillPath()
   ctx.restoreGState()
 }
 
-// Кромка ровная по высоте — верх не светлее низа.
+// Ровная голубая рамка, как в исходной версии иконки.
 let rimGradient = CGGradient(
   colorsSpace: space,
-  colors: [rgb(0xFFFFFF, 0.72), rgb(ACCENT_LIGHT, 0.50), rgb(0xFFFFFF, 0.72)] as CFArray,
+  colors: [rgb(ACCENT, 0.98), rgb(ACCENT, 0.98), rgb(ACCENT, 0.98)] as CFArray,
   locations: [0, 0.5, 1])!
 
 for shape in glassShapes {

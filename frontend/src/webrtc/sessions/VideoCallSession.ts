@@ -88,6 +88,7 @@ import {
   REMOTE_MEDIA_WATCHDOG_MS,
   REMOTE_MEDIA_SUBSCRIBE_RETRY_MS,
   MEDIA_RECONNECT_GRACE_MS,
+  REMOTE_PRESENCE_AFTER_RECONNECT_MS,
   LIVEKIT_SELF_RECOVERY_WAIT_MS,
   PEER_RECONNECTING_UI_DEBOUNCE_MS,
   REMOTE_AUDIO_SILENCE_UI_MS,
@@ -176,6 +177,30 @@ function rememberCallE2eeKey(callId: string, key: Uint8Array): void {
     if (oldest === undefined) break;
     callE2eeKeyByCallId.delete(oldest);
   }
+}
+
+/**
+ * callId звонков, уже завершённых в этом процессе (свой сброс или call:ended). Экран звонка,
+ * смонтированный после завершения ранней сессии, не должен поднимать новую: она снова вошла бы
+ * в комнату мёртвого звонка, и у одного участника висел бы экран, а у другого звонка нет.
+ */
+const locallyEndedCallIds = new Map<string, number>();
+const LOCALLY_ENDED_CALL_TTL_MS = 120_000;
+
+function markCallEndedLocally(callId?: string | null): void {
+  const id = String(callId || '').trim();
+  if (!id) return;
+  const now = Date.now();
+  for (const [key, at] of locallyEndedCallIds) {
+    if (now - at > LOCALLY_ENDED_CALL_TTL_MS) locallyEndedCallIds.delete(key);
+  }
+  locallyEndedCallIds.set(id, now);
+}
+
+export function wasCallEndedLocally(callId?: string | null): boolean {
+  const id = String(callId || '').trim();
+  const at = id ? locallyEndedCallIds.get(id) : undefined;
+  return at != null && Date.now() - at <= LOCALLY_ENDED_CALL_TTL_MS;
 }
 
 export class VideoCallSession extends SimpleEventEmitter {
@@ -331,6 +356,9 @@ export class VideoCallSession extends SimpleEventEmitter {
   private liveKitPcRebuiltSinceConnected = false;
   /** Survivor side: partner left LiveKit (e.g. airplane) — wait for rejoin within grace, don't hangup. */
   private waitingForRemotePeerRejoin = false;
+  /** Собеседник уже был в комнате этого звонка (не сбрасывается при его временном выходе). */
+  private remotePeerSeenInCall = false;
+  private remotePresenceAfterReconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private pendingRemoteDisconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private lastSocketDisconnectLogAt = 0;
   private socketRecoveryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -871,6 +899,12 @@ export class VideoCallSession extends SimpleEventEmitter {
         logger.error('[VideoCallSession] Error accepting call', e);
         this.notifyLoadingChange(false);
         setActiveVideoCall(false);
+        // Сервера звонка уже нет (звонящий сбросил / вызов истёк, пока поднималось приложение):
+        // закрываем экран как при сбросе собеседником, а не висим на «Соединение».
+        if ((err === 'not_found' || err === 'call_not_found') && this.callId === id) {
+          logger.info('[VideoCallSession] accepted call no longer exists — closing', { callId: id });
+          this.handleCallEnded({ callId: id });
+        }
       }
     })();
 
@@ -1005,9 +1039,12 @@ export class VideoCallSession extends SimpleEventEmitter {
       return;
     }
     this.endCallInProgress = true;
+    markCallEndedLocally(overrideCallId || this.callId);
     this.clearRemoteAudioSilenceUiTimer();
     this.stopRemoteAudioPacketWatch();
     this.hadLiveRemoteAudioInCall = false;
+    this.remotePeerSeenInCall = false;
+    this.clearRemotePresenceAfterReconnectTimer();
     this.clearPeerReconnectingUi('endCall');
     void this.exitExternalCallHold().catch(() => {});
     clearExternalCallHoldForCall(this.callId);
@@ -3507,6 +3544,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     if (this.ended || this.endCallInProgress) return;
     if (hasLive) {
       this.hadLiveRemoteAudioInCall = true;
+      this.remotePeerSeenInCall = true;
       this.clearRemoteAudioSilenceUiTimer();
       this.ensureRemoteAudioPacketWatch();
       if (this.peerReconnecting) {
@@ -4738,7 +4776,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     let lastError: Error | null = null;
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      if (this.ended) {
+      if (this.ended || this.endCallInProgress) {
         logger.info('[VideoCallSession] ⏭️ Stopping retries: call ended (call:ended received)');
         break;
       }
@@ -5100,6 +5138,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     const evR = String(endEvent?.roomId ?? '').trim();
     const sidC = String(this.callId ?? '').trim();
     const sidR = String(this.roomId ?? '').trim();
+    markCallEndedLocally(evC || sidC);
     applyCallEndedGlobalRefsOnce(evC || sidC || undefined, evR || sidR || undefined);
 
     // Idempotency: server may deliver call:ended multiple times (e.g., room + direct).
@@ -5878,6 +5917,11 @@ export class VideoCallSession extends SimpleEventEmitter {
           roomState: room.state,
         });
         this.notifyLoadingChange(false);
+        // Собеседник так и не вошёл: скорее всего он уже сбросил, а call:ended до нас не дошёл.
+        // Не висим в пустом звонке бесконечно — ждём его тем же grace и завершаем.
+        if (!this.remotePeerSeenInCall) {
+          this.beginWaitingForRemotePeerRejoin('remote_never_joined');
+        }
       } else {
         this.scheduleRemoteMediaWatchdog(context, true);
       }
@@ -7816,7 +7860,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     targetRoomName?: string,
     options?: LiveKitConnectOptions
   ): Promise<boolean> {
-    if (this.ended) {
+    if (this.ended || this.endCallInProgress) {
       this.incomingAcceptDeferCapture = false;
       logger.info('[VideoCallSession] ⏭️ Skipping connectToLiveKit: call already ended');
       return false;
@@ -7872,7 +7916,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     options?: LiveKitConnectOptions,
     internalRetry = false,
   ): Promise<boolean> {
-    if (this.ended) {
+    if (this.ended || this.endCallInProgress) {
       this.incomingAcceptDeferCapture = false;
       logger.info('[VideoCallSession] ⏭️ Skipping connectToLiveKit: call already ended');
       return false;
@@ -7917,6 +7961,12 @@ export class VideoCallSession extends SimpleEventEmitter {
             e2eeEnableMs: Date.now() - e2eeStartedAt,
           });
         } catch {}
+        // Пока грузились ICE/E2EE, звонок могли завершить: не входить в комнату «призраком» —
+        // иначе собеседник видит нас в комнате и ждёт, а call:end уже ушёл.
+        if (this.ended || this.endCallInProgress) {
+          logger.info('[VideoCallSession] ⏭️ Call ended before LiveKit connect — not joining');
+          return false;
+        }
         // КРИТИЧНО: Новая комната всегда в состоянии 'disconnected' до connect()
         // Проверяем состояние только после попытки подключения
         logger.info('[VideoCallSession] Attempting to connect to LiveKit', {
@@ -7943,6 +7993,20 @@ export class VideoCallSession extends SimpleEventEmitter {
         // Увеличиваем peerConnectionTimeout: при одновременном подключении обоих участников
         // переговоры (negotiation) могут не уложиться в 15s → "negotiation timed out" и повторная попытка.
         await this.connectRoomWithDnsRetry(room, url, token, targetRoomName, options, rtcConfig);
+
+        // Звонок завершили, пока шёл connect: сразу выходим, чтобы не остаться в комнате призраком.
+        if (this.ended || this.endCallInProgress) {
+          logger.info('[VideoCallSession] ⏭️ Call ended during LiveKit connect — leaving room');
+          try {
+            room.removeAllListeners();
+            await room.disconnect();
+          } catch {}
+          if (this.room === room) {
+            this.room = null;
+            this.currentRoomName = null;
+          }
+          return false;
+        }
       
         // КРИТИЧНО: Проверяем состояние после подключения
         if (room.state !== 'connected') {
@@ -8551,6 +8615,32 @@ export class VideoCallSession extends SimpleEventEmitter {
       () => this.tryRestoreCameraAfterReconnect(),
       () => this.tryRestoreCameraAfterReconnect(),
     );
+    this.scheduleRemotePresenceCheckAfterReconnect(room);
+  }
+
+  /**
+   * Собеседник мог уйти из комнаты (или завершить звонок), пока мы сами были без сети: его выход
+   * пришёл во время нашего reconnect и проигнорирован, а call:ended мимо офлайн-сокета потерян.
+   * После возврата сети звонок висел в пустой комнате до ручного сброса. Если собеседника в
+   * комнате так и нет — ждём его тем же grace, что и при обычном выходе, затем завершаем.
+   */
+  private scheduleRemotePresenceCheckAfterReconnect(room: Room): void {
+    this.clearRemotePresenceAfterReconnectTimer();
+    this.remotePresenceAfterReconnectTimer = setTimeout(() => {
+      this.remotePresenceAfterReconnectTimer = null;
+      if (this.ended || this.endCallInProgress || this.isDisconnecting) return;
+      if (this.room !== room || room.state !== 'connected') return;
+      if (!this.remotePeerSeenInCall || this.waitingForRemotePeerRejoin) return;
+      if (this.hasExpectedRemoteParticipantInRoom(room)) return;
+      this.beginWaitingForRemotePeerRejoin('room_reconnected_peer_absent');
+    }, REMOTE_PRESENCE_AFTER_RECONNECT_MS);
+  }
+
+  private clearRemotePresenceAfterReconnectTimer(): void {
+    if (this.remotePresenceAfterReconnectTimer) {
+      clearTimeout(this.remotePresenceAfterReconnectTimer);
+      this.remotePresenceAfterReconnectTimer = null;
+    }
   }
 
   /** Партнёр вошёл в комнату: подписываемся на его треки, не дожидаясь TrackSubscribed. */
@@ -8569,6 +8659,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       participant = liveParticipant;
       this.currentRemoteParticipant = liveParticipant;
       void sendClientMetrics(API_BASE, { remoteParticipantConnected: true }).catch(() => {});
+      this.remotePeerSeenInCall = true;
       // If we were about to end the call due to a disconnect, cancel — remote is back.
       this.clearPendingRemoteDisconnectTimer();
       this.noteRemotePeerRejoined('ParticipantConnected');

@@ -24,7 +24,7 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MediaStream } from '@livekit/react-native-webrtc';
 import { MaterialIcons } from '@expo/vector-icons';
-import { VideoCallSession } from '../../src/webrtc/sessions/VideoCallSession';
+import { VideoCallSession, wasCallEndedLocally } from '../../src/webrtc/sessions/VideoCallSession';
 import type { CamSide, WebRTCSessionConfig } from '../../src/webrtc/types';
 import { BlurView } from 'expo-blur';
 import { CallScreenChrome } from './shared/CallScreenChrome';
@@ -133,7 +133,7 @@ import InCallManager from 'react-native-incall-manager';
 import {
   reportEndCallToCallKeep,
   bringMainActivityToFront,
-  requestExitSystemPiPSoft,
+  dismissSystemPiPAfterCallEnded,
   pauseBackgroundMediaAfterCall,
   resolveDirectCallAudioFirst,
 } from '../../utils/callKeep';
@@ -2419,7 +2419,8 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       partnerInPiPRef.current = false;
       const inSystemNow = (global as any).__pipInSystemModeRef?.current === true;
       if (inSystemNow && Platform.OS === 'android') {
-        try { requestExitSystemPiPSoft(); } catch (_) {}
+        // Закрыть окно PiP, не разворачивая LiVi поверх приложения, где человек сейчас.
+        try { dismissSystemPiPAfterCallEnded(); } catch (_) {}
       }
 
       const sessionAlreadyEnded =
@@ -3374,6 +3375,17 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       (global as any).__endCallCleanupOwnerRef =
         (global as any).__endCallCleanupOwnerRef || { current: null };
       (global as any).__endCallCleanupOwnerRef.current = screenInstanceIdRef.current;
+      return;
+    }
+
+    // Звонок уже завершён в этом процессе (сброс или call:ended пришёл, пока экран монтировался):
+    // новая сессия снова вошла бы в комнату мёртвого звонка — закрываем экран.
+    if (effectiveCallId && wasCallEndedLocally(effectiveCallId)) {
+      logger.info('[VideoCall] call already ended — leaving screen without a new session', {
+        callId: effectiveCallId,
+      });
+      const rootNav = (global as any).__navRef;
+      if (rootNav) dispatchLeaveVideoCallScreen(rootNav, { callEnded: true });
       return;
     }
 

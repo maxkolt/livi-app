@@ -50,7 +50,29 @@ export function resolveConnectRtcConfig(
 ): RTCConfiguration | undefined {
   if (options?.enabled === false) return undefined;
   if (!config) return undefined;
-  return hasUsableTurnServer(config) ? config : undefined;
+  return hasUsableTurnServer(config) ? cloneRtcConfig(config) : undefined;
+}
+
+/**
+ * Каждому connect — своя копия. Конфиг закэширован в iceConfig и общий для всех звонков, а
+ * LiveKit нормализует iceServers на месте (urls → массив) и отдаёт их в нативный
+ * RTCPeerConnection. В dev RN замораживает всё, что ушло в натив, и следующий звонок падал
+ * на «could not establish signal connection: You attempted to set the key `urls`…»;
+ * в релизе один звонок молча правил кэш, которым пользуются следующие.
+ */
+function cloneRtcConfig(config: RTCConfiguration): RTCConfiguration {
+  const servers = (config as { iceServers?: IceServerLike[] }).iceServers;
+  return {
+    ...config,
+    ...(Array.isArray(servers)
+      ? {
+          iceServers: servers.map((server) => ({
+            ...server,
+            ...(Array.isArray(server.urls) ? { urls: [...server.urls] } : {}),
+          })),
+        }
+      : {}),
+  } as RTCConfiguration;
 }
 
 type LiveKitConnectOptionsInput = {

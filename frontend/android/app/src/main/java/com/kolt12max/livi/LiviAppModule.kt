@@ -1628,7 +1628,12 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
           promise.resolve(Arguments.createMap())
           return@runOnAudioRouteThread
         }
-        am.mode = AudioManager.MODE_IN_COMMUNICATION
+        // JS опрашивает это каждые ~1.5 с весь звонок. Безусловный setMode каждый раз заново
+        // выбирал mode owner и пересчитывал маршрут, а во время GSM вставал в очередь к telecom.
+        // Режим поднимаем, только если его сбросили в NORMAL.
+        if (am.mode == AudioManager.MODE_NORMAL) {
+          am.mode = AudioManager.MODE_IN_COMMUNICATION
+        }
         val available = Arguments.createArray()
         val seen = mutableSetOf<String>()
         fun pushRoute(route: String) {
@@ -1682,6 +1687,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
    */
   @ReactMethod
   fun setVoiceCallSpeakerOn(speakerOn: Boolean, promise: Promise) {
+    noteCallAudioActivityStatic()
     runOnAudioRouteThread {
       try {
         val am = reactApplicationContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
@@ -1702,6 +1708,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
             } catch (_: Exception) {}
           }
           Log.i(NAME, "setVoiceCallSpeakerOn kept BLUETOOTH (call-audio active)")
+          CallRouteGuard.onExternalRouteApplied()
           promise.resolve(true)
           return@runOnAudioRouteThread
         }
@@ -1732,6 +1739,11 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
           applied = true
         }
         Log.i(NAME, "setVoiceCallSpeakerOn speakerOn=$speakerOn applied=$applied api=${Build.VERSION.SDK_INT}")
+        CallRouteGuard.onBuiltinRouteApplied(
+          reactApplicationContext,
+          audioRouteHandler,
+          if (speakerOn) "SPEAKER_PHONE" else "EARPIECE",
+        )
         promise.resolve(applied)
       } catch (e: Exception) {
         Log.e(NAME, "setVoiceCallSpeakerOn failed", e)
@@ -1793,6 +1805,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   /** Явный маршрут звонка (BT / провод / earpiece / speaker) через setCommunicationDevice / SCO. */
   @ReactMethod
   fun setVoiceCallAudioRoute(route: String, promise: Promise) {
+    noteCallAudioActivityStatic()
     runOnAudioRouteThread {
       try {
         val am = reactApplicationContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
@@ -1803,6 +1816,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
         am.mode = AudioManager.MODE_IN_COMMUNICATION
         when (route) {
           "BLUETOOTH" -> {
+            CallRouteGuard.onExternalRouteApplied()
             bluetoothRouteSettleRunnable?.let { audioRouteHandler.removeCallbacks(it) }
             bluetoothRouteSettleRunnable = null
             @Suppress("DEPRECATION")
@@ -1927,9 +1941,11 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
               NAME,
               "setVoiceCallAudioRoute route=$route applied=$applied scoOn=false commDev=$commType",
             )
+            CallRouteGuard.onBuiltinRouteApplied(reactApplicationContext, audioRouteHandler, route)
             promise.resolve(applied)
           }
           "WIRED_HEADSET" -> {
+            CallRouteGuard.onExternalRouteApplied()
             var applied = false
             stopBluetoothScoForBuiltIn(am)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -2177,9 +2193,10 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   fun dismissSystemPiPAfterCallEnded() {
     val activity = mainActivityForPiP() ?: return
     val runDismiss = Runnable {
-      tryExitSystemPiPFromRunnable(activity, 0, true)
+      LiviAppModule.dismissSystemPiPToBackground(activity)
+      // Вход в PiP мог быть ещё в полёте — повторить, когда окно появится.
       Handler(Looper.getMainLooper()).postDelayed({
-        tryExitSystemPiPFromRunnable(activity, 0, true)
+        LiviAppModule.dismissSystemPiPToBackground(activity)
       }, 380)
       Handler(Looper.getMainLooper()).postDelayed({
         try {
@@ -3483,6 +3500,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     /** Активный звонок: MODE_IN_COMMUNICATION + voice focus (переживает навигатор поверх LiVi). */
     @JvmStatic
     internal fun beginActiveCallVoiceAudioHoldStatic(ctx: Context) {
+      noteCallAudioActivityStatic()
       val am = ctx.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
       synchronized(LiviAppModule::class.java) {
         try {
@@ -3902,6 +3920,31 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     /**
      * Жёстко закрыть system PiP (moveTaskToBack + finish), без debounce — только как fallback после soft.
      */
+    /**
+     * Звонок закончился, пока LiVi в системном PiP: закрыть окно и оставить человека там, где он
+     * был (навигатор, другое приложение), как WhatsApp/Telegram. Раньше окно разворачивалось на
+     * весь экран поверх чужого приложения. moveTaskToBack снимает PiP и не убивает Activity
+     * (finish() пересоздавал экран React); finish — только если окно так и не ушло.
+     */
+    @JvmStatic
+    internal fun dismissSystemPiPToBackground(activity: android.app.Activity) {
+      try {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        if (!activity.isInPictureInPictureMode || activity.isFinishing) return
+        activity.moveTaskToBack(true)
+        Log.d(NAME, "dismissSystemPiPToBackground: moveTaskToBack")
+        Handler(Looper.getMainLooper()).postDelayed({
+          try {
+            if (!activity.isFinishing && activity.isInPictureInPictureMode) {
+              hardExitFromSystemPiPNoDebounce(activity)
+            }
+          } catch (_: Exception) {}
+        }, 500)
+      } catch (e: Exception) {
+        Log.w(NAME, "dismissSystemPiPToBackground failed", e)
+      }
+    }
+
     @JvmStatic
     internal fun hardExitFromSystemPiPNoDebounce(activity: android.app.Activity) {
       try {
@@ -4003,9 +4046,67 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       activeCallForegroundRunning = running
       // Сервис живёт ровно столько, сколько звонок: на это время JS-таймеры не засыпают в PiP/фоне.
       if (running) {
+        noteCallAudioActivityStatic()
         CallJsTimersKeepAlive.start(reactContextRef)
       } else {
         CallJsTimersKeepAlive.stop()
+        CallRouteGuard.disarm()
+        scheduleCallAudioReleaseStatic()
+      }
+    }
+
+    /** Растёт при любом начале звукового сеанса — отложенный release его не трогает. */
+    @Volatile
+    private var callAudioEpoch = 0L
+    private val callAudioReleaseHandler = Handler(Looper.getMainLooper())
+    private val callAudioReleaseToken = Any()
+
+    @JvmStatic
+    internal fun noteCallAudioActivityStatic() {
+      callAudioEpoch++
+    }
+
+    /**
+     * Звонок закончился (FGS остановлен). InCallManager у нас обычно не стартует, и его stop()
+     * с очисткой маршрута не срабатывает: ухо/громкая, запрошенные во время звонка, оставались
+     * клиентом AudioService, а MODE_IN_COMMUNICATION держался, пока его через ~6 с не сбрасывала
+     * сама система. Следующий setMode приложения (рингбэк, звонок) снова применял старое
+     * устройство. Снимаем и то и другое, когда WebRTC уже остановил запись и воспроизведение, —
+     * если за это время не начался новый звуковой сеанс.
+     */
+    private fun scheduleCallAudioReleaseStatic() {
+      callAudioReleaseHandler.removeCallbacksAndMessages(callAudioReleaseToken)
+      val epoch = callAudioEpoch
+      for (delayMs in longArrayOf(1_500L, 5_000L)) {
+        callAudioReleaseHandler.postAtTime(
+          { releaseCallAudioIfIdleStatic(epoch) },
+          callAudioReleaseToken,
+          SystemClock.uptimeMillis() + delayMs,
+        )
+      }
+    }
+
+    private fun releaseCallAudioIfIdleStatic(epoch: Long) {
+      if (activeCallForegroundRunning || epoch != callAudioEpoch) return
+      if (LiviOutgoingCallService.isRingingActive()) return
+      val am = reactContextRef?.applicationContext?.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
+      try {
+        val mode = am.mode
+        // RINGTONE / IN_CALL — входящий или GSM: не наше.
+        if (mode != AudioManager.MODE_NORMAL && mode != AudioManager.MODE_IN_COMMUNICATION) return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+          am.clearCommunicationDevice()
+        } else {
+          @Suppress("DEPRECATION")
+          am.isSpeakerphoneOn = false
+        }
+        // getMode() отдаёт режим только активного владельца: когда WebRTC уже не пишет и не играет,
+        // он уже NORMAL, а наш запрос IN_COMMUNICATION в AudioService жив до сброса системой.
+        // setMode(NORMAL) снимает только запрос нашего процесса — чужой VoIP-звонок останется в своём.
+        am.mode = AudioManager.MODE_NORMAL
+        Log.i(NAME, "releaseCallAudioIfIdle: route cleared, mode $mode -> ${am.mode}")
+      } catch (e: Exception) {
+        Log.w(NAME, "releaseCallAudioIfIdle failed", e)
       }
     }
 

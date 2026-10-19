@@ -45,6 +45,21 @@ export function adaptiveTypeStyleScaleForSize(width: number, height: number, fon
   return safeFontScale < 1 ? layoutScale / Math.max(0.9, safeFontScale) : layoutScale;
 }
 
+/**
+ * Окно, по которому считаем масштаб текста. Системный PiP (окно по обеим осям меньше
+ * 3/4 короткой стороны экрана) — не экран: текст, отрисованный в PiP по его ширине,
+ * оставался мельче после разворота, пока компонент не перерисуется.
+ */
+export function typeScaleWindowSize(
+  win: { width: number; height: number },
+  screen: { width: number; height: number },
+): { width: number; height: number } {
+  const screenShort = Math.min(screen.width, screen.height);
+  const pipLike =
+    screenShort > 0 && win.width > 0 && win.height > 0 && Math.max(win.width, win.height) < screenShort * 0.75;
+  return pipLike ? screen : win;
+}
+
 export function scaleFont(size: number, scale: number): number {
   return Math.round(size * scale * 10) / 10;
 }

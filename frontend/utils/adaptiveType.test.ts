@@ -1,4 +1,19 @@
-import { adaptiveTypeScaleForSize, adaptiveTypeStyleScaleForSize } from './adaptiveType';
+import { adaptiveTypeScaleForSize, adaptiveTypeStyleScaleForSize, typeScaleWindowSize } from './adaptiveType';
+
+describe('typeScaleWindowSize', () => {
+  const screen = { width: 411, height: 891 };
+
+  it('scales text by the screen while the app is in system PiP', () => {
+    expect(typeScaleWindowSize({ width: 121, height: 215 }, screen)).toBe(screen);
+  });
+
+  it('keeps the window for full screen and split screen', () => {
+    const full = { width: 411, height: 891 };
+    const split = { width: 411, height: 440 };
+    expect(typeScaleWindowSize(full, screen)).toBe(full);
+    expect(typeScaleWindowSize(split, screen)).toBe(split);
+  });
+});
 
 describe('adaptiveTypeScaleForSize', () => {
   it('keeps the established phone size at 384 dp and below', () => {

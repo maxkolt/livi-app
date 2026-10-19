@@ -20,7 +20,10 @@ This is the **canonical app icon**. Do not replace with older glass/EQ/silver va
 - Master: `frontend/assets/icon.png` (1024)
 - Play Console 512: `frontend/assets/google-play-icon-512.png` (also `icon-512.png`)
 - Also synced: `favicon.png`, `adaptive-icon.png`, `adaptive-icon-background.png`, Android `mipmap-*/ic_launcher*`, iOS `App-Icon-1024x1024@1x.png`
-- Raster source motif: `frontend/assets/away-logo.png` (pipeline strips EQ, recolors rim)
+- Cam-off / away / PiP logo (transparent): `frontend/assets/away-logo.png` — same blue outline camera
+- Entry splash + Metro wait (`SplashLoader` / native): `frontend/assets/splash-icon.png` (+ Android `splashscreen_logo`/`splashscreen_icon`, iOS `SplashScreenLogo`)
+- Android system PiP: `frontend/android/.../drawable-nodpi/livi_pip_placeholder.png`
+- Raster pipeline source (old EQ motif, for regenerating icon): `frontend/assets/away-logo-source.png`
 
 ## When editing
 

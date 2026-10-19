@@ -24,6 +24,8 @@ export const REMOTE_MEDIA_SUBSCRIBE_RETRY_MS = 5_000;
  * while the peer (or restored socket) can still heartbeat.
  */
 export const MEDIA_RECONNECT_GRACE_MS = 45_000;
+/** После своего reconnect: сколько ждать, пока LiveKit досинхронизирует список участников. */
+export const REMOTE_PRESENCE_AFTER_RECONNECT_MS = 4_000;
 /**
  * Смена сети при живой комнате (VPN on/off, Wi‑Fi↔LTE): LiveKit сам делает resume с
  * ICE restart и теми же треками. Свой полный re-join — только если он не справился за это время.

@@ -48,7 +48,27 @@ describe('hasUsableTurnServer', () => {
 describe('resolveConnectRtcConfig', () => {
   it('свой TURN отдаём в connect — ради него всё и затевалось', () => {
     const config = cfg([turn(), stun], { iceTransportPolicy: 'relay' });
-    expect(resolveConnectRtcConfig(config)).toBe(config);
+    expect(resolveConnectRtcConfig(config)).toEqual(config);
+  });
+
+  it('отдаёт копию: LiveKit правит iceServers на месте, а кэш общий для всех звонков', () => {
+    const config = cfg([turn({ urls: ['turn:turn.example.com:3478'] }), stun]);
+    // Так dev-сборка RN оставляет объект, однажды ушедший в натив (RTCPeerConnection).
+    const deepFreeze = (o: any): any => {
+      Object.values(o).forEach((v) => {
+        if (v && typeof v === 'object') deepFreeze(v);
+      });
+      return Object.freeze(o);
+    };
+    deepFreeze(config);
+    const out = resolveConnectRtcConfig(config) as any;
+    expect(out).not.toBe(config);
+    expect(out.iceServers[0]).not.toBe((config as any).iceServers[0]);
+    expect(() => {
+      out.iceServers[0].urls = ['turn:other.example.com:3478'];
+      out.iceServers[0].urls.push('turns:other.example.com:5349');
+    }).not.toThrow();
+    expect((config as any).iceServers[0].urls).toEqual(['turn:turn.example.com:3478']);
   });
 
   it('STUN-only НЕ отдаём: иначе вытесним серверные ICE-серверы LiveKit и станет хуже', () => {
@@ -62,7 +82,7 @@ describe('resolveConnectRtcConfig', () => {
   it('kill-switch возвращает поведение «до фикса»', () => {
     const config = cfg([turn()]);
     expect(resolveConnectRtcConfig(config, { enabled: false })).toBeUndefined();
-    expect(resolveConnectRtcConfig(config, { enabled: true })).toBe(config);
+    expect(resolveConnectRtcConfig(config, { enabled: true })).toEqual(config);
   });
 });
 
@@ -80,7 +100,7 @@ describe('buildLiveKitConnectOptions', () => {
   it('со своим TURN кладёт rtcConfig — это и есть починка relay-фоллбэка', () => {
     const rtcConfig = cfg([turn()], { iceTransportPolicy: 'relay' });
     const opts = buildLiveKitConnectOptions({ peerConnectionTimeoutMs: 30_000, rtcConfig });
-    expect(opts.rtcConfig).toBe(rtcConfig);
+    expect(opts.rtcConfig).toEqual(rtcConfig);
   });
 
   it('без своего TURN ключа rtcConfig нет вовсе', () => {

@@ -1470,6 +1470,18 @@ function markRecentlyEndedCallIdentifier(id?: string | null): void {
     try { recentlyEndedCalls.delete(key); } catch {}
   }, RECENTLY_ENDED_CALL_TTL_MS));
 }
+/**
+ * roomId у пары друзей один на все их звонки (room_<a>_<b>). Метка «комната недавно завершена»
+ * от прошлого звонка не должна жить в новом: иначе call:end нового звонка в эти 15 с считался
+ * дублем, второй участник не получал call:ended и оставался на экране звонка.
+ */
+function clearRecentlyEndedRoom(roomId?: string | null): void {
+  const key = String(roomId || '').trim();
+  const timer = key ? recentlyEndedCalls.get(key) : undefined;
+  if (!timer) return;
+  try { clearTimeout(timer); } catch {}
+  recentlyEndedCalls.delete(key);
+}
 /** Участник не был подключён в момент call:accept — при reauth отправим ему call:accepted и он подключится в комнату */
 type PendingAcceptedRoom = {
   callId: string;
@@ -2093,7 +2105,7 @@ async function endDirectCallServerSide(opts: {
     }
   }
 
-  if (recentlyEndedCalls.has(callIdStr) || (roomId && recentlyEndedCalls.has(roomId))) {
+  if (recentlyEndedCalls.has(callIdStr)) {
     if (isOid(a) && isOid(b)) {
       clearDirectCallSocketStateForUsers([a, b]);
       try {
@@ -3345,7 +3357,33 @@ io.on('connection', async (sock: AuthedSocket) => {
         }
         if (!callId) return;
         const lease = getActiveCallLease(callId);
-        if (!lease) return;
+        if (!lease) {
+          // Клиент всё ещё «в звонке», а звонок уже точно завершён: его call:ended потерялся
+          // (сокет был офлайн, гонка accept/end, дедуп). Повторяем этому сокету — иначе у одного
+          // участника экран звонка висит, а у другого звонка уже нет. Без уверенности (рестарт
+          // сервера стёр состояние в памяти) молчим, чтобы не оборвать живой звонок.
+          const timeline = getCallTimeline(callId);
+          const knownEnded =
+            recentlyEndedCalls.has(callId) ||
+            (!!timeline && ['ended', 'canceled', 'declined', 'timeout'].includes(String(timeline.state)));
+          if (knownEnded) {
+            const endedRoomId = roomIdRaw || callIdToRoomId.get(callId) || undefined;
+            logger.info('[call:heartbeat] call already ended — re-sending call:ended', {
+              userId,
+              callId,
+              roomId: endedRoomId || null,
+              state: timeline?.state || null,
+            });
+            sock.emit('call:ended', {
+              callId,
+              roomId: endedRoomId,
+              reason: 'ended',
+              scope: 'direct',
+              resolvedRoomId: endedRoomId,
+            });
+          }
+          return;
+        }
         const uid = normalizeMongoObjectId(userId);
         if (uid !== lease.a && uid !== lease.b) return;
         const phase =
@@ -3450,7 +3488,9 @@ io.on('connection', async (sock: AuthedSocket) => {
         });
         return;
       }
-      if (recentlyEndedCalls.has(id) || (callId ? recentlyEndedCalls.has(String(callId)) : false)) {
+      // С callId дубль определяем только по нему: метка комнаты могла остаться от прошлого звонка пары.
+      const endCallIdKey = callId ? String(callId).trim() : '';
+      if (endCallIdKey ? recentlyEndedCalls.has(endCallIdKey) : recentlyEndedCalls.has(id)) {
         logger.info('⏭️ [call:end] duplicate ignored (already ended recently)', {
           roomId: id,
           callId: callId || null,
@@ -4271,6 +4311,7 @@ io.on('connection', async (sock: AuthedSocket) => {
       const sortedUserIds = [me, peerId].sort();
       const roomId = `room_${sortedUserIds[0]}_${sortedUserIds[1]}`;
       console.log('[call:initiate] roomId created', { me, peerId, roomId });
+      clearRecentlyEndedRoom(roomId);
 
       // Инициатор сразу присоединяется к комнате
       try {
@@ -4615,6 +4656,7 @@ io.on('connection', async (sock: AuthedSocket) => {
         console.log('[call:accept] FALLBACK roomId from socket IDs', { aSockId: aSock?.id, bSockId: bSock.id, roomId });
       }
 
+      clearRecentlyEndedRoom(roomId);
       // КРИТИЧНО: Присоединяем к комнате всех, кто сейчас подключён; инициатор может подключиться позже (reauth)
       try {
         if (link.a && aSock) evictExtraUserSocketsInDirectRoom(io, roomId, link.a, aSock.id);

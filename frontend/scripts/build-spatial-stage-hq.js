@@ -135,6 +135,54 @@ const CLEANUP = [
 ];
 
 /**
+ * Точки и пятна, отмеченные белыми рамками на landscape-скриншоте главного экрана.
+ * Координаты — исходник 572×1024. Рамки узкие и не заходят на камеру, графики,
+ * соты и ветки куба. Очистка выполняется до наложения новых сот и нейрокуба, поэтому
+ * их линии и узлы остаются неизменными.
+ */
+const MARKED_CLEANUP = [
+  // Под камерой и вокруг левого графика.
+  { rect: [120, 600, 132, 618], remove: true, feather: 4 },
+  { rect: [103, 625, 119, 648], remove: true, feather: 5 },
+  { rect: [93, 657, 102, 672], remove: true, feather: 3 },
+  { rect: [101, 657, 115, 678], remove: true, feather: 4 },
+  { rect: [153, 652, 166, 669], remove: true, feather: 4 },
+
+  // Вертикальная группа пятен справа над кубом.
+  { rect: [423, 550, 442, 609], remove: true, feather: 6 },
+  { rect: [431, 597, 451, 629], remove: true, feather: 5 },
+  { rect: [438, 651, 463, 686], remove: true, feather: 6 },
+
+  // Между заголовком, CTA и верхними ветками куба.
+  { rect: [344, 663, 360, 682], remove: true, feather: 4 },
+  { rect: [329, 698, 341, 718], remove: true, feather: 4 },
+  { rect: [331, 733, 340, 751], remove: true, feather: 3 },
+  { rect: [393, 733, 405, 752], remove: true, feather: 4 },
+  { rect: [237, 736, 257, 762], remove: true, feather: 5 },
+  { rect: [276, 752, 287, 772], remove: true, feather: 3 },
+  { rect: [309, 757, 327, 781], remove: true, feather: 5 },
+  { rect: [349, 753, 371, 781], remove: true, feather: 5 },
+  { rect: [325, 786, 354, 815], remove: true, feather: 6 },
+  { rect: [311, 842, 325, 864], remove: true, feather: 4 },
+  { rect: [255, 847, 269, 866], remove: true, feather: 4 },
+];
+
+/**
+ * Семь отдельных точек, отмеченных красным на portrait-скриншоте. Рамки максимально
+ * тесные: удаляются только сами круглые пятна/узлы, а линии и контуры материков рядом
+ * остаются на месте.
+ */
+const MAP_MARKED_CLEANUP = [
+  { rect: [146, 239, 162, 258], remove: true, feather: 3 },
+  { rect: [241, 327, 267, 354], remove: true, feather: 4 },
+  { rect: [408, 367, 435, 398], remove: true, feather: 4 },
+  { rect: [377, 428, 396, 447], remove: true, feather: 4 },
+  { rect: [293, 457, 311, 478], remove: true, feather: 3 },
+  { rect: [503, 442, 514, 454], remove: true, feather: 2 },
+  { rect: [490, 642, 506, 661], remove: true, feather: 2 },
+];
+
+/**
  * Соты на месте нижнего левого микрофона: уходят под левый край экрана, сверху и справа
  * сот меньше, книзу ряд шире и чуть правее. Координаты исходника, r — радиус соты.
  */
@@ -296,6 +344,14 @@ function moveElement(
       for (let c = 0; c < 3; c++) data[k + c] = Math.min(255, data[k + c] + glow[g + c] * gain);
     }
   }
+}
+
+function removeMarkedArtifacts(data, w, h, scale) {
+  for (const move of MARKED_CLEANUP) moveElement(data, w, h, scale, move);
+}
+
+function removeMapMarkedArtifacts(data, w, h, scale) {
+  for (const move of MAP_MARKED_CLEANUP) moveElement(data, w, h, scale, move);
 }
 
 /**
@@ -1276,6 +1332,8 @@ async function main() {
   const thin = thinParticles(A, w, h, scale, overlay);
   console.log(`частицы: оставлено ${thin.kept}, убрано ${thin.removed}`);
   for (const move of CLEANUP) moveElement(A, w, h, scale, move);
+  removeMarkedArtifacts(A, w, h, scale);
+  removeMapMarkedArtifacts(A, w, h, scale);
   // Куб с нейросетью и соты — светом поверх фона.
   for (let i = 0; i < w * h * 4; i += 4) {
     if (overlay[i + 3] === 0) continue;

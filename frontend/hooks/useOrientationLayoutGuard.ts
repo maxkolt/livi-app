@@ -39,6 +39,24 @@ function isLandscapeSize(width: number, height: number) {
   return width > 0 && height > 0 && width / height > 1.05;
 }
 
+type Size = { width: number; height: number };
+
+/**
+ * Размер после шторки: последний onLayout, если он про текущее окно, иначе само окно.
+ * Сравниваем только ширину и с запасом: высоту меняет клавиатура, а ширину окна Android
+ * в landscape может отдавать без боковой навигации — это проценты, окно PiP же в разы уже.
+ */
+export function reconcileLayoutSize(raw: Size | null, win: Size): Size | null {
+  if (!(win.width > 0 && win.height > 0)) return null;
+  const rawMatchesWindow =
+    !!raw &&
+    raw.width > 0 &&
+    raw.height > 0 &&
+    Math.abs(raw.width - win.width) <= Math.max(2, win.width * 0.2) &&
+    isLandscapeSize(raw.width, raw.height) === isLandscapeSize(win.width, win.height);
+  return rawMatchesWindow && raw ? raw : { width: win.width, height: win.height };
+}
+
 function windowIsLandscape(): boolean | null {
   const win = Dimensions.get('window');
   if (!(win.width > 0 && win.height > 0)) return null;
@@ -75,6 +93,8 @@ export function useOrientationLayoutGuard(
 
   const [size, setSize] = useState({ width: 0, height: 0 });
   const [covering, setCovering] = useState(false);
+  /** Последний onLayout как есть — в том числе отброшенный фильтрами ниже. */
+  const rawLayoutRef = useRef<Size | null>(null);
   const expectedLandscapeRef = useRef<boolean | null>(null);
   const coverStartedAtRef = useRef(0);
   const layoutMatchedRef = useRef(false);
@@ -94,6 +114,26 @@ export function useOrientationLayoutGuard(
     }
   }, []);
 
+  const commitSize = useCallback((next: { width: number; height: number }) => {
+    setSize((prev) =>
+      Math.abs(next.width - prev.width) < 1 && Math.abs(next.height - prev.height) < 1
+        ? prev
+        : next,
+    );
+  }, []);
+
+  /**
+   * Пока шторка стоит, события той же ориентации и onLayout «не той» ориентации
+   * отбрасываются. Системный PiP туда-обратно быстрее шторки (Dimensions: окно PiP →
+   * полный экран, оба портрет) оставлял размер окна PiP навсегда — Home рисовался
+   * шириной ~120 dp: CTA сжимался в «пилюлю», радар пропадал, док навбара уезжал влево.
+   * Снимая шторку, сверяемся с окном (см. reconcileLayoutSize).
+   */
+  const reconcileWithWindow = useCallback(() => {
+    const next = reconcileLayoutSize(rawLayoutRef.current, Dimensions.get('window'));
+    if (next) commitSize(next);
+  }, [commitSize]);
+
   const reveal = useCallback(() => {
     clearReadyTimer();
     if (coverFallbackRef.current) {
@@ -104,11 +144,12 @@ export function useOrientationLayoutGuard(
     expectedLandscapeRef.current = null;
     pendingLandRef.current = null;
     coveringRef.current = false;
+    reconcileWithWindow();
     setCovering(false);
     try {
       NativeModules.LiviAppModule?.orientationLayoutReady?.();
     } catch {}
-  }, [clearReadyTimer]);
+  }, [clearReadyTimer, reconcileWithWindow]);
 
   const tryScheduleReveal = useCallback(() => {
     if (!layoutMatchedRef.current || !coveringRef.current) return;
@@ -122,14 +163,6 @@ export function useOrientationLayoutGuard(
       reveal();
     }, wait);
   }, [clearReadyTimer, reveal]);
-
-  const commitSize = useCallback((next: { width: number; height: number }) => {
-    setSize((prev) =>
-      Math.abs(next.width - prev.width) < 1 && Math.abs(next.height - prev.height) < 1
-        ? prev
-        : next,
-    );
-  }, []);
 
   const applyOrientation = useCallback(
     (landscape: boolean) => {
@@ -185,6 +218,7 @@ export function useOrientationLayoutGuard(
     (event: LayoutChangeEvent) => {
       const { width, height } = event.nativeEvent.layout;
       if (!(width > 0 && height > 0)) return;
+      rawLayoutRef.current = { width, height };
       const laidLandscape = isLandscapeSize(width, height);
       const winLandscape = windowIsLandscape();
       const expected = expectedLandscapeRef.current;

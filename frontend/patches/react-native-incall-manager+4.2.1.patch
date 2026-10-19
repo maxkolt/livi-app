@@ -1,7 +1,8 @@
-diff --git a/android/src/main/java/com/zxcpoiu/incallmanager/InCallManagerModule.java b/android/src/main/java/com/zxcpoiu/incallmanager/InCallManagerModule.java
---- a/android/src/main/java/com/zxcpoiu/incallmanager/InCallManagerModule.java
-+++ b/android/src/main/java/com/zxcpoiu/incallmanager/InCallManagerModule.java
-@@ -258,7 +258,19 @@
+diff --git a/node_modules/react-native-incall-manager/android/src/main/java/com/zxcpoiu/incallmanager/InCallManagerModule.java b/node_modules/react-native-incall-manager/android/src/main/java/com/zxcpoiu/incallmanager/InCallManagerModule.java
+index 10cb1e5..e1d4a0f 100644
+--- a/node_modules/react-native-incall-manager/android/src/main/java/com/zxcpoiu/incallmanager/InCallManagerModule.java
++++ b/node_modules/react-native-incall-manager/android/src/main/java/com/zxcpoiu/incallmanager/InCallManagerModule.java
+@@ -258,7 +258,19 @@ public class InCallManagerModule extends ReactContextBaseJavaModule implements L
      private void restoreOriginalAudioSetup() {
          Log.d(TAG, "restoreOriginalAudioSetup()");
          if (isOrigAudioSetupStored) {
@@ -22,11 +23,76 @@ diff --git a/android/src/main/java/com/zxcpoiu/incallmanager/InCallManagerModule
              setMicrophoneMute(origIsMicrophoneMute);
              audioManager.setMode(origAudioMode);
              if (getCurrentActivity() != null) {
-@@ -1748,11 +1760,12 @@
+@@ -587,6 +599,14 @@ public class InCallManagerModule extends ReactContextBaseJavaModule implements L
+ 
+     @ReactMethod
+     public void stop(final String busytoneUriType) {
++        // LiVi: JS flags briefly read "no call" during video -> in-app PiP, and stop() mid-call
++        // turned the speaker off, restored the pre-call audio mode and dropped audio focus.
++        // While the host app's call is alive, postpone stop() until the call is over.
++        if (audioManagerActivated && isHostCallActive()) {
++            Log.d(TAG, "stop(): host call still active, deferring");
++            scheduleDeferredStop(busytoneUriType);
++            return;
++        }
+         if (audioManagerActivated) {
+             stopRingback();
+             if (!busytoneUriType.isEmpty() && startBusytone(busytoneUriType)) {
+@@ -611,6 +631,42 @@ public class InCallManagerModule extends ReactContextBaseJavaModule implements L
+         }
+     }
+ 
++    private boolean deferredStopPending = false;
++
++    /** LiVi ActiveCallForegroundService is running and the call is not being torn down. */
++    private static boolean isHostCallActive() {
++        try {
++            Class<?> host = Class.forName("com.kolt12max.livi.LiviAppModule");
++            boolean running = (Boolean) host.getMethod("isActiveCallForegroundRunning").invoke(null);
++            boolean ending = (Boolean) host.getMethod("getEndingCallInProgress").invoke(null);
++            return running && !ending;
++        } catch (Throwable t) {
++            return false;
++        }
++    }
++
++    private void scheduleDeferredStop(final String busytoneUriType) {
++        if (deferredStopPending) return;
++        deferredStopPending = true;
++        final Handler handler = new Handler(Looper.getMainLooper());
++        handler.postDelayed(new Runnable() {
++            @Override
++            public void run() {
++                if (!audioManagerActivated) {
++                    deferredStopPending = false;
++                    return;
++                }
++                if (isHostCallActive()) {
++                    handler.postDelayed(this, 1000);
++                    return;
++                }
++                deferredStopPending = false;
++                Log.d(TAG, "stop(): host call over, running deferred stop");
++                stop(busytoneUriType);
++            }
++        }, 1000);
++    }
++
+     private void startEvents() {
+         startWiredHeadsetEvent();
+         startNoisyAudioEvent();
+@@ -1748,11 +1804,19 @@ public class InCallManagerModule extends ReactContextBaseJavaModule implements L
       */
      public void updateAudioDeviceState() {
          UiThreadUtil.runOnUiThread(() -> {
 +            synchronized (this) {
++            // LiVi routes calls itself and often never start()s this manager. Without this check
++            // setForceSpeakerphoneOn('auto') at hang-up picked the "default" device and called
++            // setSpeakerphoneOn(true) after the call — a speaker request left for the next call.
++            if (!audioManagerActivated) {
++                Log.d(TAG, "updateAudioDeviceState: skip, audio manager not started");
++                return;
++            }
              Log.d(TAG, "--- updateAudioDeviceState: "
                              + "wired headset=" + hasWiredHeadset + ", "
                              + "BT state=" + bluetoothManager.getState());
@@ -36,7 +102,7 @@ diff --git a/android/src/main/java/com/zxcpoiu/incallmanager/InCallManagerModule
                              + "selected=" + selectedAudioDevice + ", "
                              + "user selected=" + userSelectedAudioDevice);
  
-@@ -1836,7 +1849,7 @@
+@@ -1836,7 +1900,7 @@ public class InCallManagerModule extends ReactContextBaseJavaModule implements L
                  // Do the required device switch.
                  setAudioDeviceInternal(newAudioDevice);
                  Log.d(TAG, "New device status: "
@@ -45,7 +111,7 @@ diff --git a/android/src/main/java/com/zxcpoiu/incallmanager/InCallManagerModule
                                  + "selected=" + newAudioDevice);
                  /*
                  if (audioManagerEvents != null) {
-@@ -1847,6 +1860,7 @@
+@@ -1847,6 +1911,7 @@ public class InCallManagerModule extends ReactContextBaseJavaModule implements L
                  sendEvent("onAudioDeviceChanged", getAudioDeviceStatusMap());
              }
              Log.d(TAG, "--- updateAudioDeviceState done");

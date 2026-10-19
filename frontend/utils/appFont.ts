@@ -19,7 +19,7 @@ import { Exo2_400Regular } from '@expo-google-fonts/exo-2/400Regular';
 import { Exo2_500Medium } from '@expo-google-fonts/exo-2/500Medium';
 import { Exo2_600SemiBold } from '@expo-google-fonts/exo-2/600SemiBold';
 import { Exo2_700Bold } from '@expo-google-fonts/exo-2/700Bold';
-import { adaptiveTypeStyleScaleForSize, scaleFont } from './adaptiveType';
+import { adaptiveTypeStyleScaleForSize, scaleFont, typeScaleWindowSize } from './adaptiveType';
 
 /** «Этот Text вложен в другой Text» — тот же контекст, по которому RN рисует вложенный текст спаном. */
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -138,7 +138,7 @@ function patchRender(component: ForwardRefComponent, nestable: boolean) {
   if (typeof render !== 'function' || render.appFont) return;
   const withFont = (props: any, nested: boolean) => {
     const font = appFontFor(props.style, nested);
-    const { width, height } = Dimensions.get('window');
+    const { width, height } = typeScaleWindowSize(Dimensions.get('window'), Dimensions.get('screen'));
     const adaptive = adaptiveTextStyle(
       props.style,
       adaptiveTypeStyleScaleForSize(width, height, PixelRatio.getFontScale() || 1),
