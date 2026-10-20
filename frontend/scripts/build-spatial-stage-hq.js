@@ -25,6 +25,7 @@
  */
 const path = require('path');
 const Jimp = require('jimp-compact');
+const { removeDarkCleanupStains } = require('./cleanup-spatial-dark-stains');
 
 const OUT = path.join(__dirname, '..', 'assets', 'spatial', 'stage-hq.jpg');
 
@@ -179,7 +180,7 @@ const MAP_MARKED_CLEANUP = [
   { rect: [377, 428, 396, 447], remove: true, feather: 4 },
   { rect: [293, 457, 311, 478], remove: true, feather: 3 },
   { rect: [503, 442, 514, 454], remove: true, feather: 2 },
-  { rect: [490, 642, 506, 661], remove: true, feather: 2 },
+  { rect: [500, 665, 512, 682], remove: true, feather: 2 },
 ];
 
 /**
@@ -1366,6 +1367,7 @@ async function main() {
   toneElements(A, w, h, scale);
   sharpen(A, w, h);
   grayBackground(A, w, h);
+  removeDarkCleanupStains(A, w, h, scale);
   // Тело куба с нейросетью — в цветах маленького кубика, и облако сообщения — поверх.
   for (const layer of [await drawCubeBody(w, h, scale, NEURAL_CUBE), await drawChatBubble(w, h, scale, CHAT_BUBBLE)]) {
     for (let i = 0; i < w * h * 4; i += 4) {

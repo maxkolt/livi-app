@@ -54,8 +54,8 @@ let S = CGFloat(size)
 // sits behind the camera (its 72/108 visible part ≈ the tile).
 // The launcher mark keeps a calm inset from both square and circular masks. Android's
 // foreground is slightly smaller because launchers crop it through the 72/108 visible area.
-// logo: camera fills most of the width. splashicon must fit the 192/288 dp circle.
-let k: CGFloat = mode == "full" ? 0.98 : mode == "logo" ? 1.30 : mode == "splashicon" ? 0.85 : 0.71
+// logo: ~72% width for JS/window splash. splashicon ~48% — must fit Android 12 circle (192 dp).
+let k: CGFloat = mode == "full" ? 0.98 : mode == "logo" ? 1.72 : mode == "splashicon" ? 0.78 : 0.71
 let ringless = mode == "logo" || mode == "splashicon"
 /// Что лежит под стеклом: фон плитки иконки или фон сплэша.
 let sceneBG = ringless ? SPLASH_BG : ICON_BG

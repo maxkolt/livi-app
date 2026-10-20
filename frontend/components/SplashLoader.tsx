@@ -36,7 +36,8 @@ export default function SplashLoader({
 }: SplashLoaderProps) {
   const [showSplash, setShowSplash] = useState(true);
   const { height: windowHeight, width: windowWidth } = useSafeAreaFrame();
-  const logoSize = Math.min(168, Math.max(112, Math.round(Math.min(windowHeight * 0.22, windowWidth * 0.4))));
+  // Чуть крупнее исходных 168; нативный Android 12 icon — отдельно меньше (круг).
+  const logoSize = Math.min(214, Math.max(136, Math.round(Math.min(windowHeight * 0.28, windowWidth * 0.50))));
   const startedAtRef = useRef(Date.now());
   const finishScheduledRef = useRef(false);
 
@@ -164,8 +165,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   logo: {
-    width: 150,
-    height: 150,
+    width: 196,
+    height: 196,
     borderRadius: 12,
     backgroundColor: 'transparent',
   },

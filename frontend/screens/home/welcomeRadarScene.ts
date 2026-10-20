@@ -53,7 +53,7 @@ const TAU = Math.PI * 2;
 const D2R = Math.PI / 180;
 
 /** Один оборот луча, с. */
-const SWEEP_PERIOD_S = 15;
+const SWEEP_PERIOD_S = 24;
 /** Длина следа за лучом, градусы. */
 const TAIL_DEG = 78;
 /** Оборот пунктирного HUD-обода, с. */

@@ -1,7 +1,14 @@
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
   <!-- Середина новой сцены: дальше MainActivity и JS-сплэш рисуют её же с бирюзой у краёв. -->
   <item android:drawable="@color/splashscreen_background"/>
-  <item>
-    <bitmap android:gravity="center" android:src="@drawable/splashscreen_logo"/>
+  <!--
+    width/height ограничивают 288 dp bitmap до размера JS SplashLoader (~200 dp),
+    иначе до Metro камера почти на весь экран.
+  -->
+  <item
+      android:width="200dp"
+      android:height="200dp"
+      android:gravity="center">
+    <bitmap android:gravity="fill" android:src="@drawable/splashscreen_logo"/>
   </item>
 </layer-list>
