@@ -810,6 +810,17 @@ export function clearMessageCache(peerId: string, userId?: string) {
   shared.messageCache.delete(cacheKey);
 }
 
+/** После локальной записи chat_messages_* — иначе превью списка до 5 мин видит старый last. */
+export function clearMessageCacheForStorageKey(storageKey: string) {
+  const key = String(storageKey || "").trim();
+  const m = /^chat_messages_([a-f\d]{24})_([a-f\d]{24})$/i.exec(key);
+  if (!m) return;
+  const a = m[1];
+  const b = m[2];
+  shared.messageCache.delete(`${a}-${b}`);
+  shared.messageCache.delete(`${b}-${a}`);
+}
+
 async function removeDeletedMessagesFromLocalStorage(rawIds: readonly string[]): Promise<void> {
   const ids = new Set(rawIds.map((id) => String(id || "").trim()).filter(Boolean));
   if (ids.size === 0) return;

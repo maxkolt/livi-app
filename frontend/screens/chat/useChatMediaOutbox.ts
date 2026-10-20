@@ -211,6 +211,40 @@ export function useChatMediaOutbox({
           return false;
         }
 
+        if (type === "video_note") {
+          const uri = String(m?.uri || "").trim();
+          const thumb = String(m?.thumbUri || "").trim();
+          const socketResult = await sendSocketMessage({
+            to: peerId,
+            type: "video_note",
+            ...(/^https?:\/\//i.test(uri) ? { uri } : { localUri: uri }),
+            ...(/^https?:\/\//i.test(thumb)
+              ? thumb
+                ? { thumbUri: thumb }
+                : {}
+              : thumb
+                ? { localThumbUri: thumb }
+                : {}),
+            name: String(m?.name || `video_note_${mid}.mp4`),
+            duration: Number(m?.duration || 0) || 0,
+            clientUiMessageId: mid,
+          });
+          if (socketResult?.localCancelled) return true;
+          if (socketResult?.ok) {
+            setUploadStatus((prev) => {
+              if (!(mid in prev)) return prev;
+              const next = { ...prev };
+              delete next[mid];
+              return next;
+            });
+            updateReadStatuses((prev) => ({ ...prev, [mid]: outgoingStatusFromSendResult(socketResult) }));
+            return true;
+          }
+          updateReadStatuses((prev) => ({ ...prev, [mid]: "failed" }));
+          setUploadStatus((prev) => ({ ...prev, [mid]: "failed" }));
+          return false;
+        }
+
         if (type === "text" || type === "sticker") {
           // Тот же id: если первая попытка всё же дошла, сервер не задвоит сообщение.
           const replyTo = m?.replyTo?.id

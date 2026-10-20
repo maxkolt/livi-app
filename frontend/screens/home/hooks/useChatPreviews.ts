@@ -31,6 +31,26 @@ function getChatPreviewSnapshot(): Record<string, ChatPreview> {
   return previewMemory;
 }
 
+/**
+ * Оптимистичная исходящая (в т.ч. без сети): сразу обновить строку в «Чаты»,
+ * не дожидаясь message:received и не опираясь на устаревший messageCache.
+ */
+export function noteLocalChatPreview(peerId: string, message: any, lang: Lang): void {
+  const id = String(peerId || "").trim();
+  if (!id || !message) return;
+  const at = messageTimestampMs(message) || Date.now();
+  const text = previewTextFromMessage(message, lang);
+  const prev = previewMemory[id];
+  if (prev && prev.at > at) return;
+  previewMemory = { ...previewMemory, [id]: { text, at } };
+  void unmarkChatsClearedForMe([id]);
+  prefetchListeners.forEach((listener) => {
+    try {
+      listener();
+    } catch {}
+  });
+}
+
 function previewFromServerMessage(msg: any, lang: Lang): ChatPreview | null {
   if (!msg?.id) return null;
   const at = messageTimestampMs(msg);

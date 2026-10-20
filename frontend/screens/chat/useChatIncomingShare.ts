@@ -4,7 +4,6 @@ import React from "react";
 import * as FileSystem from "expo-file-system";
 import { sendMessage as sendSocketMessage } from "../../sockets/socket";
 import { API_BASE } from "../../sockets/socket";
-import { uploadMediaToServer } from "../../utils/mediaUpload";
 import { getInstallId } from "../../utils/installId";
 import type { IncomingShareItem } from "../../utils/incomingShare";
 import { t, type Lang } from "../../utils/i18n";
@@ -19,6 +18,8 @@ type Options = {
   navigation: any;
   lang: Lang;
   setMessages: React.Dispatch<React.SetStateAction<any[]>>;
+  latestMessagesForPersistRef: React.MutableRefObject<any[]>;
+  enqueueMessagesPersist: (reason: string) => void;
   setUploadStatus: React.Dispatch<React.SetStateAction<Record<string, "sending" | "sent" | "failed">>>;
   updateReadStatuses: (updater: (prev: ReadStatusMap) => ReadStatusMap) => void;
   resolveMediaUri: (uri?: string) => string;
@@ -35,6 +36,8 @@ export function useChatIncomingShare({
   navigation,
   lang,
   setMessages,
+  latestMessagesForPersistRef,
+  enqueueMessagesPersist,
   setUploadStatus,
   updateReadStatuses,
   resolveMediaUri,
@@ -44,6 +47,15 @@ export function useChatIncomingShare({
   scrollToBottom,
 }: Options) {
   const incomingShareHandledRef = React.useRef<string>("");
+
+  const commitMessages = React.useCallback(
+    (update: (prev: any[]) => any[], reason: string) => {
+      latestMessagesForPersistRef.current = update(latestMessagesForPersistRef.current || []);
+      setMessages((prev) => update(prev));
+      enqueueMessagesPersist(reason);
+    },
+    [enqueueMessagesPersist, latestMessagesForPersistRef, setMessages],
+  );
 
   const uploadRawShareFile = React.useCallback(async (localUri: string) => {
     const installId = await getInstallId().catch(() => '');
@@ -93,18 +105,24 @@ export function useChatIncomingShare({
           const text = String(item.text || '').trim();
           if (!text) continue;
           const messageId = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: messageId,
-              text,
-              sender: 'me',
-              from: currentUserId,
-              to: peerId,
-              timestamp: new Date(),
-              type: 'text',
-            },
-          ]);
+          commitMessages(
+            (prev) =>
+              prev.some((m) => String(m?.id) === messageId)
+                ? prev
+                : [
+                    ...prev,
+                    {
+                      id: messageId,
+                      text,
+                      sender: 'me',
+                      from: currentUserId,
+                      to: peerId,
+                      timestamp: new Date(),
+                      type: 'text',
+                    },
+                  ],
+            'share_text_optimistic',
+          );
           updateReadStatuses((prev) => ({ ...prev, [messageId]: 'sending' }));
           const result: any = await sendSocketMessage({
             to: peerId,
@@ -117,12 +135,14 @@ export function useChatIncomingShare({
             sent += 1;
             const deliveryStatus = outgoingStatusFromSendResult(result);
             if (result.messageId && result.messageId !== messageId) {
-              setMessages((prev) =>
-                prev.map((msg) =>
-                  msg.id === messageId
-                    ? { ...msg, id: result.messageId, from: currentUserId, to: peerId }
-                    : msg,
-                ),
+              commitMessages(
+                (prev) =>
+                  prev.map((msg) =>
+                    msg.id === messageId
+                      ? { ...msg, id: result.messageId, from: currentUserId, to: peerId }
+                      : msg,
+                  ),
+                'share_text_server_id',
               );
               updateReadStatuses((prev) => {
                 const next = { ...prev };
@@ -141,67 +161,53 @@ export function useChatIncomingShare({
         const localUri = String(item.uri || '').trim();
         if (!localUri) continue;
         if (item.kind === 'audio') {
-          const messageId = Date.now().toString();
+          const messageId = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
           const fileName = item.name || `voice_${Date.now()}.m4a`;
           const fileSize = item.size || 0;
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: messageId,
-              type: 'audio',
-              uri: localUri,
-              name: fileName,
-              size: fileSize,
-              sender: 'me',
-              from: currentUserId,
-              to: peerId,
-              timestamp: new Date(),
-            },
-          ]);
+          commitMessages(
+            (prev) =>
+              prev.some((m) => String(m?.id) === messageId)
+                ? prev
+                : [
+                    ...prev,
+                    {
+                      id: messageId,
+                      type: 'audio',
+                      uri: localUri,
+                      name: fileName,
+                      size: fileSize,
+                      sender: 'me',
+                      from: currentUserId,
+                      to: peerId,
+                      timestamp: new Date(),
+                    },
+                  ],
+            'share_audio_optimistic',
+          );
           updateReadStatuses((prev) => ({ ...prev, [messageId]: 'sending' }));
           setUploadStatus((prev) => ({ ...prev, [messageId]: 'sending' }));
-          const upload = await uploadMediaToServer(localUri, 'audio', undefined, currentUserId, peerId);
-          if (!upload.success || !upload.url) {
-            updateReadStatuses((prev) => ({ ...prev, [messageId]: 'failed' }));
-            setUploadStatus((prev) => ({ ...prev, [messageId]: 'failed' }));
-            continue;
-          }
+          // Без сети — очередь сама загрузит файл (как голосовое из рекордера).
           const socketResult: any = await sendSocketMessage({
             to: peerId,
             type: 'audio',
-            uri: upload.url,
+            localUri,
             name: fileName,
             size: fileSize,
             clientUiMessageId: messageId,
           });
-          if (socketResult?.ok && socketResult.messageId) {
+          if (socketResult?.localCancelled) continue;
+          if (socketResult?.ok) {
             sent += 1;
-            setMessages((prev) =>
-              prev.map((msg) =>
-                msg.id === messageId
-                  ? {
-                      ...msg,
-                      id: socketResult.messageId,
-                      uri: resolveMediaUri(upload.url),
-                      from: currentUserId,
-                      to: peerId,
-                    }
-                  : msg,
-              ),
-            );
-            const delivery = outgoingStatusFromSendResult(socketResult);
-            updateReadStatuses((prev) => {
-              const next = { ...prev };
-              next[socketResult.messageId] = delivery;
-              delete next[messageId];
-              return next;
-            });
             setUploadStatus((prev) => {
+              if (!(messageId in prev)) return prev;
               const next = { ...prev };
-              next[socketResult.messageId] = 'sent';
               delete next[messageId];
               return next;
             });
+            updateReadStatuses((prev) => ({
+              ...prev,
+              [messageId]: outgoingStatusFromSendResult(socketResult),
+            }));
           } else {
             updateReadStatuses((prev) => ({ ...prev, [messageId]: 'failed' }));
             setUploadStatus((prev) => ({ ...prev, [messageId]: 'failed' }));
@@ -211,18 +217,24 @@ export function useChatIncomingShare({
         if (item.kind === 'document') {
           const messageId = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
           const label = item.name ? `📎 ${item.name}` : '📎';
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: messageId,
-              text: label,
-              sender: 'me',
-              from: currentUserId,
-              to: peerId,
-              timestamp: new Date(),
-              type: 'text',
-            },
-          ]);
+          commitMessages(
+            (prev) =>
+              prev.some((m) => String(m?.id) === messageId)
+                ? prev
+                : [
+                    ...prev,
+                    {
+                      id: messageId,
+                      text: label,
+                      sender: 'me',
+                      from: currentUserId,
+                      to: peerId,
+                      timestamp: new Date(),
+                      type: 'text',
+                    },
+                  ],
+            'share_doc_optimistic',
+          );
           updateReadStatuses((prev) => ({ ...prev, [messageId]: 'sending' }));
           const remoteUrl = await uploadRawShareFile(localUri);
           if (!remoteUrl) {
@@ -230,8 +242,9 @@ export function useChatIncomingShare({
             continue;
           }
           const text = `${label}\n${remoteUrl}`;
-          setMessages((prev) =>
-            prev.map((msg) => (msg.id === messageId ? { ...msg, text } : msg)),
+          commitMessages(
+            (prev) => prev.map((msg) => (msg.id === messageId ? { ...msg, text } : msg)),
+            'share_doc_url',
           );
           const result: any = await sendSocketMessage({
             to: peerId,
@@ -243,12 +256,14 @@ export function useChatIncomingShare({
             sent += 1;
             const deliveryStatus = outgoingStatusFromSendResult(result);
             if (result.messageId && result.messageId !== messageId) {
-              setMessages((prev) =>
-                prev.map((msg) =>
-                  msg.id === messageId
-                    ? { ...msg, id: result.messageId, text, from: currentUserId, to: peerId }
-                    : msg,
-                ),
+              commitMessages(
+                (prev) =>
+                  prev.map((msg) =>
+                    msg.id === messageId
+                      ? { ...msg, id: result.messageId, text, from: currentUserId, to: peerId }
+                      : msg,
+                  ),
+                'share_doc_server_id',
               );
               updateReadStatuses((prev) => {
                 const next = { ...prev };
@@ -266,7 +281,7 @@ export function useChatIncomingShare({
       }
       return sent;
     },
-    [currentUserId, peerId, sendPickedImage, updateReadStatuses, resolveMediaUri, uploadRawShareFile],
+    [currentUserId, peerId, sendPickedImage, updateReadStatuses, uploadRawShareFile, commitMessages, setUploadStatus],
   );
 
   React.useEffect(() => {

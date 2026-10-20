@@ -58,6 +58,8 @@ type Options = {
   setMessageText: React.Dispatch<React.SetStateAction<string>>;
   setEmojiPanelOpen: React.Dispatch<React.SetStateAction<boolean>>;
   setMessages: React.Dispatch<React.SetStateAction<any[]>>;
+  latestMessagesForPersistRef: React.MutableRefObject<any[]>;
+  enqueueMessagesPersist: (reason: string) => void;
   setUploadStatus: React.Dispatch<React.SetStateAction<Record<string, "sending" | "sent" | "failed">>>;
   updateReadStatuses: (updater: (prev: ReadStatusMap) => ReadStatusMap) => void;
   stopVoiceRecording: (cancelled?: boolean, skipSend?: boolean) => void | Promise<void>;
@@ -79,6 +81,8 @@ export function useChatComposer({
   setMessageText,
   setEmojiPanelOpen,
   setMessages,
+  latestMessagesForPersistRef,
+  enqueueMessagesPersist,
   setUploadStatus,
   updateReadStatuses,
   stopVoiceRecording,
@@ -86,6 +90,17 @@ export function useChatComposer({
   signalLocalTyping,
   rememberOutboxLocalToServerId,
 }: Options) {
+  // Как у голоса/кружка: лента + persist-снимок сразу, иначе быстрый Back без сети
+  // сохраняет старый снимок без нового пузыря.
+  const commitMessages = React.useCallback(
+    (update: (prev: any[]) => any[], reason: string) => {
+      latestMessagesForPersistRef.current = update(latestMessagesForPersistRef.current || []);
+      setMessages((prev) => update(prev));
+      enqueueMessagesPersist(reason);
+    },
+    [enqueueMessagesPersist, latestMessagesForPersistRef, setMessages],
+  );
+
   const sendMessage = async () => {
     if (!currentUserId) return;
     setEmojiPanelOpen(false);
@@ -142,11 +157,11 @@ export function useChatComposer({
       ...(replyTo ? { replyTo } : {}),
     };
     
-    setMessages((prev) => {
-      const updatedMessages = [...prev, newMessage];
-      return updatedMessages;
-    });
-    
+    commitMessages(
+      (prev) => (prev.some((m) => String(m?.id) === messageId) ? prev : [...prev, newMessage]),
+      'text_optimistic',
+    );
+
     // Статус "отправляется" (пока нет птичек)
     updateReadStatuses(prev => ({ ...prev, [messageId]: 'sending' }));
     
@@ -186,14 +201,15 @@ export function useChatComposer({
 
           if (result.messageId) {
             if (result.messageId !== messageId) {
-              setMessages(prev => {
-                const updated = prev.map(msg => 
-                  msg.id === messageId 
-                    ? { ...msg, id: result.messageId!, from: currentUserId, to: peerId }
-                    : msg
-                );
-                return updated;
-              });
+              commitMessages(
+                (prev) =>
+                  prev.map((msg) =>
+                    msg.id === messageId
+                      ? { ...msg, id: result.messageId!, from: currentUserId, to: peerId }
+                      : msg,
+                  ),
+                'text_server_id',
+              );
               
               updateReadStatuses(prev => {
                 const newStatuses = { ...prev };
@@ -307,7 +323,10 @@ export function useChatComposer({
         ...(replyTo ? { replyTo } : {}),
       };
 
-      setMessages((prev) => [...prev, newMessage]);
+      commitMessages(
+        (prev) => (prev.some((m) => String(m?.id) === messageId) ? prev : [...prev, newMessage]),
+        'sticker_optimistic',
+      );
       updateReadStatuses((prev) => ({ ...prev, [messageId]: 'sending' }));
 
       void (async () => {
@@ -343,12 +362,14 @@ export function useChatComposer({
           const serverMessageId = String(result.messageId || '');
           if (serverMessageId && serverMessageId !== messageId) {
             rememberOutboxLocalToServerId(messageId, serverMessageId);
-            setMessages((prev) =>
-              prev.map((msg) =>
-                msg.id === messageId
-                  ? { ...msg, id: serverMessageId, from: currentUserId, to: peerId }
-                  : msg,
-              ),
+            commitMessages(
+              (prev) =>
+                prev.map((msg) =>
+                  msg.id === messageId
+                    ? { ...msg, id: serverMessageId, from: currentUserId, to: peerId }
+                    : msg,
+                ),
+              'sticker_server_id',
             );
             updateReadStatuses((prev) => {
               const next: Record<string, 'sending' | 'delivered' | 'read' | 'failed' | 'sent'> = { ...prev, [serverMessageId]: deliveryStatus };
@@ -363,7 +384,7 @@ export function useChatComposer({
         }
       })();
     },
-    [currentUserId, peerId, replyingToMessage, lang, stopLocalTyping, updateReadStatuses],
+    [currentUserId, peerId, replyingToMessage, lang, stopLocalTyping, updateReadStatuses, commitMessages, rememberOutboxLocalToServerId, setUploadStatus],
   );
 
   return {

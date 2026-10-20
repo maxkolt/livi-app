@@ -9,6 +9,7 @@ jest.mock('../../utils/i18n', () => ({ t: (k: string) => k }));
 
 import { mergeInitialHistoryMessages, mergeQuietSyncMessages, reuseUnchangedMessages } from './chatHistory';
 import { filterRemoveMessageAndOutgoingDupes } from './chatMessageOps';
+import { createOptimisticChatMessageId, isOfflineQueuedOrOptimisticOutgoingId } from './chatMessageIds';
 
 const t0 = new Date('2026-10-01T12:00:00Z');
 const at = (sec: number) => new Date(t0.getTime() + sec * 1000);
@@ -38,6 +39,20 @@ describe('history merge keeps queued messages', () => {
     const legacy = mine('outbox_1759320060000_x', 'ок', 61);
     const delivered = mine('1759320060000-bbbbbbb', 'ок', 60);
     expect(ids(mergeInitialHistoryMessages([legacy], [delivered], statuses))).toEqual([delivered.id]);
+  });
+
+  it('keeps a freshly persisted media bubble even before its status write finishes', () => {
+    const mediaId = createOptimisticChatMessageId(1790964810542);
+    const video = {
+      id: mediaId,
+      type: 'video_note',
+      sender: 'me',
+      uri: 'file:///video-note.mp4',
+      timestamp: at(10),
+    };
+
+    expect(isOfflineQueuedOrOptimisticOutgoingId(mediaId)).toBe(true);
+    expect(mergeInitialHistoryMessages([video], [], statuses)).toEqual([video]);
   });
 });
 

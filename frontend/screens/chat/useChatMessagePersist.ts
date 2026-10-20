@@ -1,14 +1,19 @@
 /** Debounced AsyncStorage persist queue for chat messages. */
 
 import React from "react";
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import { clearMessageCache } from "../../sockets/socket";
+import type { Lang } from "../../utils/i18n";
+import { pickLatestMessage } from "../home/chatPreview";
+import { noteLocalChatPreview } from "../home/hooks/useChatPreviews";
 import { getChatMessagesKey } from "./chatStorageKeys";
+import { writeStoredChatMessages } from "./chatMessageStorageWrite";
 
 type Options = {
   historyReady: boolean;
   messages: any[];
   currentUserId: string | null;
   peerId: string;
+  lang: Lang;
   currentUserIdForPersistRef: React.MutableRefObject<string | null>;
   peerIdForPersistRef: React.MutableRefObject<string>;
   latestMessagesForPersistRef: React.MutableRefObject<any[]>;
@@ -19,11 +24,14 @@ export function useChatMessagePersist({
   messages,
   currentUserId,
   peerId,
+  lang,
   currentUserIdForPersistRef,
   peerIdForPersistRef,
   latestMessagesForPersistRef,
 }: Options) {
   const persistWriteTailRef = React.useRef<Promise<void>>(Promise.resolve());
+  const langRef = React.useRef(lang);
+  langRef.current = lang;
 
   const flushMessagesPersist = React.useCallback(async (_reason: string) => {
     const uid = String(currentUserIdForPersistRef.current || "").trim();
@@ -32,7 +40,7 @@ export function useChatMessagePersist({
     if (!uid || !pid || !Array.isArray(msgs)) return;
     const key = getChatMessagesKey(uid, pid);
     try {
-      await AsyncStorage.setItem(key, JSON.stringify(msgs));
+      await writeStoredChatMessages(key, msgs);
     } catch (error) {
       console.warn("💾 Failed to save messages to AsyncStorage:", error);
     }
@@ -40,11 +48,19 @@ export function useChatMessagePersist({
 
   const enqueueMessagesPersist = React.useCallback(
     (reason: string) => {
+      const uid = String(currentUserIdForPersistRef.current || "").trim();
+      const pid = String(peerIdForPersistRef.current || "").trim();
+      if (uid && pid) {
+        // Сразу: иначе Back в «Чаты» читает 5‑мин кэш без нового голосового/кружка.
+        clearMessageCache(pid, uid);
+        const last = pickLatestMessage(latestMessagesForPersistRef.current);
+        if (last) noteLocalChatPreview(pid, last, langRef.current);
+      }
       persistWriteTailRef.current = persistWriteTailRef.current
         .then(() => flushMessagesPersist(reason))
         .catch(() => {});
     },
-    [flushMessagesPersist],
+    [flushMessagesPersist, currentUserIdForPersistRef, peerIdForPersistRef, latestMessagesForPersistRef],
   );
 
   const persistDebounceTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);

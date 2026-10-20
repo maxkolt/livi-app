@@ -26,6 +26,15 @@ export function isLegacyOutboxLocalId(messageId: string): boolean {
 
 export type ChatReadStatus = 'sending' | 'delivered' | 'read' | 'failed' | 'sent';
 
+/**
+ * Id исходящего пузыря создаётся до обращения к диску/сети. Случайный хвост не даёт
+ * двум быстрым отправкам столкнуться, а общий формат позволяет history merge
+ * сохранить сообщение, даже если статус ещё не успел записаться на диск.
+ */
+export function createOptimisticChatMessageId(now: number = Date.now()): string {
+  return `${now}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
 /** Статус своего сообщения по ответу sendMessage: ещё в очереди — «часы», сервер принял — галочки. */
 export function outgoingStatusFromSendResult(
   r: { queued?: boolean; delivered?: boolean } | null | undefined,

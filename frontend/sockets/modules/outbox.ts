@@ -325,6 +325,19 @@ function removeMessageOutboxRow(rowId: string): Promise<void> {
   });
 }
 
+/** Снимок очереди для восстановления пузырей при повторном входе в чат без сети. */
+export async function listPendingMessageOutbox(): Promise<MessageOutboxItem[]> {
+  return withMessageOutboxLock(async () => (await loadMessageOutbox()).slice());
+}
+
+/** Pending rows destined for one peer (optimistic UI may have been lost on quick leave). */
+export async function listPendingMessageOutboxForPeer(peerId: string): Promise<MessageOutboxItem[]> {
+  const pid = String(peerId || "").trim();
+  if (!pid) return [];
+  const items = await listPendingMessageOutbox();
+  return items.filter((item) => String(item?.payload?.to || "").trim() === pid);
+}
+
 /** @returns false если отправку отменили (удалили сообщение) — не ставить снова в очередь. */
 export async function enqueueMessageOutbox(item: MessageOutboxItem): Promise<boolean> {
   await hydrateCancelledOutboxFromDisk();

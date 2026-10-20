@@ -12,6 +12,7 @@ export type { OutboxMessageDeliveredPayload, OutboxMessageFailedPayload } from "
 export {
   clearCancelledOutboxFingerprints,
   isMessagePendingInOutbox,
+  listPendingMessageOutboxForPeer,
   onOutboxMessageDelivered,
   onOutboxMessageFailed,
   onOutboxPendingChange,

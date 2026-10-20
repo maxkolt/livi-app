@@ -4,9 +4,11 @@ import React from "react";
 import { sendMessage as sendSocketMessage } from "../../sockets/socket";
 import { uploadMediaToServer } from "../../utils/mediaUpload";
 import { CHAT_ALBUM_MAX } from "./chatAlbum";
-import { outgoingStatusFromSendResult } from "./chatMessageIds";
+import { createOptimisticChatMessageId, outgoingStatusFromSendResult } from "./chatMessageIds";
 import { keepVoiceRecording } from "./chatVoiceRecord";
 import { keepVideoNoteRecording, makeVideoNoteThumb } from "./videoNoteFiles";
+import { getChatMessagesKey } from "./chatStorageKeys";
+import { patchStoredChatMessage } from "./chatMessageStorageWrite";
 
 type ReadStatusMap = Record<string, "sending" | "delivered" | "read" | "failed" | "sent">;
 
@@ -14,6 +16,9 @@ type Options = {
   peerId: string;
   currentUserId: string | null;
   setMessages: React.Dispatch<React.SetStateAction<any[]>>;
+  /** Синхронное зеркало нужно для flush при уходе из чата до следующего render. */
+  latestMessagesForPersistRef: React.MutableRefObject<any[]>;
+  enqueueMessagesPersist: (reason: string) => void;
   setUploadStatus: React.Dispatch<React.SetStateAction<Record<string, "sending" | "sent" | "failed">>>;
   updateReadStatuses: (updater: (prev: ReadStatusMap) => ReadStatusMap) => void;
   resolveMediaUri: (uri?: string) => string;
@@ -26,6 +31,8 @@ export function useChatSendMedia({
   peerId,
   currentUserId,
   setMessages,
+  latestMessagesForPersistRef,
+  enqueueMessagesPersist,
   setUploadStatus,
   updateReadStatuses,
   resolveMediaUri,
@@ -33,6 +40,47 @@ export function useChatSendMedia({
   dequeueMediaOutboxId,
   setVoiceRecordMs,
 }: Options) {
+  const mountedRef = React.useRef(true);
+  React.useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  /**
+   * Меняем React-ленту и её persist-снимок одним действием. Поэтому мгновенный
+   * back после отправки не сохраняет старую ленту без нового сообщения.
+   */
+  const commitMessages = React.useCallback(
+    (update: (prev: any[]) => any[], reason: string) => {
+      // После unmount новый экземпляр ChatScreen уже может писать тот же чат. Старый
+      // полный снимок нельзя сохранять поверх него; async-медиа ниже использует patch.
+      if (!mountedRef.current) return;
+      latestMessagesForPersistRef.current = update(latestMessagesForPersistRef.current || []);
+      setMessages((prev) => update(prev));
+      enqueueMessagesPersist(reason);
+    },
+    [enqueueMessagesPersist, latestMessagesForPersistRef, setMessages],
+  );
+
+  const commitMediaPatch = React.useCallback(
+    (messageId: string, patch: Record<string, unknown>, reason: string) => {
+      if (mountedRef.current) {
+        commitMessages(
+          (prev) => prev.map((m) => String(m?.id) === messageId ? { ...m, ...patch } : m),
+          reason,
+        );
+        return;
+      }
+      const uid = String(currentUserId || "").trim();
+      const pid = String(peerId || "").trim();
+      if (!uid || !pid) return;
+      void patchStoredChatMessage(getChatMessagesKey(uid, pid), messageId, patch);
+    },
+    [commitMessages, currentUserId, peerId],
+  );
+
   /**
    * Голосовое идёт через общую очередь сообщений: она на диске, сама загрузит файл и
    * отправит, когда будет сеть (даже если чат уже закрыт), и повторит после обрыва.
@@ -41,30 +89,36 @@ export function useChatSendMedia({
   const sendVoiceMessageFromLocal = React.useCallback(async (localUri: string, durationMs: number, size?: number) => {
     if (!currentUserId || !peerId) return;
 
-    const messageId = Date.now().toString();
+    const messageId = createOptimisticChatMessageId();
     const durationSec = Math.max(1, Math.round(durationMs / 1000));
     const name = `voice_${messageId}.m4a`;
-    // Кэш система может почистить раньше, чем вернётся сеть, — переносим запись к себе.
-    const fileUri = await keepVoiceRecording(localUri, messageId);
+    const optimisticMessage = {
+      id: messageId,
+      type: 'audio',
+      uri: localUri,
+      name,
+      size: size || 0,
+      duration: durationSec,
+      sender: 'me',
+      from: currentUserId,
+      to: peerId,
+      timestamp: new Date(),
+    };
 
-    setMessages((prev) => [
-      ...prev,
-      {
-        id: messageId,
-        type: 'audio',
-        uri: fileUri,
-        name,
-        size: size || 0,
-        duration: durationSec,
-        sender: 'me',
-        from: currentUserId,
-        to: peerId,
-        timestamp: new Date(),
-      },
-    ]);
+    // Сначала пузырь. Перенос записи может быть заметным на больших файлах/медленном диске.
+    commitMessages(
+      (prev) => prev.some((m) => String(m?.id) === messageId) ? prev : [...prev, optimisticMessage],
+      'voice_optimistic',
+    );
     updateReadStatuses((prev) => ({ ...prev, [messageId]: 'sending' }));
     setUploadStatus((prev) => ({ ...prev, [messageId]: 'sending' }));
     setVoiceRecordMs(0);
+
+    // Кэш система может почистить раньше, чем вернётся сеть, — переносим запись к себе.
+    const fileUri = await keepVoiceRecording(localUri, messageId);
+    if (fileUri !== localUri) {
+      commitMediaPatch(messageId, { uri: fileUri }, 'voice_kept_file');
+    }
 
     const clearUploadStatus = () =>
       setUploadStatus((prev) => {
@@ -104,7 +158,7 @@ export function useChatSendMedia({
     } catch {
       clearUploadStatus();
     }
-  }, [currentUserId, peerId, setMessages, setUploadStatus, updateReadStatuses, setVoiceRecordMs]);
+  }, [currentUserId, peerId, commitMessages, commitMediaPatch, setUploadStatus, updateReadStatuses, setVoiceRecordMs]);
 
   /**
    * Видеокружок — тем же путём, что голосовое: пузырь сразу, файл и кадр-превью загрузит
@@ -113,30 +167,35 @@ export function useChatSendMedia({
   const sendVideoNoteFromLocal = React.useCallback(async (localUri: string, durationMs: number) => {
     if (!currentUserId || !peerId) return;
 
-    const messageId = Date.now().toString();
+    const messageId = createOptimisticChatMessageId();
     const durationSec = Math.max(1, Math.round(durationMs / 1000));
-    const fileUri = await keepVideoNoteRecording(localUri, messageId);
+    const optimisticMessage = {
+      id: messageId,
+      type: 'video_note',
+      uri: localUri,
+      duration: durationSec,
+      sender: 'me',
+      from: currentUserId,
+      to: peerId,
+      timestamp: new Date(),
+    };
 
-    setMessages((prev) => [
-      ...prev,
-      {
-        id: messageId,
-        type: 'video_note',
-        uri: fileUri,
-        duration: durationSec,
-        sender: 'me',
-        from: currentUserId,
-        to: peerId,
-        timestamp: new Date(),
-      },
-    ]);
+    commitMessages(
+      (prev) => prev.some((m) => String(m?.id) === messageId) ? prev : [...prev, optimisticMessage],
+      'video_note_optimistic',
+    );
     updateReadStatuses((prev) => ({ ...prev, [messageId]: 'sending' }));
     setVoiceRecordMs(0);
+
+    const fileUri = await keepVideoNoteRecording(localUri, messageId);
+    if (fileUri !== localUri) {
+      commitMediaPatch(messageId, { uri: fileUri }, 'video_note_kept_file');
+    }
 
     // Кадр-превью — уже после пузыря: кружок в ленте появляется без задержки.
     const thumbUri = await makeVideoNoteThumb(fileUri, messageId);
     if (thumbUri) {
-      setMessages((prev) => prev.map((m) => (String(m?.id) === messageId ? { ...m, thumbUri } : m)));
+      commitMediaPatch(messageId, { thumbUri }, 'video_note_thumbnail');
     }
 
     try {
@@ -161,12 +220,12 @@ export function useChatSendMedia({
         updateReadStatuses((prev) => ({ ...prev, [messageId]: 'failed' }));
       }
     } catch {}
-  }, [currentUserId, peerId, setMessages, updateReadStatuses, setVoiceRecordMs]);
+  }, [currentUserId, peerId, commitMessages, commitMediaPatch, updateReadStatuses, setVoiceRecordMs]);
 
   const sendPickedImage = React.useCallback(async (asset: any): Promise<boolean> => {
     if (!currentUserId || !peerId) return false;
 
-    const messageId = Date.now().toString();
+    const messageId = createOptimisticChatMessageId();
     const messageType = 'image';
 
     const localUri = asset?.uri;
@@ -185,11 +244,11 @@ export function useChatSendMedia({
       timestamp: new Date(),
     };
 
-    setMessages((prev) => {
+    commitMessages((prev) => {
       const existingMessage = prev.find((msg) => msg.id === messageId);
       if (existingMessage) return prev;
       return [...prev, newMessage];
-    });
+    }, 'image_optimistic');
 
     updateReadStatuses((prev) => ({ ...prev, [messageId]: 'sending' }));
 
@@ -230,12 +289,12 @@ export function useChatSendMedia({
       }
 
       if (socketResult.ok && socketResult.messageId) {
-        setMessages((prev) => {
+        commitMessages((prev) => {
           const updated = prev.map((msg) =>
             msg.id === messageId ? { ...msg, id: socketResult.messageId!, uri: resolveMediaUri(uploadResult.url), from: currentUserId, to: peerId } : msg
           );
           return updated;
-        });
+        }, 'image_delivered');
 
         setUploadStatus((prev) => {
           const newStatus = { ...prev };
@@ -266,7 +325,7 @@ export function useChatSendMedia({
       void enqueueMediaOutboxId(messageId);
       return false;
     }
-  }, [currentUserId, peerId, updateReadStatuses, resolveMediaUri, enqueueMediaOutboxId, dequeueMediaOutboxId]);
+  }, [currentUserId, peerId, commitMessages, updateReadStatuses, resolveMediaUri, enqueueMediaOutboxId, dequeueMediaOutboxId]);
 
   /** Send 2…10 photos as one album message. */
   const sendPickedAlbum = React.useCallback(async (assets: any[]): Promise<boolean> => {
@@ -277,7 +336,7 @@ export function useChatSendMedia({
       return false;
     }
 
-    const messageId = Date.now().toString();
+    const messageId = createOptimisticChatMessageId();
     const localUris = list.map((a) => String(a?.uri || '').trim()).filter(Boolean);
     if (localUris.length < 2) return false;
 
@@ -294,10 +353,10 @@ export function useChatSendMedia({
       timestamp: new Date(),
     };
 
-    setMessages((prev) => {
+    commitMessages((prev) => {
       if (prev.find((msg) => msg.id === messageId)) return prev;
       return [...prev, newMessage];
-    });
+    }, 'album_optimistic');
     updateReadStatuses((prev) => ({ ...prev, [messageId]: 'sending' }));
     setUploadStatus((prev) => ({ ...prev, [messageId]: 'sending' }));
 
@@ -348,7 +407,7 @@ export function useChatSendMedia({
       }
 
       if (socketResult.ok && socketResult.messageId) {
-        setMessages((prev) =>
+        commitMessages((prev) =>
           prev.map((msg) =>
             msg.id === messageId
               ? {
@@ -361,6 +420,7 @@ export function useChatSendMedia({
                 }
               : msg,
           ),
+          'album_delivered',
         );
         setUploadStatus((prev) => {
           const newStatus = { ...prev };
@@ -388,7 +448,7 @@ export function useChatSendMedia({
       void enqueueMediaOutboxId(messageId);
       return false;
     }
-  }, [currentUserId, peerId, sendPickedImage, updateReadStatuses, resolveMediaUri, enqueueMediaOutboxId, dequeueMediaOutboxId]);
+  }, [currentUserId, peerId, sendPickedImage, commitMessages, updateReadStatuses, resolveMediaUri, enqueueMediaOutboxId, dequeueMediaOutboxId]);
 
   return {
     sendVoiceMessageFromLocal,

@@ -10,6 +10,7 @@ import socket, {
   clearMessageCache,
   getCurrentUserId as getCurrentSocketUserId,
   isGloballyDeletedMessageId,
+  listPendingMessageOutboxForPeer,
   markMessagesAsRead,
 } from "../../sockets/socket";
 import { logger } from "../../utils/logger";
@@ -23,6 +24,7 @@ import {
   mergeInitialHistoryMessages,
   mergeQuietSyncMessages,
 } from "./chatHistory";
+import { mergePendingOutboxIntoMessages } from "./outboxPendingRows";
 
 /** Повторы синхронизации открытого чата после переподключения сокета. */
 const RECONNECT_SYNC_DELAYS_MS = [650, 2500, 6000];
@@ -221,24 +223,39 @@ export function useChatHistorySync({
 
       let localPreloaded = false;
       try {
-        const [localMessages, savedStatuses, hiddenIds] = await Promise.all([
+        const [localMessages, savedStatuses, hiddenIds, pendingOutbox] = await Promise.all([
           getChatMessagesLocal(pid, uid),
           loadStatuses(),
           loadHiddenForMeMessageIds(uid, pid),
+          listPendingMessageOutboxForPeer(pid).catch(() => []),
         ]);
         if (historySyncGenerationRef.current !== syncGen) return;
         hiddenForMeMessageIdsRef.current = hiddenIds;
         const visibleLocalMessages = Array.isArray(localMessages)
           ? localMessages.filter((msg: any) => !hiddenIds.has(String(msg?.id || "").trim()))
           : [];
-        localPreloaded = visibleLocalMessages.length > 0;
+        // Быстрый Back без persist: пузырь мог остаться только в outbox — вернём в ленту.
+        const hydrated = mergePendingOutboxIntoMessages(visibleLocalMessages, pendingOutbox || [], uid);
+        const statusesWithPending: Record<string, "sending" | "delivered" | "read" | "failed" | "sent"> = {
+          ...(savedStatuses || {}),
+        };
+        for (const id of hydrated.sendingIds) {
+          const cur = statusesWithPending[id];
+          if (!cur || cur === "sending" || cur === "failed") statusesWithPending[id] = "sending";
+        }
+        localPreloaded = hydrated.messages.length > 0;
         // Статусы, кэш и «история готова» — одним рендером: каждый отдельный setState
         // после await перерисовывал весь чат, пока шёл переход на экран переписки.
         unstable_batchedUpdates(() => {
-          setReadStatuses(savedStatuses || {});
-          if (localPreloaded) setMessages(visibleLocalMessages);
+          setReadStatuses(statusesWithPending);
+          if (localPreloaded) setMessages(hydrated.messages);
           setHistoryReady(true);
         });
+        if (hydrated.sendingIds.length > 0) {
+          latestMessagesForPersistRef.current = hydrated.messages;
+          enqueueMessagesPersist("hydrate_pending_outbox");
+          updateReadStatuses(() => statusesWithPending);
+        }
       } catch {
         if (historySyncGenerationRef.current === syncGen) setHistoryReady(true);
       }
