@@ -11,7 +11,7 @@ This is the **canonical app icon**. Do not replace with older glass/EQ/silver va
 
 - Background: solid slate `#3E4E62` / RGB `(62, 78, 98)`
 - Motif: outline video camera (rounded body + lens trapezoid), **no equalizer bars**
-- Stroke: light blue / cyan ≈ RGB `(95, 195, 245)`, slightly thickened inward on the body
+- Stroke: light blue `#50A5D0` / RGB `(80, 165, 208)`, uniform on straight runs and curves
 - Body height slightly shorter than a perfect square (~10% vertical squash); **lens height unchanged**
 - Centered, horizontal, circle-safe scale (~56% width)
 
@@ -23,10 +23,10 @@ This is the **canonical app icon**. Do not replace with older glass/EQ/silver va
 - Cam-off / away / PiP logo (transparent): `frontend/assets/away-logo.png` — same blue outline camera
 - Entry splash + Metro wait (`SplashLoader` / native): `frontend/assets/splash-icon.png` (+ Android `splashscreen_logo`/`splashscreen_icon`, iOS `SplashScreenLogo`)
 - Android system PiP: `frontend/android/.../drawable-nodpi/livi_pip_placeholder.png`
-- Raster pipeline source (old EQ motif, for regenerating icon): `frontend/assets/away-logo-source.png`
+- Vector rasterizer source: `frontend/scripts/render-app-icon.swift` (4× supersampled)
 
 ## When editing
 
-- Prefer regenerating from the away-logo pipeline over redrawing
+- Regenerate from `frontend/scripts/render-app-icon.swift`; do not trace a PNG
 - Keep interior = background (no EQ, no fill art)
 - Sync all launcher/adaptive/iOS assets together

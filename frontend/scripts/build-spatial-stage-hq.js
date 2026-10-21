@@ -26,6 +26,7 @@
 const path = require('path');
 const Jimp = require('jimp-compact');
 const { removeDarkCleanupStains } = require('./cleanup-spatial-dark-stains');
+const { refineSpatialStage } = require('./refine-spatial-stage-details');
 
 const OUT = path.join(__dirname, '..', 'assets', 'spatial', 'stage-hq.jpg');
 
@@ -1377,6 +1378,7 @@ async function main() {
     }
   }
   await base.resize(1440, Jimp.AUTO, Jimp.RESIZE_BICUBIC).quality(95).writeAsync(OUT);
+  await refineSpatialStage(OUT);
   console.log(`${path.relative(process.cwd(), OUT)}  1440 px`);
 }
 

@@ -16,7 +16,7 @@ import { useHomeLayout } from './HomeLayoutContext';
 import { usePaneReveal } from '../../utils/paneVisibility';
 import AdaptiveText from '../../components/AdaptiveText';
 import { useStableSafeAreaInsets } from './useStableSafeAreaInsets';
-import { Ionicons } from '@expo/vector-icons';
+import { FontAwesome, Ionicons } from '@expo/vector-icons';
 import { Image as ExpoImage } from 'expo-image';
 import * as Clipboard from 'expo-clipboard';
 import AvatarImage, { activeFrameOutset } from '../../components/AvatarImage';
@@ -68,6 +68,7 @@ import {
 
 const SUPPORT_EMAIL = '12345kolt@gmail.com';
 const SUPPORT_EMAIL_2 = 'kolt12max@mail.ru';
+const SUPPORT_TELEGRAM_URL = 'https://t.me/livi_app';
 const CAMERA_BTN_SIZE = 32;
 /** Урна на аватаре чуть внутрь от угла — ближе к самому кругу, а не в пустом углу. */
 const CAMERA_BTN_INSET = 7;
@@ -587,6 +588,10 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
   const openHelp = useCallback(() => {
     setAccountOpen(false);
     setScreen('help');
+  }, []);
+
+  const openTelegram = useCallback(() => {
+    Linking.openURL(SUPPORT_TELEGRAM_URL).catch(() => {});
   }, []);
 
   const openPurchases = useCallback(() => {
@@ -1127,6 +1132,17 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
             {copiedEmail === SUPPORT_EMAIL_2 ? t('profileEmailCopied', lang) : t('profileCopyEmail', lang)}
           </AdaptiveText>
         </Pressable>
+        <View style={styles.helpTelegramDivider}>
+          <Pressable
+            onPress={openTelegram}
+            style={({ pressed }) => [styles.helpTelegramRow, pressed && styles.helpEmailRowPressed]}
+            accessibilityRole="link"
+            accessibilityLabel={t('profileOpenTelegram', lang)}
+          >
+            <AdaptiveText style={styles.helpTelegramText}>{t('profileOpenTelegram', lang)}</AdaptiveText>
+            <FontAwesome name="telegram" size={20} color="#229ED9" />
+          </Pressable>
+        </View>
       </View>
     </WelcomeProfileSection>
     </View>
@@ -1576,6 +1592,29 @@ const styles = StyleSheet.create({
     color: WELCOME_MUTED_TEXT,
     fontSize: 14,
     lineHeight: 20,
+  },
+  helpTelegramRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+    backgroundColor: 'rgba(34, 158, 217, 0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(34, 158, 217, 0.36)',
+  },
+  helpTelegramDivider: {
+    marginTop: 14,
+    paddingTop: 14,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderColor: WELCOME_GLASS_BORDER,
+  },
+  helpTelegramText: {
+    flex: 1,
+    color: WELCOME_HEADER_TITLE,
+    fontSize: 14,
+    fontWeight: '600',
   },
   helpEmailRow: {
     marginTop: 14,
