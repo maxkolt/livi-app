@@ -11,7 +11,7 @@ interface IFliqVideo {
   channelTitle: string;
   channelId: string;
   durationSec: number;
-  /** Языковые корзины, в которых ролик нашёлся (ru, en, …). */
+  /** Языковые корзины, в которых ролик нашёлся и языку которых подходит (ru, en, …). */
   langs: string[];
   topics: string[];
   views: number;

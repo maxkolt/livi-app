@@ -1,4 +1,12 @@
-import { fliqLangBucket, fliqScore, isFliqEligible, parseIsoDuration, quotaDay } from './fliqCollector';
+import {
+  fliqLangBucket,
+  fliqLanguageOk,
+  fliqScore,
+  foreignLetters,
+  isFliqEligible,
+  parseIsoDuration,
+  quotaDay,
+} from './fliqCollector';
 import { pickFliqItems } from '../routes/fliq';
 
 function video(overrides: Record<string, any> = {}) {
@@ -52,6 +60,44 @@ describe('isFliqEligible', () => {
     expect(isFliqEligible(video(noSize))).toBe(true);
     expect(isFliqEligible(video({ ...noSize, snippet: { title: 'Cat' } }))).toBe(false);
     expect(isFliqEligible(video({ ...noSize, contentDetails: { duration: 'PT90S' } }))).toBe(false);
+  });
+});
+
+describe('fliqLanguageOk', () => {
+  const snippet = (fields: Record<string, string>) => ({ snippet: { title: 'Cat #shorts', ...fields } });
+
+  it('keeps videos in the bucket language or without a declared language', () => {
+    expect(fliqLanguageOk(snippet({}), 'en')).toBe(true);
+    expect(fliqLanguageOk(snippet({ defaultAudioLanguage: 'en-US' }), 'en')).toBe(true);
+    expect(fliqLanguageOk(snippet({ title: 'Котик #shorts', defaultAudioLanguage: 'ru' }), 'ru')).toBe(true);
+    expect(fliqLanguageOk(snippet({ defaultAudioLanguage: 'en' }), 'ru')).toBe(true);
+    expect(fliqLanguageOk(snippet({ defaultAudioLanguage: 'zxx' }), 'en')).toBe(true);
+  });
+
+  it('drops videos whose audio is in another language', () => {
+    expect(fliqLanguageOk(snippet({ defaultAudioLanguage: 'hi' }), 'en')).toBe(false);
+    expect(fliqLanguageOk(snippet({ defaultLanguage: 'ta' }), 'ru')).toBe(false);
+    expect(fliqLanguageOk(snippet({ defaultAudioLanguage: 'ru' }), 'en')).toBe(false);
+  });
+
+  it('drops titles, channel names and descriptions written in another script', () => {
+    expect(fliqLanguageOk(snippet({ title: 'मजेदार वीडियो #shorts' }), 'en')).toBe(false);
+    expect(fliqLanguageOk(snippet({ channelTitle: 'தமிழ் சேனல்' }), 'ru')).toBe(false);
+    expect(fliqLanguageOk(snippet({ title: 'Котик #shorts' }), 'en')).toBe(false);
+    expect(fliqLanguageOk(snippet({ description: 'বাংলা ভিডিও দেখুন সবাই' }), 'en')).toBe(false);
+  });
+
+  it('tolerates a stray foreign letter, emoji and symbols', () => {
+    expect(fliqLanguageOk(snippet({ title: 'Cat 😂 π #shorts' }), 'en')).toBe(true);
+    expect(
+      fliqLanguageOk(snippet({ description: `${'Funny cats compilation, subscribe! '.repeat(4)}ॐ` }), 'en')
+    ).toBe(true);
+  });
+});
+
+describe('foreignLetters', () => {
+  it('counts only letters outside the allowed scripts', () => {
+    expect(foreignLetters('Hi, мир! 123 😂', /\p{Script=Latin}/u)).toEqual({ foreign: 3, letters: 5 });
   });
 });
 

@@ -1,6 +1,6 @@
 // utils/fliqCollector.ts
 // Сборщик ленты Fliq: по расписанию ищет YouTube Shorts по темам и языкам через
-// YouTube Data API и складывает подходящие ролики в fliq_videos.
+// YouTube Data API и складывает подходящие ролики на языке корзины в fliq_videos.
 //
 // Квота API по умолчанию — 10 000 единиц в сутки; поиск стоит до 100 единиц, детали
 // роликов — 1. Поэтому поисков в сутки не больше FLIQ_DAILY_SEARCH_BUDGET (90), а пары
@@ -100,6 +100,54 @@ const QUERIES: Record<string, Record<FliqTopic, string[]>> = {
     nature: ['wild nature', 'amazing nature', 'wildlife'],
   },
 };
+
+/** Регион поиска корзины: выдача смещается к роликам, которые смотрят там. */
+const REGION_BY_LANG: Record<string, string> = { ru: 'RU', en: 'US' };
+
+/**
+ * Языки звука, которые принимает корзина. В русской остаются и английские ролики — их и так
+ * находит relevanceLanguage ru. zxx (без речи), und (не определён), mul (несколько) — по
+ * звуку не решаем, проверяется только текст.
+ */
+const BUCKET_AUDIO_LANGS: Record<string, string[]> = { ru: ['ru', 'en'], en: ['en'] };
+const NEUTRAL_AUDIO_LANGS = ['zxx', 'und', 'mul'];
+
+/** Буквы, допустимые в названии и описании ролика корзины: остальные алфавиты — чужой язык. */
+const BUCKET_SCRIPTS: Record<string, RegExp> = {
+  ru: /[\p{Script=Latin}\p{Script=Cyrillic}]/u,
+  en: /\p{Script=Latin}/u,
+};
+
+/** Сколько букв текста не из допустимых алфавитов. */
+export function foreignLetters(text: string, allowed: RegExp): { foreign: number; letters: number } {
+  let foreign = 0;
+  let letters = 0;
+  for (const ch of String(text || '').match(/\p{L}/gu) || []) {
+    letters += 1;
+    if (!allowed.test(ch)) foreign += 1;
+  }
+  return { foreign, letters };
+}
+
+/**
+ * На языке ли корзины ролик: язык звука из YouTube (если указан) — из BUCKET_AUDIO_LANGS,
+ * в названии и имени канала не больше одной буквы чужого алфавита, в описании — меньше 10%.
+ */
+export function fliqLanguageOk(v: any, lang: string): boolean {
+  const audio = String(v?.snippet?.defaultAudioLanguage || v?.snippet?.defaultLanguage || '')
+    .trim()
+    .toLowerCase()
+    .split(/[-_]/)[0];
+  const audioAllowed = BUCKET_AUDIO_LANGS[lang] || [lang];
+  if (audio && !NEUTRAL_AUDIO_LANGS.includes(audio) && !audioAllowed.includes(audio)) return false;
+
+  const scripts = BUCKET_SCRIPTS[lang] || BUCKET_SCRIPTS.en;
+  const heading = foreignLetters(`${v?.snippet?.title || ''} ${v?.snippet?.channelTitle || ''}`, scripts);
+  if (heading.foreign >= 2) return false;
+  const body = foreignLetters(String(v?.snippet?.description || ''), scripts);
+  if (body.foreign >= 8 && body.foreign >= body.letters * 0.1) return false;
+  return true;
+}
 
 /** Порядок выдачи поиска и окно свежести: так одна пара тем даёт разные ролики. */
 const ORDERS: Array<{ order: string; days: number }> = [
@@ -225,6 +273,7 @@ async function collectPair(topic: FliqTopic, lang: string, variant: number): Pro
     publishedAfter,
     relevanceLanguage: lang,
   };
+  if (REGION_BY_LANG[lang]) params.regionCode = REGION_BY_LANG[lang];
   const search = await ytGet('search', params);
   const ids: string[] = (Array.isArray(search?.items) ? search.items : [])
     .map((it: any) => String(it?.id?.videoId || ''))
@@ -239,7 +288,7 @@ async function collectPair(topic: FliqTopic, lang: string, variant: number): Pro
   const now = new Date();
   let saved = 0;
   for (const v of Array.isArray(details?.items) ? details.items : []) {
-    if (!isFliqEligible(v)) continue;
+    if (!isFliqEligible(v) || !fliqLanguageOk(v, lang)) continue;
     const videoId = String(v.id);
     const views = Number(v?.statistics?.viewCount || 0);
     const publishedAt = v?.snippet?.publishedAt ? new Date(v.snippet.publishedAt) : null;
@@ -267,6 +316,41 @@ async function collectPair(topic: FliqTopic, lang: string, variant: number): Pro
   return saved;
 }
 
+/** Метка в fliq_collect_state: пул уже перепроверен по языку по этим правилам. */
+const LANG_SWEEP_KEY = 'langSweep:v1';
+
+/**
+ * Разовая перепроверка уже собранного пула по fliqLanguageOk: свежий snippet каждого ролика
+ * (videos.list — 1 единица квоты на 50 роликов) и уход из корзин, которым он не подходит.
+ * Без корзин ролик в ленту не попадает и уходит по TTL. Квота кончилась — доделаем в
+ * следующий прогон, метка ставится только в конце.
+ */
+async function sweepPoolLanguages(): Promise<void> {
+  if (await FliqCollectState.exists({ key: LANG_SWEEP_KEY })) return;
+  const docs: Array<{ videoId: string; langs: string[] }> = await FliqVideo.find(
+    { 'langs.0': { $exists: true } },
+    { videoId: 1, langs: 1 }
+  ).lean();
+  let dropped = 0;
+  for (let i = 0; i < docs.length; i += 50) {
+    const batch = docs.slice(i, i + 50);
+    const details = await ytGet('videos', { part: 'snippet', id: batch.map((d) => d.videoId).join(',') });
+    const byId = new Map<string, any>(
+      (Array.isArray(details?.items) ? details.items : []).map((v: any) => [String(v.id), v])
+    );
+    for (const doc of batch) {
+      const v = byId.get(doc.videoId);
+      if (!v) continue;
+      const keep = doc.langs.filter((lang) => fliqLanguageOk(v, lang));
+      if (keep.length === doc.langs.length) continue;
+      await FliqVideo.updateOne({ videoId: doc.videoId }, { $set: { langs: keep } });
+      dropped += doc.langs.length - keep.length;
+    }
+  }
+  await FliqCollectState.updateOne({ key: LANG_SWEEP_KEY }, { $set: { lastRunAt: new Date() } }, { upsert: true });
+  logger.info('[fliq] pool language sweep done', { checked: docs.length, dropped });
+}
+
 let running = false;
 let indexesSynced = false;
 
@@ -282,6 +366,7 @@ async function runOnce(): Promise<void> {
       await FliqVideo.syncIndexes();
       indexesSynced = true;
     }
+    await sweepPoolLanguages();
     // Молодой пул языка — ищем больше за прогон, пока лента не наполнится.
     let budget = SEARCHES_PER_RUN;
     for (const lang of FLIQ_LANGS) {
