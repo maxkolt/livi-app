@@ -107,7 +107,7 @@ export const SEARCH_RADAR_HUD = UI_ACCENT;
 /** Подсветка того же тона: кромка луча, засветка шкалы, ядро цели. */
 export const SEARCH_RADAR_HUD_LIGHT = UI_ACCENT_LIGHT;
 /** Unread / missed count badge on welcome chats and friend action buttons. */
-export const WELCOME_UNREAD_BADGE = '#2158c0';
+export const WELCOME_UNREAD_BADGE = UI_ACCENT;
 /** Значок «есть обновление»: краповый, как точка на вкладке «Профиль» в навбаре. */
 export const WELCOME_UPDATE_BADGE = '#A63A48';
 export const CROWN_GOLD = '#E4C065';

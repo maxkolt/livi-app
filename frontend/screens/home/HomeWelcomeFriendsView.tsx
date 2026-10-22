@@ -260,7 +260,8 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
             compactLandscape && styles.inviteBadgeLandscape,
           ]}
           contentFit="cover"
-          cachePolicy="memory-disk"
+          // Вшитый ассет: дисковый кэш Glide переживает обновление (см. SplashLoader).
+          cachePolicy="memory"
           accessible={false}
         />
         <View style={styles.inviteTextCol}>

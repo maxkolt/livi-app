@@ -204,6 +204,7 @@ import {
   getAvatar,
   sendChatViewing,
   ensureGloballyDeletedMessageIdsLoaded,
+  markMessagesAsRead,
 } from "../sockets/socket";
 import { MAX_MESSAGE_TEXT_LENGTH } from "../sockets/modules/constants";
 import {
@@ -214,7 +215,7 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useLang } from "../store/lang";
 import { t } from "../utils/i18n";
-import { setCurrentChatPeerId, dismissMessageNotificationForUser, syncAppBadgeFromMissedCount } from "../utils/pushNotifications";
+import { setCurrentChatPeerId, dismissMessageNotificationForUser, syncAppBadgeFromMissedCount, resyncBadgeAfterChatRead } from "../utils/pushNotifications";
 import { useFocusEffect, useIsFocused } from "@react-navigation/native";
 import type { IncomingShareItem } from '../utils/incomingShare';
 
@@ -441,6 +442,16 @@ export default function ChatScreen({ route, navigation }: Props) {
   const isChatScreenFocused = useIsFocused();
   const isFocusedRef = useRef(isChatScreenFocused);
   isFocusedRef.current = isChatScreenFocused;
+  // Сервер узнаёт о прочтении не только при загрузке истории: вернулись в уже открытый чат
+  // (из звонка, из фона или системного PiP) — пришедшее за это время прочитано сейчас.
+  // Иначе сверка с сервером возвращала «1» и сводку в шторке на прочитанное сообщение.
+  const markChatReadOnServer = useCallback((pid: string) => {
+    void markMessagesAsRead(pid)
+      .then((res) => {
+        if (res?.ok) void resyncBadgeAfterChatRead(pid);
+      })
+      .catch(() => {});
+  }, []);
   useFocusEffect(
     useCallback(() => {
       if (peerId) {
@@ -450,6 +461,7 @@ export default function ChatScreen({ route, navigation }: Props) {
         // через markMessagesAsRead, но ответ может и не дойти (сокет лёг).
         emitChatOpened(peerId);
         dismissMessageNotificationForUser(peerId).catch(() => {});
+        if (AppState.currentState === 'active') markChatReadOnServer(peerId);
       }
       // Голос: режим аудио поднимаем при входе в чат — первый тап не ждёт setAudioModeAsync
       void Audio.setAudioModeAsync({
@@ -463,22 +475,39 @@ export default function ChatScreen({ route, navigation }: Props) {
         setCurrentChatPeerId(null);
         sendChatViewing(null);
       };
-    }, [peerId])
+    }, [peerId, markChatReadOnServer])
   );
 
   // В фоне / на заблокированном экране сокет часто остаётся подключённым, а экран чата остаётся «в фокусе»
   // в навигации — сервер не получает disconnect и продолжает считать, что чат открыт, и не шлёт FCM.
   useEffect(() => {
     if (!peerId) return;
+    let readTimer: ReturnType<typeof setTimeout> | null = null;
     const sub = AppState.addEventListener('change', (next) => {
+      if (readTimer) {
+        clearTimeout(readTimer);
+        readTimer = null;
+      }
       if (next === 'active') {
-        if (isChatScreenFocused) sendChatViewing(peerId);
+        if (!isChatScreenFocused) return;
+        sendChatViewing(peerId);
+        // Фокус навигации не менялся — useFocusEffect не сработает. Пауза: при развороте
+        // системного PiP поверх чата может открыться экран звонка.
+        readTimer = setTimeout(() => {
+          readTimer = null;
+          if (AppState.currentState !== 'active' || !isFocusedRef.current) return;
+          emitChatOpened(peerId);
+          markChatReadOnServer(peerId);
+        }, 700);
       } else {
         sendChatViewing(null);
       }
     });
-    return () => sub.remove();
-  }, [peerId, isChatScreenFocused]);
+    return () => {
+      if (readTimer) clearTimeout(readTimer);
+      sub.remove();
+    };
+  }, [peerId, isChatScreenFocused, markChatReadOnServer]);
 
   // Продлеваем chat:viewing на сервере (TTL 90s), иначе длинная переписка без смены AppState → снова пуши и unread в памяти.
   useEffect(() => {

@@ -526,6 +526,14 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 } catch (_: Exception) {}
             }
             val timeStr = formatMessageNotificationTime(sentAtIso)
+            // Эта переписка открыта на экране. Пуш (часто повторный: живая доставка не подтвердилась
+            // за 8 с под VPN) не должен делать её непрочитанной — ни сводкой в шторке, ни pending unread.
+            if (LiviAppModule.isViewingChatInForeground(fromUserIdMsg)) {
+                if (messageId.isNotEmpty()) LiviAppModule.markMessageNotifiedForId(this, messageId)
+                LiviAppModule.emitMessagePushForOpenChat(fromUserIdMsg)
+                vLog("FCM message: chat open on screen, sync instead of alert fromUserId=$fromUserIdMsg")
+                return
+            }
             // Уже на welcome Chat в foreground — без системного уведомления (бейдж иконки всё равно обновляем).
             if (MainActivity.isInForeground && LiviAppModule.isSuppressUnreadMessageAlerts(this)) {
                 if (messageId.isNotEmpty()) LiviAppModule.markMessageNotifiedForId(this, messageId)

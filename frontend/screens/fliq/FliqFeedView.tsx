@@ -336,15 +336,17 @@ export function FliqFeedView({
   }, [active, prewarming]);
 
   // Первое открытие: сперва темы, потом лента. Смена тем или языка — лента заново.
+  // Темы — только на видимой вкладке: скрытый prewarm под сплешем иначе открывал
+  // диалог (Portal) поверх «Поиска» сразу после установки.
   useEffect(() => {
-    if (!topicsHydrated || !opened) return;
-    if (!onboarded) {
-      setTopicsOpen(true);
-      return;
-    }
+    if (!topicsHydrated || !opened || !onboarded) return;
     exhaustedAtRef.current = 0;
     void load(true);
   }, [topicsHydrated, opened, onboarded, load]);
+
+  useEffect(() => {
+    if (topicsHydrated && !onboarded && active) setTopicsOpen(true);
+  }, [topicsHydrated, onboarded, active]);
 
   // Догрузка, когда до конца ленты осталось несколько роликов.
   useEffect(() => {

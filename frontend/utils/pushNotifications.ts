@@ -58,6 +58,8 @@ let syncBadgeInFlight = false;
 let syncBadgeRunAgain = false;
 type BadgeSnapshot = { total: number; missed: number; unread: number; legacyCleared: boolean };
 let lastAppliedBadge: BadgeSnapshot | null = null;
+/** Следующий проход применит бейдж и сводку в шторке, даже если счётчики не изменились. */
+let forceNextBadgeApply = false;
 
 function shouldApplyBadgeToOs(missedTotal: number, unreadTotal: number, total: number, legacyCleared: boolean): boolean {
   const snap: BadgeSnapshot = { total, missed: missedTotal, unread: unreadTotal, legacyCleared };
@@ -774,6 +776,10 @@ async function dismissMissedCallNotificationsOnly(): Promise<void> {
  * Вкладки Chat/Calls в foreground держат свой вклад на 0.
  */
 async function syncAppBadgeFromMissedCountNow(): Promise<void> {
+  if (forceNextBadgeApply) {
+    forceNextBadgeApply = false;
+    lastAppliedBadge = null;
+  }
   try {
     const unreadTotal = await fetchUnreadTotalForBadge();
     const raw = await AsyncStorage.getItem(MISSED_CALLS_KEY);
@@ -906,6 +912,16 @@ async function runSyncBadgeCoalesced(): Promise<void> {
   }
 }
 
+/**
+ * Чат прочитан и сервер это подтвердил. Сводку «N непрочитанных» рисует и FCM, мимо JS:
+ * если JS уже считал те же числа, обычный sync её не трогал и «1» висела в шторке.
+ */
+export function resyncBadgeAfterChatRead(peerId: string): Promise<void> {
+  forceNextBadgeApply = true;
+  void dismissMessageNotificationForUser(peerId);
+  return syncAppBadgeFromMissedCount();
+}
+
 /** Сливаем параллельные вызовы (App + HomeScreen после emitMissedIncrement) в один проход. */
 export function syncAppBadgeFromMissedCount(): Promise<void> {
   return new Promise((resolve) => {
@@ -965,6 +981,10 @@ AppState.addEventListener('change', (next) => {
 /** Текущий peerId чата, если пользователь сейчас в экране переписки. Устанавливается ChatScreen при фокусе, сбрасывается при уходе. */
 export function setCurrentChatPeerId(peerId: string | null): void {
   (global as any).__currentChatPeerId = peerId ?? null;
+  // FCM не рисует непрочитанное по переписке, которая на экране.
+  if (Platform.OS === 'android') {
+    try { NativeModules.LiviAppModule?.setViewingChatPeer?.(peerId ?? ''); } catch (_) {}
+  }
 }
 
 // КРИТИЧНО: Захватываем «последний ответ на уведомление» сразу при загрузке модуля,

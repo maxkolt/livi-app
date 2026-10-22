@@ -2788,6 +2788,12 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     } catch (_: Exception) {}
   }
 
+  /** JS: какой чат открыт на экране ("" — никакой). */
+  @ReactMethod
+  fun setViewingChatPeer(peerId: String) {
+    viewingChatPeerId = peerId.trim()
+  }
+
   /** Снять уведомление «Пропущенный вызов» для userId и обнулить счётчик (при принятии вызова или открытии чата с этим пользователем). */
   @ReactMethod
   fun cancelMissedCallNotificationForUser(userId: String) {
@@ -4792,6 +4798,24 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
         .edit()
         .putBoolean(KEY_SUPPRESS_UNREAD_ALERTS, suppress)
         .apply()
+    }
+
+    @Volatile
+    private var viewingChatPeerId: String = ""
+
+    /** Переписка с userId сейчас на экране (приложение на переднем плане, не в PiP). */
+    @JvmStatic
+    fun isViewingChatInForeground(userId: String): Boolean =
+      userId.isNotEmpty() && MainActivity.isInForeground && userId == viewingChatPeerId
+
+    /** Пуш о сообщении в открытый чат: JS досинхронизирует переписку вместо уведомления. */
+    @JvmStatic
+    fun emitMessagePushForOpenChat(fromUserId: String) {
+      runOnReactUiQueueIfAlive { ctx ->
+        val params = Arguments.createMap()
+        params.putString("from", fromUserId)
+        ctx.emitDeviceEvent("LiviMessagePushForOpenChat", params)
+      }
     }
 
     @JvmStatic

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type MutableRefObject } from 'react';
-import { NativeModules, Platform } from 'react-native';
+import { AppState, NativeModules, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   onMessageReceived,
@@ -135,11 +135,14 @@ export function useHomeBadges({ friends, friendsRef }: UseHomeBadgesArgs) {
       const result = await getUnreadCounts(ids);
       if (!result?.ok || !result.counts) return;
       pendingUnreadBatchRefreshRef.current = false;
+      // Чат на экране прочитан, даже если mark_read ещё не дошёл до сервера (медленный VPN).
+      const openChatPeer =
+        AppState.currentState === 'active' ? String((global as any).__currentChatPeerId || '').trim() : '';
       const entries: Record<string, number> = {};
       for (const id of ids) {
         const n = result.counts[id];
         const raw = typeof n === 'number' && n > 0 ? n : 0;
-        entries[id] = resolveServerUnreadCount(id, raw);
+        entries[id] = id === openChatPeer ? 0 : resolveServerUnreadCount(id, raw);
       }
       setUnreadByUserState((prev) => {
         const next = patchUnreadCountsIfChanged(prev, entries);
@@ -396,11 +399,13 @@ export function useHomeBadges({ friends, friendsRef }: UseHomeBadgesArgs) {
       try {
         const pendingUnread = (await (NativeModules.LiviAppModule?.getAndClearPendingUnreadMessages?.() ??
           Promise.resolve([]))) as string[];
+        // Пуш уже посчитан сервером (unread пишется до отправки пуша) — без floor: сверка через
+        // 1.4 с должна суметь вернуть 0, если сообщение тем временем прочитали. Открытый чат —
+        // не непрочитанное: его отметит сам ChatScreen при возврате.
+        const openChatPeer = String((global as any).__currentChatPeerId || '').trim();
         if (pendingUnread?.length) {
-          const ids = [...new Set(pendingUnread.map((u) => String(u || '').trim()).filter(Boolean))];
-          for (const id of ids) {
-            bumpUnreadFloor(id, 1, 5000);
-          }
+          const ids = [...new Set(pendingUnread.map((u) => String(u || '').trim()).filter(Boolean))]
+            .filter((id) => id !== openChatPeer);
           setUnreadByUserState((prev) => {
             let changed = false;
             const next = { ...prev };
@@ -453,7 +458,7 @@ export function useHomeBadges({ friends, friendsRef }: UseHomeBadgesArgs) {
       })();
     }, 1400);
     logger.info('[welcome-tab] badge resume local refresh done', { elapsedMs: Date.now() - started });
-  }, [bumpUnreadFloor, friendsRef, refreshUnreadCountsForFriends]);
+  }, [friendsRef, refreshUnreadCountsForFriends]);
 
   useEffect(() => () => {
     if (badgeResumeHeavyTimerRef.current) {

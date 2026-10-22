@@ -1,7 +1,7 @@
 /** History load + quiet sync + reconnect merge for ChatScreen. */
 
 import React from "react";
-import { AppState, unstable_batchedUpdates } from "react-native";
+import { AppState, DeviceEventEmitter, unstable_batchedUpdates } from "react-native";
 import NetInfo from "@react-native-community/netinfo";
 import socket, {
   fetchMessages,
@@ -14,7 +14,7 @@ import socket, {
   markMessagesAsRead,
 } from "../../sockets/socket";
 import { logger } from "../../utils/logger";
-import { dismissMessageNotificationForUser, syncAppBadgeFromMissedCount } from "../../utils/pushNotifications";
+import { resyncBadgeAfterChatRead } from "../../utils/pushNotifications";
 import { mergeChatReadStatuses } from "./chatMessageOps";
 import {
   buildOutgoingReadStatusesFromHistory,
@@ -187,6 +187,21 @@ export function useChatHistorySync({
     };
   }, [navigation, quietSyncChat]);
 
+  // FCM о сообщении в эту переписку, пока она на экране (натив не рисует уведомление):
+  // живая доставка не подтвердилась — подтянуть с сервера и отметить прочитанным.
+  React.useEffect(() => {
+    if (!peerId) return;
+    const sub = DeviceEventEmitter.addListener("LiviMessagePushForOpenChat", (e: { from?: string }) => {
+      if (String(e?.from || "") !== String(peerId)) return;
+      void (async () => {
+        await quietSyncChat();
+        const res = await markMessagesAsRead(peerId).catch(() => null);
+        if (res?.ok) void resyncBadgeAfterChatRead(peerId);
+      })();
+    });
+    return () => sub.remove();
+  }, [peerId, quietSyncChat]);
+
   const prevPeerIdForHistoryRef = React.useRef<string | null>(null);
   const historySyncGenerationRef = React.useRef(0);
 
@@ -309,10 +324,9 @@ export function useChatHistorySync({
               );
             });
 
-            await markMessagesAsRead(pid);
+            const readRes = await markMessagesAsRead(pid);
             try {
-              await dismissMessageNotificationForUser(pid);
-              await syncAppBadgeFromMissedCount();
+              if (readRes?.ok) await resyncBadgeAfterChatRead(pid);
             } catch {}
 
             try {
@@ -427,10 +441,9 @@ export function useChatHistorySync({
                 }
               } catch {}
 
-              await markMessagesAsRead(pid);
+              const readRes = await markMessagesAsRead(pid);
               try {
-                await dismissMessageNotificationForUser(pid);
-                await syncAppBadgeFromMissedCount();
+                if (readRes?.ok) await resyncBadgeAfterChatRead(pid);
               } catch {}
               logger.debug("[ChatScreen] Merged messages after socket connect/reconnect", {
                 n: formattedMessages.length,

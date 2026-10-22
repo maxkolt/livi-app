@@ -20,10 +20,7 @@ import {
   globalMessageStorage,
 } from "../../sockets/socket";
 import { logger } from "../../utils/logger";
-import {
-  dismissMessageNotificationForUser,
-  syncAppBadgeFromMissedCount,
-} from "../../utils/pushNotifications";
+import { resyncBadgeAfterChatRead } from "../../utils/pushNotifications";
 import { CHAT_ALBUM_MAX, getMessageImageUris } from "./chatAlbum";
 import { stickerFieldsFromMessage, videoNoteFieldsFromMessage } from "./chatMessageMeta";
 import { removeMessagesForDeletedIds } from "./chatMessageOps";
@@ -166,11 +163,11 @@ export function useChatRealtime({
         if (isFromPeer && chatIsActiveForRead) {
           setTimeout(() => {
             if (!isFocusedRef.current || AppState.currentState !== 'active') return;
-            markMessagesAsRead(senderId);
-            try {
-              void dismissMessageNotificationForUser(senderId);
-              void syncAppBadgeFromMissedCount();
-            } catch {}
+            void markMessagesAsRead(senderId)
+              .then((res) => {
+                if (res?.ok) void resyncBadgeAfterChatRead(senderId);
+              })
+              .catch(() => {});
           }, 1000);
         }
       }

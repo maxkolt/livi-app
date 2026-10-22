@@ -127,7 +127,9 @@ export default function SplashLoader({
               source={SPLASH_ICON}
               style={[styles.logo, { width: logoSize, height: logoSize }]}
               contentFit="contain"
-              cachePolicy="memory-disk"
+              // Не disk: в релизе ассет приходит как res:/<id>, expo-image не добавляет
+              // к ключу версию приложения — после обновления Glide отдавал старую иконку.
+              cachePolicy="memory"
               priority="high"
               recyclingKey="splash-camera"
             />
