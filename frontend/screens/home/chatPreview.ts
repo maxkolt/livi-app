@@ -57,3 +57,12 @@ export function formatWelcomeChatTime(at: number): string {
   }
   return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
 }
+
+/** Журнал звонков: не сегодня — дата и время («19 окт. 14:32»), сегодня — только время. */
+export function formatWelcomeCallTime(at: number): string {
+  const label = formatWelcomeChatTime(at);
+  if (!label) return label;
+  const d = new Date(at);
+  if (d.toDateString() === new Date().toDateString()) return label;
+  return `${label} ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+}

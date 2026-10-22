@@ -106,10 +106,13 @@ export const WELCOME_FILTER_ACTIVE = 'rgba(98, 176, 216, 0.30)';
 export const SEARCH_RADAR_HUD = UI_ACCENT;
 /** Подсветка того же тона: кромка луча, засветка шкалы, ядро цели. */
 export const SEARCH_RADAR_HUD_LIGHT = UI_ACCENT_LIGHT;
-/** Unread / missed count badge on welcome chats and friend action buttons. */
-export const WELCOME_UNREAD_BADGE = UI_ACCENT;
 /** Значок «есть обновление»: краповый, как точка на вкладке «Профиль» в навбаре. */
 export const WELCOME_UPDATE_BADGE = '#A63A48';
+/** Счётчик непрочитанных / пропущенных в строках чатов и друзей — краповый, цифра белая. */
+export const WELCOME_UNREAD_BADGE = WELCOME_UPDATE_BADGE;
+/** Счётчик у сегмента «Пропущенные» на «Звонках» — акцент; цифра тёмная, белая читалась плохо. */
+export const WELCOME_SEGMENT_BADGE = UI_ACCENT;
+export const WELCOME_SEGMENT_BADGE_TEXT = HOME_NAV_BG;
 export const CROWN_GOLD = '#E4C065';
 /** Скругление «полки» tab bar / шапки и композера чата по краям к контенту. */
 export const WELCOME_CHROME_EDGE_RADIUS = 24;

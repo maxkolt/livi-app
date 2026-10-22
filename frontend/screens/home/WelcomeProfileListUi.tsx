@@ -419,10 +419,10 @@ const styles = StyleSheet.create({
     fontSize: 14,
   },
   countBadge: {
-    minWidth: 17,
-    height: 17,
-    paddingHorizontal: 5,
-    borderRadius: 9,
+    minWidth: 15,
+    height: 15,
+    paddingHorizontal: 4,
+    borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
     // Счётчик в профиле — только об обновлении: краповый, как точка на вкладке «Профиль».
@@ -431,9 +431,11 @@ const styles = StyleSheet.create({
   },
   countBadgeText: {
     color: LIVI.white,
-    fontSize: 10,
+    fontSize: 9.5,
     fontWeight: '700',
-    lineHeight: 12,
+    lineHeight: 11,
+    // Как счётчик в строках чатов: цифры Exo 2 стоят ниже середины строки.
+    transform: [{ translateY: -0.6 }],
   },
   divider: {
     height: StyleSheet.hairlineWidth,

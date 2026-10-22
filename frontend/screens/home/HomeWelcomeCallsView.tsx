@@ -36,7 +36,8 @@ import {
   WELCOME_HEADER_TITLE,
   WELCOME_MUTED_TEXT,
   WELCOME_SEGMENT_LABEL,
-  WELCOME_UNREAD_BADGE,
+  WELCOME_SEGMENT_BADGE,
+  WELCOME_SEGMENT_BADGE_TEXT,
   WELCOME_BRAND_GLYPH_INSET,
   WELCOME_TOP_BAR_SIDE_PAD,
   isWelcomeTabletLayout,
@@ -61,7 +62,7 @@ import {
   useGlassHeaderHeight,
 } from './WelcomeGlassHeader';
 import { friendMatchesNameSearch, getFriendDisplay, displayAvatarLetter } from './friendHelpers';
-import { formatWelcomeChatTime } from './chatPreview';
+import { formatWelcomeCallTime } from './chatPreview';
 import { useCallLog } from './hooks/useCallLog';
 import { deleteCallLogIds, recordCallLog } from './callLog';
 import { consumePendingWelcomeCallsFilter, onPendingWelcomeCallsFilter, setWelcomeCallsMissedFilterActive, setWelcomeCallsTabSelected, setWelcomeViewingMissedCalls, shouldSkipHomeUiSettle } from '../../utils/globalEvents';
@@ -179,7 +180,7 @@ const CallLogRow = memo(function CallLogRow({
     avatarLetter ||
     (friend?.name ? displayAvatarLetter(friend.name) : '') ||
     '—';
-  const timeLabel = at ? formatWelcomeChatTime(at) : '';
+  const timeLabel = at ? formatWelcomeCallTime(at) : '';
   const missed = direction === 'missed';
   const cancelled = direction === 'cancelled';
   const noAnswer = direction === 'no_answer';
@@ -1459,14 +1460,16 @@ const styles = StyleSheet.create({
     borderRadius: 9,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: WELCOME_UNREAD_BADGE,
+    backgroundColor: WELCOME_SEGMENT_BADGE,
     flexShrink: 0,
   },
   missedBadgeText: {
-    color: LIVI.white,
+    color: WELCOME_SEGMENT_BADGE_TEXT,
     fontSize: 10,
     fontWeight: '700',
     lineHeight: 12,
+    // Цифры Exo 2 стоят ниже середины строки — по центру кружка (как в строках чатов).
+    transform: [{ translateY: -0.6 }],
   },
   emptyWrap: {
     paddingTop: 36,

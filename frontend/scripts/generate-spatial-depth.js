@@ -67,9 +67,9 @@ const SEEDS = [
   // которую shapeElements заливает. Точка — у левого края тела.
   { name: 'bubble', at: [560, 430], plane: PLANE.near, pad: 36 },
   { name: 'cube-top', at: [988, 277], plane: PLANE.icons },
-  { name: 'mic', at: [1256, 740], plane: PLANE.icons },
+  { name: 'mic', at: [1264, 954], plane: PLANE.icons },
   // Камера — ниже и наклонена к кубу (build-spatial-stage-hq.js): точка внутри её корпуса.
-  { name: 'camera', at: [235, 1399], plane: PLANE.icons },
+  { name: 'camera', at: [176, 1511], plane: PLANE.icons },
   { name: 'neural-cube', at: [1208, 1872], plane: PLANE.icons },
 ];
 

@@ -17,7 +17,6 @@ import {
   WELCOME_CHROME_EDGE_RADIUS,
   WELCOME_FRIENDS_LIST_INSET,
   WELCOME_HEADER_TITLE,
-  WELCOME_STAGE_BG,
   WELCOME_UPDATE_BADGE,
   isWelcomeTabletLayout,
   UI_GLASS_CONTROL,
@@ -29,6 +28,8 @@ import {
  */
 const ACTIVE_ICON = UI_ACCENT;
 const ACTIVE_LABEL = WELCOME_HEADER_TITLE;
+/** Фигура в круге активного «Профиля» — цвет «таблетки» на экране (как внутри кольца лупы). */
+const PROFILE_ACTIVE_FIGURE = '#4C6273';
 
 export type WelcomeTabId = 'search' | 'friends' | 'fliq' | 'calls' | 'chat' | 'profile';
 
@@ -334,7 +335,7 @@ function HomeWelcomeTabBarInner({
               },
             ]}
           >
-            <Ionicons name="person" size={tabletLayout ? 19 : compactLandscape ? 16 : 17} color={WELCOME_STAGE_BG} />
+            <Ionicons name="person" size={tabletLayout ? 19 : compactLandscape ? 16 : 17} color={PROFILE_ACTIVE_FIGURE} />
           </View>
         ) : (
           <Ionicons name="person-outline" size={iconSize} color={color} />

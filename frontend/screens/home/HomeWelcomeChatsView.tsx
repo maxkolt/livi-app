@@ -1215,20 +1215,24 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   unreadBadge: {
-    minWidth: 17,
-    height: 17,
-    paddingHorizontal: 5,
-    borderRadius: 9,
+    minWidth: 15,
+    height: 15,
+    paddingHorizontal: 4,
+    borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: WELCOME_UNREAD_BADGE,
     flexShrink: 0,
+    // Тот же отступ, что у даты: правый край счётчика — под концом даты («окт.»).
+    marginRight: 6,
   },
   unreadBadgeText: {
     color: LIVI.white,
-    fontSize: 10,
+    fontSize: 9.5,
     fontWeight: '700',
-    lineHeight: 12,
+    lineHeight: 11,
+    // Цифры Exo 2 стоят ниже середины строки — по центру кружка (замерено по пикселям).
+    transform: [{ translateY: -0.6 }],
   },
   emptyWrap: {
     paddingTop: 36,

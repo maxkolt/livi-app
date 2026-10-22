@@ -605,11 +605,12 @@ function roundedPolygon(ck, points, radius) {
 /**
  * Камера — геометрия и тон сняты с прежней (растровой) камеры в этом месте: корпус
  * 39.5×31 с радиусом 5.5, зазор до объектива 2.75, объектив-трапеция 6.4 → 14.2 по
- * полувысоте, поворот 29°.
+ * полувысоте, поворот 29°. С 2026-10-22 ниже прежнего места (94.1, 557) и левее: задняя
+ * треть корпуса уходит под левый край экрана (на S25 Ultra виден x от ~64).
  */
 function drawCamera(ck, canvas, scale) {
-  const cx = 94.1;
-  const cy = 557.0;
+  const cx = 70.0;
+  const cy = 600.0;
   canvas.save();
   canvas.rotate(29, cx, cy);
 
@@ -641,8 +642,10 @@ function drawCamera(ck, canvas, scale) {
   canvas.restore();
 }
 
-/** Во сколько раз микрофон меньше прежнего; центр (501, 309.5) остаётся на месте. */
+/** Во сколько раз микрофон меньше прежнего; уменьшается вокруг прежнего центра (501, 309.5). */
 const MIC_SCALE = 0.85;
+/** С 2026-10-22 микрофон ниже прежнего места и чуть правее. */
+const MIC_SHIFT = [3, 85];
 
 /**
  * Микрофон — пропорции и тон прежнего: капсула 24.75×48.75, дужка — полуокружность r 18.1
@@ -651,6 +654,7 @@ const MIC_SCALE = 0.85;
  */
 function drawMicrophone(ck, canvas, scale) {
   canvas.save();
+  canvas.translate(MIC_SHIFT[0], MIC_SHIFT[1]);
   canvas.translate(501, 309.5);
   canvas.scale(MIC_SCALE, MIC_SCALE);
   canvas.translate(-501, -309.5);
@@ -739,4 +743,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { MAP_ROUND_MARKERS, refineSpatialStage };
+module.exports = { MAP_ROUND_MARKERS, ERASE_RECTS, eraseElement, drawCrispIcons, compositePremultiplied, refineSpatialStage };
