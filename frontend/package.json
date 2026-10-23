@@ -118,7 +118,8 @@
     "autolinking": {
       "android": {
         "buildFromSource": [
-          "expo-av"
+          "expo-av",
+          "expo-video"
         ]
       }
     }

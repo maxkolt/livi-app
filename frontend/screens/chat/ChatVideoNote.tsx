@@ -15,6 +15,7 @@ import Svg, { Circle } from 'react-native-svg';
 import { create } from 'zustand';
 import { MESSAGE_LONG_PRESS_MS } from '../../constants/uiTokens';
 import { UI_ACCENT } from '../home/constants';
+import { claimChatPlayback, releaseChatPlayback } from './chatPlaybackCoordinator';
 
 export const CHAT_VIDEO_NOTE_SIZE = 216;
 const RING_W = 3;
@@ -74,6 +75,8 @@ export const ChatVideoNote = memo(function ChatVideoNote({
   // Кружок ушёл из ленты (чат закрыли, сообщение удалили) — не играет.
   useEffect(
     () => () => {
+      const owner = `video-note:${id}`;
+      releaseChatPlayback(owner);
       if (useActiveVideoNote.getState().activeId === id) useActiveVideoNote.getState().setActive(null);
     },
     [id],
@@ -81,12 +84,21 @@ export const ChatVideoNote = memo(function ChatVideoNote({
 
   const onPress = useCallback(() => {
     if (!active) {
+      const owner = `video-note:${id}`;
+      claimChatPlayback(owner, () => {
+        if (useActiveVideoNote.getState().activeId === id) {
+          useActiveVideoNote.getState().setActive(null);
+        }
+      });
       setActive(id);
       return;
     }
     setPaused((p) => !p);
   }, [active, id, setActive]);
-  const onEnded = useCallback(() => setActive(null), [setActive]);
+  const onEnded = useCallback(() => {
+    releaseChatPlayback(`video-note:${id}`);
+    if (useActiveVideoNote.getState().activeId === id) setActive(null);
+  }, [id, setActive]);
   const onTogglePause = useCallback(() => setPaused((p) => !p), []);
 
   return (

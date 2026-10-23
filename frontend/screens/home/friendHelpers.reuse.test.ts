@@ -1,4 +1,4 @@
-import { reuseUnchangedFriends } from './friendHelpers';
+import { mergeFriendOnlineFromFetch, reuseUnchangedFriends } from './friendHelpers';
 import type { Friend } from './types';
 
 const f = (id: string, over: Partial<Friend> = {}): Friend =>
@@ -30,5 +30,15 @@ describe('reuseUnchangedFriends', () => {
     const next = reuseUnchangedFriends([f('3'), f('1')], prev);
     expect(next).toEqual([prev[2], prev[0]]);
     expect(next[0]).toBe(prev[2]);
+  });
+});
+
+describe('mergeFriendOnlineFromFetch', () => {
+  it('clears stale online=true when the authoritative refresh says offline', () => {
+    expect(mergeFriendOnlineFromFetch(false, true)).toBe(false);
+  });
+
+  it('accepts online=true from the authoritative refresh', () => {
+    expect(mergeFriendOnlineFromFetch(true, false)).toBe(true);
   });
 });

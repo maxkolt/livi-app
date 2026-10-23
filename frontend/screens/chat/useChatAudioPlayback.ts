@@ -5,6 +5,7 @@ import { Audio } from "expo-av";
 import {
   ensureVoiceCachedToLocalFile as ensureVoiceCachedToLocalFileHelper,
 } from "./chatVoiceCache";
+import { claimChatPlayback, releaseChatPlayback } from "./chatPlaybackCoordinator";
 
 type Options = {
   messages: any[];
@@ -13,6 +14,7 @@ type Options = {
 
 export function useChatAudioPlayback({ messages, resolveMediaUri }: Options) {
   const audioSoundRef = React.useRef<Audio.Sound | null>(null);
+  const audioPlaybackOwnerRef = React.useRef<string | null>(null);
   const audioPlayGenerationRef = React.useRef(0);
   const [playingAudioId, setPlayingAudioId] = React.useState<string | null>(null);
   const voiceAudioCacheRef = React.useRef<Map<string, string>>(new Map());
@@ -32,6 +34,9 @@ export function useChatAudioPlayback({ messages, resolveMediaUri }: Options) {
 
   const stopAudioPlayback = React.useCallback(async () => {
     audioPlayGenerationRef.current += 1;
+    const owner = audioPlaybackOwnerRef.current;
+    audioPlaybackOwnerRef.current = null;
+    if (owner) releaseChatPlayback(owner);
     const prev = audioSoundRef.current;
     audioSoundRef.current = null;
     setPlayingAudioId(null);
@@ -59,6 +64,9 @@ export function useChatAudioPlayback({ messages, resolveMediaUri }: Options) {
         await stopAudioPlayback();
 
         playGen = ++audioPlayGenerationRef.current;
+        const playbackOwner = `audio:${mid}`;
+        audioPlaybackOwnerRef.current = playbackOwner;
+        claimChatPlayback(playbackOwner, stopAudioPlayback);
         const fallbackDurationMs = Math.max(0, Number(m?.duration || 0) * 1000);
         setPlayingAudioState({ id: mid, durationMs: fallbackDurationMs, positionMs: 0 });
         setPlayingAudioId(mid);
@@ -110,6 +118,9 @@ export function useChatAudioPlayback({ messages, resolveMediaUri }: Options) {
         audioSoundRef.current = sound;
       } catch {
         if (playGen !== 0 && playGen === audioPlayGenerationRef.current) {
+          const owner = audioPlaybackOwnerRef.current;
+          audioPlaybackOwnerRef.current = null;
+          if (owner) releaseChatPlayback(owner);
           setPlayingAudioId(null);
           setPlayingAudioState(null);
         }

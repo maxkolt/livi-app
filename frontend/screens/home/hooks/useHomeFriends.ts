@@ -19,6 +19,7 @@ import {
   friendsCacheKeyForIdentity,
   mapToFriend,
   mergeFriendBusyFromFetch,
+  mergeFriendOnlineFromFetch,
   reuseUnchangedFriends,
 } from '../friendHelpers';
 import { shouldSkipHomeUiSettle } from '../../../utils/globalEvents';
@@ -189,15 +190,11 @@ export function useHomeFriends({
                 ? String(f.avatarThumbB64 || '')
                 : String(f.avatarThumbB64 || prevOne?.avatarThumbB64 || '');
 
-              let mergedOnlineCorr: boolean;
-              if (f.online) {
+              const mergedOnlineCorr = mergeFriendOnlineFromFetch(!!f.online, !!prevOne?.online);
+              if (mergedOnlineCorr) {
                 friendLastOnlineTrueAtRef.current.set(f.id, Date.now());
-                mergedOnlineCorr = true;
-              } else if (prevOne?.online) {
-                mergedOnlineCorr = true;
               } else {
                 friendLastOnlineTrueAtRef.current.delete(f.id);
-                mergedOnlineCorr = false;
               }
 
               return {
@@ -223,15 +220,11 @@ export function useHomeFriends({
               ? String(f.avatarThumbB64 || '')
               : String(f.avatarThumbB64 || prevOne?.avatarThumbB64 || '');
 
-            let mergedOnlineMain: boolean;
-            if (f.online) {
+            const mergedOnlineMain = mergeFriendOnlineFromFetch(!!f.online, !!prevOne?.online);
+            if (mergedOnlineMain) {
               friendLastOnlineTrueAtRef.current.set(f.id, Date.now());
-              mergedOnlineMain = true;
-            } else if (prevOne?.online) {
-              mergedOnlineMain = true;
             } else {
               friendLastOnlineTrueAtRef.current.delete(f.id);
-              mergedOnlineMain = false;
             }
 
             return {

@@ -40,12 +40,6 @@ export function emitPresenceUpdateIfChanged(
 /** Единый debounce офлайн в списке друзей и шапке чата (см. HomeScreen / ChatScreen). */
 export const PRESENCE_OFFLINE_DEBOUNCE_MS = 350;
 
-/**
- * Сразу после connect пустой массив presence часто приходит при гонке reauth / комнаты — не затираем
- * последний непустой снимок (иначе мерцание «онлайн → офлайн → онлайн»).
- */
-const PRESENCE_EMPTY_ONLINE_LIST_GRACE_MS = 5000;
-
 /** Совпадает с серверным списком «видимых» онлайн (в т.ч. ушёл в фон → нет в списке). */
 function ingestVisibleOnlinePresenceList(data: unknown) {
   if (!Array.isArray(data)) return;
@@ -59,25 +53,11 @@ function ingestVisibleOnlinePresenceList(data: unknown) {
   shared.lastVisibleOnlineUserIds = next;
 }
 
-function __normalizePresenceUpdatePayload(raw: unknown): unknown {
-  if (!Array.isArray(raw)) return raw;
-  if (
-    raw.length === 0 &&
-    shared.lastVisibleOnlineUserIds.size > 0 &&
-    Date.now() - shared.lastSocketConnectAt < PRESENCE_EMPTY_ONLINE_LIST_GRACE_MS
-  ) {
-    const msSinceConnect = Date.now() - shared.lastSocketConnectAt;
-    logger.debug("[socket] presence: skip empty online list during post-connect grace", {
-      preservedCount: shared.lastVisibleOnlineUserIds.size,
-      msSinceConnect,
-    });
-    return Array.from(shared.lastVisibleOnlineUserIds);
-  }
-  return raw;
-}
-
 function __dispatchPresenceUpdate(raw: unknown): void {
-  const payload = __normalizePresenceUpdatePayload(raw);
+  // The server emits this snapshot only after the socket is identity-bound.
+  // An empty list is authoritative: preserving the pre-reconnect list here left
+  // offline friends stuck online until the process was restarted.
+  const payload = raw;
   if (Array.isArray(payload)) {
     ingestVisibleOnlinePresenceList(payload);
   }

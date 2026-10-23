@@ -1,0 +1,35 @@
+--- a/android/src/main/java/expo/modules/video/MediaMetadataRetriever.kt
++++ b/android/src/main/java/expo/modules/video/MediaMetadataRetriever.kt
+@@ -2,7 +2,6 @@
+ 
+ import android.graphics.Bitmap
+ import android.media.MediaMetadataRetriever
+-import android.os.Build
+ import expo.modules.video.records.VideoThumbnailOptions
+ import kotlin.math.max
+ import kotlin.math.roundToLong
+@@ -28,19 +27,14 @@
+   val sizeLimit = options?.toNativeSizeLimit()
+ 
++  // LiVi: Samsung/Qualcomm devices can return a solid green bitmap from
++  // getScaledFrameAtTime for CameraX MP4 recordings. Decode the full frame
++  // first and scale the Bitmap in software; this uses the reliable retriever
++  // path and only runs once per outgoing video note.
+   val bitmap = if (sizeLimit != null) {
+     val (maxWidth, maxHeight) = sizeLimit
+-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+-      getScaledFrameAtTime(
+-        requestedTime.inWholeMicroseconds,
+-        MediaMetadataRetriever.OPTION_CLOSEST,
+-        maxWidth,
+-        maxHeight
+-      )
+-    } else {
+-      getFrameAtTime(requestedTime.inWholeMicroseconds, MediaMetadataRetriever.OPTION_CLOSEST)
+-        ?.constrainToDimensions(maxWidth, maxHeight)
+-    }
++    getFrameAtTime(requestedTime.inWholeMicroseconds, MediaMetadataRetriever.OPTION_CLOSEST)
++      ?.constrainToDimensions(maxWidth, maxHeight)
+   } else {
+     getFrameAtTime(requestedTime.inWholeMicroseconds, MediaMetadataRetriever.OPTION_CLOSEST)
+   } ?: throw IllegalStateException("Failed to generate thumbnail")

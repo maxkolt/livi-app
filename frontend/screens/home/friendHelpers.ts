@@ -79,6 +79,15 @@ export function mergeFriendBusyFromFetch(serverBusy: boolean, _prevBusy = false)
   return !!serverBusy;
 }
 
+/**
+ * A successful friends fetch is an authoritative presence snapshot. Keeping a
+ * previous `true` here makes an offline friend stay online forever when the
+ * realtime offline event was missed during a network/VPN reconnect.
+ */
+export function mergeFriendOnlineFromFetch(serverOnline: boolean, _prevOnline = false): boolean {
+  return !!serverOnline;
+}
+
 function sameFriendFields(a: Friend, b: Friend): boolean {
   const ra = a as Record<string, unknown>;
   const rb = b as Record<string, unknown>;
