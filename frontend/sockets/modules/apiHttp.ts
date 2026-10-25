@@ -1,5 +1,5 @@
 // frontend/sockets/modules/apiHttp.ts
-import { getInstallId } from "../../utils/installId";
+import { getInstallAuthHeaders } from "../../utils/installId";
 import { API_BASE } from "./constants";
 import { shared } from "./shared";
 
@@ -9,9 +9,7 @@ import { shared } from "./shared";
  * бросает, только если сеть не ответила (нет связи / таймаут).
  */
 export async function postApiJson<T = any>(path: string, body: unknown, timeoutMs: number): Promise<T> {
-  const installId = await getInstallId().catch(() => "");
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (installId) headers["x-install-id"] = String(installId);
+  const headers: Record<string, string> = { "Content-Type": "application/json", ...(await getInstallAuthHeaders()) };
   if (shared.currentUserId) headers["x-user-id"] = String(shared.currentUserId);
 
   const controller = new AbortController();

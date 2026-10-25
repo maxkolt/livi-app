@@ -19,7 +19,7 @@ jest.mock('expo-file-system', () => ({
 }));
 jest.mock('expo-image-manipulator', () => ({ manipulateAsync: jest.fn(), SaveFormat: { PNG: 'png', JPEG: 'jpeg' } }));
 jest.mock('./logger', () => ({ logger: { warn: jest.fn(), error: jest.fn(), debug: jest.fn(), info: jest.fn() } }));
-jest.mock('./installId', () => ({ getInstallId: jest.fn(async () => 'inst') }));
+jest.mock('./installId', () => ({ getInstallAuthHeaders: jest.fn(async () => ({ 'x-install-id': 'inst' })) }));
 jest.mock('../sockets/socket', () => ({ API_BASE: 'https://api.test' }));
 
 const mockFetch = jest.fn();

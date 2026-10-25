@@ -1,5 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { getInstallId, getInstallSecret } from "../../utils/installId";
+import { fetchWithTimeout } from "../../utils/fetchWithTimeout";
+import { getInstallAuthHeaders, getInstallId, getInstallSecret } from "../../utils/installId";
 import { __notifyCurrentUserId } from "./authState";
 import { API_BASE, isOid } from "./constants";
 import { emitAck } from "./emit";
@@ -376,7 +377,11 @@ export function clearCurrentUserId() {
 async function whoamiViaRest(): Promise<string | null> {
   try {
     const installId = await getInstallId();
-    const r = await fetch(`${API_BASE}/whoami?installId=${encodeURIComponent(installId)}`);
+    const r = await fetchWithTimeout(
+      `${API_BASE}/whoami?installId=${encodeURIComponent(installId)}`,
+      { headers: await getInstallAuthHeaders() },
+      10_000,
+    );
     const j = await r.json();
     if (j?.ok && isOid(j?.userId)) {
       return String(j.userId);

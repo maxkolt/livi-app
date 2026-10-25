@@ -2,7 +2,7 @@
 import * as FileSystem from 'expo-file-system';
 import * as ImageManipulator from 'expo-image-manipulator';
 import { logger } from './logger';
-import { getInstallId } from './installId';
+import { getInstallAuthHeaders } from './installId';
 import { API_BASE } from '../sockets/socket';
 
 const API_BASE_URL = API_BASE;
@@ -114,7 +114,7 @@ type MultipartAttempt =
 async function uploadMultipartOnce(
   fileUri: string,
   type: 'image' | 'audio' | 'video',
-  installId: string,
+  authHeaders: Record<string, string>,
   options: MediaUploadOptions | undefined,
   onCancelledByCaller: () => void,
 ): Promise<MultipartAttempt> {
@@ -123,7 +123,7 @@ async function uploadMultipartOnce(
     uploadType: FileSystem.FileSystemUploadType.MULTIPART,
     fieldName: 'file',
     headers: {
-      ...(installId ? { 'x-install-id': String(installId) } : {}),
+      ...authHeaders,
     },
   });
   let timedOut = false;
@@ -186,7 +186,7 @@ export const uploadMediaToServer = async (
       // Проверить не удалось — пусть решит сама загрузка.
     }
 
-    const installId = await getInstallId().catch(() => '');
+    const authHeaders = await getInstallAuthHeaders();
     
     // IMPORTANT:
     // Uploading raw images as base64-in-JSON is very heavy (size +33%),
@@ -221,13 +221,13 @@ export const uploadMediaToServer = async (
     let cancelledByCaller = false;
     if (multipartSupported !== false) {
       if (onProgress) onProgress(15);
-      let mp = await uploadMultipartOnce(normalizedUri, type, installId, options, () => {
+      let mp = await uploadMultipartOnce(normalizedUri, type, authHeaders, options, () => {
         cancelledByCaller = true;
       });
       // После смены сети первая попытка падает на старом соединении из пула —
       // вторая сразу берёт новое.
       if (mp.kind === 'network' && mp.stale && !cancelledByCaller) {
-        mp = await uploadMultipartOnce(normalizedUri, type, installId, options, () => {
+        mp = await uploadMultipartOnce(normalizedUri, type, authHeaders, options, () => {
           cancelledByCaller = true;
         });
       }
@@ -307,7 +307,7 @@ export const uploadMediaToServer = async (
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(installId ? { 'x-install-id': String(installId) } : {}),
+          ...authHeaders,
         },
         body: JSON.stringify({
           dataUri,

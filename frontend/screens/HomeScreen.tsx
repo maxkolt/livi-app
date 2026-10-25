@@ -53,7 +53,7 @@ import { t } from '../utils/i18n';
 import type { Lang } from '../utils/i18n';
 import { useLang } from '../store/lang';
 
-import { getInstallId, getInstallSecret, resetInstallId } from '../utils/installId';
+import { getInstallAuthHeaders, getInstallId, getInstallSecret, resetInstallId } from '../utils/installId';
 import { logger } from '../utils/logger';
 import { markCallPerf, callPerfSpan } from '../utils/callPerfTrace';
 import { trimNick } from '../utils/userDisplayName';
@@ -4752,8 +4752,6 @@ const handleClearNick = useCallback(async () => {
   const handleDeleteAvatar = useCallback(async () => {
     try {
       const currentUserId = String(getCurrentUserId() || '').trim();
-      const resolvedInstallId = String(installId || (await getInstallId().catch(() => ''))).trim();
-
       const deleteViaSocket = async (): Promise<{ ok: boolean; error?: string }> => {
         return new Promise((resolve) => {
           const timeout = setTimeout(() => {
@@ -4774,8 +4772,7 @@ const handleClearNick = useCallback(async () => {
 
       const deleteViaHttp = async (): Promise<{ ok: boolean; error?: string }> => {
         if (!currentUserId) return { ok: false, error: 'no_user_id' };
-        const headers: Record<string, string> = { 'x-user-id': currentUserId };
-        if (resolvedInstallId) headers['x-install-id'] = resolvedInstallId;
+        const headers: Record<string, string> = { 'x-user-id': currentUserId, ...(await getInstallAuthHeaders()) };
         try {
           const r = await fetch(`${API_BASE}/api/avatar/${encodeURIComponent(currentUserId)}`, {
             method: 'DELETE',
@@ -4827,7 +4824,7 @@ const handleClearNick = useCallback(async () => {
       console.error('[handleDeleteAvatar] Error:', e);
       showAppAlert(t('errorTitle', lang), t('avatarDeleteFailed', lang));
     }
-  }, [nick, lang, installId]);
+  }, [nick, lang]);
 
 
   /* avatar pick flow (gallery/camera/files) */

@@ -4,7 +4,6 @@ import fs from 'fs';
 import path from 'path';
 import mongoose from 'mongoose';
 import multer from 'multer';
-import Install from '../models/Install';
 import { checkRateLimit } from '../utils/rateLimit';
 
 const router = Router();
@@ -113,8 +112,8 @@ async function authenticateUpload(req: express.Request, res: express.Response, r
     res.status(503).json({ ok: false, error: 'database_unavailable' });
     return null;
   }
-  const inst = await Install.findOne({ installId }).select('user').lean();
-  const authedUserId = inst?.user ? String((inst as any).user) : '';
+  // Пользователя уже определил общий middleware (installId + секрет установки).
+  const authedUserId = String((req as any).userId || '');
   if (!authedUserId) {
     res.status(401).json({ ok: false, error: 'unauthorized' });
     return null;

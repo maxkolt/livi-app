@@ -3,7 +3,8 @@ import { Platform } from 'react-native';
 import * as FileSystem from 'expo-file-system';
 import * as ImageManipulator from 'expo-image-manipulator';
 import { API_BASE } from '../sockets/socket';
-import { getInstallId } from './installId';
+import { getInstallAuthHeaders } from './installId';
+import { fetchWithTimeout } from './fetchWithTimeout';
 import { useMe } from '../store/me';
 import { logger } from './logger';
 
@@ -86,20 +87,8 @@ export async function normalizeLocalImageUri(
   return dest;
 }
 
-/** fetch с таймаутом */
-async function fetchWithTimeout(url: string, opts: RequestInit = {}, ms = 30000): Promise<Response> {
-  const controller = new AbortController();
-  const id = setTimeout(() => controller.abort(), ms);
-  try {
-    const res = await fetch(url, { ...opts, signal: controller.signal });
-    return res;
-  } finally {
-    clearTimeout(id);
-  }
-}
-
 /** Серверный фолбэк */
-async function uploadViaServerFallback(fileUri: string, userId?: string, installId?: string): Promise<{ avatar: string; avatarVer: number }> {
+async function uploadViaServerFallback(fileUri: string, userId?: string): Promise<{ avatar: string; avatarVer: number }> {
 
   let working = fileUri;
   try {
@@ -134,8 +123,8 @@ async function uploadViaServerFallback(fileUri: string, userId?: string, install
     return { res, json };
   };
 
-  // SECURITY: only installId-based auth is supported
-  let attempt = await post(installId ? { 'x-install-id': installId } : {});
+  // SECURITY: авторизация только по установке (installId + секрет)
+  let attempt = await post(await getInstallAuthHeaders());
 
   if (!attempt.res.ok || !attempt.json?.ok) {
     const reason = attempt.json?.error || `server_fallback_failed (${attempt.res.status})`;
@@ -151,12 +140,10 @@ async function uploadAvatarToCloudinary(localUri: string, assetId?: string | nul
   try {
     const fileUri = await normalizeLocalImageUri(localUri, assetId);
 
-    // Получаем userId и installId для авторизации
     const userId = useMe.getState().me?.id;
-    const installId = await getInstallId();
 
     // Загружаем на сервер через /api/upload/avatar/dataUri
-    const result = await uploadViaServerFallback(fileUri, userId, installId);
+    const result = await uploadViaServerFallback(fileUri, userId);
 
     return result;
   } catch (error) {

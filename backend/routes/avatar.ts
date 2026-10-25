@@ -1,7 +1,6 @@
 import { Router } from 'express';
 import mongoose from 'mongoose';
 import User from '../models/User';
-import Install from '../models/Install';
 import { buildAvatarDataUris } from '../utils/avatars';
 import { getFriendIds } from '../utils/friendshipUtils';
 
@@ -17,8 +16,8 @@ async function resolveAuthedUserId(req: any): Promise<{ userId?: string; error?:
   if (mongoose.connection.readyState !== 1) {
     return { error: 'database_unavailable' };
   }
-  const inst = await Install.findOne({ installId }).select('user').lean();
-  const fromInstall = inst?.user ? String((inst as any).user) : '';
+  // Пользователя уже определил общий middleware (installId + секрет установки).
+  const fromInstall = String(req.userId || '');
   if (!isOid(fromInstall)) return { error: 'unauthorized' };
   return { userId: fromInstall };
 }

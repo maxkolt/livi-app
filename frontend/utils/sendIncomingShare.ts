@@ -1,13 +1,13 @@
 import * as FileSystem from 'expo-file-system';
 import { uploadMediaToServer } from './mediaUpload';
-import { getInstallId } from './installId';
+import { getInstallAuthHeaders } from './installId';
 import { API_BASE, getCurrentUserId, sendMessage } from '../sockets/socket';
 import type { IncomingShareItem } from './incomingShare';
 import { appendOutgoingPendingLocal } from '../screens/chat/appendOutgoingPendingLocal';
 import { createOptimisticChatMessageId } from '../screens/chat/chatMessageIds';
 
 async function uploadRawShareFile(localUri: string): Promise<string> {
-  const installId = await getInstallId().catch(() => '');
+  const authHeaders = await getInstallAuthHeaders();
   const normalizedUri = localUri.startsWith('file://') ? localUri : `file://${localUri}`;
   try {
     const mpUrl = `${API_BASE}/api/upload/media/multipart`;
@@ -16,7 +16,7 @@ async function uploadRawShareFile(localUri: string): Promise<string> {
       uploadType: FileSystem.FileSystemUploadType.MULTIPART,
       fieldName: 'file',
       headers: {
-        ...(installId ? { 'x-install-id': String(installId) } : {}),
+        ...authHeaders,
       },
     });
     if (mpRes.status >= 200 && mpRes.status < 300) {

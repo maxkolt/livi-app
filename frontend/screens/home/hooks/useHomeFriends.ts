@@ -5,7 +5,7 @@ import socket, {
   API_BASE,
   getCurrentUserId,
 } from '../../../sockets/socket';
-import { getInstallId } from '../../../utils/installId';
+import { getInstallAuthHeaders, getInstallId } from '../../../utils/installId';
 import { logger } from '../../../utils/logger';
 import { putThumb, warmAvatar } from '../../../utils/avatarCache';
 import { primeCallAvatarsFromFriends } from '../../../utils/callAvatarPrime';
@@ -106,7 +106,7 @@ export function useHomeFriends({
                   method: 'GET',
                   headers: {
                     'Content-Type': 'application/json',
-                    'x-install-id': String(id),
+                    ...(await getInstallAuthHeaders()),
                   },
                   signal: controller.signal,
                 });

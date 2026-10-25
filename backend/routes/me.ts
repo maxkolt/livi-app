@@ -1,7 +1,6 @@
 // backend/routes/me.ts
 import { Router } from 'express';
 import UserModel from '../models/User';
-import Install from '../models/Install';
 import mongoose from 'mongoose';
 import type { Server as IOServer } from 'socket.io';
 import { sendPushToUser, upsertExpoPushToken } from '../utils/push';
@@ -277,8 +276,8 @@ router.post('/push-token', async (req, res) => {
     if (mongoose.connection.readyState !== 1) {
       return res.status(503).json({ ok: false, error: 'database_unavailable' });
     }
-    const inst = await Install.findOne({ installId }).select('user').lean();
-    const userId = inst?.user ? String((inst as any).user) : '';
+    // Пользователя уже определил общий middleware (installId + секрет установки).
+    const userId = String((req as any).userId || '');
     if (!userId) {
       return res.status(401).json({ ok: false, error: 'unauthorized' });
     }

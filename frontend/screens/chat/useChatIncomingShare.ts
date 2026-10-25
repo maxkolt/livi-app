@@ -4,7 +4,7 @@ import React from "react";
 import * as FileSystem from "expo-file-system";
 import { sendMessage as sendSocketMessage } from "../../sockets/socket";
 import { API_BASE } from "../../sockets/socket";
-import { getInstallId } from "../../utils/installId";
+import { getInstallAuthHeaders } from "../../utils/installId";
 import type { IncomingShareItem } from "../../utils/incomingShare";
 import { t, type Lang } from "../../utils/i18n";
 import { outgoingStatusFromSendResult } from "./chatMessageIds";
@@ -58,7 +58,7 @@ export function useChatIncomingShare({
   );
 
   const uploadRawShareFile = React.useCallback(async (localUri: string) => {
-    const installId = await getInstallId().catch(() => '');
+    const authHeaders = await getInstallAuthHeaders();
     const normalizedUri = localUri.startsWith('file://') ? localUri : `file://${localUri}`;
     try {
       const mpUrl = `${API_BASE}/api/upload/media/multipart`;
@@ -67,7 +67,7 @@ export function useChatIncomingShare({
         uploadType: FileSystem.FileSystemUploadType.MULTIPART,
         fieldName: 'file',
         headers: {
-          ...(installId ? { 'x-install-id': String(installId) } : {}),
+          ...authHeaders,
         },
       });
       if (mpRes.status >= 200 && mpRes.status < 300) {

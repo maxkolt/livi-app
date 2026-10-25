@@ -1,4 +1,4 @@
-import { getInstallId } from "../../utils/installId";
+import { getInstallAuthHeaders } from "../../utils/installId";
 import { logger } from "../../utils/logger";
 import { API_BASE, isOid } from "./constants";
 import { emitAck } from "./emit";
@@ -22,9 +22,7 @@ export function getMyProfile() {
     }>("profile:me", undefined, 8000);
 
   const viaHttp = async () => {
-    const installId = await getInstallId().catch(() => "");
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (installId) headers["x-install-id"] = String(installId);
+    const headers: Record<string, string> = { "Content-Type": "application/json", ...(await getInstallAuthHeaders()) };
     if (shared.currentUserId) headers["x-user-id"] = String(shared.currentUserId);
 
     const timeouts = [5000, 12000];
@@ -104,9 +102,7 @@ export function updateProfile(patch: { nick?: string; avatar?: string }) {
   };
 
   const viaHttp = async () => {
-    const installId = await getInstallId().catch(() => "");
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (installId) headers["x-install-id"] = String(installId);
+    const headers: Record<string, string> = { "Content-Type": "application/json", ...(await getInstallAuthHeaders()) };
     if (shared.currentUserId) headers["x-user-id"] = String(shared.currentUserId);
 
     const timeouts = [5000, 12000];

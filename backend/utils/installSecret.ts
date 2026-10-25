@@ -68,3 +68,30 @@ export function isDeviceBoundInstallId(installId: unknown): boolean {
   const id = String(installId || '');
   return /^inst_android_[A-Za-z0-9]{8,}$/.test(id);
 }
+
+export type HttpInstallAuthDecision = {
+  /** allow — секрет верный; legacy — установка без обязательного секрета; reject — не пускать. */
+  result: 'allow' | 'legacy' | 'reject';
+  /** Первый верный секрет по HTTP: с этого момента для установки он обязателен. */
+  markHttpSecretSeen: boolean;
+};
+
+/**
+ * Авторизация HTTP-запроса по x-install-id. Раньше одного installId хватало для любого REST,
+ * а он светится в логах и ссылках. Старые сборки секрет по HTTP не шлют, поэтому он обязателен,
+ * когда установка уже присылала его по HTTP (клиент обновлён) или включён режим requireAll
+ * (HTTP_INSTALL_SECRET_REQUIRED=1 — когда старые сборки сойдут на нет).
+ */
+export function decideHttpInstallAuth(input: {
+  storedHash?: string | null;
+  providedSecret?: string | null;
+  httpSecretSeen: boolean;
+  requireAll: boolean;
+}): HttpInstallAuthDecision {
+  if (!input.storedHash) return { result: 'legacy', markHttpSecretSeen: false };
+  if (input.providedSecret && verifyInstallSecret(input.providedSecret, input.storedHash)) {
+    return { result: 'allow', markHttpSecretSeen: !input.httpSecretSeen };
+  }
+  const required = input.requireAll || input.httpSecretSeen;
+  return { result: required ? 'reject' : 'legacy', markHttpSecretSeen: false };
+}

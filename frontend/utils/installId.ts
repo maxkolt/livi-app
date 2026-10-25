@@ -21,11 +21,14 @@ function randomHex(byteLength: number): string {
 }
 
 let installSecretLoadPromise: Promise<string | null> | null = null;
+/** Прочитанный секрет: его шлёт каждый HTTP-запрос, а чтение SecureStore — расшифровка в Keystore. */
+let installSecretCache: string | null = null;
 
 /** Возвращает (создавая при первом вызове) секрет установки. На web возвращает null —
  * SecureStore недоступен, эти клиенты остаются в legacy-режиме (без installSecret). */
 export async function getInstallSecret(): Promise<string | null> {
   if (Platform.OS === 'web') return null;
+  if (installSecretCache) return installSecretCache;
   if (!installSecretLoadPromise) {
     installSecretLoadPromise = (async () => {
       try {
@@ -34,6 +37,7 @@ export async function getInstallSecret(): Promise<string | null> {
           secret = randomHex(32); // 256 бит энтропии
           await SecureStore.setItemAsync(SECRET_KEY, secret);
         }
+        installSecretCache = secret;
         return secret;
       } catch (e) {
         return null;
@@ -143,6 +147,7 @@ export async function getInstallId(): Promise<string> {
 export async function regenerateRandomInstallId(): Promise<string> {
   installIdLoadPromise = null;
   installSecretLoadPromise = null;
+  installSecretCache = null;
   const id = `inst_${randomHex(12)}`;
   if (Platform.OS !== 'web') {
     await setSecure(KEY, id);
@@ -155,9 +160,27 @@ export async function regenerateRandomInstallId(): Promise<string> {
 
 export async function resetInstallId(): Promise<void> {
   installIdLoadPromise = null;
+  installSecretLoadPromise = null;
+  installSecretCache = null;
   if (Platform.OS !== 'web') {
     await delSecure(KEY);
     try { await SecureStore.deleteItemAsync(SECRET_KEY); } catch {}
   }
   await AsyncStorage.removeItem(KEY);
+}
+
+/**
+ * Заголовки авторизации для HTTP API: installId и секрет установки. Сервер сверяет секрет с
+ * хэшем, сохранённым при identity:attach, — одного installId (он виден в логах и ссылках)
+ * для входа от имени пользователя недостаточно.
+ */
+export async function getInstallAuthHeaders(): Promise<Record<string, string>> {
+  const [installId, installSecret] = await Promise.all([
+    getInstallId().catch(() => ''),
+    getInstallSecret().catch(() => null),
+  ]);
+  const headers: Record<string, string> = {};
+  if (installId) headers['x-install-id'] = String(installId);
+  if (installSecret) headers['x-install-secret'] = installSecret;
+  return headers;
 }

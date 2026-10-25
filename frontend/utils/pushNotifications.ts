@@ -15,7 +15,8 @@ import {
   beginEarlyIncomingCallAccept,
   getIncomingCallScreenState,
 } from '../sockets/socket';
-import { getInstallId } from './installId';
+import { getInstallAuthHeaders, getInstallId } from './installId';
+import { fetchWithTimeout } from './fetchWithTimeout';
 import { logger } from './logger';
 import { trackReleaseError, trackReleaseEvent } from './telemetry';
 import { stopIncomingCallAlert } from './incomingCallAlert';
@@ -1893,12 +1894,12 @@ export async function registerAndSendPushToken(userId?: string, options?: Regist
       if (Platform.OS === 'android') {
         logger.info('[push] registering token', { hasFcmToken: !!fcmToken });
       }
-      const resp = await fetch(`${API_BASE}/api/push-token`, {
+      const resp = await fetchWithTimeout(`${API_BASE}/api/push-token`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'x-user-id': String(userId),
-          'x-install-id': String(installId),
+          ...(await getInstallAuthHeaders()),
         },
         body: JSON.stringify(body),
       }).catch((e) => {

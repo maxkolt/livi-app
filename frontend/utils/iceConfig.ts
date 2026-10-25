@@ -1,7 +1,7 @@
 // frontend/utils/iceConfig.ts
 import { Platform } from 'react-native';
 import { API_BASE } from '../sockets/socket';
-import { getInstallId } from './installId';
+import { getInstallAuthHeaders } from './installId';
 
 let cachedConfig: RTCConfiguration | null = null;
 let cacheUntil = 0;
@@ -255,11 +255,10 @@ async function fetchIceConfiguration(
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     const timeoutMs = timeoutPerAttempt[attempt - 1] ?? 5000;
     try {
-      const installId = await getInstallId().catch(() => '');
       const headers: Record<string, string> = {
         'Accept': 'application/json',
+        ...(await getInstallAuthHeaders()),
       };
-      if (installId) headers['x-install-id'] = String(installId);
 
       const r = await fetchWithHedge(
         `${API_BASE}/api/turn-credentials`,

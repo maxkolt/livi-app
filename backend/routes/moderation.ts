@@ -1,4 +1,5 @@
-import { Router } from 'express';
+import { Router, type Request } from 'express';
+import { checkRateLimit } from '../utils/rateLimit';
 import vision from '@google-cloud/vision';
 import { logger } from '../utils/logger';
 
@@ -81,9 +82,31 @@ function isSafeSearchHit(value: string, allowLikely: boolean): boolean {
   return allowLikely && value === 'LIKELY';
 }
 
+/**
+ * Каждый вызов — платный запрос Google Vision. Рандом шлёт кадр не чаще раза в 1.5 с (до 40/мин),
+ * а 429 клиент считает отказом сервиса и закрывает видео (fail-closed) — лимит выше нормы с запасом.
+ */
+const MODERATE_PER_USER_PER_MIN = 60;
+/** Старые сборки шлют кадр без заголовков установки — для них лимит по IP (за NAT бывает несколько человек). */
+const MODERATE_PER_IP_PER_MIN = 120;
+
+function clientIp(req: Request): string {
+  const xf = req.headers['x-forwarded-for'];
+  return typeof xf === 'string' && xf.trim() ? xf.split(',')[0].trim() : String(req.socket.remoteAddress || '');
+}
+
 router.post('/moderate', async (req, res) => {
   if (!moderationEnabled) {
     return res.status(404).json({ ok: false, error: 'moderation_disabled' });
+  }
+
+  const userId = String((req as any).userId || '');
+  const rl = userId
+    ? await checkRateLimit(`moderate:user:${userId}`, MODERATE_PER_USER_PER_MIN, 60_000)
+    : await checkRateLimit(`moderate:ip:${clientIp(req)}`, MODERATE_PER_IP_PER_MIN, 60_000);
+  if (!rl.ok) {
+    res.setHeader('Retry-After', String(rl.retryAfterSec || 60));
+    return res.status(429).json({ ok: false, error: 'rate_limited' });
   }
 
   try {

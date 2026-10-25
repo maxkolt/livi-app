@@ -35,7 +35,7 @@ import { setIoInstance } from './utils/ioInstance';
 import { setGetEffectiveBusy } from './utils/effectiveBusy';
 import User from './models/User';
 import Install from './models/Install';
-import { verifyInstallSecret } from './utils/installSecret';
+import { decideHttpInstallAuth, verifyInstallSecret } from './utils/installSecret';
 import { attachCallKeepAlive, deliverCallKeepAlive, getCallKeepAliveStats, type CallKeepAliveAuth } from './utils/callKeepAlive';
 import MissedCall from './models/MissedCall';
 import createChatRouter from './routes/chat';
@@ -247,7 +247,7 @@ app.use(
       };
     })(),
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'x-user-id', 'x-install-id'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'x-user-id', 'x-install-id', 'x-install-secret'],
   })
 );
 
@@ -261,7 +261,9 @@ app.use((req, res, next) => {
 app.use('/chat', createChatRouter());
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-/** Резолвим userId ТОЛЬКО по installId (не доверяем x-user-id). */
+const HTTP_INSTALL_SECRET_REQUIRED = String(process.env.HTTP_INSTALL_SECRET_REQUIRED || '').trim() === '1';
+
+/** Резолвим userId ТОЛЬКО по installId + секрету установки (не доверяем x-user-id). */
 app.use(async (req, _res, next) => {
   try {
     const installId = String(req.header('x-install-id') || '').trim();
@@ -269,10 +271,24 @@ app.use(async (req, _res, next) => {
 
     if (installId && mongoose.connection.readyState === 1) {
       try {
-        const rec = (await Install.findOne({ installId }).select('user').lean()) as
-          | { user?: any }
+        const rec = (await Install.findOne({ installId }).select('user installSecretHash httpSecretSeenAt').lean()) as
+          | { user?: any; installSecretHash?: string; httpSecretSeenAt?: Date }
           | null;
-        if (rec?.user && isOid(String(rec.user))) {
+        const auth = decideHttpInstallAuth({
+          storedHash: rec?.installSecretHash,
+          providedSecret: req.header('x-install-secret'),
+          httpSecretSeen: !!rec?.httpSecretSeenAt,
+          requireAll: HTTP_INSTALL_SECRET_REQUIRED,
+        });
+        if (auth.result === 'reject') {
+          logger.warn('[auth] rejected: missing or invalid x-install-secret', {
+            installIdPrefix: installId.slice(0, 20),
+            path: req.path,
+          });
+        } else if (rec?.user && isOid(String(rec.user))) {
+          if (auth.markHttpSecretSeen) {
+            void Install.updateOne({ installId }, { $set: { httpSecretSeenAt: new Date() } }).catch(() => undefined);
+          }
           const uid = String(rec.user);
           (req as any).userId = uid;
 
@@ -671,18 +687,29 @@ app.get('/api/turn-credentials', async (_req, res) => {
 
 app.get('/whoami', async (req, res) => {
   try {
-    const installId = String(req.query.installId || '').trim();
+    // Заголовки установки уже проверил общий middleware.
+    const authedUserId = String((req as any).userId || '');
+    if (authedUserId) return res.json({ ok: true, userId: authedUserId });
+    // ?installId= — старые сборки; секрет обязателен по тем же правилам, что и для REST.
+    const installId = String(req.query.installId || req.header('x-install-id') || '').trim();
     if (!installId) return res.status(400).json({ ok: false, error: 'no_installId' });
     // КРИТИЧНО: Проверяем готовность MongoDB перед операциями
     if (!isMongoReady()) {
       return res.status(503).json({ ok: false, error: 'database_unavailable' });
     }
-    const inst = (await Install.findOne({ installId }).select('user').lean()) as
-      | { user?: any }
+    const inst = (await Install.findOne({ installId }).select('user installSecretHash httpSecretSeenAt').lean()) as
+      | { user?: any; installSecretHash?: string; httpSecretSeenAt?: Date }
       | null;
     if (!inst || !inst.user) {
       return res.status(404).json({ ok: false, error: 'not_found' });
     }
+    const auth = decideHttpInstallAuth({
+      storedHash: inst.installSecretHash,
+      providedSecret: req.header('x-install-secret'),
+      httpSecretSeen: !!inst.httpSecretSeenAt,
+      requireAll: HTTP_INSTALL_SECRET_REQUIRED,
+    });
+    if (auth.result === 'reject') return res.status(401).json({ ok: false, error: 'unauthorized' });
     return res.json({ ok: true, userId: String(inst.user) });
   } catch (e: any) {
     return res.status(500).json({ ok: false, error: e?.message || 'server_error' });
@@ -5208,27 +5235,6 @@ io.on('connection', async (sock: AuthedSocket) => {
 registerIdentitySockets(io);
 registerFriendSockets(io);
 registerMessageSockets(io);
-
-/* ========= REST whoami (как в старой версии) ========= */
-app.get('/whoami', async (req, res) => {
-  try {
-    const installId = String(req.query.installId || '').trim();
-    if (!installId) return res.status(400).json({ ok: false, error: 'no_installId' });
-    // КРИТИЧНО: Проверяем готовность MongoDB перед операциями
-    if (!isMongoReady()) {
-      return res.status(503).json({ ok: false, error: 'database_unavailable' });
-    }
-    const inst = (await Install.findOne({ installId }).select('user').lean()) as
-      | { user?: any }
-      | null;
-    if (!inst || !inst.user) {
-      return res.status(404).json({ ok: false, error: 'not_found' });
-    }
-    return res.json({ ok: true, userId: String(inst.user) });
-  } catch (e: any) {
-    return res.status(500).json({ ok: false, error: e?.message || 'server_error' });
-  }
-});
 
 /* ========= REST presence ========= */
 /** Онлайн в приложении (не только друзья): id + nick + avatarVer для welcome-баннера. */

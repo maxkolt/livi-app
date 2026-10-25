@@ -1,7 +1,7 @@
 // Запросы ленты Fliq к нашему API: выдача роликов, события просмотра (пачкой), «не играет».
 import { API_BASE } from '../../sockets/modules/constants';
 import { getCurrentUserId } from '../../sockets/modules/authState';
-import { getInstallId } from '../../utils/installId';
+import { getInstallAuthHeaders } from '../../utils/installId';
 import { Image as ExpoImage } from 'expo-image';
 import { logger } from '../../utils/logger';
 import { youtubeThumbUrl } from './fliqLinks';
@@ -24,9 +24,7 @@ type FliqEvent = {
 };
 
 async function authHeaders(): Promise<Record<string, string>> {
-  const installId = await getInstallId().catch(() => '');
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (installId) headers['x-install-id'] = String(installId);
+  const headers: Record<string, string> = { 'Content-Type': 'application/json', ...(await getInstallAuthHeaders()) };
   const userId = getCurrentUserId();
   if (userId) headers['x-user-id'] = String(userId);
   return headers;

@@ -1,5 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { getInstallId } from "../../utils/installId";
+import { getInstallAuthHeaders } from "../../utils/installId";
 import { logger } from "../../utils/logger";
 import { API_BASE } from "./constants";
 import { emitAck, waitForConnect } from "./emit";
@@ -296,9 +296,7 @@ export function markMessagesAsRead(from: string) {
   const viaSocket = () => emitAck<{ ok: boolean; error?: string }>("messages:mark_read", { from });
 
   const viaHttp = async () => {
-    const installId = await getInstallId().catch(() => "");
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (installId) headers["x-install-id"] = String(installId);
+    const headers: Record<string, string> = { "Content-Type": "application/json", ...(await getInstallAuthHeaders()) };
     if (shared.currentUserId) headers["x-user-id"] = String(shared.currentUserId);
 
     const url = `${API_BASE}/api/messages/mark_read`;
@@ -427,9 +425,7 @@ export function fetchMessages(payload: {
     }>("messages:fetch", payload);
 
   const viaHttp = async () => {
-    const installId = await getInstallId().catch(() => "");
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (installId) headers["x-install-id"] = String(installId);
+    const headers: Record<string, string> = { "Content-Type": "application/json", ...(await getInstallAuthHeaders()) };
     if (shared.currentUserId) headers["x-user-id"] = String(shared.currentUserId);
 
     const url =
@@ -955,9 +951,7 @@ export async function clearChatMessages(peerId: string, forAll: boolean = true):
     };
 
     const viaHttp = async () => {
-      const installId = await getInstallId().catch(() => "");
-      const headers: Record<string, string> = { "Content-Type": "application/json" };
-      if (installId) headers["x-install-id"] = String(installId);
+      const headers: Record<string, string> = { "Content-Type": "application/json", ...(await getInstallAuthHeaders()) };
       if (shared.currentUserId) headers["x-user-id"] = String(shared.currentUserId);
 
       const url = `${API_BASE}/api/messages/clear_chat`;
@@ -1011,9 +1005,7 @@ export async function deleteMessage(messageId: string): Promise<boolean> {
     };
 
     const viaHttp = async (): Promise<{ ok: boolean; error?: string }> => {
-      const installId = await getInstallId().catch(() => "");
-      const headers: Record<string, string> = { "Content-Type": "application/json" };
-      if (installId) headers["x-install-id"] = String(installId);
+      const headers: Record<string, string> = { "Content-Type": "application/json", ...(await getInstallAuthHeaders()) };
       if (shared.currentUserId) headers["x-user-id"] = String(shared.currentUserId);
 
       const url = `${API_BASE}/api/messages/delete`;
@@ -1077,9 +1069,7 @@ export async function deleteMessages(messageIds: string[]): Promise<DeleteMessag
     };
 
     const viaHttp = async (): Promise<DeleteMessagesBatchResult> => {
-      const installId = await getInstallId().catch(() => "");
-      const headers: Record<string, string> = { "Content-Type": "application/json" };
-      if (installId) headers["x-install-id"] = String(installId);
+      const headers: Record<string, string> = { "Content-Type": "application/json", ...(await getInstallAuthHeaders()) };
       if (shared.currentUserId) headers["x-user-id"] = String(shared.currentUserId);
 
       const url = `${API_BASE}/api/messages/delete_many`;
@@ -1197,9 +1187,7 @@ export async function editMessage(
   };
 
   const viaHttp = async () => {
-    const installId = await getInstallId().catch(() => "");
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (installId) headers["x-install-id"] = String(installId);
+    const headers: Record<string, string> = { "Content-Type": "application/json", ...(await getInstallAuthHeaders()) };
     if (shared.currentUserId) headers["x-user-id"] = String(shared.currentUserId);
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 12000);

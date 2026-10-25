@@ -12,6 +12,8 @@ interface IInstall {
   installSecretHash?: string;
   /** Когда секрет был перепривязан после переустановки приложения (см. isDeviceBoundInstallId). */
   secretRotatedAt?: Date;
+  /** Первый HTTP-запрос с верным секретом: дальше REST без секрета для установки отклоняется. */
+  httpSecretSeenAt?: Date;
 }
 
 const InstallSchema = new Schema<IInstall>(
@@ -20,6 +22,7 @@ const InstallSchema = new Schema<IInstall>(
     user: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
     installSecretHash: { type: String, required: false },
     secretRotatedAt: { type: Date, required: false },
+    httpSecretSeenAt: { type: Date, required: false },
   },
   { timestamps: true, collection: 'installs' }
 );

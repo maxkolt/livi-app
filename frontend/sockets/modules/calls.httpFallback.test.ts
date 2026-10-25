@@ -6,8 +6,7 @@ const mockSocket = {
 };
 
 jest.mock('../../utils/installId', () => ({
-  getInstallId: jest.fn(async () => 'install-test'),
-  getInstallSecret: jest.fn(async () => 'secret-test'),
+  getInstallAuthHeaders: jest.fn(async () => ({ 'x-install-id': 'install-test', 'x-install-secret': 'secret-test' })),
 }));
 
 jest.mock('../../utils/logger', () => ({

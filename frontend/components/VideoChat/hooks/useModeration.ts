@@ -5,6 +5,8 @@ import * as FileSystem from 'expo-file-system';
 import * as ImageManipulator from 'expo-image-manipulator';
 import { API_BASE } from '../../../sockets/socket';
 import { logger } from '../../../utils/logger';
+import { fetchWithTimeout } from '../../../utils/fetchWithTimeout';
+import { getInstallAuthHeaders } from '../../../utils/installId';
 import { t, type Lang } from '../../../utils/i18n';
 
 type ModerationResponse = {
@@ -312,11 +314,15 @@ export function useModeration({
 
       let response: Response;
       try {
-        response = await fetch(`${API_BASE}/api/moderate`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ image: base64 }),
-        });
+        response = await fetchWithTimeout(
+          `${API_BASE}/api/moderate`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...(await getInstallAuthHeaders()) },
+            body: JSON.stringify({ image: base64 }),
+          },
+          15_000,
+        );
       } catch (netErr) {
         // Сеть до сервиса не дошла — это недоступность сервиса (не сбой захвата кадра).
         noteModerationServiceFailure('network');

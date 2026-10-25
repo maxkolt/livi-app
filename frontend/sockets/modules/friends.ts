@@ -1,4 +1,4 @@
-import { getInstallId } from "../../utils/installId";
+import { getInstallAuthHeaders } from "../../utils/installId";
 import { logger } from "../../utils/logger";
 import { API_BASE, isOid } from "./constants";
 import { emitAck } from "./emit";
@@ -29,9 +29,7 @@ function addFriend(toUserId: string) {
   };
 
   const viaHttp = async () => {
-    const installId = await getInstallId().catch(() => "");
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (installId) headers["x-install-id"] = String(installId);
+    const headers: Record<string, string> = { "Content-Type": "application/json", ...(await getInstallAuthHeaders()) };
     if (shared.currentUserId) headers["x-user-id"] = String(shared.currentUserId);
 
     const url = `${API_BASE}/api/friends/add`;
@@ -75,9 +73,7 @@ export function respondFriend(fromUserId: string, accept: boolean, requestId?: s
     });
 
   const viaHttp = async () => {
-    const installId = await getInstallId().catch(() => "");
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (installId) headers["x-install-id"] = String(installId);
+    const headers: Record<string, string> = { "Content-Type": "application/json", ...(await getInstallAuthHeaders()) };
     if (shared.currentUserId) headers["x-user-id"] = String(shared.currentUserId);
 
     const url = `${API_BASE}/api/friends/respond`;
@@ -115,9 +111,7 @@ export function acceptInvite(inviterId: string) {
     emitAck<{ ok: boolean; status?: string; error?: string }>("friends:acceptInvite", { inviterId });
 
   const viaHttp = async () => {
-    const installId = await getInstallId().catch(() => "");
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (installId) headers["x-install-id"] = String(installId);
+    const headers: Record<string, string> = { "Content-Type": "application/json", ...(await getInstallAuthHeaders()) };
     if (shared.currentUserId) headers["x-user-id"] = String(shared.currentUserId);
 
     const url = `${API_BASE}/api/friends/acceptInvite`;
@@ -177,9 +171,7 @@ export function fetchFriends(
   // Fallback for networks/VPNs that break socket connectivity:
   // use REST endpoint that returns the same list shape.
   const viaHttp = async () => {
-    const installId = await getInstallId().catch(() => "");
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (installId) headers["x-install-id"] = String(installId);
+    const headers: Record<string, string> = { "Content-Type": "application/json", ...(await getInstallAuthHeaders()) };
     // Legacy/audit-only header (server does NOT trust it, but may log mismatch).
     if (shared.currentUserId) headers["x-user-id"] = String(shared.currentUserId);
 
@@ -247,9 +239,7 @@ export function fetchFriendRequests(options: { includeAvatarThumbs?: boolean } =
   };
 
   const viaHttp = async (): Promise<Result> => {
-    const installId = await getInstallId().catch(() => "");
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (installId) headers["x-install-id"] = String(installId);
+    const headers: Record<string, string> = { "Content-Type": "application/json", ...(await getInstallAuthHeaders()) };
     if (shared.currentUserId) headers["x-user-id"] = String(shared.currentUserId);
     const url = `${API_BASE}/api/friends/requests?includeAvatarThumbs=${includeAvatarThumbs ? "1" : "0"}`;
     const controller = new AbortController();
@@ -348,9 +338,7 @@ export function removeFriend(peerId: string) {
   const viaSocket = () => emitAck<{ ok: boolean; error?: string }>("friends:remove", { peerId });
 
   const viaHttp = async () => {
-    const installId = await getInstallId().catch(() => "");
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (installId) headers["x-install-id"] = String(installId);
+    const headers: Record<string, string> = { "Content-Type": "application/json", ...(await getInstallAuthHeaders()) };
     if (shared.currentUserId) headers["x-user-id"] = String(shared.currentUserId);
 
     const url = `${API_BASE}/api/friends/remove`;
@@ -407,12 +395,7 @@ export async function checkInviteLink(code: string, options: { markPending?: boo
     }
 
     const userId = shared.currentUserId;
-    const headers: Record<string, string> = {};
-    // Prefer installId so backend can resolve user securely.
-    try {
-      const installId = await getInstallId();
-      if (installId) headers["x-install-id"] = String(installId);
-    } catch {}
+    const headers: Record<string, string> = await getInstallAuthHeaders();
 
     if (userId) {
       headers["x-user-id"] = userId;

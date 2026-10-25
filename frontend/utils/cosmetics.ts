@@ -6,7 +6,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 // могли оказаться неопределёнными.
 import { API_BASE } from '../sockets/modules/constants';
 import { getCurrentUserId } from '../sockets/modules/authState';
-import { getInstallId } from './installId';
+import { getInstallAuthHeaders } from './installId';
+import { fetchWithTimeout } from './fetchWithTimeout';
 import { DEFAULT_DARK_WALLPAPER_ID, setChatWallpaperId } from './chatWallpaper';
 
 export type CosmeticKind = 'frame' | 'background';
@@ -183,15 +184,14 @@ function publish(value: Partial<CosmeticEntitlements> | null | undefined) {
 }
 
 async function authHeaders(json = false): Promise<Record<string, string>> {
-  const installId = await getInstallId();
   return {
     ...(json ? { 'Content-Type': 'application/json' } : {}),
-    'x-install-id': installId,
+    ...(await getInstallAuthHeaders()),
   };
 }
 
 async function request(path: string, init?: RequestInit) {
-  const response = await fetch(`${API_BASE}/api${path}`, {
+  const response = await fetchWithTimeout(`${API_BASE}/api${path}`, {
     ...init,
     headers: {
       ...(await authHeaders(!!init?.body)),

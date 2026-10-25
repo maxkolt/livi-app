@@ -1,5 +1,5 @@
 import { markCallPerf } from "../../utils/callPerfTrace";
-import { getInstallId, getInstallSecret } from "../../utils/installId";
+import { getInstallAuthHeaders } from "../../utils/installId";
 import { logger } from "../../utils/logger";
 import { prewarmApiConnections } from "../../utils/warmConnections";
 import { API_BASE, CALL_SIGNALING_CONNECT_MS, isOid } from "./constants";
@@ -43,13 +43,7 @@ export function startCall(toUserId: string, options?: { media?: DirectCallMedia;
     );
 
   const viaHttp = async () => {
-    const [installId, installSecret] = await Promise.all([
-      getInstallId().catch(() => ""),
-      getInstallSecret().catch(() => null),
-    ]);
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (installId) headers["x-install-id"] = String(installId);
-    if (installSecret) headers["x-install-secret"] = String(installSecret);
+    const headers: Record<string, string> = { "Content-Type": "application/json", ...(await getInstallAuthHeaders()) };
     if (shared.currentUserId) headers["x-user-id"] = String(shared.currentUserId);
 
     const controller = new AbortController();

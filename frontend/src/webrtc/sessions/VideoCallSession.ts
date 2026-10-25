@@ -67,7 +67,7 @@ import {
 } from '../../../utils/directCallConnectPrewarm';
 import { getFastStartVideoCaptureOptions, getPreferredVideoCaptureOptions } from '../videoCaptureProfile';
 import { buildCallEndSocketPayload } from '../../../utils/callEndPayload';
-import { getInstallId } from '../../../utils/installId';
+import { getInstallAuthHeaders } from '../../../utils/installId';
 import { dismissSystemPiPAfterCallEnded } from '../../../utils/callKeep';
 import {
   forceAndroidSystemPiPPeerVideoVisible,
@@ -2529,9 +2529,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     // Если нужно восстановить активный звонок, запрашиваем токен
     if (params.returnToActiveCall && params.roomId) {
       try {
-        const installId = await getInstallId().catch(() => '');
-        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-        if (installId) headers['x-install-id'] = String(installId);
+        const headers: Record<string, string> = { 'Content-Type': 'application/json', ...(await getInstallAuthHeaders()) };
         const response = await fetch(`${process.env.EXPO_PUBLIC_SERVER_URL}/api/livekit/token`, {
           method: 'POST',
           headers,
@@ -4961,9 +4959,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     }
     
     try {
-      const installId = await getInstallId().catch(() => '');
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (installId) headers['x-install-id'] = String(installId);
+      const headers: Record<string, string> = { 'Content-Type': 'application/json', ...(await getInstallAuthHeaders()) };
       const response = await fetch(`${process.env.EXPO_PUBLIC_SERVER_URL}/api/livekit/token`, {
         method: 'POST',
         headers,
