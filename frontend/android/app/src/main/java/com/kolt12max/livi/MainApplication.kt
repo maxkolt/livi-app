@@ -72,6 +72,8 @@ class MainApplication : Application(), ReactApplication {
       AppMetrica.activate(this, config)
     }
     LiveKitReactNative.setup(this)
+    // Режим связи не должен проваливаться, пока WebRTC не начал запись (см. CallModeKeeper).
+    CallModeKeeper.install(this)
     // До первого WebSocket'а: общий пул с тёплыми соединениями к API (VPN, сервер в РФ).
     WarmConnections.install(this)
     WarmConnections.warm(this, "app_start")

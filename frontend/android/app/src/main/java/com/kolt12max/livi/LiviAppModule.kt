@@ -4059,6 +4059,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
         CallRouteGuard.disarm()
         scheduleCallAudioReleaseStatic()
       }
+      CallModeKeeper.onCallForegroundChanged()
     }
 
     /** Растёт при любом начале звукового сеанса — отложенный release его не трогает. */

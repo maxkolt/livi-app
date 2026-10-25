@@ -105,6 +105,7 @@ import {
   cancelDebouncedForegroundAck,
   armInAppOfflinePresenceEmit,
   cancelInAppOfflinePresenceEmit,
+  setLiveCallPredicate,
 } from './utils/friendOnlinePresence';
 import { areFriendsCached, getFriendIds, getFriendIdsForUsers } from './utils/friendshipUtils';
 import { isSocketIoRedisAdapterActive, setupSocketIoRedisAdapter } from './utils/socketIoRedisAdapter';
@@ -2467,6 +2468,15 @@ const DIRECT_CALL_ROOM_RE = /^room_[a-f\d]{24}_[a-f\d]{24}$/i;
 function isDirectCallRoomId(value?: unknown): boolean {
   return DIRECT_CALL_ROOM_RE.test(String(value ?? '').trim());
 }
+
+// Онлайн «из-за звонка» в фоне — только по реестру: идёт звонок, дозвон или пара в рандоме.
+setLiveCallPredicate((io, userId) => {
+  const uid = normalizeMongoObjectId(String(userId || ''));
+  if (isUserInLiveDirectCall(io, uid)) return true;
+  const entry = callOfUser.get(uid);
+  if (entry?.callId && callsById.has(entry.callId) && !recentlyEndedCalls.has(entry.callId)) return true;
+  return getSocketsForUser(io, uid).some((s) => (s as any)?.data?.inCall === true && !!(s as any)?.data?.partnerSid);
+});
 
 function pendingAcceptedRoomMatchesPresencePayload(
   pending: PendingAcceptedRoom,

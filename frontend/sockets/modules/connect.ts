@@ -160,6 +160,15 @@ async function readAndroidMainActivityForeground(): Promise<boolean | null> {
   }
 }
 
+/**
+ * Ответ натива приходит асинхронно: если чтение началось до onPause, true долетал после уже
+ * отправленного false, и сервер держал пользователя «онлайн» ещё ~90 с (до протухания heartbeat).
+ * Передний план — только когда натив и AppState согласны в момент ответа.
+ */
+function isForegroundAfterNativeRead(nativeForeground: boolean | null): boolean {
+  return nativeForeground !== false && isAppForegroundForPresence();
+}
+
 function stopAppVisibilityForegroundHeartbeat(): void {
   if (shared.appVisibilityHeartbeatTimer) {
     clearInterval(shared.appVisibilityHeartbeatTimer);
@@ -173,7 +182,8 @@ function startAppVisibilityForegroundHeartbeat(): void {
     if (Platform.OS === "android") {
       readAndroidMainActivityForeground()
         .then((nativeForeground) => {
-          const foreground = nativeForeground ?? isAppForegroundForPresence();
+          if (!shared.appVisibilityHeartbeatTimer) return;
+          const foreground = isForegroundAfterNativeRead(nativeForeground);
           if (!foreground) {
             stopAppVisibilityForegroundHeartbeat();
             emitAppVisibilityToServer(false);
@@ -202,8 +212,9 @@ function syncAppVisibilityToServerFromAppState(): void {
     readAndroidMainActivityForeground()
       .then((nativeForeground) => {
         if (typeof nativeForeground !== "boolean") return;
-        emitAppVisibilityToServer(nativeForeground);
-        if (nativeForeground) startAppVisibilityForegroundHeartbeat();
+        const foreground = isForegroundAfterNativeRead(nativeForeground);
+        emitAppVisibilityToServer(foreground);
+        if (foreground) startAppVisibilityForegroundHeartbeat();
         else stopAppVisibilityForegroundHeartbeat();
       })
       .catch(() => {});

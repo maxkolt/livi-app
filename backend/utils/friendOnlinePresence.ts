@@ -72,11 +72,23 @@ function socketLooksInActiveCall(s: { data?: Record<string, unknown> }): boolean
   return !!(d.busy || d.inCall || d.roomId);
 }
 
+type LiveCallPredicate = (io: Server, userId: string) => boolean;
+let liveCallPredicate: LiveCallPredicate | null = null;
+
+/**
+ * index.ts подтверждает звонок по своему реестру (callOfUser / callsById / комнаты): флаги
+ * busy/roomId на сокете переживают сбойное завершение, и пользователь в фоне оставался
+ * «онлайн» для друзей до переподключения.
+ */
+export function setLiveCallPredicate(fn: LiveCallPredicate | null): void {
+  liveCallPredicate = fn;
+}
+
 function userHasBusyCallSocket(io: Server, uid: string): boolean {
   const id = String(uid);
   for (const s of io.sockets.sockets.values()) {
     if (String((s as any)?.data?.userId || '') !== id) continue;
-    if (socketLooksInActiveCall(s)) return true;
+    if (socketLooksInActiveCall(s)) return liveCallPredicate ? liveCallPredicate(io, id) : true;
   }
   return false;
 }
