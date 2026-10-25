@@ -4060,6 +4060,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
         scheduleCallAudioReleaseStatic()
       }
       CallModeKeeper.onCallForegroundChanged()
+      MainActivity.syncRecentsScreenshotPolicy()
     }
 
     /** Растёт при любом начале звукового сеанса — отложенный release его не трогает. */

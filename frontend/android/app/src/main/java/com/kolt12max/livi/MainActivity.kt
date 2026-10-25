@@ -997,10 +997,21 @@ class MainActivity : ReactActivity() {
     LiviAppModule.emitSystemPiPExpanded()
   }
 
+  /**
+   * Пока идёт звонок LiVi, Android не сохраняет снимок задачи: в Недавних и в окне при возврате —
+   * фон темы (та же сцена, что в JS). Иначе после звонка, закончившегося в PiP, при возврате
+   * ~0.4 с показывался сохранённый кадр звонка (или плашки звонка), которого уже нет.
+   */
+  internal fun applyRecentsScreenshotPolicy() {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+    setRecentsScreenshotEnabled(!LiviAppModule.isActiveCallForegroundRunning())
+  }
+
   override fun onResume() {
     super.onResume()
     lastResumedInstance = this
     applyShowOverLock(shouldShowOverLock())
+    applyRecentsScreenshotPolicy()
     isInForeground = true
     // Звонок стартовал, пока LiVi был в фоне, — FGS без microphone; теперь можно добрать.
     ActiveCallForegroundService.promoteMicrophoneIfNeeded()
@@ -1727,6 +1738,14 @@ class MainActivity : ReactActivity() {
     /** Последний MainActivity в onResume — для закрытия system PiP при call:ended, когда currentActivity == null. */
     @JvmField
     var lastResumedInstance: MainActivity? = null
+
+    /** Звонок начался или закончился (FGS) — см. applyRecentsScreenshotPolicy. */
+    @JvmStatic
+    fun syncRecentsScreenshotPolicy() {
+      val act = liveInstance ?: lastResumedInstance ?: return
+      if (act.isFinishing || act.isDestroyed) return
+      act.runOnUiThread { act.applyRecentsScreenshotPolicy() }
+    }
 
     @JvmStatic
     fun hideOrientationScrimFromJs() {
