@@ -19,6 +19,7 @@ import { Exo2_400Regular } from '@expo-google-fonts/exo-2/400Regular';
 import { Exo2_500Medium } from '@expo-google-fonts/exo-2/500Medium';
 import { Exo2_600SemiBold } from '@expo-google-fonts/exo-2/600SemiBold';
 import { Exo2_700Bold } from '@expo-google-fonts/exo-2/700Bold';
+import { APP_INPUT_MAX_FONT_SIZE_MULTIPLIER, APP_TEXT_MAX_FONT_SIZE_MULTIPLIER } from './accessibilityTypography';
 import { adaptiveTypeStyleScaleForSize, scaleFont, typeScaleWindowSize } from './adaptiveType';
 
 /** «Этот Text вложен в другой Text» — тот же контекст, по которому RN рисует вложенный текст спаном. */
@@ -86,8 +87,7 @@ function toWeight(weight: TextStyle['fontWeight'], fallback: Weight): Weight {
 }
 
 /** Стиль шрифта приложения для текста, или null — оставить как есть. */
-function appFontFor(style: unknown, nested: boolean): TextStyle | null {
-  const flat = StyleSheet.flatten(style as TextStyle) as TextStyle | undefined;
+function appFontFor(flat: TextStyle | undefined, nested: boolean): TextStyle | null {
   const family = flat?.fontFamily;
   const weight = flat?.fontWeight;
   if (family) {
@@ -104,10 +104,8 @@ function appFontFor(style: unknown, nested: boolean): TextStyle | null {
  * Масштабируем только обычный текст приложения. Иконочные и сторонние шрифты не трогаем:
  * иначе вместе с надписями начнут расти Ionicons/MaterialIcons.
  */
-function adaptiveTextStyle(style: unknown, scale: number): TextStyle | null {
-  if (scale === 1) return null;
-  const flat = StyleSheet.flatten(style as TextStyle) as TextStyle | undefined;
-  if (!flat) return null;
+function adaptiveTextStyle(flat: TextStyle | undefined, scale: number): TextStyle | null {
+  if (scale === 1 || !flat) return null;
   const family = flat.fontFamily;
   const usesAppFont = !family || SYSTEM_FAMILIES[family] != null || family.startsWith('Exo2_');
   if (!usesAppFont) return null;
@@ -133,17 +131,27 @@ type ForwardRefComponent = {
   render?: ((props: any, ref: any) => React.ReactNode) & { appFont?: boolean };
 };
 
-function patchRender(component: ForwardRefComponent, nestable: boolean) {
+function patchRender(component: ForwardRefComponent, nestable: boolean, maxFontSizeMultiplier: number) {
   const render = component.render;
   if (typeof render !== 'function' || render.appFont) return;
   const withFont = (props: any, nested: boolean) => {
-    const font = appFontFor(props.style, nested);
+    const flat = StyleSheet.flatten(props.style as TextStyle) as TextStyle | undefined;
+    const font = appFontFor(flat, nested);
     const { width, height } = typeScaleWindowSize(Dimensions.get('window'), Dimensions.get('screen'));
     const adaptive = adaptiveTextStyle(
-      props.style,
+      flat,
       adaptiveTypeStyleScaleForSize(width, height, PixelRatio.getFontScale() || 1),
     );
-    return font || adaptive ? { ...props, style: [props.style, adaptive, font] } : props;
+    // Потолок системного размера шрифта. React 19 не применяет defaultProps к функциональным
+    // компонентам, поэтому Text.defaultProps молча не работал. Вложенный Text наследует потолок
+    // родителя — свой не ставим, иначе он перебьёт более строгий (поле ввода чата).
+    const capFontScale = !nested && props.maxFontSizeMultiplier === undefined;
+    if (!font && !adaptive && !capFontScale) return props;
+    return {
+      ...props,
+      ...(capFontScale ? { maxFontSizeMultiplier } : null),
+      ...(font || adaptive ? { style: [props.style, adaptive, font] } : null),
+    };
   };
   // Две обёртки, а не хук под условием: у Text контекст вложенности читается
   // всегда, TextInput вложенным не бывает.
@@ -164,6 +172,6 @@ let installed = false;
 export function installAppFont() {
   if (installed) return;
   installed = true;
-  patchRender(Text as unknown as ForwardRefComponent, true);
-  patchRender(TextInput as unknown as ForwardRefComponent, false);
+  patchRender(Text as unknown as ForwardRefComponent, true, APP_TEXT_MAX_FONT_SIZE_MULTIPLIER);
+  patchRender(TextInput as unknown as ForwardRefComponent, false, APP_INPUT_MAX_FONT_SIZE_MULTIPLIER);
 }

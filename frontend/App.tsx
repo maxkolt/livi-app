@@ -3481,35 +3481,6 @@ function AppContent() {
           }
         }
       } catch (_) {}
-      const inactiveNavSnapPre = (() => {
-        try {
-          const wasInSys =
-            g.__pipInSystemModeRef?.current === true ||
-            g.__pipCallEndedWasInSystemRef?.current === true;
-          if (!wasInSys) return null;
-          return {
-            callId: String(
-              data?.callId ||
-                g.__currentCallPiPParamsRef?.current?.callId ||
-                g.__pipLastContextRef?.current?.callId ||
-                ''
-            ).trim(),
-            roomId: String(
-              data?.roomId ||
-                g.__currentCallPiPParamsRef?.current?.roomId ||
-                g.__pipLastContextRef?.current?.roomId ||
-                ''
-            ).trim(),
-            peer: String(g.__videoCallPartnerUserIdRef?.current || '').trim(),
-            baseNav: {
-              ...((g.__pipLastContextRef?.current?.navParams ||
-                g.__currentCallPiPParamsRef?.current?.navParams) as Record<string, unknown>),
-            },
-          };
-        } catch {
-          return null;
-        }
-      })();
       try {
         // Если этот звонок уже завершили локально (например, EndCallFromPiP),
         // то поздний echo call:ended не должен повторно запускать teardown при возврате в приложение.
@@ -3635,43 +3606,8 @@ function AppContent() {
             try { (global as any).__callEndedFromPiPNoOpenRef.current = false; } catch (_) {}
           }, 6000);
         } catch (_) {}
-        // После обработки сокета: если не на VideoCall — тот же «неактивный» экран, что у завершившего из PiP.
-        const snap = inactiveNavSnapPre;
-        queueMicrotask(() => {
-          try {
-            if (!navRef.isReady()) return;
-            if (String(navRef.getCurrentRoute()?.name ?? '') === 'VideoCall') return;
-            if (!snap?.callId || !snap?.roomId) return;
-            const peerFromNav = snap.baseNav.peerUserId ?? snap.baseNav.partnerId;
-            const peer =
-              (typeof peerFromNav === 'string' && String(peerFromNav).trim()) ||
-              snap.peer ||
-              undefined;
-            navRef.dispatch(
-              CommonActions.reset({
-                index: 1,
-                routes: [
-                  { name: 'Home' as any },
-                  {
-                    name: 'VideoCall' as any,
-                    params: {
-                      ...snap.baseNav,
-                      callId: snap.callId,
-                      roomId: snap.roomId,
-                      peerUserId: peer,
-                      resume: true,
-                      fromPiP: true,
-                      directCall: true,
-                      endedFromRemoteSystemPiP: true,
-                    },
-                  },
-                ],
-              })
-            );
-          } catch (e) {
-            console.warn('[App] [call:ended] inSystem navigate to inactive VideoCall failed', e);
-          }
-        });
+        // Экран завершённого звонка сюда не кладём: при возврате человек видел его кадр до ухода на Home.
+        // Если system PiP открыт с экрана VideoCall, его закрывает сам VideoCall, как только окно PiP исчезнет.
         return;
       }
       // Звонок завершили из PiP (флаг выставлен в endCallImpl): call:ended мог прийти после закрытия PiP (inSystem уже false).

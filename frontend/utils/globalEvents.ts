@@ -412,6 +412,15 @@ export function applyCallEndedGlobalRefsOnce(
     g.__callConnectedAtRef.current = null;
     g.__directCallAudioOnlyMountKeyRef = g.__directCallAudioOnlyMountKeyRef || { current: null };
     g.__directCallAudioOnlyMountKeyRef.current = null;
+    // Звонок окончен в system PiP, открытом из in-app плашки: возвращать плашку при выходе из PiP некому.
+    for (const name of [
+      '__systemPiPNeedsInAppRestoreRef',
+      '__pendingInAppPiPRestoreAfterSystemRef',
+      '__restoringInAppPiPFromSystemRef',
+      '__pipSuspendedForSystemPiPRef',
+    ]) {
+      if (g[name]) g[name].current = false;
+    }
     g.__onVideoCallEndedRef?.current?.();
   } catch (_) {}
   return true;

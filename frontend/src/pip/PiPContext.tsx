@@ -523,6 +523,10 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
           }
         }
         g.__lastSystemPiPModeChangedAtRef.current = now;
+        // Открыто ли окно system PiP на самом деле. В отличие от __pipInSystemModeRef его меняет
+        // только нативное событие: hidePiP при call:ended снимает тот флаг, пока окно ещё закрывается.
+        g.__systemPiPWindowOpenRef = g.__systemPiPWindowOpenRef || { current: false };
+        g.__systemPiPWindowOpenRef.current = inPiP;
       } catch (_) {}
       trackReleaseEvent('pip_enter_exit', {
         phase: inPiP ? 'enter' : 'exit',
@@ -691,11 +695,19 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
               const runRestore = () => {
                 try {
                   if (gRestore.__pendingInAppPiPRestoreAfterSystemRef?.current !== true) return;
+                  // Этот колбэк ждёт кадра, а в фоне кадров нет: он может выполниться через минуты,
+                  // когда флаги завершения (3–6 с) уже сняты. Плашку возвращаем только живому звонку.
+                  const restoreSession = gRestore.__webrtcSessionRef?.current;
+                  const callLive =
+                    !!restoreSession &&
+                    !(typeof restoreSession.isEnded === 'function' && restoreSession.isEnded());
                   if (
+                    !callLive ||
                     gRestore.__endingCallInProgressRef?.current === true ||
                     gRestore.__callEndedFromPiPNoOpenRef?.current === true
                   ) {
                     gRestore.__pendingInAppPiPRestoreAfterSystemRef.current = false;
+                    clearSystemPiPNeedsInAppRestore();
                     return;
                   }
                   // Даже если __pipVisibleRef=true (soft-hide), нужен showPiP/re-render —

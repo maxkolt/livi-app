@@ -17,6 +17,7 @@ import {
   Animated,
   Easing,
   NativeModules,
+  NativeEventEmitter,
   AppState,
 } from 'react-native';
 import { useFocusEffect, useIsFocused } from '@react-navigation/native';
@@ -179,8 +180,6 @@ type Props = {
       systemPiPReturnToken?: number;
       isIncoming?: boolean;
       partnerNick?: string;
-      /** call:ended в системном PiP у собеседника — тот же «неактивный» экран, что у завершившего из PiP. */
-      endedFromRemoteSystemPiP?: boolean;
       /** Аудиозвонок: камера выключена до upgrade. */
       startWithCamOff?: boolean;
       callMedia?: 'audio' | 'video';
@@ -1544,7 +1543,6 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
   const audioUiOnLayoutLoggedRef = useRef(false);
   const [isEndingCall, setIsEndingCall] = useState(false); // Синхронно с ref: скрываем бейдж/активный звонок при завершении, чтобы не мигало
   const callEndedTransitionDoneRef = useRef(false); // Один переход в UI «завершён» — защита от многократных setState при disconnect + call:ended
-  const remoteEndedShellAppliedRef = useRef(false);
   const deferredTeardownScheduledRef = useRef<{ key: string; source: string } | null>(null);
   const sessionInitRouteKeyRef = useRef<string | null>(null);
   /** После полной инициализации сессии для callId|roomId — повторные эффекты только rebind callbacks (PiP visible и т.д.). */
@@ -1622,27 +1620,6 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     return () => clearInterval(timer);
   }, [sessionHandlerAttachKey, sessionTick]);
 
-  // Навигация из App после call:ended в system PiP (собеседник): сессия уже завершена — тот же неактивный UI, что у завершившего из PiP.
-  useEffect(() => {
-    if (!route?.params?.endedFromRemoteSystemPiP) {
-      remoteEndedShellAppliedRef.current = false;
-      return;
-    }
-    if (remoteEndedShellAppliedRef.current) return;
-    remoteEndedShellAppliedRef.current = true;
-    setFriendCallAccepted(true);
-    setStarted(true);
-    setLoading(false);
-    setWasFriendCallEnded(true);
-    setIsInactiveState(true);
-    isInactiveStateRef.current = true;
-    partnerInPiPRef.current = false;
-    setPartnerInPiP(false);
-    callEndedTransitionDoneRef.current = true;
-    try {
-      clearEndingCallInProgress();
-    } catch (_) {}
-  }, [route?.params?.endedFromRemoteSystemPiP]);
 
   // Дополнительные refs для видеозвонка
   const pipReturnUpdateRef = useRef(false);
@@ -2879,10 +2856,6 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
 
   // Инициализация session и восстановление состояния звонка
   useEffect(() => {
-    if (route?.params?.endedFromRemoteSystemPiP) {
-      logger.info('[VideoCall] endedFromRemoteSystemPiP — только оболочка завершённого звонка, без новой сессии');
-      return;
-    }
     // КРИТИЧНО: После завершения звонка не создаём новую сессию — пользователь ещё на экране VideoCall до перехода на Home.
     if (isInactiveState && wasFriendCallEnded) {
       logger.info('[VideoCall] Звонок уже завершён, пропускаем создание сессии');
@@ -3884,7 +3857,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     // Это гарантирует, что обработчики устанавливаются даже если сессия уже существует
     // КРИТИЧНО: Убрали зависимости roomId, callId, partnerId чтобы не пересоздавать сессию
     // Сессия создается один раз при монтировании компонента
-  }, [route?.params?.directCall, route?.params?.resume, route?.params?.endedFromRemoteSystemPiP, clearSessionRefs, isInactiveState, wasFriendCallEnded, isCleanupOwner, getDesiredLocalMediaStateForPiPReturn, getDesiredRemoteMutedForPiPReturn, extendPiPReturnAbortGuard, cleanupFunction, getSystemPiPReturnToken, claimSystemPiPReturnOwner, isFocused]);
+  }, [route?.params?.directCall, route?.params?.resume, clearSessionRefs, isInactiveState, wasFriendCallEnded, isCleanupOwner, getDesiredLocalMediaStateForPiPReturn, getDesiredRemoteMutedForPiPReturn, extendPiPReturnAbortGuard, cleanupFunction, getSystemPiPReturnToken, claimSystemPiPReturnOwner, isFocused]);
   
   useEffect(() => {
     const session = sessionRef.current;
@@ -4859,22 +4832,17 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
 
   }, [cleanupFunction, getSystemPiPReturnToken, getSystemPiPReturnState]);
 
-  // Если открыли приложение и попали на неактивный видеозвонок (например после закрытия PiP при завершении) — закрываем экран: goBack или reset на Home. Не редиректить, если звонок только что завершили из PiP.
+  // Завершённый звонок не оставляем на экране: уходим на Home сразу, в том числе в фоне — иначе при
+  // возврате в приложение первым кадром был мёртвый VideoCall. Пока открыто окно system PiP, ждём:
+  // навигация внутри окна показала бы в нём Home.
   useFocusEffect(
     useCallback(() => {
       const leaveDeadVideoCallIfNeeded = () => {
         if (!isInactiveStateRef.current || !wasFriendCallEndedRef.current) return;
-        if (pipRef.current?.visible === true || isPipOverlayVisibleSync() || pipRef.current?.inSystemPiPMode === true) {
-          return;
-        }
-        // __callEndedFromPiPNoOpenRef ставится при завершении из PiP. Пропуск нужен только для
-        // СИСТЕМНОГО PiP (приложение в фоне — не дёргать навигацию). Но при завершении из IN-APP
-        // PiP приложение на переднем плане и под оверлеем висит экран VideoCall — без ухода на Home
-        // остаётся пустой экран. Поэтому пропускаем ТОЛЬКО когда приложение НЕ активно (фон/system PiP).
-        if (
-          (global as any).__callEndedFromPiPNoOpenRef?.current === true &&
-          AppState.currentState !== 'active'
-        ) {
+        // Только нативная правда об окне. pip.inSystemPiPMode PiPContext применяет в requestAnimationFrame,
+        // а в фоне кадров нет; __pipInSystemModeRef снимает hidePiP, пока окно ещё закрывается.
+        const inSystemPiP = (global as any).__systemPiPWindowOpenRef?.current === true;
+        if (inSystemPiP || pipRef.current?.visible === true || isPipOverlayVisibleSync()) {
           return;
         }
         const rootNav = (global as any).__navRef;
@@ -4891,9 +4859,22 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       const sub = AppState.addEventListener('change', (next) => {
         if (next === 'active') leaveDeadVideoCallIfNeeded();
       });
+      // Окно PiP закрылось (call:ended → moveTaskToBack). Проверяем микрозадачей, после того как
+      // PiPContext обработал то же событие. Не setTimeout: звонок окончен, headless-задача снята,
+      // и RN не запускает JS-таймеры, пока Activity на паузе.
+      const pipSub =
+        Platform.OS === 'android'
+          ? new NativeEventEmitter(NativeModules.LiviAppModule).addListener(
+              'SystemPiPModeChanged',
+              (payload: { isInPiP?: boolean }) => {
+                if (!payload?.isInPiP) Promise.resolve().then(leaveDeadVideoCallIfNeeded);
+              },
+            )
+          : null;
       return () => {
         try {
           sub.remove();
+          pipSub?.remove();
         } catch {}
       };
     }, [isInactiveState, wasFriendCallEnded])

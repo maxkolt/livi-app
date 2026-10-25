@@ -34,24 +34,10 @@ import { installAppNavigationGuard } from './utils/appNavigationGuard';
 
 installAppNavigationGuard();
 
-import { Alert, AppRegistry, Platform, Text, TextInput } from 'react-native';
-import {
-  APP_INPUT_MAX_FONT_SIZE_MULTIPLIER,
-  APP_TEXT_MAX_FONT_SIZE_MULTIPLIER,
-} from './utils/accessibilityTypography';
+import { Alert, AppRegistry, Platform } from 'react-native';
 import { installAppFont } from './utils/appFont';
 
-// RN scales text from the user's system setting by default. Keep that behavior,
-// with a safety ceiling for compact mobile layouts and text inputs.
-(Text as any).defaultProps = {
-  ...(Text as any).defaultProps,
-  maxFontSizeMultiplier: APP_TEXT_MAX_FONT_SIZE_MULTIPLIER,
-};
-(TextInput as any).defaultProps = {
-  ...(TextInput as any).defaultProps,
-  maxFontSizeMultiplier: APP_INPUT_MAX_FONT_SIZE_MULTIPLIER,
-};
-// Весь текст — Exo 2, как «Найти собеседника» (см. utils/appFont).
+// Весь текст — Exo 2, как «Найти собеседника», с потолком системного размера шрифта (см. utils/appFont).
 installAppFont();
 import { registerRootComponent } from 'expo';
 import App from './App';

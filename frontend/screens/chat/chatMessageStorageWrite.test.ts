@@ -5,6 +5,8 @@ jest.mock('@react-native-async-storage/async-storage', () => ({
     store.set(key, value);
   }),
 }));
+// Модуль сокетов тянет нативные ESM-пакеты (SecureStore, Application); здесь нужен только сброс кэша.
+jest.mock('../../sockets/modules/messages', () => ({ clearMessageCacheForStorageKey: jest.fn() }));
 
 import { patchStoredChatMessage, writeStoredChatMessages } from './chatMessageStorageWrite';
 
