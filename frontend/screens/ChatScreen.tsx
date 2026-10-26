@@ -3038,6 +3038,364 @@ export default function ChatScreen({ route, navigation }: Props) {
     ? ({ translucent: true, mirror: true, backdrop: chatChromeBackdrop, edgeFade: false } as const)
     : {};
 
+  // Спиннер, пока лента не готова. Стабильный компонент: инлайн-функция в ListEmptyComponent
+  // была новым типом на каждом рендере экрана, и спиннер пересоздавался на каждый символ.
+  const ChatListEmpty = React.useCallback(() => {
+      if (!chatFeedReady) {
+        return (
+          <View
+            style={{
+              flex: 1,
+              justifyContent: 'center',
+              alignItems: 'center',
+              backgroundColor: 'transparent',
+            }}
+          >
+            <ActivityIndicator color={LIVI.titan} />
+          </View>
+        );
+      }
+      return null;
+  }, [chatFeedReady, LIVI.titan]);
+
+  // Запись кружка/голоса и сама строка ввода — общие для iOS и Android;
+  // платформенные отличия отмечены на месте.
+  const composerRecordingOverlays = (
+    <>
+      {/* Видеокружок: круг с камерой над перепиской (под композером); замок над кнопкой записи. */}
+      <VideoNoteRecorder
+        active={voiceIsRecording && recordingKind === 'video'}
+        recordMs={voiceRecordMs}
+        handleRef={videoRecorderRef}
+        shouldStart={shouldStartVideo}
+        onStarted={onVideoStarted}
+        onFinished={onVideoFinished}
+        bottomReserve={resolvedInputBarH + composerSystemBottomInset}
+        topReserve={headerTotalH}
+      />
+      <RecordLockHint
+        visible={voiceIsRecording && !voiceLocked}
+        lockDrag={lockDrag}
+        // Над той кнопкой, которую держат: микрофон или камера (на 40 левее).
+        right={chatChromeSideInset + 63 + (recordingKind === 'video' ? 40 : 0)}
+        bottom={resolvedInputBarH + composerSystemBottomInset + 10}
+      />
+    </>
+  );
+  const composerCore = (
+    <>
+      <E2eChatBanner
+        lang={lang}
+        peerId={peerId}
+        encrypted={chatEncrypted}
+        emptyChat={serverHistoryEmpty && showEmpty}
+      />
+      {editingMessageId ? (
+        <ChatComposerContextBar
+          mode="edit"
+          title={t('chatEditingTitle', lang)}
+          text={editingOriginalText}
+          accent={LIVI.replyQuoteAccent}
+          textColor={LIVI.white}
+          closeColor={LIVI.titan}
+          closeA11y={t('cancelAction', lang)}
+          onClose={cancelEditing}
+        />
+      ) : replyingToMessage ? (
+        <ChatComposerContextBar
+          mode="reply"
+          title={t('chatReplyingTo', lang).replace('{name}', replyingToMessage.isOwn ? t('you', lang) : peerNameState)}
+          text={replyingToMessage.text}
+          accent={LIVI.replyQuoteAccent}
+          textColor={LIVI.white}
+          closeColor={LIVI.titan}
+          closeA11y={t('cancelAction', lang)}
+          onClose={() => setReplyingToMessage(null)}
+        />
+      ) : null}
+      <View
+        style={{
+          flexDirection: 'row',
+          alignItems: 'center',
+          backgroundColor: COMPOSER_INPUT_BG,
+          borderRadius: 24,
+          // По бокам отступ = вертикальному: крайние круги (картинка, отправка)
+          // вписаны в скругление строки, полю ввода остаётся больше места.
+          paddingHorizontal: Platform.OS === 'ios' ? 5 : 2,
+          paddingVertical: Platform.OS === 'ios' ? 5 : 2,
+          borderWidth: 1,
+          borderColor: BORDER_COLOR,
+        }}
+      >
+        {voiceIsRecording ? (
+          <Pressable
+            hitSlop={10}
+            accessibilityRole="button"
+            onPress={() => {
+              void cancelVoiceRecordingWithAnimation();
+            }}
+            // Круг правее кнопки картинки; слот 8+36+4 = её 36+12, строка не сдвигается.
+            style={{ marginLeft: 8, marginRight: 4 }}
+          >
+            {/* Круг как у кнопки картинки: тот же размер и заливка. */}
+            <Animated.View
+              ref={(r) => { trashMeasureRef.current = r as any; }}
+              onLayout={() => updateTrashZone()}
+              style={{
+                width: CHAT_ROUND_BUTTON_SIZE,
+                height: CHAT_ROUND_BUTTON_SIZE,
+                borderRadius: CHAT_ROUND_BUTTON_SIZE / 2,
+                backgroundColor: COMPOSER_IDLE_BUTTON_BG,
+                alignItems: 'center',
+                justifyContent: 'center',
+                transform: [
+                  { scale: trashFlash.interpolate({ inputRange: [0, 1], outputRange: [1, 1.08] }) },
+                ],
+              }}
+            >
+              {/* Крышка качается и мигает только у значка — круг остаётся плотным. */}
+              <Animated.View
+                style={{
+                  transform: [
+                    { rotate: trashLid.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '-14deg'] }) },
+                  ],
+                  opacity: trashFlash.interpolate({ inputRange: [0, 1], outputRange: [0.85, 1] }),
+                }}
+              >
+                <Ionicons name="trash-outline" size={24} color="#FF5A67" />
+              </Animated.View>
+            </Animated.View>
+          </Pressable>
+        ) : (
+          <ChatRoundButton
+            onPress={handleAttachments}
+            hitSlop={COMPOSER_HIT_ATTACH}
+            accessibilityLabel={t('chooseFromGallery', lang)}
+            backgroundColor={COMPOSER_IDLE_BUTTON_BG}
+            pressedBackgroundColor={COMPOSER_PRESSED_BUTTON_BG}
+            marginRight={12}
+          >
+            <Ionicons name="image" size={28} color={COMPOSER_BUTTON_ICON} />
+          </ChatRoundButton>
+        )}
+
+        {!voiceIsRecording ? (
+          <ChatRoundButton
+            onPress={handleEmojiButtonPress}
+            hitSlop={{ top: 10, bottom: 10, left: 6, right: 6 }}
+            accessibilityLabel="Emoji"
+            backgroundColor={COMPOSER_IDLE_BUTTON_BG}
+            pressedBackgroundColor={COMPOSER_PRESSED_BUTTON_BG}
+            marginRight={8}
+          >
+            <Ionicons
+              name={emojiPanelOpen && emojiReturnsToKeyboard ? 'keypad-outline' : 'happy-outline'}
+              size={26}
+              color={emojiPanelOpen ? WELCOME_NAV_ACTIVE_ACCENT.softText : COMPOSER_BUTTON_ICON}
+            />
+          </ChatRoundButton>
+        ) : null}
+
+        {/* minWidth:0 — иначе Android multiline TextInput раздувает hit-box и перекрывает микрофон/отправку */}
+        <View style={{ flex: 1, minWidth: 0, justifyContent: 'center' }}>
+          <TextInput
+            ref={composerInputRef}
+            style={{
+              flex: 1,
+              color: voiceIsRecording ? 'transparent' : LIVI.white,
+              fontSize: composerFontSize,
+              lineHeight: composerLineHeight,
+              paddingTop: Platform.OS === 'ios' ? 2 : 0,
+              paddingBottom: Platform.OS === 'ios' ? 2 : 0,
+              paddingLeft: COMPOSER_TEXT_INSET_LEFT,
+              maxHeight: composerTextInputMaxHeight,
+              ...(Platform.OS === 'android' ? { includeFontPadding: false } : null),
+            }}
+            placeholder=""
+            accessibilityLabel={composerPlaceholder}
+            maxLength={MAX_MESSAGE_TEXT_LENGTH}
+            maxFontSizeMultiplier={APP_COMPOSER_MAX_FONT_SIZE_MULTIPLIER}
+            value={messageText}
+            onChangeText={(txt) => {
+              messageTextRef.current = txt;
+              setMessageText(txt);
+              signalLocalTyping();
+            }}
+            onFocus={() => setEmojiPanelOpen(false)}
+            multiline
+            scrollEnabled
+            onSubmitEditing={sendMessage}
+            returnKeyType="send"
+            caretHidden={voiceIsRecording}
+            autoCorrect={true}
+            spellCheck={true}
+          />
+          {voiceIsRecording ? (
+            <View
+              pointerEvents="none"
+              style={{
+                ...StyleSheet.absoluteFillObject,
+                flexDirection: 'row',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              <Animated.View
+                style={{
+                  width: 8,
+                  height: 8,
+                  borderRadius: 4,
+                  backgroundColor: '#FF5A67',
+                  marginRight: 8,
+                  opacity: trashFlash.interpolate({ inputRange: [0, 1], outputRange: [1, 0.5] }),
+                }}
+              />
+              <Text style={{ color: LIVI.white, fontSize: 14, fontWeight: '700' }}>
+                {formatDuration(Math.min(voiceRecordMs, VOICE_MAX_MS))}
+              </Text>
+              <Text style={{ color: LIVI.titan, fontSize: 12, fontWeight: '600', marginLeft: 6 }}>
+                / 1:00
+              </Text>
+            </View>
+          ) : null}
+          {!messageText && !voiceIsRecording ? (
+            <View
+              pointerEvents="none"
+              style={{
+                ...StyleSheet.absoluteFillObject,
+                justifyContent: 'center',
+                paddingLeft: COMPOSER_TEXT_INSET_LEFT,
+              }}
+            >
+              <Text
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.82}
+                maxFontSizeMultiplier={APP_COMPOSER_MAX_FONT_SIZE_MULTIPLIER}
+                style={{
+                  color: LIVI.titan,
+                  fontSize: composerFontSize,
+                  lineHeight: composerLineHeight,
+                  ...(Platform.OS === 'android' ? { includeFontPadding: false } : null),
+                }}
+              >
+                {composerPlaceholder}
+              </Text>
+            </View>
+          ) : null}
+          {/* «Влево — отмена» — только пока держат: запись по тапу отменяют корзиной. */}
+          {voiceIsRecording && !voiceLocked ? (
+            <View
+              pointerEvents="none"
+              style={{
+                position: 'absolute',
+                left: 0,
+                right: 0,
+                justifyContent: 'center',
+              }}
+            >
+              <View style={{ ...(Platform.OS === 'ios' ? null : { flex: 1 }), flexDirection: 'row', alignItems: 'center', height: 36 }}>
+                <Animated.View
+                  style={{
+                    opacity: recordViz.interpolate({ inputRange: [0, 1], outputRange: [0.18, 0.45] }),
+                    transform: [
+                      {
+                        translateX: recordViz.interpolate({ inputRange: [0, 1], outputRange: [0, -10] }) as any,
+                      },
+                    ],
+                  }}
+                >
+                  <Ionicons name="chevron-back" size={18} color={LIVI.titan} />
+                </Animated.View>
+              </View>
+            </View>
+          ) : null}
+        </View>
+
+        {/* Видеокружок — отдельная кнопка слева от микрофона: держишь — пишет камера. */}
+        <Animated.View
+          {...videoPanResponder.panHandlers}
+          collapsable={false}
+          accessibilityRole="button"
+          accessibilityLabel={t('chatVideoMessage', lang)}
+          style={{
+            marginLeft: 4,
+            width: 36,
+            height: 36,
+            borderRadius: 18,
+            alignItems: 'center',
+            justifyContent: 'center',
+            backgroundColor: recordingKind === 'video' ? LIVI.titan : COMPOSER_IDLE_BUTTON_BG,
+            opacity: voiceIsRecording && recordingKind !== 'video' ? 0.4 : 1,
+            transform: [{ scale: videoScale }],
+          }}
+        >
+          <View pointerEvents="none" style={{ alignItems: 'center', justifyContent: 'center' }}>
+            <Ionicons
+              name={recordingKind === 'video' ? 'videocam' : 'videocam-outline'}
+              size={20}
+              color={recordingKind === 'video' ? '#FF5A67' : COMPOSER_BUTTON_ICON}
+            />
+          </View>
+        </Animated.View>
+
+        <Animated.View
+          {...micPanResponder.panHandlers}
+          collapsable={false}
+          style={{
+            // Между камерой и микрофоном — как между микрофоном и «Отправить».
+            marginLeft: 12,
+            marginRight: 0,
+            width: 36,
+            height: 36,
+            borderRadius: 18,
+            alignItems: 'center',
+            justifyContent: 'center',
+            transform: [{ scale: micScale }],
+            backgroundColor: recordingKind === 'voice' ? LIVI.titan : COMPOSER_IDLE_BUTTON_BG,
+            opacity: voiceIsRecording && recordingKind === 'video' ? 0.4 : 1,
+          }}
+        >
+          <View pointerEvents="none" style={{ alignItems: 'center', justifyContent: 'center' }}>
+            <Ionicons
+              name={recordingKind === 'voice' ? 'mic' : 'mic-outline'}
+              size={20}
+              color={recordingKind === 'voice' ? '#FF5A67' : COMPOSER_BUTTON_ICON}
+            />
+          </View>
+        </Animated.View>
+
+        <Pressable
+          onPress={onPressSendButton}
+          hitSlop={COMPOSER_HIT_SEND}
+          accessibilityRole="button"
+          accessibilityState={{ disabled: !messageText.trim() && !voiceIsRecording }}
+          style={({ pressed }) => ({
+            width: 36,
+            height: 36,
+            borderRadius: 18,
+            alignItems: 'center',
+            justifyContent: 'center',
+            backgroundColor:
+              messageText.trim() || voiceIsRecording
+                ? LIVI.titan
+                : pressed
+                  ? COMPOSER_PRESSED_BUTTON_BG
+                  : COMPOSER_IDLE_BUTTON_BG,
+            marginLeft: 12,
+            ...(Platform.OS === 'ios' ? null : { overflow: 'hidden' as const }),
+          })}
+        >
+          <Ionicons
+            name={editingMessageId ? 'checkmark' : 'send'}
+            size={20}
+            color={messageText.trim() || voiceIsRecording ? LIVI.white : COMPOSER_BUTTON_ICON}
+          />
+        </Pressable>
+      </View>
+    </>
+  );
+
   return (
     <View
       ref={chatScreenRootRef}
@@ -3172,23 +3530,7 @@ export default function ChatScreen({ route, navigation }: Props) {
               windowSize={CHAT_LIST_WINDOW_SIZE}
               updateCellsBatchingPeriod={CHAT_LIST_UPDATE_CELLS_BATCHING_PERIOD}
               onContentSizeChange={() => setTimeout(() => scrollToBottom(), 0)}
-              ListEmptyComponent={() => {
-                if (!chatFeedReady) {
-                  return (
-                    <View
-                      style={{
-                        flex: 1,
-                        justifyContent: 'center',
-                        alignItems: 'center',
-                        backgroundColor: 'transparent',
-                      }}
-                    >
-                      <ActivityIndicator color={LIVI.titan} />
-                    </View>
-                  );
-                }
-                return null;
-              }}
+              ListEmptyComponent={ChatListEmpty}
             />
             </ChatMessageEdgeFade>
             {chatEmptyFeedPlaceholder}
@@ -3209,24 +3551,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 {InlineGapIndicator}
               </View>
             ) : null}
-            {/* Видеокружок: круг с камерой над перепиской (под композером); замок над кнопкой записи. */}
-            <VideoNoteRecorder
-              active={voiceIsRecording && recordingKind === 'video'}
-              recordMs={voiceRecordMs}
-              handleRef={videoRecorderRef}
-              shouldStart={shouldStartVideo}
-              onStarted={onVideoStarted}
-              onFinished={onVideoFinished}
-              bottomReserve={resolvedInputBarH + composerSystemBottomInset}
-              topReserve={headerTotalH}
-            />
-            <RecordLockHint
-              visible={voiceIsRecording && !voiceLocked}
-              lockDrag={lockDrag}
-              // Над той кнопкой, которую держат: микрофон или камера (на 40 левее).
-              right={chatChromeSideInset + 63 + (recordingKind === 'video' ? 40 : 0)}
-              bottom={resolvedInputBarH + composerSystemBottomInset + 10}
-            />
+            {composerRecordingOverlays}
 
             {/* Поле ввода для iOS — поверх ленты, облака уезжают под него */}
             <ChatChrome
@@ -3255,313 +3580,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 collapsable={false}
                 style={{ zIndex: 2, elevation: 2 }}
               >
-              <E2eChatBanner
-                lang={lang}
-                peerId={peerId}
-                encrypted={chatEncrypted}
-                emptyChat={serverHistoryEmpty && showEmpty}
-              />
-              {editingMessageId ? (
-                <ChatComposerContextBar
-                  mode="edit"
-                  title={t('chatEditingTitle', lang)}
-                  text={editingOriginalText}
-                  accent={LIVI.replyQuoteAccent}
-                  textColor={LIVI.white}
-                  closeColor={LIVI.titan}
-                  closeA11y={t('cancelAction', lang)}
-                  onClose={cancelEditing}
-                />
-              ) : replyingToMessage ? (
-                <ChatComposerContextBar
-                  mode="reply"
-                  title={t('chatReplyingTo', lang).replace('{name}', replyingToMessage.isOwn ? t('you', lang) : peerNameState)}
-                  text={replyingToMessage.text}
-                  accent={LIVI.replyQuoteAccent}
-                  textColor={LIVI.white}
-                  closeColor={LIVI.titan}
-                  closeA11y={t('cancelAction', lang)}
-                  onClose={() => setReplyingToMessage(null)}
-                />
-              ) : null}
-              <View
-                style={{
-                  flexDirection: "row",
-                  alignItems: "center",
-                  backgroundColor: COMPOSER_INPUT_BG,
-                  borderRadius: 24,
-                  // По бокам отступ = вертикальному: крайние круги (картинка, отправка)
-                  // вписаны в скругление строки, полю ввода остаётся больше места.
-                  paddingHorizontal: Platform.OS === 'ios' ? 5 : 2,
-                  paddingVertical: Platform.OS === 'ios' ? 5 : 2,
-                  borderWidth: 1,
-                  borderColor: BORDER_COLOR,
-                }}
-              >
-                {/* Кнопка очистки убрана по требованию */}
-                {voiceIsRecording ? (
-                  <Pressable
-                    hitSlop={10}
-                    accessibilityRole="button"
-                    onPress={() => {
-                      void cancelVoiceRecordingWithAnimation();
-                    }}
-                    // Круг правее кнопки картинки; слот 8+36+4 = её 36+12, строка не сдвигается.
-                    style={{ marginLeft: 8, marginRight: 4 }}
-                  >
-                    {/* Круг как у кнопки картинки: тот же размер и заливка. */}
-                    <Animated.View
-                      ref={(r) => { trashMeasureRef.current = r as any; }}
-                      onLayout={() => updateTrashZone()}
-                      style={{
-                        width: CHAT_ROUND_BUTTON_SIZE,
-                        height: CHAT_ROUND_BUTTON_SIZE,
-                        borderRadius: CHAT_ROUND_BUTTON_SIZE / 2,
-                        backgroundColor: COMPOSER_IDLE_BUTTON_BG,
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        transform: [
-                          { scale: trashFlash.interpolate({ inputRange: [0, 1], outputRange: [1, 1.08] }) },
-                        ],
-                      }}
-                    >
-                      {/* Крышка качается и мигает только у значка — круг остаётся плотным. */}
-                      <Animated.View
-                        style={{
-                          transform: [
-                            { rotate: trashLid.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '-14deg'] }) },
-                          ],
-                          opacity: trashFlash.interpolate({ inputRange: [0, 1], outputRange: [0.85, 1] }),
-                        }}
-                      >
-                        <Ionicons name="trash-outline" size={24} color="#FF5A67" />
-                      </Animated.View>
-                    </Animated.View>
-                  </Pressable>
-                ) : (
-                  <ChatRoundButton
-                    onPress={handleAttachments}
-                    hitSlop={COMPOSER_HIT_ATTACH}
-                    accessibilityLabel={t('chooseFromGallery', lang)}
-                    backgroundColor={COMPOSER_IDLE_BUTTON_BG}
-                    pressedBackgroundColor={COMPOSER_PRESSED_BUTTON_BG}
-                    marginRight={12}
-                  >
-                    <Ionicons name="image" size={28} color={COMPOSER_BUTTON_ICON} />
-                  </ChatRoundButton>
-                )}
-
-                {!voiceIsRecording ? (
-                  <ChatRoundButton
-                    onPress={handleEmojiButtonPress}
-                    hitSlop={{ top: 10, bottom: 10, left: 6, right: 6 }}
-                    accessibilityLabel="Emoji"
-                    backgroundColor={COMPOSER_IDLE_BUTTON_BG}
-                    pressedBackgroundColor={COMPOSER_PRESSED_BUTTON_BG}
-                    marginRight={8}
-                  >
-                    <Ionicons
-                      name={emojiPanelOpen && emojiReturnsToKeyboard ? 'keypad-outline' : 'happy-outline'}
-                      size={26}
-                      color={emojiPanelOpen ? WELCOME_NAV_ACTIVE_ACCENT.softText : COMPOSER_BUTTON_ICON}
-                    />
-                  </ChatRoundButton>
-                ) : null}
-
-                {/* minWidth:0 — иначе Android multiline TextInput раздувает hit-box и перекрывает микрофон/отправку */}
-                <View style={{ flex: 1, minWidth: 0, justifyContent: 'center' }}>
-                  <TextInput
-                    ref={composerInputRef}
-                    style={{
-                      flex: 1,
-                      color: voiceIsRecording ? 'transparent' : LIVI.white,
-                      fontSize: composerFontSize,
-                      lineHeight: composerLineHeight,
-                      paddingTop: 2,
-                      paddingBottom: 2,
-                      paddingLeft: COMPOSER_TEXT_INSET_LEFT,
-                      maxHeight: composerTextInputMaxHeight,
-                    }}
-                    placeholder=""
-                    accessibilityLabel={composerPlaceholder}
-                    maxLength={MAX_MESSAGE_TEXT_LENGTH}
-                    maxFontSizeMultiplier={APP_COMPOSER_MAX_FONT_SIZE_MULTIPLIER}
-                    value={messageText}
-                    onChangeText={(txt) => {
-                      messageTextRef.current = txt;
-                      setMessageText(txt);
-                      signalLocalTyping();
-                    }}
-                    onFocus={() => setEmojiPanelOpen(false)}
-                    multiline
-                    scrollEnabled
-                    onSubmitEditing={sendMessage}
-                    returnKeyType="send"
-                    caretHidden={voiceIsRecording}
-                    autoCorrect={true}
-                    spellCheck={true}
-                  />
-                  {voiceIsRecording ? (
-                    <View
-                      pointerEvents="none"
-                      style={{
-                        ...StyleSheet.absoluteFillObject,
-                        flexDirection: 'row',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                      }}
-                    >
-                      <Animated.View
-                        style={{
-                          width: 8,
-                          height: 8,
-                          borderRadius: 4,
-                          backgroundColor: '#FF5A67',
-                          marginRight: 8,
-                          opacity: trashFlash.interpolate({ inputRange: [0, 1], outputRange: [1, 0.5] }),
-                        }}
-                      />
-                      <Text style={{ color: LIVI.white, fontSize: 14, fontWeight: '700' }}>
-                        {formatDuration(Math.min(voiceRecordMs, VOICE_MAX_MS))}
-                      </Text>
-                      <Text style={{ color: LIVI.titan, fontSize: 12, fontWeight: '600', marginLeft: 6 }}>
-                        / 1:00
-                      </Text>
-                    </View>
-                  ) : null}
-                  {!messageText && !voiceIsRecording ? (
-                    <View
-                      pointerEvents="none"
-                      style={{
-                        ...StyleSheet.absoluteFillObject,
-                        justifyContent: 'center',
-                        paddingLeft: COMPOSER_TEXT_INSET_LEFT,
-                      }}
-                    >
-                      <Text
-                        numberOfLines={1}
-                        adjustsFontSizeToFit
-                        minimumFontScale={0.82}
-                        maxFontSizeMultiplier={APP_COMPOSER_MAX_FONT_SIZE_MULTIPLIER}
-                        style={{
-                          color: LIVI.titan,
-                          fontSize: composerFontSize,
-                          lineHeight: composerLineHeight,
-                        }}
-                      >
-                        {composerPlaceholder}
-                      </Text>
-                    </View>
-                  ) : null}
-                  {/* «Влево — отмена» — только пока держат: запись по тапу отменяют корзиной. */}
-                  {voiceIsRecording && !voiceLocked ? (
-                    <View
-                      pointerEvents="none"
-                      style={{
-                        position: 'absolute',
-                        left: 0,
-                        right: 0,
-                        justifyContent: 'center',
-                      }}
-                    >
-                      <View style={{ flexDirection: 'row', alignItems: 'center', height: 36 }}>
-                        <Animated.View
-                          style={{
-                            opacity: recordViz.interpolate({ inputRange: [0, 1], outputRange: [0.18, 0.45] }),
-                            transform: [
-                              {
-                                translateX: recordViz.interpolate({ inputRange: [0, 1], outputRange: [0, -10] }) as any,
-                              },
-                            ],
-                          }}
-                        >
-                          <Ionicons name="chevron-back" size={18} color={LIVI.titan} />
-                        </Animated.View>
-                      </View>
-                    </View>
-                  ) : null}
-                </View>
-
-                {/* Видеокружок — отдельная кнопка слева от микрофона: держишь — пишет камера. */}
-                <Animated.View
-                  {...videoPanResponder.panHandlers}
-                  collapsable={false}
-                  accessibilityRole="button"
-                  accessibilityLabel={t('chatVideoMessage', lang)}
-                  style={{
-                    marginLeft: 4,
-                    width: 36,
-                    height: 36,
-                    borderRadius: 18,
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    backgroundColor: recordingKind === 'video' ? LIVI.titan : COMPOSER_IDLE_BUTTON_BG,
-                    opacity: voiceIsRecording && recordingKind !== 'video' ? 0.4 : 1,
-                    transform: [{ scale: videoScale }],
-                  }}
-                >
-                  <View pointerEvents="none" style={{ alignItems: 'center', justifyContent: 'center' }}>
-                    <Ionicons
-                      name={recordingKind === 'video' ? 'videocam' : 'videocam-outline'}
-                      size={20}
-                      color={recordingKind === 'video' ? '#FF5A67' : COMPOSER_BUTTON_ICON}
-                    />
-                  </View>
-                </Animated.View>
-
-                <Animated.View
-                  {...micPanResponder.panHandlers}
-                  collapsable={false}
-                  style={{
-                    // Между камерой и микрофоном — как между микрофоном и «Отправить».
-                    marginLeft: 12,
-                    marginRight: 0,
-                    width: 36,
-                    height: 36,
-                    borderRadius: 18,
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    transform: [{ scale: micScale }],
-                    backgroundColor: recordingKind === 'voice' ? LIVI.titan : COMPOSER_IDLE_BUTTON_BG,
-                    opacity: voiceIsRecording && recordingKind === 'video' ? 0.4 : 1,
-                  }}
-                >
-                  <View pointerEvents="none" style={{ alignItems: 'center', justifyContent: 'center' }}>
-                    <Ionicons
-                      name={recordingKind === 'voice' ? 'mic' : 'mic-outline'}
-                      size={20}
-                      color={recordingKind === 'voice' ? '#FF5A67' : COMPOSER_BUTTON_ICON}
-                    />
-                  </View>
-                </Animated.View>
-
-                <Pressable
-                  onPress={onPressSendButton}
-                  hitSlop={COMPOSER_HIT_SEND}
-                  accessibilityRole="button"
-                  accessibilityState={{ disabled: !messageText.trim() && !voiceIsRecording }}
-                  style={({ pressed }) => ({
-                    width: 36,
-                    height: 36,
-                    borderRadius: 18,
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    backgroundColor:
-                      messageText.trim() || voiceIsRecording
-                        ? LIVI.titan
-                        : pressed
-                          ? COMPOSER_PRESSED_BUTTON_BG
-                          : COMPOSER_IDLE_BUTTON_BG,
-                    marginLeft: 12,
-                  })}
-                >
-                  <Ionicons
-                    name={editingMessageId ? 'checkmark' : 'send'}
-                    size={20}
-                    color={messageText.trim() || voiceIsRecording ? LIVI.white : COMPOSER_BUTTON_ICON}
-                  />
-                </Pressable>
-              </View>
+              {composerCore}
               {emojiPanelOpen || emojiPanelWarm ? (
                 <View
                   pointerEvents={emojiPanelOpen ? 'auto' : 'none'}
@@ -3642,23 +3661,7 @@ export default function ChatScreen({ route, navigation }: Props) {
               maxToRenderPerBatch={CHAT_LIST_MAX_TO_RENDER_PER_BATCH}
               windowSize={CHAT_LIST_WINDOW_SIZE}
               updateCellsBatchingPeriod={CHAT_LIST_UPDATE_CELLS_BATCHING_PERIOD}
-              ListEmptyComponent={() => {
-                if (!chatFeedReady) {
-                  return (
-                    <View
-                      style={{
-                        flex: 1,
-                        justifyContent: 'center',
-                        alignItems: 'center',
-                        backgroundColor: 'transparent',
-                      }}
-                    >
-                      <ActivityIndicator color={LIVI.titan} />
-                    </View>
-                  );
-                }
-                return null;
-              }}
+              ListEmptyComponent={ChatListEmpty}
             />
             </ChatMessageEdgeFade>
             </Animated.View>
@@ -3684,24 +3687,7 @@ export default function ChatScreen({ route, navigation }: Props) {
               </Animated.View>
             ) : null}
 
-            {/* Видеокружок: круг с камерой над перепиской (под композером); замок над кнопкой записи. */}
-            <VideoNoteRecorder
-              active={voiceIsRecording && recordingKind === 'video'}
-              recordMs={voiceRecordMs}
-              handleRef={videoRecorderRef}
-              shouldStart={shouldStartVideo}
-              onStarted={onVideoStarted}
-              onFinished={onVideoFinished}
-              bottomReserve={resolvedInputBarH + composerSystemBottomInset}
-              topReserve={headerTotalH}
-            />
-            <RecordLockHint
-              visible={voiceIsRecording && !voiceLocked}
-              lockDrag={lockDrag}
-              // Над той кнопкой, которую держат: микрофон или камера (на 40 левее).
-              right={chatChromeSideInset + 63 + (recordingKind === 'video' ? 40 : 0)}
-              bottom={resolvedInputBarH + composerSystemBottomInset + 10}
-            />
+            {composerRecordingOverlays}
 
             <Animated.View
               ref={chatComposerDockRef}
@@ -3739,313 +3725,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 collapsable={false}
                 style={{ zIndex: 2, elevation: 2 }}
               >
-              <E2eChatBanner
-                lang={lang}
-                peerId={peerId}
-                encrypted={chatEncrypted}
-                emptyChat={serverHistoryEmpty && showEmpty}
-              />
-              {editingMessageId ? (
-                <ChatComposerContextBar
-                  mode="edit"
-                  title={t('chatEditingTitle', lang)}
-                  text={editingOriginalText}
-                  accent={LIVI.replyQuoteAccent}
-                  textColor={LIVI.white}
-                  closeColor={LIVI.titan}
-                  closeA11y={t('cancelAction', lang)}
-                  onClose={cancelEditing}
-                />
-              ) : replyingToMessage ? (
-                <ChatComposerContextBar
-                  mode="reply"
-                  title={t('chatReplyingTo', lang).replace('{name}', replyingToMessage.isOwn ? t('you', lang) : peerNameState)}
-                  text={replyingToMessage.text}
-                  accent={LIVI.replyQuoteAccent}
-                  textColor={LIVI.white}
-                  closeColor={LIVI.titan}
-                  closeA11y={t('cancelAction', lang)}
-                  onClose={() => setReplyingToMessage(null)}
-                />
-              ) : null}
-              <View
-                style={{
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  backgroundColor: COMPOSER_INPUT_BG,
-                  borderRadius: 24,
-                  // По бокам отступ = вертикальному: крайние круги вписаны в скругление строки.
-                  paddingHorizontal: 2,
-                  paddingVertical: 2,
-                  borderWidth: 1,
-                  borderColor: BORDER_COLOR,
-                }}
-              >
-                {voiceIsRecording ? (
-                  <Pressable
-                    hitSlop={10}
-                    accessibilityRole="button"
-                    onPress={() => {
-                      void cancelVoiceRecordingWithAnimation();
-                    }}
-                    // Круг правее кнопки картинки; слот 8+36+4 = её 36+12, строка не сдвигается.
-                    style={{ marginLeft: 8, marginRight: 4 }}
-                  >
-                    {/* Круг как у кнопки картинки: тот же размер и заливка. */}
-                    <Animated.View
-                      ref={(r) => { trashMeasureRef.current = r as any; }}
-                      onLayout={() => updateTrashZone()}
-                      style={{
-                        width: CHAT_ROUND_BUTTON_SIZE,
-                        height: CHAT_ROUND_BUTTON_SIZE,
-                        borderRadius: CHAT_ROUND_BUTTON_SIZE / 2,
-                        backgroundColor: COMPOSER_IDLE_BUTTON_BG,
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        transform: [
-                          { scale: trashFlash.interpolate({ inputRange: [0, 1], outputRange: [1, 1.08] }) },
-                        ],
-                      }}
-                    >
-                      {/* Крышка качается и мигает только у значка — круг остаётся плотным. */}
-                      <Animated.View
-                        style={{
-                          transform: [
-                            { rotate: trashLid.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '-14deg'] }) },
-                          ],
-                          opacity: trashFlash.interpolate({ inputRange: [0, 1], outputRange: [0.85, 1] }),
-                        }}
-                      >
-                        <Ionicons name="trash-outline" size={24} color="#FF5A67" />
-                      </Animated.View>
-                    </Animated.View>
-                  </Pressable>
-                ) : (
-                  <ChatRoundButton
-                    onPress={handleAttachments}
-                    hitSlop={COMPOSER_HIT_ATTACH}
-                    accessibilityLabel={t('chooseFromGallery', lang)}
-                    backgroundColor={COMPOSER_IDLE_BUTTON_BG}
-                    pressedBackgroundColor={COMPOSER_PRESSED_BUTTON_BG}
-                    marginRight={12}
-                  >
-                    <Ionicons name="image" size={28} color={COMPOSER_BUTTON_ICON} />
-                  </ChatRoundButton>
-                )}
-
-                {!voiceIsRecording ? (
-                  <ChatRoundButton
-                    onPress={handleEmojiButtonPress}
-                    hitSlop={{ top: 10, bottom: 10, left: 6, right: 6 }}
-                    accessibilityLabel="Emoji"
-                    backgroundColor={COMPOSER_IDLE_BUTTON_BG}
-                    pressedBackgroundColor={COMPOSER_PRESSED_BUTTON_BG}
-                    marginRight={8}
-                  >
-                    <Ionicons
-                      name={emojiPanelOpen && emojiReturnsToKeyboard ? 'keypad-outline' : 'happy-outline'}
-                      size={26}
-                      color={emojiPanelOpen ? WELCOME_NAV_ACTIVE_ACCENT.softText : COMPOSER_BUTTON_ICON}
-                    />
-                  </ChatRoundButton>
-                ) : null}
-
-                <View style={{ flex: 1, minWidth: 0, justifyContent: 'center' }}>
-                  <TextInput
-                    ref={composerInputRef}
-                    style={{
-                      flex: 1,
-                      color: voiceIsRecording ? 'transparent' : LIVI.white,
-                      fontSize: composerFontSize,
-                      lineHeight: composerLineHeight,
-                      paddingTop: 0,
-                      paddingBottom: 0,
-                      paddingLeft: COMPOSER_TEXT_INSET_LEFT,
-                      maxHeight: composerTextInputMaxHeight,
-                      includeFontPadding: false,
-                    }}
-                    placeholder=""
-                    accessibilityLabel={composerPlaceholder}
-                    maxLength={MAX_MESSAGE_TEXT_LENGTH}
-                    maxFontSizeMultiplier={APP_COMPOSER_MAX_FONT_SIZE_MULTIPLIER}
-                    value={messageText}
-                    onChangeText={(txt) => {
-                      messageTextRef.current = txt;
-                      setMessageText(txt);
-                      signalLocalTyping();
-                    }}
-                    onFocus={() => setEmojiPanelOpen(false)}
-                    multiline
-                    scrollEnabled
-                    onSubmitEditing={sendMessage}
-                    returnKeyType="send"
-                    caretHidden={voiceIsRecording}
-                    autoCorrect={true}
-                    spellCheck={true}
-                  />
-                  {voiceIsRecording ? (
-                    <View
-                      pointerEvents="none"
-                      style={{
-                        ...StyleSheet.absoluteFillObject,
-                        flexDirection: 'row',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                      }}
-                    >
-                      <Animated.View
-                        style={{
-                          width: 8,
-                          height: 8,
-                          borderRadius: 4,
-                          backgroundColor: '#FF5A67',
-                          marginRight: 8,
-                          opacity: trashFlash.interpolate({ inputRange: [0, 1], outputRange: [1, 0.5] }),
-                        }}
-                      />
-                      <Text style={{ color: LIVI.white, fontSize: 14, fontWeight: '700' }}>
-                        {formatDuration(Math.min(voiceRecordMs, VOICE_MAX_MS))}
-                      </Text>
-                      <Text style={{ color: LIVI.titan, fontSize: 12, fontWeight: '600', marginLeft: 6 }}>
-                        / 1:00
-                      </Text>
-                    </View>
-                  ) : null}
-                  {!messageText && !voiceIsRecording ? (
-                    <View
-                      pointerEvents="none"
-                      style={{
-                        ...StyleSheet.absoluteFillObject,
-                        justifyContent: 'center',
-                        paddingLeft: COMPOSER_TEXT_INSET_LEFT,
-                      }}
-                    >
-                      <Text
-                        numberOfLines={1}
-                        adjustsFontSizeToFit
-                        minimumFontScale={0.82}
-                        maxFontSizeMultiplier={APP_COMPOSER_MAX_FONT_SIZE_MULTIPLIER}
-                        style={{
-                          color: LIVI.titan,
-                          fontSize: composerFontSize,
-                          lineHeight: composerLineHeight,
-                          ...(Platform.OS === 'android' ? { includeFontPadding: false } : null),
-                        }}
-                      >
-                        {composerPlaceholder}
-                      </Text>
-                    </View>
-                  ) : null}
-                  {/* «Влево — отмена» — только пока держат: запись по тапу отменяют корзиной. */}
-                  {voiceIsRecording && !voiceLocked ? (
-                    <View
-                      pointerEvents="none"
-                      style={{
-                        position: 'absolute',
-                        left: 0,
-                        right: 0,
-                        justifyContent: 'center',
-                      }}
-                    >
-                      <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', height: 36 }}>
-                        <Animated.View
-                          style={{
-                            opacity: recordViz.interpolate({ inputRange: [0, 1], outputRange: [0.18, 0.45] }),
-                            transform: [
-                              {
-                                translateX: recordViz.interpolate({ inputRange: [0, 1], outputRange: [0, -10] }) as any,
-                              },
-                            ],
-                          }}
-                        >
-                          <Ionicons name="chevron-back" size={18} color={LIVI.titan} />
-                        </Animated.View>
-                      </View>
-                    </View>
-                  ) : null}
-                </View>
-
-                {/* Видеокружок — отдельная кнопка слева от микрофона: держишь — пишет камера. */}
-                <Animated.View
-                  {...videoPanResponder.panHandlers}
-                  collapsable={false}
-                  accessibilityRole="button"
-                  accessibilityLabel={t('chatVideoMessage', lang)}
-                  style={{
-                    marginLeft: 4,
-                    width: 36,
-                    height: 36,
-                    borderRadius: 18,
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    backgroundColor: recordingKind === 'video' ? LIVI.titan : COMPOSER_IDLE_BUTTON_BG,
-                    opacity: voiceIsRecording && recordingKind !== 'video' ? 0.4 : 1,
-                    transform: [{ scale: videoScale }],
-                  }}
-                >
-                  <View pointerEvents="none" style={{ alignItems: 'center', justifyContent: 'center' }}>
-                    <Ionicons
-                      name={recordingKind === 'video' ? 'videocam' : 'videocam-outline'}
-                      size={20}
-                      color={recordingKind === 'video' ? '#FF5A67' : COMPOSER_BUTTON_ICON}
-                    />
-                  </View>
-                </Animated.View>
-
-                <Animated.View
-                  {...micPanResponder.panHandlers}
-                  collapsable={false}
-                  style={{
-                    // Между камерой и микрофоном — как между микрофоном и «Отправить».
-                    marginLeft: 12,
-                    marginRight: 0,
-                    width: 36,
-                    height: 36,
-                    borderRadius: 18,
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    transform: [{ scale: micScale }],
-                    backgroundColor: recordingKind === 'voice' ? LIVI.titan : COMPOSER_IDLE_BUTTON_BG,
-                    opacity: voiceIsRecording && recordingKind === 'video' ? 0.4 : 1,
-                  }}
-                >
-                  <View pointerEvents="none" style={{ alignItems: 'center', justifyContent: 'center' }}>
-                    <Ionicons
-                      name={recordingKind === 'voice' ? 'mic' : 'mic-outline'}
-                      size={20}
-                      color={recordingKind === 'voice' ? '#FF5A67' : COMPOSER_BUTTON_ICON}
-                    />
-                  </View>
-                </Animated.View>
-
-                <Pressable
-                  onPress={onPressSendButton}
-                  hitSlop={COMPOSER_HIT_SEND}
-                  accessibilityRole="button"
-                  accessibilityState={{ disabled: !messageText.trim() && !voiceIsRecording }}
-                  style={({ pressed }) => ({
-                    width: 36,
-                    height: 36,
-                    borderRadius: 18,
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    backgroundColor:
-                      messageText.trim() || voiceIsRecording
-                        ? LIVI.titan
-                        : pressed
-                          ? COMPOSER_PRESSED_BUTTON_BG
-                          : COMPOSER_IDLE_BUTTON_BG,
-                    marginLeft: 12,
-                    overflow: 'hidden',
-                  })}
-                >
-                  <Ionicons
-                    name={editingMessageId ? 'checkmark' : 'send'}
-                    size={20}
-                    color={messageText.trim() || voiceIsRecording ? LIVI.white : COMPOSER_BUTTON_ICON}
-                  />
-                </Pressable>
-              </View>
+              {composerCore}
               </View>
             </ChatChrome>
             {emojiPanelOpen || emojiPanelWarm ? (
