@@ -15,6 +15,7 @@ import {
 import { MaterialIcons } from '@expo/vector-icons';
 import { NativeBlurBackdrop, type BackdropSources } from '../../BackdropBlur';
 import { AppOverlay } from '../../AppOverlay';
+import { AvatarGlyph } from '../../AvatarGlyph';
 import { StageGradient } from '../../../screens/home/WelcomeStageBackground';
 import { useResolvedImageUri } from '../../../hooks/useResolvedImageUri';
 import { displayAvatarLetter } from '../../../screens/home/friendHelpers';
@@ -206,7 +207,7 @@ export function CallScreenChrome({
                 <Image source={{ uri: resolvedUri }} style={styles.avatar} />
               ) : (
                 <View style={[styles.avatar, styles.avatarFallback]}>
-                  <Text style={styles.avatarLetter}>{letter || '—'}</Text>
+                  <AvatarGlyph style={styles.avatarLetter}>{letter || '—'}</AvatarGlyph>
                 </View>
               )}
               <View style={styles.onlineDot} />

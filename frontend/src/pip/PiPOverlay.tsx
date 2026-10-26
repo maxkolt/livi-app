@@ -23,6 +23,7 @@ import { useResolvedImageUri } from '../../hooks/useResolvedImageUri';
 import { useAppTheme } from '../../theme/ThemeProvider';
 import { WELCOME_HEADER_TITLE } from '../../screens/home/constants';
 import AwayPlaceholder from '../../components/AwayPlaceholder';
+import { AvatarGlyph } from '../../components/AvatarGlyph';
 import { PIP_ROUNDED, PIP_TEXTURE_VIEW } from '../../components/VideoChat/shared/pipTextureView';
 import {
   prepareDirectCallAudioReturnFromPiP,
@@ -739,9 +740,9 @@ function PipPlaceholder({
         />
       ) : (
         <View style={[styles.pipAvatarFallback, avatarStyle, { backgroundColor: 'rgba(255,255,255,0.14)' }]}>
-          <Text style={[styles.pipAvatarText, compact && styles.pipAvatarTextCompact]} numberOfLines={1}>
+          <AvatarGlyph style={[styles.pipAvatarText, compact && styles.pipAvatarTextCompact]}>
             {name ? displayAvatarLetter(name) : '?'}
-          </Text>
+          </AvatarGlyph>
         </View>
       )}
     </View>

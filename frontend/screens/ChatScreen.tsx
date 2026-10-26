@@ -50,6 +50,7 @@ import {
 } from "../constants/uiTokens";
 import { Image as ExpoImage } from "expo-image";
 import AvatarImage from "../components/AvatarImage";
+import { AvatarGlyph } from "../components/AvatarGlyph";
 import ChatEmojiKeyboard, {
   CHAT_EMOJI_PANEL_HEIGHT,
   CHAT_EMOJI_PANEL_LANDSCAPE_HEIGHT,
@@ -3794,7 +3795,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                     />
                   ) : (
                     <View style={{ width: avatarModalSize, height: avatarModalSize, borderRadius: avatarModalSize / 2, backgroundColor: 'rgba(255,255,255,0.06)', alignItems: 'center', justifyContent: 'center' }}>
-                      <Text style={{ color: LIVI.titan, fontSize: avatarModalSize * 0.35, fontWeight: '500' }}>{headerInitial}</Text>
+                      <AvatarGlyph style={{ color: LIVI.titan, fontSize: avatarModalSize * 0.35, fontWeight: '500' }}>{headerInitial}</AvatarGlyph>
                     </View>
                   )
                 ) : (
@@ -3806,12 +3807,12 @@ export default function ChatScreen({ route, navigation }: Props) {
                           style={{ width: avatarModalSize, height: avatarModalSize }}
                         />
                       ) : (
-                        <Text style={{ color: LIVI.titan, fontSize: avatarModalSize * 0.35, fontWeight: '500' }}>{headerInitial}</Text>
+                        <AvatarGlyph style={{ color: LIVI.titan, fontSize: avatarModalSize * 0.35, fontWeight: '500' }}>{headerInitial}</AvatarGlyph>
                       )}
                     </View>
                   ) : (
                     <View style={{ width: avatarModalSize, height: avatarModalSize, borderRadius: avatarModalSize / 2, backgroundColor: 'rgba(255,255,255,0.06)', alignItems: 'center', justifyContent: 'center' }}>
-                      <Text style={{ color: LIVI.titan, fontSize: avatarModalSize * 0.35, fontWeight: '500' }}>{headerInitial}</Text>
+                      <AvatarGlyph style={{ color: LIVI.titan, fontSize: avatarModalSize * 0.35, fontWeight: '500' }}>{headerInitial}</AvatarGlyph>
                     </View>
                   )
                 )}

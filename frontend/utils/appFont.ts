@@ -166,6 +166,17 @@ function patchRender(component: ForwardRefComponent, nestable: boolean, maxFontS
   component.render = withAppFont;
 }
 
+/**
+ * Кегль, которым Text приложения (верхнего уровня, без своего maxFontSizeMultiplier) реально
+ * рисует fontSize: адаптивный масштаб из patchRender + системный размер шрифта под потолком.
+ */
+export function renderedAppFontSize(fontSize: number): number {
+  const { width, height } = typeScaleWindowSize(Dimensions.get('window'), Dimensions.get('screen'));
+  const fontScale = PixelRatio.getFontScale() || 1;
+  const adaptive = scaleFont(fontSize, adaptiveTypeStyleScaleForSize(width, height, fontScale));
+  return adaptive * Math.min(fontScale, APP_TEXT_MAX_FONT_SIZE_MULTIPLIER);
+}
+
 let installed = false;
 
 /** Один раз до первого рендера (index.tsx). */

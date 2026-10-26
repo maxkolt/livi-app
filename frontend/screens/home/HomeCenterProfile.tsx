@@ -5,6 +5,7 @@ import AvatarImage, {
   activeFrameOutset,
   type AvatarDisplay,
 } from '../../components/AvatarImage';
+import { AvatarGlyph } from '../../components/AvatarGlyph';
 import { getCurrentUserId } from '../../sockets/socket';
 import { CHROME_PERIMETER_GLOW_LAYOUT_INSET, LIVI } from './constants';
 import { ChromePerimeterGlow } from './chrome';
@@ -286,14 +287,14 @@ function HomeCenterProfileInner({
       ) : hasDirectAvatarUri ? (
         avatarVerChecked ? (
           <View style={[styles.centerAvatarImg, { alignItems: 'center', justifyContent: 'center' }]}>
-            <Text style={{ color: LIVI.titan, fontSize: letterFontSize, fontWeight: '500' }}>{letter}</Text>
+            <AvatarGlyph style={{ color: LIVI.titan, fontSize: letterFontSize, fontWeight: '500' }}>{letter}</AvatarGlyph>
           </View>
         ) : (
           <View style={[styles.centerAvatarImg, { alignItems: 'center', justifyContent: 'center' }]} />
         )
       ) : avatarVerChecked ? (
         <View style={[styles.centerAvatarImg, { alignItems: 'center', justifyContent: 'center' }]}>
-          <Text style={{ color: LIVI.titan, fontSize: letterFontSize, fontWeight: '500' }}>{letter}</Text>
+          <AvatarGlyph style={{ color: LIVI.titan, fontSize: letterFontSize, fontWeight: '500' }}>{letter}</AvatarGlyph>
         </View>
       ) : (
         <View style={[styles.centerAvatarImg, { alignItems: 'center', justifyContent: 'center' }]} />

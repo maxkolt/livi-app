@@ -35,6 +35,7 @@ import { useResolvedImageUri } from '../hooks/useResolvedImageUri';
 import { useOrientationLayoutGuard } from '../hooks/useOrientationLayoutGuard';
 import SplashLoader from '../components/SplashLoader';
 import AvatarImage from '../components/AvatarImage';
+import { AvatarGlyph } from '../components/AvatarGlyph';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 
@@ -5953,12 +5954,12 @@ const handleClearNick = useCallback(async () => {
                     />
                   ) : (
                   <View style={{ width: avatarModalSize, height: avatarModalSize, borderRadius: avatarModalSize / 2, backgroundColor: 'rgba(255,255,255,0.06)', alignItems: 'center', justifyContent: 'center' }}>
-                    <Text style={{ color: LIVI.titan, fontSize: avatarModalSize * 0.35, fontWeight: '500' }}>{displayAvatarLetter(savedNick)}</Text>
+                    <AvatarGlyph style={{ color: LIVI.titan, fontSize: avatarModalSize * 0.35, fontWeight: '500' }}>{displayAvatarLetter(savedNick)}</AvatarGlyph>
                   </View>
                   )
                 ) : (
                   <View style={{ width: avatarModalSize, height: avatarModalSize, borderRadius: avatarModalSize / 2, backgroundColor: 'rgba(255,255,255,0.06)', alignItems: 'center', justifyContent: 'center' }}>
-                    <Text style={{ color: LIVI.titan, fontSize: avatarModalSize * 0.35, fontWeight: '500' }}>{displayAvatarLetter(savedNick)}</Text>
+                    <AvatarGlyph style={{ color: LIVI.titan, fontSize: avatarModalSize * 0.35, fontWeight: '500' }}>{displayAvatarLetter(savedNick)}</AvatarGlyph>
                   </View>
                 )}
               </Animated.View>
@@ -6193,9 +6194,9 @@ const handleClearNick = useCallback(async () => {
               />
             ) : (
               <View style={welcomeOverlayText.avatarFallback}>
-                <Text style={{ color: WELCOME_HEADER_TITLE, fontSize: 24, fontWeight: '700' }}>
+                <AvatarGlyph style={{ color: WELCOME_HEADER_TITLE, fontSize: 24, fontWeight: '700' }}>
                   {trimNick(inviteRequestData.inviter.nick)?.[0]?.toUpperCase() || '?'}
-                </Text>
+                </AvatarGlyph>
               </View>
             )}
             <Text style={[welcomeOverlayText.strong, { marginBottom: 8 }]}>

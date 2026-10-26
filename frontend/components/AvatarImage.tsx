@@ -1,6 +1,6 @@
 // components/AvatarImage.tsx
 import React, { memo, useCallback, useEffect, useRef, useState } from 'react';
-import { StyleSheet, View, Text, StyleProp, ViewStyle, TextStyle, ImageStyle } from 'react-native';
+import { StyleSheet, View, StyleProp, ViewStyle, TextStyle, ImageStyle } from 'react-native';
 import { Image as ExpoImage } from 'expo-image';
 import Svg, { Circle, Defs, LinearGradient as SvgLinearGradient, Stop } from 'react-native-svg';
 import { useResolvedImageUri } from '../hooks/useResolvedImageUri';
@@ -11,6 +11,7 @@ import { logger } from '../utils/logger';
 import { FireAvatarFrame, fireFrameOutset } from './frames/FireAvatarFrame';
 import { IceAvatarFrame } from './frames/IceAvatarFrame';
 import { DiamondAvatarFrame } from './frames/DiamondAvatarFrame';
+import { AvatarGlyph } from './AvatarGlyph';
 import Reanimated, { useAnimatedStyle, type SharedValue } from 'react-native-reanimated';
 
 /**
@@ -420,7 +421,7 @@ const AvatarImage = memo<AvatarImageProps>(({
       ]}
     />
   ) : showFallbackLetter ? (
-    <Text
+    <AvatarGlyph
       style={[
         {
           color: '#E6E8EB',
@@ -431,7 +432,7 @@ const AvatarImage = memo<AvatarImageProps>(({
       ]}
     >
       {fallbackText}
-    </Text>
+    </AvatarGlyph>
   ) : null;
 
   if (isLiveFrame) {

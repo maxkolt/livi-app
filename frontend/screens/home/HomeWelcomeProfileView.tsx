@@ -20,6 +20,7 @@ import { FontAwesome, Ionicons } from '@expo/vector-icons';
 import { Image as ExpoImage } from 'expo-image';
 import * as Clipboard from 'expo-clipboard';
 import AvatarImage, { activeFrameOutset } from '../../components/AvatarImage';
+import { AvatarGlyph } from '../../components/AvatarGlyph';
 import { TextInput as PaperInput } from 'react-native-paper';
 import { getCurrentUserId } from '../../sockets/socket';
 import { t, languages, type Lang } from '../../utils/i18n';
@@ -714,7 +715,7 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
         />
       ) : (
         <View style={[homeStyles.centerAvatarImg, { alignItems: 'center', justifyContent: 'center' }]}>
-          <AdaptiveText style={{ color: LIVI.titan, fontSize: avatarSize > 110 ? 34 : 28, fontWeight: '500' }}>{letter}</AdaptiveText>
+          <AvatarGlyph style={{ color: LIVI.titan, fontSize: avatarSize > 110 ? 34 : 28, fontWeight: '500' }}>{letter}</AvatarGlyph>
         </View>
       )}
     </View>
