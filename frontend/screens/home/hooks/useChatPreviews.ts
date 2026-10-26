@@ -1,19 +1,28 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   fetchChatPreviews,
   getChatMessagesLocal,
   getCurrentUserId,
   globalMessageStorage,
+  isMessagePendingInOutbox,
   onChatCleared,
+  onMessageReadReceipt,
   onMessageReceived,
+  onOutboxMessageDelivered,
+  onOutboxMessageFailed,
+  onOutboxPendingChange,
 } from '../../../sockets/socket';
 import type { Lang } from '../../../utils/i18n';
 import {
+  keepReadStatus,
+  outgoingPreviewStatus,
   pickLatestMessage,
   previewTextFromMessage,
   messageTimestampMs,
   type ChatPreview,
 } from '../chatPreview';
+import { getChatStatusesKey } from '../../chat/chatStorageKeys';
 import { onChatCallStatusMessage } from '../../../utils/globalEvents';
 import {
   getClearedForMePeerIds,
@@ -31,6 +40,77 @@ function getChatPreviewSnapshot(): Record<string, ChatPreview> {
   return previewMemory;
 }
 
+function notifyPreviewListeners(): void {
+  prefetchListeners.forEach((listener) => {
+    try {
+      listener();
+    } catch {}
+  });
+}
+
+/** Квитанции о прочтении за сессию: превью могло собраться из кэша, где read ещё false. */
+const readReceiptIds = new Set<string>();
+
+function rememberReadReceipt(messageId: string): void {
+  readReceiptIds.add(messageId);
+  if (readReceiptIds.size > 5000) {
+    const oldest = readReceiptIds.values().next().value;
+    if (oldest !== undefined) readReceiptIds.delete(oldest);
+  }
+}
+
+/** Превью строки + статус своего последнего сообщения (значок под временем). */
+function previewWithStatus(msg: any, text: string, at: number, saved?: string): ChatPreview {
+  const id = String(msg?.id || '').trim();
+  const status = outgoingPreviewStatus(msg, String(getCurrentUserId() || '').trim(), {
+    pending: !!id && isMessagePendingInOutbox(id),
+    readReceipt: !!id && readReceiptIds.has(id),
+    saved,
+  });
+  const preview: ChatPreview = { text, at };
+  if (id) preview.id = id;
+  if (status) preview.status = status;
+  return preview;
+}
+
+/** Статус облака, сохранённый чатом или очередью (пишется и при закрытом чате). */
+async function readSavedOutgoingStatus(peerId: string, msg: any): Promise<string | undefined> {
+  const me = String(getCurrentUserId() || '').trim();
+  const id = String(msg?.id || '').trim();
+  if (!me || !id || !outgoingPreviewStatus(msg, me, { pending: false, readReceipt: false })) {
+    return undefined;
+  }
+  try {
+    const raw = await AsyncStorage.getItem(getChatStatusesKey(me, peerId));
+    const saved = raw ? JSON.parse(raw)?.[id] : undefined;
+    return typeof saved === 'string' ? saved : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function previewFromLocalHistory(peerId: string, lang: Lang): Promise<ChatPreview | null> {
+  const messages = await getChatMessagesLocal(peerId);
+  const last = pickLatestMessage(messages);
+  if (!last) return null;
+  const saved = await readSavedOutgoingStatus(peerId, last);
+  return previewWithStatus(last, previewTextFromMessage(last, lang), messageTimestampMs(last), saved);
+}
+
+/** Обновить превью в памяти по событию (квитанция, очередь) и разослать вкладкам. */
+function patchPreviewMemory(update: (preview: ChatPreview, peerId: string) => ChatPreview | null): void {
+  let next: Record<string, ChatPreview> | null = null;
+  for (const peerId of Object.keys(previewMemory)) {
+    const updated = update(previewMemory[peerId], peerId);
+    if (!updated) continue;
+    next = next || { ...previewMemory };
+    next[peerId] = updated;
+  }
+  if (!next) return;
+  previewMemory = next;
+  notifyPreviewListeners();
+}
+
 /**
  * Оптимистичная исходящая (в т.ч. без сети): сразу обновить строку в «Чаты»,
  * не дожидаясь message:received и не опираясь на устаревший messageCache.
@@ -42,13 +122,9 @@ export function noteLocalChatPreview(peerId: string, message: any, lang: Lang): 
   const text = previewTextFromMessage(message, lang);
   const prev = previewMemory[id];
   if (prev && prev.at > at) return;
-  previewMemory = { ...previewMemory, [id]: { text, at } };
+  previewMemory = { ...previewMemory, [id]: keepReadStatus(prev, previewWithStatus(message, text, at)) };
   void unmarkChatsClearedForMe([id]);
-  prefetchListeners.forEach((listener) => {
-    try {
-      listener();
-    } catch {}
-  });
+  notifyPreviewListeners();
 }
 
 function previewFromServerMessage(msg: any, lang: Lang): ChatPreview | null {
@@ -56,7 +132,7 @@ function previewFromServerMessage(msg: any, lang: Lang): ChatPreview | null {
   const at = messageTimestampMs(msg);
   const text = previewTextFromMessage(msg, lang);
   if (!at && !text) return null;
-  return { text, at: at || Date.now() };
+  return previewWithStatus(msg, text, at || Date.now());
 }
 
 async function hydrateMissingPreviewsFromServer(
@@ -105,7 +181,7 @@ function mergeLiveMemory(
     const mem = previewMemory[id];
     if (!mem) continue;
     if (!next[id] || mem.at >= (next[id]?.at || 0)) {
-      next[id] = mem;
+      next[id] = keepReadStatus(next[id], mem);
     }
   }
   return next;
@@ -118,7 +194,13 @@ function previewMapsEqual(
   const aKeys = Object.keys(a);
   const bKeys = Object.keys(b);
   if (aKeys.length !== bKeys.length) return false;
-  return aKeys.every((key) => a[key]?.at === b[key]?.at && a[key]?.text === b[key]?.text);
+  return aKeys.every(
+    (key) =>
+      a[key]?.at === b[key]?.at &&
+      a[key]?.text === b[key]?.text &&
+      a[key]?.id === b[key]?.id &&
+      a[key]?.status === b[key]?.status,
+  );
 }
 
 /** Prefetch до открытия вкладки Chat — первый paint с полными превью. */
@@ -129,12 +211,8 @@ export async function prefetchChatPreviews(friendIds: string[], lang: Lang): Pro
   await Promise.all(
     ids.map(async (id) => {
       try {
-        const messages = await getChatMessagesLocal(id);
-        const last = pickLatestMessage(messages);
-        if (!last) return;
-        const at = messageTimestampMs(last);
-        const text = previewTextFromMessage(last, lang);
-        next[id] = { text, at };
+        const preview = await previewFromLocalHistory(id, lang);
+        if (preview) next[id] = preview;
       } catch {
         // skip
       }
@@ -143,10 +221,10 @@ export async function prefetchChatPreviews(friendIds: string[], lang: Lang): Pro
   // Локальные превью — сразу: за VPN ответ сервера для недостающих идёт секундами,
   // а вкладка всё это время оставалась бы пустой.
   previewMemory = mergeLiveMemory(ids, next);
-  prefetchListeners.forEach((listener) => listener());
+  notifyPreviewListeners();
   const hydrated = await hydrateMissingPreviewsFromServer(ids, next, lang);
   previewMemory = mergeLiveMemory(ids, hydrated);
-  prefetchListeners.forEach((listener) => listener());
+  notifyPreviewListeners();
 }
 
 export function useChatPreviews(friendIds: string[], lang: Lang, enabled: boolean) {
@@ -198,12 +276,8 @@ export function useChatPreviews(friendIds: string[], lang: Lang, enabled: boolea
       await Promise.all(
         ids.map(async (id) => {
           try {
-            const messages = await getChatMessagesLocal(id);
-            const last = pickLatestMessage(messages);
-            if (!last) return;
-            const at = messageTimestampMs(last);
-            const text = previewTextFromMessage(last, langRef.current);
-            next[id] = { text, at };
+            const preview = await previewFromLocalHistory(id, langRef.current);
+            if (preview) next[id] = preview;
           } catch {
             // keep missing preview
           }
@@ -252,8 +326,9 @@ export function useChatPreviews(friendIds: string[], lang: Lang, enabled: boolea
       if (idsRef.current.length && !idsRef.current.includes(peerId)) return;
       const at = messageTimestampMs(message) || Date.now();
       const text = previewTextFromMessage(message, langRef.current);
-      previewMemory = { ...previewMemory, [peerId]: { text, at } };
-      setPreviews((prev) => ({ ...prev, [peerId]: { text, at } }));
+      const preview = keepReadStatus(previewMemory[peerId], previewWithStatus(message, text, at));
+      previewMemory = { ...previewMemory, [peerId]: preview };
+      setPreviews((prev) => ({ ...prev, [peerId]: preview }));
     });
     const offCleared = onChatCleared((data) => {
       const me = String(getCurrentUserId() || '');
@@ -283,13 +358,56 @@ export function useChatPreviews(friendIds: string[], lang: Lang, enabled: boolea
       if (idsRef.current.length && !idsRef.current.includes(id)) return;
       const at = messageTimestampMs(message) || Date.now();
       const text = previewTextFromMessage(message, langRef.current);
-      previewMemory = { ...previewMemory, [id]: { text, at } };
-      setPreviews((prev) => ({ ...prev, [id]: { text, at } }));
+      const preview = previewWithStatus(message, text, at);
+      previewMemory = { ...previewMemory, [id]: preview };
+      setPreviews((prev) => ({ ...prev, [id]: preview }));
+    });
+    // Статус своего последнего сообщения меняется без нового сообщения: прочитано, ушло из очереди.
+    const offReadReceipt = onMessageReadReceipt(({ messageId }) => {
+      const mid = String(messageId || '').trim();
+      if (!mid) return;
+      rememberReadReceipt(mid);
+      patchPreviewMemory((p) =>
+        p.id === mid && p.status && p.status !== 'read' ? { ...p, status: 'read' } : null,
+      );
+    });
+    const offOutboxPending = onOutboxPendingChange(() => {
+      patchPreviewMemory((p) => {
+        if (!p.id || !p.status || p.status === 'read') return null;
+        const pending = isMessagePendingInOutbox(p.id);
+        if (pending && p.status !== 'sending') return { ...p, status: 'sending' };
+        if (!pending && p.status === 'sending') return { ...p, status: 'sent' };
+        return null;
+      });
+    });
+    const outboxIds = (d: { outboxId: string; optimisticUiId?: string }) =>
+      [d.optimisticUiId, d.outboxId].map((x) => String(x || '').trim()).filter(Boolean);
+    const offOutboxDelivered = onOutboxMessageDelivered((d) => {
+      const ids = outboxIds(d);
+      const serverId = String(d.serverMessageId || '').trim();
+      patchPreviewMemory((p, peerId) => {
+        if (peerId !== String(d.to || '').trim() || !p.id || !ids.includes(p.id)) return null;
+        const id = serverId || p.id;
+        const status = readReceiptIds.has(id) ? 'read' : 'sent';
+        return p.id === id && p.status === status ? null : { ...p, id, status };
+      });
+    });
+    const offOutboxFailed = onOutboxMessageFailed((f) => {
+      const ids = outboxIds(f);
+      patchPreviewMemory((p, peerId) =>
+        peerId === String(f.to || '').trim() && p.id && ids.includes(p.id) && p.status !== 'failed'
+          ? { ...p, status: 'failed' }
+          : null,
+      );
     });
     return () => {
       offReceived?.();
       offCleared?.();
       offCallStatus?.();
+      offReadReceipt?.();
+      offOutboxPending?.();
+      offOutboxDelivered?.();
+      offOutboxFailed?.();
     };
   }, []);
 

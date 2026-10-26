@@ -6,6 +6,7 @@ import {
   Platform,
   Pressable,
   StyleSheet,
+  Text,
   TextInput,
   TouchableWithoutFeedback,
   View,
@@ -64,6 +65,7 @@ import {
 import { friendMatchesNameSearch, getFriendDisplay } from './friendHelpers';
 import { useChatPreviews } from './hooks/useChatPreviews';
 import { formatWelcomeChatTime } from './chatPreview';
+import type { ChatReadStatus } from '../chat/chatMessageIds';
 import { consumePendingWelcomeChatsFilter, onPendingWelcomeChatsFilter, setWelcomeViewingChats, shouldSkipHomeUiSettle } from '../../utils/globalEvents';
 import { markUnreadNotificationsSeen } from '../../utils/pushNotifications';
 import { usePaneList } from '../../utils/paneVisibility';
@@ -76,6 +78,32 @@ import { welcomeSelectHaptic } from './welcomeSelectHaptic';
 import type { Friend } from './types';
 
 type ChatsFilter = 'all' | 'unread';
+
+/** Как у облака в чате (ChatMessageItem): две зелёные галочки — прочитано. */
+const CHAT_READ_TICK = 'hsl(108, 53.10%, 35.10%)';
+
+/** Статус своего последнего сообщения — на месте счётчика непрочитанных, те же значки, что в чате. */
+function ChatRowStatus({ status }: { status: ChatReadStatus }) {
+  if (status === 'sending') {
+    return <Ionicons name="time-outline" size={14} color={LIVI.titan} style={styles.rowStatus} />;
+  }
+  if (status === 'failed') {
+    return (
+      <View style={[styles.rowStatus, styles.rowStatusFailed]}>
+        <Text style={styles.rowStatusFailedText}>!</Text>
+      </View>
+    );
+  }
+  if (status === 'read') {
+    return (
+      <View style={[styles.rowStatus, styles.rowStatusRead]}>
+        <Ionicons name="checkmark" size={14} color={CHAT_READ_TICK} />
+        <Ionicons name="checkmark" size={14} color={CHAT_READ_TICK} style={styles.rowStatusSecondTick} />
+      </View>
+    );
+  }
+  return <Ionicons name="checkmark" size={14} color={LIVI.titan} style={styles.rowStatus} />;
+}
 
 type HomeWelcomeChatsViewProps = {
   lang: Lang;
@@ -552,6 +580,8 @@ function HomeWelcomeChatsViewInner({
                         {unread > 99 ? '99+' : unread}
                       </AdaptiveText>
                     </View>
+                  ) : preview?.status ? (
+                    <ChatRowStatus status={preview.status} />
                   ) : null}
                 </View>
               </View>
@@ -1233,6 +1263,34 @@ const styles = StyleSheet.create({
     lineHeight: 11,
     // Цифры Exo 2 стоят ниже середины строки — по центру кружка (замерено по пикселям).
     transform: [{ translateY: -0.6 }],
+  },
+  // Правый край значка — под концом времени, как у счётчика.
+  rowStatus: {
+    flexShrink: 0,
+    marginRight: 6,
+  },
+  rowStatusRead: {
+    width: 19,
+    height: 14,
+  },
+  rowStatusSecondTick: {
+    position: 'absolute',
+    left: 5,
+    top: 0,
+  },
+  rowStatusFailed: {
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    backgroundColor: LIVI.red,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  rowStatusFailedText: {
+    color: 'white',
+    fontSize: 9,
+    fontWeight: 'bold',
+    lineHeight: 9,
   },
   emptyWrap: {
     paddingTop: 36,
