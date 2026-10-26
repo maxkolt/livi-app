@@ -109,6 +109,9 @@ type Props = {
   peerVideoHint?: string | null;
   topInset?: number;
   bottomInset?: number;
+  /** Боковые системные панели (навигация сбоку в горизонтальной ориентации). */
+  leftInset?: number;
+  rightInset?: number;
   /** Высота нижней панели от края экрана (отступ + подсказка + капсула) — чтобы ставить кнопки над ней. */
   onBottomBarHeight?: (height: number) => void;
   endDisabled?: boolean;
@@ -150,6 +153,8 @@ export function CallScreenChrome({
   peerVideoHint = null,
   topInset = 0,
   bottomInset = 0,
+  leftInset = 0,
+  rightInset = 0,
   onBottomBarHeight,
   endDisabled = false,
   speakerOn = false,
@@ -179,7 +184,10 @@ export function CallScreenChrome({
   return (
     <>
       <View
-        style={[styles.headerWrap, { paddingTop: Math.max(26, topInset + 24) }]}
+        style={[
+          styles.headerWrap,
+          { paddingTop: Math.max(26, topInset + 24), paddingLeft: leftInset, paddingRight: rightInset },
+        ]}
         pointerEvents="box-none"
       >
         <View
@@ -259,7 +267,14 @@ export function CallScreenChrome({
       </View>
 
       <View
-        style={[styles.bottomWrap, { paddingBottom: Math.max(28, bottomInset + 22) }]}
+        style={[
+          styles.bottomWrap,
+          {
+            paddingBottom: Math.max(28, bottomInset + 22),
+            paddingLeft: 18 + leftInset,
+            paddingRight: 18 + rightInset,
+          },
+        ]}
         pointerEvents="box-none"
         onLayout={
           onBottomBarHeight ? (e) => onBottomBarHeight(e.nativeEvent.layout.height) : undefined

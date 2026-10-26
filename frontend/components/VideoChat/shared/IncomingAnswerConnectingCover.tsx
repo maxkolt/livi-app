@@ -22,6 +22,8 @@ type IncomingAnswerConnectingCoverProps = {
   speakerLabel: string;
   topInset?: number;
   bottomInset?: number;
+  leftInset?: number;
+  rightInset?: number;
   /** JS-контент закоммичен — снять нативную solid-крышку. */
   onContentReady?: () => void;
 };
@@ -37,6 +39,8 @@ export function IncomingAnswerConnectingCover({
   speakerLabel,
   topInset = 0,
   bottomInset = 0,
+  leftInset = 0,
+  rightInset = 0,
   onContentReady,
 }: IncomingAnswerConnectingCoverProps) {
   const notifiedRef = useRef(false);
@@ -75,6 +79,8 @@ export function IncomingAnswerConnectingCover({
         endDisabled
         topInset={topInset}
         bottomInset={bottomInset}
+        leftInset={leftInset}
+        rightInset={rightInset}
       />
     </View>
   );

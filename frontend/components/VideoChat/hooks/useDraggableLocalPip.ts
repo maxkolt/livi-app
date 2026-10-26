@@ -23,9 +23,9 @@ function headerFloorY(topInset: number) {
   return headerPad + HEADER_ROW_WITH_HOLD + GAP_BELOW_HEADER;
 }
 
-function defaultTopRight(w: number, topInset: number) {
+function defaultTopRight(w: number, topInset: number, rightInset: number) {
   return {
-    x: Math.max(MARGIN, w - MARGIN - LOCAL_PIP_W),
+    x: Math.max(MARGIN, w - MARGIN - rightInset - LOCAL_PIP_W),
     y: headerFloorY(topInset),
   };
 }
@@ -37,43 +37,54 @@ export function useDraggableLocalPip(
     resetToken?: number;
     /** Как у CallScreenChrome topInset (Android safe area внутри stage). */
     topInset?: number;
+    /** Боковые системные панели: в горизонтальной ориентации навигация сбоку. */
+    leftInset?: number;
+    rightInset?: number;
   },
 ) {
   const w = Math.max(1, stage.width || 1);
   const h = Math.max(1, stage.height || 1);
   const resetToken = opts?.resetToken ?? 0;
   const topInset = Math.max(0, opts?.topInset ?? 0);
+  const leftInset = Math.max(0, opts?.leftInset ?? 0);
+  const rightInset = Math.max(0, opts?.rightInset ?? 0);
   const minY = headerFloorY(topInset);
+  const minX = MARGIN + leftInset;
 
   const clamp = useCallback(
     (x: number, y: number) => ({
-      x: Math.max(MARGIN, Math.min(Math.max(MARGIN, w - MARGIN - LOCAL_PIP_W), x)),
+      x: Math.max(minX, Math.min(Math.max(minX, w - MARGIN - rightInset - LOCAL_PIP_W), x)),
       y: Math.max(minY, Math.min(Math.max(minY, h - MARGIN - LOCAL_PIP_H), y)),
     }),
-    [w, h, minY],
+    [w, h, minX, minY, rightInset],
   );
 
   const [pos, setPos] = useState(() => {
-    const d = defaultTopRight(w, topInset);
+    const d = defaultTopRight(w, topInset, rightInset);
     return clamp(d.x, d.y);
   });
   const initializedRef = useRef(false);
   const lastResetTokenRef = useRef(resetToken);
+  // Поворот: позиция из другой ориентации оказывается посреди экрана — снова сверху справа.
+  const landscape = w > h;
+  const lastLandscapeRef = useRef(landscape);
   const posRef = useRef(pos);
   posRef.current = pos;
 
   useEffect(() => {
     if (w < 80 || h < 120) return;
-    const def = defaultTopRight(w, topInset);
+    const def = defaultTopRight(w, topInset, rightInset);
     const tokenChanged = lastResetTokenRef.current !== resetToken;
-    if (!initializedRef.current || tokenChanged) {
+    const rotated = lastLandscapeRef.current !== landscape;
+    if (!initializedRef.current || tokenChanged || rotated) {
       initializedRef.current = true;
       lastResetTokenRef.current = resetToken;
+      lastLandscapeRef.current = landscape;
       setPos(clamp(def.x, def.y));
       return;
     }
     setPos((prev) => clamp(prev.x, prev.y));
-  }, [w, h, clamp, resetToken, topInset]);
+  }, [w, h, clamp, resetToken, topInset, rightInset, landscape]);
 
   const translate = useRef(new Animated.ValueXY({ x: 0, y: 0 })).current;
   const dragStart = useRef({ x: 0, y: 0 });

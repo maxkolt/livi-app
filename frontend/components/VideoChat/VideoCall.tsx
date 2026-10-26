@@ -1005,6 +1005,8 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
   const { localPipPanHandlers, localPipDragStyle } = useDraggableLocalPip(callStageSize, {
     resetToken: localPipAnchorGen,
     topInset: Platform.OS === 'android' ? insets.top : 0,
+    leftInset: Platform.OS === 'android' ? insets.left : 0,
+    rightInset: Platform.OS === 'android' ? insets.right : 0,
   });
   /** WhatsApp-style swap local↔remote на полном video UI (не in-app/system PiP). */
   const [localIsMain, setLocalIsMain] = useState(false);
@@ -7836,6 +7838,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
                 styles.unifiedFlipBtn,
                 styles.unifiedFlipBtnOnMain,
                 {
+                  right: 18 + (Platform.OS === 'android' ? insets.right : 0),
                   // До первого onLayout — оценка: отступ панели + капсула (~96).
                   bottom:
                     (chromeBottomBarHeight ??
@@ -7920,6 +7923,8 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
               peerVideoHint={null}
               topInset={Platform.OS === 'android' ? insets.top : 0}
               bottomInset={Platform.OS === 'android' ? insets.bottom : 0}
+              leftInset={Platform.OS === 'android' ? insets.left : 0}
+              rightInset={Platform.OS === 'android' ? insets.right : 0}
               onBottomBarHeight={onChromeBottomBarHeight}
               endDisabled={isInactiveState}
             />
