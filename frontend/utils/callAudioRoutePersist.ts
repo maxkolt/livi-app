@@ -10,6 +10,7 @@ import {
   applyInCallManagerBuiltInRoute,
 } from './voiceCallAudioRoute';
 import { logger } from './logger';
+import { addCallAudioSessionCloseListener, isCallAudioSessionOpen, reassertCallAudioSession } from './callAudioSession';
 import { markCallPerfAudioRoute } from './callPerfTrace';
 import {
   applySystemPiPReturnMediaSnapshot,
@@ -29,7 +30,6 @@ import {
   restoreOngoingCallMicrophoneIfEnabled,
   isOngoingCallSession,
   isInCallAudioSessionStarted,
-  markInCallAudioSessionStarted,
   readUserSelectedCallAudioRoute,
   readUserLockedBuiltinCallAudioRoute,
   userExplicitlyPinnedBuiltinCallAudio,
@@ -707,6 +707,12 @@ export function getPersistedCallAudioRoute(): InCallAudioRoute | null {
     return null;
   }
 }
+
+// Выбранный маршрут живёт ровно один звонок: сессия закрылась — выбор забыт.
+addCallAudioSessionCloseListener(() => {
+  setUserSelectedCallAudioRoute(null);
+  clearPersistedCallAudioRoute();
+});
 
 export function clearPersistedCallAudioRoute(): void {
   try {
@@ -1513,15 +1519,10 @@ async function runInCallRestartIfNeeded(
     skip = true;
   }
   if (skip) return false;
-  try {
-    if (Platform.OS === 'android') beginBackgroundMediaSuppression();
-    InCallManager.start({ media: inCallStartMediaForUserRoute(media), ringback: '' });
-    markInCallAudioSessionStarted(true);
-    try {
-      (InCallManager as any).requestAudioFocus?.();
-    } catch {}
-  } catch {}
-  return true;
+  // Только открытая сессия: поздний реаплай после конца звонка не должен снова поднимать режим связи.
+  if (!isCallAudioSessionOpen()) return false;
+  if (Platform.OS === 'android') beginBackgroundMediaSuppression();
+  return reassertCallAudioSession(inCallStartMediaForUserRoute(media), reason);
 }
 
 const PIP_BURST_REAPPLY_RE =

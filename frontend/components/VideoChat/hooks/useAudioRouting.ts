@@ -6,6 +6,12 @@ import {
   Platform,
 } from 'react-native';
 import InCallManager from 'react-native-incall-manager';
+import {
+  closeCallAudioSession,
+  isCallAudioSessionOpen,
+  openCallAudioSession,
+  type CallAudioOwner,
+} from '../../../utils/callAudioSession';
 import { beginBackgroundMediaSuppression, pauseBackgroundMediaAfterCall } from '../../../utils/callKeep';
 import { logger } from '../../../utils/logger';
 import { markCallPerfAudioRoute } from '../../../utils/callPerfTrace';
@@ -38,7 +44,6 @@ import {
   getPersistedCallAudioRoute,
   isCallAudioPiPTransitionWindow,
   isCallAudioNativeTransitionLocked,
-  clearPersistedCallAudioRoute,
   resolveOngoingVideoCallAudioRoute,
   applyCallAudioOutputRouteLatest,
   cancelScheduledCallAudioRouteReappliesMatching,
@@ -72,7 +77,6 @@ import {
   readLastAppliedCallAudioRoute,
   readConnectedExternalCallAudioRoute,
   resolveActiveCallInCallMedia,
-  markInCallAudioSessionStarted,
   isInCallAudioSessionStarted,
   setUserSelectedCallAudioRoute,
   readUserSelectedCallAudioRoute,
@@ -248,9 +252,13 @@ export const useAudioRouting = (
   remoteStream: any,
   preferAudioMode = false,
   routingOptions?: AudioRoutingOptions,
+  /** Чья аудиосессия: звонок другу закрывает только его завершение, не размонтирование экрана (PiP). */
+  audioOwner: CallAudioOwner = 'random',
 ) => {
   const routingOptionsRef = useRef(routingOptions);
   routingOptionsRef.current = routingOptions;
+  const audioOwnerRef = useRef(audioOwner);
+  audioOwnerRef.current = audioOwner;
 
   const [selectedRoute, setSelectedRouteState] = useState<InCallAudioRoute>('EARPIECE');
   const [availableRoutes, setAvailableRoutes] = useState<string[]>([]);
@@ -1191,48 +1199,25 @@ export const useAudioRouting = (
     }
     const earpieceProductMode = !!routingOptionsRef.current?.defaultToEarpiece;
     const media = earpieceProductMode || preferAudioMode ? 'audio' : 'video';
-    const alreadyActive = didStartRef.current || isInCallAudioSessionStarted();
+    const alreadyActive = didStartRef.current || isCallAudioSessionOpen();
     const externalPref = readActiveExternalCallAudioRoute(getUserRoute());
     if (externalPref) {
       setUserRoute(externalPref);
     }
-    if (
-      Platform.OS === 'android' &&
-      earpieceProductMode &&
-      !alreadyActive &&
-      !isInCallAudioSessionStarted() &&
-      !isCallAudioNativeTransitionLocked()
-    ) {
-      try { InCallManager.stop(); } catch {}
-    }
-    if (!alreadyActive) {
-      enqueueInCallOp(() => {
+    // Открытую сессию (возврат из PiP, повторный bootstrap) не трогаем — ею владеет звонок.
+    enqueueInCallOp(() => {
+      if (!openCallAudioSession(audioOwnerRef.current, media, 'applyRouting')) return;
+      if (earpieceProductMode) {
         try {
-          InCallManager.start({ media, ringback: '' });
-          if (earpieceProductMode) {
-            try {
-              (InCallManager as any).setForceSpeakerphoneOn?.(false);
-              InCallManager.setSpeakerphoneOn(false);
-            } catch {}
-            syncCallProximitySensor('EARPIECE');
-          } else {
-            syncCallProximitySensor('SPEAKER_PHONE');
-          }
-          markInCallAudioSessionStarted(true);
+          (InCallManager as any).setForceSpeakerphoneOn?.(false);
+          InCallManager.setSpeakerphoneOn(false);
         } catch {}
-      });
-      didStartRef.current = true;
-    } else {
-      didStartRef.current = true;
-      const ext = readActiveExternalCallAudioRoute(getUserRoute());
-      const skipMediaRestart =
-        !!ext || isInCallAudioSessionStarted() || isOngoingCallSession();
-      if (!skipMediaRestart && !earpieceProductMode) {
-        enqueueInCallOp(() => {
-          try { InCallManager.start({ media, ringback: '' }); } catch {}
-        });
+        syncCallProximitySensor('EARPIECE');
+      } else {
+        syncCallProximitySensor('SPEAKER_PHONE');
       }
-    }
+    });
+    didStartRef.current = true;
     try { (InCallManager as any).requestAudioFocus?.(); } catch {}
     const av = lastAvailableRef.current;
     const list = av.length ? av : ['EARPIECE', 'SPEAKER_PHONE'];
@@ -1457,44 +1442,25 @@ export const useAudioRouting = (
   };
 
   const stopSpeaker = () => {
-    try {
-      const pipVisible = !!(global as any).__pipVisibleRef?.current;
-      const inSystemPiP = (global as any).__pipInSystemModeRef?.current === true;
-      const keepCallAudio = isOngoingCallSession();
-      const preserveInAppAudioPiP = shouldPreserveCallAudioRouteInInAppPiP();
-      if (pipVisible || inSystemPiP || keepCallAudio) {
-        if (preserveInAppAudioPiP) {
-          // Маршрут переприменит PiPContext (in_app_pip_from_*), без второго reapply при unmount VideoCall.
-          return;
-        }
-        if (keepCallAudio || pipVisible || inSystemPiP) {
-          scheduleReapplyPersistedCallAudioRoute('stopSpeaker_skip_active_call', {
-            media: resolveActiveCallInCallMedia(),
-          });
-        }
-        return;
-      }
-    } catch {}
-
     lastRemoteStreamRoutedIdRef.current = null;
     lastHardRouteAtRef.current = 0;
     lastNativeRouteAtRef.current = 0;
     lastAppliedRouteRef.current = '';
     previousAvailableRef.current = [];
     lastAvailableRef.current = [];
-    try { (InCallManager as any).setForceSpeakerphoneOn?.('auto'); } catch {}
-    try { InCallManager.setSpeakerphoneOn(false); } catch {}
-    try { InCallManager.stopProximitySensor(); } catch {}
-    try { InCallManager.stop(); } catch {}
-    pauseBackgroundMediaAfterCall();
-    try { (InCallManager as any).abandonAudioFocus?.(); } catch {}
-    markInCallAudioSessionStarted(false);
     didStartRef.current = false;
-    setUserSelectedCallAudioRoute(null);
-    try {
-      (global as any).__explicitBuiltInCallAudioRouteRef = { current: false };
-    } catch {}
-    clearPersistedCallAudioRoute();
+    if (audioOwnerRef.current === 'direct') {
+      // Экран звонка ушёл (in-app / system PiP, другой экран), а звонок идёт: сессию закроет только
+      // его завершение (closeCallAudioSession в teardown), маршрут — PiPContext или реаплай.
+      if (!isCallAudioSessionOpen() || shouldPreserveCallAudioRouteInInAppPiP()) return;
+      scheduleReapplyPersistedCallAudioRoute('stopSpeaker_skip_active_call', {
+        media: resolveActiveCallInCallMedia(),
+      });
+      return;
+    }
+    if (closeCallAudioSession('random', 'useAudioRouting.stopSpeaker')) {
+      pauseBackgroundMediaAfterCall();
+    }
   };
 
   useEffect(() => {

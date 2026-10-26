@@ -60,6 +60,7 @@ import {
   subscribeCallE2eeUi,
 } from '../../sockets/modules/callE2ee';
 import { usePiP, isPipOverlayVisibleSync } from '../../src/pip/PiPContext';
+import { closeCallAudioSession } from '../../utils/callAudioSession';
 import {
   isDirectCallVideoExpandGuardActive,
   setPipAudioOnlyPlaceholderSticky,
@@ -107,7 +108,7 @@ import {
   syncAndroidSystemPiPLeaveHintForActiveVideoCall,
   syncAndroidSystemPiPNativeFlags,
 } from '../../utils/activeCallNotification';
-import { clearEndingCallInProgress, isOngoingCallSession, resolvePiPLocalMutedState, readOngoingCallMicOn, restoreOngoingCallMicrophoneIfEnabled, resolvePersistedCallAudioRouteForActiveUi, resolveActiveCallInCallMedia, ongoingCallPrefersVideoMedia, markDirectCallVideoMediaActive, readInAppPiPAudioOutputRoute, readAuthoritativeCallAudioRouteAfterPiP, readLastAppliedCallAudioRoute, readActiveExternalCallAudioRoute, readConnectedExternalCallAudioRoute, markInCallAudioSessionStarted, setUserSelectedCallAudioRoute, readUserSelectedCallAudioRoute, readUserSelectedExternalCallAudioRoute, readUserLockedBuiltinCallAudioRoute, userExplicitlyPinnedBuiltinCallAudio, armDirectAudioEarpieceStabilizeWindow, isDirectAudioEarpieceStabilizeWindow, markActiveCallAudioRouteCallId, rememberManualBuiltinCallAudioRoute, isPiPBuiltinCallAudioRouteLockActive, releaseInAppPiPBuiltinAudioLockForFullVideoUi, markUserSelectedExternalCallAudioRoute } from '../../utils/activeCallSession';
+import { clearEndingCallInProgress, isOngoingCallSession, resolvePiPLocalMutedState, readOngoingCallMicOn, restoreOngoingCallMicrophoneIfEnabled, resolvePersistedCallAudioRouteForActiveUi, resolveActiveCallInCallMedia, ongoingCallPrefersVideoMedia, markDirectCallVideoMediaActive, readInAppPiPAudioOutputRoute, readAuthoritativeCallAudioRouteAfterPiP, readLastAppliedCallAudioRoute, readActiveExternalCallAudioRoute, readConnectedExternalCallAudioRoute, setUserSelectedCallAudioRoute, readUserSelectedCallAudioRoute, readUserSelectedExternalCallAudioRoute, readUserLockedBuiltinCallAudioRoute, userExplicitlyPinnedBuiltinCallAudio, armDirectAudioEarpieceStabilizeWindow, isDirectAudioEarpieceStabilizeWindow, markActiveCallAudioRouteCallId, rememberManualBuiltinCallAudioRoute, isPiPBuiltinCallAudioRouteLockActive, releaseInAppPiPBuiltinAudioLockForFullVideoUi, markUserSelectedExternalCallAudioRoute } from '../../utils/activeCallSession';
 import {
   isBluetoothAvailableForAutoRoute,
   isCallAudioBootstrapPending,
@@ -1221,6 +1222,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     currentRemoteStream,
     inAudioOnlyUi,
     audioRoutingOptions,
+    'direct',
   );
   const syncRouteNowRef = useRef(syncRouteNow);
   syncRouteNowRef.current = syncRouteNow;
@@ -2429,12 +2431,8 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
         sessionSnapshot.cleanup();
       }
 
-      try { (InCallManager as any).setForceSpeakerphoneOn?.('auto'); } catch {}
-      try { InCallManager.setSpeakerphoneOn(false); } catch {}
-      try { InCallManager.stop(); } catch {}
-      markInCallAudioSessionStarted(false);
+      closeCallAudioSession('direct', `${source}-deferred`);
       pauseBackgroundMediaAfterCall();
-      try { (InCallManager as any).abandonAudioFocus?.(); } catch {}
       clearEndingCallInProgress();
       clearSessionRefs();
       clearVideoCallHomeScreenLocks(`${source}-deferred`);
@@ -2552,11 +2550,8 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
           clearSessionRefs();
         }
 
-        try { (InCallManager as any).setForceSpeakerphoneOn?.('auto'); } catch {}
-        try { InCallManager.setSpeakerphoneOn(false); } catch {}
-        try { InCallManager.stop(); } catch {}
+        closeCallAudioSession('direct', 'VideoCall.cleanupFunction');
         pauseBackgroundMediaAfterCall();
-        try { (InCallManager as any).abandonAudioFocus?.(); } catch {}
       } catch (e) {
         logger.error('[VideoCall] Error in cleanupFunction:', e);
       }

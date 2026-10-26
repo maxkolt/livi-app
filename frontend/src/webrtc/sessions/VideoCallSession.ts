@@ -68,6 +68,7 @@ import {
 import { getFastStartVideoCaptureOptions, getPreferredVideoCaptureOptions } from '../videoCaptureProfile';
 import { buildCallEndSocketPayload } from '../../../utils/callEndPayload';
 import { getInstallAuthHeaders } from '../../../utils/installId';
+import { closeCallAudioSession } from '../../../utils/callAudioSession';
 import { dismissSystemPiPAfterCallEnded } from '../../../utils/callKeep';
 import {
   forceAndroidSystemPiPPeerVideoVisible,
@@ -1117,6 +1118,8 @@ export class VideoCallSession extends SimpleEventEmitter {
     void this.disconnectRoom('user');
     this.resetRemoteState();
     this.stopLocalTracks();
+    // Страховка владельца аудио: звонок окончен, даже если экран звонка уже размонтирован.
+    closeCallAudioSession('direct', 'session:endCall');
     
     // КРИТИЧНО: Отправляем call:end на сервер ПЕРЕД очисткой callId и roomId
     // Сервер отправит call:ended всем участникам комнаты, что завершит звонок у обоих
@@ -2581,6 +2584,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     void this.disconnectRoom('user');
     this.resetRemoteState();
     this.stopLocalTracks();
+    closeCallAudioSession('direct', 'session:cleanup');
     this.unregisterSocketHandlers('cleanup');
   }
 
@@ -5196,6 +5200,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     void this.disconnectRoom('server');
     this.resetRemoteState();
     this.stopLocalTracks();
+    closeCallAudioSession('direct', 'session:callEnded');
     
     // Очищаем состояние
     this.callId = null;

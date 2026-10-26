@@ -28,7 +28,7 @@ import {
   setCallPerfDeviceTag,
 } from './utils/callPerfTrace';
 import InCallManager from 'react-native-incall-manager';
-import { startIncomingCallAlert, stopIncomingCallAlert } from './utils/incomingCallAlert';
+import { stopIncomingCallAlert } from './utils/incomingCallAlert';
 import HomeScreen, { markHomeScreenBootedForSession } from "./screens/HomeScreen";
 import { WELCOME_NAV_ACTIVE_ICON, WELCOME_STAGE_BG } from "./screens/home/constants";
 import { IncomingAnswerConnectingCover } from "./components/VideoChat/shared/IncomingAnswerConnectingCover";
@@ -49,6 +49,7 @@ import { addNotificationListeners, ensureInitialNotificationPermissions, openInc
 import { forceCallLogUiNow, recordCallLog, recordCancelledCall, recordNoAnswerCall } from './screens/home/callLog';
 import { markChatCallBubbleEligible } from './screens/chat/chatCallEvents';
 import { getInstallId, getInstallSecret } from './utils/installId';
+import { closeCallAudioSession } from './utils/callAudioSession';
 import { notifyIncomingShare, parseNativeShareItems, pullPendingShareFromNative } from './utils/incomingShare';
 import { ensureInitialMediaPermissions, ensureCallMediaPermissions, needsNearbyDevicesPermission, requestNearbyDevicesPermissionAndroid } from './utils/mediaPermissions';
 import { probeNativeCallAudioRoutes } from './utils/nativeCallAudioProbe';
@@ -1450,7 +1451,7 @@ function AppContent() {
         String((global as any).__lastIncomingFromUserIdRef?.current || '').trim();
       repeatNativeCallSignal('decline', payload?.callId);
       incomingCallIdRef.current = null;
-      setIncoming(null);
+     
       try { setIncomingCallScreenVisible(false); } catch {}
       try { stopIncomingCallAlert(); } catch {}
       try { emitCloseIncoming(); emitRequestCloseIncoming(); } catch {}
@@ -1938,7 +1939,7 @@ function AppContent() {
           if (!info || !navRef.isReady()) return;
           try { setIncomingCallScreenVisible(false); } catch {}
           stopIncomingCallAlert();
-          setIncoming(null);
+         
           reportAnswerIncomingCall(callId);
           await completeAndroidIncomingAnswer(info.from, callId, info.fromNick);
         },
@@ -1963,7 +1964,7 @@ function AppContent() {
               incomingCallIdRef.current = null;
               try { declineCall(callId); } catch {}
               terminateCall({ reason: 'incoming_declined_local', callId });
-              setIncoming(null);
+             
               // У отклонившего — «Отменённый звонок» (не пропущенный).
               try {
                 const callerPeer =
@@ -2075,11 +2076,6 @@ function AppContent() {
     syncAndroidLeaveHintForOngoingCall();
   }, [routeName, androidPipGuardTick]);
 
-  // ==== incoming call (global, когда не на экране видеозвонка) ====
-  const [incoming, setIncoming] = React.useState<{ callId: string; from: string; fromNick?: string } | null>(null);
-  React.useEffect(() => {
-    incomingCallIdRef.current = incoming?.callId ?? null;
-  }, [incoming]);
   const bounce = React.useRef(new Animated.Value(0)).current;
   const wave1 = React.useRef(new Animated.Value(0)).current;
   const wave2 = React.useRef(new Animated.Value(0)).current;
@@ -2091,56 +2087,7 @@ function AppContent() {
     }
   }, []);
   
-  // КРИТИЧНО: Управление яркостью экрана при показе модального окна входящего вызова на Android
-  React.useEffect(() => {
-    if (Platform.OS !== 'android') return;
-    
-    if (incoming) {
-      // При показе модального окна входящего вызова
-      try {
-        // Активируем InCallManager для предотвращения падения яркости
-        InCallManager.start({ media: 'video', ringback: '' });
-        // Устанавливаем keep screen on для предотвращения затемнения
-        (InCallManager as any).setKeepScreenOn?.(true);
-        logger.debug('[App] InCallManager started for incoming call modal');
-      } catch (e) {
-        logger.warn('[App] Failed to start InCallManager for incoming call:', e);
-      }
-    } else {
-      // При закрытии модального окна
-      try {
-        // Останавливаем InCallManager только если нет активного звонка
-        // Проверяем через routeName - если мы не на экране видеозвонка, то можно остановить
-        let currentRoute: string | undefined = undefined;
-        if (navRef.isReady()) {
-          currentRoute = navRef.getCurrentRoute()?.name;
-        } else {
-          // Fallback на routeName из state, если навигация еще не готова
-          currentRoute = routeName;
-        }
-        // КРИТИЧНО: Если PiP видим, нельзя останавливать InCallManager — иначе пропадет звук в PiP.
-        const pipForceHidden = !!(global as any).__pipForceHiddenRef?.current;
-        const pipVisible = !pipForceHidden && (!!(pip as any)?.visible || !!(global as any).__pipVisibleRef?.current);
-        if (!isVideoSessionRoute(currentRoute) && !pipVisible) {
-          (InCallManager as any).setKeepScreenOn?.(false);
-          InCallManager.stop();
-          logger.debug('[App] InCallManager stopped after incoming call modal closed');
-        }
-      } catch (e) {
-        logger.warn('[App] Failed to stop InCallManager:', e);
-      }
-    }
-  }, [incoming, routeName]);
 
-  // 🔔 Рингтон/вибрация для входящего звонка (когда показываем глобальную модалку)
-  React.useEffect(() => {
-    if (incoming) startIncomingCallAlert();
-    else stopIncomingCallAlert();
-    return () => {
-      // На всякий случай при размонтировании
-      stopIncomingCallAlert();
-    };
-  }, [incoming]);
   // Храним недавно отменённые/истёкшие вызовы, чтобы избежать гонок событий (declined/timeout перед incoming)
   const canceledCallsRef = React.useRef<Map<string, number>>(new Map());
   const timedOutCallsRef = React.useRef<Map<string, number>>(new Map());
@@ -2837,7 +2784,7 @@ function AppContent() {
     }
     const pipForceHidden = !!(global as any).__pipForceHiddenRef?.current;
     const pipVisible = !pipForceHidden && (!!(pip as any)?.visible || !!(global as any).__pipVisibleRef?.current);
-    const shouldKeepOn = isVideoSessionRoute(currentRoute) || !!incoming || pipVisible;
+    const shouldKeepOn = isVideoSessionRoute(currentRoute) || pipVisible;
 
     // Android: системный PiP разрешаем ТОЛЬКО при реально активном звонке/входящем/видимом PiP,
     // а не просто потому что текущий экран = VideoCall (иначе при call:ended может произойти автозаход в PiP).
@@ -2973,7 +2920,7 @@ function AppContent() {
       // плашки на экране нет, а условие всё ещё истинно. Маршрут и входящий
       // не оборачиваем — это состояния, которые пользователь видит своими глазами.
       const pipHoldsScreen = visible && isOngoingCallSession();
-      return isVideoSessionRoute(route) || !!incoming || pipHoldsScreen;
+      return isVideoSessionRoute(route) || pipHoldsScreen;
     };
 
     /** Отдать экран системе: дальше он гаснет по тайм-ауту из настроек. */
@@ -3083,24 +3030,10 @@ function AppContent() {
           }
           logger.debug('[App] Background in PiP: keep-awake left on until call ends');
         }
-        // Для Android деактивируем setKeepScreenOn и InCallManager только если НЕ в PiP и НЕ активный видеозвонок.
-        // В системном PiP звук звонка должен оставаться громким — InCallManager.stop() сбрасывает аудио-сессию и делает звук тихим.
-        // Страховка: не вызывать stop(), если есть активная сессия (ref'ы PiP могли не успеть проставиться в release).
-        if (Platform.OS === 'android') {
+        // Аудиосессию звонка здесь не трогаем: её закрывает только завершение звонка (utils/callAudioSession).
+        if (Platform.OS === 'android' && !keepCallAudioContext) {
           try {
-            if (!keepCallAudioContext) {
-              (InCallManager as any).setKeepScreenOn?.(false);
-              InCallManager.stop();
-              logger.info('[App] AppState background: InCallManager.stop() called (no PiP, no active call)');
-            } else {
-              logger.info('[App] AppState background: Skip InCallManager.stop() — keep call audio', {
-                inPiP,
-                activeVideoCallNotEnded,
-                keepCallAudioContext,
-                pipVisibleRef: g.__pipVisibleRef?.current,
-                pipInSystemModeRef: g.__pipInSystemModeRef?.current,
-              });
-            }
+            (InCallManager as any).setKeepScreenOn?.(false);
           } catch (e) {
             logger.warn('[App] Failed to setKeepScreenOn(false) on Android:', e);
           }
@@ -3116,11 +3049,6 @@ function AppContent() {
       if (Platform.OS === 'android') {
         try {
           (InCallManager as any).setKeepScreenOn?.(false);
-          // Видео → in-app PiP: маршрут уже Home, а плашка ещё не видна — shouldKeepOn на миг false.
-          // stop() посреди звонка выключал громкую (setSpeakerphoneOn(false) + restoreOriginalAudioSetup).
-          if (!isOngoingCallSession()) {
-            InCallManager.stop();
-          }
         } catch {}
       }
       return;
@@ -3195,10 +3123,6 @@ function AppContent() {
       if (Platform.OS === 'android') {
         try {
           (InCallManager as any).setKeepScreenOn?.(false);
-          if (!isOngoingCallSession()) {
-            InCallManager.stop();
-            logger.debug('[App] setKeepScreenOn(false) deactivated for Android (unmount)');
-          }
         } catch (e) {
           logger.warn('[App] Failed to setKeepScreenOn(false) on Android (unmount):', e);
         }
@@ -3207,7 +3131,7 @@ function AppContent() {
         appStateSubscription.remove();
       }
     };
-  }, [routeName, incoming, (pip as any)?.visible, androidPipGuardTick]); // пересчитываем need-to-keep-on по состоянию приложения
+  }, [routeName, (pip as any)?.visible, androidPipGuardTick]); // пересчитываем need-to-keep-on по состоянию приложения
 
   // КРИТИЧНО: Убрана глобальная обработка блокировки экрана из App.tsx
   // Логика завершения звонков при блокировке экрана теперь полностью обрабатывается в VideoCall.tsx
@@ -3379,8 +3303,8 @@ function AppContent() {
 
   React.useEffect(() => {
     // Закрытие по внешнему запросу (например, из ChatScreen)
-    const offReq = onRequestCloseIncoming?.(() => { try { setIncomingCallScreenVisible(false); } catch {} stopIncomingCallAlert(); setIncoming(null); stopAnim(); });
-    const offClose = onCloseIncoming?.(() => { try { setIncomingCallScreenVisible(false); } catch {} stopIncomingCallAlert(); setIncoming(null); stopAnim(); });
+    const offReq = onRequestCloseIncoming?.(() => { try { setIncomingCallScreenVisible(false); } catch {} stopIncomingCallAlert(); stopAnim(); });
+    const offClose = onCloseIncoming?.(() => { try { setIncomingCallScreenVisible(false); } catch {} stopIncomingCallAlert(); stopAnim(); });
     
     // Регистрируем через обертку (основной способ)
     // УБРАНО: Дублирующий прямой слушатель - он регистрируется в отдельном useEffect для переподключения
@@ -3572,7 +3496,7 @@ function AppContent() {
         callId: data?.callId || null,
         roomId: eventRoomId || null,
       });
-      setIncoming(null);
+     
       stopAnim();
 
       // Обновить локальный журнал до любых ранних выходов для system PiP/фона.
@@ -3904,7 +3828,7 @@ function AppContent() {
       } catch {}
       terminateCall({ reason: 'outgoing_declined_socket', callId: id || null });
       stopAnim();
-      setIncoming(null);
+     
       logger.info('[decline/инициатор] App: terminateCall(outgoing_declined_socket)');
       // Сбрасываем refs активного звонка без loadFriends (ended-callback).
       try {
@@ -4011,7 +3935,7 @@ function AppContent() {
       // Callee уже на Home: страница приветствия не должна ре-рендериться — не вызываем setIncoming и эмиты с подписчиками-setState
       const calleeAlreadyOnHome = isCallee && routeName === 'Home';
       const runCloseUI = () => {
-        setIncoming(null); stopAnim(); try { emitCloseIncoming(); emitRequestCloseIncoming(); emitCloseOutgoingCall({ reason: 'remote_closed', callId: callIdStr || null }); } catch {}
+        stopAnim(); try { emitCloseIncoming(); emitRequestCloseIncoming(); emitCloseOutgoingCall({ reason: 'remote_closed', callId: callIdStr || null }); } catch {}
       };
 
       // Callee settle уже armed выше (до notifyCallCanceled).
@@ -4104,7 +4028,7 @@ function AppContent() {
         disposeDirectCallAudioPrewarm('app:accepted-already-ended');
         terminateCall({ reason: 'accepted_stale_ended', callId });
         if ((global as any).__pendingCallAcceptedRef) (global as any).__pendingCallAcceptedRef.current = null;
-        setIncoming(null);
+       
         stopAnim();
         return;
       }
@@ -4149,7 +4073,6 @@ function AppContent() {
         const incomingPeer =
           String((global as any).__incomingAnswerPeerUserIdRef?.current || '').trim() ||
           String(getIncomingCallScreenState().fromUserId || '').trim() ||
-          String(incoming?.from || '').trim() ||
           undefined;
         if (incomingPeer) peerUserId = incomingPeer;
       }
@@ -4363,7 +4286,7 @@ function AppContent() {
       
       try { setIncomingCallScreenVisible(false); } catch {}
       stopIncomingCallAlert();
-      setIncoming(null);
+     
       stopAnim();
       try {
         const navigationReady = navRef.isReady();
@@ -4689,7 +4612,7 @@ function AppContent() {
         (global as any).__onVideoCallEndedRef?.current?.();
       } catch (_) {}
       // Мгновенно закрываем JS-модалку входящего (surfaces уже через terminateCall)
-      setIncoming(null); stopAnim();
+      stopAnim();
       // Переход на Home с бейджем «Вызов отменен» (не дублируем, если уже обработали call:cancel)
       if (!wasCanceled && !isCaller && navRef.isReady()) {
         applyCallCancelledHomeNotice(navRef);
@@ -4714,46 +4637,7 @@ function AppContent() {
     return () => { offDecl?.(); offCancel?.(); onAccepted?.(); offTimeout?.(); };
   }, [stopAnim]);
 
-  // Fallback: если по какой-то причине не пришёл call:timeout, авто-сворачиваем через 20с и фиксируем пропущенный
-  React.useEffect(() => {
-    if (!incoming) return;
-    const t = setTimeout(async () => {
-      try {
-        // если всё ещё висит входящий — считаем пропущенным и сворачиваем
-        const cur = incoming; // замкнём
-        if (cur) {
-          disposeDirectCallAudioPrewarm('app:incoming-fallback-timeout');
-          try {
-            // если уже пришёл реальный timeout/cancel для этого звонка — не инкрементим повторно
-            const cid = String((cur as any)?.callId || '');
-            if (cid && (timedOutCallsRef.current.has(cid) || canceledCallsRef.current.has(cid))) {
-              try { setIncomingCallScreenVisible(false); } catch {}
-              stopIncomingCallAlert(); setIncoming(null); stopAnim();
-              return;
-            }
-            const uid = String(cur.from || '');
-            if (uid) {
-              await recordMissedCallForUser(uid, {
-                callId: cid,
-                source: 'incoming:fallback-timeout',
-              });
-              try { await AsyncStorage.removeItem('last_incoming_from'); } catch {}
-            }
-          } catch {}
-          try { setIncomingCallScreenVisible(false); } catch {}
-          stopIncomingCallAlert(); setIncoming(null); stopAnim(); try { emitCloseIncoming(); emitRequestCloseIncoming(); } catch {}
-        }
-      } catch {}
-    }, OUTGOING_CALL_TIMEOUT_MS);
-    return () => { try { clearTimeout(t); } catch {} };
-  }, [incoming, stopAnim]);
 
-  // Debug logging for incoming call modal
-  React.useEffect(() => {
-    if (incoming) {
-      logger.debug('Incoming call modal state changed', { incoming: !!incoming, callId: incoming?.callId, from: incoming?.from });
-    }
-  }, [incoming]);
 
   // Как в WhatsApp/Telegram: в системном PiP остаёмся на экране VideoCall (компактный вид), навигатор не размонтируем — возврат из PiP без перехода.
   return (
@@ -5053,15 +4937,11 @@ export default function App() {
           try { setEndingCallInProgress(false); } catch (_) {}
         }, 6000);
       } catch (_) {}
-      // При завершении из системного PiP cleanupFunction не выполнит InCallManager.stop() (guard по isInactiveStateRef).
-      // Останавливаем аудио сразу, чтобы звук и PiP закрылись одновременно.
-      try {
-        (InCallManager as any).setForceSpeakerphoneOn?.('auto');
-        InCallManager.setSpeakerphoneOn(false);
-        InCallManager.stop();
+      // При завершении из системного PiP cleanupFunction экрана звонка не выполнится (guard по isInactiveStateRef).
+      // Закрываем аудио сразу, чтобы звук и PiP закрылись одновременно.
+      if (closeCallAudioSession('direct', 'App.endCallFromSystemPiP')) {
         pauseBackgroundMediaAfterCall();
-        (InCallManager as any).abandonAudioFocus?.();
-      } catch (_) {}
+      }
     }
 
     try {
