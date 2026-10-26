@@ -119,9 +119,9 @@ export const styles = StyleSheet.create({
     zIndex: 4,
     elevation: 12,
   },
+  /** bottom задаётся в VideoCall по высоте нижней панели CallScreenChrome. */
   unifiedFlipBtnOnMain: {
     right: 18,
-    bottom: 130,
     zIndex: 28,
   },
   audioCallContainer: {

@@ -1008,6 +1008,12 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
   });
   /** WhatsApp-style swap local↔remote на полном video UI (не in-app/system PiP). */
   const [localIsMain, setLocalIsMain] = useState(false);
+  /** Высота нижней панели CallScreenChrome: кнопка разворота на своей камере стоит над ней. */
+  const [chromeBottomBarHeight, setChromeBottomBarHeight] = useState<number | null>(null);
+  const onChromeBottomBarHeight = useCallback((height: number) => {
+    const rounded = Math.round(height);
+    setChromeBottomBarHeight((prev) => (prev === rounded ? prev : rounded));
+  }, []);
 
   // Когда партнёр включает видео, remote SurfaceView на Android глушит local TextureView.
   // forceTextureView на remote + отложенный remount local.
@@ -7826,7 +7832,16 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
 
           {mainIsLocal && showControls ? (
             <TouchableOpacity
-              style={[styles.unifiedFlipBtn, styles.unifiedFlipBtnOnMain]}
+              style={[
+                styles.unifiedFlipBtn,
+                styles.unifiedFlipBtnOnMain,
+                {
+                  // До первого onLayout — оценка: отступ панели + капсула (~96).
+                  bottom:
+                    (chromeBottomBarHeight ??
+                      Math.max(28, (Platform.OS === 'android' ? insets.bottom : 0) + 22) + 96) + 12,
+                },
+              ]}
               onPress={flipLocalCamera}
               disabled={lockControlsOnAudioUiOnly}
               activeOpacity={0.8}
@@ -7905,6 +7920,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
               peerVideoHint={null}
               topInset={Platform.OS === 'android' ? insets.top : 0}
               bottomInset={Platform.OS === 'android' ? insets.bottom : 0}
+              onBottomBarHeight={onChromeBottomBarHeight}
               endDisabled={isInactiveState}
             />
           ) : null}

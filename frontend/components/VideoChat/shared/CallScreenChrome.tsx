@@ -108,6 +108,8 @@ type Props = {
   peerVideoHint?: string | null;
   topInset?: number;
   bottomInset?: number;
+  /** Высота нижней панели от края экрана (отступ + подсказка + капсула) — чтобы ставить кнопки над ней. */
+  onBottomBarHeight?: (height: number) => void;
   endDisabled?: boolean;
   /** Прямая кнопка динамика (аудио/видео): вкл = volume-up + фон/рамка, выкл = volume-mute. */
   speakerOn?: boolean;
@@ -147,6 +149,7 @@ export function CallScreenChrome({
   peerVideoHint = null,
   topInset = 0,
   bottomInset = 0,
+  onBottomBarHeight,
   endDisabled = false,
   speakerOn = false,
   onToggleSpeaker,
@@ -257,6 +260,9 @@ export function CallScreenChrome({
       <View
         style={[styles.bottomWrap, { paddingBottom: Math.max(28, bottomInset + 22) }]}
         pointerEvents="box-none"
+        onLayout={
+          onBottomBarHeight ? (e) => onBottomBarHeight(e.nativeEvent.layout.height) : undefined
+        }
       >
         {peerVideoHint ? (
           <Text style={styles.peerVideoHint} numberOfLines={2}>
