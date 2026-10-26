@@ -533,7 +533,7 @@ const STATUS_RANK: Record<string, number> = { failed: 0, sending: 1, sent: 2, de
 function persistOutgoingStatus(
   peerId: string,
   messageId: string,
-  status: 'sent' | 'delivered' | 'failed',
+  status: 'sent' | 'delivered' | 'read' | 'failed',
   staleIds: readonly string[] = [],
 ): Promise<void> {
   const me = String(shared.currentUserId || '').trim();
@@ -563,6 +563,11 @@ function persistOutgoingStatus(
       if (changed) await AsyncStorage.setItem(key, JSON.stringify(statuses));
     } catch {}
   });
+}
+
+/** Квитанция о прочтении при закрытом чате: иначе после перезапуска строка «Чаты» показала бы одну галочку. */
+export function persistOutgoingReadStatus(peerId: string, messageId: string): Promise<void> {
+  return persistOutgoingStatus(peerId, messageId, 'read');
 }
 
 /* ========= Медиа, которое очередь загружает сама (голосовое, записанное без сети) ========= */

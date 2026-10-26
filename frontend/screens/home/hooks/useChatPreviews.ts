@@ -12,6 +12,7 @@ import {
   onOutboxMessageDelivered,
   onOutboxMessageFailed,
   onOutboxPendingChange,
+  persistOutgoingReadStatus,
 } from '../../../sockets/socket';
 import type { Lang } from '../../../utils/i18n';
 import {
@@ -59,7 +60,7 @@ function rememberReadReceipt(messageId: string): void {
   }
 }
 
-/** Превью строки + статус своего последнего сообщения (значок под временем). */
+/** Превью строки + статус своего последнего сообщения (значок слева от времени). */
 function previewWithStatus(msg: any, text: string, at: number, saved?: string): ChatPreview {
   const id = String(msg?.id || '').trim();
   const status = outgoingPreviewStatus(msg, String(getCurrentUserId() || '').trim(), {
@@ -367,9 +368,11 @@ export function useChatPreviews(friendIds: string[], lang: Lang, enabled: boolea
       const mid = String(messageId || '').trim();
       if (!mid) return;
       rememberReadReceipt(mid);
-      patchPreviewMemory((p) =>
-        p.id === mid && p.status && p.status !== 'read' ? { ...p, status: 'read' } : null,
-      );
+      patchPreviewMemory((p, peerId) => {
+        if (p.id !== mid || !p.status || p.status === 'read') return null;
+        void persistOutgoingReadStatus(peerId, mid);
+        return { ...p, status: 'read' };
+      });
     });
     const offOutboxPending = onOutboxPendingChange(() => {
       patchPreviewMemory((p) => {

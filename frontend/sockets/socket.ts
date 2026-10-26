@@ -16,6 +16,7 @@ export {
   onOutboxMessageDelivered,
   onOutboxMessageFailed,
   onOutboxPendingChange,
+  persistOutgoingReadStatus,
   removeQueuedEditsMatching,
   removeQueuedMessagesMatching,
 } from "./modules/outbox";

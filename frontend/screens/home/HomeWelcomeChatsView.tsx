@@ -82,7 +82,7 @@ type ChatsFilter = 'all' | 'unread';
 /** Как у облака в чате (ChatMessageItem): две зелёные галочки — прочитано. */
 const CHAT_READ_TICK = 'hsl(108, 53.10%, 35.10%)';
 
-/** Статус своего последнего сообщения — на месте счётчика непрочитанных, те же значки, что в чате. */
+/** Статус своего последнего сообщения — слева от времени, те же значки, что в чате. */
 function ChatRowStatus({ status }: { status: ChatReadStatus }) {
   if (status === 'sending') {
     return <Ionicons name="time-outline" size={14} color={LIVI.titan} style={styles.rowStatus} />;
@@ -548,6 +548,7 @@ function HomeWelcomeChatsViewInner({
                   >
                     {displayName}
                   </AdaptiveText>
+                  {preview?.status ? <ChatRowStatus status={preview.status} /> : null}
                   {timeLabel ? (
                     <AdaptiveText
                       style={[
@@ -580,8 +581,6 @@ function HomeWelcomeChatsViewInner({
                         {unread > 99 ? '99+' : unread}
                       </AdaptiveText>
                     </View>
-                  ) : preview?.status ? (
-                    <ChatRowStatus status={preview.status} />
                   ) : null}
                 </View>
               </View>
@@ -1264,10 +1263,10 @@ const styles = StyleSheet.create({
     // Цифры Exo 2 стоят ниже середины строки — по центру кружка (замерено по пикселям).
     transform: [{ translateY: -0.6 }],
   },
-  // Правый край значка — под концом времени, как у счётчика.
+  // Вплотную к времени: gap строки 8 — для имени, значку хватает 4.
   rowStatus: {
     flexShrink: 0,
-    marginRight: 6,
+    marginRight: -4,
   },
   rowStatusRead: {
     width: 19,
