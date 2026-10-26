@@ -920,6 +920,7 @@ function HomeWelcomeCallsViewInner({
               <Ionicons name="search-outline" size={18} color={WELCOME_MUTED_TEXT} style={styles.searchIcon} />
               <TextInput
                 ref={searchInputRef}
+                disableFullscreenUI
                 value={searchQuery}
                 onChangeText={setSearchQuery}
                 placeholder={t('friendsSearchPlaceholder', lang)}

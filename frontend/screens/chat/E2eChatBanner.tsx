@@ -258,6 +258,7 @@ function E2eRestoreModal({
       <View style={[appDialogStyles.section, { gap: 10 }]}>
         <TextInput
           ref={passwordRef}
+          disableFullscreenUI
           style={appDialogStyles.input}
           value={password}
           onChangeText={setPassword}

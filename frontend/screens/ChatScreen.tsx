@@ -3176,6 +3176,8 @@ export default function ChatScreen({ route, navigation }: Props) {
         <View style={{ flex: 1, minWidth: 0, justifyContent: 'center' }}>
           <TextInput
             ref={composerInputRef}
+            // Горизонтально Android иначе открывает полноэкранный редактор поверх чата.
+            disableFullscreenUI
             style={{
               flex: 1,
               color: voiceIsRecording ? 'transparent' : LIVI.white,

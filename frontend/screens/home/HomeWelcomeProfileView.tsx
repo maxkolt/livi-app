@@ -1012,6 +1012,7 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
       >
         <PaperInput
           value={nick ?? ''}
+          disableFullscreenUI
           onChangeText={setNick}
           mode="outlined"
           dense
