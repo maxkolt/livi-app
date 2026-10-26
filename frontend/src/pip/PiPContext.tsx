@@ -1744,7 +1744,6 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       const key = `${nextInPiP ? 'enter' : 'exit'}:${String(effectiveRoomId || 'none')}`;
       const now = Date.now();
       if (pipSessionSyncRef.current.key === key && now - pipSessionSyncRef.current.at < 1500) {
-        logger.debug('[PiPContext] Skip duplicate PiP session sync', { nextInPiP, reason, roomId: effectiveRoomId });
         return false;
       }
       pipSessionSyncRef.current = { key, at: now };

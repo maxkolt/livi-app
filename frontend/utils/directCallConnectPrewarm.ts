@@ -31,9 +31,7 @@ function isLiveAudioTrack(track: LocalAudioTrack | null | undefined): boolean {
 export function prefetchDirectCallIce(reason: string): void {
   if (icePrefetchInFlight) return;
   icePrefetchInFlight = getIceConfiguration(false)
-    .then(() => {
-      logger.debug('[directCallPrewarm] ICE prefetch done', { reason });
-    })
+    .then(() => {})
     .catch((e) => {
       logger.warn('[directCallPrewarm] ICE prefetch failed', {
         reason,
@@ -123,9 +121,5 @@ export function disposeDirectCallAudioPrewarm(reason: string): void {
   ref.current = null;
   if (!entry) return;
   try { entry.track.stop(); } catch {}
-  logger.debug('[directCallPrewarm] Disposed audio capture', {
-    reason,
-    prewarmReason: entry.reason,
-  });
 }
 

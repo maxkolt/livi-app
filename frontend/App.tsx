@@ -200,12 +200,8 @@ try {
 } catch (e) {
   logger.warn("expo-keep-awake module not available, using fallback", e);
   // Fallback функции если модуль недоступен
-  activateKeepAwakeAsync = async () => {
-    logger.debug("keep-awake activate (fallback - module not available)");
-  };
-  deactivateKeepAwakeAsync = async () => {
-    logger.debug("keep-awake deactivate (fallback - module not available)");
-  };
+  activateKeepAwakeAsync = async () => {};
+  deactivateKeepAwakeAsync = async () => {};
 }
 
 // Экспортируем функции для использования в других компонентах
@@ -2669,14 +2665,12 @@ function AppContent() {
         if (url.includes('expo-development-client') || /^exp\+livi-video-chat:\/\//i.test(url)) {
           return;
         }
-        logger.debug('[App] Processing invite link:', url);
 
         let inviteMatch = url.match(/livi:\/\/invite\/([a-f\d]{24})/i);
         if (!inviteMatch) {
           inviteMatch = url.match(/\/invite\/([a-f\d]{24})/i);
         }
         if (!inviteMatch) {
-          logger.debug('[App] URL does not match invite pattern');
           return;
         }
 
@@ -2893,7 +2887,6 @@ function AppContent() {
               logger.warn('[App] Failed to activate keep-awake for Android:', e);
             });
           }
-          logger.debug('[App] setKeepScreenOn(true) and keep-awake reactivated for Android');
         } catch (e) {
           logger.warn('[App] Failed to reactivate setKeepScreenOn on Android:', e);
         }
@@ -3020,7 +3013,6 @@ function AppContent() {
             deactivateKeepAwakeAsync().catch((e) => {
               logger.warn('Failed to deactivate keep-awake:', e);
             });
-            logger.debug('Keep-awake deactivated (app background)');
           }
         } else {
           // В PiP с активным звонком — keep-awake не выключаем, экран не гасим
@@ -3032,7 +3024,6 @@ function AppContent() {
               }
             }, 3000);
           }
-          logger.debug('[App] Background in PiP: keep-awake left on until call ends');
         }
         // Аудиосессию звонка здесь не трогаем: её закрывает только завершение звонка (utils/callAudioSession).
         if (Platform.OS === 'android' && !keepCallAudioContext) {
@@ -3121,7 +3112,6 @@ function AppContent() {
         deactivateKeepAwakeAsync().catch((e) => {
           logger.warn('Failed to deactivate keep-awake on unmount:', e);
         });
-        logger.debug('Keep-awake deactivated (unmount)');
       }
       // Для Android деактивируем setKeepScreenOn при unmount
       if (Platform.OS === 'android') {
@@ -3152,11 +3142,9 @@ function AppContent() {
     const now = Date.now();
     const last = lastProcessedIncomingRef.current;
     if (callId && last?.callId === callId && now - last.at < INCOMING_CALL_DEBOUNCE_MS) {
-      logger.debug('[call:incoming] debounced duplicate', { callId });
       return;
     }
     lastProcessedIncomingRef.current = callId ? { callId, at: now } : null;
-    logger.debug('[call:incoming] received', { callId: d.callId, from: d.from, fromNick: d.fromNick });
     warmCallSignaling();
     prepareIncomingCallE2ee(callId);
 
@@ -3171,7 +3159,6 @@ function AppContent() {
       }
     } catch (e) {
       // Если навигация еще не готова - разрешаем показать модалку
-      logger.debug('Navigation not ready, allowing modal show', { routeName });
       currentRoute = routeName;
     }
     
@@ -3184,7 +3171,6 @@ function AppContent() {
         for (const [k, ts] of canceledCallsRef.current) if (now - ts > 10000) canceledCallsRef.current.delete(k);
         for (const [k, ts] of timedOutCallsRef.current) if (now - ts > 10000) timedOutCallsRef.current.delete(k);
         if (canceledCallsRef.current.has(id) || timedOutCallsRef.current.has(id)) {
-          logger.debug('Ignoring incoming call - already canceled/timed out', { callId: id });
           return;
         }
       }
@@ -3196,7 +3182,6 @@ function AppContent() {
     const videoCallPartner = (global as any)?.__videoCallPartnerUserIdRef?.current;
     const videoCallActive = (global as any)?.__videoCallActiveRef?.current;
     if (isOnVideoScreen && !isInactiveVideoState && videoCallActive && videoCallPartner && String(d.from) === String(videoCallPartner)) {
-      logger.debug('[call:incoming] Ignoring incoming from current partner (active VideoCall)', { callId: d.callId, from: d.from });
       return;
     }
     // Этот звонок уже идёт / принимается: после сна сокет переподключается, и сервер повторяет
@@ -3242,14 +3227,6 @@ function AppContent() {
 
     // Android: мы отказались от кастомных модалок — входящий всегда открываем нативным экраном
     // поверх любого экрана/вкладки/модалки в приложении (в т.ч. "неактивный" VideoCall после завершения).
-    logger.debug('Incoming call — showing native incoming UI', {
-      callId: d.callId,
-      from: d.from,
-      fromNick: d.fromNick,
-      currentRoute,
-      isOnVideoScreen,
-      isInactiveVideoState,
-    });
     // ACK показа входящего. Сервер по нему ГАСИТ ретраи и эскалацию пушей, поэтому слать его
     // до фактического показа нельзя: если экран не поднимется (BAL, дедуп, stale-guard),
     // звонок останется недоставленным, а сервер будет считать его доставленным.
@@ -3326,7 +3303,6 @@ function AppContent() {
   // Сам listener call:incoming регистрируется один раз через onCallIncoming выше.
   React.useEffect(() => {
     const onConnect = () => {
-      logger.debug('Socket connected/reconnected - processing pending call recovery');
       // FCM call_accepted вывел приложение — запросить call:accepted (инициатор перейдёт на VideoCall). Fallback: ref от HomeScreen, если нативный pending не сработал.
       if (Platform.OS === 'android') {
         setTimeout(() => {
@@ -4586,7 +4562,6 @@ function AppContent() {
     });
     // Обработчик таймаута
     const offTimeout = onCallTimeout?.(async (d) => {
-      logger.debug('Call timeout received', { callId: d?.callId });
       const callId = String((d as any)?.callId || '');
       const wasCanceled = !!(callId && canceledCallsRef.current.has(callId));
       const myUserId = String(getCurrentUserId?.() ?? '').trim();

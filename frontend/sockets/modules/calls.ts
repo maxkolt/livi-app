@@ -151,9 +151,7 @@ export function emitCallHeartbeat(opts: {
       roomId: roomId || undefined,
       phase: opts.phase === "reconnecting" ? "reconnecting" : "active",
     });
-  } catch (e) {
-    logger.debug("[socket] call:heartbeat failed", e as Error);
-  }
+  } catch {}
 }
 
 function markIncomingAcceptSent(callId: string): boolean {
@@ -404,13 +402,6 @@ export function requestCallAcceptedWithRetry(
           sessCallId === id &&
           (roomState === "connected" || roomState === "connecting" || roomState === "reconnecting");
         if (liveKitReady) {
-          if (attempt === 0) {
-            logger.debug("[call:getAccepted] retry skipped — LiveKit already active", {
-              callId: id,
-              reason,
-              roomState,
-            });
-          }
           return;
         }
         if (pendingHasToken && !liveKitReady) {
@@ -436,7 +427,6 @@ export function requestCallAcceptedWithRetry(
 
 export function onCallIncoming(cb: (d: { callId: string; callKitId?: string; from: string; fromNick?: string; ts?: number | string; expiresAt?: number | string }) => void): () => void {
   const h = (d: any) => {
-    logger.debug("Socket received call:incoming", { callId: d.callId, from: d.from, fromNick: d.fromNick });
     prewarmApiConnections("call_in", 3);
     prepareIncomingCallE2ee(d?.callId);
     cb(d);
@@ -463,7 +453,6 @@ export function onCallAccepted(
   cb: (d: { callId: string; from: string; fromUserId?: string }) => void,
 ): () => void {
   const h = (d: any) => {
-    logger.debug("Socket received call:accepted", { callId: d.callId, from: d.from, fromUserId: d.fromUserId });
     cb(d);
   };
   socket.on("call:accepted", h);

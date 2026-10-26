@@ -172,9 +172,6 @@ function runWithCallKeepConnectionRetry(
     setTimeout(() => {
       try {
         action(rn!);
-        if (attempt > 0) {
-          logger.debug(`[callKeep] ${label} retry`, { nativeCallId, attempt, delayMs });
-        }
       } catch (e) {
         if (attempt === CALLKEEP_CONNECTION_RETRY_MS.length - 1) {
           logger.warn(`[callKeep] ${label} failed`, e as Error);
@@ -439,12 +436,10 @@ async function launchIncomingCallActivityScreen(
   if (Platform.OS !== 'android') return;
   try {
     if (checkEnded && (await isEndedCallId(callId))) {
-      logger.debug('[callKeep] launchIncomingCallActivityScreen skipped (call already ended)', { callId });
       return;
     }
     const now = Date.now();
     if (lastDisplayedCallId.id === callId && now - lastDisplayedCallId.at < DISPLAY_DEBOUNCE_MS) {
-      logger.debug('[callKeep] launchIncomingCallActivityScreen skipped (duplicate)', { callId });
       return;
     }
     lastDisplayedCallId.id = callId;
@@ -754,7 +749,6 @@ export function displayIncomingCall(callId: string, fromUserId: string, fromNick
   }
   const now = Date.now();
   if (lastDisplayedCallId.id === callId && now - lastDisplayedCallId.at < DISPLAY_DEBOUNCE_MS) {
-    logger.debug('[callKeep] displayIncomingCall skipped (duplicate)', { callId });
     return;
   }
   lastDisplayedCallId.id = callId;
@@ -839,10 +833,6 @@ export async function presentIncomingCall(
 
   const now = Date.now();
   if (lastDisplayedCallId.id === callId && now - lastDisplayedCallId.at < DISPLAY_DEBOUNCE_MS) {
-    logger.debug('[presentIncomingCall] skipped (duplicate)', {
-      callId,
-      source: opts.source || null,
-    });
     return 'skipped';
   }
 
@@ -969,10 +959,6 @@ export function registerIncomingCallKeepSession(
           callId: raw,
           from,
         });
-      } else {
-        logger.debug('[callKeep] registerIncomingCallKeepSession connection already requested', {
-          callId: raw,
-        });
       }
     } catch (e) {
       callKeepConnectionRequestedIds.delete(raw);
@@ -995,9 +981,6 @@ export function reportAnswerIncomingCall(callId: string): void {
     if (Platform.OS === 'android') {
       const canConnect = await canCreateAndroidTelecomConnection();
       if (!canConnect) {
-        logger.debug('[callKeep] reportAnswerIncomingCall skip (no Telecom Connection)', {
-          callId: raw,
-        });
         clearPendingCall(callId);
         return;
       }
@@ -1031,7 +1014,6 @@ export function reportRejectCall(callId: string): void {
   if ((Platform.OS !== 'android' && Platform.OS !== 'ios') || !isSetup) return;
   const endCheck = canEndCallKeepCall(callId);
   if (!endCheck.ok) {
-    logger.debug('[callKeep] rejectCall skipped (not active or duplicate)', { callId: endCheck.callId || callId });
     return;
   }
   try {
@@ -1069,11 +1051,9 @@ export function reportEndCallToCallKeep(
 
   // Dedupe всегда (в т.ч. force): иначе double endCall → "no connection found" в logcat.
   if (recentlyEnded) {
-    logger.debug('[callKeep] endCall skipped (recent dedupe)', { callId: raw });
     return;
   }
   if (!endCheck.ok && !hadConnectionRequest && !opts?.force) {
-    logger.debug('[callKeep] endCall skipped (not active or duplicate)', { callId: raw });
     return;
   }
 
@@ -1088,7 +1068,6 @@ export function reportEndCallToCallKeep(
     try {
       setCallKeepAvailable(true);
     } catch {}
-    logger.debug('[callKeep] endCall reported', { callId: id, force: !!opts?.force });
   } catch (e) {
     markCallKeepEnded(id);
     try {

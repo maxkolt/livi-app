@@ -203,7 +203,6 @@ export function useHomeBadges({ friends, friendsRef }: UseHomeBadgesArgs) {
         }
         setMissedByUser((prev) => (badgeMapsEqual(prev, normalized) ? prev : normalized));
         setMissedLoaded(true);
-        logger.debug('[HomeScreen] Loaded missed calls from storage', { count: Object.keys(normalized).length, normalized });
       } catch (e) {
         logger.warn('[HomeScreen] Error loading missed calls:', e);
         setMissedLoaded(true);
@@ -266,7 +265,6 @@ export function useHomeBadges({ friends, friendsRef }: UseHomeBadgesArgs) {
       setMissedByUser((prev) => {
         const cur = prev[userIdStr] || 0;
         if (nextCount <= cur) return prev;
-        logger.debug('[HomeScreen] Missed call updated (UI)', { userId: userIdStr, count: nextCount });
         return { ...prev, [userIdStr]: nextCount };
       });
       // Call log уже пишет recordMissedCallForUser — не дублируем.
@@ -295,7 +293,6 @@ export function useHomeBadges({ friends, friendsRef }: UseHomeBadgesArgs) {
           return next;
         });
         await syncAppBadgeFromMissedCount();
-        logger.debug('[HomeScreen] Missed calls cleared for user (emitMissedClear)', { userId: userIdStr });
       } catch (e) {
         logger.warn('[HomeScreen] onMissedClear failed', { userId: userIdStr, error: (e as Error)?.message });
       }
@@ -333,13 +330,7 @@ export function useHomeBadges({ friends, friendsRef }: UseHomeBadgesArgs) {
     const refreshUnread = () => {
       const list = friendsRef.current;
       if (!list.length) return;
-      void refreshUnreadCountsForFriends(list).then(() => {
-        if (!pendingUnreadBatchRefreshRef.current) {
-          logger.debug('[HomeScreen] Unread counts refreshed after socket connect/reconnect (batch)', {
-            n: list.length,
-          });
-        }
-      }).catch((e) => {
+      void refreshUnreadCountsForFriends(list).catch((e) => {
         logger.warn('[HomeScreen] Unread refresh after socket failed:', e);
       });
     };

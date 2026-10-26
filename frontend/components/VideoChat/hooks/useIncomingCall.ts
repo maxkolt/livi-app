@@ -71,7 +71,6 @@ export const useIncomingCall = ({
     const offIncoming = onCallIncoming?.((d) => {
       // Не показывать входящий от того же собеседника, с которым уже идёт активный звонок (дубликат после отмены на нативном экране у звонящего)
       if (hasActiveCallWithPartner && partnerUserId && String(d?.from) === String(partnerUserId)) {
-        logger.debug('[useIncomingCall] Ignoring incoming from current partner (active call)', { from: d?.from, partnerUserId });
         return;
       }
 

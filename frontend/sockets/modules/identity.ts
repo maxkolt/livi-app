@@ -8,7 +8,6 @@ import { clearCancelledOutboxFingerprints } from "./outbox";
 import { clearAllMessageCache } from "./messages";
 import { shared } from "./shared";
 import { getSocketInstance, socket } from "./socketCore";
-import { logger } from "../../utils/logger";
 
 // ВАЖНО: отрицательный результат нельзя кэшировать надолго — иначе после восстановления/создания пользователя
 // приложение будет зацикливаться на "user_not_found" и делать hard reset по старому кэшу.
@@ -38,7 +37,6 @@ export async function checkUserExists(userId: string): Promise<boolean | null> {
       const now = Date.now();
       if (__DEV__ && now - shared.lastUserExistsCacheLogAt > 10_000) {
         shared.lastUserExistsCacheLogAt = now;
-        logger.debug("[checkUserExists] Using cached result", { result: cached.result });
       }
       return cached.result;
     }
@@ -49,14 +47,12 @@ export async function checkUserExists(userId: string): Promise<boolean | null> {
   if (pending) {
     if (!shared.pendingWaitLogged.has(userId)) {
       shared.pendingWaitLogged.add(userId);
-      logger.debug("[checkUserExists] Waiting for pending check", { userId });
     }
     return pending;
   }
 
   const checkPromise = (async () => {
     try {
-      logger.debug("[checkUserExists] Checking user", { userId });
 
       // ПРИОРИТЕТ: Используем socket.io если подключен, иначе HTTP
       if (getSocketInstance()?.connected) {
@@ -66,13 +62,11 @@ export async function checkUserExists(userId: string): Promise<boolean | null> {
           if (socketResult?.ok === true && typeof (socketResult as any).exists === "boolean") {
             const exists = (socketResult as any).exists as boolean;
             shared.userExistsCache.set(userId, { result: exists, timestamp: Date.now() });
-            logger.debug("[checkUserExists] User exists (via socket)", { userId, exists });
             return exists;
           }
           // ok=false / нет exists -> fallback to HTTP
-        } catch (socketError) {
+        } catch {
           // Не логируем как warning - это нормально если socket временно недоступен
-          logger.debug("[checkUserExists] Socket check failed, falling back to HTTP");
         }
       }
 
@@ -80,10 +74,6 @@ export async function checkUserExists(userId: string): Promise<boolean | null> {
       const httpMaxAttempts = 3;
       for (let attempt = 1; attempt <= httpMaxAttempts; attempt++) {
         try {
-          if (attempt === 1) {
-            logger.debug("[checkUserExists] Attempt (HTTP)", { attempt, maxAttempts: httpMaxAttempts });
-          }
-
           const controller = new AbortController();
           const timeoutId = setTimeout(() => controller.abort(), 20000);
 
@@ -108,19 +98,13 @@ export async function checkUserExists(userId: string): Promise<boolean | null> {
 
           const data = await response.json();
           if (data.ok) {
-            logger.debug("[checkUserExists] User exists (via HTTP)", { userId, exists: data.exists });
             shared.userExistsCache.set(userId, { result: data.exists, timestamp: Date.now() });
             return data.exists;
           }
         } catch (e: any) {
           if (attempt === httpMaxAttempts) {
             const errorMsg = e?.message || String(e);
-            if (errorMsg.includes("Network request failed") || errorMsg.includes("timeout")) {
-              logger.debug("[checkUserExists] Network unavailable, will retry later", {
-                attempt,
-                maxAttempts: httpMaxAttempts,
-              });
-            } else {
+            if (!errorMsg.includes("Network request failed") && !errorMsg.includes("timeout")) {
               console.warn(`[checkUserExists] HTTP error (attempt ${attempt}/${httpMaxAttempts}):`, errorMsg);
             }
           }
@@ -131,7 +115,6 @@ export async function checkUserExists(userId: string): Promise<boolean | null> {
         }
       }
 
-      logger.debug("[checkUserExists] All attempts failed, server temporarily unavailable");
       return null;
     } finally {
       shared.pendingChecks.delete(userId);

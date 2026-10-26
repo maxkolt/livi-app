@@ -387,19 +387,10 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
       const fileName = `image_${item.id}_${Date.now()}.jpg`;
       const targetUri = `${FileSystem.cacheDirectory}${fileName}`;
       
-      logger.debug('[ChatScreen] MessageItem: downloading image via FileSystem', { 
-        messageId: item.id, 
-        sourceUri: uri,
-        targetUri 
-      });
       
       const downloadResult = await FileSystem.downloadAsync(uri, targetUri);
       
       if (downloadResult.uri) {
-        logger.debug('[ChatScreen] MessageItem: image downloaded successfully', { 
-          messageId: item.id, 
-          localUri: downloadResult.uri 
-        });
         setLocalImageUri(downloadResult.uri);
         setImageLoadError(false);
       } else {
@@ -505,11 +496,6 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
         }
         const displayImageUri = (Platform.OS === 'android' && /^data:/i.test(imageUri)) ? messageImageResolvedUri : imageUri;
         
-        logger.debug('[ChatScreen] MessageItem: rendering image', { 
-          messageId: item.id, 
-          originalUri: item.uri, 
-          resolvedUri: imageUri 
-        });
         
         // Если была ошибка загрузки, показываем fallback UI
         if (imageLoadError) {
@@ -650,23 +636,9 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
               }}
               onLoadStart={() => {
                 setImageLoadError(false); // Сбрасываем ошибку при новой попытке загрузки
-                logger.debug('[ChatScreen] MessageItem: image load started', { 
-                  messageId: item.id, 
-                  uri: imageUri 
-                });
               }}
               onLoad={() => {
                 setImageLoadError(false); // Успешная загрузка
-                logger.debug('[ChatScreen] MessageItem: image loaded successfully', { 
-                  messageId: item.id, 
-                  uri: imageUri 
-                });
-              }}
-              onLoadEnd={() => {
-                logger.debug('[ChatScreen] MessageItem: image load ended', { 
-                  messageId: item.id, 
-                  uri: imageUri 
-                });
               }}
             />
            

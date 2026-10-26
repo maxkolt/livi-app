@@ -436,13 +436,6 @@ const RandomChat: React.FC<Props> = ({ route }) => {
             if (!audioTrack) {
               setMicOn(false);
             }
-            logger.debug('[RandomChat] Local stream changed', {
-              hasStream: !!stream,
-              hasVideoTrack,
-              videoEnabled,
-              videoTracksCount: stream.getVideoTracks().length,
-              streamId: stream.id,
-            });
           } else {
             // КРИТИЧНО: Если stream null, камера выключена
             setCamOn(false);
@@ -475,7 +468,6 @@ const RandomChat: React.FC<Props> = ({ route }) => {
               setLocalRenderKey(k => k + 1);
               localStreamTimestampRef.current = now;
               lastLocalRenderKeyUpdateRef.current = now;
-              logger.debug('[RandomChat] Updated localRenderKey on cam state change', { enabled });
             }
           } else {
             // На Android тоже обновляем key для надежности
@@ -483,7 +475,6 @@ const RandomChat: React.FC<Props> = ({ route }) => {
             if (now - lastLocalRenderKeyUpdateRef.current >= MIN_LOCAL_RENDER_KEY_UPDATE_INTERVAL_MS) {
               setLocalRenderKey(k => k + 1);
               lastLocalRenderKeyUpdateRef.current = now;
-              logger.debug('[RandomChat] Updated localRenderKey on cam state change', { enabled });
             }
           }
         },
@@ -493,7 +484,6 @@ const RandomChat: React.FC<Props> = ({ route }) => {
           setRemoteCamEnabled(enabled);
           // ВАЖНО: Не дергаем remoteViewKey из UI.
           // Сессия сама эмитит remoteViewKeyChanged при необходимости — иначе на Android легко получить мерцания из-за remount RTCView.
-          logger.debug('[RandomChat] Remote camera state changed', { enabled });
         },
         onRemoteCamSideChange: (side) => {
           setRemoteCamSide(side);
@@ -570,11 +560,6 @@ const RandomChat: React.FC<Props> = ({ route }) => {
             localStreamTimestampRef.current = now;
             lastLocalRenderKeyUpdateRef.current = now;
             needsIOSUpdateAfterNextRef.current = false;
-            logger.debug('[RandomChat] iOS: Updated localRenderKey', {
-              reason: needsIOSUpdateAfterNextRef.current ? 'next()' : (isNewStreamInstance ? 'newStreamId' : 'streamURLChanged'),
-              streamId: stream.id,
-              streamURL: newStreamURL?.substring(0, 30) + '...',
-            });
           }
         }
       } else if (stream === null) {
@@ -585,12 +570,6 @@ const RandomChat: React.FC<Props> = ({ route }) => {
           // Так RTCView не размонтируется и визуальное мерцание "Вы" сильно уменьшается.
           localStreamRef.current = prevStream!;
           // НЕ обновляем state на null, чтобы не было черного экрана
-          logger.debug('[RandomChat] Keeping previous localStream during next() to prevent flicker', {
-            prevStreamId,
-            prevStreamValid,
-            isNexting: isNextingRef.current,
-            loading: loadingRef.current,
-          });
         } else {
           // Не идет next() или нет предыдущего стрима - обновляем на null
           localStreamRef.current = null;
@@ -601,22 +580,8 @@ const RandomChat: React.FC<Props> = ({ route }) => {
         if (isTransition && prevStreamExists) {
           localStreamRef.current = prevStream!;
           // НЕ обновляем state, чтобы не было черного экрана
-          logger.debug('[RandomChat] Keeping previous localStream to prevent flicker', {
-            prevStreamId,
-            newStreamValid: false,
-            hasPrevStream: !!prevStream,
-            isNexting: isNextingRef.current,
-            loading: loadingRef.current,
-          });
         } else if (prevStreamValid) {
           localStreamRef.current = prevStream!;
-          logger.debug('[RandomChat] Keeping previous localStream (valid) to prevent flicker', {
-            prevStreamId,
-            newStreamValid: false,
-            hasPrevStream: !!prevStream,
-            isNexting: isNextingRef.current,
-            loading: loadingRef.current,
-          });
         } else {
           // Предыдущий стрим тоже невалидный - обновляем state
           localStreamRef.current = stream;
@@ -930,7 +895,6 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     // Защита от нажатий во время подключения к LiveKit
     const room = (session as any).room;
     if (room && (room.state === 'connecting' || room.state === 'reconnecting')) {
-      logger.debug('[RandomChat] onNext: room is connecting/reconnecting, ignoring');
       return;
     }
 
@@ -1011,9 +975,8 @@ const RandomChat: React.FC<Props> = ({ route }) => {
         if (!errorMsg.includes('crash') && !errorMsg.includes('fatal')) {
           showAppAlert(t('errorTitle', lang), t('nextFailed', lang));
         }
-      } catch (alertError) {
+      } catch {
         // Игнорируем ошибки показа Alert - это не критично
-        logger.debug('[RandomChat] Error showing alert', alertError);
       }
     } finally {
       // КРИТИЧНО: Увеличено время блокировки до 1500ms для гарантии полного отключения комнаты
@@ -1125,10 +1088,6 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       if (Platform.OS === 'ios') {
         localStreamTimestampRef.current = now;
       }
-      logger.debug('[RandomChat] Camera flipped, localRenderKey updated', {
-        newKey: localRenderKey + 1,
-        timestamp: now,
-      });
     } catch (e) {
       logger.warn('[RandomChat] Error flipping camera', e);
     } finally {
@@ -1556,9 +1515,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     const sub = AppState.addEventListener('change', async (nextAppState) => {
       try {
         if (nextAppState === 'background') {
-          if (shouldDeferRandomChatStopOnAppBackground()) {
-            logger.debug('[RandomChat] App background: skip stop — direct call / incoming transition active');
-          } else if (startedRef.current || loadingRef.current) {
+          if (!shouldDeferRandomChatStopOnAppBackground() && (startedRef.current || loadingRef.current)) {
             logger.info('[RandomChat] App moved to background, stopping chat immediately');
             forceStopRandomChat();
           }
@@ -2017,15 +1974,6 @@ const RandomChat: React.FC<Props> = ({ route }) => {
                     ? `local-${displayStream.id}-${camOn}-${localRenderKey}-${localStreamTimestampRef.current}`
                     : `local-${camOn}-${localRenderKey}`;
                 
-                logger.debug('[RandomChat] Rendering local video', {
-                  camOn,
-                  hasLocalStream: !!localStream,
-                  hasLocalStreamRef: !!localStreamRef.current,
-                  usingRef: displayStream === localStreamRef.current && displayStream !== localStream,
-                  hasStreamURL: !!localStreamURL,
-                  localRenderKey,
-                  streamId: displayStream.id,
-                });
                 
                 // КРИТИЧНО: На Android используем prop `stream` для лучшей производительности
                 // На iOS используем streamURL
@@ -2051,27 +1999,14 @@ const RandomChat: React.FC<Props> = ({ route }) => {
                     />
                   );
                 } else {
-                  logger.debug('[RandomChat] Local streamURL unavailable, showing placeholder');
                   return <Text style={styles.placeholder}>{L("you")}</Text>;
                 }
               } else {
-                logger.debug('[RandomChat] Local stream not ready yet, showing placeholder', {
-                  hasLocalStream: !!localStream,
-                  hasLocalStreamRef: !!localStreamRef.current,
-                  isValid: localStream ? isValidStream(localStream) : false,
-                  isValidRef: localStreamRef.current ? isValidStream(localStreamRef.current) : false,
-                  isTransition,
-                });
                 return <Text style={styles.placeholder}>{L("you")}</Text>;
               }
             } else {
               // Камера выключена (unpublishTrack() её полностью остановил) — та же
               // заглушка камеры, что у собеседника.
-              logger.debug('[RandomChat] Camera off, showing camera placeholder', {
-                camOn,
-                isInactiveState,
-                shouldShowLocalVideo,
-              });
               return (
                 <View style={styles.localCamOff} pointerEvents="none">
                   <AwayPlaceholder />

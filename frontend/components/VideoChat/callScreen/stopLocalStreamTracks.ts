@@ -41,27 +41,12 @@ export const stopStreamTracks = (stream: MediaStream | null | undefined, context
 
     const uniqueTracks = Array.from(new Set(allTracks));
 
-    // Менее шумно: детали остановки стримов/треков — только в debug.
-    logger.debug('[VideoCall] Stopping local stream tracks', {
-      context,
-      totalTracks: uniqueTracks.length,
-      videoTracks: uniqueTracks.filter((t: any) => (t.kind || (t as any).type) === 'video').length,
-      audioTracks: uniqueTracks.filter((t: any) => (t.kind || (t as any).type) === 'audio').length,
-    });
-
-    uniqueTracks.forEach((track: any, index: number) => {
+    uniqueTracks.forEach((track: any) => {
       try {
         if (track && track.readyState !== 'ended' && track.readyState !== null) {
-          const trackKind = track.kind || (track as any).type;
           track.enabled = false;
           track.stop();
 
-          logger.debug('[VideoCall] Track stopped', {
-            context,
-            trackKind,
-            trackId: track.id,
-            index,
-          });
 
           setTimeout(() => {
             try {

@@ -126,8 +126,7 @@ export function useChatHistorySync({
           readStatuses: readStatusesRef.current as any,
         }),
       );
-    } catch {
-    } finally {
+    } catch {} finally {
       quietSyncInFlightRef.current = false;
     }
   }, [
@@ -445,10 +444,6 @@ export function useChatHistorySync({
               try {
                 if (readRes?.ok) await resyncBadgeAfterChatRead(pid);
               } catch {}
-              logger.debug("[ChatScreen] Merged messages after socket connect/reconnect", {
-                n: formattedMessages.length,
-                peerId: pid,
-              });
             } catch (e) {
               logger.warn("[ChatScreen] Post-reconnect message sync failed:", e);
               if (index + 1 < RECONNECT_SYNC_DELAYS_MS.length) attempt(index + 1);

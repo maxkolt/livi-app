@@ -1,5 +1,4 @@
 import { getInstallAuthHeaders } from "../../utils/installId";
-import { logger } from "../../utils/logger";
 import { API_BASE, isOid } from "./constants";
 import { emitAck } from "./emit";
 import { ensureReauthBeforePrivilegedSocketOp } from "./reauth";
@@ -150,12 +149,9 @@ export function updateProfile(patch: { nick?: string; avatar?: string }) {
 
   promise
     .then((result) => {
-      if (result?.ok) {
-      } else {
+      if (!result?.ok) {
         const err = String(result?.error || "");
-        if (err === "unauthorized" || err === "no_userId") {
-          logger.debug("[updateProfile] skipped — identity not ready yet", { error: err });
-        } else {
+        if (err !== "unauthorized" && err !== "no_userId") {
           console.error("[updateProfile] ❌ Server response error:", result?.error);
         }
       }

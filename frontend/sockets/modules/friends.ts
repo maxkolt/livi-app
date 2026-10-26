@@ -402,7 +402,6 @@ export async function checkInviteLink(code: string, options: { markPending?: boo
     }
 
     const url = `${API_BASE}/api/invite/${code}${options.markPending ? "?pending=1" : ""}`;
-    logger.debug("Checking invite link:", { url, code, userId });
 
     const response = await fetch(url, {
       method: "GET",
@@ -432,7 +431,6 @@ export async function checkInviteLink(code: string, options: { markPending?: boo
     }
 
     const data = await response.json();
-    logger.debug("Invite link check success:", { code, hasInviter: !!data.inviter });
     return data;
   } catch (e: any) {
     logger.error("Failed to check invite link:", {

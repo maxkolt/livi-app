@@ -1645,7 +1645,6 @@ export function scheduleVideoCallReturnFromPiPAudioReapply(opts?: {
     isDirectCallVideoExpandGuardActive() ||
     isDirectCallVideoExpandAudioPreparedRecently()
   ) {
-    logger.debug('[callAudioRoutePersist] skip video_call_return (video expand prepared)', {});
     return;
   }
   if (Platform.OS === 'android') {
@@ -2268,14 +2267,12 @@ export async function reapplyPersistedCallAudioRoute(
         reason === 'preserve_in_app_pip_headset' &&
         shouldDeferPreserveDuringCallBootstrap()
       ) {
-        logger.debug('[callAudioRoutePersist] reapply skipped (bootstrap preserve)', { reason });
         return;
       }
       if (
         reason === 'audio_home_preserve_route' &&
         shouldDeferPreserveDuringCallBootstrap()
       ) {
-        logger.debug('[callAudioRoutePersist] reapply skipped (bootstrap preserve)', { reason });
         return;
       }
       let honorUser =
@@ -2379,16 +2376,11 @@ export async function reapplyPersistedCallAudioRoute(
 
       if (reason === 'in_app_pip_from_audio') {
         if (isDirectCallVideoExpandGuardActive()) {
-          logger.debug('[callAudioRoutePersist] reapply skipped (video expand guard)', { reason });
           return;
         }
         if (isInAppPiPExplicitBuiltinRouteChoiceActive()) {
           const plaqueBuiltin = readUserSelectedCallAudioRoute();
           if (plaqueBuiltin === 'EARPIECE' || plaqueBuiltin === 'SPEAKER_PHONE') {
-            logger.debug('[callAudioRoutePersist] reapply skipped (plaque builtin choice)', {
-              reason,
-              route: plaqueBuiltin,
-            });
             return;
           }
         }
@@ -2398,10 +2390,6 @@ export async function reapplyPersistedCallAudioRoute(
           (global as any).__pipVisibleRef?.current === true &&
           (isExternalHeadsetRoute(plaqueUser) || isExternalHeadsetRoute(plaqueExt))
         ) {
-          logger.debug('[callAudioRoutePersist] reapply skipped (plaque external route)', {
-            reason,
-            route: plaqueExt || plaqueUser,
-          });
           return;
         }
         const route = resolvePlaqueReapplyRespectingActiveCallUi('EARPIECE');
@@ -2412,10 +2400,6 @@ export async function reapplyPersistedCallAudioRoute(
             : resolveActiveCallInCallMedia());
         const sigPre = `${route}|${mediaPre}|${reason}`;
         if (sigPre === lastNativeInCallSignature && Date.now() - lastReapplyAt < REAPPLY_DEDUP_MS) {
-          logger.debug('[callAudioRoutePersist] reapply skipped (native unchanged)', {
-            reason,
-            route,
-          });
           return;
         }
         pinBuiltinRouteForPiPContext(route);
@@ -2460,11 +2444,6 @@ export async function reapplyPersistedCallAudioRoute(
             : resolveActiveCallInCallMedia());
         const sig = nativeOutputSignature(ext, media, false);
         if (sig === lastNativeInCallSignature) {
-          logger.debug('[callAudioRoutePersist] reapply skipped (headset native unchanged)', {
-            reason,
-            route: ext,
-            media,
-          });
           return;
         }
         await applyNativeOutputRoute(ext, media, { forceBuiltIn: false, skipCoalesce: true });
@@ -2484,10 +2463,6 @@ export async function reapplyPersistedCallAudioRoute(
         const media = opts?.media ?? 'audio';
         const sig = nativeOutputSignature(ext, media, false);
         if (sig === lastNativeInCallSignature && Date.now() - lastReapplyAt < REAPPLY_DEDUP_MS) {
-          logger.debug('[callAudioRoutePersist] reapply skipped (headset connect unchanged)', {
-            reason,
-            route: ext,
-          });
           return;
         }
         try {
@@ -2503,7 +2478,6 @@ export async function reapplyPersistedCallAudioRoute(
 
       if (reason === 'preserve_in_app_pip_headset') {
         if (!hasRealInAppPiPOrSystemReturnContext()) {
-          logger.debug('[callAudioRoutePersist] reapply skipped (no PiP context)', { reason });
           return;
         }
         const localAudioUi = shouldSkipDirectCallVideoUiReapply();
@@ -2626,11 +2600,9 @@ export async function reapplyPersistedCallAudioRoute(
         const media = opts?.media ?? 'audio';
         const now = Date.now();
         if (shouldSkipScheduledReturnToAudioUiReapply(route)) {
-          logger.debug('[callAudioRoutePersist] reapply skipped (return sync applied)', { reason, route });
           return;
         }
         if (shouldSkipDuplicateReapply(route, media, reason, now)) {
-          logger.debug('[callAudioRoutePersist] reapply skipped (duplicate)', { reason, route, media });
           return;
         }
         setPersistedCallAudioRoute(route);
@@ -2674,7 +2646,6 @@ export async function reapplyPersistedCallAudioRoute(
           !isInAudioOnlyCallUi() &&
           (shouldPreserveCallAudioRouteInInAppPiP() || isInAppPiPVideoPathContext())
         ) {
-          logger.debug('[callAudioRoutePersist] reapply skipped (in-app video PiP)', { reason });
           return;
         }
         if (!isInAudioOnlyCallUi()) {
@@ -2682,7 +2653,6 @@ export async function reapplyPersistedCallAudioRoute(
             readUserSelectedExternalCallAudioRoute() ||
             readUserSelectedCallAudioRoute();
           if (!isExternalHeadsetRoute(extOnly)) {
-            logger.debug('[callAudioRoutePersist] reapply skipped (full video UI)', { reason });
             return;
           }
         }
@@ -2726,7 +2696,6 @@ export async function reapplyPersistedCallAudioRoute(
         const media = opts?.media ?? 'audio';
         const acceptNow = Date.now();
         if (shouldSkipDuplicateReapply(route, media, reason, acceptNow)) {
-          logger.debug('[callAudioRoutePersist] reapply skipped (duplicate)', { reason, route, media });
           return;
         }
         // Уже на нужной гарнитуре — не делать лишний native apply.
@@ -2735,10 +2704,6 @@ export async function reapplyPersistedCallAudioRoute(
           readLastAppliedCallAudioRoute() === route &&
           nativeOutputSignature(route, media, false) === lastNativeInCallSignature
         ) {
-          logger.debug('[callAudioRoutePersist] reapply skipped (accept headset stable)', {
-            reason,
-            route,
-          });
           return;
         }
         setPersistedCallAudioRoute(route);
@@ -2784,13 +2749,9 @@ export async function reapplyPersistedCallAudioRoute(
       if (reason === 'direct_call_video_ui_route') {
         const genAtStart = directCallVideoUiReapplyGeneration;
         if (shouldSkipDirectCallVideoUiReapply()) {
-          logger.debug('[callAudioRoutePersist] reapply skipped (audio-only UI)', { reason });
           return;
         }
         if (isDirectCallVideoExpandAudioPreparedRecently()) {
-          logger.debug('[callAudioRoutePersist] reapply skipped (expand audio prepared)', {
-            reason,
-          });
           return;
         }
         const videoRoute = resolveFullVideoCallScreenAudioRoute();
@@ -2799,7 +2760,6 @@ export async function reapplyPersistedCallAudioRoute(
           genAtStart !== directCallVideoUiReapplyGeneration ||
           shouldSkipDirectCallVideoUiReapply()
         ) {
-          logger.debug('[callAudioRoutePersist] reapply aborted (left video UI)', { reason });
           return;
         }
         setPersistedCallAudioRoute(videoRoute);
@@ -2824,9 +2784,6 @@ export async function reapplyPersistedCallAudioRoute(
           genAtStart !== directCallVideoUiReapplyGeneration ||
           shouldSkipDirectCallVideoUiReapply()
         ) {
-          logger.debug('[callAudioRoutePersist] reapply native done but stale (left video UI)', {
-            reason,
-          });
           return;
         }
         lastNativeInCallSignature = signature;
@@ -2842,7 +2799,6 @@ export async function reapplyPersistedCallAudioRoute(
 
       if (reason === 'in_app_pip_from_video') {
         if (isInAppPiPManualRouteLockActive()) {
-          logger.debug('[callAudioRoutePersist] reapply skipped (pip manual lock)', { reason });
           return;
         }
         const videoRoute = resolveVideoInAppPiPPreserveRoute();
@@ -2877,7 +2833,6 @@ export async function reapplyPersistedCallAudioRoute(
 
       if (reason === 'in_app_pip_headset_unplug') {
         if (isInAppPiPManualRouteLockActive()) {
-          logger.debug('[callAudioRoutePersist] reapply skipped (pip manual lock)', { reason });
           return;
         }
         let route = normalizeInCallRoute(
@@ -2920,7 +2875,6 @@ export async function reapplyPersistedCallAudioRoute(
           isDirectCallVideoExpandGuardActive() ||
           isDirectCallVideoExpandAudioPreparedRecently()
         ) {
-          logger.debug('[callAudioRoutePersist] reapply skipped (expand prepared)', { reason });
           return;
         }
         const videoRoute = resolveFullVideoCallScreenAudioRoute();
@@ -2958,9 +2912,6 @@ export async function reapplyPersistedCallAudioRoute(
       }
 
       if (reason === 'system_pip_exit_preserve_route' || reason === 'system_pip_return_media') {
-        if (shouldSkipDirectCallVideoUiReapply()) {
-          logger.debug('[callAudioRoutePersist] reapply system PiP as audio-only UI', { reason });
-        }
         await reapplySystemPiPExitOrReturnRoute(reason, {
           media: resolveReapplyMediaInCallContext(opts?.media),
           skipInCallRestart: opts?.skipInCallRestart,
@@ -3117,7 +3068,6 @@ export async function reapplyPersistedCallAudioRoute(
       const signature = `${route}|${media}|${honorUser ? 'honor' : 'auto'}`;
       const now = Date.now();
       if (shouldSkipDuplicateReapply(route, media, reason, now)) {
-        logger.debug('[callAudioRoutePersist] reapply skipped (duplicate)', { reason, route, media });
         return;
       }
       rememberReapplyDedup(route, media, reason);
@@ -3160,7 +3110,6 @@ export async function reapplyPersistedCallAudioRoute(
             await (InCallManager as any).chooseAudioRoute?.(route);
           } catch {}
         }
-        logger.debug('[callAudioRoutePersist] reapply light (native unchanged)', { reason, route, media });
         return;
       }
 
@@ -3194,7 +3143,6 @@ export function scheduleReapplyPersistedCallAudioRoute(
     return;
   }
   if (reason === 'return_to_audio_ui' && shouldSkipScheduledReturnToAudioUiReapply()) {
-    logger.debug('[callAudioRoutePersist] schedule skipped (return sync applied)', { reason });
     return;
   }
   const preserveSystemPiP =

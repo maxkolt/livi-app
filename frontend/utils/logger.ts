@@ -10,7 +10,8 @@ const levels = {
   error: 3,
 };
 
-const currentLevel = levels[LOG_LEVEL as keyof typeof levels] || levels.info;
+// `??`, not `||`: debug is level 0, and `0 || info` silently turned LOG_LEVEL=debug into info.
+const currentLevel = levels[LOG_LEVEL as keyof typeof levels] ?? levels.info;
 
 export const logger = {
   debug: (...args: any[]) => {

@@ -175,8 +175,6 @@ export const uploadMediaToServer = async (
   options?: MediaUploadOptions,
 ): Promise<MediaUploadResult> => {
   try {
-    logger.debug('Starting upload to:', API_BASE_URL);
-    logger.debug('Local file:', localUri);
 
     try {
       const src = localUri.startsWith('file://') ? localUri : `file://${localUri}`;

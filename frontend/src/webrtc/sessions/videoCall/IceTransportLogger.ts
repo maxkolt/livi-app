@@ -57,11 +57,6 @@ export class IceTransportLogger {
       if (!this.host.isCurrentRoom(room)) return;
       const diagnostics = await getRoomIceTransportDiagnostics(room as any);
       if (!diagnostics.length) {
-        logger.debug('[VideoCallSession] ICE transport diagnostics unavailable', {
-          reason,
-          roomName: room.name,
-          roomState: room.state,
-        });
         return;
       }
 
@@ -78,8 +73,6 @@ export class IceTransportLogger {
         partnerUserId,
         transports: diagnostics,
       });
-    } catch (e) {
-      logger.debug('[VideoCallSession] ICE transport diagnostics failed (ignored)', e);
-    }
+    } catch {}
   }
 }

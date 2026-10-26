@@ -261,7 +261,6 @@ export async function applyAuthAndConnect() {
       // Если realtime сейчас сознательно поставлен на паузу, не стартуем новый connect().
       // Иначе при фоне/блокировке экрана можно словить шумный xhr poll error от уже отмененного запроса.
       if (!shouldAttemptRealtimeConnection()) {
-        logger.debug("[applyAuthAndConnect] Realtime paused, skip connect");
         return;
       }
 
@@ -303,7 +302,6 @@ export async function applyAuthAndConnect() {
       }
 
       if (!socket.connected) {
-        logger.debug("Connecting socket...");
         prewarmApiConnections("socket_connect", 1);
         if (!connectAttemptStartedAt) connectAttemptStartedAt = Date.now();
         socket.connect();
@@ -319,7 +317,6 @@ export async function applyAuthAndConnect() {
           const timeout = setTimeout(() => {
             cleanup();
             if (!shouldAttemptRealtimeConnection()) {
-              logger.debug("[applyAuthAndConnect] Connection timeout while realtime paused");
               resolve();
               return;
             }
@@ -328,14 +325,12 @@ export async function applyAuthAndConnect() {
 
           const onConnect = () => {
             cleanup();
-            logger.debug("Socket connected");
             resolve();
           };
 
           const onError = (err: any) => {
             if (!shouldAttemptRealtimeConnection()) {
               cleanup();
-              logger.debug("[applyAuthAndConnect] Ignoring connect error while realtime paused:", err?.message || String(err));
               resolve();
               return;
             }
@@ -353,12 +348,9 @@ export async function applyAuthAndConnect() {
           }
         });
         if (socket.connected && installId) shared.handshakeHasInstallId = true;
-      } else {
-        logger.debug("Socket already connected, skip reconnect");
       }
     } catch (error) {
       if (!shouldAttemptRealtimeConnection()) {
-        logger.debug("[applyAuthAndConnect] Connection attempt stopped while realtime paused");
         return;
       }
       if (isExpectedSocketConnectError(error)) {
@@ -377,12 +369,10 @@ export async function applyAuthAndConnect() {
 export async function boot() {
   // Защита от повторного вызова
   if (shared.bootInProgress) {
-    logger.debug("Boot already in progress, skipping...");
     return;
   }
 
   shared.bootInProgress = true;
-  logger.debug("Starting boot process...");
 
   // Снимаем уведомление «Видеозвонок от...», если оно осталось от прошлого запуска (сервис не закрылся).
   if (Platform.OS === "android") {
@@ -392,7 +382,6 @@ export async function boot() {
   try {
     const saved = await AsyncStorage.getItem("userId");
     if (saved && isOid(saved)) {
-      logger.debug("Found saved userId:", saved);
 
       // Сначала устанавливаем userId и подключаемся
       shared.currentUserId = saved;
@@ -424,11 +413,6 @@ export async function boot() {
             await createUser();
             return;
           }
-
-          const profile = profileResponse.profile;
-          logger.debug("Loaded profile from backend:", { nick: profile?.nick });
-
-          logger.debug("Using existing user with profile:", saved);
         } else {
           const err = String((profileResponse as any)?.error || "").toLowerCase();
           const isDefinitiveUserMissing =
@@ -462,16 +446,12 @@ export async function boot() {
   }
 
   // КРИТИЧНО: Подключаемся с актуальным currentUserId (только если не создавали нового пользователя)
-  logger.debug("Final currentUserId:", shared.currentUserId);
   if (!socket.connected) {
     await applyAuthAndConnect();
   } else if (shared.currentUserId) {
-    logger.debug("Socket connected, sending reauth with userId:", shared.currentUserId);
     try {
       const reauthResponse = await emitReauthDeduped(shared.currentUserId);
-      if (reauthResponse?.ok) {
-        logger.debug("Reauth successful");
-      } else {
+      if (!reauthResponse?.ok) {
         logger.warn("Reauth failed:", reauthResponse?.error);
         if (reauthResponse?.error === "user_not_found" || reauthResponse?.error === "not_found") {
           await recoverFromReauthFailure(reauthResponse?.error);
@@ -484,7 +464,6 @@ export async function boot() {
 
   // Сбрасываем флаг завершения boot процесса
   shared.bootInProgress = false;
-  logger.debug("[boot] Boot process completed");
 }
 
 export function setOutgoingCallScreenVisible(visible: boolean): void {
@@ -673,7 +652,6 @@ socket.on("connect", async () => {
 
   // КРИТИЧНО: Если у нас есть userId, но socket подключился без него - отправляем reauth (дедуп с boot / другими вызовами)
   if (shared.currentUserId && !(socket as any).data?.userId) {
-    logger.debug("[socket] post-connect reauth (no userId in socket data yet)", { userId: shared.currentUserId });
     try {
       const reauthStartedAt = Date.now();
       const reauthResponse = await emitReauthDeduped(shared.currentUserId);

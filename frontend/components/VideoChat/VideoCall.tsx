@@ -586,17 +586,6 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
   }, [localExternalHold]);
   const remoteMutedBeforeExternalHoldRef = useRef<boolean | null>(null);
   
-  // КРИТИЧНО: Логируем изменения partnerInPiP для отладки
-  useEffect(() => {
-    // Noisy UI-state logs should be DEBUG-level (hidden by default LOG_LEVEL=info).
-    logger.debug('[VideoCall] partnerInPiP state changed', { 
-      partnerInPiP,
-      roomId,
-      callId,
-      partnerId
-    });
-  }, [partnerInPiP, roomId, callId, partnerId]);
-  
   // Синхронизируем состояние неактивности с глобальным ref для App.tsx
   useEffect(() => {
     (global as any).__isInactiveStateRef = { current: isInactiveState };
@@ -2111,19 +2100,6 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       callConnected &&
       !sessionEnded &&
       !endingNow;
-    logger.debug('[VideoCall] presence:update решение', {
-      sendBusy: hasActiveCall,
-      callConnected,
-      friendCallAccepted,
-      hasRemoteStream: !!remoteStream,
-      hasRoomId: !!roomId,
-      isInactiveState,
-      sessionEnded,
-      endingNow,
-      started,
-      wasFriendCallEnded,
-      transitionDone,
-    });
     if (hasActiveCall) {
       try {
         const rid = (roomId || callId || '').trim();
@@ -2446,7 +2422,6 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       isEndingCallRef.current = false;
       setIsEndingCall(false);
       clearEndingCallInProgress();
-      logger.debug('[VideoCall] isEndingCallRef reset after deferred teardown', { source });
     }, 0);
     return true;
   }, [clearSessionRefs, getGlobalCleanupKey, isPipOverlayVisibleSync, markGlobalCleanupDone, markGlobalTeardownScheduled, wasGlobalCleanupDone, wasGlobalTeardownScheduled]);
@@ -3169,10 +3144,6 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
         onRemoteCamStateChange: (enabled) => {
           if (isInactiveStateRef.current || isEndingCallRef.current || wasFriendCallEndedRef.current) return;
           if (sessionRef.current?.isEnded?.()) return;
-          logger.debug('[VideoCall] onRemoteCamStateChange', {
-            enabled,
-            partnerInPiP: partnerInPiPRef.current,
-          });
           remoteCamStateKnownRef.current = true;
           if (inAudioOnlyUiRef.current) {
             if (enabled) {
@@ -3938,7 +3909,6 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       ((global as any).__webrtcSessionRef?.current as VideoCallSession | null | undefined) ||
       sessionRef.current;
     if (!session) {
-      logger.debug('[VideoCall] No session for event handlers setup');
       return;
     }
     const returnToken = currentSystemPiPReturnToken;
@@ -4220,11 +4190,6 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       if (isInactiveStateRef.current || isEndingCallRef.current || wasFriendCallEndedRef.current) return;
       if (sessionRef.current?.isEnded?.()) return;
       const remoteStreamSnapshot = remoteStreamRef.current;
-      logger.debug('[VideoCall] remoteState event received', {
-        muted,
-        currentRemoteMuted: remoteMutedRef.current,
-        hasRemoteStream: !!remoteStreamSnapshot
-      });
       
       if (muted !== undefined) {
         if (muted && !remoteMutedRef.current && remoteStreamSnapshot) {
@@ -4361,10 +4326,6 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     const needsStreamBridge = !createdSessionsRef.current.has(session as any);
     const sessionAttachKey = sessionHandlerAttachKey;
     lastAttachedSessionKeyRef.current = sessionAttachKey;
-    logger.debug('[VideoCall] Attaching session event handlers', {
-      sessionAttachKey,
-      needsStreamBridge,
-    });
 
     const handleLocalStreamEvent = (stream: MediaStream | null) => {
       if (!isMountedRef.current) return;
@@ -4458,14 +4419,8 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     if (needsStreamBridge) {
       session.on('localStream', handleLocalStreamEvent as any);
       session.on('remoteStream', handleRemoteStreamEvent as any);
-      logger.debug('[VideoCall] Stream bridge enabled for reused session');
     }
     
-    logger.debug('[VideoCall] Event handlers attached for session', {
-      hasSession: !!session,
-      handlersCount: needsStreamBridge ? 10 : 8,
-      needsStreamBridge,
-    });
     
     return () => {
       if (lastAttachedSessionKeyRef.current !== sessionAttachKey) {
@@ -4634,7 +4589,6 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
         try {
           clearEndingCallInProgress();
         } catch (_) {}
-        logger.debug('[VideoCall] isEndingCallRef reset (onAbortCall no-session)');
       }, 1000);
       return;
     }
@@ -7683,7 +7637,6 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
               showFriendBadge={false}
               lang={lang}
               session={sessionRef.current}
-              remoteStreamReceivedAt={remoteStreamReceivedAtRef.current}
               partnerInPiP={false}
               partnerExternalHold={partnerExternalHoldUi}
               forceTextureView={true}
@@ -7807,7 +7760,6 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
                   showFriendBadge={false}
                   lang={lang}
                   session={sessionRef.current}
-                  remoteStreamReceivedAt={remoteStreamReceivedAtRef.current}
                   partnerInPiP={partnerInPiP}
                   partnerExternalHold={partnerExternalHoldUi}
                   forceTextureView={Platform.OS === 'android'}
@@ -7886,7 +7838,6 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
                       showFriendBadge={false}
                       lang={lang}
                       session={sessionRef.current}
-                      remoteStreamReceivedAt={remoteStreamReceivedAtRef.current}
                       partnerInPiP={partnerInPiP}
                       partnerExternalHold={partnerExternalHoldUi}
                       forceTextureView={Platform.OS === 'android'}

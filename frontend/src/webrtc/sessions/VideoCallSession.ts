@@ -966,7 +966,6 @@ export class VideoCallSession extends SimpleEventEmitter {
     
     const envLivekitUrl = process.env.EXPO_PUBLIC_LIVEKIT_URL;
     
-    logger.debug('[VideoCallSession] Requesting LiveKit token', { roomId, livekitUrl: envLivekitUrl || LIVEKIT_URL });
     
     const tokenDataPromise = new Promise<{ ok: boolean; token?: string; url?: string; error?: string }>((resolve) => {
       const timeout = setTimeout(() => {
@@ -976,12 +975,6 @@ export class VideoCallSession extends SimpleEventEmitter {
       
       socket.emit('livekit:token', { roomName: roomId }, (response: { ok: boolean; token?: string; url?: string; error?: string }) => {
         clearTimeout(timeout);
-        logger.debug('[VideoCallSession] Token response received', { 
-          ok: response.ok, 
-          hasToken: !!response.token, 
-          error: response.error,
-          roomId,
-        });
         resolve(response);
       });
     });
@@ -1001,16 +994,10 @@ export class VideoCallSession extends SimpleEventEmitter {
           this.notifyLoadingChange(false);
           return;
         }
-        logger.debug('[VideoCallSession] Connecting to LiveKit', { 
-          roomId, 
-          url: resolvedLivekitUrl,
-          tokenLength: tokenData.token.length,
-        });
         const connectRequestId = ++this.connectRequestId;
         await this.restoreCallE2eeForRejoin(tokenData as any);
         const connected = await this.connectToLiveKit(resolvedLivekitUrl, tokenData.token, connectRequestId, roomId);
         if (!connected) {
-          logger.debug('[VideoCallSession] connectAsInitiatorAfterAccepted aborted (stale request)');
           return;
         }
         this.notifyLoadingChange(false);
@@ -1287,7 +1274,6 @@ export class VideoCallSession extends SimpleEventEmitter {
       const v = (config as any)[k];
       if (v !== undefined) (this.config as any)[k] = v;
     }
-    logger.debug('[VideoCallSession] rebindVideoCallMount — UI bridge refreshed');
   }
 
   /**
@@ -1613,9 +1599,7 @@ export class VideoCallSession extends SimpleEventEmitter {
 
     try {
       await this.setRoomMicrophoneEnabled(room, true, 'restoreMicrophoneAfterAppBackground');
-    } catch (e) {
-      logger.debug('[VideoCallSession] restoreMicrophone setMicrophoneEnabled', e);
-    }
+    } catch {}
 
     const audioMt = this.localAudioTrack?.mediaStreamTrack;
     if (audioMt?.readyState === 'ended') {
@@ -1995,7 +1979,6 @@ export class VideoCallSession extends SimpleEventEmitter {
       }
       return track.mediaStreamTrack?.readyState === 'live';
     } catch (e) {
-      logger.debug('[VideoCallSession] softSetLocalVideoMuted failed', e);
       return false;
     }
   }
@@ -2135,9 +2118,6 @@ export class VideoCallSession extends SimpleEventEmitter {
       }
       if (this.ended || !this.isCamOn) return;
       if (this.room && !this.isLiveKitRoomConnected()) {
-        logger.debug('[VideoCallSession] Skip camera recovery — room not connected after wait', {
-          roomState: this.room?.state,
-        });
         return;
       }
       // ВКЛЮЧАЕМ камеру: live-трек → soft unmute (без recreate); иначе fast-start recreate без upgrade.
@@ -2314,11 +2294,9 @@ export class VideoCallSession extends SimpleEventEmitter {
 
   async flipCam(): Promise<void> {
     if (this.cameraSwitchInProgress) {
-      logger.debug('[VideoCallSession] flipCam skipped: switch already in progress');
       return;
     }
     if (!this.isCamOn) {
-      logger.debug('[VideoCallSession] flipCam skipped: camera is off');
       return;
     }
     this.cameraSwitchInProgress = true;
@@ -2461,14 +2439,9 @@ export class VideoCallSession extends SimpleEventEmitter {
           await this.room.localParticipant.publishTrack(this.localVideoTrack).catch((e) => {
             const errorMsg = e?.message || String(e || '');
             if (isIgnorablePublishError(errorMsg)) {
-              logger.debug('[VideoCallSession] Ignoring publish error (already/closed)', { error: errorMsg });
               return;
             }
             throw e;
-          });
-        } else {
-          logger.debug('[VideoCallSession] Video track already published, skipping republish', {
-            trackId: this.localVideoTrack.sid || this.localVideoTrack.mediaStreamTrack?.id,
           });
         }
         if (this.localAudioTrack && this.isMicOn && !this.isAudioTrackPublished(this.localAudioTrack)) {
@@ -2476,7 +2449,6 @@ export class VideoCallSession extends SimpleEventEmitter {
           await this.room.localParticipant.publishTrack(this.localAudioTrack).catch((e) => {
             const errorMsg = e?.message || String(e || '');
             if (isIgnorablePublishError(errorMsg)) {
-              logger.debug('[VideoCallSession] Ignoring audio publish error (already/closed)', { error: errorMsg });
               return;
             }
             throw e;
@@ -2733,13 +2705,9 @@ export class VideoCallSession extends SimpleEventEmitter {
   }): void {
     const forcePeer = !!opts?.forceForPeerRemoteVideo;
     if (!forcePeer && this.isLocalDirectCallAudioOnlyUi()) {
-      logger.debug('[VideoCallSession] Skip enableRemoteVideoConsumption — local audio-only UI');
       return;
     }
     if (!forcePeer && this.isDirectCallAudioFirstWithoutUserVideo()) {
-      logger.debug(
-        '[VideoCallSession] Skip enableRemoteVideoConsumption — audio-first without user video request',
-      );
       return;
     }
     if (
@@ -2747,16 +2715,10 @@ export class VideoCallSession extends SimpleEventEmitter {
       !opts?.leaveAudioOnlyConsumer &&
       !forcePeer
     ) {
-      logger.debug('[VideoCallSession] Skip enableRemoteVideoConsumption — direct-call audio-only consumer defer');
       return;
     }
     if (opts?.leaveAudioOnlyConsumer || forcePeer) {
       this.directCallAudioOnlyConsumerDefer = false;
-      if (isInAudioOnlyCallUi()) {
-        logger.debug(
-          '[VideoCallSession] enableRemoteVideoConsumption — leaveAudioOnlyConsumer (UI ref may lag)',
-        );
-      }
     }
     const wasDeferred = this.deferRemoteVideoSubscription;
     if (!wasDeferred) {
@@ -2777,7 +2739,6 @@ export class VideoCallSession extends SimpleEventEmitter {
       !forcePeer &&
       (isInAudioOnlyCallUi() || this.directCallAudioOnlyConsumerDefer)
     ) {
-      logger.debug('[VideoCallSession] Skip enableRemoteVideoConsumption — audio-only consumer still active');
       return;
     }
     if (this.liveKitRemoteVideoUnsubscribeTimer) {
@@ -2818,11 +2779,9 @@ export class VideoCallSession extends SimpleEventEmitter {
     } catch (_) {}
     // Mid-PiP peer video: не блокировать подписку из‑за local audio-only UI.
     if (!inAppPiPVisible && this.isLocalDirectCallAudioOnlyUi()) {
-      logger.debug('[VideoCallSession] Skip ensureRemoteVideoForPiP — local audio-only UI');
       return;
     }
     if (!inAppPiPVisible && (this.directCallAudioOnlyConsumerDefer || isInAudioOnlyCallUi())) {
-      logger.debug('[VideoCallSession] Skip ensureRemoteVideoForPiP — direct-call audio-only consumer');
       return;
     }
     if (this.deferRemoteVideoSubscription) {
@@ -2884,12 +2843,6 @@ export class VideoCallSession extends SimpleEventEmitter {
       const hadLiveAfter = this.remoteStreamHasLiveVideoTrack();
       if (hadLiveAfter) {
         logger.info('[VideoCallSession] Remote video armed for system PiP capture', {
-          hadLiveAfter,
-          wasDeferred,
-          wasConsumerDefer,
-        });
-      } else {
-        logger.debug('[VideoCallSession] Remote video arm pending for system PiP', {
           hadLiveAfter,
           wasDeferred,
           wasConsumerDefer,
@@ -3035,13 +2988,6 @@ export class VideoCallSession extends SimpleEventEmitter {
           inSystemPiP,
           hasLive,
         });
-      } else {
-        logger.debug('[VideoCallSession] System PiP peer video capture arming', {
-          reason,
-          videoUiOwnsCapture,
-          inSystemPiP,
-          hasLive,
-        });
       }
       // OEM иногда игнорирует первый hide backdrop в PiP — повтор (только пока ещё в PiP).
       const repin = () => {
@@ -3174,10 +3120,6 @@ export class VideoCallSession extends SimpleEventEmitter {
     try {
       if (publication.isSubscribed) publication.setSubscribed(false);
     } catch {}
-    logger.debug('[VideoCallSession] Skipping remote video subscription (audio-only consumer)', {
-      context,
-      trackSid: publication.trackSid,
-    });
     return true;
   }
 
@@ -3294,12 +3236,6 @@ export class VideoCallSession extends SimpleEventEmitter {
       hasLiveAudio = false;
     }
     if (!peerInRoom || !hasLiveAudio) {
-      logger.debug('[VideoCallSession] peerRecovered/media check — keep restoring UI', {
-        reason,
-        peerInRoom,
-        hasLiveAudio,
-        callId: this.callId,
-      });
       return;
     }
     this.clearPeerReconnectingUi(reason);
@@ -3597,9 +3533,7 @@ export class VideoCallSession extends SimpleEventEmitter {
         callId: callId || null,
         roomId: roomId || null,
       });
-    } catch (e) {
-      logger.debug('[VideoCallSession] call:networkDown emit failed', e);
-    }
+    } catch {}
   }
 
   private armPeerReconnectingUi(reason: string): void {
@@ -3709,15 +3643,11 @@ export class VideoCallSession extends SimpleEventEmitter {
     if (!this.config.getIsDirectCall?.()) return;
     if (inVideoCallUi) {
       if (this.isDirectCallAudioFirstWithoutUserVideo()) {
-        logger.debug(
-          '[VideoCallSession] Skip direct-call:video-ui true — audio-first without user video request',
-        );
         return;
       }
       markDirectCallVideoMediaActive();
     }
     if (inVideoCallUi && this.isLocalDirectCallAudioOnlyUi()) {
-      logger.debug('[VideoCallSession] Skip direct-call:video-ui true — local audio-only UI');
       return;
     }
     if (!opts?.force && this.lastEmittedPeerVideoCallUi === inVideoCallUi) return;
@@ -3834,7 +3764,6 @@ export class VideoCallSession extends SimpleEventEmitter {
         this.deferRemoteVideoSubscription = true;
         this.directCallAudioOnlyConsumerDefer = true;
         this.requestSyncDirectCallAudioOnlyUi();
-        logger.debug('[VideoCallSession] enterDirectCallAudioOnlyMode — already audio-only consumer');
       }
     } catch (e) {
       logger.warn('[VideoCallSession] enterDirectCallAudioOnlyMode deferRemoteVideo failed', e);
@@ -3858,21 +3787,14 @@ export class VideoCallSession extends SimpleEventEmitter {
     // Отправляем pip:state партнеру только если звонок ещё активен (гонка: call ended и PiP могут совпасть).
     const currentRoomId = this.getRoomId();
     if (this.ended || this.endCallInProgress || this.cleaned || !currentRoomId) {
-      logger.debug('[VideoCallSession] pip:state не отправляем — звонок завершён или нет roomId', {
-        ended: this.ended,
-        cleaned: this.cleaned,
-        hasRoomId: !!currentRoomId,
-      });
       return;
     }
     if (this.isLocalDirectCallAudioOnlyUi()) {
-      logger.debug('[VideoCallSession] Skip enterPiP — local audio-only UI');
       return;
     }
     try {
       const g = global as any;
       if (g.__preferAudioOnlyUiOnNextVideoCallRef?.current === true) {
-        logger.debug('[VideoCallSession] Skip enterPiP — audio-only return from PiP');
         return;
       }
     } catch (_) {}
@@ -3912,7 +3834,6 @@ export class VideoCallSession extends SimpleEventEmitter {
         g.__pendingSystemPiPSyncRef?.current === true ||
         now < Number(g.__systemPiPEntryInProgressUntilRef?.current || 0)
       ) {
-        logger.debug('[VideoCallSession] Skip exitPiP — still in system PiP lifecycle');
         return;
       }
     } catch (_) {}
@@ -3922,11 +3843,6 @@ export class VideoCallSession extends SimpleEventEmitter {
       this.restoreAudioOnlyDeferAfterPiPIfNeeded();
     }
     if (this.ended || this.endCallInProgress || this.cleaned || !currentRoomId) {
-      logger.debug('[VideoCallSession] pip:state не отправляем при exitPiP — звонок завершён или нет roomId', {
-        ended: this.ended,
-        cleaned: this.cleaned,
-        hasRoomId: !!currentRoomId,
-      });
       return;
     }
     if (
@@ -4200,7 +4116,6 @@ export class VideoCallSession extends SimpleEventEmitter {
   private onSocketPartnerPiPState(data: { inPiP: boolean; roomId: string; from: string }): void {
     // Не обновлять PiP-состояние после завершения звонка — иначе у партнёра мерцание (pip:state может прийти после call:ended).
     if (this.ended || this.endCallInProgress) {
-      logger.debug('[VideoCallSession] pip:state проигнорировано — звонок уже завершён');
       return;
     }
     const currentRoomId = this.getRoomId();
@@ -4267,10 +4182,6 @@ export class VideoCallSession extends SimpleEventEmitter {
     const incoming = data.roomId;
 
     if (!currentRoomId && !this.roomId && !this.currentRoomName) {
-      logger.debug('[VideoCallSession] cam-toggle ignored (no active friend-call room)', {
-        enabled: data.enabled,
-        partnerRoomId: incoming,
-      });
       return;
     }
     // Prefer matchesSignalingRoom: after reconnect getRoomId() / LiveKit name can differ
@@ -4280,16 +4191,9 @@ export class VideoCallSession extends SimpleEventEmitter {
       !this.matchesSignalingRoom(incoming) &&
       !this.matchesDirectCallParticipantsRoom(incoming)
     ) {
-      logger.debug('[VideoCallSession] cam-toggle ignored (room mismatch)', {
-        receivedRoomId: incoming,
-        currentRoomId,
-      });
       return;
     }
     if (!incoming) {
-      logger.debug('[VideoCallSession] cam-toggle ignored (missing roomId)', {
-        enabled: data.enabled,
-      });
       return;
     }
 
@@ -4357,12 +4261,6 @@ export class VideoCallSession extends SimpleEventEmitter {
     }): void {
     const incoming = data.roomId;
     if (incoming && !this.matchesSignalingRoom(incoming)) {
-      logger.debug('[VideoCallSession] direct-call:video-ui ignored (room mismatch)', {
-        receivedRoomId: incoming,
-        currentRoomId: this.getRoomId(),
-        socketRoomId: this.roomId,
-        livekitRoomName: this.room?.name,
-      });
       return;
     }
     if (this.ended || this.endCallInProgress) return;
@@ -4423,13 +4321,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       const now = Date.now();
       if (now - this.lastSocketRecoveryAttemptAt < 5000) return;
       this.lastSocketRecoveryAttemptAt = now;
-      ensureSocketConnected(8000).catch((e) => {
-        logger.debug('[VideoCallSession] socket recovery attempt failed', {
-          callId: this.callId,
-          roomId: this.roomId,
-          error: (e as Error)?.message || String(e),
-        });
-      });
+      ensureSocketConnected(8000).catch(() => {});
     }, 700);
   }
 
@@ -5536,7 +5428,6 @@ export class VideoCallSession extends SimpleEventEmitter {
       this.armOrExtendMediaReconnectGrace();
     }
     if (this.mediaRejoinInFlight) {
-      logger.debug('[VideoCallSession] Media re-join already in flight — skip duplicate');
       return;
     }
     this.mediaRejoinInFlight = true;
@@ -5672,12 +5563,7 @@ export class VideoCallSession extends SimpleEventEmitter {
           }
         });
       });
-    } catch (e) {
-      logger.debug('[VideoCallSession] resubscribeRemoteMediaAfterReconnect audio failed', {
-        context,
-        error: (e as Error)?.message,
-      });
-    }
+    } catch {}
 
     // Clear stuck video defer only when already on video UI — never force video while
     // user is still on audio-only screen (bandwidth / product policy stay intact).
@@ -6405,7 +6291,6 @@ export class VideoCallSession extends SimpleEventEmitter {
         await this.room.localParticipant.publishTrack(newVideoTrack).catch((e) => {
           const errorMsg = e?.message || String(e || '');
           if (isIgnorablePublishError(errorMsg)) {
-            logger.debug('[VideoCallSession] Ignoring publish error (already/closed)', { error: errorMsg });
             return;
           }
           throw e;
@@ -6430,9 +6315,6 @@ export class VideoCallSession extends SimpleEventEmitter {
       await this.localVideoRecreatePromise.catch(() => {});
       const mt = this.localVideoTrack?.mediaStreamTrack;
       if (mt && mt.readyState === 'live') {
-        logger.debug('[VideoCallSession] recreateLocalVideoTrack skipped — prior recreate left live track', {
-          context,
-        });
         return;
       }
     }
@@ -6450,8 +6332,6 @@ export class VideoCallSession extends SimpleEventEmitter {
   private async recreateLocalVideoTrackInner(context: string): Promise<void> {
     // IMPORTANT: Do not touch localAudioTrack here. Recreating audio during camera recovery
     // is a common root cause of one-way / unstable audio on Android.
-    const camStateBeforeAwait = this.isCamOn;
-
     const facingMode = this.camSide === 'front' ? 'user' : 'environment';
     // Первое включение камеры из audio-only (нет трека): fast-start → upgrade.
     // PiP-return должен открыть Camera2 как можно быстрее; steady-профиль можно
@@ -6606,13 +6486,6 @@ export class VideoCallSession extends SimpleEventEmitter {
       this.fastStartVideoProfileActive = false;
       this.clearFastStartVideoUpgradeTimer();
     }
-    if (__DEV__ && camStateBeforeAwait !== camNow) {
-      logger.debug('[VideoCallSession] recreateLocalVideoTrack: cam intent changed during await', {
-        context,
-        camStateBeforeAwait,
-        camNow,
-      });
-    }
 
     // Новый stream.id только для flip/restart — иначе сохраняем id (меньше мерцания превью).
     const forceNewStream = context.includes('restartLocalCamera') || context.includes('flip');
@@ -6747,7 +6620,6 @@ export class VideoCallSession extends SimpleEventEmitter {
 
     // КРИТИЧНО: Дополнительная проверка состояния перед публикацией
     if (room.state !== 'connected' || !room.localParticipant) {
-      logger.debug(`[VideoCallSession] Room disconnected before ${kind} track publish, skipping`);
       return;
     }
     // КРИТИЧНО: Проверяем, не опубликован ли трек уже
@@ -6756,9 +6628,6 @@ export class VideoCallSession extends SimpleEventEmitter {
         ? this.isVideoTrackPublished(track as LocalVideoTrack)
         : this.isAudioTrackPublished(track as LocalAudioTrack);
     if (alreadyPublished) {
-      logger.debug(`[VideoCallSession] ${label} track already published in connectToLiveKit, skipping`, {
-        trackId: trackId(),
-      });
       return;
     }
 
@@ -6766,7 +6635,6 @@ export class VideoCallSession extends SimpleEventEmitter {
       // Игнорируем ошибки дубликатов и закрытых соединений
       const errorMsg = e?.message || String(e || '');
       if (isIgnorablePublishError(errorMsg)) {
-        logger.debug('[VideoCallSession] Ignoring publish error (already/closed)', { error: errorMsg });
         return;
       }
       logger.warn(`[VideoCallSession] Failed to publish ${kind} track`, e);
@@ -6785,7 +6653,6 @@ export class VideoCallSession extends SimpleEventEmitter {
     try {
       const pending = (global as any).__videoCallRoomDisconnectPromiseRef?.current as Promise<void> | null;
       if (pending) {
-        logger.debug('[VideoCallSession] Waiting for prior room disconnect before LiveKit connect');
         await pending.catch(() => {});
       }
     } catch {}
@@ -6817,10 +6684,6 @@ export class VideoCallSession extends SimpleEventEmitter {
         this.currentRoomName && 
         targetRoomName && 
         this.currentRoomName === targetRoomName) {
-      logger.debug('[VideoCallSession] Room already connected to target room, reusing', {
-        roomName: targetRoomName,
-        roomState: this.room.state,
-      });
       return true;
     }
 
@@ -6915,13 +6778,11 @@ export class VideoCallSession extends SimpleEventEmitter {
     // КРИТИЧНО: Проверяем, что комната действительно отключена и очищена
     // disconnectRoom() устанавливает this.room = null в промис-колбэке, поэтому нужно подождать
     if (this.isDisconnecting || this.room !== null) {
-      logger.debug('[VideoCallSession] Room still disconnecting or not cleared, waiting for disconnect promise...');
       
       // Если есть активный промис отключения, ждем его завершения
       if (this.disconnectPromise) {
         try {
           await this.disconnectPromise;
-          logger.debug('[VideoCallSession] Disconnect promise resolved');
         } catch (e) {
           logger.warn('[VideoCallSession] Disconnect promise rejected', e);
         }
@@ -6983,7 +6844,6 @@ export class VideoCallSession extends SimpleEventEmitter {
           this.currentRoomName && 
           targetRoomName && 
           this.currentRoomName === targetRoomName) {
-        logger.debug('[VideoCallSession] Room already connected to target, skipping creation');
         return true;
       }
       
@@ -7285,7 +7145,6 @@ export class VideoCallSession extends SimpleEventEmitter {
    */
   private warnAboutInvalidLiveKitApiKey(url: string): void {
     if (this.hasLoggedLiveKitApiKeyWarning) {
-      logger.debug('[VideoCallSession] LiveKit API key validation failed (suppressed повтор)', { url });
       return;
     }
     this.hasLoggedLiveKitApiKeyWarning = true;
@@ -7325,13 +7184,6 @@ export class VideoCallSession extends SimpleEventEmitter {
     );
 
     if (!isSameRoom) {
-      logger.debug('[VideoCallSession] Request is stale and not for same room', {
-        connectRequestId,
-        currentConnectRequestId: this.connectRequestId,
-        targetRoomName,
-        currentRoomName: this.currentRoomName,
-        roomState: this.room?.state,
-      });
       return false;
     }
 
@@ -7435,9 +7287,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       }
       const logFn = isTransientPcError ? logger.warn : logger.error;
       // Не логировать полный стек, если к моменту catch звонок уже завершён (например, retry после end с другой стороны)
-      if (this.ended) {
-        logger.debug('[VideoCallSession] Connect failed after call ended', { error: errorMessage });
-      } else {
+      if (!this.ended) {
         logFn('[VideoCallSession] Error connecting to LiveKit', {
           error: errorMessage,
           errorCode: e?.code,
@@ -7826,10 +7676,6 @@ export class VideoCallSession extends SimpleEventEmitter {
 
     if (this.localVideoTrack && this.isCamOn) {
       await this.publishLocalTrackOnConnect(room, this.localVideoTrack, 'video');
-    } else if (this.localVideoTrack && !this.isCamOn) {
-      logger.debug('[VideoCallSession] Skipping video publish in connectToLiveKit — camera off', {
-        trackId: this.localVideoTrack?.sid || this.localVideoTrack?.mediaStreamTrack?.id,
-      });
     }
     const earlyAudio = this.earlyAudioPublish;
     if (earlyAudio?.room === room) {
@@ -8229,9 +8075,6 @@ export class VideoCallSession extends SimpleEventEmitter {
       
       // Устанавливаем обработчик события Disconnected
       disconnectedHandler = () => {
-        logger.debug('[VideoCallSession] Room fully disconnected, cleanup complete', { 
-          reason: this.disconnectReason 
-        });
         if (timeoutId) {
           clearTimeout(timeoutId);
         }
@@ -8240,7 +8083,6 @@ export class VideoCallSession extends SimpleEventEmitter {
         if (this.room === roomToDisconnect) {
           this.room = null;
           this.currentRoomName = null;
-          logger.debug('[VideoCallSession] Room reference cleared synchronously in Disconnected handler');
         }
         // Best-effort: полностью добиваем внутренний engine/ws, чтобы LiveKit не успевал
         // выстрелить WARN "ping timeout triggered" уже ПОСЛЕ завершения звонка.
@@ -8274,7 +8116,6 @@ export class VideoCallSession extends SimpleEventEmitter {
         if (this.room === roomToDisconnect) {
           this.room = null;
           this.currentRoomName = null;
-          logger.debug('[VideoCallSession] Room reference cleared synchronously in timeout handler');
         }
         this.disconnectReason = 'unknown';
         this.isDisconnecting = false;
@@ -8292,7 +8133,6 @@ export class VideoCallSession extends SimpleEventEmitter {
       // иначе LiveKit бросает "cannot send signal request before connected, type: leave".
       (async () => {
         if (roomToDisconnect.state !== 'connected') {
-          logger.debug('[VideoCallSession] Room not connected yet, skipping disconnect()', { state: roomToDisconnect.state });
           if (timeoutId) {
             clearTimeout(timeoutId);
             timeoutId = null;
@@ -8311,7 +8151,6 @@ export class VideoCallSession extends SimpleEventEmitter {
         try {
           // Повторная проверка: за время ожидания комната могла перейти в reconnecting (уход в фон) — тогда disconnect() бросает "Received leave request while trying to (re)connect".
           if (roomToDisconnect.state !== 'connected') {
-            logger.debug('[VideoCallSession] Room no longer connected before disconnect(), skipping', { state: roomToDisconnect.state });
             this.forceDisposeRoom(roomToDisconnect, 'disconnectRoom:not_connected_before_disconnect');
             return;
           }
@@ -8319,7 +8158,6 @@ export class VideoCallSession extends SimpleEventEmitter {
           // а параллельный close PC даёт "Failed to set local answer sdp: Called in wrong state: stable".
           // LiveKit.disconnect() сам делает leave → close engine/PC → затем stopTracks без SDP race.
           await roomToDisconnect.disconnect();
-          logger.debug('[VideoCallSession] Room disconnect() called, waiting for Disconnected event');
           // Короткая задержка перед forceDisposeRoom: даём движку LiveKit обновить состояние (closed/transports),
           // чтобы снизить WARN "connection state mismatch" при быстром закрытии.
           await new Promise((r) => setTimeout(r, 50));
@@ -8337,14 +8175,6 @@ export class VideoCallSession extends SimpleEventEmitter {
           ) {
             logger.warn('[VideoCallSession] Error disconnecting room', e);
           }
-          if (isLeaveWhileReconnect) {
-            logger.debug('[VideoCallSession] Leave during reconnect (e.g. app to background) — ignored', { state: roomToDisconnect.state });
-          }
-          if (isTeardownSdpRace) {
-            logger.debug('[VideoCallSession] Ignored teardown SDP race during disconnect', {
-              error: errorMessage,
-            });
-          }
           this.forceDisposeRoom(roomToDisconnect, 'disconnectRoom:after_catch');
         }
       })();
@@ -8361,19 +8191,16 @@ export class VideoCallSession extends SimpleEventEmitter {
     // КРИТИЧНО: Защита от множественных вызовов disconnectRoom
     // Если уже идет отключение, возвращаем существующий промис
     if (this.isDisconnecting && this.disconnectPromise) {
-      logger.debug('[VideoCallSession] disconnectRoom already in progress, waiting...');
       return this.disconnectPromise;
     }
     
     const room = this.room;
     if (!room) {
-      logger.debug('[VideoCallSession] disconnectRoom: no room to disconnect');
       return;
     }
     
       // Проверяем, не отключена ли комната уже
       if (room.state === 'disconnected') {
-        logger.debug('[VideoCallSession] disconnectRoom: room already disconnected');
         this.room = null;
         this.currentRoomName = null; // Очищаем имя комнаты
         return;
@@ -8474,16 +8301,8 @@ export class VideoCallSession extends SimpleEventEmitter {
       try { engine?.client?.close?.(); } catch {}
       try { engine?.close?.(); } catch {}
 
-      logger.debug('[VideoCallSession] forceDisposeRoom complete', {
-        context,
-        roomState: (room as any)?.state,
-      });
-    } catch (e) {
+    } catch {
       // Никогда не даем этой логике ломать завершение звонка.
-      logger.debug('[VideoCallSession] forceDisposeRoom failed (ignored)', {
-        context,
-        error: (e as any)?.message || String(e || ''),
-      });
     }
   }
 
@@ -8664,11 +8483,6 @@ export class VideoCallSession extends SimpleEventEmitter {
     if (!participant.isLocal) {
       const liveParticipant = this.resolveLiveRemoteParticipant(participant);
       if (!liveParticipant) {
-        logger.debug('[VideoCallSession] Ignoring ParticipantConnected for stale participant', {
-          participantIdentity: participant.identity,
-          participantSid: participant.sid,
-          roomState: room.state,
-        });
         return;
       }
       participant = liveParticipant;
@@ -8777,12 +8591,6 @@ export class VideoCallSession extends SimpleEventEmitter {
     if (!participant.isLocal) {
       const liveParticipant = this.resolveLiveRemoteParticipant(participant);
       if (!liveParticipant) {
-        logger.debug('[VideoCallSession] Ignoring TrackPublished for stale participant', {
-          participantIdentity: participant.identity,
-          participantSid: participant.sid,
-          trackSid: publication.trackSid,
-          roomState: room.state,
-        });
         return;
       }
       participant = liveParticipant;
@@ -8815,11 +8623,6 @@ export class VideoCallSession extends SimpleEventEmitter {
           trackSid: publication.trackSid,
         });
         this.handleTrackSubscribed(publication.track, publication, participant);
-      } else {
-        logger.debug('[VideoCallSession] Track published but not loaded yet, waiting for TrackSubscribed', {
-          kind: publication.kind,
-          trackSid: publication.trackSid,
-        });
       }
     }
   }
@@ -8830,10 +8633,6 @@ export class VideoCallSession extends SimpleEventEmitter {
     // LiveKit может отправлять события подписки на локальные треки, но они не должны обрабатываться
     // Это предотвращает предупреждение "could not find local track subscription for subscribed event"
     if (participant.isLocal) {
-      logger.debug('[VideoCallSession] Ignoring TrackSubscribed for local participant', {
-        kind: publication.kind,
-        trackSid: publication.trackSid,
-      });
       return;
     }
     logger.info('[VideoCallSession] ✅ TrackSubscribed event received', {
@@ -8846,12 +8645,6 @@ export class VideoCallSession extends SimpleEventEmitter {
     });
     const liveParticipant = this.resolveLiveRemoteParticipant(participant);
     if (!liveParticipant) {
-      logger.debug('[VideoCallSession] Ignoring TrackSubscribed for stale participant', {
-        participantIdentity: participant.identity,
-        participantSid: participant.sid,
-        trackSid: publication.trackSid,
-        roomState: room.state,
-      });
       return;
     }
     participant = liveParticipant;
@@ -8874,20 +8667,10 @@ export class VideoCallSession extends SimpleEventEmitter {
     // КРИТИЧНО: Проверяем тип участника перед обработкой
     // Локальные треки не должны влиять на remoteStream
     if (participant.isLocal) {
-      logger.debug('[VideoCallSession] Ignoring TrackUnsubscribed for local participant', {
-        kind: publication.kind,
-        trackSid: publication.trackSid,
-      });
       return;
     }
     const liveParticipant = this.resolveLiveRemoteParticipant(participant);
     if (!liveParticipant) {
-      logger.debug('[VideoCallSession] Ignoring TrackUnsubscribed for stale participant', {
-        participantIdentity: participant.identity,
-        participantSid: participant.sid,
-        trackSid: publication.trackSid,
-        roomState: room.state,
-      });
       return;
     }
     this.handleTrackUnsubscribed(publication, liveParticipant);
@@ -9057,13 +8840,6 @@ export class VideoCallSession extends SimpleEventEmitter {
       // Give LiveKit engine a moment to settle after reconnect / PC rebuild.
       await new Promise((r) => setTimeout(r, 450));
       if (!roomStable()) {
-        logger.debug('[VideoCallSession] recoverLocalTracks aborted (room unstable)', {
-          context,
-          roomState: room.state,
-          liveKitReconnecting: this.liveKitReconnecting,
-          connectIdAtStart,
-          connectRequestId: this.connectRequestId,
-        });
         return;
       }
 
@@ -9128,12 +8904,7 @@ export class VideoCallSession extends SimpleEventEmitter {
               context,
               trackSid: this.localAudioTrack.sid || null,
             });
-          } catch (e) {
-            logger.debug('[VideoCallSession] Soft publish after reconnect failed', {
-              context,
-              error: (e as any)?.message || String(e || ''),
-            });
-          }
+          } catch {}
         } else {
           logger.info('[VideoCallSession] Soft recover — local audio already published', {
             context,
@@ -9155,12 +8926,7 @@ export class VideoCallSession extends SimpleEventEmitter {
               context,
               trackSid: this.localAudioTrack.sid || null,
             });
-          } catch (e) {
-            logger.debug('[VideoCallSession] Soft publish while waiting for peer failed', {
-              context,
-              error: (e as any)?.message || String(e || ''),
-            });
-          }
+          } catch {}
         } else {
           logger.info('[VideoCallSession] Defer force audio republish until peer rejoins', {
             context,
@@ -9186,20 +8952,9 @@ export class VideoCallSession extends SimpleEventEmitter {
       if (published) {
         try {
           await room.localParticipant.unpublishTrack(this.localAudioTrack, false);
-        } catch (e) {
-          const msg = String((e as any)?.message || e || '');
-          if (!/could not find published track/i.test(msg)) {
-            logger.debug('[VideoCallSession] unpublish local audio before republish', {
-              context,
-              error: msg,
-            });
-          }
-        }
+        } catch {}
       }
       if (!roomStable()) {
-        logger.debug('[VideoCallSession] Abort force republish — room unstable after unpublish', {
-          context,
-        });
         return;
       }
       try {
@@ -9216,21 +8971,14 @@ export class VideoCallSession extends SimpleEventEmitter {
         });
       } catch (e) {
         const msg = String((e as any)?.message || e || '');
-        if (/could not find published track/i.test(msg)) {
-          logger.debug('[VideoCallSession] Force republish race (ignored)', { context, error: msg });
-        } else {
+        if (!/could not find published track/i.test(msg)) {
           logger.warn('[VideoCallSession] Force republish local audio after reconnect failed', {
             context,
             error: msg,
           });
         }
       }
-    } catch (e) {
-      logger.debug('[VideoCallSession] recoverLocalTracksAfterReconnect failed (ignored)', {
-        context,
-        error: (e as any)?.message || String(e || ''),
-      });
-    }
+    } catch {}
   }
 
   private resolveLiveRemoteParticipant(participant: RemoteParticipant): RemoteParticipant | null {
@@ -9303,11 +9051,6 @@ export class VideoCallSession extends SimpleEventEmitter {
   ): void {
     const liveParticipant = this.resolveLiveRemoteParticipant(participant);
     if (!liveParticipant) {
-      logger.debug('[VideoCallSession] Ignoring TrackSubscribed for stale participant at handler', {
-        participantIdentity: participant.identity,
-        participantSid: participant.sid,
-        trackSid: track.sid,
-      });
       return;
     }
     this.currentRemoteParticipant = liveParticipant;
@@ -9386,10 +9129,6 @@ export class VideoCallSession extends SimpleEventEmitter {
     const sameAudio = isAudioTrack && this.remoteAudioTrack?.mediaStreamTrack === mediaTrack;
     if (!sameVideo && !sameAudio) return false;
 
-    logger.debug('[VideoCallSession] Track subscribed (already applied, skipping duplicate)', {
-      trackSid: track.sid,
-      streamId: this.remoteStream.id,
-    });
     return true;
   }
 
@@ -9464,12 +9203,6 @@ export class VideoCallSession extends SimpleEventEmitter {
     }
     if (mediaTrack && !trackAlreadyInStream) {
       activeRemoteStream.addTrack(mediaTrack as any);
-      logger.debug('[VideoCallSession] Added track to remote stream', {
-        kind: publication.kind,
-        streamId: activeRemoteStream.id,
-        tracksCount: activeRemoteStream.getTracks().length,
-        trackId: track.sid,
-      });
     }
   }
 
@@ -9534,10 +9267,6 @@ export class VideoCallSession extends SimpleEventEmitter {
     const isFirstVideoTrack = !oldVideoTrackSid;
     let shouldRemountRemoteView = false;
     if (isFirstVideoTrack || change.wasVideoTrackChanged || change.videoResubscribed || wasMutedStateChanged) {
-      logger.debug('[VideoCallSession] Video track muted state changed', {
-        wasMuted: prevVideoTrack?.isMuted,
-        isMuted: track.isMuted,
-      });
       shouldRemountRemoteView = true;
     }
 
@@ -9561,17 +9290,6 @@ export class VideoCallSession extends SimpleEventEmitter {
     // Всегда эмитим remoteStream для обновления UI/аудио, но remount RTCView делаем только при необходимости.
     if (shouldRemountRemoteView) {
       this.remoteViewKey = Date.now();
-      logger.debug('[VideoCallSession] Updated remoteViewKey after remote track change', {
-        remoteViewKey: this.remoteViewKey,
-        trackId: track.sid,
-        kind: publication.kind,
-        wasVideoTrackChanged: change.wasVideoTrackChanged,
-        wasAudioTrackChanged: change.wasAudioTrackChanged,
-        staleAudioInStream: change.staleAudioInStream,
-        streamId: this.remoteStream!.id,
-        trackReady: track.mediaStreamTrack?.readyState,
-        trackMuted: track.isMuted,
-      });
     }
 
     // КРИТИЧНО: порядок событий — сначала remoteViewKeyChanged, затем remoteStream,
@@ -9640,9 +9358,6 @@ export class VideoCallSession extends SimpleEventEmitter {
         Date.now() - this.lastRemotePartnerCameraSideFlipAt < 3500;
       this.lastUnsubscribedRemoteVideoTrackSid = this.remoteVideoTrack.sid ?? null;
       if (duringPartnerSideFlip) {
-        logger.debug('[VideoCallSession] TrackUnsubscribed video during partner side flip — keep stream', {
-          trackSid: this.remoteVideoTrack.sid,
-        });
         this.remoteVideoTrack = null;
         return;
       }
@@ -9671,15 +9386,6 @@ export class VideoCallSession extends SimpleEventEmitter {
           const pipUpdate = (global as any).__pipUpdateStateRef?.current;
           if (typeof pipUpdate === 'function') pipUpdate({ remoteStream: null });
         } catch (_) {}
-      } else {
-        logger.debug('[VideoCallSession] Suppressed remoteStream=null during reconnect or camera flip', {
-          isRoomReconnecting,
-          recentlyReconnecting,
-          duringLocalCameraFlip,
-          recentlyAfterCameraFlip,
-          roomState: this.room?.state,
-          kind: publication.kind,
-        });
       }
     }
 
@@ -9705,7 +9411,6 @@ export class VideoCallSession extends SimpleEventEmitter {
     }
     // GSM/messenger hold: soft-mute даёт TrackMuted — не уходим в «Отошёл» / audio shell.
     if (this.partnerExternalHoldActive) {
-      logger.debug('[VideoCallSession] skip remote cam off — partner external hold', { reason });
       return;
     }
     // If we already consider camera off, don't spam timers/callbacks.
@@ -9727,7 +9432,6 @@ export class VideoCallSession extends SimpleEventEmitter {
         const pipUpdate = (global as any).__pipUpdateStateRef?.current;
         if (typeof pipUpdate === 'function') pipUpdate({ remoteCamOn: false });
       } catch (_) {}
-      logger.debug('[VideoCallSession] Remote camera set OFF after grace period', { reason, ms: REMOTE_CAM_OFF_GRACE_MS });
     }, REMOTE_CAM_OFF_GRACE_MS);
   }
 }

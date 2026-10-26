@@ -220,12 +220,6 @@ export class RandomChatSession extends SimpleEventEmitter {
       if (this.room !== room) return;
       const diagnostics = await getRoomIceTransportDiagnostics(room as any);
       if (!diagnostics.length) {
-        logger.debug('[RandomChatSession] ICE transport diagnostics unavailable', {
-          reason,
-          roomName: room.name,
-          roomState: room.state,
-          sessionId: this.sessionId,
-        });
         return;
       }
 
@@ -241,9 +235,7 @@ export class RandomChatSession extends SimpleEventEmitter {
         myUserId: this.resolveMyUserId(),
         transports: diagnostics,
       });
-    } catch (e) {
-      logger.debug('[RandomChatSession] ICE transport diagnostics failed (ignored)', e);
-    }
+    } catch {}
   }
 
   private scheduleIceTransportLogging(room: Room, reason: string): void {
@@ -283,14 +275,7 @@ export class RandomChatSession extends SimpleEventEmitter {
         roomId,
         camSide: this.camSide,
       });
-      logger.debug('[RandomChatSession] cam-toggle relay', {
-        reason,
-        roomId,
-        enabled: this.isCamOn,
-      });
-    } catch (e) {
-      logger.debug('[RandomChatSession] emitCamToggleRelay failed', { reason, error: e });
-    }
+    } catch {}
   }
 
   private notifyLoadingChange(loading: boolean): void {
@@ -337,11 +322,6 @@ export class RandomChatSession extends SimpleEventEmitter {
   ): void {
     this.suppressLocalVideoEndedRecoverUntil = Date.now() + durationMs;
     this.suppressLocalVideoEndedReason = reason;
-    logger.debug('[RandomChatSession] Suppressing local video ended recovery', {
-      reason,
-      durationMs,
-      suppressUntil: this.suppressLocalVideoEndedRecoverUntil,
-    });
   }
 
   private isLocalVideoEndedRecoverySuppressed(): boolean {
@@ -386,10 +366,6 @@ export class RandomChatSession extends SimpleEventEmitter {
   private clearPendingRemoteVideoReset(reason: string): void {
     if (!this.pendingRemoteVideoResetTimer) return;
     clearTimeout(this.pendingRemoteVideoResetTimer);
-    logger.debug('[RandomChatSession] Cleared pending remote video reset', {
-      reason,
-      trackSid: this.pendingRemoteVideoResetTrackSid,
-    });
     this.pendingRemoteVideoResetTimer = null;
     this.pendingRemoteVideoResetTrackSid = null;
   }
@@ -398,7 +374,6 @@ export class RandomChatSession extends SimpleEventEmitter {
     if (!this.remoteCamImplicitOffTimer) return;
     clearTimeout(this.remoteCamImplicitOffTimer);
     this.remoteCamImplicitOffTimer = null;
-    logger.debug('[RandomChatSession] Cleared remoteCamImplicitOff timer', { reason });
   }
 
   /** SFU уже знает о видеопубликации — ждём подписку, не трактуем как «пользователь выключил камеру». */
@@ -419,9 +394,6 @@ export class RandomChatSession extends SimpleEventEmitter {
       if (this.remoteCamEnabled) return;
       if (this.remoteParticipantHasAnyVideoPublication(this.currentRemoteParticipant)) return;
       this.notifyRemoteCamStateChange(false);
-      logger.debug('[RandomChatSession] Implicit remote cam off (no video publication after debounce)', {
-        reason,
-      });
     }, this.remoteCamImplicitOffDebounceMs);
   }
 
@@ -433,11 +405,6 @@ export class RandomChatSession extends SimpleEventEmitter {
       const pendingTrackSid = this.pendingRemoteVideoResetTrackSid;
       this.pendingRemoteVideoResetTrackSid = null;
       if (this.remoteVideoTrack) {
-        logger.debug('[RandomChatSession] Skip delayed remote video reset, replacement track already active', {
-          unsubscribedTrackSid: pendingTrackSid,
-          activeTrackSid: this.remoteVideoTrack.sid,
-          participantId,
-        });
         return;
       }
       this.remoteViewKey = Date.now();
@@ -472,23 +439,10 @@ export class RandomChatSession extends SimpleEventEmitter {
     this.lastPartnerGoneSignalAt = now;
 
     if (!this.started) {
-      logger.debug('[RandomChatSession] Ignoring partner-gone socket signal for stopped session', {
-        source,
-        reason,
-        nextTransitionId,
-      });
       return;
     }
 
     if (this.isDisconnecting || this.disconnectHandled || isDuplicateSignal) {
-      logger.debug('[RandomChatSession] Ignoring duplicate partner-gone socket signal', {
-        source,
-        reason,
-        nextTransitionId,
-        isDisconnecting: this.isDisconnecting,
-        disconnectHandled: this.disconnectHandled,
-        isDuplicateSignal,
-      });
       return;
     }
 
@@ -628,13 +582,6 @@ export class RandomChatSession extends SimpleEventEmitter {
 
   stopRandomChat(): void {
     if (this.stopRequested) {
-      logger.debug('[RandomChatSession] stopRandomChat already requested, skipping duplicate call', {
-        sessionId: this.sessionId,
-        myUserId: this.resolveMyUserId(),
-        deviceModel: this.deviceModel,
-        hasRoom: !!this.room,
-        isDisconnecting: this.isDisconnecting,
-      });
       return;
     }
     this.stopRequested = true;
@@ -688,7 +635,6 @@ export class RandomChatSession extends SimpleEventEmitter {
     // 3. КРИТИЧНО: Проверка состояния подключения комнаты
     // Защита от нажатий во время подключения к LiveKit
     if (this.room && (this.room.state === 'connecting' || this.room.state === 'reconnecting')) {
-      logger.debug('[RandomChatSession] next: room is connecting/reconnecting, skipping');
       return false;
     }
 
@@ -820,9 +766,7 @@ export class RandomChatSession extends SimpleEventEmitter {
           }
           this.isDisconnecting = false;
           this.disconnectPromise = null;
-        } catch (resetError) {
-          logger.debug('[RandomChatSession] Error resetting state after disconnect error', resetError);
-        }
+        } catch {}
       }
       
       // КРИТИЧНО: Сбрасываем pending connect request, чтобы разрешить новое подключение
@@ -865,7 +809,6 @@ export class RandomChatSession extends SimpleEventEmitter {
               logger.warn('[RandomChatSession] Still disconnecting after 700ms, forcing reset');
               this.isDisconnecting = false;
             }
-            logger.debug('[RandomChatSession] Fallback: no match_found after next(), calling start()');
             this.autoNext('next_fallback');
           }
         }, 700);
@@ -890,9 +833,7 @@ export class RandomChatSession extends SimpleEventEmitter {
           this.room = null;
           this.currentRoomName = null;
         }
-      } catch (resetError) {
-        logger.debug('[RandomChatSession] Error resetting state in next() catch', resetError);
-      }
+      } catch {}
       return false;
     } finally {
       // КРИТИЧНО: Сбрасываем флаг выполнения через небольшую задержку
@@ -902,12 +843,9 @@ export class RandomChatSession extends SimpleEventEmitter {
         setTimeout(() => {
           try {
             this.nextInProgress = false;
-          } catch (e) {
-            logger.debug('[RandomChatSession] Error resetting nextInProgress', e);
-          }
+          } catch {}
         }, this.NEXT_DEBOUNCE_MS);
       } catch (e) {
-        logger.debug('[RandomChatSession] Error setting timeout in next() finally', e);
         // Принудительно сбрасываем флаг
         this.nextInProgress = false;
       }
@@ -919,9 +857,6 @@ export class RandomChatSession extends SimpleEventEmitter {
     // КРИТИЧНО: Проверяем состояние комнаты - если она disconnected или null, можно запускать поиск
     // Это важно для fallback после next(), когда комната уже отключена, но еще не null
     if (this.isDisconnecting) {
-      logger.debug('[RandomChatSession] autoNext: skipping (disconnecting)', {
-        isDisconnecting: this.isDisconnecting
-      });
       this.logReconnectTrace('auto_next_skipped_disconnecting', { reason: reason || 'unspecified' });
       return;
     }
@@ -929,9 +864,6 @@ export class RandomChatSession extends SimpleEventEmitter {
     // КРИТИЧНО: Проверяем состояние комнаты - если она connected или connecting, не запускаем поиск
     // Но если комната disconnected или null, можно запускать поиск (fallback после next())
     if (this.isRoomLive()) {
-      logger.debug('[RandomChatSession] autoNext: skipping (room is active)', {
-        roomState: this.room?.state
-      });
       this.logReconnectTrace('auto_next_skipped_room_active', {
         reason: reason || 'unspecified',
         roomState: this.room?.state,
@@ -1541,7 +1473,6 @@ export class RandomChatSession extends SimpleEventEmitter {
     this.matchPartnerUserId = null;
     this.clearReconnectState(`partner_gone:${reason}`);
     if (this.isDisconnecting || this.disconnectHandled) {
-      logger.debug('[RandomChatSession] handlePartnerGone already in progress, skipping', { reason });
       this.logReconnectTrace('partner_gone_skipped_already_handling', { reason });
       return;
     }
@@ -1719,9 +1650,7 @@ export class RandomChatSession extends SimpleEventEmitter {
         this.emit('remoteViewKeyChanged', this.remoteViewKey);
         this.clearRemoteCamImplicitOffTimer('cam_toggle');
         this.notifyRemoteCamStateChange(nextEnabled);
-      } catch (e) {
-        logger.debug('[RandomChatSession] cam-toggle handler error', e);
-      }
+      } catch {}
     };
 
     // У собеседника оборвался сокет — сервер держит пару, пока он не вернётся.
@@ -1821,10 +1750,6 @@ export class RandomChatSession extends SimpleEventEmitter {
       return;
     }
     if (this.isDisconnecting) {
-      logger.debug('[RandomChatSession] Disconnecting in progress, buffering match_found', {
-        partnerId,
-        roomName: data.livekitRoomName
-      });
       this.bufferMatchFoundDuringDisconnect(data);
       return;
     }
@@ -1841,25 +1766,12 @@ export class RandomChatSession extends SimpleEventEmitter {
     const now = Date.now();
     if (data.livekitRoomName === this.lastMatchFoundRoomName && 
         now - this.lastMatchFoundTime < this.MATCH_FOUND_DEBOUNCE_MS) {
-      logger.debug('[RandomChatSession] Duplicate match_found ignored (debounce)', { 
-        partnerId, 
-        roomName: data.livekitRoomName,
-        timeSinceLast: now - this.lastMatchFoundTime
-      });
       return;
     }
 
     // КРИТИЧНО: Если уже идет подключение к этой же комнате, игнорируем дубликат
     if (this.pendingConnectRequestId !== null && 
         data.livekitRoomName === this.lastMatchFoundRoomName) {
-      logger.debug('[RandomChatSession] Connection already in progress for this room, ignoring duplicate', { 
-        partnerId, 
-        roomName: data.livekitRoomName,
-        pendingRequestId: this.pendingConnectRequestId,
-        sessionId: this.sessionId,
-        myUserId: this.resolveMyUserId(),
-        deviceModel: this.deviceModel,
-      });
       return;
     }
 
@@ -1867,10 +1779,6 @@ export class RandomChatSession extends SimpleEventEmitter {
     if (this.room && 
         this.room.state === 'connected' && 
         this.room.name === data.livekitRoomName) {
-      logger.debug('[RandomChatSession] Room already connected to this room, ignoring match_found', { 
-        partnerId, 
-        roomName: data.livekitRoomName 
-      });
       return;
     }
 
@@ -1941,10 +1849,6 @@ export class RandomChatSession extends SimpleEventEmitter {
         this.pendingConnectRequestId = connectRequestId;
       }
       if (!connected) {
-        logger.debug('[RandomChatSession] Match handling aborted (stale request)', {
-          connectRequestId,
-          partnerId,
-        });
         this.logReconnectTrace('handle_match_found_connect_not_connected', {
           connectRequestId,
           partnerId,
@@ -2203,13 +2107,6 @@ export class RandomChatSession extends SimpleEventEmitter {
     if (this.recoveringVideo) return;
     const now = Date.now();
     if (reason === 'stuck' && now - this.lastStuckRecoveryAt < this.stuckRecoveryCooldownMs) {
-      logger.debug('[RandomChatSession] Skip stuck recovery due to cooldown', {
-        sessionId: this.sessionId,
-        myUserId: this.resolveMyUserId(),
-        deviceModel: this.deviceModel,
-        sinceMs: now - this.lastStuckRecoveryAt,
-        cooldownMs: this.stuckRecoveryCooldownMs,
-      });
       return;
     }
     if (reason === 'stuck') {
@@ -2511,9 +2408,7 @@ export class RandomChatSession extends SimpleEventEmitter {
       logger.info('[RandomChatSession] Published video track (ensure)', {
         trackId: this.localVideoTrack.sid || this.localVideoTrack.mediaStreamTrack?.id,
       });
-    } catch (e) {
-      logger.debug('[RandomChatSession] Failed to ensure video track publish', e);
-    }
+    } catch {}
   }
 
   private shouldRunLocalVideoWatchdog(): boolean {
@@ -2657,22 +2552,12 @@ export class RandomChatSession extends SimpleEventEmitter {
       }
 
       if (this.camToggleInProgress || this.flipCamInProgress) {
-        logger.debug('[RandomChatSession] Skip stuck recovery while cam operation in progress', {
-          sessionId: this.sessionId,
-          myUserId: this.resolveMyUserId(),
-          deviceModel: this.deviceModel,
-          camToggleInProgress: this.camToggleInProgress,
-          flipCamInProgress: this.flipCamInProgress,
-          context,
-        });
         this.scheduleLocalVideoHealthCheck(`${context}:cam-op-in-progress`);
         return;
       }
 
       await this.recoverLocalVideoTrack('stuck');
-    } catch (e) {
-      logger.debug('[RandomChatSession] Local video health check failed (ignored)', e);
-    }
+    } catch {}
   }
 
   private async publishVideoTrackIfRoomActive(force = false): Promise<void> {
@@ -2684,11 +2569,6 @@ export class RandomChatSession extends SimpleEventEmitter {
     if (this.room.state !== 'connected' || 
         !this.room.localParticipant || 
         !this.room.localParticipant.sid) {
-      logger.debug('[RandomChatSession] Room not connected or participant not ready, skipping video track publish', {
-        roomState: this.room.state,
-        hasLocalParticipant: !!this.room.localParticipant,
-        participantSid: this.room.localParticipant?.sid
-      });
       return;
     }
     
@@ -2770,9 +2650,6 @@ export class RandomChatSession extends SimpleEventEmitter {
       
       // КРИТИЧНО: Проверяем, не опубликован ли трек уже
       if (this.isVideoTrackPublished(this.localVideoTrack)) {
-        logger.debug('[RandomChatSession] Video track already published, skipping', {
-          trackId: this.localVideoTrack.sid || this.localVideoTrack.mediaStreamTrack?.id,
-        });
         // Обновляем состояние камеры без повторной публикации
         try {
           await this.room.localParticipant.setCameraEnabled(this.isCamOn);
@@ -2787,11 +2664,6 @@ export class RandomChatSession extends SimpleEventEmitter {
             this.room.state !== 'connected' || 
             !this.room.localParticipant || 
             !this.room.localParticipant.sid) {
-          logger.debug('[RandomChatSession] Room disconnected or participant not ready during publish, skipping', {
-            roomState: this.room?.state,
-            hasLocalParticipant: !!this.room?.localParticipant,
-            participantSid: this.room?.localParticipant?.sid
-          });
           return;
         }
         
@@ -2809,10 +2681,6 @@ export class RandomChatSession extends SimpleEventEmitter {
               errorMsg.includes('not present') ||
               (errorMsg.includes('participant') && errorMsg.includes('not present')) ||
               errorName === 'PublishTrackError') {
-            logger.debug('[RandomChatSession] Ignoring publish error (duplicate/closed/fingerprint/not present)', { 
-              error: errorMsg,
-              errorName 
-            });
             return;
           }
           // Для других ошибок логируем, но не бросаем исключение
@@ -2825,7 +2693,6 @@ export class RandomChatSession extends SimpleEventEmitter {
         
         // КРИТИЧНО: Проверяем состояние комнаты после публикации
         if (!this.room || this.room.state !== 'connected' || !this.room.localParticipant) {
-          logger.debug('[RandomChatSession] Room disconnected after publish, skipping setCameraEnabled');
           return;
         }
         
@@ -2909,9 +2776,7 @@ export class RandomChatSession extends SimpleEventEmitter {
       try {
         await this.room.localParticipant.setMicrophoneEnabled(this.isMicOn);
       } catch {}
-    } catch (e) {
-      logger.debug('[RandomChatSession] Error in publishAudioTrackIfRoomActive', e);
-    }
+    } catch {}
   }
 
   /**
@@ -2941,9 +2806,7 @@ export class RandomChatSession extends SimpleEventEmitter {
         const vals = Object.values(publications as any);
         return vals.some((pub: any) => pub?.track === track || pub?.trackSid === track.sid);
       }
-    } catch (e) {
-      logger.debug('[RandomChatSession] Error checking video track publication', e);
-    }
+    } catch {}
     
     return false;
   }
@@ -2971,9 +2834,7 @@ export class RandomChatSession extends SimpleEventEmitter {
           pub => pub.track === track || pub.trackSid === track.sid
         );
       }
-    } catch (e) {
-      logger.debug('[RandomChatSession] Error checking audio track publication', e);
-    }
+    } catch {}
     
     return false;
   }
@@ -2989,11 +2850,6 @@ export class RandomChatSession extends SimpleEventEmitter {
     // КРИТИЧНО: Проверяем, что это актуальный запрос на подключение
     // Если connectRequestId изменился, значит был новый вызов next() и этот запрос устарел
     if (this.connectRequestId !== connectRequestId) {
-      logger.debug('[RandomChatSession] Connect request is stale, aborting', {
-        connectRequestId,
-        currentRequestId: this.connectRequestId,
-        targetRoomName
-      });
       this.logReconnectTrace('connect_stale_request', {
         connectSource,
         connectRequestId,
@@ -3062,12 +2918,6 @@ export class RandomChatSession extends SimpleEventEmitter {
           });
           return true;
         }
-        logger.debug('[RandomChatSession] Connect lock wait finished without reusable room', {
-          sessionId: this.sessionId,
-          myUserId: this.resolveMyUserId(),
-          deviceModel: this.deviceModel,
-          roomName: normalizedRoomName,
-        });
         return false;
       }
 
@@ -3099,10 +2949,6 @@ export class RandomChatSession extends SimpleEventEmitter {
         this.currentRoomName && 
         targetRoomName && 
         this.currentRoomName === targetRoomName) {
-      logger.debug('[RandomChatSession] Room already connected to target room, reusing', {
-        roomName: targetRoomName,
-        roomState: this.room.state,
-      });
       // Убеждаемся что треки опубликованы
       if (this.localVideoTrack && this.isCamOn) {
         await this.publishVideoTrackIfRoomActive();
@@ -3113,10 +2959,6 @@ export class RandomChatSession extends SimpleEventEmitter {
     // КРИТИЧНО: Если идет отключение, не создаем новое подключение.
     // Это защищает от overlap двух комнат/negotiation гонок.
     if (this.isDisconnecting) {
-      logger.debug('[RandomChatSession] Disconnecting in progress, aborting connect', {
-        connectRequestId,
-        targetRoomName
-      });
       return false;
     }
     
@@ -3232,7 +3074,6 @@ export class RandomChatSession extends SimpleEventEmitter {
           this.currentRoomName && 
           targetRoomName && 
           this.currentRoomName === targetRoomName) {
-        logger.debug('[RandomChatSession] Room already connected to target, skipping creation');
         return true;
       }
       
@@ -3261,11 +3102,7 @@ export class RandomChatSession extends SimpleEventEmitter {
               } else {
                 await stuckRoom.disconnect();
               }
-            } catch (e: any) {
-              logger.debug('[RandomChatSession] Error disconnecting stuck room', {
-                error: e?.message || String(e),
-              });
-            }
+            } catch {}
           }
         }
         // КРИТИЧНО: Очищаем все ссылки на старую комнату
@@ -3434,10 +3271,6 @@ export class RandomChatSession extends SimpleEventEmitter {
       }).catch(() => {});
       // Сохраняем имя подключенной комнаты для проверки переиспользования
       this.currentRoomName = room.name || targetRoomName || null;
-      logger.debug('[RandomChatSession] Room connected, saved room name', {
-        roomName: this.currentRoomName,
-        roomState: room.state,
-      });
 
       // RandomChat UX: send initial camera state to partner via socket relay.
       // This makes "Отошел" depend only on explicit UI camera toggles (and the current state),
@@ -3539,8 +3372,6 @@ export class RandomChatSession extends SimpleEventEmitter {
             ],
             suggestion: 'Check LIVEKIT_API_KEY and LIVEKIT_API_SECRET in backend .env file match LiveKit server credentials'
           });
-        } else {
-          logger.debug('[RandomChatSession] LiveKit API key validation failed (suppressed повтор)', { url });
         }
       }
       
@@ -3602,7 +3433,6 @@ export class RandomChatSession extends SimpleEventEmitter {
       
       // Проверяем что запрос еще актуален
       if (this.connectRequestId !== connectRequestId || this.room !== room) {
-        logger.debug('[RandomChatSession] Connect request cancelled while waiting for participant');
         return false;
       }
     }
@@ -3628,7 +3458,6 @@ export class RandomChatSession extends SimpleEventEmitter {
     // КРИТИЧНО: Проверяем еще раз после задержки, что комната все еще подключена
     // и запрос еще актуален (не было отмены через next())
     if (this.connectRequestId !== connectRequestId || this.room !== room) {
-      logger.debug('[RandomChatSession] Connect request cancelled during delay before track publish');
       return false;
     }
     
@@ -3687,13 +3516,11 @@ export class RandomChatSession extends SimpleEventEmitter {
     // КРИТИЧНО: Защита от множественных вызовов disconnectRoom
     // Если уже идет отключение, возвращаем существующий промис
     if (this.isDisconnecting && this.disconnectPromise) {
-      logger.debug('[RandomChatSession] disconnectRoom already in progress, waiting...');
       return this.disconnectPromise;
     }
     
     const room = this.room;
     if (!room) {
-      logger.debug('[RandomChatSession] disconnectRoom: no room to disconnect');
       this.logReconnectTrace('disconnect_no_room', { reason, source });
       // КРИТИЧНО: Сбрасываем флаги, если комнаты нет
       this.isDisconnecting = false;
@@ -3705,9 +3532,6 @@ export class RandomChatSession extends SimpleEventEmitter {
     // или уже отключена. Это предотвращает ошибку "cannot send signal request before connected"
     const roomState = room.state;
     if (roomState === 'disconnected') {
-      logger.debug('[RandomChatSession] disconnectRoom: room already disconnected', { 
-        state: roomState 
-      });
       this.logReconnectTrace('disconnect_already_disconnected', {
         reason,
         source,
@@ -3721,9 +3545,6 @@ export class RandomChatSession extends SimpleEventEmitter {
     }
     // КРИТИЧНО: Если комната еще connecting, ждем подключения или отключения
     if (roomState === 'connecting') {
-      logger.debug('[RandomChatSession] disconnectRoom: room still connecting, waiting for connection or timeout', { 
-        state: roomState 
-      });
       // Ждем максимум 3 секунды, затем принудительно отключаем
       let waitCount = 0;
       const maxWait = 30; // 30 * 100ms = 3 секунды
@@ -3740,9 +3561,7 @@ export class RandomChatSession extends SimpleEventEmitter {
           } else {
             await room.disconnect();
           }
-        } catch (e) {
-          logger.debug('[RandomChatSession] Error disconnecting connecting room', e);
-        }
+        } catch {}
       }
       // Продолжаем нормальный процесс отключения
     }
@@ -3766,9 +3585,6 @@ export class RandomChatSession extends SimpleEventEmitter {
       disconnectedHandler = () => {
         if (resolved) return;
         resolved = true;
-        logger.debug('[RandomChatSession] Room fully disconnected, cleanup complete', { 
-          reason: this.disconnectReason 
-        });
         this.logReconnectTrace('disconnect_completed', {
           reason,
           source,
@@ -3868,7 +3684,6 @@ export class RandomChatSession extends SimpleEventEmitter {
             if (this.started) {
               this.forceCloseSignalTransport(roomToDisconnect, 'post_disconnect_immediate');
             }
-            logger.debug('[RandomChatSession] Room disconnect() called, waiting for Disconnected event');
             // Если RandomChat полностью остановлен (не Next/не reconnect), можем агрессивно добить engine/ws
             // раньше 5–10 секунд, чтобы не увидеть WARN "ping timeout triggered" после выхода.
             // ВАЖНО: НЕ делаем это при Next/быстрых переподключениях — там это может сломать состояние сигналинга.
@@ -3880,22 +3695,16 @@ export class RandomChatSession extends SimpleEventEmitter {
                 try {
                   if (resolved) return;
                   if (roomToDisconnect.state !== 'disconnected' && disconnectedHandler) {
-                    logger.debug('[RandomChatSession] Disconnected delayed after stop, forcing cleanup early', {
-                      roomState: roomToDisconnect.state,
-                    });
                     try {
                       roomToDisconnect.off(RoomEvent.Disconnected, disconnectedHandler);
                     } catch {}
                     disconnectedHandler();
                   }
-                } catch (e) {
-                  logger.debug('[RandomChatSession] Error forcing early stop cleanup', e);
-                }
+                } catch {}
               }, 1200);
             }
           } else {
             // Если комната уже отключена, сразу вызываем обработчик
-            logger.debug('[RandomChatSession] Room already disconnected, triggering cleanup');
             if (disconnectedHandler) {
               roomToDisconnect.off(RoomEvent.Disconnected, disconnectedHandler);
               disconnectedHandler();
@@ -3928,9 +3737,7 @@ export class RandomChatSession extends SimpleEventEmitter {
                   roomToDisconnect.off(RoomEvent.Disconnected, disconnectedHandler);
                   disconnectedHandler();
                 }
-              } catch (cleanupError) {
-                logger.debug('[RandomChatSession] Error in forced cleanup', cleanupError);
-              }
+              } catch {}
             }, 100);
           }
         }
@@ -3946,20 +3753,12 @@ export class RandomChatSession extends SimpleEventEmitter {
         if (this.room === room) {
           this.room = null;
           this.currentRoomName = null; // Очищаем имя комнаты при отключении
-          logger.debug('[RandomChatSession] Room reference cleared after full disconnect');
         }
-      } catch (e) {
-        logger.debug('[RandomChatSession] Error clearing room reference', e);
-      }
+      } catch {}
       this.flushPendingMatchFound('disconnect_complete');
-    }).catch((e: any) => {
+    }).catch(() => {
       // КРИТИЧНО: В случае ошибки все равно очищаем, но с защитой от крашей
       try {
-        const errorMsg = e?.message || String(e || '');
-        logger.debug('[RandomChatSession] Disconnect promise rejected, forcing cleanup', {
-          error: errorMsg,
-          errorName: e?.name
-        });
         if (this.room === room) {
           this.room = null;
           this.currentRoomName = null;
@@ -3967,9 +3766,7 @@ export class RandomChatSession extends SimpleEventEmitter {
         // Сбрасываем флаги принудительно
         this.isDisconnecting = false;
         this.disconnectPromise = null;
-      } catch (cleanupError) {
-        logger.debug('[RandomChatSession] Error in catch cleanup', cleanupError);
-      }
+      } catch {}
       this.flushPendingMatchFound('disconnect_complete_error');
     });
     
@@ -3991,16 +3788,7 @@ export class RandomChatSession extends SimpleEventEmitter {
       try { engine?.signalClient?.socket?.close?.(); } catch {}
       try { engine?.signalClient?.transport?.close?.(); } catch {}
 
-      logger.debug('[RandomChatSession] forceDisposeRoom complete', {
-        context,
-        roomState: (room as any)?.state,
-      });
-    } catch (e) {
-      logger.debug('[RandomChatSession] forceDisposeRoom failed (ignored)', {
-        context,
-        error: (e as any)?.message || String(e || ''),
-      });
-    }
+    } catch {}
   }
 
   // Закрываем ТОЛЬКО signal transport (ws/socket) без engine.close().
@@ -4014,16 +3802,7 @@ export class RandomChatSession extends SimpleEventEmitter {
       try { sc?.socket?.close?.(); } catch {}
       try { sc?.transport?.close?.(); } catch {}
 
-      logger.debug('[RandomChatSession] forceCloseSignalTransport complete', {
-        context,
-        roomState: (room as any)?.state,
-      });
-    } catch (e) {
-      logger.debug('[RandomChatSession] forceCloseSignalTransport failed (ignored)', {
-        context,
-        error: (e as any)?.message || String(e || ''),
-      });
-    }
+    } catch {}
   }
 
   private async safeDisconnect(room: Room): Promise<void> {
@@ -4058,14 +3837,7 @@ export class RandomChatSession extends SimpleEventEmitter {
       try {
         await disconnectFn.call(room);
         return;
-      } catch (e2: any) {
-        logger.debug('[RandomChatSession] disconnectRoomKeepTracks failed', {
-          context,
-          e1: (e1 as any)?.message || String(e1 || ''),
-          e2: (e2 as any)?.message || String(e2 || ''),
-          roomState: (room as any)?.state,
-        });
-      }
+      } catch {}
     }
   }
 
@@ -4148,11 +3920,6 @@ export class RandomChatSession extends SimpleEventEmitter {
         if (participant.isLocal) return;
         const liveParticipant = this.resolveLiveRemoteParticipant(participant);
         if (!liveParticipant) {
-          logger.debug('[RandomChatSession] Ignoring ParticipantConnected for stale participant', {
-            participantIdentity: participant.identity,
-            participantSid: participant.sid,
-            roomState: room.state,
-          });
           return;
         }
         participant = liveParticipant;
@@ -4173,20 +3940,10 @@ export class RandomChatSession extends SimpleEventEmitter {
         // LiveKit может отправлять события подписки на локальные треки, но они не должны обрабатываться
         // Это предотвращает предупреждение "could not find local track subscription for subscribed event"
         if (participant.isLocal) {
-          logger.debug('[RandomChatSession] Ignoring TrackSubscribed for local participant', {
-            kind: publication.kind,
-            trackSid: publication.trackSid,
-          });
           return;
         }
         const liveParticipant = this.resolveLiveRemoteParticipant(participant);
         if (!liveParticipant) {
-          logger.debug('[RandomChatSession] Ignoring TrackSubscribed for stale participant', {
-            participantIdentity: participant.identity,
-            participantSid: participant.sid,
-            trackSid: publication.trackSid,
-            roomState: room.state,
-          });
           return;
         }
         participant = liveParticipant;
@@ -4198,12 +3955,6 @@ export class RandomChatSession extends SimpleEventEmitter {
         if (!participant.isLocal) {
           const liveParticipant = this.resolveLiveRemoteParticipant(participant);
           if (!liveParticipant) {
-            logger.debug('[RandomChatSession] Ignoring TrackPublished for stale participant', {
-              participantIdentity: participant.identity,
-              participantSid: participant.sid,
-              trackSid: publication.trackSid,
-              roomState: room.state,
-            });
             return;
           }
           participant = liveParticipant;
@@ -4237,11 +3988,6 @@ export class RandomChatSession extends SimpleEventEmitter {
               trackSid: publication.trackSid,
             });
             this.handleTrackSubscribed(publication.track, publication, participant as RemoteParticipant);
-          } else {
-            logger.debug('[RandomChatSession] Track published but not loaded yet, waiting for TrackSubscribed', {
-              kind: publication.kind,
-              trackSid: publication.trackSid,
-            });
           }
         }
       })
@@ -4249,45 +3995,19 @@ export class RandomChatSession extends SimpleEventEmitter {
         // КРИТИЧНО: Проверяем тип участника перед обработкой
         // Локальные треки не должны влиять на remoteStream
         if (participant.isLocal) {
-          logger.debug('[RandomChatSession] Ignoring TrackUnsubscribed for local participant', {
-            kind: publication.kind,
-            trackSid: publication.trackSid,
-          });
           return;
         }
         // КРИТИЧНО: Приводим к RemoteParticipant для типизации
         const liveParticipant = this.resolveLiveRemoteParticipant(participant as RemoteParticipant);
         if (!liveParticipant) {
-          logger.debug('[RandomChatSession] Ignoring TrackUnsubscribed for stale participant', {
-            participantIdentity: participant.identity,
-            participantSid: participant.sid,
-            trackSid: publication.trackSid,
-            roomState: room.state,
-          });
           return;
         }
         this.handleTrackUnsubscribed(publication, liveParticipant);
       })
-      .on(RoomEvent.TrackMuted, (pub, participant) => {
-        if (!participant.isLocal && pub.kind === Track.Kind.Video) {
-          // IMPORTANT (RandomChat UX):
-          // TrackMuted/Unmuted is NOT a reliable source of "user pressed camera button" intent in RandomChat.
-          // It can occur during churn (resubscribe/reconnect/leave) and caused false "Отошел".
-          // We drive "Отошел" ONLY from socket event 'cam-toggle' emitted on explicit toggleCam().
-          logger.debug('[RandomChatSession] Ignoring remote TrackMuted (RandomChat uses cam-toggle)', {
-            participantId: participant.identity,
-            trackId: pub.trackSid,
-          });
-        }
-      })
-      .on(RoomEvent.TrackUnmuted, (pub, participant) => {
-        if (!participant.isLocal && pub.kind === Track.Kind.Video) {
-          logger.debug('[RandomChatSession] Ignoring remote TrackUnmuted (RandomChat uses cam-toggle)', {
-            participantId: participant.identity,
-            trackId: pub.trackSid,
-          });
-        }
-      })
+      // IMPORTANT (RandomChat UX): no TrackMuted/TrackUnmuted handlers on purpose.
+      // TrackMuted/Unmuted is NOT a reliable source of "user pressed camera button" intent in RandomChat.
+      // It can occur during churn (resubscribe/reconnect/leave) and caused false "Отошел".
+      // We drive "Отошел" ONLY from socket event 'cam-toggle' emitted on explicit toggleCam().
       .on(RoomEvent.ParticipantDisconnected, (participant) => {
         if (this.isSameRemoteParticipant(participant)) {
           // Не уходим сразу: это может быть переподключение собеседника. Решит сервер
@@ -4321,12 +4041,6 @@ export class RandomChatSession extends SimpleEventEmitter {
         // или в других обработчиках. Здесь только сбрасываем флаги.
         // КРИТИЧНО: Если идет процесс disconnectRoom через промис, не сбрасываем флаги здесь -
         // это сделает промис в disconnectRoom
-        logger.debug('[RandomChatSession] Room disconnected event received', { 
-          reason: this.disconnectReason, 
-          started: this.started,
-          isDisconnecting: this.isDisconnecting,
-          hasDisconnectPromise: !!this.disconnectPromise
-        });
         // Флаги будут сброшены в disconnectRoom через промис, если он активен
         // Если disconnectRoom не был вызван (например, неожиданное отключение), сбрасываем флаги
         if (this.roomReconnecting && (this.room === room || !this.room)) {
@@ -4354,21 +4068,11 @@ export class RandomChatSession extends SimpleEventEmitter {
     // КРИТИЧНО: Обрабатываем только треки удаленного участника
     // Локальные треки (participant.isLocal === true) не должны влиять на remoteStream
     if (participant.isLocal) {
-      logger.debug('[RandomChatSession] Ignoring subscription of local track', {
-        kind: publication.kind,
-        trackId: track.sid,
-      });
       return;
     }
 
     const liveParticipant = this.resolveLiveRemoteParticipant(participant);
     if (!liveParticipant) {
-      logger.debug('[RandomChatSession] Ignoring subscription for stale participant', {
-        kind: publication.kind,
-        trackId: track.sid,
-        participantId: participant.identity,
-        participantSid: participant.sid,
-      });
       return;
     }
 
@@ -4384,17 +4088,9 @@ export class RandomChatSession extends SimpleEventEmitter {
         this.remoteVideoTrack?.mediaStreamTrack === mediaTrackEarly &&
         this.remoteVideoTrack.isMuted === track.isMuted
       ) {
-        logger.debug('[RandomChatSession] Remote track subscribed (already applied, skipping duplicate)', {
-          trackSid: track.sid,
-          streamId: this.remoteStream.id,
-        });
         return;
       }
       if (isAud && this.remoteAudioTrack?.mediaStreamTrack === mediaTrackEarly) {
-        logger.debug('[RandomChatSession] Remote track subscribed (already applied, skipping duplicate)', {
-          trackSid: track.sid,
-          streamId: this.remoteStream.id,
-        });
         return;
       }
     }
@@ -4434,7 +4130,6 @@ export class RandomChatSession extends SimpleEventEmitter {
     // Не пересоздаем stream, чтобы не было мерцаний — создаем один раз и переиспользуем
     if (!this.remoteStream) {
       this.remoteStream = new MediaStream();
-      logger.debug('[RandomChatSession] Created new remote MediaStream');
     }
     
     const activeRemoteStream = this.remoteStream;
@@ -4449,22 +4144,12 @@ export class RandomChatSession extends SimpleEventEmitter {
     ) {
       try {
         activeRemoteStream.removeTrack(this.remoteVideoTrack.mediaStreamTrack as any);
-        logger.debug('[RandomChatSession] Removed previous remote video track from stream', {
-          oldTrackId: oldVideoTrackSid,
-        });
       } catch {}
     }
     
     if (mediaTrack && !trackAlreadyInStream) {
       // LiveKit's MediaStreamTrack is compatible with @livekit/react-native-webrtc's MediaStreamTrack at runtime
       activeRemoteStream.addTrack(mediaTrack as any);
-      logger.debug('[RandomChatSession] Added track to remote stream', {
-        kind: publication.kind,
-        streamId: activeRemoteStream.id,
-        tracksCount: activeRemoteStream.getTracks().length,
-        hasToURL: typeof activeRemoteStream.toURL === 'function',
-        trackId: track.sid,
-      });
     }
     
     if (publication.kind === Track.Kind.Audio) {
@@ -4478,10 +4163,6 @@ export class RandomChatSession extends SimpleEventEmitter {
       
       // КРИТИЧНО: Если состояние muted изменилось, обновляем remoteViewKey
       if (wasMutedStateChanged) {
-        logger.debug('[RandomChatSession] Video track muted state changed', {
-          wasMuted: this.remoteVideoTrack?.isMuted,
-          isMuted: track.isMuted,
-        });
         this.remoteViewKey = Date.now();
       }
       
@@ -4493,10 +4174,6 @@ export class RandomChatSession extends SimpleEventEmitter {
         const enabledFromTrack = !track.isMuted;
         this.remoteCamEnabled = enabledFromTrack;
         this.notifyRemoteCamStateChange(enabledFromTrack);
-        logger.debug('[RandomChatSession] Initial remote cam state from video track', {
-          isMuted: track.isMuted,
-          remoteCamEnabled: this.remoteCamEnabled,
-        });
       }
     }
     
@@ -4511,10 +4188,6 @@ export class RandomChatSession extends SimpleEventEmitter {
       } else {
         this.scheduleImplicitRemoteCamOffWhenNoVideoTrack('subscribed_without_video_track_yet');
       }
-      logger.debug('[RandomChatSession] Remote stream has no video track yet', {
-        hasAudioTrack: !!this.remoteAudioTrack,
-        hasVideoPublication: this.remoteParticipantHasAnyVideoPublication(this.currentRemoteParticipant),
-      });
     }
     
     // Always emit remoteStream even if the track was already present; this updates UI state.
@@ -4526,14 +4199,6 @@ export class RandomChatSession extends SimpleEventEmitter {
       const shouldRemountForVideo = !hadVideoBefore || wasVideoTrackChanged;
       if (shouldRemountForVideo) {
         this.remoteViewKey = Date.now();
-        logger.debug('[RandomChatSession] Updated remoteViewKey for video track', {
-          remoteViewKey: this.remoteViewKey,
-          trackId: track.sid,
-          wasVideoTrackChanged,
-          streamId: this.remoteStream.id,
-          trackReady: track.mediaStreamTrack?.readyState,
-          trackMuted: track.isMuted,
-        });
       }
     } else if (publication.kind === Track.Kind.Audio && !this.remoteVideoTrack) {
       // Audio-only room (no video yet): a single bump helps RTCView mount once.
@@ -4564,10 +4229,6 @@ export class RandomChatSession extends SimpleEventEmitter {
     // КРИТИЧНО: Обрабатываем только треки удаленного участника
     // Локальные треки (participant.isLocal === true) не должны влиять на remoteStream
     if (participant.isLocal) {
-      logger.debug('[RandomChatSession] Ignoring unsubscription of local track', {
-        kind: publication.kind,
-        trackSid: publication.trackSid,
-      });
       return;
     }
     
@@ -4627,20 +4288,9 @@ export class RandomChatSession extends SimpleEventEmitter {
           this.clearPendingRemoteVideoReset('immediate_video_unsubscribe_reset');
           this.remoteViewKey = Date.now();
           this.emit('remoteViewKeyChanged', this.remoteViewKey);
-          logger.debug('[RandomChatSession] Applied immediate remote video reset after unsubscribe', {
-            unsubscribedTrackSid,
-            participantId: participant.identity,
-            roomState: this.room?.state ?? 'none',
-            started: this.started,
-            remoteCamEnabled: this.remoteCamEnabled,
-          });
         }
         return;
       } else {
-        logger.debug('[RandomChatSession] Ignoring unsubscription of old video track, new track already active', {
-          unsubscribedTrackSid,
-          currentTrackSid,
-        });
         return;
       }
     }

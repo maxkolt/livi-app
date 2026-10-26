@@ -150,11 +150,6 @@ export function useHomeFriends({
 
         const hasUsableFriendsPayload = !!res?.ok && Array.isArray(res?.list);
         if (!hasUsableFriendsPayload) {
-          logger.debug('[loadFriends] Skip friends overwrite: backend payload not usable', {
-            ok: !!res?.ok,
-            hasList: Array.isArray(res?.list),
-            error: String(res?.error || ''),
-          });
           return;
         }
 

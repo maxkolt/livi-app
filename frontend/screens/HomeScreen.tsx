@@ -2520,7 +2520,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       sub(
         onCallAccepted?.(({ callId }) => {
           finishOutgoing(() => {
-            logger.debug('Call accepted', { callId });
             if (callId) try { reportEndCallToCallKeep(callId); } catch {}
             try { setOutgoingCallScreenVisible(false); } catch {}
             try {
@@ -2539,7 +2538,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
                   delete next[friendIdStr];
                 }
                 AsyncStorage.setItem(MISSED_CALLS_KEY, JSON.stringify(next)).catch(() => {});
-                logger.debug('[HomeScreen] Reset missed calls for accepted call (removed key)', { friendId: friendIdStr });
                 return next;
               });
             } catch (e) {
@@ -2983,7 +2981,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           } else if (result?.error === 'duplicate_request') {
             // КРИТИЧНО: duplicate_request означает, что первый запрос уже обрабатывается/обработан
             // Подождем немного и попробуем получить userId
-            logger.debug('[attachIdentitySafe] duplicate_request received, waiting for first request to complete...');
             
             // Ждем немного, чтобы первый запрос успел обработаться
             await new Promise(resolve => setTimeout(resolve, 500));
@@ -2998,7 +2995,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
                 // Пользователь существует - возвращаем успешный результат
                 setCurrentUserId(existingUserId);
                 pendingAttachRef.current = null;
-                logger.debug('[attachIdentitySafe] User restored after duplicate_request', { existingUserId });
                 return { ok: true, userId: existingUserId };
               } else {
                 console.warn('[attachIdentitySafe] ⚠️ User from duplicate_request does not exist on server');
@@ -3349,7 +3345,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
             cachedNick = cached.nick.trim();
             setNick((n) => (String(n || '').trim() ? n : cachedNick));
             setSavedNick((s) => (String(s || '').trim() ? s : cachedNick));
-            logger.debug('[HomeScreen] Loaded nick from cache', { nick: cachedNick });
           }
           if (cached.avatar && typeof cached.avatar === 'string' && cached.avatar.trim()) {
             const url = cached.avatar.trim();
@@ -3357,7 +3352,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
             setAvatarUri((a) => (String(a || '').trim() ? a : url));
             setMyFullAvatarUri((a) => (String(a || '').trim() ? a : url));
             setSavedAvatarUrl((s) => (String(s || '').trim() ? s : url));
-            logger.debug('[HomeScreen] Loaded avatar from cache');
           }
         }
       } catch (e) {
@@ -3366,7 +3360,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
 
       const currentUserId = getCurrentUserId();
       if (!currentUserId) {
-        logger.debug('[HomeScreen] No currentUserId yet; profile hydrated from disk only');
         setDataLoaded(true);
         return;
       }
@@ -3380,7 +3373,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         logger.warn('[HomeScreen] Socket connection wait failed', { e });
       }
 
-      logger.debug('[HomeScreen] Loading profile for userId', { userId: currentUserId });
 
       // Загружаем профиль из MongoDB через backend с retry
       let profileLoadedSuccess = false;
@@ -3390,7 +3382,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       
       for (let attempt = 1; attempt <= 5; attempt++) {
         try {
-          logger.debug('[HomeScreen] Loading profile attempt', { attempt, maxAttempts: 5 });
           const profileResponse = await getMyProfile();
           const profileAny: any = profileResponse?.profile ?? null;
           const avatarB64 = typeof profileAny?.avatarB64 === 'string' ? String(profileAny.avatarB64) : '';
@@ -3400,22 +3391,9 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
             if (!s) return '';
             return s.startsWith('data:') ? s : `data:image/jpeg;base64,${s}`;
           };
-          // КРИТИЧНО: Убираем avatarB64 и avatarThumbB64 из логов (очень большие base64)
-          const logProfile = profileResponse ? {
-            ...profileResponse,
-            profile: profileResponse.profile ? {
-              ...profileResponse.profile,
-              avatarB64: avatarB64 ? `[base64: ${avatarB64.length} chars]` : undefined,
-              avatarThumbB64: avatarThumbB64 ? `[base64: ${avatarThumbB64.length} chars]` : undefined
-            } : profileResponse.profile
-          } : profileResponse;
-          logger.debug('[HomeScreen] Profile response from backend', { profile: logProfile });
-          
           // Проверяем что профиль не пустой (должен быть хотя бы nick или avatar)
           if (profileResponse?.ok && profileResponse.profile) {
             const profile = profileResponse.profile as any;
-            logger.debug('[HomeScreen] Profile data', { nick: profile.nick, hasAvatar: !!avatarB64, hasAvatarThumb: !!avatarThumbB64, avatarVer: profile.avatarVer });
-            logger.debug('Loaded profile from backend', { nick: profile.nick, hasAvatar: !!avatarB64 });
             
             // Обновляем никнейм из backend (если на сервере пусто — не затираем локальный кэш/UI)
             const serverNick = typeof profile.nick === 'string' ? profile.nick.trim() : '';
@@ -3424,14 +3402,12 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
               setNick(serverNick);
               setSavedNick(serverNick);
               setSavedNickDebug(serverNick);
-              logger.debug('[HomeScreen] Set nick from backend', { nick: serverNick });
               hasActualData = true;
             } else if (cachedNick) {
               loadedNick = cachedNick;
               setNick((n) => (String(n || '').trim() ? n : cachedNick));
               setSavedNick((s) => (String(s || '').trim() ? s : cachedNick));
               setSavedNickDebug(cachedNick);
-              logger.debug('[HomeScreen] Server nick empty, kept cached nick', { nick: cachedNick });
               if (isCreateUserInProgress()) {
                 try { await waitForCreateUserCompletion(); } catch {}
               }
@@ -3466,8 +3442,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
               setMyFullAvatarUri(avatarDataUri);
               setAvatarUri(avatarDataUri);
               setSavedAvatarUrl(avatarDataUri);
-              logger.debug('[HomeScreen] Set avatar from backend avatarB64');
-              logger.debug('Set avatar from backend avatarB64');
               hasActualData = true;
             } else if (profileAvatarIsFresh && avatarThumbB64) {
               const avatarDataUri = toDataUri(avatarThumbB64);
@@ -3475,8 +3449,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
               setMyFullAvatarUri(avatarDataUri);
               setAvatarUri(avatarDataUri);
               setSavedAvatarUrl(avatarDataUri);
-              logger.debug('[HomeScreen] Set avatar from backend avatarThumbB64');
-              logger.debug('Set avatar from backend avatarThumbB64');
               hasActualData = true;
             }
             
@@ -3509,10 +3481,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
             // Если есть реальные данные (nick или avatar), отмечаем как успешную загрузку
             if (hasActualData || (profile.nick && profile.nick.trim()) || avatarB64 || avatarThumbB64) {
               profileLoadedSuccess = true;
-              logger.debug('[HomeScreen] Profile loaded successfully with data');
             } else {
               // Пустой профиль - это нормально для нового пользователя, но не выходим из цикла
-              logger.debug('[HomeScreen] Profile loaded (empty profile for new user)');
               profileLoadedSuccess = true; // Принимаем пустой профиль как валидный ответ
             }
             
@@ -3520,11 +3490,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
             if (profileLoadedSuccess) {
               break;
             }
-          } else {
-            logger.debug('[HomeScreen] Profile load attempt: empty/invalid response', { attempt, maxAttempts: 5 });
           }
         } catch (e) {
-          logger.debug('[HomeScreen] Profile load attempt failed', { attempt, maxAttempts: 5, e });
           if (attempt < 5) {
             await new Promise(resolve => setTimeout(resolve, 2000)); // 2 секунды задержка
           }
@@ -3559,13 +3526,10 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
             try {
               await AsyncStorage.removeItem(PROFILE_KEY); // livi.profile.v1
               await AsyncStorage.removeItem(DRAFT_KEY);   // profile_draft_v1
-              logger.debug('[HomeScreen] Cleared local storage after profile deletion');
             } catch (e) {
               logger.warn('[HomeScreen] Failed to clear local storage', { e });
             }
           }
-        } else {
-          logger.debug('[HomeScreen] Using cached profile data due to server failure');
         }
       }
 
@@ -3573,12 +3537,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       // КРИТИЧНО: Для нового пользователя без данных profileLoaded должен быть true, чтобы показать экран создания профиля
       const isNewUser = !hasRealData && !profileLoadedSuccess && currentUserId;
       if (hasRealData || profileLoadedSuccess || isNewUser) {
-        logger.debug('[HomeScreen] Profile loading complete', { 
-          hasData: hasRealData || profileLoadedSuccess,
-          isNewUser,
-          hasNick: !!(finalNick && finalNick.trim()), 
-          hasAvatar: !!(finalAvatar && finalAvatar.trim()) 
-        });
         setProfileLoaded(true);
       } else {
         logger.warn('[HomeScreen] Profile loading complete but no data found and not a new user');
@@ -4003,9 +3961,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
 
         if (friends.length > 0) {
           await refreshUnreadCountsForFriends(friends);
-          logger.debug('[HomeScreen] Reloaded unread messages on focus (batch)', {
-            count: friends.length,
-          });
         }
       } catch (e) {
         logger.warn('[HomeScreen] Error reloading counters on focus:', e);
@@ -4179,16 +4134,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         return;
       }
 
-      // Логируем получение обновления профиля друга для диагностики
-      logger.debug('[onFriendProfile] Friend profile update received', {
-        userId,
-        nick: nick || '(пусто)',
-        nickLength: nick?.length || 0,
-        hasAvatar: !!(avatarVer && avatarVer > 0),
-        avatarVer,
-        hasThumb: !!avatarThumbB64
-      });
-
       // Кэшируем миниатюру если пришла
       if (avatarThumbB64 && avatarVer) {
         try {
@@ -4219,23 +4164,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           // Если версия аватара 0 и миниатюра пустая, очищаем аватар
           const finalAvatarThumbB64 = (newAvatarVer === 0 && !newAvatarThumbB64) ? '' : newAvatarThumbB64;
           
-          // Логируем обновление для диагностики
-          const nameChanged = updatedName !== oldName;
-          const avatarChanged = newAvatarVer !== existingFriend.avatarVer || finalAvatarThumbB64 !== existingFriend.avatarThumbB64;
-          if (nameChanged || avatarChanged) {
-            logger.debug('[onFriendProfile] Friend profile updated', {
-              userId,
-              nameChanged,
-              oldName: oldName || '(пусто)',
-              newName: updatedName || '(пусто)',
-              avatarChanged,
-              oldAvatarVer: existingFriend.avatarVer,
-              newAvatarVer,
-              oldHasThumb: !!existingFriend.avatarThumbB64,
-              newHasThumb: !!finalAvatarThumbB64
-            });
-          }
-          
           return prev.map((f) =>
             String(f.id) === String(userId)
               ? { 
@@ -4251,11 +4179,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           // Добавляем нового друга (только что подружились)
           // КРИТИЧНО: Используем полный никнейм, не обрезаем до первой буквы
           const newName = typeof nick === 'string' && nick.trim() ? nick.trim() : '—';
-          logger.debug('[onFriendProfile] New friend added', {
-            userId,
-            name: newName || '(пусто)',
-            nameLength: newName.length
-          });
           return [
             ...prev,
             {
@@ -5142,7 +5065,6 @@ const handleClearNick = useCallback(async () => {
         delete next[friendIdStr];
         return next;
       });
-      logger.debug('[HomeScreen] Reset missed calls for friend (removed key)', { friendId: friendIdStr });
       await syncAppBadgeFromMissedCount();
     } catch (e) {
       logger.warn('[HomeScreen] clearMissedCallsForFriend failed', { friendId: friendIdStr, error: (e as Error)?.message });
@@ -6192,11 +6114,6 @@ const handleClearNick = useCallback(async () => {
                 });
                 if (result.action === Share.sharedAction) {
                   await incrCounter('invite_link_shared');
-                  if (result.activityType) {
-                    logger.debug('Shared via:', result.activityType);
-                  }
-                } else if (result.action === Share.dismissedAction) {
-                  logger.debug('Share dismissed');
                 }
               } catch (e) {
                 logger.error('Failed to share link:', e);

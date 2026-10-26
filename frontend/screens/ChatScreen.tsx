@@ -178,7 +178,7 @@ import {
   SHEET_REACTIONS_ALL,
 } from './chat/chatReactions';
 
-import { API_BASE, getMyProfile } from '../sockets/socket';
+import { API_BASE } from '../sockets/socket';
 import { logger } from '../utils/logger';
 import {
   APP_COMPOSER_MAX_FONT_SIZE_MULTIPLIER,
@@ -326,29 +326,6 @@ export default function ChatScreen({ route, navigation }: Props) {
   // доходят до низа экрана: фон уходит под кнопки навигации, содержимое — над ними.
   const ANDROID_SHEET_BOTTOM_PAD = 12 + Math.max(0, insets.bottom);
 
-
-  // Загружаем профиль при инициализации
-  useEffect(() => {
-    (async () => {
-      try {
-        const profileResponse = await getMyProfile();
-        if (profileResponse?.ok && profileResponse.profile) {
-          const profile = profileResponse.profile;
-          const hasAvatar = ("avatarB64" in profile ? !!profile.avatarB64 : !!profile.avatarUrl);
-          logger.debug('Loaded profile on init', { nick: profile.nick, hasAvatar });
-          
-          // Обновляем никнейм из backend
-          if (profile.nick && typeof profile.nick === 'string') {
-            // Здесь можно обновить никнейм если нужно
-            // (не логируем сам nick в консоль — PII)
-            logger.debug('[ChatScreen] Profile nick loaded');
-          }
-        }
-      } catch (e) {
-        console.warn('[ChatScreen] Failed to load profile on init:', e);
-      }
-    })();
-  }, []);
 
   // КРИТИЧНО: мемоизируем объект, иначе он новый на каждый рендер (и может ломать мемоизацию ниже)
   const LIVI = React.useMemo(() => ({
@@ -1753,12 +1730,10 @@ export default function ChatScreen({ route, navigation }: Props) {
     // Если относительный путь начинается с /uploads/, добавляем API_BASE
     if (s.startsWith('/uploads/')) {
       const fullUrl = `${API_BASE}${s}`;
-      logger.debug('[ChatScreen] resolveMediaUri: resolved relative path', { original: s, resolved: fullUrl });
       return fullUrl;
     }
     // Если путь не начинается с /, возможно это уже полный путь без протокола
     // Или это может быть base64 или другой формат
-    logger.debug('[ChatScreen] resolveMediaUri: returning as-is', { uri: s });
     return s;
   }, []);
 

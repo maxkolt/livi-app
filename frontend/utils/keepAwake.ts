@@ -30,7 +30,6 @@ export const activateKeepAwakeAsync = async (): Promise<void> => {
       logger.warn('activateKeepAwakeAsync failed:', e);
     }
   }
-  logger.debug('keep-awake activate (fallback - module not available)');
 };
 
 export const deactivateKeepAwakeAsync = async (): Promise<void> => {
@@ -42,7 +41,6 @@ export const deactivateKeepAwakeAsync = async (): Promise<void> => {
       logger.warn('deactivateKeepAwakeAsync failed:', e);
     }
   }
-  logger.debug('keep-awake deactivate (fallback - module not available)');
 };
 
 

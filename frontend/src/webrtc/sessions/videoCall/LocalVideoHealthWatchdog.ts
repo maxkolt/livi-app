@@ -140,8 +140,6 @@ export class LocalVideoHealthWatchdog {
 
       await this.host.recoverLocalVideo(context);
       this.schedule('post-recovery');
-    } catch (e) {
-      logger.debug('[VideoCallSession] Local video health check failed (ignored)', e);
-    }
+    } catch {}
   }
 }

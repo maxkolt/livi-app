@@ -7,7 +7,6 @@
  */
 
 import type { LocalAudioTrack, LocalTrack, LocalVideoTrack, Room } from 'livekit-client';
-import { logger } from '../../../../utils/logger';
 
 type PublicationLike = { track?: unknown; trackSid?: string };
 
@@ -38,7 +37,6 @@ export function isVideoTrackPublished(room: Room | null, track: LocalVideoTrack 
   try {
     return isTrackPublishedIn(room.localParticipant.videoTrackPublications, track);
   } catch (e) {
-    logger.debug('[VideoCallSession] Error checking video track publication', e);
     return false;
   }
 }
@@ -49,7 +47,6 @@ export function isAudioTrackPublished(room: Room | null, track: LocalAudioTrack 
   try {
     return isTrackPublishedIn(room.localParticipant.audioTrackPublications, track);
   } catch (e) {
-    logger.debug('[VideoCallSession] Error checking audio track publication', e);
     return false;
   }
 }

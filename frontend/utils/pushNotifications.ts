@@ -316,9 +316,7 @@ async function fetchUnreadTotalForBadge(): Promise<number> {
     if (unreadResult?.ok) {
       return Math.max(0, Number(unreadResult.count || 0), localFallback);
     }
-  } catch (e) {
-    logger.debug('[push] fetchUnreadTotalForBadge: offline or error', (e as Error)?.message);
-  }
+  } catch {}
   return Math.max(0, localFallback);
 }
 
@@ -1698,7 +1696,6 @@ async function ensureIncomingCallNotificationCategory() {
       { identifier: 'answer', buttonTitle: t('answerAction', lang) },
       { identifier: 'decline', buttonTitle: t('cancelCall', lang), options: { isDestructive: true } },
     ]);
-    logger.debug('[push] incoming call notification category registered');
   } catch (e) {
     logger.warn('[push] setNotificationCategoryAsync failed', e as any);
   }
@@ -1741,7 +1738,6 @@ export async function registerAndSendPushToken(userId?: string, options?: Regist
 
   if (reason === 'startup') {
     if (pushStartupRegisterDone && !force) {
-      logger.debug('[push] startup register skipped (already done this session)');
       return;
     }
     pushStartupRegisterDone = true;
@@ -1751,7 +1747,6 @@ export async function registerAndSendPushToken(userId?: string, options?: Regist
   if (!force && (reason === 'socket_reconnect' || reason === 'app_active')) {
     const last = lastRegisteredPushToken;
     if (last && last.userId === uid && Date.now() - last.atMs < PUSH_TOKEN_REGISTER_COOLDOWN_MS) {
-      logger.debug('[push] register skipped (cooldown, no Expo fetch)', { reason });
       return;
     }
   }
@@ -1761,7 +1756,6 @@ export async function registerAndSendPushToken(userId?: string, options?: Regist
     if (!force && (reason === 'socket_reconnect' || reason === 'app_active')) {
       const last = lastRegisteredPushToken;
       if (last && last.userId === uid && Date.now() - last.atMs < PUSH_TOKEN_REGISTER_COOLDOWN_MS) {
-        logger.debug('[push] register skipped (cooldown after in-flight)', { reason });
         return;
       }
     }
@@ -1787,16 +1781,8 @@ export async function registerAndSendPushToken(userId?: string, options?: Regist
       try {
         const deviceTokenResp = await Notifications.getDevicePushTokenAsync();
         const deviceToken = (deviceTokenResp as any)?.data;
-        const deviceType = String((deviceTokenResp as any)?.type || '');
         if (deviceToken && Platform.OS === 'android') {
           fcmToken = String(deviceToken);
-          logger.debug('[push] device push token acquired', {
-            type: deviceType,
-            tokenPrefix: fcmToken.slice(0, 18),
-          });
-          if (__DEV__) {
-            logger.debug('[push][DEV] DEVICE_PUSH_TOKEN (Firebase test)', { tokenPrefix: fcmToken.slice(0, 24) + '…' });
-          }
         }
       } catch (e) {
         const msg = String((e as any)?.message || e || '');
@@ -1804,9 +1790,7 @@ export async function registerAndSendPushToken(userId?: string, options?: Regist
           msg.includes('fcm-credentials') ||
           msg.includes('Default FirebaseApp is not initialized') ||
           msg.includes('FirebaseApp.initializeApp');
-        if (__DEV__ && looksLikeFcmSetupError) {
-          logger.debug('[push] skipping device push token warning (FCM not configured)', { message: msg.slice(0, 220) });
-        } else {
+        if (!(__DEV__ && looksLikeFcmSetupError)) {
           logger.warn('[push] failed to get device push token', e as any);
         }
       }
@@ -1848,16 +1832,6 @@ export async function registerAndSendPushToken(userId?: string, options?: Regist
           hasVoipToken: !!voipToken,
         });
       }
-      try {
-        logger.debug('[push] push token acquired', {
-          userId,
-          tokenPrefix: String(token).slice(0, 18),
-          platform: Platform.OS,
-          hasProjectId: !!projectId,
-          hasExpoToken: !!expoToken,
-        });
-      } catch {}
-
       const lang = await loadLang();
       const snapshotNow: PushTokenSnapshot = {
         userId: String(userId),
@@ -1876,10 +1850,6 @@ export async function registerAndSendPushToken(userId?: string, options?: Regist
       const withinCooldown = !!last && snapshotNow.atMs - last.atMs < PUSH_TOKEN_REGISTER_COOLDOWN_MS;
       const force = options?.force === true;
       if (!force && unchanged && withinCooldown) {
-        logger.debug('[push] token registration skipped (unchanged + cooldown)', {
-          reason: options?.reason || 'manual',
-          cooldownLeftMs: Math.max(0, PUSH_TOKEN_REGISTER_COOLDOWN_MS - (snapshotNow.atMs - (last?.atMs || 0))),
-        });
         return;
       }
 
@@ -1909,13 +1879,6 @@ export async function registerAndSendPushToken(userId?: string, options?: Regist
 
       try {
         if (resp && typeof resp?.ok === 'boolean') {
-          const text = await resp.text().catch(() => '');
-          logger.debug('[push] token register response', {
-            ok: resp.ok,
-            status: resp.status,
-            body: text ? text.slice(0, 200) : '',
-            reason: options?.reason || 'manual',
-          });
           if (resp.ok) {
             lastRegisteredPushToken = snapshotNow;
             await persistPushTokenSnapshot(snapshotNow);
@@ -1936,9 +1899,6 @@ export async function registerAndSendPushToken(userId?: string, options?: Regist
         msg.includes('FirebaseApp.initializeApp');
 
       if (__DEV__ && looksLikeFcmSetupError) {
-        logger.debug('[push] В dev пуш-токен не зарегистрирован (FCM не настроен). Уведомления о звонках не придут. Собери с google-services.json или проверяй на релизной сборке.', {
-          message: msg.slice(0, 220),
-        });
         return;
       }
 
@@ -1949,9 +1909,6 @@ export async function registerAndSendPushToken(userId?: string, options?: Regist
         msg.includes('no healthy upstream') ||
         msg.includes('upstream connect error');
       if (transientPush) {
-        logger.debug('[push] registerAndSendPushToken transient server/load — will retry on next register', {
-          message: msg.slice(0, 220),
-        });
         return;
       }
 

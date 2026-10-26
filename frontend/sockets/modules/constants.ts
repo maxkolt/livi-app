@@ -51,11 +51,6 @@ export const SOCKET_ENGINE_TIMEOUT_MS = 12000;
 /** In-app call signaling (accept / initiate) after warmCallSignaling or while app is active. */
 export const CALL_SIGNALING_CONNECT_MS = 8000;
 
-if (__DEV__) {
-  const lk = (process.env.EXPO_PUBLIC_LIVEKIT_URL || '').trim();
-  logger.debug('[socket] API_BASE / LIVEKIT', { API_BASE, livekit: lk || '—' });
-}
-
 /* ========= helpers ========= */
 export const isOid = (s?: string) => !!s && /^[a-f\d]{24}$/i.test(s);
 

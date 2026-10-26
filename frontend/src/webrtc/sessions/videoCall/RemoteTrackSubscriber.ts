@@ -95,22 +95,9 @@ export class RemoteTrackSubscriber {
           trackSid: publication.trackSid,
         });
         this.host.applyTrack(publication.track, publication, participant);
-      } else {
-        logger.debug(`[VideoCallSession] ${context} - ${kind} track still not loaded after subscription`, {
-          trackSid: publication.trackSid,
-          isSubscribed: publication.isSubscribed,
-          hasTrack: !!publication.track,
-        });
       }
     }, TRACK_LOAD_RECHECK_MS);
 
-    logger.debug(
-      `[VideoCallSession] ${context} - ${kind} track not loaded yet, waiting for TrackSubscribed event or delayed check`,
-      {
-        trackSid: publication.trackSid,
-        isSubscribed: publication.isSubscribed,
-      },
-    );
   }
 
   /**
@@ -156,11 +143,7 @@ export class RemoteTrackSubscriber {
       });
     }
     if (publication.track) {
-      if (this.host.shouldSkipRedundantDelayedApply(publication.track, publication)) {
-        logger.debug(`[VideoCallSession] ${pass} delayed check skipped (${kind} already wired)`, {
-          trackSid: publication.trackSid,
-        });
-      } else {
+      if (!this.host.shouldSkipRedundantDelayedApply(publication.track, publication)) {
         logger.info(`[VideoCallSession] ${pass} delayed processing of ${kind} track`, {
           trackSid: publication.trackSid,
         });

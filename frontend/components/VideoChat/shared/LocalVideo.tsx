@@ -69,21 +69,6 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
     (isVideoTrackEnabled || !!localExternalHold) &&
     (Platform.OS === 'android' ? true : !isVideoTrackMuted || !!localExternalHold) &&
     (isVideoTrackLive || trackLiveTick > 0 || camOn || !!localExternalHold);
-  
-  // Логирование для отладки на Android
-  useEffect(() => {
-    if (Platform.OS === 'android' && localStream) {
-      logger.debug('[LocalVideo] Local stream state', {
-        streamId: localStream.id,
-        hasVideoTrack: !!videoTrack,
-        isVideoTrackLive,
-        isVideoTrackEnabled,
-        isVideoTrackMuted,
-        hasStreamURL: typeof localStream.toURL === 'function',
-        streamURL: localStream.toURL?.()?.substring(0, 50) + '...'
-      });
-    }
-  }, [localStream?.id, isVideoTrackLive, isVideoTrackEnabled, isVideoTrackMuted]);
 
   // После flip readyState может не быть 'live' сразу — один отложенный re-render (как у RemoteVideo).
   useEffect(() => {
@@ -105,13 +90,6 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
       const bump = () => {
         setForceUpdateKey((prev) => {
           const next = prev + 1;
-          logger.debug('[LocalVideo] Android: force-update RTCView', {
-            streamId: localStream.id,
-            trackId: vt.id,
-            trackEnabled: vt.enabled,
-            trackReady: vt.readyState,
-            key: next,
-          });
           return next;
         });
       };
@@ -199,18 +177,6 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
       lastRtcViewKeyRef.current = candidateKey;
     }
     
-    logger.debug('[LocalVideo] Render RTCView', {
-      platform: Platform.OS,
-      streamURL: localStreamURL ? localStreamURL.substring(0, 50) + '...' : 'null',
-      key: rtcViewKey,
-      isVideoTrackLive,
-      isVideoTrackEnabled,
-      isVideoTrackMuted,
-      streamId: localStream.id,
-      isFrontCamera,
-      localExternalHold,
-      usingStreamProp: Platform.OS === 'android'
-    });
 
     // КРИТИЧНО: На Android используем prop `stream` напрямую, на iOS - `streamURL`
     // На iOS проверяем, что streamURL существует
