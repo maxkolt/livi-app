@@ -2611,6 +2611,21 @@ function AppContent() {
           });
           await clearPendingInviteCode();
           presentedInviteCodeRef.current = null;
+          // Уже друзья — ссылка ведёт в чат с ним, а не молча никуда.
+          const friendId = String(result.inviter?.id || '').trim();
+          if (result.areFriends && friendId && friendId !== String(userId) && navRef.isReady()) {
+            navRef.dispatch(
+              CommonActions.navigate({
+                name: 'Chat',
+                params: {
+                  peerId: friendId,
+                  peerName: String(result.inviter?.nick || '').trim() || '—',
+                  peerAvatarVer: result.inviter?.avatarVer || 0,
+                  peerAvatarThumbB64: result.inviter?.avatarThumbB64 || '',
+                },
+              }),
+            );
+          }
           return;
         }
 
@@ -4787,6 +4802,8 @@ function AppContent() {
               speakerLabel={t('callSpeakerOn', lang)}
               topInset={insets.top}
               bottomInset={insets.bottom}
+              leftInset={insets.left}
+              rightInset={insets.right}
               // Не снимаем native здесь: ConnectingCover может быть готов пока Main ещё
               // в background / под Incoming — тогда clear → вспышка предыдущего экрана.
               onContentReady={() => {
