@@ -1,4 +1,6 @@
 import { AppState, NativeModules, Platform } from 'react-native';
+import { getCallLifecycle, isCallMediaLive } from './callLifecycle';
+import { logger } from './logger';
 import {
   type InCallAudioRoute,
   isExternalHeadsetRoute,
@@ -310,6 +312,12 @@ export function shouldDeferCallAudioStopOnHookUnmount(): boolean {
 
 /** Активный direct / VideoCall (не teardown, сессия не ended). */
 export function isOngoingCallSession(): boolean {
+  const legacy = isOngoingCallSessionByFlags();
+  shadowCompareOngoing(legacy);
+  return legacy;
+}
+
+function isOngoingCallSessionByFlags(): boolean {
   try {
     if (isEndingCallInProgress()) return false;
     if (isCallEndedFromPiPNoOpen()) return false;
@@ -321,6 +329,22 @@ export function isOngoingCallSession(): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * Перевод на машину состояний (utils/callLifecycle), шаг 1: старый ответ по флагам остаётся
+ * действующим, расхождения с машиной пишутся в лог (раз на смену пары значений). Переключение —
+ * когда расхождений на реальных звонках не останется.
+ */
+let lastShadowMismatchKey = '';
+function shadowCompareOngoing(legacy: boolean): void {
+  const lc = getCallLifecycle();
+  // «Идёт звонок» здесь = медиа принято/соединено; дозвон и входящий флаги тоже не считали.
+  const machine = isCallMediaLive();
+  const key = legacy === machine ? '' : `${legacy}|${lc.phase}|${lc.callId ?? ''}`;
+  if (key === lastShadowMismatchKey) return;
+  lastShadowMismatchKey = key;
+  if (key) logger.warn('[callLifecycle] shadow mismatch isOngoingCallSession', { legacy, phase: lc.phase, callId: lc.callId });
 }
 
 /** InCallManager.start уже поднят (не делать stop/start при remount VideoCall). */

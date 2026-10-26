@@ -50,7 +50,7 @@ import { forceCallLogUiNow, recordCallLog, recordCancelledCall, recordNoAnswerCa
 import { markChatCallBubbleEligible } from './screens/chat/chatCallEvents';
 import { getInstallId, getInstallSecret } from './utils/installId';
 import { closeCallAudioSession } from './utils/callAudioSession';
-import { callLifecycle } from './utils/callLifecycle';
+import { callLifecycle, getCallLifecycle } from './utils/callLifecycle';
 import { notifyIncomingShare, parseNativeShareItems, pullPendingShareFromNative } from './utils/incomingShare';
 import { ensureInitialMediaPermissions, ensureCallMediaPermissions, needsNearbyDevicesPermission, requestNearbyDevicesPermissionAndroid } from './utils/mediaPermissions';
 import { probeNativeCallAudioRoutes } from './utils/nativeCallAudioProbe';
@@ -1073,6 +1073,8 @@ function AppContent() {
     }
     return runAndroidIncomingAnswerInFlight(cid, async () => {
       logger.info('[App] Completing incoming answer', { callId: cid, from, fromNick: fromNick || null });
+      // Ответ нажат — звонок принят уже сейчас, до монтирования экрана и accept сессии.
+      callLifecycle.accepted(cid, from, 'callee');
       // До bringMain/AppState(active): иначе Home badge/friends resume (~1–2с) конкурирует с VideoCall paint.
       try {
         armHomeUiSettleSkip(8000);
@@ -4035,6 +4037,10 @@ function AppContent() {
        
         stopAnim();
         return;
+      }
+      // Нам ответили: звонок принят до того, как экран создаст сессию и она обработает accept.
+      if (callId && getCallLifecycle().phase === 'outgoing') {
+        callLifecycle.accepted(callId, String((data as any)?.fromUserId || '').trim() || null, 'caller');
       }
 
       const gAccept = global as any;

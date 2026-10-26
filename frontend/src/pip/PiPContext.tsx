@@ -739,7 +739,12 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
               }
             } catch (_) {}
           } else {
-            setSuppressOverlayForReturn(true);
+            // Restore плашки мог обогнать этот обработчик (кадры в фоне не идут) и уже снять флаги
+            // restore — тогда здесь кажется, что возвращаемся на полный экран, и плашка пряталась:
+            // живой звонок оставался без управления. Плашка видна вне экрана звонка — не прячем.
+            const plaqueIsCurrentUi =
+              g.__pipVisibleRef?.current === true && readRootCurrentRouteName() !== 'VideoCall';
+            if (!plaqueIsCurrentUi) setSuppressOverlayForReturn(true);
             try {
               if (
                 leaveCtxExit.leaveUi === 'audio' ||
