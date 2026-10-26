@@ -143,9 +143,15 @@ function emitAppVisibilityToServer(foreground: boolean, options: { heartbeat?: b
   } catch {}
 }
 
+/**
+ * Для друзей «в приложении» — только active. iOS переводит приложение в inactive при открытии
+ * переключателя приложений; закрытие свайпом оттуда не даёт background, и сервер держал
+ * пользователя «онлайн» ещё 45 с (липкий онлайн после обрыва). Короткие inactive (шторка,
+ * Face ID) друзьям не видны: сервер ждёт 2 с, прежде чем показать офлайн.
+ */
 function isAppForegroundForPresence(): boolean {
   const state = AppState.currentState || shared.lastAppState;
-  return state === "active" || state === "inactive";
+  return state === "active";
 }
 
 async function readAndroidMainActivityForeground(): Promise<boolean | null> {
@@ -590,11 +596,19 @@ try {
       // (e.g. transient OS transitions). We only pause realtime when app actually goes to background.
       const wasForeground = shared.lastAppState === "active" || shared.lastAppState === "inactive";
       const isForeground = nextState === "active" || nextState === "inactive";
+      const wasPresenceForeground = shared.lastAppState === "active";
       shared.lastAppState = nextState;
 
-      if (wasForeground && !isForeground) {
+      // Presence — по active (см. isAppForegroundForPresence); сокет — по active|inactive, как раньше.
+      if (wasPresenceForeground && nextState !== "active") {
         emitAppVisibilityToServer(false);
         stopAppVisibilityForegroundHeartbeat();
+      } else if (!wasPresenceForeground && nextState === "active") {
+        emitAppVisibilityToServer(true);
+        startAppVisibilityForegroundHeartbeat();
+      }
+
+      if (wasForeground && !isForeground) {
         if (SOCKET_KEEP_ALIVE_IN_BACKGROUND) return;
         const inSystemPiP = typeof (global as any).__pipInSystemModeRef?.current === "boolean" && (global as any).__pipInSystemModeRef?.current === true;
         if (shared.outgoingCallScreenVisible || shared.incomingCallScreenVisible || shared.activeVideoCall || inSystemPiP) return;
@@ -609,8 +623,6 @@ try {
       }
 
       if (!wasForeground && isForeground) {
-        emitAppVisibilityToServer(true);
-        startAppVisibilityForegroundHeartbeat();
         if (!SOCKET_KEEP_ALIVE_IN_BACKGROUND) shared.realtimePaused = false;
         // Не сбрасываем __incomingCallScreenVisible / __outgoingCallScreenVisible / __activeVideoCall здесь:
         // нативные экраны звонка и видеозвонок могут оставаться активными при возврате из фона; сброс давал

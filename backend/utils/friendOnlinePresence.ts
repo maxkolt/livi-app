@@ -39,35 +39,42 @@ function isOid(userId: string): boolean {
   return /^[a-f\d]{24}$/i.test(normalizeUid(userId));
 }
 
-function getConnectedUserIds(io: Server): string[] {
-  const uids = new Set<string>();
-  for (const s of io.sockets.sockets.values()) {
-    const u = normalizeUid(String((s as any)?.data?.userId || ''));
-    if (u) uids.add(u);
-  }
-  return [...uids];
+type PresenceSocket = { data?: Record<string, unknown> };
+
+function socketUserId(s: PresenceSocket): string {
+  return normalizeUid(String((s as any)?.data?.userId || ''));
 }
 
-function hasAnySocketForUser(io: Server, uid: string): boolean {
-  const id = String(uid);
-  for (const s of io.sockets.sockets.values()) {
-    if (String((s as any)?.data?.userId || '') === id) return true;
+/**
+ * Сокеты пользователя на этом узле — через его комнату u:<id> (identity.ts): O(сокетов пользователя).
+ * Раньше каждая проверка обходила все сокеты сервера, и пересчёт для всех пользователей стоил
+ * O(пользователей × сокетов) на каждое событие видимости.
+ */
+function socketsOfUser(io: Server, uid: string): PresenceSocket[] {
+  const room = (io.sockets as any).adapter?.rooms?.get(`u:${uid}`) as Set<string> | undefined;
+  if (!room || room.size === 0) return [];
+  const out: PresenceSocket[] = [];
+  for (const sid of room) {
+    const s = io.sockets.sockets.get(sid) as PresenceSocket | undefined;
+    if (s && socketUserId(s) === uid) out.push(s);
   }
-  return false;
+  return out;
 }
 
-/** true = в приложении на переднем плане или клиент ещё не шлёт app:visibility (undefined). */
-function anySocketForegroundOrLegacy(io: Server, uid: string): boolean {
-  const id = String(uid);
+/** Все подключённые пользователи с их сокетами — один проход по сокетам. */
+function socketsByConnectedUser(io: Server): Map<string, PresenceSocket[]> {
+  const byUser = new Map<string, PresenceSocket[]>();
   for (const s of io.sockets.sockets.values()) {
-    if (String((s as any)?.data?.userId || '') !== id) continue;
-    const tri = socketForegroundTriState(s);
-    if (tri === 'legacy' || tri === 'true') return true;
+    const uid = socketUserId(s as PresenceSocket);
+    if (!uid) continue;
+    const list = byUser.get(uid);
+    if (list) list.push(s as PresenceSocket);
+    else byUser.set(uid, [s as PresenceSocket]);
   }
-  return false;
+  return byUser;
 }
 
-function socketLooksInActiveCall(s: { data?: Record<string, unknown> }): boolean {
+function socketLooksInActiveCall(s: PresenceSocket): boolean {
   const d = (s as any)?.data || {};
   return !!(d.busy || d.inCall || d.roomId);
 }
@@ -84,132 +91,105 @@ export function setLiveCallPredicate(fn: LiveCallPredicate | null): void {
   liveCallPredicate = fn;
 }
 
-function userHasBusyCallSocket(io: Server, uid: string): boolean {
-  const id = String(uid);
-  for (const s of io.sockets.sockets.values()) {
-    if (String((s as any)?.data?.userId || '') !== id) continue;
-    if (socketLooksInActiveCall(s)) return liveCallPredicate ? liveCallPredicate(io, id) : true;
-  }
-  return false;
+function userHasBusyCallSocket(io: Server, uid: string, sockets: PresenceSocket[]): boolean {
+  if (!sockets.some(socketLooksInActiveCall)) return false;
+  return liveCallPredicate ? liveCallPredicate(io, uid) : true;
 }
 
 type FgTri = 'legacy' | 'true' | 'false';
 
-function socketForegroundLastSeenAt(s: { data?: Record<string, unknown> }): number {
+function socketForegroundLastSeenAt(s: PresenceSocket): number {
   const raw = (s as any).data?.appForegroundLastSeenAt;
   return typeof raw === 'number' && Number.isFinite(raw) ? raw : 0;
 }
 
-function isForegroundHeartbeatFresh(s: { data?: Record<string, unknown> }): boolean {
+function isForegroundHeartbeatFresh(s: PresenceSocket): boolean {
   const lastSeenAt = socketForegroundLastSeenAt(s);
   return lastSeenAt > 0 && Date.now() - lastSeenAt <= APP_FOREGROUND_HEARTBEAT_STALE_MS;
 }
 
-function socketForegroundTriState(s: { data?: Record<string, unknown> }): FgTri {
+function socketForegroundTriState(s: PresenceSocket): FgTri {
   const v = (s as any).data?.appForeground;
   if (v === false) return 'false';
   if (v === true) return isForegroundHeartbeatFresh(s) ? 'true' : 'false';
   return 'legacy';
 }
 
+function clearTimerFor(timers: Map<string, ReturnType<typeof setTimeout>>, uid: string): void {
+  const t = timers.get(uid);
+  if (t) clearTimeout(t);
+  timers.delete(uid);
+}
+
+/** Пользователь ушёл со всех сокетов: его отсчёты и таймеры больше не нужны. */
+function forgetUserTracking(uid: string): void {
+  userAllBackgroundSince.delete(uid);
+  clearTimerFor(foregroundAckTimers, uid);
+  clearTimerFor(inAppOfflinePresenceTimers, uid);
+  clearTimerFor(foregroundStalePresenceTimers, uid);
+}
+
 /**
- * Обновляет момент «все сокеты ушли в фон».
+ * Обновляет момент «все сокеты пользователя ушли в фон».
  * Не удаляем отсчёт при каждом кратком appForeground:true — это делает scheduleDebouncedClearBackgroundOnForeground.
  */
-function syncInAppTrackingForAllConnectedUsers(io: Server): void {
-  const active = new Set<string>();
-  for (const s of io.sockets.sockets.values()) {
-    const u = normalizeUid(String((s as any)?.data?.userId || ''));
-    if (u) active.add(u);
+function syncInAppTrackingForUser(io: Server, uid: string, sockets: PresenceSocket[]): void {
+  if (sockets.length === 0) {
+    forgetUserTracking(uid);
+    return;
   }
-  for (const uid of active) {
-    if (userHasBusyCallSocket(io, uid)) {
-      userAllBackgroundSince.delete(uid);
-      cancelForegroundAckForUser(uid);
-      continue;
-    }
-
-    let hasLegacy = false;
-    let allExplicitFalse = true;
-    let allBackgroundSinceCandidate = 0;
-    let sawSocket = false;
-    for (const s of io.sockets.sockets.values()) {
-      if (String((s as any)?.data?.userId || '') !== uid) continue;
-      sawSocket = true;
-      const tri = socketForegroundTriState(s);
-      if (tri === 'legacy') {
-        hasLegacy = true;
-        allExplicitFalse = false;
-      } else if (tri === 'true') {
-        allExplicitFalse = false;
-      } else {
-        const staleForegroundAt =
-          (s as any).data?.appForeground === true
-            ? socketForegroundLastSeenAt(s) + APP_FOREGROUND_HEARTBEAT_STALE_MS
-            : 0;
-        allBackgroundSinceCandidate = Math.max(
-          allBackgroundSinceCandidate,
-          staleForegroundAt > 0 ? Math.min(Date.now(), staleForegroundAt) : Date.now(),
-        );
-      }
-    }
-    if (!sawSocket) continue;
-
-    if (hasLegacy) {
-      userAllBackgroundSince.delete(uid);
-      cancelForegroundAckForUser(uid);
-      continue;
-    }
-    if (allExplicitFalse) {
-      cancelForegroundAckForUser(uid);
-      if (!userAllBackgroundSince.has(uid)) {
-        userAllBackgroundSince.set(uid, allBackgroundSinceCandidate || Date.now());
-      }
-      continue;
-    }
-    // Есть хотя бы один явный foreground:true — онлайн; таймер фона не трогаем здесь
+  if (userHasBusyCallSocket(io, uid, sockets)) {
+    userAllBackgroundSince.delete(uid);
+    cancelForegroundAckForUser(uid);
+    return;
   }
 
-  for (const k of [...userAllBackgroundSince.keys()]) {
-    if (!active.has(k)) userAllBackgroundSince.delete(k);
-  }
-  for (const k of [...foregroundAckTimers.keys()]) {
-    if (!active.has(k)) {
-      const t = foregroundAckTimers.get(k);
-      if (t) clearTimeout(t);
-      foregroundAckTimers.delete(k);
+  let hasLegacy = false;
+  let allExplicitFalse = true;
+  let allBackgroundSinceCandidate = 0;
+  for (const s of sockets) {
+    const tri = socketForegroundTriState(s);
+    if (tri === 'legacy') {
+      hasLegacy = true;
+      allExplicitFalse = false;
+    } else if (tri === 'true') {
+      allExplicitFalse = false;
+    } else {
+      const staleForegroundAt =
+        (s as any).data?.appForeground === true
+          ? socketForegroundLastSeenAt(s) + APP_FOREGROUND_HEARTBEAT_STALE_MS
+          : 0;
+      allBackgroundSinceCandidate = Math.max(
+        allBackgroundSinceCandidate,
+        staleForegroundAt > 0 ? Math.min(Date.now(), staleForegroundAt) : Date.now(),
+      );
     }
   }
-  for (const k of [...inAppOfflinePresenceTimers.keys()]) {
-    if (!active.has(k)) {
-      const t = inAppOfflinePresenceTimers.get(k);
-      if (t) clearTimeout(t);
-      inAppOfflinePresenceTimers.delete(k);
+
+  if (hasLegacy) {
+    userAllBackgroundSince.delete(uid);
+    cancelForegroundAckForUser(uid);
+    return;
+  }
+  if (allExplicitFalse) {
+    cancelForegroundAckForUser(uid);
+    if (!userAllBackgroundSince.has(uid)) {
+      userAllBackgroundSince.set(uid, allBackgroundSinceCandidate || Date.now());
     }
   }
-  for (const k of [...foregroundStalePresenceTimers.keys()]) {
-    if (!active.has(k)) {
-      const t = foregroundStalePresenceTimers.get(k);
-      if (t) clearTimeout(t);
-      foregroundStalePresenceTimers.delete(k);
-    }
-  }
+  // Есть хотя бы один явный foreground:true — онлайн; таймер фона не трогаем здесь
 }
 
 export function cancelInAppOfflinePresenceEmit(userId: string): void {
   const key = normalizeUid(userId);
   if (!key) return;
-  const t = inAppOfflinePresenceTimers.get(key);
-  if (t) clearTimeout(t);
-  inAppOfflinePresenceTimers.delete(key);
+  clearTimerFor(inAppOfflinePresenceTimers, key);
 }
 
 function cancelForegroundStalePresenceEmit(userId: string): void {
   const key = normalizeUid(userId);
   if (!key) return;
-  const t = foregroundStalePresenceTimers.get(key);
-  if (t) clearTimeout(t);
-  foregroundStalePresenceTimers.delete(key);
+  clearTimerFor(foregroundStalePresenceTimers, key);
 }
 
 /** Если foreground:true перестал подтверждаться, переслать друзьям актуальный список без разрыва сокета. */
@@ -219,8 +199,7 @@ function armForegroundStalePresenceEmit(io: Server, userId: string): void {
   cancelForegroundStalePresenceEmit(key);
 
   let newestSeenAt = 0;
-  for (const s of io.sockets.sockets.values()) {
-    if (String((s as any)?.data?.userId || '') !== key) continue;
+  for (const s of socketsOfUser(io, key)) {
     if ((s as any).data?.appForeground === true) {
       newestSeenAt = Math.max(newestSeenAt, socketForegroundLastSeenAt(s));
     }
@@ -242,7 +221,7 @@ export function armInAppOfflinePresenceEmit(io: Server, userId: string): void {
   if (!key) return;
   cancelInAppOfflinePresenceEmit(key);
   cancelForegroundStalePresenceEmit(key);
-  syncInAppTrackingForAllConnectedUsers(io);
+  syncInAppTrackingForUser(io, key, socketsOfUser(io, key));
   const since = userAllBackgroundSince.get(key);
   if (since == null) return;
   const elapsed = Date.now() - since;
@@ -262,23 +241,22 @@ export function armInAppOfflinePresenceEmit(io: Server, userId: string): void {
  */
 export function applyFastOfflineAfterCallIfAllSocketsBackground(io: Server, userId: string): void {
   const key = normalizeUid(userId);
-  if (!key || !hasAnySocketForUser(io, key)) return;
-  for (const s of io.sockets.sockets.values()) {
-    if (String((s as any)?.data?.userId || '') !== key) continue;
-    if ((s as any).data?.appForeground !== false) return;
-  }
+  if (!key) return;
+  const sockets = socketsOfUser(io, key);
+  if (sockets.length === 0) return;
+  if (sockets.some((s) => (s as any).data?.appForeground !== false)) return;
   cancelInAppOfflinePresenceEmit(key);
   userAllBackgroundSince.set(key, Date.now() - IN_APP_OFFLINE_DEBOUNCE_MS - 1);
   scheduleGlobalFriendPresenceEmit(io, key);
 }
 
-/** После syncInAppTrackingForAllConnectedUsers: онлайн ли пользователь «в приложении». */
-function isUserOnlineInApplicationAfterSync(io: Server, uid: string): boolean {
-  const key = normalizeUid(uid);
-  if (!key || !hasAnySocketForUser(io, key)) return false;
-  if (anySocketForegroundOrLegacy(io, key)) return true;
-  if (userHasBusyCallSocket(io, key)) return true;
-  const since = userAllBackgroundSince.get(key);
+/** Онлайн ли пользователь «в приложении» — по его собственным сокетам. */
+function evaluateUserOnline(io: Server, uid: string, sockets: PresenceSocket[]): boolean {
+  syncInAppTrackingForUser(io, uid, sockets);
+  if (sockets.length === 0) return false;
+  if (sockets.some((s) => socketForegroundTriState(s) !== 'false')) return true;
+  if (userHasBusyCallSocket(io, uid, sockets)) return true;
+  const since = userAllBackgroundSince.get(uid);
   if (since == null) return true;
   return Date.now() - since < IN_APP_OFFLINE_DEBOUNCE_MS;
 }
@@ -286,18 +264,27 @@ function isUserOnlineInApplicationAfterSync(io: Server, uid: string): boolean {
 function isUserOnlineInApplication(io: Server, uid: string): boolean {
   const key = normalizeUid(uid);
   if (!key) return false;
-  syncInAppTrackingForAllConnectedUsers(io);
-  return isUserOnlineInApplicationAfterSync(io, key);
+  return evaluateUserOnline(io, key, socketsOfUser(io, key));
 }
 
+/** Все, кого друзья видят онлайн. O(сокетов); заодно чистит отсчёты ушедших пользователей. */
 export function getFriendVisibleOnlineUserIds(io: Server): string[] {
-  syncInAppTrackingForAllConnectedUsers(io);
-  const uids = new Set<string>();
-  for (const s of io.sockets.sockets.values()) {
-    const u = normalizeUid(String((s as any)?.data?.userId || ''));
-    if (u) uids.add(u);
+  const byUser = socketsByConnectedUser(io);
+  for (const tracked of [
+    userAllBackgroundSince,
+    foregroundAckTimers,
+    inAppOfflinePresenceTimers,
+    foregroundStalePresenceTimers,
+  ] as Map<string, unknown>[]) {
+    for (const uid of [...tracked.keys()]) {
+      if (!byUser.has(uid)) forgetUserTracking(uid);
+    }
   }
-  return [...uids].filter((uid) => isUserOnlineInApplicationAfterSync(io, uid));
+  const online: string[] = [];
+  for (const [uid, sockets] of byUser) {
+    if (evaluateUserOnline(io, uid, sockets)) online.push(uid);
+  }
+  return online;
 }
 
 /** @deprecated используйте isUserOnlineInApplication — то же имя для HTTP/сокетов друзей */
@@ -321,8 +308,16 @@ async function emitFriendPresenceForUsers(io: Server, changedUserIds: string | s
   if (changed.length === 0) return;
 
   try {
-    syncInAppTrackingForAllConnectedUsers(io);
-    const online = new Set(getFriendVisibleOnlineUserIds(io));
+    // Только те, чей статус нужен получателям: раньше на каждое событие пересчитывались все.
+    const onlineMemo = new Map<string, boolean>();
+    const isOnline = (uid: string): boolean => {
+      let value = onlineMemo.get(uid);
+      if (value === undefined) {
+        value = isUserOnlineInApplication(io, uid);
+        onlineMemo.set(uid, value);
+      }
+      return value;
+    };
     const changedFriends = await loadFriendIdsForUsers(changed);
     const recipientIds = new Set<string>(changed);
 
@@ -334,8 +329,7 @@ async function emitFriendPresenceForUsers(io: Server, changedUserIds: string | s
     const recipientFriends = await loadFriendIdsForUsers([...recipientIds]);
     for (const recipientId of recipientIds) {
       const friends = recipientFriends.get(recipientId) || [];
-      const onlineFriends = friends.filter((friendId) => online.has(friendId));
-      emitPresenceSnapshotToUser(io, recipientId, onlineFriends);
+      emitPresenceSnapshotToUser(io, recipientId, friends.filter(isOnline));
     }
   } catch {
     // Presence is best-effort: skip noisy failures and let the next scheduled update heal state.
@@ -344,7 +338,7 @@ async function emitFriendPresenceForUsers(io: Server, changedUserIds: string | s
 
 export async function emitGlobalFriendPresence(io: Server): Promise<void> {
   try {
-    const recipientIds = getConnectedUserIds(io);
+    const recipientIds = [...socketsByConnectedUser(io).keys()];
     if (recipientIds.length === 0) return;
 
     const online = new Set(getFriendVisibleOnlineUserIds(io));
