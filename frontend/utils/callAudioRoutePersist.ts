@@ -370,6 +370,8 @@ export function isDirectCallVideoExpandAudioPreparedRecently(
 
 /** Явный «громкий» в video in-app PiP — только если плашка/persist сейчас громкий (не stale lock/toggle). */
 function readVideoInAppPiPExplicitSpeakerBeforeExpand(): boolean {
+  // Кнопка плашки пишет режим звонка; выбранное ухо не перебивается громкой из плашки.
+  if (readCallBuiltinRouteChoice() === 'EARPIECE') return false;
   const authoritative = normalizeInCallRoute(
     readInAppPiPAudioOutputRoute() ||
       readUserSelectedCallAudioRoute() ||

@@ -198,12 +198,10 @@ export const usePiP = ({
       
       const audioRoute = getAudioOutputRoute?.() || readInAppPiPAudioOutputRoute();
       const fromAudioOnlyUi = isInAudioOnlyCallUi();
-      const pipAudioRoute =
-        fromAudioOnlyUi
-          ? audioRoute || 'EARPIECE'
-          : audioRoute === 'EARPIECE'
-            ? 'SPEAKER_PHONE'
-            : audioRoute;
+      // Video → плашка: маршрут как есть — ухо остаётся ухом (режим звонка камера не меняет).
+      // Раньше EARPIECE → SPEAKER: плашка считала громкую явным выбором, и после system PiP /
+      // разворота звонок уходил на громкую.
+      const pipAudioRoute = fromAudioOnlyUi ? audioRoute || 'EARPIECE' : audioRoute;
       const muteLocal = resolvePiPLocalMutedState(micOn);
       const sessionCamOn =
         currentSession && typeof currentSession.getIsCamOn === 'function'
