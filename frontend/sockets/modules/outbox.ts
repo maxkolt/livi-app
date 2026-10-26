@@ -5,6 +5,7 @@ import { shared } from "./shared";
 import { socket } from "./socketCore";
 import { emitAck } from "./emit";
 import { postApiJson } from "./apiHttp";
+import { noteMessageOutboxPending } from "./outboxBackgroundDrain";
 import { ensureReauthBeforePrivilegedSocketOp } from "./reauth";
 import {
   E2eUnavailableError,
@@ -163,6 +164,7 @@ function notifyPendingChange(): void {
 
 function setQueuedMirror(items: MessageOutboxItem[]): void {
   pendingMirrorHydrated = true;
+  noteMessageOutboxPending(items.length > 0);
   const next = new Set<string>();
   for (const item of items) {
     if (item.id) next.add(item.id);

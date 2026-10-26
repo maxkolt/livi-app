@@ -193,6 +193,8 @@
       tools:replace="android:screenOrientation" />
     <!-- Исходящий вызов в фоне: WAV в динамике, уведомление, таймаут 20 сек -->
     <service android:name=".LiviOutgoingCallService" android:exported="false" android:foregroundServiceType="mediaPlayback"/>
+    <!-- Досылка очереди сообщений в фоне, когда есть сеть (JobScheduler). -->
+    <service android:name=".OutboxDrainJobService" android:exported="false" android:permission="android.permission.BIND_JOB_SERVICE"/>
     <!-- Входящий звонок: foreground-сервис типа phoneCall (Android 14+) — без ограничения камеры/микрофона при старте из фона; на старых версиях — specialUse -->
     <service android:name=".IncomingCallForegroundService" android:exported="false" android:foregroundServiceType="phoneCall|specialUse">
       <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="Display incoming video call screen over other apps"/>

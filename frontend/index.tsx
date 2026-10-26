@@ -50,6 +50,12 @@ import { isIncomingCallExpired } from './utils/callExpiry';
 // Promise не резолвится — задачу завершает натив, когда звонок закончился.
 AppRegistry.registerHeadlessTask('LiviCallJsTimersKeepAlive', () => () => new Promise<void>(() => {}));
 
+// Досылка очереди сообщений из фона: задание JobScheduler (OutboxDrainJobService) будит JS, когда есть сеть.
+AppRegistry.registerHeadlessTask('LiviOutboxDrain', () => async () => {
+  const { drainAllOutboxes } = require('./sockets/modules/outboxTriggers') as typeof import('./sockets/modules/outboxTriggers');
+  await drainAllOutboxes();
+});
+
 // Headless: один путь presentIncomingCall (Activity/system UI), без CallKeep.displayIncomingCall.
 AppRegistry.registerHeadlessTask('RNCallKeepBackgroundMessage', () => async (data: { type?: string; callId?: string; from?: string; fromNick?: string; ts?: number | string; expiresAt?: number | string } | null) => {
   if (Platform.OS !== 'android') return;

@@ -207,6 +207,22 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     }
   }
 
+  /**
+   * JS закрыл аудиосессию звонка (utils/callAudioSession). У рандома нет FGS, а маршрут ставит
+   * режим связи раньше InCallManager.start — тот запоминает его как «исходный» и после stop()
+   * возвращает: MODE_IN_COMMUNICATION держался, пока через ~6 с его не сбрасывала система.
+   */
+  @ReactMethod
+  fun scheduleCallAudioRelease() {
+    scheduleCallAudioReleaseStatic()
+  }
+
+  /** Очередь сообщений не пуста и приложение не на экране — см. OutboxDrainJobService. */
+  @ReactMethod
+  fun syncOutboxBackgroundDrain(pending: Boolean, inBackground: Boolean) {
+    OutboxDrainJobService.sync(reactApplicationContext, pending, inBackground)
+  }
+
   /** Для presence: сокет может жить в фоне, но друзьям показываем online только когда MainActivity реально foreground. */
   @ReactMethod
   fun isMainActivityForeground(promise: Promise) {
@@ -4082,7 +4098,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
      * устройство. Снимаем и то и другое, когда WebRTC уже остановил запись и воспроизведение, —
      * если за это время не начался новый звуковой сеанс.
      */
-    private fun scheduleCallAudioReleaseStatic() {
+    internal fun scheduleCallAudioReleaseStatic() {
       callAudioReleaseHandler.removeCallbacksAndMessages(callAudioReleaseToken)
       val epoch = callAudioEpoch
       for (delayMs in longArrayOf(1_500L, 5_000L)) {
@@ -4561,6 +4577,11 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     private const val KEY_PENDING_RETURN_AUDIO_ONLY = "pending_return_to_active_call_audio_only"
 
     private var reactContextRef: ReactApplicationContext? = null
+
+    /** Живой React-контекст для headless-задач из фона (null — JS не запущен). */
+    @JvmStatic
+    internal fun reactContextForBackgroundTask(): ReactApplicationContext? =
+      reactContextRef?.takeIf { it.hasActiveReactInstance() }
 
     /** Безопасная доставка device events (Home/PiP во время reload или destroy RN). */
     @JvmStatic
