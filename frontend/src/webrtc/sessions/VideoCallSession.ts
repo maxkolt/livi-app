@@ -6158,21 +6158,21 @@ export class VideoCallSession extends SimpleEventEmitter {
   }
 
   /**
-   * Creates a new local video track with current camSide without changing room state.
-   * Used by restartLocalCamera (flip) to support replaceTrack flow (same as Random Chat).
+   * Camera tracks for a recreate/flip: video only with the preferred preset, then the fallback.
+   * Some livekit-client builds are picky about `audio: false`, so the last resort creates
+   * audio+video; the caller stops or adopts the extra audio track (never grab the mic twice).
    */
-  private async createFreshLocalVideoTrack(context: string): Promise<LocalVideoTrack> {
-    const facingMode = this.camSide === 'front' ? 'user' : 'environment';
-    const preferred = getPreferredVideoCaptureOptions(facingMode);
-    logger.info('[VideoCallSession] Creating fresh local video track', { context, preferred: preferred.meta, camSide: this.camSide });
-
+  private async createCameraTracksWithFallback(
+    preferred: ReturnType<typeof getPreferredVideoCaptureOptions>,
+    context: string,
+  ): Promise<LocalTrack[]> {
     const tryCreate = async (opts: any) => createLocalTracks(opts);
-    let tracks: LocalTrack[] = [];
     try {
-      tracks = await tryCreate({ audio: false, video: preferred.primary });
+      // Preferred path: create video only (no audio churn).
+      return await tryCreate({ audio: false, video: preferred.primary });
     } catch (e1) {
       try {
-        tracks = await tryCreate({ audio: false, video: preferred.fallback || preferred.primary });
+        return await tryCreate({ audio: false, video: preferred.fallback || preferred.primary });
       } catch (e2) {
         logger.warn('[VideoCallSession] Video-only createLocalTracks failed; falling back to audio+video create', {
           context,
@@ -6181,12 +6181,24 @@ export class VideoCallSession extends SimpleEventEmitter {
           e2: (e2 as any)?.message || String(e2),
         });
         try {
-          tracks = await tryCreate({ audio: true, video: preferred.primary });
-        } catch (e3) {
-          tracks = await tryCreate({ audio: true, video: preferred.fallback || preferred.primary });
+          return await tryCreate({ audio: true, video: preferred.primary });
+        } catch {
+          return await tryCreate({ audio: true, video: preferred.fallback || preferred.primary });
         }
       }
     }
+  }
+
+  /**
+   * Creates a new local video track with current camSide without changing room state.
+   * Used by restartLocalCamera (flip) to support replaceTrack flow (same as Random Chat).
+   */
+  private async createFreshLocalVideoTrack(context: string): Promise<LocalVideoTrack> {
+    const facingMode = this.camSide === 'front' ? 'user' : 'environment';
+    const preferred = getPreferredVideoCaptureOptions(facingMode);
+    logger.info('[VideoCallSession] Creating fresh local video track', { context, preferred: preferred.meta, camSide: this.camSide });
+
+    const tracks = await this.createCameraTracksWithFallback(preferred, context);
 
     const newVideo = tracks.find((t) => t.kind === Track.Kind.Video) as LocalVideoTrack | undefined;
     if (!newVideo) {
@@ -6425,30 +6437,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       await new Promise((r) => setTimeout(r, releaseMs));
     }
 
-    const tryCreate = async (opts: any) => createLocalTracks(opts);
-    let tracks: LocalTrack[] = [];
-    try {
-      // Preferred path: create video only (no audio churn).
-      tracks = await tryCreate({ audio: false, video: preferred.primary });
-    } catch (e1) {
-      try {
-        tracks = await tryCreate({ audio: false, video: preferred.fallback || preferred.primary });
-      } catch (e2) {
-        // Some livekit-client builds are picky about `audio: false`. Fallback to creating audio+video,
-        // then immediately stop the extra audio track to avoid grabbing the microphone twice.
-        logger.warn('[VideoCallSession] Video-only createLocalTracks failed; falling back to audio+video create', {
-          context,
-          preferred: preferred.meta,
-          e1: (e1 as any)?.message || String(e1),
-          e2: (e2 as any)?.message || String(e2),
-        });
-        try {
-          tracks = await tryCreate({ audio: true, video: preferred.primary });
-        } catch (e3) {
-          tracks = await tryCreate({ audio: true, video: preferred.fallback || preferred.primary });
-        }
-      }
-    }
+    const tracks = await this.createCameraTracksWithFallback(preferred, context);
 
     const newVideo = tracks.find((t) => t.kind === Track.Kind.Video) as LocalVideoTrack | undefined;
     if (!newVideo) {

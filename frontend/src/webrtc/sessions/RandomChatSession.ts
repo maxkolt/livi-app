@@ -2134,7 +2134,6 @@ export class RandomChatSession extends SimpleEventEmitter {
       this.notifyCamStateChange(this.isCamOn);
       return;
     }
-    const prevTrackId = this.localVideoTrack?.mediaStreamTrack?.id;
     this.suppressLocalVideoEndedRecovery(reason === 'toggleCam' ? 'toggleCam' : 'recreate');
     
     // Останавливаем старый трек (сначала отключаем захват — снижает errorCode 4/5 на Android)
@@ -2145,88 +2144,8 @@ export class RandomChatSession extends SimpleEventEmitter {
       );
     }
     
-    const facingMode = this.camSide === 'front' ? 'user' : 'environment';
-    const preferred = getPreferredVideoCaptureOptions(facingMode);
-    logger.info('[RandomChatSession] Video capture preset (recreate)', { recreateReason: reason, ...preferred.meta });
-
-    let tracks: LocalTrack[] = [];
-    try {
-      tracks = await createLocalTracks({ audio: false, video: preferred.primary });
-    } catch (e1) {
-      logger.warn('[RandomChatSession] Failed to recreate local video track with preferred preset; retrying with fallback', {
-        reason,
-        error: (e1 as any)?.message || String(e1),
-        preferred: preferred.meta,
-      });
-      try {
-        tracks = await createLocalTracks({ audio: false, video: preferred.fallback || preferred.primary });
-      } catch (e2) {
-        logger.error('[RandomChatSession] Failed to recreate local video track (preferred + fallback)', {
-          reason,
-          preferred: preferred.meta,
-          error: (e2 as any)?.message || String(e2),
-        });
-        throw e2;
-      }
-    }
-
-    const newVideoTrack = tracks.find((t) => t.kind === Track.Kind.Video) as LocalVideoTrack | undefined;
-    if (!newVideoTrack) {
-      throw new Error('Failed to recreate local video track');
-    }
-    this.localVideoTrack = newVideoTrack;
-    
-    if (this.isCamOn && newVideoTrack.mediaStreamTrack) {
-      newVideoTrack.mediaStreamTrack.enabled = true;
-      try {
-        newVideoTrack.unmute();
-      } catch {}
-    } else if (!this.isCamOn && newVideoTrack.mediaStreamTrack) {
-      newVideoTrack.mediaStreamTrack.enabled = false;
-      try {
-        newVideoTrack.mute();
-      } catch {}
-    }
-    this.attachLocalVideoEndedListener(newVideoTrack);
-
-    if (!this.localStream) {
-      this.localStream = new MediaStream();
-    }
-
-    // Удаляем старые видео треки из localStream
-    try {
-      this.localStream.getVideoTracks().forEach((t) => {
-        try {
-          this.localStream?.removeTrack(t as any);
-        } catch {}
-      });
-    } catch {}
-
-    const mediaTrack = newVideoTrack.mediaStreamTrack;
-    if (mediaTrack) {
-      this.localStream.addTrack(mediaTrack as any);
-    }
-
-    // Убеждаемся, что аудио трек остается в localStream
-    if (this.localAudioTrack?.mediaStreamTrack) {
-      const hasAudio = this.localStream.getAudioTracks().some(
-        (t) => t.id === this.localAudioTrack?.mediaStreamTrack?.id
-      );
-      if (!hasAudio) {
-        this.localStream.addTrack(this.localAudioTrack.mediaStreamTrack as any);
-      }
-    }
-
-    // Обновляем состояние UI
-    this.notifyLocalStreamChange(this.localStream);
-    this.emit('localStream', this.localStream);
-    this.notifyCamStateChange(this.isCamOn);
-    
-    logger.info('[RandomChatSession] Local video track recreated', {
-      reason,
-      prevTrackId,
-      newTrackId: mediaTrack?.id,
-    });
+    const newVideoTrack = await this.createFreshLocalVideoTrack(reason);
+    this.swapLocalVideoTrack(newVideoTrack, reason);
   }
 
   private async createFreshLocalVideoTrack(reason: 'ended' | 'toggleCam' | 'stuck'): Promise<LocalVideoTrack> {
@@ -2240,6 +2159,7 @@ export class RandomChatSession extends SimpleEventEmitter {
 
     const facingMode = this.camSide === 'front' ? 'user' : 'environment';
     const preferred = getPreferredVideoCaptureOptions(facingMode);
+    logger.info('[RandomChatSession] Video capture preset', { createReason: reason, ...preferred.meta });
 
     let tracks: LocalTrack[] = [];
     try {

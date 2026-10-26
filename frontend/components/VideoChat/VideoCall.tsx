@@ -2083,7 +2083,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
   // Важно: callConnected = friendCallAccepted && remoteStream (не OR). Иначе при обрыве LiveKit
   // remoteStream обнуляется раньше, чем приходит call:ended — эффект снова шлёт busy:true, сервер
   // рассылает друзьям бейдж «занято» на секунды после завершения звонка.
-  useEffect(() => {
+  const isBusyInConnectedCall = (): boolean => {
     const session = sessionRef.current || (global as any).__webrtcSessionRef?.current;
     const callConnected = !!friendCallAccepted && !!remoteStream;
     const sessionEnded = !!(session && typeof session.isEnded === 'function' && session.isEnded());
@@ -2092,21 +2092,23 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       !!callEndedTransitionDoneRef.current ||
       !!wasFriendCallEnded ||
       !!isInactiveStateRef.current;
-    const hasActiveCall =
+    return (
       (!!roomId || !!callId || !!partnerId) &&
       !!started &&
       !isInactiveState &&
       !transitionDone &&
       callConnected &&
       !sessionEnded &&
-      !endingNow;
-    if (hasActiveCall) {
-      try {
-        const rid = (roomId || callId || '').trim();
-        emitPresenceUpdateIfChanged({ status: 'busy', ...(rid ? { roomId: rid } : {}) });
-      } catch (e) {
-        logger.warn('[VideoCall] Error sending presence:update busy:', e);
-      }
+      !endingNow
+    );
+  };
+  useEffect(() => {
+    if (!isBusyInConnectedCall()) return;
+    try {
+      const rid = (roomId || callId || '').trim();
+      emitPresenceUpdateIfChanged({ status: 'busy', ...(rid ? { roomId: rid } : {}) });
+    } catch (e) {
+      logger.warn('[VideoCall] Error sending presence:update busy:', e);
     }
   }, [roomId, callId, partnerId, isInactiveState, friendCallAccepted, remoteStream, started, wasFriendCallEnded]);
 
@@ -2122,29 +2124,12 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
   // При реконнекте сокета сервер может сбросить busy — переотправляем busy, если мы всё ещё в звонке
   useEffect(() => {
     const off = onConnected(() => {
-      const session = sessionRef.current || (global as any).__webrtcSessionRef?.current;
-      const callConnected = !!friendCallAccepted && !!remoteStream;
-      const sessionEnded = !!(session && typeof session.isEnded === 'function' && session.isEnded());
-      const endingNow = !!isEndingCallRef.current || (global as any).__endingCallInProgressRef?.current === true;
-      const transitionDone =
-        !!callEndedTransitionDoneRef.current ||
-        !!wasFriendCallEnded ||
-        !!isInactiveStateRef.current;
-      const hasActiveCall =
-        (!!roomId || !!callId || !!partnerId) &&
-        !!started &&
-        !isInactiveState &&
-        !transitionDone &&
-        callConnected &&
-        !sessionEnded &&
-        !endingNow;
-      if (hasActiveCall) {
-        try {
-          const rid = (roomId || callId || '').trim();
-          emitPresenceUpdateIfChanged({ status: 'busy', ...(rid ? { roomId: rid } : {}) }, { force: true });
-        } catch (e) {
-          logger.warn('[VideoCall] Error re-sending presence:update busy on connect', e);
-        }
+      if (!isBusyInConnectedCall()) return;
+      try {
+        const rid = (roomId || callId || '').trim();
+        emitPresenceUpdateIfChanged({ status: 'busy', ...(rid ? { roomId: rid } : {}) }, { force: true });
+      } catch (e) {
+        logger.warn('[VideoCall] Error re-sending presence:update busy on connect', e);
       }
     });
     return () => { try { off?.(); } catch {} };
@@ -7553,6 +7538,29 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     allowSystemPiPCompact &&
     (!pip.visible || pipSuspendedForSystem || pip.inSystemPiPMode || leavingForSystemPiP) &&
     (pip.pendingSystemPiP || pip.inSystemPiPMode || homeSystemPiPPending || leavingForSystemPiP);
+  // Общие пропсы видео в system PiP, главном и плавающем окне — копии не должны расходиться.
+  const localVideoProps = {
+    localStream,
+    camOn,
+    isFrontCamera: localCamSide === 'front',
+    localRenderKey,
+    lang,
+    localExternalHold: localExternalHoldUi,
+  };
+  const remoteVideoProps = {
+    remoteCamSide,
+    remoteMuted,
+    isInactiveState,
+    wasFriendCallEnded,
+    started,
+    loading,
+    remoteViewKey,
+    showFriendBadge: false,
+    lang,
+    session: sessionRef.current,
+    partnerExternalHold: partnerExternalHoldUi,
+    objectFit: 'cover' as const,
+  };
   if (systemPiPCompact) {
     // ДИАГНОСТИКА (временная): compact не должен рисоваться на переднем плане.
     try {
@@ -7627,30 +7635,12 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
             <RemoteVideo
               remoteStream={sessionRemoteStream}
               remoteCamOn={sessionRemoteCamOn}
-              remoteCamSide={remoteCamSide}
-              remoteMuted={remoteMuted}
-              isInactiveState={isInactiveState}
-              wasFriendCallEnded={wasFriendCallEnded}
-              started={started}
-              loading={loading}
-              remoteViewKey={remoteViewKey}
-              showFriendBadge={false}
-              lang={lang}
-              session={sessionRef.current}
+              {...remoteVideoProps}
               partnerInPiP={false}
-              partnerExternalHold={partnerExternalHoldUi}
               forceTextureView={true}
-              objectFit="cover"
             />
           ) : showSystemPiPLocal ? (
-            <LocalVideo
-              localStream={localStream}
-              camOn={camOn}
-              isFrontCamera={localCamSide === 'front'}
-              localRenderKey={localRenderKey}
-              lang={lang}
-              localExternalHold={localExternalHoldUi}
-            />
+            <LocalVideo {...localVideoProps} />
           ) : null}
           {showSystemPiPLocal && showSystemPiPRemote ? (
             <View
@@ -7658,12 +7648,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
               collapsable={false}
             >
               <LocalVideo
-                localStream={localStream}
-                camOn={camOn}
-                isFrontCamera={localCamSide === 'front'}
-                localRenderKey={localRenderKey}
-                lang={lang}
-                localExternalHold={localExternalHoldUi}
+                {...localVideoProps}
                 asPipOverlay
                 textureView={PIP_TEXTURE_VIEW}
               />
@@ -7738,33 +7723,15 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
               {/* Источник стекла кнопок: видео под капсулой и «свернуть» видно размытым. */}
               <BlurListSource sourceId={CALL_BLUR_VIDEO_SOURCE} style={StyleSheet.absoluteFill}>
               {mainIsLocal ? (
-                <LocalVideo
-                  localStream={localStream}
-                  camOn={camOn}
-                  isFrontCamera={localCamSide === 'front'}
-                  localRenderKey={localRenderKey}
-                  lang={lang}
-                  localExternalHold={localExternalHoldUi}
-                />
+                <LocalVideo {...localVideoProps} />
               ) : (
                 <RemoteVideo
                   remoteStream={currentRemoteStream}
                   remoteCamOn={remoteCamOn}
-                  remoteCamSide={remoteCamSide}
-                  remoteMuted={remoteMuted}
-                  isInactiveState={isInactiveState}
-                  wasFriendCallEnded={wasFriendCallEnded}
-                  started={started}
-                  loading={loading}
-                  remoteViewKey={remoteViewKey}
-                  showFriendBadge={false}
-                  lang={lang}
-                  session={sessionRef.current}
+                  {...remoteVideoProps}
                   partnerInPiP={partnerInPiP}
-                  partnerExternalHold={partnerExternalHoldUi}
                   forceTextureView={Platform.OS === 'android'}
                   glassTextureView
-                  objectFit="cover"
                 />
               )}
               </BlurListSource>
@@ -7828,31 +7795,15 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
                     <RemoteVideo
                       remoteStream={currentRemoteStream}
                       remoteCamOn={remoteCamOn}
-                      remoteCamSide={remoteCamSide}
-                      remoteMuted={remoteMuted}
-                      isInactiveState={isInactiveState}
-                      wasFriendCallEnded={wasFriendCallEnded}
-                      started={started}
-                      loading={loading}
-                      remoteViewKey={remoteViewKey}
-                      showFriendBadge={false}
-                      lang={lang}
-                      session={sessionRef.current}
+                      {...remoteVideoProps}
                       partnerInPiP={partnerInPiP}
-                      partnerExternalHold={partnerExternalHoldUi}
                       forceTextureView={Platform.OS === 'android'}
                       glassTextureView={PIP_TEXTURE_VIEW}
                       transparentBackground={PIP_TEXTURE_VIEW}
-                      objectFit="cover"
                     />
                   ) : (
                     <LocalVideo
-                      localStream={localStream}
-                      camOn={camOn}
-                      isFrontCamera={localCamSide === 'front'}
-                      localRenderKey={localRenderKey}
-                      lang={lang}
-                      localExternalHold={localExternalHoldUi}
+                      {...localVideoProps}
                       asPipOverlay
                       textureView={PIP_TEXTURE_VIEW}
                     />
