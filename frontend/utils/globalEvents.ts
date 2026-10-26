@@ -1,5 +1,6 @@
 import { NativeModules, Platform, AppState } from 'react-native';
 import { setPipVisible, setVideoCallActive } from './callRuntime';
+import { callLifecycle } from './callLifecycle';
 
 // Простой глобальный эмиттер событий без зависимостей
 // Используем для мгновенного обновления счетчиков пропущенных звонков на HomeScreen
@@ -294,6 +295,10 @@ export function emitCloseOutgoingCall(opts?: CloseOutgoingCallPayload) {
     reason: opts?.reason ?? 'external',
     callId: opts?.callId ?? null,
   };
+  // Дозвон закончился без ответа (X, таймаут, отказ). accepted/external звонок не завершают.
+  if (payload.reason === 'native_cancel' || payload.reason === 'timeout' || payload.reason === 'remote_closed') {
+    callLifecycle.ringEnded(payload.callId ?? null, `outgoing_${payload.reason}`);
+  }
   for (const l of closeOutgoingCallListeners) {
     try { (l as any)(payload); } catch {}
   }

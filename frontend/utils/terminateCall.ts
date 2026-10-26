@@ -30,6 +30,7 @@ import {
 } from '../sockets/socket';
 import { stopIncomingCallAlert } from './incomingCallAlert';
 import { logger } from './logger';
+import { callLifecycle } from './callLifecycle';
 
 /** Lazy: avoid cycle with pushNotifications ↔ terminateCall. */
 function clearCallNotificationsAsync(): void {
@@ -225,6 +226,24 @@ type TerminateCallOptions = {
 /**
  * Единая точка surface-teardown. Идемпотентна на коротком окне (callId+reason).
  */
+const RING_END_REASONS: ReadonlySet<TerminateCallReason> = new Set<TerminateCallReason>([
+  'outgoing_declined',
+  'outgoing_declined_socket',
+  'outgoing_canceled_local',
+  'outgoing_timeout',
+  'outgoing_ring_closed',
+  'outgoing_abort_keep_main',
+  'incoming_canceled',
+  'incoming_timeout',
+  'incoming_declined_local',
+]);
+
+/** outgoing_native_close (закрыть устаревший экран, в т.ч. перед повтором) и stale accept звонок не завершают. */
+function noteLifecycle(reason: TerminateCallReason, callId: string | null): void {
+  if (RING_END_REASONS.has(reason)) callLifecycle.ringEnded(callId, reason);
+  else if (reason === 'call_ended_surfaces' || reason === 'hangup_surfaces') callLifecycle.endRequested(callId, reason);
+}
+
 export function terminateCall(opts: TerminateCallOptions): void {
   const reason = opts.reason;
   const callId = String(opts.callId || '').trim();
@@ -247,6 +266,7 @@ export function terminateCall(opts: TerminateCallOptions): void {
     callId: callId || null,
     roomId: opts.roomId ? String(opts.roomId) : null,
   });
+  noteLifecycle(reason, callId || null);
 
   if (plan.callKeepEnd && callId) {
     try {

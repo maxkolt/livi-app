@@ -69,6 +69,7 @@ import { getFastStartVideoCaptureOptions, getPreferredVideoCaptureOptions } from
 import { buildCallEndSocketPayload } from '../../../utils/callEndPayload';
 import { getInstallAuthHeaders } from '../../../utils/installId';
 import { closeCallAudioSession } from '../../../utils/callAudioSession';
+import { callLifecycle, getCallLifecycle } from '../../../utils/callLifecycle';
 import { dismissSystemPiPAfterCallEnded } from '../../../utils/callKeep';
 import {
   forceAndroidSystemPiPPeerVideoVisible,
@@ -837,6 +838,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.prepareExternalHoldStateForCall(id);
     this.callId = id;
     this.partnerUserId = fromUserId;
+    callLifecycle.accepted(id, fromUserId, 'callee');
     this.resetCallFlowMetrics();
     this.notifyLoadingChange(true);
     setActiveVideoCall(true);
@@ -943,6 +945,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.prepareExternalHoldStateForCall(callId);
     this.callId = callId;
     this.partnerUserId = peerUserId;
+    callLifecycle.accepted(callId, peerUserId, 'caller');
     this.resetCallFlowMetrics();
     this.notifyLoadingChange(true);
     warmCallSignaling();
@@ -1040,6 +1043,8 @@ export class VideoCallSession extends SimpleEventEmitter {
       return;
     }
     this.endCallInProgress = true;
+    const lifecycleCallId = overrideCallId || this.callId;
+    callLifecycle.endRequested(lifecycleCallId, 'local');
     markCallEndedLocally(overrideCallId || this.callId);
     this.clearRemoteAudioSilenceUiTimer();
     this.stopRemoteAudioPacketWatch();
@@ -1174,6 +1179,8 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.config.setWasFriendCallEnded?.(true);
     this.emit('callEnded');
     this.clearGlobalSessionRefIfCurrent('endCall');
+    // Сессия отпущена — звонок для приложения закончен (cleanup экрана может и не прийти: PiP, remount).
+    callLifecycle.ended(lifecycleCallId, 'session:endCall');
     logger.info('[VideoCallSession] ✅ Состояние сессии сброшено и callEnded событие отправлено');
     this.endCallInProgress = false;
   }
@@ -2585,6 +2592,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.resetRemoteState();
     this.stopLocalTracks();
     closeCallAudioSession('direct', 'session:cleanup');
+    callLifecycle.ended(this.callId, 'session:cleanup');
     this.unregisterSocketHandlers('cleanup');
   }
 
@@ -4635,6 +4643,8 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.callId = callId;
     this.partnerId = partnerId;
     this.partnerUserId = partnerUserId;
+    // У callee фаза уже connecting (acceptCall) — для него это no-op; для caller — момент ответа.
+    if (callId) callLifecycle.accepted(callId, partnerUserId, getCallLifecycle().role ?? 'caller');
 
     this.notifyRoomIdChange(roomId);
     this.notifyPartnerIdChange(partnerId);
@@ -5114,6 +5124,8 @@ export class VideoCallSession extends SimpleEventEmitter {
       }
       return;
     }
+    const lifecycleCallId = endEvent?.callId || this.callId;
+    callLifecycle.endRequested(lifecycleCallId, 'remote');
 
     // До applyCallEndedGlobalRefsOnce / goBack: блокируем system PiP на onUserLeaveHint (remote end гонка с Home leaveHint).
     if (Platform.OS === 'android') {
@@ -5222,6 +5234,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     // Компоненты должны обработать завершение звонка независимо от состояния сессии
     this.emit('callEnded');
     this.clearGlobalSessionRefIfCurrent('callEnded');
+    callLifecycle.ended(lifecycleCallId, 'session:callEnded');
   }
 
   private clearPendingRemoteDisconnectTimer(): void {
@@ -7492,6 +7505,7 @@ export class VideoCallSession extends SimpleEventEmitter {
         videoTracks: p.videoTrackPublications.size,
       }));
         
+      callLifecycle.mediaConnected(this.callId);
       logger.info('[VideoCallSession] Successfully connected to LiveKit', {
         roomName: room.name,
         state: room.state,

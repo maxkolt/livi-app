@@ -50,6 +50,7 @@ import { forceCallLogUiNow, recordCallLog, recordCancelledCall, recordNoAnswerCa
 import { markChatCallBubbleEligible } from './screens/chat/chatCallEvents';
 import { getInstallId, getInstallSecret } from './utils/installId';
 import { closeCallAudioSession } from './utils/callAudioSession';
+import { callLifecycle } from './utils/callLifecycle';
 import { notifyIncomingShare, parseNativeShareItems, pullPendingShareFromNative } from './utils/incomingShare';
 import { ensureInitialMediaPermissions, ensureCallMediaPermissions, needsNearbyDevicesPermission, requestNearbyDevicesPermissionAndroid } from './utils/mediaPermissions';
 import { probeNativeCallAudioRoutes } from './utils/nativeCallAudioProbe';
@@ -1450,6 +1451,7 @@ function AppContent() {
         String(getIncomingCallScreenState().fromUserId || '').trim() ||
         String((global as any).__lastIncomingFromUserIdRef?.current || '').trim();
       repeatNativeCallSignal('decline', payload?.callId);
+      callLifecycle.ringEnded(payload?.callId ? String(payload.callId) : null, 'incoming_declined_native');
       incomingCallIdRef.current = null;
      
       try { setIncomingCallScreenVisible(false); } catch {}
@@ -3252,6 +3254,7 @@ function AppContent() {
     // Android: ACK шлёт сама IncomingCallActivity по HTTP в onCreate — по факту показа.
     // iOS: CallKit рисует экран сам, подтверждаем после displayIncomingCall ниже.
     incomingCallIdRef.current = d.callId;
+    callLifecycle.incomingPresented(d.callId, String(d.from || ''));
     try { Keyboard.dismiss(); } catch {}
 
     // Единый UI (presentIncomingCall):
@@ -3848,6 +3851,7 @@ function AppContent() {
       const myUserId = getCurrentUserId?.() ?? '';
       const isCallee = callerId && myUserId && callerId !== myUserId;
       const callIdStr = (d as any)?.callId ? String((d as any).callId) : '';
+      callLifecycle.ringEnded(callIdStr || null, isCallee ? 'incoming_canceled' : 'outgoing_canceled');
       // Инициатор уже закрыл Outgoing локально — server echo не должен гонять Home/nav/callLog.
       if (!isCallee) {
         try {
@@ -4587,6 +4591,7 @@ function AppContent() {
         !wasCanceled &&
         ((callerId && myUserId && callerId === myUserId) ||
           (!!callId && !!outgoingCallId && callId === outgoingCallId));
+      callLifecycle.ringEnded(callId || null, isCaller ? 'outgoing_timeout' : 'incoming_timeout');
 
       // Инициатору timeout надо зафиксировать до закрытия native UI: общий incoming teardown
       // эмитит remote_closed и раньше успевал превратить строку в «Отменённый звонок».

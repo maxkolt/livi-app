@@ -1,6 +1,7 @@
 import { markCallPerf } from "../../utils/callPerfTrace";
 import { getInstallAuthHeaders } from "../../utils/installId";
 import { logger } from "../../utils/logger";
+import { callLifecycle } from "../../utils/callLifecycle";
 import { prewarmApiConnections } from "../../utils/warmConnections";
 import { API_BASE, CALL_SIGNALING_CONNECT_MS, isOid } from "./constants";
 import { emitAck, ensureSocketConnected, warmCallSignaling } from "./emit";
@@ -31,6 +32,8 @@ export function startCall(toUserId: string, options?: { media?: DirectCallMedia;
   // Звонки всегда E2EE: отдельный эфемерный ключ не зависит от настроек E2EE чата.
   const e2ee = createOutgoingCallE2eeDeclaration(to);
   payload.e2ee = e2ee;
+
+  callLifecycle.outgoingStarted(to);
 
   const viaSocket = () =>
     emitAck<{ ok: boolean; callId?: string; error?: string }>(
@@ -96,11 +99,18 @@ export function startCall(toUserId: string, options?: { media?: DirectCallMedia;
       const bound = await bindOutgoingCallE2ee(result.callId, to, e2ee);
       if (!bound) {
         logger.error("[call:initiate] failed to bind call E2EE key", { callId: result.callId });
+        callLifecycle.ringEnded(null, "call_e2ee_key_unavailable");
         return { ok: false, error: "call_e2ee_key_unavailable" };
       }
+      callLifecycle.outgoingCallIdAssigned(result.callId);
+    } else {
+      callLifecycle.ringEnded(null, `initiate_failed:${result?.error || "unknown"}`);
     }
     return result;
-  })();
+  })().catch((e) => {
+    callLifecycle.ringEnded(null, "initiate_failed:network");
+    throw e;
+  });
 }
 
 export function cancelCall(callId: string) {
