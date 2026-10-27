@@ -99,10 +99,12 @@ class IncomingCallActivity : AppCompatActivity() {
         android.util.Log.d(TAG, "IncomingCallActivity onCreate: isAlive=true isInForeground=(set in onResume) callId=$callIdFromIntent")
         // Сначала broadcast: FGS делает stopForeground(DETACH) и оставляет уведомление в шторке (без отмены — иначе ломаем
         // foreground до detach и на части OEM обрывается рингтон FGS/Activity).
+        val autoAnswer = intent.getBooleanExtra(EXTRA_AUTO_ANSWER, false)
         if (callIdFromIntent.isNotEmpty()) {
             val shown = Intent(IncomingCallForegroundService.ACTION_INCOMING_CALL_ACTIVITY_SHOWN).apply {
                 setPackage(packageName)
                 putExtra(LiviFirebaseMessagingService.EXTRA_CALL_ID, callIdFromIntent)
+                putExtra(IncomingCallForegroundService.EXTRA_ANSWERING, autoAnswer)
             }
             sendBroadcast(shown)
             // Fallback: на некоторых устройствах broadcast может уйти до регистрации receiver в сервисе.
@@ -123,6 +125,8 @@ class IncomingCallActivity : AppCompatActivity() {
         // exactly like on OutgoingCallActivity.
         EdgeToEdgeHelper.apply(this)
         setContentView(R.layout.activity_incoming_call)
+        // «Принять» в плашке: экран входящего не показываем ни кадра — сразу фон передачи в звонок.
+        if (autoAnswer) paintAnswerHandoffCover()
         findViewById<View>(R.id.incoming_call_content)?.let { EdgeToEdgeHelper.applySystemBarInsets(it) }
         // Пауза + transient media focus на время входящего/звонка (рингтон остаётся на STREAM_RING).
         window?.decorView?.post {
@@ -246,7 +250,7 @@ class IncomingCallActivity : AppCompatActivity() {
         })
 
         // «Принять» в плашке уведомления: тот же ответ, что кнопкой на этом экране.
-        if (intent.getBooleanExtra(EXTRA_AUTO_ANSWER, false)) {
+        if (autoAnswer) {
             acceptButton.post { acceptButton.performClick() }
         }
     }
@@ -521,6 +525,7 @@ class IncomingCallActivity : AppCompatActivity() {
             putExtra(MainActivity.EXTRA_PENDING_ANSWER_FROM_NICK, fromNick)
             // Нативный фон сцены поверх RN до VideoCall.onLayout — без этого мелькает Home.
             putExtra(MainActivity.EXTRA_INCOMING_ANSWER_COVER, true)
+            putExtra(MainActivity.EXTRA_ANSWER_LAUNCHED_AT, android.os.SystemClock.elapsedRealtime())
         }
         MainActivity.armIncomingAnswerCover = true
         startActivity(intent)

@@ -401,15 +401,27 @@ class MainActivity : ReactActivity() {
   }
 
   private fun maybeShowIncomingAnswerCoverFromIntent(intent: Intent?) {
-    val fromExtra = intent?.getBooleanExtra(EXTRA_INCOMING_ANSWER_COVER, false) == true
+    val hasExtra = intent?.getBooleanExtra(EXTRA_INCOMING_ANSWER_COVER, false) == true
+    if (hasExtra) {
+      try { intent?.removeExtra(EXTRA_INCOMING_ANSWER_COVER) } catch (_: Exception) {}
+    }
+    val fromExtra = hasExtra && isFreshAnswerLaunch(intent)
     // Не использовать hasPendingAnswerCall(): pending живёт до getAndClear и при каждом
     // bringMain/onNewIntent снова накрывал бы VideoCall чёрной крышкой после accept.
     if (fromExtra || armIncomingAnswerCover) {
-      if (fromExtra) {
-        try { intent?.removeExtra(EXTRA_INCOMING_ANSWER_COVER) } catch (_: Exception) {}
-      }
       showIncomingAnswerCover()
     }
+  }
+
+  /**
+   * Extras ответа живут в intent задачи: после смерти процесса система пересоздаёт Main с тем же
+   * intent (removeExtra меняет только нашу копию), и ответ на давно закончившийся звонок снова
+   * открывал экран звонка под чёрной крышкой. Свежий запуск ответа — не старше 20 с (холодному
+   * старту хватает нескольких секунд); звонок, уже отмеченный завершённым, не принимаем вовсе.
+   */
+  private fun isFreshAnswerLaunch(i: Intent?): Boolean {
+    val at = i?.getLongExtra(EXTRA_ANSWER_LAUNCHED_AT, 0L) ?: 0L
+    return at > 0L && SystemClock.elapsedRealtime() - at in 0..ANSWER_LAUNCH_MAX_AGE_MS
   }
 
   private fun showSystemPiPBackdropForCapture() {
@@ -861,10 +873,15 @@ class MainActivity : ReactActivity() {
     val from = i.getStringExtra(EXTRA_PENDING_ANSWER_FROM) ?: return false
     if (callId.isBlank() || from.isBlank()) return false
     val fromNick = i.getStringExtra(EXTRA_PENDING_ANSWER_FROM_NICK) ?: ""
-    LiviAppModule.setPendingAnswerCall(callId, from, fromNick)
+    val fresh = isFreshAnswerLaunch(i) && !EndedCallIds.isEnded(this, callId)
     i.removeExtra(EXTRA_PENDING_ANSWER_CALL_ID)
     i.removeExtra(EXTRA_PENDING_ANSWER_FROM)
     i.removeExtra(EXTRA_PENDING_ANSWER_FROM_NICK)
+    if (!fresh) {
+      android.util.Log.w("MainActivity", "pending answer from a stale task intent ignored callId=$callId")
+      return false
+    }
+    LiviAppModule.setPendingAnswerCall(callId, from, fromNick)
     return true
   }
 
@@ -1693,6 +1710,9 @@ class MainActivity : ReactActivity() {
     const val EXTRA_PENDING_ANSWER_FROM_NICK = "pending_answer_from_nick"
     /** Accept входящего: показать фон сцены поверх RN до VideoCall.onLayout. */
     const val EXTRA_INCOMING_ANSWER_COVER = "incoming_answer_cover"
+    /** SystemClock.elapsedRealtime() запуска ответа: старые extras из intent задачи не применять. */
+    const val EXTRA_ANSWER_LAUNCHED_AT = "answer_launched_at"
+    private const val ANSWER_LAUNCH_MAX_AGE_MS = 20_000L
     const val EXTRA_OPEN_TAB_FRIENDS = "open_tab_friends"
     /** Тап по уведомлению о непрочитанном сообщении → welcome Chat. */
     const val EXTRA_OPEN_WELCOME_CHAT = "open_welcome_chat"

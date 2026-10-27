@@ -153,13 +153,14 @@ class IncomingCallForegroundService : Service() {
         activityShownReceiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, i: Intent?) {
                 val shownCallId = i?.getStringExtra(LiviFirebaseMessagingService.EXTRA_CALL_ID) ?: return
+                val answering = i.getBooleanExtra(EXTRA_ANSWERING, false)
                 if (shownCallId == currentCallId) {
                     handler.post {
                         if (shownCallId != currentCallId) return@post
                         // IncomingCallActivity ведёт ring window и missed — FGS-таймаут не нужен (иначе двойной missed).
                         timeoutRunnable?.let { handler.removeCallbacks(it) }
                         timeoutRunnable = null
-                        detachForegroundAfterIncomingActivityVisible()
+                        detachForegroundAfterIncomingActivityVisible(answering)
                     }
                 }
             }
@@ -341,7 +342,8 @@ class IncomingCallForegroundService : Service() {
      * MediaPlayer FGS не останавливаем здесь: иначе на keyguard звук обрывается до успешного старта
      * плеера в Activity — IncomingCallActivity вызывает [LiviAppModule.stopRingtonePlayerForCallKeepOnly] после play().
      */
-    private fun detachForegroundAfterIncomingActivityVisible() {
+    /** [answering]: экран открыт кнопкой «Принять» в плашке — уведомление просто убираем, без тихой строчки. */
+    private fun detachForegroundAfterIncomingActivityVisible(answering: Boolean = false) {
         if (didDetachAfterActivityShown) return
         didDetachAfterActivityShown = true
         cancelPendingActivityLaunches()
@@ -354,7 +356,7 @@ class IncomingCallForegroundService : Service() {
         // Нативный экран на месте — в шторке только тихая строчка: плашка с кнопками поверх него не нужна.
         // До DETACH, пока уведомление ещё принадлежит FGS (CallStyle без FGS система не держит).
         val shownCallId = currentCallId
-        if (!shownCallId.isNullOrEmpty()) {
+        if (!answering && !shownCallId.isNullOrEmpty()) {
             try {
                 (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).notify(
                     LiviFirebaseMessagingService.NOTIFICATION_ID_INCOMING_CALL,
@@ -370,7 +372,10 @@ class IncomingCallForegroundService : Service() {
             }
         }
         try {
-            ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_DETACH)
+            ServiceCompat.stopForeground(
+                this,
+                if (answering) ServiceCompat.STOP_FOREGROUND_REMOVE else ServiceCompat.STOP_FOREGROUND_DETACH,
+            )
         } catch (e: Exception) {
             Log.w(TAG, "[INCOMING_FGS] stopForeground DETACH failed", e)
         }
@@ -516,6 +521,8 @@ class IncomingCallForegroundService : Service() {
         const val EXTRA_FROM_NICK = "fromNick"
         /** Broadcast: IncomingCallActivity открылась, сервис может снять уведомление и остановиться */
         const val ACTION_INCOMING_CALL_ACTIVITY_SHOWN = "com.kolt12max.livi.INCOMING_CALL_ACTIVITY_SHOWN"
+        /** В ACTION_INCOMING_CALL_ACTIVITY_SHOWN: экран открыт кнопкой «Принять» в плашке и сразу отвечает. */
+        const val EXTRA_ANSWERING = "answering"
         /** Режим «только heads-up»: не запускать IncomingCallActivity, уведомление с кнопками Принять/Отклонить */
         const val EXTRA_HEADS_UP_ONLY = "heads_up_only"
         /** Тихий режим: без heads-up (только иконка/шторка). */

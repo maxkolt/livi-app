@@ -3899,6 +3899,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
         )
         if (withAnswerCover) {
           putExtra(MainActivity.EXTRA_INCOMING_ANSWER_COVER, true)
+          putExtra(MainActivity.EXTRA_ANSWER_LAUNCHED_AT, SystemClock.elapsedRealtime())
         }
       }
       Handler(Looper.getMainLooper()).post {
