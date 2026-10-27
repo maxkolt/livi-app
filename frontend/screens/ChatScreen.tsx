@@ -1348,13 +1348,21 @@ export default function ChatScreen({ route, navigation }: Props) {
   /**
    * progress×(−ime) + (1−p)×(−nav).
    * ime из WindowInsets (логи: kc=0, ime=363) — единственный рабочий источник высоты.
+   * Аппаратная или плавающая клавиатура почти не занимает низ (ime≈0): открытая не опускает
+   * композер ниже закрытой — под полосу жестов, где нижняя половина кнопок не нажимается.
    */
+  const androidMinImeLift = Math.max(0, androidPinnedNavInset) + ANDROID_COMPOSER_NAV_GAP;
+  const androidImeLiftAnim = androidImeLiftTargetAnim.interpolate({
+    inputRange: [androidMinImeLift, androidMinImeLift + 1],
+    outputRange: [androidMinImeLift, androidMinImeLift + 1],
+    extrapolateLeft: 'clamp',
+  });
   const androidDockKeyboardTranslateY = emojiPanelOpen
     ? 0
     : Animated.add(
         Animated.multiply(
           keyboardAnimation.progress,
-          Animated.add(Animated.multiply(androidImeLiftTargetAnim, -1), ANDROID_COMPOSER_NAV_GAP),
+          Animated.add(Animated.multiply(androidImeLiftAnim, -1), ANDROID_COMPOSER_NAV_GAP),
         ),
         Animated.multiply(
           Animated.add(1, Animated.multiply(keyboardAnimation.progress, -1)),
