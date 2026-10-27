@@ -284,6 +284,9 @@ dependencies {
     implementation("me.leolin:ShortcutBadger:1.1.22@aar")
     // Block Store: ключ сквозного шифрования чата переживает переустановку (LiviKeyVaultModule).
     implementation("com.google.android.gms:play-services-auth-blockstore:16.4.0")
+    // Play Integrity: вердикт при перепривязке установки после переустановки (LiviIntegrityModule).
+    // 1.5.0 — та же play-services-basement 18.4.0, что уже в сборке (1.6.0 тянет 18.9.0).
+    implementation("com.google.android.play:integrity:1.5.0")
 
     def isGifEnabled = (findProperty('expo.gif.enabled') ?: "") == "true";
     def isWebpEnabled = (findProperty('expo.webp.enabled') ?: "") == "true";

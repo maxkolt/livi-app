@@ -676,6 +676,10 @@ socket.on("connect", async () => {
   syncAppVisibilityAfterConnect();
   setTimeout(syncAppVisibilityAfterConnect, 250);
   __flushPendingRtcSignals();
+  // Выборка Play Integrity раз в неделю (после переустановки отчёт шлёт identity:attach).
+  if (shared.currentUserId) {
+    void import("../../utils/playIntegrity").then((m) => m.reportInstallIntegrityIfDue()).catch(() => {});
+  }
   // После reconnect сервер сбрасывает chat:viewing — восстанавливаем, если пользователь всё ещё в переписке.
   try {
     const peer = (global as any).__currentChatPeerId;

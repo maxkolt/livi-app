@@ -25,6 +25,7 @@ import messagesRouter from './routes/messages';
 import moderationRouter from './routes/moderation';
 import cosmeticsRouter from './routes/cosmetics';
 import fliqRouter from './routes/fliq';
+import integrityRouter from './routes/integrity';
 import { startFliqCollector } from './utils/fliqCollector';
 import registerFriendSockets from './sockets/friends';
 import registerIdentitySockets, { bindUser as bindUserIdentity } from './sockets/identity';
@@ -510,6 +511,7 @@ app.use('/api', moderationRouter);
 app.set('io', io);
 app.use('/api', cosmeticsRouter);
 app.use('/api', fliqRouter);
+app.use('/api', integrityRouter);
 
 // Stream utility убран - больше не используется
 

@@ -13,6 +13,7 @@ class LiviAppPackage : ReactPackage {
       LiviCryptoModule(reactContext),
       LiviKeyVaultModule(reactContext),
       LiviCallKeepAliveModule(reactContext),
+      LiviIntegrityModule(reactContext),
     )
   }
 

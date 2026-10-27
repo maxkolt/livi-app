@@ -14,6 +14,8 @@ interface IInstall {
   secretRotatedAt?: Date;
   /** Первый HTTP-запрос с верным секретом: дальше REST без секрета для установки отклоняется. */
   httpSecretSeenAt?: Date;
+  /** Последний отчёт Play Integrity (routes/integrity.ts): сводка вердикта или ошибка. Только наблюдение. */
+  integrity?: Record<string, unknown>;
 }
 
 const InstallSchema = new Schema<IInstall>(
@@ -23,6 +25,7 @@ const InstallSchema = new Schema<IInstall>(
     installSecretHash: { type: String, required: false },
     secretRotatedAt: { type: Date, required: false },
     httpSecretSeenAt: { type: Date, required: false },
+    integrity: { type: Schema.Types.Mixed, required: false },
   },
   { timestamps: true, collection: 'installs' }
 );

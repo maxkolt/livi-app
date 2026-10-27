@@ -14,15 +14,20 @@ import { getSocketInstance, socket } from "./socketCore";
 const USER_EXISTS_CACHE_TTL_TRUE = 30000;
 const USER_EXISTS_CACHE_TTL_FALSE = 1500;
 
-function identityAttach(payload: {
+async function identityAttach(payload: {
   installId?: string;
   installSecret?: string | null;
   profile?: { nick?: string; avatarUrl?: string };
 }) {
-  return emitAck<{ ok: boolean; userId?: string; error?: string }>(
+  const response = await emitAck<{ ok: boolean; userId?: string; error?: string }>(
     "identity:attach",
     payload,
   );
+  // Установка привязана (и после переустановки секрет уже перепривязан) — отчёт Play Integrity в фоне.
+  if (response?.ok) {
+    void import("../../utils/playIntegrity").then((m) => m.reportInstallIntegrityIfDue()).catch(() => {});
+  }
+  return response;
 }
 
 export const attachIdentity = identityAttach;

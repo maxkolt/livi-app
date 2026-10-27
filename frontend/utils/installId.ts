@@ -23,6 +23,12 @@ function randomHex(byteLength: number): string {
 let installSecretLoadPromise: Promise<string | null> | null = null;
 /** Прочитанный секрет: его шлёт каждый HTTP-запрос, а чтение SecureStore — расшифровка в Keystore. */
 let installSecretCache: string | null = null;
+/** Секрет создан в этом запуске: первая установка или переустановка (SecureStore её не переживает). */
+let installSecretCreatedThisRun = false;
+
+export function wasInstallSecretCreatedThisRun(): boolean {
+  return installSecretCreatedThisRun;
+}
 
 /** Возвращает (создавая при первом вызове) секрет установки. На web возвращает null —
  * SecureStore недоступен, эти клиенты остаются в legacy-режиме (без installSecret). */
@@ -36,6 +42,7 @@ export async function getInstallSecret(): Promise<string | null> {
         if (!secret) {
           secret = randomHex(32); // 256 бит энтропии
           await SecureStore.setItemAsync(SECRET_KEY, secret);
+          installSecretCreatedThisRun = true;
         }
         installSecretCache = secret;
         return secret;
