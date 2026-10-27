@@ -38,7 +38,12 @@ KEY="$(env_value LIVEKIT_API_KEY)"
 SECRET="$(env_value LIVEKIT_API_SECRET)"
 [ -n "$KEY" ] && [ -n "$SECRET" ] || { echo "LIVEKIT_API_KEY/SECRET not found in $BACKEND_ENV" >&2; exit 1; }
 
-command -v livekit-server >/dev/null || curl -sSL https://get.livekit.io | bash
+# Pinned: the version that runs on the box since 2026-10-07. get.livekit.io installs whatever is latest,
+# so a reinstall could silently change the SFU under live calls. Bump this on purpose, after a test call.
+LIVEKIT_VERSION="${LIVEKIT_VERSION:-1.13.8}"
+command -v livekit-server >/dev/null || curl -fsSL \
+  "https://github.com/livekit/livekit/releases/download/v${LIVEKIT_VERSION}/livekit_${LIVEKIT_VERSION}_linux_amd64.tar.gz" \
+  | tar -xz -C /usr/local/bin livekit-server
 id livekit >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/nologin livekit
 
 mkdir -p /etc/livekit

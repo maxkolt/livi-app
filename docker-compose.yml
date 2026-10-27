@@ -28,7 +28,7 @@ services:
       start_period: 40s
 
   livekit-sfu:
-    image: livekit/livekit-server:latest
+    image: livekit/livekit-server:v1.13.8
     restart: unless-stopped
     stop_grace_period: 10s
     env_file:
