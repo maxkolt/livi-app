@@ -20,6 +20,10 @@ class DeclineCallReceiver : BroadcastReceiver() {
         if (intent?.action != ACTION_DECLINE_CALL) return
         val callId = intent.getStringExtra(EXTRA_CALL_ID) ?: return
         EndedCallIds.add(context, callId)
+        // JS здесь не работает — запись «Отменённый звонок» в истории добавит App при открытии.
+        intent.getStringExtra(EXTRA_FROM)?.let { from ->
+            LiviAppModule.addPendingDeclinedCall(context, from, System.currentTimeMillis())
+        }
         (context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager)?.cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_INCOMING_CALL)
         context.stopService(Intent(context, IncomingCallForegroundService::class.java))
         val cancelIntent = Intent(LiviFirebaseMessagingService.ACTION_CALL_CANCELED).apply {
@@ -88,5 +92,7 @@ class DeclineCallReceiver : BroadcastReceiver() {
         private const val TAG = "DeclineCallReceiver"
         const val ACTION_DECLINE_CALL = "com.kolt12max.livi.DECLINE_CALL"
         const val EXTRA_CALL_ID = "callId"
+        /** userId звонящего: для «Отменённого звонка» в истории (см. LiviAppModule.addPendingDeclinedCall). */
+        const val EXTRA_FROM = "from"
     }
 }

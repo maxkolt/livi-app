@@ -1514,7 +1514,8 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 REQUEST_INCOMING_DECLINE,
                 Intent(context, DeclineCallReceiver::class.java)
                     .setAction(DeclineCallReceiver.ACTION_DECLINE_CALL)
-                    .putExtra(DeclineCallReceiver.EXTRA_CALL_ID, callId),
+                    .putExtra(DeclineCallReceiver.EXTRA_CALL_ID, callId)
+                    .putExtra(DeclineCallReceiver.EXTRA_FROM, from),
                 flags
             )
             val caller = Person.Builder().setName(callerName).setImportant(true).build()

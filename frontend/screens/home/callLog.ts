@@ -298,9 +298,26 @@ export function recordCallLog(
  */
 export function recordCancelledCall(
   peerIdRaw: string,
-  opts?: { deferNotifyMs?: number; silent?: boolean },
+  opts?: { deferNotifyMs?: number; silent?: boolean; at?: number },
 ): void {
   recordOutgoingFinalCall(peerIdRaw, 'cancelled', opts);
+}
+
+/**
+ * «Отклонить» в плашке уведомления проходит без JS (DeclineCallReceiver): нативная очередь
+ * «userId|epochMs» (LiviAppModule.getAndClearPendingDeclinedCalls) — те же «Отменённые звонки»,
+ * что и при отказе с нативного экрана, со временем самого отказа.
+ */
+export function recordPendingDeclinedCalls(entries: string[]): void {
+  let recorded = false;
+  for (const raw of entries) {
+    const [peerId, atRaw] = String(raw || '').split('|');
+    if (!peerId) continue;
+    const at = Number(atRaw);
+    recordCancelledCall(peerId, { silent: true, ...(Number.isFinite(at) && at > 0 ? { at } : {}) });
+    recorded = true;
+  }
+  if (recorded) forceCallLogUiNow('declined_from_notification');
 }
 
 /** Таймаут исходящего дозвона: исходящий → «Нет ответа». */
@@ -314,12 +331,13 @@ export function recordNoAnswerCall(
 function recordOutgoingFinalCall(
   peerIdRaw: string,
   direction: 'cancelled' | 'no_answer',
-  opts?: { deferNotifyMs?: number; silent?: boolean },
+  opts?: { deferNotifyMs?: number; silent?: boolean; at?: number },
 ): void {
   const peerId = String(peerIdRaw || '').trim();
   if (!peerId) return;
   const uid = currentUid();
-  const now = Date.now();
+  // at — время события, если записываем его позже (отказ из уведомления без JS).
+  const now = opts?.at ?? Date.now();
   const deferNotifyMs = opts?.deferNotifyMs;
   const silent = opts?.silent === true;
 
@@ -367,7 +385,12 @@ function recordOutgoingFinalCall(
         direction,
         at: now,
       };
-      next = [entry, ...prev].slice(0, MAX_ENTRIES);
+      // Список — от новых к старым; запись задним числом встаёт на своё место по времени.
+      const insertAt = prev.findIndex((item) => item.at <= now);
+      next = (insertAt < 0 ? [...prev, entry] : [...prev.slice(0, insertAt), entry, ...prev.slice(insertAt)]).slice(
+        0,
+        MAX_ENTRIES,
+      );
     }
     memory = next;
     memoryUid = uid;

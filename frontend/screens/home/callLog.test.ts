@@ -24,6 +24,7 @@ import {
   recordCallLog,
   recordCancelledCall,
   recordNoAnswerCall,
+  recordPendingDeclinedCalls,
   subscribeCallLog,
 } from './callLog';
 
@@ -79,5 +80,20 @@ describe('local call log', () => {
     const peerRows = getCallLogSnapshot().filter((entry) => entry.peerId === peerId);
     expect(peerRows).toHaveLength(1);
     expect(peerRows[0]?.direction).toBe('no_answer');
+  });
+
+  it('отказ из уведомления без JS записывается задним числом на своё место по времени (без времени — сейчас)', () => {
+    const declinedPeer = '507f191e810c19729de860ee';
+    const laterPeer = '507f191e810c19729de860ef';
+    const declinedAt = Date.now() - 60_000;
+    recordCallLog({ peerId: laterPeer, direction: 'incoming', at: Date.now() - 1_000 });
+
+    recordPendingDeclinedCalls([`${declinedPeer}|${declinedAt}`, '507f191e810c19729de860f0', '']);
+
+    const rows = getCallLogSnapshot();
+    const declined = rows.find((entry) => entry.peerId === declinedPeer);
+    expect(declined).toMatchObject({ direction: 'cancelled', at: declinedAt });
+    expect(rows.findIndex((entry) => entry.peerId === laterPeer)).toBeLessThan(rows.indexOf(declined!));
+    expect(rows.find((entry) => entry.peerId === '507f191e810c19729de860f0')?.direction).toBe('cancelled');
   });
 });

@@ -46,7 +46,7 @@ import SystemPiPLogoLayer from "./src/pip/SystemPiPLogoLayer";
 import SystemPiPCaptureHost from "./src/pip/SystemPiPCaptureHost";
 import type { RootStackParamList } from "./navigation/types";
 import { addNotificationListeners, ensureInitialNotificationPermissions, openIncomingCallScreen, openAnswerCallScreen, handleDeclineCallFromDeepLink, registerAndSendPushToken, clearCallRelatedNotificationsAndSyncBadge, syncAppBadgeFromMissedCount, recordMissedCallForUser, applyPendingMissedCallsFromNative, getMissedCountByUserFromNative } from './utils/pushNotifications';
-import { forceCallLogUiNow, recordCallLog, recordCancelledCall, recordNoAnswerCall } from './screens/home/callLog';
+import { forceCallLogUiNow, recordCallLog, recordCancelledCall, recordNoAnswerCall, recordPendingDeclinedCalls } from './screens/home/callLog';
 import { markChatCallBubbleEligible } from './screens/chat/chatCallEvents';
 import { getInstallId, getInstallSecret } from './utils/installId';
 import { closeCallAudioSession } from './utils/callAudioSession';
@@ -2297,6 +2297,8 @@ function AppContent() {
         if (cancelled) return;
         (async () => {
           try {
+            const declined = (await (LiviAppModule?.getAndClearPendingDeclinedCalls?.() ?? Promise.resolve([]))) as string[];
+            if (declined?.length && !cancelled) recordPendingDeclinedCalls(declined);
             const arr = (await (LiviAppModule?.getAndClearPendingMissedCalls?.() ?? Promise.resolve([]))) as string[];
             if (arr?.length && !cancelled) {
               await applyPendingMissedCallsFromNative(arr);
@@ -3767,6 +3769,10 @@ function AppContent() {
               rememberExpectedCallAccepted(callId, 'app-active-pending-call-accepted', 60_000);
               try { requestCallAcceptedWithRetry(callId, { reason: 'app-active-pending' }); } catch {}
             }
+          });
+          // Отклонённые кнопкой в плашке уведомления, пока JS не работал, — «Отменённый звонок» в истории.
+          LiviAppModule?.getAndClearPendingDeclinedCalls?.()?.then?.((arr: string[]) => {
+            if (arr?.length) recordPendingDeclinedCalls(arr);
           });
           // Пропущенные, показанные из нативного кода (FCM call_ended) — обновить счётчик и бейдж (без дубля, если уже учли по сокету)
           LiviAppModule?.getAndClearPendingMissedCalls?.()?.then?.((arr: string[]) => {

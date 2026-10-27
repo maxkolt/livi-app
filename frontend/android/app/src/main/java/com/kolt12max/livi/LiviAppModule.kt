@@ -2684,6 +2684,18 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     }
   }
 
+  /** Отклонённые кнопкой в плашке уведомления, пока JS не работал: ["userId|epochMs", ...] для истории звонков. */
+  @ReactMethod
+  fun getAndClearPendingDeclinedCalls(promise: Promise) {
+    try {
+      val arr = Arguments.createArray()
+      getAndClearPendingDeclinedCalls(reactApplicationContext).forEach { arr.pushString(it) }
+      promise.resolve(arr)
+    } catch (e: Exception) {
+      promise.resolve(Arguments.createArray())
+    }
+  }
+
   /** Удалить userId из списка pending пропущенных (дедуп: после инкремента по сокету call:timeout не считать повторно при getAndClearPendingMissedCalls). */
   @ReactMethod
   fun removePendingMissedCall(userId: String) {
@@ -4529,6 +4541,8 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       } catch (_: Exception) {}
     }
     const val PREFS_CALL = "LiviCallPrefs"
+    private const val PREFS_PENDING_DECLINED = "LiviPendingDeclined"
+    private const val KEY_PENDING_DECLINED = "calls"
     private const val PREFS_PENDING_MISSED = "LiviPendingMissed"
     private const val KEY_PENDING_MISSED_IDS = "user_ids"
     /** FCM message while JS background — userId для мгновенной точки на вкладке Chat при resume. */
@@ -4707,6 +4721,28 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       val list = if (current.isEmpty()) mutableListOf<String>() else current.split(',').toMutableList()
       list.add(userId.trim())
       prefs.edit().putString(KEY_PENDING_MISSED_IDS, list.joinToString(",")).apply()
+    }
+
+    /**
+     * «Отклонить» в плашке уведомления (DeclineCallReceiver) проходит без JS — «Отменённый звонок» попадёт
+     * в историю при следующем открытии приложения, со временем самого отказа.
+     */
+    @JvmStatic
+    fun addPendingDeclinedCall(context: Context, userId: String, atMs: Long) {
+      if (userId.isBlank()) return
+      val prefs = context.getSharedPreferences(PREFS_PENDING_DECLINED, Context.MODE_PRIVATE)
+      val current = prefs.getString(KEY_PENDING_DECLINED, "") ?: ""
+      val list = if (current.isEmpty()) mutableListOf<String>() else current.split(',').toMutableList()
+      list.add("${userId.trim()}|$atMs")
+      prefs.edit().putString(KEY_PENDING_DECLINED, list.takeLast(20).joinToString(",")).apply()
+    }
+
+    @JvmStatic
+    fun getAndClearPendingDeclinedCalls(context: Context): List<String> {
+      val prefs = context.getSharedPreferences(PREFS_PENDING_DECLINED, Context.MODE_PRIVATE)
+      val current = prefs.getString(KEY_PENDING_DECLINED, "") ?: ""
+      prefs.edit().remove(KEY_PENDING_DECLINED).apply()
+      return if (current.isEmpty()) emptyList() else current.split(',').map { it.trim() }.filter { it.isNotEmpty() }
     }
 
     @JvmStatic
