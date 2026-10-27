@@ -1,6 +1,5 @@
 import { AppState, NativeModules, Platform } from 'react-native';
-import { getCallLifecycle, isCallMediaLive } from './callLifecycle';
-import { logger } from './logger';
+import { shadowCompareWithLifecycle } from './callLifecycleTelemetry';
 import {
   type InCallAudioRoute,
   isExternalHeadsetRoute,
@@ -333,18 +332,23 @@ function isOngoingCallSessionByFlags(): boolean {
 
 /**
  * Перевод на машину состояний (utils/callLifecycle), шаг 1: старый ответ по флагам остаётся
- * действующим, расхождения с машиной пишутся в лог (раз на смену пары значений). Переключение —
- * когда расхождений на реальных звонках не останется.
+ * действующим, расхождения с машиной уходят в релизную телеметрию (раз на смену пары значений).
+ * «Идёт звонок» у машины = медиа принято/соединено; дозвон и входящий флаги тоже не считали.
+ * Переключение — когда расхождений на реальных звонках не останется.
  */
-let lastShadowMismatchKey = '';
 function shadowCompareOngoing(legacy: boolean): void {
-  const lc = getCallLifecycle();
-  // «Идёт звонок» здесь = медиа принято/соединено; дозвон и входящий флаги тоже не считали.
-  const machine = isCallMediaLive();
-  const key = legacy === machine ? '' : `${legacy}|${lc.phase}|${lc.callId ?? ''}`;
-  if (key === lastShadowMismatchKey) return;
-  lastShadowMismatchKey = key;
-  if (key) logger.warn('[callLifecycle] shadow mismatch isOngoingCallSession', { legacy, phase: lc.phase, callId: lc.callId });
+  shadowCompareWithLifecycle('isOngoingCallSession', legacy, describeOngoingCallFlags);
+}
+
+function describeOngoingCallFlags(): Record<string, unknown> {
+  const session = getWebrtcSession();
+  return {
+    endingInProgress: isEndingCallInProgress(),
+    endedFromPiPNoOpen: isCallEndedFromPiPNoOpen(),
+    videoCallActiveFalse: isVideoCallActiveExplicitlyFalse(),
+    session: !session ? 'none' : typeof session.isEnded === 'function' && session.isEnded() ? 'ended' : 'live',
+    videoCallActive: isVideoCallActive(),
+  };
 }
 
 /** InCallManager.start уже поднят (не делать stop/start при remount VideoCall). */

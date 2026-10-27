@@ -1,10 +1,13 @@
 import './polyfills/ensureCoreJsPolyfills';
 import { safeRegisterLiveKitGlobals } from './livekit/safeRegisterGlobals';
 import { installCallRuntimeBridges } from './utils/callRuntime';
+import { installCallOutcomeTelemetry } from './utils/callLifecycleTelemetry';
 import { trackReleaseError } from './utils/telemetry';
 
 // Пункт 6: lifecycle/policy флаги звонка — callRuntime; global.__*Ref только bridge.
 installCallRuntimeBridges();
+// call_outcome на каждый звонок другу: доля состоявшихся и время до медиа (см. callLifecycleTelemetry).
+installCallOutcomeTelemetry();
 
 // Dev: глушим deprecation-шум до импорта App/expo-av (иначе warn успевает проскочить).
 if (__DEV__) {
