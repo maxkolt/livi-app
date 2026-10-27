@@ -1,6 +1,25 @@
---- a/android/src/main/java/com/reactnativekeyboardcontroller/views/EdgeToEdgeReactViewGroup.kt	2026-10-04 09:16:47
-+++ b/android/src/main/java/com/reactnativekeyboardcontroller/views/EdgeToEdgeReactViewGroup.kt	2026-10-04 09:16:47
-@@ -112,17 +112,21 @@
+diff --git a/node_modules/react-native-keyboard-controller/android/src/main/java/com/reactnativekeyboardcontroller/views/EdgeToEdgeReactViewGroup.kt b/node_modules/react-native-keyboard-controller/android/src/main/java/com/reactnativekeyboardcontroller/views/EdgeToEdgeReactViewGroup.kt
+index 003890b..841af45 100644
+--- a/node_modules/react-native-keyboard-controller/android/src/main/java/com/reactnativekeyboardcontroller/views/EdgeToEdgeReactViewGroup.kt
++++ b/node_modules/react-native-keyboard-controller/android/src/main/java/com/reactnativekeyboardcontroller/views/EdgeToEdgeReactViewGroup.kt
+@@ -10,6 +10,7 @@ import androidx.core.view.ViewCompat
+ import androidx.core.view.WindowCompat
+ import androidx.core.view.WindowInsetsAnimationCompat
+ import androidx.core.view.WindowInsetsCompat
++import com.facebook.react.bridge.LifecycleEventListener
+ import com.facebook.react.uimanager.ThemedReactContext
+ import com.facebook.react.views.view.ReactViewGroup
+ import com.reactnativekeyboardcontroller.extensions.content
+@@ -59,6 +60,8 @@ class EdgeToEdgeReactViewGroup(
+   private var eventView: ReactViewGroup? = null
+   private var wasMounted = false
+   internal var callback: KeyboardAnimationCallback? = null
++  // LiVi: смонтировались до onResume (холодный старт при выключенном экране) — Activity ещё нет.
++  private var pendingResumeListener: LifecycleEventListener? = null
+   private val config =
+     KeyboardAnimationCallbackConfig(
+       persistentInsetTypes = WindowInsetsCompat.Type.systemBars(),
+@@ -112,17 +115,21 @@ class EdgeToEdgeReactViewGroup(
  
          val shouldApplyZeroPaddingTop = !active || this.isStatusBarTranslucent
          val shouldApplyZeroPaddingBottom = !active || this.isNavigationBarTranslucent
@@ -24,3 +43,52 @@
            if (shouldApplyZeroPaddingBottom) {
              0
            } else {
+@@ -176,9 +183,40 @@ class EdgeToEdgeReactViewGroup(
+       }
+     } else {
+       Logger.w(TAG, "Can not setup keyboard animation listener, since `currentActivity` is null")
++      // LiVi: без повтора клавиатура до перезапуска закрывала поле ввода — подключаемся
++      // на первом onResume, когда Activity появится.
++      waitForActivity()
+     }
+   }
+ 
++  private fun waitForActivity() {
++    if (pendingResumeListener != null) return
++    val listener =
++      object : LifecycleEventListener {
++        override fun onHostResume() {
++          clearPendingResume()
++          if (active && reactContext.currentActivity != null) {
++            setupWindowInsets()
++            setupKeyboardCallbacks()
++            requestApplyInsetsWhenAttached()
++          }
++        }
++
++        override fun onHostPause() = Unit
++
++        override fun onHostDestroy() {
++          clearPendingResume()
++        }
++      }
++    pendingResumeListener = listener
++    reactContext.addLifecycleEventListener(listener)
++  }
++
++  private fun clearPendingResume() {
++    pendingResumeListener?.let { reactContext.removeLifecycleEventListener(it) }
++    pendingResumeListener = null
++  }
++
+   private fun removeKeyboardCallbacks() {
+     callback?.destroy()
+ 
+@@ -217,6 +255,7 @@ class EdgeToEdgeReactViewGroup(
+   }
+ 
+   private fun deactivate() {
++    this.clearPendingResume()
+     this.removeKeyboardCallbacks()
+     modalAttachedWatcher.disable()
+   }
