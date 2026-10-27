@@ -1,5 +1,7 @@
 package com.kolt12max.livi
 
+import android.app.KeyguardManager
+import android.app.Notification
 import android.app.NotificationManager
 import android.app.Service
 import android.content.BroadcastReceiver
@@ -11,6 +13,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.ServiceCompat
 
@@ -135,7 +138,7 @@ class IncomingCallForegroundService : Service() {
         // иначе (редко): уведомление с setFullScreenIntent — может дать heads-up поверх UI.
         val notification = when {
             silentNotification -> LiviFirebaseMessagingService.buildIncomingCallNotificationSilent(this, callId, from, fromNick)
-            headsUpOnly -> LiviFirebaseMessagingService.buildIncomingCallNotificationHeadsUpOnly(this, callId, from, fromNick)
+            headsUpOnly -> LiviFirebaseMessagingService.buildIncomingCallNotificationWithActions(this, callId, from, fromNick, fullScreen = false)
             else -> buildIncomingCallNotificationResolved(callId, from, fromNick)
         }
         // Для Android 10+ используем PHONE_CALL как основной тип call-FGS.
@@ -348,6 +351,24 @@ class IncomingCallForegroundService : Service() {
             try { unregisterReceiver(it) } catch (_: Exception) {}
         }
         activityShownReceiver = null
+        // Нативный экран на месте — в шторке только тихая строчка: плашка с кнопками поверх него не нужна.
+        // До DETACH, пока уведомление ещё принадлежит FGS (CallStyle без FGS система не держит).
+        val shownCallId = currentCallId
+        if (!shownCallId.isNullOrEmpty()) {
+            try {
+                (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).notify(
+                    LiviFirebaseMessagingService.NOTIFICATION_ID_INCOMING_CALL,
+                    LiviFirebaseMessagingService.buildIncomingCallNotificationSilent(
+                        this,
+                        shownCallId,
+                        currentFrom.orEmpty(),
+                        currentFromNick.orEmpty(),
+                    )
+                )
+            } catch (e: Exception) {
+                Log.w(TAG, "[INCOMING_FGS] silent notification after activity shown failed", e)
+            }
+        }
         try {
             ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_DETACH)
         } catch (e: Exception) {
@@ -369,12 +390,29 @@ class IncomingCallForegroundService : Service() {
         } catch (_: Exception) { true }
     }
 
-    private fun buildIncomingCallNotificationResolved(callId: String, from: String, fromNick: String) =
-        if (canShowFullScreenIncoming()) {
+    /**
+     * Заблокированный или погашенный экран и FSI разрешён — система сама поднимет нативный экран входящего.
+     * Иначе нативного экрана может не быть: на разблокированном экране FSI система показывает плашкой,
+     * а фоновый старт активити блокирует. Тогда плашка звонка с кнопками «Отклонить» / «Принять».
+     */
+    private fun buildIncomingCallNotificationResolved(callId: String, from: String, fromNick: String): Notification {
+        val canFullScreen = canShowFullScreenIncoming()
+        return if (canFullScreen && !isScreenOnAndUnlocked()) {
             LiviFirebaseMessagingService.buildIncomingCallNotification(this, callId, from, fromNick)
         } else {
-            LiviFirebaseMessagingService.buildIncomingCallNotificationHeadsUpOnly(this, callId, from, fromNick)
+            LiviFirebaseMessagingService.buildIncomingCallNotificationWithActions(this, callId, from, fromNick, canFullScreen)
         }
+    }
+
+    private fun isScreenOnAndUnlocked(): Boolean {
+        return try {
+            val interactive = (getSystemService(Context.POWER_SERVICE) as PowerManager).isInteractive
+            val locked = (getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager).isKeyguardLocked
+            interactive && !locked
+        } catch (_: Exception) {
+            false
+        }
+    }
 
     private fun promoteForegroundIfNeeded(
         callId: String,
@@ -386,7 +424,7 @@ class IncomingCallForegroundService : Service() {
         if (didPromoteForeground) return
         val notification = when {
             silentNotification -> LiviFirebaseMessagingService.buildIncomingCallNotificationSilent(this, callId, from, fromNick)
-            headsUpOnly -> LiviFirebaseMessagingService.buildIncomingCallNotificationHeadsUpOnly(this, callId, from, fromNick)
+            headsUpOnly -> LiviFirebaseMessagingService.buildIncomingCallNotificationWithActions(this, callId, from, fromNick, fullScreen = false)
             else -> buildIncomingCallNotificationResolved(callId, from, fromNick)
         }
         val fgsType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {

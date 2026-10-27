@@ -244,6 +244,11 @@ class IncomingCallActivity : AppCompatActivity() {
                 moveTaskToBack(true)
             }
         })
+
+        // «Принять» в плашке уведомления: тот же ответ, что кнопкой на этом экране.
+        if (intent.getBooleanExtra(EXTRA_AUTO_ANSWER, false)) {
+            acceptButton.post { acceptButton.performClick() }
+        }
     }
 
     override fun onResume() {
@@ -552,6 +557,13 @@ class IncomingCallActivity : AppCompatActivity() {
                 (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_INCOMING_CALL)
             }
             closeIncomingScreen(cid.ifEmpty { null }, bringMainOnDismiss = false)
+            return
+        }
+        // «Принять» в плашке, когда экран уже жив (свёрнут в шторку): отвечаем на этот же звонок.
+        if (intent.getBooleanExtra(EXTRA_AUTO_ANSWER, false) &&
+            intent.getStringExtra(EXTRA_CALL_ID) == currentCallId
+        ) {
+            findViewById<ImageButton>(R.id.btn_accept)?.let { button -> button.post { button.performClick() } }
         }
     }
 
@@ -946,6 +958,8 @@ class IncomingCallActivity : AppCompatActivity() {
         const val EXTRA_JUST_CLOSE = "just_close"
         /** Закрытие входящего (таймаут/отмена): вернуть MainActivity только если true (пользователь был в приложении). */
         const val EXTRA_RETURN_MAIN_ON_DISMISS = "returnMainOnDismiss"
+        /** Открыт кнопкой «Принять» в плашке уведомления: сразу ответить (см. buildIncomingCallNotificationWithActions). */
+        const val EXTRA_AUTO_ANSWER = "autoAnswer"
         const val ACTION_CALL_ANSWERED = "com.kolt12max.livi.CALL_ANSWERED"
         /** true пока нативный экран входящего на экране (защита от heads-up поверх него). */
         @JvmField

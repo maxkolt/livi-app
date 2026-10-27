@@ -1476,6 +1476,63 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
         }
 
         private const val REQUEST_CONTENT = 2003
+        private const val REQUEST_INCOMING_ANSWER = 2004
+        private const val REQUEST_INCOMING_DECLINE = 2005
+
+        /**
+         * Нативный экран входящего не поднялся (разблокированный экран: система блокирует фоновый старт и
+         * full-screen intent показывает плашкой; или FSI запрещён на 14+) — плашка звонка с кнопками.
+         * «Принять» открывает экран входящего и отвечает тем же кодом, что кнопка на нём; «Отклонить» —
+         * DeclineCallReceiver без открытия приложения. Только как уведомление FGS: CallStyle без FGS и
+         * без full-screen intent система не принимает.
+         */
+        @JvmStatic
+        fun buildIncomingCallNotificationWithActions(
+            context: Context,
+            callId: String,
+            from: String,
+            fromNick: String,
+            fullScreen: Boolean,
+        ): Notification {
+            val callerName = fromNick.ifEmpty { AppLocale.str(context, R.string.incoming_call_unknown) }
+            val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            val openPending = PendingIntent.getActivity(
+                context,
+                NOTIFICATION_ID_INCOMING_CALL,
+                buildIncomingCallActivityIntent(context, callId, from, fromNick),
+                flags
+            )
+            val answerPending = PendingIntent.getActivity(
+                context,
+                REQUEST_INCOMING_ANSWER,
+                buildIncomingCallActivityIntent(context, callId, from, fromNick)
+                    .putExtra(IncomingCallActivity.EXTRA_AUTO_ANSWER, true),
+                flags
+            )
+            val declinePending = PendingIntent.getBroadcast(
+                context,
+                REQUEST_INCOMING_DECLINE,
+                Intent(context, DeclineCallReceiver::class.java)
+                    .setAction(DeclineCallReceiver.ACTION_DECLINE_CALL)
+                    .putExtra(DeclineCallReceiver.EXTRA_CALL_ID, callId),
+                flags
+            )
+            val caller = Person.Builder().setName(callerName).setImportant(true).build()
+            val builder = NotificationCompat.Builder(context, CHANNEL_ID_CALLS_VISUAL)
+                .setSmallIcon(getSafeSmallIconRes(context, android.R.drawable.ic_menu_call))
+                .setContentTitle(callerName)
+                .setContentText(AppLocale.str(context, R.string.incoming_call_title))
+                .setContentIntent(openPending)
+                .setStyle(NotificationCompat.CallStyle.forIncomingCall(caller, declinePending, answerPending))
+                .setCategory(NotificationCompat.CATEGORY_CALL)
+                .setOngoing(true)
+                .setOnlyAlertOnce(true)
+                .setTimeoutAfter(45_000)
+                .setPriority(NotificationCompat.PRIORITY_MAX)
+                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            if (fullScreen) builder.setFullScreenIntent(openPending, true)
+            return builder.build()
+        }
 
         /** Постоянное уведомление (heads-up): LiVi, имя звонящего, «Входящий видеозвонок». Без кнопок. */
         @JvmStatic
