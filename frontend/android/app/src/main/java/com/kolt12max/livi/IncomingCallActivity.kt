@@ -209,6 +209,9 @@ class IncomingCallActivity : AppCompatActivity() {
             clearIncomingTimeout()
             stopCallRingtone()
             stopRepeatingVibration()
+            // Экран мог открыться без FGS и без JS (приложение убито, а старт активити разрешён): режим
+            // MODE_RINGTONE, взятый под мелодию, тогда никто не возвращал — телефон так в нём и оставался.
+            try { LiviAppModule.clearIncomingRingtoneAudioMode(applicationContext) } catch (_: Exception) {}
             closingForCompletion = true
             try {
                 LiviAppModule.releaseBackgroundMediaSuppressionStatic(applicationContext)
@@ -332,6 +335,10 @@ class IncomingCallActivity : AppCompatActivity() {
         if (closingForCompletion) {
             LiviOngoingCallHelper.clearOngoingCall(applicationContext)
             (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_INCOMING_CALL)
+            // Звонок закончился без ответа: вернуть режим AudioManager, взятый под рингтон (см. decline).
+            if (!acceptInProgress) {
+                try { LiviAppModule.clearIncomingRingtoneAudioMode(applicationContext) } catch (_: Exception) {}
+            }
         } else if (minimizedToShade) {
             // Keep ongoing incoming state + shade notification so user can reopen screen.
             minimizeIncomingToShade()
