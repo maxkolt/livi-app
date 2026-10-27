@@ -238,8 +238,11 @@ const CHAT_READ_TICK_COLOR = 'hsl(108, 53.10%, 35.10%)';
 /** Компактная шапка чата: контент ближе к системной строке, как в Telegram. */
 const CHAT_HEADER_H = 48;
 const CHAT_HEADER_TOP_PADDING = 6 + APP_TOP_CONTENT_GAP;
-/** Last non-zero Android navigation inset survives ChatScreen remounts/resume. */
-let lastStableAndroidNavInset = 0;
+/**
+ * Last non-zero Android navigation inset survives ChatScreen remounts/resume — per orientation:
+ * in landscape the navigation sits at the side and bottom = 0 is real, not a transient frame.
+ */
+const lastStableAndroidNavInset: Record<'portrait' | 'landscape', number> = { portrait: 0, landscape: 0 };
 /** Текст и плейсхолдер «Сообщение» начинаются с одного отступа от кнопки эмодзи. */
 const COMPOSER_TEXT_INSET_LEFT = 6;
 /**
@@ -590,16 +593,28 @@ export default function ChatScreen({ route, navigation }: Props) {
   const androidImeDockLogAtRef = useRef(0);
   const safeAreaBottomRef = useRef(insets.bottom);
   safeAreaBottomRef.current = insets.bottom;
+  const navOrientation: 'portrait' | 'landscape' =
+    windowDims.width > windowDims.height ? 'landscape' : 'portrait';
+  const navOrientationRef = useRef(navOrientation);
+  navOrientationRef.current = navOrientation;
   const initialAndroidNavInset = resolveStableAndroidNavInset(
-    lastStableAndroidNavInset,
+    lastStableAndroidNavInset[navOrientation],
     insets.bottom,
   );
   const androidPinnedNavInsetRef = useRef(initialAndroidNavInset);
+  const pinnedNavOrientationRef = useRef(navOrientation);
   const [androidPinnedNavInset, setAndroidPinnedNavInset] = useState(initialAndroidNavInset);
 
   const syncAndroidPinnedNavInset = React.useCallback((nextRaw: number) => {
-    const next = resolveStableAndroidNavInset(androidPinnedNavInsetRef.current, nextRaw);
-    if (next > 1) lastStableAndroidNavInset = next;
+    const orientation = navOrientationRef.current;
+    // Повернули экран — прежний отступ из другой ориентации не держим.
+    const previous =
+      pinnedNavOrientationRef.current === orientation
+        ? androidPinnedNavInsetRef.current
+        : lastStableAndroidNavInset[orientation];
+    pinnedNavOrientationRef.current = orientation;
+    const next = resolveStableAndroidNavInset(previous, nextRaw);
+    if (next > 1) lastStableAndroidNavInset[orientation] = next;
     if (Math.abs(androidPinnedNavInsetRef.current - next) <= 1) return;
     androidPinnedNavInsetRef.current = next;
     setAndroidPinnedNavInset(next);
@@ -719,7 +734,7 @@ export default function ChatScreen({ route, navigation }: Props) {
     if (androidImeInset > 0 || keyboardVisible) return;
     if (androidKeyboardProgressRef.current > 0.02) return;
     syncAndroidPinnedNavInset(insets.bottom);
-  }, [androidImeInset, insets.bottom, keyboardVisible, syncAndroidPinnedNavInset]);
+  }, [androidImeInset, insets.bottom, keyboardVisible, navOrientation, syncAndroidPinnedNavInset]);
 
   useEffect(() => {
     if (Platform.OS !== 'android') return;
