@@ -1,0 +1,10 @@
+# Любая сторона: полный экран звонка → «Завершить», экран звонка закрылся.
+appId: com.kolt12max.livi.dev
+---
+- extendedWaitUntil:
+    visible: "minimize"
+    timeout: 10000
+- tapOn: "Завершить|End call"
+- extendedWaitUntil:
+    notVisible: "minimize"
+    timeout: 10000

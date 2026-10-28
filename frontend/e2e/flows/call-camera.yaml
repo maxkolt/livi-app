@@ -1,0 +1,9 @@
+# Экран звонка: переключить камеру (вкл/выкл). Проверку, что камера реально открыта, делает adb.
+appId: com.kolt12max.livi.dev
+---
+- extendedWaitUntil:
+    visible: "Камера|Camera"
+    timeout: 10000
+- tapOn: "Камера|Camera"
+- waitForAnimationToEnd:
+    timeout: 3000

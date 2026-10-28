@@ -1,0 +1,14 @@
+# После системного PiP / «Недавних» приложение снова на экране: звонок продолжается — открыт полный
+# экран звонка или «пузырь» (его разворачиваем).
+appId: com.kolt12max.livi.dev
+---
+- waitForAnimationToEnd:
+    timeout: 3000
+- runFlow:
+    when:
+      visible:
+        id: "pip-expand"
+    file: pip-expand.yaml
+- extendedWaitUntil:
+    visible: "minimize"
+    timeout: 10000

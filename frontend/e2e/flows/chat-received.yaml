@@ -1,0 +1,11 @@
+# У получателя: сообщение ${TEXT} видно в списке чатов (последнее сообщение, расшифровано).
+appId: com.kolt12max.livi.dev
+---
+- launchApp
+- extendedWaitUntil:
+    visible: "Find a partner|Найти собеседника"
+    timeout: 30000
+- tapOn: "Chat|Чаты"
+- extendedWaitUntil:
+    visible: "${TEXT}"
+    timeout: 15000

@@ -1,0 +1,9 @@
+# Экран звонка: переключить громкую связь. Маршрут звука проверяет adb (Active communication device).
+appId: com.kolt12max.livi.dev
+---
+- extendedWaitUntil:
+    visible: "Динамик|Speaker"
+    timeout: 10000
+- tapOn: "Динамик|Speaker"
+- waitForAnimationToEnd:
+    timeout: 3000

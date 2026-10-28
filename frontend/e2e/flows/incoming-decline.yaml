@@ -1,0 +1,11 @@
+# Принимающий, приложение убито: отклонить тем, что показал Android — плашкой или нативным экраном
+# (у обоих кнопка «Отклонить»). Какой путь был, пишет call-matrix.sh.
+appId: com.kolt12max.livi.dev
+---
+- extendedWaitUntil:
+    visible: "Отклонить|Decline"
+    timeout: 20000
+- tapOn: "Отклонить|Decline"
+- extendedWaitUntil:
+    notVisible: "Отклонить|Decline"
+    timeout: 5000

@@ -1,0 +1,11 @@
+# Экран звонка → ⌄ (minimize) → звонок в «пузыре» (in-app PiP) поверх приложения.
+appId: com.kolt12max.livi.dev
+---
+- extendedWaitUntil:
+    visible: "minimize"
+    timeout: 10000
+- tapOn: "minimize"
+- extendedWaitUntil:
+    visible:
+      id: "pip-expand"
+    timeout: 10000

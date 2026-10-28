@@ -1,0 +1,19 @@
+# Запуск и все вкладки нижней панели. Тексты — regex на двух языках (эмулятор EN, телефоны RU).
+appId: com.kolt12max.livi.dev
+---
+- launchApp
+- extendedWaitUntil:
+    visible: "Find a partner|Найти собеседника"
+    timeout: 30000
+- tapOn: "Friends|Друзья"
+- extendedWaitUntil:
+    visible:
+      id: "friend-row-call"
+    timeout: 10000
+- tapOn: "Chat|Чаты"
+- assertVisible: "All|Все"
+- tapOn: "Calls|Звонки"
+- assertVisible: "Missed|Пропущенные"
+- tapOn: "Profile|Профиль"
+- tapOn: "Search|Поиск"
+- assertVisible: "Find a partner|Найти собеседника"

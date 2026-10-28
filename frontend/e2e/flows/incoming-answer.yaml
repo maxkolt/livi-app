@@ -1,0 +1,22 @@
+# Принимающий, приложение убито: ответить тем, что показал Android — плашкой «Ответить» (фоновый старт
+# экрана запрещён) или нативным экраном «Принять» (разрешён). Какой путь был, пишет call-matrix.sh.
+appId: com.kolt12max.livi.dev
+---
+- extendedWaitUntil:
+    visible: "Ответить|Answer|Принять|Accept"
+    timeout: 20000
+- runFlow:
+    when:
+      visible: "Ответить|Answer"
+    commands:
+      - tapOn: "Ответить|Answer"
+- runFlow:
+    when:
+      visible:
+        id: ".*btn_accept"
+    commands:
+      - tapOn:
+          id: ".*btn_accept"
+- extendedWaitUntil:
+    visible: "minimize"
+    timeout: 20000

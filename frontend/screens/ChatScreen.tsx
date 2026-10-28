@@ -3214,6 +3214,7 @@ export default function ChatScreen({ route, navigation }: Props) {
             }}
             placeholder=""
             accessibilityLabel={composerPlaceholder}
+            testID="chat-input"
             maxLength={MAX_MESSAGE_TEXT_LENGTH}
             maxFontSizeMultiplier={APP_COMPOSER_MAX_FONT_SIZE_MULTIPLIER}
             value={messageText}
@@ -3368,6 +3369,7 @@ export default function ChatScreen({ route, navigation }: Props) {
 
         <Pressable
           onPress={onPressSendButton}
+          testID="chat-send"
           hitSlop={COMPOSER_HIT_SEND}
           accessibilityRole="button"
           accessibilityState={{ disabled: !messageText.trim() && !voiceIsRecording }}

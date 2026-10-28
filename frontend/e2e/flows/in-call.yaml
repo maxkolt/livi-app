@@ -1,0 +1,6 @@
+# Любая сторона: открыт полный экран звонка (кнопка ⌄ есть только на нём, «Завершить» — и у «пузыря»).
+appId: com.kolt12max.livi.dev
+---
+- extendedWaitUntil:
+    visible: "minimize"
+    timeout: 20000

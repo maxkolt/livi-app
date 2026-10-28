@@ -1,0 +1,12 @@
+# Принимающий: нативный экран входящего → «Принять» (btn_accept) → экран звонка.
+appId: com.kolt12max.livi.dev
+---
+- extendedWaitUntil:
+    visible:
+      id: ".*btn_accept"
+    timeout: 20000
+- tapOn:
+    id: ".*btn_accept"
+- extendedWaitUntil:
+    visible: "minimize"
+    timeout: 20000

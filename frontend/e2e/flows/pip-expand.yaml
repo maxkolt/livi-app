@@ -1,0 +1,12 @@
+# «Пузырь» звонка → развернуть → полный экран звонка.
+appId: com.kolt12max.livi.dev
+---
+- extendedWaitUntil:
+    visible:
+      id: "pip-expand"
+    timeout: 10000
+- tapOn:
+    id: "pip-expand"
+- extendedWaitUntil:
+    visible: "minimize"
+    timeout: 10000

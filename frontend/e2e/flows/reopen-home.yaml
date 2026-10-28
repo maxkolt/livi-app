@@ -1,0 +1,13 @@
+# Принимающий: открытие приложения ведёт на главный экран, экран звонка не появляется ни на миг
+# (старый ответ из intent задачи не проигрывается — см. MainActivity.isFreshAnswerLaunch).
+appId: com.kolt12max.livi.dev
+---
+- launchApp:
+    stopApp: false
+- extendedWaitUntil:
+    visible: "Find a partner|Найти собеседника"
+    timeout: 30000
+- assertNotVisible: "minimize|Завершить|End call"
+- waitForAnimationToEnd:
+    timeout: 3000
+- assertNotVisible: "minimize|Завершить|End call"

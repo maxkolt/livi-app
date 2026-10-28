@@ -1,0 +1,6 @@
+# Звонящий: после отказа/отбоя на той стороне дозвон и экран звонка закрылись сами.
+appId: com.kolt12max.livi.dev
+---
+- extendedWaitUntil:
+    notVisible: "Calling.*|Вызов.*|Звонок.*|minimize|Завершить|End call"
+    timeout: 10000

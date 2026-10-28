@@ -32,6 +32,8 @@ type FriendRowIconActionButtonProps = {
   /** Серый вид без блокировки long press (пропущенные при занятом друге). */
   appearanceDisabled?: boolean;
   accessibilityState?: { disabled?: boolean };
+  /** Для автотестов (Maestro видит его как resource-id). */
+  testID?: string;
   rescueMissedPress?: boolean;
   onPressIn?: () => void;
   onPress?: () => void;
@@ -52,6 +54,7 @@ export function FriendRowIconActionButton({
   disabled,
   appearanceDisabled,
   accessibilityState,
+  testID,
   rescueMissedPress,
   onPressIn,
   onPress,
@@ -166,6 +169,7 @@ export function FriendRowIconActionButton({
     <Pressable
       disabled={disabled}
       accessibilityState={accessibilityState}
+      testID={testID}
       hitSlop={hitSlop}
       pressRetentionOffset={FRIEND_ACTION_PRESS_RETENTION}
       delayLongPress={longPressEnabled ? longPressDelay : undefined}

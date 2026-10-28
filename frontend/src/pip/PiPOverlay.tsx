@@ -582,6 +582,7 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
               <View style={[styles.pipActionsRow, { gap: PIP_ACTION_GAP }]} pointerEvents="box-none">
               <PiPActionButton
                 onPress={returnToCallFromPiP}
+                testID="pip-expand"
                 accessibilityLabel={
                   pipReturnUsesPhoneIcon
                     ? t('returnToAudioCallA11y', lang)
@@ -609,7 +610,7 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
                   color={micIconMuted ? chrome.dangerIcon : chrome.icon}
                 />
               </PiPActionButton>
-              <PiPActionButton onPress={endCall} accessibilityLabel={t('endCall', lang)} chrome={chrome} danger>
+              <PiPActionButton onPress={endCall} testID="pip-end" accessibilityLabel={t('endCall', lang)} chrome={chrome} danger>
                 <MaterialIcons name="call-end" size={PIP_ICON_SIZE} color={chrome.dangerIcon} />
               </PiPActionButton>
               </View>
@@ -641,6 +642,7 @@ function PiPActionButton({
   children,
   disabled = false,
   accessibilityLabel,
+  testID,
   chrome,
   danger = false,
   active = false,
@@ -650,6 +652,8 @@ function PiPActionButton({
   children: React.ReactNode;
   disabled?: boolean;
   accessibilityLabel?: string;
+  /** Для автотестов (Maestro видит его как resource-id). */
+  testID?: string;
   chrome: PipChrome;
   /** Краповая заливка+рамка — как muted mic / hangup на аудиозвонке. */
   danger?: boolean;
@@ -661,6 +665,7 @@ function PiPActionButton({
       onPress={disabled ? undefined : onPress}
       disabled={disabled}
       accessibilityLabel={accessibilityLabel}
+      testID={testID}
       style={({ pressed }) => [
         styles.pipActionPressable,
         pressed && !disabled && styles.pipActionPressablePressed,

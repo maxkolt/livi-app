@@ -1,0 +1,13 @@
+# Принимающий: нативный экран входящего → «Отклонить» (кнопка btn_decline), экран закрылся.
+appId: com.kolt12max.livi.dev
+---
+- extendedWaitUntil:
+    visible:
+      id: ".*btn_decline"
+    timeout: 20000
+- tapOn:
+    id: ".*btn_decline"
+- extendedWaitUntil:
+    notVisible:
+      id: ".*btn_decline"
+    timeout: 5000

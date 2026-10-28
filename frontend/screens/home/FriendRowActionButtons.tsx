@@ -145,6 +145,7 @@ export function FriendRowChatButton({
       <View style={styles.friendActionBadgeAnchor}>
         <FriendRowIconActionButton
           icon="chat-processing-outline"
+          testID="friend-row-chat"
           variant={actionButtonVariant}
           large={largeActionButton}
           compact={compactActionButton}
@@ -332,6 +333,7 @@ export function FriendRowInviteButton({
       <View style={styles.friendCallActionsAnchor}>
         <FriendRowIconActionButton
           icon="phone-in-talk-outline"
+          testID="friend-row-call"
           variant={actionButtonVariant}
           large={largeActionButton}
           compact={compactActionButton}
