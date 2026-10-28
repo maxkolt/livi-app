@@ -320,6 +320,9 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                     }
                 } catch (_: Exception) {}
                 vLog("[INCOMING_CALL] incoming UI dispatch done callId=$callId needsFgs=$needsForegroundService")
+                // Приложение было убито: поднять React, пока звонит, — «Принять» не ждёт холодного
+                // старта JS (замер A35: экран звонка через ~2.5 с после нажатия против ~1.1 с с живым JS).
+                LiviAppModule.prewarmReactInBackground(this@LiviFirebaseMessagingService)
             }
             return
         }

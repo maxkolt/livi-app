@@ -3886,6 +3886,25 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     }
 
     /**
+     * Входящий при убитом приложении: создать React-контекст в фоне (загрузить бандл, выполнить модули),
+     * пока звонит. Тот же старт без окна, что у headless-задач (LiviOutboxDrain); App смонтируется,
+     * когда откроется MainActivity, и заберёт отложенный ответ (getAndClearPendingAnswerCallMap).
+     * Только с main thread; если React уже поднят или поднимается — ничего не делает.
+     */
+    @JvmStatic
+    fun prewarmReactInBackground(ctx: Context) {
+      try {
+        val host = (ctx.applicationContext as? com.facebook.react.ReactApplication)?.reactNativeHost ?: return
+        val manager = host.reactInstanceManager
+        if (manager.hasStartedCreatingInitialContext()) return
+        manager.createReactContextInBackground()
+        Log.i(NAME, "prewarmReactInBackground: started")
+      } catch (e: Exception) {
+        Log.w(NAME, "prewarmReactInBackground failed", e)
+      }
+    }
+
+    /**
      * Сразу вывести задачу MainActivity на передний план (accept входящего).
      * Без OutgoingCall(close) и без debounce-skip по isInForeground — Incoming в отдельной задаче.
      * [withAnswerCover]: true только до первого кадра VideoCall; false при reinforce после navigate.
