@@ -608,7 +608,7 @@ function HomeWelcomeCallsViewInner({
     [missedByUser],
   );
 
-  const rows = useMemo(() => {
+  const rows = useMemo((): CallRow[] => {
     if (pickMode) {
       let list = allFriends;
       if (trimmedQuery) list = list.filter((f) => friendMatchesNameSearch(f, trimmedQuery));
