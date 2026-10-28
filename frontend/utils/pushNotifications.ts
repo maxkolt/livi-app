@@ -23,7 +23,8 @@ import { stopIncomingCallAlert } from './incomingCallAlert';
 import { sendCallAnsweredBroadcast, addEndedCallId, isEndedCallId, isOutgoingDeclineHandled, markOutgoingDeclineHandled, setCallMediaHint, getCallMediaHint, videoCallNavExtras, type DirectCallMediaHint } from './callKeep';
 import { emitCloseHomeModals, emitMissedClear, emitMissedIncrement, isWelcomeCallsMissedFilterActive, isWelcomeViewingChats, isWelcomeViewingMissedCalls, setPendingWelcomeCallsFilter, setPendingWelcomeChatsFilter, shouldSkipHomeUiSettle } from './globalEvents';
 import { terminateCall } from './terminateCall';
-import { recordCallLog, recordCancelledCall, forceCallLogUiNow } from '../screens/home/callLog';
+import { recordCallLog, recordMissedCallHistory, recordCancelledCall, forceCallLogUiNow } from '../screens/home/callLog';
+import { persistPendingMissedCallHistory } from './pendingMissedCallHistory';
 import { UNREAD_BY_USER_KEY } from '../screens/home/constants';
 import { navigateToVideoCallScreen, type VideoCallNavLike } from './appNavigationGuard';
 import { beginCallPerfTrace, markCallPerf, callPerfSpan } from './callPerfTrace';
@@ -406,6 +407,12 @@ export async function markUnreadNotificationsSeen(reason?: string): Promise<void
  */
 export async function markMissedNotificationsSeen(reason?: string): Promise<void> {
   try {
+    await persistPendingMissedCallHistory();
+    // Older native builds have only the user-ID inbox: import it before clearing counts.
+    if (Platform.OS === 'android' && !NativeModules.LiviAppModule?.getPendingMissedCallEventsJson) {
+      const pending = await (NativeModules.LiviAppModule?.getAndClearPendingMissedCalls?.() ?? Promise.resolve([]));
+      await applyPendingMissedCallsFromNative(pending);
+    }
     const raw = await AsyncStorage.getItem(MISSED_CALLS_KEY);
     const map: Record<string, number> = raw ? JSON.parse(raw) : {};
     for (const uid of Object.keys(map || {})) {
@@ -440,9 +447,6 @@ export async function markMissedNotificationsSeen(reason?: string): Promise<void
           NativeModules.LiviAppModule?.clearAllMissedCountsAndSetBadgeZero?.();
           NativeModules.LiviAppModule?.setAppIconBadgeCount?.(unreadForBadge);
         }
-      } catch (_) {}
-      try {
-        await (NativeModules.LiviAppModule?.getAndClearPendingMissedCalls?.() ?? Promise.resolve([]));
       } catch (_) {}
     }
 
@@ -514,6 +518,9 @@ export async function recordMissedCallForUser(
   const source = options?.source || 'unknown';
   if (!uid) return false;
 
+  // Persist before either notification/badge dedupe can discard this delivery.
+  if (callId) await recordMissedCallHistory({ peerId: uid, eventId: callId, fromNick: options?.fromNick });
+
   if (callId && (await wasMissedCallIdApplied(callId))) {
     logger.info('[push] recordMissedCallForUser skip (callId dup)', { callId, uid, source });
     return false;
@@ -521,7 +528,7 @@ export async function recordMissedCallForUser(
 
   // Журнал Calls сразу (All / Missed) — независимо от бейджа/пуша.
   try {
-    recordCallLog({ peerId: uid, direction: 'missed' });
+    if (!callId) recordCallLog({ peerId: uid, direction: 'missed' });
   } catch {}
 
   // Уже на Calls в foreground: только строка в журнале, без бейджа/пуша.
@@ -642,6 +649,7 @@ export async function recordMissedCallForUser(
 
 /** FCM уже учёл пропущенный в native — подтянуть в AsyncStorage/UI без +1 за каждый элемент pending. */
 export async function applyPendingMissedCallsFromNative(pendingUserIds: string[]): Promise<void> {
+  await persistPendingMissedCallHistory();
   if (!pendingUserIds?.length) return;
   const raw = await AsyncStorage.getItem(MISSED_CALLS_KEY);
   const map: Record<string, number> = raw ? JSON.parse(raw) : {};
@@ -655,8 +663,12 @@ export async function applyPendingMissedCallsFromNative(pendingUserIds: string[]
   for (const u of pendingUserIds) {
     const uid = String(u || '').trim();
     if (!uid) continue;
+    if (!NativeModules.LiviAppModule?.getPendingMissedCallEventsJson) {
+      await recordMissedCallHistory({ peerId: uid, eventId: `legacy-native:${uid}:${Date.now()}` });
+    }
     const prev = typeof map[uid] === 'number' ? map[uid] : 0;
-    const target = Math.max(prev, typeof native[uid] === 'number' ? native[uid] : 0);
+    const target = isWelcomeViewingMissedCalls() || isWelcomeCallsMissedFilterActive()
+      ? prev : Math.max(prev, typeof native[uid] === 'number' ? native[uid] : 0);
     if (target > prev) {
       map[uid] = target;
       changed = true;

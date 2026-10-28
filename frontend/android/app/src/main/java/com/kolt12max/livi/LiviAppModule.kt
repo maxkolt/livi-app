@@ -2684,6 +2684,25 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     }
   }
 
+  @ReactMethod
+  fun getPendingMissedCallEventsJson(promise: Promise) {
+    try {
+      promise.resolve(readPendingMissedCallEvents(reactApplicationContext))
+    } catch (e: Exception) {
+      promise.reject("missed_calls_read_failed", e)
+    }
+  }
+
+  @ReactMethod
+  fun acknowledgePendingMissedCallEvents(idsJson: String, promise: Promise) {
+    try {
+      acknowledgeMissedCallEvents(reactApplicationContext, idsJson)
+      promise.resolve(null)
+    } catch (e: Exception) {
+      promise.reject("missed_calls_ack_failed", e)
+    }
+  }
+
   /** Отклонённые кнопкой в плашке уведомления, пока JS не работал: ["userId|epochMs", ...] для истории звонков. */
   @ReactMethod
   fun getAndClearPendingDeclinedCalls(promise: Promise) {
@@ -4563,6 +4582,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     private const val PREFS_PENDING_DECLINED = "LiviPendingDeclined"
     private const val KEY_PENDING_DECLINED = "calls"
     private const val PREFS_PENDING_MISSED = "LiviPendingMissed"
+    private const val KEY_PENDING_MISSED_EVENTS = "events_v1"
     private const val KEY_PENDING_MISSED_IDS = "user_ids"
     /** FCM message while JS background — userId для мгновенной точки на вкладке Chat при resume. */
     private const val PREFS_PENDING_UNREAD = "LiviPendingUnread"
@@ -4732,14 +4752,59 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
 
     /** Вызвать из LiviFirebaseMessagingService при показе «Пропущенный вызов» — чтобы при открытии приложения JS обновил счётчик и бейдж. Не добавляем, если JS уже учёл по сокету (wasPendingMissedRecentlyRemoved). */
     @JvmStatic
-    fun addPendingMissedCall(context: Context, userId: String) {
+    @Synchronized
+    fun addPendingMissedCall(context: Context, userId: String, callId: String = "", fromNick: String = "") {
       if (userId.isBlank()) return
-      if (wasPendingMissedRecentlyRemoved(context, userId)) return
       val prefs = context.getSharedPreferences(PREFS_PENDING_MISSED, Context.MODE_PRIVATE)
+      val events = org.json.JSONArray(prefs.getString(KEY_PENDING_MISSED_EVENTS, "[]") ?: "[]")
+      val id = callId.ifBlank { "native:${java.util.UUID.randomUUID()}" }
+      if ((0 until events.length()).none { events.getJSONObject(it).optString("id") == id }) {
+        events.put(JSONObject().put("id", id).put("from", userId.trim())
+          .put("fromNick", fromNick).put("at", System.currentTimeMillis()))
+        // Persist history before showing the notification, independently of badge deduplication.
+        check(prefs.edit().putString(KEY_PENDING_MISSED_EVENTS, events.toString()).commit())
+      }
+      if (wasPendingMissedRecentlyRemoved(context, userId)) return
       val current = prefs.getString(KEY_PENDING_MISSED_IDS, "") ?: ""
       val list = if (current.isEmpty()) mutableListOf<String>() else current.split(',').toMutableList()
       list.add(userId.trim())
       prefs.edit().putString(KEY_PENDING_MISSED_IDS, list.joinToString(",")).apply()
+    }
+
+    @JvmStatic
+    @Synchronized
+    fun readPendingMissedCallEvents(context: Context): String {
+      val prefs = context.getSharedPreferences(PREFS_PENDING_MISSED, Context.MODE_PRIVATE)
+      val events = org.json.JSONArray(prefs.getString(KEY_PENDING_MISSED_EVENTS, "[]") ?: "[]")
+      // Upgrade pending notifications left by an older release before any destructive read.
+      val known = (0 until events.length()).map { events.getJSONObject(it).optString("from") }.toSet()
+      val legacy = (prefs.getString(KEY_PENDING_MISSED_IDS, "") ?: "").split(',').filter { it.isNotBlank() }.distinct()
+      for (uid in legacy) {
+        if (uid !in known) events.put(JSONObject().put("id", "legacy:${java.util.UUID.randomUUID()}")
+          .put("from", uid).put("fromNick", getMissedCallNick(context, uid)).put("at", System.currentTimeMillis()))
+      }
+      check(prefs.edit().putString(KEY_PENDING_MISSED_EVENTS, events.toString()).commit())
+      return events.toString()
+    }
+
+    @JvmStatic
+    @Synchronized
+    fun acknowledgeMissedCallEvents(context: Context, idsJson: String) {
+      val ids = org.json.JSONArray(idsJson)
+      val accepted = (0 until ids.length()).map { ids.getString(it) }.toSet()
+      val prefs = context.getSharedPreferences(PREFS_PENDING_MISSED, Context.MODE_PRIVATE)
+      val events = org.json.JSONArray(prefs.getString(KEY_PENDING_MISSED_EVENTS, "[]") ?: "[]")
+      val remaining = org.json.JSONArray()
+      val acknowledgedUsers = mutableSetOf<String>()
+      for (i in 0 until events.length()) {
+        val event = events.getJSONObject(i)
+        if (event.optString("id") !in accepted) remaining.put(event)
+        else acknowledgedUsers.add(event.optString("from"))
+      }
+      val legacy = (prefs.getString(KEY_PENDING_MISSED_IDS, "") ?: "").split(',')
+        .filter { it.isNotBlank() && it !in acknowledgedUsers }
+      check(prefs.edit().putString(KEY_PENDING_MISSED_EVENTS, remaining.toString())
+        .putString(KEY_PENDING_MISSED_IDS, legacy.joinToString(",")).commit())
     }
 
     /**
@@ -4765,7 +4830,9 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     }
 
     @JvmStatic
+    @Synchronized
     fun getAndClearPendingMissedCalls(context: Context): List<String> {
+      readPendingMissedCallEvents(context)
       val prefs = context.getSharedPreferences(PREFS_PENDING_MISSED, Context.MODE_PRIVATE)
       val current = prefs.getString(KEY_PENDING_MISSED_IDS, "") ?: ""
       prefs.edit().remove(KEY_PENDING_MISSED_IDS).apply()

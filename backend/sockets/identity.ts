@@ -8,6 +8,7 @@ import FriendshipMessages from '../models/FriendshipMessages';
 import FriendshipMessageItem from '../models/FriendshipMessageItem';
 import Install from '../models/Install';
 import MissedCall from '../models/MissedCall';
+import { getPendingMissedCalls, registerMissedCallAck } from './missedCallDelivery';
 import PushToken from '../models/PushToken';
 import FriendshipEdge from '../models/FriendshipEdge';
 // Cloudinary удален, используем только MongoDB
@@ -99,17 +100,9 @@ export async function bindUser(io: Server, sock: any, userId: string) {
   // Пропущенные звонки за время офлайна (телефон выключен / нет сети): отдаём при подключении, чтобы при включении телефона всё пришло сразу
   if (mongoose.connection.readyState === 1) {
     try {
-      const docs = await MissedCall.find({ calleeId: new mongoose.Types.ObjectId(canonical) })
-        .sort({ createdAt: -1 })
-        .limit(50)
-        .lean();
-      const missed = (docs as any[]).map((d) => ({
-        from: String(d.callerId),
-        fromNick: String(d.callerNick || '').trim(),
-      }));
+      const missed = await getPendingMissedCalls(sock, canonical);
       if (missed.length > 0) {
-        sock.emit('missed_calls:sync', { missed });
-        await MissedCall.deleteMany({ _id: { $in: docs.map((d: any) => d._id) } });
+        sock.emit('missed_calls:sync', { userId: canonical, missed });
       }
     } catch (e) {
       console.warn('[identity] bindUser missed_calls sync failed', (e as Error)?.message);
@@ -171,6 +164,7 @@ const attachRequestCache = new Map<string, { timestamp: number; promise: Promise
 
 export default function registerIdentitySockets(io: Server) {
   io.on('connection', (sock) => {
+    registerMissedCallAck(sock);
     // Обработка отключения пользователя
     sock.on('disconnect', (reason) => {
       const userId = (sock as any).data?.userId;

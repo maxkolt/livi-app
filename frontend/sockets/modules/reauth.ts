@@ -19,7 +19,8 @@ export async function emitReauthDeduped(
       const res = await emitAck<SocketReauthResponse>("reauth", { userId: uid }, timeoutMs, retries);
       if (res?.ok) {
         shared.lastSuccessfulReauthAt = Date.now();
-        if (res?.missed?.length) applyMissedFromReauth(res).catch(() => {});
+        // Also drain native history after identity becomes available, even without server backlog.
+        applyMissedFromReauth(res).catch(() => {});
       }
       return res && typeof res.ok === "boolean" ? res : { ok: false, error: "bad_response" };
     } catch (e: any) {

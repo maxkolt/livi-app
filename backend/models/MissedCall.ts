@@ -7,6 +7,7 @@ interface IMissedCall {
   calleeId: Types.ObjectId;
   callerId: Types.ObjectId;
   callerNick: string;
+  callId?: string;
   createdAt: Date;
 }
 
@@ -15,6 +16,7 @@ const MissedCallSchema = new Schema<IMissedCall>(
     calleeId: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
     callerId: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
     callerNick: { type: String, default: '' },
+    callId: { type: String },
   },
   { timestamps: true, collection: 'missed_calls' }
 );

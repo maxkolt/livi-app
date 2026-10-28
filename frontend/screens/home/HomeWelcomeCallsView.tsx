@@ -83,6 +83,7 @@ type CallRow = {
   peerId: string;
   direction: CallLogDirection | 'contact';
   at: number;
+  fromNick?: string;
 };
 
 type HomeWelcomeCallsViewProps = {
@@ -141,6 +142,7 @@ type CallLogRowProps = {
   peerId: string;
   direction: CallRow['direction'];
   at: number;
+  fromNick?: string;
   friend: Friend | undefined;
   lang: Lang;
   L: (key: string) => string;
@@ -162,6 +164,7 @@ const CallLogRow = memo(function CallLogRow({
   peerId,
   direction,
   at,
+  fromNick,
   friend,
   lang,
   L,
@@ -175,7 +178,7 @@ const CallLogRow = memo(function CallLogRow({
 }: CallLogRowProps) {
   const { displayName, avatarLetter } = friend
     ? getFriendDisplay(friend)
-    : { displayName: t('user', lang), avatarLetter: '—' };
+    : { displayName: fromNick || t('user', lang), avatarLetter: fromNick ? displayAvatarLetter(fromNick) : '—' };
   const avatarFallback =
     avatarLetter ||
     (friend?.name ? displayAvatarLetter(friend.name) : '') ||
@@ -764,6 +767,7 @@ function HomeWelcomeCallsViewInner({
         peerId={item.peerId}
         direction={item.direction}
         at={item.at}
+        fromNick={item.fromNick}
         friend={friendsById.get(item.peerId)}
         lang={lang}
         L={L}

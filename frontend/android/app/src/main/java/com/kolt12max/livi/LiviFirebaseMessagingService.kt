@@ -971,7 +971,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                     }
                 }
                 if (uidSuppressed.isNotEmpty()) {
-                    LiviAppModule.addPendingMissedCall(context, uidSuppressed)
+                    LiviAppModule.addPendingMissedCall(context, uidSuppressed, callId, nickSuppressed)
                     LiviAppModule.saveMissedCallNick(context, uidSuppressed, nickSuppressed)
                     LiviAppModule.incrementMissedCountForUser(context, uidSuppressed)
                     // Без бейджа иконки: пользователь на Calls и так видит строку.
@@ -996,7 +996,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 return
             }
             ensureMissedCallChannel(context)
-            LiviAppModule.addPendingMissedCall(context, uid)
+            LiviAppModule.addPendingMissedCall(context, uid, callId, nick)
             LiviAppModule.saveMissedCallNick(context, uid, nick)
             val countForUser = LiviAppModule.incrementMissedCountForUser(context, uid)
             refreshMissedCallNotificationsInShade(context, allowAlert = true)

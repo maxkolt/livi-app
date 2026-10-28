@@ -39,6 +39,7 @@ import Install from './models/Install';
 import { decideHttpInstallAuth, verifyInstallSecret } from './utils/installSecret';
 import { attachCallKeepAlive, deliverCallKeepAlive, getCallKeepAliveStats, type CallKeepAliveAuth } from './utils/callKeepAlive';
 import MissedCall from './models/MissedCall';
+import { getPendingMissedCalls, type MissedCallDelivery } from './sockets/missedCallDelivery';
 import createChatRouter from './routes/chat';
 import { buildAvatarDataUris } from './utils/avatars';
 import { createToken, getLiveKitUrl, isAllowedParticipant } from './routes/livekit';
@@ -2693,13 +2694,14 @@ function getEffectiveBusyForExport(io: Server, userId: string): boolean {
 setGetEffectiveBusy(getEffectiveBusyForExport);
 
 /** Сохранить пропущенный вызов для получателя (после восстановления сети он подтянет через reauth). */
-async function saveMissedCall(calleeId: string, callerId: string, callerNick: string) {
+async function saveMissedCall(calleeId: string, callerId: string, callerNick: string, callId: string) {
   if (!isMongoReady() || !isOid(calleeId) || !isOid(callerId)) return;
   try {
     await MissedCall.create({
       calleeId: new mongoose.Types.ObjectId(calleeId),
       callerId: new mongoose.Types.ObjectId(callerId),
       callerNick: String(callerNick || '').trim(),
+      callId,
     });
   } catch (e: any) {
     logger.warn('[saveMissedCall] failed', { calleeId, callerId, error: e?.message });
@@ -2886,7 +2888,7 @@ app.post('/api/calls/initiate', async (req, res) => {
         });
       }
       if (!hasSocketForUser(io, activeLink.b)) {
-        await saveMissedCall(activeLink.b, activeLink.a, timeoutNick);
+        await saveMissedCall(activeLink.b, activeLink.a, timeoutNick, callId);
       }
       cleanupCall(callId, 'timeout');
     }, CALL_RING_TIMEOUT_MS);
@@ -3124,7 +3126,7 @@ app.post('/api/calls/cancel', async (req, res) => {
         });
       }
       try {
-        if (!hasSocketForUser(io, calleeId)) await saveMissedCall(calleeId, callerId, fromNick || '');
+        if (!hasSocketForUser(io, calleeId)) await saveMissedCall(calleeId, callerId, fromNick || '', callId);
       } catch {}
       logger.info('[api/calls/cancel] background notify done', {
         callId,
@@ -3307,12 +3309,10 @@ io.on('connection', async (sock: AuthedSocket) => {
       }
 
       logger.debug('User reauthorized successfully', { userId: mappedUserId });
-      let missed: { from: string; fromNick: string }[] = [];
+      let missed: MissedCallDelivery[] = [];
       try {
         if (isMongoReady()) {
-          const docs = await MissedCall.find({ calleeId: mappedUserId }).sort({ createdAt: -1 }).limit(50).lean();
-          missed = (docs as any[]).map((d) => ({ from: String(d.callerId), fromNick: String(d.callerNick || '').trim() }));
-          if (docs.length) await MissedCall.deleteMany({ _id: { $in: docs.map((d: any) => d._id) } });
+          missed = await getPendingMissedCalls(sock, mappedUserId);
         }
       } catch (e: any) {
         logger.warn('[reauth] fetch missed failed', { error: e?.message });
@@ -4434,7 +4434,7 @@ io.on('connection', async (sock: AuthedSocket) => {
           logger.warn('[call:timeout] call_ended push failed', { peerId: link.b, error: e?.message });
         }
         // Сохраняем пропущенный только если получатель офлайн — иначе он уже получил socket+FCM и при reauth получит дубль через missed_calls:sync
-        if (!hasSocketForUser(io, link.b)) await saveMissedCall(link.b, link.a, fromNick || '');
+        if (!hasSocketForUser(io, link.b)) await saveMissedCall(link.b, link.a, fromNick || '', callId);
         logger.info('[call:timeout] call ended for both: callee notified (socket+missed push), caller gets timeout', { callId, caller: link.a, callee: link.b });
         cleanupCall(callId, 'timeout');
       }, CALL_RING_TIMEOUT_MS);
@@ -5090,7 +5090,7 @@ io.on('connection', async (sock: AuthedSocket) => {
         });
       }
       try {
-        if (!hasSocketForUser(io, calleeId)) await saveMissedCall(calleeId, callerId, fromNick || '');
+        if (!hasSocketForUser(io, calleeId)) await saveMissedCall(calleeId, callerId, fromNick || '', id);
       } catch {}
       logger.info('[call:cancel] background notify done', {
         callId: id,

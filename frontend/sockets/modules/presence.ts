@@ -3,6 +3,7 @@ import { applyRemoteFrameChange } from '../../utils/cosmetics';
 import { shared } from "./shared";
 import { socket } from "./socketCore";
 import { applyMissedFromReauth } from "./missedCalls";
+import type { MissedCallDelivery } from './types';
 import { drainAllOutboxes } from "./outboxTriggers";
 import { noteNetworkBack } from "./outbox";
 import { refreshE2eState } from "./e2e";
@@ -136,6 +137,6 @@ socket.on("presence:welcome", (data: WelcomePresencePayload) => {
 });
 
 // При подключении сервер шлёт пропущенные звонки (телефон был выключен / нет сети) — мержим в хранилище и обновляем UI
-socket.on("missed_calls:sync", (payload: { missed?: { from: string; fromNick?: string }[] }) => {
+socket.on("missed_calls:sync", (payload: { userId?: string; missed?: MissedCallDelivery[] }) => {
   applyMissedFromReauth(payload).catch(() => {});
 });

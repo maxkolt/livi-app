@@ -380,9 +380,7 @@ export function useHomeBadges({ friends, friendsRef }: UseHomeBadgesArgs) {
       try {
         const pendingMissed = (await (NativeModules.LiviAppModule?.getAndClearPendingMissedCalls?.() ??
           Promise.resolve([]))) as string[];
-        if (pendingMissed?.length) {
-          await applyPendingMissedCallsFromNative(pendingMissed);
-        }
+        await applyPendingMissedCallsFromNative(pendingMissed || []);
       } catch (e) {
         logger.warn('[welcome-tab] badge resume pending missed failed', e as any);
       }

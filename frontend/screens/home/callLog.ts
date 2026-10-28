@@ -10,6 +10,7 @@ export type CallLogEntry = {
   peerId: string;
   direction: CallLogDirection;
   at: number;
+  fromNick?: string;
 };
 
 const MAX_ENTRIES = 200;
@@ -158,7 +159,7 @@ function parseEntries(raw: string | null): CallLogEntry[] {
         const id = String(item?.id || '').trim();
         if (!peerId) return null;
         if (!VALID_DIRECTIONS.has(direction)) return null;
-        return { id: id || `${peerId}:${at}`, peerId, direction, at } as CallLogEntry;
+        return { id: id || `${peerId}:${at}`, peerId, direction, at, fromNick: String(item?.fromNick || '') } as CallLogEntry;
       })
       .filter(Boolean) as CallLogEntry[];
   } catch {
@@ -206,8 +207,54 @@ async function ensureLoaded(uid = currentUid()): Promise<CallLogEntry[]> {
   return loadPromise;
 }
 
-function persist(uid: string, entries: CallLogEntry[]) {
-  AsyncStorage.setItem(storageKey(uid), JSON.stringify(entries)).catch(() => {});
+let persistQueue: Promise<void> = Promise.resolve();
+function persist(uid: string, entries: CallLogEntry[]): Promise<void> {
+  const raw = JSON.stringify(entries);
+  const write = persistQueue.catch(() => {}).then(() => AsyncStorage.setItem(storageKey(uid), raw));
+  persistQueue = write;
+  // Existing synchronous callers are best effort; delivery handlers await this promise.
+  void write.catch(() => {});
+  return write;
+}
+
+let missedHistoryQueue: Promise<unknown> = Promise.resolve();
+
+/** Durable receipt shared by FCM, sockets and offline replay. Never acknowledge before it resolves. */
+export function recordMissedCallHistory(input: {
+  peerId: string; eventId: string; at?: number; fromNick?: string;
+}): Promise<boolean> {
+  const uid = currentUid();
+  const save = missedHistoryQueue.catch(() => {}).then(async () => {
+    if (!uid || currentUid() !== uid) throw new Error('missed_call_identity_not_ready');
+    const peerId = String(input.peerId || '').trim();
+    const eventId = String(input.eventId || '').trim();
+    if (!peerId || !eventId) throw new Error('invalid_missed_call');
+    const receiptKey = `missed_call_history_receipt_v1:${uid}:${eventId}`;
+    const applied = (await AsyncStorage.getItem(receiptKey)) === '1';
+    await ensureLoaded(uid);
+    if (currentUid() !== uid) throw new Error('missed_call_identity_changed');
+    const id = `missed:${eventId}`;
+    const entries = memory || [];
+    const existing = entries.find((entry) => entry.id === id);
+    const at = Number(input.at) > 0 ? Number(input.at) : Date.now();
+    // A receipt survives deleting a row: redelivery must not resurrect a deleted call.
+    if (!applied || existing) {
+      const entry: CallLogEntry = {
+        id, peerId, direction: 'missed',
+        at: existing ? Math.min(existing.at, at) : at,
+        fromNick: input.fromNick || existing?.fromNick || '',
+      };
+      memory = [entry, ...entries.filter((item) => item.id !== id)]
+        .sort((a, b) => b.at - a.at).slice(0, MAX_ENTRIES);
+      memoryUid = uid;
+      await persist(uid, memory);
+      notify();
+    }
+    if (!applied) await AsyncStorage.setItem(receiptKey, '1');
+    return !applied && !existing;
+  });
+  missedHistoryQueue = save;
+  return save;
 }
 
 export async function loadCallLog(): Promise<CallLogEntry[]> {

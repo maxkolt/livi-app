@@ -2300,9 +2300,8 @@ function AppContent() {
             const declined = (await (LiviAppModule?.getAndClearPendingDeclinedCalls?.() ?? Promise.resolve([]))) as string[];
             if (declined?.length && !cancelled) recordPendingDeclinedCalls(declined);
             const arr = (await (LiviAppModule?.getAndClearPendingMissedCalls?.() ?? Promise.resolve([]))) as string[];
-            if (arr?.length && !cancelled) {
+            if (!cancelled) {
               await applyPendingMissedCallsFromNative(arr);
-            } else if (!cancelled) {
               await syncAppBadgeFromMissedCount();
             }
           } catch (e) {
@@ -3776,11 +3775,9 @@ function AppContent() {
           });
           // Пропущенные, показанные из нативного кода (FCM call_ended) — обновить счётчик и бейдж (без дубля, если уже учли по сокету)
           LiviAppModule?.getAndClearPendingMissedCalls?.()?.then?.((arr: string[]) => {
-            if (arr?.length) {
-              applyPendingMissedCallsFromNative(arr).catch((e) => {
-                logger.warn('[App] getAndClearPendingMissedCalls apply failed', e);
-              });
-            }
+            applyPendingMissedCallsFromNative(arr || []).catch((e) => {
+              logger.warn('[App] getAndClearPendingMissedCalls apply failed', e);
+            });
           });
         }
         // Если приложение открыли (или вернулись в него), а текущий экран — неактивный видеозвонок — сбрасываем на Home только если это не тот, кто завершил звонок из PiP (иначе он оказывается на странице приветствия при открытии по пушу, когда у собеседника закрывается PiP).
