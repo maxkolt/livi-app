@@ -41,6 +41,10 @@ In IntellectMoney → Shops → 473314 → Connection settings:
 
 Prices remain 199 for frames and 99 for backgrounds, in the configured currency.
 Use the IntellectMoney test payment methods; real payment credentials are not needed.
+For TST the provider requires the payer email to belong to the organization owner.
+Enter that IntellectMoney account email in the official widget. An arbitrary sample
+address is rejected with «У тестового счета плательщиком может быть только владелец
+организации»; this is a separate validation after the currency/account check.
 
 ## Verification
 
