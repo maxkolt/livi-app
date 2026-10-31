@@ -41,7 +41,7 @@ function restoreSessionMicrophoneIfNeeded(): void {
   try {
     const session = (global as CallAudioGlobals).__webrtcSessionRef?.current;
     if (session && typeof session.restoreMicrophoneAfterAppBackground === 'function') {
-      void session.restoreMicrophoneAfterAppBackground();
+      void session.restoreMicrophoneAfterAppBackground().catch(() => {});
     }
   } catch {}
 }
@@ -107,6 +107,7 @@ function onAppStateChange(next: AppStateStatus): void {
     } catch (_) {}
     if (prev !== 'background') {
       maintainCallAudioForActiveCall('app_state_background');
+      restoreSessionMicrophoneIfNeeded();
     }
     if (Platform.OS !== 'android') return;
     clearBackgroundInterval();
@@ -119,6 +120,7 @@ function onAppStateChange(next: AppStateStatus): void {
       captureCallAudioRouteFromUi();
       void reapplyPersistedCallAudioRoute('app_state_background_interval', { media });
       nativeMaintainCallVoiceAudio(false);
+      restoreSessionMicrophoneIfNeeded();
     }, BACKGROUND_INTERVAL_MS);
     return;
   }

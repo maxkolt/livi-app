@@ -28,7 +28,7 @@ const Jimp = require('jimp-compact');
 const { PNG } = require('pngjs');
 
 const ROOT = path.join(__dirname, '..');
-const { BACKGROUND, LOWER_CUBE, SOURCE_WIDTH, UPPER_CUBE } = require('./spatial-stage-style');
+const { BACKGROUND, LOWER_CUBE, SOURCE_WIDTH, UPPER_CUBE, HEADER_BUBBLE } = require('./spatial-stage-style');
 const HQ = path.join(ROOT, 'assets', 'spatial', 'stage-hq.png');
 const RES = path.join(ROOT, 'android', 'app', 'src', 'main', 'res', 'drawable-nodpi');
 const OUT_IMAGE = path.join(RES, 'spatial_stage.png');
@@ -65,7 +65,13 @@ const PLANE = { deep: 1, map: 2, mid: 3, icons: 4, near: 5 };
 const SEEDS = [
   // Облако крупнее половины окна медианы фона: ядро — кольцо по краю, середина — дыра,
   // которую shapeElements заливает. Точка — у левого края тела.
-  { name: 'bubble', at: [560, 430], plane: PLANE.near, pad: 36 },
+  {
+    name: 'bubble',
+    at: [HEADER_BUBBLE.cx - HEADER_BUBBLE.w / 2 + 4, HEADER_BUBBLE.cy + 7.5]
+      .map(v => Math.round(v * 1440 / SOURCE_WIDTH)),
+    plane: PLANE.near,
+    pad: 20,
+  },
   {
     name: 'cube-top',
     at: [UPPER_CUBE.cx, UPPER_CUBE.cy].map(v => Math.round(v * 1440 / SOURCE_WIDTH)),
@@ -87,7 +93,7 @@ const SEEDS = [
  * между точками, слабее порога ядра (иначе на фоне оставалась их тень).
  */
 const GROUPS = [
-  { name: 'digits', rect: [220, 590, 340, 790], plane: PLANE.deep },
+  { name: 'digits', rect: [1196, 540, 1330, 745], plane: PLANE.deep },
   { name: 'data-left', rect: [0, 640, 240, 1160], plane: PLANE.deep },
   { name: 'data-right', rect: [1170, 1020, 1440, 1340], plane: PLANE.deep },
   { name: 'chart-right', rect: [1060, 1430, 1440, 1600], plane: PLANE.deep },

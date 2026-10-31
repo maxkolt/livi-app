@@ -320,6 +320,7 @@ async function tryEnterExternalHold(
       // in that case preserve the normal focus-based hold path.
       logger.info('[externalCallHold] ignore unconfirmed focus loss with locked display', { reason });
       clearMediaFocusLossNote();
+      try { NativeModules.LiviAppModule?.maintainActiveCallVoiceAudio?.(); } catch {}
       return;
     }
   }

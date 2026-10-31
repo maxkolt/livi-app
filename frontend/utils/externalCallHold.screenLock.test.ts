@@ -17,6 +17,7 @@ jest.mock('react-native', () => {
       clearExternalCallHoldInterruptSticky: jest.fn(),
       setExternalCallAudioHoldActive: jest.fn(),
       isExternalTelephonyAudioModeActive: jest.fn().mockResolvedValue(false),
+      maintainActiveCallVoiceAudio: jest.fn(),
     } },
   };
 });
@@ -64,6 +65,7 @@ describe('external hold and a locked display', () => {
     jest.advanceTimersByTime(300000);
     await settle();
     expect(session.enterExternalCallHold).not.toHaveBeenCalled();
+    expect(native.maintainActiveCallVoiceAudio).toHaveBeenCalled();
   });
 
   it('does not turn a stale native focusLost flag into a fresh external call', async () => {
@@ -85,6 +87,7 @@ describe('external hold and a locked display', () => {
     focus(-2);
     await settle();
     expect(session.enterExternalCallHold).toHaveBeenCalledTimes(1);
+    expect(native.maintainActiveCallVoiceAudio).not.toHaveBeenCalled();
   });
 
   it('preserves focus-based VoIP hold after switching to another app on an unlocked display', async () => {

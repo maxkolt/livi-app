@@ -5,6 +5,12 @@ internal object CallAudioPolicy {
     fun useProximity(active: Boolean, audioOnly: Boolean, externalHold: Boolean,
                      communicationMode: Boolean, earpiece: Boolean): Boolean =
         active && audioOnly && !externalHold && communicationMode && earpiece
+
+    /** Retry a lost focus only after ruling out another call on a locked display. */
+    fun recoverScreenOffFocus(state: CallVoiceFocusState, screenInteractive: Boolean,
+                              externalHold: Boolean, telephony: Boolean, foreignVoice: Boolean): Boolean =
+        state == CallVoiceFocusState.LOST && !screenInteractive &&
+            !externalHold && !telephony && !foreignVoice
 }
 
 /** A request object is not evidence of granted focus. Lost/delayed focus waits for Android;

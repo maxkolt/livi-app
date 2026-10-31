@@ -33,4 +33,18 @@ class CallAudioPolicyTest {
         assertFalse(delayed.needsRequest)
         assertFalse(CallVoiceFocusState.LOST.needsRequest)
     }
+
+    @Test fun screenOffFocusRecoveryRequiresNoExternalCall() {
+        fun recover(state: CallVoiceFocusState = CallVoiceFocusState.LOST,
+                    interactive: Boolean = false, hold: Boolean = false,
+                    telephony: Boolean = false, foreignVoice: Boolean = false) =
+            CallAudioPolicy.recoverScreenOffFocus(state, interactive, hold, telephony, foreignVoice)
+        assertTrue(recover())
+        assertFalse(recover(interactive = true))
+        assertFalse(recover(hold = true))
+        assertFalse(recover(telephony = true))
+        assertFalse(recover(foreignVoice = true))
+        assertFalse(recover(state = CallVoiceFocusState.DELAYED))
+        assertFalse(recover(state = CallVoiceFocusState.GRANTED))
+    }
 }

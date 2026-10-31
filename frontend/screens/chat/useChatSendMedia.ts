@@ -194,7 +194,7 @@ export function useChatSendMedia({
     }
 
     // Кадр-превью — уже после пузыря: кружок в ленте появляется без задержки.
-    const thumbUri = await makeVideoNoteThumb(fileUri, messageId);
+    const thumbUri = await makeVideoNoteThumb(fileUri, messageId, durationMs / 1000);
     if (thumbUri) {
       commitMediaPatch(messageId, { thumbUri }, 'video_note_thumbnail');
     }

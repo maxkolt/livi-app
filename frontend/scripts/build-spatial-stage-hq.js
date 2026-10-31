@@ -30,6 +30,7 @@ const { refineSpatialStage } = require('./refine-spatial-stage-details');
 const { normalizeStage } = require('./normalize-spatial-stage');
 const { LOWER_CUBE } = require('./spatial-stage-style');
 const { canvasKit, drawCubeBody } = require('./spatial-cube');
+const { relayoutSpatialHeader } = require('./relayout-spatial-header');
 
 const OUT = path.join(__dirname, '..', 'assets', 'spatial', 'stage-hq.png');
 
@@ -1271,6 +1272,7 @@ async function main() {
   await base.resize(1440, Jimp.AUTO, Jimp.RESIZE_BICUBIC).writeAsync(OUT);
   await refineSpatialStage(OUT);
   await normalizeStage(OUT);
+  await relayoutSpatialHeader(OUT);
   console.log(`${path.relative(process.cwd(), OUT)}  1440 px`);
 }
 

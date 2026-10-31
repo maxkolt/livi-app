@@ -3666,6 +3666,27 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
         } catch (e: Exception) {
           Log.w(NAME, "maintainActiveCallVoiceAudio: mode restore failed", e)
         }
+        if (activeCallVoiceFocusState == CallVoiceFocusState.LOST) {
+          try {
+            val pm = ctx.getSystemService(Context.POWER_SERVICE) as? PowerManager
+            val foreignVoice = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+              hasForeignVoicePlayback(am.activePlaybackConfigurations)
+            if (CallAudioPolicy.recoverScreenOffFocus(
+                activeCallVoiceFocusState,
+                pm?.isInteractive ?: true,
+                externalCallAudioHoldJsActive,
+                isExternalTelephonyAudioMode(am.mode),
+                foreignVoice,
+              )) {
+              activeCallVoiceFocusLost = false
+              pendingExternalHoldFocusChange = 0
+              pendingExternalHoldAtMs = 0L
+              reacquireActiveCallVoiceAudioHoldStatic(ctx)
+            }
+          } catch (e: Exception) {
+            Log.w(NAME, "maintainActiveCallVoiceAudio: screen-off focus recovery failed", e)
+          }
+        }
         if (activeCallVoiceFocusState.needsRequest) {
           beginActiveCallVoiceAudioHoldStatic(ctx)
         }

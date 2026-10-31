@@ -172,6 +172,7 @@ import { IceTransportLogger } from './videoCall/IceTransportLogger';
 import { NetworkReachabilityMonitor } from './videoCall/NetworkReachabilityMonitor';
 import { LocalVideoHealthWatchdog } from './videoCall/LocalVideoHealthWatchdog';
 import { RemoteTrackSubscriber } from './videoCall/RemoteTrackSubscriber';
+import { recoverLocalAudioTrack } from './videoCall/localAudioRecovery';
 
 /**
  * Ключи шифрования звонков в этом процессе. Возврат в идущий звонок может создать новый
@@ -316,6 +317,8 @@ export class VideoCallSession extends SimpleEventEmitter<VideoCallSessionEvents>
   private cameraMutationPromise: Promise<void> | null = null;
   private localVideoRecreatePromise: Promise<void> | null = null;
   private localCameraRestoreAfterPiPPromise: Promise<void> | null = null;
+  private microphoneRestorePromise: Promise<void> | null = null;
+  private lastBackgroundMicrophoneMaintainAt = 0;
   /** После foreground/pip restore не дублировать recreate через reconnectCameraOnResume. */
   private skipReconnectCameraOnResumeUntil = 0;
   /** Идемпотентность cleanup(): повторный вызов не выполняет отписки и endCall повторно */
@@ -1608,68 +1611,63 @@ export class VideoCallSession extends SimpleEventEmitter<VideoCallSessionEvents>
    * Фон / другое приложение поверх: восстановить mic uplink и публикацию в LiveKit.
    */
   async restoreMicrophoneAfterAppBackground(): Promise<void> {
+    if (this.microphoneRestorePromise) return this.microphoneRestorePromise;
+    const pending = this.restoreMicrophoneCaptureAndPublication();
+    this.microphoneRestorePromise = pending;
+    try {
+      await pending;
+    } finally {
+      if (this.microphoneRestorePromise === pending) this.microphoneRestorePromise = null;
+    }
+  }
+
+  private async restoreMicrophoneCaptureAndPublication(): Promise<void> {
     if (this.localExternalHoldActive) return;
     if (this.ended || this.endCallInProgress || !this.isMicOn) return;
     const room = this.room;
     if (!room || room.state !== 'connected' || !room.localParticipant) return;
 
+    const canRestore = () => this.room === room && room.state === 'connected' &&
+      !this.ended && !this.endCallInProgress && this.isMicOn && !this.localExternalHoldActive;
     try {
-      await this.setRoomMicrophoneEnabled(room, true, 'restoreMicrophoneAfterAppBackground');
-    } catch {}
-
-    const audioMt = this.localAudioTrack?.mediaStreamTrack;
-    if (audioMt?.readyState === 'ended') {
-      try {
-        logger.info('[VideoCallSession] Recreating local audio track after background');
-        const tracks = await createLocalTracks({ audio: true, video: false });
-        if (this.ended || this.endCallInProgress || !this.isMicOn) {
-          for (const t of tracks) {
-            try {
-              t.stop();
-            } catch {}
-          }
+      if (!this.localAudioTrack) {
+        await this.setRoomMicrophoneEnabled(room, true, 'restoreMicrophoneAfterAppBackground');
+        const published = room.localParticipant.getTrackPublication(Track.Source.Microphone)?.track;
+        if (!canRestore()) {
+          await published?.mute();
           return;
         }
-        const newAudio = tracks.find((t) => t.kind === Track.Kind.Audio) as LocalAudioTrack | undefined;
-        if (newAudio) {
-          try {
-            this.localAudioTrack?.stop();
-          } catch {}
-          this.localAudioTrack = newAudio;
-          await this.unpublishOtherLocalTracks('audio', newAudio);
-          await room.localParticipant.publishTrack(newAudio).catch((e) => {
-            logger.warn('[VideoCallSession] Publish recreated audio after background failed', e);
-          });
-          const stream = this.localStream ?? new MediaStream();
-          try {
-            const stale = stream.getAudioTracks();
-            stale.forEach((t) => {
-              try {
-                stream.removeTrack(t);
-              } catch {}
-            });
-            const mt = newAudio.mediaStreamTrack;
-            if (mt) stream.addTrack((mt as NativeLiveKitMediaTrack));
-          } catch {}
-          this.localStream = stream;
-          this.emit('localStream', stream);
-          this.notifyLocalStreamChange(stream);
-        }
-      } catch (e) {
-        logger.warn('[VideoCallSession] restoreMicrophone recreate failed', e);
+        if (published?.kind === Track.Kind.Audio) this.localAudioTrack = published as LocalAudioTrack;
       }
-      return;
+      const track = this.localAudioTrack;
+      if (!track || !canRestore()) return;
+      const mediaTrack = track.mediaStreamTrack;
+      if (mediaTrack.readyState === 'ended' || mediaTrack.muted || !mediaTrack.enabled || track.isUpstreamPaused) {
+        logger.info('[VideoCallSession] Restoring interrupted microphone capture', {
+          readyState: mediaTrack.readyState, enabled: mediaTrack.enabled,
+          sourceMuted: mediaTrack.muted, upstreamPaused: track.isUpstreamPaused,
+        });
+      }
+      const isCurrent = () => canRestore() && this.localAudioTrack === track;
+      await recoverLocalAudioTrack(track, isCurrent);
+      if (!isCurrent()) return;
+      if (!this.localStream?.getAudioTracks().some(t => t.id === track.mediaStreamTrack.id)) {
+        const stream = this.localStream ?? new MediaStream();
+        for (const stale of stream.getAudioTracks()) stream.removeTrack(stale);
+        stream.addTrack(track.mediaStreamTrack as NativeLiveKitMediaTrack);
+        this.localStream = stream;
+        this.emit('localStream', stream);
+        this.notifyLocalStreamChange(stream);
+      }
+      if (!this.isAudioTrackPublished(track)) {
+        await this.unpublishOtherLocalTracks('audio', track);
+        if (!isCurrent()) return;
+        await room.localParticipant.publishTrack(track);
+        if (!isCurrent()) await track.mute();
+      }
+    } catch (e) {
+      logger.warn('[VideoCallSession] restoreMicrophone failed', e);
     }
-
-    if (this.localAudioTrack && !this.isAudioTrackPublished(this.localAudioTrack)) {
-      try {
-        await this.unpublishOtherLocalTracks('audio', this.localAudioTrack);
-        await room.localParticipant.publishTrack(this.localAudioTrack).catch(() => {});
-      } catch {}
-    }
-    try {
-      if (this.isMicOn) await this.localAudioTrack?.unmute().catch(() => {});
-    } catch {}
   }
 
   getLocalExternalHoldActive(): boolean {
@@ -3273,6 +3271,7 @@ export class VideoCallSession extends SimpleEventEmitter<VideoCallSessionEvents>
     this.remoteAudioPacketsStalledSince = null;
     this.remoteVideoStallSince = null;
     this.remoteVideoStallPackets = null;
+    this.lastBackgroundMicrophoneMaintainAt = 0;
   }
 
   private ensureRemoteAudioPacketWatch(): void {
@@ -3345,6 +3344,18 @@ export class VideoCallSession extends SimpleEventEmitter<VideoCallSessionEvents>
       return;
     }
     if (!this.hadLiveRemoteAudioInCall || this.room?.state !== 'connected') return;
+
+    // Some Android versions keep AppState=active in system PiP, so the background
+    // interval alone cannot repair capture that fails after the screen is locked.
+    if (Platform.OS === 'android') {
+      const g = global as CallAudioGlobals;
+      if ((AppState.currentState !== 'active' || g.__pipInSystemModeRef?.current === true ||
+          g.__pipVisibleRef?.current === true) &&
+          Date.now() - this.lastBackgroundMicrophoneMaintainAt >= 12_000) {
+        this.lastBackgroundMicrophoneMaintainAt = Date.now();
+        void this.restoreMicrophoneAfterAppBackground();
+      }
+    }
 
     if (await this.checkRemoteVideoStall()) return;
 
