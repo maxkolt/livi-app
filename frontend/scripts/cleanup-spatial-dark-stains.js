@@ -72,10 +72,10 @@ function removeDarkCleanupStains(data, w, h, scale = w / 572) {
 }
 
 async function main() {
-  const imagePath = process.argv[2] || path.join(__dirname, '..', 'assets', 'spatial', 'stage-hq.jpg');
+  const imagePath = process.argv[2] || path.join(__dirname, '..', 'assets', 'spatial', 'stage-hq.png');
   const image = await Jimp.read(imagePath);
   removeDarkCleanupStains(image.bitmap.data, image.bitmap.width, image.bitmap.height);
-  await image.quality(95).writeAsync(imagePath);
+  await image.writeAsync(imagePath);
   console.log(`${path.relative(process.cwd(), imagePath)}: убраны пять тёмных следов`);
 }
 

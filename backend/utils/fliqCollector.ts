@@ -1,3 +1,4 @@
+import type { ErrorDetails } from './runtimeTypes';
 // utils/fliqCollector.ts
 // Сборщик ленты Fliq: по расписанию ищет YouTube Shorts по темам и языкам через
 // YouTube Data API и складывает подходящие ролики на языке корзины в fliq_videos.
@@ -133,7 +134,7 @@ export function foreignLetters(text: string, allowed: RegExp): { foreign: number
  * На языке ли корзины ролик: язык звука из YouTube (если указан) — из BUCKET_AUDIO_LANGS,
  * в названии и имени канала не больше одной буквы чужого алфавита, в описании — меньше 10%.
  */
-export function fliqLanguageOk(v: any, lang: string): boolean {
+export function fliqLanguageOk(v: YouTubeVideo | null | undefined, lang: string): boolean {
   const audio = String(v?.snippet?.defaultAudioLanguage || v?.snippet?.defaultLanguage || '')
     .trim()
     .toLowerCase()
@@ -186,7 +187,7 @@ export function quotaDay(now = new Date()): string {
 /** Списать один поиск из суточного бюджета. Счётчик в базе: перезапуск сервера его не обнуляет. */
 async function takeSearchBudget(): Promise<boolean> {
   const day = quotaDay();
-  const doc: any = await FliqCollectState.findOneAndUpdate(
+  const doc = await FliqCollectState.findOneAndUpdate(
     { key: `budget:${day}` },
     { $inc: { variant: 1 }, $set: { lastRunAt: new Date() } },
     { upsert: true, new: true }
@@ -199,7 +200,32 @@ async function takeSearchBudget(): Promise<boolean> {
 
 class QuotaError extends Error {}
 
-async function ytGet(path: string, params: Record<string, string>): Promise<any> {
+type YouTubeVideo = {
+  id?: string;
+  snippet?: {
+    title?: string;
+    channelTitle?: string;
+    channelId?: string;
+    description?: string;
+    defaultAudioLanguage?: string;
+    defaultLanguage?: string;
+    publishedAt?: string;
+    liveBroadcastContent?: string;
+  };
+  status?: { embeddable?: boolean; privacyStatus?: string; madeForKids?: boolean };
+  contentDetails?: { duration?: string; contentRating?: { ytRating?: string } };
+  player?: { embedWidth?: string | number; embedHeight?: string | number };
+  statistics?: { viewCount?: string | number };
+};
+type YouTubeSearchItem = { id?: { videoId?: string } };
+type YouTubeResponse<Item> = {
+  items?: Item[];
+  error?: { errors?: Array<{ reason?: string }>; status?: string };
+};
+
+function ytGet(path: 'search', params: Record<string, string>): Promise<YouTubeResponse<YouTubeSearchItem> | null>;
+function ytGet(path: 'videos', params: Record<string, string>): Promise<YouTubeResponse<YouTubeVideo> | null>;
+async function ytGet(path: string, params: Record<string, string>): Promise<YouTubeResponse<YouTubeSearchItem | YouTubeVideo> | null> {
   const qs = new URLSearchParams({ ...params, key: API_KEY });
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 15_000);
@@ -207,7 +233,7 @@ async function ytGet(path: string, params: Record<string, string>): Promise<any>
     const res = await fetch(`https://www.googleapis.com/youtube/v3/${path}?${qs.toString()}`, {
       signal: controller.signal,
     });
-    const json: any = await res.json().catch(() => ({}));
+    const json = await res.json().catch(() => ({})) as YouTubeResponse<YouTubeSearchItem | YouTubeVideo> | null;
     if (!res.ok) {
       const reason = String(json?.error?.errors?.[0]?.reason || json?.error?.status || res.status);
       if (res.status === 403 && /quota|rateLimit|dailyLimit/i.test(reason)) throw new QuotaError(reason);
@@ -220,7 +246,7 @@ async function ytGet(path: string, params: Record<string, string>): Promise<any>
 }
 
 /** ISO 8601 (PT1M5S) → секунды. */
-export function parseIsoDuration(iso: string): number {
+export function parseIsoDuration(iso: string | null | undefined): number {
   const m = /^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/.exec(String(iso || ''));
   if (!m) return 0;
   const [, d, h, min, s] = m;
@@ -241,7 +267,7 @@ export function fliqScore(views: number, publishedAt: Date | null): number {
  * (API отдаёт их, когда в запросе есть maxWidth); если они неизвестны — только короткий
  * ролик с #shorts в названии.
  */
-export function isFliqEligible(v: any): boolean {
+export function isFliqEligible(v: YouTubeVideo | null | undefined): boolean {
   const st = v?.status || {};
   if (st.embeddable !== true || st.privacyStatus !== 'public' || st.madeForKids === true) return false;
   if (v?.contentDetails?.contentRating?.ytRating === 'ytAgeRestricted') return false;
@@ -276,7 +302,7 @@ async function collectPair(topic: FliqTopic, lang: string, variant: number): Pro
   if (REGION_BY_LANG[lang]) params.regionCode = REGION_BY_LANG[lang];
   const search = await ytGet('search', params);
   const ids: string[] = (Array.isArray(search?.items) ? search.items : [])
-    .map((it: any) => String(it?.id?.videoId || ''))
+    .map((it) => String(it?.id?.videoId || ''))
     .filter((id: string) => /^[\w-]{11}$/.test(id));
   if (!ids.length) return 0;
 
@@ -335,8 +361,8 @@ async function sweepPoolLanguages(): Promise<void> {
   for (let i = 0; i < docs.length; i += 50) {
     const batch = docs.slice(i, i + 50);
     const details = await ytGet('videos', { part: 'snippet', id: batch.map((d) => d.videoId).join(',') });
-    const byId = new Map<string, any>(
-      (Array.isArray(details?.items) ? details.items : []).map((v: any) => [String(v.id), v])
+    const byId = new Map<string, YouTubeVideo>(
+      (Array.isArray(details?.items) ? details.items : []).map((v) => [String(v.id), v])
     );
     for (const doc of batch) {
       const v = byId.get(doc.videoId);
@@ -375,7 +401,7 @@ async function runOnce(): Promise<void> {
     }
 
     const pairs = FLIQ_LANGS.flatMap((lang) => FLIQ_TOPICS.map((topic) => ({ lang, topic, key: `${lang}:${topic}` })));
-    const states: any[] = await FliqCollectState.find({ key: { $in: pairs.map((p) => p.key) } }).lean();
+    const states = await FliqCollectState.find({ key: { $in: pairs.map((p) => p.key) } }).lean();
     const byKey = new Map(states.map((s) => [String(s.key), s]));
     pairs.sort((a, b) => {
       const ta = new Date(byKey.get(a.key)?.lastRunAt || 0).getTime();
@@ -389,9 +415,9 @@ async function runOnce(): Promise<void> {
       let found = 0;
       try {
         found = await collectPair(pair.topic, pair.lang, variant);
-      } catch (e: any) {
+      } catch (e: unknown) {
         if (e instanceof QuotaError) throw e;
-        status.lastError = String(e?.message || e);
+        status.lastError = String((e as ErrorDetails)?.message || e);
         logger.warn('[fliq] collect pair failed', { key: pair.key, error: status.lastError });
       }
       await FliqCollectState.updateOne(
@@ -401,8 +427,8 @@ async function runOnce(): Promise<void> {
       );
       logger.info('[fliq] collected', { key: pair.key, variant, found });
     }
-  } catch (e: any) {
-    status.lastError = String(e?.message || e);
+  } catch (e: unknown) {
+    status.lastError = String((e as ErrorDetails)?.message || e);
     if (e instanceof QuotaError) {
       // Квота кончилась — до её сброса (полночь по Тихоокеанскому времени) не стучимся.
       status.pausedUntil = Date.now() + 6 * 60 * 60_000;

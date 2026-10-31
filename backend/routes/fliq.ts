@@ -1,3 +1,4 @@
+import type { AuthenticatedRequest, ErrorDetails } from '../utils/runtimeTypes';
 // routes/fliq.ts
 // Лента Fliq: выдача роликов, события просмотра (досмотры/пролистывания → веса тем),
 // пометка роликов, которые не играют во встроенном плеере.
@@ -85,7 +86,7 @@ export function pickFliqItems(
 }
 
 router.get('/fliq/feed', async (req, res) => {
-  const userId = String((req as any).userId || '').trim();
+  const userId = String((req as AuthenticatedRequest).userId || '').trim();
   if (!userId) return res.status(401).json({ ok: false, error: 'unauthorized' });
   if (mongoose.connection.readyState !== 1) return res.status(503).json({ ok: false, error: 'database_unavailable' });
 
@@ -100,7 +101,7 @@ router.get('/fliq/feed', async (req, res) => {
     // Ролики, которые уже лежат в ленте клиента, но ещё не досмотрены.
     const clientIds = parseIds(req.query.exclude, 80);
 
-    const state: any = await FliqUserState.findOne({ user: userId }).select('seen topicWeights').lean();
+    const state = await FliqUserState.findOne({ user: userId }).select('seen topicWeights').lean();
     const seen: string[] = Array.isArray(state?.seen) ? state.seen : [];
     const weights: Record<string, number> = state?.topicWeights || {};
     const exclude = Array.from(new Set([...seen, ...clientIds]));
@@ -141,14 +142,14 @@ router.get('/fliq/feed', async (req, res) => {
         topics: v.topics,
       })),
     });
-  } catch (e: any) {
-    logger.warn('[fliq] feed failed', { userId, error: e?.message || String(e) });
+  } catch (e: unknown) {
+    logger.warn('[fliq] feed failed', { userId, error: (e as ErrorDetails)?.message || String(e) });
     res.status(500).json({ ok: false, error: 'feed_failed' });
   }
 });
 
 router.post('/fliq/events', async (req, res) => {
-  const userId = String((req as any).userId || '').trim();
+  const userId = String((req as AuthenticatedRequest).userId || '').trim();
   if (!userId) return res.status(401).json({ ok: false, error: 'unauthorized' });
   if (mongoose.connection.readyState !== 1) return res.status(503).json({ ok: false, error: 'database_unavailable' });
 
@@ -156,9 +157,9 @@ router.post('/fliq/events', async (req, res) => {
   if (!rl.ok) return res.status(429).json({ ok: false, error: 'rate_limited' });
 
   try {
-    const raw = Array.isArray(req.body?.events) ? req.body.events.slice(0, 50) : [];
+    const raw: Array<{ id?: unknown; watchedMs?: unknown; durationMs?: unknown; shared?: unknown } | null> = Array.isArray(req.body?.events) ? req.body.events.slice(0, 50) : [];
     const events = raw
-      .map((e: any) => ({
+      .map((e) => ({
         id: String(e?.id || ''),
         watchedMs: Math.max(0, Number(e?.watchedMs || 0)),
         durationMs: Math.max(0, Number(e?.durationMs || 0)),
@@ -173,7 +174,7 @@ router.post('/fliq/events', async (req, res) => {
       .lean();
     const topicsById = new Map(videos.map((v) => [v.videoId, v.topics || []]));
 
-    const state: any = await FliqUserState.findOne({ user: userId }).select('topicWeights').lean();
+    const state = await FliqUserState.findOne({ user: userId }).select('topicWeights').lean();
     const weights: Record<string, number> = { ...(state?.topicWeights || {}) };
     for (const ev of events) {
       const ratio = ev.durationMs > 0 ? ev.watchedMs / ev.durationMs : 0;
@@ -191,14 +192,14 @@ router.post('/fliq/events', async (req, res) => {
       { upsert: true }
     );
     res.json({ ok: true });
-  } catch (e: any) {
-    logger.warn('[fliq] events failed', { userId, error: e?.message || String(e) });
+  } catch (e: unknown) {
+    logger.warn('[fliq] events failed', { userId, error: (e as ErrorDetails)?.message || String(e) });
     res.status(500).json({ ok: false, error: 'events_failed' });
   }
 });
 
 router.post('/fliq/unplayable', async (req, res) => {
-  const userId = String((req as any).userId || '').trim();
+  const userId = String((req as AuthenticatedRequest).userId || '').trim();
   if (!userId) return res.status(401).json({ ok: false, error: 'unauthorized' });
   const rl = await checkRateLimit(`fliq_unplayable:${userId}`, 30, 60 * 60_000);
   if (!rl.ok) return res.status(429).json({ ok: false, error: 'rate_limited' });
@@ -212,7 +213,7 @@ router.post('/fliq/unplayable', async (req, res) => {
       logger.info('[fliq] video marked unplayable', { id, code, userId });
     }
     res.json({ ok: true });
-  } catch (e: any) {
+  } catch (e: unknown) {
     res.status(500).json({ ok: false, error: 'unplayable_failed' });
   }
 });

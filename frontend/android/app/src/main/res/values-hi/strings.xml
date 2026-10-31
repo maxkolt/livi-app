@@ -5,7 +5,7 @@
   <string name="incoming_call_unknown">कोई कॉल कर रहा है</string>
   <string name="incoming_call_accept">स्वीकार करें</string>
   <string name="incoming_call_decline">अस्वीकार करें</string>
-  <string name="outgoing_call_title">आउटगोइंग वीडियो कॉल</string>
+  <string name="outgoing_call_title">आउटगोइंग कॉल</string>
   <string name="outgoing_call_subtitle">कॉल हो रही है…</string>
   <string name="outgoing_call_subtitle_base">कॉल हो रही है</string>
   <string name="outgoing_call_subtitle_base_audio">कॉल हो रही है</string>

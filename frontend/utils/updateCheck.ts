@@ -59,7 +59,7 @@ export function getCurrentAppVersion(): string {
     const native = nativeApplicationVersion ? String(nativeApplicationVersion).trim() : '';
     if (native) return native;
   } catch {}
-  const v = (Constants.expoConfig as any)?.version ?? '';
+  const v = (Constants.expoConfig)?.version ?? '';
   if (v) return String(v).trim();
   return '0';
 }

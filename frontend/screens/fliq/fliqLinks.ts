@@ -165,7 +165,9 @@ export function peekFliqMeta(link: FliqLink): FliqMeta | undefined {
   return metaMemory.get(metaKey(link));
 }
 
-async function fetchJson(url: string, timeoutMs: number): Promise<any> {
+type OEmbedMetadata = { title?: string; author_name?: string; thumbnail_url?: string };
+
+async function fetchJson(url: string, timeoutMs: number): Promise<OEmbedMetadata | null> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {

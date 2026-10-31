@@ -1,3 +1,5 @@
+import type { ChatMessage } from './chatMessageTypes';
+
 /** Chat message id / delete / read-status helpers (pure). */
 
 import {
@@ -23,7 +25,7 @@ export function isDeletableOnServerMessageId(messageId: string): boolean {
 }
 
 /** Совпадение исходящего текста ± время — убрать дубликат outbox/optimistic, когда сервер уже отдал msg_*. */
-export function approxSameOutgoingTextMessage(a: any, b: any): boolean {
+export function approxSameOutgoingTextMessage(a: ChatMessage, b: ChatMessage): boolean {
   if (String(a?.sender || "") !== "me" || String(b?.sender || "") !== "me") return false;
   const t1 = String(a?.text ?? "").trim();
   const t2 = String(b?.text ?? "").trim();
@@ -58,7 +60,7 @@ export function mergeChatReadStatuses(
 }
 
 /** Удалить сообщение и «близнеца» outbox/optimistic с тем же текстом (чтобы не остался второй пузырь). */
-export function filterRemoveMessageAndOutgoingDupes(prev: any[], deletedId: string): any[] {
+export function filterRemoveMessageAndOutgoingDupes(prev: ChatMessage[], deletedId: string): ChatMessage[] {
   const victim = prev.find((m) => String(m?.id || "") === deletedId);
   return prev.filter((msg) => {
     const id = String(msg?.id || "");
@@ -78,10 +80,10 @@ export function filterRemoveMessageAndOutgoingDupes(prev: any[], deletedId: stri
 
 /** Снять с ленты id с сервера и связанные outbox/optimistic (по тексту и local→server map). */
 export function removeMessagesForDeletedIds(
-  prev: any[],
+  prev: ChatMessage[],
   rawIds: readonly string[],
   localToServer?: ReadonlyMap<string, string>,
-): any[] {
+): ChatMessage[] {
   const deletedSet = new Set(
     (rawIds || []).map((id) => String(id || "").trim()).filter(Boolean),
   );
@@ -117,7 +119,7 @@ export function removeMessagesForDeletedIds(
 /** Перед delete «для обоих»: outbox_* → server id из ленты или из map после доставки. */
 export function resolveServerMessageIdForDelete(
   messageId: string,
-  messages: any[],
+  messages: ChatMessage[],
   localToServer: ReadonlyMap<string, string>,
 ): string {
   const id = String(messageId || "").trim();

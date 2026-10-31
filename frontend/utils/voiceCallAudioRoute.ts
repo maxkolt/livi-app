@@ -1,3 +1,4 @@
+import type { CallAudioGlobals } from './callStateTypes';
 import { NativeModules, Platform } from 'react-native';
 import InCallManager from 'react-native-incall-manager';
 import type { InCallAudioRoute } from '../components/VideoChat/hooks/audioRouteTypes';
@@ -28,8 +29,8 @@ function shouldHoldBluetoothScoAgainstBuiltIn(): boolean {
     // Ручной EAR/SPEAKER всегда сильнее sticky/expect — иначе cycle «на разговорный» остаётся в наушниках.
     const userSel = readUserSelectedCallAudioRoute();
     if (userSel === 'EARPIECE' || userSel === 'SPEAKER_PHONE') return false;
-    if (Date.now() < Number((global as any).__btWearStickyUntilRef?.current || 0)) return true;
-    if (Date.now() < Number((global as any).__btExpectReconnectUntilRef?.current || 0)) return true;
+    if (Date.now() < Number((global as CallAudioGlobals).__btWearStickyUntilRef?.current || 0)) return true;
+    if (Date.now() < Number((global as CallAudioGlobals).__btExpectReconnectUntilRef?.current || 0)) return true;
     if (readUserSelectedExternalCallAudioRoute() === 'BLUETOOTH') return true;
     return userSel === 'BLUETOOTH';
   } catch {
@@ -48,7 +49,7 @@ function shouldHoldBluetoothScoAgainstBuiltIn(): boolean {
  */
 export function applyInCallManagerBuiltInRoute(wantSpeaker: boolean): void {
   try {
-    (InCallManager as any).setForceSpeakerphoneOn?.(wantSpeaker);
+    (InCallManager).setForceSpeakerphoneOn?.(wantSpeaker);
     if (Platform.OS !== 'android') {
       InCallManager.setSpeakerphoneOn(wantSpeaker);
     }

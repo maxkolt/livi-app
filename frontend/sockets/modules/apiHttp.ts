@@ -8,7 +8,7 @@ import { shared } from "./shared";
  * Ошибку сервера возвращает как `{ ok:false, error:"http_<status>:<тело>" }`;
  * бросает, только если сеть не ответила (нет связи / таймаут).
  */
-export async function postApiJson<T = any>(path: string, body: unknown, timeoutMs: number): Promise<T> {
+export async function postApiJson<T = unknown>(path: string, body: unknown, timeoutMs: number): Promise<T> {
   const headers: Record<string, string> = { "Content-Type": "application/json", ...(await getInstallAuthHeaders()) };
   if (shared.currentUserId) headers["x-user-id"] = String(shared.currentUserId);
 

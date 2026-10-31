@@ -1,3 +1,4 @@
+import type { TrackStatsParticipant } from '../../rtcCompatibilityTypes';
 /**
  * Сторож локального видео для проблемных Android-устройств.
  *
@@ -54,8 +55,8 @@ function currentDeviceWatchdogEnv(): DeviceWatchdogEnv {
   return {
     os: Platform.OS,
     version: Number(Platform.Version),
-    brand: (Device as any)?.brand ?? null,
-    manufacturer: (Device as any)?.manufacturer ?? null,
+    brand: (Device)?.brand ?? null,
+    manufacturer: (Device)?.manufacturer ?? null,
   };
 }
 
@@ -109,7 +110,7 @@ export class LocalVideoHealthWatchdog {
   private async sampleProgress(): Promise<VideoProgress> {
     try {
       const room = this.host.getRoom();
-      const stats = await (room?.localParticipant as any)?.getTrackStats?.();
+      const stats = await (room?.localParticipant as TrackStatsParticipant | undefined)?.getTrackStats?.();
       return extractVideoProgress(pickLocalVideoStat(stats || [], this.host.getLocalVideoTrack()));
     } catch {
       return { ...EMPTY_VIDEO_PROGRESS };

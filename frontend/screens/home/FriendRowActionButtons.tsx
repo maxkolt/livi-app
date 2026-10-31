@@ -1,3 +1,5 @@
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import type { RootStackParamList } from '../../navigation/types';
 import React, { useCallback, useRef } from 'react';
 import { AppState, Platform, Text, View } from 'react-native';
 import * as Haptics from 'expo-haptics';
@@ -11,9 +13,11 @@ import { logger } from '../../utils/logger';
 import { type Lang } from '../../utils/i18n';
 import { CHAT_OPEN_DEBOUNCE_MS } from './constants';
 import { FriendRowIconActionButton } from './FriendRowIconActionButton';
-import { isDirectCallSessionLive } from './friendHelpers';
-import type { Friend, MarkReadMenu } from './types';
+import { isDirectCallSessionLive, type DirectCallSnapshot } from './friendHelpers';
+import type { Friend, MarkReadMenu, HomeUiGlobals } from './types';
 import type { HomeStyles } from './styles';
+
+type FriendActionGlobals = HomeUiGlobals & DirectCallSnapshot;
 
 function friendRowBadgeLongPressHaptic() {
   try {
@@ -45,7 +49,7 @@ export function FriendRowChatButton({
 }: {
   friend: Friend;
   styles: HomeStyles;
-  navigation: any;
+  navigation: NativeStackNavigationProp<RootStackParamList, 'Home'>;
   unreadByUser: Record<string, number>;
   prepareFriendRowActionTap: () => void;
   lastChatOpenRef: React.MutableRefObject<{ peerId: string; at: number } | null>;
@@ -217,7 +221,7 @@ export function FriendRowInviteButton({
   const startedCallOnPressInRef = useRef(false);
 
   const isFriendBusy = friend.isBusy || false;
-  const g = global as any;
+  const g = global as FriendActionGlobals;
   const videoCallPartner = g.__videoCallPartnerUserIdRef?.current;
   const activeCallInProgress = isDirectCallSessionLive(g);
   const pipBlocksCall = g.__pipVisibleRef?.current === true;
@@ -233,7 +237,7 @@ export function FriendRowInviteButton({
   const videoDisabled = hardVideoDisabled || outgoingInProgress;
 
   const runStartCall = useCallback(() => {
-    const gAfterTap = global as any;
+    const gAfterTap = global as FriendActionGlobals;
     const activeCallAfterTap = isDirectCallSessionLive(gAfterTap);
     const pipBlocksAfterTap = gAfterTap.__pipVisibleRef?.current === true;
     const videoCallPartnerAfterTap = gAfterTap.__videoCallPartnerUserIdRef?.current;
@@ -272,7 +276,7 @@ export function FriendRowInviteButton({
     const sameFriendOutgoing = String(calling.friend?.id || '') === friendIdStr;
     const outgoingUiActive = callingVisibleRef.current === true;
     const inRedialGrace =
-      Date.now() < Number((global as any).__outgoingRedialGraceUntilRef?.current || 0);
+      Date.now() < Number((global as FriendActionGlobals).__outgoingRedialGraceUntilRef?.current || 0);
     if (
       outgoingUiActive &&
       activeOutgoingAttemptRef.current > 0 &&
@@ -287,7 +291,7 @@ export function FriendRowInviteButton({
       if (shouldResetStaleOutgoing) {
         const currentOutgoingCallId =
           activeOutgoingCallIdRef.current ||
-          String((global as any).__outgoingCallIdRef?.current || '').trim() ||
+          String(global.__outgoingCallIdRef?.current || '').trim() ||
           calling.callId ||
           null;
         if (!currentOutgoingCallId) {
@@ -302,7 +306,7 @@ export function FriendRowInviteButton({
       }
     }
     try {
-      const gTap = global as any;
+      const gTap = global as FriendActionGlobals;
       if (
         gTap.__outgoingStartInFlightRef?.current === true &&
         (!callingVisibleRef.current || inRedialGrace)
@@ -346,7 +350,7 @@ export function FriendRowInviteButton({
           onPressIn={() => {
             prepareFriendRowActionTap();
             const inRedialGrace =
-              Date.now() < Number((global as any).__outgoingRedialGraceUntilRef?.current || 0);
+              Date.now() < Number((global as FriendActionGlobals).__outgoingRedialGraceUntilRef?.current || 0);
             // После cancel — старт на касании, пока JS ещё свободен.
             if (inRedialGrace && !hardVideoDisabled) {
               startedCallOnPressInRef.current = true;

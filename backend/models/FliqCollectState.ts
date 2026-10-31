@@ -1,7 +1,7 @@
 // models/FliqCollectState.ts
 // Очередь сборщика Fliq: когда в последний раз искали пару «тема × язык» и какой вариант запроса следующий.
 // Запись budget:<день по Тихоокеанскому времени> — счётчик поисков за сутки квоты (в поле variant), переживает перезапуски.
-import { Schema, model, models } from 'mongoose';
+import { Schema, model, models, type Model } from 'mongoose';
 
 interface IFliqCollectState {
   key: string;
@@ -20,4 +20,4 @@ const FliqCollectStateSchema = new Schema<IFliqCollectState>(
   { collection: 'fliq_collect_state' }
 );
 
-export default (models.FliqCollectState as any) || model<IFliqCollectState>('FliqCollectState', FliqCollectStateSchema);
+export default (models.FliqCollectState as Model<IFliqCollectState> | undefined) || model<IFliqCollectState>('FliqCollectState', FliqCollectStateSchema);

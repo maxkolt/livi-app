@@ -68,7 +68,7 @@ export type E2eBackup = { v: number; kdf: E2eBackupKdf; n: string; c: string; pk
 type E2eBackupUpload = E2eBackup & { authKey: string };
 
 nacl.setPRNG((out: Uint8Array, n: number) => {
-  const cryptoObj = (globalThis as any).crypto;
+  const cryptoObj = (globalThis).crypto;
   if (!cryptoObj?.getRandomValues) throw new Error("e2e: no secure random source");
   const bytes = new Uint8Array(n);
   cryptoObj.getRandomValues(bytes);
@@ -285,7 +285,7 @@ export function openMessage(
   if (!plain) return { ok: false, reason: "forged" };
   const json = utf8Decode(plain);
   if (json == null) return { ok: false, reason: "forged" };
-  let body: any;
+  let body: Partial<Record<keyof E2eMessageBody, unknown>> | null;
   try {
     body = JSON.parse(json);
   } catch {

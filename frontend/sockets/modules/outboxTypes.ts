@@ -1,4 +1,14 @@
 // frontend/sockets/modules/outboxTypes.ts
+/** Acknowledgement shared by socket and HTTP message mutations. */
+export type MessageMutationResponse = {
+  ok: boolean;
+  error?: string;
+  messageId?: string;
+  delivered?: boolean;
+  timestamp?: string;
+  retryAfterSec?: number;
+};
+
 export type MessageOutboxItem = {
   id: string;
   /** Совпадает с id сообщения в UI до замены на outbox_/msg_* (чтобы удалить из очереди при отмене до ack). */
@@ -11,6 +21,7 @@ export type MessageOutboxItem = {
     text?: string;
     type: "text" | "image" | "audio" | "sticker" | "video_note";
     uri?: string;
+    uris?: string[];
     /** Видеокружок: кадр-превью на сервере. */
     thumbUri?: string;
     /** Видеокружок: кадр-превью на устройстве, ещё не загруженный (как localUri). */

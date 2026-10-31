@@ -17,7 +17,7 @@ export const OFFLINE_ACK_TIMEOUT_MS = 20_000;
 /** Аренда длиннее таймаута ack, чтобы параллельный bind не выдал ту же запись повторно. */
 export const OFFLINE_CLAIM_LEASE_MS = 45_000;
 
-export type ClaimedOfflineMessage = { queueId: unknown; messageData: any };
+export type ClaimedOfflineMessage = { queueId: unknown; messageData: unknown };
 
 export interface OfflineQueuePort {
   /** Взять в аренду все записи получателя, созданные не позже `drainStartedAt`. */
@@ -25,13 +25,17 @@ export interface OfflineQueuePort {
   /** Удалить подтверждённую клиентом запись. */
   remove(queueId: unknown): Promise<void>;
   /** Прежний режим: забрать и сразу удалить. */
-  takeAll(userId: string): Promise<any[]>;
+  takeAll(userId: string): Promise<unknown[]>;
 }
+
+type OfflineAck = (error: unknown, response?: { ok?: boolean } | null) => void;
 
 type AckingSocket = {
   handshake?: { query?: Record<string, unknown> };
-  emit: (event: string, ...args: any[]) => unknown;
-  timeout: (ms: number) => { emit: (event: string, ...args: any[]) => unknown };
+  emit: (event: 'message:received', message: unknown) => unknown;
+  timeout: (ms: number) => {
+    emit: (event: 'message:received', message: unknown, ack: OfflineAck) => unknown;
+  };
 };
 
 export function socketSupportsOfflineAck(sock: { handshake?: { query?: Record<string, unknown> } }): boolean {
@@ -67,7 +71,7 @@ export async function deliverOfflineMessages(
     return 0;
   }
   for (const { queueId, messageData } of claimed) {
-    sock.timeout(OFFLINE_ACK_TIMEOUT_MS).emit('message:received', messageData, (err: unknown, res: any) => {
+    sock.timeout(OFFLINE_ACK_TIMEOUT_MS).emit('message:received', messageData, (err, res) => {
       // Без ack запись остаётся в аренде и уйдёт при следующем подключении.
       if (err || !res?.ok) return;
       queue.remove(queueId).catch((e) => {

@@ -1,6 +1,6 @@
 // models/MissedCall.ts
 // Пропущенные видеозвонки: сохраняются при таймауте/отмене, чтобы получатель мог увидеть их после восстановления сети.
-import { Schema, model, models, type Types } from 'mongoose';
+import { Schema, model, models, type Model, type Types } from 'mongoose';
 
 interface IMissedCall {
   _id: Types.ObjectId;
@@ -24,4 +24,4 @@ const MissedCallSchema = new Schema<IMissedCall>(
 MissedCallSchema.index({ calleeId: 1, createdAt: -1 });
 MissedCallSchema.index({ createdAt: 1 }, { expireAfterSeconds: 60 * 60 * 24 * 30 });
 
-export default (models.MissedCall as any) || model<IMissedCall>('MissedCall', MissedCallSchema);
+export default (models.MissedCall as Model<IMissedCall> | undefined) || model<IMissedCall>('MissedCall', MissedCallSchema);

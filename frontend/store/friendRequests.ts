@@ -98,12 +98,12 @@ async function ensureOwner(): Promise<string | null> {
   useFriendRequests.setState({ ownerId, items: withDevTest([]), busy: {} });
   try {
     const raw = await AsyncStorage.getItem(cacheKey(ownerId));
-    const cached = raw ? JSON.parse(raw) : [];
+    const cached: FriendRequestItem[] | null = raw ? JSON.parse(raw) : [];
     const state = useFriendRequests.getState();
     const onlyDevTest = state.items.every((it) => it.id === DEV_TEST_REQUEST.id);
     if (state.ownerId === ownerId && onlyDevTest && Array.isArray(cached)) {
       useFriendRequests.setState({
-        items: withDevTest(cached.filter((it: any) => isOid(String(it?.id || '')))),
+        items: withDevTest(cached.filter((it) => isOid(String(it?.id || '')))),
       });
     }
   } catch {}
@@ -127,7 +127,7 @@ export function refreshFriendRequests(): Promise<void> {
         .map((row) => toItem(row, prevById.get(String(row._id))));
       setItems(ownerId, items);
     } catch (e) {
-      logger.warn('[friendRequests] refresh failed', e as any);
+      logger.warn('[friendRequests] refresh failed', e);
     }
   })().finally(() => {
     refreshInFlight = null;
@@ -173,12 +173,12 @@ async function respond(id: string, accept: boolean): Promise<boolean> {
       await removeFriendRequest(id);
       return false;
     }
-    const r: any = await respondFriend(id, accept);
+    const r = await respondFriend(id, accept);
     const ok = !!r?.ok;
     if (ok) await removeFriendRequest(id);
     return ok;
   } catch (e) {
-    logger.warn('[friendRequests] respond failed', { id, accept, error: (e as any)?.message });
+    logger.warn('[friendRequests] respond failed', { id, accept, error: (e as { message?: unknown } | null)?.message });
     return false;
   } finally {
     const { [id]: _done, ...rest } = useFriendRequests.getState().busy;

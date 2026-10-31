@@ -16,6 +16,21 @@ export const INTEGRITY_PACKAGES: ReadonlySet<string> = new Set(['com.kolt12max.l
 
 type ServiceAccount = { client_email: string; private_key: string };
 
+/** Raw verdict fields are normalized and compared in summarizeIntegrity. */
+export type IntegrityPayload = {
+  requestDetails?: { requestPackageName?: unknown; requestHash?: unknown; timestampMillis?: unknown } | null;
+  appIntegrity?: { appRecognitionVerdict?: unknown; packageName?: unknown } | null;
+  deviceIntegrity?: {
+    deviceRecognitionVerdict?: unknown;
+    recentDeviceActivity?: { deviceActivityLevel?: unknown } | null;
+  } | null;
+  accountDetails?: { appLicensingVerdict?: unknown } | null;
+};
+
+type OAuthTokenResponse = { access_token?: string; expires_in?: number | string; error?: string };
+type IntegrityDecodeResponse = { tokenPayloadExternal?: IntegrityPayload | null; error?: { status?: string } };
+type HttpJsonResult<T> = { status: number; ok: boolean; json: T | null };
+
 /** Тот же сервисный аккаунт, что у FCM (utils/push.ts): его проект привязан к Play Integrity в Play Console. */
 function readServiceAccount(): ServiceAccount | null {
   try {
@@ -49,12 +64,14 @@ export function buildServiceAccountAssertion(sa: ServiceAccount, nowSec: number)
   return `${unsigned}.${signature}`;
 }
 
-async function postJson(url: string, init: RequestInit): Promise<{ status: number; ok: boolean; json: any }> {
+function postJson(url: typeof TOKEN_URL, init: RequestInit): Promise<HttpJsonResult<OAuthTokenResponse>>;
+function postJson(url: `https://playintegrity.googleapis.com/v1/${string}:decodeIntegrityToken`, init: RequestInit): Promise<HttpJsonResult<IntegrityDecodeResponse>>;
+async function postJson(url: string, init: RequestInit): Promise<HttpJsonResult<OAuthTokenResponse | IntegrityDecodeResponse>> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
     const res = await fetch(url, { ...init, method: 'POST', signal: controller.signal });
-    const json: any = await res.json().catch(() => ({}));
+    const json = await res.json().catch(() => ({})) as OAuthTokenResponse | IntegrityDecodeResponse | null;
     return { status: res.status, ok: res.ok, json };
   } finally {
     clearTimeout(timer);
@@ -80,7 +97,7 @@ async function getAccessToken(): Promise<string> {
 }
 
 /** Расшифровка на стороне Google (шифрование ответов «под управлением Google» в Play Console). */
-export async function decodeIntegrityToken(packageName: string, integrityToken: string): Promise<any> {
+export async function decodeIntegrityToken(packageName: string, integrityToken: string): Promise<IntegrityPayload | null> {
   const access = await getAccessToken();
   const { ok, status, json } = await postJson(
     `https://playintegrity.googleapis.com/v1/${encodeURIComponent(packageName)}:decodeIntegrityToken`,
@@ -106,7 +123,7 @@ export type IntegritySummary = {
 };
 
 export function summarizeIntegrity(
-  payload: any,
+  payload: IntegrityPayload | null | undefined,
   expected: { packageName: string; requestHash: string; nowMs: number }
 ): IntegritySummary {
   const details = payload?.requestDetails || {};

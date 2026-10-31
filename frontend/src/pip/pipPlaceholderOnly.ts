@@ -1,3 +1,5 @@
+import type { MediaStream } from '@livekit/react-native-webrtc';
+import type { CallAudioGlobals } from '../../utils/callStateTypes';
 /** Активен экран «аудиозвонок» (ещё не перешли на video UI). */
 import { Platform } from 'react-native';
 import {
@@ -52,7 +54,7 @@ export {
  */
 export function prepareDirectCallAudioReturnFromPiP(): void {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     // Явный audio-return: сбросить sticky video-expand, иначе layout/focus
     // видят authenticIntent при preferVideoCallUi:false и шумят remount/cam.
     clearDirectCallUserRequestedVideoExpand();
@@ -130,7 +132,7 @@ export function prepareDirectCallAudioReturnFromPiP(): void {
 
 export function mediaStreamHasLiveVideo(stream: unknown): boolean {
   try {
-    const t = (stream as any)?.getVideoTracks?.()?.[0];
+    const t = (stream as Partial<Pick<MediaStream, 'getVideoTracks'>> | null | undefined)?.getVideoTracks?.()?.[0];
     return !!t && t.readyState === 'live' && t.enabled !== false;
   } catch {
     return false;
@@ -143,7 +145,7 @@ function getPipPlaceholderOnlyDebug(opts?: {
   remoteStream?: unknown;
   localStream?: unknown;
 }): { placeholderOnly: boolean; reason: string; flags: Record<string, boolean> } {
-  const g = global as any;
+  const g = global as CallAudioGlobals;
   const flags = {
     inAudioOnlyUiRef: g.__inAudioOnlyUiRef?.current === true,
     pipAudioOnlySticky: g.__pipAudioOnlyPlaceholderRef?.current === true,
@@ -208,7 +210,7 @@ function getPipPlaceholderOnlyDebug(opts?: {
 /** С какого UI ушли в in-app PiP: аудио → иконка возврата «аудио», видео → «видео». */
 export function pipInAppBarEnteredFromAudioOnly(): boolean {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     const sticky = g.__pipInAppRtcFromAudioOnlyRef?.current;
     if (sticky === true) return true;
     if (sticky === false) return false;
@@ -232,7 +234,7 @@ function shouldAllowRtcVideoInInAppPiPBar(opts?: {
   try {
     if (pipInAppBarEnteredFromAudioOnly()) {
       try {
-        const session = (global as any).__webrtcSessionRef?.current;
+        const session = (global as CallAudioGlobals).__webrtcSessionRef?.current;
         if (
           session?.getRemoteCamEnabled?.() === true &&
           mediaStreamHasLiveVideo(opts?.remoteStream ?? session?.getRemoteStream?.())
@@ -248,7 +250,7 @@ function shouldAllowRtcVideoInInAppPiPBar(opts?: {
 
 export function setPipInAppRtcFromAudioOnlySticky(fromAudioOnlyUi: boolean): void {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     g.__pipInAppRtcFromAudioOnlyRef = g.__pipInAppRtcFromAudioOnlyRef || { current: false };
     g.__pipInAppRtcFromAudioOnlyRef.current = !!fromAudioOnlyUi;
   } catch {}
@@ -294,7 +296,7 @@ export function resolvePreferAudioOnlyUiOnActiveCallReturn(_opts?: {
   preferAudioOnlyFromNative?: boolean;
 }): boolean {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     const params = g.__currentCallPiPParamsRef?.current;
     if (g.__stayOnVideoCallUiRef?.current === true) return false;
     if (params?.preferVideoCallUi === true) return false;
@@ -321,7 +323,7 @@ function resolvePreferAudioOnlyUiOnPiPReturn(opts?: {
     if (isInAudioOnlyCallUi()) {
       return true;
     }
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     if (g.__stayOnVideoCallUiRef?.current === true) {
       return false;
     }
@@ -355,7 +357,7 @@ function resolvePreferAudioOnlyUiOnPiPReturn(opts?: {
   }
 }
 
-type SystemPiPLeaveContext = {
+export type SystemPiPLeaveContext = {
   preferAudioOnly: boolean;
   /** Уход с аудио UI / audio-origin in-app — system PiP только лого, даже если peer потом включит камеру. */
   audioOrigin: boolean;
@@ -372,7 +374,7 @@ type SystemPiPLeaveContext = {
  */
 export function clearStickySystemPiPCompactFlags(_reason?: string): void {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     g.__pendingSystemPiPSyncRef = g.__pendingSystemPiPSyncRef || { current: false };
     g.__pendingSystemPiPSyncRef.current = false;
     g.__leavingVideoCallByHomeRef = g.__leavingVideoCallByHomeRef || { current: false };
@@ -399,7 +401,7 @@ export function clearStickySystemPiPCompactFlags(_reason?: string): void {
  */
 export function clearStaleInAppPiPRestoreForIncomingAnswer(ttlMs = 10_000): void {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     const now = Date.now();
     g.__suppressInAppPiPUntilRef = g.__suppressInAppPiPUntilRef || { current: 0 };
     g.__suppressInAppPiPUntilRef.current = Math.max(
@@ -440,7 +442,7 @@ export function clearStaleInAppPiPRestoreForIncomingAnswer(ttlMs = 10_000): void
 /** Sticky на всю сессию system PiP (ставится в AboutToEnter). */
 export function markSystemPiPSessionAudioOrigin(fromAudio: boolean): void {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     g.__systemPiPSessionAudioOriginRef = g.__systemPiPSessionAudioOriginRef || { current: false };
     g.__systemPiPSessionAudioOriginRef.current = !!fromAudio;
     g.__systemPiPSessionAudioOriginDecidedRef =
@@ -451,7 +453,7 @@ export function markSystemPiPSessionAudioOrigin(fromAudio: boolean): void {
 
 export function clearSystemPiPSessionAudioOrigin(): void {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     if (g.__systemPiPSessionAudioOriginRef) g.__systemPiPSessionAudioOriginRef.current = false;
     if (g.__systemPiPSessionAudioOriginDecidedRef) {
       g.__systemPiPSessionAudioOriginDecidedRef.current = false;
@@ -461,7 +463,7 @@ export function clearSystemPiPSessionAudioOrigin(): void {
 
 export function isSystemPiPSessionAudioOrigin(): boolean {
   try {
-    return (global as any).__systemPiPSessionAudioOriginRef?.current === true;
+    return (global as CallAudioGlobals).__systemPiPSessionAudioOriginRef?.current === true;
   } catch {
     return false;
   }
@@ -474,12 +476,12 @@ export function isSystemPiPSessionAudioOrigin(): boolean {
  */
 export function isSystemPiPLeaveAudioOrigin(): boolean {
   try {
-    if ((global as any).__systemPiPSessionAudioOriginDecidedRef?.current === true) {
+    if ((global as CallAudioGlobals).__systemPiPSessionAudioOriginDecidedRef?.current === true) {
       return isSystemPiPSessionAudioOrigin();
     }
   } catch {}
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     if (g.__stayOnVideoCallUiRef?.current === true) return false;
     const params = g.__currentCallPiPParamsRef?.current;
     if (params?.preferVideoCallUi === true) return false;
@@ -509,7 +511,7 @@ export function shouldUseSystemPiPPlaceholderOnly(opts?: {
   localStream?: unknown;
 }): boolean {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     const params = g.__currentCallPiPParamsRef?.current;
     const session = g.__webrtcSessionRef?.current;
     const sessionRemoteStream =
@@ -579,7 +581,7 @@ export function commitSystemPiPLeaveContextSnapshot(opts?: {
   routeName?: string | null;
 }): void {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     const params = g.__currentCallPiPParamsRef?.current;
     const existing = g.__systemPiPLeaveContextSnapshotRef as SystemPiPLeaveContext | undefined;
     const placeholderOnly =
@@ -661,7 +663,7 @@ export function commitSystemPiPLeaveContextSnapshot(opts?: {
 /** После успешного return из system PiP — сбросить снимок, чтобы не отравить следующий leave. */
 export function clearSystemPiPLeaveContextSnapshot(): void {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     g.__systemPiPLeaveContextSnapshotRef = null;
   } catch {}
 }
@@ -673,7 +675,7 @@ export function refreshSystemPiPLeaveContextSnapshot(): void {
 
 export function peekSystemPiPLeaveContextForReturn(): SystemPiPLeaveContext {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     const snap = g.__systemPiPLeaveContextSnapshotRef as SystemPiPLeaveContext | undefined;
     const suspendedInApp = g.__pipSuspendedForSystemPiPRef?.current === true;
     if (snap && Date.now() - snap.capturedAt < 120_000) {

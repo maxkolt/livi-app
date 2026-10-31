@@ -29,27 +29,33 @@ import { __flushPendingRtcSignals } from "./rtc";
 import { shared } from "./shared";
 import { socket } from "./socketCore";
 import { __notifyCurrentUserId } from "./authState";
+import { nextSocketTransportOrder } from "./socketTransportPreference";
+
+type ConnectionGlobals = typeof global & {
+  __incomingCallScreenVisibleRef?: { current: boolean };
+  __outgoingCallScreenVisibleRef?: { current: boolean };
+  __socketActiveVideoCallRef?: { current: boolean };
+  __currentChatPeerId?: string | null;
+};
+
+type DisconnectDetails = {
+  description?: unknown;
+  message?: unknown;
+  context?: unknown;
+};
 
 /** Prefer the other transport after a failed attempt (VPN often kills only one path). */
 function preferAlternateSocketTransport(failedHint: string): void {
   try {
     const msg = String(failedHint || "").toLowerCase();
-    const ioOpts: any = (socket as any)?.io?.opts;
+    const ioOpts = socket?.io?.opts;
     if (!Array.isArray(ioOpts?.transports) || ioOpts.transports.length < 2) return;
 
-    const current = String(ioOpts.transports[0] || "");
-    let next: string[] | null = null;
-
-    if (msg.includes("xhr poll") || (msg.includes("polling") && !msg.includes("websocket"))) {
-      next = ["websocket", "polling"];
-    } else if (msg.includes("websocket")) {
-      next = ["polling", "websocket"];
-    } else if (msg.includes("timeout") || msg.includes("transport error")) {
-      next = current === "websocket" ? ["polling", "websocket"] : ["websocket", "polling"];
-    }
-
-    if (!next || next[0] === current) return;
+    const next = nextSocketTransportOrder(ioOpts.transports, msg);
+    if (!next) return;
     ioOpts.transports = next;
+    // A remembered successful WS route must not override this explicit fallback.
+    ioOpts.rememberUpgrade = false;
     logger.warn(`[socket] transport preference → ${next[0]} (after: ${msg.slice(0, 80) || "unknown"})`);
   } catch {}
 }
@@ -71,7 +77,7 @@ export async function hardRecycleSocketConnection(reason = "manual"): Promise<vo
   shared.reconnecting = true;
 
   try {
-    const mgr: any = (socket as any).io;
+    const mgr = socket.io;
     try {
       socket.disconnect();
     } catch {}
@@ -81,6 +87,7 @@ export async function hardRecycleSocketConnection(reason = "manual"): Promise<vo
     // Under VPN, HTTPS long-polling often survives when WS upgrade is blocked.
     if (mgr?.opts) {
       mgr.opts.transports = ["polling", "websocket"];
+      mgr.opts.rememberUpgrade = false;
       mgr.opts.tryAllTransports = true;
       mgr.opts.timeout = SOCKET_ENGINE_TIMEOUT_MS;
       mgr.opts.reconnection = true;
@@ -98,7 +105,7 @@ export async function hardRecycleSocketConnection(reason = "manual"): Promise<vo
       signal: controller.signal,
       headers: { Accept: "*/*" },
       cache: "no-store",
-    } as any).catch(() => null);
+    } as RequestInit & { cache: "no-store" }).catch(() => null);
     clearTimeout(t);
   } catch {}
 
@@ -119,7 +126,7 @@ function mirrorCallPresenceFlagsToGlobal(patch: {
   activeVideoCall?: boolean;
 }): void {
   try {
-    const g = global as any;
+    const g = global as ConnectionGlobals;
     if (typeof patch.incomingScreen === "boolean") {
       g.__incomingCallScreenVisibleRef = g.__incomingCallScreenVisibleRef || { current: false };
       g.__incomingCallScreenVisibleRef.current = patch.incomingScreen;
@@ -230,13 +237,13 @@ function syncAppVisibilityToServerFromAppState(): void {
 function shouldAttemptRealtimeConnection(): boolean {
   if (SOCKET_KEEP_ALIVE_IN_BACKGROUND) return true;
   const inSystemPiP =
-    typeof (global as any).__pipInSystemModeRef?.current === "boolean" &&
-    (global as any).__pipInSystemModeRef?.current === true;
+    typeof global.__pipInSystemModeRef?.current === "boolean" &&
+    global.__pipInSystemModeRef?.current === true;
   return !shared.realtimePaused || shared.outgoingCallScreenVisible || shared.incomingCallScreenVisible || shared.activeVideoCall || inSystemPiP;
 }
 
 function isExpectedSocketConnectError(error: unknown): boolean {
-  const msg = String((error as any)?.message || error || "").toLowerCase();
+  const msg = String((error as { message?: unknown } | null)?.message || error || "").toLowerCase();
   return (
     msg.includes("websocket error") ||
     msg.includes("xhr poll error") ||
@@ -255,7 +262,7 @@ export async function applyAuthAndConnect() {
   shared.connectAttemptPromise = (async () => {
     try {
       const installId = await getInstallId();
-      // @ts-ignore
+
       socket.auth = { installId, ...(shared.currentUserId ? { userId: shared.currentUserId } : {}) };
 
       // Если realtime сейчас сознательно поставлен на паузу, не стартуем новый connect().
@@ -328,7 +335,7 @@ export async function applyAuthAndConnect() {
             resolve();
           };
 
-          const onError = (err: any) => {
+          const onError = (err: Error) => {
             if (!shouldAttemptRealtimeConnection()) {
               cleanup();
               resolve();
@@ -414,7 +421,7 @@ export async function boot() {
             return;
           }
         } else {
-          const err = String((profileResponse as any)?.error || "").toLowerCase();
+          const err = String(profileResponse?.error || "").toLowerCase();
           const isDefinitiveUserMissing =
             err === "user_not_found" ||
             err.includes("user_not_found") ||
@@ -427,12 +434,12 @@ export async function boot() {
           // ВАЖНО: оффлайн/таймаут/временный сбой НЕ должен приводить к пересозданию userId
           // и очистке локального профиля/кэшей друзей.
           logger.warn("[boot] Profile check failed (temporary), keep saved userId and local cache", {
-            error: (profileResponse as any)?.error,
+            error: profileResponse?.error,
           });
         }
       } catch (e) {
         // ВАЖНО: при сетевых сбоях не пересоздаём пользователя.
-        logger.warn("[boot] Profile check threw error, keep saved userId and local cache", e as any);
+        logger.warn("[boot] Profile check threw error, keep saved userId and local cache", e);
       }
     } else {
       // Нет сохраненного userId (удаление приложения или сброс аккаунта) - создаем нового
@@ -477,7 +484,7 @@ export function setOutgoingCallScreenVisible(visible: boolean): void {
   ) {
     shared.realtimePaused = true;
     try {
-      (socket as any).io.opts.reconnection = false;
+      socket.io.opts.reconnection = false;
     } catch {}
     if (socket?.connected) socket.disconnect();
   }
@@ -500,7 +507,7 @@ export function setIncomingCallScreenVisible(visible: boolean, fromUserId?: stri
   ) {
     shared.realtimePaused = true;
     try {
-      (socket as any).io.opts.reconnection = false;
+      socket.io.opts.reconnection = false;
     } catch {}
     if (socket?.connected) socket.disconnect();
   }
@@ -543,7 +550,7 @@ export function setActiveVideoCall(active: boolean, partnerDisplayName?: string 
   ) {
     shared.realtimePaused = true;
     try {
-      (socket as any).io.opts.reconnection = false;
+      socket.io.opts.reconnection = false;
     } catch {}
     if (socket?.connected) socket.disconnect();
   }
@@ -589,12 +596,12 @@ try {
 
       if (wasForeground && !isForeground) {
         if (SOCKET_KEEP_ALIVE_IN_BACKGROUND) return;
-        const inSystemPiP = typeof (global as any).__pipInSystemModeRef?.current === "boolean" && (global as any).__pipInSystemModeRef?.current === true;
+        const inSystemPiP = typeof global.__pipInSystemModeRef?.current === "boolean" && global.__pipInSystemModeRef?.current === true;
         if (shared.outgoingCallScreenVisible || shared.incomingCallScreenVisible || shared.activeVideoCall || inSystemPiP) return;
         shared.realtimePaused = true;
         try {
           try {
-            (socket as any).io.opts.reconnection = false;
+            socket.io.opts.reconnection = false;
           } catch {}
           if (socket?.connected) socket.disconnect();
         } catch {}
@@ -607,7 +614,7 @@ try {
         // нативные экраны звонка и видеозвонок могут оставаться активными при возврате из фона; сброс давал
         // ложный «офлайн», обрыв сокета во время входящего/исходящего и рассинхрон presence.
         try {
-          (socket as any).io.opts.reconnection = true;
+          socket.io.opts.reconnection = true;
         } catch {}
         // applyAuthAndConnect already sets installId/userId and connects with timeouts.
         applyAuthAndConnect().catch(() => {});
@@ -619,7 +626,7 @@ try {
 /* ========= logging ========= */
 socket.on("server:restarting", () => {
   try {
-    const mgr = (socket as any).io;
+    const mgr = socket.io;
     if (mgr?.opts) {
       mgr.opts.reconnectionDelay = SOCKET_RECONNECT_AFTER_SERVER_RESTART_DELAY_MS;
       mgr.opts.reconnectionDelayMax = SOCKET_RECONNECT_AFTER_SERVER_RESTART_DELAY_MAX_MS;
@@ -631,7 +638,7 @@ socket.on("server:restarting", () => {
 socket.on("connect", async () => {
   shared.reconnecting = false;
   try {
-    const mgr = (socket as any).io;
+    const mgr = socket.io;
     if (mgr?.opts) {
       mgr.opts.reconnectionDelay = SOCKET_RECONNECT_DELAY_MS;
       mgr.opts.reconnectionDelayMax = SOCKET_RECONNECT_DELAY_MAX_MS;
@@ -639,19 +646,19 @@ socket.on("connect", async () => {
   } catch {}
   logger.info("[socket] connected", {
     connectMs: connectAttemptStartedAt ? Date.now() - connectAttemptStartedAt : null,
-    transport: (socket as any)?.io?.engine?.transport?.name ?? null,
+    transport: socket?.io?.engine?.transport?.name ?? null,
     socketId: socket.id ?? null,
   });
   connectAttemptStartedAt = 0;
   // If we connected with installId in auth, handshake is considered valid.
   try {
-    // @ts-ignore
-    const auth = (socket as any)?.auth;
+
+    const auth = socket?.auth as { installId?: string } | undefined;
     if (auth?.installId) shared.handshakeHasInstallId = true;
   } catch {}
 
   // КРИТИЧНО: Если у нас есть userId, но socket подключился без него - отправляем reauth (дедуп с boot / другими вызовами)
-  if (shared.currentUserId && !(socket as any).data?.userId) {
+  if (shared.currentUserId && !socket.data?.userId) {
     try {
       const reauthStartedAt = Date.now();
       const reauthResponse = await emitReauthDeduped(shared.currentUserId);
@@ -682,7 +689,7 @@ socket.on("connect", async () => {
   }
   // После reconnect сервер сбрасывает chat:viewing — восстанавливаем, если пользователь всё ещё в переписке.
   try {
-    const peer = (global as any).__currentChatPeerId;
+    const peer = (global as ConnectionGlobals).__currentChatPeerId;
     if (peer && typeof peer === "string" && peer.length > 0) {
       sendChatViewing(peer);
     }
@@ -696,7 +703,7 @@ socket.io.on("reconnect_attempt", () => {
 });
 // Manager `reconnect` не дублируем: после успешного переподключения снова срабатывает `connect` → один reauth через emitReauthDeduped.
 
-socket.on("disconnect", (r, details?: any) => {
+socket.on("disconnect", (r, details?: DisconnectDetails) => {
   // Временные отвалы: по ним считаем, что сокет в состоянии переподключения (для логов и isReconnecting()).
   // io server disconnect: корректное закрытие при деплое/restart (см. server:restarting на бэкенде)
   const transient = ["transport close", "ping timeout", "transport error", "io server disconnect"];
@@ -713,8 +720,8 @@ socket.on("disconnect", (r, details?: any) => {
   } else if (transient.includes(reason)) {
     // info, не debug: под VPN обрывы — главная причина долгого входа, их надо видеть в логах.
     logger.info(`[socket] disconnected (${reason}) reconnecting=${shared.reconnecting} (transient; reauth after reconnect if needed)`, {
-      detail: String(details?.description?.message ?? details?.message ?? details?.description ?? ""),
-      context: details?.context ? String(details.context?.message ?? details.context) : undefined,
+      detail: String((details?.description as { message?: unknown } | null)?.message ?? details?.message ?? details?.description ?? ""),
+      context: details?.context ? String((details.context as { message?: unknown } | null)?.message ?? details.context) : undefined,
     });
   } else {
     logger.warn(`[socket] disconnected (${reason || "unknown"}) reconnecting=${shared.reconnecting}`);
@@ -725,10 +732,10 @@ socket.on("connect_error", (e) => {
   shared.reconnecting = true;
   // Flip transport preference only between reconnect cycles (debounced), not on every packet error.
   const now = Date.now();
-  const lastFlip = (socket as any).__liviLastTransportFlipAt || 0;
+  const lastFlip = socket.__liviLastTransportFlipAt || 0;
   if (now - lastFlip > 8_000) {
-    (socket as any).__liviLastTransportFlipAt = now;
-    preferAlternateSocketTransport((e as any)?.message || String(e || ""));
+    socket.__liviLastTransportFlipAt = now;
+    preferAlternateSocketTransport(e?.message || String(e || ""));
   }
   console.warn(`[socket] error ${e?.message || e}`);
 });
@@ -746,7 +753,7 @@ try {
     const wasReachable = lastNetReachable;
     lastNetReachable = reachable;
 
-    const typeKey = `${String(state.type || '')}:${String((state.details as any)?.isConnectionExpensive ?? '')}`;
+    const typeKey = `${String(state.type || '')}:${String((state.details as { isConnectionExpensive?: boolean } | null)?.isConnectionExpensive ?? '')}`;
     const typeChanged = !!lastNetTypeKey && typeKey !== lastNetTypeKey;
     lastNetTypeKey = typeKey || lastNetTypeKey;
 

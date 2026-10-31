@@ -1,3 +1,4 @@
+import type { CallAudioGlobals } from './callStateTypes';
 /**
  * Пункт 4: mutex system PiP ↔ in-app PiP.
  * Одновременно активен только один режим; in-app плашка не должна
@@ -19,7 +20,7 @@ export function isSystemPiPActiveOrEnteringSync(): boolean {
   try {
     if (isPipInSystemMode()) return true;
     if (isPendingSystemPiPSync()) return true;
-    const entryUntil = Number((global as any).__systemPiPEntryInProgressUntilRef?.current || 0);
+    const entryUntil = Number((global as CallAudioGlobals).__systemPiPEntryInProgressUntilRef?.current || 0);
     if (entryUntil > Date.now()) return true;
     return false;
   } catch {

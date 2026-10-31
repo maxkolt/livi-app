@@ -25,6 +25,10 @@ import {
 import { VIDEO_NOTE_MAX_MS, VIDEO_NOTE_MIN_MS } from "./videoNoteFiles";
 import type { VideoNoteRecorderHandle } from "./VideoNoteRecorder";
 
+type RecordingOptions = NonNullable<Parameters<Audio.Recording['prepareToRecordAsync']>[0]>;
+type NativeRecordingOptions = Omit<RecordingOptions, 'web'> & Partial<Pick<RecordingOptions, 'web'>>;
+type PrepareNativeRecording = (options: NativeRecordingOptions) => ReturnType<Audio.Recording['prepareToRecordAsync']>;
+
 type RecordMode = "voice" | "video";
 /** Дольше — удержание (запись), короче — касание (подсказка «удерживайте…»). */
 const HOLD_START_MS = 170;
@@ -150,7 +154,7 @@ export function useChatVoiceRecord({
 
   const updateTrashZone = React.useCallback(() => {
     try {
-      const node: any = trashMeasureRef.current;
+      const node = trashMeasureRef.current;
       if (!node?.measureInWindow) return;
       node.measureInWindow((x: number, y: number, w: number, h: number) => {
         trashZoneRef.current = { x, y, w, h };
@@ -241,7 +245,7 @@ export function useChatVoiceRecord({
       try {
         await rec.stopAndUnloadAsync();
         const uri = rec.getURI() || "";
-        const st: any = await rec.getStatusAsync().catch(() => null);
+        const st = await rec.getStatusAsync().catch(() => null);
         const durationMs = Math.min(
           VOICE_MAX_MS,
           Math.max(
@@ -536,7 +540,8 @@ export function useChatVoiceRecord({
       setRecordingKind("voice");
       setVoiceIsRecording(true);
       recording = new Audio.Recording();
-      await recording.prepareToRecordAsync({
+      // This recorder runs on Android/iOS; expo-av requires web options in its cross-platform type.
+      await (recording.prepareToRecordAsync as PrepareNativeRecording)({
         android: {
           extension: ".m4a",
           outputFormat: Audio.AndroidOutputFormat.MPEG_4,
@@ -555,9 +560,9 @@ export function useChatVoiceRecord({
           linearPCMIsBigEndian: false,
           linearPCMIsFloat: false,
         },
-        web: undefined as any,
+        web: undefined,
         isMeteringEnabled: false,
-      } as any);
+      });
       await recording.startAsync();
 
       if (startAbandoned()) {
@@ -586,7 +591,7 @@ export function useChatVoiceRecord({
           : 0;
         let recorderMs = 0;
         try {
-          const st: any = await rec.getStatusAsync();
+          const st = await rec.getStatusAsync();
           recorderMs = Number(st?.durationMillis || 0);
         } catch {}
 
@@ -665,7 +670,23 @@ export function useChatVoiceRecord({
    * посреди жеста начинает отсчёт dx/dy с нуля экрана — замок вверх и отмена влево ломались
    * (а пересоздавался он каждые 100 мс вместе с таймером записи).
    */
-  const latestRef = React.useRef<any>(null);
+  const latestRef = React.useRef<{
+    startVoiceRecording: typeof startVoiceRecording;
+    startVideoRecording: typeof startVideoRecording;
+    stopVideoRecording: typeof stopVideoRecording;
+    stopVoiceRecording: typeof stopVoiceRecording;
+    cancelVoiceRecordingWithAnimation: typeof cancelVoiceRecordingWithAnimation;
+    armCancelUI: typeof armCancelUI;
+    disarmCancelUI: typeof disarmCancelUI;
+    resetVoiceGesture: typeof resetVoiceGesture;
+    isInTrashZone: typeof isInTrashZone;
+    updateTrashZone: typeof updateTrashZone;
+    startLocalRecordingSignal: typeof startLocalRecordingSignal;
+    lockRecording: typeof lockRecording;
+    currentUserId: typeof currentUserId;
+    peerId: typeof peerId;
+    selectionMode: typeof selectionMode;
+  } | null>(null);
   latestRef.current = {
     startVoiceRecording,
     startVideoRecording,
@@ -683,7 +704,7 @@ export function useChatVoiceRecord({
     peerId,
     selectionMode,
   };
-  const L = () => latestRef.current;
+  const L = () => latestRef.current!;
 
   const makeRecordResponder = (mode: RecordMode) => {
     const pressScale = mode === "video" ? videoScale : micScale;

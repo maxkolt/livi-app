@@ -1,3 +1,4 @@
+import type { PanGestureHandlerGestureEvent, PanGestureHandlerStateChangeEvent, PinchGestureHandlerGestureEvent, PinchGestureHandlerStateChangeEvent, TapGestureHandlerStateChangeEvent } from 'react-native-gesture-handler';
 // components/MediaViewer.tsx
 import React from 'react';
 import {
@@ -123,13 +124,13 @@ const ZoomableAlbumSlide = React.memo(function ZoomableAlbumSlide({
   slideKey: string;
   isActive: boolean;
   scaleNumber: number;
-  scale: Animated.AnimatedInterpolation<number> | any;
+  scale: ReturnType<typeof Animated.multiply>;
   translateX: Animated.Value;
   translateY: Animated.Value;
-  onPinchEvent: (...args: any[]) => void;
-  onPinchStateChange: (e: any) => void;
-  onPanEvent: (e: any) => void;
-  onPanStateChange: (e: any) => void;
+  onPinchEvent: (e: PinchGestureHandlerGestureEvent) => void;
+  onPinchStateChange: (e: PinchGestureHandlerStateChangeEvent) => void;
+  onPanEvent: (e: PanGestureHandlerGestureEvent) => void;
+  onPanStateChange: (e: PanGestureHandlerStateChangeEvent) => void;
 }) {
   return (
     <View style={{ width, height, justifyContent: 'center', alignItems: 'center' }}>
@@ -172,7 +173,7 @@ interface MediaViewerProps {
   onClosed?: () => void;
   mediaType: 'image';
   uri: string;
-  name?: string;
+  name?: string | null;
   onSend?: (finalUri: string) => void;
   /** All photos in the same chat message. Swipe between them when length > 1. */
   uris?: string[];
@@ -215,7 +216,7 @@ export default function MediaViewer({
       return next;
     });
   }, [chromeOpacity]);
-  const onMediaTapStateChange = React.useCallback((e: any) => {
+  const onMediaTapStateChange = React.useCallback((e: TapGestureHandlerStateChangeEvent) => {
     if (e?.nativeEvent?.state === State.ACTIVE) {
       toggleChrome();
     }
@@ -286,7 +287,7 @@ export default function MediaViewer({
     [pinchScale],
   );
 
-  const onPinchStateChange = React.useCallback((e: any) => {
+  const onPinchStateChange = React.useCallback((e: PinchGestureHandlerStateChangeEvent) => {
     if (e.nativeEvent.oldState === State.ACTIVE) {
       let next = lastScale.current * e.nativeEvent.scale;
       // Clamp scale between 1x and 6x
@@ -314,7 +315,7 @@ export default function MediaViewer({
     }
   }, [baseScale, pinchScale, translateX, translateY]);
 
-  const onPanEvent = React.useCallback((e: any) => {
+  const onPanEvent = React.useCallback((e: PanGestureHandlerGestureEvent) => {
     const s = lastScaleRef.current;
     if (s <= 1) return;
     const dx = Number(e?.nativeEvent?.translationX || 0);
@@ -326,7 +327,7 @@ export default function MediaViewer({
     translateY.setValue(ny);
   }, [translateX, translateY, containerSize.w, containerSize.h]);
 
-  const onPanStateChange = React.useCallback((e: any) => {
+  const onPanStateChange = React.useCallback((e: PanGestureHandlerStateChangeEvent) => {
     if (e?.nativeEvent?.oldState === State.ACTIVE) {
       const s = lastScaleRef.current;
       if (s <= 1) {
@@ -367,7 +368,7 @@ export default function MediaViewer({
   }, []);
 
   const onCropMoveEvent = React.useCallback(
-    (e: any) => {
+    (e: PanGestureHandlerGestureEvent) => {
       if (!cropMode) return;
       const base = cropLast.current || cropRectRef.current;
       const dx = Number(e?.nativeEvent?.translationX || 0);
@@ -378,7 +379,7 @@ export default function MediaViewer({
   );
 
   const onCropMoveState = React.useCallback(
-    (e: any) => {
+    (e: PanGestureHandlerStateChangeEvent) => {
       if (!cropMode) return;
       if (e?.nativeEvent?.oldState === State.ACTIVE) {
         cropLast.current = cropRectRef.current;
@@ -389,7 +390,7 @@ export default function MediaViewer({
 
   type Corner = 'tl' | 'tr' | 'bl' | 'br';
   const onCornerEvent = React.useCallback(
-    (corner: Corner, e: any) => {
+    (corner: Corner, e: PanGestureHandlerGestureEvent) => {
       if (!cropMode) return;
       const base = cropLast.current || cropRectRef.current;
       const dx = Number(e?.nativeEvent?.translationX || 0);
@@ -432,7 +433,7 @@ export default function MediaViewer({
   );
 
   const onCornerState = React.useCallback(
-    (e: any) => {
+    (e: PanGestureHandlerStateChangeEvent) => {
       if (!cropMode) return;
       if (e?.nativeEvent?.oldState === State.ACTIVE) {
         cropLast.current = cropRectRef.current;
@@ -715,7 +716,7 @@ export default function MediaViewer({
         // Fallback на стандартный Share из RN (требует url)
         try {
           const { Share } = await import('react-native');
-          await (Share as any).share({ url: local });
+          await (Share).share({ url: local });
         } catch {}
       }
     } catch (e) {
@@ -992,22 +993,22 @@ export default function MediaViewer({
                   ]}
                 />
                 <PanGestureHandler
-                  onBegan={beginCropDrag as any}
+                  onBegan={beginCropDrag}
                   onGestureEvent={onCropMoveEvent}
                   onHandlerStateChange={onCropMoveState}
                 >
                   <View style={[styles.cropFrame, { left: cropRect.x, top: cropRect.y, width: cropRect.w, height: cropRect.h }]}>
                     {/* Corner handles */}
-                    <PanGestureHandler onBegan={beginCropDrag as any} onGestureEvent={(e) => onCornerEvent('tl', e)} onHandlerStateChange={onCornerState}>
+                    <PanGestureHandler onBegan={beginCropDrag} onGestureEvent={(e) => onCornerEvent('tl', e)} onHandlerStateChange={onCornerState}>
                       <View style={[styles.handle, styles.handleTL]} />
                     </PanGestureHandler>
-                    <PanGestureHandler onBegan={beginCropDrag as any} onGestureEvent={(e) => onCornerEvent('tr', e)} onHandlerStateChange={onCornerState}>
+                    <PanGestureHandler onBegan={beginCropDrag} onGestureEvent={(e) => onCornerEvent('tr', e)} onHandlerStateChange={onCornerState}>
                       <View style={[styles.handle, styles.handleTR]} />
                     </PanGestureHandler>
-                    <PanGestureHandler onBegan={beginCropDrag as any} onGestureEvent={(e) => onCornerEvent('bl', e)} onHandlerStateChange={onCornerState}>
+                    <PanGestureHandler onBegan={beginCropDrag} onGestureEvent={(e) => onCornerEvent('bl', e)} onHandlerStateChange={onCornerState}>
                       <View style={[styles.handle, styles.handleBL]} />
                     </PanGestureHandler>
-                    <PanGestureHandler onBegan={beginCropDrag as any} onGestureEvent={(e) => onCornerEvent('br', e)} onHandlerStateChange={onCornerState}>
+                    <PanGestureHandler onBegan={beginCropDrag} onGestureEvent={(e) => onCornerEvent('br', e)} onHandlerStateChange={onCornerState}>
                       <View style={[styles.handle, styles.handleBR]} />
                     </PanGestureHandler>
                   </View>

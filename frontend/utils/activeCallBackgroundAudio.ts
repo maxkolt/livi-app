@@ -1,3 +1,4 @@
+import type { CallAudioGlobals } from './callStateTypes';
 import { AppState, Platform, type AppStateStatus, NativeModules } from 'react-native';
 import { captureCallAudioRouteFromUi, isOngoingCallSession, peekSystemPiPReturnMediaSnapshot, resolveActiveCallInCallMedia, readActiveExternalCallAudioRoute, isDirectAudioEarpieceStabilizeWindow, isIncomingAnswerTransitionActive } from './activeCallSession';
 import {
@@ -38,7 +39,7 @@ function clearBackgroundInterval(): void {
 function restoreSessionMicrophoneIfNeeded(): void {
   if (isExternalCallHoldActive()) return;
   try {
-    const session = (global as any).__webrtcSessionRef?.current;
+    const session = (global as CallAudioGlobals).__webrtcSessionRef?.current;
     if (session && typeof session.restoreMicrophoneAfterAppBackground === 'function') {
       void session.restoreMicrophoneAfterAppBackground();
     }
@@ -130,7 +131,7 @@ function onAppStateChange(next: AppStateStatus): void {
     // после accept даёт короткий background→active блип (~13мс), он взводит их, PiP не
     // происходит, и VideoCall потом считает, что мы уходим в PiP (compact без кнопок).
     try {
-      const g = global as any;
+      const g = global as CallAudioGlobals;
       const inSystemPiP = g.__pipInSystemModeRef?.current === true;
       const pendingEnter = g.__pendingSystemPiPSyncRef?.current === true;
       const entryUntil = Number(g.__systemPiPEntryInProgressUntilRef?.current || 0);
@@ -143,7 +144,7 @@ function onAppStateChange(next: AppStateStatus): void {
     } catch (_) {}
     syncAndroidLeaveHintForOngoingCall();
     try {
-      const g = global as any;
+      const g = global as CallAudioGlobals;
       const returningFromPiP = Date.now() < Number(g.__returningFromSystemPiPUntilRef?.current || 0);
       const hasPendingSnap = !!peekSystemPiPReturnMediaSnapshot();
       const plaqueVisible = g.__pipVisibleRef?.current === true;
@@ -170,12 +171,12 @@ function onAppStateChange(next: AppStateStatus): void {
     if (foregroundExternal) {
       setPersistedCallAudioRoute(foregroundExternal);
       try {
-        (global as any).__lastAppliedCallAudioRouteRef = { current: foregroundExternal };
+        (global as CallAudioGlobals).__lastAppliedCallAudioRouteRef = { current: foregroundExternal };
       } catch {}
     } else if (stabilizeEarpiece) {
       setPersistedCallAudioRoute('EARPIECE');
       try {
-        (global as any).__lastAppliedCallAudioRouteRef = { current: 'EARPIECE' };
+        (global as CallAudioGlobals).__lastAppliedCallAudioRouteRef = { current: 'EARPIECE' };
       } catch {}
     } else {
       captureCallAudioRouteFromUi();
@@ -183,7 +184,7 @@ function onAppStateChange(next: AppStateStatus): void {
     if (prev !== 'active') {
       armCallAudioPreservePriority(isCallAudioPiPTransitionWindow() ? 5000 : 3500);
       try {
-        const g = global as any;
+        const g = global as CallAudioGlobals;
         const plaqueVisible = g.__pipVisibleRef?.current === true;
         const onHomeWithPlaque =
           plaqueVisible &&
@@ -220,7 +221,8 @@ function onAppStateChange(next: AppStateStatus): void {
               setTimeout(() => {
                 try {
                   if (g.__pipVisibleRef?.current === true) {
-                    g.__pendingInAppPiPRestoreAfterSystemRef.current = false;
+                    // Initialized before scheduling; teardown exceptions stay in the existing catch.
+                    g.__pendingInAppPiPRestoreAfterSystemRef!.current = false;
                     return;
                   }
                   if (
@@ -265,7 +267,7 @@ function onAppStateChange(next: AppStateStatus): void {
       restoreSessionMicrophoneIfNeeded();
     }
     try {
-      const g = global as any;
+      const g = global as CallAudioGlobals;
       const returningFromPiP = Date.now() < Number(g.__returningFromSystemPiPUntilRef?.current || 0);
       const session = g.__webrtcSessionRef?.current;
       if (

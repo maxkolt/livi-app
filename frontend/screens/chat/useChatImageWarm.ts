@@ -1,3 +1,4 @@
+import type { ChatMessage } from './chatMessageTypes';
 /** Anti-flicker: prefetch recent chat images before first paint / after history ready. */
 
 import React from "react";
@@ -7,12 +8,12 @@ import { getMessageImageUris } from "./chatAlbum";
 
 type Options = {
   historyReady: boolean;
-  messages: any[];
+  messages: ChatMessage[];
   resolveMediaUri: (u: string) => string;
   /** Controlled warm flag lives in parent when history reload must reset it. */
   chatImagesWarm: boolean;
   setChatImagesWarm: React.Dispatch<React.SetStateAction<boolean>>;
-  navigation?: { addListener?: (event: any, cb: (e: any) => void) => () => void };
+  navigation?: { addListener?: (event: "transitionEnd", cb: (e: { data?: { closing?: boolean } }) => void) => () => void };
 };
 
 export function useChatImageWarm({
@@ -28,7 +29,7 @@ export function useChatImageWarm({
   const transitionDoneRef = React.useRef(false);
   const warmAfterTransitionRef = React.useRef(false);
   React.useEffect(() => {
-    const unsub = navigation?.addListener?.("transitionEnd", (e: any) => {
+    const unsub = navigation?.addListener?.("transitionEnd", (e) => {
       if (e?.data?.closing) return;
       transitionDoneRef.current = true;
       if (!warmAfterTransitionRef.current) return;

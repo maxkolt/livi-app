@@ -1,4 +1,5 @@
-type LogMeta = Record<string, unknown> | undefined;
+// Metadata is serialized as-is, including Error instances and raw thrown values.
+type LogMeta = unknown;
 
 const LOG_LEVEL = String(process.env.LOG_LEVEL || 'info').trim().toLowerCase();
 const levels = {

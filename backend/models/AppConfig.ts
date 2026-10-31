@@ -1,6 +1,6 @@
 // models/AppConfig.ts
 // Key-value конфиг для сервера (например latestAppVersion для уведомления об обновлении).
-import { Schema, model, models, type Types } from 'mongoose';
+import { Schema, model, models, type Model, type Types } from 'mongoose';
 
 interface IAppConfig {
   _id?: Types.ObjectId;
@@ -16,4 +16,4 @@ const AppConfigSchema = new Schema<IAppConfig>(
   { timestamps: true, collection: 'appconfig' }
 );
 
-export default (models.AppConfig as any) || model<IAppConfig>('AppConfig', AppConfigSchema);
+export default (models.AppConfig as Model<IAppConfig> | undefined) || model<IAppConfig>('AppConfig', AppConfigSchema);

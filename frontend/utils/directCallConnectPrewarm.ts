@@ -18,7 +18,7 @@ let audioPrewarmInFlight: Promise<void> | null = null;
 let audioPrewarmGeneration = 0;
 
 function getAudioPrewarmRef(): { current: AudioPrewarmEntry | null } {
-  const g = global as any;
+  const g = global as { __directCallAudioPrewarmRef?: { current: AudioPrewarmEntry | null } };
   g.__directCallAudioPrewarmRef = g.__directCallAudioPrewarmRef || { current: null as AudioPrewarmEntry | null };
   return g.__directCallAudioPrewarmRef as { current: AudioPrewarmEntry | null };
 }

@@ -1,3 +1,7 @@
+import type { ChatBubbleRow } from './chat/chatList';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import type { RootStackParamList } from '../navigation/types';
+import type { ChatMessage, PickedChatImage } from './chat/chatMessageTypes';
 // screens/ChatScreen.tsx
 import React, { useCallback, useEffect, useState, useRef } from "react";
 import {
@@ -22,6 +26,8 @@ import {
   StyleSheet,
   InteractionManager,
   unstable_batchedUpdates,
+  type KeyboardEvent,
+  type LayoutChangeEvent,
 } from "react-native";
 import { SystemBars } from 'react-native-edge-to-edge';
  
@@ -34,6 +40,7 @@ import {
 import {
   PanGestureHandler,
   PinchGestureHandler,
+  type PinchGestureHandlerStateChangeEvent,
   State,
   NativeViewGestureHandler,
   FlatList as GHFlatList,
@@ -229,7 +236,7 @@ type RouteParams = {
   peerOnline?: boolean;
   incomingShareItems?: IncomingShareItem[];
 };
-type Props = { route: { params?: RouteParams }; navigation: any };
+type Props = { route: { params?: RouteParams }; navigation: NativeStackNavigationProp<RootStackParamList, 'Chat'> };
 
 /** Сколько реакций видно в свёрнутой строке меню сообщения (остальные — по стрелке). */
 const MSG_REACTIONS_COLLAPSED = 5;
@@ -512,7 +519,7 @@ export default function ChatScreen({ route, navigation }: Props) {
     }
   });
   const [err, setErr] = useState<string | null>(null);
-  const [messages, setMessages] = useState<any[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   /** Always points at latest `messages` for background/unmount persistence (avoid stale closures). */
   const latestMessagesForPersistRef = useRef(messages);
   latestMessagesForPersistRef.current = messages;
@@ -880,7 +887,7 @@ export default function ChatScreen({ route, navigation }: Props) {
   // как только ключи есть у обоих. Настроек в меню нет.
   const e2eStatus = useE2eStatus();
   const chatEncrypted = usePeerChatEncrypted(peerId, e2eStatus);
-  const [selectedMessage, setSelectedMessage] = useState<any>(null);
+  const [selectedMessage, setSelectedMessage] = useState<ChatMessage | null>(null);
   /** Index of album tile under long-press (null = whole message). */
   const [albumFocusIndex, setAlbumFocusIndex] = useState<number | null>(null);
   /** Album save/forward/delete: multi-select photos. */
@@ -1015,6 +1022,7 @@ export default function ChatScreen({ route, navigation }: Props) {
     exitSelectionMode,
     toggleSelectMessage,
     toggleSelectAlbumTile,
+    enterEmptySelectionMode,
     enterSelectionModeFromMessage,
     selectAllLoaded,
   } = useChatSelection({
@@ -1078,7 +1086,7 @@ export default function ChatScreen({ route, navigation }: Props) {
     return () => clearTimeout(id);
   }, [editingMessageId]);
   /** Сообщение, на которое отвечаем (показываем превью над полем ввода). */
-  const [replyingToMessage, setReplyingToMessage] = useState<{ id: string; text: string; from?: string; isOwn?: boolean } | null>(null);
+  const [replyingToMessage, setReplyingToMessage] = useState<{ id: string; text: string; from?: string | null; isOwn?: boolean } | null>(null);
 
   // Анимации для сообщений
   const messagePressAnimations = useRef<Record<string, Animated.Value>>({}).current;
@@ -1179,7 +1187,7 @@ export default function ChatScreen({ route, navigation }: Props) {
   });
 
   // Refs для автоскролла
-  const flatListRef = useRef<FlatList>(null);
+  const flatListRef = useRef<FlatList<ChatListRow>>(null);
   const iosChatListDataRef = useRef<ChatListRow[]>([]);
   const androidChatListDataRef = useRef<ChatListRow[]>([]);
 
@@ -1189,7 +1197,7 @@ export default function ChatScreen({ route, navigation }: Props) {
       if (flatListRef.current) {
         if (Platform.OS === 'android') {
           // В инвертированном списке "низ" = offset 0
-          (flatListRef.current as any).scrollToOffset?.({ offset: 0, animated: false });
+          (flatListRef.current).scrollToOffset?.({ offset: 0, animated: false });
         } else {
           flatListRef.current.scrollToEnd({ animated: false });
         }
@@ -1200,7 +1208,7 @@ export default function ChatScreen({ route, navigation }: Props) {
       try {
         if (flatListRef.current) {
           if (Platform.OS === 'android') {
-            (flatListRef.current as any).scrollToOffset?.({ offset: 0, animated: false });
+            (flatListRef.current).scrollToOffset?.({ offset: 0, animated: false });
           } else {
             flatListRef.current.scrollToEnd({ animated: false });
           }
@@ -1235,7 +1243,7 @@ export default function ChatScreen({ route, navigation }: Props) {
     try { socket.on('call:cancel', forceClose); } catch {}
 
     // Локальный таймер: если висит входящий в чате и 20с тишина — гарантированно закрыть
-    const incomingTimerRef: { current: any } = { current: null };
+    const incomingTimerRef: { current: ReturnType<typeof setTimeout> | null } = { current: null };
     const onIncoming = () => {
       if (incomingTimerRef.current) { clearTimeout(incomingTimerRef.current); incomingTimerRef.current = null; }
       incomingTimerRef.current = setTimeout(() => { try { emitCloseIncoming(); } catch {} }, 20500);
@@ -1246,7 +1254,7 @@ export default function ChatScreen({ route, navigation }: Props) {
     try { socket.on('call:declined', clearIncomingTimer); } catch {}
     try { socket.on('call:cancel', clearIncomingTimer); } catch {}
     try { socket.on('call:timeout', clearIncomingTimer); } catch {}
-    const applyIosKeyboardFrame = (event: any) => {
+    const applyIosKeyboardFrame = (event: KeyboardEvent) => {
       if (Platform.OS !== 'ios') return;
       try { Keyboard.scheduleLayoutAnimation(event); } catch {}
       const nextInset = resolveKeyboardAvoidance(
@@ -1258,7 +1266,7 @@ export default function ChatScreen({ route, navigation }: Props) {
       setKeyboardInset(nextInset);
       scheduleScrollToBottom(0);
     };
-    const onShow = (event: any) => {
+    const onShow = (event: KeyboardEvent) => {
       if (Platform.OS === 'android') {
         // StickyView двигает dock; inset — для pad списка/empty.
         setKeyboardVisible(true);
@@ -1300,14 +1308,14 @@ export default function ChatScreen({ route, navigation }: Props) {
         scheduleScrollToBottom(0);
       }
     };
-    const onWillShow = (event: any) => applyIosKeyboardFrame(event);
+    const onWillShow = (event: KeyboardEvent) => applyIosKeyboardFrame(event);
     const onWillHide = () => { 
       setKeyboardVisible(false); 
       setKeyboardInset(0);
       scheduleScrollToBottom(0); 
     };
-    const onWillChangeFrame = (event: any) => applyIosKeyboardFrame(event);
-    const onDidChangeFrame = (event: any) => {
+    const onWillChangeFrame = (event: KeyboardEvent) => applyIosKeyboardFrame(event);
+    const onDidChangeFrame = (event: KeyboardEvent) => {
       if (Platform.OS === 'ios') {
         applyIosKeyboardFrame(event);
         return;
@@ -1543,7 +1551,7 @@ export default function ChatScreen({ route, navigation }: Props) {
   const avatarModalScale = Animated.multiply(avatarModalBaseScale, avatarModalPinchScale);
   const clampAvatarModal = (v: number, min: number, max: number) => Math.max(min, Math.min(v, max));
   const onAvatarModalPinchEvent = Animated.event([{ nativeEvent: { scale: avatarModalPinchScale } }], { useNativeDriver: false });
-  const onAvatarModalPinchStateChange = useCallback((e: any) => {
+  const onAvatarModalPinchStateChange = useCallback((e: PinchGestureHandlerStateChangeEvent) => {
     if (e.nativeEvent.oldState === State.ACTIVE) {
       const next = clampAvatarModal(avatarModalLastScale.current * e.nativeEvent.scale, 1, 6);
       avatarModalLastScale.current = next;
@@ -1580,7 +1588,7 @@ export default function ChatScreen({ route, navigation }: Props) {
       const parsed = JSON.parse(raw);
       return new Set(
         Array.isArray(parsed)
-          ? parsed.map((id: any) => String(id || '').trim()).filter(Boolean)
+          ? parsed.map((id: unknown) => String(id || '').trim()).filter(Boolean)
           : [],
       );
     } catch {
@@ -1725,7 +1733,7 @@ export default function ChatScreen({ route, navigation }: Props) {
 
   // Слушатели сообщений через сокеты
 
-  const messagesRef = useRef<any[]>([]);
+  const messagesRef = useRef<ChatMessage[]>([]);
   // Очереди отправки (сообщения, реакции) живут вне React — версия перерисовывает ленту.
   const [outboxVersion, setOutboxVersion] = useState(0);
   useEffect(() => {
@@ -1774,7 +1782,7 @@ export default function ChatScreen({ route, navigation }: Props) {
     type: 'image',
     uri: string,
     name?: string,
-    album?: { uris: string[]; index: number; message?: any },
+    album?: { uris: string[]; index: number; message?: ChatMessage },
   ) => {
     const messageId = String(album?.message?.id ?? '').trim();
     const photoIndexInMessage = Math.max(0, album?.index || 0);
@@ -1914,7 +1922,7 @@ export default function ChatScreen({ route, navigation }: Props) {
 
   // live updates for peer profile while chat is open
   useEffect(() => {
-    const offProfile = onFriendProfile?.(async ({ userId, nick, avatar, avatarVer, avatarThumbB64 }: any) => {
+    const offProfile = onFriendProfile?.(async ({ userId, nick, avatar, avatarVer, avatarThumbB64 }) => {
       // Обновляем только профиль конкретного друга в этом чате
       if (String(userId) !== String(peerId)) return;
 
@@ -1950,10 +1958,10 @@ export default function ChatScreen({ route, navigation }: Props) {
       }
     });
     let presenceOfflineDebounce: ReturnType<typeof setTimeout> | null = null;
-    const offPresence = onPresenceUpdate?.((data: any) => {
+    const offPresence = onPresenceUpdate?.((data) => {
       // Обрабатываем только массив (для online статуса), игнорируем объекты {userId, busy}
       if (Array.isArray(data)) {
-        const onlineSet = new Set((data || []).map((it: any) => String((it as any)?._id ?? it)));
+        const onlineSet = new Set((data || []).map((it) => String((it as { _id?: string })?._id ?? it)));
         const isOn = onlineSet.has(String(peerId));
         if (isOn) {
           if (presenceOfflineDebounce) {
@@ -1962,7 +1970,7 @@ export default function ChatScreen({ route, navigation }: Props) {
           }
           setPeerOnline(true);
           try {
-            navigation.setParams({ peerOnline: true } as any);
+            navigation.setParams({ peerOnline: true });
           } catch {}
           return;
         }
@@ -1971,7 +1979,7 @@ export default function ChatScreen({ route, navigation }: Props) {
             presenceOfflineDebounce = null;
             setPeerOnline(false);
             try {
-              navigation.setParams({ peerOnline: false } as any);
+              navigation.setParams({ peerOnline: false });
             } catch {}
           }, PRESENCE_OFFLINE_DEBOUNCE_MS);
         }
@@ -1986,7 +1994,7 @@ export default function ChatScreen({ route, navigation }: Props) {
 
   // Обработчик user.avatarUpdated для мгновенного обновления аватара
   useEffect(() => {
-    const handleAvatarUpdated = async ({ userId, avatarVer, avatarThumbB64 }: any) => {
+    const handleAvatarUpdated = async ({ userId, avatarVer, avatarThumbB64 }: { userId: string; avatarVer: number; avatarThumbB64?: string | null }) => {
       // Обновляем только аватар конкретного друга в этом чате
       if (String(userId) !== String(peerId)) return;
 
@@ -2107,14 +2115,14 @@ export default function ChatScreen({ route, navigation }: Props) {
     showNotice,
   });
 
-  const confirmDeleteSelectedMessage = React.useCallback((m: any) => {
+  const confirmDeleteSelectedMessage = React.useCallback((m: ChatMessage) => {
     if (!m?.id) return;
     // Закрываем нижний sheet (если открыт), чтобы не было наложений
     try { hideMessageActions(); } catch {}
     openDeleteConfirmSingle(m);
   }, [hideMessageActions, openDeleteConfirmSingle]);
 
-  const copySelectedMessage = React.useCallback(async (m: any) => {
+  const copySelectedMessage = React.useCallback(async (m: ChatMessage) => {
     const type = String(m?.type || '').trim();
     const text = String(m?.text ?? '').trim();
     const rawUri = String(m?.uri ?? '').trim();
@@ -2200,7 +2208,7 @@ export default function ChatScreen({ route, navigation }: Props) {
   const confirmDeleteNow = React.useCallback(() => {
     const { pending: m, forBoth } = consumeDeleteConfirm();
     if (Array.isArray(m?.ids)) {
-      const ids = m.ids.map((id: any) => String(id || '').trim()).filter(Boolean);
+      const ids = m.ids.map((id) => String(id || '').trim()).filter(Boolean);
       if (ids.length > 0) void batchDeleteSelectedRef.current?.(forBoth, ids);
       return;
     }
@@ -2209,7 +2217,7 @@ export default function ChatScreen({ route, navigation }: Props) {
   }, [deleteSingleMessage, consumeDeleteConfirm]);
 
   const handleScrollToIndexFailed = React.useCallback((info: { index: number; averageItemLength?: number }) => {
-    const fl = flatListRef.current as any;
+    const fl = flatListRef.current;
     if (!fl) return;
     setTimeout(() => {
       try {
@@ -2240,7 +2248,7 @@ export default function ChatScreen({ route, navigation }: Props) {
 
       requestAnimationFrame(() => {
         try {
-          (flatListRef.current as any)?.scrollToIndex?.({
+          (flatListRef.current)?.scrollToIndex?.({
             index,
             animated: true,
             viewPosition: 0.35,
@@ -2280,7 +2288,11 @@ export default function ChatScreen({ route, navigation }: Props) {
     // Двойной тап по трубке в шапке чата — один исходящий.
     if (now - lastChatCallTapAtRef.current < 1200) return;
     try {
-      const g = global as any;
+      const g = global as typeof global & {
+        __outgoingStartInFlightRef?: React.MutableRefObject<boolean>;
+        __outgoingCallUiActiveRef?: React.MutableRefObject<boolean>;
+        __outgoingCallScreenVisibleRef?: React.MutableRefObject<boolean>;
+      };
       if (g.__outgoingStartInFlightRef?.current === true) return;
       if (g.__outgoingCallUiActiveRef?.current === true) return;
       if (g.__outgoingCallScreenVisibleRef?.current === true) return;
@@ -2395,10 +2407,28 @@ export default function ChatScreen({ route, navigation }: Props) {
     clearAndroidLayoutIfNeeded,
     enterSelectionModeFromMessage,
     requestImageAction,
+    forwardSelectedMessage: openForwardPicker,
+    deleteSelectedMessage: confirmDeleteSelectedMessage,
     isLayoutBlockedByChrome,
   });
 
   type BubbleLayout = { x: number; y: number; width: number; height: number };
+  type PendingMessageTap = {
+    id: string;
+    timer: ReturnType<typeof setTimeout> | null;
+    layout?: BubbleLayout;
+    composerTop: number | null;
+    measuring: number;
+    opened: boolean;
+    released: boolean;
+  };
+  const pendingMessageTapRef = useRef<PendingMessageTap | null>(null);
+  const cancelPendingMessageTap = React.useCallback(() => {
+    const pending = pendingMessageTapRef.current;
+    if (pending?.timer) clearTimeout(pending.timer);
+    pendingMessageTapRef.current = null;
+    if (pending?.opened) dismissMessageActionsNow();
+  }, [dismissMessageActionsNow]);
   /**
    * Открыть меню сообщения одним рендером. Старая архитектура RN не объединяет
    * setState вне обработчиков касания (таймер, колбэк замера) — без batch каждый
@@ -2406,7 +2436,7 @@ export default function ChatScreen({ route, navigation }: Props) {
    */
   const openMessageActions = React.useCallback(
     (
-      m: any,
+      m: ChatMessage,
       layout?: BubbleLayout,
       focusIndex: number | null = null,
       composerTop: number | null = null,
@@ -2431,18 +2461,22 @@ export default function ChatScreen({ route, navigation }: Props) {
     },
     [revealMessageActions],
   );
-  /** Зажатие облака / плитки альбома: сперва верх поля ввода, потом меню. */
-  const openMessageActionsFromLongPress = React.useCallback(
-    (m: any, layout: BubbleLayout) => {
-      measureMsgActionsComposerTop((top) => openMessageActions(m, layout, null, top));
+  /** Зажатие сразу включает выбор и отмечает облако / плитку альбома. */
+  const selectMessageFromLongPress = React.useCallback(
+    (m: ChatMessage, layout: BubbleLayout) => {
+      if (isLayoutBlockedByChrome(layout)) return;
+      cancelPendingMessageTap();
+      enterSelectionModeFromMessage(m);
     },
-    [measureMsgActionsComposerTop, openMessageActions],
+    [isLayoutBlockedByChrome, cancelPendingMessageTap, enterSelectionModeFromMessage],
   );
-  const openAlbumTileActionsFromLongPress = React.useCallback(
-    (m: any, index: number, layout: BubbleLayout) => {
-      measureMsgActionsComposerTop((top) => openMessageActions(m, layout, index, top));
+  const selectAlbumTileFromLongPress = React.useCallback(
+    (m: ChatMessage, index: number, layout: BubbleLayout) => {
+      if (isLayoutBlockedByChrome(layout)) return;
+      cancelPendingMessageTap();
+      enterSelectionModeFromMessage(m, index);
     },
-    [measureMsgActionsComposerTop, openMessageActions],
+    [isLayoutBlockedByChrome, cancelPendingMessageTap, enterSelectionModeFromMessage],
   );
 
   // Функция для получения анимации сообщения (стабильная ссылка, чтобы не ломать мемоизацию)
@@ -2503,25 +2537,12 @@ export default function ChatScreen({ route, navigation }: Props) {
    * истечении ожидания только проявляется. Облако сжимается сразу.
    */
   const MESSAGE_DOUBLE_TAP_MS = 250;
-  type PendingMessageTap = {
-    id: string;
-    timer: ReturnType<typeof setTimeout> | null;
-    layout?: BubbleLayout;
-    composerTop: number | null;
-    /** Сколько замеров (облако, поле ввода) ещё не вернулось. */
-    measuring: number;
-    /** Меню уже отрисовано (невидимым или нет). */
-    opened: boolean;
-    /** Ожидание второго тапа кончилось. */
-    released: boolean;
-  };
-  const pendingMessageTapRef = useRef<PendingMessageTap | null>(null);
   useEffect(() => () => {
     const pending = pendingMessageTapRef.current;
     if (pending?.timer) clearTimeout(pending.timer);
   }, []);
   const handleMessagePress = React.useCallback((
-    item: any,
+    item: ChatMessage & { id: string },
     measureBubble: (done: (layout?: BubbleLayout) => void) => void,
   ) => {
     const id = String(item?.id ?? '');
@@ -2700,7 +2721,7 @@ export default function ChatScreen({ route, navigation }: Props) {
     scrollToBottom,
   });
 
-  const openComposeViewer = React.useCallback((asset: any) => {
+  const openComposeViewer = React.useCallback((asset: PickedChatImage) => {
     setComposeAsset(asset);
     setComposeViewerVisible(true);
   }, []);
@@ -2802,7 +2823,7 @@ export default function ChatScreen({ route, navigation }: Props) {
       : Math.max(0, androidPinnedNavInset, insets.bottom)
     : Math.max(0, insets.bottom);
 
-  const handleInputBarLayout = React.useCallback((e: any) => {
+  const handleInputBarLayout = React.useCallback((e: LayoutChangeEvent) => {
     const measuredH = Math.max(0, Math.round(Number(e?.nativeEvent?.layout?.height || 0)));
     if (Platform.OS === 'ios') setIosComposerBoxH((prev) => (Math.abs(prev - measuredH) <= 1 ? prev : measuredH));
     // Продолжение под системную навигацию — фон, а не высота композера для ленты;
@@ -2926,7 +2947,8 @@ export default function ChatScreen({ route, navigation }: Props) {
           </View>
         );
       }
-      const msg = item as any;
+      // The date separator was handled above; message rows carry their stored identity.
+      const msg = item as ChatBubbleRow;
       const isOwnMessage = msg?.sender === 'me' || msg?.from === currentUserId;
       return (
         <ChatMessageItem
@@ -2947,9 +2969,9 @@ export default function ChatScreen({ route, navigation }: Props) {
           retryUiForId={retryUiForId}
           onToggleRetryUi={handleToggleRetryUi}
           onRetryFailed={retryFailedOutgoingMessage}
-          onLongPressMessage={openMessageActionsFromLongPress}
+          onLongPressMessage={selectMessageFromLongPress}
           isLayoutBlockedByChrome={isLayoutBlockedByChrome}
-          onLongPressAlbumTile={openAlbumTileActionsFromLongPress}
+          onLongPressAlbumTile={selectAlbumTileFromLongPress}
           albumFocusIndex={
             albumFocus && albumFocus.id === String(msg?.id || '') ? albumFocus.index : null
           }
@@ -3000,9 +3022,9 @@ export default function ChatScreen({ route, navigation }: Props) {
       retryUiForId,
       handleToggleRetryUi,
       retryFailedOutgoingMessage,
-      openMessageActionsFromLongPress,
+      selectMessageFromLongPress,
       isLayoutBlockedByChrome,
-      openAlbumTileActionsFromLongPress,
+      selectAlbumTileFromLongPress,
       albumFocus,
       handleMessagePress,
       handleCallBubblePress,
@@ -3138,7 +3160,7 @@ export default function ChatScreen({ route, navigation }: Props) {
           >
             {/* Круг как у кнопки картинки: тот же размер и заливка. */}
             <Animated.View
-              ref={(r) => { trashMeasureRef.current = r as any; }}
+              ref={(r) => { trashMeasureRef.current = r as View | null; }}
               onLayout={() => updateTrashZone()}
               style={{
                 width: CHAT_ROUND_BUTTON_SIZE,
@@ -3302,7 +3324,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                     opacity: recordViz.interpolate({ inputRange: [0, 1], outputRange: [0.18, 0.45] }),
                     transform: [
                       {
-                        translateX: recordViz.interpolate({ inputRange: [0, 1], outputRange: [0, -10] }) as any,
+                        translateX: recordViz.interpolate({ inputRange: [0, 1], outputRange: [0, -10] }),
                       },
                     ],
                   }}
@@ -3508,7 +3530,7 @@ export default function ChatScreen({ route, navigation }: Props) {
               ref={flatListRef}
               data={iosChatListData}
               extraData={chatLayoutW}
-              keyExtractor={(item) => item.id}
+              keyExtractor={(item) => item.id!}
               renderItem={renderMessageRow}
               style={{
                 flex: 1,
@@ -3637,7 +3659,7 @@ export default function ChatScreen({ route, navigation }: Props) {
               ref={flatListRef}
               data={androidChatListData}
               extraData={chatLayoutW}
-              keyExtractor={(item) => item.id}
+              keyExtractor={(item) => item.id!}
               renderItem={renderMessageRow}
               style={{ flex: 1, backgroundColor: 'transparent' }}
               contentContainerStyle={{
@@ -3894,6 +3916,18 @@ export default function ChatScreen({ route, navigation }: Props) {
       >
         <View style={[appDialogStyles.section, { gap: 10 }]}>
           <Text style={chatMenuSectionLabel}>
+            {t('menuTitle', lang)}
+          </Text>
+          <AppDialogButton
+            label={t('chatActionSelect', lang)}
+            variant="primary"
+            stretch={false}
+            onPress={() => {
+              setShowClearMenu(false);
+              enterEmptySelectionMode();
+            }}
+          />
+          <Text style={[chatMenuSectionLabel, { marginTop: 4 }]}>
             {t('chatClearMenuTitle', lang)}
           </Text>
           <AppDialogButton
@@ -4046,7 +4080,7 @@ export default function ChatScreen({ route, navigation }: Props) {
               ) : (
                 <GHFlatList
                   data={forwardFriends}
-                  keyExtractor={(it: any, index: number) => String(it?._id || `fwd-friend-${index}`)}
+                  keyExtractor={(it, index: number) => String(it?._id || `fwd-friend-${index}`)}
                   style={{ flex: 1, minHeight: 0 }}
                   nestedScrollEnabled
                   scrollEnabled={forwardFriends.length > 0}
@@ -4067,6 +4101,9 @@ export default function ChatScreen({ route, navigation }: Props) {
                     const isSelected = forwardSelectedFriendIds.has(friendId);
                     return (
                       <Pressable
+                        testID={`chat-forward-recipient-${friendId}`}
+                        accessibilityRole="checkbox"
+                        accessibilityState={{ checked: isSelected }}
                         onPress={() => {
                           setForwardSelectedFriendIds((prev) => {
                             const next = new Set(prev);
@@ -4148,6 +4185,7 @@ export default function ChatScreen({ route, navigation }: Props) {
               }}
             >
             <TouchableOpacity
+              testID="chat-forward-confirm"
               onPress={() => void forwardToSelectedFriends()}
               disabled={forwardSelectedFriendIds.size === 0}
               style={{
@@ -4344,6 +4382,8 @@ export default function ChatScreen({ route, navigation }: Props) {
     {Platform.OS === 'android' && showMessageActions && selectedMessage && (
       <Pressable
         ref={msgActionsRootRef}
+        accessible={false}
+        testID="chat-message-actions"
         onPress={hideMessageActions}
         onLayout={msgActionsComposerTop == null ? measureMsgActionsComposer : undefined}
         pointerEvents={msgActionsHeld ? 'none' : 'auto'}
@@ -4464,13 +4504,13 @@ export default function ChatScreen({ route, navigation }: Props) {
                   },
                 });
               }
-              rows.push({
-                key: 'select',
-                label: t('chatActionSelect', lang),
-                icon: 'checkmark-circle-outline',
-                onPress: () => enterSelectionModeFromMessage(selectedMessage, albumFocusIndex),
-              });
             }
+            rows.push({
+              key: 'select',
+              label: t('chatActionSelect', lang),
+              icon: 'checkbox-outline',
+              onPress: () => enterSelectionModeFromMessage(selectedMessage, albumFocusIndex),
+            });
             rows.push({
               key: 'delete',
               label: t('delete', lang),
@@ -4616,6 +4656,9 @@ export default function ChatScreen({ route, navigation }: Props) {
                   {rows.map((row) => (
                     <Pressable
                       key={row.key}
+                      testID={`chat-message-action-${row.key}`}
+                      accessibilityRole="button"
+                      accessibilityLabel={row.label}
                       onPress={() => {
                         hideMessageActions();
                         row.onPress();
@@ -4640,7 +4683,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                       />
                       <Text
                         style={{ color: row.danger ? '#FF5A67' : LIVI.white, fontSize: actionFontSize, fontWeight: '400', flexShrink: 1 }}
-                        numberOfLines={1}
+                        numberOfLines={2}
                       >
                         {row.label}
                       </Text>

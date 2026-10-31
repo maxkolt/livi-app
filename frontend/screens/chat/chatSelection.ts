@@ -1,3 +1,5 @@
+import type { ChatMessage } from './chatMessageTypes';
+
 /** Pure selection-mode helpers for chat (message + album tile keys). */
 
 import {
@@ -10,7 +12,7 @@ import {
 } from "./chatAlbum";
 
 export function initialSelectionKeysForMessage(
-  m: any,
+  m: ChatMessage,
   focusIndex: number | null = null,
 ): Set<string> {
   const next = new Set<string>();
@@ -29,7 +31,7 @@ export function initialSelectionKeysForMessage(
 
 export function toggleMessageSelection(
   prev: Set<string>,
-  messages: any[],
+  messages: ChatMessage[],
   id: string,
 ): Set<string> {
   const mid = String(id || "").trim();
@@ -54,7 +56,7 @@ export function toggleMessageSelection(
 
 export function toggleAlbumTileSelection(
   prev: Set<string>,
-  messages: any[],
+  messages: ChatMessage[],
   messageId: string,
   index: number,
 ): Set<string> {
@@ -76,7 +78,7 @@ export function toggleAlbumTileSelection(
   return next;
 }
 
-export function allLoadedSelectionKeys(messages: any[]): string[] {
+export function allLoadedSelectionKeys(messages: ChatMessage[]): string[] {
   const allKeys: string[] = [];
   for (const m of messages) {
     const mid = String(m?.id || "").trim();
@@ -92,7 +94,7 @@ export function allLoadedSelectionKeys(messages: any[]): string[] {
 
 export function selectionHasAnyValidKey(
   selectedKeys: Set<string>,
-  messages: any[],
+  messages: ChatMessage[],
 ): boolean {
   const byId = new Map(
     messages.map((m) => [String(m?.id || "").trim(), m] as const).filter(([id]) => !!id),
@@ -109,9 +111,16 @@ export function selectionHasAnyValidKey(
   return false;
 }
 
+/** Drop messages/photos removed while selection is open, keeping the count accurate. */
+export function reconcileSelectionKeys(selectedKeys: Set<string>, messages: ChatMessage[]): Set<string> {
+  const validKeys = new Set(allLoadedSelectionKeys(messages));
+  const next = new Set(Array.from(selectedKeys).filter((key) => validKeys.has(key)));
+  return next.size === selectedKeys.size ? selectedKeys : next;
+}
+
 export function selectionHasAnyForwardable(
   selectedKeys: Set<string>,
-  messages: any[],
+  messages: ChatMessage[],
 ): boolean {
   if (selectedKeys.size === 0) return false;
   for (const m of messages) {
@@ -133,13 +142,13 @@ export function selectionHasAnyForwardable(
 
 type AlbumDeletePlan = {
   fullDeleteIds: Set<string>;
-  albumPartials: Array<{ messageId: string; message: any; removeIndices: number[] }>;
+  albumPartials: Array<{ messageId: string; message: ChatMessage; removeIndices: number[] }>;
 };
 
 /** Expand selection keys into full message deletes vs partial album photo removals. */
 export function planAlbumSelectionDeletes(
   rawKeys: string[],
-  messages: any[],
+  messages: ChatMessage[],
   currentUserId: string | null | undefined,
 ): AlbumDeletePlan {
   const byId = new Map(

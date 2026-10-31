@@ -14,7 +14,7 @@
  * Поэтому объединять эти две функции нельзя — они решают разные задачи.
  */
 
-import type { MediaStream } from '@livekit/react-native-webrtc';
+import type { MediaStream, MediaStreamTrack } from '@livekit/react-native-webrtc';
 import { logger } from '../../../utils/logger';
 
 export const stopStreamTracks = (stream: MediaStream | null | undefined, context: string) => {
@@ -24,12 +24,12 @@ export const stopStreamTracks = (stream: MediaStream | null | undefined, context
 
   try {
     const baseTracks = stream.getTracks?.() || [];
-    const videoTracks = (stream as any)?.getVideoTracks?.() || [];
-    const audioTracks = (stream as any)?.getAudioTracks?.() || [];
+    const videoTracks = (stream)?.getVideoTracks?.() || [];
+    const audioTracks = (stream)?.getAudioTracks?.() || [];
 
-    const allTracks: any[] = [...baseTracks];
-    const appendUnique = (tracks: any[]) => {
-      tracks.forEach((track: any) => {
+    const allTracks: MediaStreamTrack[] = [...baseTracks];
+    const appendUnique = (tracks: MediaStreamTrack[]) => {
+      tracks.forEach((track) => {
         if (track && !allTracks.includes(track)) {
           allTracks.push(track);
         }
@@ -41,7 +41,7 @@ export const stopStreamTracks = (stream: MediaStream | null | undefined, context
 
     const uniqueTracks = Array.from(new Set(allTracks));
 
-    uniqueTracks.forEach((track: any) => {
+    uniqueTracks.forEach((track) => {
       try {
         if (track && track.readyState !== 'ended' && track.readyState !== null) {
           track.enabled = false;

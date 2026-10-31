@@ -1,3 +1,4 @@
+import type { CallAudioGlobals } from './callStateTypes';
 import { Platform } from 'react-native';
 import {
   type InCallAudioRoute,
@@ -54,7 +55,7 @@ function readPlaqueRoute(): InCallAudioRoute | null {
 
 function pipPlaqueVisible(): boolean {
   try {
-    return (global as any).__pipVisibleRef?.current === true;
+    return global.__pipVisibleRef?.current === true;
   } catch {
     return false;
   }
@@ -77,7 +78,7 @@ export async function applyInAppPiPHeadsetConnectRoute(
     if (!bt) return false;
   }
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     g.__lastInAppPiPHeadsetConnectAtRef = g.__lastInAppPiPHeadsetConnectAtRef || { current: 0 };
     g.__lastInAppPiPHeadsetConnectRouteRef =
       g.__lastInAppPiPHeadsetConnectRouteRef || { current: null as InCallAudioRoute | null };
@@ -147,7 +148,7 @@ export async function tryAutoSwitchInAppPiPFromDisconnectedHeadset(): Promise<In
   const userSel = readUserSelectedCallAudioRoute();
   const userExt = readUserSelectedExternalCallAudioRoute();
   const lastApplied = normalizeInCallRoute(
-    (global as any).__lastAppliedCallAudioRouteRef?.current || '',
+    (global as CallAudioGlobals).__lastAppliedCallAudioRouteRef?.current || '',
   );
 
   const uiShowsBt =
@@ -189,7 +190,7 @@ export async function tryAutoSwitchInAppPiPFromDisconnectedHeadset(): Promise<In
     'in_app_pip_headset_unplug',
   ]);
 
-  const g = global as any;
+  const g = global as CallAudioGlobals;
   let fallback: InCallAudioRoute = 'EARPIECE';
   if (wiredLive && uiShowsBt && !btLive) {
     fallback = 'WIRED_HEADSET';
@@ -251,7 +252,7 @@ export async function tryAutoSwitchInAppPiPToConnectedHeadset(): Promise<InCallA
   const plaque = readPlaqueRoute();
   const userSel = readUserSelectedCallAudioRoute();
   const lastApplied = normalizeInCallRoute(
-    (global as any).__lastAppliedCallAudioRouteRef?.current || '',
+    (global as CallAudioGlobals).__lastAppliedCallAudioRouteRef?.current || '',
   );
   if (plaque === 'BLUETOOTH' && (userSel === 'BLUETOOTH' || lastApplied === 'BLUETOOTH')) {
     const stillBt = await isNativeBluetoothHeadsetConnectedForCall();

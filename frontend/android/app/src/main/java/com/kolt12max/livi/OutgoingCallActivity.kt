@@ -9,7 +9,6 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
-import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.graphics.PixelFormat
@@ -149,7 +148,11 @@ class OutgoingCallActivity : AppCompatActivity() {
 
         val cancelButton = findViewById<ImageButton>(R.id.btn_cancel)
         cancelButton.contentDescription = AppLocale.str(applicationContext, R.string.outgoing_call_cancel)
-        installPressFeedback(cancelButton)
+        CallButtonPressFeedback.install(
+            cancelButton,
+            findViewById(R.id.outgoing_call_root),
+            getColor(R.color.incoming_btn_decline_border_pressed),
+        )
 
         cancelButton.setOnClickListener {
             // Только локальный callId Activity. peekOutgoingCall опасен при redial:
@@ -455,28 +458,6 @@ class OutgoingCallActivity : AppCompatActivity() {
             return callId.trim().isEmpty()
         }
         return shouldAcceptIncomingCloseId(incoming) && incoming == callId.trim()
-    }
-
-    private fun installPressFeedback(button: ImageButton) {
-        button.setOnTouchListener { view, event ->
-            when (event.actionMasked) {
-                MotionEvent.ACTION_DOWN -> animateButtonPress(view, pressed = true)
-                MotionEvent.ACTION_UP,
-                MotionEvent.ACTION_CANCEL -> animateButtonPress(view, pressed = false)
-            }
-            false
-        }
-    }
-
-    private fun animateButtonPress(view: View, pressed: Boolean) {
-        val scale = if (pressed) 0.86f else 1f
-        val alpha = if (pressed) 0.78f else 1f
-        view.animate()
-            .scaleX(scale)
-            .scaleY(scale)
-            .alpha(alpha)
-            .setDuration(if (pressed) 90L else 140L)
-            .start()
     }
 
     companion object {

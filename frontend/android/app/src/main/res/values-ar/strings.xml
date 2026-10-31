@@ -5,7 +5,7 @@
   <string name="incoming_call_unknown">شخص ما يتصل</string>
   <string name="incoming_call_accept">قبول</string>
   <string name="incoming_call_decline">رفض</string>
-  <string name="outgoing_call_title">مكالمة فيديو صادرة</string>
+  <string name="outgoing_call_title">مكالمة صادرة</string>
   <string name="outgoing_call_subtitle">جارٍ الاتصال…</string>
   <string name="outgoing_call_subtitle_base">جارٍ الاتصال</string>
   <string name="outgoing_call_subtitle_base_audio">جارٍ الاتصال</string>

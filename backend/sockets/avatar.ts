@@ -4,13 +4,15 @@ import User from '../models/User';
 import { buildAvatarDataUris } from '../utils/avatars';
 import { getFriendIds } from '../utils/friendshipUtils';
 
+type AvatarAck<T extends object = object> = (result: ({ ok: true } & T) | { ok: false; error: string }) => void;
+
 export function bindAvatarSockets(io: Server, socket: Socket) {
   // Загрузка аватара
-  socket.on('user.uploadAvatar', async ({ base64 }: { base64: string }, cb?: Function) => {
-    const userId = (socket as any).data?.userId as string | undefined;
+  socket.on('user.uploadAvatar', async ({ base64 }: { base64: string }, cb?: AvatarAck<{ avatarVer: number }>) => {
+    const userId = (socket).data?.userId as string | undefined;
 
     if (!userId) {
-      console.warn('[avatar] uploadAvatar: unauthorized, socket.data:', (socket as any).data);
+      console.warn('[avatar] uploadAvatar: unauthorized, socket.data:', (socket).data);
       return cb?.({ ok: false, error: 'unauthorized' });
     }
 
@@ -57,7 +59,7 @@ export function bindAvatarSockets(io: Server, socket: Socket) {
       };
 
       const friends = await getFriendIds(userId);
-      friends.forEach((fid: any) => {
+      friends.forEach((fid) => {
         try {
           io.to(`u:${String(fid)}`).emit('user.avatarUpdated', payload);
         } catch (e) {
@@ -66,18 +68,18 @@ export function bindAvatarSockets(io: Server, socket: Socket) {
       });
 
       cb?.({ ok: true, avatarVer: updated.avatarVer || 0 });
-    } catch (e: any) {
-      console.error('[avatar] upload error:', e?.message || e);
-      cb?.({ ok: false, error: String(e?.message || e) });
+    } catch (e) {
+      console.error('[avatar] upload error:', (e as { message?: unknown } | null)?.message || e);
+      cb?.({ ok: false, error: String((e as { message?: unknown } | null)?.message || e) });
     }
   });
 
   // Удалить аватар
-  socket.on('user.deleteAvatar', async (_: any, cb?: Function) => {
-    const userId = (socket as any).data?.userId as string | undefined;
+  socket.on('user.deleteAvatar', async (_: unknown, cb?: AvatarAck) => {
+    const userId = (socket).data?.userId as string | undefined;
 
     if (!userId) {
-      console.warn('[avatar] deleteAvatar: unauthorized, socket.data:', (socket as any).data);
+      console.warn('[avatar] deleteAvatar: unauthorized, socket.data:', (socket).data);
       return cb?.({ ok: false, error: 'unauthorized' });
     }
 
@@ -114,7 +116,7 @@ export function bindAvatarSockets(io: Server, socket: Socket) {
       };
 
       const friends = await getFriendIds(userId);
-      friends.forEach((fid: any) => {
+      friends.forEach((fid) => {
         try {
           io.to(`u:${String(fid)}`).emit('user.avatarUpdated', payload);
         } catch (e) {
@@ -123,14 +125,14 @@ export function bindAvatarSockets(io: Server, socket: Socket) {
       });
 
       cb?.({ ok: true });
-    } catch (e: any) {
-      console.error('[avatar] delete error:', e?.message || e);
-      cb?.({ ok: false, error: String(e?.message || e) });
+    } catch (e) {
+      console.error('[avatar] delete error:', (e as { message?: unknown } | null)?.message || e);
+      cb?.({ ok: false, error: String((e as { message?: unknown } | null)?.message || e) });
     }
   });
 
   // Получить полный аватар друга (на экране профиля/клика)
-  socket.on('user.getAvatar', async ({ userId: otherId }: { userId: string }, cb?: Function) => {
+  socket.on('user.getAvatar', async ({ userId: otherId }: { userId: string }, cb?: AvatarAck<{ userId: string; avatarVer: number; avatarB64: string }>) => {
     
     try {
       if (!otherId) {
@@ -151,9 +153,9 @@ export function bindAvatarSockets(io: Server, socket: Socket) {
         avatarVer: doc.avatarVer || 0, 
         avatarB64: doc.avatarB64 || '' 
       });
-    } catch (e: any) {
-      console.error('[avatar] get error:', e?.message || e);
-      cb?.({ ok: false, error: String(e?.message || e) });
+    } catch (e) {
+      console.error('[avatar] get error:', (e as { message?: unknown } | null)?.message || e);
+      cb?.({ ok: false, error: String((e as { message?: unknown } | null)?.message || e) });
     }
   });
 }

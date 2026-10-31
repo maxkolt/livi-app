@@ -1,3 +1,4 @@
+import type { CallAudioGlobals } from '../../../utils/callStateTypes';
 /**
  * Снятие блокировок, которыми экран звонка удерживал HomeScreen.
  *
@@ -11,7 +12,7 @@ import { setVideoCallActive } from '../../../utils/callRuntime';
 
 export function clearVideoCallHomeScreenLocks(reason: string) {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     if (!g.__videoCallPartnerUserIdRef) g.__videoCallPartnerUserIdRef = { current: null };
     else g.__videoCallPartnerUserIdRef.current = null;
     setVideoCallActive(false);

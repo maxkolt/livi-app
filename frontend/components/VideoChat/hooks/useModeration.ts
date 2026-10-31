@@ -134,7 +134,7 @@ export function useModeration({
     return await new Promise<{ x: number; y: number; width: number; height: number } | null>(
       (resolve) => {
         try {
-          (target as any).measureInWindow?.((x: number, y: number, w: number, h: number) => {
+          (target).measureInWindow?.((x: number, y: number, w: number, h: number) => {
             if (targetRef.current !== target) {
               resolve(null);
               return;
@@ -269,7 +269,7 @@ export function useModeration({
           // Prefer skipping this moderation frame over risking an app crash.
           logger.warn('[Moderation] skip frame: captureRef failed and Android captureScreen fallback disabled', {
             target: moderationTarget,
-            error: (refErr as any)?.message || String(refErr),
+            error: (refErr as { message?: unknown } | null | undefined)?.message || String(refErr),
           });
           return;
         }
@@ -392,7 +392,7 @@ export function useModeration({
       consecutiveBadFramesRef.current = 0;
       logger.info('[Moderation] frame checked OK');
     } catch (e) {
-      logger.warn('[Moderation] frame check failed', { error: (e as any)?.message || String(e) });
+      logger.warn('[Moderation] frame check failed', { error: (e as { message?: unknown } | null | undefined)?.message || String(e) });
     } finally {
       isCheckingRef.current = false;
       setIsChecking(false);

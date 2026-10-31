@@ -7,6 +7,7 @@ import { API_BASE, CALL_SIGNALING_CONNECT_MS, isOid } from "./constants";
 import { emitAck, ensureSocketConnected, warmCallSignaling } from "./emit";
 import { shared } from "./shared";
 import { socket } from "./socketCore";
+import type { CallAcceptedPayload, CallIncomingPayload, CallInitiateResponse } from "./types";
 import {
   bindOutgoingCallE2ee,
   createOutgoingCallE2eeDeclaration,
@@ -16,6 +17,17 @@ import {
 } from "./callE2ee";
 
 type DirectCallMedia = "audio" | "video";
+
+type CallSignalingGlobals = typeof global & {
+  __incomingAcceptSentRef?: { current: string | null };
+  __pendingCallAcceptedRef?: { current: CallAcceptedPayload | null };
+  __webrtcSessionRef?: {
+    current: {
+      getCallId?: () => string | null;
+      room?: { state?: string } | null;
+    } | null;
+  };
+};
 
 export function startCall(toUserId: string, options?: { media?: DirectCallMedia; callerNick?: string }) {
   // Пока у собеседника звонит, открываем соединения: после «Принять» сигналинг LiveKit
@@ -36,7 +48,7 @@ export function startCall(toUserId: string, options?: { media?: DirectCallMedia;
   callLifecycle.outgoingStarted(to);
 
   const viaSocket = () =>
-    emitAck<{ ok: boolean; callId?: string; error?: string }>(
+    emitAck<CallInitiateResponse>(
       "call:initiate",
       payload,
       20000,
@@ -45,7 +57,7 @@ export function startCall(toUserId: string, options?: { media?: DirectCallMedia;
       0,
     );
 
-  const viaHttp = async () => {
+  const viaHttp = async (): Promise<CallInitiateResponse> => {
     const headers: Record<string, string> = { "Content-Type": "application/json", ...(await getInstallAuthHeaders()) };
     if (shared.currentUserId) headers["x-user-id"] = String(shared.currentUserId);
 
@@ -59,7 +71,7 @@ export function startCall(toUserId: string, options?: { media?: DirectCallMedia;
         signal: controller.signal,
       });
       if (!res.ok) {
-        const body = await res.json().catch(async () => {
+        const body: CallInitiateResponse | null = await res.json().catch(async () => {
           const txt = await res.text().catch(() => "");
           return { ok: false, error: `http_${res.status}${txt ? `:${txt}` : ""}` };
         });
@@ -75,7 +87,7 @@ export function startCall(toUserId: string, options?: { media?: DirectCallMedia;
   };
 
   return (async () => {
-    let result: { ok: boolean; callId?: string; error?: string };
+    let result: CallInitiateResponse;
     if (!socket.connected || shared.reconnecting) {
       logger.info("[call:initiate] socket unavailable, using HTTP fallback", {
         connected: socket.connected,
@@ -86,9 +98,9 @@ export function startCall(toUserId: string, options?: { media?: DirectCallMedia;
       try {
         const socketResp = await viaSocket();
         result = socketResp;
-      } catch (e: any) {
+      } catch (e: unknown) {
         logger.warn("[call:initiate] socket initiate failed, trying HTTP fallback", {
-          error: e?.message || String(e),
+          error: (e as { message?: string } | null)?.message || String(e),
           connected: socket.connected,
           reconnecting: shared.reconnecting,
         });
@@ -156,7 +168,7 @@ export function emitCallHeartbeat(opts: {
 
 function markIncomingAcceptSent(callId: string): boolean {
   try {
-    const g = global as any;
+    const g = global as CallSignalingGlobals;
     g.__incomingAcceptSentRef = g.__incomingAcceptSentRef || { current: null as string | null };
     if (g.__incomingAcceptSentRef.current === callId) return false;
     g.__incomingAcceptSentRef.current = callId;
@@ -168,7 +180,7 @@ function markIncomingAcceptSent(callId: string): boolean {
 
 function clearIncomingAcceptSent(callId: string): void {
   try {
-    const g = global as any;
+    const g = global as CallSignalingGlobals;
     if (g.__incomingAcceptSentRef?.current === callId) {
       g.__incomingAcceptSentRef.current = null;
     }
@@ -240,10 +252,10 @@ export async function emitCallAcceptAck(
         } catch {}
       }
       return !!reauthed || !!shared.lastSuccessfulReauthAt;
-    } catch (e: any) {
+    } catch (e: unknown) {
       logger.warn("[socket] call:accept reauth wait failed", {
         callId: id,
-        error: e?.message || String(e),
+        error: (e as { message?: string } | null)?.message || String(e),
       });
       return false;
     }
@@ -279,13 +291,13 @@ export async function emitCallAcceptAck(
       await reauthP;
       const retry = await tryEmit();
       return normalize(retry);
-    } catch (e: any) {
+    } catch (e: unknown) {
       await reauthP;
       try {
         const retry = await tryEmit();
         return normalize(retry);
-      } catch (e2: any) {
-        return { ok: false, error: e2?.message || e?.message || "accept_failed" };
+      } catch (e2: unknown) {
+        return { ok: false, error: (e2 as { message?: string } | null)?.message || (e as { message?: string } | null)?.message || "accept_failed" };
       }
     }
   }
@@ -295,8 +307,8 @@ export async function emitCallAcceptAck(
   try {
     const resp = await tryEmit();
     return normalize(resp);
-  } catch (e: any) {
-    return { ok: false, error: e?.message || "accept_failed" };
+  } catch (e: unknown) {
+    return { ok: false, error: (e as { message?: string } | null)?.message || "accept_failed" };
   }
 }
 
@@ -322,11 +334,11 @@ export function beginEarlyIncomingCallAccept(callId: string): void {
         });
       }
       return result;
-    } catch (e: any) {
+    } catch (e: unknown) {
       clearIncomingAcceptSent(id);
       logger.warn("[socket] early call:accept failed, fallback emit", {
         callId: id,
-        error: e?.message || String(e),
+        error: (e as { message?: string } | null)?.message || String(e),
       });
       try {
         const e2ee = await getOrCreateIncomingCallE2eeDeclaration(id);
@@ -388,10 +400,10 @@ export function requestCallAcceptedWithRetry(
   delays.forEach((ms, attempt) => {
     setTimeout(() => {
       try {
-        const g = global as any;
+        const g = global as CallSignalingGlobals;
         const pending = g.__pendingCallAcceptedRef?.current;
         const pendingCallId = pending ? String(pending?.callId || "").trim() : "";
-        const pendingHasToken = pendingCallId === id && !!(pending as any)?.livekitToken;
+        const pendingHasToken = pendingCallId === id && !!pending?.livekitToken;
         const sess = g.__webrtcSessionRef?.current;
         const sessCallId =
           sess && typeof sess.getCallId === "function"
@@ -425,8 +437,8 @@ export function requestCallAcceptedWithRetry(
   });
 }
 
-export function onCallIncoming(cb: (d: { callId: string; callKitId?: string; from: string; fromNick?: string; ts?: number | string; expiresAt?: number | string }) => void): () => void {
-  const h = (d: any) => {
+export function onCallIncoming(cb: (d: CallIncomingPayload) => void): () => void {
+  const h = (d: Parameters<typeof cb>[0]) => {
     prewarmApiConnections("call_in", 3);
     prepareIncomingCallE2ee(d?.callId);
     cb(d);
@@ -450,9 +462,9 @@ export function reportIncomingCallShown(callId: string): void {
 }
 
 export function onCallAccepted(
-  cb: (d: { callId: string; from: string; fromUserId?: string }) => void,
+  cb: (d: CallAcceptedPayload) => void,
 ): () => void {
-  const h = (d: any) => {
+  const h = (d: Parameters<typeof cb>[0]) => {
     cb(d);
   };
   socket.on("call:accepted", h);
@@ -462,7 +474,7 @@ export function onCallAccepted(
 export function onCallDeclined(
   cb: (d: { callId: string; from: string; fromUserId?: string }) => void,
 ): () => void {
-  const h = (d: any) => cb(d);
+  const h = (d: Parameters<typeof cb>[0]) => cb(d);
   socket.on("call:declined", h);
   return () => socket.off("call:declined", h);
 }
@@ -471,32 +483,32 @@ export function onCallDeclined(
 export function onCallCanceled(
   cb: (d: { callId: string; from: string; fromUserId?: string }) => void,
 ): () => void {
-  const h = (d: any) => cb(d);
+  const h = (d: Parameters<typeof cb>[0]) => cb(d);
   socket.on("call:cancel", h);
   return () => socket.off("call:cancel", h);
 }
 
 export function onCallTimeout(cb: (d: { callId: string; from?: string }) => void): () => void {
-  const h = (d: any) => cb(d);
+  const h = (d: Parameters<typeof cb>[0]) => cb(d);
   socket.on("call:timeout", h);
   return () => socket.off("call:timeout", h);
 }
 
 export function onCallRoomFull(cb: (d: { userId?: string }) => void): () => void {
-  const h = (d: any) => cb(d || {});
+  const h = (d: Parameters<typeof cb>[0] | null | undefined) => cb(d || {});
   socket.on("call:room_full", h);
   return () => socket.off("call:room_full", h);
 }
 
 // Обработчики для системы бэйджа "Занято"
 export function onRandomBusy(cb: (data: { userId: string; busy: boolean }) => void): () => void {
-  const h = (data: any) => cb(data);
+  const h = (data: Parameters<typeof cb>[0]) => cb(data);
   socket.on("random:busy", h);
   return () => socket.off("random:busy", h);
 }
 
 export function onFriendsRoomState(cb: (data: { roomId: string; participants: string[] }) => void): () => void {
-  const h = (data: any) => cb(data);
+  const h = (data: Parameters<typeof cb>[0]) => cb(data);
   socket.on("friends:room_state", h);
   return () => socket.off("friends:room_state", h);
 }

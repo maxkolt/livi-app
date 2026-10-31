@@ -38,29 +38,32 @@ type BackupKdf =
 const PBKDF2_MIN_ITERATIONS = 310_000;
 type BackupUpload = { v: number; kdf: BackupKdf; n: string; c: string; pk: string; authKey: string };
 
-function isPowerOfTwo(n: number): boolean {
-  return Number.isInteger(n) && n > 0 && (n & (n - 1)) === 0;
+// Number.isInteger checks both the primitive type and integer value; lib.d.ts exposes only boolean.
+type IntegerGuard = (value: unknown) => value is number;
+
+function isPowerOfTwo(n: unknown): n is number {
+  return (Number.isInteger as IntegerGuard)(n) && n > 0 && (n & (n - 1)) === 0;
 }
 
 export function parseBackupKdf(raw: unknown): BackupKdf | null {
-  const k = raw as any;
+  const k = raw as Partial<Record<'alg' | 'salt' | 'iterations' | 'N' | 'r' | 'p', unknown>> | null;
   const saltLen = strictBase64Length(k?.salt);
   if (saltLen == null || saltLen < 16 || saltLen > 64) return null;
   if (k?.alg === 'pbkdf2-sha256') {
     // Нативный PBKDF2 на устройстве (LiviCrypto). Нижняя граница — чтобы копию не ослабили.
-    if (!Number.isInteger(k.iterations) || k.iterations < PBKDF2_MIN_ITERATIONS || k.iterations > 10_000_000) return null;
-    return { alg: 'pbkdf2-sha256', iterations: k.iterations, salt: k.salt };
+    if (!(Number.isInteger as IntegerGuard)(k.iterations) || k.iterations < PBKDF2_MIN_ITERATIONS || k.iterations > 10_000_000) return null;
+    return { alg: 'pbkdf2-sha256', iterations: k.iterations, salt: k.salt as string };
   }
   if (!k || k.alg !== 'scrypt') return null;
   // Нижняя граница — не дать клиенту (или атакующему с сессией) ослабить копию.
   if (!isPowerOfTwo(k.N) || k.N < 2 ** 15 || k.N > 2 ** 20) return null;
-  if (!Number.isInteger(k.r) || k.r < 8 || k.r > 16) return null;
-  if (!Number.isInteger(k.p) || k.p < 1 || k.p > 4) return null;
-  return { alg: 'scrypt', N: k.N, r: k.r, p: k.p, salt: k.salt };
+  if (!(Number.isInteger as IntegerGuard)(k.r) || k.r < 8 || k.r > 16) return null;
+  if (!(Number.isInteger as IntegerGuard)(k.p) || k.p < 1 || k.p > 4) return null;
+  return { alg: 'scrypt', N: k.N, r: k.r, p: k.p, salt: k.salt as string };
 }
 
 export function parseBackupUpload(raw: unknown, publicKey: string): BackupUpload | null {
-  const b = raw as any;
+  const b = raw as Partial<Record<keyof BackupUpload, unknown>> | null;
   if (!b || b.v !== E2E_BACKUP_VERSION) return null;
   const kdf = parseBackupKdf(b.kdf);
   if (!kdf) return null;
@@ -68,7 +71,7 @@ export function parseBackupUpload(raw: unknown, publicKey: string): BackupUpload
   if (strictBase64Length(b.c) !== SECRET_KEY_BYTES + SECRETBOX_OVERHEAD) return null;
   if (b.pk !== publicKey) return null;
   if (strictBase64Length(b.authKey) !== AUTH_KEY_BYTES) return null;
-  return { v: E2E_BACKUP_VERSION, kdf, n: b.n, c: b.c, pk: b.pk, authKey: b.authKey };
+  return { v: E2E_BACKUP_VERSION, kdf, n: b.n as string, c: b.c as string, pk: b.pk, authKey: b.authKey as string };
 }
 
 /** Отдельный домен HMAC, чтобы хэш authKey нельзя было перепутать с installSecret. */
@@ -86,7 +89,7 @@ export async function loadE2ePublicKeys(userIds: string[]): Promise<Record<strin
   if (ids.length === 0) return {};
   const docs = await User.find({ _id: { $in: ids } }).select('e2ePublicKey').lean();
   const out: Record<string, string | undefined> = {};
-  for (const d of docs as any[]) out[String(d._id)] = d.e2ePublicKey || undefined;
+  for (const d of docs) out[String(d._id)] = d.e2ePublicKey || undefined;
   return out;
 }
 
@@ -113,15 +116,15 @@ export function registerE2eKeyHandlers(io: Server, sock: Socket, meId: () => str
       const me = authed();
       if (!me) return ack?.({ ok: false, error: 'unauthorized' });
       const u = await User.findById(me).select('e2ePublicKey e2eDisabled +e2eBackup').lean();
-      const backup = (u as any)?.e2eBackup;
+      const backup = u?.e2eBackup;
       return ack?.({
         ok: true,
-        publicKey: (u as any)?.e2ePublicKey || '',
+        publicKey: u?.e2ePublicKey || '',
         backup: backup ? { kdf: backup.kdf, pk: backup.pk } : null,
-        disabled: (u as any)?.e2eDisabled === true,
+        disabled: u?.e2eDisabled === true,
       });
-    } catch (e: any) {
-      console.error('[e2e:state] error:', e?.message || e);
+    } catch (e) {
+      console.error('[e2e:state] error:', (e as { message?: unknown } | null)?.message || e);
       return ack?.({ ok: false, error: 'server_error' });
     }
   });
@@ -168,13 +171,13 @@ export function registerE2eKeyHandlers(io: Server, sock: Socket, meId: () => str
         }
       );
 
-      if ((prev as any).e2ePublicKey !== publicKey) {
+      if (prev.e2ePublicKey !== publicKey) {
         await notifyFriendsKeyChanged(io, me, publicKey);
-        console.log(`[e2e] public key ${(prev as any).e2ePublicKey ? 'rotated' : 'published'} user=${me}`);
+        console.log(`[e2e] public key ${prev.e2ePublicKey ? 'rotated' : 'published'} user=${me}`);
       }
       return ack?.({ ok: true });
-    } catch (e: any) {
-      console.error('[e2e:publish] error:', e?.message || e);
+    } catch (e) {
+      console.error('[e2e:publish] error:', (e as { message?: unknown } | null)?.message || e);
       return ack?.({ ok: false, error: 'server_error' });
     }
   });
@@ -194,13 +197,13 @@ export function registerE2eKeyHandlers(io: Server, sock: Socket, meId: () => str
         { _id: me },
         { $set: { e2ePublicKey: '', e2eKeyUpdatedAt: new Date(), e2eDisabled: true } },
       );
-      if ((prev as any).e2ePublicKey) {
+      if (prev.e2ePublicKey) {
         await notifyFriendsKeyChanged(io, me, '');
         console.log(`[e2e] disabled user=${me}`);
       }
       return ack?.({ ok: true });
-    } catch (e: any) {
-      console.error('[e2e:disable] error:', e?.message || e);
+    } catch (e) {
+      console.error('[e2e:disable] error:', (e as { message?: unknown } | null)?.message || e);
       return ack?.({ ok: false, error: 'server_error' });
     }
   });
@@ -214,18 +217,18 @@ export function registerE2eKeyHandlers(io: Server, sock: Socket, meId: () => str
       if (!isE2ePublicKey(publicKey)) return ack?.({ ok: false, error: 'invalid_key' });
       const u = await User.findById(me).select('e2ePublicKey +e2eBackup').lean();
       if (!u) return ack?.({ ok: false, error: 'not_found' });
-      if ((u as any).e2eBackup?.pk !== publicKey) return ack?.({ ok: false, error: 'no_backup' });
+      if (u.e2eBackup?.pk !== publicKey) return ack?.({ ok: false, error: 'no_backup' });
       await User.updateOne(
         { _id: me },
         { $set: { e2ePublicKey: publicKey, e2eKeyUpdatedAt: new Date(), e2eDisabled: false } },
       );
-      if ((u as any).e2ePublicKey !== publicKey) {
+      if (u.e2ePublicKey !== publicKey) {
         await notifyFriendsKeyChanged(io, me, publicKey);
         console.log(`[e2e] re-enabled user=${me}`);
       }
       return ack?.({ ok: true });
-    } catch (e: any) {
-      console.error('[e2e:enable] error:', e?.message || e);
+    } catch (e) {
+      console.error('[e2e:enable] error:', (e as { message?: unknown } | null)?.message || e);
       return ack?.({ ok: false, error: 'server_error' });
     }
   });
@@ -240,14 +243,14 @@ export function registerE2eKeyHandlers(io: Server, sock: Socket, meId: () => str
         if (!r.ok) return ack?.({ ok: false, error: 'rate_limited', retryAfterSec: r.retryAfterSec });
       }
       const u = await User.findById(me).select('+e2eBackup').lean();
-      const backup = (u as any)?.e2eBackup;
+      const backup = u?.e2eBackup;
       if (!backup) return ack?.({ ok: false, error: 'no_backup' });
       if (!verifyBackupAuthKey(payload?.authKey, backup.authHash)) {
         return ack?.({ ok: false, error: 'wrong_password' });
       }
       return ack?.({ ok: true, backup: { v: backup.v, kdf: backup.kdf, n: backup.n, c: backup.c, pk: backup.pk } });
-    } catch (e: any) {
-      console.error('[e2e:backup_fetch] error:', e?.message || e);
+    } catch (e) {
+      console.error('[e2e:backup_fetch] error:', (e as { message?: unknown } | null)?.message || e);
       return ack?.({ ok: false, error: 'server_error' });
     }
   });
@@ -269,8 +272,8 @@ export function registerE2eKeyHandlers(io: Server, sock: Socket, meId: () => str
       const keys: Record<string, string> = {};
       for (const id of ids) keys[id] = found[id] || '';
       return ack?.({ ok: true, keys });
-    } catch (e: any) {
-      console.error('[e2e:keys] error:', e?.message || e);
+    } catch (e) {
+      console.error('[e2e:keys] error:', (e as { message?: unknown } | null)?.message || e);
       return ack?.({ ok: false, error: 'server_error' });
     }
   });

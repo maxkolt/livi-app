@@ -5,7 +5,7 @@
   <string name="incoming_call_unknown">Có người đang gọi</string>
   <string name="incoming_call_accept">Chấp nhận</string>
   <string name="incoming_call_decline">Từ chối</string>
-  <string name="outgoing_call_title">Cuộc gọi video đi</string>
+  <string name="outgoing_call_title">Cuộc gọi đi</string>
   <string name="outgoing_call_subtitle">Đang gọi…</string>
   <string name="outgoing_call_subtitle_base">Đang gọi</string>
   <string name="outgoing_call_subtitle_base_audio">Đang gọi</string>

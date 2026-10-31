@@ -5,7 +5,7 @@
   <string name="incoming_call_unknown">Qualcuno ti sta chiamando</string>
   <string name="incoming_call_accept">Accetta</string>
   <string name="incoming_call_decline">Rifiuta</string>
-  <string name="outgoing_call_title">Videochiamata in uscita</string>
+  <string name="outgoing_call_title">Chiamata in uscita</string>
   <string name="outgoing_call_subtitle">Chiamata in corso…</string>
   <string name="outgoing_call_subtitle_base">Chiamata in corso</string>
   <string name="outgoing_call_subtitle_base_audio">Chiamata in corso</string>

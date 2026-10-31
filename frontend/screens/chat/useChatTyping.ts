@@ -99,10 +99,10 @@ export function useChatTyping({ peerId, currentUserId }: Options) {
   React.useEffect(() => {
     const off = onChatTyping((data) => {
       try {
-        const from = String((data as any)?.from || "");
-        const to = String((data as any)?.to || "");
-        const typing = !!(data as any)?.typing;
-        const recording = !!(data as any)?.recording;
+        const from = String((data)?.from || "");
+        const to = String((data)?.to || "");
+        const typing = !!(data)?.typing;
+        const recording = !!(data)?.recording;
 
         if (!from || from !== peerId) return;
         if (currentUserId && to && to !== String(currentUserId)) return;

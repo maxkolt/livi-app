@@ -1,11 +1,17 @@
+import type { HomeRouteParams } from '../screens/home/types';
 import type { IncomingShareItem } from '../utils/incomingShare';
 
+export type CallScreenReturnTarget = {
+  name: keyof RootStackParamList;
+  params?: object;
+};
+
 export type RootStackParamList = {
-  Home: undefined;
+  Home: HomeRouteParams | undefined;
   RandomChat:
     | {
         myUserId?: string;
-        returnTo?: { name: keyof RootStackParamList; params?: any };
+        returnTo?: CallScreenReturnTarget;
       }
     | undefined;
   VideoCall:
@@ -16,7 +22,13 @@ export type RootStackParamList = {
         directInitiator?: boolean;
         callId?: string;
         roomId?: string;
-        returnTo?: { name: keyof RootStackParamList; params?: any };
+        returnTo?: CallScreenReturnTarget;
+        partnerId?: string;
+        partnerName?: string;
+        partnerNick?: string;
+        isIncoming?: boolean;
+        startWithCamOff?: boolean;
+        callMedia?: 'audio' | 'video';
         mode?: 'friend';
         resume?: boolean;
         fromPiP?: boolean;

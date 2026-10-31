@@ -1,3 +1,4 @@
+import type { CallAudioGlobals, SystemPiPReturnState } from '../../../utils/callStateTypes';
 /**
  * Состояние возврата из системного PiP.
  *
@@ -11,9 +12,9 @@
  */
 
 /** Состояние текущего возврата, либо null, если токен не совпал или возврата нет. */
-export function readSystemPiPReturnState(token: number): any {
+export function readSystemPiPReturnState(token: number): SystemPiPReturnState | null {
   if (!token) return null;
-  const g = global as any;
+  const g = global as CallAudioGlobals;
   const current = g.__systemPiPReturnStateRef?.current;
   if (!current || Number(current.token || 0) !== token) {
     return null;
@@ -23,7 +24,7 @@ export function readSystemPiPReturnState(token: number): any {
 
 /** Идёт ли сейчас возврат из системного PiP и какие окна ещё активны. */
 export function readSystemPiPReturnGuard(token: number) {
-  const g = global as any;
+  const g = global as CallAudioGlobals;
   const now = Date.now();
   const returningUntil = Number(g.__returningFromSystemPiPUntilRef?.current || 0);
   const disableUntil = Number(g.__disableSystemPiPUntilRef?.current || 0);

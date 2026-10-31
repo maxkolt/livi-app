@@ -1,5 +1,5 @@
 // models/Install.ts
-import { Schema, model, models, type Types } from 'mongoose';
+import { Schema, model, models, type Model, type Types } from 'mongoose';
 
 interface IInstall {
   _id: Types.ObjectId;
@@ -30,4 +30,4 @@ const InstallSchema = new Schema<IInstall>(
   { timestamps: true, collection: 'installs' }
 );
 
-export default (models.Install as any) || model<IInstall>('Install', InstallSchema);
+export default (models.Install as Model<IInstall> | undefined) || model<IInstall>('Install', InstallSchema);

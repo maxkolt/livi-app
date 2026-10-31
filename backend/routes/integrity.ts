@@ -1,3 +1,4 @@
+import type { AuthenticatedRequest, ErrorDetails } from '../utils/runtimeTypes';
 // routes/integrity.ts
 // Отчёт Play Integrity от приложения: после переустановки (секрет создан заново и перепривязан)
 // и раз в неделю как выборка. Только наблюдение — ответ всегда ok, никого не блокирует.
@@ -19,8 +20,8 @@ const REASONS = new Set(['new_secret', 'periodic']);
 const MAX_TOKEN_LENGTH = 20_000;
 
 router.post('/integrity/report', async (req, res) => {
-  const userId = String((req as any).userId || '').trim();
-  const installId = String((req as any).installId || '').trim();
+  const userId = String((req as AuthenticatedRequest).userId || '').trim();
+  const installId = String((req as AuthenticatedRequest).installId || '').trim();
   if (!userId || !installId) return res.status(401).json({ ok: false, error: 'unauthorized' });
   if (mongoose.connection.readyState !== 1) return res.status(503).json({ ok: false, error: 'database_unavailable' });
 
@@ -46,13 +47,13 @@ router.post('/integrity/report', async (req, res) => {
           nowMs: Date.now(),
         })
       );
-    } catch (e: any) {
-      record.decodeError = String(e?.message || e).slice(0, 120);
+    } catch (e: unknown) {
+      record.decodeError = String((e as ErrorDetails)?.message || e).slice(0, 120);
     }
   }
 
   try {
-    const inst: any = await Install.findOneAndUpdate({ installId }, { $set: { integrity: record } })
+    const inst = await Install.findOneAndUpdate({ installId }, { $set: { integrity: record } })
       .select('secretRotatedAt')
       .lean();
     const rotatedAt = inst?.secretRotatedAt ? new Date(inst.secretRotatedAt).getTime() : 0;
@@ -63,8 +64,8 @@ router.post('/integrity/report', async (req, res) => {
       ...record,
       sinceRotationMs: rotatedAt ? Date.now() - rotatedAt : null,
     });
-  } catch (e: any) {
-    logger.warn('[integrity] report save failed', { installIdPrefix: installId.slice(0, 20), error: e?.message });
+  } catch (e: unknown) {
+    logger.warn('[integrity] report save failed', { installIdPrefix: installId.slice(0, 20), error: (e as ErrorDetails)?.message });
   }
   res.json({ ok: true });
 });

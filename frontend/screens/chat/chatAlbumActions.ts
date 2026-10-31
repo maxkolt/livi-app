@@ -1,3 +1,5 @@
+import type { ChatMessage } from './chatMessageTypes';
+
 /** Pure album save/forward/delete helpers for chat image actions. */
 
 import { getMessageImageUris } from "./chatAlbum";
@@ -29,11 +31,11 @@ function albumMessageFieldsAfterUrisUpdate(
 
 /** Apply server/local album URI update onto a messages array. */
 export function mapMessagesAfterAlbumUrisUpdate(
-  prev: any[],
+  prev: ChatMessage[],
   messageId: string,
   nextUris: string[],
   result: { ok?: boolean; deleted?: boolean; uri?: string } | null | undefined,
-): any[] {
+): ChatMessage[] {
   const mid = String(messageId || "").trim();
   if (!mid || !result?.ok) return prev;
   if (result.deleted) {
@@ -45,9 +47,9 @@ export function mapMessagesAfterAlbumUrisUpdate(
 
 /** Shape selectedMessage for forward after album multi-pick. */
 export function buildAlbumForwardSelectedMessage(
-  message: any,
+  message: ChatMessage,
   pickedUris: string[],
-): any {
+): ChatMessage {
   if (!pickedUris.length) return message;
   if (pickedUris.length === 1) {
     return {
@@ -99,7 +101,7 @@ export function filterValidAlbumPickIndices(
 
 /** Whether delete of picked album photos should become a full-message delete. */
 export function albumPickRequiresFullDelete(
-  message: any,
+  message: ChatMessage,
   currentUserId: string | null | undefined,
   uris: string[],
   picked: string[],
@@ -113,7 +115,7 @@ export function albumPickRequiresFullDelete(
 }
 
 export function resolveOneAlbumUri(
-  message: any,
+  message: ChatMessage,
   focusIndex: number | null,
 ): { uris: string[]; isAlbum: boolean; idx: number | null; oneUri: string | undefined } {
   const uris = getMessageImageUris(message);

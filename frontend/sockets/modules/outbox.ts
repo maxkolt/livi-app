@@ -1,3 +1,4 @@
+import type { ChatMessage } from '../../screens/chat/chatMessageTypes';
 // frontend/sockets/modules/outbox.ts
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { logger } from "../../utils/logger";
@@ -40,6 +41,7 @@ const PERMANENT_EDIT_ERRORS = new Set(['not_found_or_forbidden', 'bad_request', 
 import type {
   EditOutboxItem,
   MessageOutboxItem,
+  MessageMutationResponse,
   OutboxMessageDeliveredPayload,
   OutboxMessageFailedPayload,
 } from "./outboxTypes";
@@ -74,7 +76,7 @@ async function loadCancelledOutboxIdsDisk(): Promise<Set<string>> {
     if (!raw) return new Set();
     const parsed = JSON.parse(raw);
     return new Set(
-      Array.isArray(parsed) ? parsed.map((x: any) => String(x || '').trim()).filter(Boolean) : [],
+      Array.isArray(parsed) ? parsed.map((x: unknown) => String(x || '').trim()).filter(Boolean) : [],
     );
   } catch {
     return new Set();
@@ -118,7 +120,7 @@ export function clearCancelledOutboxFingerprints(): void {
  * отдаёт строкой `http_429:<body>`). Возвращает, через сколько секунд повторить, иначе null.
  */
 export function readRateLimitRetryAfterSec(resp: unknown): number | null {
-  const r = resp as any;
+  const r = resp as { error?: unknown; retryAfterSec?: unknown } | null;
   const error = String(r?.error || '');
   let retryAfter: unknown;
   if (error === 'rate_limited') {
@@ -136,7 +138,7 @@ export function readRateLimitRetryAfterSec(resp: unknown): number | null {
 
 /** Код отказа: у сокета `error`, у HTTP — `error` из тела `http_<status>:<json>`. */
 export function readApiErrorCode(resp: unknown): string {
-  const error = String((resp as any)?.error || '');
+  const error = String((resp as { error?: unknown } | null)?.error || '');
   const m = /^http_\d+:([\s\S]*)$/.exec(error);
   if (!m) return error;
   try {
@@ -214,7 +216,7 @@ export function onOutboxPendingChange(cb: () => void): () => void {
 /* ========= Исход отправки — для того, кто ждёт конкретное сообщение ========= */
 
 type OutboxOutcome =
-  | { kind: 'delivered'; messageId: string; delivered: boolean; timestamp?: unknown }
+  | { kind: 'delivered'; messageId: string; delivered: boolean; timestamp?: MessageMutationResponse['timestamp'] }
   | { kind: 'failed'; error: string }
   | { kind: 'cancelled' };
 
@@ -244,20 +246,20 @@ function settleOutboxOutcome(outboxId: string, outcome: OutboxOutcome): void {
 
 /* ========= Хранилище очереди сообщений ========= */
 
-let messageOutboxRetryTimer: ReturnType<typeof setTimeout> | null = null;
+// Native timers are numeric IDs; keep scheduling metadata outside the timer handle.
+let messageOutboxRetryTimer: { handle: ReturnType<typeof setTimeout>; dueAt: number } | null = null;
 
 /** Повторить drain позже. Держим один таймер — берём более ранний срок. */
 export function scheduleMessageOutboxDrain(delaySec: number): void {
   const delayMs = Math.max(1, delaySec) * 1000;
   const dueAt = Date.now() + delayMs;
-  if (messageOutboxRetryTimer && (messageOutboxRetryTimer as any).__dueAt <= dueAt) return;
-  if (messageOutboxRetryTimer) clearTimeout(messageOutboxRetryTimer);
+  if (messageOutboxRetryTimer && messageOutboxRetryTimer.dueAt <= dueAt) return;
+  if (messageOutboxRetryTimer) clearTimeout(messageOutboxRetryTimer.handle);
   const timer = setTimeout(() => {
-    if (messageOutboxRetryTimer === timer) messageOutboxRetryTimer = null;
+    if (messageOutboxRetryTimer?.handle === timer) messageOutboxRetryTimer = null;
     void drainMessageOutbox().catch(() => {});
   }, delayMs);
-  (timer as any).__dueAt = dueAt;
-  messageOutboxRetryTimer = timer;
+  messageOutboxRetryTimer = { handle: timer, dueAt };
 }
 
 let networkRetryStep = 0;
@@ -287,20 +289,27 @@ function scheduleNetworkRetry(): void {
   scheduleMessageOutboxDrain(sec);
 }
 
+type StoredMessageOutboxRow = Partial<Record<'id' | 'optimisticUiId' | 'createdAt' | 'attempts', unknown>> & {
+  payload?: MessageOutboxItem['payload'];
+};
+type MessageOutboxCandidate = Omit<MessageOutboxItem, 'payload'> & {
+  payload: MessageOutboxItem['payload'] | { to?: never };
+};
+
 async function loadMessageOutbox(): Promise<MessageOutboxItem[]> {
   try {
     const raw = await AsyncStorage.getItem(MESSAGE_OUTBOX_KEY);
     const parsed = raw ? JSON.parse(raw) : [];
     const list = Array.isArray(parsed) ? parsed : [];
     const items = list
-      .map((item: any) => ({
+      .map((item: StoredMessageOutboxRow | null): MessageOutboxCandidate => ({
         id: String(item?.id || ''),
         optimisticUiId: item?.optimisticUiId ? String(item.optimisticUiId) : undefined,
         createdAt: Number(item?.createdAt || Date.now()),
-        ...(Number(item?.attempts) > 0 ? { attempts: Number(item.attempts) } : {}),
+        ...(Number(item?.attempts) > 0 ? { attempts: Number(item!.attempts) } : {}),
         payload: item?.payload || {},
       }))
-      .filter((item: MessageOutboxItem) => !!item.id && !!item.payload?.to);
+      .filter((item): item is MessageOutboxItem => !!item.id && !!item.payload?.to);
     setQueuedMirror(items);
     return items;
   } catch {
@@ -402,7 +411,7 @@ async function loadEditOutbox(): Promise<EditOutboxItem[]> {
     const parsed = JSON.parse(raw);
     const list = Array.isArray(parsed) ? parsed : [];
     return list
-      .map((item: any) => ({
+      .map((item: Partial<Record<keyof EditOutboxItem, unknown>> | null) => ({
         id: String(item?.id || ''),
         messageId: String(item?.messageId || '').trim(),
         text: String(item?.text ?? ''),
@@ -692,7 +701,7 @@ async function finishQueuedMedia(row: MessageOutboxItem, ids: readonly string[])
       const list = raw ? JSON.parse(raw) : null;
       if (Array.isArray(list)) {
         let changed = false;
-        const next = list.map((m: any) => {
+        const next = list.map((m: ChatMessage) => {
           if (!idSet.has(String(m?.id || '')) || m?.uri !== localUri) return m;
           changed = true;
           return { ...m, uri, ...(thumbUri && m?.thumbUri === localThumbUri ? { thumbUri } : {}) };
@@ -708,7 +717,7 @@ async function finishQueuedMedia(row: MessageOutboxItem, ids: readonly string[])
 
 /* ========= Отправка: сокет, при его молчании — HTTP ========= */
 
-type SendAttempt = { kind: 'resp'; resp: any; useSocket: boolean } | { kind: 'network'; useSocket: boolean };
+type SendAttempt = { kind: 'resp'; resp: MessageMutationResponse; useSocket: boolean } | { kind: 'network'; useSocket: boolean };
 
 async function socketReadyForSend(): Promise<boolean> {
   if (!socket.connected || shared.reconnecting) return false;
@@ -730,14 +739,14 @@ async function sendOnce(
 ): Promise<SendAttempt> {
   if (useSocket) {
     try {
-      const resp = await emitAck(event, payload, SEND_ACK_TIMEOUT_MS, 0);
+      const resp = await emitAck<MessageMutationResponse>(event, payload, SEND_ACK_TIMEOUT_MS, 0);
       if (resp?.error !== 'unauthorized') return { kind: 'resp', resp, useSocket: true };
     } catch {}
     // Сокет не ответил (VPN держит «connected», а пакеты не ходят) — до конца прохода шлём по HTTP.
     useSocket = false;
   }
   try {
-    const resp = await postApiJson(httpPath, payload, SEND_HTTP_TIMEOUT_MS);
+    const resp = await postApiJson<MessageMutationResponse>(httpPath, payload, SEND_HTTP_TIMEOUT_MS);
     return { kind: 'resp', resp, useSocket };
   } catch {
     return { kind: 'network', useSocket };
@@ -748,7 +757,7 @@ async function sendOnce(
 
 let drainAgainRequested = false;
 
-async function onRowDelivered(row: MessageOutboxItem, resp: any): Promise<void> {
+async function onRowDelivered(row: MessageOutboxItem, resp: MessageMutationResponse): Promise<void> {
   const to = String(row.payload?.to || '');
   const serverMessageId = String(resp?.messageId || row.payload?.clientMessageId || row.id);
   const delivered = resp?.delivered === true;

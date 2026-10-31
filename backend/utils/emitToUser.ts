@@ -29,7 +29,7 @@ export function emitToUser(io: Server, userId: string, event: string, payload: u
 
   for (const sock of io.sockets.sockets.values()) {
     if (delivered.has(sock.id)) continue;
-    const suid = normalizeMongoObjectId(String((sock as any).data?.userId || ''));
+    const suid = normalizeMongoObjectId(String((sock).data?.userId || ''));
     if (suid !== uid) continue;
     sock.emit(event, payload);
     delivered.add(sock.id);

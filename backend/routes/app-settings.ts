@@ -40,7 +40,7 @@ r.get('/app-settings', async (_req, res) => {
   if (mongoose.connection.readyState === 1) {
     try {
       const doc = await AppConfig.findOne({ key: APP_CONFIG_KEY_LATEST_VERSION }).lean();
-      const fromDb = (doc as any)?.value;
+      const fromDb = (doc)?.value;
       if (fromDb && typeof fromDb === 'string' && fromDb.trim()) {
         latestAppVersion = fromDb.trim();
       }

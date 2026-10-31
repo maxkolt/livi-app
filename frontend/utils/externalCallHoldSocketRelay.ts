@@ -3,7 +3,7 @@ import { dispatchPartnerExternalHoldFromSocket } from './partnerExternalHoldUi';
 
 /** Партнёрский hold на __webrtcSessionRef (не тянем socket в externalCallHold.ts — break require cycle). */
 export function installExternalHoldSocketRelay(): void {
-  const g = global as any;
+  const g = global as { __externalHoldSocketRelayInstalled?: boolean };
   if (g.__externalHoldSocketRelayInstalled) return;
   g.__externalHoldSocketRelayInstalled = true;
   socket.on('call:external-hold', (data: { hold?: boolean; from: string; callId?: string; roomId?: string }) => {

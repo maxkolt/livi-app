@@ -1,5 +1,6 @@
 // sockets/identity.ts
 import { Server } from 'socket.io';
+import type { AuthedSocket } from './types';
 import mongoose, { ClientSession, Types } from 'mongoose';
 import User from '../models/User';
 import Message from '../models/Message';
@@ -28,18 +29,22 @@ type AttachPayload = {
   profile?: { nick?: string; avatar?: string } | null;
 };
 
+type IdentityAck<T extends object = object> = (
+  result: ({ ok: true } & T) | { ok: false; error: string },
+) => void;
+
 const OID_HEX_24 = /^[a-f\d]{24}$/i;
 function canonicalMongoUserId(userId: string): string {
   const raw = String(userId || '').trim();
   return OID_HEX_24.test(raw) ? raw.toLowerCase() : raw;
 }
 
-export async function bindUser(io: Server, sock: any, userId: string) {
+export async function bindUser(io: Server, sock: AuthedSocket, userId: string) {
   const canonical = canonicalMongoUserId(userId);
   // Проверяем, не подключен ли уже этот пользователь.
   // Не отключаем дубликат до bind нового сокета — иначе можно поймать кратковременный "offline" фликер.
-  const duplicateSockets = Array.from(io.sockets.sockets.values())
-    .filter(s => String((s as any)?.data?.userId || '') === canonical && s.id !== sock.id);
+  const duplicateSockets: AuthedSocket[] = Array.from(io.sockets.sockets.values())
+    .filter((s: AuthedSocket) => String(s?.data?.userId || '') === canonical && s.id !== sock.id);
 
   sock.data.userId = canonical;
 
@@ -47,7 +52,7 @@ export async function bindUser(io: Server, sock: any, userId: string) {
   try {
     if (mongoose.connection.readyState === 1) {
       const u = await User.findById(canonical).select('nick').lean();
-      sock.data.nick = String((u as any)?.nick || '').trim();
+      sock.data.nick = String(u?.nick || '').trim();
     }
   } catch {
     sock.data.nick = String(sock.data.nick || '').trim();
@@ -69,11 +74,11 @@ export async function bindUser(io: Server, sock: any, userId: string) {
     setTimeout(() => {
       for (const oldSocket of duplicateSockets) {
         try {
-          if ((oldSocket as any)?.connected) {
+          if (oldSocket?.connected) {
             console.warn(`[user] duplicate connection ${canonical} old=${oldSocket.id} -> disconnect`);
             // Старый сокет вытеснен новым того же пользователя — это обрыв сети, а не выход:
             // рандом-пара на нём должна уйти в паузу и дождаться random:resume (sockets/match.ts).
-            (oldSocket as any).data.evictedBy = sock.id;
+            oldSocket.data.evictedBy = sock.id;
             oldSocket.disconnect(true);
           }
         } catch {}
@@ -88,7 +93,7 @@ export async function bindUser(io: Server, sock: any, userId: string) {
   const offlineChatClearedNotifications = getAndClearOfflineChatClearedQueue(canonical);
 
   if (offlineChatClearedNotifications.length > 0) {
-    offlineChatClearedNotifications.forEach((notification: any) => {
+    offlineChatClearedNotifications.forEach((notification) => {
       sock.emit('message:chat_cleared', notification);
     });
     
@@ -120,9 +125,9 @@ async function broadcastProfileToFriends(io: Server, userId: string) {
   if (!u) return;
   
   // Теперь avatar - просто маркер, avatarVer - версия для кеша
-  const rawAvatar = String((u as any)?.avatar || '');
-  const avatarVer = (u as any)?.avatarVer || 0;
-  const avatarThumbB64 = (u as any)?.avatarThumbB64 || '';
+  const rawAvatar = String(u?.avatar || '');
+  const avatarVer = u?.avatarVer || 0;
+  const avatarThumbB64 = u?.avatarThumbB64 || '';
 
   const payload = {
     userId: String(userId),
@@ -139,7 +144,7 @@ async function broadcastProfileToFriends(io: Server, userId: string) {
 
 /** Собираем $set только по реально переданным полям профиля */
 function buildSetFromProfile(p?: { nick?: string; avatar?: string }) {
-  const safe: any = {};
+  const safe: { nick?: string; avatar?: string } = {};
   if (!p) return safe;
 
   if ('nick' in p) {
@@ -160,14 +165,14 @@ function buildSetFromProfile(p?: { nick?: string; avatar?: string }) {
 }
 
 // Кэш для предотвращения дублирования запросов
-const attachRequestCache = new Map<string, { timestamp: number; promise: Promise<any> }>();
+const attachRequestCache = new Map<string, { timestamp: number; promise: Promise<void> }>();
 
 export default function registerIdentitySockets(io: Server) {
-  io.on('connection', (sock) => {
+  io.on('connection', (sock: AuthedSocket) => {
     registerMissedCallAck(sock);
     // Обработка отключения пользователя
     sock.on('disconnect', (reason) => {
-      const userId = (sock as any).data?.userId;
+      const userId = sock.data?.userId;
       if (userId) {
         try { 
           sock.leave(`u:${userId}`); 
@@ -183,7 +188,7 @@ export default function registerIdentitySockets(io: Server) {
     /* -------- identity:attach --------
        Привязка installId -> user + "мягкое" обновление профиля.
        ВАЖНО: апдейтим ТОЛЬКО поля, которые пришли в payload.profile. */
-    sock.on('identity:attach', async (payload: AttachPayload, ack?: Function) => {
+    sock.on('identity:attach', async (payload: AttachPayload, ack?: IdentityAck<{ userId: string }>) => {
       const installId = String(payload?.installId || '').trim();
       const cacheKey = `${installId}_${sock.id}`;
       
@@ -214,12 +219,12 @@ export default function registerIdentitySockets(io: Server) {
         // 1) install уже существует -> пользователь есть/нет. Независимые запросы параллельно.
         const inst = await Install.findOne({ installId }).lean();
         if (inst) {
-          const userId = String((inst as any).user);
+          const userId = String(inst.user);
 
           // SECURITY: если для этого install уже сохранён секрет — требуем его совпадения.
           // Без этой проверки знания/подбора одного installId было достаточно, чтобы
           // привязать чужую сессию к своему сокету (полный захват аккаунта).
-          const storedInstallSecretHash = (inst as any).installSecretHash as string | undefined;
+          const storedInstallSecretHash = inst.installSecretHash;
           if (storedInstallSecretHash) {
             if (!verifyInstallSecret(payload?.installSecret, storedInstallSecretHash)) {
               // Переустановка приложения: installId выведен из ANDROID_ID и вернулся тем же,
@@ -249,8 +254,8 @@ export default function registerIdentitySockets(io: Server) {
                   console.warn(
                     `[identity] installSecret ROTATED for device-bound install=${installId} user=${userId} (reinstall recovery)`
                   );
-                } catch (e: any) {
-                  console.warn(`[identity] failed to rotate installSecret for install=${installId}:`, e?.message);
+                } catch (e: unknown) {
+                  console.warn(`[identity] failed to rotate installSecret for install=${installId}:`, (e as { message?: string } | null)?.message);
                   ack?.({ ok: false, error: 'unauthorized' });
                   setTimeout(() => attachRequestCache.delete(cacheKey), 1000);
                   return;
@@ -273,8 +278,8 @@ export default function registerIdentitySockets(io: Server) {
                 { installId },
                 { $set: { installSecretHash: hashInstallSecret(payload!.installSecret as string) } }
               );
-            } catch (e: any) {
-              console.warn(`[identity] failed to bootstrap installSecret for install=${installId}:`, e?.message);
+            } catch (e: unknown) {
+              console.warn(`[identity] failed to bootstrap installSecret for install=${installId}:`, (e as { message?: string } | null)?.message);
             }
           } else {
             console.warn(`[identity] attach ALLOWED without installSecret (legacy client, install=${installId}) — update app to close this window`);
@@ -316,7 +321,7 @@ export default function registerIdentitySockets(io: Server) {
             let prevNickForAudit: string | null = null;
             if ('nick' in $set) {
               const row = await User.findById(userId).select('nick').lean();
-              prevNickForAudit = String((row as any)?.nick ?? '');
+              prevNickForAudit = String(row?.nick ?? '');
             }
             await User.updateOne({ _id: userId }, { $set });
             if (prevNickForAudit !== null) {
@@ -368,7 +373,7 @@ export default function registerIdentitySockets(io: Server) {
               avatar: '', // ВСЕГДА пустой для нового пользователя
               friends: [],
             }],
-            opt as any
+            opt
           );
           const installDocToCreate: { installId: string; user: typeof newUserId; installSecretHash?: string } = {
             installId,
@@ -377,7 +382,7 @@ export default function registerIdentitySockets(io: Server) {
           if (isPlausibleInstallSecret(payload?.installSecret)) {
             installDocToCreate.installSecretHash = hashInstallSecret(payload!.installSecret as string);
           }
-          const [newInstall] = await Install.create([installDocToCreate], opt as any);
+          const [newInstall] = await Install.create([installDocToCreate], opt);
           console.log(`[identity] ✅ User created (new): ${newUserId}`, {
             _id: String(newUser._id),
             nick: newUser.nick,
@@ -410,14 +415,14 @@ export default function registerIdentitySockets(io: Server) {
         // Очищаем кэш
         setTimeout(() => attachRequestCache.delete(cacheKey), 1000);
         return;
-      } catch (e: any) {
+      } catch (e: unknown) {
         console.error(`[identity] ❌ attach error:`, {
-          error: e?.message || String(e),
-          stack: e?.stack?.substring(0, 500),
+          error: (e as { message?: string } | null)?.message || String(e),
+          stack: (e as { stack?: string } | null)?.stack?.substring(0, 500),
           installId,
           socketId: sock.id
         });
-        ack?.({ ok: false, error: e?.message || 'server_error' });
+        ack?.({ ok: false, error: (e as { message?: string } | null)?.message || 'server_error' });
         // Очищаем кэш при ошибке
         setTimeout(() => attachRequestCache.delete(cacheKey), 1000);
       }
@@ -425,7 +430,7 @@ export default function registerIdentitySockets(io: Server) {
 
     /* -------- user:exists --------
        Проверка существования пользователя в MongoDB. */
-    sock.on('user:exists', async ({ userId }: { userId?: string }, ack?: Function) => {
+    sock.on('user:exists', async ({ userId }: { userId?: string }, ack?: IdentityAck<{ exists: boolean }>) => {
       try {
         const id = String(userId || '').trim();
         if (!id) return ack?.({ ok: false, error: 'no_userId' });
@@ -438,14 +443,14 @@ export default function registerIdentitySockets(io: Server) {
 
         const exists = await User.exists({ _id: id });
         ack?.({ ok: true, exists: !!exists });
-      } catch (e: any) {
-        ack?.({ ok: false, error: e?.message || 'server_error' });
+      } catch (e: unknown) {
+        ack?.({ ok: false, error: (e as { message?: string } | null)?.message || 'server_error' });
       }
     });
 
     /* -------- identity:wipeMe --------
        Полное удаление аккаунта по installId (+чистка дружб/заявок). */
-    sock.on('identity:wipeMe', async ({ installId }: { installId?: string }, ack?: Function) => {
+    sock.on('identity:wipeMe', async ({ installId }: { installId?: string }, ack?: IdentityAck) => {
       let session: ClientSession | null = null;
       try {
         const id = String(installId || '').trim();
@@ -457,7 +462,7 @@ export default function registerIdentitySockets(io: Server) {
         }
 
         const inst = await Install.findOne({ installId: id }).lean();
-        const userId = inst && (inst as any).user ? String((inst as any).user) : '';
+        const userId = inst && inst.user ? String(inst.user) : '';
         if (!userId) return ack?.({ ok: false, error: 'not_found' });
 
         // Список друзей нужно снять ДО разрыва связей: после удаления сообщать будет некому,
@@ -465,15 +470,15 @@ export default function registerIdentitySockets(io: Server) {
         let formerFriendIds: string[] = [];
         try {
           formerFriendIds = (await getFriendIds(userId)).map((f) => String(f));
-        } catch (e: any) {
-          console.warn('[identity:wipeMe] failed to collect friends before wipe', e?.message);
+        } catch (e: unknown) {
+          console.warn('[identity:wipeMe] failed to collect friends before wipe', (e as { message?: string } | null)?.message);
         }
 
         // Файлы фото и голосовых из удаляемых чатов: после удаления сообщений на них
         // больше никто не ссылается, и без этого они остались бы на диске навсегда.
         let mediaNames: string[] = [];
         try {
-          const chatIds = (await FriendshipMessages.find({ $or: [{ user1: userId }, { user2: userId }] }).select('_id').lean()).map((d: any) => d._id);
+          const chatIds = (await FriendshipMessages.find({ $or: [{ user1: userId }, { user2: userId }] }).select('_id').lean()).map((d) => d._id);
           const [chatItems, directMessages, offlineMessages] = await Promise.all([
             chatIds.length
               ? FriendshipMessageItem.find({ friendshipId: { $in: chatIds }, type: { $in: ['image', 'audio'] } }).select('uri uris').lean()
@@ -482,12 +487,12 @@ export default function registerIdentitySockets(io: Server) {
             OfflineMessage.find({ $or: [{ senderId: userId }, { recipientId: userId }] }).select('messageData.uri messageData.uris').lean(),
           ]);
           mediaNames = collectUploadedMediaNames([
-            ...(chatItems as any[]),
-            ...(directMessages as any[]),
-            ...(offlineMessages as any[]).map((doc) => doc?.messageData || {}),
+            ...chatItems,
+            ...directMessages,
+            ...offlineMessages.map((doc) => doc?.messageData || {}),
           ]);
-        } catch (e: any) {
-          console.warn('[identity:wipeMe] failed to collect chat media before wipe', e?.message);
+        } catch (e: unknown) {
+          console.warn('[identity:wipeMe] failed to collect chat media before wipe', (e as { message?: string } | null)?.message);
         }
 
         try { session = await mongoose.startSession(); } catch {}
@@ -499,13 +504,13 @@ export default function registerIdentitySockets(io: Server) {
           await User.updateMany(
             { friends: userId },
             { $pull: { friends: userId } },
-            opt as any
+            opt
           );
           // 1) Разрываем дружбы у других
           await User.updateMany(
             { friends: userId },
             { $pull: { friends: userId } },
-            opt as any,
+            opt,
           );
           await FriendshipEdge.deleteMany(
             {
@@ -514,26 +519,26 @@ export default function registerIdentitySockets(io: Server) {
                 { friendId: new mongoose.Types.ObjectId(userId) },
               ],
             },
-            opt as any,
+            opt,
           );
 
           // 2) Удаляем входящие заявки у других
           await User.updateMany(
             { friendRequests: userId },
             { $pull: { friendRequests: userId } },
-            opt as any,
+            opt,
           );
 
           // 3) Чистим сообщения (две модели + офлайн + отдельная коллекция сообщений)
-          await Message.deleteMany({ $or: [{ from: userId }, { to: userId }] }, opt as any);
-          await OfflineMessage.deleteMany({ $or: [{ senderId: userId }, { recipientId: userId }] }, opt as any);
-          const friendshipIds = (await FriendshipMessages.find({ $or: [{ user1: userId }, { user2: userId }] }).select('_id').lean()).map((d: any) => d._id);
-          if (friendshipIds.length) await FriendshipMessageItem.deleteMany({ friendshipId: { $in: friendshipIds } }, opt as any);
-          await FriendshipMessages.deleteMany({ $or: [{ user1: userId }, { user2: userId }] }, opt as any);
+          await Message.deleteMany({ $or: [{ from: userId }, { to: userId }] }, opt);
+          await OfflineMessage.deleteMany({ $or: [{ senderId: userId }, { recipientId: userId }] }, opt);
+          const friendshipIds = (await FriendshipMessages.find({ $or: [{ user1: userId }, { user2: userId }] }).select('_id').lean()).map((d) => d._id);
+          if (friendshipIds.length) await FriendshipMessageItem.deleteMany({ friendshipId: { $in: friendshipIds } }, opt);
+          await FriendshipMessages.deleteMany({ $or: [{ user1: userId }, { user2: userId }] }, opt);
 
           // 4) Пуш-токены: без этого удалённому аккаунту продолжают слать пуши, а записи
           // висят на мёртвом userId и тратят квоту FCM.
-          await PushToken.deleteMany({ userId: new mongoose.Types.ObjectId(userId) }, opt as any);
+          await PushToken.deleteMany({ userId: new mongoose.Types.ObjectId(userId) }, opt);
 
           // 5) Пропущенные звонки в обе стороны — они бесполезны и после удаления профиля.
           await MissedCall.deleteMany(
@@ -543,7 +548,7 @@ export default function registerIdentitySockets(io: Server) {
                 { callerId: new mongoose.Types.ObjectId(userId) },
               ],
             },
-            opt as any,
+            opt,
           );
 
           // 6) Сам пользователь. Раньше поля только обнулялись, и документ оставался навсегда:
@@ -551,7 +556,7 @@ export default function registerIdentitySockets(io: Server) {
           // с аватаром в base64 внутри. Профиль удаляют — значит удаляем.
           // Записи об оплатах (cosmetic_purchases) намеренно остаются: это финансовый след.
           const beforeWipe = await User.findById(userId).select('nick').lean();
-          const prevNickWipe = String((beforeWipe as any)?.nick ?? '');
+          const prevNickWipe = String(beforeWipe?.nick ?? '');
           auditNickChange({
             source: 'socket.identity:wipeMe',
             userId,
@@ -560,10 +565,10 @@ export default function registerIdentitySockets(io: Server) {
             socketId: sock.id,
             installId: id.length > 80 ? id.slice(0, 80) : id,
           });
-          await User.deleteOne({ _id: userId }, opt as any);
+          await User.deleteOne({ _id: userId }, opt);
 
           // 7) Инсталлы: после их удаления следующий identity:attach заведёт новый профиль.
-          await Install.deleteMany({ user: userId }, opt as any);
+          await Install.deleteMany({ user: userId }, opt);
         };
 
         if (session) {
@@ -580,18 +585,18 @@ export default function registerIdentitySockets(io: Server) {
         }
 
         // отвязываем сокет и обновляем presence
-        (sock as any).data.userId = undefined;
+        sock.data.userId = undefined;
         try { sock.leave(`u:${userId}`); } catch {}
         scheduleGlobalFriendPresenceEmit(io, userId);
 
         ack?.({ ok: true });
 
-        void deleteUnreferencedUploadedMedia(mediaNames, UPLOADS_MEDIA_DIR).catch((e: any) => {
-          console.warn('[identity:wipeMe] failed to delete chat media', e?.message);
+        void deleteUnreferencedUploadedMedia(mediaNames, UPLOADS_MEDIA_DIR).catch((e: unknown) => {
+          console.warn('[identity:wipeMe] failed to delete chat media', (e as { message?: string } | null)?.message);
         });
-      } catch (e: any) {
+      } catch (e: unknown) {
         try { session?.endSession(); } catch {}
-        ack?.({ ok: false, error: e?.message || 'server_error' });
+        ack?.({ ok: false, error: (e as { message?: string } | null)?.message || 'server_error' });
       }
     });
   });

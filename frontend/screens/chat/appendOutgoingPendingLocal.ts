@@ -1,3 +1,4 @@
+import type { ChatMessage } from './chatMessageTypes';
 /** Persist an optimistic outgoing row + «sending» status without ChatScreen mounted. */
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -10,7 +11,7 @@ import { writeStoredChatMessages } from "./chatMessageStorageWrite";
 export async function appendOutgoingPendingLocal(opts: {
   currentUserId: string;
   peerId: string;
-  message: Record<string, unknown>;
+  message: ChatMessage;
   lang?: Lang;
 }): Promise<void> {
   const uid = String(opts.currentUserId || "").trim();
@@ -28,7 +29,7 @@ export async function appendOutgoingPendingLocal(opts: {
     const raw = await AsyncStorage.getItem(messagesKey);
     const list = raw ? JSON.parse(raw) : [];
     const messages = Array.isArray(list) ? list : [];
-    if (!messages.some((m: any) => String(m?.id || "") === mid)) {
+    if (!messages.some((m: ChatMessage) => String(m?.id || "") === mid)) {
       messages.push(opts.message);
       await writeStoredChatMessages(messagesKey, messages);
     }

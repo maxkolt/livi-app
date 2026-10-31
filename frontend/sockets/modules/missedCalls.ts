@@ -75,6 +75,6 @@ export function applyMissedFromReauth(response: { userId?: string; missed?: Miss
   });
   deliveryQueue = run;
   return run.catch((e) => {
-    logger.warn('[applyMissedFromReauth] failed', e as any);
+    logger.warn('[applyMissedFromReauth] failed', e);
   });
 }

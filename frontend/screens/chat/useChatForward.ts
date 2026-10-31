@@ -1,3 +1,4 @@
+import type { ForwardRecipient } from './chatMessageTypes';
 /** Forward picker / toast / sheet state for ChatScreen. */
 
 import React from "react";
@@ -19,7 +20,7 @@ type Options = {
 
 export function useChatForward({ lang, sheetBottomPad, sheetMaxHeight, isLandscape }: Options) {
   const [showForwardPicker, setShowForwardPicker] = React.useState(false);
-  const [forwardFriends, setForwardFriends] = React.useState<any[]>([]);
+  const [forwardFriends, setForwardFriends] = React.useState<ForwardRecipient[]>([]);
   const [forwardLoading, setForwardLoading] = React.useState(false);
   const [forwardSelectedFriendIds, setForwardSelectedFriendIds] = React.useState<
     Set<string>

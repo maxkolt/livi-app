@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { View, Text, StyleSheet, ActivityIndicator, Platform } from 'react-native';
 import { NativeBlurBackdrop } from '../../BackdropBlur';
 import { RTCView, MediaStream } from '@livekit/react-native-webrtc';
+import type { VideoCallSession } from '../../../src/webrtc/sessions/VideoCallSession';
 import { MaterialIcons } from '@expo/vector-icons';
 import AwayPlaceholder from '../../../components/AwayPlaceholder';
 import PartnerCallStatusOverlay from '../../../components/PartnerCallStatusOverlay';
@@ -26,7 +27,7 @@ interface RemoteVideoProps {
   remoteViewKey: number;
   showFriendBadge: boolean;
   lang: Lang;
-  session?: any; // VideoCallSession
+  session?: Partial<Pick<VideoCallSession, 'getRemoteCamDeclaredOff' | 'shouldSuppressRemoteTransientUi'>> | null;
   onStreamReady?: (stream: MediaStream) => void;
   partnerInPiP?: boolean; // Партнер в режиме PiP
   /** Партнёр на hold из-за стороннего звонка (GSM / мессенджер). */
@@ -155,7 +156,7 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
       return (
         <RTCView
           key={rtcViewKey}
-          {...(rtcViewProps as any)}
+          {...(rtcViewProps)}
           style={[styles.rtc, transparentBackground && styles.rtcTransparent]}
           objectFit={objectFitProp}
           mirror={remoteCamSide === 'front'}
@@ -239,7 +240,7 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
     trackId: null,
   });
   const streamToUseVideoTrackId = streamToUse
-    ? ((streamToUse as any)?.getVideoTracks?.()?.[0]?.id ?? null)
+    ? ((streamToUse)?.getVideoTracks?.()?.[0]?.id ?? null)
     : null;
 
   // После переворота камеры приходит новый stream. В RN readyState может не быть 'live' — ре-рендер по таймауту.
@@ -248,7 +249,7 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
   const prevStreamIdForTickRef = useRef<string | null>(null);
   useEffect(() => {
     if (!streamToUse) return;
-    const videoTrack = (streamToUse as any)?.getVideoTracks?.()?.[0] || null;
+    const videoTrack = (streamToUse)?.getVideoTracks?.()?.[0] || null;
     if (!videoTrack) return;
 
     const streamId = streamToUse.id;
@@ -272,7 +273,7 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
         clearInterval(t);
         return;
       }
-      const vt = (streamToUse as any)?.getVideoTracks?.()?.[0];
+      const vt = (streamToUse)?.getVideoTracks?.()?.[0];
       if (vt && vt.readyState === 'live') {
         clearInterval(t);
         setTrackLiveTick((k) => k + 1);
@@ -288,7 +289,7 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
     if (Platform.OS !== 'android') return;
     if (!streamToUse) return;
 
-    const videoTrack = (streamToUse as any)?.getVideoTracks?.()?.[0] || null;
+    const videoTrack = (streamToUse)?.getVideoTracks?.()?.[0] || null;
     if (!videoTrack) return;
     if (videoTrack.readyState !== 'live') return;
 
@@ -317,8 +318,8 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
   // Управление аудио треками под mute/unmute
   useEffect(() => {
     if (!streamToUse) return;
-    const audioTracks = (streamToUse as any)?.getAudioTracks?.() || [];
-    audioTracks.forEach((track: any) => {
+    const audioTracks = (streamToUse)?.getAudioTracks?.() || [];
+    audioTracks.forEach((track) => {
       if (!track) return;
       if (!remoteMuted && !track.enabled) {
         track.enabled = true;
@@ -338,7 +339,7 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
     if (!wasInPiP) return;
     if (pipReturnRemoteRetryDoneRef.current) return;
     if (!effectiveRemoteCamOn || !streamToUse) return;
-    const videoTrack = (streamToUse as any)?.getVideoTracks?.()?.[0] || null;
+    const videoTrack = (streamToUse)?.getVideoTracks?.()?.[0] || null;
     const renderable =
       !!videoTrack &&
       (videoTrack.enabled ?? true) &&
@@ -381,7 +382,7 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
           ) : (
             <RTCView
               key={rtcViewKey}
-              {...(rtcViewProps as any)}
+              {...(rtcViewProps)}
               style={[styles.rtc, transparentBackground && styles.rtcTransparent]}
               objectFit={objectFitProp}
               mirror={remoteCamSide === 'front'}
@@ -546,7 +547,7 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
     );
   }
 
-  const videoTrack = (streamToUse as any)?.getVideoTracks?.()?.[0] || null;
+  const videoTrack = (streamToUse)?.getVideoTracks?.()?.[0] || null;
   const hasVideoTrack = !!videoTrack;
   const videoTrackReady = !!videoTrack && videoTrack.readyState === 'live';
   const videoTrackEnabled = !!videoTrack && (videoTrack.enabled ?? true);
@@ -645,7 +646,7 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
       <View style={styles.videoContainer}>
         <RTCView
           key={rtcViewKey}
-          {...(rtcViewProps as any)}
+          {...(rtcViewProps)}
           style={[styles.rtc, transparentBackground && styles.rtcTransparent]}
           objectFit={objectFitProp}
           mirror={remoteCamSide === 'front'}

@@ -2,8 +2,9 @@
 import { Server, Socket } from 'socket.io';
 import mongoose from 'mongoose';
 import User from '../models/User';
-import FriendshipMessages, { IFriendshipMessages } from '../models/FriendshipMessages';
-import FriendshipMessageItem from '../models/FriendshipMessageItem';
+import FriendshipMessages, { IFriendshipMessages, type IMessageItem, type ClientMessage } from '../models/FriendshipMessages';
+import FriendshipMessageItem, { type IFriendshipMessageItem } from '../models/FriendshipMessageItem';
+import type { E2eEnvelope } from '../utils/e2eEnvelope';
 import OfflineMessage from '../models/OfflineMessage';
 import type { ClaimedOfflineMessage, OfflineQueuePort } from './offlineMessageDelivery';
 import { checkMessageSendRateLimit, isMessageTextTooLong, truncateReplyQuote } from '../utils/messageLimits';
@@ -32,6 +33,20 @@ import {
   removeUnreadOne,
   setViewingChatState,
 } from '../utils/unreadStore';
+
+type MessageRecord = IMessageItem & { friendshipId: mongoose.Types.ObjectId; _id?: mongoose.Types.ObjectId };
+export type MessageOwner = Pick<MessageRecord, 'id' | 'from' | 'to' | 'friendshipId'> &
+  Partial<Pick<MessageRecord, 'type' | '_id'>>;
+type LegacyMessage = Partial<Omit<IMessageItem, 'id' | 'from' | 'to' | 'timestamp' | 'uris'>> & {
+  id?: unknown;
+  from?: unknown;
+  to?: unknown;
+  timestamp?: unknown;
+  uris?: unknown[];
+};
+type LegacyMessageField = 'textMessages' | 'imageMessages' | 'audioMessages' | 'stickerMessages';
+type LegacyFriendshipDocument = { _id: mongoose.Types.ObjectId } & Partial<Record<LegacyMessageField, LegacyMessage[]>>;
+type BackfillFailure = { code?: unknown; writeErrors?: unknown; insertedDocs?: unknown[] };
 
 const isOid = (s?: string) => !!s && mongoose.Types.ObjectId.isValid(String(s));
 const CLIENT_MESSAGE_ID_RE = /^[A-Za-z0-9:_-]{1,120}$/;
@@ -67,7 +82,7 @@ export function emitMessagesDeletedToParticipants(
 export const MAX_MESSAGE_BATCH_SIZE = 100;
 const READ_RECEIPT_CHUNK_SIZE = 500;
 
-function normalizeClientMessageId(payload: any): string {
+function normalizeClientMessageId(payload: { clientMessageId?: unknown; clientId?: unknown } | null | undefined): string {
   const raw = String(payload?.clientMessageId || payload?.clientId || '').trim();
   return CLIENT_MESSAGE_ID_RE.test(raw) ? raw : '';
 }
@@ -75,7 +90,7 @@ function normalizeClientMessageId(payload: any): string {
 export function normalizeMessageIdBatch(input: unknown): string[] {
   return Array.from(new Set(
     (Array.isArray(input) ? input : [])
-      .map((id: any) => String(id || '').trim())
+      .map((id: unknown) => String(id || '').trim())
       .filter((id: string) => {
         if (!id || id.length > 120) return false;
         if (CLIENT_MESSAGE_ID_RE.test(id)) return true;
@@ -85,7 +100,7 @@ export function normalizeMessageIdBatch(input: unknown): string[] {
   ));
 }
 
-function formatExistingMessageAck(doc: any, delivered: boolean) {
+function formatExistingMessageAck(doc: Partial<Pick<IMessageItem, 'id' | 'timestamp'>> | null | undefined, delivered: boolean) {
   return {
     ok: true,
     duplicate: true,
@@ -95,12 +110,12 @@ function formatExistingMessageAck(doc: any, delivered: boolean) {
   };
 }
 
-function isDuplicateKeyError(error: any): boolean {
-  return error?.code === 11000 || String(error?.message || '').includes('E11000');
+function isDuplicateKeyError(error: unknown): boolean {
+  return (error as { code?: unknown } | null)?.code === 11000 || String((error as { message?: unknown } | null)?.message || '').includes('E11000');
 }
 
-function toFriendshipMessageSnapshot(message: any): any {
-  const snapshot: any = {
+function toFriendshipMessageSnapshot(message: Omit<IMessageItem, 'timestamp'> & { timestamp: Date | string | number }): IMessageItem {
+  const snapshot: IMessageItem = {
     id: String(message.id),
     from: message.from,
     to: message.to,
@@ -120,7 +135,7 @@ function toFriendshipMessageSnapshot(message: any): any {
   };
   if (message.enc) snapshot.enc = message.enc;
   if (Array.isArray(message.uris) && message.uris.length > 0) {
-    snapshot.uris = message.uris.map((u: any) => String(u || '').trim()).filter(Boolean).slice(0, 10);
+    snapshot.uris = message.uris.map((u) => String(u || '').trim()).filter(Boolean).slice(0, 10);
     if (!snapshot.uri && snapshot.uris[0]) snapshot.uri = snapshot.uris[0];
   }
   if (Array.isArray(message.reactions)) snapshot.reactions = message.reactions;
@@ -163,7 +178,7 @@ export function videoNoteThumbUri(type: unknown, raw: unknown): string | undefin
   return v && v.length <= 1000 ? v : undefined;
 }
 
-const LEGACY_MESSAGE_ARRAYS: Array<{ field: string; type: 'text' | 'image' | 'audio' | 'sticker' }> = [
+const LEGACY_MESSAGE_ARRAYS: Array<{ field: LegacyMessageField; type: 'text' | 'image' | 'audio' | 'sticker' }> = [
   { field: 'textMessages', type: 'text' },
   { field: 'imageMessages', type: 'image' },
   { field: 'audioMessages', type: 'audio' },
@@ -179,12 +194,12 @@ export async function removeLegacyFriendshipMessages(
   const ids = Array.from(new Set(messageIds.map((id) => String(id || '').trim()).filter(Boolean)));
   if (ids.length === 0) return;
 
-  const pull: Record<string, any> = {};
+  const pull: Partial<Record<LegacyMessageField, { id: { $in: string[] } }>> = {};
   for (const { field } of LEGACY_MESSAGE_ARRAYS) {
     pull[field] = { id: { $in: ids } };
   }
 
-  await mongoose.connection.collection('friendshipmessages').updateOne(
+  await mongoose.connection.collection<LegacyFriendshipDocument>('friendshipmessages').updateOne(
     { _id: friendshipId },
     { $pull: pull }
   );
@@ -193,29 +208,29 @@ export async function removeLegacyFriendshipMessages(
 async function clearLegacyFriendshipMessages(friendshipId: mongoose.Types.ObjectId | null): Promise<void> {
   if (!friendshipId) return;
 
-  const set: Record<string, any[]> = {};
+  const set: Partial<Record<LegacyMessageField, never[]>> = {};
   for (const { field } of LEGACY_MESSAGE_ARRAYS) {
     set[field] = [];
   }
 
-  await mongoose.connection.collection('friendshipmessages').updateOne(
+  await mongoose.connection.collection<LegacyFriendshipDocument>('friendshipmessages').updateOne(
     { _id: friendshipId },
     { $set: set }
   );
 }
 
-function asObjectId(value: any): mongoose.Types.ObjectId | null {
+function asObjectId(value: unknown): mongoose.Types.ObjectId | null {
   const raw = String(value || '').trim();
   return mongoose.Types.ObjectId.isValid(raw) ? new mongoose.Types.ObjectId(raw) : null;
 }
 
-function legacyMessageToItem(friendshipId: mongoose.Types.ObjectId, message: any, fallbackType: string) {
+function legacyMessageToItem(friendshipId: mongoose.Types.ObjectId, message: LegacyMessage | null | undefined, fallbackType: MessageType): MessageRecord | null {
   if (!message || !message.id) return null;
   const from = asObjectId(message.from);
   const to = asObjectId(message.to);
   if (!from || !to) return null;
   const type = ['text', 'image', 'audio', 'sticker', 'video_note'].includes(String(message.type))
-    ? String(message.type)
+    ? String(message.type) as MessageType
     : fallbackType;
 
   return {
@@ -227,7 +242,7 @@ function legacyMessageToItem(friendshipId: mongoose.Types.ObjectId, message: any
     text: message.text,
     uri: message.uri,
     uris: Array.isArray(message.uris)
-      ? message.uris.map((u: any) => String(u || '').trim()).filter(Boolean).slice(0, 10)
+      ? message.uris.map((u) => String(u || '').trim()).filter(Boolean).slice(0, 10)
       : undefined,
     name: message.name,
     size: message.size,
@@ -252,7 +267,7 @@ export async function backfillFriendshipMessageItems(friendshipId: mongoose.Type
   const friendshipKey = String(friendshipId);
   if (legacyBackfillAttempts.has(friendshipKey)) return 0;
 
-  const legacyDoc = await mongoose.connection.collection('friendshipmessages').findOne(
+  const legacyDoc = await mongoose.connection.collection<LegacyFriendshipDocument>('friendshipmessages').findOne(
     { _id: friendshipId },
     { projection: { textMessages: 1, imageMessages: 1, audioMessages: 1, stickerMessages: 1 } }
   );
@@ -261,9 +276,9 @@ export async function backfillFriendshipMessageItems(friendshipId: mongoose.Type
     return 0;
   }
 
-  const items: any[] = [];
+  const items: MessageRecord[] = [];
   for (const { field, type } of LEGACY_MESSAGE_ARRAYS) {
-    const legacyMessages = Array.isArray((legacyDoc as any)[field]) ? (legacyDoc as any)[field] : [];
+    const legacyMessages = Array.isArray((legacyDoc)[field]) ? (legacyDoc)[field] : [];
     for (const message of legacyMessages) {
       const item = legacyMessageToItem(friendshipId, message, type);
       if (item) items.push(item);
@@ -276,7 +291,7 @@ export async function backfillFriendshipMessageItems(friendshipId: mongoose.Type
 
   const ids = Array.from(new Set(items.map((item) => item.id)));
   const existing = await FriendshipMessageItem.find({ friendshipId, id: { $in: ids } }).select('id').lean();
-  const existingIds = new Set((existing as any[]).map((item) => String(item.id)));
+  const existingIds = new Set((existing).map((item) => String(item.id)));
   const toInsert = items.filter((item) => !existingIds.has(item.id));
   if (toInsert.length === 0) {
     legacyBackfillAttempts.add(friendshipKey);
@@ -287,10 +302,10 @@ export async function backfillFriendshipMessageItems(friendshipId: mongoose.Type
     await FriendshipMessageItem.insertMany(toInsert, { ordered: false });
     legacyBackfillAttempts.add(friendshipKey);
     return toInsert.length;
-  } catch (error: any) {
-    if (error?.code === 11000 || error?.writeErrors) {
+  } catch (error) {
+    if ((error as BackfillFailure | null)?.code === 11000 || (error as BackfillFailure | null)?.writeErrors) {
       legacyBackfillAttempts.add(friendshipKey);
-      return error?.insertedDocs?.length || 0;
+      return (error as BackfillFailure | null)?.insertedDocs?.length || 0;
     }
     throw error;
   }
@@ -301,24 +316,24 @@ export async function findLegacyMessageFriendshipId(messageId: string): Promise<
   if (!trimmed) return null;
 
   const or = LEGACY_MESSAGE_ARRAYS.map(({ field }) => ({ [`${field}.id`]: trimmed }));
-  const legacyDoc = await mongoose.connection.collection('friendshipmessages').findOne(
+  const legacyDoc = await mongoose.connection.collection<LegacyFriendshipDocument>('friendshipmessages').findOne(
     { $or: or },
     { projection: { _id: 1 } }
   );
   return legacyDoc?._id ? asObjectId(legacyDoc._id) : null;
 }
 
-async function readLegacyFriendshipMessageItems(friendshipId: mongoose.Types.ObjectId): Promise<any[]> {
+async function readLegacyFriendshipMessageItems(friendshipId: mongoose.Types.ObjectId): Promise<MessageRecord[]> {
   try {
-    const legacyDoc = await mongoose.connection.collection('friendshipmessages').findOne(
+    const legacyDoc = await mongoose.connection.collection<LegacyFriendshipDocument>('friendshipmessages').findOne(
       { _id: friendshipId },
       { projection: { textMessages: 1, imageMessages: 1, audioMessages: 1, stickerMessages: 1 } }
     );
     if (!legacyDoc) return [];
 
-    const items: any[] = [];
+    const items: MessageRecord[] = [];
     for (const { field, type } of LEGACY_MESSAGE_ARRAYS) {
-      const legacyMessages = Array.isArray((legacyDoc as any)[field]) ? (legacyDoc as any)[field] : [];
+      const legacyMessages = Array.isArray((legacyDoc)[field]) ? (legacyDoc)[field] : [];
       for (const message of legacyMessages) {
         const item = legacyMessageToItem(friendshipId, message, type);
         if (item) items.push(item);
@@ -334,7 +349,7 @@ async function readLegacyFriendshipMessageItems(friendshipId: mongoose.Types.Obj
 export async function findLegacyMessageForUser(
   messageId: string,
   meOid: mongoose.Types.ObjectId
-): Promise<{ id: string; from: mongoose.Types.ObjectId; to: mongoose.Types.ObjectId; type?: string; friendshipId: mongoose.Types.ObjectId } | null> {
+): Promise<MessageOwner | null> {
   const legacyFriendshipId = await findLegacyMessageFriendshipId(messageId);
   if (!legacyFriendshipId) return null;
 
@@ -354,13 +369,13 @@ export async function findLegacyMessageForUser(
   };
 }
 
-function formatEnvelope(enc: any) {
+function formatEnvelope(enc: E2eEnvelope) {
   return { v: enc.v, n: enc.n, c: enc.c, spk: enc.spk, rpk: enc.rpk };
 }
 
-function formatMessageForClient(msg: any) {
+function formatMessageForClient(msg: IMessageItem): ClientMessage {
   const uris = Array.isArray(msg.uris)
-    ? msg.uris.map((u: any) => String(u || '').trim()).filter(Boolean).slice(0, 10)
+    ? msg.uris.map((u) => String(u || '').trim()).filter(Boolean).slice(0, 10)
     : undefined;
   return {
     id: String(msg.id),
@@ -380,7 +395,7 @@ function formatMessageForClient(msg: any) {
     thumbUri: msg.thumbUri,
     timestamp: msg.timestamp?.toISOString?.() || String(msg.timestamp),
     read: !!msg.read,
-    reactions: Array.isArray(msg.reactions) ? msg.reactions.map((r: any) => ({ emoji: r.emoji, userId: String(r.userId) })) : [],
+    reactions: Array.isArray(msg.reactions) ? msg.reactions.map((r) => ({ emoji: r.emoji, userId: String(r.userId) })) : [],
     ...(msg.replyTo && msg.replyTo.id ? { replyTo: { id: String(msg.replyTo.id), text: msg.replyTo.text, from: String(msg.replyTo.from || '') } } : {}),
     ...(msg.enc ? { enc: formatEnvelope(msg.enc) } : {}),
   };
@@ -390,7 +405,7 @@ export async function fetchFriendshipMessagesPage(
   friendshipId: mongoose.Types.ObjectId,
   limit: number,
   before?: string
-): Promise<{ messages: any[]; hasMore: boolean }> {
+): Promise<{ messages: ClientMessage[]; hasMore: boolean }> {
   let backfillFailed = false;
   try {
     await backfillFriendshipMessageItems(friendshipId);
@@ -414,15 +429,15 @@ export async function fetchFriendshipMessagesPage(
       { friendshipId, id: beforeId },
       { timestamp: 1 }
     ).lean();
-    if (beforeDoc && (beforeDoc as any).timestamp) {
-      cursor = { timestamp: asValidDate((beforeDoc as any).timestamp), id: beforeId };
+    if (beforeDoc && (beforeDoc).timestamp) {
+      cursor = { timestamp: asValidDate((beforeDoc).timestamp), id: beforeId };
     } else if (needLegacyMerge) {
       const legacyBefore = legacyItems.find((item) => String(item.id) === beforeId);
       if (legacyBefore) cursor = { timestamp: asValidDate(legacyBefore.timestamp), id: beforeId };
     }
   }
 
-  const query: any = { friendshipId };
+  const query: mongoose.FilterQuery<IFriendshipMessageItem> = { friendshipId };
   if (cursor) Object.assign(query, messagePageCursorQuery(cursor));
   const itemDocs = await FriendshipMessageItem.find(query)
     .sort({ timestamp: -1, id: -1 })
@@ -433,17 +448,17 @@ export async function fetchFriendshipMessagesPage(
     const hasMore = itemDocs.length > limit;
     const slice = hasMore ? itemDocs.slice(0, limit) : itemDocs;
     return {
-      messages: (slice as any[]).reverse().map(formatMessageForClient),
+      messages: (slice).reverse().map(formatMessageForClient),
       hasMore,
     };
   }
 
-  const byId = new Map<string, any>();
+  const byId = new Map<string, IMessageItem>();
   for (const msg of legacyItems) {
     const id = String(msg?.id || '');
     if (id && isOlderThanCursor(msg, cursor)) byId.set(id, msg);
   }
-  for (const msg of itemDocs as any[]) {
+  for (const msg of itemDocs) {
     const id = String(msg?.id || '');
     if (id && isOlderThanCursor(msg, cursor)) byId.set(id, msg);
   }
@@ -485,7 +500,7 @@ async function deleteMessageForBothUsers(me: string, messageId: string): Promise
   let friendshipId: mongoose.Types.ObjectId | null = null;
 
   const meOid = new mongoose.Types.ObjectId(me);
-  let doc = await FriendshipMessageItem.findOne({
+  let doc: Omit<MessageOwner, 'id'> | null = await FriendshipMessageItem.findOne({
     id: messageId,
     $or: [{ from: meOid }, { to: meOid }],
   }).select('from to friendshipId type').lean();
@@ -500,12 +515,12 @@ async function deleteMessageForBothUsers(me: string, messageId: string): Promise
     }
   }
   if (!doc) {
-    doc = await findLegacyMessageForUser(messageId, meOid) as any;
+    doc = await findLegacyMessageForUser(messageId, meOid);
   }
   if (doc) {
-    fromUserId = String((doc as any).from);
-    toUserId = String((doc as any).to);
-    friendshipId = (doc as any).friendshipId;
+    fromUserId = String((doc).from);
+    toUserId = String((doc).to);
+    friendshipId = (doc).friendshipId;
     await Promise.all([
       FriendshipMessageItem.deleteOne({ friendshipId, id: messageId }).exec(),
       removeLegacyFriendshipMessages(friendshipId, [messageId]),
@@ -535,15 +550,15 @@ async function deleteMessageForBothUsers(me: string, messageId: string): Promise
 /**
  * Добавить сообщение в дружбу (и в отдельную коллекцию FriendshipMessageItem для быстрого GET)
  */
-async function addMessageToFriendship(friendship: IFriendshipMessages, message: any): Promise<{
+async function addMessageToFriendship(friendship: IFriendshipMessages, message: ClientMessage<Date>): Promise<{
   ok: boolean;
   duplicate?: boolean;
   conflict?: boolean;
   timestamp?: Date;
 }> {
   try {
-    const friendshipId = (friendship as any)._id;
-    const messageItem: any = {
+    const friendshipId = (friendship)._id;
+    const messageItem: IMessageItem = {
       id: message.id,
       from: new mongoose.Types.ObjectId(message.from),
       to: new mongoose.Types.ObjectId(message.to),
@@ -563,7 +578,7 @@ async function addMessageToFriendship(friendship: IFriendshipMessages, message: 
     };
     if (message.enc) messageItem.enc = message.enc;
     if (Array.isArray(message.uris) && message.uris.length > 0) {
-      messageItem.uris = message.uris.map((u: any) => String(u || '').trim()).filter(Boolean).slice(0, 10);
+      messageItem.uris = message.uris.map((u) => String(u || '').trim()).filter(Boolean).slice(0, 10);
       if (!messageItem.uri) messageItem.uri = messageItem.uris[0];
     }
     if (message.replyTo && typeof message.replyTo === 'object' && message.replyTo.id) {
@@ -574,7 +589,7 @@ async function addMessageToFriendship(friendship: IFriendshipMessages, message: 
       };
     }
 
-    const createPayload: any = {
+    const createPayload: MessageRecord = {
       friendshipId,
       id: message.id,
       from: messageItem.from,
@@ -599,11 +614,11 @@ async function addMessageToFriendship(friendship: IFriendshipMessages, message: 
     if (messageItem.replyTo) createPayload.replyTo = messageItem.replyTo;
     if (message.enc) createPayload.enc = message.enc;
     await FriendshipMessageItem.create(createPayload);
-    await (friendship as any).addMessage(messageItem);
+    await (friendship).addMessage(messageItem);
     return { ok: true };
-  } catch (error: any) {
+  } catch (error) {
     if (isDuplicateKeyError(error)) {
-      const friendshipId = (friendship as any)._id;
+      const friendshipId = (friendship)._id;
       const existing = await FriendshipMessageItem.findOne({
         friendshipId,
         id: String(message.id || ''),
@@ -611,7 +626,7 @@ async function addMessageToFriendship(friendship: IFriendshipMessages, message: 
         to: new mongoose.Types.ObjectId(message.to),
       }).select('id timestamp').lean();
       if (existing) {
-        return { ok: true, duplicate: true, timestamp: (existing as any).timestamp || new Date() };
+        return { ok: true, duplicate: true, timestamp: (existing).timestamp || new Date() };
       }
       return { ok: false, conflict: true };
     }
@@ -623,7 +638,7 @@ async function addMessageToFriendship(friendship: IFriendshipMessages, message: 
 /**
  * Сохранить офлайн сообщение в базу данных
  */
-async function saveOfflineMessage(recipientId: string, message: any): Promise<boolean> {
+async function saveOfflineMessage(recipientId: string, message: ClientMessage<Date | string>): Promise<boolean> {
   try {
     const offlineMessage = new OfflineMessage({
       recipientId: new mongoose.Types.ObjectId(recipientId),
@@ -643,11 +658,11 @@ async function saveOfflineMessage(recipientId: string, message: any): Promise<bo
 /**
  * Получить и удалить офлайн сообщения для пользователя
  */
-async function getAndClearOfflineMessages(userId: string): Promise<any[]> {
+async function getAndClearOfflineMessages(userId: string): Promise<ClientMessage<Date>[]> {
   try {
     const recipientId = new mongoose.Types.ObjectId(userId);
     const drainStartedAt = new Date();
-    const messages: any[] = [];
+    const messages: ClientMessage<Date>[] = [];
 
     while (true) {
       const offlineMessage = await OfflineMessage.findOneAndDelete({
@@ -658,7 +673,7 @@ async function getAndClearOfflineMessages(userId: string): Promise<any[]> {
         .lean();
 
       if (!offlineMessage) break;
-      messages.push((offlineMessage as any).messageData);
+      messages.push((offlineMessage).messageData);
     }
 
     return messages;
@@ -689,12 +704,12 @@ export const mongoOfflineQueue: OfflineQueuePort = {
         .sort({ createdAt: 1, _id: 1 })
         .lean();
       if (!doc) break;
-      claimed.push({ queueId: (doc as any)._id, messageData: (doc as any).messageData });
+      claimed.push({ queueId: (doc)._id, messageData: (doc).messageData });
     }
     return claimed;
   },
   async remove(queueId) {
-    await OfflineMessage.deleteOne({ _id: queueId as any });
+    await OfflineMessage.deleteOne({ _id: queueId });
   },
   takeAll: getAndClearOfflineMessages,
 };
@@ -702,7 +717,7 @@ export const mongoOfflineQueue: OfflineQueuePort = {
 /**
  * Получить и очистить очередь офлайн уведомлений об очистке чата
  */
-export function getAndClearOfflineChatClearedQueue(userId: string): Array<any> {
+export function getAndClearOfflineChatClearedQueue(userId: string): Array<{ by: string; with: string; forAll?: boolean }> {
   // Пока возвращаем пустой массив, так как эта функциональность не реализована
   return [];
 }
@@ -728,7 +743,7 @@ export async function markMessagesReadForUser(
   const friendship = await getOrCreateFriendship(me, from);
   if (!friendship) throw new Error('friendship_not_found');
 
-  const fid = (friendship as any)._id;
+  const fid = (friendship)._id;
   const fromOid = new mongoose.Types.ObjectId(from);
   const meOid = new mongoose.Types.ObjectId(me);
   let total = 0;
@@ -744,10 +759,10 @@ export async function markMessagesReadForUser(
 
     if (unreadItems.length === 0) break;
 
-    const ids = unreadItems.map((doc: any) => String(doc.id)).filter(Boolean);
+    const ids = unreadItems.map((doc) => String(doc.id)).filter(Boolean);
 
     await FriendshipMessageItem.updateMany(
-      { _id: { $in: unreadItems.map((doc: any) => doc._id) } },
+      { _id: { $in: unreadItems.map((doc) => doc._id) } },
       { $set: { read: true } }
     ).exec();
 
@@ -771,7 +786,7 @@ async function markSingleMessageReadForUser(me: string, from: string, messageId:
   const friendship = await getOrCreateFriendship(me, from);
   if (!friendship) throw new Error('friendship_not_found');
 
-  const fid = (friendship as any)._id;
+  const fid = (friendship)._id;
   const fromOid = new mongoose.Types.ObjectId(from);
   const meOid = new mongoose.Types.ObjectId(me);
 
@@ -792,7 +807,7 @@ async function markSingleMessageReadForUser(me: string, from: string, messageId:
     ).exec(),
   ]);
 
-  return !!((itemResult as any)?.modifiedCount || (itemResult as any)?.matchedCount);
+  return !!((itemResult)?.modifiedCount || (itemResult)?.matchedCount);
 }
 
 export async function deleteMessagesForBothUsersBatch(me: string, rawMessageIds: unknown): Promise<{
@@ -817,12 +832,12 @@ export async function deleteMessagesForBothUsersBatch(me: string, rawMessageIds:
   }
 
   const meOid = new mongoose.Types.ObjectId(me);
-  let docs = await FriendshipMessageItem.find({
+  let docs: MessageOwner[] = await FriendshipMessageItem.find({
     id: { $in: messageIds },
     $or: [{ from: meOid }, { to: meOid }],
   }).select('id from to friendshipId').lean();
 
-  const foundIds = new Set((docs as any[]).map((doc) => String(doc.id)));
+  const foundIds = new Set((docs).map((doc) => String(doc.id)));
   const missingIds = messageIds.filter((id) => !foundIds.has(id));
   if (missingIds.length > 0) {
     const legacyFriendshipIds = new Set<string>();
@@ -843,21 +858,21 @@ export async function deleteMessagesForBothUsersBatch(me: string, rawMessageIds:
     }
   }
 
-  const foundAfterBackfill = new Set((docs as any[]).map((doc) => String(doc.id)));
+  const foundAfterBackfill = new Set((docs).map((doc) => String(doc.id)));
   const stillMissingIds = messageIds.filter((id) => !foundAfterBackfill.has(id));
   if (stillMissingIds.length > 0) {
-    const legacyDocs: any[] = [];
+    const legacyDocs: MessageOwner[] = [];
     for (const messageId of stillMissingIds) {
       const legacyDoc = await findLegacyMessageForUser(messageId, meOid);
       if (legacyDoc) legacyDocs.push(legacyDoc);
     }
     if (legacyDocs.length > 0) {
-      docs = [...(docs as any[]), ...legacyDocs] as any;
+      docs = [...(docs), ...legacyDocs];
     }
   }
 
-  const docsById = new Map<string, any[]>();
-  for (const doc of docs as any[]) {
+  const docsById = new Map<string, MessageOwner[]>();
+  for (const doc of docs) {
     const id = String(doc.id);
     const list = docsById.get(id) || [];
     list.push(doc);
@@ -877,7 +892,7 @@ export async function deleteMessagesForBothUsersBatch(me: string, rawMessageIds:
   const cachePairs = new Set<string>();
 
   const deleteDocIds: mongoose.Types.ObjectId[] = [];
-  const offlineDeleteClauses: any[] = [];
+  const offlineDeleteClauses: Array<{ messageId: string; senderId: mongoose.Types.ObjectId; recipientId: mongoose.Types.ObjectId }> = [];
   for (const messageId of deletedIds) {
     for (const doc of docsById.get(messageId) || []) {
       const fromUserId = String(doc.from);
@@ -885,7 +900,7 @@ export async function deleteMessagesForBothUsersBatch(me: string, rawMessageIds:
       const friendshipId = doc.friendshipId as mongoose.Types.ObjectId;
       const friendshipKey = String(friendshipId);
 
-      if ((doc as any)._id) deleteDocIds.push((doc as any)._id);
+      if ((doc)._id) deleteDocIds.push((doc)._id);
       recipients.add(fromUserId);
       recipients.add(toUserId);
       friendshipIds.set(friendshipKey, friendshipId);
@@ -943,7 +958,7 @@ export async function clearChatMessagesForUsers(me: string, withId: string, forA
     const friendship = await getOrCreateFriendship(me, withId);
     if (!friendship) return { ok: false, error: 'friendship_not_found' };
 
-    const fid = (friendship as any)._id;
+    const fid = (friendship)._id;
     const meOid = new mongoose.Types.ObjectId(me);
     const withOid = new mongoose.Types.ObjectId(withId);
 
@@ -980,7 +995,7 @@ export async function applyMessageEdit(
   me: string,
   payload: { messageId?: unknown; text?: unknown; enc?: unknown },
 ): Promise<
-  | { ok: true; participants: string[]; event: { messageId: string; text?: string; from?: string; to?: string; enc?: any } }
+  | { ok: true; participants: string[]; event: { messageId: string; text?: string; from?: string; to?: string; enc?: E2eEnvelope } }
   | { ok: false; error: string }
 > {
   const messageId = String(payload?.messageId || '').trim();
@@ -998,7 +1013,7 @@ export async function applyMessageEdit(
       doc = await FriendshipMessageItem.findOne({ id: messageId, from: meOid }).select('from to type friendshipId').lean();
     }
   }
-  if (!doc || (doc as any).type !== 'text' || String((doc as any).from) !== me) {
+  if (!doc || (doc).type !== 'text' || String((doc).from) !== me) {
     return { ok: false, error: 'not_found_or_forbidden' };
   }
 
@@ -1007,13 +1022,13 @@ export async function applyMessageEdit(
     type: 'text',
     clientMessageId: messageId,
     from: me,
-    to: String((doc as any).to),
+    to: String((doc).to),
     loadPublicKeys: loadE2ePublicKeys,
   });
   if (!envelope.ok) return { ok: false, error: envelope.error };
   const enc = envelope.enc;
 
-  const friendshipId = (doc as any).friendshipId;
+  const friendshipId = (doc).friendshipId;
   await FriendshipMessageItem.updateOne(
     { friendshipId, id: messageId },
     enc ? { $set: { enc }, $unset: { text: 1 } } : { $set: { text }, $unset: { enc: 1 } }
@@ -1026,10 +1041,10 @@ export async function applyMessageEdit(
   ).exec();
 
   const fr = await FriendshipMessages.findById(friendshipId).select('user1 user2').lean();
-  const participants = fr ? [String((fr as any).user1), String((fr as any).user2)].filter(Boolean) : [];
+  const participants = fr ? [String((fr).user1), String((fr).user2)].filter(Boolean) : [];
   // from/to нужны получателю, чтобы сверить их с телом конверта.
   const event = enc
-    ? { messageId, from: me, to: String((doc as any).to), enc: formatEnvelope(enc) }
+    ? { messageId, from: me, to: String((doc).to), enc: formatEnvelope(enc) }
     : { messageId, text };
   return { ok: true, participants, event };
 }
@@ -1059,7 +1074,7 @@ export async function applyMessageReaction(
   const friendship = await getOrCreateFriendship(me, peerId);
   if (!friendship) return { ok: false, error: 'friendship_not_found' };
 
-  const fid = (friendship as any)._id;
+  const fid = (friendship)._id;
   const filter = { friendshipId: fid, id: messageId };
   const exists = await FriendshipMessageItem.findOne(filter).select('_id').lean();
   if (!exists) return { ok: false, error: 'message_not_found' };
@@ -1071,14 +1086,14 @@ export async function applyMessageReaction(
     await FriendshipMessageItem.updateOne(filter, { $pull: { reactions: myReaction } }).exec();
   } else {
     const pullResult = await FriendshipMessageItem.updateOne(filter, { $pull: { reactions: myReaction } }).exec();
-    if (!((pullResult as any)?.modifiedCount || 0)) {
+    if (!((pullResult)?.modifiedCount || 0)) {
       await FriendshipMessageItem.updateOne(filter, { $addToSet: { reactions: myReaction } }).exec();
     }
   }
 
   const updated = await FriendshipMessageItem.findOne(filter, { reactions: 1 }).lean();
-  const reactions: MessageReaction[] = Array.isArray((updated as any)?.reactions)
-    ? (updated as any).reactions.map((r: any) => ({ emoji: String(r.emoji), userId: String(r.userId) }))
+  const reactions: MessageReaction[] = Array.isArray((updated)?.reactions)
+    ? (updated).reactions.map((r) => ({ emoji: String(r.emoji), userId: String(r.userId) }))
     : [];
 
   await FriendshipMessages.updateOne(
@@ -1096,7 +1111,7 @@ export default function registerMessageSockets(io: Server) {
 }
 
 function registerMessageHandlers(io: Server, sock: Socket) {
-  const meId = () => String((sock as any).data?.userId || '');
+  const meId = () => String((sock).data?.userId || '');
   registerE2eKeyHandlers(io, sock, meId);
 
   // per-socket handlers
@@ -1110,8 +1125,8 @@ function registerMessageHandlers(io: Server, sock: Socket) {
       const withPeer = payload?.with && isOid(String(payload.with)) ? String(payload.with).trim() : null;
       await setViewingChatState(me, withPeer);
       ack?.({ ok: true });
-    } catch (e: any) {
-      ack?.({ ok: false, error: e?.message || 'server_error' });
+    } catch (e) {
+      ack?.({ ok: false, error: (e as { message?: unknown } | null)?.message || 'server_error' });
     }
   });
 
@@ -1141,8 +1156,8 @@ function registerMessageHandlers(io: Server, sock: Socket) {
 
       // Best-effort realtime event (только если получатель онлайн)
       try {
-        const typing = !!(payload as any)?.typing;
-        const recording = !!(payload as any)?.recording;
+        const typing = !!(payload)?.typing;
+        const recording = !!(payload)?.recording;
         io.to(`u:${payload.to}`).emit('chat:typing', {
           from: me,
           to: payload.to,
@@ -1153,8 +1168,8 @@ function registerMessageHandlers(io: Server, sock: Socket) {
       } catch {}
 
       return ack?.({ ok: true });
-    } catch (e: any) {
-      console.error('[chat:typing] error:', e?.message || e);
+    } catch (e) {
+      console.error('[chat:typing] error:', (e as { message?: unknown } | null)?.message || e);
       return ack?.({ ok: false, error: 'server_error' });
     }
   });
@@ -1219,7 +1234,7 @@ function registerMessageHandlers(io: Server, sock: Socket) {
         return ack?.({ ok: false, error: 'friendship_not_found' });
       }
 
-      const friendshipId = (friendship as any)._id;
+      const friendshipId = (friendship)._id;
       const clientMessageId = normalizeClientMessageId(payload);
       if (clientMessageId) {
         const existing = await FriendshipMessageItem.findOne({
@@ -1256,7 +1271,7 @@ function registerMessageHandlers(io: Server, sock: Socket) {
       const messageId = clientMessageId || `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
       // Создаем объект сообщения
-      const message: any = {
+      const message: ClientMessage<Date> = {
         id: messageId,
         from: me,
         to: payload.to,
@@ -1286,7 +1301,7 @@ function registerMessageHandlers(io: Server, sock: Socket) {
         };
       }
 
-      const emitPayload: any = {
+      const emitPayload: ClientMessage = {
         id: messageId,
         from: me,
         to: payload.to,
@@ -1336,7 +1351,7 @@ function registerMessageHandlers(io: Server, sock: Socket) {
           let fromNick: string | undefined;
           try {
             const u = await User.findById(me).select('nick').lean();
-            if (u && typeof (u as any).nick === 'string') fromNick = String((u as any).nick).trim() || undefined;
+            if (u && typeof (u).nick === 'string') fromNick = String((u).nick).trim() || undefined;
           } catch {}
 
           const unreadCount = await countUnreadTotal(payload.to);
@@ -1365,7 +1380,7 @@ function registerMessageHandlers(io: Server, sock: Socket) {
 
       // Живая доставка с подтверждением (sockets/liveMessageDelivery.ts): не дошло —
       // офлайн-очередь и пуш, как если бы получатель был офлайн.
-      const delivery = await deliverLiveMessage(io as any, payload.to, emitPayload, () => {
+      const delivery = await deliverLiveMessage(io, payload.to, emitPayload, () => {
         void saveOfflineMessage(payload.to, { ...emitPayload, id: messageId });
         void sendNewMessagePush(true);
       });
@@ -1390,8 +1405,8 @@ function registerMessageHandlers(io: Server, sock: Socket) {
       });
 
       await sendNewMessagePush(false);
-    } catch (e: any) {
-      console.error('[message:send] error:', e?.message || e);
+    } catch (e) {
+      console.error('[message:send] error:', (e as { message?: unknown } | null)?.message || e);
       return ack?.({ ok: false, error: 'server_error' });
     }
   });
@@ -1422,13 +1437,13 @@ function registerMessageHandlers(io: Server, sock: Socket) {
         return ack?.({ ok: false, error: 'friendship_not_found' });
       }
 
-      const friendshipId = (friendship as any)._id;
+      const friendshipId = (friendship)._id;
       const limit = Math.min(200, Math.max(1, payload.limit || 50));
       const { messages, hasMore } = await fetchFriendshipMessagesPage(friendshipId, limit, payload.before);
 
       ack?.({ ok: true, messages, hasMore });
-    } catch (e: any) {
-      console.error('[messages:fetch] error:', e?.message || e);
+    } catch (e) {
+      console.error('[messages:fetch] error:', (e as { message?: unknown } | null)?.message || e);
       return ack?.({ ok: false, error: 'server_error' });
     }
   });
@@ -1460,8 +1475,8 @@ function registerMessageHandlers(io: Server, sock: Socket) {
       await markAllReadFrom(me, payload.from);
 
       ack?.({ ok: true });
-    } catch (e: any) {
-      console.error('[messages:mark_read] error:', e?.message || e);
+    } catch (e) {
+      console.error('[messages:mark_read] error:', (e as { message?: unknown } | null)?.message || e);
       return ack?.({ ok: false, error: 'server_error' });
     }
   });
@@ -1498,8 +1513,8 @@ function registerMessageHandlers(io: Server, sock: Socket) {
       io.to(`u:${payload.from}`).emit('message:read_receipt', receipt);
 
       return ack?.({ ok: true });
-    } catch (e: any) {
-      console.error('[message:read] error:', e?.message || e);
+    } catch (e) {
+      console.error('[message:read] error:', (e as { message?: unknown } | null)?.message || e);
       return ack?.({ ok: false, error: 'server_error' });
     }
   });
@@ -1523,8 +1538,8 @@ function registerMessageHandlers(io: Server, sock: Socket) {
       }
 
       return ack?.({ ok: true, reactions: result.event.reactions });
-    } catch (e: any) {
-      console.error('[message:react] error:', e?.message || e);
+    } catch (e) {
+      console.error('[message:react] error:', (e as { message?: unknown } | null)?.message || e);
       return ack?.({ ok: false, error: 'server_error' });
     }
   });
@@ -1550,8 +1565,8 @@ function registerMessageHandlers(io: Server, sock: Socket) {
         ack?.({ ok: true, count });
       }
 
-    } catch (e: any) {
-      console.error('[messages:unread_count] error:', e?.message || e);
+    } catch (e) {
+      console.error('[messages:unread_count] error:', (e as { message?: unknown } | null)?.message || e);
       return ack?.({ ok: false, error: 'server_error' });
     }
   });
@@ -1584,8 +1599,8 @@ function registerMessageHandlers(io: Server, sock: Socket) {
       }
 
       ack?.({ ok: true, counts });
-    } catch (e: any) {
-      console.error('[messages:unread_counts] error:', e?.message || e);
+    } catch (e) {
+      console.error('[messages:unread_counts] error:', (e as { message?: unknown } | null)?.message || e);
       return ack?.({ ok: false, error: 'server_error' });
     }
   });
@@ -1619,10 +1634,10 @@ function registerMessageHandlers(io: Server, sock: Socket) {
         .select('user1 user2 lastMessage')
         .lean();
 
-      const previews: Record<string, any> = {};
+      const previews: Record<string, ClientMessage> = {};
       const needLatest: Array<{ peerId: string; friendshipId: mongoose.Types.ObjectId }> = [];
 
-      for (const doc of docs as any[]) {
+      for (const doc of docs) {
         const u1 = String(doc.user1);
         const u2 = String(doc.user2);
         const peerId = u1 === me ? u2 : u1;
@@ -1641,7 +1656,7 @@ function registerMessageHandlers(io: Server, sock: Socket) {
             const latest = await FriendshipMessageItem.findOne({ friendshipId })
               .sort({ timestamp: -1 })
               .lean();
-            if (latest && (latest as any).id) {
+            if (latest && (latest).id) {
               previews[peerId] = formatMessageForClient(latest);
             }
           }),
@@ -1649,8 +1664,8 @@ function registerMessageHandlers(io: Server, sock: Socket) {
       }
 
       ack?.({ ok: true, previews });
-    } catch (e: any) {
-      console.error('[messages:chat_previews] error:', e?.message || e);
+    } catch (e) {
+      console.error('[messages:chat_previews] error:', (e as { message?: unknown } | null)?.message || e);
       return ack?.({ ok: false, error: 'server_error' });
     }
   });
@@ -1669,8 +1684,8 @@ function registerMessageHandlers(io: Server, sock: Socket) {
       emitMessageDeletedToParticipants(io, result.fromUserId, result.toUserId, eventPayload);
 
       return ack?.({ ok: true });
-    } catch (e: any) {
-      console.error('[message:delete] error:', e?.message || e);
+    } catch (e) {
+      console.error('[message:delete] error:', (e as { message?: unknown } | null)?.message || e);
       return ack?.({ ok: false, error: 'server_error' });
     }
   });
@@ -1706,8 +1721,8 @@ function registerMessageHandlers(io: Server, sock: Socket) {
         failedIds: result.failedIds,
         ...(result.error ? { error: result.error } : {}),
       });
-    } catch (e: any) {
-      console.error('[messages:delete] error:', e?.message || e);
+    } catch (e) {
+      console.error('[messages:delete] error:', (e as { message?: unknown } | null)?.message || e);
       return ack?.({ ok: false, error: 'server_error', deletedIds: [], failedIds: [] });
     }
   });
@@ -1732,8 +1747,8 @@ function registerMessageHandlers(io: Server, sock: Socket) {
       }
 
       return ack?.({ ok: true });
-    } catch (e: any) {
-      console.error('[message:clear_chat] error:', e?.message || e);
+    } catch (e) {
+      console.error('[message:clear_chat] error:', (e as { message?: unknown } | null)?.message || e);
       return ack?.({ ok: false, error: 'server_error' });
     }
   });
@@ -1761,12 +1776,12 @@ function registerMessageHandlers(io: Server, sock: Socket) {
         }
       }
       if (!doc) return ack?.({ ok: false, error: 'not_found_or_forbidden' });
-      if ((doc as any).type !== 'image') return ack?.({ ok: false, error: 'not_found_or_forbidden' });
+      if ((doc).type !== 'image') return ack?.({ ok: false, error: 'not_found_or_forbidden' });
 
-      const friendshipId = (doc as any).friendshipId;
+      const friendshipId = (doc).friendshipId;
       const fr = await FriendshipMessages.findById(friendshipId).select('user1 user2').lean();
-      const u1 = fr ? String((fr as any).user1) : '';
-      const u2 = fr ? String((fr as any).user2) : '';
+      const u1 = fr ? String((fr).user1) : '';
+      const u2 = fr ? String((fr).user2) : '';
 
       if (nextUris.length === 0) {
         const del = await deleteMessagesForBothUsersBatch(me, [messageId]);
@@ -1784,9 +1799,9 @@ function registerMessageHandlers(io: Server, sock: Socket) {
       }
 
       const primaryUri = nextUris[0];
-      const setDoc: any = { uri: primaryUri };
+      const setDoc: { uri: string; uris?: string[] } = { uri: primaryUri };
       if (nextUris.length > 1) setDoc.uris = nextUris;
-      const unsetDoc: any = nextUris.length > 1 ? {} : { uris: '' };
+      const unsetDoc: { uris?: '' } = nextUris.length > 1 ? {} : { uris: '' };
 
       await FriendshipMessageItem.updateOne(
         { friendshipId, id: messageId },
@@ -1796,7 +1811,7 @@ function registerMessageHandlers(io: Server, sock: Socket) {
         }
       ).exec();
 
-      const lastSet: any = {
+      const lastSet: { 'lastMessage.uri': string; 'lastMessage.uris'?: string[]; lastActivity: Date } = {
         'lastMessage.uri': primaryUri,
         lastActivity: new Date(),
       };
@@ -1809,7 +1824,7 @@ function registerMessageHandlers(io: Server, sock: Socket) {
         }
       ).exec();
 
-      const payloadOut: any = {
+      const payloadOut = {
         messageId,
         uri: primaryUri,
         uris: nextUris.length > 1 ? nextUris : undefined,
@@ -1817,8 +1832,8 @@ function registerMessageHandlers(io: Server, sock: Socket) {
       if (u1) io.to(`u:${u1}`).emit('message:uris_updated', payloadOut);
       if (u2) io.to(`u:${u2}`).emit('message:uris_updated', payloadOut);
       return ack?.({ ok: true, ...payloadOut });
-    } catch (e: any) {
-      console.error('[message:update_uris] error:', e?.message || e);
+    } catch (e) {
+      console.error('[message:update_uris] error:', (e as { message?: unknown } | null)?.message || e);
       return ack?.({ ok: false, error: 'server_error' });
     }
   });
@@ -1832,8 +1847,8 @@ function registerMessageHandlers(io: Server, sock: Socket) {
       if (!result.ok) return ack?.({ ok: false, error: result.error });
       for (const u of result.participants) io.to(`u:${u}`).emit('message:edited', result.event);
       return ack?.({ ok: true, ...result.event });
-    } catch (e: any) {
-      console.error('[message:edit] error:', e?.message || e);
+    } catch (e) {
+      console.error('[message:edit] error:', (e as { message?: unknown } | null)?.message || e);
       return ack?.({ ok: false, error: 'server_error' });
     }
   });

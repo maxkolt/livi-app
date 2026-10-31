@@ -1,5 +1,5 @@
 // backend/routes/me.ts
-import { Router } from 'express';
+import { Router, type Request } from 'express';
 import UserModel from '../models/User';
 import mongoose from 'mongoose';
 import type { Server as IOServer } from 'socket.io';
@@ -10,10 +10,17 @@ import { auditNickChange } from '../utils/profileNickAudit';
 import { checkRateLimit } from '../utils/rateLimit';
 import { getFriendIds } from '../utils/friendshipUtils';
 
+type ProfileRequest = Request<Record<string, string>, unknown, Record<string, unknown>> & {
+  userId?: string;
+  auth?: { userId?: string };
+  io?: IOServer;
+};
+type ProfilePatch = { nick?: string; avatar?: string };
+
 const router = Router();
 
 // Проверка существования пользователя
-router.get('/exists/:userId', async (req, res) => {
+router.get('/exists/:userId', async (req: ProfileRequest, res) => {
   try {
     const { userId } = req.params;
     // Убираем избыточное логирование - функция вызывается слишком часто
@@ -55,7 +62,7 @@ router.get('/exists/:userId', async (req, res) => {
 
 // Условное логирование для отладки
 const isDebug = process.env.NODE_ENV === 'development' || process.env.DEBUG_LOGS === 'true';
-const debugLog = (...args: any[]) => {
+const debugLog = (...args: unknown[]) => {
   if (isDebug) {}
 };
 
@@ -64,16 +71,15 @@ const isHttp = (s?: string) =>
 
 /**
  * ВАЖНО:
- * В index.ts ДО подключения роутов прокинь io:
- *   app.use((req, _res, next) => { (req as any).io = io; next(); });
+ * В index.ts ДО подключения роутов middleware должен записать экземпляр io в req.io.
  * И не забудь json-парсер:
  *   app.use(express.json({ limit: '10mb' }));
  */
-router.patch('/me', async (req, res) => {
+router.patch('/me', async (req: ProfileRequest, res) => {
   try {
     const userId =
-      ((req as any)?.auth?.userId as string | undefined) ||
-      ((req as any)?.userId as string | undefined);
+      ((req)?.auth?.userId as string | undefined) ||
+      ((req)?.userId as string | undefined);
 
     debugLog('PATCH /api/me START →', {
       userId,
@@ -97,7 +103,7 @@ router.patch('/me', async (req, res) => {
       return res.status(401).json({ ok: false, error: 'unauthorized' });
     }
 
-    const io = (req as any).io as IOServer | undefined;
+    const io = (req).io as IOServer | undefined;
 
     const { nick, avatar } = (req.body || {}) as {
       nick?: string;
@@ -105,7 +111,7 @@ router.patch('/me', async (req, res) => {
     };
 
     // ---- готовим апдейт ----
-    const safe: any = {};
+    const safe: ProfilePatch = {};
 
     if (typeof nick === 'string') {
       safe.nick = nick.trim();
@@ -154,16 +160,16 @@ router.patch('/me', async (req, res) => {
         user: {
           id: String(current._id),
           nick: current.nick || '',
-          avatar: (current as any).avatar || '',
+          avatar: (current).avatar || '',
           friends: await getFriendIds(userId),
         },
       });
     }
 
     // проверяем, что значения действительно изменились
-    const hasChanges = Object.keys($set).some(key => {
+    const hasChanges = (Object.keys($set) as Array<keyof ProfilePatch>).some(key => {
       const newValue = $set[key];
-      const currentValue = (current as any)[key];
+      const currentValue = (current)[key];
       return newValue !== currentValue;
     });
 
@@ -173,7 +179,7 @@ router.patch('/me', async (req, res) => {
         user: {
           id: String(current._id),
           nick: current.nick || '',
-          avatar: (current as any).avatar || '',
+          avatar: (current).avatar || '',
           friends: await getFriendIds(userId),
         },
       });
@@ -181,7 +187,7 @@ router.patch('/me', async (req, res) => {
 
     if (typeof nick === 'string') {
       const nextN = nick.trim();
-      const prevN = String((current as any).nick ?? '');
+      const prevN = String((current).nick ?? '');
       if (nextN !== prevN) {
         const xf = req.headers['x-forwarded-for'];
         const clientIp =
@@ -221,9 +227,9 @@ router.patch('/me', async (req, res) => {
         const payload = {
           userId: String(userId),
           nick: me.nick || '',
-          avatar: (me as any).avatar || '',
-          avatarVer: (me as any).avatarVer || 0,
-          avatarThumbB64: (me as any).avatarThumbB64 || '',
+          avatar: (me).avatar || '',
+          avatarVer: (me).avatarVer || 0,
+          avatarThumbB64: (me).avatarThumbB64 || '',
         };
         const friends = await getFriendIds(userId);
         for (const fid of friends) {
@@ -239,14 +245,14 @@ router.patch('/me', async (req, res) => {
       user: {
         id: String(userId),
         nick: me.nick || '',
-        avatar: (me as any).avatar || '',
-        avatarVer: (me as any).avatarVer || 0,
-        avatarThumbB64: (me as any).avatarThumbB64 || '',
+        avatar: (me).avatar || '',
+        avatarVer: (me).avatarVer || 0,
+        avatarThumbB64: (me).avatarThumbB64 || '',
         friends: await getFriendIds(userId),
       },
     });
-  } catch (e: any) {
-    console.error('PATCH /api/me ERROR:', e?.message || e);
+  } catch (e) {
+    console.error('PATCH /api/me ERROR:', (e as { message?: unknown } | null)?.message || e);
     return res.status(500).json({ ok: false, error: 'server_error' });
   }
 });
@@ -257,7 +263,7 @@ router.patch('/me', async (req, res) => {
  * - x-user-id (или userId в query/по installId — как в глобальном middleware)
  * - x-install-id (желательно)
  */
-router.post('/push-token', async (req, res) => {
+router.post('/push-token', async (req: ProfileRequest, res) => {
   try {
     const installId = String(req.header('x-install-id') || '');
     if (!installId) {
@@ -277,7 +283,7 @@ router.post('/push-token', async (req, res) => {
       return res.status(503).json({ ok: false, error: 'database_unavailable' });
     }
     // Пользователя уже определил общий middleware (installId + секрет установки).
-    const userId = String((req as any).userId || '');
+    const userId = String((req).userId || '');
     if (!userId) {
       return res.status(401).json({ ok: false, error: 'unauthorized' });
     }
@@ -322,8 +328,8 @@ router.post('/push-token', async (req, res) => {
       hasVoipToken: !!voip,
     });
     return res.json({ ok: true });
-  } catch (e: any) {
-    return res.status(500).json({ ok: false, error: e?.message || 'server_error' });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: (e as { message?: unknown } | null)?.message || 'server_error' });
   }
 });
 
@@ -331,21 +337,21 @@ router.post('/push-token', async (req, res) => {
  * DEBUG: отправить тестовый push текущему пользователю.
  * Полезно чтобы проверить, что токен зарегистрирован и пуши доходят в фоне/убитом приложении.
  */
-router.post('/push-test', async (req, res) => {
+router.post('/push-test', async (req: ProfileRequest, res) => {
   try {
     const userId =
-      ((req as any)?.auth?.userId as string | undefined) ||
-      ((req as any)?.userId as string | undefined);
+      ((req)?.auth?.userId as string | undefined) ||
+      ((req)?.userId as string | undefined);
 
     if (!userId) {
       return res.status(401).json({ ok: false, error: 'unauthorized' });
     }
 
-    const kind = (String((req.body as any)?.kind || 'message') as 'message' | 'call');
+    const kind = (String((req.body)?.kind || 'message') as 'message' | 'call');
     const title = String(
-      (req.body as any)?.title || (kind === 'call' ? 'Входящий звонок' : 'Тестовое сообщение')
+      (req.body)?.title || (kind === 'call' ? 'Входящий звонок' : 'Тестовое сообщение')
     );
-    const body = String((req.body as any)?.body || (kind === 'call' ? 'Кто-то звонит' : 'Это тестовый push'));
+    const body = String((req.body)?.body || (kind === 'call' ? 'Кто-то звонит' : 'Это тестовый push'));
 
     await sendPushToUser(String(userId), {
       kind,
@@ -360,9 +366,9 @@ router.post('/push-test', async (req, res) => {
     });
 
     return res.json({ ok: true });
-  } catch (e: any) {
-    logger.warn('[push] push-test failed', e as any);
-    return res.status(500).json({ ok: false, error: e?.message || 'server_error' });
+  } catch (e) {
+    logger.warn('[push] push-test failed', e);
+    return res.status(500).json({ ok: false, error: (e as { message?: unknown } | null)?.message || 'server_error' });
   }
 });
 
@@ -373,8 +379,8 @@ router.post('/push-test', async (req, res) => {
 router.get('/debug/push-log', (_req, res) => {
   try {
     return res.json({ ok: true, entries: getPushLog() });
-  } catch (e: any) {
-    return res.status(500).json({ ok: false, error: e?.message || 'server_error' });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: (e as { message?: unknown } | null)?.message || 'server_error' });
   }
 });
 

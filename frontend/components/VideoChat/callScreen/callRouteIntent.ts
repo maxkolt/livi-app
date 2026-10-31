@@ -1,3 +1,4 @@
+import type { CallAudioGlobals } from '../../../utils/callStateTypes';
 /**
  * Толкование навигационных параметров экрана звонка.
  *
@@ -32,7 +33,7 @@ export function isAcceptedVideoCallNavCallId(callId?: string | null): boolean {
   const cid = String(callId || '').trim();
   if (!cid) return false;
   try {
-    return String((global as any).__acceptedVideoCallNavCallIdRef?.current || '') === cid;
+    return String((global as CallAudioGlobals).__acceptedVideoCallNavCallIdRef?.current || '') === cid;
   } catch {
     return false;
   }
@@ -40,7 +41,7 @@ export function isAcceptedVideoCallNavCallId(callId?: string | null): boolean {
 
 export function hasAuthenticDirectCallVideoPiPReturnIntent(): boolean {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     // Не считать stayOnVideo / in-app PiP «возвратом из PiP» — иначе remount/layout шум
     // и ложный restore fromPiP пока партнёр в system PiP.
     return (
@@ -136,7 +137,7 @@ export function stripStaleDirectCallPiPNavParamsIfNeeded(
   });
   // Не затираем userExpand, если пользователь уже на video UI (иначе после PiP
   // повторное включение камеры тихо блокируется audio-first guard'ом).
-  const stayOnVideoUi = (global as any).__stayOnVideoCallUiRef?.current === true;
+  const stayOnVideoUi = global.__stayOnVideoCallUiRef?.current === true;
   clearStaleDirectCallVideoExpandGlobalHints();
   if (stayOnVideoUi) {
     markDirectCallUserRequestedVideoExpand();
@@ -162,7 +163,7 @@ export function isFreshDirectCallAudioAcceptRoute(params?: {
   if (callId && isAcceptedVideoCallNavCallId(callId)) return true;
   if (params.isIncoming === true) return true;
   if (params.directInitiator === true) return true;
-  const outgoingPeer = String((global as any).__outgoingCallPeerUserIdRef?.current || '').trim();
+  const outgoingPeer = String((global as CallAudioGlobals).__outgoingCallPeerUserIdRef?.current || '').trim();
   const peer = String(params.peerUserId || '').trim();
   return !!outgoingPeer && outgoingPeer === peer;
 }

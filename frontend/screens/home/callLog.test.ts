@@ -10,7 +10,7 @@ jest.mock('@react-native-async-storage/async-storage', () => ({
   }),
 }));
 
-jest.mock('../../sockets/socket', () => ({
+jest.mock('../../sockets/modules/authState', () => ({
   getCurrentUserId: () => '507f1f77bcf86cd799439011',
 }));
 

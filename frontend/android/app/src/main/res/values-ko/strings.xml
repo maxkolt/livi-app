@@ -5,7 +5,7 @@
   <string name="incoming_call_unknown">누군가 전화하고 있습니다</string>
   <string name="incoming_call_accept">수락</string>
   <string name="incoming_call_decline">거절</string>
-  <string name="outgoing_call_title">발신 영상 통화</string>
+  <string name="outgoing_call_title">발신 전화</string>
   <string name="outgoing_call_subtitle">전화 거는 중…</string>
   <string name="outgoing_call_subtitle_base">전화 거는 중</string>
   <string name="outgoing_call_subtitle_base_audio">전화 거는 중</string>

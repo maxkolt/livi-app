@@ -1,14 +1,10 @@
 # Звонящий: звонок другу ${FRIEND} из списка друзей, дозвон начался.
 appId: com.kolt12max.livi.dev
 ---
-- launchApp
-- extendedWaitUntil:
-    visible: "Find a partner|Найти собеседника"
-    timeout: 30000
-- tapOn: "Friends|Друзья"
+- runFlow: chat-open.yaml
 - tapOn:
-    id: "friend-row-call"
-    rightOf: "${FRIEND}"
+    id: "chat-header-call"
+    waitToSettleTimeoutMs: 1000
 - extendedWaitUntil:
     visible: "Calling.*|Вызов.*|Звонок.*"
     timeout: 15000

@@ -1,3 +1,5 @@
+import type { ChatMessage } from '../screens/chat/chatMessageTypes';
+import type { CallAcceptedPayload } from '../sockets/modules/types';
 import { NativeModules, Platform, AppState } from 'react-native';
 import { setPipVisible, setVideoCallActive } from './callRuntime';
 import { callLifecycle } from './callLifecycle';
@@ -7,12 +9,40 @@ import { callLifecycle } from './callLifecycle';
 
 type Listener<T> = (payload: T) => void;
 
+type EventRef<T> = { current: T };
+type GlobalEventState = typeof global & {
+  __welcomeViewingMissedCallsRef?: EventRef<boolean>;
+  __welcomeCallsTabSelectedRef?: EventRef<boolean>;
+  __welcomeCallsMissedFilterRef?: EventRef<boolean>;
+  __incomingCallScreenVisibleRef?: EventRef<boolean>;
+  __welcomeViewingChatsRef?: EventRef<boolean>;
+  __welcomeCallsPendingFilterRef?: EventRef<'all' | 'missed' | null>;
+  __welcomeChatsPendingFilterRef?: EventRef<'all' | 'unread' | null>;
+  __skipHomeUiSettleUntilRef?: EventRef<number>;
+  __skipAppStateActiveSetAppIsActiveRef?: EventRef<boolean>;
+  __callEndedGlobalRefsDedupRef?: { key: string; at: number };
+  __videoCallPartnerUserIdRef?: EventRef<string | null>;
+  // This emitter only clears the navigation snapshot; its owner reads its fields.
+  __currentCallPiPParamsRef?: EventRef<object | null>;
+  __pendingCallAcceptedRef?: EventRef<CallAcceptedPayload | null>;
+  __acceptCallTimeRef?: EventRef<number>;
+  __callTimerCallIdRef?: EventRef<string>;
+  __directAudioEarpieceStabilizeUntilRef?: EventRef<number>;
+  __callConnectedAtRef?: EventRef<number | null>;
+  __directCallAudioOnlyMountKeyRef?: EventRef<string | null>;
+  __systemPiPNeedsInAppRestoreRef?: EventRef<boolean>;
+  __pendingInAppPiPRestoreAfterSystemRef?: EventRef<boolean>;
+  __restoringInAppPiPFromSystemRef?: EventRef<boolean>;
+  __pipSuspendedForSystemPiPRef?: EventRef<boolean>;
+  __onVideoCallEndedRef?: EventRef<(() => void) | null>;
+};
+
 const missedListeners = new Set<Listener<{ userId: string; count?: number }>>();
 const missedClearListeners = new Set<Listener<{ userId: string }>>();
 const chatOpenedListeners = new Set<Listener<{ userId: string }>>();
 const closeIncomingListeners = new Set<Listener<{}>>();
 const closeIncomingRequestListeners = new Set<Listener<{}>>();
-const closeOutgoingCallListeners = new Set<Listener<{}>>();
+const closeOutgoingCallListeners = new Set<Listener<CloseOutgoingCallPayload>>();
 const callCancelledOnHomeListeners = new Set<Listener<{ fromUserId?: string }>>();
 const callEndedOnHomeListeners = new Set<Listener<{}>>();
 const closeHomeModalsListeners = new Set<Listener<{}>>();
@@ -38,7 +68,7 @@ export function emitMissedIncrement(userId: string, count?: number) {
  * (строка видна в журнале). В фоне пуши всегда приходят.
  */
 export function setWelcomeViewingMissedCalls(viewing: boolean): void {
-  const g = global as any;
+  const g = global as GlobalEventState;
   g.__welcomeViewingMissedCallsRef = g.__welcomeViewingMissedCallsRef || { current: false };
   g.__welcomeViewingMissedCallsRef.current = viewing === true;
   if (Platform.OS === 'android') {
@@ -50,7 +80,7 @@ export function setWelcomeViewingMissedCalls(viewing: boolean): void {
 
 /** Выбрана вкладка Calls (даже в фоне) — для Incoming поверх не слать лишний missed. */
 export function setWelcomeCallsTabSelected(selected: boolean): void {
-  const g = global as any;
+  const g = global as GlobalEventState;
   g.__welcomeCallsTabSelectedRef = g.__welcomeCallsTabSelectedRef || { current: false };
   g.__welcomeCallsTabSelectedRef.current = selected === true;
 }
@@ -60,14 +90,14 @@ export function setWelcomeCallsTabSelected(selected: boolean): void {
  * В фоне — false (пуши должны приходить), кроме Incoming поверх вкладки Calls.
  */
 export function setWelcomeCallsMissedFilterActive(active: boolean): void {
-  const g = global as any;
+  const g = global as GlobalEventState;
   g.__welcomeCallsMissedFilterRef = g.__welcomeCallsMissedFilterRef || { current: false };
   g.__welcomeCallsMissedFilterRef.current = active === true;
 }
 
 function isIncomingCallUiVisible(): boolean {
   try {
-    return (global as any).__incomingCallScreenVisibleRef?.current === true;
+    return (global as GlobalEventState).__incomingCallScreenVisibleRef?.current === true;
   } catch {
     return false;
   }
@@ -77,10 +107,10 @@ export function isWelcomeCallsMissedFilterActive(): boolean {
   try {
     // В фоне пуши нужны; не держим filter из‑за settle.
     if (AppState.currentState !== 'active') {
-      const tabSelected = (global as any).__welcomeCallsTabSelectedRef?.current === true;
+      const tabSelected = (global as GlobalEventState).__welcomeCallsTabSelectedRef?.current === true;
       return tabSelected && isIncomingCallUiVisible();
     }
-    return (global as any).__welcomeCallsMissedFilterRef?.current === true;
+    return (global as GlobalEventState).__welcomeCallsMissedFilterRef?.current === true;
   } catch {
     return false;
   }
@@ -90,17 +120,17 @@ export function isWelcomeViewingMissedCalls(): boolean {
   try {
     if (AppState.currentState !== 'active') {
       // Свернуто: пуши да; Incoming поверх Calls — без дубля в шторке.
-      const tabSelected = (global as any).__welcomeCallsTabSelectedRef?.current === true;
+      const tabSelected = (global as GlobalEventState).__welcomeCallsTabSelectedRef?.current === true;
       return tabSelected && isIncomingCallUiVisible();
     }
-    return (global as any).__welcomeViewingMissedCallsRef?.current === true;
+    return (global as GlobalEventState).__welcomeViewingMissedCallsRef?.current === true;
   } catch {
     return false;
   }
 }
 
 export function setWelcomeViewingChats(viewing: boolean): void {
-  const g = global as any;
+  const g = global as GlobalEventState;
   g.__welcomeViewingChatsRef = g.__welcomeViewingChatsRef || { current: false };
   g.__welcomeViewingChatsRef.current = viewing === true;
   if (Platform.OS === 'android') {
@@ -113,7 +143,7 @@ export function setWelcomeViewingChats(viewing: boolean): void {
 export function isWelcomeViewingChats(): boolean {
   try {
     if (AppState.currentState !== 'active') return false;
-    return (global as any).__welcomeViewingChatsRef?.current === true;
+    return (global as GlobalEventState).__welcomeViewingChatsRef?.current === true;
   } catch {
     return false;
   }
@@ -132,7 +162,7 @@ function ensureSuppressClearedWhenBackgrounded(): void {
           if (AppState.currentState === 'active') return;
           // Incoming ещё на экране — не снимаем suppress (иначе дубль при cancel).
           if (isIncomingCallUiVisible()) return;
-          const g = global as any;
+          const g = global as GlobalEventState;
           if (g.__welcomeViewingMissedCallsRef?.current) {
             setWelcomeViewingMissedCalls(false);
           }
@@ -160,7 +190,7 @@ export function onPendingWelcomeCallsFilter(cb: () => void): () => void {
 }
 
 export function setPendingWelcomeCallsFilter(filter: 'all' | 'missed' | null): void {
-  const g = global as any;
+  const g = global as GlobalEventState;
   g.__welcomeCallsPendingFilterRef = g.__welcomeCallsPendingFilterRef || { current: null as 'all' | 'missed' | null };
   g.__welcomeCallsPendingFilterRef.current = filter;
   for (const l of welcomeCallsFilterPendingListeners) {
@@ -170,7 +200,7 @@ export function setPendingWelcomeCallsFilter(filter: 'all' | 'missed' | null): v
 
 export function consumePendingWelcomeCallsFilter(): 'all' | 'missed' | null {
   try {
-    const g = global as any;
+    const g = global as GlobalEventState;
     const next = g.__welcomeCallsPendingFilterRef?.current ?? null;
     if (g.__welcomeCallsPendingFilterRef) g.__welcomeCallsPendingFilterRef.current = null;
     return next === 'all' || next === 'missed' ? next : null;
@@ -189,7 +219,7 @@ export function onPendingWelcomeChatsFilter(cb: () => void): () => void {
 }
 
 export function setPendingWelcomeChatsFilter(filter: 'all' | 'unread' | null): void {
-  const g = global as any;
+  const g = global as GlobalEventState;
   g.__welcomeChatsPendingFilterRef = g.__welcomeChatsPendingFilterRef || { current: null as 'all' | 'unread' | null };
   g.__welcomeChatsPendingFilterRef.current = filter;
   for (const l of welcomeChatsFilterPendingListeners) {
@@ -199,7 +229,7 @@ export function setPendingWelcomeChatsFilter(filter: 'all' | 'unread' | null): v
 
 export function consumePendingWelcomeChatsFilter(): 'all' | 'unread' | null {
   try {
-    const g = global as any;
+    const g = global as GlobalEventState;
     const next = g.__welcomeChatsPendingFilterRef?.current ?? null;
     if (g.__welcomeChatsPendingFilterRef) g.__welcomeChatsPendingFilterRef.current = null;
     return next === 'all' || next === 'unread' ? next : null;
@@ -254,25 +284,25 @@ export function emitChatOpened(userId: string) {
 
 export function onCloseIncoming(cb: () => void): () => void {
   const h = () => cb();
-  closeIncomingListeners.add(h as any);
-  return () => { closeIncomingListeners.delete(h as any); };
+  closeIncomingListeners.add(h);
+  return () => { closeIncomingListeners.delete(h); };
 }
 
 export function emitCloseIncoming() {
   for (const l of closeIncomingListeners) {
-    try { (l as any)({}); } catch {}
+    try { l({}); } catch {}
   }
 }
 
 export function onRequestCloseIncoming(cb: () => void): () => void {
   const h = () => cb();
-  closeIncomingRequestListeners.add(h as any);
-  return () => { closeIncomingRequestListeners.delete(h as any); };
+  closeIncomingRequestListeners.add(h);
+  return () => { closeIncomingRequestListeners.delete(h); };
 }
 
 export function emitRequestCloseIncoming() {
   for (const l of closeIncomingRequestListeners) {
-    try { (l as any)({}); } catch {}
+    try { l({}); } catch {}
   }
 }
 
@@ -286,8 +316,8 @@ export type CloseOutgoingCallPayload = {
 /** Закрыть модалку исходящего вызова (когда абонент отклонил/отменил/таймаут вне приложения). */
 export function onCloseOutgoingCall(cb: (payload?: CloseOutgoingCallPayload) => void): () => void {
   const h = (payload?: CloseOutgoingCallPayload) => cb(payload);
-  closeOutgoingCallListeners.add(h as any);
-  return () => { closeOutgoingCallListeners.delete(h as any); };
+  closeOutgoingCallListeners.add(h);
+  return () => { closeOutgoingCallListeners.delete(h); };
 }
 
 export function emitCloseOutgoingCall(opts?: CloseOutgoingCallPayload) {
@@ -300,21 +330,21 @@ export function emitCloseOutgoingCall(opts?: CloseOutgoingCallPayload) {
     callLifecycle.ringEnded(payload.callId ?? null, `outgoing_${payload.reason}`);
   }
   for (const l of closeOutgoingCallListeners) {
-    try { (l as any)(payload); } catch {}
+    try { l(payload); } catch {}
   }
 }
 
 /** Вызов отменён инициатором, при этом пользователь уже на Home (страница приветствия). Бейдж показываем через подписку в HomeScreen, без setParams — без лишних ре-рендеров. */
 export function onCallCancelledOnHome(cb: (payload?: { fromUserId?: string }) => void): () => void {
   const h = (payload?: { fromUserId?: string }) => cb(payload);
-  callCancelledOnHomeListeners.add(h as any);
-  return () => { callCancelledOnHomeListeners.delete(h as any); };
+  callCancelledOnHomeListeners.add(h);
+  return () => { callCancelledOnHomeListeners.delete(h); };
 }
 
 export function emitCallCancelledOnHome(fromUserId?: string) {
   const payload = { fromUserId: String(fromUserId || '').trim() || undefined };
   for (const l of callCancelledOnHomeListeners) {
-    try { (l as any)(payload); } catch {}
+    try { l(payload); } catch {}
   }
 }
 
@@ -323,7 +353,7 @@ export function emitCallCancelledOnHome(fromUserId?: string) {
  * Окно settle подавляет setAppIsActive / loadFriends / setRouteName — иначе Home «мерцает» несколько раз.
  */
 export function armHomeUiSettleSkip(ms = 4500): void {
-  const g = global as any;
+  const g = global as GlobalEventState;
   const until = Date.now() + Math.max(0, Number(ms) || 0);
   g.__skipHomeUiSettleUntilRef = g.__skipHomeUiSettleUntilRef || { current: 0 };
   g.__skipHomeUiSettleUntilRef.current = Math.max(
@@ -339,7 +369,7 @@ export function armHomeUiSettleSkip(ms = 4500): void {
 }
 
 export function shouldSkipHomeUiSettle(): boolean {
-  const g = global as any;
+  const g = global as GlobalEventState;
   const until = Number(g.__skipHomeUiSettleUntilRef?.current || 0);
   if (until > Date.now()) return true;
   // Native armed на X Outgoing до returnMain — читаем sync, иначе loadFriends глотает тачи.
@@ -352,7 +382,7 @@ export function shouldSkipHomeUiSettle(): boolean {
 }
 
 export function clearHomeUiSettleSkip(): void {
-  const g = global as any;
+  const g = global as GlobalEventState;
   if (g.__skipHomeUiSettleUntilRef) g.__skipHomeUiSettleUntilRef.current = 0;
   if (g.__skipAppStateActiveSetAppIsActiveRef) g.__skipAppStateActiveSetAppIsActiveRef.current = false;
   if (Platform.OS === 'android') {
@@ -365,13 +395,13 @@ export function clearHomeUiSettleSkip(): void {
 /** Звонок завершён (не отмена). Показываем тост «Звонок завершён» на Home при фокусе, без setParams — без лишних ре-рендеров (при закрытии экрана звонка через goBack). */
 export function onCallEndedOnHome(cb: () => void): () => void {
   const h = () => cb();
-  callEndedOnHomeListeners.add(h as any);
-  return () => { callEndedOnHomeListeners.delete(h as any); };
+  callEndedOnHomeListeners.add(h);
+  return () => { callEndedOnHomeListeners.delete(h); };
 }
 
 export function emitCallEndedOnHome() {
   for (const l of callEndedOnHomeListeners) {
-    try { (l as any)({}); } catch {}
+    try { l({}); } catch {}
   }
 }
 
@@ -385,7 +415,7 @@ export function applyCallEndedGlobalRefsOnce(
   callId?: string | null,
   roomId?: string | null
 ): boolean {
-  const g = global as any;
+  const g = global as GlobalEventState;
   const c = String(callId ?? '').trim();
   const r = String(roomId ?? '').trim();
   const key = c && r ? `${c}|${r}` : c || r || 'unknown';
@@ -423,7 +453,7 @@ export function applyCallEndedGlobalRefsOnce(
       '__pendingInAppPiPRestoreAfterSystemRef',
       '__restoringInAppPiPFromSystemRef',
       '__pipSuspendedForSystemPiPRef',
-    ]) {
+    ] as const) {
       if (g[name]) g[name].current = false;
     }
     g.__onVideoCallEndedRef?.current?.();
@@ -434,13 +464,13 @@ export function applyCallEndedGlobalRefsOnce(
 /** Закрыть модалки «Поддержать LiVi» и «Пригласи друга» на Home (чтобы экран видеозвонка был поверх при принятии вызова). */
 export function onCloseHomeModals(cb: () => void): () => void {
   const h = () => cb();
-  closeHomeModalsListeners.add(h as any);
-  return () => { closeHomeModalsListeners.delete(h as any); };
+  closeHomeModalsListeners.add(h);
+  return () => { closeHomeModalsListeners.delete(h); };
 }
 
 export function emitCloseHomeModals() {
   for (const l of closeHomeModalsListeners) {
-    try { (l as any)({}); } catch {}
+    try { l({}); } catch {}
   }
 }
 
@@ -493,7 +523,7 @@ export function emitRequestDirectCall(payload: RequestDirectCallPayload) {
 
 type ChatCallStatusMessagePayload = {
   peerId: string;
-  message: any;
+  message: ChatMessage;
 };
 
 const chatCallStatusListeners = new Set<Listener<ChatCallStatusMessagePayload>>();

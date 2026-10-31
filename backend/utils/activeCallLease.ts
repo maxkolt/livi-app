@@ -130,7 +130,7 @@ export function startActiveCallLeaseSweeper(
   }, intervalMs);
   // Unref so lease sweeper does not keep the process alive in tests/scripts.
   try {
-    (sweepTimer as any)?.unref?.();
+    (sweepTimer)?.unref?.();
   } catch {}
 }
 

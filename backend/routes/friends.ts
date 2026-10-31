@@ -1,5 +1,6 @@
 // routes/friends.ts
-import { Router } from 'express';
+import { Router, type Request } from 'express';
+import type { Server } from 'socket.io';
 import User from '../models/User';
 import {
   areFriendsCached,
@@ -12,6 +13,14 @@ import { getEffectiveBusy } from '../utils/effectiveBusy';
 import { isFriendGloballyVisibleOnline } from '../utils/friendOnlinePresence';
 import { emitToUser } from '../utils/emitToUser';
 import { listIncomingFriendRequests, markInviteFriendRequest } from '../utils/friendRequests';
+
+type FriendRequest = Request<Record<string, string>, unknown, {
+  to?: unknown;
+  from?: unknown;
+  accept?: unknown;
+  inviterId?: unknown;
+  peerId?: unknown;
+}> & { userId?: string; io?: Server };
 
 const router = Router();
 
@@ -27,9 +36,9 @@ function getOnlineAndBusyFromSockets() {
   return { isOnline, isBusy };
 }
 
-router.get('/friends', async (req, res) => {
+router.get('/friends', async (req: FriendRequest, res) => {
   try {
-    const userId = (req as any)?.userId as string | undefined;
+    const userId = (req)?.userId as string | undefined;
     if (!userId) return res.status(401).json({ ok: false, error: 'unauthorized' });
 
     const page = parseInt(req.query.page as string) || 1;
@@ -47,9 +56,9 @@ router.get('/friends', async (req, res) => {
       return {
         _id: friendId,
         nick: friend.nick || '',
-        avatar: (friend as any).avatar || '',
-        avatarVer: (friend as any).avatarVer || 0,
-        ...(includeAvatarThumbs ? { avatarThumbB64: (friend as any).avatarThumbB64 || '' } : {}),
+        avatar: (friend).avatar || '',
+        avatarVer: (friend).avatarVer || 0,
+        ...(includeAvatarThumbs ? { avatarThumbB64: (friend).avatarThumbB64 || '' } : {}),
         online: isOnline(friendId),
         isBusy: isBusy(friendId),
       };
@@ -65,8 +74,8 @@ router.get('/friends', async (req, res) => {
         hasMore: result.hasMore
       }
     });
-  } catch (e: any) {
-    res.status(500).json({ ok: false, error: String(e?.message || e) });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String((e as { message?: unknown } | null)?.message || e) });
   }
 });
 
@@ -74,17 +83,17 @@ router.get('/friends', async (req, res) => {
  * GET /api/friends/requests
  * Mirrors socket "friends:requests": incoming friend requests, newest first.
  */
-router.get('/friends/requests', async (req, res) => {
+router.get('/friends/requests', async (req: FriendRequest, res) => {
   try {
-    const me = String((req as any)?.userId || '').trim();
+    const me = String((req)?.userId || '').trim();
     if (!isOid(me)) return res.status(401).json({ ok: false, error: 'unauthorized' });
     const includeAvatarThumbs = String(req.query.includeAvatarThumbs ?? '1') !== '0'
       && String(req.query.includeAvatarThumbs ?? 'true') !== 'false';
     const { isOnline } = getOnlineAndBusyFromSockets();
     const list = await listIncomingFriendRequests(me, { includeAvatarThumbs, isOnline });
     res.json({ ok: true, list });
-  } catch (e: any) {
-    res.status(500).json({ ok: false, error: String(e?.message || e) });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String((e as { message?: unknown } | null)?.message || e) });
   }
 });
 
@@ -93,9 +102,9 @@ router.get('/friends/requests', async (req, res) => {
  * Body: { to }
  * Mirrors socket "friends:add" behavior (creates pending request).
  */
-router.post('/friends/add', async (req, res) => {
+router.post('/friends/add', async (req: FriendRequest, res) => {
   try {
-    const me = String((req as any)?.userId || '').trim();
+    const me = String((req)?.userId || '').trim();
     const to = String(req.body?.to || '').trim();
     if (!isOid(me)) return res.status(401).json({ ok: false, error: 'unauthorized' });
     if (!isOid(to)) return res.status(400).json({ ok: false, error: 'invalid_to' });
@@ -106,20 +115,20 @@ router.post('/friends/add', async (req, res) => {
 
     const toUserDoc = await User.findById(to).select('friendRequests').lean();
     const alreadyPending =
-      Array.isArray((toUserDoc as any)?.friendRequests) &&
-      (toUserDoc as any).friendRequests.some((x: any) => String(x) === String(me));
+      Array.isArray((toUserDoc)?.friendRequests) &&
+      (toUserDoc).friendRequests.some((x) => String(x) === String(me));
     if (alreadyPending) return res.json({ ok: true, status: 'pending' });
 
-    await (User as any).updateOne({ _id: to }, { $addToSet: { friendRequests: me } });
+    await (User).updateOne({ _id: to }, { $addToSet: { friendRequests: me } });
 
     // Try to notify recipient via socket (best-effort)
     try {
-      const io = (req as any).io as any | undefined;
+      const io = (req).io;
       if (io) {
         let fromNick: string | undefined;
         try {
           const u = await User.findById(me).select('nick').lean();
-          const n = String((u as any)?.nick ?? '').trim();
+          const n = String((u)?.nick ?? '').trim();
           fromNick = n || undefined;
         } catch {}
         emitToUser(io, to, 'friend:request', { from: me, fromNick });
@@ -127,8 +136,8 @@ router.post('/friends/add', async (req, res) => {
     } catch {}
 
     return res.json({ ok: true, status: 'pending' });
-  } catch (e: any) {
-    return res.status(500).json({ ok: false, error: String(e?.message || e) });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String((e as { message?: unknown } | null)?.message || e) });
   }
 });
 
@@ -137,42 +146,42 @@ router.post('/friends/add', async (req, res) => {
  * Body: { from, accept }
  * Mirrors socket "friends:respond" behavior.
  */
-router.post('/friends/respond', async (req, res) => {
+router.post('/friends/respond', async (req: FriendRequest, res) => {
   try {
-    const me = String((req as any)?.userId || '').trim();
+    const me = String((req)?.userId || '').trim();
     const from = String(req.body?.from || '').trim();
     const accept = !!req.body?.accept;
     if (!isOid(me)) return res.status(401).json({ ok: false, error: 'unauthorized' });
     if (!isOid(from)) return res.status(400).json({ ok: false, error: 'invalid_from' });
 
     // Remove request from incoming list
-    await (User as any).updateOne({ _id: me }, { $pull: { friendRequests: from } });
+    await (User).updateOne({ _id: me }, { $pull: { friendRequests: from } });
 
     if (accept) {
       await ensureFriendshipEdges(me, from);
 
       // Send profile snapshots to both sides (best-effort)
       try {
-        const io = (req as any).io as any | undefined;
+        const io = (req).io;
         if (io) {
           const meProfile = await User.findById(me).select('nick avatar avatarVer avatarThumbB64').lean();
           if (meProfile) {
             emitToUser(io, from, 'friend:profile', {
               userId: me,
-              nick: String((meProfile as any).nick || '').trim(),
-              avatar: String((meProfile as any).avatar || ''),
-              avatarVer: (meProfile as any).avatarVer || 0,
-              avatarThumbB64: String((meProfile as any).avatarThumbB64 || ''),
+              nick: String((meProfile).nick || '').trim(),
+              avatar: String((meProfile).avatar || ''),
+              avatarVer: (meProfile).avatarVer || 0,
+              avatarThumbB64: String((meProfile).avatarThumbB64 || ''),
             });
           }
           const fromProfile = await User.findById(from).select('nick avatar avatarVer avatarThumbB64').lean();
           if (fromProfile) {
             emitToUser(io, me, 'friend:profile', {
               userId: from,
-              nick: String((fromProfile as any).nick || '').trim(),
-              avatar: String((fromProfile as any).avatar || ''),
-              avatarVer: (fromProfile as any).avatarVer || 0,
-              avatarThumbB64: String((fromProfile as any).avatarThumbB64 || ''),
+              nick: String((fromProfile).nick || '').trim(),
+              avatar: String((fromProfile).avatar || ''),
+              avatarVer: (fromProfile).avatarVer || 0,
+              avatarThumbB64: String((fromProfile).avatarThumbB64 || ''),
             });
           }
           emitToUser(io, me, 'friend:accepted', { userId: from });
@@ -185,7 +194,7 @@ router.post('/friends/respond', async (req, res) => {
 
     // declined
     try {
-      const io = (req as any).io as any | undefined;
+      const io = (req).io;
       if (io) {
         emitToUser(io, me, 'friend:declined', { userId: from });
         emitToUser(io, from, 'friend:declined', { userId: me });
@@ -193,8 +202,8 @@ router.post('/friends/respond', async (req, res) => {
     } catch {}
 
     return res.json({ ok: true, status: 'declined' });
-  } catch (e: any) {
-    return res.status(500).json({ ok: false, error: String(e?.message || e) });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String((e as { message?: unknown } | null)?.message || e) });
   }
 });
 
@@ -203,9 +212,9 @@ router.post('/friends/respond', async (req, res) => {
  * Body: { inviterId }
  * Mirrors socket "friends:acceptInvite".
  */
-router.post('/friends/acceptInvite', async (req, res) => {
+router.post('/friends/acceptInvite', async (req: FriendRequest, res) => {
   try {
-    const me = String((req as any)?.userId || '').trim();
+    const me = String((req)?.userId || '').trim();
     const inviterId = String(req.body?.inviterId || '').trim();
     if (!isOid(me)) return res.status(401).json({ ok: false, error: 'unauthorized' });
     if (!isOid(inviterId)) return res.status(400).json({ ok: false, error: 'invalid_inviter' });
@@ -217,12 +226,12 @@ router.post('/friends/acceptInvite', async (req, res) => {
     await ensureFriendshipEdges(me, inviterId);
 
     // remove pending requests if present
-    await (User as any).updateOne({ _id: me }, { $pull: { friendRequests: inviterId } });
-    await (User as any).updateOne({ _id: inviterId }, { $pull: { friendRequests: me } });
+    await (User).updateOne({ _id: me }, { $pull: { friendRequests: inviterId } });
+    await (User).updateOne({ _id: inviterId }, { $pull: { friendRequests: me } });
 
     // best-effort socket notifications
     try {
-      const io = (req as any).io as any | undefined;
+      const io = (req).io;
       if (io) {
         emitToUser(io, me, 'friend:accepted', { userId: inviterId });
         emitToUser(io, inviterId, 'friend:accepted', { userId: me });
@@ -230,8 +239,8 @@ router.post('/friends/acceptInvite', async (req, res) => {
     } catch {}
 
     return res.json({ ok: true, status: 'accepted' });
-  } catch (e: any) {
-    return res.status(500).json({ ok: false, error: String(e?.message || e) });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String((e as { message?: unknown } | null)?.message || e) });
   }
 });
 
@@ -240,21 +249,21 @@ router.post('/friends/acceptInvite', async (req, res) => {
  * Body: { peerId }
  * Mirrors socket "friends:remove".
  */
-router.post('/friends/remove', async (req, res) => {
+router.post('/friends/remove', async (req: FriendRequest, res) => {
   try {
-    const me = String((req as any)?.userId || '').trim();
+    const me = String((req)?.userId || '').trim();
     const peerId = String(req.body?.peerId || '').trim();
     if (!isOid(me)) return res.status(401).json({ ok: false, error: 'unauthorized' });
     if (!isOid(peerId)) return res.status(400).json({ ok: false, error: 'invalid_peer' });
     if (String(me) === String(peerId)) return res.status(400).json({ ok: false, error: 'self' });
 
     await removeFriendshipEdges(me, peerId);
-    await (User as any).updateOne({ _id: me }, { $pull: { friends: peerId } });
-    await (User as any).updateOne({ _id: peerId }, { $pull: { friends: me } });
+    await (User).updateOne({ _id: me }, { $pull: { friends: peerId } });
+    await (User).updateOne({ _id: peerId }, { $pull: { friends: me } });
 
     // best-effort socket notifications
     try {
-      const io = (req as any).io as any | undefined;
+      const io = (req).io;
       if (io) {
         emitToUser(io, me, 'friend:removed', { userId: peerId });
         emitToUser(io, peerId, 'friend:removed', { userId: me });
@@ -262,14 +271,14 @@ router.post('/friends/remove', async (req, res) => {
     } catch {}
 
     return res.json({ ok: true });
-  } catch (e: any) {
-    return res.status(500).json({ ok: false, error: String(e?.message || e) });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String((e as { message?: unknown } | null)?.message || e) });
   }
 });
 
-router.get('/friends/check/:userId', async (req, res) => {
+router.get('/friends/check/:userId', async (req: FriendRequest, res) => {
   try {
-    const me = (req as any)?.userId as string | undefined;
+    const me = (req)?.userId as string | undefined;
     const targetUserId = req.params.userId;
     
     if (!me) return res.status(401).json({ ok: false, error: 'unauthorized' });
@@ -278,16 +287,16 @@ router.get('/friends/check/:userId', async (req, res) => {
     const areFriends = await areFriendsCached(me, targetUserId);
     
     res.json({ ok: true, areFriends });
-  } catch (e: any) {
-    res.status(500).json({ ok: false, error: String(e?.message || e) });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String((e as { message?: unknown } | null)?.message || e) });
   }
 });
 
 // Endpoint для обработки реферальных ссылок
-router.get('/invite/:code', async (req, res) => {
+router.get('/invite/:code', async (req: FriendRequest, res) => {
   try {
     const code = String(req.params.code || '').trim();
-    const me = (req as any)?.userId as string | undefined; // Текущий пользователь (если авторизован)
+    const me = (req)?.userId as string | undefined; // Текущий пользователь (если авторизован)
     
     console.log('[friends] /api/invite/:code called', { code, me, url: req.url, path: req.path });
     
@@ -315,8 +324,8 @@ router.get('/invite/:code', async (req, res) => {
       // Проверяем, есть ли уже заявка в друзья
       if (!areFriends) {
         const meUser = await User.findById(me).select('friendRequests').lean();
-        if (meUser && Array.isArray((meUser as any).friendRequests)) {
-          hasPendingRequest = (meUser as any).friendRequests.some((id: any) => String(id) === code);
+        if (meUser && Array.isArray((meUser).friendRequests)) {
+          hasPendingRequest = (meUser).friendRequests.some((id) => String(id) === code);
         }
       }
     }
@@ -324,8 +333,8 @@ router.get('/invite/:code', async (req, res) => {
     // Приложение открыло ссылку (?pending=1): пригласивший ждёт ответа в «Заявках»,
     // даже если окно закрыли или приложение вышло. Статус выше — до этой записи.
     if (me && me !== code && !areFriends && String(req.query.pending ?? '') === '1') {
-      await markInviteFriendRequest(me, code).catch((e: any) =>
-        console.warn('[friends] mark invite request failed', e?.message || e),
+      await markInviteFriendRequest(me, code).catch((e: unknown) =>
+        console.warn('[friends] mark invite request failed', (e as { message?: unknown } | null)?.message || e),
       );
     }
 
@@ -333,10 +342,10 @@ router.get('/invite/:code', async (req, res) => {
       ok: true,
       inviter: {
         id: String(inviter._id),
-        nick: String((inviter as any).nick ?? '').trim(),
-        avatar: (inviter as any).avatar || '',
-        avatarVer: (inviter as any).avatarVer || 0,
-        avatarThumbB64: (inviter as any).avatarThumbB64 || '',
+        nick: String((inviter).nick ?? '').trim(),
+        avatar: (inviter).avatar || '',
+        avatarVer: (inviter).avatarVer || 0,
+        avatarThumbB64: (inviter).avatarThumbB64 || '',
       },
       areFriends,
       hasPendingRequest,
@@ -345,9 +354,9 @@ router.get('/invite/:code', async (req, res) => {
     
     console.log('[friends] /api/invite/:code success', { code, hasInviter: !!inviter, areFriends, hasPendingRequest });
     res.json(response);
-  } catch (e: any) {
+  } catch (e) {
     console.error('[friends] /api/invite/:code error:', e);
-    res.status(500).json({ ok: false, error: String(e?.message || e) });
+    res.status(500).json({ ok: false, error: String((e as { message?: unknown } | null)?.message || e) });
   }
 });
 

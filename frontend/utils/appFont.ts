@@ -13,7 +13,7 @@
  */
 
 import React from 'react';
-import { Dimensions, PixelRatio, StyleSheet, Text, TextInput, type TextStyle } from 'react-native';
+import { Dimensions, PixelRatio, StyleSheet, Text, TextInput, type TextStyle, type TextProps, type TextInputProps } from 'react-native';
 import { Exo2_300Light } from '@expo-google-fonts/exo-2/300Light';
 import { Exo2_400Regular } from '@expo-google-fonts/exo-2/400Regular';
 import { Exo2_500Medium } from '@expo-google-fonts/exo-2/500Medium';
@@ -127,14 +127,16 @@ function adaptiveTextStyle(flat: TextStyle | undefined, scale: number): TextStyl
   return changed ? next : null;
 }
 
-type ForwardRefComponent = {
-  render?: ((props: any, ref: any) => React.ReactNode) & { appFont?: boolean };
+type ForwardRefComponent<Props, Instance> = {
+  render?: ((props: Props, ref: React.ForwardedRef<Instance>) => React.ReactNode) & { appFont?: boolean };
 };
 
-function patchRender(component: ForwardRefComponent, nestable: boolean, maxFontSizeMultiplier: number) {
+function patchRender<Props extends Pick<TextProps, 'style' | 'maxFontSizeMultiplier'>, Instance>(
+  component: ForwardRefComponent<Props, Instance>, nestable: boolean, maxFontSizeMultiplier: number,
+) {
   const render = component.render;
   if (typeof render !== 'function' || render.appFont) return;
-  const withFont = (props: any, nested: boolean) => {
+  const withFont = (props: Props, nested: boolean) => {
     const flat = StyleSheet.flatten(props.style as TextStyle) as TextStyle | undefined;
     const font = appFontFor(flat, nested);
     const { width, height } = typeScaleWindowSize(Dimensions.get('window'), Dimensions.get('screen'));
@@ -155,11 +157,11 @@ function patchRender(component: ForwardRefComponent, nestable: boolean, maxFontS
   };
   // Две обёртки, а не хук под условием: у Text контекст вложенности читается
   // всегда, TextInput вложенным не бывает.
-  const withAppFont: NonNullable<ForwardRefComponent['render']> = nestable
-    ? function AppFontText(props: any, ref: any) {
+  const withAppFont: NonNullable<ForwardRefComponent<Props, Instance>['render']> = nestable
+    ? function AppFontText(props, ref) {
         return render(withFont(props, React.useContext(TextAncestorContext)), ref);
       }
-    : function AppFontTextInput(props: any, ref: any) {
+    : function AppFontTextInput(props, ref) {
         return render(withFont(props, false), ref);
       };
   withAppFont.appFont = true;
@@ -183,6 +185,6 @@ let installed = false;
 export function installAppFont() {
   if (installed) return;
   installed = true;
-  patchRender(Text as unknown as ForwardRefComponent, true, APP_TEXT_MAX_FONT_SIZE_MULTIPLIER);
-  patchRender(TextInput as unknown as ForwardRefComponent, false, APP_INPUT_MAX_FONT_SIZE_MULTIPLIER);
+  patchRender(Text as typeof Text & ForwardRefComponent<TextProps, Text>, true, APP_TEXT_MAX_FONT_SIZE_MULTIPLIER);
+  patchRender(TextInput as typeof TextInput & ForwardRefComponent<TextInputProps, TextInput>, false, APP_INPUT_MAX_FONT_SIZE_MULTIPLIER);
 }

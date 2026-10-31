@@ -10,7 +10,7 @@
   <string name="incoming_call_unknown">Someone is calling</string>
   <string name="incoming_call_accept">Accept</string>
   <string name="incoming_call_decline">Decline</string>
-  <string name="outgoing_call_title">Outgoing video call</string>
+  <string name="outgoing_call_title">Outgoing call</string>
   <string name="outgoing_call_subtitle">Calling…</string>
   <string name="outgoing_call_subtitle_base">Calling</string>
   <string name="outgoing_call_subtitle_base_audio">Calling</string>

@@ -38,7 +38,7 @@ export function createRedisUnreadStore(url: string) {
     retryStrategy: (times) => Math.min(times * 100, 3000),
   });
   client.on('error', (err) =>
-    logger.warn('[unreadStore:redis] error', { message: (err as any)?.message ?? String(err) }),
+    logger.warn('[unreadStore:redis] error', { message: (err)?.message ?? String(err) }),
   );
 
   async function entries(userId: string): Promise<UnreadEntry[]> {

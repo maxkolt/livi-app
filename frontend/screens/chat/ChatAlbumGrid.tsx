@@ -1,3 +1,4 @@
+import type { ChatMessage } from './chatMessageTypes';
 // screens/chat/ChatAlbumGrid.tsx
 import React from "react";
 import { Dimensions, View, Pressable, Animated } from "react-native";
@@ -15,7 +16,7 @@ import { MESSAGE_LONG_PRESS_MS } from "../../constants/uiTokens";
 const SELECT_CHECK = UI_ACCENT;
 
 type Props = {
-  item: any;
+  item: ChatMessage;
   /** Ширина корня чата — тот же источник, что у облака. */
   layoutWidth?: number;
   resolveMediaUri: (uri?: string) => string;

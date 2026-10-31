@@ -12,6 +12,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 
@@ -24,6 +25,7 @@ class ActiveCallForegroundService : Service() {
 
     private val audioMaintainHandler = Handler(Looper.getMainLooper())
     private var audioMaintainRunnable: Runnable? = null
+    private var callWakeLock: PowerManager.WakeLock? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -36,7 +38,8 @@ class ActiveCallForegroundService : Service() {
         }
         partnerNick = intent.getStringExtra(EXTRA_PARTNER_NICK)?.trim()?.takeIf { it.isNotEmpty() }
         audioOnly = intent.getBooleanExtra(EXTRA_AUDIO_ONLY, false)
-        if (instance === this) {
+        val alreadyRunning = instance === this
+        if (alreadyRunning) {
             // Уже foreground: повторный start только меняет текст (аудио ↔ видео). Повторный
             // startForeground из фона перепроверил бы тип microphone и снял бы его.
             refreshNotification()
@@ -47,7 +50,10 @@ class ActiveCallForegroundService : Service() {
         }
         instance = this
         LiviAppModule.setActiveCallForegroundRunningStatic(true)
-        LiviAppModule.beginActiveCallVoiceAudioHoldStatic(applicationContext)
+        acquireCallWakeLock()
+        if (alreadyRunning) LiviAppModule.maintainActiveCallVoiceAudioStatic(applicationContext)
+        else LiviAppModule.beginActiveCallVoiceAudioHoldStatic(applicationContext)
+        CallProximityController.start(applicationContext, audioOnly)
         scheduleAudioMaintainLoop()
         try {
             val p = org.json.JSONObject()
@@ -139,9 +145,48 @@ class ActiveCallForegroundService : Service() {
     override fun onDestroy() {
         if (instance === this) instance = null
         cancelAudioMaintainLoop()
+        CallProximityController.stop()
+        releaseCallWakeLock()
         LiviAppModule.setActiveCallForegroundRunningStatic(false)
         LiviAppModule.endActiveCallVoiceAudioHoldStatic(applicationContext)
         super.onDestroy()
+    }
+
+    /**
+     * A foreground service keeps the process important, but it does not keep the CPU running after
+     * the display is switched off. LiveKit still needs its audio/network threads (and our 12 s audio
+     * guard) to run for the whole call, so hold a partial wake lock for exactly the service lifetime.
+     * Android releases the lock as a final safety net if the process dies.
+     */
+    @Suppress("WakelockTimeout")
+    private fun acquireCallWakeLock() {
+        try {
+            val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return
+            val lock = callWakeLock
+                ?: pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, CALL_WAKE_LOCK_TAG).apply {
+                    setReferenceCounted(false)
+                }
+            callWakeLock = lock
+            if (!lock.isHeld) {
+                lock.acquire()
+                android.util.Log.i(TAG, "active-call partial wake lock acquired")
+            }
+        } catch (e: RuntimeException) {
+            android.util.Log.w(TAG, "active-call partial wake lock acquire failed", e)
+        }
+    }
+
+    private fun releaseCallWakeLock() {
+        val lock = callWakeLock ?: return
+        callWakeLock = null
+        try {
+            if (lock.isHeld) {
+                lock.release()
+                android.util.Log.i(TAG, "active-call partial wake lock released")
+            }
+        } catch (e: RuntimeException) {
+            android.util.Log.w(TAG, "active-call partial wake lock release failed", e)
+        }
     }
 
     private fun scheduleAudioMaintainLoop() {
@@ -152,6 +197,7 @@ class ActiveCallForegroundService : Service() {
                     LiviAppModule.maintainActiveCallVoiceAudioStatic(applicationContext)
                 } catch (_: Exception) {}
                 CallRouteGuard.requestCheck("maintain")
+                CallProximityController.refresh()
                 audioMaintainHandler.postDelayed(this, AUDIO_MAINTAIN_INTERVAL_MS)
             }
         }
@@ -229,6 +275,7 @@ class ActiveCallForegroundService : Service() {
 
     companion object {
         private const val TAG = "ActiveCallFg"
+        private const val CALL_WAKE_LOCK_TAG = "LiVi:ActiveCall"
         private const val AUDIO_MAINTAIN_INTERVAL_MS = 12_000L
         private const val CHANNEL_ID = "livi_active_call_channel"
         private const val CHANNEL_ID_AUDIO = "livi_active_audio_call_channel"

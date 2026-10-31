@@ -1,3 +1,5 @@
+import type { NavigationPerfGlobals } from '../../utils/navigationPerf';
+import type { HomeUiGlobals } from './types';
 import React, { memo, useCallback, useMemo, useRef, useState } from 'react';
 import {
   Animated,
@@ -262,7 +264,7 @@ export function WelcomeSearchCta({
     pressArmed.current = true;
     const t0 = Date.now();
     try {
-      const g = global as any;
+      const g = global as NavigationPerfGlobals & HomeUiGlobals;
       // CTA is a foreground navigation action just like a chat/call row tap.
       // Let Home's delayed resume/badge work yield so the RandomChat screen can paint first.
       g.__homeRowActionAtRef = g.__homeRowActionAtRef || { current: 0 };
@@ -294,7 +296,7 @@ export function WelcomeSearchCta({
   const prepareFromEffect = useCallback(() => {
     touchAtRef.current = Date.now();
     try {
-      const g = global as any;
+      const g = global as NavigationPerfGlobals & HomeUiGlobals;
       const trace = {
         id: nextNavigationPerfId('random'),
         startedAt: navigationPerfNow(),
@@ -307,7 +309,7 @@ export function WelcomeSearchCta({
   }, [onPressPrepare]);
   const navigateFromEffect = useCallback(() => {
     try {
-      const trace = (global as any).__searchPerfTrace;
+      const trace = (global as NavigationPerfGlobals & HomeUiGlobals).__searchPerfTrace;
       if (trace) {
         logNavigationPerf('random.effectComplete', {
           id: trace.id,

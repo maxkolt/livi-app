@@ -1,3 +1,4 @@
+import type { ErrorDetails } from './runtimeTypes';
 import type { Server } from 'socket.io';
 import { createAdapter } from '@socket.io/redis-adapter';
 import Redis from 'ioredis';
@@ -20,7 +21,7 @@ function createRedisClient(role: 'pub' | 'sub'): Redis {
 
   client.on('connect', () => logger.info(`[socket.io:redis] ${role} connected`));
   client.on('ready', () => logger.info(`[socket.io:redis] ${role} ready`));
-  client.on('error', (err) => logger.warn(`[socket.io:redis] ${role} error`, { message: err?.message ?? String(err) }));
+  client.on('error', (err) => logger.warn(`[socket.io:redis] ${role} error`, { message: (err as ErrorDetails)?.message ?? String(err) }));
 
   return client;
 }
@@ -56,10 +57,10 @@ export async function setupSocketIoRedisAdapter(io: Server): Promise<() => Promi
       await Promise.allSettled([pubClient.quit(), subClient.quit()]);
       logger.info('[socket.io:redis] adapter closed');
     };
-  } catch (e: any) {
+  } catch (e: unknown) {
     socketIoRedisAdapterActive = false;
     logger.warn('[socket.io:redis] adapter init failed, falling back to in-memory adapter', {
-      error: e?.message || String(e),
+      error: (e as ErrorDetails)?.message || String(e),
     });
     await Promise.allSettled([pubClient.quit(), subClient.quit()]);
     return async () => {};

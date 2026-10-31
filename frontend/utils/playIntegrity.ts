@@ -77,8 +77,8 @@ export async function reportInstallIntegrityIfDue(): Promise<void> {
     let error: string | null = null;
     try {
       token = await requestToken(integrityRequestHash(installId, installSecret));
-    } catch (e: any) {
-      error = String(e?.code || e?.message || 'E_INTEGRITY').slice(0, 80);
+    } catch (e) {
+      error = String((e as { code?: unknown } | null | undefined)?.code || (e as { message?: unknown } | null | undefined)?.message || 'E_INTEGRITY').slice(0, 80);
     }
 
     const res = await fetchWithTimeout(

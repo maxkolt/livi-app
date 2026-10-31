@@ -3,7 +3,7 @@ import { applyRemoteFrameChange } from '../../utils/cosmetics';
 import { shared } from "./shared";
 import { socket } from "./socketCore";
 import { applyMissedFromReauth } from "./missedCalls";
-import type { MissedCallDelivery } from './types';
+import type { MissedCallDelivery, PresenceUpdatePayload, WelcomePresencePayload } from './types';
 import { drainAllOutboxes } from "./outboxTriggers";
 import { noteNetworkBack } from "./outbox";
 import { refreshE2eState } from "./e2e";
@@ -48,13 +48,13 @@ function ingestVisibleOnlinePresenceList(data: unknown) {
   const next = new Set<string>();
   for (const it of data) {
     if (it == null) continue;
-    const id = String((it as any)?._id ?? it);
+    const id = String((it)?._id ?? it);
     if (id) next.add(id);
   }
   shared.lastVisibleOnlineUserIds = next;
 }
 
-function __dispatchPresenceUpdate(raw: unknown): void {
+function __dispatchPresenceUpdate(raw: PresenceUpdatePayload): void {
   // The server emits this snapshot only after the socket is identity-bound.
   // An empty list is authoritative: preserving the pre-reconnect list here left
   // offline friends stuck online until the process was restarted.
@@ -66,15 +66,15 @@ function __dispatchPresenceUpdate(raw: unknown): void {
     try {
       cb(payload);
     } catch (e) {
-      logger.warn("[socket] onPresenceUpdate subscriber error", e as any);
+      logger.warn("[socket] onPresenceUpdate subscriber error", e);
     }
   }
 }
 
 export function onPresenceUpdate(
-  cb: (data: Array<{ _id: string; online: boolean }> | string[] | { userId: string; busy: boolean }) => void,
+  cb: (data: PresenceUpdatePayload) => void,
 ): () => void {
-  const wrapped = (data: any) => {
+  const wrapped = (data: Parameters<typeof cb>[0]) => {
     cb(data);
   };
   shared.presenceUpdateSubscribers.add(wrapped);
@@ -83,18 +83,13 @@ export function onPresenceUpdate(
   };
 }
 
-type WelcomePresencePayload = {
-  ok?: boolean;
-  list?: Array<string | { id?: string; nick?: string; name?: string; avatarVer?: number }>;
-};
-
 /** Global app-online snapshot for welcome banner (not friend-only). */
 export function onWelcomePresence(cb: (data: WelcomePresencePayload) => void): () => void {
   const handler = (data: WelcomePresencePayload) => {
     try {
       cb(data);
     } catch (e) {
-      logger.warn("[socket] onWelcomePresence subscriber error", e as any);
+      logger.warn("[socket] onWelcomePresence subscriber error", e);
     }
   };
   shared.welcomePresenceSubscribers.add(handler);
@@ -131,7 +126,7 @@ socket.on("presence:welcome", (data: WelcomePresencePayload) => {
     try {
       cb(data);
     } catch (e) {
-      logger.warn("[socket] presence:welcome subscriber error", e as any);
+      logger.warn("[socket] presence:welcome subscriber error", e);
     }
   }
 });

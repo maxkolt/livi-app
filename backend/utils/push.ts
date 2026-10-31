@@ -16,7 +16,7 @@ const IOS_VOIP_PRODUCTION = !/^(0|false|no)$/i.test(String(process.env.APNS_PROD
 type PushKind = 'message' | 'call';
 
 /** Коды ошибок Firebase Admin при невалидном/устаревшем FCM-токене — такой токен нужно снять с записи. */
-const FCM_INVALID_TOKEN_CODES = [
+const FCM_INVALID_TOKEN_CODES: readonly string[] = [
   'messaging/registration-token-not-registered',
   'messaging/invalid-registration-token',
   'messaging/invalid-argument',
@@ -36,7 +36,7 @@ function isFcmInvalidTokenError(e: unknown): boolean {
   const msg = String(err?.message ?? err?.errorInfo?.message ?? '').toLowerCase();
   const code = String(err?.code ?? '');
   const raw = String(e).toLowerCase();
-  if (FCM_INVALID_TOKEN_CODES.includes(code as any)) return true;
+  if (FCM_INVALID_TOKEN_CODES.includes(code)) return true;
   const fromMsgOrRaw = (phrase: string) => msg.includes(phrase) || raw.includes(phrase);
   return FCM_INVALID_PHRASES.some(fromMsgOrRaw);
 }
@@ -717,7 +717,7 @@ export async function sendPushToUser(
   try {
     const recs = await PushTokenModel.find({ userId }).select('token lang').lean();
     const tokens = (recs || [])
-      .map((r: any) => ({ token: String(r.token || ''), lang: String(r.lang || '') }))
+      .map((r) => ({ token: String(r.token || ''), lang: String(r.lang || '') }))
       .filter((r) => Expo.isExpoPushToken(r.token));
 
     if (!tokens.length) {
@@ -746,17 +746,17 @@ export async function sendPushToUser(
               .filter((r) => r.status === 'error')
               .slice(0, 3)
               .map((r) => {
-                const anyR = r as any;
+                const anyR = r;
                 return { message: anyR?.message, details: anyR?.details };
               }),
           });
         }
       } catch (e) {
-        logger.warn('[push] sendPushNotificationsAsync failed', e as any);
+        logger.warn('[push] sendPushNotificationsAsync failed', e);
       }
     }
   } catch (e) {
-    logger.warn('[push] sendPushToUser failed', e as any);
+    logger.warn('[push] sendPushToUser failed', e);
   }
 }
 
@@ -961,7 +961,7 @@ export async function sendCallPushToRecipient(userId: string, data: CallPushData
       try {
         await expo.sendPushNotificationsAsync(chunk);
       } catch (e) {
-        logger.warn('[push] sendCallPushToRecipient Expo failed', e as any);
+        logger.warn('[push] sendCallPushToRecipient Expo failed', e);
       }
     }
   }

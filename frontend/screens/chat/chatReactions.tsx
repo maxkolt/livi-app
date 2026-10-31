@@ -17,7 +17,7 @@ import type { BackdropSources } from "../../components/BackdropBlur";
 
 const REACTION_EMOJIS_PAGE_1 = ["👍", "😊", "❤️", "😮", "😢", "👎"];
 const REACTION_EMOJIS_PAGE_2 = ["😉", "😂", "😍", "😭", "🙏", "🔥"];
-/** Порядок в bottom sheet по зажиму: первый ряд — 👍 ❤️ 🙏 🔥 😉 😂, второй — остальные */
+/** Порядок в меню сообщения: первый ряд — 👍 ❤️ 🙏 🔥 😉 😂, второй — остальные */
 const SHEET_REACTIONS_ROW_1 = ["👍", "❤️", "🙏", "🔥", "😉", "😂"];
 const SHEET_REACTIONS_ROW_2 = ["😊", "😮", "😢", "👎", "😍", "😭"];
 export const SHEET_REACTIONS_ALL = [...SHEET_REACTIONS_ROW_1, ...SHEET_REACTIONS_ROW_2];
@@ -171,6 +171,7 @@ export function ReactionBarOverlay({
   return (
     <Pressable
       ref={rootRef}
+      accessible={false}
       onLayout={measureRoot}
       style={[StyleSheet.absoluteFill, { zIndex: 1000, alignItems: "flex-start" }]}
       onPress={onClose}
@@ -186,6 +187,8 @@ export function ReactionBarOverlay({
           }}
         >
           <Pressable
+            testID="chat-reaction-bar"
+            accessible={false}
             onPress={() => {}}
             style={{
               width: barWidth,

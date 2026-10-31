@@ -1,5 +1,15 @@
 import { logger } from './logger';
 
+export type NavigationPerfGlobals = typeof global & {
+  __navigationPerfSeq?: number;
+  __searchNavT0?: number;
+  __searchNavFocusLogged?: boolean;
+  __searchNavStateChangeLogged?: boolean;
+  __searchNavSteps?: Array<{ step: string; at: number; elapsedMs: number; effectMs?: number }>;
+  __searchPerfTrace?: { id: string; startedAt: number; wallStartedAt: number; focusLogged?: boolean };
+  __randomExitPerfTrace?: { id: string; startedAt: number; blurLogged?: boolean };
+};
+
 export function navigationPerfNow(): number {
   try {
     const value = globalThis.performance?.now?.();
@@ -9,7 +19,7 @@ export function navigationPerfNow(): number {
 }
 
 export function nextNavigationPerfId(scope: string): string {
-  const g = global as any;
+  const g = global as NavigationPerfGlobals;
   g.__navigationPerfSeq = Number(g.__navigationPerfSeq || 0) + 1;
   return `${scope}-${g.__navigationPerfSeq}`;
 }

@@ -1,3 +1,4 @@
+import type { ChatMessage, PickedChatImage } from './chatMessageTypes';
 /** Incoming share-to-chat send + one-shot route effect. */
 
 import React from "react";
@@ -15,15 +16,15 @@ type Options = {
   peerId: string;
   currentUserId: string | null;
   route: { params?: { incomingShareItems?: IncomingShareItem[] } };
-  navigation: any;
+  navigation: { setParams: (params: { incomingShareItems?: IncomingShareItem[] }) => void };
   lang: Lang;
-  setMessages: React.Dispatch<React.SetStateAction<any[]>>;
-  latestMessagesForPersistRef: React.MutableRefObject<any[]>;
+  setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>;
+  latestMessagesForPersistRef: React.MutableRefObject<ChatMessage[]>;
   enqueueMessagesPersist: (reason: string) => void;
   setUploadStatus: React.Dispatch<React.SetStateAction<Record<string, "sending" | "sent" | "failed">>>;
   updateReadStatuses: (updater: (prev: ReadStatusMap) => ReadStatusMap) => void;
   resolveMediaUri: (uri?: string) => string;
-  sendPickedImage: (asset: any) => Promise<boolean>;
+  sendPickedImage: (asset: PickedChatImage) => Promise<boolean>;
   showForwardToastBadge: (ok: boolean, text: string) => void;
   scheduleScrollToBottom: (delay?: number) => void;
   scrollToBottom: () => void;
@@ -49,7 +50,7 @@ export function useChatIncomingShare({
   const incomingShareHandledRef = React.useRef<string>("");
 
   const commitMessages = React.useCallback(
-    (update: (prev: any[]) => any[], reason: string) => {
+    (update: (prev: ChatMessage[]) => ChatMessage[], reason: string) => {
       latestMessagesForPersistRef.current = update(latestMessagesForPersistRef.current || []);
       setMessages((prev) => update(prev));
       enqueueMessagesPersist(reason);
@@ -124,7 +125,7 @@ export function useChatIncomingShare({
             'share_text_optimistic',
           );
           updateReadStatuses((prev) => ({ ...prev, [messageId]: 'sending' }));
-          const result: any = await sendSocketMessage({
+          const result = await sendSocketMessage({
             to: peerId,
             text,
             type: 'text',
@@ -146,7 +147,7 @@ export function useChatIncomingShare({
               );
               updateReadStatuses((prev) => {
                 const next = { ...prev };
-                next[result.messageId] = deliveryStatus;
+                next[result.messageId!] = deliveryStatus;
                 delete next[messageId];
                 return next;
               });
@@ -187,7 +188,7 @@ export function useChatIncomingShare({
           updateReadStatuses((prev) => ({ ...prev, [messageId]: 'sending' }));
           setUploadStatus((prev) => ({ ...prev, [messageId]: 'sending' }));
           // Без сети — очередь сама загрузит файл (как голосовое из рекордера).
-          const socketResult: any = await sendSocketMessage({
+          const socketResult = await sendSocketMessage({
             to: peerId,
             type: 'audio',
             localUri,
@@ -246,7 +247,7 @@ export function useChatIncomingShare({
             (prev) => prev.map((msg) => (msg.id === messageId ? { ...msg, text } : msg)),
             'share_doc_url',
           );
-          const result: any = await sendSocketMessage({
+          const result = await sendSocketMessage({
             to: peerId,
             type: 'text',
             text,
@@ -267,7 +268,7 @@ export function useChatIncomingShare({
               );
               updateReadStatuses((prev) => {
                 const next = { ...prev };
-                next[result.messageId] = deliveryStatus;
+                next[result.messageId!] = deliveryStatus;
                 delete next[messageId];
                 return next;
               });

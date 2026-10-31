@@ -1,13 +1,14 @@
+import type { CallAudioGlobals } from './callStateTypes';
 import { NativeEventEmitter, NativeModules, Platform } from 'react-native';
 import { logger } from './logger';
 import { trackReleaseEvent } from './telemetry';
 
 const LOG_TAG = '[LIVI][SYSPIP][home]';
 
-/** Включить: `(global as any).__LIVI_SYS_PIP_HOME_TRACE__ = true` (см. scripts/capture-pip-debug-logs.sh). */
+/** Включить: `(global as CallAudioGlobals).__LIVI_SYS_PIP_HOME_TRACE__ = true` (см. scripts/capture-pip-debug-logs.sh). */
 function isSysPiPHomeTraceEnabled(): boolean {
   try {
-    return (global as any).__LIVI_SYS_PIP_HOME_TRACE__ === true;
+    return (global as CallAudioGlobals).__LIVI_SYS_PIP_HOME_TRACE__ === true;
   } catch {
     return false;
   }
@@ -28,7 +29,7 @@ type HomePiPTracePhase =
   | 'outcome';
 
 type TracePayload = Record<string, unknown> & {
-  traceId?: string;
+  traceId?: string | null;
   phase?: string;
   callId?: string | null;
   roomId?: string | null;
@@ -48,7 +49,7 @@ const outcomes = new Map<string, OutcomeState>();
 
 function resolveIds(): { callId: string | null; roomId: string | null } {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     const p = g.__currentCallPiPParamsRef?.current;
     const session = g.__webrtcSessionRef?.current;
     const callId = String(
@@ -70,7 +71,7 @@ export function logHomePiPTrace(phase: HomePiPTracePhase | string, payload: Trac
     phase,
     ...ids,
     ...payload,
-    traceId: payload.traceId ?? (global as any).__activeHomePiPTraceIdRef?.current ?? null,
+    traceId: payload.traceId ?? (global as CallAudioGlobals).__activeHomePiPTraceIdRef?.current ?? null,
     ts: Date.now(),
   };
   logger.info(LOG_TAG, body);
@@ -79,7 +80,7 @@ export function logHomePiPTrace(phase: HomePiPTracePhase | string, payload: Trac
 
 export function setActiveHomePiPTraceId(traceId: string | null): void {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     g.__activeHomePiPTraceIdRef = g.__activeHomePiPTraceIdRef || { current: null };
     g.__activeHomePiPTraceIdRef.current = traceId;
   } catch (_) {}
@@ -105,7 +106,7 @@ export function beginHomePiPOutcomeWatch(traceId: string): void {
 export function noteHomePiPModeChanged(traceId: string | null, inPiP: boolean): void {
   const id =
     traceId ||
-    (global as any).__activeHomePiPTraceIdRef?.current ||
+    (global as CallAudioGlobals).__activeHomePiPTraceIdRef?.current ||
     '';
   if (!id) return;
   let state = outcomes.get(id);
@@ -131,7 +132,7 @@ function finalizeHomePiPOutcome(traceId: string, reason: string): void {
     clearTimeout(state.timeoutId);
     state.timeoutId = null;
   }
-  const g = global as any;
+  const g = global as CallAudioGlobals;
   const inSystemNow = g.__pipInSystemModeRef?.current === true;
   let outcome: string;
   if (state.sawEnter && !state.sawExit && inSystemNow) {
@@ -157,11 +158,11 @@ function finalizeHomePiPOutcome(traceId: string, reason: string): void {
     inSystemModeRef: g.__pipInSystemModeRef?.current === true,
     device:
       Platform.OS === 'android'
-        ? `${String((Platform.constants as any)?.Brand ?? '')}_${String((Platform.constants as any)?.Model ?? '')}`.replace(/^_|_$/g, '') || undefined
+        ? `${String(Platform.constants?.Brand ?? '')}_${String(Platform.constants?.Model ?? '')}`.replace(/^_|_$/g, '') || undefined
         : undefined,
   });
   outcomes.delete(traceId);
-  if ((global as any).__activeHomePiPTraceIdRef?.current === traceId) {
+  if ((global as CallAudioGlobals).__activeHomePiPTraceIdRef?.current === traceId) {
     setActiveHomePiPTraceId(null);
   }
 }

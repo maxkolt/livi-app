@@ -10,9 +10,9 @@ export const isValidStream = (stream?: MediaStream | null): boolean => {
     try {
       const streamId = stream.id;
       if (!streamId) return false;
-    } catch (streamError: any) {
+    } catch (streamError: unknown) {
       // Если стрим уже disposed, нативный код выбросит ошибку
-      if (streamError?.message?.includes('disposed') || streamError?.message?.includes('MediaStream')) {
+      if ((streamError as Error | null | undefined)?.message?.includes('disposed') || (streamError as Error | null | undefined)?.message?.includes('MediaStream')) {
         return false;
       }
       // Пробрасываем другие ошибки
@@ -20,7 +20,7 @@ export const isValidStream = (stream?: MediaStream | null): boolean => {
     }
     
     // Проверяем базовые свойства стрима
-    return typeof (stream as any).toURL === 'function' && (stream as any).getTracks?.().length > 0;
+    return typeof (stream).toURL === 'function' && (stream).getTracks?.().length > 0;
   } catch {
     return false;
   }
@@ -30,7 +30,7 @@ export const stopStreamTracks = (stream: MediaStream | null | undefined): void =
   if (!stream) return;
   try {
     const tracks = stream.getTracks?.() || [];
-    tracks.forEach((t: any) => {
+    tracks.forEach((t) => {
       try {
         // Проверяем, что трек еще не был disposed перед остановкой
         // Это предотвращает ошибку "MediaStreamTrack has been disposed" на Android
@@ -39,7 +39,7 @@ export const stopStreamTracks = (stream: MediaStream | null | undefined): void =
           t.stop();
           // release вызываем только если трек еще активен
           try {
-            (t as any).release?.();
+            (t).release?.();
           } catch {}
         }
       } catch {}

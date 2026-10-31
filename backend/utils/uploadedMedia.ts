@@ -57,9 +57,9 @@ export async function deleteUnreferencedUploadedMedia(names: string[], dir: stri
   ]);
   const stillUsed = new Set(
     collectUploadedMediaNames([
-      ...(friendItems as any[]),
-      ...(messages as any[]),
-      ...(offline as any[]).map((doc) => doc?.messageData || {}),
+      ...(friendItems),
+      ...(messages),
+      ...(offline).map((doc) => doc?.messageData || {}),
     ]),
   );
 
@@ -69,8 +69,8 @@ export async function deleteUnreferencedUploadedMedia(names: string[], dir: stri
     try {
       await fs.promises.unlink(path.join(dir, name));
       removed += 1;
-    } catch (e: any) {
-      if (e?.code !== 'ENOENT') logger.warn('[uploadedMedia] unlink failed', { name, error: e?.message });
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException | null)?.code !== 'ENOENT') logger.warn('[uploadedMedia] unlink failed', { name, error: (e as NodeJS.ErrnoException | null)?.message });
     }
   }
   return removed;

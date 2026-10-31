@@ -4,6 +4,7 @@
  * Два телефона на одном Metro различаем по `dev` (хвост userId / install tag).
  */
 import { logger } from './logger';
+import type { CallRef } from './callStateTypes';
 
 const TAG = '[call-perf]';
 
@@ -19,8 +20,15 @@ type TraceState = {
   seq: number;
 };
 
-function g(): any {
-  return global as any;
+type CallPerfGlobals = typeof global & {
+  __callPerfDeviceTagRef?: CallRef<string>;
+  __callPerfTraceRef?: CallRef<TraceState | null>;
+  __currentUserIdRef?: CallRef<string | null>;
+  __myUserIdRef?: CallRef<string | null>;
+};
+
+function g(): CallPerfGlobals {
+  return global;
 }
 
 function ensureDeviceTag(): string {
@@ -46,7 +54,7 @@ export function setCallPerfDeviceTag(tag: string): void {
     const t = String(tag || '').trim();
     if (!t) return;
     g().__callPerfDeviceTagRef = g().__callPerfDeviceTagRef || { current: '' };
-    g().__callPerfDeviceTagRef.current = t.length > 8 ? t.slice(-8) : t;
+    g().__callPerfDeviceTagRef!.current = t.length > 8 ? t.slice(-8) : t;
   } catch {}
 }
 
@@ -61,7 +69,7 @@ function activeTrace(): TraceState | null {
 function setActiveTrace(next: TraceState | null): void {
   try {
     g().__callPerfTraceRef = g().__callPerfTraceRef || { current: null };
-    g().__callPerfTraceRef.current = next;
+    g().__callPerfTraceRef!.current = next;
   } catch {}
 }
 

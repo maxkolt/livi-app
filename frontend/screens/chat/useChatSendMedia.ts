@@ -1,3 +1,4 @@
+import type { ChatMessage, PickedChatImage } from './chatMessageTypes';
 /** Send voice / single image / album from local assets. */
 
 import React from "react";
@@ -15,9 +16,9 @@ type ReadStatusMap = Record<string, "sending" | "delivered" | "read" | "failed" 
 type Options = {
   peerId: string;
   currentUserId: string | null;
-  setMessages: React.Dispatch<React.SetStateAction<any[]>>;
+  setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>;
   /** Синхронное зеркало нужно для flush при уходе из чата до следующего render. */
-  latestMessagesForPersistRef: React.MutableRefObject<any[]>;
+  latestMessagesForPersistRef: React.MutableRefObject<ChatMessage[]>;
   enqueueMessagesPersist: (reason: string) => void;
   setUploadStatus: React.Dispatch<React.SetStateAction<Record<string, "sending" | "sent" | "failed">>>;
   updateReadStatuses: (updater: (prev: ReadStatusMap) => ReadStatusMap) => void;
@@ -53,7 +54,7 @@ export function useChatSendMedia({
    * back после отправки не сохраняет старую ленту без нового сообщения.
    */
   const commitMessages = React.useCallback(
-    (update: (prev: any[]) => any[], reason: string) => {
+    (update: (prev: ChatMessage[]) => ChatMessage[], reason: string) => {
       // После unmount новый экземпляр ChatScreen уже может писать тот же чат. Старый
       // полный снимок нельзя сохранять поверх него; async-медиа ниже использует patch.
       if (!mountedRef.current) return;
@@ -65,7 +66,7 @@ export function useChatSendMedia({
   );
 
   const commitMediaPatch = React.useCallback(
-    (messageId: string, patch: Record<string, unknown>, reason: string) => {
+    (messageId: string, patch: Partial<ChatMessage>, reason: string) => {
       if (mountedRef.current) {
         commitMessages(
           (prev) => prev.map((m) => String(m?.id) === messageId ? { ...m, ...patch } : m),
@@ -222,7 +223,7 @@ export function useChatSendMedia({
     } catch {}
   }, [currentUserId, peerId, commitMessages, commitMediaPatch, updateReadStatuses, setVoiceRecordMs]);
 
-  const sendPickedImage = React.useCallback(async (asset: any): Promise<boolean> => {
+  const sendPickedImage = React.useCallback(async (asset: PickedChatImage): Promise<boolean> => {
     if (!currentUserId || !peerId) return false;
 
     const messageId = createOptimisticChatMessageId();
@@ -264,7 +265,7 @@ export function useChatSendMedia({
         return false;
       }
 
-      const socketResult: any = await sendSocketMessage({
+      const socketResult = await sendSocketMessage({
         to: peerId,
         type: messageType,
         uri: uploadResult.url,
@@ -276,12 +277,12 @@ export function useChatSendMedia({
       if (socketResult?.localCancelled) {
         updateReadStatuses((prev) => {
           const n = { ...prev };
-          delete (n as any)[messageId];
-          return n as any;
+          delete (n)[messageId];
+          return n;
         });
         setUploadStatus((prev) => {
           const n = { ...prev };
-          delete (n as any)[messageId];
+          delete (n)[messageId];
           return n;
         });
         void dequeueMediaOutboxId(messageId);
@@ -328,7 +329,7 @@ export function useChatSendMedia({
   }, [currentUserId, peerId, commitMessages, updateReadStatuses, resolveMediaUri, enqueueMediaOutboxId, dequeueMediaOutboxId]);
 
   /** Send 2…10 photos as one album message. */
-  const sendPickedAlbum = React.useCallback(async (assets: any[]): Promise<boolean> => {
+  const sendPickedAlbum = React.useCallback(async (assets: PickedChatImage[]): Promise<boolean> => {
     if (!currentUserId || !peerId) return false;
     const list = (Array.isArray(assets) ? assets : []).slice(0, CHAT_ALBUM_MAX);
     if (list.length < 2) {
@@ -381,7 +382,7 @@ export function useChatSendMedia({
       }
 
       const resolvedUris = remoteUris.map((u) => resolveMediaUri(u) || u);
-      const socketResult: any = await sendSocketMessage({
+      const socketResult = await sendSocketMessage({
         to: peerId,
         type: 'image',
         uri: remoteUris[0],
@@ -394,12 +395,12 @@ export function useChatSendMedia({
       if (socketResult?.localCancelled) {
         updateReadStatuses((prev) => {
           const n = { ...prev };
-          delete (n as any)[messageId];
-          return n as any;
+          delete (n)[messageId];
+          return n;
         });
         setUploadStatus((prev) => {
           const n = { ...prev };
-          delete (n as any)[messageId];
+          delete (n)[messageId];
           return n;
         });
         void dequeueMediaOutboxId(messageId);

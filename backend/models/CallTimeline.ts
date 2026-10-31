@@ -1,4 +1,4 @@
-import { Schema, model, models, type Types } from 'mongoose';
+import { Schema, model, models, type Model, type Types } from 'mongoose';
 
 export type CallLifecycleState =
   | 'invited'
@@ -105,4 +105,4 @@ CallTimelineSchema.index({ createdAtMs: -1 });
 CallTimelineSchema.index({ state: 1, createdAtMs: -1 });
 CallTimelineSchema.index({ createdAt: 1 }, { expireAfterSeconds: 60 * 60 * 24 * 30 });
 
-export default (models.CallTimeline as any) || model<ICallTimeline>('CallTimeline', CallTimelineSchema);
+export default (models.CallTimeline as Model<ICallTimeline> | undefined) || model<ICallTimeline>('CallTimeline', CallTimelineSchema);

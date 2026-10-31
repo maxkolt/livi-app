@@ -1,3 +1,4 @@
+import type { CallAudioGlobals } from '../../utils/callStateTypes';
 import React from 'react';
 import { Image, Platform, StyleSheet, View } from 'react-native';
 import { usePiP } from './PiPContext';
@@ -14,7 +15,7 @@ export default function SystemPiPLogoLayer() {
   }
   let backdropRef = false;
   try {
-    backdropRef = (global as any).__systemPiPLiViBackdropActiveRef?.current === true;
+    backdropRef = (global as CallAudioGlobals).__systemPiPLiViBackdropActiveRef?.current === true;
   } catch (_) {}
   if (!inSystemPiPMode && !pendingSystemPiP && !backdropRef) return null;
 

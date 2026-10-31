@@ -1,3 +1,4 @@
+import type { CallAudioGlobals } from './callStateTypes';
 import { Platform, NativeModules } from 'react-native';
 import InCallManager from 'react-native-incall-manager';
 import type { InCallAudioRoute } from '../components/VideoChat/hooks/audioRouteTypes';
@@ -97,7 +98,7 @@ export {
 
 function readAvailableAudioDeviceList(): string[] {
   try {
-    const av = (global as any).__inCallAvailableAudioRoutesRef?.current;
+    const av = (global as CallAudioGlobals).__inCallAvailableAudioRoutesRef?.current;
     return Array.isArray(av) ? av.map((s: unknown) => String(s)) : [];
   } catch {
     return [];
@@ -113,7 +114,7 @@ export function clearStaleInAppPiPAudioContextForFreshCallNav(
     return;
   }
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     const pipActive =
       g.__pipVisibleRef?.current === true || g.__pipInSystemModeRef?.current === true;
     const cid = String(callId ?? '').trim();
@@ -179,7 +180,7 @@ function coerceDirectAudioAcceptBuiltinRoute(route: InCallAudioRoute): InCallAud
   if (userExplicitlyPinnedBuiltinCallAudio()) return route;
   if (isDirectAudioEarpieceStabilizeWindow()) return 'EARPIECE';
   try {
-    const cid = String((global as any).__activeCallAudioRouteCallIdRef?.current || '').trim();
+    const cid = String((global as CallAudioGlobals).__activeCallAudioRouteCallIdRef?.current || '').trim();
     if (cid && getCallMediaHint(cid) === 'audio') return 'EARPIECE';
   } catch {}
   return route;
@@ -194,7 +195,7 @@ export function clearDirectCallAudioRouteCarryoverAfterCallEnd(): void {
     'audio_home',
   ]);
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     g.__inCallSelectedAudioRouteRef = g.__inCallSelectedAudioRouteRef || { current: null };
     g.__inCallSelectedAudioRouteRef.current = null;
     if (g.__audioUiExplicitCycleRouteRef) g.__audioUiExplicitCycleRouteRef.current = null;
@@ -213,7 +214,7 @@ export function clearStaleHomeAudioRouteBeforeDirectCallAccept(): void {
       'direct_call_accept_audio_route',
       'audio_home',
     ]);
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     if (g.__audioCallHomeSpeakerPinRef) {
       g.__audioCallHomeSpeakerPinRef.current = false;
     }
@@ -237,7 +238,7 @@ export function clearStaleHomeAudioRouteBeforeDirectCallAccept(): void {
 
 function readExplicitInAppPiPBuiltinRoute(): InCallAudioRoute | null {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     const explicit = normalizeInCallRoute(g.__inAppPiPExplicitToggleRouteRef?.current || '');
     if (explicit === 'EARPIECE' || explicit === 'SPEAKER_PHONE') {
       return explicit;
@@ -270,7 +271,7 @@ function resolveReturnToAudioUiReapplyRoute(): InCallAudioRoute {
   }
   try {
     const fromUi = normalizeInCallRoute(
-      (global as any).__inCallSelectedAudioRouteRef?.current || '',
+      (global as CallAudioGlobals).__inCallSelectedAudioRouteRef?.current || '',
     );
     if (fromUi === 'EARPIECE' || fromUi === 'SPEAKER_PHONE') {
       return coercePersistedRouteForAvailableDevices(fromUi);
@@ -320,7 +321,7 @@ function resolveReturnToAudioUiReapplyRoute(): InCallAudioRoute {
 /** Реальный PiP / system PiP return — не окно armCallAudioPreservePriority при accept. */
 export function hasRealInAppPiPOrSystemReturnContext(): boolean {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     if (Number(g.__returningFromSystemPiPUntilRef?.current || 0) > Date.now()) return true;
     if (g.__pipInSystemModeRef?.current === true) return true;
     if (g.__pipSuspendedForSystemPiPRef?.current === true) return true;
@@ -334,7 +335,7 @@ const DIRECT_CALL_VIDEO_EXPAND_AUDIO_PREPARED_MS = 3200;
 
 function touchDirectCallVideoExpandAudioPrepared(): void {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     g.__directCallVideoExpandAudioPreparedAtRef =
       g.__directCallVideoExpandAudioPreparedAtRef || { current: 0 };
     g.__directCallVideoExpandAudioPreparedAtRef.current = Date.now();
@@ -349,7 +350,7 @@ export function markDirectCallVideoExpandAudioPrepared(): void {
 /** Video→audio return: снять «expand prepared», иначе late pin/reapply думает, что speaker ещё актуален. */
 export function clearDirectCallVideoExpandAudioPrepared(): void {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     g.__directCallVideoExpandAudioPreparedAtRef =
       g.__directCallVideoExpandAudioPreparedAtRef || { current: 0 };
     g.__directCallVideoExpandAudioPreparedAtRef.current = 0;
@@ -361,7 +362,7 @@ export function isDirectCallVideoExpandAudioPreparedRecently(
   windowMs = DIRECT_CALL_VIDEO_EXPAND_AUDIO_PREPARED_MS,
 ): boolean {
   try {
-    const at = Number((global as any).__directCallVideoExpandAudioPreparedAtRef?.current || 0);
+    const at = Number((global as CallAudioGlobals).__directCallVideoExpandAudioPreparedAtRef?.current || 0);
     return at > 0 && Date.now() - at < windowMs;
   } catch {
     return false;
@@ -420,7 +421,7 @@ export function prepareDirectCallVideoExpandFromInAppPiP(): void {
       setUserSelectedCallAudioRoute(plaqueNow);
       markUserSelectedExternalCallAudioRoute(plaqueNow);
       try {
-        const g = global as any;
+        const g = global as CallAudioGlobals;
         g.__explicitBuiltInCallAudioRouteRef = { current: false };
         g.__lastAppliedCallAudioRouteRef = { current: plaqueNow };
       } catch {}
@@ -433,7 +434,7 @@ export function prepareDirectCallVideoExpandFromInAppPiP(): void {
       rememberManualBuiltinCallAudioRoute('SPEAKER_PHONE');
       armCallAudioRouteUiLock('SPEAKER_PHONE');
       try {
-        const g = global as any;
+        const g = global as CallAudioGlobals;
         g.__userSelectedExternalCallAudioRouteRef = { current: null };
         g.__explicitBuiltInCallAudioRouteRef = { current: true };
       } catch {}
@@ -534,7 +535,7 @@ function resolvePreserveCallAudioRoute(): InCallAudioRoute {
 function schedulePreserveCallAudioRoute(reason: string, media?: 'audio' | 'video'): void {
   // Fresh accept / incoming answer: не ставить audio_home_preserve поверх bootstrap.
   try {
-    const incoming = (global as any).__incomingAnswerTransitionRef?.current;
+    const incoming = (global as CallAudioGlobals).__incomingAnswerTransitionRef?.current;
     if (incoming && Number(incoming.expiresAt || 0) > Date.now()) {
       return;
     }
@@ -542,7 +543,7 @@ function schedulePreserveCallAudioRoute(reason: string, media?: 'audio' | 'video
   try {
     const freshAcceptId = getFreshDirectCallAudioAcceptCallId();
     const bootstrappedId = String(
-      (global as any).__directCallAudioAcceptBootstrappedCallIdRef?.current || '',
+      (global as CallAudioGlobals).__directCallAudioAcceptBootstrappedCallIdRef?.current || '',
     ).trim();
     // Пока audio accept ещё не bootstrapped — preserve только мешает.
     if (freshAcceptId && freshAcceptId !== bootstrappedId) {
@@ -554,7 +555,7 @@ function schedulePreserveCallAudioRoute(reason: string, media?: 'audio' | 'video
   }
   // Dedupe burst: Back/Home leave вызывают preserve из нескольких путей за один кадр.
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     g.__lastAudioHomePreserveAtRef = g.__lastAudioHomePreserveAtRef || { current: 0 };
     const now = Date.now();
     if (now - Number(g.__lastAudioHomePreserveAtRef.current || 0) < 700) {
@@ -584,11 +585,11 @@ function schedulePreserveCallAudioRoute(reason: string, media?: 'audio' | 'video
   const route = resolvePreserveCallAudioRoute();
   setPersistedCallAudioRoute(route);
   try {
-    const params = (global as any).__currentCallPiPParamsRef?.current;
+    const params = (global as CallAudioGlobals).__currentCallPiPParamsRef?.current;
     if (params && typeof params === 'object') {
       params.audioOutputRoute = route;
     }
-    (global as any).__lastAppliedCallAudioRouteRef = { current: route };
+    (global as CallAudioGlobals).__lastAppliedCallAudioRouteRef = { current: route };
   } catch {}
   armCallAudioPreservePriority();
   scheduleReapplyPersistedCallAudioRoute(reason, {
@@ -603,7 +604,7 @@ function schedulePreserveCallAudioRoute(reason: string, media?: 'audio' | 'video
 /** In-app PiP, suspend под system PiP или restore с system PiP — плашка «активна» для audio guards. */
 export function isInAppPiPContextIncludingSuspended(): boolean {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     return (
       g.__pipVisibleRef?.current === true ||
       g.__pipSuspendedForSystemPiPRef?.current === true ||
@@ -624,7 +625,7 @@ function shouldKeepExternalRouteDespiteMissingFromList(route: InCallAudioRoute):
     // ICM без BT при живом native probe — не считать «отключено» (accept churn).
     if (list.length && !list.includes(route)) {
       try {
-        const probe = (global as any).__nativeCallAudioRoutesRef?.current as
+        const probe = (global as CallAudioGlobals).__nativeCallAudioRoutesRef?.current as
           | { available?: string[] }
           | undefined;
         if (Array.isArray(probe?.available) && probe.available.includes(route)) {
@@ -696,7 +697,7 @@ function coercePersistedRouteForAvailableDevices(route: InCallAudioRoute): InCal
 
 export function setPersistedCallAudioRoute(route: InCallAudioRoute): void {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     g.__persistedCallAudioRouteRef = g.__persistedCallAudioRouteRef || { current: null };
     g.__persistedCallAudioRouteRef.current = route;
   } catch {}
@@ -704,7 +705,7 @@ export function setPersistedCallAudioRoute(route: InCallAudioRoute): void {
 
 export function getPersistedCallAudioRoute(): InCallAudioRoute | null {
   try {
-    return normalizeInCallRoute((global as any).__persistedCallAudioRouteRef?.current || '');
+    return normalizeInCallRoute((global as CallAudioGlobals).__persistedCallAudioRouteRef?.current || '');
   } catch {
     return null;
   }
@@ -718,7 +719,7 @@ addCallAudioSessionCloseListener(() => {
 
 export function clearPersistedCallAudioRoute(): void {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     if (g.__persistedCallAudioRouteRef) g.__persistedCallAudioRouteRef.current = null;
     if (g.__userSelectedCallAudioRouteRef) g.__userSelectedCallAudioRouteRef.current = null;
     if (g.__userSelectedExternalCallAudioRouteRef) g.__userSelectedExternalCallAudioRouteRef.current = null;
@@ -739,11 +740,11 @@ export function pinLoudSpeakerForAudioCallLeavingToBackground(): void {
   if (externalIntent) {
     setPersistedCallAudioRoute(externalIntent);
     try {
-      const params = (global as any).__currentCallPiPParamsRef?.current;
+      const params = (global as CallAudioGlobals).__currentCallPiPParamsRef?.current;
       if (params && typeof params === 'object') {
         params.audioOutputRoute = externalIntent;
       }
-      (global as any).__lastAppliedCallAudioRouteRef = { current: externalIntent };
+      (global as CallAudioGlobals).__lastAppliedCallAudioRouteRef = { current: externalIntent };
     } catch {}
     scheduleReapplyPersistedCallAudioRoute('pin_preserve_headset', {
       media: 'audio',
@@ -753,7 +754,7 @@ export function pinLoudSpeakerForAudioCallLeavingToBackground(): void {
   }
   captureCallAudioRouteFromUi();
   const fromParams = normalizeInCallRoute(
-    (global as any).__currentCallPiPParamsRef?.current?.audioOutputRoute || '',
+    (global as CallAudioGlobals).__currentCallPiPParamsRef?.current?.audioOutputRoute || '',
   );
   const stored = getPersistedCallAudioRoute();
   const lastApplied = readLastAppliedCallAudioRoute();
@@ -768,7 +769,7 @@ export function pinLoudSpeakerForAudioCallLeavingToBackground(): void {
   if (isBluetoothAvailableForAutoRoute()) {
     setPersistedCallAudioRoute('BLUETOOTH');
     try {
-      const params = (global as any).__currentCallPiPParamsRef?.current;
+      const params = (global as CallAudioGlobals).__currentCallPiPParamsRef?.current;
       if (params && typeof params === 'object') {
         params.audioOutputRoute = 'BLUETOOTH';
       }
@@ -778,7 +779,7 @@ export function pinLoudSpeakerForAudioCallLeavingToBackground(): void {
   if (available.includes('WIRED_HEADSET')) {
     setPersistedCallAudioRoute('WIRED_HEADSET');
     try {
-      const params = (global as any).__currentCallPiPParamsRef?.current;
+      const params = (global as CallAudioGlobals).__currentCallPiPParamsRef?.current;
       if (params && typeof params === 'object') {
         params.audioOutputRoute = 'WIRED_HEADSET';
       }
@@ -790,18 +791,18 @@ export function pinLoudSpeakerForAudioCallLeavingToBackground(): void {
     const keep = readPreferredCallAudioRouteForTransition();
     setPersistedCallAudioRoute(keep);
     try {
-      const params = (global as any).__currentCallPiPParamsRef?.current;
+      const params = (global as CallAudioGlobals).__currentCallPiPParamsRef?.current;
       if (params && typeof params === 'object') {
         params.audioOutputRoute = keep;
       }
-      (global as any).__lastAppliedCallAudioRouteRef = { current: keep };
+      (global as CallAudioGlobals).__lastAppliedCallAudioRouteRef = { current: keep };
     } catch {}
     return;
   }
 
   setPersistedCallAudioRoute('SPEAKER_PHONE');
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     g.__audioCallHomeSpeakerPinRef = g.__audioCallHomeSpeakerPinRef || { current: false };
     g.__audioCallHomeSpeakerPinRef.current = true;
     const params = g.__currentCallPiPParamsRef?.current;
@@ -814,7 +815,7 @@ export function pinLoudSpeakerForAudioCallLeavingToBackground(): void {
 /** После возврата с Home: снова разговорный на экране «Аудиозвонок». */
 export function restoreAudioCallEarpieceAfterHomeReturn(): void {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     if (g.__audioCallHomeSpeakerPinRef?.current !== true) return;
     g.__audioCallHomeSpeakerPinRef.current = false;
     if (!isAudioOnlyOngoingCallContext()) return;
@@ -909,7 +910,7 @@ export function readExplicitVideoCallBuiltInRoute(): InCallAudioRoute | null {
   let explicitPiP: InCallAudioRoute | null = null;
   try {
     explicitPiP = normalizeInCallRoute(
-      (global as any).__inAppPiPExplicitToggleRouteRef?.current || '',
+      (global as CallAudioGlobals).__inAppPiPExplicitToggleRouteRef?.current || '',
     );
   } catch {}
   const speakerMarked =
@@ -957,7 +958,7 @@ export function resolveFullVideoCallScreenAudioRoute(): InCallAudioRoute {
   // оставить маршрут audio-страницы (в т.ч. ручное ухо при надетых buds).
   let localCamOn = false;
   try {
-    const session = (global as any).__webrtcSessionRef?.current as
+    const session = (global as CallAudioGlobals).__webrtcSessionRef?.current as
       | { getIsCamOn?: () => boolean }
       | null
       | undefined;
@@ -965,7 +966,7 @@ export function resolveFullVideoCallScreenAudioRoute(): InCallAudioRoute {
   } catch {}
   if (!localCamOn) {
     try {
-      const params = (global as any).__currentCallPiPParamsRef?.current;
+      const params = (global as CallAudioGlobals).__currentCallPiPParamsRef?.current;
       if (params?.localCamOn === true) localCamOn = true;
     } catch {}
   }
@@ -1030,7 +1031,7 @@ export function resolveOngoingVideoCallAudioRoute(): InCallAudioRoute {
   const inAppPiP = shouldPreserveCallAudioRouteInInAppPiP();
   const fromAudioPiP = (() => {
     try {
-      return (global as any).__pipInAppRtcFromAudioOnlyRef?.current === true;
+      return (global as CallAudioGlobals).__pipInAppRtcFromAudioOnlyRef?.current === true;
     } catch {
       return false;
     }
@@ -1062,7 +1063,7 @@ async function applyVideoContextNativeRoute(
 ): Promise<void> {
   setPersistedCallAudioRoute(route);
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     g.__lastAppliedCallAudioRouteRef = { current: route };
     const params = g.__currentCallPiPParamsRef?.current;
     if (params && typeof params === 'object') {
@@ -1090,7 +1091,7 @@ async function applyVideoContextNativeRoute(
 
 function writeVideoCallPiPRouteToParams(route: InCallAudioRoute): void {
   try {
-    const params = (global as any).__currentCallPiPParamsRef?.current;
+    const params = (global as CallAudioGlobals).__currentCallPiPParamsRef?.current;
     if (params && typeof params === 'object') {
       params.audioOutputRoute = route;
       params.preferVideoCallUi = true;
@@ -1162,12 +1163,12 @@ let directCallVideoUiReapplyGeneration = 0;
 
 function shouldSkipDirectCallVideoUiReapply(): boolean {
   try {
-    if ((global as any).__inAudioOnlyUiRef?.current === true) return true;
+    if (global.__inAudioOnlyUiRef?.current === true) return true;
   } catch {}
   if (isInAudioOnlyCallUi()) return true;
   try {
     // Sticky после return-to-audio — даже если inAudioOnly ещё не синхронизировался.
-    if ((global as any).__preferAudioOnlyUiOnNextVideoCallRef?.current === true) {
+    if (global.__preferAudioOnlyUiOnNextVideoCallRef?.current === true) {
       return true;
     }
   } catch {}
@@ -1192,7 +1193,7 @@ export function userExplicitlyChoseLoudSpeakerForCall(): boolean {
   const userSel = normalizeInCallRoute(readUserSelectedCallAudioRoute() || '');
   if (userSel === 'SPEAKER_PHONE') return true;
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     const cycled = normalizeInCallRoute(g.__lastCycleUserRouteResultRef?.current || '');
     return cycled === 'SPEAKER_PHONE';
   } catch {
@@ -1203,7 +1204,7 @@ export function userExplicitlyChoseLoudSpeakerForCall(): boolean {
 export function resolveReapplyMediaInCallContext(fallback?: 'audio' | 'video'): 'audio' | 'video' {
   if (isInAudioOnlyCallUi()) return 'audio';
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     if (g.__inAudioOnlyUiRef?.current === true) return 'audio';
     if (
       g.__pipAudioOnlyPlaceholderRef?.current === true &&
@@ -1367,8 +1368,8 @@ function shouldHoldBluetoothScoAgainstBuiltInOutput(): boolean {
   try {
     const userSel = readUserSelectedCallAudioRoute();
     if (userSel === 'EARPIECE' || userSel === 'SPEAKER_PHONE') return false;
-    if (Date.now() < Number((global as any).__btWearStickyUntilRef?.current || 0)) return true;
-    if (Date.now() < Number((global as any).__btExpectReconnectUntilRef?.current || 0)) return true;
+    if (Date.now() < Number((global as CallAudioGlobals).__btWearStickyUntilRef?.current || 0)) return true;
+    if (Date.now() < Number((global as CallAudioGlobals).__btExpectReconnectUntilRef?.current || 0)) return true;
     if (readUserSelectedExternalCallAudioRoute() === 'BLUETOOTH') return true;
     return userSel === 'BLUETOOTH';
   } catch {
@@ -1404,9 +1405,9 @@ async function applyNativeOutputRouteImmediate(
     try {
       const nativeP = applyNativeVoiceCallRoute('BLUETOOTH');
       try {
-        (InCallManager as any).setForceSpeakerphoneOn?.(false);
+        InCallManager.setForceSpeakerphoneOn?.(false);
         InCallManager.setSpeakerphoneOn(false);
-        void (InCallManager as any).chooseAudioRoute?.('BLUETOOTH');
+        void InCallManager.chooseAudioRoute?.('BLUETOOTH');
       } catch {}
       await nativeP;
     } catch {}
@@ -1420,9 +1421,9 @@ async function applyNativeOutputRouteImmediate(
     try {
       const nativeP = applyNativeVoiceCallRoute(route);
       try {
-        (InCallManager as any).setForceSpeakerphoneOn?.(false);
+        InCallManager.setForceSpeakerphoneOn?.(false);
         InCallManager.setSpeakerphoneOn(false);
-        void (InCallManager as any).chooseAudioRoute?.(route);
+        void InCallManager.chooseAudioRoute?.(route);
       } catch {}
       await nativeP;
     } catch {}
@@ -1677,7 +1678,7 @@ export async function applyCallAudioOutputRouteNow(
     skipCoalesce: true,
   });
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     g.__lastAppliedCallAudioRouteRef = { current: route };
     const params = g.__currentCallPiPParamsRef?.current;
     if (params && typeof params === 'object') {
@@ -1783,7 +1784,7 @@ function pinBuiltinRouteForPiPContext(route: InCallAudioRoute): void {
     setUserSelectedCallAudioRoute(route);
     rememberManualBuiltinCallAudioRoute(route);
     try {
-      const g = global as any;
+      const g = global as CallAudioGlobals;
       g.__explicitBuiltInCallAudioRouteRef =
         g.__explicitBuiltInCallAudioRouteRef || { current: false };
       g.__explicitBuiltInCallAudioRouteRef.current = true;
@@ -1792,7 +1793,7 @@ function pinBuiltinRouteForPiPContext(route: InCallAudioRoute): void {
     setUserSelectedCallAudioRoute(route);
   }
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     g.__lastAppliedCallAudioRouteRef = { current: route };
     const params = g.__currentCallPiPParamsRef?.current;
     if (params && typeof params === 'object') {
@@ -1804,7 +1805,7 @@ function pinBuiltinRouteForPiPContext(route: InCallAudioRoute): void {
 
 function resolvePiPPlaqueReapplyRoute(fallback: InCallAudioRoute = 'EARPIECE'): InCallAudioRoute {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     if (isInAudioOnlyCallUi() && g.__pipVisibleRef?.current !== true) {
       const lock = readCallAudioRouteUiLock();
       if (
@@ -1863,7 +1864,7 @@ function resolvePlaqueReapplyRespectingActiveCallUi(
 ): InCallAudioRoute {
   let route = resolvePiPPlaqueReapplyRoute(fallback);
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     const fromAudioPiP = g.__pipInAppRtcFromAudioOnlyRef?.current === true;
     const audioOnlyPlaque =
       isInAudioOnlyCallUi() &&
@@ -1908,7 +1909,7 @@ function resolveExplicitPiPOrAudioUiBuiltinRoute(
   }
   try {
     const explicit = normalizeInCallRoute(
-      (global as any).__inAppPiPExplicitToggleRouteRef?.current || '',
+      (global as CallAudioGlobals).__inAppPiPExplicitToggleRouteRef?.current || '',
     );
     if (explicit === 'EARPIECE' || explicit === 'SPEAKER_PHONE') {
       return coercePersistedRouteForAvailableDevices(explicit);
@@ -2018,7 +2019,7 @@ function isSystemPiPFromAudioOnlyCallContext(): boolean {
     const snap = peekSystemPiPReturnMediaSnapshot();
     if (snap?.preferAudioOnlyUi) return true;
     if (isInAudioOnlyCallUi()) return true;
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     if (g.__preferAudioOnlyUiOnNextVideoCallRef?.current === true) return true;
     if (g.__pipInAppRtcFromAudioOnlyRef?.current === true) return true;
     if (g.__pipAudioOnlyPlaceholderRef?.current === true) return true;
@@ -2029,7 +2030,7 @@ function isSystemPiPFromAudioOnlyCallContext(): boolean {
 function allowAutoLoudSpeakerOnSystemPiPEnter(): boolean {
   if (isSystemPiPFromAudioOnlyCallContext() || isInAudioOnlyCallUi()) return false;
   try {
-    if ((global as any).__pipAudioOnlyPlaceholderRef?.current === true) return false;
+    if (global.__pipAudioOnlyPlaceholderRef?.current === true) return false;
   } catch {}
   return ongoingCallPrefersVideoMedia();
 }
@@ -2045,7 +2046,7 @@ function readAuthoritativeAudioUiBuiltinRoute(): InCallAudioRoute | null {
   }
   try {
     const fromUi = normalizeInCallRoute(
-      (global as any).__inCallSelectedAudioRouteRef?.current || '',
+      (global as CallAudioGlobals).__inCallSelectedAudioRouteRef?.current || '',
     );
     if (fromUi === 'EARPIECE' || fromUi === 'SPEAKER_PHONE') {
       return coercePersistedRouteForAvailableDevices(fromUi);
@@ -2087,7 +2088,7 @@ function resolveSystemPiPReturnToVideoBuiltinRoute(): InCallAudioRoute {
   try {
     const snap =
       peekSystemPiPReturnMediaSnapshot() ||
-      ((global as any).__lastAppliedSystemPiPSnapRef as
+      ((global as CallAudioGlobals).__lastAppliedSystemPiPSnapRef as
         | SystemPiPReturnMediaSnapshot
         | undefined);
     const fromSnap = normalizeInCallRoute(snap?.audioRoute || '');
@@ -2144,7 +2145,7 @@ function resolveSystemPiPEnterPlaqueRoute(): InCallAudioRoute {
   const media = resolveActiveCallInCallMedia();
   const fromAudioPiP = (() => {
     try {
-      return (global as any).__pipInAppRtcFromAudioOnlyRef?.current === true;
+      return (global as CallAudioGlobals).__pipInAppRtcFromAudioOnlyRef?.current === true;
     } catch {
       return false;
     }
@@ -2170,7 +2171,7 @@ function resolveSystemPiPEnterPlaqueRoute(): InCallAudioRoute {
     );
   }
   const plaque = normalizeInCallRoute(
-    (global as any).__currentCallPiPParamsRef?.current?.audioOutputRoute || '',
+    (global as CallAudioGlobals).__currentCallPiPParamsRef?.current?.audioOutputRoute || '',
   );
   if (plaque === 'EARPIECE') {
     return coercePersistedRouteForAvailableDevices('EARPIECE');
@@ -2191,7 +2192,7 @@ function resolveSystemPiPEnterPlaqueRoute(): InCallAudioRoute {
 export function prepareSystemPiPEnterCallAudioRoute(): void {
   if (Platform.OS !== 'android' || !isOngoingCallSession()) return;
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     const now = Date.now();
     // Expand/return: не ставить enter_preserve поверх return_to_audio (ложный schedule после exit).
     if (now < Number(g.__returningFromSystemPiPUntilRef?.current || 0)) return;
@@ -2302,7 +2303,7 @@ export async function reapplyPersistedCallAudioRoute(
         let explicitBuiltin: InCallAudioRoute | null = null;
         let explicitFromUserToggle: InCallAudioRoute | null = null;
         try {
-          const g = global as any;
+          const g = global as CallAudioGlobals;
           const explicit = normalizeInCallRoute(
             reason === 'audio_ui_route_cycle'
               ? g.__audioUiExplicitCycleRouteRef?.current || ''
@@ -2338,7 +2339,7 @@ export async function reapplyPersistedCallAudioRoute(
         }
         setPersistedCallAudioRoute(route);
         try {
-          const g = global as any;
+          const g = global as CallAudioGlobals;
           g.__lastAppliedCallAudioRouteRef = { current: route };
           const params = g.__currentCallPiPParamsRef?.current;
           if (params && typeof params === 'object') {
@@ -2348,7 +2349,7 @@ export async function reapplyPersistedCallAudioRoute(
         } catch {}
         const media =
           opts?.media ??
-          ((global as any).__pipInAppRtcFromAudioOnlyRef?.current === true ||
+          ((global as CallAudioGlobals).__pipInAppRtcFromAudioOnlyRef?.current === true ||
           isInAudioOnlyCallUi()
             ? 'audio'
             : resolveActiveCallInCallMedia());
@@ -2389,7 +2390,7 @@ export async function reapplyPersistedCallAudioRoute(
         const plaqueUser = readUserSelectedCallAudioRoute();
         const plaqueExt = readUserSelectedExternalCallAudioRoute();
         if (
-          (global as any).__pipVisibleRef?.current === true &&
+          global.__pipVisibleRef?.current === true &&
           (isExternalHeadsetRoute(plaqueUser) || isExternalHeadsetRoute(plaqueExt))
         ) {
           return;
@@ -2397,7 +2398,7 @@ export async function reapplyPersistedCallAudioRoute(
         const route = resolvePlaqueReapplyRespectingActiveCallUi('EARPIECE');
         const mediaPre =
           opts?.media ??
-          ((global as any).__pipInAppRtcFromAudioOnlyRef?.current === true || isInAudioOnlyCallUi()
+          ((global as CallAudioGlobals).__pipInAppRtcFromAudioOnlyRef?.current === true || isInAudioOnlyCallUi()
             ? 'audio'
             : resolveActiveCallInCallMedia());
         const sigPre = `${route}|${mediaPre}|${reason}`;
@@ -2407,7 +2408,7 @@ export async function reapplyPersistedCallAudioRoute(
         pinBuiltinRouteForPiPContext(route);
         const media =
           opts?.media ??
-          ((global as any).__pipInAppRtcFromAudioOnlyRef?.current === true || isInAudioOnlyCallUi()
+          ((global as CallAudioGlobals).__pipInAppRtcFromAudioOnlyRef?.current === true || isInAudioOnlyCallUi()
             ? 'audio'
             : resolveActiveCallInCallMedia());
         const plaqueSkip =
@@ -2426,7 +2427,7 @@ export async function reapplyPersistedCallAudioRoute(
           honorUser: true,
         });
         try {
-          if ((global as any).__pipVisibleRef?.current === true) {
+          if (global.__pipVisibleRef?.current === true) {
             notifyInAppPiPAudioRouteUi(route);
           }
         } catch {}
@@ -2441,7 +2442,7 @@ export async function reapplyPersistedCallAudioRoute(
         if (ext === 'BLUETOOTH' && !isBluetoothHeadsetActiveForCall()) return;
         const media =
           opts?.media ??
-          ((global as any).__pipInAppRtcFromAudioOnlyRef?.current === true || isInAudioOnlyCallUi()
+          ((global as CallAudioGlobals).__pipInAppRtcFromAudioOnlyRef?.current === true || isInAudioOnlyCallUi()
             ? 'audio'
             : resolveActiveCallInCallMedia());
         const sig = nativeOutputSignature(ext, media, false);
@@ -2468,7 +2469,7 @@ export async function reapplyPersistedCallAudioRoute(
           return;
         }
         try {
-          const g = global as any;
+          const g = global as CallAudioGlobals;
           g.__lastAppliedCallAudioRouteRef = { current: ext };
           g.__applyCallAudioRouteFromParentRef?.current?.(ext, reason);
         } catch {}
@@ -2488,7 +2489,7 @@ export async function reapplyPersistedCallAudioRoute(
           (ongoingCallPrefersVideoMedia() ||
           (() => {
             try {
-              const g = global as any;
+              const g = global as CallAudioGlobals;
               return (
                 g.__stayOnVideoCallUiRef?.current === true ||
                 g.__expandToVideoCallUiFromPiPRef?.current === true
@@ -2542,7 +2543,7 @@ export async function reapplyPersistedCallAudioRoute(
           forceBuiltIn: !isExternalHeadsetRoute(route),
         });
         try {
-          const g = global as any;
+          const g = global as CallAudioGlobals;
           g.__lastAppliedCallAudioRouteRef = { current: route };
           g.__onInAppPiPAudioRouteChanged?.(route);
           g.__applyCallAudioRouteFromParentRef?.current?.(route, reason);
@@ -2617,7 +2618,7 @@ export async function reapplyPersistedCallAudioRoute(
           setUserSelectedCallAudioRoute(route);
         }
         try {
-          const g = global as any;
+          const g = global as CallAudioGlobals;
           g.__lastAppliedCallAudioRouteRef = { current: route };
           const params = g.__currentCallPiPParamsRef?.current;
           if (params && typeof params === 'object') {
@@ -2724,7 +2725,7 @@ export async function reapplyPersistedCallAudioRoute(
           }
         }
         try {
-          const g = global as any;
+          const g = global as CallAudioGlobals;
           g.__lastAppliedCallAudioRouteRef = { current: route };
           const params = g.__currentCallPiPParamsRef?.current;
           if (params && typeof params === 'object') {
@@ -2766,7 +2767,7 @@ export async function reapplyPersistedCallAudioRoute(
         }
         setPersistedCallAudioRoute(videoRoute);
         try {
-          const g = global as any;
+          const g = global as CallAudioGlobals;
           g.__lastAppliedCallAudioRouteRef = { current: videoRoute };
           const params = g.__currentCallPiPParamsRef?.current;
           if (params && typeof params === 'object') {
@@ -2816,12 +2817,12 @@ export async function reapplyPersistedCallAudioRoute(
             rememberManualBuiltinCallAudioRoute(videoRoute);
           }
           try {
-            (global as any).__userSelectedExternalCallAudioRouteRef = { current: null };
+            (global as CallAudioGlobals).__userSelectedExternalCallAudioRouteRef = { current: null };
           } catch {}
         } else {
           setUserSelectedCallAudioRoute(null);
           try {
-            (global as any).__userSelectedExternalCallAudioRouteRef = { current: null };
+            (global as CallAudioGlobals).__userSelectedExternalCallAudioRouteRef = { current: null };
           } catch {}
         }
         await applyVideoContextNativeRoute(
@@ -2850,7 +2851,7 @@ export async function reapplyPersistedCallAudioRoute(
         setPersistedCallAudioRoute(route);
         setUserSelectedCallAudioRoute(route);
         try {
-          const g = global as any;
+          const g = global as CallAudioGlobals;
           g.__lastAppliedCallAudioRouteRef = { current: route };
           g.__userSelectedExternalCallAudioRouteRef = { current: null };
           const params = g.__currentCallPiPParamsRef?.current;
@@ -2885,8 +2886,8 @@ export async function reapplyPersistedCallAudioRoute(
           rememberManualBuiltinCallAudioRoute('SPEAKER_PHONE');
           armCallAudioRouteUiLock('SPEAKER_PHONE');
           try {
-            (global as any).__userSelectedExternalCallAudioRouteRef = { current: null };
-            (global as any).__explicitBuiltInCallAudioRouteRef = { current: true };
+            (global as CallAudioGlobals).__userSelectedExternalCallAudioRouteRef = { current: null };
+            (global as CallAudioGlobals).__explicitBuiltInCallAudioRouteRef = { current: true };
           } catch {}
         } else if (isExternalHeadsetRoute(videoRoute)) {
           clearCallAudioRouteUiLock();
@@ -2934,14 +2935,14 @@ export async function reapplyPersistedCallAudioRoute(
         } else if (!externalBeforeCapture && isDirectAudioEarpieceStabilizeWindow()) {
           setPersistedCallAudioRoute('EARPIECE');
           try {
-            (global as any).__lastAppliedCallAudioRouteRef = { current: 'EARPIECE' };
+            (global as CallAudioGlobals).__lastAppliedCallAudioRouteRef = { current: 'EARPIECE' };
           } catch {}
         } else {
           const externalRoute = externalBeforeCapture;
           if (!externalRoute) return;
           setPersistedCallAudioRoute(externalRoute);
           try {
-            (global as any).__lastAppliedCallAudioRouteRef = { current: externalRoute };
+            (global as CallAudioGlobals).__lastAppliedCallAudioRouteRef = { current: externalRoute };
           } catch {}
         }
       }
@@ -2957,11 +2958,11 @@ export async function reapplyPersistedCallAudioRoute(
         stored = lockedExternal;
         setPersistedCallAudioRoute(lockedExternal);
         try {
-          const params = (global as any).__currentCallPiPParamsRef?.current;
+          const params = (global as CallAudioGlobals).__currentCallPiPParamsRef?.current;
           if (params && typeof params === 'object') {
             params.audioOutputRoute = lockedExternal;
           }
-          (global as any).__onInAppPiPAudioRouteChanged?.(lockedExternal);
+          (global as CallAudioGlobals).__onInAppPiPAudioRouteChanged?.(lockedExternal);
         } catch {}
       }
       if (preserveInAppPiP && !honorUser) {
@@ -3034,11 +3035,11 @@ export async function reapplyPersistedCallAudioRoute(
       if (route !== stored) {
         setPersistedCallAudioRoute(route);
         try {
-          const params = (global as any).__currentCallPiPParamsRef?.current;
+          const params = (global as CallAudioGlobals).__currentCallPiPParamsRef?.current;
           if (params && typeof params === 'object') {
             params.audioOutputRoute = route;
           }
-          (global as any).__onInAppPiPAudioRouteChanged?.(route);
+          (global as CallAudioGlobals).__onInAppPiPAudioRouteChanged?.(route);
         } catch {}
       }
 
@@ -3083,7 +3084,7 @@ export async function reapplyPersistedCallAudioRoute(
           route = coercePersistedRouteForAvailableDevices(route);
           setPersistedCallAudioRoute(route);
           try {
-            const params = (global as any).__currentCallPiPParamsRef?.current;
+            const params = (global as CallAudioGlobals).__currentCallPiPParamsRef?.current;
             if (params && typeof params === 'object') {
               params.audioOutputRoute = route;
             }
@@ -3107,9 +3108,9 @@ export async function reapplyPersistedCallAudioRoute(
       if (skipHeavyNative) {
         if (isExternalHeadsetRoute(route)) {
           try {
-            (InCallManager as any).setForceSpeakerphoneOn?.(false);
+            InCallManager.setForceSpeakerphoneOn?.(false);
             InCallManager.setSpeakerphoneOn(false);
-            await (InCallManager as any).chooseAudioRoute?.(route);
+            await InCallManager.chooseAudioRoute?.(route);
           } catch {}
         }
         return;
@@ -3217,7 +3218,7 @@ export function scheduleReapplyPersistedCallAudioRoute(
 /** In-app PiP: сохранить earpiece / speaker / BT / провод при reapply. */
 export function shouldPreserveCallAudioRouteInInAppPiP(): boolean {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     if (g.__pipVisibleRef?.current !== true) return false;
     if (g.__pipInSystemModeRef?.current === true) return false;
     return true;
@@ -3230,7 +3231,7 @@ export function shouldPreserveCallAudioRouteInInAppPiP(): boolean {
 export function restoreCallMediaAfterSystemPiPReturn(opts?: {
   preferAudioOnly?: boolean;
 }): boolean {
-  const g = global as any;
+  const g = global as CallAudioGlobals;
   const token = Number(g.__systemPiPReturnTokenRef?.current || 0);
   g.__systemPiPReturnMediaRestoreTokenRef =
     g.__systemPiPReturnMediaRestoreTokenRef || { current: 0 };
@@ -3269,7 +3270,7 @@ export function restoreCallMediaAfterSystemPiPReturn(opts?: {
 export function restoreCallAudioForInAppPiPPlaque(reason: string): void {
   if (!isOngoingCallSession()) return;
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     const plaqueActive =
       g.__pipVisibleRef?.current === true ||
       g.__pipSuspendedForSystemPiPRef?.current === true ||
@@ -3282,12 +3283,12 @@ export function restoreCallAudioForInAppPiPPlaque(reason: string): void {
   const route = readInAppPiPAudioOutputRoute();
   pinBuiltinRouteForPiPContext(route);
   try {
-    const params = (global as any).__currentCallPiPParamsRef?.current;
+    const params = (global as CallAudioGlobals).__currentCallPiPParamsRef?.current;
     if (params && typeof params === 'object') {
       params.audioOutputRoute = route;
     }
-    (global as any).__lastAppliedCallAudioRouteRef = { current: route };
-    (global as any).__onInAppPiPAudioRouteChanged?.(route);
+    (global as CallAudioGlobals).__lastAppliedCallAudioRouteRef = { current: route };
+    (global as CallAudioGlobals).__onInAppPiPAudioRouteChanged?.(route);
   } catch {}
   const media = resolveActiveCallInCallMedia();
   const external = isExternalHeadsetRoute(route);
@@ -3302,7 +3303,7 @@ export function restoreCallAudioForInAppPiPPlaque(reason: string): void {
   });
   restoreOngoingCallMicrophoneIfEnabled();
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     if (typeof g.__syncDirectCallAudioRouteRef?.current === 'function') {
       const external = isExternalHeadsetRoute(route);
       if (!external) {

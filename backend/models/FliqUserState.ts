@@ -1,6 +1,6 @@
 // models/FliqUserState.ts
 // Что пользователь уже видел в Fliq и какие темы досматривает — по этому строится выдача.
-import { Schema, model, models, type Types } from 'mongoose';
+import { Schema, model, models, type Model, type Types } from 'mongoose';
 
 interface IFliqUserState {
   user: Types.ObjectId;
@@ -20,4 +20,4 @@ const FliqUserStateSchema = new Schema<IFliqUserState>(
   { timestamps: true, collection: 'fliq_user_state', minimize: false }
 );
 
-export default (models.FliqUserState as any) || model<IFliqUserState>('FliqUserState', FliqUserStateSchema);
+export default (models.FliqUserState as Model<IFliqUserState> | undefined) || model<IFliqUserState>('FliqUserState', FliqUserStateSchema);

@@ -21,6 +21,7 @@ export function ChatRoundButton({
   onPress,
   hitSlop,
   accessibilityLabel,
+  testID,
   backgroundColor,
   pressedBackgroundColor,
   marginRight = 0,
@@ -29,6 +30,7 @@ export function ChatRoundButton({
   onPress: () => void;
   hitSlop?: number | Insets;
   accessibilityLabel: string;
+  testID?: string;
   backgroundColor: string;
   pressedBackgroundColor: string;
   marginRight?: number;
@@ -63,6 +65,7 @@ export function ChatRoundButton({
       hitSlop={hitSlop}
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel}
+      testID={testID}
       style={{
         width: CHAT_ROUND_BUTTON_SIZE,
         height: CHAT_ROUND_BUTTON_SIZE,

@@ -1,3 +1,4 @@
+import type { AppRuntimeGlobals } from '../../utils/appRuntimeTypes';
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AppState,
@@ -447,7 +448,7 @@ function HomeWelcomeCallsViewInner({
         return;
       }
       const appActive = AppState.currentState === 'active';
-      const incomingUi = !!(global as any).__incomingCallScreenVisibleRef?.current;
+      const incomingUi = !!(global as AppRuntimeGlobals).__incomingCallScreenVisibleRef?.current;
       // В фоне suppress только пока висит Incoming; иначе пуши должны идти.
       const viewing = appActive || incomingUi;
       setWelcomeCallsMissedFilterActive(viewing);

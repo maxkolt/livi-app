@@ -5,7 +5,7 @@
   <string name="incoming_call_unknown">Seseorang menelepon</string>
   <string name="incoming_call_accept">Terima</string>
   <string name="incoming_call_decline">Tolak</string>
-  <string name="outgoing_call_title">Panggilan video keluar</string>
+  <string name="outgoing_call_title">Panggilan keluar</string>
   <string name="outgoing_call_subtitle">Memanggil…</string>
   <string name="outgoing_call_subtitle_base">Memanggil</string>
   <string name="outgoing_call_subtitle_base_audio">Memanggil</string>

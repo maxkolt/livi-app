@@ -1,3 +1,4 @@
+import type { AuthenticatedRequest, ErrorDetails } from '../utils/runtimeTypes';
 import { Router, type Request } from 'express';
 import { checkRateLimit } from '../utils/rateLimit';
 import vision from '@google-cloud/vision';
@@ -43,9 +44,9 @@ type ModerationProviderFailure = {
  * application bugs and should be reported as 503, so clients can back off while
  * keeping the video fail-closed.
  */
-export function classifyModerationProviderFailure(error: any): ModerationProviderFailure | null {
-  const code = Number(error?.code);
-  const message = String(error?.message || error || '').toLowerCase();
+export function classifyModerationProviderFailure(error: unknown): ModerationProviderFailure | null {
+  const code = Number((error as ErrorDetails)?.code);
+  const message = String((error as ErrorDetails)?.message || error || '').toLowerCase();
 
   if (code === 7 && message.includes('billing')) {
     return { publicError: 'moderation_provider_billing_required', retryAfterSeconds: 300 };
@@ -100,7 +101,7 @@ router.post('/moderate', async (req, res) => {
     return res.status(404).json({ ok: false, error: 'moderation_disabled' });
   }
 
-  const userId = String((req as any).userId || '');
+  const userId = String((req as AuthenticatedRequest).userId || '');
   const rl = userId
     ? await checkRateLimit(`moderate:user:${userId}`, MODERATE_PER_USER_PER_MIN, 60_000)
     : await checkRateLimit(`moderate:ip:${clientIp(req)}`, MODERATE_PER_IP_PER_MIN, 60_000);
@@ -212,11 +213,11 @@ router.post('/moderate', async (req, res) => {
         useRacyLikely,
       },
     });
-  } catch (e: any) {
+  } catch (e: unknown) {
     const providerFailure = classifyModerationProviderFailure(e);
     logger.error('[Moderation] Request failed', {
-      error: e?.message || String(e),
-      providerCode: e?.code ?? null,
+      error: (e as ErrorDetails)?.message || String(e),
+      providerCode: (e as ErrorDetails)?.code ?? null,
       providerFailure: providerFailure?.publicError ?? null,
     });
     if (providerFailure) {

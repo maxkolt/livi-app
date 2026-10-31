@@ -1,3 +1,4 @@
+import type { CallAudioGlobals } from './callStateTypes';
 import { NativeModules, Platform } from 'react-native';
 import { logger } from './logger';
 import {
@@ -5,7 +6,7 @@ import {
   normalizeInCallRoute,
 } from '../components/VideoChat/hooks/audioRouteTypes';
 
-type NativeCallAudioProbe = {
+export type NativeCallAudioProbe = {
   available: InCallAudioRoute[];
   preferred: InCallAudioRoute | null;
   /** Native: SCO/audio actually on — не idle paired в кейсе. */
@@ -31,13 +32,13 @@ function parseProbe(raw: unknown): NativeCallAudioProbe {
 
 export function setCallBluetoothHeadsetConnectedCache(connected: boolean): void {
   try {
-    (global as any).__callBtHeadsetConnectedRef = { current: connected };
+    (global as CallAudioGlobals).__callBtHeadsetConnectedRef = { current: connected };
   } catch {}
 }
 
 function readCallBluetoothHeadsetConnectedCache(): boolean | null {
   try {
-    const v = (global as any).__callBtHeadsetConnectedRef?.current;
+    const v = (global as CallAudioGlobals).__callBtHeadsetConnectedRef?.current;
     return typeof v === 'boolean' ? v : null;
   } catch {
     return null;
@@ -130,7 +131,7 @@ export async function probeNativeCallAudioRoutes(): Promise<NativeCallAudioProbe
       // OS на EAR/SPEAKER без native call-audio — buds в кейсе / sticky HFP.
       // Если native SCO уже up (одел) — не обнулять active из‑за запаздывающего preferred.
       const wearSticky =
-        Date.now() < Number((global as any).__btWearStickyUntilRef?.current || 0);
+        Date.now() < Number((global as CallAudioGlobals).__btWearStickyUntilRef?.current || 0);
       if (
         !wearSticky &&
         !nativeActive &&
@@ -162,10 +163,10 @@ export async function probeNativeCallAudioRoutes(): Promise<NativeCallAudioProbe
       parsed.btCallAudioActive ||
       parsed.btPairedAvailable
     ) {
-      const prev = (global as any).__nativeCallAudioProbeLogSigRef?.current as string | undefined;
+      const prev = (global as CallAudioGlobals).__nativeCallAudioProbeLogSigRef?.current as string | undefined;
       const sig = `${parsed.available.join(',')}|${parsed.preferred || ''}|a=${parsed.btCallAudioActive ? 1 : 0}|p=${parsed.btPairedAvailable ? 1 : 0}`;
       if (prev !== sig) {
-        (global as any).__nativeCallAudioProbeLogSigRef = { current: sig };
+        (global as CallAudioGlobals).__nativeCallAudioProbeLogSigRef = { current: sig };
         logger.info('[nativeCallAudioProbe] BT call-audio state', parsed);
       }
     }
@@ -175,14 +176,14 @@ export async function probeNativeCallAudioRoutes(): Promise<NativeCallAudioProbe
   }
 }
 
-export function mergeNativeProbeIntoGlobal(probe: NativeCallAudioProbe): InCallAudioRoute[] {
-  const g = global as any;
+export function mergeNativeProbeIntoGlobal(probe: NativeCallAudioProbe): string[] {
+  const g = global as CallAudioGlobals;
   // Paired в кейсе НЕ держим BLUETOOTH в available для cycle — только call-audio / preferred.
   g.__nativeCallAudioRoutesRef = { current: probe };
-  const prev: InCallAudioRoute[] = Array.isArray(g.__inCallAvailableAudioRoutesRef?.current)
+  const prev: string[] = Array.isArray(g.__inCallAvailableAudioRoutesRef?.current)
     ? g.__inCallAvailableAudioRoutesRef.current
     : [];
-  const probeHas = new Set(probe.available);
+  const probeHas = new Set<string>(probe.available);
   const btLiveForCycle =
     probe.btCallAudioActive === true || probe.preferred === 'BLUETOOTH';
   const merged = Array.from(
@@ -209,7 +210,7 @@ export function isBluetoothPreferredForAutoRoute(
   try {
     const p =
       probe ||
-      ((global as any).__nativeCallAudioRoutesRef?.current as NativeCallAudioProbe | undefined);
+      ((global as CallAudioGlobals).__nativeCallAudioRoutesRef?.current as NativeCallAudioProbe | undefined);
     if (!p) return false;
     if (p.btCallAudioActive === true && p.preferred === 'BLUETOOTH') {
       return isBluetoothHeadsetActiveForCall();
@@ -233,7 +234,7 @@ export function isBluetoothAvailableForAutoRoute(
   try {
     const p =
       probe ||
-      ((global as any).__nativeCallAudioRoutesRef?.current as NativeCallAudioProbe | undefined);
+      ((global as CallAudioGlobals).__nativeCallAudioRoutesRef?.current as NativeCallAudioProbe | undefined);
     if (!p) return false;
     if (p.preferred === 'EARPIECE' || p.preferred === 'SPEAKER_PHONE') return false;
     if (p.btCallAudioActive === true) return true;
@@ -250,7 +251,7 @@ export function isBluetoothPairedAvailable(
   try {
     const p =
       probe ||
-      ((global as any).__nativeCallAudioRoutesRef?.current as NativeCallAudioProbe | undefined);
+      ((global as CallAudioGlobals).__nativeCallAudioRoutesRef?.current as NativeCallAudioProbe | undefined);
     if (!p) return false;
     if (p.btPairedAvailable === true) return true;
     if (p.btCallAudioActive === true) return true;
@@ -262,9 +263,9 @@ export function isBluetoothPairedAvailable(
 
 export function readNativeProbedExternalRoute(): InCallAudioRoute | null {
   try {
-    const probe = (global as any).__nativeCallAudioRoutesRef?.current as NativeCallAudioProbe | undefined;
+    const probe = (global as CallAudioGlobals).__nativeCallAudioRoutesRef?.current as NativeCallAudioProbe | undefined;
     if (!probe) return null;
-    const icmRaw = (global as any).__inCallAvailableAudioRoutesRef?.current;
+    const icmRaw = (global as CallAudioGlobals).__inCallAvailableAudioRoutesRef?.current;
     const icm = Array.isArray(icmRaw) ? icmRaw.map((s: unknown) => String(s)) : [];
     const listedOrProbeOnly = (route: InCallAudioRoute) =>
       !icm.length || icm.includes(route) || probe.available.includes(route);
@@ -291,7 +292,7 @@ export function readNativeProbedExternalRoute(): InCallAudioRoute | null {
 
 export function isCallAudioBootstrapPending(): boolean {
   try {
-    return (global as any).__callAudioBootstrapPendingRef?.current !== false;
+    return (global as CallAudioGlobals).__callAudioBootstrapPendingRef?.current !== false;
   } catch {
     return false;
   }
@@ -299,7 +300,7 @@ export function isCallAudioBootstrapPending(): boolean {
 
 export function setCallAudioBootstrapPending(pending: boolean): void {
   try {
-    (global as any).__callAudioBootstrapPendingRef = { current: pending };
+    (global as CallAudioGlobals).__callAudioBootstrapPendingRef = { current: pending };
   } catch {}
 }
 
@@ -307,7 +308,7 @@ export function setCallAudioBootstrapPending(pending: boolean): void {
 export function clearNativeProbeBluetoothRoute(): void {
   setCallBluetoothHeadsetConnectedCache(false);
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     const probe = g.__nativeCallAudioRoutesRef?.current as NativeCallAudioProbe | undefined;
     if (probe) {
       // В кейсе paired может остаться — из cycle/available BT убираем всегда.
@@ -337,7 +338,7 @@ export function clearNativeProbeBluetoothRoute(): void {
 /** После отключения провода — убрать stale WIRED_HEADSET из probe/available. */
 export function clearNativeProbeWiredHeadsetRoute(): void {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     const probe = g.__nativeCallAudioRoutesRef?.current as NativeCallAudioProbe | undefined;
     if (probe) {
       g.__nativeCallAudioRoutesRef = {

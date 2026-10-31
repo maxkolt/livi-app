@@ -1,0 +1,20 @@
+# Открываем чат внутри карточки нужного друга и проверяем адресата до отправки или звонка.
+appId: com.kolt12max.livi.dev
+---
+- launchApp
+- extendedWaitUntil:
+    visible: "Find a partner|Найти собеседника"
+    timeout: 30000
+- tapOn:
+    text: "Friends|Друзья"
+    waitToSettleTimeoutMs: 1000
+- tapOn:
+    id: "friend-row-chat"
+    childOf:
+      id: "friend-card-.*"
+      containsDescendants:
+        - text: "${FRIEND}"
+    waitToSettleTimeoutMs: 1000
+- assertVisible:
+    id: "chat-peer-name"
+    text: "${FRIEND}"

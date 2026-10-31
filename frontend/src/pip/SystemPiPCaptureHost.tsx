@@ -1,3 +1,5 @@
+import type { MediaStream } from '@livekit/react-native-webrtc';
+import type { CallAudioGlobals } from '../../utils/callStateTypes';
 // App-level capture layer for Android system PiP when VideoCall is not mounted (Home / in-app PiP).
 import React, { useCallback, useEffect } from 'react';
 import { NativeModules, Platform, StyleSheet, View } from 'react-native';
@@ -5,6 +7,13 @@ import { RTCView } from '@livekit/react-native-webrtc';
 import { usePiP } from './PiPContext';
 import { mediaStreamHasLiveVideo } from './pipPlaceholderOnly';
 import { PIP_ROUNDED, PIP_TEXTURE_VIEW } from '../../components/VideoChat/shared/pipTextureView';
+
+// Keep the existing capture configuration, including legacy pass-through props.
+type CaptureVideoProps = React.ComponentProps<typeof RTCView> & {
+  stream: MediaStream | null;
+  useTextureView: boolean;
+  zOrderMediaOverlay: boolean;
+};
 
 /**
  * Product:
@@ -27,7 +36,7 @@ export default function SystemPiPCaptureHost() {
 
   let captureBlocked = false;
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     const now = Date.now();
     const inSys =
       inSystemPiPMode === true ||
@@ -60,12 +69,12 @@ export default function SystemPiPCaptureHost() {
     systemPiPCaptureActive &&
     (pendingSystemPiP || inSystemPiPMode);
 
-  let sessionRemoteStream: unknown = null;
+  let sessionRemoteStream: MediaStream | null = null;
   let sessionRemoteCamOn: boolean | undefined;
-  let sessionLocalStream: unknown = null;
+  let sessionLocalStream: MediaStream | null = null;
   let sessionLocalCamOn: boolean | undefined;
   try {
-    const session = (global as any).__webrtcSessionRef?.current;
+    const session = (global as CallAudioGlobals).__webrtcSessionRef?.current;
     sessionRemoteStream =
       typeof session?.getRemoteStream === 'function' ? session.getRemoteStream() : null;
     if (typeof session?.getRemoteCamEnabled === 'function') {
@@ -102,12 +111,12 @@ export default function SystemPiPCaptureHost() {
     hasLiveLocal;
 
   const remoteStreamUrl =
-    effectiveRemoteStream && typeof (effectiveRemoteStream as any).toURL === 'function'
-      ? (effectiveRemoteStream as any).toURL()
+    effectiveRemoteStream && typeof effectiveRemoteStream.toURL === 'function'
+      ? effectiveRemoteStream.toURL()
       : null;
   const localStreamUrl =
-    effectiveLocalStream && typeof (effectiveLocalStream as any).toURL === 'function'
-      ? (effectiveLocalStream as any).toURL()
+    effectiveLocalStream && typeof effectiveLocalStream.toURL === 'function'
+      ? effectiveLocalStream.toURL()
       : null;
 
   const canBindRemote = peerCamOn && !!effectiveRemoteStream && !!remoteStreamUrl && hasLiveRemote;
@@ -140,7 +149,7 @@ export default function SystemPiPCaptureHost() {
     if (mediaStreamHasLiveVideo(effectiveRemoteStream)) return;
     const arm = () => {
       try {
-        const session = (global as any).__webrtcSessionRef?.current;
+        const session = (global as CallAudioGlobals).__webrtcSessionRef?.current;
         if (!session) return;
         const stream =
           typeof session.getRemoteStream === 'function' ? session.getRemoteStream() : null;
@@ -170,14 +179,14 @@ export default function SystemPiPCaptureHost() {
     >
       {mainIsRemote ? (
         <RTCView
-          key={`sys-pip-remote-${pipRemoteViewKey}-${remoteStreamVersion}-${(effectiveRemoteStream as any)?.id || 's'}`}
+          key={`sys-pip-remote-${pipRemoteViewKey}-${remoteStreamVersion}-${effectiveRemoteStream?.id || 's'}`}
           {...({
             stream: effectiveRemoteStream,
             streamURL: remoteStreamUrl,
             useTextureView: true,
             renderToHardwareTextureAndroid: true,
             zOrderMediaOverlay: false,
-          } as any)}
+          } satisfies CaptureVideoProps)}
           style={styles.video}
           objectFit="cover"
           mirror={false}
@@ -186,14 +195,14 @@ export default function SystemPiPCaptureHost() {
       ) : null}
       {mainIsLocalOnly ? (
         <RTCView
-          key={`sys-pip-local-main-${(effectiveLocalStream as any)?.id || 'l'}`}
+          key={`sys-pip-local-main-${effectiveLocalStream?.id || 'l'}`}
           {...({
             stream: effectiveLocalStream,
             streamURL: localStreamUrl,
             useTextureView: true,
             renderToHardwareTextureAndroid: true,
             zOrderMediaOverlay: false,
-          } as any)}
+          } satisfies CaptureVideoProps)}
           style={styles.video}
           objectFit="cover"
           mirror={true}
@@ -203,7 +212,7 @@ export default function SystemPiPCaptureHost() {
       {showLocalInset ? (
         <View style={[styles.localInset, PIP_ROUNDED && styles.localInsetRounded]} collapsable={false}>
           <RTCView
-            key={`sys-pip-local-inset-${(effectiveLocalStream as any)?.id || 'l'}`}
+            key={`sys-pip-local-inset-${effectiveLocalStream?.id || 'l'}`}
             {...({
               stream: effectiveLocalStream,
               streamURL: localStreamUrl,
@@ -211,7 +220,7 @@ export default function SystemPiPCaptureHost() {
               textureView: PIP_TEXTURE_VIEW,
               renderToHardwareTextureAndroid: true,
               zOrderMediaOverlay: true,
-            } as any)}
+            } satisfies CaptureVideoProps)}
             style={[styles.localInsetVideo, PIP_TEXTURE_VIEW && styles.localInsetVideoTransparent]}
             objectFit="cover"
             mirror={true}

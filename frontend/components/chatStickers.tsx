@@ -58,9 +58,9 @@ export function getBuiltInSticker(stickerId?: string): BuiltInSticker | undefine
   return id ? STICKERS_BY_ID[id] : undefined;
 }
 
-export function getStickerFallbackText(sticker?: Partial<BuiltInSticker> | null, langCode?: string): string {
+export function getStickerFallbackText(sticker?: (Partial<BuiltInSticker> & { stickerLabel?: string }) | null, langCode?: string): string {
   const lang = (langCode || 'ru') as Lang;
-  const label = String(sticker?.label || (sticker as any)?.stickerLabel || '').trim();
+  const label = String(sticker?.label || (sticker)?.stickerLabel || '').trim();
   if (label) return t('chatStickerFallbackNamed', lang).replace('{label}', label);
   return t('chatStickerFallback', lang);
 }

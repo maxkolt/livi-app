@@ -1,3 +1,4 @@
+import type { ErrorDetails } from '../utils/runtimeTypes';
 import type { Server } from 'socket.io';
 import type { AuthedSocket } from './types';
 import { logger } from '../utils/logger';
@@ -93,8 +94,8 @@ function scheduleDelayedRetry(io: Server, sid: string, delayMs: number, reason: 
     matchInProgress.add(id);
     logger.debug('Running delayed match retry', { socketId: id, reason, delayMs });
     void tryMatch(io, target)
-      .catch((e: any) => {
-        logger.error('Delayed tryMatch failed', { socketId: id, reason, error: e?.message || e });
+      .catch((e: unknown) => {
+        logger.error('Delayed tryMatch failed', { socketId: id, reason, error: (e as ErrorDetails)?.message || e });
       })
       .finally(() => {
         matchInProgress.delete(id);
@@ -496,7 +497,7 @@ export async function tryMatch(io: Server, socket: AuthedSocket): Promise<boolea
     livekitTokenA = tokenA;
     livekitTokenB = tokenB;
     logger.debug('LiveKit tokens created', { roomName: livekitRoomName, identityA: livekitIdentityA, identityB: livekitIdentityB });
-  } catch (e: any) {
+  } catch (e: unknown) {
     logger.error('Failed to create LiveKit tokens:', e);
   }
   
@@ -531,8 +532,8 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
     if (matchInProgress.has(target.id)) return;
     matchInProgress.add(target.id);
     void tryMatch(io, target)
-      .catch((e: any) => {
-        logger.error('tryMatch failed', { socketId: target.id, error: e?.message || e });
+      .catch((e: unknown) => {
+        logger.error('tryMatch failed', { socketId: target.id, error: (e as ErrorDetails)?.message || e });
       })
       .finally(() => {
         matchInProgress.delete(target.id);
@@ -831,7 +832,7 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
         done({ ok: false, reason: 'partner_not_connected' });
         return;
       }
-      const actualPartnerUserId = String((partner as any)?.data?.userId || '').trim();
+      const actualPartnerUserId = String((partner)?.data?.userId || '').trim();
       if (!actualPartnerUserId) {
         done({ ok: false, reason: 'partner_user_unknown' });
         return;
@@ -839,7 +840,7 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
       if (reported !== actualPartnerUserId) {
         logger.warn('[Moderation] Reject reportPartner due to mismatched partnerUserId', {
           reporterSocketId: socket.id,
-          reporterUserId: (socket as any)?.data?.userId,
+          reporterUserId: (socket)?.data?.userId,
           providedPartnerUserId: reported,
           actualPartnerUserId,
           partnerSocketId: partnerSid,
@@ -848,7 +849,7 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
         return;
       }
 
-      const reporterId = (socket as any)?.data?.userId;
+      const reporterId = (socket)?.data?.userId;
       logger.info('[Moderation] partner reported for violation, banning userId', {
         reporterUserId: reporterId,
         reportedUserId: actualPartnerUserId,
@@ -878,7 +879,7 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
         } catch {}
       };
       try {
-        const reporterId = String((socket as any)?.data?.userId || '').trim();
+        const reporterId = String((socket)?.data?.userId || '').trim();
         const reported = String(partnerUserId || '').trim();
         if (!reporterId) return done({ ok: false, reason: 'unauthorized' });
         if (!reported) return done({ ok: false, reason: 'no_partner_user_id' });
@@ -890,7 +891,7 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
         // Жаловаться можно только на текущего собеседника этой пары.
         const partnerSid = socket.data.partnerSid as string | undefined;
         const partner = partnerSid ? safeGet(io, partnerSid) : undefined;
-        const actualPartnerUserId = String((partner as any)?.data?.userId || '').trim();
+        const actualPartnerUserId = String((partner)?.data?.userId || '').trim();
         if (!partnerSid || !partner || !actualPartnerUserId) {
           return done({ ok: false, reason: 'partner_not_connected' });
         }
@@ -928,8 +929,8 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
         }
         // Без бана пару разводит обычный next() репортёра — как при «Далее».
         done({ ok: true, banned: shouldBan });
-      } catch (e: any) {
-        logger.warn('[Report] user:reportPartner failed', { error: e?.message || String(e) });
+      } catch (e: unknown) {
+        logger.warn('[Report] user:reportPartner failed', { error: (e as ErrorDetails)?.message || String(e) });
         done({ ok: false, reason: 'server_error' });
       }
     },
@@ -975,8 +976,8 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
           let token: string | null = null;
           try {
             token = await createToken({ identity: userId, roomName });
-          } catch (e: any) {
-            logger.error('[Match] resume: failed to create LiveKit token', { error: e?.message || String(e) });
+          } catch (e: unknown) {
+            logger.error('[Match] resume: failed to create LiveKit token', { error: (e as ErrorDetails)?.message || String(e) });
           }
           logger.info('[Match] resume on a live socket — LiveKit rejoin', { userId, socketId: socket.id });
           return done({
@@ -1041,8 +1042,8 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
         let livekitToken: string | null = null;
         try {
           livekitToken = await createToken({ identity: userId, roomName: livekitRoomName });
-        } catch (e: any) {
-          logger.error('[Match] resume: failed to create LiveKit token', { error: e?.message || String(e) });
+        } catch (e: unknown) {
+          logger.error('[Match] resume: failed to create LiveKit token', { error: (e as ErrorDetails)?.message || String(e) });
         }
 
         partner.emit('random:partnerResumed', { id: socket.id });
@@ -1061,8 +1062,8 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
           livekitRoomName,
           livekitUrl: getLiveKitUrl() || null,
         });
-      } catch (e: any) {
-        logger.warn('[Match] random:resume failed', { error: e?.message || String(e) });
+      } catch (e: unknown) {
+        logger.warn('[Match] random:resume failed', { error: (e as ErrorDetails)?.message || String(e) });
         done({ ok: false, reason: 'server_error' });
       }
     },
@@ -1220,8 +1221,8 @@ export function startQueueCleanup(io: Server): void {
           pairs: staleStates.cleanedPairs
         });
       }
-    } catch (e: any) {
-      logger.error('Queue cleanup error', { error: e?.message || e });
+    } catch (e: unknown) {
+      logger.error('Queue cleanup error', { error: (e as ErrorDetails)?.message || e });
     }
   }, QUEUE_CLEANUP_INTERVAL_MS);
 

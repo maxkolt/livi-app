@@ -65,7 +65,9 @@ export function useSkiaFirstPaint(onPainted?: () => void) {
       else setTimeout(attempt, RETRY_MS);
     };
     const canvas = canvasRef.current;
-    const api = (globalThis as any).SkiaViewApi;
+    const api = (globalThis as typeof globalThis & {
+      SkiaViewApi?: Pick<import('@shopify/react-native-skia/lib/typescript/src/views/types').ISkiaViewApi, 'size'>;
+    }).SkiaViewApi;
     if (!canvas || !paintViewRef.current || !api?.size) {
       retry();
       return;

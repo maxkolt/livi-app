@@ -1,17 +1,19 @@
+import type { ChatMessage } from './chatMessageTypes';
+
 /** Selection-mode state for ChatScreen (message + album tiles). */
 
 import React from "react";
 import {
   allLoadedSelectionKeys,
   initialSelectionKeysForMessage,
+  reconcileSelectionKeys,
   selectionHasAnyForwardable,
-  selectionHasAnyValidKey,
   toggleAlbumTileSelection,
   toggleMessageSelection,
 } from "./chatSelection";
 
 type Options = {
-  messages: any[];
+  messages: ChatMessage[];
   /** Called when entering selection (e.g. close actions sheet). */
   onEnter?: () => void;
 };
@@ -44,7 +46,7 @@ export function useChatSelection({ messages, onEnter }: Options) {
   );
 
   const enterSelectionModeFromMessage = React.useCallback(
-    (m: any, focusIndex: number | null = null) => {
+    (m: ChatMessage, focusIndex: number | null = null) => {
       setSelectionMode(true);
       setSelectedMessageIds(initialSelectionKeysForMessage(m, focusIndex));
       try {
@@ -53,6 +55,14 @@ export function useChatSelection({ messages, onEnter }: Options) {
     },
     [onEnter],
   );
+
+  const enterEmptySelectionMode = React.useCallback(() => {
+    setSelectionMode(true);
+    setSelectedMessageIds(new Set());
+    try {
+      onEnter?.();
+    } catch {}
+  }, [onEnter]);
 
   const selectAllLoaded = React.useCallback(() => {
     const allKeys = allLoadedSelectionKeys(messages);
@@ -67,12 +77,14 @@ export function useChatSelection({ messages, onEnter }: Options) {
 
   React.useEffect(() => {
     if (!selectionMode) return;
-    if (selectedMessageIds.size === 0) {
+    // Пустой режим нужен при входе через меню чата: сначала показываем боксы,
+    // затем пользователь отмечает нужные сообщения.
+    if (selectedMessageIds.size === 0) return;
+    const next = reconcileSelectionKeys(selectedMessageIds, messages);
+    if (next.size === 0) {
       exitSelectionMode();
-      return;
-    }
-    if (!selectionHasAnyValidKey(selectedMessageIds, messages)) {
-      exitSelectionMode();
+    } else if (next !== selectedMessageIds) {
+      setSelectedMessageIds(next);
     }
   }, [selectionMode, selectedMessageIds, messages, exitSelectionMode]);
 
@@ -93,6 +105,7 @@ export function useChatSelection({ messages, onEnter }: Options) {
     exitSelectionMode,
     toggleSelectMessage,
     toggleSelectAlbumTile,
+    enterEmptySelectionMode,
     enterSelectionModeFromMessage,
     selectAllLoaded,
   };

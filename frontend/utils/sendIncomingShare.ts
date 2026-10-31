@@ -59,7 +59,7 @@ export async function sendIncomingShareToFriend(peerId: string, items: IncomingS
           type: 'text',
         },
       });
-      const result: any = await sendMessage({
+      const result = await sendMessage({
         to: peerId,
         text,
         type: 'text',
@@ -92,7 +92,7 @@ export async function sendIncomingShareToFriend(peerId: string, items: IncomingS
       });
       const upload = await uploadMediaToServer(localUri, 'image', undefined, currentUserId, peerId);
       if (!upload.success || !upload.url) continue;
-      const result: any = await sendMessage({
+      const result = await sendMessage({
         to: peerId,
         type: 'image',
         uri: upload.url,
@@ -122,7 +122,7 @@ export async function sendIncomingShareToFriend(peerId: string, items: IncomingS
           timestamp: new Date(),
         },
       });
-      const result: any = await sendMessage({
+      const result = await sendMessage({
         to: peerId,
         type: 'audio',
         localUri,
@@ -152,7 +152,7 @@ export async function sendIncomingShareToFriend(peerId: string, items: IncomingS
       });
       const remoteUrl = await uploadRawShareFile(localUri);
       if (!remoteUrl) continue;
-      const result: any = await sendMessage({
+      const result = await sendMessage({
         to: peerId,
         type: 'text',
         text: `${label}\n${remoteUrl}`,

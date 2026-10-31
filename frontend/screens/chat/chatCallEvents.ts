@@ -1,11 +1,12 @@
+import type { ChatMessage } from './chatMessageTypes';
 /**
  * Локальные статусные «облака» звонка в переписке.
  * Появляются только если в момент исходящего/входящего был открыт чат с этим peer.
  * Не уходят на сервер — только AsyncStorage + live UI.
  */
 
-import { getCurrentUserId } from '../../sockets/socket';
-import { globalMessageStorage } from '../../sockets/modules/messages';
+import { getCurrentUserId } from '../../sockets/modules/authState';
+import { globalMessageStorage } from '../../sockets/modules/messageStorage';
 import { shared } from '../../sockets/modules/shared';
 import { emitChatCallStatusMessage } from '../../utils/globalEvents';
 
@@ -24,8 +25,13 @@ type EligibleEntry = {
 const eligibleByPeer = new Map<string, EligibleEntry>();
 const lastAppendAt = new Map<string, number>();
 
+type ChatCallGlobals = {
+  __chatCallBubbleEligibleMap?: Map<string, EligibleEntry>;
+  __currentChatPeerId?: string | null;
+};
+
 function gEligible(): Map<string, EligibleEntry> {
-  const g = global as any;
+  const g = global as typeof global & ChatCallGlobals;
   if (!g.__chatCallBubbleEligibleMap) {
     g.__chatCallBubbleEligibleMap = eligibleByPeer;
   }
@@ -43,7 +49,7 @@ function pruneEligible(now = Date.now()) {
 function isViewingChatWithPeer(peerIdRaw: string): boolean {
   const peerId = String(peerIdRaw || '').trim();
   if (!peerId) return false;
-  return String((global as any).__currentChatPeerId || '').trim() === peerId;
+  return String((global as typeof global & ChatCallGlobals).__currentChatPeerId || '').trim() === peerId;
 }
 
 /**
@@ -106,7 +112,7 @@ export async function appendChatCallStatusIfEligible(
   peerIdRaw: string,
   direction: ChatCallBubbleDirection,
   opts?: { callId?: string; at?: number },
-): Promise<any | null> {
+): Promise<ChatMessage | null> {
   const peerId = String(peerIdRaw || '').trim();
   if (!peerId) return null;
   if (!['outgoing', 'incoming', 'missed', 'cancelled', 'no_answer'].includes(direction)) return null;
@@ -146,7 +152,7 @@ export async function appendChatCallStatusIfEligible(
     const cacheKey = `${me}-${peerId}`;
     const cached = shared.messageCache.get(cacheKey);
     if (cached?.messages) {
-      if (!cached.messages.some((m: any) => String(m?.id || '') === String(message.id))) {
+      if (!cached.messages.some((m) => String(m?.id || '') === String(message.id))) {
         shared.messageCache.set(cacheKey, {
           messages: [...cached.messages, message],
           timestamp: Date.now(),

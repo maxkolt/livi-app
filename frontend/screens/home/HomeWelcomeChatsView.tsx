@@ -1,3 +1,5 @@
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import type { RootStackParamList } from '../../navigation/types';
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AppState,
@@ -114,7 +116,7 @@ type HomeWelcomeChatsViewProps = {
   bottomInset?: number;
   allFriends: Friend[];
   unreadByUser: Record<string, number>;
-  navigation: any;
+  navigation: NativeStackNavigationProp<RootStackParamList, 'Home'>;
   lastChatOpenRef: React.MutableRefObject<{ peerId: string; at: number } | null>;
   prepareFriendRowActionTap: () => void;
   refreshing: boolean;

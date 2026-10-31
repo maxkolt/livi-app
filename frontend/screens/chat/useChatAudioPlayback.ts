@@ -1,14 +1,15 @@
+import type { ChatMessage } from './chatMessageTypes';
 /** Voice message playback + cache warmup for chat. */
 
 import React from "react";
-import { Audio } from "expo-av";
+import { Audio, type AVPlaybackStatusSuccess } from "expo-av";
 import {
   ensureVoiceCachedToLocalFile as ensureVoiceCachedToLocalFileHelper,
 } from "./chatVoiceCache";
 import { claimChatPlayback, releaseChatPlayback } from "./chatPlaybackCoordinator";
 
 type Options = {
-  messages: any[];
+  messages: ChatMessage[];
   resolveMediaUri: (uri?: string) => string;
 };
 
@@ -48,7 +49,7 @@ export function useChatAudioPlayback({ messages, resolveMediaUri }: Options) {
   }, []);
 
   const togglePlayAudioMessage = React.useCallback(
-    async (m: any) => {
+    async (m: ChatMessage) => {
       let playGen = 0;
       try {
         const mid = String(m?.id || "").trim();
@@ -92,7 +93,8 @@ export function useChatAudioPlayback({ messages, resolveMediaUri }: Options) {
           { uri: playUri },
           { shouldPlay: true },
           (status) => {
-            const s: any = status as any;
+            // Failed/unloaded statuses omit these fields. Keep the existing optional reads.
+            const s: Partial<Pick<AVPlaybackStatusSuccess, 'positionMillis' | 'durationMillis' | 'didJustFinish'>> & { isLoaded: boolean } = status;
             if (s && typeof s.positionMillis === "number") {
               setPlayingAudioState((prev) => {
                 if (!prev || prev.id !== mid) return prev;

@@ -1,3 +1,4 @@
+import type { FriendListItem } from '../../../sockets/modules/friends';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   fetchFriends,
@@ -31,7 +32,7 @@ export function useRandomChatFriends({
   showToast,
   L,
 }: Params) {
-  const [friends, setFriends] = useState<any[]>([]);
+  const [friends, setFriends] = useState<FriendListItem[]>([]);
   const [addPending, setAddPending] = useState(false);
   const [addBlocked, setAddBlocked] = useState(false);
   const [friendModalVisible, setFriendModalVisible] = useState(false);
@@ -91,7 +92,7 @@ export function useRandomChatFriends({
   // Прочие события дружбы (зависят от текущего partnerUserId).
   useEffect(() => {
     const offAdded = onFriendAdded?.(({ userId }) => {
-      fetchFriends?.().then((r: any) => setFriends(r?.list || [])).catch(() => {});
+      fetchFriends?.().then((r) => setFriends(r?.list || [])).catch(() => {});
       if (String(userId) === String(partnerUserId)) {
         setAddPending(false);
         setAddBlocked(true);
@@ -101,7 +102,7 @@ export function useRandomChatFriends({
 
     const offAccepted = onFriendAccepted?.(async ({ userId }) => {
       setAddPending(false);
-      fetchFriends?.().then((r: any) => setFriends(r?.list || [])).catch(() => {});
+      fetchFriends?.().then((r) => setFriends(r?.list || [])).catch(() => {});
       if (String(userId) === String(partnerUserId)) {
         showToast(L('friend_added'));
       }
@@ -143,7 +144,7 @@ export function useRandomChatFriends({
 
     setAddPending(true);
     try {
-      const res: any = await requestFriend(partnerUserId);
+      const res = await requestFriend(partnerUserId);
       if (res?.status === 'pending' || res?.ok) {
         showToast(L('friend_request_sent'));
         // Обновляем профиль на сервере
@@ -164,7 +165,7 @@ export function useRandomChatFriends({
       } else if (res?.status === 'already') {
         setAddPending(false);
         setAddBlocked(true);
-        fetchFriends?.().then((r: any) => setFriends(r?.list || [])).catch(() => {});
+        fetchFriends?.().then((r) => setFriends(r?.list || [])).catch(() => {});
         showToast(L('already_friends'));
       } else if (res?.ok === false) {
         setAddPending(false);
@@ -184,7 +185,7 @@ export function useRandomChatFriends({
       setFriendModalVisible(false);
       setIncomingFriendFrom(null);
       setIncomingFriendNick(undefined);
-      fetchFriends?.().then((r: any) => setFriends(r?.list || [])).catch(() => {});
+      fetchFriends?.().then((r) => setFriends(r?.list || [])).catch(() => {});
       // Обновляем профиль на сервере
       try {
         const cached = await loadProfileFromStorage();

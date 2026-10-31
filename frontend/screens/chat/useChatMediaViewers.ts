@@ -1,3 +1,4 @@
+import type { PickedChatImage } from './chatMessageTypes';
 /** Media viewer + compose preview visibility. */
 
 import React from "react";
@@ -14,7 +15,7 @@ export function useChatMediaViewers() {
   const [mediaViewerVisible, setMediaViewerVisible] = React.useState(false);
   const [selectedMedia, setSelectedMedia] = React.useState<ChatSelectedMedia | null>(null);
   const [composeViewerVisible, setComposeViewerVisible] = React.useState(false);
-  const [composeAsset, setComposeAsset] = React.useState<any>(null);
+  const [composeAsset, setComposeAsset] = React.useState<PickedChatImage | null>(null);
 
   const openMediaViewer = React.useCallback((media: ChatSelectedMedia) => {
     setSelectedMedia(media);
@@ -26,7 +27,7 @@ export function useChatMediaViewers() {
     setSelectedMedia(null);
   }, []);
 
-  const openComposeViewer = React.useCallback((asset: any) => {
+  const openComposeViewer = React.useCallback((asset: PickedChatImage) => {
     setComposeAsset(asset);
     setComposeViewerVisible(true);
   }, []);

@@ -1,3 +1,4 @@
+import type { CallAudioGlobals, CallPiPParams } from './callStateTypes';
 import { AppState, NativeModules, Platform } from 'react-native';
 import {
   isInAudioOnlyCallUi,
@@ -29,7 +30,7 @@ import { isFreshDirectCallAudioAcceptCallActive } from './directCallVideoExpandG
  */
 function resolveActiveCallNotificationAudioOnly(): boolean {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     if (g.__stayOnVideoCallUiRef?.current === true) return false;
     if (ongoingCallPrefersVideoMedia()) return false;
     const params = g.__currentCallPiPParamsRef?.current;
@@ -42,7 +43,7 @@ function resolveActiveCallNotificationAudioOnly(): boolean {
 
 function isCallTeardownInProgress(): boolean {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     if (g.__endingCallInProgressRef?.current === true) return true;
     if (g.__callEndedFromPiPNoOpenRef?.current === true) return true;
     if (g.__endingFromPiPButtonRef?.current === true) return true;
@@ -55,7 +56,7 @@ function isCallTeardownInProgress(): boolean {
 
 function getActiveCallIds(): { roomId: string; callId: string } {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     const session = g.__webrtcSessionRef?.current;
     const params = g.__currentCallPiPParamsRef?.current;
     const roomId = String(
@@ -77,7 +78,7 @@ function getActiveCallIds(): { roomId: string; callId: string } {
 
 function shouldBlockActiveCallNotificationStart(): boolean {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     if (g.__endingCallInProgressRef?.current === true) return true;
     if (g.__callEndedFromPiPNoOpenRef?.current === true) return true;
     if (g.__endingFromPiPButtonRef?.current === true) return true;
@@ -93,7 +94,7 @@ function shouldBlockActiveCallNotificationStart(): boolean {
 export function isAndroidLeaveHintHomeTransitionHold(): boolean {
   if (Platform.OS !== 'android') return false;
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     if (g.__leavingVideoCallByHomeRef?.current === true) return true;
     const entryUntil = Number(g.__systemPiPEntryInProgressUntilRef?.current || 0);
     return entryUntil > Date.now();
@@ -112,7 +113,7 @@ export function shouldBlockAndroidLeaveHintDisarm(): boolean {
   if (isAndroidLeaveHintHomeTransitionHold()) return true;
   if (isAndroidActiveCallEligibleForLeaveHint()) return true;
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     const route = readRootCurrentRouteName();
     if (route === 'VideoCall' && g.__videoCallActiveRef?.current !== false) return true;
     if (AppState.currentState === 'background' && g.__videoCallActiveRef?.current !== false) return true;
@@ -223,13 +224,13 @@ export function forceAndroidSystemPiPPeerVideoVisible(): void {
  * Без peerUserId/partnerNick после remount в шапке «—» или пустой ник.
  */
 export function buildVideoCallReturnNavParams(
-  params: Record<string, any> | null | undefined,
+  params: CallPiPParams | null | undefined,
   opts: {
     preferAudioOnlyUi: boolean;
     returnToken: number;
   },
 ): Record<string, unknown> {
-  const g = global as any;
+  const g = global as CallAudioGlobals;
   const navParams =
     params?.navParams && typeof params.navParams === 'object' && !Array.isArray(params.navParams)
       ? (params.navParams as Record<string, unknown>)
@@ -276,7 +277,7 @@ export function primeAndroidCallContextForLeaveHint(opts: {
   const roomId = String(opts.roomId ?? '').trim();
   if (!callId && !roomId) return;
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     g.__videoCallActiveRef = g.__videoCallActiveRef || { current: false };
     g.__videoCallActiveRef.current = true;
     g.__currentCallPiPParamsRef = g.__currentCallPiPParamsRef || { current: null };
@@ -337,7 +338,7 @@ export function syncAndroidSystemPiPNativeFlags(): void {
 export function refreshAndroidActiveCallNotification(): void {
   if (Platform.OS !== 'android') return;
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     if (g.__videoCallActiveRef?.current === false) return;
     const session = g.__webrtcSessionRef?.current;
     if (session && typeof session.isEnded === 'function' && session.isEnded()) return;
@@ -363,7 +364,7 @@ export function stopActiveCallNotification(): void {
 export function isAndroidActiveCallEligibleForLeaveHint(): boolean {
   if (Platform.OS !== 'android') return false;
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     if (g.__endingCallInProgressRef?.current === true) return false;
     if (g.__callEndedFromPiPNoOpenRef?.current === true) return false;
     if (g.__endingFromPiPButtonRef?.current === true) return false;
@@ -376,10 +377,11 @@ export function isAndroidActiveCallEligibleForLeaveHint(): boolean {
     if (!roomId && !callId) return false;
 
     const homeHold = isAndroidLeaveHintHomeTransitionHold();
+    // Helpers above may update the live ref after the initial teardown check.
     const onVideoCallRoute =
-      readRootCurrentRouteName() === 'VideoCall' && g.__videoCallActiveRef?.current !== false;
+      readRootCurrentRouteName() === 'VideoCall' && (g.__videoCallActiveRef?.current as boolean | undefined) !== false;
     const inBackgroundWithLiveCall =
-      AppState.currentState === 'background' && g.__videoCallActiveRef?.current !== false;
+      AppState.currentState === 'background' && (g.__videoCallActiveRef?.current as boolean | undefined) !== false;
     const ongoingSession = isOngoingCallSession();
     const inAppPiPVisible = g.__pipVisibleRef?.current === true;
     const incomingTransition = g.__incomingAnswerTransitionRef?.current;
@@ -433,7 +435,7 @@ export function setAndroidSystemPiPLeaveHintEnabled(enabled: boolean): void {
     return;
   }
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     if (g.__leavingVideoCallByHomeRef?.current === true) return;
     const entryUntil = Number(g.__systemPiPEntryInProgressUntilRef?.current || 0);
     if (entryUntil > Date.now()) return;
@@ -446,7 +448,7 @@ export function setAndroidSystemPiPLeaveHintEnabled(enabled: boolean): void {
         applyAndroidLeaveHintNativeFlags(true);
         return;
       }
-      const g = global as any;
+      const g = global as CallAudioGlobals;
       if (g.__leavingVideoCallByHomeRef?.current === true) return;
       const entryUntil = Number(g.__systemPiPEntryInProgressUntilRef?.current || 0);
       if (entryUntil > Date.now()) return;
@@ -493,8 +495,8 @@ export function armAndroidLeaveHintForVideoCallHome(opts?: { allowFromInAppPiP?:
         (() => {
           try {
             const cid = String(
-              (global as any).__activeCallAudioRouteCallIdRef?.current ||
-                (global as any).__currentCallPiPParamsRef?.current?.callId ||
+              (global as CallAudioGlobals).__activeCallAudioRouteCallIdRef?.current ||
+                (global as CallAudioGlobals).__currentCallPiPParamsRef?.current?.callId ||
                 '',
             ).trim();
             return !!cid && isFreshDirectCallAudioAcceptCallActive(cid);
@@ -518,7 +520,7 @@ export function armAndroidLeaveHintForVideoCallHome(opts?: { allowFromInAppPiP?:
         });
       }
     }
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     // Home/фон штатно → system PiP: снять Back-guards и returning с прошлого expand.
     try {
       g.__leavingVideoCallByBackRef = g.__leavingVideoCallByBackRef || { current: false };
@@ -580,7 +582,7 @@ export function armAndroidLeaveHintForVideoCallHome(opts?: { allowFromInAppPiP?:
 export function minimizeAndroidAppToBackground(): boolean {
   if (Platform.OS !== 'android') return false;
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     const ending =
       g.__endingCallInProgressRef?.current === true ||
       g.__callEndedFromPiPNoOpenRef?.current === true ||
@@ -662,7 +664,7 @@ export function reenableAndroidSystemPiPLeaveHintAfterReturn(opts?: {
     if (generation !== reenableAfterReturnGeneration) return;
     try {
       if (!isAndroidActiveCallEligibleForLeaveHint()) return;
-      const g = global as any;
+      const g = global as CallAudioGlobals;
       g.__disableSystemPiPUntilRef = g.__disableSystemPiPUntilRef || { current: 0 };
       if (Number(g.__disableSystemPiPUntilRef.current || 0) > Date.now()) {
         g.__disableSystemPiPUntilRef.current = 0;

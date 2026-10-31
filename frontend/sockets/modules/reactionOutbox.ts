@@ -1,3 +1,4 @@
+import type { MessageMutationResponse } from './outboxTypes';
 // frontend/sockets/modules/reactionOutbox.ts
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { logger } from "../../utils/logger";
@@ -198,18 +199,20 @@ function scheduleRetry(): void {
   }, sec * 1000);
 }
 
-type ReactAttempt = { kind: 'resp'; resp: any; useSocket: boolean } | { kind: 'network'; useSocket: boolean };
+type ReactionResponse = MessageMutationResponse & { reactions?: MessageReaction[] };
+
+type ReactAttempt = { kind: 'resp'; resp: ReactionResponse; useSocket: boolean } | { kind: 'network'; useSocket: boolean };
 
 async function sendReactOnce(payload: Record<string, unknown>, useSocket: boolean): Promise<ReactAttempt> {
   if (useSocket) {
     try {
-      const resp = await emitAck('message:react', payload, REACT_ACK_TIMEOUT_MS, 0);
+      const resp = await emitAck<ReactionResponse>('message:react', payload, REACT_ACK_TIMEOUT_MS, 0);
       if (resp?.error !== 'unauthorized') return { kind: 'resp', resp, useSocket: true };
     } catch {}
     useSocket = false;
   }
   try {
-    const resp = await postApiJson('/api/messages/react', payload, REACT_HTTP_TIMEOUT_MS);
+    const resp = await postApiJson<ReactionResponse>('/api/messages/react', payload, REACT_HTTP_TIMEOUT_MS);
     // Сервер ещё без HTTP-маршрута реакций: ждём сокет, как при обрыве, попытки не тратим.
     if (String(resp?.error || '').startsWith('http_404')) return { kind: 'network', useSocket };
     return { kind: 'resp', resp, useSocket };

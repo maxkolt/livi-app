@@ -1,3 +1,4 @@
+import type { ChatMessage } from './chatMessageTypes';
 /** Build chat bubbles from pending outbox rows (recover after leave without persist). */
 
 import type { MessageOutboxItem } from "../../sockets/modules/outboxTypes";
@@ -5,7 +6,7 @@ import type { MessageOutboxItem } from "../../sockets/modules/outboxTypes";
 export function messageFromPendingOutboxItem(
   item: MessageOutboxItem,
   currentUserId: string,
-): { message: Record<string, unknown>; statusId: string } | null {
+): { message: ChatMessage; statusId: string } | null {
   const payload = item?.payload;
   const peerId = String(payload?.to || "").trim();
   const mid = String(item?.optimisticUiId || payload?.clientMessageId || payload?.clientId || item?.id || "").trim();
@@ -14,7 +15,7 @@ export function messageFromPendingOutboxItem(
   const type = String(payload?.type || "text").trim() || "text";
   const uri = String(payload?.uri || payload?.localUri || "").trim();
   const thumbUri = String(payload?.thumbUri || payload?.localThumbUri || "").trim();
-  const message: Record<string, unknown> = {
+  const message: ChatMessage = {
     id: mid,
     sender: "me",
     from: currentUserId,
@@ -44,10 +45,10 @@ export function messageFromPendingOutboxItem(
 }
 
 export function mergePendingOutboxIntoMessages(
-  messages: any[],
+  messages: ChatMessage[],
   pending: MessageOutboxItem[],
   currentUserId: string,
-): { messages: any[]; sendingIds: string[] } {
+): { messages: ChatMessage[]; sendingIds: string[] } {
   const existing = new Set(messages.map((m) => String(m?.id || "").trim()).filter(Boolean));
   const next = messages.slice();
   const sendingIds: string[] = [];

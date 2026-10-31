@@ -1,0 +1,72 @@
+appId: com.kolt12max.livi.dev
+---
+- assertVisible:
+    id: "chat-input"
+- tapOn: "${MESSAGE}"
+- assertVisible:
+    id: "chat-message-action-forward"
+- assertVisible:
+    id: "chat-message-action-delete"
+- assertVisible:
+    id: "chat-message-action-select"
+- pressKey: BACK
+- doubleTapOn: "${MESSAGE}"
+- assertVisible:
+    id: "chat-reaction-bar"
+- assertNotVisible:
+    id: "chat-message-action-select"
+- pressKey: BACK
+- longPressOn:
+    id: "chat-message-.*"
+    text: "${MESSAGE}.*"
+- assertNotVisible:
+    id: "chat-message-action-select"
+- assertVisible: "Выбрано: 1|Selected: 1"
+- assertVisible:
+    id: "chat-select-checkbox"
+- tapOn:
+    id: "chat-select-checkbox"
+    text: "${SECOND_MESSAGE}"
+- assertVisible: "Выбрано: 2|Selected: 2"
+- longPressOn:
+    id: "chat-message-.*"
+    text: "${SECOND_MESSAGE}.*"
+- assertVisible: "Выбрано: 1|Selected: 1"
+- assertNotVisible:
+    id: "chat-message-action-select"
+- tapOn: "${SECOND_MESSAGE}"
+- assertVisible: "Выбрано: 2|Selected: 2"
+- tapOn:
+    id: "chat-selection-forward"
+- assertVisible: "Переслать…|Forward…"
+- pressKey: BACK
+- assertVisible: "Выбрано: 2|Selected: 2"
+- tapOn:
+    id: "chat-selection-delete"
+- assertVisible: "Удалить сообщения.*|Delete messages.*"
+- pressKey: BACK
+- assertVisible: "Выбрано: 2|Selected: 2"
+- tapOn: "${MESSAGE}"
+- tapOn: "${SECOND_MESSAGE}"
+- assertVisible: "Выбрано: 0|Selected: 0"
+- assertVisible:
+    id: "chat-select-checkbox"
+- tapOn:
+    id: "chat-selection-delete"
+- assertNotVisible: "Удалить сообщения.*|Delete messages.*"
+- tapOn: "${MESSAGE}"
+- assertVisible: "Выбрано: 1|Selected: 1"
+- pressKey: BACK
+- assertNotVisible:
+    id: "chat-select-checkbox"
+- tapOn: "${MESSAGE}"
+- tapOn:
+    id: "chat-message-action-delete"
+- assertVisible: "Удалить сообщение.*|Delete message.*"
+- pressKey: BACK
+- assertVisible: "${MESSAGE}"
+- tapOn: "${MESSAGE}"
+- tapOn:
+    id: "chat-message-action-select"
+- assertVisible: "Выбрано: 1|Selected: 1"
+- pressKey: BACK

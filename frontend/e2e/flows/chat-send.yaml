@@ -1,14 +1,7 @@
 # Чат с другом ${FRIEND}: сообщение ${TEXT} уходит и появляется в ленте, поле очищается.
 appId: com.kolt12max.livi.dev
 ---
-- launchApp
-- extendedWaitUntil:
-    visible: "Find a partner|Найти собеседника"
-    timeout: 30000
-- tapOn: "Friends|Друзья"
-- tapOn:
-    id: "friend-row-chat"
-    rightOf: "${FRIEND}"
+- runFlow: chat-open.yaml
 - tapOn:
     id: "chat-input"
 - inputText: "${TEXT}"

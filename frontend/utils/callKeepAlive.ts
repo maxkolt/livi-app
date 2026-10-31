@@ -25,7 +25,7 @@ type NativeCallKeepAlive = {
 };
 
 const native: NativeCallKeepAlive | null =
-  Platform.OS === 'android' ? ((NativeModules as any).LiviCallKeepAlive as NativeCallKeepAlive | undefined) ?? null : null;
+  Platform.OS === 'android' ? ((NativeModules).LiviCallKeepAlive as NativeCallKeepAlive | undefined) ?? null : null;
 
 /** Режим есть только там, где есть нативный сервис (Android). */
 export const isCallKeepAliveSupported = !!native;

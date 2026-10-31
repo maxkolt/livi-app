@@ -23,6 +23,8 @@ type FliqEvent = {
   shared?: boolean;
 };
 
+type FliqResponse = { ok: boolean; items?: FliqItem[]; error?: string };
+
 async function authHeaders(): Promise<Record<string, string>> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json', ...(await getInstallAuthHeaders()) };
   const userId = getCurrentUserId();
@@ -30,7 +32,7 @@ async function authHeaders(): Promise<Record<string, string>> {
   return headers;
 }
 
-async function request(path: string, init: RequestInit, timeoutMs: number): Promise<any> {
+async function request(path: string, init: RequestInit, timeoutMs: number): Promise<FliqResponse> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -39,7 +41,7 @@ async function request(path: string, init: RequestInit, timeoutMs: number): Prom
       headers: { ...(await authHeaders()), ...(init.headers as Record<string, string> | undefined) },
       signal: controller.signal,
     });
-    const json = await res.json().catch(() => null);
+    const json: FliqResponse | null = await res.json().catch(() => null);
     if (!res.ok) return { ok: false, error: json?.error || `http_${res.status}` };
     return json ?? { ok: false, error: 'bad_json' };
   } finally {
@@ -64,11 +66,11 @@ export async function fetchFliqFeed(opts: {
   try {
     const json = await request(`/api/fliq/feed?${qs}`, { method: 'GET' }, 12_000);
     const items: FliqItem[] = Array.isArray(json?.items)
-      ? json.items.filter((it: any) => it && typeof it.id === 'string')
+      ? json.items.filter((it) => it && typeof it.id === 'string')
       : [];
     return { ok: !!json?.ok, items, error: json?.error };
-  } catch (e: any) {
-    return { ok: false, items: [], error: e?.name === 'AbortError' ? 'timeout' : 'network' };
+  } catch (e) {
+    return { ok: false, items: [], error: (e as { name?: unknown } | null | undefined)?.name === 'AbortError' ? 'timeout' : 'network' };
   }
 }
 

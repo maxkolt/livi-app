@@ -1,3 +1,4 @@
+import type { AppRuntimeGlobals } from '../utils/appRuntimeTypes';
 // screens/HomeScreen.tsx
 import React, { useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef, startTransition } from 'react';
 import {
@@ -24,10 +25,13 @@ import * as Haptics from 'expo-haptics';
 
 import { SafeAreaView, useSafeAreaFrame, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import type { AvatarResult } from '../sockets/modules/profile';
+import type { RootStackParamList } from '../navigation/types';
 import { BlurView } from 'expo-blur';
 import * as ImagePicker from 'expo-image-picker';
 import * as Clipboard from 'expo-clipboard';
-import { PinchGestureHandler, State } from 'react-native-gesture-handler';
+import { PinchGestureHandler, State, type PinchGestureHandlerStateChangeEvent } from 'react-native-gesture-handler';
 import { Ionicons } from '@expo/vector-icons';
 import { Image as ExpoImage } from 'expo-image';
 import { getAvatarImageProps, forceImageRefresh } from '../utils/imageOptimization';
@@ -307,7 +311,7 @@ async function hardLocalReset() {
 const waitSocketConnected = (timeoutMs: number = 1200) =>
   new Promise<void>((resolve) => {
     try {
-      if ((socket as any)?.connected) return resolve();
+      if ((socket)?.connected) return resolve();
       let done = false;
       const on = () => {
         if (done) return;
@@ -330,7 +334,7 @@ const waitSocketConnected = (timeoutMs: number = 1200) =>
   });
 
 /* ================= component ================= */
-type Props = { navigation: any };
+type Props = { navigation: NativeStackNavigationProp<RootStackParamList, 'Home'> };
 
 
 /** При возврате на Home (например из VideoCall по Back → PiP) экран монтируется заново и state сбрасывается — без этого флага снова показывался бы SplashLoader. Запоминаем, что контент уже показывали в этой сессии. */
@@ -485,7 +489,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const welcomeActiveTabRef = useRef<WelcomeTabId>('search');
   welcomeActiveTabRef.current = welcomeActiveTab;
   useLayoutEffect(() => {
-    const g = global as any;
+    const g = global as AppRuntimeGlobals;
     const trace = g.__welcomeTabPerfTrace as
       | {
           id: string;
@@ -936,7 +940,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const avatarModalScale = Animated.multiply(avatarModalBaseScale, avatarModalPinchScale);
   const clampAvatarModal = (v: number, min: number, max: number) => Math.max(min, Math.min(v, max));
   const onAvatarModalPinchEvent = Animated.event([{ nativeEvent: { scale: avatarModalPinchScale } }], { useNativeDriver: false });
-  const onAvatarModalPinchStateChange = useCallback((e: any) => {
+  const onAvatarModalPinchStateChange = useCallback((e: PinchGestureHandlerStateChangeEvent) => {
     if (e.nativeEvent.oldState === State.ACTIVE) {
       const next = clampAvatarModal(avatarModalLastScale.current * e.nativeEvent.scale, 1, 6);
       avatarModalLastScale.current = next;
@@ -954,8 +958,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   /* УДАЛЕНО: устаревшие статусы "Занято" - теперь используется friend.isBusy */
 
   /* ===== Защита от дублирования вызовов ===== */
-  const ensureIdentityRef = useRef<Promise<any> | null>(null);
-  const attachIdentityRef = useRef<Promise<any> | null>(null);
+  const ensureIdentityRef = useRef<Promise<void> | null>(null);
+  const attachIdentityRef = useRef<ReturnType<typeof attachIdentity> | null>(null);
   const lastChatOpenRef = useRef<{ peerId: string; at: number } | null>(null);
   const recentlyEndedCallFriendIdsRef = useRef<Map<string, number>>(new Map());
   const RECENT_CALL_END_UNLOCK_MS = 5000;
@@ -1130,7 +1134,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       navigation?.setParams?.({
         showInviteModal: false,
         inviteCode: undefined,
-      } as any);
+      });
     } catch {}
   }, [navigation]);
   
@@ -1314,7 +1318,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       if (callingVisibleRef.current) return false;
       try {
         if (shouldSkipHomeUiSettle()) return false;
-        const cancelAt = Number((global as any).__lastOutgoingCancelAtRef?.current || 0);
+        const cancelAt = Number((global as AppRuntimeGlobals).__lastOutgoingCancelAtRef?.current || 0);
         if (cancelAt > 0 && Date.now() - cancelAt < 4000) return false;
       } catch {}
       warmWelcomeListShells(reason);
@@ -1402,7 +1406,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
 
   const readOutgoingRedialGraceUntil = () => {
     try {
-      const g = global as any;
+      const g = global as AppRuntimeGlobals;
       g.__outgoingRedialGraceUntilRef = g.__outgoingRedialGraceUntilRef || { current: 0 };
       return Number(g.__outgoingRedialGraceUntilRef.current || 0);
     } catch {
@@ -1411,14 +1415,14 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   };
   const armOutgoingRedialGrace = (ms = 4000) => {
     try {
-      const g = global as any;
+      const g = global as AppRuntimeGlobals;
       g.__outgoingRedialGraceUntilRef = g.__outgoingRedialGraceUntilRef || { current: 0 };
       g.__outgoingRedialGraceUntilRef.current = Date.now() + ms;
     } catch {}
   };
   const clearOutgoingRedialGrace = () => {
     try {
-      const g = global as any;
+      const g = global as AppRuntimeGlobals;
       g.__outgoingRedialGraceUntilRef = g.__outgoingRedialGraceUntilRef || { current: 0 };
       g.__outgoingRedialGraceUntilRef.current = 0;
     } catch {}
@@ -1492,7 +1496,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
 
   const forceResetCallBusyRefs = useCallback((opts?: { skipEndedCallback?: boolean }) => {
     try {
-      const g = global as any;
+      const g = global as AppRuntimeGlobals;
       // Сначала socket/FGS/leaveHint: исходящий video (чат) ставил setActiveVideoCall(true)
       // до accept — без сброса cancel оставлял activeVideoCall+PiP «живыми».
       try {
@@ -1546,7 +1550,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
 
   const teardownOutgoingAttemptSubs = useCallback(() => {
     try {
-      const g = global as any;
+      const g = global as AppRuntimeGlobals;
       const fn = g.__outgoingAttemptTeardownRef?.current;
       if (typeof fn === 'function') {
         fn();
@@ -1588,12 +1592,12 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const clearNativeCanceledOutgoingAttempt = useCallback((source: string) => {
     const canceledByNative =
       typeof global !== 'undefined' &&
-      (global as any).__outgoingCanceledByNativeRef?.current === true;
+      (global as AppRuntimeGlobals).__outgoingCanceledByNativeRef?.current === true;
     if (!canceledByNative || activeOutgoingAttemptRef.current <= 0) return false;
     const resolvedCallId =
       activeOutgoingCallIdRef.current ||
       calling.callId ||
-      String((global as any).__outgoingCallIdRef?.current || '').trim() ||
+      String(global.__outgoingCallIdRef?.current || '').trim() ||
       null;
     // Живой новый dial: не closeOutgoing(stale) с Main churn.
     if (
@@ -1603,12 +1607,12 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       String(resolvedCallId) !== String(activeOutgoingCallIdRef.current)
     ) {
       try {
-        (global as any).__outgoingCanceledByNativeRef.current = false;
+        (global as AppRuntimeGlobals).__outgoingCanceledByNativeRef!.current = false;
       } catch {}
       return false;
     }
     try {
-      (global as any).__outgoingCanceledByNativeRef.current = false;
+      (global as AppRuntimeGlobals).__outgoingCanceledByNativeRef!.current = false;
     } catch {}
     logger.info('[HomeScreen] cleared native-canceled outgoing attempt before retry', {
       source,
@@ -1639,7 +1643,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
 
   const prepareFriendRowActionTap = useCallback(() => {
     try {
-      const g = global as any;
+      const g = global as AppRuntimeGlobals;
       g.__homeRowActionAtRef = g.__homeRowActionAtRef || { current: 0 };
       g.__homeRowActionAtRef.current = Date.now();
       if (g.__videoCallActiveRef?.current === true && !isDirectCallSessionLive(g)) {
@@ -1650,7 +1654,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     clearStaleOutgoingAttemptIfIdle();
     const inRedialGrace = Date.now() < readOutgoingRedialGraceUntil();
     try {
-      const g = global as any;
+      const g = global as AppRuntimeGlobals;
       // После cancel/hangup startCall мог ещё await'иться — не глотать следующий тап.
       // В redial-grace сбрасываем inFlight даже если visible ещё true (stale state/race).
       if (
@@ -1680,30 +1684,30 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
 
   // Ref текущего исходящего callId — fallback для App: при подключении сокета запросить call:accepted, если FCM не сработал (инициатор на нативном экране)
   useEffect(() => {
-    (global as any).__outgoingCallIdRef = (global as any).__outgoingCallIdRef ?? { current: null };
-    (global as any).__outgoingCallPeerUserIdRef = (global as any).__outgoingCallPeerUserIdRef ?? { current: null };
+    global.__outgoingCallIdRef = global.__outgoingCallIdRef ?? { current: null };
+    (global as AppRuntimeGlobals).__outgoingCallPeerUserIdRef = (global as AppRuntimeGlobals).__outgoingCallPeerUserIdRef ?? { current: null };
     // callingVisibleRef сбрасывается на cancel раньше state — иначе stale callId в global
     // ломает redial / «cancel current outgoing» и держит hasActiveLocalCall ~5с.
     const outgoingLive = callingVisibleRef.current && calling.visible;
-    (global as any).__outgoingCallIdRef.current =
+    global.__outgoingCallIdRef.current =
       outgoingLive && calling.callId ? calling.callId : null;
-    (global as any).__outgoingCallPeerUserIdRef.current =
+    (global as AppRuntimeGlobals).__outgoingCallPeerUserIdRef!.current =
       outgoingLive && calling.friend?.id ? String(calling.friend.id) : null;
     try {
-      (global as any).__outgoingCallPeerNickRef =
-        (global as any).__outgoingCallPeerNickRef || { current: null };
+      (global as AppRuntimeGlobals).__outgoingCallPeerNickRef =
+        (global as AppRuntimeGlobals).__outgoingCallPeerNickRef || { current: null };
       const nick = trimNick(calling.friend?.nick || calling.friend?.name || '');
       // Не обнуляем ник при сбросе outgoing (accept): navigate ещё читает ref.
       // Иначе первый кадр VideoCall = «—», потом friends → мерцание ника.
       if (outgoingLive && nick) {
-        (global as any).__outgoingCallPeerNickRef.current = nick;
+        (global as AppRuntimeGlobals).__outgoingCallPeerNickRef!.current = nick;
         try {
           primeCallNick(calling.friend?.id, nick);
         } catch {}
       }
     } catch {}
     if (Platform.OS === 'android' && outgoingLive && calling.callId) {
-      const media = (global as any).__outgoingCallMediaRef?.current;
+      const media = (global as AppRuntimeGlobals).__outgoingCallMediaRef?.current;
       if (media === 'video') {
         const nick = trimNick(calling.friend?.nick || calling.friend?.name || '');
         try {
@@ -1716,14 +1720,14 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       }
     }
     return () => {
-      if ((global as any).__outgoingCallIdRef?.current === calling.callId) {
-        (global as any).__outgoingCallIdRef.current = null;
+      if (global.__outgoingCallIdRef?.current === calling.callId) {
+        (global as AppRuntimeGlobals).__outgoingCallIdRef!.current = null;
       }
       if (
         calling.friend?.id &&
-        (global as any).__outgoingCallPeerUserIdRef?.current === String(calling.friend.id)
+        (global as AppRuntimeGlobals).__outgoingCallPeerUserIdRef?.current === String(calling.friend.id)
       ) {
-        (global as any).__outgoingCallPeerUserIdRef.current = null;
+        (global as AppRuntimeGlobals).__outgoingCallPeerUserIdRef!.current = null;
       }
     };
   }, [calling.visible, calling.callId, calling.friend]);
@@ -1742,7 +1746,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     );
     setSwipeActionsHiddenForCall(null);
     try {
-      const g = global as any;
+      const g = global as AppRuntimeGlobals;
       if (g.__outgoingCallUiActiveRef) g.__outgoingCallUiActiveRef.current = false;
       if (g.__activeOutgoingAttemptRef) g.__activeOutgoingAttemptRef.current = 0;
     } catch {}
@@ -1753,12 +1757,12 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const resetOutgoingAfterExternalClose = useCallback((source = 'external', eventCallId?: string | null) => {
     const closeCallId = String(eventCallId || '').trim();
     const currentCallId = String(
-      activeOutgoingCallIdRef.current || calling.callId || (global as any).__outgoingCallIdRef?.current || '',
+      activeOutgoingCallIdRef.current || calling.callId || global.__outgoingCallIdRef?.current || '',
     ).trim();
     const isActiveOutgoingAttempt = activeOutgoingAttemptRef.current > 0;
     const isNativeCancel = source.includes('native_cancel');
     const isTimeoutPath = source.includes('timeout');
-    const canceledByNative = (global as any).__outgoingCanceledByNativeRef?.current === true;
+    const canceledByNative = (global as AppRuntimeGlobals).__outgoingCanceledByNativeRef?.current === true;
     const resolvedCloseCallId = closeCallId || (isNativeCancel ? currentCallId : '');
     const allowUnscopedActiveReset =
       source === 'call-press-stale-outgoing' ||
@@ -1864,7 +1868,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     // Invalidate in-flight handleStartDirectCall (isCurrentAttempt) even if a new start bumps active again.
     outgoingAttemptSeqRef.current += 1;
     try {
-      const g = global as any;
+      const g = global as AppRuntimeGlobals;
       g.__outgoingStartInFlightRef = g.__outgoingStartInFlightRef || { current: false };
       g.__outgoingStartInFlightRef.current = false;
       outgoingStartGenRef.current += 1;
@@ -1886,7 +1890,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     // Не дать AppState(active) после Outgoing→Main запустить loadFriends и заморозить табы/redial.
     if (isNativeCancel || /cancel/i.test(source)) {
       try {
-        const g = global as any;
+        const g = global as AppRuntimeGlobals;
         g.__lastOutgoingCancelAtRef = g.__lastOutgoingCancelAtRef || { current: 0 };
         g.__lastOutgoingCancelAtRef.current = Date.now();
         logger.info('[welcome-tab] cancel marked', {
@@ -1928,7 +1932,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         .catch(() => {});
     }
     try {
-      const g = global as any;
+      const g = global as AppRuntimeGlobals;
       if (g.__outgoingCanceledByNativeRef) g.__outgoingCanceledByNativeRef.current = false;
       if (g.__outgoingCallIdRef) g.__outgoingCallIdRef.current = null;
       if (g.__outgoingCallPeerUserIdRef) g.__outgoingCallPeerUserIdRef.current = null;
@@ -1938,7 +1942,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     // Важно: ставим ref сразу, чтобы следующий tap не упёрся в stale calling.visible до рендера.
     callingVisibleRef.current = false;
     try {
-      const g = global as any;
+      const g = global as AppRuntimeGlobals;
       if (g.__outgoingCallUiActiveRef) g.__outgoingCallUiActiveRef.current = false;
       if (g.__activeOutgoingAttemptRef) g.__activeOutgoingAttemptRef.current = 0;
     } catch {}
@@ -1955,7 +1959,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         if (id) markRecentlyEndedCallFriend(id);
       });
       logger.info('[welcome-tab] cancel refs-only (no setState)', {
-        sinceCancelMs: Date.now() - Number((global as any).__lastOutgoingCancelAtRef?.current || 0),
+        sinceCancelMs: Date.now() - Number((global as AppRuntimeGlobals).__lastOutgoingCancelAtRef?.current || 0),
         hadCallingUi: shouldClearCallingUi,
         peerId: outgoingPeerId || null,
       });
@@ -2016,7 +2020,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         logger.info('[welcome-tab] callLog finalized', {
           peerId: peerForLog,
           direction: isTimeoutPath ? 'no_answer' : 'cancelled',
-          sinceCancelMs: Date.now() - Number((global as any).__lastOutgoingCancelAtRef?.current || Date.now()),
+          sinceCancelMs: Date.now() - Number((global as AppRuntimeGlobals).__lastOutgoingCancelAtRef?.current || Date.now()),
         });
       } catch {}
       if (cancelCallLogTimerRef.current) {
@@ -2029,11 +2033,11 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
 
   useEffect(() => {
     const off = onCallCanceled?.((d) => {
-      const callerId = String((d as any)?.from || '').trim();
-      const eventCallId = String((d as any)?.callId || '').trim();
+      const callerId = String((d)?.from || '').trim();
+      const eventCallId = String((d)?.callId || '').trim();
       // Echo своего cancel после локального close — UI/callLog уже обработаны.
       try {
-        const at = Number((global as any).__lastOutgoingCancelAtRef?.current || 0);
+        const at = Number((global as AppRuntimeGlobals).__lastOutgoingCancelAtRef?.current || 0);
         if (at > 0 && Date.now() - at < 8000) {
           logger.info('[HomeScreen] onCallCanceled skipped (local cancel settle)', {
             eventCallId: eventCallId || null,
@@ -2118,7 +2122,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
 
   const handleStartDirectCall = useCallback(async (friend: Friend, media: 'audio' | 'video' = 'video') => {
     // Не flush до native UI: setState на входе откладывал displayOutgoing на кадр+.
-    const gStart = global as any;
+    const gStart = global as AppRuntimeGlobals;
     // Активный звонок / in-app|system PiP — не поднимать Outgoing (иначе flash + initiator_busy).
     // Не трогаем обычный cancel→redial: там сессия ещё не live / PiP нет.
     const blockForActiveCall =
@@ -2235,7 +2239,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     try {
     const canceledByNative =
       typeof global !== 'undefined' &&
-      (global as any).__outgoingCanceledByNativeRef?.current === true;
+      (global as AppRuntimeGlobals).__outgoingCanceledByNativeRef?.current === true;
     if (canceledByNative) {
       if (!clearNativeCanceledOutgoingAttempt('handleStartDirectCall')) {
         resetOutgoingAfterExternalClose('video-start-native-flag');
@@ -2269,7 +2273,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         });
         const prevCallId =
           activeOutgoingCallIdRef.current ||
-          String((global as any).__outgoingCallIdRef?.current || '').trim() ||
+          String(global.__outgoingCallIdRef?.current || '').trim() ||
           null;
         // Не close+Main: native_cancel сбросит seq и closeOutgoing(null) убьёт новый Outgoing.
         // Только signaling cancel; displayOutgoingCallImmediate перекроет UI.
@@ -2279,7 +2283,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           });
         }
         try {
-          const g = global as any;
+          const g = global as AppRuntimeGlobals;
           if (g.__outgoingCallIdRef) g.__outgoingCallIdRef.current = null;
         } catch {}
         try {
@@ -2309,7 +2313,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     activeOutgoingAttemptRef.current = attemptId;
     activeOutgoingCallIdRef.current = null;
     try {
-      const g = global as any;
+      const g = global as AppRuntimeGlobals;
       g.__activeOutgoingAttemptRef = g.__activeOutgoingAttemptRef || { current: 0 };
       g.__activeOutgoingAttemptRef.current = attemptId;
       g.__outgoingCallUiActiveRef = g.__outgoingCallUiActiveRef || { current: false };
@@ -2351,24 +2355,24 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         clearHomeUiSettleSkip();
       } catch {}
       try {
-        (global as any).__outgoingCanceledByNativeRef =
-          (global as any).__outgoingCanceledByNativeRef || { current: false };
-        (global as any).__outgoingCanceledByNativeRef.current = false;
+        (global as AppRuntimeGlobals).__outgoingCanceledByNativeRef =
+          (global as AppRuntimeGlobals).__outgoingCanceledByNativeRef || { current: false };
+        (global as AppRuntimeGlobals).__outgoingCanceledByNativeRef!.current = false;
       } catch {}
       try {
-        (global as any).__outgoingCancelAwaitingCallIdRef =
-          (global as any).__outgoingCancelAwaitingCallIdRef || { current: false };
-        (global as any).__outgoingCancelAwaitingCallIdRef.current = false;
+        (global as AppRuntimeGlobals).__outgoingCancelAwaitingCallIdRef =
+          (global as AppRuntimeGlobals).__outgoingCancelAwaitingCallIdRef || { current: false };
+        (global as AppRuntimeGlobals).__outgoingCancelAwaitingCallIdRef!.current = false;
       } catch {}
       const cancelEpochAtStart = outgoingCancelEpochRef.current;
       lastOutgoingPeerIdRef.current = String(friend.id);
       try {
-        (global as any).__outgoingCallMediaRef = { current: media };
+        (global as AppRuntimeGlobals).__outgoingCallMediaRef = { current: media };
       } catch {}
       try {
-        (global as any).__outgoingCallPeerNickRef =
-          (global as any).__outgoingCallPeerNickRef || { current: null };
-        (global as any).__outgoingCallPeerNickRef.current = friendName || null;
+        (global as AppRuntimeGlobals).__outgoingCallPeerNickRef =
+          (global as AppRuntimeGlobals).__outgoingCallPeerNickRef || { current: null };
+        (global as AppRuntimeGlobals).__outgoingCallPeerNickRef!.current = friendName || null;
         if (friendName) {
           try {
             primeCallNick(friend.id, friendName);
@@ -2413,7 +2417,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         if (!isCurrentAttempt()) return;
         if (outgoingCallUserCanceledRef.current) return;
         try {
-          const cancelAt = Number((global as any).__lastOutgoingCancelAtRef?.current || 0);
+          const cancelAt = Number((global as AppRuntimeGlobals).__lastOutgoingCancelAtRef?.current || 0);
           if (cancelAt > 0 && Date.now() - cancelAt < 8000) return;
         } catch {}
         try { warmCallSignaling(); } catch {}
@@ -2441,7 +2445,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         }
         try {
           const orphan = await startCallPromise.catch(() => null);
-          const orphanId = String((orphan as any)?.callId || '').trim();
+          const orphanId = String((orphan)?.callId || '').trim();
           if (orphanId) {
             try { cancelCall(orphanId); } catch {}
           }
@@ -2466,7 +2470,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           safeguardTimer = null;
         }
         try {
-          const g = global as any;
+          const g = global as AppRuntimeGlobals;
           if (g.__outgoingAttemptTeardownRef?.current === removeAllSocketSubs) {
             g.__outgoingAttemptTeardownRef.current = null;
           }
@@ -2474,7 +2478,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       };
 
       try {
-        const g = global as any;
+        const g = global as AppRuntimeGlobals;
         g.__outgoingAttemptTeardownRef = g.__outgoingAttemptTeardownRef || { current: null };
         g.__outgoingAttemptTeardownRef.current = removeAllSocketSubs;
       } catch {}
@@ -2552,7 +2556,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
 
       sub(
         onCallDeclined?.((d) => {
-          const eventCallId = String((d as any)?.callId || '').trim();
+          const eventCallId = String((d)?.callId || '').trim();
           if (!shouldHandleOutgoingEvent('call:declined', eventCallId)) return;
           finishOutgoing(() => {
             disposeDirectCallAudioPrewarm('home:outgoing-declined');
@@ -2583,7 +2587,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
 
       sub(
         onCallTimeout?.((d) => {
-          const eventCallId = String((d as any)?.callId || '').trim();
+          const eventCallId = String((d)?.callId || '').trim();
           if (!shouldHandleOutgoingEvent('call:timeout', eventCallId)) return;
           finishOutgoing(() => {
             disposeDirectCallAudioPrewarm('home:outgoing-timeout');
@@ -2620,11 +2624,11 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
 
       sub(
         onCallCanceled?.((d) => {
-          const eventCallId = String((d as any)?.callId || '').trim();
+          const eventCallId = String((d)?.callId || '').trim();
           if (!shouldHandleOutgoingEvent('call:cancel', eventCallId)) return;
           // После своего X серверный echo не должен снова finishOutgoing + callLog.
           try {
-            const at = Number((global as any).__lastOutgoingCancelAtRef?.current || 0);
+            const at = Number((global as AppRuntimeGlobals).__lastOutgoingCancelAtRef?.current || 0);
             if (at > 0 && Date.now() - at < 8000) {
               logger.info('[HomeScreen] attempt onCallCanceled skipped (local cancel settle)', {
                 eventCallId: eventCallId || null,
@@ -2650,7 +2654,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         }),
       );
 
-      let r: any;
+      let r: Awaited<typeof startCallPromise>;
       try {
         r = await startCallPromise;
       } catch (startErr) {
@@ -2714,12 +2718,12 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       // Cancel мог прийти между isCurrentAttempt и сюда (pending_* → X → late ack).
       // Не notifyOutgoingCallId — иначе native снова поднимает ringback после close.
       const awaitingOrphanCancel =
-        (global as any).__outgoingCancelAwaitingCallIdRef?.current === true;
+        (global as AppRuntimeGlobals).__outgoingCancelAwaitingCallIdRef?.current === true;
       const canceledDuringThisAttempt =
         outgoingCancelEpochRef.current !== cancelEpochAtStart || awaitingOrphanCancel;
       if (awaitingOrphanCancel) {
         try {
-          (global as any).__outgoingCancelAwaitingCallIdRef.current = false;
+          (global as AppRuntimeGlobals).__outgoingCancelAwaitingCallIdRef!.current = false;
         } catch {}
       }
       if (!isCurrentAttempt() || canceledDuringThisAttempt) {
@@ -2748,8 +2752,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
             awaitingOrphanCancel,
           });
           try {
-            (global as any).__outgoingCanceledByNativeRef &&
-              ((global as any).__outgoingCanceledByNativeRef.current = false);
+            (global as AppRuntimeGlobals).__outgoingCanceledByNativeRef &&
+              ((global as AppRuntimeGlobals).__outgoingCanceledByNativeRef!.current = false);
           } catch {}
           try { cancelCall(finishedCallId); } catch {}
           pendingCancelRef.current = false;
@@ -2800,8 +2804,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           } catch {}
         });
       }, OUTGOING_CALL_TIMEOUT_MS);
-    } catch (e: any) {
-      const errCode = String(e?.message ?? e ?? '').trim();
+    } catch (e) {
+      const errCode = String((e as { message?: string } | null)?.message ?? e ?? '').trim();
       logger.warn('[outgoing] handleStartDirectCall failed', { error: errCode, media });
       teardownOutgoingAttemptSubs();
       disposeDirectCallAudioPrewarm('home:outgoing-start-failed');
@@ -2823,8 +2827,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           // (иначе redial сам рвётся / FCM трясёт callee).
           const peerId = String(friend?.id || lastOutgoingPeerIdRef.current || '').trim();
           const staleCallId =
-            String((global as any).__pendingCallAcceptedRef?.current?.callId || '').trim() ||
-            String((global as any).__outgoingCallIdRef?.current || '').trim() ||
+            String((global as AppRuntimeGlobals).__pendingCallAcceptedRef?.current?.callId || '').trim() ||
+            String(global.__outgoingCallIdRef?.current || '').trim() ||
             String(activeOutgoingCallIdRef.current || '').trim() ||
             String(calling.callId || '').trim() ||
             null;
@@ -2840,7 +2844,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       setCalling({ visible: false, friend: null, callId: null });
       const canceledByNative =
         typeof global !== 'undefined' &&
-        (global as any).__outgoingCanceledByNativeRef?.current === true;
+        (global as AppRuntimeGlobals).__outgoingCanceledByNativeRef?.current === true;
       const skipNetworkBanner =
         outgoingCallUserCanceledRef.current ||
         pendingCancelRef.current ||
@@ -2860,7 +2864,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       }
       if (canceledByNative) {
         try {
-          (global as any).__outgoingCanceledByNativeRef.current = false;
+          (global as AppRuntimeGlobals).__outgoingCanceledByNativeRef!.current = false;
         } catch {}
       }
     }
@@ -2898,9 +2902,9 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   useEffect(() => {
     const off = onCallAccepted?.((d) => {
       const callId = String(d?.callId || '').trim();
-      const outgoingId = String((global as any).__outgoingCallIdRef?.current || '').trim();
+      const outgoingId = String(global.__outgoingCallIdRef?.current || '').trim();
       if (outgoingId && outgoingId === callId) return;
-      const fromUserId = String((d as any)?.fromUserId || '').trim();
+      const fromUserId = String((d)?.fromUserId || '').trim();
       const fromRaw = String(d?.from || '').trim();
       // Prefer userId; `from` is often a socket id and would break friends lookup.
       const peerId =
@@ -2927,19 +2931,19 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       
       const promise = (async () => {
         try {
-          const s: any = socket as any;
+          const s = socket;
 
           // ВАЖНО: не отправляем профиль, если пользователя ещё нет
           // Это предотвращает "воскрешение" удалённых данных из черновика
           const currentUserId = getCurrentUserId();
           const hasUser = !!currentUserId;
 
-          let profilePayload: any = {};
+          let profilePayload: { nick?: string; avatar?: string } = {};
 
           if (hasUser && params?.profile) {
             // Только если пользователь уже существует - отправляем профиль
             if ('nick' in params.profile) profilePayload.nick = String(params.profile.nick ?? '');
-            if ('avatar' in params.profile) profilePayload.avatar = String((params.profile as any).avatar ?? '');
+            if ('avatar' in params.profile) profilePayload.avatar = String((params.profile).avatar ?? '');
           } else {
             // Если пользователя нет - отправляем пустой профиль
             profilePayload = {};
@@ -3300,7 +3304,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           await new Promise(r => setTimeout(r, 300));
 
           try {
-            const profileUpdate: any = {};
+            const profileUpdate: { nick?: string } = {};
             if (currentNick) profileUpdate.nick = currentNick;
             // avatarUri будет обработан в handleSaveProfile
             
@@ -3321,7 +3325,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       if (cachedAvatar || draftAvatar) {
         const headerPreview = cachedAvatar || draftAvatar;
         const thumb = toAvatarThumb(headerPreview, 240, 240);
-        if (thumb) try { (ExpoImage as any).prefetch?.(thumb); } catch {}
+        if (thumb) try { (ExpoImage).prefetch?.(thumb); } catch {}
       }
     })();
     
@@ -3384,7 +3388,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       for (let attempt = 1; attempt <= 5; attempt++) {
         try {
           const profileResponse = await getMyProfile();
-          const profileAny: any = profileResponse?.profile ?? null;
+          const profileAny = profileResponse?.profile ?? null;
           const avatarB64 = typeof profileAny?.avatarB64 === 'string' ? String(profileAny.avatarB64) : '';
           const avatarThumbB64 = typeof profileAny?.avatarThumbB64 === 'string' ? String(profileAny.avatarThumbB64) : '';
           const toDataUri = (raw: string) => {
@@ -3394,7 +3398,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           };
           // Проверяем что профиль не пустой (должен быть хотя бы nick или avatar)
           if (profileResponse?.ok && profileResponse.profile) {
-            const profile = profileResponse.profile as any;
+            const profile = profileResponse.profile;
             
             // Обновляем никнейм из backend (если на сервере пусто — не затираем локальный кэш/UI)
             const serverNick = typeof profile.nick === 'string' ? profile.nick.trim() : '';
@@ -3664,7 +3668,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
 
   const syncSelfPresenceOnlineIfIdle = useCallback((reason: string) => {
     try {
-      const g = global as any;
+      const g = global as AppRuntimeGlobals;
       const session = g.__webrtcSessionRef?.current;
       const incomingAnswerTransition = g.__incomingAnswerTransitionRef?.current;
       const incomingAnswerTransitionActive =
@@ -3674,7 +3678,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         !!session &&
         (typeof session.isEnded === 'function'
           ? !session.isEnded()
-          : session?.room?.state !== 'disconnected');
+          : session?.['room']?.state !== 'disconnected');
       const hasAnyCallIds =
         !!g.__currentCallPiPParamsRef?.current?.callId ||
         !!g.__currentCallPiPParamsRef?.current?.roomId ||
@@ -3707,7 +3711,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     if (welcomeActiveTab !== 'friends') return;
     syncSelfPresenceOnlineIfIdle('friends-tab');
     try {
-      const g = global as any;
+      const g = global as AppRuntimeGlobals;
       if (g.__videoCallActiveRef?.current === true && !isDirectCallSessionLive(g)) {
         forceResetCallBusyRefs();
       }
@@ -3760,7 +3764,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       appStateRef.current = state;
       const recentCancelAt = (() => {
         try {
-          return Number((global as any).__lastOutgoingCancelAtRef?.current || 0);
+          return Number((global as AppRuntimeGlobals).__lastOutgoingCancelAtRef?.current || 0);
         } catch {
           return 0;
         }
@@ -3769,7 +3773,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         recentCancelAt > 0 && Date.now() - recentCancelAt < 12000;
       const activeVideoCall = (() => {
         try {
-          const g = global as any;
+          const g = global as AppRuntimeGlobals;
           if (g.__socketActiveVideoCallRef?.current === true) return true;
           const session = g.__webrtcSessionRef?.current;
           if (session && typeof session.isEnded === 'function' && !session.isEnded()) return true;
@@ -3818,7 +3822,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       // Outgoing поверх Main даёт AppState=background, хотя пользователь «в приложении».
       // Если сбросить appIsActive→false, на cancel active→true снова гоняет friendsSurfaceActive.
       try {
-        const g = global as any;
+        const g = global as AppRuntimeGlobals;
         const outgoingCoversMain =
           g.__outgoingCallUiActiveRef?.current === true ||
           g.__outgoingCallScreenVisibleRef?.current === true ||
@@ -3837,7 +3841,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           resumeInteractions.delete(interaction);
           const timer = setTimeout(() => {
             resumeTimers.delete(timer);
-            const rowActionAt = Number((global as any).__homeRowActionAtRef?.current || 0);
+            const rowActionAt = Number((global as AppRuntimeGlobals).__homeRowActionAtRef?.current || 0);
             const sinceRowActionMs = rowActionAt > 0 ? Date.now() - rowActionAt : null;
             // Если пользователь уже открыл чат/звонок, Home не должен начинать тяжёлую
             // синхронизацию под его переходом. Данные догонят socket/focus-обработчики.
@@ -3855,13 +3859,13 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
 
             void (async () => {
               logger.info('[welcome-tab] AppState resume sync start', { state });
-              const activeSession = (global as any).__webrtcSessionRef?.current;
+              const activeSession = (global as AppRuntimeGlobals).__webrtcSessionRef?.current;
               const sessionLive =
                 !!activeSession &&
                 (typeof activeSession.isEnded !== 'function' || !activeSession.isEnded());
               const activeCallId = sessionLive
                 ? String(
-                    (global as any).__activeCallAudioRouteCallIdRef?.current ||
+                    (global as AppRuntimeGlobals).__activeCallAudioRouteCallIdRef?.current ||
                       activeSession?.getCallId?.() ||
                       '',
                   ).trim()
@@ -3869,11 +3873,11 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
               const resumeSpan = callPerfSpan('home_resume_sync', {
                 state,
                 activeCallId: activeCallId || null,
-                activeVideoCall: !!(global as any).__socketActiveVideoCallRef?.current,
+                activeVideoCall: !!(global as AppRuntimeGlobals).__socketActiveVideoCallRef?.current,
                 settleSkip: shouldSkipHomeUiSettle(),
               });
               const abortForForegroundAction = (phase: string): boolean => {
-                const actionAt = Number((global as any).__homeRowActionAtRef?.current || 0);
+                const actionAt = Number((global as AppRuntimeGlobals).__homeRowActionAtRef?.current || 0);
                 const sinceActionMs = actionAt > 0 ? Date.now() - actionAt : null;
                 const shouldAbort =
                   AppState.currentState !== 'active' ||
@@ -3972,7 +3976,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
 
   // Регистрируем колбэк, чтобы при завершении видеозвонка (в т.ч. из PiP) принудительно обновить список друзей — снять бейдж «Занят» и disabled с кнопки.
   useEffect(() => {
-    const g = global as any;
+    const g = global as AppRuntimeGlobals;
     if (!g.__onVideoCallEndedRef) g.__onVideoCallEndedRef = { current: null };
     g.__onVideoCallEndedRef.current = () => {
       const currentPartner = String((g.__videoCallPartnerUserIdRef?.current ?? '') || '').trim();
@@ -3997,7 +4001,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
 
   // Запоминаем последнего партнера активного видеозвонка, чтобы при завершении можно было снять stale busy.
   useEffect(() => {
-    const g = global as any;
+    const g = global as AppRuntimeGlobals;
     const partner = String((g.__videoCallPartnerUserIdRef?.current ?? '') || '').trim();
     const active = g.__videoCallActiveRef?.current === true;
     if (active && partner) {
@@ -4038,7 +4042,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       }
       void loadFriends();
     });
-    const offPresence = onPresenceUpdate?.((data: any) => {
+    const offPresence = onPresenceUpdate?.((data) => {
       // КРИТИЧНО: Защита от некорректных типов данных (Date, null, undefined и т.д.)
       if (!data) return;
       
@@ -4047,9 +4051,9 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         // Формат массива: обновление online статуса
         // КРИТИЧНО: Дополнительная проверка что все элементы массива валидны
         try {
-          const onlineSet = new Set((data || []).map((it: any) => {
+          const onlineSet = new Set((data || []).map((it) => {
             if (it === null || it === undefined) return null;
-            return String(it?._id ?? it);
+            return String((it as { _id?: string } | null)?._id ?? it);
           }).filter((id: string | null): id is string => id !== null));
           
           // Тот же массив, если online ни у кого не поменялся: presence приходит пачками
@@ -4112,7 +4116,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         }
       }
     });
-    const offProfile = onFriendProfile?.(async ({ userId, nick, avatar, avatarVer, avatarThumbB64 }: any) => {
+    const offProfile = onFriendProfile?.(async ({ userId, nick, avatar, avatarVer, avatarThumbB64 }) => {
       // КРИТИЧНО: НЕ трогаем собственный профиль!
       // Обновления friend:profile обновляют ТОЛЬКО список друзей (setFriends),
       // НЕ затрагивая savedNick, nick, savedAvatarUrl, avatarUri
@@ -4236,7 +4240,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         return;
       }
 
-      socket.emit('user.getAvatar', { userId: currentUserId }, async (res: any) => {
+      socket.emit('user.getAvatar', { userId: currentUserId }, async (res: AvatarResult) => {
         if (!cancelled && res?.ok && res.avatarB64) {
           await putFull(currentUserId, res.avatarVer, res.avatarB64);
           setMyFullAvatarUri(res.avatarB64);
@@ -4264,7 +4268,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
 
   /* ===== Обработчик user.avatar для получения своего полного аватара ===== */
   useEffect(() => {
-    const handleMyAvatar = async ({ userId, avatarVer, avatarB64 }: any) => {
+    const handleMyAvatar = async ({ userId, avatarVer, avatarB64 }: { userId: string; avatarVer: number; avatarB64?: string }) => {
       const currentUserId = getCurrentUserId();
       if (!currentUserId || String(userId) !== String(currentUserId)) return;
 
@@ -4312,7 +4316,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
 
   /* ===== Обработчик user.avatarUpdated для мгновенного обновления аватаров друзей ===== */
   useEffect(() => {
-    const handleAvatarUpdated = async ({ userId, avatarVer, avatarThumbB64 }: any) => {
+    const handleAvatarUpdated = async ({ userId, avatarVer, avatarThumbB64 }: { userId: string; avatarVer: number; avatarThumbB64?: string }) => {
       // КРИТИЧНО: НЕ обновляем собственный профиль через это событие
       // Событие user.avatarUpdated предназначено для ДРУЗЕЙ
       const currentUserId = getCurrentUserId();
@@ -4505,7 +4509,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
               resolve(value);
             };
             const timer = setTimeout(() => finish({ ok: false, error: 'upload_timeout' }), 15000);
-            socket.emit('user.uploadAvatar', { base64 }, (ack: any) => {
+            socket.emit('user.uploadAvatar', { base64 }, (ack: { ok: boolean; avatarVer?: number; error?: string } | null) => {
               clearTimeout(timer);
               finish(ack || { ok: false, error: 'no_response' });
             });
@@ -4563,13 +4567,13 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           // UI автоматически переключится на myFullAvatarUri когда он загрузится
           setSavedAvatarUrl('');
           finalAvatarUrl = ''; // Аватар теперь хранится как data URI в БД
-        } catch (e: any) {
+        } catch (e) {
           // Молчать тут нельзя: раньше ошибка уходила только в console.error,
           // локальный превью оставался на экране, и пользователь был уверен,
           // что аватар сохранён. На следующем запуске ответ профиля возвращал
           // прежний аватар — со стороны это выглядело как самопроизвольная
           // подмена, хотя новый просто никогда не доезжал до сервера.
-          logger.warn('[handleSaveProfile] Avatar upload failed', { error: e?.message });
+          logger.warn('[handleSaveProfile] Avatar upload failed', { error: (e as { message?: string } | null)?.message });
           await ensureMinSpinner();
           setSaving(false);
           showAppAlert(t('errorTitle', lang), t('avatarUploadFailed', lang));
@@ -4606,11 +4610,11 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         try {
           // Добавляем таймаут для всей операции
           const updatePromise = updateProfile(patch);
-          const timeoutPromise = new Promise((_, reject) => 
+          const timeoutPromise = new Promise<never>((_, reject) =>
             setTimeout(() => reject(new Error('Server timeout')), 8000)
           );
           
-          const result = await Promise.race([updatePromise, timeoutPromise]) as any;
+          const result = await Promise.race([updatePromise, timeoutPromise]);
           
           if (result?.ok) {
             pendingAttachRef.current = patch;
@@ -4637,7 +4641,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
 
       // Префетч для быстрого отображения
       if (finalAvatarUrl) {
-        try { (ExpoImage as any).prefetch?.(toAvatarThumb(finalAvatarUrl, 240, 240)); } catch {}
+        try { (ExpoImage).prefetch?.(toAvatarThumb(finalAvatarUrl, 240, 240)); } catch {}
       }
 
       shouldToast = true;
@@ -4683,7 +4687,7 @@ const handleClearNick = useCallback(async () => {
           }, 10_000);
 
           try {
-            socket.emit('user.deleteAvatar', {}, (ack: any) => {
+            socket.emit('user.deleteAvatar', {}, (ack: { ok: boolean; error?: string } | null) => {
               clearTimeout(timeout);
               resolve(ack || { ok: false, error: 'no_response' });
             });
@@ -4703,7 +4707,7 @@ const handleClearNick = useCallback(async () => {
             headers,
           });
           const text = await r.text();
-          let payload: any = {};
+          let payload: { ok?: boolean; error?: string } = {};
           try { payload = text ? JSON.parse(text) : {}; } catch {}
           if (r.ok && payload?.ok) return { ok: true };
           return { ok: false, error: String(payload?.error || `http_${r.status}`) };
@@ -4713,7 +4717,7 @@ const handleClearNick = useCallback(async () => {
       };
 
       let result: { ok: boolean; error?: string } = { ok: false, error: 'unknown' };
-      if ((socket as any)?.connected) {
+      if ((socket)?.connected) {
         result = await deleteViaSocket();
       }
       if (!result.ok) {
@@ -4744,7 +4748,7 @@ const handleClearNick = useCallback(async () => {
       await saveProfileToStorage({ nick: nick || '', avatar: '' });
       await saveDraftProfile({ nick: nick || '', avatar: '' });
 
-    } catch (e: any) {
+    } catch (e) {
       console.error('[handleDeleteAvatar] Error:', e);
       showAppAlert(t('errorTitle', lang), t('avatarDeleteFailed', lang));
     }
@@ -4779,7 +4783,7 @@ const handleClearNick = useCallback(async () => {
           const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], allowsEditing: true, aspect: [1, 1], quality: 0.9 });
           if (!res.canceled) {
             const a = res.assets?.[0];
-            localUri = await normalizeLocalImageUri(a?.uri ?? undefined, (a as any)?.assetId ?? null);
+            localUri = await normalizeLocalImageUri(a?.uri ?? undefined, (a)?.assetId ?? null);
           }
         } else if (pendingPicker === 'camera') {
           let cam = await ImagePicker.getCameraPermissionsAsync();
@@ -4789,7 +4793,7 @@ const handleClearNick = useCallback(async () => {
           const res = await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], allowsEditing: true, aspect: [1, 1], quality: 0.9 });
           if (!res.canceled) {
             const a = res.assets?.[0];
-            localUri = await normalizeLocalImageUri(a?.uri ?? undefined, (a as any)?.assetId ?? null);
+            localUri = await normalizeLocalImageUri(a?.uri ?? undefined, (a)?.assetId ?? null);
           }
         }
 
@@ -4867,23 +4871,23 @@ const handleClearNick = useCallback(async () => {
     const me = toAvatarThumb(savedAvatarUrl || avatarUri, 240, 240);
     if (me) urls.push(me);
     for (const f of friends) if (f.avatar) urls.push(toAvatarThumb(f.avatar, 96, 96));
-    urls.forEach((u) => (ExpoImage as any).prefetch?.(u));
+    urls.forEach((u) => (ExpoImage).prefetch?.(u));
   }, [savedAvatarUrl, avatarUri, friends, avatarRefreshKey]);
 
   /* wipe account */
   const wipeAccountOnServer = useCallback(async (id: string) => {
     const res = await new Promise<{ ok: boolean; error?: string }>((resolve, reject) => {
-      const s: any = socket as any;
+      const s = socket;
       if (!s) return resolve({ ok: false, error: 'no socket' });
       if (typeof s.timeout === 'function') {
-        s.timeout(10000).emit('identity:wipeMe', { installId: id }, (err: any, r: any) => {
+        s.timeout(10000).emit('identity:wipeMe', { installId: id }, (err: Error | null, r: { ok: boolean; error?: string }) => {
           if (err) return reject(err);
           resolve(r);
         });
       } else {
         let done = false;
         const t = setTimeout(() => { if (!done) { done = true; reject(new Error('ack timeout')); } }, 10000);
-        s.emit('identity:wipeMe', { installId: id }, (r: any) => { if (done) return; clearTimeout(t); done = true; resolve(r); });
+        s.emit('identity:wipeMe', { installId: id }, (r: { ok: boolean; error?: string }) => { if (done) return; clearTimeout(t); done = true; resolve(r); });
       }
     });
     if (!res?.ok) throw new Error(res?.error || 'wipe failed');
@@ -4896,7 +4900,7 @@ const handleClearNick = useCallback(async () => {
     setInitialized(false); // Сбрасываем флаг инициализации
 
     try {
-      if (!(socket as any)?.connected) {
+      if (!(socket)?.connected) {
         // Раньше здесь был молчаливый выход: пользователь подтверждал удаление, ничего не
         // происходило и он не получал никакого объяснения. Удаление требует сервера — говорим прямо.
         setWiping(false);
@@ -4951,13 +4955,13 @@ const handleClearNick = useCallback(async () => {
       // Это предотвращает сброс флагов после установки
       setProfileKey(prev => prev + 1);
 
-    } catch (e: any) {
+    } catch (e) {
       // При ошибке также устанавливаем флаги, чтобы не зависнуть на SplashLoader
       setProfileLoaded(true);
       setDataLoaded(true);
       // И обязательно сообщаем: молча проглоченная ошибка выглядит как «кнопка не работает»,
       // а данные при этом могут быть уже удалены на сервере или ещё нет — пользователь должен знать.
-      const reason = String(e?.message || '').trim();
+      const reason = String((e as { message?: string } | null)?.message || '').trim();
       logger.warn('[handleWipeAccount] failed', { reason });
       showAppAlert(
         t('errorTitle', lang),
@@ -4985,7 +4989,7 @@ const handleClearNick = useCallback(async () => {
     (friend: Friend) => {
       const friendIdStr = String(friend.id);
       if (swipeActionsHiddenForCall === friendIdStr) return true;
-      const g = global as any;
+      const g = global as AppRuntimeGlobals;
       const videoCallPartner = g.__videoCallPartnerUserIdRef?.current;
       if (
         isDirectCallSessionLive(g) &&
@@ -5041,7 +5045,7 @@ const handleClearNick = useCallback(async () => {
         const res = await removeFriend(peerId);
         if (!res?.ok) throw new Error(res?.error || 'remove failed');
         return true;
-      } catch (e: any) {
+      } catch (e) {
         setFriends(prevFriends);
         return false;
       }
@@ -5186,17 +5190,17 @@ const handleClearNick = useCallback(async () => {
 
   // Авто-открытие welcome-вкладок по route params (тап по уведомлению). Legacy menu не открываем.
   useEffect(() => {
-    const ended = (route as any)?.params?.callEnded;
-    const cancelled = (route as any)?.params?.callCancelled;
-    const openFriendsMenu = (route as any)?.params?.openFriendsMenu;
-    const openFriendsTab = (route as any)?.params?.openFriendsTab;
-    const openWelcomeCalls = (route as any)?.params?.openWelcomeCalls;
-    const openWelcomeCallsMissed = (route as any)?.params?.openWelcomeCallsMissed;
-    const openWelcomeChat = (route as any)?.params?.openWelcomeChat;
-    const openWelcomeChatUnread = (route as any)?.params?.openWelcomeChatUnread;
-    const openWelcomeProfile = (route as any)?.params?.openWelcomeProfile;
-    const openFriendRequestsParam = !!(route as any)?.params?.openFriendRequests;
-    const pushMessageFrom = String((route as any)?.params?.pushMessageFrom || '').trim();
+    const ended = (route)?.params?.callEnded;
+    const cancelled = (route)?.params?.callCancelled;
+    const openFriendsMenu = (route)?.params?.openFriendsMenu;
+    const openFriendsTab = (route)?.params?.openFriendsTab;
+    const openWelcomeCalls = (route)?.params?.openWelcomeCalls;
+    const openWelcomeCallsMissed = (route)?.params?.openWelcomeCallsMissed;
+    const openWelcomeChat = (route)?.params?.openWelcomeChat;
+    const openWelcomeChatUnread = (route)?.params?.openWelcomeChatUnread;
+    const openWelcomeProfile = (route)?.params?.openWelcomeProfile;
+    const openFriendRequestsParam = !!(route)?.params?.openFriendRequests;
+    const pushMessageFrom = String((route)?.params?.pushMessageFrom || '').trim();
 
     // Legacy openFriendsMenu → welcome Calls (старое меню больше не показываем).
     const wantCalls = !!(openWelcomeCalls || openFriendsMenu);
@@ -5226,7 +5230,7 @@ const handleClearNick = useCallback(async () => {
         const peer = friends.find((f) => String(f.id) === pushMessageFrom);
         const peerName = (peer?.name && peer.name.trim()) || peer?.nick || '—';
         try {
-          (navigation as any).navigate('Chat', {
+          (navigation).navigate('Chat', {
             peerId: pushMessageFrom,
             peerName,
             peerAvatarVer: peer?.avatarVer || 0,
@@ -5313,7 +5317,7 @@ const handleClearNick = useCallback(async () => {
     };
 
     socket.on('call:busy', onBusy);
-    return () => { socket.off('call:busy', onBusy as any); };
+    return () => { socket.off('call:busy', onBusy); };
   }, [calling.callId, lang]);
 
   // Старый обработчик удален - используем новую систему статусов
@@ -5329,18 +5333,18 @@ const handleClearNick = useCallback(async () => {
     // Ref: после cancel visible в state ещё true ~1.8с, но табы/поиск не должны быть «в звонке».
     callingVisibleRef.current ||
     incomingCallScreen.visible ||
-    (global as any).__videoCallActiveRef?.current === true ||
-    isDirectCallSessionLive(global as any);
+    global.__videoCallActiveRef?.current === true ||
+    isDirectCallSessionLive(global as AppRuntimeGlobals);
   /** Блок нового вызова из Друзей/Звонков (без outgoing dialing — redial не ломаем). */
   const callActionsLocked =
     pip.visible ||
     pip.inSystemPiPMode ||
     pip.pendingSystemPiP ||
     incomingCallScreen.visible ||
-    isDirectCallSessionLive(global as any);
+    isDirectCallSessionLive(global as AppRuntimeGlobals);
   const handleWelcomeTabPress = useCallback(
     (tabId: WelcomeTabId, pressMeta?: WelcomeTabPressMeta) => {
-      const g = global as any;
+      const g = global as AppRuntimeGlobals;
       const cancelAt = Number(g.__lastOutgoingCancelAtRef?.current || 0);
       const t0 = Date.now();
       const perfStartedAt = navigationPerfNow();
@@ -5482,13 +5486,13 @@ const handleClearNick = useCallback(async () => {
   const handleStartSearch = useCallback(() => {
     const now = Date.now();
     try {
-      const g = global as any;
+      const g = global as AppRuntimeGlobals;
       g.__homeRowActionAtRef = g.__homeRowActionAtRef || { current: 0 };
       g.__homeRowActionAtRef.current = now;
     } catch {}
     if (now < searchNavLockUntilRef.current) {
       try {
-        const g = global as any;
+        const g = global as AppRuntimeGlobals;
         const t0 = Number(g.__searchNavT0 || now);
         logger.info('[search-nav] home.handleStartSearch.skipped', {
           elapsedMs: now - t0,
@@ -5500,7 +5504,7 @@ const handleClearNick = useCallback(async () => {
     // Блок повторного navigate на время fade (иначе 2-й вызов перезапускает анимацию).
     searchNavLockUntilRef.current = now + 700;
     try {
-      const g = global as any;
+      const g = global as AppRuntimeGlobals;
       const t0 = Number(g.__searchNavT0 || now);
       g.__searchNavT0 = t0;
       const steps = Array.isArray(g.__searchNavSteps) ? g.__searchNavSteps : [];
@@ -5514,7 +5518,7 @@ const handleClearNick = useCallback(async () => {
     navigation.navigate('RandomChat', { returnTo: { name: 'Home' } });
     try {
       const after = Date.now();
-      const g = global as any;
+      const g = global as AppRuntimeGlobals;
       const t0 = Number(g.__searchNavT0 || after);
       logger.info('[search-nav] home.handleStartSearch.navigateReturned', {
         elapsedMs: after - t0,

@@ -1,3 +1,5 @@
+import type { CallAudioGlobals, CallPiPNavigationParams, CallPiPShowParams } from '../../utils/callStateTypes';
+import type { MediaStream } from '@livekit/react-native-webrtc';
 // src/pip/PiPContext.tsx
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { PropsWithChildren } from 'react';
@@ -85,11 +87,11 @@ import {
 } from '../../utils/systemPiPHomeTrace';
 import { mergeActiveVideoCallParams } from '../../utils/appNavigationGuard';
 
-type MediaStreamLike = any; // из @livekit/react-native-webrtc
+type MediaStreamLike = MediaStream;
 
 function readAvailableAudioDeviceListFromGlobal(): string[] {
   try {
-    const av = (global as any).__inCallAvailableAudioRoutesRef?.current;
+    const av = (global as CallAudioGlobals).__inCallAvailableAudioRoutesRef?.current;
     return Array.isArray(av) ? av.map((s: unknown) => String(s)) : [];
   } catch {
     return [];
@@ -99,7 +101,7 @@ function readAvailableAudioDeviceListFromGlobal(): string[] {
 function readNativePreferredExternalRoute(): InCallAudioRoute | null {
   try {
     const preferred = normalizeInCallRoute(
-      (global as any).__nativeCallAudioRoutesRef?.current?.preferred || '',
+      (global as CallAudioGlobals).__nativeCallAudioRoutesRef?.current?.preferred || '',
     );
     return preferred && isExternalHeadsetRoute(preferred) ? preferred : null;
   } catch {
@@ -126,7 +128,7 @@ function resolvePiPExternalAudioRoute(hint?: InCallAudioRoute | string | null): 
 
 function shouldSkipSuppressOverlayWhenLeavingSystemPiP(): boolean {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     if (g.__restoringInAppPiPFromSystemRef?.current === true) return true;
     if (g.__pipSuspendedForSystemPiPRef?.current === true) return true;
     if (g.__systemPiPNeedsInAppRestoreRef?.current === true) return true;
@@ -140,7 +142,7 @@ function shouldSkipSuppressOverlayWhenLeavingSystemPiP(): boolean {
 /** Скрыть in-app оверлей на время system PiP без hidePiP — visible остаётся true для мгновенного возврата плашки. */
 function suspendInAppOverlayForSystemPiPEnter(): void {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     if (g.__pipVisibleRef?.current !== true) return;
     g.__pipSuspendedForSystemPiPRef = g.__pipSuspendedForSystemPiPRef || { current: false };
     g.__pipSuspendedForSystemPiPRef.current = true;
@@ -153,7 +155,7 @@ function suspendInAppOverlayForSystemPiPEnter(): void {
 
 function clearInAppPiPSystemSuspendFlags(): void {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     if (g.__pipSuspendedForSystemPiPRef) g.__pipSuspendedForSystemPiPRef.current = false;
     if (g.__restoringInAppPiPFromSystemRef) g.__restoringInAppPiPFromSystemRef.current = false;
     try {
@@ -164,7 +166,7 @@ function clearInAppPiPSystemSuspendFlags(): void {
 
 function clearSystemPiPNeedsInAppRestore(): void {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     if (g.__systemPiPNeedsInAppRestoreRef) g.__systemPiPNeedsInAppRestoreRef.current = false;
   } catch (_) {}
 }
@@ -176,13 +178,13 @@ function clearSystemPiPNeedsInAppRestore(): void {
  */
 export function isPipOverlayVisibleSync(): boolean {
   try {
-    return (global as any).__pipVisibleRef?.current === true;
+    return global.__pipVisibleRef?.current === true;
   } catch {
     return false;
   }
 }
 
-type PiPState = {
+export type PiPState = {
   visible: boolean;
   callId: string | null;
   roomId: string | null;
@@ -205,29 +207,10 @@ type PiPState = {
   pipPos: { x: number; y: number };
 
   // для возврата
-  lastNavParams?: any;
+  lastNavParams?: CallPiPNavigationParams;
 
   // Управление
-  showPiP: (params: {
-    callId: string;
-    roomId: string;
-    partnerName?: string;
-    partnerAvatarUrl?: string;
-    localStream?: MediaStreamLike | null;
-    remoteStream?: MediaStreamLike | null;
-    localCamOn?: boolean;
-    remoteCamOn?: boolean;
-    muteLocal?: boolean;
-    muteRemote?: boolean;
-    navParams?: any; // ← кто нас вызвал (для корректного возврата)
-    /**
-     * When true, delays making overlay visible by a couple frames.
-     * Used on Android BackHandler to avoid PiP flashing before navigation.
-     */
-    deferVisible?: boolean;
-    fromAudioOnlyUi?: boolean;
-    audioOutputRoute?: import('../../components/VideoChat/hooks/audioRouteTypes').InCallAudioRoute;
-  }) => void;
+  showPiP: (params: CallPiPShowParams) => void;
 
   hidePiP: () => void;
   updatePiPPosition: (x: number, y: number) => void;
@@ -319,7 +302,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
   const [pipPos, setPipPos] = useState({ x: 12, y: 120 });
 
   // для возврата
-  const [lastNavParams, setLastNavParams] = useState<any>(undefined);
+  const [lastNavParams, setLastNavParams] = useState<CallPiPNavigationParams | undefined>(undefined);
 
   /** Рендер видео в PiP включаем с задержкой, чтобы не было двух RTCView одновременно. */
   const [allowVideoRender, setAllowVideoRender] = useState(false);
@@ -347,17 +330,17 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
 
   const resolveStablePiPIds = useCallback((): { callId: string | null; roomId: string | null } => {
     try {
-      const g = global as any;
+      const g = global as CallAudioGlobals;
       const paramsRef = g.__currentCallPiPParamsRef?.current;
       const lastCtx = g.__pipLastContextRef?.current;
       const session = g.__webrtcSessionRef?.current;
       const sessionCallId =
-        session && typeof (session as any).getCallId === 'function'
-          ? (session as any).getCallId()
+        session && typeof session.getCallId === 'function'
+          ? session.getCallId()
           : null;
       const sessionRoomId =
-        session && typeof (session as any).getRoomId === 'function'
-          ? (session as any).getRoomId()
+        session && typeof session.getRoomId === 'function'
+          ? session.getRoomId()
           : null;
       const cid = String(callIdRef.current || paramsRef?.callId || lastCtx?.callId || sessionCallId || '').trim();
       const rid = String(roomIdRef.current || paramsRef?.roomId || lastCtx?.roomId || sessionRoomId || '').trim();
@@ -411,7 +394,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       // а сам visible при deferVisible включается позже (через rAF). В этот промежуток мы НЕ должны
       // сбрасывать allowVideoRender=false — иначе in-app PiP всегда "мигнёт" плейсхолдером.
       const preparing =
-        (global as any).__pipVisibleRef?.current === true;
+        global.__pipVisibleRef?.current === true;
       if (!preparing) {
         setAllowVideoRender(false);
       }
@@ -482,14 +465,14 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     const emitter = new NativeEventEmitter(NativeModules.LiviAppModule);
     const sub = emitter.addListener('SystemPiPModeChanged', (payload: { isInPiP?: boolean }) => {
       const inPiP = !!payload?.isInPiP;
-      const traceId = (global as any).__activeHomePiPTraceIdRef?.current as string | null;
+      const traceId = (global as CallAudioGlobals).__activeHomePiPTraceIdRef?.current as string | null;
       logHomePiPTrace('js_mode_changed', { traceId: traceId ?? undefined, inPiP });
       noteHomePiPModeChanged(traceId, inPiP);
       const stableIds = resolveStablePiPIds();
       // OEM bounce: ModeChanged(true)→false за сотни ms пока app ещё в background —
       // не трактовать как реальный exit (иначе pip:state=false + audio return).
       try {
-        const g = global as any;
+        const g = global as CallAudioGlobals;
         g.__lastSystemPiPModeChangedAtRef = g.__lastSystemPiPModeChangedAtRef || { current: 0 };
         g.__lastSystemPiPEnteredAtRef = g.__lastSystemPiPEnteredAtRef || { current: 0 };
         const now = Date.now();
@@ -536,7 +519,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       // SYNC до rAF: TrackSubscribed в том же кадре иначе remount CaptureHost (peer video fullscreen поверх audio).
       if (!inPiP) {
         try {
-          const g = global as any;
+          const g = global as CallAudioGlobals;
           const now = Date.now();
           g.__blockSystemPiPCaptureHostUntilRef =
             g.__blockSystemPiPCaptureHostUntilRef || { current: 0 };
@@ -605,7 +588,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         // SYNC enter: cam-toggle / TrackSubscribed до rAF должны видеть in-PiP (mid-PiP peer video).
         // Снимаем returning/block с прошлого expand — иначе shouldIgnoreLateEnter глушит реальный enter.
         try {
-          const g = global as any;
+          const g = global as CallAudioGlobals;
           g.__pipInSystemModeRef = g.__pipInSystemModeRef || { current: false };
           g.__pipInSystemModeRef.current = true;
           g.__blockSystemPiPCaptureHostUntilRef =
@@ -618,7 +601,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         } catch (_) {}
       }
       const run = () => {
-        const g = global as any;
+        const g = global as CallAudioGlobals;
         const now = Date.now();
         const returningUntil = Number(g.__returningFromSystemPiPUntilRef?.current || 0);
         const returnState = g.__systemPiPReturnStateRef?.current;
@@ -688,7 +671,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
             // (иначе soft-hide остаётся на экране до showPiP, который Expanded мог отменить).
             setPipRemoteViewKey((k) => k + 1);
             try {
-              const gRestore = global as any;
+              const gRestore = global as CallAudioGlobals;
               gRestore.__pendingInAppPiPRestoreAfterSystemRef =
                 gRestore.__pendingInAppPiPRestoreAfterSystemRef || { current: false };
               gRestore.__pendingInAppPiPRestoreAfterSystemRef.current = true;
@@ -807,7 +790,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
             g.__pendingSystemPiPSyncRef.current = false;
           } catch (_) {}
           const session = g.__webrtcSessionRef?.current;
-          if (session && typeof (session as any).enterPiP === 'function') (session as any).enterPiP();
+          if (session && typeof session.enterPiP === 'function') session.enterPiP();
           // КРИТИЧНО: В PiP система часто переключает звук — переприменяем сохранённый маршрут (BT / динамик).
           const reapplyPiPAudio = () => {
             prepareSystemPiPEnterCallAudioRoute();
@@ -817,7 +800,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
           }
         } else {
           try {
-            const g = global as any;
+            const g = global as CallAudioGlobals;
             g.__returningFromSystemPiPUntilRef = g.__returningFromSystemPiPUntilRef || { current: 0 };
             g.__returningFromSystemPiPUntilRef.current = Math.max(
               Number(g.__returningFromSystemPiPUntilRef.current || 0),
@@ -872,22 +855,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
   // Подписка здесь не нужна — иначе событие обрабатывается дважды: второй вызов идёт с уже очищенным state (hidePiP) и ломает переход.
 
   // ====== API управления ======
-  const showPiP = useCallback((p: {
-    callId: string;
-    roomId: string;
-    partnerName?: string;
-    partnerAvatarUrl?: string;
-    localStream?: MediaStreamLike | null;
-    remoteStream?: MediaStreamLike | null;
-    localCamOn?: boolean;
-    remoteCamOn?: boolean;
-    muteLocal?: boolean;
-    muteRemote?: boolean;
-    navParams?: any; // ← кто нас вызвал (для корректного возврата)
-    deferVisible?: boolean;
-    fromAudioOnlyUi?: boolean;
-    audioOutputRoute?: InCallAudioRoute;
-  }) => {
+  const showPiP = useCallback((p: CallPiPShowParams) => {
     const fromAudioOnlyUi =
       typeof p.fromAudioOnlyUi === 'boolean' ? p.fromAudioOnlyUi : isInAudioOnlyCallUi();
     setPipInAppRtcFromAudioOnlySticky(fromAudioOnlyUi);
@@ -932,7 +900,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       if (routeNorm === 'SPEAKER_PHONE' || routeNorm === 'EARPIECE') {
         rememberManualBuiltinCallAudioRoute(routeNorm);
         try {
-          const gExp = global as any;
+          const gExp = global as CallAudioGlobals;
           gExp.__explicitBuiltInCallAudioRouteRef =
             gExp.__explicitBuiltInCallAudioRouteRef || { current: false };
           gExp.__explicitBuiltInCallAudioRouteRef.current = true;
@@ -944,7 +912,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         } catch {}
       }
       try {
-        const gParams = global as any;
+        const gParams = global as CallAudioGlobals;
         gParams.__currentCallPiPParamsRef = gParams.__currentCallPiPParamsRef || { current: null };
         const existing = gParams.__currentCallPiPParamsRef.current;
         if (existing && typeof existing === 'object') {
@@ -957,7 +925,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       const audioBuiltin =
         routeNorm === 'SPEAKER_PHONE' || routeNorm === 'EARPIECE';
       try {
-        const gAudio = global as any;
+        const gAudio = global as CallAudioGlobals;
         gAudio.__lastInAppPipAudioReapplyAtRef = gAudio.__lastInAppPipAudioReapplyAtRef || { current: 0 };
         const nowAudio = Date.now();
         const lastAppliedEnter = readLastAppliedCallAudioRoute();
@@ -1039,12 +1007,12 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         }
         try {
           // Снять wear sticky, иначе toggle на плашке / native apply залипают на BT.
-          (global as any).__btWearStickyUntilRef = { current: 0 };
-          (global as any).__btAutoSuppressUntilRef = { current: Date.now() + 12000 };
+          (global as CallAudioGlobals).__btWearStickyUntilRef = { current: 0 };
+          (global as CallAudioGlobals).__btAutoSuppressUntilRef = { current: Date.now() + 12000 };
         } catch {}
         armCallAudioRouteUiLock(videoRouteNorm);
         try {
-          const gPin = global as any;
+          const gPin = global as CallAudioGlobals;
           gPin.__explicitBuiltInCallAudioRouteRef =
             gPin.__explicitBuiltInCallAudioRouteRef || { current: false };
           gPin.__explicitBuiltInCallAudioRouteRef.current = true;
@@ -1060,7 +1028,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       }
       persistVideoInAppPiPAudioRoute(videoRouteNorm, { mapForEnterVideoUi: false });
       try {
-        const gVideoUi = global as any;
+        const gVideoUi = global as CallAudioGlobals;
         gVideoUi.__currentCallPiPParamsRef = gVideoUi.__currentCallPiPParamsRef || { current: null };
         const existingVideo = gVideoUi.__currentCallPiPParamsRef.current;
         if (existingVideo && typeof existingVideo === 'object') {
@@ -1075,7 +1043,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         });
       }
       try {
-        const gVideo = global as any;
+        const gVideo = global as CallAudioGlobals;
         gVideo.__lastInAppPipAudioReapplyAtRef = gVideo.__lastInAppPipAudioReapplyAtRef || { current: 0 };
         const nowVideo = Date.now();
         if (nowVideo - Number(gVideo.__lastInAppPipAudioReapplyAtRef.current || 0) > 1200) {
@@ -1118,7 +1086,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
           setUserSelectedCallAudioRoute(externalRoute);
           setPersistedCallAudioRoute(externalRoute);
           try {
-            const gAudio = global as any;
+            const gAudio = global as CallAudioGlobals;
             gAudio.__currentCallPiPParamsRef = gAudio.__currentCallPiPParamsRef || { current: null };
             const params = gAudio.__currentCallPiPParamsRef.current;
             if (params && typeof params === 'object') {
@@ -1129,7 +1097,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
             gAudio.__pipUpdateStateRef?.current?.({ audioOutputRoute: externalRoute });
           } catch {}
           try {
-            const gOrch = global as any;
+            const gOrch = global as CallAudioGlobals;
             gOrch.__lastInAppPipExternalOrchestratorAtRef =
               gOrch.__lastInAppPipExternalOrchestratorAtRef || { current: 0 };
             const nowExt = Date.now();
@@ -1148,10 +1116,10 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
 
     // КРИТИЧНО: Ставим флаг PiP синхронно
     try {
-      (global as any).__pipForceHiddenRef = (global as any).__pipForceHiddenRef || { current: false };
-      (global as any).__pipForceHiddenRef.current = false;
-      (global as any).__pipVisibleRef = (global as any).__pipVisibleRef || { current: false };
-      (global as any).__pipVisibleRef.current = true;
+      global.__pipForceHiddenRef = global.__pipForceHiddenRef || { current: false };
+      global.__pipForceHiddenRef.current = false;
+      global.__pipVisibleRef = global.__pipVisibleRef || { current: false };
+      global.__pipVisibleRef.current = true;
       if (Platform.OS === 'android') {
         // Mutex: поверх system PiP плашку не поднимаем (leave-hint/OEM не видят dual).
         if (isSystemPiPActiveOrEnteringSync()) {
@@ -1166,7 +1134,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     } catch {}
 
     let remoteStreamForPiP = p.remoteStream;
-    const sessionEarly = (global as any).__webrtcSessionRef?.current;
+    const sessionEarly = (global as CallAudioGlobals).__webrtcSessionRef?.current;
     const placeholderOnlyEarly = shouldUsePipPlaceholderOnly({
       localCamOn: p.localCamOn,
       remoteCamOn: p.remoteCamOn,
@@ -1178,13 +1146,13 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         fromAudioOnlyUi &&
         !placeholderOnlyEarly &&
         session &&
-        typeof (session as any).ensureRemoteVideoForPiP === 'function'
+        typeof session.ensureRemoteVideoForPiP === 'function'
       ) {
-        (session as any).ensureRemoteVideoForPiP();
+        session.ensureRemoteVideoForPiP();
       }
       const streamFromSession =
-        session && typeof (session as any).getRemoteStream === 'function'
-          ? (session as any).getRemoteStream()
+        session && typeof session.getRemoteStream === 'function'
+          ? session.getRemoteStream()
           : null;
       if (streamFromSession) {
         remoteStreamForPiP = streamFromSession;
@@ -1204,7 +1172,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         if (Livi?.setPiPEndCallParams) Livi.setPiPEndCallParams(p.callId, p.roomId);
       } catch (_) {}
     }
-    const pipParamsRef = (global as any).__currentCallPiPParamsRef?.current;
+    const pipParamsRef = (global as CallAudioGlobals).__currentCallPiPParamsRef?.current;
     const resolvedPartnerName = pickNonEmptyPiPString(
       p.partnerName,
       pipParamsRef?.partnerName,
@@ -1257,7 +1225,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       localCamOnRef.current = p.localCamOn;
     } else {
       try {
-        const t = (p.localStream as any)?.getVideoTracks?.()?.[0];
+        const t = p.localStream?.getVideoTracks?.()?.[0];
         const enabled = t?.enabled;
         if (typeof enabled === 'boolean') {
           setLocalCamOn(enabled);
@@ -1268,9 +1236,9 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     // КРИТИЧНО: remoteCamOn берём из сессии, если есть — она обновляется синхронно при cam-toggle;
     // иначе при быстром выходе в PiP после выключения камеры партнёра React state ещё не обновился и заглушка «Отошел» не показывалась.
     try {
-      const session = (global as any).__webrtcSessionRef?.current;
-      if (session && typeof (session as any).getRemoteCamEnabled === 'function') {
-        const remoteCam = (session as any).getRemoteCamEnabled();
+      const session = (global as CallAudioGlobals).__webrtcSessionRef?.current;
+      if (session && typeof session.getRemoteCamEnabled === 'function') {
+        const remoteCam = session.getRemoteCamEnabled();
         setRemoteCamOn(remoteCam);
         remoteCamOnRef.current = remoteCam;
       } else if (typeof p.remoteCamOn === 'boolean') {
@@ -1288,7 +1256,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     );
     if (typeof p.muteRemote === 'boolean') setIsRemoteMuted(!!p.muteRemote);
     // Не затираем navParams undefined-ом: это ломает returnToCall (нечем восстановить экран звонка).
-    setLastNavParams((prev: any) => (p.navParams !== undefined ? p.navParams : prev));
+    setLastNavParams((prev) => (p.navParams !== undefined ? p.navParams : prev));
 
     // By default show immediately. For Android Back we now also reveal PiP immediately,
     // so the overlay appears without an extra frame of waiting.
@@ -1318,7 +1286,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         setVisible(true);
       } else {
         try {
-          const g = global as any;
+          const g = global as CallAudioGlobals;
           g.__pipDeferVisiblePendingRef = g.__pipDeferVisiblePendingRef || { current: false };
           g.__pipDeferVisiblePendingRef.current = true;
         } catch {}
@@ -1372,7 +1340,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     }
     clearInAppPiPSystemSuspendFlags();
     try {
-      const g = global as any;
+      const g = global as CallAudioGlobals;
       g.__pipForceHiddenRef = g.__pipForceHiddenRef || { current: false };
       g.__pipForceHiddenRef.current = true;
       g.__pipDeferVisiblePendingRef = g.__pipDeferVisiblePendingRef || { current: false };
@@ -1407,7 +1375,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     if (Platform.OS !== 'android') return;
     if (!inSystemPiPMode && !pendingSystemPiP && !systemPiPCaptureActive) return;
     try {
-      const g = global as any;
+      const g = global as CallAudioGlobals;
       const now = Date.now();
       // Native/global refs are authoritative. Local React state may still contain
       // pending=true for one render after ModeChanged(false) and must not re-arm PiP.
@@ -1435,7 +1403,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     let sessionRemoteCam = false;
     let sessionEnded = false;
     try {
-      const session = (global as any).__webrtcSessionRef?.current;
+      const session = (global as CallAudioGlobals).__webrtcSessionRef?.current;
       if (!session) {
         sessionEnded = true;
       } else {
@@ -1466,7 +1434,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     setPendingSystemPiP((prev) => (prev ? prev : true));
     if (!sessionEnded && !hasLive && (remoteCamOn === true || sessionRemoteCam)) {
       try {
-        const session = (global as any).__webrtcSessionRef?.current;
+        const session = (global as CallAudioGlobals).__webrtcSessionRef?.current;
         if (session && typeof session.ensureRemoteVideoForSystemPiPCapture === 'function') {
           session.ensureRemoteVideoForSystemPiPCapture();
         }
@@ -1478,7 +1446,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     const audioUi = isInAudioOnlyCallUi();
     let stayOnVideo = false;
     try {
-      stayOnVideo = (global as any).__stayOnVideoCallUiRef?.current === true;
+      stayOnVideo = global.__stayOnVideoCallUiRef?.current === true;
     } catch (_) {}
     const audioOrigin = isSystemPiPLeaveAudioOrigin() || isSystemPiPSessionAudioOrigin();
     const videoUiOwnsCapture =
@@ -1521,7 +1489,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       try {
         const available = parseList(data?.availableAudioDeviceList);
         const selected = normalizeInCallRoute(String(data?.selectedAudioDevice || ''));
-        const g = global as any;
+        const g = global as CallAudioGlobals;
         const prevRaw = g.__inCallAvailableAudioRoutesRef?.current;
         const prev = Array.isArray(prevRaw) ? prevRaw.map((s: unknown) => String(s)) : [];
         g.__inCallAvailableAudioRoutesRef = g.__inCallAvailableAudioRoutesRef || { current: [] };
@@ -1732,13 +1700,13 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
 
   const syncSessionPiPState = useCallback((nextInPiP: boolean, reason: string): boolean => {
     try {
-      const g = global as any;
+      const g = global as CallAudioGlobals;
       const session = g.__webrtcSessionRef?.current;
       const paramsRef = g.__currentCallPiPParamsRef?.current;
       const lastCtx = g.__pipLastContextRef?.current;
       const sessionRoomId =
-        session && typeof (session as any).getRoomId === 'function'
-          ? (session as any).getRoomId()
+        session && typeof session.getRoomId === 'function'
+          ? session.getRoomId()
           : null;
       const effectiveRoomId = roomId || paramsRef?.roomId || lastCtx?.roomId || sessionRoomId || null;
       const key = `${nextInPiP ? 'enter' : 'exit'}:${String(effectiveRoomId || 'none')}`;
@@ -1776,7 +1744,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
   // мог включиться без вызова showPiP). returnToCall использует effectiveCallId = callId || paramsRef?.callId || lastCtx?.callId.
   useEffect(() => {
     try {
-      const g = (global as any);
+      const g = (global as CallAudioGlobals);
       g.__pipLastContextRef = g.__pipLastContextRef || { current: null };
       if (callId || roomId || lastNavParams) {
         g.__pipLastContextRef.current = {
@@ -1798,7 +1766,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     if (Platform.OS !== 'android') return () => {};
     const emitter = new NativeEventEmitter(NativeModules.LiviAppModule);
     const sub = emitter.addListener('AboutToEnterSystemPiP', (payload: { width?: number; height?: number; traceId?: string } | null) => {
-      const g = (global as any);
+      const g = (global as CallAudioGlobals);
       const traceId = payload?.traceId ? String(payload.traceId) : `hp_js_${Date.now()}`;
       setActiveHomePiPTraceId(traceId);
       beginHomePiPOutcomeWatch(traceId);
@@ -1890,7 +1858,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         return;
       }
       const session = g.__webrtcSessionRef?.current;
-      if (session && typeof (session as any).isEnded === 'function' && (session as any).isEnded()) {
+      if (session && typeof session.isEnded === 'function' && session.isEnded()) {
         return;
       }
 
@@ -1907,44 +1875,44 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
 
       let paramsEarly = g.__currentCallPiPParamsRef?.current;
       if (!paramsEarly && session) {
-        const cid = typeof (session as any).getCallId === 'function' ? (session as any).getCallId() : null;
-        const rid = typeof (session as any).getRoomId === 'function' ? (session as any).getRoomId() : null;
+        const cid = typeof session.getCallId === 'function' ? session.getCallId() : null;
+        const rid = typeof session.getRoomId === 'function' ? session.getRoomId() : null;
         if (cid || rid) {
           paramsEarly = {
             localCamOn:
-              typeof (session as any).getIsCamOn === 'function' ? (session as any).getIsCamOn() : false,
+              typeof session.getIsCamOn === 'function' ? session.getIsCamOn() : false,
             remoteCamOn:
-              typeof (session as any).getRemoteCamEnabled === 'function'
-                ? (session as any).getRemoteCamEnabled()
+              typeof session.getRemoteCamEnabled === 'function'
+                ? session.getRemoteCamEnabled()
                 : false,
             remoteStream:
-              typeof (session as any).getRemoteStream === 'function'
-                ? (session as any).getRemoteStream()
+              typeof session.getRemoteStream === 'function'
+                ? session.getRemoteStream()
                 : null,
           };
         }
       }
       const remoteEarly =
-        session && typeof (session as any).getRemoteStream === 'function'
-          ? (session as any).getRemoteStream()
+        session && typeof session.getRemoteStream === 'function'
+          ? session.getRemoteStream()
           : null;
       const localCamEarly =
         paramsEarly?.localCamOn ??
-        (session && typeof (session as any).getIsCamOn === 'function'
-          ? (session as any).getIsCamOn()
+        (session && typeof session.getIsCamOn === 'function'
+          ? session.getIsCamOn()
           : false);
       const remoteCamEarly =
         paramsEarly?.remoteCamOn ??
-        (session && typeof (session as any).getRemoteCamEnabled === 'function'
-          ? (session as any).getRemoteCamEnabled()
+        (session && typeof session.getRemoteCamEnabled === 'function'
+          ? session.getRemoteCamEnabled()
           : false);
       if (localCamEarly || remoteCamEarly || ongoingCallPrefersVideoMedia()) {
         markDirectCallVideoMediaActive();
       }
       const localEarly =
         paramsEarly?.localStream ??
-        (session && typeof (session as any).getLocalStream === 'function'
-          ? (session as any).getLocalStream()
+        (session && typeof session.getLocalStream === 'function'
+          ? session.getLocalStream()
           : null);
       if (
         !shouldUseSystemPiPControlsCaptureOnly() &&
@@ -1985,7 +1953,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
           NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false);
           NativeModules.LiviAppModule?.setSystemPiPCapturePlaceholderOnly?.(true);
           NativeModules.LiviAppModule?.cancelPendingSystemPiPEnter?.();
-          g.__leavingVideoCallByHomeRef.current = false;
+          g.__leavingVideoCallByHomeRef!.current = false;
           refreshAndroidActiveCallNotification();
         } catch (_) {}
         return;
@@ -2037,14 +2005,14 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
 
       let params = g.__currentCallPiPParamsRef?.current;
       if (!params && session) {
-        const cid = typeof (session as any).getCallId === 'function' ? (session as any).getCallId() : null;
-        const rid = typeof (session as any).getRoomId === 'function' ? (session as any).getRoomId() : null;
+        const cid = typeof session.getCallId === 'function' ? session.getCallId() : null;
+        const rid = typeof session.getRoomId === 'function' ? session.getRoomId() : null;
         if (cid || rid) {
           const localCam =
-            typeof (session as any).getIsCamOn === 'function' ? (session as any).getIsCamOn() : false;
+            typeof session.getIsCamOn === 'function' ? session.getIsCamOn() : false;
           const remoteCam =
-            typeof (session as any).getRemoteCamEnabled === 'function'
-              ? (session as any).getRemoteCamEnabled()
+            typeof session.getRemoteCamEnabled === 'function'
+              ? session.getRemoteCamEnabled()
               : false;
           params = {
             callId: cid || '',
@@ -2060,20 +2028,20 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         }
       }
       const remoteFromSessionForPlaceholder =
-        session && typeof (session as any).getRemoteStream === 'function'
-          ? (session as any).getRemoteStream()
+        session && typeof session.getRemoteStream === 'function'
+          ? session.getRemoteStream()
           : null;
       const localFromSessionForPlaceholder =
-        session && typeof (session as any).getLocalStream === 'function'
-          ? (session as any).getLocalStream()
+        session && typeof session.getLocalStream === 'function'
+          ? session.getLocalStream()
           : null;
       const localCamFromSession =
-        session && typeof (session as any).getIsCamOn === 'function'
-          ? (session as any).getIsCamOn()
+        session && typeof session.getIsCamOn === 'function'
+          ? session.getIsCamOn()
           : undefined;
       const remoteCamFromSession =
-        session && typeof (session as any).getRemoteCamEnabled === 'function'
-          ? (session as any).getRemoteCamEnabled()
+        session && typeof session.getRemoteCamEnabled === 'function'
+          ? session.getRemoteCamEnabled()
           : undefined;
       const sessionHasLiveRemoteVideo = mediaStreamHasLiveVideo(remoteFromSessionForPlaceholder);
       // Prefer session / live track over stale params after in-app PiP.
@@ -2106,8 +2074,8 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       // Audio UI часто defer'ит remote video — для video system PiP подтянем track без смены UI.
       if (!placeholderOnlyHome && !sessionHasLiveRemoteVideo && remoteCamForPlaceholder) {
         try {
-          if (session && typeof (session as any).ensureRemoteVideoForSystemPiPCapture === 'function') {
-            (session as any).ensureRemoteVideoForSystemPiPCapture();
+          if (session && typeof session.ensureRemoteVideoForSystemPiPCapture === 'function') {
+            session.ensureRemoteVideoForSystemPiPCapture();
           }
         } catch (_) {}
       }
@@ -2151,12 +2119,12 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
           try { NativeModules.LiviAppModule.setPiPEndCallParams(params.callId, params.roomId); } catch (_) {}
         }
         const remoteFromSession =
-          session && typeof (session as any).getRemoteStream === 'function'
-            ? (session as any).getRemoteStream()
+          session && typeof session.getRemoteStream === 'function'
+            ? session.getRemoteStream()
             : null;
         const localFromSession =
-          session && typeof (session as any).getLocalStream === 'function'
-            ? (session as any).getLocalStream()
+          session && typeof session.getLocalStream === 'function'
+            ? session.getLocalStream()
             : null;
         const updateFnEarly = g.__pipUpdateStateRef?.current;
         if (typeof updateFnEarly === 'function') {
@@ -2254,7 +2222,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
             g.__pendingSystemPiPSyncRef.current = false;
           } catch (_) {}
           if (typeof until === 'number') {
-            g.__systemPiPEntryInProgressUntilRef.current = 0;
+            g.__systemPiPEntryInProgressUntilRef!.current = 0;
           }
         } catch (_) {}
       };
@@ -2266,22 +2234,22 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
 
   // Для системного PiP: натив шлёт AboutToEnterSystemPiP, App вызывает __pipShowPiPRef.current(params)
   useEffect(() => {
-    const g = (global as any);
+    const g = (global as CallAudioGlobals);
     g.__pipShowPiPRef = g.__pipShowPiPRef || { current: null };
     g.__pipShowPiPRef.current = showPiP;
-    return () => { g.__pipShowPiPRef.current = null; };
+    return () => { g.__pipShowPiPRef!.current = null; };
   }, [showPiP]);
 
   // При call:ended (другой участник завершил) App вызывает __pipHidePiPRef.current(), чтобы у того, кто не был в PiP, не появлялся оверлей PiP и не было перехода «приветствие + PiP».
   useEffect(() => {
-    const g = (global as any);
+    const g = (global as CallAudioGlobals);
     g.__pipHidePiPRef = g.__pipHidePiPRef || { current: null };
     g.__pipHidePiPRef.current = hidePiP;
-    return () => { g.__pipHidePiPRef.current = null; };
+    return () => { g.__pipHidePiPRef!.current = null; };
   }, [hidePiP]);
 
   useEffect(() => {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     g.__pipSyncSessionStateRef = g.__pipSyncSessionStateRef || { current: null };
     g.__pipSyncSessionStateRef.current = syncSessionPiPState;
     return () => {
@@ -2293,7 +2261,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
   // Параметры для навигации берутся из state (callId, roomId, lastNavParams), при null — из __currentCallPiPParamsRef
   // и __pipLastContextRef (см. комментарий выше), чтобы возврат работал даже при гонках.
   const returnToCall = useCallback((opts?: { preferAudioOnlyUi?: boolean; restoreInAppPiP?: boolean }) => {
-    const g = (global as any);
+    const g = (global as CallAudioGlobals);
     const nav = g.__navRef;
     const currentRouteName = readRootCurrentRouteName() || undefined;
     const preferAudioOnlyUiEarly = opts?.preferAudioOnlyUi === true;
@@ -2307,7 +2275,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       g.__lastReturnToCallAtRef.current = now;
     } catch (_) {}
     try {
-      const gGuard = (global as any);
+      const gGuard = (global as CallAudioGlobals);
       const endingFromPiPButton = gGuard.__endingFromPiPButtonRef?.current === true;
       let endingCall =
         gGuard.__endingCallInProgressRef?.current === true ||
@@ -2323,7 +2291,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
           logger.info('[PiPContext] returnToCall: active call — ignore stale teardown guards');
           try {
             clearEndingCallInProgress();
-            gGuard.__callEndedFromPiPNoOpenRef.current = false;
+            gGuard.__callEndedFromPiPNoOpenRef!.current = false;
           } catch (_) {}
           endingCall = false;
         }
@@ -2433,7 +2401,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     // Флаг для App: при выходе из PiP по SystemPiPModeChanged не завершать звонок (пользователь тапнул «вернуться», а не системную X).
     setPipReturnToCallJustPressed(true);
     try {
-      const g = global as any;
+      const g = global as CallAudioGlobals;
       const returnToken = Number(g.__systemPiPReturnTokenRef?.current || Date.now());
       g.__systemPiPReturnTokenRef = g.__systemPiPReturnTokenRef || { current: 0 };
       g.__systemPiPReturnTokenRef.current = returnToken;
@@ -2458,7 +2426,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       );
     } catch (_) {}
     // Если звонок уже завершён (партнёр положил трубку), не переходим на экран звонка — только скрываем PiP
-    const session = (global as any).__webrtcSessionRef?.current;
+    const session = (global as CallAudioGlobals).__webrtcSessionRef?.current;
     if (session && typeof session.isEnded === 'function' && session.isEnded()) {
       hidePiP();
       releaseReturnToCallInFlight();
@@ -2486,12 +2454,12 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     const paramsRef = g.__currentCallPiPParamsRef?.current;
     const lastCtx = g.__pipLastContextRef?.current;
     const sessionCallId =
-      sessionForPipeState && typeof (sessionForPipeState as any).getCallId === 'function'
-        ? (sessionForPipeState as any).getCallId()
+      sessionForPipeState && typeof sessionForPipeState.getCallId === 'function'
+        ? sessionForPipeState.getCallId()
         : null;
     const sessionRoomId =
-      sessionForPipeState && typeof (sessionForPipeState as any).getRoomId === 'function'
-        ? (sessionForPipeState as any).getRoomId()
+      sessionForPipeState && typeof sessionForPipeState.getRoomId === 'function'
+        ? sessionForPipeState.getRoomId()
         : null;
 
     const effectiveCallId = callId || paramsRef?.callId || lastCtx?.callId || sessionCallId || null;
@@ -2524,17 +2492,17 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       return;
     }
 
-    const doNavigate = (cid: string, rid: string, navParams?: any) => {
+    const doNavigate = (cid: string, rid: string, navParams?: CallPiPNavigationParams) => {
       const partnerNickFromCtx = String(
         navParams?.partnerNick ||
           partnerNameRef.current ||
-          (global as any).__currentCallPiPParamsRef?.current?.partnerName ||
+          (global as CallAudioGlobals).__currentCallPiPParamsRef?.current?.partnerName ||
           '',
       ).trim();
       const peerFromCtx = String(
         navParams?.peerUserId ||
           navParams?.partnerId ||
-          (global as any).__videoCallPartnerUserIdRef?.current ||
+          (global as CallAudioGlobals).__videoCallPartnerUserIdRef?.current ||
           '',
       ).trim();
       const params = {
@@ -2590,7 +2558,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       setSuppressOverlayForReturn(true);
       try {
         const currentRouteName = readRootCurrentRouteName() || undefined;
-        const liveSession = (global as any).__webrtcSessionRef?.current;
+        const liveSession = (global as CallAudioGlobals).__webrtcSessionRef?.current;
         const callStillLive =
           liveSession &&
           typeof liveSession.isEnded === 'function' &&
@@ -2603,7 +2571,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         if (useStackNavigate) {
           nav.dispatch(
             CommonActions.navigate({
-              name: 'VideoCall' as any,
+              name: 'VideoCall',
               params,
               merge: true,
             }),
@@ -2612,7 +2580,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
           nav.dispatch(
             CommonActions.reset({
               index: 1,
-              routes: [{ name: 'Home' as any }, { name: 'VideoCall' as any, params }],
+              routes: [{ name: 'Home' }, { name: 'VideoCall', params }],
             }),
           );
         }
@@ -2726,7 +2694,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
           clearSystemPiPLeaveContextSnapshot();
         } catch (_) {}
         try {
-          const g2 = global as any;
+          const g2 = global as CallAudioGlobals;
           if (g2.__pendingInAppPiPRestoreAfterSystemRef) {
             g2.__pendingInAppPiPRestoreAfterSystemRef.current = false;
           }
@@ -2743,7 +2711,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         if (curRoute === targetRoute) {
           completeRestore();
         } else {
-          nav.dispatch(CommonActions.navigate({ name: targetRoute as any }));
+          nav.dispatch(CommonActions.navigate({ name: targetRoute }));
           setTimeout(completeRestore, 100);
         }
       } catch (e) {
@@ -2789,7 +2757,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
 
   // Чтобы по кнопке «развернуть» в системном PiP возвращать на экран видеозвонка (App слушает SystemPiPExpanded и дергает этот ref).
   useEffect(() => {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     g.__pipReturnToCallRef = {
       current: (inner?: { restoreInAppPiP?: boolean }) =>
         returnToCall({ preferAudioOnlyUi: false, restoreInAppPiP: inner?.restoreInAppPiP }),
@@ -2810,7 +2778,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       onEndCall(callId, roomId);
     } else {
       // Fallback: если onEndCall не установлен, вызываем session.endCall(callId, roomId) напрямую (завершение у обоих)
-      const session = (global as any).__webrtcSessionRef?.current;
+      const session = (global as CallAudioGlobals).__webrtcSessionRef?.current;
       if (session && typeof session.endCall === 'function') {
         session.endCall(callId ?? undefined, roomId ?? undefined);
       } else if (callId || roomId) {
@@ -2842,7 +2810,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
   // Задержка закрытия у того, кто не нажимал «Завершить»: в системном PiP сокет часто отключён (app in background),
   // поэтому call:ended приходит только после реконнекта; PiP также закрывается по LiveKit (ParticipantDisconnected / Room Disconnected) и при socket reconnect в App.
   useEffect(() => {
-    const onCallEnded = (data?: any) => {
+    const onCallEnded = (data?: { callId?: string | null; roomId?: string | null } | null) => {
       const receivedCallId = String(data?.callId || '').trim();
       const receivedRoomId = String(data?.roomId || '').trim();
       const currentCallId = String(callId || '').trim();
@@ -2857,14 +2825,14 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       // Закрываем PiP при call:ended: in-app, state системного PiP или ref (после shouldIgnoreLateEnter state мог остаться false).
       let inSystemByRef = false;
       try {
-        inSystemByRef = (global as any).__pipInSystemModeRef?.current === true;
+        inSystemByRef = global.__pipInSystemModeRef?.current === true;
       } catch (_) {}
       const shouldClosePiP = (visible || inSystemPiPMode || inSystemByRef) && (callId || roomId);
       // Идемпотентно с App и VideoCallSession (один socket — несколько слушателей call:ended).
       applyCallEndedGlobalRefsOnce(receivedCallId || undefined, receivedRoomId || undefined);
       if (!shouldClosePiP) {
         try {
-          const g2 = global as any;
+          const g2 = global as CallAudioGlobals;
           if (g2.__pipCallEndedWasInSystemRef) g2.__pipCallEndedWasInSystemRef.current = false;
         } catch (_) {}
         return;
@@ -2872,7 +2840,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       // Слушатель PiPContext обычно идёт раньше App: hidePiP() обнулит __pipInSystemModeRef до того, как App
       // прочитает inSystem. Снимок — чтобы App и VideoCall применили ту же ветку «завершение из PiP».
       try {
-        const g2 = global as any;
+        const g2 = global as CallAudioGlobals;
         g2.__pipCallEndedWasInSystemRef = g2.__pipCallEndedWasInSystemRef || { current: false };
         g2.__pipCallEndedWasInSystemRef.current =
           inSystemPiPMode === true || inSystemByRef === true;
@@ -2920,7 +2888,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     if (patch.isMuted !== undefined) {
       setIsMuted(patch.isMuted);
       try {
-        const params = (global as any).__currentCallPiPParamsRef?.current;
+        const params = (global as CallAudioGlobals).__currentCallPiPParamsRef?.current;
         if (params && typeof params === 'object') {
           params.muteLocal = patch.isMuted;
         }
@@ -2968,8 +2936,8 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     // потоки через ref:
     if (patch.localStream !== undefined) localStreamRef.current = patch.localStream;
     if (patch.remoteStream !== undefined) {
-      const prev = remoteStreamRef.current as any;
-      const next = patch.remoteStream as any;
+      const prev = remoteStreamRef.current;
+      const next = patch.remoteStream;
       const prevId = prev?.id;
       const nextId = next?.id;
       const liveChanged =
@@ -3002,7 +2970,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
   // КРИТИЧНО: Делаем updatePiPState доступным глобально, чтобы WebRTC session могла обновлять PiP,
   // даже когда экран VideoCall размонтирован (PiP работает поверх приложения).
   useEffect(() => {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     g.__pipUpdateStateRef = g.__pipUpdateStateRef || { current: null };
     g.__pipUpdateStateRef.current = updatePiPState;
     g.__pipVisibleRef = g.__pipVisibleRef || { current: false };
@@ -3022,7 +2990,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       g.__pipVisibleRef.current = false;
     }
     return () => {
-      try { (global as any).__pipUpdateStateRef.current = null; } catch {}
+      try { (global as CallAudioGlobals).__pipUpdateStateRef!.current = null; } catch {}
     };
   }, [updatePiPState, visible]);
 
@@ -3046,7 +3014,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
   // Сбрасываем __pipVisibleRef только при размонтировании провайдера, а не на каждом re-run эффекта.
   useEffect(() => {
     return () => {
-      try { (global as any).__pipVisibleRef.current = false; } catch {}
+      try { (global as CallAudioGlobals).__pipVisibleRef!.current = false; } catch {}
     };
   }, []);
 

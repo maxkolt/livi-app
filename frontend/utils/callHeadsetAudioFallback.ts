@@ -1,3 +1,4 @@
+import type { CallAudioGlobals } from './callStateTypes';
 import type { InCallAudioRoute } from '../components/VideoChat/hooks/audioRouteTypes';
 import { normalizeInCallRoute } from '../components/VideoChat/hooks/audioRouteTypes';
 import { isInAudioOnlyCallUi } from './callAudioOnlyUiContext';
@@ -8,13 +9,13 @@ import { armCallAudioRouteUiLock } from './callAudioRouteTransitionGuards';
 export type BuiltinCallAudioRoute = 'EARPIECE' | 'SPEAKER_PHONE';
 
 function builtinRef(): { current: BuiltinCallAudioRoute | null } {
-  const g = global as any;
+  const g = global as CallAudioGlobals;
   g.__builtinCallAudioRouteBeforeHeadsetRef = g.__builtinCallAudioRouteBeforeHeadsetRef || { current: null };
   return g.__builtinCallAudioRouteBeforeHeadsetRef;
 }
 
 function builtinChoiceRef(): { current: BuiltinCallAudioRoute | null } {
-  const g = global as any;
+  const g = global as CallAudioGlobals;
   g.__callBuiltinRouteChoiceRef = g.__callBuiltinRouteChoiceRef || { current: null };
   return g.__callBuiltinRouteChoiceRef;
 }
@@ -78,7 +79,7 @@ export function rememberBuiltinCallRouteBeforeHeadset(
 
 export function isInSystemPiPMode(): boolean {
   try {
-    return (global as any).__pipInSystemModeRef?.current === true;
+    return global.__pipInSystemModeRef?.current === true;
   } catch {
     return false;
   }
@@ -126,7 +127,7 @@ export type HeadsetRouteState = {
 
 /** Единственное место, где эта логика трогает global/модульный стейт (импуре-граница). */
 function gatherHeadsetRouteState(): HeadsetRouteState {
-  const g = global as any;
+  const g = global as CallAudioGlobals;
   let currentRouteName: string | null = null;
   try {
     currentRouteName = readRootCurrentRouteName();
@@ -162,7 +163,7 @@ export function rememberVideoUiSpeakerAfterHeadsetDisconnect(): void {
   rememberBuiltinCallRouteBeforeHeadset('SPEAKER_PHONE', false);
   rememberManualBuiltinCallAudioRoute('SPEAKER_PHONE');
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     g.__explicitBuiltInCallAudioRouteRef = g.__explicitBuiltInCallAudioRouteRef || { current: false };
     g.__explicitBuiltInCallAudioRouteRef.current = true;
   } catch {}

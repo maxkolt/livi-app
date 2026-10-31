@@ -2,17 +2,19 @@
 // Must be imported BEFORE any other imports in index.tsx
 import { NativeModules, Platform } from 'react-native';
 
+type NativeListenerMethods = { addListener?: unknown; removeListeners?: unknown };
+
 if (Platform.OS === 'android') {
   try {
-    const mods: Record<string, any> = (NativeModules as unknown) as Record<string, any>;
+    const mods: Record<string, unknown> = NativeModules as Record<string, unknown>;
     Object.keys(mods || {}).forEach((key) => {
       const m = mods[key];
       if (!m || typeof m !== 'object') return;
-      if (typeof (m as any).addListener !== 'function') {
-        try { (m as any).addListener = () => {}; } catch {}
+      if (typeof (m as NativeListenerMethods).addListener !== 'function') {
+        try { (m as NativeListenerMethods).addListener = () => {}; } catch {}
       }
-      if (typeof (m as any).removeListeners !== 'function') {
-        try { (m as any).removeListeners = () => {}; } catch {}
+      if (typeof (m as NativeListenerMethods).removeListeners !== 'function') {
+        try { (m as NativeListenerMethods).removeListeners = () => {}; } catch {}
       }
     });
   } catch {}
@@ -24,12 +26,12 @@ if (Platform.OS === 'android') {
       '`new NativeEventEmitter()` was called with a non-null argument without the required `addListener` method.',
       '`new NativeEventEmitter()` was called with a non-null argument without the required `removeListeners` method.',
     ];
-    console.warn = (...args: any[]) => {
+    console.warn = (...args: unknown[]) => {
       try {
         const msg = args?.[0] ? String(args[0]) : args.map(a => String(a)).join(' ');
         if (IGNORE_SUBSTR.some(s => msg.includes(s))) return;
       } catch {}
-      ORIG_WARN(...args as any);
+      ORIG_WARN(...args);
     };
   } catch {}
 }
@@ -49,12 +51,12 @@ try {
       // LiveKit: can show up when disconnect/reconnect overlaps on RN.
       "could not createOffer with closed peer connection",
   ];
-  console.warn = (...args: any[]) => {
+  console.warn = (...args: unknown[]) => {
     try {
       const msg = args?.[0] ? String(args[0]) : args.map(a => String(a)).join(' ');
       if (IGNORE_SUBSTR.some(s => msg.includes(s))) return;
     } catch {}
-    ORIG_WARN(...args as any);
+    ORIG_WARN(...args);
   };
 } catch {}
 

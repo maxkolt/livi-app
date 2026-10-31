@@ -1,3 +1,4 @@
+import type { ChatMessage } from './chatMessageTypes';
 /** Text/sticker composer send + emoji panel helpers. */
 
 import React from "react";
@@ -18,13 +19,13 @@ import { outgoingStatusFromSendResult } from "./chatMessageIds";
 
 type ReadStatusMap = Record<string, "sending" | "delivered" | "read" | "failed" | "sent">;
 
-type ReplyTo = { id: string; text: string; from?: string; isOwn?: boolean } | null;
+type ReplyTo = { id: string; text: string; from?: string | null; isOwn?: boolean } | null;
 
 /** Удаляет последний графемный символ (эмодзи / ZWJ / skin tone — целиком). */
 function removeLastGrapheme(text: string): string {
   if (!text) return text;
   try {
-    const Segmenter = (Intl as any)?.Segmenter;
+    const Segmenter = (Intl)?.Segmenter;
     if (typeof Segmenter === 'function') {
       const seg = new Segmenter(undefined, { granularity: 'grapheme' });
       const parts = Array.from(seg.segment(text) as Iterable<{ segment: string }>).map(
@@ -57,8 +58,8 @@ type Options = {
   messageTextRef: React.MutableRefObject<string>;
   setMessageText: React.Dispatch<React.SetStateAction<string>>;
   setEmojiPanelOpen: React.Dispatch<React.SetStateAction<boolean>>;
-  setMessages: React.Dispatch<React.SetStateAction<any[]>>;
-  latestMessagesForPersistRef: React.MutableRefObject<any[]>;
+  setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>;
+  latestMessagesForPersistRef: React.MutableRefObject<ChatMessage[]>;
   enqueueMessagesPersist: (reason: string) => void;
   setUploadStatus: React.Dispatch<React.SetStateAction<Record<string, "sending" | "sent" | "failed">>>;
   updateReadStatuses: (updater: (prev: ReadStatusMap) => ReadStatusMap) => void;
@@ -93,7 +94,7 @@ export function useChatComposer({
   // Как у голоса/кружка: лента + persist-снимок сразу, иначе быстрый Back без сети
   // сохраняет старый снимок без нового пузыря.
   const commitMessages = React.useCallback(
-    (update: (prev: any[]) => any[], reason: string) => {
+    (update: (prev: ChatMessage[]) => ChatMessage[], reason: string) => {
       latestMessagesForPersistRef.current = update(latestMessagesForPersistRef.current || []);
       setMessages((prev) => update(prev));
       enqueueMessagesPersist(reason);
@@ -185,7 +186,7 @@ export function useChatComposer({
             : {}),
         });
 
-        if ((result as any)?.localCancelled) {
+        if ((result)?.localCancelled) {
           return;
         }
         
@@ -230,7 +231,7 @@ export function useChatComposer({
             }));
           }
         } else {
-          throw new Error((result as any).error || 'Failed to send message');
+          throw new Error((result).error || 'Failed to send message');
         }
         
       } catch (e) {
@@ -352,8 +353,8 @@ export function useChatComposer({
               : {}),
           });
 
-          if ((result as any)?.localCancelled) return;
-          if (!result.ok) throw new Error((result as any).error || 'Failed to send sticker');
+          if ((result)?.localCancelled) return;
+          if (!result.ok) throw new Error((result).error || 'Failed to send sticker');
 
           if (currentUserId) clearMessageCache(peerId, currentUserId);
           const deliveryStatus = outgoingStatusFromSendResult(result);

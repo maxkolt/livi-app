@@ -13,7 +13,7 @@ export interface IReplyTo {
   from: string;
 }
 
-interface IFriendshipMessageItem extends Document {
+export interface IFriendshipMessageItem extends Document {
   _id: mongoose.Types.ObjectId;
   friendshipId: mongoose.Types.ObjectId;
   id: string; // messageId (msg_...)
@@ -109,16 +109,16 @@ export async function ensureFriendshipMessageItemIndexes(): Promise<void> {
   for (const name of obsoleteNames) {
     try {
       await coll.dropIndex(name);
-    } catch (err: any) {
-      if (err?.code !== 27 && err?.codeName !== 'IndexNotFound') {
-        console.warn(`[FriendshipMessageItem] dropIndex(${name}):`, err?.message || err);
+    } catch (err) {
+      if ((err as { code?: unknown } | null)?.code !== 27 && (err as { codeName?: unknown } | null)?.codeName !== 'IndexNotFound') {
+        console.warn(`[FriendshipMessageItem] dropIndex(${name}):`, (err as { message?: unknown } | null)?.message || err);
       }
     }
   }
   try {
     await FriendshipMessageItem.createIndexes();
-  } catch (err: any) {
-    console.warn('[FriendshipMessageItem] createIndexes:', err?.message || err);
+  } catch (err) {
+    console.warn('[FriendshipMessageItem] createIndexes:', (err as { message?: unknown } | null)?.message || err);
   }
 }
 

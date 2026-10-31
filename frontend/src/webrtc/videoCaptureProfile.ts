@@ -29,8 +29,8 @@ function getAndroidApiLevel(): number | null {
 function isOppoA3s(): boolean {
   const brand = normalizeLower(Device.brand);
   const model = normalizeLower(Device.modelName);
-  const modelId = normalizeLower((Device as any).modelId);
-  const manufacturer = normalizeLower((Device as any).manufacturer);
+  const modelId = normalizeLower((Device).modelId);
+  const manufacturer = normalizeLower((Device).manufacturer);
 
   // OPPO A3s is commonly reported as "OPPO A3s", and model IDs often include CPH1803/CPH1853.
   // We keep this conservative to avoid downscaling unrelated OPPO devices.

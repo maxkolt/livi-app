@@ -1,3 +1,5 @@
+import type { AppRuntimeGlobals } from './appRuntimeTypes';
+import type { PushNotificationData } from './notificationTypes';
 import { AppState, NativeModules, Platform } from 'react-native';
 import * as Notifications from 'expo-notifications';
 import Constants from 'expo-constants';
@@ -178,7 +180,7 @@ async function notifyMissedCallNativeAndroid(callId: string, fromUserId: string,
     await mod.showMissedCallNotification(callId, fromUserId || '', fromNick ?? '');
     return true;
   } catch (e) {
-    logger.warn('[push] showMissedCallNotification native failed', e as any);
+    logger.warn('[push] showMissedCallNotification native failed', e);
     return false;
   }
 }
@@ -232,7 +234,7 @@ async function persistPushTokenSnapshot(snapshot: PushTokenSnapshot): Promise<vo
 
 function ensureInAppPiPBeforeOpeningFriendsFromMessageNotification(): void {
   try {
-    const g = global as any;
+    const g = global as AppRuntimeGlobals;
     if (g.__pipVisibleRef?.current === true || g.__pipInSystemModeRef?.current === true) return;
 
     const session = g.__webrtcSessionRef?.current;
@@ -292,7 +294,7 @@ function ensureInAppPiPBeforeOpeningFriendsFromMessageNotification(): void {
       if (session && typeof session.enterPiP === 'function') session.enterPiP();
     } catch {}
   } catch (e) {
-    logger.warn('[push] ensureInAppPiPBeforeOpeningFriendsFromMessageNotification failed', e as any);
+    logger.warn('[push] ensureInAppPiPBeforeOpeningFriendsFromMessageNotification failed', e);
   }
 }
 
@@ -395,7 +397,7 @@ export async function markUnreadNotificationsSeen(reason?: string): Promise<void
     logger.info('[push] markUnreadNotificationsSeen', { reason: reason || 'chats', unreadTotal });
     await syncAppBadgeFromMissedCount();
   } catch (e) {
-    logger.warn('[push] markUnreadNotificationsSeen failed', e as any);
+    logger.warn('[push] markUnreadNotificationsSeen failed', e);
   }
 }
 
@@ -478,7 +480,7 @@ export async function markMissedNotificationsSeen(reason?: string): Promise<void
     const waiters = syncBadgeWaiters.splice(0);
     waiters.forEach((w) => w());
   } catch (e) {
-    logger.warn('[push] markMissedNotificationsSeen failed', e as any);
+    logger.warn('[push] markMissedNotificationsSeen failed', e);
   }
 }
 
@@ -631,7 +633,7 @@ export async function recordMissedCallForUser(
   })();
   const recentCancel = (() => {
     try {
-      const at = Number((global as any).__lastOutgoingCancelAtRef?.current || 0);
+      const at = Number((global as AppRuntimeGlobals).__lastOutgoingCancelAtRef?.current || 0);
       return at > 0 && Date.now() - at < 8000;
     } catch {
       return false;
@@ -901,7 +903,7 @@ async function syncAppBadgeFromMissedCountNow(): Promise<void> {
       applyAndroidShadeSummariesIfNeeded(prevSnap, missedForBadge, unreadForBadge, map, nativeMissed);
     }
   } catch (e) {
-    logger.warn('[push] syncAppBadgeFromMissedCount failed', e as any);
+    logger.warn('[push] syncAppBadgeFromMissedCount failed', e);
     lastAppliedBadge = null;
     try { await Notifications.setBadgeCountAsync(0); } catch {}
   }
@@ -991,7 +993,7 @@ AppState.addEventListener('change', (next) => {
 
 /** Текущий peerId чата, если пользователь сейчас в экране переписки. Устанавливается ChatScreen при фокусе, сбрасывается при уходе. */
 export function setCurrentChatPeerId(peerId: string | null): void {
-  (global as any).__currentChatPeerId = peerId ?? null;
+  (global as AppRuntimeGlobals).__currentChatPeerId = peerId ?? null;
   // FCM не рисует непрочитанное по переписке, которая на экране.
   if (Platform.OS === 'android') {
     try { NativeModules.LiviAppModule?.setViewingChatPeer?.(peerId ?? ''); } catch (_) {}
@@ -1009,11 +1011,11 @@ function getColdStartNotificationResponse(): Promise<Notifications.NotificationR
 // Для звонков: в активном приложении показываем модалку по сокету; в фоне/убитом — показываем пуш на телефоне.
 Notifications.setNotificationHandler({
   handleNotification: async (n) => {
-    const type = String((n as any)?.request?.content?.data?.type || '');
+    const type = String((n)?.request?.content?.data?.type || '');
     // Таймаут или отмена: останавливаем вибрацию (снимаем уведомление), затем показываем «Пропущенный вызов» без вибрации.
     // На Android «Пропущенный вызов» показывается только из нативного кода (LiviFirebaseMessagingService), чтобы не было двух одинаковых уведомлений в шторке.
     if (type === 'call_ended') {
-      const data = (n as any)?.request?.content?.data || {};
+      const data: PushNotificationData | undefined = (n)?.request?.content?.data || {};
       const endedFromActive = !!data.endedFromActive;
       if (data?.callId) addEndedCallId(String(data.callId));
       try {
@@ -1024,7 +1026,7 @@ Notifications.setNotificationHandler({
       // Tear down VideoCall even in foreground — native FCM also emits RemoteCallEndedInSystemPiP.
       if (endedFromActive) {
         try {
-          (global as any).__onCallEndedFromPush?.();
+          (global as AppRuntimeGlobals).__onCallEndedFromPush?.();
         } catch {}
       }
       // Android: «пропущенный» только из FCM (LiviFirebaseMessagingService), без дубля из Expo.
@@ -1047,7 +1049,7 @@ Notifications.setNotificationHandler({
             trigger: { type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL, seconds: 0.2 },
           });
         } catch (e) {
-          logger.warn('[push] failed to show missed_call notification', e as any);
+          logger.warn('[push] failed to show missed_call notification', e);
         }
       } else if (isWelcomeViewingMissedCalls()) {
         logger.info('[push] skip missed_call banner (viewing calls)');
@@ -1060,7 +1062,7 @@ Notifications.setNotificationHandler({
       };
     }
     if (type === 'call_declined') {
-      const data = (n as any)?.request?.content?.data || {};
+      const data: PushNotificationData | undefined = (n)?.request?.content?.data || {};
       const id = data?.callId ? String(data.callId) : '';
       logger.info('[decline/инициатор] push setNotificationHandler call_declined', { callId: id, alreadyHandled: id ? isOutgoingDeclineHandled(id) : false });
       if (id && isOutgoingDeclineHandled(id)) {
@@ -1078,7 +1080,7 @@ Notifications.setNotificationHandler({
       };
     }
     if (type === 'call_canceled') {
-      const data = (n as any)?.request?.content?.data || {};
+      const data: PushNotificationData | undefined = (n)?.request?.content?.data || {};
       logger.info('[push] call_canceled received (handler)', { callId: data?.callId });
       if (data?.callId) {
         terminateCall({ reason: 'incoming_canceled', callId: String(data.callId) });
@@ -1113,9 +1115,9 @@ Notifications.setNotificationHandler({
     }
     // Одно уведомление о сообщениях: сверху количество, снизу «От X в HH:MM». Не показывать стандартное Expo.
     if (type === 'message') {
-      const data = (n as any)?.request?.content?.data || {};
+      const data: PushNotificationData | undefined = (n)?.request?.content?.data || {};
       const fromId = String(data?.from || data?.fromUserId || '').trim();
-      const currentPeer = (global as any).__currentChatPeerId;
+      const currentPeer = (global as AppRuntimeGlobals).__currentChatPeerId;
       if (fromId && currentPeer && fromId === currentPeer) {
         return {
           shouldShowBanner: false,
@@ -1170,7 +1172,7 @@ Notifications.setNotificationHandler({
   },
 });
 
-type ReadyNavigation = NonNullable<any>;
+type ReadyNavigation = NonNullable<AppRuntimeGlobals['__navRef']>;
 type PendingNavigation = {
   key: string;
   createdAtMs: number;
@@ -1188,7 +1190,7 @@ const PUSH_HANDLED_NOTIFICATION_RESPONSES_KEY = 'push_handled_notification_respo
 const MAX_STORED_HANDLED_NOTIFICATION_RESPONSES = 80;
 
 function getReadyNav(): ReadyNavigation | null {
-  const nav = (global as any).__navRef;
+  const nav = (global as AppRuntimeGlobals).__navRef;
   return nav?.isReady?.() ? nav : null;
 }
 
@@ -1208,7 +1210,7 @@ function cleanupHandledNotificationTaps(now = Date.now()): void {
   }
 }
 
-function buildNotificationTapKey(data: any, actionIdentifier: string, responseIdentifier?: string): string {
+function buildNotificationTapKey(data: PushNotificationData, actionIdentifier: string, responseIdentifier?: string): string {
   const type = String(data?.type || '').trim();
   const callId = String(data?.callId || '').trim();
   const messageId = String(data?.messageId || '').trim();
@@ -1222,7 +1224,7 @@ function buildNotificationTapKey(data: any, actionIdentifier: string, responseId
   ].join(':');
 }
 
-function shouldHandleNotificationTap(data: any, actionIdentifier: string, responseIdentifier?: string): boolean {
+function shouldHandleNotificationTap(data: PushNotificationData, actionIdentifier: string, responseIdentifier?: string): boolean {
   const key = buildNotificationTapKey(data, actionIdentifier, responseIdentifier);
   const now = Date.now();
   cleanupHandledNotificationTaps(now);
@@ -1251,7 +1253,7 @@ async function loadPersistedHandledNotificationResponseKeys(): Promise<Set<strin
 }
 
 async function wasNotificationResponseHandledInPastSession(
-  data: any,
+  data: PushNotificationData,
   actionIdentifier: string,
   responseIdentifier?: string
 ): Promise<boolean> {
@@ -1261,7 +1263,7 @@ async function wasNotificationResponseHandledInPastSession(
 }
 
 async function persistHandledNotificationResponseKey(
-  data: any,
+  data: PushNotificationData,
   actionIdentifier: string,
   responseIdentifier?: string
 ): Promise<void> {
@@ -1430,7 +1432,7 @@ export async function handleDeclineCallFromDeepLink(callId: string): Promise<voi
   } catch {}
   if (!callerPeer) {
     try {
-      callerPeer = String((global as any).__lastIncomingFromUserIdRef?.current || '').trim();
+      callerPeer = String((global as AppRuntimeGlobals).__lastIncomingFromUserIdRef?.current || '').trim();
     } catch {}
   }
   if (!callerPeer) {
@@ -1449,8 +1451,8 @@ export async function handleDeclineCallFromDeepLink(callId: string): Promise<voi
     await AsyncStorage.removeItem('last_incoming_from');
   } catch {}
   try {
-    (global as any).__lastIncomingFromUserIdRef = (global as any).__lastIncomingFromUserIdRef || { current: null };
-    (global as any).__lastIncomingFromUserIdRef.current = null;
+    (global as AppRuntimeGlobals).__lastIncomingFromUserIdRef = (global as AppRuntimeGlobals).__lastIncomingFromUserIdRef || { current: null };
+    (global as AppRuntimeGlobals).__lastIncomingFromUserIdRef!.current = null;
   } catch {}
   terminateCall({ reason: 'incoming_declined_local', callId });
   try {
@@ -1466,7 +1468,7 @@ export async function handleDeclineCallFromDeepLink(callId: string): Promise<voi
  * Обработка ответа на уведомление (тап по уведомлению или по кнопке «Поднять»/«Положить»).
  * actionIdentifier: 'answer' = Поднять, 'decline' = Положить, DEFAULT = тап по телу уведомления.
  */
-async function handleNotificationResponse(data: any, actionIdentifier: string, responseIdentifier?: string) {
+async function handleNotificationResponse(data: PushNotificationData, actionIdentifier: string, responseIdentifier?: string) {
   let persistAfterHandle = false;
   try {
     const type = String(data?.type || '');
@@ -1506,7 +1508,7 @@ async function handleNotificationResponse(data: any, actionIdentifier: string, r
       if (data?.endedFromActive) {
         await clearCallRelatedNotificationsAndSyncBadge();
         try {
-          (global as any).__onCallEndedFromPush?.();
+          (global as AppRuntimeGlobals).__onCallEndedFromPush?.();
         } catch {}
       }
       return;
@@ -1518,7 +1520,7 @@ async function handleNotificationResponse(data: any, actionIdentifier: string, r
         nav.dispatch(
           CommonActions.reset({
             index: 0,
-            routes: [{ name: 'Home' as never, params: { openWelcomeCalls: true, openWelcomeCallsMissed: true } }],
+            routes: [{ name: 'Home', params: { openWelcomeCalls: true, openWelcomeCallsMissed: true } }],
           })
         );
       });
@@ -1535,7 +1537,7 @@ async function handleNotificationResponse(data: any, actionIdentifier: string, r
           CommonActions.reset({
             index: 0,
             routes: [{
-              name: 'Home' as never,
+              name: 'Home',
               params: {
                 openWelcomeChat: true,
                 openWelcomeChatUnread: true,
@@ -1558,7 +1560,7 @@ async function handleNotificationResponse(data: any, actionIdentifier: string, r
           CommonActions.reset({
             index: 0,
             // Сразу страница «Заявки в друзья»: заявка ждёт там, даже если окно уже закрыли.
-            routes: [{ name: 'Home' as never, params: { openFriendsTab: true, openFriendRequests: true } }],
+            routes: [{ name: 'Home', params: { openFriendsTab: true, openFriendRequests: true } }],
           })
         );
       });
@@ -1574,7 +1576,7 @@ async function handleNotificationResponse(data: any, actionIdentifier: string, r
         nav.dispatch(
           CommonActions.reset({
             index: 0,
-            routes: [{ name: 'Home' as never, params: { openWelcomeProfile: true } }],
+            routes: [{ name: 'Home', params: { openWelcomeProfile: true } }],
           })
         );
       });
@@ -1629,8 +1631,8 @@ async function handleNotificationResponse(data: any, actionIdentifier: string, r
           stopIncomingCallAlert();
         } catch {}
         const complete =
-          typeof (global as any).__completeAndroidIncomingAnswer === 'function'
-            ? (global as any).__completeAndroidIncomingAnswer as (from: string, callId: string) => Promise<void>
+          typeof (global as AppRuntimeGlobals).__completeAndroidIncomingAnswer === 'function'
+            ? (global as AppRuntimeGlobals).__completeAndroidIncomingAnswer as (from: string, callId: string) => Promise<void>
             : null;
         if (complete && Platform.OS === 'android') {
           await complete(peerUserId, callId);
@@ -1650,7 +1652,7 @@ async function handleNotificationResponse(data: any, actionIdentifier: string, r
       userId: String(data?.from || data?.fromUserId || '').trim() || null,
       actionIdentifier,
     });
-    logger.warn('[push] handleNotificationResponse failed', e as any);
+    logger.warn('[push] handleNotificationResponse failed', e);
   } finally {
     if (persistAfterHandle) {
       try {
@@ -1709,7 +1711,7 @@ async function ensureIncomingCallNotificationCategory() {
       { identifier: 'decline', buttonTitle: t('cancelCall', lang), options: { isDestructive: true } },
     ]);
   } catch (e) {
-    logger.warn('[push] setNotificationCategoryAsync failed', e as any);
+    logger.warn('[push] setNotificationCategoryAsync failed', e);
   }
 }
 
@@ -1736,7 +1738,7 @@ export async function ensureInitialNotificationPermissions(): Promise<void> {
     }
     logger.info('[push] notification permission status:', finalStatus);
   } catch (e) {
-    logger.warn('[push] Failed to request notification permissions', e as any);
+    logger.warn('[push] Failed to request notification permissions', e);
   }
 
 }
@@ -1792,18 +1794,18 @@ export async function registerAndSendPushToken(userId?: string, options?: Regist
       let fcmToken: string | undefined;
       try {
         const deviceTokenResp = await Notifications.getDevicePushTokenAsync();
-        const deviceToken = (deviceTokenResp as any)?.data;
+        const deviceToken = (deviceTokenResp)?.data;
         if (deviceToken && Platform.OS === 'android') {
           fcmToken = String(deviceToken);
         }
       } catch (e) {
-        const msg = String((e as any)?.message || e || '');
+        const msg = String((e as Error | null | undefined)?.message || e || '');
         const looksLikeFcmSetupError =
           msg.includes('fcm-credentials') ||
           msg.includes('Default FirebaseApp is not initialized') ||
           msg.includes('FirebaseApp.initializeApp');
         if (!(__DEV__ && looksLikeFcmSetupError)) {
-          logger.warn('[push] failed to get device push token', e as any);
+          logger.warn('[push] failed to get device push token', e);
         }
       }
 
@@ -1811,8 +1813,8 @@ export async function registerAndSendPushToken(userId?: string, options?: Regist
       // звонок на Android идёт data-only через FCM, на iOS — через PushKit. Поэтому недоступность
       // Expo не должна отменять регистрацию нативных токенов — иначе 503 у Expo = недозвон.
       const projectId =
-        (Constants.expoConfig as any)?.extra?.eas?.projectId ||
-        (Constants as any)?.easConfig?.projectId;
+        (Constants.expoConfig)?.extra?.eas?.projectId ||
+        (Constants)?.easConfig?.projectId;
 
       let expoToken = '';
       try {
@@ -1821,7 +1823,7 @@ export async function registerAndSendPushToken(userId?: string, options?: Regist
         );
         expoToken = String(tokenResp?.data || '');
       } catch (e) {
-        logger.warn('[push] failed to get expo push token', e as any);
+        logger.warn('[push] failed to get expo push token', e);
       }
 
       const installId = await getInstallId();
@@ -1886,7 +1888,7 @@ export async function registerAndSendPushToken(userId?: string, options?: Regist
         body: JSON.stringify(body),
       }).catch((e) => {
         logger.warn('[push] failed to register token (network)', e);
-        return null as any;
+        return null;
       });
 
       try {
@@ -1900,11 +1902,11 @@ export async function registerAndSendPushToken(userId?: string, options?: Regist
           }
         }
       } catch {}
-    } catch (e: any) {
+    } catch (e: unknown) {
       // Dev-only noise suppression:
       // In dev builds, Firebase/FCM is often not configured, so expo-notifications may throw.
       // This should not spam logs during everyday debugging.
-      const msg = String(e?.message || e || '');
+      const msg = String((e as Error | null | undefined)?.message || e || '');
       const looksLikeFcmSetupError =
         msg.includes('fcm-credentials') ||
         msg.includes('Default FirebaseApp is not initialized') ||
@@ -1924,7 +1926,7 @@ export async function registerAndSendPushToken(userId?: string, options?: Regist
         return;
       }
 
-      logger.warn('[push] registerAndSendPushToken error', e as any);
+      logger.warn('[push] registerAndSendPushToken error', e);
     }
   })();
   try {
@@ -1954,9 +1956,9 @@ export function addNotificationListeners() {
   (async () => {
     try {
       const last = await getColdStartNotificationResponse();
-      const data = (last as any)?.notification?.request?.content?.data;
-      const actionId = (last as any)?.actionIdentifier ?? Notifications.DEFAULT_ACTION_IDENTIFIER;
-      const responseId = (last as any)?.notification?.request?.identifier;
+      const data: PushNotificationData | undefined = (last)?.notification?.request?.content?.data;
+      const actionId = (last)?.actionIdentifier ?? Notifications.DEFAULT_ACTION_IDENTIFIER;
+      const responseId = (last)?.notification?.request?.identifier;
       if (!data) return;
       const coldStartType = String(data?.type || '').trim();
       if (!coldStartType) {
@@ -1975,15 +1977,15 @@ export function addNotificationListeners() {
       logger.info('[push] cold start: handling notification response', { type: coldStartType, actionId });
       await handleNotificationResponse(data, actionId, responseId);
     } catch (e) {
-      logger.warn('[push] cold start handle failed', e as any);
+      logger.warn('[push] cold start handle failed', e);
     }
   })();
 
   // 2) Если приложение в фоне/foreground и пользователь нажал на пуш или на кнопку «Поднять»/«Положить»
   const sub2 = Notifications.addNotificationResponseReceivedListener(async (r) => {
-    const data = (r as any)?.notification?.request?.content?.data;
-    const actionId = (r as any)?.actionIdentifier ?? Notifications.DEFAULT_ACTION_IDENTIFIER;
-    const responseId = (r as any)?.notification?.request?.identifier;
+    const data: PushNotificationData | undefined = (r)?.notification?.request?.content?.data;
+    const actionId = (r)?.actionIdentifier ?? Notifications.DEFAULT_ACTION_IDENTIFIER;
+    const responseId = (r)?.notification?.request?.identifier;
     if (data) await handleNotificationResponse(data, actionId, responseId);
   });
 
@@ -1991,7 +1993,7 @@ export function addNotificationListeners() {
   // (Expo-уведомление скрыто в setNotificationHandler; при FCM пуше экран открывает LiviFirebaseMessagingService).
   const sub1 = Notifications.addNotificationReceivedListener(async (n) => {
     try {
-      const data = (n as any)?.request?.content?.data;
+      const data: PushNotificationData | undefined = (n)?.request?.content?.data;
       if (data?.type === 'call_declined') {
         const id = data?.callId ? String(data.callId) : '';
         logger.info('[decline/инициатор] push notificationReceived call_declined', { callId: id, alreadyHandled: id ? isOutgoingDeclineHandled(id) : false });
@@ -2024,7 +2026,7 @@ export function addNotificationListeners() {
         // Foreground/active: socket call:ended can be missed after reconnect — tear down UI.
         if (endedFromActive) {
           try {
-            (global as any).__onCallEndedFromPush?.();
+            (global as AppRuntimeGlobals).__onCallEndedFromPush?.();
           } catch {}
         }
         // Android: см. call_canceled — не дублируем notifyMissedCallNativeAndroid.
@@ -2064,7 +2066,7 @@ export function addNotificationListeners() {
               trigger: { type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL, seconds: 0.2 },
             });
           } catch (e) {
-            logger.warn('[push] failed to show missed_call for stale call', e as any);
+            logger.warn('[push] failed to show missed_call for stale call', e);
           }
           return;
         }
@@ -2074,7 +2076,7 @@ export function addNotificationListeners() {
           appState: AppState.currentState,
         });
         // Один путь: только handler App → presentIncomingCall. Не CallKeep.displayIncomingCall (двойной UI).
-        const setFromPush = (global as any).__setIncomingCallFromPush;
+        const setFromPush = (global as AppRuntimeGlobals).__setIncomingCallFromPush;
         if (typeof setFromPush === 'function') {
           setFromPush(data);
         }

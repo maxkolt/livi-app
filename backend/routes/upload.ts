@@ -1,3 +1,4 @@
+import type { AuthenticatedRequest, ErrorDetails } from '../utils/runtimeTypes';
 // backend/routes/upload.ts
 import express, { Router } from 'express';
 import fs from 'fs';
@@ -113,7 +114,7 @@ async function authenticateUpload(req: express.Request, res: express.Response, r
     return null;
   }
   // Пользователя уже определил общий middleware (installId + секрет установки).
-  const authedUserId = String((req as any).userId || '');
+  const authedUserId = String((req as AuthenticatedRequest).userId || '');
   if (!authedUserId) {
     res.status(401).json({ ok: false, error: 'unauthorized' });
     return null;
@@ -126,10 +127,10 @@ function requireUploadAuth(rateLimitKey: string, maxRequests: number): express.R
     try {
       const authedUserId = await authenticateUpload(req, res, rateLimitKey, maxRequests);
       if (!authedUserId) return;
-      (req as any).uploadUserId = authedUserId;
+      (req as AuthenticatedRequest).uploadUserId = authedUserId;
       next();
-    } catch (error: any) {
-      res.status(500).json({ ok: false, error: error?.message || 'Upload failed' });
+    } catch (error: unknown) {
+      res.status(500).json({ ok: false, error: (error as ErrorDetails)?.message || 'Upload failed' });
     }
   };
 }
@@ -138,7 +139,7 @@ function requireUploadAuth(rateLimitKey: string, maxRequests: number): express.R
 // Legacy base64 JSON fallback. Keep this intentionally small; use multipart for large media.
 router.post('/upload/media', requireUploadAuth('upload_media', 25), express.json({ limit: BASE64_JSON_LIMIT }), async (req, res) => {
   try {
-    const authedUserId = String((req as any).uploadUserId || '');
+    const authedUserId = String((req as AuthenticatedRequest).uploadUserId || '');
 
     const { dataUri, from } = req.body;
 
@@ -185,9 +186,9 @@ router.post('/upload/media', requireUploadAuth('upload_media', 25), express.json
     console.log(`📤 Media uploaded: ${fileName} (${mimeType}, ${Math.round(buffer.length / 1024)}KB)`);
 
     return res.json({ ok: true, url });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('📤 Upload error:', error);
-    return res.status(500).json({ ok: false, error: error?.message || 'Upload failed' });
+    return res.status(500).json({ ok: false, error: (error as ErrorDetails)?.message || 'Upload failed' });
   }
 });
 
@@ -214,7 +215,7 @@ router.post('/upload/media/multipart', async (req, res) => {
     const authedUserId = await authenticateUpload(req, res, 'upload_media_mp', 60);
     if (!authedUserId) return;
 
-    upload.single('file')(req, res, async (error: any) => {
+    upload.single('file')(req, res, async (error: unknown) => {
       if (error) {
         if (error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE') {
           return res.status(413).json({ ok: false, error: 'file_too_large' });
@@ -222,10 +223,10 @@ router.post('/upload/media/multipart', async (req, res) => {
         if (error instanceof multer.MulterError && error.code === 'LIMIT_UNEXPECTED_FILE') {
           return res.status(400).json({ ok: false, error: 'unsupported_mime' });
         }
-        return res.status(400).json({ ok: false, error: error?.message || 'upload_failed' });
+        return res.status(400).json({ ok: false, error: (error as ErrorDetails)?.message || 'upload_failed' });
       }
 
-      const file = (req as any).file as { path: string; filename: string; mimetype: string; size: number } | undefined;
+      const file = (req).file as { path: string; filename: string; mimetype: string; size: number } | undefined;
       if (!file?.path || !file?.filename || !file.size) {
         return res.status(400).json({ ok: false, error: 'missing_file' });
       }
@@ -233,8 +234,8 @@ router.post('/upload/media/multipart', async (req, res) => {
       const url = `/uploads/media/${file.filename}`;
       return res.json({ ok: true, url });
     });
-  } catch (error: any) {
-    return res.status(500).json({ ok: false, error: error?.message || 'Upload failed' });
+  } catch (error: unknown) {
+    return res.status(500).json({ ok: false, error: (error as ErrorDetails)?.message || 'Upload failed' });
   }
 });
 

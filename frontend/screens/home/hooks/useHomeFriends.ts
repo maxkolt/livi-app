@@ -1,3 +1,4 @@
+import type { FriendsPage, FriendListItem } from '../../../sockets/modules/friends';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import socket, {
@@ -83,9 +84,9 @@ export function useHomeFriends({
 
     const promise = (async () => {
       try {
-        let res: any = null;
-        const fetchFriendsPage = async (page: number): Promise<any> => {
-          const s: any = socket as any;
+        let res: FriendsPage | null = null;
+        const fetchFriendsPage = async (page: number): Promise<FriendsPage> => {
+          const s = socket;
           if (s?.connected) {
             try {
               const socketRes = await fetchFriends?.(page, FRIENDS_PAGE_SIZE, { includeAvatarThumbs });
@@ -112,7 +113,7 @@ export function useHomeFriends({
                 });
                 clearTimeout(timeoutId);
                 if (httpRes.ok) {
-                  const json = await httpRes.json().catch(() => null);
+                  const json: FriendsPage | null = await httpRes.json().catch(() => null);
                   if (json?.ok) {
                     return json;
                   }
@@ -125,7 +126,7 @@ export function useHomeFriends({
           return { ok: false, list: [], error: 'friends_fetch_failed' };
         };
 
-        const allFriends: any[] = [];
+        const allFriends: FriendListItem[] = [];
         for (let page = 1; page <= FRIENDS_MAX_PAGES_PER_LOAD; page += 1) {
           const pageRes = await fetchFriendsPage(page);
           if (!pageRes?.ok || !Array.isArray(pageRes?.list)) {
@@ -141,7 +142,7 @@ export function useHomeFriends({
 
         const logRes = res ? {
           ...res,
-          list: res.list?.map((f: any) => ({
+          list: res.list?.map((f) => ({
             ...f,
             avatarThumbB64: f.avatarThumbB64 ? `[base64: ${f.avatarThumbB64.length} chars]` : undefined
           }))
@@ -153,13 +154,13 @@ export function useHomeFriends({
           return;
         }
 
-        const incoming: any[] = res.list;
+        const incoming: FriendListItem[] = res!.list!;
         const fresh: Friend[] = incoming.map(mapToFriend);
         primeCallAvatarsFromFriends(incoming);
         const cacheKey = friendsCacheKeyForIdentity(getCurrentUserId(), installId || (await getInstallId().catch(() => '')));
         setFriends((prev) => {
           const merged: Friend[] = fresh.map((f: Friend) => {
-            const prevOne = prev.find((p) => p.id === f.id) as any;
+            const prevOne = prev.find((p) => p.id === f.id);
             const finalName = (f.name && f.name.trim()) || (prevOne?.name && prevOne.name.trim()) || '';
 
             if (finalName && finalName.length === 1 && finalName !== '—' && f.name && f.name.trim().length > 1) {
@@ -202,7 +203,7 @@ export function useHomeFriends({
                 isBusy: mergeFriendBusyFromFetch(!!f.isBusy, !!prevOne?.isBusy),
                 isRandomBusy: !!prevOne?.isRandomBusy,
                 inCall: !!prevOne?.inCall,
-              } as any;
+              };
             }
 
             const newAvatarVer = typeof f.avatarVer === 'number' ? f.avatarVer : (prevOne?.avatarVer || 0);
@@ -232,7 +233,7 @@ export function useHomeFriends({
               isBusy: mergeFriendBusyFromFetch(!!f.isBusy, !!prevOne?.isBusy),
               isRandomBusy: !!prevOne?.isRandomBusy,
               inCall: !!prevOne?.inCall,
-            } as any;
+            };
           });
 
           try {
@@ -248,7 +249,7 @@ export function useHomeFriends({
           }
 
           try {
-            const cacheList = merged.map((f: any) => ({
+            const cacheList = merged.map((f) => ({
               id: String(f.id),
               name: String(f.name || ''),
               avatar: String(f.avatar || ''),
@@ -300,7 +301,7 @@ export function useHomeFriends({
         if (!Array.isArray(list) || list.length === 0) return;
 
         const cached: Friend[] = list
-          .map((it: any) => {
+          .map((it: Partial<Record<keyof Friend, unknown>> | null) => {
             const id = it?.id != null ? String(it.id) : '';
             if (!id) return null;
             return {
@@ -311,7 +312,7 @@ export function useHomeFriends({
               avatarThumbB64: String(it?.avatarThumbB64 || ''),
               online: false,
               isBusy: false,
-            } as any;
+            };
           })
           .filter(Boolean) as Friend[];
 
@@ -340,7 +341,7 @@ export function useHomeFriends({
     let cancelled = false;
     const recentOutgoingCancel = () => {
       try {
-        const at = Number((global as any).__lastOutgoingCancelAtRef?.current || 0);
+        const at = Number((global as typeof global & { __lastOutgoingCancelAtRef?: { current: number } }).__lastOutgoingCancelAtRef?.current || 0);
         return at > 0 && Date.now() - at < 12000;
       } catch {
         return false;

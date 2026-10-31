@@ -1,3 +1,6 @@
+import type { E2eEnvelope } from './e2eCrypto';
+import type { MessageMutationResponse, MessageOutboxItem } from './outboxTypes';
+import type { ChatMessage } from '../../screens/chat/chatMessageTypes';
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { getInstallAuthHeaders } from "../../utils/installId";
 import { logger } from "../../utils/logger";
@@ -14,9 +17,12 @@ import {
 } from "./outbox";
 import { onReactionsConfirmed, queueMessageReaction } from "./reactionOutbox";
 import { shared } from "./shared";
+import { globalMessageStorage } from "./messageStorage";
+export { globalMessageStorage } from "./messageStorage";
 import { socket } from "./socketCore";
 import {
   decryptIncomingMessage,
+  type DecryptableMessage,
   E2eUnavailableError,
   invalidateKeysAfterMismatch,
   onE2eStatus,
@@ -39,124 +45,19 @@ onE2eStatus((status) => {
     .catch(() => {});
 });
 
-const decryptForApp = <M extends Record<string, any>>(m: M): Promise<M> =>
+const decryptForApp = <M extends DecryptableMessage>(m: M): Promise<M> =>
   decryptIncomingMessage(m, e2eUndecryptableText).catch(() => m);
 
-async function decryptMessageList<M extends Record<string, any>>(list: M[]): Promise<M[]> {
+async function decryptMessageList<M extends DecryptableMessage>(list: M[]): Promise<M[]> {
   return Promise.all(list.map((m) => decryptForApp(m)));
 }
-
-// saveMessage делает read-modify-write одного ключа AsyncStorage. Без очереди пачка входящих
-// (офлайн-очередь на reconnect) читала один и тот же массив, и последняя запись затирала остальные.
-const chatWriteChains = new Map<string, Promise<unknown>>();
-function withChatWriteLock<T>(chatKey: string, work: () => Promise<T>): Promise<T> {
-  const prev = chatWriteChains.get(chatKey) ?? Promise.resolve();
-  const next = prev.then(work, work);
-  const settled = next.catch(() => undefined);
-  chatWriteChains.set(chatKey, settled);
-  void settled.then(() => {
-    if (chatWriteChains.get(chatKey) === settled) chatWriteChains.delete(chatKey);
-  });
-  return next;
-}
-
-// Глобальное хранение сообщений
-export const globalMessageStorage = {
-  // Функция для получения ключа чата
-  getChatKey: (userId1: string, userId2: string) => {
-    const sortedIds = [userId1, userId2].sort();
-    return `chat_messages_${sortedIds[0]}_${sortedIds[1]}`;
-  },
-
-  // Сохранение сообщения в AsyncStorage (+ сброс in-memory кэша, чтобы превью/список видели последнее).
-  // true — сообщение лежит в хранилище (записано сейчас или уже было).
-  saveMessage: async (message: any, currentUserId: string): Promise<boolean> => {
-    const me = String(currentUserId || "").trim();
-    const from = String(message?.from || "").trim();
-    const to = String(message?.to || "").trim();
-    if (!me || !message?.id) return false;
-    // peer = собеседник: для входящего from, для своего — to.
-    const peerId = from === me ? to : from;
-    if (!peerId) return false;
-
-    const chatKey = globalMessageStorage.getChatKey(me, peerId);
-    return withChatWriteLock(chatKey, async () => {
-      try {
-        const existingMessages = await AsyncStorage.getItem(chatKey);
-        const messages = existingMessages ? JSON.parse(existingMessages) : [];
-        const isOwn = from === me;
-
-        const replyToPayload =
-          message.replyTo && message.replyTo.id
-            ? {
-                id: String(message.replyTo.id),
-                text: message.replyTo.text,
-                from: String(message.replyTo.from || ""),
-                isOwn: String(message.replyTo.from || "") === me,
-              }
-            : null;
-
-        const existingIdx = messages.findIndex((m: any) => String(m?.id) === String(message.id));
-        let didWrite = false;
-        if (existingIdx < 0) {
-          const newMessage: any = {
-            id: message.id,
-            text: message.text,
-            type: message.type,
-            uri: message.uri,
-            name: message.name,
-            size: message.size,
-            duration: message.duration,
-            stickerId: message.stickerId,
-            stickerPackId: message.stickerPackId,
-            stickerEmoji: message.stickerEmoji,
-            stickerLabel: message.stickerLabel,
-            ...(message.thumbUri ? { thumbUri: message.thumbUri } : {}),
-            sender: isOwn ? "me" : "peer",
-            from,
-            to,
-            timestamp: new Date(message.timestamp),
-          };
-          if (message.callDirection) newMessage.callDirection = message.callDirection;
-        if (message.e2eUndecryptable) newMessage.e2eUndecryptable = true;
-          if (message.localOnly) newMessage.localOnly = true;
-          if (Array.isArray(message.uris) && message.uris.length > 1) {
-            newMessage.uris = message.uris.map((u: any) => String(u || "").trim()).filter(Boolean).slice(0, 10);
-            if (!newMessage.uri) newMessage.uri = newMessage.uris[0];
-          }
-          if (replyToPayload) newMessage.replyTo = replyToPayload;
-          messages.push(newMessage);
-          didWrite = true;
-        } else if (messages[existingIdx]?.e2eUndecryptable && !message.e2eUndecryptable && typeof message.text === "string") {
-        // Ключ восстановили — заглушку заменяем расшифрованным текстом.
-        const { e2eUndecryptable: _stale, ...prevMsg } = messages[existingIdx];
-        messages[existingIdx] = { ...prevMsg, text: message.text, ...(replyToPayload ? { replyTo: replyToPayload } : {}) };
-        didWrite = true;
-      } else if (replyToPayload && !messages[existingIdx]?.replyTo?.id) {
-          messages[existingIdx] = { ...messages[existingIdx], replyTo: replyToPayload };
-          didWrite = true;
-        }
-        if (didWrite) {
-          await AsyncStorage.setItem(chatKey, JSON.stringify(messages));
-          // Иначе getChatMessagesLocal до 5 мин отдаёт старый кэш без входящего → превью «своё последнее».
-          const cacheKey = `${me}-${peerId}`;
-          shared.messageCache.delete(cacheKey);
-        }
-        return true;
-      } catch (error) {
-        logger.warn("Failed to save message globally:", error);
-        return false;
-      }
-    });
-  },
-};
 
 const CACHE_DURATION = 5 * 60 * 1000;
 const GLOBALLY_DELETED_MESSAGE_IDS_KEY = "chat_globally_deleted_message_ids";
 const GLOBALLY_DELETED_MESSAGE_IDS_MAX = 600;
 
 function isLikelyOfflineError(err: unknown): boolean {
-  const msg = String((err as any)?.message || err || "").toLowerCase();
+  const msg = String((err as { message?: unknown } | null)?.message || err || "").toLowerCase();
   return (
     msg.includes("network request failed") ||
     msg.includes("socket connection timeout") ||
@@ -175,11 +76,11 @@ const SEND_RESULT_WAIT_MS = 12000;
 /** Сокета нет — HTTP либо ответит быстро, либо сети нет: долго не держим вызывающего. */
 const SEND_RESULT_WAIT_OFFLINE_MS = 1500;
 
-type SendMessageResult = {
+export type SendMessageResult = {
   ok: boolean;
   messageId?: string;
   delivered?: boolean;
-  timestamp?: unknown;
+  timestamp?: MessageMutationResponse['timestamp'];
   /** Сервер ещё не ответил: сообщение в очереди и уйдёт само, статус придёт событием. */
   queued?: boolean;
   /** Пользователь удалил сообщение до отправки. */
@@ -224,7 +125,7 @@ export function sendMessage(payload: {
       ? albumUris[0] || payload.uri
       : payload.uri;
 
-  const socketPayload: any = {
+  const socketPayload: MessageOutboxItem['payload'] = {
     to: payload.to,
     text: payload.text,
     type: messageType,
@@ -370,7 +271,7 @@ export function sendChatTyping(payload: { to: string; typing?: boolean; recordin
 export function onChatTyping(
   cb: (data: { from: string; to: string; typing: boolean; recording?: boolean; ts?: string }) => void,
 ): () => void {
-  const h = (data: any) => {
+  const h = (data: Parameters<typeof cb>[0]) => {
     if (__DEV__) {
       try {
         const DEV_LOG_CHAT_TYPING = false;
@@ -397,34 +298,22 @@ export function onChatTyping(
 }
 
 // Новая функция для получения сообщений
+export type MessagePage = {
+  ok: boolean;
+  messages?: IncomingMessage[];
+  hasMore?: boolean;
+  error?: string;
+};
+
 export function fetchMessages(payload: {
   with: string;
   limit?: number;
   before?: string;
 }) {
   const viaSocket = () =>
-    emitAck<{
-      ok: boolean;
-      messages?: Array<{
-        id: string;
-        from: string;
-        to: string;
-        type: "text" | "image" | "audio" | "sticker" | "video_note";
-        text?: string;
-        uri?: string;
-        stickerId?: string;
-        stickerPackId?: string;
-        stickerEmoji?: string;
-        stickerLabel?: string;
-        thumbUri?: string;
-        timestamp: string;
-        read: boolean;
-      }>;
-      hasMore?: boolean;
-      error?: string;
-    }>("messages:fetch", payload);
+    emitAck<MessagePage>("messages:fetch", payload);
 
-  const viaHttp = async () => {
+  const viaHttp = async (): Promise<MessagePage> => {
     const headers: Record<string, string> = { "Content-Type": "application/json", ...(await getInstallAuthHeaders()) };
     if (shared.currentUserId) headers["x-user-id"] = String(shared.currentUserId);
 
@@ -446,12 +335,12 @@ export function fetchMessages(payload: {
     }
   };
 
-  const decryptPage = async (r: any) =>
+  const decryptPage = async (r: MessagePage) =>
     r?.ok === true && Array.isArray(r.messages) ? { ...r, messages: await decryptMessageList(r.messages) } : r;
 
   return (async () => {
     try {
-      const r: any = await viaSocket();
+      const r = await viaSocket();
       if (r?.ok === true) return await decryptPage(r);
       return await decryptPage(await viaHttp());
     } catch {
@@ -483,8 +372,8 @@ export function getUnreadCounts(fromIds?: string[]) {
   return (async () => {
     try {
       return await viaSocket();
-    } catch (e: any) {
-      const msg = String(e?.message || e || "");
+    } catch (e) {
+      const msg = String((e as { message?: string } | null)?.message || e || "");
       const retriable = msg.includes("offline") || msg.includes("timeout") || msg.includes("Ack timeout");
       if (!retriable) throw e;
       try {
@@ -568,8 +457,8 @@ export function fetchChatPreviews(withIds: string[]) {
       const r = await viaSocket();
       if (r?.ok && r.previews && typeof r.previews === "object") return await decryptPreviews(r);
       return viaFetchFallback();
-    } catch (e: any) {
-      const msg = String(e?.message || e || "");
+    } catch (e) {
+      const msg = String((e as { message?: string } | null)?.message || e || "");
       const retriable = msg.includes("offline") || msg.includes("timeout") || msg.includes("Ack timeout");
       if (retriable) {
         try {
@@ -589,13 +478,19 @@ export function fetchChatPreviews(withIds: string[]) {
   })();
 }
 
-type IncomingMessage = {
+export type IncomingMessage = {
   id: string;
   from: string;
   to: string;
   type: "text" | "image" | "audio" | "sticker" | "video_note";
   text?: string;
   uri?: string;
+  uris?: string[];
+  name?: string;
+  size?: number;
+  duration?: number;
+  reactions?: { emoji: string; userId: string }[];
+  replyTo?: { id: string; text?: string; from?: string; isOwn?: boolean } | null;
   stickerId?: string;
   stickerPackId?: string;
   stickerEmoji?: string;
@@ -621,7 +516,7 @@ export function onMessageReceived(cb: (message: IncomingMessage) => void): () =>
  * иначе вкладка Чаты показывает превью своего последнего исходящего при unread > 0.
  */
 let incomingChain: Promise<void> = Promise.resolve();
-socket.on("message:received", (raw: any, ack?: (res: { ok: boolean }) => void) => {
+socket.on("message:received", (raw: IncomingMessage & { enc?: unknown }, ack?: (res: { ok: boolean }) => void) => {
   incomingChain = incomingChain.then(async () => {
     const message = await decryptForApp(raw);
     // Задержка доставки (часы телефонов идут по NTP) — главный показатель переписки под VPN.
@@ -657,9 +552,9 @@ socket.on("message:received", (raw: any, ack?: (res: { ok: boolean }) => void) =
 });
 
 export function onChatCleared(
-  cb: (data: { by: string; with: string }) => void,
+  cb: (data: { by: string; with: string; forAll?: boolean }) => void,
 ): () => void {
-  const h = (data: any) => cb(data);
+  const h = (data: Parameters<typeof cb>[0]) => cb(data);
   socket.on("message:chat_cleared", h);
   return () => {
     socket.off("message:chat_cleared", h);
@@ -669,7 +564,7 @@ export function onChatCleared(
 export function onMessageDeleted(
   cb: (data: { messageId: string; deletedBy: string }) => void,
 ): () => void {
-  const h = (data: any) => cb(data);
+  const h = (data: Parameters<typeof cb>[0]) => cb(data);
   socket.on("message:deleted", h);
   return () => {
     socket.off("message:deleted", h);
@@ -679,7 +574,7 @@ export function onMessageDeleted(
 export function onMessagesDeleted(
   cb: (data: { messageIds: string[]; deletedBy: string }) => void,
 ): () => void {
-  const h = (data: any) => cb(data);
+  const h = (data: Parameters<typeof cb>[0]) => cb(data);
   socket.on("messages:deleted", h);
   return () => {
     socket.off("messages:deleted", h);
@@ -693,8 +588,8 @@ export function onMessageReadReceipt(
     timestamp: string;
   }) => void,
 ): () => void {
-  const single = (receipt: any) => cb(receipt);
-  const batch = (receipt: any) => {
+  const single = (receipt: Parameters<typeof cb>[0]) => cb(receipt);
+  const batch = (receipt: { messageIds?: string[]; readBy?: string; timestamp?: string }) => {
     const messageIds = Array.isArray(receipt?.messageIds) ? receipt.messageIds : [];
     for (const messageId of messageIds) {
       cb({
@@ -723,7 +618,7 @@ export function sendMessageReaction(messageId: string, emoji: string, withPeerId
 export function onMessageReaction(
   cb: (data: { messageId: string; reactions: { emoji: string; userId: string }[] }) => void,
 ): () => void {
-  const h = (data: any) => cb(data);
+  const h = (data: Parameters<typeof cb>[0]) => cb(data);
   socket.on("message:reaction", h);
   const offConfirmed = onReactionsConfirmed(h);
   return () => {
@@ -826,7 +721,7 @@ async function removeDeletedMessagesFromLocalStorage(rawIds: readonly string[]):
   try {
     for (const [cacheKey, cached] of Array.from(shared.messageCache.entries())) {
       const before = Array.isArray(cached?.messages) ? cached.messages : [];
-      const next = before.filter((msg: any) => !ids.has(String(msg?.id || "").trim()));
+      const next = before.filter((msg) => !ids.has(String(msg?.id || "").trim()));
       if (next.length !== before.length) {
         shared.messageCache.set(cacheKey, { ...cached, messages: next, timestamp: Date.now() });
       }
@@ -843,7 +738,7 @@ async function removeDeletedMessagesFromLocalStorage(rawIds: readonly string[]):
         try {
           const parsed = JSON.parse(value);
           if (!Array.isArray(parsed)) return;
-          const next = parsed.filter((msg: any) => !ids.has(String(msg?.id || "").trim()));
+          const next = parsed.filter((msg: ChatMessage) => !ids.has(String(msg?.id || "").trim()));
           if (next.length === parsed.length) return;
           if (next.length === 0) {
             await AsyncStorage.removeItem(key);
@@ -858,14 +753,14 @@ async function removeDeletedMessagesFromLocalStorage(rawIds: readonly string[]):
   }
 }
 
-const deleteCleanupGlobal = globalThis as any;
+const deleteCleanupGlobal = globalThis as typeof globalThis & { __liviMessageDeleteCacheCleanupRegistered?: boolean };
 if (!deleteCleanupGlobal.__liviMessageDeleteCacheCleanupRegistered) {
   deleteCleanupGlobal.__liviMessageDeleteCacheCleanupRegistered = true;
-  socket.on("message:deleted", (data: any) => {
+  socket.on("message:deleted", (data: Parameters<Parameters<typeof onMessageDeleted>[0]>[0]) => {
     void removeDeletedMessagesFromLocalStorage([String(data?.messageId || "")]);
   });
-  socket.on("messages:deleted", (data: any) => {
-    const ids = Array.isArray(data?.messageIds) ? data.messageIds.map((id: any) => String(id || "")) : [];
+  socket.on("messages:deleted", (data: Parameters<Parameters<typeof onMessagesDeleted>[0]>[0]) => {
+    const ids = Array.isArray(data?.messageIds) ? data.messageIds.map((id) => String(id || "")) : [];
     void removeDeletedMessagesFromLocalStorage(ids);
   });
 }
@@ -874,15 +769,15 @@ function parseStoredChatMessagesJson(
   savedMessages: string,
   currentUser: string,
   peerId: string,
-): any[] {
-  const parsed = JSON.parse(savedMessages);
+): ChatMessage[] {
+  const parsed: ChatMessage[] = JSON.parse(savedMessages);
   const mapped = parsed
-    .filter((msg: any) => {
+    .filter((msg) => {
       const isFromCurrentUser = msg.from === currentUser && msg.to === peerId;
       const isToCurrentUser = msg.from === peerId && msg.to === currentUser;
       return isFromCurrentUser || isToCurrentUser;
     })
-    .map((msg: any) => {
+    .map((msg) => {
       let correctedMsg = { ...msg };
       if (!msg.from || !msg.to) {
         if (msg.sender === "me") {
@@ -895,7 +790,7 @@ function parseStoredChatMessagesJson(
       }
       return {
         ...correctedMsg,
-        timestamp: new Date(msg.timestamp),
+        timestamp: new Date(msg.timestamp!),
         sender: correctedMsg.from === currentUser ? "me" : "peer",
       };
     });
@@ -906,7 +801,7 @@ function parseStoredChatMessagesJson(
  * Только in-memory кэш + AsyncStorage — без сети и без getMyUserId.
  * Нужен для первого кадра ChatScreen (нет долгого спиннера при офлайне / таймаутах сокета).
  */
-export async function getChatMessagesLocal(peerId: string, userId?: string): Promise<any[]> {
+export async function getChatMessagesLocal(peerId: string, userId?: string): Promise<ChatMessage[]> {
   try {
     let currentUser = userId || shared.currentUserId;
     if (!currentUser) {
@@ -946,7 +841,7 @@ export function clearAllMessageCache() {
 export async function clearChatMessages(peerId: string, forAll: boolean = true): Promise<boolean> {
   try {
     const viaSocket = async () => {
-      const result = await emitAck("message:clear_chat", { with: peerId, forAll });
+      const result = await emitAck<{ ok: boolean; error?: string }>("message:clear_chat", { with: peerId, forAll });
       return !!result?.ok;
     };
 
@@ -1032,7 +927,7 @@ export async function deleteMessage(messageId: string): Promise<boolean> {
     };
 
     try {
-      const r: any = await viaSocket();
+      const r = await viaSocket();
       if (r?.ok === true) return finishOk();
       if (r?.ok === false && String(r?.error || "") === "not_found") return finishOk();
       const http = await viaHttp();
@@ -1110,7 +1005,7 @@ export async function deleteMessages(messageIds: string[]): Promise<DeleteMessag
     };
 
     try {
-      const r: any = await viaSocket();
+      const r = await viaSocket();
       const deletedFromSocket = Array.isArray(r?.deletedIds) ? r.deletedIds.map(String) : [];
       const failedFromSocket = Array.isArray(r?.failedIds) ? r.failedIds.map(String) : [];
       if (r?.ok === true || deletedFromSocket.length > 0 || failedFromSocket.length > 0) {
@@ -1178,7 +1073,7 @@ export async function editMessage(
   }
 
   const viaSocket = async () => {
-    const r: any = await emitAck<{ ok: boolean; error?: string }>("message:edit", wire);
+    const r = await emitAck<{ ok: boolean; error?: string }>("message:edit", wire);
     if (r?.error !== "e2e_key_mismatch" || !peerId) return r;
     // Ключ сменился — перечитываем и шифруем правку заново, один раз.
     await invalidateKeysAfterMismatch(peerId);
@@ -1186,7 +1081,7 @@ export async function editMessage(
     return emitAck<{ ok: boolean; error?: string }>("message:edit", wire);
   };
 
-  const viaHttp = async () => {
+  const viaHttp = async (): Promise<{ ok: boolean; error?: string }> => {
     const headers: Record<string, string> = { "Content-Type": "application/json", ...(await getInstallAuthHeaders()) };
     if (shared.currentUserId) headers["x-user-id"] = String(shared.currentUserId);
     const controller = new AbortController();
@@ -1207,39 +1102,39 @@ export async function editMessage(
   };
 
   try {
-    const r: any = await viaSocket();
+    const r = await viaSocket();
     if (r?.ok === true) return { ok: true };
     if (await mergePendingMessageOutboxEdit(trimmedMid, trimmedText)) {
       return { ok: true };
     }
     const http = await viaHttp();
-    if ((http as any)?.ok === true) return { ok: true };
-    if (isLikelyOfflineError((http as any)?.error)) {
+    if (http?.ok === true) return { ok: true };
+    if (isLikelyOfflineError(http?.error)) {
       return await queueOffline();
     }
     if (await mergePendingMessageOutboxEdit(trimmedMid, trimmedText)) {
       return { ok: true };
     }
-    return { ok: false, error: (http as any)?.error || "edit_failed" };
+    return { ok: false, error: http?.error || "edit_failed" };
   } catch {
     try {
       const http = await viaHttp();
-      if ((http as any)?.ok === true) return { ok: true };
-      if (isLikelyOfflineError((http as any)?.error)) {
+      if (http?.ok === true) return { ok: true };
+      if (isLikelyOfflineError(http?.error)) {
         return await queueOffline();
       }
       if (await mergePendingMessageOutboxEdit(trimmedMid, trimmedText)) {
         return { ok: true };
       }
-      return { ok: false, error: (http as any)?.error || "edit_failed" };
-    } catch (e: any) {
+      return { ok: false, error: http?.error || "edit_failed" };
+    } catch (e) {
       if (isLikelyOfflineError(e)) {
         return await queueOffline();
       }
       if (await mergePendingMessageOutboxEdit(trimmedMid, trimmedText)) {
         return { ok: true };
       }
-      return { ok: false, error: e?.message || "network_error" };
+      return { ok: false, error: (e as { message?: string } | null)?.message || "network_error" };
     }
   }
 }
@@ -1247,13 +1142,17 @@ export async function editMessage(
 export function onMessageEdited(
   cb: (data: { messageId: string; text: string; e2eUndecryptable?: boolean }) => void,
 ): () => void {
-  const h = (data: any) => {
+  const h = (data: { messageId: string; from?: string; to?: string } & (
+    | { text: string; e2eUndecryptable?: boolean; enc?: null }
+    | { enc: E2eEnvelope }
+  )) => {
     if (data?.enc == null) {
       cb(data);
       return;
     }
-    void decryptForApp({ id: data.messageId, from: data.from, to: data.to, enc: data.enc }).then((m: any) =>
-      cb({ messageId: data.messageId, text: m.text, ...(m.e2eUndecryptable ? { e2eUndecryptable: true } : {}) }),
+    // A present envelope always yields decrypted text or the undecryptable placeholder.
+    void decryptForApp({ id: data.messageId, from: data.from, to: data.to, enc: data.enc }).then((m: DecryptableMessage) =>
+      cb({ messageId: data.messageId, text: m.text!, ...(m.e2eUndecryptable ? { e2eUndecryptable: true } : {}) }),
     );
   };
   socket.on("message:edited", h);
@@ -1263,13 +1162,15 @@ export function onMessageEdited(
 }
 
 /** Update album URIs (remove one photo). Empty uris deletes the whole message on server. */
-export async function updateMessageUris(messageId: string, uris: string[]): Promise<{
+export type UpdateMessageUrisResult = {
   ok: boolean;
   deleted?: boolean;
   uri?: string;
   uris?: string[];
   error?: string;
-}> {
+};
+
+export async function updateMessageUris(messageId: string, uris: string[]): Promise<UpdateMessageUrisResult> {
   const mid = String(messageId || "").trim();
   if (!mid) return { ok: false, error: "bad_request" };
   const normalized = (Array.isArray(uris) ? uris : [])
@@ -1277,17 +1178,17 @@ export async function updateMessageUris(messageId: string, uris: string[]): Prom
     .filter(Boolean)
     .slice(0, 10);
   try {
-    const r = await emitAck<any>("message:update_uris", { messageId: mid, uris: normalized }, 12000);
+    const r = await emitAck<UpdateMessageUrisResult>("message:update_uris", { messageId: mid, uris: normalized }, 12000);
     return r && typeof r === "object" ? r : { ok: false, error: "bad_response" };
-  } catch (e: any) {
-    return { ok: false, error: e?.message || "network_error" };
+  } catch (e) {
+    return { ok: false, error: (e as { message?: string } | null)?.message || "network_error" };
   }
 }
 
 export function onMessageUrisUpdated(
   cb: (data: { messageId: string; uri?: string; uris?: string[]; deleted?: boolean }) => void,
 ): () => void {
-  const h = (data: any) => cb(data);
+  const h = (data: Parameters<typeof cb>[0]) => cb(data);
   socket.on("message:uris_updated", h);
   return () => {
     socket.off("message:uris_updated", h);
@@ -1295,7 +1196,7 @@ export function onMessageUrisUpdated(
 }
 
 // Загрузка всех сообщений для чата (с кэшированием)
-export async function getChatMessages(peerId: string, userId?: string): Promise<any[]> {
+export async function getChatMessages(peerId: string, userId?: string): Promise<ChatMessage[]> {
   try {
     let currentUser = userId || shared.currentUserId;
 
@@ -1334,7 +1235,7 @@ export async function getChatMessages(peerId: string, userId?: string): Promise<
     const response = await loadMessagesFromServer(peerId, 100);
 
     if (response.ok && response.messages && response.messages.length > 0) {
-      const messagesWithSender = response.messages.map((msg: any) => ({
+      const messagesWithSender = response.messages.map((msg) => ({
         ...msg,
         timestamp: new Date(msg.timestamp),
         sender: msg.from === currentUser ? "me" : "peer",

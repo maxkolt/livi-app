@@ -27,7 +27,7 @@ type Options = {
   systemTopInset: number;
   LIVI: LiviColors;
   headerBg: string;
-  navigation: any;
+  navigation: { goBack: () => void };
   isDark: boolean;
   peerNameState: string;
   peerOnline: boolean;
@@ -158,6 +158,7 @@ export function useChatHeader({
           <>
             <View style={{ flex: 1, alignItems: "center", marginHorizontal: 8 }}>
               <Text
+                testID="chat-selection-count"
                 style={{
                   color: isDark ? LIVI.white : LIVI.titan,
                   fontSize: 18,
@@ -170,6 +171,9 @@ export function useChatHeader({
             <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
               <TouchableOpacity
                 onPress={selectAllLoaded}
+                testID="chat-select-all"
+                accessibilityRole="button"
+                accessibilityLabel={t("chatSelectAll", lang)}
                 activeOpacity={0.85}
                 style={{
                   height: ACTION_BTN,
@@ -191,6 +195,10 @@ export function useChatHeader({
 
               <TouchableOpacity
                 onPress={startForwardSelected}
+                testID="chat-selection-forward"
+                accessibilityRole="button"
+                accessibilityLabel={t("chatActionForward", lang)}
+                disabled={selectedCount === 0}
                 activeOpacity={0.85}
                 style={{
                   ...chromeBtnStyle,
@@ -202,6 +210,10 @@ export function useChatHeader({
 
               <TouchableOpacity
                 onPress={confirmDeleteSelected}
+                testID="chat-selection-delete"
+                accessibilityRole="button"
+                accessibilityLabel={t("delete", lang)}
+                disabled={selectedCount === 0}
                 activeOpacity={0.85}
                 style={{
                   ...chromeBtnStyle,
@@ -240,6 +252,7 @@ export function useChatHeader({
             <View style={{ flex: 1, minWidth: 0, marginLeft: 10, marginRight: 8, justifyContent: "center" }}>
               <View style={{ flexDirection: "row", alignItems: "center" }}>
                 <Text
+                  testID="chat-peer-name"
                   style={{
                     flexShrink: 1,
                     color: isDark ? LIVI.white : LIVI.titan,
@@ -292,6 +305,7 @@ export function useChatHeader({
 
             <View style={{ flexDirection: "row", alignItems: "center", gap: 16 }}>
               <ChatRoundButton
+                testID="chat-header-call"
                 onPress={() => onPressCall?.()}
                 backgroundColor={chromeBtnColors.idle}
                 pressedBackgroundColor={chromeBtnColors.pressed}
@@ -301,6 +315,7 @@ export function useChatHeader({
               </ChatRoundButton>
               <ChatRoundButton
                 onPress={() => onPressMore?.()}
+                testID="chat-header-menu"
                 backgroundColor={chromeBtnColors.idle}
                 pressedBackgroundColor={chromeBtnColors.pressed}
                 accessibilityLabel={t("menuTitle", lang)}

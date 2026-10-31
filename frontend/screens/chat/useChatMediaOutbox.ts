@@ -1,3 +1,4 @@
+import type { ChatMessage } from './chatMessageTypes';
 /** Media outbox enqueue/retry/drain for failed image/audio sends. */
 
 import React from "react";
@@ -17,8 +18,8 @@ type Options = {
   currentUserId: string | null;
   /** История чата загружена: раньше «нет такого сообщения» не значит, что его нет. */
   historyReady: boolean;
-  messages: any[];
-  setMessages: React.Dispatch<React.SetStateAction<any[]>>;
+  messages: ChatMessage[];
+  setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>;
   uploadStatus: Record<string, "sending" | "sent" | "failed">;
   setUploadStatus: React.Dispatch<React.SetStateAction<Record<string, "sending" | "sent" | "failed">>>;
   readStatuses: ReadStatusMap;
@@ -105,7 +106,7 @@ export function useChatMediaOutbox({
   }, [currentUserId, peerId]);
 
   const retryFailedOutgoingMessage = React.useCallback(
-    async (m: any): Promise<boolean> => {
+    async (m: ChatMessage): Promise<boolean> => {
       try {
         if (!m?.id || !currentUserId || !peerId) return false;
         const mid = String(m.id);
@@ -164,7 +165,7 @@ export function useChatMediaOutbox({
             remoteUrl = upload.url;
           }
 
-          const socketResult: any = await sendSocketMessage({
+          const socketResult = await sendSocketMessage({
             to: peerId,
             type: "image",
             uri: remoteUrl,
@@ -181,7 +182,7 @@ export function useChatMediaOutbox({
           if (socketResult?.ok && socketResult?.messageId) {
             const newId = String(socketResult.messageId);
             setMessages((prev) => {
-              const updated = prev.map((msg: any) =>
+              const updated = prev.map((msg: ChatMessage) =>
                 String(msg?.id) === mid
                   ? { ...msg, id: newId, uri: resolveMediaUri(remoteUrl), from: currentUserId, to: peerId }
                   : msg,
@@ -302,7 +303,7 @@ export function useChatMediaOutbox({
     try {
       const ids = await loadMediaOutboxIds();
       for (const id of ids) {
-        const msg = messagesRef.current.find((x: any) => String(x?.id) === String(id));
+        const msg = messagesRef.current.find((x: ChatMessage) => String(x?.id) === String(id));
         if (!msg) {
           await dequeueMediaOutboxId(id);
           continue;

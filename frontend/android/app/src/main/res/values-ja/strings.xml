@@ -5,7 +5,7 @@
   <string name="incoming_call_unknown">着信があります</string>
   <string name="incoming_call_accept">応答</string>
   <string name="incoming_call_decline">拒否</string>
-  <string name="outgoing_call_title">発信中のビデオ通話</string>
+  <string name="outgoing_call_title">発信</string>
   <string name="outgoing_call_subtitle">呼び出し中…</string>
   <string name="outgoing_call_subtitle_base">呼び出し中</string>
   <string name="outgoing_call_subtitle_base_audio">呼び出し中</string>

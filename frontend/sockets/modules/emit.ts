@@ -4,7 +4,7 @@ import { shared } from "./shared";
 import { socket } from "./socketCore";
 import { SOCKET_CONNECT_WAIT_MS } from "./constants";
 
-type AnyObj = Record<string, any>;
+type AnyObj = Record<string, unknown>;
 
 /** @internal used by emitAck / messages; not part of public socket.ts facade */
 export async function waitForConnect(ms = 8000): Promise<void> {
@@ -16,10 +16,10 @@ export async function waitForConnect(ms = 8000): Promise<void> {
   // Without installId in handshake server can treat client as guest and return empty profile/avatar.
   try {
     const installId = await getInstallId();
-    // @ts-ignore
+
     const prevAuth =
-      (socket as any)?.auth && typeof (socket as any).auth === "object" ? (socket as any).auth : {};
-    // @ts-ignore
+      (socket)?.auth && typeof (socket).auth === "object" ? (socket).auth : {};
+
     socket.auth = {
       ...prevAuth,
       installId,
@@ -66,10 +66,10 @@ export function warmCallSignaling(): void {
   void (async () => {
     try {
       const installId = await getInstallId();
-      // @ts-ignore
+
       const prevAuth =
-        (socket as any)?.auth && typeof (socket as any).auth === "object" ? (socket as any).auth : {};
-      // @ts-ignore
+        (socket)?.auth && typeof (socket).auth === "object" ? (socket).auth : {};
+
       socket.auth = {
         ...prevAuth,
         installId,
@@ -82,7 +82,7 @@ export function warmCallSignaling(): void {
   })();
 }
 
-export async function emitAck<T = any>(
+export async function emitAck<T = unknown>(
   event: string,
   payload?: AnyObj,
   timeoutMs = 12000,
@@ -140,7 +140,7 @@ export async function emitAck<T = any>(
     });
 
   // 2) ретраи на таймаут
-  let lastErr: any;
+  let lastErr: unknown;
   const startedAt = Date.now();
   for (let i = 0; i <= retries; i++) {
     const attemptStartedAt = Date.now();
@@ -154,7 +154,7 @@ export async function emitAck<T = any>(
         });
       }
       return resp;
-    } catch (e: any) {
+    } catch (e: unknown) {
       lastErr = e;
       // Ретрай раньше был немым: VPN терял первый emit, а в логах — просто дыра в 7 с.
       logger.warn("[socket] emitAck attempt failed", {
@@ -162,10 +162,10 @@ export async function emitAck<T = any>(
         attempt: i + 1,
         of: retries + 1,
         attemptMs: Date.now() - attemptStartedAt,
-        error: e?.message || String(e),
+        error: (e as { message?: string } | null)?.message || String(e),
         connected: socket.connected,
         reconnecting: !!shared.reconnecting,
-        transport: (socket as any)?.io?.engine?.transport?.name ?? null,
+        transport: (socket)?.io?.engine?.transport?.name ?? null,
         socketId: socket.id ?? null,
       });
       // если снова ушли в реконнект — подождём и повторим

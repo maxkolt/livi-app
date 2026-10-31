@@ -1,3 +1,4 @@
+import type { AppRuntimeGlobals } from '../../utils/appRuntimeTypes';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Animated,
@@ -111,7 +112,7 @@ const PHONE_SPLIT_AVATAR_RATIO = 0.36;
 /** Центр радара (фото + рамка + тонкий круг) чуть меньше доли диска. */
 const SEARCH_CENTER_AVATAR_SCALE = 0.9;
 /** Лёгкий оптический подъём CTA над нижней навигацией в портрете. */
-const SEARCH_CTA_PORTRAIT_LIFT = 8;
+const SEARCH_CTA_PORTRAIT_LIFT = 16;
 
 function HomeWelcomeViewInner({
   styles,
@@ -366,7 +367,7 @@ function HomeWelcomeViewInner({
 
   /**
    * Портрет: кнопка ниже середины между низом ника (или рисунка радара) и таб-баром
-   * (низ сцены) — 62% свободного места сверху, затем оптический подъём на 8 dp.
+   * (низ сцены) — 62% свободного места сверху, затем оптический подъём на 16 dp.
    * Радар не двигается, сдвигаем только кнопку.
    */
   const radarDashR = radarGeometry(radarSize, 0).rDash;
@@ -417,7 +418,7 @@ function HomeWelcomeViewInner({
   const handleStartSearchPress = useCallback(() => {
     const now = Date.now();
     try {
-      const g = global as any;
+      const g = global as AppRuntimeGlobals;
       const t0 = Number(g.__searchNavT0 || now);
       const steps = Array.isArray(g.__searchNavSteps) ? g.__searchNavSteps : [];
       steps.push({ step: 'welcome.handleStartSearchPress', at: now, elapsedMs: now - t0 });

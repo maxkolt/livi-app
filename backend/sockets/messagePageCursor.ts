@@ -1,5 +1,5 @@
-export function asValidDate(value: any): Date {
-  const date = value ? new Date(value) : new Date();
+export function asValidDate(value: unknown): Date {
+  const date = value ? new Date(value as string | number) : new Date();
   return Number.isNaN(date.getTime()) ? new Date() : date;
 }
 
@@ -11,7 +11,7 @@ export function asValidDate(value: any): Date {
 export type MessagePageCursor = { timestamp: Date; id: string };
 
 /** Порядок «новые первыми»: timestamp desc, затем id desc. */
-export function compareMessagesNewestFirst(a: { timestamp: any; id: any }, b: { timestamp: any; id: any }): number {
+export function compareMessagesNewestFirst(a: { timestamp: unknown; id: unknown }, b: { timestamp: unknown; id: unknown }): number {
   const dt = asValidDate(b.timestamp).getTime() - asValidDate(a.timestamp).getTime();
   if (dt !== 0) return dt;
   const ai = String(a.id ?? '');
@@ -20,7 +20,7 @@ export function compareMessagesNewestFirst(a: { timestamp: any; id: any }, b: { 
 }
 
 /** Строго старше курсора в порядке compareMessagesNewestFirst. */
-export function isOlderThanCursor(msg: { timestamp: any; id: any }, cursor: MessagePageCursor | null): boolean {
+export function isOlderThanCursor(msg: { timestamp: unknown; id: unknown }, cursor: MessagePageCursor | null): boolean {
   if (!cursor) return true;
   return compareMessagesNewestFirst(msg, cursor) > 0;
 }

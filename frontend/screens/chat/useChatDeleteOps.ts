@@ -1,3 +1,5 @@
+import type { ChatMessage } from './chatMessageTypes';
+
 /** Single-message and batch delete for chat selection. */
 
 import React from "react";
@@ -31,15 +33,15 @@ type Options = {
   currentUserId: string | null;
   lang: Lang;
   selectedMessageIds: Set<string>;
-  messagesRef: React.MutableRefObject<any[]>;
+  messagesRef: React.MutableRefObject<ChatMessage[]>;
   outboxLocalIdToServerIdRef: React.MutableRefObject<Map<string, string>>;
-  latestMessagesForPersistRef: React.MutableRefObject<any[]>;
+  latestMessagesForPersistRef: React.MutableRefObject<ChatMessage[]>;
   batchDeleteSelectedRef: React.MutableRefObject<
     ((forBoth: boolean, idsOverride?: string[]) => Promise<void>) | null
   >;
-  setMessages: React.Dispatch<React.SetStateAction<any[]>>;
+  setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>;
   setUploadStatus: React.Dispatch<React.SetStateAction<Record<string, "sending" | "sent" | "failed">>>;
-  setSelectedMessage: React.Dispatch<React.SetStateAction<any>>;
+  setSelectedMessage: React.Dispatch<React.SetStateAction<ChatMessage | null>>;
   setSelectionMode: React.Dispatch<React.SetStateAction<boolean>>;
   setSelectedMessageIds: React.Dispatch<React.SetStateAction<Set<string>>>;
   updateReadStatuses: (updater: (prev: ReadStatusMap) => ReadStatusMap) => void;
@@ -105,20 +107,20 @@ export function useChatDeleteOps({
         latestMessagesForPersistRef.current = next;
         clearMessageCache(peerId, currentUserId || undefined);
         queueMicrotask(() => enqueueMessagesPersist('delete_local_message'));
-        const nextIds = new Set(next.map((m: any) => String(m?.id || '')));
+        const nextIds = new Set(next.map((m: ChatMessage) => String(m?.id || '')));
         const dropped = prev
-          .map((m: any) => String(m?.id || ''))
+          .map((m: ChatMessage) => String(m?.id || ''))
           .filter((id) => id && !nextIds.has(id));
         if (dropped.length) {
           queueMicrotask(() => {
             updateReadStatuses((rs) => {
               const n = { ...rs };
-              for (const d of dropped) delete (n as any)[d];
-              return n as any;
+              for (const d of dropped) delete (n)[d];
+              return n;
             });
             setUploadStatus((up) => {
               const n = { ...up };
-              for (const d of dropped) delete (n as any)[d];
+              for (const d of dropped) delete (n)[d];
               return n;
             });
             void removeQueuedMessagesMatching(dropped).catch(() => {});
@@ -138,20 +140,20 @@ export function useChatDeleteOps({
         const next = filterRemoveMessageAndOutgoingDupes(prev, mid);
         latestMessagesForPersistRef.current = next;
         queueMicrotask(() => enqueueMessagesPersist('delete_message_for_me'));
-        const nextIds = new Set(next.map((m: any) => String(m?.id || '')));
+        const nextIds = new Set(next.map((m: ChatMessage) => String(m?.id || '')));
         const dropped = prev
-          .map((m: any) => String(m?.id || ''))
+          .map((m: ChatMessage) => String(m?.id || ''))
           .filter((id) => id && !nextIds.has(id));
         if (dropped.length) {
           queueMicrotask(() => {
             updateReadStatuses((rs) => {
               const n = { ...rs };
-              for (const d of dropped) delete (n as any)[d];
-              return n as any;
+              for (const d of dropped) delete (n)[d];
+              return n;
             });
             setUploadStatus((up) => {
               const n = { ...up };
-              for (const d of dropped) delete (n as any)[d];
+              for (const d of dropped) delete (n)[d];
               return n;
             });
             void removeQueuedMessagesMatching(dropped).catch(() => {});
@@ -172,20 +174,20 @@ export function useChatDeleteOps({
         const next = filterRemoveMessageAndOutgoingDupes(prev, mid);
         latestMessagesForPersistRef.current = next;
         queueMicrotask(() => enqueueMessagesPersist('delete_server_message'));
-        const nextIds = new Set(next.map((m: any) => String(m?.id || '')));
+        const nextIds = new Set(next.map((m: ChatMessage) => String(m?.id || '')));
         const dropped = prev
-          .map((m: any) => String(m?.id || ''))
+          .map((m: ChatMessage) => String(m?.id || ''))
           .filter((id) => id && !nextIds.has(id));
         if (dropped.length) {
           queueMicrotask(() => {
             updateReadStatuses((rs) => {
               const n = { ...rs };
-              for (const d of dropped) delete (n as any)[d];
-              return n as any;
+              for (const d of dropped) delete (n)[d];
+              return n;
             });
             setUploadStatus((up) => {
               const n = { ...up };
-              for (const d of dropped) delete (n as any)[d];
+              for (const d of dropped) delete (n)[d];
               return n;
             });
             void removeQueuedMessagesMatching(dropped).catch(() => {});
@@ -270,7 +272,7 @@ export function useChatDeleteOps({
 
     // Optimistic UI: remove all selected messages at once (no sequential "one-by-one" deletion).
     // Keep a snapshot of removed messages so we can restore only the ones that actually failed.
-    const removedById = new Map<string, any>();
+    const removedById = new Map<string, ChatMessage>();
     const prevSnap = Array.isArray(messagesRef.current) ? [...messagesRef.current] : [];
     try {
       for (const mm of prevSnap) {
@@ -284,9 +286,9 @@ export function useChatDeleteOps({
       if (!delId) continue;
       nextMessages = filterRemoveMessageAndOutgoingDupes(nextMessages, delId);
     }
-    const nextIds = new Set(nextMessages.map((m: any) => String(m?.id || '').trim()).filter(Boolean));
+    const nextIds = new Set(nextMessages.map((m: ChatMessage) => String(m?.id || '').trim()).filter(Boolean));
     const droppedAll = prevSnap
-      .map((m: any) => String(m?.id || '').trim())
+      .map((m: ChatMessage) => String(m?.id || '').trim())
       .filter((mid) => mid && !nextIds.has(mid));
     latestMessagesForPersistRef.current = nextMessages;
     clearMessageCache(peerId, currentUserId || undefined);
@@ -328,12 +330,12 @@ export function useChatDeleteOps({
     const deletedOk = new Set<string>([...localOnlyIds, ...successServerIds, ...goneServerIds].map(String));
     if (deletedOk.size > 0) {
       updateReadStatuses((prev) => {
-        const next: any = { ...prev };
+        const next = { ...prev };
         for (const id of deletedOk) delete next[id];
         return next;
       });
       setUploadStatus((prev) => {
-        const next: any = { ...prev };
+        const next = { ...prev };
         for (const id of deletedOk) delete next[id];
         return next;
       });
@@ -348,13 +350,13 @@ export function useChatDeleteOps({
     // Also preserve any new messages that might have arrived while we were deleting.
     const failedSet = new Set(failedServer.map(String));
     setMessages((prev) => {
-      const toRestore: any[] = [];
+      const toRestore: ChatMessage[] = [];
       for (const id of failedSet) {
         const mm = removedById.get(String(id));
         if (mm) toRestore.push(mm);
       }
       const merged = [...prev, ...toRestore];
-      merged.sort((a: any, b: any) => {
+      merged.sort((a: ChatMessage, b: ChatMessage) => {
         const ta = +new Date(a?.timestamp || 0);
         const tb = +new Date(b?.timestamp || 0);
         return ta - tb;

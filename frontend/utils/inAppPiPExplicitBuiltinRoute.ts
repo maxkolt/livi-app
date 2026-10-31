@@ -1,3 +1,4 @@
+import type { CallAudioGlobals } from './callStateTypes';
 import {
   normalizeInCallRoute,
   type InCallAudioRoute,
@@ -11,7 +12,7 @@ import {
 function readPlaqueRoute(): InCallAudioRoute | null {
   try {
     return normalizeInCallRoute(
-      (global as any).__currentCallPiPParamsRef?.current?.audioOutputRoute || '',
+      (global as CallAudioGlobals).__currentCallPiPParamsRef?.current?.audioOutputRoute || '',
     );
   } catch {
     return null;
@@ -23,7 +24,7 @@ export { readPlaqueRoute as readInAppPiPPlaqueAudioRoute };
 /** Недавний ручной выбор на плашке (любой маршрут) — не трогать auto poll/unplug. */
 export function isInAppPiPManualRouteLockActive(): boolean {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     const lockUntil = Number(g.__pipBuiltinRouteLockUntilRef?.current || 0);
     if (lockUntil > Date.now()) return true;
     const lastToggle = Number(g.__lastInAppPiPAudioToggleAtRef?.current || 0);
@@ -35,7 +36,7 @@ export function isInAppPiPManualRouteLockActive(): boolean {
 /** Пользователь на плашке явно выбрал ухо/динамик — не отбирать маршрут auto-BT poll. */
 export function isInAppPiPExplicitBuiltinRouteChoiceActive(): boolean {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     const lockUntil = Number(g.__pipBuiltinRouteLockUntilRef?.current || 0);
     if (lockUntil > Date.now()) {
       const explicitLock = normalizeInCallRoute(g.__inAppPiPExplicitToggleRouteRef?.current || '');

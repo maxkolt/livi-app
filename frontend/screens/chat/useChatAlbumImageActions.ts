@@ -1,3 +1,4 @@
+import type { ChatMessage } from './chatMessageTypes';
 /** Save / forward / delete actions for image & album messages. */
 
 import React from "react";
@@ -22,13 +23,13 @@ type Options = {
   currentUserId: string | null;
   lang: Lang;
   resolveMediaUri: (uri?: string) => string;
-  setMessages: React.Dispatch<React.SetStateAction<any[]>>;
-  setSelectedMessage: React.Dispatch<React.SetStateAction<any>>;
+  setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>;
+  setSelectedMessage: React.Dispatch<React.SetStateAction<ChatMessage | null>>;
   setAlbumFocusIndex: React.Dispatch<React.SetStateAction<number | null>>;
   openForwardPicker: () => void | Promise<void>;
-  openAlbumScope: (kind: AlbumScopeKind, m: any, focus: number | null) => void;
-  consumeAlbumScope: () => { message: any; kind: AlbumScopeKind };
-  confirmDeleteSelectedMessage: (m: any) => void;
+  openAlbumScope: (kind: AlbumScopeKind, m: ChatMessage, focus: number | null) => void;
+  consumeAlbumScope: () => { message: ChatMessage | null; kind: AlbumScopeKind };
+  confirmDeleteSelectedMessage: (m: ChatMessage) => void;
   showForwardToastBadge: (ok: boolean, text: string) => void;
   showNotice: (kind: NoticeKind, title: string, message: string) => void;
 };
@@ -72,7 +73,7 @@ export function useChatAlbumImageActions({
         await saveImageToGallery(local);
         ok += 1;
       } catch (e) {
-        if (/permission|Photos|gallery/i.test(String((e as any)?.message || e))) {
+        if (/permission|Photos|gallery/i.test(String((e as { message?: unknown } | null)?.message || e))) {
           permDenied = true;
         }
       }
@@ -90,7 +91,7 @@ export function useChatAlbumImageActions({
   }, [downloadUriToCache, showForwardToastBadge, showNotice, lang]);
 
   const runSelectedImageAction = React.useCallback(
-    async (action: string, m: any, focusIndex: number | null) => {
+    async (action: string, m: ChatMessage, focusIndex: number | null) => {
       if (!m) return;
       const { uris, isAlbum, idx, oneUri } = resolveOneAlbumUri(m, focusIndex);
       const isOwn = m?.from === currentUserId || m?.sender === 'me';
@@ -146,7 +147,7 @@ export function useChatAlbumImageActions({
 
   /** Single menu entry → run now, or open multi-select for albums. */
   const requestImageAction = React.useCallback(
-    (kind: 'save' | 'forward' | 'delete', m: any, focusIndex: number | null) => {
+    (kind: 'save' | 'forward' | 'delete', m: ChatMessage, focusIndex: number | null) => {
       if (!m) return;
       const uris = getMessageImageUris(m);
       const isAlbum = uris.length > 1;

@@ -35,7 +35,7 @@ export const HiddenRemoteAudioSink: React.FC<Props> = ({ stream, remoteMuted = f
           objectFit: 'cover',
           zOrder: 0,
           ...(Platform.OS === 'android' ? { zOrderMediaOverlay: false } : {}),
-        } as any)}
+        })}
       />
     </View>
   );

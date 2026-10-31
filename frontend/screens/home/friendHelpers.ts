@@ -12,7 +12,7 @@ export const displayAvatarLetter = (name?: string) => {
 
   let glyph = '';
   try {
-    const Segmenter = (Intl as any)?.Segmenter;
+    const Segmenter = (Intl)?.Segmenter;
     if (typeof Segmenter === 'function') {
       const seg = new Segmenter(undefined, { granularity: 'grapheme' });
       const first = Array.from(seg.segment(n) as Iterable<{ segment: string }>)[0]?.segment;
@@ -53,7 +53,38 @@ export const displayAvatarLetter = (name?: string) => {
   return glyph;
 };
 
-export const mapToFriend = (u: any): Friend => {
+/** Current API rows and older cached profile fields share this normalization boundary. */
+export type FriendSource = {
+  _id?: unknown;
+  id?: unknown;
+  nick?: unknown;
+  name?: unknown;
+  username?: unknown;
+  avatar?: string;
+  image?: string;
+  avatarVer?: unknown;
+  avatarThumbB64?: string;
+  online?: unknown;
+  isOnline?: unknown;
+  isBusy?: unknown;
+  isRandomBusy?: unknown;
+  inCall?: unknown;
+};
+
+type LegacyDirectCallSessionSnapshot = {
+  isEnded?: () => boolean;
+  getCallId?: () => string | null;
+  getRoomId?: () => string | null;
+  room?: { state?: string } | null;
+};
+
+export type DirectCallSnapshot = {
+  __webrtcSessionRef?: { current: import('../../src/webrtc/sessions/VideoCallSession').VideoCallSession | LegacyDirectCallSessionSnapshot | null };
+  __currentCallPiPParamsRef?: { current: { callId?: string | null; roomId?: string | null } | null };
+  __videoCallActiveRef?: { current: boolean };
+};
+
+export const mapToFriend = (u: FriendSource): Friend => {
   const rawNick = u.nick || u.name || u.username || '';
   const fullNickname = typeof rawNick === 'string' ? rawNick.trim() : '';
 
@@ -195,7 +226,7 @@ export function patchUnreadCountsIfChanged(
 }
 
 /** Есть ли реально активный direct-call (не залипшие global refs после завершения). */
-export function isDirectCallSessionLive(g: any): boolean {
+export function isDirectCallSessionLive(g: DirectCallSnapshot | null | undefined): boolean {
   const session = g?.__webrtcSessionRef?.current;
   if (session && typeof session.isEnded === 'function' && session.isEnded()) {
     return false;
@@ -204,7 +235,7 @@ export function isDirectCallSessionLive(g: any): boolean {
     !!session &&
     (typeof session.isEnded === 'function'
       ? !session.isEnded()
-      : session?.room?.state !== 'disconnected');
+      : (session as LegacyDirectCallSessionSnapshot)?.room?.state !== 'disconnected');
   const params = g?.__currentCallPiPParamsRef?.current;
   let sessionCallId = '';
   let sessionRoomId = '';
@@ -255,7 +286,7 @@ export function getFriendDisplay(f: Friend) {
  * avatarThumbB64 → avatarB64 → avatar(url/path). Принимает «сырой» объект друга
  * (из fetchFriends) или Friend — читает поля мягко.
  */
-export function buildFriendAvatarUri(partner: any): string | undefined {
+export function buildFriendAvatarUri(partner: { avatarThumbB64?: unknown; avatarB64?: unknown; avatar?: unknown } | null | undefined): string | undefined {
   if (!partner) return undefined;
   try {
     const thumb = partner.avatarThumbB64 != null ? String(partner.avatarThumbB64).trim() : '';

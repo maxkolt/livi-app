@@ -10,7 +10,7 @@
  * Координаты заданы в сетке исходника 572×1024, поэтому результат одинаков при любом
  * рабочем разрешении. Остальная сцена не пересчитывается и не перерисовывается.
  *
- *   node scripts/refine-spatial-stage-details.js [stage-hq.jpg]
+ *   node scripts/refine-spatial-stage-details.js [stage-hq.png]
  */
 const path = require('path');
 const Jimp = require('jimp-compact');
@@ -728,12 +728,12 @@ async function refineSpatialStage(imagePath) {
   for (const patch of patches) removePatch(Buffer.from(data), data, w, h, scale, patch);
   for (const rect of ERASE_RECTS) eraseElement(data, w, h, scale, rect);
   compositePremultiplied(data, await drawCrispIcons(w, h, scale));
-  await image.quality(95).writeAsync(imagePath);
+  await image.writeAsync(imagePath);
   return { width: w, height: h, removedMarkers: MAP_ROUND_MARKERS.length };
 }
 
 if (require.main === module) {
-  const imagePath = process.argv[2] || path.join(__dirname, '..', 'assets', 'spatial', 'stage-hq.jpg');
+  const imagePath = process.argv[2] || path.join(__dirname, '..', 'assets', 'spatial', 'stage-hq.png');
   refineSpatialStage(imagePath)
     .then(({ width, height, removedMarkers }) => {
       console.log(`${path.relative(process.cwd(), imagePath)}: ${width}×${height}, убрано кругов: ${removedMarkers}`);

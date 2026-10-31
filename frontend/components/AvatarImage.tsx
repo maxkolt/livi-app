@@ -411,7 +411,7 @@ const AvatarImage = memo<AvatarImageProps>(({
         logger.warn('[search-avatar] image-onError', {
           size: photoSize,
           displayKind: /^file:/i.test(displayUri) ? 'file' : 'other',
-          error: String((e as any)?.error ?? e ?? ''),
+          error: String((e)?.error ?? e ?? ''),
         });
       }}
       style={[

@@ -32,14 +32,14 @@ export async function listIncomingFriendRequests(
   opts: { includeAvatarThumbs: boolean; isOnline: (uid: string) => boolean },
 ): Promise<IncomingFriendRequest[]> {
   const meDoc = await User.findById(me).select('friendRequests').lean();
-  const raw: unknown[] = Array.isArray((meDoc as any)?.friendRequests) ? (meDoc as any).friendRequests : [];
+  const raw: unknown[] = Array.isArray((meDoc)?.friendRequests) ? (meDoc).friendRequests : [];
   const ids = Array.from(new Set(raw.map((x) => String(x)).filter((id) => isOid(id) && id !== String(me))));
   if (ids.length === 0) return [];
 
   const users = await User.find({ _id: { $in: ids } })
     .select('nick avatar avatarVer avatarThumbB64')
     .lean();
-  const byId = new Map(users.map((u: any) => [String(u._id), u]));
+  const byId = new Map(users.map((u) => [String(u._id), u]));
   const friendFlags = await Promise.all(ids.map((id) => areFriendsCached(me, id).catch(() => false)));
 
   const stale: string[] = [];
@@ -47,7 +47,7 @@ export async function listIncomingFriendRequests(
   // $addToSet дописывает в конец — последние заявки в конце массива.
   for (let i = ids.length - 1; i >= 0; i--) {
     const id = ids[i];
-    const user = byId.get(id) as any;
+    const user = byId.get(id);
     if (!user || friendFlags[i]) {
       stale.push(id);
       continue;
@@ -63,7 +63,7 @@ export async function listIncomingFriendRequests(
   }
 
   if (stale.length > 0) {
-    await (User as any).updateOne({ _id: me }, { $pull: { friendRequests: { $in: stale } } });
+    await (User).updateOne({ _id: me }, { $pull: { friendRequests: { $in: stale } } });
   }
   return list;
 }
@@ -75,5 +75,5 @@ export async function listIncomingFriendRequests(
 export async function markInviteFriendRequest(me: string, inviterId: string): Promise<void> {
   if (!isOid(me) || !isOid(inviterId) || String(me) === String(inviterId)) return;
   if (await areFriendsCached(me, inviterId)) return;
-  await (User as any).updateOne({ _id: me }, { $addToSet: { friendRequests: inviterId } });
+  await (User).updateOne({ _id: me }, { $addToSet: { friendRequests: inviterId } });
 }

@@ -5,7 +5,7 @@
   <string name="incoming_call_unknown">Jemand ruft an</string>
   <string name="incoming_call_accept">Annehmen</string>
   <string name="incoming_call_decline">Ablehnen</string>
-  <string name="outgoing_call_title">Ausgehender Videoanruf</string>
+  <string name="outgoing_call_title">Ausgehender Anruf</string>
   <string name="outgoing_call_subtitle">Wird angerufen…</string>
   <string name="outgoing_call_subtitle_base">Wird angerufen</string>
   <string name="outgoing_call_subtitle_base_audio">Wird angerufen</string>

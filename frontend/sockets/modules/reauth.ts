@@ -23,8 +23,8 @@ export async function emitReauthDeduped(
         applyMissedFromReauth(res).catch(() => {});
       }
       return res && typeof res.ok === "boolean" ? res : { ok: false, error: "bad_response" };
-    } catch (e: any) {
-      return { ok: false, error: String(e?.message || e || "reauth_failed") };
+    } catch (e: unknown) {
+      return { ok: false, error: String((e as { message?: string } | null)?.message || e || "reauth_failed") };
     } finally {
       shared.reauthInFlight = null;
     }

@@ -1,3 +1,4 @@
+import type { AuthenticatedRequest, ErrorDetails } from '../utils/runtimeTypes';
 // routes/livekit.ts
 import { Router } from 'express';
 import { AccessToken } from 'livekit-server-sdk';
@@ -81,8 +82,8 @@ export async function createToken({ identity, roomName }: { identity: string; ro
     recordTokenSuccess();
     logger.debug('[LiveKit] Token created successfully', { identity, roomName, tokenLength: token.length });
     return token;
-  } catch (e: any) {
-    logger.error('[LiveKit] Token creation error:', { error: e?.message, identity, roomName });
+  } catch (e: unknown) {
+    logger.error('[LiveKit] Token creation error:', { error: (e as ErrorDetails)?.message, identity, roomName });
     throw e;
   }
 }
@@ -90,7 +91,7 @@ export async function createToken({ identity, roomName }: { identity: string; ro
 router.post('/livekit/token', async (req, res) => {
   try {
     const { userId, roomName } = req.body;
-    const trustedUserId = String((req as any).userId || '').trim();
+    const trustedUserId = String((req as AuthenticatedRequest).userId || '').trim();
     const claimedUserId = String(userId || '').trim();
 
     if (!roomName) {
@@ -125,10 +126,10 @@ router.post('/livekit/token', async (req, res) => {
     const callE2ee = req.app.locals.getCallE2eeForToken?.(trustedUserId, roomName) ?? null;
 
     res.json({ ok: true, token, url: LIVEKIT_URL, ...(callE2ee ?? {}) });
-  } catch (e: any) {
+  } catch (e: unknown) {
     recordTokenFailure();
     logger.error('LiveKit token creation failed:', e);
-    res.status(500).json({ ok: false, error: e?.message || 'server_error' });
+    res.status(500).json({ ok: false, error: (e as ErrorDetails)?.message || 'server_error' });
   }
 });
 

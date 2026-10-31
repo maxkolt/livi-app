@@ -1,3 +1,4 @@
+import type { CallAudioGlobals } from './callStateTypes';
 /**
  * Audio-only call UI policy (поверх callRuntime, без PiP imports).
  * Сырые флаги — в callRuntime; здесь составное решение «сейчас audio UI?».
@@ -21,7 +22,7 @@ export function isInAudioOnlyCallUi(): boolean {
     if (isStayOnVideoCallUi()) {
       return false;
     }
-    const params = (global as any).__currentCallPiPParamsRef?.current;
+    const params = (global as CallAudioGlobals).__currentCallPiPParamsRef?.current;
     if (params?.preferVideoCallUi === true) {
       return false;
     }

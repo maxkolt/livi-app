@@ -1,7 +1,11 @@
 import { NativeEventEmitter, NativeModules, Platform } from 'react-native';
 
+type VoipPushNativeModule = NonNullable<ConstructorParameters<typeof NativeEventEmitter>[0]> & {
+  getVoipPushToken?: () => Promise<string | null>;
+};
+
 const moduleName = 'LiviVoipPushManager';
-const nativeModule = Platform.OS === 'ios' ? (NativeModules as Record<string, any>)[moduleName] : null;
+const nativeModule = Platform.OS === 'ios' ? (NativeModules as { LiviVoipPushManager?: VoipPushNativeModule })[moduleName] : null;
 const emitter = nativeModule ? new NativeEventEmitter(nativeModule) : null;
 
 export async function getVoipPushToken(): Promise<string | undefined> {

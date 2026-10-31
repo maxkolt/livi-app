@@ -5,27 +5,32 @@ import { ensureReauthBeforePrivilegedSocketOp } from "./reauth";
 import { shared } from "./shared";
 import { socket } from "./socketCore";
 
+export type UserProfile = {
+  nick?: string;
+  avatar?: string;
+  avatarUrl?: string;
+  avatarB64?: string;
+  avatarThumbB64?: string;
+  avatarVer?: number;
+};
+export type ProfileResult = { ok: boolean; profile?: UserProfile; error?: string };
+type HttpProfileResult = ProfileResult & { user?: UserProfile };
+
+export type AvatarResult =
+  | { ok: true; avatarB64?: string; avatarVer: number; userId?: string }
+  | { ok: false; error?: string };
+
 export function getMyProfile() {
   // КРИТИЧНО: Добавляем таймаут 8 секунд для защиты от зависания MongoDB
   const viaSocket = () =>
-    emitAck<{
-      ok: boolean;
-      profile?: {
-        nick?: string;
-        avatarUrl?: string;
-        avatarB64?: string;
-        avatarThumbB64?: string;
-        avatarVer?: number;
-      };
-      error?: string;
-    }>("profile:me", undefined, 8000);
+    emitAck<ProfileResult>("profile:me", undefined, 8000);
 
-  const viaHttp = async () => {
+  const viaHttp = async (): Promise<ProfileResult> => {
     const headers: Record<string, string> = { "Content-Type": "application/json", ...(await getInstallAuthHeaders()) };
     if (shared.currentUserId) headers["x-user-id"] = String(shared.currentUserId);
 
     const timeouts = [5000, 12000];
-    let lastErr: any = null;
+    let lastErr: unknown = null;
     const url = `${API_BASE}/me`;
 
     for (const ms of timeouts) {
@@ -37,7 +42,7 @@ export function getMyProfile() {
           const txt = await res.text().catch(() => "");
           return { ok: false, error: `http_${res.status}${txt ? `:${txt}` : ""}` };
         }
-        const data = await res.json();
+        const data: HttpProfileResult = await res.json();
         if (data?.ok && data?.user) {
           return {
             ok: true,
@@ -49,14 +54,14 @@ export function getMyProfile() {
           };
         }
         return { ok: false, error: "invalid_response" };
-      } catch (e: any) {
+      } catch (e: unknown) {
         lastErr = e;
         await new Promise((r) => setTimeout(r, 150));
       } finally {
         clearTimeout(timeoutId);
       }
     }
-    return { ok: false, error: lastErr?.message || String(lastErr || "network_error") };
+    return { ok: false, error: (lastErr as { message?: string } | null)?.message || String(lastErr || "network_error") };
   };
 
   return (async () => {
@@ -93,19 +98,19 @@ export function updateProfile(patch: { nick?: string; avatar?: string }) {
       const ok = await ensureReauthBeforePrivilegedSocketOp();
       if (!ok) return { ok: false, error: "unauthorized" };
     }
-    return emitAck<{ ok: boolean; profile?: { nick?: string; avatar?: string }; error?: string }>(
+    return emitAck<ProfileResult>(
       "profile:update",
       clean,
       5000,
     );
   };
 
-  const viaHttp = async () => {
+  const viaHttp = async (): Promise<ProfileResult> => {
     const headers: Record<string, string> = { "Content-Type": "application/json", ...(await getInstallAuthHeaders()) };
     if (shared.currentUserId) headers["x-user-id"] = String(shared.currentUserId);
 
     const timeouts = [5000, 12000];
-    let lastErr: any = null;
+    let lastErr: unknown = null;
     const url = `${API_BASE}/api/me`;
     for (const ms of timeouts) {
       const controller = new AbortController();
@@ -121,19 +126,19 @@ export function updateProfile(patch: { nick?: string; avatar?: string }) {
           const txt = await res.text().catch(() => "");
           return { ok: false, error: `http_${res.status}${txt ? `:${txt}` : ""}` };
         }
-        const data = await res.json();
+        const data: HttpProfileResult = await res.json();
         if (data?.ok && data?.user) {
           return { ok: true, profile: { nick: data.user.nick || "", avatar: data.user.avatar || "" } };
         }
         return data;
-      } catch (e: any) {
+      } catch (e: unknown) {
         lastErr = e;
         await new Promise((r) => setTimeout(r, 150));
       } finally {
         clearTimeout(timeoutId);
       }
     }
-    return { ok: false, error: lastErr?.message || String(lastErr || "network_error") };
+    return { ok: false, error: (lastErr as { message?: string } | null)?.message || String(lastErr || "network_error") };
   };
 
   const promise = (async () => {
@@ -163,9 +168,9 @@ export function updateProfile(patch: { nick?: string; avatar?: string }) {
   return promise;
 }
 
-export async function getAvatar(userId: string) {
+export async function getAvatar(userId: string): Promise<AvatarResult> {
   if (!isOid(userId)) return { ok: false };
-  return emitAck<{ ok: boolean; avatarB64?: string; avatarVer?: number }>(
+  return emitAck<AvatarResult>(
     "user.getAvatar",
     { userId },
     8000,

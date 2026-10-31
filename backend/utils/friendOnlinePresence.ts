@@ -42,7 +42,7 @@ function isOid(userId: string): boolean {
 type PresenceSocket = { data?: Record<string, unknown> };
 
 function socketUserId(s: PresenceSocket): string {
-  return normalizeUid(String((s as any)?.data?.userId || ''));
+  return normalizeUid(String((s)?.data?.userId || ''));
 }
 
 /**
@@ -51,7 +51,7 @@ function socketUserId(s: PresenceSocket): string {
  * O(пользователей × сокетов) на каждое событие видимости.
  */
 function socketsOfUser(io: Server, uid: string): PresenceSocket[] {
-  const room = (io.sockets as any).adapter?.rooms?.get(`u:${uid}`) as Set<string> | undefined;
+  const room = (io.sockets).adapter?.rooms?.get(`u:${uid}`) as Set<string> | undefined;
   if (!room || room.size === 0) return [];
   const out: PresenceSocket[] = [];
   for (const sid of room) {
@@ -75,7 +75,7 @@ function socketsByConnectedUser(io: Server): Map<string, PresenceSocket[]> {
 }
 
 function socketLooksInActiveCall(s: PresenceSocket): boolean {
-  const d = (s as any)?.data || {};
+  const d = (s)?.data || {};
   return !!(d.busy || d.inCall || d.roomId);
 }
 
@@ -99,7 +99,7 @@ function userHasBusyCallSocket(io: Server, uid: string, sockets: PresenceSocket[
 type FgTri = 'legacy' | 'true' | 'false';
 
 function socketForegroundLastSeenAt(s: PresenceSocket): number {
-  const raw = (s as any).data?.appForegroundLastSeenAt;
+  const raw = (s).data?.appForegroundLastSeenAt;
   return typeof raw === 'number' && Number.isFinite(raw) ? raw : 0;
 }
 
@@ -109,7 +109,7 @@ function isForegroundHeartbeatFresh(s: PresenceSocket): boolean {
 }
 
 function socketForegroundTriState(s: PresenceSocket): FgTri {
-  const v = (s as any).data?.appForeground;
+  const v = (s).data?.appForeground;
   if (v === false) return 'false';
   if (v === true) return isForegroundHeartbeatFresh(s) ? 'true' : 'false';
   return 'legacy';
@@ -156,7 +156,7 @@ function syncInAppTrackingForUser(io: Server, uid: string, sockets: PresenceSock
       allExplicitFalse = false;
     } else {
       const staleForegroundAt =
-        (s as any).data?.appForeground === true
+        (s).data?.appForeground === true
           ? socketForegroundLastSeenAt(s) + APP_FOREGROUND_HEARTBEAT_STALE_MS
           : 0;
       allBackgroundSinceCandidate = Math.max(
@@ -200,7 +200,7 @@ function armForegroundStalePresenceEmit(io: Server, userId: string): void {
 
   let newestSeenAt = 0;
   for (const s of socketsOfUser(io, key)) {
-    if ((s as any).data?.appForeground === true) {
+    if ((s).data?.appForeground === true) {
       newestSeenAt = Math.max(newestSeenAt, socketForegroundLastSeenAt(s));
     }
   }
@@ -244,7 +244,7 @@ export function applyFastOfflineAfterCallIfAllSocketsBackground(io: Server, user
   if (!key) return;
   const sockets = socketsOfUser(io, key);
   if (sockets.length === 0) return;
-  if (sockets.some((s) => (s as any).data?.appForeground !== false)) return;
+  if (sockets.some((s) => (s).data?.appForeground !== false)) return;
   cancelInAppOfflinePresenceEmit(key);
   userAllBackgroundSince.set(key, Date.now() - IN_APP_OFFLINE_DEBOUNCE_MS - 1);
   scheduleGlobalFriendPresenceEmit(io, key);

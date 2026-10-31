@@ -1,3 +1,4 @@
+import type { ChatMessage } from './chatMessageTypes';
 /** Serialized writes for the local message list of one chat. */
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -16,7 +17,7 @@ function withChatMessageWriteLock<T>(key: string, work: () => Promise<T>): Promi
   return next;
 }
 
-export function writeStoredChatMessages(key: string, messages: any[]): Promise<void> {
+export function writeStoredChatMessages(key: string, messages: ChatMessage[]): Promise<void> {
   return withChatMessageWriteLock(key, async () => {
     await AsyncStorage.setItem(key, JSON.stringify(messages));
     clearMessageCacheForStorageKey(key);
@@ -30,14 +31,14 @@ export function writeStoredChatMessages(key: string, messages: any[]): Promise<v
 export function patchStoredChatMessage(
   key: string,
   messageId: string,
-  patch: Record<string, unknown>,
+  patch: Partial<ChatMessage>,
 ): Promise<void> {
   return withChatMessageWriteLock(key, async () => {
     const raw = await AsyncStorage.getItem(key);
     const messages = raw ? JSON.parse(raw) : null;
     if (!Array.isArray(messages)) return;
     let changed = false;
-    const next = messages.map((message: any) => {
+    const next = messages.map((message: ChatMessage) => {
       if (String(message?.id || "") !== messageId) return message;
       changed = true;
       return { ...message, ...patch };

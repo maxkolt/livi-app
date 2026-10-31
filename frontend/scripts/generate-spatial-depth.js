@@ -4,15 +4,14 @@
  * Scenes на iPhone: каждый элемент картинки лежит на своём плане и при наклоне сдвигается
  * целиком, без растяжения пикселей, а за ним открывается чистый фон.
  *
- * assets/spatial/stage-hq.jpg (scripts/build-spatial-stage-hq.js) раскладывается на:
- *   spatial_stage_plate.jpg  — фон без элементов (дальний план): под элементами восстановлен
- *                              нормированным размытием окружения;
+ * assets/spatial/stage-hq.png (scripts/build-spatial-stage-hq.js) раскладывается на:
+ *   spatial_stage_plate.png  — однотонный фон без элементов (дальний план);
  *   spatial_stage_layers.png — элементы: разность картинки и фона, со смещением
  *                              LAYER_OFFSET (тени темнее фона — отрицательная разность);
  *   spatial_stage_planes.png — план каждого пикселя слоя (k · PLANE_STEP, 0 — нет), ½ размера;
  *   spatial_stage_tiles.png  — какие планы есть рядом с плиткой TILE px (биты · TILE_BIT_STEP):
  *                              шейдер проверяет только их.
- * В покое фон + слой = исходная картинка. Ещё пишутся spatial_stage.jpg (картинка целиком —
+ * В покое фон + слой = исходная картинка. Ещё пишутся spatial_stage.png (картинка целиком —
  * Android 12 и ниже сдвигает её одним планом) и размытая копия для стеклянных блоков
  * (SpatialGlassView): они показывают её кусок под собой, а не размывают сцену на каждом кадре.
  *
@@ -29,14 +28,15 @@ const Jimp = require('jimp-compact');
 const { PNG } = require('pngjs');
 
 const ROOT = path.join(__dirname, '..');
-const HQ = path.join(ROOT, 'assets', 'spatial', 'stage-hq.jpg');
+const { BACKGROUND, LOWER_CUBE, SOURCE_WIDTH, UPPER_CUBE } = require('./spatial-stage-style');
+const HQ = path.join(ROOT, 'assets', 'spatial', 'stage-hq.png');
 const RES = path.join(ROOT, 'android', 'app', 'src', 'main', 'res', 'drawable-nodpi');
-const OUT_IMAGE = path.join(RES, 'spatial_stage.jpg');
-const OUT_PLATE = path.join(RES, 'spatial_stage_plate.jpg');
+const OUT_IMAGE = path.join(RES, 'spatial_stage.png');
+const OUT_PLATE = path.join(RES, 'spatial_stage_plate.png');
 const OUT_LAYERS = path.join(RES, 'spatial_stage_layers.png');
 const OUT_PLANES = path.join(RES, 'spatial_stage_planes.png');
 const OUT_TILES = path.join(RES, 'spatial_stage_tiles.png');
-const OUT_BLUR = path.join(RES, 'spatial_stage_blur.jpg');
+const OUT_BLUR = path.join(RES, 'spatial_stage_blur.png');
 /** Размытая копия — в 1/4 ширины сцены: она гладкая, GPU растянет её без потерь. */
 const BLUR_WIDTH = 360;
 /** Сигма в пикселях копии: ×4 ≈ 10 px на сцене 1440 — прозрачное стекло, фон угадывается. */
@@ -44,7 +44,7 @@ const BLUR_SIGMA = 2.5;
 
 // Константы формата — те же в SpatialDepth.kt (DepthScene).
 /** Ноль разности в слое: тени до −LAYER_OFFSET, свет до 255 − LAYER_OFFSET уровней. */
-const LAYER_OFFSET = 64;
+const LAYER_OFFSET = 32;
 const PLANE_STEP = 40;
 const TILE = 32;
 const TILE_BIT_STEP = 8;
@@ -66,11 +66,19 @@ const SEEDS = [
   // Облако крупнее половины окна медианы фона: ядро — кольцо по краю, середина — дыра,
   // которую shapeElements заливает. Точка — у левого края тела.
   { name: 'bubble', at: [560, 430], plane: PLANE.near, pad: 36 },
-  { name: 'cube-top', at: [988, 277], plane: PLANE.icons },
+  {
+    name: 'cube-top',
+    at: [UPPER_CUBE.cx, UPPER_CUBE.cy].map(v => Math.round(v * 1440 / SOURCE_WIDTH)),
+    plane: PLANE.icons,
+  },
   { name: 'mic', at: [1264, 954], plane: PLANE.icons },
   // Камера — ниже и наклонена к кубу (build-spatial-stage-hq.js): точка внутри её корпуса.
   { name: 'camera', at: [176, 1398], plane: PLANE.icons },
-  { name: 'neural-cube', at: [1208, 1872], plane: PLANE.icons },
+  {
+    name: 'cube-bottom',
+    at: [LOWER_CUBE.cx, LOWER_CUBE.cy].map(v => Math.round(v * 1440 / SOURCE_WIDTH)),
+    plane: PLANE.icons,
+  },
 ];
 
 /**
@@ -476,16 +484,10 @@ async function main() {
   const { planeOf, stats, why } = assignPlanes(elements, w, h);
   const { weight, labels } = elements;
 
-  const fill = fillBackground(rgb, weight, w, h);
-  const plate = new Jimp(w, h);
-  for (let i = 0; i < w * h; i++) {
-    const m = weight[i];
-    for (let c = 0; c < 3; c++) plate.bitmap.data[i * 4 + c] = Math.round(rgb[c][i] * (1 - m) + fill[c][i] * m);
-    plate.bitmap.data[i * 4 + 3] = 255;
-  }
-  await plate.quality(95).writeAsync(OUT_PLATE);
-  // Разность — от фона, каким его увидит телефон (после JPEG): в покое сумма точна.
-  const decoded = (await Jimp.read(OUT_PLATE)).bitmap.data;
+  const plate = new Jimp(w, h, Jimp.rgbaToInt(...BACKGROUND, 255));
+  await plate.writeAsync(OUT_PLATE);
+  // PNG сохраняет и однотонную подложку, и контуры без повторного JPEG-сжатия.
+  const decoded = plate.bitmap.data;
   const layers = new PNG({ width: w, height: h });
   let clipped = 0;
   let lo = 0;
@@ -553,7 +555,10 @@ async function main() {
     const blurred = gaussianBlur(ch, bw, bh, BLUR_SIGMA);
     for (let i = 0; i < bw * bh; i++) bd[i * 4 + c] = Math.round(blurred[i]);
   }
-  await small.quality(90).writeAsync(OUT_BLUR);
+  await small.writeAsync(OUT_BLUR);
+  for (const old of ['spatial_stage.jpg', 'spatial_stage_plate.jpg', 'spatial_stage_blur.jpg']) {
+    fs.rmSync(path.join(RES, old), { force: true });
+  }
 
   const perPlane = {};
   for (let l = 1; l < planeOf.length; l++) perPlane[planeOf[l]] = (perPlane[planeOf[l]] || 0) + 1;
@@ -585,7 +590,7 @@ async function main() {
   }
 }
 
-main().catch((e) => {
-  console.error(e);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((e) => { console.error(e); process.exit(1); });
+}
+module.exports = { findElements, layout, assignPlanes, shapeElements, fillBackground };

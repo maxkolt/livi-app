@@ -1,8 +1,15 @@
+import type { ChatMessage } from './chatMessageTypes';
 /** Chat FlatList row builders (date separators + messages). */
 
-export type ChatListRow =
-  | { type: "date"; id: string; label: string }
-  | ({ type: "message" } & Record<string, any>);
+/** Message fields are spread over the row discriminator; type stays text/image/etc. */
+export type ChatListRow = ChatMessage & {
+  label?: string;
+  groupedWithPrev?: boolean;
+  groupedWithNext?: boolean;
+};
+
+/** Bubbles (including their menu previews) originate from stored/optimistic rows with IDs and timestamps. */
+export type ChatBubbleRow = ChatListRow & Required<Pick<ChatMessage, 'id' | 'timestamp'>>;
 
 export const CHAT_LIST_INITIAL_NUM_TO_RENDER = 12;
 export const CHAT_LIST_MAX_TO_RENDER_PER_BATCH = 8;
@@ -23,8 +30,8 @@ function formatChatDateSeparator(ts: Date): string {
 /** Подряд от одного человека не дольше этого — одна серия облаков, как в Telegram. */
 const BUBBLE_GROUP_GAP_MS = 5 * 60 * 1000;
 
-function timeMs(raw: unknown): number {
-  const ms = raw instanceof Date ? raw.getTime() : new Date((raw as any) || 0).getTime();
+function timeMs(raw: ChatMessage['timestamp']): number {
+  const ms = raw instanceof Date ? raw.getTime() : new Date(raw || 0).getTime();
   return Number.isFinite(ms) ? ms : NaN;
 }
 
@@ -33,7 +40,7 @@ function timeMs(raw: unknown): number {
  * Видеокружок в серию не входит: в серии облака стоят почти вплотную (их скругления
  * сходятся), а круг так «прилипает» к соседу — вокруг него обычный промежуток ленты.
  */
-function sameBubbleGroup(a: any, b: any): boolean {
+function sameBubbleGroup(a: ChatMessage, b: ChatMessage): boolean {
   if (String(a?.type || "") === "call" || String(b?.type || "") === "call") return false;
   if (String(a?.type || "") === "video_note" || String(b?.type || "") === "video_note") return false;
   if ((a?.sender === "me") !== (b?.sender === "me")) return false;
@@ -42,7 +49,7 @@ function sameBubbleGroup(a: any, b: any): boolean {
   return Number.isFinite(ta) && Number.isFinite(tb) && Math.abs(tb - ta) <= BUBBLE_GROUP_GAP_MS;
 }
 
-export function buildChatListRows(messages: any[]): ChatListRow[] {
+export function buildChatListRows(messages: ChatMessage[]): ChatListRow[] {
   const rows: ChatListRow[] = [];
   let lastDayKey: string | null = null;
   for (const m of messages) {
@@ -75,5 +82,5 @@ export function buildChatListRows(messages: any[]): ChatListRow[] {
 
 export function indexInChatListData(data: ChatListRow[], messageId: string): number {
   const id = String(messageId || "").trim();
-  return data.findIndex((row) => row.type === "message" && String((row as any).id) === id);
+  return data.findIndex((row) => row.type === "message" && String((row).id) === id);
 }

@@ -1,3 +1,4 @@
+import type { CallAudioGlobals } from './callStateTypes';
 import { setPipAudioOnlyPlaceholderSticky } from './callAudioOnlyUiContext';
 import { resolveDirectCallAudioFirst } from './directCallMediaHint';
 import {
@@ -7,7 +8,7 @@ import {
 
 function setPipInAppRtcFromAudioOnlySticky(fromAudioOnlyUi: boolean): void {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     g.__pipInAppRtcFromAudioOnlyRef = g.__pipInAppRtcFromAudioOnlyRef || { current: false };
     g.__pipInAppRtcFromAudioOnlyRef.current = fromAudioOnlyUi;
   } catch {}
@@ -19,7 +20,7 @@ const DIRECT_CALL_VIDEO_EXPAND_DEDUP_MS = 900;
 /** Продлевает окно, в котором audio-only / PiP-return не должны откатывать переход на video UI. */
 function touchDirectCallVideoExpandGuard(): void {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     g.__directCallVideoExpandUntilRef = g.__directCallVideoExpandUntilRef || { current: 0 };
     g.__directCallVideoExpandUntilRef.current = Date.now() + DIRECT_CALL_VIDEO_EXPAND_GUARD_MS;
   } catch {}
@@ -27,7 +28,7 @@ function touchDirectCallVideoExpandGuard(): void {
 
 export function isDirectCallVideoExpandGuardActive(): boolean {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     if (g.__directCallVideoExpandInFlightRef?.current === true) return true;
     return Date.now() < Number(g.__directCallVideoExpandUntilRef?.current || 0);
   } catch {
@@ -38,7 +39,7 @@ export function isDirectCallVideoExpandGuardActive(): boolean {
 /** Один активный expand на коротком интервале (PiP overlay + mount effects). */
 function tryBeginDirectCallVideoExpand(): boolean {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     const now = Date.now();
     g.__directCallVideoExpandInFlightRef = g.__directCallVideoExpandInFlightRef || { current: false };
     g.__directCallVideoExpandLastBeginRef = g.__directCallVideoExpandLastBeginRef || { current: 0 };
@@ -57,7 +58,7 @@ function tryBeginDirectCallVideoExpand(): boolean {
 
 export function finishDirectCallVideoExpandInFlight(): void {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     if (g.__directCallVideoExpandInFlightRef) {
       g.__directCallVideoExpandInFlightRef.current = false;
     }
@@ -67,7 +68,7 @@ export function finishDirectCallVideoExpandInFlight(): void {
 /** Пользователь явно перешёл на video UI (PiP expand / кнопка камеры), не stale ref с прошлого звонка. */
 export function markDirectCallUserRequestedVideoExpand(): void {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     g.__directCallUserRequestedVideoExpandRef =
       g.__directCallUserRequestedVideoExpandRef || { current: false };
     g.__directCallUserRequestedVideoExpandRef.current = true;
@@ -77,7 +78,7 @@ export function markDirectCallUserRequestedVideoExpand(): void {
 
 export function clearDirectCallUserRequestedVideoExpand(): void {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     if (g.__directCallUserRequestedVideoExpandRef) {
       g.__directCallUserRequestedVideoExpandRef.current = false;
     }
@@ -86,7 +87,7 @@ export function clearDirectCallUserRequestedVideoExpand(): void {
 
 export function isDirectCallUserRequestedVideoExpand(): boolean {
   try {
-    return (global as any).__directCallUserRequestedVideoExpandRef?.current === true;
+    return (global as CallAudioGlobals).__directCallUserRequestedVideoExpandRef?.current === true;
   } catch {
     return false;
   }
@@ -94,7 +95,7 @@ export function isDirectCallUserRequestedVideoExpand(): boolean {
 
 export function clearStaleDirectCallVideoExpandFlags(): void {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     g.__expandToVideoCallUiFromPiPRef = g.__expandToVideoCallUiFromPiPRef || { current: false };
     g.__expandToVideoCallUiFromPiPRef.current = false;
     g.__directCallVideoExpandUntilRef = g.__directCallVideoExpandUntilRef || { current: 0 };
@@ -115,7 +116,7 @@ export function shouldBlockAutomatedDirectCallVideoExpand(
 
 function readDirectCallPiPParamsPreferVideo(): boolean {
   try {
-    return (global as any).__currentCallPiPParamsRef?.current?.preferVideoCallUi === true;
+    return (global as CallAudioGlobals).__currentCallPiPParamsRef?.current?.preferVideoCallUi === true;
   } catch {
     return false;
   }
@@ -129,7 +130,7 @@ export function isStaleDirectCallVideoExpandGlobalHint(
   } | null,
 ): boolean {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     const hasHint =
       g.__expandToVideoCallUiFromPiPRef?.current === true ||
       isDirectCallUserRequestedVideoExpand();
@@ -192,7 +193,7 @@ export function markDirectCallAudioAcceptBootstrapped(callId?: string | null): v
   const cid = String(callId || '').trim();
   if (!cid) return;
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     g.__directCallAudioAcceptBootstrappedCallIdRef =
       g.__directCallAudioAcceptBootstrappedCallIdRef || { current: null as string | null };
     g.__directCallAudioAcceptBootstrappedCallIdRef.current = cid;
@@ -204,7 +205,7 @@ export function isDirectCallAudioAcceptBootstrapped(callId?: string | null): boo
   if (!cid) return false;
   try {
     return (
-      String((global as any).__directCallAudioAcceptBootstrappedCallIdRef?.current || '') === cid
+      String((global as CallAudioGlobals).__directCallAudioAcceptBootstrappedCallIdRef?.current || '') === cid
     );
   } catch {
     return false;
@@ -213,7 +214,7 @@ export function isDirectCallAudioAcceptBootstrapped(callId?: string | null): boo
 
 export function clearDirectCallAudioAcceptBootstrapped(): void {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     if (g.__directCallAudioAcceptBootstrappedCallIdRef) {
       g.__directCallAudioAcceptBootstrappedCallIdRef.current = null;
     }
@@ -223,7 +224,7 @@ export function clearDirectCallAudioAcceptBootstrapped(): void {
 /** Пользователь на video UI (expand / PiP→fullscreen / камера), не на audio-only. */
 export function isDirectCallVideoUiActive(): boolean {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     const params = g.__currentCallPiPParamsRef?.current;
     const routePrefersVideo =
       params?.preferVideoCallUi === true || readDirectCallPiPParamsPreferVideo();
@@ -254,7 +255,7 @@ export function shouldSuppressDirectCallAudioOnlyUiTransition(): boolean {
 /** Один expand + enable camera на всех входах (PiP overlay, mount, focus). */
 export function runDirectCallVideoExpandOnce(run: () => Promise<void>): Promise<void> {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     g.__directCallVideoExpandPromiseRef =
       g.__directCallVideoExpandPromiseRef || { current: null as Promise<void> | null };
     const existing = g.__directCallVideoExpandPromiseRef.current;
@@ -287,7 +288,7 @@ export function runDirectCallVideoExpandOnce(run: () => Promise<void>): Promise<
 /** In-app PiP → экран видеозвонка с Home / другого экрана (не audio UI). */
 export function prepareDirectCallVideoReturnFromPiP(): void {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     g.__preferAudioOnlyUiOnNextVideoCallRef = g.__preferAudioOnlyUiOnNextVideoCallRef || { current: false };
     g.__preferAudioOnlyUiOnNextVideoCallRef.current = false;
     g.__expandToVideoCallUiFromPiPRef = g.__expandToVideoCallUiFromPiPRef || { current: false };

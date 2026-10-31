@@ -1,3 +1,10 @@
+import type { CallAudioGlobals } from '../../../utils/callStateTypes';
+import type {
+  NativeLiveKitMediaTrack,
+  RoomDisposalEngine,
+  RoomResumeEngine,
+} from '../rtcCompatibilityTypes';
+import type { LiveKitTokenResponse } from './videoCall/types';
 import { MediaStream } from '@livekit/react-native-webrtc';
 import { Platform, NativeModules, AppState } from 'react-native';
 import {
@@ -5,6 +12,7 @@ import {
   RoomEvent,
   Track,
   type RemoteParticipant,
+  type RemoteAudioTrack,
   type RemoteTrack,
   type RemoteTrackPublication,
   type LocalTrack,
@@ -39,6 +47,7 @@ import {
   type PartnerExternalHoldSignal,
 } from '../../../utils/partnerExternalHoldUi';
 import { SimpleEventEmitter } from '../base/SimpleEventEmitter';
+import type { VideoCallSessionEvents } from '../base/sessionEvents';
 import type { WebRTCSessionConfig, WebRTCSessionCallbacks, CamSide } from '../types';
 import socket, {
   API_BASE,
@@ -205,7 +214,11 @@ export function wasCallEndedLocally(callId?: string | null): boolean {
   return at != null && Date.now() - at <= LOCALLY_ENDED_CALL_TTL_MS;
 }
 
-export class VideoCallSession extends SimpleEventEmitter {
+export type EarlyBootstrapVideoCallSession = VideoCallSession & {
+  __earlyDirectCallBootstrap?: boolean;
+};
+
+export class VideoCallSession extends SimpleEventEmitter<VideoCallSessionEvents> {
   private hasLoggedLiveKitApiKeyWarning = false;
   private config: WebRTCSessionConfig;
   private room: Room | null = null;
@@ -221,7 +234,7 @@ export class VideoCallSession extends SimpleEventEmitter {
   private localStream: MediaStream | null = null;
   private remoteStream: MediaStream | null = null;
   private currentRemoteParticipant: RemoteParticipant | null = null;
-  private remoteAudioTrack: RemoteTrack | null = null;
+  private remoteAudioTrack: RemoteAudioTrack | null = null;
   private remoteVideoTrack: RemoteTrack | null = null;
   private remoteViewKey = 0;
   private camSide: CamSide = 'front';
@@ -457,11 +470,11 @@ export class VideoCallSession extends SimpleEventEmitter {
     
     // КРИТИЧНО: Проверяем, есть ли сохраненное событие call:accepted, которое пришло до создания сессии
     // Это решает проблему, когда call:accepted приходит до того, как VideoCallSession создан
-    const pendingCallAccepted = (global as any).__pendingCallAcceptedRef?.current;
+    const pendingCallAccepted = (global as CallAudioGlobals).__pendingCallAcceptedRef?.current;
     const pendingCallId = pendingCallAccepted ? String(pendingCallAccepted?.callId ?? '') : '';
     const pendingBlockedByTeardown = (() => {
       try {
-        const g = global as any;
+        const g = (global as CallAudioGlobals);
         return (
           g.__endingCallInProgressRef?.current === true ||
           g.__callEndedFromPiPNoOpenRef?.current === true ||
@@ -478,14 +491,14 @@ export class VideoCallSession extends SimpleEventEmitter {
         initialCallId: initialCallId ?? undefined,
         myUserId: config.myUserId,
       });
-      (global as any).__pendingCallAcceptedRef.current = null;
+      (global as CallAudioGlobals).__pendingCallAcceptedRef!.current = null;
     } else if (pendingCallAccepted && !usePending) {
       logger.info('[VideoCallSession] 🔄 Ignoring stale pending call:accepted (callId mismatch)', {
         pendingCallId,
         initialCallId: initialCallId ?? undefined,
         myUserId: config.myUserId,
       });
-      (global as any).__pendingCallAcceptedRef.current = null;
+      (global as CallAudioGlobals).__pendingCallAcceptedRef!.current = null;
     } else if (usePending) {
       this.consumedPendingCallAcceptedAtConstruct = true;
       logger.info('[VideoCallSession] 🔄 Found pending call:accepted event, scheduling handleCallAccepted (microtask)', {
@@ -538,7 +551,7 @@ export class VideoCallSession extends SimpleEventEmitter {
 
   private isGlobalCallTeardownInProgress(): boolean {
     try {
-      const g = global as any;
+      const g = (global as CallAudioGlobals);
       return (
         g.__endingCallInProgressRef?.current === true ||
         g.__callEndedFromPiPNoOpenRef?.current === true ||
@@ -562,7 +575,7 @@ export class VideoCallSession extends SimpleEventEmitter {
 
   private clearGlobalSessionRefIfCurrent(reason: string): void {
     try {
-      const ref = (global as any).__webrtcSessionRef;
+      const ref = (global as CallAudioGlobals).__webrtcSessionRef;
       if (ref?.current === this) {
         ref.current = null;
         logger.info('[VideoCallSession] Cleared global session ref', {
@@ -967,13 +980,13 @@ export class VideoCallSession extends SimpleEventEmitter {
     const envLivekitUrl = process.env.EXPO_PUBLIC_LIVEKIT_URL;
     
     
-    const tokenDataPromise = new Promise<{ ok: boolean; token?: string; url?: string; error?: string }>((resolve) => {
+    const tokenDataPromise = new Promise<LiveKitTokenResponse>((resolve) => {
       const timeout = setTimeout(() => {
         logger.warn('[VideoCallSession] Token request timeout', { roomId });
         resolve({ ok: false, error: 'timeout' });
       }, 10000);
       
-      socket.emit('livekit:token', { roomName: roomId }, (response: { ok: boolean; token?: string; url?: string; error?: string }) => {
+      socket.emit('livekit:token', { roomName: roomId }, (response: LiveKitTokenResponse) => {
         clearTimeout(timeout);
         resolve(response);
       });
@@ -995,7 +1008,7 @@ export class VideoCallSession extends SimpleEventEmitter {
           return;
         }
         const connectRequestId = ++this.connectRequestId;
-        await this.restoreCallE2eeForRejoin(tokenData as any);
+        await this.restoreCallE2eeForRejoin(tokenData);
         const connected = await this.connectToLiveKit(resolvedLivekitUrl, tokenData.token, connectRequestId, roomId);
         if (!connected) {
           return;
@@ -1051,8 +1064,8 @@ export class VideoCallSession extends SimpleEventEmitter {
     // видел ended и не выполнял пост-подключение / setLocalDescription после disconnect
     this.ended = true;
     try {
-      if ((global as any).__pendingCallAcceptedRef) {
-        (global as any).__pendingCallAcceptedRef.current = null;
+      if ((global as CallAudioGlobals).__pendingCallAcceptedRef) {
+        (global as CallAudioGlobals).__pendingCallAcceptedRef!.current = null;
       }
     } catch {}
     this.cameraSuspendedForAppBackground = false;
@@ -1060,11 +1073,11 @@ export class VideoCallSession extends SimpleEventEmitter {
     // КРИТИЧНО: При завершении звонка выключаем системный PiP hint максимально рано,
     // чтобы на некоторых устройствах не происходил автовход в PiP (onUserLeaveHint) во время очистки.
     if (Platform.OS === 'android') {
-      try { (NativeModules as any)?.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false); } catch {}
+      try { NativeModules?.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false); } catch {}
     }
 
     // Сбрасываем блокировку комнаты сразу, чтобы следующий звонок не видел старую сессию
-    const roomLock = (global as any).__connectingToRoomRef as { roomName: string | null; session: VideoCallSession | null } | undefined;
+    const roomLock = (global as CallAudioGlobals).__connectingToRoomRef as { roomName: string | null; session: VideoCallSession | null } | undefined;
     if (roomLock?.session === this) {
       roomLock.roomName = null;
       roomLock.session = null;
@@ -1235,7 +1248,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     if (config.myUserId != null) this.config.myUserId = config.myUserId;
     if (config.initialCallId !== undefined) this.config.initialCallId = config.initialCallId;
 
-    const bridgeKeys: (keyof WebRTCSessionConfig)[] = [
+    const bridgeKeys = [
       'getIsInactiveState',
       'getIsDirectCall',
       'getInDirectCall',
@@ -1269,10 +1282,13 @@ export class VideoCallSession extends SimpleEventEmitter {
       'onRoomIdChange',
       'onCallIdChange',
       'onPcConnectedChange',
-    ];
+    ] as const satisfies readonly (keyof WebRTCSessionConfig)[];
+    type BridgeKey = (typeof bridgeKeys)[number];
+    type ReboundCallbacks = { [K in BridgeKey]?: WebRTCSessionConfig[BridgeKey] };
     for (const k of bridgeKeys) {
-      const v = (config as any)[k];
-      if (v !== undefined) (this.config as any)[k] = v;
+      const v = config[k];
+      // The source and destination use the same callback key.
+      if (v !== undefined) (this.config as ReboundCallbacks)[k] = v;
     }
   }
 
@@ -1401,7 +1417,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       this.notifyPeerDirectCallVideoUi(true, { force: true });
     }
     try {
-      const g = global as any;
+      const g = (global as CallAudioGlobals);
       if (g.__leavingVideoCallByHomeRef?.current === true) {
         logger.info('[VideoCallSession] Skip camera pause — Home/system PiP transition in progress');
         return;
@@ -1457,7 +1473,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     if (this.ended || this.endCallInProgress) return;
     const expandingToVideoUi =
       isDirectCallVideoExpandGuardActive() ||
-      (global as any).__stayOnVideoCallUiRef?.current === true;
+      global.__stayOnVideoCallUiRef?.current === true;
     // Video shell после PiP ≠ «включи камеру». Если пользователь выключил cam до PiP
     // (isCamOn=false и не было background-pause с intent «камера была вкл»), не форсим ON.
     if (this.isLocalDirectCallAudioOnlyUi() && !expandingToVideoUi) return;
@@ -1516,7 +1532,7 @@ export class VideoCallSession extends SimpleEventEmitter {
         this.cameraRestorePendingAfterPiP = false;
         this.skipReconnectCameraOnResumeUntil = Date.now() + 8000;
         try {
-          const pipUpdate = (global as any).__pipUpdateStateRef?.current;
+          const pipUpdate = (global as CallAudioGlobals).__pipUpdateStateRef?.current;
           if (typeof pipUpdate === 'function') pipUpdate({ localCamOn: true });
         } catch (_) {}
         return;
@@ -1527,7 +1543,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       this.cameraRestorePendingAfterPiP = false;
       this.skipReconnectCameraOnResumeUntil = Date.now() + 8000;
       try {
-        const pipUpdate = (global as any).__pipUpdateStateRef?.current;
+        const pipUpdate = (global as CallAudioGlobals).__pipUpdateStateRef?.current;
         if (typeof pipUpdate === 'function') pipUpdate({ localCamOn: true });
       } catch (_) {}
     });
@@ -1538,7 +1554,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     return this.enqueueCameraAppLifecycle(async () => {
       try {
         const returningFromPiP =
-          Date.now() < Number((global as any).__returningFromSystemPiPUntilRef?.current || 0);
+          Date.now() < Number((global as CallAudioGlobals).__returningFromSystemPiPUntilRef?.current || 0);
         if (returningFromPiP) {
           logger.info(
             '[VideoCallSession] Skip AppState camera restore — system PiP return owns lifecycle',
@@ -1567,7 +1583,7 @@ export class VideoCallSession extends SimpleEventEmitter {
         await this.applyLocalCameraEnabled(true);
         this.skipReconnectCameraOnResumeUntil = Date.now() + 8000;
         try {
-          const pipUpdate = (global as any).__pipUpdateStateRef?.current;
+          const pipUpdate = (global as CallAudioGlobals).__pipUpdateStateRef?.current;
           if (typeof pipUpdate === 'function') pipUpdate({ localCamOn: true });
         } catch (_) {}
         return;
@@ -1633,7 +1649,7 @@ export class VideoCallSession extends SimpleEventEmitter {
               } catch {}
             });
             const mt = newAudio.mediaStreamTrack;
-            if (mt) stream.addTrack(mt as any);
+            if (mt) stream.addTrack((mt as NativeLiveKitMediaTrack));
           } catch {}
           this.localStream = stream;
           this.emit('localStream', stream);
@@ -1717,7 +1733,7 @@ export class VideoCallSession extends SimpleEventEmitter {
   private syncExternalHoldStateToCanonicalSessions(kind: 'partner' | 'local', hold: boolean): void {
     const targets: VideoCallSession[] = [this];
     try {
-      const g = (global as any).__webrtcSessionRef?.current as VideoCallSession | undefined;
+      const g = (global as CallAudioGlobals).__webrtcSessionRef?.current as VideoCallSession | undefined;
       if (g && g !== this) targets.push(g);
     } catch {}
     const seen = new Set<VideoCallSession>();
@@ -1837,7 +1853,7 @@ export class VideoCallSession extends SimpleEventEmitter {
           // Soft-unmute недостаточно: после GSM MediaStreamTrack часто остаётся
           // readyState=live без новых кадров → у партнёра вечный last-frame.
           try {
-            (this.localVideoTrack as any).providedByUser = false;
+            this.localVideoTrack!['providedByUser'] = false;
           } catch {}
           if (Platform.OS === 'android') {
             await new Promise((r) => setTimeout(r, 280));
@@ -1967,7 +1983,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     const mst = track.mediaStreamTrack;
     if (!mst || mst.readyState === 'ended') return false;
     try {
-      (track as any).providedByUser = true;
+      track['providedByUser'] = true;
     } catch {}
     try {
       if (muted) {
@@ -1988,7 +2004,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     const track = this.localVideoTrack;
     if (!track) return;
     try {
-      (track as any).providedByUser = false;
+      track['providedByUser'] = false;
     } catch {}
     try {
       const mst = track.mediaStreamTrack;
@@ -2013,7 +2029,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     if (!this.isVideoTrackPublished(this.localVideoTrack)) {
       await this.unpublishOtherLocalTracks('video', this.localVideoTrack);
       await this.room.localParticipant.publishTrack(this.localVideoTrack).catch((e) => {
-        const errorMsg = e?.message || String(e || '');
+        const errorMsg = (e as Error | null | undefined)?.message || String(e || '');
         if (!errorMsg.includes('already') && !errorMsg.includes('duplicate')) {
           logger.warn('[VideoCallSession] Failed to publish video track on camera enable', e);
         }
@@ -2023,7 +2039,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     if (this.localAudioTrack && this.isMicOn && !this.isAudioTrackPublished(this.localAudioTrack)) {
       await this.unpublishOtherLocalTracks('audio', this.localAudioTrack);
       await this.room.localParticipant.publishTrack(this.localAudioTrack).catch((e) => {
-        const errorMsg = e?.message || String(e || '');
+        const errorMsg = (e as Error | null | undefined)?.message || String(e || '');
         if (!errorMsg.includes('already') && !errorMsg.includes('duplicate')) {
           logger.warn('[VideoCallSession] Failed to publish audio track after camera recovery', e);
         }
@@ -2047,7 +2063,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     const audioFirstCall =
       !!this.config.startWithCamOff ||
       (cidForMedia ? getCallMediaHint(cidForMedia) === 'audio' : false);
-    const stayOnVideoUi = (global as any).__stayOnVideoCallUiRef?.current === true;
+    const stayOnVideoUi = global.__stayOnVideoCallUiRef?.current === true;
     // stayOnVideoUi достаточно: после in-app PiP userExpand могут сбросить как stale,
     // но пользователь всё ещё на video UI и должен мочь снова включить камеру.
     const userLeftAudioOnlyForVideo =
@@ -2226,7 +2242,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     if (this.localVideoRecreatePromise) return;
     if (Date.now() < this.skipReconnectCameraOnResumeUntil) return;
     try {
-      if (Date.now() < Number((global as any).__returningFromSystemPiPUntilRef?.current || 0)) {
+      if (Date.now() < Number((global as CallAudioGlobals).__returningFromSystemPiPUntilRef?.current || 0)) {
         return;
       }
     } catch (_) {}
@@ -2239,7 +2255,7 @@ export class VideoCallSession extends SimpleEventEmitter {
         if (!this.isVideoTrackPublished(this.localVideoTrack)) {
           await this.unpublishOtherLocalTracks('video', this.localVideoTrack);
           await this.room.localParticipant.publishTrack(this.localVideoTrack).catch((e) => {
-            const msg = e?.message || String(e || '');
+            const msg = (e as Error | null | undefined)?.message || String(e || '');
             if (!msg.includes('already') && !msg.includes('duplicate')) logger.warn('[VideoCallSession] Publish video on resume failed', e);
           });
         }
@@ -2260,7 +2276,7 @@ export class VideoCallSession extends SimpleEventEmitter {
   private async unpublishOtherLocalTracks(kind: 'video' | 'audio', keep: LocalTrack): Promise<void> {
     try {
       if (!this.room || this.room.state !== 'connected' || !this.room.localParticipant) return;
-      const lp = this.room.localParticipant as any;
+      const lp = (this.room.localParticipant);
       const pubs =
         kind === 'video' ? lp.videoTrackPublications : lp.audioTrackPublications;
       if (!pubs || typeof pubs.values !== 'function') return;
@@ -2274,7 +2290,7 @@ export class VideoCallSession extends SimpleEventEmitter {
         if (kind === 'video' && source && source !== Track.Source.Camera) continue;
         if (kind === 'audio' && source && source !== Track.Source.Microphone) continue;
         try {
-          await (this.room!.localParticipant as any).unpublishTrack(track, true);
+          await this.room!.localParticipant.unpublishTrack(track, true);
         } catch {}
       }
     } catch {}
@@ -2327,7 +2343,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       logger.warn('[VideoCallSession] flipCam failed, reverted camSide', {
         prevSide,
         nextSide,
-        error: (e as any)?.message || String(e || ''),
+        error: (e as Error | null | undefined)?.message || String(e || ''),
       });
     } finally {
       this.cameraSwitchInProgress = false;
@@ -2346,14 +2362,14 @@ export class VideoCallSession extends SimpleEventEmitter {
         });
 
         try {
-          await this.localVideoTrack.restartTrack(preferred.primary as any);
+          await this.localVideoTrack.restartTrack(preferred.primary);
         } catch (e1) {
           if (!preferred.fallback) throw e1;
           logger.warn('[VideoCallSession] restartTrack with preferred preset failed; retrying with fallback', {
-            error: (e1 as any)?.message || String(e1 || ''),
+            error: (e1 as Error | null | undefined)?.message || String(e1 || ''),
             preferred: preferred.meta,
           });
-          await this.localVideoTrack.restartTrack(preferred.fallback as any);
+          await this.localVideoTrack.restartTrack(preferred.fallback);
         }
 
         try {
@@ -2375,7 +2391,7 @@ export class VideoCallSession extends SimpleEventEmitter {
         return;
       } catch (e) {
         logger.warn('[VideoCallSession] restartTrack flip path failed; trying replacePublishedVideoTrack', {
-          error: (e as any)?.message || String(e || ''),
+          error: (e as Error | null | undefined)?.message || String(e || ''),
         });
       }
 
@@ -2410,7 +2426,7 @@ export class VideoCallSession extends SimpleEventEmitter {
         return;
       } catch (e) {
         logger.warn('[VideoCallSession] replacePublishedVideoTrack path failed, falling back to recreateLocalVideoTrack', {
-          error: (e as any)?.message || String(e || ''),
+          error: (e as Error | null | undefined)?.message || String(e || ''),
         });
         await this.restartLocalCameraRecreatePath();
       }
@@ -2428,7 +2444,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       await this.recreateLocalVideoTrack('restartLocalCamera');
     } catch (e) {
       logger.warn('[VideoCallSession] Failed to recreate local video track for restartLocalCamera', {
-        error: (e as any)?.message || String(e || ''),
+        error: (e as Error | null | undefined)?.message || String(e || ''),
       });
       throw e;
     }
@@ -2437,7 +2453,7 @@ export class VideoCallSession extends SimpleEventEmitter {
         if (!this.isVideoTrackPublished(this.localVideoTrack)) {
           await this.unpublishOtherLocalTracks('video', this.localVideoTrack);
           await this.room.localParticipant.publishTrack(this.localVideoTrack).catch((e) => {
-            const errorMsg = e?.message || String(e || '');
+            const errorMsg = (e as Error | null | undefined)?.message || String(e || '');
             if (isIgnorablePublishError(errorMsg)) {
               return;
             }
@@ -2447,7 +2463,7 @@ export class VideoCallSession extends SimpleEventEmitter {
         if (this.localAudioTrack && this.isMicOn && !this.isAudioTrackPublished(this.localAudioTrack)) {
           await this.unpublishOtherLocalTracks('audio', this.localAudioTrack);
           await this.room.localParticipant.publishTrack(this.localAudioTrack).catch((e) => {
-            const errorMsg = e?.message || String(e || '');
+            const errorMsg = (e as Error | null | undefined)?.message || String(e || '');
             if (isIgnorablePublishError(errorMsg)) {
               return;
             }
@@ -2681,7 +2697,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     if (this.getIsCamOn?.()) return false;
     if (this.remoteStreamHasLiveVideoTrack()) return false;
     try {
-      const t = (this.localStream as any)?.getVideoTracks?.()?.[0];
+      const t = this.localStream?.getVideoTracks?.()?.[0];
       if (t && t.readyState === 'live' && t.enabled !== false) return false;
     } catch {}
     return this.deferRemoteVideoSubscription;
@@ -2773,7 +2789,7 @@ export class VideoCallSession extends SimpleEventEmitter {
   ensureRemoteVideoForPiP(): void {
     let inAppPiPVisible = false;
     try {
-      const g = global as any;
+      const g = (global as CallAudioGlobals);
       inAppPiPVisible =
         g.__pipVisibleRef?.current === true && g.__pipInSystemModeRef?.current !== true;
     } catch (_) {}
@@ -2814,7 +2830,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     if (!this.getRemoteCamEnabled()) return;
     const now = Date.now();
     try {
-      const g = global as any;
+      const g = (global as CallAudioGlobals);
       // Returning/block всегда первым — stale inSystemPiP не должен снимать defer на audio UI.
       if (now < Number(g.__returningFromSystemPiPUntilRef?.current || 0)) return;
       if (now < Number(g.__blockSystemPiPCaptureHostUntilRef?.current || 0)) return;
@@ -2853,13 +2869,13 @@ export class VideoCallSession extends SimpleEventEmitter {
         this.flushPiPRemoteVideoState({ bumpKey: true });
       }
     } catch (e) {
-      logger.warn('[VideoCallSession] ensureRemoteVideoForSystemPiPCapture failed', e as any);
+      logger.warn('[VideoCallSession] ensureRemoteVideoForSystemPiPCapture failed', (e));
     }
   }
 
   private remoteStreamHasLiveVideoTrack(): boolean {
     try {
-      const t = (this.remoteStream as any)?.getVideoTracks?.()?.[0];
+      const t = this.remoteStream?.getVideoTracks?.()?.[0];
       return !!t && t.readyState === 'live' && t.enabled !== false;
     } catch {
       return false;
@@ -2868,7 +2884,7 @@ export class VideoCallSession extends SimpleEventEmitter {
 
   private remoteStreamVideoTrackId(): string | null {
     try {
-      return (this.remoteStream as any)?.getVideoTracks?.()?.[0]?.id ?? null;
+      return this.remoteStream?.getVideoTracks?.()?.[0]?.id ?? null;
     } catch {
       return null;
     }
@@ -2894,7 +2910,7 @@ export class VideoCallSession extends SimpleEventEmitter {
 
   private flushPiPRemoteVideoState(opts?: { bumpKey?: boolean }): void {
     try {
-      const pipUpdate = (global as any).__pipUpdateStateRef?.current;
+      const pipUpdate = (global as CallAudioGlobals).__pipUpdateStateRef?.current;
       if (typeof pipUpdate !== 'function') return;
       const bumpKey = opts?.bumpKey !== false;
       if (bumpKey) {
@@ -2908,7 +2924,7 @@ export class VideoCallSession extends SimpleEventEmitter {
         pipRemoteViewKey: this.remoteViewKey || Date.now(),
       };
       try {
-        const g = global as any;
+        const g = (global as CallAudioGlobals);
         if (
           hasLive &&
           remoteCamOn &&
@@ -2925,7 +2941,7 @@ export class VideoCallSession extends SimpleEventEmitter {
   /** System PiP (в т.ч. audio/logo enter): показать peer RTC без смены audio UI. */
   private activateSystemPiPPeerVideoCapture(reason: string): void {
     try {
-      const g = global as any;
+      const g = (global as CallAudioGlobals);
       const now = Date.now();
       // Expanding/returning побеждает stale inSystemPiP — иначе late TrackSubscribed remount CaptureHost.
       if (now < Number(g.__returningFromSystemPiPUntilRef?.current || 0)) return;
@@ -2951,7 +2967,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       try {
         const params = g.__currentCallPiPParamsRef?.current;
         if (params && typeof params === 'object') {
-          g.__currentCallPiPParamsRef.current = {
+          g.__currentCallPiPParamsRef!.current = {
             ...params,
             remoteCamOn: true,
             remoteStream: this.remoteStream ?? params.remoteStream ?? null,
@@ -3003,13 +3019,13 @@ export class VideoCallSession extends SimpleEventEmitter {
       setTimeout(repin, 120);
       setTimeout(repin, 400);
     } catch (e) {
-      logger.warn('[VideoCallSession] activateSystemPiPPeerVideoCapture failed', e as any);
+      logger.warn('[VideoCallSession] activateSystemPiPPeerVideoCapture failed', (e));
     }
   }
 
   private restoreAudioOnlyDeferAfterPiPIfNeeded(): void {
     try {
-      if ((global as any).__expandToVideoCallUiFromPiPRef?.current === true) {
+      if ((global as CallAudioGlobals).__expandToVideoCallUiFromPiPRef?.current === true) {
         this.restoreDeferRemoteVideoAfterPiP = false;
         return;
       }
@@ -3025,7 +3041,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       const mediaTrack = this.remoteVideoTrack.mediaStreamTrack;
       if (mediaTrack && this.remoteStream) {
         try {
-          this.remoteStream.removeTrack(mediaTrack as any);
+          this.remoteStream.removeTrack((mediaTrack as NativeLiveKitMediaTrack));
         } catch {}
       }
       this.remoteVideoTrack = null;
@@ -3130,7 +3146,7 @@ export class VideoCallSession extends SimpleEventEmitter {
   private shouldKeepRemoteVideoDespiteAudioDefer(): boolean {
     if (this.getRemoteCamEnabled()) return true;
     try {
-      const g = global as any;
+      const g = (global as CallAudioGlobals);
       if (g.__pipInSystemModeRef?.current === true) return true;
       if (g.__pendingSystemPiPSyncRef?.current === true) return true;
       // In-app PiP: peer может включить cam после входа — track нужен для плашки.
@@ -3152,7 +3168,7 @@ export class VideoCallSession extends SimpleEventEmitter {
   private isDirectCallAudioFirstWithoutUserVideo(): boolean {
     if (!this.config.getIsDirectCall?.()) return false;
     try {
-      if ((global as any).__stayOnVideoCallUiRef?.current === true) return false;
+      if (global.__stayOnVideoCallUiRef?.current === true) return false;
     } catch {}
     const cid = String(this.getCallId?.() || this.callId || '').trim();
     const audioFirst =
@@ -3273,7 +3289,7 @@ export class VideoCallSession extends SimpleEventEmitter {
    */
   private isRemoteAudioStallWatchSuppressed(): boolean {
     try {
-      const g = global as any;
+      const g = (global as CallAudioGlobals);
       const now = Date.now();
       if (g.__pipInSystemModeRef?.current === true) return true;
       if (g.__pendingSystemPiPSyncRef?.current === true) return true;
@@ -3457,7 +3473,7 @@ export class VideoCallSession extends SimpleEventEmitter {
    * signal reconnect + ICE restart с теми же треками, без re-join и без разрыва у партнёра.
    */
   private requestLiveKitResume(reason: string, stalledMs: number): boolean {
-    const engine = (this.room as any)?.engine;
+    const engine = this.room?.engine as RoomResumeEngine | undefined;
     if (!engine || typeof engine.handleDisconnect !== 'function') return false;
     this.lastRemoteVideoStallResumeAt = Date.now();
     this.remoteVideoStallResumes += 1;
@@ -3598,7 +3614,7 @@ export class VideoCallSession extends SimpleEventEmitter {
   /** Локальный UI direct-call: экран «Аудиозвонок» (не video UI / не Home-as-video). */
   private isLocalDirectCallAudioOnlyUi(): boolean {
     try {
-      const g = global as any;
+      const g = (global as CallAudioGlobals);
       // Явный return-to-audio: preferAudioOnly + inAudioOnly побеждают stale stayOnVideo
       // (иначе партнёру снова уходит direct-call:video-ui=true).
       if (
@@ -3631,7 +3647,7 @@ export class VideoCallSession extends SimpleEventEmitter {
 
   private requestSyncDirectCallAudioOnlyUi(): void {
     try {
-      const fn = (global as any).__syncDirectCallAudioOnlyUiRef?.current;
+      const fn = (global as CallAudioGlobals).__syncDirectCallAudioOnlyUiRef?.current;
       if (typeof fn === 'function') {
         fn(this);
       }
@@ -3691,7 +3707,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     }
 
     try {
-      const g = global as any;
+      const g = (global as CallAudioGlobals);
       if (forceUserReturn) {
         g.__expandToVideoCallUiFromPiPRef = g.__expandToVideoCallUiFromPiPRef || { current: false };
         g.__expandToVideoCallUiFromPiPRef.current = false;
@@ -3717,7 +3733,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       !this.inPiP
     ) {
       try {
-        const g = global as any;
+        const g = (global as CallAudioGlobals);
         if (g.__inAudioOnlyUiRef) g.__inAudioOnlyUiRef.current = true;
       } catch (_) {}
       this.notifyPeerDirectCallVideoUi(false, { force: true });
@@ -3727,7 +3743,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.restoreDeferRemoteVideoAfterPiP = false;
     this.lastEmittedPeerVideoCallUi = false;
     try {
-      const g = global as any;
+      const g = (global as CallAudioGlobals);
       if (g.__inAudioOnlyUiRef) g.__inAudioOnlyUiRef.current = true;
     } catch (_) {}
     this.setInPiP(false);
@@ -3738,7 +3754,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       logger.warn('[VideoCallSession] enterDirectCallAudioOnlyMode exitPiP failed', e);
     }
     const camOn = this.getIsCamOn();
-    const localVideoTrack = (this.localStream as any)?.getVideoTracks?.()?.[0];
+    const localVideoTrack = this.localStream?.getVideoTracks?.()?.[0];
     const hasLiveLocalVideo =
       !!localVideoTrack &&
       localVideoTrack.readyState === 'live' &&
@@ -3769,7 +3785,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       logger.warn('[VideoCallSession] enterDirectCallAudioOnlyMode deferRemoteVideo failed', e);
     }
     try {
-      const pipUpdate = (global as any).__pipUpdateStateRef?.current;
+      const pipUpdate = (global as CallAudioGlobals).__pipUpdateStateRef?.current;
       if (typeof pipUpdate === 'function') pipUpdate({ localCamOn: false });
     } catch (_) {}
   }
@@ -3793,7 +3809,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       return;
     }
     try {
-      const g = global as any;
+      const g = (global as CallAudioGlobals);
       if (g.__preferAudioOnlyUiOnNextVideoCallRef?.current === true) {
         return;
       }
@@ -3827,7 +3843,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     const currentRoomId = this.getRoomId();
     // OEM bounce / audio-return mid-enter: не сбрасывать local inPiP и не слать false.
     try {
-      const g = global as any;
+      const g = (global as CallAudioGlobals);
       const now = Date.now();
       if (
         g.__pipInSystemModeRef?.current === true ||
@@ -4229,11 +4245,11 @@ export class VideoCallSession extends SimpleEventEmitter {
       }
     } catch (_) {}
     try {
-      const pipUpdate = (global as any).__pipUpdateStateRef?.current;
+      const pipUpdate = (global as CallAudioGlobals).__pipUpdateStateRef?.current;
       if (typeof pipUpdate === 'function') pipUpdate({ remoteCamOn: data.enabled });
     } catch (_) {}
     try {
-      const g = global as any;
+      const g = (global as CallAudioGlobals);
       const pipVisible = g.__pipVisibleRef?.current === true;
       if (data.enabled) {
         // After reconnect, peer video publish may already exist — pull it in.
@@ -4276,7 +4292,7 @@ export class VideoCallSession extends SimpleEventEmitter {
         this.remoteCamEnabled = false;
         this.notifyRemoteCamStateChange(false);
         try {
-          const pipUpdate = (global as any).__pipUpdateStateRef?.current;
+          const pipUpdate = (global as CallAudioGlobals).__pipUpdateStateRef?.current;
           if (typeof pipUpdate === 'function') pipUpdate({ remoteCamOn: false });
         } catch (_) {}
       }
@@ -4336,7 +4352,7 @@ export class VideoCallSession extends SimpleEventEmitter {
    * false → этим звонком занимается другая сессия.
    */
   private claimActiveSessionForCallAccepted(callId: string | null, targetRoomName: string | null): boolean {
-    const globalSessionRef = (global as any).__webrtcSessionRef;
+    const globalSessionRef = (global as CallAudioGlobals).__webrtcSessionRef;
     const globalSession = globalSessionRef?.current;
     if (globalSession == null || globalSession === this) return true;
 
@@ -4357,10 +4373,10 @@ export class VideoCallSession extends SimpleEventEmitter {
     }
 
     const otherCallId =
-      typeof (globalSession as any).getCallId === 'function'
-        ? String((globalSession as any).getCallId() || '').trim()
+      typeof globalSession.getCallId === 'function'
+        ? String(globalSession.getCallId() || '').trim()
         : '';
-    const otherRoomState = (globalSession as any)?.room?.state as string | undefined;
+    const otherRoomState = globalSession?.room?.state as string | undefined;
     const otherBusy =
       otherRoomState === 'connected' || otherRoomState === 'connecting' || otherRoomState === 'reconnecting';
     const sameCall = !!callId && otherCallId === String(callId);
@@ -4384,8 +4400,8 @@ export class VideoCallSession extends SimpleEventEmitter {
       myUserId: this.config.myUserId,
     });
     try {
-      if (typeof (globalSession as any).detachFromCall === 'function') {
-        (globalSession as any).detachFromCall();
+      if (typeof globalSession.detachFromCall === 'function') {
+        globalSession.detachFromCall();
       }
     } catch (_) {}
     return true;
@@ -4481,8 +4497,8 @@ export class VideoCallSession extends SimpleEventEmitter {
         myUserId: this.config.myUserId,
       });
       try {
-        if ((global as any).__pendingCallAcceptedRef) {
-          (global as any).__pendingCallAcceptedRef.current = null;
+        if ((global as CallAudioGlobals).__pendingCallAcceptedRef) {
+          (global as CallAudioGlobals).__pendingCallAcceptedRef!.current = null;
         }
       } catch {}
       return;
@@ -4627,7 +4643,7 @@ export class VideoCallSession extends SimpleEventEmitter {
    * false → подключаться не нам.
    */
   private acquireRoomConnectLock(targetRoomName: string | null): boolean {
-    const g = global as any;
+    const g = (global as CallAudioGlobals);
     if (!g.__connectingToRoomRef) {
       g.__connectingToRoomRef = { roomName: null as string | null, session: null as VideoCallSession | null };
     }
@@ -4828,9 +4844,9 @@ export class VideoCallSession extends SimpleEventEmitter {
     } finally {
       // НЕ сбрасываем setActiveVideoCall(false) здесь — звонок активен, сокет не должен отключаться в фоне.
       // setActiveVideoCall(false) вызывается только при disconnectRoom/endCall.
-      if ((global as any).__connectingToRoomRef?.session === this) {
-        (global as any).__connectingToRoomRef.roomName = null;
-        (global as any).__connectingToRoomRef.session = null;
+      if ((global as CallAudioGlobals).__connectingToRoomRef?.session === this) {
+        (global as CallAudioGlobals).__connectingToRoomRef!.roomName = null;
+        (global as CallAudioGlobals).__connectingToRoomRef!.session = null;
       }
     }
   }
@@ -4874,7 +4890,7 @@ export class VideoCallSession extends SimpleEventEmitter {
           roomName: roomId,
         }),
       });
-      const tokenData = await response.json();
+      const tokenData: LiveKitTokenResponse = await response.json();
       if (tokenData.ok && tokenData.token) {
         const resolvedUrl = (LIVEKIT_URL || (tokenData.url as string | undefined) || '').trim();
         // КРИТИЧНО: Используем retry механизм для надежного подключения
@@ -4896,7 +4912,7 @@ export class VideoCallSession extends SimpleEventEmitter {
               connectRequestId,
             });
             
-            await this.restoreCallE2eeForRejoin(tokenData as any);
+            await this.restoreCallE2eeForRejoin(tokenData);
             connected = await this.connectToLiveKit(resolvedUrl, tokenData.token, connectRequestId, roomId);
             
             if (connected) {
@@ -5022,19 +5038,19 @@ export class VideoCallSession extends SimpleEventEmitter {
     // До applyCallEndedGlobalRefsOnce / goBack: блокируем system PiP на onUserLeaveHint (remote end гонка с Home leaveHint).
     if (Platform.OS === 'android') {
       try {
-        const g = global as any;
+        const g = (global as CallAudioGlobals);
         g.__endingCallInProgressRef = g.__endingCallInProgressRef || { current: false };
         g.__endingCallInProgressRef.current = true;
       } catch {}
-      try { (NativeModules as any)?.LiviAppModule?.setEndingCallInProgress?.(true); } catch {}
-      try { (NativeModules as any)?.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false); } catch {}
+      try { NativeModules?.LiviAppModule?.setEndingCallInProgress?.(true); } catch {}
+      try { NativeModules?.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false); } catch {}
     }
 
     if (Platform.OS === 'android') {
       try { dismissSystemPiPAfterCallEnded(); } catch {}
     }
     try {
-      const hidePiP = (global as any).__pipHidePiPRef?.current;
+      const hidePiP = (global as CallAudioGlobals).__pipHidePiPRef?.current;
       if (typeof hidePiP === 'function') hidePiP();
     } catch {}
 
@@ -5470,10 +5486,10 @@ export class VideoCallSession extends SimpleEventEmitter {
         });
         // this.room was nulled above; connectToLiveKit reassigns — avoid TS narrowing to never.
         return !!ok && (this as VideoCallSession).room?.state === 'connected';
-      } catch (e: any) {
+      } catch (e: unknown) {
         logger.warn('[VideoCallSession] Media reconnect attempt failed', {
           forceRelayOnly,
-          error: e?.message || String(e),
+          error: (e as Error | null | undefined)?.message || String(e),
         });
         return false;
       }
@@ -5725,7 +5741,7 @@ export class VideoCallSession extends SimpleEventEmitter {
   private async hasHealthyIceTransport(room: Room): Promise<boolean> {
     try {
       if (this.room !== room) return false;
-      const diagnostics = await getRoomIceTransportDiagnostics(room as any);
+      const diagnostics = await getRoomIceTransportDiagnostics(room);
       if (!diagnostics.length) return false;
       return diagnostics.some((item) => {
         if (!item.selectedCandidatePairId) return false;
@@ -5972,7 +5988,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     } catch {}
     try {
       const vt = this.localVideoTrack?.mediaStreamTrack;
-      if (vt) base.addTrack(vt as any);
+      if (vt) base.addTrack((vt as NativeLiveKitMediaTrack));
     } catch {}
     try {
       const at = this.localAudioTrack?.mediaStreamTrack;
@@ -5982,7 +5998,7 @@ export class VideoCallSession extends SimpleEventEmitter {
             base.removeTrack(t);
           } catch {}
         }
-        base.addTrack(at as any);
+        base.addTrack((at as NativeLiveKitMediaTrack));
       }
     } catch {}
     // Сохраняем instance, если меняется только состояние существующего трека.
@@ -6062,12 +6078,12 @@ export class VideoCallSession extends SimpleEventEmitter {
     } catch (e1) {
       if (!wantVideo) {
         logger.error('[VideoCallSession] Failed to create audio-only local tracks', {
-          error: (e1 as any)?.message || String(e1),
+          error: (e1 as Error | null | undefined)?.message || String(e1),
         });
         throw e1;
       }
       logger.warn('[VideoCallSession] Failed to create local tracks with preferred preset; retrying with fallback', {
-        error: (e1 as any)?.message || String(e1),
+        error: (e1 as Error | null | undefined)?.message || String(e1),
         preferred: preferred.meta,
       });
       try {
@@ -6075,7 +6091,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       } catch (e2) {
         logger.error('[VideoCallSession] Failed to create local tracks (preferred + fallback)', {
           preferred: preferred.meta,
-          error: (e2 as any)?.message || String(e2),
+          error: (e2 as Error | null | undefined)?.message || String(e2),
         });
         throw e2;
       }
@@ -6104,7 +6120,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     tracks.forEach((track) => {
       const mediaTrack = track.mediaStreamTrack;
       if (mediaTrack) {
-        stream.addTrack(mediaTrack as any);
+        stream.addTrack((mediaTrack as NativeLiveKitMediaTrack));
       }
     });
     this.localStream = stream;
@@ -6166,7 +6182,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     preferred: ReturnType<typeof getPreferredVideoCaptureOptions>,
     context: string,
   ): Promise<LocalTrack[]> {
-    const tryCreate = async (opts: any) => createLocalTracks(opts);
+    const tryCreate = async (opts: Parameters<typeof createLocalTracks>[0]) => createLocalTracks(opts);
     try {
       // Preferred path: create video only (no audio churn).
       return await tryCreate({ audio: false, video: preferred.primary });
@@ -6177,8 +6193,8 @@ export class VideoCallSession extends SimpleEventEmitter {
         logger.warn('[VideoCallSession] Video-only createLocalTracks failed; falling back to audio+video create', {
           context,
           preferred: preferred.meta,
-          e1: (e1 as any)?.message || String(e1),
-          e2: (e2 as any)?.message || String(e2),
+          e1: (e1 as Error | null | undefined)?.message || String(e1),
+          e2: (e2 as Error | null | undefined)?.message || String(e2),
         });
         try {
           return await tryCreate({ audio: true, video: preferred.primary });
@@ -6250,23 +6266,23 @@ export class VideoCallSession extends SimpleEventEmitter {
             stream.removeTrack(t);
           } catch {}
         }
-        stream.addTrack(mt as any);
+        stream.addTrack((mt as NativeLiveKitMediaTrack));
       } catch {
         stream = new MediaStream();
-        if (mt) stream.addTrack(mt as any);
+        if (mt) stream.addTrack((mt as NativeLiveKitMediaTrack));
         try {
           const at = this.localAudioTrack?.mediaStreamTrack;
-          if (at) stream.addTrack(at as any);
+          if (at) stream.addTrack((at as NativeLiveKitMediaTrack));
         } catch {}
       }
     } else {
       stream = new MediaStream();
       try {
-        if (mt) stream.addTrack(mt as any);
+        if (mt) stream.addTrack((mt as NativeLiveKitMediaTrack));
       } catch {}
       try {
         const at = this.localAudioTrack?.mediaStreamTrack;
-        if (at) stream.addTrack(at as any);
+        if (at) stream.addTrack((at as NativeLiveKitMediaTrack));
       } catch {}
     }
     this.localStream = stream;
@@ -6293,7 +6309,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     const publication = this.getLocalVideoPublication();
     try {
       if (publication?.replaceTrack) {
-        await (publication as any).replaceTrack(newVideoTrack, true);
+        await publication.replaceTrack(newVideoTrack, true);
         logger.info('[VideoCallSession] Replaced published video track (replaceTrack)', {
           oldTrackId: oldVideoTrack?.sid || oldVideoTrack?.mediaStreamTrack?.id,
           newTrackId: newVideoTrack?.sid || newVideoTrack?.mediaStreamTrack?.id,
@@ -6301,7 +6317,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       } else {
         await this.unpublishOtherLocalTracks('video', newVideoTrack);
         await this.room.localParticipant.publishTrack(newVideoTrack).catch((e) => {
-          const errorMsg = e?.message || String(e || '');
+          const errorMsg = (e as Error | null | undefined)?.message || String(e || '');
           if (isIgnorablePublishError(errorMsg)) {
             return;
           }
@@ -6395,7 +6411,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       if (publication?.replaceTrack) {
         try {
           const newVideo = await this.createFreshLocalVideoTrack(context);
-          await (publication as any).replaceTrack(newVideo, true);
+          await publication.replaceTrack(newVideo, true);
           if (oldVideoTrack) {
             try {
               oldVideoTrack.stop();
@@ -6411,7 +6427,7 @@ export class VideoCallSession extends SimpleEventEmitter {
         } catch (e) {
           logger.warn('[VideoCallSession] replaceTrack fast recovery failed; falling back to full recreate', {
             context,
-            error: (e as any)?.message || String(e),
+            error: (e as Error | null | undefined)?.message || String(e),
           });
           this.localVideoTrack = oldVideoTrack;
         }
@@ -6541,7 +6557,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     } catch {}
     if (room.state === 'connected' && this.room === room && !this.isAudioTrackPublished(own)) {
       await lp.publishTrack(own).catch((e) => {
-        const errorMsg = e?.message || String(e || '');
+        const errorMsg = (e as Error | null | undefined)?.message || String(e || '');
         if (!isIgnorablePublishError(errorMsg)) {
           logger.warn('[VideoCallSession] Publish own audio on mic enable failed', e);
         }
@@ -6582,7 +6598,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.emit('remoteStream', null);
     this.notifyRemoteStreamChange(null);
     try {
-      const pipUpdate = (global as any).__pipUpdateStateRef?.current;
+      const pipUpdate = (global as CallAudioGlobals).__pipUpdateStateRef?.current;
       if (typeof pipUpdate === 'function') pipUpdate({ remoteStream: null, remoteCamOn: false });
     } catch (_) {}
     this.notifyRemoteCamStateChange(false);
@@ -6622,7 +6638,7 @@ export class VideoCallSession extends SimpleEventEmitter {
 
     await room.localParticipant.publishTrack(track).catch((e) => {
       // Игнорируем ошибки дубликатов и закрытых соединений
-      const errorMsg = e?.message || String(e || '');
+      const errorMsg = (e as Error | null | undefined)?.message || String(e || '');
       if (isIgnorablePublishError(errorMsg)) {
         return;
       }
@@ -6640,7 +6656,7 @@ export class VideoCallSession extends SimpleEventEmitter {
    */
   private async prepareRoomForLiveKitConnect(targetRoomName?: string): Promise<boolean | null> {
     try {
-      const pending = (global as any).__videoCallRoomDisconnectPromiseRef?.current as Promise<void> | null;
+      const pending = (global as CallAudioGlobals).__videoCallRoomDisconnectPromiseRef?.current as Promise<void> | null;
       if (pending) {
         await pending.catch(() => {});
       }
@@ -6826,7 +6842,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     // Но если комната уже подключена к нужной комнате, не создаем новую
     const existingRoom: Room | null = this.room;
     if (existingRoom) {
-      // @ts-ignore - TypeScript неправильно сужает тип после проверки состояния
+
       const existingRoomState: string = existingRoom.state as string;
       
       if (existingRoomState === 'connected' && 
@@ -6851,7 +6867,7 @@ export class VideoCallSession extends SimpleEventEmitter {
           if (!currentRoomState) {
             break;
           }
-          // @ts-ignore - TypeScript неправильно сужает тип после проверки состояния
+
           if (currentRoomState.state !== 'connecting') {
             break;
           }
@@ -6862,7 +6878,7 @@ export class VideoCallSession extends SimpleEventEmitter {
         // После ожидания проверяем результат
         const roomAfterWait: Room | null = this.room;
         if (roomAfterWait) {
-          // @ts-ignore - TypeScript неправильно сужает тип после проверки состояния
+
           const roomAfterWaitState: string = roomAfterWait.state as string;
           if (roomAfterWaitState === 'connected' && 
               this.currentRoomName && 
@@ -6892,10 +6908,10 @@ export class VideoCallSession extends SimpleEventEmitter {
       try {
         const stuckRoom: Room | null = this.room;
         if (stuckRoom) {
-          // @ts-ignore - TypeScript неправильно сужает тип после проверки состояния
+
           const stuckRoomState: string = stuckRoom.state as string;
           if (stuckRoomState !== 'disconnected') {
-            // @ts-ignore - TypeScript неправильно сужает тип после проверки состояния
+
             await stuckRoom.disconnect().catch(() => {});
           }
         }
@@ -7186,7 +7202,7 @@ export class VideoCallSession extends SimpleEventEmitter {
   }
 
   private async recoverFromLiveKitConnectError(
-    e: any,
+    e: unknown,
     room: Room,
     url: string,
     token: string,
@@ -7195,7 +7211,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     options?: LiveKitConnectOptions,
   ): Promise<boolean> {
     sendClientMetrics(API_BASE, { joinFailure: true }).catch(() => {});
-    const errorMessage = e?.message || String(e);
+    const errorMessage = (e as Error | null | undefined)?.message || String(e);
     const isInvalidApiKey = isInvalidApiKeyError(errorMessage);
     const isClientDisconnect = isClientDisconnectError(errorMessage);
 
@@ -7279,8 +7295,8 @@ export class VideoCallSession extends SimpleEventEmitter {
       if (!this.ended) {
         logFn('[VideoCallSession] Error connecting to LiveKit', {
           error: errorMessage,
-          errorCode: e?.code,
-          errorName: e?.name,
+          errorCode: (e as { code?: unknown } | null | undefined)?.code,
+          errorName: (e as Error | null | undefined)?.name,
           url,
           urlHost: url ? new URL(url).hostname : 'unknown',
           targetRoomName,
@@ -7292,7 +7308,7 @@ export class VideoCallSession extends SimpleEventEmitter {
           forceRelayOnly: !!options?.forceRelayOnly,
           signalProxyTried: !!options?.signalProxyTried,
           directSignalTried: !!options?.directSignalTried,
-          stack: e?.stack,
+          stack: (e as Error | null | undefined)?.stack,
         });
       }
     }
@@ -7363,10 +7379,10 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.metrics.markRoomConnected();
     this.startCallLeaseHeartbeat('active');
     try {
-      const pending = (global as any).__pendingCallAcceptedRef?.current;
+      const pending = (global as CallAudioGlobals).__pendingCallAcceptedRef?.current;
       const pendingCallId = pending ? String(pending?.callId ?? '').trim() : '';
       if (pendingCallId && this.callId && pendingCallId === String(this.callId)) {
-        (global as any).__pendingCallAcceptedRef.current = null;
+        (global as CallAudioGlobals).__pendingCallAcceptedRef!.current = null;
         logger.info('[VideoCallSession] Cleared pending call:accepted after LiveKit connect', {
           callId: pendingCallId,
         });
@@ -7425,7 +7441,7 @@ export class VideoCallSession extends SimpleEventEmitter {
         needAudioTrack,
         needVideoTrack,
         camOn: this.isCamOn,
-        earlyBootstrap: !!(this as any).__earlyDirectCallBootstrap,
+        earlyBootstrap: !!(this as EarlyBootstrapVideoCallSession).__earlyDirectCallBootstrap,
       });
     } catch {}
     return this.ensureLocalTracks().catch((e) => {
@@ -7442,9 +7458,9 @@ export class VideoCallSession extends SimpleEventEmitter {
   private async loadIceConfiguration(options?: LiveKitConnectOptions): Promise<RTCConfiguration | undefined> {
     try {
       return await getIceConfiguration(false, { forceRelayOnly: !!options?.forceRelayOnly });
-    } catch (e: any) {
+    } catch (e: unknown) {
       logger.warn('[VideoCallSession] Failed to load ICE config, using LiveKit defaults', {
-        error: e?.message || String(e),
+        error: (e as Error | null | undefined)?.message || String(e),
         forceRelayOnly: !!options?.forceRelayOnly,
       });
       return undefined;
@@ -7610,7 +7626,7 @@ export class VideoCallSession extends SimpleEventEmitter {
         markCallPerf('livekit_audio_publish_early_start', { roomState: room.state });
       } catch {}
       await room.localParticipant.publishTrack(track).catch((e) => {
-        const errorMsg = e?.message || String(e || '');
+        const errorMsg = (e as Error | null | undefined)?.message || String(e || '');
         if (isIgnorablePublishError(errorMsg)) return;
         logger.warn('[VideoCallSession] Early audio publish failed — will publish after connect', {
           error: errorMsg,
@@ -7836,7 +7852,7 @@ export class VideoCallSession extends SimpleEventEmitter {
           markCallPerf('livekit_connect_start', {
             roomName: targetRoomName,
             connectReason: options?.reason || null,
-            earlyBootstrap: !!(this as any).__earlyDirectCallBootstrap,
+            earlyBootstrap: !!(this as EarlyBootstrapVideoCallSession).__earlyDirectCallBootstrap,
           });
         } catch {}
         this.metrics.markLiveKitConnectStarted(connectStartTime);
@@ -7918,7 +7934,7 @@ export class VideoCallSession extends SimpleEventEmitter {
 
       await this.publishLocalTracksAfterConnect(room, tracksReadyPromise);
       return true;
-    } catch (e: any) {
+    } catch (e: unknown) {
       return await this.recoverFromLiveKitConnectError(
         e,
         room,
@@ -7969,7 +7985,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     });
     logger.info('[VideoCallSession] LiveKit connect ICE policy', {
       appliedClientRtcConfig: !!connectOptions.rtcConfig,
-      iceTransportPolicy: (connectOptions.rtcConfig as any)?.iceTransportPolicy ?? 'server_default',
+      iceTransportPolicy: connectOptions.rtcConfig?.iceTransportPolicy ?? 'server_default',
       forceRelayOnly: !!options?.forceRelayOnly,
       targetRoomName,
     });
@@ -8025,9 +8041,9 @@ export class VideoCallSession extends SimpleEventEmitter {
           });
         }
         return;
-      } catch (e: any) {
+      } catch (e: unknown) {
         lastError = e;
-        const message = e?.message || String(e);
+        const message = (e as Error | null | undefined)?.message || String(e);
         const isDnsError = isLikelyDnsResolutionError(message);
         const canRetry = isDnsError && attempt < maxAttempts && !this.ended;
         logger.warn('[VideoCallSession] LiveKit connect attempt failed', {
@@ -8151,8 +8167,8 @@ export class VideoCallSession extends SimpleEventEmitter {
           // чтобы снизить WARN "connection state mismatch" при быстром закрытии.
           await new Promise((r) => setTimeout(r, 50));
           this.forceDisposeRoom(roomToDisconnect, 'disconnectRoom:after_await');
-        } catch (e: any) {
-          const errorMessage = e?.message || String(e || '');
+        } catch (e: unknown) {
+          const errorMessage = (e as Error | null | undefined)?.message || String(e || '');
           const isLeaveWhileReconnect = /leave request|LeaveRequest|reconnect/i.test(errorMessage);
           const isTeardownSdpRace =
             /wrong state:\s*stable|unable to set answer|NegotiationError/i.test(errorMessage);
@@ -8226,7 +8242,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     });
 
     try {
-      const g = global as any;
+      const g = (global as CallAudioGlobals);
       const pending = this.disconnectPromise;
       g.__videoCallRoomDisconnectPromiseRef = g.__videoCallRoomDisconnectPromiseRef || { current: null };
       g.__videoCallRoomDisconnectPromiseRef.current = pending;
@@ -8245,7 +8261,7 @@ export class VideoCallSession extends SimpleEventEmitter {
   /** Stop accepting remote SDP once teardown begins (prevents late createAnswer during disconnect). */
   private abortIncomingSdpNegotiation(room: Room): void {
     try {
-      const client = (room as any)?.engine?.client;
+      const client = room?.engine?.client;
       if (!client) return;
       client.onOffer = undefined;
       client.onAnswer = undefined;
@@ -8259,7 +8275,7 @@ export class VideoCallSession extends SimpleEventEmitter {
   private abortPeerConnectionNegotiation(room: Room): void {
     try {
       this.abortIncomingSdpNegotiation(room);
-      const engine: any = (room as any)?.engine;
+      const engine = room?.engine as RoomDisposalEngine | undefined;
       if (!engine) return;
       const pcm = engine.pcManager;
       try { pcm?.publisher?.close?.(); } catch {}
@@ -8277,9 +8293,9 @@ export class VideoCallSession extends SimpleEventEmitter {
   private forceDisposeRoom(room: Room, context: 'disconnected' | 'timeout' | string): void {
     try {
       // Внешние listeners можно снять безопасно после начала/завершения disconnect.
-      try { (room as any)?.removeAllListeners?.(); } catch {}
+      try { room?.removeAllListeners?.(); } catch {}
 
-      const engine: any = (room as any)?.engine;
+      const engine = room?.engine as RoomDisposalEngine | undefined;
       this.abortPeerConnectionNegotiation(room);
       const signalClient = engine?.signalClient ?? engine?.client;
       // Порядок: сначала транспорт и сокет, затем signalClient, затем engine — чтобы не было "connection state mismatch".
@@ -8683,7 +8699,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       this.clearRemoteCamOffTimeout();
       this.notifyRemoteCamStateChange(true);
       try {
-        const g = global as any;
+        const g = (global as CallAudioGlobals);
         const pipVisible = g.__pipVisibleRef?.current === true;
         if (pipVisible && g.__pipInSystemModeRef?.current !== true) {
           this.flushPiPRemoteVideoState({ bumpKey: true });
@@ -8854,7 +8870,7 @@ export class VideoCallSession extends SimpleEventEmitter {
 
       // Re-apply mic enabled state (some devices flip enabled=false transiently).
       try {
-        const mt = this.localAudioTrack?.mediaStreamTrack as any;
+        const mt = this.localAudioTrack?.mediaStreamTrack;
         if (mt && typeof mt.enabled === 'boolean') mt.enabled = this.isMicOn;
       } catch {}
       try {
@@ -8959,7 +8975,7 @@ export class VideoCallSession extends SimpleEventEmitter {
           trackSid: this.localAudioTrack.sid,
         });
       } catch (e) {
-        const msg = String((e as any)?.message || e || '');
+        const msg = String((e as Error | null | undefined)?.message || e || '');
         if (!/could not find published track/i.test(msg)) {
           logger.warn('[VideoCallSession] Force republish local audio after reconnect failed', {
             context,
@@ -9109,7 +9125,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     isAudioTrack: boolean,
     mediaTrack: MediaStreamTrack | undefined,
   ): boolean {
-    if (!mediaTrack || !this.remoteStream?.getTracks().includes(mediaTrack as any)) return false;
+    if (!mediaTrack || !this.remoteStream?.getTracks().includes((mediaTrack as NativeLiveKitMediaTrack))) return false;
 
     const sameVideo =
       isVideoTrack &&
@@ -9146,18 +9162,18 @@ export class VideoCallSession extends SimpleEventEmitter {
     }
 
     const activeRemoteStream = this.remoteStream;
-    const trackAlreadyInStream = mediaTrack && activeRemoteStream.getTracks().includes(mediaTrack as any);
+    const trackAlreadyInStream = mediaTrack && activeRemoteStream.getTracks().includes((mediaTrack as NativeLiveKitMediaTrack));
 
     if (change.needsFreshStream) {
       const newStream = new MediaStream();
       try {
-        if (mediaTrack) newStream.addTrack(mediaTrack as any);
+        if (mediaTrack) newStream.addTrack((mediaTrack as NativeLiveKitMediaTrack));
         // Живую дорожку другого вида переносим в новый стрим, мёртвую — оставляем позади.
         const keepMt = change.isAudioTrack
           ? this.remoteVideoTrack?.mediaStreamTrack
           : this.remoteAudioTrack?.mediaStreamTrack;
-        if (keepMt && (keepMt as any).readyState !== 'ended') {
-          newStream.addTrack(keepMt as any);
+        if (keepMt && (keepMt).readyState !== 'ended') {
+          newStream.addTrack(keepMt as NativeLiveKitMediaTrack);
         }
         this.remoteStream = newStream;
         logger.info('[VideoCallSession] New remote MediaStream for replaced remote track', {
@@ -9178,10 +9194,10 @@ export class VideoCallSession extends SimpleEventEmitter {
       change.isVideoTrack &&
       change.wasVideoTrackChanged &&
       this.remoteVideoTrack?.mediaStreamTrack &&
-      activeRemoteStream.getTracks().includes(this.remoteVideoTrack.mediaStreamTrack as any)
+      activeRemoteStream.getTracks().includes((this.remoteVideoTrack.mediaStreamTrack as NativeLiveKitMediaTrack))
     ) {
       try {
-        activeRemoteStream.removeTrack(this.remoteVideoTrack.mediaStreamTrack as any);
+        activeRemoteStream.removeTrack((this.remoteVideoTrack.mediaStreamTrack as NativeLiveKitMediaTrack));
         logger.info('[VideoCallSession] Removed previous remote video track from stream', {
           oldTrackId: oldVideoTrackSid,
           newTrackId: track.sid,
@@ -9191,7 +9207,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       }
     }
     if (mediaTrack && !trackAlreadyInStream) {
-      activeRemoteStream.addTrack(mediaTrack as any);
+      activeRemoteStream.addTrack((mediaTrack as NativeLiveKitMediaTrack));
     }
   }
 
@@ -9201,20 +9217,20 @@ export class VideoCallSession extends SimpleEventEmitter {
    * к текущему состоянию «звук выключен» тремя способами, какой-то из них сработает.
    */
   private applyRemoteAudioTrack(track: RemoteTrack, change: RemoteTrackChange): boolean {
-    this.remoteAudioTrack = track;
+    this.remoteAudioTrack = track as RemoteAudioTrack;
     this.lastUnsubscribedRemoteAudioTrackSid = null;
     const shouldRemountRemoteView = change.wasAudioTrackChanged || change.staleAudioInStream;
 
     try {
       // sync with local "mute remote" toggle
-      (this.remoteAudioTrack as any).setMuted?.(this.remoteAudioMuted);
+      this.remoteAudioTrack.setMuted?.(this.remoteAudioMuted);
     } catch {}
     try {
       // RN: setVolume влияет на нативный трек через _setVolume
-      (this.remoteAudioTrack as any).setVolume?.(this.remoteAudioMuted ? 0 : 1);
+      this.remoteAudioTrack.setVolume?.(this.remoteAudioMuted ? 0 : 1);
     } catch {}
     try {
-      const mt = (this.remoteAudioTrack as any)?.mediaStreamTrack;
+      const mt = this.remoteAudioTrack?.mediaStreamTrack;
       if (mt && typeof mt.enabled === 'boolean') {
         mt.enabled = !this.remoteAudioMuted;
       }
@@ -9262,7 +9278,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     if (!track.isMuted && !this.remotePartnerDeclaredCamOff && this.partnerPeerDirectCallVideoUi !== false) {
       this.notifyRemoteCamStateChange(true);
       try {
-        const pipUpdate = (global as any).__pipUpdateStateRef?.current;
+        const pipUpdate = (global as CallAudioGlobals).__pipUpdateStateRef?.current;
         if (typeof pipUpdate === 'function') pipUpdate({ remoteCamOn: true });
       } catch (_) {}
     }
@@ -9291,7 +9307,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       if (change.isVideoTrack && this.getRemoteCamEnabled()) {
         this.flushPiPRemoteVideoState({ bumpKey: false });
       } else {
-        const pipUpdate = (global as any).__pipUpdateStateRef?.current;
+        const pipUpdate = (global as CallAudioGlobals).__pipUpdateStateRef?.current;
         if (typeof pipUpdate === 'function') {
           pipUpdate({
             remoteStream: this.remoteStream,
@@ -9337,7 +9353,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       this.lastUnsubscribedRemoteAudioTrackSid = this.remoteAudioTrack.sid ?? null;
       const mediaTrack = this.remoteAudioTrack.mediaStreamTrack;
       if (mediaTrack && this.remoteStream) {
-        this.remoteStream.removeTrack(mediaTrack as any);
+        this.remoteStream.removeTrack((mediaTrack as NativeLiveKitMediaTrack));
       }
       this.remoteAudioTrack = null;
       this.noteRemoteAudioPresence(false);
@@ -9352,7 +9368,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       }
       const mediaTrack = this.remoteVideoTrack.mediaStreamTrack;
       if (mediaTrack && this.remoteStream) {
-        this.remoteStream.removeTrack(mediaTrack as any);
+        this.remoteStream.removeTrack((mediaTrack as NativeLiveKitMediaTrack));
       }
       this.remoteVideoTrack = null;
       // TrackUnsubscribed can happen during camera flip/replace; debounce "camera off".
@@ -9372,7 +9388,7 @@ export class VideoCallSession extends SimpleEventEmitter {
         this.emit('remoteStream', null);
         this.notifyRemoteStreamChange(null);
         try {
-          const pipUpdate = (global as any).__pipUpdateStateRef?.current;
+          const pipUpdate = (global as CallAudioGlobals).__pipUpdateStateRef?.current;
           if (typeof pipUpdate === 'function') pipUpdate({ remoteStream: null });
         } catch (_) {}
       }
@@ -9418,7 +9434,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       this.remoteCamEnabled = false;
       this.notifyRemoteCamStateChange(false);
       try {
-        const pipUpdate = (global as any).__pipUpdateStateRef?.current;
+        const pipUpdate = (global as CallAudioGlobals).__pipUpdateStateRef?.current;
         if (typeof pipUpdate === 'function') pipUpdate({ remoteCamOn: false });
       } catch (_) {}
     }, REMOTE_CAM_OFF_GRACE_MS);

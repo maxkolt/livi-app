@@ -8,6 +8,11 @@ import { fetchWithTimeout } from './fetchWithTimeout';
 import { useMe } from '../store/me';
 import { logger } from './logger';
 
+type AvatarUploadResponse =
+  | { ok: true; avatar: string; avatarVer: number; error?: never }
+  | { ok?: false; error?: string }
+  | null;
+
 const isHttp = (s?: string) => !!s && /^https?:\/\//i.test(String(s).trim());
 
 async function ensureMediaPermissions(): Promise<boolean> {
@@ -118,7 +123,7 @@ async function uploadViaServerFallback(fileUri: string, userId?: string): Promis
     );
 
     const txt = await res.clone().text();
-    let json: any = {};
+    let json: AvatarUploadResponse = {};
     try { json = JSON.parse(txt); } catch {}
     return { res, json };
   };

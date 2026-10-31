@@ -75,15 +75,15 @@ function shimCryptoUuid(): void {
 }
 
 function shimWebstreams(): void {
-  const g = global as typeof globalThis & {
-    WritableStream?: typeof WritableStream;
-    ReadableStream?: typeof ReadableStream;
+  const g = global as {
+    WritableStream?: typeof globalThis.WritableStream | typeof WritableStream;
+    ReadableStream?: typeof globalThis.ReadableStream | typeof ReadableStream;
   };
   if (typeof g.WritableStream === 'undefined') {
     g.WritableStream = WritableStream;
   }
   if (typeof g.ReadableStream === 'undefined') {
-    g.ReadableStream = ReadableStream as any;
+    g.ReadableStream = ReadableStream;
   }
 }
 

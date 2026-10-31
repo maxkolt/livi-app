@@ -1,3 +1,4 @@
+import type { ChatMessage, ForwardRecipient } from './chatMessageTypes';
 /** Forward/share send orchestration for chat. */
 
 import React from "react";
@@ -22,15 +23,15 @@ type Options = {
   peerId: string;
   currentUserId: string | null;
   lang: Lang;
-  messages: any[];
+  messages: ChatMessage[];
   selectionMode: boolean;
   selectedCount: number;
   selectedHasAnyForwardable: boolean;
   selectedMessageIds: Set<string>;
-  selectedMessage: any;
-  forwardFriends: any[];
+  selectedMessage: ChatMessage | null;
+  forwardFriends: ForwardRecipient[];
   forwardSelectedFriendIds: Set<string>;
-  setMessages: React.Dispatch<React.SetStateAction<any[]>>;
+  setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>;
   setSelectionMode: React.Dispatch<React.SetStateAction<boolean>>;
   setSelectedMessageIds: React.Dispatch<React.SetStateAction<Set<string>>>;
   setShowForwardPicker: React.Dispatch<React.SetStateAction<boolean>>;
@@ -75,7 +76,7 @@ export function useChatForwardSend({
   const forwardToRecipient = React.useCallback(
     async (to: string): Promise<number> => {
       /** Сразу показать в текущем чате, если переслали собеседнику этого экрана (иначе ждём socket echo с задержкой). */
-      const appendIfForwardedToThisPeer = (r: any, partial: ForwardPayload) => {
+      const appendIfForwardedToThisPeer = (r: Awaited<ReturnType<typeof sendSocketMessage>>, partial: ForwardPayload) => {
         const uid = String(currentUserId || '').trim();
         const pid = String(peerId || '').trim();
         const tTo = String(to || '').trim();
@@ -83,7 +84,7 @@ export function useChatForwardSend({
         if (!r?.ok || r?.localCancelled) return;
         const mid = String(r?.messageId || '').trim();
         if (!mid || mid.startsWith('outbox_')) return;
-        const tsRaw = (r as any)?.timestamp;
+        const tsRaw = (r)?.timestamp;
         const ts = tsRaw ? new Date(tsRaw) : new Date();
         setMessages((prev) => {
           if (prev.some((m) => String(m?.id) === mid)) return prev;
@@ -119,7 +120,7 @@ export function useChatForwardSend({
       if (forwardables.length === 0) return 0;
       let okCount = 0;
       for (const payload of forwardables) {
-        const r: any = await sendSocketMessage({ to, ...payload });
+        const r = await sendSocketMessage({ to, ...payload });
         if (r?.localCancelled) continue;
         if (r?.ok) {
           okCount += 1;
@@ -216,7 +217,7 @@ export function useChatForwardSend({
   }, [selectionMode, messages, selectedMessageIds, selectedMessage, resolveMediaUri, lang]);
 
   const forwardSelectedMessageTo = React.useCallback(
-    async (friend: any) => {
+    async (friend: ForwardRecipient) => {
       const to = String(friend?._id || '').trim();
       if (!to) return;
       const count = await forwardToRecipient(to);

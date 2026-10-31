@@ -1,3 +1,4 @@
+import type { AppRuntimeGlobals } from '../../utils/appRuntimeTypes';
 import React, { memo, useRef } from 'react';
 import { AppState, Platform, Pressable, StyleSheet, View, type GestureResponderEvent } from 'react-native';
 import Svg, { ClipPath, Defs, Ellipse, LinearGradient, Path, RadialGradient, Rect, Stop } from 'react-native-svg';
@@ -395,7 +396,7 @@ function HomeWelcomeTabBarInner({
               key={tab.id}
               style={styles.item}
               onPressIn={(event) => {
-                const g = global as any;
+                const g = global as AppRuntimeGlobals;
                 const cancelAt = Number(g.__lastOutgoingCancelAtRef?.current || 0);
                 logger.info('[welcome-tab] pressIn', {
                   tab: tab.id,
@@ -407,7 +408,7 @@ function HomeWelcomeTabBarInner({
                 onPressTab(tab.id, pressMeta('pressIn', event));
               }}
               onPress={(event) => {
-                const g = global as any;
+                const g = global as AppRuntimeGlobals;
                 const cancelAt = Number(g.__lastOutgoingCancelAtRef?.current || 0);
                 const sinceCancel = cancelAt > 0 ? Date.now() - cancelAt : null;
                 const recentCancel = sinceCancel != null && sinceCancel < 8000;

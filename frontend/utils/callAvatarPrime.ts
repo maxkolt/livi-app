@@ -13,7 +13,7 @@
  * список friends всё равно перезапишет значение, когда придёт с сервера.
  */
 import { Platform } from 'react-native';
-import { buildFriendAvatarUri } from '../screens/home/friendHelpers';
+import { buildFriendAvatarUri, type FriendSource } from '../screens/home/friendHelpers';
 import { resolveDataUriForAndroid } from './dataUriToFileUri';
 
 const avatarByUserId = new Map<string, string>();
@@ -48,7 +48,9 @@ export function primeCallNick(userId: unknown, nick: unknown): void {
 }
 
 /** Прайм из «сырого» объекта друга (fetchFriends) или Friend. */
-function primeCallAvatarFromFriend(partner: any): void {
+type AvatarFriend = FriendSource & { avatarB64?: string };
+
+function primeCallAvatarFromFriend(partner: AvatarFriend | null | undefined): void {
   try {
     if (!partner) return;
     const id = String(partner._id ?? partner.id ?? '').trim();
@@ -61,7 +63,7 @@ function primeCallAvatarFromFriend(partner: any): void {
 }
 
 /** Прайм из списка друзей — вызывать сразу после загрузки списка. */
-export function primeCallAvatarsFromFriends(list: any): void {
+export function primeCallAvatarsFromFriends(list: AvatarFriend[] | null | undefined): void {
   try {
     if (!Array.isArray(list)) return;
     for (const f of list) primeCallAvatarFromFriend(f);

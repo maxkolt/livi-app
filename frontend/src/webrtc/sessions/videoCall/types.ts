@@ -1,23 +1,19 @@
 /** Формы socket-payload'ов и опций connect для прямого звонка (вынесено из VideoCallSession.ts). */
+import type { CallAcceptedPayload as SocketCallAcceptedPayload } from '../../../../sockets/modules/types';
 
-export type CallAcceptedPayload = {
+// Recovery paths also normalize partial snapshots of the same socket payload.
+export type CallAcceptedPayload = Partial<SocketCallAcceptedPayload>;
+
+export type LiveKitTokenResponse = {
+  ok: boolean;
+  token?: string;
+  url?: string;
+  error?: string;
   callId?: string;
-  from?: string;
-  fromUserId?: string;
-  roomId?: string;
-  livekitToken?: string | null;
-  livekitRoomName?: string | null;
-  livekitUrl?: string | null;
-  acceptedAt?: number | string | null;
-  /** Сервер включил сквозное шифрование звонка: ключ собеседника для вывода ключа кадров. */
-  e2ee?: { peerPublicKey: string } | null;
+  e2ee?: { peerPublicKey?: string } | null;
 };
 
-export type CallIncomingPayload = {
-  callId: string;
-  from: string;
-  fromNick?: string;
-};
+export type { CallIncomingPayload } from '../../../../sockets/modules/types';
 
 export type CallEndedPayload = {
   callId?: string;

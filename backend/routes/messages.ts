@@ -1,6 +1,7 @@
-import { Router } from 'express';
+import { Router, type Request } from 'express';
+import type { Server } from 'socket.io';
 import mongoose from 'mongoose';
-import FriendshipMessages from '../models/FriendshipMessages';
+import FriendshipMessages, { type IMessageItem, type ClientMessage } from '../models/FriendshipMessages';
 import FriendshipMessageItem from '../models/FriendshipMessageItem';
 import OfflineMessage from '../models/OfflineMessage';
 import { checkMessageSendRateLimit, isMessageTextTooLong, truncateReplyQuote } from '../utils/messageLimits';
@@ -23,6 +24,7 @@ import {
   isKnownMessageType,
   markMessagesReadForUser,
   type MessageType,
+  type MessageOwner,
   normalizeIncomingImageUris,
   normalizeMessageIdBatch,
   removeLegacyFriendshipMessages,
@@ -31,16 +33,27 @@ import {
 import { markAllReadFrom, removeUnreadOne } from '../utils/unreadStore';
 import { emitToUser } from '../utils/emitToUser';
 
+type MessageRequestBody = Partial<Record<
+  'to' | 'from' | 'type' | 'text' | 'uri' | 'uris' | 'thumbUri' | 'name' | 'size' | 'duration' |
+  'stickerId' | 'stickerPackId' | 'stickerEmoji' | 'stickerLabel' | 'clientMessageId' | 'clientId' |
+  'enc' | 'messageId' | 'messageIds' | 'with' | 'forAll' | 'emoji' | 'on',
+  unknown
+>> & { replyTo?: { id?: unknown; text?: unknown; from?: unknown } | null };
+type MessageRequest = Request<Record<string, string>, unknown, MessageRequestBody> & {
+  userId?: string;
+  io?: Server;
+};
+
 const router = Router();
 
 const isOid = (s?: string) => !!s && mongoose.Types.ObjectId.isValid(String(s));
 const CLIENT_MESSAGE_ID_RE = /^[A-Za-z0-9:_-]{1,120}$/;
 
-function isDuplicateKeyError(error: any): boolean {
-  return error?.code === 11000 || String(error?.message || '').includes('E11000');
+function isDuplicateKeyError(error: unknown): boolean {
+  return (error as { code?: unknown } | null)?.code === 11000 || String((error as { message?: unknown } | null)?.message || '').includes('E11000');
 }
 
-async function isUserRoomOnline(io: any, userId: string): Promise<boolean> {
+async function isUserRoomOnline(io: Server | undefined, userId: string): Promise<boolean> {
   try {
     const sockets = await io?.in?.(`u:${String(userId)}`)?.fetchSockets?.();
     return Array.isArray(sockets) && sockets.length > 0;
@@ -49,13 +62,13 @@ async function isUserRoomOnline(io: any, userId: string): Promise<boolean> {
   }
 }
 
-function normalizeClientMessageId(payload: any): string {
+function normalizeClientMessageId(payload: { clientMessageId?: unknown; clientId?: unknown } | null | undefined): string {
   const raw = String(payload?.clientMessageId || payload?.clientId || '').trim();
   return CLIENT_MESSAGE_ID_RE.test(raw) ? raw : '';
 }
 
-function toFriendshipMessageSnapshot(message: any): any {
-  const snapshot: any = {
+function toFriendshipMessageSnapshot(message: Omit<IMessageItem, 'timestamp'> & { timestamp: Date | string | number }): IMessageItem {
+  const snapshot: IMessageItem = {
     id: String(message.id),
     from: message.from,
     to: message.to,
@@ -74,7 +87,7 @@ function toFriendshipMessageSnapshot(message: any): any {
     read: !!message.read,
   };
   if (Array.isArray(message.uris) && message.uris.length > 0) {
-    snapshot.uris = message.uris.map((u: any) => String(u || '').trim()).filter(Boolean).slice(0, 10);
+    snapshot.uris = message.uris.map((u) => String(u || '').trim()).filter(Boolean).slice(0, 10);
     if (!snapshot.uri && snapshot.uris[0]) snapshot.uri = snapshot.uris[0];
   }
   if (Array.isArray(message.reactions)) snapshot.reactions = message.reactions;
@@ -114,7 +127,7 @@ async function deleteMessageForBothUsers(me: string, messageId: string): Promise
   let friendshipId: mongoose.Types.ObjectId | null = null;
 
   const meOid = new mongoose.Types.ObjectId(me);
-  let doc = await FriendshipMessageItem.findOne({
+  let doc: Omit<MessageOwner, 'id'> | null = await FriendshipMessageItem.findOne({
     id: messageId,
     $or: [{ from: meOid }, { to: meOid }],
   }).select('from to friendshipId type').lean();
@@ -129,12 +142,12 @@ async function deleteMessageForBothUsers(me: string, messageId: string): Promise
     }
   }
   if (!doc) {
-    doc = await findLegacyMessageForUser(messageId, meOid) as any;
+    doc = await findLegacyMessageForUser(messageId, meOid);
   }
   if (doc) {
-    fromUserId = String((doc as any).from);
-    toUserId = String((doc as any).to);
-    friendshipId = (doc as any).friendshipId;
+    fromUserId = String((doc).from);
+    toUserId = String((doc).to);
+    friendshipId = (doc).friendshipId;
     await Promise.all([
       FriendshipMessageItem.deleteOne({ friendshipId, id: messageId }).exec(),
       removeLegacyFriendshipMessages(friendshipId, [messageId]),
@@ -163,9 +176,9 @@ async function deleteMessageForBothUsers(me: string, messageId: string): Promise
  * POST /api/messages/send
  * Body: { to, type: 'text'|'image'|'audio'|'sticker'|'video_note', text?, uri?, thumbUri?, name?, size?, duration?, stickerId? }
  */
-router.post('/messages/send', async (req, res) => {
+router.post('/messages/send', async (req: MessageRequest, res) => {
   try {
-    const me = String((req as any)?.userId || '').trim();
+    const me = String((req)?.userId || '').trim();
     if (!isOid(me)) return res.status(401).json({ ok: false, error: 'unauthorized' });
 
     const to = String(req.body?.to || '').trim();
@@ -196,7 +209,7 @@ router.post('/messages/send', async (req, res) => {
     const friendship = await getOrCreateFriendship(me, to);
     if (!friendship) return res.status(500).json({ ok: false, error: 'friendship_not_found' });
 
-    const friendshipId = (friendship as any)._id;
+    const friendshipId = (friendship)._id;
     if (clientMessageId) {
       const existing = await FriendshipMessageItem.findOne({
         friendshipId,
@@ -205,13 +218,13 @@ router.post('/messages/send', async (req, res) => {
         to: new mongoose.Types.ObjectId(to),
       }).select('id timestamp').lean();
       if (existing) {
-        const io = (req as any).io as any | undefined;
+        const io = (req).io;
         const delivered = io ? await isUserRoomOnline(io, to) : false;
         return res.json({
           ok: true,
           duplicate: true,
-          messageId: String((existing as any).id || ''),
-          timestamp: (existing as any).timestamp || new Date(),
+          messageId: String((existing).id || ''),
+          timestamp: (existing).timestamp || new Date(),
           delivered,
         });
       }
@@ -251,7 +264,7 @@ router.post('/messages/send', async (req, res) => {
     }
     const primaryUri = type === 'image' ? imageUris[0] : uri;
 
-    const messageItem: any = {
+    const messageItem: IMessageItem = {
       id: messageId,
       from: new mongoose.Types.ObjectId(me),
       to: new mongoose.Types.ObjectId(to),
@@ -273,7 +286,7 @@ router.post('/messages/send', async (req, res) => {
     if (replyTo) messageItem.replyTo = replyTo;
     if (enc) messageItem.enc = enc;
 
-    const createItem: any = {
+    const createItem: IMessageItem & { friendshipId: mongoose.Types.ObjectId } = {
       friendshipId,
       id: messageId,
       from: messageItem.from,
@@ -297,7 +310,7 @@ router.post('/messages/send', async (req, res) => {
     if (enc) createItem.enc = enc;
     try {
       await FriendshipMessageItem.create(createItem);
-    } catch (error: any) {
+    } catch (error) {
       if (!isDuplicateKeyError(error)) throw error;
       const existing = await FriendshipMessageItem.findOne({
         friendshipId,
@@ -306,24 +319,24 @@ router.post('/messages/send', async (req, res) => {
         to: new mongoose.Types.ObjectId(to),
       }).select('id timestamp').lean();
       if (existing) {
-        const io = (req as any).io as any | undefined;
+        const io = (req).io;
         const delivered = io ? await isUserRoomOnline(io, to) : false;
         return res.json({
           ok: true,
           duplicate: true,
-          messageId: String((existing as any).id || ''),
-          timestamp: (existing as any).timestamp || new Date(),
+          messageId: String((existing).id || ''),
+          timestamp: (existing).timestamp || new Date(),
           delivered,
         });
       }
       return res.status(409).json({ ok: false, error: 'message_id_conflict' });
     }
-    await (friendship as any).addMessage(messageItem);
+    await (friendship).addMessage(messageItem);
 
     // If recipient is offline, persist as offline message (same semantics as socket flow)
     try {
-      const io = (req as any).io as any | undefined;
-      const payload: any = {
+      const io = (req).io;
+      const payload: ClientMessage = {
         id: messageId,
         from: me,
         to,
@@ -360,7 +373,7 @@ router.post('/messages/send', async (req, res) => {
       }
 
       // offline path
-      const messageData: any = {
+      const messageData: ClientMessage = {
         id: messageId,
         from: me,
         to,
@@ -392,8 +405,8 @@ router.post('/messages/send', async (req, res) => {
       // Even if push/emit/offline persistence fails, message is already persisted in FriendshipMessageItem.
       return res.json({ ok: true, messageId, timestamp, delivered: false });
     }
-  } catch (e: any) {
-    return res.status(500).json({ ok: false, error: e?.message || 'server_error' });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: (e as { message?: unknown } | null)?.message || 'server_error' });
   }
 });
 
@@ -401,9 +414,9 @@ router.post('/messages/send', async (req, res) => {
  * GET /api/messages?with=...&limit=50&before=msgId
  * Reads from FriendshipMessageItem collection (one doc per message) for fast pagination.
  */
-router.get('/messages', async (req, res) => {
+router.get('/messages', async (req: MessageRequest, res) => {
   try {
-    const me = String((req as any)?.userId || '').trim();
+    const me = String((req)?.userId || '').trim();
     if (!isOid(me)) return res.status(401).json({ ok: false, error: 'unauthorized' });
 
     const withId = String(req.query.with || '').trim();
@@ -418,12 +431,12 @@ router.get('/messages', async (req, res) => {
     const friendship = await getOrCreateFriendship(me, withId);
     if (!friendship) return res.status(500).json({ ok: false, error: 'friendship_not_found' });
 
-    const friendshipId = (friendship as any)._id;
+    const friendshipId = (friendship)._id;
     const { messages, hasMore } = await fetchFriendshipMessagesPage(friendshipId, limit, before);
 
     return res.json({ ok: true, messages, hasMore });
-  } catch (e: any) {
-    return res.status(500).json({ ok: false, error: e?.message || 'server_error' });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: (e as { message?: unknown } | null)?.message || 'server_error' });
   }
 });
 
@@ -432,14 +445,14 @@ router.get('/messages', async (req, res) => {
  * Body: { from }
  * updateOne с arrayFilters вместо полного save().
  */
-router.post('/messages/mark_read', async (req, res) => {
+router.post('/messages/mark_read', async (req: MessageRequest, res) => {
   try {
-    const me = String((req as any)?.userId || '').trim();
+    const me = String((req)?.userId || '').trim();
     if (!isOid(me)) return res.status(401).json({ ok: false, error: 'unauthorized' });
     const from = String(req.body?.from || '').trim();
     if (!isOid(from)) return res.status(400).json({ ok: false, error: 'invalid_from' });
 
-    const io = (req as any).io as any | undefined;
+    const io = (req).io;
     const timestamp = new Date().toISOString();
     await markMessagesReadForUser(me, from, (messageIds) => {
       try {
@@ -458,8 +471,8 @@ router.post('/messages/mark_read', async (req, res) => {
     await markAllReadFrom(me, from);
 
     return res.json({ ok: true });
-  } catch (e: any) {
-    return res.status(500).json({ ok: false, error: e?.message || 'server_error' });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: (e as { message?: unknown } | null)?.message || 'server_error' });
   }
 });
 
@@ -468,9 +481,9 @@ router.post('/messages/mark_read', async (req, res) => {
  * Body: { messageId, text }
  * Только текстовые сообщения, только отправитель может редактировать. Поиск по messageId в БД.
  */
-router.post('/messages/edit', async (req, res) => {
+router.post('/messages/edit', async (req: MessageRequest, res) => {
   try {
-    const me = String((req as any)?.userId || '').trim();
+    const me = String((req)?.userId || '').trim();
     if (!isOid(me)) return res.status(401).json({ ok: false, error: 'unauthorized' });
 
     const result = await applyMessageEdit(me, req.body || {});
@@ -483,13 +496,13 @@ router.post('/messages/edit', async (req, res) => {
     }
 
     try {
-      const io = (req as any).io as any | undefined;
+      const io = (req).io;
       if (io) for (const u of result.participants) io.to(`u:${u}`).emit('message:edited', result.event);
     } catch {}
 
     return res.json({ ok: true, ...result.event });
-  } catch (e: any) {
-    return res.status(500).json({ ok: false, error: e?.message || 'server_error' });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: (e as { message?: unknown } | null)?.message || 'server_error' });
   }
 });
 
@@ -498,9 +511,9 @@ router.post('/messages/edit', async (req, res) => {
  * Body: { messageId, emoji, with, on? }
  * Фолбэк офлайн-очереди реакций, когда сокет завис (VPN), а HTTP проходит.
  */
-router.post('/messages/react', async (req, res) => {
+router.post('/messages/react', async (req: MessageRequest, res) => {
   try {
-    const me = String((req as any)?.userId || '').trim();
+    const me = String((req)?.userId || '').trim();
     if (!isOid(me)) return res.status(401).json({ ok: false, error: 'unauthorized' });
 
     const result = await applyMessageReaction(me, req.body || {});
@@ -510,13 +523,13 @@ router.post('/messages/react', async (req, res) => {
     }
 
     try {
-      const io = (req as any).io as any | undefined;
+      const io = (req).io;
       if (io) for (const u of result.participants) emitToUser(io, u, 'message:reaction', result.event);
     } catch {}
 
     return res.json({ ok: true, reactions: result.event.reactions });
-  } catch (e: any) {
-    return res.status(500).json({ ok: false, error: e?.message || 'server_error' });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: (e as { message?: unknown } | null)?.message || 'server_error' });
   }
 });
 
@@ -525,9 +538,9 @@ router.post('/messages/react', async (req, res) => {
  * Body: { messageId }
  * Поиск по messageId в БД (FriendshipMessageItem или FriendshipMessages).
  */
-router.post('/messages/delete', async (req, res) => {
+router.post('/messages/delete', async (req: MessageRequest, res) => {
   try {
-    const me = String((req as any)?.userId || '').trim();
+    const me = String((req)?.userId || '').trim();
     if (!isOid(me)) return res.status(401).json({ ok: false, error: 'unauthorized' });
 
     const messageId = String(req.body?.messageId || '').trim();
@@ -536,7 +549,7 @@ router.post('/messages/delete', async (req, res) => {
     if (!result.ok) return res.json({ ok: false, error: result.error || 'not_found' });
 
     try {
-      const io = (req as any).io as any | undefined;
+      const io = (req).io;
       if (io && (result.fromUserId || result.toUserId)) {
         const payload = { messageId, deletedBy: me };
         emitMessageDeletedToParticipants(io, result.fromUserId, result.toUserId, payload);
@@ -544,14 +557,14 @@ router.post('/messages/delete', async (req, res) => {
     } catch {}
 
     return res.json({ ok: true });
-  } catch (e: any) {
-    return res.status(500).json({ ok: false, error: e?.message || 'server_error' });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: (e as { message?: unknown } | null)?.message || 'server_error' });
   }
 });
 
-router.post('/messages/delete_many', async (req, res) => {
+router.post('/messages/delete_many', async (req: MessageRequest, res) => {
   try {
-    const me = String((req as any)?.userId || '').trim();
+    const me = String((req)?.userId || '').trim();
     if (!isOid(me)) return res.status(401).json({ ok: false, error: 'unauthorized' });
 
     const messageIds = normalizeMessageIdBatch(req.body?.messageIds);
@@ -569,7 +582,7 @@ router.post('/messages/delete_many', async (req, res) => {
     const result = await deleteMessagesForBothUsersBatch(me, messageIds);
 
     try {
-      const io = (req as any).io as any | undefined;
+      const io = (req).io;
       if (io && result.deletedIds.length > 0) {
         const payload = { messageIds: result.deletedIds, deletedBy: me };
         emitMessagesDeletedToParticipants(io, result.recipients, payload);
@@ -582,8 +595,8 @@ router.post('/messages/delete_many', async (req, res) => {
       failedIds: result.failedIds,
       ...(result.error ? { error: result.error } : {}),
     });
-  } catch (e: any) {
-    return res.status(500).json({ ok: false, error: e?.message || 'server_error', deletedIds: [], failedIds: [] });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: (e as { message?: unknown } | null)?.message || 'server_error', deletedIds: [], failedIds: [] });
   }
 });
 
@@ -596,9 +609,9 @@ router.post('/messages/delete_many', async (req, res) => {
  * - forAll=false: "clear only for me" is a client-local operation in current architecture,
  *   so we acknowledge success and only emit an event to initiator (no DB mutation).
  */
-router.post('/messages/clear_chat', async (req, res) => {
+router.post('/messages/clear_chat', async (req: MessageRequest, res) => {
   try {
-    const me = String((req as any)?.userId || '').trim();
+    const me = String((req)?.userId || '').trim();
     if (!isOid(me)) return res.status(401).json({ ok: false, error: 'unauthorized' });
 
     const withId = String(req.body?.with || '').trim();
@@ -613,7 +626,7 @@ router.post('/messages/clear_chat', async (req, res) => {
 
     // Best-effort realtime notify (if sockets are up)
     try {
-      const io = (req as any).io as any | undefined;
+      const io = (req).io;
       if (io) {
         emitToUser(io, me, 'message:chat_cleared', result.payload);
         if (forAll) {
@@ -623,8 +636,8 @@ router.post('/messages/clear_chat', async (req, res) => {
     } catch {}
 
     return res.json({ ok: true });
-  } catch (e: any) {
-    return res.status(500).json({ ok: false, error: e?.message || 'server_error' });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: (e as { message?: unknown } | null)?.message || 'server_error' });
   }
 });
 

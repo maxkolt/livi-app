@@ -12,6 +12,14 @@ import { PLAYER_ORIGIN, YT_PLAYING, youtubePlayerHtml, type FliqPlayMode } from 
 
 export type { FliqPlayMode } from './fliqPlayerHtml';
 
+/** Messages emitted by youtubePlayerHtml through the WebView bridge. */
+type YoutubePlayerMessage =
+  | { t: 'ready' | 'primed' | 'buffered' | 'loop' | 'ended' | 'userpause' | 'userplay' }
+  | { t: 'state'; s: number }
+  | { t: 'tick'; c: number; d: number; p: 0 | 1; at: number }
+  | { t: 'mute'; m: boolean }
+  | { t: 'error'; c: number };
+
 /** Ссылки из плеера (логотип YouTube, автор) — в приложении источника, а не в нашем WebView. */
 function openExternally(url: string) {
   if (/^https?:\/\//i.test(url)) Linking.openURL(url).catch(() => {});
@@ -161,7 +169,7 @@ export const FliqYoutubePlayer = memo(forwardRef<FliqYoutubePlayerHandle, FliqYo
 
   const onMessage = useCallback(
     (e: WebViewMessageEvent) => {
-      let msg: any = null;
+      let msg: YoutubePlayerMessage | null = null;
       try {
         msg = JSON.parse(e.nativeEvent.data);
       } catch {

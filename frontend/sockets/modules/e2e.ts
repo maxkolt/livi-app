@@ -45,6 +45,26 @@ import {
   type E2eKeyPair,
 } from "./e2eCrypto";
 
+type E2eAck = { ok: boolean; error?: string; retryAfterSec?: number };
+type E2eResponses = {
+  'e2e:state': E2eAck & { publicKey?: string; disabled?: boolean; backup?: Pick<E2eBackup, 'kdf' | 'pk'> | null };
+  'e2e:publish': E2eAck;
+  'e2e:disable': E2eAck;
+  'e2e:backup_fetch': E2eAck & { backup?: E2eBackup };
+  'e2e:keys': E2eAck & { keys?: Record<string, string> };
+};
+
+/** Only envelope metadata is needed here; message-specific fields stay on the generic input. */
+export type DecryptableMessage = {
+  id?: unknown;
+  from?: unknown;
+  to?: unknown;
+  enc?: unknown;
+  text?: string;
+  replyTo?: { id?: unknown; text?: string; from?: string | null } | null;
+  e2eUndecryptable?: boolean;
+};
+
 export type E2eStatus = "unknown" | "needs_setup" | "needs_restore" | "ready" | "disabled";
 
 /** Свой ключ есть, а зашифровать сейчас нельзя — сообщение не должно уйти открытым текстом. */
@@ -121,7 +141,7 @@ type KeyVault = {
   load(key: string): Promise<string | null>;
   remove(key: string): Promise<boolean>;
 };
-const keyVault = (NativeModules as any)?.LiviKeyVault as KeyVault | undefined;
+const keyVault = (NativeModules)?.LiviKeyVault as KeyVault | undefined;
 /** Последнее чтение хранилища сорвалось: ключ мог там быть, новый создавать нельзя. */
 let vaultReadFailed = false;
 /** Для кого копия в хранилище уже сверена в этом запуске. */
@@ -215,7 +235,7 @@ export function refreshE2eState(): Promise<E2eStatus> {
     const own = await loadOwnKey(me);
     // До reauth сервер не знает userId и ответит unauthorized.
     if (!(await ensureReauthBeforePrivilegedSocketOp().catch(() => false))) return state.status;
-    const resp: any = await emitAck("e2e:state", {}, STATE_TIMEOUT_MS, 0).catch(() => null);
+    const resp = await emitAck<E2eResponses["e2e:state"]>("e2e:state", {}, STATE_TIMEOUT_MS, 0).catch(() => null);
     if (!resp?.ok) stateFailedAt = Date.now();
     if (!resp?.ok || state.userId !== me) return state.status;
     stateFailedAt = 0;
@@ -283,7 +303,7 @@ let nativeKdfReady: Promise<void> | null = null;
 function ensureNativeKdf(): Promise<void> {
   if (nativeKdfReady) return nativeKdfReady;
   nativeKdfReady = (async () => {
-    const mod = (NativeModules as any)?.LiviCrypto;
+    const mod = (NativeModules)?.LiviCrypto;
     if (typeof mod?.pbkdf2Sha256 !== "function") return;
     const impl: Pbkdf2Impl = async (password, salt, iterations, dkLen) => {
       const out = fromBase64(await mod.pbkdf2Sha256(toBase64(password), toBase64(salt), iterations, dkLen));
@@ -305,12 +325,12 @@ function ensureNativeKdf(): Promise<void> {
  * какое-то время не авторизован (сервер ответит unauthorized) — дожидаемся reauth
  * и повторяем один раз, а не показываем «нет соединения».
  */
-async function emitAuthed(event: string, payload: Record<string, unknown>): Promise<any> {
+async function emitAuthed<E extends keyof E2eResponses>(event: E, payload: Record<string, unknown>): Promise<E2eResponses[E] | null> {
   await ensureReauthBeforePrivilegedSocketOp().catch(() => false);
-  let resp: any = await emitAck(event, payload).catch(() => null);
+  let resp = await emitAck<E2eResponses[E]>(event, payload).catch(() => null);
   if (resp?.error === "unauthorized") {
     await ensureReauthBeforePrivilegedSocketOp().catch(() => false);
-    resp = await emitAck(event, payload).catch(() => null);
+    resp = await emitAck<E2eResponses[E]>(event, payload).catch(() => null);
   }
   return resp;
 }
@@ -318,7 +338,7 @@ async function emitAuthed(event: string, payload: Record<string, unknown>): Prom
 /** Публикация ключа без копии под паролем: переустановку он переживёт через хранилище. */
 async function publishDeviceKey(me: string, pair: E2eKeyPair): Promise<ActionResult> {
   const publicKey = toBase64(pair.publicKey);
-  const resp: any = await emitAuthed("e2e:publish", { publicKey });
+  const resp = await emitAuthed("e2e:publish", { publicKey });
   logger.info("[e2e] publish device key", {
     ok: !!resp?.ok,
     error: resp?.error ?? (resp ? null : "no_ack"),
@@ -339,7 +359,7 @@ async function publish(me: string, pair: E2eKeyPair, password: string): Promise<
   const backup = await createKeyBackup(pair, password);
   const kdfMs = Date.now() - kdfStartedAt;
   const publishStartedAt = Date.now();
-  const resp: any = await emitAuthed("e2e:publish", { publicKey: toBase64(pair.publicKey), backup });
+  const resp = await emitAuthed("e2e:publish", { publicKey: toBase64(pair.publicKey), backup });
   logger.info("[e2e] publish", {
     ok: !!resp?.ok,
     error: resp?.error ?? (resp ? null : "no_ack"),
@@ -373,7 +393,7 @@ export async function restoreE2e(password: string): Promise<ActionResult> {
   if (!kdf) return { ok: false, error: "no_backup" };
   await ensureNativeKdf();
   const { wrapKey, authKey } = await deriveRestoreKeys(password, kdf);
-  const resp: any = await emitAuthed("e2e:backup_fetch", { authKey });
+  const resp = await emitAuthed("e2e:backup_fetch", { authKey });
   if (!resp?.ok) {
     wrapKey.fill(0);
     return { ok: false, error: resp?.error || "network", retryAfterSec: resp?.retryAfterSec };
@@ -401,7 +421,7 @@ export function hasLocalE2eKey(): boolean {
 export async function disableE2e(): Promise<ActionResult> {
   const me = syncUser();
   if (!me) return { ok: false, error: "unauthorized" };
-  const resp: any = await emitAuthed("e2e:disable", {});
+  const resp = await emitAuthed("e2e:disable", {});
   if (!resp?.ok) return { ok: false, error: resp?.error || "network" };
   if (state.userId === me) {
     state.serverPublicKey = "";
@@ -519,7 +539,7 @@ export async function getPeerPublicKey(peerId: string, opts?: { force?: boolean 
   const cached = peerKeys.get(peerId);
   const ttl = cached?.pk ? PEER_KEY_TTL_MS : PEER_NO_KEY_TTL_MS;
   if (cached && !opts?.force && Date.now() - cached.at < ttl) return cached.pk || null;
-  const resp: any = await emitAuthed("e2e:keys", { userIds: [peerId] });
+  const resp = await emitAuthed("e2e:keys", { userIds: [peerId] });
   if (!resp?.ok) throw new E2eUnavailableError("unavailable");
   const pk = String(resp.keys?.[peerId] || "");
   peerKeys.set(peerId, { pk, at: Date.now() });
@@ -651,7 +671,7 @@ export async function toWireMessagePayload<T extends OutgoingTextPayload>(
  * (ключ не восстановлен, сброшен или конверт подделан) — заглушка с флагом
  * e2eUndecryptable: после восстановления ключа серверная версия её заменит.
  */
-export async function decryptIncomingMessage<M extends Record<string, any>>(
+export async function decryptIncomingMessage<M extends DecryptableMessage>(
   msg: M,
   undecryptableText: () => string,
 ): Promise<M> {

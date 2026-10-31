@@ -1,3 +1,5 @@
+import type { ChatMessage, ForwardRecipient } from './chatMessageTypes';
+
 /** Pure forward / system-share helpers for chat (no React state). */
 
 import { getStickerFallbackText } from "../../components/chatStickers";
@@ -18,9 +20,9 @@ export type ForwardPayload = {
   text?: string;
   uri?: string;
   uris?: string[];
-  name?: any;
-  size?: any;
-  duration?: any;
+  name?: string;
+  size?: number;
+  duration?: number;
   stickerId?: string;
   stickerPackId?: string;
   stickerEmoji?: string;
@@ -30,7 +32,7 @@ export type ForwardPayload = {
 };
 
 /** Видеокружок для пересылки: только уже загруженный (локальный файл не перешлёшь). */
-function videoNoteForwardPayload(m: any, resolveMediaUri: ForwardMediaResolver): ForwardPayload | null {
+function videoNoteForwardPayload(m: ChatMessage | null, resolveMediaUri: ForwardMediaResolver): ForwardPayload | null {
   const rawUri = String(m?.uri || "").trim();
   const uri = rawUri ? normalizeForwardMediaUri(rawUri, resolveMediaUri) : "";
   if (!uri) return null;
@@ -50,7 +52,7 @@ function normalizeForwardMediaUri(
 }
 
 export function collectForwardPayloadsFromSelection(
-  messages: any[],
+  messages: ChatMessage[],
   selectedMessageIds: Set<string>,
   resolveMediaUri: ForwardMediaResolver,
   lang: Lang,
@@ -120,7 +122,7 @@ export function collectForwardPayloadsFromSelection(
 
 /** Payloads for a single selected message (incl. album / __albumForwardOne). */
 export function collectForwardPayloadsFromSelectedMessage(
-  selectedMessage: any,
+  selectedMessage: ChatMessage | null,
   resolveMediaUri: ForwardMediaResolver,
   lang: Lang,
 ): ForwardPayload[] {
@@ -130,7 +132,7 @@ export function collectForwardPayloadsFromSelectedMessage(
     return txt ? [{ type: "text", text: txt }] : [];
   }
   if (type === "image") {
-    const forceOne = !!(selectedMessage as any)?.__albumForwardOne;
+    const forceOne = !!(selectedMessage)?.__albumForwardOne;
     const album = forceOne ? [] : getMessageImageUris(selectedMessage);
     if (album.length > 1) {
       const resolved = album
@@ -193,7 +195,7 @@ export function collectForwardPayloadsFromSelectedMessage(
 
 /** Same “есть что пересылать” check used before multi-friend forward. */
 export function selectionHasForwardableContent(
-  messages: any[],
+  messages: ChatMessage[],
   selectedMessageIds: Set<string>,
   resolveMediaUri: ForwardMediaResolver,
 ): boolean {
@@ -228,7 +230,7 @@ export function selectionHasForwardableContent(
 
 /** Early-exit checks for single-message multi-friend forward (mirrors ChatScreen). */
 export function selectedMessageIsForwardable(
-  selectedMessage: any,
+  selectedMessage: ChatMessage | null,
   resolveMediaUri: ForwardMediaResolver,
 ): boolean {
   if (!selectedMessage) return false;
@@ -254,9 +256,9 @@ export function buildOptimisticForwardRow(
     lang: Lang;
     resolveMediaUri: ForwardMediaResolver;
   },
-): any {
+): ChatMessage {
   const typ = String(partial.type || "text").trim();
-  const row: any = {
+  const row: ChatMessage = {
     id: opts.messageId,
     type: typ,
     sender: "me",
@@ -295,9 +297,9 @@ type SystemShareContent = {
 
 export function buildSystemShareContent(opts: {
   selectionMode: boolean;
-  messages: any[];
+  messages: ChatMessage[];
   selectedMessageIds: Set<string>;
-  selectedMessage: any;
+  selectedMessage: ChatMessage | null;
   resolveMediaUri: ForwardMediaResolver;
   lang: Lang;
 }): SystemShareContent {
@@ -370,14 +372,14 @@ export { computeForwardPickerLayout } from './chatForwardLayout';
 
 /** Paginate fetchFriends until exhausted (same caps as ChatScreen). */
 export async function loadAllFriendsForForward(
-  fetchFriendsPage: (page: number, limit: number) => Promise<any>,
-): Promise<any[]> {
-  const all: any[] = [];
+  fetchFriendsPage: (page: number, limit: number) => Promise<{ list?: ForwardRecipient[]; pagination?: { hasMore?: boolean } }>,
+): Promise<ForwardRecipient[]> {
+  const all: ForwardRecipient[] = [];
   const seen = new Set<string>();
   let page = 1;
   const limit = 50;
   for (let i = 0; i < 20; i++) {
-    const res: any = await fetchFriendsPage(page, limit);
+    const res = await fetchFriendsPage(page, limit);
     const list = Array.isArray(res?.list) ? res.list : [];
     for (const f of list) {
       const id = String(f?._id || "").trim();

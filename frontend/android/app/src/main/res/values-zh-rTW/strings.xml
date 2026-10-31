@@ -5,7 +5,7 @@
   <string name="incoming_call_unknown">有人來電</string>
   <string name="incoming_call_accept">接聽</string>
   <string name="incoming_call_decline">拒絕</string>
-  <string name="outgoing_call_title">視訊通話撥出</string>
+  <string name="outgoing_call_title">撥出電話</string>
   <string name="outgoing_call_subtitle">正在撥號…</string>
   <string name="outgoing_call_subtitle_base">正在撥號</string>
   <string name="outgoing_call_subtitle_base_audio">正在撥號</string>

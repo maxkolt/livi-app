@@ -1,3 +1,5 @@
+import type { CompatibleLocalPublication, LocalPublicationCollection, NativeLiveKitMediaTrack, RTCStatsSample, RoomDisposalEngine, TrackStatsParticipant } from '../rtcCompatibilityTypes';
+import type { RemoteAudioTrack } from 'livekit-client';
 import { MediaStream } from '@livekit/react-native-webrtc';
 import {
   Room,
@@ -15,6 +17,7 @@ import {
 import { Platform } from 'react-native';
 import * as Device from 'expo-device';
 import { SimpleEventEmitter } from '../base/SimpleEventEmitter';
+import type { RandomChatSessionEvents } from '../base/sessionEvents';
 import type { WebRTCSessionConfig, CamSide } from '../types';
 import socket, {
   API_BASE,
@@ -72,7 +75,7 @@ type ResumeAck =
   | { ok: true; id: string; livekitToken: string | null; livekitRoomName: string; livekitUrl: string | null }
   | { ok: false; reason: string };
 
-export class RandomChatSession extends SimpleEventEmitter {
+export class RandomChatSession extends SimpleEventEmitter<RandomChatSessionEvents> {
   private hasLoggedLiveKitApiKeyWarning = false;
   private config: WebRTCSessionConfig;
   private room: Room | null = null;
@@ -81,7 +84,7 @@ export class RandomChatSession extends SimpleEventEmitter {
   private localStream: MediaStream | null = null;
   private remoteStream: MediaStream | null = null;
   private currentRemoteParticipant: RemoteParticipant | null = null;
-  private remoteAudioTrack: RemoteTrack | null = null;
+  private remoteAudioTrack: RemoteAudioTrack | null = null;
   private remoteVideoTrack: RemoteTrack | null = null;
   private remoteViewKey = 0;
   private started = false;
@@ -218,7 +221,7 @@ export class RandomChatSession extends SimpleEventEmitter {
   private async logSelectedIceTransport(room: Room, reason: string): Promise<void> {
     try {
       if (this.room !== room) return;
-      const diagnostics = await getRoomIceTransportDiagnostics(room as any);
+      const diagnostics = await getRoomIceTransportDiagnostics(room);
       if (!diagnostics.length) {
         return;
       }
@@ -329,8 +332,8 @@ export class RandomChatSession extends SimpleEventEmitter {
   }
 
   private isAbortLikeCameraError(error: unknown): boolean {
-    const message = String((error as any)?.message || error || '').toLowerCase();
-    const name = String((error as any)?.name || '').toLowerCase();
+    const message = String((error as Error | null | undefined)?.message || error || '').toLowerCase();
+    const name = String((error as Error | null | undefined)?.name || '').toLowerCase();
     return (
       message.includes('aborterror') ||
       message.includes('aborted') ||
@@ -749,12 +752,12 @@ export class RandomChatSession extends SimpleEventEmitter {
       // КРИТИЧНО: Обернуто в дополнительный try-catch для предотвращения крашей на Android
       try {
         await this.disconnectRoom('user', 'next');
-      } catch (e: any) {
+      } catch (e) {
         // КРИТИЧНО: Улучшенная обработка ошибок для предотвращения крашей
-        const errorMsg = e?.message || String(e || '');
+        const errorMsg = (e as Error | null | undefined)?.message || String(e || '');
         logger.warn('[RandomChatSession] Error disconnecting room in next()', {
           error: errorMsg,
-          errorName: e?.name,
+          errorName: (e as Error | null | undefined)?.name,
           // Не логируем stack trace на Android - это может вызвать проблемы
         });
         // Даже при ошибке продолжаем - комната может быть уже отключена
@@ -814,12 +817,12 @@ export class RandomChatSession extends SimpleEventEmitter {
         }, 700);
       }
       return true;
-    } catch (e: any) {
+    } catch (e) {
       // КРИТИЧНО: Улучшенная обработка ошибок для предотвращения крашей на Android
-      const errorMsg = e?.message || String(e || '');
+      const errorMsg = (e as Error | null | undefined)?.message || String(e || '');
       logger.error('[RandomChatSession] Error in next()', {
         error: errorMsg,
-        errorName: e?.name,
+        errorName: (e as Error | null | undefined)?.name,
         // Не логируем stack trace - это может вызвать проблемы на Android
       });
       
@@ -1084,7 +1087,7 @@ export class RandomChatSession extends SimpleEventEmitter {
 
     const inFlight = run()
       .catch((e) => {
-        logger.warn('[RandomChatSession] resumePair failed', { reason, error: (e as any)?.message || String(e) });
+        logger.warn('[RandomChatSession] resumePair failed', { reason, error: (e as Error | null | undefined)?.message || String(e) });
       })
       .finally(() => {
         if (this.resumeInFlight === inFlight) this.resumeInFlight = null;
@@ -1203,7 +1206,7 @@ export class RandomChatSession extends SimpleEventEmitter {
           logger.warn('[RandomChatSession] emitStartReliable: connect attempt failed', {
             reason,
             attempt,
-            error: (e as any)?.message || String(e),
+            error: (e as Error | null | undefined)?.message || String(e),
           });
         }
 
@@ -1231,7 +1234,7 @@ export class RandomChatSession extends SimpleEventEmitter {
             this.logReconnectTrace('auto_next_emit_error', {
               reason,
               nextTransitionId,
-              error: (e as any)?.message || String(e),
+              error: (e as Error | null | undefined)?.message || String(e),
             });
           }
         }
@@ -1366,7 +1369,7 @@ export class RandomChatSession extends SimpleEventEmitter {
       const hasVideoTrack = videoTracks.some(t => t.id === mediaStreamTrack.id);
       if (!hasVideoTrack) {
         // Добавляем видео трек обратно в localStream если его нет
-        this.localStream.addTrack(mediaStreamTrack as any);
+        this.localStream.addTrack(mediaStreamTrack as NativeLiveKitMediaTrack);
       }
     }
     
@@ -1397,7 +1400,7 @@ export class RandomChatSession extends SimpleEventEmitter {
    * это переживает. Зовём и при подписке: трек мог прийти уже после нажатия.
    */
   private applyRemoteAudioMute(): void {
-    const track = this.remoteAudioTrack as any;
+    const track = this.remoteAudioTrack;
     if (!track) return;
     try {
       track.setMuted?.(this.remoteAudioMuted);
@@ -1453,7 +1456,7 @@ export class RandomChatSession extends SimpleEventEmitter {
         throw error;
       }
       logger.warn('[RandomChatSession] Camera restart hit AbortError, retrying after release', {
-        error: (error as any)?.message || String(error),
+        error: (error as Error | null | undefined)?.message || String(error),
         trackId: oldVideoTrack.mediaStreamTrack?.id,
         camSide: this.camSide,
       });
@@ -1500,7 +1503,7 @@ export class RandomChatSession extends SimpleEventEmitter {
         logger.warn('[RandomChatSession] handlePartnerGone error', { reason, error: e });
         this.logReconnectTrace('partner_gone_error', {
           reason,
-          error: (e as any)?.message || String(e),
+          error: (e as Error | null | undefined)?.message || String(e),
         });
       } finally {
         setTimeout(() => {
@@ -1930,14 +1933,14 @@ export class RandomChatSession extends SimpleEventEmitter {
           const facingMode = this.camSide === 'front' ? 'user' : 'environment';
           const preferred = getPreferredVideoCaptureOptions(facingMode);
           logger.warn('[RandomChatSession] Failed to create local video track with preferred preset; retrying with fallback', {
-            error: (e as any)?.message || String(e),
+            error: (e as Error | null | undefined)?.message || String(e),
             preferred: preferred.meta,
           });
           tracks = await createLocalTracks({ audio: true, video: preferred.fallback || preferred.primary });
         } catch (e2) {
           // Final fallback: allow audio-only when camera isn't available (esp. older/weak devices)
           logger.warn('[RandomChatSession] Failed to create local video track (preferred + fallback); falling back to audio-only', {
-            error: (e2 as any)?.message || String(e2),
+            error: (e2 as Error | null | undefined)?.message || String(e2),
             platform: Platform.OS,
             isDevice: Device.isDevice,
           });
@@ -1965,7 +1968,7 @@ export class RandomChatSession extends SimpleEventEmitter {
       const mediaTrack = track.mediaStreamTrack;
       if (mediaTrack) {
         // LiveKit's MediaStreamTrack is compatible with @livekit/react-native-webrtc's MediaStreamTrack at runtime
-        stream.addTrack(mediaTrack as any);
+        stream.addTrack(mediaTrack as NativeLiveKitMediaTrack);
       }
     });
     this.localStream = stream;
@@ -2167,7 +2170,7 @@ export class RandomChatSession extends SimpleEventEmitter {
     } catch (e1) {
       logger.warn('[RandomChatSession] Failed to create local video track with preferred preset; retrying with fallback', {
         reason,
-        error: (e1 as any)?.message || String(e1),
+        error: (e1 as Error | null | undefined)?.message || String(e1),
         preferred: preferred.meta,
       });
       try {
@@ -2176,7 +2179,7 @@ export class RandomChatSession extends SimpleEventEmitter {
         logger.error('[RandomChatSession] Failed to create local video track (preferred + fallback)', {
           reason,
           preferred: preferred.meta,
-          error: (e2 as any)?.message || String(e2),
+          error: (e2 as Error | null | undefined)?.message || String(e2),
         });
         throw e2;
       }
@@ -2208,7 +2211,7 @@ export class RandomChatSession extends SimpleEventEmitter {
       return this.localVideoTrack?.mediaStreamTrack?.readyState !== 'ended';
     } catch (error) {
       logger.warn('[RandomChatSession] Failed to refresh ended local video track before reconnect', {
-        error: (error as any)?.message || String(error),
+        error: (error as Error | null | undefined)?.message || String(error),
       });
       return false;
     }
@@ -2239,14 +2242,14 @@ export class RandomChatSession extends SimpleEventEmitter {
     try {
       this.localStream.getVideoTracks().forEach((t) => {
         try {
-          this.localStream?.removeTrack(t as any);
+          this.localStream?.removeTrack(t);
         } catch {}
       });
     } catch {}
 
     const mediaTrack = newVideoTrack.mediaStreamTrack;
     if (mediaTrack) {
-      this.localStream.addTrack(mediaTrack as any);
+      this.localStream.addTrack(mediaTrack as NativeLiveKitMediaTrack);
     }
 
     // Убеждаемся, что аудио трек остается в localStream
@@ -2255,7 +2258,7 @@ export class RandomChatSession extends SimpleEventEmitter {
         (t) => t.id === this.localAudioTrack?.mediaStreamTrack?.id
       );
       if (!hasAudio) {
-        this.localStream.addTrack(this.localAudioTrack.mediaStreamTrack as any);
+        this.localStream.addTrack(this.localAudioTrack.mediaStreamTrack as NativeLiveKitMediaTrack);
       }
     }
 
@@ -2271,21 +2274,21 @@ export class RandomChatSession extends SimpleEventEmitter {
     });
   }
 
-  private getLocalVideoPublication(): any | null {
+  private getLocalVideoPublication(): CompatibleLocalPublication | null {
     if (!this.room || !this.room.localParticipant) return null;
-    const publications = this.room.localParticipant.videoTrackPublications;
+    const publications = this.room.localParticipant.videoTrackPublications as LocalPublicationCollection;
     if (!publications) return null;
     try {
-      if (typeof (publications as any).values === 'function') {
-        for (const pub of (publications as any).values()) {
+      if (typeof publications.values === 'function') {
+        for (const pub of publications.values()) {
           return pub || null;
         }
       } else if (Array.isArray(publications)) {
         return publications[0] || null;
       } else if (typeof publications === 'object') {
         // В RN сборках livekit-client это может быть plain object без .values()
-        const vals = Object.values(publications as any);
-        return (vals?.[0] as any) || null;
+        const vals = Object.values(publications);
+        return vals?.[0] || null;
       }
     } catch {}
     return null;
@@ -2336,8 +2339,8 @@ export class RandomChatSession extends SimpleEventEmitter {
     if (this.isLocalVideoWatchdogForced()) return true;
     const api = Number(Platform.Version);
     const isOldAndroid = Number.isFinite(api) && api <= 27; // Android 8.1 and below
-    const brand = String((Device as any)?.brand || '').toLowerCase();
-    const manufacturer = String((Device as any)?.manufacturer || '').toLowerCase();
+    const brand = String(Device?.brand || '').toLowerCase();
+    const manufacturer = String(Device?.manufacturer || '').toLowerCase();
     const isOppoLike = brand.includes('oppo') || manufacturer.includes('oppo');
     return isOldAndroid || isOppoLike;
   }
@@ -2385,12 +2388,12 @@ export class RandomChatSession extends SimpleEventEmitter {
     }, delayMs);
   }
 
-  private pickLocalVideoStat(stats: any[]): any | null {
+  private pickLocalVideoStat(stats: RTCStatsSample[]): RTCStatsSample | null {
     if (!Array.isArray(stats) || stats.length === 0) return null;
     const sid = this.localVideoTrack?.sid;
-    const isVideo = (s: any) => String(s?.kind || '').toLowerCase() === 'video';
-    const matchesSid = (s: any) =>
-      sid && (String((s as any)?.trackSid || '') === String(sid) || String((s as any)?.mediaTrackId || '') === String(sid));
+    const isVideo = (s: RTCStatsSample) => String(s?.kind || '').toLowerCase() === 'video';
+    const matchesSid = (s: RTCStatsSample) =>
+      sid && (String(s?.trackSid || '') === String(sid) || String(s?.mediaTrackId || '') === String(sid));
 
     const bySid = sid ? stats.find((s) => isVideo(s) && matchesSid(s)) : null;
     if (bySid) return bySid;
@@ -2398,22 +2401,22 @@ export class RandomChatSession extends SimpleEventEmitter {
     return stats.find((s) => isVideo(s)) || null;
   }
 
-  private extractVideoProgress(stat: any): { frames: number; bytes: number; packets: number } {
+  private extractVideoProgress(stat: RTCStatsSample | null | undefined): { frames: number; bytes: number; packets: number } {
     const frames = Number(
-      (stat as any)?.framesSent ??
-      (stat as any)?.framesEncoded ??
-      (stat as any)?.frames ??
+      (stat)?.framesSent ??
+      (stat)?.framesEncoded ??
+      (stat)?.frames ??
       0
     ) || 0;
     const bytes = Number(
-      (stat as any)?.bytesSent ??
-      (stat as any)?.bytes ??
-      (stat as any)?.bytesSentTotal ??
+      (stat)?.bytesSent ??
+      (stat)?.bytes ??
+      (stat)?.bytesSentTotal ??
       0
     ) || 0;
     const packets = Number(
-      (stat as any)?.packetsSent ??
-      (stat as any)?.packets ??
+      (stat)?.packetsSent ??
+      (stat)?.packets ??
       0
     ) || 0;
     return { frames, bytes, packets };
@@ -2430,7 +2433,7 @@ export class RandomChatSession extends SimpleEventEmitter {
       if (this.localVideoHealthAttempts >= 3) return;
 
       const getStats = async () => {
-        const stats = await (this.room?.localParticipant as any)?.getTrackStats?.();
+        const stats = await (this.room?.localParticipant as TrackStatsParticipant | undefined)?.getTrackStats?.();
         const st = this.pickLocalVideoStat(stats || []);
         return this.extractVideoProgress(st);
       };
@@ -2493,13 +2496,13 @@ export class RandomChatSession extends SimpleEventEmitter {
     }
     
     try {
-      const publications = this.room.localParticipant.videoTrackPublications;
+      const publications = this.room.localParticipant.videoTrackPublications as LocalPublicationCollection;
       // КРИТИЧНО: В режиме force (пересоздание/рестарт камеры) агрессивно снимаем ВСЕ старые camera публикации.
       // Это устраняет ошибку LiveKit: "publishing a second track with the same source: camera".
       const shouldUnpublishAll = !!force;
       let hasUnpublished = false;
-      if (publications && typeof (publications as any).values === 'function') {
-        for (const pub of (publications as any).values()) {
+      if (publications && typeof publications.values === 'function') {
+        for (const pub of publications.values()) {
           const track = pub?.track;
           const trackEnded = track?.mediaStreamTrack?.readyState === 'ended';
           const isSameTrack = track && track === this.localVideoTrack;
@@ -2514,7 +2517,7 @@ export class RandomChatSession extends SimpleEventEmitter {
         }
       } else if (Array.isArray(publications)) {
         for (const pub of publications) {
-          const track = (pub as any)?.track;
+          const track = pub?.track;
           const trackEnded = track?.mediaStreamTrack?.readyState === 'ended';
           const isSameTrack = track && track === this.localVideoTrack;
           if (track && (shouldUnpublishAll || !isSameTrack || trackEnded)) {
@@ -2588,8 +2591,8 @@ export class RandomChatSession extends SimpleEventEmitter {
         }
         
         await this.room.localParticipant.publishTrack(this.localVideoTrack).catch((e) => {
-          const errorMsg = e?.message || String(e || '');
-          const errorName = e?.name || '';
+          const errorMsg = (e as Error | null | undefined)?.message || String(e || '');
+          const errorName = (e as Error | null | undefined)?.name || '';
           // КРИТИЧНО: Игнорируем ошибки связанные с отключением комнаты, fingerprint mismatch и отсутствующими участниками
           if (errorMsg.includes('already') || 
               errorMsg.includes('duplicate') ||
@@ -2634,9 +2637,9 @@ export class RandomChatSession extends SimpleEventEmitter {
     if (this.room.state !== 'connected' || !this.room.localParticipant.sid) return;
     const shouldUnpublishAll = !!force;
     try {
-      const publications = this.room.localParticipant.audioTrackPublications;
-      if (publications && typeof (publications as any).values === 'function') {
-        for (const pub of (publications as any).values()) {
+      const publications = this.room.localParticipant.audioTrackPublications as LocalPublicationCollection;
+      if (publications && typeof publications.values === 'function') {
+        for (const pub of publications.values()) {
           const track = pub?.track;
           const trackEnded = track?.mediaStreamTrack?.readyState === 'ended';
           const isSameTrack = track && track === this.localAudioTrack;
@@ -2648,7 +2651,7 @@ export class RandomChatSession extends SimpleEventEmitter {
         }
       } else if (Array.isArray(publications)) {
         for (const pub of publications) {
-          const track = (pub as any)?.track;
+          const track = pub?.track;
           const trackEnded = track?.mediaStreamTrack?.readyState === 'ended';
           const isSameTrack = track && track === this.localAudioTrack;
           if (track && (shouldUnpublishAll || !isSameTrack || trackEnded)) {
@@ -2666,9 +2669,9 @@ export class RandomChatSession extends SimpleEventEmitter {
         return;
       }
 
-      await this.room.localParticipant.publishTrack(this.localAudioTrack).catch((e: any) => {
-        const errorMsg = e?.message || String(e || '');
-        const errorName = e?.name || '';
+      await this.room.localParticipant.publishTrack(this.localAudioTrack).catch((e: unknown) => {
+        const errorMsg = (e as Error | null | undefined)?.message || String(e || '');
+        const errorName = (e as Error | null | undefined)?.name || '';
         if (
           errorMsg.includes('already') ||
           errorMsg.includes('duplicate') ||
@@ -2705,7 +2708,7 @@ export class RandomChatSession extends SimpleEventEmitter {
   private isVideoTrackPublished(track: LocalVideoTrack | null): boolean {
     if (!this.room || !track || !this.room.localParticipant) return false;
     
-    const publications = this.room.localParticipant.videoTrackPublications;
+    const publications = this.room.localParticipant.videoTrackPublications as LocalPublicationCollection;
     if (!publications) return false;
     
     try {
@@ -2723,8 +2726,8 @@ export class RandomChatSession extends SimpleEventEmitter {
         );
       } else if (typeof publications === 'object') {
         // RN: может быть plain object
-        const vals = Object.values(publications as any);
-        return vals.some((pub: any) => pub?.track === track || pub?.trackSid === track.sid);
+        const vals = Object.values(publications);
+        return vals.some((pub: CompatibleLocalPublication) => pub?.track === track || pub?.trackSid === track.sid);
       }
     } catch {}
     
@@ -2737,7 +2740,7 @@ export class RandomChatSession extends SimpleEventEmitter {
   private isAudioTrackPublished(track: LocalAudioTrack | null): boolean {
     if (!this.room || !track || !this.room.localParticipant) return false;
     
-    const publications = this.room.localParticipant.audioTrackPublications;
+    const publications = this.room.localParticipant.audioTrackPublications as LocalPublicationCollection;
     if (!publications) return false;
     
     try {
@@ -3033,10 +3036,10 @@ export class RandomChatSession extends SimpleEventEmitter {
         logger.warn('[RandomChatSession] Force cleared stuck room, will retry connection');
         // КРИТИЧНО: После очистки продолжаем создание новой комнаты вместо возврата false
         // Это позволяет восстановиться из зависшего состояния
-      } catch (e: any) {
+      } catch (e) {
         logger.warn('[RandomChatSession] Error force clearing room', {
-          error: e?.message || String(e),
-          errorName: e?.name
+          error: (e as Error | null | undefined)?.message || String(e),
+          errorName: (e as Error | null | undefined)?.name
         });
         // Даже при ошибке очистки продолжаем попытку подключения
         this.room = null;
@@ -3049,9 +3052,9 @@ export class RandomChatSession extends SimpleEventEmitter {
     let rtcConfig: RTCConfiguration | undefined = undefined;
     try {
       rtcConfig = await getIceConfiguration(false, { forceRelayOnly: !!options?.forceRelayOnly });
-    } catch (e: any) {
+    } catch (e) {
       logger.warn('[RandomChatSession] Failed to load ICE config, using LiveKit defaults', {
-        error: e?.message || String(e),
+        error: (e as Error | null | undefined)?.message || String(e),
         forceRelayOnly: !!options?.forceRelayOnly,
       });
     }
@@ -3076,7 +3079,7 @@ export class RandomChatSession extends SimpleEventEmitter {
       myUserId: this.resolveMyUserId(),
       deviceModel: this.deviceModel,
       forceRelayOnly: !!options?.forceRelayOnly,
-      iceTransportPolicy: (rtcConfig as any)?.iceTransportPolicy || 'default',
+      iceTransportPolicy: rtcConfig?.iceTransportPolicy || 'default',
     });
 
     const room = new Room({
@@ -3126,7 +3129,7 @@ export class RandomChatSession extends SimpleEventEmitter {
       });
       logger.info('[RandomChatSession] LiveKit connect ICE policy', {
         appliedClientRtcConfig: !!connectOptions.rtcConfig,
-        iceTransportPolicy: (connectOptions.rtcConfig as any)?.iceTransportPolicy ?? 'server_default',
+        iceTransportPolicy: connectOptions.rtcConfig?.iceTransportPolicy ?? 'server_default',
         forceRelayOnly: !!options?.forceRelayOnly,
         targetRoomName,
       });
@@ -3196,8 +3199,8 @@ export class RandomChatSession extends SimpleEventEmitter {
       // This makes "Отошел" depend only on explicit UI camera toggles (and the current state),
       // not on LiveKit TrackMuted/Unmuted which can be noisy during churn.
       this.emitCamToggleRelay('livekit_connected');
-    } catch (e: any) {
-      const errorMessage = e?.message || String(e);
+    } catch (e) {
+      const errorMessage = (e as Error | null | undefined)?.message || String(e);
       const isInvalidApiKey = errorMessage.includes('invalid API key') || 
                                errorMessage.includes('401') ||
                                errorMessage.includes('Unauthorized');
@@ -3251,8 +3254,8 @@ export class RandomChatSession extends SimpleEventEmitter {
       const logFn = isTransientPcError || isClientDisconnect ? logger.warn : logger.error;
       logFn('[RandomChatSession] Error connecting to LiveKit', {
         error: errorMessage,
-        errorCode: e?.code,
-        errorName: e?.name,
+        errorCode: (e as { code?: unknown } | null | undefined)?.code,
+        errorName: (e as Error | null | undefined)?.name,
         url,
         urlHost: url ? new URL(url).hostname : 'unknown',
         targetRoomName,
@@ -3262,7 +3265,7 @@ export class RandomChatSession extends SimpleEventEmitter {
         roomState: room?.state,
         isInvalidApiKey,
         forceRelayOnly: !!options?.forceRelayOnly,
-        stack: e?.stack,
+        stack: (e as Error | null | undefined)?.stack,
         connectSource,
         reconnectCycleId: this.reconnectCycleId,
       });
@@ -3630,10 +3633,10 @@ export class RandomChatSession extends SimpleEventEmitter {
               disconnectedHandler();
             }
           }
-        } catch (e: any) {
+        } catch (e) {
           // КРИТИЧНО: Улучшенная обработка ошибок для предотвращения крашей на Android
-          const errorMessage = e?.message || String(e || '');
-          const errorName = e?.name || '';
+          const errorMessage = (e as Error | null | undefined)?.message || String(e || '');
+          const errorName = (e as Error | null | undefined)?.name || '';
           
           // Игнорируем ошибки отключения если комната уже отключена или еще не подключена
           if (!errorMessage.includes('before connected') && 
@@ -3698,9 +3701,9 @@ export class RandomChatSession extends SimpleEventEmitter {
   // Делаем best-effort cleanup через внутренние поля (не публичный API) — строго в try/catch.
   private forceDisposeRoom(room: Room, context: 'disconnected' | 'timeout' | string): void {
     try {
-      try { (room as any)?.removeAllListeners?.(); } catch {}
+      try { room?.removeAllListeners?.(); } catch {}
 
-      const engine: any = (room as any)?.engine;
+      const engine = room?.engine as RoomDisposalEngine | undefined;
       try { engine?.close?.(); } catch {}
       try { engine?.client?.close?.(); } catch {}
       try { engine?.signalClient?.close?.(); } catch {}
@@ -3715,8 +3718,8 @@ export class RandomChatSession extends SimpleEventEmitter {
   // Это безопаснее для сценария Next/переподключений и помогает убрать WARN "ping timeout triggered".
   private forceCloseSignalTransport(room: Room, context: string): void {
     try {
-      const engine: any = (room as any)?.engine;
-      const sc: any = engine?.signalClient;
+      const engine = room?.engine as RoomDisposalEngine | undefined;
+      const sc = engine?.signalClient;
       try { sc?.close?.(); } catch {}
       try { sc?.ws?.close?.(); } catch {}
       try { sc?.socket?.close?.(); } catch {}
@@ -3748,12 +3751,12 @@ export class RandomChatSession extends SimpleEventEmitter {
    * So we always try boolean `false` first, and only then fallback to no-args.
    */
   private async disconnectRoomKeepTracks(room: Room, context: string): Promise<void> {
-    const disconnectFn: any = (room as any)?.disconnect;
+    const disconnectFn = room?.disconnect;
     if (typeof disconnectFn !== 'function') return;
     try {
       await disconnectFn.call(room, false);
       return;
-    } catch (e1: any) {
+    } catch (e1) {
       try {
         await disconnectFn.call(room);
         return;
@@ -4002,7 +4005,7 @@ export class RandomChatSession extends SimpleEventEmitter {
     const mediaTrackEarly = track.mediaStreamTrack;
     const isVid = publication.kind === Track.Kind.Video;
     const isAud = publication.kind === Track.Kind.Audio;
-    if (mediaTrackEarly && this.remoteStream?.getTracks().includes(mediaTrackEarly as any)) {
+    if (mediaTrackEarly && this.remoteStream?.getTracks().includes(mediaTrackEarly as NativeLiveKitMediaTrack)) {
       if (
         isVid &&
         this.remoteVideoTrack?.mediaStreamTrack === mediaTrackEarly &&
@@ -4053,27 +4056,27 @@ export class RandomChatSession extends SimpleEventEmitter {
     }
     
     const activeRemoteStream = this.remoteStream;
-    const trackAlreadyInStream = mediaTrack && activeRemoteStream.getTracks().includes(mediaTrack as any);
+    const trackAlreadyInStream = mediaTrack && activeRemoteStream.getTracks().includes(mediaTrack as NativeLiveKitMediaTrack);
     
     // Если видео трек изменился, удаляем старый из потока перед добавлением нового
     if (
       isVideoTrack &&
       wasVideoTrackChanged &&
       this.remoteVideoTrack?.mediaStreamTrack &&
-      activeRemoteStream.getTracks().includes(this.remoteVideoTrack.mediaStreamTrack as any)
+      activeRemoteStream.getTracks().includes(this.remoteVideoTrack.mediaStreamTrack as NativeLiveKitMediaTrack)
     ) {
       try {
-        activeRemoteStream.removeTrack(this.remoteVideoTrack.mediaStreamTrack as any);
+        activeRemoteStream.removeTrack(this.remoteVideoTrack.mediaStreamTrack as NativeLiveKitMediaTrack);
       } catch {}
     }
     
     if (mediaTrack && !trackAlreadyInStream) {
       // LiveKit's MediaStreamTrack is compatible with @livekit/react-native-webrtc's MediaStreamTrack at runtime
-      activeRemoteStream.addTrack(mediaTrack as any);
+      activeRemoteStream.addTrack(mediaTrack as NativeLiveKitMediaTrack);
     }
     
     if (publication.kind === Track.Kind.Audio) {
-      this.remoteAudioTrack = track;
+      this.remoteAudioTrack = track as RemoteAudioTrack;
       if (this.remoteAudioMuted) this.applyRemoteAudioMute();
     } else if (publication.kind === Track.Kind.Video) {
       this.clearPendingRemoteVideoReset('video_track_subscribed');
@@ -4165,7 +4168,7 @@ export class RandomChatSession extends SimpleEventEmitter {
     if (publication.kind === Track.Kind.Audio && this.remoteAudioTrack) {
       const mediaTrack = this.remoteAudioTrack.mediaStreamTrack;
       if (mediaTrack && this.remoteStream) {
-        this.remoteStream.removeTrack(mediaTrack as any);
+        this.remoteStream.removeTrack(mediaTrack as NativeLiveKitMediaTrack);
       }
       this.remoteAudioTrack = null;
     }
@@ -4176,7 +4179,7 @@ export class RandomChatSession extends SimpleEventEmitter {
       if (unsubscribedTrackSid === currentTrackSid) {
         const mediaTrack = this.remoteVideoTrack.mediaStreamTrack;
         if (mediaTrack && this.remoteStream) {
-          this.remoteStream.removeTrack(mediaTrack as any);
+          this.remoteStream.removeTrack(mediaTrack as NativeLiveKitMediaTrack);
         }
         
         this.remoteVideoTrack = null;

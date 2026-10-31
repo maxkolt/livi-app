@@ -1,13 +1,14 @@
+import type { ChatMessage } from '../../screens/chat/chatMessageTypes';
 // frontend/sockets/modules/shared.ts
 import type { AppStateStatus } from "react-native";
 import { AppState } from "react-native";
 import type { OutboxMessageDeliveredPayload } from "./outboxTypes";
-import type { SocketReauthResponse } from "./types";
+import type { SocketReauthResponse, PresenceUpdatePayload, WelcomePresencePayload } from "./types";
 
 type PendingRtcSignal = {
   event: "offer" | "answer" | "ice-candidate";
   to: string;
-  payload: any;
+  payload: unknown;
 };
 
 /**
@@ -44,8 +45,8 @@ export const shared = {
   lastVisibleOnlineUserIds: new Set<string>(),
   visibleOnlinePresenceListKnown: false,
   lastSocketConnectAt: 0,
-  presenceUpdateSubscribers: new Set<(data: any) => void>(),
-  welcomePresenceSubscribers: new Set<(data: any) => void>(),
+  presenceUpdateSubscribers: new Set<(data: PresenceUpdatePayload) => void>(),
+  welcomePresenceSubscribers: new Set<(data: WelcomePresencePayload) => void>(),
 
   // app visibility / call screen flags
   lastAppState: AppState.currentState as AppStateStatus,
@@ -61,7 +62,7 @@ export const shared = {
   activeVideoCall: false,
 
   // ICE / RTC
-  candidateBuffer: {} as Record<string, any[]>,
+  candidateBuffer: {} as Record<string, unknown[]>,
   pendingRtcSignals: [] as PendingRtcSignal[],
 
   // identity caches
@@ -71,7 +72,7 @@ export const shared = {
   pendingWaitLogged: new Set<string>(),
 
   // messages cache
-  messageCache: new Map<string, { messages: any[]; timestamp: number }>(),
+  messageCache: new Map<string, { messages: ChatMessage[]; timestamp: number }>(),
   globallyDeletedMessageIdsMem: null as Set<string> | null,
   globallyDeletedMessageIdsLoadPromise: null as Promise<Set<string>> | null,
 

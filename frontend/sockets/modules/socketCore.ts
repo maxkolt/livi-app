@@ -10,6 +10,11 @@ import {
 import { shared } from "./shared";
 
 /* ========= socket (singleton) ========= */
+type LiViSocket = Socket & {
+  data?: { userId?: string };
+  __liviLastTransportFlipAt?: number;
+};
+
 let socketInstance: Socket | null = null;
 
 export const isReconnecting = () => shared.reconnecting;
@@ -24,7 +29,7 @@ const getSocket = (): Socket => {
       // Mobile VPN often breaks XHR long-polling while WebSocket still works (and is faster).
       // Corporate/captive portals may block WS — tryAllTransports still falls back to polling.
       transports: ["websocket", "polling"],
-      // @ts-ignore - engine.io-client: try every transport in the list on failure
+
       tryAllTransports: true,
       upgrade: true,
       // After a successful WebSocket session, reconnect with WebSocket first (less polling→upgrade churn).
@@ -60,7 +65,7 @@ function dropStalledAttemptOnRouteChange(): void {
     const s = socketInstance;
     if (!s || s.connected) return;
     try {
-      (s as any).io?.engine?.close();
+      (s).io?.engine?.close();
     } catch {}
   });
 }
@@ -76,7 +81,7 @@ function dropStalledAttemptOnRouteChange(): void {
 function guardDuplicateConnectPacket(s: Socket): void {
   const rawConnect = s.connect.bind(s);
   const guarded = (): Socket => {
-    const mgr = (s as any).io;
+    const mgr = (s).io;
     if (!s.connected && s.active && mgr?._readyState === "open") return s;
     return rawConnect();
   };
@@ -89,4 +94,4 @@ export function getSocketInstance(): Socket | null {
   return socketInstance;
 }
 
-export const socket: Socket = getSocket();
+export const socket: LiViSocket = getSocket();

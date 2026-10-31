@@ -1,3 +1,4 @@
+import type { ChatMessage } from './chatMessageTypes';
 /** Debounced AsyncStorage persist queue for chat messages. */
 
 import React from "react";
@@ -10,13 +11,13 @@ import { writeStoredChatMessages } from "./chatMessageStorageWrite";
 
 type Options = {
   historyReady: boolean;
-  messages: any[];
+  messages: ChatMessage[];
   currentUserId: string | null;
   peerId: string;
   lang: Lang;
   currentUserIdForPersistRef: React.MutableRefObject<string | null>;
   peerIdForPersistRef: React.MutableRefObject<string>;
-  latestMessagesForPersistRef: React.MutableRefObject<any[]>;
+  latestMessagesForPersistRef: React.MutableRefObject<ChatMessage[]>;
 };
 
 export function useChatMessagePersist({

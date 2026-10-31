@@ -32,7 +32,7 @@ export function dissolveSocketIoRoom(io: Server, roomId: string): void {
 }
 
 function clearCallRoomDataIfStale(s: AuthedSocket, roomId: string) {
-  const d: any = s.data || {};
+  const d = s.data || {};
   if (String(d.roomId || "") !== roomId) return;
   d.roomId = undefined;
   d.partnerSid = undefined;
@@ -61,7 +61,7 @@ export function evictExtraUserSocketsInDirectRoom(
     if (sid === keepSocketId) continue;
     const s = io.sockets.sockets.get(sid) as AuthedSocket | undefined;
     if (!s) continue;
-    const suid = String((s as any)?.data?.userId || "");
+    const suid = String((s)?.data?.userId || "");
     if (suid !== uid) continue;
     try {
       s.leave(roomId);
@@ -88,7 +88,7 @@ function scoreSocketForDirectRoomKeep(
 ): number {
   if (!s) return -1;
   let score = 0;
-  const d: any = s.data || {};
+  const d = s.data || {};
   if (activeRoomBySocket?.get(s.id) === roomId) score += 4;
   if (String(d.roomId || "") === roomId) score += 2;
   if (d.inCall) score += 1;
@@ -116,7 +116,7 @@ export function sanitizeDirectCallSocketIoRoom(
   for (const sid of [...room]) {
     const s = io.sockets.sockets.get(sid) as AuthedSocket | undefined;
     if (!s) continue;
-    const suid = String((s as any)?.data?.userId || "");
+    const suid = String((s)?.data?.userId || "");
     if (!suid || (suid !== pair.a && suid !== pair.b)) {
       try {
         s.leave(roomId);

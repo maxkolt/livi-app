@@ -1,3 +1,4 @@
+import type { CallAudioGlobals } from './callStateTypes';
 import {
   type InCallAudioRoute,
 } from '../components/VideoChat/hooks/audioRouteTypes';
@@ -5,7 +6,7 @@ import {
 /** Синхронизировать кнопку маршрута на in-app PiP-плашке (без импорта persist — без циклов). */
 export function notifyInAppPiPAudioRouteUi(route: InCallAudioRoute): void {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     const params = g.__currentCallPiPParamsRef?.current;
     if (params && typeof params === 'object') {
       params.audioOutputRoute = route;

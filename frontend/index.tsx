@@ -1,3 +1,11 @@
+type UnhandledRejectionEvent = { reason?: unknown; preventDefault?: () => void };
+type RejectionDetails = { message?: unknown; reasonName?: unknown };
+type BootstrapGlobals = {
+  HermesInternal?: unknown;
+  onunhandledrejection?: ((event: UnhandledRejectionEvent | null | undefined) => void) | null;
+  __lastJsFatalAlert?: string;
+};
+
 import './polyfills/ensureCoreJsPolyfills';
 import { safeRegisterLiveKitGlobals } from './livekit/safeRegisterGlobals';
 import { installCallRuntimeBridges } from './utils/callRuntime';
@@ -142,9 +150,9 @@ try {
       // Защита от спама алертами
       const msg = String(error?.message || error || 'Unknown error');
       const key = '__lastJsFatalAlert';
-      const last = (global as any)[key];
+      const last = (global as BootstrapGlobals)[key];
       if (__DEV__ && isFatal && last !== msg) {
-        (global as any)[key] = msg;
+        (global as BootstrapGlobals)[key] = msg;
         Alert.alert('JS Error', msg);
       }
     } catch {}
@@ -162,13 +170,13 @@ try {
 }
 
 // Обработчик необработанных промисов
-const bootstrapGlobal = global as any;
+const bootstrapGlobal = global as BootstrapGlobals;
 if (typeof global !== 'undefined' && bootstrapGlobal.HermesInternal) {
   // React Native с Hermes
   const originalUnhandledRejection = bootstrapGlobal.onunhandledrejection;
-  bootstrapGlobal.onunhandledrejection = (event: any) => {
+  bootstrapGlobal.onunhandledrejection = (event: UnhandledRejectionEvent | null | undefined) => {
     const reason = event?.reason || event;
-    const msg = String(reason?.message || reason?.reasonName || reason || '');
+    const msg = String((reason as RejectionDetails | null | undefined)?.message || (reason as RejectionDetails | null | undefined)?.reasonName || reason || '');
     const isLeaveWhileReconnect =
       msg.includes('leave request') ||
       msg.includes('LeaveRequest') ||
@@ -206,15 +214,15 @@ if (typeof global !== 'undefined' && bootstrapGlobal.HermesInternal) {
       event.preventDefault();
     }
     if (typeof originalUnhandledRejection === 'function') {
-      (originalUnhandledRejection as (ev: any) => void)(event);
+      (originalUnhandledRejection as (ev: UnhandledRejectionEvent | null | undefined) => void)(event);
     }
   };
 } else {
   // Fallback для других движков
   if (typeof global !== 'undefined') {
-    bootstrapGlobal.onunhandledrejection = (event: any) => {
+    bootstrapGlobal.onunhandledrejection = (event: UnhandledRejectionEvent | null | undefined) => {
       const reason = event?.reason || event;
-      const msg = String(reason?.message || reason?.reasonName || reason || '');
+      const msg = String((reason as RejectionDetails | null | undefined)?.message || (reason as RejectionDetails | null | undefined)?.reasonName || reason || '');
       const isLeaveWhileReconnect =
         msg.includes('leave request') ||
         msg.includes('LeaveRequest') ||

@@ -1,3 +1,4 @@
+import type { CallAudioGlobals } from '../../utils/callStateTypes';
 // src/pip/PiPOverlay.tsx
 // In-app: горизонтальная плашка с превью и кнопками (без возврата в звонок по тапу на превью).
 import React, { useContext, useRef, useCallback, useMemo, useState, useEffect, useSyncExternalStore } from 'react';
@@ -83,7 +84,7 @@ const PIP_ICON_SIZE = 19;
 
 const isRandomChatActive = () => {
   try {
-    return (global as any).__isInactiveStateRef?.current !== true;
+    return (global as CallAudioGlobals).__isInactiveStateRef?.current !== true;
   } catch {
     return true;
   }
@@ -186,7 +187,7 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
   const connectionDegradedUi = useMemo(() => {
     if (!visible || onHoldUi) return false;
     try {
-      const s = (global as any).__webrtcSessionRef?.current;
+      const s = (global as CallAudioGlobals).__webrtcSessionRef?.current;
       if (!s || s.isEnded?.()) return false;
       if (typeof s.isPeerReconnecting === 'function' && s.isPeerReconnecting()) return true;
       if (typeof s.isLiveKitReconnecting === 'function' && s.isLiveKitReconnecting()) return true;
@@ -254,17 +255,17 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
   const toggleMic = useCallback(() => {
     try {
       const onVideoCallScreenNow = shouldSuppressInAppPiPOnRoute(currentRouteName);
-      const toggleFromVideoCall = (global as any).__toggleMicRef?.current;
+      const toggleFromVideoCall = (global as CallAudioGlobals).__toggleMicRef?.current;
       if (onVideoCallScreenNow && typeof toggleFromVideoCall === 'function') {
         toggleFromVideoCall();
         return;
       }
-      const session = (global as any).__webrtcSessionRef?.current;
+      const session = (global as CallAudioGlobals).__webrtcSessionRef?.current;
       if (session && typeof session.toggleMic === 'function') {
         session.toggleMic();
         const enabled =
           typeof session.getIsMicOn === 'function' ? session.getIsMicOn() : !micIconMuted;
-        (global as any).__pipUpdateStateRef?.current?.({ isMuted: !enabled });
+        (global as CallAudioGlobals).__pipUpdateStateRef?.current?.({ isMuted: !enabled });
         setLocalMicMuted(!enabled);
       }
     } catch (_) {}
@@ -284,12 +285,12 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
    *  pipFromAudioOnly не трогаем: возврат из PiP по-прежнему на video UI, если ушли с видео. */
   const showPeerVideoPreviewSlot = peerHasLiveVideo || localHasLiveVideo;
   const remoteStreamUrl =
-    remoteStream && typeof (remoteStream as any).toURL === 'function'
-      ? String((remoteStream as any).toURL())
+    remoteStream && typeof remoteStream.toURL === 'function'
+      ? String(remoteStream.toURL())
       : '';
   const localStreamUrl =
-    localStream && typeof (localStream as any).toURL === 'function'
-      ? String((localStream as any).toURL())
+    localStream && typeof localStream.toURL === 'function'
+      ? String(localStream.toURL())
       : '';
   const showPeerLiveVideo =
     showPeerVideoPreviewSlot &&
@@ -306,7 +307,7 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
 
   const returnToCallFromPiP = useCallback(() => {
     try {
-      const g = global as any;
+      const g = global as CallAudioGlobals;
       const onVideoCallScreen = shouldSuppressInAppPiPOnRoute(currentRouteName);
       if (onVideoCallScreen) {
         if (!pipFromAudioOnly) {
@@ -364,14 +365,14 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
   let suspendedForSystemPiP = false;
   try {
     suspendedForSystemPiP =
-      (global as any).__pipSuspendedForSystemPiPRef?.current === true ||
+      global.__pipSuspendedForSystemPiPRef?.current === true ||
       isSystemPiPActiveOrEnteringSync();
   } catch (_) {}
   const showingInAppPiPDuringBackTransition =
     !isSystemPiPLayout &&
     !suspendedForSystemPiP &&
     suppressInAppPiPOnCurrentRoute &&
-    (global as any).__leavingVideoCallByBackRef?.current === true;
+    (global as CallAudioGlobals).__leavingVideoCallByBackRef?.current === true;
   const shouldShowOverlay =
     visible &&
     !suspendedForSystemPiP &&

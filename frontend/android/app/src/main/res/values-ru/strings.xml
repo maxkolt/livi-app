@@ -5,7 +5,7 @@
   <string name="incoming_call_unknown">Кто-то звонит</string>
   <string name="incoming_call_accept">Принять</string>
   <string name="incoming_call_decline">Отклонить</string>
-  <string name="outgoing_call_title">Исходящий видеозвонок</string>
+  <string name="outgoing_call_title">Исходящий звонок</string>
   <string name="outgoing_call_subtitle">Вызов…</string>
   <string name="outgoing_call_subtitle_base">Вызов</string>
   <string name="outgoing_call_subtitle_base_audio">Звонок</string>

@@ -49,12 +49,12 @@ export async function deliverLiveMessage(
     .timeout(LIVE_DELIVERY_ACK_TIMEOUT_MS)
     .emit('message:received', payload, (_err, responses) => {
       // err — не все сокеты ответили; достаточно одного, записавшего сообщение.
-      const confirmed = Array.isArray(responses) && responses.some((r: any) => r?.ok === true);
+      const confirmed = Array.isArray(responses) && responses.some((r: unknown) => (r as { ok?: unknown } | null)?.ok === true);
       if (!confirmed) {
         try {
           onUnconfirmed();
-        } catch (e: any) {
-          console.warn('[messages] live delivery fallback failed:', e?.message || e);
+        } catch (e) {
+          console.warn('[messages] live delivery fallback failed:', (e as { message?: unknown } | null)?.message || e);
         }
       }
     });

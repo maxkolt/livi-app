@@ -557,9 +557,11 @@ class MainActivity : ReactActivity() {
   }
 
   private fun shouldArmSystemPiPEnter(): Boolean {
-    if (LiviAppModule.getEndingCallInProgress()) return false
-    return LiviAppModule.getShouldEnterPiPOnLeaveHint() ||
-      LiviAppModule.isActiveCallForegroundRunning()
+    return SystemPiPAutoEnterPolicy.isArmed(
+      requestedByUi = LiviAppModule.getShouldEnterPiPOnLeaveHint(),
+      activeCall = LiviAppModule.isActiveCallForegroundRunning(),
+      endingCall = LiviAppModule.getEndingCallInProgress(),
+    )
   }
 
   /**
@@ -842,11 +844,13 @@ class MainActivity : ReactActivity() {
       // приложение без всякого PiP. Защита от захваченного chrome теперь не здесь, а в
       // onPictureInPictureModeChanged(true) — backdrop остаётся/показывается там же, независимо
       // от того, кто вызвал вход (ручной путь или сама система).
-      val allow =
-        enabled &&
-          !inRecentsOverview &&
-          !LiviAppModule.getEndingCallInProgress() &&
-          (LiviAppModule.getShouldEnterPiPOnLeaveHint() || LiviAppModule.isActiveCallForegroundRunning())
+      // A late JS state refresh must not undo the native PiP-return guard.
+      val allow = SystemPiPAutoEnterPolicy.isEnabled(
+        allowedByActivity = enabled,
+        armed = shouldArmSystemPiPEnter(),
+        inRecents = inRecentsOverview,
+        returningFromPiP = System.currentTimeMillis() < suppressPiPReenterUntilMs,
+      )
       val ratio = if (placeholderOnly) Rational(16, 9) else Rational(9, 16)
       val builder =
         PictureInPictureParams.Builder()

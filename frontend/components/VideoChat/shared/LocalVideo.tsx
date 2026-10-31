@@ -57,7 +57,7 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
   // КРИТИЧНО: Все хуки должны быть вызваны ДО любых условных return
   // Проверяем готовность стрима
   const hasLocalStream = localStream && isValidStream(localStream);
-  const videoTrack = hasLocalStream ? (localStream as any)?.getVideoTracks?.()?.[0] : null;
+  const videoTrack = hasLocalStream ? (localStream)?.getVideoTracks?.()?.[0] : null;
   const localVideoTrackId = videoTrack?.id ?? null;
   const isVideoTrackLive = !!videoTrack && videoTrack.readyState === 'live';
   const isVideoTrackEnabled = !!videoTrack && (videoTrack.enabled ?? true) === true;
@@ -73,7 +73,7 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
   // После flip readyState может не быть 'live' сразу — один отложенный re-render (как у RemoteVideo).
   useEffect(() => {
     if (!localStream || !isValidStream(localStream)) return;
-    const vt = (localStream as any)?.getVideoTracks?.()?.[0];
+    const vt = (localStream)?.getVideoTracks?.()?.[0];
     if (!vt) return;
     setTrackLiveTick(0);
     const t = setTimeout(() => setTrackLiveTick((k) => k + 1), 150);
@@ -85,7 +85,7 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
   useEffect(() => {
     if (localExternalHold) return;
     if (Platform.OS === 'android' && localStream && isValidStream(localStream)) {
-      const vt = (localStream as any)?.getVideoTracks?.()?.[0];
+      const vt = (localStream)?.getVideoTracks?.()?.[0];
       if (!vt) return;
       const bump = () => {
         setForceUpdateKey((prev) => {
@@ -206,7 +206,7 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
     const rtcView = (
       <RTCView
         key={rtcViewKey}
-        {...(rtcViewProps as any)}
+        {...(rtcViewProps)}
         // Скруглённое окно (TextureView): без чёрной подложки — её сглаженный край давал рамку.
         style={[styles.rtc, textureView && styles.rtcTransparent]}
         objectFit="cover"

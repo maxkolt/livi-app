@@ -1,3 +1,4 @@
+import type { AuthenticatedRequest, ErrorDetails } from '../utils/runtimeTypes';
 import { Router } from 'express';
 import mongoose from 'mongoose';
 import User from '../models/User';
@@ -8,7 +9,7 @@ const router = Router();
 
 const isOid = (s?: string) => !!s && /^[a-f\d]{24}$/i.test(String(s || '').trim());
 
-async function resolveAuthedUserId(req: any): Promise<{ userId?: string; error?: string }> {
+async function resolveAuthedUserId(req: AuthenticatedRequest): Promise<{ userId?: string; error?: string }> {
   const installId = String(req.header('x-install-id') || '').trim();
 
   // SECURITY: require installId-based auth (do not accept x-user-id alone).
@@ -65,13 +66,13 @@ router.post('/upload/avatar/dataUri', async (req, res) => {
 
     if (!updated) return res.status(404).json({ ok: false, error: 'user_not_found' });
 
-    const io = (req as any).io as any | undefined;
+    const io = (req as AuthenticatedRequest).io;
     const payloadMe = { userId: String(updated._id), avatarVer: updated.avatarVer || 0, avatarB64: updated.avatarB64 || '' };
     const payloadFriends = { userId: String(updated._id), avatarVer: updated.avatarVer || 0, avatarThumbB64: updated.avatarThumbB64 || '' };
     const payloadFriendProfile = {
       userId: String(updated._id),
-      nick: String((updated as any).nick || '').trim(),
-      avatar: (updated as any).avatar || 'data:image',
+      nick: String((updated).nick || '').trim(),
+      avatar: (updated).avatar || 'data:image',
       avatarVer: updated.avatarVer || 0,
       avatarThumbB64: updated.avatarThumbB64 || '',
     };
@@ -80,16 +81,16 @@ router.post('/upload/avatar/dataUri', async (req, res) => {
       if (io) {
         io.to(`u:${String(updated._id)}`).emit('user.avatar', payloadMe);
         const friends = await getFriendIds(String(updated._id));
-        friends.forEach((fid: any) => {
+        friends.forEach((fid) => {
           io.to(`u:${String(fid)}`).emit('user.avatarUpdated', payloadFriends);
           io.to(`u:${String(fid)}`).emit('friend:profile', payloadFriendProfile);
         });
       }
     } catch {}
 
-    return res.json({ ok: true, avatar: (updated as any).avatar || 'data:image', avatarVer: updated.avatarVer || 0 });
-  } catch (e: any) {
-    return res.status(500).json({ ok: false, error: String(e?.message || e) });
+    return res.json({ ok: true, avatar: (updated).avatar || 'data:image', avatarVer: updated.avatarVer || 0 });
+  } catch (e: unknown) {
+    return res.status(500).json({ ok: false, error: String((e as ErrorDetails)?.message || e) });
   }
 });
 
@@ -104,8 +105,8 @@ router.get('/avatar/:userId', async (req, res) => {
     const doc = await User.findById(userId).select('_id avatarVer avatarB64 avatarThumbB64').lean();
     if (!doc) return res.status(404).end();
 
-    const ver = (doc as any).avatarVer || 0;
-    const data = thumb ? (doc as any).avatarThumbB64 : (doc as any).avatarB64;
+    const ver = (doc).avatarVer || 0;
+    const data = thumb ? (doc).avatarThumbB64 : (doc).avatarB64;
     if (!data) return res.status(404).end();
 
     const parsed = parseDataUriToBuffer(String(data));
@@ -150,12 +151,12 @@ router.delete('/avatar/:userId', async (req, res) => {
 
     if (!updated) return res.status(404).json({ ok: false, error: 'user_not_found' });
 
-    const io = (req as any).io as any | undefined;
+    const io = (req as AuthenticatedRequest).io;
     const payloadMe = { userId: String(updated._id), avatarVer: updated.avatarVer || 0, avatarB64: '' };
     const payloadFriends = { userId: String(updated._id), avatarVer: updated.avatarVer || 0, avatarThumbB64: '' };
     const payloadFriendProfile = {
       userId: String(updated._id),
-      nick: String((updated as any).nick || '').trim(),
+      nick: String((updated).nick || '').trim(),
       avatar: '',
       avatarVer: updated.avatarVer || 0,
       avatarThumbB64: '',
@@ -165,7 +166,7 @@ router.delete('/avatar/:userId', async (req, res) => {
       if (io) {
         io.to(`u:${String(updated._id)}`).emit('user.avatar', payloadMe);
         const friends = await getFriendIds(String(updated._id));
-        friends.forEach((fid: any) => {
+        friends.forEach((fid) => {
           io.to(`u:${String(fid)}`).emit('user.avatarUpdated', payloadFriends);
           io.to(`u:${String(fid)}`).emit('friend:profile', payloadFriendProfile);
         });
@@ -173,8 +174,8 @@ router.delete('/avatar/:userId', async (req, res) => {
     } catch {}
 
     return res.json({ ok: true, avatar: '', avatarVer: updated.avatarVer || 0 });
-  } catch (e: any) {
-    return res.status(500).json({ ok: false, error: String(e?.message || e) });
+  } catch (e: unknown) {
+    return res.status(500).json({ ok: false, error: String((e as ErrorDetails)?.message || e) });
   }
 });
 

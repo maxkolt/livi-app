@@ -1,3 +1,4 @@
+import type { CallAudioGlobals } from '../../../utils/callStateTypes';
 /**
  * Длительность звонка живёт в глобальных ref'ах, а не в стейте компонента.
  *
@@ -24,7 +25,7 @@ export function normalizeTimerCallId(callId?: string | null): string {
  * иначе новый звонок показал бы длительность предыдущего.
  */
 export function getGlobalCallTimerRefs(callId?: string | null): TimerRefs {
-  const g = global as any;
+  const g = global as CallAudioGlobals;
   const nextCallId = normalizeTimerCallId(callId);
   g.__callTimerCallIdRef = g.__callTimerCallIdRef || { current: '' };
   if (nextCallId && g.__callTimerCallIdRef.current !== nextCallId) {
@@ -71,7 +72,7 @@ export function persistCallTimerToGlobal(
  * обнулять отсчёт уже начавшегося нового.
  */
 export function clearGlobalCallTimer(callId?: string | null): void {
-  const g = global as any;
+  const g = global as CallAudioGlobals;
   const requestedCallId = normalizeTimerCallId(callId);
   const currentCallId = normalizeTimerCallId(g.__callTimerCallIdRef?.current || '');
   if (requestedCallId && currentCallId && requestedCallId !== currentCallId) return;

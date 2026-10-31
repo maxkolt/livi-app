@@ -1,3 +1,4 @@
+import type { CallAudioGlobals } from '../../../../utils/callStateTypes';
 /**
  * Что пользователь выбрал сам, а что выбрала автоматика.
  *
@@ -21,7 +22,7 @@ import { readExplicitVideoCallBuiltInRoute } from '../../../../utils/callAudioRo
 /** Явный выбор разговорного/громкого — не подменять Bluetooth вне PiP-перехода. */
 export function readExplicitBuiltInFromGlobal(): boolean {
   try {
-    return !!(global as any).__explicitBuiltInCallAudioRouteRef?.current;
+    return !!(global as CallAudioGlobals).__explicitBuiltInCallAudioRouteRef?.current;
   } catch {
     return false;
   }
@@ -29,7 +30,7 @@ export function readExplicitBuiltInFromGlobal(): boolean {
 
 export function setExplicitBuiltInGlobal(explicit: boolean): void {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     g.__explicitBuiltInCallAudioRouteRef =
       g.__explicitBuiltInCallAudioRouteRef || { current: false };
     g.__explicitBuiltInCallAudioRouteRef.current = explicit;

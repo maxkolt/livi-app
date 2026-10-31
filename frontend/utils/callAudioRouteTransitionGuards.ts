@@ -1,3 +1,4 @@
+import type { CallAudioGlobals } from './callStateTypes';
 import type { InCallAudioRoute } from '../components/VideoChat/hooks/audioRouteTypes';
 import { isExternalHeadsetRoute, normalizeInCallRoute } from '../components/VideoChat/hooks/audioRouteTypes';
 
@@ -9,7 +10,7 @@ const CALL_AUDIO_PREFER_QUIET_MS = 450;
 /** После sync/bootstrap — не перебивать preferAudioMode (убирает SPEAKER→BT мерцание). */
 export function armCallAudioPreferAudioModeQuiet(ms = CALL_AUDIO_PREFER_QUIET_MS): void {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     g.__callAudioPreferQuietUntilRef = g.__callAudioPreferQuietUntilRef || { current: 0 };
     g.__callAudioPreferQuietUntilRef.current = Date.now() + ms;
   } catch {}
@@ -17,7 +18,7 @@ export function armCallAudioPreferAudioModeQuiet(ms = CALL_AUDIO_PREFER_QUIET_MS
 
 export function isCallAudioPreferAudioModeQuiet(): boolean {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     return Date.now() < Number(g.__callAudioPreferQuietUntilRef?.current || 0);
   } catch {}
   return false;
@@ -26,7 +27,7 @@ export function isCallAudioPreferAudioModeQuiet(): boolean {
 /** return_to_audio_ui_sync только что выставил маршрут — не дублировать отложенный reapply. */
 export function markCallAudioReturnToUiSyncApplied(route: InCallAudioRoute): void {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     g.__callAudioReturnSyncRouteRef = g.__callAudioReturnSyncRouteRef || { current: null };
     g.__callAudioReturnSyncAtRef = g.__callAudioReturnSyncAtRef || { current: 0 };
     g.__callAudioReturnSyncRouteRef.current = route;
@@ -37,7 +38,7 @@ export function markCallAudioReturnToUiSyncApplied(route: InCallAudioRoute): voi
 
 export function shouldSkipScheduledReturnToAudioUiReapply(expectedRoute?: InCallAudioRoute): boolean {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     const at = Number(g.__callAudioReturnSyncAtRef?.current || 0);
     if (Date.now() - at > 2500) return false;
     const synced = normalizeInCallRoute(g.__callAudioReturnSyncRouteRef?.current || '');
@@ -51,7 +52,7 @@ export function shouldSkipScheduledReturnToAudioUiReapply(expectedRoute?: InCall
 /** Короткое окно PiP enter/exit/focus — без InCallManager stop/start и полного bootstrap. */
 export function armCallAudioNativeTransitionLock(ms = CALL_AUDIO_NATIVE_TRANSITION_MS): void {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     g.__callAudioNativeTransitionUntilRef = g.__callAudioNativeTransitionUntilRef || { current: 0 };
     g.__callAudioNativeTransitionUntilRef.current = Math.max(
       Number(g.__callAudioNativeTransitionUntilRef.current || 0),
@@ -62,7 +63,7 @@ export function armCallAudioNativeTransitionLock(ms = CALL_AUDIO_NATIVE_TRANSITI
 
 export function isCallAudioNativeTransitionLocked(): boolean {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     return Date.now() < Number(g.__callAudioNativeTransitionUntilRef?.current || 0);
   } catch {}
   return false;
@@ -71,7 +72,7 @@ export function isCallAudioNativeTransitionLocked(): boolean {
 /** Окно enter/exit system PiP и возврата — не форсить громкую связь поверх earpiece/BT. */
 export function isCallAudioPiPTransitionWindow(): boolean {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     const now = Date.now();
     if (now < Number(g.__returningFromSystemPiPUntilRef?.current || 0)) return true;
     if (g.__pipInSystemModeRef?.current === true) return true;
@@ -83,7 +84,7 @@ export function isCallAudioPiPTransitionWindow(): boolean {
 
 export function armCallAudioPreservePriority(ms = CALL_AUDIO_PRESERVE_PRIORITY_MS): void {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     g.__callAudioPreservePriorityUntilRef = g.__callAudioPreservePriorityUntilRef || { current: 0 };
     g.__callAudioPreservePriorityUntilRef.current = Math.max(
       Number(g.__callAudioPreservePriorityUntilRef.current || 0),
@@ -98,7 +99,7 @@ export function armCallAudioRouteUiLock(route: InCallAudioRoute, ms = CALL_AUDIO
     return;
   }
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     g.__callAudioUiLockedRouteRef = g.__callAudioUiLockedRouteRef || { current: null as InCallAudioRoute | null };
     g.__callAudioUiLockUntilRef = g.__callAudioUiLockUntilRef || { current: 0 };
     g.__callAudioUiLockedRouteRef.current = route;
@@ -109,7 +110,7 @@ export function armCallAudioRouteUiLock(route: InCallAudioRoute, ms = CALL_AUDIO
 
 export function readCallAudioRouteUiLock(): InCallAudioRoute | null {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     if (Date.now() >= Number(g.__callAudioUiLockUntilRef?.current || 0)) return null;
     const r = normalizeInCallRoute(g.__callAudioUiLockedRouteRef?.current || '');
     if (r === 'EARPIECE' || r === 'SPEAKER_PHONE' || isExternalHeadsetRoute(r)) return r;
@@ -119,7 +120,7 @@ export function readCallAudioRouteUiLock(): InCallAudioRoute | null {
 
 export function clearCallAudioRouteUiLock(): void {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     if (g.__callAudioUiLockedRouteRef) g.__callAudioUiLockedRouteRef.current = null;
     if (g.__callAudioUiLockUntilRef) g.__callAudioUiLockUntilRef.current = 0;
   } catch {}
@@ -129,9 +130,10 @@ export function resolveExternalRouteForAudioUiBootstrap(
   uiLock: InCallAudioRoute | null,
 ): InCallAudioRoute | null {
   try {
-    const g = global as any;
-    const extMarked = normalizeInCallRoute(g.__userSelectedExternalCallAudioRouteRef?.current || '');
-    if (isExternalHeadsetRoute(extMarked)) return extMarked;
+    const g = global as CallAudioGlobals;
+    const marked = g.__userSelectedExternalCallAudioRouteRef?.current;
+    const extMarked = normalizeInCallRoute(marked?.route || '');
+    if (isExternalHeadsetRoute(extMarked) && Number(marked?.until || 0) > Date.now()) return extMarked;
     const userSel = normalizeInCallRoute(g.__userSelectedCallAudioRouteRef?.current || '');
     if (isExternalHeadsetRoute(userSel)) return userSel;
     if (isExternalHeadsetRoute(uiLock)) return uiLock;

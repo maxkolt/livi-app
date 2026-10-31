@@ -1,3 +1,4 @@
+import type { ErrorDetails } from './runtimeTypes';
 /**
  * Собственный канал доставки звонков для режима «Надёжные звонки» (Android).
  *
@@ -82,8 +83,8 @@ function deliverLocal(userId: string, data: Record<string, string>): number {
     try {
       ws.send(frame);
       sent += 1;
-    } catch (e: any) {
-      logger.warn('[callKeepAlive] send failed', { userId, error: e?.message });
+    } catch (e: unknown) {
+      logger.warn('[callKeepAlive] send failed', { userId, error: (e as ErrorDetails)?.message });
     }
   }
   return sent;
@@ -153,13 +154,13 @@ export function attachCallKeepAlive(
           } catch {}
           try {
             onConnected?.(auth);
-          } catch (e: any) {
-            logger.warn('[callKeepAlive] onConnected failed', { error: e?.message });
+          } catch (e: unknown) {
+            logger.warn('[callKeepAlive] onConnected failed', { error: (e as ErrorDetails)?.message });
           }
         });
       })
-      .catch((e: any) => {
-        logger.warn('[callKeepAlive] auth failed', { error: e?.message });
+      .catch((e: unknown) => {
+        logger.warn('[callKeepAlive] auth failed', { error: (e as ErrorDetails)?.message });
         rejectUpgrade(socket, 503, 'Service Unavailable');
       });
   });
@@ -175,10 +176,10 @@ export function attachCallKeepAlive(
  */
 function forwardToOtherNodes(userId: string, data: Record<string, string>): void {
   try {
-    const io = getIoInstance() as any;
+    const io = getIoInstance();
     const adapterName = io?.of?.('/')?.adapter?.constructor?.name;
     if (adapterName !== 'RedisAdapter') return;
-    io.serverSideEmit(CLUSTER_EVENT, { userId, data });
+    io!.serverSideEmit(CLUSTER_EVENT, { userId, data });
   } catch {}
 }
 
@@ -188,7 +189,7 @@ function attachClusterListener(): void {
   const io = getIoInstance();
   if (!io) return;
   clusterListenerAttached = true;
-  io.on(CLUSTER_EVENT as any, (payload: { userId?: string; data?: Record<string, string> }) => {
+  io.on(CLUSTER_EVENT, (payload: { userId?: string; data?: Record<string, string> }) => {
     if (!payload?.userId || !payload.data) return;
     deliverLocal(String(payload.userId), payload.data);
   });

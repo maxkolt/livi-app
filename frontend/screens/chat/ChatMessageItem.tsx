@@ -1,3 +1,4 @@
+import type { ChatBubbleRow } from './chatList';
 // screens/chat/ChatMessageItem.tsx
 import React from "react";
 import {
@@ -14,7 +15,7 @@ import {
   type ViewStyle,
 } from "react-native";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
-import { Image as ExpoImage } from "expo-image";
+import { Image as ExpoImage, type ImageErrorEventData } from "expo-image";
 import * as FileSystem from "expo-file-system";
 import Svg, { Circle as SvgCircle, Defs, LinearGradient, Stop, G, Path } from "react-native-svg";
 import { useResolvedImageUri } from "../../hooks/useResolvedImageUri";
@@ -210,8 +211,28 @@ type ChatMessageItemLivi = {
   replyHighlightAccent: string;
 };
 
+// Older image implementations expose nativeEvent/message/code alongside expo-image's error field.
+type ImageLoadError = ImageErrorEventData & {
+  nativeEvent?: { error?: string };
+  message?: unknown;
+  code?: unknown;
+};
+type ImageLoadErrorDetails = {
+  messageId: string;
+  uri: string;
+  originalUri?: string;
+  errorType: string;
+  errorString: string;
+  nativeEvent?: ImageLoadError['nativeEvent'];
+  errorMessage?: unknown;
+  errorCode?: unknown;
+  errorKeys?: string[];
+  errorValues?: Record<string, string>;
+  serializationError?: string;
+};
+
 type ChatMessageItemProps = {
-  item: any;
+  item: ChatBubbleRow;
   currentUserId: string | null;
   readStatus?: ChatReadStatus;
   uploadStatus?: "sending" | "sent" | "failed";
@@ -219,9 +240,9 @@ type ChatMessageItemProps = {
     kind: "image",
     uri: string,
     name?: string,
-    album?: { uris: string[]; index: number; message: any },
+    album?: { uris: string[]; index: number; message: ChatBubbleRow },
   ) => void;
-  onPressAudio?: (item: any) => void;
+  onPressAudio?: (item: ChatBubbleRow) => void;
   playingAudioId: string | null;
   playingAudioState: {
     id: string;
@@ -229,7 +250,7 @@ type ChatMessageItemProps = {
     durationMs: number;
   } | null;
   onLongPressMessage: (
-    item: any,
+    item: ChatBubbleRow,
     layout: { x: number; y: number; width: number; height: number },
   ) => void;
   /** true = облако под chrome — не открывать меню и не анимировать. */
@@ -241,7 +262,7 @@ type ChatMessageItemProps = {
   }) => boolean;
   /** Long-press on one album tile — actions for one/all photos. */
   onLongPressAlbumTile?: (
-    item: any,
+    item: ChatBubbleRow,
     index: number,
     layout: { x: number; y: number; width: number; height: number },
   ) => void;
@@ -252,11 +273,11 @@ type ChatMessageItemProps = {
    * позицию облака чат замеряет сам через measureBubble, когда она нужна.
    */
   onMessagePress?: (
-    item: any,
+    item: ChatBubbleRow,
     measureBubble: (done: (layout?: { x: number; y: number; width: number; height: number }) => void) => void,
   ) => void;
   /** Тап по облаку звонка — перезвонить. */
-  onPressCallBubble?: (item: any) => void;
+  onPressCallBubble?: (item: ChatBubbleRow) => void;
   onReactionPress?: (messageId: string, emoji: string) => void;
   selectionMode: boolean;
   isSelected: boolean;
@@ -267,7 +288,7 @@ type ChatMessageItemProps = {
   onToggleAlbumTileSelect?: (messageId: string, index: number) => void;
   retryUiForId: string | null;
   onToggleRetryUi?: (id: string) => void;
-  onRetryFailed?: (item: any) => void;
+  onRetryFailed?: (item: ChatBubbleRow) => void;
   resolveMediaUri: (uri?: string) => string;
   peerDisplayName?: string;
   highlightedMessageId: string | null;
@@ -306,6 +327,10 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
     Platform.OS === 'android' && imageUriForItem && /^data:/i.test(imageUriForItem) ? imageUriForItem : ''
   );
   const fireLongPressWithLayout = React.useCallback(() => {
+    if (selectionMode) {
+      onToggleSelect?.(String(item.id));
+      return;
+    }
     const measure = () => {
       bubbleRef.current?.measureInWindow((x, y, w, h) => {
         const layout = { x, y, width: w, height: h };
@@ -318,8 +343,12 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
     } else {
       measure();
     }
-  }, [item, onLongPressMessage, isLayoutBlockedByChrome]);
+  }, [item, onLongPressMessage, isLayoutBlockedByChrome, selectionMode, onToggleSelect]);
   const openMessageActionsFromBubble = React.useCallback(() => {
+    if (selectionMode) {
+      onToggleSelect?.(String(item.id));
+      return;
+    }
     const measureThenMaybeOpen = () => {
       bubbleRef.current?.measureInWindow((x, y, w, h) => {
         const layout = { x, y, width: w, height: h };
@@ -329,7 +358,7 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
     };
     if (Platform.OS === 'android') requestAnimationFrame(measureThenMaybeOpen);
     else measureThenMaybeOpen();
-  }, [item, animateMessagePress, onLongPressMessage, isLayoutBlockedByChrome]);
+  }, [item, animateMessagePress, onLongPressMessage, isLayoutBlockedByChrome, selectionMode, onToggleSelect]);
   /** Ссылка на ролик (YouTube / TikTok / Instagram) — показываем карточкой с плеером. */
   const fliqLink = React.useMemo(
     () => (item.type === 'text' ? findFliqLink(String(item.text ?? '')) : null),
@@ -396,11 +425,11 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
       } else {
         throw new Error('Download failed: no URI returned');
       }
-    } catch (error: any) {
+    } catch (error) {
       logger.error('[ChatScreen] MessageItem: FileSystem download error', { 
         messageId: item.id, 
         uri, 
-        error: error?.message || String(error) 
+        error: (error as { message?: unknown } | null)?.message || String(error)
       });
       setImageLoadError(true);
     } finally {
@@ -579,9 +608,9 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
               recyclingKey={`message_image_${item.id}`}
               allowDownscaling={false}
               placeholder={null}
-              onError={(error: any) => {
+              onError={(error: ImageLoadError) => {
                 // КРИТИЧНО: Детальное логирование ошибки для диагностики
-                const errorDetails: any = {
+                const errorDetails: ImageLoadErrorDetails = {
                   messageId: item.id,
                   uri: imageUri,
                   originalUri: item.uri,
@@ -604,9 +633,9 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
                   const errorKeys = Object.keys(error || {});
                   if (errorKeys.length > 0) {
                     errorDetails.errorKeys = errorKeys;
-                    errorDetails.errorValues = errorKeys.reduce((acc: any, key: string) => {
+                    errorDetails.errorValues = errorKeys.reduce<Record<string, string>>((acc, key) => {
                       try {
-                        acc[key] = String(error[key]);
+                        acc[key] = String((error as Record<string, unknown>)[key]);
                       } catch {
                         acc[key] = '[unserializable]';
                       }
@@ -1054,6 +1083,10 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
 
     const checkbox = showSideCheckbox ? (
       <Pressable
+        testID="chat-select-checkbox"
+        accessibilityRole="checkbox"
+        accessibilityLabel={String(item.text || t("chatActionSelect", lang))}
+        accessibilityState={{ checked: !!isSelected }}
         onPress={() => onToggleSelect?.(String(item.id))}
         style={({ pressed }) => ({
           width: 26,
@@ -1089,7 +1122,7 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
       >
         {!isMyMessage && checkbox}
         <Pressable
-          // Звонок: тап — перезвонить (с подтверждением), зажатие — меню действий.
+          // Звонок: тап — перезвонить (с подтверждением), зажатие — выбрать.
           onPress={() => {
             if (selectionMode) {
               onToggleSelect?.(String(item.id));
@@ -1125,7 +1158,7 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
               showTail={!joinedBelow}
               underlay={bubblePlate}
             />
-            <MaterialCommunityIcons name={iconName as any} size={18} color={iconColor} />
+            <MaterialCommunityIcons name={iconName} size={18} color={iconColor} />
             <View style={{ flexShrink: 1, minWidth: 0 }}>
               <Text
                 style={{
@@ -1167,6 +1200,10 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
 
     const checkbox = (
       <Pressable
+        testID="chat-select-checkbox"
+        accessibilityRole="checkbox"
+        accessibilityLabel={String(item.text || t("chatActionSelect", lang))}
+        accessibilityState={{ checked: !!isSelected }}
         onPress={() => onToggleSelect?.(String(item.id))}
         style={({ pressed }) => ({
           width: 26,
@@ -1212,7 +1249,7 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
           {item.replyTo && (
             <Pressable
               disabled={!!selectionMode}
-              onPress={() => onPressReplyQuote?.(String(item.replyTo.id))}
+              onPress={() => onPressReplyQuote?.(String(item.replyTo!.id))}
               onLongPress={openMessageActionsFromBubble}
               delayLongPress={MESSAGE_LONG_PRESS_MS}
               style={({ pressed }) => ({
@@ -1245,6 +1282,8 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
           )}
           <Pressable
             ref={bubbleRef}
+            collapsable={false}
+            testID={`chat-message-${item.id}`}
             onPress={handleBubblePress}
             onLongPress={openMessageActionsFromBubble}
             delayLongPress={MESSAGE_LONG_PRESS_MS}
@@ -1286,6 +1325,7 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
               {reactionList.map(({ emoji, count }) => (
                 <Pressable
                   key={emoji}
+                  disabled={selectionMode}
                   onPress={() => onReactionPress?.(item.id, emoji)}
                   onLongPress={openMessageActionsFromBubble}
                   delayLongPress={MESSAGE_LONG_PRESS_MS}
@@ -1344,6 +1384,10 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
       {/* Чекбокс выбора (режим "Выбрать") — рядом с облаком и по центру */}
       {showSideCheckbox && !isMyMessage && (
         <Pressable
+          testID="chat-select-checkbox"
+          accessibilityRole="checkbox"
+          accessibilityLabel={String(item.text || t("chatActionSelect", lang))}
+          accessibilityState={{ checked: !!isSelected }}
           onPress={() => onToggleSelect?.(String(item.id))}
           style={({ pressed }) => ({
             width: 26,
@@ -1391,7 +1435,10 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
                 }
               : { padding: 12 };
             const bubbleBody = (
-              <View style={{ maxWidth: '100%' }}>
+              <View
+                style={{ maxWidth: '100%' }}
+                pointerEvents={selectionMode && !isAlbumImage ? 'none' : 'auto'}
+              >
           {/* Основной контент */}
           {renderContent()}
           
@@ -1510,7 +1557,7 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
               {item.replyTo && (
                 <Pressable
                   disabled={!!selectionMode}
-                  onPress={() => onPressReplyQuote?.(String(item.replyTo.id))}
+                  onPress={() => onPressReplyQuote?.(String(item.replyTo!.id))}
                   onLongPress={openMessageActionsFromBubble}
                   delayLongPress={MESSAGE_LONG_PRESS_MS}
                   style={({ pressed }) => ({
@@ -1571,6 +1618,8 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
                 >
                   <Pressable
                     ref={bubbleRef}
+                    collapsable={false}
+                    testID={`chat-message-${item.id}`}
                     onPress={handleBubblePress}
                     onLongPress={openMessageActionsFromBubble}
                     delayLongPress={MESSAGE_LONG_PRESS_MS}
@@ -1595,6 +1644,8 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
           return (
             <Pressable
               ref={bubbleRef}
+              collapsable={false}
+              testID={`chat-message-${item.id}`}
               onPress={handleBubblePress}
               onLongPress={openMessageActionsFromBubble}
               delayLongPress={MESSAGE_LONG_PRESS_MS}
@@ -1625,6 +1676,10 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
 
       {showSideCheckbox && isMyMessage && (
         <Pressable
+          testID="chat-select-checkbox"
+          accessibilityRole="checkbox"
+          accessibilityLabel={String(item.text || t("chatActionSelect", lang))}
+          accessibilityState={{ checked: !!isSelected }}
           onPress={() => onToggleSelect?.(String(item.id))}
           style={({ pressed }) => ({
             width: 26,

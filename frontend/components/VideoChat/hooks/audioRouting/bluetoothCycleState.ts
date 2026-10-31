@@ -1,3 +1,4 @@
+import type { CallAudioGlobals } from '../../../../utils/callStateTypes';
 /**
  * Окна и флаги вокруг Bluetooth-гарнитуры во время звонка.
  *
@@ -26,7 +27,7 @@ const BT_SCO_SETTLE_MS = 2500;
 
 export function readBtAutoSuppressUntil(): number {
   try {
-    return Number((global as any).__btAutoSuppressUntilRef?.current || 0);
+    return Number((global as CallAudioGlobals).__btAutoSuppressUntilRef?.current || 0);
   } catch {
     return 0;
   }
@@ -35,13 +36,13 @@ export function readBtAutoSuppressUntil(): number {
 export function armBtAutoSuppress(ms = BT_AUTO_SUPPRESS_MS): void {
   const until = Date.now() + ms;
   try {
-    (global as any).__btAutoSuppressUntilRef = { current: until };
+    (global as CallAudioGlobals).__btAutoSuppressUntilRef = { current: until };
   } catch {}
 }
 
 export function clearBtAutoSuppress(): void {
   try {
-    (global as any).__btAutoSuppressUntilRef = { current: 0 };
+    (global as CallAudioGlobals).__btAutoSuppressUntilRef = { current: 0 };
   } catch {}
 }
 
@@ -51,20 +52,20 @@ export function clearBtAutoSuppress(): void {
  */
 export function armBtKeepInCycleAfterManualLeave(): void {
   try {
-    (global as any).__btKeepInCycleAfterManualLeaveRef = { current: true };
-    (global as any).__btRemovedFromCycleByUnplugRef = { current: false };
+    (global as CallAudioGlobals).__btKeepInCycleAfterManualLeaveRef = { current: true };
+    (global as CallAudioGlobals).__btRemovedFromCycleByUnplugRef = { current: false };
   } catch {}
 }
 
 export function clearBtKeepInCycleAfterManualLeave(): void {
   try {
-    (global as any).__btKeepInCycleAfterManualLeaveRef = { current: false };
+    (global as CallAudioGlobals).__btKeepInCycleAfterManualLeaveRef = { current: false };
   } catch {}
 }
 
 export function isBtKeepInCycleAfterManualLeave(): boolean {
   try {
-    return !!(global as any).__btKeepInCycleAfterManualLeaveRef?.current;
+    return !!(global as CallAudioGlobals).__btKeepInCycleAfterManualLeaveRef?.current;
   } catch {
     return false;
   }
@@ -72,20 +73,20 @@ export function isBtKeepInCycleAfterManualLeave(): boolean {
 
 export function markBtRemovedFromCycleByUnplug(): void {
   try {
-    (global as any).__btRemovedFromCycleByUnplugRef = { current: true };
-    (global as any).__btKeepInCycleAfterManualLeaveRef = { current: false };
+    (global as CallAudioGlobals).__btRemovedFromCycleByUnplugRef = { current: true };
+    (global as CallAudioGlobals).__btKeepInCycleAfterManualLeaveRef = { current: false };
   } catch {}
 }
 
 export function clearBtRemovedFromCycleByUnplug(): void {
   try {
-    (global as any).__btRemovedFromCycleByUnplugRef = { current: false };
+    (global as CallAudioGlobals).__btRemovedFromCycleByUnplugRef = { current: false };
   } catch {}
 }
 
 export function isBtRemovedFromCycleByUnplug(): boolean {
   try {
-    return !!(global as any).__btRemovedFromCycleByUnplugRef?.current;
+    return !!(global as CallAudioGlobals).__btRemovedFromCycleByUnplugRef?.current;
   } catch {
     return false;
   }
@@ -109,20 +110,20 @@ export function shouldShowBluetoothInCycle(opts?: {
 export function armBtWearSticky(ms = BT_WEAR_STICKY_MS): void {
   const until = Date.now() + ms;
   try {
-    const prev = Number((global as any).__btWearStickyUntilRef?.current || 0);
-    (global as any).__btWearStickyUntilRef = { current: Math.max(prev, until) };
+    const prev = Number((global as CallAudioGlobals).__btWearStickyUntilRef?.current || 0);
+    (global as CallAudioGlobals).__btWearStickyUntilRef = { current: Math.max(prev, until) };
   } catch {}
 }
 
 export function clearBtWearSticky(): void {
   try {
-    (global as any).__btWearStickyUntilRef = { current: 0 };
+    (global as CallAudioGlobals).__btWearStickyUntilRef = { current: 0 };
   } catch {}
 }
 
 export function isBtWearStickyActive(): boolean {
   try {
-    return Date.now() < Number((global as any).__btWearStickyUntilRef?.current || 0);
+    return Date.now() < Number((global as CallAudioGlobals).__btWearStickyUntilRef?.current || 0);
   } catch {
     return false;
   }
@@ -132,20 +133,20 @@ export function isBtWearStickyActive(): boolean {
 export function armExpectBtReconnect(ms = BT_EXPECT_RECONNECT_MS): void {
   const until = Date.now() + ms;
   try {
-    const prev = Number((global as any).__btExpectReconnectUntilRef?.current || 0);
-    (global as any).__btExpectReconnectUntilRef = { current: Math.max(prev, until) };
+    const prev = Number((global as CallAudioGlobals).__btExpectReconnectUntilRef?.current || 0);
+    (global as CallAudioGlobals).__btExpectReconnectUntilRef = { current: Math.max(prev, until) };
   } catch {}
 }
 
 export function clearExpectBtReconnect(): void {
   try {
-    (global as any).__btExpectReconnectUntilRef = { current: 0 };
+    (global as CallAudioGlobals).__btExpectReconnectUntilRef = { current: 0 };
   } catch {}
 }
 
 export function isExpectBtReconnectActive(): boolean {
   try {
-    return Date.now() < Number((global as any).__btExpectReconnectUntilRef?.current || 0);
+    return Date.now() < Number((global as CallAudioGlobals).__btExpectReconnectUntilRef?.current || 0);
   } catch {
     return false;
   }
@@ -155,7 +156,7 @@ export function isExpectBtReconnectActive(): boolean {
 export function isBtScoSettleActive(lastBtApplyAt: number, ms = BT_SCO_SETTLE_MS): boolean {
   const last = Math.max(
     lastBtApplyAt,
-    Number((global as any).__lastBluetoothRouteApplyAtRef?.current || 0),
+    Number((global as CallAudioGlobals).__lastBluetoothRouteApplyAtRef?.current || 0),
   );
   return Date.now() - last < ms;
 }

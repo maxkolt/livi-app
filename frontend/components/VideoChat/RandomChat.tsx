@@ -1,3 +1,6 @@
+import type { CallAudioGlobals, CallRef } from '../../utils/callStateTypes';
+import type { NavigationPerfGlobals } from '../../utils/navigationPerf';
+import type { CallScreenReturnTarget } from '../../navigation/types';
 /**
  * RandomChat - Компонент для рандомного видеочата
  * Использует компоненты: RTCView (для отображения видео), AwayPlaceholder
@@ -58,11 +61,22 @@ import { useRandomChatFriends } from './randomChat/useRandomChatFriends';
 import { FriendRequestModal } from './randomChat/FriendRequestModal';
 import { ReportPartnerModal, type ReportReason } from './randomChat/ReportPartnerModal';
 
+type RandomChatGlobals = CallAudioGlobals & NavigationPerfGlobals & {
+  __randomChatPresenceBusyRef?: CallRef<boolean>;
+  __randomChatHadPresenceBusyRef?: CallRef<boolean>;
+};
+
+// Preserve the existing platform-specific RTCView configuration.
+type RandomChatRTCViewProps = React.ComponentProps<typeof RTCView> & {
+  stream?: MediaStream | null;
+  useTextureView?: boolean;
+};
+
 type Props = { 
   route?: { 
     params?: { 
       myUserId?: string; 
-      returnTo?: { name: string; params?: any };
+      returnTo?: CallScreenReturnTarget;
     } 
   } 
 };
@@ -92,7 +106,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     firstRenderLoggedRef.current = true;
     try {
       const now = Date.now();
-      const g = global as any;
+      const g = global as RandomChatGlobals;
       const t0 = Number(g.__searchNavT0 || now);
       const steps = Array.isArray(g.__searchNavSteps) ? g.__searchNavSteps : [];
       steps.push({ step: 'RandomChat.firstRender', at: now, elapsedMs: now - t0 });
@@ -196,9 +210,9 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     // - поиск/сессия не запущены (started=false), ИЛИ
     // - сессия завершена и экран в неактивном состоянии (isInactiveState=true)
     // Тогда входящий должен идти через ГЛОБАЛЬНУЮ full-screen модалку (App.tsx) с рингтоном/вибрацией.
-    (global as any).__isInactiveStateRef = { current: (!started || isInactiveState) };
+    (global as RandomChatGlobals).__isInactiveStateRef = { current: (!started || isInactiveState) };
     return () => {
-      (global as any).__isInactiveStateRef = { current: false };
+      (global as RandomChatGlobals).__isInactiveStateRef = { current: false };
     };
   }, [isInactiveState, started]);
 
@@ -367,7 +381,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       // Сразу снимаем busy у друзей: иначе гонка с next() собеседника / presence tick
       // может оставить бейдж «Занято» после бана.
       try {
-        const g = global as any;
+        const g = global as RandomChatGlobals;
         g.__randomChatPresenceBusyRef = g.__randomChatPresenceBusyRef || { current: false };
         g.__randomChatPresenceBusyRef.current = false;
         g.__randomChatHadPresenceBusyRef = g.__randomChatHadPresenceBusyRef || { current: false };
@@ -401,7 +415,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   useEffect(() => {
     const effectStart = Date.now();
     try {
-      const g = global as any;
+      const g = global as RandomChatGlobals;
       const t0 = Number(g.__searchNavT0 || effectStart);
       const steps = Array.isArray(g.__searchNavSteps) ? g.__searchNavSteps : [];
       steps.push({ step: 'RandomChat.sessionEffect.start', at: effectStart, elapsedMs: effectStart - t0 });
@@ -414,7 +428,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     } catch {}
     const config: WebRTCSessionConfig = {
       myUserId,
-      isSimulator: Platform.OS === 'ios' && !(Device as any)?.isDevice,
+      isSimulator: Platform.OS === 'ios' && !(Device)?.isDevice,
       callbacks: {
         onLocalStreamChange: (stream) => {
           setLocalStream(stream);
@@ -507,7 +521,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     setRemoteCamSide(session.getRemoteCamSide?.() ?? 'front');
     try {
       const now = Date.now();
-      const g = global as any;
+      const g = global as RandomChatGlobals;
       const t0 = Number(g.__searchNavT0 || now);
       const steps = Array.isArray(g.__searchNavSteps) ? g.__searchNavSteps : [];
       steps.push({
@@ -707,7 +721,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   // If we had remote video before, remote cam is ON, but video is not renderable for a long time,
   // treat it as a network-origin failure and show a full-screen overlay.
   const remoteStreamForUi = remoteStream || remoteStreamRef.current || lastGoodRemoteStreamRef.current;
-  const remoteTrackForUi = (remoteStreamForUi as any)?.getVideoTracks?.()?.[0];
+  const remoteTrackForUi = (remoteStreamForUi)?.getVideoTracks?.()?.[0];
   const remoteVideoRenderableForUi =
     !!remoteTrackForUi &&
     remoteTrackForUi.readyState === 'live' &&
@@ -893,7 +907,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     
     // 3. КРИТИЧНО: Проверка состояния подключения комнаты
     // Защита от нажатий во время подключения к LiveKit
-    const room = (session as any).room;
+    const room = session['room'];
     if (room && (room.state === 'connecting' || room.state === 'reconnecting')) {
       return;
     }
@@ -957,15 +971,15 @@ const RandomChat: React.FC<Props> = ({ route }) => {
         if (Platform.OS === 'ios') {
           needsIOSUpdateAfterNextRef.current = true;
         }
-    } catch (e: any) {
+    } catch (e) {
       if (!nextStarted) {
         restoreUiAfterRejectedNext();
       }
       // КРИТИЧНО: Улучшенная обработка ошибок для предотвращения крашей на Android
-      const errorMsg = e?.message || String(e || '');
+      const errorMsg = (e as Error | null | undefined)?.message || String(e || '');
       logger.error('[RandomChat] Error next:', {
         error: errorMsg,
-        errorName: e?.name,
+        errorName: (e as Error | null | undefined)?.name,
         // Не логируем полный объект ошибки - это может вызвать проблемы на Android
       });
       
@@ -1223,7 +1237,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   }, [partnerId, roomId, started, loading]);
 
   useEffect(() => {
-    const g = global as any;
+    const g = global as RandomChatGlobals;
     if (!g.__randomChatPresenceBusyRef) g.__randomChatPresenceBusyRef = { current: false };
     if (!g.__randomChatHadPresenceBusyRef) g.__randomChatHadPresenceBusyRef = { current: false };
 
@@ -1249,7 +1263,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
 
   useEffect(() => {
     const off = onConnected(() => {
-      const g = global as any;
+      const g = global as RandomChatGlobals;
       if (!computeRandomPresenceShouldBeBusy()) return;
       try {
         emitRandomPresenceBusy({ force: true });
@@ -1274,7 +1288,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       if (!computeRandomPresenceShouldBeBusy()) return;
       try {
         emitRandomPresenceBusy({ force: true });
-        const g = global as any;
+        const g = global as RandomChatGlobals;
         g.__randomChatHadPresenceBusyRef = g.__randomChatHadPresenceBusyRef || { current: false };
         g.__randomChatHadPresenceBusyRef.current = true;
         g.__randomChatPresenceBusyRef = g.__randomChatPresenceBusyRef || { current: false };
@@ -1294,7 +1308,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   ]);
 
   useEffect(() => {
-    const g = global as any;
+    const g = global as RandomChatGlobals;
     return () => {
       g.__randomChatPresenceBusyRef = g.__randomChatPresenceBusyRef || { current: false };
       g.__randomChatPresenceBusyRef.current = false;
@@ -1577,7 +1591,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
             id: nextNavigationPerfId('random-exit'),
             startedAt: navigationPerfNow(),
           };
-          (global as any).__randomExitPerfTrace = exitTrace;
+          (global as RandomChatGlobals).__randomExitPerfTrace = exitTrace;
           logNavigationPerf('random.exitPress', { id: exitTrace.id, source: 'hardwareBack' });
           navigation.goBack();
           return true;
@@ -1595,7 +1609,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       leavingRef.current = false;
       try {
         const now = Date.now();
-        const g = global as any;
+        const g = global as RandomChatGlobals;
         const t0 = Number(g.__searchNavT0 || 0);
         // Один лог на CTA: повторные focus после setRouteName/remount не время открытия.
         if (t0 > 0 && !g.__searchNavFocusLogged) {
@@ -1643,7 +1657,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
         
         leavingRef.current = true;
         try {
-          const exitTrace = (global as any).__randomExitPerfTrace;
+          const exitTrace = (global as RandomChatGlobals).__randomExitPerfTrace;
           if (exitTrace && !exitTrace.blurLogged) {
             exitTrace.blurLogged = true;
             logNavigationPerf('random.blur', {
@@ -1745,7 +1759,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
             // 2) Camera off: показываем "Отошел" ОВЕРЛЕЕМ, не ломая видеопоток/RTCView
             // 3) Camera on: "Отошел" исчезает только когда видео реально снова renderable (без лоадера)
             const streamToRender = remoteStream || remoteStreamRef.current || lastGoodRemoteStreamRef.current;
-            const videoTrack = (streamToRender as any)?.getVideoTracks?.()?.[0];
+            const videoTrack = (streamToRender)?.getVideoTracks?.()?.[0];
             const canRenderVideo =
               !!videoTrack &&
               videoTrack.readyState === 'live' &&
@@ -1781,7 +1795,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
 
             const streamURL = streamToRender?.toURL?.() || streamToRender?.id;
             const rtcViewKey = `remote-${streamToRender?.id || 'none'}-${remoteViewKey}`;
-            const rtcViewProps: any = Platform.OS === 'android'
+            const rtcViewProps: RandomChatRTCViewProps = Platform.OS === 'android'
               ? {
                   stream: streamToRender,
                   streamURL,
@@ -1798,7 +1812,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
                 {streamToRender ? (
                   <RTCView
                     key={rtcViewKey}
-                    {...(rtcViewProps as any)}
+                    {...(rtcViewProps)}
                     style={styles.rtc}
                     objectFit="cover"
                     mirror={remoteCamSide === 'front'}
@@ -1984,7 +1998,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
                         streamURL: localStreamURL, 
                         renderToHardwareTextureAndroid: true,
                         useTextureView: true,
-                      } as any;
+                      } satisfies RandomChatRTCViewProps;
                     })()
                   : { streamURL: localStreamURL! }; // iOS: используем streamURL
                 

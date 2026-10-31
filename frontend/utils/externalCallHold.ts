@@ -1,3 +1,5 @@
+import type { CallAudioGlobals } from './callStateTypes';
+import type { VideoCallSession } from '../src/webrtc/sessions/VideoCallSession';
 /**
  * Внешний звонок (GSM/WA/TG) во время LiVi audio/video.
  *
@@ -52,6 +54,7 @@ let lastMediaFocusLossHint: NativeHoldHint = {};
 let callMediaEstablishedOnce = false;
 /** callId, которому принадлежат local hold и bootstrap/media guards. */
 let externalHoldCallId: string | null = null;
+let focusDecisionGeneration = 0;
 
 export function isExternalCallHoldActive(): boolean {
   return holdActive;
@@ -70,7 +73,7 @@ export function shouldSuppressPeerReconnectForExternalHold(): boolean {
     return true;
   }
   try {
-    const s = (global as any).__webrtcSessionRef?.current;
+    const s = (global as CallAudioGlobals).__webrtcSessionRef?.current;
     if (s?.getLocalExternalHoldActive?.() || s?.getPartnerExternalHoldActive?.()) return true;
   } catch {}
   return false;
@@ -99,16 +102,16 @@ function clearNativeHoldSticky(): void {
   } catch {}
 }
 
-type HoldSession = {
-  enterExternalCallHold?: () => Promise<void>;
-  exitExternalCallHold?: () => Promise<void>;
-  getLocalExternalHoldActive?: () => boolean;
-  clearPeerReconnectingForExternalHold?: () => void;
-  isEnded?: () => boolean;
-  getLiveKitRoomState?: () => string | undefined;
-  getRemoteStream?: () => unknown;
-  applyRemoteExternalHoldState?: (hold: boolean, roomId?: string | null) => void;
-};
+type HoldSession = Partial<Pick<VideoCallSession,
+  | 'enterExternalCallHold'
+  | 'exitExternalCallHold'
+  | 'getLocalExternalHoldActive'
+  | 'clearPeerReconnectingForExternalHold'
+  | 'isEnded'
+  | 'getLiveKitRoomState'
+  | 'getRemoteStream'
+  | 'applyRemoteExternalHoldState'
+>>;
 
 type NativeHoldHint = {
   focusChange?: number;
@@ -123,11 +126,14 @@ type ProbeResult = {
   focusChange?: number;
   audioMode?: number;
   pendingAgeMs?: number;
+  screenInteractive?: boolean;
+  keyguardLocked?: boolean;
+  foreignVoicePlayback?: boolean;
 };
 
 function currentSession(): HoldSession | null {
   try {
-    return (global as any).__webrtcSessionRef?.current ?? null;
+    return (global as CallAudioGlobals).__webrtcSessionRef?.current ?? null;
   } catch {
     return null;
   }
@@ -168,6 +174,7 @@ function clearCallMediaEstablished(): void {
 }
 
 function resetExternalCallHoldRuntimeState(): void {
+  focusDecisionGeneration++;
   clearBackgroundTelephonyTimers();
   clearForegroundExitTimers();
   clearDeferredFocusHoldTimer();
@@ -263,7 +270,11 @@ function tryExitExternalHold(reason: string): void {
   }
 }
 
-function tryEnterExternalHold(reason: string, hint: NativeHoldHint): void {
+async function tryEnterExternalHold(
+  reason: string,
+  hint: NativeHoldHint,
+  sampledProbe?: ProbeResult,
+): Promise<void> {
   if (!isOngoingCallSession()) {
     logger.info('[externalCallHold] skip — no ongoing call session', { reason });
     clearNativeHoldSticky();
@@ -288,7 +299,31 @@ function tryEnterExternalHold(reason: string, hint: NativeHoldHint): void {
     return;
   }
 
-  const telephony = isTelephonyAudioMode(hint.audioMode, hint.telephonyLikely);
+  let telephony = isTelephonyAudioMode(hint.audioMode, hint.telephonyLikely);
+  let probe = sampledProbe;
+  if (!telephony && Platform.OS === 'android') {
+    const generation = ++focusDecisionGeneration;
+    if (!probe) {
+      try {
+        probe = await NativeModules.LiviAppModule?.probeExternalCallHoldSignal?.();
+      } catch {}
+    }
+    // A delayed native reply must not mute a new/ended call, or undo a focus gain.
+    if (generation !== focusDecisionGeneration || session !== currentSession() ||
+        !isOngoingCallSession() || holdActive || !canEnterHoldForSession(session)) return;
+    telephony = probe?.telephony === true || isTelephonyAudioMode(probe?.audioMode);
+    if (!telephony && probe?.foreignVoicePlayback !== true &&
+        probe?.screenInteractive !== true) {
+      // Screen off / keyguard is not another call. Two focus owners in our own
+      // process can emit LOSS_TRANSIENT here; muting both tracks would create silence.
+      // A foreign call UI can wake the display while keyguard remains locked:
+      // in that case preserve the normal focus-based hold path.
+      logger.info('[externalCallHold] ignore unconfirmed focus loss with locked display', { reason });
+      clearMediaFocusLossNote();
+      return;
+    }
+  }
+  const foreignVoice = probe?.foreignVoicePlayback === true;
   const focusLoss = isExternalFocusLoss(hint.focusChange);
   const recentFocus =
     lastMediaFocusLossAt > 0 && Date.now() - lastMediaFocusLossAt < DEFERRED_FOCUS_HOLD_MS;
@@ -296,7 +331,7 @@ function tryEnterExternalHold(reason: string, hint: NativeHoldHint): void {
     AppState.currentState === 'background' || AppState.currentState === 'inactive';
 
   // Home без чужого звонка: нет focus-loss и нет telephony.
-  if (inBackground && !telephony && !focusLoss && !recentFocus) {
+  if (!telephony && !foreignVoice && !focusLoss && !recentFocus) {
     logger.info('[externalCallHold] ignore — background without telephony/focus loss', {
       reason,
       focusChange: hint.focusChange,
@@ -308,7 +343,7 @@ function tryEnterExternalHold(reason: string, hint: NativeHoldHint): void {
   // Focus в foreground без telephony: телефонный UI часто ещё «active» на 100–800мс
   // после LOSS (OEM: notification/popup call UI). Не чистим sticky на первом тике —
   // иначе background на ~30–200мс позже теряет recentFocus и hold не открывается.
-  if (!inBackground && !telephony && focusLoss) {
+  if (!inBackground && !telephony && !foreignVoice && focusLoss) {
     noteMediaFocusLoss(hint);
     logger.info('[externalCallHold] defer — foreground focus, wait background/telephony', {
       reason,
@@ -361,6 +396,7 @@ function tryEnterExternalHold(reason: string, hint: NativeHoldHint): void {
     audioMode: hint.audioMode,
     appState: AppState.currentState,
   });
+  focusDecisionGeneration++;
   try {
     session.clearPeerReconnectingForExternalHold?.();
   } catch {}
@@ -433,23 +469,13 @@ async function pollProbeAndMaybeHold(reason: string): Promise<void> {
     const recentFocus =
       lastMediaFocusLossAt > 0 && Date.now() - lastMediaFocusLossAt < DEFERRED_FOCUS_HOLD_MS;
     if (!telephony && !freshPending && !recentFocus) {
-      if (probe.focusLost === true) {
-        // Во время активного звонка focus часто держит InCallManager, а не LiviAppModule.
-        // Если уже background и медиа было — это внешний звонок/оверлей, не «stale bootstrap».
-        const bg =
-          AppState.currentState === 'background' || AppState.currentState === 'inactive';
-        const session = currentSession();
-        if (bg && session && canEnterHoldForSession(session)) {
-          tryEnterExternalHold(`${reason}_focus_lost_background`, {
-            focusChange: ANDROID_AUDIOFOCUS_LOSS_TRANSIENT,
-            audioMode: probe.audioMode,
-          });
-          return;
-        }
+      if (probe.focusLost === true && !probe.foreignVoicePlayback) {
+        // Old focusLost can belong to InCallManager in this same process.
+        // Do not fabricate a new LOSS_TRANSIENT just because AppState is background.
         logger.info('[externalCallHold] probe ignore stale focusLost', { reason, probe });
         clearNativeHoldSticky();
       }
-      return;
+      if (!probe.foreignVoicePlayback) return;
     }
     logger.info('[externalCallHold] probe hit', {
       reason,
@@ -457,7 +483,7 @@ async function pollProbeAndMaybeHold(reason: string): Promise<void> {
       freshPending,
       recentFocus,
     });
-    tryEnterExternalHold(reason, {
+    await tryEnterExternalHold(reason, {
       telephonyLikely: telephony,
       focusChange:
         freshPending || recentFocus
@@ -468,7 +494,7 @@ async function pollProbeAndMaybeHold(reason: string): Promise<void> {
             ? ANDROID_AUDIOFOCUS_LOSS_TRANSIENT
             : undefined,
       audioMode: probe.audioMode,
-    });
+    }, probe);
   } catch {}
 }
 
@@ -538,6 +564,7 @@ function onAboutToEnterSystemPiP(): void {
 }
 
 function onResumed(): void {
+  focusDecisionGeneration++;
   void (async () => {
     if (Platform.OS === 'android') {
       try {
@@ -587,6 +614,8 @@ function onInCallManagerAudioFocusChange(data?: { eventCode?: number; eventText?
     focusChange === AudioManagerGainCodes.GAIN_TRANSIENT_MAY_DUCK ||
     focusChange === AudioManagerGainCodes.GAIN_TRANSIENT_EXCLUSIVE
   ) {
+    focusDecisionGeneration++;
+    clearMediaFocusLossNote();
     if (!holdActive && !currentSession()?.getLocalExternalHoldActive?.()) return;
     logger.info('[externalCallHold] InCallManager focus gain', {
       focusChange,

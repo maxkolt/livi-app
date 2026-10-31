@@ -7,7 +7,7 @@
 #
 # Без аргументов — все сценарии по порядку. Экран CALLEE должен быть включён и разблокирован.
 # Сценарии: killed_decline killed_answer reopen_after_answer native_decline_foreground
-#           native_decline_overlay video_pip_earpiece video_pip_speaker
+#           native_decline_overlay video_pip_earpiece video_pip_speaker screen_off_audio_5m
 # Для убитого приложения Android сам решает, разрешить ли фоновый старт экрана входящего: показывается
 # нативный экран или плашка с кнопками. Подходят оба пути — скрипт пишет, какой был.
 set -u
@@ -42,6 +42,17 @@ flow() {
 audio_mode() { adb -s "$1" shell dumpsys audio | grep -A1 'Audio mode:' | tail -1 | grep -oE 'MODE_[A-Z_]+'; }
 incoming_fgs() { adb -s "$1" shell dumpsys activity services "$PKG" | grep -c IncomingCallForegroundService; }
 incoming_notif() { adb -s "$1" shell dumpsys notification --noredact | grep -c "pkg=$PKG.*id=1001"; }
+active_call_fgs() { adb -s "$1" shell dumpsys activity services "$PKG" | grep -c ActiveCallForegroundService; }
+call_wake_lock() {
+  # Samsung also prints historical ACQ/REL entries below this section.
+  # Counting the entire dump would accept a lock that has already been released.
+  adb -s "$1" shell dumpsys power | sed -n '/Wake Locks: size=/,/Suspend Blockers: size=/p' | grep -c 'LiVi:ActiveCall'
+}
+display_state() {
+  # Samsung can report mWakefulness=Dozing with a fully switched-off display.
+  # Check the display itself instead of assuming that only Asleep means screen off.
+  adb -s "$1" shell dumpsys display | sed -n 's/^  mScreenState=//p' | head -1 | tr -d '\r'
+}
 
 # expect_mode <устройство> <режим> <секунд> — режим звука устанавливается не позже срока.
 expect_mode() {
@@ -224,7 +235,7 @@ video_pip_round() {
   expect_mode "$CALLEE" MODE_IN_COMMUNICATION 2
   expect_route "$CALLEE" "$want_route"
   reopen "$CALLEE"
-  flow "$CALLEE" back-in-call.yaml
+  flow "$CALLEE" assert-full-call.yaml
   expect_pinned "$CALLEE" no 5
   expect_route "$CALLEE" "$want_route"
 
@@ -234,7 +245,11 @@ video_pip_round() {
   expect_pinned "$CALLEE" yes 5
   expect_route "$CALLEE" "$want_route"
   reopen "$CALLEE"
-  flow "$CALLEE" back-in-call.yaml
+  flow "$CALLEE" assert-in-app-pip.yaml
+  expect_pinned "$CALLEE" no 5
+  expect_camera "$CALLEE" on 2
+  expect_route "$CALLEE" "$want_route"
+  flow "$CALLEE" pip-expand.yaml
   expect_route "$CALLEE" "$want_route"
 
   echo "  · «Недавние» → системный PiP → назад"
@@ -244,7 +259,7 @@ video_pip_round() {
   adb -s "$CALLEE" shell input keyevent KEYCODE_HOME
   sleep 1
   reopen "$CALLEE"
-  flow "$CALLEE" back-in-call.yaml
+  flow "$CALLEE" assert-full-call.yaml
   expect_route "$CALLEE" "$want_route"
   expect_camera "$CALLEE" on 2
 
@@ -261,6 +276,76 @@ video_pip_round() {
 scenario_video_pip_earpiece() { video_pip_round earpiece; }
 scenario_video_pip_speaker() { video_pip_round speaker; }
 
+# Реальный screen-off regression: оба участника остаются с выключенными экранами пять минут.
+# Каждые 5 с проверяем процесс, active-call FGS, partial wake lock, audio mode и выбранный маршрут.
+# Это проверка жизненного цикла; наличие FGS/режима само по себе не доказывает передачу звука.
+# Параллельно проверяйте RTP/звуковые счётчики и слышимость в обе стороны.
+scenario_screen_off_audio_5m() {
+  local caller_route callee_route elapsed dev want_route got_mode got_route got_fgs got_lock got_display pid failure
+  flow "$CALLEE" smoke.yaml || return
+  start_call || return
+  flow "$CALLEE" native-answer.yaml || return
+  flow "$CALLER" in-call.yaml || return
+  expect_mode "$CALLER" MODE_IN_COMMUNICATION 4
+  expect_mode "$CALLEE" MODE_IN_COMMUNICATION 4
+  caller_route=$(route "$CALLER")
+  callee_route=$(route "$CALLEE")
+  [ -n "$caller_route" ] && ok "исходный маршрут $caller_route ($CALLER)" || bad "исходный маршрут не определён ($CALLER)"
+  [ -n "$callee_route" ] && ok "исходный маршрут $callee_route ($CALLEE)" || bad "исходный маршрут не определён ($CALLEE)"
+
+  adb -s "$CALLER" shell input keyevent KEYCODE_SLEEP
+  adb -s "$CALLEE" shell input keyevent KEYCODE_SLEEP
+  sleep 1
+  echo "  · оба экрана выключены; контроль звонка 300 с"
+  failure=""
+  for elapsed in $(seq 0 5 300); do
+    for dev in "$CALLER" "$CALLEE"; do
+      if [ "$dev" = "$CALLER" ]; then want_route=$caller_route; else want_route=$callee_route; fi
+      pid=$(adb -s "$dev" shell pidof "$PKG" | tr -d '\r')
+      got_fgs=$(active_call_fgs "$dev")
+      got_lock=$(call_wake_lock "$dev")
+      got_mode=$(audio_mode "$dev")
+      got_route=$(route "$dev")
+      got_display=$(display_state "$dev")
+      if [ -z "$pid" ]; then
+        failure="процесс звонка завершился на $dev через ${elapsed}с"
+      elif [ "$got_fgs" = 0 ]; then
+        failure="ActiveCallForegroundService остановлен на $dev через ${elapsed}с"
+      elif [ "$got_lock" = 0 ]; then
+        failure="partial wake lock потерян на $dev через ${elapsed}с"
+      elif [ "$got_display" != OFF ]; then
+        failure="дисплей $got_display вместо OFF на $dev через ${elapsed}с"
+      elif [ "$got_mode" != MODE_IN_COMMUNICATION ]; then
+        failure="режим $got_mode вместо MODE_IN_COMMUNICATION на $dev через ${elapsed}с"
+      elif [ -n "$want_route" ] && [ "$got_route" != "$want_route" ]; then
+        failure="маршрут $got_route вместо $want_route на $dev через ${elapsed}с"
+      fi
+      [ -z "$failure" ] || break
+    done
+    if [ -n "$failure" ]; then
+      bad "$failure"
+      break
+    fi
+    if [ $((elapsed % 30)) = 0 ]; then
+      echo "  · ${elapsed}/300 с: оба процесса, FGS, wake lock, audio mode и маршруты в норме"
+    fi
+    [ "$elapsed" = 300 ] || sleep 5
+  done
+  [ -n "$failure" ] || ok "звонок выдержал 300 с с выключенными экранами на обоих устройствах"
+
+  for dev in "$CALLER" "$CALLEE"; do
+    adb -s "$dev" shell input keyevent KEYCODE_WAKEUP
+    adb -s "$dev" shell wm dismiss-keyguard >/dev/null 2>&1 || true
+  done
+  reopen "$CALLEE"
+  flow "$CALLEE" back-in-call.yaml
+  expect_mode "$CALLEE" MODE_IN_COMMUNICATION 4
+  flow "$CALLEE" hangup.yaml
+  flow "$CALLER" call-gone.yaml
+  expect_mode "$CALLEE" MODE_NORMAL 4
+  expect_mode "$CALLER" MODE_NORMAL 4
+}
+
 # Экран CALLEE не гаснет и не блокируется посреди прогона; исходная настройка возвращается в конце.
 STAY_ON_BEFORE=$(adb -s "$CALLEE" shell settings get global stay_on_while_plugged_in | tr -d '\r')
 adb -s "$CALLEE" shell settings put global stay_on_while_plugged_in 7
@@ -268,7 +353,7 @@ trap 'adb -s "$CALLEE" shell settings put global stay_on_while_plugged_in "${STA
 adb -s "$CALLEE" shell input keyevent KEYCODE_WAKEUP
 
 ALL=(killed_decline killed_answer reopen_after_answer native_decline_foreground native_decline_overlay
-  video_pip_earpiece video_pip_speaker)
+  video_pip_earpiece video_pip_speaker screen_off_audio_5m)
 SCENARIOS=("$@")
 [ ${#SCENARIOS[@]} -eq 0 ] && SCENARIOS=("${ALL[@]}")
 

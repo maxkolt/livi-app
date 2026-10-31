@@ -20,6 +20,8 @@ export type HomeRouteParams = {
   openFriendsMenu?: boolean;
   /** @deprecated prefer openWelcomeChat / openWelcomeCalls */
   openFriendsTab?: boolean;
+  openWelcomeProfile?: boolean;
+  openFriendRequests?: boolean;
   openWelcomeCalls?: boolean;
   openWelcomeCallsMissed?: boolean;
   openWelcomeChat?: boolean;
@@ -31,3 +33,16 @@ export type MarkReadMenu = {
   friendId: string;
   type: 'video' | 'chat';
 } | null;
+
+/** Legacy refs used by home lists; each ref may be absent before its owner initializes. */
+export type HomeUiGlobals = typeof global & {
+  __currentChatPeerId?: string | null;
+  __lastOutgoingCancelAtRef?: { current: number };
+  __homeRowActionAtRef?: { current: number };
+  __lastCallLogForceUiAtRef?: { current: number };
+  __outgoingStartInFlightRef?: { current: boolean };
+  __outgoingCallUiActiveRef?: { current: boolean };
+  __outgoingCallScreenVisibleRef?: { current: boolean };
+  __outgoingRedialGraceUntilRef?: { current: number };
+  __videoCallPartnerUserIdRef?: { current: string | null };
+};

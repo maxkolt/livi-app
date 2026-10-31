@@ -1,3 +1,4 @@
+import type { ErrorDetails } from '../utils/runtimeTypes';
 import { Router } from 'express';
 import mongoose from 'mongoose';
 import User from '../models/User';
@@ -19,7 +20,7 @@ export default function createChatRouter() {
 
       // Stream Chat токен убран - больше не используется
       return res.json({ ok: true, token: 'stream_disabled' });
-    } catch (e: any) {
+    } catch (e: unknown) {
       console.error('[chat/token] error:', e);
       return res.status(500).json({ ok: false, error: 'token_failed' });
     }
@@ -35,8 +36,8 @@ export default function createChatRouter() {
       }
 
       const [me, peer] = await Promise.all([
-        (User as any).findById(meId, { nick: 1, avatarUrl: 1 }).lean(),
-        (User as any).findById(peerId, { nick: 1, avatarUrl: 1 }).lean(),
+        (User).findById(meId, { nick: 1, avatarUrl: 1 }).lean(),
+        (User).findById(peerId, { nick: 1, avatarUrl: 1 }).lean(),
       ]);
 
       if (!me) return res.status(404).json({ ok: false, error: 'me_not_found' });
@@ -49,8 +50,8 @@ export default function createChatRouter() {
       // Stream Chat обновление канала убрано - больше не используется
 
       return res.json({ ok: true });
-    } catch (e: any) {
-      console.error('[chat/ensure-dm] error:', e?.message || e);
+    } catch (e: unknown) {
+      console.error('[chat/ensure-dm] error:', (e as ErrorDetails)?.message || e);
       console.error('[chat/ensure-dm] stack:', e);
       return res.status(500).json({ ok: false, error: 'ensure_dm_failed' });
     }

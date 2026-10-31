@@ -20,7 +20,7 @@ export function getEffectiveBusy(io: Server, userId: string): boolean {
   if (getEffectiveBusyImpl) return getEffectiveBusyImpl(io, userId);
   // Fallback: хотя бы один сокет пользователя с data.busy === true
   for (const s of io.sockets.sockets.values()) {
-    if (String((s as any).data?.userId) === String(userId) && (s as any).data?.busy === true) return true;
+    if (String((s).data?.userId) === String(userId) && (s).data?.busy === true) return true;
   }
   return false;
 }

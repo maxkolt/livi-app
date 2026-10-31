@@ -1,3 +1,6 @@
+import type { NavigationAction } from '@react-navigation/native';
+import type { RootStackParamList } from '../navigation/types';
+import type { CallRef } from './callStateTypes';
 import { AppState, AppStateStatus } from 'react-native';
 import { CommonActions, StackActions } from '@react-navigation/native';
 import { logger } from './logger';
@@ -14,7 +17,7 @@ export type RootNavLike = {
   isReady?: () => boolean;
   getCurrentRoute?: () => { name?: string; params?: object } | undefined;
   getState?: () => { routes?: ReadonlyArray<{ name?: string; params?: object }>; index?: number } | undefined;
-  dispatch?: (...args: any[]) => any;
+  dispatch?: (action: NavigationAction) => void;
   canGoBack?: () => boolean;
 };
 
@@ -107,10 +110,10 @@ export function dismissStaleVideoCallRouteIfNeeded(nav: RootNavLike): void {
   if (!nav.isReady?.()) return;
   const route = nav.getCurrentRoute?.();
   if (route?.name !== 'VideoCall') return;
-  const g = global as typeof globalThis & Record<string, unknown>;
-  const isInactiveCall = (g as any).__isInactiveStateRef?.current === true;
-  const sessionEnded = (g as any).__webrtcSessionRef?.current?.ended === true;
-  const endedFromPiP = (g as any).__lastEndCallSourceRef?.current === 'pip_close';
+  const g = global as CallNavigationGlobals;
+  const isInactiveCall = g.__isInactiveStateRef?.current === true;
+  const sessionEnded = g.__webrtcSessionRef?.current?.ended === true;
+  const endedFromPiP = g.__lastEndCallSourceRef?.current === 'pip_close';
   if (!(isInactiveCall || sessionEnded) || endedFromPiP) return;
   leaveVideoCallScreenPreservingStack(nav);
 }
@@ -126,7 +129,14 @@ export function endCallImplNavCleanup(nav: RootNavLike): void {
   // Не VideoCall — сохраняем текущий экран (Chat, Home, …).
 }
 
-type PendingVideoCallNav = {
+type CallNavigationGlobals = typeof globalThis & {
+  __isInactiveStateRef?: CallRef<boolean>;
+  __webrtcSessionRef?: CallRef<{ readonly ended?: boolean } | null>;
+  __lastEndCallSourceRef?: CallRef<string | null>;
+  __pendingForegroundVideoCallNavRef?: CallRef<PendingVideoCallNav | null>;
+};
+
+export type PendingVideoCallNav = {
   params: Record<string, unknown>;
   at: number;
 };
@@ -135,30 +145,30 @@ const PENDING_VIDEO_CALL_TTL_MS = 120_000;
 
 /** call:accepted в фоне: не менять стек, пока пользователь не вернётся в приложение. */
 export function stashPendingVideoCallNavigation(params: Record<string, unknown>): void {
-  const g = global as typeof globalThis & Record<string, unknown>;
-  (g as any).__pendingForegroundVideoCallNavRef = (g as any).__pendingForegroundVideoCallNavRef || {
+  const g = global as CallNavigationGlobals;
+  (g).__pendingForegroundVideoCallNavRef = (g).__pendingForegroundVideoCallNavRef || {
     current: null as PendingVideoCallNav | null,
   };
-  (g as any).__pendingForegroundVideoCallNavRef.current = { params, at: Date.now() };
+  g.__pendingForegroundVideoCallNavRef.current = { params, at: Date.now() };
 }
 
 export function flushPendingVideoCallNavigation(
-  nav: RootNavLike & { navigate?: (...args: any[]) => any },
+  nav: VideoCallNavLike,
 ): boolean {
   if (!isAppForegroundForUi()) return false;
-  const g = global as typeof globalThis & Record<string, unknown>;
-  const pending = (g as any).__pendingForegroundVideoCallNavRef?.current as PendingVideoCallNav | null;
+  const g = global as CallNavigationGlobals;
+  const pending = g.__pendingForegroundVideoCallNavRef?.current as PendingVideoCallNav | null;
   if (!pending?.params) return false;
   if (Date.now() - pending.at > PENDING_VIDEO_CALL_TTL_MS) {
-    (g as any).__pendingForegroundVideoCallNavRef.current = null;
+    g.__pendingForegroundVideoCallNavRef!.current = null;
     return false;
   }
   if (!nav.isReady?.()) return false;
   if (String(nav.getCurrentRoute?.()?.name ?? '') === 'VideoCall') {
-    (g as any).__pendingForegroundVideoCallNavRef.current = null;
+    g.__pendingForegroundVideoCallNavRef!.current = null;
     return false;
   }
-  (g as any).__pendingForegroundVideoCallNavRef.current = null;
+  g.__pendingForegroundVideoCallNavRef!.current = null;
   return navigateToVideoCallScreen(nav, pending.params, 'flush_pending');
 }
 
@@ -199,7 +209,7 @@ function stripStalePiPReturnNavParams(
 }
 
 export type VideoCallNavLike = RootNavLike & {
-  navigate?: (...args: any[]) => any;
+  navigate?: (screen: 'VideoCall', params: RootStackParamList['VideoCall']) => void;
 };
 
 function readRouteCallId(route: { params?: object } | undefined): string {

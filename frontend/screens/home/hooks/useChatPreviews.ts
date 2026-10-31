@@ -1,3 +1,4 @@
+import type { ChatMessage } from '../../chat/chatMessageTypes';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
@@ -61,7 +62,7 @@ function rememberReadReceipt(messageId: string): void {
 }
 
 /** Превью строки + статус своего последнего сообщения (значок слева от времени). */
-function previewWithStatus(msg: any, text: string, at: number, saved?: string): ChatPreview {
+function previewWithStatus(msg: ChatMessage | null | undefined, text: string, at: number, saved?: string): ChatPreview {
   const id = String(msg?.id || '').trim();
   const status = outgoingPreviewStatus(msg, String(getCurrentUserId() || '').trim(), {
     pending: !!id && isMessagePendingInOutbox(id),
@@ -75,7 +76,7 @@ function previewWithStatus(msg: any, text: string, at: number, saved?: string): 
 }
 
 /** Статус облака, сохранённый чатом или очередью (пишется и при закрытом чате). */
-async function readSavedOutgoingStatus(peerId: string, msg: any): Promise<string | undefined> {
+async function readSavedOutgoingStatus(peerId: string, msg: ChatMessage | null | undefined): Promise<string | undefined> {
   const me = String(getCurrentUserId() || '').trim();
   const id = String(msg?.id || '').trim();
   if (!me || !id || !outgoingPreviewStatus(msg, me, { pending: false, readReceipt: false })) {
@@ -116,7 +117,7 @@ function patchPreviewMemory(update: (preview: ChatPreview, peerId: string) => Ch
  * Оптимистичная исходящая (в т.ч. без сети): сразу обновить строку в «Чаты»,
  * не дожидаясь message:received и не опираясь на устаревший messageCache.
  */
-export function noteLocalChatPreview(peerId: string, message: any, lang: Lang): void {
+export function noteLocalChatPreview(peerId: string, message: unknown, lang: Lang): void {
   const id = String(peerId || "").trim();
   if (!id || !message) return;
   const at = messageTimestampMs(message) || Date.now();
@@ -128,7 +129,7 @@ export function noteLocalChatPreview(peerId: string, message: any, lang: Lang): 
   notifyPreviewListeners();
 }
 
-function previewFromServerMessage(msg: any, lang: Lang): ChatPreview | null {
+function previewFromServerMessage(msg: ChatMessage | null | undefined, lang: Lang): ChatPreview | null {
   if (!msg?.id) return null;
   const at = messageTimestampMs(msg);
   const text = previewTextFromMessage(msg, lang);
@@ -338,7 +339,7 @@ export function useChatPreviews(friendIds: string[], lang: Lang, enabled: boolea
       const peerId = by === me ? withId : by;
       if (!peerId) return;
       // clear «для себя» — серверный lastMessage остаётся; не поднимать строку снова.
-      if (!(data as any)?.forAll) {
+      if (!(data)?.forAll) {
         void markChatsClearedForMe([peerId]);
       }
       if (previewMemory[peerId]) {

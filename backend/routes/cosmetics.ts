@@ -1,3 +1,4 @@
+import type { AuthenticatedRequest, ErrorDetails } from '../utils/runtimeTypes';
 import { randomUUID } from 'crypto';
 import { Router } from 'express';
 import mongoose from 'mongoose';
@@ -69,7 +70,9 @@ async function yooRequest(path: string, init?: RequestInit): Promise<YooPayment>
   return json;
 }
 
-function serializeEntitlements(user: any) {
+function serializeEntitlements(user: Partial<Pick<import('../models/User').UserRecord,
+  'purchasedFrameIds' | 'purchasedBackgroundIds' | 'activeFrameId' | 'activeBackgroundId'
+>> | null) {
   return {
     purchasedFrameIds: Array.isArray(user?.purchasedFrameIds) ? user.purchasedFrameIds.map(String) : [],
     purchasedBackgroundIds: Array.isArray(user?.purchasedBackgroundIds)
@@ -126,7 +129,7 @@ async function grantVerifiedPayment(payment: YooPayment) {
 }
 
 router.get('/cosmetics/me', async (req, res) => {
-  const userId = String((req as any).userId || '').trim();
+  const userId = String((req as AuthenticatedRequest).userId || '').trim();
   if (!mongoose.isValidObjectId(userId)) return res.status(401).json({ ok: false, error: 'unauthorized' });
   const user = await UserModel.findById(userId)
     .select('purchasedFrameIds purchasedBackgroundIds activeFrameId activeBackgroundId')
@@ -140,7 +143,7 @@ router.get('/cosmetics/user/:userId', async (req, res) => {
   if (!mongoose.isValidObjectId(userId)) return res.status(400).json({ ok: false, error: 'bad_user_id' });
   const user = await UserModel.findById(userId).select('activeFrameId').lean();
   if (!user) return res.status(404).json({ ok: false, error: 'user_not_found' });
-  return res.json({ ok: true, activeFrameId: String((user as any).activeFrameId || '') });
+  return res.json({ ok: true, activeFrameId: String((user).activeFrameId || '') });
 });
 
 router.get('/cosmetics/payment-return', (_req, res) => {
@@ -149,7 +152,7 @@ router.get('/cosmetics/payment-return', (_req, res) => {
 
 router.post('/cosmetics/payments', async (req, res) => {
   try {
-    const userId = String((req as any).userId || '').trim();
+    const userId = String((req as AuthenticatedRequest).userId || '').trim();
     if (!mongoose.isValidObjectId(userId)) return res.status(401).json({ ok: false, error: 'unauthorized' });
     const kind = String(req.body?.kind || '') as CosmeticKind;
     const itemId = String(req.body?.itemId || '').trim();
@@ -162,7 +165,7 @@ router.post('/cosmetics/payments', async (req, res) => {
       .select('purchasedFrameIds purchasedBackgroundIds activeFrameId activeBackgroundId')
       .lean();
     if (!user) return res.status(404).json({ ok: false, error: 'user_not_found' });
-    const owned = kind === 'frame' ? (user as any).purchasedFrameIds : (user as any).purchasedBackgroundIds;
+    const owned = kind === 'frame' ? (user).purchasedFrameIds : (user).purchasedBackgroundIds;
     if (Array.isArray(owned) && owned.includes(itemId)) {
       return res.json({ ok: true, alreadyOwned: true, entitlements: serializeEntitlements(user) });
     }
@@ -197,15 +200,15 @@ router.post('/cosmetics/payments', async (req, res) => {
 
     if (payment.status === 'succeeded' && payment.paid === true) await grantVerifiedPayment(payment);
     return res.json({ ok: true, paymentId, confirmationUrl, status: payment.status || 'pending' });
-  } catch (error: any) {
-    logger.error('[cosmetics] create payment failed', { error: error?.message || String(error) });
+  } catch (error: unknown) {
+    logger.error('[cosmetics] create payment failed', { error: (error as ErrorDetails)?.message || String(error) });
     return res.status(502).json({ ok: false, error: 'payment_create_failed' });
   }
 });
 
 router.get('/cosmetics/payments/:paymentId', async (req, res) => {
   try {
-    const userId = String((req as any).userId || '').trim();
+    const userId = String((req as AuthenticatedRequest).userId || '').trim();
     if (!mongoose.isValidObjectId(userId)) return res.status(401).json({ ok: false, error: 'unauthorized' });
     const paymentId = String(req.params.paymentId || '').trim();
     const purchase = await CosmeticPurchaseModel.findOne({ yookassaPaymentId: paymentId, user: userId });
@@ -221,8 +224,8 @@ router.get('/cosmetics/payments/:paymentId', async (req, res) => {
       status: payment.status || purchase.status,
       entitlements: user ? serializeEntitlements(user) : undefined,
     });
-  } catch (error: any) {
-    logger.error('[cosmetics] check payment failed', { error: error?.message || String(error) });
+  } catch (error: unknown) {
+    logger.error('[cosmetics] check payment failed', { error: (error as ErrorDetails)?.message || String(error) });
     return res.status(502).json({ ok: false, error: 'payment_check_failed' });
   }
 });
@@ -231,9 +234,9 @@ router.get('/cosmetics/payments/:paymentId', async (req, res) => {
  * Разослать смену рамки друзьям и самому пользователю (у него могут быть другие
  * устройства). Ошибки глушим: смена косметики не должна падать из-за сокета.
  */
-async function broadcastFrameChange(req: any, userId: string, frameId: string): Promise<void> {
+async function broadcastFrameChange(req: AuthenticatedRequest, userId: string, frameId: string): Promise<void> {
   try {
-    const io = req.app?.get?.('io');
+    const io: AuthenticatedRequest['io'] = req.app?.get?.('io');
     if (!io) return;
     const payload = { userId, frameId };
     io.to(`u:${userId}`).emit('cosmetics:frame', payload);
@@ -243,13 +246,13 @@ async function broadcastFrameChange(req: any, userId: string, frameId: string): 
         io.to(`u:${friendId}`).emit('cosmetics:frame', payload);
       } catch {}
     }
-  } catch (e: any) {
-    logger.warn('[cosmetics] broadcastFrameChange failed', { userId, error: e?.message });
+  } catch (e: unknown) {
+    logger.warn('[cosmetics] broadcastFrameChange failed', { userId, error: (e as ErrorDetails)?.message });
   }
 }
 
 router.patch('/cosmetics/active', async (req, res) => {
-  const userId = String((req as any).userId || '').trim();
+  const userId = String((req as AuthenticatedRequest).userId || '').trim();
   if (!mongoose.isValidObjectId(userId)) return res.status(401).json({ ok: false, error: 'unauthorized' });
   const kind = String(req.body?.kind || '') as CosmeticKind;
   const itemId = String(req.body?.itemId || '').trim();
@@ -261,7 +264,7 @@ router.patch('/cosmetics/active', async (req, res) => {
     .select('purchasedFrameIds purchasedBackgroundIds activeFrameId activeBackgroundId')
     .lean();
   if (!user) return res.status(404).json({ ok: false, error: 'user_not_found' });
-  const owned = Array.isArray((user as any)[purchaseField]) ? (user as any)[purchaseField].map(String) : [];
+  const owned = Array.isArray((user)[purchaseField]) ? (user)[purchaseField].map(String) : [];
   if (itemId && !owned.includes(itemId)) return res.status(403).json({ ok: false, error: 'not_owned' });
 
   const updated = await UserModel.findByIdAndUpdate(userId, { $set: { [activeField]: itemId } }, { new: true })
@@ -292,8 +295,8 @@ router.post('/cosmetics/webhook', async (req, res) => {
       );
     }
     return res.status(200).json({ ok: true });
-  } catch (error: any) {
-    logger.error('[cosmetics] webhook failed', { error: error?.message || String(error) });
+  } catch (error: unknown) {
+    logger.error('[cosmetics] webhook failed', { error: (error as ErrorDetails)?.message || String(error) });
     return res.status(500).json({ ok: false });
   }
 });

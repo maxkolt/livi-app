@@ -155,9 +155,9 @@ async function uploadMultipartOnce(
   }
   multipartSupported = true;
   if (res.status >= 200 && res.status < 300) {
-    let json: any = null;
+    let json: { ok?: boolean; url?: string; secure_url?: string } | null = null;
     try { json = JSON.parse(res.body || '{}'); } catch {}
-    if (json?.ok && (json.url || json.secure_url)) return { kind: 'ok', url: json.url || json.secure_url };
+    if (json?.ok && (json.url || json.secure_url)) return { kind: 'ok', url: (json.url || json.secure_url)! };
   }
   logger.warn('Multipart upload rejected', { status: res.status });
   return { kind: res.status === 413 ? 'file' : 'server', error: `Server error ${res.status}` };
@@ -251,7 +251,7 @@ export const uploadMediaToServer = async (
     // Legacy base64-in-JSON upload (small-file fallback only).
     try {
       const info = await FileSystem.getInfoAsync(normalizedUri);
-      const size = Number((info as any)?.size || 0);
+      const size = Number((info as { size?: number })?.size || 0);
       if (size > LEGACY_BASE64_MAX_MB * 1024 * 1024) {
         return { success: false, kind: 'file', error: `Multipart upload failed and legacy fallback is limited to ${LEGACY_BASE64_MAX_MB}MB` };
       }

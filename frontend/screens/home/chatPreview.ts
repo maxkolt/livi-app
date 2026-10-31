@@ -1,3 +1,4 @@
+import type { ChatMessage } from '../chat/chatMessageTypes';
 import { getChatReplyPreviewText } from '../chat/chatMessageMeta';
 import type { ChatReadStatus } from '../chat/chatMessageIds';
 import { t, type Lang } from '../../utils/i18n';
@@ -17,7 +18,7 @@ export type ChatPreview = {
  * Не в очереди — значит, сервер его принял, даже если сохранённый статус ещё «sending».
  */
 export function outgoingPreviewStatus(
-  msg: any,
+  msg: ChatMessage | null | undefined,
   me: string,
   opts: { pending: boolean; readReceipt: boolean; saved?: string },
 ): ChatReadStatus | undefined {
@@ -38,7 +39,7 @@ export function keepReadStatus(prev: ChatPreview | undefined, next: ChatPreview)
   return next;
 }
 
-export function messageTimestampMs(msg: any): number {
+export function messageTimestampMs(msg: ChatMessage | null | undefined): number {
   const raw = msg?.timestamp;
   if (raw instanceof Date) {
     const n = raw.getTime();
@@ -48,7 +49,7 @@ export function messageTimestampMs(msg: any): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-export function pickLatestMessage(messages: any[] | null | undefined): any | null {
+export function pickLatestMessage<T extends ChatMessage>(messages: T[] | null | undefined): T | null {
   if (!Array.isArray(messages) || messages.length === 0) return null;
   let latest = messages[0];
   let latestAt = messageTimestampMs(latest);
@@ -62,7 +63,7 @@ export function pickLatestMessage(messages: any[] | null | undefined): any | nul
   return latest ?? null;
 }
 
-export function previewTextFromMessage(msg: any, lang: Lang): string {
+export function previewTextFromMessage(msg: ChatMessage | null | undefined, lang: Lang): string {
   const type = String(msg?.type || '');
   if (type === 'call') {
     const direction = String(msg?.callDirection || '').trim();

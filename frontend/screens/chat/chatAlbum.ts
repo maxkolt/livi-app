@@ -1,3 +1,5 @@
+import type { ChatMessage } from './chatMessageTypes';
+
 /** Chat image album helpers (1…10 photos in one message). */
 
 export const CHAT_ALBUM_MAX = 10;
@@ -25,7 +27,7 @@ export function parseAlbumSelectionKey(
 }
 
 /** Normalize message image URIs: prefers `uris[]`, falls back to single `uri`. */
-export function getMessageImageUris(message: any): string[] {
+export function getMessageImageUris(message: ChatMessage | null | undefined): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
   const push = (raw: unknown) => {
@@ -55,12 +57,12 @@ export function getMessageImageUris(message: any): string[] {
   return out;
 }
 
-export function isImageAlbumMessage(message: any): boolean {
+export function isImageAlbumMessage(message: ChatMessage | null | undefined): boolean {
   return String(message?.type || '') === 'image' && getMessageImageUris(message).length > 1;
 }
 
 /** All selection keys for an album message (one per photo). */
-export function albumSelectionKeysForMessage(message: any): string[] {
+export function albumSelectionKeysForMessage(message: ChatMessage | null | undefined): string[] {
   const mid = String(message?.id || '').trim();
   if (!mid || !isImageAlbumMessage(message)) return mid ? [mid] : [];
   return getMessageImageUris(message).map((_, i) => albumSelectionKey(mid, i));
@@ -68,7 +70,7 @@ export function albumSelectionKeysForMessage(message: any): string[] {
 
 /** Selected photo indices for an album message from the selection set. */
 export function selectedAlbumIndices(
-  message: any,
+  message: ChatMessage | null | undefined,
   selectedKeys: Set<string> | Iterable<string>,
 ): number[] {
   const mid = String(message?.id || '').trim();
@@ -100,7 +102,7 @@ type ChatPhotoEntry = {
  * inside the one message that was tapped.
  */
 export function buildChatPhotoTimeline(
-  messages: any[],
+  messages: ChatMessage[],
   resolveMediaUri: (uri?: string) => string,
 ): ChatPhotoEntry[] {
   const out: ChatPhotoEntry[] = [];

@@ -1,3 +1,4 @@
+import type { ChatMessage } from './chatMessageTypes';
 /** Album multi-select modal state (save / forward / delete scope). */
 
 import React from "react";
@@ -12,7 +13,7 @@ export function useChatAlbumScope() {
   const [albumScopeKind, setAlbumScopeKind] = React.useState<AlbumScopeKind>("delete");
   const [albumPickUris, setAlbumPickUris] = React.useState<string[]>([]);
   const [albumPickInitial, setAlbumPickInitial] = React.useState<number[]>([0]);
-  const albumScopeMessageRef = React.useRef<any>(null);
+  const albumScopeMessageRef = React.useRef<ChatMessage | null>(null);
 
   const closeAlbumScope = React.useCallback(() => {
     setAlbumScopeVisible(false);
@@ -22,7 +23,7 @@ export function useChatAlbumScope() {
   }, []);
 
   const openAlbumScope = React.useCallback(
-    (kind: AlbumScopeKind, m: any, focusIndex: number | null) => {
+    (kind: AlbumScopeKind, m: ChatMessage, focusIndex: number | null) => {
       const uris = getMessageImageUris(m);
       albumScopeMessageRef.current = m;
       setAlbumScopeKind(kind);

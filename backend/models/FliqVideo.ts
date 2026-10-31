@@ -2,7 +2,7 @@
 // Ролики ленты Fliq (YouTube Shorts), собранные через YouTube Data API.
 // Правила YouTube API: данные хранятся не дольше 30 дней — TTL по fetchedAt,
 // сборщик освежает fetchedAt, когда находит ролик снова.
-import { Schema, model, models } from 'mongoose';
+import { Schema, model, models, type Model } from 'mongoose';
 
 interface IFliqVideo {
   videoId: string;
@@ -47,4 +47,4 @@ const FliqVideoSchema = new Schema<IFliqVideo>(
 FliqVideoSchema.index({ langs: 1, score: -1 });
 FliqVideoSchema.index({ fetchedAt: 1 }, { expireAfterSeconds: 60 * 60 * 24 * 30 });
 
-export default (models.FliqVideo as any) || model<IFliqVideo>('FliqVideo', FliqVideoSchema);
+export default (models.FliqVideo as Model<IFliqVideo> | undefined) || model<IFliqVideo>('FliqVideo', FliqVideoSchema);

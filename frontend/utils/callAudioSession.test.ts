@@ -1,5 +1,6 @@
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const incall = require('react-native-incall-manager') as { __calls: () => { method: string }[]; __reset: () => void };
+import InCallManager from 'react-native-incall-manager';
 
 jest.mock('./logger', () => ({ logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() } }));
 
@@ -27,6 +28,18 @@ describe('call audio session owner', () => {
     expect(methods().filter((m) => m === 'start')).toHaveLength(1);
     expect(isCallAudioSessionOpen()).toBe(true);
     expect(getCallAudioSessionOwner()).toBe('direct');
+  });
+
+  it('keeps the session closed after a failed start so a route bootstrap can retry', () => {
+    const start = jest.spyOn(InCallManager, 'start').mockImplementationOnce(() => {
+      throw new Error('native module not ready');
+    });
+    expect(openCallAudioSession('direct', 'audio', 'first-bootstrap')).toBe(false);
+    expect(isCallAudioSessionOpen()).toBe(false);
+    expect(getCallAudioSessionOwner()).toBeNull();
+    expect(openCallAudioSession('direct', 'audio', 'bootstrap-retry')).toBe(true);
+    expect(isCallAudioSessionOpen()).toBe(true);
+    start.mockRestore();
   });
 
   it('does not reopen a closed session from a late route reapply', () => {

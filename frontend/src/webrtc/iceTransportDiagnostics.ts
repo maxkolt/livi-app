@@ -1,5 +1,7 @@
+import type { RTCStatsSample, RTCStatsReportView, RoomTransportSource } from './rtcCompatibilityTypes';
+
 type PeerConnectionLike = {
-  getStats: () => Promise<any>;
+  getStats: () => Promise<unknown>;
   iceConnectionState?: string;
   connectionState?: string;
 };
@@ -23,32 +25,32 @@ export type IceTransportDiagnostic = {
   connectionState: string | null;
 };
 
-function isObject(value: unknown): value is Record<string, any> {
+function isObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object';
 }
 
 function isPeerConnectionLike(value: unknown): value is PeerConnectionLike {
-  return isObject(value) && typeof (value as any).getStats === 'function';
+  return isObject(value) && typeof (value).getStats === 'function';
 }
 
-function normalizeStats(report: any): any[] {
+function normalizeStats(report: unknown): RTCStatsSample[] {
   if (!report) return [];
   if (Array.isArray(report)) return report.filter(Boolean);
-  if (typeof report.values === 'function') {
+  if (typeof (report as RTCStatsReportView).values === 'function') {
     try {
-      return Array.from(report.values()).filter(Boolean);
+      return Array.from((report as RTCStatsReportView).values!()).filter(Boolean);
     } catch {}
   }
-  if (typeof report.forEach === 'function') {
-    const out: any[] = [];
+  if (typeof (report as RTCStatsReportView).forEach === 'function') {
+    const out: RTCStatsSample[] = [];
     try {
-      report.forEach((value: any) => {
+      (report as RTCStatsReportView).forEach((value: RTCStatsSample) => {
         if (value) out.push(value);
       });
       if (out.length > 0) return out;
     } catch {}
   }
-  if (isObject(report)) return Object.values(report).filter(Boolean);
+  if (isObject(report)) return Object.values(report).filter(Boolean) as RTCStatsSample[];
   return [];
 }
 
@@ -64,7 +66,7 @@ function firstString(...values: unknown[]): string | null {
   return null;
 }
 
-function firstCandidatePair(stats: any[], byId: Map<string, any>): any | null {
+function firstCandidatePair(stats: RTCStatsSample[], byId: Map<string, RTCStatsSample>): RTCStatsSample | null {
   const transport = stats.find((stat) => stat?.type === 'transport' && stat?.selectedCandidatePairId);
   if (transport?.selectedCandidatePairId && byId.has(String(transport.selectedCandidatePairId))) {
     return byId.get(String(transport.selectedCandidatePairId)) || null;
@@ -88,18 +90,18 @@ function firstCandidatePair(stats: any[], byId: Map<string, any>): any | null {
   return succeeded[0] || null;
 }
 
-function collectPeerConnections(root: any): Array<{ source: string; pc: PeerConnectionLike }> {
+function collectPeerConnections(root: RoomTransportSource | null | undefined): Array<{ source: string; pc: PeerConnectionLike }> {
   const results: Array<{ source: string; pc: PeerConnectionLike }> = [];
   const seenObjects = new WeakSet<object>();
   const seenPcs = new WeakSet<object>();
 
-  const seedEntries: Array<[string, any]> = [
+  const seedEntries: Array<[string, unknown]> = [
     ['room.engine.publisher', root?.engine?.publisher],
     ['room.engine.subscriber', root?.engine?.subscriber],
     ['room.engine', root?.engine],
   ];
 
-  const walk = (value: any, path: string, depth: number) => {
+  const walk = (value: unknown, path: string, depth: number) => {
     if (!isObject(value)) return;
     if (seenObjects.has(value)) return;
     seenObjects.add(value);
@@ -121,7 +123,7 @@ function collectPeerConnections(root: any): Array<{ source: string; pc: PeerConn
 
     for (const key of keys) {
       try {
-        walk((value as any)[key], `${path}.${key}`, depth - 1);
+        walk((value)[key], `${path}.${key}`, depth - 1);
       } catch {}
     }
   };
@@ -138,7 +140,7 @@ async function inspectPeerConnection(source: string, pc: PeerConnectionLike): Pr
     const stats = normalizeStats(await pc.getStats());
     if (stats.length === 0) return null;
 
-    const byId = new Map<string, any>();
+    const byId = new Map<string, RTCStatsSample>();
     for (const stat of stats) {
       const id = firstString(stat?.id);
       if (id) byId.set(id, stat);
@@ -161,8 +163,8 @@ async function inspectPeerConnection(source: string, pc: PeerConnectionLike): Pr
         currentRoundTripTime: null,
         availableOutgoingBitrate: null,
         availableIncomingBitrate: null,
-        iceConnectionState: firstString((pc as any).iceConnectionState),
-        connectionState: firstString((pc as any).connectionState),
+        iceConnectionState: firstString((pc).iceConnectionState),
+        connectionState: firstString((pc).connectionState),
       };
     }
 
@@ -186,15 +188,15 @@ async function inspectPeerConnection(source: string, pc: PeerConnectionLike): Pr
       currentRoundTripTime: asNumber(pair.currentRoundTripTime),
       availableOutgoingBitrate: asNumber(pair.availableOutgoingBitrate),
       availableIncomingBitrate: asNumber(pair.availableIncomingBitrate),
-      iceConnectionState: firstString((pc as any).iceConnectionState),
-      connectionState: firstString((pc as any).connectionState),
+      iceConnectionState: firstString((pc).iceConnectionState),
+      connectionState: firstString((pc).connectionState),
     };
   } catch {
     return null;
   }
 }
 
-export async function getRoomIceTransportDiagnostics(room: any): Promise<IceTransportDiagnostic[]> {
+export async function getRoomIceTransportDiagnostics(room: RoomTransportSource | null | undefined): Promise<IceTransportDiagnostic[]> {
   const pcs = collectPeerConnections(room);
   const diagnostics = await Promise.all(pcs.map(({ source, pc }) => inspectPeerConnection(source, pc)));
   return diagnostics.filter((value): value is IceTransportDiagnostic => !!value);

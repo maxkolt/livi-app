@@ -1,12 +1,12 @@
-import type { Server } from 'socket.io';
+import type { BackendServer } from '../sockets/types';
 
-let ioInstance: Server | null = null;
+let ioInstance: BackendServer | null = null;
 
-export function setIoInstance(io: Server) {
+export function setIoInstance(io: BackendServer) {
   ioInstance = io;
 }
 
-export function getIoInstance(): Server | null {
+export function getIoInstance(): BackendServer | null {
   return ioInstance;
 }
 

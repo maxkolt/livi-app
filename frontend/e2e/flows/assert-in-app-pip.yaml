@@ -1,0 +1,8 @@
+# Возврат из системного PiP должен сохранить внутреннюю плашку, без автоматического разворота.
+appId: com.kolt12max.livi.dev
+---
+- extendedWaitUntil:
+    visible:
+      id: "pip-expand"
+    timeout: 15000
+- assertNotVisible: "minimize"

@@ -42,7 +42,7 @@ export async function ensureProductShadeChannels(): Promise<void> {
     });
     channelsReady = true;
   } catch (e) {
-    logger.warn('[productShade] ensure channels failed', e as any);
+    logger.warn('[productShade] ensure channels failed', e);
   }
 }
 
@@ -73,7 +73,7 @@ export async function presentFriendRequestShadeNotification(opts: {
       trigger: null,
     });
   } catch (e) {
-    logger.warn('[productShade] friend_request failed', e as any);
+    logger.warn('[productShade] friend_request failed', e);
   }
 }
 
@@ -81,8 +81,8 @@ export async function dismissFriendRequestShadeNotifications(): Promise<void> {
   try {
     const presented = await Notifications.getPresentedNotificationsAsync();
     for (const n of presented) {
-      const type = String((n as any)?.request?.content?.data?.type || '');
-      const id = String((n as any)?.request?.identifier || '');
+      const type = String((n)?.request?.content?.data?.type || '');
+      const id = String((n)?.request?.identifier || '');
       if (type === 'friend_request' || id.startsWith(FRIEND_REQUEST_NOTIF_ID_PREFIX)) {
         await Notifications.dismissNotificationAsync(id);
       }
@@ -124,7 +124,7 @@ export async function presentAppUpdateShadeNotificationIfNeeded(): Promise<void>
       await AsyncStorage.setItem(APP_UPDATE_SHADE_FOR_LATEST_KEY, latest);
     }
   } catch (e) {
-    logger.warn('[productShade] app_update failed', e as any);
+    logger.warn('[productShade] app_update failed', e);
   }
 }
 
@@ -132,8 +132,8 @@ export async function dismissAppUpdateShadeNotifications(): Promise<void> {
   try {
     const presented = await Notifications.getPresentedNotificationsAsync();
     for (const n of presented) {
-      const type = String((n as any)?.request?.content?.data?.type || '');
-      const id = String((n as any)?.request?.identifier || '');
+      const type = String((n)?.request?.content?.data?.type || '');
+      const id = String((n)?.request?.identifier || '');
       if (type === 'app_update' || id.startsWith('app_update_')) {
         await Notifications.dismissNotificationAsync(id);
       }

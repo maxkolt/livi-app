@@ -1,0 +1,8 @@
+# Возврат из системного PiP на полный экран звонка.
+appId: com.kolt12max.livi.dev
+---
+- extendedWaitUntil:
+    visible: "minimize"
+    timeout: 15000
+- assertNotVisible:
+    id: "pip-expand"

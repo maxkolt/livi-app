@@ -1,3 +1,4 @@
+import type { NavigationPerfGlobals } from '../utils/navigationPerf';
 import React, { useRef } from 'react';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import RandomChat from '../components/VideoChat/RandomChat';
@@ -12,7 +13,7 @@ const RandomChatScreen: React.FC<Props> = ({ route }) => {
     firstRenderLoggedRef.current = true;
     try {
       const now = Date.now();
-      const g = global as any;
+      const g = global as NavigationPerfGlobals;
       const t0 = Number(g.__searchNavT0 || now);
       const steps = Array.isArray(g.__searchNavSteps) ? g.__searchNavSteps : [];
       steps.push({ step: 'RandomChatScreen.firstRender', at: now, elapsedMs: now - t0 });

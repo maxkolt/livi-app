@@ -14,7 +14,7 @@ const randomId = () => `inst_${Math.random().toString(36).slice(2, 10)}`;
 function randomHex(byteLength: number): string {
   const bytes = new Uint8Array(byteLength);
   // react-native-get-random-values полифиллит crypto.getRandomValues криптостойким генератором.
-  (globalThis as any).crypto.getRandomValues(bytes);
+  (globalThis).crypto.getRandomValues(bytes);
   let hex = '';
   for (let i = 0; i < bytes.length; i++) hex += bytes[i].toString(16).padStart(2, '0');
   return hex;

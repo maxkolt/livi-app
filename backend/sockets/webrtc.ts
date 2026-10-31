@@ -54,7 +54,7 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
   socket.on("room:join:ack", ({ roomId }: { roomId: string }) => {
     if (!roomId) return;
 
-    const myUserId = (socket as any)?.data?.userId ? String((socket as any).data.userId) : '';
+    const myUserId = (socket)?.data?.userId ? String((socket).data.userId) : '';
     if (myUserId) {
       evictExtraUserSocketsInDirectRoom(io, roomId, myUserId, socket.id);
     }
@@ -77,7 +77,7 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
       room.forEach(socketId => {
         if (socketId !== socket.id) {
           const peerSocket = io.sockets.sockets.get(socketId) as AuthedSocket;
-          const userId = (peerSocket as any)?.data?.userId ? String((peerSocket as any).data.userId) : undefined;
+          const userId = (peerSocket)?.data?.userId ? String((peerSocket).data.userId) : undefined;
           existingPeers.push({ peerId: socketId, userId });
         }
       });
@@ -113,7 +113,7 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
     
     // Добавляем сокет в комнату
     socket.join(roomId);
-    const userId = (socket as any)?.data?.userId ? String((socket as any).data.userId) : undefined;
+    const userId = (socket)?.data?.userId ? String((socket).data.userId) : undefined;
     logger.info(`[room:join] User joined room ${roomId}`, { 
       socketId: socket.id, 
       userId, 
@@ -131,7 +131,7 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
     }
     
     // Уведомляем собеседника о подключении нового
-    const newUserId = (socket as any)?.data?.userId ? String((socket as any).data.userId) : undefined;
+    const newUserId = (socket)?.data?.userId ? String((socket).data.userId) : undefined;
     socket.to(roomId).emit("peer:connected", { 
       peerId: socket.id, 
       userId: newUserId 
@@ -147,10 +147,10 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
     logger.debug('LiveKit connection established', { socketId: socket.id, roomId });
     
     // Устанавливаем busy флаг для текущего пользователя
-    (socket as any).data = (socket as any).data || {};
-    (socket as any).data.busy = true;
+    (socket).data = (socket).data || {};
+    (socket).data.busy = true;
     
-    const myUserId = (socket as any)?.data?.userId;
+    const myUserId = (socket)?.data?.userId;
     if (myUserId) {
       await emitPresenceUpdateToFriends(io, myUserId, true);
       scheduleGlobalFriendPresenceEmit(io, String(myUserId));
@@ -176,7 +176,7 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
       roomId && roomId.startsWith("room_") ? roomId : undefined;
 
     if (resolvedRoomId) {
-      const room = (io.sockets.adapter.rooms as any)?.get?.(resolvedRoomId) as
+      const room = (io.sockets.adapter.rooms)?.get?.(resolvedRoomId) as
         | Set<string>
         | undefined;
       if (room && room.size > 1) {
@@ -197,7 +197,7 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
       socket.rooms.forEach((currentRoomId) => {
         if (!currentRoomId.startsWith("room_")) return;
         resolvedRoomId = resolvedRoomId || currentRoomId;
-        const room = (io.sockets.adapter.rooms as any)?.get?.(currentRoomId) as
+        const room = (io.sockets.adapter.rooms)?.get?.(currentRoomId) as
           | Set<string>
           | undefined;
         if (room && room.size > 1) {
@@ -211,7 +211,7 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
       });
     }
 
-    const socketData = (socket as any).data;
+    const socketData = (socket).data;
     const partnerSid = socketData?.partnerSid as string | undefined;
     if (partnerSid) {
       const partnerSocket = io.sockets.sockets.get(partnerSid);
@@ -241,7 +241,7 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
           (roomId && roomId.startsWith("room_") ? roomId : undefined) ||
           (socketData?.roomId as string | undefined);
         if (scanRoomId) {
-          const room = (io.sockets.adapter.rooms as any)?.get?.(scanRoomId) as
+          const room = (io.sockets.adapter.rooms)?.get?.(scanRoomId) as
             | Set<string>
             | undefined;
           if (room) {
@@ -282,7 +282,7 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
     if (roomId && roomId.startsWith("room_")) {
       // Only treat as "forwarded via room" if the room actually exists in the adapter.
       // In RandomChat we may NOT join sockets to that roomId, so room-broadcast would be a no-op.
-      const room = (io.sockets.adapter.rooms as any)?.get?.(roomId) as Set<string> | undefined;
+      const room = (io.sockets.adapter.rooms)?.get?.(roomId) as Set<string> | undefined;
       if (room && room.size > 0) {
         socket.to(roomId).emit("cam-toggle", { ...relayPayload, roomId });
         if (!enabled) logger.debug('Camera toggle forwarded to room (explicit)', { roomId, roomSize: room.size });
@@ -303,7 +303,7 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
     
     // Для обратной совместимости пересылаем событие напрямую по socket.id
     // ТОЛЬКО если пересылка через комнату не сработала (чтобы избежать дубликатов).
-    const socketData = (socket as any).data;
+    const socketData = (socket).data;
     
     if (!forwardedViaRoom && socketData && socketData.partnerSid) {
       const partnerSocket = io.sockets.sockets.get(socketData.partnerSid);
@@ -331,7 +331,7 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
     // Пересылаем событие всем в комнатах, где находится этот сокет
     socket.rooms.forEach((roomId) => {
       if (roomId.startsWith("room_")) {
-        const fromUserId = (socket as any)?.data?.userId ? String((socket as any).data.userId) : undefined;
+        const fromUserId = (socket)?.data?.userId ? String((socket).data.userId) : undefined;
         socket.to(roomId).emit("pip:entered", { 
           ...data, 
           from: socket.id, 
@@ -348,7 +348,7 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
     // Пересылаем событие всем в комнатах, где находится этот сокет
     socket.rooms.forEach((roomId) => {
       if (roomId.startsWith("room_")) {
-        const fromUserId = (socket as any)?.data?.userId ? String((socket as any).data.userId) : undefined;
+        const fromUserId = (socket)?.data?.userId ? String((socket).data.userId) : undefined;
         socket.to(roomId).emit("pip:exited", { 
           ...data, 
           from: socket.id, 
@@ -375,7 +375,7 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
     }
     
     // Также пересылаем через partnerSid для обратной совместимости
-    const socketData = (socket as any).data;
+    const socketData = (socket).data;
     if (!forwardedViaRoom && socketData && socketData.partnerSid) {
       const partnerSocket = io.sockets.sockets.get(socketData.partnerSid);
       if (partnerSocket) {
@@ -400,7 +400,7 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
         roomId && roomId.startsWith("room_") ? roomId : undefined;
 
       if (resolvedRoomId) {
-        const room = (io.sockets.adapter.rooms as any)?.get?.(resolvedRoomId) as
+        const room = (io.sockets.adapter.rooms)?.get?.(resolvedRoomId) as
           | Set<string>
           | undefined;
         if (room && room.size > 1) {
@@ -425,7 +425,7 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
       }
 
       let forwardedToPartnerSid = false;
-      const socketData = (socket as any).data;
+      const socketData = (socket).data;
       const partnerSid = socketData?.partnerSid as string | undefined;
       if (partnerSid) {
         const partnerSocket = io.sockets.sockets.get(partnerSid);
@@ -464,9 +464,9 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
     logger.debug('Socket leaving room', { socketId: socket.id, roomId });
     
     // Снимаем флаг busy с уходящего
-    const leavingUserId = (socket as any)?.data?.userId;
-    (socket as any).data = (socket as any).data || {};
-    (socket as any).data.busy = false;
+    const leavingUserId = (socket)?.data?.userId;
+    (socket).data = (socket).data || {};
+    (socket).data.busy = false;
     
     // Получаем оставшихся участников
     const room = io.sockets.adapter.rooms.get(roomId);
@@ -483,10 +483,10 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
     for (const peerId of remainingPeers) {
       const peerSocket = io.sockets.sockets.get(peerId) as AuthedSocket;
       if (peerSocket) {
-        (peerSocket as any).data = (peerSocket as any).data || {};
-        (peerSocket as any).data.busy = false;
+        (peerSocket).data = (peerSocket).data || {};
+        (peerSocket).data.busy = false;
         
-        const peerUserId = (peerSocket as any)?.data?.userId;
+        const peerUserId = (peerSocket)?.data?.userId;
         if (peerUserId) {
           await emitPresenceUpdateToFriends(io, peerUserId, false);
           scheduleGlobalFriendPresenceEmit(io, String(peerUserId));

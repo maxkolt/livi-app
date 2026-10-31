@@ -5,7 +5,7 @@
   <string name="incoming_call_unknown">Alguém está ligando</string>
   <string name="incoming_call_accept">Atender</string>
   <string name="incoming_call_decline">Recusar</string>
-  <string name="outgoing_call_title">Videochamada efetuada</string>
+  <string name="outgoing_call_title">Chamada efetuada</string>
   <string name="outgoing_call_subtitle">Chamando…</string>
   <string name="outgoing_call_subtitle_base">Chamando</string>
   <string name="outgoing_call_subtitle_base_audio">Chamando</string>

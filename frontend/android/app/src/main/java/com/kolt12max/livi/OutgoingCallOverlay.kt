@@ -8,7 +8,6 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
-import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.ImageButton
@@ -202,7 +201,11 @@ object OutgoingCallOverlay {
   private fun wireCancel(rootView: View) {
     val cancelButton = rootView.findViewById<ImageButton>(R.id.btn_cancel) ?: return
     cancelButton.contentDescription = AppLocale.str(rootView.context, R.string.outgoing_call_cancel)
-    installPressFeedback(cancelButton)
+    CallButtonPressFeedback.install(
+      cancelButton,
+      rootView as ViewGroup,
+      rootView.context.getColor(R.color.incoming_btn_decline_border_pressed),
+    )
     cancelButton.setOnClickListener {
       if (hideRequested) return@setOnClickListener
       hideRequested = true
@@ -387,17 +390,4 @@ object OutgoingCallOverlay {
     handler.postDelayed(dotsRunnable!!, 400L)
   }
 
-  private fun installPressFeedback(button: ImageButton) {
-    button.setOnTouchListener { view, event ->
-      when (event.actionMasked) {
-        MotionEvent.ACTION_DOWN -> {
-          view.animate().scaleX(0.92f).scaleY(0.92f).setDuration(60).start()
-        }
-        MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-          view.animate().scaleX(1f).scaleY(1f).setDuration(80).start()
-        }
-      }
-      false
-    }
-  }
 }

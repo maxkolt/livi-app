@@ -1,10 +1,12 @@
+import type { ChatMessage } from './chatMessageTypes';
+
 /** Reply preview / sticker / album field helpers for chat messages. */
 
 import { getStickerFallbackText } from "../../components/chatStickers";
 import { t, type Lang } from "../../utils/i18n";
 import { CHAT_ALBUM_MAX, getMessageImageUris } from "./chatAlbum";
 
-export function stickerFieldsFromMessage(msg: any) {
+export function stickerFieldsFromMessage(msg: ChatMessage | null | undefined) {
   return {
     stickerId: msg?.stickerId,
     stickerPackId: msg?.stickerPackId,
@@ -14,19 +16,19 @@ export function stickerFieldsFromMessage(msg: any) {
 }
 
 /** Видеокружок: кадр-превью. */
-export function videoNoteFieldsFromMessage(msg: any): { thumbUri?: string } {
+export function videoNoteFieldsFromMessage(msg: ChatMessage | null | undefined): { thumbUri?: string } {
   const thumbUri = String(msg?.thumbUri || "").trim();
   return thumbUri ? { thumbUri } : {};
 }
 
-export function albumUrisFieldFromMessage(msg: any): { uris?: string[] } {
+export function albumUrisFieldFromMessage(msg: ChatMessage | null | undefined): { uris?: string[] } {
   const uris = Array.isArray(msg?.uris)
-    ? msg.uris.map((u: any) => String(u || "").trim()).filter(Boolean).slice(0, CHAT_ALBUM_MAX)
+    ? msg.uris.map((u: string) => String(u || "").trim()).filter(Boolean).slice(0, CHAT_ALBUM_MAX)
     : [];
   return uris.length > 1 ? { uris } : {};
 }
 
-export function getChatReplyPreviewText(message: any, langCode: string): string {
+export function getChatReplyPreviewText(message: ChatMessage | null | undefined, langCode: string): string {
   if (String(message?.type || "") === "call") {
     const direction = String(message?.callDirection || "").trim();
     if (direction === "outgoing") return t("callsOutgoing", langCode as Lang);

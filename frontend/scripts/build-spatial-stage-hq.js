@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Качественная сцена пространственного фона (assets/spatial/stage-hq.jpg) из двух
+ * Качественная сцена пространственного фона (assets/spatial/stage-hq.png) из двух
  * 4×-апскейлов исходника assets/spatial/stage-source.jpg, сделанных Real-ESRGAN
  * (realesrgan-ncnn-vulkan, релиз v0.2.5.0):
  *
@@ -11,14 +11,14 @@
  * на континентах; на карте мира поверх него (lighten, мягкая маска) — animevideov3.
  * Правки элементов (MOVES): элемент вычитается из фона как свечение над восстановленным
  * фоном и прибавляется на новом месте (или не прибавляется — убран). На месте микрофона —
- * новый куб с ветвями нейросети (NEURAL_CUBE), нарисованный canvaskit; россыпь частиц у него
+ * новый куб (LOWER_CUBE), нарисованный canvaskit; россыпь частиц у него
  * и под панелью навигации прорежена (thinParticles). Затем цвет: бирюза → голубой (фон к
  * ~216°, светлые элементы к голубому LiVi ~203°, чуть приглушённо) и лёгкий холодный тон.
  * В конце убирается туман — светлая дымка пятнами по фону (removeHaze) — и дым: слабое
  * свечение вокруг элементов и в пустых местах (suppressSmoke); разводы фона выравниваются
  * (evenBackground); основной фон становится
  * серым в тон приложению (grayBackground), элементы остаются голубыми.
- * Затем чёткость (sharpen). Итог — 1440 px по ширине, JPEG 95.
+ * Затем чёткость (sharpen) и нормализация однотонной подложки. Итог — 1440 px, PNG без потерь.
  *
  *   node scripts/build-spatial-stage-hq.js x4plus.png anime.png
  *   node scripts/generate-spatial-depth.js
@@ -27,8 +27,11 @@ const path = require('path');
 const Jimp = require('jimp-compact');
 const { removeDarkCleanupStains } = require('./cleanup-spatial-dark-stains');
 const { refineSpatialStage } = require('./refine-spatial-stage-details');
+const { normalizeStage } = require('./normalize-spatial-stage');
+const { LOWER_CUBE } = require('./spatial-stage-style');
+const { canvasKit, drawCubeBody } = require('./spatial-cube');
 
-const OUT = path.join(__dirname, '..', 'assets', 'spatial', 'stage-hq.jpg');
+const OUT = path.join(__dirname, '..', 'assets', 'spatial', 'stage-hq.png');
 
 const smoothstep = (a, b, x) => {
   const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
@@ -74,7 +77,7 @@ const MOVES = [
   // Два больших облака снизу слева — убраны.
   { rect: [56, 698, 201, 820], remove: true },
   // Микрофон снизу справа — убран (сначала стоял на месте облаков, теперь там соты; на
-  // его месте справа — куб с нейросетью).
+  // его месте справа — куб).
   { rect: [436, 684, 526, 812], remove: true },
   // Камера справа на уровне верха радара — убрана…
   { rect: [427, 249, 541, 326], remove: true },
@@ -111,7 +114,7 @@ const MOVES = [
     feather: 7,
   },
   // Камера слева посередине — ниже и наклонена по диагонали вниз: объективом смотрит на
-  // куб с нейросетью справа внизу (NEURAL_CUBE, ~29° от горизонтали). Отдельной правкой после
+  // куб справа внизу (LOWER_CUBE, ~29° от горизонтали). Отдельной правкой после
   // карты: до её переноса рядом с камерой стоит Южная Америка, и повёрнутый объектив попал бы
   // в маску карты — его кусок уехал бы с ней. Рамка тесная: сверху боке, справа точки карты.
   { rect: [66, 492, 136, 539], dy: 45, rotate: 29, feather: 5 },
@@ -139,7 +142,7 @@ const CLEANUP = [
 /**
  * Точки и пятна, отмеченные белыми рамками на landscape-скриншоте главного экрана.
  * Координаты — исходник 572×1024. Рамки узкие и не заходят на камеру, графики,
- * соты и ветки куба. Очистка выполняется до наложения новых сот и нейрокуба, поэтому
+ * соты и свечение куба. Очистка выполняется до наложения новых сот и куба, поэтому
  * их линии и узлы остаются неизменными.
  */
 const MARKED_CLEANUP = [
@@ -155,7 +158,7 @@ const MARKED_CLEANUP = [
   { rect: [431, 597, 451, 629], remove: true, feather: 5 },
   { rect: [438, 651, 463, 686], remove: true, feather: 6 },
 
-  // Между заголовком, CTA и верхними ветками куба.
+  // Между заголовком, CTA и кубом.
   { rect: [344, 663, 360, 682], remove: true, feather: 4 },
   { rect: [329, 698, 341, 718], remove: true, feather: 4 },
   { rect: [331, 733, 340, 751], remove: true, feather: 3 },
@@ -190,16 +193,6 @@ const MAP_MARKED_CLEANUP = [
  */
 // На экране видно с x ≈ 58: сверху край одной соты, книзу 2–3, остальное под краем.
 const HONEYCOMB = { top: 706, rows: 5, r: 19, reachTop: 44, reachBottom: 112, seed: 0x51ce7a };
-
-/**
- * Новый элемент на месте микрофона: голографический куб, от вершин которого ветвятся линии
- * нейросети с узлами. Рисуется до перекраски в бирюзе, как родные иконки картинки, и
- * прибавляется светом (на тёмном фоне — как свечение).
- */
-// Первый вариант — пользователю он понравился больше: ветки частично уходят за правый
-// край экрана (телефон в портрете видит по ширине примерно 50…522 из 572).
-// brightness: тусклее микрофона сверху справа — фон, а не акцент.
-const NEURAL_CUBE = { cx: 480, cy: 744, r: 24, seed: 0x6c1f2e, brightness: 0.32 };
 
 function gaussianBlur(src, w, h, sigma) {
   const radius = Math.ceil(sigma * 3);
@@ -389,7 +382,7 @@ function pasteRotated(data, w, glow, { cx0, cy0, cw, ch }, ecx, ecy, sx, sy, rot
 }
 
 /**
- * Новые элементы картинки (куб с нейросетью, соты) одним слоем canvaskit в координатах
+ * Новые элементы картинки (свечение куба, соты) одним слоем canvaskit в координатах
  * исходника; возвращает премультиплицированные RGBA пиксели размера w×h.
  */
 async function drawOverlays(w, h, scale) {
@@ -398,7 +391,7 @@ async function drawOverlays(w, h, scale) {
   const c = surface.getCanvas();
   c.clear(ck.TRANSPARENT);
   c.scale(scale, scale);
-  drawNeuralCube(ck, c, scale, NEURAL_CUBE);
+  drawCubeGlow(ck, c, scale, LOWER_CUBE);
   drawHoneycomb(ck, c, scale, HONEYCOMB);
   const px = c.readPixels(0, 0, {
     width: w, height: h, colorType: ck.ColorType.RGBA_8888, alphaType: ck.AlphaType.Premul,
@@ -406,13 +399,6 @@ async function drawOverlays(w, h, scale) {
   });
   surface.delete();
   return px;
-}
-
-let canvasKitReady = null;
-function canvasKit() {
-  const dir = path.join(__dirname, '..', 'node_modules', 'canvaskit-wasm', 'bin', 'full');
-  canvasKitReady ??= require(path.join(dir, 'canvaskit.js'))({ locateFile: (f) => path.join(dir, f) });
-  return canvasKitReady;
 }
 
 function overlayPaint(ck, scale, rgb, alpha, { stroke, blur } = {}) {
@@ -486,9 +472,7 @@ function drawHoneycomb(ck, c, scale, { top, rows, r, reachTop, reachBottom, seed
   }
 }
 
-function drawNeuralCube(ck, c, scale, { cx, cy, r, seed, brightness = 1 }) {
-  let state = seed >>> 0;
-  const rnd = () => (state = (Math.imul(state, 1664525) + 1013904223) >>> 0) / 4294967296;
+function drawCubeGlow(ck, c, scale, { cx, cy, r, brightness = 1 }) {
   const paint = (rgb, alpha, { stroke, blur } = {}) => {
     const p = new ck.Paint();
     p.setAntiAlias(true);
@@ -503,54 +487,11 @@ function drawNeuralCube(ck, c, scale, { cx, cy, r, seed, brightness = 1 }) {
     return p;
   };
   const TEAL = [93, 175, 185];
-  const LIGHT = [175, 236, 242];
-
-  // Ветви нейросети: от вершин куба наружу, на концах узлы, у части — вторые ветки.
   const tilt = 0.14;
   const corner = (i) => {
     const a = -Math.PI / 2 + (Math.PI / 3) * i + tilt;
     return [cx + Math.cos(a) * r, cy + Math.sin(a) * r];
   };
-  const inBounds = (x, y) => x > 372 && x < 556 && y > 650 && y < 872;
-  const nodes = [];
-  const branch = (x0, y0, angle, length, depth) => {
-    const x1 = x0 + Math.cos(angle) * length;
-    const y1 = y0 + Math.sin(angle) * length;
-    if (!inBounds(x1, y1)) return;
-    const bend = (rnd() - 0.5) * length * 0.35;
-    const mx = (x0 + x1) / 2 - Math.sin(angle) * bend;
-    const my = (y0 + y1) / 2 + Math.cos(angle) * bend;
-    const p = new ck.Path();
-    p.moveTo(x0, y0);
-    p.quadTo(mx, my, x1, y1);
-    c.drawPath(p, paint(TEAL, depth ? 0.22 : 0.3, { stroke: 3.2, blur: 1.6 }));
-    c.drawPath(p, paint(LIGHT, depth ? 0.42 : 0.6, { stroke: depth ? 0.8 : 1.05 }));
-    nodes.push([x1, y1, depth]);
-    if (depth < 2) {
-      const kids = depth === 0 ? 1 + Math.floor(rnd() * 2) : rnd() < 0.5 ? 1 : 0;
-      for (let k = 0; k < kids; k++) {
-        branch(x1, y1, angle + (rnd() - 0.5) * 1.3, length * (0.45 + rnd() * 0.25), depth + 1);
-      }
-    }
-  };
-  for (let i = 0; i < 6; i++) {
-    const [x0, y0] = corner(i);
-    const out = Math.atan2(y0 - cy, x0 - cx);
-    branch(x0, y0, out + (rnd() - 0.5) * 0.5, 30 + rnd() * 34, 0);
-  }
-  // Поперечные связи между близкими узлами — сеть, а не дерево.
-  const link = paint(LIGHT, 0.22, { stroke: 0.6 });
-  for (let i = 0; i < nodes.length; i++) {
-    for (let j = i + 1; j < nodes.length; j++) {
-      const d = Math.hypot(nodes[i][0] - nodes[j][0], nodes[i][1] - nodes[j][1]);
-      if (d < 34 && rnd() < 0.55) c.drawLine(nodes[i][0], nodes[i][1], nodes[j][0], nodes[j][1], link);
-    }
-  }
-  for (const [x, y, depth] of nodes) {
-    c.drawCircle(x, y, depth ? 4 : 5.5, paint(TEAL, 0.4, { blur: 3 }));
-    c.drawCircle(x, y, depth ? 1.3 : 1.9, paint(LIGHT, 0.95));
-  }
-
   // Тело куба рисуется отдельно, уже в итоговых цветах (drawCubeBody) — как маленький кубик
   // сверху. Здесь только мягкое свечение вокруг.
   const pts = [0, 1, 2, 3, 4, 5].map(corner);
@@ -558,56 +499,6 @@ function drawNeuralCube(ck, c, scale, { cx, cy, r, seed, brightness = 1 }) {
   pts.forEach(([x, y], i) => (i ? hex.lineTo(x, y) : hex.moveTo(x, y)));
   hex.close();
   c.drawPath(hex, paint(TEAL, 0.3, { blur: 12 }));
-}
-
-/**
- * Тело куба с нейросетью — в тех же цветах граней, что у маленького кубика справа от
- * верхнего облака (замерены на готовой картинке): верх, светлая синяя правая грань, тёмная
- * левая, тонкие рёбра. Рисуется поверх уже перекрашенной картинки, обычным наложением.
- */
-const CUBE_FACES = {
-  top: [59, 77, 101],
-  right: [59, 79, 107],
-  left: [59, 69, 83],
-  edge: [86, 108, 136],
-};
-
-async function drawCubeBody(w, h, scale, { cx, cy, r }) {
-  const ck = await canvasKit();
-  const surface = ck.MakeSurface(w, h);
-  const c = surface.getCanvas();
-  c.clear(ck.TRANSPARENT);
-  c.scale(scale, scale);
-  const tilt = 0.14;
-  const pts = [0, 1, 2, 3, 4, 5].map((i) => {
-    const a = -Math.PI / 2 + (Math.PI / 3) * i + tilt;
-    return [cx + Math.cos(a) * r, cy + Math.sin(a) * r];
-  });
-  const fill = (rgb) => overlayPaint(ck, scale, rgb, 1);
-  const face = (a, b, d, rgb) => {
-    const f = new ck.Path();
-    f.moveTo(cx, cy);
-    f.lineTo(...pts[a]);
-    f.lineTo(...pts[b]);
-    f.lineTo(...pts[d]);
-    f.close();
-    c.drawPath(f, fill(rgb));
-  };
-  face(5, 0, 1, CUBE_FACES.top);
-  face(1, 2, 3, CUBE_FACES.right);
-  face(3, 4, 5, CUBE_FACES.left);
-  const edge = overlayPaint(ck, scale, CUBE_FACES.edge, 0.35, { stroke: 0.8 });
-  const hex = new ck.Path();
-  pts.forEach(([x, y], i) => (i ? hex.lineTo(x, y) : hex.moveTo(x, y)));
-  hex.close();
-  c.drawPath(hex, edge);
-  for (const i of [1, 3, 5]) c.drawLine(cx, cy, pts[i][0], pts[i][1], edge);
-  const px = c.readPixels(0, 0, {
-    width: w, height: h, colorType: ck.ColorType.RGBA_8888, alphaType: ck.AlphaType.Premul,
-    colorSpace: ck.ColorSpace.SRGB,
-  });
-  surface.delete();
-  return px;
 }
 
 /**
@@ -880,17 +771,17 @@ function suppressSmoke(data, w, h, scale, overlay) {
 }
 
 /**
- * Россыпь частиц у куба с нейросетью и под панелью навигации — реже (просьба пользователя
+ * Россыпь частиц у куба и под панелью навигации — реже (просьба пользователя
  * «прорядить»). Частица — связное пятно над локальным фоном (выше THIN_RISE уровней, в пике
  * не слабее THIN_MIN_PEAK — иначе это шум фона) не крупнее maxArea её зоны (кв. пикселей
  * исходника). От самых заметных к слабым: частица остаётся, если ближе gap её зоны к ней
- * нет уже оставленной; у веток куба (ближе THIN_NET_CLEAR к ним) частиц нет вовсе — сеть
- * читается чисто. Остальные вычитаются до фона вместе с ореолом.
- * Идёт до наложения куба и сот: в картинке их ещё нет, overlay только показывает, где ветки.
+ * нет уже оставленной; возле графики overlay (ближе THIN_NET_CLEAR) частиц нет вовсе.
+ * Остальные вычитаются до фона вместе с ореолом.
+ * Идёт до наложения куба и сот: в картинке их ещё нет, их расположение задаёт overlay.
  */
 // Координаты исходника; зона частицы — по её центру.
 const THIN_ZONES = [
-  // От середины кнопки «Найти собеседника» вправо до края, от верхних веток куба до кнопки.
+  // От середины кнопки «Найти собеседника» вправо до края, от области над кубом до кнопки.
   { rect: [170, 630, 572, 790], gap: 36, maxArea: 260 },
   // Под кнопкой до низа экрана, под панелью навигации тоже, с x 150 (левее только соты и
   // кубик — их не трогаем): пятен ещё реже. Пятна здесь крупнее, с ореолом.
@@ -960,7 +851,7 @@ function thinParticles(data, w, h, scale, overlay) {
   const particles = blobs.filter(
     (b) => b.zone && b.peak >= THIN_MIN_PEAK && b.pixels.length / (scale * scale) <= b.zone.maxArea,
   );
-  // Ветки куба — пиксели overlay в сетке исходника.
+  // Графика overlay в сетке исходника.
   const sw = Math.round(w / scale);
   const sh = Math.round(h / scale);
   const net = new Uint8Array(sw * sh);
@@ -1336,7 +1227,7 @@ async function main() {
   for (const move of CLEANUP) moveElement(A, w, h, scale, move);
   removeMarkedArtifacts(A, w, h, scale);
   removeMapMarkedArtifacts(A, w, h, scale);
-  // Куб с нейросетью и соты — светом поверх фона.
+  // Свечение куба и соты — светом поверх фона.
   for (let i = 0; i < w * h * 4; i += 4) {
     if (overlay[i + 3] === 0) continue;
     for (let ch = 0; ch < 3; ch++) A[i + ch] = Math.min(255, A[i + ch] + overlay[i + ch]);
@@ -1369,16 +1260,17 @@ async function main() {
   sharpen(A, w, h);
   grayBackground(A, w, h);
   removeDarkCleanupStains(A, w, h, scale);
-  // Тело куба с нейросетью — в цветах маленького кубика, и облако сообщения — поверх.
-  for (const layer of [await drawCubeBody(w, h, scale, NEURAL_CUBE), await drawChatBubble(w, h, scale, CHAT_BUBBLE)]) {
+  // Тело куба — в цветах маленького кубика, и облако сообщения — поверх.
+  for (const layer of [await drawCubeBody(w, h, scale, LOWER_CUBE), await drawChatBubble(w, h, scale, CHAT_BUBBLE)]) {
     for (let i = 0; i < w * h * 4; i += 4) {
       const a = layer[i + 3] / 255;
       if (a === 0) continue;
       for (let ch = 0; ch < 3; ch++) A[i + ch] = Math.round(layer[i + ch] + A[i + ch] * (1 - a));
     }
   }
-  await base.resize(1440, Jimp.AUTO, Jimp.RESIZE_BICUBIC).quality(95).writeAsync(OUT);
+  await base.resize(1440, Jimp.AUTO, Jimp.RESIZE_BICUBIC).writeAsync(OUT);
   await refineSpatialStage(OUT);
+  await normalizeStage(OUT);
   console.log(`${path.relative(process.cwd(), OUT)}  1440 px`);
 }
 

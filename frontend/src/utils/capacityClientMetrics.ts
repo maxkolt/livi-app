@@ -107,7 +107,7 @@ export async function sendClientMetrics(
       },
       body: JSON.stringify(normalized),
       signal: controller?.signal,
-    } as any);
+    });
   } catch {
     // Best-effort only: metrics must never affect call flow.
   } finally {

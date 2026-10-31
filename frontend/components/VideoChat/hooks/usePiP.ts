@@ -1,3 +1,8 @@
+import type { MediaStream } from '@livekit/react-native-webrtc';
+import type { VideoCallSession } from '../../../src/webrtc/sessions/VideoCallSession';
+import type { CallPartnerProfile } from '../../../src/webrtc/types';
+import type { RootStackParamList } from '../../../navigation/types';
+import type { CallAudioGlobals } from '../../../utils/callStateTypes';
 import { useCallback, useRef, useEffect } from 'react';
 import { BackHandler, PanResponder, Platform, Dimensions, NativeModules } from 'react-native';
 import { usePiP as usePiPContext, isPipOverlayVisibleSync } from '../../../src/pip/PiPContext';
@@ -22,11 +27,11 @@ interface UsePiPProps {
   micOn: boolean;
   remoteMuted: boolean;
   remoteCamOn: boolean;
-  localStream: any;
-  remoteStream: any;
-  friends: any[];
-  routeParams?: any;
-  session?: any; // VideoCallSession
+  localStream: MediaStream | null;
+  remoteStream: MediaStream | null;
+  friends: CallPartnerProfile[];
+  routeParams?: RootStackParamList['VideoCall'];
+  session?: VideoCallSession | null;
   acceptCallTimeRef: React.MutableRefObject<number>;
   enableAndroidBackHandler?: boolean;
   getAudioOutputRoute?: () => import('./audioRouteTypes').InCallAudioRoute;
@@ -83,7 +88,7 @@ export const usePiP = ({
   }, [wasFriendCallEnded]);
 
   useEffect(() => {
-    const currentSession = session || (global as any).__webrtcSessionRef?.current;
+    const currentSession = session || (global as CallAudioGlobals).__webrtcSessionRef?.current;
     const actualRoomId = roomId || currentSession?.getRoomId?.() || null;
     const actualCallId = callId || currentSession?.getCallId?.() || null;
     const actualPartnerId = partnerId || currentSession?.getPartnerId?.() || null;
@@ -96,7 +101,7 @@ export const usePiP = ({
   // Функция для входа в PiP
   const enterPiPMode = useCallback((opts?: { deferVisible?: boolean; fromVideoCallBack?: boolean }) => {
     const now = Date.now();
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     // Accept с Incoming: task-switch/ложный Back не должен показывать in-app PiP.
     if (isIncomingAnswerTransitionActive()) {
       return;
@@ -138,7 +143,7 @@ export const usePiP = ({
         pip.hidePiP();
         pipRef.current = { ...pip, visible: false };
         pipVisibleRef.current = false;
-        const currentSession = session || (global as any).__webrtcSessionRef?.current;
+        const currentSession = session || (global as CallAudioGlobals).__webrtcSessionRef?.current;
         if (currentSession && currentSession.exitPiP) {
           currentSession.exitPiP();
         }
@@ -149,7 +154,7 @@ export const usePiP = ({
     // КРИТИЧНО: Получаем актуальные значения из session если они null в пропсах
     // Это решает проблему когда roomId/callId еще не установлены в state, но есть в session
     // Также проверяем глобальную ссылку на session как fallback
-    const currentSession = session || (global as any).__webrtcSessionRef?.current;
+    const currentSession = session || (global as CallAudioGlobals).__webrtcSessionRef?.current;
     const actualRoomId = roomId || currentSession?.getRoomId?.() || null;
     const actualCallId = callId || currentSession?.getCallId?.() || null;
     const actualPartnerId = partnerId || currentSession?.getPartnerId?.() || null;
@@ -167,7 +172,7 @@ export const usePiP = ({
       const partner = partnerUserId
         ? friends.find(f => String(f._id) === String(partnerUserId))
         : null;
-      const partnerNameFromParams = (routeParams as any)?.partnerNick ?? (routeParams as any)?.partnerName ?? '';
+      const partnerNameFromParams = routeParams?.partnerNick ?? routeParams?.partnerName ?? '';
 
       // КРИТИЧНО: Используем avatarThumbB64 (data URI) для аватара в PiP
       // Это соответствует тому, как аватары используются в других частях приложения
@@ -212,7 +217,7 @@ export const usePiP = ({
       if (effectiveLocalCamOn) {
         markDirectCallVideoMediaActive();
         try {
-          const g = global as any;
+          const g = global as CallAudioGlobals;
           g.__stayOnVideoCallUiRef = g.__stayOnVideoCallUiRef || { current: false };
           g.__stayOnVideoCallUiRef.current = true;
         } catch {}
@@ -241,7 +246,7 @@ export const usePiP = ({
           ...routeParams,
           peerUserId: partnerUserId,
           partnerId: actualPartnerId || partnerId,
-        } as any,
+        },
       });
       // Синхронно совмещаем ref с showPiP до следующего рендера (pip.visible из замыкания ещё старый).
       pipRef.current = { ...pip, visible: true };
@@ -271,14 +276,14 @@ export const usePiP = ({
       } else {
         logger.warn('[usePiP] ⚠️ Session недоступна', {
           hasSession: !!currentSession,
-          hasGlobalSession: !!(global as any).__webrtcSessionRef?.current
+          hasGlobalSession: !!(global as CallAudioGlobals).__webrtcSessionRef?.current
         });
       }
 
     } else {
       // Префетч Android Back: __pipVisibleRef=true до goBack(), но PiP не показываем — убираем «висящий» флаг.
       try {
-        const g = global as any;
+        const g = global as CallAudioGlobals;
         if (g.__pipVisibleRef?.current === true && !pip.visible) g.__pipVisibleRef.current = false;
       } catch {}
     }
@@ -288,7 +293,7 @@ export const usePiP = ({
   const minimizeToInAppPiP = useCallback(() => {
     if (isIncomingAnswerTransitionActive()) return;
     if (isInactiveStateRef.current || wasFriendCallEndedRef.current) {
-      const returnTo = (routeParams as any)?.returnTo as
+      const returnTo = routeParams?.returnTo as
         | { name: string; params?: object }
         | undefined;
       goBackFromCallScreenOrHome(returnTo);
@@ -298,7 +303,7 @@ export const usePiP = ({
 
     const now = Date.now();
     try {
-      const g = global as any;
+      const g = global as CallAudioGlobals;
       g.__leavingVideoCallByBackRef = g.__leavingVideoCallByBackRef || { current: false };
       g.__leavingVideoCallByBackRef.current = true;
       g.__disableSystemPiPUntilRef = g.__disableSystemPiPUntilRef || { current: 0 };
@@ -321,7 +326,7 @@ export const usePiP = ({
       NativeModules.LiviAppModule?.setSystemPiPCaptureFrameReady?.(false);
     } catch {}
 
-    const returnTo = (routeParams as any)?.returnTo as
+    const returnTo = routeParams?.returnTo as
       | { name: string; params?: object }
       | undefined;
     goBackFromCallScreenOrHome(returnTo);
@@ -329,7 +334,7 @@ export const usePiP = ({
     const revealInAppPiPAfterBack = () => {
       enterPiPMode({ deferVisible: true, fromVideoCallBack: true });
       try {
-        const g = global as any;
+        const g = global as CallAudioGlobals;
         const clearLeaving = () => {
           g.__leavingVideoCallByBackRef = g.__leavingVideoCallByBackRef || { current: false };
           g.__leavingVideoCallByBackRef.current = false;
@@ -390,7 +395,7 @@ export const usePiP = ({
         if (Platform.OS === 'ios') {
           startXRef.current = evt.nativeEvent.locationX;
           // Проверяем, есть ли активный звонок, используя refs для актуальных значений
-          const currentSession = session || (global as any).__webrtcSessionRef?.current;
+          const currentSession = session || (global as CallAudioGlobals).__webrtcSessionRef?.current;
           const actualRoomId = roomId || currentSession?.getRoomId?.() || null;
           const actualCallId = callId || currentSession?.getCallId?.() || null;
           const actualPartnerId = partnerId || currentSession?.getPartnerId?.() || null;
@@ -436,14 +441,14 @@ export const usePiP = ({
             // Звонок завершен - просто возвращаемся назад без PiP
             requestAnimationFrame(() => {
               goBackFromCallScreenOrHome(
-                (routeParams as any)?.returnTo as { name: string; params?: object } | undefined,
+                routeParams?.returnTo as { name: string; params?: object } | undefined,
               );
             });
             return;
           }
           
           // КРИТИЧНО: Получаем актуальные значения из session для проверки активного звонка
-          const currentSession = session || (global as any).__webrtcSessionRef?.current;
+          const currentSession = session || (global as CallAudioGlobals).__webrtcSessionRef?.current;
           const actualRoomId = roomId || currentSession?.getRoomId?.() || null;
           const actualCallId = callId || currentSession?.getCallId?.() || null;
           const actualPartnerId = partnerId || currentSession?.getPartnerId?.() || null;
@@ -457,7 +462,7 @@ export const usePiP = ({
             // Back/swipe: in-app PiP поверх предыдущего экрана. System PiP — только Home/фон.
             if (Platform.OS === 'android') {
               try {
-                const g = global as any;
+                const g = global as CallAudioGlobals;
                 g.__leavingVideoCallByBackRef = g.__leavingVideoCallByBackRef || { current: false };
                 g.__leavingVideoCallByBackRef.current = true;
                 g.__disableSystemPiPUntilRef = g.__disableSystemPiPUntilRef || { current: 0 };
@@ -469,11 +474,11 @@ export const usePiP = ({
               pipShownDuringSwipeRef.current = true;
             }
             goBackFromCallScreenOrHome(
-              (routeParams as any)?.returnTo as { name: string; params?: object } | undefined,
+              routeParams?.returnTo as { name: string; params?: object } | undefined,
             );
             if (Platform.OS === 'android') {
               try {
-                const g = global as any;
+                const g = global as CallAudioGlobals;
                 const clearLeaving = () => {
                   g.__leavingVideoCallByBackRef = g.__leavingVideoCallByBackRef || { current: false };
                   g.__leavingVideoCallByBackRef.current = false;
@@ -490,7 +495,7 @@ export const usePiP = ({
             // Нет активного звонка - просто возвращаемся назад
             requestAnimationFrame(() => {
               goBackFromCallScreenOrHome(
-                (routeParams as any)?.returnTo as { name: string; params?: object } | undefined,
+                routeParams?.returnTo as { name: string; params?: object } | undefined,
               );
             });
           }
@@ -498,7 +503,7 @@ export const usePiP = ({
       },
       onPanResponderTerminate: (_, gestureState) => {
         if (!isInactiveStateRef.current && !wasFriendCallEndedRef.current) {
-          const currentSession = session || (global as any).__webrtcSessionRef?.current;
+          const currentSession = session || (global as CallAudioGlobals).__webrtcSessionRef?.current;
           const actualRoomId = roomId || currentSession?.getRoomId?.() || null;
           const actualCallId = callId || currentSession?.getCallId?.() || null;
           const actualPartnerId = partnerId || currentSession?.getPartnerId?.() || null;
@@ -506,7 +511,7 @@ export const usePiP = ({
           if (hasActiveCall) {
             if (Platform.OS === 'android') {
               try {
-                const g = global as any;
+                const g = global as CallAudioGlobals;
                 g.__leavingVideoCallByBackRef = g.__leavingVideoCallByBackRef || { current: false };
                 g.__leavingVideoCallByBackRef.current = true;
                 g.__disableSystemPiPUntilRef = g.__disableSystemPiPUntilRef || { current: 0 };
@@ -519,11 +524,11 @@ export const usePiP = ({
             }
             requestAnimationFrame(() => {
               goBackFromCallScreenOrHome(
-                (routeParams as any)?.returnTo as { name: string; params?: object } | undefined,
+                routeParams?.returnTo as { name: string; params?: object } | undefined,
               );
               if (Platform.OS === 'android') {
                 try {
-                  const g = global as any;
+                  const g = global as CallAudioGlobals;
                   g.__leavingVideoCallByBackRef = g.__leavingVideoCallByBackRef || { current: false };
                   g.__leavingVideoCallByBackRef.current = false;
                 } catch {}

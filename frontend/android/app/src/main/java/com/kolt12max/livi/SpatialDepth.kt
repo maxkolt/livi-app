@@ -510,9 +510,9 @@ private object SpatialScene {
 
   private fun to8(v: Int, dither: Int): Int = ((v + dither) shr 16).coerceIn(0, 255)
 
-  /** Ноль разности в слое элементов — LAYER_OFFSET 64 (generate-spatial-depth.js). */
-  private const val EMPTY = (0xFF shl 24) or (64 shl 16) or (64 shl 8) or 64
-  private const val EMPTY10 = (256 shl 20) or (256 shl 10) or 256
+  /** Ноль разности в слое элементов — LAYER_OFFSET 32 (generate-spatial-depth.js). */
+  private const val EMPTY = (0xFF shl 24) or (32 shl 16) or (32 shl 8) or 32
+  private const val EMPTY10 = (128 shl 20) or (128 shl 10) or 128
   private const val BLOCK = 32
 }
 
@@ -953,7 +953,7 @@ class SpatialBackgroundView(context: Context) : View(context), SpatialTilt.Liste
     const val VIGNETTE_MIN = 0.8f
 
     /**
-     * Числа формата слоёв — из generate-spatial-depth.js: LAYER_OFFSET 64 (ноль разности),
+     * Числа формата слоёв — из generate-spatial-depth.js: LAYER_OFFSET 32 (ноль разности),
      * PLANE_STEP 40 (номер плана), TILE_BIT_STEP 8 (биты планов плитки).
      */
     const val AGSL = """
@@ -975,7 +975,8 @@ class SpatialBackgroundView(context: Context) : View(context), SpatialTilt.Liste
 
       half4 main(float2 p) {
         // Дальний план — фон без элементов.
-        float3 c = float3(plate.eval(p - plateOffset).rgb);
+        float3 base = float3(plate.eval(p - plateOffset).rgb);
+        float3 c = base;
         // Элементы: каждый план сдвигается целиком, без растяжения. Проверяются только планы,
         // что есть рядом (биты плитки); точка слоя — его, если номер плана совпал.
         float bits = floor(float(tiles.eval(p).r) * 255.0 / 8.0 + 0.5);
@@ -990,7 +991,7 @@ class SpatialBackgroundView(context: Context) : View(context), SpatialTilt.Liste
           float s = planeShift[k];
           float2 q = p - float2(planeOffX[k], planeOffY[k]);
           if (abs(float(planes.eval(q).r) * 255.0 / 40.0 - float(k + 1)) > 0.5) continue;
-          float3 d = float3(layers.eval(q).rgb) - 64.0 / 255.0;
+          float3 d = float3(layers.eval(q).rgb) - 32.0 / 255.0;
           c += d;
           float amount = d.r + d.g + d.b;
           if (amount > strongest) {
@@ -1016,13 +1017,14 @@ class SpatialBackgroundView(context: Context) : View(context), SpatialTilt.Liste
         float2 lightPos = size * (float2(0.32, 0.22) - tilt * 0.42);
         float2 toLight = (lightPos - p) / size.x;
         float spot = exp(-dot(toLight, toLight) * 2.4);
-        float catchLight = smoothstep(0.2, 0.55, lum) * (0.35 + 0.65 * lift);
+        float foreground = smoothstep(0.0, 0.025, strongest);
+        float catchLight = smoothstep(0.2, 0.55, lum) * (0.35 + 0.65 * lift) * foreground;
 
         c *= dim;
         // Виньетка: края темнее — сцена уходит вглубь.
         float2 v = p / size - 0.5;
         float vignette = 1.0 - smoothstep(0.32, 0.95, length(v * float2(1.15, 0.95)));
-        c *= mix(0.8, 1.0, vignette);
+        c = mix(base * dim, c * mix(0.8, 1.0, vignette), foreground);
         // Свет — только на самих элементах (без светлого пятна по фону: оно читалось туманом).
         float3 glow = float3(glowColor.rgb);
         c += glow * (catchLight * spot * 0.22);
@@ -1048,7 +1050,7 @@ class SpatialBackgroundView(context: Context) : View(context), SpatialTilt.Liste
         // Фон картинки после осветления — lum 0.215…0.235: старая маска давала ему ~15%
         // перелива, и f1·f2 шахматкой пятен ползло по всему экрану при наклоне. Отсечка
         // чуть выше фона гасит его; элементам ярче 0.29 перелив остаётся прежним.
-        float element = smoothstep(0.16, 0.45, lum) * smoothstep(0.235, 0.29, lum);
+        float element = smoothstep(0.16, 0.45, lum) * smoothstep(0.235, 0.29, lum) * foreground;
         c += hue * element * shine * 0.13;
 
         // Голограмма — только на элементах, пиксель в пиксель, без размытия. Рельеф элемента —
@@ -1102,7 +1104,7 @@ class SpatialBackgroundView(context: Context) : View(context), SpatialTilt.Liste
         }
 
         // Blue noise ±0.5 уровня до округления: тёмные переходы без полос.
-        c += (float(noise.eval(p).r) - 0.5) / 255.0;
+        c += (float(noise.eval(p).r) - 0.5) / 255.0 * foreground;
         return half4(half3(c), 1.0);
       }
     """
@@ -1112,7 +1114,7 @@ class SpatialBackgroundView(context: Context) : View(context), SpatialTilt.Liste
 /**
  * Стеклянный блок над сценой: строки списков, «Пригласить друзей», карточки профиля.
  *
- * Под собой показывает кусок заранее размытой сцены (spatial_stage_blur.jpg) — с тем же
+ * Под собой показывает кусок заранее размытой сцены (spatial_stage_blur.png) — с тем же
  * cover, сдвигом от наклона, затемнением и виньеткой, что у фона, — сверху тонировку, блик и
  * светлую кромку. Живое размытие (RenderEffect) на каждой строке при прокрутке и наклоне —
  * десятки проходов за кадр; здесь одна отрисовка картинки на блок.

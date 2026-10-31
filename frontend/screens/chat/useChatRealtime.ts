@@ -1,3 +1,4 @@
+import type { ChatMessage } from './chatMessageTypes';
 /** Realtime socket listeners for an open chat. */
 
 import React from "react";
@@ -33,13 +34,13 @@ const STATUS_RANK: Record<string, number> = { failed: 0, sending: 1, sent: 2, de
 type Options = {
   peerId: string;
   currentUserId: string | null;
-  setMessages: React.Dispatch<React.SetStateAction<any[]>>;
+  setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>;
   setUploadStatus: React.Dispatch<React.SetStateAction<Record<string, "sending" | "sent" | "failed">>>;
   setSelectedMessageIds: React.Dispatch<React.SetStateAction<Set<string>>>;
   updateReadStatuses: (updater: (prev: ReadStatusMap) => ReadStatusMap) => void;
   resolveMediaUri: (uri?: string) => string;
   scrollToBottom: () => void;
-  latestMessagesForPersistRef: React.MutableRefObject<any[]>;
+  latestMessagesForPersistRef: React.MutableRefObject<ChatMessage[]>;
   isFocusedRef: React.MutableRefObject<boolean>;
   readReceiptSentIdsRef: React.MutableRefObject<Set<string>>;
   deletedServerMessageIdsRef: React.MutableRefObject<Set<string>>;
@@ -88,20 +89,20 @@ export function useChatRealtime({
           text: message.text,
           type: message.type,
           uri: message.uri,
-          uris: Array.isArray((message as any).uris) && (message as any).uris.length > 1
-            ? (message as any).uris.map((u: any) => String(u || '').trim()).filter(Boolean).slice(0, CHAT_ALBUM_MAX)
+          uris: Array.isArray(message.uris) && message.uris.length > 1
+            ? message.uris.map((u) => String(u || '').trim()).filter(Boolean).slice(0, CHAT_ALBUM_MAX)
             : undefined,
-          name: (message as any).name,
-          size: (message as any).size,
-          duration: (message as any).duration,
+          name: message.name,
+          size: message.size,
+          duration: message.duration,
           ...stickerFieldsFromMessage(message),
           ...videoNoteFieldsFromMessage(message),
           sender: isFromMe ? "me" : "peer",
           from: message.from,
           to: message.to,
           timestamp: new Date(message.timestamp),
-          reactions: Array.isArray((message as any).reactions) ? (message as any).reactions.map((r: any) => ({ emoji: r.emoji, userId: String(r.userId) })) : [],
-          ...((message as any).replyTo && (message as any).replyTo.id ? { replyTo: { id: (message as any).replyTo.id, text: (message as any).replyTo.text, from: (message as any).replyTo.from, isOwn: (message as any).replyTo.from === currentUserId } } : {}),
+          reactions: Array.isArray(message.reactions) ? message.reactions.map((r) => ({ emoji: r.emoji, userId: String(r.userId) })) : [],
+          ...(message.replyTo && message.replyTo.id ? { replyTo: { id: message.replyTo.id, text: message.replyTo.text, from: message.replyTo.from, isOwn: message.replyTo.from === currentUserId } } : {}),
         };
         
         // КРИТИЧНО: Логируем входящие сообщения с изображениями для отладки
@@ -118,7 +119,7 @@ export function useChatRealtime({
         }
 
         const existedBeforeLiveReceive = isFromPeer
-          ? latestMessagesForPersistRef.current.some((msg: any) => String(msg?.id || '') === String(newMessage.id || ''))
+          ? latestMessagesForPersistRef.current.some((msg: ChatMessage) => String(msg?.id || '') === String(newMessage.id || ''))
           : false;
 
         setMessages((prev) => {
@@ -239,14 +240,14 @@ export function useChatRealtime({
       });
       try {
         updateReadStatuses((prev) => {
-          const next: any = { ...prev };
+          const next = { ...prev };
           for (const id of deletedIds) delete next[id];
           return next;
         });
       } catch {}
       try {
         setUploadStatus((prev) => {
-          const next: any = { ...prev };
+          const next = { ...prev };
           for (const id of deletedIds) delete next[id];
           return next;
         });
@@ -276,14 +277,14 @@ export function useChatRealtime({
       });
       try {
         updateReadStatuses((prev) => {
-          const next: any = { ...prev };
+          const next = { ...prev };
           for (const id of deletedIds) delete next[id];
           return next;
         });
       } catch {}
       try {
         setUploadStatus((prev) => {
-          const next: any = { ...prev };
+          const next = { ...prev };
           for (const id of deletedIds) delete next[id];
           return next;
         });
@@ -297,7 +298,7 @@ export function useChatRealtime({
       } catch {}
     };
     const unsubscribeMessageDeleted = onMessageDeleted((data) => {
-      const mid = String((data as any)?.messageId || '').trim();
+      const mid = String(data?.messageId || '').trim();
       if (!mid) return;
       rememberDeletedServerMessageId(mid);
       pendingDeletedIds.add(mid);
@@ -310,12 +311,12 @@ export function useChatRealtime({
         pendingDeletedTimer = null;
       }
       pendingDeletedIds.clear();
-      applyDeletedIds(Array.isArray((data as any)?.messageIds) ? (data as any).messageIds : []);
+      applyDeletedIds(Array.isArray(data?.messageIds) ? data.messageIds : []);
     });
 
     const unsubscribeMessageEdited = onMessageEdited((data) => {
-      const mid = String((data as any)?.messageId || '').trim();
-      const text = typeof (data as any)?.text === 'string' ? String((data as any).text) : '';
+      const mid = String(data?.messageId || '').trim();
+      const text = typeof data?.text === 'string' ? String(data.text) : '';
       if (!mid) return;
       setMessages((prev) => {
         const updated = prev.map((msg) =>
@@ -326,16 +327,16 @@ export function useChatRealtime({
     });
 
     const unsubscribeMessageUrisUpdated = onMessageUrisUpdated((data) => {
-      const mid = String((data as any)?.messageId || '').trim();
+      const mid = String(data?.messageId || '').trim();
       if (!mid) return;
-      if ((data as any)?.deleted) {
+      if (data?.deleted) {
         setMessages((prev) => prev.filter((msg) => String(msg?.id || '') !== mid));
         return;
       }
-      const nextUris = Array.isArray((data as any)?.uris)
-        ? (data as any).uris.map((u: any) => String(u || '').trim()).filter(Boolean).slice(0, CHAT_ALBUM_MAX)
+      const nextUris = Array.isArray(data?.uris)
+        ? data.uris.map((u) => String(u || '').trim()).filter(Boolean).slice(0, CHAT_ALBUM_MAX)
         : [];
-      const primary = String((data as any)?.uri || nextUris[0] || '').trim();
+      const primary = String(data?.uri || nextUris[0] || '').trim();
       setMessages((prev) =>
         prev.map((msg) => {
           if (String(msg?.id || '') !== mid) return msg;
@@ -362,7 +363,7 @@ export function useChatRealtime({
         clearMessageCache(peerId, currentUserId || undefined);
         setMessages((prev) => prev.filter((msg) => !olds.has(String(msg?.id || ''))));
         updateReadStatuses((prev) => {
-          const next: any = { ...prev };
+          const next = { ...prev };
           for (const oid of olds) delete next[oid];
           delete next[serverMessageId];
           return next;
@@ -400,8 +401,8 @@ export function useChatRealtime({
       // Обычно server id = optimistic id: «часы»/«ошибку» под этим же id поднимаем до галочек,
       // но не опускаем уже пришедшие «доставлено»/«прочитано».
       updateReadStatuses((prev) => {
-        const next: any = { ...prev };
-        let best: string = ev.delivered ? 'delivered' : 'sent';
+        const next = { ...prev };
+        let best: ReadStatusMap[string] = ev.delivered ? 'delivered' : 'sent';
         for (const id of [serverMessageId, ...olds]) {
           const v = next[id];
           if (v && v !== 'sending' && v !== 'failed' && STATUS_RANK[v] > STATUS_RANK[best]) best = v;

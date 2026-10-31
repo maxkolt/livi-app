@@ -1100,6 +1100,12 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
         pendingExternalHoldFocusChange = 0
       }
     }
+    CallProximityController.setExternalHold(active)
+  }
+
+  @ReactMethod
+  fun refreshCallProximity() {
+    CallProximityController.refresh()
   }
 
   /** JS: сбросить ложный LOSS_TRANSIENT с bootstrap (до установления медиа). */
@@ -1188,6 +1194,12 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       }
       val map = Arguments.createMap()
       map.putBoolean("telephony", telephony)
+      val pm = appCtx.getSystemService(Context.POWER_SERVICE) as? PowerManager
+      val keyguard = appCtx.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
+      map.putBoolean("screenInteractive", pm?.isInteractive ?: true)
+      map.putBoolean("keyguardLocked", keyguard?.isKeyguardLocked ?: false)
+      map.putBoolean("foreignVoicePlayback", Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+        am != null && hasForeignVoicePlayback(am.activePlaybackConfigurations))
       map.putBoolean("focusLost", activeCallVoiceFocusLost)
       map.putBoolean("pending", pendingFocus != 0 || telephony)
       map.putInt("focusChange", pendingFocus)
@@ -2077,16 +2089,8 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     if (prev != enabled) {
       Log.i(NAME, "setShouldEnterPiPOnLeaveHint: $prev -> $enabled")
     }
-    // S+: как только JS взвёл звонок — сразу включаем системный auto-enter на Activity,
-    // пока экран звонка виден. Тогда уход в фон надёжно вводит в PiP на всех устройствах
-    // (без отложенного ручного enterPictureInPictureMode, падавшего с "must be resumed").
-    try {
-      (currentActivity as? MainActivity)?.let { act ->
-        act.runOnUiThread {
-          try { act.syncSystemPiPAutoEnterParams(enabled) } catch (_: Exception) {}
-        }
-      }
-    } catch (_: Exception) {}
+    // The static setter refreshes the complete call state on the UI thread. Do not
+    // apply this screen's captured Boolean again: its cleanup can follow in-app PiP mount.
   }
 
   /** JS выставляет true, когда виден маленький in-app PiP. Home из этого состояния требует задержки перед system PiP, чтобы не захватить zoomed cover-кадр. */
@@ -3237,6 +3241,9 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     private var activeCallVoiceFocusLegacyHeld: Boolean = false
 
     @Volatile
+    private var activeCallVoiceFocusState = CallVoiceFocusState.NONE
+
+    @Volatile
     private var externalCallAudioHoldJsActive: Boolean = false
 
     private var externalTelephonyWatchHandler: Handler? = null
@@ -3492,6 +3499,12 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     }
 
     private val activeCallVoiceFocusChangeListener = AudioManager.OnAudioFocusChangeListener { focusChange ->
+      if (!activeCallForegroundRunning) return@OnAudioFocusChangeListener
+      activeCallVoiceFocusState = when (focusChange) {
+        AudioManager.AUDIOFOCUS_GAIN -> CallVoiceFocusState.GRANTED
+        AudioManager.AUDIOFOCUS_LOSS, AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> CallVoiceFocusState.LOST
+        else -> activeCallVoiceFocusState
+      }
       when (focusChange) {
         AudioManager.AUDIOFOCUS_LOSS -> {
           if (activeCallForegroundRunning) {
@@ -3553,15 +3566,14 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     /** Активный звонок: MODE_IN_COMMUNICATION + voice focus (переживает навигатор поверх LiVi). */
     @JvmStatic
     internal fun beginActiveCallVoiceAudioHoldStatic(ctx: Context) {
+      if (!activeCallForegroundRunning || externalCallAudioHoldJsActive) return
       noteCallAudioActivityStatic()
       val am = ctx.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
       synchronized(LiviAppModule::class.java) {
         try {
           am.mode = AudioManager.MODE_IN_COMMUNICATION
         } catch (_: Exception) {}
-        val alreadyHasFocus =
-          activeCallVoiceFocusRequest != null || activeCallVoiceFocusLegacyHeld
-        if (!alreadyHasFocus) {
+        if (activeCallVoiceFocusState.needsRequest) {
           try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
               val attrs = AudioAttributes.Builder()
@@ -3576,10 +3588,12 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
                   Handler(Looper.getMainLooper()),
                 )
                 .build()
-              // Всегда держим request: иначе listener не получит LOSS_TRANSIENT от WA/TG
-              // (InCallManager/WebRTC часто уже держат focus → GRANT может не прийти сразу).
               activeCallVoiceFocusRequest = req
               val focusResult = am.requestAudioFocus(req)
+              activeCallVoiceFocusState = CallVoiceFocusState.fromRequestResult(focusResult)
+              if (activeCallVoiceFocusState == CallVoiceFocusState.FAILED) {
+                activeCallVoiceFocusRequest = null
+              }
               Log.d(NAME, "beginActiveCallVoiceAudioHold: voice focus result=$focusResult")
             } else {
               @Suppress("DEPRECATION")
@@ -3590,9 +3604,12 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
               )
               activeCallVoiceFocusLegacyHeld = granted == AudioManager.AUDIOFOCUS_REQUEST_GRANTED ||
                 granted == AudioManager.AUDIOFOCUS_REQUEST_DELAYED
+              activeCallVoiceFocusState = CallVoiceFocusState.fromRequestResult(granted)
               Log.d(NAME, "beginActiveCallVoiceAudioHold: legacy focus result=$granted")
             }
           } catch (e: Exception) {
+            activeCallVoiceFocusState = CallVoiceFocusState.FAILED
+            activeCallVoiceFocusRequest = null
             Log.w(NAME, "beginActiveCallVoiceAudioHold failed", e)
           }
         }
@@ -3602,8 +3619,9 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
 
     @JvmStatic
     internal fun reacquireActiveCallVoiceAudioHoldStatic(ctx: Context) {
-      if (externalCallAudioHoldJsActive) return
+      if (!activeCallForegroundRunning || externalCallAudioHoldJsActive) return
       val am = ctx.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
+      if (isExternalTelephonyAudioMode(am.mode)) return
       synchronized(LiviAppModule::class.java) {
         try {
           if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -3616,6 +3634,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
           }
         } catch (_: Exception) {}
       }
+      activeCallVoiceFocusState = CallVoiceFocusState.NONE
       beginActiveCallVoiceAudioHoldStatic(ctx)
     }
 
@@ -3623,17 +3642,31 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     internal fun maintainActiveCallVoiceAudioStatic(ctx: Context) {
       // На hold не форсим MODE_IN_COMMUNICATION — иначе глушим MODE_IN_CALL/RINGTONE
       // и telephony-watch не видит внешний звонок (все OEM).
-      if (externalCallAudioHoldJsActive) return
-      // Пока Activity не наверху (GSM/WA/dialer overlay) — не перебиваем системный audio mode.
-      if (!MainActivity.isInForeground) return
+      if (!activeCallForegroundRunning || externalCallAudioHoldJsActive) return
       val am = ctx.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
       synchronized(LiviAppModule::class.java) {
+        val modeBefore = try {
+          am.mode
+        } catch (_: Exception) {
+          return
+        }
+        // Background не означает внешний звонок: это также заблокированный экран, Home и PiP.
+        // Не трогаем только настоящий telephony mode; сторонний VoIP с тем же
+        // MODE_IN_COMMUNICATION отсекается focus/playback watch и здесь уже ничего не меняется.
+        if (isExternalTelephonyAudioMode(modeBefore)) return
         try {
-          am.mode = AudioManager.MODE_IN_COMMUNICATION
-        } catch (_: Exception) {}
-        val hasFocus =
-          activeCallVoiceFocusRequest != null || activeCallVoiceFocusLegacyHeld
-        if (!hasFocus) {
+          if (modeBefore != AudioManager.MODE_IN_COMMUNICATION) {
+            am.mode = AudioManager.MODE_IN_COMMUNICATION
+            Log.w(
+              NAME,
+              "maintainActiveCallVoiceAudio: restored mode from $modeBefore " +
+                "appForeground=${MainActivity.isInForeground}",
+            )
+          }
+        } catch (e: Exception) {
+          Log.w(NAME, "maintainActiveCallVoiceAudio: mode restore failed", e)
+        }
+        if (activeCallVoiceFocusState.needsRequest) {
           beginActiveCallVoiceAudioHoldStatic(ctx)
         }
       }
@@ -3644,6 +3677,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       stopExternalTelephonyWatchStatic()
       synchronized(LiviAppModule::class.java) {
         externalCallAudioHoldJsActive = false
+        activeCallVoiceFocusState = CallVoiceFocusState.NONE
       }
       val am = ctx.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
       synchronized(LiviAppModule::class.java) {
@@ -4098,11 +4132,17 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     @JvmStatic
     internal fun setPiPOnLeaveHintEnabled(value: Boolean) {
       shouldEnterPiPOnLeaveHint = value
+      refreshSystemPiPAutoEnterForCallState()
+    }
+
+    private fun refreshSystemPiPAutoEnterForCallState() {
       try {
-        val act = MainActivity.lastResumedInstance
+        val act = (reactContextRef?.currentActivity as? MainActivity) ?: MainActivity.lastResumedInstance
         act?.runOnUiThread {
           try {
-            act.syncSystemPiPAutoEnterParams(value && !getEndingCallInProgress())
+            // Read current state inside MainActivity, after queued UI/screen handoffs.
+            // A live call keeps auto-enter armed even when VideoCall cleanup requests false.
+            act.syncSystemPiPAutoEnterParams(true)
           } catch (_: Exception) {}
         }
       } catch (_: Exception) {}
@@ -4117,6 +4157,8 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     @JvmStatic
     internal fun setActiveCallForegroundRunningStatic(running: Boolean) {
       activeCallForegroundRunning = running
+      // Also disarm when the service stops after the screen has already cleaned up.
+      refreshSystemPiPAutoEnterForCallState()
       // Сервис живёт ровно столько, сколько звонок: на это время JS-таймеры не засыпают в PiP/фоне.
       if (running) {
         noteCallAudioActivityStatic()

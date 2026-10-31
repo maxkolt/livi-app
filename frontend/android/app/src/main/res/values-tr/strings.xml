@@ -5,7 +5,7 @@
   <string name="incoming_call_unknown">Biri arıyor</string>
   <string name="incoming_call_accept">Kabul et</string>
   <string name="incoming_call_decline">Reddet</string>
-  <string name="outgoing_call_title">Giden görüntülü arama</string>
+  <string name="outgoing_call_title">Giden arama</string>
   <string name="outgoing_call_subtitle">Aranıyor…</string>
   <string name="outgoing_call_subtitle_base">Aranıyor</string>
   <string name="outgoing_call_subtitle_base_audio">Aranıyor</string>

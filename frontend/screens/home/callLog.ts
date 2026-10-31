@@ -1,5 +1,6 @@
+import type { HomeUiGlobals } from './types';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { getCurrentUserId } from '../../sockets/socket';
+import { getCurrentUserId } from '../../sockets/modules/authState';
 import { CALL_LOG_KEY } from './constants';
 import { appendChatCallStatusIfEligible } from '../chat/chatCallEvents';
 
@@ -76,7 +77,7 @@ export function cancelPendingCallLogNotify(): void {
  */
 export function forceCallLogUiNow(reason?: string): void {
   try {
-    const g = global as any;
+    const g = global as HomeUiGlobals;
     g.__lastCallLogForceUiAtRef = g.__lastCallLogForceUiAtRef || { current: 0 };
     g.__lastCallLogForceUiAtRef.current = Date.now();
     const r = String(reason || '');

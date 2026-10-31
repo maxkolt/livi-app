@@ -1,3 +1,4 @@
+import type { HomeUiGlobals } from '../types';
 import { useCallback, useEffect, useRef, useState, type MutableRefObject } from 'react';
 import { AppState, NativeModules, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -137,7 +138,7 @@ export function useHomeBadges({ friends, friendsRef }: UseHomeBadgesArgs) {
       pendingUnreadBatchRefreshRef.current = false;
       // Чат на экране прочитан, даже если mark_read ещё не дошёл до сервера (медленный VPN).
       const openChatPeer =
-        AppState.currentState === 'active' ? String((global as any).__currentChatPeerId || '').trim() : '';
+        AppState.currentState === 'active' ? String((global as HomeUiGlobals).__currentChatPeerId || '').trim() : '';
       const entries: Record<string, number> = {};
       for (const id of ids) {
         const n = result.counts[id];
@@ -234,14 +235,14 @@ export function useHomeBadges({ friends, friendsRef }: UseHomeBadgesArgs) {
   useEffect(() => {
     // После cancel не гоняем badge sync — AsyncStorage+native конкурируют с paint вкладок.
     try {
-      const at = Number((global as any).__lastOutgoingCancelAtRef?.current || 0);
+      const at = Number((global as HomeUiGlobals).__lastOutgoingCancelAtRef?.current || 0);
       if (at > 0 && Date.now() - at < 8000) return;
     } catch {}
     if (badgeSyncDebounceRef.current) clearTimeout(badgeSyncDebounceRef.current);
     badgeSyncDebounceRef.current = setTimeout(() => {
       badgeSyncDebounceRef.current = null;
       try {
-        const at = Number((global as any).__lastOutgoingCancelAtRef?.current || 0);
+        const at = Number((global as HomeUiGlobals).__lastOutgoingCancelAtRef?.current || 0);
         if (at > 0 && Date.now() - at < 8000) return;
       } catch {}
       syncAppBadgeFromMissedCount().catch(() => {});
@@ -373,7 +374,7 @@ export function useHomeBadges({ friends, friendsRef }: UseHomeBadgesArgs) {
       });
       setMissedLoaded(true);
     } catch (e) {
-      logger.warn('[welcome-tab] badge resume missed merge failed', e as any);
+      logger.warn('[welcome-tab] badge resume missed merge failed', e);
     }
 
     if (Platform.OS === 'android') {
@@ -382,7 +383,7 @@ export function useHomeBadges({ friends, friendsRef }: UseHomeBadgesArgs) {
           Promise.resolve([]))) as string[];
         await applyPendingMissedCallsFromNative(pendingMissed || []);
       } catch (e) {
-        logger.warn('[welcome-tab] badge resume pending missed failed', e as any);
+        logger.warn('[welcome-tab] badge resume pending missed failed', e);
       }
 
       try {
@@ -391,7 +392,7 @@ export function useHomeBadges({ friends, friendsRef }: UseHomeBadgesArgs) {
         // Пуш уже посчитан сервером (unread пишется до отправки пуша) — без floor: сверка через
         // 1.4 с должна суметь вернуть 0, если сообщение тем временем прочитали. Открытый чат —
         // не непрочитанное: его отметит сам ChatScreen при возврате.
-        const openChatPeer = String((global as any).__currentChatPeerId || '').trim();
+        const openChatPeer = String((global as HomeUiGlobals).__currentChatPeerId || '').trim();
         if (pendingUnread?.length) {
           const ids = [...new Set(pendingUnread.map((u) => String(u || '').trim()).filter(Boolean))]
             .filter((id) => id !== openChatPeer);
@@ -412,7 +413,7 @@ export function useHomeBadges({ friends, friendsRef }: UseHomeBadgesArgs) {
           logger.info('[welcome-tab] badge resume pending unread applied', { n: ids.length });
         }
       } catch (e) {
-        logger.warn('[welcome-tab] badge resume pending unread failed', e as any);
+        logger.warn('[welcome-tab] badge resume pending unread failed', e);
       }
     }
 
@@ -421,7 +422,7 @@ export function useHomeBadges({ friends, friendsRef }: UseHomeBadgesArgs) {
     if (badgeResumeHeavyTimerRef.current) clearTimeout(badgeResumeHeavyTimerRef.current);
     badgeResumeHeavyTimerRef.current = setTimeout(() => {
       badgeResumeHeavyTimerRef.current = null;
-      const actionAt = Number((global as any).__homeRowActionAtRef?.current || 0);
+      const actionAt = Number((global as HomeUiGlobals).__homeRowActionAtRef?.current || 0);
       const sinceActionMs = actionAt > 0 ? Date.now() - actionAt : null;
       if (sinceActionMs != null && sinceActionMs < 2500) {
         logger.info('[welcome-tab] badge resume heavy refresh skipped for foreground action', {
@@ -436,7 +437,7 @@ export function useHomeBadges({ friends, friendsRef }: UseHomeBadgesArgs) {
             await refreshUnreadCountsForFriends(list);
           }
         } catch (e) {
-          logger.warn('[welcome-tab] badge resume unread server refresh failed', e as any);
+          logger.warn('[welcome-tab] badge resume unread server refresh failed', e);
         }
 
         try {
@@ -519,7 +520,7 @@ export function useHomeBadges({ friends, friendsRef }: UseHomeBadgesArgs) {
       if (!rememberCountedUnreadMessageId(countedUnreadMessageIdsRef.current, message?.id)) {
         return;
       }
-      const openChatPeer = String((global as any).__currentChatPeerId || '').trim();
+      const openChatPeer = String((global as HomeUiGlobals).__currentChatPeerId || '').trim();
       if (openChatPeer && openChatPeer === messageFromStr) {
         if (!disposed) {
           clearUnreadFloor(messageFromStr);

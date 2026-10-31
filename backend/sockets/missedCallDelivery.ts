@@ -1,4 +1,5 @@
 import type { Socket } from 'socket.io';
+import type { AuthedSocket } from './types';
 import MissedCall from '../models/MissedCall';
 
 export type MissedCallDelivery = {
@@ -15,7 +16,7 @@ export function supportsMissedCallAck(sock: Pick<Socket, 'handshake'>): boolean 
 
 export async function getPendingMissedCalls(sock: Pick<Socket, 'handshake'>, userId: string): Promise<MissedCallDelivery[]> {
   const docs = await MissedCall.find({ calleeId: userId }).sort({ createdAt: 1 }).limit(50).lean();
-  const missed = docs.map((d: any) => ({
+  const missed = docs.map((d) => ({
     id: String(d._id),
     callId: d.callId ? String(d.callId) : undefined,
     from: String(d.callerId),
@@ -24,13 +25,16 @@ export async function getPendingMissedCalls(sock: Pick<Socket, 'handshake'>, use
   }));
   // Old releases cannot acknowledge receipt. Keep their existing delivery contract.
   if (docs.length && !supportsMissedCallAck(sock)) {
-    await MissedCall.deleteMany({ calleeId: userId, _id: { $in: docs.map((d: any) => d._id) } });
+    await MissedCall.deleteMany({ calleeId: userId, _id: { $in: docs.map((d) => d._id) } });
   }
   return missed;
 }
 
-export function registerMissedCallAck(sock: Socket): void {
-  sock.on('missed_calls:ack', async (payload, ack) => {
+export function registerMissedCallAck(sock: AuthedSocket): void {
+  sock.on('missed_calls:ack', async (
+    payload: { ids?: unknown } | null | undefined,
+    ack?: (result: { ok: false; error: string } | { ok: true; userId: string; missed: MissedCallDelivery[] }) => void,
+  ) => {
     const userId = String(sock.data?.userId || '');
     const ids = payload?.ids;
     if (!/^[a-f\d]{24}$/i.test(userId) || !supportsMissedCallAck(sock) ||

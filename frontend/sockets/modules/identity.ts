@@ -64,8 +64,8 @@ export async function checkUserExists(userId: string): Promise<boolean | null> {
         try {
           const socketResult = await checkUserExistsSocket(userId);
           // ВАЖНО: не интерпретируем ok=false как exists=false (например, когда БД временно недоступна).
-          if (socketResult?.ok === true && typeof (socketResult as any).exists === "boolean") {
-            const exists = (socketResult as any).exists as boolean;
+          if (socketResult?.ok === true && typeof (socketResult).exists === "boolean") {
+            const exists = (socketResult).exists as boolean;
             shared.userExistsCache.set(userId, { result: exists, timestamp: Date.now() });
             return exists;
           }
@@ -106,9 +106,9 @@ export async function checkUserExists(userId: string): Promise<boolean | null> {
             shared.userExistsCache.set(userId, { result: data.exists, timestamp: Date.now() });
             return data.exists;
           }
-        } catch (e: any) {
+        } catch (e) {
           if (attempt === httpMaxAttempts) {
-            const errorMsg = e?.message || String(e);
+            const errorMsg = (e as { message?: string } | null)?.message || String(e);
             if (!errorMsg.includes("Network request failed") && !errorMsg.includes("timeout")) {
               console.warn(`[checkUserExists] HTTP error (attempt ${attempt}/${httpMaxAttempts}):`, errorMsg);
             }
@@ -405,7 +405,7 @@ export async function getMyUserId(): Promise<string | null> {
 
   // Если REST API не работает, попробуем через socket
   try {
-    const resp = await emitAck<any>("whoami", undefined, 6000, 1);
+    const resp = await emitAck<{ _id?: string }>("whoami", undefined, 6000, 1);
     if (resp && resp._id) {
       setCurrentUserId(resp._id);
       return resp._id;
@@ -420,7 +420,7 @@ export async function getMyUserId(): Promise<string | null> {
 export function onFriendProfile(
   cb: (p: { userId: string; nick?: string; avatar?: string; avatarVer?: number; avatarThumbB64?: string }) => void,
 ): () => void {
-  const h = (p: any) => cb(p);
+  const h = (p: Parameters<typeof cb>[0]) => cb(p);
   socket.on("friend:profile", h);
   socket.on("friend_profile", h);
   return () => {
@@ -438,7 +438,7 @@ function checkUserExistsSocket(userId: string) {
 }
 
 /* ========= User Data Cleanup ========= */
-export async function clearAllUserData(): Promise<{ success: boolean; error?: any }> {
+export async function clearAllUserData(): Promise<{ success: boolean; error?: unknown }> {
   try {
     // Очищаем все данные из AsyncStorage
     const keys = await AsyncStorage.getAllKeys();

@@ -5,7 +5,7 @@
   <string name="incoming_call_unknown">มีคนโทรมา</string>
   <string name="incoming_call_accept">รับสาย</string>
   <string name="incoming_call_decline">ปฏิเสธ</string>
-  <string name="outgoing_call_title">วิดีโอคอลออก</string>
+  <string name="outgoing_call_title">สายโทรออก</string>
   <string name="outgoing_call_subtitle">กำลังโทร…</string>
   <string name="outgoing_call_subtitle_base">กำลังโทร</string>
   <string name="outgoing_call_subtitle_base_audio">กำลังโทร</string>

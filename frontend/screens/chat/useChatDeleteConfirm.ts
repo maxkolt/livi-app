@@ -1,3 +1,4 @@
+import type { ChatMessage } from './chatMessageTypes';
 /** Delete-confirm modal state for ChatScreen. */
 
 import React from "react";
@@ -9,7 +10,7 @@ export function useChatDeleteConfirm() {
   const [deleteForBoth, setDeleteForBoth] = React.useState(true);
   const [deleteConfirmKind, setDeleteConfirmKind] =
     React.useState<DeleteConfirmKind>("single");
-  const pendingDeleteRef = React.useRef<any>(null);
+  const pendingDeleteRef = React.useRef<(ChatMessage & { ids?: never }) | { ids: string[]; id?: never } | null>(null);
 
   const closeDeleteConfirm = React.useCallback(() => {
     setDeleteConfirmVisible(false);
@@ -18,7 +19,7 @@ export function useChatDeleteConfirm() {
     pendingDeleteRef.current = null;
   }, []);
 
-  const openDeleteConfirmSingle = React.useCallback((m: any) => {
+  const openDeleteConfirmSingle = React.useCallback((m: ChatMessage | null) => {
     if (!m?.id) return;
     pendingDeleteRef.current = m;
     setDeleteConfirmKind("single");

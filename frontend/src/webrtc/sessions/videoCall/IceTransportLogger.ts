@@ -55,7 +55,7 @@ export class IceTransportLogger {
   async log(room: Room, reason: string): Promise<void> {
     try {
       if (!this.host.isCurrentRoom(room)) return;
-      const diagnostics = await getRoomIceTransportDiagnostics(room as any);
+      const diagnostics = await getRoomIceTransportDiagnostics(room);
       if (!diagnostics.length) {
         return;
       }

@@ -1,3 +1,5 @@
+import type { ChatMessage } from './chatMessageTypes';
+import type { IncomingMessage, MessagePage } from '../../sockets/modules/messages';
 /** Pure history / quiet-sync helpers for chat message lists. */
 
 import {
@@ -11,11 +13,11 @@ import {
 } from "./chatMessageOps";
 import { albumUrisFieldFromMessage, stickerFieldsFromMessage, videoNoteFieldsFromMessage } from "./chatMessageMeta";
 
-type FormattedChatMessage = Record<string, any>;
+type FormattedChatMessage = ChatMessage & { id: string; timestamp: Date; read: boolean };
 
 /** Map a server message row into ChatScreen bubble shape. */
 export function formatServerChatMessage(
-  msg: any,
+  msg: IncomingMessage,
   currentUserId: string,
 ): FormattedChatMessage {
   const uid = String(currentUserId || "").trim();
@@ -25,9 +27,9 @@ export function formatServerChatMessage(
     type: msg.type,
     uri: msg.uri,
     ...albumUrisFieldFromMessage(msg),
-    name: (msg as any).name,
-    size: (msg as any).size,
-    duration: (msg as any).duration,
+    name: (msg).name,
+    size: (msg).size,
+    duration: (msg).duration,
     ...stickerFieldsFromMessage(msg),
     ...videoNoteFieldsFromMessage(msg),
     sender: msg.from === uid ? "me" : "peer",
@@ -35,35 +37,35 @@ export function formatServerChatMessage(
     to: msg.to,
     timestamp: new Date(msg.timestamp),
     read: !!msg.read,
-    reactions: Array.isArray((msg as any).reactions)
-      ? (msg as any).reactions.map((r: any) => ({
+    reactions: Array.isArray((msg).reactions)
+      ? (msg).reactions.map((r) => ({
           emoji: r.emoji,
           userId: String(r.userId),
         }))
       : [],
-    ...((msg as any).replyTo && (msg as any).replyTo.id
+    ...((msg).replyTo && (msg).replyTo.id
       ? {
           replyTo: {
-            id: (msg as any).replyTo.id,
-            text: (msg as any).replyTo.text,
-            from: (msg as any).replyTo.from,
-            isOwn: (msg as any).replyTo.from === uid,
+            id: (msg).replyTo.id,
+            text: (msg).replyTo.text,
+            from: (msg).replyTo.from,
+            isOwn: (msg).replyTo.from === uid,
           },
         }
       : {}),
   };
 }
 
-export function filterVisibleServerMessages(
-  messages: any[],
+export function filterVisibleServerMessages<T extends ChatMessage>(
+  messages: T[],
   opts: {
     hiddenForMeIds: Set<string>;
     deletedServerIds: Set<string>;
     isGloballyDeleted: (id: string) => boolean;
   },
-): any[] {
+): T[] {
   const { hiddenForMeIds, deletedServerIds, isGloballyDeleted } = opts;
-  return (Array.isArray(messages) ? messages : []).filter((msg: any) => {
+  return (Array.isArray(messages) ? messages : []).filter((msg: ChatMessage) => {
     const id = String(msg?.id || "").trim();
     if (!id) return false;
     if (hiddenForMeIds.has(id)) return false;
@@ -73,13 +75,13 @@ export function filterVisibleServerMessages(
   });
 }
 
-function sortMessagesByTimestamp(messages: any[]): any[] {
-  return [...messages].sort((a: any, b: any) => timestampMs(a?.timestamp) - timestampMs(b?.timestamp));
+function sortMessagesByTimestamp(messages: ChatMessage[]): ChatMessage[] {
+  return [...messages].sort((a: ChatMessage, b: ChatMessage) => timestampMs(a?.timestamp) - timestampMs(b?.timestamp));
 }
 
 function dropOptimisticDupesAgainstServer(
-  localKeep: any[],
-  serverMine: any[],
+  localKeep: ChatMessage[],
+  serverMine: ChatMessage[],
 ): Set<string> {
   const dropLocalIds = new Set<string>();
   for (const loc of localKeep) {
@@ -95,8 +97,8 @@ function dropOptimisticDupesAgainstServer(
   return dropLocalIds;
 }
 
-function timestampMs(t: unknown): number {
-  const ms = t instanceof Date ? t.getTime() : +new Date((t as any) || 0);
+function timestampMs(t: ChatMessage['timestamp']): number {
+  const ms = t instanceof Date ? t.getTime() : +new Date(t || 0);
   return Number.isFinite(ms) ? ms : 0;
 }
 
@@ -106,15 +108,15 @@ function timestampMs(t: unknown): number {
  * сообщение, отправленное из очереди после возврата сети, обгоняло ещё не ушедшие
  * (голосовое уезжало ниже текста, написанного после него).
  */
-function preserveLocalFields(formatted: any[], prev: any[]): any[] {
-  const prevById = new Map(prev.map((m: any) => [String(m?.id || ""), m]));
-  return formatted.map((f: any) => {
+function preserveLocalFields(formatted: ChatMessage[], prev: ChatMessage[]): ChatMessage[] {
+  const prevById = new Map(prev.map((m: ChatMessage) => [String(m?.id || ""), m]));
+  return formatted.map((f: ChatMessage) => {
     const local = prevById.get(String(f?.id || ""));
     if (!local) return f;
     let next = f;
     if (local.replyTo && !f.replyTo) next = { ...next, replyTo: local.replyTo };
     if (String(f?.sender || "") === "me" && timestampMs(local.timestamp) > 0) {
-      next = { ...next, timestamp: local.timestamp instanceof Date ? local.timestamp : new Date(local.timestamp) };
+      next = { ...next, timestamp: local.timestamp instanceof Date ? local.timestamp : new Date(local.timestamp!) };
     }
     return next;
   });
@@ -127,12 +129,12 @@ type StatusMaps = {
 
 /** Quiet sync after wake/focus: keep pending local outgoing + merge server page. */
 export function mergeQuietSyncMessages(
-  prev: any[],
-  formatted: any[],
+  prev: ChatMessage[],
+  formatted: ChatMessage[],
   statuses: StatusMaps,
-): any[] {
-  const serverIdSet = new Set(formatted.map((m: any) => String(m?.id || "")));
-  const localKeep = prev.filter((m: any) => {
+): ChatMessage[] {
+  const serverIdSet = new Set(formatted.map((m: ChatMessage) => String(m?.id || "")));
+  const localKeep = prev.filter((m: ChatMessage) => {
     const id = String(m?.id || "");
     if (!id || serverIdSet.has(id)) return false;
 
@@ -154,7 +156,7 @@ export function mergeQuietSyncMessages(
     return false;
   });
 
-  const serverMine = formatted.filter((x: any) => String(x?.sender || "") === "me");
+  const serverMine = formatted.filter((x: ChatMessage) => String(x?.sender || "") === "me");
   const dropLocalIds = dropOptimisticDupesAgainstServer(localKeep, serverMine);
 
   let merged = [
@@ -162,22 +164,22 @@ export function mergeQuietSyncMessages(
     ...localKeep,
   ];
   if (dropLocalIds.size > 0) {
-    merged = merged.filter((m: any) => !dropLocalIds.has(String(m?.id || "")));
+    merged = merged.filter((m: ChatMessage) => !dropLocalIds.has(String(m?.id || "")));
   }
   return reuseUnchangedMessages(sortMessagesByTimestamp(merged), prev);
 }
 
 /** Initial / reconnect history merge. Set dropOptimisticDupes for first load. */
 export function mergeInitialHistoryMessages(
-  prev: any[],
-  formatted: any[],
+  prev: ChatMessage[],
+  formatted: ChatMessage[],
   statuses: StatusMaps,
   opts?: { dropOptimisticDupes?: boolean },
-): any[] {
+): ChatMessage[] {
   const dropOptimisticDupes = opts?.dropOptimisticDupes !== false;
-  const serverIds = new Set(formatted.map((m: any) => String(m?.id || "")));
-  const serverMine = formatted.filter((x: any) => String(x?.sender || "") === "me");
-  const localKeep = prev.filter((m: any) => {
+  const serverIds = new Set(formatted.map((m: ChatMessage) => String(m?.id || "")));
+  const serverMine = formatted.filter((x: ChatMessage) => String(x?.sender || "") === "me");
+  const localKeep = prev.filter((m: ChatMessage) => {
     const id = String(m?.id || "");
     if (!id || serverIds.has(id)) return false;
     if (String(m?.type || "") === "call" || m?.localOnly === true) return true;
@@ -193,20 +195,20 @@ export function mergeInitialHistoryMessages(
     : new Set<string>();
   const merged = [
     ...preserveLocalFields(formatted, prev),
-    ...localKeep.filter((m: any) => !dropLocalIds.has(String(m?.id || ""))),
+    ...localKeep.filter((m: ChatMessage) => !dropLocalIds.has(String(m?.id || ""))),
   ];
   return reuseUnchangedMessages(sortMessagesByTimestamp(merged), prev);
 }
 
 /** Одно и то же сообщение по содержимому (вложенные — реакции, цитата, фото альбома — небольшие). */
-function sameMessage(a: any, b: any): boolean {
+function sameMessage(a: ChatMessage, b: ChatMessage): boolean {
   if (a === b) return true;
   if (!a || !b) return false;
   // Поле со значением undefined и отсутствующее поле — одно и то же (сервер и кэш различаются).
   const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
   for (const k of keys) {
-    const va = a[k];
-    const vb = b[k];
+    const va = (a as Record<string, unknown>)[k];
+    const vb = (b as Record<string, unknown>)[k];
     if (va === vb) continue;
     if (va && vb && typeof va === "object" && typeof vb === "object") {
       if (JSON.stringify(va) !== JSON.stringify(vb)) return false;
@@ -222,9 +224,9 @@ function sameMessage(a: any, b: any): boolean {
  * прежним массивом. Облака ленты — React.memo: сверка с сервером при открытии чата
  * иначе перерисовывала все облака, хотя по содержимому всё то же.
  */
-export function reuseUnchangedMessages(next: any[], prev: any[]): any[] {
+export function reuseUnchangedMessages(next: ChatMessage[], prev: ChatMessage[]): ChatMessage[] {
   if (!prev.length) return next;
-  const prevById = new Map<string, any>();
+  const prevById = new Map<string, ChatMessage>();
   for (const m of prev) {
     const id = String(m?.id || "");
     if (id) prevById.set(id, m);
@@ -240,7 +242,7 @@ export function reuseUnchangedMessages(next: any[], prev: any[]): any[] {
 }
 
 export function buildOutgoingReadStatusesFromHistory(
-  formattedMessages: any[],
+  formattedMessages: FormattedChatMessage[],
 ): Record<string, ChatReadStatus> {
   const serverStatuses: Record<string, ChatReadStatus> = {};
   for (const m of formattedMessages) {
@@ -259,20 +261,20 @@ export async function fetchQuietSyncMessagePages(
     with: string;
     limit: number;
     before?: string;
-  }) => Promise<any>,
-): Promise<any[]> {
-  const pages: any[] = [];
+  }) => Promise<MessagePage>,
+): Promise<IncomingMessage[]> {
+  const pages: IncomingMessage[] = [];
   let before: string | undefined = undefined;
   const capped = Math.min(400, Math.max(60, Math.max(0, targetCount)));
   for (let i = 0; i < 3 && pages.length < capped; i++) {
     const limit = Math.min(200, Math.max(1, capped - pages.length));
-    const resp: any = await fetchPage({
+    const resp = await fetchPage({
       with: peerId,
       limit,
       ...(before ? { before } : {}),
     });
     if (!(resp?.ok && Array.isArray(resp.messages))) break;
-    const batch = resp.messages as any[];
+    const batch = resp.messages;
     if (batch.length === 0) break;
     pages.unshift(...batch);
     before = String(batch[0]?.id || "").trim() || before;

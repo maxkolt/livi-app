@@ -159,9 +159,9 @@ function markCallKeepEnded(callIdOrUuid: string): void {
 function runWithCallKeepConnectionRetry(
   label: string,
   nativeCallId: string,
-  action: (rnCallKeep: { default: any }) => void,
+  action: (rnCallKeep: { default: typeof import('react-native-callkeep').default }) => void,
 ): void {
-  let rn: { default: any } | null = null;
+  let rn: { default: typeof import('react-native-callkeep').default } | null = null;
   try {
     rn = require('react-native-callkeep');
   } catch (e) {
@@ -401,7 +401,7 @@ export function showIncomingAnswerNativeCover(): void {
 export function requestExitSystemPiPSoft(): void {
   if (Platform.OS !== 'android') return;
   try {
-    (NativeModules.LiviAppModule as any)?.requestExitSystemPiPSoft?.();
+    (NativeModules.LiviAppModule)?.requestExitSystemPiPSoft?.();
   } catch {}
 }
 
@@ -409,7 +409,7 @@ export function requestExitSystemPiPSoft(): void {
 export function dismissSystemPiPAfterCallEnded(): void {
   if (Platform.OS !== 'android') return;
   try {
-    (NativeModules.LiviAppModule as any)?.dismissSystemPiPAfterCallEnded?.();
+    (NativeModules.LiviAppModule)?.dismissSystemPiPAfterCallEnded?.();
   } catch {
     requestExitSystemPiPSoft();
   }
@@ -1117,10 +1117,10 @@ export function registerCallKeepEvents(callbacks: CallKeepEventCallbacks): () =>
       payload?: Record<string, unknown>;
     }) => {
       const payload = event?.payload && typeof event.payload === 'object' ? event.payload : {};
-      const callId = String((payload as any)?.callId || event?.callUUID || '').trim();
-      const from = String((payload as any)?.from || (payload as any)?.fromUserId || event?.handle || '').trim();
-      const fromNick = String((payload as any)?.fromNick || event?.localizedCallerName || '').trim();
-      const callKitId = String((payload as any)?.callKitId || event?.callUUID || '').trim();
+      const callId = String((payload)?.callId || event?.callUUID || '').trim();
+      const from = String((payload)?.from || (payload)?.fromUserId || event?.handle || '').trim();
+      const fromNick = String((payload)?.fromNick || event?.localizedCallerName || '').trim();
+      const callKitId = String((payload)?.callKitId || event?.callUUID || '').trim();
       if (callId && from) {
         rememberPendingCall({ callId, callKitId, from, fromNick: fromNick || undefined });
       }
@@ -1141,7 +1141,7 @@ export function registerCallKeepEvents(callbacks: CallKeepEventCallbacks): () =>
     RNCallKeep.default.addEventListener('endCall', onEnd);
     RNCallKeep.default.addEventListener('didDisplayIncomingCall', onDisplay);
     RNCallKeep.default.getInitialEvents?.()
-      ?.then?.((events: Array<{ name?: string; data?: any }>) => {
+      ?.then?.((events: Array<{ name?: string; data?: Parameters<typeof syncPendingFromDisplay>[0] }>) => {
         for (const event of events || []) {
           const name = String(event?.name || '');
           if (name === 'RNCallKeepDidDisplayIncomingCall') {

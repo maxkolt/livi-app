@@ -1,6 +1,7 @@
 /** UI-снимок «партнёр на GSM hold» без импорта socket (для useSyncExternalStore). */
 
 import { isExternalCallHoldActive } from './externalCallHold';
+import type { CallRef } from './callStateTypes';
 
 export type PartnerExternalHoldSignal = {
   callId?: string | null;
@@ -24,6 +25,11 @@ type PartnerExternalHoldRef = {
   roomId?: string | null;
 };
 
+type PartnerExternalHoldGlobals = {
+  __partnerExternalHoldRef?: PartnerExternalHoldRef;
+  __webrtcSessionRef?: CallRef<HoldSessionLike | null>;
+};
+
 const listeners = new Set<() => void>();
 
 function normalized(value?: string | null): string | null {
@@ -33,7 +39,7 @@ function normalized(value?: string | null): string | null {
 
 function getRef(): PartnerExternalHoldRef | null {
   try {
-    return (global as any).__partnerExternalHoldRef ?? null;
+    return (global as PartnerExternalHoldGlobals).__partnerExternalHoldRef ?? null;
   } catch {
     return null;
   }
@@ -41,7 +47,7 @@ function getRef(): PartnerExternalHoldRef | null {
 
 function getActiveSession(): HoldSessionLike | null {
   try {
-    return (global as any).__webrtcSessionRef?.current ?? null;
+    return (global as PartnerExternalHoldGlobals).__webrtcSessionRef?.current ?? null;
   } catch {
     return null;
   }
@@ -76,7 +82,7 @@ export function setPartnerExternalHoldSnapshot(
   scope?: PartnerExternalHoldSignal | null,
 ): void {
   try {
-    const g = global as any;
+    const g = global as PartnerExternalHoldGlobals;
     const ref: PartnerExternalHoldRef =
       g.__partnerExternalHoldRef || (g.__partnerExternalHoldRef = { current: false });
     const callId = normalized(scope?.callId);

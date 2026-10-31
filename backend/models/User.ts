@@ -2,7 +2,7 @@ import { Schema, model, models, Types, Model } from 'mongoose';
 
 // Условное логирование для отладки - отключено в production
 const isDebug = process.env.NODE_ENV === 'development' || process.env.DEBUG_LOGS === 'true';
-const debugLog = (...args: any[]) => {
+const debugLog = (...args: unknown[]) => {
   if (isDebug) {}
 };
 
@@ -28,6 +28,8 @@ interface IUser {
   /** Пользователь сам отключил шифрование: клиент не публикует ключ автоматически. */
   e2eDisabled?: boolean;
 }
+
+export type UserRecord = IUser;
 
 interface IE2eKeyBackup {
   v: number;

@@ -1,3 +1,5 @@
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import type { RootStackParamList } from '../../navigation/types';
 import React, { useCallback, useEffect, useMemo, useRef } from 'react';
 import { Animated, Pressable, StyleSheet, View } from 'react-native';
 import AdaptiveText from '../../components/AdaptiveText';
@@ -38,7 +40,7 @@ import { FriendMarkReadMenuStrip } from './FriendMarkReadMenuStrip';
 import { BlurListSource } from '../../components/BackdropBlur';
 import { GLASS_LIST_GAP } from './WelcomeGlassHeader';
 import { FriendRowChatButton, FriendRowInviteButton } from './FriendRowActionButtons';
-import { getFriendDisplay, isDirectCallSessionLive } from './friendHelpers';
+import { getFriendDisplay, isDirectCallSessionLive, type DirectCallSnapshot } from './friendHelpers';
 import { usePaneList } from '../../utils/paneVisibility';
 import type { Friend, MarkReadMenu } from './types';
 import type { HomeStyles } from './styles';
@@ -55,7 +57,7 @@ function friendRowIsBusy(
   isRecentlyEndedCallFriend: (userId: string | null | undefined) => boolean,
 ): boolean {
   const friendIdStr = String(friend.id);
-  const g = global as any;
+  const g = global as typeof global & DirectCallSnapshot & { __videoCallPartnerUserIdRef?: { current: string | null } };
   const videoCallPartner = g.__videoCallPartnerUserIdRef?.current;
   const activeCallInProgress = isDirectCallSessionLive(g);
   const recentlyEnded = isRecentlyEndedCallFriend(friendIdStr);
@@ -114,7 +116,7 @@ export type FriendsListCoreProps = {
   L: (key: string) => string;
   lang: Lang;
   styles: HomeStyles;
-  navigation: any;
+  navigation: NativeStackNavigationProp<RootStackParamList, 'Home'>;
   prepareFriendRowActionTap: () => void;
   handleStartFriendCall: (friend: Friend) => void;
   clearMissedCallsForFriend: (friendIdStr: string) => Promise<void>;
@@ -134,7 +136,7 @@ export type FriendsListCoreProps = {
   unreadByUser: Record<string, number>;
   isRecentlyEndedCallFriend: (userId: string | null | undefined) => boolean;
   resetOutgoingAfterExternalClose: (source: string, callId: string | null) => void;
-  ListFooterComponent?: React.ComponentType<any> | React.ReactElement | null;
+  ListFooterComponent?: React.ComponentType<unknown> | React.ReactElement | null;
   keyboardShouldPersistTaps?: 'always' | 'handled' | 'never';
   onScrollBeginDragExtra?: () => void;
   selectMode?: boolean;
@@ -409,6 +411,7 @@ function FriendsListCoreInner(props: FriendsListCoreProps) {
 
           return (
             <View
+              testID={`friend-card-${item.id}`}
               style={[
                 welcomeListStyles.cardWrap,
                 tabletLayout && welcomeListStyles.cardWrapTablet,

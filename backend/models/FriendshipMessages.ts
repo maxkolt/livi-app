@@ -32,11 +32,19 @@ export interface IMessageItem {
   stickerPackId?: string;
   stickerEmoji?: string;
   stickerLabel?: string;
+  thumbUri?: string;
   timestamp: Date;
   read: boolean;
   reactions?: IMessageReaction[]; // Реакции (эмодзи + userId)
   replyTo?: IReplyTo; // Ответ на сообщение (цитата)
 }
+
+/** Message payload after IDs are serialized for socket/HTTP delivery. */
+export type ClientMessage<Timestamp extends Date | string = string> = Omit<IMessageItem, 'from' | 'to' | 'timestamp'> & {
+  from: string;
+  to: string;
+  timestamp: Timestamp;
+};
 
 // Интерфейс для документа дружбы с сообщениями
 export interface IFriendshipMessages extends Document {
@@ -44,6 +52,7 @@ export interface IFriendshipMessages extends Document {
   user1: mongoose.Types.ObjectId; // Первый пользователь
   user2: mongoose.Types.ObjectId; // Второй пользователь
   lastMessage?: IMessageItem; // Последнее сообщение для быстрого доступа
+  addMessage(message: IMessageItem): Promise<unknown>;
   lastActivity: Date; // Время последней активности
   createdAt: Date;
   updatedAt: Date;
@@ -158,11 +167,11 @@ FriendshipMessagesSchema.index({ user2: 1, lastActivity: -1 });
 
 // Метод для добавления нового сообщения (updateOne вместо save для скорости)
 // Full message history lives in FriendshipMessageItem; this document keeps chat metadata.
-FriendshipMessagesSchema.methods.addMessage = function(message: IMessageItem) {
+FriendshipMessagesSchema.methods.addMessage = function(this: IFriendshipMessages, message: IMessageItem) {
   this.lastMessage = message;
   this.lastActivity = new Date();
 
-  return (this as any).constructor.updateOne(
+  return (this.constructor as mongoose.Model<IFriendshipMessages>).updateOne(
     { _id: this._id },
     { $set: { lastMessage: message, lastActivity: new Date() } }
   ).exec();

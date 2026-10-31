@@ -3,6 +3,9 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { logger } from './logger';
 
 type StoredProfile = { nick?: string; avatar?: string };
+type ExpoImageGlobals = {
+  expo?: { Image?: Pick<typeof import('expo-image').Image, 'clearMemoryCache' | 'clearDiskCache'> };
+};
 
 const KEY = 'livi.profile.v1';
 
@@ -76,15 +79,15 @@ export async function clearAllAvatarCaches(): Promise<void> {
     
     // 2. Очищаем кэш Expo Image (если доступен)
     try {
-      if (typeof (global as any).expo !== 'undefined' && (global as any).expo.Image) {
-        await (global as any).expo.Image.clearMemoryCache();
+    if (typeof (global as ExpoImageGlobals).expo !== 'undefined' && (global as ExpoImageGlobals).expo!.Image) {
+      await (global as ExpoImageGlobals).expo!.Image!.clearMemoryCache();
       }
     } catch (e) {}
     
     // 3. Очищаем кэш диска (если доступен)
     try {
-      if (typeof (global as any).expo !== 'undefined' && (global as any).expo.Image) {
-        await (global as any).expo.Image.clearDiskCache();
+    if (typeof (global as ExpoImageGlobals).expo !== 'undefined' && (global as ExpoImageGlobals).expo!.Image) {
+      await (global as ExpoImageGlobals).expo!.Image!.clearDiskCache();
       }
     } catch (e) {}
     

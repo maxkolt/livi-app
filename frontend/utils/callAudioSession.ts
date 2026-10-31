@@ -38,6 +38,12 @@ export function openCallAudioSession(nextOwner: CallAudioOwner, media: CallAudio
     return false;
   }
   try {
+    if (Platform.OS === 'android' && NativeModules.LiviAppModule?.refreshCallProximity) {
+      // One native owner of the proximity wake lock; InCallManager must not also
+      // switch the display or reroute audio on every near/far event.
+      // Random chat has no ActiveCallForegroundService; preserve its legacy owner.
+      NativeModules.InCallManager?.setAutomaticProximityEnabled?.(nextOwner !== 'direct');
+    }
     InCallManager.start({ media, ringback: '' });
   } catch (e) {
     logger.warn('[callAudio] start failed', { owner: nextOwner, media, reason, error: String(e) });
@@ -57,7 +63,7 @@ export function reassertCallAudioSession(media: CallAudioMedia, reason: string):
   }
   try {
     InCallManager.start({ media, ringback: '' });
-    (InCallManager as any).requestAudioFocus?.();
+    (InCallManager).requestAudioFocus?.();
   } catch {}
   return true;
 }
@@ -69,11 +75,11 @@ export function closeCallAudioSession(closingOwner: CallAudioOwner, reason: stri
     logger.info('[callAudio] close refused: session belongs to another call', { owner, closingOwner, reason });
     return false;
   }
-  try { (InCallManager as any).setForceSpeakerphoneOn?.('auto'); } catch {}
+  try { InCallManager.setForceSpeakerphoneOn?.('auto'); } catch {}
   try { InCallManager.setSpeakerphoneOn(false); } catch {}
   try { InCallManager.stopProximitySensor(); } catch {}
   try { InCallManager.stop(); } catch {}
-  try { (InCallManager as any).abandonAudioFocus?.(); } catch {}
+  try { (InCallManager).abandonAudioFocus?.(); } catch {}
   // Режим связи снимает натив (через 1.5 / 5 с, если не идёт новый звонок): InCallManager может
   // «восстановить» MODE_IN_COMMUNICATION, если маршрут выставил его раньше старта сессии.
   if (Platform.OS === 'android') {

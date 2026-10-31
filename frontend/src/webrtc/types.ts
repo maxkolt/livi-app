@@ -1,8 +1,17 @@
 import { MediaStream } from '@livekit/react-native-webrtc';
+import type { CallIncomingPayload } from '../../sockets/modules/types';
+import type { FriendListItem } from '../../sockets/modules/friends';
 
 // ==================== Types ====================
 
 export type CamSide = 'front' | 'back';
+
+export type IncomingFriendCall = Pick<CallIncomingPayload, 'from'> & { nick?: string };
+
+export type CallPartnerProfile = Pick<FriendListItem, '_id' | 'nick' | 'avatar' | 'avatarThumbB64'> & {
+  name?: string;
+  avatarB64?: string;
+};
 
 export interface WebRTCSessionCallbacks {
   // Stream callbacks
@@ -64,9 +73,9 @@ export interface WebRTCSessionConfig {
   fetchFriends?: () => Promise<void>;
   sendCameraState?: (toPartnerId?: string, enabled?: boolean) => void;
   getDeclinedBlock?: () => { userId?: string; until?: number } | null;
-  getIncomingFriendCall?: () => any;
+  getIncomingFriendCall?: () => IncomingFriendCall | null | undefined;
   getWasFriendCallEnded?: () => boolean;
-  getFriends?: () => any[];
+  getFriends?: () => CallPartnerProfile[];
   /** Имя партнёра для уведомления «Видеозвонок от {nick}». Если нет — показываем «от кого-то». */
   getPartnerDisplayName?: () => string | null;
 
@@ -77,7 +86,9 @@ export interface WebRTCSessionConfig {
   getFromPiP?: () => boolean;
 
   /** Вызывается, когда эта сессия пропустила подключение (другая сессия уже подключается к комнате). Компонент должен переключиться на переданную сессию. */
-  onSwitchToConnectingSession?: (session: unknown) => void;
+  onSwitchToConnectingSession?: (
+    session: import('./sessions/VideoCallSession').VideoCallSession | null,
+  ) => void;
 
   /** Вызывается в самом начале handleCallEnded (до disconnectRoom), чтобы UI успел выставить refs и не реагировал на колбэки при отключении — без ререндеров при закрытии экрана. */
   onCallEnding?: () => void;

@@ -1,3 +1,5 @@
+import type { AppRuntimeGlobals } from './utils/appRuntimeTypes';
+import type { PushNotificationData } from './utils/notificationTypes';
 // App.tsx
 import "react-native-gesture-handler";
 import React from "react";
@@ -207,7 +209,7 @@ try {
 // Экспортируем функции для использования в других компонентах
 export { activateKeepAwakeAsync, deactivateKeepAwakeAsync };
 
-try { (React as any).useInsertionEffect = (React as any).useEffect; } catch {}
+try { (React).useInsertionEffect = (React).useEffect; } catch {}
 
 // Dev: без всплывающих плашек LogBox (серые с «!» внизу экрана). Обрывы сети, VPN и
 // переподключения LiveKit — штатные ситуации, которые приложение обрабатывает само, а список
@@ -225,13 +227,13 @@ const Stack = createNativeStackNavigator<RootStackParamList>();
 const navRef = createNavigationContainerRef<RootStackParamList>();
 // Экспортируем ссылку глобально для простого доступа из модулей без хука
 // (безопасно: используется только для navigate на Home при разрыве вызова)
-(global as any).__navRef = navRef;
+(global as AppRuntimeGlobals).__navRef = navRef;
 
 /** Стабильная ссылка: inline getComponent в render App пересоздаётся и даёт лишний resolve/focus. */
 function getRandomChatScreen() {
   const requireStart = Date.now();
   try {
-    const g = global as any;
+    const g = global as AppRuntimeGlobals;
     const t0 = Number(g.__searchNavT0 || requireStart);
     logger.info('[search-nav] App.getComponent.start', {
       elapsedMs: requireStart - t0,
@@ -240,7 +242,7 @@ function getRandomChatScreen() {
   const Comp = require('./screens/RandomChatScreen').default;
   try {
     const now = Date.now();
-    const g = global as any;
+    const g = global as AppRuntimeGlobals;
     const t0 = Number(g.__searchNavT0 || now);
     const steps = Array.isArray(g.__searchNavSteps) ? g.__searchNavSteps : [];
     steps.push({
@@ -273,9 +275,9 @@ const ENDED_CALL_IDS_TTL_MS = 120000;
 function addEndedCallIdFromSocket(callId: string) {
   endedCallIdsFromSocket.add(callId);
   try {
-    const pendingRef = (global as any).__pendingForegroundVideoCallNavRef;
+    const pendingRef = (global as AppRuntimeGlobals).__pendingForegroundVideoCallNavRef;
     const pendingCallId = String(pendingRef?.current?.params?.callId || '').trim();
-    if (pendingCallId === callId) pendingRef.current = null;
+    if (pendingCallId === callId) pendingRef!.current = null;
   } catch {}
   setTimeout(() => endedCallIdsFromSocket.delete(callId), ENDED_CALL_IDS_TTL_MS);
 }
@@ -301,16 +303,16 @@ function markAcceptedVideoCallNavigationInFlight(callId?: string | null): void {
   if (!cid) return;
   acceptedVideoCallNavInFlight.set(cid, Date.now());
   try {
-    (global as any).__acceptedVideoCallNavCallIdRef =
-      (global as any).__acceptedVideoCallNavCallIdRef || { current: null as string | null };
-    (global as any).__acceptedVideoCallNavCallIdRef.current = cid;
+    (global as AppRuntimeGlobals).__acceptedVideoCallNavCallIdRef =
+      (global as AppRuntimeGlobals).__acceptedVideoCallNavCallIdRef || { current: null as string | null };
+    (global as AppRuntimeGlobals).__acceptedVideoCallNavCallIdRef!.current = cid;
   } catch {}
   setTimeout(() => {
     acceptedVideoCallNavInFlight.delete(cid);
     try {
-      const g = global as any;
+      const g = global as AppRuntimeGlobals;
       if (String(g.__acceptedVideoCallNavCallIdRef?.current || '') === cid) {
-        g.__acceptedVideoCallNavCallIdRef.current = null;
+        g.__acceptedVideoCallNavCallIdRef!.current = null;
       }
     } catch {}
   }, ACCEPTED_VIDEO_CALL_NAV_IN_FLIGHT_TTL_MS);
@@ -390,7 +392,7 @@ function endStaleCallAcceptedOnServer(callId: string, data: unknown, reason: str
     });
     socket.emit('call:end', buildCallEndSocketPayload(cid, roomId));
     try {
-      (global as any).__onVideoCallEndedRef?.current?.();
+      (global as AppRuntimeGlobals).__onVideoCallEndedRef?.current?.();
     } catch (_) {}
   } catch (e) {
     logger.warn('[App] failed call:end for stale call:accepted', {
@@ -405,39 +407,39 @@ const isVideoSessionRoute = (routeName?: string | null) =>
 
 // КРИТИЧНО: Глобальная ссылка на состояние неактивности экрана видеозвонка/рандомчата
 // Когда true - входящий звонок показывается в блоке собеседник, а не глобально
-(global as any).__isInactiveStateRef = { current: false };
+(global as AppRuntimeGlobals).__isInactiveStateRef = { current: false };
 
 // КРИТИЧНО: Глобальная ссылка на функцию очистки звонка из VideoCall
 // Это нужно чтобы можно было вызвать очистку даже когда экран звонка размонтирован (в PiP)
-(global as any).__endCallCleanupRef = { current: null as (() => void) | null };
+(global as AppRuntimeGlobals).__endCallCleanupRef = { current: null as (() => void) | null };
 
 // Колбэк для принудительного ре-рендера списка друзей при завершении видеозвонка (чтобы снялись бейдж «Занят» и disabled кнопки).
-(global as any).__onVideoCallEndedRef = { current: null as (() => void) | null };
+(global as AppRuntimeGlobals).__onVideoCallEndedRef = { current: null as (() => void) | null };
 
 // КРИТИЧНО: WebRTC session — box в callRuntime; global.__webrtcSessionRef = bridge.
-(global as any).__webrtcSessionRef = (global as any).__webrtcSessionRef || { current: null as any };
+(global as AppRuntimeGlobals).__webrtcSessionRef = (global as AppRuntimeGlobals).__webrtcSessionRef || { current: null };
 
 // AppContent региструет сюда bump, outer App (endCallImpl) вызывает — пересчёт Android leaveHint без доступа к state AppContent.
-(global as any).__bumpAndroidPipGuardRef = { current: null as (() => void) | null };
+(global as AppRuntimeGlobals).__bumpAndroidPipGuardRef = { current: null as (() => void) | null };
 
 // КРИТИЧНО: VideoCall выставляет true при doReset() → навигация на Home. App при call:ended не вызывает goHome() повторно (убирает двойное закрытие).
-(global as any).__homeResetByVideoCallRef = { current: false };
+(global as AppRuntimeGlobals).__homeResetByVideoCallRef = { current: false };
 
 // КРИТИЧНО: Один переход на Home при отмене звонка (call:cancel). Ключ по from (инициатор): несколько call:cancel с разными callId от одного звонящего = одно действие за окно времени.
-(global as any).__callCancelNavDoneRef = { from: '' as string, at: 0 };
+(global as AppRuntimeGlobals).__callCancelNavDoneRef = { from: '' as string, at: 0 };
 
 // КРИТИЧНО: Глобальная ссылка на функцию переключения микрофона из VideoCall
 // Это нужно чтобы можно было запустить startMicMeter даже когда экран звонка размонтирован (в PiP)
-(global as any).__toggleMicRef = { current: null as (() => void) | null };
+(global as AppRuntimeGlobals).__toggleMicRef = { current: null as (() => void) | null };
 
 // КРИТИЧНО: Глобальная ссылка на функцию переключения удаленного аудио из VideoCall
 // Это нужно чтобы можно было переключать динамик даже когда экран звонка размонтирован (в PiP)
-(global as any).__toggleRemoteAudioRef = { current: null as (() => void) | null };
+(global as AppRuntimeGlobals).__toggleRemoteAudioRef = { current: null as (() => void) | null };
 
 // КРИТИЧНО: Глобальная ссылка на функцию переключения камеры из VideoCall (для PiP).
-(global as any).__toggleCamRef = { current: null as (() => void) | null };
+(global as AppRuntimeGlobals).__toggleCamRef = { current: null as (() => void) | null };
 
-(global as any).__cycleAudioRouteRef = { current: null as (() => void) | null };
+(global as AppRuntimeGlobals).__cycleAudioRouteRef = { current: null as (() => void) | null };
 
 function AppContent() {
   const { theme, isDark } = useAppTheme();
@@ -484,16 +486,16 @@ function AppContent() {
     (opts?: { partnerName?: string; peerUserId?: string }) => {
       const peerUserId = String(
         opts?.peerUserId ||
-          (global as any).__incomingAnswerPeerUserIdRef?.current ||
-          (global as any).__currentCallPiPParamsRef?.current?.partnerId ||
+          (global as AppRuntimeGlobals).__incomingAnswerPeerUserIdRef?.current ||
+          (global as AppRuntimeGlobals).__currentCallPiPParamsRef?.current?.partnerId ||
           '',
       ).trim();
       let partnerName = String(opts?.partnerName || '').trim();
       if (!partnerName) {
         try {
           partnerName =
-            String((global as any).__currentCallPiPParamsRef?.current?.partnerName || '').trim() ||
-            String((global as any).__outgoingCallPeerNickRef?.current || '').trim() ||
+            String((global as AppRuntimeGlobals).__currentCallPiPParamsRef?.current?.partnerName || '').trim() ||
+            String((global as AppRuntimeGlobals).__outgoingCallPeerNickRef?.current || '').trim() ||
             peekCallNick(peerUserId) ||
             '';
         } catch {
@@ -504,7 +506,7 @@ function AppContent() {
       try {
         partnerAvatarUri =
           peekCallAvatar(peerUserId) ||
-          String((global as any).__currentCallPiPParamsRef?.current?.partnerAvatarUrl || '').trim() ||
+          String((global as AppRuntimeGlobals).__currentCallPiPParamsRef?.current?.partnerAvatarUrl || '').trim() ||
           undefined;
       } catch {
         partnerAvatarUri = peekCallAvatar(peerUserId);
@@ -540,7 +542,7 @@ function AppContent() {
     try { markCallPerf('answer_cover_clear'); } catch {}
     // Audio UI готов: снять accept-guard и снова разрешить Home→system PiP.
     try {
-      const g = global as any;
+      const g = global as AppRuntimeGlobals;
       if (incomingAnswerTransitionTimerRef.current) {
         clearTimeout(incomingAnswerTransitionTimerRef.current);
         incomingAnswerTransitionTimerRef.current = null;
@@ -637,7 +639,7 @@ function AppContent() {
     const meta = resolveIncomingAnswerCoverMeta(opts);
     if (opts?.peerUserId) {
       try {
-        const g = global as any;
+        const g = global as AppRuntimeGlobals;
         g.__incomingAnswerPeerUserIdRef = g.__incomingAnswerPeerUserIdRef || { current: null as string | null };
         g.__incomingAnswerPeerUserIdRef.current = String(opts.peerUserId).trim() || null;
       } catch {}
@@ -705,8 +707,8 @@ function AppContent() {
   // Только SafeArea onLayout VideoCall (source=videocall_layout). Голый вызов — no-op
   // (старый useLayoutEffect на mount иначе снимал крышку до bringMain → вспышка Home).
   React.useEffect(() => {
-    const g = global as any;
-    g.__notifyIncomingAnswerUiReady = (info?: { source?: string; callId?: string }) => {
+    const g = global as AppRuntimeGlobals;
+    g.__notifyIncomingAnswerUiReady = (info?: { source?: string; callId?: string | null }) => {
       if (!incomingAnswerCoverShownRef.current) return;
       if (info?.source !== 'videocall_layout') {
         try {
@@ -885,7 +887,7 @@ function AppContent() {
   const incomingCallIdRef = React.useRef<string | null>(null);
   const expectedCallAcceptedRef = React.useRef<{ callId: string; reason: string; expiresAt: number } | null>(null);
   const setIncomingAnswerTransitionGuard = React.useCallback((callId?: string | null, active = true, ttlMs = 10000) => {
-    const g = global as any;
+    const g = global as AppRuntimeGlobals;
     g.__incomingAnswerTransitionRef = g.__incomingAnswerTransitionRef || { current: null as null | { callId: string; expiresAt: number } };
     if (incomingAnswerTransitionTimerRef.current) {
       clearTimeout(incomingAnswerTransitionTimerRef.current);
@@ -951,8 +953,8 @@ function AppContent() {
       return false;
     }
     const currentRouteName = readRootCurrentRouteName();
-    const g = global as any;
-    const session = (global as any).__webrtcSessionRef?.current;
+    const g = global as AppRuntimeGlobals;
+    const session = (global as AppRuntimeGlobals).__webrtcSessionRef?.current;
     const sessionEnded =
       !!session && (typeof session.isEnded === 'function' ? !!session.isEnded() : false);
     const sessionCallId =
@@ -973,13 +975,13 @@ function AppContent() {
     const sessionNotEnded =
       !!session && !sessionEnded;
     const hasMatchingOutgoing =
-      (global as any).__outgoingCallIdRef?.current != null &&
-      String((global as any).__outgoingCallIdRef.current) === normalizedCallId;
+      global.__outgoingCallIdRef?.current != null &&
+      String(global.__outgoingCallIdRef.current) === normalizedCallId;
     const hasIncomingContext = incomingCallIdRef.current === normalizedCallId;
     const hasExpectedAcceptedContext = !!readExpectedCallAccepted(normalizedCallId);
     const onActiveVideoCall =
       currentRouteName === 'VideoCall' ||
-      ((global as any).__videoCallActiveRef?.current === true && sessionNotEnded);
+      (global.__videoCallActiveRef?.current === true && sessionNotEnded);
     if (onActiveVideoCall && !hasMatchingOutgoing && !hasIncomingContext && !hasExpectedAcceptedContext) {
       logger.info('[App] ⏭️ pending call:accepted ignored - active call already owns UI', {
         callId: normalizedCallId,
@@ -1088,7 +1090,7 @@ function AppContent() {
       } catch {}
       clearPreviousCallTeardownGuards();
       const partnerNick = String(fromNick || '').trim();
-      const gAns = global as any;
+      const gAns = global as AppRuntimeGlobals;
       gAns.__incomingAnswerPeerUserIdRef = gAns.__incomingAnswerPeerUserIdRef || { current: null as string | null };
       gAns.__incomingAnswerPeerUserIdRef.current = String(from || '').trim() || null;
       if (partnerNick) {
@@ -1194,7 +1196,7 @@ function AppContent() {
   const completeAndroidIncomingAnswerRef = React.useRef(completeAndroidIncomingAnswer);
   completeAndroidIncomingAnswerRef.current = completeAndroidIncomingAnswer;
   React.useEffect(() => {
-    const g = global as any;
+    const g = global as AppRuntimeGlobals;
     g.__completeAndroidIncomingAnswer = (from: string, callId: string, fromNick?: string) =>
       completeAndroidIncomingAnswerRef.current(from, callId, fromNick);
     return () => {
@@ -1210,7 +1212,7 @@ function AppContent() {
       returnFromNotifRetryTimerRef.current = null;
     }
 
-    const g = global as any;
+    const g = global as AppRuntimeGlobals;
     const session = g.__webrtcSessionRef?.current;
     const sessionEnded =
       session && typeof session.isEnded === 'function' && session.isEnded();
@@ -1259,7 +1261,7 @@ function AppContent() {
         retry,
       });
       const returnToken = Number(g.__systemPiPReturnTokenRef?.current || Date.now());
-      nav.dispatch(
+      nav!.dispatch(
         CommonActions.reset({
           index: 1,
           routes: [
@@ -1324,7 +1326,7 @@ function AppContent() {
         returnFromNotifRetryTimerRef.current = null;
       }
       try {
-        const g = global as any;
+        const g = global as AppRuntimeGlobals;
         if (g.__incomingAnswerTransitionRef) g.__incomingAnswerTransitionRef.current = null;
       } catch {}
     };
@@ -1363,7 +1365,7 @@ function AppContent() {
         armHomeUiSettleSkip(8000);
       } catch {}
       try {
-        const g = global as any;
+        const g = global as AppRuntimeGlobals;
         g.__lastOutgoingCancelAtRef = g.__lastOutgoingCancelAtRef || { current: 0 };
         g.__lastOutgoingCancelAtRef.current = Date.now();
       } catch {}
@@ -1372,8 +1374,8 @@ function AppContent() {
       const rawCallId = String(payload?.callId || '').trim();
       // provisional ringback id (`pending_*`) — ещё нет серверного callId.
       const callId = rawCallId.startsWith('pending_') ? '' : rawCallId;
-      const currentOutgoing = String((global as any).__outgoingCallIdRef?.current || '').trim();
-      (global as any).__outgoingCanceledByNativeRef = (global as any).__outgoingCanceledByNativeRef ?? { current: false };
+      const currentOutgoing = String(global.__outgoingCallIdRef?.current || '').trim();
+      (global as AppRuntimeGlobals).__outgoingCanceledByNativeRef = (global as AppRuntimeGlobals).__outgoingCanceledByNativeRef ?? { current: false };
       if (callId && currentOutgoing && callId !== currentOutgoing) {
         // Поздний cancel старого callId, пока уже идёт новый исходящий — не ставим native-флаг.
         logger.info('[App] OutgoingCallCanceledByUser for stale callId — cancel old only', {
@@ -1384,29 +1386,29 @@ function AppContent() {
         return;
       }
       if (!callId && !currentOutgoing) {
-        const attempt = Number((global as any).__activeOutgoingAttemptRef?.current || 0);
-        const uiActive = (global as any).__outgoingCallUiActiveRef?.current === true;
+        const attempt = Number((global as AppRuntimeGlobals).__activeOutgoingAttemptRef?.current || 0);
+        const uiActive = (global as AppRuntimeGlobals).__outgoingCallUiActiveRef?.current === true;
         if (attempt <= 0 && !uiActive) {
           logger.info('[App] OutgoingCallCanceledByUser without callId ignored — no active outgoing');
-          (global as any).__outgoingCanceledByNativeRef.current = false;
+          (global as AppRuntimeGlobals).__outgoingCanceledByNativeRef!.current = false;
           return;
         }
         // callId ещё не пришёл (pending_*): HomeScreen cancel'нёт orphan при ack startCall.
         // Без флага callee остаётся на Incoming до позднего cancel/busy.
-        (global as any).__outgoingCancelAwaitingCallIdRef =
-          (global as any).__outgoingCancelAwaitingCallIdRef || { current: false };
-        (global as any).__outgoingCancelAwaitingCallIdRef.current = true;
+        (global as AppRuntimeGlobals).__outgoingCancelAwaitingCallIdRef =
+          (global as AppRuntimeGlobals).__outgoingCancelAwaitingCallIdRef || { current: false };
+        (global as AppRuntimeGlobals).__outgoingCancelAwaitingCallIdRef!.current = true;
         logger.info('[App] OutgoingCallCanceledByUser without callId — await orphan callId to cancel', {
           attempt,
           uiActive,
           provisionalNativeId: rawCallId.startsWith('pending_') ? rawCallId : null,
         });
       }
-      (global as any).__outgoingCanceledByNativeRef.current = true;
+      (global as AppRuntimeGlobals).__outgoingCanceledByNativeRef!.current = true;
       // Текущий исходящий реально отменяем: снять video+leaveHint до AppState,
       // иначе cancel из чата оставляет activeVideoCall и ложный system PiP.
       try {
-        const g = global as any;
+        const g = global as AppRuntimeGlobals;
         g.__disableSystemPiPUntilRef = g.__disableSystemPiPUntilRef || { current: 0 };
         g.__disableSystemPiPUntilRef.current = Date.now() + 4000;
         g.__videoCallActiveRef = g.__videoCallActiveRef || { current: false };
@@ -1447,7 +1449,7 @@ function AppContent() {
     const sub2 = emitter.addListener('IncomingCallDeclinedByUser', (payload?: { callId?: string | null }) => {
       const callerPeer =
         String(getIncomingCallScreenState().fromUserId || '').trim() ||
-        String((global as any).__lastIncomingFromUserIdRef?.current || '').trim();
+        String((global as AppRuntimeGlobals).__lastIncomingFromUserIdRef?.current || '').trim();
       repeatNativeCallSignal('decline', payload?.callId);
       callLifecycle.ringEnded(payload?.callId ? String(payload.callId) : null, 'incoming_declined_native');
       incomingCallIdRef.current = null;
@@ -1516,7 +1518,7 @@ function AppContent() {
       // Native already decided X vs expand (timeout without resume). Never swallow hangup —
       // returningUntil / returnToCallInFlight previously blocked call:end and left the peer mid-call.
       try {
-        const g = (global as any);
+        const g = (global as AppRuntimeGlobals);
         const now = Date.now();
         const returningUntil = Number(g.__returningFromSystemPiPUntilRef?.current || 0);
         const returnToCallInFlight = isPipReturnToCallInFlight();
@@ -1533,7 +1535,7 @@ function AppContent() {
         } catch (_) {}
       } catch (_) {}
       try {
-        const g = (global as any);
+        const g = (global as AppRuntimeGlobals);
         setEndingFromPiPButton(true);
         setEndingCallInProgress(true);
         setCallEndedFromPiPNoOpen(true);
@@ -1544,7 +1546,7 @@ function AppContent() {
         setPipVisible(false);
       } catch (_) {}
       NativeModules.LiviAppModule?.getPiPEndCallParams?.()?.then?.((params: { callId?: string | null; roomId?: string | null }) => {
-        const fn = (global as any).__endCallFromNativeRef?.current;
+        const fn = (global as AppRuntimeGlobals).__endCallFromNativeRef?.current;
         if (typeof fn === 'function') {
           fn(params?.callId ?? null, params?.roomId ?? null);
         } else {
@@ -1566,7 +1568,7 @@ function AppContent() {
     const sub7 = emitter.addListener('SystemPiPExpanded', () => {
       let forceInAppRestore = false;
       try {
-        const g = (global as any);
+        const g = (global as AppRuntimeGlobals);
         const ignoreExpandedUntil = Number(g.__ignoreSystemPiPExpandedUntilRef?.current || 0);
         const returnToCallInFlight = isPipReturnToCallInFlight();
         const endingCall =
@@ -1688,7 +1690,7 @@ function AppContent() {
         );
       } catch (_) {}
       try {
-        const g = (global as any);
+        const g = (global as AppRuntimeGlobals);
         g.__disableSystemPiPUntilRef = g.__disableSystemPiPUntilRef || { current: 0 };
         // Короткое окно только против повторного auto-PiP при развороте; leaveHint не гасим — натив уже сбросил при exit PiP.
         g.__disableSystemPiPUntilRef.current = Date.now() + 2200;
@@ -1698,7 +1700,7 @@ function AppContent() {
       } catch (_) {}
       // Ещё раз: ModeChanged мог успеть показать плашку пока шли флаги выше.
       try {
-        const g = global as any;
+        const g = global as AppRuntimeGlobals;
         if (forceInAppRestore && g.__pipVisibleRef?.current === true) {
           return;
         }
@@ -1721,8 +1723,8 @@ function AppContent() {
       // компактный overlay остаётся единственным владельцем восстановления.
       if (restoreInAppPiP) {
         try {
-          const session = (global as any).__webrtcSessionRef?.current;
-          const appliedSnap = (global as any).__lastAppliedSystemPiPSnapRef as
+          const session = (global as AppRuntimeGlobals).__webrtcSessionRef?.current;
+          const appliedSnap = (global as AppRuntimeGlobals).__lastAppliedSystemPiPSnapRef as
             | { camOn?: boolean; preferAudioOnlyUi?: boolean }
             | undefined;
           const shouldRestoreCam =
@@ -1737,14 +1739,14 @@ function AppContent() {
         } catch (_) {}
       }
       const fn = restoreInAppPiP
-        ? (global as any).__pipReturnToCallRef?.current
+        ? (global as AppRuntimeGlobals).__pipReturnToCallRef?.current
         : preferAudioOnly
-          ? (global as any).__pipReturnToAudioCallRef?.current
-          : (global as any).__pipReturnToCallRef?.current;
+          ? (global as AppRuntimeGlobals).__pipReturnToAudioCallRef?.current
+          : (global as AppRuntimeGlobals).__pipReturnToCallRef?.current;
       if (typeof fn === 'function') {
         if (restoreInAppPiP) {
           try {
-            const g = global as any;
+            const g = global as AppRuntimeGlobals;
             g.__restoringInAppPiPFromSystemRef = g.__restoringInAppPiPFromSystemRef || { current: false };
             g.__restoringInAppPiPFromSystemRef.current = true;
           } catch (_) {}
@@ -1758,11 +1760,11 @@ function AppContent() {
         return;
       }
       // Fallback: если ref не установлен (тайминг), берём callId/roomId из глобального ref и навигируем сами
-      const params = (global as any).__currentCallPiPParamsRef?.current;
-      const nav = (global as any).__navRef;
+      const params = (global as AppRuntimeGlobals).__currentCallPiPParamsRef?.current;
+      const nav = (global as AppRuntimeGlobals).__navRef;
       console.log('[App] SystemPiPExpanded fallback', { hasParams: !!params, callId: params?.callId, roomId: params?.roomId, navReady: nav?.isReady?.() });
       if (params?.callId && params?.roomId && nav?.isReady?.()) {
-        const g = global as any;
+        const g = global as AppRuntimeGlobals;
         const returnToken = Number(g.__systemPiPReturnTokenRef?.current || Date.now());
         if (leaveCtx.restoreInAppPiP || forceInAppRestore) {
           // restore in-app PiP on Home — skip audio-only VideoCall reset below
@@ -1772,7 +1774,7 @@ function AppContent() {
         if (restoreInAppPiP) {
           const rawTarget = (leaveCtx.routeName as string) || 'Home';
           const target = (rawTarget === 'VideoCall' ? 'Home' : rawTarget) as keyof RootStackParamList;
-          nav.dispatch(CommonActions.navigate({ name: target as any }));
+          nav.dispatch(CommonActions.navigate({ name: target }));
           const showPiP = g.__pipShowPiPRef?.current;
           if (typeof showPiP === 'function') {
             showPiP({
@@ -1818,13 +1820,13 @@ function AppContent() {
     });
     const subReturnAudio = emitter.addListener('ReturnToAudioCallFromPiP', () => {
       try {
-        const navFn = (global as any).__pipReturnToAudioCallRef?.current;
+        const navFn = (global as AppRuntimeGlobals).__pipReturnToAudioCallRef?.current;
         if (typeof navFn === 'function') {
           navFn();
           reenableAndroidSystemPiPLeaveHintAfterReturn();
           return;
         }
-        const g = global as any;
+        const g = global as AppRuntimeGlobals;
         const params = g.__currentCallPiPParamsRef?.current;
         const nav = g.__navRef;
         if (params?.callId && params?.roomId && nav?.isReady?.()) {
@@ -1855,7 +1857,7 @@ function AppContent() {
       'RemoteCallEndedInSystemPiP',
       (payload?: { callId?: string | null; roomId?: string | null }) => {
         try {
-          const g = global as any;
+          const g = global as AppRuntimeGlobals;
           const callId =
             String(payload?.callId || g.__currentCallPiPParamsRef?.current?.callId || '').trim() || null;
           const roomId =
@@ -1949,14 +1951,14 @@ function AppContent() {
           try { stopIncomingCallForegroundService(); } catch {}
           const routeName = readRootCurrentRouteName();
           if (routeName === 'VideoCall') {
-            const endFn = (global as any).__endCallFromNativeRef?.current;
+            const endFn = (global as AppRuntimeGlobals).__endCallFromNativeRef?.current;
             if (typeof endFn === 'function') endFn(callId, null);
           } else {
             // Ignore stale PerformEndCallAction from getInitialEvents / OEM noise:
             // only act when we know this device is ringing (callee) or placing (caller).
             const isCallee = incomingCallIdRef.current === callId;
             const outgoingId = String(
-              (global as any).__outgoingCallIdRef?.current || '',
+              global.__outgoingCallIdRef?.current || '',
             ).trim();
             const isCaller = !!outgoingId && outgoingId === callId;
             if (isCallee) {
@@ -1969,7 +1971,7 @@ function AppContent() {
               try {
                 const callerPeer =
                   String(getIncomingCallScreenState().fromUserId || '').trim() ||
-                  String((global as any).__lastIncomingFromUserIdRef?.current || '').trim();
+                  String((global as AppRuntimeGlobals).__lastIncomingFromUserIdRef?.current || '').trim();
                 if (callerPeer) {
                   recordCancelledCall(callerPeer);
                   forceCallLogUiNow('incoming_declined_callkeep');
@@ -2017,13 +2019,13 @@ function AppContent() {
    * requestBluetoothPermission через этот ref.
    */
   React.useEffect(() => {
-    const g = global as any;
+    const g = global as AppRuntimeGlobals;
     g.__promptBluetoothPermissionRef = g.__promptBluetoothPermissionRef || {
       current: null as null | ((opts?: { ifHeadsetPresent?: boolean }) => Promise<boolean>),
     };
     g.__promptBluetoothPermissionRef.current = requestBluetoothPermission;
     return () => {
-      g.__promptBluetoothPermissionRef.current = null;
+      g.__promptBluetoothPermissionRef!.current = null;
     };
   }, [requestBluetoothPermission]);
 
@@ -2063,11 +2065,11 @@ function AppContent() {
   /** Форсирует пересчёт Android leaveHint/PiP guard после call:end/call:ended (refs меняются без смены route/pip). */
   const [androidPipGuardTick, setAndroidPipGuardTick] = React.useState(0);
   React.useEffect(() => {
-    const g = global as any;
+    const g = global as AppRuntimeGlobals;
     g.__bumpAndroidPipGuardRef = g.__bumpAndroidPipGuardRef || { current: null as (() => void) | null };
     g.__bumpAndroidPipGuardRef.current = () => setAndroidPipGuardTick((n: number) => n + 1);
     return () => {
-      g.__bumpAndroidPipGuardRef.current = null;
+      g.__bumpAndroidPipGuardRef!.current = null;
     };
   }, []);
 
@@ -2194,7 +2196,7 @@ function AppContent() {
   const ensureInAppPiPBeforeOpenFriends = React.useCallback(() => {
     if (Platform.OS !== 'android') return;
     try {
-      const g = global as any;
+      const g = global as AppRuntimeGlobals;
       if (g.__pipVisibleRef?.current === true || g.__pipInSystemModeRef?.current === true) return;
 
       const session = g.__webrtcSessionRef?.current;
@@ -2509,9 +2511,9 @@ function AppContent() {
   const handleCallDeepLinkRef = React.useRef<(url: string) => Promise<boolean>>(async () => false);
   handleCallDeepLinkRef.current = handleCallDeepLink;
   React.useEffect(() => {
-    (global as any).__handleCallDeepLinkRef = handleCallDeepLinkRef;
+    (global as AppRuntimeGlobals).__handleCallDeepLinkRef = handleCallDeepLinkRef;
     return () => {
-      delete (global as any).__handleCallDeepLinkRef;
+      delete (global as AppRuntimeGlobals).__handleCallDeepLinkRef;
     };
   }, []);
 
@@ -2796,15 +2798,15 @@ function AppContent() {
     } catch {
       currentRoute = routeName;
     }
-    const pipForceHidden = !!(global as any).__pipForceHiddenRef?.current;
-    const pipVisible = !pipForceHidden && (!!(pip as any)?.visible || !!(global as any).__pipVisibleRef?.current);
+    const pipForceHidden = !!global.__pipForceHiddenRef?.current;
+    const pipVisible = !pipForceHidden && (!!(pip)?.visible || !!global.__pipVisibleRef?.current);
     const shouldKeepOn = isVideoSessionRoute(currentRoute) || pipVisible;
 
     // Android: системный PiP разрешаем ТОЛЬКО при реально активном звонке/входящем/видимом PiP,
     // а не просто потому что текущий экран = VideoCall (иначе при call:ended может произойти автозаход в PiP).
     if (Platform.OS === 'android') {
       try {
-        const g = (global as any);
+        const g = (global as AppRuntimeGlobals);
         const sessionForGuard = g.__webrtcSessionRef?.current;
         const sessionNotEndedForGuard =
           !!sessionForGuard && (typeof sessionForGuard.isEnded === 'function' ? !sessionForGuard.isEnded() : true);
@@ -2875,7 +2877,7 @@ function AppContent() {
       } catch (_) {}
     }
 
-    let appStateSubscription: any = null;
+    let appStateSubscription: ReturnType<typeof AppState.addEventListener> | null = null;
     let keepAwakeInterval: ReturnType<typeof setInterval> | null = null;
     let androidKeepScreenOnInterval: ReturnType<typeof setInterval> | null = null;
     let pipKeepScreenOnInterval: ReturnType<typeof setInterval> | null = null;
@@ -2896,7 +2898,7 @@ function AppContent() {
           // ждал Bluetooth profile около двух секунд и блокировал главный UI-поток.
           // Аудиосессию запускает useAudioRouting только после фактического начала звонка;
           // здесь достаточно window flag + expo-keep-awake.
-          (InCallManager as any).setKeepScreenOn?.(true);
+          InCallManager.setKeepScreenOn?.(true);
           // Также активируем expo-keep-awake для Android (дополнительная защита)
           if (activateKeepAwakeAsync) {
             activateKeepAwakeAsync().catch((e) => {
@@ -2925,9 +2927,9 @@ function AppContent() {
       } catch {
         route = routeName;
       }
-      const forceHidden = !!(global as any).__pipForceHiddenRef?.current;
+      const forceHidden = !!global.__pipForceHiddenRef?.current;
       const visible =
-        !forceHidden && (!!(pip as any)?.visible || !!(global as any).__pipVisibleRef?.current);
+        !forceHidden && (!!(pip)?.visible || !!global.__pipVisibleRef?.current);
       // PiP засчитываем только при живом звонке. Иначе зависший __pipVisibleRef
       // держал бы экран бесконечно: сам он к тому моменту уже ни на что не влияет,
       // плашки на экране нет, а условие всё ещё истинно. Маршрут и входящий
@@ -2940,7 +2942,7 @@ function AppContent() {
     const releaseKeepScreenOn = () => {
       if (Platform.OS === 'android') {
         try {
-          (InCallManager as any).setKeepScreenOn?.(false);
+          InCallManager.setKeepScreenOn?.(false);
         } catch {}
       }
       try {
@@ -2990,7 +2992,7 @@ function AppContent() {
         }
       } else if (nextAppState === 'background') {
         try {
-          const bgSession = (global as any).__webrtcSessionRef?.current;
+          const bgSession = (global as AppRuntimeGlobals).__webrtcSessionRef?.current;
           const callStillLive =
             bgSession &&
             (typeof bgSession.isEnded !== 'function' || !bgSession.isEnded());
@@ -3003,7 +3005,7 @@ function AppContent() {
           }
         } catch (_) {}
         // Проверяем: в системном PiP с активным звонком — экран не гасим до завершения звонка
-        const g = (global as any);
+        const g = (global as AppRuntimeGlobals);
         const inPiP = g.__pipVisibleRef?.current === true || g.__pipInSystemModeRef?.current === true;
         const session = g.__webrtcSessionRef?.current;
         const activeVideoCallNotEnded = !!session && (typeof session.isEnded !== 'function' ? true : !session.isEnded());
@@ -3044,7 +3046,7 @@ function AppContent() {
         // Аудиосессию звонка здесь не трогаем: её закрывает только завершение звонка (utils/callAudioSession).
         if (Platform.OS === 'android' && !keepCallAudioContext) {
           try {
-            (InCallManager as any).setKeepScreenOn?.(false);
+            InCallManager.setKeepScreenOn?.(false);
           } catch (e) {
             logger.warn('[App] Failed to setKeepScreenOn(false) on Android:', e);
           }
@@ -3059,7 +3061,7 @@ function AppContent() {
       } catch {}
       if (Platform.OS === 'android') {
         try {
-          (InCallManager as any).setKeepScreenOn?.(false);
+          InCallManager.setKeepScreenOn?.(false);
         } catch {}
       }
       return;
@@ -3089,7 +3091,7 @@ function AppContent() {
           // Не выключать leaveHint во время входа в системный PiP (Home во время звонка):
           // иначе повторный запуск эффекта (из-за pip.visible/route) гасит флаг до срабатывания onUserLeaveHint.
           // Пока активен экран звонка, leaveHint принадлежит VideoCall и cleanup App не должен его сбрасывать.
-          const g = (global as any);
+          const g = (global as AppRuntimeGlobals);
           const systemPiPEntryUntil = g?.__systemPiPEntryInProgressUntilRef?.current;
           const enteringSystemPiP = typeof systemPiPEntryUntil === 'number' && systemPiPEntryUntil > Date.now();
           const session = g?.__webrtcSessionRef?.current;
@@ -3132,7 +3134,7 @@ function AppContent() {
       // Для Android деактивируем setKeepScreenOn при unmount
       if (Platform.OS === 'android') {
         try {
-          (InCallManager as any).setKeepScreenOn?.(false);
+          InCallManager.setKeepScreenOn?.(false);
         } catch (e) {
           logger.warn('[App] Failed to setKeepScreenOn(false) on Android (unmount):', e);
         }
@@ -3141,7 +3143,7 @@ function AppContent() {
         appStateSubscription.remove();
       }
     };
-  }, [routeName, (pip as any)?.visible, androidPipGuardTick]); // пересчитываем need-to-keep-on по состоянию приложения
+  }, [routeName, (pip)?.visible, androidPipGuardTick]); // пересчитываем need-to-keep-on по состоянию приложения
 
   // КРИТИЧНО: Убрана глобальная обработка блокировки экрана из App.tsx
   // Логика завершения звонков при блокировке экрана теперь полностью обрабатывается в VideoCall.tsx
@@ -3180,7 +3182,7 @@ function AppContent() {
     
     // Защита от гонки: если для этого callId уже пришёл cancel/timeout, игнорируем входящий
     try {
-      const id = String((d as any)?.callId || '');
+      const id = String((d)?.callId || '');
       if (id) {
         const now = Date.now();
         // ленивое очищение старых записей (>10с)
@@ -3194,16 +3196,16 @@ function AppContent() {
 
     // На экране видеозвонка с активным звонком — входящий от того же собеседника игнорируем (дубликат после отмены на нативном экране у звонящего)
     const isOnVideoScreen = isVideoSessionRoute(currentRoute);
-    const isInactiveVideoState = !!(global as any)?.__isInactiveStateRef?.current;
-    const videoCallPartner = (global as any)?.__videoCallPartnerUserIdRef?.current;
-    const videoCallActive = (global as any)?.__videoCallActiveRef?.current;
+    const isInactiveVideoState = !!(global as AppRuntimeGlobals)?.__isInactiveStateRef?.current;
+    const videoCallPartner = (global as AppRuntimeGlobals)?.__videoCallPartnerUserIdRef?.current;
+    const videoCallActive = (global as AppRuntimeGlobals)?.__videoCallActiveRef?.current;
     if (isOnVideoScreen && !isInactiveVideoState && videoCallActive && videoCallPartner && String(d.from) === String(videoCallPartner)) {
       return;
     }
     // Этот звонок уже идёт / принимается: после сна сокет переподключается, и сервер повторяет
     // call:incoming по тому же callId (ретрай без ACK), пока FCM-копии ещё в пути.
     try {
-      const g = global as any;
+      const g = global as AppRuntimeGlobals;
       const sessCallId = String(g.__webrtcSessionRef?.current?.getCallId?.() || '').trim();
       const pendingAcceptCallId = String(g.__pendingCallAcceptedRef?.current?.callId || '').trim();
       if (callId && (sessCallId === callId || pendingAcceptCallId === callId)) {
@@ -3233,7 +3235,7 @@ function AppContent() {
     }
 
     const incomingMedia =
-      String((d as any).media || '').toLowerCase() === 'video' ? 'video' : 'audio';
+      String((d).media || '').toLowerCase() === 'video' ? 'video' : 'audio';
     const hasVideo = incomingMedia === 'video';
     try { setCallMediaHint(d.callId, incomingMedia); } catch {}
     prefetchDirectCallIce('app:call-incoming');
@@ -3271,13 +3273,13 @@ function AppContent() {
     }
     try { AsyncStorage.setItem('last_incoming_from', String(d.from || '')); } catch {}
     try {
-      const g = global as any;
+      const g = global as AppRuntimeGlobals;
       g.__lastIncomingFromUserIdRef = g.__lastIncomingFromUserIdRef || { current: null };
       g.__lastIncomingFromUserIdRef.current = String(d.from || '').trim() || null;
     } catch {}
     try {
       const fromPeer = String(d.from || '').trim();
-      if (fromPeer && String((global as any).__currentChatPeerId || '').trim() === fromPeer) {
+      if (fromPeer && String((global as AppRuntimeGlobals).__currentChatPeerId || '').trim() === fromPeer) {
         markChatCallBubbleEligible(fromPeer, 'callee', d.callId);
       }
     } catch {}
@@ -3285,7 +3287,7 @@ function AppContent() {
 
   // Сохраняем обработчик в ref для использования в fallback и для пуша
   incomingCallHandlerRef.current = handleIncomingCall;
-  (global as any).__setIncomingCallFromPush = (data: any) => {
+  (global as AppRuntimeGlobals).__setIncomingCallFromPush = (data: PushNotificationData) => {
     if (data?.callId && data?.from && incomingCallHandlerRef.current) {
       incomingCallHandlerRef.current({
         callId: String(data.callId),
@@ -3330,7 +3332,7 @@ function AppContent() {
               try { requestCallAcceptedWithRetry(callId, { reason: 'socket-connect-native-pending' }); } catch {}
               return;
             }
-            const refCallId = (global as any).__outgoingCallIdRef?.current;
+            const refCallId = global.__outgoingCallIdRef?.current;
             if (refCallId && shouldRequestPendingCallAccepted(refCallId, 'socket-connect-outgoing-fallback')) {
               logger.info('[App] Socket connected with outgoing callId ref (FCM fallback), requesting call:accepted', { callId: refCallId });
               // Не очищаем __outgoingCallIdRef до обработки call:accepted — иначе caller теряет контекст
@@ -3366,7 +3368,7 @@ function AppContent() {
   // При получении call:ended (второй участник завершил) — закрываем модалки, PiP по контексту: только reset на Home если были на полноэкранном видеозвонке.
   React.useEffect(() => {
     const onCallEnded = (data?: { callId?: string; roomId?: string }) => {
-      const g = global as any;
+      const g = global as AppRuntimeGlobals;
       // Снимок до hidePiP в PiPContext: in-app PiP → бейдж «Звонок завершён» на Home.
       try {
         g.__pipCallEndedWasInAppAtStartRef = g.__pipCallEndedWasInAppAtStartRef || { current: false };
@@ -3426,7 +3428,7 @@ function AppContent() {
         if (lastKey === eventKey && now - lastAt < 3000) {
           // Дубликат call:ended: всё равно пробуем снять системный PiP (первый проход мог попасть в debounce натива).
           try {
-            const g2 = global as any;
+            const g2 = global as AppRuntimeGlobals;
             const dupInSystem =
               g2.__pipInSystemModeRef?.current === true ||
               g2.__pipCallEndedWasInSystemRef?.current === true;
@@ -3452,7 +3454,7 @@ function AppContent() {
       }
       setTimeout(() => {
         try {
-          const g2 = global as any;
+          const g2 = global as AppRuntimeGlobals;
           const session = g2.__webrtcSessionRef?.current;
           const sessionLive =
             session &&
@@ -3479,8 +3481,8 @@ function AppContent() {
       clearIncomingAnswerCover();
       // Жёстко запрещаем системный PiP на короткое время после завершения звонка (анти-гонка).
       try {
-        (global as any).__disableSystemPiPUntilRef = (global as any).__disableSystemPiPUntilRef || { current: 0 };
-        (global as any).__disableSystemPiPUntilRef.current = Date.now() + 4000;
+        (global as AppRuntimeGlobals).__disableSystemPiPUntilRef = (global as AppRuntimeGlobals).__disableSystemPiPUntilRef || { current: 0 };
+        (global as AppRuntimeGlobals).__disableSystemPiPUntilRef!.current = Date.now() + 4000;
       } catch (_) {}
       if (Platform.OS === 'android') {
         try { NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false); } catch (_) {}
@@ -3524,7 +3526,7 @@ function AppContent() {
           g.__callEndedFromPiPNoOpenRef = g.__callEndedFromPiPNoOpenRef || { current: false };
           g.__callEndedFromPiPNoOpenRef.current = true;
           setTimeout(() => {
-            try { (global as any).__callEndedFromPiPNoOpenRef.current = false; } catch (_) {}
+            try { (global as AppRuntimeGlobals).__callEndedFromPiPNoOpenRef!.current = false; } catch (_) {}
           }, 6000);
         } catch (_) {}
         // Экран завершённого звонка сюда не кладём: при возврате человек видел его кадр до ухода на Home.
@@ -3561,13 +3563,13 @@ function AppContent() {
       const homeResetByVideoCall = g.__homeResetByVideoCallRef?.current === true;
       if (homeResetByVideoCall) {
         console.log('[App] [call:ended] навигацию не делаем — экран звонка уже закрыт из VideoCall');
-        try { g.__homeResetByVideoCallRef.current = false; } catch (_) {}
+        try { g.__homeResetByVideoCallRef!.current = false; } catch (_) {}
         return;
       }
       const closeVideoCallScreen = () => {
         if (!navRef.isReady()) return;
         const route = navRef.getCurrentRoute();
-        const routeName = String((route as any)?.name ?? '');
+        const routeName = String((route)?.name ?? '');
         if (routeName === 'Home') return;
         if (routeName === 'VideoCall') {
           leaveVideoCallScreenPreservingStack(navRef, {
@@ -3590,11 +3592,11 @@ function AppContent() {
   React.useEffect(() => {
     if (Platform.OS !== 'android') return () => {};
     const onReconnect = () => {
-      const g = global as any;
+      const g = global as AppRuntimeGlobals;
       if (g.__pipInSystemModeRef?.current !== true) return;
       const session = g.__webrtcSessionRef?.current;
-      const roomDisconnected = session?.room?.state === 'disconnected';
-      const sessionEnded = typeof session?.ended === 'boolean' && session.ended;
+      const roomDisconnected = session?.['room']?.state === 'disconnected';
+      const sessionEnded = typeof session?.['ended'] === 'boolean' && session['ended'];
       if (roomDisconnected || sessionEnded || !session) {
         try { dismissSystemPiPAfterCallEnded(); } catch (_) {}
         try {
@@ -3609,15 +3611,15 @@ function AppContent() {
 
   // Тап по уведомлению «звонок завершён» — по контексту: только reset на Home если были на полноэкранном видеозвонке
   React.useEffect(() => {
-    (global as any).__onCallEndedFromPush = () => {
+    (global as AppRuntimeGlobals).__onCallEndedFromPush = () => {
       try {
-        (global as any).__disableSystemPiPUntilRef = (global as any).__disableSystemPiPUntilRef || { current: 0 };
-        (global as any).__disableSystemPiPUntilRef.current = Date.now() + 4000;
+        (global as AppRuntimeGlobals).__disableSystemPiPUntilRef = (global as AppRuntimeGlobals).__disableSystemPiPUntilRef || { current: 0 };
+        (global as AppRuntimeGlobals).__disableSystemPiPUntilRef!.current = Date.now() + 4000;
       } catch (_) {}
       if (Platform.OS === 'android') {
         try { NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false); } catch (_) {}
       }
-      const g = global as any;
+      const g = global as AppRuntimeGlobals;
       const callId =
         String(g.__currentCallPiPParamsRef?.current?.callId || g.__outgoingCallIdRef?.current || '').trim() || null;
       const roomId =
@@ -3653,7 +3655,7 @@ function AppContent() {
           if (route?.name === 'Home') {
             // уже на Home
           } else if (route?.name === 'VideoCall') {
-            const endedFromPiP = (global as any).__lastEndCallSourceRef?.current === 'pip_close';
+            const endedFromPiP = (global as AppRuntimeGlobals).__lastEndCallSourceRef?.current === 'pip_close';
             if (!endedFromPiP) {
               leaveVideoCallScreenPreservingStack(navRef);
             }
@@ -3663,7 +3665,7 @@ function AppContent() {
       }
       clearCallRelatedNotificationsAndSyncBadge().catch(() => {});
     };
-    return () => { delete (global as any).__onCallEndedFromPush; };
+    return () => { delete (global as AppRuntimeGlobals).__onCallEndedFromPush; };
   }, []);
 
   // При старте приложения (в т.ч. по FCM call_accepted) — запросить call:accepted, если нативный модуль сохранил callId. Несколько попыток: после холодного старта или экрана dev client App может смонтироваться с задержкой.
@@ -3690,7 +3692,7 @@ function AppContent() {
     if (Platform.OS !== 'android') return;
     const t = setTimeout(() => {
       try {
-        const g = global as any;
+        const g = global as AppRuntimeGlobals;
         const hasOutgoing =
           !!String(g.__outgoingCallIdRef?.current || '').trim() ||
           g.__outgoingCallScreenVisibleRef?.current === true;
@@ -3719,9 +3721,9 @@ function AppContent() {
     const handleAppStateChange = (nextAppState: string) => {
       if (appStateRef.match(/inactive|background/) && nextAppState === 'active') {
         // Если пользователь нажал X на нативном экране исходящего — событие могло не дойти до JS; при возврате в приложение очищаем состояние
-        const canceledByNative = (global as any).__outgoingCanceledByNativeRef?.current === true;
+        const canceledByNative = (global as AppRuntimeGlobals).__outgoingCanceledByNativeRef?.current === true;
         if (canceledByNative) {
-          (global as any).__outgoingCanceledByNativeRef.current = false;
+          (global as AppRuntimeGlobals).__outgoingCanceledByNativeRef!.current = false;
         }
         if (Platform.OS === 'android') {
           const LiviAppModule = NativeModules.LiviAppModule;
@@ -3734,7 +3736,7 @@ function AppContent() {
             LiviAppModule?.getAndClearOutgoingCanceledByUserCallId?.()?.then?.((callId: string | null) => {
               const id = String(callId || '').trim();
               if (id) {
-                const currentOutgoing = String((global as any).__outgoingCallIdRef?.current || '').trim();
+                const currentOutgoing = String(global.__outgoingCallIdRef?.current || '').trim();
                 if (currentOutgoing && id !== currentOutgoing) {
                   logger.info('[App] stale outgoingCanceledByUserCallId on resume — cancel old only', {
                     callId: id,
@@ -3831,27 +3833,27 @@ function AppContent() {
       logger.info('[decline/инициатор] App: terminateCall(outgoing_declined_socket)');
       // Сбрасываем refs активного звонка без loadFriends (ended-callback).
       try {
-        (global as any).__videoCallPartnerUserIdRef = { current: null };
-        (global as any).__videoCallActiveRef = { current: false };
+        (global as AppRuntimeGlobals).__videoCallPartnerUserIdRef = { current: null };
+        global.__videoCallActiveRef = { current: false };
       } catch (_) {}
       // emitCloseOutgoing намеренно не шлём (preset outgoing_declined_socket) — анти-мерцание Home.
       // call:declined = тот, кому звонили, отклонил — пропущенным не считаем; «Отменённый» пишет HomeScreen offDeclined.
     });
     const offCancel = onCallCanceled?.(async (d) => {
       const callerId =
-        String((d as any)?.fromUserId || '').trim() ||
-        (/^[a-f0-9]{24}$/i.test(String((d as any)?.from || '').trim())
-          ? String((d as any).from).trim()
+        String((d)?.fromUserId || '').trim() ||
+        (/^[a-f0-9]{24}$/i.test(String((d)?.from || '').trim())
+          ? String((d).from).trim()
           : '') ||
-        String((d as any)?.from || '').trim();
+        String((d)?.from || '').trim();
       const myUserId = getCurrentUserId?.() ?? '';
       const isCallee = callerId && myUserId && callerId !== myUserId;
-      const callIdStr = (d as any)?.callId ? String((d as any).callId) : '';
+      const callIdStr = (d)?.callId ? String((d).callId) : '';
       callLifecycle.ringEnded(callIdStr || null, isCallee ? 'incoming_canceled' : 'outgoing_canceled');
       // Инициатор уже закрыл Outgoing локально — server echo не должен гонять Home/nav/callLog.
       if (!isCallee) {
         try {
-          const at = Number((global as any).__lastOutgoingCancelAtRef?.current || 0);
+          const at = Number((global as AppRuntimeGlobals).__lastOutgoingCancelAtRef?.current || 0);
           if (at > 0 && Date.now() - at < 8000) {
             logger.info('[App] onCallCanceled skipped (local initiator cancel settle)', {
               callId: callIdStr || null,
@@ -3868,9 +3870,9 @@ function AppContent() {
       // Старые Android-сборки на 27-й секунде отправляли обычный HTTP cancel.
       // Классифицируем такой server echo по возрасту активного исходящего как timeout,
       // чтобы JS-обновление сразу давало инициатору «Нет ответа» даже до переустановки APK.
-      const outgoingStartedAt = Number((global as any).__outgoingCallStartedAtRef?.current || 0);
-      const outgoingCallId = String((global as any).__outgoingCallIdRef?.current || '').trim();
-      const outgoingPeerId = String((global as any).__outgoingCallPeerUserIdRef?.current || '').trim();
+      const outgoingStartedAt = Number((global as AppRuntimeGlobals).__outgoingCallStartedAtRef?.current || 0);
+      const outgoingCallId = String(global.__outgoingCallIdRef?.current || '').trim();
+      const outgoingPeerId = String((global as AppRuntimeGlobals).__outgoingCallPeerUserIdRef?.current || '').trim();
       const outgoingAgeMs = outgoingStartedAt > 0 ? Date.now() - outgoingStartedAt : 0;
       const isCallerTimeoutRace =
         !isCallee &&
@@ -3918,10 +3920,10 @@ function AppContent() {
       stopIncomingCallAlert();
       // КРИТИЧНО: Обновляем canceledCallsRef для защиты от гонки событий
       try {
-        const id = String((d as any)?.callId || '');
+        const id = String((d)?.callId || '');
         if (id) canceledCallsRef.current.set(id, Date.now());
       } catch {}
-      const g = global as any;
+      const g = global as AppRuntimeGlobals;
       const homeResetByVideoCall = g.__homeResetByVideoCallRef?.current === true;
       const doneRef = g.__callCancelNavDoneRef;
       const now = Date.now();
@@ -3978,13 +3980,13 @@ function AppContent() {
         try { setIncomingCallScreenVisible(false); } catch {}
         // Сбрасываем refs активного звонка при отмене вызова
         try {
-          (global as any).__videoCallPartnerUserIdRef = { current: null };
-          (global as any).__videoCallActiveRef = { current: false };
-          (global as any).__onVideoCallEndedRef?.current?.();
+          (global as AppRuntimeGlobals).__videoCallPartnerUserIdRef = { current: null };
+          global.__videoCallActiveRef = { current: false };
+          (global as AppRuntimeGlobals).__onVideoCallEndedRef?.current?.();
         } catch (_) {}
         runCloseUI();
         if (homeResetByVideoCall) {
-          try { g.__homeResetByVideoCallRef.current = false; } catch (_) {}
+          try { g.__homeResetByVideoCallRef!.current = false; } catch (_) {}
         } else if (!alreadyDidNav && navRef.isReady()) {
           applyCallCancelledHomeNotice(navRef);
         }
@@ -4017,7 +4019,7 @@ function AppContent() {
       });
       const callId = data?.callId ? String(data.callId) : '';
       const currentRouteName = readRootCurrentRouteName();
-      const currentOutgoing = (global as any).__outgoingCallIdRef?.current;
+      const currentOutgoing = global.__outgoingCallIdRef?.current;
       const hasMatchingOutgoing = !!callId && currentOutgoing != null && String(currentOutgoing) === callId;
       const hasIncomingContext = !!callId && incomingCallIdRef.current === callId;
       const hasExpectedAcceptedContext = !!readExpectedCallAccepted(callId);
@@ -4027,17 +4029,17 @@ function AppContent() {
         logger.info('[App] ⏭️ call:accepted ignored (call already ended)', { callId });
         disposeDirectCallAudioPrewarm('app:accepted-already-ended');
         terminateCall({ reason: 'accepted_stale_ended', callId });
-        if ((global as any).__pendingCallAcceptedRef) (global as any).__pendingCallAcceptedRef.current = null;
+        if ((global as AppRuntimeGlobals).__pendingCallAcceptedRef) (global as AppRuntimeGlobals).__pendingCallAcceptedRef!.current = null;
        
         stopAnim();
         return;
       }
       // Нам ответили: звонок принят до того, как экран создаст сессию и она обработает accept.
       if (callId && getCallLifecycle().phase === 'outgoing') {
-        callLifecycle.accepted(callId, String((data as any)?.fromUserId || '').trim() || null, 'caller');
+        callLifecycle.accepted(callId, String((data)?.fromUserId || '').trim() || null, 'caller');
       }
 
-      const gAccept = global as any;
+      const gAccept = global as AppRuntimeGlobals;
       const incomingTransition = gAccept.__incomingAnswerTransitionRef?.current as
         | { callId?: string; expiresAt?: number }
         | null
@@ -4049,12 +4051,12 @@ function AppContent() {
         Date.now() < Number(incomingTransition.expiresAt || 0);
       const expectedPeek = readExpectedCallAccepted(callId, false);
       const expectedIsCallerSide = isCallerExpectedAcceptReason(expectedPeek?.reason);
-      const outgoingPeerHint = String((global as any).__outgoingCallPeerUserIdRef?.current || '').trim();
+      const outgoingPeerHint = String((global as AppRuntimeGlobals).__outgoingCallPeerUserIdRef?.current || '').trim();
       const hasLivekitAcceptPayload =
-        !!(data as any)?.livekitToken &&
-        !!(String((data as any)?.livekitRoomName ?? (data as any)?.roomId ?? '').trim());
+        !!(data)?.livekitToken &&
+        !!(String((data)?.livekitRoomName ?? (data)?.roomId ?? '').trim());
       const myUserId = String(getCurrentUserId() || '').trim();
-      let peerUserId = String((data as any)?.fromUserId ?? '').trim() || undefined;
+      let peerUserId = String((data)?.fromUserId ?? '').trim() || undefined;
       // Инициатор даже если __outgoingCallIdRef уже сброшен (FCM/getAccepted path).
       let isCaller =
         hasMatchingOutgoing ||
@@ -4075,7 +4077,7 @@ function AppContent() {
         }
       } else if (myUserId && peerUserId === myUserId) {
         const incomingPeer =
-          String((global as any).__incomingAnswerPeerUserIdRef?.current || '').trim() ||
+          String((global as AppRuntimeGlobals).__incomingAnswerPeerUserIdRef?.current || '').trim() ||
           String(getIncomingCallScreenState().fromUserId || '').trim() ||
           undefined;
         if (incomingPeer) peerUserId = incomingPeer;
@@ -4132,7 +4134,7 @@ function AppContent() {
             alreadyOnVideoCall,
             route: readRootCurrentRouteName() || null,
             appState: AppState.currentState,
-            hasLivekitToken: !!(data as any)?.livekitToken,
+            hasLivekitToken: !!(data)?.livekitToken,
           });
         }
       } catch {}
@@ -4146,17 +4148,17 @@ function AppContent() {
         });
         disposeDirectCallAudioPrewarm('app:accepted-no-context');
         // Не чистим pending и не шлём call:end, если есть LiveKit payload — иначе первый accept убивает звонок.
-        if (!(global as any).__pendingCallAcceptedRef) {
-          (global as any).__pendingCallAcceptedRef = { current: null };
+        if (!(global as AppRuntimeGlobals).__pendingCallAcceptedRef) {
+          (global as AppRuntimeGlobals).__pendingCallAcceptedRef = { current: null };
         }
         if (hasLivekitAcceptPayload) {
-          (global as any).__pendingCallAcceptedRef.current = data;
+          (global as AppRuntimeGlobals).__pendingCallAcceptedRef!.current = data;
           rememberExpectedCallAccepted(callId, 'soft-accept-stash', 60_000);
           logger.info('[App] 💾 Stashed call:accepted without UI context for later connect', {
             callId,
           });
         } else {
-          if ((global as any).__pendingCallAcceptedRef) (global as any).__pendingCallAcceptedRef.current = null;
+          if ((global as AppRuntimeGlobals).__pendingCallAcceptedRef) (global as AppRuntimeGlobals).__pendingCallAcceptedRef!.current = null;
           if (callId && !alreadyOnVideoCall) {
             endStaleCallAcceptedOnServer(callId, data, 'no-active-call-context');
           }
@@ -4168,15 +4170,15 @@ function AppContent() {
         logger.info('[App] ⏭️ call:accepted ignored (callId not current outgoing)', { callId, currentOutgoing });
         disposeDirectCallAudioPrewarm('app:accepted-wrong-outgoing');
         // Не очищаем pending с токеном — может быть гонка двух callId UI.
-        if (!hasLivekitAcceptPayload && (global as any).__pendingCallAcceptedRef) {
-          (global as any).__pendingCallAcceptedRef.current = null;
+        if (!hasLivekitAcceptPayload && (global as AppRuntimeGlobals).__pendingCallAcceptedRef) {
+          (global as AppRuntimeGlobals).__pendingCallAcceptedRef!.current = null;
         }
         return;
       }
       readExpectedCallAccepted(callId, true);
       clearEndingCallInProgress();
       const acceptedRoomId = String(
-        (data as any)?.livekitRoomName ?? (data as any)?.roomId ?? '',
+        (data)?.livekitRoomName ?? (data)?.roomId ?? '',
       ).trim();
       if (Platform.OS === 'android' && (callId || acceptedRoomId)) {
         try {
@@ -4187,8 +4189,8 @@ function AppContent() {
       }
       // КРИТИЧНО: Сохраняем событие call:accepted в глобальный ref на случай, если VideoCallSession еще не создан
       // Это решает проблему, когда call:accepted приходит до того, как VideoCallSession создан
-      if (!(global as any).__pendingCallAcceptedRef) {
-        (global as any).__pendingCallAcceptedRef = { current: null };
+      if (!(global as AppRuntimeGlobals).__pendingCallAcceptedRef) {
+        (global as AppRuntimeGlobals).__pendingCallAcceptedRef = { current: null };
       }
       // Повторный call:accepted (reconnect сокета / дубль broadcast), пока инициатор уже в LiveKit —
       // не перезаписываем pending ref и не дёргаем UI (в логах второй дубль часто приходит в `connecting`, не только в `connected`).
@@ -4200,11 +4202,11 @@ function AppContent() {
             });
             return;
           }
-          const sess = (global as any).__webrtcSessionRef?.current;
+          const sess = (global as AppRuntimeGlobals).__webrtcSessionRef?.current;
           const sid =
             sess && typeof sess.getCallId === 'function' ? String(sess.getCallId() || '').trim() : '';
           const ended = sess && typeof sess.isEnded === 'function' ? !!sess.isEnded() : false;
-          const roomState = sess?.room?.state as string | undefined;
+          const roomState = sess?.['room']?.state as string | undefined;
           const lkBusy =
             roomState === 'connected' ||
             roomState === 'connecting' ||
@@ -4225,18 +4227,18 @@ function AppContent() {
         });
         return;
       }
-      (global as any).__pendingCallAcceptedRef.current = data;
+      (global as AppRuntimeGlobals).__pendingCallAcceptedRef!.current = data;
       logger.info('[App] 💾 Saved call:accepted event to global ref', {
         callId: data?.callId,
-        hasLivekitToken: !!(data as any)?.livekitToken,
-        hasLivekitRoomName: !!(data as any)?.livekitRoomName,
+        hasLivekitToken: !!(data)?.livekitToken,
+        hasLivekitRoomName: !!(data)?.livekitRoomName,
       });
 
       // LiveKit connect до mount VideoCall: токен уже в __pendingCallAcceptedRef.
       // Сессия уходит в __webrtcSessionRef → VideoCall только rebind (без второго connect).
       // Ник собеседника фиксируем ДО сброса outgoing UI (HomeScreen иначе обнуляет ref).
       const callerPartnerNickEarly = isCaller
-        ? String((global as any).__outgoingCallPeerNickRef?.current || '').trim() ||
+        ? String((global as AppRuntimeGlobals).__outgoingCallPeerNickRef?.current || '').trim() ||
           peekCallNick(peerUserId) ||
           null
         : null;
@@ -4245,10 +4247,10 @@ function AppContent() {
           primeCallNick(peerUserId, callerPartnerNickEarly);
         } catch {}
         try {
-          const prev = (global as any).__currentCallPiPParamsRef?.current;
-          (global as any).__currentCallPiPParamsRef =
-            (global as any).__currentCallPiPParamsRef || { current: null };
-          (global as any).__currentCallPiPParamsRef.current = {
+          const prev = (global as AppRuntimeGlobals).__currentCallPiPParamsRef?.current;
+          (global as AppRuntimeGlobals).__currentCallPiPParamsRef =
+            (global as AppRuntimeGlobals).__currentCallPiPParamsRef || { current: null };
+          (global as AppRuntimeGlobals).__currentCallPiPParamsRef!.current = {
             ...(prev && typeof prev === 'object' ? prev : {}),
             partnerName: callerPartnerNickEarly,
             partnerId: String(peerUserId).trim() || prev?.partnerId,
@@ -4299,7 +4301,7 @@ function AppContent() {
           const resolveOutgoingPartnerNick = (): string | undefined => {
             const nick =
               String(callerPartnerNickEarly || '').trim() ||
-              String((global as any).__outgoingCallPeerNickRef?.current || '').trim() ||
+              String((global as AppRuntimeGlobals).__outgoingCallPeerNickRef?.current || '').trim() ||
               peekCallNick(peerUserId) ||
               '';
             return nick || undefined;
@@ -4379,10 +4381,10 @@ function AppContent() {
               const calleeParams = {
                 directCall: true,
                 directInitiator: false,
-                callId: (data as any)?.callId,
+                callId: (data)?.callId,
                 isIncoming: true,
                 peerUserId,
-                ...videoCallNavExtras((data as any)?.callId),
+                ...videoCallNavExtras((data)?.callId),
               };
               try {
                 showIncomingAnswerCover({
@@ -4415,22 +4417,22 @@ function AppContent() {
               ? {
                   directCall: true,
                   directInitiator: true,
-                  callId: (data as any)?.callId,
+                  callId: (data)?.callId,
                   peerUserId,
                   ...(outgoingNick ? { partnerNick: outgoingNick } : {}),
-                  roomId: (data as any)?.livekitRoomName ?? (data as any)?.roomId,
+                  roomId: (data)?.livekitRoomName ?? (data)?.roomId,
                   ...videoCallNavExtras(
-                    (data as any)?.callId,
-                    (global as any).__outgoingCallMediaRef?.current === 'video' ? 'video' : undefined,
+                    (data)?.callId,
+                    (global as AppRuntimeGlobals).__outgoingCallMediaRef?.current === 'video' ? 'video' : undefined,
                   ),
                 }
               : {
                   directCall: true,
                   directInitiator: false,
-                  callId: (data as any)?.callId,
+                  callId: (data)?.callId,
                   isIncoming: true,
                   peerUserId,
-                  ...videoCallNavExtras((data as any)?.callId),
+                  ...videoCallNavExtras((data)?.callId),
                 };
             if (isCaller && callId) {
               if (isAcceptedVideoCallNavigationInFlight(callId)) {
@@ -4496,9 +4498,9 @@ function AppContent() {
                   });
                 } catch {}
                 try {
-                  (global as any).__pendingForegroundVideoCallNavRef = (global as any)
+                  (global as AppRuntimeGlobals).__pendingForegroundVideoCallNavRef = (global as AppRuntimeGlobals)
                     .__pendingForegroundVideoCallNavRef || { current: null };
-                  (global as any).__pendingForegroundVideoCallNavRef.current = null;
+                  (global as AppRuntimeGlobals).__pendingForegroundVideoCallNavRef!.current = null;
                 } catch (_) {}
               } catch (err) {
                 logger.error('[App] ❌ Error navigating to VideoCall', { error: err, callId: data?.callId });
@@ -4580,12 +4582,12 @@ function AppContent() {
     });
     // Обработчик таймаута
     const offTimeout = onCallTimeout?.(async (d) => {
-      const callId = String((d as any)?.callId || '');
+      const callId = String((d)?.callId || '');
       const wasCanceled = !!(callId && canceledCallsRef.current.has(callId));
       const myUserId = String(getCurrentUserId?.() ?? '').trim();
-      const callerId = String((d as any)?.from || '').trim();
-      const outgoingCallId = String((global as any).__outgoingCallIdRef?.current || '').trim();
-      const outgoingPeerId = String((global as any).__outgoingCallPeerUserIdRef?.current || '').trim();
+      const callerId = String((d)?.from || '').trim();
+      const outgoingCallId = String(global.__outgoingCallIdRef?.current || '').trim();
+      const outgoingPeerId = String((global as AppRuntimeGlobals).__outgoingCallPeerUserIdRef?.current || '').trim();
       const isCaller =
         !wasCanceled &&
         ((callerId && myUserId && callerId === myUserId) ||
@@ -4611,9 +4613,9 @@ function AppContent() {
       }
       // Сбрасываем refs активного звонка, чтобы кнопки видеозвонка у инициатора снова стали активными
       try {
-        (global as any).__videoCallPartnerUserIdRef = { current: null };
-        (global as any).__videoCallActiveRef = { current: false };
-        (global as any).__onVideoCallEndedRef?.current?.();
+        (global as AppRuntimeGlobals).__videoCallPartnerUserIdRef = { current: null };
+        global.__videoCallActiveRef = { current: false };
+        (global as AppRuntimeGlobals).__onVideoCallEndedRef?.current?.();
       } catch (_) {}
       // Мгновенно закрываем JS-модалку входящего (surfaces уже через terminateCall)
       stopAnim();
@@ -4695,7 +4697,7 @@ function AppContent() {
                 if (currentRoute === 'RandomChat') {
                   try {
                     const now = Date.now();
-                    const g = global as any;
+                    const g = global as AppRuntimeGlobals;
                     const t0 = Number(g.__searchNavT0 || 0);
                     if (t0 > 0 && !g.__searchNavStateChangeLogged) {
                       g.__searchNavStateChangeLogged = true;
@@ -4896,7 +4898,7 @@ export default function App() {
   };
 
   const endCallImpl = (callId: string | null, roomId: string | null) => {
-    const g = global as any;
+    const g = global as AppRuntimeGlobals;
     const localEndCallId = String(callId || g.__currentCallPiPParamsRef?.current?.callId || '').trim();
     const session = g.__webrtcSessionRef?.current;
     const resolvedCallId = String(
@@ -5028,7 +5030,7 @@ export default function App() {
       g.__onVideoCallEndedRef?.current?.();
     } catch (_) {}
     try {
-      (global as any).__bumpAndroidPipGuardRef?.current?.();
+      (global as AppRuntimeGlobals).__bumpAndroidPipGuardRef?.current?.();
     } catch (_) {}
 
     // При завершении из системного PiP (X): только закрываем PiP, приложение не открываем.
@@ -5057,9 +5059,9 @@ export default function App() {
   const endCallImplRef = React.useRef<(cid: string | null, rid: string | null) => void>(endCallImpl);
   endCallImplRef.current = endCallImpl;
   React.useEffect(() => {
-    (global as any).__endCallFromNativeRef = endCallImplRef;
+    (global as AppRuntimeGlobals).__endCallFromNativeRef = endCallImplRef;
     return () => {
-      delete (global as any).__endCallFromNativeRef;
+      delete (global as AppRuntimeGlobals).__endCallFromNativeRef;
     };
   }, []);
 
@@ -5072,10 +5074,10 @@ export default function App() {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
       if (!navRef.isReady()) return false;
 
-      const pipVisible = (global as any).__pipVisibleRef?.current === true;
-      const session = (global as any).__webrtcSessionRef?.current;
+      const pipVisible = global.__pipVisibleRef?.current === true;
+      const session = (global as AppRuntimeGlobals).__webrtcSessionRef?.current;
       const hasActiveCall = session && typeof session.getRoomId === 'function' && session.getRoomId();
-      if ((global as any).__endingCallInProgressRef?.current === true) return false;
+      if (global.__endingCallInProgressRef?.current === true) return false;
 
       const currentRoute = navRef.getCurrentRoute?.()?.name;
       if (currentRoute === 'VideoCall' && hasActiveCall) {

@@ -1,3 +1,4 @@
+import type { HomeUiGlobals } from '../types';
 import { useEffect, useLayoutEffect, useState } from 'react';
 import { getCurrentUserId } from '../../../sockets/socket';
 import {
@@ -10,7 +11,7 @@ import {
 
 function isOutgoingDialHot(): boolean {
   try {
-    const g = global as any;
+    const g = global as HomeUiGlobals;
     // Только активный дозвон — не grace после cancel: иначе строка «отменён/пропущен» ждёт ~3с.
     if (g.__outgoingStartInFlightRef?.current) return true;
     if (g.__outgoingCallUiActiveRef?.current) return true;
@@ -25,7 +26,7 @@ function isOutgoingDialHot(): boolean {
 function shouldDeferCallLogUi(): boolean {
   if (!isOutgoingDialHot()) return false;
   try {
-    const g = global as any;
+    const g = global as HomeUiGlobals;
     const forceAt = Number(g.__lastCallLogForceUiAtRef?.current || 0);
     if (forceAt > 0 && Date.now() - forceAt < 8000) return false;
     const cancelAt = Number(g.__lastOutgoingCancelAtRef?.current || 0);

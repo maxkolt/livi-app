@@ -115,7 +115,7 @@ export function useWelcomeOnlineCount(enabled = true, excludeUserId?: string | n
     if (!enabled) return;
     const recentOutgoingCancel = () => {
       try {
-        const at = Number((global as any).__lastOutgoingCancelAtRef?.current || 0);
+        const at = Number((global as typeof global & { __lastOutgoingCancelAtRef?: { current: number } }).__lastOutgoingCancelAtRef?.current || 0);
         return at > 0 && Date.now() - at < 12000;
       } catch {
         return false;

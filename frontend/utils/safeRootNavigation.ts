@@ -9,7 +9,7 @@ type SafeRootNavLike = {
 
 export function readSafeRootNavigation(): SafeRootNavLike | null {
   try {
-    const nav = (global as any).__navRef as SafeRootNavLike | undefined;
+    const nav = (global as typeof globalThis & { __navRef?: SafeRootNavLike }).__navRef;
     if (!nav?.isReady?.()) return null;
     return nav;
   } catch {

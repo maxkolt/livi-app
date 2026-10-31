@@ -9,7 +9,32 @@
  * Bridge: get всегда отдаёт живой box; set с `{ current }` — adopt (важно для
  * VideoCall, который вешает свои React.ref на __inAudioOnlyUiRef / stayOn).
  */
+import type { VideoCallSession } from '../src/webrtc/sessions/VideoCallSession';
+
 type RefBox<T> = { current: T };
+
+// Only refs owned and installed by this module belong here. They can be absent
+// before bootstrap; optional access at the legacy bridge remains intentional.
+declare global {
+  var __endingCallInProgressRef: RefBox<boolean> | undefined;
+  var __videoCallActiveRef: RefBox<boolean> | undefined;
+  var __callEndedFromPiPNoOpenRef: RefBox<boolean> | undefined;
+  var __endingFromPiPButtonRef: RefBox<boolean> | undefined;
+  var __inCallAudioSessionStartedRef: RefBox<boolean> | undefined;
+  var __pipVisibleRef: RefBox<boolean> | undefined;
+  var __pipInSystemModeRef: RefBox<boolean> | undefined;
+  var __pipSuspendedForSystemPiPRef: RefBox<boolean> | undefined;
+  var __pipForceHiddenRef: RefBox<boolean> | undefined;
+  var __pendingSystemPiPSyncRef: RefBox<boolean> | undefined;
+  var __pipReturnToCallInFlightRef: RefBox<boolean> | undefined;
+  var __pipReturnToCallJustPressedRef: RefBox<boolean> | undefined;
+  var __inAudioOnlyUiRef: RefBox<boolean> | undefined;
+  var __stayOnVideoCallUiRef: RefBox<boolean> | undefined;
+  var __preferAudioOnlyUiOnNextVideoCallRef: RefBox<boolean> | undefined;
+  var __pipAudioOnlyPlaceholderRef: RefBox<boolean> | undefined;
+  var __outgoingCallIdRef: RefBox<string | null> | undefined;
+  var __freshDirectCallAudioAcceptCallIdRef: RefBox<string | null> | undefined;
+}
 
 type Holder<T> = { box: RefBox<T> };
 
@@ -18,7 +43,7 @@ function holder<T>(initial: T): Holder<T> {
 }
 
 function installBridgedRef<T>(globalKey: string, h: Holder<T>): void {
-  const g = global as any;
+  const g = global as unknown as Record<string, unknown>;
   try {
     const existing = g[globalKey];
     if (existing && typeof existing === 'object' && 'current' in existing) {
@@ -46,7 +71,7 @@ function installBridgedRef<T>(globalKey: string, h: Holder<T>): void {
 }
 
 const H = {
-  webrtcSession: holder<any>(null),
+  webrtcSession: holder<VideoCallSession | null>(null),
   endingCallInProgress: holder(false),
   videoCallActive: holder(false),
   callEndedFromPiPNoOpen: holder(false),
@@ -63,7 +88,7 @@ const H = {
   stayOnVideoCallUi: holder(false),
   preferAudioOnlyUiOnNextVideoCall: holder(false),
   pipAudioOnlyPlaceholder: holder(false),
-  outgoingCallId: holder('' as string),
+  outgoingCallId: holder<string | null>(''),
   freshDirectCallAudioAcceptCallId: holder(null as string | null),
 };
 
@@ -100,7 +125,7 @@ function ensureInstalled(): void {
 
 // —— Session ——
 
-export function getWebrtcSession(): any {
+export function getWebrtcSession(): VideoCallSession | null {
   ensureInstalled();
   return H.webrtcSession.box.current;
 }

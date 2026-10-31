@@ -1,3 +1,5 @@
+import type { EarlyBootstrapVideoCallSession } from '../src/webrtc/sessions/VideoCallSession';
+import type { CallAudioGlobals } from './callStateTypes';
 /**
  * Early LiveKit session on call:accepted — start Room.connect before VideoCall mounts.
  * VideoCall must rebind/reuse __webrtcSessionRef (no second connect).
@@ -48,7 +50,7 @@ function noopConfig(opts: {
 
 function isTeardownInProgress(): boolean {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     return (
       g.__endingCallInProgressRef?.current === true ||
       g.__callEndedFromPiPNoOpenRef?.current === true ||
@@ -59,14 +61,14 @@ function isTeardownInProgress(): boolean {
   }
 }
 
-function roomBusy(session: VideoCallSession): boolean {
+function roomBusy(session: Pick<VideoCallSession, 'isPendingAcceptConnectBusy' | 'getLiveKitRoomState'>): boolean {
   if (typeof session.isPendingAcceptConnectBusy === 'function' && session.isPendingAcceptConnectBusy()) {
     return true;
   }
   const state =
     (typeof session.getLiveKitRoomState === 'function'
       ? session.getLiveKitRoomState()
-      : (session as any)?.room?.state) as string | undefined;
+      : (session as { room?: { state?: string } | null })?.room?.state) as string | undefined;
   return state === 'connected' || state === 'connecting' || state === 'reconnecting';
 }
 
@@ -85,14 +87,14 @@ export function bootstrapEarlyDirectCallSession(opts: EarlyDirectCallBootstrapOp
       return null;
     }
 
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     const pending = g.__pendingCallAcceptedRef?.current;
     const pendingCallId = pending ? String(pending?.callId || '').trim() : '';
     const hasToken =
       !!pending &&
       pendingCallId === callId &&
-      !!(pending as any)?.livekitToken &&
-      !!(String((pending as any)?.livekitRoomName ?? (pending as any)?.roomId ?? '').trim());
+      !!pending?.livekitToken &&
+      !!(String(pending?.livekitRoomName ?? pending?.roomId ?? '').trim());
 
     if (!hasToken) {
       logger.info('[earlyDirectCallSession] skip — no pending LiveKit token', {
@@ -111,7 +113,7 @@ export function bootstrapEarlyDirectCallSession(opts: EarlyDirectCallBootstrapOp
       return null;
     }
 
-    const existingRaw = g.__webrtcSessionRef?.current;
+    const existingRaw: Pick<VideoCallSession, 'isEnded'> | null | undefined = g.__webrtcSessionRef?.current;
     const existing =
       existingRaw instanceof VideoCallSession
         ? existingRaw
@@ -154,10 +156,10 @@ export function bootstrapEarlyDirectCallSession(opts: EarlyDirectCallBootstrapOp
           return existing;
         }
         // Same call, idle session: apply pending via ctor path is already consumed — kick payload.
-        if (typeof (existing as any).applyCallAcceptedFromPayload === 'function') {
+        if (typeof existing.applyCallAcceptedFromPayload === 'function') {
           logger.info('[earlyDirectCallSession] kick idle session with pending payload', { callId });
           markCallPerf('early_session_kick_idle', { callId });
-          void (existing as any).applyCallAcceptedFromPayload(pending, 'early-bootstrap-idle').catch((e: unknown) => {
+          void existing.applyCallAcceptedFromPayload(pending, 'early-bootstrap-idle').catch((e: unknown) => {
             logger.warn('[earlyDirectCallSession] kick idle failed', {
               callId,
               error: (e as Error)?.message || String(e),
@@ -206,8 +208,8 @@ export function bootstrapEarlyDirectCallSession(opts: EarlyDirectCallBootstrapOp
       startWithCamOff,
     });
 
-    const session = new VideoCallSession(config);
-    (session as any).__earlyDirectCallBootstrap = true;
+    const session: EarlyBootstrapVideoCallSession = new VideoCallSession(config);
+    session.__earlyDirectCallBootstrap = true;
     g.__webrtcSessionRef = g.__webrtcSessionRef || { current: null };
     g.__webrtcSessionRef.current = session;
     g.__earlyDirectCallBootstrapRef = g.__earlyDirectCallBootstrapRef || { current: null };
@@ -243,12 +245,12 @@ export function bootstrapEarlyDirectCallSession(opts: EarlyDirectCallBootstrapOp
       isCaller: opts.isCaller,
     });
 
-    if (!scheduled && !flushed && typeof (session as any).applyCallAcceptedFromPayload === 'function') {
+    if (!scheduled && !flushed && typeof session.applyCallAcceptedFromPayload === 'function') {
       logger.warn('[earlyDirectCallSession] ctor did not schedule pending — applying payload explicitly', {
         callId,
       });
       markCallPerf('early_session_explicit_apply', { callId });
-      void (session as any).applyCallAcceptedFromPayload(pending, 'early-bootstrap-explicit').catch((e: unknown) => {
+      void session.applyCallAcceptedFromPayload(pending, 'early-bootstrap-explicit').catch((e: unknown) => {
         logger.warn('[earlyDirectCallSession] explicit apply failed', {
           callId,
           error: (e as Error)?.message || String(e),
@@ -274,7 +276,7 @@ export function bootstrapEarlyDirectCallSession(opts: EarlyDirectCallBootstrapOp
 
 export function wasEarlyDirectCallBootstrap(callId?: string | null): boolean {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     const meta = g.__earlyDirectCallBootstrapRef?.current;
     if (!meta?.callId) return false;
     const id = String(callId || '').trim();

@@ -1,3 +1,6 @@
+import type { RootStackParamList } from '../../../navigation/types';
+import type { VideoCallSession } from '../../../src/webrtc/sessions/VideoCallSession';
+import type { IncomingFriendCall } from '../../../src/webrtc/types';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Keyboard, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -10,12 +13,17 @@ import { emitMissedClear } from '../../../utils/globalEvents';
 import { readRootNavigationState } from '../../../utils/safeRootNavigation';
 import { forceCallLogUiNow, recordCancelledCall } from '../../../screens/home/callLog';
 
+// Optional compatibility hook; current sessions do not install it.
+type IncomingCallSession = VideoCallSession & {
+  cleanupAfterFriendCallFailure?: (reason: 'timeout' | 'busy') => void;
+};
+
 interface UseIncomingCallProps {
   myUserId?: string;
-  routeParams?: any;
+  routeParams?: RootStackParamList['VideoCall'];
   friendCallAccepted: boolean;
   currentCallIdRef: React.MutableRefObject<string | null>;
-  session?: any; // VideoCallSession (может быть null при первом вызове)
+  session?: IncomingCallSession | null; // VideoCallSession (может быть null при первом вызове)
   /** Текущий собеседник на экране видеозвонка; входящий от него при активном звонке игнорируем (дубликат после отмены на нативном экране у звонящего). */
   partnerUserId?: string | null;
   /** Есть активный звонок (комната/партнёр) — вместе с partnerUserId отфильтровываем дубликаты call:incoming. */
@@ -39,7 +47,7 @@ export const useIncomingCall = ({
   onAccept,
   onDecline,
 }: UseIncomingCallProps) => {
-  const [incomingFriendCall, setIncomingFriendCall] = useState<{ from: string; nick?: string } | null>(null);
+  const [incomingFriendCall, setIncomingFriendCall] = useState<IncomingFriendCall | null>(null);
   const [incomingCall, setIncomingCall] = useState<{ callId: string; from: string; fromNick?: string } | null>(null);
   const [incomingOverlay, setIncomingOverlay] = useState<boolean>(false);
   const hadIncomingCallRef = useRef(false);
@@ -90,7 +98,7 @@ export const useIncomingCall = ({
       setIncomingFriendCall({ from: d.from, nick: d.fromNick });
       hadIncomingCallRef.current = true;
       warmCallSignaling();
-      void (sessionRef.current as any)?.prewarmLocalTracks?.();
+      void (sessionRef.current)?.prewarmLocalTracks?.();
     });
 
     return () => {
@@ -115,7 +123,7 @@ export const useIncomingCall = ({
 
   // Обработка отмены звонка (инкремент пропущенного делается централизованно в App.tsx — здесь только закрываем UI)
   useEffect(() => {
-    const offCancel = onCallCanceled?.(async (d: any) => {
+    const offCancel = onCallCanceled?.(async (d) => {
       const isFriendCall = !!routeParams?.directCall || friendCallAccepted || !!currentCallIdRef.current;
       if (!isFriendCall) return;
 
@@ -182,7 +190,7 @@ export const useIncomingCall = ({
 
   // Обработка call:declined через socket (получатель — инициатор; отклонил тот, кому звонили)
   useEffect(() => {
-    const handleDeclined = (d?: any) => {
+    const handleDeclined = (d?: unknown) => {
       const isFriendCall = !!routeParams?.directCall || friendCallAccepted || !!currentCallIdRef.current;
       if (!isFriendCall) return;
 
@@ -222,7 +230,7 @@ export const useIncomingCall = ({
       setIncomingOverlay(true);
       hadIncomingCallRef.current = true;
       warmCallSignaling();
-      void (currentSession as any)?.prewarmLocalTracks?.();
+      void (currentSession)?.prewarmLocalTracks?.();
     };
 
     currentSession.on('incomingCall', handleIncomingCall);
@@ -253,7 +261,7 @@ export const useIncomingCall = ({
     const currentSession = sessionRef.current;
     if (currentSession) {
       try {
-        await (currentSession as any).acceptCall?.(finalCallId, fromUserId);
+        await (currentSession).acceptCall?.(finalCallId, fromUserId);
         logger.info('[useIncomingCall] ✅ Звонок принят через session', { callId: finalCallId, fromUserId });
       } catch (e) {
         logger.error('[useIncomingCall] ❌ Ошибка принятия звонка через session:', e);

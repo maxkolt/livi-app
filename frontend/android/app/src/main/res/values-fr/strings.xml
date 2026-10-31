@@ -5,7 +5,7 @@
   <string name="incoming_call_unknown">Quelqu\'un vous appelle</string>
   <string name="incoming_call_accept">Accepter</string>
   <string name="incoming_call_decline">Refuser</string>
-  <string name="outgoing_call_title">Appel vidéo sortant</string>
+  <string name="outgoing_call_title">Appel sortant</string>
   <string name="outgoing_call_subtitle">Appel en cours…</string>
   <string name="outgoing_call_subtitle_base">Appel en cours</string>
   <string name="outgoing_call_subtitle_base_audio">Appel en cours</string>

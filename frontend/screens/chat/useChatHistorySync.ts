@@ -1,3 +1,4 @@
+import type { ChatMessage } from './chatMessageTypes';
 /** History load + quiet sync + reconnect merge for ChatScreen. */
 
 import React from "react";
@@ -35,9 +36,9 @@ type Options = {
   peerId: string;
   currentUserId: string | null;
   setCurrentUserId: React.Dispatch<React.SetStateAction<string | null>>;
-  messages: any[];
-  setMessages: React.Dispatch<React.SetStateAction<any[]>>;
-  messagesRef: React.MutableRefObject<any[]>;
+  messages: ChatMessage[];
+  setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>;
+  messagesRef: React.MutableRefObject<ChatMessage[]>;
   historyReady: boolean;
   setHistoryReady: React.Dispatch<React.SetStateAction<boolean>>;
   setChatImagesWarm: React.Dispatch<React.SetStateAction<boolean>>;
@@ -53,8 +54,8 @@ type Options = {
   enqueueMessagesPersist: (reason: string) => void;
   currentUserIdForPersistRef: React.MutableRefObject<string | null>;
   peerIdForPersistRef: React.MutableRefObject<string>;
-  latestMessagesForPersistRef: React.MutableRefObject<any[]>;
-  navigation: any;
+  latestMessagesForPersistRef: React.MutableRefObject<ChatMessage[]>;
+  navigation: { addListener?: (event: "focus", listener: () => void) => () => void };
   resolveMediaUri: (uri?: string) => string;
 };
 
@@ -118,12 +119,12 @@ export function useChatHistorySync({
         hiddenForMeIds,
         deletedServerIds: deletedServerMessageIdsRef.current,
         isGloballyDeleted: isGloballyDeletedMessageId,
-      }).map((msg: any) => formatServerChatMessage(msg, String(currentUserId)));
+      }).map((msg) => formatServerChatMessage(msg, String(currentUserId)));
 
       setMessages((prev) =>
         mergeQuietSyncMessages(prev, formatted, {
-          uploadStatus: uploadStatusRef.current as any,
-          readStatuses: readStatusesRef.current as any,
+          uploadStatus: uploadStatusRef.current,
+          readStatuses: readStatusesRef.current,
         }),
       );
     } catch {} finally {
@@ -246,7 +247,7 @@ export function useChatHistorySync({
         if (historySyncGenerationRef.current !== syncGen) return;
         hiddenForMeMessageIdsRef.current = hiddenIds;
         const visibleLocalMessages = Array.isArray(localMessages)
-          ? localMessages.filter((msg: any) => !hiddenIds.has(String(msg?.id || "").trim()))
+          ? localMessages.filter((msg) => !hiddenIds.has(String(msg?.id || "").trim()))
           : [];
         // Быстрый Back без persist: пузырь мог остаться только в outbox — вернём в ленту.
         const hydrated = mergePendingOutboxIntoMessages(visibleLocalMessages, pendingOutbox || [], uid);
@@ -289,7 +290,7 @@ export function useChatHistorySync({
               deletedServerIds: deletedServerMessageIdsRef.current,
               isGloballyDeleted: isGloballyDeletedMessageId,
             });
-            const formattedMessages = visible.map((msg: any) => {
+            const formattedMessages = visible.map((msg) => {
               if (msg.type === "image") {
                 const mid = String(msg.id || "").trim();
                 if (
@@ -317,8 +318,8 @@ export function useChatHistorySync({
               setServerHistoryEmpty(serverEmpty);
               setMessages((prev) =>
                 mergeInitialHistoryMessages(prev, formattedMessages, {
-                  uploadStatus: uploadStatusRef.current as any,
-                  readStatuses: readStatusesRef.current as any,
+                  uploadStatus: uploadStatusRef.current,
+                  readStatuses: readStatusesRef.current,
                 }),
               );
             });
@@ -339,7 +340,7 @@ export function useChatHistorySync({
               if (historySyncGenerationRef.current !== syncGen) return;
               const hiddenIds = hiddenForMeMessageIdsRef.current;
               setMessages(
-                fallbackLocal.filter((msg: any) => !hiddenIds.has(String(msg?.id || "").trim())),
+                fallbackLocal.filter((msg) => !hiddenIds.has(String(msg?.id || "").trim())),
               );
             }
             const savedStatuses = await loadStatuses();
@@ -354,7 +355,7 @@ export function useChatHistorySync({
               const localMessages = await getChatMessages(pid, uid);
               const hiddenIds = hiddenForMeMessageIdsRef.current;
               setMessages(
-                localMessages.filter((msg: any) => !hiddenIds.has(String(msg?.id || "").trim())),
+                localMessages.filter((msg) => !hiddenIds.has(String(msg?.id || "").trim())),
               );
               const savedStatuses = await loadStatuses();
               setReadStatuses(savedStatuses);
@@ -418,16 +419,16 @@ export function useChatHistorySync({
 
               const hiddenForMeIds = hiddenForMeMessageIdsRef.current;
               const formattedMessages = serverMessages.messages
-                .filter((msg: any) => !hiddenForMeIds.has(String(msg?.id || "").trim()))
-                .map((msg: any) => formatServerChatMessage(msg, String(uid)));
+                .filter((msg) => !hiddenForMeIds.has(String(msg?.id || "").trim()))
+                .map((msg) => formatServerChatMessage(msg, String(uid)));
 
               setMessagesRef.current((prev) =>
                 mergeInitialHistoryMessages(
                   prev,
                   formattedMessages,
                   {
-                    uploadStatus: uploadStatusRef.current as any,
-                    readStatuses: readStatusesRef.current as any,
+                    uploadStatus: uploadStatusRef.current,
+                    readStatuses: readStatusesRef.current,
                   },
                   { dropOptimisticDupes: false },
                 ),

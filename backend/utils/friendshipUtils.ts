@@ -1,7 +1,13 @@
 import mongoose from 'mongoose';
-import User from '../models/User';
+import User, { type LeanUser } from '../models/User';
 import FriendshipMessages, { IFriendshipMessages } from '../models/FriendshipMessages';
 import FriendshipEdge from '../models/FriendshipEdge';
+
+export type FriendListProfile = Pick<LeanUser, '_id' | 'nick' | 'avatar' | 'avatarVer' | 'avatarThumbB64'>;
+type BulkWriteFailure = {
+  code?: unknown;
+  writeErrors?: Array<{ code?: unknown } | null>;
+};
 
 const TTL_MS = 5 * 60_000; // reduce repeated DB checks on hot realtime paths like typing
 
@@ -114,14 +120,14 @@ export async function removeFriendshipEdges(a: string, b: string): Promise<void>
 
 async function getLegacyFriendIds(userId: string): Promise<string[]> {
   const me = await User.findById(userId).select('friends').lean();
-  return Array.isArray((me as any)?.friends) ? (me as any).friends.map((x: any) => String(x)) : [];
+  return Array.isArray((me)?.friends) ? (me).friends.map((x) => String(x)) : [];
 }
 
 async function getReverseLegacyFriendIds(userId: string): Promise<string[]> {
   if (!isOid(userId)) return [];
   const userOid = new mongoose.Types.ObjectId(userId);
   const docs = await User.find({ _id: { $ne: userOid }, friends: userOid }).select('_id').lean();
-  return (docs as any[]).map((doc) => String(doc._id)).filter((id) => isOid(id) && id !== userId);
+  return (docs).map((doc) => String(doc._id)).filter((id) => isOid(id) && id !== userId);
 }
 
 function addUniqueFriend(list: string[], seen: Set<string>, userId: string, friendId: string) {
@@ -161,9 +167,9 @@ async function upsertBidirectionalFriendshipEdges(userId: string, friendIds: str
     for (let i = 0; i < ops.length; i += 500) {
       await FriendshipEdge.bulkWrite(ops.slice(i, i + 500), { ordered: false });
     }
-  } catch (error: any) {
-    const writeErrors = Array.isArray(error?.writeErrors) ? error.writeErrors : [];
-    const onlyDuplicateKeys = error?.code === 11000 || (writeErrors.length > 0 && writeErrors.every((err: any) => err?.code === 11000));
+  } catch (error) {
+    const writeErrors = Array.isArray((error as BulkWriteFailure | null)?.writeErrors) ? (error as BulkWriteFailure).writeErrors! : [];
+    const onlyDuplicateKeys = (error as BulkWriteFailure | null)?.code === 11000 || (writeErrors.length > 0 && writeErrors.every((err) => err?.code === 11000));
     if (!onlyDuplicateKeys) throw error;
   }
 
@@ -197,9 +203,9 @@ async function migrateLegacyFriendEdgesForUser(userId: string): Promise<void> {
     for (let i = 0; i < ops.length; i += 500) {
       await FriendshipEdge.bulkWrite(ops.slice(i, i + 500), { ordered: false });
     }
-  } catch (error: any) {
-    const writeErrors = Array.isArray(error?.writeErrors) ? error.writeErrors : [];
-    const onlyDuplicateKeys = error?.code === 11000 || (writeErrors.length > 0 && writeErrors.every((err: any) => err?.code === 11000));
+  } catch (error) {
+    const writeErrors = Array.isArray((error as BulkWriteFailure | null)?.writeErrors) ? (error as BulkWriteFailure).writeErrors! : [];
+    const onlyDuplicateKeys = (error as BulkWriteFailure | null)?.code === 11000 || (writeErrors.length > 0 && writeErrors.every((err) => err?.code === 11000));
     if (!onlyDuplicateKeys) throw error;
   }
   legacyEdgeMigrationAttempts.add(userId);
@@ -227,7 +233,7 @@ export async function getFriendIds(userId: string): Promise<string[]> {
   const seen = new Set<string>();
   const outgoing = new Set<string>();
   const incoming = new Set<string>();
-  for (const edge of edges as any[]) {
+  for (const edge of edges) {
     const edgeUserId = String(edge.userId);
     const edgeFriendId = String(edge.friendId);
     if (edgeUserId === userId) {
@@ -291,16 +297,16 @@ export async function getFriendIdsForUsers(userIds: string[]): Promise<Map<strin
     seenByUser.set(uid, seen);
   };
 
-  for (const edge of edges as any[]) {
+  for (const edge of edges) {
     const uid = String(edge.userId);
     const fid = String(edge.friendId);
     addForUser(uid, fid);
     addForUser(fid, uid);
   }
 
-  for (const doc of reverseLegacyDocs as any[]) {
+  for (const doc of reverseLegacyDocs) {
     const ownerId = String(doc._id);
-    const legacyFriends = Array.isArray(doc.friends) ? doc.friends.map((id: any) => String(id)) : [];
+    const legacyFriends = Array.isArray(doc.friends) ? doc.friends.map((id) => String(id)) : [];
     for (const legacyFriendId of legacyFriends) {
       addForUser(ownerId, legacyFriendId);
       addForUser(legacyFriendId, ownerId);
@@ -347,8 +353,8 @@ export async function areFriendsCached(a: string, b: string): Promise<boolean> {
   }
 
   if (ok) {
-    const hasForward = (edges as any[]).some((edge) => String(edge.userId) === a && String(edge.friendId) === b);
-    const hasReverse = (edges as any[]).some((edge) => String(edge.userId) === b && String(edge.friendId) === a);
+    const hasForward = (edges).some((edge) => String(edge.userId) === a && String(edge.friendId) === b);
+    const hasReverse = (edges).some((edge) => String(edge.userId) === b && String(edge.friendId) === a);
     if (!hasForward || !hasReverse) await upsertBidirectionalFriendshipEdges(a, [b]);
   }
 
@@ -356,7 +362,7 @@ export async function areFriendsCached(a: string, b: string): Promise<boolean> {
   return ok;
 }
 
-export async function getFriendsPaginated(userId: string, page = 1, limit = 50): Promise<{ friends: any[]; total: number; hasMore: boolean }> {
+export async function getFriendsPaginated(userId: string, page = 1, limit = 50): Promise<{ friends: FriendListProfile[]; total: number; hasMore: boolean }> {
   if (!isOid(userId)) return { friends: [], total: 0, hasMore: false };
   const p = Math.max(1, Number(page) || 1);
   const l = Math.min(200, Math.max(1, Number(limit) || 50));
@@ -374,8 +380,8 @@ export async function getFriendsPaginated(userId: string, page = 1, limit = 50):
     .lean();
 
   // Стабильный порядок как в slice
-  const byId = new Map(friends.map((f: any) => [String(f._id), f]));
-  const ordered = slice.map((id) => byId.get(String(id))).filter(Boolean);
+  const byId = new Map(friends.map((f) => [String(f._id), f]));
+  const ordered = slice.map((id) => byId.get(String(id))).filter(Boolean) as FriendListProfile[];
 
   return {
     friends: ordered,

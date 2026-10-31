@@ -1,3 +1,4 @@
+import type { CallAudioGlobals, CallPiPParams } from './callStateTypes';
 import { AppState, NativeModules, Platform } from 'react-native';
 import { shadowCompareWithLifecycle } from './callLifecycleTelemetry';
 import {
@@ -43,7 +44,7 @@ function isActiveDirectCallAudioFirstWithoutUserVideo(): boolean {
   try {
     const session = getWebrtcSession();
     const cid = String(
-      session?.getCallId?.() ?? (global as any).__activeCallAudioRouteCallIdRef?.current ?? '',
+      session?.getCallId?.() ?? (global as CallAudioGlobals).__activeCallAudioRouteCallIdRef?.current ?? '',
     ).trim();
     if (!cid || getCallMediaHint(cid) !== 'audio') return false;
     return !isDirectCallUserRequestedVideoExpand();
@@ -66,7 +67,7 @@ export function markDirectCallVideoMediaActive(): void {
     setPipAudioOnlyPlaceholderSticky(false);
     setInAudioOnlyUi(false);
     setPreferAudioOnlyUiOnNextVideoCall(false);
-    const params = (global as any).__currentCallPiPParamsRef?.current;
+    const params = (global as CallAudioGlobals).__currentCallPiPParamsRef?.current;
     if (params && typeof params === 'object') {
       params.inAudioOnlyUi = false;
       params.preferVideoCallUi = true;
@@ -79,7 +80,7 @@ const DIRECT_AUDIO_EARPIECE_STABILIZE_MS = 3200;
 /** После accept direct audio: не давать foreground/reapply/poll переключать на громкую связь. */
 export function armDirectAudioEarpieceStabilizeWindow(ms = DIRECT_AUDIO_EARPIECE_STABILIZE_MS): void {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     g.__directAudioEarpieceStabilizeUntilRef = g.__directAudioEarpieceStabilizeUntilRef || { current: 0 };
     g.__directAudioEarpieceStabilizeUntilRef.current = Math.max(
       Number(g.__directAudioEarpieceStabilizeUntilRef.current || 0),
@@ -90,7 +91,7 @@ export function armDirectAudioEarpieceStabilizeWindow(ms = DIRECT_AUDIO_EARPIECE
 
 function clearDirectAudioEarpieceStabilizeWindow(): void {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     if (g.__directAudioEarpieceStabilizeUntilRef) {
       g.__directAudioEarpieceStabilizeUntilRef.current = 0;
     }
@@ -99,7 +100,7 @@ function clearDirectAudioEarpieceStabilizeWindow(): void {
 
 export function isDirectAudioEarpieceStabilizeWindow(): boolean {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     const until = Number(g.__directAudioEarpieceStabilizeUntilRef?.current || 0);
     if (!until || Date.now() >= until) return false;
     return true;
@@ -135,12 +136,12 @@ export type OngoingCallMediaState = {
  * их можно безопасно вызывать один раз заранее, а не лениво внутри решающей функции.
  */
 export function gatherOngoingCallMediaState(): OngoingCallMediaState {
-  const g = global as any;
-  let session: any = null;
+  const g = global as CallAudioGlobals;
+  let session: ReturnType<typeof getWebrtcSession> = null;
   try {
     session = getWebrtcSession();
   } catch {}
-  let params: any = null;
+  let params: CallPiPParams | null | undefined = null;
   try {
     params = g.__currentCallPiPParamsRef?.current;
   } catch {}
@@ -290,7 +291,7 @@ export function clearEndingCallInProgress(): void {
 export function clearPreviousCallTeardownGuards(): void {
   clearEndingCallInProgress();
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     if (g.__callEndedFromPiPNoOpenRef) g.__callEndedFromPiPNoOpenRef.current = false;
   } catch {}
 }
@@ -363,7 +364,7 @@ export function isInCallAudioSessionStarted(): boolean {
 /** Accept с нативного Incoming → VideoCall: не уводить в in-app/system PiP от task-switch. */
 export function isIncomingAnswerTransitionActive(): boolean {
   try {
-    const incomingTransition = (global as any).__incomingAnswerTransitionRef?.current;
+    const incomingTransition = (global as CallAudioGlobals).__incomingAnswerTransitionRef?.current;
     return !!incomingTransition && Number(incomingTransition.expiresAt || 0) > Date.now();
   } catch {
     return false;
@@ -376,7 +377,7 @@ export function isIncomingAnswerTransitionActive(): boolean {
  */
 export function shouldKeepInCallAudioOnAppBackground(): boolean {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     if (isEndingCallInProgress()) return false;
     if (isCallEndedFromPiPNoOpen()) return false;
     if (isEndingFromPiPButton()) return false;
@@ -461,8 +462,12 @@ export type CallAudioRouteReapplyState = {
 function gatherCallAudioRouteReapplyState(
   media: OngoingCallMediaState = gatherOngoingCallMediaState(),
 ): CallAudioRouteReapplyState {
-  const g = global as any;
-  const readUntil = (key: string): number => {
+  const g = global as CallAudioGlobals;
+  const readUntil = (key:
+    | '__returningFromSystemPiPUntilRef'
+    | '__systemPiPEntryInProgressUntilRef'
+    | '__callAudioPreservePriorityUntilRef'
+  ): number => {
     try {
       return Number(g[key]?.current || 0);
     } catch {
@@ -578,7 +583,7 @@ export function resolvePersistedCallAudioRouteForReapply(
 /** Сохранить маршрут из PiP params / persisted перед уходом в фон. */
 export function readLastAppliedCallAudioRoute(): InCallAudioRoute | null {
   try {
-    return normalizeInCallRoute((global as any).__lastAppliedCallAudioRouteRef?.current || '');
+    return normalizeInCallRoute((global as CallAudioGlobals).__lastAppliedCallAudioRouteRef?.current || '');
   } catch {
     return null;
   }
@@ -587,7 +592,7 @@ export function readLastAppliedCallAudioRoute(): InCallAudioRoute | null {
 export function markUserSelectedExternalCallAudioRoute(route: InCallAudioRoute, ttlMs = 10000): void {
   if (!isExternalHeadsetRoute(route)) return;
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     g.__userSelectedExternalCallAudioRouteRef = {
       current: {
         route,
@@ -599,13 +604,13 @@ export function markUserSelectedExternalCallAudioRoute(route: InCallAudioRoute, 
 
 export function readUserSelectedExternalCallAudioRoute(): InCallAudioRoute | null {
   try {
-    const entry = (global as any).__userSelectedExternalCallAudioRouteRef?.current;
+    const entry = (global as CallAudioGlobals).__userSelectedExternalCallAudioRouteRef?.current;
     const route = normalizeInCallRoute(entry?.route || '');
     if (!route || !isExternalHeadsetRoute(route)) return null;
     if (Number(entry?.until || 0) <= Date.now()) return null;
     const available = (() => {
       try {
-        const av = (global as any).__inCallAvailableAudioRoutesRef?.current;
+        const av = (global as CallAudioGlobals).__inCallAvailableAudioRoutesRef?.current;
         return Array.isArray(av) ? av.map((s: unknown) => String(s)) : [];
       } catch {
         return [];
@@ -614,12 +619,12 @@ export function readUserSelectedExternalCallAudioRoute(): InCallAudioRoute | nul
     if (available.length && !available.includes(route)) {
       // ICM lag: native probe / BT cache ещё держат гарнитуру.
       try {
-        const probe = (global as any).__nativeCallAudioRoutesRef?.current as
+        const probe = (global as CallAudioGlobals).__nativeCallAudioRoutesRef?.current as
           | { available?: string[] }
           | undefined;
         if (Array.isArray(probe?.available) && probe.available.includes(route)) {
           if (route === 'BLUETOOTH') {
-            const cached = (global as any).__callBtHeadsetConnectedRef?.current;
+            const cached = (global as CallAudioGlobals).__callBtHeadsetConnectedRef?.current;
             if (cached === false) return null;
           }
           return route;
@@ -635,7 +640,7 @@ export function readUserSelectedExternalCallAudioRoute(): InCallAudioRoute | nul
 
 export function captureCallAudioRouteFromUi(): void {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     const userBuiltin = readUserSelectedCallAudioRoute();
     if (userBuiltin === 'SPEAKER_PHONE' || userBuiltin === 'EARPIECE') {
       g.__persistedCallAudioRouteRef = g.__persistedCallAudioRouteRef || { current: null };
@@ -683,19 +688,19 @@ export function readActiveExternalCallAudioRoute(
       readUserSelectedExternalCallAudioRoute(),
       normalizeInCallRoute(liveUserRoute || ''),
       readLastAppliedCallAudioRoute(),
-      normalizeInCallRoute((global as any).__currentCallPiPParamsRef?.current?.audioOutputRoute || ''),
-      normalizeInCallRoute((global as any).__persistedCallAudioRouteRef?.current || ''),
+      normalizeInCallRoute((global as CallAudioGlobals).__currentCallPiPParamsRef?.current?.audioOutputRoute || ''),
+      normalizeInCallRoute((global as CallAudioGlobals).__persistedCallAudioRouteRef?.current || ''),
     ];
     const found = candidates.find((r) => r && isExternalHeadsetRoute(r)) || null;
     if (!found) return null;
     if (available.length && !available.includes(found)) {
       try {
-        const probe = (global as any).__nativeCallAudioRoutesRef?.current as
+        const probe = (global as CallAudioGlobals).__nativeCallAudioRoutesRef?.current as
           | { available?: string[] }
           | undefined;
         if (Array.isArray(probe?.available) && probe.available.includes(found)) {
           if (found === 'BLUETOOTH') {
-            const cached = (global as any).__callBtHeadsetConnectedRef?.current;
+            const cached = (global as CallAudioGlobals).__callBtHeadsetConnectedRef?.current;
             if (cached === false) return null;
           }
           return found;
@@ -711,7 +716,7 @@ export function readActiveExternalCallAudioRoute(
 
 export function readInCallAvailableAudioRoutesForCycle(): string[] {
   try {
-    const av = (global as any).__inCallAvailableAudioRoutesRef?.current;
+    const av = (global as CallAudioGlobals).__inCallAvailableAudioRoutesRef?.current;
     return Array.isArray(av) ? av.map((s: unknown) => String(s)) : [];
   } catch {
     return [];
@@ -727,7 +732,7 @@ export { readConnectedExternalCallAudioRoute } from './callConnectedExternalAudi
 /** Явный выбор маршрута (PiP / cycle) — не перебивать авто-BT в UI. */
 export function readUserSelectedCallAudioRoute(): InCallAudioRoute | null {
   try {
-    return normalizeInCallRoute((global as any).__userSelectedCallAudioRouteRef?.current || '');
+    return normalizeInCallRoute((global as CallAudioGlobals).__userSelectedCallAudioRouteRef?.current || '');
   } catch {
     return null;
   }
@@ -735,7 +740,7 @@ export function readUserSelectedCallAudioRoute(): InCallAudioRoute | null {
 
 function readActiveCallAudioRouteCallId(): string {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     return String(
       g.__activeCallAudioRouteCallIdRef?.current ||
         g.__currentCallPiPParamsRef?.current?.callId ||
@@ -753,7 +758,7 @@ export function resetDirectCallVideoUiGlobalsAfterCallEnd(): void {
     clearDirectCallAudioAcceptBootstrapped();
   } catch {}
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     g.__expandToVideoCallUiFromPiPRef = g.__expandToVideoCallUiFromPiPRef || { current: false };
     g.__expandToVideoCallUiFromPiPRef.current = false;
     g.__stayOnVideoCallUiRef = g.__stayOnVideoCallUiRef || { current: false };
@@ -779,7 +784,7 @@ export function resetDirectCallVideoUiGlobalsAfterCallEnd(): void {
 
 export function markActiveCallAudioRouteCallId(callId?: string | null): void {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     const nextCallId = String(callId || '').trim();
     const prevCallId = String(g.__activeCallAudioRouteCallIdRef?.current || '').trim();
     if (nextCallId && nextCallId !== prevCallId) {
@@ -829,7 +834,7 @@ export function markActiveCallAudioRouteCallId(callId?: string | null): void {
 export function rememberManualBuiltinCallAudioRoute(route: InCallAudioRoute): void {
   if (route !== 'SPEAKER_PHONE' && route !== 'EARPIECE') return;
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     g.__manualBuiltinCallAudioRouteRef = {
       current: {
         route,
@@ -842,7 +847,7 @@ export function rememberManualBuiltinCallAudioRoute(route: InCallAudioRoute): vo
 
 export function readManualBuiltinCallAudioRoute(maxAgeMs = 120_000): InCallAudioRoute | null {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     const record = g.__manualBuiltinCallAudioRouteRef?.current;
     const route = normalizeInCallRoute(record?.route || '');
     if (route !== 'SPEAKER_PHONE' && route !== 'EARPIECE') return null;
@@ -867,7 +872,7 @@ export function readUserLockedBuiltinCallAudioRoute(): InCallAudioRoute | null {
   const userSel = readUserSelectedCallAudioRoute();
   if (userSel !== 'SPEAKER_PHONE' && userSel !== 'EARPIECE') return null;
   try {
-    if ((global as any).__explicitBuiltInCallAudioRouteRef?.current) {
+    if ((global as CallAudioGlobals).__explicitBuiltInCallAudioRouteRef?.current) {
       return userSel;
     }
   } catch {}
@@ -877,7 +882,7 @@ export function readUserLockedBuiltinCallAudioRoute(): InCallAudioRoute | null {
 /** Cycle/toggle/PiP toggle — не авто-BT. Продуктовый earpiece при accept/bootstrap сюда не входит. */
 export function userExplicitlyPinnedBuiltinCallAudio(): boolean {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     const cycled = normalizeInCallRoute(g.__lastCycleUserRouteResultRef?.current || '');
     const cycledAt = Number(g.__lastCycleUserRouteAtRef?.current || 0);
     const cycledCallId = String(g.__lastCycleUserRouteCallIdRef?.current || '').trim();
@@ -913,7 +918,7 @@ export function userExplicitlyPinnedBuiltinCallAudio(): boolean {
 /** Снять pin уха/громкой — перед авто-переходом на BT/провод при подключении. */
 export function clearBuiltinPinForExternalHeadsetConnect(): void {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     if (g.__manualBuiltinCallAudioRouteRef) g.__manualBuiltinCallAudioRouteRef.current = null;
     g.__explicitBuiltInCallAudioRouteRef = g.__explicitBuiltInCallAudioRouteRef || { current: false };
     g.__explicitBuiltInCallAudioRouteRef.current = false;
@@ -926,7 +931,7 @@ export function clearBuiltinPinForExternalHeadsetConnect(): void {
 
 export function setUserSelectedCallAudioRoute(route: InCallAudioRoute | null): void {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     g.__userSelectedCallAudioRouteRef = g.__userSelectedCallAudioRouteRef || { current: null };
     g.__userSelectedCallAudioRouteRef.current = route;
     if (!route || route === 'EARPIECE' || route === 'SPEAKER_PHONE') {
@@ -942,7 +947,7 @@ export function setUserSelectedCallAudioRoute(route: InCallAudioRoute | null): v
 
 export function isPiPBuiltinCallAudioRouteLockActive(): boolean {
   try {
-    return Number((global as any).__pipBuiltinRouteLockUntilRef?.current || 0) > Date.now();
+    return Number((global as CallAudioGlobals).__pipBuiltinRouteLockUntilRef?.current || 0) > Date.now();
   } catch {
     return false;
   }
@@ -951,7 +956,7 @@ export function isPiPBuiltinCallAudioRouteLockActive(): boolean {
 /** Полный video UI: выбор «ухо» в audio-плашке не должен держать earpiece / manual lock. */
 export function releaseInAppPiPBuiltinAudioLockForFullVideoUi(): void {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     g.__pipBuiltinRouteLockUntilRef = g.__pipBuiltinRouteLockUntilRef || { current: 0 };
     g.__pipBuiltinRouteLockUntilRef.current = 0;
     g.__inAppPiPExplicitToggleRouteRef = g.__inAppPiPExplicitToggleRouteRef || { current: null };
@@ -968,7 +973,7 @@ export function releaseInAppPiPBuiltinAudioLockForFullVideoUi(): void {
 /** После PiP / system PiP: выбор в плашке и persist важнее устаревшего lastApplied. */
 export function readAuthoritativeCallAudioRouteAfterPiP(): InCallAudioRoute | null {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     if (isPiPBuiltinCallAudioRouteLockActive()) {
       const explicit = normalizeInCallRoute(g.__inAppPiPExplicitToggleRouteRef?.current || '');
       if (
@@ -1072,7 +1077,7 @@ export type PiPAudioOutputRouteState = {
 };
 
 function gatherPiPAudioOutputRouteState(): PiPAudioOutputRouteState {
-  const g = global as any;
+  const g = global as CallAudioGlobals;
   function read<T>(fn: () => T, fallback: T): T {
     try {
       return fn();
@@ -1080,7 +1085,7 @@ function gatherPiPAudioOutputRouteState(): PiPAudioOutputRouteState {
       return fallback;
     }
   }
-  const params = read<any>(() => g.__currentCallPiPParamsRef?.current, null);
+  const params = read(() => g.__currentCallPiPParamsRef?.current, null);
   const fromParams = read(() => normalizeInCallRoute(params?.audioOutputRoute || ''), null);
   const userSel = read(() => readUserSelectedCallAudioRoute(), null);
   const icmSelected = read(
@@ -1255,7 +1260,7 @@ export function readInAppPiPAudioOutputRoute(): InCallAudioRoute {
 /** Намерение пользователя по микрофону (единый источник для UI / PiP). */
 export function readOngoingCallMicOn(): boolean | null {
   try {
-    const session = (global as any).__webrtcSessionRef?.current;
+    const session = (global as CallAudioGlobals).__webrtcSessionRef?.current;
     if (session && typeof session.getIsMicOn === 'function') {
       return session.getIsMicOn();
     }
@@ -1266,7 +1271,7 @@ export function readOngoingCallMicOn(): boolean | null {
 /** Локальный mute для PiP: намерение пользователя (session), не track.enabled. */
 export function resolvePiPLocalMutedState(fallbackMicOn?: boolean): boolean {
   try {
-    const session = (global as any).__webrtcSessionRef?.current;
+    const session = (global as CallAudioGlobals).__webrtcSessionRef?.current;
     if (session && typeof session.getIsMicOn === 'function') {
       return !session.getIsMicOn();
     }
@@ -1275,7 +1280,7 @@ export function resolvePiPLocalMutedState(fallbackMicOn?: boolean): boolean {
     return !fallbackMicOn;
   }
   try {
-    const muteLocal = (global as any).__currentCallPiPParamsRef?.current?.muteLocal;
+    const muteLocal = (global as CallAudioGlobals).__currentCallPiPParamsRef?.current?.muteLocal;
     if (typeof muteLocal === 'boolean') return muteLocal;
   } catch {}
   return false;
@@ -1292,7 +1297,7 @@ export type SystemPiPReturnMediaSnapshot = {
 /** Состояние mic / cam / динамика до Home → system PiP (до pin громкой связи в фоне). */
 export function captureSystemPiPReturnMediaSnapshot(): void {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     const session = g.__webrtcSessionRef?.current;
     if (!session) return;
     const micOn =
@@ -1302,7 +1307,7 @@ export function captureSystemPiPReturnMediaSnapshot(): void {
     const preferAudioOnlyUi = (() => {
       if (isInAudioOnlyCallUi()) return true;
       try {
-        const gg = global as any;
+        const gg = global as CallAudioGlobals;
         if (gg.__preferAudioOnlyUiOnNextVideoCallRef?.current === true) return true;
         if (gg.__pipInAppRtcFromAudioOnlyRef?.current === true) return true;
         if (
@@ -1379,7 +1384,7 @@ export function captureSystemPiPReturnMediaSnapshot(): void {
 
 export function peekSystemPiPReturnMediaSnapshot(): SystemPiPReturnMediaSnapshot | null {
   try {
-    const snap = (global as any).__systemPiPReturnMediaSnapshotRef as
+    const snap = (global as CallAudioGlobals).__systemPiPReturnMediaSnapshotRef as
       | SystemPiPReturnMediaSnapshot
       | undefined;
     if (!snap || Date.now() - snap.capturedAt > 120_000) return null;
@@ -1392,7 +1397,7 @@ export function peekSystemPiPReturnMediaSnapshot(): SystemPiPReturnMediaSnapshot
 /** Восстановить mic / маршрут из снимка (камера — через session.restoreLocalCameraAfterPiPReturn). */
 export function applySystemPiPReturnMediaSnapshot(): boolean {
   try {
-    const g = global as any;
+    const g = global as CallAudioGlobals;
     const snap = g.__systemPiPReturnMediaSnapshotRef as SystemPiPReturnMediaSnapshot | undefined;
     if (!snap || Date.now() - snap.capturedAt > 120_000) {
       g.__systemPiPReturnMediaSnapshotRef = null;
@@ -1465,7 +1470,7 @@ export function applySystemPiPReturnMediaSnapshot(): boolean {
 /** После PiP/фона: поднять mic uplink, если пользователь не выключал микрофон. */
 export function restoreOngoingCallMicrophoneIfEnabled(): void {
   try {
-    const session = (global as any).__webrtcSessionRef?.current;
+    const session = (global as CallAudioGlobals).__webrtcSessionRef?.current;
     if (!session || typeof session.getIsMicOn !== 'function' || !session.getIsMicOn()) return;
     if (typeof session.restoreMicrophoneAfterAppBackground === 'function') {
       void session.restoreMicrophoneAfterAppBackground();

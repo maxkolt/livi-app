@@ -1,3 +1,4 @@
+import type { ChatMessage } from './chatMessageTypes';
 /** Clear-chat confirm actions (for me / for everyone). */
 
 import React from "react";
@@ -11,7 +12,7 @@ type Options = {
   peerId: string;
   currentUserId: string | null;
   lang: Lang;
-  setMessages: React.Dispatch<React.SetStateAction<any[]>>;
+  setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>;
   setShowClearMenu: React.Dispatch<React.SetStateAction<boolean>>;
   openConfirm: (opts: OpenConfirmOpts) => void;
   showNotice: (kind: NoticeKind, title: string, message: string) => void;

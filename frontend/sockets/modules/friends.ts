@@ -6,8 +6,12 @@ import { ensureReauthBeforePrivilegedSocketOp } from "./reauth";
 import { shared } from "./shared";
 import { socket } from "./socketCore";
 
-type FriendListItem = {
+export type FriendListItem = {
   _id: string;
+  /** Optional fields retained by older friend/profile snapshots. */
+  id?: string;
+  name?: string;
+  avatarB64?: string;
   nick?: string;
   avatar?: string;
   avatarVer?: number;
@@ -17,6 +21,14 @@ type FriendListItem = {
   isRandomBusy?: boolean;
   inCall?: boolean;
 };
+
+export type FriendsPage = {
+  ok: boolean;
+  list?: FriendListItem[];
+  pagination?: { page: number; limit: number; total: number; hasMore: boolean };
+  error?: string;
+};
+type FriendMutationResult = { ok: boolean; status?: string; error?: string };
 
 function addFriend(toUserId: string) {
   if (!isOid(toUserId)) return Promise.reject(new Error("invalid ObjectId"));
@@ -28,7 +40,7 @@ function addFriend(toUserId: string) {
     return emitAck<{ ok: boolean; status?: string; error?: string }>("friends:add", { to: toUserId });
   };
 
-  const viaHttp = async () => {
+  const viaHttp = async (): Promise<FriendMutationResult> => {
     const headers: Record<string, string> = { "Content-Type": "application/json", ...(await getInstallAuthHeaders()) };
     if (shared.currentUserId) headers["x-user-id"] = String(shared.currentUserId);
 
@@ -72,7 +84,7 @@ export function respondFriend(fromUserId: string, accept: boolean, requestId?: s
       requestId,
     });
 
-  const viaHttp = async () => {
+  const viaHttp = async (): Promise<FriendMutationResult> => {
     const headers: Record<string, string> = { "Content-Type": "application/json", ...(await getInstallAuthHeaders()) };
     if (shared.currentUserId) headers["x-user-id"] = String(shared.currentUserId);
 
@@ -110,7 +122,7 @@ export function acceptInvite(inviterId: string) {
   const viaSocket = () =>
     emitAck<{ ok: boolean; status?: string; error?: string }>("friends:acceptInvite", { inviterId });
 
-  const viaHttp = async () => {
+  const viaHttp = async (): Promise<FriendMutationResult> => {
     const headers: Record<string, string> = { "Content-Type": "application/json", ...(await getInstallAuthHeaders()) };
     if (shared.currentUserId) headers["x-user-id"] = String(shared.currentUserId);
 
@@ -155,22 +167,12 @@ export function fetchFriends(
       const ok = await ensureReauthBeforePrivilegedSocketOp();
       if (!ok) throw new Error("reauth_before_friends_fetch_failed");
     }
-    return emitAck<{
-      ok: boolean;
-      list: FriendListItem[];
-      pagination?: {
-        page: number;
-        limit: number;
-        total: number;
-        hasMore: boolean;
-      };
-      error?: string;
-    }>("friends:fetch", { page, limit, includeAvatarThumbs });
+    return emitAck<FriendsPage>("friends:fetch", { page, limit, includeAvatarThumbs });
   };
 
   // Fallback for networks/VPNs that break socket connectivity:
   // use REST endpoint that returns the same list shape.
-  const viaHttp = async () => {
+  const viaHttp = async (): Promise<FriendsPage> => {
     const headers: Record<string, string> = { "Content-Type": "application/json", ...(await getInstallAuthHeaders()) };
     // Legacy/audit-only header (server does NOT trust it, but may log mismatch).
     if (shared.currentUserId) headers["x-user-id"] = String(shared.currentUserId);
@@ -179,7 +181,7 @@ export function fetchFriends(
     // - first attempt: short timeout (good networks feel instant)
     // - second attempt: longer timeout (slow VPN still succeeds)
     const timeouts = [7000, 20000];
-    let lastErr: any = null;
+    let lastErr: unknown = null;
     const url = `${API_BASE}/api/friends?page=${encodeURIComponent(String(page))}&limit=${encodeURIComponent(String(limit))}&includeAvatarThumbs=${includeAvatarThumbs ? "1" : "0"}`;
 
     for (const ms of timeouts) {
@@ -192,7 +194,7 @@ export function fetchFriends(
           return { ok: false, list: [], error: `http_${res.status}${txt ? `:${txt}` : ""}` };
         }
         return await res.json();
-      } catch (e: any) {
+      } catch (e) {
         lastErr = e;
         await new Promise((r) => setTimeout(r, 200));
       } finally {
@@ -200,7 +202,7 @@ export function fetchFriends(
       }
     }
 
-    return { ok: false, list: [], error: lastErr?.message || String(lastErr || "network_error") };
+    return { ok: false, list: [], error: (lastErr as { message?: string } | null)?.message || String(lastErr || "network_error") };
   };
 
   return (async () => {
@@ -248,8 +250,8 @@ export function fetchFriendRequests(options: { includeAvatarThumbs?: boolean } =
       const res = await fetch(url, { method: "GET", headers, signal: controller.signal });
       if (!res.ok) return { ok: false, error: `http_${res.status}` };
       return await res.json();
-    } catch (e: any) {
-      return { ok: false, error: e?.message || "network_error" };
+    } catch (e) {
+      return { ok: false, error: (e as { message?: string } | null)?.message || "network_error" };
     } finally {
       clearTimeout(timeoutId);
     }
@@ -282,7 +284,7 @@ export function fetchFriendRequests(options: { includeAvatarThumbs?: boolean } =
 export function onFriendAdded(
   cb: (d: { userId: string; userNick?: string }) => void,
 ): () => void {
-  const h = (d: any) => cb(d);
+  const h = (d: Parameters<typeof cb>[0]) => cb(d);
   socket.on("friend_added", h);
   socket.on("friend:added", h);
   return () => {
@@ -294,7 +296,7 @@ export function onFriendAdded(
 export function onFriendRequest(
   cb: (d: { from: string; requestId?: string; fromNick?: string }) => void,
 ): () => void {
-  const h = (d: any) => cb(d);
+  const h = (d: Parameters<typeof cb>[0]) => cb(d);
   socket.on("friend_request", h);
   socket.on("friend:request", h);
   return () => {
@@ -304,7 +306,7 @@ export function onFriendRequest(
 }
 
 export function onFriendAccepted(cb: (d: { userId: string }) => void): () => void {
-  const h = (d: any) => cb(d);
+  const h = (d: Parameters<typeof cb>[0]) => cb(d);
   socket.on("friend_accepted", h);
   socket.on("friend:accepted", h);
   return () => {
@@ -314,7 +316,7 @@ export function onFriendAccepted(cb: (d: { userId: string }) => void): () => voi
 }
 
 export function onFriendDeclined(cb: (d: { userId: string }) => void): () => void {
-  const h = (d: any) => cb(d);
+  const h = (d: Parameters<typeof cb>[0]) => cb(d);
   socket.on("friend_declined", h);
   socket.on("friend:declined", h);
   return () => {
@@ -324,7 +326,7 @@ export function onFriendDeclined(cb: (d: { userId: string }) => void): () => voi
 }
 
 export function onFriendRemoved(cb: (p: { userId: string }) => void): () => void {
-  const h = (d: any) => cb({ userId: String(d?.userId ?? d?.id ?? d) });
+  const h = (d: unknown) => cb({ userId: String((d as { userId?: unknown } | null)?.userId ?? (d as { id?: unknown } | null)?.id ?? d) });
   socket.on("friend_removed", h);
   socket.on("friend:removed", h);
   return () => {
@@ -337,7 +339,7 @@ export function removeFriend(peerId: string) {
   if (!isOid(peerId)) return Promise.reject(new Error("invalid ObjectId"));
   const viaSocket = () => emitAck<{ ok: boolean; error?: string }>("friends:remove", { peerId });
 
-  const viaHttp = async () => {
+  const viaHttp = async (): Promise<FriendMutationResult> => {
     const headers: Record<string, string> = { "Content-Type": "application/json", ...(await getInstallAuthHeaders()) };
     if (shared.currentUserId) headers["x-user-id"] = String(shared.currentUserId);
 
@@ -432,13 +434,13 @@ export async function checkInviteLink(code: string, options: { markPending?: boo
 
     const data = await response.json();
     return data;
-  } catch (e: any) {
+  } catch (e) {
     logger.error("Failed to check invite link:", {
-      error: e?.message || e,
+      error: (e as { message?: string } | null)?.message || e,
       code,
-      stack: e?.stack,
+      stack: (e as { stack?: string } | null)?.stack,
     });
-    return { ok: false, error: e?.message || "network_error" };
+    return { ok: false, error: (e as { message?: string } | null)?.message || "network_error" };
   }
 }
 

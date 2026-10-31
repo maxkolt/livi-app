@@ -1,3 +1,5 @@
+import type { ChatMessage } from './chatMessageTypes';
+
 /** Long-press message actions (iOS ActionSheet / Android sheet). */
 
 import React from "react";
@@ -7,7 +9,7 @@ import { getChatReplyPreviewText } from "./chatMessageMeta";
 
 type Layout = { x: number; y: number; width: number; height: number };
 
-type ReplyTo = { id: string; text: string; from?: string; isOwn?: boolean } | null;
+type ReplyTo = { id: string; text: string; from?: string | null; isOwn?: boolean } | null;
 
 type Options = {
   currentUserId: string | null;
@@ -16,13 +18,15 @@ type Options = {
   setMessageText: React.Dispatch<React.SetStateAction<string>>;
   setEditingMessageId: React.Dispatch<React.SetStateAction<string | null>>;
   setReplyingToMessage: React.Dispatch<React.SetStateAction<ReplyTo>>;
-  setSelectedMessage: React.Dispatch<React.SetStateAction<any>>;
+  setSelectedMessage: React.Dispatch<React.SetStateAction<ChatMessage | null>>;
   setAlbumFocusIndex: React.Dispatch<React.SetStateAction<number | null>>;
-  copySelectedMessage: (m: any) => void | Promise<void>;
+  copySelectedMessage: (m: ChatMessage) => void | Promise<void>;
   showMessageActionsSheet: (layout: Layout | null) => void;
   clearAndroidLayoutIfNeeded: (layout?: Layout) => void;
-  enterSelectionModeFromMessage: (m: any, focusIndex: number | null) => void;
-  requestImageAction: (kind: "save" | "forward" | "delete", m: any, focusIndex: number | null) => void;
+  enterSelectionModeFromMessage: (m: ChatMessage, focusIndex: number | null) => void;
+  requestImageAction: (kind: "save" | "forward" | "delete", m: ChatMessage, focusIndex: number | null) => void;
+  forwardSelectedMessage: (m: ChatMessage) => void | Promise<void>;
+  deleteSelectedMessage: (m: ChatMessage) => void;
   /** true = облако ≥½ под шапкой/композером — long-press запрещён. */
   isLayoutBlockedByChrome?: (layout: Layout) => boolean;
 };
@@ -41,10 +45,12 @@ export function useChatLongPressMessage({
   clearAndroidLayoutIfNeeded,
   enterSelectionModeFromMessage,
   requestImageAction,
+  forwardSelectedMessage,
+  deleteSelectedMessage,
   isLayoutBlockedByChrome,
 }: Options) {
   const handleLongPressMessage = React.useCallback(
-    (m: any, layout?: { x: number; y: number; width: number; height: number }, focusIndex: number | null = null) => {
+    (m: ChatMessage, layout?: { x: number; y: number; width: number; height: number }, focusIndex: number | null = null) => {
       if (layout && isLayoutBlockedByChrome?.(layout)) return;
 
       setSelectedMessage(m);
@@ -143,8 +149,18 @@ export function useChatLongPressMessage({
               setAlbumFocusIndex(null);
               return;
             }
-            if (action === 'save' || action === 'forward' || action === 'delete') {
+            if (action === 'save' || (isImage && (action === 'forward' || action === 'delete'))) {
               requestImageAction(action, m, focusIndex);
+              return;
+            }
+            if (action === 'forward') {
+              void forwardSelectedMessage(m);
+              setAlbumFocusIndex(null);
+              return;
+            }
+            if (action === 'delete') {
+              deleteSelectedMessage(m);
+              setAlbumFocusIndex(null);
               return;
             }
           }
@@ -162,6 +178,8 @@ export function useChatLongPressMessage({
       clearAndroidLayoutIfNeeded,
       enterSelectionModeFromMessage,
       requestImageAction,
+      forwardSelectedMessage,
+      deleteSelectedMessage,
       isLayoutBlockedByChrome,
       lang,
       messageTextRef,
@@ -174,7 +192,7 @@ export function useChatLongPressMessage({
   );
 
   const handleLongPressAlbumTile = React.useCallback(
-    (m: any, index: number, layout?: { x: number; y: number; width: number; height: number }) => {
+    (m: ChatMessage, index: number, layout?: { x: number; y: number; width: number; height: number }) => {
       handleLongPressMessage(m, layout, index);
     },
     [handleLongPressMessage],

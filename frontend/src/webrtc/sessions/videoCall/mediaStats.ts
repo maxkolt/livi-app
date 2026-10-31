@@ -1,3 +1,4 @@
+import type { RTCStatsSample, RoomTransportSource, InboundStatsEngine } from '../../rtcCompatibilityTypes';
 /**
  * Чтение WebRTC-статистики и нормализация её в простые числа/сигнатуры.
  *
@@ -18,11 +19,11 @@ export const EMPTY_VIDEO_PROGRESS: VideoProgress = { frames: 0, bytes: 0, packet
  * Статистика нашего видео-трека: сначала ищем по sid, иначе берём первую video-запись.
  * Разные сборки кладут sid в trackSid либо в mediaTrackId.
  */
-export function pickLocalVideoStat(stats: any[], track: LocalVideoTrack | null): any | null {
+export function pickLocalVideoStat(stats: RTCStatsSample[], track: LocalVideoTrack | null): RTCStatsSample | null {
   if (!Array.isArray(stats) || stats.length === 0) return null;
   const sid = track?.sid;
-  const isVideo = (s: any) => String(s?.kind || '').toLowerCase() === 'video';
-  const matchesSid = (s: any) =>
+  const isVideo = (s: RTCStatsSample) => String(s?.kind || '').toLowerCase() === 'video';
+  const matchesSid = (s: RTCStatsSample) =>
     sid && (String(s?.trackSid || '') === String(sid) || String(s?.mediaTrackId || '') === String(sid));
 
   const bySid = sid ? stats.find((s) => isVideo(s) && matchesSid(s)) : null;
@@ -31,7 +32,7 @@ export function pickLocalVideoStat(stats: any[], track: LocalVideoTrack | null):
 }
 
 /** Прогресс отправки видео; отсутствующие/нечисловые поля дают 0, чтобы дельта не «прыгала». */
-export function extractVideoProgress(stat: any): VideoProgress {
+export function extractVideoProgress(stat: RTCStatsSample | null | undefined): VideoProgress {
   const frames = Number(stat?.framesSent ?? stat?.framesEncoded ?? stat?.frames ?? 0) || 0;
   const bytes = Number(stat?.bytesSent ?? stat?.bytes ?? stat?.bytesSentTotal ?? 0) || 0;
   const packets = Number(stat?.packetsSent ?? stat?.packets ?? 0) || 0;
@@ -42,19 +43,19 @@ export function extractVideoProgress(stat: any): VideoProgress {
  * Best-effort inbound-rtp packetsReceived с subscriber PC.
  * null = статистика недоступна (не подключены / нет PC / getStats упал), это не «ноль пакетов».
  */
-export async function readInboundRemotePackets(room: any, kind: 'audio' | 'video'): Promise<number | null> {
+export async function readInboundRemotePackets(room: RoomTransportSource | null | undefined, kind: 'audio' | 'video'): Promise<number | null> {
   try {
     if (!room || room.state !== 'connected') return null;
     const pc =
-      room.engine?.pcManager?.subscriber?.pc ||
-      room.engine?.subscriber?.pc ||
-      room.engine?.pcManager?.subscriberPC ||
+      (room.engine as InboundStatsEngine | undefined)?.pcManager?.subscriber?.pc ||
+      (room.engine as InboundStatsEngine | undefined)?.subscriber?.pc ||
+      (room.engine as InboundStatsEngine | undefined)?.pcManager?.subscriberPC ||
       null;
     if (!pc || typeof pc.getStats !== 'function') return null;
     const report = await pc.getStats();
     let packets = 0;
     let found = false;
-    report.forEach((r: any) => {
+    report.forEach((r: RTCStatsSample) => {
       const isInbound = r?.type === 'inbound-rtp';
       const isKind = r?.kind === kind || r?.mediaType === kind;
       if (!isInbound || !isKind) return;

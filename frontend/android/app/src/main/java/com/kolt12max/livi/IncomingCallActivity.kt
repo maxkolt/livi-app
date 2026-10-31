@@ -21,7 +21,6 @@ import android.os.VibratorManager
 import android.os.VibrationAttributes
 import android.graphics.PixelFormat
 import android.view.WindowManager
-import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.ImageButton
@@ -174,8 +173,9 @@ class IncomingCallActivity : AppCompatActivity() {
         val declineButton = findViewById<ImageButton>(R.id.btn_decline)
         acceptButton.contentDescription = AppLocale.str(applicationContext, R.string.incoming_call_accept)
         declineButton.contentDescription = AppLocale.str(applicationContext, R.string.incoming_call_decline)
-        installPressFeedback(acceptButton)
-        installPressFeedback(declineButton)
+        val callRoot = findViewById<ViewGroup>(R.id.incoming_call_root)
+        CallButtonPressFeedback.install(acceptButton, callRoot, getColor(R.color.incoming_btn_accept_border_pressed))
+        CallButtonPressFeedback.install(declineButton, callRoot, getColor(R.color.incoming_btn_decline_border_pressed))
 
         acceptButton.setOnClickListener {
             if (acceptInProgress) return@setOnClickListener
@@ -933,28 +933,6 @@ class IncomingCallActivity : AppCompatActivity() {
         }
         android.util.Log.d(TAG, "IncomingCallActivity closeIncomingScreen: setting isInForeground=false, calling finish()")
         finish()
-    }
-
-    private fun installPressFeedback(button: ImageButton) {
-        button.setOnTouchListener { view, event ->
-            when (event.actionMasked) {
-                MotionEvent.ACTION_DOWN -> animateButtonPress(view, pressed = true)
-                MotionEvent.ACTION_UP,
-                MotionEvent.ACTION_CANCEL -> animateButtonPress(view, pressed = false)
-            }
-            false
-        }
-    }
-
-    private fun animateButtonPress(view: View, pressed: Boolean) {
-        val scale = if (pressed) 0.86f else 1f
-        val alpha = if (pressed) 0.78f else 1f
-        view.animate()
-            .scaleX(scale)
-            .scaleY(scale)
-            .alpha(alpha)
-            .setDuration(if (pressed) 90L else 140L)
-            .start()
     }
 
     companion object {

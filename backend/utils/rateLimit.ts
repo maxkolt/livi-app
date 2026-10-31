@@ -1,3 +1,4 @@
+import type { ErrorDetails } from './runtimeTypes';
 import Redis from 'ioredis';
 import { logger } from './logger';
 
@@ -63,7 +64,7 @@ if (REDIS_URL && REDIS_RATE_LIMIT_ENABLED) {
   redisClient.on('connect', () => logger.info('[rateLimit:redis] connected'));
   redisClient.on('ready', () => logger.info('[rateLimit:redis] ready'));
   redisClient.on('error', (err) => {
-    logger.warn('[rateLimit:redis] error', { message: err?.message ?? String(err) });
+    logger.warn('[rateLimit:redis] error', { message: (err as ErrorDetails)?.message ?? String(err) });
   });
 } else if (!REDIS_URL) {
   logger.info('[rateLimit] using in-memory store (no REDIS_URL)');
@@ -165,8 +166,8 @@ export async function checkRateLimit(
     const ttlMs = Number(result?.[1] ?? safeWindowMs);
     if (count <= safeMax) return { ok: true };
     return { ok: false, retryAfterSec: Math.max(1, Math.ceil(ttlMs / 1000)) };
-  } catch (e: any) {
-    return checkFallbackRateLimit(key, safeMax, safeWindowMs, e?.message || String(e), options);
+  } catch (e: unknown) {
+    return checkFallbackRateLimit(key, safeMax, safeWindowMs, (e as ErrorDetails)?.message || String(e), options);
   }
 }
 

@@ -10,7 +10,7 @@ export async function needsNearbyDevicesPermission(): Promise<boolean> {
   if (Platform.OS !== 'android') return false;
   const ver = typeof Platform.Version === 'number' ? Platform.Version : Number(Platform.Version);
   if (!Number.isFinite(ver) || ver < 31) return false;
-  const perm = (PermissionsAndroid as any)?.PERMISSIONS?.BLUETOOTH_CONNECT;
+  const perm = (PermissionsAndroid)?.PERMISSIONS?.BLUETOOTH_CONNECT;
   if (!perm) return false;
   try {
     return !(await PermissionsAndroid.check(perm));
@@ -33,7 +33,7 @@ export async function requestNearbyDevicesPermissionAndroid(): Promise<
   const ver = typeof Platform.Version === 'number' ? Platform.Version : Number(Platform.Version);
   if (!Number.isFinite(ver) || ver < 31) return 'granted'; // BLUETOOTH_CONNECT с Android 12 (API 31)
 
-  const perm = (PermissionsAndroid as any)?.PERMISSIONS?.BLUETOOTH_CONNECT;
+  const perm = (PermissionsAndroid)?.PERMISSIONS?.BLUETOOTH_CONNECT;
   if (!perm) return 'granted';
 
   try {
