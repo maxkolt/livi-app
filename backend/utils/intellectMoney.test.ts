@@ -1,0 +1,116 @@
+import { createHash } from 'crypto';
+import {
+  intellectMoneyConfig, intellectMoneyPurchaseHash, intellectMoneyCheckoutHtml,
+  intellectMoneyAmount, verifyIntellectMoneyNotification, type IntellectMoneyConfig,
+} from './intellectMoney';
+
+const config: IntellectMoneyConfig = {
+  eshopId: '473314', secretKey: 'test-only-secret', currency: 'TST', publicBaseUrl: 'https://api.liviapp.com',
+};
+const paymentId = 'im_00000000-0000-4000-8000-000000000001';
+function notification(overrides: Record<string, string> = {}) {
+  const fields: Record<string, string> = {
+    EshopId: '473314', OrderId: paymentId, ServiceName: 'Рамка Legendary: fire', EshopAccount: '12345',
+    RecipientAmount: '199.00', RecipientCurrency: 'TST', PaymentStatus: '5',
+    UserName: '', UserEmail: 'buyer@example.com', PaymentData: '2026-10-31 21:00:00', PaymentId: '3000000001',
+    ...overrides,
+  };
+  fields.Hash = createHash('md5').update([
+    fields.EshopId, fields.OrderId, fields.ServiceName, fields.EshopAccount, fields.RecipientAmount,
+    fields.RecipientCurrency, fields.PaymentStatus, fields.UserName, fields.UserEmail, fields.PaymentData,
+    config.secretKey,
+  ].join('::'), 'utf8').digest('hex');
+  return fields;
+}
+
+describe('IntellectMoney configuration and checkout', () => {
+  it('defaults to test currency and requires the merchant key', () => {
+    expect(() => intellectMoneyConfig({})).toThrow('intellectmoney_not_configured');
+    expect(intellectMoneyConfig({ INTELLECTMONEY_ESHOP_ID: '473314', INTELLECTMONEY_SECRET_KEY: config.secretKey }).currency).toBe('TST');
+  });
+  it('does not use old YooKassa credentials as a fallback', () => {
+    expect(() => intellectMoneyConfig({ YUKASSA_SHOP_ID: '473314', YUKASSA_SECRET_KEY: 'old-key' }))
+      .toThrow('intellectmoney_not_configured');
+  });
+  it.each(['USD', 'RUR', 'anything'])('rejects an unsupported configured currency: %s', currency => {
+    expect(() => intellectMoneyConfig({
+      INTELLECTMONEY_ESHOP_ID: '473314', INTELLECTMONEY_SECRET_KEY: config.secretKey, INTELLECTMONEY_CURRENCY: currency,
+    })).toThrow('intellectmoney_invalid_currency');
+  });
+  it.each(['http://api.liviapp.com', 'https://user:password@api.liviapp.com', 'https://api.liviapp.com/?bad=1'])(
+  'rejects unsafe callback bases: %s', url => {
+    expect(() => intellectMoneyConfig({
+      INTELLECTMONEY_ESHOP_ID: '473314', INTELLECTMONEY_SECRET_KEY: config.secretKey, PUBLIC_BASE_URL: url,
+    })).toThrow('intellectmoney_invalid_public_url');
+  });
+  it('signs the canonical shop/order/description/amount/currency sequence with UTF-8', () => {
+    const order = { paymentId, eshopId: config.eshopId, serviceName: 'Рамка Legendary: fire',
+      amount: '199.00', currency: 'TST' as const, expiresAt: new Date('2026-11-01T18:00:00Z') };
+    const expected = createHash('md5')
+      .update(`473314::${paymentId}::Рамка Legendary: fire::199.00::TST::test-only-secret`, 'utf8').digest('hex');
+    expect(intellectMoneyPurchaseHash(order, config.secretKey)).toBe(expected);
+    const page = intellectMoneyCheckoutHtml(order, config);
+    expect(page).toContain('action="https://merchant.intellectmoney.ru/"');
+    expect(page).toContain(`name="PurchaseHash" value="${expected}"`);
+    expect(page).toContain('name="Email" type="email"');
+    expect(page).toContain('/api/cosmetics/intellectmoney/webhook');
+    expect(page).toContain('2026-11-01 21:00:00');
+    expect(page).not.toContain(config.secretKey);
+    expect(page).not.toContain('yookassa');
+  });
+  it('escapes dynamic text and hidden input values', () => {
+    const page = intellectMoneyCheckoutHtml({
+      paymentId, eshopId: '473314', serviceName: '"><script>alert(1)</script>',
+      amount: '199.00', currency: 'TST', expiresAt: new Date(),
+    }, config);
+    expect(page).not.toContain('<script>');
+    expect(page).toContain('&lt;script&gt;');
+  });
+});
+
+describe('IntellectMoney amounts', () => {
+  it.each(['199', '199.0', '199.00', '199.0000', '00199.00'])('normalizes %s without rounding', amount => {
+    expect(intellectMoneyAmount(amount)).toBe('19900');
+  });
+  it.each(['199.001', '-199', '199,00', '1e2', 'NaN', ' 199.00', '199.00000', ''])('rejects %s', amount => {
+    expect(intellectMoneyAmount(amount)).toBeNull();
+  });
+});
+
+describe('IntellectMoney signed server notifications', () => {
+  it('authenticates the documented callback, including an empty username segment', () => {
+    expect(verifyIntellectMoneyNotification(notification(), config)).toMatchObject({
+      orderId: paymentId, amount: '199.00', currency: 'TST', status: '5',
+    });
+  });
+  it('accepts the lower-camel field casing used by legacy merchant notifications', () => {
+    const lower = Object.fromEntries(Object.entries(notification()).map(([key, value]) => [key[0].toLowerCase() + key.slice(1), value]));
+    expect(verifyIntellectMoneyNotification(lower, config)?.status).toBe('5');
+  });
+  it.each(['RecipientAmount', 'RecipientCurrency', 'OrderId', 'PaymentStatus', 'UserEmail'])(
+  'rejects a tampered %s field', field => {
+    const body = notification(); body[field] = 'tampered';
+    expect(verifyIntellectMoneyNotification(body, config)).toBeNull();
+  });
+  it('does not trust a SecretKey supplied in the callback', () => {
+    const body = notification(); body.SecretKey = config.secretKey;
+    expect(verifyIntellectMoneyNotification(body, { ...config, secretKey: 'different-key' })).toBeNull();
+  });
+  it.each(['', 'abc', '0'.repeat(32), 'z'.repeat(32)])('rejects malformed or forged hashes: %s', hash => {
+    expect(verifyIntellectMoneyNotification({ ...notification(), Hash: hash }, config)).toBeNull();
+  });
+  it('rejects duplicate field casing and parameter arrays', () => {
+    expect(verifyIntellectMoneyNotification({ ...notification(), eshopId: '473314' }, config)).toBeNull();
+    expect(verifyIntellectMoneyNotification({ ...notification(), OrderId: [paymentId] }, config)).toBeNull();
+  });
+  it('rejects a signed notification for another merchant', () => {
+    expect(verifyIntellectMoneyNotification(notification({ EshopId: '123456' }), config)).toBeNull();
+  });
+  it('keeps test currency distinct from real rubles and normalizes the RUR alias', () => {
+    expect(verifyIntellectMoneyNotification(notification(), config)?.currency).toBe('TST');
+    expect(verifyIntellectMoneyNotification(notification({ RecipientCurrency: 'RUR' }), config)?.currency).toBe('RUB');
+  });
+  it.each(['3', '4', '5', '6', '7', '8'])('recognizes signed status %s without treating it as paid', status => {
+    expect(verifyIntellectMoneyNotification(notification({ PaymentStatus: status }), config)?.status).toBe(status);
+  });
+});

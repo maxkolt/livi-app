@@ -1,13 +1,15 @@
 import type { AuthenticatedRequest, ErrorDetails } from '../utils/runtimeTypes';
-import { randomUUID } from 'crypto';
 import { Router } from 'express';
 import mongoose from 'mongoose';
 import UserModel from '../models/User';
 import CosmeticPurchaseModel, { type CosmeticKind } from '../models/CosmeticPurchase';
 import { logger } from '../utils/logger';
 import { getFriendIds } from '../utils/friendshipUtils';
+import { serializeCosmeticEntitlements as serializeEntitlements } from '../utils/cosmeticCatalog';
+import { createIntellectMoneyCosmeticsRouter } from './intellectMoneyCosmetics';
 
 const router = Router();
+router.use(createIntellectMoneyCosmeticsRouter(broadcastFrameChange));
 
 const SHOP_ID = String(process.env.YUKASSA_SHOP_ID || '').trim();
 const SECRET_KEY = String(process.env.YUKASSA_SECRET_KEY || '').trim();
@@ -15,20 +17,6 @@ const CONFIGURED_RETURN_URL = String(process.env.YUKASSA_RETURN_URL || '').trim(
 const APP_RETURN_DEEP_LINK = CONFIGURED_RETURN_URL.startsWith('livi://')
   ? CONFIGURED_RETURN_URL
   : 'livi://legendary/payment-result';
-const PUBLIC_BASE_URL = String(process.env.PUBLIC_BASE_URL || 'https://api.liviapp.com').replace(/\/+$/, '');
-// Redirect-сценарий ЮKassa ожидает абсолютный HTTPS URL. Промежуточная страница
-// на нашем backend возвращает пользователя в приложение по livi:// deep link.
-const RETURN_URL = CONFIGURED_RETURN_URL.startsWith('https://')
-  ? CONFIGURED_RETURN_URL
-  : `${PUBLIC_BASE_URL}/api/cosmetics/payment-return`;
-const PRICE_BY_KIND: Record<CosmeticKind, string> = {
-  background: '99.00',
-  frame: '199.00',
-};
-
-const FRAME_IDS = new Set(['fire', 'diamond', 'aurora', 'palladium', 'frost', 'jade', 'void', 'obsidian']);
-const BACKGROUND_IDS = new Set(['aurora-chat', 'deep-space', 'poetry', 'ocean-flow', 'graphite-chat']);
-
 type YooPayment = {
   id?: string;
   status?: 'pending' | 'waiting_for_capture' | 'succeeded' | 'canceled';
@@ -38,10 +26,6 @@ type YooPayment = {
   confirmation?: { confirmation_url?: string };
   metadata?: Record<string, unknown>;
 };
-
-function isValidItem(kind: CosmeticKind, itemId: string): boolean {
-  return kind === 'frame' ? FRAME_IDS.has(itemId) : BACKGROUND_IDS.has(itemId);
-}
 
 function basicAuth(): string {
   return `Basic ${Buffer.from(`${SHOP_ID}:${SECRET_KEY}`).toString('base64')}`;
@@ -68,19 +52,6 @@ async function yooRequest(path: string, init?: RequestInit): Promise<YooPayment>
     throw new Error(`yookassa_${response.status}`);
   }
   return json;
-}
-
-function serializeEntitlements(user: Partial<Pick<import('../models/User').UserRecord,
-  'purchasedFrameIds' | 'purchasedBackgroundIds' | 'activeFrameId' | 'activeBackgroundId'
->> | null) {
-  return {
-    purchasedFrameIds: Array.isArray(user?.purchasedFrameIds) ? user.purchasedFrameIds.map(String) : [],
-    purchasedBackgroundIds: Array.isArray(user?.purchasedBackgroundIds)
-      ? user.purchasedBackgroundIds.map(String)
-      : [],
-    activeFrameId: String(user?.activeFrameId || ''),
-    activeBackgroundId: String(user?.activeBackgroundId || ''),
-  };
 }
 
 async function grantVerifiedPayment(payment: YooPayment) {
@@ -148,62 +119,6 @@ router.get('/cosmetics/user/:userId', async (req, res) => {
 
 router.get('/cosmetics/payment-return', (_req, res) => {
   return res.redirect(302, APP_RETURN_DEEP_LINK);
-});
-
-router.post('/cosmetics/payments', async (req, res) => {
-  try {
-    const userId = String((req as AuthenticatedRequest).userId || '').trim();
-    if (!mongoose.isValidObjectId(userId)) return res.status(401).json({ ok: false, error: 'unauthorized' });
-    const kind = String(req.body?.kind || '') as CosmeticKind;
-    const itemId = String(req.body?.itemId || '').trim();
-    if ((kind !== 'frame' && kind !== 'background') || !isValidItem(kind, itemId)) {
-      return res.status(400).json({ ok: false, error: 'invalid_item' });
-    }
-    const price = PRICE_BY_KIND[kind];
-
-    const user = await UserModel.findById(userId)
-      .select('purchasedFrameIds purchasedBackgroundIds activeFrameId activeBackgroundId')
-      .lean();
-    if (!user) return res.status(404).json({ ok: false, error: 'user_not_found' });
-    const owned = kind === 'frame' ? (user).purchasedFrameIds : (user).purchasedBackgroundIds;
-    if (Array.isArray(owned) && owned.includes(itemId)) {
-      return res.json({ ok: true, alreadyOwned: true, entitlements: serializeEntitlements(user) });
-    }
-
-    const idempotenceKey = randomUUID();
-    const payment = await yooRequest('/payments', {
-      method: 'POST',
-      headers: { 'Idempotence-Key': idempotenceKey },
-      body: JSON.stringify({
-        amount: { value: price, currency: 'RUB' },
-        capture: true,
-        confirmation: { type: 'redirect', return_url: RETURN_URL },
-        description: `${kind === 'frame' ? 'Рамка' : 'Фон чата'} Legendary: ${itemId}`,
-        metadata: { userId, kind, itemId },
-      }),
-    });
-    const paymentId = String(payment.id || '').trim();
-    const confirmationUrl = String(payment.confirmation?.confirmation_url || '').trim();
-    if (!paymentId || !confirmationUrl) throw new Error('yookassa_invalid_response');
-
-    await CosmeticPurchaseModel.create({
-      user: userId,
-      kind,
-      itemId,
-      amount: price,
-      currency: 'RUB',
-      yookassaPaymentId: paymentId,
-      // Право выдаёт только grantVerifiedPayment после независимой проверки ответа ЮKassa.
-      status: 'pending',
-      test: payment.test === true,
-    });
-
-    if (payment.status === 'succeeded' && payment.paid === true) await grantVerifiedPayment(payment);
-    return res.json({ ok: true, paymentId, confirmationUrl, status: payment.status || 'pending' });
-  } catch (error: unknown) {
-    logger.error('[cosmetics] create payment failed', { error: (error as ErrorDetails)?.message || String(error) });
-    return res.status(502).json({ ok: false, error: 'payment_create_failed' });
-  }
 });
 
 router.get('/cosmetics/payments/:paymentId', async (req, res) => {
