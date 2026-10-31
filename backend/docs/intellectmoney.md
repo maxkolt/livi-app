@@ -1,16 +1,28 @@
 # Legendary: IntellectMoney
 
-New purchases use IntellectMoney's hosted payment form. No card data or merchant key
-is stored in the Android app. The checkout collects the payer's email and submits
-the signed order directly to IntellectMoney. The existing Android checkout API is
-preserved; updating the backend switches the provider for existing app builds too.
+New purchases open the official IntellectMoney Merchant Widget automatically on
+the same tealDeep background as Legendary. There is no separate LiVi payment card,
+email form, or intermediate payment button. The provider's form and branding are
+preserved; only its outer modal is placed on the LiVi background. No card data or
+merchant key is stored in the Android app. The existing Android checkout API is
+preserved; updating the backend switches the checkout for existing app builds too.
+
+The official SDK is loaded from
+`https://merchant.intellectmoney.ru/v2/js/IntellectMoneyMerchantWidget.js`.
+It opens `/v2/` in an iframe with the server-signed order and explicit currency.
+The checkout CSP allows the provider's script, iframe and images; the LiVi
+initializer has a fresh nonce. Success/close callbacks only return to the app and
+never grant an item; the signed server notification remains authoritative.
 
 ## Test shop 473314
 
 Append the values in `backend/.env.payments.example` to the backend environment.
 `INTELLECTMONEY_SECRET_KEY` must be exactly the SecretKey in the shop's connection
 settings. Quote it if it contains spaces or `#`. Do not use an API token here.
-`INTELLECTMONEY_CURRENCY=TST` is for the test account and does not charge real money.
+The currency must match the account selected in the merchant cabinet. Shop 473314
+is configured with `INTELLECTMONEY_CURRENCY=RUB` on request, using the selected
+RSB test account. TST is a separate test-currency mode; the backend never changes
+TST to RUB automatically. Currency alone does not determine whether an account is live.
 Restart the backend after changing its environment.
 
 In IntellectMoney → Shops → 473314 → Connection settings:
@@ -24,14 +36,14 @@ In IntellectMoney → Shops → 473314 → Connection settings:
   recognizes created (3), hold (6), partial payment (7), and refund (8).
 - The SecretKey in the cabinet and backend must match.
 
-Prices remain 199 for frames and 99 for backgrounds. In this shop these are TST.
+Prices remain 199 for frames and 99 for backgrounds, in the configured currency.
 Use the IntellectMoney test payment methods; real payment credentials are not needed.
 
 ## Verification
 
 1. Open Legendary and select an unowned item, then Buy.
-2. A LiVi checkout opens, showing the item and test amount. Enter an email and
-   continue to the hosted IntellectMoney page.
+2. The official IntellectMoney widget opens immediately on the Legendary
+   background. Fill in the fields requested by the provider.
 3. Finish a test payment. The server validates the signed notification, merchant,
    order, amount, and currency, then adds the item and applies it.
 4. Returning to LiVi refreshes the purchase. Closing/reopening the shop also loads
@@ -53,14 +65,15 @@ are not implemented by this checkout.
 
 ## Real payments
 
-Keep TST until the real account is approved and its receipt settings are configured
-with IntellectMoney. RUB is a separate explicit environment setting, not an
-automatic fallback. This integration does not configure fiscal receipts on behalf
-of the merchant. A new live shop also requires its actual EshopId and SecretKey.
+The selected merchant account determines whether payments are test or live. Moving
+to a real account requires its approval and receipt settings in IntellectMoney;
+changing the currency is insufficient. This integration does not configure fiscal
+receipts on behalf of the merchant. A new shop requires its actual EshopId and SecretKey.
 
 ## Official protocol
 
 - [Hosted HTML payment form](https://developer.intellectmoney.ru/protocol/html/createInvoice/)
+- [Official payment widget](https://developer.intellectmoney.ru/protocol/widget/)
 - [Control signatures](https://developer.intellectmoney.ru/info/signature/)
 - [Server notifications](https://developer.intellectmoney.ru/info/notification/)
 - [Test access and TST](https://developer.intellectmoney.ru/info/access/)

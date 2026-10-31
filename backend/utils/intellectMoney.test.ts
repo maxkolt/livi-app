@@ -1,13 +1,31 @@
 import { createHash } from 'crypto';
+import { runInNewContext } from 'vm';
 import {
   intellectMoneyConfig, intellectMoneyPurchaseHash, intellectMoneyCheckoutHtml,
-  intellectMoneyAmount, verifyIntellectMoneyNotification, type IntellectMoneyConfig,
+  intellectMoneyAmount, intellectMoneyCheckoutCsp, verifyIntellectMoneyNotification, type IntellectMoneyConfig,
 } from './intellectMoney';
 
 const config: IntellectMoneyConfig = {
   eshopId: '473314', secretKey: 'test-only-secret', currency: 'TST', publicBaseUrl: 'https://api.liviapp.com',
 };
 const paymentId = 'im_00000000-0000-4000-8000-000000000001';
+const nonce = 'testNonce123';
+const checkoutOrder = { paymentId, eshopId: config.eshopId, serviceName: 'Рамка Legendary: fire',
+  amount: '199.00', currency: 'TST' as const, expiresAt: new Date('2026-11-01T18:00:00Z') };
+function bootCheckout(page: string, init?: jest.Mock) {
+  let loaded = () => {};
+  const error = { hidden: true };
+  const location = { assign: jest.fn() };
+  const window = {
+    IntellectMoneyMerchantWidget: init ? { Configuration: { init } } : undefined,
+    addEventListener: jest.fn((_event, callback) => { loaded = callback; }), location,
+  };
+  const source = /<script nonce="[^"]+">([\s\S]*?)<\/script>/.exec(page)?.[1];
+  if (!source) throw Error('Missing widget bootstrap');
+  runInNewContext(source, { window, document: { getElementById: () => error }, setTimeout: jest.fn(), clearTimeout: jest.fn() });
+  loaded();
+  return { error, location };
+}
 function notification(overrides: Record<string, string> = {}) {
   const fields: Record<string, string> = {
     EshopId: '473314', OrderId: paymentId, ServiceName: 'Рамка Legendary: fire', EshopAccount: '12345',
@@ -44,27 +62,65 @@ describe('IntellectMoney configuration and checkout', () => {
     })).toThrow('intellectmoney_invalid_public_url');
   });
   it('signs the canonical shop/order/description/amount/currency sequence with UTF-8', () => {
-    const order = { paymentId, eshopId: config.eshopId, serviceName: 'Рамка Legendary: fire',
-      amount: '199.00', currency: 'TST' as const, expiresAt: new Date('2026-11-01T18:00:00Z') };
     const expected = createHash('md5')
       .update(`473314::${paymentId}::Рамка Legendary: fire::199.00::TST::test-only-secret`, 'utf8').digest('hex');
-    expect(intellectMoneyPurchaseHash(order, config.secretKey)).toBe(expected);
-    const page = intellectMoneyCheckoutHtml(order, config);
-    expect(page).toContain('action="https://merchant.intellectmoney.ru/"');
-    expect(page).toContain(`name="PurchaseHash" value="${expected}"`);
-    expect(page).toContain('name="Email" type="email"');
-    expect(page).toContain('/api/cosmetics/intellectmoney/webhook');
-    expect(page).toContain('2026-11-01 21:00:00');
+    expect(intellectMoneyPurchaseHash(checkoutOrder, config.secretKey)).toBe(expected);
+    const page = intellectMoneyCheckoutHtml(checkoutOrder, config, nonce);
+    const init = jest.fn();
+    bootCheckout(page, init);
+    expect(page).toContain('src="https://merchant.intellectmoney.ru/v2/js/IntellectMoneyMerchantWidget.js"');
+    expect(init).toHaveBeenCalledWith(expect.objectContaining({
+      EshopId: '473314', OrderId: paymentId, RecipientAmount: '199.00', RecipientCurrency: 'TST',
+      PurchaseHash: expected, ExpireDate: '2026-11-01 21:00:00',
+      ResultUrl: 'https://api.liviapp.com/api/cosmetics/intellectmoney/webhook',
+    }), expect.any(Object));
+    expect(page).not.toContain('<form');
+    expect(page).not.toContain('Перейти к оплате');
+    expect(page).not.toContain('<h1>');
     expect(page).not.toContain(config.secretKey);
     expect(page).not.toContain('yookassa');
   });
-  it('escapes dynamic text and hidden input values', () => {
+  it('escapes script termination and preserves the description passed to the official widget', () => {
+    const description = '</script><script>alert(1)</script>\u2028&';
     const page = intellectMoneyCheckoutHtml({
-      paymentId, eshopId: '473314', serviceName: '"><script>alert(1)</script>',
-      amount: '199.00', currency: 'TST', expiresAt: new Date(),
-    }, config);
-    expect(page).not.toContain('<script>');
-    expect(page).toContain('&lt;script&gt;');
+      ...checkoutOrder, serviceName: description,
+    }, config, nonce);
+    expect(page).not.toContain(description);
+    const init = jest.fn();
+    bootCheckout(page, init);
+    expect(init.mock.calls[0][0].ServiceName).toBe(description);
+  });
+  it('passes explicitly selected RUB and its matching signature without silently falling back to TST', () => {
+    const rubConfig = intellectMoneyConfig({
+      INTELLECTMONEY_ESHOP_ID: config.eshopId, INTELLECTMONEY_SECRET_KEY: config.secretKey,
+      INTELLECTMONEY_CURRENCY: 'RUB',
+    });
+    const rubOrder = { ...checkoutOrder, currency: rubConfig.currency };
+    const init = jest.fn();
+    bootCheckout(intellectMoneyCheckoutHtml(rubOrder, rubConfig, nonce), init);
+    const params = init.mock.calls[0][0];
+    expect(params.RecipientCurrency).toBe('RUB');
+    expect(params.PurchaseHash).toBe(createHash('md5')
+      .update(`473314::${paymentId}::Рамка Legendary: fire::199.00::RUB::test-only-secret`, 'utf8').digest('hex'));
+    expect(params.PurchaseHash).not.toBe(intellectMoneyPurchaseHash(checkoutOrder, config.secretKey));
+  });
+  it('uses a fresh CSP nonce and permits the official script, images and iframe', () => {
+    const policy = intellectMoneyCheckoutCsp(nonce);
+    expect(policy).toContain(`script-src 'nonce-${nonce}' https://merchant.intellectmoney.ru;`);
+    expect(policy).toContain('frame-src https://merchant.intellectmoney.ru;');
+    expect(policy).toContain('img-src https://merchant.intellectmoney.ru data:;');
+    expect(() => intellectMoneyCheckoutHtml(checkoutOrder, config, '\" onclick=bad')).toThrow('intellectmoney_invalid_nonce');
+  });
+  it.each(['success', 'close'])('returns to LiVi on widget %s without granting an item in JavaScript', event => {
+    const init = jest.fn();
+    const { location } = bootCheckout(intellectMoneyCheckoutHtml(checkoutOrder, config, nonce), init);
+    init.mock.calls[0][1][event === 'success' ? 'onSuccess' : 'onClosedWindow']();
+    expect(location.assign).toHaveBeenCalledWith('https://api.liviapp.com/api/cosmetics/payment-return');
+  });
+  it('shows a retry only if the provider script is unavailable', () => {
+    expect(bootCheckout(intellectMoneyCheckoutHtml(checkoutOrder, config, nonce)).error.hidden).toBe(false);
+    const init = jest.fn(() => { throw Error('Provider unavailable'); });
+    expect(bootCheckout(intellectMoneyCheckoutHtml(checkoutOrder, config, nonce), init).error.hidden).toBe(false);
   });
 });
 

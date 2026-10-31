@@ -1,4 +1,4 @@
-import { randomUUID } from 'crypto';
+import { randomBytes, randomUUID } from 'crypto';
 import { Router } from 'express';
 import mongoose from 'mongoose';
 import UserModel from '../models/User';
@@ -7,7 +7,7 @@ import IntellectMoneyPurchaseModel, { type IntellectMoneyPurchaseRecord } from '
 import { COSMETIC_PRICES, isValidCosmetic, serializeCosmeticEntitlements } from '../utils/cosmeticCatalog';
 import {
   intellectMoneyConfig, intellectMoneyAmount, intellectMoneyCheckoutHtml,
-  intellectMoneyCheckoutUrl, verifyIntellectMoneyNotification,
+  intellectMoneyCheckoutUrl, intellectMoneyCheckoutCsp, verifyIntellectMoneyNotification,
 } from '../utils/intellectMoney';
 import type { AuthenticatedRequest } from '../utils/runtimeTypes';
 import { logger } from '../utils/logger';
@@ -74,7 +74,8 @@ export function createIntellectMoneyCosmeticsRouter(broadcastFrame: BroadcastFra
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; form-action https://merchant.intellectmoney.ru; base-uri 'none'; frame-ancestors 'none'");
+    const nonce = randomBytes(18).toString('base64');
+    res.setHeader('Content-Security-Policy', intellectMoneyCheckoutCsp(nonce));
     const paymentId = String(req.params.paymentId || '');
     if (!PAYMENT_ID.test(paymentId)) return res.status(404).send('Платёж не найден');
     try {
@@ -92,7 +93,7 @@ export function createIntellectMoneyCosmeticsRouter(broadcastFrame: BroadcastFra
       if (!user) return res.status(404).send('Пользователь не найден');
       const owned = order.kind === 'frame' ? user.purchasedFrameIds : user.purchasedBackgroundIds;
       if (owned?.includes(order.itemId)) return res.redirect(302, `${config.publicBaseUrl}/api/cosmetics/payment-return`);
-      return res.type('html').send(intellectMoneyCheckoutHtml(order, config));
+      return res.type('html').send(intellectMoneyCheckoutHtml(order, config, nonce));
     } catch {
       return res.status(503).send('Оплата временно недоступна. Попробуйте позже.');
     }

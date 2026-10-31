@@ -139,7 +139,10 @@ describe('IntellectMoney Legendary checkout and fulfillment', () => {
     expect(res.statusCode).toBe(200);
     expect(res.headers['Cache-Control']).toBe('no-store');
     expect(res.headers['Referrer-Policy']).toBe('no-referrer');
-    expect(res.body).toContain('name="PurchaseHash"');
+    expect(res.body).toContain('/v2/js/IntellectMoneyMerchantWidget.js');
+    const nonce = /<script nonce="([^"]+)">/.exec(res.body)?.[1];
+    expect(nonce).toBeTruthy();
+    expect(res.headers['Content-Security-Policy']).toContain(`script-src 'nonce-${nonce}'`);
     expect(res.body).not.toContain(secret);
     expect(User.findOneAndUpdate).not.toHaveBeenCalled();
   });

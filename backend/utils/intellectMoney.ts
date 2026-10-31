@@ -42,8 +42,27 @@ export function intellectMoneyCheckoutUrl(config: IntellectMoneyConfig, paymentI
   return `${config.publicBaseUrl}/api/cosmetics/intellectmoney/checkout/${encodeURIComponent(paymentId)}`;
 }
 
-function html(value: string): string {
-  return value.replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]!);
+export const INTELLECTMONEY_WIDGET_SCRIPT = 'https://merchant.intellectmoney.ru/v2/js/IntellectMoneyMerchantWidget.js';
+
+export function intellectMoneyCheckoutCsp(nonce: string): string {
+  return `default-src 'none'; script-src 'nonce-${nonce}' https://merchant.intellectmoney.ru; style-src 'unsafe-inline'; img-src https://merchant.intellectmoney.ru data:; frame-src https://merchant.intellectmoney.ru; connect-src https://merchant.intellectmoney.ru; form-action https://merchant.intellectmoney.ru; base-uri 'none'; frame-ancestors 'none'`;
+}
+
+function scriptJson(value: unknown): string {
+  return JSON.stringify(value).replace(/[<>&\u2028\u2029]/g, char => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`);
+}
+
+// The same tealDeep palette and cosine fade as WelcomeStageBackground.tsx.
+function legendaryBackground(): string {
+  const middle = [37, 43, 52], edge = [40, 46, 56];
+  const stops = Array.from({ length: 33 }, (_, index) => {
+    const position = index / 32;
+    const distance = Math.min(1, Math.max(0, (Math.abs(position - 0.5) * 2 - 0.3) / 0.7));
+    const mix = (1 - Math.cos(Math.PI * distance)) / 2;
+    const rgb = middle.map((color, channel) => (color + (edge[channel] - color) * mix).toFixed(3));
+    return `rgb(${rgb.join(',')}) ${position * 100}%`;
+  });
+  return `linear-gradient(180deg,${stops.join(',')})`;
 }
 
 function moscowDate(date: Date): string {
@@ -53,7 +72,8 @@ function moscowDate(date: Date): string {
   }).format(date);
 }
 
-export function intellectMoneyCheckoutHtml(order: IntellectMoneyOrder, config: IntellectMoneyConfig): string {
+export function intellectMoneyCheckoutHtml(order: IntellectMoneyOrder, config: IntellectMoneyConfig, nonce: string): string {
+  if (!/^[a-zA-Z0-9+/=]+$/.test(nonce)) throw new Error('intellectmoney_invalid_nonce');
   const returnUrl = `${config.publicBaseUrl}/api/cosmetics/payment-return`;
   const fields: Record<string, string> = {
     EshopId: order.eshopId, OrderId: order.paymentId, ServiceName: order.serviceName,
@@ -64,17 +84,37 @@ export function intellectMoneyCheckoutHtml(order: IntellectMoneyOrder, config: I
     PurchaseHash: intellectMoneyPurchaseHash(order, config.secretKey),
   };
   return `<!doctype html><html lang="ru"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>LiVi — Legendary</title>
-<style>body{margin:0;background:#252b34;color:#fff;font:17px system-ui,sans-serif;display:grid;min-height:100vh;place-items:center}main{box-sizing:border-box;width:min(92vw,420px);padding:28px;border-radius:24px;background:#344252}h1{font-size:24px}label{display:block;margin:24px 0 8px}input,button{box-sizing:border-box;width:100%;padding:14px;border:0;border-radius:12px;font:inherit}button{margin-top:18px;background:#50a5d0;color:#10202b;font-weight:600;cursor:pointer}p{line-height:1.5}a{color:#7fc4e8}.muted{color:#c1cbd8;font-size:14px}</style>
-</head><body><main><h1>LiVi · Legendary</h1><p>${html(order.serviceName)}</p>
-<p>${html(order.amount)} ${order.currency === 'TST' ? 'TST · тестовая оплата' : '₽'}</p>
-<form method="post" action="https://merchant.intellectmoney.ru/" accept-charset="UTF-8">
-${Object.entries(fields).map(([key, value]) => `<input type="hidden" name="${key}" value="${html(value)}">`).join('\n')}
-<label for="email">Email для подтверждения оплаты</label>
-<input id="email" name="Email" type="email" autocomplete="email" maxlength="100" required>
-<button type="submit">Перейти к оплате</button></form>
-<p class="muted">Оплата на защищённой странице IntellectMoney. Данные карты не передаются LiVi.</p>
-<a href="${html(returnUrl)}">Вернуться в LiVi</a></main></body></html>`;
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="light"><title>LiVi — Legendary</title>
+<style>
+html{min-height:100%;background:#252b34}body{margin:0;min-height:100vh;min-height:100dvh;background:${legendaryBackground()};background-attachment:fixed;font:16px system-ui,sans-serif;color:#fff}
+[hidden]{display:none!important}#checkout-error{max-width:320px;margin:35vh auto 0;padding:20px;text-align:center}#checkout-error a{color:#83c8e8}
+/* Keep the provider's form intact; only its outer modal sits on the LiVi background. */
+#intellectmoney__widget__modal{background:transparent!important}
+#intellectmoney__widget__modal-content{box-sizing:border-box;width:calc(100% - 32px);max-width:480px;min-height:100vh;min-height:100dvh;height:auto!important;margin:0 auto!important;padding:24px 0}
+#intellectmoney__widget__wraper_modal-frame{height:auto!important;background:transparent!important;overflow:visible!important}
+#iFrameIm{min-height:490px!important;max-height:none!important;border-radius:24px!important;color-scheme:light}
+</style>
+<script defer src="${INTELLECTMONEY_WIDGET_SCRIPT}"></script>
+</head><body>
+<p id="checkout-error" role="alert" hidden>Не удалось открыть оплату. <a href="">Повторить</a></p>
+<noscript>Для открытия оплаты включите JavaScript в браузере.</noscript>
+<script nonce="${nonce}">
+(function(){
+  var started=false;
+  function unavailable(){if(!started)document.getElementById('checkout-error').hidden=false;}
+  var timeout=setTimeout(unavailable,15000);
+  window.addEventListener('load',function(){
+    var widget=window.IntellectMoneyMerchantWidget;
+    if(!widget||!widget.Configuration){clearTimeout(timeout);unavailable();return;}
+    function returnToApp(){window.location.assign(${scriptJson(returnUrl)});}
+    try{
+      widget.Configuration.init(${scriptJson(fields)},{onSuccess:returnToApp,onClosedWindow:returnToApp});
+      started=true;clearTimeout(timeout);document.getElementById('checkout-error').hidden=true;
+    }catch(_){clearTimeout(timeout);unavailable();}
+  });
+})();
+</script></body></html>`;
 }
 
 /** Accept decimal formatting differences without floating-point rounding or fractional kopecks. */
