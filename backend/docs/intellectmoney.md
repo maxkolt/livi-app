@@ -19,10 +19,13 @@ never grant an item; the signed server notification remains authoritative.
 Append the values in `backend/.env.payments.example` to the backend environment.
 `INTELLECTMONEY_SECRET_KEY` must be exactly the SecretKey in the shop's connection
 settings. Quote it if it contains spaces or `#`. Do not use an API token here.
-The currency must match the account selected in the merchant cabinet. Shop 473314
-is configured with `INTELLECTMONEY_CURRENCY=RUB` on request, using the selected
-RSB test account. TST is a separate test-currency mode; the backend never changes
-TST to RUB automatically. Currency alone does not determine whether an account is live.
+Use `INTELLECTMONEY_CURRENCY=TST`. The currency must match the account linked to
+the shop, not just the balance currently selected on the cabinet's home page.
+For shop 473314, General settings → Account must select **«Тестовый счёт»**
+(TST account ID 4822630893). **«Счёт РСБ тестовый»** is a different account, which
+was selected in the original shop screenshot. A TST balance on the first account
+does not mean that the shop is linked to it. Save the correct account before
+retrying the widget. The backend never changes TST to RUB automatically.
 Restart the backend after changing its environment.
 
 In IntellectMoney → Shops → 473314 → Connection settings:
