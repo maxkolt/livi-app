@@ -33,7 +33,10 @@ In IntellectMoney → Shops → 473314 → Connection settings:
 - Set **Result URL** to `https://api.liviapp.com/api/cosmetics/intellectmoney/webhook`.
 - Set **Success URL** and **Back URL** to `https://api.liviapp.com/api/cosmetics/payment-return`.
 - Use **POST** and **UTF-8** for notifications.
-- Enable **Require request data signature** (PurchaseHash).
+- Enable **Require request data signature**. Checkout passes the six-field MD5
+  signature as `Hash` and also as `PurchaseHash` for widget compatibility. The
+  merchant key remains on the backend. This fixes the provider error
+  `Не передан обязательный параметр 'hash'` when a shop requires a signature.
 - Keep **Accept only unique purchase numbers** enabled.
 - In Notifications enable **paid (5)** and **canceled (4)** events; the handler also
   recognizes created (3), hold (6), partial payment (7), and refund (8).

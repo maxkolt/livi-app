@@ -131,30 +131,30 @@ def enableProguardInReleaseBuilds = (
 def jscFlavor = 'io.github.react-native-community:jsc-android:2026004.+'
 
 android {
-    ndkVersion rootProject.ext.ndkVersion
+    ndkVersion = rootProject.ext.ndkVersion
 
-    buildToolsVersion rootProject.ext.buildToolsVersion
-    compileSdk rootProject.ext.compileSdkVersion
+    buildToolsVersion = rootProject.ext.buildToolsVersion
+    compileSdk = rootProject.ext.compileSdkVersion
 
     buildFeatures {
-        buildConfig true
+        buildConfig = true
     }
 
-    namespace 'com.kolt12max.livi'
+    namespace = 'com.kolt12max.livi'
     defaultConfig {
-        applicationId 'com.kolt12max.livi'
-        minSdkVersion rootProject.ext.minSdkVersion
-        targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 207
-        versionName "1.1.22"
+        applicationId = 'com.kolt12max.livi'
+        minSdkVersion = rootProject.ext.minSdkVersion
+        targetSdkVersion = rootProject.ext.targetSdkVersion
+        versionCode = 207
+        versionName = "1.1.22"
         buildConfigField "String", "APPMETRICA_API_KEY", "\"${appMetricaApiKeyEscaped}\""
     }
     signingConfigs {
     debug {
-        storeFile file('debug.keystore')
-        storePassword 'android'
-        keyAlias 'androiddebugkey'
-        keyPassword 'android'
+        storeFile = file('debug.keystore')
+        storePassword = 'android'
+        keyAlias = 'androiddebugkey'
+        keyPassword = 'android'
     }
     release {
         // Release signing secrets must NOT live in the repo.
@@ -202,47 +202,47 @@ android {
         }
         if (useDebugSigning) {
             println "[livi] WARNING: Signing release with DEBUG key because LIVI_ALLOW_DEBUG_RELEASE_SIGNING=1 — for local test only, not for Play Store."
-            storeFile file('debug.keystore')
-            storePassword 'android'
-            keyAlias 'androiddebugkey'
-            keyPassword 'android'
+            storeFile = file('debug.keystore')
+            storePassword = 'android'
+            keyAlias = 'androiddebugkey'
+            keyPassword = 'android'
         } else {
-            storeFile storeFileResolved
+            storeFile = storeFileResolved
             def storePass = envOrProp('LIVI_RELEASE_STORE_PASSWORD')
             def keyAliasVal = envOrProp('LIVI_RELEASE_KEY_ALIAS')
             def keyPass = envOrProp('LIVI_RELEASE_KEY_PASSWORD')
-            if (storePass != null) storePassword storePass
-            if (keyAliasVal != null) keyAlias keyAliasVal
-            if (keyPass != null) keyPassword keyPass
+            if (storePass != null) storePassword = storePass
+            if (keyAliasVal != null) keyAlias = keyAliasVal
+            if (keyPass != null) keyPassword = keyPass
         }
     }
 }
     buildTypes {
     debug {  
-        signingConfig signingConfigs.debug
+        signingConfig = signingConfigs.debug
         // Install debug/dev-client alongside the Play Store app (different signing key).
-        applicationIdSuffix ".dev"
+        applicationIdSuffix = ".dev"
         resValue "string", "app_name", "LiVi Dev"
         buildConfigField "boolean", "ENABLE_FCM_VERBOSE_LOG", "true"
         buildConfigField "String", "API_BASE_URL", "\"${apiBaseUrlEscaped}\""
     }
     release {
-        signingConfig signingConfigs.release
+        signingConfig = signingConfigs.release
         buildConfigField "boolean", "ENABLE_FCM_VERBOSE_LOG", "false"
         buildConfigField "String", "API_BASE_URL", "\"${apiBaseUrlEscaped}\""
-        shrinkResources (findProperty('android.enableShrinkResourcesInReleaseBuilds')?.toBoolean() ?: false)
-        minifyEnabled enableProguardInReleaseBuilds
+        shrinkResources = (findProperty('android.enableShrinkResourcesInReleaseBuilds')?.toBoolean() ?: false)
+        minifyEnabled = enableProguardInReleaseBuilds
         proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
-        crunchPngs (findProperty('android.enablePngCrunchInReleaseBuilds')?.toBoolean() ?: true)
+        crunchPngs = (findProperty('android.enablePngCrunchInReleaseBuilds')?.toBoolean() ?: true)
     }
 }
     packagingOptions {
         jniLibs {
-            useLegacyPackaging (findProperty('expo.useLegacyPackaging')?.toBoolean() ?: false)
+            useLegacyPackaging = (findProperty('expo.useLegacyPackaging')?.toBoolean() ?: false)
         }
     }
     androidResources {
-        ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:!CVS:!thumbs.db:!picasa.ini:!*~'
+        ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:!CVS:!thumbs.db:!picasa.ini:!*~'
     }
 }
 

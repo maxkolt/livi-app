@@ -29,7 +29,9 @@ type UseHomeBadgesArgs = {
 };
 
 const UNREAD_FLOOR_TTL_MS = 2500;
-const UNREAD_SERVER_RECONCILE_DELAY_MS = 900;
+// Reconcile after the optimistic floor expires; an earlier reply cannot correct
+// a message already counted by the native push inbox before socket replay.
+const UNREAD_SERVER_RECONCILE_DELAY_MS = UNREAD_FLOOR_TTL_MS + 100;
 /** Дедуп optimistic +1 по message.id (повторный message:received → бейдж «2» при одном пузыре). */
 const COUNTED_UNREAD_MESSAGE_IDS_MAX = 300;
 
@@ -484,7 +486,8 @@ export function useHomeBadges({ friends, friendsRef }: UseHomeBadgesArgs) {
     const updateOne = async (pid: string) => {
       try {
         const result = await getUnreadCount(pid);
-        const raw = result.ok ? (result.count || 0) : 0;
+        if (!result.ok) return;
+        const raw = result.count || 0;
         const count = resolveServerUnreadCount(pid, raw);
         if (!disposed) {
           setUnreadByUserState((prev) => {

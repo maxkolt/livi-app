@@ -182,6 +182,10 @@ ensureSuppressClearedWhenBackgrounded();
 
 /** Тап по уведомлению / deep link: сразу открыть фильтр «Пропущенные» на welcome Calls. */
 const welcomeCallsFilterPendingListeners = new Set<() => void>();
+let welcomeCallsFilterSnapshot: 'all' | 'missed' = 'all';
+export function getWelcomeCallsFilterSnapshot(): 'all' | 'missed' {
+  return welcomeCallsFilterSnapshot;
+}
 export function onPendingWelcomeCallsFilter(cb: () => void): () => void {
   welcomeCallsFilterPendingListeners.add(cb);
   return () => {
@@ -190,6 +194,7 @@ export function onPendingWelcomeCallsFilter(cb: () => void): () => void {
 }
 
 export function setPendingWelcomeCallsFilter(filter: 'all' | 'missed' | null): void {
+  if (filter) welcomeCallsFilterSnapshot = filter;
   const g = global as GlobalEventState;
   g.__welcomeCallsPendingFilterRef = g.__welcomeCallsPendingFilterRef || { current: null as 'all' | 'missed' | null };
   g.__welcomeCallsPendingFilterRef.current = filter;
@@ -211,6 +216,10 @@ export function consumePendingWelcomeCallsFilter(): 'all' | 'missed' | null {
 
 /** Тап по уведомлению о непрочитанных → фильтр Unread на welcome Chat. */
 const welcomeChatsFilterPendingListeners = new Set<() => void>();
+let welcomeChatsFilterSnapshot: 'all' | 'unread' = 'all';
+export function getWelcomeChatsFilterSnapshot(): 'all' | 'unread' {
+  return welcomeChatsFilterSnapshot;
+}
 export function onPendingWelcomeChatsFilter(cb: () => void): () => void {
   welcomeChatsFilterPendingListeners.add(cb);
   return () => {
@@ -219,6 +228,7 @@ export function onPendingWelcomeChatsFilter(cb: () => void): () => void {
 }
 
 export function setPendingWelcomeChatsFilter(filter: 'all' | 'unread' | null): void {
+  if (filter) welcomeChatsFilterSnapshot = filter;
   const g = global as GlobalEventState;
   g.__welcomeChatsPendingFilterRef = g.__welcomeChatsPendingFilterRef || { current: null as 'all' | 'unread' | null };
   g.__welcomeChatsPendingFilterRef.current = filter;

@@ -5227,17 +5227,6 @@ const handleClearNick = useCallback(async () => {
           ...prev,
           [pushMessageFrom]: Math.max(1, prev[pushMessageFrom] || 0),
         }));
-        const peer = friends.find((f) => String(f.id) === pushMessageFrom);
-        const peerName = (peer?.name && peer.name.trim()) || peer?.nick || '—';
-        try {
-          (navigation).navigate('Chat', {
-            peerId: pushMessageFrom,
-            peerName,
-            peerAvatarVer: peer?.avatarVer || 0,
-            peerAvatarThumbB64: peer?.avatarThumbB64 || '',
-            peerOnline: !!peer?.online,
-          });
-        } catch {}
       }
     } else if (wantFriends) {
       setWelcomeActiveTab('friends');

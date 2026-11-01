@@ -1,6 +1,7 @@
 import type { ChatMessage } from '../../chat/chatMessageTypes';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { AppState } from 'react-native';
 import {
   fetchChatPreviews,
   getChatMessagesLocal,
@@ -14,6 +15,7 @@ import {
   onOutboxMessageFailed,
   onOutboxPendingChange,
   persistOutgoingReadStatus,
+  socket,
 } from '../../../sockets/socket';
 import type { Lang } from '../../../utils/i18n';
 import {
@@ -38,7 +40,7 @@ let previewMemory: Record<string, ChatPreview> = {};
 /** Хуки вкладки, которым нужен результат prefetch (в т.ч. скрытая keep-alive вкладка). */
 const prefetchListeners = new Set<() => void>();
 
-function getChatPreviewSnapshot(): Record<string, ChatPreview> {
+export function getChatPreviewSnapshot(): Record<string, ChatPreview> {
   return previewMemory;
 }
 
@@ -137,35 +139,39 @@ function previewFromServerMessage(msg: ChatMessage | null | undefined, lang: Lan
   return previewWithStatus(msg, text, at || Date.now());
 }
 
-async function hydrateMissingPreviewsFromServer(
+async function refreshPreviewsFromServer(
   friendIds: string[],
   local: Record<string, ChatPreview>,
   lang: Lang,
 ): Promise<Record<string, ChatPreview>> {
-  const missing = friendIds.filter((id) => !local[id]);
-  if (!missing.length) return local;
-
   let cleared: Set<string>;
   try {
     cleared = await getClearedForMePeerIds();
   } catch {
     cleared = new Set();
   }
-  const toFetch = missing.filter((id) => !cleared.has(id));
+  // A badge can arrive through FCM before the message reaches local history.
+  // Existing local previews must be refreshed too, including after reconnect.
+  const toFetch = friendIds.filter((id) => !cleared.has(id));
   if (!toFetch.length) return local;
 
   try {
-    const result = await fetchChatPreviews(toFetch);
-    if (!result?.ok || !result.previews) return local;
     const next = { ...local };
     const me = String(getCurrentUserId() || '').trim();
-    for (const peerId of toFetch) {
-      const msg = result.previews[peerId];
-      const preview = previewFromServerMessage(msg, lang);
-      if (!preview) continue;
-      next[peerId] = preview;
-      if (me && msg) {
-        void globalMessageStorage.saveMessage(msg, me).catch(() => {});
+    for (let offset = 0; offset < toFetch.length; offset += 100) {
+      const batch = toFetch.slice(offset, offset + 100);
+      const result = await fetchChatPreviews(batch);
+      if (String(getCurrentUserId() || '').trim() !== me) return local;
+      if (!result?.ok || !result.previews) continue;
+      for (const peerId of batch) {
+        const msg = result.previews[peerId];
+        const preview = previewFromServerMessage(msg, lang);
+        if (!preview) continue;
+        if (next[peerId] && next[peerId].at > preview.at) continue;
+        next[peerId] = keepReadStatus(next[peerId], preview);
+        if (me && msg) {
+          void globalMessageStorage.saveMessage(msg, me).catch(() => {});
+        }
       }
     }
     return next;
@@ -224,12 +230,12 @@ export async function prefetchChatPreviews(friendIds: string[], lang: Lang): Pro
   // а вкладка всё это время оставалась бы пустой.
   previewMemory = mergeLiveMemory(ids, next);
   notifyPreviewListeners();
-  const hydrated = await hydrateMissingPreviewsFromServer(ids, next, lang);
+  const hydrated = await refreshPreviewsFromServer(ids, next, lang);
   previewMemory = mergeLiveMemory(ids, hydrated);
   notifyPreviewListeners();
 }
 
-export function useChatPreviews(friendIds: string[], lang: Lang, enabled: boolean) {
+export function useChatPreviews(friendIds: string[], lang: Lang, enabled: boolean, unreadRevision = '') {
   // Скрытая вкладка (prewarm) держит превью в синхроне с memory: строки, рамки и
   // аватары монтируются заранее, а не в момент тапа. Перезагрузки — только когда enabled.
   const [previews, setPreviews] = useState<Record<string, ChatPreview>>(() => ({
@@ -253,6 +259,7 @@ export function useChatPreviews(friendIds: string[], lang: Lang, enabled: boolea
   const idsRef = useRef(friendIds);
   const langRef = useRef(lang);
   const reloadPromiseRef = useRef<Promise<void> | null>(null);
+  const reloadAgainRef = useRef(false);
   const lastReloadCompletedAtRef = useRef(0);
 
   useEffect(() => {
@@ -263,9 +270,12 @@ export function useChatPreviews(friendIds: string[], lang: Lang, enabled: boolea
     langRef.current = lang;
   }, [lang]);
 
-  const reload = useCallback((): Promise<void> => {
-    if (reloadPromiseRef.current) return reloadPromiseRef.current;
-    if (Date.now() - lastReloadCompletedAtRef.current < 750) return Promise.resolve();
+  const reload = useCallback((force = false): Promise<void> => {
+    if (reloadPromiseRef.current) {
+      if (force) reloadAgainRef.current = true;
+      return reloadPromiseRef.current;
+    }
+    if (!force && Date.now() - lastReloadCompletedAtRef.current < 750) return Promise.resolve();
 
     let tracked: Promise<void>;
     const task = (async () => {
@@ -287,7 +297,9 @@ export function useChatPreviews(friendIds: string[], lang: Lang, enabled: boolea
       );
       // Не затирать более свежий live-preview (message:received), если persist ещё догоняет.
       const withLive = mergeLiveMemory(ids, next);
-      const hydrated = await hydrateMissingPreviewsFromServer(ids, withLive, langRef.current);
+      previewMemory = withLive;
+      setPreviews((prev) => (previewMapsEqual(prev, withLive) ? prev : withLive));
+      const hydrated = await refreshPreviewsFromServer(ids, withLive, langRef.current);
       const finalMap = mergeLiveMemory(ids, hydrated);
       previewMemory = finalMap;
       setPreviews((prev) => (previewMapsEqual(prev, finalMap) ? prev : finalMap));
@@ -295,6 +307,10 @@ export function useChatPreviews(friendIds: string[], lang: Lang, enabled: boolea
     tracked = task.finally(() => {
       lastReloadCompletedAtRef.current = Date.now();
       if (reloadPromiseRef.current === tracked) reloadPromiseRef.current = null;
+      if (reloadAgainRef.current) {
+        reloadAgainRef.current = false;
+        void reload(true);
+      }
     });
     reloadPromiseRef.current = tracked;
     return tracked;
@@ -310,7 +326,20 @@ export function useChatPreviews(friendIds: string[], lang: Lang, enabled: boolea
 
   useEffect(() => {
     if (!enabled) return;
-    void reload();
+    void reload(true);
+  }, [enabled, reload, unreadRevision]);
+
+  useEffect(() => {
+    if (!enabled) return;
+    const refresh = () => { void reload(true); };
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') refresh();
+    });
+    socket.on('connect', refresh);
+    return () => {
+      sub.remove();
+      socket.off('connect', refresh);
+    };
   }, [enabled, reload]);
 
   // Слушаем всегда: иначе при выключенной вкладке Чаты memory/превью не обновляются,
@@ -327,6 +356,7 @@ export function useChatPreviews(friendIds: string[], lang: Lang, enabled: boolea
       void unmarkChatsClearedForMe([peerId]);
       if (idsRef.current.length && !idsRef.current.includes(peerId)) return;
       const at = messageTimestampMs(message) || Date.now();
+      if (previewMemory[peerId]?.at > at) return;
       const text = previewTextFromMessage(message, langRef.current);
       const preview = keepReadStatus(previewMemory[peerId], previewWithStatus(message, text, at));
       previewMemory = { ...previewMemory, [peerId]: preview };

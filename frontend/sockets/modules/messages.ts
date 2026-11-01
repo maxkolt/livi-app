@@ -309,7 +309,7 @@ export function fetchMessages(payload: {
   with: string;
   limit?: number;
   before?: string;
-}) {
+}, options: { httpOnly?: boolean } = {}) {
   const viaSocket = () =>
     emitAck<MessagePage>("messages:fetch", payload);
 
@@ -339,6 +339,7 @@ export function fetchMessages(payload: {
     r?.ok === true && Array.isArray(r.messages) ? { ...r, messages: await decryptMessageList(r.messages) } : r;
 
   return (async () => {
+    if (options.httpOnly) return await decryptPage(await viaHttp());
     try {
       const r = await viaSocket();
       if (r?.ok === true) return await decryptPage(r);
@@ -419,7 +420,7 @@ export function fetchChatPreviews(withIds: string[]) {
       ok: boolean;
       previews?: Record<string, PreviewMsg>;
       error?: string;
-    }>("messages:chat_previews", { withIds: ids }, 12000, 2);
+    }>("messages:chat_previews", { withIds: ids }, 4000, 0);
 
   const viaFetchFallback = async () => {
     const previews: Record<string, PreviewMsg> = {};
@@ -431,7 +432,7 @@ export function fetchChatPreviews(withIds: string[]) {
         cursor += 1;
         const peerId = ids[idx]!;
         try {
-          const page = await fetchMessages({ with: peerId, limit: 1 });
+          const page = await fetchMessages({ with: peerId, limit: 1 }, { httpOnly: true });
           const list = page?.ok && Array.isArray(page.messages) ? page.messages : [];
           const last = list.length ? list[list.length - 1] : null;
           if (last?.id) previews[peerId] = last as PreviewMsg;
@@ -453,27 +454,28 @@ export function fetchChatPreviews(withIds: string[]) {
   };
 
   return (async () => {
+    // A VPN can leave a socket marked connected while its acknowledgements stall.
+    // Start the authenticated HTTP read promptly instead of waiting through reconnect retries.
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const r = await viaSocket();
+      if (!socket.connected || shared.reconnecting) return await viaFetchFallback();
+      const r = await Promise.race([
+        viaSocket(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error('preview_socket_timeout')), 1500);
+        }),
+      ]);
       if (r?.ok && r.previews && typeof r.previews === "object") return await decryptPreviews(r);
       return viaFetchFallback();
     } catch (e) {
       const msg = String((e as { message?: string } | null)?.message || e || "");
-      const retriable = msg.includes("offline") || msg.includes("timeout") || msg.includes("Ack timeout");
-      if (retriable) {
-        try {
-          await waitForConnect(20000);
-          const r = await viaSocket();
-          if (r?.ok && r.previews && typeof r.previews === "object") return await decryptPreviews(r);
-        } catch {
-          // fall through
-        }
-      }
       try {
         return await viaFetchFallback();
       } catch {
         return { ok: false as const, previews: {} as Record<string, PreviewMsg>, error: msg };
       }
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   })();
 }

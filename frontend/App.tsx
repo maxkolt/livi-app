@@ -48,7 +48,7 @@ import SystemPiPLogoLayer from "./src/pip/SystemPiPLogoLayer";
 import SystemPiPCaptureHost from "./src/pip/SystemPiPCaptureHost";
 import type { RootStackParamList } from "./navigation/types";
 import { addNotificationListeners, ensureInitialNotificationPermissions, openIncomingCallScreen, openAnswerCallScreen, handleDeclineCallFromDeepLink, registerAndSendPushToken, clearCallRelatedNotificationsAndSyncBadge, syncAppBadgeFromMissedCount, recordMissedCallForUser, applyPendingMissedCallsFromNative, getMissedCountByUserFromNative } from './utils/pushNotifications';
-import { forceCallLogUiNow, recordCallLog, recordCancelledCall, recordNoAnswerCall, recordPendingDeclinedCalls } from './screens/home/callLog';
+import { forceCallLogUiNow, recordCancelledCall, recordNoAnswerCall, recordPendingDeclinedCalls } from './screens/home/callLog';
 import { markChatCallBubbleEligible } from './screens/chat/chatCallEvents';
 import { getInstallId, getInstallSecret } from './utils/installId';
 import { closeCallAudioSession } from './utils/callAudioSession';
@@ -3958,7 +3958,6 @@ function AppContent() {
         // Журнал Calls сразу (не ждать setTimeout/badge) — иначе «Пропущенный» опаздывает.
         if (callerId) {
           try {
-            recordCallLog({ peerId: callerId, direction: 'missed' });
             forceCallLogUiNow('call_cancel_missed_home');
           } catch (_) {}
         }
@@ -3999,7 +3998,6 @@ function AppContent() {
       try {
         if (callerId && isCallee && !calleeAlreadyOnHome) {
           try {
-            recordCallLog({ peerId: callerId, direction: 'missed' });
             forceCallLogUiNow('call_cancel_missed');
           } catch {}
           await recordMissedCallForUser(callerId, {

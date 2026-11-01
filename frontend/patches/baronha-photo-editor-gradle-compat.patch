@@ -1,0 +1,7 @@
+--- a/android/build.gradle
++++ b/android/build.gradle
+@@ -7 +7 @@
+-    jcenter()
++    mavenCentral()
+@@ -55 +54,0 @@
+-  jcenter()

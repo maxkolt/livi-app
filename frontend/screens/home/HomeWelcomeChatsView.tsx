@@ -68,7 +68,7 @@ import { friendMatchesNameSearch, getFriendDisplay } from './friendHelpers';
 import { useChatPreviews } from './hooks/useChatPreviews';
 import { formatWelcomeChatTime } from './chatPreview';
 import type { ChatReadStatus } from '../chat/chatMessageIds';
-import { consumePendingWelcomeChatsFilter, onPendingWelcomeChatsFilter, setWelcomeViewingChats, shouldSkipHomeUiSettle } from '../../utils/globalEvents';
+import { consumePendingWelcomeChatsFilter, getWelcomeChatsFilterSnapshot, setPendingWelcomeChatsFilter, onPendingWelcomeChatsFilter, setWelcomeViewingChats, shouldSkipHomeUiSettle } from '../../utils/globalEvents';
 import { markUnreadNotificationsSeen } from '../../utils/pushNotifications';
 import { usePaneList } from '../../utils/paneVisibility';
 import { clearWelcomeChatsForMe } from './clearWelcomeChats';
@@ -153,7 +153,7 @@ function HomeWelcomeChatsViewInner({
   const tabletLayout = isWelcomeTabletLayout(windowWidth, windowHeight);
   const compactLandscape =
     !tabletLayout && windowWidth > 0 && windowHeight > 0 && windowWidth / windowHeight > 1.05;
-  const [filter, setFilter] = useState<ChatsFilter>('all');
+  const [filter, setFilter] = useState<ChatsFilter>(getWelcomeChatsFilterSnapshot);
   const [searchOpen, setSearchOpen] = useState(false);
   const [glassHeaderH, setGlassHeaderH] = useGlassHeaderHeight(tabletLayout, compactLandscape, searchOpen);
   const [searchQuery, setSearchQuery] = useState('');
@@ -165,13 +165,14 @@ function HomeWelcomeChatsViewInner({
 
   const trimmedQuery = searchQuery.trim();
   const friendIds = useMemo(() => allFriends.map((f) => String(f.id)), [allFriends]);
-  const { previews, reloadPreviews, dropPreviews } = useChatPreviews(friendIds, lang, active);
+  const unreadRevision = JSON.stringify(unreadByUser);
+  const { previews, reloadPreviews, dropPreviews } = useChatPreviews(friendIds, lang, active, unreadRevision);
 
   // Тап по уведомлению о непрочитанных → фильтр Unread.
   useEffect(() => {
     const applyPending = () => {
       if (!active) return;
-      const pending = consumePendingWelcomeChatsFilter();
+      const pending = consumePendingWelcomeChatsFilter() ?? getWelcomeChatsFilterSnapshot();
       if (pending === 'unread') {
         setFilter('unread');
       } else if (pending === 'all') {
@@ -774,6 +775,7 @@ function HomeWelcomeChatsViewInner({
               onPress={() => {
                 pauseSearchDismissOnKeyboardHide();
                 setFilter('all');
+                setPendingWelcomeChatsFilter('all');
               }}
               accessibilityRole="button"
               accessibilityState={{ selected: filter === 'all' }}
@@ -803,6 +805,7 @@ function HomeWelcomeChatsViewInner({
               onPress={() => {
                 pauseSearchDismissOnKeyboardHide();
                 setFilter('unread');
+                setPendingWelcomeChatsFilter('unread');
               }}
               accessibilityRole="button"
               accessibilityState={{ selected: filter === 'unread' }}

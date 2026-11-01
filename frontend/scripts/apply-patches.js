@@ -11,6 +11,9 @@ const root = path.resolve(__dirname, '..');
 const patchesDir = path.join(root, 'patches');
 
 const patches = [
+  { dir: 'node_modules/@baronha/react-native-photo-editor', file: 'baronha-photo-editor-gradle-compat.patch' },
+  { dir: 'node_modules/@livekit/react-native', file: 'livekit-react-native-gradle-compat.patch' },
+  { dir: 'node_modules/@shopify/react-native-skia', file: 'react-native-skia-gradle-compat.patch' },
   { dir: 'node_modules/expo-notifications', file: 'expo-notifications+0.31.4.patch' },
   { dir: 'node_modules/expo-dev-launcher', file: 'expo-dev-launcher+5.1.16.patch' },
   { dir: 'node_modules/expo-dev-launcher', file: 'expo-dev-launcher+5.1.16-android.patch' },

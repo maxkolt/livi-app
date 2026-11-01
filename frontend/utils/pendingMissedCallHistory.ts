@@ -1,7 +1,21 @@
 import { NativeModules, Platform } from 'react-native';
 import { recordMissedCallHistory } from '../screens/home/callLog';
+import type { PushNotificationData } from './notificationTypes';
 
 let importing: Promise<void> | null = null;
+
+/** A tapped notification may reach JS before either socket replay or the native inbox import. */
+export async function persistMissedCallNotificationHistory(data: PushNotificationData = {}): Promise<void> {
+  await persistPendingMissedCallHistory();
+  const peerId = String(data.from || data.fromUserId || '').trim();
+  const eventId = String(data.callId || '').trim();
+  if (!peerId || !eventId) return;
+  const at = Date.parse(String(data.sentAt || ''));
+  await recordMissedCallHistory({
+    peerId, eventId, fromNick: data.fromNick,
+    ...(Number.isFinite(at) && at > 0 ? { at } : {}),
+  });
+}
 
 /** The native inbox is independent of notification counts and is removed only after disk writes. */
 export function persistPendingMissedCallHistory(): Promise<void> {

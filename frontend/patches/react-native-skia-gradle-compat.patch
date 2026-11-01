@@ -1,0 +1,5 @@
+--- a/android/build.gradle
++++ b/android/build.gradle
+@@ -294 +294 @@
+-            from javaCompileTask.destinationDir
++            from javaCompileTask.destinationDirectory

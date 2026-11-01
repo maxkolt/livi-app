@@ -65,8 +65,8 @@ import {
 import { friendMatchesNameSearch, getFriendDisplay, displayAvatarLetter } from './friendHelpers';
 import { formatWelcomeCallTime } from './chatPreview';
 import { useCallLog } from './hooks/useCallLog';
-import { deleteCallLogIds, recordCallLog } from './callLog';
-import { consumePendingWelcomeCallsFilter, onPendingWelcomeCallsFilter, setWelcomeCallsMissedFilterActive, setWelcomeCallsTabSelected, setWelcomeViewingMissedCalls, shouldSkipHomeUiSettle } from '../../utils/globalEvents';
+import { deleteCallLogIds } from './callLog';
+import { consumePendingWelcomeCallsFilter, getWelcomeCallsFilterSnapshot, setPendingWelcomeCallsFilter, onPendingWelcomeCallsFilter, setWelcomeCallsMissedFilterActive, setWelcomeCallsTabSelected, setWelcomeViewingMissedCalls, shouldSkipHomeUiSettle } from '../../utils/globalEvents';
 import { markMissedNotificationsSeen } from '../../utils/pushNotifications';
 import { usePaneList } from '../../utils/paneVisibility';
 import { WelcomeCrownButton } from './WelcomeCrownButton';
@@ -401,7 +401,7 @@ function HomeWelcomeCallsViewInner({
   const tabletLayout = isWelcomeTabletLayout(windowWidth, windowHeight);
   const compactLandscape =
     !tabletLayout && windowWidth > 0 && windowHeight > 0 && windowWidth / windowHeight > 1.05;
-  const [filter, setFilter] = useState<CallsFilter>('all');
+  const [filter, setFilter] = useState<CallsFilter>(getWelcomeCallsFilterSnapshot);
   const [searchOpen, setSearchOpen] = useState(false);
   const [glassHeaderH, setGlassHeaderH] = useGlassHeaderHeight(tabletLayout, compactLandscape, searchOpen);
   const [searchQuery, setSearchQuery] = useState('');
@@ -420,7 +420,7 @@ function HomeWelcomeCallsViewInner({
   useEffect(() => {
     const applyPending = () => {
       if (!active) return;
-      const pending = consumePendingWelcomeCallsFilter();
+      const pending = consumePendingWelcomeCallsFilter() ?? getWelcomeCallsFilterSnapshot();
       if (pending === 'missed') {
         setFilter('missed');
         setPickMode(false);
@@ -496,16 +496,12 @@ function HomeWelcomeCallsViewInner({
     if (shouldSkipHomeUiSettle()) return;
     const peerIds = Object.keys(missedByUser).filter((id) => (missedByUser[id] || 0) > 0);
     if (peerIds.length === 0) return;
-    const haveMissed = new Set(
-      logEntries.filter((item) => item.direction === 'missed').map((item) => item.peerId),
-    );
     peerIds.forEach((peerId) => {
-      if (!haveMissed.has(peerId)) {
-        recordCallLog({ peerId, direction: 'missed' });
-      }
+      // A badge is not a call event. Native/socket delivery persists the row by
+      // callId; writing a synthetic row here races the inbox import and duplicates it.
       void clearMissedCallsForFriend(peerId);
     });
-  }, [active, clearMissedCallsForFriend, logEntries, missedByUser, pickMode]);
+  }, [active, clearMissedCallsForFriend, missedByUser, pickMode]);
 
   const closeSearch = useCallback(() => {
     skipSearchDismissRef.current = true;
@@ -965,6 +961,7 @@ function HomeWelcomeCallsViewInner({
                 onPress={() => {
                   pauseSearchDismissOnKeyboardHide();
                   setFilter('all');
+                setPendingWelcomeCallsFilter('all');
                 }}
                 accessibilityRole="button"
                 accessibilityState={{ selected: filter === 'all' }}
@@ -994,6 +991,7 @@ function HomeWelcomeCallsViewInner({
                 onPress={() => {
                   pauseSearchDismissOnKeyboardHide();
                   setFilter('missed');
+                setPendingWelcomeCallsFilter('missed');
                 }}
                 accessibilityRole="button"
                 accessibilityState={{ selected: filter === 'missed' }}

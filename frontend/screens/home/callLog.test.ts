@@ -25,6 +25,7 @@ import {
   recordCancelledCall,
   recordNoAnswerCall,
   recordPendingDeclinedCalls,
+  recordMissedCallHistory,
   subscribeCallLog,
 } from './callLog';
 
@@ -32,6 +33,22 @@ describe('local call log', () => {
   beforeAll(async () => {
     mockStorage.clear();
     await loadCallLog();
+  });
+
+  it('keeps one durable missed-call row for repeated native/socket delivery', async () => {
+    const event = { peerId: 'missed-peer', eventId: 'same-call', fromNick: 'Caller', at: 1000 };
+    expect(await recordMissedCallHistory(event)).toBe(true);
+    expect(await recordMissedCallHistory(event)).toBe(false);
+    const rows = getCallLogSnapshot().filter(row => row.id === 'missed:same-call');
+    expect(rows).toEqual([{ id: 'missed:same-call', peerId: 'missed-peer', direction: 'missed', fromNick: 'Caller', at: 1000 }]);
+    expect([...mockStorage.values()].some(raw => raw.includes('missed:same-call'))).toBe(true);
+  });
+
+  it('preserves distinct missed calls from one caller during concurrent replay', async () => {
+    await Promise.all(['call-a', 'call-b'].map(eventId => recordMissedCallHistory({
+      peerId: 'replay-peer', eventId, at: 2000,
+    })));
+    expect(getCallLogSnapshot().filter(row => row.peerId === 'replay-peer')).toHaveLength(2);
   });
 
   it('уведомляет активный список сразу при локальной записи исходящего', () => {

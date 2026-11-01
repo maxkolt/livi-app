@@ -26,7 +26,7 @@ import { sendCallAnsweredBroadcast, addEndedCallId, isEndedCallId, isOutgoingDec
 import { emitCloseHomeModals, emitMissedClear, emitMissedIncrement, isWelcomeCallsMissedFilterActive, isWelcomeViewingChats, isWelcomeViewingMissedCalls, setPendingWelcomeCallsFilter, setPendingWelcomeChatsFilter, shouldSkipHomeUiSettle } from './globalEvents';
 import { terminateCall } from './terminateCall';
 import { recordCallLog, recordMissedCallHistory, recordCancelledCall, forceCallLogUiNow } from '../screens/home/callLog';
-import { persistPendingMissedCallHistory } from './pendingMissedCallHistory';
+import { persistPendingMissedCallHistory, persistMissedCallNotificationHistory } from './pendingMissedCallHistory';
 import { UNREAD_BY_USER_KEY } from '../screens/home/constants';
 import { navigateToVideoCallScreen, type VideoCallNavLike } from './appNavigationGuard';
 import { beginCallPerfTrace, markCallPerf, callPerfSpan } from './callPerfTrace';
@@ -1044,7 +1044,7 @@ Notifications.setNotificationHandler({
             content: {
               title,
               body,
-              data: { type: 'missed_call', from: fromUserId, fromNick },
+              data: { type: 'missed_call', from: fromUserId, fromNick, callId: data.callId },
             },
             trigger: { type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL, seconds: 0.2 },
           });
@@ -1516,6 +1516,7 @@ async function handleNotificationResponse(data: PushNotificationData, actionIden
 
     if (type === 'missed_call') {
       await runWhenNavReady(`missed_call:${String(data?.from || data?.fromUserId || 'unknown')}`, async (nav) => {
+        await persistMissedCallNotificationHistory(data);
         try { setPendingWelcomeCallsFilter('missed'); } catch {}
         nav.dispatch(
           CommonActions.reset({
@@ -2061,7 +2062,7 @@ export function addNotificationListeners() {
               content: {
                 title,
                 body,
-                data: { type: 'missed_call', from: fromUserId, fromNick },
+                data: { type: 'missed_call', from: fromUserId, fromNick, callId: data.callId },
               },
               trigger: { type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL, seconds: 0.2 },
             });

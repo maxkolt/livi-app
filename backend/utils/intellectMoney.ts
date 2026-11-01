@@ -81,6 +81,9 @@ export function intellectMoneyCheckoutHtml(order: IntellectMoneyOrder, config: I
     SuccessUrl: returnUrl, BackUrl: returnUrl,
     ResultUrl: `${config.publicBaseUrl}/api/cosmetics/intellectmoney/webhook`,
     HoldMode: '0', ExpireDate: moscowDate(order.expiresAt),
+    // Merchant's HTML checkout requires Hash when the shop enables RequireHash.
+    // Keep PurchaseHash for widget versions using that alias as well.
+    Hash: intellectMoneyPurchaseHash(order, config.secretKey),
     PurchaseHash: intellectMoneyPurchaseHash(order, config.secretKey),
   };
   return `<!doctype html><html lang="ru"><head><meta charset="utf-8">

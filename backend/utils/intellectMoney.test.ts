@@ -71,7 +71,7 @@ describe('IntellectMoney configuration and checkout', () => {
     expect(page).toContain('src="https://merchant.intellectmoney.ru/v2/js/IntellectMoneyMerchantWidget.js"');
     expect(init).toHaveBeenCalledWith(expect.objectContaining({
       EshopId: '473314', OrderId: paymentId, RecipientAmount: '199.00', RecipientCurrency: 'TST',
-      PurchaseHash: expected, ExpireDate: '2026-11-01 21:00:00',
+      Hash: expected, PurchaseHash: expected, ExpireDate: '2026-11-01 21:00:00',
       ResultUrl: 'https://api.liviapp.com/api/cosmetics/intellectmoney/webhook',
     }), expect.any(Object));
     expect(page).not.toContain('<form');
@@ -100,6 +100,7 @@ describe('IntellectMoney configuration and checkout', () => {
     bootCheckout(intellectMoneyCheckoutHtml(rubOrder, rubConfig, nonce), init);
     const params = init.mock.calls[0][0];
     expect(params.RecipientCurrency).toBe('RUB');
+    expect(params.Hash).toBe(params.PurchaseHash);
     expect(params.PurchaseHash).toBe(createHash('md5')
       .update(`473314::${paymentId}::Рамка Legendary: fire::199.00::RUB::test-only-secret`, 'utf8').digest('hex'));
     expect(params.PurchaseHash).not.toBe(intellectMoneyPurchaseHash(checkoutOrder, config.secretKey));
