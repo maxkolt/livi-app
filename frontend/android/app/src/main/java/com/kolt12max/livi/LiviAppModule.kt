@@ -78,6 +78,15 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
 
   override fun getName(): String = NAME
 
+  override fun getConstants(): Map<String, Any> = mapOf(
+    "initialNotificationDestination" to pendingNotificationDestination(reactApplicationContext)
+  )
+
+  @ReactMethod
+  fun getAndClearPendingNotificationDestination(promise: Promise) {
+    promise.resolve(consumePendingNotificationDestination(reactApplicationContext))
+  }
+
   override fun invalidate() {
     super.invalidate()
     try {
@@ -4688,6 +4697,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     private const val KEY_INSTALL_REFERRER_CHECKED = "install_referrer_checked"
     private const val KEY_INSTALL_INVITE_CODE = "install_invite_code"
     private const val PREFS_OPEN_TAB = "LiviOpenTab"
+    private const val KEY_PENDING_NOTIFICATION_DESTINATION = "pending_notification_destination"
     private const val KEY_PENDING_OPEN_TAB_FRIENDS = "pending_open_tab_friends"
     private const val KEY_PENDING_OPEN_WELCOME_CHAT = "pending_open_welcome_chat"
     private const val KEY_PENDING_RETURN_TO_ACTIVE_CALL = "pending_return_to_active_call"
@@ -4739,13 +4749,43 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     /** Вызвать из MainActivity при intent с EXTRA_OPEN_TAB_FRIENDS (тап по уведомлению «Пропущенный вызов» → welcome Calls). */
     @JvmStatic
     fun setPendingOpenTabFriends(context: Context) {
-      context.getSharedPreferences(PREFS_OPEN_TAB, Context.MODE_PRIVATE).edit().putBoolean(KEY_PENDING_OPEN_TAB_FRIENDS, true).apply()
+      setPendingNotificationDestination(context, "missed")
     }
 
     /** Тап по уведомлению о непрочитанном сообщении → welcome Chat. */
     @JvmStatic
     fun setPendingOpenWelcomeChat(context: Context) {
-      context.getSharedPreferences(PREFS_OPEN_TAB, Context.MODE_PRIVATE).edit().putBoolean(KEY_PENDING_OPEN_WELCOME_CHAT, true).apply()
+      setPendingNotificationDestination(context, "unread")
+    }
+
+    @JvmStatic
+    @Synchronized
+    fun setPendingNotificationDestination(context: Context, destination: String) {
+      if (destination !in setOf("unread", "missed", "requests", "updates")) return
+      context.getSharedPreferences(PREFS_OPEN_TAB, Context.MODE_PRIVATE).edit()
+        .remove(KEY_PENDING_OPEN_TAB_FRIENDS).remove(KEY_PENDING_OPEN_WELCOME_CHAT)
+        .putString(KEY_PENDING_NOTIFICATION_DESTINATION, destination).apply()
+      runOnReactUiQueueIfAlive { it.emitDeviceEvent("NotificationHomeDestination", destination) }
+    }
+
+    @Synchronized
+    private fun consumePendingNotificationDestination(context: Context): String {
+      val destination = pendingNotificationDestination(context)
+      context.getSharedPreferences(PREFS_OPEN_TAB, Context.MODE_PRIVATE).edit()
+        .remove(KEY_PENDING_NOTIFICATION_DESTINATION)
+        .remove(KEY_PENDING_OPEN_WELCOME_CHAT).remove(KEY_PENDING_OPEN_TAB_FRIENDS).apply()
+      return destination
+    }
+
+    private fun pendingNotificationDestination(context: Context): String {
+      val prefs = context.getSharedPreferences(PREFS_OPEN_TAB, Context.MODE_PRIVATE)
+      val destination = prefs.getString(KEY_PENDING_NOTIFICATION_DESTINATION, "") ?: ""
+      if (destination.isNotEmpty()) return destination
+      return when {
+        prefs.getBoolean(KEY_PENDING_OPEN_WELCOME_CHAT, false) -> "unread"
+        prefs.getBoolean(KEY_PENDING_OPEN_TAB_FRIENDS, false) -> "missed"
+        else -> ""
+      }
     }
 
     @JvmStatic

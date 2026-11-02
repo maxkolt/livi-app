@@ -27,6 +27,7 @@ import {
   type ChatPreview,
 } from '../chatPreview';
 import { getChatStatusesKey } from '../../chat/chatStorageKeys';
+import { waitForChatExitTransition } from '../../chat/chatExitTransition';
 import { onChatCallStatusMessage } from '../../../utils/globalEvents';
 import {
   getClearedForMePeerIds,
@@ -161,6 +162,8 @@ async function refreshPreviewsFromServer(
     for (let offset = 0; offset < toFetch.length; offset += 100) {
       const batch = toFetch.slice(offset, offset + 100);
       const result = await fetchChatPreviews(batch);
+      // A request started earlier may finish just as Back begins.
+      await waitForChatExitTransition();
       if (String(getCurrentUserId() || '').trim() !== me) return local;
       if (!result?.ok || !result.previews) continue;
       for (const peerId of batch) {
@@ -212,20 +215,24 @@ function previewMapsEqual(
 }
 
 /** Prefetch до открытия вкладки Chat — первый paint с полными превью. */
-export async function prefetchChatPreviews(friendIds: string[], lang: Lang): Promise<void> {
+export async function prefetchChatPreviews(
+  friendIds: string[], lang: Lang, preferMemory = false,
+): Promise<void> {
+  await waitForChatExitTransition();
   const ids = friendIds.map((id) => String(id || '').trim()).filter(Boolean);
   if (ids.length === 0) return;
   const next: Record<string, ChatPreview> = {};
   await Promise.all(
     ids.map(async (id) => {
       try {
-        const preview = await previewFromLocalHistory(id, lang);
+        const preview = (preferMemory && previewMemory[id]) || await previewFromLocalHistory(id, lang);
         if (preview) next[id] = preview;
       } catch {
         // skip
       }
     }),
   );
+  await waitForChatExitTransition();
   // Локальные превью — сразу: за VPN ответ сервера для недостающих идёт секундами,
   // а вкладка всё это время оставалась бы пустой.
   previewMemory = mergeLiveMemory(ids, next);
@@ -259,6 +266,8 @@ export function useChatPreviews(friendIds: string[], lang: Lang, enabled: boolea
   const idsRef = useRef(friendIds);
   const langRef = useRef(lang);
   const reloadPromiseRef = useRef<Promise<void> | null>(null);
+  const enabledRef = useRef(enabled);
+  enabledRef.current = enabled;
   const reloadAgainRef = useRef(false);
   const lastReloadCompletedAtRef = useRef(0);
 
@@ -279,30 +288,15 @@ export function useChatPreviews(friendIds: string[], lang: Lang, enabled: boolea
 
     let tracked: Promise<void>;
     const task = (async () => {
+      await waitForChatExitTransition();
       const ids = idsRef.current;
-      if (!enabled || ids.length === 0) {
+      if (!enabledRef.current || ids.length === 0) {
         if (!ids.length) setPreviews((prev) => (Object.keys(prev).length ? {} : prev));
         return;
       }
-      const next: Record<string, ChatPreview> = {};
-      await Promise.all(
-        ids.map(async (id) => {
-          try {
-            const preview = await previewFromLocalHistory(id, langRef.current);
-            if (preview) next[id] = preview;
-          } catch {
-            // keep missing preview
-          }
-        }),
-      );
-      // Не затирать более свежий live-preview (message:received), если persist ещё догоняет.
-      const withLive = mergeLiveMemory(ids, next);
-      previewMemory = withLive;
-      setPreviews((prev) => (previewMapsEqual(prev, withLive) ? prev : withLive));
-      const hydrated = await refreshPreviewsFromServer(ids, withLive, langRef.current);
-      const finalMap = mergeLiveMemory(ids, hydrated);
-      previewMemory = finalMap;
-      setPreviews((prev) => (previewMapsEqual(prev, finalMap) ? prev : finalMap));
+      // Живое превью уже опубликовано чатом: не разбирать всю его историю на Back.
+      // Сверка с сервером остаётся обязательной, в том числе для Unread и VPN/reconnect.
+      await prefetchChatPreviews(ids, langRef.current, true);
     })();
     tracked = task.finally(() => {
       lastReloadCompletedAtRef.current = Date.now();

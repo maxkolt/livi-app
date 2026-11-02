@@ -1197,6 +1197,7 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
     const timeColor = isDark ? 'rgba(255,255,255,0.86)' : 'rgba(28, 36, 48, 0.92)';
     const metaBg = isDark ? 'rgba(18, 22, 30, 0.88)' : 'rgba(255,255,255,0.88)';
     const stickerSize = isVideoNote ? CHAT_VIDEO_NOTE_SIZE : 132;
+    const videoNoteSideActions = isVideoNote && !centered;
 
     const checkbox = (
       <Pressable
@@ -1225,13 +1226,14 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
       </Pressable>
     );
 
-    return (
+    const mediaMessage = (
       <Animated.View
+        pointerEvents={videoNoteSideActions ? 'box-none' : undefined}
         style={{
           transform: [{ scale: messageAnimation }],
           marginHorizontal: 16,
-          marginTop: rowMarginTop,
-          marginBottom: rowMarginBottom,
+          marginTop: videoNoteSideActions ? 0 : rowMarginTop,
+          marginBottom: videoNoteSideActions ? 0 : rowMarginBottom,
           alignSelf: rowAlignSelf,
           flexDirection: 'row',
           alignItems: 'center',
@@ -1240,6 +1242,7 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
       >
         {selectionMode && !isMyMessage ? checkbox : null}
         <View
+          pointerEvents={videoNoteSideActions ? 'box-none' : undefined}
           style={{
             alignSelf: isMyMessage ? 'flex-end' : 'flex-start',
             maxWidth: item.replyTo ? Math.max(replyBubbleMinWidth, stickerSize) : isVideoNote ? stickerSize : 190,
@@ -1290,6 +1293,8 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
             style={({ pressed }) => ({
               width: stickerSize,
               minHeight: stickerSize,
+              // Цитата может быть шире круга: сам круг остаётся у края отправителя.
+              ...(videoNoteSideActions ? { alignSelf: isMyMessage ? 'flex-end' : 'flex-start' } : null),
               alignItems: 'center',
               justifyContent: 'center',
               opacity: pressed && !selectionMode ? 0.92 : 1,
@@ -1302,7 +1307,7 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
                 thumbUri={item.thumbUri ? resolveMediaUri(item.thumbUri) || String(item.thumbUri) : undefined}
                 durationSec={Number(item.duration || 0)}
                 size={stickerSize}
-                disabled={!!selectionMode}
+                disabled={!!selectionMode || centered}
                 onLongPress={openMessageActionsFromBubble}
               />
             ) : (
@@ -1363,6 +1368,34 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
         </View>
         {selectionMode && isMyMessage ? checkbox : null}
       </Animated.View>
+    );
+
+    if (!videoNoteSideActions) return mediaMessage;
+
+    // Область — от круга до противоположного края строки, только на высоту круга.
+    // Чекбокс занимает 26 px + 10 px зазора со стороны отправителя. Цитата выше
+    // круга и промежутки между сообщениями в область нажатия не входят.
+    const circleFarEdge = 16 + stickerSize + (selectionMode ? 36 : 0);
+    return (
+      <View
+        pointerEvents="box-none"
+        style={{ alignSelf: 'stretch', marginTop: rowMarginTop, marginBottom: rowMarginBottom }}
+      >
+        <Pressable
+          testID={`chat-video-note-message-area-${item.id}`}
+          onPress={handleBubblePress}
+          onLongPress={openMessageActionsFromBubble}
+          delayLongPress={MESSAGE_LONG_PRESS_MS}
+          style={{
+            position: 'absolute',
+            bottom: 0,
+            height: stickerSize,
+            left: isMyMessage ? 0 : circleFarEdge,
+            right: isMyMessage ? circleFarEdge : 0,
+          }}
+        />
+        {mediaMessage}
+      </View>
     );
   }
 

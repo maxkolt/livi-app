@@ -279,6 +279,8 @@ dependencies {
     implementation("com.google.firebase:firebase-crashlytics:19.3.0")
     // Play Install Referrer: deferred invite link after first install from Play Store.
     implementation("com.android.installreferrer:installreferrer:2.2")
+    // Official Google Play rating/comment form; loaded only for a post-call review request.
+    implementation("com.google.android.play:review:2.0.2")
     // AppMetrica analytics SDK.
     implementation("io.appmetrica.analytics:analytics:8.5.0")
     // Same as expo-notifications — прямой вызов для бейджа иконки без cancelAll().

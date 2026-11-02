@@ -21,11 +21,58 @@ jest.mock('../../../utils/i18n', () => ({ t: (key: string) => key }));
 jest.mock('../../../utils/globalEvents', () => ({}));
 
 import { getChatPreviewSnapshot, noteLocalChatPreview, prefetchChatPreviews } from './useChatPreviews';
+import { beginChatExitTransition, finishChatExitTransition } from '../../chat/chatExitTransition';
 const message = (id: string, text: string, at: number, from = 'peer') => ({
   id, text, timestamp: new Date(at).toISOString(), from, to: from === 'me' ? 'peer' : 'me', type: 'text',
 });
 beforeEach(() => {
   mockLocal.mockReset(); mockFetch.mockReset(); mockSave.mockClear(); mockCleared.clear();
+});
+afterEach(() => { finishChatExitTransition(); jest.useRealTimers(); });
+
+it('keeps the live preview visible and postpones all heavy reload work during Back', async () => {
+  noteLocalChatPreview('return-peer', message('return-new', 'already visible', 10_000), 'ru');
+  beginChatExitTransition();
+  mockFetch.mockResolvedValue({ ok: true, previews: { 'return-peer': message('server-latest', 'fresh from server', 11_000) } });
+  const pending = prefetchChatPreviews(['return-peer'], 'ru', true);
+  for (let i = 0; i < 15; i++) await Promise.resolve();
+  expect(getChatPreviewSnapshot()['return-peer'].text).toBe('already visible');
+  expect(mockLocal).not.toHaveBeenCalled();
+  expect(mockFetch).not.toHaveBeenCalled();
+  finishChatExitTransition();
+  await pending;
+  expect(mockLocal).not.toHaveBeenCalled();
+  expect(mockFetch).toHaveBeenCalledWith(['return-peer']);
+  expect(getChatPreviewSnapshot()['return-peer'].text).toBe('fresh from server');
+});
+
+it('reads history only for missing previews and still checks every contact on the server', async () => {
+  noteLocalChatPreview('known-peer', message('known', 'cached live', 12_000), 'ru');
+  mockLocal.mockResolvedValue([message('missing', 'local fallback', 13_000)]);
+  mockFetch.mockRejectedValue(new Error('VPN timeout'));
+  await prefetchChatPreviews(['known-peer', 'missing-peer'], 'ru', true);
+  expect(mockLocal).toHaveBeenCalledTimes(1);
+  expect(mockLocal).toHaveBeenCalledWith('missing-peer');
+  expect(mockFetch).toHaveBeenCalledWith(['known-peer', 'missing-peer']);
+  expect(getChatPreviewSnapshot()['known-peer'].text).toBe('cached live');
+  expect(getChatPreviewSnapshot()['missing-peer'].text).toBe('local fallback');
+});
+
+it('holds an already running server response if Back begins before it completes', async () => {
+  noteLocalChatPreview('inflight-peer', message('before', 'visible before Back', 14_000), 'ru');
+  let finish!: (value: unknown) => void;
+  mockFetch.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+  const pending = prefetchChatPreviews(['inflight-peer'], 'ru', true);
+  for (let i = 0; i < 20; i++) await Promise.resolve();
+  expect(mockFetch).toHaveBeenCalledTimes(1);
+  beginChatExitTransition();
+  finish({ ok: true, previews: { 'inflight-peer': message('after', 'server after Back', 15_000) } });
+  for (let i = 0; i < 20; i++) await Promise.resolve();
+  expect(getChatPreviewSnapshot()['inflight-peer'].text).toBe('visible before Back');
+  expect(mockSave).not.toHaveBeenCalled();
+  finishChatExitTransition();
+  await pending;
+  expect(getChatPreviewSnapshot()['inflight-peer'].text).toBe('server after Back');
 });
 
 it('replaces an existing outgoing preview with the latest unread incoming message', async () => {

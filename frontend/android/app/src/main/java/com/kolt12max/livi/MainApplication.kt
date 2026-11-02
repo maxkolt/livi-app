@@ -61,6 +61,11 @@ class MainApplication : Application(), ReactApplication {
 
   override fun onCreate() {
     super.onCreate()
+    // These preferences describe live JS screens, not durable user settings. A process
+    // started by FCM has no visible chat/call list, even if it died on that tab.
+    // Otherwise the incoming activity makes a stale Calls flag suppress the missed push.
+    LiviAppModule.setSuppressMissedCallAlertsStatic(this, false)
+    LiviAppModule.setSuppressUnreadMessageAlertsStatic(this, false)
     // Раскладка всегда слева направо, текст на арабском внутри строк остаётся RTL.
     // Иначе на арабском устройстве RN зеркалит весь UI (радар, жесты, сдвиги),
     // а при выборе арабского в самом приложении — нет. До загрузки JS, чтобы

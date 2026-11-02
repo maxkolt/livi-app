@@ -256,6 +256,31 @@ describe('youtube player page', () => {
     expect(types(p.sent)).toEqual(['ready', 'state:1']);
   });
 
+  it('retries a requested start while the player is unstarted or buffering', () => {
+    const p = start({ mode: 'play' });
+    p.ready();
+    // YouTube может оставить первую команду без PLAYING: синхронизация должна повторить запуск.
+    p.win.__fliq('play');
+    expect(p.calls.filter((call) => call === 'play')).toHaveLength(2);
+    p.state(3);
+    p.win.__fliq('play');
+    expect(p.calls.filter((call) => call === 'play')).toHaveLength(3);
+    p.state(1);
+    p.win.__fliqPrebuffer(false);
+    expect(p.calls.filter((call) => call === 'play')).toHaveLength(3);
+  });
+
+  it('can start again after leaving during an unfinished start', () => {
+    const p = start({ mode: 'play' });
+    p.ready();
+    p.win.__fliq('pause');
+    p.state(2);
+    p.win.__fliq('play');
+    expect(p.calls.filter((call) => call === 'play')).toHaveLength(2);
+    p.state(1);
+    expect(p.calls[p.calls.length - 1]).toBe('unmute');
+  });
+
   it('a pause from the app is not a user pause, and blocks playback', () => {
     const p = start({ mode: 'play' });
     p.ready();
@@ -289,6 +314,20 @@ describe('youtube player page', () => {
 
     expect(types(p.sent)).toEqual(['ready', 'state:1']);
     expect(p.calls[p.calls.length - 1]).toBe('play');
+  });
+
+  it('keeps a user pause when a delayed playing event arrives', () => {
+    const p = start({ mode: 'play' });
+    p.ready();
+    p.state(1);
+    p.win.__fliqUserToggle();
+    p.state(1);
+    expect(types(p.sent)).not.toContain('userplay');
+    expect(p.calls[p.calls.length - 1]).toBe('pause');
+    p.state(2);
+    p.win.__fliqUserToggle();
+    p.state(1);
+    expect(types(p.sent).slice(-2)).toEqual(['userplay', 'state:1']);
   });
 
   it('loops by default when the video ends', () => {

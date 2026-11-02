@@ -21,6 +21,7 @@ export type HomeRouteParams = {
   /** @deprecated prefer openWelcomeChat / openWelcomeCalls */
   openFriendsTab?: boolean;
   openWelcomeProfile?: boolean;
+  openAppUpdates?: boolean;
   openFriendRequests?: boolean;
   openWelcomeCalls?: boolean;
   openWelcomeCallsMissed?: boolean;

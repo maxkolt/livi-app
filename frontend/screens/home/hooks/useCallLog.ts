@@ -1,6 +1,7 @@
 import type { HomeUiGlobals } from '../types';
 import { useEffect, useLayoutEffect, useState } from 'react';
 import { getCurrentUserId } from '../../../sockets/socket';
+import { persistPendingMissedCallHistory } from '../../../utils/pendingMissedCallHistory';
 import {
   getCallLogSnapshot,
   loadCallLog,
@@ -43,16 +44,17 @@ export function useCallLog(enabled: boolean) {
     enabled || !shouldDeferCallLogUi() ? getCallLogSnapshot() : [],
   );
   const uid = String(getCurrentUserId() || '').trim();
+  const [ready, setReady] = useState(false);
 
   // До paint: если prefetch уже в memory — сразу полный список, не «1 строка → rest».
   useLayoutEffect(() => {
-    if (!enabled) return;
+    if (!enabled || !uid) return;
     const snap = getCallLogSnapshot();
     if (snap.length) setEntries(snap);
   }, [enabled, uid]);
 
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled || !uid) return;
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -78,7 +80,10 @@ export function useCallLog(enabled: boolean) {
 
     const snap = getCallLogSnapshot();
     if (snap.length) setEntries(snap);
-    void loadCallLog().then((list) => {
+    // Import the durable native inbox before revealing a cold notification entry.
+    // Showing disk history first inserts the new call above it a frame later and
+    // moves every lower row after the list has already appeared.
+    void persistPendingMissedCallHistory().then(() => loadCallLog()).then((list) => {
       if (cancelled) return;
       if (shouldDeferCallLogUi()) {
         if (retryTimer) clearTimeout(retryTimer);
@@ -86,6 +91,11 @@ export function useCallLog(enabled: boolean) {
         return;
       }
       setEntries(list);
+      setReady(true);
+    }).catch(() => {
+      if (cancelled) return;
+      applySnap();
+      setReady(true);
     });
 
     const offSoft = subscribeCallLogSoftUi(softPull);
@@ -111,5 +121,5 @@ export function useCallLog(enabled: boolean) {
     };
   }, [enabled, uid]);
 
-  return entries;
+  return { entries, ready };
 }

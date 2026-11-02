@@ -60,6 +60,7 @@ export function useHomeBadges({ friends, friendsRef }: UseHomeBadgesArgs) {
   const [unreadByUser, setUnreadByUserState] = useState<Record<string, number>>({});
   const [missedByUser, setMissedByUser] = useState<Record<string, number>>({});
   const [missedLoaded, setMissedLoaded] = useState(false);
+  const [unreadLoaded, setUnreadLoaded] = useState(false);
   const pendingUnreadBatchRefreshRef = useRef(false);
   const badgeSyncDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const missedByUserRef = useRef<Record<string, number>>({});
@@ -171,6 +172,7 @@ export function useHomeBadges({ friends, friendsRef }: UseHomeBadgesArgs) {
   }, [resolveServerUnreadCount]);
   // Кэш непрочитанных по друзьям — сразу при монтировании (до сокета).
   useEffect(() => {
+    let disposed = false;
     (async () => {
       try {
         const raw = await AsyncStorage.getItem(UNREAD_BY_USER_KEY);
@@ -182,11 +184,31 @@ export function useHomeBadges({ friends, friendsRef }: UseHomeBadgesArgs) {
             if (typeof value === 'number' && value > 0) normalized[String(key)] = value;
           });
         }
-        if (Object.keys(normalized).length) {
-          setUnreadByUser((prev) => ({ ...normalized, ...prev }));
+        // A killed app has no resume event in this JS context. Import the native
+        // push inbox before publishing readiness, rather than briefly showing Empty.
+        if (Platform.OS === 'android') {
+          let pending: string[] | undefined;
+          try { pending = await NativeModules.LiviAppModule?.getAndClearPendingUnreadMessages?.(); } catch {}
+          const openPeer = AppState.currentState === 'active'
+            ? String((global as HomeUiGlobals).__currentChatPeerId || '').trim() : '';
+          for (const peer of pending || []) {
+            const id = String(peer || '').trim();
+            if (id && id !== openPeer) normalized[id] = Math.max(normalized[id] || 0, 1);
+          }
         }
-      } catch {}
+        if (disposed) return;
+        if (Object.keys(normalized).length) {
+          setUnreadByUser((prev) => {
+            const next = { ...normalized, ...prev };
+            persistUnreadMap(next);
+            return next;
+          });
+        }
+      } catch {} finally {
+        if (!disposed) setUnreadLoaded(true);
+      }
     })();
+    return () => { disposed = true; };
   }, []);
 
   // Пропущенные звонки из storage при монтировании
@@ -536,14 +558,17 @@ export function useHomeBadges({ friends, friendsRef }: UseHomeBadgesArgs) {
       } else {
         if (!disposed) {
           setUnreadByUserState((prev) => {
-            const nextCount = (prev[messageFromStr] || 0) + 1;
+            // Delivery is an invalidation, not an increment: native push, disk cache
+            // or a server snapshot may already include this exact message.
+            const nextCount = Math.max(prev[messageFromStr] || 0, 1);
             bumpUnreadFloor(messageFromStr, nextCount);
             const next = patchUnreadCountsIfChanged(prev, { [messageFromStr]: nextCount });
             if (next !== prev) persistUnreadMap(next);
             return next;
           });
         }
-        // Отложенная сверка с сервером — не мгновенная (сервер часто ещё отдаёт 0).
+        // Fetch the exact count promptly, then retry after the server write/ack race.
+        scheduleRecalcAll();
         scheduleReconcileOne(messageFromStr);
       }
       clearMissedBadgeCleared().then(() => syncAppBadgeFromMissedCount()).catch(() => {});
@@ -584,6 +609,7 @@ export function useHomeBadges({ friends, friendsRef }: UseHomeBadgesArgs) {
 
   return {
     unreadByUser,
+    unreadLoaded,
     setUnreadByUser,
     missedByUser,
     setMissedByUser,

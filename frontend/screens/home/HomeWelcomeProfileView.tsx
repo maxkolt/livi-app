@@ -1,4 +1,4 @@
-import React, { memo, useCallback, useEffect, useMemo, useState } from 'react';
+import React, { memo, useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import {
   Animated,
   Keyboard,
@@ -15,6 +15,7 @@ import {
 import { useHomeLayout } from './HomeLayoutContext';
 import { usePaneReveal } from '../../utils/paneVisibility';
 import AdaptiveText from '../../components/AdaptiveText';
+import AppReviewCard from '../../components/AppReviewCard';
 import { useStableSafeAreaInsets } from './useStableSafeAreaInsets';
 import { FontAwesome, Ionicons } from '@expo/vector-icons';
 import { Image as ExpoImage } from 'expo-image';
@@ -409,6 +410,7 @@ type HomeWelcomeProfileViewProps = {
   onLogOutAccount?: () => void;
   wiping?: boolean;
   updateAvailable: boolean;
+  openAppUpdatesRequest?: number;
   wallpaperPickerTheme: ChatWallpaperTheme | null;
   setWallpaperPickerTheme: (theme: ChatWallpaperTheme | null) => void;
   /** Hub + Back → родитель (обычно Search), иначе false → системный фон. */
@@ -453,7 +455,10 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
     windowWidth > 0 && windowHeight > 0 && windowWidth / windowHeight > 1.05;
   const isTablet = isWelcomeTabletLayout(windowWidth, windowHeight);
   const compactLandscape = isLandscape && !isTablet;
-  const [screen, setScreen] = useState<ProfileScreen>('hub');
+  const [screen, setScreen] = useState<ProfileScreen>(props.openAppUpdatesRequest ? 'about' : 'hub');
+  useLayoutEffect(() => {
+    if (props.openAppUpdatesRequest) setScreen('about');
+  }, [props.openAppUpdatesRequest]);
   const callKeepAlive = useCallKeepAliveState(active);
   const [accountOpen, setAccountOpen] = useState(false);
   const [copiedEmail, setCopiedEmail] = useState<string | null>(null);
@@ -1086,6 +1091,11 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
           />
         ) : null}
       </WelcomeProfileSection>
+      {Platform.OS === 'android' ? (
+        <WelcomeProfileSection compact={compactLandscape} tablet={isTablet}>
+          <AppReviewCard lang={lang} />
+        </WelcomeProfileSection>
+      ) : null}
     </View>
   );
 

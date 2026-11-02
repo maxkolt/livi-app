@@ -5,6 +5,8 @@ import type { Lang } from '../../utils/i18n';
 type Table = Record<string, string>;
 
 const ru: Table = {
+  play: 'Продолжить воспроизведение',
+  pause: 'Приостановить воспроизведение',
   soundOn: 'Включить звук',
   soundOff: 'Выключить звук',
   share: 'Переслать',
@@ -53,6 +55,8 @@ const ru: Table = {
 };
 
 const en: Table = {
+  play: 'Resume playback',
+  pause: 'Pause playback',
   soundOn: 'Sound on',
   soundOff: 'Sound off',
   share: 'Send',

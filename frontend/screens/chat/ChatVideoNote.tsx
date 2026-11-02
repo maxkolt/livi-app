@@ -65,7 +65,7 @@ export const ChatVideoNote = memo(function ChatVideoNote({
   disabled,
   onLongPress,
 }: Props) {
-  const active = useActiveVideoNote((s) => s.activeId === id);
+  const active = useActiveVideoNote((s) => !disabled && s.activeId === id);
   const setActive = useActiveVideoNote((s) => s.setActive);
   const [paused, setPaused] = useState(false);
 
@@ -73,14 +73,15 @@ export const ChatVideoNote = memo(function ChatVideoNote({
     if (!active) setPaused(false);
   }, [active]);
   // Кружок ушёл из ленты (чат закрыли, сообщение удалили) — не играет.
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    // Static menu previews must neither create a second player nor release the real owner's player.
+    if (disabled) return;
+    return () => {
       const owner = `video-note:${id}`;
       releaseChatPlayback(owner);
       if (useActiveVideoNote.getState().activeId === id) useActiveVideoNote.getState().setActive(null);
-    },
-    [id],
-  );
+    };
+  }, [id, disabled]);
 
   const onPress = useCallback(() => {
     if (!active) {
@@ -89,7 +90,7 @@ export const ChatVideoNote = memo(function ChatVideoNote({
         if (useActiveVideoNote.getState().activeId === id) {
           useActiveVideoNote.getState().setActive(null);
         }
-      });
+      }, () => setPaused(true));
       setActive(id);
       return;
     }
@@ -103,6 +104,8 @@ export const ChatVideoNote = memo(function ChatVideoNote({
 
   return (
     <Pressable
+      // Keep taps and ring scrubbing inside the circle out of ChatScreen's outside-touch handler.
+      onTouchStart={(event) => event.stopPropagation()}
       onPress={onPress}
       onLongPress={onLongPress}
       delayLongPress={MESSAGE_LONG_PRESS_MS}
@@ -274,7 +277,7 @@ function ActiveVideoNote({
     if (dur > 0) p.currentTime = target * dur;
     setSeekHold(target);
     setScrub(null);
-    if (g.wasPlaying) p.play();
+    if (g.wasPlaying && !live.current.paused) p.play();
   }
 
   return (

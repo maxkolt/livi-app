@@ -50,7 +50,7 @@ export function applyMissedFromReauth(response: { userId?: string; missed?: Miss
         const eventId = m.callId || (m.id ? `server:${m.id}` : `legacy-server:${uid}:${now}:${ids.length}`);
         const added = await recordMissedCallHistory({ peerId: uid, eventId, at: m.at, fromNick: m.fromNick });
         if (m.id) ids.push(m.id);
-        if (added && !wasAppliedFromPending(uid) && !isWelcomeViewingMissedCalls() && !isWelcomeCallsMissedFilterActive()) {
+        if (added && (m.callId || m.id || !wasAppliedFromPending(uid)) && !isWelcomeViewingMissedCalls() && !isWelcomeCallsMissedFilterActive()) {
           map[uid] = (map[uid] || 0) + 1;
         }
         shared.appliedFromReauthByUid.set(uid, now);

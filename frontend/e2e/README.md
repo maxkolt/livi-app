@@ -1,5 +1,17 @@
 # Автотесты на устройствах (Maestro)
 
+Холодный запуск в «Непрочитанные», «Пропущенные», «Заявки в друзья» и «О приложении»:
+
+```
+python3 frontend/e2e/notification-navigation.py --device emulator-5554 --output /tmp/livi-notification-emulator
+python3 frontend/e2e/notification-navigation.py --device RFCX306PWLE --output /tmp/livi-notification-phone
+```
+
+Нужна автономная `.dev`-сборка без Expo DevLauncher. Скрипт перед каждым сценарием останавливает
+процесс, запускает тот же Intent, который приходит из уведомления, проверяет экран и выбранный
+фильтр, сохраняет снимки. Это проверка навигации с синтетическими payload: доставку настоящего
+FCM, количество непрочитанных сообщений и пропущенных проверять отдельно на двух устройствах.
+
 Релизная сборка (`.dev`, см. память «release-test-install») на обоих устройствах, эмулятор — звонящий
 (аккаунт без ника, друг `Ron`), A35 — принимающий (`Ron`). Maestro: `~/.maestro/maestro/bin/maestro`
 (2.11.0, архив с GitHub).

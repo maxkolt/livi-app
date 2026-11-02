@@ -34,6 +34,8 @@ import { APP_BLUR_SOURCE } from './BackdropBlur';
  * списке: после каждой новой регистрации переставляем его в конец.
  */
 const overlayBackStack: Array<{ onBack: () => void }> = [];
+/** Read-only guard for optional UI such as Google Play's post-call review form. */
+export const hasActiveAppOverlay = (): boolean => overlayBackStack.length > 0;
 let overlayBackInstalled = false;
 
 function overlayBackPress(): boolean {

@@ -482,6 +482,7 @@ export function clearHomeTransientRouteParams(): boolean {
           openWelcomeChat: undefined,
           openWelcomeChatUnread: undefined,
           openWelcomeProfile: undefined,
+          openAppUpdates: undefined,
           pushMessageFrom: undefined,
         }),
       );

@@ -1,6 +1,6 @@
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../../navigation/types';
-import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import {
   AppState,
   BackHandler,
@@ -68,7 +68,7 @@ import { friendMatchesNameSearch, getFriendDisplay } from './friendHelpers';
 import { useChatPreviews } from './hooks/useChatPreviews';
 import { formatWelcomeChatTime } from './chatPreview';
 import type { ChatReadStatus } from '../chat/chatMessageIds';
-import { consumePendingWelcomeChatsFilter, getWelcomeChatsFilterSnapshot, setPendingWelcomeChatsFilter, onPendingWelcomeChatsFilter, setWelcomeViewingChats, shouldSkipHomeUiSettle } from '../../utils/globalEvents';
+import { getWelcomeChatsFilterSnapshot, setPendingWelcomeChatsFilter, onPendingWelcomeChatsFilter, setWelcomeViewingChats, shouldSkipHomeUiSettle } from '../../utils/globalEvents';
 import { markUnreadNotificationsSeen } from '../../utils/pushNotifications';
 import { usePaneList } from '../../utils/paneVisibility';
 import { clearWelcomeChatsForMe } from './clearWelcomeChats';
@@ -112,6 +112,7 @@ type HomeWelcomeChatsViewProps = {
   L: (key: string) => string;
   /** Видима ли вкладка — иначе не грузим AsyncStorage превью (keep-alive без лагов). */
   active?: boolean;
+  dataReady: boolean;
   /** Высота навбара поверх списка: последняя строка поднимается над ним. */
   bottomInset?: number;
   allFriends: Friend[];
@@ -135,6 +136,7 @@ function HomeWelcomeChatsViewInner({
   L,
   bottomInset = 0,
   active = true,
+  dataReady,
   allFriends,
   unreadByUser,
   navigation,
@@ -153,7 +155,7 @@ function HomeWelcomeChatsViewInner({
   const tabletLayout = isWelcomeTabletLayout(windowWidth, windowHeight);
   const compactLandscape =
     !tabletLayout && windowWidth > 0 && windowHeight > 0 && windowWidth / windowHeight > 1.05;
-  const [filter, setFilter] = useState<ChatsFilter>(getWelcomeChatsFilterSnapshot);
+  const filter = useSyncExternalStore<ChatsFilter>(onPendingWelcomeChatsFilter, getWelcomeChatsFilterSnapshot, getWelcomeChatsFilterSnapshot);
   const [searchOpen, setSearchOpen] = useState(false);
   const [glassHeaderH, setGlassHeaderH] = useGlassHeaderHeight(tabletLayout, compactLandscape, searchOpen);
   const [searchQuery, setSearchQuery] = useState('');
@@ -168,20 +170,7 @@ function HomeWelcomeChatsViewInner({
   const unreadRevision = JSON.stringify(unreadByUser);
   const { previews, reloadPreviews, dropPreviews } = useChatPreviews(friendIds, lang, active, unreadRevision);
 
-  // Тап по уведомлению о непрочитанных → фильтр Unread.
-  useEffect(() => {
-    const applyPending = () => {
-      if (!active) return;
-      const pending = consumePendingWelcomeChatsFilter() ?? getWelcomeChatsFilterSnapshot();
-      if (pending === 'unread') {
-        setFilter('unread');
-      } else if (pending === 'all') {
-        setFilter('all');
-      }
-    };
-    applyPending();
-    return onPendingWelcomeChatsFilter(applyPending);
-  }, [active]);
+  // The shared snapshot also updates hidden panes before their first visible frame.
 
   // На вкладке Chat в foreground — без системных message-пушей; иконка/шторка = «увидел».
   // После cancel не гасим пуши на кратком AppState(active).
@@ -435,7 +424,7 @@ function HomeWelcomeChatsViewInner({
       const { displayName, avatarLetter } = getFriendDisplay(item);
       const unread = unreadByUser[id] || 0;
       const preview = previews[id];
-      const previewText = preview?.text?.trim() ? preview.text : L('chatsPreviewEmpty');
+      const previewText = preview?.text?.trim() ? preview.text : unread > 0 ? '' : L('chatsPreviewEmpty');
       const timeLabel = preview?.at ? formatWelcomeChatTime(preview.at) : '';
       const isSelected = selectedIds.has(id);
 
@@ -655,9 +644,9 @@ function HomeWelcomeChatsViewInner({
                 index,
               })}
               ListEmptyComponent={
-                <View style={styles.emptyWrap}>
+                dataReady && (allFriends.length > 0 || !Object.values(unreadByUser).some(n => n > 0)) ? <View style={styles.emptyWrap}>
                   <AdaptiveText style={styles.emptyText}>{emptyLabel}</AdaptiveText>
-                </View>
+                </View> : null
               }
             />
           </BlurListSource>
@@ -774,7 +763,6 @@ function HomeWelcomeChatsViewInner({
               ]}
               onPress={() => {
                 pauseSearchDismissOnKeyboardHide();
-                setFilter('all');
                 setPendingWelcomeChatsFilter('all');
               }}
               accessibilityRole="button"
@@ -804,7 +792,6 @@ function HomeWelcomeChatsViewInner({
               ]}
               onPress={() => {
                 pauseSearchDismissOnKeyboardHide();
-                setFilter('unread');
                 setPendingWelcomeChatsFilter('unread');
               }}
               accessibilityRole="button"

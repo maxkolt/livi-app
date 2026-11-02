@@ -122,6 +122,8 @@ import { useChatHistorySync } from './chat/useChatHistorySync';
 import { useChatSendMedia } from './chat/useChatSendMedia';
 import { useChatMediaOutbox } from './chat/useChatMediaOutbox';
 import { useChatAudioPlayback } from './chat/useChatAudioPlayback';
+import { pauseActiveChatVideoNote } from './chat/chatPlaybackCoordinator';
+import { beginChatExitTransition, finishChatExitTransition } from './chat/chatExitTransition';
 import { useChatIncomingShare } from './chat/useChatIncomingShare';
 import { useChatRealtime } from './chat/useChatRealtime';
 import { useChatDeleteOps } from './chat/useChatDeleteOps';
@@ -460,11 +462,23 @@ export default function ChatScreen({ route, navigation }: Props) {
         playThroughEarpieceAndroid: false,
       }).catch(() => {});
       return () => {
+        pauseActiveChatVideoNote();
         setCurrentChatPeerId(null);
         sendChatViewing(null);
       };
     }, [peerId, markChatReadOnServer])
   );
+
+  useEffect(() => {
+    const beforeRemove = navigation.addListener('beforeRemove', beginChatExitTransition);
+    const start = navigation.addListener('transitionStart', (event) => {
+      if (event.data.closing) beginChatExitTransition();
+    });
+    const end = navigation.addListener('transitionEnd', (event) => {
+      if (event.data.closing) finishChatExitTransition();
+    });
+    return () => { beforeRemove(); start(); end(); };
+  }, [navigation]);
 
   // В фоне / на заблокированном экране сокет часто остаётся подключённым, а экран чата остаётся «в фокусе»
   // в навигации — сервер не получает disconnect и продолжает считать, что чат открыт, и не шлёт FCM.
@@ -488,6 +502,7 @@ export default function ChatScreen({ route, navigation }: Props) {
           markChatReadOnServer(peerId);
         }, 700);
       } else {
+        pauseActiveChatVideoNote();
         sendChatViewing(null);
       }
     });
@@ -2174,6 +2189,7 @@ export default function ChatScreen({ route, navigation }: Props) {
   useEffect(() => {
     if (Platform.OS !== 'android') return;
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      pauseActiveChatVideoNote();
       if (selectionMode) {
         exitSelectionMode();
         return true;
@@ -2193,6 +2209,12 @@ export default function ChatScreen({ route, navigation }: Props) {
   // Меню сообщения и полоса реакций — слои над чатом: «Назад» сперва закрывает их.
   useOverlayBackHandler(showMessageActions, hideMessageActions);
   useOverlayBackHandler(reactionBarForMessageId !== null, closeReactionBar);
+
+  useEffect(() => {
+    if (showMessageActions || reactionBarForMessageId !== null || avatarModalVisible || mediaViewerVisible || emojiPanelOpen) {
+      pauseActiveChatVideoNote();
+    }
+  }, [showMessageActions, reactionBarForMessageId, avatarModalVisible, mediaViewerVisible, emojiPanelOpen]);
 
   useEffect(() => {
     const selectedId = String(selectedMessage?.id || '').trim();
@@ -2669,6 +2691,7 @@ export default function ChatScreen({ route, navigation }: Props) {
   }, [emojiPanelOpen, emojiReturnsToKeyboard, keyboardVisible, toggleEmojiPanel]);
   const handleEmojiPanelEmojiSelected = React.useCallback(
     (emoji: Parameters<typeof handleComposerEmojiSelected>[0]) => {
+      pauseActiveChatVideoNote();
       setEmojiReturnsToKeyboard(true);
       handleComposerEmojiSelected(emoji);
     },
@@ -2676,6 +2699,7 @@ export default function ChatScreen({ route, navigation }: Props) {
   );
 
   const handleAttachments = () => {
+    pauseActiveChatVideoNote();
     if (Platform.OS === 'ios') {
       ActionSheetIOS.showActionSheetWithOptions(
         {
@@ -3241,6 +3265,7 @@ export default function ChatScreen({ route, navigation }: Props) {
             maxFontSizeMultiplier={APP_COMPOSER_MAX_FONT_SIZE_MULTIPLIER}
             value={messageText}
             onChangeText={(txt) => {
+              pauseActiveChatVideoNote();
               messageTextRef.current = txt;
               setMessageText(txt);
               signalLocalTyping();
@@ -3424,6 +3449,7 @@ export default function ChatScreen({ route, navigation }: Props) {
   return (
     <View
       ref={chatScreenRootRef}
+      onTouchStart={pauseActiveChatVideoNote}
       onLayout={onChatRootLayout}
       style={{ flex: 1, backgroundColor: HOME_NAV_BG }}
     >
@@ -3550,6 +3576,7 @@ export default function ChatScreen({ route, navigation }: Props) {
               showsVerticalScrollIndicator={false}
               inverted={false}
               onScrollToIndexFailed={handleScrollToIndexFailed}
+              onScrollBeginDrag={pauseActiveChatVideoNote}
               initialNumToRender={CHAT_LIST_INITIAL_NUM_TO_RENDER}
               maxToRenderPerBatch={CHAT_LIST_MAX_TO_RENDER_PER_BATCH}
               windowSize={CHAT_LIST_WINDOW_SIZE}
@@ -3682,6 +3709,7 @@ export default function ChatScreen({ route, navigation }: Props) {
               removeClippedSubviews={false}
               inverted={!showEmpty}
               onScrollToIndexFailed={handleScrollToIndexFailed}
+              onScrollBeginDrag={pauseActiveChatVideoNote}
               initialNumToRender={CHAT_LIST_INITIAL_NUM_TO_RENDER}
               maxToRenderPerBatch={CHAT_LIST_MAX_TO_RENDER_PER_BATCH}
               windowSize={CHAT_LIST_WINDOW_SIZE}

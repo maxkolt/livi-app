@@ -1,5 +1,5 @@
 import type { AppRuntimeGlobals } from '../../utils/appRuntimeTypes';
-import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import {
   AppState,
   BackHandler,
@@ -66,7 +66,7 @@ import { friendMatchesNameSearch, getFriendDisplay, displayAvatarLetter } from '
 import { formatWelcomeCallTime } from './chatPreview';
 import { useCallLog } from './hooks/useCallLog';
 import { deleteCallLogIds } from './callLog';
-import { consumePendingWelcomeCallsFilter, getWelcomeCallsFilterSnapshot, setPendingWelcomeCallsFilter, onPendingWelcomeCallsFilter, setWelcomeCallsMissedFilterActive, setWelcomeCallsTabSelected, setWelcomeViewingMissedCalls, shouldSkipHomeUiSettle } from '../../utils/globalEvents';
+import { getWelcomeCallsFilterSnapshot, setPendingWelcomeCallsFilter, onPendingWelcomeCallsFilter, setWelcomeCallsMissedFilterActive, setWelcomeCallsTabSelected, setWelcomeViewingMissedCalls, shouldSkipHomeUiSettle } from '../../utils/globalEvents';
 import { markMissedNotificationsSeen } from '../../utils/pushNotifications';
 import { usePaneList } from '../../utils/paneVisibility';
 import { WelcomeCrownButton } from './WelcomeCrownButton';
@@ -92,6 +92,7 @@ type HomeWelcomeCallsViewProps = {
   L: (key: string) => string;
   /** Вкладка «Звонки» сейчас видима (pane keep-alive не remount'ит экран). */
   active: boolean;
+  onInitialHistoryReady?: () => void;
   /** Высота навбара поверх списка: последняя строка поднимается над ним. */
   bottomInset?: number;
   allFriends: Friend[];
@@ -383,6 +384,7 @@ function HomeWelcomeCallsViewInner({
   L,
   bottomInset = 0,
   active,
+  onInitialHistoryReady,
   allFriends,
   missedByUser,
   prepareFriendRowActionTap,
@@ -401,7 +403,7 @@ function HomeWelcomeCallsViewInner({
   const tabletLayout = isWelcomeTabletLayout(windowWidth, windowHeight);
   const compactLandscape =
     !tabletLayout && windowWidth > 0 && windowHeight > 0 && windowWidth / windowHeight > 1.05;
-  const [filter, setFilter] = useState<CallsFilter>(getWelcomeCallsFilterSnapshot);
+  const filter = useSyncExternalStore<CallsFilter>(onPendingWelcomeCallsFilter, getWelcomeCallsFilterSnapshot, getWelcomeCallsFilterSnapshot);
   const [searchOpen, setSearchOpen] = useState(false);
   const [glassHeaderH, setGlassHeaderH] = useGlassHeaderHeight(tabletLayout, compactLandscape, searchOpen);
   const [searchQuery, setSearchQuery] = useState('');
@@ -414,23 +416,19 @@ function HomeWelcomeCallsViewInner({
 
   const trimmedQuery = searchQuery.trim();
   // Журнал только когда вкладка видна — иначе notify после cancel перерисовывает скрытый FlatList.
-  const logEntries = useCallLog(active);
+  const { entries: logEntries, ready: historyReady } = useCallLog(active);
+  useLayoutEffect(() => {
+    if (historyReady) onInitialHistoryReady?.();
+  }, [historyReady, onInitialHistoryReady]);
 
-  // Тап по уведомлению «пропущенный» → сразу фильтр Missed (в т.ч. если уже на Calls).
-  useEffect(() => {
-    const applyPending = () => {
-      if (!active) return;
-      const pending = consumePendingWelcomeCallsFilter() ?? getWelcomeCallsFilterSnapshot();
-      if (pending === 'missed') {
-        setFilter('missed');
-        setPickMode(false);
-      } else if (pending === 'all') {
-        setFilter('all');
-      }
+  // A notification prepares the filter while this keep-alive pane is still hidden.
+  useLayoutEffect(() => {
+    const leaveContactPicker = () => {
+      if (getWelcomeCallsFilterSnapshot() === 'missed') setPickMode(false);
     };
-    applyPending();
-    return onPendingWelcomeCallsFilter(applyPending);
-  }, [active]);
+    leaveContactPicker();
+    return onPendingWelcomeCallsFilter(leaveContactPicker);
+  }, []);
 
   // Calls + foreground → без системных missed (гасим шторку).
   // Свернуто → пуши приходят. Разворот на Calls → снова гасим.
@@ -960,7 +958,6 @@ function HomeWelcomeCallsViewInner({
                 ]}
                 onPress={() => {
                   pauseSearchDismissOnKeyboardHide();
-                  setFilter('all');
                 setPendingWelcomeCallsFilter('all');
                 }}
                 accessibilityRole="button"
@@ -990,7 +987,6 @@ function HomeWelcomeCallsViewInner({
                 ]}
                 onPress={() => {
                   pauseSearchDismissOnKeyboardHide();
-                  setFilter('missed');
                 setPendingWelcomeCallsFilter('missed');
                 }}
                 accessibilityRole="button"

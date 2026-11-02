@@ -1,14 +1,16 @@
 // Плееры Fliq — родные плееры источников в WebView.
-// YouTube: официальный IFrame Player API (плеер не меняем и ничем не перекрываем — правила
-// YouTube API), из RN только «играть/пауза», звук и события: готов, первый кадр, прогресс, ошибка.
+// YouTube: официальный IFrame Player API; касания и значок продолжения при своей паузе — в RN.
 // TikTok / Instagram: их встраиваемые страницы как есть.
 import React, { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef } from 'react';
 import { Linking, Pressable, StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
 import { WebView, type WebViewMessageEvent } from 'react-native-webview';
+import { Ionicons } from '@expo/vector-icons';
 import type { ShouldStartLoadRequest } from 'react-native-webview/lib/WebViewTypes';
 import { logger } from '../../utils/logger';
+import { useLang } from '../../store/lang';
 import { splitUrl } from './fliqLinks';
-import { PLAYER_ORIGIN, YT_PLAYING, youtubePlayerHtml, type FliqPlayMode } from './fliqPlayerHtml';
+import { fliqT } from './fliqI18n';
+import { MIN_PLAYER_CSS_W, PLAYER_ORIGIN, YT_PLAYING, youtubePlayerHtml, type FliqPlayMode } from './fliqPlayerHtml';
 
 export type { FliqPlayMode } from './fliqPlayerHtml';
 
@@ -115,6 +117,10 @@ export const FliqYoutubePlayer = memo(forwardRef<FliqYoutubePlayerHandle, FliqYo
   onError,
   style,
 }, handleRef) {
+  const lang = useLang((s) => s.lang);
+  // Кнопка YouTube — 56 CSS px; узкую страницу WebView масштабирует вместе с ней.
+  const playerScale = widthDp && widthDp > 0 ? Math.min(1, widthDp / MIN_PLAYER_CSS_W) : 1;
+  const playBadgeSize = 56 * playerScale;
   const ref = useRef<WebView>(null);
   // html собирается один раз: смена props — команды в страницу, а не перезагрузка.
   const initRef = useRef({ mode, muted, prebuffer, prebufferMs, startSec, widthDp, loop });
@@ -228,7 +234,24 @@ export const FliqYoutubePlayer = memo(forwardRef<FliqYoutubePlayerHandle, FliqYo
         style={styles.web}
         containerStyle={StyleSheet.absoluteFill}
       />
-      <Pressable onPress={toggleByUserTap} style={StyleSheet.absoluteFill} />
+      <Pressable
+        onPress={toggleByUserTap}
+        accessibilityRole="button"
+        accessibilityLabel={fliqT(mode === 'hold' ? 'play' : 'pause', lang)}
+        accessibilityElementsHidden={mode === 'pause'}
+        importantForAccessibility={mode === 'pause' ? 'no-hide-descendants' : 'auto'}
+        style={styles.playbackTouch}
+      >
+        {/* Только пауза человека: загрузка и скрытая подгрузка не показывают «играть». */}
+        {mode === 'hold' ? (
+          <View pointerEvents="none" style={[
+            styles.playBadge,
+            { width: playBadgeSize, height: playBadgeSize, borderRadius: playBadgeSize / 2 },
+          ]}>
+            <Ionicons name="play" size={38 * playerScale} color="#FFFFFF" style={{ marginLeft: 3 * playerScale }} />
+          </View>
+        ) : null}
+      </Pressable>
     </View>
   );
 }));
@@ -271,4 +294,10 @@ export const FliqEmbedPlayer = memo(function FliqEmbedPlayer({ uri, onLoaded, on
 const styles = StyleSheet.create({
   youtubeHost: { flex: 1 },
   web: { flex: 1, backgroundColor: '#000' },
+  playbackTouch: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center' },
+  playBadge: {
+    backgroundColor: 'rgba(0,0,0,0.38)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 });

@@ -14,6 +14,7 @@ class LiviAppPackage : ReactPackage {
       LiviKeyVaultModule(reactContext),
       LiviCallKeepAliveModule(reactContext),
       LiviIntegrityModule(reactContext),
+      LiviReviewModule(reactContext),
     )
   }
 

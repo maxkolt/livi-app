@@ -611,9 +611,12 @@ const styles = StyleSheet.create({
     height: 48,
   },
   avatar: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
+    position: 'absolute',
+    left: -3,
+    top: -3,
+    width: 54,
+    height: 54,
+    borderRadius: 27,
     backgroundColor: WELCOME_CHROME_BTN_BG,
   },
   avatarFallback: {

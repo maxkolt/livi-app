@@ -20,7 +20,7 @@ export type FliqPlayMode = 'play' | 'pause' | 'hold';
  * Ниже этой ширины YouTube включает «маленький» / Shorts-оверлей (лайк, звук, меню,
  * красная полоса). Держим viewport не уже этого — WebView сам ужмёт страницу в карточку.
  */
-const MIN_PLAYER_CSS_W = 390;
+export const MIN_PLAYER_CSS_W = 390;
 
 /**
  * Страница плеера. Кроме «играть/пауза»:
@@ -225,10 +225,9 @@ ${init.widthDp ? `window.__fliqFit(${Math.round(init.widthDp)});` : ''}
             }
             return;
           }
-          // pause — ролик не на экране: играть не даём. hold — его остановил сам человек:
-          // запуск кнопкой в плеере — тоже его решение, сообщаем и играем.
-          if(e.data===1&&want==='pause'){ try{player.pauseVideo();}catch(_){} return; }
-          if(e.data===1&&want==='hold'){ want='play'; send({t:'userplay'}); }
+          // Запоздавший PLAYING не отменяет паузу. Касания принимает RN, поэтому
+          // продолжить после hold может только явный __fliqUserToggle / команда play.
+          if(e.data===1&&want!=='play'){ try{player.pauseVideo();}catch(_){} return; }
           if(e.data===1&&starting){ starting=false; applyMute(); }
           if(e.data===2&&want==='play'&&!ended){ try{player.playVideo();}catch(_){} return; }
           send({t:'state',s:e.data});

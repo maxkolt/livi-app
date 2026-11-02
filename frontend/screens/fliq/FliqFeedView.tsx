@@ -8,7 +8,7 @@
 // Листается только сам ролик: рамка карточки, полоса прогресса и кнопки LiVi (звук, YouTube,
 // сохранить, переслать) стоят на месте, ролики сменяют друг друга внутри рамки. Кнопки — ровным
 // рядом под роликом, не поверх плеера: правила YouTube API запрещают перекрывать встроенный плеер.
-// Полоса прогресса появляется, когда ролик на экране пошёл, и прячется, пока следующий грузится.
+// Полоса прогресса остаётся на месте и видна даже во время загрузки следующего ролика.
 //
 // Пауза: ушли с вкладки — ролик встаёт и продолжает при возврате; если паузу поставил сам
 // человек — при возврате ролик так и стоит на том же месте.
@@ -516,16 +516,8 @@ export function FliqFeedView({
 
   const savedIds = useMemo(() => new Set(savedItems.map((item) => item.id)), [savedItems]);
 
-  // Полоса появляется, когда ролик на экране пошёл: пока он грузится или листаем — её нет.
-  const barShown = !!activeId && startedId === activeId;
-  const barOpacity = useRef(new Animated.Value(0)).current;
-  useEffect(() => {
-    Animated.timing(barOpacity, {
-      toValue: barShown ? 1 : 0,
-      duration: barShown ? 220 : 120,
-      useNativeDriver: true,
-    }).start();
-  }, [barOpacity, barShown]);
+  // Дорожка видна всегда; перемотка доступна после старта текущего ролика.
+  const canSeek = !!activeId && startedId === activeId;
 
   const onTopicsDone = useCallback(
     (next: FliqTopic[]) => {
@@ -863,7 +855,7 @@ export function FliqFeedView({
                   и шаг ленты расходился с её высотой. */}
               <View pointerEvents="none" style={styles.frameRim} />
             </View>
-            <Animated.View pointerEvents={barShown ? 'auto' : 'none'} style={{ opacity: barOpacity }}>
+            <View pointerEvents={canSeek ? 'auto' : 'none'}>
               <FliqProgressBar
                 progress={progress}
                 width={boxW}
@@ -871,7 +863,7 @@ export function FliqFeedView({
                 onSeek={seekActive}
                 style={styles.progressLow}
               />
-            </Animated.View>
+            </View>
             {activeItem ? (
               <FliqActionPanel
                 item={activeItem}

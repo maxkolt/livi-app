@@ -1,4 +1,5 @@
 import type { AppRuntimeGlobals } from '../utils/appRuntimeTypes';
+import { notificationHomeTab } from '../utils/notificationHome';
 // screens/HomeScreen.tsx
 import React, { useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef, startTransition } from 'react';
 import {
@@ -485,7 +486,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     () => ({ paddingTop: homeInsets.top, paddingBottom: tabBarH }),
     [homeInsets.top, tabBarH],
   );
-  const [welcomeActiveTab, setWelcomeActiveTab] = useState<WelcomeTabId>('search');
+  const [welcomeActiveTab, setWelcomeActiveTab] = useState<WelcomeTabId>(() => notificationHomeTab(route?.params) || 'search');
   const welcomeActiveTabRef = useRef<WelcomeTabId>('search');
   welcomeActiveTabRef.current = welcomeActiveTab;
   useLayoutEffect(() => {
@@ -543,7 +544,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   }, [welcomeActiveTab]);
   // Effects/data refreshes are non-visual work. Start them only after the selected pane
   // has had time to paint; tying them directly to welcomeActiveTab made the tap commit heavy.
-  const [welcomeSettledTab, setWelcomeSettledTab] = useState<WelcomeTabId>('search');
+  const [welcomeSettledTab, setWelcomeSettledTab] = useState<WelcomeTabId>(() => notificationHomeTab(route?.params) || 'search');
   useEffect(() => {
     if (welcomeSettledTab === welcomeActiveTab) return;
     const timer = setTimeout(() => setWelcomeSettledTab(welcomeActiveTab), 80);
@@ -556,7 +557,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
    * hundreds of milliseconds. The less frequent panes remain lazy.
    */
   const [mountedWelcomeTabs, setMountedWelcomeTabs] = useState<ReadonlySet<WelcomeTabId>>(
-    () => new Set<WelcomeTabId>(['search', 'friends', 'chat']),
+    () => new Set<WelcomeTabId>(['search', 'friends', 'chat', notificationHomeTab(route?.params) || 'search']),
   );
   const ensureWelcomeTabMounted = useCallback((tabId: WelcomeTabId) => {
     setMountedWelcomeTabs((prev) => {
@@ -632,6 +633,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
 
   const {
     unreadByUser,
+    unreadLoaded,
     setUnreadByUser,
     missedByUser,
     setMissedByUser,
@@ -639,6 +641,27 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     refreshUnreadCountsForFriends,
     refreshBadgesOnAppResume,
   } = useHomeBadges({ friends, friendsRef });
+
+  // Paint a cold notification destination together with its local rows. In Calls,
+  // import the native inbox first so inserting the new call cannot shift the list.
+  const notificationEntryKind = useRef(
+    route?.params?.openWelcomeCallsMissed ? 'missed' : route?.params?.openWelcomeChatUnread ? 'unread' : null,
+  ).current;
+  const [notificationEntryReady, setNotificationEntryReady] = useState(
+    !notificationEntryKind,
+  );
+  const notificationChatHasRow = unreadLoaded && friends.some(f => (unreadByUser[String(f.id)] || 0) > 0);
+  useLayoutEffect(() => {
+    if (notificationEntryKind === 'unread' && notificationChatHasRow) setNotificationEntryReady(true);
+  }, [notificationEntryKind, notificationChatHasRow]);
+  const onNotificationCallHistoryReady = useCallback(() => {
+    if (notificationEntryKind === 'missed') setNotificationEntryReady(true);
+  }, [notificationEntryKind]);
+  useEffect(() => {
+    if (notificationEntryReady) return;
+    const timer = setTimeout(() => setNotificationEntryReady(true), 750);
+    return () => clearTimeout(timer);
+  }, [notificationEntryReady]);
 
   const { onlineCount: welcomeOnlineCount } = useWelcomeOnlineCount(
     appIsActive,
@@ -690,7 +713,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const [profileLoaded, setProfileLoaded] = useState(homeScreenAlreadyBooted);
   const [, setDataLoaded] = useState(homeScreenAlreadyBooted);
   // Сплеш поверх уже отрисованного Home: при уходе сплеша видна страница приветствия с актуальными данными
-  const [splashDismissed, setSplashDismissed] = useState(homeScreenAlreadyBooted);
+  const [splashDismissed, setSplashDismissed] = useState(homeScreenAlreadyBooted || !!notificationHomeTab(route?.params));
   const splashTimingRef = useRef<SplashTiming>({ t0: Date.now(), at: {} });
   if (homeScreenAlreadyBooted && !splashTimingRef.current.reported) {
     splashTimingRef.current.reported = true;
@@ -1014,7 +1037,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const L = useCallback((key: string) => t(key, lang), [lang]);
 
   // ===== Заявки в друзья: страница из вкладки «Друзья», красная точка на её кнопке =====
-  const [friendRequestsOpen, setFriendRequestsOpen] = useState(false);
+  const [friendRequestsOpen, setFriendRequestsOpen] = useState(!!route?.params?.openFriendRequests);
+  const [appUpdatesRequest, setAppUpdatesRequest] = useState(0);
   const openFriendRequests = useCallback(() => setFriendRequestsOpen(true), []);
   const closeFriendRequests = useCallback(() => setFriendRequestsOpen(false), []);
   const friendRequestItems = useFriendRequests((s) => s.items);
@@ -5188,8 +5212,8 @@ const handleClearNick = useCallback(async () => {
     ],
   );
 
-  // Авто-открытие welcome-вкладок по route params (тап по уведомлению). Legacy menu не открываем.
-  useEffect(() => {
+  // Apply notification tabs before paint; Search avatar/radar must not hold their splash.
+  useLayoutEffect(() => {
     const ended = (route)?.params?.callEnded;
     const cancelled = (route)?.params?.callCancelled;
     const openFriendsMenu = (route)?.params?.openFriendsMenu;
@@ -5207,7 +5231,11 @@ const handleClearNick = useCallback(async () => {
     const wantCallsMissed = !!(openWelcomeCallsMissed || openFriendsMenu);
     const wantChat = !!(openWelcomeChat || (openFriendsTab && pushMessageFrom && !openFriendsMenu));
     const wantFriends = !!(openFriendsTab && !openFriendsMenu && !pushMessageFrom && !openWelcomeChat);
-    const wantProfile = !!openWelcomeProfile;
+    const wantProfile = !!(openWelcomeProfile || route?.params?.openAppUpdates);
+    if (wantCalls || wantChat || wantFriends || wantProfile) {
+      setSplashDismissed(true);
+      setFriendRequestsOpen(wantFriends && openFriendRequestsParam);
+    }
 
     if (wantCalls) {
       if (wantCallsMissed) {
@@ -5236,6 +5264,7 @@ const handleClearNick = useCallback(async () => {
     } else if (wantProfile) {
       setWelcomeActiveTab('profile');
       ensureWelcomeTabMounted('profile');
+      if (route?.params?.openAppUpdates) setAppUpdatesRequest(value => value + 1);
     }
 
     if (wantCalls || wantChat || wantFriends || wantProfile || openFriendsMenu || openFriendsTab) {
@@ -5576,8 +5605,8 @@ const handleClearNick = useCallback(async () => {
     [friends, unreadByUser, missedByUser, friendRequestsCount, initialized, refreshing, lang],
   );
   const chatsPaneRevision = useMemo(
-    () => ({ friends, unreadByUser, refreshing, lang }),
-    [friends, unreadByUser, refreshing, lang],
+    () => ({ friends, unreadByUser, unreadLoaded, initialized, refreshing, lang }),
+    [friends, unreadByUser, unreadLoaded, initialized, refreshing, lang],
   );
   const showSplashOverlay = !splashDismissed;
   // Splash = «Поиск готов к первому кадру»: версия проверена, URI есть (если аватар
@@ -5777,6 +5806,7 @@ const handleClearNick = useCallback(async () => {
           hiddenRevision={chatsPaneRevision}
         >
           <HomeWelcomeChatsView
+            dataReady={initialized && unreadLoaded}
             bottomInset={tabBarH + GLASS_DOCK_TOP_PAD}
             lang={lang}
             L={L}
@@ -5817,6 +5847,7 @@ const handleClearNick = useCallback(async () => {
         {mountedWelcomeTabs.has('calls') ? (
         <WelcomeKeepAlivePane visible={showCallsTab} mode="offscreen">
           <HomeWelcomeCallsView
+            onInitialHistoryReady={onNotificationCallHistoryReady}
             bottomInset={tabBarH + GLASS_DOCK_TOP_PAD}
             lang={lang}
             L={L}
@@ -5843,6 +5874,7 @@ const handleClearNick = useCallback(async () => {
           {/* Источник нижнего стекла: что подъезжает к навбару, видно под стеклом размытым. */}
           <BlurListSource sourceId={HOME_BLUR_LIST_SOURCE.profile} style={{ flex: 1, minHeight: 0 }}>
           <HomeWelcomeProfileView
+            openAppUpdatesRequest={appUpdatesRequest}
             lang={lang}
             isDark={isDark}
             styles={styles}
@@ -6203,6 +6235,9 @@ const handleClearNick = useCallback(async () => {
       </AppDialogModal>
     </SafeAreaView>
 
+    {!notificationEntryReady && (
+      <View testID="notification-entry-cover" style={[StyleSheet.absoluteFillObject, { zIndex: 9997, backgroundColor: WELCOME_STAGE_BG }]} />
+    )}
     {showSplashOverlay && (
       <View style={[StyleSheet.absoluteFillObject, { zIndex: 9998 }]} pointerEvents="box-none">
         <FliqWebViewWarmup />

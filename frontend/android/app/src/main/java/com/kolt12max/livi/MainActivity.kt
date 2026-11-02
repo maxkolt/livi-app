@@ -1392,6 +1392,8 @@ class MainActivity : ReactActivity() {
     } else {
       setTheme(R.style.AppTheme)
     }
+    // Publish the destination before React creates its initial navigation state.
+    consumeShadeOpenIntent(intent, dismissMissed = false)
     super.onCreate(null)
     if (!isDeclineCallIntent(intent)) {
       // Новая сцена, как у JS-сплэша, пиксель-в-пиксель: старт без смены тона.
@@ -1659,6 +1661,7 @@ class MainActivity : ReactActivity() {
    */
   private fun consumeShadeOpenIntent(intent: Intent?, dismissMissed: Boolean) {
     if (intent == null) return
+    if (intent.getBooleanExtra("livi_notification_destination_consumed", false)) return
     val action = intent.action
     val openChat =
       action == LiviFirebaseMessagingService.ACTION_OPEN_UNREAD_CHAT ||
@@ -1667,6 +1670,7 @@ class MainActivity : ReactActivity() {
       action == LiviFirebaseMessagingService.ACTION_OPEN_MISSED_CALLS ||
         intent.getBooleanExtra(EXTRA_OPEN_TAB_FRIENDS, false)
     if (openChat) {
+      intent.putExtra("livi_notification_destination_consumed", true)
       intent.removeExtra(EXTRA_OPEN_WELCOME_CHAT)
       if (action == LiviFirebaseMessagingService.ACTION_OPEN_UNREAD_CHAT) {
         intent.action = null
@@ -1675,6 +1679,7 @@ class MainActivity : ReactActivity() {
       return
     }
     if (openCalls) {
+      intent.putExtra("livi_notification_destination_consumed", true)
       intent.removeExtra(EXTRA_OPEN_TAB_FRIENDS)
       if (action == LiviFirebaseMessagingService.ACTION_OPEN_MISSED_CALLS) {
         intent.action = null
@@ -1686,6 +1691,35 @@ class MainActivity : ReactActivity() {
           LiviAppModule.dismissAllMissedCallNotificationsFromContext(this@MainActivity)
         }, 150)
       }
+      return
+    }
+    // Expo's local notifications use a marshalled response; remote Expo/FCM
+    // notifications use extras. Read either before React starts, leaving Expo's
+    // payload intact for its acknowledgement and notification cleanup listeners.
+    try {
+      val response = expo.modules.notifications.service.NotificationsService.getNotificationResponseFromOpenIntent(intent)
+      val content = response?.let {
+        if (it.actionIdentifier != expo.modules.notifications.notifications.model.NotificationResponse.DEFAULT_ACTION_IDENTIFIER) return
+        expo.modules.notifications.notifications.NotificationSerializer.toBundle(it.notification)
+          .getBundle("request")?.getBundle("content")
+      }
+      val type = content?.getBundle("data")?.getString("type")
+        ?: (content?.getString("dataString") ?: intent.getStringExtra("body"))?.let {
+          try { org.json.JSONObject(it).optString("type", "") } catch (_: Exception) { "" }
+        } ?: intent.getStringExtra("type")
+      val destination = when (type) {
+        "message" -> "unread"
+        "missed_call" -> "missed"
+        "friend_request" -> "requests"
+        "app_update" -> "updates"
+        else -> ""
+      }
+      if (destination.isNotEmpty()) {
+        intent.putExtra("livi_notification_destination_consumed", true)
+        LiviAppModule.setPendingNotificationDestination(this, destination)
+      }
+    } catch (e: Exception) {
+      android.util.Log.w("MainActivity", "Could not read notification destination", e)
     }
   }
 

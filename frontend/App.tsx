@@ -1,5 +1,6 @@
 import type { AppRuntimeGlobals } from './utils/appRuntimeTypes';
 import type { PushNotificationData } from './utils/notificationTypes';
+import { notificationHomeParams } from './utils/notificationHome';
 // App.tsx
 import "react-native-gesture-handler";
 import React from "react";
@@ -41,13 +42,15 @@ import { AppDialogModal } from "./components/AppDialog";
 import { AppAlertHost } from "./components/AppAlert";
 import { APP_BLUR_SOURCE, BlurListSource } from "./components/BackdropBlur";
 import { useFonts } from "expo-font";
+import { FontAwesome, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { APP_FONT_FILES } from "./utils/appFont";
 import { PiPProvider, usePiP } from "./src/pip/PiPContext";
 import PiPOverlay from "./src/pip/PiPOverlay";
+import AppReviewHost from './components/AppReviewHost';
 import SystemPiPLogoLayer from "./src/pip/SystemPiPLogoLayer";
 import SystemPiPCaptureHost from "./src/pip/SystemPiPCaptureHost";
 import type { RootStackParamList } from "./navigation/types";
-import { addNotificationListeners, ensureInitialNotificationPermissions, openIncomingCallScreen, openAnswerCallScreen, handleDeclineCallFromDeepLink, registerAndSendPushToken, clearCallRelatedNotificationsAndSyncBadge, syncAppBadgeFromMissedCount, recordMissedCallForUser, applyPendingMissedCallsFromNative, getMissedCountByUserFromNative } from './utils/pushNotifications';
+import { navigateNotificationHome, drainPendingNavigations, addNotificationListeners, ensureInitialNotificationPermissions, openIncomingCallScreen, openAnswerCallScreen, handleDeclineCallFromDeepLink, registerAndSendPushToken, clearCallRelatedNotificationsAndSyncBadge, syncAppBadgeFromMissedCount, recordMissedCallForUser, applyPendingMissedCallsFromNative, getMissedCountByUserFromNative } from './utils/pushNotifications';
 import { forceCallLogUiNow, recordCancelledCall, recordNoAnswerCall, recordPendingDeclinedCalls } from './screens/home/callLog';
 import { markChatCallBubbleEligible } from './screens/chat/chatCallEvents';
 import { getInstallId, getInstallSecret } from './utils/installId';
@@ -442,6 +445,12 @@ const isVideoSessionRoute = (routeName?: string | null) =>
 (global as AppRuntimeGlobals).__cycleAudioRouteRef = { current: null as (() => void) | null };
 
 function AppContent() {
+  const [initialNotificationParams] = React.useState(() => {
+    const params = notificationHomeParams(NativeModules.LiviAppModule?.initialNotificationDestination);
+    if (params?.openWelcomeChatUnread) setPendingWelcomeChatsFilter('unread');
+    if (params?.openWelcomeCallsMissed) setPendingWelcomeCallsFilter('missed');
+    return params;
+  });
   const { theme, isDark } = useAppTheme();
   const pip = usePiP();
   const lang = useLang((s) => s.lang);
@@ -2259,42 +2268,7 @@ function AppContent() {
     const LiviAppModule = NativeModules.LiviAppModule;
     const key = 'missed_calls_by_user_v1';
     let cancelled = false;
-    const GO_TO_WELCOME_RETRIES = 25;
-    const GO_TO_WELCOME_DELAY_MS = 100;
-    const goToWelcomeCallsMissed = (retryCount = 0) => {
-      if (cancelled) return;
-      if (navRef.isReady()) {
-        ensureInAppPiPBeforeOpenFriends();
-        try { setPendingWelcomeCallsFilter('missed'); } catch {}
-        navRef.dispatch(CommonActions.navigate({ name: 'Home', params: { openWelcomeCalls: true, openWelcomeCallsMissed: true } }));
-        return;
-      }
-      if (retryCount < GO_TO_WELCOME_RETRIES) {
-        setTimeout(() => goToWelcomeCallsMissed(retryCount + 1), GO_TO_WELCOME_DELAY_MS);
-      }
-    };
-    const goToWelcomeChatUnread = (retryCount = 0) => {
-      if (cancelled) return;
-      if (navRef.isReady()) {
-        ensureInAppPiPBeforeOpenFriends();
-        try { setPendingWelcomeChatsFilter('unread'); } catch {}
-        navRef.dispatch(CommonActions.navigate({ name: 'Home', params: { openWelcomeChat: true, openWelcomeChatUnread: true } }));
-        return;
-      }
-      if (retryCount < GO_TO_WELCOME_RETRIES) {
-        setTimeout(() => goToWelcomeChatUnread(retryCount + 1), GO_TO_WELCOME_DELAY_MS);
-      }
-    };
-    (async () => {
-      // Раздельные native-флаги: Chat → непрочитанные, Calls → пропущенные (без эвристики по badge).
-      const openChat = await (LiviAppModule?.getAndClearPendingOpenWelcomeChat?.() ?? Promise.resolve(false));
-      if (openChat) {
-        goToWelcomeChatUnread();
-      }
-      const openCalls = await (LiviAppModule?.getAndClearPendingOpenTabFriends?.() ?? Promise.resolve(false));
-      if (openCalls && !openChat) {
-        goToWelcomeCallsMissed();
-      }
+    (() => {
       setTimeout(() => {
         if (cancelled) return;
         (async () => {
@@ -2359,43 +2333,39 @@ function AppContent() {
     return () => sub.remove();
   }, [invokeReturnToVideoCallFromNotification]);
 
-  // Android: тап по уведомлению «Пропущенный вызов» / «Непрочитанные» → welcome Calls/Chat.
+  // Handle taps even while Home is already foreground; retain cold-start taps until nav is ready.
   React.useEffect(() => {
     if (Platform.OS !== 'android') return;
-    const goChat = () => {
-      const go = (retry = 0) => {
-        if (navRef.isReady()) {
-          ensureInAppPiPBeforeOpenFriends();
-          try { setPendingWelcomeChatsFilter('unread'); } catch {}
-          navRef.dispatch(CommonActions.navigate({ name: 'Home', params: { openWelcomeChat: true, openWelcomeChatUnread: true } }));
-          return;
-        }
-        if (retry < 15) setTimeout(() => go(retry + 1), 100);
-      };
-      go();
+    let disposed = false;
+    let reading = false;
+    let readAgain = false;
+    const consume = async () => {
+      if (reading) { readAgain = true; return; }
+      reading = true;
+      try {
+        do {
+          readAgain = false;
+          const mod = NativeModules.LiviAppModule;
+          const destination = mod?.getAndClearPendingNotificationDestination
+            ? await mod.getAndClearPendingNotificationDestination()
+            : (await mod?.getAndClearPendingOpenWelcomeChat?.()) ? 'unread'
+              : (await mod?.getAndClearPendingOpenTabFriends?.()) ? 'missed' : '';
+          if (!disposed && (destination === 'unread' || destination === 'missed' || destination === 'requests' || destination === 'updates')) {
+            ensureInAppPiPBeforeOpenFriends();
+            await navigateNotificationHome(destination);
+          }
+        } while (readAgain && !disposed);
+      } catch (e) {
+        logger.warn('[App] notification destination failed', e);
+      } finally { reading = false; }
     };
-    const goCalls = () => {
-      const go = (retry = 0) => {
-        if (navRef.isReady()) {
-          ensureInAppPiPBeforeOpenFriends();
-          try { setPendingWelcomeCallsFilter('missed'); } catch {}
-          navRef.dispatch(CommonActions.navigate({ name: 'Home', params: { openWelcomeCalls: true, openWelcomeCallsMissed: true } }));
-          return;
-        }
-        if (retry < 15) setTimeout(() => go(retry + 1), 100);
-      };
-      go();
-    };
-    const sub = AppState.addEventListener('change', (state) => {
-      if (state !== 'active') return;
-      NativeModules.LiviAppModule?.getAndClearPendingOpenWelcomeChat?.()?.then?.((open: boolean) => {
-        if (open) goChat();
-      });
-      NativeModules.LiviAppModule?.getAndClearPendingOpenTabFriends?.()?.then?.((open: boolean) => {
-        if (open) goCalls();
-      });
+    const emitter = new NativeEventEmitter(NativeModules.LiviAppModule);
+    const tap = emitter.addListener('NotificationHomeDestination', () => { void consume(); });
+    const resume = AppState.addEventListener('change', state => {
+      if (state === 'active') void consume();
     });
-    return () => sub.remove();
+    void consume();
+    return () => { disposed = true; tap.remove(); resume.remove(); };
   }, [ensureInAppPiPBeforeOpenFriends]);
 
   // «Надёжные звонки»: из фона Android мог не дать поднять сервис — проверяем на старте и при возврате.
@@ -4664,6 +4634,7 @@ function AppContent() {
             },
           }}
           onReady={() => {
+            void drainPendingNavigations();
             try {
               if (navRef.isReady()) {
                 const currentRoute = navRef.getCurrentRoute()?.name;
@@ -4743,7 +4714,7 @@ function AppContent() {
             // Типы native-stack не включают detachInactiveScreens, но опция поддерживается в рантайме.
             detachInactiveScreens: false,
           } as React.ComponentProps<typeof Stack.Navigator>['screenOptions']}>
-              <Stack.Screen name="Home" component={HomeScreen} />
+              <Stack.Screen name="Home" component={HomeScreen} initialParams={initialNotificationParams} />
               <Stack.Screen
                 name="RandomChat"
                 getComponent={getRandomChatScreen}
@@ -4817,6 +4788,7 @@ function AppContent() {
 
           {/* In-app PiP не показывается на экране видеозвонка (VideoCall/RandomChat) — только на Home и др. */}
           <PiPOverlay currentRouteName={routeName} />
+          <AppReviewHost ready={routeName === 'Home' && !callAccessModalVisible && bluetoothExplainMode == null} />
           <SystemPiPCaptureHost />
           <SystemPiPLogoLayer />
 
@@ -4876,7 +4848,12 @@ function AppContent() {
 export default function App() {
   // Весь текст — Exo 2: приложение рисуется, когда файлы шрифта уже загружены,
   // чтобы первый экран не мелькнул системным шрифтом.
-  const [appFontsLoaded, appFontsError] = useFonts(APP_FONT_FILES);
+  const [appFontsLoaded, appFontsError] = useFonts({
+    ...APP_FONT_FILES,
+    ...Ionicons.font,
+    ...MaterialCommunityIcons.font,
+    ...FontAwesome.font,
+  });
   // Навигация в «вернуться к звонку»:
   const navigateToCall = (callId: string | null, roomId: string | null) => {
     console.log('[App] navigateToCall called with:', { callId, roomId });

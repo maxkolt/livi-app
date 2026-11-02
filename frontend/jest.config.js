@@ -1,6 +1,8 @@
 /** @type {import('jest').Config} */
 module.exports = {
   preset: 'ts-jest',
+  // Unit tests render component element trees in Node; the app's "react-native" JSX stays uncompiled there.
+  transform: { '^.+\\.tsx?$': ['ts-jest', { tsconfig: { jsx: 'react' } }] },
   testEnvironment: 'node',
   setupFiles: ['<rootDir>/jest.setup.js'],
   roots: ['<rootDir>'],

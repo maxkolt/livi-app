@@ -40,6 +40,7 @@ import {
   prewarmDirectCallAudioCapture,
 } from './directCallConnectPrewarm';
 import { presentFriendRequestShadeNotification } from './productShadeNotifications';
+import { notificationHomeParams, type NotificationHomeDestination } from './notificationHome';
 
 const MISSED_CALLS_KEY = 'missed_calls_by_user_v1';
 /** Флаг: пользователь заходил во вкладку «Друзья» и «увидел» пропущенные — бейдж и уведомления в шторке скрываем, счётчики в приложении не трогаем. */
@@ -511,7 +512,18 @@ async function markMissedCallIdApplied(callId: string): Promise<void> {
  * Один пропущенный звонок = +1 (не дублируем FCM native + socket/pending).
  * На Android FCM уже увеличивает нативный счётчик — JS подтягивает max(storage, native).
  */
-export async function recordMissedCallForUser(
+let missedRecordQueue: Promise<unknown> = Promise.resolve();
+
+export function recordMissedCallForUser(
+  userId: string,
+  options?: { callId?: string; source?: string; fromNick?: string },
+): Promise<boolean> {
+  const result = missedRecordQueue.catch(() => {}).then(() => recordMissedCallForUserOnce(userId, options));
+  missedRecordQueue = result;
+  return result;
+}
+
+async function recordMissedCallForUserOnce(
   userId: string,
   options?: { callId?: string; source?: string; fromNick?: string },
 ): Promise<boolean> {
@@ -521,7 +533,9 @@ export async function recordMissedCallForUser(
   if (!uid) return false;
 
   // Persist before either notification/badge dedupe can discard this delivery.
-  if (callId) await recordMissedCallHistory({ peerId: uid, eventId: callId, fromNick: options?.fromNick });
+  const historyAdded = callId
+    ? await recordMissedCallHistory({ peerId: uid, eventId: callId, fromNick: options?.fromNick })
+    : true;
 
   if (callId && (await wasMissedCallIdApplied(callId))) {
     logger.info('[push] recordMissedCallForUser skip (callId dup)', { callId, uid, source });
@@ -547,7 +561,7 @@ export async function recordMissedCallForUser(
 
   // Не в приложении / не на Calls: сразу системное уведомление + бейдж иконки (FCM мог не успеть).
   let invokedNativeShow = false;
-  if (Platform.OS === 'android' && callId) {
+  if (Platform.OS === 'android' && callId && historyAdded) {
     let alreadyShown = false;
     try {
       alreadyShown = !!(await NativeModules.LiviAppModule?.wasMissedShownForCallId?.(callId));
@@ -577,11 +591,10 @@ export async function recordMissedCallForUser(
   }
 
   let next: number;
-  if (nativeAlreadyForCallId || invokedNativeShow) {
+  if (nativeAlreadyForCallId || invokedNativeShow || !historyAdded) {
     // Native уже сделал +1 (blocking show / FCM). Не звать syncMissedCountForUser —
     // иначе set(1) + поздний increment → «2 пропущенных».
     next = Math.max(storageN, nativeN);
-    if (next <= storageN) next = storageN + 1;
   } else if (nativeN > storageN) {
     next = nativeN;
   } else {
@@ -1285,7 +1298,7 @@ function schedulePendingNavigationDrain(delayMs = 80): void {
   }, delayMs);
 }
 
-async function drainPendingNavigations(): Promise<void> {
+export async function drainPendingNavigations(): Promise<void> {
   if (pendingNavigationDrainInFlight) return;
   pendingNavigationDrainInFlight = true;
   try {
@@ -1330,6 +1343,30 @@ async function runWhenNavReady(
   schedulePendingNavigationDrain();
   logger.info('[push] queued notification navigation until nav ready', { key });
   return false;
+}
+
+/** Navigate first; shade cleanup and network badge reconciliation must not delay the tap. */
+let lastHomeNotificationNavigation: { nav: ReadyNavigation; destination: NotificationHomeDestination; at: number } | null = null;
+
+export function navigateNotificationHome(destination: NotificationHomeDestination, fromId?: string): Promise<boolean> {
+  return runWhenNavReady('notification:home', (nav) => {
+    const now = Date.now();
+    // MainActivity, AppState resume and Expo may report the same tap. Once Home
+    // is in front, repeating the dispatch only churns route params and list effects.
+    if (lastHomeNotificationNavigation?.nav === nav &&
+        lastHomeNotificationNavigation.destination === destination &&
+        now - lastHomeNotificationNavigation.at < 1500 &&
+        nav.getCurrentRoute?.()?.name === 'Home') return;
+    lastHomeNotificationNavigation = { nav, destination, at: now };
+    ensureInAppPiPBeforeOpeningFriendsFromMessageNotification();
+    emitCloseHomeModals();
+    if (destination === 'unread') setPendingWelcomeChatsFilter('unread');
+    if (destination === 'missed') setPendingWelcomeCallsFilter('missed');
+    nav.dispatch(CommonActions.navigate({
+      name: 'Home',
+      params: { ...notificationHomeParams(destination), ...(fromId ? { pushMessageFrom: fromId } : {}) },
+    }));
+  }, 0);
 }
 
 async function navigateToVideoCallIncoming(
@@ -1515,72 +1552,37 @@ async function handleNotificationResponse(data: PushNotificationData, actionIden
     }
 
     if (type === 'missed_call') {
-      await runWhenNavReady(`missed_call:${String(data?.from || data?.fromUserId || 'unknown')}`, async (nav) => {
-        await persistMissedCallNotificationHistory(data);
-        try { setPendingWelcomeCallsFilter('missed'); } catch {}
-        nav.dispatch(
-          CommonActions.reset({
-            index: 0,
-            routes: [{ name: 'Home', params: { openWelcomeCalls: true, openWelcomeCallsMissed: true } }],
-          })
-        );
-      });
+      void persistMissedCallNotificationHistory(data).catch(e => logger.warn('[push] missed tap history failed', e));
+      await navigateNotificationHome('missed');
       return;
     }
 
     if (type === 'message') {
-      ensureInAppPiPBeforeOpeningFriendsFromMessageNotification();
       const fromId = String(data?.from || data?.fromUserId || '').trim();
-      await runWhenNavReady(`message:${fromId || String(data?.messageId || 'unknown')}`, async (nav) => {
-        await clearNotificationIndicators();
-        try { setPendingWelcomeChatsFilter('unread'); } catch {}
-        nav.dispatch(
-          CommonActions.reset({
-            index: 0,
-            routes: [{
-              name: 'Home',
-              params: {
-                openWelcomeChat: true,
-                openWelcomeChatUnread: true,
-                ...(fromId ? { pushMessageFrom: fromId } : {}),
-              },
-            }],
-          })
-        );
-      });
+      await navigateNotificationHome('unread', fromId);
+      void dismissMessageNotificationsOnly().catch(() => {});
       return;
     }
 
     if (type === 'friend_request') {
-      await runWhenNavReady(`friend_request:${String(data?.from || 'unknown')}`, async (nav) => {
+      await navigateNotificationHome('requests');
+      void (async () => {
         try {
           const { dismissFriendRequestShadeNotifications } = await import('./productShadeNotifications');
           await dismissFriendRequestShadeNotifications();
         } catch {}
-        nav.dispatch(
-          CommonActions.reset({
-            index: 0,
-            // Сразу страница «Заявки в друзья»: заявка ждёт там, даже если окно уже закрыли.
-            routes: [{ name: 'Home', params: { openFriendsTab: true, openFriendRequests: true } }],
-          })
-        );
-      });
+      })();
       return;
     }
 
     if (type === 'app_update') {
-      await runWhenNavReady('app_update', async (nav) => {
+      await navigateNotificationHome('updates');
+      void (async () => {
         try {
           const { dismissAppUpdateShadeNotifications } = await import('./productShadeNotifications');
           await dismissAppUpdateShadeNotifications();
         } catch {}
-        nav.dispatch(
-          CommonActions.reset({
-            index: 0,
-            routes: [{ name: 'Home', params: { openWelcomeProfile: true } }],
-          })
-        );
-      });
+      })();
       return;
     }
 
