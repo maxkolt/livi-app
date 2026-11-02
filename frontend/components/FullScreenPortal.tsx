@@ -16,6 +16,7 @@ export function FullScreenPortal({
   ready = true,
   keepMounted = false,
   instant = false,
+  animation = 'fade',
   onShown,
   onRequestClose,
   children,
@@ -33,6 +34,8 @@ export function FullScreenPortal({
   keepMounted?: boolean;
   /** Появиться сразу, без затухания (закрытие всё равно плавное). */
   instant?: boolean;
+  /** none — показать готовый слой и убрать его без анимации в обе стороны. */
+  animation?: 'fade' | 'none';
   /** Слой полностью показан и нарисован. */
   onShown?: () => void;
   /** Системное «Назад» — как onRequestClose у модалки. */
@@ -51,7 +54,7 @@ export function FullScreenPortal({
     if (visible) {
       setMounted(true);
       if (!ready) return;
-      if (instant) {
+      if (instant || animation === 'none') {
         opacity.setValue(1);
         // Два кадра: слой успевает нарисоваться, прежде чем о нём узнают.
         let raf = requestAnimationFrame(() => {
@@ -66,22 +69,30 @@ export function FullScreenPortal({
       );
       return;
     }
+    if (animation === 'none') {
+      opacity.setValue(0);
+      setMounted(false);
+      return;
+    }
     Animated.timing(opacity, { toValue: 0, duration: 160, useNativeDriver: true }).start(
       ({ finished }) => {
         if (finished) setMounted(false);
       },
     );
-  }, [visible, ready, instant, opacity]);
+  }, [visible, ready, instant, animation, opacity]);
 
   // «Назад» — сначала закрыть этот слой (и модалки над ним), потом навигация.
   useOverlayBackHandler(visible, () => requestCloseRef.current());
 
-  if (!visible && !mounted && !keepMounted) return null;
+  if (!visible && (!mounted || animation === 'none') && !keepMounted) return null;
+  const layerOpacity = animation === 'none'
+    ? visible && ready ? 1 : 0
+    : instant && visible ? 1 : opacity;
   return (
     <Portal>
       <Animated.View
-        // instant: непрозрачен с первого кадра, не дожидаясь эффекта.
-        style={[StyleSheet.absoluteFill, { opacity: instant && visible ? 1 : opacity }]}
+        // Без анимации готовый слой виден уже в первом кадре, закрытый — сразу скрыт.
+        style={[StyleSheet.absoluteFill, { opacity: layerOpacity }]}
         pointerEvents={visible ? 'auto' : 'none'}
         accessibilityViewIsModal={visible}
         accessibilityElementsHidden={!visible}

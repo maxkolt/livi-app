@@ -4751,8 +4751,8 @@ function AppContent() {
                 name="Chat"
                 getComponent={getChatScreen}
                 options={{
-                  animation: 'fade',
-                  animationDuration: 120,
+                  animation: 'none',
+                  animationDuration: 0,
                   gestureEnabled: true,
                   contentStyle: {
                     backgroundColor: WELCOME_STAGE_BG,

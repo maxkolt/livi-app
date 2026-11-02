@@ -72,7 +72,7 @@ type Props = {
 
 export function FriendRequestsPage({ visible, onClose, ...rest }: Props) {
   return (
-    <FullScreenPortal visible={visible} onRequestClose={onClose}>
+    <FullScreenPortal visible={visible} animation="none" onRequestClose={onClose}>
       <FriendRequestsContent visible={visible} onClose={onClose} {...rest} />
     </FullScreenPortal>
   );

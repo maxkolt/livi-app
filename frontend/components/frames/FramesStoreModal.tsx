@@ -66,6 +66,7 @@ type FrameItem = {
   key: string;
   colors: readonly [string, string, ...string[]];
   kind: 'ring';
+  available: boolean;
 };
 
 type ChatBackgroundItem = {
@@ -121,41 +122,49 @@ const FRAME_CATALOG: FrameItem[] = [
     key: 'fire',
     colors: ['#FFC062', '#FF8A34', '#FF4D1C'],
     kind: 'ring',
+    available: true,
   },
   {
     key: 'diamond',
     colors: ['#E8F6FF', '#9ED0FF', '#6AA9FF'],
     kind: 'ring',
-  },
-  {
-    key: 'aurora',
-    colors: ['#7CF5C8', '#5AA9FF', '#3B82F6'],
-    kind: 'ring',
-  },
-  {
-    key: 'palladium',
-    colors: ['#F2F4F7', '#C5CCD6', '#8B93A0'],
-    kind: 'ring',
+    available: true,
   },
   {
     key: 'frost',
     colors: ['#D9F4FF', '#7EC8E8', '#4A9BC7'],
     kind: 'ring',
+    available: true,
+  },
+  {
+    key: 'aurora',
+    colors: ['#7CF5C8', '#5AA9FF', '#3B82F6'],
+    kind: 'ring',
+    available: false,
+  },
+  {
+    key: 'palladium',
+    colors: ['#F2F4F7', '#C5CCD6', '#8B93A0'],
+    kind: 'ring',
+    available: false,
   },
   {
     key: 'jade',
     colors: ['#B8F0D0', '#3DCF8E', '#1B8F5A'],
     kind: 'ring',
+    available: false,
   },
   {
     key: 'void',
     colors: ['#D4B5FF', '#7B5CFF', '#2A1B4A'],
     kind: 'ring',
+    available: false,
   },
   {
     key: 'obsidian',
     colors: ['#6B7280', '#374151', '#111827'],
     kind: 'ring',
+    available: false,
   },
 ];
 
@@ -229,7 +238,7 @@ function FrameCoverCard({
   }
 
   return (
-    <View style={styles.cardShadow}>
+    <View style={[styles.cardShadow, { width: size, height: size }]}>
       <LinearGradient
         colors={item.colors as [string, string, ...string[]]}
         start={{ x: 0, y: 0 }}
@@ -256,6 +265,16 @@ function FrameCoverCard({
           onLoad={onLoad}
         />
       </LinearGradient>
+      {!item.available ? (
+        <View
+          pointerEvents="none"
+          style={[styles.frameLockedOverlay, { borderRadius: size / 2 }]}
+        >
+          <View style={styles.frameLockBadge}>
+            <MaterialCommunityIcons name="lock" size={Math.round(size * 0.25)} color={CROWN_GOLD} />
+          </View>
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -272,7 +291,7 @@ function PurchaseButton({
   onPress,
 }: {
   label: string;
-  icon: 'image-outline' | 'account-circle-outline';
+  icon: 'image-outline' | 'account-circle-outline' | 'lock-outline';
   width: number;
   height: number;
   borderColor: string;
@@ -288,6 +307,7 @@ function PurchaseButton({
       disabled={disabled}
       accessibilityRole="button"
       accessibilityLabel={label}
+      accessibilityState={{ disabled: !!disabled }}
       style={({ pressed }) => [
         styles.ctaWrap,
         { width },
@@ -469,6 +489,7 @@ export function FramesStoreModal(props: Props) {
   return (
     <FullScreenPortal
       visible={props.visible}
+      animation="none"
       ready={ready || loadedOnceRef.current}
       keepMounted={props.keepWarm}
       onRequestClose={() => requestCloseRef.current()}
@@ -702,7 +723,7 @@ function FramesStoreContent({
   if (!visible && !keepWarm) return null;
 
   const openSharedCheckout = async (kind: CosmeticKind) => {
-    if (paymentBusy) return;
+    if (paymentBusy || (kind === 'frame' && !activeFrame.available)) return;
     const itemId = kind === 'background' ? activeBackground.key : activeFrame.key;
     const owned = kind === 'background'
       ? entitlements.purchasedBackgroundIds.includes(itemId)
@@ -866,18 +887,20 @@ function FramesStoreContent({
       </View>
       <FlexGap {...gaps.button} />
       <PurchaseButton
-        label={paymentBusy === 'frame'
-          ? L('storeOpeningPayment')
-          : frameOwned
-            ? frameActive ? L('storeRemoveFrame') : L('storeApplyFrame')
-            : L('storeBuyFrame').replace('{price}', '199 ₽')}
-        icon="account-circle-outline"
+        label={!activeFrame.available
+          ? L('storeComingSoon')
+          : paymentBusy === 'frame'
+            ? L('storeOpeningPayment')
+            : frameOwned
+              ? frameActive ? L('storeRemoveFrame') : L('storeApplyFrame')
+              : L('storeBuyFrame').replace('{price}', '199 ₽')}
+        icon={activeFrame.available ? 'account-circle-outline' : 'lock-outline'}
         width={buttonWidth}
         height={buttonHeight}
-        borderColor={activeFrame.colors[1]}
-        surfaceColor={withAlpha(activeFrame.colors[0], 0.12)}
-        contentColor={activeFrame.colors[0]}
-        disabled={paymentBusy !== null}
+        borderColor={activeFrame.available ? activeFrame.colors[1] : 'rgba(139,148,158,0.4)'}
+        surfaceColor={activeFrame.available ? withAlpha(activeFrame.colors[0], 0.12) : 'rgba(139,148,158,0.08)'}
+        contentColor={activeFrame.available ? activeFrame.colors[0] : WELCOME_MUTED_TEXT}
+        disabled={!activeFrame.available || paymentBusy !== null}
         onPress={() => void openSharedCheckout('frame')}
       />
     </>
@@ -1053,6 +1076,19 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.42,
     shadowRadius: 13,
     elevation: 9,
+  },
+  frameLockedOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(4,8,14,0.64)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  frameLockBadge: {
+    padding: 9,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(219,191,130,0.48)',
+    backgroundColor: 'rgba(20,25,34,0.9)',
   },
   backgroundCard: { overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(255,255,255,0.13)' },
   chatBubble: {
