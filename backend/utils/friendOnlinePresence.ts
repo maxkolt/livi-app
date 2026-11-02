@@ -1,4 +1,5 @@
 import type { Server } from 'socket.io';
+import { measureMatchStage } from './matchPerformance';
 import mongoose from 'mongoose';
 import { getFriendIdsForUsers } from './friendshipUtils';
 
@@ -298,7 +299,7 @@ function emitPresenceSnapshotToUser(io: Server, userId: string, onlineFriendIds:
 async function loadFriendIdsForUsers(userIds: string[]): Promise<Map<string, string[]>> {
   const uniqueIds = [...new Set(userIds.map(normalizeUid).filter(isOid))];
   if (uniqueIds.length === 0 || mongoose.connection.readyState !== 1) return new Map<string, string[]>();
-  return getFriendIdsForUsers(uniqueIds);
+  return measureMatchStage('friends.batch', () => getFriendIdsForUsers(uniqueIds));
 }
 
 async function emitFriendPresenceForUsers(io: Server, changedUserIds: string | string[]): Promise<void> {
@@ -326,7 +327,11 @@ async function emitFriendPresenceForUsers(io: Server, changedUserIds: string | s
       for (const friendId of friends) recipientIds.add(friendId);
     }
 
-    const recipientFriends = await loadFriendIdsForUsers([...recipientIds]);
+    const missingRecipients = [...recipientIds].filter((id) => !changedFriends.has(id));
+    const recipientFriends = new Map([
+      ...changedFriends,
+      ...await loadFriendIdsForUsers(missingRecipients),
+    ]);
     for (const recipientId of recipientIds) {
       const friends = recipientFriends.get(recipientId) || [];
       emitPresenceSnapshotToUser(io, recipientId, friends.filter(isOnline));

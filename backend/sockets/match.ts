@@ -1,14 +1,16 @@
 import type { ErrorDetails } from '../utils/runtimeTypes';
 import type { Server } from 'socket.io';
+import { createHash } from 'node:crypto';
 import type { AuthedSocket } from './types';
 import { logger } from '../utils/logger';
 import { isShuttingDown } from '../utils/shutdownState';
 import { createToken, getLiveKitUrl } from '../routes/livekit';
 import * as queueStore from '../utils/queueStore';
-import { getFriendIds } from '../utils/friendshipUtils';
+import { getPresenceFriendIds } from '../utils/friendPresenceRecipients';
 import { scheduleGlobalFriendPresenceEmit } from '../utils/friendOnlinePresence';
 import { checkRateLimit } from '../utils/rateLimit';
 import UserReportModel, { isUserReportReason } from '../models/UserReport';
+import { measureMatchStage, profileNow, recordMatchStage } from '../utils/matchPerformance';
 
 const MODERATION_BAN_MS = 60 * 60 * 1000; // 1 час
 
@@ -55,9 +57,11 @@ let activeMatchWorkers = 0;
 const pendingMatchWorkers: Array<() => void> = [];
 const pendingSearches = new WeakMap<AuthedSocket, { epoch: number; promise: Promise<boolean> }>();
 async function withMatchWorker(work: () => Promise<boolean>): Promise<boolean> {
+  const queuedAt = profileNow();
   if (activeMatchWorkers >= MATCH_WORKERS) await new Promise<void>((resolve) => pendingMatchWorkers.push(resolve));
   else activeMatchWorkers++;
-  try { return await work(); }
+  recordMatchStage('match.worker_wait', profileNow() - queuedAt);
+  try { return await measureMatchStage('match.attempt', work); }
   finally {
     const next = pendingMatchWorkers.shift();
     if (next) next();
@@ -94,6 +98,33 @@ type HeldPair = {
   timer: NodeJS.Timeout;
 };
 const heldPairs = new Map<string, HeldPair>();
+
+/** Anonymous invariant snapshot for the explicitly enabled local capacity API. */
+export function auditRandomPairs(io: Server, queuedIds: readonly string[] = []) {
+  const held = new Map([...heldPairs.values()].map((pair) => [pair.oldSocket.id, pair.partnerSid]));
+  const pairs: string[] = [];
+  let matchedSockets = 0, heldSockets = 0, asymmetricSockets = 0, stoppedWithPartner = 0;
+  for (const raw of io.sockets.sockets.values()) {
+    const socket = raw as AuthedSocket;
+    const sid = socket.data.randomPartnerSid;
+    if (!sid) continue;
+    if (stoppedSearches.has(socket)) stoppedWithPartner++;
+    const other = safeGet(io, sid);
+    if (!other && held.get(sid) === socket.id) { heldSockets++; continue; }
+    if (!other || other === socket || socket.data.partnerSid !== sid ||
+        other.data.partnerSid !== socket.id || other.data.randomPartnerSid !== socket.id ||
+        !socket.data.inCall || !other.data.inCall || socket.data.userId === other.data.userId) {
+      asymmetricSockets++;
+      continue;
+    }
+    matchedSockets++;
+    if (socket.id < other.id) pairs.push(`${socket.id}|${other.id}`);
+  }
+  return { matchedSockets, heldSockets, asymmetricSockets, stoppedWithPartner,
+    queuedSockets: queuedIds.length,
+    queuedWithPartner: queuedIds.filter((id) => !!safeGet(io, id)?.data.partnerSid).length,
+    pairs: pairs.length, pairDigest: createHash('sha256').update(pairs.sort().join('\n')).digest('hex') };
+}
 
 // === Константы ===============================================================
 const NEXT_DEBOUNCE_MS = 500;
@@ -163,11 +194,12 @@ async function pushToQueue(sid: string) {
  * Оптимизированная отправка presence:update только друзьям пользователя
  * Вместо отправки всем подключенным (io.emit), отправляем только заинтересованным
  */
-async function emitPresenceUpdateToFriends(io: Server, userId: string, busy: boolean) {
+async function emitPresenceUpdateToFriends(io: Server, userId: string, busy: boolean, isCurrent: () => boolean) {
   try {
     if (!userId) return;
     
-    const friends = await getFriendIds(userId);
+    const friends = await measureMatchStage('friends.single', () => getPresenceFriendIds(userId));
+    if (!isCurrent()) return;
     if (friends.length === 0) {
       // Если друзей нет, отправляем только самому пользователю (для синхронизации состояния)
       io.to(`u:${userId}`).emit('presence:update', { userId, busy });
@@ -186,18 +218,28 @@ async function emitPresenceUpdateToFriends(io: Server, userId: string, busy: boo
   } catch (e) {
     // В случае ошибки отправляем только самому пользователю (fallback)
     try {
-      io.to(`u:${userId}`).emit('presence:update', { userId, busy });
+      if (isCurrent()) io.to(`u:${userId}`).emit('presence:update', { userId, busy });
     } catch {}
   }
 }
 
+// Only unresolved notifications are retained. Late reads cannot restore an older
+// busy flag after Stop or another state change, including a replacement socket.
+const busyNotifications = new Map<string, object>();
 async function markBusy(io: Server, s: AuthedSocket, busy: boolean) {
   s.data = s.data || {};
   s.data.busy = busy;
   const userId = String(s.data.userId || '');
   if (userId) {
-    await emitPresenceUpdateToFriends(io, userId, busy);
-    scheduleGlobalFriendPresenceEmit(io, userId);
+    const notification = {};
+    busyNotifications.set(userId, notification);
+    try {
+      await measureMatchStage('match.presence', () => emitPresenceUpdateToFriends(io, userId, busy,
+        () => busyNotifications.get(userId) === notification));
+      scheduleGlobalFriendPresenceEmit(io, userId);
+    } finally {
+      if (busyNotifications.get(userId) === notification) busyNotifications.delete(userId);
+    }
   }
 }
 async function lockPair(a: AuthedSocket, b: AuthedSocket) {
@@ -585,10 +627,10 @@ async function tryMatchAvailable(io: Server, socket: AuthedSocket, epoch: number
   }
 
   try {
-    const [tokenA, tokenB] = await Promise.all([
+    const [tokenA, tokenB] = await measureMatchStage('match.tokens', () => Promise.all([
       createToken({ identity: livekitIdentityA, roomName: livekitRoomName }),
       createToken({ identity: livekitIdentityB, roomName: livekitRoomName }),
-    ]);
+    ]));
     livekitTokenA = tokenA;
     livekitTokenB = tokenB;
     logger.debug('LiveKit tokens created', { roomName: livekitRoomName, identityA: livekitIdentityA, identityB: livekitIdentityB });
@@ -637,7 +679,11 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
       const execute = async (): Promise<void> => {
         const entryEpoch = searchEpoch(socket);
         const entryPartnerSid = socket.data.partnerSid;
-        try { await handler(...args); }
+        try {
+          if (event === 'start' || event === 'next') {
+            await measureMatchStage(event === 'start' ? 'search.start' : 'search.next', async () => handler(...args));
+          } else await handler(...args);
+        }
         catch (error) {
           logger.error('Random command failed', { event, socketId: socket.id, error: (error as ErrorDetails)?.message || error });
           if (event === 'disconnect') {
@@ -804,8 +850,11 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
     logger.debug('Start requested', { socketId: socket.id, transitionId });
     await markBusy(io, socket, true);
     if (cancelled()) return;
+    // A concurrent Next requeue may already have produced a pair while this
+    // Start awaited metadata. Never put that matched endpoint back in the FIFO.
+    if (socket.data.partnerSid || socket.data.inCall || pairReservations.has(socket)) return;
     await pushToQueue(socket.id);
-    if (cancelled()) {
+    if (cancelled() || socket.data.partnerSid || socket.data.inCall) {
       await removeFromQueue(socket.id);
       return;
     }

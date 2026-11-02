@@ -9,11 +9,14 @@ node backend/load/local-capacity.cjs 5000 random
 node backend/load/local-capacity.cjs 5000 calls
 node backend/load/local-capacity.cjs 5000 chat
 node backend/load/local-capacity.cjs 5000 mixed
+LIVI_LOAD_PROFILE=1 node backend/load/local-capacity.cjs 5000 random
+LIVI_LOAD_PROFILE=1 node backend/load/local-capacity.cjs 5000 churn
 node backend/load/presence-fanout.cjs 5000
 ```
 
-The user count must be even, between 2 and 5000. Profiles: `all` (default), `chat`, `random`, `calls`, `mixed`.
+The user count must be even, between 2 and 5000. Profiles: `all` (default), `chat`, `random`, `calls`, `mixed`, `churn`.
 `mixed` requires a count divisible by four. `all` includes the mixed soak.
+`churn` requires at least four users and runs separately from `all`.
 The runner compiles the current backend into a temporary directory. It uses only loopback ports
 3107 (backend), 27028 (MongoDB) and 16379 (Redis), and refuses to start if a port is occupied.
 It creates its own single-member MongoDB replica set, Redis process, fixture users, install secrets,
@@ -35,6 +38,26 @@ probe keeps the full snapshot protocol. The shared generator retains only a few 
 rounds of friendship messages with concurrency 100. The default soak is 60 seconds; use
 `LIVI_LOAD_SOAK_MS=120000` (allowed range 10000..600000) for a longer run. These messages and ACKs
 are synthetic. Holding signaling state does not establish the presence or quality of media streams.
+
+`churn` exercises repeated Next commands, Stop/restart and transport failure followed by
+`random:resume`. On 5000 users it performs three rounds of 2500 Next actions, stops/restarts
+500 users and reconnects 250 users. `LIVI_CHURN_ROUNDS=1..20` overrides the number of Next rounds.
+The generator models the app's delayed Start fallback and visibility heartbeat. It compares client
+pair ownership with an anonymous server digest after each transition, checks empty queues and
+holds the result for another second to catch late commands. Resumes must preserve the peer and
+LiveKit room. This exercises signaling timing; native room disposal and media need device tests.
+
+`LIVI_LOAD_PROFILE=1` enables bounded aggregate matchmaking/MongoDB timing counters in the isolated
+backend. Normal operation leaves these counters and MongoDB command monitoring disabled. Phase
+reports contain counter differences; `processMaxMs` is the maximum since process start, not the
+maximum within that phase. Parallel durations overlap and must not be added as wall-clock time.
+No query contents or user IDs are recorded by the profiler. The anonymous pair audit endpoint is
+available only with the explicit `CAPACITY_METRICS_ENABLED` diagnostic switch, like the other
+capacity endpoints.
+
+Matchmaking presence reads share batches of at most 128 users with four concurrent queries and a
+2 ms collection window. Completed results are not cached. Friendship edges are repaired only when
+one direction is missing, and concurrent legacy migrations share only their pending operation.
 
 `all`/`chat` sends one message per user, retries its ID through socket/HTTP, fetches capped history,
 tests a disconnected recipient and drains 1000 persisted offline records with acknowledgements.

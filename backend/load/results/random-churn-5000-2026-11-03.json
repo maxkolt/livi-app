@@ -1,0 +1,1879 @@
+{
+  "startedAt": "2026-11-02T21:52:48.451Z",
+  "users": 5000,
+  "profile": "churn",
+  "runDir": "/var/folders/96/2cpj42y56cl6_7y_t0s26jcm0000gn/T/livi-capacity-5NWwIS",
+  "backendSourceSha256": "1f91e98c2c23f18a6cdcf932445316f6abfcaa373f3df0f33c1f6632568d7d14",
+  "scope": "One local backend, real MongoDB/Redis/Socket.IO. LiveKit JWT/signaling only; no audio/video media or production capacity certification.",
+  "host": {
+    "platform": "darwin",
+    "arch": "arm64",
+    "cpus": 10,
+    "memoryGiB": 32,
+    "node": "v20.19.4"
+  },
+  "phases": [
+    {
+      "name": "seed-and-indexes",
+      "ok": true,
+      "ms": 4536,
+      "users": 5000,
+      "friendships": 2500,
+      "historyMessages": 250000,
+      "indexes": {
+        "friendshipmessageitems": [
+          {
+            "v": 2,
+            "key": {
+              "_id": 1
+            },
+            "name": "_id_"
+          },
+          {
+            "v": 2,
+            "key": {
+              "friendshipId": 1,
+              "timestamp": -1
+            },
+            "name": "friendshipId_1_timestamp_-1",
+            "background": true
+          },
+          {
+            "v": 2,
+            "key": {
+              "friendshipId": 1,
+              "timestamp": -1,
+              "id": -1
+            },
+            "name": "friendshipId_1_timestamp_-1_id_-1",
+            "background": true
+          },
+          {
+            "v": 2,
+            "key": {
+              "friendshipId": 1,
+              "id": 1
+            },
+            "name": "friendshipId_1_id_1",
+            "background": true,
+            "unique": true
+          },
+          {
+            "v": 2,
+            "key": {
+              "friendshipId": 1,
+              "from": 1,
+              "to": 1,
+              "timestamp": 1,
+              "_id": 1
+            },
+            "name": "friendship_unread_partial",
+            "background": true,
+            "partialFilterExpression": {
+              "read": false
+            }
+          },
+          {
+            "v": 2,
+            "key": {
+              "id": 1
+            },
+            "name": "id_1",
+            "background": true
+          }
+        ],
+        "offlinemessages": [
+          {
+            "v": 2,
+            "key": {
+              "_id": 1
+            },
+            "name": "_id_"
+          },
+          {
+            "v": 2,
+            "key": {
+              "recipientId": 1
+            },
+            "name": "recipientId_1",
+            "background": true
+          },
+          {
+            "v": 2,
+            "key": {
+              "senderId": 1
+            },
+            "name": "senderId_1",
+            "background": true
+          },
+          {
+            "v": 2,
+            "key": {
+              "messageId": 1
+            },
+            "name": "messageId_1",
+            "background": true
+          },
+          {
+            "v": 2,
+            "key": {
+              "createdAt": 1
+            },
+            "name": "createdAt_1",
+            "background": true
+          },
+          {
+            "v": 2,
+            "key": {
+              "expiresAt": 1
+            },
+            "name": "expiresAt_1",
+            "background": true,
+            "expireAfterSeconds": 0
+          },
+          {
+            "v": 2,
+            "key": {
+              "recipientId": 1,
+              "createdAt": -1
+            },
+            "name": "recipientId_1_createdAt_-1",
+            "background": true
+          },
+          {
+            "v": 2,
+            "key": {
+              "recipientId": 1,
+              "createdAt": 1,
+              "_id": 1
+            },
+            "name": "offline_recipient_fifo",
+            "background": true
+          }
+        ],
+        "friendship_edges": [
+          {
+            "v": 2,
+            "key": {
+              "_id": 1
+            },
+            "name": "_id_"
+          },
+          {
+            "v": 2,
+            "key": {
+              "userId": 1,
+              "friendId": 1
+            },
+            "name": "userId_1_friendId_1",
+            "background": true,
+            "unique": true
+          },
+          {
+            "v": 2,
+            "key": {
+              "userId": 1,
+              "createdAt": 1,
+              "_id": 1
+            },
+            "name": "userId_1_createdAt_1__id_1",
+            "background": true
+          },
+          {
+            "v": 2,
+            "key": {
+              "friendId": 1,
+              "userId": 1
+            },
+            "name": "friendId_1_userId_1",
+            "background": true
+          }
+        ],
+        "installs": [
+          {
+            "v": 2,
+            "key": {
+              "_id": 1
+            },
+            "name": "_id_"
+          },
+          {
+            "v": 2,
+            "key": {
+              "installId": 1
+            },
+            "name": "installId_1",
+            "background": true,
+            "unique": true
+          },
+          {
+            "v": 2,
+            "key": {
+              "user": 1
+            },
+            "name": "user_1",
+            "background": true
+          }
+        ]
+      },
+      "matchPerformance": {
+        "mongo.other": {
+          "count": 90,
+          "totalMs": 17759,
+          "meanMs": 197.32222222222222,
+          "processMaxMs": 483
+        },
+        "mongo.aggregate": {
+          "count": 2,
+          "totalMs": 4,
+          "meanMs": 2,
+          "processMaxMs": 2
+        }
+      }
+    },
+    {
+      "name": "connect-and-authenticate",
+      "ok": true,
+      "ms": 19947,
+      "connected": 5000,
+      "authenticated": 5000,
+      "errors": [],
+      "latencyMs": {
+        "count": 5000,
+        "p50": 182.49,
+        "p95": 328.64,
+        "p99": 385.55,
+        "max": 511.99
+      },
+      "matchPerformance": {
+        "mongo.other": {
+          "count": 6900,
+          "totalMs": 61903,
+          "meanMs": 8.97144927536232,
+          "processMaxMs": 483
+        },
+        "mongo.find": {
+          "count": 50998,
+          "totalMs": 530522,
+          "meanMs": 10.402800109808227,
+          "processMaxMs": 113
+        },
+        "mongo.update": {
+          "count": 4969,
+          "totalMs": 100221,
+          "meanMs": 20.16924934594486,
+          "processMaxMs": 77
+        },
+        "friends.batch": {
+          "count": 418,
+          "totalMs": 15564.98958499997,
+          "meanMs": 37.23681718899515,
+          "processMaxMs": 198.94283399999767
+        },
+        "mongo.getMore": {
+          "count": 10,
+          "totalMs": 14,
+          "meanMs": 1.4,
+          "processMaxMs": 3
+        }
+      }
+    },
+    {
+      "name": "welcome-presence-convergence",
+      "ok": true,
+      "ms": 4786,
+      "probedClients": 5,
+      "legacyClients": 1,
+      "missedDeltaRecovered": true,
+      "onlineUsers": 5000,
+      "unchangedResponseBytes": 90,
+      "matchPerformance": {
+        "mongo.find": {
+          "count": 35,
+          "totalMs": 40,
+          "meanMs": 1.1428571428571428,
+          "processMaxMs": 113
+        },
+        "friends.batch": {
+          "count": 17,
+          "totalMs": 35.956999000001815,
+          "meanMs": 2.115117588235401,
+          "processMaxMs": 198.94283399999767
+        }
+      }
+    },
+    {
+      "name": "random-churn",
+      "ok": true,
+      "ms": 31077,
+      "users": 5000,
+      "rounds": [
+        {
+          "label": "initial",
+          "ms": 3902,
+          "activeUsers": 5000,
+          "audit": {
+            "matchedSockets": 5000,
+            "heldSockets": 0,
+            "asymmetricSockets": 0,
+            "stoppedWithPartner": 0,
+            "queuedSockets": 0,
+            "queuedWithPartner": 0,
+            "pairs": 2500,
+            "pairDigest": "998e1decb43972cba7d2612d3c7b30e6337cea617f0034594de530abe031a565"
+          }
+        },
+        {
+          "label": "next-1",
+          "ms": 5813,
+          "activeUsers": 5000,
+          "audit": {
+            "matchedSockets": 5000,
+            "heldSockets": 0,
+            "asymmetricSockets": 0,
+            "stoppedWithPartner": 0,
+            "queuedSockets": 0,
+            "queuedWithPartner": 0,
+            "pairs": 2500,
+            "pairDigest": "0c2fd049fed0b003c8202eeb29213b300f9cc1d171ba78151142fb2265d7671b"
+          }
+        },
+        {
+          "label": "next-2",
+          "ms": 4401,
+          "activeUsers": 5000,
+          "audit": {
+            "matchedSockets": 5000,
+            "heldSockets": 0,
+            "asymmetricSockets": 0,
+            "stoppedWithPartner": 0,
+            "queuedSockets": 0,
+            "queuedWithPartner": 0,
+            "pairs": 2500,
+            "pairDigest": "803967a23ab92a493f53f37e8c80d451a21a617e7f8bd0673c0b67f75bc49050"
+          }
+        },
+        {
+          "label": "next-3",
+          "ms": 6309,
+          "activeUsers": 5000,
+          "audit": {
+            "matchedSockets": 5000,
+            "heldSockets": 0,
+            "asymmetricSockets": 0,
+            "stoppedWithPartner": 0,
+            "queuedSockets": 0,
+            "queuedWithPartner": 0,
+            "pairs": 2500,
+            "pairDigest": "60612b455c54fd5700c8c8e0106d8ec15fa852284b70609f3a370a4465b5a017"
+          }
+        },
+        {
+          "label": "stop-one-endpoint",
+          "ms": 1533,
+          "activeUsers": 4500,
+          "audit": {
+            "matchedSockets": 4500,
+            "heldSockets": 0,
+            "asymmetricSockets": 0,
+            "stoppedWithPartner": 0,
+            "queuedSockets": 0,
+            "queuedWithPartner": 0,
+            "pairs": 2250,
+            "pairDigest": "9ce33e8976e2187dbad76557a5eaef84ffeed3b0198f89fd11fe2598f6e49499"
+          }
+        },
+        {
+          "label": "restart-stopped",
+          "ms": 1340,
+          "activeUsers": 5000,
+          "audit": {
+            "matchedSockets": 5000,
+            "heldSockets": 0,
+            "asymmetricSockets": 0,
+            "stoppedWithPartner": 0,
+            "queuedSockets": 0,
+            "queuedWithPartner": 0,
+            "pairs": 2500,
+            "pairDigest": "7af99763ce72c1d0f412f69665af356bb1fe6d779ccbeec31fa86eff4727528f"
+          }
+        },
+        {
+          "label": "transport-drop-and-resume",
+          "ms": 4587,
+          "activeUsers": 5000,
+          "audit": {
+            "matchedSockets": 5000,
+            "heldSockets": 0,
+            "asymmetricSockets": 0,
+            "stoppedWithPartner": 0,
+            "queuedSockets": 0,
+            "queuedWithPartner": 0,
+            "pairs": 2500,
+            "pairDigest": "532f2ca744c1536d135adc041cc7c6f4a8f9e45d8e48c12b43e46785d29aa134"
+          }
+        }
+      ],
+      "resumedUsers": 250,
+      "fallbackStarts": 8000,
+      "ignoredLateMatches": 0,
+      "unexpectedDisconnects": 0,
+      "scope": "Real server and sockets; client fallback timing is modeled, no native room disposal or SFU media.",
+      "matchPerformance": {
+        "mongo.other": {
+          "count": 469,
+          "totalMs": 4326,
+          "meanMs": 9.223880597014926,
+          "processMaxMs": 483
+        },
+        "mongo.find": {
+          "count": 8629,
+          "totalMs": 75452,
+          "meanMs": 8.744002781318809,
+          "processMaxMs": 255
+        },
+        "friends.batch": {
+          "count": 380,
+          "totalMs": 9256.095343000092,
+          "meanMs": 24.358145639473925,
+          "processMaxMs": 339.7005830000053
+        },
+        "mongo.getMore": {
+          "count": 1106,
+          "totalMs": 20956,
+          "meanMs": 18.94755877034358,
+          "processMaxMs": 178
+        },
+        "queue.ban": {
+          "count": 83932,
+          "totalMs": 1550903.526574006,
+          "meanMs": 18.478095679526355,
+          "processMaxMs": 226.9403750000056
+        },
+        "queue.read": {
+          "count": 89926,
+          "totalMs": 1170766.0578479914,
+          "meanMs": 13.019216442941879,
+          "processMaxMs": 168.64491700000508
+        },
+        "queue.write": {
+          "count": 119416,
+          "totalMs": 3000529.472939998,
+          "meanMs": 25.126695526060143,
+          "processMaxMs": 228.0602080000026
+        },
+        "queue.lock": {
+          "count": 110660,
+          "totalMs": 2726170.6148650316,
+          "meanMs": 24.635555890701532,
+          "processMaxMs": 226.9878749999989
+        },
+        "friends.single": {
+          "count": 61518,
+          "totalMs": 12321955.546008784,
+          "meanMs": 200.2983768329397,
+          "processMaxMs": 988.5886249999967
+        },
+        "match.presence": {
+          "count": 61518,
+          "totalMs": 12528319.536280984,
+          "meanMs": 203.65290705616218,
+          "processMaxMs": 993.3638329999958
+        },
+        "match.worker_wait": {
+          "count": 21000,
+          "totalMs": 40121725.69729913,
+          "meanMs": 1910.5583665380539,
+          "processMaxMs": 3381.5913749999963
+        },
+        "search.start": {
+          "count": 19432,
+          "totalMs": 8311910.931374008,
+          "meanMs": 427.74346085704036,
+          "processMaxMs": 843.5452499999956
+        },
+        "queue.scan": {
+          "count": 42006,
+          "totalMs": 64335.38193700022,
+          "meanMs": 1.5315760114507504,
+          "processMaxMs": 157.9897920000003
+        },
+        "match.attempt": {
+          "count": 21000,
+          "totalMs": 456226.4637750004,
+          "meanMs": 21.72506970357145,
+          "processMaxMs": 1575.1235410000008
+        },
+        "match.tokens": {
+          "count": 10500,
+          "totalMs": 1050.798400999749,
+          "meanMs": 0.10007603819045228,
+          "processMaxMs": 2.9690000000009604
+        },
+        "search.next": {
+          "count": 7500,
+          "totalMs": 6838325.444581989,
+          "meanMs": 911.7767259442652,
+          "processMaxMs": 1380.248249999997
+        }
+      }
+    }
+  ],
+  "samples": [
+    {
+      "at": 1793656376119,
+      "healthMs": 8,
+      "mongo": 1,
+      "runtime": {
+        "uptimeSec": 3,
+        "memory": {
+          "rss": 171884544,
+          "heapUsed": 63156304,
+          "heapTotal": 90472448,
+          "external": 20941352
+        },
+        "eventLoop": {
+          "utilization": 0.046414226099655856,
+          "p99Ms": 22.38,
+          "maxMs": 22.43
+        },
+        "socketConnections": 0,
+        "socketDisconnects": {}
+      },
+      "processes": [
+        [
+          23033,
+          14,
+          302368
+        ],
+        [
+          23040,
+          112,
+          214304
+        ],
+        [
+          23073,
+          0.6,
+          167888
+        ]
+      ]
+    },
+    {
+      "at": 1793656378121,
+      "healthMs": 7,
+      "mongo": 1,
+      "runtime": {
+        "uptimeSec": 5,
+        "memory": {
+          "rss": 172032000,
+          "heapUsed": 63292552,
+          "heapTotal": 90472448,
+          "external": 20941352
+        },
+        "eventLoop": {
+          "utilization": 0.024862162423543662,
+          "p99Ms": 22.43,
+          "maxMs": 22.64
+        },
+        "socketConnections": 0,
+        "socketDisconnects": {}
+      },
+      "processes": [
+        [
+          23033,
+          14.4,
+          337808
+        ],
+        [
+          23040,
+          111.3,
+          296928
+        ],
+        [
+          23073,
+          0.1,
+          168032
+        ]
+      ]
+    },
+    {
+      "at": 1793656380122,
+      "healthMs": 15,
+      "mongo": 1,
+      "runtime": {
+        "uptimeSec": 7,
+        "memory": {
+          "rss": 238190592,
+          "heapUsed": 113907320,
+          "heapTotal": 145784832,
+          "external": 25911863
+        },
+        "eventLoop": {
+          "utilization": 0.2560131918809555,
+          "p99Ms": 24.85,
+          "maxMs": 31.69
+        },
+        "socketConnections": 541,
+        "socketDisconnects": {}
+      },
+      "processes": [
+        [
+          23033,
+          46.4,
+          368592
+        ],
+        [
+          23040,
+          56.6,
+          331872
+        ],
+        [
+          23073,
+          141.3,
+          232672
+        ]
+      ]
+    },
+    {
+      "at": 1793656382121,
+      "healthMs": 29,
+      "mongo": 1,
+      "runtime": {
+        "uptimeSec": 9,
+        "memory": {
+          "rss": 360103936,
+          "heapUsed": 113708928,
+          "heapTotal": 255623168,
+          "external": 24192738
+        },
+        "eventLoop": {
+          "utilization": 0.441327934053684,
+          "p99Ms": 29.74,
+          "maxMs": 31.69
+        },
+        "socketConnections": 1311,
+        "socketDisconnects": {}
+      },
+      "processes": [
+        [
+          23033,
+          60.4,
+          413744
+        ],
+        [
+          23040,
+          46.3,
+          333808
+        ],
+        [
+          23073,
+          129.8,
+          351664
+        ]
+      ]
+    },
+    {
+      "at": 1793656384126,
+      "healthMs": 31,
+      "mongo": 1,
+      "runtime": {
+        "uptimeSec": 11,
+        "memory": {
+          "rss": 384253952,
+          "heapUsed": 242520104,
+          "heapTotal": 274792448,
+          "external": 40739939
+        },
+        "eventLoop": {
+          "utilization": 0.5496652347954311,
+          "p99Ms": 38.8,
+          "maxMs": 41.84
+        },
+        "socketConnections": 2005,
+        "socketDisconnects": {}
+      },
+      "processes": [
+        [
+          23033,
+          87.9,
+          330928
+        ],
+        [
+          23040,
+          37.7,
+          336688
+        ],
+        [
+          23073,
+          107.9,
+          375424
+        ]
+      ]
+    },
+    {
+      "at": 1793656386152,
+      "healthMs": 77,
+      "mongo": 1,
+      "runtime": {
+        "uptimeSec": 13,
+        "memory": {
+          "rss": 460308480,
+          "heapUsed": 185008768,
+          "heapTotal": 341393408,
+          "external": 31852165
+        },
+        "eventLoop": {
+          "utilization": 0.6206949687275162,
+          "p99Ms": 46.92,
+          "maxMs": 60.06
+        },
+        "socketConnections": 2556,
+        "socketDisconnects": {}
+      },
+      "processes": [
+        [
+          23033,
+          83.7,
+          368864
+        ],
+        [
+          23040,
+          32.5,
+          337728
+        ],
+        [
+          23073,
+          113.8,
+          449376
+        ]
+      ]
+    },
+    {
+      "at": 1793656388202,
+      "healthMs": 105,
+      "mongo": 1,
+      "runtime": {
+        "uptimeSec": 15,
+        "memory": {
+          "rss": 466157568,
+          "heapUsed": 307046432,
+          "heapTotal": 342671360,
+          "external": 50825147
+        },
+        "eventLoop": {
+          "utilization": 0.6701702722243824,
+          "p99Ms": 60.06,
+          "maxMs": 74.58
+        },
+        "socketConnections": 3090,
+        "socketDisconnects": {}
+      },
+      "processes": [
+        [
+          23033,
+          87.2,
+          426640
+        ],
+        [
+          23040,
+          30.2,
+          337872
+        ],
+        [
+          23073,
+          105.6,
+          455232
+        ]
+      ]
+    },
+    {
+      "at": 1793656390202,
+      "healthMs": 87,
+      "mongo": 1,
+      "runtime": {
+        "uptimeSec": 17,
+        "memory": {
+          "rss": 580665344,
+          "heapUsed": 143992816,
+          "heapTotal": 443924480,
+          "external": 24316531
+        },
+        "eventLoop": {
+          "utilization": 0.7057975022549368,
+          "p99Ms": 69.4,
+          "maxMs": 88.21
+        },
+        "socketConnections": 3507,
+        "socketDisconnects": {}
+      },
+      "processes": [
+        [
+          23033,
+          71.3,
+          426128
+        ],
+        [
+          23040,
+          31.5,
+          337888
+        ],
+        [
+          23073,
+          133.2,
+          567056
+        ]
+      ]
+    },
+    {
+      "at": 1793656392240,
+      "healthMs": 97,
+      "mongo": 1,
+      "runtime": {
+        "uptimeSec": 19,
+        "memory": {
+          "rss": 584941568,
+          "heapUsed": 312896864,
+          "heapTotal": 444710912,
+          "external": 43001826
+        },
+        "eventLoop": {
+          "utilization": 0.7320766191619534,
+          "p99Ms": 76.09,
+          "maxMs": 96.34
+        },
+        "socketConnections": 3930,
+        "socketDisconnects": {}
+      },
+      "processes": [
+        [
+          23033,
+          85.1,
+          459952
+        ],
+        [
+          23040,
+          21.3,
+          338240
+        ],
+        [
+          23073,
+          92.8,
+          571232
+        ]
+      ]
+    },
+    {
+      "at": 1793656394290,
+      "healthMs": 187,
+      "mongo": 1,
+      "runtime": {
+        "uptimeSec": 21,
+        "memory": {
+          "rss": 595689472,
+          "heapUsed": 411962232,
+          "heapTotal": 453296128,
+          "external": 61792405
+        },
+        "eventLoop": {
+          "utilization": 0.7554753009032815,
+          "p99Ms": 76.74,
+          "maxMs": 96.34
+        },
+        "socketConnections": 4293,
+        "socketDisconnects": {}
+      },
+      "processes": [
+        [
+          23033,
+          109.3,
+          477360
+        ],
+        [
+          23040,
+          22.1,
+          338400
+        ],
+        [
+          23073,
+          104.9,
+          584160
+        ]
+      ]
+    },
+    {
+      "at": 1793656396290,
+      "healthMs": 132,
+      "mongo": 1,
+      "runtime": {
+        "uptimeSec": 23,
+        "memory": {
+          "rss": 660553728,
+          "heapUsed": 191068520,
+          "heapTotal": 513589248,
+          "external": 29245130
+        },
+        "eventLoop": {
+          "utilization": 0.7716906576902858,
+          "p99Ms": 81.46,
+          "maxMs": 96.34
+        },
+        "socketConnections": 4621,
+        "socketDisconnects": {}
+      },
+      "processes": [
+        [
+          23033,
+          96.4,
+          504912
+        ],
+        [
+          23040,
+          26.5,
+          338480
+        ],
+        [
+          23073,
+          109.4,
+          647424
+        ]
+      ]
+    },
+    {
+      "at": 1793656398315,
+      "healthMs": 33,
+      "mongo": 1,
+      "runtime": {
+        "uptimeSec": 25,
+        "memory": {
+          "rss": 713261056,
+          "heapUsed": 360548672,
+          "heapTotal": 555827200,
+          "external": 46188490
+        },
+        "eventLoop": {
+          "utilization": 0.7849848177876071,
+          "p99Ms": 82.58,
+          "maxMs": 96.99
+        },
+        "socketConnections": 4965,
+        "socketDisconnects": {}
+      },
+      "processes": [
+        [
+          23033,
+          87.1,
+          520448
+        ],
+        [
+          23040,
+          18.8,
+          339232
+        ],
+        [
+          23073,
+          90,
+          696960
+        ]
+      ]
+    },
+    {
+      "at": 1793656400316,
+      "healthMs": 27,
+      "mongo": 1,
+      "runtime": {
+        "uptimeSec": 27,
+        "memory": {
+          "rss": 729448448,
+          "heapUsed": 393749632,
+          "heapTotal": 566214656,
+          "external": 49639530
+        },
+        "eventLoop": {
+          "utilization": 0.7431865248128963,
+          "p99Ms": 82.58,
+          "maxMs": 96.99
+        },
+        "socketConnections": 5000,
+        "socketDisconnects": {}
+      },
+      "processes": [
+        [
+          23033,
+          3.1,
+          527376
+        ],
+        [
+          23040,
+          0.2,
+          339296
+        ],
+        [
+          23073,
+          3.6,
+          712352
+        ]
+      ]
+    },
+    {
+      "at": 1793656402318,
+      "healthMs": 16,
+      "mongo": 1,
+      "runtime": {
+        "uptimeSec": 29,
+        "memory": {
+          "rss": 732184576,
+          "heapUsed": 397206840,
+          "heapTotal": 567656448,
+          "external": 52174557
+        },
+        "eventLoop": {
+          "utilization": 0.6995970567276186,
+          "p99Ms": 81.79,
+          "maxMs": 96.99
+        },
+        "socketConnections": 5000,
+        "socketDisconnects": {}
+      },
+      "processes": [
+        [
+          23033,
+          8.5,
+          525760
+        ],
+        [
+          23040,
+          0.2,
+          339296
+        ],
+        [
+          23073,
+          12.5,
+          715024
+        ]
+      ]
+    },
+    {
+      "at": 1793656404317,
+      "healthMs": 88,
+      "mongo": 1,
+      "runtime": {
+        "uptimeSec": 31,
+        "memory": {
+          "rss": 736575488,
+          "heapUsed": 499509552,
+          "heapTotal": 569180160,
+          "external": 63849990
+        },
+        "eventLoop": {
+          "utilization": 0.6877524113294791,
+          "p99Ms": 82.58,
+          "maxMs": 149.55
+        },
+        "socketConnections": 5000,
+        "socketDisconnects": {}
+      },
+      "processes": [
+        [
+          23033,
+          40.9,
+          541712
+        ],
+        [
+          23040,
+          10.8,
+          341104
+        ],
+        [
+          23073,
+          127.5,
+          719312
+        ]
+      ]
+    },
+    {
+      "at": 1793656406317,
+      "healthMs": 18,
+      "mongo": 1,
+      "runtime": {
+        "uptimeSec": 33,
+        "memory": {
+          "rss": 708182016,
+          "heapUsed": 197387016,
+          "heapTotal": 531464192,
+          "external": 27758097
+        },
+        "eventLoop": {
+          "utilization": 0.7062490820629582,
+          "p99Ms": 81.79,
+          "maxMs": 149.55
+        },
+        "socketConnections": 5000,
+        "socketDisconnects": {}
+      },
+      "processes": [
+        [
+          23033,
+          22.8,
+          547952
+        ],
+        [
+          23040,
+          18.9,
+          341120
+        ],
+        [
+          23073,
+          106.7,
+          691584
+        ]
+      ]
+    },
+    {
+      "at": 1793656408317,
+      "healthMs": 143,
+      "mongo": 1,
+      "runtime": {
+        "uptimeSec": 35,
+        "memory": {
+          "rss": 712818688,
+          "heapUsed": 402843288,
+          "heapTotal": 534396928,
+          "external": 41501995
+        },
+        "eventLoop": {
+          "utilization": 0.701243267085292,
+          "p99Ms": 85.46,
+          "maxMs": 152.04
+        },
+        "socketConnections": 5000,
+        "socketDisconnects": {}
+      },
+      "processes": [
+        [
+          23033,
+          33.7,
+          556112
+        ],
+        [
+          23040,
+          14.8,
+          342368
+        ],
+        [
+          23073,
+          120.3,
+          696112
+        ]
+      ]
+    },
+    {
+      "at": 1793656410319,
+      "healthMs": 11,
+      "mongo": 1,
+      "runtime": {
+        "uptimeSec": 37,
+        "memory": {
+          "rss": 813744128,
+          "heapUsed": 587212952,
+          "heapTotal": 625459200,
+          "external": 66116560
+        },
+        "eventLoop": {
+          "utilization": 0.7165023716533185,
+          "p99Ms": 90.05,
+          "maxMs": 182.45
+        },
+        "socketConnections": 5000,
+        "socketDisconnects": {}
+      },
+      "processes": [
+        [
+          23033,
+          24.6,
+          567824
+        ],
+        [
+          23040,
+          18.5,
+          342992
+        ],
+        [
+          23073,
+          104,
+          795072
+        ]
+      ]
+    },
+    {
+      "at": 1793656412320,
+      "healthMs": 9,
+      "mongo": 1,
+      "runtime": {
+        "uptimeSec": 39,
+        "memory": {
+          "rss": 799211520,
+          "heapUsed": 212952048,
+          "heapTotal": 601407488,
+          "external": 32720993
+        },
+        "eventLoop": {
+          "utilization": 0.7283114859011659,
+          "p99Ms": 90.05,
+          "maxMs": 182.45
+        },
+        "socketConnections": 5000,
+        "socketDisconnects": {}
+      },
+      "processes": [
+        [
+          23033,
+          47.6,
+          564864
+        ],
+        [
+          23040,
+          16.2,
+          343200
+        ],
+        [
+          23073,
+          92.4,
+          780480
+        ]
+      ]
+    },
+    {
+      "at": 1793656414319,
+      "healthMs": 78,
+      "mongo": 1,
+      "runtime": {
+        "uptimeSec": 41,
+        "memory": {
+          "rss": 801112064,
+          "heapUsed": 378529504,
+          "heapTotal": 602537984,
+          "external": 45604844
+        },
+        "eventLoop": {
+          "utilization": 0.7208547977587363,
+          "p99Ms": 91.03,
+          "maxMs": 182.45
+        },
+        "socketConnections": 5000,
+        "socketDisconnects": {}
+      },
+      "processes": [
+        [
+          23033,
+          34.4,
+          564864
+        ],
+        [
+          23040,
+          11,
+          345664
+        ],
+        [
+          23073,
+          106.4,
+          782336
+        ]
+      ]
+    },
+    {
+      "at": 1793656416319,
+      "healthMs": 14,
+      "mongo": 1,
+      "runtime": {
+        "uptimeSec": 43,
+        "memory": {
+          "rss": 802668544,
+          "heapUsed": 458258064,
+          "heapTotal": 603947008,
+          "external": 62763299
+        },
+        "eventLoop": {
+          "utilization": 0.7334306848786194,
+          "p99Ms": 91.68,
+          "maxMs": 182.45
+        },
+        "socketConnections": 5000,
+        "socketDisconnects": {}
+      },
+      "processes": [
+        [
+          23033,
+          19.8,
+          565120
+        ],
+        [
+          23040,
+          19.1,
+          345760
+        ],
+        [
+          23073,
+          97.8,
+          783856
+        ]
+      ]
+    },
+    {
+      "at": 1793656418319,
+      "healthMs": 102,
+      "mongo": 1,
+      "runtime": {
+        "uptimeSec": 45,
+        "memory": {
+          "rss": 862732288,
+          "heapUsed": 621916528,
+          "heapTotal": 663699456,
+          "external": 73548518
+        },
+        "eventLoop": {
+          "utilization": 0.7249713713100934,
+          "p99Ms": 91.68,
+          "maxMs": 182.45
+        },
+        "socketConnections": 5000,
+        "socketDisconnects": {}
+      },
+      "processes": [
+        [
+          23033,
+          24.8,
+          546688
+        ],
+        [
+          23040,
+          19.3,
+          346016
+        ],
+        [
+          23073,
+          125.3,
+          842752
+        ]
+      ]
+    },
+    {
+      "at": 1793656420319,
+      "healthMs": 70,
+      "mongo": 1,
+      "runtime": {
+        "uptimeSec": 47,
+        "memory": {
+          "rss": 827490304,
+          "heapUsed": 466247656,
+          "heapTotal": 627376128,
+          "external": 52486660
+        },
+        "eventLoop": {
+          "utilization": 0.736661372942863,
+          "p99Ms": 100.79,
+          "maxMs": 332.92
+        },
+        "socketConnections": 5000,
+        "socketDisconnects": {}
+      },
+      "processes": [
+        [
+          23033,
+          37.6,
+          545424
+        ],
+        [
+          23040,
+          21.9,
+          346560
+        ],
+        [
+          23073,
+          112.1,
+          808160
+        ]
+      ]
+    },
+    {
+      "at": 1793656422319,
+      "healthMs": 30,
+      "mongo": 1,
+      "runtime": {
+        "uptimeSec": 49,
+        "memory": {
+          "rss": 831373312,
+          "heapUsed": 572267560,
+          "heapTotal": 630865920,
+          "external": 74313885
+        },
+        "eventLoop": {
+          "utilization": 0.747191271258154,
+          "p99Ms": 108.46,
+          "maxMs": 332.92
+        },
+        "socketConnections": 5000,
+        "socketDisconnects": {}
+      },
+      "processes": [
+        [
+          23033,
+          23.4,
+          545424
+        ],
+        [
+          23040,
+          18.6,
+          346704
+        ],
+        [
+          23073,
+          99,
+          811888
+        ]
+      ]
+    },
+    {
+      "at": 1793656424319,
+      "healthMs": 11,
+      "mongo": 1,
+      "runtime": {
+        "uptimeSec": 51,
+        "memory": {
+          "rss": 866598912,
+          "heapUsed": 618221080,
+          "heapTotal": 659030016,
+          "external": 84092220
+        },
+        "eventLoop": {
+          "utilization": 0.7379917993686748,
+          "p99Ms": 100.79,
+          "maxMs": 332.92
+        },
+        "socketConnections": 5000,
+        "socketDisconnects": {}
+      },
+      "processes": [
+        [
+          23033,
+          21.4,
+          545664
+        ],
+        [
+          23040,
+          8,
+          346704
+        ],
+        [
+          23073,
+          77,
+          846400
+        ]
+      ]
+    },
+    {
+      "at": 1793656426321,
+      "healthMs": 22,
+      "mongo": 1,
+      "runtime": {
+        "uptimeSec": 53,
+        "memory": {
+          "rss": 871858176,
+          "heapUsed": 626684584,
+          "heapTotal": 663552000,
+          "external": 84365362
+        },
+        "eventLoop": {
+          "utilization": 0.7138093886529813,
+          "p99Ms": 98.7,
+          "maxMs": 332.92
+        },
+        "socketConnections": 5000,
+        "socketDisconnects": {}
+      },
+      "processes": [
+        [
+          23033,
+          2.4,
+          545664
+        ],
+        [
+          23040,
+          0.3,
+          346784
+        ],
+        [
+          23073,
+          2.7,
+          851424
+        ]
+      ]
+    },
+    {
+      "at": 1793656428325,
+      "healthMs": 20,
+      "mongo": 1,
+      "runtime": {
+        "uptimeSec": 55,
+        "memory": {
+          "rss": 884621312,
+          "heapUsed": 636302960,
+          "heapTotal": 674299904,
+          "external": 86434094
+        },
+        "eventLoop": {
+          "utilization": 0.694751876381545,
+          "p99Ms": 96.99,
+          "maxMs": 332.92
+        },
+        "socketConnections": 5000,
+        "socketDisconnects": {}
+      },
+      "processes": [
+        [
+          23033,
+          6.3,
+          545664
+        ],
+        [
+          23040,
+          2.4,
+          347072
+        ],
+        [
+          23073,
+          19.2,
+          863888
+        ]
+      ]
+    },
+    {
+      "at": 1793656430345,
+      "healthMs": 100,
+      "mongo": 1,
+      "runtime": {
+        "uptimeSec": 57,
+        "memory": {
+          "rss": 838942720,
+          "heapUsed": 226451800,
+          "heapTotal": 626130944,
+          "external": 39083307
+        },
+        "eventLoop": {
+          "utilization": 0.6975337609531669,
+          "p99Ms": 98.7,
+          "maxMs": 332.92
+        },
+        "socketConnections": 5113,
+        "socketDisconnects": {
+          "transport close": 61,
+          "transport error": 52
+        }
+      },
+      "processes": [
+        [
+          23033,
+          88.9,
+          582064
+        ],
+        [
+          23040,
+          10.1,
+          349136
+        ],
+        [
+          23073,
+          108.7,
+          819280
+        ]
+      ]
+    },
+    {
+      "at": 1793656432389,
+      "healthMs": 8,
+      "mongo": 1,
+      "runtime": {
+        "uptimeSec": 59,
+        "memory": {
+          "rss": 858112000,
+          "heapUsed": 315727552,
+          "heapTotal": 639090688,
+          "external": 61875348
+        },
+        "eventLoop": {
+          "utilization": 0.7045939239240392,
+          "p99Ms": 96.99,
+          "maxMs": 332.92
+        },
+        "socketConnections": 5250,
+        "socketDisconnects": {
+          "transport close": 132,
+          "transport error": 118
+        }
+      },
+      "processes": [
+        [
+          23033,
+          89,
+          615264
+        ],
+        [
+          23040,
+          7.9,
+          349136
+        ],
+        [
+          23073,
+          97,
+          838000
+        ]
+      ]
+    },
+    {
+      "at": 1793656434389,
+      "healthMs": 49,
+      "mongo": 1,
+      "runtime": {
+        "uptimeSec": 61,
+        "memory": {
+          "rss": 860110848,
+          "heapUsed": 454370072,
+          "heapTotal": 639877120,
+          "external": 72523886
+        },
+        "eventLoop": {
+          "utilization": 0.6970866742070411,
+          "p99Ms": 96.99,
+          "maxMs": 332.92
+        },
+        "socketConnections": 5250,
+        "socketDisconnects": {
+          "transport close": 132,
+          "transport error": 118
+        }
+      },
+      "processes": [
+        [
+          23033,
+          34.3,
+          622192
+        ],
+        [
+          23040,
+          11.6,
+          349840
+        ],
+        [
+          23073,
+          99.3,
+          839984
+        ]
+      ]
+    }
+  ],
+  "connection": {
+    "connected": 5000,
+    "authenticated": 5000,
+    "errors": [],
+    "latencyMs": {
+      "count": 5000,
+      "p50": 182.49,
+      "p95": 328.64,
+      "p99": 385.55,
+      "max": 511.99
+    }
+  },
+  "presenceProbeState": {
+    "expectedCount": 5000,
+    "expectedRevision": 209,
+    "clients": [
+      {
+        "i": 0,
+        "count": 5000,
+        "revision": 209
+      },
+      {
+        "i": 1,
+        "count": 5000,
+        "revision": 209
+      },
+      {
+        "i": 2,
+        "count": 5000,
+        "revision": 209
+      },
+      {
+        "i": 3,
+        "count": 5000,
+        "revision": 209
+      },
+      {
+        "i": 4999,
+        "count": 5000,
+        "revision": 209
+      }
+    ]
+  },
+  "disconnects": {
+    "random-churn:forced close": 250,
+    "cleanup:io client disconnect": 5000
+  },
+  "churn": {
+    "users": 5000,
+    "rounds": [
+      {
+        "label": "initial",
+        "ms": 3902,
+        "activeUsers": 5000,
+        "audit": {
+          "matchedSockets": 5000,
+          "heldSockets": 0,
+          "asymmetricSockets": 0,
+          "stoppedWithPartner": 0,
+          "queuedSockets": 0,
+          "queuedWithPartner": 0,
+          "pairs": 2500,
+          "pairDigest": "998e1decb43972cba7d2612d3c7b30e6337cea617f0034594de530abe031a565"
+        }
+      },
+      {
+        "label": "next-1",
+        "ms": 5813,
+        "activeUsers": 5000,
+        "audit": {
+          "matchedSockets": 5000,
+          "heldSockets": 0,
+          "asymmetricSockets": 0,
+          "stoppedWithPartner": 0,
+          "queuedSockets": 0,
+          "queuedWithPartner": 0,
+          "pairs": 2500,
+          "pairDigest": "0c2fd049fed0b003c8202eeb29213b300f9cc1d171ba78151142fb2265d7671b"
+        }
+      },
+      {
+        "label": "next-2",
+        "ms": 4401,
+        "activeUsers": 5000,
+        "audit": {
+          "matchedSockets": 5000,
+          "heldSockets": 0,
+          "asymmetricSockets": 0,
+          "stoppedWithPartner": 0,
+          "queuedSockets": 0,
+          "queuedWithPartner": 0,
+          "pairs": 2500,
+          "pairDigest": "803967a23ab92a493f53f37e8c80d451a21a617e7f8bd0673c0b67f75bc49050"
+        }
+      },
+      {
+        "label": "next-3",
+        "ms": 6309,
+        "activeUsers": 5000,
+        "audit": {
+          "matchedSockets": 5000,
+          "heldSockets": 0,
+          "asymmetricSockets": 0,
+          "stoppedWithPartner": 0,
+          "queuedSockets": 0,
+          "queuedWithPartner": 0,
+          "pairs": 2500,
+          "pairDigest": "60612b455c54fd5700c8c8e0106d8ec15fa852284b70609f3a370a4465b5a017"
+        }
+      },
+      {
+        "label": "stop-one-endpoint",
+        "ms": 1533,
+        "activeUsers": 4500,
+        "audit": {
+          "matchedSockets": 4500,
+          "heldSockets": 0,
+          "asymmetricSockets": 0,
+          "stoppedWithPartner": 0,
+          "queuedSockets": 0,
+          "queuedWithPartner": 0,
+          "pairs": 2250,
+          "pairDigest": "9ce33e8976e2187dbad76557a5eaef84ffeed3b0198f89fd11fe2598f6e49499"
+        }
+      },
+      {
+        "label": "restart-stopped",
+        "ms": 1340,
+        "activeUsers": 5000,
+        "audit": {
+          "matchedSockets": 5000,
+          "heldSockets": 0,
+          "asymmetricSockets": 0,
+          "stoppedWithPartner": 0,
+          "queuedSockets": 0,
+          "queuedWithPartner": 0,
+          "pairs": 2500,
+          "pairDigest": "7af99763ce72c1d0f412f69665af356bb1fe6d779ccbeec31fa86eff4727528f"
+        }
+      },
+      {
+        "label": "transport-drop-and-resume",
+        "ms": 4587,
+        "activeUsers": 5000,
+        "audit": {
+          "matchedSockets": 5000,
+          "heldSockets": 0,
+          "asymmetricSockets": 0,
+          "stoppedWithPartner": 0,
+          "queuedSockets": 0,
+          "queuedWithPartner": 0,
+          "pairs": 2500,
+          "pairDigest": "532f2ca744c1536d135adc041cc7c6f4a8f9e45d8e48c12b43e46785d29aa134"
+        }
+      }
+    ],
+    "resumedUsers": 250,
+    "fallbackStarts": 8000,
+    "ignoredLateMatches": 0,
+    "unexpectedDisconnects": 0,
+    "scope": "Real server and sockets; client fallback timing is modeled, no native room disposal or SFU media."
+  },
+  "mongo": {
+    "connections": {
+      "current": 56,
+      "available": 838804,
+      "totalCreated": 70,
+      "rejected": 0,
+      "active": 3,
+      "queuedForEstablishment": 0,
+      "establishmentRateLimit": {
+        "rejected": 0,
+        "exempted": 0,
+        "interruptedDueToClientDisconnect": 0
+      },
+      "threaded": 56,
+      "exhaustIsMaster": 0,
+      "exhaustHello": 2,
+      "awaitingTopologyChanges": 2
+    },
+    "opcounters": {
+      "insert": 267502,
+      "query": 59870,
+      "update": 5000,
+      "delete": 0,
+      "getmore": 1208,
+      "command": 7595
+    },
+    "memory": {
+      "bits": 64,
+      "resident": 341,
+      "virtual": 454466,
+      "supported": true
+    },
+    "wiredTigerCache": {
+      "bytes": 158775217,
+      "maximum": 268435456
+    }
+  },
+  "redis": [
+    "used_memory:2814464",
+    "used_memory_peak:4045424",
+    "maxmemory:134217728",
+    "maxmemory_policy:noeviction"
+  ],
+  "finishedAt": "2026-11-02T21:53:55.791Z"
+}

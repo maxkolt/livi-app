@@ -5,13 +5,14 @@ jest.mock('../routes/livekit', () => ({
   createToken: jest.fn(async () => 'lk-token'),
   getLiveKitUrl: () => 'wss://lk.test',
 }));
-jest.mock('../utils/friendshipUtils', () => ({ getFriendIds: async () => [] }));
+jest.mock('../utils/friendPresenceRecipients', () => ({ getPresenceFriendIds: jest.fn(async () => []) }));
 jest.mock('../utils/friendOnlinePresence', () => ({ scheduleGlobalFriendPresenceEmit: () => {} }));
 jest.mock('../utils/rateLimit', () => ({ checkRateLimit: async () => ({ ok: true }) }));
 jest.mock('../models/UserReport', () => ({ __esModule: true, default: {}, isUserReportReason: () => true }));
 
 import { bindMatch } from './match';
 import { createToken } from '../routes/livekit';
+import { getPresenceFriendIds } from '../utils/friendPresenceRecipients';
 import * as queueStore from '../utils/queueStore';
 import * as shutdownState from '../utils/shutdownState';
 
@@ -132,6 +133,81 @@ async function pairUp() {
 }
 
 describe('random chat: simultaneous searches', () => {
+  it('does not reinsert an endpoint while its reserved pair awaits queue-removal completion', async () => {
+    const io = new FakeIo();
+    const a = new FakeSocket(io, 'reserved-start-a');
+    const b = new FakeSocket(io, 'reserved-start-b');
+    let finishStart!: (ids: string[]) => void, finishRemoval!: () => void;
+    let removalPending = false;
+    const removalGate = new Promise<void>((resolve) => { finishRemoval = resolve; });
+    jest.mocked(getPresenceFriendIds).mockImplementationOnce(() => new Promise((resolve) => { finishStart = resolve; }));
+    const original = queueStore.removeFromQueue;
+    const remove = jest.spyOn(queueStore, 'removeFromQueue').mockImplementation(async (sid) => {
+      await original(sid);
+      if (sid === a.id) { removalPending = true; await removalGate; }
+    });
+    const start = a.fire('start');
+    try {
+      await waitFor(() => !!finishStart);
+      await queueStore.addToQueue(a.id);
+      await b.fire('start');
+      await waitFor(() => removalPending);
+      finishStart([]);
+      await start;
+      expect(await queueStore.isInQueue(a.id)).toBe(false);
+      finishRemoval();
+      await waitFor(() => a.got('match_found').length === 1);
+    } finally {
+      finishStart([]); finishRemoval(); remove.mockRestore();
+      await start;
+      await Promise.all([a.fire('stop'), b.fire('stop')]);
+    }
+  });
+
+  it('does not reinsert an already matched socket when a concurrent Start finishes its friend read late', async () => {
+    const io = new FakeIo();
+    const a = new FakeSocket(io, 'late-start-a');
+    const b = new FakeSocket(io, 'late-start-b');
+    let finishStart!: (ids: string[]) => void;
+    jest.mocked(getPresenceFriendIds).mockImplementationOnce(() => new Promise((resolve) => { finishStart = resolve; }));
+    const start = a.fire('start');
+    try {
+      await waitFor(() => !!finishStart);
+      // A Next requeue can make the socket available while Start still awaits metadata.
+      await queueStore.addToQueue(a.id);
+      await b.fire('start');
+      await waitFor(() => a.got('match_found').length === 1);
+      finishStart([]);
+      await start;
+      expect(await queueStore.isInQueue(a.id)).toBe(false);
+      expect(a.got('match_found')).toHaveLength(1);
+    } finally {
+      finishStart([]);
+      await start;
+      await Promise.all([a.fire('stop'), b.fire('stop')]);
+    }
+  });
+
+  it('does not announce stale busy=true after Stop when the earlier friend read finishes late', async () => {
+    const io = new FakeIo();
+    const a = new FakeSocket(io, 'presence-order-a');
+    let finishStart!: (ids: string[]) => void;
+    let finishStop!: (ids: string[]) => void;
+    const read = jest.mocked(getPresenceFriendIds);
+    read.mockImplementationOnce(() => new Promise((resolve) => { finishStart = resolve; }))
+      .mockImplementationOnce(() => new Promise((resolve) => { finishStop = resolve; }));
+    const start = a.fire('start');
+    await waitFor(() => !!finishStart);
+    const stop = a.fire('stop');
+    await waitFor(() => !!finishStop);
+    finishStop([]);
+    await stop;
+    finishStart([]);
+    await start;
+    expect(a.got('presence:update').map((event) => event.payload.busy)).toEqual([false]);
+    expect(await queueStore.isInQueue(a.id)).toBe(false);
+  });
+
   it('contains a failed Start write and retries the original permission checks', async () => {
     const io = new FakeIo();
     const a = new FakeSocket(io, 'start-oom-a');

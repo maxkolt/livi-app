@@ -6,6 +6,7 @@
  */
 
 import { logger } from './logger';
+import { measureMatchStage } from './matchPerformance';
 import { createRedisStore } from './queueStoreRedis';
 import { createMemoryStore } from './queueStoreMemory';
 
@@ -29,28 +30,28 @@ if (REDIS_URL) {
 
 export type CleanupStatesResult = { cleanedBans: number; cleanedLocks: number; cleanedPairs: number };
 
-export const addToQueue = (sid: string) => store.addToQueue(sid);
-export const removeFromQueue = (sid: string) => store.removeFromQueue(sid);
-export const isInQueue = (sid: string) => store.isInQueue(sid);
-export const getWaitingQueue = (limit?: number) => store.getWaitingQueue(limit);
-export const getQueueSize = () => store.getQueueSize();
+export const addToQueue = (sid: string) => measureMatchStage('queue.write', () => store.addToQueue(sid));
+export const removeFromQueue = (sid: string) => measureMatchStage('queue.write', () => store.removeFromQueue(sid));
+export const isInQueue = (sid: string) => measureMatchStage('queue.read', () => store.isInQueue(sid));
+export const getWaitingQueue = (limit?: number) => measureMatchStage('queue.scan', () => store.getWaitingQueue(limit));
+export const getQueueSize = () => measureMatchStage('queue.scan', () => store.getQueueSize());
 export const setPair = (aSid: string, bSid: string) => store.setPair(aSid, bSid);
 export const getPartner = (sid: string) => store.getPartner(sid);
 export const removePair = (sid: string) => store.removePair(sid);
-export const lockSocket = (sid: string) => store.lockSocket(sid);
-export const unlockSocket = (sid: string) => store.unlockSocket(sid);
-export const isLocked = (sid: string) => store.isLocked(sid);
-export const banPair = (aSid: string, bSid: string, ms: number) => store.banPair(aSid, bSid, ms);
-export const isBannedTogether = (aSid: string, bSid: string) => store.isBannedTogether(aSid, bSid);
-export const banModerationUser = (userId: string, ms: number) => store.banModerationUser(userId, ms);
-export const isModerationBanned = (userId: string) => store.isModerationBanned(userId);
-export const getModerationBanExpiresAt = (userId: string) => store.getModerationBanExpiresAt(userId);
-export const getLastMatchAttempt = (sid: string) => store.getLastMatchAttempt(sid);
-export const setLastMatchAttempt = (sid: string, ts: number) => store.setLastMatchAttempt(sid, ts);
-export const getLastStart = (sid: string) => store.getLastStart(sid);
-export const setLastStart = (sid: string, ts: number) => store.setLastStart(sid, ts);
-export const getLastSearch = (sid: string) => store.getLastSearch(sid);
-export const setLastSearch = (sid: string, ts: number) => store.setLastSearch(sid, ts);
+export const lockSocket = (sid: string) => measureMatchStage('queue.lock', () => store.lockSocket(sid));
+export const unlockSocket = (sid: string) => measureMatchStage('queue.lock', () => store.unlockSocket(sid));
+export const isLocked = (sid: string) => measureMatchStage('queue.lock', () => store.isLocked(sid));
+export const banPair = (aSid: string, bSid: string, ms: number) => measureMatchStage('queue.ban', () => store.banPair(aSid, bSid, ms));
+export const isBannedTogether = (aSid: string, bSid: string) => measureMatchStage('queue.ban', () => store.isBannedTogether(aSid, bSid));
+export const banModerationUser = (userId: string, ms: number) => measureMatchStage('queue.ban', () => store.banModerationUser(userId, ms));
+export const isModerationBanned = (userId: string) => measureMatchStage('queue.ban', () => store.isModerationBanned(userId));
+export const getModerationBanExpiresAt = (userId: string) => measureMatchStage('queue.ban', () => store.getModerationBanExpiresAt(userId));
+export const getLastMatchAttempt = (sid: string) => measureMatchStage('queue.read', () => store.getLastMatchAttempt(sid));
+export const setLastMatchAttempt = (sid: string, ts: number) => measureMatchStage('queue.write', () => store.setLastMatchAttempt(sid, ts));
+export const getLastStart = (sid: string) => measureMatchStage('queue.read', () => store.getLastStart(sid));
+export const setLastStart = (sid: string, ts: number) => measureMatchStage('queue.write', () => store.setLastStart(sid, ts));
+export const getLastSearch = (sid: string) => measureMatchStage('queue.read', () => store.getLastSearch(sid));
+export const setLastSearch = (sid: string, ts: number) => measureMatchStage('queue.write', () => store.setLastSearch(sid, ts));
 export const clearSocketData = (sid: string) => store.clearSocketData(sid);
 export const cleanupStaleQueueEntries = (
   timeoutMs: number,

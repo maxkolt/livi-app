@@ -14,6 +14,7 @@ const TTL_MS = 5 * 60_000; // reduce repeated DB checks on hot realtime paths li
 type CacheEntry<T> = { v: T; exp: number };
 const friendsCache = new Map<string, CacheEntry<boolean>>();
 const legacyEdgeMigrationAttempts = new Set<string>();
+const legacyEdgeMigrations = new Map<string, Promise<void>>();
 
 /** Кэш документов дружбы (getOrCreateFriendship). Ключ: `${user1}_${user2}` (id отсортированы). */
 const friendshipDocCache = new Map<string, IFriendshipMessages>();
@@ -180,6 +181,16 @@ async function upsertBidirectionalFriendshipEdges(userId: string, friendIds: str
 async function migrateLegacyFriendEdgesForUser(userId: string): Promise<void> {
   if (!isOid(userId)) return;
   if (legacyEdgeMigrationAttempts.has(userId)) return;
+  const existing = legacyEdgeMigrations.get(userId);
+  if (existing) return existing;
+  const migration = migrateLegacyFriendEdges(userId).finally(() => {
+    if (legacyEdgeMigrations.get(userId) === migration) legacyEdgeMigrations.delete(userId);
+  });
+  legacyEdgeMigrations.set(userId, migration);
+  return migration;
+}
+
+async function migrateLegacyFriendEdges(userId: string): Promise<void> {
 
   const legacyIds = Array.from(new Set(
     (await getLegacyFriendIds(userId)).filter((friendId) => isOid(friendId) && friendId !== userId)
@@ -252,9 +263,9 @@ export async function getFriendIds(userId: string): Promise<string[]> {
     addUniqueFriend(friendIds, seen, userId, friendId);
   }
 
-  const repairIds = friendIds.filter((friendId) =>
-    ownLegacyIds.includes(friendId) || reverseLegacyIds.includes(friendId) || !outgoing.has(friendId) || !incoming.has(friendId)
-  );
+  // A legacy array is still a valid source of truth. Its presence does not mean
+  // the already-complete edge pair needs rewriting on every status update.
+  const repairIds = friendIds.filter((friendId) => !outgoing.has(friendId) || !incoming.has(friendId));
   if (repairIds.length > 0) await upsertBidirectionalFriendshipEdges(userId, repairIds);
 
   return friendIds;
@@ -288,6 +299,7 @@ export async function getFriendIdsForUsers(userIds: string[]): Promise<Map<strin
   ]);
 
   const seenByUser = new Map<string, Set<string>>();
+  const directedEdges = new Set<string>();
   const addForUser = (uid: string, friendId: string) => {
     if (!uniqueIdSet.has(uid)) return;
     const list = byUser.get(uid) || [];
@@ -300,6 +312,7 @@ export async function getFriendIdsForUsers(userIds: string[]): Promise<Map<strin
   for (const edge of edges) {
     const uid = String(edge.userId);
     const fid = String(edge.friendId);
+    directedEdges.add(`${uid}_${fid}`);
     addForUser(uid, fid);
     addForUser(fid, uid);
   }
@@ -316,7 +329,18 @@ export async function getFriendIdsForUsers(userIds: string[]): Promise<Map<strin
     if (!byUser.has(id)) byUser.set(id, []);
   }
 
-  await Promise.all(uniqueIds.map((id) => upsertBidirectionalFriendshipEdges(id, byUser.get(id) || [])));
+  const repairingPairs = new Set<string>();
+  const repairs = uniqueIds.map((id) => {
+    const missing = (byUser.get(id) || []).filter((friendId) => {
+      if (directedEdges.has(`${id}_${friendId}`) && directedEdges.has(`${friendId}_${id}`)) return false;
+      const pairKey = key(id, friendId);
+      if (repairingPairs.has(pairKey)) return false;
+      repairingPairs.add(pairKey);
+      return true;
+    });
+    return missing.length ? upsertBidirectionalFriendshipEdges(id, missing) : Promise.resolve();
+  });
+  await Promise.all(repairs);
 
   return byUser;
 }

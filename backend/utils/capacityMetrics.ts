@@ -5,6 +5,7 @@
  */
 
 import { monitorEventLoopDelay, performance } from 'node:perf_hooks';
+import { getMatchPerformance } from './matchPerformance';
 
 const CAPACITY_METRICS_ENABLED = String(process.env.CAPACITY_METRICS_ENABLED || '').trim() === '1';
 const eventLoopDelay = CAPACITY_METRICS_ENABLED ? monitorEventLoopDelay({ resolution: 20 }) : null;
@@ -163,6 +164,7 @@ export function getStats() {
   const joinFailureRate = totalJoins > 0 ? (clientJoinFailureCount / totalJoins) * 100 : 0;
   return {
     runtime: CAPACITY_METRICS_ENABLED ? runtimeStats() : undefined,
+    matchPerformance: getMatchPerformance(),
     tokenRequestsTotal,
     tokenErrorsTotal,
     tokenFailureRate: tokenRequestsTotal > 0 ? (tokenErrorsTotal / tokenRequestsTotal) * 100 : 0,

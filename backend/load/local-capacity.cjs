@@ -33,8 +33,9 @@ const profile = process.argv[3] || 'all';
 if (!Number.isInteger(users) || users < 2 || users > 5000 || users % 2) {
   throw new Error('Usage: node backend/load/local-capacity.cjs <even users: 2..5000>');
 }
-if (!['all', 'calls', 'random', 'chat', 'mixed'].includes(profile)) throw new Error('Profile must be all, calls, random, chat or mixed');
+if (!['all', 'calls', 'random', 'chat', 'mixed', 'churn'].includes(profile)) throw new Error('Profile must be all, calls, random, chat, mixed or churn');
 if (profile === 'mixed' && users % 4) throw new Error('Mixed profile needs a user count divisible by four');
+if (profile === 'churn' && users < 4) throw new Error('Churn profile needs at least four users');
 const runDir = fs.mkdtempSync(path.join(os.tmpdir(), 'livi-capacity-'));
 const children = [];
 let dbClient;
@@ -135,6 +136,7 @@ for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => {
     LIVEKIT_API_KEY: 'local-capacity', LIVEKIT_API_SECRET: crypto.randomBytes(32).toString('hex'), LIVEKIT_URL: 'wss://capacity.invalid',
     MODERATION_ENABLED: '0', CALL_ORCHESTRATION_ENABLED: '0', CALL_PUSH_FALLBACK_ENABLED: '0',
     CAPACITY_METRICS_ENABLED: '1', LOG_LEVEL: 'warn',
+    MATCH_PROFILE_ENABLED: process.env.LIVI_LOAD_PROFILE === '1' ? '1' : '0',
   };
   const backend = start('backend', process.execPath, [path.join(runDir, 'dist/index.js')], env);
   const url = `http://127.0.0.1:${backendPort}`;

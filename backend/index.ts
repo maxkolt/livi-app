@@ -58,7 +58,7 @@ import { pushLog } from './utils/pushLogBuffer';
 import * as queueStore from './utils/queueStore';
 import * as rateLimitStore from './utils/rateLimit';
 import * as capacityMetrics from './utils/capacityMetrics';
-import { startQueueCleanup, stopQueueCleanup, tryMatch } from './sockets/match';
+import { startQueueCleanup, stopQueueCleanup, tryMatch, auditRandomPairs } from './sockets/match';
 import { onSocketDisconnectWebRTC } from './sockets/webrtc';
 import {
   dissolveSocketIoRoom,
@@ -114,6 +114,7 @@ import { areFriendsCached, getFriendIds, getFriendIdsForUsers } from './utils/fr
 import { isSocketIoRedisAdapterActive, setupSocketIoRedisAdapter } from './utils/socketIoRedisAdapter';
 import { getWelcomeOnlinePresenceSnapshot } from './utils/welcomeOnlinePresence';
 import { createRequestBodyParsers } from './utils/requestBodyParsers';
+import { attachMongoMatchProfile, MATCH_PROFILE_ENABLED } from './utils/matchPerformance';
 import { attachLiveKitSignalProxy } from './utils/livekitSignalProxy';
 
 /* ========= Типы ========= */
@@ -400,6 +401,11 @@ app.get('/metrics', (_req, res) => {
 app.get('/api/capacity/stats', (_req, res) => {
   if (!capacityMetrics.isCapacityMetricsEnabled()) return res.status(404).end();
   res.json(capacityMetrics.getStats());
+});
+
+app.get('/api/capacity/random-state', async (_req, res) => {
+  if (!capacityMetrics.isCapacityMetricsEnabled()) return res.status(404).end();
+  res.json(auditRandomPairs(io, await queueStore.getWaitingQueue()));
 });
 
 app.post('/api/capacity/client-metrics', express.json(), (req, res) => {
@@ -788,6 +794,7 @@ function connectMongo(attempt = 1): void {
       minPoolSize: 5,
       serverSelectionTimeoutMS: 10000,
       connectTimeoutMS: 10000,
+      monitorCommands: MATCH_PROFILE_ENABLED,
     })
     .then(onMongoConnected)
     .catch((err) => {
@@ -805,6 +812,7 @@ function connectMongo(attempt = 1): void {
 }
 
 async function onMongoConnected(): Promise<void> {
+  attachMongoMatchProfile(mongoose.connection.getClient());
   const dbName = mongoose.connection.db?.databaseName;
   logger.info('MongoDB connected successfully', {
     uri: MONGO_URI.replace(/\/\/[^:]+:[^@]+@/, '//***:***@'), // Скрываем пароль

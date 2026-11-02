@@ -1,0 +1,412 @@
+{
+  "date": "2026-11-03 Europe/Moscow",
+  "checkpointCommit": "9258c19dc",
+  "commands": [
+    "LIVI_LOAD_PROFILE=1 node backend/load/local-capacity.cjs 5000 random",
+    "LIVI_LOAD_PROFILE=1 node backend/load/local-capacity.cjs 5000 churn",
+    "LIVI_LOAD_PROFILE=1 node backend/load/local-capacity.cjs 5000",
+    "npm run check"
+  ],
+  "versions": {
+    "mongodb": "7.0.23",
+    "redis": "8.10.3"
+  },
+  "comparability": "Same local host, services and random profile; each measurement is one run, not a confidence interval. The final all-profile run followed mixed/chat work and ran alongside code checks.",
+  "profilingSemantics": "Phase differences of aggregate counters. Concurrent durations overlap. processMaxMs is process-wide, not phase-local.",
+  "randomComparison": [
+    {
+      "label": "instrumented baseline",
+      "runDir": "/var/folders/96/2cpj42y56cl6_7y_t0s26jcm0000gn/T/livi-capacity-CUGqoB",
+      "backendSourceSha256": "54b4862795271d60b9eb158b2bc89086af1f1ccb67edd4f4bc6a3ad140d8d1ad",
+      "startedAt": "2026-11-02T21:41:02.873Z",
+      "finishedAt": "2026-11-02T21:41:55.116Z",
+      "host": {
+        "platform": "darwin",
+        "arch": "arm64",
+        "cpus": 10,
+        "memoryGiB": 32,
+        "node": "v20.19.4"
+      },
+      "users": 5000,
+      "profile": "random",
+      "randomPhase": {
+        "name": "random-match-concurrency",
+        "ok": true,
+        "ms": 12408,
+        "requested": 5000,
+        "matchedUsers": 5000,
+        "usersWithRepeatedMatches": 0,
+        "asymmetricPartners": 0,
+        "queueLength": 0,
+        "latencyMs": {
+          "count": 5000,
+          "p50": 8404,
+          "p95": 11071,
+          "p99": 11279,
+          "max": 11323
+        },
+        "remainingConnections": 5000,
+        "matchPerformance": {
+          "mongo.find": {
+            "count": 30376,
+            "totalMs": 161135,
+            "meanMs": 5.304681327363708,
+            "processMaxMs": 286
+          },
+          "mongo.update": {
+            "count": 31222,
+            "totalMs": 326811,
+            "meanMs": 10.467330728332586,
+            "processMaxMs": 117
+          },
+          "friends.batch": {
+            "count": 188,
+            "totalMs": 49907.82403499992,
+            "meanMs": 265.46714912234,
+            "processMaxMs": 2168.3876670000027
+          },
+          "mongo.getMore": {
+            "count": 100,
+            "totalMs": 1697,
+            "meanMs": 16.97,
+            "processMaxMs": 85
+          },
+          "queue.ban": {
+            "count": 12500,
+            "totalMs": 118691.40501300001,
+            "meanMs": 9.495312401040001,
+            "processMaxMs": 83.21154200000456
+          },
+          "queue.read": {
+            "count": 19900,
+            "totalMs": 189721.1332020008,
+            "meanMs": 9.533725286532704,
+            "processMaxMs": 73.54858399999648
+          },
+          "queue.write": {
+            "count": 19939,
+            "totalMs": 215170.2361629996,
+            "meanMs": 10.791425656402005,
+            "processMaxMs": 84.45712500000081
+          },
+          "queue.lock": {
+            "count": 22439,
+            "totalMs": 929998.5616990039,
+            "meanMs": 41.4456331253177,
+            "processMaxMs": 301.1089159999974
+          },
+          "friends.single": {
+            "count": 10000,
+            "totalMs": 11321445.712999947,
+            "meanMs": 1132.1445712999948,
+            "processMaxMs": 2597.793958000002
+          },
+          "match.presence": {
+            "count": 10000,
+            "totalMs": 11321926.62089795,
+            "meanMs": 1132.192662089795,
+            "processMaxMs": 2597.8352920000034
+          },
+          "match.worker_wait": {
+            "count": 5000,
+            "totalMs": 27990856.527075976,
+            "meanMs": 5598.171305415195,
+            "processMaxMs": 8169.316958000003
+          },
+          "search.start": {
+            "count": 5000,
+            "totalMs": 12813563.832692064,
+            "meanMs": 2562.712766538413,
+            "processMaxMs": 2970.6900410000017
+          },
+          "queue.scan": {
+            "count": 9878,
+            "totalMs": 14270.66856799995,
+            "meanMs": 1.4446921004251823,
+            "processMaxMs": 35.243374999998196
+          },
+          "match.attempt": {
+            "count": 5000,
+            "totalMs": 324475.5211920012,
+            "meanMs": 64.89510423840024,
+            "processMaxMs": 2557.2854579999985
+          },
+          "match.tokens": {
+            "count": 2500,
+            "totalMs": 121.28116900004534,
+            "meanMs": 0.048512467600018136,
+            "processMaxMs": 1.4550830000007409
+          }
+        }
+      }
+    },
+    {
+      "label": "repair only missing friendship edges",
+      "runDir": "/var/folders/96/2cpj42y56cl6_7y_t0s26jcm0000gn/T/livi-capacity-xSJN9t",
+      "backendSourceSha256": "3d3a86d51b376c4744f270ec9ab89a9d56633a8e93ffe47779222c06e1a62949",
+      "startedAt": "2026-11-02T21:44:01.750Z",
+      "finishedAt": "2026-11-02T21:44:45.393Z",
+      "host": {
+        "platform": "darwin",
+        "arch": "arm64",
+        "cpus": 10,
+        "memoryGiB": 32,
+        "node": "v20.19.4"
+      },
+      "users": 5000,
+      "profile": "random",
+      "randomPhase": {
+        "name": "random-match-concurrency",
+        "ok": true,
+        "ms": 7382,
+        "requested": 5000,
+        "matchedUsers": 5000,
+        "usersWithRepeatedMatches": 0,
+        "asymmetricPartners": 0,
+        "queueLength": 0,
+        "latencyMs": {
+          "count": 5000,
+          "p50": 4471,
+          "p95": 6112,
+          "p99": 6255,
+          "max": 6278
+        },
+        "remainingConnections": 5000,
+        "matchPerformance": {
+          "mongo.find": {
+            "count": 30252,
+            "totalMs": 161417,
+            "meanMs": 5.335746396932434,
+            "processMaxMs": 271
+          },
+          "friends.batch": {
+            "count": 126,
+            "totalMs": 18810.49216599999,
+            "meanMs": 149.2896203650793,
+            "processMaxMs": 1511.6691250000003
+          },
+          "mongo.getMore": {
+            "count": 108,
+            "totalMs": 786,
+            "meanMs": 7.277777777777778,
+            "processMaxMs": 43
+          },
+          "queue.ban": {
+            "count": 12500,
+            "totalMs": 112431.50577600033,
+            "meanMs": 8.994520462080025,
+            "processMaxMs": 72.21208299999853
+          },
+          "queue.read": {
+            "count": 19998,
+            "totalMs": 209189.8888870009,
+            "meanMs": 10.460540498399885,
+            "processMaxMs": 233.0779999999977
+          },
+          "queue.write": {
+            "count": 19999,
+            "totalMs": 237994.49482400072,
+            "meanMs": 11.900319757187896,
+            "processMaxMs": 225.49116700000013
+          },
+          "queue.lock": {
+            "count": 22499,
+            "totalMs": 1127680.5574650138,
+            "meanMs": 50.12136350348966,
+            "processMaxMs": 261.0415410000023
+          },
+          "friends.single": {
+            "count": 10000,
+            "totalMs": 6027778.25706901,
+            "meanMs": 602.777825706901,
+            "processMaxMs": 1734.1962500000009
+          },
+          "match.presence": {
+            "count": 10000,
+            "totalMs": 6028221.838040976,
+            "meanMs": 602.8221838040976,
+            "processMaxMs": 1734.2270419999986
+          },
+          "match.worker_wait": {
+            "count": 5000,
+            "totalMs": 13779225.371008018,
+            "meanMs": 2755.8450742016034,
+            "processMaxMs": 3910.4212920000027
+          },
+          "search.start": {
+            "count": 5000,
+            "totalMs": 7926456.543758001,
+            "meanMs": 1585.2913087516001,
+            "processMaxMs": 2217.9771660000006
+          },
+          "queue.scan": {
+            "count": 9998,
+            "totalMs": 21426.732517999644,
+            "meanMs": 2.1431018721743995,
+            "processMaxMs": 25.128375000000233
+          },
+          "match.attempt": {
+            "count": 5000,
+            "totalMs": 190545.37378100038,
+            "meanMs": 38.10907475620007,
+            "processMaxMs": 2114.694166999998
+          },
+          "match.tokens": {
+            "count": 2500,
+            "totalMs": 123.33809199991447,
+            "meanMs": 0.049335236799965786,
+            "processMaxMs": 1.4100409999991825
+          }
+        }
+      }
+    },
+    {
+      "label": "batch presence reads",
+      "runDir": "/var/folders/96/2cpj42y56cl6_7y_t0s26jcm0000gn/T/livi-capacity-VJQWpR",
+      "backendSourceSha256": "48d36884e068006c1cdd5b1d1412f29b0d036d9a9ca60944d861c535b6471c82",
+      "startedAt": "2026-11-02T21:46:59.163Z",
+      "finishedAt": "2026-11-02T21:47:39.246Z",
+      "host": {
+        "platform": "darwin",
+        "arch": "arm64",
+        "cpus": 10,
+        "memoryGiB": 32,
+        "node": "v20.19.4"
+      },
+      "users": 5000,
+      "profile": "random",
+      "randomPhase": {
+        "name": "random-match-concurrency",
+        "ok": true,
+        "ms": 3885,
+        "requested": 5000,
+        "matchedUsers": 5000,
+        "usersWithRepeatedMatches": 0,
+        "asymmetricPartners": 0,
+        "queueLength": 0,
+        "latencyMs": {
+          "count": 5000,
+          "p50": 1930,
+          "p95": 2739,
+          "p99": 2817,
+          "max": 2826
+        },
+        "remainingConnections": 5000,
+        "matchPerformance": {
+          "mongo.find": {
+            "count": 1330,
+            "totalMs": 4759,
+            "meanMs": 3.5781954887218044,
+            "processMaxMs": 104
+          },
+          "friends.batch": {
+            "count": 54,
+            "totalMs": 574.531205000003,
+            "meanMs": 10.639466759259314,
+            "processMaxMs": 127.30641699999978
+          },
+          "mongo.getMore": {
+            "count": 134,
+            "totalMs": 1264,
+            "meanMs": 9.432835820895523,
+            "processMaxMs": 45
+          },
+          "queue.ban": {
+            "count": 12500,
+            "totalMs": 95123.71632499906,
+            "meanMs": 7.609897305999924,
+            "processMaxMs": 54.018708999999944
+          },
+          "queue.read": {
+            "count": 19998,
+            "totalMs": 139953.3777300012,
+            "meanMs": 6.998368723372398,
+            "processMaxMs": 93.26408299999821
+          },
+          "queue.write": {
+            "count": 19998,
+            "totalMs": 224697.19950200076,
+            "meanMs": 11.235983573457384,
+            "processMaxMs": 95.99941600000238
+          },
+          "queue.lock": {
+            "count": 22498,
+            "totalMs": 274109.1621730001,
+            "meanMs": 12.183712426571255,
+            "processMaxMs": 96.16362500000105
+          },
+          "friends.single": {
+            "count": 10000,
+            "totalMs": 1551065.5156999954,
+            "meanMs": 155.10655156999954,
+            "processMaxMs": 572.9668329999986
+          },
+          "match.presence": {
+            "count": 10000,
+            "totalMs": 1575975.8569530044,
+            "meanMs": 157.59758569530044,
+            "processMaxMs": 574.3682919999992
+          },
+          "match.worker_wait": {
+            "count": 5000,
+            "totalMs": 6523643.917589007,
+            "meanMs": 1304.7287835178013,
+            "processMaxMs": 1933.1854999999996
+          },
+          "search.start": {
+            "count": 5000,
+            "totalMs": 2552887.2186829974,
+            "meanMs": 510.5774437365995,
+            "processMaxMs": 769.3742500000008
+          },
+          "queue.scan": {
+            "count": 9996,
+            "totalMs": 11265.384432999861,
+            "meanMs": 1.1269892389955842,
+            "processMaxMs": 95.9888749999991
+          },
+          "match.attempt": {
+            "count": 5000,
+            "totalMs": 85429.46843700012,
+            "meanMs": 17.085893687400024,
+            "processMaxMs": 814.2429999999986
+          },
+          "match.tokens": {
+            "count": 2500,
+            "totalMs": 285.2510890001395,
+            "meanMs": 0.11410043560005578,
+            "processMaxMs": 3.1495839999988675
+          }
+        }
+      }
+    }
+  ],
+  "finalRuntimeSourceSha256": "1f91e98c2c23f18a6cdcf932445316f6abfcaa373f3df0f33c1f6632568d7d14",
+  "checks": {
+    "command": "npm run check",
+    "exitCode": 0,
+    "lint": "passed",
+    "frontendTypecheck": "passed",
+    "backendTypecheck": "passed",
+    "frontend": {
+      "suites": 95,
+      "tests": 996
+    },
+    "backend": {
+      "suites": 25,
+      "tests": 280
+    },
+    "capturedLog": "/tmp/livi-optimization-check.log"
+  },
+  "regressions": {
+    "failedChurnRun": "/private/var/folders/96/2cpj42y56cl6_7y_t0s26jcm0000gn/T/livi-capacity-oi7QSG/report.json",
+    "failure": "Next round left two paired endpoints queued; a Start awaiting friendship metadata raced with pair reservation.",
+    "coverage": "Deterministic late-Start tests cover both completed pairing and pending queue-removal/reservation. Both failed before the fix and passed afterwards."
+  },
+  "limits": [
+    "Synthetic fixtures have one friend per user; dense friend graphs need separate fanout measurements.",
+    "One backend process; distributed pair ownership is not implemented.",
+    "No SFU/TURN media or native Android room disposal exercised by these load generators.",
+    "Local measurements do not certify production capacity."
+  ]
+}

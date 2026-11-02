@@ -7,6 +7,7 @@ const frontendRequire = createRequire(path.resolve(__dirname, '../../frontend/pa
 const { ObjectId } = backendRequire('mongodb');
 const Redis = backendRequire('ioredis');
 const { io } = frontendRequire('socket.io-client');
+const { runRandomChurn } = require('./random-churn.cjs');
 // Exercise the actual Android client's pure reducer, rather than a second copy
 // of the delta algorithm. Type-only imports disappear in this local transpile.
 const reducerExports = {};
@@ -62,15 +63,27 @@ async function runWorkloads({ users, profile = 'all', url, db, redisUrl, pepper,
     const profiles = {
       calls: ['direct-call-signaling-and-heartbeats'],
       mixed: ['mixed-chat-and-call-soak'],
+      churn: ['random-churn'],
       random: ['random-match-concurrency'],
       chat: ['active-chat-messages', 'retries-socket-and-http', 'bounded-history-and-query-plan', 'offline-and-reconnect', 'request-boundaries', 'offline-backlog-acknowledgements', 'redis-noeviction-overflow-and-recovery'],
     };
+    if (name === 'random-churn' && profile !== 'churn') return;
     if (profile !== 'all' && !common.includes(name) && !profiles[profile].includes(name)) return;
     activePhase = name;
     console.log(JSON.stringify({ stage: name, users }));
     const at = Date.now();
+    const before = (await (await fetch(`${url}/api/capacity/stats`)).json()).matchPerformance;
     try { const result = await fn(); report.phases.push({ name, ok: true, ms: Date.now() - at, ...result }); }
     catch (error) { report.phases.push({ name, ok: false, ms: Date.now() - at, error: error.message }); }
+    const after = (await (await fetch(`${url}/api/capacity/stats`)).json()).matchPerformance;
+    if (after) {
+      const delta = Object.fromEntries(Object.entries(after).map(([stage, value]) => {
+        const count = value.count - (before?.[stage]?.count || 0);
+        const totalMs = value.totalMs - (before?.[stage]?.totalMs || 0);
+        return [stage, { count, totalMs, meanMs: count ? totalMs / count : 0, processMaxMs: value.maxMs }];
+      }).filter(([, value]) => value.count));
+      report.phases[report.phases.length - 1].matchPerformance = delta;
+    }
   }
   function makeClient(fixture) {
     const fixtureIndex = fixtures.indexOf(fixture);
@@ -111,7 +124,11 @@ async function runWorkloads({ users, profile = 'all', url, db, redisUrl, pepper,
     return client;
   }
   async function connect(fixture, client = makeClient(fixture)) {
-    await new Promise((resolve, reject) => { client.once('connect', resolve); client.once('connect_error', reject); client.connect(); });
+    await new Promise((resolve, reject) => {
+      const onConnect = () => { client.off('connect_error', onError); resolve(); };
+      const onError = (error) => { client.off('connect', onConnect); reject(error); };
+      client.once('connect', onConnect); client.once('connect_error', onError); client.connect();
+    });
     const response = await ack(client, 'reauth', {});
     if (!response?.ok || response.userId !== String(fixture._id)) throw new Error(`reauth:${response?.error || 'wrong_user'}`);
     client.emit('app:visibility', { foreground: true });
@@ -180,6 +197,7 @@ async function runWorkloads({ users, profile = 'all', url, db, redisUrl, pepper,
       return { probedClients: presenceProbes.size, legacyClients: 1, missedDeltaRecovered: skippedPresenceDelta,
         onlineUsers: latest.list.length, unchangedResponseBytes: Buffer.byteLength(JSON.stringify(unchanged)) };
     });
+    await phase('random-churn', () => runRandomChurn({ fixtures, clients, connect, url, report, ack, waitFor, sleep }));
     await phase('mixed-chat-and-call-soak', async () => {
       const durationMs = Number(process.env.LIVI_LOAD_SOAK_MS || 60000);
       if (!Number.isInteger(durationMs) || durationMs < 10000 || durationMs > 600000) throw new Error('LIVI_LOAD_SOAK_MS must be 10000..600000');
