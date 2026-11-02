@@ -53,6 +53,29 @@ afterEach(() => {
 });
 
 describe('sendMessage', () => {
+  it('reports a durable-storage failure instead of claiming that the message was queued', async () => {
+    const storage = require('@react-native-async-storage/async-storage');
+    storage.setItem.mockRejectedValueOnce(new Error('SQLite full'));
+    await expect(sendMessage({ to: 'peer', type: 'text', text: 'hi', clientUiMessageId: UI_ID }))
+      .resolves.toEqual({ ok: false, error: 'outbox_storage_failed' });
+    expect(isMessagePendingInOutbox(UI_ID)).toBe(false);
+    expect(mockEmitAck).not.toHaveBeenCalled();
+    expect(mockStore.has('chat_message_outbox_v1')).toBe(false);
+  });
+
+  it('reports a full queue as failed so the chat keeps the bubble available for retry', async () => {
+    const { MAX_OUTBOX_ITEMS } = require('./outboxCapacity');
+    const existing = JSON.stringify(Array.from({ length: MAX_OUTBOX_ITEMS }, (_, i) => ({
+      id: `old-${i}`, createdAt: i, payload: { to: 'peer', type: 'text', text: 'old' },
+    })));
+    mockStore.set('chat_message_outbox_v1', existing);
+    await expect(sendMessage({ to: 'peer', type: 'text', text: 'hi', clientUiMessageId: UI_ID }))
+      .resolves.toEqual({ ok: false, error: 'outbox_full' });
+    expect(mockStore.get('chat_message_outbox_v1')).toBe(existing);
+    expect(isMessagePendingInOutbox(UI_ID)).toBe(false);
+    expect(mockEmitAck).not.toHaveBeenCalled();
+  });
+
   it('returns "queued" within moments when there is no connection, and the bubble shows a clock', async () => {
     jest.useFakeTimers();
     mockSocket.connected = false;

@@ -41,6 +41,45 @@ const MODERATION_FIRST_WARNING_TEXT =
 // Используем распределенное хранилище через queueStore
 const matchInProgress = new Set<string>(); // Локальный Set для предотвращения одновременных матчей на одном инстансе
 const delayedRetryTimers = new Map<string, NodeJS.Timeout>();
+// Reserve both endpoints before the first queue write. JavaScript runs this section
+// synchronously; another search cannot select either endpoint while Redis is pending.
+const pairReservations = new WeakMap<AuthedSocket, object>();
+const searchEpochs = new WeakMap<AuthedSocket, number>();
+const stoppedSearches = new WeakSet<AuthedSocket>();
+const stopsInFlight = new WeakMap<AuthedSocket, Promise<void>>();
+const commandRetryTimers = new WeakMap<AuthedSocket, NodeJS.Timeout>();
+// Bound simultaneous scans. Letting thousands of searches all read the same
+// first 64 candidates creates retry waves despite correct endpoint reservation.
+const MATCH_WORKERS = 32;
+let activeMatchWorkers = 0;
+const pendingMatchWorkers: Array<() => void> = [];
+const pendingSearches = new WeakMap<AuthedSocket, { epoch: number; promise: Promise<boolean> }>();
+async function withMatchWorker(work: () => Promise<boolean>): Promise<boolean> {
+  if (activeMatchWorkers >= MATCH_WORKERS) await new Promise<void>((resolve) => pendingMatchWorkers.push(resolve));
+  else activeMatchWorkers++;
+  try { return await work(); }
+  finally {
+    const next = pendingMatchWorkers.shift();
+    if (next) next();
+    else activeMatchWorkers--;
+  }
+}
+function searchEpoch(s: AuthedSocket): number { return searchEpochs.get(s) || 0; }
+function invalidateSearch(s: AuthedSocket): number {
+  const retry = commandRetryTimers.get(s);
+  if (retry) clearTimeout(retry);
+  commandRetryTimers.delete(s);
+  const epoch = searchEpoch(s) + 1;
+  searchEpochs.set(s, epoch);
+  return epoch;
+}
+function isFreeForMatch(io: Server, s: AuthedSocket, reservation?: object): boolean {
+  return safeGet(io, s.id) === s && !s.data.partnerSid && !s.data.inCall &&
+    !s.data.isNexting && (!pairReservations.has(s) || pairReservations.get(s) === reservation) && !stoppedSearches.has(s);
+}
+function releaseMatchReservation(s: AuthedSocket, reservation: object | undefined): void {
+  if (pairReservations.get(s) === reservation) pairReservations.delete(s);
+}
 
 /**
  * Рандом-пары, где у одного собеседника оборвался сокет (моргнула сеть, VPN, лифт).
@@ -82,24 +121,35 @@ function clearDelayedRetry(sid: string) {
     delayedRetryTimers.delete(String(sid));
   }
 }
-function scheduleDelayedRetry(io: Server, sid: string, delayMs: number, reason: string) {
+function scheduleDelayedRetry(
+  io: Server, sid: string, delayMs: number, reason: string, restoreQueue = false,
+  expectedEpoch?: number,
+) {
   const id = String(sid);
+  const original = safeGet(io, id);
+  if (!original) return;
+  const epoch = expectedEpoch ?? searchEpoch(original);
+  if (searchEpoch(original) !== epoch) return;
   clearDelayedRetry(id);
   const timer = setTimeout(() => {
     delayedRetryTimers.delete(id);
-    const target = safeGet(io, id);
-    if (!target) return;
-    if (target.data.partnerSid || target.data.inCall) return;
-    if (matchInProgress.has(id)) return;
-    matchInProgress.add(id);
-    logger.debug('Running delayed match retry', { socketId: id, reason, delayMs });
-    void tryMatch(io, target)
-      .catch((e: unknown) => {
+    void (async () => {
+      const target = safeGet(io, id);
+      if (target !== original || searchEpoch(original) !== epoch || !isFreeForMatch(io, original)) return;
+      if (matchInProgress.has(id)) {
+        scheduleDelayedRetry(io, id, 250, reason, restoreQueue, epoch);
+        return;
+      }
+      matchInProgress.add(id);
+      try {
+        if (restoreQueue) await pushToQueue(id);
+        if (searchEpoch(original) !== epoch) return;
+        await tryMatch(io, original);
+      } catch (e: unknown) {
         logger.error('Delayed tryMatch failed', { socketId: id, reason, error: (e as ErrorDetails)?.message || e });
-      })
-      .finally(() => {
-        matchInProgress.delete(id);
-      });
+        scheduleDelayedRetry(io, id, MATCH_RATE_LIMIT_MS, 'queue_recovery', restoreQueue, epoch);
+      } finally { matchInProgress.delete(id); }
+    })();
   }, delayMs);
   delayedRetryTimers.set(id, timer);
 }
@@ -151,12 +201,12 @@ async function markBusy(io: Server, s: AuthedSocket, busy: boolean) {
   }
 }
 async function lockPair(a: AuthedSocket, b: AuthedSocket) {
+  a.data.inCall = true;
+  b.data.inCall = true;
   await Promise.all([
     queueStore.lockSocket(a.id),
     queueStore.lockSocket(b.id),
   ]);
-  a.data.inCall = true;
-  b.data.inCall = true;
 }
 async function unlockPair(aSid?: string, bSid?: string) {
   const promises: Promise<void>[] = [];
@@ -180,7 +230,7 @@ function makeRoomId(aSid: string, bSid: string) {
  */
 function leaveCallRooms(s: AuthedSocket) {
   s.rooms.forEach((r) => {
-    if (r !== s.id && !r.startsWith('u:')) s.leave(r);
+    if (r !== s.id && !r.startsWith('u:') && !r.startsWith('presence:')) s.leave(r);
   });
 }
 /**
@@ -199,31 +249,21 @@ async function clearPartner(
   signalData?: { nextTransitionId?: string | null }
 ) {
   const otherSid = me.data.partnerSid as string | undefined;
-  
-  // КРИТИЧНО: Всегда очищаем состояние текущего сокета, даже если партнера нет
-  // Это важно для случаев, когда партнер уже отключился или очистил свое состояние
-  me.data.partnerSid = undefined;
-  me.data.randomPartnerSid = undefined;
-  me.data.inCall = false;
-  me.data.roomId = undefined;
-  await unlockPair(me.id);
-
-  // Если партнер существует, очищаем и его состояние
-  if (otherSid) {
-    const other = safeGet(io, otherSid);
-    if (other) {
-      other.data.partnerSid = undefined;
-      other.data.randomPartnerSid = undefined;
-      other.data.inCall = false;
-      other.data.roomId = undefined;
-      if (notifyOther) {
-        if (reason === 'disconnect') other.emit('disconnected', signalData);
-        else other.emit('peer:stopped', signalData);
-      }
-      await markBusy(io, other, false);
-      await unlockPair(other.id);
-    }
+  const candidate = otherSid ? safeGet(io, otherSid) : undefined;
+  const other = candidate?.data.partnerSid === me.id ? candidate : undefined;
+  // Release both local endpoints before any Redis/DB await. Cleanup failure
+  // must not leave the peer attached to a user who already pressed Stop.
+  for (const target of other ? [me, other] : [me]) {
+    target.data.partnerSid = undefined;
+    target.data.randomPartnerSid = undefined;
+    target.data.inCall = false;
+    target.data.roomId = undefined;
   }
+  if (other && notifyOther) other.emit(reason === 'disconnect' ? 'disconnected' : 'peer:stopped', signalData);
+  await Promise.all([
+    unlockPair(me.id, other?.id),
+    ...(other ? [markBusy(io, other, false)] : []),
+  ]);
 }
 
 // === Пауза на переподключение ================================================
@@ -330,6 +370,19 @@ function findStalePairedSocketOfUser(io: Server, userId: string, exceptSid: stri
  * Экспортируется для использования в других модулях (например, index.ts)
  */
 export async function tryMatch(io: Server, socket: AuthedSocket): Promise<boolean> {
+  const epoch = searchEpoch(socket);
+  const existing = pendingSearches.get(socket);
+  if (existing?.epoch === epoch) return existing.promise;
+  const promise = withMatchWorker(() => searchEpoch(socket) === epoch ? tryMatchAvailable(io, socket, epoch) : Promise.resolve(false));
+  const search = { epoch, promise };
+  pendingSearches.set(socket, search);
+  try { return await promise; }
+  finally { if (pendingSearches.get(socket) === search) pendingSearches.delete(socket); }
+}
+
+async function tryMatchAvailable(io: Server, socket: AuthedSocket, epoch: number): Promise<boolean> {
+  if (!isFreeForMatch(io, socket)) return false;
+  if (!(await queueStore.isInQueue(socket.id)) || searchEpoch(socket) !== epoch || !isFreeForMatch(io, socket)) return false;
   // Rate limiting: проверяем, не слишком ли часто происходят попытки матчинга
   const now = Date.now();
   const lastAttempt = await queueStore.getLastMatchAttempt(socket.id) || 0;
@@ -339,6 +392,7 @@ export async function tryMatch(io: Server, socket: AuthedSocket): Promise<boolea
       timeSinceLastAttempt: now - lastAttempt,
       rateLimitMs: MATCH_RATE_LIMIT_MS
     });
+    scheduleDelayedRetry(io, socket.id, MATCH_RATE_LIMIT_MS - (now - lastAttempt) + 10, 'match_rate_limit', false, epoch);
     return false;
   }
   await queueStore.setLastMatchAttempt(socket.id, now);
@@ -363,69 +417,59 @@ export async function tryMatch(io: Server, socket: AuthedSocket): Promise<boolea
 
   const waitQueue = await queueStore.getWaitingQueue(MATCH_CANDIDATE_SCAN_LIMIT);
   let candidateSid: string | undefined;
+  let candidateReservation: object | undefined;
   let cleanedSkipped = 0;
-  
+  let rematchBanSkipped = false;
+
   for (const sid of waitQueue) {
+    if (searchEpoch(socket) !== epoch || !isFreeForMatch(io, socket)) return false;
     if (sid === socket.id) continue;
-    const isLocked = await queueStore.isLocked(sid);
-    if (isLocked) continue;
     const other = safeGet(io, sid);
-    if (!other || other.data.partnerSid || other.data.inCall) {
+    if (!other || stoppedSearches.has(other)) {
       await removeFromQueue(sid);
       cleanedSkipped++;
       continue;
     }
-    
-    // Проверяем, что это не один и тот же пользователь (по userId)
+    if (!isFreeForMatch(io, other)) continue;
     const myUserId = String(socket.data.userId || '');
     const otherUserId = String(other.data.userId || '');
-    if (myUserId && otherUserId && myUserId === otherUserId) {
-      logger.debug('Skipping self-match by userId', { socketId: socket.id, userId: myUserId, otherSocketId: sid });
-      continue;
-    }
-    // Пропускаем пользователей, забаненных модерацией (нарушение правил)
-    if (otherUserId && (await queueStore.isModerationBanned(otherUserId))) {
-      logger.debug('Skipping moderation-banned user', { socketId: socket.id, otherUserId, otherSocketId: sid });
-      await removeFromQueue(sid);
-      cleanedSkipped++;
-      continue;
-    }
-    // Один пожаловался на другого — эту пару больше не сводим.
-    if (
-      myUserId &&
-      otherUserId &&
-      (await queueStore.isBannedTogether(reportPairKey(myUserId), reportPairKey(otherUserId)))
-    ) {
-      continue;
-    }
-    
-    // КРИТИЧНО: Друзья могут попадаться в рандомном чате - это нормально и не блокирует работу
-    // Проверка на дружбу НЕ выполняется здесь, так как друзья имеют право общаться в рандомном чате
-    
-    // Проверяем бан перед проверкой размера очереди
-    const isBanned = await bannedTogether(socket.id, other.id);
-    
-    // Даже если в очереди осталось только 2 пользователя, соблюдаем rematch-ban.
-    // Иначе после нажатия "Далее" сервер мгновенно сводит ту же пару обратно,
-    // и клиент выглядит так, будто новый поиск у одного пользователя не начался.
-    if (queueSize <= 2) {
-      if (isBanned) {
-        logger.debug('Only 2 users in queue, rematch ban still active', {
-          socketId: socket.id,
-          otherId: other.id,
-          waitQueueSize: queueSize
-        });
+    if (myUserId && otherUserId && myUserId === otherUserId) continue;
+
+    // Reserve before eligibility I/O: other workers skip this pair immediately
+    // instead of all querying the same first candidate and losing the race later.
+    const reservation = {};
+    const otherEpoch = searchEpoch(other);
+    pairReservations.set(socket, reservation);
+    pairReservations.set(other, reservation);
+    let selected = false;
+    try {
+      if (await queueStore.isLocked(sid)) continue;
+      if (otherUserId && await queueStore.isModerationBanned(otherUserId)) {
+        await removeFromQueue(sid);
+        cleanedSkipped++;
         continue;
       }
-      logger.debug('Only 2 users in queue, allowing match');
+      if (myUserId && otherUserId &&
+          await queueStore.isBannedTogether(reportPairKey(myUserId), reportPairKey(otherUserId))) continue;
+      // Friendship does not exclude a random match. Both kinds of pair bans do.
+      if (await bannedTogether(socket.id, other.id)) { rematchBanSkipped = true; continue; }
+      const [meQueued, otherQueued] = await Promise.all([
+        queueStore.isInQueue(socket.id), queueStore.isInQueue(other.id),
+      ]);
+      if (!meQueued) return false;
+      if (!otherQueued) continue;
+      if (searchEpoch(socket) !== epoch || !isFreeForMatch(io, socket, reservation)) return false;
+      if (searchEpoch(other) !== otherEpoch || !isFreeForMatch(io, other, reservation)) continue;
       candidateSid = sid;
+      candidateReservation = reservation;
+      selected = true;
       break;
+    } finally {
+      if (!selected) {
+        releaseMatchReservation(socket, reservation);
+        releaseMatchReservation(other, reservation);
+      }
     }
-    
-    // Если в очереди больше 2 пользователей, проверяем бан
-    if (isBanned) continue;
-    candidateSid = sid;
-    break;
   }
 
   if (!candidateSid) {
@@ -436,14 +480,43 @@ export async function tryMatch(io: Server, socket: AuthedSocket): Promise<boolea
       scanLimit: MATCH_CANDIDATE_SCAN_LIMIT,
       cleanedSkipped,
     });
+    if (waitQueue.length >= MATCH_CANDIDATE_SCAN_LIMIT) {
+      scheduleDelayedRetry(io, socket.id, MATCH_RATE_LIMIT_MS + 10, 'candidate_contention', false, epoch);
+    } else if (rematchBanSkipped) {
+      scheduleDelayedRetry(io, socket.id, REMATCH_BAN_MS + 10, 'rematch_ban_expiry', false, epoch);
+    }
     return false;
   }
 
-  await removeFromQueue(socket.id);
-  await removeFromQueue(candidateSid);
-
   const other = safeGet(io, candidateSid);
-  if (!other) return false;
+  if (!other || !isFreeForMatch(io, socket, candidateReservation) || !isFreeForMatch(io, other, candidateReservation)) {
+    releaseMatchReservation(socket, candidateReservation);
+    if (other) releaseMatchReservation(other, candidateReservation);
+    return false;
+  }
+  const otherEpoch = searchEpoch(other);
+  try {
+    await Promise.all([removeFromQueue(socket.id), removeFromQueue(other.id)]);
+  } catch (error) {
+    scheduleDelayedRetry(io, socket.id, MATCH_RATE_LIMIT_MS, 'queue_write_failed', true, epoch);
+    scheduleDelayedRetry(io, other.id, MATCH_RATE_LIMIT_MS, 'queue_write_failed', true, otherEpoch);
+    throw error;
+  } finally {
+    releaseMatchReservation(socket, candidateReservation);
+    releaseMatchReservation(other, candidateReservation);
+  }
+  if (searchEpoch(socket) !== epoch || searchEpoch(other) !== otherEpoch ||
+      !isFreeForMatch(io, socket) || !isFreeForMatch(io, other)) {
+    // The other endpoint may have stopped while the queue writes were pending.
+    // Keep any unchanged search eligible instead of silently losing it.
+    for (const [s, expected] of [[socket, epoch], [other, otherEpoch]] as const) {
+      if (searchEpoch(s) === expected && isFreeForMatch(io, s)) {
+        await pushToQueue(s.id);
+        scheduleDelayedRetry(io, s.id, MATCH_RATE_LIMIT_MS + 10, 'reservation_cancelled');
+      }
+    }
+    return false;
+  }
 
   clearDelayedRetry(socket.id);
   clearDelayedRetry(other.id);
@@ -462,8 +535,30 @@ export async function tryMatch(io: Server, socket: AuthedSocket): Promise<boolea
   socket.data.randomPartnerSid = other.id;
   other.data.randomPartnerSid = socket.id;
 
-  await lockPair(socket, other);
+  try {
+    await lockPair(socket, other);
+  } catch (error) {
+    if (searchEpoch(socket) === epoch && searchEpoch(other) === otherEpoch &&
+        socket.data.partnerSid === other.id && other.data.partnerSid === socket.id) {
+      for (const s of [socket, other]) {
+        s.data.partnerSid = undefined;
+        s.data.randomPartnerSid = undefined;
+        s.data.inCall = false;
+      }
+      await unlockPair(socket.id, other.id).catch(() => undefined);
+      scheduleDelayedRetry(io, socket.id, MATCH_RATE_LIMIT_MS, 'pair_lock_failed', true, epoch);
+      scheduleDelayedRetry(io, other.id, MATCH_RATE_LIMIT_MS, 'pair_lock_failed', true, otherEpoch);
+    }
+    throw error;
+  }
+  if (searchEpoch(socket) !== epoch || searchEpoch(other) !== otherEpoch ||
+      socket.data.partnerSid !== other.id || other.data.partnerSid !== socket.id) {
+    await Promise.all([socket, other].filter((s) => !s.data.partnerSid && !s.data.inCall).map((s) => unlockPair(s.id)));
+    return false;
+  }
   await markBusy(io, socket, true);
+  if (searchEpoch(socket) !== epoch || searchEpoch(other) !== otherEpoch ||
+      socket.data.partnerSid !== other.id || other.data.partnerSid !== socket.id) return false;
   await markBusy(io, other, true);
 
   const myUserId = String(socket.data.userId || '');
@@ -500,6 +595,12 @@ export async function tryMatch(io: Server, socket: AuthedSocket): Promise<boolea
   } catch (e: unknown) {
     logger.error('Failed to create LiveKit tokens:', e);
   }
+
+  // Tokens and presence can finish after Next/Stop or a network interruption.
+  // Never deliver a result for a pair that no longer exists.
+  if (searchEpoch(socket) !== epoch || searchEpoch(other) !== otherEpoch ||
+      !socket.connected || !other.connected ||
+      socket.data.partnerSid !== other.id || other.data.partnerSid !== socket.id) return false;
   
   io.to(socket.id).emit('match_found', { 
     roomId, 
@@ -528,12 +629,50 @@ export async function tryMatch(io: Server, socket: AuthedSocket): Promise<boolea
 
 // === Основная логика ========================================================
 export function bindMatch(io: Server, socket: AuthedSocket) {
+  // Socket.IO does not await async listeners. Contain storage rejections so a
+  // temporary Redis OOM/network failure cannot become a process-wide crash.
+  const onCommand = <Args extends unknown[]>(event: string, handler: (...args: Args) => unknown) => {
+    socket.on(event, (...args: Args) => {
+      let retryAttempt = 0;
+      const execute = async (): Promise<void> => {
+        const entryEpoch = searchEpoch(socket);
+        const entryPartnerSid = socket.data.partnerSid;
+        try { await handler(...args); }
+        catch (error) {
+          logger.error('Random command failed', { event, socketId: socket.id, error: (error as ErrorDetails)?.message || error });
+          if (event === 'disconnect') {
+            await Promise.allSettled([clearPartner(io, socket, true, 'disconnect'), markBusy(io, socket, false)]);
+            return;
+          }
+          const epoch = searchEpoch(socket);
+          if ((event !== 'start' && event !== 'next') || !socket.connected ||
+              (epoch !== entryEpoch && !(event === 'next' && epoch === entryEpoch + 1)) ||
+              (event === 'next' && stoppedSearches.has(socket))) return;
+          const previous = commandRetryTimers.get(socket);
+          if (previous) clearTimeout(previous);
+          const retryDelay = Math.min(15_000, START_RATE_LIMIT_MS * 2 ** Math.min(retryAttempt++, 3));
+          const timer = setTimeout(() => {
+            commandRetryTimers.delete(socket);
+            if (!socket.connected || searchEpoch(socket) !== epoch) return;
+            const stillOriginalPair = event === 'next' && entryPartnerSid &&
+              socket.data.partnerSid === entryPartnerSid && epoch === entryEpoch;
+            if (!stillOriginalPair && (socket.data.partnerSid || socket.data.inCall)) return;
+            void execute(); // repeats the original moderation and rate checks
+          }, retryDelay + 100 + Math.floor(Math.random() * 300));
+          commandRetryTimers.set(socket, timer);
+        }
+      };
+      return execute();
+    });
+  };
   const runTryMatch = (target: AuthedSocket) => {
     if (matchInProgress.has(target.id)) return;
     matchInProgress.add(target.id);
+    const epoch = searchEpoch(target);
     void tryMatch(io, target)
       .catch((e: unknown) => {
         logger.error('tryMatch failed', { socketId: target.id, error: (e as ErrorDetails)?.message || e });
+        scheduleDelayedRetry(io, target.id, MATCH_RATE_LIMIT_MS, 'queue_recovery', true, epoch);
       })
       .finally(() => {
         matchInProgress.delete(target.id);
@@ -576,7 +715,11 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
   };
 
   // === START ================================================================
-  socket.on('start', async (data?: { transitionId?: string }) => {
+  onCommand('start', async (data?: { transitionId?: string }) => {
+    const epoch = searchEpoch(socket);
+    const cancelled = () => !socket.connected || searchEpoch(socket) !== epoch;
+    await stopsInFlight.get(socket);
+    if (cancelled()) return;
     const transitionId =
       data && typeof data.transitionId === 'string' && data.transitionId.trim().length > 0
         ? data.transitionId.trim()
@@ -607,6 +750,7 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
       return;
     }
     await queueStore.setLastStart(socket.id, now);
+    if (cancelled()) return;
 
     // Если уже есть партнер и он существует — не ломаем активную сессию.
     const existingPartnerSid = socket.data.partnerSid as string | undefined;
@@ -634,7 +778,8 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
 
     // Если сокет уже залочен/в колле — не добавляем в очередь повторно.
     const isLocked = await queueStore.isLocked(socket.id);
-    if (isLocked || socket.data.inCall) {
+    if (cancelled()) return;
+    if (isLocked || socket.data.inCall || socket.data.partnerSid || pairReservations.has(socket)) {
       logger.debug('Start ignored: socket is busy', {
         socketId: socket.id,
         inCall: !!socket.data.inCall,
@@ -645,6 +790,7 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
     }
     
     // КРИТИЧНО: Всегда очищаем состояние перед добавлением в очередь
+    stoppedSearches.delete(socket);
     leaveCallRooms(socket);
     socket.data.partnerSid = undefined;
     socket.data.randomPartnerSid = undefined;
@@ -653,137 +799,101 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
     socket.data.inCall = false;
     socket.data.lastNextTransitionId = transitionId;
     await unlockPair(socket.id);
+    if (cancelled()) return;
 
     logger.debug('Start requested', { socketId: socket.id, transitionId });
     await markBusy(io, socket, true);
+    if (cancelled()) return;
     await pushToQueue(socket.id);
+    if (cancelled()) {
+      await removeFromQueue(socket.id);
+      return;
+    }
     // КРИТИЧНО: Вызываем tryMatch немедленно, без задержек
     // Это гарантирует быстрое нахождение собеседника
     runTryMatch(socket);
   });
 
   // === NEXT ================================================================
-  socket.on('next', async (data?: { transitionId?: string }) => {
-    const transitionId =
-      data && typeof data.transitionId === 'string' && data.transitionId.trim().length > 0
-        ? data.transitionId.trim()
-        : undefined;
+  onCommand('next', async (data?: { transitionId?: string }) => {
+    const entryEpoch = searchEpoch(socket);
+    await stopsInFlight.get(socket);
+    if (!socket.connected || searchEpoch(socket) !== entryEpoch) return;
+    const transitionId = typeof data?.transitionId === 'string' && data.transitionId.trim()
+      ? data.transitionId.trim() : undefined;
     const now = Date.now();
     const last = await queueStore.getLastSearch(socket.id) || 0;
-    if (now - last < NEXT_DEBOUNCE_MS) {
-      logger.debug('Next request debounced', { socketId: socket.id, debounceMs: now - last, transitionId });
-      return;
-    }
+    if (now - last < NEXT_DEBOUNCE_MS) return;
     await queueStore.setLastSearch(socket.id, now);
+    if (!socket.connected || searchEpoch(socket) !== entryEpoch) return;
 
+    const epoch = invalidateSearch(socket);
+    stoppedSearches.delete(socket);
+    const previous = socket.data.partnerSid ? safeGet(io, socket.data.partnerSid) : undefined;
+    const other = previous?.data.partnerSid === socket.id ? previous : undefined;
+    const otherEpoch = other ? invalidateSearch(other) : 0;
     socket.data.lastNextTransitionId = transitionId;
-    logger.debug('Next requested', { socketId: socket.id, transitionId });
-    socket.data.isNexting = true;
 
-    // ПРОСТАЯ ЛОГИКА: Полностью очищаем все состояние синхронно
-    // 1. Разрываем пару с предыдущим партнером
-    const prevPartner = socket.data.partnerSid as string | undefined;
-    if (prevPartner) {
-      const other = safeGet(io, prevPartner);
-      if (other) {
-        await banPair(socket.id, other.id);
-        // КРИТИЧНО: Полностью очищаем состояние партнера
-        other.data.partnerSid = undefined;
-        other.data.randomPartnerSid = undefined;
-        other.data.inCall = false;
-        await unlockPair(other.id);
-        // КРИТИЧНО: Удаляем партнера из очереди и очищаем комнаты
-        await removeFromQueue(other.id);
-        leaveCallRooms(other);
-        other.data.roomId = undefined;
+    // Detach both endpoints synchronously. No Redis wait can leave half a pair
+    // available to another search or let a late token restore the old session.
+    for (const target of other ? [socket, other] : [socket]) {
+      target.data.partnerSid = undefined;
+      target.data.randomPartnerSid = undefined;
+      target.data.inCall = false;
+      target.data.roomId = undefined;
+      target.data.isNexting = true;
+      clearDelayedRetry(target.id);
+      leaveCallRooms(target);
+    }
 
-        const otherUserId = String(other.data.userId || '').trim();
-        const otherModBanned =
-          !!otherUserId && (await queueStore.isModerationBanned(otherUserId));
-        if (otherModBanned) {
-          // После модерации не возвращаем в поиск и не вешаем busy друзьям.
-          clearDelayedRetry(other.id);
+    const enqueueAfterNext = (target: AuthedSocket, expectedEpoch: number) => {
+      setTimeout(() => {
+        void (async () => {
+          const current = () => safeGet(io, target.id) === target && searchEpoch(target) === expectedEpoch &&
+            !target.data.partnerSid && !target.data.inCall && !stoppedSearches.has(target);
+          if (!current()) return;
+          const uid = String(target.data.userId || '').trim();
+          const banned = uid && await queueStore.isModerationBanned(uid);
+          if (!current()) return;
+          target.data.isNexting = false;
+          if (banned) { await markBusy(io, target, false); return; }
+          await pushToQueue(target.id);
+          if (!current()) {
+            // A newer Start owns its queue entry. Stop/disconnect already mark
+            // the socket idle and may have raced the pending queue write.
+            if (!target.data.busy || !target.connected) await removeFromQueue(target.id);
+            return;
+          }
+          runTryMatch(target);
+          scheduleDelayedRetry(io, target.id, REMATCH_BAN_MS + 250, 'next_rematch_window');
+        })().catch((e: unknown) => {
+          logger.error('Next requeue failed', { socketId: target.id, error: (e as ErrorDetails)?.message || e });
+        });
+      }, 250);
+    };
+
+    await Promise.all([
+      removeFromQueue(socket.id), unlockPair(socket.id),
+      ...(other ? [removeFromQueue(other.id), unlockPair(other.id), banPair(socket.id, other.id)] : []),
+    ]);
+    if (other && safeGet(io, other.id) === other && searchEpoch(other) === otherEpoch && !stoppedSearches.has(other)) {
+      const uid = String(other.data.userId || '').trim();
+      const banned = uid && await queueStore.isModerationBanned(uid);
+      if (other.connected && searchEpoch(other) === otherEpoch) {
+        if (banned) {
+          other.data.isNexting = false;
           await markBusy(io, other, false);
-          logger.debug('Skip partner requeue after next: moderation-banned', {
-            socketId: other.id,
-            otherUserId,
-            triggeredByTransitionId: transitionId,
-          });
         } else {
-          // ЧАТРУЛЕТКА: Отправляем peer:left партнеру (он нажал "Далее", значит партнер должен начать новый поиск)
           other.emit('peer:left', { nextTransitionId: transitionId ?? null });
-          // КРИТИЧНО: Автоматически возвращаем партнера в очередь для нового поиска
           await markBusy(io, other, true);
-          // Одинаковая задержка для обоих (250ms), чтобы tryMatch не сматчил одного с третьим пока второй ещё не в очереди
-          const reEnqueueDelayMs = 250;
-          setTimeout(async () => {
-            const currentOther = safeGet(io, other.id);
-            if (!currentOther) {
-              await queueStore.clearSocketData(other.id);
-              logger.debug('Skip partner requeue after next: socket disconnected', {
-                socketId: other.id,
-                triggeredByTransitionId: transitionId,
-              });
-              return;
-            }
-            const uid = String(currentOther.data.userId || '').trim();
-            if (uid && (await queueStore.isModerationBanned(uid))) {
-              clearDelayedRetry(currentOther.id);
-              await markBusy(io, currentOther, false);
-              logger.debug('Skip partner requeue after next delay: moderation-banned', {
-                socketId: currentOther.id,
-                otherUserId: uid,
-                triggeredByTransitionId: transitionId,
-              });
-              return;
-            }
-            currentOther.data.partnerSid = undefined;
-            currentOther.data.randomPartnerSid = undefined;
-            currentOther.data.inCall = false;
-            await unlockPair(currentOther.id);
-            await pushToQueue(currentOther.id);
-            logger.debug('Partner re-added to queue after next', {
-              socketId: currentOther.id,
-              triggeredByTransitionId: transitionId,
-            });
-            runTryMatch(currentOther);
-            scheduleDelayedRetry(io, currentOther.id, REMATCH_BAN_MS + 250, 'next_rematch_window');
-          }, reEnqueueDelayMs);
+          if (searchEpoch(other) === otherEpoch) enqueueAfterNext(other, otherEpoch);
         }
       }
     }
-
-    // 2. Полностью очищаем состояние текущего сокета
-    await removeFromQueue(socket.id);
-    leaveCallRooms(socket);
-    socket.data.roomId = undefined;
-    socket.data.partnerSid = undefined;
-    socket.data.randomPartnerSid = undefined;
-    socket.data.inCall = false;
-    await unlockPair(socket.id);
-    
-    // 3. Устанавливаем busy (пользователь продолжает поиск)
-    await markBusy(io, socket, true);
-
-    // 4. Та же задержка 250ms — оба в очереди одновременно, меньше гонок при tryMatch
-    const reEnqueueDelayMs = 250;
-    setTimeout(async () => {
-      const currentSocket = safeGet(io, socket.id);
-      if (!currentSocket) {
-        await queueStore.clearSocketData(socket.id);
-        logger.debug('Skip socket requeue after next: socket disconnected', { socketId: socket.id, transitionId });
-        return;
-      }
-      currentSocket.data.partnerSid = undefined;
-      currentSocket.data.randomPartnerSid = undefined;
-      currentSocket.data.inCall = false;
-      await unlockPair(currentSocket.id);
-      currentSocket.data.isNexting = false;
-      await pushToQueue(currentSocket.id);
-      logger.debug('Socket re-added to queue', { socketId: currentSocket.id, transitionId });
-      runTryMatch(currentSocket);
-      scheduleDelayedRetry(io, currentSocket.id, REMATCH_BAN_MS + 250, 'next_rematch_window');
-    }, reEnqueueDelayMs);
+    if (socket.connected && searchEpoch(socket) === epoch) {
+      await markBusy(io, socket, true);
+      if (searchEpoch(socket) === epoch) enqueueAfterNext(socket, epoch);
+    }
   });
 
   // === MODERATION: предупреждение партнёру (первое нарушение) =============
@@ -801,7 +911,7 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
   type ReportAck = { ok: boolean; reason?: string };
 
   // === MODERATION: report partner for violation (второе нарушение — бан) ===
-  socket.on(
+  onCommand(
     'moderation:reportPartner',
     async (
       { partnerUserId }: { partnerUserId?: string },
@@ -961,6 +1071,7 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
         if (!userId) return done({ ok: false, reason: 'not_ready' });
         const expectedPartnerUserId = String(payload?.partnerUserId || '').trim();
         if (!expectedPartnerUserId) return done({ ok: false, reason: 'bad_request' });
+        if (stoppedSearches.has(socket)) return done({ ok: false, reason: 'expired' });
 
         // Сокет не рвался, сдался только LiveKit: пара цела — нужен лишь свежий токен в ту же комнату.
         const currentPartner =
@@ -968,6 +1079,7 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
             ? safeGet(io, socket.data.partnerSid)
             : undefined;
         if (currentPartner && currentPartner.data.partnerSid === socket.id) {
+          const epoch = searchEpoch(socket);
           const currentPartnerUserId = String(currentPartner.data.userId || '').trim();
           if (currentPartnerUserId !== expectedPartnerUserId) {
             return done({ ok: false, reason: 'partner_mismatch' });
@@ -978,6 +1090,10 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
             token = await createToken({ identity: userId, roomName });
           } catch (e: unknown) {
             logger.error('[Match] resume: failed to create LiveKit token', { error: (e as ErrorDetails)?.message || String(e) });
+          }
+          if (!socket.connected || searchEpoch(socket) !== epoch ||
+              socket.data.partnerSid !== currentPartner.id || currentPartner.data.partnerSid !== socket.id) {
+            return done({ ok: false, reason: 'expired' });
           }
           logger.info('[Match] resume on a live socket — LiveKit rejoin', { userId, socketId: socket.id });
           return done({
@@ -1021,20 +1137,28 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
           clearTimeout(held.timer);
           heldPairs.delete(userId);
         }
+        const epoch = invalidateSearch(socket);
+        invalidateSearch(oldSocket);
         // Старый сокет отпускаем: его поздний disconnect не должен разорвать пару.
         oldSocket.data.resumedBy = socket.id;
         oldSocket.data.partnerSid = undefined;
         oldSocket.data.randomPartnerSid = undefined;
         oldSocket.data.inCall = false;
-        await unlockPair(oldSocket.id);
-
         clearDelayedRetry(socket.id);
-        await removeFromQueue(socket.id);
         socket.data.partnerSid = partner.id;
         socket.data.randomPartnerSid = partner.id;
         partner.data.partnerSid = socket.id;
         partner.data.randomPartnerSid = socket.id;
+        socket.data.isNexting = false;
+        await Promise.all([unlockPair(oldSocket.id), removeFromQueue(socket.id)]);
+        const current = () => socket.connected && searchEpoch(socket) === epoch &&
+          socket.data.partnerSid === partner.id && partner.data.partnerSid === socket.id;
+        if (!current()) return done({ ok: false, reason: 'expired' });
         await lockPair(socket, partner);
+        if (!current()) {
+          await Promise.all([socket, partner].filter((s) => !s.data.partnerSid && !s.data.inCall).map((s) => unlockPair(s.id)));
+          return done({ ok: false, reason: 'expired' });
+        }
         await markBusy(io, socket, true);
 
         // Свежий токен — если LiveKit у вернувшегося успел сдаться, он зайдёт в ту же комнату.
@@ -1046,6 +1170,7 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
           logger.error('[Match] resume: failed to create LiveKit token', { error: (e as ErrorDetails)?.message || String(e) });
         }
 
+        if (!current()) return done({ ok: false, reason: 'expired' });
         partner.emit('random:partnerResumed', { id: socket.id });
         logger.info('[Match] pair resumed after reconnect', {
           userId,
@@ -1070,26 +1195,39 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
   );
 
   // === STOP ================================================================
-  socket.on('stop', async () => {
+  socket.on('stop', () => {
+    invalidateSearch(socket);
+    stoppedSearches.add(socket);
+    socket.data.isNexting = false;
     clearDelayedRetry(socket.id);
-    await removeFromQueue(socket.id);
-    const stopUserId = String(socket.data.userId || '').trim();
-    if (stopUserId) await releaseHeldPairOf(io, stopUserId);
-    // Ban pair to prevent immediate rematch (same race as "Next" — device may still be reconnecting)
-    const partnerSid = socket.data.partnerSid as string | undefined;
-    if (partnerSid) {
-      await banPair(socket.id, partnerSid);
-    }
-    await clearPartner(io, socket, true, 'stop', {
-      nextTransitionId: socket.data.lastNextTransitionId ?? null,
+    const previousStop = stopsInFlight.get(socket);
+    const stop = (async () => {
+      await previousStop;
+      const stopUserId = String(socket.data.userId || '').trim();
+      const partnerSid = socket.data.partnerSid as string | undefined;
+      const clear = clearPartner(io, socket, true, 'stop', {
+        nextTransitionId: socket.data.lastNextTransitionId ?? null,
+      });
+      socket.data.inCall = false;
+      socket.data.lastNextTransitionId = undefined;
+      await Promise.all([
+        clear, markBusy(io, socket, false), removeFromQueue(socket.id),
+        ...(stopUserId ? [releaseHeldPairOf(io, stopUserId)] : []),
+        ...(partnerSid ? [banPair(socket.id, partnerSid)] : []),
+      ]);
+    })().catch((e: unknown) => {
+      logger.error('Stop search cleanup failed', { socketId: socket.id, error: (e as ErrorDetails)?.message || e });
+    }).finally(() => {
+      if (stopsInFlight.get(socket) === stop) stopsInFlight.delete(socket);
     });
-    socket.data.inCall = false;
-    socket.data.lastNextTransitionId = undefined;
-    await markBusy(io, socket, false);
+    stopsInFlight.set(socket, stop);
+    return stop;
   });
 
   // === DISCONNECT ==========================================================
-  socket.on('disconnect', async (reason) => {
+  onCommand('disconnect', async (reason: string) => {
+    invalidateSearch(socket);
+    stoppedSearches.add(socket);
     logger.debug('Socket disconnected', { socketId: socket.id, reason });
     clearDelayedRetry(socket.id);
 

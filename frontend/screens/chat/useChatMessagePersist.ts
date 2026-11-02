@@ -1,4 +1,4 @@
-import type { ChatMessage } from './chatMessageTypes';
+import type { ChatSessionState } from './useChatSessionState';
 /** Debounced AsyncStorage persist queue for chat messages. */
 
 import React from "react";
@@ -11,26 +11,20 @@ import { writeStoredChatMessages } from "./chatMessageStorageWrite";
 import { createChatMessagePersistQueue, type ChatPersistSnapshot } from './chatMessagePersistQueue';
 
 type Options = {
-  historyReady: boolean;
-  messages: ChatMessage[];
-  currentUserId: string | null;
-  peerId: string;
+  session: ChatSessionState;
   lang: Lang;
-  currentUserIdForPersistRef: React.MutableRefObject<string | null>;
-  peerIdForPersistRef: React.MutableRefObject<string>;
-  latestMessagesForPersistRef: React.MutableRefObject<ChatMessage[]>;
 };
 
-export function useChatMessagePersist({
-  historyReady,
-  messages,
-  currentUserId,
-  peerId,
-  lang,
-  currentUserIdForPersistRef,
-  peerIdForPersistRef,
-  latestMessagesForPersistRef,
-}: Options) {
+export function useChatMessagePersist({ session, lang }: Options) {
+  const {
+    historyReady,
+    messages,
+    currentUserId,
+    peerId,
+    currentUserIdForPersistRef,
+    peerIdForPersistRef,
+    latestMessagesForPersistRef,
+  } = session;
   const langRef = React.useRef(lang);
   langRef.current = lang;
   const readyRef = React.useRef(historyReady);

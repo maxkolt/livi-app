@@ -1,3 +1,4 @@
+import type { ChatSessionState } from './useChatSessionState';
 import type { ChatMessage, PickedChatImage } from './chatMessageTypes';
 /** Send voice / single image / album from local assets. */
 
@@ -11,36 +12,24 @@ import { keepVideoNoteRecording, makeVideoNoteThumb } from "./videoNoteFiles";
 import { getChatMessagesKey } from "./chatStorageKeys";
 import { patchStoredChatMessage } from "./chatMessageStorageWrite";
 
-type ReadStatusMap = Record<string, "sending" | "delivered" | "read" | "failed" | "sent">;
-
 type Options = {
-  peerId: string;
-  currentUserId: string | null;
-  setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>;
-  /** Синхронное зеркало нужно для flush при уходе из чата до следующего render. */
-  latestMessagesForPersistRef: React.MutableRefObject<ChatMessage[]>;
+  session: ChatSessionState;
   enqueueMessagesPersist: (reason: string) => void;
-  setUploadStatus: React.Dispatch<React.SetStateAction<Record<string, "sending" | "sent" | "failed">>>;
-  updateReadStatuses: (updater: (prev: ReadStatusMap) => ReadStatusMap) => void;
   resolveMediaUri: (uri?: string) => string;
   enqueueMediaOutboxId: (id: string) => Promise<void>;
   dequeueMediaOutboxId: (id: string) => Promise<void>;
   setVoiceRecordMs: React.Dispatch<React.SetStateAction<number>>;
 };
 
-export function useChatSendMedia({
-  peerId,
-  currentUserId,
-  setMessages,
-  latestMessagesForPersistRef,
-  enqueueMessagesPersist,
-  setUploadStatus,
-  updateReadStatuses,
-  resolveMediaUri,
-  enqueueMediaOutboxId,
-  dequeueMediaOutboxId,
-  setVoiceRecordMs,
-}: Options) {
+export function useChatSendMedia({ session, enqueueMessagesPersist, resolveMediaUri, enqueueMediaOutboxId, dequeueMediaOutboxId, setVoiceRecordMs }: Options) {
+  const {
+    peerId,
+    currentUserId,
+    setMessages,
+    latestMessagesForPersistRef,
+    setUploadStatus,
+    updateReadStatuses,
+  } = session;
   const mountedRef = React.useRef(true);
   React.useEffect(() => {
     mountedRef.current = true;

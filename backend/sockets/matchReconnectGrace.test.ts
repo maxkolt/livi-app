@@ -2,7 +2,7 @@ jest.mock('../utils/logger', () => ({
   logger: { info: () => {}, debug: () => {}, warn: () => {}, error: () => {} },
 }));
 jest.mock('../routes/livekit', () => ({
-  createToken: async () => 'lk-token',
+  createToken: jest.fn(async () => 'lk-token'),
   getLiveKitUrl: () => 'wss://lk.test',
 }));
 jest.mock('../utils/friendshipUtils', () => ({ getFriendIds: async () => [] }));
@@ -11,6 +11,7 @@ jest.mock('../utils/rateLimit', () => ({ checkRateLimit: async () => ({ ok: true
 jest.mock('../models/UserReport', () => ({ __esModule: true, default: {}, isUserReportReason: () => true }));
 
 import { bindMatch } from './match';
+import { createToken } from '../routes/livekit';
 import * as queueStore from '../utils/queueStore';
 import * as shutdownState from '../utils/shutdownState';
 
@@ -129,6 +130,173 @@ async function pairUp() {
   await waitFor(() => a.got('match_found').length === 1 && b.got('match_found').length === 1);
   return { io, a, b, aUser: a.data.userId as string, bUser: b.data.userId as string };
 }
+
+describe('random chat: simultaneous searches', () => {
+  it('contains a failed Start write and retries the original permission checks', async () => {
+    const io = new FakeIo();
+    const a = new FakeSocket(io, 'start-oom-a');
+    const b = new FakeSocket(io, 'start-oom-b');
+    const fail = jest.spyOn(queueStore, 'setLastStart').mockRejectedValueOnce(new Error('OOM'));
+    try {
+      await expect(a.fire('start')).resolves.toBeUndefined();
+      await b.fire('start');
+      await waitFor(() => a.got('match_found').length === 1 && b.got('match_found').length === 1, 4000);
+    } finally { fail.mockRestore(); await Promise.all([a.fire('stop'), b.fire('stop')]); }
+  });
+
+  it('retries Next when its first write failed before detaching the original pair', async () => {
+    const { a, b } = await pairUp();
+    const fail = jest.spyOn(queueStore, 'setLastSearch').mockRejectedValueOnce(new Error('OOM'));
+    try {
+      await expect(a.fire('next', { transitionId: 'retry-next' })).resolves.toBeUndefined();
+      await waitFor(() => b.got('peer:left').length === 1, 4000);
+      expect(b.got('peer:left')[0].payload.nextTransitionId).toBe('retry-next');
+    } finally { fail.mockRestore(); await Promise.all([a.fire('stop'), b.fire('stop')]); }
+  });
+
+  it('does not pick a stopped user even if a late queue write restores its entry', async () => {
+    const io = new FakeIo();
+    const stopped = new FakeSocket(io, 'stopped-user');
+    const searching = new FakeSocket(io, 'active-user');
+    await stopped.fire('stop');
+    await queueStore.addToQueue(stopped.id);
+    await searching.fire('start');
+    await sleep(30);
+    expect(stopped.got('match_found')).toHaveLength(0);
+    expect(searching.got('match_found')).toHaveLength(0);
+    expect(await queueStore.isInQueue(stopped.id)).toBe(false);
+    await searching.fire('stop');
+  });
+
+  it('releases the local pair even when Redis cleanup fails during Stop', async () => {
+    const { a, b } = await pairUp();
+    const failure = jest.spyOn(queueStore, 'removeFromQueue').mockRejectedValueOnce(new Error('Redis unavailable'));
+    try {
+      await a.fire('stop');
+      for (const s of [a, b]) {
+        expect(s.data.partnerSid).toBeUndefined();
+        expect(s.data.inCall).toBe(false);
+        expect(s.data.busy).toBe(false);
+      }
+      expect(b.got('peer:stopped')).toHaveLength(1);
+    } finally { failure.mockRestore(); await b.fire('stop'); }
+  });
+
+  it('restores both queued searches after a transient queue write failure', async () => {
+    const io = new FakeIo();
+    const a = new FakeSocket(io, 'queue-recovery-a');
+    const b = new FakeSocket(io, 'queue-recovery-b');
+    const remove = queueStore.removeFromQueue;
+    const failure = jest.spyOn(queueStore, 'removeFromQueue').mockRejectedValueOnce(new Error('Redis temporarily unavailable'))
+      .mockImplementation(remove);
+    try {
+      await Promise.all([a.fire('start'), b.fire('start')]);
+      await waitFor(() => a.got('match_found').length === 1 && b.got('match_found').length === 1, 4000);
+      expect(a.data.partnerSid).toBe(b.id);
+      expect(b.data.partnerSid).toBe(a.id);
+    } finally {
+      failure.mockRestore();
+      await Promise.all([a.fire('stop'), b.fire('stop')]);
+    }
+  });
+
+  it('does not select a connected socket which never entered the waiting queue', async () => {
+    const { tryMatch } = await import('./match');
+    const io = new FakeIo();
+    const idle = new FakeSocket(io, 'idle-user');
+    const searching = new FakeSocket(io, 'searching-user');
+    await searching.fire('start');
+    expect(await tryMatch(io as any, idle as any)).toBe(false);
+    expect(idle.got('match_found')).toHaveLength(0);
+    expect(searching.got('match_found')).toHaveLength(0);
+    await searching.fire('stop');
+  });
+
+  it('clears late Redis locks when Stop arrives while the pair is being locked', async () => {
+    const io = new FakeIo();
+    const a = new FakeSocket(io, 'pending-lock-a');
+    const b = new FakeSocket(io, 'pending-lock-b');
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const lock = queueStore.lockSocket;
+    const delayedLock = jest.spyOn(queueStore, 'lockSocket').mockImplementation(async (id) => { await gate; await lock(id); });
+    try {
+      await a.fire('start');
+      await b.fire('start');
+      await waitFor(() => delayedLock.mock.calls.length === 2);
+      await a.fire('stop');
+      release();
+      await flushMatch();
+      for (const s of [a, b]) {
+        expect(s.data.inCall).toBe(false);
+        expect(s.data.busy).toBe(false);
+        expect(await queueStore.isLocked(s.id)).toBe(false);
+        expect(s.got('match_found')).toHaveLength(0);
+      }
+    } finally {
+      release(); delayedLock.mockRestore();
+      await Promise.all([a.fire('stop'), b.fire('stop')]);
+    }
+  });
+
+  it('does not deliver a late match or restore inCall after Stop during token creation', async () => {
+    const io = new FakeIo();
+    const a = new FakeSocket(io, 'pending-token-a');
+    const b = new FakeSocket(io, 'pending-token-b');
+    let release!: (token: string) => void;
+    const token = new Promise<string>((resolve) => { release = resolve; });
+    const tokenMock = jest.mocked(createToken);
+    tokenMock.mockImplementation(() => token);
+    try {
+      await a.fire('start');
+      await b.fire('start');
+      await waitFor(() => !!a.data.partnerSid && tokenMock.mock.calls.length > 0);
+      await a.fire('stop');
+      release('late-token');
+      await flushMatch();
+      expect(a.got('match_found')).toHaveLength(0);
+      expect(b.got('match_found')).toHaveLength(0);
+      expect(a.data.inCall).toBe(false);
+      expect(b.data.inCall).toBe(false);
+      expect(a.data.partnerSid).toBeUndefined();
+      expect(b.data.partnerSid).toBeUndefined();
+    } finally {
+      release('late-token');
+      tokenMock.mockImplementation(async () => 'lk-token');
+      await Promise.all([a.fire('stop'), b.fire('stop')]);
+    }
+  });
+
+  it('does not re-enqueue a stopped socket from an earlier Next timer', async () => {
+    const { a, b } = await pairUp();
+    await a.fire('next');
+    await Promise.all([a.fire('stop'), b.fire('stop')]);
+    await sleep(350);
+    expect(await queueStore.isInQueue(a.id)).toBe(false);
+    expect(await queueStore.isInQueue(b.id)).toBe(false);
+    expect(a.data.busy).toBe(false);
+    expect(b.data.busy).toBe(false);
+  });
+
+  it('gives every searching socket one reciprocal partner', async () => {
+    const io = new FakeIo();
+    const sockets = Array.from({ length: 100 }, (_, i) => new FakeSocket(io, `concurrent-${i}`));
+    try {
+      await Promise.all(sockets.map((s) => s.fire('start')));
+      await waitFor(() => sockets.every((s) => s.got('match_found').length > 0), 5000);
+      for (const s of sockets) {
+        expect(s.got('match_found')).toHaveLength(1);
+        const peer = io.sockets.sockets.get(s.data.partnerSid);
+        expect(peer?.data.partnerSid).toBe(s.id);
+        expect(s.got('match_found')[0].payload.id).toBe(peer?.id);
+      }
+    } finally {
+      await Promise.all(sockets.map((s) => s.fire('stop')));
+    }
+  });
+});
+
+const flushMatch = () => new Promise((resolve) => setImmediate(resolve));
 
 describe('random chat: pause for reconnect', () => {
   it('returns the same pair when the dropped user comes back in time', async () => {

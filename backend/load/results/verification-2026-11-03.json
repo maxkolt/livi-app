@@ -1,0 +1,143 @@
+{
+  "date": "2026-11-03",
+  "productionCapacityProven": false,
+  "deployed": false,
+  "backendSourceSha256": "5332f4bc122cadb749ec61aa854e35882e00351afb954f3425d3a5abd344788d",
+  "automatedChecks": {
+    "frontend": {
+      "suites": 95,
+      "tests": 996
+    },
+    "backend": {
+      "suites": 23,
+      "tests": 265
+    },
+    "typecheck": "passed",
+    "lint": "passed",
+    "diffCheck": "passed"
+  },
+  "load": {
+    "users": 5000,
+    "allPhasesPassed": true,
+    "mixed": {
+      "requestedUsers": 5000,
+      "retainedConnections": 5000,
+      "durationMs": 60771,
+      "directCallPairs": 1250,
+      "connectedPairsAtEnd": 1250,
+      "randomUsers": 2500,
+      "reciprocalRandomUsers": 2500,
+      "rounds": 6,
+      "acknowledgedMessages": 30000,
+      "persistedMessages": 30000,
+      "receivedMessages": 30000,
+      "duplicateDeliveries": 0,
+      "ackLatencyMs": {
+        "count": 30000,
+        "p50": 111.62,
+        "p95": 172.86,
+        "p99": 223.51,
+        "max": 364.91
+      },
+      "errors": [],
+      "media": "signaling only; no SFU/TURN media generated"
+    },
+    "chat": {
+      "ackLatencyMs": {
+        "count": 5000,
+        "p50": 127.36,
+        "p95": 330.81,
+        "p99": 4668.11,
+        "max": 4672.3
+      },
+      "acknowledged": 5000,
+      "persisted": 5000,
+      "missingLiveDeliveries": 0,
+      "duplicateLiveIds": 0,
+      "remainingConnections": 5000,
+      "errors": []
+    },
+    "random": {
+      "requested": 5000,
+      "matchedUsers": 5000,
+      "usersWithRepeatedMatches": 0,
+      "asymmetricPartners": 0,
+      "queueLength": 0,
+      "latencyMs": {
+        "count": 5000,
+        "p50": 12731,
+        "p95": 16408,
+        "p99": 16755,
+        "max": 16843
+      },
+      "remainingConnections": 5000
+    },
+    "calls": {
+      "requestedPairs": 2500,
+      "acceptedPairs": 2500,
+      "connectedPairsAtEnd": 2500,
+      "acceptedLatencyMs": {
+        "count": 2500,
+        "p50": 63.02,
+        "p95": 88.06,
+        "p99": 146.62,
+        "max": 166.1
+      },
+      "heartbeatHoldMs": 10000,
+      "errors": [],
+      "media": "not generated; signaling only"
+    },
+    "redisRecovery": {
+      "name": "redis-noeviction-overflow-and-recovery",
+      "ok": true,
+      "ms": 2254,
+      "rejectedWithoutEviction": true,
+      "recovered": true,
+      "backendStayedHealthy": true,
+      "backendWriteRejected": true,
+      "searchRecovered": true,
+      "scope": "isolated Redis OOM + actual search command and automatic recovery; not client outbox admission control"
+    },
+    "backendPeakSampledRssMiB": 1345.73,
+    "healthP95Ms": 228,
+    "healthMaxMs": 1052,
+    "unexpectedDisconnects": 0,
+    "disconnectClassification": "The raw report labels 5000 io client disconnect events with the last phase: these are explicit generator cleanup calls in finally. The other two disconnects are planned offline fixtures."
+  },
+  "android": {
+    "devices": [
+      "Samsung A35 / Android 16",
+      "Pixel_10_Pro emulator / Android 17 preview"
+    ],
+    "serverUsed": "existing backend; local bulk load used only isolated services",
+    "failureInjection": "only one designated message forced to OutboxFullError in dev JS; production source and all stored outbox rows unchanged; original function restored",
+    "failedBubbleAndRetryButton": "Maestro passed on A35",
+    "retryAfterCapacityAvailable": "Maestro passed on A35",
+    "recipientReceivedAndOpened": "Maestro passed on emulator",
+    "senderStoredCopies": 1,
+    "recipientStoredCopies": 1,
+    "messageId": "1793653845660-ubgshdr",
+    "messageText": "capacity-retry-20261103-01",
+    "pendingOutboxBoth": 0,
+    "coldRestart": "Maestro passed after confirmed empty pidof; chat and test text visible after cold launch",
+    "coldRestartStoredCopies": 1
+  },
+  "limits": [
+    "Single laptop shares CPU/memory between generator, backend, database and emulator.",
+    "Synthetic short chat messages; load clients do not carry real E2EE chat keys. Two-device testing uses the ordinary client message path; wire encryption was not separately inspected.",
+    "Calls exercise signaling/tokens/heartbeats; no generated SFU/TURN media.",
+    "Mixed soak is approximately one minute, not a long-running server reliability test.",
+    "Most load clients advertise welcome_delta; one legacy client checks snapshot compatibility.",
+    "Outbox limit covers metadata, not referenced media file sizes; pre-existing rows are not evicted.",
+    "A burst of 5000 random searches still takes up to about 17 seconds on the shared local host.",
+    "Random pairs, reconnect timers and call registries still have one backend owner; multi-instance failover is not implemented."
+  ],
+  "cleanup": {
+    "isolatedServicesStopped": true,
+    "temporaryFaultInjectionRemoved": true,
+    "emulatorStopped": true,
+    "testMetroStopped": true,
+    "temporaryDeviceDumpRemoved": true,
+    "networkSettingsChanged": false
+  }
+}

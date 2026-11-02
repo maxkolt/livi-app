@@ -69,6 +69,36 @@ beforeEach(() => {
 });
 
 describe('message outbox', () => {
+  it('preserves existing rows when storage cannot be read or written', async () => {
+    const storage = require('@react-native-async-storage/async-storage');
+    await enqueue('saved', 1);
+    const original = mockStore.get(OUTBOX_KEY);
+    storage.getItem.mockImplementationOnce(async () => { throw new Error('CursorWindow unavailable'); });
+    await expect(enqueue('new', 2)).rejects.toThrow('CursorWindow unavailable');
+    expect(mockStore.get(OUTBOX_KEY)).toBe(original);
+    storage.setItem.mockRejectedValueOnce(new Error('SQLite full'));
+    await expect(enqueue('new', 2)).rejects.toThrow('SQLite full');
+    expect(mockStore.get(OUTBOX_KEY)).toBe(original);
+    expect(outbox.isMessagePendingInOutbox('new')).toBe(false);
+    expect(outbox.isMessagePendingInOutbox('saved')).toBe(true);
+  });
+
+  it('refuses an oversized admission without evicting old rows, then allows retry after draining', async () => {
+    const { MAX_OUTBOX_ITEMS } = require('./outboxCapacity');
+    const items = Array.from({ length: MAX_OUTBOX_ITEMS }, (_, i) => ({
+      id: `outbox_${i}`, optimisticUiId: `${i}`, createdAt: i,
+      payload: { to: 'peer', type: 'text', text: `${i}`, clientMessageId: `${i}` },
+    }));
+    mockStore.set(OUTBOX_KEY, JSON.stringify(items));
+    const original = mockStore.get(OUTBOX_KEY);
+    await expect(enqueue('new', MAX_OUTBOX_ITEMS + 1)).rejects.toThrow('outbox_full');
+    expect(mockStore.get(OUTBOX_KEY)).toBe(original);
+    await outbox.removeQueuedMessagesMatching(['0']);
+    await expect(enqueue('new', MAX_OUTBOX_ITEMS + 2)).resolves.toBe(true);
+    expect(queued()).toHaveLength(MAX_OUTBOX_ITEMS);
+    expect(queued()).toContain('new');
+  });
+
   it('keeps a message queued while a drain is busy and sends it right after', async () => {
     await enqueue('a', 1);
     let releaseFirst: (v: unknown) => void = () => {};

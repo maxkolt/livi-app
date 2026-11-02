@@ -112,7 +112,8 @@ import {
 } from './utils/friendOnlinePresence';
 import { areFriendsCached, getFriendIds, getFriendIdsForUsers } from './utils/friendshipUtils';
 import { isSocketIoRedisAdapterActive, setupSocketIoRedisAdapter } from './utils/socketIoRedisAdapter';
-import { buildWelcomeOnlinePresenceList } from './utils/welcomeOnlinePresence';
+import { getWelcomeOnlinePresenceSnapshot } from './utils/welcomeOnlinePresence';
+import { createRequestBodyParsers } from './utils/requestBodyParsers';
 import { attachLiveKitSignalProxy } from './utils/livekitSignalProxy';
 
 /* ========= Типы ========= */
@@ -261,13 +262,10 @@ app.use(
 
 // json/urlencoded парсеры — один раз и до роутеров.
 // Legacy base64 media upload owns a smaller route-local JSON limit; large media must use multipart streaming.
-const defaultJsonParser = express.json({ limit: '50mb' });
-app.use((req, res, next) => {
-  if (req.method === 'POST' && req.path === '/api/upload/media') return next();
-  return defaultJsonParser(req, res, next);
-});
+const bodyParsers = createRequestBodyParsers();
+app.use(bodyParsers.json);
 app.use('/chat', createChatRouter());
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+app.use(bodyParsers.urlencoded);
 
 const HTTP_INSTALL_SECRET_REQUIRED = String(process.env.HTTP_INSTALL_SECRET_REQUIRED || '').trim() === '1';
 
@@ -3224,6 +3222,8 @@ app.post('/api/calls/provider-delivered', (req, res) => {
 
 /* ========= Socket.IO ========= */
 io.on('connection', async (sock: AuthedSocket) => {
+  capacityMetrics.recordSocketConnected();
+  sock.on('disconnect', (reason) => capacityMetrics.recordSocketDisconnected(reason));
   sock.on('whoami', (payload?: unknown, ack?: (result: { _id: string | null }) => void) => {
     const id = (sock)?.data?.userId || null;
 
@@ -5246,10 +5246,13 @@ registerMessageSockets(io);
 
 /* ========= REST presence ========= */
 /** Онлайн в приложении (не только друзья): id + nick + avatarVer для welcome-баннера. */
-app.get('/api/presence', async (_req, res) => {
+app.get('/api/presence', async (req, res) => {
   try {
-    const list = await buildWelcomeOnlinePresenceList(io);
-    return res.json({ ok: true, list });
+    const snapshot = await getWelcomeOnlinePresenceSnapshot(io);
+    if (req.query.epoch === snapshot.epoch && String(req.query.revision) === String(snapshot.revision)) {
+      return res.json({ ok: true, unchanged: true, epoch: snapshot.epoch, revision: snapshot.revision });
+    }
+    return res.json(snapshot);
   } catch (e: unknown) {
     try {
       const ids = getOnlineListFromIo(io);

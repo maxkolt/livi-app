@@ -158,6 +158,12 @@ export function setVideoCallActive(value: boolean): void {
   H.videoCallActive.box.current = !!value;
 }
 
+/** Совместимость с прежним сбросом через замену global ref: старый box не мутируем. */
+export function adoptVideoCallActiveRef(ref: RefBox<boolean>): void {
+  ensureInstalled();
+  H.videoCallActive.box = ref;
+}
+
 export function isCallEndedFromPiPNoOpen(): boolean {
   ensureInstalled();
   return H.callEndedFromPiPNoOpen.box.current === true;

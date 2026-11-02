@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { AppState } from 'react-native';
-import { API_BASE, onConnected, onWelcomePresence } from '../../../sockets/socket';
+import { API_BASE, onConnected, onWelcomePresence, beginWelcomePresenceRefresh } from '../../../sockets/socket';
 import { shouldSkipHomeUiSettle } from '../../../utils/globalEvents';
 import { fetchWithTimeout } from '../../../utils/fetchWithTimeout';
 import type { WelcomeBannerPeer } from '../WelcomeOnlineBanner';
@@ -89,9 +89,10 @@ export function useWelcomeOnlineCount(enabled = true, excludeUserId?: string | n
   const refresh = useCallback(async () => {
     if (!enabled) return;
     try {
-      const res = await fetchWithTimeout(`${API_BASE}/api/presence`, { method: 'GET' }, 10_000);
+      const request = beginWelcomePresenceRefresh();
+      const res = await fetchWithTimeout(`${API_BASE}/api/presence${request.query}`, { method: 'GET' }, 10_000);
       if (!res.ok) return;
-      const json = (await res.json()) as { ok?: boolean; list?: PresenceListItem[] };
+      const json = request.apply(await res.json());
       if (json?.ok && Array.isArray(json.list)) {
         applyPresenceList(json.list, excludeRef.current, setCount, setPeers, lastGoodRef);
       }

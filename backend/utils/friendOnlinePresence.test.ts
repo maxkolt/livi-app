@@ -3,6 +3,7 @@ import {
   getFriendVisibleOnlineUserIds,
   isFriendGloballyVisibleOnline,
   setLiveCallPredicate,
+  scheduleGlobalFriendPresenceEmit,
 } from './friendOnlinePresence';
 
 jest.mock('./friendshipUtils', () => ({ getFriendIdsForUsers: jest.fn(async () => new Map()) }));
@@ -98,4 +99,19 @@ describe('presence cost', () => {
     expect(io.fullScans() - before).toBe(1);
     expect(Date.now() - started).toBeLessThan(1_000);
   });
+});
+
+it('emits friend presence during a continuous stream of changed users', async () => {
+  jest.useFakeTimers();
+  const emit = jest.fn();
+  const io = fakeIo([{ id: 's1', data: { userId: USER } }]);
+  io.to = jest.fn(() => ({ emit })) as unknown as Server['to'];
+  try {
+    for (let i = 0; i < 10; i++) {
+      scheduleGlobalFriendPresenceEmit(io, USER);
+      await jest.advanceTimersByTimeAsync(30);
+    }
+    expect(emit.mock.calls.some(([event]) => event === 'presence_update')).toBe(true);
+    await jest.advanceTimersByTimeAsync(500);
+  } finally { jest.useRealTimers(); }
 });

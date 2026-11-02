@@ -7,6 +7,7 @@ import { socket } from "./socketCore";
 import { emitAck } from "./emit";
 import { postApiJson } from "./apiHttp";
 import { noteMessageOutboxPending } from "./outboxBackgroundDrain";
+import { assertOutboxCapacity } from './outboxCapacity';
 import { ensureReauthBeforePrivilegedSocketOp } from "./reauth";
 import {
   E2eUnavailableError,
@@ -300,7 +301,8 @@ async function loadMessageOutbox(): Promise<MessageOutboxItem[]> {
   try {
     const raw = await AsyncStorage.getItem(MESSAGE_OUTBOX_KEY);
     const parsed = raw ? JSON.parse(raw) : [];
-    const list = Array.isArray(parsed) ? parsed : [];
+    if (!Array.isArray(parsed)) throw new Error('invalid_message_outbox');
+    const list = parsed;
     const items = list
       .map((item: StoredMessageOutboxRow | null): MessageOutboxCandidate => ({
         id: String(item?.id || ''),
@@ -312,20 +314,22 @@ async function loadMessageOutbox(): Promise<MessageOutboxItem[]> {
       .filter((item): item is MessageOutboxItem => !!item.id && !!item.payload?.to);
     setQueuedMirror(items);
     return items;
-  } catch {
-    return [];
+  } catch (error) {
+    // A read failure is not an empty queue: treating it as empty lets the next
+    // enqueue overwrite messages already on disk.
+    logger.warn('[outbox] message queue read failed', error);
+    throw error;
   }
 }
 
 async function saveMessageOutbox(items: MessageOutboxItem[]): Promise<void> {
-  try {
-    if (!items.length) {
-      await AsyncStorage.removeItem(MESSAGE_OUTBOX_KEY);
-    } else {
-      await AsyncStorage.setItem(MESSAGE_OUTBOX_KEY, JSON.stringify(items));
-    }
-    setQueuedMirror(items);
-  } catch {}
+  if (!items.length) {
+    await AsyncStorage.removeItem(MESSAGE_OUTBOX_KEY);
+  } else {
+    await AsyncStorage.setItem(MESSAGE_OUTBOX_KEY, JSON.stringify(items));
+  }
+  // UI is allowed to report a durable queue only after the write succeeded.
+  setQueuedMirror(items);
 }
 
 function removeMessageOutboxRow(rowId: string): Promise<void> {
@@ -368,6 +372,7 @@ export async function enqueueMessageOutbox(item: MessageOutboxItem): Promise<boo
       return false;
     }
     items.push(item);
+    assertOutboxCapacity(items);
     await saveMessageOutbox(items);
     return true;
   });
@@ -409,7 +414,8 @@ async function loadEditOutbox(): Promise<EditOutboxItem[]> {
     const raw = await AsyncStorage.getItem(MESSAGE_EDIT_OUTBOX_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
-    const list = Array.isArray(parsed) ? parsed : [];
+    if (!Array.isArray(parsed)) throw new Error('invalid_edit_outbox');
+    const list = parsed;
     return list
       .map((item: Partial<Record<keyof EditOutboxItem, unknown>> | null) => ({
         id: String(item?.id || ''),
@@ -419,19 +425,18 @@ async function loadEditOutbox(): Promise<EditOutboxItem[]> {
         createdAt: Number(item?.createdAt || Date.now()),
       }))
       .filter((item: EditOutboxItem) => !!item.id && !!item.messageId);
-  } catch {
-    return [];
+  } catch (error) {
+    logger.warn('[outbox] edit queue read failed', error);
+    throw error;
   }
 }
 
 async function saveEditOutbox(items: EditOutboxItem[]): Promise<void> {
-  try {
-    if (!items.length) {
-      await AsyncStorage.removeItem(MESSAGE_EDIT_OUTBOX_KEY);
-      return;
-    }
-    await AsyncStorage.setItem(MESSAGE_EDIT_OUTBOX_KEY, JSON.stringify(items));
-  } catch {}
+  if (!items.length) {
+    await AsyncStorage.removeItem(MESSAGE_EDIT_OUTBOX_KEY);
+    return;
+  }
+  await AsyncStorage.setItem(MESSAGE_EDIT_OUTBOX_KEY, JSON.stringify(items));
 }
 
 export function enqueueEditOutbox(item: EditOutboxItem): Promise<void> {
@@ -439,6 +444,7 @@ export function enqueueEditOutbox(item: EditOutboxItem): Promise<void> {
     let items = await loadEditOutbox();
     items = items.filter((x) => x.messageId !== item.messageId);
     items.push(item);
+    assertOutboxCapacity(items);
     await saveEditOutbox(items);
   });
 }
@@ -462,6 +468,8 @@ export async function mergePendingMessageOutboxEdit(messageId: string, text: str
       ...found,
       payload: { ...found.payload, text: String(text ?? '') },
     };
+    // Shortening an oversized legacy queue remains possible while it drains.
+    if (String(text ?? '').length > String(found.payload.text ?? '').length) assertOutboxCapacity(items);
     await saveMessageOutbox(items);
     return found;
   });
@@ -762,8 +770,8 @@ async function onRowDelivered(row: MessageOutboxItem, resp: MessageMutationRespo
   const serverMessageId = String(resp?.messageId || row.payload?.clientMessageId || row.id);
   const delivered = resp?.delivered === true;
   const oldIds = [row.id, row.optimisticUiId].map((x) => String(x || '').trim()).filter(Boolean);
-  await removeMessageOutboxRow(row.id);
   await remapEditOutboxMessageIds(oldIds, serverMessageId);
+  await removeMessageOutboxRow(row.id);
   void persistOutgoingStatus(to, serverMessageId, delivered ? 'delivered' : 'sent', oldIds);
   const uploadedUri = row.payload.localUri ? row.payload.uri : undefined;
   const uploadedThumb = row.payload.localThumbUri ? row.payload.thumbUri : undefined;
@@ -928,7 +936,12 @@ export async function drainMessageOutbox(): Promise<void> {
       drainAgainRequested = false;
       end = await drainMessageOutboxPass();
     } while (drainAgainRequested && end !== 'stopped');
-  })().finally(() => {
+  })().catch((error) => {
+    // In particular, retry a transient storage failure after a server ACK:
+    // the durable row is still present and the server deduplicates its ID.
+    scheduleNetworkRetry();
+    throw error;
+  }).finally(() => {
     shared.outboxDrainInFlight = null;
   });
   return shared.outboxDrainInFlight;

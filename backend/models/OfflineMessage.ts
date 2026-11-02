@@ -100,6 +100,8 @@ const OfflineMessageSchema = new Schema<IOfflineMessage>({
 
 // Составной индекс для быстрого поиска
 OfflineMessageSchema.index({ recipientId: 1, createdAt: -1 });
+// Exact FIFO tie-break used by claim/take; added without dropping deployed indexes.
+OfflineMessageSchema.index({ recipientId: 1, createdAt: 1, _id: 1 }, { name: 'offline_recipient_fifo' });
 
 export default mongoose.model<IOfflineMessage>('OfflineMessage', OfflineMessageSchema);
 

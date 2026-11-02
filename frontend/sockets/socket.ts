@@ -43,6 +43,7 @@ export {
   emitPresenceUpdateIfChanged,
   onPresenceUpdate,
   onWelcomePresence,
+  beginWelcomePresenceRefresh,
 } from "./modules/presence";
 
 

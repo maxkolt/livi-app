@@ -3,9 +3,11 @@ import { AppState, Linking, Platform, Pressable, StyleSheet, View } from 'react-
 import { useSafeAreaFrame, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Image as ExpoImage } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
-import { FireAvatarFrame, fireFrameOutset } from './FireAvatarFrame';
-import { IceAvatarFrame } from './IceAvatarFrame';
-import { DiamondAvatarFrame } from './DiamondAvatarFrame';
+import { CosmeticFramePreview } from './CosmeticFramePreview';
+import {
+  CHAT_BACKGROUND_CATALOG, FRAME_CATALOG, isLiveCosmeticFrame,
+  type ChatBackgroundItem, type FrameItem,
+} from '../../utils/cosmeticCatalog';
 import { MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
 import Carousel from 'react-native-reanimated-carousel';
 import { Extrapolation, interpolate } from 'react-native-reanimated';
@@ -39,7 +41,6 @@ import {
 import { WelcomeStageBackground } from '../../screens/home/WelcomeStageBackground';
 import { AppDialogModal } from '../AppDialog';
 
-const SHOWCASE_AVATAR = require('../../assets/frames/showcase-avatar.jpg');
 /** Под фото в рамке: пока кадр не декодирован, градиент рамки не виден сплошным кругом. */
 const SHOWCASE_AVATAR_BG = '#0B1219';
 /** Дольше не ждём картинок: витрина появляется, даже если кадр не пришёл. */
@@ -61,19 +62,6 @@ type Props = {
   keepWarm?: boolean;
 };
 
-/** Название и описание — в i18n по ключу предмета (cosmeticNameKey / cosmeticBlurbKey). */
-type FrameItem = {
-  key: string;
-  colors: readonly [string, string, ...string[]];
-  kind: 'ring';
-  available: boolean;
-};
-
-type ChatBackgroundItem = {
-  key: string;
-  source: number;
-};
-
 type PurchaseNotice = {
   kind: 'success' | 'canceled' | 'error';
   title: string;
@@ -93,80 +81,6 @@ function withAlpha(hex: string, alpha: number): string {
   const b = parseInt(value.slice(4, 6), 16);
   return `rgba(${r},${g},${b},${alpha})`;
 }
-
-const CHAT_BACKGROUND_CATALOG: ChatBackgroundItem[] = [
-  {
-    key: 'aurora-chat',
-    source: require('../../assets/chat-wallpapers/dark/doodles-cyan.jpeg'),
-  },
-  {
-    key: 'deep-space',
-    source: require('../../assets/chat-wallpapers/dark/cosmos.jpeg'),
-  },
-  {
-    key: 'poetry',
-    source: require('../../assets/chat-wallpapers/dark/pushkin.jpeg'),
-  },
-  {
-    key: 'ocean-flow',
-    source: require('../../assets/chat-wallpapers/dark/doodles-teal.jpeg'),
-  },
-  {
-    key: 'graphite-chat',
-    source: require('../../assets/chat-wallpapers/dark/letters.jpeg'),
-  },
-];
-
-const FRAME_CATALOG: FrameItem[] = [
-  {
-    key: 'fire',
-    colors: ['#FFC062', '#FF8A34', '#FF4D1C'],
-    kind: 'ring',
-    available: true,
-  },
-  {
-    key: 'diamond',
-    colors: ['#E8F6FF', '#9ED0FF', '#6AA9FF'],
-    kind: 'ring',
-    available: true,
-  },
-  {
-    key: 'frost',
-    colors: ['#D9F4FF', '#7EC8E8', '#4A9BC7'],
-    kind: 'ring',
-    available: true,
-  },
-  {
-    key: 'aurora',
-    colors: ['#7CF5C8', '#5AA9FF', '#3B82F6'],
-    kind: 'ring',
-    available: false,
-  },
-  {
-    key: 'palladium',
-    colors: ['#F2F4F7', '#C5CCD6', '#8B93A0'],
-    kind: 'ring',
-    available: false,
-  },
-  {
-    key: 'jade',
-    colors: ['#B8F0D0', '#3DCF8E', '#1B8F5A'],
-    kind: 'ring',
-    available: false,
-  },
-  {
-    key: 'void',
-    colors: ['#D4B5FF', '#7B5CFF', '#2A1B4A'],
-    kind: 'ring',
-    available: false,
-  },
-  {
-    key: 'obsidian',
-    colors: ['#6B7280', '#374151', '#111827'],
-    kind: 'ring',
-    available: false,
-  },
-];
 
 function ChatBackgroundCard({
   item,
@@ -211,65 +125,17 @@ function FrameCoverCard({
   active: boolean;
   onLoad?: () => void;
 }) {
-  const ringWidth = Math.max(2, Math.round(size * 0.025));
-  const avatarSize = size - ringWidth * 2;
-
-  if (item.key === 'fire' || item.key === 'frost' || item.key === 'diamond') {
-    const liveOutset = fireFrameOutset(size);
-    const liveAvatarSize = size - liveOutset * 2;
-    const LiveFrame = item.key === 'fire'
-      ? FireAvatarFrame
-      : item.key === 'frost'
-        ? IceAvatarFrame
-        : DiamondAvatarFrame;
-    return (
-      <View style={styles.cardShadow}>
-        <LiveFrame size={size} photoSize={liveAvatarSize} active={active}>
-          <ExpoImage
-            source={SHOWCASE_AVATAR}
-            style={StyleSheet.absoluteFillObject}
-            contentFit="cover"
-            cachePolicy="memory-disk"
-            onLoad={onLoad}
-          />
-        </LiveFrame>
-      </View>
-    );
-  }
-
   return (
-    <View style={[styles.cardShadow, { width: size, height: size }]}>
-      <LinearGradient
-        colors={item.colors as [string, string, ...string[]]}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={{
-          width: size,
-          height: size,
-          borderRadius: size / 2,
-          padding: ringWidth,
-          alignItems: 'center',
-          justifyContent: 'center',
-        }}
-      >
-        <ExpoImage
-          source={SHOWCASE_AVATAR}
-          style={{
-            width: avatarSize,
-            height: avatarSize,
-            borderRadius: avatarSize / 2,
-            backgroundColor: SHOWCASE_AVATAR_BG,
-          }}
-          contentFit="cover"
-          cachePolicy="memory-disk"
-          onLoad={onLoad}
-        />
-      </LinearGradient>
+    <View style={[styles.cardShadow, !isLiveCosmeticFrame(item.key) && { width: size, height: size }]}>
+      <CosmeticFramePreview
+        itemId={item.key}
+        size={size}
+        active={active}
+        avatarBackgroundColor={SHOWCASE_AVATAR_BG}
+        onLoad={onLoad}
+      />
       {!item.available ? (
-        <View
-          pointerEvents="none"
-          style={[styles.frameLockedOverlay, { borderRadius: size / 2 }]}
-        >
+        <View pointerEvents="none" style={[styles.frameLockedOverlay, { borderRadius: size / 2 }]}>
           <View style={styles.frameLockBadge}>
             <MaterialCommunityIcons name="lock" size={Math.round(size * 0.25)} color={CROWN_GOLD} />
           </View>

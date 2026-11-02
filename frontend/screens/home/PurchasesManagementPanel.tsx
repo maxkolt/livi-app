@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { Image as ExpoImage } from 'expo-image';
-import { LinearGradient } from 'expo-linear-gradient';
 import AdaptiveText from '../../components/AdaptiveText';
 import { cosmeticNameKey, setActiveCosmetic, useCosmetics, type CosmeticKind } from '../../utils/cosmetics';
 import { t, type Lang } from '../../utils/i18n';
@@ -13,30 +12,8 @@ import {
   WELCOME_HEADER_TITLE,
   WELCOME_MUTED_TEXT,
 } from './constants';
-import { FireAvatarFrame, fireFrameOutset } from '../../components/frames/FireAvatarFrame';
-import { IceAvatarFrame } from '../../components/frames/IceAvatarFrame';
-import { DiamondAvatarFrame } from '../../components/frames/DiamondAvatarFrame';
-
-const SHOWCASE_AVATAR = require('../../assets/frames/showcase-avatar.jpg');
-
-const FRAME_COLORS: Record<string, readonly [string, string, ...string[]]> = {
-  fire: ['#FFC062', '#FF8A34', '#FF4D1C'],
-  diamond: ['#E8F6FF', '#9ED0FF', '#6AA9FF'],
-  aurora: ['#7CF5C8', '#5AA9FF', '#3B82F6'],
-  palladium: ['#F2F4F7', '#C5CCD6', '#8B93A0'],
-  frost: ['#D9F4FF', '#7EC8E8', '#4A9BC7'],
-  jade: ['#B8F0D0', '#3DCF8E', '#1B8F5A'],
-  void: ['#D4B5FF', '#7B5CFF', '#2A1B4A'],
-  obsidian: ['#6B7280', '#374151', '#111827'],
-};
-
-const BACKGROUND_IMAGES: Record<string, number> = {
-  'aurora-chat': require('../../assets/chat-wallpapers/dark/doodles-cyan.jpeg'),
-  'deep-space': require('../../assets/chat-wallpapers/dark/cosmos.jpeg'),
-  poetry: require('../../assets/chat-wallpapers/dark/pushkin.jpeg'),
-  'ocean-flow': require('../../assets/chat-wallpapers/dark/doodles-teal.jpeg'),
-  'graphite-chat': require('../../assets/chat-wallpapers/dark/letters.jpeg'),
-};
+import { CosmeticFramePreview } from '../../components/frames/CosmeticFramePreview';
+import { getCosmeticBackground } from '../../utils/cosmeticCatalog';
 
 /** Название купленной рамки или фона; неизвестный id показываем как есть. */
 function cosmeticName(itemId: string, lang: Lang): string {
@@ -46,36 +23,18 @@ function cosmeticName(itemId: string, lang: Lang): string {
 }
 
 function FramePreview({ itemId }: { itemId: string }) {
-  const colors = FRAME_COLORS[itemId];
-  if (!colors) return <View style={styles.emptyFrame} />;
-  if (itemId === 'fire' || itemId === 'frost' || itemId === 'diamond') {
-    const size = 48;
-    const outset = fireFrameOutset(size);
-    const LiveFrame = itemId === 'fire'
-      ? FireAvatarFrame
-      : itemId === 'frost'
-        ? IceAvatarFrame
-        : DiamondAvatarFrame;
-    return (
-      <LiveFrame size={size} photoSize={size - outset * 2}>
-        <ExpoImage source={SHOWCASE_AVATAR} style={StyleSheet.absoluteFillObject} contentFit="cover" cachePolicy="memory-disk" />
-      </LiveFrame>
-    );
-  }
   return (
-    <LinearGradient
-      colors={colors as [string, string, ...string[]]}
-      start={{ x: 0, y: 0 }}
-      end={{ x: 1, y: 1 }}
-      style={styles.frameSwatch}
-    >
-      <ExpoImage source={SHOWCASE_AVATAR} style={styles.frameAvatar} contentFit="cover" cachePolicy="memory-disk" />
-    </LinearGradient>
+    <CosmeticFramePreview
+      itemId={itemId}
+      size={48}
+      ringWidth={3}
+      fallback={<View style={styles.emptyFrame} />}
+    />
   );
 }
 
 function BackgroundPreview({ itemId }: { itemId: string }) {
-  const source = BACKGROUND_IMAGES[itemId];
+  const source = getCosmeticBackground(itemId)?.source;
   if (!source) return <View style={styles.emptyBackground} />;
   return (
     <View style={styles.backgroundSwatch}>
@@ -190,16 +149,6 @@ const styles = StyleSheet.create({
   emptyTitle: { color: LIVI.text, fontSize: 14, fontWeight: '600' },
   emptyHint: { marginTop: 2, color: WELCOME_MUTED_TEXT, fontSize: 12 },
   itemRow: { minHeight: 66, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, gap: 12 },
-  framePreviewBox: { width: 48, height: 48, alignItems: 'center', justifyContent: 'center' },
-  frameSwatch: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    padding: 3,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  frameAvatar: { width: 42, height: 42, borderRadius: 21 },
   backgroundSwatch: {
     width: 54,
     height: 38,

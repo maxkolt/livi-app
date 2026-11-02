@@ -58,17 +58,24 @@ export function createRedisStore(redisUrl: string) {
   return {
     async addToQueue(sid: string): Promise<void> {
       const id = String(sid);
-      const inSet = await redis.sadd(PREFIX + 'inQueue', id);
-      if (inSet === 0) return;
-      await redis.rpush(PREFIX + 'queue', id);
-      await redis.hset(PREFIX + 'queueAddedAt', id, String(now()));
+      // Membership, FIFO order and age are one operation. A concurrent remove
+      // must not leave an orphaned list entry between SADD and RPUSH.
+      await redis.eval(`
+        if redis.call('SISMEMBER', KEYS[1], ARGV[1]) == 1 then return 0 end
+        redis.call('SADD', KEYS[1], ARGV[1])
+        redis.call('RPUSH', KEYS[2], ARGV[1])
+        redis.call('HSET', KEYS[3], ARGV[1], ARGV[2])
+        return 1
+      `, 3, PREFIX + 'inQueue', PREFIX + 'queue', PREFIX + 'queueAddedAt', id, String(now()));
     },
 
     async removeFromQueue(sid: string): Promise<void> {
       const id = String(sid);
-      await redis.srem(PREFIX + 'inQueue', id);
-      await redis.lrem(PREFIX + 'queue', 0, id);
-      await redis.hdel(PREFIX + 'queueAddedAt', id);
+      const result = await redis.multi()
+        .srem(PREFIX + 'inQueue', id)
+        .lrem(PREFIX + 'queue', 0, id)
+        .hdel(PREFIX + 'queueAddedAt', id).exec();
+      for (const [error] of result || []) if (error) throw error;
     },
 
     async isInQueue(sid: string): Promise<boolean> {

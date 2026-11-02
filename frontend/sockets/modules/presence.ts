@@ -7,6 +7,46 @@ import type { MissedCallDelivery, PresenceUpdatePayload, WelcomePresencePayload 
 import { drainAllOutboxes } from "./outboxTriggers";
 import { noteNetworkBack } from "./outbox";
 import { refreshE2eState } from "./e2e";
+import { WelcomePresenceState, type WelcomePresenceDelta } from './welcomePresenceState';
+
+const welcomeState = new WelcomePresenceState();
+let welcomeConnectionGeneration = 0;
+let welcomeSyncTimer: ReturnType<typeof setTimeout> | null = null;
+
+function dispatchWelcomePresence(data: WelcomePresencePayload): void {
+  for (const cb of [...shared.welcomePresenceSubscribers]) {
+    try { cb(data); } catch (e) { logger.warn('[socket] presence:welcome subscriber error', e); }
+  }
+}
+
+// Keep stale HTTP responses from replacing a newer socket snapshot after reconnect.
+export function beginWelcomePresenceRefresh() {
+  const generation = welcomeConnectionGeneration;
+  const current = welcomeState.snapshot();
+  const query = current?.epoch && Number.isSafeInteger(current.revision)
+    ? `?epoch=${encodeURIComponent(current.epoch)}&revision=${current.revision}` : '';
+  return {
+    query,
+    apply: (data: WelcomePresencePayload) => {
+      if (generation !== welcomeConnectionGeneration) return null;
+      const latest = welcomeState.snapshot();
+      if (data.unchanged && latest?.epoch === data.epoch &&
+          Number(latest?.revision) >= Number(data.revision)) return latest;
+      return welcomeState.acceptSnapshot(data);
+    },
+  };
+}
+
+function requestWelcomeSync(): void {
+  if (welcomeSyncTimer) return;
+  socket.emit('presence:welcome:sync');
+  // A concurrent initial sync may be rate limited on the server. Retry until
+  // an authoritative snapshot arrives; disconnect clears this timer.
+  welcomeSyncTimer = setTimeout(() => {
+    welcomeSyncTimer = null;
+    if (socket.connected) requestWelcomeSync();
+  }, 1000);
+}
 
 /** Дедуп повторных presence:update с одним и тем же status/roomId (useEffect в VideoCall/PiP и т.д.). Сброс при connect. */
 function __presenceUpdateKey(payload: { status?: string; roomId?: string | undefined }): string {
@@ -93,12 +133,15 @@ export function onWelcomePresence(cb: (data: WelcomePresencePayload) => void): (
     }
   };
   shared.welcomePresenceSubscribers.add(handler);
+  const snapshot = welcomeState.snapshot();
+  if (snapshot) handler(snapshot);
   return () => {
     shared.welcomePresenceSubscribers.delete(handler);
   };
 }
 
 socket.on("connect", () => {
+  welcomeConnectionGeneration += 1;
   shared.hasConnectedEver = true;
   shared.lastPresenceUpdateKey = null;
   shared.lastSocketConnectAt = Date.now();
@@ -122,13 +165,22 @@ socket.on("cosmetics:frame", (data: { userId?: string; frameId?: string }) => {
 socket.on("presence:update", __dispatchPresenceUpdate);
 socket.on("presence_update", __dispatchPresenceUpdate);
 socket.on("presence:welcome", (data: WelcomePresencePayload) => {
-  for (const cb of [...shared.welcomePresenceSubscribers]) {
-    try {
-      cb(data);
-    } catch (e) {
-      logger.warn("[socket] presence:welcome subscriber error", e);
-    }
+  const snapshot = welcomeState.acceptSnapshot(data);
+  if (snapshot) {
+    if (welcomeSyncTimer) clearTimeout(welcomeSyncTimer);
+    welcomeSyncTimer = null;
+    dispatchWelcomePresence(snapshot);
   }
+});
+socket.on('presence:welcome:delta', (data: WelcomePresenceDelta) => {
+  const result = welcomeState.applyDelta(data);
+  if (result === 'sync') requestWelcomeSync();
+  if (result === 'applied') dispatchWelcomePresence(welcomeState.snapshot()!);
+});
+socket.on('disconnect', () => {
+  welcomeConnectionGeneration += 1;
+  if (welcomeSyncTimer) clearTimeout(welcomeSyncTimer);
+  welcomeSyncTimer = null;
 });
 
 // При подключении сервер шлёт пропущенные звонки (телефон был выключен / нет сети) — мержим в хранилище и обновляем UI

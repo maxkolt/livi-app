@@ -17,6 +17,7 @@ import { mongoOfflineQueue, getAndClearOfflineChatClearedQueue } from './message
 import { deliverOfflineMessages } from './offlineMessageDelivery';
 import { auditNickChange } from '../utils/profileNickAudit';
 import { scheduleGlobalFriendPresenceEmit } from '../utils/friendOnlinePresence';
+import { bindWelcomeOnlinePresence } from '../utils/welcomeOnlinePresence';
 import { getFriendIds } from '../utils/friendshipUtils';
 import { hashInstallSecret, verifyInstallSecret, isPlausibleInstallSecret, isDeviceBoundInstallId } from '../utils/installSecret';
 import { checkRateLimit } from '../utils/rateLimit';
@@ -169,6 +170,7 @@ const attachRequestCache = new Map<string, { timestamp: number; promise: Promise
 
 export default function registerIdentitySockets(io: Server) {
   io.on('connection', (sock: AuthedSocket) => {
+    bindWelcomeOnlinePresence(io, sock);
     registerMissedCallAck(sock);
     // Обработка отключения пользователя
     sock.on('disconnect', (reason) => {

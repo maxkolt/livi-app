@@ -4,7 +4,36 @@
  * В проде отключено: задать CAPACITY_METRICS_ENABLED=1 для включения.
  */
 
+import { monitorEventLoopDelay, performance } from 'node:perf_hooks';
+
 const CAPACITY_METRICS_ENABLED = String(process.env.CAPACITY_METRICS_ENABLED || '').trim() === '1';
+const eventLoopDelay = CAPACITY_METRICS_ENABLED ? monitorEventLoopDelay({ resolution: 20 }) : null;
+eventLoopDelay?.enable();
+const socketDisconnects = new Map<string, number>();
+let socketConnections = 0;
+const DISCONNECT_REASONS = new Set(['transport close', 'transport error', 'ping timeout',
+  'server namespace disconnect', 'client namespace disconnect', 'server shutting down', 'forced close']);
+
+export function recordSocketConnected(): void {
+  if (CAPACITY_METRICS_ENABLED) socketConnections++;
+}
+export function recordSocketDisconnected(reason: string): void {
+  if (!CAPACITY_METRICS_ENABLED) return;
+  const key = DISCONNECT_REASONS.has(reason) ? reason : 'other';
+  socketDisconnects.set(key, (socketDisconnects.get(key) || 0) + 1);
+}
+
+function runtimeStats() {
+  const memory = process.memoryUsage();
+  const toMs = (n: number) => Number.isFinite(n) ? +(n / 1e6).toFixed(2) : 0;
+  return {
+    uptimeSec: Math.round(process.uptime()),
+    memory: { rss: memory.rss, heapUsed: memory.heapUsed, heapTotal: memory.heapTotal, external: memory.external },
+    eventLoop: { utilization: performance.eventLoopUtilization().utilization,
+      p99Ms: toMs(eventLoopDelay?.percentile(99) || 0), maxMs: toMs(eventLoopDelay?.max || 0) },
+    socketConnections, socketDisconnects: Object.fromEntries(socketDisconnects),
+  };
+}
 
 export function isCapacityMetricsEnabled(): boolean {
   return CAPACITY_METRICS_ENABLED;
@@ -133,6 +162,7 @@ export function getStats() {
   const totalJoins = clientJoinSuccessCount + clientJoinFailureCount;
   const joinFailureRate = totalJoins > 0 ? (clientJoinFailureCount / totalJoins) * 100 : 0;
   return {
+    runtime: CAPACITY_METRICS_ENABLED ? runtimeStats() : undefined,
     tokenRequestsTotal,
     tokenErrorsTotal,
     tokenFailureRate: tokenRequestsTotal > 0 ? (tokenErrorsTotal / tokenRequestsTotal) * 100 : 0,
@@ -235,5 +265,21 @@ export function getPrometheusText(): string {
     '# TYPE livi_relay_fallback_total counter',
     `livi_relay_fallback_total ${s.clientRelayFallbackCount}`,
   ];
+  if (s.runtime) {
+    lines.push(
+      '# TYPE livi_process_resident_memory_bytes gauge',
+      `livi_process_resident_memory_bytes ${s.runtime.memory.rss}`,
+      '# TYPE livi_event_loop_delay_p99_ms gauge',
+      `livi_event_loop_delay_p99_ms ${s.runtime.eventLoop.p99Ms}`,
+      '# TYPE livi_event_loop_delay_max_ms gauge',
+      `livi_event_loop_delay_max_ms ${s.runtime.eventLoop.maxMs}`,
+      '# TYPE livi_socket_connections_total counter',
+      `livi_socket_connections_total ${s.runtime.socketConnections}`,
+      '# TYPE livi_socket_disconnects_total counter',
+    );
+    for (const [reason, count] of Object.entries(s.runtime.socketDisconnects)) {
+      lines.push(`livi_socket_disconnects_total{reason=${JSON.stringify(reason)}} ${count}`);
+    }
+  }
   return lines.join('\n') + '\n';
 }

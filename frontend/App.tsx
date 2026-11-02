@@ -118,6 +118,14 @@ import {
   isPipReturnToCallInFlight,
   isPipReturnToCallJustPressed,
   setPipReturnToCallInFlight,
+  isEndingCallInProgress,
+  isCallEndedFromPiPNoOpen,
+  isVideoCallActive,
+  setVideoCallActive,
+  isPipVisible,
+  isPipInSystemMode,
+  isVideoCallActiveExplicitlyFalse,
+  adoptVideoCallActiveRef,
 } from './utils/callRuntime';
 import { addVoipTokenListener } from './utils/voipPush';
 import { useLang } from './store/lang';
@@ -962,7 +970,6 @@ function AppContent() {
       return false;
     }
     const currentRouteName = readRootCurrentRouteName();
-    const g = global as AppRuntimeGlobals;
     const session = (global as AppRuntimeGlobals).__webrtcSessionRef?.current;
     const sessionEnded =
       !!session && (typeof session.isEnded === 'function' ? !!session.isEnded() : false);
@@ -971,8 +978,8 @@ function AppContent() {
     if (
       sessionCallId === normalizedCallId &&
       (sessionEnded ||
-        g.__endingCallInProgressRef?.current === true ||
-        g.__callEndedFromPiPNoOpenRef?.current === true)
+        isEndingCallInProgress() ||
+        isCallEndedFromPiPNoOpen())
     ) {
       logger.info('[App] ⏭️ pending call:accepted ignored - same call is ending', {
         callId: normalizedCallId,
@@ -990,7 +997,7 @@ function AppContent() {
     const hasExpectedAcceptedContext = !!readExpectedCallAccepted(normalizedCallId);
     const onActiveVideoCall =
       currentRouteName === 'VideoCall' ||
-      (global.__videoCallActiveRef?.current === true && sessionNotEnded);
+      (isVideoCallActive() && sessionNotEnded);
     if (onActiveVideoCall && !hasMatchingOutgoing && !hasIncomingContext && !hasExpectedAcceptedContext) {
       logger.info('[App] ⏭️ pending call:accepted ignored - active call already owns UI', {
         callId: normalizedCallId,
@@ -1230,8 +1237,8 @@ function AppContent() {
       return;
     }
     const endingCall =
-      g.__endingCallInProgressRef?.current === true ||
-      g.__callEndedFromPiPNoOpenRef?.current === true ||
+      isEndingCallInProgress() ||
+      isCallEndedFromPiPNoOpen() ||
       g.__endingFromPiPButtonRef?.current === true;
     if (endingCall) {
       logger.info('[App] return notification ignored: ending call', { retry });
@@ -1420,8 +1427,7 @@ function AppContent() {
         const g = global as AppRuntimeGlobals;
         g.__disableSystemPiPUntilRef = g.__disableSystemPiPUntilRef || { current: 0 };
         g.__disableSystemPiPUntilRef.current = Date.now() + 4000;
-        g.__videoCallActiveRef = g.__videoCallActiveRef || { current: false };
-        g.__videoCallActiveRef.current = false;
+        setVideoCallActive(false);
         g.__currentCallPiPParamsRef = g.__currentCallPiPParamsRef || { current: null };
         g.__currentCallPiPParamsRef.current = null;
       } catch {}
@@ -1581,8 +1587,8 @@ function AppContent() {
         const ignoreExpandedUntil = Number(g.__ignoreSystemPiPExpandedUntilRef?.current || 0);
         const returnToCallInFlight = isPipReturnToCallInFlight();
         const endingCall =
-          g.__endingCallInProgressRef?.current === true ||
-          g.__callEndedFromPiPNoOpenRef?.current === true ||
+          isEndingCallInProgress() ||
+          isCallEndedFromPiPNoOpen() ||
           g.__endingFromPiPButtonRef?.current === true;
         g.__lastSystemPiPExpandedAtRef = g.__lastSystemPiPExpandedAtRef || { current: 0 };
         const now = Date.now();
@@ -1593,7 +1599,7 @@ function AppContent() {
           g.__pendingInAppPiPRestoreAfterSystemRef?.current === true ||
           g.__restoringInAppPiPFromSystemRef?.current === true ||
           leaveCtxEarly.restoreInAppPiP === true;
-        const plaqueVisible = g.__pipVisibleRef?.current === true;
+        const plaqueVisible = isPipVisible();
         // Soft-hide: ref=true, но overlay мог остаться скрыт (suspend cleared без re-render).
         // Раньше early-return сбрасывал pending → ModeChanged runRestore abort, плашка исчезала.
         if (forceInAppRestore && plaqueVisible && !endingCall) {
@@ -1645,8 +1651,7 @@ function AppContent() {
         try {
           g.__pendingSystemPiPSyncRef = g.__pendingSystemPiPSyncRef || { current: false };
           g.__pendingSystemPiPSyncRef.current = false;
-          g.__pipInSystemModeRef = g.__pipInSystemModeRef || { current: false };
-          g.__pipInSystemModeRef.current = false;
+          setPipInSystemMode(false);
         } catch (_) {}
         markHomeScreenBootedForSession();
         g.__systemPiPReturnTokenRef = g.__systemPiPReturnTokenRef || { current: 0 };
@@ -1709,8 +1714,7 @@ function AppContent() {
       } catch (_) {}
       // Ещё раз: ModeChanged мог успеть показать плашку пока шли флаги выше.
       try {
-        const g = global as AppRuntimeGlobals;
-        if (forceInAppRestore && g.__pipVisibleRef?.current === true) {
+        if (forceInAppRestore && isPipVisible()) {
           return;
         }
       } catch (_) {}
@@ -1905,8 +1909,7 @@ function AppContent() {
           try {
             g.__videoCallPartnerUserIdRef = g.__videoCallPartnerUserIdRef || { current: null };
             g.__videoCallPartnerUserIdRef.current = null;
-            g.__videoCallActiveRef = g.__videoCallActiveRef || { current: false };
-            g.__videoCallActiveRef.current = false;
+            setVideoCallActive(false);
             g.__onVideoCallEndedRef?.current?.();
           } catch (_) {}
           setTimeout(() => {
@@ -2206,7 +2209,7 @@ function AppContent() {
     if (Platform.OS !== 'android') return;
     try {
       const g = global as AppRuntimeGlobals;
-      if (g.__pipVisibleRef?.current === true || g.__pipInSystemModeRef?.current === true) return;
+      if (isPipVisible() || isPipInSystemMode()) return;
 
       const session = g.__webrtcSessionRef?.current;
       const sessionEnded = !!session && typeof session.isEnded === 'function' && session.isEnded();
@@ -2769,7 +2772,7 @@ function AppContent() {
       currentRoute = routeName;
     }
     const pipForceHidden = !!global.__pipForceHiddenRef?.current;
-    const pipVisible = !pipForceHidden && (!!(pip)?.visible || !!global.__pipVisibleRef?.current);
+    const pipVisible = !pipForceHidden && (!!(pip)?.visible || !!isPipVisible());
     const shouldKeepOn = isVideoSessionRoute(currentRoute) || pipVisible;
 
     // Android: системный PiP разрешаем ТОЛЬКО при реально активном звонке/входящем/видимом PiP,
@@ -2780,7 +2783,7 @@ function AppContent() {
         const sessionForGuard = g.__webrtcSessionRef?.current;
         const sessionNotEndedForGuard =
           !!sessionForGuard && (typeof sessionForGuard.isEnded === 'function' ? !sessionForGuard.isEnded() : true);
-        const videoCallStillActiveByRef = g.__videoCallActiveRef?.current !== false;
+        const videoCallStillActiveByRef = !isVideoCallActiveExplicitlyFalse();
         const paramsForGuard = g.__currentCallPiPParamsRef?.current;
         const hasCallIdsForGuard =
           !!paramsForGuard?.callId ||
@@ -2812,9 +2815,9 @@ function AppContent() {
         const systemPiPEntryUntil = g.__systemPiPEntryInProgressUntilRef?.current;
         const systemPiPEntryInProgress =
           typeof systemPiPEntryUntil === 'number' && systemPiPEntryUntil > Date.now();
-        const videoCallInactiveByRef = g.__videoCallActiveRef?.current === false;
-        const endingFromPiPNoOpen = g.__callEndedFromPiPNoOpenRef?.current === true;
-        const endingCallInProgress = g.__endingCallInProgressRef?.current === true;
+        const videoCallInactiveByRef = isVideoCallActiveExplicitlyFalse();
+        const endingFromPiPNoOpen = isCallEndedFromPiPNoOpen();
+        const endingCallInProgress = isEndingCallInProgress();
         const callTeardownInProgress = endingFromPiPNoOpen || endingCallInProgress || videoCallInactiveByRef;
         const session = g.__webrtcSessionRef?.current;
         const rawSessionNotEnded =
@@ -2899,7 +2902,7 @@ function AppContent() {
       }
       const forceHidden = !!global.__pipForceHiddenRef?.current;
       const visible =
-        !forceHidden && (!!(pip)?.visible || !!global.__pipVisibleRef?.current);
+        !forceHidden && (!!(pip)?.visible || !!isPipVisible());
       // PiP засчитываем только при живом звонке. Иначе зависший __pipVisibleRef
       // держал бы экран бесконечно: сам он к тому моменту уже ни на что не влияет,
       // плашки на экране нет, а условие всё ещё истинно. Маршрут и входящий
@@ -2976,7 +2979,7 @@ function AppContent() {
         } catch (_) {}
         // Проверяем: в системном PiP с активным звонком — экран не гасим до завершения звонка
         const g = (global as AppRuntimeGlobals);
-        const inPiP = g.__pipVisibleRef?.current === true || g.__pipInSystemModeRef?.current === true;
+        const inPiP = isPipVisible() || isPipInSystemMode();
         const session = g.__webrtcSessionRef?.current;
         const activeVideoCallNotEnded = !!session && (typeof session.isEnded !== 'function' ? true : !session.isEnded());
         const keepCallAudioContext =
@@ -3065,10 +3068,10 @@ function AppContent() {
           const systemPiPEntryUntil = g?.__systemPiPEntryInProgressUntilRef?.current;
           const enteringSystemPiP = typeof systemPiPEntryUntil === 'number' && systemPiPEntryUntil > Date.now();
           const session = g?.__webrtcSessionRef?.current;
-          const videoCallInactiveByRef = g?.__videoCallActiveRef?.current === false;
+          const videoCallInactiveByRef = isVideoCallActiveExplicitlyFalse();
           const callTeardownInProgress =
-            g?.__endingCallInProgressRef?.current === true ||
-            g?.__callEndedFromPiPNoOpenRef?.current === true ||
+            isEndingCallInProgress() ||
+            isCallEndedFromPiPNoOpen() ||
             videoCallInactiveByRef;
           const sessionNotEnded =
             !callTeardownInProgress &&
@@ -3076,7 +3079,7 @@ function AppContent() {
           const activeVideoRouteOwnsLeaveHint =
             isVideoSessionRoute(currentRoute) &&
             sessionNotEnded &&
-            g?.__videoCallActiveRef?.current !== false;
+            !isVideoCallActiveExplicitlyFalse();
           if (!enteringSystemPiP && !activeVideoRouteOwnsLeaveHint) {
             NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false);
           }
@@ -3168,7 +3171,7 @@ function AppContent() {
     const isOnVideoScreen = isVideoSessionRoute(currentRoute);
     const isInactiveVideoState = !!(global as AppRuntimeGlobals)?.__isInactiveStateRef?.current;
     const videoCallPartner = (global as AppRuntimeGlobals)?.__videoCallPartnerUserIdRef?.current;
-    const videoCallActive = (global as AppRuntimeGlobals)?.__videoCallActiveRef?.current;
+    const videoCallActive = isVideoCallActive();
     if (isOnVideoScreen && !isInactiveVideoState && videoCallActive && videoCallPartner && String(d.from) === String(videoCallPartner)) {
       return;
     }
@@ -3343,7 +3346,7 @@ function AppContent() {
       try {
         g.__pipCallEndedWasInAppAtStartRef = g.__pipCallEndedWasInAppAtStartRef || { current: false };
         g.__pipCallEndedWasInAppAtStartRef.current =
-          g.__pipVisibleRef?.current === true && g.__pipInSystemModeRef?.current !== true;
+          isPipVisible() && !isPipInSystemMode();
       } catch (_) {}
       const eventCallId = String(data?.callId || g.__currentCallPiPParamsRef?.current?.callId || '').trim();
       const eventRoomId = String(
@@ -3400,7 +3403,7 @@ function AppContent() {
           try {
             const g2 = global as AppRuntimeGlobals;
             const dupInSystem =
-              g2.__pipInSystemModeRef?.current === true ||
+              isPipInSystemMode() ||
               g2.__pipCallEndedWasInSystemRef?.current === true;
             if (Platform.OS === 'android' && dupInSystem) {
               dismissSystemPiPAfterCallEnded();
@@ -3414,8 +3417,7 @@ function AppContent() {
         g.__lastHandledCallEndedRef.at = now;
       } catch (_) {}
       try {
-        g.__endingCallInProgressRef = g.__endingCallInProgressRef || { current: false };
-        g.__endingCallInProgressRef.current = true;
+        setEndingCallInProgress(true);
       } catch (_) {}
       if (Platform.OS === 'android') {
         try { NativeModules.LiviAppModule?.setEndingCallInProgress?.(true); } catch (_) {}
@@ -3430,7 +3432,7 @@ function AppContent() {
             session &&
             typeof session.isEnded === 'function' &&
             !session.isEnded();
-          if (sessionLive || g2.__videoCallActiveRef?.current === true) return;
+          if (sessionLive || isVideoCallActive()) return;
           clearEndingCallInProgress();
         } catch (_) {}
       }, 3200);
@@ -3476,14 +3478,14 @@ function AppContent() {
 
       const wasInSystemSnapshot = g.__pipCallEndedWasInSystemRef?.current === true;
       const inSystem =
-        g.__pipInSystemModeRef?.current === true || wasInSystemSnapshot;
+        isPipInSystemMode() || wasInSystemSnapshot;
       try {
         if (wasInSystemSnapshot && g.__pipCallEndedWasInSystemRef) {
           g.__pipCallEndedWasInSystemRef.current = false;
         }
       } catch (_) {}
       const hidePiP = g.__pipHidePiPRef?.current;
-      const noOpenFlag = g.__callEndedFromPiPNoOpenRef?.current === true;
+      const noOpenFlag = isCallEndedFromPiPNoOpen();
 
       if (typeof hidePiP === 'function') hidePiP();
       // Кто в системном PiP при call:ended — только закрываем PiP, приложение не открываем.
@@ -3493,10 +3495,9 @@ function AppContent() {
         }
         console.log('[App] [call:ended] inSystem=true → ставим __callEndedFromPiPNoOpenRef, return (НЕ вызываем goHome)');
         try {
-          g.__callEndedFromPiPNoOpenRef = g.__callEndedFromPiPNoOpenRef || { current: false };
-          g.__callEndedFromPiPNoOpenRef.current = true;
+          setCallEndedFromPiPNoOpen(true);
           setTimeout(() => {
-            try { (global as AppRuntimeGlobals).__callEndedFromPiPNoOpenRef!.current = false; } catch (_) {}
+            try { setCallEndedFromPiPNoOpen(false); } catch (_) {}
           }, 6000);
         } catch (_) {}
         // Экран завершённого звонка сюда не кладём: при возврате человек видел его кадр до ухода на Home.
@@ -3563,7 +3564,7 @@ function AppContent() {
     if (Platform.OS !== 'android') return () => {};
     const onReconnect = () => {
       const g = global as AppRuntimeGlobals;
-      if (g.__pipInSystemModeRef?.current !== true) return;
+      if (!isPipInSystemMode()) return;
       const session = g.__webrtcSessionRef?.current;
       const roomDisconnected = session?.['room']?.state === 'disconnected';
       const sessionEnded = typeof session?.['ended'] === 'boolean' && session['ended'];
@@ -3608,8 +3609,8 @@ function AppContent() {
           session.applyRemoteEnded({ callId: callId || undefined, roomId: roomId || undefined });
         }
       } catch (_) {}
-      const inSystem = g.__pipInSystemModeRef?.current === true;
-      const pipVisible = g.__pipVisibleRef?.current === true;
+      const inSystem = isPipInSystemMode();
+      const pipVisible = isPipVisible();
       const hidePiP = g.__pipHidePiPRef?.current;
       if (inSystem) {
         if (Platform.OS === 'android') {
@@ -3667,7 +3668,7 @@ function AppContent() {
           !!String(g.__outgoingCallIdRef?.current || '').trim() ||
           g.__outgoingCallScreenVisibleRef?.current === true;
         const hasVideo =
-          g.__videoCallActiveRef?.current === true ||
+          isVideoCallActive() ||
           readRootCurrentRouteName() === 'VideoCall';
         if (hasOutgoing || hasVideo) return;
         logger.info('[App] dismiss stale native outgoing on launch (no JS call context)');
@@ -3804,7 +3805,7 @@ function AppContent() {
       // Сбрасываем refs активного звонка без loadFriends (ended-callback).
       try {
         (global as AppRuntimeGlobals).__videoCallPartnerUserIdRef = { current: null };
-        global.__videoCallActiveRef = { current: false };
+        adoptVideoCallActiveRef({ current: false });
       } catch (_) {}
       // emitCloseOutgoing намеренно не шлём (preset outgoing_declined_socket) — анти-мерцание Home.
       // call:declined = тот, кому звонили, отклонил — пропущенным не считаем; «Отменённый» пишет HomeScreen offDeclined.
@@ -3922,8 +3923,7 @@ function AppContent() {
         try {
           g.__videoCallPartnerUserIdRef = g.__videoCallPartnerUserIdRef || { current: null };
           g.__videoCallPartnerUserIdRef.current = null;
-          g.__videoCallActiveRef = g.__videoCallActiveRef || { current: false };
-          g.__videoCallActiveRef.current = false;
+          setVideoCallActive(false);
         } catch (_) {}
         // Журнал Calls сразу (не ждать setTimeout/badge) — иначе «Пропущенный» опаздывает.
         if (callerId) {
@@ -3950,7 +3950,7 @@ function AppContent() {
         // Сбрасываем refs активного звонка при отмене вызова
         try {
           (global as AppRuntimeGlobals).__videoCallPartnerUserIdRef = { current: null };
-          global.__videoCallActiveRef = { current: false };
+          adoptVideoCallActiveRef({ current: false });
           (global as AppRuntimeGlobals).__onVideoCallEndedRef?.current?.();
         } catch (_) {}
         runCloseUI();
@@ -4582,7 +4582,7 @@ function AppContent() {
       // Сбрасываем refs активного звонка, чтобы кнопки видеозвонка у инициатора снова стали активными
       try {
         (global as AppRuntimeGlobals).__videoCallPartnerUserIdRef = { current: null };
-        global.__videoCallActiveRef = { current: false };
+        adoptVideoCallActiveRef({ current: false });
         (global as AppRuntimeGlobals).__onVideoCallEndedRef?.current?.();
       } catch (_) {}
       // Мгновенно закрываем JS-модалку входящего (surfaces уже через terminateCall)
@@ -4898,8 +4898,8 @@ export default function App() {
     if (fromPiPButton) {
       try { setEndingFromPiPButton(false); } catch (_) {}
     }
-    const inSystem = g.__pipInSystemModeRef?.current === true;
-    const pipVisible = g.__pipVisibleRef?.current === true;
+    const inSystem = isPipInSystemMode();
+    const pipVisible = isPipVisible();
     const endingFromSystemPiP = inSystem || fromPiPButton;
     // Сразу выставляем флаги «завершили из PiP», чтобы handleCallEnded (вызовется из session.endCall) и onCallEnded (call:ended) не открывали приложение.
     // SystemPiPModeChanged(true) может прийти позже, поэтому inSystem часто false при нажатии X в PiP.
@@ -5000,8 +5000,7 @@ export default function App() {
     try {
       g.__videoCallPartnerUserIdRef = g.__videoCallPartnerUserIdRef || { current: null };
       g.__videoCallPartnerUserIdRef.current = null;
-      g.__videoCallActiveRef = g.__videoCallActiveRef || { current: false };
-      g.__videoCallActiveRef.current = false;
+      setVideoCallActive(false);
       g.__onVideoCallEndedRef?.current?.();
     } catch (_) {}
     try {
@@ -5049,10 +5048,10 @@ export default function App() {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
       if (!navRef.isReady()) return false;
 
-      const pipVisible = global.__pipVisibleRef?.current === true;
+      const pipVisible = isPipVisible();
       const session = (global as AppRuntimeGlobals).__webrtcSessionRef?.current;
       const hasActiveCall = session && typeof session.getRoomId === 'function' && session.getRoomId();
-      if (global.__endingCallInProgressRef?.current === true) return false;
+      if (isEndingCallInProgress()) return false;
 
       const currentRoute = navRef.getCurrentRoute?.()?.name;
       if (currentRoute === 'VideoCall' && hasActiveCall) {

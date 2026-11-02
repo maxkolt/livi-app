@@ -50,5 +50,8 @@ export type PresenceUpdatePayload =
 
 export type WelcomePresencePayload = {
   ok?: boolean;
+  epoch?: string;
+  revision?: number;
+  unchanged?: boolean;
   list?: Array<string | { id?: string; nick?: string; name?: string; avatarVer?: number }>;
 };

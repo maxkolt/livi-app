@@ -1,3 +1,4 @@
+import type { ChatSessionState } from './useChatSessionState';
 import type { ChatMessage } from './chatMessageTypes';
 /** Media outbox enqueue/retry/drain for failed image/audio sends. */
 
@@ -11,34 +12,23 @@ import { getChatMediaOutboxKey } from "./chatStorageKeys";
 import { outgoingStatusFromSendResult } from "./chatMessageIds";
 import { stickerFieldsFromMessage } from "./chatMessageMeta";
 
-type ReadStatusMap = Record<string, "sending" | "delivered" | "read" | "failed" | "sent">;
-
 type Options = {
-  peerId: string;
-  currentUserId: string | null;
-  /** История чата загружена: раньше «нет такого сообщения» не значит, что его нет. */
-  historyReady: boolean;
-  messages: ChatMessage[];
-  setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>;
-  uploadStatus: Record<string, "sending" | "sent" | "failed">;
-  setUploadStatus: React.Dispatch<React.SetStateAction<Record<string, "sending" | "sent" | "failed">>>;
-  readStatuses: ReadStatusMap;
-  updateReadStatuses: (updater: (prev: ReadStatusMap) => ReadStatusMap) => void;
+  session: ChatSessionState;
   resolveMediaUri: (uri?: string) => string;
 };
 
-export function useChatMediaOutbox({
-  peerId,
-  currentUserId,
-  historyReady,
-  messages,
-  setMessages,
-  uploadStatus,
-  setUploadStatus,
-  readStatuses,
-  updateReadStatuses,
-  resolveMediaUri,
-}: Options) {
+export function useChatMediaOutbox({ session, resolveMediaUri }: Options) {
+  const {
+    peerId,
+    currentUserId,
+    historyReady,
+    messages,
+    setMessages,
+    uploadStatus,
+    setUploadStatus,
+    readStatuses,
+    updateReadStatuses,
+  } = session;
   const [retryUiForId, setRetryUiForId] = React.useState<string | null>(null);
   // Drain читает свежие значения из ref: он не должен пересоздаваться на каждое
   // изменение ленты, иначе без сети повтор шёл по кругу (часы ↔ ошибка без конца).

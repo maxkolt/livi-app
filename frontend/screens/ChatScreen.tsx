@@ -1,3 +1,4 @@
+import { useChatSessionState } from './chat/useChatSessionState';
 import type { ChatBubbleRow } from './chat/chatList';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
@@ -88,9 +89,6 @@ import {
 } from './chat/chatAlbum';
 import { ChatAlbumPickModal } from './chat/ChatAlbumPickModal';
 import {
-  isDeletableOnServerMessageId,
-} from './chat/chatMessageOps';
-import {
   buildChatListRows,
   indexInChatListData,
   CHAT_LIST_INITIAL_NUM_TO_RENDER,
@@ -134,10 +132,6 @@ import { useChatClear } from './chat/useChatClear';
 import { useChatHeader } from './chat/useChatHeader';
 import { useChatLongPressMessage } from './chat/useChatLongPressMessage';
 import { ChatMessagePreviewFit } from './chat/ChatMessagePreviewFit';
-import {
-  getChatHiddenForMeKey,
-  getChatStatusesKey,
-} from './chat/chatStorageKeys';
 import {
   getAndroidImeLiftCacheDp,
   setAndroidImeLiftCacheDp,
@@ -404,8 +398,27 @@ export default function ChatScreen({ route, navigation }: Props) {
   const [iosComposerBoxH, setIosComposerBoxH] = useState(0);
 
   const peerId = String(route?.params?.peerId || "");
-  const peerIdForPersistRef = useRef(peerId);
-  peerIdForPersistRef.current = peerId;
+  const session = useChatSessionState(peerId);
+  const {
+    messages,
+    setMessages,
+    latestMessagesForPersistRef,
+    historyReady,
+    chatImagesWarm,
+    setChatImagesWarm,
+    readStatuses,
+    outboxLocalIdToServerIdRef,
+    rememberOutboxLocalToServerId,
+    rememberDeletedServerMessageId,
+    uploadStatus,
+    setUploadStatus,
+    updateReadStatuses,
+    currentUserId,
+    setCurrentUserId,
+    rememberHiddenForMeMessageId,
+    rememberHiddenForMeMessageIds,
+    messagesRef,
+  } = session;
   const peerNameParam = route?.params?.peerName || "—";
   const peerAvatarVer = route?.params?.peerAvatarVer || 0;
   const peerAvatarThumbB64Param = route?.params?.peerAvatarThumbB64 || '';
@@ -534,16 +547,6 @@ export default function ChatScreen({ route, navigation }: Props) {
     }
   });
   const [err, setErr] = useState<string | null>(null);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  /** Always points at latest `messages` for background/unmount persistence (avoid stale closures). */
-  const latestMessagesForPersistRef = useRef(messages);
-  latestMessagesForPersistRef.current = messages;
-  /** Для каких live id уже слали `message:read`; history/initial sync закрывается batch `markMessagesAsRead`. */
-  const readReceiptSentIdsRef = useRef<Set<string>>(new Set());
-  // Чтобы не показывать "пустую заглушку" до загрузки истории (иначе она мелькает на входе в чат)
-  const [historyReady, setHistoryReady] = useState(false);
-  /** Prefetch chat images before first paint so bubbles don't flash empty→loaded. */
-  const [chatImagesWarm, setChatImagesWarm] = useState(false);
   const {
     deleteConfirmVisible,
     deleteForBoth,
@@ -855,34 +858,6 @@ export default function ChatScreen({ route, navigation }: Props) {
   const [messageText, setMessageText] = useState("");
   const messageTextRef = useRef("");
   messageTextRef.current = messageText;
-  const [readStatuses, setReadStatuses] = useState<Record<string, 'sending' | 'delivered' | 'read' | 'failed' | 'sent'>>({});
-  const readStatusesRef = useRef(readStatuses);
-  readStatusesRef.current = readStatuses;
-  /** Удалённые на сервере id (в t.ч. legacy numeric): блокируем повтор из history/outbox. */
-  const deletedServerMessageIdsRef = useRef<Set<string>>(new Set());
-  /** outbox_* / optimistic ui id → id в Mongo (после доставки). */
-  const outboxLocalIdToServerIdRef = useRef<Map<string, string>>(new Map());
-  const rememberOutboxLocalToServerId = React.useCallback((localId: string, serverId: string) => {
-    const local = String(localId || '').trim();
-    const server = String(serverId || '').trim();
-    if (!local || !server || local === server) return;
-    const map = outboxLocalIdToServerIdRef.current;
-    map.set(local, server);
-    if (map.size > 500) {
-      const keep = new Map(Array.from(map.entries()).slice(-250));
-      outboxLocalIdToServerIdRef.current = keep;
-    }
-  }, []);
-  const hiddenForMeMessageIdsRef = useRef<Set<string>>(new Set());
-  const rememberDeletedServerMessageId = React.useCallback((rawId: string) => {
-    const id = String(rawId || '').trim();
-    if (!id || !isDeletableOnServerMessageId(id)) return;
-    const s = deletedServerMessageIdsRef.current;
-    s.add(id);
-    if (s.size > 400) {
-      deletedServerMessageIdsRef.current = new Set(Array.from(s).slice(-200));
-    }
-  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -894,9 +869,6 @@ export default function ChatScreen({ route, navigation }: Props) {
       cancelled = true;
     };
   }, [rememberDeletedServerMessageId]);
-  const [uploadStatus, setUploadStatus] = useState<Record<string, 'sending' | 'sent' | 'failed'>>({});
-  const uploadStatusRef = useRef(uploadStatus);
-  uploadStatusRef.current = uploadStatus;
   const [showClearMenu, setShowClearMenu] = useState(false);
   // Сквозное шифрование включается само у всех и не отключается: переписка шифруется,
   // как только ключи есть у обоих. Настроек в меню нет.
@@ -1118,28 +1090,6 @@ export default function ChatScreen({ route, navigation }: Props) {
     setComposeAsset,
   } = useChatMediaViewers();
   const attachSheetRef = useRef<ChatAttachSheetHandle>(null);
-
-  // Обертка для setReadStatuses с автосохранением. Стабильная: она в deps подписок useChatRealtime,
-  // и новая функция на каждый рендер переподписывала их — а событие очереди, пришедшее во время
-  // синхронного рендера, тогда крутилось по новым подписчикам бесконечно (JS 100%, чат замирал).
-  // saveStatuses берёт id из ref, поэтому версия первого рендера актуальна.
-  const updateReadStatuses = React.useCallback((updater: (prev: Record<string, 'sending' | 'delivered' | 'read' | 'failed' | 'sent'>) => Record<string, 'sending' | 'delivered' | 'read' | 'failed' | 'sent'>) => {
-    setReadStatuses(prev => {
-      const updated = updater(prev);
-      saveStatuses(updated); // Автоматически сохраняем
-      return updated;
-    });
-  }, []);
-  // Обычно уже известен сокету — сразу, без лишнего рендера при открытии чата.
-  const [currentUserId, setCurrentUserId] = useState<string | null>(() => {
-    try {
-      return getCurrentSocketUserId() || null;
-    } catch {
-      return null;
-    }
-  });
-  const currentUserIdForPersistRef = useRef<string | null>(null);
-  currentUserIdForPersistRef.current = currentUserId;
   const {
     peerActivity,
     stopLocalTyping,
@@ -1595,101 +1545,13 @@ export default function ChatScreen({ route, navigation }: Props) {
     setMediaViewerVisible(false);
   }, []);
 
-  // Функции для работы с сохраненными сообщениями и статусами
-  const loadHiddenForMeMessageIds = React.useCallback(async (uid: string, pid: string): Promise<Set<string>> => {
-    try {
-      const raw = await AsyncStorage.getItem(getChatHiddenForMeKey(uid, pid));
-      if (!raw) return new Set();
-      const parsed = JSON.parse(raw);
-      return new Set(
-        Array.isArray(parsed)
-          ? parsed.map((id: unknown) => String(id || '').trim()).filter(Boolean)
-          : [],
-      );
-    } catch {
-      return new Set();
-    }
-  }, []);
-
-  const persistHiddenForMeMessageIds = React.useCallback(async (uid: string, pid: string, ids: Set<string>) => {
-    try {
-      const key = getChatHiddenForMeKey(uid, pid);
-      const list = Array.from(ids).filter(Boolean).slice(-1000);
-      if (list.length === 0) {
-        await AsyncStorage.removeItem(key);
-      } else {
-        await AsyncStorage.setItem(key, JSON.stringify(list));
-      }
-    } catch {}
-  }, []);
-
-  const rememberHiddenForMeMessageId = React.useCallback(async (rawId: string) => {
-    const id = String(rawId || '').trim();
-    const uid = String(currentUserIdForPersistRef.current || '').trim();
-    const pid = String(peerIdForPersistRef.current || '').trim();
-    if (!id || !uid || !pid) return;
-    const next = new Set(hiddenForMeMessageIdsRef.current);
-    next.add(id);
-    hiddenForMeMessageIdsRef.current = next;
-    await persistHiddenForMeMessageIds(uid, pid, next);
-  }, [persistHiddenForMeMessageIds]);
-
-  const rememberHiddenForMeMessageIds = React.useCallback(async (rawIds: string[]) => {
-    const ids = Array.from(new Set(
-      (rawIds || []).map((rawId) => String(rawId || '').trim()).filter(Boolean),
-    ));
-    const uid = String(currentUserIdForPersistRef.current || '').trim();
-    const pid = String(peerIdForPersistRef.current || '').trim();
-    if (ids.length === 0 || !uid || !pid) return;
-    const next = new Set(hiddenForMeMessageIdsRef.current);
-    for (const id of ids) next.add(id);
-    hiddenForMeMessageIdsRef.current = next;
-    await persistHiddenForMeMessageIds(uid, pid, next);
-  }, [persistHiddenForMeMessageIds]);
-
   /**
    * Одна очередь на запись чата в AsyncStorage: параллельные setItem давали multi-second spikes.
    * Снимок всегда из ref в момент выполнения — быстрые пачки обновлений схлопываются в одну запись.
    */
-  const { enqueueMessagesPersist } = useChatMessagePersist({
-    historyReady,
-    messages,
-    currentUserId,
-    peerId,
+  const { enqueueMessagesPersist } = useChatMessagePersist({ session,
     lang,
-    currentUserIdForPersistRef,
-    peerIdForPersistRef,
-    latestMessagesForPersistRef,
   });
-
-  const saveStatuses = async (statuses: Record<string, 'sending' | 'delivered' | 'read' | 'failed' | 'sent'>) => {
-    try {
-      // Читаем id из ref: эффект reconnect подписан с deps [] и иначе мог бы сохранять статусы под устаревшими peer/user.
-      const uid = String(currentUserIdForPersistRef.current || '').trim();
-      const pid = String(peerIdForPersistRef.current || '').trim();
-      if (!uid || !pid) return;
-      const key = getChatStatusesKey(uid, pid);
-      await AsyncStorage.setItem(key, JSON.stringify(statuses));
-    } catch (error) {
-      // Игнорируем ошибки сохранения
-    }
-  };
-
-  const loadStatuses = async (): Promise<Record<string, 'sending' | 'delivered' | 'read' | 'failed'>> => {
-    try {
-      const uid = String(currentUserIdForPersistRef.current || '').trim();
-      const pid = String(peerIdForPersistRef.current || '').trim();
-      if (!uid || !pid) return {};
-      const key = getChatStatusesKey(uid, pid);
-      const savedStatuses = await AsyncStorage.getItem(key);
-      if (savedStatuses) {
-        return JSON.parse(savedStatuses);
-      }
-      return {};
-    } catch (error) {
-      return {};
-    }
-  };
 
   useEffect(() => {
     // Быстрая инициализация как в старой версии
@@ -1745,10 +1607,6 @@ export default function ChatScreen({ route, navigation }: Props) {
       try { off?.(); } catch {}
     };
   }, []);
-
-  // Слушатели сообщений через сокеты
-
-  const messagesRef = useRef<ChatMessage[]>([]);
   // Очереди отправки (сообщения, реакции) живут вне React — версия перерисовывает ленту.
   const [outboxVersion, setOutboxVersion] = useState(0);
   useEffect(() => {
@@ -1832,22 +1690,11 @@ export default function ChatScreen({ route, navigation }: Props) {
     setMediaViewerVisible(true);
   }, [chatPhotoTimeline]);
 
-  useChatRealtime({
-    peerId,
-    currentUserId,
-    setMessages,
-    setUploadStatus,
+  useChatRealtime({ session,
     setSelectedMessageIds,
-    updateReadStatuses,
     resolveMediaUri,
     scrollToBottom,
-    latestMessagesForPersistRef,
     isFocusedRef,
-    readReceiptSentIdsRef,
-    deletedServerMessageIdsRef,
-    outboxLocalIdToServerIdRef,
-    rememberDeletedServerMessageId,
-    rememberOutboxLocalToServerId,
     enqueueMessagesPersist,
   });
 
@@ -1864,16 +1711,7 @@ export default function ChatScreen({ route, navigation }: Props) {
     enqueueMediaOutboxId,
     dequeueMediaOutboxId,
     retryFailedOutgoingMessage,
-  } = useChatMediaOutbox({
-    peerId,
-    currentUserId,
-    historyReady,
-    messages,
-    setMessages,
-    uploadStatus,
-    setUploadStatus,
-    readStatuses,
-    updateReadStatuses,
+  } = useChatMediaOutbox({ session,
     resolveMediaUri,
   });
 
@@ -1882,14 +1720,8 @@ export default function ChatScreen({ route, navigation }: Props) {
     sendVideoNoteFromLocal,
     sendPickedImage,
     sendPickedAlbum,
-  } = useChatSendMedia({
-    peerId,
-    currentUserId,
-    setMessages,
-    latestMessagesForPersistRef,
+  } = useChatSendMedia({ session,
     enqueueMessagesPersist,
-    setUploadStatus,
-    updateReadStatuses,
     resolveMediaUri,
     enqueueMediaOutboxId,
     dequeueMediaOutboxId,
@@ -1902,29 +1734,9 @@ export default function ChatScreen({ route, navigation }: Props) {
   const formatDuration = formatVoiceDuration;
   const formatDurationDot = formatVoiceDurationDot;
 
-  const { serverHistoryEmpty } = useChatHistorySync({
-    peerId,
-    currentUserId,
-    setCurrentUserId,
-    messages,
-    setMessages,
-    messagesRef,
-    historyReady,
-    setHistoryReady,
-    setChatImagesWarm,
-    setReadStatuses,
-    updateReadStatuses,
-    loadStatuses,
-    loadHiddenForMeMessageIds,
-    hiddenForMeMessageIdsRef,
-    deletedServerMessageIdsRef,
-    uploadStatusRef,
-    readStatusesRef,
+  const { serverHistoryEmpty } = useChatHistorySync({ session,
     isFocusedRef,
     enqueueMessagesPersist,
-    currentUserIdForPersistRef,
-    peerIdForPersistRef,
-    latestMessagesForPersistRef,
     navigation,
     resolveMediaUri,
   });

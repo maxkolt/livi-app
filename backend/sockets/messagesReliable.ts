@@ -658,13 +658,12 @@ async function saveOfflineMessage(recipientId: string, message: ClientMessage<Da
 /**
  * Получить и удалить офлайн сообщения для пользователя
  */
-async function getAndClearOfflineMessages(userId: string): Promise<ClientMessage<Date>[]> {
+async function getAndClearOfflineMessages(userId: string, limit: number, drainStartedAt: Date): Promise<ClientMessage<Date>[]> {
   try {
     const recipientId = new mongoose.Types.ObjectId(userId);
-    const drainStartedAt = new Date();
     const messages: ClientMessage<Date>[] = [];
 
-    while (true) {
+    while (messages.length < limit) {
       const offlineMessage = await OfflineMessage.findOneAndDelete({
         recipientId,
         createdAt: { $lte: drainStartedAt },
@@ -689,10 +688,10 @@ async function getAndClearOfflineMessages(userId: string): Promise<ClientMessage
  * bind'а одного пользователя не выдадут одну запись дважды, пока жива аренда.
  */
 export const mongoOfflineQueue: OfflineQueuePort = {
-  async claim(userId, drainStartedAt, leaseUntil) {
+  async claim(userId, drainStartedAt, leaseUntil, limit) {
     const recipientId = new mongoose.Types.ObjectId(userId);
     const claimed: ClaimedOfflineMessage[] = [];
-    while (true) {
+    while (claimed.length < limit) {
       const doc = await OfflineMessage.findOneAndUpdate(
         {
           recipientId,

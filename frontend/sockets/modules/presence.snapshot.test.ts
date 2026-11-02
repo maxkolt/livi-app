@@ -29,7 +29,7 @@ jest.mock('../../utils/logger', () => ({
   logger: { debug: jest.fn(), info: jest.fn(), warn: jest.fn(), error: jest.fn() },
 }));
 
-import { onPresenceUpdate } from './presence';
+import { onPresenceUpdate, beginWelcomePresenceRefresh } from './presence';
 import { shared } from './shared';
 
 describe('presence snapshots after reconnect', () => {
@@ -47,5 +47,21 @@ describe('presence snapshots after reconnect', () => {
 
     expect(listener).toHaveBeenCalledWith([]);
     expect([...shared.lastVisibleOnlineUserIds]).toEqual([]);
+  });
+});
+
+describe('welcome HTTP/socket ordering', () => {
+  it('reuses a current snapshot for a conditional refresh after the UI skipped an update', () => {
+    const data = { ok: true, epoch: 'welcome-server-a', revision: 10, list: [{ id: 'peer', nick: 'Peer', avatarVer: 1 }] };
+    socketHandlers.get('presence:welcome')?.(data);
+    const request = beginWelcomePresenceRefresh();
+    expect(request.query).toContain('revision=10');
+    expect(request.apply({ ok: true, unchanged: true, epoch: data.epoch, revision: 10 })).toBe(data);
+  });
+
+  it('discards an HTTP response started before reconnect', () => {
+    const request = beginWelcomePresenceRefresh();
+    socketHandlers.get('connect')?.();
+    expect(request.apply({ ok: true, list: ['stale'] })).toBeNull();
   });
 });

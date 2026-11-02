@@ -12,6 +12,14 @@ import {
   isPipReturnToCallJustPressed,
   setPipReturnToCallInFlight,
   setPipReturnToCallJustPressed,
+  isPipVisible,
+  setPipInSystemMode,
+  isPipInSystemMode,
+  isEndingCallInProgress,
+  isCallEndedFromPiPNoOpen,
+  setPipVisible,
+  isVideoCallActiveExplicitlyFalse,
+  setCallEndedFromPiPNoOpen,
 } from '../../utils/callRuntime';
 import { clearEndingCallInProgress, captureSystemPiPReturnMediaSnapshot, resolvePiPLocalMutedState, markDirectCallVideoMediaActive, ongoingCallPrefersVideoMedia, resolveActiveCallInCallMedia, readInAppPiPAudioOutputRoute, readAuthoritativeCallAudioRouteAfterPiP, readLastAppliedCallAudioRoute, readActiveExternalCallAudioRoute, readConnectedExternalCallAudioRoute, setUserSelectedCallAudioRoute, readUserSelectedCallAudioRoute, readUserSelectedExternalCallAudioRoute, rememberManualBuiltinCallAudioRoute, clearBuiltinPinForExternalHeadsetConnect, markUserSelectedExternalCallAudioRoute, isIncomingAnswerTransitionActive } from '../../utils/activeCallSession';
 import { buildCallEndSocketPayload } from '../../utils/callEndPayload';
@@ -143,7 +151,7 @@ function shouldSkipSuppressOverlayWhenLeavingSystemPiP(): boolean {
 function suspendInAppOverlayForSystemPiPEnter(): void {
   try {
     const g = global as CallAudioGlobals;
-    if (g.__pipVisibleRef?.current !== true) return;
+    if (!isPipVisible()) return;
     g.__pipSuspendedForSystemPiPRef = g.__pipSuspendedForSystemPiPRef || { current: false };
     g.__pipSuspendedForSystemPiPRef.current = true;
     // Sticky: OEM bounce enter→exit может снять suspend до restore — плашку всё равно вернуть.
@@ -178,7 +186,7 @@ function clearSystemPiPNeedsInAppRestore(): void {
  */
 export function isPipOverlayVisibleSync(): boolean {
   try {
-    return global.__pipVisibleRef?.current === true;
+    return isPipVisible();
   } catch {
     return false;
   }
@@ -394,7 +402,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       // а сам visible при deferVisible включается позже (через rAF). В этот промежуток мы НЕ должны
       // сбрасывать allowVideoRender=false — иначе in-app PiP всегда "мигнёт" плейсхолдером.
       const preparing =
-        global.__pipVisibleRef?.current === true;
+        isPipVisible();
       if (!preparing) {
         setAllowVideoRender(false);
       }
@@ -534,8 +542,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
           );
           g.__pendingSystemPiPSyncRef = g.__pendingSystemPiPSyncRef || { current: false };
           g.__pendingSystemPiPSyncRef.current = false;
-          g.__pipInSystemModeRef = g.__pipInSystemModeRef || { current: false };
-          g.__pipInSystemModeRef.current = false;
+          setPipInSystemMode(false);
           g.__systemPiPEntryInProgressUntilRef =
             g.__systemPiPEntryInProgressUntilRef || { current: 0 };
           g.__systemPiPEntryInProgressUntilRef.current = 0;
@@ -556,7 +563,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
           });
           // Stale optimistic enter из AboutToEnter — не оставить pending для late activate.
           g.__pendingSystemPiPSyncRef.current = false;
-          g.__pipInSystemModeRef.current = false;
+          setPipInSystemMode(false);
           // Выход подтверждён нативом: сразу снять session PiP и отправить
           // pip:state=false. Не ждать Expanded/focus — они могут прийти позже.
           const session = g.__webrtcSessionRef?.current;
@@ -589,8 +596,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         // Снимаем returning/block с прошлого expand — иначе shouldIgnoreLateEnter глушит реальный enter.
         try {
           const g = global as CallAudioGlobals;
-          g.__pipInSystemModeRef = g.__pipInSystemModeRef || { current: false };
-          g.__pipInSystemModeRef.current = true;
+          setPipInSystemMode(true);
           g.__blockSystemPiPCaptureHostUntilRef =
             g.__blockSystemPiPCaptureHostUntilRef || { current: 0 };
           g.__blockSystemPiPCaptureHostUntilRef.current = 0;
@@ -613,7 +619,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         const shouldIgnoreLateEnter =
           inPiP &&
           (
-            (g.__pipInSystemModeRef?.current !== true && now < returningUntil) ||
+            (!isPipInSystemMode() && now < returningUntil) ||
             returnToCallInFlightRef.current ||
             isPipReturnToCallJustPressed() ||
             (now < settledUntil && now < returningUntil)
@@ -625,9 +631,8 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
           setSystemPiPCaptureRequestId(0);
           setDecorSizeForPiP(null);
           try {
-            g.__pipInSystemModeRef = g.__pipInSystemModeRef || { current: false };
             // Не поднимаем ref=true при ignored late enter — иначе activate CaptureHost после expand.
-            g.__pipInSystemModeRef.current = false;
+            setPipInSystemMode(false);
           } catch (_) {}
           return;
         }
@@ -652,8 +657,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
             );
             g.__pendingSystemPiPSyncRef = g.__pendingSystemPiPSyncRef || { current: false };
             g.__pendingSystemPiPSyncRef.current = false;
-            g.__pipInSystemModeRef = g.__pipInSystemModeRef || { current: false };
-            g.__pipInSystemModeRef.current = false;
+            setPipInSystemMode(false);
           } catch (_) {}
           setPendingSystemPiP(false);
           setDecorSizeForPiP(null);
@@ -686,8 +690,8 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
                     !(typeof restoreSession.isEnded === 'function' && restoreSession.isEnded());
                   if (
                     !callLive ||
-                    gRestore.__endingCallInProgressRef?.current === true ||
-                    gRestore.__callEndedFromPiPNoOpenRef?.current === true
+                    isEndingCallInProgress() ||
+                    isCallEndedFromPiPNoOpen()
                   ) {
                     gRestore.__pendingInAppPiPRestoreAfterSystemRef.current = false;
                     clearSystemPiPNeedsInAppRestore();
@@ -703,7 +707,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
                     fn({ restoreInAppPiP: true });
                     return;
                   }
-                  if (gRestore.__pipVisibleRef?.current === true) {
+                  if (isPipVisible()) {
                     gRestore.__pendingInAppPiPRestoreAfterSystemRef.current = false;
                     clearSystemPiPNeedsInAppRestore();
                     try {
@@ -726,7 +730,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
             // restore — тогда здесь кажется, что возвращаемся на полный экран, и плашка пряталась:
             // живой звонок оставался без управления. Плашка видна вне экрана звонка — не прячем.
             const plaqueIsCurrentUi =
-              g.__pipVisibleRef?.current === true && readRootCurrentRouteName() !== 'VideoCall';
+              isPipVisible() && readRootCurrentRouteName() !== 'VideoCall';
             if (!plaqueIsCurrentUi) setSuppressOverlayForReturn(true);
             try {
               if (
@@ -741,8 +745,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
           }
         }
         try {
-          g.__pipInSystemModeRef = g.__pipInSystemModeRef || { current: false };
-          g.__pipInSystemModeRef.current = inPiP;
+          setPipInSystemMode(inPiP);
         } catch (_) {}
         if (inPiP) {
           // Новый вход в PiP — снять block с прошлого expand, иначе mid-PiP peer video не поднимется.
@@ -779,8 +782,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
             }
           }
           try {
-            g.__pipVisibleRef = g.__pipVisibleRef || { current: false };
-            if (g.__pipVisibleRef.current === true) {
+            if (isPipVisible()) {
               suspendInAppOverlayForSystemPiPEnter();
               logHomePiPTrace('js_soft_hide_in_app_for_system', { traceId: g.__activeHomePiPTraceIdRef?.current });
             }
@@ -1118,8 +1120,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     try {
       global.__pipForceHiddenRef = global.__pipForceHiddenRef || { current: false };
       global.__pipForceHiddenRef.current = false;
-      global.__pipVisibleRef = global.__pipVisibleRef || { current: false };
-      global.__pipVisibleRef.current = true;
+      setPipVisible(true);
       if (Platform.OS === 'android') {
         // Mutex: поверх system PiP плашку не поднимаем (leave-hint/OEM не видят dual).
         if (isSystemPiPActiveOrEnteringSync()) {
@@ -1345,10 +1346,8 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       g.__pipForceHiddenRef.current = true;
       g.__pipDeferVisiblePendingRef = g.__pipDeferVisiblePendingRef || { current: false };
       g.__pipDeferVisiblePendingRef.current = false;
-      g.__pipVisibleRef = g.__pipVisibleRef || { current: false };
-      g.__pipVisibleRef.current = false;
-      g.__pipInSystemModeRef = g.__pipInSystemModeRef || { current: false };
-      g.__pipInSystemModeRef.current = false;
+      setPipVisible(false);
+      setPipInSystemMode(false);
       if (Platform.OS === 'android') {
         NativeModules.LiviAppModule?.setInAppPiPVisibleForSystemPiP?.(false);
       }
@@ -1379,7 +1378,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       const now = Date.now();
       // Native/global refs are authoritative. Local React state may still contain
       // pending=true for one render after ModeChanged(false) and must not re-arm PiP.
-      const nativeInSystemPiP = g.__pipInSystemModeRef?.current === true;
+      const nativeInSystemPiP = isPipInSystemMode();
       const nativePendingEnter = g.__pendingSystemPiPSyncRef?.current === true;
       if (!nativeInSystemPiP && !nativePendingEnter) {
         // Вход не состоялся, а pending/capture остались (пропущенный сброс) — снять, иначе
@@ -1502,7 +1501,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
           String(g.__currentCallPiPParamsRef?.current?.audioOutputRoute || ''),
         );
         if (
-          g.__pipVisibleRef?.current === true &&
+          isPipVisible() &&
           (selected === 'EARPIECE' ||
             selected === 'SPEAKER_PHONE' ||
             (plaqueRouteSync === 'BLUETOOTH' && !available.includes('BLUETOOTH')) ||
@@ -1776,10 +1775,10 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         decorH: payload?.height ?? 0,
       });
       // Не входить в PiP без нажатия пользователя: при завершении звонка (переход на Home) onUserLeaveHint может сработать раньше нативного флага.
-      if (g.__endingCallInProgressRef?.current === true) {
+      if (isEndingCallInProgress()) {
         return;
       }
-      if (g.__videoCallActiveRef?.current === false) {
+      if (isVideoCallActiveExplicitlyFalse()) {
         return;
       }
       // Accept handoff Incoming→Main: ложный leaveHint не должен готовить system/in-app PiP.
@@ -1974,7 +1973,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         g.__systemPiPEntryInProgressUntilRef.current = Date.now() + 4000;
         g.__pendingSystemPiPSyncRef = g.__pendingSystemPiPSyncRef || { current: false };
         g.__pendingSystemPiPSyncRef.current = true;
-        if (g.__pipVisibleRef?.current === true) {
+        if (isPipVisible()) {
           suspendInAppOverlayForSystemPiPEnter();
           try {
             NativeModules.LiviAppModule?.setInAppPiPVisibleForSystemPiP?.(false);
@@ -2147,14 +2146,13 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         // Logo-only: native backdrop сверху; CaptureHost уже mounted (тихий fill) —
         // mid-PiP peer cam только снимает backdrop + bind RTC, без remount.
         try {
-          if (g.__pipVisibleRef?.current === true) {
+          if (isPipVisible()) {
             suspendInAppOverlayForSystemPiPEnter();
           }
         } catch (_) {}
         try {
-          g.__pipInSystemModeRef = g.__pipInSystemModeRef || { current: false };
           // Optimistic: cam-toggle / TrackSubscribed до ModeChanged всё равно mid-PiP path.
-          g.__pipInSystemModeRef.current = true;
+          setPipInSystemMode(true);
           g.__blockSystemPiPCaptureHostUntilRef =
             g.__blockSystemPiPCaptureHostUntilRef || { current: 0 };
           g.__blockSystemPiPCaptureHostUntilRef.current = 0;
@@ -2202,7 +2200,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       }
       const clearIfNotEntered = () => {
         try {
-          const inPiP = g.__pipInSystemModeRef?.current === true;
+          const inPiP = isPipInSystemMode();
           const until = g.__systemPiPEntryInProgressUntilRef?.current;
           if (inPiP) {
             return;
@@ -2278,8 +2276,8 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       const gGuard = (global as CallAudioGlobals);
       const endingFromPiPButton = gGuard.__endingFromPiPButtonRef?.current === true;
       let endingCall =
-        gGuard.__endingCallInProgressRef?.current === true ||
-        gGuard.__callEndedFromPiPNoOpenRef?.current === true ||
+        isEndingCallInProgress() ||
+        isCallEndedFromPiPNoOpen() ||
         endingFromPiPButton;
       if (endingCall) {
         const sessionCheck = gGuard.__webrtcSessionRef?.current;
@@ -2291,7 +2289,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
           logger.info('[PiPContext] returnToCall: active call — ignore stale teardown guards');
           try {
             clearEndingCallInProgress();
-            gGuard.__callEndedFromPiPNoOpenRef!.current = false;
+            setCallEndedFromPiPNoOpen(false);
           } catch (_) {}
           endingCall = false;
         }
@@ -2340,7 +2338,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     if (
       restoreInAppPiP &&
       readRootCurrentRouteName() === 'VideoCall' &&
-      g.__pipVisibleRef?.current !== true
+      !isPipVisible()
     ) {
       logger.info('[PiPContext] returnToCall restoreInAppPiP ignored — already on fullscreen VideoCall');
       try {
@@ -2366,7 +2364,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     }
 
     const wasSystemPiP =
-      inSystemPiPMode || g.__pipInSystemModeRef?.current === true;
+      inSystemPiPMode || isPipInSystemMode();
 
     if (wasSystemPiP) {
       try {
@@ -2825,7 +2823,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       // Закрываем PiP при call:ended: in-app, state системного PiP или ref (после shouldIgnoreLateEnter state мог остаться false).
       let inSystemByRef = false;
       try {
-        inSystemByRef = global.__pipInSystemModeRef?.current === true;
+        inSystemByRef = isPipInSystemMode();
       } catch (_) {}
       const shouldClosePiP = (visible || inSystemPiPMode || inSystemByRef) && (callId || roomId);
       // Идемпотентно с App и VideoCallSession (один socket — несколько слушателей call:ended).
@@ -2973,21 +2971,20 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     const g = global as CallAudioGlobals;
     g.__pipUpdateStateRef = g.__pipUpdateStateRef || { current: null };
     g.__pipUpdateStateRef.current = updatePiPState;
-    g.__pipVisibleRef = g.__pipVisibleRef || { current: false };
     g.__pipDeferVisiblePendingRef = g.__pipDeferVisiblePendingRef || { current: false };
     g.__pipForceHiddenRef = g.__pipForceHiddenRef || { current: false };
     // Нельзя делать __pipVisibleRef = visible пока visible ещё false, а showPiP уже выставил ref=true для iOS deferVisible (rAF).
     // Иначе VideoCall размонтируется после goBack(), cleanup видит pipVisible=false и шлёт call:end.
     if (g.__pipForceHiddenRef.current === true) {
-      g.__pipVisibleRef.current = false;
+      setPipVisible(false);
       g.__pipDeferVisiblePendingRef.current = false;
     } else if (visible) {
-      g.__pipVisibleRef.current = true;
+      setPipVisible(true);
       g.__pipDeferVisiblePendingRef.current = false;
     } else if (g.__pipDeferVisiblePendingRef.current === true) {
       // оставляем __pipVisibleRef как после showPiP (true)
     } else {
-      g.__pipVisibleRef.current = false;
+      setPipVisible(false);
     }
     return () => {
       try { (global as CallAudioGlobals).__pipUpdateStateRef!.current = null; } catch {}
@@ -3014,7 +3011,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
   // Сбрасываем __pipVisibleRef только при размонтировании провайдера, а не на каждом re-run эффекта.
   useEffect(() => {
     return () => {
-      try { (global as CallAudioGlobals).__pipVisibleRef!.current = false; } catch {}
+      try { setPipVisible(false); } catch {}
     };
   }, []);
 

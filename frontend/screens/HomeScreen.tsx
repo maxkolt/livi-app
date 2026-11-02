@@ -1,3 +1,4 @@
+import { setVideoCallActive, setPipVisible, setPipInSystemMode, setCallEndedFromPiPNoOpen, isVideoCallActive, isPipVisible, isPipInSystemMode } from '../utils/callRuntime';
 import type { AppRuntimeGlobals } from '../utils/appRuntimeTypes';
 import { notificationHomeTab } from '../utils/notificationHome';
 // screens/HomeScreen.tsx
@@ -1528,12 +1529,9 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       } catch {}
       g.__videoCallPartnerUserIdRef = g.__videoCallPartnerUserIdRef || { current: null };
       g.__videoCallPartnerUserIdRef.current = null;
-      g.__videoCallActiveRef = g.__videoCallActiveRef || { current: false };
-      g.__videoCallActiveRef.current = false;
-      g.__pipVisibleRef = g.__pipVisibleRef || { current: false };
-      g.__pipVisibleRef.current = false;
-      g.__pipInSystemModeRef = g.__pipInSystemModeRef || { current: false };
-      g.__pipInSystemModeRef.current = false;
+      setVideoCallActive(false);
+      setPipVisible(false);
+      setPipInSystemMode(false);
       g.__currentCallPiPParamsRef = g.__currentCallPiPParamsRef || { current: null };
       g.__currentCallPiPParamsRef.current = null;
       g.__outgoingCallMediaRef = g.__outgoingCallMediaRef || { current: null };
@@ -1547,8 +1545,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       try {
         clearDirectCallAudioRouteCarryoverAfterCallEnd();
       } catch {}
-      g.__callEndedFromPiPNoOpenRef = g.__callEndedFromPiPNoOpenRef || { current: false };
-      g.__callEndedFromPiPNoOpenRef.current = false;
+      setCallEndedFromPiPNoOpen(false);
       if (Platform.OS === 'android') {
         try {
           g.__disableSystemPiPUntilRef = g.__disableSystemPiPUntilRef || { current: 0 };
@@ -1670,7 +1667,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       const g = global as AppRuntimeGlobals;
       g.__homeRowActionAtRef = g.__homeRowActionAtRef || { current: 0 };
       g.__homeRowActionAtRef.current = Date.now();
-      if (g.__videoCallActiveRef?.current === true && !isDirectCallSessionLive(g)) {
+      if (isVideoCallActive() && !isDirectCallSessionLive(g)) {
         forceResetCallBusyRefs();
       }
     } catch {}
@@ -3709,11 +3706,11 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         (!!session && typeof session.getCallId === 'function' && !!session.getCallId()) ||
         (!!session && typeof session.getRoomId === 'function' && !!session.getRoomId());
       const hasActiveLocalCall =
-        g.__videoCallActiveRef?.current === true ||
+        isVideoCallActive() ||
         g.__randomChatPresenceBusyRef?.current === true ||
         g.__randomChatHadPresenceBusyRef?.current === true ||
-        g.__pipVisibleRef?.current === true ||
-        g.__pipInSystemModeRef?.current === true ||
+        isPipVisible() ||
+        isPipInSystemMode() ||
         g.__outgoingCallScreenVisibleRef?.current === true ||
         g.__incomingCallScreenVisibleRef?.current === true ||
         !!String(g.__outgoingCallIdRef?.current || '').trim() ||
@@ -3736,7 +3733,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     syncSelfPresenceOnlineIfIdle('friends-tab');
     try {
       const g = global as AppRuntimeGlobals;
-      if (g.__videoCallActiveRef?.current === true && !isDirectCallSessionLive(g)) {
+      if (isVideoCallActive() && !isDirectCallSessionLive(g)) {
         forceResetCallBusyRefs();
       }
     } catch {}
@@ -3811,6 +3808,22 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       const skipHomeHeavyResume =
         shouldSkipHomeUiSettle() || recentlyCanceled || activeVideoCall;
 
+      // Активность нужна плеерам даже во время звонка: ранний return ниже пропускает
+      // только тяжёлую синхронизацию. Иначе после Incoming/PiP Fliq остаётся на паузе.
+      // Outgoing поверх Main сохраняет прежнее исключение для нативного экрана вызова.
+      try {
+        const g = global as AppRuntimeGlobals;
+        const outgoingCoversMain =
+          g.__outgoingCallUiActiveRef?.current === true ||
+          g.__outgoingCallScreenVisibleRef?.current === true ||
+          callingVisibleRef.current === true;
+        const nextActive =
+          state === 'active' || (outgoingCoversMain && /inactive|background/.test(state));
+        setAppIsActive((prev) => (prev === nextActive ? prev : nextActive));
+      } catch {
+        try { setAppIsActive(state === 'active'); } catch {}
+      }
+
       // Точки навигации Chat/Calls: сразу при возврате из фона (FCM мог обновить только иконку).
       // Не завязано на 30s loadFriends debounce. На accept/звонке — skip.
       if (wasBg && state === 'active' && !skipHomeHeavyResume) {
@@ -3821,8 +3834,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         }
       }
 
-      // Settle / сразу после cancel / active call: ноль setState (даже setAppIsActive) —
-      // AppState churn с Incoming/Outgoing иначе конкурент paint вкладок / VideoCall.
+      // Settle / сразу после cancel / active call: не запускаем тяжёлую работу Home,
+      // чтобы она не конкурировала с Incoming/Outgoing / VideoCall.
       if (skipHomeHeavyResume) {
         logger.info('[welcome-tab] AppState settle-skip (no loadFriends)', {
           state,
@@ -3842,20 +3855,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           });
         } catch {}
         return;
-      }
-      // Outgoing поверх Main даёт AppState=background, хотя пользователь «в приложении».
-      // Если сбросить appIsActive→false, на cancel active→true снова гоняет friendsSurfaceActive.
-      try {
-        const g = global as AppRuntimeGlobals;
-        const outgoingCoversMain =
-          g.__outgoingCallUiActiveRef?.current === true ||
-          g.__outgoingCallScreenVisibleRef?.current === true ||
-          callingVisibleRef.current === true;
-        const nextActive =
-          state === 'active' || (outgoingCoversMain && /inactive|background/.test(state));
-        setAppIsActive((prev) => (prev === nextActive ? prev : nextActive));
-      } catch {
-        try { setAppIsActive(state === 'active'); } catch {}
       }
       if (wasBg && state === 'active') {
         const now = Date.now();
@@ -4027,7 +4026,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   useEffect(() => {
     const g = global as AppRuntimeGlobals;
     const partner = String((g.__videoCallPartnerUserIdRef?.current ?? '') || '').trim();
-    const active = g.__videoCallActiveRef?.current === true;
+    const active = isVideoCallActive();
     if (active && partner) {
       lastVideoCallPartnerRef.current = partner;
     }
@@ -5351,7 +5350,7 @@ const handleClearNick = useCallback(async () => {
     // Ref: после cancel visible в state ещё true ~1.8с, но табы/поиск не должны быть «в звонке».
     callingVisibleRef.current ||
     incomingCallScreen.visible ||
-    global.__videoCallActiveRef?.current === true ||
+    isVideoCallActive() ||
     isDirectCallSessionLive(global as AppRuntimeGlobals);
   /** Блок нового вызова из Друзей/Звонков (без outgoing dialing — redial не ломаем). */
   const callActionsLocked =

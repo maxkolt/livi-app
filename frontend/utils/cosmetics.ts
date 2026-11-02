@@ -8,6 +8,7 @@ import { API_BASE } from '../sockets/modules/constants';
 import { getCurrentUserId } from '../sockets/modules/authState';
 import { getInstallAuthHeaders } from './installId';
 import { fetchWithTimeout } from './fetchWithTimeout';
+import { getCosmeticBackground } from './cosmeticCatalog';
 import { DEFAULT_DARK_WALLPAPER_ID, setChatWallpaperId } from './chatWallpaper';
 
 export type CosmeticKind = 'frame' | 'background';
@@ -24,14 +25,6 @@ const EMPTY: CosmeticEntitlements = {
   purchasedBackgroundIds: [],
   activeFrameId: '',
   activeBackgroundId: '',
-};
-
-const BACKGROUND_TO_WALLPAPER: Record<string, string> = {
-  'aurora-chat': 'dark-doodles-cyan',
-  'deep-space': 'dark-cosmos',
-  poetry: 'dark-pushkin',
-  'ocean-flow': 'dark-doodles-teal',
-  'graphite-chat': 'dark-letters',
 };
 
 function cosmeticKeySuffix(itemId: string): string {
@@ -52,7 +45,7 @@ export function cosmeticBlurbKey(itemId: string): string {
 }
 
 export function cosmeticBackgroundToWallpaperId(itemId: string): string {
-  return BACKGROUND_TO_WALLPAPER[itemId] || DEFAULT_DARK_WALLPAPER_ID;
+  return getCosmeticBackground(itemId)?.wallpaperId || DEFAULT_DARK_WALLPAPER_ID;
 }
 
 let cached: CosmeticEntitlements = EMPTY;

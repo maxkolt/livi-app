@@ -1,0 +1,1068 @@
+{
+  "date": "2026-11-02",
+  "target": {
+    "activeUsers": 5000,
+    "oneToOnePairs": 2500
+  },
+  "productionCapacityProven": false,
+  "scope": "Local backend + real isolated MongoDB and Redis; no production bulk load; no generated SFU/TURN media.",
+  "host": {
+    "platform": "darwin",
+    "arch": "arm64",
+    "cpus": 10,
+    "memoryGiB": 32,
+    "node": "v20.19.4"
+  },
+  "results": {
+    "100_users_final": {
+      "connection": {
+        "connected": 100,
+        "authenticated": 100,
+        "errors": [],
+        "latencyMs": {
+          "count": 100,
+          "p50": 192.92,
+          "p95": 257.71,
+          "p99": 265.28,
+          "max": 265.28
+        }
+      },
+      "chat": {
+        "ackLatencyMs": {
+          "count": 100,
+          "p50": 516.54,
+          "p95": 660.5,
+          "p99": 660.73,
+          "max": 660.73
+        },
+        "acknowledged": 100,
+        "persisted": 100,
+        "missingLiveDeliveries": 0,
+        "duplicateLiveIds": 0,
+        "remainingConnections": 100,
+        "errors": []
+      },
+      "random": {
+        "requested": 100,
+        "matchedUsers": 100,
+        "usersWithRepeatedMatches": 4,
+        "asymmetricPartners": 96,
+        "queueLength": 0,
+        "latencyMs": {
+          "count": 100,
+          "p50": 380,
+          "p95": 393,
+          "p99": 394,
+          "max": 394
+        },
+        "remainingConnections": 100
+      },
+      "calls": {
+        "requestedPairs": 50,
+        "acceptedPairs": 50,
+        "connectedPairsAtEnd": 50,
+        "acceptedLatencyMs": {
+          "count": 50,
+          "p50": 66.65,
+          "p95": 74.61,
+          "p99": 175.49,
+          "max": 175.49
+        },
+        "heartbeatHoldMs": 10000,
+        "errors": [],
+        "media": "not generated; signaling only"
+      },
+      "phases": [
+        {
+          "name": "seed-and-indexes",
+          "ok": true,
+          "ms": 615,
+          "users": 100,
+          "friendships": 50,
+          "historyMessages": 5000,
+          "indexes": {
+            "friendshipmessageitems": [
+              {
+                "v": 2,
+                "key": {
+                  "_id": 1
+                },
+                "name": "_id_"
+              },
+              {
+                "v": 2,
+                "key": {
+                  "friendshipId": 1,
+                  "timestamp": -1
+                },
+                "name": "friendshipId_1_timestamp_-1",
+                "background": true
+              },
+              {
+                "v": 2,
+                "key": {
+                  "friendshipId": 1,
+                  "timestamp": -1,
+                  "id": -1
+                },
+                "name": "friendshipId_1_timestamp_-1_id_-1",
+                "background": true
+              }
+            ],
+            "offlinemessages": [
+              {
+                "v": 2,
+                "key": {
+                  "_id": 1
+                },
+                "name": "_id_"
+              },
+              {
+                "v": 2,
+                "key": {
+                  "recipientId": 1
+                },
+                "name": "recipientId_1",
+                "background": true
+              },
+              {
+                "v": 2,
+                "key": {
+                  "senderId": 1
+                },
+                "name": "senderId_1",
+                "background": true
+              }
+            ],
+            "friendship_edges": [
+              {
+                "v": 2,
+                "key": {
+                  "_id": 1
+                },
+                "name": "_id_"
+              },
+              {
+                "v": 2,
+                "key": {
+                  "userId": 1,
+                  "friendId": 1
+                },
+                "name": "userId_1_friendId_1",
+                "background": true,
+                "unique": true
+              },
+              {
+                "v": 2,
+                "key": {
+                  "userId": 1,
+                  "createdAt": 1,
+                  "_id": 1
+                },
+                "name": "userId_1_createdAt_1__id_1",
+                "background": true
+              }
+            ],
+            "installs": [
+              {
+                "v": 2,
+                "key": {
+                  "_id": 1
+                },
+                "name": "_id_"
+              },
+              {
+                "v": 2,
+                "key": {
+                  "installId": 1
+                },
+                "name": "installId_1",
+                "background": true,
+                "unique": true
+              }
+            ]
+          }
+        },
+        {
+          "name": "connect-and-authenticate",
+          "ok": true,
+          "ms": 476,
+          "connected": 100,
+          "authenticated": 100,
+          "errors": [],
+          "latencyMs": {
+            "count": 100,
+            "p50": 192.92,
+            "p95": 257.71,
+            "p99": 265.28,
+            "max": 265.28
+          }
+        },
+        {
+          "name": "active-chat-messages",
+          "ok": true,
+          "ms": 666,
+          "ackLatencyMs": {
+            "count": 100,
+            "p50": 516.54,
+            "p95": 660.5,
+            "p99": 660.73,
+            "max": 660.73
+          },
+          "acknowledged": 100,
+          "persisted": 100,
+          "missingLiveDeliveries": 0,
+          "duplicateLiveIds": 0,
+          "remainingConnections": 100,
+          "errors": []
+        },
+        {
+          "name": "retries-socket-and-http",
+          "ok": true,
+          "ms": 160,
+          "retries": 100,
+          "persisted": 100,
+          "duplicateLiveIds": 0
+        },
+        {
+          "name": "bounded-history-and-query-plan",
+          "ok": true,
+          "ms": 190,
+          "requests": 100,
+          "cap": 200,
+          "executionStats": {
+            "executionSuccess": true,
+            "nReturned": 51,
+            "executionTimeMillis": 0,
+            "totalKeysExamined": 51,
+            "totalDocsExamined": 51,
+            "executionStages": {
+              "stage": "LIMIT",
+              "nReturned": 51,
+              "executionTimeMillisEstimate": 0,
+              "works": 52,
+              "advanced": 51,
+              "needTime": 0,
+              "needYield": 0,
+              "saveState": 0,
+              "restoreState": 0,
+              "isEOF": 1,
+              "limitAmount": 51,
+              "inputStage": {
+                "stage": "FETCH",
+                "nReturned": 51,
+                "executionTimeMillisEstimate": 0,
+                "works": 51,
+                "advanced": 51,
+                "needTime": 0,
+                "needYield": 0,
+                "saveState": 0,
+                "restoreState": 0,
+                "isEOF": 0,
+                "docsExamined": 51,
+                "alreadyHasObj": 0,
+                "inputStage": {
+                  "stage": "IXSCAN",
+                  "nReturned": 51,
+                  "executionTimeMillisEstimate": 0,
+                  "works": 51,
+                  "advanced": 51,
+                  "needTime": 0,
+                  "needYield": 0,
+                  "saveState": 0,
+                  "restoreState": 0,
+                  "isEOF": 0,
+                  "keyPattern": {
+                    "friendshipId": 1,
+                    "timestamp": -1,
+                    "id": -1
+                  },
+                  "indexName": "friendshipId_1_timestamp_-1_id_-1",
+                  "isMultiKey": false,
+                  "multiKeyPaths": {
+                    "friendshipId": [],
+                    "timestamp": [],
+                    "id": []
+                  },
+                  "isUnique": false,
+                  "isSparse": false,
+                  "isPartial": false,
+                  "indexVersion": 2,
+                  "direction": "forward",
+                  "indexBounds": {
+                    "friendshipId": [
+                      "[ObjectId('6ae8ef27568a40edb8f95fb1'), ObjectId('6ae8ef27568a40edb8f95fb1')]"
+                    ],
+                    "timestamp": [
+                      "[MaxKey, MinKey]"
+                    ],
+                    "id": [
+                      "[MaxKey, MinKey]"
+                    ]
+                  },
+                  "keysExamined": 51,
+                  "seeks": 1,
+                  "dupsTested": 0,
+                  "dupsDropped": 0
+                }
+              }
+            }
+          },
+          "queryPlan": {
+            "stage": "LIMIT",
+            "limitAmount": 51,
+            "inputStage": {
+              "stage": "FETCH",
+              "inputStage": {
+                "stage": "IXSCAN",
+                "keyPattern": {
+                  "friendshipId": 1,
+                  "timestamp": -1,
+                  "id": -1
+                },
+                "indexName": "friendshipId_1_timestamp_-1_id_-1",
+                "isMultiKey": false,
+                "multiKeyPaths": {
+                  "friendshipId": [],
+                  "timestamp": [],
+                  "id": []
+                },
+                "isUnique": false,
+                "isSparse": false,
+                "isPartial": false,
+                "indexVersion": 2,
+                "direction": "forward",
+                "indexBounds": {
+                  "friendshipId": [
+                    "[ObjectId('6ae8ef27568a40edb8f95fb1'), ObjectId('6ae8ef27568a40edb8f95fb1')]"
+                  ],
+                  "timestamp": [
+                    "[MaxKey, MinKey]"
+                  ],
+                  "id": [
+                    "[MaxKey, MinKey]"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "offline-and-reconnect",
+          "ok": true,
+          "ms": 656,
+          "delivered": 1,
+          "persisted": 1
+        },
+        {
+          "name": "direct-call-signaling-and-heartbeats",
+          "ok": true,
+          "ms": 11318,
+          "requestedPairs": 50,
+          "acceptedPairs": 50,
+          "connectedPairsAtEnd": 50,
+          "acceptedLatencyMs": {
+            "count": 50,
+            "p50": 66.65,
+            "p95": 74.61,
+            "p99": 175.49,
+            "max": 175.49
+          },
+          "heartbeatHoldMs": 10000,
+          "errors": [],
+          "media": "not generated; signaling only"
+        },
+        {
+          "name": "random-match-concurrency",
+          "ok": false,
+          "ms": 1417,
+          "error": "{\"requested\":100,\"matchedUsers\":100,\"usersWithRepeatedMatches\":4,\"asymmetricPartners\":96,\"queueLength\":0,\"latencyMs\":{\"count\":100,\"p50\":380,\"p95\":393,\"p99\":394,\"max\":394},\"remainingConnections\":100}"
+        },
+        {
+          "name": "request-boundaries",
+          "ok": true,
+          "ms": 2,
+          "textTooLong": "text_too_long",
+          "unauthenticated": "unauthorized"
+        },
+        {
+          "name": "offline-backlog-acknowledgements",
+          "ok": true,
+          "ms": 6479,
+          "backlog": 1000,
+          "deliveredAndAcknowledged": 1000,
+          "duplicateIds": 0,
+          "drainMs": 5954.98,
+          "claimPlan": {
+            "stage": "SORT",
+            "sortPattern": {
+              "createdAt": 1,
+              "_id": 1
+            },
+            "memLimit": 104857600,
+            "limitAmount": 1,
+            "type": "simple",
+            "inputStage": {
+              "stage": "FETCH",
+              "filter": {
+                "$or": [
+                  {
+                    "claimedUntil": {
+                      "$eq": null
+                    }
+                  },
+                  {
+                    "claimedUntil": {
+                      "$lte": "2026-11-02T20:14:53.740Z"
+                    }
+                  }
+                ]
+              },
+              "inputStage": {
+                "stage": "IXSCAN",
+                "keyPattern": {
+                  "recipientId": 1,
+                  "createdAt": -1
+                },
+                "indexName": "recipientId_1_createdAt_-1",
+                "isMultiKey": false,
+                "multiKeyPaths": {
+                  "recipientId": [],
+                  "createdAt": []
+                },
+                "isUnique": false,
+                "isSparse": false,
+                "isPartial": false,
+                "indexVersion": 2,
+                "direction": "forward",
+                "indexBounds": {
+                  "recipientId": [
+                    "[ObjectId('6ae8ef26568a40edb8f95e86'), ObjectId('6ae8ef26568a40edb8f95e86')]"
+                  ],
+                  "createdAt": [
+                    "[new Date(1793650493740), new Date(-9223372036854775808)]"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "redis-noeviction-overflow-and-recovery",
+          "ok": true,
+          "ms": 3,
+          "rejectedWithoutEviction": true,
+          "recovered": true,
+          "scope": "isolated Redis memory pressure; not client outbox admission control"
+        }
+      ]
+    },
+    "1000_users": {
+      "connection": {
+        "connected": 1000,
+        "authenticated": 1000,
+        "errors": [],
+        "latencyMs": {
+          "count": 1000,
+          "p50": 104.18,
+          "p95": 143.56,
+          "p99": 154.28,
+          "max": 189
+        }
+      },
+      "chat": {
+        "ackLatencyMs": {
+          "count": 1000,
+          "p50": 246.45,
+          "p95": 885.09,
+          "p99": 916.46,
+          "max": 940.08
+        },
+        "acknowledged": 1000,
+        "persisted": 1000,
+        "missingLiveDeliveries": 0,
+        "duplicateLiveIds": 0,
+        "errors": []
+      },
+      "random": {
+        "requested": 1000,
+        "matchedUsers": 1000,
+        "usersWithRepeatedMatches": 38,
+        "asymmetricPartners": 938,
+        "queueLength": 0,
+        "latencyMs": {
+          "count": 1000,
+          "p50": 3406,
+          "p95": 3515,
+          "p99": 3631,
+          "max": 3633
+        },
+        "remainingConnections": 1000
+      }
+    },
+    "5000_random": {
+      "connection": {
+        "connected": 5000,
+        "authenticated": 5000,
+        "errors": [],
+        "latencyMs": {
+          "count": 5000,
+          "p50": 80.45,
+          "p95": 105.73,
+          "p99": 132.54,
+          "max": 158.71
+        }
+      },
+      "random": {
+        "requested": 5000,
+        "matchedUsers": 852,
+        "usersWithRepeatedMatches": 32,
+        "asymmetricPartners": 822,
+        "queueLength": 0,
+        "latencyMs": {
+          "count": 852,
+          "p50": 26941,
+          "p95": 37344,
+          "p99": 37670,
+          "max": 37710
+        },
+        "remainingConnections": 1786
+      }
+    },
+    "5000_call_signaling": {
+      "connection": {
+        "connected": 5000,
+        "authenticated": 5000,
+        "errors": [],
+        "latencyMs": {
+          "count": 5000,
+          "p50": 79.73,
+          "p95": 109.1,
+          "p99": 126.71,
+          "max": 167.87
+        }
+      },
+      "requestedPairs": 2500,
+      "acceptedPairs": 2365,
+      "allPairsRetained": false,
+      "acceptedLatencyMs": {
+        "count": 2365,
+        "p50": 75.92,
+        "p95": 111.72,
+        "p99": 214.16,
+        "max": 228.51
+      },
+      "errors": [
+        {
+          "error": "socket has been disconnected"
+        },
+        {
+          "error": "socket has been disconnected"
+        },
+        {
+          "error": "socket has been disconnected"
+        },
+        {
+          "error": "socket has been disconnected"
+        },
+        {
+          "error": "socket has been disconnected"
+        },
+        {
+          "error": "socket has been disconnected"
+        },
+        {
+          "error": "socket has been disconnected"
+        },
+        {
+          "error": "socket has been disconnected"
+        },
+        {
+          "error": "socket has been disconnected"
+        },
+        {
+          "error": "socket has been disconnected"
+        }
+      ],
+      "note": "Raw legacy field concurrentCalls counted accepted pairs; it did not prove simultaneous media calls. Final harness now reports acceptedPairs and checks connectedPairsAtEnd."
+    },
+    "5000_chat": {
+      "connection": {
+        "connected": 5000,
+        "authenticated": 5000,
+        "errors": [],
+        "latencyMs": {
+          "count": 5000,
+          "p50": 101.46,
+          "p95": 157.35,
+          "p99": 179.08,
+          "max": 198.68
+        }
+      },
+      "chat": {
+        "ackLatencyMs": {
+          "count": 389,
+          "p50": 1252.67,
+          "p95": 5371.46,
+          "p99": 6050.84,
+          "max": 22958.74
+        },
+        "acknowledged": 389,
+        "persisted": 550,
+        "missingLiveDeliveries": 4611,
+        "duplicateLiveIds": 0,
+        "errors": [
+          {
+            "error": "socket has been disconnected"
+          },
+          {
+            "error": "socket has been disconnected"
+          },
+          {
+            "error": "socket has been disconnected"
+          },
+          {
+            "error": "socket has been disconnected"
+          },
+          {
+            "error": "socket has been disconnected"
+          },
+          {
+            "error": "socket has been disconnected"
+          },
+          {
+            "error": "socket has been disconnected"
+          },
+          {
+            "error": "socket has been disconnected"
+          },
+          {
+            "error": "socket has been disconnected"
+          },
+          {
+            "error": "socket has been disconnected"
+          }
+        ]
+      },
+      "interrupted": "SIGTERM",
+      "note": "Failed phase includes timeouts/disconnects. Writes continued after sampling; these numbers do not establish permanent message loss."
+    },
+    "welcome_snapshot": {
+      "onlineUsers": 5000,
+      "oneSnapshotBytes": 290020,
+      "broadcastRecipients": 5000,
+      "totalPayloadBytes": 1450100000,
+      "totalPayloadGiB": 1.351,
+      "measurement": "actual snapshot builder with empty nicknames; aggregate fanout calculated, no network traffic generated"
+    }
+  },
+  "findings": [
+    {
+      "severity": "critical",
+      "kind": "reproduced correctness defect",
+      "source": "backend/sockets/match.ts:442",
+      "finding": "Candidate selection and removal are separated by awaits; candidate is not atomically reserved or revalidated before partner fields are overwritten. Repeated match_found and asymmetric partners reproduced at 100, 1000 and 5000 clients."
+    },
+    {
+      "severity": "high",
+      "kind": "measured object size; calculated fanout",
+      "source": "backend/utils/welcomeOnlinePresence.ts:74",
+      "finding": "Full online snapshot broadcast to all clients. At 5000 users, empty-name snapshot is 290020 bytes; aggregate payload before compression is 1450100000 bytes per broadcast. Wire bandwidth and its exact causal contribution to disconnects were not measured."
+    },
+    {
+      "severity": "medium",
+      "kind": "observed local explain plan",
+      "source": "backend/models/OfflineMessage.ts:102",
+      "finding": "Claim sort uses createdAt,_id; current recipientId,createdAt index leaves a blocking SORT. Actual production index inventory not queried."
+    },
+    {
+      "severity": "medium",
+      "kind": "code inspection; backlog test passed at 1000 records",
+      "source": "backend/sockets/messagesReliable.ts:692",
+      "finding": "Claims entire recipient backlog into memory with serial DB operations before delivery; no batch or in-flight acknowledgement bound."
+    },
+    {
+      "severity": "medium",
+      "kind": "code inspection",
+      "source": "frontend/sockets/modules/outbox.ts:353",
+      "finding": "Durable outbox rewrites one JSON array and has no count/byte admission bound. A safe overflow policy must preserve pending user messages."
+    },
+    {
+      "severity": "medium",
+      "kind": "code inspection",
+      "source": "backend/index.ts:264",
+      "finding": "Global JSON and urlencoded body limits are 50MB before route authentication; message text limits do not prevent large-body parsing cost."
+    },
+    {
+      "severity": "high",
+      "kind": "architectural limitation",
+      "source": "backend/sockets/match.ts:43",
+      "finding": "Random matchmaking, reservation guard and reconnect-held pairs are process-local and safeGet reads local sockets. Redis adapter alone does not make matching multi-instance."
+    }
+  ],
+  "deviceChecks": {
+    "devices": [
+      "Samsung A35 RFCX306PWLE",
+      "Pixel_10_Pro emulator"
+    ],
+    "message": {
+      "text": "recovery-20261102-offline1",
+      "sameId": "1793649610211-5cti5dx",
+      "sentWithoutNetwork": true,
+      "persistedBeforeProcessStop": true,
+      "persistedAfterColdStartWithoutNetwork": true,
+      "senderCopiesAfterRecovery": 1,
+      "receiverCopiesAfterRecoveryAndAnotherReconnect": 1,
+      "pendingOutboxAfterRecovery": 0,
+      "receiverUIAssertPassed": true
+    },
+    "call": {
+      "networkInterruptionSeconds": 7,
+      "A35ScreenStateDuringInterruption": "Dozing",
+      "sameCallIdBeforeAfter": true,
+      "roomStateAfterRecoveryBoth": "connected",
+      "remoteParticipantsAfterRecoveryBoth": 1,
+      "audioModeAfterHangupBoth": "MODE_NORMAL",
+      "actualAudibilityVerified": false
+    },
+    "originalWifiMobileAirplaneSettingsRestoredBoth": true,
+    "limitations": [
+      "No controlled VPN on/off matrix",
+      "No full 5-minute screen-off/media recovery matrix in this audit",
+      "Emulator host process crashed during competing load runs; eventual low-load device checks completed",
+      "No 2500 simultaneous real audio/video calls generated"
+    ]
+  },
+  "validation": {
+    "backendSuites": 21,
+    "backendTestsPassed": 246,
+    "typecheck": "passed frontend and backend",
+    "lint": "passed",
+    "diffCheck": "passed",
+    "loadHarnessFailures": "Preserved as nonzero exit results, not treated as passing tests"
+  },
+  "rawReports": {
+    "8nTsJ4": "/var/folders/96/2cpj42y56cl6_7y_t0s26jcm0000gn/T/livi-capacity-8nTsJ4/report.json",
+    "bjyocn": "/var/folders/96/2cpj42y56cl6_7y_t0s26jcm0000gn/T/livi-capacity-bjyocn/report.json",
+    "13LO2o": "/var/folders/96/2cpj42y56cl6_7y_t0s26jcm0000gn/T/livi-capacity-13LO2o/report.json",
+    "I2RdNE": "/var/folders/96/2cpj42y56cl6_7y_t0s26jcm0000gn/T/livi-capacity-I2RdNE/report.json",
+    "TxhZiU": "/var/folders/96/2cpj42y56cl6_7y_t0s26jcm0000gn/T/livi-capacity-TxhZiU/report.json"
+  },
+  "environmentChanges": {
+    "redisInstalled": "8.10.3; not enabled as an OS service",
+    "unexpectedBrewAutocleanup": "Removed packages were reinstalled. Homebrew package versions changed; global Homebrew Node restored to major 24 (24.22.1). Project NVM Node remains 20.19.4.",
+    "restoredPackages": [
+      "brotli",
+      "c-ares",
+      "libnghttp2",
+      "libnghttp3",
+      "libngtcp2",
+      "libuv",
+      "mongosh",
+      "node",
+      "simdjson"
+    ],
+    "dependencyUpdates": "Homebrew also updated ca-certificates, OpenSSL and dependencies of reinstalled packages. Original exact package versions were not restored; project NVM Node remained unchanged."
+  },
+  "productionApplicationCodeChangedInThisAudit": false,
+  "nextPriorities": [
+    "Fix and regression-test atomic random partner reservation",
+    "Bound welcome online list and avoid broadcasting full snapshots to every socket",
+    "Batch offline delivery and add matching indexes; define queue overload admission without dropping user messages",
+    "Repeat target workload on representative separate generator/backend/database/SFU/TURN infrastructure"
+  ],
+  "localResourceObservations": {
+    "8nTsJ4": {
+      "samplingIntervalMs": 2000,
+      "processes": [
+        {
+          "role": "generator",
+          "pid": 32918,
+          "maxSampledCpuPercent": 14,
+          "maxSampledRssMiB": 124.61
+        },
+        {
+          "role": "mongo",
+          "pid": 32925,
+          "maxSampledCpuPercent": 53.8,
+          "maxSampledRssMiB": 160.97
+        },
+        {
+          "role": "backend",
+          "pid": 32947,
+          "maxSampledCpuPercent": 110.4,
+          "maxSampledRssMiB": 255.62
+        }
+      ],
+      "healthP95Ms": 77,
+      "failedHealthSamples": 0,
+      "mongoFinal": {
+        "connections": {
+          "current": 56,
+          "available": 838804,
+          "totalCreated": 71,
+          "rejected": 0,
+          "active": 3,
+          "queuedForEstablishment": 0,
+          "establishmentRateLimit": {
+            "rejected": 0,
+            "exempted": 0,
+            "interruptedDueToClientDisconnect": 0
+          },
+          "threaded": 56,
+          "exhaustIsMaster": 0,
+          "exhaustHello": 2,
+          "awaitingTopologyChanges": 2
+        },
+        "opcounters": {
+          "insert": 6454,
+          "query": 4283,
+          "update": 3417,
+          "delete": 1001,
+          "getmore": 100,
+          "command": 1418
+        },
+        "memory": {
+          "bits": 64,
+          "resident": 161,
+          "virtual": 454434,
+          "supported": true
+        },
+        "wiredTigerCache": {
+          "bytes": 13152603,
+          "maximum": 268435456
+        }
+      },
+      "redisMemoryFinal": [
+        "used_memory:1632800",
+        "used_memory_peak:1703200",
+        "maxmemory:134217728",
+        "maxmemory_policy:noeviction"
+      ],
+      "note": "Sampled peaks can miss transient peaks; generator and services share the same host."
+    },
+    "bjyocn": {
+      "samplingIntervalMs": 2000,
+      "processes": [
+        {
+          "role": "mongo",
+          "pid": 22025,
+          "maxSampledCpuPercent": 123.9,
+          "maxSampledRssMiB": 166.61
+        },
+        {
+          "role": "backend",
+          "pid": 22055,
+          "maxSampledCpuPercent": 138.9,
+          "maxSampledRssMiB": 500.59
+        }
+      ],
+      "healthP95Ms": 43,
+      "failedHealthSamples": 0,
+      "mongoFinal": {
+        "connections": {
+          "current": 56,
+          "available": 838804,
+          "totalCreated": 68,
+          "rejected": 0,
+          "active": 4,
+          "queuedForEstablishment": 0,
+          "establishmentRateLimit": {
+            "rejected": 0,
+            "exempted": 0,
+            "interruptedDueToClientDisconnect": 0
+          },
+          "threaded": 56,
+          "exhaustIsMaster": 0,
+          "exhaustHello": 2,
+          "awaitingTopologyChanges": 2
+        },
+        "opcounters": {
+          "insert": 4504,
+          "query": 33140,
+          "update": 22653,
+          "delete": 1,
+          "getmore": 13,
+          "command": 2199
+        },
+        "memory": {
+          "bits": 64,
+          "resident": 171,
+          "virtual": 454436,
+          "supported": true
+        },
+        "wiredTigerCache": {
+          "bytes": 16582361,
+          "maximum": 268435456
+        }
+      },
+      "redisMemoryFinal": [
+        "used_memory:2688704",
+        "used_memory_peak:2798320",
+        "maxmemory:134217728",
+        "maxmemory_policy:noeviction"
+      ],
+      "note": "Sampled peaks can miss transient peaks; generator and services share the same host."
+    },
+    "13LO2o": {
+      "samplingIntervalMs": 2000,
+      "processes": [
+        {
+          "role": "generator",
+          "pid": 31906,
+          "maxSampledCpuPercent": 152.8,
+          "maxSampledRssMiB": 1472.7
+        },
+        {
+          "role": "mongo",
+          "pid": 31915,
+          "maxSampledCpuPercent": 149.9,
+          "maxSampledRssMiB": 400.28
+        },
+        {
+          "role": "backend",
+          "pid": 31926,
+          "maxSampledCpuPercent": 154.9,
+          "maxSampledRssMiB": 1368.16
+        }
+      ],
+      "healthP95Ms": 533,
+      "failedHealthSamples": 3,
+      "mongoFinal": {
+        "connections": {
+          "current": 56,
+          "available": 838804,
+          "totalCreated": 119,
+          "rejected": 0,
+          "active": 7,
+          "queuedForEstablishment": 0,
+          "establishmentRateLimit": {
+            "rejected": 0,
+            "exempted": 0,
+            "interruptedDueToClientDisconnect": 0
+          },
+          "threaded": 56,
+          "exhaustIsMaster": 0,
+          "exhaustHello": 2,
+          "awaitingTopologyChanges": 2
+        },
+        "opcounters": {
+          "insert": 267502,
+          "query": 99821,
+          "update": 37815,
+          "delete": 0,
+          "getmore": 47,
+          "command": 10275
+        },
+        "memory": {
+          "bits": 64,
+          "resident": 408,
+          "virtual": 454487,
+          "supported": true
+        },
+        "wiredTigerCache": {
+          "bytes": 178812378,
+          "maximum": 268435456
+        }
+      },
+      "redisMemoryFinal": [
+        "used_memory:1827872",
+        "used_memory_peak:3461904",
+        "maxmemory:134217728",
+        "maxmemory_policy:noeviction"
+      ],
+      "note": "Sampled peaks can miss transient peaks; generator and services share the same host."
+    },
+    "I2RdNE": {
+      "samplingIntervalMs": 2000,
+      "processes": [
+        {
+          "role": "generator",
+          "pid": 32258,
+          "maxSampledCpuPercent": 174.2,
+          "maxSampledRssMiB": 747.52
+        },
+        {
+          "role": "mongo",
+          "pid": 32265,
+          "maxSampledCpuPercent": 175.4,
+          "maxSampledRssMiB": 357.42
+        },
+        {
+          "role": "backend",
+          "pid": 32307,
+          "maxSampledCpuPercent": 159.2,
+          "maxSampledRssMiB": 790.34
+        }
+      ],
+      "healthP95Ms": 233,
+      "failedHealthSamples": 7,
+      "mongoFinal": {
+        "connections": {
+          "current": 59,
+          "available": 838801,
+          "totalCreated": 122,
+          "rejected": 0,
+          "active": 3,
+          "queuedForEstablishment": 0,
+          "establishmentRateLimit": {
+            "rejected": 0,
+            "exempted": 0,
+            "interruptedDueToClientDisconnect": 0
+          },
+          "threaded": 59,
+          "exhaustIsMaster": 0,
+          "exhaustHello": 2,
+          "awaitingTopologyChanges": 2
+        },
+        "opcounters": {
+          "insert": 267502,
+          "query": 63796,
+          "update": 60720,
+          "delete": 0,
+          "getmore": 65,
+          "command": 10264
+        },
+        "memory": {
+          "bits": 64,
+          "resident": 358,
+          "virtual": 454472,
+          "supported": true
+        },
+        "wiredTigerCache": {
+          "bytes": 166340391,
+          "maximum": 268435456
+        }
+      },
+      "redisMemoryFinal": [
+        "used_memory:1340816",
+        "used_memory_peak:3894528",
+        "maxmemory:134217728",
+        "maxmemory_policy:noeviction"
+      ],
+      "note": "Sampled peaks can miss transient peaks; generator and services share the same host."
+    },
+    "TxhZiU": {
+      "samplingIntervalMs": 2000,
+      "processes": [
+        {
+          "role": "mongo",
+          "pid": 29089,
+          "maxSampledCpuPercent": 136,
+          "maxSampledRssMiB": 365.61
+        },
+        {
+          "role": "backend",
+          "pid": 29125,
+          "maxSampledCpuPercent": 170.2,
+          "maxSampledRssMiB": 633.81
+        }
+      ],
+      "healthP95Ms": 75,
+      "failedHealthSamples": 0,
+      "mongoFinal": null,
+      "redisMemoryFinal": null,
+      "note": "Sampled peaks can miss transient peaks; generator and services share the same host."
+    }
+  }
+}

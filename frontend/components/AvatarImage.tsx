@@ -6,6 +6,7 @@ import Svg, { Circle, Defs, LinearGradient as SvgLinearGradient, Stop } from 're
 import { useResolvedImageUri } from '../hooks/useResolvedImageUri';
 import { getAvatarImageProps } from '../utils/imageOptimization';
 import { getAvatarUri } from '../utils/avatarCache';
+import { getCosmeticFrame } from '../utils/cosmeticCatalog';
 import { useUserActiveFrame } from '../utils/cosmetics';
 import { logger } from '../utils/logger';
 import { FireAvatarFrame, fireFrameOutset } from './frames/FireAvatarFrame';
@@ -88,17 +89,6 @@ export function activeFrameOutset(avatarSize: number, frameId?: string | null): 
     ? fireFrameOutset(avatarSize)
     : activeFrameRingWidth(avatarSize);
 }
-const FRAME_COLORS: Record<string, readonly [string, string, ...string[]]> = {
-  fire: ['#FFC062', '#FF8A34', '#FF4D1C'],
-  diamond: ['#E8F6FF', '#9ED0FF', '#6AA9FF'],
-  aurora: ['#7CF5C8', '#5AA9FF', '#3B82F6'],
-  palladium: ['#F2F4F7', '#C5CCD6', '#8B93A0'],
-  frost: ['#D9F4FF', '#7EC8E8', '#4A9BC7'],
-  jade: ['#B8F0D0', '#3DCF8E', '#1B8F5A'],
-  void: ['#D4B5FF', '#7B5CFF', '#2A1B4A'],
-  obsidian: ['#6B7280', '#374151', '#111827'],
-};
-
 /** Что аватар показывает прямо сейчас. */
 export type AvatarDisplay =
   | { kind: 'image'; uri: string }
@@ -271,7 +261,7 @@ const AvatarImage = memo<AvatarImageProps>(({
     );
   }, [displayUri, onDisplayChange, showFallbackLetter]);
 
-  const frameColors = FRAME_COLORS[activeFrameId];
+  const frameColors = getCosmeticFrame(activeFrameId)?.colors;
   const hasActiveFrame = !!frameColors;
   const isFireFrame = activeFrameId === 'fire';
   const isIceFrame = activeFrameId === 'frost';

@@ -1,6 +1,7 @@
 import type { E2eEnvelope } from './e2eCrypto';
 import type { MessageMutationResponse, MessageOutboxItem } from './outboxTypes';
 import type { ChatMessage } from '../../screens/chat/chatMessageTypes';
+import { OutboxFullError } from './outboxCapacity';
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { getInstallAuthHeaders } from "../../utils/installId";
 import { logger } from "../../utils/logger";
@@ -175,6 +176,9 @@ export function sendMessage(payload: {
         wait.cancel();
         return { ok: true, localCancelled: true, delivered: false };
       }
+    } catch (error) {
+      wait.cancel();
+      return { ok: false, error: error instanceof OutboxFullError ? 'outbox_full' : 'outbox_storage_failed' };
     } finally {
       markMessagePendingInOutbox(clientId, false);
     }

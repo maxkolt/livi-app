@@ -25,7 +25,7 @@ const getSocket = (): Socket => {
       path: "/socket.io",
       // Capabilities для сервера. offline_ack: подтверждаем офлайн-очередь после записи в хранилище,
       // и сервер удаляет запись только по ack (иначе дошлёт при следующем подключении).
-      query: { caps: "offline_ack,missed_calls_ack" },
+      query: { caps: "offline_ack,missed_calls_ack,welcome_delta" },
       // Mobile VPN often breaks XHR long-polling while WebSocket still works (and is faster).
       // Corporate/captive portals may block WS — tryAllTransports still falls back to polling.
       transports: ["websocket", "polling"],

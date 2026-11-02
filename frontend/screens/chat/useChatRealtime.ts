@@ -1,3 +1,4 @@
+import type { ChatSessionState } from './useChatSessionState';
 import type { ChatMessage } from './chatMessageTypes';
 /** Realtime socket listeners for an open chat. */
 
@@ -32,42 +33,28 @@ type ReadStatusMap = Record<string, "sending" | "delivered" | "read" | "failed" 
 const STATUS_RANK: Record<string, number> = { failed: 0, sending: 1, sent: 2, delivered: 3, read: 4 };
 
 type Options = {
-  peerId: string;
-  currentUserId: string | null;
-  setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>;
-  setUploadStatus: React.Dispatch<React.SetStateAction<Record<string, "sending" | "sent" | "failed">>>;
+  session: ChatSessionState;
   setSelectedMessageIds: React.Dispatch<React.SetStateAction<Set<string>>>;
-  updateReadStatuses: (updater: (prev: ReadStatusMap) => ReadStatusMap) => void;
   resolveMediaUri: (uri?: string) => string;
   scrollToBottom: () => void;
-  latestMessagesForPersistRef: React.MutableRefObject<ChatMessage[]>;
   isFocusedRef: React.MutableRefObject<boolean>;
-  readReceiptSentIdsRef: React.MutableRefObject<Set<string>>;
-  deletedServerMessageIdsRef: React.MutableRefObject<Set<string>>;
-  outboxLocalIdToServerIdRef: React.MutableRefObject<Map<string, string>>;
-  rememberDeletedServerMessageId: (id: string) => void;
-  rememberOutboxLocalToServerId: (localId: string, serverId: string) => void;
   enqueueMessagesPersist: (reason: string) => void;
 };
 
-export function useChatRealtime({
-  peerId,
-  currentUserId,
-  setMessages,
-  setUploadStatus,
-  setSelectedMessageIds,
-  updateReadStatuses,
-  resolveMediaUri,
-  scrollToBottom,
-  latestMessagesForPersistRef,
-  isFocusedRef,
-  readReceiptSentIdsRef,
-  deletedServerMessageIdsRef,
-  outboxLocalIdToServerIdRef,
-  rememberDeletedServerMessageId,
-  rememberOutboxLocalToServerId,
-  enqueueMessagesPersist,
-}: Options) {
+export function useChatRealtime({ session, setSelectedMessageIds, resolveMediaUri, scrollToBottom, isFocusedRef, enqueueMessagesPersist }: Options) {
+  const {
+    peerId,
+    currentUserId,
+    setMessages,
+    setUploadStatus,
+    updateReadStatuses,
+    latestMessagesForPersistRef,
+    readReceiptSentIdsRef,
+    deletedServerMessageIdsRef,
+    outboxLocalIdToServerIdRef,
+    rememberDeletedServerMessageId,
+    rememberOutboxLocalToServerId,
+  } = session;
   React.useEffect(() => {
     if (!currentUserId) return;
 

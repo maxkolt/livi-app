@@ -1,4 +1,4 @@
-import type { ChatMessage } from './chatMessageTypes';
+import type { ChatSessionState } from './useChatSessionState';
 /** History load + quiet sync + reconnect merge for ChatScreen. */
 
 import React from "react";
@@ -30,61 +30,37 @@ import { mergePendingOutboxIntoMessages } from "./outboxPendingRows";
 /** Повторы синхронизации открытого чата после переподключения сокета. */
 const RECONNECT_SYNC_DELAYS_MS = [650, 2500, 6000];
 
-type ReadStatusMap = Record<string, "sending" | "delivered" | "read" | "failed" | "sent">;
-
 type Options = {
-  peerId: string;
-  currentUserId: string | null;
-  setCurrentUserId: React.Dispatch<React.SetStateAction<string | null>>;
-  messages: ChatMessage[];
-  setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>;
-  messagesRef: React.MutableRefObject<ChatMessage[]>;
-  historyReady: boolean;
-  setHistoryReady: React.Dispatch<React.SetStateAction<boolean>>;
-  setChatImagesWarm: React.Dispatch<React.SetStateAction<boolean>>;
-  setReadStatuses: React.Dispatch<React.SetStateAction<ReadStatusMap>>;
-  updateReadStatuses: (updater: (prev: ReadStatusMap) => ReadStatusMap) => void;
-  loadStatuses: () => Promise<ReadStatusMap>;
-  loadHiddenForMeMessageIds: (uid: string, pid: string) => Promise<Set<string>>;
-  hiddenForMeMessageIdsRef: React.MutableRefObject<Set<string>>;
-  deletedServerMessageIdsRef: React.MutableRefObject<Set<string>>;
-  uploadStatusRef: React.MutableRefObject<Record<string, string | undefined>>;
-  readStatusesRef: React.MutableRefObject<ReadStatusMap>;
+  session: ChatSessionState;
   isFocusedRef: React.MutableRefObject<boolean>;
   enqueueMessagesPersist: (reason: string) => void;
-  currentUserIdForPersistRef: React.MutableRefObject<string | null>;
-  peerIdForPersistRef: React.MutableRefObject<string>;
-  latestMessagesForPersistRef: React.MutableRefObject<ChatMessage[]>;
   navigation: { addListener?: (event: "focus", listener: () => void) => () => void };
   resolveMediaUri: (uri?: string) => string;
 };
 
-export function useChatHistorySync({
-  peerId,
-  currentUserId,
-  setCurrentUserId,
-  messages,
-  setMessages,
-  messagesRef,
-  historyReady,
-  setHistoryReady,
-  setChatImagesWarm,
-  setReadStatuses,
-  updateReadStatuses,
-  loadStatuses,
-  loadHiddenForMeMessageIds,
-  hiddenForMeMessageIdsRef,
-  deletedServerMessageIdsRef,
-  uploadStatusRef,
-  readStatusesRef,
-  isFocusedRef,
-  enqueueMessagesPersist,
-  currentUserIdForPersistRef,
-  peerIdForPersistRef,
-  latestMessagesForPersistRef,
-  navigation,
-  resolveMediaUri,
-}: Options) {
+export function useChatHistorySync({ session, isFocusedRef, enqueueMessagesPersist, navigation, resolveMediaUri }: Options) {
+  const {
+    peerId,
+    currentUserId,
+    setCurrentUserId,
+    messages,
+    setMessages,
+    messagesRef,
+    historyReady,
+    setHistoryReady,
+    setChatImagesWarm,
+    setReadStatuses,
+    updateReadStatuses,
+    loadStatuses,
+    loadHiddenForMeMessageIds,
+    hiddenForMeMessageIdsRef,
+    deletedServerMessageIdsRef,
+    uploadStatusRef,
+    readStatusesRef,
+    currentUserIdForPersistRef,
+    peerIdForPersistRef,
+    latestMessagesForPersistRef,
+  } = session;
   /** Сервер ответил, что переписки нет совсем (для уведомления о шифровании в пустом чате). */
   const [serverHistoryEmpty, setServerHistoryEmpty] = React.useState(false);
   const lastQuietSyncAtRef = React.useRef(0);

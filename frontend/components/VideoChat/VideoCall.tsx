@@ -1,3 +1,4 @@
+import { isPipInSystemMode, isPipVisible, setVideoCallActive, isVideoCallActiveExplicitlyFalse, isEndingCallInProgress, setEndingCallInProgress, isCallEndedFromPiPNoOpen } from '../../utils/callRuntime';
 import type { CallAudioGlobals } from '../../utils/callStateTypes';
 import type { FriendListItem } from '../../sockets/modules/friends';
 import type { RouteProp } from '@react-navigation/native';
@@ -379,8 +380,8 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     if (localExternalHoldRef.current || partnerExternalHoldRef.current) return;
     if (isExternalCallHoldActive()) return;
     try {
-      if (global.__pipInSystemModeRef?.current === true) return;
-      if (global.__pipVisibleRef?.current === true) return;
+      if (isPipInSystemMode()) return;
+      if (isPipVisible()) return;
     } catch {}
     const s =
       session ||
@@ -405,8 +406,8 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       return;
     }
     try {
-      if (global.__pipInSystemModeRef?.current === true) return;
-      if (global.__pipVisibleRef?.current === true) return;
+      if (isPipInSystemMode()) return;
+      if (isPipVisible()) return;
     } catch {}
     const s =
       session ||
@@ -588,9 +589,8 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
   useEffect(() => {
     const g = global as CallAudioGlobals;
     if (!g.__videoCallPartnerUserIdRef) g.__videoCallPartnerUserIdRef = { current: null };
-    if (!g.__videoCallActiveRef) g.__videoCallActiveRef = { current: false };
     g.__videoCallPartnerUserIdRef.current = hasActiveCallWithPartnerRef ? partnerUserId : null;
-    g.__videoCallActiveRef.current = hasActiveCallWithPartnerRef;
+    setVideoCallActive(hasActiveCallWithPartnerRef);
     // Не очищаем refs в cleanup при размонтировании (PiP) — только при завершении звонка (effect перезапишет при wasFriendCallEnded или handleCallEnded явно очистит).
   }, [hasActiveCallWithPartnerRef, partnerUserId]);
   const [friendCallAccepted, setFriendCallAccepted] = useState(() => initialLiveCallAccepted);
@@ -1636,7 +1636,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
             pipRef.current?.systemPiPCaptureActive === true ||
             g.__pendingSystemPiPSyncRef?.current === true ||
             g.__leavingVideoCallByHomeRef?.current === true ||
-            g.__pipInSystemModeRef?.current === true;
+            isPipInSystemMode();
           // Clear only if not confirmed in system PiP, or bounce-ignore window + foreground
           // (quick expand was mistaken for OEM bounce).
           if (stickyCompact && (!confirmedSystemPiP || recentBounceIgnore)) {
@@ -1669,7 +1669,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       !sessionForSystemPiP ||
       typeof (sessionForSystemPiP).isEnded !== 'function' ||
       !(sessionForSystemPiP).isEnded();
-    const globalVideoCallActiveForPiP = g.__videoCallActiveRef?.current !== false;
+    const globalVideoCallActiveForPiP = !isVideoCallActiveExplicitlyFalse();
     const hasStableSystemPiPContext =
       Platform.OS === 'android' &&
       !!(effectiveSystemPiPRoomId || effectiveSystemPiPCallId) &&
@@ -1795,7 +1795,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     if (
       typeof pipUpd === 'function' &&
       paramsForPip?.remoteStream &&
-      g.__pipVisibleRef?.current !== true
+      !isPipVisible()
     ) {
       pipUpd({
         remoteStream: paramsForPip.remoteStream,
@@ -2083,7 +2083,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     const session = sessionRef.current || (global as CallAudioGlobals).__webrtcSessionRef?.current;
     const callConnected = !!friendCallAccepted && !!remoteStream;
     const sessionEnded = !!(session && typeof session.isEnded === 'function' && session.isEnded());
-    const endingNow = !!isEndingCallRef.current || global.__endingCallInProgressRef?.current === true;
+    const endingNow = !!isEndingCallRef.current || isEndingCallInProgress();
     const transitionDone =
       !!callEndedTransitionDoneRef.current ||
       !!wasFriendCallEnded ||
@@ -2353,7 +2353,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
         }
       }
       partnerInPiPRef.current = false;
-      const inSystemNow = global.__pipInSystemModeRef?.current === true;
+      const inSystemNow = isPipInSystemMode();
       if (inSystemNow && Platform.OS === 'android') {
         // Закрыть окно PiP, не разворачивая LiVi поверх приложения, где человек сейчас.
         try { dismissSystemPiPAfterCallEnded(); } catch (_) {}
@@ -2530,7 +2530,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     if (isDirectCallVideoExpandAudioPreparedRecently()) return;
     if (inAudioOnlyUiRef.current) return;
     try {
-      if (global.__pipVisibleRef?.current === true) return;
+      if (isPipVisible()) return;
     } catch {}
     cancelScheduledCallAudioRouteReappliesMatching(['direct_call_accept_audio_route']);
     scheduleReapplyPersistedCallAudioRoute('direct_call_video_ui_route', {
@@ -2548,7 +2548,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
   /** Вход в video UI: маршрут не меняется — режим звонка или гарнитура; без режима — громкая. */
   const pinVideoUiAudioRouteAndSync = useCallback(() => {
     try {
-      if (global.__pipVisibleRef?.current === true) return;
+      if (isPipVisible()) return;
     } catch {}
     // stayOnVideo побеждает stale audio-only flags при expand audio-first → video.
     if (
@@ -2598,7 +2598,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     }
     if (!inAudioOnlyUiRef.current && !isInAudioOnlyCallUi()) return;
     try {
-      if (global.__pipInSystemModeRef?.current === true) return;
+      if (isPipInSystemMode()) return;
     } catch {}
     const session = (sessionRef.current ||
       (global as CallAudioGlobals).__webrtcSessionRef?.current) as VideoCallSession | null;
@@ -3069,8 +3069,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
           });
           setMicOn(enabled);
           try {
-            const g = global as CallAudioGlobals;
-            if (g.__pipVisibleRef?.current === true) {
+            if (isPipVisible()) {
               const muted = resolvePiPLocalMutedState(enabled);
               pip.updatePiPState({ isMuted: muted });
             }
@@ -3129,7 +3128,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
           if (inAudioOnlyUiRef.current) {
             if (enabled) {
               try {
-                if (global.__pipInSystemModeRef?.current === true) {
+                if (isPipInSystemMode()) {
                   setRemoteCamOn(true);
                   sessionRef.current?.ensureRemoteVideoForSystemPiPCapture?.();
                   return;
@@ -3817,8 +3816,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
         });
         setMicOn(enabled);
         try {
-          const g = global as CallAudioGlobals;
-          if (g.__pipVisibleRef?.current === true) {
+          if (isPipVisible()) {
             const muted = resolvePiPLocalMutedState(enabled);
             pip.updatePiPState({ isMuted: muted });
           }
@@ -3827,7 +3825,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       onCamStateChange: (enabled: boolean) => {
         if (enabled && !camOnRef.current) setLocalRenderKey((k: number) => k + 1);
         try {
-          if (global.__pipVisibleRef?.current === true) {
+          if (isPipVisible()) {
             pip.updatePiPState({ localCamOn: enabled });
           }
         } catch {}
@@ -3843,7 +3841,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
         if (inAudioOnlyUiRef.current) {
           if (enabled) {
             try {
-              if (global.__pipInSystemModeRef?.current === true) {
+              if (isPipInSystemMode()) {
                 setRemoteCamOn(true);
                 if (enabled) {
                   sessionRef.current?.ensureRemoteVideoForSystemPiPCapture?.();
@@ -3943,9 +3941,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       setLocalExternalHold(false);
       remoteMutedBeforeExternalHoldRef.current = null;
       try {
-        const gEnd = global as CallAudioGlobals;
-        gEnd.__endingCallInProgressRef = gEnd.__endingCallInProgressRef || { current: false };
-        gEnd.__endingCallInProgressRef.current = true;
+        setEndingCallInProgress(true);
       } catch (_) {}
       // Нативно блокируем вход в системный PiP при завершении (иначе пользователь улетает на главный экран с PiP).
       if (Platform.OS === 'android') {
@@ -3961,11 +3957,10 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
 
       // Закрываем экран видеозвонка: goBack — пользователь остаётся на том же экране, что и до звонка (без мерцания). Если в стеке только VideoCall — reset на Home.
       const endSource = (global as CallAudioGlobals).__lastEndCallSourceRef?.current;
-      const gEnd = global as CallAudioGlobals;
       const inSystemPiP =
         pipRef.current.inSystemPiPMode === true ||
-        gEnd.__pipInSystemModeRef?.current === true;
-      const noOpenFlag = gEnd.__callEndedFromPiPNoOpenRef?.current === true;
+        isPipInSystemMode();
+      const noOpenFlag = isCallEndedFromPiPNoOpen();
       const endedFromPiP = endSource === 'pip_close' || noOpenFlag;
       const explicitEndButton = endSource === 'end_button';
       // Без goBack/reset экран остаётся на VideoCall — refs не дают ререндера; через ~1s deferred teardown
@@ -4532,10 +4527,8 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       isInactiveStateRef.current = true;
       partnerInPiPRef.current = false;
       setPartnerInPiP(false);
-      const g = global as CallAudioGlobals;
       try {
-        g.__endingCallInProgressRef = g.__endingCallInProgressRef || { current: false };
-        g.__endingCallInProgressRef.current = true;
+        setEndingCallInProgress(true);
       } catch (_) {}
       if (Platform.OS === 'android') {
         try { NativeModules.LiviAppModule?.setEndingCallInProgress?.(true); } catch (_) {}
@@ -4577,9 +4570,8 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     isEndingCallRef.current = true;
     setIsEndingCall(true);
 
-    const g = global as CallAudioGlobals;
     const inSystemPiP =
-      pipRef.current?.inSystemPiPMode === true || g.__pipInSystemModeRef?.current === true;
+      pipRef.current?.inSystemPiPMode === true || isPipInSystemMode();
     // Sticky in-app PiP / ложный system-флаг при AppState active не должны оставлять мёртвый VideoCall.
     const stayOnDeadVideoCall =
       inSystemPiP && AppState.currentState !== 'active' && source !== 'end_button';
@@ -4623,8 +4615,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     // КРИТИЧНО: Сразу выставляем глобальный флаг (синхронно), чтобы AboutToEnterSystemPiP / onUserLeaveHint
     // не переводили в PiP при переходе на Home — без нажатия пользователем кнопки PiP/Home.
     try {
-      g.__endingCallInProgressRef = g.__endingCallInProgressRef || { current: false };
-      g.__endingCallInProgressRef.current = true;
+      setEndingCallInProgress(true);
     } catch (_) {}
 
     if (Platform.OS === 'android') {
@@ -4846,8 +4837,8 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       const currentRouteName = rootNav?.isReady?.() ? rootNav.getCurrentRoute()?.name : null;
       const replacedByAnotherVideoCall = currentRouteName === 'VideoCall';
       const pipVisible =
-        global.__pipVisibleRef?.current === true ||
-        global.__pipInSystemModeRef?.current === true;
+        isPipVisible() ||
+        isPipInSystemMode();
       const { now, returningUntil, active: systemPiPReturnGuardActive } = getSystemPiPReturnGuard();
       const returningFromSystemPiP = now < returningUntil;
       // Если звонок уже корректно завершили через handleCallEnded/onAbortCall — не дёргаем cleanup повторно.
@@ -5176,7 +5167,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       const pipPlaqueActive =
         shouldPreserveCallAudioRouteInInAppPiP() ||
         returningFromSystem ||
-        g.__pipInSystemModeRef?.current === true ||
+        isPipInSystemMode() ||
         g.__pipSuspendedForSystemPiPRef?.current === true;
       if (
         isDirectAudioEarpieceStabilizeWindow() &&
@@ -5350,7 +5341,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
         returningFromSystem ||
         pip.visible ||
         shouldPreserveCallAudioRouteInInAppPiP() ||
-        g.__pipInSystemModeRef?.current === true ||
+        isPipInSystemMode() ||
         g.__pipSuspendedForSystemPiPRef?.current === true;
       if (!pipCtx) return;
     } catch {}
@@ -6415,7 +6406,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
         ((sessionRef.current || g.__webrtcSessionRef?.current) as VideoCallSession | null);
       // Не fromPiP: иначе pip/lastApplied SPEAKER с video pin перебивает beforeVideo earpiece.
       const fromPiP =
-        g.__pipVisibleRef?.current === true ||
+        isPipVisible() ||
         route?.params?.fromPiP === true ||
         route?.params?.audioOnlyPiPReturn === true;
       applyAudioOnlyUiState(live, {

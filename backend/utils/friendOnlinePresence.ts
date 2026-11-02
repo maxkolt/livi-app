@@ -366,7 +366,9 @@ export function scheduleGlobalFriendPresenceEmit(io: Server, changedUserIds?: st
       if (isOid(normalized)) pendingPresenceChangedUserIds.add(normalized);
     }
   }
-  if (presenceBroadcastDebounceTimer) clearTimeout(presenceBroadcastDebounceTimer);
+  // A continuous stream of visibility/call events must not postpone presence
+  // forever. Coalesce into a fixed window instead of restarting the timer.
+  if (presenceBroadcastDebounceTimer) return;
   presenceBroadcastDebounceTimer = setTimeout(() => {
     presenceBroadcastDebounceTimer = null;
     const changed = [...pendingPresenceChangedUserIds];
