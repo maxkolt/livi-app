@@ -1,0 +1,27 @@
+{"at": 1793684039.393832, "label": "network-connected-baseline", "ok": true, "media": {"at": "2026-11-03T05:33:59.212Z", "rooms": [{"name": "room_6a62fae2c2583f4d42b33d16_6aa075a657dcabd3e27db3b0", "sid": "RM_d3wdU56KPsJF", "participants": [{"identity": "6aa075a657dcabd3e27db3b0", "sid": "PA_4cs4tNPXMvhj", "state": 2, "joinedAt": "1793683997", "tracks": [{"sid": "TR_AMRbferZypJsBM", "type": 0, "source": 2, "muted": false}, {"sid": "TR_VCqqB5TNZyhvif", "type": 1, "source": 1, "muted": false}]}, {"identity": "6a62fae2c2583f4d42b33d16", "sid": "PA_Ts2ZHT6NTEkt", "state": 2, "joinedAt": "1793683997", "tracks": [{"sid": "TR_AMJmKdBt4tFNTW", "type": 0, "source": 2, "muted": false}, {"sid": "TR_VC4f7fzRAPksAZ", "type": 1, "source": 1, "muted": false}]}]}]}}
+{"at": 1793684039.546253, "label": "network-offline", "ok": true, "duration": 30}
+{"at": 1793684085.073067, "label": "network-30s-restored", "ok": true, "media": {"at": "2026-11-03T05:34:44.851Z", "rooms": [{"name": "room_6a62fae2c2583f4d42b33d16_6aa075a657dcabd3e27db3b0", "sid": "RM_d3wdU56KPsJF", "participants": [{"identity": "6a62fae2c2583f4d42b33d16", "sid": "PA_Lm6z6HZcAAZb", "state": 2, "joinedAt": "1793684076", "tracks": [{"sid": "TR_VCvkyJxjKoCm7G", "type": 1, "source": 1, "muted": false}, {"sid": "TR_AMJNDdSU3Z63hn", "type": 0, "source": 2, "muted": false}]}, {"identity": "6aa075a657dcabd3e27db3b0", "sid": "PA_YjsXUXKpK2HX", "state": 2, "joinedAt": "1793684081", "tracks": [{"sid": "TR_VC6Jesb4si7rXa", "type": 1, "source": 1, "muted": false}, {"sid": "TR_AMwvKj7fwrvJR3", "type": 0, "source": 2, "muted": false}]}]}]}}
+{"at": 1793684085.073471, "label": "network-recovery-time", "ok": true, "seconds": 15.36}
+{"at": 1793684097.9376829, "label": "network-restored-still-published", "ok": true, "media": {"at": "2026-11-03T05:34:57.743Z", "rooms": [{"name": "room_6a62fae2c2583f4d42b33d16_6aa075a657dcabd3e27db3b0", "sid": "RM_d3wdU56KPsJF", "participants": [{"identity": "6a62fae2c2583f4d42b33d16", "sid": "PA_Lm6z6HZcAAZb", "state": 2, "joinedAt": "1793684076", "tracks": [{"sid": "TR_VCvkyJxjKoCm7G", "type": 1, "source": 1, "muted": false}, {"sid": "TR_AMJNDdSU3Z63hn", "type": 0, "source": 2, "muted": false}]}, {"identity": "6aa075a657dcabd3e27db3b0", "sid": "PA_YjsXUXKpK2HX", "state": 2, "joinedAt": "1793684081", "tracks": [{"sid": "TR_VC6Jesb4si7rXa", "type": 1, "source": 1, "muted": false}, {"sid": "TR_AMwvKj7fwrvJR3", "type": 0, "source": 2, "muted": false}]}]}]}}
+{"at": 1793684141.450484, "label": "offline-hangup-no-sfu-ghosts", "ok": true, "media": {"at": "2026-11-03T05:35:41.223Z", "rooms": [{"name": "room_6a62fae2c2583f4d42b33d16_6aa075a657dcabd3e27db3b0", "sid": "RM_d3wdU56KPsJF", "participants": []}]}, "endAt": 1793684120.2712908}
+{"at": 1793684141.857471, "label": "network-regression", "ok": false, "error": "'utf-8' codec can't decode byte 0xfe in position 339754: invalid start byte"}
+Traceback (most recent call last):
+  File "/tmp/livi-fixes-20261103/network-regression.py", line 54, in <module>
+    logs=shell(d,'logcat','-d','-v','epoch').stdout
+         ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/livi-fixes-20261103/android_ui.py", line 5, in shell
+    return subprocess.run(['adb','-s',device,'shell',shlex.join(args)],capture_output=True,text=True,check=check,timeout=timeout)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/subprocess.py", line 557, in run
+    stdout, stderr = process.communicate(input, timeout=timeout)
+                     ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/subprocess.py", line 1221, in communicate
+    stdout, stderr = self._communicate(input, endtime, timeout)
+                     ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/subprocess.py", line 2194, in _communicate
+    stdout = self._translate_newlines(stdout,
+                                      self.stdout.encoding,
+                                      self.stdout.errors)
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/subprocess.py", line 1099, in _translate_newlines
+    data = data.decode(encoding, errors)
+UnicodeDecodeError: 'utf-8' codec can't decode byte 0xfe in position 339754: invalid start byte

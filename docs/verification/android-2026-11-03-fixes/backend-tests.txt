@@ -1,0 +1,90 @@
+
+> backend@1.0.0 test:ci
+> NODE_ENV=test jest --ci --runInBand
+
+PASS sockets/matchReconnectGrace.test.ts (9.628 s)
+PASS routes/moderationProviderFailure.test.ts
+  ● Console
+
+    console.log
+      [2026-11-03T05:19:03.773Z] [info] [rateLimit] using in-memory store (no REDIS_URL)
+
+      at Object.info (utils/file:/Users/maximkoltovich/LiVi/livi-app/backend/utils/logger.ts:36:13)
+
+PASS utils/playIntegrity.test.ts
+PASS sockets/messageReaction.test.ts
+  ● Console
+
+    console.log
+      [2026-11-03T05:19:04.305Z] [info] [rateLimit] using in-memory store (no REDIS_URL)
+
+      at Object.info (utils/file:/Users/maximkoltovich/LiVi/livi-app/backend/utils/logger.ts:36:13)
+
+PASS utils/friendOnlinePresence.test.ts
+PASS routes/intellectMoneyCosmetics.test.ts
+PASS utils/fliqCollector.test.ts
+  ● Console
+
+    console.log
+      [2026-11-03T05:19:04.691Z] [info] [rateLimit] using in-memory store (no REDIS_URL)
+
+      at Object.info (utils/file:/Users/maximkoltovich/LiVi/livi-app/backend/utils/logger.ts:36:13)
+
+PASS sockets/e2eKeys.test.ts
+  ● Console
+
+    console.warn
+      [2026-11-03T05:19:04.761Z] [warn] [installSecret] INSTALL_SECRET_PEPPER is not set — falling back to a fixed dev pepper. Set INSTALL_SECRET_PEPPER (long random string) in the backend environment for production.
+
+      at Object.warn (utils/file:/Users/maximkoltovich/LiVi/livi-app/backend/utils/logger.ts:41:13)
+      at effectivePepper (utils/file:/Users/maximkoltovich/LiVi/livi-app/backend/utils/installSecret.ts:17:12)
+      at hashInstallSecret (utils/file:/Users/maximkoltovich/LiVi/livi-app/backend/utils/installSecret.ts:28:27)
+      at hashBackupAuthKey (sockets/file:/Users/maximkoltovich/LiVi/livi-app/backend/sockets/e2eKeys.ts:79:27)
+      at Object.<anonymous> (sockets/file:/Users/maximkoltovich/LiVi/livi-app/backend/sockets/e2eKeys.test.ts:106:35)
+
+    console.log
+      [e2e] public key published user=aaaaaaaaaaaaaaaaaaaaaaaa
+
+      at sockets/file:/Users/maximkoltovich/LiVi/livi-app/backend/sockets/e2eKeys.ts:176:17
+
+    console.log
+      [e2e] public key rotated user=aaaaaaaaaaaaaaaaaaaaaaaa
+
+      at sockets/file:/Users/maximkoltovich/LiVi/livi-app/backend/sockets/e2eKeys.ts:176:17
+
+    console.log
+      [e2e] public key published user=aaaaaaaaaaaaaaaaaaaaaaaa
+
+      at sockets/file:/Users/maximkoltovich/LiVi/livi-app/backend/sockets/e2eKeys.ts:176:17
+
+PASS utils/requestBodyParsers.test.ts
+PASS utils/friendshipUtils.test.ts
+PASS utils/friendPresenceRecipients.test.ts
+PASS utils/intellectMoney.test.ts
+PASS utils/callKeepAlive.test.ts
+PASS utils/welcomeOnlinePresence.test.ts
+PASS utils/livekitSignalProxy.test.ts
+  ● Console
+
+    console.log
+      [2026-11-03T05:19:05.148Z] [info] [LiveKit signal proxy] enabled {"path":"/livekit/rtc"}
+
+      at Object.info (utils/file:/Users/maximkoltovich/LiVi/livi-app/backend/utils/logger.ts:36:13)
+
+PASS sockets/offlineMessageDelivery.test.ts
+PASS sockets/messagePageCursor.test.ts
+PASS utils/unreadStoreMemory.test.ts
+PASS utils/pushI18n.test.ts
+PASS utils/messageLimits.test.ts
+PASS utils/e2eEnvelope.test.ts
+PASS utils/uploadedMedia.test.ts
+PASS utils/callE2ee.test.ts
+PASS utils/installSecret.test.ts
+PASS sockets/liveMessageDelivery.test.ts
+
+Test Suites: 25 passed, 25 total
+Tests:       280 passed, 280 total
+Snapshots:   0 total
+Time:        11.424 s
+Ran all test suites.
+Force exiting Jest: Have you considered using `--detectOpenHandles` to detect async operations that kept running after all tests finished?

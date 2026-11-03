@@ -1,0 +1,10 @@
+[
+  {
+    "apk": "/tmp/livi-fixes-20261103/livi-fixed-final.apk",
+    "bundleSha256": "196742ae93968eaa14815053f5cb9bd7f81aec14e7b07f896c30e8cb4c376067"
+  },
+  {
+    "apk": "frontend/android/app/build/outputs/apk/release/app-release.apk",
+    "bundleSha256": "196742ae93968eaa14815053f5cb9bd7f81aec14e7b07f896c30e8cb4c376067"
+  }
+]

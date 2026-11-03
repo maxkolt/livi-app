@@ -1,0 +1,11 @@
+
+> typecheck
+> npm --prefix frontend run typecheck && npm --prefix backend run typecheck
+
+
+> frontend@1.0.0 typecheck
+> tsc --noEmit
+
+
+> backend@1.0.0 typecheck
+> tsc --noEmit

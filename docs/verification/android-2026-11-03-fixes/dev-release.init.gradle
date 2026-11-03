@@ -1,0 +1,8 @@
+gradle.beforeProject { project ->
+    project.pluginManager.withPlugin('com.android.application') {
+        project.androidComponents.finalizeDsl { android ->
+            android.buildTypes.release.applicationIdSuffix = '.dev'
+            android.buildTypes.release.resValue 'string', 'app_name', 'LiVi Dev'
+        }
+    }
+}

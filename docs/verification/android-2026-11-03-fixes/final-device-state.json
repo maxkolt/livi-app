@@ -1,0 +1,28 @@
+{
+  "media": {
+    "at": "2026-11-03T05:43:25.609Z",
+    "rooms": []
+  },
+  "random": {
+    "matchedSockets": 0,
+    "heldSockets": 0,
+    "asymmetricSockets": 0,
+    "stoppedWithPartner": 0,
+    "queuedSockets": 0,
+    "queuedWithPartner": 0,
+    "pairs": 0,
+    "pairDigest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "android": [
+    {
+      "device": "RFCX306PWLE",
+      "audioMode": "mAudioModeOwner: AudioModeInfo: mMode=MODE_NORMAL, mPid=0, mUid=0",
+      "activeCallServices": []
+    },
+    {
+      "device": "emulator-5554",
+      "audioMode": "mAudioModeOwner: AudioDeviceBroker$AudioModeInfo[mMode=0, mPid=0, mUid=0, mToken=null]",
+      "activeCallServices": []
+    }
+  ]
+}

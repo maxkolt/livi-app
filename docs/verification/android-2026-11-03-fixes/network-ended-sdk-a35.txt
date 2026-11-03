@@ -1,0 +1,29 @@
+--------- beginning of main
+         1793684114.224 17630 17750 W ReactNativeJS: 'peerconnection failed disconnected', { room: 'room_6a62fae2c2583f4d42b33d16_6aa075a657dcabd3e27db3b0',
+         1793684114.224 17630 17750 W ReactNativeJS:   roomID: 'RM_d3wdU56KPsJF',
+         1793684114.224 17630 17750 W ReactNativeJS:   participant: '6aa075a657dcabd3e27db3b0',
+         1793684114.224 17630 17750 W ReactNativeJS:   pID: 'PA_YjsXUXKpK2HX' }
+         1793684114.227 17630 17750 W ReactNativeJS: '[WARN]', '[VideoCallSession] LiveKit room reconnecting (transient)', { roomName: 'room_6a62fae2c2583f4d42b33d16_6aa075a657dcabd3e27db3b0',
+         1793684114.227 17630 17750 W ReactNativeJS:   roomState: 'reconnecting',
+         1793684114.227 17630 17750 W ReactNativeJS:   myUserId: '6aa075a657dcabd3e27db3b0',
+         1793684114.227 17630 17750 W ReactNativeJS:   partnerUserId: '6a62fae2c2583f4d42b33d16' }
+         1793684114.228 17630 17750 W ReactNativeJS: '[WARN]', '[VideoCallSession] Emitted call:networkDown', { reason: 'livekit_reconnecting',
+         1793684114.228 17630 17750 W ReactNativeJS:   connected: false,
+         1793684114.228 17630 17750 W ReactNativeJS:   callId: '1793683975619_0yb6jb',
+         1793684114.228 17630 17750 W ReactNativeJS:   roomId: 'room_6a62fae2c2583f4d42b33d16_6aa075a657dcabd3e27db3b0' }
+         1793684116.254 17630 17750 I ReactNativeJS: 'disconnect from room', { room: 'room_6a62fae2c2583f4d42b33d16_6aa075a657dcabd3e27db3b0',
+         1793684116.254 17630 17750 I ReactNativeJS:   roomID: 'RM_d3wdU56KPsJF',
+         1793684116.254 17630 17750 I ReactNativeJS:   participant: '6aa075a657dcabd3e27db3b0',
+         1793684116.254 17630 17750 I ReactNativeJS:   pID: 'PA_YjsXUXKpK2HX' }
+         1793684116.254 17630 17750 W ReactNativeJS: 'Abort connection attempt due to user initiated disconnect', { room: 'room_6a62fae2c2583f4d42b33d16_6aa075a657dcabd3e27db3b0',
+         1793684116.254 17630 17750 W ReactNativeJS:   roomID: 'RM_d3wdU56KPsJF',
+         1793684116.254 17630 17750 W ReactNativeJS:   participant: '6aa075a657dcabd3e27db3b0',
+         1793684116.254 17630 17750 W ReactNativeJS:   pID: 'PA_YjsXUXKpK2HX' }
+         1793684116.263 17630 17750 W ReactNativeJS: 'Got disconnected during reconnection attempt', { room: 'room_6a62fae2c2583f4d42b33d16_6aa075a657dcabd3e27db3b0',
+         1793684116.263 17630 17750 W ReactNativeJS:   roomID: 'RM_d3wdU56KPsJF',
+         1793684116.263 17630 17750 W ReactNativeJS:   participant: '6aa075a657dcabd3e27db3b0',
+         1793684116.263 17630 17750 W ReactNativeJS:   pID: 'PA_YjsXUXKpK2HX' }
+         1793684118.527 17630 17750 W ReactNativeJS: [socket] error websocket error
+         1793684125.577 17630 17750 W ReactNativeJS: '[WARN]', '[socket] hard recycle', { reason: 'netinfo_reachable_again',
+         1793684125.577 17630 17750 W ReactNativeJS:   connected: false,
+         1793684125.577 17630 17750 W ReactNativeJS:   api: 'https://api.liviapp.com' }

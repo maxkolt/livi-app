@@ -1,0 +1,3 @@
+Running on Pixel_10_Pro
+ > Flow call-gone
+Assert that "Calling.*|Вызов.*|Звонок.*|minimize|Завершить|End call" is not visible... COMPLETED

@@ -20,7 +20,7 @@ jest.mock('../../chat/chatMessageMeta', () => ({
 jest.mock('../../../utils/i18n', () => ({ t: (key: string) => key }));
 jest.mock('../../../utils/globalEvents', () => ({}));
 
-import { getChatPreviewSnapshot, noteLocalChatPreview, prefetchChatPreviews } from './useChatPreviews';
+import { getChatPreviewSnapshot, noteLocalChatPreview, prefetchChatPreviews, selectChatPreviews } from './useChatPreviews';
 import { beginChatExitTransition, finishChatExitTransition } from '../../chat/chatExitTransition';
 const message = (id: string, text: string, at: number, from = 'peer') => ({
   id, text, timestamp: new Date(at).toISOString(), from, to: from === 'me' ? 'peer' : 'me', type: 'text',
@@ -124,4 +124,49 @@ it('refreshes more than 100 contacts in bounded batches', async () => {
   mockFetch.mockResolvedValue({ ok: true, previews: {} });
   await prefetchChatPreviews(Array.from({ length: 205 }, (_, i) => `peer-${i}`), 'ru');
   expect(mockFetch.mock.calls.map(args => args[0].length)).toEqual([100, 100, 5]);
+});
+
+it('never renders old disk history for an unread row while the cold server request is pending', async () => {
+  const peer = 'cold-unread';
+  mockLocal.mockResolvedValue([message('cold-old', 'old outgoing', 20_000, 'me')]);
+  let finish!: (value: unknown) => void;
+  mockFetch.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+  const pending = prefetchChatPreviews([peer], 'ru', false, { [peer]: 1 });
+  for (let i = 0; i < 20; i++) await Promise.resolve();
+  expect(getChatPreviewSnapshot()[peer].text).toBe('old outgoing');
+  expect(selectChatPreviews(getChatPreviewSnapshot(), { [peer]: 1 })[peer]).toBeUndefined();
+  finish({ ok: true, previews: { [peer]: message('cold-fresh', 'newest incoming', 21_000) } });
+  await pending;
+  expect(selectChatPreviews(getChatPreviewSnapshot(), { [peer]: 1 })[peer].text).toBe('newest incoming');
+  // An unread delivery invalidates the confirmed row before effects or server work run.
+  expect(selectChatPreviews(getChatPreviewSnapshot(), { [peer]: 2 })[peer]).toBeUndefined();
+});
+
+it('does not confirm stale unread text on failed fetch or a changed unread count', async () => {
+  const peer = 'offline-unread';
+  mockLocal.mockResolvedValue([message('offline-cached', 'old cached', 22_000)]);
+  mockFetch.mockRejectedValue(new Error('offline'));
+  await prefetchChatPreviews([peer], 'ru', false, { [peer]: 1 });
+  expect(selectChatPreviews(getChatPreviewSnapshot(), { [peer]: 1 })[peer]).toBeUndefined();
+  // Ordinary chat rows retain their offline preview.
+  expect(selectChatPreviews(getChatPreviewSnapshot(), {})[peer].id).toBe('offline-cached');
+  mockFetch.mockResolvedValue({ ok: true, previews: { [peer]: message('fresh-one', 'one unread', 23_000) } });
+  await prefetchChatPreviews([peer], 'ru', false, { [peer]: 1 });
+  expect(selectChatPreviews(getChatPreviewSnapshot(), { [peer]: 2 })[peer]).toBeUndefined();
+});
+
+it('keeps unread confirmation when a generic prefetch or an older unread request finishes later', async () => {
+  const peer = 'overlap-unread';
+  mockLocal.mockResolvedValue([]);
+  let finishOld!: (value: unknown) => void;
+  mockFetch.mockImplementationOnce(() => new Promise(resolve => { finishOld = resolve; }));
+  const older = prefetchChatPreviews([peer], 'ru', false, { [peer]: 1 });
+  for (let i = 0; i < 20; i++) await Promise.resolve();
+  const fresh = message('overlap-new', 'latest unread', 25_000);
+  mockFetch.mockResolvedValue({ ok: true, previews: { [peer]: fresh } });
+  await prefetchChatPreviews([peer], 'ru', false, { [peer]: 2 });
+  await prefetchChatPreviews([peer], 'ru');
+  finishOld({ ok: true, previews: { [peer]: message('overlap-old', 'older response', 24_000) } });
+  await older;
+  expect(selectChatPreviews(getChatPreviewSnapshot(), { [peer]: 2 })[peer].id).toBe('overlap-new');
 });

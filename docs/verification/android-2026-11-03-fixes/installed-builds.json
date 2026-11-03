@@ -1,0 +1,10 @@
+[
+  {
+    "device": "RFCX306PWLE",
+    "installedApkSha256": "83822606d67166f62ce856d3b941be8357f1538ba8098de5d435a9cfe9a2e724"
+  },
+  {
+    "device": "emulator-5554",
+    "installedApkSha256": "83822606d67166f62ce856d3b941be8357f1538ba8098de5d435a9cfe9a2e724"
+  }
+]

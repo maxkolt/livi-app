@@ -1,0 +1,11 @@
+{
+  "frontend/screens/home/HomeWelcomeChatsView.tsx": "6b632596d528b7487c7d9a6da38425ec8ab4ebaa06638bd8b786941d778d469a",
+  "frontend/screens/home/hooks/useChatPreviews.ts": "ef04627e9e9828f196609afb4230f69467e7b749822dc92886f0f35374c1e4fb",
+  "frontend/screens/home/hooks/useChatPreviews.test.ts": "2f592d59d813beb22c292f94cd14a03faae14ada72165977d2960f1283afe0ea",
+  "frontend/src/webrtc/sessions/RandomChatSession.ts": "7aea4802d14152ec509e467f1ad03daa2a61c281429791f2beac121e8e7a5572",
+  "frontend/src/webrtc/sessions/VideoCallSession.ts": "b530907a0f9faf4f40e97aeab09064f1fe15d44162f384a5d6b383850e37c007",
+  "frontend/src/webrtc/sessions/disposeRoom.ts": "b027d4aa79bf54b2a714688ede3e0ae0150eef5c356a1da9e3efa26af6eb41df",
+  "frontend/src/webrtc/sessions/disposeRoom.test.ts": "9e65c865b2ce79c402d07cbf89a329810fa5deadea7b95751dcfa6a976292540",
+  "frontend/src/webrtc/sessions/publishLocalTrack.ts": "cf952f8778d66e2fde256a3ab22f63abe94ef2fba7efbd336d5d36e851b941f4",
+  "frontend/src/webrtc/sessions/publishLocalTrack.test.ts": "f736217fe00681901274b472b156a9aff4ff678d964f3a794d8f4d9a6bb021f0"
+}

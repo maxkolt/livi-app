@@ -1,0 +1,109 @@
+--------- beginning of main
+         1793684016.116 14210 14307 I ReactNativeJS: 'End-to-end encryption is set up, simulcast publishing will be disabled on Safari versions and iOS browsers running iOS < v17.2', { room: 'room_6a62fae2c2583f4d42b33d16_6aa075a657dcabd3e27db3b0',
+         1793684016.116 14210 14307 I ReactNativeJS:   roomID: 'RM_d3wdU56KPsJF',
+         1793684016.116 14210 14307 I ReactNativeJS:   participant: '6a62fae2c2583f4d42b33d16',
+         1793684016.116 14210 14307 I ReactNativeJS:   pID: 'PA_Ts2ZHT6NTEkt' }
+         1793684044.977 14210 14307 W ReactNativeJS: '[WARN]', '[VideoCallSession] Remote video stalled on a live room — asking LiveKit to resume', { reason: 'remote_video_stall',
+         1793684044.977 14210 14307 W ReactNativeJS:   stalledMs: 4198,
+         1793684044.977 14210 14307 W ReactNativeJS:   attempt: 1,
+         1793684044.977 14210 14307 W ReactNativeJS:   callId: '1793683975619_0yb6jb' }
+         1793684044.977 14210 14307 W ReactNativeJS: 'livi remote_video_stall disconnected', { room: 'room_6a62fae2c2583f4d42b33d16_6aa075a657dcabd3e27db3b0',
+         1793684044.977 14210 14307 W ReactNativeJS:   roomID: 'RM_d3wdU56KPsJF',
+         1793684044.977 14210 14307 W ReactNativeJS:   participant: '6a62fae2c2583f4d42b33d16',
+         1793684044.977 14210 14307 W ReactNativeJS:   pID: 'PA_Ts2ZHT6NTEkt' }
+         1793684044.978 14210 14307 I ReactNativeJS: 'resuming signal connection, attempt 0', { room: 'room_6a62fae2c2583f4d42b33d16_6aa075a657dcabd3e27db3b0',
+         1793684044.978 14210 14307 I ReactNativeJS:   roomID: 'RM_d3wdU56KPsJF',
+         1793684044.978 14210 14307 I ReactNativeJS:   participant: '6a62fae2c2583f4d42b33d16',
+         1793684044.978 14210 14307 I ReactNativeJS:   pID: 'PA_Ts2ZHT6NTEkt' }
+         1793684044.978 14210 14307 I ReactNativeJS: 'Resuming signal connection', { room: 'room_6a62fae2c2583f4d42b33d16_6aa075a657dcabd3e27db3b0',
+         1793684044.978 14210 14307 I ReactNativeJS:   roomID: 'RM_d3wdU56KPsJF',
+         1793684044.978 14210 14307 I ReactNativeJS:   participant: '6a62fae2c2583f4d42b33d16',
+         1793684044.978 14210 14307 I ReactNativeJS:   pID: 'PA_Ts2ZHT6NTEkt' }
+         1793684047.359 14210 14307 I ReactNativeJS: 'Resumed signal connection', { room: 'room_6a62fae2c2583f4d42b33d16_6aa075a657dcabd3e27db3b0',
+         1793684047.359 14210 14307 I ReactNativeJS:   roomID: 'RM_d3wdU56KPsJF',
+         1793684047.359 14210 14307 I ReactNativeJS:   participant: '6a62fae2c2583f4d42b33d16',
+         1793684047.359 14210 14307 I ReactNativeJS:   pID: 'PA_Ts2ZHT6NTEkt' }
+         1793684048.058 14210 14307 W ReactNativeJS: '[WARN]', '[VideoCallSession] Peer reconnecting UI', { reason: 'remote_audio_packet_stall',
+         1793684048.058 14210 14307 W ReactNativeJS:   callId: '1793683975619_0yb6jb',
+         1793684048.058 14210 14307 W ReactNativeJS:   partnerUserId: '6aa075a657dcabd3e27db3b0' }
+         1793684053.897 14210 14307 W ReactNativeJS: '[WARN]', '[VideoCallSession] Socket disconnected (ignored; LiveKit call continues)', { callId: '1793683975619_0yb6jb',
+         1793684053.897 14210 14307 W ReactNativeJS:   roomId: 'room_6a62fae2c2583f4d42b33d16_6aa075a657dcabd3e27db3b0',
+         1793684053.897 14210 14307 W ReactNativeJS:   hasRoom: true,
+         1793684053.897 14210 14307 W ReactNativeJS:   roomState: 'connected' }
+         1793684061.498 14210 14307 W ReactNativeJS: '[WARN]', '[VideoCallSession] Media link recovering', { reason: 'remote_participant_disconnected',
+         1793684061.498 14210 14307 W ReactNativeJS:   callId: '1793683975619_0yb6jb' }
+         1793684061.498 14210 14307 W ReactNativeJS: '[WARN]', '[VideoCallSession] Waiting for remote peer rejoin (no local hangup)', { reason: 'remote_participant_disconnected',
+         1793684061.498 14210 14307 W ReactNativeJS:   callId: '1793683975619_0yb6jb',
+         1793684061.498 14210 14307 W ReactNativeJS:   partnerUserId: '6aa075a657dcabd3e27db3b0',
+         1793684061.498 14210 14307 W ReactNativeJS:   graceMs: 45000,
+         1793684061.498 14210 14307 W ReactNativeJS:   roomState: 'connected' }
+         1793684076.422 14210 14307 W ReactNativeJS: 'leave-reconnect disconnected', { room: 'room_6a62fae2c2583f4d42b33d16_6aa075a657dcabd3e27db3b0',
+         1793684076.422 14210 14307 W ReactNativeJS:   roomID: 'RM_d3wdU56KPsJF',
+         1793684076.422 14210 14307 W ReactNativeJS:   participant: '6a62fae2c2583f4d42b33d16',
+         1793684076.422 14210 14307 W ReactNativeJS:   pID: 'PA_Ts2ZHT6NTEkt' }
+         1793684076.424 14210 14307 I ReactNativeJS: 'reconnecting, attempt: 0', { room: 'room_6a62fae2c2583f4d42b33d16_6aa075a657dcabd3e27db3b0',
+         1793684076.424 14210 14307 I ReactNativeJS:   roomID: 'RM_d3wdU56KPsJF',
+         1793684076.424 14210 14307 I ReactNativeJS:   participant: '6a62fae2c2583f4d42b33d16',
+         1793684076.424 14210 14307 I ReactNativeJS:   pID: 'PA_Ts2ZHT6NTEkt' }
+         1793684076.425 14210 14307 W ReactNativeJS: '[WARN]', '[VideoCallSession] LiveKit room reconnecting (transient)', { roomName: 'room_6a62fae2c2583f4d42b33d16_6aa075a657dcabd3e27db3b0',
+         1793684076.425 14210 14307 W ReactNativeJS:   roomState: 'reconnecting',
+         1793684076.425 14210 14307 W ReactNativeJS:   myUserId: '6a62fae2c2583f4d42b33d16',
+         1793684076.425 14210 14307 W ReactNativeJS:   partnerUserId: '6aa075a657dcabd3e27db3b0' }
+         1793684076.426 14210 14307 W ReactNativeJS: '[WARN]', '[VideoCallSession] Emitted call:networkDown', { reason: 'livekit_reconnecting',
+         1793684076.426 14210 14307 W ReactNativeJS:   connected: true,
+         1793684076.426 14210 14307 W ReactNativeJS:   callId: '1793683975619_0yb6jb',
+         1793684076.426 14210 14307 W ReactNativeJS:   roomId: 'room_6a62fae2c2583f4d42b33d16_6aa075a657dcabd3e27db3b0' }
+         1793684076.596 14210 14307 W ReactNativeJS: 'failed to remove track', { room: 'room_6a62fae2c2583f4d42b33d16_6aa075a657dcabd3e27db3b0',
+         1793684076.596 14210 14307 W ReactNativeJS:   roomID: 'RM_d3wdU56KPsJF',
+         1793684076.596 14210 14307 W ReactNativeJS:   participant: '6a62fae2c2583f4d42b33d16',
+         1793684076.596 14210 14307 W ReactNativeJS:   pID: 'PA_Lm6z6HZcAAZb',
+         1793684076.596 14210 14307 W ReactNativeJS:   error: [Error: Sender does not belong to this peer connection] }
+         1793684076.596 14210 14307 W ReactNativeJS: 'failed to remove track', { room: 'room_6a62fae2c2583f4d42b33d16_6aa075a657dcabd3e27db3b0',
+         1793684076.596 14210 14307 W ReactNativeJS:   roomID: 'RM_d3wdU56KPsJF',
+         1793684076.596 14210 14307 W ReactNativeJS:   participant: '6a62fae2c2583f4d42b33d16',
+         1793684076.596 14210 14307 W ReactNativeJS:   pID: 'PA_Lm6z6HZcAAZb',
+         1793684076.596 14210 14307 W ReactNativeJS:   error: [Error: Sender does not belong to this peer connection] }
+         1793684076.597 14210 14307 I ReactNativeJS: 'End-to-end encryption is set up, simulcast publishing will be disabled on Safari versions and iOS browsers running iOS < v17.2', { room: 'room_6a62fae2c2583f4d42b33d16_6aa075a657dcabd3e27db3b0',
+         1793684076.597 14210 14307 I ReactNativeJS:   roomID: 'RM_d3wdU56KPsJF',
+         1793684076.597 14210 14307 I ReactNativeJS:   participant: '6a62fae2c2583f4d42b33d16',
+         1793684076.597 14210 14307 I ReactNativeJS:   pID: 'PA_Lm6z6HZcAAZb' }
+         1793684076.608 14210 14307 I ReactNativeJS: 'End-to-end encryption is set up, simulcast publishing will be disabled on Safari versions and iOS browsers running iOS < v17.2', { room: 'room_6a62fae2c2583f4d42b33d16_6aa075a657dcabd3e27db3b0',
+         1793684076.608 14210 14307 I ReactNativeJS:   roomID: 'RM_d3wdU56KPsJF',
+         1793684076.608 14210 14307 I ReactNativeJS:   participant: '6a62fae2c2583f4d42b33d16',
+         1793684076.608 14210 14307 I ReactNativeJS:   pID: 'PA_Lm6z6HZcAAZb' }
+         1793684078.611 14210 14307 W ReactNativeJS: '[WARN]', '[VideoCallSession] Media link recovering', { reason: 'room_reconnected_waiting_peer',
+         1793684078.611 14210 14307 W ReactNativeJS:   callId: '1793683975619_0yb6jb' }
+         1793684103.087 14210 14307 W ReactNativeJS: '[WARN]', '[VideoCallSession] Remote video stalled on a live room — asking LiveKit to resume', { reason: 'remote_video_stall',
+         1793684103.087 14210 14307 W ReactNativeJS:   stalledMs: 4201,
+         1793684103.087 14210 14307 W ReactNativeJS:   attempt: 2,
+         1793684103.087 14210 14307 W ReactNativeJS:   callId: '1793683975619_0yb6jb' }
+         1793684103.087 14210 14307 W ReactNativeJS: 'livi remote_video_stall disconnected', { room: 'room_6a62fae2c2583f4d42b33d16_6aa075a657dcabd3e27db3b0',
+         1793684103.087 14210 14307 W ReactNativeJS:   roomID: 'RM_d3wdU56KPsJF',
+         1793684103.087 14210 14307 W ReactNativeJS:   participant: '6a62fae2c2583f4d42b33d16',
+         1793684103.087 14210 14307 W ReactNativeJS:   pID: 'PA_Lm6z6HZcAAZb' }
+         1793684103.089 14210 14307 I ReactNativeJS: 'resuming signal connection, attempt 0', { room: 'room_6a62fae2c2583f4d42b33d16_6aa075a657dcabd3e27db3b0',
+         1793684103.089 14210 14307 I ReactNativeJS:   roomID: 'RM_d3wdU56KPsJF',
+         1793684103.089 14210 14307 I ReactNativeJS:   participant: '6a62fae2c2583f4d42b33d16',
+         1793684103.089 14210 14307 I ReactNativeJS:   pID: 'PA_Lm6z6HZcAAZb' }
+         1793684103.089 14210 14307 I ReactNativeJS: 'Resuming signal connection', { room: 'room_6a62fae2c2583f4d42b33d16_6aa075a657dcabd3e27db3b0',
+         1793684103.089 14210 14307 I ReactNativeJS:   roomID: 'RM_d3wdU56KPsJF',
+         1793684103.089 14210 14307 I ReactNativeJS:   participant: '6a62fae2c2583f4d42b33d16',
+         1793684103.089 14210 14307 I ReactNativeJS:   pID: 'PA_Lm6z6HZcAAZb' }
+         1793684105.471 14210 14307 I ReactNativeJS: 'Resumed signal connection', { room: 'room_6a62fae2c2583f4d42b33d16_6aa075a657dcabd3e27db3b0',
+         1793684105.471 14210 14307 I ReactNativeJS:   roomID: 'RM_d3wdU56KPsJF',
+         1793684105.471 14210 14307 I ReactNativeJS:   participant: '6a62fae2c2583f4d42b33d16',
+         1793684105.471 14210 14307 I ReactNativeJS:   pID: 'PA_Lm6z6HZcAAZb' }
+         1793684106.239 14210 14307 W ReactNativeJS: '[WARN]', '[VideoCallSession] Peer reconnecting UI', { reason: 'remote_audio_packet_stall',
+         1793684106.239 14210 14307 W ReactNativeJS:   callId: '1793683975619_0yb6jb',
+         1793684106.239 14210 14307 W ReactNativeJS:   partnerUserId: '6aa075a657dcabd3e27db3b0' }
+         1793684120.045 14210 14307 W ReactNativeJS: '[WARN]', '[VideoCallSession] Media link recovering', { reason: 'remote_participant_disconnected',
+         1793684120.045 14210 14307 W ReactNativeJS:   callId: '1793683975619_0yb6jb' }
+         1793684120.045 14210 14307 W ReactNativeJS: '[WARN]', '[VideoCallSession] Waiting for remote peer rejoin (no local hangup)', { reason: 'remote_participant_disconnected',
+         1793684120.045 14210 14307 W ReactNativeJS:   callId: '1793683975619_0yb6jb',
+         1793684120.045 14210 14307 W ReactNativeJS:   partnerUserId: '6aa075a657dcabd3e27db3b0',
+         1793684120.045 14210 14307 W ReactNativeJS:   graceMs: 45000,
+         1793684120.045 14210 14307 W ReactNativeJS:   roomState: 'connected' }
+         1793684126.257 14210 14307 I ReactNativeJS: 'disconnect from room', { room: 'room_6a62fae2c2583f4d42b33d16_6aa075a657dcabd3e27db3b0',
+         1793684126.257 14210 14307 I ReactNativeJS:   roomID: 'RM_d3wdU56KPsJF',
+         1793684126.257 14210 14307 I ReactNativeJS:   participant: '6a62fae2c2583f4d42b33d16',
+         1793684126.257 14210 14307 I ReactNativeJS:   pID: 'PA_Lm6z6HZcAAZb' }

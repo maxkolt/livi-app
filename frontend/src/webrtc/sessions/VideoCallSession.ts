@@ -1,7 +1,7 @@
+import { disposeRoom } from './disposeRoom';
 import type { CallAudioGlobals } from '../../../utils/callStateTypes';
 import type {
   NativeLiveKitMediaTrack,
-  RoomDisposalEngine,
   RoomResumeEngine,
 } from '../rtcCompatibilityTypes';
 import type { LiveKitTokenResponse } from './videoCall/types';
@@ -116,7 +116,6 @@ import {
   LIVEKIT_PEER_CONNECTION_TIMEOUT_MS,
   LIVEKIT_WEBSOCKET_TIMEOUT_MS,
   LIVEKIT_PREFER_SIGNAL_PROXY,
-  FAILED_ROOM_DISCONNECT_WAIT_MS,
   LIVEKIT_TEST_BLOCK_DIRECT_SIGNAL,
   LIVEKIT_TEST_BLACKHOLE_URL,
   SDK_RECONNECT_ADOPT_TICKS,
@@ -595,12 +594,7 @@ export class VideoCallSession extends SimpleEventEmitter<VideoCallSessionEvents>
     // КРИТИЧНО: Очищаем старую комнату перед новым звонком
     if (this.room) {
       logger.info('[VideoCallSession] Cleaning up old room before callFriend', { roomState: this.room.state });
-      try {
-        this.room.removeAllListeners();
-        if (this.room.state === 'connected') {
-          this.room.disconnect();
-        }
-      } catch {}
+      await disposeRoom(this.room);
       this.room = null;
       this.isDisconnecting = false;
       this.disconnectPromise = null;
@@ -838,12 +832,7 @@ export class VideoCallSession extends SimpleEventEmitter<VideoCallSessionEvents>
     // иначе LiveKit бросает "cannot send signal request before connected, type: leave" и первая попытка подключения падает.
     if (this.room) {
       logger.info('[VideoCallSession] Cleaning up old room before acceptCall', { roomState: this.room.state });
-      try {
-        this.room.removeAllListeners();
-        if (this.room.state === 'connected') {
-          this.room.disconnect();
-        }
-      } catch {}
+      await disposeRoom(this.room);
       this.room = null;
       this.isDisconnecting = false;
       this.disconnectPromise = null;
@@ -945,12 +934,7 @@ export class VideoCallSession extends SimpleEventEmitter<VideoCallSessionEvents>
     // КРИТИЧНО: Очищаем старую комнату
     if (this.room) {
       logger.info('[VideoCallSession] Cleaning up old room before connectAsInitiatorAfterAccepted', { roomState: this.room.state });
-      try {
-        this.room.removeAllListeners();
-        if (this.room.state === 'connected') {
-          this.room.disconnect();
-        }
-      } catch {}
+      await disposeRoom(this.room);
       this.room = null;
       this.isDisconnecting = false;
       this.disconnectPromise = null;
@@ -5478,14 +5462,10 @@ export class VideoCallSession extends SimpleEventEmitter<VideoCallSessionEvents>
             this.liveKitConnectByRoom.delete(String(targetRoomName).trim());
           } catch {}
         }
-        if (this.room && this.room.state !== 'disconnected') {
-          try {
-            // false: свои мик и камера переезжают в новую комнату. disconnect() по умолчанию
-            // их останавливает — и после смены сети (VPN off) собеседник получал мёртвые
-            // треки: тишину и пустое видео.
-            await this.room.disconnect(false);
-          } catch {}
-        }
+        const previousRoom = this.room;
+        if (previousRoom) await disposeRoom(previousRoom);
+        if (this.ended || this.endCallInProgress || !this.mediaReconnectInProgress) return false;
+        if (this.room !== previousRoom) return false;
         this.room = null;
         this.currentRoomName = null;
         this.isDisconnecting = false;
@@ -6820,14 +6800,7 @@ export class VideoCallSession extends SimpleEventEmitter<VideoCallSessionEvents>
         });
         
         // Принудительная очистка застрявшей комнаты (disconnect только если комната уже connected)
-        try {
-          if (this.room) {
-            this.room.removeAllListeners();
-            if (this.room.state === 'connected') {
-              try { this.room.disconnect(); } catch {}
-            }
-          }
-        } catch {}
+        if (this.room) await disposeRoom(this.room);
         this.room = null;
         this.isDisconnecting = false;
         this.disconnectPromise = null;
@@ -6920,11 +6893,7 @@ export class VideoCallSession extends SimpleEventEmitter<VideoCallSessionEvents>
         const stuckRoom: Room | null = this.room;
         if (stuckRoom) {
 
-          const stuckRoomState: string = stuckRoom.state as string;
-          if (stuckRoomState !== 'disconnected') {
-
-            await stuckRoom.disconnect().catch(() => {});
-          }
+          await disposeRoom(stuckRoom);
         }
         this.room = null;
         this.currentRoomName = null;
@@ -6966,7 +6935,7 @@ export class VideoCallSession extends SimpleEventEmitter<VideoCallSessionEvents>
     targetRoomName: string | undefined,
     errorMessage: string,
   ): Promise<boolean> {
-    if (this.room !== room) return false;
+    if (this.ended || this.endCallInProgress || this.room !== room) return false;
 
     if (room.state === 'connected') {
       this.keepConnectedRoom(room, url, token, targetRoomName);
@@ -6979,11 +6948,11 @@ export class VideoCallSession extends SimpleEventEmitter<VideoCallSessionEvents>
     if (room.state !== 'reconnecting') return false;
 
     let waitCount = 0;
-    while (this.room === room && room.state === 'reconnecting' && waitCount < SDK_RECONNECT_ADOPT_TICKS) {
+    while (!this.ended && !this.endCallInProgress && this.room === room && room.state === 'reconnecting' && waitCount < SDK_RECONNECT_ADOPT_TICKS) {
       await new Promise((resolve) => setTimeout(resolve, SDK_RECONNECT_POLL_MS));
       waitCount++;
     }
-    if (this.room === room && (room.state as ConnectionState) === ConnectionState.Connected) {
+    if (!this.ended && !this.endCallInProgress && this.room === room && (room.state as ConnectionState) === ConnectionState.Connected) {
       this.keepConnectedRoom(room, url, token, targetRoomName);
       logger.info(
         '[VideoCallSession] Room reconnected after connect promise error; keeping session',
@@ -7005,22 +6974,10 @@ export class VideoCallSession extends SimpleEventEmitter<VideoCallSessionEvents>
    * Бросаем неудавшуюся попытку connect. Наши обработчики снимаем ДО disconnect: события
    * регистрируются при создании комнаты, и её Disconnected иначе запустил бы media-recovery
    * живого звонка. SDK, зависший на signaling, может не отпустить и disconnect — ждём его
-   * не дольше FAILED_ROOM_DISCONNECT_WAIT_MS.
+   * с ограниченным ожиданием, затем обязательно закрываем engine.
    */
   private async abortFailedConnectRoom(room: Room): Promise<void> {
-    try {
-      room.removeAllListeners();
-    } catch {}
-    if (room.state !== 'disconnected') {
-      await Promise.race([
-        room.disconnect().catch(() => {}),
-        new Promise<void>((resolve) => setTimeout(resolve, FAILED_ROOM_DISCONNECT_WAIT_MS)),
-      ]);
-    }
-    // disconnect() зависшего на signaling SDK не закрывает его WebSocket: соединение,
-    // пробившееся через VPN позже, входило в комнату тем же участником, и сервер выбивал
-    // уже следующую попытку как дубликат. Закрываем engine и сокет явно.
-    this.forceDisposeRoom(room, 'abort_failed_connect');
+    await disposeRoom(room);
   }
 
   /**
@@ -7176,42 +7133,6 @@ export class VideoCallSession extends SimpleEventEmitter<VideoCallSessionEvents>
     });
   }
 
-  /**
-   * Пока шёл connect, его мог вытеснить более свежий запрос.
-   *
-   * Но «устаревший» — не всегда «провалившийся»: если комната уже подключена к той же
-   * цели, переиспользуем её. Иначе быстрые повторные вызовы рвали бы живое соединение.
-   *
-   * null → запрос актуален, решение принимает вызывающий код.
-   */
-  private resolveStaleConnectRequest(
-    room: Room,
-    connectRequestId: number,
-    targetRoomName?: string,
-  ): boolean | null {
-    const isStaleRequest = this.connectRequestId !== connectRequestId || this.room !== room;
-    if (!isStaleRequest) return null;
-
-    const isSameRoom = !!(
-      targetRoomName &&
-      this.currentRoomName === targetRoomName &&
-      this.room &&
-      this.room.state === 'connected'
-    );
-
-    if (!isSameRoom) {
-      return false;
-    }
-
-    logger.info('[VideoCallSession] Request is stale but room already connected, reusing connection', {
-      connectRequestId,
-      currentConnectRequestId: this.connectRequestId,
-      targetRoomName,
-      currentRoomName: this.currentRoomName,
-    });
-    return true;
-  }
-
   private async recoverFromLiveKitConnectError(
     e: unknown,
     room: Room,
@@ -7326,25 +7247,14 @@ export class VideoCallSession extends SimpleEventEmitter<VideoCallSessionEvents>
     
     if (isInvalidApiKey) this.warnAboutInvalidLiveKitApiKey(url);
     
+    await disposeRoom(room);
+    const cancelled = this.ended || this.endCallInProgress || this.connectRequestId !== connectRequestId;
     if (this.room === room) {
-      const sdkRecovered = room.state === 'connected' || room.state === 'reconnecting';
-      if (sdkRecovered) {
-        if (await this.adoptRoomIfSdkRecovered(room, url, token, targetRoomName, errorMessage)) {
-          return true;
-        }
-        logger.info(
-          '[VideoCallSession] Connect promise failed while room reconnecting; not tearing down',
-          { roomState: room.state, targetRoomName, error: errorMessage },
-        );
-      } else {
-        this.room = null;
-        this.currentRoomName = null;
-        setActiveVideoCall(false);
-      }
+      this.room = null;
+      this.currentRoomName = null;
+      setActiveVideoCall(false);
     }
-    
-    const staleResult = this.resolveStaleConnectRequest(room, connectRequestId, targetRoomName);
-    if (staleResult !== null) return staleResult;
+    if (cancelled) return false;
 
     throw e;
   }
@@ -7804,6 +7714,7 @@ export class VideoCallSession extends SimpleEventEmitter<VideoCallSessionEvents>
       const reusedOrBlocked = await this.prepareRoomForLiveKitConnect(targetRoomName);
       if (reusedOrBlocked !== null) return reusedOrBlocked;
     }
+    if (this.ended || this.endCallInProgress) return false;
     
     if (this.incomingAcceptDeferCapture) {
       // Видео-входящий: короткая пауза до capture. Аудио — без sleep (блокировало Room.connect).
@@ -7819,11 +7730,13 @@ export class VideoCallSession extends SimpleEventEmitter<VideoCallSessionEvents>
     
     const reusedAfterCleanup = await this.clearStuckRoomBeforeConnect(targetRoomName);
     if (reusedAfterCleanup !== null) return reusedAfterCleanup;
+    if (this.ended || this.endCallInProgress) return false;
     
     // КРИТИЧНО: Создаем промис подключения для защиты от множественных вызовов
     const connectionPromise = (async (): Promise<boolean> => {
       const iceLoadStartedAt = Date.now();
       const rtcConfig = await this.loadIceConfiguration(options);
+      if (this.ended || this.endCallInProgress) return false;
       const room = this.createLiveKitRoomForConnect();
       room.once(RoomEvent.SignalConnected, () => {
         this.startEarlyAudioPublish(room, tracksReadyPromise);
@@ -7840,8 +7753,9 @@ export class VideoCallSession extends SimpleEventEmitter<VideoCallSessionEvents>
         } catch {}
         // Пока грузились ICE/E2EE, звонок могли завершить: не входить в комнату «призраком» —
         // иначе собеседник видит нас в комнате и ждёт, а call:end уже ушёл.
-        if (this.ended || this.endCallInProgress) {
-          logger.info('[VideoCallSession] ⏭️ Call ended before LiveKit connect — not joining');
+        if (this.ended || this.endCallInProgress || this.room !== room) {
+          await disposeRoom(room, !(this.ended || this.endCallInProgress));
+          if (this.room === room) this.room = null;
           return false;
         }
         // КРИТИЧНО: Новая комната всегда в состоянии 'disconnected' до connect()
@@ -7872,12 +7786,8 @@ export class VideoCallSession extends SimpleEventEmitter<VideoCallSessionEvents>
         await this.connectRoomWithDnsRetry(room, url, token, targetRoomName, options, rtcConfig);
 
         // Звонок завершили, пока шёл connect: сразу выходим, чтобы не остаться в комнате призраком.
-        if (this.ended || this.endCallInProgress) {
-          logger.info('[VideoCallSession] ⏭️ Call ended during LiveKit connect — leaving room');
-          try {
-            room.removeAllListeners();
-            await room.disconnect();
-          } catch {}
+        if (this.ended || this.endCallInProgress || this.room !== room) {
+          await disposeRoom(room, !(this.ended || this.endCallInProgress));
           if (this.room === room) {
             this.room = null;
             this.currentRoomName = null;
@@ -7894,6 +7804,7 @@ export class VideoCallSession extends SimpleEventEmitter<VideoCallSessionEvents>
             hasToken: !!token,
             tokenLength: token?.length || 0,
           });
+          await disposeRoom(room);
           if (this.room === room) {
             this.room = null;
             this.currentRoomName = null;
@@ -8083,117 +7994,14 @@ export class VideoCallSession extends SimpleEventEmitter<VideoCallSessionEvents>
    * и таймаут с принудительной утилизацией — разрешить промис обязаны в любом случае.
    */
   private createRoomDisconnectPromise(room: Room): Promise<void> {
-    return new Promise<void>((resolve) => {
-      // КРИТИЧНО: Сохраняем ссылку на room, чтобы не потерять её при установке this.room = null
-      const roomToDisconnect = room;
-      let disconnectedHandler: (() => void) | null = null;
-      let timeoutId: NodeJS.Timeout | null = null;
-      
-      // Устанавливаем обработчик события Disconnected
-      disconnectedHandler = () => {
-        if (timeoutId) {
-          clearTimeout(timeoutId);
-        }
-        // КРИТИЧНО: Очищаем ссылку на комнату СИНХРОННО в обработчике события
-        // Это гарантирует, что this.room = null установится до разрешения промиса
-        if (this.room === roomToDisconnect) {
-          this.room = null;
-          this.currentRoomName = null;
-        }
-        // Best-effort: полностью добиваем внутренний engine/ws, чтобы LiveKit не успевал
-        // выстрелить WARN "ping timeout triggered" уже ПОСЛЕ завершения звонка.
-        this.forceDisposeRoom(roomToDisconnect, 'disconnected');
-        this.disconnectReason = 'unknown';
-        this.isDisconnecting = false;
-        this.disconnectPromise = null;
-        resolve();
-      };
-      
-      // Подписываемся на событие Disconnected
-      roomToDisconnect.once(RoomEvent.Disconnected, disconnectedHandler);
-      
-      // Таймаут на случай, если событие Disconnected не придет (защита от зависания)
-      timeoutId = setTimeout(() => {
-        logger.warn('[VideoCallSession] Disconnect timeout, forcing cleanup', { 
-          roomState: roomToDisconnect.state 
-        });
-        if (disconnectedHandler) {
-          roomToDisconnect.off(RoomEvent.Disconnected, disconnectedHandler);
-        }
-        // disconnect() только если комната была connected, иначе "cannot send signal request before connected, type: leave"
-        if (roomToDisconnect.state === 'connected') {
-          try { roomToDisconnect.disconnect(); } catch {}
-        }
-        try { roomToDisconnect.removeAllListeners(); } catch {}
-        // Дополнительно принудительно закрываем внутренний engine/ws.
-        this.forceDisposeRoom(roomToDisconnect, 'timeout');
-        // КРИТИЧНО: Очищаем ссылку на комнату СИНХРОННО при таймауте
-        // Это гарантирует, что this.room = null установится даже если событие Disconnected не придет
-        if (this.room === roomToDisconnect) {
-          this.room = null;
-          this.currentRoomName = null;
-        }
-        this.disconnectReason = 'unknown';
-        this.isDisconnecting = false;
-        this.disconnectPromise = null;
-        resolve();
-      }, 5000); // 5 секунд максимум на отключение
-      
-      // КРИТИЧНО: НЕ устанавливаем this.room = null сразу - это делается только после полного отключения
-      // в обработчике Disconnected, чтобы избежать утечек соединений
-      
-      // КРИТИЧНО: НЕ вызываем room.removeAllListeners() перед disconnect()
-      // Это удаляет внутренние обработчики LiveKit (ping/pong, корректное завершение),
-      // что приводит к "ping timeout" и "connection state mismatch" ошибкам.
-      // room.disconnect() отправляет "leave" на сервер — вызывать только если state === 'connected',
-      // иначе LiveKit бросает "cannot send signal request before connected, type: leave".
-      (async () => {
-        if (roomToDisconnect.state !== 'connected') {
-          if (timeoutId) {
-            clearTimeout(timeoutId);
-            timeoutId = null;
-          }
-          this.forceDisposeRoom(roomToDisconnect, 'disconnectRoom:not_connected');
-          if (this.room === roomToDisconnect) {
-            this.room = null;
-            this.currentRoomName = null;
-          }
-          if (disconnectedHandler) {
-            roomToDisconnect.off(RoomEvent.Disconnected, disconnectedHandler);
-            disconnectedHandler();
-          }
-          return;
-        }
-        try {
-          // Повторная проверка: за время ожидания комната могла перейти в reconnecting (уход в фон) — тогда disconnect() бросает "Received leave request while trying to (re)connect".
-          if (roomToDisconnect.state !== 'connected') {
-            this.forceDisposeRoom(roomToDisconnect, 'disconnectRoom:not_connected_before_disconnect');
-            return;
-          }
-          // Не вызываем unpublish перед disconnect(): он стартует renegotiation (createAnswer),
-          // а параллельный close PC даёт "Failed to set local answer sdp: Called in wrong state: stable".
-          // LiveKit.disconnect() сам делает leave → close engine/PC → затем stopTracks без SDP race.
-          await roomToDisconnect.disconnect();
-          // Короткая задержка перед forceDisposeRoom: даём движку LiveKit обновить состояние (closed/transports),
-          // чтобы снизить WARN "connection state mismatch" при быстром закрытии.
-          await new Promise((r) => setTimeout(r, 50));
-          this.forceDisposeRoom(roomToDisconnect, 'disconnectRoom:after_await');
-        } catch (e: unknown) {
-          const errorMessage = (e as Error | null | undefined)?.message || String(e || '');
-          const isLeaveWhileReconnect = /leave request|LeaveRequest|reconnect/i.test(errorMessage);
-          const isTeardownSdpRace =
-            /wrong state:\s*stable|unable to set answer|NegotiationError/i.test(errorMessage);
-          if (
-            !errorMessage.includes('before connected') &&
-            !errorMessage.includes('already disconnected') &&
-            !isLeaveWhileReconnect &&
-            !isTeardownSdpRace
-          ) {
-            logger.warn('[VideoCallSession] Error disconnecting room', e);
-          }
-          this.forceDisposeRoom(roomToDisconnect, 'disconnectRoom:after_catch');
-        }
-      })();
+    return disposeRoom(room, false).finally(() => {
+      if (this.room === room) {
+        this.room = null;
+        this.currentRoomName = null;
+      }
+      this.disconnectReason = 'unknown';
+      this.isDisconnecting = false;
+      this.disconnectPromise = null;
     });
   }
 
@@ -8217,6 +8025,7 @@ export class VideoCallSession extends SimpleEventEmitter<VideoCallSessionEvents>
     
       // Проверяем, не отключена ли комната уже
       if (room.state === 'disconnected') {
+        await disposeRoom(room, false);
         this.room = null;
         this.currentRoomName = null; // Очищаем имя комнаты
         return;
@@ -8282,45 +8091,6 @@ export class VideoCallSession extends SimpleEventEmitter<VideoCallSessionEvents>
     }
   }
 
-  /** Sync-close publisher/subscriber PCs after leave / on force dispose. */
-  private abortPeerConnectionNegotiation(room: Room): void {
-    try {
-      this.abortIncomingSdpNegotiation(room);
-      const engine = room?.engine as RoomDisposalEngine | undefined;
-      if (!engine) return;
-      const pcm = engine.pcManager;
-      try { pcm?.publisher?.close?.(); } catch {}
-      try { pcm?.subscriber?.close?.(); } catch {}
-      try { pcm?.close?.(); } catch {}
-      try { engine.pcManager = undefined; } catch {}
-    } catch {
-      // Best-effort only.
-    }
-  }
-
-  // livekit-client иногда оставляет активный ws/engine на мобилках даже после room.disconnect().
-  // Это приводит к WARN "ping timeout triggered" и "connection state mismatch" после завершения звонка.
-  // Закрываем в порядке: транспорт → сокет/ws → signalClient → engine, чтобы состояние было согласованным.
-  private forceDisposeRoom(room: Room, context: 'disconnected' | 'timeout' | string): void {
-    try {
-      // Внешние listeners можно снять безопасно после начала/завершения disconnect.
-      try { room?.removeAllListeners?.(); } catch {}
-
-      const engine = room?.engine as RoomDisposalEngine | undefined;
-      this.abortPeerConnectionNegotiation(room);
-      const signalClient = engine?.signalClient ?? engine?.client;
-      // Порядок: сначала транспорт и сокет, затем signalClient, затем engine — чтобы не было "connection state mismatch".
-      try { signalClient?.transport?.close?.(); } catch {}
-      try { signalClient?.ws?.close?.(); } catch {}
-      try { signalClient?.socket?.close?.(); } catch {}
-      try { signalClient?.close?.(); } catch {}
-      try { engine?.client?.close?.(); } catch {}
-      try { engine?.close?.(); } catch {}
-
-    } catch {
-      // Никогда не даем этой логике ломать завершение звонка.
-    }
-  }
 
   /**
    * Best-effort ремонт залипшей камеры: снять публикацию, пересоздать трек, опубликовать снова.

@@ -1,0 +1,584 @@
+
+> frontend@1.0.0 test:ci
+> NODE_ENV=test jest --ci --runInBand --watchman=false
+
+PASS sockets/modules/e2eCrypto.test.ts
+PASS sockets/modules/e2e.test.ts
+  ● Console
+
+    console.info
+      [INFO] [e2e] publish device key { ok: true, error: null, vault: true }
+
+      at Object.info (utils/logger.ts:24:15)
+
+    console.info
+      [INFO] [e2e] publish device key { ok: true, error: null, vault: true }
+
+      at Object.info (utils/logger.ts:24:15)
+
+    console.info
+      [INFO] [e2e] publish device key { ok: true, error: null, vault: true }
+
+      at Object.info (utils/logger.ts:24:15)
+
+    console.info
+      [INFO] [e2e] publish device key { ok: true, error: null, vault: true }
+
+      at Object.info (utils/logger.ts:24:15)
+
+    console.info
+      [INFO] [e2e] publish device key { ok: true, error: null, vault: true }
+
+      at Object.info (utils/logger.ts:24:15)
+
+    console.info
+      [INFO] [e2e] publish device key { ok: true, error: null, vault: true }
+
+      at Object.info (utils/logger.ts:24:15)
+
+    console.info
+      [INFO] [e2e] publish device key { ok: true, error: null, vault: true }
+
+      at Object.info (utils/logger.ts:24:15)
+
+    console.info
+      [INFO] [e2e] publish device key { ok: true, error: null, vault: true }
+
+      at Object.info (utils/logger.ts:24:15)
+
+    console.info
+      [INFO] [e2e] publish device key { ok: true, error: null, vault: true }
+
+      at Object.info (utils/logger.ts:24:15)
+
+    console.info
+      [INFO] [e2e] publish device key { ok: true, error: null, vault: true }
+
+      at Object.info (utils/logger.ts:24:15)
+
+    console.info
+      [INFO] [e2e] publish device key { ok: true, error: null, vault: true }
+
+      at Object.info (utils/logger.ts:24:15)
+
+    console.info
+      [INFO] [e2e] publish device key { ok: true, error: null, vault: true }
+
+      at Object.info (utils/logger.ts:24:15)
+
+    console.info
+      [INFO] [e2e] publish device key { ok: true, error: null, vault: true }
+
+      at Object.info (utils/logger.ts:24:15)
+
+    console.info
+      [INFO] [e2e] publish device key { ok: true, error: null, vault: true }
+
+      at Object.info (utils/logger.ts:24:15)
+
+    console.info
+      [INFO] [e2e] publish device key { ok: true, error: null, vault: true }
+
+      at Object.info (utils/logger.ts:24:15)
+
+    console.info
+      [INFO] [e2e] publish device key { ok: true, error: null, vault: true }
+
+      at Object.info (utils/logger.ts:24:15)
+
+    console.info
+      [INFO] [e2e] publish device key { ok: true, error: null, vault: true }
+
+      at Object.info (utils/logger.ts:24:15)
+
+    console.info
+      [INFO] [e2e] publish device key { ok: true, error: null, vault: true }
+
+      at Object.info (utils/logger.ts:24:15)
+
+    console.info
+      [INFO] [e2e] publish device key { ok: true, error: null, vault: true }
+
+      at Object.info (utils/logger.ts:24:15)
+
+    console.info
+      [INFO] [e2e] publish { ok: true, error: null, kdf: 'scrypt', kdfMs: 99, publishMs: 0 }
+
+      at Object.info (utils/logger.ts:24:15)
+
+    console.info
+      [INFO] [e2e] publish device key { ok: true, error: null, vault: true }
+
+      at Object.info (utils/logger.ts:24:15)
+
+    console.info
+      [INFO] [e2e] publish device key { ok: true, error: null, vault: true }
+
+      at Object.info (utils/logger.ts:24:15)
+
+    console.info
+      [INFO] [e2e] publish { ok: true, error: null, kdf: 'scrypt', kdfMs: 112, publishMs: 0 }
+
+      at Object.info (utils/logger.ts:24:15)
+
+    console.info
+      [INFO] [e2e] publish device key { ok: true, error: null, vault: true }
+
+      at Object.info (utils/logger.ts:24:15)
+
+    console.info
+      [INFO] [e2e] publish device key { ok: true, error: null, vault: true }
+
+      at Object.info (utils/logger.ts:24:15)
+
+    console.info
+      [INFO] [e2e] publish device key { ok: true, error: null, vault: true }
+
+      at Object.info (utils/logger.ts:24:15)
+
+    console.info
+      [INFO] [e2e] publish { ok: true, error: null, kdf: 'scrypt', kdfMs: 111, publishMs: 0 }
+
+      at Object.info (utils/logger.ts:24:15)
+
+    console.info
+      [INFO] [e2e] publish device key { ok: true, error: null, vault: true }
+
+      at Object.info (utils/logger.ts:24:15)
+
+    console.info
+      [INFO] [e2e] publish device key { ok: true, error: null, vault: true }
+
+      at Object.info (utils/logger.ts:24:15)
+
+    console.info
+      [INFO] [e2e] publish { ok: true, error: null, kdf: 'scrypt', kdfMs: 108, publishMs: 0 }
+
+      at Object.info (utils/logger.ts:24:15)
+
+    console.info
+      [INFO] [e2e] publish device key { ok: true, error: null, vault: true }
+
+      at Object.info (utils/logger.ts:24:15)
+
+    console.info
+      [INFO] [e2e] publish device key { ok: true, error: null, vault: true }
+
+      at Object.info (utils/logger.ts:24:15)
+
+    console.info
+      [INFO] [e2e] publish { ok: true, error: null, kdf: 'scrypt', kdfMs: 111, publishMs: 0 }
+
+      at Object.info (utils/logger.ts:24:15)
+
+    console.info
+      [INFO] [e2e] publish device key { ok: true, error: null, vault: true }
+
+      at Object.info (utils/logger.ts:24:15)
+
+    console.info
+      [INFO] [e2e] publish device key { ok: true, error: null, vault: true }
+
+      at Object.info (utils/logger.ts:24:15)
+
+    console.info
+      [INFO] [e2e] publish device key { ok: true, error: null, vault: true }
+
+      at Object.info (utils/logger.ts:24:15)
+
+    console.info
+      [INFO] [e2e] publish device key { ok: true, error: null, vault: true }
+
+      at Object.info (utils/logger.ts:24:15)
+
+    console.info
+      [INFO] [e2e] publish device key { ok: true, error: null, vault: true }
+
+      at Object.info (utils/logger.ts:24:15)
+
+    console.info
+      [INFO] [e2e] publish device key { ok: true, error: null, vault: true }
+
+      at Object.info (utils/logger.ts:24:15)
+
+    console.info
+      [INFO] [e2e] publish device key { ok: true, error: null, vault: true }
+
+      at Object.info (utils/logger.ts:24:15)
+
+    console.info
+      [INFO] [e2e] publish device key { ok: true, error: null, vault: true }
+
+      at Object.info (utils/logger.ts:24:15)
+
+    console.info
+      [INFO] [e2e] publish device key { ok: true, error: null, vault: true }
+
+      at Object.info (utils/logger.ts:24:15)
+
+    console.info
+      [INFO] [e2e] publish device key { ok: true, error: null, vault: true }
+
+      at Object.info (utils/logger.ts:24:15)
+
+    console.info
+      [INFO] [e2e] publish device key { ok: true, error: null, vault: true }
+
+      at Object.info (utils/logger.ts:24:15)
+
+    console.info
+      [INFO] [e2e] publish device key { ok: true, error: null, vault: true }
+
+      at Object.info (utils/logger.ts:24:15)
+
+    console.info
+      [INFO] [e2e] publish device key { ok: true, error: null, vault: true }
+
+      at Object.info (utils/logger.ts:24:15)
+
+    console.info
+      [INFO] [e2e] publish device key { ok: true, error: null, vault: true }
+
+      at Object.info (utils/logger.ts:24:15)
+
+    console.info
+      [INFO] [e2e] publish device key { ok: true, error: null, vault: true }
+
+      at Object.info (utils/logger.ts:24:15)
+
+    console.info
+      [INFO] [e2e] publish device key { ok: true, error: null, vault: true }
+
+      at Object.info (utils/logger.ts:24:15)
+
+    console.info
+      [INFO] [e2e] publish device key { ok: true, error: null, vault: true }
+
+      at Object.info (utils/logger.ts:24:15)
+
+    console.info
+      [INFO] [e2e] publish device key { ok: true, error: null, vault: true }
+
+      at Object.info (utils/logger.ts:24:15)
+
+    console.info
+      [INFO] [e2e] publish device key { ok: true, error: null, vault: true }
+
+      at Object.info (utils/logger.ts:24:15)
+
+    console.info
+      [INFO] [e2e] publish device key { ok: true, error: null, vault: true }
+
+      at Object.info (utils/logger.ts:24:15)
+
+PASS sockets/modules/messages.offlineAck.test.ts
+PASS screens/home/HomeScreen.appState.test.ts
+PASS screens/home/friendHelpers.avatar.test.ts
+PASS sockets/modules/callE2ee.test.ts
+PASS sockets/modules/outbox.offline.test.ts
+PASS sockets/modules/identity.reinstall.test.ts
+  ● Console
+
+    console.log
+      [createUser] Creating user...
+
+      at createUserInternal (sockets/modules/identity.ts:135:11)
+
+    console.log
+      [createUser] Cleared old userId and all local data from AsyncStorage
+
+      at createUserInternal (sockets/modules/identity.ts:166:13)
+
+    console.log
+      [createUser] Attempt 1/5...
+
+      at createUserInternal (sockets/modules/identity.ts:176:15)
+
+    console.warn
+      [createUser] attach unauthorized — retrying before touching installId { attempt: 1, secretReadOk: true }
+
+      256 |         const secretReadOk = typeof installSecret === "string" && installSecret.length >= 16;
+      257 |         if (!secretReadOk || attempt < 4) {
+    > 258 |           console.warn("[createUser] attach unauthorized — retrying before touching installId", {
+          |                   ^
+      259 |             attempt,
+      260 |             secretReadOk,
+      261 |           });
+
+      at createUserInternal (sockets/modules/identity.ts:258:19)
+      at sockets/modules/identity.ts:302:14
+      at createUser (sockets/modules/identity.ts:309:12)
+      at Object.<anonymous> (sockets/modules/identity.reinstall.test.ts:96:20)
+
+    console.log
+      [createUser] Attempt 2/5...
+
+      at createUserInternal (sockets/modules/identity.ts:176:15)
+
+    console.warn
+      [createUser] attach unauthorized — retrying before touching installId { attempt: 2, secretReadOk: true }
+
+      256 |         const secretReadOk = typeof installSecret === "string" && installSecret.length >= 16;
+      257 |         if (!secretReadOk || attempt < 4) {
+    > 258 |           console.warn("[createUser] attach unauthorized — retrying before touching installId", {
+          |                   ^
+      259 |             attempt,
+      260 |             secretReadOk,
+      261 |           });
+
+      at createUserInternal (sockets/modules/identity.ts:258:19)
+      at sockets/modules/identity.ts:302:14
+      at createUser (sockets/modules/identity.ts:309:12)
+      at Object.<anonymous> (sockets/modules/identity.reinstall.test.ts:96:20)
+
+    console.log
+      [createUser] Attempt 3/5...
+
+      at createUserInternal (sockets/modules/identity.ts:176:15)
+
+    console.warn
+      [createUser] attach unauthorized — retrying before touching installId { attempt: 3, secretReadOk: true }
+
+      256 |         const secretReadOk = typeof installSecret === "string" && installSecret.length >= 16;
+      257 |         if (!secretReadOk || attempt < 4) {
+    > 258 |           console.warn("[createUser] attach unauthorized — retrying before touching installId", {
+          |                   ^
+      259 |             attempt,
+      260 |             secretReadOk,
+      261 |           });
+
+      at createUserInternal (sockets/modules/identity.ts:258:19)
+      at sockets/modules/identity.ts:302:14
+      at createUser (sockets/modules/identity.ts:309:12)
+      at Object.<anonymous> (sockets/modules/identity.reinstall.test.ts:96:20)
+
+    console.log
+      [createUser] Attempt 4/5...
+
+      at createUserInternal (sockets/modules/identity.ts:176:15)
+
+    console.warn
+      [createUser] attach rejected (installId belongs to a previous install) — switching to a fresh random installId
+
+      263 |           continue;
+      264 |         }
+    > 265 |         console.warn("[createUser] attach rejected (installId belongs to a previous install) — switching to a fresh random installId");
+          |                 ^
+      266 |         const { regenerateRandomInstallId } = await import("../../utils/installId");
+      267 |         installId = await regenerateRandomInstallId();
+      268 |         clearCurrentUserId();
+
+      at createUserInternal (sockets/modules/identity.ts:265:17)
+      at sockets/modules/identity.ts:302:14
+      at createUser (sockets/modules/identity.ts:309:12)
+      at Object.<anonymous> (sockets/modules/identity.reinstall.test.ts:96:20)
+
+    console.log
+      [clearCurrentUserId] Cleared currentUserId
+
+      at clearCurrentUserId (sockets/modules/identity.ts:361:11)
+
+    console.log
+      [createUser] Attempt 5/5...
+
+      at createUserInternal (sockets/modules/identity.ts:176:15)
+
+    console.log
+      [createUser] User created successfully: aaaaaaaaaaaaaaaaaaaaaaaa
+
+      at createUserInternal (sockets/modules/identity.ts:192:19)
+
+    console.log
+      [createUser] Creating user...
+
+      at createUserInternal (sockets/modules/identity.ts:135:11)
+
+    console.log
+      [createUser] User already exists on server: aaaaaaaaaaaaaaaaaaaaaaaa skipping creation
+
+      at createUserInternal (sockets/modules/identity.ts:142:17)
+
+    console.log
+      [createUser] Creating user...
+
+      at createUserInternal (sockets/modules/identity.ts:135:11)
+
+    console.warn
+      [createUser] Failed to check user existence, clearing local userId: ReferenceError: __DEV__ is not defined
+          at checkUserExists (/Users/maximkoltovich/LiVi/livi-app/frontend/sockets/modules/identity.ts:43:7)
+          at createUserInternal (/Users/maximkoltovich/LiVi/livi-app/frontend/sockets/modules/identity.ts:140:28)
+          at /Users/maximkoltovich/LiVi/livi-app/frontend/sockets/modules/identity.ts:302:20
+          at createUser (/Users/maximkoltovich/LiVi/livi-app/frontend/sockets/modules/identity.ts:306:5)
+          at Object.<anonymous> (/Users/maximkoltovich/LiVi/livi-app/frontend/sockets/modules/identity.reinstall.test.ts:127:11)
+
+      150 |       }
+      151 |     } catch (e) {
+    > 152 |       console.warn("[createUser] Failed to check user existence, clearing local userId:", e);
+          |               ^
+      153 |       clearCurrentUserId();
+      154 |     }
+      155 |   }
+
+      at createUserInternal (sockets/modules/identity.ts:152:15)
+      at sockets/modules/identity.ts:302:14
+      at createUser (sockets/modules/identity.ts:309:12)
+      at Object.<anonymous> (sockets/modules/identity.reinstall.test.ts:127:5)
+
+    console.log
+      [clearCurrentUserId] Cleared currentUserId
+
+      at clearCurrentUserId (sockets/modules/identity.ts:361:11)
+
+    console.log
+      [createUser] Cleared old userId and all local data from AsyncStorage
+
+      at createUserInternal (sockets/modules/identity.ts:166:13)
+
+    console.log
+      [createUser] Attempt 1/5...
+
+      at createUserInternal (sockets/modules/identity.ts:176:15)
+
+    console.warn
+      [createUser] attach unauthorized — retrying before touching installId { attempt: 1, secretReadOk: true }
+
+      256 |         const secretReadOk = typeof installSecret === "string" && installSecret.length >= 16;
+      257 |         if (!secretReadOk || attempt < 4) {
+    > 258 |           console.warn("[createUser] attach unauthorized — retrying before touching installId", {
+          |                   ^
+      259 |             attempt,
+      260 |             secretReadOk,
+      261 |           });
+
+      at createUserInternal (sockets/modules/identity.ts:258:19)
+      at sockets/modules/identity.ts:302:14
+      at createUser (sockets/modules/identity.ts:309:12)
+      at Object.<anonymous> (sockets/modules/identity.reinstall.test.ts:127:5)
+
+    console.log
+      [createUser] Attempt 2/5...
+
+      at createUserInternal (sockets/modules/identity.ts:176:15)
+
+    console.warn
+      [createUser] attach unauthorized — retrying before touching installId { attempt: 2, secretReadOk: true }
+
+      256 |         const secretReadOk = typeof installSecret === "string" && installSecret.length >= 16;
+      257 |         if (!secretReadOk || attempt < 4) {
+    > 258 |           console.warn("[createUser] attach unauthorized — retrying before touching installId", {
+          |                   ^
+      259 |             attempt,
+      260 |             secretReadOk,
+      261 |           });
+
+      at createUserInternal (sockets/modules/identity.ts:258:19)
+      at sockets/modules/identity.ts:302:14
+      at createUser (sockets/modules/identity.ts:309:12)
+      at Object.<anonymous> (sockets/modules/identity.reinstall.test.ts:127:5)
+
+    console.log
+      [createUser] Attempt 3/5...
+
+      at createUserInternal (sockets/modules/identity.ts:176:15)
+
+    console.log
+      [createUser] User created successfully: aaaaaaaaaaaaaaaaaaaaaaaa
+
+      at createUserInternal (sockets/modules/identity.ts:192:19)
+
+PASS sockets/modules/socketTransportPreference.test.ts
+PASS components/VideoChat/callScreen/callAudioRouteUi.test.ts
+PASS utils/callLifecycleTelemetry.test.ts
+PASS utils/appReviewPolicy.test.ts
+PASS sockets/modules/outboxCapacity.test.ts
+PASS components/VideoChat/hooks/audioRouting/explicitRouteChoice.test.ts
+PASS screens/chat/videoNoteThumbValidation.test.ts
+PASS sockets/modules/outbox.voice.test.ts
+PASS utils/mediaUpload.test.ts
+PASS utils/pushNotifications.delivery.test.ts
+PASS utils/pipAudioOutputRoute.test.ts
+PASS src/webrtc/sessions/videoCall/roomOptions.test.ts
+PASS sockets/modules/messages.previews.test.ts
+PASS screens/fliq/fliqPlayerHtml.test.ts
+PASS components/VideoChat/callScreen/callRouteIntent.test.ts
+PASS components/VideoChat/hooks/audioRouting/pickDesiredRoute.test.ts
+PASS screens/home/hooks/useChatPreviews.test.ts
+PASS screens/chat/videoNoteFiles.test.ts
+PASS src/webrtc/sessions/videoCall/LocalVideoHealthWatchdog.test.ts
+PASS screens/chat/chatMessagePersistQueue.test.ts
+PASS src/webrtc/sessions/videoCall/mediaStats.test.ts
+PASS src/webrtc/sessions/videoCall/localAudioRecovery.test.ts
+PASS components/VideoChat/callScreen/systemPiPReturnGuard.test.ts
+PASS utils/activeCallSession.ongoingMedia.test.ts
+PASS src/webrtc/sessions/videoCall/signalWatchdog.test.ts
+PASS sockets/modules/reactionOutbox.test.ts
+PASS sockets/modules/messages.send.test.ts
+PASS src/webrtc/sessions/videoCall/callIdentity.test.ts
+PASS src/webrtc/sessions/videoCall/RemoteTrackSubscriber.test.ts
+PASS src/webrtc/sessions/videoCall/NetworkReachabilityMonitor.test.ts
+PASS screens/home/hooks/useHomeBadges.notifications.test.ts
+PASS screens/chat/chatHistory.dedupe.test.ts
+PASS screens/chat/ChatVideoNote.test.tsx
+PASS utils/callHeadsetAudioFallback.test.ts
+PASS src/webrtc/sessions/videoCall/remoteTrackChange.test.ts
+PASS src/webrtc/sessions/videoCall/connectErrors.test.ts
+PASS src/webrtc/sessions/videoCall/CallFlowMetrics.test.ts
+PASS sockets/modules/outbox.nativeTimers.test.ts
+PASS components/frames/CosmeticFramePreview.test.tsx
+PASS utils/playIntegrity.test.ts
+PASS utils/callAudioRouteReapply.test.ts
+PASS utils/activeCallBackgroundAudio.test.ts
+PASS src/webrtc/sessions/videoCall/iceConnectOptions.test.ts
+PASS components/VideoChat/hooks/audioRouting/bluetoothCycleState.test.ts
+PASS src/webrtc/sessions/disposeRoom.test.ts
+PASS components/VideoChat/callScreen/callTimerStore.test.ts
+PASS screens/chat/chatSelection.test.ts
+PASS screens/fliq/fliqLinks.test.ts
+PASS utils/externalCallHold.screenLock.test.ts
+PASS utils/callExpiry.test.ts
+PASS utils/callBuiltinRouteChoice.test.ts
+PASS utils/adaptiveType.test.ts
+PASS src/webrtc/sessions/videoCall/localTrackPublications.test.ts
+PASS screens/home/callLog.test.ts
+PASS sockets/modules/welcomePresenceState.test.ts
+PASS sockets/modules/outbox.rateLimit.test.ts
+PASS screens/chat/chatAndroidImeDock.test.ts
+PASS utils/callRuntime.test.ts
+PASS utils/callLifecycle.test.ts
+PASS utils/callAudioSession.test.ts
+PASS hooks/useOrientationLayoutGuard.test.ts
+PASS components/VideoChat/hooks/audioRouting/routeReasons.test.ts
+PASS screens/home/hooks/useCallLog.notifications.test.ts
+PASS src/webrtc/sessions/publishLocalTrack.test.ts
+PASS sockets/modules/calls.httpFallback.test.ts
+PASS screens/chat/useChatSessionState.test.ts
+PASS screens/chat/chatExitTransition.test.ts
+PASS screens/fliq/fliqSaved.test.ts
+PASS utils/pendingMissedCallHistory.test.ts
+PASS utils/partnerExternalHoldUi.test.ts
+PASS utils/appReview.test.ts
+PASS utils/appFont.test.ts
+PASS src/webrtc/sessions/videoCall/signalProxy.test.ts
+PASS components/VideoChat/hooks/audioRouting/bluetoothSettling.test.ts
+PASS components/VideoChat/callScreen/callFormatting.test.ts
+PASS screens/home/chatPreview.status.test.ts
+PASS screens/chat/chatList.grouping.test.ts
+PASS screens/chat/chatKeyboardGeometry.test.ts
+PASS screens/chat/chatForward.layout.test.ts
+PASS utils/welcomeNotificationFilters.test.ts
+PASS utils/externalCallHold.scope.test.ts
+PASS utils/callAudioRouteTransitionGuards.test.ts
+PASS screens/home/friendHelpers.reuse.test.ts
+PASS sockets/modules/presence.snapshot.test.ts
+PASS sockets/modules/missedCalls.notifications.test.ts
+PASS screens/chat/outboxPendingRows.test.ts
+PASS screens/chat/chatMessageStorageWrite.test.ts
+PASS utils/callAudioSession.android.test.ts
+PASS screens/chat/chatPlaybackCoordinator.test.ts
+
+Test Suites: 97 passed, 97 total
+Tests:       1008 passed, 1008 total
+Snapshots:   0 total
+Time:        8.853 s, estimated 12 s
+Ran all test suites.
+Force exiting Jest: Have you considered using `--detectOpenHandles` to detect async operations that kept running after all tests finished?

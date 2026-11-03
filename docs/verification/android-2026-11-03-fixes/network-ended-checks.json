@@ -1,0 +1,21 @@
+{
+  "hangupCompletedAt": 1793684120.2712908,
+  "checks": [
+    {
+      "device": "a35",
+      "noLateSdkReconnectEvents": true,
+      "lateSdkReconnectEvents": [],
+      "audioModeNormal": true,
+      "audioOwner": "mAudioModeOwner: AudioModeInfo: mMode=MODE_NORMAL, mPid=0, mUid=0",
+      "callScreenGone": true
+    },
+    {
+      "device": "emulator",
+      "noLateSdkReconnectEvents": true,
+      "lateSdkReconnectEvents": [],
+      "audioModeNormal": true,
+      "audioOwner": "mAudioModeOwner: AudioDeviceBroker$AudioModeInfo[mMode=0, mPid=0, mUid=0, mToken=null]",
+      "callScreenGone": true
+    }
+  ]
+}

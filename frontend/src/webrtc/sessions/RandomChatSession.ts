@@ -1,4 +1,6 @@
-import type { CompatibleLocalPublication, LocalPublicationCollection, NativeLiveKitMediaTrack, RTCStatsSample, RoomDisposalEngine, TrackStatsParticipant } from '../rtcCompatibilityTypes';
+import { publishLocalTrack } from './publishLocalTrack';
+import { disposeRoom } from './disposeRoom';
+import type { CompatibleLocalPublication, LocalPublicationCollection, NativeLiveKitMediaTrack, RTCStatsSample, TrackStatsParticipant } from '../rtcCompatibilityTypes';
 import type { RemoteAudioTrack } from 'livekit-client';
 import { MediaStream } from '@livekit/react-native-webrtc';
 import {
@@ -2483,223 +2485,36 @@ export class RandomChatSession extends SimpleEventEmitter<RandomChatSessionEvent
     } catch {}
   }
 
-  private async publishVideoTrackIfRoomActive(force = false): Promise<void> {
-    if (!this.room || !this.localVideoTrack) return;
-    // КРИТИЧНО: если камера выключена — не публикуем, но можем агрессивно снять старые публикации (force=true)
-    
-    // КРИТИЧНО: Проверяем состояние комнаты и участника в начале метода
-    // Участник должен иметь sid (session ID), что означает что он полностью добавлен в комнату
-    if (this.room.state !== 'connected' || 
-        !this.room.localParticipant || 
-        !this.room.localParticipant.sid) {
-      return;
-    }
-    
+  private async publishVideoTrackIfRoomActive(_force = false): Promise<boolean> {
+    const room = this.room;
+    const track = this.localVideoTrack;
+    const requestId = this.connectRequestId;
+    if (!room || !track || !this.isCamOn) return !this.isCamOn;
     try {
-      const publications = this.room.localParticipant.videoTrackPublications as LocalPublicationCollection;
-      // КРИТИЧНО: В режиме force (пересоздание/рестарт камеры) агрессивно снимаем ВСЕ старые camera публикации.
-      // Это устраняет ошибку LiveKit: "publishing a second track with the same source: camera".
-      const shouldUnpublishAll = !!force;
-      let hasUnpublished = false;
-      if (publications && typeof publications.values === 'function') {
-        for (const pub of publications.values()) {
-          const track = pub?.track;
-          const trackEnded = track?.mediaStreamTrack?.readyState === 'ended';
-          const isSameTrack = track && track === this.localVideoTrack;
-          if (track && (shouldUnpublishAll || !isSameTrack || trackEnded)) {
-            try {
-              // КРИТИЧНО: При перевороте камеры (force=true) используем stop=true для полного удаления трека
-              // Это гарантирует, что удаленный участник получит событие об удалении и сможет подписаться на новый трек
-              await this.room.localParticipant.unpublishTrack(track, shouldUnpublishAll);
-              hasUnpublished = true;
-            } catch {}
-          }
-        }
-      } else if (Array.isArray(publications)) {
-        for (const pub of publications) {
-          const track = pub?.track;
-          const trackEnded = track?.mediaStreamTrack?.readyState === 'ended';
-          const isSameTrack = track && track === this.localVideoTrack;
-          if (track && (shouldUnpublishAll || !isSameTrack || trackEnded)) {
-            try {
-              // КРИТИЧНО: При перевороте камеры (force=true) используем stop=true для полного удаления трека
-              // Это гарантирует, что удаленный участник получит событие об удалении и сможет подписаться на новый трек
-              await this.room.localParticipant.unpublishTrack(track, shouldUnpublishAll);
-              hasUnpublished = true;
-            } catch {}
-          }
-        }
-      }
-      
-      // КРИТИЧНО: После удаления старого трека даем серверу время обработать событие перед публикацией нового
-      // Это особенно важно при перевороте камеры, чтобы удаленный участник успел получить событие TrackUnsubscribed
-      // и мог подписаться на новый трек
-      if (hasUnpublished && shouldUnpublishAll) {
-        await new Promise(resolve => setTimeout(resolve, 100));
-      }
-
-      // Если камера выключена — гарантируем, что она выключена в комнате и выходим (без publish)
-      if (!this.isCamOn) {
-        try {
-          await this.room.localParticipant.setCameraEnabled(false);
-        } catch {}
-        return;
-      }
-
-      // Включаем mediaTrack если нужна камера
-      if (this.localVideoTrack.mediaStreamTrack) {
-        this.localVideoTrack.mediaStreamTrack.enabled = this.isCamOn;
-      }
-      // Синхронизируем mute с флагом камеры
-      if (this.isCamOn && this.localVideoTrack.isMuted) {
-        this.localVideoTrack.unmute();
-      } else if (!this.isCamOn && !this.localVideoTrack.isMuted) {
-        this.localVideoTrack.mute();
-      }
-
-      // КРИТИЧНО: Проверяем состояние комнаты и участника перед публикацией
-      // Участник должен иметь sid (session ID), что означает что он полностью добавлен в комнату
-      if (!this.room || 
-          this.room.state !== 'connected' || 
-          !this.room.localParticipant || 
-          !this.room.localParticipant.sid) {
-        logger.warn('[RandomChatSession] Room not connected or participant not ready, skipping video track publish', {
-          roomState: this.room?.state,
-          hasLocalParticipant: !!this.room?.localParticipant,
-          participantSid: this.room?.localParticipant?.sid
-        });
-        return;
-      }
-      
-      // КРИТИЧНО: Проверяем, не опубликован ли трек уже
-      if (this.isVideoTrackPublished(this.localVideoTrack)) {
-        // Обновляем состояние камеры без повторной публикации
-        try {
-          await this.room.localParticipant.setCameraEnabled(this.isCamOn);
-        } catch {}
-        return;
-      }
-      
-      if (this.isCamOn || force) {
-        // КРИТИЧНО: Проверяем состояние комнаты и участника перед публикацией
-        // Участник должен иметь sid (session ID), что означает что он полностью добавлен в комнату
-        if (!this.room || 
-            this.room.state !== 'connected' || 
-            !this.room.localParticipant || 
-            !this.room.localParticipant.sid) {
-          return;
-        }
-        
-        await this.room.localParticipant.publishTrack(this.localVideoTrack).catch((e) => {
-          const errorMsg = (e as Error | null | undefined)?.message || String(e || '');
-          const errorName = (e as Error | null | undefined)?.name || '';
-          // КРИТИЧНО: Игнорируем ошибки связанные с отключением комнаты, fingerprint mismatch и отсутствующими участниками
-          if (errorMsg.includes('already') || 
-              errorMsg.includes('duplicate') ||
-              errorMsg.includes('closed') ||
-              errorMsg.includes('disconnected') ||
-              errorMsg.includes('fingerprint') ||
-              errorMsg.includes('identity') ||
-              errorMsg.includes('ERROR_CONTENT') ||
-              errorMsg.includes('not present') ||
-              (errorMsg.includes('participant') && errorMsg.includes('not present')) ||
-              errorName === 'PublishTrackError') {
-            return;
-          }
-          // Для других ошибок логируем, но не бросаем исключение
-          logger.warn('[RandomChatSession] Failed to publish video track (non-critical)', {
-            error: errorMsg,
-            errorName,
-            roomState: this.room?.state
-          });
-        });
-        
-        // КРИТИЧНО: Проверяем состояние комнаты после публикации
-        if (!this.room || this.room.state !== 'connected' || !this.room.localParticipant) {
-          return;
-        }
-        
-        try {
-          await this.room.localParticipant.setCameraEnabled(this.isCamOn);
-        } catch {}
-        logger.info('[RandomChatSession] Video track published', {
-          trackId: this.localVideoTrack.sid || this.localVideoTrack.mediaStreamTrack?.id,
-          isMuted: this.localVideoTrack.isMuted,
-        });
-      }
-    } catch (e) {
-      logger.warn('[RandomChatSession] Failed to publish video track after recovery', e);
+      return await publishLocalTrack(room, track, 'video', () =>
+        this.started && !this.isDisconnecting && this.room === room &&
+        this.connectRequestId === requestId && this.localVideoTrack === track && this.isCamOn,
+      );
+    } catch (error) {
+      logger.warn('[RandomChatSession] Video publication failed', { error: String(error) });
+      return false;
     }
   }
 
-  private async publishAudioTrackIfRoomActive(force = false): Promise<void> {
-    if (!this.room || !this.localAudioTrack || !this.room.localParticipant) return;
-    if (this.room.state !== 'connected' || !this.room.localParticipant.sid) return;
-    const shouldUnpublishAll = !!force;
+  private async publishAudioTrackIfRoomActive(_force = false): Promise<boolean> {
+    const room = this.room;
+    const track = this.localAudioTrack;
+    const requestId = this.connectRequestId;
+    if (!room || !track) return false;
     try {
-      const publications = this.room.localParticipant.audioTrackPublications as LocalPublicationCollection;
-      if (publications && typeof publications.values === 'function') {
-        for (const pub of publications.values()) {
-          const track = pub?.track;
-          const trackEnded = track?.mediaStreamTrack?.readyState === 'ended';
-          const isSameTrack = track && track === this.localAudioTrack;
-          if (track && (shouldUnpublishAll || !isSameTrack || trackEnded)) {
-            try {
-              await this.room.localParticipant.unpublishTrack(track, false);
-            } catch {}
-          }
-        }
-      } else if (Array.isArray(publications)) {
-        for (const pub of publications) {
-          const track = pub?.track;
-          const trackEnded = track?.mediaStreamTrack?.readyState === 'ended';
-          const isSameTrack = track && track === this.localAudioTrack;
-          if (track && (shouldUnpublishAll || !isSameTrack || trackEnded)) {
-            try {
-              await this.room.localParticipant.unpublishTrack(track, false);
-            } catch {}
-          }
-        }
-      }
-
-      if (this.isAudioTrackPublished(this.localAudioTrack)) {
-        try {
-          await this.room.localParticipant.setMicrophoneEnabled(this.isMicOn);
-        } catch {}
-        return;
-      }
-
-      await this.room.localParticipant.publishTrack(this.localAudioTrack).catch((e: unknown) => {
-        const errorMsg = (e as Error | null | undefined)?.message || String(e || '');
-        const errorName = (e as Error | null | undefined)?.name || '';
-        if (
-          errorMsg.includes('already') ||
-          errorMsg.includes('duplicate') ||
-          errorMsg.includes('closed') ||
-          errorMsg.includes('disconnected') ||
-          errorMsg.includes('timeout') ||
-          errorMsg.includes('engine not connected') ||
-          errorMsg.includes('not present') ||
-          errorMsg.includes('fingerprint') ||
-          errorMsg.includes('identity') ||
-          errorMsg.includes('ERROR_CONTENT') ||
-          (errorMsg.includes('participant') && errorMsg.includes('not present')) ||
-          errorName === 'PublishTrackError'
-        ) {
-          return;
-        }
-        logger.warn('[RandomChatSession] Failed to publish audio track (non-critical)', {
-          error: errorMsg,
-          errorName,
-          roomState: this.room?.state,
-        });
-      });
-
-      // Применяем состояние микрофона через LiveKit (после публикации)
-      try {
-        await this.room.localParticipant.setMicrophoneEnabled(this.isMicOn);
-      } catch {}
-    } catch {}
+      return await publishLocalTrack(room, track, 'audio', () =>
+        this.started && !this.isDisconnecting && this.room === room &&
+        this.connectRequestId === requestId && this.localAudioTrack === track,
+      );
+    } catch (error) {
+      logger.warn('[RandomChatSession] Audio publication failed', { error: String(error) });
+      return false;
+    }
   }
 
   /**
@@ -2715,14 +2530,14 @@ export class RandomChatSession extends SimpleEventEmitter<RandomChatSessionEvent
       if (typeof publications.values === 'function') {
         // Это Map - проверяем через values()
         for (const pub of publications.values()) {
-          if (pub.track === track || pub.trackSid === track.sid) {
+          if (pub.track === track || (!!track.sid && pub.trackSid === track.sid)) {
             return true;
           }
         }
       } else if (Array.isArray(publications)) {
         // Это массив - используем find
         return publications.some(
-          pub => pub.track === track || pub.trackSid === track.sid
+          pub => pub.track === track || (!!track.sid && pub.trackSid === track.sid)
         );
       } else if (typeof publications === 'object') {
         // RN: может быть plain object
@@ -2747,14 +2562,14 @@ export class RandomChatSession extends SimpleEventEmitter<RandomChatSessionEvent
       if (typeof publications.values === 'function') {
         // Это Map - проверяем через values()
         for (const pub of publications.values()) {
-          if (pub.track === track || pub.trackSid === track.sid) {
+          if (pub.track === track || (!!track.sid && pub.trackSid === track.sid)) {
             return true;
           }
         }
       } else if (Array.isArray(publications)) {
         // Это массив - используем find
         return publications.some(
-          pub => pub.track === track || pub.trackSid === track.sid
+          pub => pub.track === track || (!!track.sid && pub.trackSid === track.sid)
         );
       }
     } catch {}
@@ -2873,10 +2688,9 @@ export class RandomChatSession extends SimpleEventEmitter<RandomChatSessionEvent
         targetRoomName && 
         this.currentRoomName === targetRoomName) {
       // Убеждаемся что треки опубликованы
-      if (this.localVideoTrack && this.isCamOn) {
-        await this.publishVideoTrackIfRoomActive();
-      }
-      return true;
+      const audioPublished = await this.publishAudioTrackIfRoomActive();
+      const videoPublished = await this.publishVideoTrackIfRoomActive();
+      return audioPublished && (!this.isCamOn || videoPublished);
     }
     
     // КРИТИЧНО: Если идет отключение, не создаем новое подключение.
@@ -3016,17 +2830,7 @@ export class RandomChatSession extends SimpleEventEmitter<RandomChatSessionEvent
       try {
         const stuckRoom: Room | null = this.room;
         if (stuckRoom) {
-          const stuckRoomState: string = stuckRoom.state as string;
-          if (stuckRoomState !== 'disconnected') {
-            // КРИТИЧНО: Отключаем зависшую комнату без ожидания
-            try {
-              if (this.started) {
-                await this.disconnectRoomKeepTracks(stuckRoom, 'force_clear_stuck_room');
-              } else {
-                await stuckRoom.disconnect();
-              }
-            } catch {}
-          }
+          await this.safeDisconnect(stuckRoom);
         }
         // КРИТИЧНО: Очищаем все ссылки на старую комнату
         this.room = null;
@@ -3148,6 +2952,7 @@ export class RandomChatSession extends SimpleEventEmitter<RandomChatSessionEvent
           hasToken: !!token,
           tokenLength: token?.length || 0,
         });
+        await this.safeDisconnect(room);
         if (this.room === room) {
           this.room = null;
           this.currentRoomName = null;
@@ -3232,11 +3037,7 @@ export class RandomChatSession extends SimpleEventEmitter<RandomChatSessionEvent
           error: errorMessage,
         });
         enableForcedRelayFallback('random_chat_pc_connection');
-        try {
-          if (room.state !== 'disconnected') {
-            await room.disconnect();
-          }
-        } catch {}
+        await this.safeDisconnect(room);
         if (this.room === room) {
           this.room = null;
           this.currentRoomName = null;
@@ -3298,15 +3099,12 @@ export class RandomChatSession extends SimpleEventEmitter<RandomChatSessionEvent
         }
       }
       
+      await this.safeDisconnect(room);
       if (this.room === room) {
         this.room = null;
         this.currentRoomName = null;
       }
-      if (this.connectRequestId !== connectRequestId || this.room !== room) {
-        // Подключение отменено (например, пользователь нажал «Далее»)
-        return false;
-      }
-      throw e;
+      return false;
     }
 
     if (this.connectRequestId !== connectRequestId || this.room !== room) {
@@ -3369,7 +3167,9 @@ export class RandomChatSession extends SimpleEventEmitter<RandomChatSessionEvent
         participantSid: room.localParticipant?.sid,
         waitAttempts
       });
-      return true; // Подключение успешно, просто треки не опубликованы
+      await this.safeDisconnect(room);
+      if (this.room === room) this.room = null;
+      return false;
     }
     
     // КРИТИЧНО: Добавляем небольшую задержку перед публикацией треков
@@ -3390,13 +3190,25 @@ export class RandomChatSession extends SimpleEventEmitter<RandomChatSessionEvent
         hasLocalParticipant: !!room.localParticipant,
         participantSid: room.localParticipant?.sid
       });
-      return true; // Подключение было успешным, просто треки не опубликованы
+      await this.safeDisconnect(room);
+      if (this.room === room) this.room = null;
+      return false;
     }
     
     // КРИТИЧНО: Публикуем треки через единый безопасный путь с агрессивным cleanup.
     // Это уменьшает renegotiation при спаме и устраняет "publishing a second track with the same source: camera/microphone".
-    await this.publishVideoTrackIfRoomActive(true);
-    await this.publishAudioTrackIfRoomActive(true);
+    const audioPublished = await this.publishAudioTrackIfRoomActive();
+    if (this.connectRequestId !== connectRequestId || this.room !== room) return false;
+    const videoPublished = await this.publishVideoTrackIfRoomActive();
+    if (this.connectRequestId !== connectRequestId || this.room !== room) return false;
+    if (!audioPublished || (this.isCamOn && !videoPublished)) {
+      await this.safeDisconnect(room);
+      if (this.room === room) {
+        this.room = null;
+        this.currentRoomName = null;
+      }
+      return false;
+    }
 
     // 🩺 Android 8.1 / OPPO: watchdog — если видео "залипло" (есть трек, но не идут кадры), пересоздаем автоматически.
     // ВАЖНО: не форсим watchdog на всех девайсах (на новых Samsung это дает false-positive и вызывает "гирлянду").
@@ -3436,333 +3248,33 @@ export class RandomChatSession extends SimpleEventEmitter<RandomChatSessionEvent
   private async disconnectRoom(reason: 'user' | 'server' = 'user', source = 'unknown'): Promise<void> {
     this.logReconnectTrace('disconnect_requested', { reason, source });
     this.clearIceTransportLogTimers();
-    // КРИТИЧНО: Защита от множественных вызовов disconnectRoom
-    // Если уже идет отключение, возвращаем существующий промис
-    if (this.isDisconnecting && this.disconnectPromise) {
-      return this.disconnectPromise;
-    }
-    
+    if (this.disconnectPromise) return this.disconnectPromise;
+    // Invalidate old connect/publish work before the first await.
+    this.connectRequestId++;
     const room = this.room;
-    if (!room) {
-      this.logReconnectTrace('disconnect_no_room', { reason, source });
-      // КРИТИЧНО: Сбрасываем флаги, если комнаты нет
-      this.isDisconnecting = false;
-      this.disconnectPromise = null;
-      return;
-    }
-    
-    // КРИТИЧНО: Проверяем состояние комнаты - не пытаемся отключиться если комната еще не подключена
-    // или уже отключена. Это предотвращает ошибку "cannot send signal request before connected"
-    const roomState = room.state;
-    if (roomState === 'disconnected') {
-      this.logReconnectTrace('disconnect_already_disconnected', {
-        reason,
-        source,
-        roomState,
-      });
-      this.room = null;
-      this.currentRoomName = null; // Очищаем имя комнаты
-      this.isDisconnecting = false;
-      this.disconnectPromise = null;
-      return;
-    }
-    // КРИТИЧНО: Если комната еще connecting, ждем подключения или отключения
-    if (roomState === 'connecting') {
-      // Ждем максимум 3 секунды, затем принудительно отключаем
-      let waitCount = 0;
-      const maxWait = 30; // 30 * 100ms = 3 секунды
-      while (room.state === 'connecting' && waitCount < maxWait) {
-        await new Promise(resolve => setTimeout(resolve, 100));
-        waitCount++;
-      }
-      // Если все еще connecting, принудительно отключаем
-      if (room.state === 'connecting') {
-        logger.warn('[RandomChatSession] Room stuck in connecting state, forcing disconnect');
-        try {
-          if (this.started) {
-            await this.disconnectRoomKeepTracks(room, 'connecting_force_disconnect');
-          } else {
-            await room.disconnect();
-          }
-        } catch {}
-      }
-      // Продолжаем нормальный процесс отключения
-    }
-    
+    if (!room) return;
     this.isDisconnecting = true;
     this.disconnectReason = reason;
-    
-    // КРИТИЧНО: Создаем промис, который разрешится только когда комната полностью отключится
-    // Это гарантирует, что все ресурсы (включая ping/pong handlers) будут очищены перед новым подключением
-    this.disconnectPromise = new Promise<void>((resolve) => {
-      // КРИТИЧНО: Сохраняем ссылку на room, чтобы не потерять её при установке this.room = null
-      const roomToDisconnect = room;
-      let disconnectedHandler: (() => void) | null = null;
-      let timeoutId: NodeJS.Timeout | null = null;
-      let aggressiveStopTimerId: NodeJS.Timeout | null = null;
-      let resolved = false;
-      // NOTE: Keep it simple here. Aggressive "early forced cleanup" can cause signaling state races
-      // during fast reconnect/Next. We only use it when RandomChat is fully stopping (started=false).
-      
-      // Устанавливаем обработчик события Disconnected
-      disconnectedHandler = () => {
-        if (resolved) return;
-        resolved = true;
-        this.logReconnectTrace('disconnect_completed', {
-          reason,
-          source,
-          finalReason: this.disconnectReason,
-        });
-        if (timeoutId) {
-          clearTimeout(timeoutId);
-        }
-        try {
-          if (aggressiveStopTimerId) clearTimeout(aggressiveStopTimerId);
-        } catch {}
-        // ВАЖНО: При Next/переподключениях (started=true) НЕ делаем forceDisposeRoom,
-        // иначе можно получить "Local tracks ended" и SDP state ошибки.
-        // Для полного stop (started=false) — добиваем engine/ws, чтобы не было WARN "ping timeout triggered".
-        if (!this.started) {
-          this.forceDisposeRoom(roomToDisconnect, 'disconnected');
-        } else {
-          this.forceCloseSignalTransport(roomToDisconnect, 'disconnected:started');
-        }
+    const pending = disposeRoom(room, this.started).finally(() => {
+      if (this.room === room) {
+        this.room = null;
+        this.currentRoomName = null;
+      }
+      if (this.disconnectPromise === pending) {
         this.disconnectReason = 'unknown';
         this.isDisconnecting = false;
         this.disconnectPromise = null;
-        resolve();
-      };
-      
-      // Подписываемся на событие Disconnected
-      roomToDisconnect.once(RoomEvent.Disconnected, disconnectedHandler);
-      
-      // Таймаут на случай, если событие Disconnected не придет (защита от зависания)
-      timeoutId = setTimeout(() => {
-        logger.warn('[RandomChatSession] Disconnect timeout, forcing cleanup', { 
-          roomState: roomToDisconnect.state 
-        });
-        this.logReconnectTrace('disconnect_timeout', {
-          reason,
-          source,
-          roomState: roomToDisconnect.state,
-        });
-        if (resolved) return;
-        resolved = true;
-        if (disconnectedHandler) {
-          roomToDisconnect.off(RoomEvent.Disconnected, disconnectedHandler);
-        }
-        try {
-          if (aggressiveStopTimerId) clearTimeout(aggressiveStopTimerId);
-        } catch {}
-        // Timeout — worst-case. Здесь допускаем более агрессивный cleanup.
-        // Если чат всё ещё started, стараемся сначала закрыть только signal transport,
-        // чтобы не гасить локальные треки без необходимости.
-        if (this.started) {
-          this.forceCloseSignalTransport(roomToDisconnect, 'timeout:started');
-          // В режиме started=true НЕ делаем forceDisposeRoom — это может "ended" локальные треки
-          // и снова вызвать чёрные мерцания/renegotiation гонки.
-          this.disconnectReason = 'unknown';
-          this.isDisconnecting = false;
-          this.disconnectPromise = null;
-          resolve();
-          return;
-        }
-        this.forceDisposeRoom(roomToDisconnect, 'timeout');
-        this.disconnectReason = 'unknown';
-        this.isDisconnecting = false;
-        this.disconnectPromise = null;
-        resolve();
-      }, 5000); // 5 секунд максимум на отключение
-      
-      // NOTE: We intentionally avoid complex pre-unpublish here.
-      // It's easy to introduce renegotiation races and make RandomChat connect/disconnect feel worse.
-      
-      // Увеличиваем connectRequestId, чтобы остановить отложенные подключения
-      this.connectRequestId++;
-      // КРИТИЧНО: НЕ устанавливаем this.room = null сразу - это делается только после полного отключения
-      // в обработчике Disconnected, чтобы избежать утечек соединений
-      
-      // КРИТИЧНО: НЕ вызываем room.removeAllListeners() перед disconnect()
-      // Это удаляет внутренние обработчики LiveKit (ping/pong, корректное завершение),
-      // что приводит к "ping timeout" и "connection state mismatch" ошибкам.
-      // room.disconnect() сам корректно завершит соединение и очистит ресурсы.
-      
-      // Вызываем disconnect и ждем события Disconnected
-      (async () => {
-        try {
-          // КРИТИЧНО: Проверяем состояние еще раз перед disconnect, чтобы избежать ошибки
-          if (roomToDisconnect.state !== 'disconnected') {
-            // КРИТИЧНО для RandomChat UX:
-            // при Next (started=true) на части Android LiveKit может останавливать локальные camera/mic треки,
-            // из-за чего они становятся readyState='ended' -> пересоздание localStream -> мерцание "Вы".
-            // В livekit-client у disconnect() в некоторых версиях есть флаг stopTracks/stopLocalTracks.
-            // JS безопасно принимает лишний аргумент, поэтому делаем best-effort: disconnect(false) во время Next.
-            if (this.started) {
-              await this.disconnectRoomKeepTracks(roomToDisconnect, 'disconnectRoom:started');
-            } else {
-              await roomToDisconnect.disconnect();
-            }
-            // КРИТИЧНО: Закрываем signal transport сразу после disconnect() при Next/переходах.
-            // Иначе ws может остаться "живым" и через 5–10 сек появляется WARN "ping timeout triggered".
-            if (this.started) {
-              this.forceCloseSignalTransport(roomToDisconnect, 'post_disconnect_immediate');
-            }
-            // Если RandomChat полностью остановлен (не Next/не reconnect), можем агрессивно добить engine/ws
-            // раньше 5–10 секунд, чтобы не увидеть WARN "ping timeout triggered" после выхода.
-            // ВАЖНО: НЕ делаем это при Next/быстрых переподключениях — там это может сломать состояние сигналинга.
-            if (!this.started && this.disconnectReason === 'user') {
-              try {
-                if (aggressiveStopTimerId) clearTimeout(aggressiveStopTimerId);
-              } catch {}
-              aggressiveStopTimerId = setTimeout(() => {
-                try {
-                  if (resolved) return;
-                  if (roomToDisconnect.state !== 'disconnected' && disconnectedHandler) {
-                    try {
-                      roomToDisconnect.off(RoomEvent.Disconnected, disconnectedHandler);
-                    } catch {}
-                    disconnectedHandler();
-                  }
-                } catch {}
-              }, 1200);
-            }
-          } else {
-            // Если комната уже отключена, сразу вызываем обработчик
-            if (disconnectedHandler) {
-              roomToDisconnect.off(RoomEvent.Disconnected, disconnectedHandler);
-              disconnectedHandler();
-            }
-          }
-        } catch (e) {
-          // КРИТИЧНО: Улучшенная обработка ошибок для предотвращения крашей на Android
-          const errorMessage = (e as Error | null | undefined)?.message || String(e || '');
-          const errorName = (e as Error | null | undefined)?.name || '';
-          
-          // Игнорируем ошибки отключения если комната уже отключена или еще не подключена
-          if (!errorMessage.includes('before connected') && 
-              !errorMessage.includes('already disconnected') &&
-              !errorMessage.includes('ping timeout') &&
-              !errorMessage.includes('connection state mismatch')) {
-            logger.warn('[RandomChatSession] Error disconnecting room', {
-              error: errorMessage,
-              errorName,
-              roomState: roomToDisconnect?.state
-              // Не логируем полный объект ошибки - это может вызвать проблемы на Android
-            });
-          }
-          // Даже при ошибке ждем события Disconnected или таймаута
-          // КРИТИЧНО: При ошибке принудительно вызываем cleanup через таймаут
-          if (disconnectedHandler) {
-            setTimeout(() => {
-              try {
-                if (roomToDisconnect.state === 'disconnected' || 
-                    roomToDisconnect.state === 'reconnecting') {
-                  roomToDisconnect.off(RoomEvent.Disconnected, disconnectedHandler);
-                  disconnectedHandler();
-                }
-              } catch {}
-            }, 100);
-          }
-        }
-      })();
+        this.flushPendingMatchFound('disconnect_complete');
+      }
     });
-    
-    // Устанавливаем this.room = null только после полного отключения
-    // Это делается в обработчике Disconnected через промис
-    this.disconnectPromise.then(() => {
-      // КРИТИЧНО: Очищаем ссылку на комнату только после полного отключения
-      // Это гарантирует, что все ресурсы LiveKit (включая ping/pong) очищены
-      try {
-        if (this.room === room) {
-          this.room = null;
-          this.currentRoomName = null; // Очищаем имя комнаты при отключении
-        }
-      } catch {}
-      this.flushPendingMatchFound('disconnect_complete');
-    }).catch(() => {
-      // КРИТИЧНО: В случае ошибки все равно очищаем, но с защитой от крашей
-      try {
-        if (this.room === room) {
-          this.room = null;
-          this.currentRoomName = null;
-        }
-        // Сбрасываем флаги принудительно
-        this.isDisconnecting = false;
-        this.disconnectPromise = null;
-      } catch {}
-      this.flushPendingMatchFound('disconnect_complete_error');
-    });
-    
-    return this.disconnectPromise;
-  }
-
-  // livekit-client иногда оставляет активный ws/engine на мобилках даже после room.disconnect().
-  // Это приводит к WARN "ping timeout triggered" уже после завершения сессии.
-  // Делаем best-effort cleanup через внутренние поля (не публичный API) — строго в try/catch.
-  private forceDisposeRoom(room: Room, context: 'disconnected' | 'timeout' | string): void {
-    try {
-      try { room?.removeAllListeners?.(); } catch {}
-
-      const engine = room?.engine as RoomDisposalEngine | undefined;
-      try { engine?.close?.(); } catch {}
-      try { engine?.client?.close?.(); } catch {}
-      try { engine?.signalClient?.close?.(); } catch {}
-      try { engine?.signalClient?.ws?.close?.(); } catch {}
-      try { engine?.signalClient?.socket?.close?.(); } catch {}
-      try { engine?.signalClient?.transport?.close?.(); } catch {}
-
-    } catch {}
-  }
-
-  // Закрываем ТОЛЬКО signal transport (ws/socket) без engine.close().
-  // Это безопаснее для сценария Next/переподключений и помогает убрать WARN "ping timeout triggered".
-  private forceCloseSignalTransport(room: Room, context: string): void {
-    try {
-      const engine = room?.engine as RoomDisposalEngine | undefined;
-      const sc = engine?.signalClient;
-      try { sc?.close?.(); } catch {}
-      try { sc?.ws?.close?.(); } catch {}
-      try { sc?.socket?.close?.(); } catch {}
-      try { sc?.transport?.close?.(); } catch {}
-
-    } catch {}
+    this.disconnectPromise = pending;
+    return pending;
   }
 
   private async safeDisconnect(room: Room): Promise<void> {
-    if (!room) return;
-    if (room.state === 'disconnected') {
-      return;
-    }
-    try {
-      await room.disconnect();
-    } catch (e) {
-      logger.warn('[RandomChatSession] Error disconnecting stale room', e);
-    }
+    await disposeRoom(room, this.started);
   }
 
-  /**
-   * Best-effort Room.disconnect that tries to KEEP local tracks alive.
-   *
-   * IMPORTANT:
-   * In many livekit-client versions the signature is `disconnect(stopTracks?: boolean)`.
-   * Passing an object (even `{ stopTracks:false }`) would be treated as truthy => stopTracks=true,
-   * which ends local camera/mic tracks and causes black flicker in the "Вы" block.
-   *
-   * So we always try boolean `false` first, and only then fallback to no-args.
-   */
-  private async disconnectRoomKeepTracks(room: Room, context: string): Promise<void> {
-    const disconnectFn = room?.disconnect;
-    if (typeof disconnectFn !== 'function') return;
-    try {
-      await disconnectFn.call(room, false);
-      return;
-    } catch (e1) {
-      try {
-        await disconnectFn.call(room);
-        return;
-      } catch {}
-    }
-  }
 
   private resolveLiveRemoteParticipant(participant: RemoteParticipant): RemoteParticipant | null {
     if (participant.isLocal) return null;

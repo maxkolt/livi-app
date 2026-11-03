@@ -1,0 +1,20 @@
+{
+  "framesDecodedAndRecognized": 96,
+  "samplingFps": 10,
+  "oldPreviewFrames": 0,
+  "freshPreviewFrames": 73,
+  "firstFreshVideoTimestamp": 2.3,
+  "pidAbsentBeforeOpen": true,
+  "unreadFilterSelected": true,
+  "finalUnreadCount": 2,
+  "nativeIntent": "com.kolt12max.livi.OPEN_UNREAD_CHAT",
+  "manualFrameSample": {
+    "frames": 30,
+    "samplingFps": 5,
+    "rangeSeconds": [
+      0,
+      5.8
+    ],
+    "staleFramesSeen": 0
+  }
+}

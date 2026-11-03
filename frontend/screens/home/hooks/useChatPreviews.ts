@@ -38,6 +38,21 @@ import {
 export type { ChatPreview };
 
 let previewMemory: Record<string, ChatPreview> = {};
+const unreadPreviewVersions = new Map<string, { count: number; id: string }>();
+const unreadPreviewRequests = new Map<string, number>();
+
+/** Unverified disk history cannot identify the newest unread message after a cold launch. */
+export function selectChatPreviews(
+  previews: Record<string, ChatPreview>, unreadByUser: Record<string, number>,
+): Record<string, ChatPreview> {
+  const visible = { ...previews };
+  for (const [peerId, count] of Object.entries(unreadByUser)) {
+    if (count <= 0) continue;
+    const confirmed = unreadPreviewVersions.get(peerId);
+    if (confirmed?.count !== count || confirmed.id !== previews[peerId]?.id) delete visible[peerId];
+  }
+  return visible;
+}
 /** Хуки вкладки, которым нужен результат prefetch (в т.ч. скрытая keep-alive вкладка). */
 const prefetchListeners = new Set<() => void>();
 
@@ -144,7 +159,15 @@ async function refreshPreviewsFromServer(
   friendIds: string[],
   local: Record<string, ChatPreview>,
   lang: Lang,
+  unreadByUser: Record<string, number>,
 ): Promise<Record<string, ChatPreview>> {
+  const requestVersions = new Map<string, number>();
+  for (const peerId of friendIds) {
+    if (!(unreadByUser[peerId] > 0)) continue;
+    const version = (unreadPreviewRequests.get(peerId) || 0) + 1;
+    unreadPreviewRequests.set(peerId, version);
+    requestVersions.set(peerId, version);
+  }
   let cleared: Set<string>;
   try {
     cleared = await getClearedForMePeerIds();
@@ -170,6 +193,11 @@ async function refreshPreviewsFromServer(
         const msg = result.previews[peerId];
         const preview = previewFromServerMessage(msg, lang);
         if (!preview) continue;
+        // Associate confirmation with the count captured when this request began.
+        // A later unread delivery invalidates it synchronously during rendering.
+        if (requestVersions.has(peerId) && requestVersions.get(peerId) === unreadPreviewRequests.get(peerId)) {
+          unreadPreviewVersions.set(peerId, { count: unreadByUser[peerId], id: preview.id || '' });
+        }
         if (next[peerId] && next[peerId].at > preview.at) continue;
         next[peerId] = keepReadStatus(next[peerId], preview);
         if (me && msg) {
@@ -216,7 +244,7 @@ function previewMapsEqual(
 
 /** Prefetch до открытия вкладки Chat — первый paint с полными превью. */
 export async function prefetchChatPreviews(
-  friendIds: string[], lang: Lang, preferMemory = false,
+  friendIds: string[], lang: Lang, preferMemory = false, unreadByUser: Record<string, number> = {},
 ): Promise<void> {
   await waitForChatExitTransition();
   const ids = friendIds.map((id) => String(id || '').trim()).filter(Boolean);
@@ -237,12 +265,13 @@ export async function prefetchChatPreviews(
   // а вкладка всё это время оставалась бы пустой.
   previewMemory = mergeLiveMemory(ids, next);
   notifyPreviewListeners();
-  const hydrated = await refreshPreviewsFromServer(ids, next, lang);
+  const hydrated = await refreshPreviewsFromServer(ids, next, lang, unreadByUser);
   previewMemory = mergeLiveMemory(ids, hydrated);
   notifyPreviewListeners();
 }
 
-export function useChatPreviews(friendIds: string[], lang: Lang, enabled: boolean, unreadRevision = '') {
+export function useChatPreviews(friendIds: string[], lang: Lang, enabled: boolean, unreadRevision = '', unreadByUser: Record<string, number> = {}) {
+  const [, setFreshnessRevision] = useState(0);
   // Скрытая вкладка (prewarm) держит превью в синхроне с memory: строки, рамки и
   // аватары монтируются заранее, а не в момент тапа. Перезагрузки — только когда enabled.
   const [previews, setPreviews] = useState<Record<string, ChatPreview>>(() => ({
@@ -255,6 +284,7 @@ export function useChatPreviews(friendIds: string[], lang: Lang, enabled: boolea
     const applySnapshot = () => {
       const snap = getChatPreviewSnapshot();
       setPreviews((prev) => (previewMapsEqual(prev, snap) ? prev : { ...snap }));
+      setFreshnessRevision((revision) => revision + 1);
     };
     prefetchListeners.add(applySnapshot);
     applySnapshot();
@@ -266,6 +296,8 @@ export function useChatPreviews(friendIds: string[], lang: Lang, enabled: boolea
   const idsRef = useRef(friendIds);
   const langRef = useRef(lang);
   const reloadPromiseRef = useRef<Promise<void> | null>(null);
+  const unreadRef = useRef(unreadByUser);
+  unreadRef.current = unreadByUser;
   const enabledRef = useRef(enabled);
   enabledRef.current = enabled;
   const reloadAgainRef = useRef(false);
@@ -296,7 +328,7 @@ export function useChatPreviews(friendIds: string[], lang: Lang, enabled: boolea
       }
       // Живое превью уже опубликовано чатом: не разбирать всю его историю на Back.
       // Сверка с сервером остаётся обязательной, в том числе для Unread и VPN/reconnect.
-      await prefetchChatPreviews(ids, langRef.current, true);
+      await prefetchChatPreviews(ids, langRef.current, true, { ...unreadRef.current });
     })();
     tracked = task.finally(() => {
       lastReloadCompletedAtRef.current = Date.now();
@@ -462,5 +494,5 @@ export function useChatPreviews(friendIds: string[], lang: Lang, enabled: boolea
     });
   }, []);
 
-  return { previews, reloadPreviews: reload, dropPreviews };
+  return { previews: selectChatPreviews(previews, unreadByUser), reloadPreviews: reload, dropPreviews };
 }

@@ -168,7 +168,7 @@ function HomeWelcomeChatsViewInner({
   const trimmedQuery = searchQuery.trim();
   const friendIds = useMemo(() => allFriends.map((f) => String(f.id)), [allFriends]);
   const unreadRevision = JSON.stringify(unreadByUser);
-  const { previews, reloadPreviews, dropPreviews } = useChatPreviews(friendIds, lang, active, unreadRevision);
+  const { previews, reloadPreviews, dropPreviews } = useChatPreviews(friendIds, lang, active, unreadRevision, unreadByUser);
 
   // The shared snapshot also updates hidden panes before their first visible frame.
 
