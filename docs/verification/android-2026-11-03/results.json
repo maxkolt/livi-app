@@ -1,5 +1,5 @@
 {
-  "status": "incomplete_device_disconnected",
+  "status": "completed_with_failures",
   "sourceCommit": "74e8767afba8f434d1f4c400608d1db6d41eb42c",
   "backendDeployed": true,
   "environmentPreserved": true,
@@ -140,6 +140,24 @@
       "realFcmNotificationCount": 1,
       "terminalDestinationCorrect": true,
       "terminalNewTextInstances": 1
+    },
+    {
+      "id": "random-overlapping-next-track-publication",
+      "evidence": [
+        "random-overlap-failure.txt",
+        "a35-random-publish-failure.txt"
+      ],
+      "recoveryDeadlineSeconds": 60,
+      "serverPairInvariantsPassed": true,
+      "twoActiveSfuParticipantsAtDeadline": true,
+      "a35TracksAtDeadline": 0,
+      "emulatorTracksAtDeadline": 2,
+      "nativeLogErrors": [
+        "missing track resolver",
+        "negotiation disconnected",
+        "Failed to publish video track (non-critical): negotiation timed out"
+      ],
+      "rootCauseNotYetProven": true
     }
   ],
   "scopeLimits": [
@@ -198,12 +216,18 @@
     "realLauncherIconRetryExitCode": 0,
     "realLauncherIconFullCallAssertionPassed": true,
     "twoParticipantsAndTracksAfterReturn": true,
-    "adbReturnFailureClassifiedAsAppDefect": false
+    "adbReturnFailureClassifiedAsAppDefect": false,
+    "bubbleHomeRealIconPassed": true,
+    "recentsRealIconPassed": true,
+    "extraPipScriptExitCode": 0
   },
   "randomNative": {
     "checksPassed": [
       "random-native-start",
-      "random-native-next-1"
+      "random-native-next-1",
+      "random-native-next-2",
+      "random-native-stop",
+      "random-native-restart"
     ],
     "finalAudit": {
       "matchedSockets": 0,
@@ -221,20 +245,46 @@
       "HTTPS diagnostic connection reset",
       "A35 screen off before UI test"
     ],
-    "stoppedBecause": "A35 no longer present in adb devices"
+    "stopRestartSeparateExitCode": 0,
+    "overlappingNextPassed": false
   },
-  "remaining": [
-    "Native random Next on emulator, overlapping Next, Stop and Start again",
-    "VPN off/on during active call",
-    "Final A35 resource and settings verification after USB reconnect",
-    "Human bidirectional audibility"
-  ],
+  "remaining": [],
   "cleanup": {
-    "emulatorStoppedTestApp": true,
-    "emulatorAudioMode": "MODE_NORMAL",
-    "emulatorCallServices": 0,
+    "passed": true,
+    "bothAudioNormal": true,
+    "bothCamerasClosed": true,
+    "callServices": 0,
+    "callWakeLocks": 0,
+    "liviCrashBufferEntries": 0,
+    "sfuTestRooms": 0,
     "randomPairs": 0,
     "randomQueue": 0,
-    "phoneCurrentlyReachableByAdb": false
+    "a35StayOnRestored": "15",
+    "emulatorStayOnRestored": "1",
+    "phoneCurrentlyReachableByAdb": true,
+    "vpnActiveAfterTest": false,
+    "vpnStateMatchesResumedBaseline": true
+  },
+  "humanAudibility": "User cannot participate; not verified",
+  "followUp": [
+    "Fix and repeat the three confirmed failing scenarios"
+  ],
+  "vpn": {
+    "country": "Austria",
+    "stateBeforeResumedTest": false,
+    "onConfirmedByAndroid": true,
+    "offConfirmedByAndroid": true,
+    "sameSfuParticipantsAndTracksRetained": true,
+    "stateRestoredToBeforeResumedTest": true,
+    "decodedFrameCountersChecked": false,
+    "humanAudibilityConfirmed": false
+  },
+  "backendFinal": {
+    "active": true,
+    "nRestarts": 0,
+    "mongo": 1,
+    "redis": "ready",
+    "socketIoRedisAdapter": true,
+    "errorPriorityJournalEntries": 0
   }
 }

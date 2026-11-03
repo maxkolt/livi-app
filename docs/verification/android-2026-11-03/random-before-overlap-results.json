@@ -1,0 +1,206 @@
+{
+  "checks": [
+    {
+      "label": "random-native-start",
+      "media": {
+        "at": "2026-11-03T04:53:50.734Z",
+        "rooms": [
+          {
+            "name": "rand_room_6a62fae2c2583f4d42b33d16_6aa075a657dcabd3e27db3b0",
+            "sid": "RM_FD6nkdJpDJaK",
+            "participants": [
+              {
+                "identity": "6aa075a657dcabd3e27db3b0",
+                "sid": "PA_zgv3hvmdL48T",
+                "state": 2,
+                "joinedAt": "1793681625",
+                "tracks": [
+                  {
+                    "sid": "TR_AMPG5LbxpPsuUB",
+                    "type": 0,
+                    "source": 2,
+                    "muted": false
+                  },
+                  {
+                    "sid": "TR_VC5NvbQFXYLsHd",
+                    "type": 1,
+                    "source": 1,
+                    "muted": false
+                  }
+                ]
+              },
+              {
+                "identity": "6a62fae2c2583f4d42b33d16",
+                "sid": "PA_t3nd9UZBR8sS",
+                "state": 2,
+                "joinedAt": "1793681626",
+                "tracks": [
+                  {
+                    "sid": "TR_VCAWikGvcwVjyj",
+                    "type": 1,
+                    "source": 1,
+                    "muted": false
+                  },
+                  {
+                    "sid": "TR_AM7iaxrvL4V9En",
+                    "type": 0,
+                    "source": 2,
+                    "muted": false
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "audit": {
+        "matchedSockets": 2,
+        "heldSockets": 0,
+        "asymmetricSockets": 0,
+        "stoppedWithPartner": 0,
+        "queuedSockets": 0,
+        "queuedWithPartner": 0,
+        "pairs": 1,
+        "pairDigest": "305d90a5960eca7342c6790a1d6c910776f6d5790b166609b1ba3045e68fa6cb"
+      }
+    },
+    {
+      "label": "random-native-next-1",
+      "media": {
+        "at": "2026-11-03T04:54:16.668Z",
+        "rooms": [
+          {
+            "name": "rand_room_6a62fae2c2583f4d42b33d16_6aa075a657dcabd3e27db3b0",
+            "sid": "RM_FD6nkdJpDJaK",
+            "participants": [
+              {
+                "identity": "6a62fae2c2583f4d42b33d16",
+                "sid": "PA_6hoq2hGxH2uY",
+                "state": 2,
+                "joinedAt": "1793681647",
+                "tracks": [
+                  {
+                    "sid": "TR_VCnggs2BaKh5Xj",
+                    "type": 1,
+                    "source": 1,
+                    "muted": false
+                  },
+                  {
+                    "sid": "TR_AMd3rrzf8AM87k",
+                    "type": 0,
+                    "source": 2,
+                    "muted": false
+                  }
+                ]
+              },
+              {
+                "identity": "6aa075a657dcabd3e27db3b0",
+                "sid": "PA_2BUkxGc3TUBd",
+                "state": 2,
+                "joinedAt": "1793681646",
+                "tracks": [
+                  {
+                    "sid": "TR_AMYEgg9zAqirxG",
+                    "type": 0,
+                    "source": 2,
+                    "muted": false
+                  },
+                  {
+                    "sid": "TR_VC3u5nMb6fRQAa",
+                    "type": 1,
+                    "source": 1,
+                    "muted": false
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "audit": {
+        "matchedSockets": 2,
+        "heldSockets": 0,
+        "asymmetricSockets": 0,
+        "stoppedWithPartner": 0,
+        "queuedSockets": 0,
+        "queuedWithPartner": 0,
+        "pairs": 1,
+        "pairDigest": "305d90a5960eca7342c6790a1d6c910776f6d5790b166609b1ba3045e68fa6cb"
+      }
+    },
+    {
+      "label": "random-native-next-2",
+      "media": {
+        "at": "2026-11-03T04:54:40.780Z",
+        "rooms": [
+          {
+            "name": "rand_room_6a62fae2c2583f4d42b33d16_6aa075a657dcabd3e27db3b0",
+            "sid": "RM_FD6nkdJpDJaK",
+            "participants": [
+              {
+                "identity": "6aa075a657dcabd3e27db3b0",
+                "sid": "PA_Ns45nNAWz4LW",
+                "state": 2,
+                "joinedAt": "1793681671",
+                "tracks": [
+                  {
+                    "sid": "TR_AMzJ3PRjpfRKFA",
+                    "type": 0,
+                    "source": 2,
+                    "muted": false
+                  },
+                  {
+                    "sid": "TR_VCQvuLEZuemk3C",
+                    "type": 1,
+                    "source": 1,
+                    "muted": false
+                  }
+                ]
+              },
+              {
+                "identity": "6a62fae2c2583f4d42b33d16",
+                "sid": "PA_CdytUZVSohwv",
+                "state": 2,
+                "joinedAt": "1793681673",
+                "tracks": [
+                  {
+                    "sid": "TR_VCSgE3f3cKuccT",
+                    "type": 1,
+                    "source": 1,
+                    "muted": false
+                  },
+                  {
+                    "sid": "TR_AMofGzXWopAte8",
+                    "type": 0,
+                    "source": 2,
+                    "muted": false
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "audit": {
+        "matchedSockets": 2,
+        "heldSockets": 0,
+        "asymmetricSockets": 0,
+        "stoppedWithPartner": 0,
+        "queuedSockets": 0,
+        "queuedWithPartner": 0,
+        "pairs": 1,
+        "pairDigest": "305d90a5960eca7342c6790a1d6c910776f6d5790b166609b1ba3045e68fa6cb"
+      }
+    }
+  ],
+  "finalAudit": {
+    "matchedSockets": 0,
+    "heldSockets": 0,
+    "asymmetricSockets": 0,
+    "stoppedWithPartner": 0,
+    "queuedSockets": 0,
+    "queuedWithPartner": 0,
+    "pairs": 0,
+    "pairDigest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}

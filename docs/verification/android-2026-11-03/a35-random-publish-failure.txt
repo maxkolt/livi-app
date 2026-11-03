@@ -1,0 +1,36 @@
+--------- beginning of main
+11-03 07:54:48.784 17861 18044 I ReactNativeJS: 'disconnect from room', { room: 'rand_room_6a62fae2c2583f4d42b33d16_6aa075a657dcabd3e27db3b0',
+11-03 07:54:48.784 17861 18044 I ReactNativeJS:   roomID: 'RM_FD6nkdJpDJaK',
+11-03 07:54:48.784 17861 18044 I ReactNativeJS:   participant: '6aa075a657dcabd3e27db3b0',
+11-03 07:54:48.784 17861 18044 I ReactNativeJS:   pID: 'PA_Ns45nNAWz4LW' }
+11-03 07:55:51.217 17861 18044 E ReactNativeJS: 'missing track resolver for 386611fa-aca4-4f7c-8602-bccefa92f594', { room: 'rand_room_6a62fae2c2583f4d42b33d16_6aa075a657dcabd3e27db3b0',
+11-03 07:55:51.217 17861 18044 E ReactNativeJS:   roomID: 'RM_FD6nkdJpDJaK',
+11-03 07:55:51.217 17861 18044 E ReactNativeJS:   participant: '6aa075a657dcabd3e27db3b0',
+11-03 07:55:51.217 17861 18044 E ReactNativeJS:   pID: 'PA_Bfgsw7jFsZi2',
+11-03 07:55:51.217 17861 18044 E ReactNativeJS:   cid: '386611fa-aca4-4f7c-8602-bccefa92f594' }
+11-03 07:55:52.420 17861 18044 W ReactNativeJS: 'negotiation disconnected', { room: 'rand_room_6a62fae2c2583f4d42b33d16_6aa075a657dcabd3e27db3b0',
+11-03 07:55:52.420 17861 18044 W ReactNativeJS:   roomID: 'RM_FD6nkdJpDJaK',
+11-03 07:55:52.420 17861 18044 W ReactNativeJS:   participant: '6aa075a657dcabd3e27db3b0',
+11-03 07:55:52.420 17861 18044 W ReactNativeJS:   pID: 'PA_Bfgsw7jFsZi2' }
+11-03 07:55:52.424 17861 18044 W ReactNativeJS: '[WARN]', '[RandomChatSession] Failed to publish video track (non-critical)', { error: 'negotiation timed out',
+11-03 07:55:52.424 17861 18044 W ReactNativeJS:   errorName: '',
+11-03 07:55:52.424 17861 18044 W ReactNativeJS:   roomState: 'connected' }
+11-03 07:55:52.436 17861 18044 I ReactNativeJS: 'resuming signal connection, attempt 0', { room: 'rand_room_6a62fae2c2583f4d42b33d16_6aa075a657dcabd3e27db3b0',
+11-03 07:55:52.436 17861 18044 I ReactNativeJS:   roomID: 'RM_FD6nkdJpDJaK',
+11-03 07:55:52.436 17861 18044 I ReactNativeJS:   participant: '6aa075a657dcabd3e27db3b0',
+11-03 07:55:52.436 17861 18044 I ReactNativeJS:   pID: 'PA_Bfgsw7jFsZi2' }
+11-03 07:55:52.437 17861 18044 I ReactNativeJS: 'Resuming signal connection', { room: 'rand_room_6a62fae2c2583f4d42b33d16_6aa075a657dcabd3e27db3b0',
+11-03 07:55:52.437 17861 18044 I ReactNativeJS:   roomID: 'RM_FD6nkdJpDJaK',
+11-03 07:55:52.437 17861 18044 I ReactNativeJS:   participant: '6aa075a657dcabd3e27db3b0',
+11-03 07:55:52.437 17861 18044 I ReactNativeJS:   pID: 'PA_Bfgsw7jFsZi2' }
+11-03 07:55:52.571 17861 18044 I ReactNativeJS: 'publishing track', { room: 'rand_room_6a62fae2c2583f4d42b33d16_6aa075a657dcabd3e27db3b0',
+11-03 07:55:52.571 17861 18044 I ReactNativeJS:   roomID: 'RM_FD6nkdJpDJaK',
+11-03 07:55:52.571 17861 18044 I ReactNativeJS:   participant: '6aa075a657dcabd3e27db3b0',
+11-03 07:55:52.571 17861 18044 I ReactNativeJS:   pID: 'PA_Bfgsw7jFsZi2',
+11-03 07:55:52.571 17861 18044 I ReactNativeJS:   trackID: undefined,
+11-03 07:55:52.571 17861 18044 I ReactNativeJS:   source: 'camera',
+11-03 07:55:52.571 17861 18044 I ReactNativeJS:   muted: false,
+11-03 07:55:52.571 17861 18044 I ReactNativeJS:   enabled: true,
+11-03 07:55:52.571 17861 18044 I ReactNativeJS:   kind: 'video',
+11-03 07:55:52.571 17861 18044 I ReactNativeJS:   streamID: 'a5478b35-f3ff-404c-9e21-c30bddf58a08',
+11-03 07:55:52.571 17861 18044 I ReactNativeJS:   streamTrackID: 'a5478b35-f3ff-404c-9e21-c30bddf58a08' }

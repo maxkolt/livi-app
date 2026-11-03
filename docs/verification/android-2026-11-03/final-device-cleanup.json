@@ -1,0 +1,40 @@
+{
+  "devices": [
+    {
+      "device": "RFCX306PWLE",
+      "audioNormal": true,
+      "incomingService": false,
+      "activeCallService": false,
+      "activeCallWakeLock": false,
+      "cameraLastEvent": "11-03 08:08:50 : DISCONNECT device 1 client for package com.kolt12max.livi.dev (PID 26720)",
+      "cameraOpen": false,
+      "stayOn": "15",
+      "wifiOn": "1",
+      "mobileData": "1",
+      "airplaneMode": "0",
+      "vpnActive": false,
+      "overlayOp": "SYSTEM_ALERT_WINDOW: default; time=+6h13m49s291ms ago; rejectTime=+1m23s883ms ago",
+      "exactAlarmOp": "SCHEDULE_EXACT_ALARM: default",
+      "liviMentionedInCrashBuffer": false
+    },
+    {
+      "device": "emulator-5554",
+      "audioNormal": true,
+      "incomingService": false,
+      "activeCallService": false,
+      "activeCallWakeLock": false,
+      "cameraLastEvent": "11-03 08:08:49 : DISCONNECT device 1 client for package com.kolt12max.livi.dev (PID 18036)",
+      "cameraOpen": false,
+      "stayOn": "1",
+      "wifiOn": "1",
+      "mobileData": "1",
+      "airplaneMode": "0",
+      "vpnActive": false,
+      "liviMentionedInCrashBuffer": false
+    }
+  ],
+  "sfu": {
+    "at": "2026-11-03T05:12:04.083Z",
+    "rooms": []
+  }
+}

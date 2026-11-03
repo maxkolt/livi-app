@@ -1,0 +1,58 @@
+{
+  "phase": "on",
+  "vpnActive": true,
+  "sfu": {
+    "at": "2026-11-03T05:08:03.021Z",
+    "rooms": [
+      {
+        "name": "room_6a62fae2c2583f4d42b33d16_6aa075a657dcabd3e27db3b0",
+        "sid": "RM_EnNdcdntND54",
+        "participants": [
+          {
+            "identity": "6a62fae2c2583f4d42b33d16",
+            "sid": "PA_ZkNZpfKjKKew",
+            "state": 2,
+            "joinedAt": "1793682210",
+            "tracks": [
+              {
+                "sid": "TR_AMKmsfeAK6uHTd",
+                "type": 0,
+                "source": 2,
+                "muted": false
+              },
+              {
+                "sid": "TR_VCShLBHrG23dmV",
+                "type": 1,
+                "source": 1,
+                "muted": false
+              }
+            ]
+          },
+          {
+            "identity": "6aa075a657dcabd3e27db3b0",
+            "sid": "PA_owJBgNJkui5e",
+            "state": 2,
+            "joinedAt": "1793682210",
+            "tracks": [
+              {
+                "sid": "TR_AMHxS824u4KM86",
+                "type": 0,
+                "source": 2,
+                "muted": false
+              },
+              {
+                "sid": "TR_VCnJDh6rmWULir",
+                "type": 1,
+                "source": 1,
+                "muted": false
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "screenshotsIntervalSeconds": 5,
+  "decodedFrameCountersChecked": false,
+  "audibilityConfirmed": false
+}
