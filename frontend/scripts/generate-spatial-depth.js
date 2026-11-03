@@ -93,7 +93,7 @@ const SEEDS = [
  * между точками, слабее порога ядра (иначе на фоне оставалась их тень).
  */
 const GROUPS = [
-  { name: 'digits', rect: [1196, 540, 1330, 745], plane: PLANE.deep },
+  { name: 'digits', rect: [1196, 450, 1330, 655], plane: PLANE.deep },
   { name: 'data-left', rect: [0, 640, 240, 1160], plane: PLANE.deep },
   { name: 'data-right', rect: [1170, 1020, 1440, 1340], plane: PLANE.deep },
   { name: 'chart-right', rect: [1060, 1430, 1440, 1600], plane: PLANE.deep },

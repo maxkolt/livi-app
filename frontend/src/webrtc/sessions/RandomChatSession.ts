@@ -481,8 +481,8 @@ export class RandomChatSession extends SimpleEventEmitter<RandomChatSessionEvent
   }
 
   private logReconnectTrace(event: string, details: Record<string, unknown> = {}): void {
-    // Production strips info; preserve causes of teardown/recovery in release logcat.
-    const log = /disconnect_requested|room_lost|room_reconnecting|resume_rejected|connect_error/.test(event)
+    // Production strips info; preserve recovery failures while routine teardown stays informational.
+    const log = /room_lost|room_reconnecting|resume_rejected|connect_error/.test(event)
       ? logger.warn : logger.info;
     log('[RandomChatSession][ReconnectTrace]', {
       event,

@@ -2,8 +2,7 @@ import type { ChatMessage } from './chatMessageTypes';
 /** Text/sticker composer send + emoji panel helpers. */
 
 import React from "react";
-import { Keyboard, Vibration } from "react-native";
-import * as Haptics from "expo-haptics";
+import { Keyboard } from "react-native";
 import type { EmojiType } from "rn-emoji-keyboard";
 import {
   clearMessageCache,
@@ -247,14 +246,6 @@ export function useChatComposer({
 
   const onPressSendButton = React.useCallback(() => {
     if (!messageTextRef.current.trim() && !voiceIsRecording) return;
-    // Запись (замок → «Отправить») вибрирует сама, когда уходит: здесь второй раз не нужно.
-    if (!voiceIsRecording) {
-      try {
-        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-      } catch {
-        Vibration.vibrate(10);
-      }
-    }
     setEmojiPanelOpen(false);
     void sendMessage();
   }, [voiceIsRecording, sendMessage]);

@@ -36,7 +36,8 @@ async function repaintBubble(image) {
   const { width, data } = image.bitmap;
   const scale = width / SOURCE_WIDTH;
   // Полностью убрать прежнее облако вместе с тенью. По краям здесь ровный фон.
-  const rect = [190, 128, 305, 211].map(v => Math.round(v * scale));
+  const rect = [Math.min(190, HEADER_BUBBLE.cx - HEADER_BUBBLE.w / 2 - 4), 128, 305, 211]
+    .map(v => Math.round(v * scale));
   fillRect(image, rect);
   const [x0, y0, x1, y1] = rect;
   const w = x1 - x0, h = y1 - y0, samples = 4;
